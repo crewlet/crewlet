@@ -88,6 +88,16 @@ type lineWalk struct {
 	// idSum digests a word past the bound a walk for notes tells apart
 	// ([recordWord]).
 	idSum hash.Hash
+	// images says the walk passes images ([lineWalk.passImages]): head holds
+	// a string's opening as it is told, written filters a value shown as
+	// written.
+	images  bool
+	head    []byte
+	written asWrittenImages
+	// inner reads, through innerSrc, the JSON text a string holds
+	// ([lineWalk.decoded]).
+	inner    *jsonscan.Scanner
+	innerSrc stringWords
 }
 
 // setup makes w rd's walk into b of the members lines reads.
@@ -163,7 +173,7 @@ func (w *lineWalk) line(ctx context.Context) (bool, error) {
 	case object:
 		err = w.rd.record()
 	case passed:
-		err = w.scan.Skip()
+		err = w.skip(k)
 	}
 	if (object || passed) && err == nil {
 		_, err = w.scan.Next()
@@ -187,7 +197,7 @@ func (w *lineWalk) line(ctx context.Context) (bool, error) {
 		return ended, nil
 	}
 	if w.bound > 0 {
-		if w.src.past {
+		if w.src.over() {
 			return ended, w.say(w.pastBound)
 		}
 		if frameErr := w.frame(); frameErr != nil {
@@ -228,19 +238,41 @@ func (w *lineWalk) refused() error {
 	return w.b.notARecord(int(n))
 }
 
-// pastBound says the line just read ran past the bound, sized with its break.
+// pastBound says the line just read ran past the bound, sized with its break,
+// and where it held images, that the bound is what is outside them.
 func (w *lineWalk) pastBound() error {
 	n := w.src.n
 	if w.src.broke {
 		n++
 	}
-	return w.b.unread(fmt.Sprintf("a line of %s of the harness's record is past the %s one read reads, "+
-		"and was not read", humanSize(n), humanSize(w.bound)))
+	outside := ""
+	if w.src.skipped > 0 {
+		outside = " outside its images"
+	}
+	return w.b.unread(fmt.Sprintf("a line of %s of the harness's record is past the %s one read reads%s, "+
+		"and was not read", humanSize(n), humanSize(w.bound), outside))
 }
 
-// read reads the current string or name into to, a piece at a time.
+// read reads the current string or name into to, a piece at a time: on a
+// walk that passes images, a string that is an image's data URL as its place
+// ([lineWalk.readImage]).
 func (w *lineWalk) read(to io.Writer) error {
-	for {
+	var head []byte
+	if w.images {
+		head = w.head[:0]
+	}
+	return w.readFrom(to, head, false)
+}
+
+// readFrom is [lineWalk.read] of a string whose opening, head, is read
+// already, and the whole of it where ended says so.
+func (w *lineWalk) readFrom(to io.Writer, head []byte, ended bool) error {
+	image, head, ended, err := w.readImage(to, head, ended)
+	if image || err != nil {
+		return err
+	}
+	_, _ = to.Write(head)
+	for !ended {
 		n, err := w.scan.Read(w.piece)
 		_, _ = to.Write(w.piece[:n])
 		switch {
@@ -250,6 +282,7 @@ func (w *lineWalk) read(to io.Writer) error {
 			return err
 		}
 	}
+	return nil
 }
 
 // asked is the caller's error, asked between the values and the notes one line
@@ -306,7 +339,7 @@ func (w *lineWalk) wordValue(k jsonscan.Kind) (string, error) {
 // passes it over.
 func (w *lineWalk) value(k jsonscan.Kind) error {
 	if w.plain {
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	switch k {
 	case jsonscan.String:

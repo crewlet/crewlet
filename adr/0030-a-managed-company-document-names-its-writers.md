@@ -2,7 +2,14 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/configapi`
-- **Enforced-by:** `internal/api/configapi.TestAManagedDocumentRefusesEveryOtherCredential`, `internal/api/configapi.TestTheProgrammaticWritesAreJudgedByTheirAuthor`, `internal/api/configapi.TestAReloadOfAManagedDocumentIsOpenToEveryCredential`, `internal/api/configapi.TestAManagedRefusalComesBeforeTheRequestIsRead`, `internal/api/setupapi.TestAManagedDocumentRefusesAConnectBeforeSealing`, `internal/api/setupapi.TestAManagedDocumentRefusesAGitHubAppBeforeGitHubIsAsked`, `cmd/crewlet.TestAManagedDocumentRefusesTheOfflineWrites`
+- **Enforced-by:**
+  - `internal/api/configapi.TestAManagedDocumentRefusesEveryOtherCredential`
+  - `internal/api/configapi.TestTheProgrammaticWritesAreJudgedByTheirAuthor`
+  - `internal/api/configapi.TestAReloadOfAManagedDocumentIsOpenToEveryCredential`
+  - `internal/api/configapi.TestAManagedRefusalComesBeforeTheRequestIsRead`
+  - `internal/api/setupapi.TestAManagedDocumentRefusesAConnectBeforeSealing`
+  - `internal/api/setupapi.TestAManagedDocumentRefusesAGitHubAppBeforeGitHubIsAsked`
+  - `cmd/crewlet.TestAManagedDocumentRefusesTheOfflineWrites`
 - **Tag-status:** unreleased
 
 ## The decision

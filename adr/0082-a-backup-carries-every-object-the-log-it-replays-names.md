@@ -2,7 +2,13 @@
 
 - **Status:** accepted
 - **Authority:** `internal/backup`
-- **Enforced-by:** `internal/backup.TestABackupCarriesAnObjectNamedAfterItsCopy`, `internal/backup.TestTheObjectStreamIsSnapshottedAfterEveryOtherStream`, `internal/backup.TestABackupRefusesALogRecordItCannotRead`, `internal/objstore/references.TestEveryRequiredTableSaysHowItsLogNamesObjects`, `internal/engine.TestEveryRequiredTableNamesItsDomainsLog`, `internal/worklet.TestAFileRecordNamesTheObjectItsRowNames`
+- **Enforced-by:**
+  - `internal/backup.TestABackupCarriesAnObjectNamedAfterItsCopy`
+  - `internal/backup.TestTheObjectStreamIsSnapshottedAfterEveryOtherStream`
+  - `internal/backup.TestABackupRefusesALogRecordItCannotRead`
+  - `internal/objstore/references.TestEveryRequiredTableSaysHowItsLogNamesObjects`
+  - `internal/engine.TestEveryRequiredTableNamesItsDomainsLog`
+  - `internal/worklet.TestAFileRecordNamesTheObjectItsRowNames`
 - **Measured:** the pinned broker's stream snapshot (nats-server v2.15.0, `server/stream_backup.go`) takes the stream's state when the request arrives and copies records only through that state's last sequence, clamping its consumers there too. A stream snapshotted while a publisher appended 1,647 records during the transfer restored to exactly the last sequence the snapshot's answer stated (120,361), not the 121,647 the source held when the transfer ended (2026-10-11; four earlier runs of the same program, with 778 to 1,394 records appended, agreed)
 - **Cost-when-tried:** the backup carried only the objects its store copy's rows name. The copy is taken first and the streams after it, so every file uploaded and named while the backup ran was a row the restored log writes and an object no backup carried: a restore into an empty bucket brought those files back with no bytes, and nothing said so until the collector's next daily audit. The same reading listed as LOST every object of the copy whose file a record after the copy had removed and the collector had then deleted — files no restored row names
 - **Tag-status:** unreleased

@@ -2,7 +2,22 @@
 
 - **Status:** accepted
 - **Authority:** `internal/atlaswake`
-- **Enforced-by:** `internal/atlaswake.TestOnlyAnAgentSeatThatOwnsAnEntryIsWoken`, `internal/atlaswake.TestDriftIsTheThreeChanges`, `internal/atlaswake.TestAWakeIsClaimedOnceADayAndAChangeIsToldOnce`, `internal/atlaswake.TestASecondNodeWakesNobodyTheSameDay`, `internal/atlaswake.TestTheNodeThatLosesTheClaimPublishesNothing`, `internal/atlaswake.TestASeatThatTakesNoWorkIsNotWokenAndKeepsItsDay`, `internal/atlaswake.TestAFailedPublishIsMadeAgainAsTheSameWake`, `internal/atlaswake.TestTheCompanySwitchWakesNobodyAndKeepsTheDay`, `internal/atlaswake.TestAWakeSaysNothingOutsideTheClosedWords`, `internal/atlaswake.TestTheParserWakesNoPerson`, `internal/atlaswake.TestDriftIsReadInTheOwningSeatsOwnView`, `internal/engine.TestASeatThatCannotStartATurnTakesNoAtlasWake`, `internal/engine.TestASeatNobodyCanAskAboutIsUnknown`, `internal/config.TestOwnersAreWokenUnlessTurnedOff`, `internal/coord/kv.TestFleetContract`
+- **Enforced-by:**
+  - `internal/atlaswake.TestOnlyAnAgentSeatThatOwnsAnEntryIsWoken`
+  - `internal/atlaswake.TestDriftIsTheThreeChanges`
+  - `internal/atlaswake.TestAWakeIsClaimedOnceADayAndAChangeIsToldOnce`
+  - `internal/atlaswake.TestASecondNodeWakesNobodyTheSameDay`
+  - `internal/atlaswake.TestTheNodeThatLosesTheClaimPublishesNothing`
+  - `internal/atlaswake.TestASeatThatTakesNoWorkIsNotWokenAndKeepsItsDay`
+  - `internal/atlaswake.TestAFailedPublishIsMadeAgainAsTheSameWake`
+  - `internal/atlaswake.TestTheCompanySwitchWakesNobodyAndKeepsTheDay`
+  - `internal/atlaswake.TestAWakeSaysNothingOutsideTheClosedWords`
+  - `internal/atlaswake.TestTheParserWakesNoPerson`
+  - `internal/atlaswake.TestDriftIsReadInTheOwningSeatsOwnView`
+  - `internal/engine.TestASeatThatCannotStartATurnTakesNoAtlasWake`
+  - `internal/engine.TestASeatNobodyCanAskAboutIsUnknown`
+  - `internal/config.TestOwnersAreWokenUnlessTurnedOff`
+  - `internal/coord/kv.TestFleetContract`
 - **Cost-when-tried:** not tried. Until this record a drift on an entry reached a person only: the one who set a contested value, under Needs you, and every holder of the atlas in Review. An entry whose owner is an agent seat waited for a person to notice it and hand it on.
 - **Tag-status:** unreleased
 

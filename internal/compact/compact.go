@@ -218,6 +218,9 @@ const (
 	KindArgument Kind = "argument"
 	// KindToolError is the text a failed tool call returned.
 	KindToolError Kind = "tool_error"
+	// KindWriteAnswer is the text a successful tool call that changed
+	// something returned.
+	KindWriteAnswer Kind = "write_answer"
 	// KindProduced is what an earlier round of a turn produced, ending in
 	// its deliverable.
 	KindProduced Kind = "produced"
@@ -237,7 +240,7 @@ const (
 )
 
 // Kinds is every kind this build has instructions for.
-var Kinds = []Kind{KindThread, KindArgument, KindToolError,
+var Kinds = []Kind{KindThread, KindArgument, KindToolError, KindWriteAnswer,
 	KindProduced, KindSource, KindTask, KindAnswer, KindOutcome, KindReport}
 
 // Valid reports whether this build knows the kind.

@@ -2,7 +2,14 @@
 
 - **Status:** accepted
 - **Authority:** `internal/scaleway`
-- **Enforced-by:** `internal/scaleway.TestTheNeverGrantedListIsPinned`, `internal/scaleway.TestABucketsSettingsAreGrantedForOneChange`, `internal/scaleway.TestABucketGrantRidesThePolicyForItsHoursAndLeaves`, `internal/scaleway.TestTheScalewayPageStatesWhatIsNeverGranted`, `internal/seataccess.TestAGrantForOneChangeIsNeverPermanentNorPastItsBound`, `internal/agent/builtin.TestAOneChangePermissionIsAskedForItsTargetAlone`, `internal/capability.TestASeatIsToldTheGrantsItsCredentialHolds`
+- **Enforced-by:**
+  - `internal/scaleway.TestTheNeverGrantedListIsPinned`
+  - `internal/scaleway.TestABucketsSettingsAreGrantedForOneChange`
+  - `internal/scaleway.TestABucketGrantRidesThePolicyForItsHoursAndLeaves`
+  - `internal/scaleway.TestTheScalewayPageStatesWhatIsNeverGranted`
+  - `internal/seataccess.TestAGrantForOneChangeIsNeverPermanentNorPastItsBound`
+  - `internal/agent/builtin.TestAOneChangePermissionIsAskedForItsTargetAlone`
+  - `internal/capability.TestASeatIsToldTheGrantsItsCredentialHolds`
 - **Cost-when-tried:** an agent found two buckets whose object listing was public and could not close them, since no level or grant held `PutBucketAcl`; the person it asked to run the call by hand saw it fail silently, and the buckets stayed public.
 - **Tag-status:** unreleased
 

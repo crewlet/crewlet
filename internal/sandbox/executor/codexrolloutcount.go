@@ -101,7 +101,7 @@ func (l *codexCountLine) read(w *lineWalk) error {
 		case "timestamp", "metadata":
 			return l.compaction.envelopeField(w, name, k)
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		l.took = l.took && ok
 		return err
@@ -126,7 +126,7 @@ func (l *codexCountLine) payloadMember(w *lineWalk) func(name string, k jsonscan
 		case "message":
 			return l.compaction.messageField(w, k, l.typ)
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		l.took = l.took && ok
 		return err
@@ -145,7 +145,7 @@ func (l *codexCountLine) infoMember(w *lineWalk) func(name string, k jsonscan.Ki
 			l.last, l.input, l.total = k == jsonscan.ObjectStart, 0, 0
 			ok, err = w.objectField(k, l.usageMember(w))
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		l.took = l.took && ok
 		return err
@@ -163,7 +163,7 @@ func (l *codexCountLine) usageMember(w *lineWalk) func(name string, k jsonscan.K
 		case "total_tokens":
 			l.total, ok, err = w.intField(k)
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		l.took = l.took && ok
 		return err
@@ -255,6 +255,7 @@ func codexMeter(ctx context.Context, r io.Reader, release string, summary *summa
 func (c *codexCounting) read(ctx context.Context, rollout io.Reader, summary *summaryRead) error {
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(rollout, lineChunkBytes), codexWalkBound)
+	w.passImages()
 	var l codexCountLine
 	if summary != nil {
 		l.compaction = &codexCompaction{}

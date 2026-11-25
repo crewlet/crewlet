@@ -127,7 +127,7 @@ func (s *summaryText) read(w *lineWalk, k jsonscan.Kind) (bool, error) {
 	s.reset()
 	if k != jsonscan.String {
 		s.odd = k != jsonscan.Null
-		return !s.odd, w.scan.Skip()
+		return !s.odd, w.skip(k)
 	}
 	s.set = true
 	return true, w.read(s)

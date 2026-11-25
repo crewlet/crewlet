@@ -2,7 +2,21 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestASignInsStateIsSignedAndSpentOnce`, `internal/engine.TestTwoRenewersCannotStrandAToken`, `internal/engine.TestASignOutRevokesAtTheVendorAndDeletesTheGrant`, `internal/engine.TestARefusedRenewalAsksForASignInAndTheVendorNoMore`, `internal/engine.TestASignInComingBackFromAnotherIssuerIsRefused`, `internal/mcp/oauth.TestOnlyPKCES256IsEverSentAndAServerWithoutItIsRefused`, `internal/mcp/oauth.TestAnEndpointOnAnotherOriginIsReachedOnlyThroughTheGuard`, `internal/fleetsecrets.TestAnOAuthGrantIsUnreachableFromTheOperatorsView`, `internal/mcp.TestARefusedTokenIsRenewedOnceAndTheRequestRetriedOnce`, `internal/engine.TestAGrantGoesOnlyToTheAddressItWasIssuedFor`, `internal/engine.TestAServiceIdentityIsIssuedItsTokenAtUseAndKeepsNothing`, `internal/engine.TestARefusedServiceIdentityIsHeldUntilItsWaitOrNewCredentials`, `internal/engine.TestAServiceIdentitysTokenEndpointIsDialledOnlyThroughTheGuard`, `internal/mcp/oauth.TestAServiceIdentitysSecretGoesOnlyByAMethodTheServerOffers`
+- **Enforced-by:**
+  - `internal/engine.TestASignInsStateIsSignedAndSpentOnce`
+  - `internal/engine.TestTwoRenewersCannotStrandAToken`
+  - `internal/engine.TestASignOutRevokesAtTheVendorAndDeletesTheGrant`
+  - `internal/engine.TestARefusedRenewalAsksForASignInAndTheVendorNoMore`
+  - `internal/engine.TestASignInComingBackFromAnotherIssuerIsRefused`
+  - `internal/mcp/oauth.TestOnlyPKCES256IsEverSentAndAServerWithoutItIsRefused`
+  - `internal/mcp/oauth.TestAnEndpointOnAnotherOriginIsReachedOnlyThroughTheGuard`
+  - `internal/fleetsecrets.TestAnOAuthGrantIsUnreachableFromTheOperatorsView`
+  - `internal/mcp.TestARefusedTokenIsRenewedOnceAndTheRequestRetriedOnce`
+  - `internal/engine.TestAGrantGoesOnlyToTheAddressItWasIssuedFor`
+  - `internal/engine.TestAServiceIdentityIsIssuedItsTokenAtUseAndKeepsNothing`
+  - `internal/engine.TestARefusedServiceIdentityIsHeldUntilItsWaitOrNewCredentials`
+  - `internal/engine.TestAServiceIdentitysTokenEndpointIsDialledOnlyThroughTheGuard`
+  - `internal/mcp/oauth.TestAServiceIdentitysSecretGoesOnlyByAMethodTheServerOffers`
 - **Cost-when-tried:** a remote MCP server that signs in with OAuth (Linear, Notion, Sentry, Atlassian, Cloudflare, Stripe) could only be reached by pasting a personal access token into a header, where a vendor offers one at all: a token tied to one person, never renewed, and readable back from the secret store by any administrator.
 - **Tag-status:** unreleased
 

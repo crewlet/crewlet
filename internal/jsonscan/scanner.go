@@ -13,10 +13,10 @@ import (
 // read, and the take's scrub, which reads on this scanner, rewrites no value nested deeper.
 const MaxDepth = 10000
 
-// readBufferSize is the read buffer [New] gives a Scanner, 64 KiB: what a pipe holds at once on Linux, so one
+// ReadBufferSize is the read buffer [New] gives a Scanner, 64 KiB: what a pipe holds at once on Linux, so one
 // read of a pipe or a file fills it, and a long string is copied out in runs of up to that length. Smaller,
 // a 256 MiB session costs a read call per few KiB; larger buys nothing one read can hand over.
-const readBufferSize = 64 << 10
+const ReadBufferSize = 64 << 10
 
 // minBufferSize is the least buffer a Scanner reads with: the most it must see at once, a surrogate's \u
 // escape and the escape after it, which it reads together to say whether the two make one character, and
@@ -136,7 +136,7 @@ const (
 // New reads one JSON text from r: exactly one value, with blanks (space, tab, line feed, carriage return)
 // around it. It reads r as the scan needs it, a 64 KiB buffer at a time.
 func New(r io.Reader) *Scanner {
-	return newScanner(r, readBufferSize)
+	return newScanner(r, ReadBufferSize)
 }
 
 // newScanner is New with a buffer of size bytes, at least [minBufferSize]: what a test scans with to move

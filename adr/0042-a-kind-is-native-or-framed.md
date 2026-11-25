@@ -2,7 +2,13 @@
 
 - **Status:** accepted
 - **Authority:** `internal/artifacts`
-- **Enforced-by:** `internal/artifacts.TestEveryKindAnswersEveryFacet`, `internal/artifacts.TestOnlyAFramedKindRunsAPage`, `internal/artifacts/manifest.TestEveryEntryRuleCanBeMet`, `internal/artifacts/manifest.TestAnEntryInfersExactlyOneKind`, `internal/artifactupload.TestADeckDeclaresNoCapability`, `internal/api/artifactsapi.TestTheDashboardDrawsEachKindAsTheKindTableSays`, and the dashboard's `KIND_VIEWS` and `KIND_WORDS`, records over every kind that fail the build when a kind is added and not drawn
+- **Enforced-by:**
+  - `internal/artifacts.TestEveryKindAnswersEveryFacet`
+  - `internal/artifacts.TestOnlyAFramedKindRunsAPage`
+  - `internal/artifacts/manifest.TestEveryEntryRuleCanBeMet`
+  - `internal/artifacts/manifest.TestAnEntryInfersExactlyOneKind`
+  - `internal/artifactupload.TestADeckDeclaresNoCapability`
+  - `internal/api/artifactsapi.TestTheDashboardDrawsEachKindAsTheKindTableSays`, and the dashboard's `KIND_VIEWS` and `KIND_WORDS`, records over every kind that fail the build when a kind is added and not drawn
 - **Cost-when-tried:** before this record, what an artifact's kind decided was spelled in a switch on its name in eleven places (the manifest's entry check, the agent tools' default entry, the artifact origin's serving decision, the frame route, the source route, the runtime contract, the dark-mode warning, the search text, the CLI's inference, the dashboard's viewer and uilet's card). Adding the second native kind meant finding every one; a switch nobody found treated the new kind as whatever its default branch said, which for the serving decision is the difference between drawing a file and running it.
 - **Tag-status:** unreleased
 
