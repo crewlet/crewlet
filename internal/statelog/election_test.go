@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -180,4 +181,61 @@ func TestABarrierWhoseCallerRunsOutMidElectionSaysTheLogHadNoLeader(t *testing.T
 			t.Errorf("the barrier was appended %d times, want it appended again while it waited", n)
 		}
 	})
+}
+
+// A BARRIER WHOSE LOG HAD NO LEADER FOR ITS WHOLE BUDGET, ITS ADMISSION'S USAGE
+// READING ANSWERED SO, IS REFUSED AS NEVER APPENDED AND SAYS WHY: a missed
+// quorum on several members and an unanswered broker on one, never a stalled
+// write, since the broker answered; and the log is marked as having cost a
+// whole budget, so the next node appends no second barrier behind it.
+//
+// Mutants: the refusal coded by the budget's end (`broker_stalled` on one
+// member); the detail claiming an append that was never made.
+func TestABarrierWhoseLogHadNoLeaderForItsWholeBudgetSaysSo(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		members int
+		want    statelog.ReadRefusal
+	}{{3, statelog.RefuseNoQuorum}, {1, statelog.RefuseBrokerUnreachable}} {
+		t.Run(fmt.Sprintf("on %d members", c.members), func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				leaderless, err := statelog.NewReserve(probeDomain{}.Stream(),
+					func(context.Context) (statelog.Usage, error) {
+						return statelog.Usage{}, &jetstream.APIError{Code: 503, ErrorCode: 10008,
+							Description: "JetStream system temporarily unavailable"}
+					})
+				if err != nil {
+					t.Fatalf("NewReserve: %v", err)
+				}
+				log := electing(func() bool { return true })
+				index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), log,
+					members(c.members), testSigner(t, probeDomain{}), leaderless, probeEncode,
+					func() uint32 { return 1 }, nil)
+				if err != nil {
+					t.Fatalf("NewReadIndex: %v", err)
+				}
+				r := newReader(t, unreadStore{t}, healthy, &stubWaiter{at: healthy().Position}, index)
+				_, err = r.Read(t.Context(), pointQuery(statelog.ReadLinearizable),
+					func(*sql.Tx) error { return nil })
+				var refusal *statelog.Refused
+				if !errors.As(err, &refusal) || refusal.Code != c.want {
+					t.Fatalf("a barrier whose log had no leader for its whole budget answered %v, "+
+						"want refused %q", err, c.want)
+				}
+				for _, want := range []string{"never appended", "the " + probeStream + " stream had no leader"} {
+					if !strings.Contains(refusal.Detail, want) {
+						t.Errorf("the refusal reads %q, which does not say %q", refusal.Detail, want)
+					}
+				}
+				if !refusal.Spent.UnconfirmedOn(probeStream) {
+					t.Errorf("the refusal says it paid for %+v, want the log its barrier spent its "+
+						"budget on", refusal.Spent)
+				}
+				if n := log.asked.Load(); n != 0 {
+					t.Errorf("the barrier reached the broker %d times, want none", n)
+				}
+			})
+		})
+	}
 }

@@ -122,6 +122,12 @@
 //     ([jsapi.Leader.Carrying]), or each request asked again puts another
 //     piece on a link the reply is still crossing; a member's reply crosses
 //     a route, and keeps the read term.
+//   - A STREAM WITH NO LEADER IS WAITED OUT, inside the caller's deadline:
+//     every leader read, stream info and consumer create that a member
+//     answers 503, err_code 10008 (its group, or the metadata group, knows it
+//     has no leader) is asked again until an election ends it
+//     ([jsprovision.ThroughElection]). A read whose deadline ends first fails
+//     saying the stream had no leader.
 //   - A GET IS A CONSUMER OF THE OBJECT'S OWN MESSAGES, read one message at
 //     a time under [objstore.Stall] and ended by its context: on a member's
 //     own client an ordered consumer the client pulls, and across a link one
@@ -806,16 +812,19 @@ func (b *Backend) Seal(ctx context.Context) error {
 // client's five seconds with none, for a reply nobody sends.
 // THROUGH A HANDLE OF EACH REQUEST'S OWN, never [Backend]'s stream: the
 // client caches an info reply on the handle with no lock, the hedge can have
-// two requests out, and the bucket's handle serves every get and listing.
+// two requests out, and the bucket's handle serves every get and listing. A
+// leaderless answer is waited out ([leaderReads]).
 func (b *Backend) info(ctx context.Context) (*jetstream.StreamInfo, error) {
-	return jsprovision.ReadBounded(ctx, b.js.Options().DefaultTimeout,
-		func(ctx context.Context) (*jetstream.StreamInfo, error) {
-			stream, err := b.js.Stream(ctx, Stream)
-			if err != nil {
-				return nil, err
-			}
-			return stream.CachedInfo(), nil
-		}, nil)
+	return jsprovision.ThroughElection(ctx, Stream, func(ctx context.Context) (*jetstream.StreamInfo, error) {
+		return jsprovision.ReadBounded(ctx, b.js.Options().DefaultTimeout,
+			func(ctx context.Context) (*jetstream.StreamInfo, error) {
+				stream, err := b.js.Stream(ctx, Stream)
+				if err != nil {
+					return nil, err
+				}
+				return stream.CachedInfo(), nil
+			}, nil)
+	})
 }
 
 // metaSubject is the subject the bucket keeps name's metadata on, and
@@ -834,12 +843,48 @@ func pieceSubject(nuid string) string { return "$O." + Bucket + ".C." + nuid }
 // is never asked again while the piece is still crossing a link
 // ([jsapi.Leader.Carrying]); a subject listing answers names and counts, and
 // is the metadata leader's.
-func (b *Backend) leaderFor(filter string) *jsapi.Leader {
+func (b *Backend) leaderFor(filter string) leaderReads {
 	if strings.HasPrefix(filter, metaSubject("")) {
-		return b.leader
+		return leaderReads{b.leader}
 	}
-	return b.pieces
+	return leaderReads{b.pieces}
 }
+
+// leaderReads is the stream's leader reads, each waiting out an election
+// inside its caller's deadline ([jsprovision.ThroughElection]): a member that
+// knows the group has no leader answers so at once, and that is no answer
+// about the object. The only way natsobj asks the stream's leader.
+type leaderReads struct{ l *jsapi.Leader }
+
+func (r leaderReads) Last(ctx context.Context, subject string) (jsapi.Message, error) {
+	return jsprovision.ThroughElection(ctx, Stream, func(ctx context.Context) (jsapi.Message, error) {
+		return r.l.Last(ctx, subject)
+	})
+}
+
+func (r leaderReads) First(ctx context.Context, subject string) (jsapi.Message, error) {
+	return jsprovision.ThroughElection(ctx, Stream, func(ctx context.Context) (jsapi.Message, error) {
+		return r.l.First(ctx, subject)
+	})
+}
+
+func (r leaderReads) Next(ctx context.Context, subject string, from uint64) (jsapi.Message, error) {
+	return jsprovision.ThroughElection(ctx, Stream, func(ctx context.Context) (jsapi.Message, error) {
+		return r.l.Next(ctx, subject, from)
+	})
+}
+
+// Subjects lists filter's subjects a page at a time, asked again whole after a
+// leaderless answer: visit must take a page it was handed before.
+func (r leaderReads) Subjects(ctx context.Context, filter string, visit func(map[string]uint64) error) error {
+	_, err := jsprovision.ThroughElection(ctx, Stream, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, r.l.Subjects(ctx, filter, visit)
+	})
+	return err
+}
+
+// Term is how long one read is given before it is asked again.
+func (r leaderReads) Term() time.Duration { return r.l.Term() }
 
 // nameOfMeta is the name a metadata subject spells, and whether it spells one
 // — [metaSubject] read back.
@@ -1056,7 +1101,7 @@ type reading struct {
 	filter string
 	// leader asks the stream's leader what follows on filter
 	// ([Backend.leaderFor]).
-	leader *jsapi.Leader
+	leader leaderReads
 	cfg    jetstream.OrderedConsumerConfig
 	batch  int
 	stall  time.Duration
@@ -1179,10 +1224,16 @@ func (r *reading) open(ctx context.Context) (*message, error) {
 	}
 }
 
-// create asks the broker for r's consumer for no longer than r.begin where r
-// has one: under a context with no deadline the client holds the request to
-// its own five seconds, which a large bucket's listing outgrows.
+// create asks the broker for r's consumer, each ask for no longer than r.begin
+// where r has one: under a context with no deadline the client holds the
+// request to its own five seconds, which a large bucket's listing outgrows. A
+// metadata group with no leader is waited out ([leaderReads]).
 func (r *reading) create(ctx context.Context) (jetstream.Consumer, error) {
+	return jsprovision.ThroughElection(ctx, Stream, r.createOnce)
+}
+
+// createOnce is one of [reading.create]'s asks.
+func (r *reading) createOnce(ctx context.Context) (jetstream.Consumer, error) {
 	if r.begin <= 0 {
 		return r.made(ctx)
 	}
@@ -1265,7 +1316,7 @@ func (r *reading) caughtUp(ctx context.Context, after uint64) (bool, error) {
 	if after >= r.through {
 		return true, nil
 	}
-	if r.b.across && r.leader == r.b.pieces {
+	if r.b.across && r.leader.l == r.b.pieces {
 		reply := jsapi.ReplyBytes(MessageBytes)
 		if err := r.b.window.Take(ctx, reply); err != nil {
 			return false, err
@@ -1838,7 +1889,7 @@ func (b *Backend) Pending(ctx context.Context, visit func(objstore.Pending) erro
 	// metadata walk, so the pass holds no more than the broker's answers
 	// already did, never a second copy of the bucket's inventory.
 	orphans := make(map[string]uint64)
-	err := b.leader.Subjects(ctx, pieceSubjects, func(page map[string]uint64) error {
+	err := leaderReads{b.leader}.Subjects(ctx, pieceSubjects, func(page map[string]uint64) error {
 		maps.Copy(orphans, page)
 		return nil
 	})
