@@ -117,11 +117,16 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		fresh = geminiFreshCopies(paths, geminiHooked(req))
 	}
 	lines := []string{
-		// THE HOME'S OWN SETTINGS BACK however the script exits; a run killed
-		// first leaves them to the next run's clear ([homeKeeper]).
+		// THE HOME'S OWN SETTINGS BACK, and the checkouts' skills out, however
+		// the script ends, a teardown's signal included: dash runs no EXIT trap
+		// for a signal it dies of, so each is trapped, and runs once the
+		// foreground command the signal also reached returns. A run killed
+		// outright leaves them to the next run's clear ([homeKeeper]).
 		// What the checkouts' hook left out said first ([checkoutHome.saySkipped]).
 		"restore() { " + geminiCheckoutHome(paths).saySkipped() + "; " + GeminiCLI{}.homeRestore(paths) +
 			"; }; trap restore EXIT",
+		`trap 'restore; trap - EXIT; exit 143' TERM; trap 'restore; trap - EXIT; exit 130' INT; ` +
+			`trap 'restore; trap - EXIT; exit 129' HUP`,
 		// THE RELEASE, read once for the gate, the record and the session's,
 		// before anything else: an older one never runs ([releaseGate]).
 		releaseRead(GeminiCLI{}.VersionCommand()),
