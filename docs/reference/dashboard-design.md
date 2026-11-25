@@ -1418,9 +1418,10 @@ A tab that was read by somebody (`lib/reader.ts`) and lands here with no session
   its reader, so Home opens on it however they come back (see
   [`window=`](#window--one-vocabulary-for-every-time-range)).
 - **Five figures** (kit `StatCard`s): *Agents working now* (`working / total`
-  from the engine's `activity`, with the state bar of working, waiting,
-  stopped and idle, and a sub-line naming only the states somebody is in;
-  loading until the first state arrives, never "0 / 0");
+  from the engine's `activity`, a paused seat counted as paused even while its
+  turn finishes, with the state bar of working, waiting, paused or stopped and
+  idle, and a sub-line naming only the states somebody is in; loading until the
+  first state arrives, never "0 / 0");
   *Waiting on your decision* (the engine's `decisions` count plus the seats
   stopped on their budget that THIS reader can act on — raise the ceiling, a
   `/config` write an admin may make and so may the lead of the
@@ -1764,7 +1765,7 @@ Every layout action then fits whatever it draws, however wide (`CHART_FIT_FLOOR`
 
 A unit's card carries its **Reports to** pill on its bottom edge ("Reports to: CTO", marked inherited where it is), the one label for a reporting line everywhere (the unit panel's fact, the unit editor's field); the choice of none reads **No one**. The root card and the Table's company row carry the company's logo: the square mark of the brand adopted in Company › Brand, else its primary logo (`useAdoptedMark`), else the company glyph.
 
-**The status chips** stand over the Table, each a filter: All agents, Working, Needs you, Paused or stopped, Idle, No state yet (drawn only while some agent has none) and **Agents with problems**, named apart from the toolbar's configuration check pill ("Configuration OK", or "*N* configuration problems"), which is about the document, not the agents (`routes/org/structureParts.tsx`). No chip is counted before the first state arrives (a row of zeros is a claim nobody made). A chip prunes the tree to the seats it keeps (a team stays while it holds one); one matching nobody says so, with **Show all agents**.
+**The status chips** stand over the Table, each a filter: All agents, Working, Needs you, Paused or stopped, Idle, No state yet (drawn only while some agent has none) and **Agents with problems**, named apart from the toolbar's configuration check pill ("Configuration OK", or "*N* configuration problems"), which is about the document, not the agents (`routes/org/structureParts.tsx`). No chip is counted before the first state arrives (a row of zeros is a claim nobody made). Every chip, legend key and Home tile counts a seat in one state group (`countedStateOf` in `lib/seats.ts`), so the groups add up to All agents: a paused seat is in Paused or stopped from the moment it is paused, while the turn it is on finishes or its executor asks too, and its Status still says what it is doing ("Working · pausing"). A chip prunes the tree to the seats it keeps (a team stays while it holds one); one matching nobody says so, with **Show all agents**.
 
 **The chart's status legend** is a bar in the canvas's bottom right, across from the zoom bar and the same height: Working, Needs you, Paused or stopped and Idle, each with its dot in the cards' tone and a quiet count, the same words as the chips. A pressed key greys the seats it leaves out, at full contrast (the kit's `cardDimmed`), and refits the chart in the room the legend leaves, so no card is under it.
 
