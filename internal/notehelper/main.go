@@ -155,7 +155,9 @@
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
-// (name, description, the copy's SKILL.md) as its hook's context; pi-nested
+// (name, description, the copy's SKILL.md) as its hook's context;
+// hermes-nested the same through the gate, added to the tool's result by the
+// run's plugin; pi-nested
 // the same with each file in Pi's `<project_instructions path=...>`, on
 // stdout for the run's extension to add to the tool's result (Pi lists no
 // skill it did not start with and loads instructions only as it starts,
@@ -167,6 +169,20 @@
 // answer, and in state/skipped under the lock, which the runner's script
 // prints to the run's error stream once the harness has stopped, since no
 // harness shows a hook's stderr; checkout-launch's stderr is the run's own.
+// A gated spec (`gated`: Hermes Agent's) reads its gate on stdin
+// (checkoutgate.go): what the harness's own code makes of each candidate,
+// whose text, files and skill directories stand in for the slots, the skill
+// walk and a home check of the names its skills take, so a checkout
+// brings what a session started there loads and no more (Hermes 0.23.3
+// blocks an injection-scanned file and loads a checkout's skills only where
+// trusted, read in its code). hermes-peek names the candidates first, since a
+// gate is read before the claim; a candidate the gate does not name waits.
+// checkout-launch's `budget`, {"form": "hermes", "own": <file>, "bytes": N},
+// is the bound its sections share with the run's own text in Hermes's
+// system prompt; hermes-nested's -room, the characters a tool's result has
+// left before Hermes spills it to a file: each checkout is handed whole while
+// it fits, else named by the files to read, else left for a later firing,
+// then the skills copied and what was left out (hermesrepo.go).
 // The runner's restore marks the state ended, after which a firing claims
 // nothing. A run killed before its script printed the log loses it: the next
 // run's gate removes the state unprinted, as its lines in another run's error
@@ -323,6 +339,8 @@ type flags struct {
 	config                string
 	skillLoads, loadsOnly bool
 	slot                  int
+	// hermes-nested's: the characters the tool's result has left.
+	room int
 	// codex-renew's: the rollout of the session the run continues.
 	rollout string
 	// codex-materialize's: Codex's sessions directory, and the thread whose
