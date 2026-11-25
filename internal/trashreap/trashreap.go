@@ -20,8 +20,10 @@ import (
 // MaxSources sources, each named in at most MaxSourceNameBytes, and each
 // source's first failure cut to MaxSourceErrorBytes as stored. A build
 // registers six (internal/engine's trashSources, which its reapSource holds
-// to this); sixteen leaves room for ten more, the widest report then 10,390
-// bytes, and a failure's 512 bytes keep a store's error whole in practice.
+// to this); sixteen leaves room for ten more, the widest report then 11,406
+// bytes (every source stopped at MaxPerPass with more due, on a term of its
+// own and its first failure at its bound, every instant to the nanosecond),
+// and a failure's 512 bytes keep a store's error whole in practice.
 const (
 	MaxSources          = 16
 	MaxSourceNameBytes  = 64
