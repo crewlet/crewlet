@@ -64,11 +64,23 @@ test("every link the engine renders opens the screen it names", () => {
 /**
  * The router's screen a link-table screen opens: the table names the map
  * opened on an entry, and lit along a trace, as screens of their own, and
- * both are the atlas to the router, told apart by their query.
+ * both are the atlas to the router, told apart by their query; one
+ * integration's page is the integrations screen with its kind.
  */
 function routeScreenOf(screen: string): string {
+  if (screen === "integration") return "integrations";
   return screen === "atlas-entry-on-map" || screen === "atlas-trace-on-map" ? "atlas" : screen;
 }
+
+test("an integration's link opens that integration's page, never the list", () => {
+  const links = JSON.parse(readFileSync(FIXTURE, "utf8")) as EngineLink[];
+  const one = links.filter((link) => link.screen === "integration");
+  expect(one).toHaveLength(1);
+  const [, kind = ""] = /^#\/company\/integrations\/([^/?]+)$/.exec(one[0]!.href) ?? [];
+  const route = resolve(["company", "integrations", kind]);
+  expect(route.resolved && route.screen === "integrations" && route.kind).toBe("google_cloud");
+  expect(one[0]!.label).toBe("Open Google Cloud setup");
+});
 
 test("a map link's query is what the atlas screen reads on arrival", () => {
   const links = JSON.parse(readFileSync(FIXTURE, "utf8")) as EngineLink[];
