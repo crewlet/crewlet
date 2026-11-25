@@ -90,7 +90,8 @@ func readLimit(capped int) int {
 // the engine host it could block or never end ([NotRegularFileError] says
 // which). A write over one is refused too ([NotRegularFileError.Write]): a
 // write replaces a regular file whole, and anything else there is the box's
-// own doing, left as it made it; a refused write fails the launch.
+// own doing, left as it made it; a refused write fails the launch, but for a
+// browser seat's helper, which withholds the browser instead ([EnsureBrowser]).
 //
 // It refuses that piece, not the box: what the path names is fixed, so a retry
 // would be refused until the run was settled as lost, its spend uncharged. A

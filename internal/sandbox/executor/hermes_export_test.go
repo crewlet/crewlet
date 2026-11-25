@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -24,6 +25,12 @@ func HermesStandIn(t *testing.T, system string) string {
 	bin := t.TempDir()
 	hermesLauncherIn(t, bin, system)
 	return bin
+}
+
+// HermesStopGateway is the script text defining a Hermes run's endgw and the
+// gwgone it waits on ([hermesStopGateway]).
+func HermesStopGateway(paths Paths, gateway time.Duration) string {
+	return hermesStopGateway(paths, gateway)
 }
 
 // hermesFixture is one of the captures measured on Hermes Agent release.
