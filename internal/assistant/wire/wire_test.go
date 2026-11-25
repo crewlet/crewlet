@@ -236,6 +236,8 @@ func TestACardCarriesExactlyItsKindsBody(t *testing.T) {
 			Error:  &wire.ErrorCard{}},
 		"a permitted link with a reason": {Type: wire.CardOpenInApp,
 			OpenInApp: &wire.OpenInAppCard{Permitted: true, Reason: wire.OpenNotPermitted}},
+		"a link opening by itself that is not permitted": {Type: wire.CardOpenInApp,
+			OpenInApp: &wire.OpenInAppCard{Asked: true, Reason: wire.OpenNotPermitted}},
 		"a ragged table": {Type: wire.CardTable, Table: &wire.TableCard{
 			Columns: []wire.Column{{Key: "a", Label: "A", Type: wire.ColumnText}},
 			Rows:    [][]any{{"x", "y"}}, RowCount: 1}},

@@ -37,6 +37,7 @@ import {
 } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
 import { PlugGlyph } from "@crewlethq/icons/glyphs";
+import { fixAddress } from "./address.ts";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
@@ -62,9 +63,9 @@ const ACTIVITY_LINES = 5;
 /** The size a mark is drawn at in a compact card's well. */
 const MARK = 20;
 
-/** Where one item's page is, opening its settings form for `open` when one is named. */
-function pageOf(key: string, open?: Intent): string {
-  return href(["company", "integrations", key], open ? { open } : undefined);
+/** Where one item's page is, at the form or tab `fix` names when one is named. */
+function pageOf(key: string, fix?: Intent): string {
+  return fix ? fixAddress(key, fix) : href(["company", "integrations", key]);
 }
 
 /** The newest instant one app's rows carry for its deliveries. */
@@ -80,6 +81,8 @@ function lastDelivery(tool: Tool, rows: Map<string, IntegrationRow>): string | n
 /** Whether a line is in use: a service the company runs, or a connected app or product. */
 function active(line: Line, model: Model | null, services: BuiltInService[]): boolean {
   if (line.kind === "service") return services.some((s) => s.key === line.key && s.known && s.on);
+  // GOOGLE IS NO CARD OF ITS OWN: each Google product in use is one.
+  if (line.kind === "google") return false;
   const tool = model?.byKey.get(entryOf(line)!.key);
   if (!tool) return false;
   return line.kind === "product"

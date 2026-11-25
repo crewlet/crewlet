@@ -15,6 +15,7 @@ An agent is on at one level across every property it is granted.
 | An agent at | Can | Needs, on the property |
 |---|---|---|
 | `read` (the default) | Every report (standard, pivot, realtime, funnel, audience exports, report tasks), metadata, every setting read, change history and the access report where its role allows | Viewer or above. Change history needs Editor; the access report and access listing need Administrator |
+| `operate` as Marketer (`role: marketer`), shown as **Marketer** | Everything `read` can, plus Marketer's changes made at once and recorded: audiences, key events, attribution settings and event create rules. Any other change is refused before Google | Marketer, which only a person adds and Crewlet cannot read back, so the row reads Role not checked |
 | `operate` | Everything `read` can, plus reversible changes made at once and recorded: key events, custom dimensions and metrics, audiences, annotations, channel groups, event rules, data stream and reporting settings | Marketer for key events, audiences and attribution; Editor for the rest |
 | `administer` | Everything `operate` can, plus asking an administrator to approve each account, access, link, key, deletion or other irreversible change | Editor; Administrator for access bindings |
 
@@ -24,23 +25,32 @@ The roles Google Analytics gives, least first: **Viewer** (sees settings and dat
 
 ## Connecting Crewlet
 
-1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing, and the form says whether it is connected. Turn Google Analytics on, then run the Google Cloud connection's Cloud Shell block again: it turns on the Analytics Data and Admin APIs in the identity project and makes the company reader ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
-2. Add the company reader's email, shown on the form, to each property at **Viewer**: Google Analytics, Admin, Property access management, Add users. Crewlet reads the company's figures for boards and the atlas as this identity.
-3. Turn agents on from the Agents tab, each with its properties, and give each its identity ([below](#give-an-agent-its-own-identity)).
+1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing, and the form says whether it is connected.
+2. Press **Connect** on Google Analytics, which turns it on. Crewlet then turns on the Analytics Data and Admin APIs in the identity project and makes the company reader, whose email the form shows ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
+3. Add the company reader's email, shown on the form, to the account at **Viewer**: in Google Analytics, **Admin**, **Account access management**, **+**, **Add users**; untick **Notify new users by email** (a service account has no inbox), choose **Viewer** and press **Add**. One add lets it list and read every property of the account; to share only some, add it under **Property access management** of each instead. Crewlet reads the company's figures for boards and the atlas as this identity.
+4. Turn agents on from the Agents tab, each with its level and its properties, then **Review changes** and **Save and sync**. **Properties** lists what the company reader sees; a property it cannot see yet is typed by its numeric ID, the number under its name in Google Analytics' property picker or in **Admin**, **Property details**. Then give each agent its identity ([below](#give-an-agent-its-own-identity)).
 
 The integration's Settings tab then lists each connection and the properties it reaches, with the Google Analytics logo under them, linked to Google Analytics, as [Google's developer branding policy](https://developers.google.com/analytics/terms/branding-policy) asks of an application that shows Google Analytics data.
 
 ## Give an agent its own identity
 
-An agent's identity at Google Analytics is its own Google growth identity, which Crewlet made; what is left is adding it to its properties. Its row on the Agents tab reads **Needs you** until the identity reaches each of them, and **Set up identity** in its box shows the steps, with the email ready to copy:
+**Choose its properties.** The agent's **Properties** list what the company reader sees, each by its name under its account, with its ID small; search finds one by name, account or ID, and **Choose all** ticks every property listed now (one added later is chosen when it exists). A property the reader cannot see yet is added by its numeric ID, which the list takes only in that shape (Admin, Property details). With no reader to sign in as, the list says so instead of offering anything typed.
 
-1. In Google Analytics, open **Admin**, choose the property under Property, and press **Property access management**.
+**Getting ready.** Crewlet makes the agent's Google growth identity on its next pass, and Google takes up to about two minutes before Google Analytics can find it: until then the row reads **Getting ready** and the identity's add buttons wait, since an add before then fails with "This email doesn't match a Google Account".
+
+**Add it.** **Set up identity** in the agent's box lists each property still missing the identity, by name and account, with a button that opens that property's **Property access management**, and the steps, the email ready to copy:
+
+1. Open the property with its button, or **Admin**, then **Property access management** with the property chosen.
 2. Press **+**, then **Add users**, and paste the agent's email.
-3. Pick the role its level needs, **Viewer** at `read` and **Editor** at `operate` and `administer`, and press **Add**. Access changes an `administer` agent asks for need **Administrator**.
+3. Untick **Notify new users by email**.
+4. Pick the role its level needs, **Viewer** at `read` and **Editor** at `operate` and `administer`, and press **Add**. Access changes an `administer` agent asks for need **Administrator**.
+5. Press **Check now** on the page; the row reads **In sync** once every property passes.
 
-**Add it for me.** With the company's own OAuth client (`oauth`, made as [Google Cloud's page describes](google-cloud.md#the-companys-own-oauth-client), which Google Play may share) and an Administrator's sign-in on the Settings tab, **Add it for me** binds the identity to each property at the level's role through the Admin API's access bindings, where it holds no role at or above it on the property or its account, keeping any No Cost Metrics or No Revenue Metrics restriction. Turning the agent off removes those bindings. The sign-in only adds, reads and removes agents' identities; no agent's call is made with it.
+**Or once, on the account.** Added under **Account access management**, one add covers every property of the account, now and later. That is broader access at Google: the identity reaches every property there, though Crewlet still holds the agent to its own.
 
-**The check, on every pass:** Crewlet signs in as the identity and lists the properties it reaches; one not listed is not added yet. With the admin sign-in it also reads the identity's role on each property and its account, which every property inherits: one below the level's is the wrong role, and Administrator below `administer` is a warning. The agent is ready once every property passes, and reads Needs you again if somebody removes it there; calls Google refuses meanwhile name what is missing.
+**Add it for me.** With the company's Google sign-in client (set once on the Google page, as [Google Cloud's page describes](google-cloud.md#the-companys-own-oauth-client), or `oauth` here) and an Administrator's sign-in on the Google page, **Add it for me** binds the identity to each property at the level's role through the Admin API's access bindings, where it holds no role at or above it on the property or its account, keeping any No Cost Metrics or No Revenue Metrics restriction. Turning the agent off removes those bindings. The sign-in only adds, reads and removes agents' identities; no agent's call is made with it.
+
+**The check, on every pass:** Crewlet signs in as the identity and lists the properties it reaches; one not listed is not added yet, and one listed holds Viewer at least. A `read` agent is then **In sync**. Google Analytics shows any other role only to an Administrator, so an `operate` or `administer` agent's role is read with the admin sign-in, on each property and its account, which every property inherits: one below the level's is the wrong role, and Administrator below `administer` is a warning. Without that sign-in the row reads **Role not checked**, never In sync, and says which role to set; a call Google refuses names what is missing.
 
 ## The agents' tools
 
@@ -81,9 +91,12 @@ roles:
   - handle: growth-lead
     integrations:
       google_analytics: {enabled: true, level: read, properties: ["123456789"]}
+  - handle: digital-marketer
+    integrations:
+      google_analytics: {enabled: true, level: operate, role: marketer, properties: ["123456789"]}
 ```
 
-The block needs `integrations.google_cloud` on with its provisioning block. Its one secret is the optional OAuth client's.
+The block needs `integrations.google_cloud` on with its provisioning block. Its one secret is the optional OAuth client's, where it names its own.
 
 ## Every method, and its class
 

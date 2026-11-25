@@ -12,7 +12,8 @@ import (
 // properties. A value the compiler lays out, so registering it at init
 // allocates nothing of its own.
 var seatAccess = googlegrowth.SeatAccess{Product: Kind, Lane: seataccess.LaneGoogleAnalytics,
-	Name: "Google Analytics", Levels: levels, Scope: propertiesOf, Identity: identity, Adds: true}
+	Name: "Google Analytics", Levels: levels, Scope: propertiesOf, Identity: identity, Adds: true, List: list,
+	Typed: config.GoogleAnalyticsPropertyPattern}
 
 func init() { seataccess.Register(&seatAccess) }
 
@@ -30,6 +31,10 @@ func levels() []seataccess.Level {
 	return []seataccess.Level{
 		{ID: string(growth.LevelRead), Name: "Read", Note: "Reports and every setting, nothing changed. Add the " +
 			"agent's identity to each property at Viewer or above."},
+		{ID: seataccess.GrowthLevelID(string(growth.LevelOperate), config.GoogleAnalyticsMarketer),
+			Name: "Marketer", Administers: true, Note: "Operate held to Marketer's changes: audiences, key events, " +
+				"attribution and event create rules, made at once and recorded. Needs Marketer on the property, " +
+				"which only a person adds, and Crewlet cannot read it back."},
 		{ID: string(growth.LevelOperate), Name: "Operate", Administers: true, Note: "Read, plus reversible " +
 			"changes made at once and recorded: key events, custom definitions, audiences, settings. Needs " +
 			"Editor on the property."},

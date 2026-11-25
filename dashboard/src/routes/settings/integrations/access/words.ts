@@ -42,12 +42,10 @@ export interface LaneWords {
     emptyOn?: string;
     none?: string;
     noneLink?: DocSection & { label: string };
-    /**
-     * The shape of an entry a person may type where the reach is open (an
-     * Apple ID's digits), so a search by name is never offered as an entry;
-     * absent where any text may be one.
-     */
-    typed?: RegExp;
+    /** Where the picker's entries come from, said under its list. */
+    listed?: string;
+    /** What a typed entry must be, said where the text typed is not one (the shape is the engine's). */
+    typedHint?: string;
   };
   /** The tool a seat uses its credential through, in a few words. */
   tool: string;
@@ -441,7 +439,7 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       // A TEAM'S APPS ARE LISTED WITH AN AGENT'S OWN KEY, and an agent is
       // turned on with at least one: the first is added by its Apple ID.
       none: "No app is listed yet: add one by its Apple ID",
-      typed: /^\d{1,20}$/,
+      typedHint: "An Apple ID is the app's digits, under App Information in App Store Connect",
     },
     tool: "app_store_connect tools, built in",
     issued: "never: Crewlet makes every call",
@@ -478,6 +476,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     scope: {
       noun: "Properties",
       singular: "property",
+      listed: "What Crewlet's company reader sees in Google Analytics, by account.",
+      typedHint: "A property ID is its digits, under Admin, Property details",
       empty: "No property",
       none: "No properties are listed yet",
       noneLink: {
@@ -501,6 +501,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     scope: {
       noun: "Accounts",
       singular: "account",
+      listed: "What the company's Google sign-in reaches in AdMob.",
+      typedHint: "A publisher ID is pub- and 16 digits",
       empty: "No account",
       none: "No publisher accounts are listed yet",
       noneLink: {
@@ -524,6 +526,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     scope: {
       noun: "Accounts",
       singular: "account",
+      listed: "What the company's Google sign-in reaches in AdSense.",
+      typedHint: "A publisher ID is pub- and 16 digits",
       empty: "No account",
       none: "No publisher accounts are listed yet",
       noneLink: {
@@ -548,6 +552,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     scope: {
       noun: "Accounts",
       singular: "account",
+      listed: "What Crewlet's company reader sees in Google Ads, under each manager account.",
+      typedHint: "A customer ID is its ten digits, without dashes",
       empty: "No account",
       none: "No accounts are listed yet",
       noneLink: {
@@ -572,6 +578,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     scope: {
       noun: "Sites",
       singular: "site",
+      listed: "What Crewlet's company reader sees in Search Console.",
+      typedHint: "A property is sc-domain: and a domain, or a URL prefix ending in a slash",
       empty: "No site",
       none: "No sites are listed yet",
       noneLink: {
@@ -596,6 +604,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     scope: {
       noun: "Apps",
       singular: "app",
+      listed: "What Crewlet's company reader sees in Play Console.",
+      typedHint: "An app is its package name, such as com.example.app",
       empty: "No app",
       none: "No apps are listed yet",
       noneLink: {

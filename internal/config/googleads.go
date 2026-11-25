@@ -58,7 +58,11 @@ const GoogleAdsKind = "google_ads"
 const googleAdsMaxCustomers = 200
 
 // googleAdsCustomerID is a customer ID as the API writes it: ten digits.
-var googleAdsCustomerID = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[0-9]{10}$`) })
+var googleAdsCustomerID = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(GoogleAdsCustomerPattern) })
+
+// GoogleAdsCustomerPattern is an account's ten-digit customer ID, without
+// dashes; the seat picker offers a typed account by it too.
+const GoogleAdsCustomerPattern = `^[0-9]{10}$`
 
 // GrowthKind makes the block one of the growth blocks the shared rules find
 // (growth.go).

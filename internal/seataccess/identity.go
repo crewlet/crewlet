@@ -61,9 +61,17 @@ const (
 	// IdentityNone is a seat set to its own identity that holds none yet:
 	// not handed in, not added at the product, or not made.
 	IdentityNone IdentityStatus = "none"
+	// IdentityPreparing is a seat's own identity Crewlet is still making,
+	// or made so lately that the vendor cannot find it yet: nothing a person
+	// can add until it settles ([IdentityCheck.ReadyAt]).
+	IdentityPreparing IdentityStatus = "preparing"
 	// IdentityReady is a seat's own identity the last check found working,
 	// at the role its level needs, in the company's team.
 	IdentityReady IdentityStatus = "ready"
+	// IdentityUnchecked is a seat's own identity the last check found
+	// working, whose role the vendor shows to nobody Crewlet signs in as: it
+	// is kept, and its role is said to be unverified, never in sync.
+	IdentityUnchecked IdentityStatus = "unchecked"
 	// IdentityWrongRole is an identity at a role that does not match the
 	// seat's level: too narrow, or broader than Crewlet allows.
 	IdentityWrongRole IdentityStatus = "wrong_role"
@@ -79,8 +87,8 @@ const (
 
 // IdentityStatuses is every status, in the chip set's order.
 func IdentityStatuses() []IdentityStatus {
-	return []IdentityStatus{IdentityCompanys, IdentityNone, IdentityReady, IdentityWrongRole,
-		IdentityWrongTeam, IdentityRefused, IdentityReplacing}
+	return []IdentityStatus{IdentityCompanys, IdentityNone, IdentityPreparing, IdentityReady, IdentityUnchecked,
+		IdentityWrongRole, IdentityWrongTeam, IdentityRefused, IdentityReplacing}
 }
 
 // Valid reports whether s is a status this build words.
@@ -94,8 +102,12 @@ func (s IdentityStatus) Label() string {
 		return "Company's"
 	case IdentityNone:
 		return "Not set up"
+	case IdentityPreparing:
+		return "Getting ready"
 	case IdentityReady:
 		return "Ready"
+	case IdentityUnchecked:
+		return "Role not checked"
 	case IdentityWrongRole:
 		return "Wrong role"
 	case IdentityWrongTeam:
@@ -109,7 +121,13 @@ func (s IdentityStatus) Label() string {
 }
 
 // works reports a status whose identity may sign calls.
-func (s IdentityStatus) works() bool { return s == IdentityReady || s == IdentityReplacing }
+func (s IdentityStatus) works() bool {
+	return s == IdentityReady || s == IdentityReplacing || s == IdentityUnchecked
+}
+
+// Keeps reports a verdict whose identity is kept: it works, whether or not
+// its role could be read.
+func (s IdentityStatus) Keeps() bool { return s == IdentityReady || s == IdentityUnchecked }
 
 // IdentitySpec is how a lane offers a seat its own identity, statically.
 type IdentitySpec struct {
@@ -305,6 +323,14 @@ type IdentityCheck struct {
 	// stay on the company's identity and the box says why.
 	Blocked string `json:"blocked,omitempty"`
 
+	// Entries are the seat's scope entries as the check found its identity
+	// on each, in the seat's order; nil where the vendor has no entries.
+	Entries []IdentityEntry `json:"entries,omitempty"`
+
+	// ReadyAt is when the vendor can find a [IdentityPreparing] identity, so
+	// a person can add it; zero for any other status.
+	ReadyAt time.Time `json:"ready_at,omitzero"`
+
 	// RetiringGone are the record's retiring identities the vendor now
 	// refuses: revoked, so the sync stops asking a person to revoke them.
 	RetiringGone []string `json:"-"`
@@ -312,6 +338,40 @@ type IdentityCheck struct {
 	// At is when the check ran.
 	At time.Time `json:"at,omitzero"`
 }
+
+// IdentityEntry is one of a seat's scope entries as a check found its
+// identity there, and where a person adds it.
+type IdentityEntry struct {
+	ID string `json:"id"`
+	// Name is the vendor's name for it and Group what holds it (an
+	// Analytics property's account); "" where neither was read.
+	Name  string     `json:"name,omitempty"`
+	Group string     `json:"group,omitempty"`
+	State EntryState `json:"state"`
+	// Role is the role read there, in the vendor's words.
+	Role string `json:"role,omitempty"`
+	// AddURL is the vendor's page that adds a user on the entry, and
+	// GroupURL the one on what holds it; "" where it has none.
+	AddURL   string `json:"add_url,omitempty"`
+	GroupURL string `json:"group_url,omitempty"`
+}
+
+// EntryState is where a seat's identity stands on one scope entry.
+type EntryState string
+
+const (
+	// EntryMissing is an entry the identity is not added to.
+	EntryMissing EntryState = "missing"
+	// EntryApplying is one the vendor shows it added to but does not let it
+	// in yet.
+	EntryApplying EntryState = "applying"
+	// EntryAdded is one it reaches at the role its level needs.
+	EntryAdded EntryState = "added"
+	// EntryWrongRole is one it reaches at a role short of its level's.
+	EntryWrongRole EntryState = "wrong_role"
+	// EntryUnchecked is one it reaches whose role nobody could read.
+	EntryUnchecked EntryState = "unchecked"
+)
 
 // IdentityRead is one read a check made: what it asked, and what it found.
 type IdentityRead struct {
@@ -406,7 +466,7 @@ type IdentityInput struct {
 
 // IdentityKept is a KeepIdentity's answer.
 type IdentityKept struct {
-	// Check is the verdict. Only [IdentityReady] is kept.
+	// Check is the verdict. Only one that [IdentityStatus.Keeps] is kept.
 	Check IdentityCheck
 
 	// Minted is the credential to seal for the seat, by field; empty for an

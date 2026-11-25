@@ -103,6 +103,7 @@ import {
   scopeChoices,
   scopeLabel,
   scopeUnavailable,
+  takesTyped,
   wantOf,
   withEnabled,
   withLevel,
@@ -441,7 +442,7 @@ function scopeField(seat: AccessSeat, lane: Lane, path: string): Field | null {
         }
         // A TYPED ENTRY HAS THE LANE'S SHAPE where it has one, as the dialog
         // takes it: a name it lists no app by is never stored as an Apple ID.
-        const takes = lane.scope_open && (words.typed?.test(typed.trim()) ?? true);
+        const takes = takesTyped(lane, typed);
         const id = typeof found === "object" ? found.value : takes ? typed.trim() : null;
         if (id === null && lane.scope_open) {
           return refuse(

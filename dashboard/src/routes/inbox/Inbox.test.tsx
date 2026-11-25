@@ -4986,3 +4986,74 @@ describe("every item has its own address", () => {
     }
   });
 });
+
+describe("the OAuth clients a moved address left behind", () => {
+  const uri = "https://crewlet.example.com/webhooks/mcp-oauth";
+  const moved = {
+    notices: [
+      {
+        class: "oauth_redirect_moved",
+        subject: { kind: "company" },
+        title: "Add the new redirect URI to 2 OAuth clients",
+        person: `This engine's address changed, so every OAuth sign-in now comes back to ${uri}.`,
+        redirect: {
+          uri,
+          clients: [
+            {
+              vendor: "google",
+              id: "123456789012-abcdefghij.apps.googleusercontent.com",
+              label: "123456789012-abcdefgh…",
+              uses: [
+                { name: "adsense", title: "AdSense" },
+                { name: "admob", title: "AdMob" },
+              ],
+              redirect: "https://old-tunnel.example.com/webhooks/mcp-oauth",
+              at: "2026-01-01T09:00:00Z",
+            },
+            {
+              vendor: "mcp",
+              id: "search-client",
+              label: "search",
+              uses: [{ name: "search", title: "search" }],
+              redirect: "https://old-tunnel.example.com/webhooks/mcp-oauth",
+              at: "2026-01-01T09:00:00Z",
+            },
+          ],
+        },
+        finding: null,
+      },
+    ],
+    unread: [],
+  };
+
+  test("its row gives the new URI to copy and each client, linked to where it signs in again", async () => {
+    location.hash = "#/inbox/condition/notice-oauth_redirect_moved";
+    mount({ answers: { advisor_notices: moved } });
+    await settle();
+    const pane = document.querySelector<HTMLElement>(".crewlet-reading-pane")!;
+    expect(within(pane).getByRole("heading", { name: moved.notices[0]!.title })).toBeTruthy();
+    expect(within(pane).getByRole("button", { name: "Copy the new redirect URI" })).toBeTruthy();
+    expect(within(pane).getAllByText(uri).length).toBeGreaterThan(0);
+    const clients = within(pane).getByRole("list", {
+      name: "OAuth clients to add the new redirect URI to",
+    });
+    expect(clients.textContent).toContain("123456789012-abcdefgh…");
+    expect(clients.textContent).toContain("Google client of AdSense and AdMob");
+    expect(clients.textContent).toContain("last signed in through old-tunnel.example.com");
+    expect(
+      within(clients).getByRole("link", { name: "Open Google sign-in" }).getAttribute("href"),
+    ).toBe("#/company/integrations/google?tab=settings&product=adsense");
+    expect(within(clients).getByRole("link", { name: "Open search" }).getAttribute("href")).toBe(
+      "#/settings/mcp-tools/servers/search?tab=connection",
+    );
+    expect(pane.textContent).toContain(
+      "Clears for each client once it signs in through the new address.",
+    );
+  });
+
+  test("no row is drawn while no client is left behind", async () => {
+    mount({ answers: { advisor_notices: { notices: [], unread: [] } } });
+    await settle();
+    expect(screen.queryByText(/Add the new redirect URI/)).toBeNull();
+  });
+});

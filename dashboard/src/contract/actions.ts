@@ -233,6 +233,16 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  save_assistant_instructions: {
+    // THE READER'S OWN ASK CREWLET INSTRUCTIONS, the whole layer, kept under
+    // their seat beside their Home board and conditional on the revision
+    // `assistant_instructions` answered. On no log.
+    args: ["instructions", "if_match"],
+    domain: null,
+    apps: [],
+    refreshes: ["assistant_instructions"],
+    scope: "person",
+  },
   save_home_board: {
     // HOME'S DONE and a group folded outside editing: the reader's whole board,
     // kept under their seat, conditional on the revision `home_board` answered

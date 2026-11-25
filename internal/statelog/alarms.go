@@ -2124,10 +2124,11 @@ var table = []rule{
 			waiting := !m.WaitingSince.IsZero() && now.Sub(m.WaitingSince) >= LimitWaitingGrace
 			return AlarmEntry{Detail: limitDetail(m.Key, out), Since: out.Since}, !waiting
 		},
-		remedy: modelRemedy("Nothing, if the plan's limit is expected: the engine tries the " +
-			"model again on its own and its seats fall back meanwhile. To end it now, " +
-			"Settings › Models & Fleets › the entry › Retry asks the vendor once, and Clear " +
-			"stops every node sitting it out."),
+		remedy: modelRemedy("Nothing, if the plan's limit is expected: the engine reads the " +
+			"plan's status on its own and brings the model back when the plan resets or is " +
+			"raised, and its seats fall back meanwhile. To check now, Settings › Models & " +
+			"Fleets › the entry › Retry reads the plan (or asks the vendor once where the plan " +
+			"cannot be read), and Clear stops every node sitting it out."),
 	},
 	{
 		kind:  KindLLMLimitWaiting,
@@ -2148,7 +2149,7 @@ var table = []rule{
 		},
 		remedy: modelRemedy("Seats are not working. Add a fallback entry to their chain " +
 			"(a model on another sign-in), raise the plan, or wait for the reset the " +
-			"vendor named; Settings › Models & Fleets › the entry › Retry asks the vendor once."),
+			"vendor named; Settings › Models & Fleets › the entry › Retry reads the plan now."),
 	},
 	{
 		// A mirror not brought level for longer than its own refresh promise (the
