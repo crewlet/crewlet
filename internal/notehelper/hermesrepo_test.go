@@ -264,7 +264,7 @@ func TestEveryFiringsListingStaysWithinItsBound(t *testing.T) {
 				path: "/home/u/skills/big:s" + strconv.Itoa(i) + "/SKILL.md"}
 		}
 		big := handedCheckout{name: "big", root: "/w/big"}
-		for i := 0; i*(100+shift) < total+2000; i++ {
+		for i := 0; i*(80+shift) < 2*total; i++ {
 			big.skills = append(big.skills, line(i))
 		}
 		small := handedCheckout{name: "small", root: "/w/small", skills: []handedSkill{line(0)}}
