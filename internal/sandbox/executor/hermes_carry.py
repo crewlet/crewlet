@@ -3,6 +3,9 @@
 #
 #   hermes_carry.py dump DB TITLE POLICY OUT        the session titled TITLE, with its compaction lineage,
 #                                                   written to OUT
+#   hermes_carry.py trim SRC DST                    the dump at SRC as a resume of it loads it, written to DST:
+#                                                   a session's inactive messages below its newest compaction
+#                                                   left out, its settled admissions' results slimmed
 #   hermes_carry.py renew DB TITLE SYSTEM           SYSTEM's text as the standing instructions of the session
 #                                                   titled TITLE, in place of the ones Hermes froze with it
 #   hermes_carry.py restore MEMBER DB POLICY TITLE  a new session store at DB from MEMBER, the launch kept at
@@ -23,9 +26,9 @@
 # which keeps no exit status, so every command ends on one line of its own on stdout: `crewlet-carry ok`
 # (with the restored session's stored id after a restore, the id after top), or `crewlet-carry none` where
 # the store holds no session of that title (or, for renew, no launch Hermes froze with it; for route, no
-# route), route answers `crewlet-carry moved` for another route, servers `crewlet-carry taken` and why, and
-# guard `crewlet-carry refused <why>` where the box would switch the run's own plugin or servers off. Anything
-# else is a failure, its traceback on stderr.
+# route; for trim, no row to leave out), route answers `crewlet-carry moved` for another route, servers
+# `crewlet-carry taken` and why, and guard `crewlet-carry refused <why>` where the box would switch the run's
+# own plugin or servers off. Anything else is a failure, its traceback on stderr.
 #
 # A dump is JSON lines: the store's schema ({"ddl", "kind"}, never the full-text index's own tables, which
 # its triggers fill again), the store's own bookkeeping rows whole, then the session's rows ({"t", "r"}),
@@ -171,6 +174,81 @@ def restore(member, db_path, policy_path, title):
     if not stored:
         return "none"
     return "ok " + stored
+
+
+# What 0.23.3's own retirement drops of a settled admission's stored result, its copies of the turn's
+# transcript (persistence/sqlite/conversation/_store/retirement.py, _compact_result), leaving `messages` empty.
+RESULT_TRANSCRIPT = ("messages", "last_reasoning", "tools", "_turn_user_row")
+
+
+def stored_result(value):
+    """An admission's stored result as 0.23.3's terminal.load_result reads it, without the envelope a row
+    stores its closing reply once by ({"_stored": {"v": 1, "reply_ref": i}}, i a message of the result's,
+    whose words final_response holds); None where it does not read so."""
+    try:
+        v = json.loads(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+    if not isinstance(v, dict) or not isinstance(v.get("result"), dict):
+        return None
+    env, messages = v.pop("_stored", None), v["result"].get("messages")
+    if env is None:
+        return v
+    if not isinstance(env, dict) or set(env) != {"v", "reply_ref"} or env["v"] != 1 or not isinstance(messages, list):
+        return None
+    ref = env["reply_ref"]
+    if type(ref) is not int or not 0 <= ref < len(messages) or not isinstance(messages[ref], dict):
+        return None
+    return v
+
+
+def slimmed(line, row):
+    """line, a settled admission's stored result, slimmed as 0.23.3's retirement slims it and written back as
+    the measured trim wrote it; line itself where its value does not read as a result, or the slim cannot be
+    written as text (a lone surrogate the value escaped)."""
+    v = stored_result(row["r"]["value"])
+    if v is None:
+        return line
+    v["result"] = dict({k: x for k, x in v["result"].items() if k not in RESULT_TRANSCRIPT}, messages=[])
+    row["r"]["value"] = json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    out = json.dumps(row, ensure_ascii=False) + "\n"
+    try:
+        out.encode("utf-8")
+    except UnicodeEncodeError:
+        return line
+    return out
+
+
+def trim(src, dst):
+    """The dump at src as a resume of it loads it, into dst (measured on 0.23.3: a resume of the trimmed dump
+    sent the requests a resume of the whole one did). Left out: each session's inactive message rows below its
+    newest active compaction summary, the compaction's archive and the originals of the tail it wrote again,
+    which a resume never loads; an inactive row above it, one an undo left, stays, so the restored ids go on
+    where they did. Each settled admission's stored result is slimmed as Hermes's own retirement slims one;
+    every other line is kept as it is. "none", dst unwritten, where no row is left out. Read a line at a time,
+    twice, the summaries first, so the dump is never held whole."""
+    newest, settled, inactive = {}, set(), []
+    with open(src, encoding="utf-8", newline="") as f:
+        for line in f:
+            o = json.loads(line)
+            r = o.get("r") or {}
+            if o.get("t") == "messages":
+                if r["active"] == 1 and r["_compressed_summary"] == 1:
+                    newest[r["session_id"]] = max(newest.get(r["session_id"], 0), r["id"])
+                elif r["active"] == 0:
+                    inactive.append((r["session_id"], r["id"]))
+            elif o.get("t") == "session_admissions" and r["status"] == "terminal":
+                settled.add(ADMISSION_KEY % r["admission_id"])
+    if not any(i < newest.get(sid, 0) for sid, i in inactive):
+        return "none"
+    with open(src, encoding="utf-8", newline="") as f, open(dst, "w", encoding="utf-8", newline="") as out:
+        for line in f:
+            o = json.loads(line)
+            r = o.get("r") or {}
+            if o.get("t") == "messages" and r["active"] == 0 and r["id"] < newest.get(r["session_id"], 0):
+                continue
+            out.write(slimmed(line, o) if o.get("t") == "state_meta" and r["key"] in settled else line)
+    return "ok"
 
 
 SYSTEM_ENV = "HERMES_EPHEMERAL_SYSTEM_PROMPT"
@@ -584,13 +662,13 @@ def guard(plugin, servers, skills):
     return "ok" if not found else "refused " + " | ".join(found).replace("\n", " ")
 
 
-COMMANDS = {"dump": (dump, 4), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 3), "top": (top, 1),
-            "route": (route, 3), "servers": (servers, 2), "guard": (guard, 3), "plugoff": (plugoff, 1)}
+COMMANDS = {"dump": (dump, 4), "trim": (trim, 2), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 3),
+            "top": (top, 1), "route": (route, 3), "servers": (servers, 2), "guard": (guard, 3), "plugoff": (plugoff, 1)}
 
 if __name__ == "__main__":
     command = COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if command is None or len(sys.argv) != command[1] + 2:
-        sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | renew DB TITLE SYSTEM | "
+        sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | trim SRC DST | renew DB TITLE SYSTEM | "
                          "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED HOSTS | top DB | route DB TITLE MODEL | "
                          "servers STAGED GUARDED | guard PLUGIN SERVERS SKILLS | plugoff PLUGIN\n")
         sys.exit(2)
