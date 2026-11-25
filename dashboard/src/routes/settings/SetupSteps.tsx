@@ -4,9 +4,19 @@
  */
 
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Button, Callout, IconButton, Link, List, Tag, VendorUI } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  Disclosure,
+  IconButton,
+  Link,
+  List,
+  Tag,
+  VendorUI,
+  VisuallyHidden,
+} from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
-import { ListOrderedGlyph, XGlyph } from "@crewlethq/icons/glyphs";
+import { CircleCheckGlyph, ListOrderedGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import type { SetupStep } from "~/protocol/index.ts";
 import { VendorWords } from "~/ui/VendorWords.tsx";
 import { href } from "~/app/router.tsx";
@@ -59,10 +69,25 @@ export function NeedsFirst({ steps }: { steps: SetupStep[] }) {
     });
 }
 
-/** One step's words, the permissions it grants, and the state of what it connects first. */
+/**
+ * One step: its title and where it is taken, its words, the permissions it
+ * grants, the state of what it connects first, what shows it worked, and
+ * what people hit there, folded.
+ */
 function stepWords(step: SetupStep, resolveUrl: StepsProps["resolveUrl"]): ReactNode {
   return (
-    <span className="int-step">
+    <div className="int-step">
+      {step.title && (
+        <span className="int-step-head">
+          <span className="int-step-title">{step.title}</span>
+          {step.where && (
+            <Tag size="xs" variant="neutral">
+              <VisuallyHidden>In </VisuallyHidden>
+              {step.where}
+            </Tag>
+          )}
+        </span>
+      )}
       <span>
         <VendorWords text={step.text} resolveUrl={resolveUrl} />
       </span>
@@ -74,7 +99,55 @@ function stepWords(step: SetupStep, resolveUrl: StepsProps["resolveUrl"]): React
         </span>
       )}
       {step.needs && <NeedsState kind={step.needs} connected={step.connected === true} />}
-    </span>
+      {step.result && step.result.length > 0 && (
+        <span className="int-step-result">
+          <span className="int-step-result-mark">
+            <CircleCheckGlyph size="sm" aria-hidden />
+          </span>
+          <span>
+            <VisuallyHidden>When it worked: </VisuallyHidden>
+            <VendorWords text={step.result} resolveUrl={resolveUrl} />
+          </span>
+        </span>
+      )}
+      {step.trouble && step.trouble.length > 0 && (
+        <Disclosure
+          title="If it goes wrong"
+          size="compact"
+          variant="aside"
+          flush
+          headingLevel="none"
+        >
+          <ul className="int-step-trouble">
+            {step.trouble.map((trouble, i) => (
+              <li key={i}>
+                <span className="int-step-sign">
+                  <VendorWords text={trouble.sign} resolveUrl={resolveUrl} />
+                </span>
+                <span>
+                  <VendorWords text={trouble.fix} resolveUrl={resolveUrl} />
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Disclosure>
+      )}
+    </div>
+  );
+}
+
+/** The numbered steps: in the box the numbers hang in its icon column, in the sheet in their own gutter. */
+function StepsList({
+  steps,
+  resolveUrl,
+  markers,
+}: StepsProps & { markers: "hanging" | "indented" }) {
+  return (
+    <List variant="numbered" density="compact" markers={markers}>
+      {steps.map((step, i) => (
+        <List.Item key={i}>{stepWords(step, resolveUrl)}</List.Item>
+      ))}
+    </List>
   );
 }
 
@@ -104,11 +177,7 @@ export function StepsBox({ steps, resolveUrl, onClose }: StepsProps & { onClose?
         )
       }
     >
-      <List variant="numbered" density="compact" markers="hanging">
-        {steps.map((step, i) => (
-          <List.Item key={i}>{stepWords(step, resolveUrl)}</List.Item>
-        ))}
-      </List>
+      <StepsList steps={steps} resolveUrl={resolveUrl} markers="hanging" />
     </Callout>
   );
 }
@@ -198,8 +267,9 @@ export function SetupStepsSheet({ steps, resolveUrl }: StepsProps) {
         title="Setup steps"
         closeLabel="Close Setup steps"
       >
+        {/* THE SHEET'S TITLE NAMES THEM, so the box's own would say it twice. */}
         <div id={id}>
-          <StepsBox steps={steps} resolveUrl={resolveUrl} />
+          <StepsList steps={steps} resolveUrl={resolveUrl} markers="indented" />
         </div>
       </Modal>
     </>

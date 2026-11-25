@@ -11,6 +11,8 @@
  * only, with one line saying why.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Profiler, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -2708,4 +2710,42 @@ test("past Meta's system user cap the box says the agent stays on the company's"
   const box = screen.getByRole("region", { name: "Identity at Meta" });
   expect(within(box).getAllByText(/all 10 are used/).length).toBeGreaterThan(0);
   expect(within(box).queryByRole("button", { name: /Set up identity/ })).toBeNull();
+});
+
+// THE LAST SETUP STEP NAMES ONLY WHAT THIS TAB DRAWS: Google Cloud's and AWS's
+// steps end by turning agents on here, and every control that step marks is a
+// column, switch or button of this tab (the engine's words, from
+// internal/api/setupapi/testdata/setup_steps.json; the tab itself is
+// Directory's). Mutation: rename Review changes, and the step names nothing.
+test("the setup step that turns agents on names this tab's own controls", async () => {
+  const fixture = JSON.parse(
+    readFileSync(
+      join(process.cwd(), "..", "internal", "api", "setupapi", "testdata", "setup_steps.json"),
+      "utf8",
+    ),
+  ) as {
+    kind: string;
+    states: { tool: { prepare?: { where?: string; text: { ui?: string[] }[] }[] } }[];
+  }[];
+  for (const [kind, answer] of [
+    ["google_cloud", googleCloudAnswer()],
+    ["aws", awsAnswer()],
+  ] as const) {
+    const steps = fixture.find((t) => t.kind === kind)!.states[0]!.tool.prepare ?? [];
+    const last = steps[steps.length - 1]!;
+    expect(last.where, kind).toBe("Crewlet");
+    const marked = last.text
+      .flatMap((p) => (p.ui ? [p.ui.join(" > ")] : []))
+      .filter((n) => n !== "Agents");
+    draw(answer);
+    const headers = screen.getAllByRole("columnheader").map((h) => h.textContent?.trim());
+    fireEvent.click(screen.getByRole("switch", { name: `SRE on ${laneWords(kind).name}` }));
+    fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+    await screen.findByRole("button", { name: "Save and sync" });
+    for (const name of marked) {
+      const found = headers.includes(name) || screen.queryAllByRole("button", { name }).length > 0;
+      expect(found, `${kind}: "${name}" is not on the Agents tab`).toBe(true);
+    }
+    cleanup();
+  }
 });

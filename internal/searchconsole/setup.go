@@ -36,14 +36,20 @@ func Guide() setup.Guide {
 	return setup.Guide{
 		Summary: "Agents use your Search Console properties as their own Google identity, at the permission " +
 			"you give it on each property. No token reaches an agent's box.",
-		Prepare: []setup.Step{
-			googlegrowth.CloudFirst("the Search Console, Site Verification and Indexing APIs"),
-			{Text: vendortext.Of(vendortext.W("Add the company reader below to each property as a "),
-				vendortext.UI("Restricted user"), vendortext.W("."))},
-			{Text: vendortext.Plain("Turn agents on from the Agents tab, then set up each one's identity there: add " +
-				"its email to its properties at the permission its level needs. Crewlet checks each agent's access " +
-				"on every pass.")},
-		},
+		Prepare: append(googlegrowth.CloudSteps("Search Console", "the Search Console, Site Verification and "+
+			"Indexing APIs"),
+			setup.Step{
+				Title: "Add the company reader", Where: "Search Console",
+				Text: vendortext.Of(vendortext.W("Add the company reader below to each property as a "),
+					vendortext.UI("Restricted user"), vendortext.W(".")),
+			},
+			googlegrowth.AgentsOn("Search Console", "Sites"),
+			setup.Step{
+				Title: "Add each agent's account", Where: "Search Console",
+				Text: vendortext.Plain("Add the account on the agent's row to each of its properties at the " +
+					"permission its level needs. Crewlet checks each agent's access on every pass."),
+			},
+		),
 	}
 }
 

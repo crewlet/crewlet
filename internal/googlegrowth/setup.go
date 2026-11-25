@@ -51,13 +51,47 @@ const (
 	audienceDocURL = "https://support.google.com/cloud/answer/15549945"
 )
 
-// CloudFirst is the first step of a product whose agents sign in as their own
-// Google identities: connecting Google Cloud, after which Crewlet turns on apis
-// and makes the company reader itself. setupapi answers whether Google Cloud
-// is connected ([setup.Step.Connected]).
-func CloudFirst(apis string) setup.Step {
-	return setup.Step{Needs: integration.KindGoogleCloud, Text: vendortext.Plain("Connect Google Cloud " +
-		"first; no project needs preparing. Crewlet then turns on " + apis + " and makes the company reader.")}
+// CloudSteps are the first steps of a product whose agents sign in as their
+// own Google identities: Google Cloud connected, then the product turned on
+// here, which has Crewlet turn on apis in the identity project and make the
+// company reader. setupapi answers whether Google Cloud is connected
+// ([setup.Step.Connected]).
+func CloudSteps(name, apis string) []setup.Step {
+	w, ui := vendortext.W, vendortext.UI
+	return []setup.Step{
+		{
+			Title: "Connect Google Cloud first", Where: setup.Here, Needs: integration.KindGoogleCloud,
+			Text: vendortext.Plain("Connect Google Cloud first; no project needs preparing for " + name + "."),
+		},
+		{
+			Title: "Turn " + name + " on", Where: setup.Here,
+			Text: vendortext.Of(w("Press "), ui("Connect"), w(" here. Crewlet turns on "+apis+" in the "+
+				"identity project and makes the company reader.")),
+		},
+	}
+}
+
+// AgentsOn is the step turning agents on, where each chooses its scope from
+// scope, said in the product's words.
+func AgentsOn(name, scope string) setup.Step {
+	w, ui := vendortext.W, vendortext.UI
+	return setup.Step{
+		Title: "Turn agents on", Where: setup.Here,
+		Text: vendortext.Of(w("On the "), ui("Agents"), w(" tab, turn "), ui("On"), w(" each agent that should "+
+			"use "+name+", choose its "), ui("Access"), w(" level and "), ui(scope), w(", then press "),
+			ui("Review changes"), w(" and "), ui("Save and sync"), w(".")),
+		Result: vendortext.Plain("The agent's row reads Getting ready for about a minute, then Needs you, and " +
+			"shows its own account, which Crewlet made in the identity project."),
+	}
+}
+
+// LateAccount is the trouble of adding an agent's account at the product
+// right after Crewlet made it, which Google does not know yet.
+func LateAccount(said string) setup.Trouble {
+	return setup.Trouble{
+		Sign: vendortext.Plain("It says `" + said + "`."),
+		Fix:  vendortext.Plain("Google is still making the account. Wait a minute or two and add it again."),
+	}
 }
 
 // ClientStep is the step making the OAuth client a consent product signs in

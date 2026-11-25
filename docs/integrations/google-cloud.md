@@ -26,23 +26,27 @@ Open **Company › Integrations › Google Cloud**.
 
 Crewlet's service accounts live in a project of their own, the **identity project**: the provisioner `crewlet-provisioner` and one account per agent, nothing else.
 - **A new, empty project, used only for Crewlet.** The provisioner holds Service Account Admin there, so any other service account is one it could act as. The block refuses a project that runs workloads or holds an account Crewlet did not make.
-- Its ID is all you give Crewlet. The form suggests one; keep it and the block creates the project, or type the ID of an empty project you made on the [new project page](https://console.cloud.google.com/projectcreate) (Google shows the ID under the name, and it can differ from the name).
+- Its ID is all you give Crewlet. The form suggests one; keep it and the block creates the project, or type the ID of an empty project you made on the [new project page](https://console.cloud.google.com/projectcreate) (Google shows the ID under the name, and it can differ from the name). If an older block ran in a project that already runs something, [undo it there](#undo-the-cloud-shell-block).
 
 ### Connecting Crewlet
+
+The connect form's **Setup steps** say the same, step by step, each with where it happens, what shows it worked and what people hit.
 
 One block, run once:
 
 1. **Open the form.** Crewlet makes its ES256 federation key at once, sealed as `GOOGLE_CLOUD_FEDERATION_KEY`; its private half never leaves the secret store. The form shows the **Cloud Shell block** straight away, drawn from the **Identity project ID** as you type it.
-2. **Copy the block, open [Cloud Shell](https://console.cloud.google.com/?cloudshell=true), paste it whole and run it.** About a minute. Before it changes anything it stops, with one `Crewlet setup stopped: ...` line saying what to do, if Cloud Shell has no active account (run `gcloud auth login`), if the project runs workloads (Firebase, App Engine, Compute Engine, Cloud Run, Cloud Functions or GKE) or if it holds a service account not named `crewlet-*`. Then it:
+2. **Copy the block with its Copy button, open [Cloud Shell](https://console.cloud.google.com/?cloudshell=true), paste it whole and run it.** About a minute. Before it changes anything it stops, with one `Crewlet setup stopped: ...` line saying what to do, if Cloud Shell has no active account (run `gcloud auth login`), if the project runs workloads (Firebase, App Engine, Compute Engine, Cloud Run, Cloud Functions or GKE) or if it holds a service account not named `crewlet-*`. Then it:
    - creates the identity project if it does not exist;
    - enables the IAM, IAM Service Account Credentials, Security Token Service, Cloud Resource Manager and Service Usage APIs;
    - creates the provisioner if missing, and grants it Service Account Admin, Service Usage Viewer and `crewletApiEnabler`, a custom role holding `serviceusage.services.enable` alone, so Crewlet turns on a Google product's APIs itself;
-   - creates the workload identity pool and provider holding Crewlet's public key (inline, nothing uploaded), or updates the provider's key if it exists;
+   - creates the workload identity pool `crewlet` and its provider `crewlet-engine` holding Crewlet's public key (inline, nothing uploaded), or updates the provider's key if it exists;
    - lets Crewlet's subject act as the provisioner (Workload Identity User);
-   - prints the provider's full name as its last line.
-3. **Paste that last line** into **Workload identity provider**, press **Test connection**, then **Save**.
+   - prints the provider's full name as its last line: `projects/<project number>/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine`, with the project's **number**, not its ID.
+3. **Paste that last line** into **Workload identity provider**, press **Test connection**, then **Save**. The form closes, and within about a minute the status goes from **Needs attention** to **Setting up** to **Connected**.
 
 The block follows what you type and needs no save to appear or change. A save made before the provider is pasted keeps what you typed; the setup finishes once the provider is pasted.
+
+**Connected gives no agent any access yet.** [Prepare each project](#prepare-a-project-for-crewlet) agents should work in, then [turn the agents on](#turning-agents-on).
 
 The block is safe to run again. It pins the provider to this company's subject (`crewlet:<company>`), so no other identity can use it. A provider holds at most 8 keys; when Crewlet's key changes, the block updates the provider with `update-oidc`. Turning on a Google growth product never changes the block.
 
@@ -143,6 +147,42 @@ fi
 - each prepared project carries the three conditions and an exact `crewletOperator`;
 - the identity project holds no account but the provisioner's and Crewlet's;
 - the identity project's service account count is under its quota.
+
+### Turning agents on
+
+Every agent is off until you turn it on. On the integration's **Agents** tab, turn **On** each agent that should use Google Cloud, choose its **Access** level and **Projects** (only prepared projects are offered), then press **Review changes** and **Save and sync**. Crewlet creates the agent's service account in the identity project and grants its level on its projects ([what each change does](#what-each-change-does-at-google-cloud)).
+
+### Undo the Cloud Shell block
+
+The block stops, changing nothing, in a project that runs workloads or holds accounts Crewlet did not make. If an older block ran in the wrong project, or you want to remove Crewlet from its identity project, run this in Cloud Shell as an Owner of that project. Where the block created the project for you, `gcloud projects delete "$IDENTITY"` removes it all at once instead.
+
+```sh
+IDENTITY=the-wrong-project-id
+PROV=crewlet-provisioner@${IDENTITY}.iam.gserviceaccount.com
+
+for ROLE in roles/iam.serviceAccountAdmin roles/serviceusage.serviceUsageViewer \
+  "projects/$IDENTITY/roles/crewletApiEnabler"; do
+  gcloud projects remove-iam-policy-binding "$IDENTITY" --member="serviceAccount:$PROV" \
+    --role="$ROLE" --condition=None --format=none
+done
+gcloud iam roles delete crewletApiEnabler --project="$IDENTITY" --quiet
+gcloud iam service-accounts delete "$PROV" --project="$IDENTITY" --quiet
+gcloud iam workload-identity-pools delete crewlet --project="$IDENTITY" --location=global --quiet
+
+# Only where See more in Atlas was on:
+ATLAS=crewlet-atlas@${IDENTITY}.iam.gserviceaccount.com
+gcloud projects remove-iam-policy-binding "$IDENTITY" --member="serviceAccount:$ATLAS" \
+  --role=roles/serviceusage.serviceUsageConsumer --condition=None --format=none
+gcloud iam service-accounts delete "$ATLAS" --project="$IDENTITY" --quiet
+```
+
+**What this removes:**
+- the provisioner, `crewlet-provisioner`, and its `roles/iam.serviceAccountAdmin`, `roles/serviceusage.serviceUsageViewer` and `crewletApiEnabler` on the project, then that custom role; deleting the provisioner also ends Crewlet's `roles/iam.workloadIdentityUser` on it;
+- the workload identity pool `crewlet` with its provider `crewlet-engine`; Google keeps a deleted pool for 30 days, during which its ID cannot be reused in that project;
+- where See more in Atlas was on, `crewlet-atlas` and its `roles/serviceusage.serviceUsageConsumer`. On each other project it was granted on, remove its binding to `projects/<that project>/roles/crewletAtlasReader` with `gcloud projects remove-iam-policy-binding`, then the role with `gcloud iam roles delete crewletAtlasReader --project=<that project>`;
+- where a Google growth product was turned on, Crewlet made the company's growth reader, `crewlet-gr-...`, there: delete it with `gcloud iam service-accounts delete`.
+
+**It leaves the APIs on**, as a project already running something may use them: `iam.googleapis.com`, `iamcredentials.googleapis.com`, `sts.googleapis.com`, `cloudresourcemanager.googleapis.com` and `serviceusage.googleapis.com`, plus `cloudasset.googleapis.com` with Atlas and the growth products' APIs. Disable one with `gcloud services disable <api> --project="$IDENTITY"` only if nothing else there uses it.
 
 ## Giving each agent its own Google Cloud account
 
