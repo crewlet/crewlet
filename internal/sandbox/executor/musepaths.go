@@ -23,6 +23,10 @@ func (p Paths) MuseHeldSettings() string { return p.WorkDir() + "/muse-home-sett
 // XDG_DATA_HOME is unset for the harness, so this is the one place.
 func (p Paths) MuseSessions() string { return p.Home + "/.local/share/muse/sessions" }
 
+// MuseInstalled is Muse Code's record of the plugins installed in the home,
+// each with whether it is enabled (`muse plugins disable` writes false).
+func (p Paths) MuseInstalled() string { return p.Home + "/.local/share/muse/plugins/installed.json" }
+
 // MuseChildLines is where a run's script keeps, before its harness starts, how
 // many lines each subagent's record of the session already holds, which its
 // usage after the run is read past ([museChildUsage]).
@@ -68,6 +72,10 @@ func (p Paths) MuseNotesPlugin() string { return p.WorkDir() + "/muse-notes-plug
 // every run of the plugin's hooks records as its `source_digest`: the confirm
 // counts no other hook's ([museInstalledDigest]).
 func (p Paths) MuseNotesInstall() string { return p.WorkDir() + "/muse-notes-install.json" }
+
+// MusePluginOff marks that the box home switched the run's notes plugin off
+// ([museSwitchedOff]), so the script leaves it as it is.
+func (p Paths) MusePluginOff() string { return p.WorkDir() + "/muse-plugin-off" }
 
 // MuseNoteHelper is the note helper's build for the box (internal/notehelper),
 // written at each launch of a run wired to its notes or skills.

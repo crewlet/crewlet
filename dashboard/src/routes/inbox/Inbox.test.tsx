@@ -4617,11 +4617,33 @@ describe("every item has its own address", () => {
       work_item: { backend: "native", id: "t-12", key: "LEAD-12", project: "LEAD" },
     },
   };
+  const FOLD_IN = {
+    kind: "fold_in",
+    at: new Date(Date.now() - 8 * 60_000).toISOString(),
+    fold_in: {
+      id: "fold-1",
+      turn_id: "turn-8",
+      launch_id: "job-8",
+      seat: "cto",
+      requester: "jane",
+      asker: "ceo",
+      asker_kind: "human",
+      conversation: "chat:C1",
+      words: "also redo the logo",
+      cut: 0,
+      put_to: ["jane"],
+      asked_at: new Date(Date.now() - 8 * 60_000).toISOString(),
+      decision: { question: "ceo asked cto for work of their own", options: [], role: "approver" },
+    },
+    put_to_you: true,
+    may_answer: true,
+    needs_you: true,
+  };
   /** An inbox holding a row of every kind. */
   const everyKind = () => ({
     agents: [LIMITED, BUDGET],
     answers: {
-      decisions: decisionsOf(askItem(), RUN),
+      decisions: decisionsOf(askItem(), RUN, FOLD_IN),
       answered_decisions: { handle: "jane", items: [answeredItem()] },
       inbox: inboxes({ unread: [notice("r-1"), codeNotice("c-5"), artifactNotice("a-5")] }),
     },
@@ -4657,6 +4679,7 @@ describe("every item has its own address", () => {
     for (const want of [
       "#/inbox/ask/c-12",
       "#/inbox/run/turn-7",
+      "#/inbox/fold_in/fold-1",
       "#/inbox/seat/pm",
       "#/inbox/notice/r-1",
       "#/inbox/change/c-5",
@@ -4687,12 +4710,29 @@ describe("every item has its own address", () => {
     for (const row of rows()) {
       const address = decodeURIComponent(row.getAttribute("href")!);
       expect(address).toMatch(
-        /^#\/inbox\/(ask|run|seat|condition|notice|change|artifact)(\/[A-Za-z0-9_.:-]+)+$/,
+        /^#\/inbox\/(ask|run|fold_in|seat|condition|notice|change|artifact)(\/[A-Za-z0-9_.:-]+)+$/,
       );
       for (const said of ["fixtures", "release", "Q3", "upload", "something about", "Ship"]) {
         expect(address).not.toContain(said);
       }
     }
+  });
+
+  // A FOLD-IN REQUEST is a row like any other: its own address, opened on a press, left by Back.
+  test("a fold-in row opens at its own address, and Back returns to the item before", async () => {
+    location.hash = "#/inbox/ask/c-12";
+    mount(everyKind());
+    await settle();
+    expect(current()).toBe("#/inbox/ask/c-12");
+    expect(press("#/inbox/fold_in/fold-1")).toBe(true);
+    await settle();
+    expect(location.hash).toBe("#/inbox/fold_in/fold-1");
+    expect(current()).toBe("#/inbox/fold_in/fold-1");
+    expect(screen.queryByText(MISSING)).toBeNull();
+    act(() => history.back());
+    await waitFor(() => expect(location.hash).toBe("#/inbox/ask/c-12"));
+    await settle();
+    expect(current()).toBe("#/inbox/ask/c-12");
   });
 
   test("opening an item pushes, so Back and Forward step between the items read", async () => {

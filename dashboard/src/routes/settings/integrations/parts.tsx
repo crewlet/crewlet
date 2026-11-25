@@ -31,6 +31,7 @@ import { marked } from "~/ui/Problems.tsx";
 import { VendorWords } from "~/ui/VendorWords.tsx";
 import { href } from "~/app/router.tsx";
 import { DisconnectDialog } from "../DisconnectDialog.tsx";
+import { atVendor } from "../SetupForm.tsx";
 // THE SCREEN'S OWN SHEET, with every module of the integrations screen (its
 // directory, panes, setup form and disconnect dialog), which all reach it here.
 import "~/styles/integrations.css";
@@ -284,7 +285,7 @@ export function SettingsSummary({ tool }: { tool: Tool }) {
     .flatMap((s) => s.tool.requirements)
     .filter(
       (r, i, all) =>
-        !r.hidden && r.kind !== "add_identity" && all.findIndex((o) => o.field === r.field) === i,
+        !r.hidden && !atVendor(r.kind) && all.findIndex((o) => o.field === r.field) === i,
     );
   if (reqs.length === 0) {
     return <p className="t-caption">Nothing to set for the company as a whole.</p>;

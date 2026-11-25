@@ -153,6 +153,89 @@ func (m *MCPServer) SeatBindings() []BoundSeatKey {
 	return out
 }
 
+// BoundOrgKey is one of an integration's own values a per-seat server is
+// started with beside each seat's credential ([catalogue.OrgKey]), under the
+// key and prefix its own transport reads.
+type BoundOrgKey struct {
+	Kind, Field, Key, Prefix string
+}
+
+// OrgBindings is every value of its integration's own this per-seat server
+// reads, as this build recognises it ([catalogue.OrgKeysFor]); none for a
+// shared server or one that declares its seat_credentials.
+func (m *MCPServer) OrgBindings() []BoundOrgKey {
+	if m.IsShared() || len(m.SeatCredentials) > 0 {
+		return nil
+	}
+	kind, keys, ok := catalogue.OrgKeysFor(m.Launch())
+	if !ok {
+		return nil
+	}
+	var out []BoundOrgKey
+	for _, k := range keys {
+		key, prefix := k.Env, ""
+		if m.Kind() == TransportHTTP {
+			key, prefix = k.Header, k.Prefix
+		}
+		if key != "" {
+			out = append(out, BoundOrgKey{Kind: kind, Field: k.Field, Key: key, Prefix: prefix})
+		}
+	}
+	return out
+}
+
+// orgFields is each integration's own values by the field the catalogue
+// names ([catalogue.OrgKey]), read off the company's block: the one place
+// config reads them for a tool.
+var orgFields = map[string]map[string]func(*Integrations) string{
+	"datadog": {"API_KEY": func(in *Integrations) string {
+		if d := in.Datadog; d != nil && d.Enabled && d.Provisioning != nil {
+			return d.Provisioning.APIKey
+		}
+		return ""
+	}},
+	"mattermost": {"URL": func(in *Integrations) string {
+		if m := in.Mattermost; m != nil && m.Enabled {
+			return m.URL
+		}
+		return ""
+	}},
+}
+
+// orgValue is k's value as the document writes it (`${DATADOG_API_KEY}`), ""
+// where the company holds none.
+func (c *Company) orgValue(k BoundOrgKey) string {
+	read, ok := orgFields[k.Kind][k.Field]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(read(&c.Integrations))
+}
+
+// HandedOrgKeys is every value of its integration's own c hands server's
+// instances: each of [MCPServer.OrgBindings] the company holds and the entry
+// writes no value of its own for.
+func (c *Company) HandedOrgKeys(server *MCPServer) []BoundOrgKey {
+	var out []BoundOrgKey
+	for _, k := range server.OrgBindings() {
+		if c.orgValue(k) != "" && !server.writesKey(server.ownValues(), k.Key) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// writesKey reports whether block names key, in whatever case the server
+// tells keys apart by ([MCPServer.ValueKey]).
+func (m *MCPServer) writesKey(block map[string]string, key string) bool {
+	for written := range block {
+		if m.ValueKey(written) == m.ValueKey(key) {
+			return true
+		}
+	}
+	return false
+}
+
 // SignedBinding is the seat credential this per-seat server's requests are
 // signed with, and false for a server that is handed its credential instead.
 func (m *MCPServer) SignedBinding() (BoundSeatKey, bool) {
@@ -283,7 +366,8 @@ func (c *Company) boundRef(in *RoleIntegrations, handle string, k BoundSeatKey) 
 // bindSeatTools adds each agent seat's own credential to its environment for
 // every per-seat server that reads an integration it is on at. It runs after
 // normalization, so the engine's binding wins over a unit's value for the same
-// key, as a seat's own value always does.
+// key, as a seat's own value always does. The integration's own values fill
+// only a key neither the entry nor the seat's block names.
 func (c *Company) bindSeatTools(o *org.Organization) {
 	seats := map[string]*org.Role{}
 	for seat := range o.AllRoles() {
@@ -310,7 +394,13 @@ func (c *Company) bindSeatTools(o *org.Organization) {
 					bound[k.Key] = k.Prefix + ref
 				}
 			}
-			if len(bound) == 0 {
+			orgs := map[string]string{}
+			for _, k := range c.HandedOrgKeys(server) {
+				if role.seatOnAt(k.Kind) {
+					orgs[k.Key] = k.Prefix + c.orgValue(k)
+				}
+			}
+			if len(bound) == 0 && len(orgs) == 0 {
 				continue
 			}
 			env := seat.MCPEnv.Clone()
@@ -330,6 +420,11 @@ func (c *Company) bindSeatTools(o *org.Organization) {
 					}
 				}
 				block[key] = value
+			}
+			for key, value := range orgs {
+				if !server.writesKey(block, key) {
+					block[key] = value
+				}
 			}
 			env[server.Name] = block
 			seat.MCPEnv = env

@@ -4,11 +4,13 @@ import { describe, expect, test } from "vitest";
 import type { McpCatalogueEntry, McpValueState } from "~/contract/mcp.ts";
 import type { ConfigProblem } from "~/protocol/types.ts";
 import {
+  catalogueRows,
   emptyDraft,
   entityOf,
   fromCatalogue,
   fromServer,
   nameFromAddress,
+  newRow,
   problemAt,
   readPasted,
   stepOf,
@@ -259,6 +261,93 @@ describe("an edit", () => {
     const d = typed(fromServer(base, values, null, "headers"), "Authorization", "Bearer new");
     expect(entityOf(d, base).headers).toEqual(base.headers);
     expect(valuesOf(d)).toEqual({ Authorization: "Bearer new" });
+  });
+});
+
+/** Datadog's entry: both keys its integration sends, and a third it does not. */
+const datadog = entry({
+  id: "datadog",
+  name: "datadog",
+  title: "Datadog",
+  vendor: "datadog",
+  url: "https://mcp.datadoghq.com/v1/mcp",
+  headers: ["DD_API_KEY", "DD_APPLICATION_KEY"].map((name) => ({
+    name,
+    description: "",
+    required: true,
+    secret: true,
+    value: "",
+    format: "",
+    from_integration: true,
+  })),
+  auth: ["integration", "oauth", "headers"],
+  oauth_client: "dcr",
+  integration: "datadog",
+});
+
+describe("an integration's sign-in", () => {
+  // ROWS FOLLOW THE SIGN-IN: nobody types what the integration sends, and a
+  // header sign-in types every key. Mutation: leave the integration's keys
+  // out of a header sign-in, and its server is saved without them.
+  test("takes no row the integration sends, and a header sign-in takes every key", () => {
+    const d = fromCatalogue(datadog, emptyDraft());
+    expect(d.signIn).toBe("integration");
+    expect(d.headers).toEqual([]);
+    const headers = catalogueRows(datadog, "headers", d.headers);
+    expect(headers.map((r) => [r.key, r.required])).toEqual([
+      ["DD_API_KEY", true],
+      ["DD_APPLICATION_KEY", true],
+    ]);
+    const typedRows = headers.map((r) => ({ ...r, value: `${r.key}-typed` }));
+    expect(catalogueRows(datadog, "integration", typedRows)).toEqual([]);
+  });
+
+  // NO SAVE DROPS A HEADER THE INTEGRATION DOES NOT SEND: an edit of a server
+  // in an integration's sign-in writes back every stored header the engine
+  // does not report as the integration's, as its entry spells it. Mutation:
+  // send no rows in an integration's sign-in, and the headers are lost.
+  test("writes back each stored header the integration does not send", () => {
+    const saved = {
+      name: "datadog",
+      transport: "http",
+      url: "https://mcp.datadoghq.com/v1/mcp",
+      shared: false,
+      headers: { DD_API_KEY: "${DATADOG_API_KEY}", "X-Region": "eu" },
+    };
+    const state = (key: string, bound: string | null): McpValueState => ({
+      key,
+      as: "header",
+      variable: "",
+      set: true,
+      stored_at: null,
+      stored_by: null,
+      optional: false,
+      bound_by: bound,
+    });
+    const d = fromServer(
+      saved,
+      [state("DD_API_KEY", null), state("X-Region", null), state("DD_APPLICATION_KEY", "datadog")],
+      datadog,
+      "integration",
+    );
+    expect(d.headers.map((r) => [r.key, r.stored])).toEqual([
+      ["DD_API_KEY", true],
+      ["X-Region", true],
+    ]);
+    expect(entityOf({ ...d, autoAccept: true }, saved)).toEqual({
+      ...saved,
+      tools: { auto_accept_changes: true },
+    });
+  });
+
+  // Mutation: send no rows in an integration's sign-in, and the value is never stored.
+  test("asks for and stores a value typed for a key the integration does not send", () => {
+    const d = {
+      ...fromCatalogue(datadog, emptyDraft()),
+      headers: [newRow("X-Region", { required: true })],
+    };
+    expect(missingIn(d, "signin").row).toBeDefined();
+    expect(valuesOf(typed(d, "X-Region", " eu "))).toEqual({ "X-Region": "eu" });
   });
 });
 

@@ -54,6 +54,7 @@ import { writeFailed } from "~/protocol/writeOutcome.ts";
 import { setAssistantActivity } from "../status.ts";
 import { CONVERSATION_ID, writeTab } from "../tab.ts";
 import { pageSnapshot, undoPageAction, type PageSnapshot } from "../context.ts";
+import { withView } from "../view.ts";
 import { takeAction } from "./pageActions.ts";
 import {
   EMPTY,
@@ -321,7 +322,12 @@ function pageAction(frame: AssistantNarrowFrame): void {
     (action.proposal_id !== undefined && approvals.has(action.proposal_id));
   const at = generation;
   void takeAction(action, mine, {
-    settle: (local) => dispatch({ type: "action_local", actionId: action.action_id, local }),
+    // A SCREEN READ has no receipt: the turn's step says it read the screen.
+    settle: (local) => {
+      if (action.confirm !== "read") {
+        dispatch({ type: "action_local", actionId: action.action_id, local });
+      }
+    },
   }).then((reported) => {
     // THE TURN RESUMES ONLY ONCE THE PAGE HAS REPORTED, and the stream that
     // carried the action may already have closed on the parked turn, so the
@@ -492,7 +498,7 @@ export async function send(
       {
         ...versioned,
         input: { text },
-        page_context: page ? page.context : null,
+        page_context: page ? withView(page.context) : null,
         ...(mode === "ask" ? {} : { mode }),
         ...(attachments.length > 0 ? { attachments: attachments.map((a) => a.file_id) } : {}),
       },
@@ -804,7 +810,7 @@ function decisionBody(proposal: AssistantProposalCard): AssistantProposalDecisio
   return {
     ...versioned,
     digest: proposal.digest,
-    ...(screen === null ? {} : { page_context: screen.context }),
+    ...(screen === null ? {} : { page_context: withView(screen.context) }),
   };
 }
 

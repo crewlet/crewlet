@@ -68,7 +68,7 @@ describe("the context a turn sends", () => {
       query: { blocked: "true" },
       resources: [{ kind: "task", id: "ENG-1", version: "4" }],
       selection: { kind: "task", id: "ENG-1" },
-      accepts: [],
+      accepts: ["page.read"],
     });
     expect(pageContextFits(context)).toBe(true);
   });
@@ -95,7 +95,7 @@ describe("the context a turn sends", () => {
     expect(context.screen).toBe("unknown");
     expect(context.query).toEqual({ fine: "1" });
     expect(context.resources).toEqual([{ kind: "task", id: "ENG-2" }]);
-    expect(context.accepts).toEqual(["work.filter.apply"]);
+    expect(context.accepts).toEqual(["work.filter.apply", "page.read"]);
   });
 
   test("is held to the counts and the byte budget, shedding the query first", () => {
@@ -146,11 +146,12 @@ describe("the context a turn sends", () => {
         actions,
         resources: [{ kind: "task", id: "ENG-2" }],
       });
-      expect(context.accepts).toEqual(["work.filter.apply", "draft.set"]);
-      expect(Object.keys(context.action_args ?? {})).toEqual(["work.filter.apply"]);
+      expect(context.accepts).toEqual(["work.filter.apply", "draft.set", "page.read"]);
+      expect(Object.keys(context.action_args ?? {})).toEqual(["work.filter.apply", "page.read"]);
       expect(Object.keys(context.action_revisions ?? {})).toEqual([
         "work.filter.apply",
         "draft.set",
+        "page.read",
       ]);
       expect(context.resources).toEqual([{ kind: "task", id: "ENG-2" }]);
       expect(pageContextFits(context)).toBe(true);
@@ -285,15 +286,16 @@ describe("a page of several components", () => {
       actions: { "work.filter.apply": noop, "work.arrange.set": noop },
     });
     expect(pageSnapshot()?.context.accepts.sort()).toEqual([
+      "page.read",
       "project.lens.set",
       "work.arrange.set",
       "work.filter.apply",
     ]);
     expect(pageSnapshot()?.context.resources).toEqual([{ kind: "project", id: "ENG" }]);
     list();
-    expect(pageSnapshot()?.context.accepts).toEqual(["project.lens.set"]);
+    expect(pageSnapshot()?.context.accepts).toEqual(["project.lens.set", "page.read"]);
     project();
-    expect(pageSnapshot()?.context.accepts).toEqual([]);
+    expect(pageSnapshot()?.context.accepts).toEqual(["page.read"]);
   });
 
   test("a move in any component's data is a move of the page", () => {

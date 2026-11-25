@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/words"
@@ -24,7 +26,8 @@ import (
 // loads for the start directory ([codexGuardCommand]) and refuses the run
 // where one other than the run's own file or command line holds the server's
 // entry, naming the file, key and entry ([codexGuardVerdict]); the same
-// answer is the run's project_doc_max_bytes ([codexDocLimit]).
+// answer is the run's project_doc_max_bytes ([codexDocLimit]), and where hooked
+// it refuses a layer that switches the run's nested hook off ([codexHooksVerdict]).
 
 // codexGuardAnswer is how long [codexGuardCommand] waits for its app-server's
 // answer: as long as the run's script waits for its own to listen
@@ -37,9 +40,11 @@ const codexGuardAnswer = codexListenWait
 // ([codexGuardVerdict]), and is the project_doc_max_bytes Codex reads for the
 // start directory ([codexDocLimit]) with what the run's error stream is to say
 // of it. ONLY CREWLET'S SERVERS REFUSE A RUN: where the ask itself fails, a run
-// with none of them starts on [codexProjectDocMaxBytes], saying so. home is the
-// home's own configuration ([codexHomeConfig]).
-func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths, home string) (int, string, error) {
+// with none of them starts on [codexProjectDocMaxBytes], saying so. hooked: the
+// box holds the helper the nested hook runs. home is the home's own
+// configuration ([codexHomeConfig]).
+func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths, home string,
+	hooked bool) (int, string, error) {
 	servers := crewletServers(req.MCPServers)
 	config, err := codexConfigOver(home, codexConfigTOML(codexGuardServers(req, servers), "", req.Model))
 	if err != nil {
@@ -65,6 +70,11 @@ func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest
 	}
 	if err = codexGuardVerdict(res.Stdout, servers); err != nil {
 		return 0, "", err
+	}
+	if hooked {
+		if err = codexHooksVerdict(res.Stdout, paths.CodexHome()+"/config.toml"); err != nil {
+			return 0, "", err
+		}
 	}
 	return codexDocLimit(res.Stdout), "", nil
 }
@@ -126,6 +136,7 @@ func codexGuardCommand(req sandbox.RunRequest, paths Paths) string {
 	line(`exec 3>&-`)
 	line(`kill "$gp" 2> /dev/null; wait "$gp" 2> /dev/null`)
 	line(`cat "$gt/out"`)
+	line(`echo; echo %s; cat -- %s 2> /dev/null`, q(codexRequirementsMark), q(codexRequirementsFile))
 	line(`exit 0`)
 	return b.String()
 }
@@ -145,10 +156,108 @@ type codexConfigRead struct {
 			} `json:"name"`
 			Config struct {
 				MCPServers map[string]json.RawMessage `json:"mcp_servers"`
+				codexHookSwitches
 			} `json:"config"`
 			DisabledReason string `json:"disabledReason"`
 		} `json:"layers"`
+		Config codexHookSwitches `json:"config"`
 	} `json:"result"`
+}
+
+// codexHookSwitches is the part of a configuration that can switch the run's
+// nested hook off: the two names of the hooks feature, and each hook's state.
+type codexHookSwitches struct {
+	Features map[string]json.RawMessage `json:"features"`
+	Hooks    struct {
+		State map[string]struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"state"`
+	} `json:"hooks"`
+}
+
+// codexRequirementsFile is the machine's requirements Codex 0.171.0 reads,
+// its top-level `allow_managed_hooks_only` running managed hooks alone (read
+// in its ConfigRequirementsToml; root's alone to write, so not measured). The
+// Codex home's own requirements.toml is not read (measured).
+const codexRequirementsFile = "/etc/codex/requirements.toml"
+
+// codexRequirementsMark opens [codexRequirementsFile]'s content in the
+// guard's answer, after the app-server's.
+const codexRequirementsMark = "crewlet-codex-requirements"
+
+// codexHookFeatures is the two names Codex 0.171.0 reads its hooks feature
+// by, either false switching every hook off (measured).
+var codexHookFeatures = []string{"codex_hooks", "hooks"}
+
+// codexHooksVerdict refuses the run where out's `config/read` answer switches
+// the run's nested hook off: a hooks feature false in the configuration Codex
+// settles on, named by the highest loaded layer setting it (a trusted
+// project's counts), or the hook's own state `enabled = false` in a loaded
+// layer other than a project's, which Codex ignores there (measured). home
+// names the layer the guard's own home stands in for, the box home's file.
+func codexHooksVerdict(out, home string) error {
+	var read codexConfigRead
+	for l := range strings.SplitSeq(out, "\n") {
+		var r codexConfigRead
+		if json.Unmarshal([]byte(l), &r) == nil && string(r.ID) == "2" && r.Result != nil {
+			read = r
+		}
+	}
+	var said []string
+	if _, text, ok := strings.Cut(out, "\n"+codexRequirementsMark+"\n"); ok {
+		var requirements struct {
+			ManagedHooksOnly *bool `toml:"allow_managed_hooks_only"`
+		}
+		if _, err := toml.Decode(text, &requirements); err == nil && requirements.ManagedHooksOnly != nil &&
+			*requirements.ManagedHooksOnly {
+			said = append(said, codexRequirementsFile+" sets allow_managed_hooks_only = true, which runs the "+
+				"machine's managed hooks alone")
+		}
+	}
+	if read.Result == nil {
+		return codexHooksRefusal(said)
+	}
+	file := func(i int) string {
+		layer := read.Result.Layers[i]
+		switch {
+		case layer.Name.Type == "user":
+			return home
+		case layer.Name.DotCodexFolder != "":
+			return layer.Name.DotCodexFolder + "/config.toml"
+		case layer.Name.File != "":
+			return layer.Name.File
+		}
+		return "Codex's " + layer.Name.Type + " configuration"
+	}
+	for _, feature := range codexHookFeatures {
+		if string(read.Result.Config.Features[feature]) != "false" {
+			continue
+		}
+		for i, layer := range read.Result.Layers {
+			if v, ok := layer.Config.Features[feature]; ok && layer.DisabledReason == "" && string(v) != "null" {
+				said = append(said, fmt.Sprintf("%s sets features.%s = false", file(i), feature))
+				break
+			}
+		}
+	}
+	for i, layer := range read.Result.Layers {
+		state, ok := layer.Config.Hooks.State[codexNestedHookKey]
+		if ok && state.Enabled != nil && !*state.Enabled && layer.DisabledReason == "" && layer.Name.Type != "project" {
+			said = append(said, fmt.Sprintf("%s sets hooks.state.%q.enabled = false", file(i), codexNestedHookKey))
+		}
+	}
+	return codexHooksRefusal(said)
+}
+
+// codexHooksRefusal is the run's refusal for said, what switches its nested
+// hook off; nil for nothing.
+func codexHooksRefusal(said []string) error {
+	if len(said) == 0 {
+		return nil
+	}
+	return fmt.Errorf("executor: Codex would run without the run's hook that hands a checkout cloned during it "+
+		"its instructions: %s, and the run never switches on a hook the box switched off; remove that key",
+		strings.Join(said, "; "))
 }
 
 // codexGuardVerdict refuses the run where out, an app-server's stdout, holds

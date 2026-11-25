@@ -573,6 +573,9 @@ type Engine struct {
 	// readings is what this node kept of each sign-in's windows in its own
 	// file, read back at each apply ([Engine.recallReadings]).
 	readings keptReadings
+	// mcpDown is when each MCP instance this node holds stopped serving, kept
+	// in its own file across a restart ([Engine.keepMCPDown]).
+	mcpDown mcpDown
 
 	// fakePlay is Options.fakePlay: what a `providers.sandbox.fake` company's
 	// runs do, nil for the double's own demonstration. Kept because every

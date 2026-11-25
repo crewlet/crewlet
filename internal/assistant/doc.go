@@ -69,8 +69,10 @@
 // (the engine's words, the route's answer fenced as an API answer, a page's
 // report fenced as the page's). Each taints the resumed segment as a step's
 // read does, beside the taint the park kept, and the proposal card is updated
-// in place by its first card id. Emit streams a page action to a turn that
-// stays parked. A Stop of a parked turn declines what it waits on through
+// in place by its first card id. A screen read (catalog.ReadScreenTool) parks
+// too: its action is sent only once the park lands, and the page's report,
+// carrying the screen as it is now, resumes the turn with no card. Emit
+// streams a page action to a turn that stays parked. A Stop of a parked turn declines what it waits on through
 // approval.DeclineTurn, bound with BindDecliner because the approver is built
 // over the service, under the Stop's own key; Stop decides from the turn's
 // record before a local runner, since a runner that just parked is still
