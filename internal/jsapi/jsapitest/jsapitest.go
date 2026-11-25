@@ -150,7 +150,7 @@ func (r *Read) Leaderless() error { return r.Refuse(server.NewJSClusterNotAvailE
 func (r *Read) Refuse(apiErr *server.ApiError) error {
 	body, err := json.Marshal(server.ApiResponse{Error: apiErr})
 	if err != nil {
-		return fmt.Errorf("jsapitest: encode the answer %v: %w", apiErr, err)
+		return fmt.Errorf("jsapitest: encode the answer %q: %w", apiErr.Description, err)
 	}
 	return r.h.nc.Publish(r.msg.Reply, body)
 }
