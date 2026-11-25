@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -641,5 +642,27 @@ func TestAnImageTheRuleRefusesIsNeverWritten(t *testing.T) {
 	if !res.IsError || len(res.Content) != 1 || !strings.Contains(text(res), "not a PNG, a JPEG or a WebP") {
 		t.Errorf("the harness was answered %d blocks, failed %v: %q, want one failed text saying why",
 			len(res.Content), res.IsError, text(res))
+	}
+}
+
+// ONE TOOL WITH AN INVALID SCHEMA IS LEFT OUT ALONE: Claude Code refuses a
+// list holding one and offers none of the server's tools, so the session
+// lists every other tool and never that one.
+//
+// Mutation: drop the listable check in sync and the bad tool is listed.
+func TestOneToolWithAnInvalidSchemaIsLeftOutAlone(t *testing.T) {
+	t.Parallel()
+	bad := tool("bad_item")
+	bad.Def.Parameters = map[string]any{"type": "object", "properties": map[string]any{}, "required": []string(nil)}
+	d := &fakeDispatcher{offered: []toolsession.Tool{tool("get_item"), bad, tool("put_item")}}
+	s, err := host(t).Open(t.Context(), "crewlet", "CTO (cto)", d)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Retire()
+	got := names(t, client(t, s))
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"get_item", "put_item"}) {
+		t.Errorf("the session listed %v, want every tool but the one with the invalid schema", got)
 	}
 }

@@ -9,10 +9,32 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/logging"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
+	"github.com/crewlet/crewlet/internal/tools/toolschema"
 )
+
+var log = logging.Get("toolsession")
+
+// unlisted is each tool name already logged as left out for its schema, so
+// the warning is once per tool per process.
+var unlisted sync.Map
+
+// listable reports whether tool's input schema is one a harness can take: one
+// it would refuse would cost the whole server's list in Claude Code, so it is
+// left out alone, and logged ([toolschema]).
+func listable(tool Tool) bool {
+	faults := toolschema.Faults(tool.Def.Parameters)
+	if len(faults) == 0 {
+		return true
+	}
+	if _, logged := unlisted.LoadOrStore(tool.Def.Name, struct{}{}); !logged {
+		log.Warn("tool_schema_invalid", "tool", tool.Def.Name, "faults", faults)
+	}
+	return false
+}
 
 // Dispatcher is the phase's side of a session: what is offered, and how a call
 // is decided and run.
@@ -271,10 +293,14 @@ func (s *Server) sync() (changed bool, listsBefore uint64) {
 	live := make(map[string]struct{})
 	for _, tool := range s.d.Offered() {
 		name := tool.Def.Name
-		live[name] = struct{}{}
 		if _, have := s.advertised[name]; have {
+			live[name] = struct{}{}
 			continue
 		}
+		if !listable(tool) {
+			continue
+		}
+		live[name] = struct{}{}
 		s.srv.AddTool(&mcp.Tool{
 			Name:        name,
 			Description: tool.Def.Description,
