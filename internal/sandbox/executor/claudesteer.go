@@ -231,7 +231,7 @@ func (ClaudeCode) hookAnswer(event, take string, notes []HookNote) string {
 	case calls > 1:
 		named = append(named, words.Said(strconv.Itoa(calls)+" "+hookCallsMany))
 	}
-	line := "crewlet: " + words.And(named) + " reached the run"
+	line := claudeHookOpening + words.And(named) + " reached the run"
 	if event == claudeEventFinish {
 		line += " as it was finishing"
 	}

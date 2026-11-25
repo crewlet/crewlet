@@ -667,8 +667,9 @@ type NoteRead struct {
 	// conversation from the restart on, which is not known to hold it.
 	// Delivered all the same, and carried; but no capture of the session
 	// counts it held ([notesHeld]), so a launch that continues one tells it
-	// again. A thread that compacted or rooted again decides no take, so marks
-	// none Restarted (executor's package doc, "A hook's note").
+	// again. A take before a compaction's last boundary is Restarted only where
+	// a reply of the model followed it there (executor's package doc, "A
+	// hook's note").
 	Restarted bool `json:"restarted,omitempty"`
 
 	// Extra is every key of the read this build does not know — see

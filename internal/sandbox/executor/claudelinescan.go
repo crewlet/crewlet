@@ -923,9 +923,10 @@ func (d *lineDecoder) members(scan *jsonscan.Scanner, each func(name []byte, k j
 
 // member reads the record's member name, whose value's first token, k, the
 // scanner stands at: a head key captured into d, a small value its accessors
-// decode captured into f, taskDelivery's presence, a frame its type may read
-// ([gates]), and every other member passed over unheld; estimating, the
-// images taskDelivery carries and the record's stored rendering besides.
+// decode captured into f, taskDelivery's and rowsAheadOfPutBack's presence,
+// a frame its type may read ([gates]), and every other member passed over
+// unheld; estimating, the images taskDelivery carries and the record's stored
+// rendering besides.
 func (d *lineDecoder) member(scan *jsonscan.Scanner, k jsonscan.Kind, name []byte, f *lineFacts) error {
 	for i, key := range headNames {
 		if string(name) == key {
@@ -945,6 +946,9 @@ func (d *lineDecoder) member(scan *jsonscan.Scanner, k jsonscan.Kind, name []byt
 		}
 	}
 	switch {
+	case string(name) == "rowsAheadOfPutBack":
+		f.putBack = true
+		return scan.Skip()
 	case string(name) == "taskDelivery":
 		f.taskDelivery = true
 		if !d.estimating {
