@@ -84,6 +84,7 @@ test("an integration's links open that integration, at a tab or form its page ha
   const links = JSON.parse(readFileSync(FIXTURE, "utf8")) as EngineLink[];
   const ours = links.filter((link) => routeScreenOf(link.screen) === "integrations");
   expect(ours.map((link) => link.screen).sort()).toEqual([
+    "google",
     "integration",
     "integration-activity",
     "integration-agents",
@@ -91,7 +92,14 @@ test("an integration's links open that integration, at a tab or form its page ha
     "integration-setup",
     "integrations",
   ]);
-  for (const link of ours.filter((l) => l.screen !== "integrations")) {
+  const google = resolve(
+    ours
+      .find((l) => l.screen === "google")!
+      .href.replace(/^#\//, "")
+      .split("/"),
+  );
+  expect(google.resolved && google.screen === "integrations" && google.kind).toBe("google");
+  for (const link of ours.filter((l) => l.screen !== "integrations" && l.screen !== "google")) {
     const [path = "", query = ""] = link.href.replace(/^#\//, "").split("?");
     const route = resolve(path.split("/"));
     expect(route.resolved && route.screen === "integrations" && route.kind).toBe("google_cloud");

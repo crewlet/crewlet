@@ -795,7 +795,7 @@ function SignInSection({
           ) : (
             <EmptyValue label="No sign-in client yet" />
           )}
-          {redirect && <RedirectStep r={redirect} />}
+          {redirect && <RedirectStep r={redirect} integrations={signIns.map((p) => p.kind)} />}
           {signIns.length > 0 && (
             <DescriptionList
               dense

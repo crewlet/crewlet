@@ -5040,9 +5040,9 @@ describe("the OAuth clients a moved address left behind", () => {
     expect(clients.textContent).toContain("123456789012-abcdefgh…");
     expect(clients.textContent).toContain("Google client of AdSense and AdMob");
     expect(clients.textContent).toContain("last signed in through old-tunnel.example.com");
-    expect(within(clients).getByRole("link", { name: "Open AdSense" }).getAttribute("href")).toBe(
-      "#/company/integrations/adsense?open=settings",
-    );
+    expect(
+      within(clients).getByRole("link", { name: "Open Google sign-in" }).getAttribute("href"),
+    ).toBe("#/company/integrations/google?tab=settings&product=adsense");
     expect(within(clients).getByRole("link", { name: "Open search" }).getAttribute("href")).toBe(
       "#/settings/mcp-tools/servers/search?tab=connection",
     );

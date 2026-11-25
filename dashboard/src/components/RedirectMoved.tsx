@@ -69,14 +69,20 @@ export function RedirectMovedClients({ moved }: { moved: AdvisorRedirectMoved })
  * earlier address; nothing while it lists the current one, or for a reader not
  * told the notices.
  */
-export function RedirectStale({ vendor, name }: { vendor: "google" | "mcp"; name: string }) {
+export function RedirectStale({
+  vendor,
+  names,
+}: {
+  vendor: "google" | "mcp";
+  names: readonly string[];
+}) {
   const reads = useReadsNotices();
   const { data } = useQuery("advisor_notices", undefined, {
     pollMs: ADVISOR_POLL_MS,
     enabled: reads,
   });
   const notices = reads && Array.isArray(data?.notices) ? data.notices : undefined;
-  const client = staleClientOf(notices, vendor, name);
+  const client = staleClientOf(notices, vendor, names);
   if (!client) return null;
   const google = vendor === "google";
   return (
