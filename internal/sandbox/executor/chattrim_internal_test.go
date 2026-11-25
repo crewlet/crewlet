@@ -516,7 +516,7 @@ func TestALineFormReadsAlikeInGoAndInAwk(t *testing.T) {
 	t.Parallel()
 	forms := []namedForm{{"set", geminiCompressionSet}, {"user", geminiCompressionUser},
 		{"ack", geminiCompressionAck}, {"closed", geminiSyncClosed}, {"touched", geminiSyncTouched}}
-	forms = append(forms, qwenCompressions...)
+	forms = append(forms, qwenCompressions()...)
 	var lines [][]byte
 	for _, f := range []struct {
 		h    chatTrimHarness

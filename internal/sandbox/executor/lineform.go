@@ -140,5 +140,5 @@ function holds(s, f,   m, i, k, p, at) {
 
 // awkString is s as an awk string literal.
 func awkString(s string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+	return `"` + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), `"`, `\"`) + `"`
 }
