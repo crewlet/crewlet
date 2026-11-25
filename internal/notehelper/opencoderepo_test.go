@@ -101,3 +101,54 @@ func TestAnOpenCodeFiringHandsClaudeMDWithoutAgentsMD(t *testing.T) {
 		t.Errorf("printed %q, want %q (said %q)", out, want, said)
 	}
 }
+
+// A COPY NEVER TAKES THE NAME OF A SKILL THE HARNESS LISTS ELSEWHERE: OpenCode
+// 2.3.2 lists two skills of one name and loads neither (measured), so a
+// clone's skill whose copy would be named as a skill of the listed
+// directories (absolute, or under the working directory) is left out, named
+// in the answer and the skip log, whether the listed skill's frontmatter or,
+// with none, its directory gives the name; the others are copied.
+//
+// Mutation: skip the listed names, read only the frontmatter, or only the
+// directory, and the answer or the copies go red.
+func TestACopyNeverTakesTheNameOfASkillTheHarnessListsElsewhere(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	home := t.TempDir()
+	writeTree(t, home, map[string]string{
+		"skills/mine/SKILL.md":      "---\nname: \"late:fix\"\ndescription: Mine.\n---\n",
+		"skills/late:bare/SKILL.md": "---\ndescription: No name.\n---\n",
+	})
+	writeTree(t, r.work, map[string]string{".opencode/skills/w/SKILL.md": "---\nname: late:other\ndescription: W.\n---\n"})
+	spec := openCodeSpec(r.skills)
+	spec.Listed = []skillDirSlot{{Dir: filepath.Join(home, "skills"), Recursive: true, Depth: 6},
+		{Dir: ".opencode/skills", Recursive: true, Depth: 6}}
+	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, checkoutSpec: spec})
+	config := filepath.Join(t.TempDir(), "launch.json")
+	if err := os.WriteFile(config, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var errs bytes.Buffer
+	if err := checkoutLaunch(config, r.work, &errs); err != nil {
+		t.Fatalf("the launch failed: %v\n%s", err, errs.String())
+	}
+	skill := func(name string) string { return "---\nname: " + name + "\ndescription: " + name + ".\n---\n" }
+	r.add(t, map[string]string{"late/.git/": "", "late/.agents/skills/fix/SKILL.md": skill("fix"),
+		"late/.agents/skills/bare/SKILL.md": skill("bare"), "late/.agents/skills/other/SKILL.md": skill("other"),
+		"late/.agents/skills/ok/SKILL.md": skill("ok")})
+	out, _ := r.openCodeFire(t)
+	late := filepath.Join(r.workdir(t), "late")
+	log := read(t, filepath.Join(r.state, skippedLog))
+	for _, s := range []string{"fix", "bare", "other"} {
+		src := filepath.Join(late, ".agents/skills", s)
+		if !strings.Contains(out, "the skill "+src+" is left out") || !strings.Contains(log, "the skill "+src+" is left out") {
+			t.Errorf("%s: the answer or the skip log does not name it left out:\n%s\n%s", s, out, log)
+		}
+		if _, err := os.Stat(filepath.Join(r.skills, "late:"+s)); !os.IsNotExist(err) {
+			t.Errorf("%s: a copy late:%s was made over a listed skill's name (%v)", s, s, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(r.skills, "late:ok", "SKILL.md")); err != nil || !strings.Contains(out, "- late:ok:") {
+		t.Errorf("the skill no listed one names was not copied and listed (%v):\n%s", err, out)
+	}
+}
