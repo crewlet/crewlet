@@ -316,6 +316,11 @@ type Requirement struct {
 	// not. How it is minted is its [Requirement.Shape].
 	Mintable bool `json:"mintable,omitempty"`
 
+	// MintFirst makes a Mintable value as soon as a form for it opens, before
+	// anything is typed, so its public view (a block drawn from what is typed,
+	// [PublicView.Live]) is there at once and one save finishes the setup.
+	MintFirst bool `json:"mint_first,omitempty"` //wiregate:absent-is-false minted at the first save, as every other mint
+
 	// Public is an engine-rendered view of a minted value the company holds,
 	// for a person to copy to the vendor: a key's public half, a
 	// certificate, or a command block holding one. The vendor's requirements
@@ -452,6 +457,10 @@ type PublicView struct {
 	// DrawnFrom names the fields of the same list whose saved answers Text is
 	// drawn from, so a form knows an unsaved change to one makes it stale.
 	DrawnFrom []string `json:"drawn_from,omitempty"`
+	// Live is a view the form redraws from what is typed in DrawnFrom, through
+	// the integration's [Drawer], so it is never stale and never waits on a
+	// save. It holds public names and public halves alone.
+	Live bool `json:"live,omitempty"` //wiregate:absent-is-false drawn from what is saved, as every other view
 }
 
 // privateKeyBlock matches the armour of a PEM private key of any kind: PKCS#8,

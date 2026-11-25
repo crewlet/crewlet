@@ -58,6 +58,14 @@ interface SetupRedirectStep {
 }
 
 /** One input an integration needs; every word the form draws comes from here. */
+/** A block or key a person copies to the app, as the engine drew it. */
+export interface SetupPublicView {
+  text: string;
+  language: string;
+  drawn_from?: string[];
+  live?: boolean;
+}
+
 export interface SetupRequirement {
   field: string;
   label: string;
@@ -82,11 +90,14 @@ export interface SetupRequirement {
   /** The other fields one check of this credential is made with. */
   check_with?: string[];
   mintable?: boolean;
+  /** A mintable value Crewlet makes as soon as the form opens, so its block shows before any save. */
+  mint_first?: boolean;
   /**
    * The engine's rendering of a minted value's public half, to copy to the app,
-   * and the fields whose saved answers it is drawn from.
+   * and the fields whose answers it is drawn from. A `live` one is redrawn from
+   * what is typed in those fields (`POST /setup/integrations/{kind}/draw`).
    */
-  public?: { text: string; language: string; drawn_from?: string[] };
+  public?: SetupPublicView;
   /** The field whose block, run at the app, prints this value: needed to finish, never to save. */
   printed_by?: string;
   /** An `add_identity` step: the email to add at the vendor, at which role and where. */
