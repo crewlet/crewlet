@@ -17,8 +17,8 @@ import (
 )
 
 // PageContext is what a screen tells a turn about itself: WHICH things are on
-// screen, by id, and never a record's content; and the draft the person has
-// open, if any, with its current values ([PageDraft]).
+// screen, by id, never a record's content; the open draft's values
+// ([PageDraft]); and an outline of what it shows ([PageView]).
 //
 // A HINT TO THE MODEL AND NEVER AUTHORITY. Every fact the model uses about a
 // record comes from a tool call made as the person, so a page can neither
@@ -65,6 +65,9 @@ type PageContext struct {
 	// Draft is the draft the person has open on the screen, or absent
 	// where the screen edits nothing.
 	Draft *PageDraft `json:"draft,omitempty"`
+	// View is an outline of what the screen shows ([PageView]), absent
+	// where the dashboard read none.
+	View *PageView `json:"view,omitempty"`
 }
 
 // RevisionFor is the revision a change by action is prepared against: the
@@ -361,7 +364,12 @@ func (p PageContext) Validate() error {
 		}
 	}
 	if p.Draft != nil {
-		return p.Draft.validate()
+		if err := p.Draft.validate(); err != nil {
+			return err
+		}
+	}
+	if p.View != nil {
+		return p.View.validate()
 	}
 	return nil
 }
