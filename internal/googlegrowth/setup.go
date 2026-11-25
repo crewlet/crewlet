@@ -32,12 +32,12 @@ func Reader(c *config.Company, role setup.IdentityRole, where, hint vendortext.T
 }
 
 // ReaderEmail is the company's reader's email, "" where the Google Cloud
-// connection names no provisioner to read its identity project from.
+// connection names no identity project.
 func ReaderEmail(c *config.Company) string {
-	if c == nil || c.Integrations.GoogleCloud == nil || c.Integrations.GoogleCloud.Provisioning == nil {
+	if c == nil {
 		return ""
 	}
-	identity, ok := config.GoogleCloudServiceAccount(c.Integrations.GoogleCloud.Provisioning.Provisioner)
+	identity, ok := c.Integrations.GoogleCloud.Identity()
 	if !ok {
 		return ""
 	}
@@ -52,13 +52,12 @@ const (
 )
 
 // CloudFirst is the first step of a product whose agents sign in as their own
-// Google identities: connecting Google Cloud, whose Cloud Shell block, run
-// again, turns on apis and makes the company reader. setupapi answers whether
-// Google Cloud is connected ([setup.Step.Connected]).
+// Google identities: connecting Google Cloud, after which Crewlet turns on apis
+// and makes the company reader itself. setupapi answers whether Google Cloud
+// is connected ([setup.Step.Connected]).
 func CloudFirst(apis string) setup.Step {
 	return setup.Step{Needs: integration.KindGoogleCloud, Text: vendortext.Plain("Connect Google Cloud " +
-		"first; no project needs preparing. Its Cloud Shell block, run again, turns on " + apis +
-		" and makes the company reader.")}
+		"first; no project needs preparing. Crewlet then turns on " + apis + " and makes the company reader.")}
 }
 
 // ClientStep is the step making the OAuth client a consent product signs in

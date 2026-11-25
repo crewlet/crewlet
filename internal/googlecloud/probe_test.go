@@ -31,7 +31,7 @@ func newProbeWorld(t *testing.T) *probeWorld {
 
 func (w *probeWorld) check(t *testing.T, values map[string]string) (setup.Verdict, error) {
 	t.Helper()
-	form := map[string]string{"provisioner": provisioner, "provider": testProvider, "federation_key": w.key}
+	form := map[string]string{"identity_project": identity, "provider": testProvider, "federation_key": w.key}
 	for k, v := range values {
 		form[k] = v
 	}
@@ -151,7 +151,7 @@ func TestAForeignAccountInTheIdentityProjectIsNamed(t *testing.T) {
 func TestAnIncompleteFormIsNotChecked(t *testing.T) {
 	t.Parallel()
 	w := newProbeWorld(t)
-	for _, field := range []string{"provisioner", "provider", "federation_key"} {
+	for _, field := range []string{"identity_project", "provider", "federation_key"} {
 		if _, err := w.check(t, map[string]string{field: ""}); !errors.Is(err, setup.ErrUnusableInput) {
 			t.Errorf("no %s: %v, want unusable input", field, err)
 		}
@@ -160,8 +160,8 @@ func TestAnIncompleteFormIsNotChecked(t *testing.T) {
 		t.Errorf("a malformed provider: %v, want unusable input", err)
 	}
 	probe := googlecloud.Probe(w.hc)
-	if _, err := probe(context.Background(), setup.Check{Field: "provisioner"}); !errors.Is(err, setup.ErrNotCheckable) {
-		t.Errorf("checking the provisioner on its own: %v, want not checkable", err)
+	if _, err := probe(context.Background(), setup.Check{Field: "identity_project"}); !errors.Is(err, setup.ErrNotCheckable) {
+		t.Errorf("checking the identity project on its own: %v, want not checkable", err)
 	}
 }
 
@@ -175,8 +175,8 @@ func TestAnUnusableValueIsNamedWithoutAPackagesName(t *testing.T) {
 	t.Parallel()
 	w := newProbeWorld(t)
 	for field, value := range map[string]string{
-		"provisioner": "ops@acme.example",
-		"provider":    "projects/123456789012/locations/global/workloadIdentityPools/crewlet",
+		"identity_project": "Acme Crewlet",
+		"provider":         "projects/123456789012/locations/global/workloadIdentityPools/crewlet",
 	} {
 		_, err := w.check(t, map[string]string{field: value})
 		if err == nil || strings.Contains(err.Error(), "googleauth") || strings.Contains(err.Error(), "googlecloud") ||

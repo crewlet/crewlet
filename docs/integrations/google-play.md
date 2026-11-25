@@ -24,7 +24,7 @@ The permissions Play Console gives, each on chosen apps or on all of them: **Adm
 
 ## Connecting Crewlet
 
-1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing, and the form says whether it is connected. Turn Google Play on, then run the Google Cloud connection's Cloud Shell block again: it turns on the Google Play Android Developer and Developer Reporting APIs in the identity project and makes the company reader ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
+1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing, and the form says whether it is connected. Turn Google Play on: Crewlet turns on the Google Play Android Developer and Developer Reporting APIs in the identity project and makes the company reader itself, with no block to run ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
 2. Invite the company reader's email, shown on the form, in Play Console, Users and permissions, with **View app information** for all apps (and View financial data for the financial reports). Name each developer account's monthly reports bucket: Download reports, Copy Cloud Storage URI, without `gs://`. Crewlet reads the company's figures and the monthly reports as this identity.
 3. Turn agents on from the Agents tab, each with its apps, and give each its identity ([below](#give-an-agent-its-own-identity)).
 

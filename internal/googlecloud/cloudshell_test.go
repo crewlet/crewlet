@@ -23,19 +23,19 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// heldKeyRow is the federation key's row of a company whose provisioner is
-// saved and whose key is held as pemText.
+// heldKeyRow is the federation key's row of a company whose identity project
+// is saved and whose key is held as pemText.
 func heldKeyRow(t *testing.T, pemText string) setup.Requirement {
 	t.Helper()
 	block := &config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{
-		Provisioner: "${GCP_PROVISIONER}", FederationKey: "${" + googlecloud.FederationKeySecret + "}",
+		IdentityProject: "${GCP_IDENTITY}", FederationKey: "${" + googlecloud.FederationKeySecret + "}",
 	}}
-	values := map[string]string{"GCP_PROVISIONER": provisioner, googlecloud.FederationKeySecret: pemText}
+	values := map[string]string{"GCP_IDENTITY": identity, googlecloud.FederationKeySecret: pemText}
 	resolve := func(name string) (string, bool) {
 		v, ok := values[name]
 		return v, ok
 	}
-	for _, r := range googlecloud.Requirements(testCompany, block, nil, resolve) {
+	for _, r := range googlecloud.Requirements(testCompany, block, resolve) {
 		if r.Field == "federation_key" {
 			return r
 		}
@@ -70,7 +70,7 @@ func statements(text string) []string {
 func TestTheBlockCarriesThePublicHalfAlone(t *testing.T) {
 	t.Parallel()
 	key, pemText := fakeKey(t)
-	before := googlecloud.Requirements(testCompany, nil, nil, nil)[1]
+	before := googlecloud.Requirements(testCompany, nil, nil)[1]
 	if before.Shape != setup.ShapeES256Key || before.Public != nil {
 		t.Fatalf("before the key, its row is shape %q with view %v, want an ES256 mint and no block",
 			before.Shape, before.Public)
@@ -113,7 +113,7 @@ func TestTheBlockCarriesThePublicHalfAlone(t *testing.T) {
 func TestTheBlockTrustsWhatTheClientSigns(t *testing.T) {
 	t.Parallel()
 	_, pemText := fakeKey(t)
-	text, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText, false, nil)
+	text, err := googlecloud.CloudShellBlock(testCompany, identity, pemText, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,10 +143,12 @@ func TestTheBlockTrustsWhatTheClientSigns(t *testing.T) {
 		t.Errorf("the provisioner trusts %q, want the client's principal %q", got,
 			googleauth.Principal(testProvider, testCompany))
 	}
-	if _, err := googlecloud.CloudShellBlock(testCompany, "ops@acme.example", pemText, false, nil); err == nil {
-		t.Error("a block was drawn for a provisioner that is no service account")
+	for _, project := range []string{"Acme Crewlet", "example.com:acme-crewlet", "acme; rm -rf ~"} {
+		if _, err := googlecloud.CloudShellBlock(testCompany, project, pemText, false); err == nil {
+			t.Errorf("a block was drawn for %q, which is no project ID a service account can name", project)
+		}
 	}
-	if _, err := googlecloud.CloudShellBlock(testCompany, provisioner, "not a key", false, nil); err == nil {
+	if _, err := googlecloud.CloudShellBlock(testCompany, identity, "not a key", false); err == nil {
 		t.Error("a block was drawn for a key the engine never minted")
 	}
 }
@@ -159,7 +161,7 @@ func TestTheBlockTrustsWhatTheClientSigns(t *testing.T) {
 func TestTheBlockIsSafeToPasteAgainAndPrintsTheProvider(t *testing.T) {
 	t.Parallel()
 	_, pemText := fakeKey(t)
-	text, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText, false, nil)
+	text, err := googlecloud.CloudShellBlock(testCompany, identity, pemText, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +171,9 @@ func TestTheBlockIsSafeToPasteAgainAndPrintsTheProvider(t *testing.T) {
 		t.Fatalf("the block is not one subshell that stops on an unset name with prompts off:\n%s", text)
 	}
 	for _, made := range []struct{ describe, create string }{
+		{"gcloud projects describe", "gcloud projects create"},
 		{"gcloud iam service-accounts describe", "gcloud iam service-accounts create"},
+		{"gcloud iam roles describe " + googlecloud.EnablerRoleID, "gcloud iam roles create " + googlecloud.EnablerRoleID},
 		{"gcloud iam workload-identity-pools describe", "gcloud iam workload-identity-pools create"},
 		{"gcloud iam workload-identity-pools providers describe", "gcloud iam workload-identity-pools providers create-oidc"},
 	} {
@@ -224,21 +228,14 @@ func fixedKey(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 }
 
-// THE BLOCK IS EXACTLY ITS GOLDEN TEXT, with and without the atlas and a growth
-// product, so any change to what a person pastes into Cloud Shell is a reviewed
-// diff of testdata. Run with -update to rewrite the files.
+// THE BLOCK IS EXACTLY ITS GOLDEN TEXT, with and without the atlas, so any
+// change to what a person pastes into Cloud Shell is a reviewed diff of
+// testdata. Run with -update to rewrite the files.
 func TestTheBlockMatchesItsGolden(t *testing.T) {
 	t.Parallel()
 	key := fixedKey(t)
-	for name, tc := range map[string]struct {
-		atlas  bool
-		growth []googleauth.Product
-	}{
-		"plain": {},
-		"atlas-growth": {atlas: true, growth: []googleauth.Product{{Name: "Google Play",
-			APIs: []string{"androidpublisher.googleapis.com", "playdeveloperreporting.googleapis.com"}}}},
-	} {
-		text, err := googlecloud.CloudShellBlock(testCompany, provisioner, key, tc.atlas, tc.growth)
+	for name, atlas := range map[string]bool{"plain": false, "atlas": true} {
+		text, err := googlecloud.CloudShellBlock(testCompany, identity, key, atlas)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -261,14 +258,18 @@ func TestTheBlockMatchesItsGolden(t *testing.T) {
 
 // fakeGcloud is a gcloud on PATH that logs each call and answers from the
 // environment: FAKE_ACCOUNT, FAKE_APIS and FAKE_ACCOUNTS (space-separated),
-// and FAKE_SERVICES_FAIL. Every describe finds what it asks about.
+// FAKE_SERVICES_FAIL, FAKE_STATE (the project's lifecycle state, none where it
+// does not exist) and FAKE_CREATE_FAIL. Every other describe finds what it
+// asks about.
 const fakeGcloud = `#!/bin/bash
 echo "$*" >> "$GCLOUD_LOG"
 case "$*" in
   "config get-value account") [ -n "$FAKE_ACCOUNT" ] && echo "$FAKE_ACCOUNT"; exit 0 ;;
   "services list --enabled "*) [ -z "$FAKE_SERVICES_FAIL" ] || exit 1; printf '%s\n' $FAKE_APIS ;;
   "iam service-accounts list "*) printf '%s\n' $FAKE_ACCOUNTS ;;
+  "projects describe "*lifecycleState*) [ -n "$FAKE_STATE" ] || exit 1; echo "$FAKE_STATE" ;;
   "projects describe "*) echo 123456789012 ;;
+  "projects create "*) [ -z "$FAKE_CREATE_FAIL" ] || exit 1 ;;
   *" describe "*|"iam workload-identity-pools providers describe "*)
     echo "projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine" ;;
 esac
@@ -312,52 +313,68 @@ func runBlock(t *testing.T, block string, env map[string]string) preflightRun {
 }
 
 // The gcloud calls the preflight makes, all of them reads.
-var preflightReads = []string{"config get-value account", "services list --enabled ", "iam service-accounts list "}
+var preflightReads = []string{
+	"config get-value account", "projects describe ", "services list --enabled ", "iam service-accounts list ",
+}
 
 // THE BLOCK STOPS BEFORE IT CHANGES ANYTHING IN A PROJECT THAT IS NOT CREWLET'S
-// ALONE, with one line saying why, and runs to the provider in Crewlet's own
-// project, a first time or again. Mutation: drop the preflight, or let it read
-// the accounts with IAM off, or forget the provisioner, and a case fails.
+// ALONE, with one line saying why, creates one that does not exist, and runs
+// to the provider in Crewlet's own project, a first time or again. Mutation:
+// drop the preflight, let it read the accounts with IAM off, or create over a
+// project that exists, and a case fails.
 func TestTheBlockStopsInAProjectThatIsNotCrewletsAlone(t *testing.T) {
 	t.Parallel()
 	const ownAPIs = "iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com cloudasset.googleapis.com"
 	agent := googlecloud.AccountID(testCompany, "sre") + "@" + identity + ".iam.gserviceaccount.com"
 	foreign := "firebase-adminsdk-x1@" + identity + ".iam.gserviceaccount.com"
 	compute := "123456789012-compute@developer.gserviceaccount.com"
+	active := func(env map[string]string) map[string]string {
+		env["FAKE_ACCOUNT"] = "ops@example.com"
+		if _, set := env["FAKE_STATE"]; !set {
+			env["FAKE_STATE"] = "ACTIVE"
+		}
+		return env
+	}
 	for _, tc := range []struct {
-		name        string
-		provisioner string
-		env         map[string]string
-		stop        string
+		name    string
+		env     map[string]string
+		stop    string
+		creates bool
 	}{
-		{"a new project", provisioner, map[string]string{"FAKE_ACCOUNT": "ops@example.com",
-			"FAKE_APIS": "bigquery.googleapis.com storage.googleapis.com"}, ""},
-		{"Crewlet's own project, again", provisioner, map[string]string{"FAKE_ACCOUNT": "ops@example.com",
-			"FAKE_APIS": ownAPIs, "FAKE_ACCOUNTS": provisioner + " " + agent + " " +
-				googlecloud.AtlasAccountIn(identity) + " " + googleauth.AccountEmail(googleauth.ReaderAccountID(testCompany), identity)}, ""},
-		{"a provisioner named otherwise", "ops-bot@" + identity + ".iam.gserviceaccount.com", map[string]string{
-			"FAKE_ACCOUNT": "ops@example.com", "FAKE_APIS": ownAPIs,
-			"FAKE_ACCOUNTS": "ops-bot@" + identity + ".iam.gserviceaccount.com"}, ""},
-		{"no active account", provisioner, map[string]string{}, "Cloud Shell has no active account. Run gcloud auth login"},
-		{"APIs it cannot read", provisioner, map[string]string{"FAKE_ACCOUNT": "ops@example.com", "FAKE_SERVICES_FAIL": "1"},
-			"could not read the APIs enabled on " + identity},
-		{"an app", provisioner, map[string]string{"FAKE_ACCOUNT": "ops@example.com",
-			"FAKE_APIS": "firebase.googleapis.com compute.googleapis.com iam.googleapis.com"},
-			identity + " runs workloads (Firebase, Compute Engine)."},
-		{"an account Crewlet did not make", provisioner, map[string]string{"FAKE_ACCOUNT": "ops@example.com",
-			"FAKE_APIS": ownAPIs, "FAKE_ACCOUNTS": provisioner + " " + foreign},
-			identity + " holds a service account Crewlet did not make (" + foreign + ")."},
-		{"several accounts Crewlet did not make", provisioner, map[string]string{"FAKE_ACCOUNT": "ops@example.com",
-			"FAKE_APIS": ownAPIs, "FAKE_ACCOUNTS": compute + " " + agent + " " + foreign},
-			identity + " holds 2 service accounts Crewlet did not make, such as " + compute + "."},
+		{name: "a new project", env: active(map[string]string{"FAKE_APIS": "bigquery.googleapis.com storage.googleapis.com"})},
+		{name: "a project that does not exist yet", env: active(map[string]string{"FAKE_STATE": ""}), creates: true},
+		{name: "Crewlet's own project, again", env: active(map[string]string{"FAKE_APIS": ownAPIs,
+			"FAKE_ACCOUNTS": provisioner + " " + agent + " " + googlecloud.AtlasAccountIn(identity) + " " +
+				googleauth.AccountEmail(googleauth.ReaderAccountID(testCompany), identity)})},
+		{name: "no active account", env: map[string]string{"FAKE_STATE": "ACTIVE"},
+			stop: "Cloud Shell has no active account. Run gcloud auth login"},
+		{name: "a project ID that cannot be created", env: active(map[string]string{"FAKE_STATE": "", "FAKE_CREATE_FAIL": "1"}),
+			stop: identity + " does not exist and could not be created", creates: true},
+		{name: "a project being deleted", env: active(map[string]string{"FAKE_STATE": "DELETE_REQUESTED"}),
+			stop: identity + " is being deleted. Restore it with gcloud projects undelete " + identity},
+		{name: "APIs it cannot read", env: active(map[string]string{"FAKE_SERVICES_FAIL": "1"}),
+			stop: "could not read the APIs enabled on " + identity},
+		{name: "an app", env: active(map[string]string{
+			"FAKE_APIS": "firebase.googleapis.com compute.googleapis.com iam.googleapis.com"}),
+			stop: identity + " runs workloads (Firebase, Compute Engine)."},
+		{name: "an account Crewlet did not make", env: active(map[string]string{"FAKE_APIS": ownAPIs,
+			"FAKE_ACCOUNTS": provisioner + " " + foreign}),
+			stop: identity + " holds a service account Crewlet did not make (" + foreign + ")."},
+		{name: "several accounts Crewlet did not make", env: active(map[string]string{"FAKE_APIS": ownAPIs,
+			"FAKE_ACCOUNTS": compute + " " + agent + " " + foreign}),
+			stop: identity + " holds 2 service accounts Crewlet did not make, such as " + compute + "."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			block, err := googlecloud.CloudShellBlock(testCompany, tc.provisioner, fixedKey(t), true, nil)
+			block, err := googlecloud.CloudShellBlock(testCompany, identity, fixedKey(t), true)
 			if err != nil {
 				t.Fatal(err)
 			}
 			run := runBlock(t, block, tc.env)
+			created := slices.Contains(run.calls, "projects create "+identity+" --name=Crewlet --format=none")
+			if created != tc.creates {
+				t.Errorf("the block created the project %v, want %v (calls %q)", created, tc.creates, run.calls)
+			}
 			if tc.stop == "" {
 				if run.failed || strings.TrimSpace(run.stdout) != googlecloud.ProviderName("123456789012") {
 					t.Fatalf("the block did not run to the provider: stdout %q, stderr %q", run.stdout, run.stderr)
@@ -371,12 +388,14 @@ func TestTheBlockStopsInAProjectThatIsNotCrewletsAlone(t *testing.T) {
 				t.Fatalf("stderr ends %q (failed %v, stdout %q), want the stop line saying %q",
 					last, run.failed, run.stdout, tc.stop)
 			}
-			if strings.Contains(tc.stop, identity+" ") && !strings.Contains(last, "a new, empty project used only for "+
+			empty := strings.Contains(tc.stop, "runs workloads") || strings.Contains(tc.stop, "did not make")
+			if empty && !strings.Contains(last, "a new, empty project used only for "+
 				"Crewlet: the provisioner becomes Service Account Admin of the whole project") {
 				t.Errorf("the stop line %q does not say what the project must be, and why", last)
 			}
 			for _, call := range run.calls {
-				if !slices.ContainsFunc(preflightReads, func(read string) bool { return strings.HasPrefix(call, read) }) {
+				if !slices.ContainsFunc(preflightReads, func(read string) bool { return strings.HasPrefix(call, read) }) &&
+					!strings.HasPrefix(call, "projects create ") {
 					t.Errorf("the block ran %q before it stopped", call)
 				}
 			}
@@ -389,7 +408,7 @@ func TestTheBlockStopsInAProjectThatIsNotCrewletsAlone(t *testing.T) {
 // one they warn about. Mutation: change the prefix in either, and this fails.
 func TestThePreflightClaimsTheAccountsTheEngineDoes(t *testing.T) {
 	t.Parallel()
-	block, err := googlecloud.CloudShellBlock(testCompany, provisioner, fixedKey(t), false, nil)
+	block, err := googlecloud.CloudShellBlock(testCompany, identity, fixedKey(t), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,11 +418,10 @@ func TestThePreflightClaimsTheAccountsTheEngineDoes(t *testing.T) {
 		"deploy@" + identity + ".iam.gserviceaccount.com", "123-compute@developer.gserviceaccount.com",
 		"crewletx-a@" + identity + ".iam.gserviceaccount.com",
 	} {
-		run := runBlock(t, block, map[string]string{"FAKE_ACCOUNT": "ops@example.com",
+		run := runBlock(t, block, map[string]string{"FAKE_ACCOUNT": "ops@example.com", "FAKE_STATE": "ACTIVE",
 			"FAKE_APIS": "iam.googleapis.com", "FAKE_ACCOUNTS": email})
-		if stopped := run.failed; stopped == googlecloud.Ours(email, provisioner) {
-			t.Errorf("%s: the block stopped %v, the engine calls it Crewlet's %v", email, stopped,
-				googlecloud.Ours(email, provisioner))
+		if stopped := run.failed; stopped == googlecloud.Ours(email) {
+			t.Errorf("%s: the block stopped %v, the engine calls it Crewlet's %v", email, stopped, googlecloud.Ours(email))
 		}
 	}
 }

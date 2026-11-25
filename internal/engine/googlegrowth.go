@@ -22,7 +22,7 @@ import (
 // (internal/googleauth): each seat's growth identity, held by the Google
 // identity pass ([googlecloud.ConvergeGrowthIdentities], run with Google
 // Cloud's company pass, which every Google lane's pass follows), and the
-// company's reader, which the Cloud Shell block makes. Their tokens are
+// company's reader, which Google Cloud's pass makes. Their tokens are
 // minted here, inside the engine, with the product's own scopes, and never
 // leave it: no growth token is ever a `${VAR}` or reaches a box.
 
@@ -97,34 +97,38 @@ func (e *Engine) GoogleReaderToken(ctx context.Context, scopes []string, hc *htt
 }
 
 // missingAPIs is the finding a Google growth product reports for its APIs not
-// on in the identity project: a person runs the Cloud Shell block again,
-// which turns them on; the pass enables nothing itself.
+// on in the identity project. Google Cloud's pass, which runs first, turns
+// them on ([googlecloud.ConvergeGrowthProducts]); one still off is Google
+// settling, or a provisioner the block has not let turn APIs on, which only
+// running the block again fixes.
 func missingAPIs(ctx context.Context, client *googlecloud.Client, kind integration.Kind) ([]integration.Finding, error) {
 	product, ok := googleauth.ProductOf(kind)
 	if !ok {
 		return nil, fmt.Errorf("engine: %s registers no Google product", kind)
 	}
-	enabled, err := client.EnabledServices(ctx, client.IdentityProject())
+	off, err := googlecloud.MissingAPIs(ctx, client, product)
 	if err != nil {
 		return nil, fmt.Errorf("engine: read the APIs on %s: %w", client.IdentityProject(), googleauth.Reject(err))
-	}
-	var off []string
-	for _, api := range product.APIs {
-		if !enabled[api] {
-			off = append(off, api)
-		}
 	}
 	if len(off) == 0 {
 		return nil, nil
 	}
-	slices.Sort(off)
-	return []integration.Finding{{
-		Kind: integration.FindingApprovalRequired, Subject: "apis",
-		Title:     "Turn on " + product.Name + "'s APIs",
-		Detail:    "The identity project " + client.IdentityProject() + " does not have these on: " + words.And(off),
-		Remedy:    "Run the Google Cloud connection's Cloud Shell block again; it turns them on",
-		ActionURL: googlecloud.CloudShellURL, Subjects: off,
-	}}, nil
+	may, err := googlecloud.MayEnableAPIs(ctx, client)
+	if err != nil {
+		return nil, fmt.Errorf("engine: read whether the provisioner may turn APIs on: %w", googleauth.Reject(err))
+	}
+	if may {
+		return []integration.Finding{{
+			Kind: integration.FindingGrantPending, Subject: "apis", Subjects: off,
+			Detail: "Crewlet is turning on " + product.Name + "'s APIs in " + client.IdentityProject() + ": " +
+				words.And(off),
+		}}, nil
+	}
+	f := googlecloud.RunBlockAgain(client.IdentityProject())
+	f.Subject, f.Subjects = "apis", off
+	f.Detail = product.Name + " needs " + words.And(off) + " on in " + client.IdentityProject() +
+		", and the Google Cloud connection's block did not let Crewlet turn APIs on"
+	return []integration.Finding{f}, nil
 }
 
 // googleGrowthPass checks the company's half of one Google growth product:

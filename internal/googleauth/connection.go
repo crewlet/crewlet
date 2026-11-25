@@ -88,7 +88,8 @@ func New(opts Options) (*Connection, error) {
 	email := strings.TrimSpace(opts.Provisioner)
 	identity, ok := config.GoogleCloudServiceAccount(email)
 	if !ok {
-		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.provisioner is not a service account's email"}
+		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.identity_project names no " +
+			"project a service account can be made in"}
 	}
 	provider := strings.TrimSpace(opts.Provider)
 	if !config.GoogleCloudProvider(provider) {
@@ -130,19 +131,23 @@ func For(c *config.Company, env *config.Resolver, hc *http.Client) (*Connection,
 	}
 	prov := c.Integrations.GoogleCloud.Provisioning
 	values := map[string]string{
-		"provisioner":    strings.TrimSpace(env.Value(prov.Provisioner)),
-		"provider":       strings.TrimSpace(env.Value(prov.Provider)),
-		"federation_key": strings.TrimSpace(env.Value(prov.FederationKey)),
+		"identity_project": strings.TrimSpace(env.Value(prov.IdentityProject)),
+		"provider":         strings.TrimSpace(env.Value(prov.Provider)),
+		"federation_key":   strings.TrimSpace(env.Value(prov.FederationKey)),
 	}
-	for _, field := range []string{"provisioner", "provider", "federation_key"} {
+	for _, field := range []string{"identity_project", "provider", "federation_key"} {
 		if values[field] == "" {
 			return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning." + field +
 				" is not set or did not resolve", Err: integration.ErrNotConfigured}
 		}
 	}
+	if !config.GoogleCloudIdentityProject(values["identity_project"]) {
+		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.identity_project is not a " +
+			"Google Cloud project ID"}
+	}
 	return New(Options{
-		Company: c.Name, Provisioner: values["provisioner"], Provider: values["provider"],
-		FederationKey: values["federation_key"], HTTP: hc,
+		Company: c.Name, Provisioner: config.GoogleCloudProvisioner(values["identity_project"]),
+		Provider: values["provider"], FederationKey: values["federation_key"], HTTP: hc,
 	})
 }
 
