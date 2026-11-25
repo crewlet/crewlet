@@ -295,3 +295,62 @@ func TestABarrierWhoseLogHadNoLeaderForItsWholeBudgetSaysSo(t *testing.T) {
 		})
 	}
 }
+
+// A BARRIER NOBODY ANSWERED FOR ITS WHOLE BUDGET SAYS THE LOG HAD NO LEADER
+// ONLY WHERE A READ ONLY ITS LEADER ANSWERS GOES UNANSWERED TOO: members that
+// have not yet seen their leader go swallow the append rather than answer
+// leaderless, so a refusal naming the election rests on that read. Where a
+// leader answers it, the refusal stays the barrier a majority did not commit.
+//
+// Mutant: no read after the budget — the swallowed barrier names no leaderless
+// log.
+func TestABarrierNobodyAnsweredSaysTheLogHadNoLeaderOnlyWhereNoLeaderAnswers(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name     string
+		answered bool
+	}{{"no leader answers", false}, {"a leader answers", true}} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
+					swallowingLog{leaderAnswers: c.answered}, members(3), testSigner(t, probeDomain{}),
+					noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
+				if err != nil {
+					t.Fatalf("NewReadIndex: %v", err)
+				}
+				r := newReader(t, unreadStore{t}, healthy, &stubWaiter{at: healthy().Position}, index)
+				_, err = r.Read(t.Context(), pointQuery(statelog.ReadLinearizable),
+					func(*sql.Tx) error { return nil })
+				var refusal *statelog.Refused
+				if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseNoQuorum {
+					t.Fatalf("a barrier nobody answered answered %v, want refused %q", err,
+						statelog.RefuseNoQuorum)
+				}
+				said := strings.Contains(refusal.Detail, "the "+probeStream+" stream had no leader")
+				if said == c.answered {
+					t.Errorf("the refusal reads %q: a leader answering is %v, and the refusal "+
+						"names no leader %v", refusal.Detail, c.answered, said)
+				}
+			})
+		})
+	}
+}
+
+// swallowingLog is a log whose members swallow every append, as members that
+// have not yet seen their leader go do; a read only its leader answers is
+// answered where leaderAnswers, and swallowed too where not.
+type swallowingLog struct{ leaderAnswers bool }
+
+func (swallowingLog) Append(ctx context.Context, _, _ string, _ *uint64, _ []byte) (uint64, bool, error) {
+	<-ctx.Done()
+	return 0, false, ctx.Err()
+}
+
+func (l swallowingLog) LastSeq(ctx context.Context, _ string) (uint64, bool, error) {
+	if l.leaderAnswers {
+		return 0, false, nil
+	}
+	<-ctx.Done()
+	return 0, false, ctx.Err()
+}

@@ -10,8 +10,11 @@ import (
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi/jsapitest"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 )
@@ -129,6 +132,45 @@ func TestAReadOfAStreamThatIsNotThereFailsAtOnce(t *testing.T) {
 	}
 	if n := held.Count(); n != 1 {
 		t.Errorf("the stat asked %d times, want once: no wait brings a stream back", n)
+	}
+}
+
+// A READ WHOSE CONSUMER'S CREATE A MEMBER DROPS IS ASKED AGAIN, not waited for
+// until its caller's deadline: while the metadata group elects, a member that
+// is not its leader drops the create without a word (on a cluster too young to
+// answer 10008), and the reply never comes once a leader is elected.
+//
+// Mutant: the create asked once — the get waits out its whole deadline.
+func TestAReadWhoseConsumerCreateWasDroppedAsksAgain(t *testing.T) {
+	t.Parallel()
+	srv, _, name := accountBucket(t)
+	nc, err := nats.Connect("", nats.InProcessServer(srv))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(nc.Close)
+	client, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A TERM OF A SECOND, the production one being a clustered election's
+	// fifteen: what is held is that the create is asked again, not when.
+	timing := jsprovision.Clustered(false).Timing()
+	timing.AskTerm = time.Second
+	b, err := natsobj.OpenAt(t.Context(), client, natsobj.Config{MaxBytes: testCeiling, Replicas: 1},
+		timing)
+	if err != nil {
+		t.Fatalf("open the bucket: %v", err)
+	}
+	dropped := jsapitest.DropFirst(t, srv, jsapitest.ConsumerCreate(natsobj.Stream), 1)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	if err := get(ctx, b, name); err != nil {
+		t.Fatalf("a get whose consumer's first create was dropped failed rather than asking "+
+			"again: %v", err)
+	}
+	if n := dropped.Count(); n != 1 {
+		t.Errorf("the broker dropped %d creates, want the 1 the case staged", n)
 	}
 }
 

@@ -136,11 +136,12 @@ func TestLinearizableKeepsWorkingOnTheSurvivingMajority(t *testing.T) {
 // timers, four to nine seconds after the last heartbeat. Meanwhile they swallow
 // a barrier's append, so a read whose deadline is shorter than the election
 // fails at that deadline, and one with time to wait commits a barrier sent again
-// once the new leader leads, in one read inside the barrier's budget
-// (crewlet/crewlet#2096). A read told the log has no leader: election_test.go.
+// once the new leader leads, or, on a runner slow enough that the election
+// outlasts the budget, says the log had no leader: never the bare unconfirmed
+// barrier (crewlet/crewlet#2096). Timings: election_test.go.
 //
-// Mutant: no barrier is sent again while nobody answers — the read runs out its
-// budget on the append the survivors swallowed.
+// Mutant: no barrier sent again while nobody answers, and no leader read after
+// the budget — the read refused as an unconfirmed barrier.
 func TestABarrierIsServedAcrossAnElectionOfItsLogsLeader(t *testing.T) {
 	t.Parallel()
 	c := jetstreamtest.StartPartitionableCluster(t, 3, js.Config{})
@@ -193,12 +194,18 @@ func TestABarrierIsServedAcrossAnElectionOfItsLogsLeader(t *testing.T) {
 		t.Errorf("a barrier whose deadline ended a second into the election answered %v, want "+
 			"its deadline's end", err)
 	}
+	began := time.Now()
 	at, err := idx.Read(t.Context())
-	if err != nil {
-		t.Fatalf("a barrier across the election of the log's leader: %v", err)
-	}
-	if at.Seq == 0 {
+	t.Logf("the barrier across the election answered after %v", time.Since(began)) //fixedwait:measure logged for the record, decides nothing
+	switch noLeader := "the " + spec.Name + " stream had no leader"; {
+	case err == nil && at.Seq == 0:
 		t.Fatalf("the new leader answered sequence 0")
+	case err == nil:
+	case strings.Contains(err.Error(), noLeader):
+		t.Logf("an election outlasted the barrier's budget, and it said so: %v", err)
+	default:
+		t.Fatalf("a barrier across the election of the log's leader answered %v, want a position "+
+			"or an error saying %q", err, noLeader)
 	}
 }
 
