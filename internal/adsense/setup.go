@@ -44,8 +44,8 @@ func Guide() setup.Guide {
 			"AdSense through it. No token reaches an agent's box.",
 		Prepare: []setup.Step{
 			platformPartner(googlegrowth.ClientStep("AdSense Management API")),
-			{Text: vendortext.Of(vendortext.W("Paste the client's ID and secret below, save, then sign in with Google "+
-				"as an "), vendortext.UI("Administrator"), vendortext.W(" or "), vendortext.UI("Standard"),
+			{Text: vendortext.Of(vendortext.W("Paste the client's ID and secret below, press "), vendortext.UI("Connect"),
+				vendortext.W(", then press "), vendortext.UI("Sign in"), vendortext.W(" and sign in with Google as an "), vendortext.UI("Administrator"), vendortext.W(" or "), vendortext.UI("Standard"),
 				vendortext.W(" user of the AdSense account. Sign in again once an agent is raised to operate, to "+
 					"allow changes."))},
 			{Text: vendortext.Plain("Turn agents on from the Agents tab, each on the publisher accounts it may reach.")},
