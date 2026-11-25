@@ -87,11 +87,13 @@ type launchConfig struct {
 
 // nestedConfig is what -config names for a nested adapter, written by
 // checkout-launch: the state directory, the working directory its checkouts
-// sit directly under, and the launch's spec.
+// sit directly under, and the launch's spec; room, not on the wire, is the
+// firing's own bound where its adapter takes -room, in place of FiringLimit.
 type nestedConfig struct {
 	State   string `json:"state"`
 	Workdir string `json:"workdir"`
 	checkoutSpec
+	room *firingBound
 }
 
 // maxSkillDescription is the most characters of a skill's description a
@@ -161,7 +163,8 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = os.WriteFile(filepath.Join(c.State, "handed"), nil, 0o600); err != nil {
 		return err
 	}
-	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, math.MaxInt, &skips{stderr: stderr})
+	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, &firingBound{left: math.MaxInt, count: byteCount},
+		&skips{stderr: stderr})
 	if err != nil {
 		return err
 	}
@@ -304,43 +307,74 @@ func endsCut(file *os.File, size int64) bool {
 const endedMarker = "ended"
 
 // handNested is a nested adapter's firing under c ([handCheckouts]), within
-// its spec's FiringLimit: the checkouts handed and what it left out, kept in
-// [skippedLog] too.
+// its room, else its spec's FiringLimit in bytes: the checkouts handed and
+// what it left out, kept in [skippedLog] too.
 func handNested(c nestedConfig, stderr io.Writer) ([]handedCheckout, []string, error) {
 	said := &skips{stderr: stderr, keep: filepath.Join(c.State, skippedLog)}
-	firing := math.MaxInt
-	if c.FiringLimit != nil {
-		firing = *c.FiringLimit
+	firing := c.room
+	if firing == nil {
+		firing = &firingBound{left: math.MaxInt, count: byteCount}
+		if c.FiringLimit != nil {
+			firing.left = *c.FiringLimit
+		}
 	}
 	handed, err := handCheckouts(c.State, c.Workdir, nil, c.checkoutSpec, firing, said)
 	return handed, said.lines, err
 }
 
-// fitFiring is parts within left, what is left of a firing's bound on its
+// firingBound is what is left of a firing's bound on its instructions, and
+// how it counts text: in bytes ([byteCount]), or as the harness reading the
+// answer counts its characters ([utf16Count]).
+type firingBound struct {
+	left  int
+	count func(string) int
+}
+
+// byteCount is s's length in bytes.
+func byteCount(s string) int { return len(s) }
+
+// utf16Count is s's length as a JavaScript string's, in UTF-16 code units: one
+// a character, two past U+FFFF, and one an invalid byte, which decoding
+// replaces with U+FFFD once a sequence at most. A unit is never more than
+// three bytes, so a byte bound three times a unit bound holds the same text.
+func utf16Count(s string) int {
+	n := 0
+	for _, r := range s {
+		n++
+		if r > 0xFFFF {
+			n++
+		}
+	}
+	return n
+}
+
+// fitFiring is parts within what is left of a firing's bound on its
 // instructions, each counted with its frame ([framedCost]): each part that
 // fits whole, in order, and the rest left out whole, each said by its path
 // for the model to read there, never cut, as a cut file reads as the whole.
-func fitFiring(parts []instructionPart, left *int, said *skips) []instructionPart {
+func fitFiring(parts []instructionPart, firing *firingBound, said *skips) []instructionPart {
 	var kept []instructionPart
 	for _, p := range parts {
-		if cost := framedCost(p); cost > *left {
+		if cost := framedCost(p, firing.count); cost > firing.left {
 			said.say("the instruction file %s is left out: it passes what is left of the firing's bound on "+
 				"instructions; read it at that path", p.path)
 		} else {
-			*left -= cost
+			firing.left -= cost
 			kept = append(kept, p)
 		}
 	}
 	return kept
 }
 
-// framedCost is what part p takes of a firing's bound: its text, its path
-// three times and 64 bytes, more than any adapter wraps a file in
+// framedCost is what part p takes of a firing's bound, in count: its text,
+// its path three times and 64 more, more than any adapter wraps a file in
 // (qwen-nested: the path twice and 47 bytes; a checkout's section header, its
 // root and 22 bytes, once per checkout; pi-nested: the path and 54 bytes, and
 // once per checkout a label of its name, its root and 21 bytes, a file's path
 // its root's and 10 bytes more), so the bound holds the answer whole.
-func framedCost(p instructionPart) int { return len(p.text) + 3*len(p.path) + 64 }
+func framedCost(p instructionPart, count func(string) int) int {
+	return count(p.text) + 3*count(p.path) + 64
+}
 
 // skippedListing is what a firing left out, as a nested adapter hands it to
 // the model, "" for nothing: a line each, so a model told of a repository's
@@ -372,6 +406,14 @@ type listingBudget struct {
 
 func newListingBudget() *listingBudget {
 	return &listingBudget{left: maxListing - len(listingCut) - 1}
+}
+
+// newListingBudgetWithin is a budget whose listings, with the blank line
+// before each, never pass bound bytes: the cut line and the separator before
+// the block it ends are reserved, since a cut keeps at most what is left (its
+// last newline standing in for the cut line's own).
+func newListingBudgetWithin(bound int) *listingBudget {
+	return &listingBudget{left: bound - len(listingCut) - len("\n\n")}
 }
 
 // take is block within what is left of b, block apart from the one before by
@@ -423,7 +465,7 @@ func readNested(path string) (nestedConfig, error) {
 // theirs within firing ([fitFiring]), and its skills copied as
 // `<tag>:<skill>` ([copyPlanned]). What it leaves out is
 // said to said, and kept where said asks, under the lock.
-func handCheckouts(state, work string, first []string, spec checkoutSpec, firing int, said *skips) ([]handedCheckout, error) {
+func handCheckouts(state, work string, first []string, spec checkoutSpec, firing *firingBound, said *skips) ([]handedCheckout, error) {
 	lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -524,7 +566,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 			h.text = rootImports(root, spec.Instructions, said)
 		} else {
 			parts, _ := instructionParts(root, limit, spec.Instructions, said)
-			parts = fitFiring(parts, &firing, said)
+			parts = fitFiring(parts, firing, said)
 			h.text, h.parts = joinParts(parts), parts
 		}
 		for _, p := range plans[name] {

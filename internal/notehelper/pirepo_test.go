@@ -11,14 +11,17 @@ import (
 )
 
 // piSpec is the spec a Pi run's launch gives the core
-// (internal/sandbox/executor's piCheckouts and piFiringLimit), its skills in
-// skills.
+// (internal/sandbox/executor's piCheckouts), its skills in skills.
 func piSpec(skills string) checkoutSpec {
 	return checkoutSpec{Instructions: names([]string{"AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"}),
-		FiringLimit: limited(157_696),
-		SkillDirs:   []skillDirSlot{{Dir: ".pi/skills", Recursive: true}, {Dir: ".agents/skills", Recursive: true}},
-		Skills:      skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
+		SkillDirs: []skillDirSlot{{Dir: ".pi/skills", Recursive: true}, {Dir: ".agents/skills", Recursive: true}},
+		Skills:    skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
 }
+
+// piRoomed is the -room of a firing whose context has room to spare: the
+// most the run's extension hands (internal/sandbox/executor's
+// piNestedMaxRoom).
+const piRoomed = 22_369_621
 
 // piLaunch runs checkout-launch in r's working directory under Pi's spec.
 func (r repoRun) piLaunch(t *testing.T) {
@@ -34,12 +37,18 @@ func (r repoRun) piLaunch(t *testing.T) {
 	}
 }
 
-// piFire runs one pi-nested firing off the state the launch wrote: what it
-// printed and said.
+// piFire runs one pi-nested firing off the state the launch wrote, with room
+// to spare ([piRoomed]): what it printed and said.
 func (r repoRun) piFire(t *testing.T) (out, said string) {
 	t.Helper()
+	return r.piFireWithin(t, piRoomed)
+}
+
+// piFireWithin is [repoRun.piFire] with -room room.
+func (r repoRun) piFireWithin(t *testing.T, room int) (out, said string) {
+	t.Helper()
 	var stdout, stderr bytes.Buffer
-	if code := runPiNested(context.Background(), flags{config: filepath.Join(r.state, "nested.json")},
+	if code := runPiNested(context.Background(), flags{config: filepath.Join(r.state, "nested.json"), room: room},
 		strings.NewReader("never read"), &stdout, &stderr, os.Getenv); code != exitDone {
 		t.Fatalf("the firing exited %d: %s", code, stderr.String())
 	}
@@ -81,49 +90,111 @@ func TestACheckoutClonedDuringAPiRunIsHandedInPisOwnShapeOnce(t *testing.T) {
 	}
 }
 
-// A PI FIRING HANDS ITS CLONES' FILES WITHIN ITS BOUND, FRAMES COUNTED: of
-// three clones in one firing, each file whose text, its path three times and
-// 64 bytes fit what is left of the FiringLimit is handed whole in Pi's
-// wrapping, in order, and one past it is left out whole, never cut, named in
-// the answer and once in the skip log for the model to read there, though its
-// text alone would fit; the wrapped files and their labels take no more than
-// the bound. A later firing hands nothing.
+// piFramed is clone's file as a pi-nested firing hands it: labelled with the
+// clone, wrapped as Pi wraps a context file.
+func piFramed(work, clone, file, text string) string {
+	root := filepath.Join(work, clone)
+	return "for `" + clone + "` with root " + root + "\n\n<project_instructions path=\"" + root + "/" + file + "\">\n" +
+		text + "\n</project_instructions>"
+}
+
+// piLeftOut is the line naming a file a firing left out.
+func piLeftOut(path string) string {
+	return "the instruction file " + path + " is left out: it passes what is left of the firing's bound on " +
+		"instructions; read it at that path"
+}
+
+// A PI FIRING HANDS ITS CLONES' FILES WITHIN ITS ROOM, FRAMES COUNTED: the
+// room less the listings' 64 KiB holds the files, each counted in UTF-16
+// units, as Pi counts, with its frame; of three clones in one firing each
+// file that fits what is left is handed whole in Pi's wrapping, in order, and
+// one past it is left out whole, never cut, named in the answer and once in
+// the skip log, though its text alone would fit. The answer stays within the
+// room; a later firing hands nothing.
 //
-// Mutation: hand past the bound, count the text alone, cut the file, or say
-// nothing of it, and this goes red.
-func TestAPiFiringHandsItsClonesFilesWithinItsBound(t *testing.T) {
+// Mutation: hand past the room, count the text alone or in bytes, cut the
+// file, or say nothing of it, and this goes red.
+func TestAPiFiringHandsItsClonesFilesWithinItsRoom(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, nil)
 	work := r.workdir(t)
-	cost := func(clone, file, text string) int { return len(text) + 3*len(filepath.Join(work, clone, file)) + 64 }
-	a, b, c := strings.Repeat("A", 300), strings.Repeat("B", 200), strings.Repeat("C", 100)
-	spec := piSpec(r.skills)
-	spec.FiringLimit = limited(cost("a", "AGENTS.md", a) + cost("c", "CLAUDE.md", c))
+	cost := func(clone, file, text string) int {
+		return utf16Count(text) + 3*utf16Count(filepath.Join(work, clone, file)) + 64
+	}
+	a, b, c := strings.Repeat("\u20ac", 300), strings.Repeat("B", 200), strings.Repeat("C", 100)
+	room := maxListing + cost("a", "AGENTS.md", a) + cost("c", "CLAUDE.md", c)
 	if len(b) > cost("c", "CLAUDE.md", c) || cost("b", "AGENTS.md", b) <= cost("c", "CLAUDE.md", c) {
 		t.Fatal("b's text must fit the room c takes and its frame must not")
 	}
-	r.launchWith(t, spec, false, "")
+	r.launchWith(t, piSpec(r.skills), false, "")
 	r.add(t, map[string]string{"a/.git/": "", "a/AGENTS.md": a, "b/.git/": "", "b/AGENTS.md": b, "c/.git/": "",
 		"c/CLAUDE.md": c})
-	framed := func(clone, file, text string) string {
-		root := filepath.Join(work, clone)
-		return "for `" + clone + "` with root " + root + "\n\n<project_instructions path=\"" + root + "/" + file + "\">\n" +
-			text + "\n</project_instructions>"
+	line := piLeftOut(filepath.Join(work, "b", "AGENTS.md"))
+	want := piFramed(work, "a", "AGENTS.md", a) + "\n\n" + piFramed(work, "c", "CLAUDE.md", c) + "\n\n" +
+		skippedListing([]string{line})
+	if out, said := r.piFireWithin(t, room); out != want || said != "" {
+		t.Errorf("the firing printed\n%q\nwant\n%q\n(said %q)", out, want, said)
+	} else if utf16Count(out) > room {
+		t.Errorf("the answer takes %d characters, past its room of %d", utf16Count(out), room)
 	}
-	files := framed("a", "AGENTS.md", a) + "\n\n" + framed("c", "CLAUDE.md", c)
-	line := "the instruction file " + filepath.Join(work, "b", "AGENTS.md") + " is left out: it passes what is " +
-		"left of the firing's bound on instructions; read it at that path"
-	if out, said := r.piFire(t); out != files+"\n\n"+skippedListing([]string{line}) || said != "" {
-		t.Errorf("the firing printed\n%q\nwant\n%q\n(said %q)", out, files+"\n\n"+skippedListing([]string{line}), said)
-	}
-	if len(files) > *spec.FiringLimit {
-		t.Errorf("the wrapped files take %d bytes, past the firing's bound of %d", len(files), *spec.FiringLimit)
-	}
-	if out, said := r.piFire(t); out != "" || said != "" {
+	if out, said := r.piFireWithin(t, room); out != "" || said != "" {
 		t.Errorf("a later firing printed %q, said %q", out, said)
 	}
 	if log := read(t, filepath.Join(r.state, skippedLog)); strings.Count(log, line) != 1 {
 		t.Errorf("the skip log reads %q, want the file left out named once", log)
+	}
+}
+
+// A PI FIRING COUNTS CHARACTERS AS PI DOES: a file of 3-byte and 4-byte
+// characters is handed whole in a room its UTF-16 units fit, though its bytes
+// would not, and named in one a unit short, a character past U+FFFF counting
+// two.
+//
+// Mutation: count bytes, or count a character past U+FFFF once, and a case
+// goes red.
+func TestAPiFiringCountsCharactersAsPiDoes(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("\u20ac", 100) + strings.Repeat("\U0001F600", 10)
+	for _, short := range []int{0, 1} {
+		r := newRepoRun(t, nil)
+		work := r.workdir(t)
+		file := filepath.Join(work, "late", "AGENTS.md")
+		room := maxListing + utf16Count(text) + 3*utf16Count(file) + 64 - short
+		if utf16Count(text) != 120 || len(text) <= utf16Count(text) {
+			t.Fatalf("the text counts %d units in %d bytes, want 120 in more", utf16Count(text), len(text))
+		}
+		r.launchWith(t, piSpec(r.skills), false, "")
+		r.add(t, map[string]string{"late/.git/": "", "late/AGENTS.md": text})
+		want := piFramed(work, "late", "AGENTS.md", text)
+		if short == 1 {
+			want = skippedListing([]string{piLeftOut(file)})
+		}
+		if out, _ := r.piFireWithin(t, room); out != want {
+			t.Errorf("a room %d short printed\n%q\nwant\n%q", short, out, want)
+		}
+	}
+}
+
+// A PI FIRING IN A SMALL ROOM HANDS NO FILE AND NAMES EACH: a room under the
+// listings' 64 KiB leaves the files none, so a large file is named, within
+// the room; a room too small to say a listing is cut hands nothing at all.
+//
+// Mutation: hand files from the listings' share, or print past the room, and
+// this goes red.
+func TestAPiFiringInASmallRoomNamesItsFiles(t *testing.T) {
+	t.Parallel()
+	for _, room := range []int{4 << 10, 64} {
+		r := newRepoRun(t, nil)
+		work := r.workdir(t)
+		r.launchWith(t, piSpec(r.skills), false, "")
+		r.add(t, map[string]string{"late/.git/": "", "late/AGENTS.md": strings.Repeat("L", 100_000)})
+		want := ""
+		if room > 64 {
+			want = skippedListing([]string{piLeftOut(filepath.Join(work, "late", "AGENTS.md"))})
+		}
+		if out, _ := r.piFireWithin(t, room); out != want || utf16Count(out) > room {
+			t.Errorf("a room of %d printed\n%q\nwant\n%q", room, out, want)
+		}
 	}
 }
 

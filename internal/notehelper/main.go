@@ -188,7 +188,10 @@
 // pi-nested the same as codex-nested with each file in Pi's
 // `<project_instructions path=...>`, on stdout for the run's extension to add
 // to the tool's result (Pi lists no skill it did not start with and loads
-// instructions only as it starts, measured on 1.6.0). A harness taking
+// instructions only as it starts, measured on 1.6.0), all of it within
+// -room, the characters (UTF-16 units, as Pi counts) the extension found the
+// result has left, the files within what the listings' bound leaves of it
+// in place of `firingLimit`. A harness taking
 // checkouts adds a nested adapter, never a second core; its runner holds the
 // home file and the copies (internal/sandbox/executor's checkoutHome). What a nested firing
 // leaves out (a skill whose name the home's skills hold, one that leads out
@@ -354,6 +357,8 @@ type flags struct {
 	config                string
 	skillLoads, loadsOnly bool
 	slot                  int
+	// pi-nested's: the characters its answer has left.
+	room int
 	// codex-renew's: the rollout of the session the run continues.
 	rollout string
 	// codex-materialize's: Codex's sessions directory, and the thread whose

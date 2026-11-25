@@ -12,7 +12,9 @@ import (
 // pi_extension.mjs, its tool_result handler): it hands each checkout cloned
 // since the last firing, once ([handNested]), printed on stdout in Pi's own
 // shape ([piNestedText]) for the extension to add to the tool's result, with
-// what it left out. It reads no input. Exit 0 whatever happened, as
+// what it left out, all of it within -room, the characters (UTF-16 units, as
+// Pi counts them) the extension found the result has left before Pi would
+// compact the run. It reads no input. Exit 0 whatever happened, as
 // [runCodexNested], its trouble on stderr.
 func runPiNested(_ context.Context, f flags, _ io.Reader, stdout, stderr io.Writer, _ func(string) string) int {
 	c, err := readNested(f.config)
@@ -20,11 +22,14 @@ func runPiNested(_ context.Context, f flags, _ io.Reader, stdout, stderr io.Writ
 		fmt.Fprintf(stderr, "notehelper: the nested config: %v\n", err)
 		return exitDone
 	}
+	room := max(f.room, 0)
+	listings := min(maxListing, room)
+	c.room = &firingBound{left: room - listings, count: utf16Count}
 	handed, skipped, err := handNested(c, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: handing a checkout's instructions: %v\n", err)
 	}
-	_, _ = io.WriteString(stdout, piNestedText(handed, skipped))
+	_, _ = io.WriteString(stdout, piNestedText(handed, skipped, listings))
 	return exitDone
 }
 
@@ -34,11 +39,14 @@ func runPiNested(_ context.Context, f flags, _ io.Reader, stdout, stderr io.Writ
 // under "for `<name>` with root <path>", as the launch's sections are; then
 // its skills listed by path ([skillsListing]), since Pi lists no skill added
 // after it started (measured); then what the firing left out
-// ([skippedListing]), the listings within one firing's bound
-// ([listingBudget]). "" where they hand nothing.
-func piNestedText(handed []handedCheckout, skipped []string) string {
+// ([skippedListing]), the listings within listings bytes, which no count of
+// their characters passes ([listingBudget]), none where that cannot even say
+// they are cut. The files take what the room leaves the listings, so the
+// answer stays within the room. "" where they hand nothing.
+func piNestedText(handed []handedCheckout, skipped []string, listings int) string {
 	var blocks []string
-	budget := newListingBudget()
+	budget := newListingBudgetWithin(listings)
+	budget.cut = listings < len(listingCut)+len("\n\n")
 	for _, h := range handed {
 		files := make([]string, 0, len(h.parts))
 		for _, p := range h.parts {
