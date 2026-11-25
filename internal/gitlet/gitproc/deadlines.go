@@ -19,16 +19,18 @@ import (
 //     over the same bytes.
 //   - A walk of a repository's history adds [HistoryWalk] to its other bounds.
 
-// ReadDeadline bounds one local read: one read attempt
-// (estate.Production().ReadAttempt). This package imports no engine package,
-// so estate's TestGitprocsReadBoundsAreOneReadAttempt holds the equality, and
-// [SlotWait]'s beside it.
+// ReadDeadline bounds one local read, inside one read attempt
+// (estate.Production().ReadAttempt): ten seconds, what that attempt holds for
+// a log one member stores (2 + 5 + 2 + 1), since no local git waits out the
+// election a replicated log's barrier may. This package imports no engine
+// package, so estate's TestGitprocsReadBoundsFitInsideOneReadAttempt holds the
+// bound, and [SlotWait]'s beside it.
 const ReadDeadline = 10 * time.Second
 
 // SlotWait is the longest a run waits for a slot before it is refused
-// [ErrBusy]: one read attempt, as [ReadDeadline] is. A node whose slots stay
-// busy that long is one a balancer should send the retry elsewhere from,
-// which the host's 503 and its Retry-After are for.
+// [ErrBusy]: as long as [ReadDeadline], inside one read attempt. A node whose
+// slots stay busy that long is one a balancer should send the retry elsewhere
+// from, which the host's 503 and its Retry-After are for.
 const SlotWait = 10 * time.Second
 
 // KillGrace is how long a process is given between SIGTERM and SIGKILL. git
