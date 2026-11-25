@@ -346,7 +346,7 @@ func TestAReadLetsGoOfEachValueOnceItEnds(t *testing.T) {
 		member := strings.Join([]string{
 			`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1",` +
 				`"content":[{"type":"text","text":` + long + `}]}]},"toolUseResult":{"stdout":` + long + `}}`,
-			`{"type":"system","subtype":"informational","content":` + long + `}`,
+			`{"type":"attachment","attachment":{"type":"hook_system_message","content":` + long + `}}`,
 			`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":` +
 				quoted(t, strings.Repeat("i", transcriptNameMaxBytes+1)) + `,"name":"Bash","input":{}}]}}`,
 		}, "\n") + "\n"

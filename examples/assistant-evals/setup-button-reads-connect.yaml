@@ -1,0 +1,54 @@
+# The setup form's main button reads Connect until the integration is
+# connected and Save after, while the setup's own text says Save. The
+# assistant names the button as the screen labels it and says which steps
+# happen in Crewlet and which in the vendor's console.
+person:
+  apps: [admin]
+page:
+  screen: integrations
+  title: Integrations › Google Cloud
+  params: {kind: gcp}
+  query: {}
+  resources: []
+  selection: null
+  source_revision: integrations@1
+  accepts: [page.read]
+  action_args:
+    page.read: {type: object, additionalProperties: false}
+  action_revisions: {page.read: screen}
+  view:
+    nodes:
+      - {role: heading, name: Google Cloud, level: 1}
+      - {role: field, name: Project ID, field: text, filled: true, required: true}
+      - {role: field, name: Service account key, field: secret, filled: true, required: true}
+      - {role: button, name: Cancel}
+      - {role: button, name: Connect}
+question: I filled everything in. What do I press now, and is there anything left to do in Google Cloud?
+answers:
+  - route: GET /setup/integrations/{kind}
+    body:
+      key: gcp
+      configured: false
+      enabled: false
+      satisfied: false
+      form_complete: true
+      can_provision: false
+      requirements:
+        - {field: project_id, label: Project ID, kind: text, config_path: integrations.gcp.project_id, required: true}
+        - {field: key, label: Service account key, kind: secret, config_path: integrations.gcp.key, required: true}
+      help: >-
+        In the Google Cloud console, create a service account and grant it the
+        roles below, then paste its key here and press Save.
+script:
+  - call: read_api
+    args: {route: "GET /setup/integrations/{kind}", path: {kind: gcp}}
+  - say: >-
+      Press Connect at the bottom of the form, here in Crewlet. Before that,
+      in the Google Cloud console, make sure the service account has the roles
+      the setup lists; once connected, the button reads differently.
+expect:
+  calls: [read_api]
+  proposals: 0
+  state: completed
+  says: [Connect, Google Cloud console]
+  never_says: [press Save]

@@ -693,6 +693,8 @@ type FakeRunner struct {
 	name      string
 	installed map[string]bool
 	started   []RunRequest
+	// collected is each handle a collection read a job's box with.
+	collected []RunHandle
 
 	done   bool
 	result Result
@@ -1125,10 +1127,18 @@ func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (J
 	return JobRunning, nil
 }
 
+// Collected is each handle a collection read a job's box with, in order.
+func (r *FakeRunner) Collected() []RunHandle {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.collected)
+}
+
 // Collect returns the result a test queued with [FakeRunner.Finish], or the
 // one the job's play answered.
 func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle, _ *queue.AnswerBudget) (Result, error) {
 	r.mu.Lock()
+	r.collected = append(r.collected, handle)
 	if r.CollectErr != nil {
 		r.mu.Unlock()
 		return Result{}, r.CollectErr
@@ -1843,6 +1853,24 @@ func (r *FakeRunner) PinnedWindow(model string) int {
 		return 0
 	}
 	return pin(model)
+}
+
+var _ summaryKeeper = (*FakeRunner)(nil)
+
+// KeepSummary keeps found as a runner does: scrubbed of scrub, by value alone
+// (the fake redacts nothing by shape), and held to its bound by its end.
+func (r *FakeRunner) KeepSummary(found ThreadSummary, scrub []string) ThreadSummary {
+	if found.Unread != "" || found.Text == "" {
+		return found
+	}
+	text := found.Text
+	for _, value := range scrub {
+		if value != "" {
+			text = strings.ReplaceAll(text, value, "[scrubbed]")
+		}
+	}
+	kept, cut := executorkeep.SummaryTail(text)
+	return ThreadSummary{Text: kept, Bytes: int64(len(text)), Cut: cut}
 }
 
 // ReadMainThread answers a collection's read of a job's main thread with what

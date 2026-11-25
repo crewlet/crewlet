@@ -2,6 +2,7 @@ package executorkeep
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -20,11 +21,11 @@ const (
 	// about 8 MiB of ordinary work. Claude Code keeps a whole 20 MiB PDF read
 	// as 40.13 MiB (gzip level 7), OpenCode the same file as an image as
 	// 20.1 MiB; a session holding more media than that is still not kept
-	// (crewlet/crewlet#1626), since compaction keeps every line before its
-	// boundary. A capture or restore streams it a chunk at a time
-	// ([secrets.StreamChunkBytes]), the store keeps [SealedMaxBytes], and it is
-	// pinned against objstore.RecordWithin at objstore.MiBPace in
-	// internal/objstore/references.
+	// (crewlet/crewlet#1626): a pack's trim drops lines, never media, and a
+	// text session meets [SessionPlainMaxBytes] first. A capture or restore
+	// streams it a chunk at a time ([secrets.StreamChunkBytes]), the store keeps
+	// [SealedMaxBytes], and it is pinned against objstore.RecordWithin at
+	// objstore.MiBPace in internal/objstore/references.
 	SessionMaxBytes = 48 << 20
 
 	// CompletedWorkMaxBytes and BlockedOnMaxBytes bound the reviewer's
@@ -103,6 +104,35 @@ const (
 var SealedMaxBytes = secrets.SealedStreamSize(SessionMaxBytes,
 	strings.Repeat("k", secrets.MaxStreamKeyIDBytes))
 
+const (
+	// SessionKeptMaxBytes bounds what one capture keeps in all: its archive's
+	// text object and every media object it names ([MediaObject]), before
+	// they are sealed. The log refuses a capture past it, sealed
+	// ([KeptSealedMaxBytes]).
+	//
+	// NINETY-FOUR MEBIBYTES, ruled with the drain of crewlet/crewlet#2020:
+	// a take of a session at it, its scrub spool drained into its sealed
+	// spools, peaks at 95.14 MiB before its objects' seal headers and
+	// members, inside one take's room (internal/sandbox's takeRoomBytes,
+	// 96.23 MiB); 95 MiB would leave them under a tenth of a mebibyte. Two
+	// whole-file Claude Code reads (80.3 MiB kept) fit beside 13.7 MiB of text.
+	SessionKeptMaxBytes = 94 << 20
+
+	// MediaMaxCount bounds the media objects one capture names. THIRTY-TWO:
+	// each object begun costs a whole objstore.MiBPace of its upload's
+	// pace, sixteen minutes at the cap, and about 8 KiB of record.
+	MediaMaxCount = 32
+)
+
+// KeptSealedMaxBytes is the most a capture's objects hold together, and so
+// the most any one of its media objects holds: [SessionKeptMaxBytes] sealed,
+// and the header and last chunk's tag each of [MediaMaxCount] more objects
+// adds. It is what a media object is uploaded under and what the object
+// store's pacing is held to for a capture's uploads.
+var KeptSealedMaxBytes = secrets.SealedStreamSize(SessionKeptMaxBytes,
+	strings.Repeat("k", secrets.MaxStreamKeyIDBytes)) +
+	MediaMaxCount*secrets.SealedStreamSize(0, strings.Repeat("k", secrets.MaxStreamKeyIDBytes))
+
 // GzipMostBytes is the most Go's gzip writes of n bytes it cannot shrink, at
 // any level, in one member: flate stores such input as it came, five bytes of
 // header to a block, and its levels end a block of literals at 32 KiB (seven
@@ -132,6 +162,17 @@ const SpoolMembersMostBytes = (256<<20/(64<<10) + 1) * GzipMemberBytes
 // recorded, and the turn's next launch starts from the session the row already
 // names, or fresh.
 var ErrSessionTooLarge = errors.New("executorkeep: the session is over its size bound")
+
+// SessionPlainMaxBytes bounds one captured session's archive as it expands:
+// 256 MiB of plaintext, what its take's scrub reads (internal/sandbox/executor's
+// scrubPlainMax, which is this and says why). Text gzips past the ratio of the
+// two bounds, so a text session meets this one before [SessionMaxBytes].
+const SessionPlainMaxBytes = 256 << 20
+
+// ErrSessionPlainTooLarge reports an archive that expands past
+// [SessionPlainMaxBytes]: an [ErrSessionTooLarge], refused as one.
+var ErrSessionPlainTooLarge = fmt.Errorf("%w: it expands past %d bytes of plaintext", ErrSessionTooLarge,
+	SessionPlainMaxBytes)
 
 // SealedObject is an uploaded session: the object a capture names and the
 // keyring key it was sealed under, which the capture records as its content

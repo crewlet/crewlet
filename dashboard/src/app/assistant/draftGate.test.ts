@@ -310,6 +310,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "not an editor: one configuration field; every host is a modal or the create-company form, which declares",
   "routes/artifacts/DashboardView.tsx":
     "not an editor: its select filters what a published board shows, and changes nothing",
+  "routes/settings/RedirectStep.tsx":
+    "not an editor: the address a sign-in comes back to, copied out and never typed",
   "routes/signin/SignIn.tsx": "signed out: there is no assistant before a sign-in",
   "routes/signin/Invite.tsx": "signed out: accepting an invitation",
   "routes/signin/NewPassword.tsx": "signed out: a password reset",

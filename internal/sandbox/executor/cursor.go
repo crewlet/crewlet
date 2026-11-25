@@ -169,8 +169,12 @@ func cursorScript(req sandbox.RunRequest, session Session, paths Paths, configur
 			q(paths.MCPConfig()), add)
 	}
 	line(`rm -f %s %s`, q(paths.MCPConfig()), q(paths.MCPConfigFresh()))
+	// --disable-auto-update: else a run checks for a newer build two seconds in,
+	// installs it and points the box's `cursor-agent` at it (the
+	// [cursorSupported] bundle), so the release that wrote a session would not
+	// be the one the box's next run, or its release read, runs.
 	parts := []string{"-p", "--output-format", "stream-json", "--trust", "--force", "--approve-mcps",
-		"--sandbox", "disabled"}
+		"--sandbox", "disabled", "--disable-auto-update"}
 	if req.Model != "" {
 		parts = append(parts, "--model", q(req.Model))
 	}
@@ -599,7 +603,8 @@ var cursorHelperScript []byte
 var errCursorWebDenied = errors.New("executor: Cursor Agent has no setting that turns its web tools off, " +
 	"so a run cannot honour web_tools: denied; allow the web on this entry or give the seat another harness")
 
-// WriteConfig writes what a Cursor run reads: its helper, its standing
+// WriteConfig writes what a Cursor run reads, once [cursorGuard] finds no deny
+// of the person's cutting it off from its own servers: its helper, its standing
 // instructions ([Paths.System]), and its MCP servers ([cursorServers]) at
 // [Paths.MCPConfig], with a fresh session's copy beside it
 // ([sandbox.RunRequest.FreshWiring]), returned as the run's config, "" for a
@@ -626,6 +631,9 @@ func (CursorAgent) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 	}
 	nonce, err := cursorNonce()
 	if err != nil {
+		return "", err
+	}
+	if err = cursorGuard(ctx, box, req, paths, nonce); err != nil {
 		return "", err
 	}
 	if err = writeCursorServers(ctx, box, paths.MCPConfig(), req.MCPServers, nonce); err != nil {

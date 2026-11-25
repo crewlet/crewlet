@@ -168,6 +168,16 @@ type sessionKeep struct {
 	// spool took, a seal refused part way included.
 	uploaded [][]byte
 	wrote    []int64
+	// summaries is every summary put, apart from the sessions' uploads, and
+	// copies every one copied under a fresh key; summaryErr, when set, refuses
+	// every put, and summaryGate, when set, holds every put until closed or its
+	// context ends.
+	summaries   []string
+	copies      []objstore.Object
+	summaryErr  error
+	summaryGate chan struct{}
+	// copied is each summary's text by the key it was put under.
+	copied map[objstore.Key]string
 }
 
 func (k *sessionKeep) Policy(context.Context) (SessionPolicy, error) {
@@ -265,6 +275,58 @@ func (k *sessionKeep) Upload(ctx context.Context, spool executorkeep.SealedSpool
 	return executorkeep.SealedObject{ContentKey: spool.ContentKey, Object: objstore.Object{
 		Key: spool.Key, Hash: objstore.Hash(hex.EncodeToString(sum[:])), Size: int64(len(body)),
 	}}, nil
+}
+
+func (k *sessionKeep) PutSummary(ctx context.Context, _, _ string, text io.Reader) (executorkeep.SealedObject, error) {
+	body, err := io.ReadAll(text)
+	if err != nil {
+		return executorkeep.SealedObject{}, err
+	}
+	k.mu.Lock()
+	gate := k.summaryGate
+	k.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return executorkeep.SealedObject{}, ctx.Err()
+		}
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.summaryErr != nil {
+		return executorkeep.SealedObject{}, k.summaryErr
+	}
+	k.summaries = append(k.summaries, string(body))
+	sum := sha256.Sum256(body)
+	key := objstore.KeyAt(k.now())
+	if k.copied == nil {
+		k.copied = map[objstore.Key]string{}
+	}
+	k.copied[key] = string(body)
+	return executorkeep.SealedObject{ContentKey: "k1", Object: objstore.Object{
+		Key: key, Hash: objstore.Hash(hex.EncodeToString(sum[:])), Size: int64(len(body)),
+	}}, nil
+}
+
+func (k *sessionKeep) CopySummary(ctx context.Context, handle, turn string,
+	object objstore.Object) (executorkeep.SealedObject, error) {
+
+	k.mu.Lock()
+	text, held := k.copied[object.Key]
+	k.copies = append(k.copies, object)
+	k.mu.Unlock()
+	if !held {
+		return executorkeep.SealedObject{}, errors.New("no summary was put under that key")
+	}
+	return k.PutSummary(ctx, handle, turn, strings.NewReader(text))
+}
+
+// summariesPut is every summary the rig's keep was handed.
+func (k *sessionKeep) summariesPut() []string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return slices.Clone(k.summaries)
 }
 
 func (k *sessionKeep) uploads() [][]byte {

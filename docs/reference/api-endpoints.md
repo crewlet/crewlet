@@ -365,7 +365,7 @@ The CLI and dashboard rely on it. A non-2xx answer with no code was written by s
 | `GET` | `/gitlet/repos/{name}/verify/{id}` | A check begun above: running, done with its report, or failed with why and what it found (see [below](#get-gitletreposnameverifyid)) |
 | `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Ask Crewlet proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends. Needs your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 3, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with `"outcome": "unknown"` and the `op_id` to retry under for a decision nobody can confirm, and `503 unavailable` without `outcome` for a condition of the node, which recorded nothing: its `detail` says what happened in a sentence, with a `Retry-After` exactly where waiting clears it. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
 | `POST` | `/assistant/proposals/{id}/decline` | Decline one of your proposals: the same body, header and refusals as the approval; nothing is sent, and Ask Crewlet is told. `200` with the proposal's state |
-| `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at for that action (its `action_revisions` entry, else `source_revision`): one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which Ask Crewlet reads as client-reported; its `revision`, `reason` and `receipt` are each one short line, at most 256 bytes, and a longer one is `400 invalid_body`. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
+| `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing. A screen read (`confirm: read`, `page.read`) is sent the same way once the turn has parked, changes nothing, and its report's `page_context` (the screen as it is now) resumes the turn. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at for that action (its `action_revisions` entry, else `source_revision`): one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which Ask Crewlet reads as client-reported; its `revision`, `reason` and `receipt` are each one short line, at most 256 bytes, and a longer one is `400 invalid_body`. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
 | `POST` | `/assistant/audit/conversations/{id}/read` | An administrator's **compliance read** of somebody else's Ask Crewlet conversation (`assistant.conversation.audit_read`: admin, a recent proof, a person present, never Ask Crewlet). Body `{"protocol_version": 3, "reason": "..."}`, the reason required, at most 500 characters. The read is recorded first, beside your name and reason, and the conversation's owner is shown it; then `200` answers the transcript and an `assistant_conversation_read` audit record names you, the owner and the reason |
 | `POST` | `/assistant/audit/conversations/{id}/files/{file}/read` | The same **compliance read** of one file the conversation keeps, same verb and body: the read is recorded beside the conversation first, the `assistant_conversation_read` audit record names the file as well (`file_id`), and `200` answers the file with every header of [the owner's download](#ask-crewlet). A file the conversation does not keep is `404 not_found`, and the read stays on its record. Absent on a node with no object store |
 
@@ -7548,6 +7548,9 @@ page handed out. Also served as the `executor_sessions` query.
       "ask_excerpt": "…",
       "kept": true,
       "object_bytes": 41234,
+      "media_bytes": 0,
+      "summary_kept": true,
+      "summary_bytes": 6144,
       "in_progress": false,
       "base_turn": "0193f0b8-2d4c-7e1a-9b3f-5c8d7e6f1a20",
       "continued_by": "next_turn",
@@ -7600,6 +7603,10 @@ page handed out. Also served as the `executor_sessions` query.
   The prose among them, and `ask_excerpt` (the first kibibyte of what the turn
   was asked), are a model's or a person's words, **redacted at this read**,
   `unkept.reason` included.
+- **`summary_kept`** says the row keeps its session's newest compaction summary
+  apart from it, `summary_bytes` the bytes kept of it
+  ([Code Sandbox](../concepts/code-sandbox.md#a-sessions-newest-summary-kept-apart)):
+  a row naming no object then reads as that summary (`state: summary`).
 - **`kept`** says the row still names a session's object, of `object_bytes`
   sealed. A row naming none is an ending alone, for one of four reasons its
   transcript's `why` and its `not_continuable` say: its turn captured nothing
@@ -7610,6 +7617,11 @@ page handed out. Also served as the `executor_sessions` query.
   (`turn_engine.conversation_session.max_bytes_per_seat`) released its object for
   newer ones, keeping how the turn ended. Only the budget releases a session its
   turn went on past, said with the newer capture `unkept` names.
+- **`media_bytes`**: the sealed size of the large payloads (an image, a whole PDF
+  the run read) a kept session stores apart from its `object_bytes` and splices
+  back on every read, 0 where it keeps none. A payload several of the seat's
+  sessions hold is stored and counted against the seat's budget once, and stated
+  on each row that holds it.
 - **`in_progress`**: the row names the session of a turn that has not ended, the
   newest its runs have kept (a job's final capture while the turn goes on to its
   review or waits on a person's answer, or one a loss left its box to take). Its
@@ -7631,6 +7643,13 @@ page handed out. Also served as the `executor_sessions` query.
   newer capture `unkept` names and why, redacted (that reason quotes what refused
   the capture, so a seat reads the note fenced). Absent on any other row; a row
   at its turn's `last_word` holds all the turn did, unless the turn was lost.
+- **`trimmed_note`** is the engine's own sentence, the one a seat's own
+  `list_sessions` and `read_session` carry, told every reader of a row whose
+  session was [trimmed past the bound](../concepts/code-sandbox.md#each-launchs-session-kept)
+  to what its harness's resume loads: "The history before this session's newest
+  compaction was trimmed to keep it within the bound a kept session is held to:
+  its transcript begins there." Absent on any other row, and on one whose
+  session is no longer kept.
 - **`base_turn`** is the ended turn whose session this turn's first launch was
   handed to continue: its conversation's head as the dispatch read it (of the
   conversation's ended turns whose rows still name a session, the one that read
@@ -7777,7 +7796,7 @@ OpenCode 2 gives it (its `type`). Each entry is one of:
 | `tool_call` | A tool the model called, its input as JSON, the tool in `tool` |
 | `tool_result` | What the tool answered, `failed` where the harness recorded an error |
 | `summary` | A compaction summary: the harness's own account of the conversation before it, which the model read in its place |
-| `unread` | A part of the record the read could not read, said where it was so a gap never reads as continuity: a line that is no record, a line longer than the read reads of a harness, a record or a message of no shape the read knows, an OpenCode message of a kind the read does not know, a transcript that is no plain file in the archive (a link), a text whose redaction could not be read, a call's result or a text joined from parts with a part written out of order past the value bound, a Qwen Code compaction's summary past the value bound, a Qwen Code or Gemini CLI tool result past it whose error is no text or that names its output or error twice, a record past the lines and elements one read reads (`bounds.read_lines`) |
+| `unread` | A part of the record the read could not read, said where it was so a gap never reads as continuity: a line that is no record, a line longer than the read reads of a harness, a record or a message of no shape the read knows, an OpenCode message of a kind the read does not know, a transcript that is no plain file in the archive (a link), a text whose redaction could not be read, a call's result or a text joined from parts with a part written out of order past the value bound, a Qwen Code compaction's summary past the value bound, a Qwen Code or Gemini CLI tool result past it whose error is no text or that names its output or error twice, a Codex tool result past it of no shape the read knows, a record past the lines and elements one read reads (`bounds.read_lines`) |
 
 The harness's bookkeeping (a session's title, a snapshot of the files it
 edited, its system notices), the model's thinking and a tool result Claude Code
@@ -7807,7 +7826,10 @@ scanned only to be dropped.
 **Bounded, and the cut said.** A page holds at most `bounds.entries` (200)
 entries and `bounds.bytes` (1 MiB) of their text; an entry's text is at most
 `bounds.entry_bytes` (16 KiB), cut on a character and marked, with
-`cut: true`. Every entry's text is redacted whole before it is cut, and its
+`cut: true`. A row's newest summary, read where its session is not kept
+(`state: summary`), is cut from its **end** instead, where every summary
+puts what to do next: its entry says `tail: true`, and its text is the
+summary's last part, marked at its start. Every entry's text is redacted whole before it is cut, and its
 `bytes` is always the size of what its whole text redacts to, the text it would
 show whole. **Never the size as recorded**, which beside a text shown whole
 says how long each value its redaction took out was. A line of the
@@ -7877,6 +7899,7 @@ held:
 | `unreadable` | The object does not open: it is sealed under a keyring key this fleet no longer holds, or its bytes are not the ones sealed for this turn |
 | `malformed` | It opened, and is not an archive of its harness's format, and `why` says which of six ways: it is not gzip-compressed, its compressed bytes are corrupt, it ends part way through, it holds no tar of its harness's files, it holds no export document of its harness's, or its bytes are not laid out as its format describes (a box's own agent can rewrite what its run packs before a collection takes it) |
 | `unsupported` | It is of a harness or an archive format this build does not read |
+| `summary` | The row names no object, for a reason `none` lists, and keeps its session's newest compaction summary apart ([Code Sandbox](../concepts/code-sandbox.md#a-sessions-newest-summary-kept-apart)): the entries are that summary alone, one `summary` entry, and `why` says why the session is not kept. A summary gone or not opening is `none`, its `why` saying so |
 
 A store that did not answer is `503 unavailable` with a `Retry-After`, and a
 turn the seat keeps no row of is `404 not_found`, saying how a row goes: its

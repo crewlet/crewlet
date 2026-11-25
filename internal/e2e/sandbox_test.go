@@ -97,17 +97,16 @@ providers:
         FAKE_AGENT_MODE: "${FAKE_AGENT_MODE}"
         FAKE_AGENT_ARGV: "${FAKE_AGENT_ARGV}"
         FAKE_AGENT_RELEASE: "${FAKE_AGENT_RELEASE}"
-        FAKE_AGENT_VERSION: "${FAKE_AGENT_VERSION}"
         FAKE_AGENT_TOKEN: "${FAKE_AGENT_TOKEN}"
         FAKE_AGENT_PUSH_LOG: "${FAKE_AGENT_PUSH_LOG}"
         FAKE_AGENT_CANCEL_TAKE: "${FAKE_AGENT_CANCEL_TAKE}"
-      # Only the cases that read the argv, hold the run, run an older release,
-      # keep what a push run's git saw (its token, its log) or give a hook's
-      # call up set these six. Declared optional, a case that sets none runs
+      # Only the cases that read the argv, hold the run, keep what a push
+      # run's git saw (its token, its log) or give a hook's call up set these
+      # five. Declared optional, a case that sets none runs
       # without them; undeclared, every such run starts without what it never
       # needed and logs the gap.
-      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE, FAKE_AGENT_VERSION, FAKE_AGENT_TOKEN,
-        FAKE_AGENT_PUSH_LOG, FAKE_AGENT_CANCEL_TAKE]
+      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE, FAKE_AGENT_TOKEN, FAKE_AGENT_PUSH_LOG,
+        FAKE_AGENT_CANCEL_TAKE]
   - name: Founder
     kind: human
     contact:

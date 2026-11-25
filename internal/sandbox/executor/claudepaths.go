@@ -48,14 +48,17 @@ func (p Paths) ClaudeNoProxy() string { return p.WorkDir() + "/claude-no-proxy" 
 // reason it is.
 func (p Paths) ClaudeNotesSettings() string { return p.WorkDir() + "/claude-settings-notes.json" }
 
-// ClaudeSkillsSettings is where a Claude Code run handed skills of its own has
-// its settings written with hooks switched on ([claudeHooksOnSettings]), so
-// the plugin's hook that reports each load runs whatever the repository's own
-// settings say: the file the run's script names in place of
-// [Paths.ClaudeSettings] on a release that runs that hook ([claudeSkillsGate]),
-// unless it starts the notes' hooks, whose own settings switch hooks on too
-// ([Paths.ClaudeNotesSettings]). Beside the others, for their reason.
-func (p Paths) ClaudeSkillsSettings() string { return p.WorkDir() + "/claude-settings-skills.json" }
+// ClaudeHooksOff is why the settings a Claude Code run loads would run none of
+// its hooks ([claudeHooksOff]), empty where nothing switches them off: written
+// for a run that may start a hook of the engine's, read by the script once its
+// gates have started one ([claudeHooksOffGate]).
+func (p Paths) ClaudeHooksOff() string { return p.WorkDir() + "/claude-hooks-off" }
+
+// ClaudeHooksOffBy is each file and key that has Claude Code run no hook of a
+// plugin's, `; `-separated, empty where none: written beside
+// [Paths.ClaudeHooksOff], read where the checkouts' hook would be the run's
+// only one ([claudeCheckoutsGate]).
+func (p Paths) ClaudeHooksOffBy() string { return p.WorkDir() + "/claude-hooks-off-by" }
 
 // ClaudeSettingsPinned is [Paths.ClaudeSettings]'s pinned copy: the same
 // settings with the compaction point and a resume's load pinned besides
@@ -69,12 +72,6 @@ func (p Paths) ClaudeNotesSettingsPinned() string {
 	return p.WorkDir() + "/claude-settings-notes-pinned.json"
 }
 
-// ClaudeSkillsSettingsPinned is [Paths.ClaudeSkillsSettings]'s pinned copy
-// ([Paths.ClaudeSettingsPinned]).
-func (p Paths) ClaudeSkillsSettingsPinned() string {
-	return p.WorkDir() + "/claude-settings-skills-pinned.json"
-}
-
 // ClaudeSkillsPlugin is the DIRECTORY of the plugin a Claude Code run is handed
 // its own skills in ([sandbox.RunRequest.Skills], [ClaudeCode.WriteConfig]):
 // its manifest, a directory per skill, and the hook that reports each load to
@@ -84,3 +81,58 @@ func (p Paths) ClaudeSkillsSettingsPinned() string {
 // them or the next run in the box would find them; and its own, removed whole
 // before every run ([Runner.ClearArtifacts]).
 func (p Paths) ClaudeSkillsPlugin() string { return p.WorkDir() + "/claude-skills" }
+
+// ClaudeRepo is the run's checkout state ([claudeCheckoutHome]): the checkouts
+// handed, the lock and the nested hook's config, remade by every run.
+func (p Paths) ClaudeRepo() string { return p.WorkDir() + "/claude-repo" }
+
+// ClaudeRepoSkills lists, a name a line, the checkouts' skills a run copied
+// into the home's `.claude/skills` ([claudeCheckoutHome]), so the run's end
+// removes them and none of the home's, or the next run's gate where the run
+// was killed first.
+func (p Paths) ClaudeRepoSkills() string { return p.WorkDir() + "/claude-repo-skills" }
+
+// ClaudeHomeInstructions is the home's own `.claude/CLAUDE.md`, held in the
+// work directory while the run's, the home's with its checkouts' after it,
+// stands in its place ([claudeCheckoutHome], [ClaudeCode.homeRestore],
+// [putBackHome]).
+func (p Paths) ClaudeHomeInstructions() string { return p.WorkDir() + "/claude-home-CLAUDE.md" }
+
+// ClaudeRepoInstructions is where checkout-launch writes the instructions of
+// a run's checkouts ([claudeCheckoutHome]), which the gate then writes after
+// the home's own into `.claude/CLAUDE.md` through a link as the home keeps it.
+func (p Paths) ClaudeRepoInstructions() string { return p.WorkDir() + "/claude-repo-CLAUDE.md" }
+
+// ClaudeNoteHelper is where a Claude Code run's launch writes the note helper
+// its checkout gate and checkouts' hook run ([claudeCheckoutHome]).
+func (p Paths) ClaudeNoteHelper() string { return p.WorkDir() + "/claude-notehelper" }
+
+// ClaudeCheckoutLaunch is the run's checkout-launch config, which its launch
+// writes ([claudeCheckouts]) and its script hands the note helper.
+func (p Paths) ClaudeCheckoutLaunch() string { return p.WorkDir() + "/claude-checkout-launch.json" }
+
+// ClaudeCheckoutsPlugin is the DIRECTORY of the plugin that holds a Claude
+// Code run's checkouts' hook ([writeClaudeCheckouts]), named with
+// `--plugin-dir` where the run's script starts it ([claudeCheckoutsGate]).
+func (p Paths) ClaudeCheckoutsPlugin() string { return p.WorkDir() + "/claude-checkouts" }
+
+// ClaudeSettingsGuarded is the guarded copy of a run's settings, handed to a
+// run with a bridge in place of every run's and
+// the skills' pinned copies ([claudePinGate]): the pin, hooks on, and the
+// bridge's guard ([claudeGuardHooks]). Beside them, for their reason.
+func (p Paths) ClaudeSettingsGuarded() string { return p.WorkDir() + "/claude-settings-guarded.json" }
+
+// ClaudeNotesSettingsGuarded is [Paths.ClaudeNotesSettingsPinned]'s guarded
+// copy: the notes' hooks beside the guard's ([Paths.ClaudeSettingsGuarded]).
+func (p Paths) ClaudeNotesSettingsGuarded() string {
+	return p.WorkDir() + "/claude-settings-notes-guarded.json"
+}
+
+// ClaudeBridgeGuard is the script the guard's PreToolUse hook runs
+// ([claudeGuardScript]). Under WorkDir, never in the checkout.
+func (p Paths) ClaudeBridgeGuard() string { return p.WorkDir() + "/claude-bridge-guard.sh" }
+
+// ClaudeUnbridged is where the guard records the server's source and the agent
+// of a call it refused, which the run's script reads once the harness exits
+// ([claudeGuardLines]).
+func (p Paths) ClaudeUnbridged() string { return p.WorkDir() + "/claude-unbridged" }

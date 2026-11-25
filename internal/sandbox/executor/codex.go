@@ -2,6 +2,9 @@ package executor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -161,9 +164,10 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	// stop: the watcher, the helper, then the app-server, TERM again on each
 	// probe: on TERM it finishes the running turn first, and a second TERM
 	// ends it at once (measured on 0.171.0), all within the job's grace.
-	// AND THE HOME'S OWN CONFIGURATION BACK once the server is gone ([codexRestoreHome]).
-	line(`stop() { end "$tpid"; end "$gpid"; end "$hpid"; end "$apid" again; tpid= gpid= hpid= apid=; rm -f %s; %s; }`,
-		sock, codexRestoreHome(paths))
+	// THEN what the nested hook left out said ([checkoutHome.saySkipped]) and
+	// THE HOME'S OWN CONFIGURATION BACK once the server is gone ([codexRestoreHome]).
+	line(`stop() { end "$tpid"; end "$gpid"; end "$hpid"; end "$apid" again; tpid= gpid= hpid= apid=; rm -f %s; %s; %s; }`,
+		sock, codexCheckoutHome(paths).saySkipped(), codexRestoreHome(paths))
 	// THE THREAD, off the stream's first line, the one `exec --json` prints as
 	// the server starts the thread, before its turn: written for the helper
 	// and reported for collection, with where the run began in its rollout
@@ -187,11 +191,8 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`, q(paths.SessionRecord()))
 	line(`endbefore() { endedas=before; %s; exit 143; }`, strings.TrimSuffix(recordEnded(paths), "\n"))
 	line(`[ -z "$endasked" ] || endbefore`)
-	// WHERE THE RUN BEGAN IN THE ROLLOUT IT CONTINUES: every line past it is
-	// the run's own, which is all the result reads.
 	if session.Continues {
-		line(`if [ "$k" = yes ]; then r=$(%s); [ -z "$r" ] || { lc=$(wc -l < "$r" | tr -d " ") && [ -n "$lc" ] && before=$lc; } || before=0; fi`,
-			codexRolloutPath(paths, session.ID))
+		b.WriteString(codexRunStart(paths, session.ID))
 	}
 
 	line(`rm -f %s %s %s %s`, sock, thread, threadNext, runStart)
@@ -218,6 +219,10 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 		times.clock, times.listen)
 	line(`  sleep 0.1`)
 	line(`done`)
+
+	if len(crewletServers(req.MCPServers)) > 0 {
+		b.WriteString(codexBridgeCheck(req, paths))
+	}
 
 	line(`( while kill -0 $$ 2> /dev/null; do thread && exit 0; sleep 0.1; done ) &`)
 	line(`tpid=$!`)
@@ -349,15 +354,70 @@ gpid=$!
 `, env, base, flags, codexGuardPoll, q(paths.CodexHelperLost()))
 }
 
+// codexBridgeCheck is the part of a Codex run's script that starts nothing
+// unless the note helper's codex-bridge, asking the app-server before the
+// thread starts, finds Codex would hand the model each bridge's tools under
+// their own names (internal/notehelper, "The Codex bridge check"): run in the
+// background, so an end request is taken while it waits, and its refusal,
+// naming the server, on the run's error stream. Each bridge goes as the
+// SHA-256 of every address the run wrote for it, both wirings' where it has two.
+func codexBridgeCheck(req sandbox.RunRequest, paths Paths) string {
+	type bridge struct {
+		Name    string   `json:"name"`
+		Digests []string `json:"url_sha256"`
+	}
+	var bridges []bridge
+	for _, name := range crewletServers(req.MCPServers) {
+		b := bridge{Name: name, Digests: []string{sha256Hex(req.MCPServers[name].URL)}}
+		if f := req.FreshWiring; f != nil {
+			if s, ok := f.MCPServers[name]; ok {
+				b.Digests = append(b.Digests, sha256Hex(s.URL))
+			}
+		}
+		bridges = append(bridges, b)
+	}
+	config, _ := json.Marshal(map[string]any{"socket": paths.CodexSocket(),
+		"wait_seconds": waitSeconds(codexBridgeCheckWait), "bridges": bridges}) // strings and ints cannot fail to encode
+	q := shellword.Quote
+	return fmt.Sprintf(`printf '%%s\n' %s > "$rr/bridge.json" || exit 1
+"$rh" -adapter codex-bridge -config "$rr/bridge.json" < /dev/null &
+cpid=$!
+while kill -0 "$cpid" 2> /dev/null; do [ -z "$endasked" ] || { end "$cpid"; endbefore; }; sleep 0.1; done
+wait "$cpid" || { echo 'crewlet: the run does not start: Codex would not hand its model the engine'"'"'s own tools under their own names, or that could not be checked (above)' >&2; exit 1; }
+`, q(string(config)))
+}
+
+// codexBridgeCheckWait bounds each answer the bridge check waits for: the
+// listing starts every MCP server, the bridge under its own startup bound
+// ([codexMCPStartupWait]), past which the run would fail anyway, so that and
+// the helper's own thirty-second bound on an answer.
+const codexBridgeCheckWait = codexMCPStartupWait + 30*time.Second
+
+// sha256Hex is the SHA-256 of s in hex.
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
 // codexGuardPoll is how often the guard looks for the helper: half a second,
 // a few of a model's shortest responses, so a run outlives its helper by at
 // most that before its turn is interrupted.
 const codexGuardPoll = "0.5"
 
+// codexRunStart sets before to WHERE THE RUN BEGINS IN THE ROLLOUT IT
+// CONTINUES, its line count once the gate has settled it (a compressed one
+// written plain, [codexSessionGate]): every line past it is the run's own,
+// which is all the result reads.
+func codexRunStart(paths Paths, thread string) string {
+	return fmt.Sprintf(`if [ "$k" = yes ]; then r=$(%s); [ -z "$r" ] || { lc=$(wc -l < "$r" | tr -d " ") && [ -n "$lc" ] && before=$lc; } || before=0; fi`+"\n",
+		codexRolloutPath(paths, thread))
+}
+
 // codexAborted defines the script's `aborted`: true where the rollout lines
 // the run appended (past before, of the thread reported, else the one
 // continued) record a turn aborted as interrupted, as the result reads them
-// ([codexEvents.keepRollout]).
+// ([codexEvents.keepRollout]). A compressed rollout alone is no resume's, so
+// it holds no line of the run's, and is passed over, as finish passes it.
 func codexAborted(paths Paths) string {
 	return fmt.Sprintf(`aborted() { as=${tid:-$sid}; [ -n "$as" ] || return 1; af=$(find %s -type f -name "rollout-*-$as.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1); [ -n "$af" ] && tail -n +$((before + 1)) "$af" | grep -E '"type": *"turn_aborted"' | grep -qE '"reason": *"interrupted"'; }`+"\n",
 		shellword.Quote(paths.CodexSessions()))

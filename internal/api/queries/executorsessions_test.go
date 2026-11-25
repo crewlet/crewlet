@@ -244,8 +244,8 @@ var plantedKey = "ghp_" + strings.Repeat("Qx7Rb2", 6)
 // and handed on as asked; another seat's rows are never on the page, and a
 // cursor the domain refuses is the caller's to change, told without the
 // domain's package name. Each row says how its turn ended, what it was asked
-// (redacted), and whether a session is kept and how large: a turn whose
-// session the budget released, or which captured nothing, keeps none.
+// (redacted), and whether a session is kept and how large, its media apart: a
+// turn whose session the budget released, or which captured nothing, keeps none.
 //
 // Mutation: sort the rows, drop the cursor on its way to the reader, list every
 // seat's rows, or pass the domain's refusal through as a failure, and a check
@@ -259,6 +259,10 @@ func TestASeatsSessionsAreListedInTheReadersOrderAPageAtATime(t *testing.T) {
 			ArchiveFormat: executor.ClaudeCode{}.ArchiveFormat(), CapturedAt: at,
 			Object: objstore.Object{Key: objstore.KeyAt(at), Hash: objstore.Hash(strings.Repeat("a", 64)),
 				Size: 4096},
+			Media: []executorkeep.MediaObject{
+				{Digest: strings.Repeat("1", 64), Object: objstore.Object{Size: 3 << 20}},
+				{Digest: strings.Repeat("2", 64), Object: objstore.Object{Size: 1 << 20}},
+			},
 			AskExcerpt: "fix the deploy with " + plantedKey},
 		{Handle: "bo", Turn: uuid.NewString()},
 		{Handle: "ana", Turn: turns[1], ConversationKey: "chat:room", CapturedAt: at, EndedAt: at,
@@ -281,14 +285,14 @@ func TestASeatsSessionsAreListedInTheReadersOrderAPageAtATime(t *testing.T) {
 		t.Fatalf("the first page is %v with next %q, want %v and a cursor", got, page.Next, turns[:2])
 	}
 	kept, released := page.Sessions[0], page.Sessions[1]
-	if !kept.Kept || kept.ObjectBytes != 4096 || kept.CapturedAt == nil || kept.EndedAt != nil ||
-		kept.Ending != nil {
+	if !kept.Kept || kept.ObjectBytes != 4096 || kept.MediaBytes != 4<<20 || kept.CapturedAt == nil ||
+		kept.EndedAt != nil || kept.Ending != nil {
 		t.Errorf("the live, kept session reads %+v", kept)
 	}
 	if strings.Contains(kept.AskExcerpt, plantedKey) || !strings.Contains(kept.AskExcerpt, redact.Marker) {
 		t.Errorf("the ask's excerpt reads %q, want it redacted", kept.AskExcerpt)
 	}
-	if released.Kept || released.ObjectBytes != 0 || released.CapturedAt == nil ||
+	if released.Kept || released.ObjectBytes != 0 || released.MediaBytes != 0 || released.CapturedAt == nil ||
 		released.Ending == nil || released.Ending.Outcome != executorkeep.OutcomeFailed {
 		t.Errorf("the released session reads %+v", released)
 	}
@@ -844,6 +848,10 @@ func TestATurnIdThatIsNoneIsTheCallersToChange(t *testing.T) {
 type failingObjects struct{}
 
 func (failingObjects) Open(context.Context, executordomain.Session) (io.ReadCloser, error) {
+	return nil, errors.New("objstore: the bucket did not answer within its budget")
+}
+
+func (failingObjects) OpenSummary(context.Context, executordomain.Session) (io.ReadCloser, error) {
 	return nil, errors.New("objstore: the bucket did not answer within its budget")
 }
 

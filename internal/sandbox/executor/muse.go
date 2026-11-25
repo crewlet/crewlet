@@ -3,9 +3,8 @@ package executor
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -47,6 +46,7 @@ var (
 	_ artifactDirHolder = Muse{}
 	_ inPlaceGate       = Muse{}
 	_ sessionJudge      = Muse{}
+	_ trimmer           = Muse{}
 )
 
 // NewMuse returns the runner.
@@ -158,7 +158,7 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`if ! at %s; then printf 'crewlet: this box runs Muse Code %%s, older than %s, the release this runner is written for\n' "$n" >&2; exit 1; fi`,
 		floorArgs(museSupported()), museSupported())
 	line(`p=%s`, q(paths.Brief()))
-	b.WriteString(museSessionGate(session, paths, req.FreshWiring != nil))
+	b.WriteString(museSessionGate(session, paths, freshSessionWiring(req, session) != nil))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
 	b.WriteString(museWiring(paths))
@@ -205,7 +205,7 @@ func museGuard(paths Paths, own []string) string {
 	settings := q(paths.MuseSettings())
 	var names []string
 	for _, name := range own {
-		if len(name)+len("-")+museNonceLen <= museServerNameShown {
+		if len(name)+len("-")+sessionNonceLen <= museServerNameShown {
 			names = append(names, q(name)+"-??????")
 		}
 	}
@@ -370,12 +370,12 @@ func museChildUsage(paths Paths) (before, after string) {
 // museArchiveFormat is the layout a Muse Code run packs its session in
 // ([musePack]) and the one it restores ([museSessionGate]): one gzipped tar
 // of members named from [Paths.MuseSessions] down,
-// `<YYYY>/<MM>/<DD>/<session>/`: its session.jsonl, its subagents' records
-// (subagent/) and its tool outputs (tool-outputs/), which a resume takes up
-// whole from any home's data directory (measured on 1.4.25). Never cron.db,
-// a binary SQLite file the archive's text scrub would corrupt, nor the cli
-// log: Muse writes both afresh on a resume (measured). A change is a new
-// format.
+// `<YYYY>/<MM>/<DD>/<session>/`: its session.jsonl (cut past the bound,
+// [Muse.trimRecord]), its subagents' records (subagent/) and its tool outputs
+// (tool-outputs/), which a resume takes up from any home's data directory
+// (measured on 1.4.25). Never cron.db, a binary SQLite file the archive's text
+// scrub would corrupt, nor the cli log: Muse writes both afresh on a resume
+// (measured). A change is a new format.
 const museArchiveFormat = 1
 
 // ArchiveFormat is the layout a Muse Code run packs its session in ([carrier]).
@@ -446,17 +446,27 @@ func (Muse) meter(context.Context, io.Reader, string, string, *passBudget) (mete
 }
 
 // museCapture is the part of a run's script that packs its session once its
-// harness has exited ([musePack]).
+// harness has exited ([musePack]), trimmed by the box's bare release
+// ([trimRelVar], read off v as [releaseOf] reads it).
 func museCapture(paths Paths) string {
-	return musePack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()})
+	return bareReleaseShell(trimRelVar) + musePack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()})
 }
 
-// musePack packs the session s names into at.staged and moves it over
-// at.dest, its digest kept ([packDigest]): the members [museArchiveFormat]
-// names, its record first. A pack beside a working harness is held to
-// [claudeHeldTar]'s rule, whose lists catch a file rewritten as tar reads it
-// and which reads the first member as the session's transcript.
-func musePack(paths Paths, at packAt) string {
+// musePack is ONE PACK, the run's end's, a pack on demand's and a save's, at
+// the bounds a take keeps ([trimAt]): [musePackAt].
+func musePack(paths Paths, at packAt) string { return musePackAt(paths, at, trimAt) }
+
+// musePackedRecord is a pack's record, the first of its members, named from
+// [Paths.MuseSessions] down: a shell word.
+const musePackedRecord = `"$e/session.jsonl"`
+
+// musePackAt packs the session s names into at.staged and moves it over
+// at.dest, its digest kept ([packDigest]) and its trim past trim said beside
+// it ([trimTar], [trimMarked]): the members [museArchiveFormat] names, its
+// record first and the only one a trim cuts. A pack beside a working harness
+// is held to [claudeHeldTar]'s rule, whose lists catch a file rewritten as tar
+// reads it and which reads the first member as the session's transcript.
+func musePackAt(paths Paths, at packAt, trim trimPoints) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
@@ -464,15 +474,17 @@ func musePack(paths Paths, at packAt) string {
 	b.WriteString(museFind(paths))
 	line(`if [ -n "$x" ]; then`)
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
-	line(`    set -- "$e/session.jsonl"; for y in subagent tool-outputs; do [ ! -d "$x/$y" ] || [ -L "$x/$y" ] || set -- "$@" "$e/$y"; done`)
+	line(`    set -- %s; for y in subagent tool-outputs; do [ ! -d "$x/$y" ] || [ -L "$x/$y" ] || set -- "$@" "$e/$y"; done`,
+		musePackedRecord)
 	tar := fmt.Sprintf(`{ tar -czf %s -C %s "$@" < /dev/null > /dev/null 2> %s; t=$?; [ "$t" = 0 ] || { [ "$t" = 1 ] && grep -q 'changed as we read it' %s; }; }`,
 		q(at.staged+"/capture"), q(sessions), q(at.staged+"/error"), q(at.staged+"/error"))
 	if at.working {
 		tar = claudeHeldTar(sessions, at.staged)
 	}
-	line(`    rm -rf %s; if mkdir -p %s && %s && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(at.staged), q(at.staged), tar, packDigest(paths, "s", at.staged), q(at.staged+"/capture"), q(at.dest),
-		q(at.staged+"/error"))
+	tar = trimTar(Muse{}, trim, q(sessions), musePackedRecord, at.staged, tar)
+	line(`    rm -rf %s; if mkdir -p %s && %s && %s && %s && mv -f %s %s; then packed=1; %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(at.staged), q(at.staged), tar, packDigest(paths, "s", at.staged), trimUnmark(at.dest),
+		q(at.staged+"/capture"), q(at.dest), trimMarked(at.dest), q(at.staged+"/error"))
 	line(`    rm -rf %s`, q(at.staged))
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)
@@ -607,6 +619,128 @@ func museMergeSystem(ctx context.Context, box sandbox.Sandbox, paths Paths, syst
 	return nil
 }
 
+// museSwitchedOff refuses a run where the box home switches off what the run
+// brings of its own, each with no word otherwise (measured on 1.4.25): its
+// notes plugin, where it has one, by the settings' `plugins.activation` "off",
+// a disable recorded in installed.json ([Paths.MuseInstalled]), a reject
+// recorded as a hook's runtime capability, or an installed.json Muse cannot
+// read (it then loads no plugin); a seat skill, by `skills.activation.user`
+// "off" on its file. The plugin's records are read on every run, before the
+// script's remove and install, which would reset them: a run with no use for
+// the plugin is not refused, but its script leaves the plugin alone
+// ([Paths.MusePluginOff]); nothing is switched back on. Settings that do not
+// read are Muse's to refuse, which it does loudly.
+func museSwitchedOff(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
+	path := paths.MuseSettings()
+	raw, err := box.ReadFile(ctx, path)
+	if err != nil {
+		return fmt.Errorf("executor: reading the box home's own Muse Code settings (%s): %w", path, err)
+	}
+	var settings struct {
+		Plugins struct {
+			Activation map[string]json.RawMessage `json:"activation"`
+		} `json:"plugins"`
+		Capabilities map[string]struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"runtime_capabilities"`
+		Skills struct {
+			Activation struct {
+				User map[string]json.RawMessage `json:"user"`
+			} `json:"activation"`
+		} `json:"skills"`
+	}
+	_ = json.Unmarshal(raw, &settings) // a value that does not decode switches nothing off
+	var off []string
+	if string(settings.Plugins.Activation[museNotesPlugin]) == `"off"` {
+		off = append(off, fmt.Sprintf(`%s sets plugins.activation.%s to "off"`, path, museNotesPlugin))
+	}
+	for _, h := range museNoteHooks {
+		key := "plugin:" + museNotesPlugin + ":hook:" + h.id
+		if c, ok := settings.Capabilities[key]; ok && c.Enabled != nil && !*c.Enabled {
+			off = append(off, fmt.Sprintf("%s sets runtime_capabilities.%q.enabled to false (`muse plugins "+
+				"reject`)", path, key))
+		}
+	}
+	installed, err := museInstalledOff(ctx, box, paths)
+	if err != nil {
+		return err
+	}
+	off = append(off, installed...)
+	if err = museMarkPluginOff(ctx, box, paths, len(off) > 0); err != nil {
+		return err
+	}
+	var said []string
+	if req.Steer.Set() || req.SkillLoads.Set() {
+		said = off
+	}
+	for _, s := range req.Skills {
+		file := paths.MuseSkills() + "/" + s.Listed() + "/SKILL.md"
+		if string(settings.Skills.Activation.User[file]) == `"off"` {
+			said = append(said, fmt.Sprintf(`%s sets skills.activation.user[%q] to "off", the seat skill %s`,
+				path, file, s.Listed()))
+		}
+	}
+	if len(said) == 0 {
+		return nil
+	}
+	return fmt.Errorf("executor: the box home switches off what the run brings of its own, which Muse Code "+
+		"would then go without unseen, and the run never switches back on what a person switched off: %s; "+
+		"undo that there (`muse plugins enable` or `approve`, `muse skills enable`), or run without notes, "+
+		"skill loads and skills", strings.Join(said, "; "))
+}
+
+// museInstalledOff is what installed.json ([Paths.MuseInstalled]) says of the
+// notes plugin, read by the box's shell as Muse reads it: a disable
+// (`plugins.<id>.enabled` false), or the file there and unreadable (a link,
+// not a regular file, not readable, no JSON object), which leaves Muse with no
+// plugin at all (measured on 1.4.25). A missing file says nothing.
+func museInstalledOff(ctx context.Context, box sandbox.Sandbox, paths Paths) ([]string, error) {
+	file := paths.MuseInstalled()
+	q := shellword.Quote(file)
+	res, err := box.Exec(ctx, "if [ -L "+q+" ] || { [ -e "+q+" ] && { [ ! -f "+q+" ] || [ ! -r "+q+" ]; }; }; "+
+		"then echo unreadable; elif [ -f "+q+" ]; then echo read; cat -- "+q+"; fi; exit 0", sandbox.ExecOptions{})
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("executor: reading the box home's Muse Code plugin store (%s): %w", file, err)
+	}
+	unreadable := []string{file + " is there but no regular file Muse Code can read, which leaves it no plugin"}
+	head, body, _ := strings.Cut(res.Stdout, "\n")
+	switch head {
+	case "unreadable":
+		return unreadable, nil
+	case "read":
+	default:
+		return nil, nil
+	}
+	var store struct {
+		Plugins map[string]struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"plugins"`
+	}
+	if read := json.Unmarshal([]byte(body), &store) == nil; !read {
+		return []string{file + " does not read as JSON, which leaves Muse Code no plugin"}, nil
+	}
+	if p, ok := store.Plugins[museNotesPlugin]; ok && p.Enabled != nil && !*p.Enabled {
+		return []string{fmt.Sprintf("%s sets plugins.%s.enabled to false (`muse plugins disable`)", file,
+			museNotesPlugin)}, nil
+	}
+	return nil, nil
+}
+
+// museMarkPluginOff records for the run's script whether a person switched the
+// notes plugin off ([Paths.MusePluginOff]): present, the script neither
+// removes, installs nor approves it, so the person's record stays as it is.
+func museMarkPluginOff(ctx context.Context, box sandbox.Sandbox, paths Paths, off bool) error {
+	q := shellword.Quote(paths.MusePluginOff())
+	cmd := "rm -f -- " + q
+	if off {
+		cmd = "mkdir -p " + shellword.Quote(paths.WorkDir()) + " && : > " + q
+	}
+	return execOK(ctx, box, cmd, "recording whether the box home switched the run's notes plugin off")
+}
+
 // museHold holds the box home's settings as the run finds them
 // ([Paths.MuseHeldSettings], empty where the home has none) and returns them:
 // the copy already held where there is one, which is the home's own, the live
@@ -679,25 +813,13 @@ func museMCP(s sandbox.MCPServer) museMCPServer {
 	return out
 }
 
-// museNonceLen is how many hex digits [museNonce] makes.
-const museNonceLen = 6
-
-// museNonce is a run's own suffix to its servers' names: six hex digits (24
-// bits) from the system's random source, new every run, so the run's servers
-// are under names no file of the repository's can declare beforehand (a
-// trusted run loads the repository's `.mcp.json` beside them), and a name of
-// up to 19 characters stays whole ([museServerNameShown]). A variable so a
-// case can name the files it reads.
-var museNonce = func() string {
-	var b [museNonceLen / 2]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
-}
-
 // writeMuseServers writes each of servers as dir/<name>-<nonce>.json, which
 // the run's script adds to its settings under that name ([museWiring]), the
-// model offered its tools as `mcp__<name>_<nonce>__<tool>`: refused for a
-// name that is not a file's, which `muse mcp add-json` would be handed whole.
+// model offered its tools as `mcp__<name>_<nonce>__<tool>`, nonce its
+// session's ([sessionNonce]), stable across the session's runs; a
+// repository's `.mcp.json` naming one refuses the run ([museServersHeld]), and
+// the home's makes the add refuse it: refused for a name that is not a
+// file's, which `muse mcp add-json` would be handed whole.
 func writeMuseServers(ctx context.Context, box sandbox.Sandbox, dir string, servers map[string]sandbox.MCPServer,
 	nonce string) error {
 
@@ -739,12 +861,15 @@ func museServerName(name string) bool {
 // instructions, told of notes where it reads them, into the home's settings
 // ([museMergeSystem]), refused past [museSystemMax]; its MCP servers
 // ([writeMuseServers]) with a fresh session's beside them
-// ([sandbox.RunRequest.FreshWiring]); its skills; its notes plugin, take
-// config and note helper where it is wired to its notes or its skills' loads;
-// and its brief, and the brief a new session is handed in a continued one's
-// place, which `--prompt-file` names.
-func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+// ([freshSessionWiring]), each named for its session; its skills; its notes
+// plugin, take config and note helper where it is wired to its notes or its
+// skills' loads; and its brief, and the brief a new session is handed in a
+// continued one's place, which `--prompt-file` names.
+func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
 	paths Paths) (string, error) {
+	if session.ID == "" || (session.Continues && session.Fresh == "") {
+		return "", errors.New("executor: a Muse Code run names no session to name its MCP servers for")
+	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, m.NoteInstruction())
@@ -754,26 +879,35 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			"at most %d (run.system_prompt_append): shorten the seat's system prompt, its policies or its "+
 			"memory", n, museSystemMax)
 	}
+	if err := museSwitchedOff(ctx, box, req, paths); err != nil {
+		return "", err
+	}
+	notes, loads := req.Steer.Set(), req.SkillLoads.Set()
 	if system != "" {
 		if err := museMergeSystem(ctx, box, paths, system); err != nil {
 			return "", err
 		}
 	}
-	nonce := museNonce()
-	if err := writeMuseServers(ctx, box, paths.MuseServers(), req.MCPServers, nonce); err != nil {
+	names := museServerNames(req.MCPServers, sessionNonce(session.ID))
+	if f := freshSessionWiring(req, session); f != nil {
+		names = append(names, museServerNames(f.MCPServers, sessionNonce(session.Fresh))...)
+	}
+	if err := museServersHeld(ctx, box, names); err != nil {
+		return "", err
+	}
+	if err := writeMuseServers(ctx, box, paths.MuseServers(), req.MCPServers, sessionNonce(session.ID)); err != nil {
 		return "", err
 	}
 	if err := writeMuseSkills(ctx, box, req.Skills, paths); err != nil {
 		return "", err
 	}
-	notes, loads := req.Steer.Set(), req.SkillLoads.Set()
 	if notes || loads {
 		if err := writeMuseNotes(ctx, box, req, paths); err != nil {
 			return "", err
 		}
 	}
-	if f := req.FreshWiring; f != nil {
-		if err := writeMuseServers(ctx, box, paths.MuseServersFresh(), f.MCPServers, nonce); err != nil {
+	if f := freshSessionWiring(req, session); f != nil {
+		if err := writeMuseServers(ctx, box, paths.MuseServersFresh(), f.MCPServers, sessionNonce(session.Fresh)); err != nil {
 			return "", err
 		}
 		if notes || loads {
@@ -839,8 +973,11 @@ func museWiring(paths Paths) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	added := q(paths.MuseServersAdded())
-	line(`muse plugins remove %s --json < /dev/null > /dev/null 2>&1; rm -f %s`, museNotesPlugin, installed)
-	line(`if [ -f %s ]; then`, q(plugin+"/.muse-plugin/plugin.json"))
+	// NOT OVER A PERSON'S OFF ([museSwitchedOff]): the remove and install
+	// reset a disable and a reject, so where one stands they are skipped.
+	off := q(paths.MusePluginOff())
+	line(`[ -e %s ] || muse plugins remove %s --json < /dev/null > /dev/null 2>&1; rm -f %s`, off, museNotesPlugin, installed)
+	line(`if [ ! -e %s ] && [ -f %s ]; then`, off, q(plugin+"/.muse-plugin/plugin.json"))
 	line(`  chmod 0755 %s 2> /dev/null`, q(paths.MuseNoteHelper()))
 	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > %s 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
 		q(plugin), installed, errs, museNotesPlugin, errs)

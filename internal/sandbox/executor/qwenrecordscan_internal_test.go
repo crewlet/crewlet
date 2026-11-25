@@ -247,12 +247,12 @@ func TestACollectionsReadOfAQwenSessionIsItsWholeLineRead(t *testing.T) {
 		takes := qwenNotesIn(record)
 		for _, from := range []int{0, 2} {
 			want, wantErr := qwenNotesHeldWhole(t.Context(), strings.NewReader(record), takes, from, maxLineBytes)
-			got, err := qwenNotesHeld(t.Context(), strings.NewReader(record), takes, from, maxLineBytes)
+			got, err := qwenNotesHeld(t.Context(), strings.NewReader(record), takes, from, maxLineBytes, nil)
 			if !slices.Equal(got, want) || (err != nil) != (wantErr != nil) {
 				t.Errorf("%s from %d: held %v (%v), want %v (%v)", name, from, got, err, want, wantErr)
 			}
 			got, err = qwenNotesHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, takes, from,
-				maxLineBytes)
+				maxLineBytes, nil)
 			if !slices.Equal(got, want) || (err != nil) != (wantErr != nil) {
 				t.Errorf("%s from %d in pieces: held %v (%v), want %v (%v)", name, from, got, err, want, wantErr)
 			}

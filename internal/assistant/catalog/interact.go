@@ -40,6 +40,10 @@ func draft(id, scope string) PageAction {
 		Scope: scope + " Nothing is saved until you save it."}
 }
 
+// ReadScreen is the page action every screen answers with itself as it is
+// now ([ReadScreenTool]): it changes nothing and needs no approval.
+const ReadScreen = "page.read"
+
 // PageActions are every page action a proposal may name, in v1.
 var PageActions = []PageAction{
 	view("home.range.set", "Changes the window Home shows."),
@@ -62,6 +66,7 @@ var PageActions = []PageAction{
 	draft(DraftSet, "Changes the draft open on this screen."),
 	draft("org.draft.apply_ops", "Changes the org builder's draft."),
 	draft("budgets.ceiling.prefill", "Opens the ceiling editor with a new value filled in."),
+	{ID: ReadScreen, Confirm: wire.ConfirmRead, Scope: "Reads what this screen shows. Nothing changes."},
 }
 
 // DraftSet is the page action that sets fields of the draft a screen has
@@ -94,8 +99,8 @@ var ErrNotAccepted = errors.New("catalog: the screen does not accept that page a
 // it declares none for is refused rather than taken on trust; draft.set alone
 // may go without, because the open draft's editable fields already declare
 // what it takes, and [DraftValues] holds a call to them either way.
-func PageActionFor(args Args, page *wire.PageContext) (PageAction, error) {
-	id := args.String("action")
+func PageActionFor(t Tool, args Args, page *wire.PageContext) (PageAction, error) {
+	id, payload := t.PageCall(args)
 	action, known := PageActionOf(id)
 	var accepts []string
 	if page != nil {
@@ -119,12 +124,24 @@ func PageActionFor(args Args, page *wire.PageContext) (PageAction, error) {
 		return PageAction{}, fmt.Errorf("%w: the screen does not say what %q takes, so it "+
 			"cannot be proposed", ErrInvalidArguments, id)
 	}
-	if err := declared.Check(args["args"]); err != nil {
+	if err := declared.Check(payload); err != nil {
 		return PageAction{}, fmt.Errorf("%w: %s takes what the page context's action_args "+
 			"declares for it: %w", ErrInvalidArguments, id, err)
 	}
 	return action, nil
 }
+
+// PageCall is the page action a call of t names and its arguments:
+// [ReadScreen] with none for [ReadScreenTool], else the call's own.
+func (t Tool) PageCall(args Args) (string, any) {
+	if t.Name == ReadScreenTool {
+		return ReadScreen, map[string]any{}
+	}
+	return args.String("action"), args["args"]
+}
+
+// ReadScreenTool is the tool that reads the person's screen again.
+const ReadScreenTool = "read_screen"
 
 // PageActionPrefix opens a page action's request path. A page action sends
 // nothing to the engine; its request is the action as the digest binds it
@@ -175,6 +192,20 @@ func interactionTools() []Tool {
 		},
 	}
 
+	readScreen := Tool{
+		Name: ReadScreenTool, Kind: KindPageAction, Tier: TierPageLocal,
+		Phrase: "read this screen",
+		Description: "Read the person's screen as it is now: the same outline the page " +
+			"context's view gives, fresh. The view is the screen as the question was sent; " +
+			"call this when it may have moved since (a change you made was applied, or the " +
+			"person acted while you answered). It changes nothing and needs no approval.",
+		schema: object(nil, map[string]*schema{}),
+		Build: func(map[string]any) (exec.Request, error) {
+			return exec.Request{Method: PageMethod, Path: PageActionPrefix + ReadScreen,
+				Body: []byte("{}")}, nil
+		},
+	}
+
 	params := map[string]*schema{
 		"screen": oneOf("The screen to open.", cards.Screens()...),
 		"label":  text("The link's text, a few words.", 80),
@@ -204,7 +235,7 @@ func interactionTools() []Tool {
 			return *probe, nil
 		},
 	}
-	return []Tool{pageAction, open}
+	return []Tool{pageAction, readScreen, open}
 }
 
 // probes are the record reads open_in_app sends to decide whether the person

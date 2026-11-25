@@ -105,21 +105,54 @@
 // and skills once its clone has finished (checkoutclone.go; checkout.go), and
 // once its skills fit what is left of the firing's bound, else at a later
 // firing. Its logic names no harness; a runner gives it a spec:
-//   - `instructions`: slots of file names relative to a checkout's root; each
-//     slot hands its first regular file, the slots in order (Codex:
-//     [["AGENTS.override.md","AGENTS.md"]]), within `limit`, the harness's own
+//   - `instructions`: slots, in order, within `limit`, the harness's own
 //     bound in bytes on what a session started in the checkout reads of them
-//     (Codex: project_doc_max_bytes), omitted for a harness with none;
+//     (Codex: project_doc_max_bytes), omitted for a harness with none, a file
+//     the limit cuts spending all of it. A list of file names relative to a
+//     checkout's root hands its first regular file (Codex:
+//     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>,
+//     "suffix": <s>, "form": <harness>, "scoped": {"keys": [...], "whole":
+//     [...]}}, hands each file below dir whose name ends in s, whole, apart by
+//     a blank line, walked depth first, a directory's entries by name in byte
+//     order, a file link followed while it stays in the checkout, and
+//     `scoped` leaving out a file its harness loads only lazily, on a path
+//     its frontmatter names: frontmatter is a line `---` first, after an
+//     optional BOM, to the next `---` line, and the first of keys present in
+//     it holds an entry outside whole. Each form is its harness's walk of
+//     .claude/rules (measured). `copilot` (1.0.114): s in any case, dot
+//     entries skipped, a directory link never followed; keys read as its line
+//     reader reads them, a case-exact `<key>:` line, indentation trimmed,
+//     whose value, split on `,` or read as `[a, b]`, quotes trimmed, is the
+//     entries. `claude` (2.1.310): s in its own case, dot entries walked, a
+//     directory link, dir itself included, followed while it stays in the
+//     checkout, each directory once, an empty file skipped; frontmatter read
+//     as YAML, a file whose frontmatter is not valid YAML left out (it never
+//     loads), a key's value a string or a list's strings, split on `,`,
+//     trimmed, its other entries and another kind holding none. A tree past 8 directories deep, 1,024 entries or 32 MiB is
+//     left out whole, said: Copilot walks 9 levels and Claude Code 10 at least
+//     (measured), so a deeper tree is the gap;
+//     `importInstructions` for a harness that reads them itself (Claude Code),
+//     each file then named as one `@<absolute path>` import in place of its
+//     text, no limit applying (checkoutimport.go);
 //   - `skillDirs`: the checkout's skill directories, an earlier one winning a
-//     name (Codex: [".codex/skills",".agents/skills"]);
+//     name (Codex: [".codex/skills",".agents/skills"]), each skill a
+//     directory directly in one. {"dir": <d>, "recursive": true} walks d as
+//     Pi 1.6.0 does (measured): a directory holding SKILL.md is a skill and
+//     ends the descent, dot directories and node_modules are skipped, and a
+//     skill reached twice, by real path, is copied once, and of two of one
+//     name, the first, the other left out, said; past 8 directories
+//     deep or 1,024 entries it is left out whole, said. Pi also follows a
+//     link out of the checkout, lists a loose root `.md` skill, and honours
+//     .gitignore, .ignore and .fdignore; the walk does none of these;
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (at most 64 characters) with its
-//     frontmatter's name rewritten to that, never over one already there;
-//     `staging`: the directory on that filesystem a copy is built in, which
-//     the harness must not load; `copied`: the file each copy is listed in
-//     before it is written, for the runner's next launch to remove with the
-//     staging directory (checkoutcopy.go); `reserved`: the tags no checkout
+//     frontmatter's name rewritten to that, never over one already there,
+//     built in state/staging (or, where the state is on another filesystem
+//     than the skills, beside the skills directory's real path), outside
+//     every skills directory, and moved into place by one rename; `copied`: the file each copy is listed
+//     in before it is written, for the runner's next launch to remove
+//     (checkoutcopy.go); `reserved`: the tags no checkout
 //     takes (the seats' namespace). A tag is the checkout's name lower-cased,
 //     a byte outside [a-z0-9] a hyphen, `-2`, `-3`... where taken.
 //
@@ -128,14 +161,29 @@
 // it replaces with a section per checkout, "for `<name>` with root <path>"
 // and its instructions, which the runner places where its harness reads them)
 // and `first` (the repositories the run pushes to, handed first; the rest by
-// name). It writes state/nested.json, the -config of the harness's nested
+// name), and `nestedSkillsOnly` for a nested adapter that hands no
+// instructions, whose spec then names none to read. It writes state/nested.json, the -config of the harness's nested
 // adapter, which the run's post-tool hook runs after each of the main loop's
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
-// (name, description, the copy's SKILL.md). A harness taking checkouts adds a
-// nested adapter, never a second core; its runner holds the home file and the
-// copies (internal/sandbox/executor's checkoutHome).
+// (name, description, the copy's SKILL.md) as its hook's context;
+// claude-nested the listing alone, and nothing for a subagent's call;
+// pi-nested the same as codex-nested with each file in Pi's
+// `<project_instructions path=...>`, on stdout for the run's extension to add
+// to the tool's result (Pi lists no skill it did not start with and loads
+// instructions only as it starts, measured on 1.6.0). A harness taking
+// checkouts adds a nested adapter, never a second core; its runner holds the
+// home file and the copies (internal/sandbox/executor's checkoutHome). What a nested firing
+// leaves out (a skill whose name the home's skills hold, one that leads out
+// of its checkout, a tree past a bound) is a line each on its stderr, in its
+// answer, and in state/skipped under the lock, which the runner's script
+// prints to the run's error stream once the harness has stopped, since no
+// harness shows a hook's stderr; checkout-launch's stderr is the run's own.
+// The runner's restore marks the state ended, after which a firing claims
+// nothing. A run killed before its script printed the log loses it: the next
+// run's gate removes the state unprinted, as its lines in another run's error
+// stream would read as that run's; each was in its firing's answer already.
 //
 // # A continued Codex session's standing instructions
 //
@@ -157,16 +205,60 @@
 // and the run starts a session of its own, as Kimi Code's, Grok Build's and
 // Hermes's runners renew theirs or start fresh.
 //
+// # The Codex bridge check
+//
+// A Codex run's script runs the helper once as codex-bridge (codexbridge.go)
+// after its app-server listens and before `codex exec` starts the thread, and
+// the run does not start unless it exits 0. Codex 0.171.0 hands its model a
+// server's tools in namespace `mcp__<server>`, the server's name cleaned (each
+// character outside [A-Za-z0-9_] made `_`, no prefix where it then opens with
+// `mcp__`), under each tool's cleaned name. Two servers whose namespaces clean
+// alike BOTH get a hashed namespace; of two tools whose namespace and name
+// joined with no separator spell the same, one keeps its name and the other
+// is hashed (codex-rs/codex-mcp/src/tools.rs). So a server `mcp__crewlet` or
+// `mcp::crewlet` from any layer renames the engine's own `mcp__crewlet`
+// namespace, and a server `crewle` listing `tsubmit_work` renames its
+// `submit_work` to `submit_work_<hash>` (measured), each unseen. The helper
+// reads Codex's effective configuration with its layers (config/read, from
+// the working directory the thread starts in) and every server's tools as the
+// server names them (mcpServerStatus/list, which starts each server once, as
+// the thread does again), names them as Codex does, and refuses, naming the
+// server and the layer that declares it: a server whose namespace is the
+// bridge's; one of whose tools joins to a bridge tool's name; one it could
+// not list whose namespace opens one; the bridge served other than at the
+// run's own address (its SHA-256 on the config, since the address carries the
+// job's token) or turned off, as a managed layer above the run's own can do;
+// and a feature that renames the tools or lets a server change them after the
+// check (non_prefixed_mcp_tool_names, multi_environment_mcp,
+// mcp_tool_list_changed), which the run pins off on its command line where no
+// managed layer turns them on.
+//
+// # A rollout a person's Codex compressed
+//
+// Codex 0.171.0 behind its local_thread_store_compression feature, a
+// person's own opt-in the runner leaves as it finds it, compresses at its
+// start each rollout untouched for 7 days to `<name>.zst` beside it, and
+// writes it plain again before appending to it. The gate's cut and renew,
+// the run's start in the rollout and every pack read the plain file before
+// Codex runs, so codex-materialize writes plain, first, every compressed
+// rollout of the thread under -sessions as Codex would: decoded beside it,
+// its mode and mtime kept, linked in under the plain name and never over a
+// file there, which wins (Codex writes it before removing the `.zst`), the
+// `.zst` then removed: a resume takes a stale `.zst` over a plain copy
+// elsewhere (measured on 0.171.0).
+//
 // # Exit
 //
 // 0 on SIGTERM or SIGINT, and once the harness's connection closes (the run
 // is over); 1 when the harness cannot be reached; 2 for a command line or
 // environment it cannot run with; checkout-launch exits 1 where it could not
-// write the instructions, and codex-renew where it could not renew them. A
-// route that refuses the helper (401 or 404: its token no longer resolves, or
-// the run has no such route) ends only what that route is for, logged: the
-// notes route its polls, the skill route its reports, the cap and the other
-// route going on. -interrupt-once exits 0 once
+// write the instructions, codex-renew where it could not renew them, and
+// codex-bridge where the run may not start or it cannot tell, and
+// codex-materialize where a compressed rollout is left. A route that refuses
+// the helper (401 or 404: its token no longer resolves, or the run has no such
+// route) ends only what that route is for, logged: the notes route its polls,
+// the skill route its reports, the cap and the other route going on.
+// -interrupt-once exits 0 once
 // it interrupted the turn in flight, 3 where no turn was in flight to
 // interrupt, and 1 where it cannot tell. Every error goes to stderr, which the
 // run's script sends to the run's error stream.
@@ -179,11 +271,15 @@
 // go.mod's toolchain with -trimpath, no VCS stamp and an empty build id, and
 // gzipped by ./gzipbuild, so a rebuild is byte for byte the same; `make
 // notehelper-check` and ci.yml's build job rebuild and diff them. It links the
-// standard library and golang.org/x/net/websocket alone: the one module
-// beyond std, kept because dropping it means hand-rolling RFC 6455, which
-// #1818's ruling forbids. Its version is in the build's module info, so a bump
-// of it changes the builds, and .github/workflows/dependabot-notehelper.yml
-// rebuilds them on Dependabot's pull request.
+// standard library and two modules beyond it, each kept because dropping it
+// means hand-rolling a protocol, which #1818's ruling forbids:
+// golang.org/x/net/websocket (RFC 6455) and github.com/klauspost/compress/zstd
+// (RFC 8878, which std does not decode); and gopkg.in/yaml.v3, the engine's
+// own YAML module, as Claude Code reads a rule's frontmatter as YAML. Their
+// versions are in the build's module info, so a bump of any changes the
+// builds, and
+// .github/workflows/dependabot-notehelper.yml rebuilds them on Dependabot's
+// pull request.
 package main
 
 import (
@@ -244,6 +340,9 @@ type flags struct {
 	slot                  int
 	// codex-renew's: the rollout of the session the run continues.
 	rollout string
+	// codex-materialize's: Codex's sessions directory, and the thread whose
+	// compressed rollouts it writes plain.
+	sessions, thread string
 }
 
 // run is the whole program: the exit status for args, the environment

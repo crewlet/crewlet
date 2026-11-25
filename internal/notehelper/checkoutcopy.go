@@ -17,13 +17,79 @@ import (
 // whole into the run's skills directory within one firing's bound
 // ([copyRoom]), never through a link that leads out of the checkout, and
 // crash-safe: its name is listed for removal (spec.Copied) before anything is
-// written, the copy is built in spec.Staging, which no harness loads, its
+// written, the copy is built outside the skills directory ([stagingFor]), its
 // SKILL.md renamed last, and the whole moved into place by one rename. A
 // firing killed at any point leaves the final name absent or complete, and
-// nothing the next launch does not remove (its gate removes every listed name
-// and the staging directory). A checkout's skills are planned before it is
-// claimed, and one whose skills do not fit what is left waits for a firing
-// with room ([handCheckouts]).
+// nothing the next launch does not remove (its gate removes every listed
+// name, the state and the sibling staging). A checkout's skills are planned
+// before it is claimed, and one whose skills do not fit what is left waits
+// for a firing with room ([handCheckouts]).
+
+// stagingDir is the directory under a run's checkout state a copy is built
+// in, outside every skills directory and every harness's own: Grok Build
+// 1.0.92 and Hermes Agent 0.23.4 list a copy under `<skills>/.crewlet-staging`,
+// and none of Codex 0.171.0, Hermes 0.23.3 and Grok 1.0.92 (nor Codex 0.172.0
+// or Hermes 0.23.4) lists or loads one here (measured). The state and the
+// skills directory are both under the box's one home (a host directory, or one
+// bind mount in a container), so the one rename stays on one filesystem;
+// where they are not, [siblingStaging].
+const stagingDir = "staging"
+
+// siblingStaging is the directory beside the skills directory's real path a
+// copy is built in where the run's state is on another filesystem than the
+// skills (a skills directory, or its harness's home, mounted or linked onto
+// another one): outside the skills directory, so on its filesystem but where
+// none of Codex 0.171.0, Grok Build 1.0.92, Hermes Agent 0.23.3 and Claude
+// Code 2.1.310 lists or loads it (measured). Only a skills directory that is
+// a mount point of its own is then on another filesystem than its parent:
+// [otherFilesystemError].
+const siblingStaging = ".crewlet-staging-skills"
+
+// onOneFilesystem reports whether a and b are on one filesystem, by their
+// devices; a test stands in for it to build in [siblingStaging].
+var onOneFilesystem = func(a, b os.FileInfo) bool {
+	as, aok := a.Sys().(*syscall.Stat_t)
+	bs, bok := b.Sys().(*syscall.Stat_t)
+	return aok && bok && as.Dev == bs.Dev
+}
+
+// stagingFor is where a firing under state builds its copies for the skills
+// directory skills, made where the home has none: state/[stagingDir], or
+// [siblingStaging] where the state is on another filesystem than the skills.
+func stagingFor(state, skills string) string {
+	inState := filepath.Join(state, stagingDir)
+	if err := os.MkdirAll(skills, 0o700); err != nil {
+		return inState
+	}
+	real, err := filepath.EvalSymlinks(skills)
+	if err != nil {
+		return inState
+	}
+	ri, rerr := os.Stat(real)
+	si, serr := os.Stat(state)
+	if rerr != nil || serr != nil || onOneFilesystem(ri, si) {
+		return inState
+	}
+	return filepath.Join(filepath.Dir(real), siblingStaging)
+}
+
+// otherFilesystemError is a copy no one rename can move into place: the
+// run's skills directory is on another filesystem than its staging directory
+// (a skills directory that is a mount point of its own). The skill is left out,
+// never copied there in parts, which a harness could list half written.
+type otherFilesystemError struct{ skills, staging string }
+
+func (e *otherFilesystemError) Error() string {
+	return fmt.Sprintf("the run's skills directory %s is on another filesystem than %s, where a copy is built, "+
+		"so no one rename moves it into place", e.skills, e.staging)
+}
+
+// Unwrap is the rename's own error, EXDEV.
+func (e *otherFilesystemError) Unwrap() error { return syscall.EXDEV }
+
+// renameCopy moves a built copy into place; a test stands in for it to see
+// the skills directory as the copy lands, or a rename across filesystems.
+var renameCopy = os.Rename
 
 // The bounds of one firing's copies (a launch is one firing): bytes, entries
 // (files and directories) and depth, well past the largest skill directory
@@ -107,67 +173,106 @@ type plannedSkill struct {
 }
 
 // skillDir is a directory under one of a checkout's skill directories that
-// holds a SKILL.md: its path and its name.
-type skillDir struct{ src, name string }
+// holds a SKILL.md: its path, its name, and which of the spec's skill
+// directories it is under.
+type skillDir struct {
+	src, name string
+	slot      int
+}
 
 // checkoutSkillDirs is the skill directories under root's skill directories,
-// in order, each skill directory read within the entry bound; one past it is
-// named in over, its skills left out.
+// in order, each skill directory read within the entry bound, a recursive one
+// walked ([skillWalk]); one past a bound is left out whole, over saying why.
 func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []string) {
-	for _, dir := range spec.SkillDirs {
-		entries, past, err := readDirBounded(filepath.Join(root, dir), maxCopyFiles)
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, nil
+	}
+	reached := map[string]bool{}
+	for i, slot := range spec.SkillDirs {
+		dir := filepath.Join(root, slot.Dir)
+		if slot.Recursive {
+			found, err := walkSkills(realRoot, dir, reached)
+			if err != nil {
+				over = append(over, fmt.Sprintf("the skills of %s are left out: %v", dir, err))
+				continue
+			}
+			for _, d := range found {
+				d.slot = i
+				dirs = append(dirs, d)
+			}
+			continue
+		}
+		entries, past, err := readDirBounded(dir)
 		if err != nil {
 			continue
 		}
 		if past {
-			over = append(over, filepath.Join(root, dir))
+			over = append(over, fmt.Sprintf("the skills of %s are left out: it holds more than %d entries", dir, maxCopyFiles))
 			continue
 		}
 		for _, e := range entries {
 			if strings.HasPrefix(e.Name(), ".") {
 				continue
 			}
-			src := filepath.Join(root, dir, e.Name())
-			if info, err := os.Stat(src); err != nil || !info.IsDir() {
+			src := filepath.Join(dir, e.Name())
+			if info, err := os.Stat(src); err != nil || !info.IsDir() || !holdsSkill(src) {
 				continue
 			}
-			if info, err := os.Stat(filepath.Join(src, "SKILL.md")); err != nil || !info.Mode().IsRegular() {
-				continue
-			}
-			dirs = append(dirs, skillDir{src: src, name: e.Name()})
+			dirs = append(dirs, skillDir{src: src, name: e.Name(), slot: i})
 		}
 	}
 	return dirs, over
 }
 
+// holdsSkill reports whether the directory dir holds a SKILL.md, a regular
+// file or a link to one.
+func holdsSkill(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, "SKILL.md"))
+	return err == nil && info.Mode().IsRegular()
+}
+
 // planCheckoutSkills plans each skill under root's skill directories
-// ([planSkill]) until the plans pass a fresh room's capacity, which no firing
-// could copy more of, and reports whether they did; a directory without a
-// SKILL.md, one whose SKILL.md opens with no frontmatter (no harness lists
-// it), and one whose name a skill already holds, or an earlier skill
-// directory's skill took, are left out, one that cannot be planned said on
-// stderr.
-func planCheckoutSkills(root, tag string, spec checkoutSpec, stderr io.Writer) ([]plannedSkill, bool) {
+// ([planSkill]) until what they read passes a fresh room's capacity, which no
+// firing could copy more of, and reports whether it did: a plan is charged its
+// entries and bytes, and a refused one what it read (the entries its walk
+// looked at, its SKILL.md), so refused skills cost a firing no more than ones
+// it could copy. A directory without a SKILL.md, one whose SKILL.md opens with
+// no frontmatter (no harness lists it), and one whose name an earlier skill
+// directory's skill took, as the harness's own order has it, are left out;
+// one whose name the home's skills already hold, one that cannot be planned,
+// and one whose name a skill of its own skill directory took (a walk reaching
+// two directories of one name, which no order of the harness's decides), are
+// left out said.
+func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]plannedSkill, bool) {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, false
 	}
 	dirs, over := checkoutSkillDirs(root, spec)
-	for _, dir := range over {
-		fmt.Fprintf(stderr, "notehelper: the skills of %s are left out: it holds more than %d entries\n", dir, maxCopyFiles)
-	}
+	said.sayAll(over)
 	var plans []plannedSkill
-	planned := map[string]bool{}
+	planned := map[string]skillDir{}
 	files, bytes := 0, int64(0)
 	for _, d := range dirs {
 		name := skillName(tag, d.name)
-		if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil || planned[name] {
+		if first, ok := planned[name]; ok {
+			if first.slot == d.slot {
+				said.say("the skill %s is left out: %s, found first, takes its name %s", d.src, first.src, name)
+			}
 			continue
 		}
-		plan, err := planSkill(d.src, realRoot, name)
+		if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil {
+			said.say("the skill %s is left out: the home's skills hold %s already", d.src, name)
+			continue
+		}
+		plan, cost, err := planSkill(d.src, realRoot, name)
 		if err != nil {
 			if !errors.Is(err, errNoFrontmatter) {
-				fmt.Fprintf(stderr, "notehelper: the skill %s is left out: %v\n", d.src, err)
+				said.say("the skill %s is left out: %v", d.src, err)
+			}
+			if files, bytes = files+cost.entries, bytes+cost.bytes; files > maxCopyFiles || bytes > maxCopyBytes {
+				return plans, true
 			}
 			continue
 		}
@@ -175,7 +280,7 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, stderr io.Writer) (
 			return plans, true
 		}
 		files, bytes = files+len(plan.items), bytes+plan.bytes
-		planned[name] = true
+		planned[name] = d
 		plans = append(plans, plan)
 	}
 	return plans, false
@@ -184,54 +289,70 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, stderr io.Writer) (
 // errNoFrontmatter is a SKILL.md that opens with no frontmatter.
 var errNoFrontmatter = errors.New("its SKILL.md opens with no frontmatter")
 
+// planRead is what planning a skill read: the entries its walk looked at and
+// the bytes of its SKILL.md.
+type planRead struct {
+	entries int
+	bytes   int64
+}
+
 // planSkill plans the skill directory src, of the checkout whose real root is
-// realRoot, to be listed as name ([planCopy]).
-func planSkill(src, realRoot, name string) (plannedSkill, error) {
+// realRoot, to be listed as name ([copyWalk.plan]), and is what it read,
+// whether the plan was refused or not.
+func planSkill(src, realRoot, name string) (plannedSkill, planRead, error) {
 	real, err := filepath.EvalSymlinks(src)
 	if err != nil {
-		return plannedSkill{}, err
+		return plannedSkill{}, planRead{}, err
 	}
 	if !within(realRoot, real) {
-		return plannedSkill{}, fmt.Errorf("it leads out of its checkout, to %s", real)
+		return plannedSkill{}, planRead{}, fmt.Errorf("it leads out of its checkout, to %s", real)
 	}
 	md, err := filepath.EvalSymlinks(filepath.Join(src, "SKILL.md"))
 	if err != nil || !within(realRoot, md) {
-		return plannedSkill{}, fmt.Errorf("its SKILL.md leads out of its checkout")
+		return plannedSkill{}, planRead{}, fmt.Errorf("its SKILL.md leads out of its checkout")
 	}
 	raw, err := readBounded(md, maxCopyBytes)
+	cost := planRead{bytes: int64(len(raw))}
 	if err != nil {
-		return plannedSkill{}, err
+		return plannedSkill{}, cost, err
 	}
 	renamed, description, ok := renameSkill(raw, name)
 	if !ok {
-		return plannedSkill{}, errNoFrontmatter
+		return plannedSkill{}, cost, errNoFrontmatter
 	}
 	p := plannedSkill{src: src, name: name, description: description, renamed: renamed}
-	p.items, p.bytes, err = planCopy(src, realRoot, "", 0, nil, &p.notes)
-	return p, err
+	walk := copyWalk{realRoot: realRoot}
+	p.items, p.bytes, err = walk.plan(src, "", 0, nil)
+	p.notes, cost.entries = walk.notes, walk.entries
+	return p, cost, err
 }
 
-// copyPlanned copies p to spec.Skills, crash-safe (the file's header), saying
-// on stderr each entry left out of it, and is it as listed.
-func copyPlanned(p plannedSkill, spec checkoutSpec, stderr io.Writer) (handedSkill, error) {
+// copyPlanned copies p to spec.Skills, built in staging, crash-safe (the
+// file's header), saying each entry left out of it, and is it as listed.
+func copyPlanned(p plannedSkill, spec checkoutSpec, staging string, said *skips) (handedSkill, error) {
 	if spec.Copied != "" {
 		if err := appendLines(spec.Copied, []string{p.name}); err != nil {
 			return handedSkill{}, fmt.Errorf("listing it for removal: %w", err)
 		}
 	}
-	staging := filepath.Join(spec.Staging, p.name)
-	final := filepath.Join(spec.Skills, p.name)
-	err := buildCopy(staging, p.items, p.renamed)
+	built, final := filepath.Join(staging, p.name), filepath.Join(spec.Skills, p.name)
+	err := buildCopy(built, p.items, p.renamed)
 	if err == nil {
-		err = os.Rename(staging, final)
+		err = os.MkdirAll(spec.Skills, 0o700)
+	}
+	if err == nil {
+		err = renameCopy(built, final)
+		if errors.Is(err, syscall.EXDEV) {
+			err = &otherFilesystemError{skills: spec.Skills, staging: staging}
+		}
 	}
 	if err != nil {
-		_ = os.RemoveAll(staging)
+		_ = os.RemoveAll(built)
 		return handedSkill{}, err
 	}
-	_ = os.Remove(spec.Staging) // emptied, so it is not left among the skills; never one holding another's copy
+	_ = os.Remove(staging) // emptied; never one holding another firing's copy
 	for _, note := range p.notes {
-		fmt.Fprintf(stderr, "notehelper: the skill %s is copied without %s\n", p.src, note)
+		said.say("the skill %s is copied without %s", p.src, note)
 	}
 	return handedSkill{name: p.name, description: p.description, path: filepath.Join(final, "SKILL.md")}, nil
 }
@@ -252,33 +373,41 @@ func within(root, path string) bool {
 	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
-// readDirBounded is dir's entries by name, at most n read, and whether it
-// holds more, so no directory costs more than the bound to list.
-func readDirBounded(dir string, n int) ([]os.DirEntry, bool, error) {
+// readDirBounded is dir's entries by name, at most [maxCopyFiles] read, and
+// whether it holds more, so no directory costs more than the bound to list.
+func readDirBounded(dir string) ([]os.DirEntry, bool, error) {
 	f, err := os.Open(dir) //nolint:gosec // a checkout's directory the harness itself would read
 	if err != nil {
 		return nil, false, err
 	}
 	defer func() { _ = f.Close() }()
-	entries, err := f.ReadDir(n + 1)
+	entries, err := f.ReadDir(maxCopyFiles + 1)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, false, err
 	}
-	if len(entries) > n {
+	if len(entries) > maxCopyFiles {
 		return nil, true, nil
 	}
 	slices.SortFunc(entries, func(a, b os.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
 	return entries, false, nil
 }
 
-// planCopy is the entries of the directory dir (rel below the skill), links
+// copyWalk is one skill's plan as it walks the checkout whose real root is
+// realRoot: the entries it left out, noted, and how many it looked at.
+type copyWalk struct {
+	realRoot string
+	notes    []string
+	entries  int
+}
+
+// plan is the entries of the directory dir (rel below the skill), links
 // followed while they stay in the checkout, each file by its real path, and
 // the bytes of their files; a link out of the checkout, one that leads nowhere
 // and one back into a directory above it are left out, each noted. A skill
 // with an entry deeper than [maxCopyDepth], or past one firing's bound, is
 // refused whole, the entry and the bound named: a skill missing a part is a
 // broken one.
-func planCopy(dir, realRoot, rel string, depth int, on []os.FileInfo, notes *[]string) ([]copyItem, int64, error) {
+func (w *copyWalk) plan(dir, rel string, depth int, on []os.FileInfo) ([]copyItem, int64, error) {
 	if depth > maxCopyDepth {
 		return nil, 0, fmt.Errorf("its entry %s runs past the bound of %d directories deep", rel, maxCopyDepth)
 	}
@@ -287,7 +416,7 @@ func planCopy(dir, realRoot, rel string, depth int, on []os.FileInfo, notes *[]s
 		return nil, 0, err
 	}
 	on = append(on, info)
-	entries, over, err := readDirBounded(dir, maxCopyFiles)
+	entries, over, err := readDirBounded(dir)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -297,14 +426,15 @@ func planCopy(dir, realRoot, rel string, depth int, on []os.FileInfo, notes *[]s
 	var items []copyItem
 	var total int64
 	for _, e := range entries {
+		w.entries++
 		path, at := filepath.Join(dir, e.Name()), filepath.Join(rel, e.Name())
 		real, err := filepath.EvalSymlinks(path)
 		switch {
 		case err != nil:
-			*notes = append(*notes, at+" leads nowhere")
+			w.notes = append(w.notes, at+" leads nowhere")
 			continue
-		case !within(realRoot, real):
-			*notes = append(*notes, at+" leads out of the checkout")
+		case !within(w.realRoot, real):
+			w.notes = append(w.notes, at+" leads out of the checkout")
 			continue
 		}
 		fi, err := os.Stat(real)
@@ -314,10 +444,10 @@ func planCopy(dir, realRoot, rel string, depth int, on []os.FileInfo, notes *[]s
 		switch {
 		case fi.IsDir():
 			if aboveOn(on, fi) {
-				*notes = append(*notes, at+" leads back into a directory above it")
+				w.notes = append(w.notes, at+" leads back into a directory above it")
 				continue
 			}
-			sub, n, err := planCopy(path, realRoot, at, depth+1, on, notes)
+			sub, n, err := w.plan(path, at, depth+1, on)
 			if err != nil {
 				return nil, 0, err
 			}
@@ -380,19 +510,32 @@ func buildCopy(staging string, items []copyItem, skill []byte) error {
 // or turned into a link, since.
 var errChanged = errors.New("changed since it was planned")
 
-// copyFile copies the planned file it to a new dst, opened by its real path
-// without following a link and without waiting (a FIFO swapped in opens at
-// once), and refused where it is no longer the regular file planned, so
-// nothing swapped in after the plan is read through or waited on.
+// openPlanned is the planned file info at its real path, opened without
+// following a link and without waiting (a FIFO swapped in opens at once), and
+// refused where it is no longer the regular file planned, so nothing swapped
+// in after the plan is read through or waited on.
+func openPlanned(real string, info os.FileInfo) (*os.File, error) {
+	in, err := os.OpenFile(real, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	if now, statErr := in.Stat(); statErr != nil || !now.Mode().IsRegular() || !os.SameFile(now, info) {
+		_ = in.Close()
+		return nil, errChanged
+	}
+	return in, nil
+}
+
+// copyFile copies the planned file it to a new dst ([openPlanned]).
 func copyFile(it copyItem, dst string) error {
-	in, err := os.OpenFile(it.real, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	in, err := openPlanned(it.real, it.info)
+	if errors.Is(err, errChanged) {
+		return fmt.Errorf("%s %w", it.rel, err)
+	}
 	if err != nil {
 		return fmt.Errorf("%s: %w", it.rel, err)
 	}
 	defer func() { _ = in.Close() }()
-	if now, statErr := in.Stat(); statErr != nil || !now.Mode().IsRegular() || !os.SameFile(now, it.info) {
-		return fmt.Errorf("%s %w", it.rel, errChanged)
-	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, it.perm|0o600) //nolint:gosec // the run's own copy
 	if err != nil {
 		return err

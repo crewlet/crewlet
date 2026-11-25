@@ -51,12 +51,10 @@ func (b *transcriptBuilder) claudeLine(ctx context.Context, line []byte) error {
 // name and raw, and read loosely by type.
 type claudeRecord struct {
 	Type             json.RawMessage `json:"type"`
-	Subtype          json.RawMessage `json:"subtype"`
 	Timestamp        json.RawMessage `json:"timestamp"`
 	IsMeta           json.RawMessage `json:"isMeta"`
 	IsCompactSummary json.RawMessage `json:"isCompactSummary"`
 	Message          json.RawMessage `json:"message"`
-	Content          json.RawMessage `json:"content"`
 	Attachment       json.RawMessage `json:"attachment"`
 }
 
@@ -137,22 +135,31 @@ func (b *transcriptBuilder) claudeLineWhole(ctx context.Context, raw []byte, fra
 			kind = EntrySummary
 		}
 		return b.claudeMessageWhole(ctx, rec.Message, kind, at)
-	case record == "system":
-		var content string
-		if b.wordOf(rec.Subtype) == "informational" && wireDecode(rec.Content, &content) == nil &&
-			len(content) <= b.valueMax {
-			if said, ok := claudeSteerContent(content); ok {
-				hookLine, _, _ := strings.Cut(strings.TrimSpace(said), "\n")
-				if hookLine = strings.TrimSpace(hookLine); hookLine != "" {
-					entry := TranscriptEntry{Kind: hookLineKind(hookLine), At: at, Thread: b.thread}
-					if err := b.add(entry, hookLine); err != nil {
-						return err
-					}
-				}
-			}
+	case record == "attachment":
+		if line, ok := b.hookLineWhole(rec.Attachment); ok {
+			return b.add(TranscriptEntry{Kind: hookLineKind(line), At: at, Thread: b.thread}, line)
 		}
 	}
 	return b.claudeNotesWhole(ctx, rec.Attachment, at)
+}
+
+// hookLineWhole is the line the run's own hook said that a main thread's
+// `hook_system_message` attachment holds, read whole: its content as the hook
+// said it, its first line, within the value bound.
+func (b *transcriptBuilder) hookLineWhole(attachment json.RawMessage) (string, bool) {
+	var said struct {
+		Type    json.RawMessage `json:"type"`
+		Content json.RawMessage `json:"content"`
+	}
+	var content string
+	if b.thread != "" || wireDecode(attachment, &said) != nil || b.wordOf(said.Type) != hookSystemMessage ||
+		wireDecode(said.Content, &content) != nil || len(content) > b.valueMax {
+		return "", false
+	}
+	hooked, ok := claudeHookSaid(content)
+	line, _, _ := strings.Cut(strings.TrimSpace(hooked), "\n")
+	line = strings.TrimSpace(line)
+	return line, ok && line != ""
 }
 
 // wordOf is raw's string where it is one within [transcriptNameMaxBytes], the

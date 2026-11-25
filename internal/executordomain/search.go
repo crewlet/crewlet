@@ -154,12 +154,12 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 		var (
 			lastBegun int64
 			older     bool
+			found     []pendingHit
 		)
-		held := statelog.RowsOf(ctx)
 		for rows.Next() {
 			// A ROW PAST WHAT THE PAGE EXAMINES is only counted: it says the
 			// page did not reach the seat's oldest.
-			if out.Scanned == SearchScanRows || len(out.Hits) == limit {
+			if out.Scanned == SearchScanRows || len(found) == limit {
 				older = true
 				break
 			}
@@ -169,22 +169,36 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 				_ = rows.Close()
 				return scanErr
 			}
-			hit, found := searchHit(s, terms)
-			if found && !held.TakeEncoded(hit) {
-				// THE REFUSED ROW IS LEFT UNEXAMINED: the cursor stays on the
-				// row before it, so the next page starts at it. A kept hit
-				// precedes any refusal, so that row exists.
-				older = true
-				break
+			if hit, matched := searchHit(s, terms); matched {
+				found = append(found, pendingHit{hit: hit, scanned: out.Scanned, before: lastBegun})
 			}
 			out.Scanned++
 			lastBegun = first
-			if found {
-				out.Hits = append(out.Hits, hit)
-			}
 		}
 		if closeErr := errors.Join(rows.Err(), rows.Close()); closeErr != nil {
 			return closeErr
+		}
+		sessions := make([]Session, len(found))
+		for i, f := range found {
+			sessions[i] = f.hit.Session
+		}
+		if mediaErr := withMedia(ctx, tx, sessions); mediaErr != nil {
+			return mediaErr
+		}
+		if summaryErr := withSummaries(ctx, tx, sessions); summaryErr != nil {
+			return summaryErr
+		}
+		held := statelog.RowsOf(ctx)
+		for i, f := range found {
+			f.hit.Session = sessions[i]
+			if !held.TakeEncoded(f.hit) {
+				// THE REFUSED ROW IS LEFT UNEXAMINED: the cursor stays on the
+				// row before it, so the next page starts at it. A kept hit
+				// precedes any refusal, so that row exists.
+				older, out.Scanned, lastBegun = true, f.scanned, f.before
+				break
+			}
+			out.Hits = append(out.Hits, f.hit)
 		}
 		out.Exhausted = !older
 		if older {
@@ -197,6 +211,15 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 	}
 	out.Position, out.Complete = answer.Position, answer.Complete
 	return out, nil
+}
+
+// pendingHit is a hit a search found, held to the read's bytes once its
+// rows are closed and its media and summary read: how many rows it examined before it,
+// and where the row before it began.
+type pendingHit struct {
+	hit     SearchHit
+	scanned int
+	before  int64
 }
 
 // searchedText is one field of a row a search matches, and its words.

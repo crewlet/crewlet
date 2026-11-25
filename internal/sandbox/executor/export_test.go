@@ -245,6 +245,10 @@ func AttributionHook(a sandbox.CommitAttribution, hooks string) ([]byte, error) 
 // at the hooks directory hooks with ([hooksParameter]).
 func HooksParameter(hooks string) string { return hooksParameter(hooks) }
 
+// ClaudeNoProxyHolder stands in a run's settings for its NO_PROXY list until
+// the script merges it ([claudeNoProxyHolder]).
+const ClaudeNoProxyHolder = claudeNoProxyHolder
+
 // ClaudeSkillsFloor, ClaudeNotesFloor and ClaudeSettingsPinFloor are the
 // oldest Claude Code releases a run is started with its skills' plugin, and the
 // settings that keep its hook on, with its notes' hooks, and with its settings'

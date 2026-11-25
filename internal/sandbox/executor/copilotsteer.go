@@ -17,8 +17,8 @@ const CopilotSteerInstruction = steerInstructionHead +
 	"result of the tool that was running when it came, or, when it came as you " +
 	"finished, as a new message you answer before the run ends. " + steerInstructionTail
 
-// copilotNotesExtension is the extension that hands a Copilot run its notes and
-// holds it to its turn cap (copilot_steer.js). Embedded, so it matches this
+// copilotNotesExtension is the extension that hands a Copilot run its notes,
+// holds it to its turn cap and guards the bridge's names (copilot_steer.js). Embedded, so it matches this
 // build's bridge and decoder.
 //
 //go:embed copilot_steer.js
@@ -38,6 +38,16 @@ const copilotTurnPrefix = "crewlet-note:"
 // its run (its capMessage), which labels a run's abort as the cap's
 // ([copilotEvents]).
 const copilotCapMessage = "crewlet: this run reached its turn cap of "
+
+// copilotUnkeptMessage is the line copilot_steer.js logs as it stops a capped
+// run whose turn count it cannot keep or read back, which the run's failure
+// says ([copilotEvents]).
+const copilotUnkeptMessage = "crewlet: this run's turn count could not be kept, so the run was stopped"
+
+// copilotNotesUnkeptMessage is the line copilot_steer.js logs, once, where a
+// note's id cannot be kept, so no note is sent: the notes wait unconfirmed and
+// are served again after the run, and the stream says why none arrived.
+const copilotNotesUnkeptMessage = "crewlet: this run's notes could not be kept, so none is sent until they can be"
 
 // copilotArmedMessage is the line copilot_steer.js logs once it runs in the
 // session (its armedMessage): a run with a turn cap whose stream lacks it ran
@@ -61,17 +71,44 @@ func copilotCapLine(turns int) string {
 func CopilotClientTurnID(inbox string) string { return copilotTurnPrefix + inbox }
 
 // copilotExtensionSettings is what the extension is written with: the run's
-// notes route, "" for a run wired to none, and its turn cap, 0 for none.
+// notes route, "" for a run wired to none, and its turn cap, 0 for none; the
+// file it keeps its count, cursor and sent notes in across a restart
+// ([Paths.CopilotNotesState]), and the launch that state belongs to, a key
+// minted for each launch: a state another launch left counts nothing; and the
+// bridge's servers it guards the names of ([crewletServers]), none for none.
 type copilotExtensionSettings struct {
-	URL string `json:"url"`
-	Cap int    `json:"cap"`
+	URL     string   `json:"url"`
+	Cap     int      `json:"cap"`
+	State   string   `json:"state"`
+	Run     string   `json:"run"`
+	Bridges []string `json:"bridges,omitempty"`
 }
+
+// copilotUnbridgedMessage opens the error copilot_steer.js logs as it stops a
+// run where an agent connected a server of its own under a bridge's name (its
+// unbridgedMessage), which fails the run in its words ([copilotEvents]).
+const copilotUnbridgedMessage = "crewlet: " + copilotShadowed
+
+// copilotShadowed is the sentence such a run fails with.
+const copilotShadowed = "a repository's or home's MCP server may not take a name inside Crewlet's own " +
+	"server's tool names, or its place"
+
+// copilotBridgeGuardMark is the type of the line a run handed a bridge prints before
+// its harness starts, by which the decoder fails the run whose extension, which
+// guards the bridge's names, never ran.
+const copilotBridgeGuardMark = "crewlet.guard"
 
 // copilotExtension is the extension's file as a run's box is written it: the
 // embedded source with settings in its placeholder's place. JSON is a
 // JavaScript expression, so the settings need no quoting of their own; `<` and
 // friends are escaped by the encoder all the same.
 func copilotExtension(settings copilotExtensionSettings) (string, error) {
+	// A WIRED EXTENSION KEEPS ITS STATE: without a file and a launch it would
+	// send no note and stop a capped run at its first request.
+	if (settings.URL != "" || settings.Cap > 0) && (settings.State == "" || settings.Run == "") {
+		return "", fmt.Errorf("executor: the Copilot extension is wired to notes or a cap with no state file or "+
+			"launch (state %q, launch %q)", settings.State, settings.Run)
+	}
 	if n := strings.Count(copilotNotesExtension, copilotExtensionConfig); n != 1 {
 		return "", fmt.Errorf("executor: the embedded Copilot extension holds its settings' placeholder %d times, not once", n)
 	}

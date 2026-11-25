@@ -132,7 +132,8 @@ type Input struct {
 	// <API key>"), or "".
 	Format string `json:"format"`
 	// FromIntegration is whether the entry's integration hands each agent
-	// its own value under this key, so nobody types it.
+	// the value under this key, its own or the integration's, so nobody
+	// types it.
 	FromIntegration bool `json:"from_integration"`
 }
 

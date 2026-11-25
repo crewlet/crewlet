@@ -569,7 +569,8 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	out := r.harness.Output(p)
 	files := []string{p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.BaseResult(),
-		p.SessionRecord(), p.SessionReport(), p.sessionReportStaging(), p.SessionCapture(), p.SessionCarried(),
+		p.SessionRecord(), p.SessionReport(), p.sessionReportStaging(), p.SessionCapture(),
+		trimMarkOf(p.SessionCapture()), p.SessionCarried(),
 		p.MCPConfig(), p.MCPConfigFresh(),
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
 	dirs := []string{p.CommitAttribution(), p.SessionStaging()}
@@ -947,22 +948,12 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 	if out.BriefOnStdin {
 		stdin = shellword.Quote(paths.Brief())
 	}
+	switches, err := harnessSwitches(out, pins)
+	if err != nil {
+		return "", err
+	}
 	var b strings.Builder
-	// A STATEMENT OF ITS OWN, before the harness's: an assignment prefix on the
-	// command could only add to its environment, never remove from it.
-	if len(out.Unset) > 0 {
-		fmt.Fprintf(&b, "unset %s; ", strings.Join(out.Unset, " "))
-	}
-	// And the pins after the unsets, so each replaces what an earlier source
-	// gave it, written as envfile writes an assignment, the one form a dotenv
-	// reader and `source` agree on: a value either would misread is refused.
-	for _, pin := range pins {
-		line, err := envfile.FormatAssignment(pin.Name, pin.Value)
-		if err != nil {
-			return "", fmt.Errorf("executor: pinning %s for the harness: %w", pin.Name, err)
-		}
-		b.WriteString(line + "; ")
-	}
+	b.WriteString(switches)
 	// AFTER THE PROFILE, BEFORE THE HARNESS, for the reason the unset is: an
 	// entry exported around the shell would be replaced by a profile that
 	// sets the count.
@@ -983,6 +974,45 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 	fmt.Fprintf(&b, "echo $code > %s; echo $code > %s",
 		shellword.Quote(paths.ExitCode()), shellword.Quote(paths.Done()))
 	return b.String(), nil
+}
+
+// harnessSwitches is the shell that sets a harness's environment as its
+// launch does, after the login shell's profile: every [Output.Unset] name
+// removed, then every pin exported over what any source gave it. The one
+// text the wrapper and every read of the harness's release run
+// ([releaseAsk]).
+func harnessSwitches(out Output, pins []Pinned) (string, error) {
+	var b strings.Builder
+	// A STATEMENT OF ITS OWN, before the harness's: an assignment prefix on the
+	// command could only add to its environment, never remove from it.
+	if len(out.Unset) > 0 {
+		fmt.Fprintf(&b, "unset %s; ", strings.Join(out.Unset, " "))
+	}
+	// And the pins after the unsets, so each replaces what an earlier source
+	// gave it, written as envfile writes an assignment, the one form a dotenv
+	// reader and `source` agree on: a value either would misread is refused.
+	for _, pin := range pins {
+		line, err := envfile.FormatAssignment(pin.Name, pin.Value)
+		if err != nil {
+			return "", fmt.Errorf("executor: pinning %s for the harness: %w", pin.Name, err)
+		}
+		b.WriteString(line + "; ")
+	}
+	return b.String(), nil
+}
+
+// releaseAsk is h's version command (version) run in a box as h's launch runs
+// h: under [harnessSwitches] of h's [Harness.Output] and its pins for a request
+// naming nothing, since a read of the release precedes any run and no pin a
+// request moves picks the release (package doc, "A box's release is pinned").
+// A subshell, so the switches end with the read and a script that goes on
+// sees its own environment.
+func releaseAsk(ctx context.Context, h Harness, paths Paths, version string) (string, error) {
+	switches, err := harnessSwitches(h.Output(paths), h.Pins(ctx, sandbox.RunRequest{}, paths))
+	if err != nil {
+		return "", fmt.Errorf("executor: asking the box's %s for its release: %w", h.Name(), err)
+	}
+	return "(" + switches + "exec " + version + " < /dev/null)", nil
 }
 
 // finalSystem appends the report instruction, addressed at this box, to the
@@ -1325,7 +1355,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// request the other only mentions.
 		result.DeliveredRefs = deliveredRefs(findings, result.Text)
 		result.Text = findings
-		if !crashed && ended {
+		// A RUN ITS GUARD STOPPED stays failed whatever it reported
+		// ([sandbox.Result.Unbridged]).
+		if !crashed && ended && !result.Unbridged {
 			result.Success = true
 			result.Error = ""
 		}
@@ -1345,6 +1377,14 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		said = append(said, result.Error)
 	}
 
+	// A RUN ITS HARNESS ENDED WITHOUT CONNECTING ITS BRIDGE had none of its
+	// seat's tools, so what it reported is no result ([bridgeUnconnected]); its
+	// failure says so first. Not for a run ended on request or never ended,
+	// whose own sentence says more of why nothing was listed.
+	unbridged := handle.BridgeUnconnected && ended && result.JobEnd == ""
+	if unbridged {
+		result.Success = false
+	}
 	if len(refused) > 0 {
 		// A PIECE THAT COULD NOT BE READ IS A RUN THAT DID NOT FULLY REPORT,
 		// so it does not read as a success whatever else it said — and the
@@ -1358,6 +1398,11 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	if result.JobEnd != "" {
 		result.Success = false
 		sentences = append(sentences, endedSentence(result.JobEnd, code))
+	}
+	if unbridged && handle.BridgeHolderChanged {
+		sentences = append(sentences, bridgeHolderLost)
+	} else if unbridged {
+		sentences = append(sentences, bridgeUnconnected)
 	}
 	// A RUN PAST ITS CAP fails next, whatever it reported: decided here, after
 	// the report's success above and nowhere else, so no runner can let a
@@ -1428,6 +1473,27 @@ func capVerdict(turnCap, requests, inFlight int, stopped bool) (capJudgment, boo
 	return capJudgment{exceeded: true, sentence: fmt.Sprintf("the turn cap of %d was exceeded: the run made %d "+
 		"model requests", turnCap, requests)}, true
 }
+
+// bridgeUnconnected is a run's failure where its harness ended it without ever
+// listing the tools of the engine's own server, its bridge (internal/api/mcpbridge,
+// connected.go, measured eager on every runner): the likely causes, and where they
+// are told apart.
+const bridgeUnconnected = "the run's harness never connected its Crewlet bridge (it never listed the " +
+	"tools of Crewlet's own MCP server, `crewlet`), so the run had none of its seat's tools and what it " +
+	"reported is no result. Likely, a settings file in the box (its home's, the repository's, or a " +
+	"system-wide or managed one), a plugin or an extension switched that server off or put one of its own " +
+	"under its name; else the bridge did not answer the harness's startup in time. See Code Sandbox, " +
+	"\"The tool bridge\", in Crewlet's documentation"
+
+// bridgeHolderLost is bridgeUnconnected for a run collected for another node
+// than the one that launched it ([sandbox.RunHandle.BridgeHolderChanged]): the
+// node that saw its harness list may be gone with what it saw, so the failure
+// says what is known, never that the harness did not connect.
+const bridgeHolderLost = "the node that served the run's bridge was lost before it recorded the connection: " +
+	"the run's seat moved to another node after its launch, and the run's record holds no word that its " +
+	"harness connected its Crewlet bridge (listed the tools of Crewlet's own MCP server, `crewlet`), so " +
+	"whether the run had its seat's tools is unknown and what it reported is no result. See Code Sandbox, " +
+	"\"The tool bridge\", in Crewlet's documentation"
 
 // harnessNoResult is a run's failure where its harness exited without saying
 // how its run ended and its decoder gave no reason of its own.
