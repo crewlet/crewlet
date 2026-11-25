@@ -22,13 +22,14 @@ import (
 // message: its `context.append_message`, a user message under its prompt_id
 // ([KimiNoteID]), then a `usage.record` of `usageScope: turn` (a request of the
 // agent's loop answered) with no compaction, undo or clear between. Measured on
-// 2.7.2: the line is on disk before its request; killed between the
-// two, the record holds the line alone; and past a compaction, whose record
-// names no message it kept, a request may carry the note only inside its
-// summary (ADR-0177), so such a note is told again (code-sandbox.md, "Kimi
-// Code"). A last line with no newline is a write cut off; a line past the
-// bound is no line. The record is walked for notes ([lineWalk.noteLine]).
-func kimiNotesHeld(ctx context.Context, wire io.Reader, takes []ServedTake) ([]string, error) {
+// 2.7.2: the line is on disk before its request; killed between the two, the
+// record holds the line alone; and past a compaction, whose record names no
+// message it kept, a request may carry the note only inside its summary
+// (ADR-0177), so such a note is told again (code-sandbox.md, "Kimi Code"). A
+// last line with no newline is a write cut off; a line past the bound is no
+// line. Walked for notes ([lineWalk.noteLine]), and its newest summary, if
+// asked ([kimiWireLine.summarised]).
+func kimiNotesHeld(ctx context.Context, wire io.Reader, takes []ServedTake, summary *summaryRead) ([]string, error) {
 	asked := make(map[string]string, len(takes))
 	for _, take := range takes {
 		asked[KimiNoteID(take.InboxID)] = take.InboxID
@@ -42,6 +43,9 @@ func kimiNotesHeld(ctx context.Context, wire io.Reader, takes []ServedTake) ([]s
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes), maxLineBytes)
 	var l kimiWireLine
+	if summary != nil {
+		l.summary = &summaryText{}
+	}
 	for {
 		line, err := w.noteLine(ctx, func() error { return l.read(&w) })
 		if err != nil {
@@ -49,6 +53,9 @@ func kimiNotesHeld(ctx context.Context, wire io.Reader, takes []ServedTake) ([]s
 		}
 		if line.none {
 			break
+		}
+		if summary != nil {
+			l.summarised(line, summary)
 		}
 		moved = moved[:0]
 		switch typ := l.kind(line); typ {
@@ -94,11 +101,16 @@ func kimiNotesHeld(ctx context.Context, wire io.Reader, takes []ServedTake) ([]s
 type kimiWireLine struct {
 	typ, id, role, scope string
 	whole, typed         bool
+	// summary, where a read asks one, is the line's `summary`.
+	summary *summaryText
 }
 
 // read reads one line's members.
 func (l *kimiWireLine) read(w *lineWalk) error {
-	*l = kimiWireLine{whole: true, typed: true}
+	*l = kimiWireLine{whole: true, typed: true, summary: l.summary}
+	if l.summary != nil {
+		l.summary.reset()
+	}
 	return w.members(func(name string, k jsonscan.Kind) error {
 		var ok bool
 		var err error
@@ -124,6 +136,12 @@ func (l *kimiWireLine) read(w *lineWalk) error {
 			})
 		case "usageScope":
 			l.scope, ok, err = w.wordField(k)
+		case "summary":
+			if l.summary == nil {
+				return w.scan.Skip()
+			}
+			_, err = l.summary.read(w, k)
+			return err
 		default:
 			return w.scan.Skip()
 		}
@@ -141,9 +159,22 @@ func (l *kimiWireLine) kind(line noteLine) string {
 	case line.past, !line.object, !l.typed:
 		return ""
 	case !l.whole:
-		*l = kimiWireLine{typ: l.typ}
+		*l = kimiWireLine{typ: l.typ, summary: l.summary}
 	}
 	return l.typ
+}
+
+// summarised makes the line's `summary` the newest summary where the line
+// applies a compaction, as the transcript reads one ([kimiReading.commit]):
+// the summary Kimi works from, never its `contextSummary`, which names the
+// box's paths. A line past the bound leaves the newest unsaid.
+func (l *kimiWireLine) summarised(line noteLine, s *summaryRead) {
+	switch {
+	case line.past:
+		s.unshaped(fmt.Sprintf("a line of the record runs past the %d bytes a line is read to", maxLineBytes))
+	case line.object && l.typed && l.typ == "context.apply_compaction":
+		s.taken(l.summary)
+	}
 }
 
 // notesHeld is the inbox ids of takes ([Kimi.inboxID]) whose note the box's
@@ -153,12 +184,31 @@ func (l *kimiWireLine) kind(line noteLine) string {
 // directory by the run's working directory: an id matching none, or more than
 // one, is a record that could not be read, which is neither held nor not.
 func (Kimi) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
-	takes []ServedTake) ([]string, error) {
-	if !strings.HasPrefix(session.ID, "session_") || !sandbox.ValidSessionID(session.ID) {
-		return nil, fmt.Errorf("executor: %q is no Kimi session id", session.ID)
+	takes []ServedTake, summary *summaryRead) ([]string, error) {
+	wire, err := kimiMainWire(ctx, box, session.ID)
+	if err != nil {
+		return nil, summary.failedBy(err)
+	}
+	defer func() { _ = wire.Close() }()
+	held, err := kimiNotesHeld(ctx, wire, takes, summary)
+	return held, summary.failedBy(err)
+}
+
+// recordSummary reports whether the receipts' walk reads ask's summary: its
+// wire.jsonl is the one walk that reads it, on the release its summary was
+// read on.
+func (Kimi) recordSummary(ask sandbox.MainThreadAsk) bool {
+	return summaryReleaseWhy(ask.Release, kimiSupported) == ""
+}
+
+// kimiMainWire opens the main agent's wire.jsonl of session in box, under any
+// workspace directory: an id matching none, or more than one, is an error.
+func kimiMainWire(ctx context.Context, box sandbox.Sandbox, session string) (io.ReadCloser, error) {
+	if !strings.HasPrefix(session, "session_") || !sandbox.ValidSessionID(session) {
+		return nil, fmt.Errorf("executor: %q is no Kimi session id", session)
 	}
 	paths := PathsFor(box)
-	found, err := box.Exec(ctx, `for w in `+shellword.Quote(paths.KimiSessions())+`/*/`+session.ID+
+	found, err := box.Exec(ctx, `for w in `+shellword.Quote(paths.KimiSessions())+`/*/`+session+
 		`/agents/main/wire.jsonl; do [ -f "$w" ] && printf '%s\n' "$w"; done; :`, sandbox.ExecOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("executor: finding the Kimi session's record: %w", err)
@@ -166,15 +216,35 @@ func (Kimi) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
 	records := strings.Fields(strings.TrimSpace(found.Stdout))
 	if len(records) != 1 {
 		return nil, fmt.Errorf("executor: the box holds %d records of the Kimi session %s, not one", len(records),
-			session.ID)
+			session)
 	}
 	wire, err := box.OpenFile(ctx, records[0])
 	if err != nil {
 		return nil, fmt.Errorf("executor: opening the Kimi session's record: %w", err)
 	}
-	defer func() { _ = wire.Close() }()
-	return kimiNotesHeld(ctx, wire, takes)
+	return wire, nil
 }
+
+// readMainThread reads the newest summary on the main agent's thread of ask's
+// session in box, off its wire.jsonl ([Kimi.notesHeld]), on the release its
+// summary was read on alone. Its receipts are its record's ([recordConfirmer]).
+func (k Kimi) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
+	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
+
+	if !ask.Summary {
+		return sandbox.MainThreadReading{}
+	}
+	if why := summaryReleaseWhy(ask.Release, kimiSupported); why != "" {
+		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
+	}
+	var summary summaryRead
+	_, _ = k.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
+	return sandbox.MainThreadReading{Summary: summary.reading()}
+}
+
+// threadTraits is what Kimi's main-thread read settles: the newest summary
+// alone, its record's receipts added by [Runner.ThreadTraits].
+func (Kimi) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{Summaries: true} }
 
 // transcript reads a Kimi archive ([kimiArchiveFormat]): each agent's
 // wire.jsonl, a line at a time, as the session's entries, the main agent's
