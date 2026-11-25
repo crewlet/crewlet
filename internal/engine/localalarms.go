@@ -146,7 +146,9 @@ func (e *Engine) stopLocalAlarms() {
 }
 
 // run evaluates the table at once and then every [statelog.AlarmInterval], the
-// cadence a data node's heartbeat evaluates its own at, until ctx ends.
+// cadence a data node's heartbeat evaluates its own at, until ctx ends. A pass
+// costs about 0.45 ms and 129 KB in 2,950 allocations on a 2-core EPYC-Rome
+// (BenchmarkALocalAlarmPass): under a ten-thousandth of a core at that cadence.
 func (l *localAlarms) run(ctx context.Context) {
 	ticker := time.NewTicker(statelog.AlarmInterval)
 	defer ticker.Stop()
