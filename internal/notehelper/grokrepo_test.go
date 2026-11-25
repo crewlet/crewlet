@@ -25,7 +25,7 @@ func grokSpec(skills, home string) checkoutSpec {
 	}
 	for _, dir := range []string{".grok/rules", ".claude/rules"} {
 		spec.Instructions = append(spec.Instructions, instructionSlot{Tree: &instructionTree{Tree: dir, Suffix: ".md",
-			Flat: true, Dots: true, Once: true}})
+			Form: formGrok, Once: true}})
 	}
 	for _, v := range []string{".grok", ".agents", ".claude", ".cursor"} {
 		spec.SkillDirs = append(spec.SkillDirs, skillDirSlot{Dir: v + "/skills", Recursive: true,
@@ -331,7 +331,7 @@ func prefixed(dir string, files map[string]string) map[string]string {
 func TestGroksFormsKeepTheirShapeOnTheWire(t *testing.T) {
 	t.Parallel()
 	wire := `[["AGENTS.md"],{"names":["Agents.md"],"inside":true,"once":true},` +
-		`{"tree":".grok/rules","suffix":".md","flat":true,"dots":true,"once":true}]`
+		`{"tree":".grok/rules","suffix":".md","form":"grok","once":true}]`
 	var slots []instructionSlot
 	if err := json.Unmarshal([]byte(wire), &slots); err != nil {
 		t.Fatal(err)
@@ -350,6 +350,32 @@ func TestGroksFormsKeepTheirShapeOnTheWire(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(`[{"dir":"x","depth":-1}]`), &dirs); err == nil {
 		t.Error("a negative depth was read, want it refused")
+	}
+	bad := `[{"tree":".grok/rules","suffix":".md","form":"grok","scoped":{"keys":["paths"],"whole":["**"]}}]`
+	if err := json.Unmarshal([]byte(bad), &slots); err == nil {
+		t.Error("a grok tree with a scope was read, want it refused: Grok takes every file")
+	}
+}
+
+// A GROK LAUNCH WITH A .grok/rules TREE HANDS IT: the launch config Grok's
+// runner writes (its tree slots carry the "grok" form, which the core now
+// requires) is read and the rule handed, under the checkout's root.
+//
+// Mutation: leave the form empty, and the launch is refused.
+func TestAGrokLaunchWithARulesTreeHandsIt(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.grok/rules/r.md": "RULE\n"})
+	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, checkoutSpec: grokSpec(r.skills, r.grokHome())})
+	config := filepath.Join(t.TempDir(), "launch.json")
+	if err := os.WriteFile(config, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var errs bytes.Buffer
+	if err := checkoutLaunch(config, r.work, &errs); err != nil {
+		t.Fatalf("the launch failed: %v\n%s", err, errs.String())
+	}
+	if got, want := read(t, r.agents), "for `repo` with root "+filepath.Join(r.workdir(t), "repo")+"\n\nRULE\n"; got != want {
+		t.Errorf("the launch wrote %q, want %q", got, want)
 	}
 }
 

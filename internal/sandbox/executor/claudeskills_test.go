@@ -103,7 +103,7 @@ func TestAClaudeCodeRunsSkillsAreAddedByItsRelease(t *testing.T) {
 	if older := tail(script); strings.Contains(older, "exit") || !strings.Contains(older, "starts without") {
 		t.Errorf("an older release refuses a run whose skills are advisory, or says nothing: %s", older)
 	}
-	if plain := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, p, "")); strings.Contains(plain, "--plugin-dir") {
-		t.Errorf("a run handed no skills is started with a plugin:\n%s", plain)
+	if plain := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, p, "")); strings.Contains(plain, p.ClaudeSkillsPlugin()) {
+		t.Errorf("a run handed no skills is started with the skills' plugin:\n%s", plain)
 	}
 }

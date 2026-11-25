@@ -35,7 +35,7 @@ func grokCheckouts(paths Paths) checkoutSpec {
 	}
 	for _, dir := range []string{".grok/rules", ".claude/rules"} {
 		spec.Instructions = append(spec.Instructions,
-			checkoutSlot{Tree: &checkoutTree{Tree: dir, Suffix: ".md", Flat: true, Dots: true, Once: true}})
+			checkoutSlot{Tree: &checkoutTree{Tree: dir, Suffix: ".md", Form: checkoutFormGrok, Once: true}})
 	}
 	commands := checkoutWalk{Commands: true}
 	for _, vendor := range grokVendors {

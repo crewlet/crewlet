@@ -37,7 +37,8 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 	summary := func() *executorkeep.Summary {
 		return &executorkeep.Summary{Object: objstore.Object{Key: objstore.KeyAt(at),
 			Hash: objstore.Hash(strings.Repeat("b", 64)), Size: 512}, ContentKey: "k1", At: at, Bytes: 4096,
-			Kept: 400, Cut: true, Harness: "claude-code", Session: plantedToken}
+			Kept: 400, Cut: true, Harness: "claude-code", Session: plantedToken,
+			Place: executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 2}}
 	}
 	row := executordomain.Session{
 		Handle: "ana", Turn: "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f3",
