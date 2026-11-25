@@ -2,7 +2,13 @@
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`
-- **Enforced-by:** `internal/statelog.TestAnAttemptRebasesOnlyPastTheHorizon`, `internal/engine.TestALaterAttemptIsJudgedAtItsOwnClock`, `internal/engine.TestALaterAttemptInheritsTheRebaseWhileItCan`, `internal/engine.TestADispatchPastTheHorizonMintsAtItsAttempt`, `internal/engine.TestAResumePastTheHorizonMintsAtItsAttemptOrItsHalfsRebase`, `internal/coord/coordtest.TestTheRetentionsOutlastWhatTheyCover`
+- **Enforced-by:**
+  - `internal/statelog.TestAnAttemptRebasesOnlyPastTheHorizon`
+  - `internal/engine.TestALaterAttemptIsJudgedAtItsOwnClock`
+  - `internal/engine.TestALaterAttemptInheritsTheRebaseWhileItCan`
+  - `internal/engine.TestADispatchPastTheHorizonMintsAtItsAttempt`
+  - `internal/engine.TestAResumePastTheHorizonMintsAtItsAttemptOrItsHalfsRebase`
+  - `internal/coord/coordtest.TestTheRetentionsOutlastWhatTheyCover`
 - **Cost-when-tried:** the first fix decided the rebase once, at a resume's first attempt, and kept that instant on the parked run's row until the run's next launch cleared it. A resume that failed at twenty-eight days and succeeded at forty, on a person's second answer, minted at the work's start and lost every write it made on every node; and the second half of a rebased turn, judged against the work's start again, rebased onto its own instant two hours after the first half's and wrote twice what the first half had written and the second repeated. A dispatch of a month-old backlog had the same loss and no fix at all.
 - **Tag-status:** unreleased
 

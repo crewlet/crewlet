@@ -2,7 +2,12 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/datasetsapi`
-- **Enforced-by:** `internal/api.TestTwoViewersOfOneBoardEachSeeOnlyTheirOwnRows`, `internal/api.TestTheBoardAndItsOutlineCarryNoRow`, `internal/api/datasetsapi.TestABindingToAPerRecordQuestionIsRefused`, `internal/api/datasetsapi.TestThePrincipalKeyChangesWithEveryAuthorityFact`, `internal/api/datasetsapi.TestEveryBindingAnswersExactlyItsSourcesColumns`
+- **Enforced-by:**
+  - `internal/api.TestTwoViewersOfOneBoardEachSeeOnlyTheirOwnRows`
+  - `internal/api.TestTheBoardAndItsOutlineCarryNoRow`
+  - `internal/api/datasetsapi.TestABindingToAPerRecordQuestionIsRefused`
+  - `internal/api/datasetsapi.TestThePrincipalKeyChangesWithEveryAuthorityFact`
+  - `internal/api/datasetsapi.TestEveryBindingAnswersExactlyItsSourcesColumns`
 - **Cost-when-tried:** a dashboard's figures over the tracker, spend and the agents would be decided by whoever answered the read: read as the board's author, sharing a board would hand every viewer the author's rows; read by a service identity, it would hand them everybody's. Either way the share of an artifact would become a grant over the data behind it.
 - **Tag-status:** unreleased
 

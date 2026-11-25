@@ -2,7 +2,12 @@
 
 - **Status:** accepted
 - **Authority:** `internal/coord/kv`
-- **Enforced-by:** `internal/coord/kv.TestARenewalCrossesALeafsLinkAheadOfAnUploadOnIt`, `internal/coord/kv.TestAHoldRidesTheHoldClientAndEveryFleetReadTheReadClient`, `internal/coord/kv.TestContractAcrossTheTwoClients`, `internal/queue/jetstream.TestALeafsTwoLinksToOneMemberStandSideBySide`, `internal/engine.TestTheLeaseStoreRidesTheLeaseConnection`
+- **Enforced-by:**
+  - `internal/coord/kv.TestARenewalCrossesALeafsLinkAheadOfAnUploadOnIt`
+  - `internal/coord/kv.TestAHoldRidesTheHoldClientAndEveryFleetReadTheReadClient`
+  - `internal/coord/kv.TestContractAcrossTheTwoClients`
+  - `internal/queue/jetstream.TestALeafsTwoLinksToOneMemberStandSideBySide`
+  - `internal/engine.TestTheLeaseStoreRidesTheLeaseConnection`
 - **Measured:** a seat renewal is about 573 bytes up and 110 down, and a presence at its worst 8,610 bytes (estimated from their subjects and records, not counted on a wire); at the floor of 30 s a MiB a lease link renews 33 to 46 seats within a one-second beat, and no lease lapses below 887 seats at the floor TTL (about 2,700 at the shipped 45 s); in the case, at a fair 64 KiB/s link, each renewal is answered while half a mebibyte still crosses the data link, where the same renewal over the data connection waits for all of it.
 - **Cost-when-tried:** one link for everything a node sends (#1035): a renewal behind one 8 MiB write waited 240 s at the floor, past every lease, and a put window sized for the shipped heartbeat held a renewal 20 s on a 15 s lease, so a node lost its seats to its own uploads. A first draft moved the whole lease store to the new link and put the fleet's listings, watches and gate view on it: 2.4 times the floor at 32 nodes.
 - **Tag-status:** unreleased

@@ -2,7 +2,17 @@
 
 - **Status:** accepted
 - **Authority:** `internal/objstore/collect`
-- **Enforced-by:** `internal/worklet.TestAPutNamingAnOldKeyIsRefused`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/objstore.TestEveryPutMintsAKeyNeverWrittenBefore`, `internal/objstore/collect.TestAnObjectIsJudgedByBothItsInstants`, `internal/objstore/collect.TestAnIncompleteEstateDeletesNothing`, `internal/objstore/collect.TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace`, `internal/objstore/collect.TestAnythingThisNodeCannotSeeDeletesNothing`, `internal/engine.TestTheEnginesCollectorKeepsWhatANewerBuildMayName`, `internal/engine.TestARolledBackCopyOfTheEstateIsUnseen`, `internal/executordomain.TestACarryNamesOnlyAnObjectItsTurnOrBaseNamesLive`
+- **Enforced-by:**
+  - `internal/worklet.TestAPutNamingAnOldKeyIsRefused`
+  - `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`
+  - `internal/objstore.TestEveryPutMintsAKeyNeverWrittenBefore`
+  - `internal/objstore/collect.TestAnObjectIsJudgedByBothItsInstants`
+  - `internal/objstore/collect.TestAnIncompleteEstateDeletesNothing`
+  - `internal/objstore/collect.TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace`
+  - `internal/objstore/collect.TestAnythingThisNodeCannotSeeDeletesNothing`
+  - `internal/engine.TestTheEnginesCollectorKeepsWhatANewerBuildMayName`
+  - `internal/engine.TestARolledBackCopyOfTheEstateIsUnseen`
+  - `internal/executordomain.TestACarryNamesOnlyAnObjectItsTurnOrBaseNamesLive`
 - **Tag-status:** unreleased
 
 ## The decision

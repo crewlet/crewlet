@@ -2,7 +2,14 @@
 
 - **Status:** accepted
 - **Authority:** `internal/ssh`
-- **Enforced-by:** `internal/ssh.TestTheGateTakesAProgramsBareNameAfterSudo`, `internal/ssh.TestTheGateTakesAProgramsBareNameAfterSudoOnARealServer`, `internal/ssh.TestAHostsReadCommandsAreListedAsAnAgentTypesThem`, `internal/capability.TestYourAccessListsEachHostsReadCommands`, `internal/capability.TestAHostsReadCommandsAreBounded`, `internal/capability.TestAChangedAllowlistIsSaidAndIsNoChange`, `internal/agent/builtin.TestARefusedReadNamesTheHostsReadCommands`
+- **Enforced-by:**
+  - `internal/ssh.TestTheGateTakesAProgramsBareNameAfterSudo`
+  - `internal/ssh.TestTheGateTakesAProgramsBareNameAfterSudoOnARealServer`
+  - `internal/ssh.TestAHostsReadCommandsAreListedAsAnAgentTypesThem`
+  - `internal/capability.TestYourAccessListsEachHostsReadCommands`
+  - `internal/capability.TestAHostsReadCommandsAreBounded`
+  - `internal/capability.TestAChangedAllowlistIsSaidAndIsNoChange`
+  - `internal/agent/builtin.TestARefusedReadNamesTheHostsReadCommands`
 - **Tag-status:** unreleased
 
 ## The decision

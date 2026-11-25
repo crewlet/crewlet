@@ -2,7 +2,13 @@
 
 - **Status:** accepted
 - **Authority:** `internal/iamdomain`
-- **Enforced-by:** `internal/iamdomain.TestAPersonEnrolsOnlyOntoAHumanSeat`, `internal/iamdomain.TestAPersonsSeatIsChangedButNeverCleared`, `internal/iamdomain.TestAnOpenInvitationHoldsItsSeat`, `internal/iamdomain.TestACreatedPersonGetsAFirstPasswordLink`, `internal/api/iamapi.TestAPersonIsNeverCreatedOrInvitedWithoutASeat`, `internal/api/configapi.TestAnInvitedSeatCannotBeTakenOutOfTheCompany`
+- **Enforced-by:**
+  - `internal/iamdomain.TestAPersonEnrolsOnlyOntoAHumanSeat`
+  - `internal/iamdomain.TestAPersonsSeatIsChangedButNeverCleared`
+  - `internal/iamdomain.TestAnOpenInvitationHoldsItsSeat`
+  - `internal/iamdomain.TestACreatedPersonGetsAFirstPasswordLink`
+  - `internal/api/iamapi.TestAPersonIsNeverCreatedOrInvitedWithoutASeat`
+  - `internal/api/configapi.TestAnInvitedSeatCannotBeTakenOutOfTheCompany`
 - **Cost-when-tried:** the seat was optional, and the documented way in produced exactly the person it should never produce. The first-person command in the identity guide and the `iam_unclaimed` boot hint both read `crewlet iam invite <address> -grants …` with no `-seat`, and Settings › People & access offered **No seat** in its invite dialog, so a founder could join with no inbox, no day, no lead and no contact route. Separately, an administrator's create and a bind checked only that the chart held the handle, not that the seat was human, so a person could be bound to an agent's seat and then be refused `403 seat_unavailable` on every request they made.
 - **Tag-status:** unreleased
 

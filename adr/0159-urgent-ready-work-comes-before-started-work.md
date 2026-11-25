@@ -2,7 +2,15 @@
 
 - **Status:** accepted
 - **Authority:** `internal/worklet`
-- **Enforced-by:** `internal/worklet.TestUrgentWorkComesBeforeStartedWork`, `internal/worklet.TestReadyWorkComesStartedFirstThenTheListThenTheQueue`, `internal/events/types.TestAPickupsBriefSaysWhereUrgentWorkSits`, `internal/pickup.TestAnUrgentItemIsHandedToABusySeatOnItsPriorityLane`, `internal/pickup.TestAnUrgentItemWaitsForWhatHoldsTheSeat`, `internal/pickup.TestAnUrgentItemIsHandedWhileTheSeatsExecutorRuns`, `internal/pickup.TestAnUrgentPickupIsTheBusySeatsNextTurn`, the `queuetest` conformance suite every backend runs (`Lane/a_priority_event_published_mid_drain_is_the_next_partition`), `internal/notify.TestASourcesLaneRuleKeepsAPersonsChangeOffTheLane`, `internal/worklet.TestOnlyAPersonsCommentRidesTheLane`
+- **Enforced-by:**
+  - `internal/worklet.TestUrgentWorkComesBeforeStartedWork`
+  - `internal/worklet.TestReadyWorkComesStartedFirstThenTheListThenTheQueue`
+  - `internal/events/types.TestAPickupsBriefSaysWhereUrgentWorkSits`
+  - `internal/pickup.TestAnUrgentItemIsHandedToABusySeatOnItsPriorityLane`
+  - `internal/pickup.TestAnUrgentItemWaitsForWhatHoldsTheSeat`
+  - `internal/pickup.TestAnUrgentItemIsHandedWhileTheSeatsExecutorRuns`
+  - `internal/pickup.TestAnUrgentPickupIsTheBusySeatsNextTurn`, the `queuetest` conformance suite every backend runs (`Lane/a_priority_event_published_mid_drain_is_the_next_partition`), `internal/notify.TestASourcesLaneRuleKeepsAPersonsChangeOffTheLane`
+  - `internal/worklet.TestOnlyAPersonsCommentRidesTheLane`
 - **Measured:** on a company running this engine, an item assigned to an agent seat as `todo` with priority `urgent` waited more than four hours while the same seat was handed, pass after pass, three `high` items it had already started; two mentions on the urgent item did not change the order. Once the seat had started it, its next turn was an older queued assignment wake for a `high` item, one of hundreds the seat had queued. Marked for the lane, it still waited hours: a drain read the lane only when it opened and then ran up to twenty queued partitions, each a turn, and the lane itself held dozens of tasks people had filed or assigned (one seat showed 79 such wakes against 9 background ones), each ahead of the pickup and of a person's later mention. On a seat whose every turn runs in an executor box, an urgent item filed while a run held the seat was handed nothing for more than two hours, through one run of almost an hour and then dozens of short ones: the pass read each run as a hold, so it could hand the item only in the moments between two runs, and its once-a-minute pass landed in none of them.
 - **Tag-status:** unreleased
 
