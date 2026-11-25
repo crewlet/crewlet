@@ -80,13 +80,17 @@ type cursorEvents struct {
 	turnStatus       string
 	turnError        string
 	capped           int
-	responses        map[string]bool
-	spent            cursorUse
-	stated           bool
-	calls            map[string]int
-	seq              int
-	transcript       transcriptLines
-	following        bool
+	// responses is the model responses that called a tool, counted where a
+	// call starts under a model call other than the last one started
+	// ([cursorEvents.responded]); lastCall that model call.
+	responses  int
+	lastCall   string
+	spent      cursorUse
+	stated     bool
+	calls      map[string]int
+	seq        int
+	transcript transcriptLines
+	following  bool
 }
 
 var _ runSpender = (*cursorEvents)(nil)
@@ -125,16 +129,9 @@ func (d *cursorEvents) Line(line []byte) {
 			d.assistant(piText(ev.Message.Content))
 		}
 	case "tool_call":
-		if ev.ModelCallID != "" {
-			if d.responses == nil {
-				d.responses = map[string]bool{}
-			}
-			if len(d.responses) < maxPendingCalls {
-				d.responses[ev.ModelCallID] = true
-			}
-		}
 		switch ev.Subtype {
 		case "started":
+			d.responded(ev.ModelCallID)
 			d.started(ev)
 		case "completed":
 			d.completed(ev)
@@ -246,14 +243,31 @@ func (d *cursorEvents) runSpend() (runSpend, bool) {
 // [cursorSupported]).
 func (d *cursorEvents) Ended() bool { return d.resulted || d.turnEnded || d.capped > 0 }
 
-// Requests implements [Decoder]: the model calls the stream's tool calls name,
-// and the response that answered, where one did ([cursorEvents.Result]'s Turns).
+// Requests implements [Decoder]: the responses that called a tool
+// ([cursorEvents.responded]), and the response that answered, where one did;
+// [cursorEvents.Result]'s Turns too.
 func (d *cursorEvents) Requests() int {
 	text := strings.TrimSpace(firstNonBlank(d.answer, d.result))
 	if text != "" && d.resulted && !d.failed {
-		return len(d.responses) + 1
+		return d.responses + 1
 	}
-	return len(d.responses)
+	return d.responses
+}
+
+// responded counts the response a call that starts under modelCall made, once:
+// a response's calls all start before the next request is made, which needs
+// their results, so a model call other than the last one started is a new
+// response. EXACT AT ANY LENGTH, where a set of the model calls seen would be
+// bounded and under-count past its bound. A call's end can come later (one in
+// the background), so only starts are read. Measured on [cursorSupported]:
+// 119, 167 and 4 responses counted alike by starts and by every model call
+// seen.
+func (d *cursorEvents) responded(modelCall string) {
+	if modelCall == "" || modelCall == d.lastCall {
+		return
+	}
+	d.lastCall = modelCall
+	d.responses++
 }
 
 // Result implements [Decoder]: the answer, and how the run ended. A RESULT
