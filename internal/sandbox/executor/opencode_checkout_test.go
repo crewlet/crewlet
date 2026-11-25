@@ -59,9 +59,9 @@ if (entry && existsSync(join(home, "clone-src"))) {
 `
 
 // openCodeCheckoutBox is a real box with an OpenCode runner and the fake
-// `opencode` whose server runs [openCodeCheckoutDriver] as it starts,
-// answering config.get with docs where it is not empty: the box and the
-// directory the fake and the driver record in.
+// `opencode` whose server runs [openCodeCheckoutDriver] as it starts, whose
+// run ends its step, and which answers config.get with docs where it is not
+// empty: the box and the directory the fake and the driver record in.
 func openCodeCheckoutBox(t *testing.T, docs string) (*executor.Runner, sandbox.Sandbox, string) {
 	t.Helper()
 	node := prereqtest.OnPath(t, "node", "the OpenCode stand-in loads the run's checkouts plugin under it",
@@ -75,6 +75,10 @@ func openCodeCheckoutBox(t *testing.T, docs string) (*executor.Runner, sandbox.S
 	if docs != "" {
 		standIn = strings.Replace(standIn, "d="+q(dir), "d="+q(dir)+"\nFAKE_DOCUMENTS="+q(docs), 1)
 	}
+	// ITS RUN ENDS ITS STEP, as OpenCode's does, so the collection reads a run
+	// that said how it ended.
+	standIn = strings.Replace(standIn, `else echo '{"type":"text","part":{"text":"done"}}'; fi`,
+		`else echo '{"type":"text","part":{"text":"done"}}'; fi; echo '{"type":"step_finish","part":{"reason":"stop"}}'`, 1)
 	standIn = strings.Replace(standIn, "serve)\n", "serve)\n  "+q(node)+" "+q(p.BinDir()+"/oc-checkout-driver.mjs")+
 		` "$d" "$HOME" 2> "$d/driver.err" || : > "$d/driver-failed"`+"\n", 1)
 	writeBoxStandIn(t, box, p.BinDir()+"/opencode", standIn)

@@ -69,8 +69,9 @@ func TestTheStandingInstructionsReachClaudeCodeOnItsAppendChannel(t *testing.T) 
 }
 
 // AN OPENCODE RUN GETS THEM AS AN INSTRUCTION FILE its config names, which
-// OpenCode adds after its default agent's prompt — and its stdin, the prompt
-// it runs, holds the task and nothing else.
+// OpenCode adds after its default agent's prompt, before the checkouts'
+// sections file — and its stdin, the prompt it runs, holds the task and
+// nothing else.
 //
 // ABSOLUTE, because a relative `instructions` entry is matched by walking up
 // from the working directory, which is the checkout.
@@ -97,8 +98,10 @@ func TestTheStandingInstructionsReachOpenCodeAsAnInstructionFile(t *testing.T) {
 	if err := json.Unmarshal(blob, &cfg); err != nil {
 		t.Fatalf("unmarshal: %v\n%s", err, blob)
 	}
-	if len(cfg.Instructions) != 1 || cfg.Instructions[0] != p.System() || !strings.HasPrefix(p.System(), "/") {
-		t.Errorf("instructions = %q, want exactly the absolute %q:\n%s", cfg.Instructions, p.System(), blob)
+	if len(cfg.Instructions) != 2 || cfg.Instructions[0] != p.System() || !strings.HasPrefix(p.System(), "/") ||
+		cfg.Instructions[1] != p.OpenCodeCheckoutSections() {
+		t.Errorf("instructions = %q, want the absolute %q, then the checkouts' %q:\n%s", cfg.Instructions,
+			p.System(), p.OpenCodeCheckoutSections(), blob)
 	}
 }
 
