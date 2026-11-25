@@ -257,6 +257,16 @@ describe("the figures", () => {
     const halted = crewOf([stopped("paused"), stopped("provider"), stopped("provider")]);
     expect(halted).toMatchObject({ stopped: 3, paused: 1 });
     expect(joinParts(crewParts(halted))).toBe("1 paused · 2 stopped");
+    // A PAUSE COUNTS FROM THE MOMENT IT IS TAKEN, a turn still finishing or an
+    // executor still asking included, so the tile's parts add up to its total.
+    const pause = { by: "jane", by_kind: "human", at: "2026-01-01T11:48:00Z", stop_running: false };
+    const pausing = crewOf([
+      { ...row("working"), paused: pause },
+      { ...row("needs"), paused: pause },
+      row("working"),
+    ]);
+    expect(pausing).toEqual({ working: 1, needs: 0, stopped: 2, paused: 2, idle: 0, total: 3 });
+    expect(joinParts(crewParts(pausing))).toBe("2 paused");
     expect(joinParts(crewParts(crewOf([])))).toBe("No agent seats in the chart");
     expect(troubleParts({ blocked: 2, overdue: 0 })).toEqual(["2 blocked"]);
     expect(troubleParts({ blocked: 0, overdue: 0 })).toEqual([]);

@@ -19,6 +19,7 @@
 import { describe, expect, test } from "vitest";
 import {
   activityOf,
+  countedStateOf,
   handleLabel,
   indexOrg,
   labelOf,
@@ -30,6 +31,7 @@ import {
   stoppedLine,
   seatWord,
   shownStateOf,
+  stateGroupOf,
   stateGroupWord,
   stateWord,
   llmChain,
@@ -673,13 +675,42 @@ describe("what a seat is doing", () => {
       { id: "a", agent_id: "a", role: "QA", activity: "idle" },
     ] as Parameters<typeof labelOf>[0][];
     for (const row of rows) expect(labelOf(row, now).startsWith(seatWord(row))).toBe(true);
-    // A GROUP keyed on the engine's `stopped` holds both, and says so.
+    // ONE GROUP holds both, and says so.
     expect(stateGroupWord("stopped")).toBe("Paused or stopped");
     expect(stateGroupWord("needs")).toBe(stateWord("needs"));
     // A paused seat wears the stop's badge, and the words tell them apart; its
     // tone is neutral, since a pause somebody chose is no fault.
     expect(statusOf(shownStateOf(paused))).toBe("stopped");
     expect(toneOf(shownStateOf(paused))).toBe("neutral");
+  });
+
+  // A PAUSE COUNTS FROM THE MOMENT IT IS TAKEN: a seat finishing its turn or
+  // asking a person under a pause is in the paused group, never Working or
+  // Needs you, while its row keeps its own word. Mutation: read `activity`
+  // alone in `countedStateOf`, and the first two land in their activity's group.
+  test("a paused seat counts in the paused group whatever its turn is doing", () => {
+    const seat = (activity: string, extra: object = {}) =>
+      ({ id: "a", agent_id: "a", role: "QA", activity, ...extra }) as unknown as Parameters<
+        typeof countedStateOf
+      >[0];
+    const pause = { paused: { by_kind: "human", by: "jane", at: "2026-01-01T11:48:00Z" } };
+    const cases: [Parameters<typeof countedStateOf>[0], string, string, string][] = [
+      [seat("working", pause), "Working", "paused", "stopped"],
+      [seat("needs", pause), "Needs you", "paused", "stopped"],
+      [seat("stopped", { stopped_reason: "paused", ...pause }), "Paused", "paused", "stopped"],
+      [seat("stopped", { stopped_reason: "budget" }), "Stopped", "stopped", "stopped"],
+      [seat("working"), "Working", "working", "working"],
+      [seat("needs"), "Needs you", "needs", "needs"],
+      [seat("idle"), "Idle", "idle", "idle"],
+      [undefined, "No state yet", "offline", "offline"],
+    ];
+    for (const [row, word, counted, group] of cases) {
+      expect([seatWord(row), countedStateOf(row), stateGroupOf(countedStateOf(row))]).toEqual([
+        word,
+        counted,
+        group,
+      ]);
+    }
   });
 
   // A CREDENTIAL'S SPELLING IS NOT A NAME. `paused.by` is `token:review` for a
