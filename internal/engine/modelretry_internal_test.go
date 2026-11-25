@@ -2,10 +2,13 @@ package engine
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -117,5 +120,95 @@ func TestRetryNowWritesNothingUnlessTheProbeAnswered(t *testing.T) {
 	}
 	if _, found, _ := fleet.ModelRetry(t.Context(), "plan"); found {
 		t.Error("a probe that did not answer wrote the record, so every node clears a limit nothing showed is over")
+	}
+}
+
+// planNode is [retryNode] with a harness that reads its plan: a script that
+// prints Claude Code's usage screen with the week at weekPercent, fenced as the
+// shipped read is, and answers no model call.
+func planNode(t *testing.T, fleet coord.Fleet, weekPercent int) (*Engine, *Company) {
+	t.Helper()
+	c, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus", subscription: true})
+	script := filepath.Join(t.TempDir(), "claude")
+	screen := fmt.Sprintf(`{"num_turns":0,"result":"Current session: 4%% used · resets 6:30am (UTC)\n`+
+		`Current week (all models): %d%% used · resets Mon 9am (UTC)"}`, weekPercent)
+	body := "#!/bin/sh\ncase \"$*\" in *usage*) [ \"$ANTHROPIC_BASE_URL\" = \"http://127.0.0.1:9\" ] || exit 3; " +
+		"printf '%s' '" + screen + "';; *) exit 1;; esac\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	spec := c.Config.Providers.LLM["plan"]
+	spec.StateDir = t.TempDir()
+	spec.Overrides = map[string]any{"binary": script}
+	c.Config.Providers.LLM["plan"] = spec
+	rebuilt, err := buildProviders(c.Config, config.NewResolver(config.MapSource{}), harness.NewPlans(nil), nil)
+	if err != nil {
+		t.Fatalf("buildProviders: %v", err)
+	}
+	c.Models = rebuilt
+	if !planOf(t, c).ReadsPlan() {
+		t.Fatal("the premise: the entry signs in with a login and reads its plan")
+	}
+	e := epochEngine(c)
+	e.backends = &Backends{Fleet: fleet}
+	e.startModelRetries(t.Context())
+	t.Cleanup(e.stopModelRetries)
+	return e, c
+}
+
+// CHECK NOW READS THE PLAN, NO MODEL CALL: a plan with room clears every node's
+// sit-out; a week still used up writes nothing and answers the window, now
+// held until the week's reset rather than the sentence's.
+//
+// Mutation: probe with a call where the entry reads its plan, and the script
+// (which answers no call) fails both cases.
+func TestCheckNowReadsThePlanInsteadOfCallingTheModel(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		week    int
+		cleared bool
+	}{
+		"the plan has room":         {week: 3, cleared: true},
+		"the week is still used up": {week: 100},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fleet := coordmemory.NewFleet()
+			e, c := planNode(t, fleet, tc.week)
+			spend(t, c, time.Now().Add(-time.Minute))
+			result, err := e.RetryModel(t.Context(), "plan", coord.RetryProbe, person)
+			if err != nil || result.Failed != "" || result.Cleared != tc.cleared {
+				t.Fatalf("Check now = %+v, %v; want cleared %v", result, err, tc.cleared)
+			}
+			if _, found, _ := fleet.ModelRetry(t.Context(), "plan"); found != tc.cleared {
+				t.Errorf("the record was written = %v, want %v", found, tc.cleared)
+			}
+			if !tc.cleared && (result.Still == nil || result.Still.Window != "weekly") {
+				t.Errorf("a used-up week answers %+v, want the weekly window still held", result.Still)
+			}
+		})
+	}
+}
+
+// A WEEKLY LIMIT SITS THE ENTRY OUT TO ITS RESET ON THE NODE'S OWN ROW, days
+// away, from the vendor's own sentence ("resets Nov 30 at 7am"), so the alarm
+// and the Models page read one window and no hourly end.
+//
+// Mutation: cap the bench again, or read "at" as no instant, and the row's
+// window ends within the hour.
+func TestAWeeklyLimitSitsOutToItsResetOnTheRow(t *testing.T) {
+	t.Parallel()
+	_, c := retryNode(t, coordmemory.NewFleet())
+	at := time.Date(2026, time.November, 24, 18, 31, 0, 0, time.UTC)
+	event := `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,` +
+		`"result":"You've hit your weekly limit · resets Nov 30 at 7am (UTC)"}`
+	if !planOf(t, c).RunEnded(t.Context(), harness.RunEnd{Event: event, Failed: true, At: at}) {
+		t.Fatal("the premise: the entry sits out")
+	}
+	state := planOf(t, c).Plan().State(at.Add(2 * time.Hour))
+	reset := time.Date(2026, time.November, 30, 7, 0, 0, 0, time.UTC)
+	if len(state.SittingOut) != 1 || !state.SittingOut[0].Until.Equal(reset) ||
+		!state.SittingOut[0].Since.Equal(at) {
+		t.Errorf("two hours on, the entry sits out %+v; want one window from %v to %v", state.SittingOut, at, reset)
 	}
 }

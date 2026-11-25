@@ -182,11 +182,12 @@ func (e *Engine) harnessEntry(key string) (*harness.Provider, bool) {
 
 // RetryModel stops every node sitting an entry out. [coord.RetryClear] writes
 // the record at once. [coord.RetryProbe] needs a live node sitting it out
-// ([ErrNotSittingOut]) and makes ONE call within [ModelRetryProbeBudget],
-// charged as a provider probe; only an answer writes the record, and every
-// node, this one included, clears through it. A limit refusal answers the
-// fresh window ([RetryResult.Still]), held on this node's plan; any other
-// failure is [RetryResult.Failed].
+// ([ErrNotSittingOut]) and asks the vendor: by the plan read where the entry has
+// one ([Engine.checkPlan], no model call), else by ONE call within
+// [ModelRetryProbeBudget], charged as a provider probe; only room or an answer
+// writes the record, and every node, this one included, clears through it. A
+// limit still in force answers the window ([RetryResult.Still]), held on this
+// node's plan; any other failure is [RetryResult.Failed].
 //
 // The probe goes through [Engine.probeSibling], never the entry, so a failure
 // leaves the window as it was: clearing first left this node alone, with no
@@ -210,24 +211,13 @@ func (e *Engine) RetryModel(ctx context.Context, key string, mode coord.ModelRet
 		if !sitting {
 			return RetryResult{}, fmt.Errorf("%w: %q", ErrNotSittingOut, key)
 		}
-		sibling, err := e.probeSibling(key)
-		if err != nil {
-			return RetryResult{}, err
-		}
-		if err := e.probeEntry(ctx, key, sibling); err != nil {
-			if _, limited := chain.Limited(err); limited {
-				// The vendor's fresh word is the entry's: hold the
-				// sibling's window on the entry's plan (Hold never
-				// shortens one in force), or this node retries at the
-				// old window's end into a limit already met.
-				now := e.now()
-				for _, window := range sibling.Plan().State(now).SittingOut {
-					agent.Plan().Hold(window)
-				}
-				out.Still = sitOutFor(agent.Plan().State(now), agent.ModelArgument())
+		if agent.ReadsPlan() {
+			if done := e.checkPlan(ctx, agent, &out); done {
 				return out, nil
 			}
-			out.Failed = err.Error()
+		} else if done, err := e.probeOnce(ctx, key, agent, &out); err != nil {
+			return RetryResult{}, err
+		} else if done {
 			return out, nil
 		}
 	}
@@ -241,6 +231,54 @@ func (e *Engine) RetryModel(ctx context.Context, key string, mode coord.ModelRet
 	}
 	out.Cleared = true
 	return out, nil
+}
+
+// checkPlan is a person's Check now on an entry whose plan is read without a
+// call: the read, then done with the window still in force or why it failed,
+// or not done where the plan has room and every node should clear.
+func (e *Engine) checkPlan(ctx context.Context, agent *harness.Provider, out *RetryResult) (done bool) {
+	readings, err := agent.ReadPlan(ctx)
+	if err != nil {
+		out.Failed = err.Error()
+		return true
+	}
+	for _, r := range readings {
+		if (r.Window == llm.LimitSession || r.Window == llm.LimitWeekly) &&
+			(r.State == llm.LimitReached || (r.Used != nil && *r.Used >= 1)) {
+			out.Still = sitOutFor(agent.Plan().State(e.now()), agent.ModelArgument())
+			return true
+		}
+	}
+	return false
+}
+
+// probeOnce is [Engine.RetryModel]'s one call on an entry whose plan cannot be
+// read: done with the window still in force or why it failed, or not done
+// where it answered.
+func (e *Engine) probeOnce(ctx context.Context, key string, agent *harness.Provider,
+	out *RetryResult) (done bool, err error) {
+
+	sibling, err := e.probeSibling(key)
+	if err != nil {
+		return true, err
+	}
+	if err := e.probeEntry(ctx, key, sibling); err != nil {
+		if _, limited := chain.Limited(err); limited {
+			// The vendor's fresh word is the entry's: hold the sibling's
+			// window on the entry's plan (Hold never shortens one in
+			// force), or this node retries at the old window's end into a
+			// limit already met.
+			now := e.now()
+			for _, window := range sibling.Plan().State(now).SittingOut {
+				agent.Plan().Hold(window)
+			}
+			out.Still = sitOutFor(agent.Plan().State(now), agent.ModelArgument())
+			return true, nil
+		}
+		out.Failed = err.Error()
+		return true, nil
+	}
+	return false, nil
 }
 
 // probeSibling is the entry under key as the active revision builds it, on the
