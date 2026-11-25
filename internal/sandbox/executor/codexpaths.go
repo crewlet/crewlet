@@ -22,6 +22,12 @@ func (p Paths) CodexRunStart() string { return p.WorkDir() + "/codex-run-start" 
 // runs beside its harness (internal/notehelper), written at every launch.
 func (p Paths) CodexNoteHelper() string { return p.WorkDir() + "/notehelper" }
 
+// CodexHooksOffBy is each file and key that has Codex run no hook of the
+// run's, `; `-separated, empty where none ([codexHooksSwitchedOff]): written by
+// the launch where the box holds the helper, read by the script, which then
+// starts Codex without its nested hook ([codexScript]).
+func (p Paths) CodexHooksOffBy() string { return p.WorkDir() + "/codex-hooks-off-by" }
+
 // CodexNotesURL is the file holding the job's notes route for the note
 // helper, read into the helper's environment alone: the route carries the
 // job's token, so it never reaches argv or the harness's environment.

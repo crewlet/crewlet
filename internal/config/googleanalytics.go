@@ -25,7 +25,7 @@ type GoogleAnalytics struct {
 
 	// OAuth is the client an Administrator signs in as, so Crewlet adds each
 	// agent's identity itself.
-	OAuth *GoogleOAuthClient `yaml:"oauth,omitempty" json:"oauth,omitempty" desc:"The company's own OAuth client (a Web application, in a Google Cloud project it controls), which a Google Analytics Administrator signs in as so Crewlet adds each agent's identity to its properties itself; other Google products may share it. Optional: without it a person adds each agent's identity in Google Analytics."`
+	OAuth *GoogleOAuthClient `yaml:"oauth,omitempty" json:"oauth,omitempty" desc:"The OAuth client Google Analytics' admin sign-in alone is made as, in place of integrations.google_cloud.sign_in_client. Optional."`
 
 	// Approvers route an agent's held acts: who is asked first.
 	Approvers []string `yaml:"approvers,omitempty" json:"approvers,omitempty" desc:"Handles of human seats an agent's admin acts are routed to first. Only an administrator answers one, at a fresh step-up; without approvers every administrator is asked. Optional."`
@@ -39,7 +39,14 @@ type RoleGoogleAnalytics struct {
 	Level string `yaml:"level,omitempty" json:"level,omitempty" js:"enum=read|operate|administer" desc:"read (the default): reports and settings, nothing changed. operate: also reversible changes such as key events, custom definitions and links' settings. administer: also asks an administrator to approve account, access, key and other irreversible changes, one each."`
 
 	Properties []string `yaml:"properties,omitempty" json:"properties,omitempty" desc:"Numeric property IDs this agent may reach, within integrations.google_analytics.properties when that is set. Required when the agent is on."`
+
+	// Role narrows operate to Google Analytics' Marketer role.
+	Role string `yaml:"role,omitempty" json:"role,omitempty" js:"enum=marketer" desc:"At operate only: marketer runs the agent at Google Analytics' Marketer role, its changes held to audiences, key events, attribution and event create rules; absent is Editor's, every reversible change. Optional."`
 }
+
+// GoogleAnalyticsMarketer is the seat role that narrows operate to Google
+// Analytics' Marketer.
+const GoogleAnalyticsMarketer = "marketer"
 
 // GoogleAnalyticsKind is the integration's kind, config key and lane.
 const GoogleAnalyticsKind = "google_analytics"
@@ -48,9 +55,12 @@ const GoogleAnalyticsKind = "google_analytics"
 // more is an agency, which connects each client's company.
 const googleAnalyticsMaxProperties = 200
 
-// googleAnalyticsProperty is a property's ID as Google writes it: digits.
+// GoogleAnalyticsPropertyPattern is a property's ID as Google writes it,
+// digits; the seat picker offers a typed property by it too.
+const GoogleAnalyticsPropertyPattern = `^[0-9]{1,20}$`
+
 var googleAnalyticsProperty = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`^[0-9]{1,20}$`)
+	return regexp.MustCompile(GoogleAnalyticsPropertyPattern)
 })
 
 // GrowthKind makes the block one of the growth blocks the shared rules find
@@ -88,12 +98,12 @@ func (r *RoleGoogleAnalytics) GrowthSeatLevel() string {
 
 // SeatAccess is the block as seat access reads it.
 func (r *RoleGoogleAnalytics) SeatAccess() GrowthSeatAccess {
-	return GrowthSeatAccess{On: r.Enabled, Level: string(r.LevelOrDefault()), Scope: r.Properties}
+	return GrowthSeatAccess{On: r.Enabled, Level: string(r.LevelOrDefault()), Role: r.Role, Scope: r.Properties}
 }
 
 // SetSeatAccess writes the block from seat access.
 func (r *RoleGoogleAnalytics) SetSeatAccess(a GrowthSeatAccess) {
-	r.Enabled, r.Level, r.Properties = a.On, a.Level, a.Scope
+	r.Enabled, r.Level, r.Role, r.Properties = a.On, a.Level, a.Role, a.Scope
 }
 
 func (r *RoleGoogleAnalytics) seatScopeKey() string { return "properties" }
@@ -149,6 +159,15 @@ func (r *RoleGoogleAnalytics) check(c *Company, p *problems, path Path) {
 	if level := strings.TrimSpace(r.Level); level != "" && !growth.Level(level).Valid() {
 		p.add(at(path, "level"), ErrUnknownValue, "%q is not a Google Analytics level; give %s", r.Level,
 			words.Or(growth.LevelNames()))
+	}
+	switch role := strings.TrimSpace(r.Role); {
+	case role == "":
+	case role != GoogleAnalyticsMarketer:
+		p.add(at(path, "role"), ErrUnknownValue, "%q is not a Google Analytics seat role; give %s or leave it out",
+			r.Role, GoogleAnalyticsMarketer)
+	case r.LevelOrDefault() != growth.LevelOperate:
+		p.add(at(path, "role"), ErrConflict, "role %s narrows operate; this agent is at %s, so leave role out",
+			role, r.LevelOrDefault())
 	}
 	checkGoogleAnalyticsProperties(p, at(path, "properties"), r.Properties)
 	company := c.Integrations.GoogleAnalytics

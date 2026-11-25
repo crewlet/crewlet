@@ -7,6 +7,13 @@ import (
 	"time"
 )
 
+// AwaitsSetup reports a finding on an input the integration's own setup still
+// needs from a person: a credential not given, or a step only they can take.
+// One about a single agent's account ([Finding.Seat]) is that agent's wait.
+func (f Finding) AwaitsSetup() bool {
+	return !f.Seat && (f.Kind == FindingCredentialMissing || f.Kind == FindingApprovalRequired)
+}
+
 // FindingKind is one thing a pass observed that is not "fine".
 //
 // A CLOSED SET, and that is the whole point of this file. Seven third-party apps

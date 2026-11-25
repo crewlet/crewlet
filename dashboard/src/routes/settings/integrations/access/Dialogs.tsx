@@ -99,6 +99,7 @@ import {
   type ScopeChoice,
   scopeWords,
   takesAccessAway,
+  takesTyped,
   type Lane,
 } from "./logic.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
@@ -689,13 +690,10 @@ export function ScopeDialog({
         `${c.label} ${c.value} ${c.description ?? ""}`.toLowerCase().includes(find),
       )
     : choices;
-  // A SEARCH IS NOT AN ENTRY: where the lane knows an entry's shape (an Apple
-  // ID's digits), a name or a bundle ID typed to find an app is never offered.
+  // A SEARCH IS NOT AN ENTRY: where the engine sends an entry's shape (an
+  // Apple ID's digits), a name typed to find one is never offered.
   const typed =
-    lane.scope_open &&
-    find &&
-    (words?.typed?.test(term.trim()) ?? true) &&
-    !choices.some((c) => c.value.toLowerCase() === find)
+    takesTyped(lane, term) && !choices.some((c) => c.value.toLowerCase() === find)
       ? term.trim()
       : null;
   const add = () => {
@@ -717,11 +715,19 @@ export function ScopeDialog({
       label: c.label,
       ...(lane.scope_details?.[c.value] ? { detail: lane.scope_details[c.value] } : {}),
       ...(c.label !== c.value ? { id: c.value } : {}),
+      ...(lane.scope_groups?.[c.value] ? { group: lane.scope_groups[c.value] } : {}),
     }));
-  // APPS ARE CHOSEN BY NAME: where entries are IDs the vendor names (`typed`,
-  // an Apple ID) or carry a second identifier, the list searches itself and is
-  // counted, with Choose all, and an entry it does not hold is added by its ID.
-  const byName = lane.scope_details !== undefined || words?.typed !== undefined;
+  // ENTRIES ARE CHOSEN BY NAME: where entries are IDs the vendor names (an
+  // Apple ID, a property's digits), are grouped or carry a second identifier,
+  // the list searches itself and is counted, with Choose all, and an entry it
+  // does not list is added by its ID.
+  const byName =
+    lane.scope_details !== undefined ||
+    lane.scope_typed !== undefined ||
+    lane.scope_groups !== undefined;
+  const typedReason = term.trim()
+    ? (words?.typedHint ?? `Type ${one}'s ID to add it`)
+    : `Type ${one}'s ID to add it`;
   // THE ENGINE'S REFUSAL OVER THE LANE'S OWN, then why names are missing.
   const said = (
     <>
@@ -746,8 +752,15 @@ export function ScopeDialog({
         onChange={onChange}
         searchFrom={SCOPE_SEARCH_FROM}
         bulk={choices.length > 0}
-        labels={{ none: `${words?.none ?? `No ${singular} to choose from`}.` }}
+        labels={{
+          none: lane.scope_unlisted ?? `${words?.none ?? `No ${singular} to choose from`}.`,
+        }}
       />
+      {lane.scope_live && choices.length > 0 && words?.listed && (
+        <Text as="p" variant="caption" tone="secondary">
+          {words.listed}
+        </Text>
+      )}
       {lane.scope_open && (
         <Inline gap={2} align="center">
           <Input
@@ -761,12 +774,18 @@ export function ScopeDialog({
             size="small"
             variant="secondary"
             leadingIcon={<PlusGlyph size="sm" />}
-            disabledReason={typed ? undefined : `Type ${one}'s ID to add it`}
+            disabledReason={typed ? undefined : typedReason}
             onClick={add}
           >
             Add
           </Button>
         </Inline>
+      )}
+      {/* WHAT AN ENTRY IS, said where the text typed is not one. */}
+      {lane.scope_open && term.trim() && !typed && words?.typedHint && (
+        <Text as="p" variant="caption" tone="secondary">
+          {`${words.typedHint}.`}
+        </Text>
       )}
       {said}
     </Stack>

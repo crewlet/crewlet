@@ -253,3 +253,28 @@ func TestUnusableCarriesItsSentenceAndItsClass(t *testing.T) {
 		t.Error("a wiring fault reads as the request's fault")
 	}
 }
+
+// A CHECK'S PARTS ARE SAID IN ORDER UP TO THE ONE THAT FAILED: each before it
+// passed, it failed, and none after it ran, so nothing is claimed of a part
+// that never ran. Mutation: list every part, or mark the failed one Passed,
+// and this fails.
+func TestPartsAreSaidUpToTheOneThatFailed(t *testing.T) {
+	t.Parallel()
+	parts := []string{"Sign-in", "Read", "Grants"}
+	facts := func(details []setup.Detail) []setup.Fact {
+		return setup.Refused("x", details...).Facts
+	}
+	for _, tc := range []struct {
+		failed int
+		want   []setup.Fact
+	}{
+		{0, []setup.Fact{{Label: "Sign-in", Value: setup.PartFailed}}},
+		{1, []setup.Fact{{Label: "Sign-in", Value: setup.PartPassed}, {Label: "Read", Value: setup.PartFailed}}},
+		{-1, []setup.Fact{{Label: "Sign-in", Value: setup.PartPassed}, {Label: "Read", Value: setup.PartPassed},
+			{Label: "Grants", Value: setup.PartPassed}}},
+	} {
+		if got := facts(setup.Parts(parts, tc.failed)); !slices.Equal(got, tc.want) {
+			t.Errorf("failed at %d: %+v, want %+v", tc.failed, got, tc.want)
+		}
+	}
+}

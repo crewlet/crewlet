@@ -258,22 +258,43 @@ func TestFleetMembershipAndFleetUseAreReferences(t *testing.T) {
 }
 
 // A seat's executor on a fleet is judged on its members: one of harnesses that
-// cannot run an executor is refused at the seat's llm. `custom` stands for
-// them, as the one harness that never gets a runner ([config.RunnerlessProfile]).
+// cannot run an executor is refused at the seat's llm. The harnesses are the
+// ones config.ExecutorHarnesses leaves out, read off the derived set, so a
+// harness gaining an in-box runner leaves the case on those that still have
+// none.
+//
+// Mutation: drop the fleet branch from Company.validateExecutors, and the
+// seat is refused only as its own chain, never naming the fleet: the words
+// checked are what catch it.
 func TestAnExecutorOnAFleetIsJudgedOnItsMembers(t *testing.T) {
 	t.Parallel()
-	house := "    house: {model: house-model, harness: custom, overrides: " + config.RunnerlessProfile + "}\n  llm_fleets:"
-	doc := strings.Replace(fleetDoc, "  llm_fleets:", house, 1)
-	doc = strings.Replace(doc, "%s", "    house: {name: House, members: [house]}", 1)
-	doc = strings.Replace(doc, "%s", "    llm: fleet:house", 1)
-	doc = strings.Replace(doc, "%s", "", 1)
-	c, err := config.ParseCompanyDocument([]byte(doc))
-	if err != nil {
-		t.Fatalf("parse: %v\n%s", err, doc)
+	var runnerless []config.Harness
+	for _, h := range config.Harnesses {
+		if !slices.Contains(config.ExecutorHarnesses(), h) {
+			runnerless = append(runnerless, h)
+		}
 	}
-	err = c.Validate()
-	if !errors.Is(err, config.ErrConflict) || !strings.Contains(err.Error(), "runs on fleet house") {
-		t.Fatalf("a seat whose fleet cannot run its executor validated: %v", err)
+	if len(runnerless) == 0 {
+		t.Fatal("premise: every harness runs an executor, so no fleet's members can lack one")
+	}
+	for _, h := range runnerless {
+		entry := "    bare: {harness: " + string(h) + ", model: house-model"
+		if h == config.HarnessCustom {
+			entry += ", overrides: " + config.RunnerlessProfile
+		}
+		doc := strings.Replace(fleetDoc, "  llm_fleets:\n", entry+"}\n  llm_fleets:\n", 1)
+		doc = strings.Replace(doc, "%s", "    bare: {name: Bare, members: [bare]}", 1)
+		doc = strings.Replace(doc, "%s", "    llm: fleet:bare", 1)
+		doc = strings.Replace(doc, "%s", "", 1)
+		c, err := config.ParseCompanyDocument([]byte(doc))
+		if err != nil {
+			t.Fatalf("parse: %v\n%s", err, doc)
+		}
+		err = c.Validate()
+		if !errors.Is(err, config.ErrConflict) || !strings.Contains(err.Error(), "runs on fleet bare") {
+			t.Errorf("a seat whose fleet of %s cannot run its executor = %v, want a conflict naming the "+
+				"fleet", h, err)
+		}
 	}
 }
 

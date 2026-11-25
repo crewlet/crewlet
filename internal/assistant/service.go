@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/costlimit"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -65,6 +66,10 @@ type Deps struct {
 	// Rate counts a person's turn starts across the fleet; nil counts them
 	// on this node alone.
 	Rate TurnRate
+	// Instructions reads each person's own instructions; nil keeps none, as
+	// on a node with no coordination store.
+	Instructions Instructions
+
 	// Files keeps a conversation's files, the images a person attaches, and
 	// answers whether a file a draft change names is the person's. Nil keeps
 	// none: a question takes no attachment, and every draft change naming a
@@ -82,24 +87,25 @@ type Deps struct {
 // Service runs a node's Dashboard Assistant turns: it starts them, streams
 // them, stops them and answers a person's conversations.
 type Service struct {
-	node        string
-	company     Company
-	acts        func(ctx context.Context, p iam.Principal) ([]string, error)
-	models      Models
-	budget      Budget
-	catalogue   Catalogue
-	transcripts Transcripts
-	records     Records
-	dispatcher  exec.Dispatcher
-	revoker     Revoker
-	audit       AuditPublisher
-	metrics     Metrics
-	remote      Remote
-	rate        TurnRate
-	files       Files
-	sessions    *toolsession.Host
-	now         func() time.Time
-	log         *slog.Logger
+	node         string
+	company      Company
+	acts         func(ctx context.Context, p iam.Principal) ([]string, error)
+	models       Models
+	budget       Budget
+	catalogue    Catalogue
+	transcripts  Transcripts
+	records      Records
+	dispatcher   exec.Dispatcher
+	revoker      Revoker
+	audit        AuditPublisher
+	metrics      Metrics
+	remote       Remote
+	rate         TurnRate
+	files        Files
+	instructions Instructions
+	sessions     *toolsession.Host
+	now          func() time.Time
+	log          *slog.Logger
 
 	hub     *live.Hub
 	limiter *costlimit.Limiter
@@ -170,7 +176,8 @@ func New(d Deps) (*Service, error) {
 		catalogue: d.Catalogue, transcripts: d.Transcripts,
 		records: d.Records, dispatcher: d.Dispatcher, revoker: d.Revoker, audit: d.Audit,
 		metrics: d.Metrics, remote: d.Remote, rate: d.Rate, files: d.Files,
-		sessions: d.Sessions, now: now,
+		instructions: d.Instructions,
+		sessions:     d.Sessions, now: now,
 		log: logging.Get("assistant"),
 		hub: live.NewHub(now, proposal.TTL, tap),
 		limiter: costlimit.New(costlimit.Rates{
@@ -220,6 +227,21 @@ func (s *Service) withWeb(tools []catalog.Tool) []catalog.Tool {
 // ReadsImages reports whether a question's images are handed to its model:
 // the assigned model's run takes them ([Models.ReadsImages]).
 func (s *Service) ReadsImages() bool { return s.models.ReadsImages() }
+
+// instructionsOf is the person's own layer for this turn. An unreadable one is
+// none, logged without its words: a style preference never stops an answer.
+func (s *Service) instructionsOf(ctx context.Context, p iam.Principal) config.AssistantInstructions {
+	if s.instructions == nil {
+		return config.AssistantInstructions{}
+	}
+	in, err := s.instructions(ctx, p)
+	if err != nil {
+		s.log.WarnContext(ctx, "assistant_instructions_unread", "seat", p.Seat,
+			"error", redact.Secrets(err.Error()))
+		return config.AssistantInstructions{}
+	}
+	return in
+}
 
 // imagesOf are the bytes of the files a question carried, as its model is
 // handed them, or none where the model takes no image.
@@ -495,6 +517,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	t := s.newTurn(ts.Person, ts.Conversation, id, ts.Key, ts.Read, ts.Page, acts)
 	t.decidedBy(provider)
 	t.subjects = subjectsOf(ts.Input, ts.Page)
+	t.question = ts.Input
 	t.seePerson(history.Messages, input, ts.Page)
 	t.brief.on = briefing
 	var chip *wire.PageChip
@@ -566,7 +589,9 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		Attachments: refsOf(attached), ReadsImages: len(images) > 0}
 	if c != nil {
 		in.Company, in.Zone = c.Name, c.Location()
+		in.CompanyInstructions = c.Assistant.Instructions
 	}
+	in.Instructions = s.instructionsOf(ctx, ts.Person)
 	if organization != nil {
 		if seat := organization.SeatByHandle(ts.Person.Seat); seat != nil {
 			in.Name = seat.Name

@@ -120,6 +120,8 @@ type geminiTokens struct {
 // event of any other kind. A run handed a note at its finish answers again
 // after the block's warning, and that later reply is the answer.
 type geminiEvents struct {
+	undecidedLines
+
 	transcript transcriptLines
 
 	// said is the assistant text since the last other event, written to the
@@ -282,10 +284,22 @@ func (d *geminiEvents) flushSaid() {
 }
 
 // Skipped counts a line past the stream's bound into the transcript.
-func (d *geminiEvents) Skipped(n int64, bound int) {
+func (d *geminiEvents) Skipped(line LongLine) {
 	d.sawLine = true
 	d.flushSaid()
-	d.transcript.skip(n, bound)
+	d.transcript.skip(line.Size, line.Bound)
+	switch lineType(line) {
+	case geminiUsageEvent:
+		if n, ok := windowInt(line.Head, "requests", false); ok {
+			d.requests = n
+		} else if n, ok := windowInt(line.Tail, "requests", true); ok {
+			d.requests = n
+		} else {
+			d.undecided++
+		}
+	case "":
+		d.undecided++
+	}
 }
 
 // runSpend is the run's own spend, every request its process made, whether it
@@ -317,6 +331,19 @@ func (d *geminiEvents) runSpend() (runSpend, bool) {
 
 // Ended implements [Decoder]: the stream's `result` event.
 func (d *geminiEvents) Ended() bool { return d.result != nil }
+
+// Requests implements [Decoder]: the requests the run's own record of its
+// session states, which the script appends after Gemini CLI exits
+// ([geminiUsageEvent]); its stdout marks no request of its own. NOT COUNTED:
+// the side calls Gemini CLI makes on its flash model, which that record leaves
+// out. Measured on 0.70.0 against a stand-in: 31 counted of a run's 41
+// requests, the 10 others gemini-3-flash-preview's; 11 of 11, and 6 with a 429
+// and a 500 retried, in runs that made none.
+func (d *geminiEvents) Requests() int { return d.requests }
+
+// InFlight implements [Decoder]: none, as Gemini CLI's own maxSessionTurns
+// stops before the next request (measured on 0.70.0: a cap of 3, 3 requests).
+func (d *geminiEvents) InFlight() int { return 0 }
 
 func (d *geminiEvents) Result() sandbox.Result {
 	d.flushSaid()

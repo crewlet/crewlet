@@ -127,6 +127,11 @@ type OAuthGrant struct {
 	// family: the one address the grant's tokens are sent to.
 	Resource string `json:"resource,omitempty"`
 
+	// Redirect is the redirect URI the sign-in came back through: what a
+	// client a person registered at its vendor lists. Empty on a grant
+	// recorded before it was kept.
+	Redirect string `json:"redirect,omitempty"`
+
 	// Accounts are the vendor accounts the grant reached when its product
 	// last looked, nil before it has.
 	Accounts []string `json:"accounts,omitempty"`
@@ -187,8 +192,8 @@ func (g OAuthGrant) Validate(f GrantFamily) error {
 		return fmt.Errorf("coord: an OAuth grant names a grant or a client kind past %d plain bytes",
 			MaxGrantNameBytes)
 	case len(g.ClientID) > MaxGrantAddressBytes || len(g.Issuer) > MaxGrantAddressBytes ||
-		len(g.Resource) > MaxGrantAddressBytes:
-		return fmt.Errorf("coord: an OAuth grant names a client id, issuer or resource past %d bytes",
+		len(g.Resource) > MaxGrantAddressBytes || len(g.Redirect) > MaxGrantAddressBytes:
+		return fmt.Errorf("coord: an OAuth grant names a client id, issuer, resource or redirect past %d bytes",
 			MaxGrantAddressBytes)
 	case slices.ContainsFunc(g.Scopes, func(s string) bool { return len(s) > MaxGrantScopeBytes }):
 		return fmt.Errorf("coord: an OAuth grant names a scope past %d bytes", MaxGrantScopeBytes)
@@ -204,10 +209,11 @@ const MaxGrantNameBytes = 64
 // table (`cimd`, `dcr`, `own`).
 const maxGrantClientBytes = 16
 
-// MaxGrantAddressBytes bounds a grant's client id, issuer and resource: each
-// an address (a client metadata document's, for `cimd`) or an id, which
-// internal/config refuses past it where it is configured and internal/engine
-// where the vendor gives it, before a sign-in sends anybody to consent.
+// MaxGrantAddressBytes bounds a grant's client id, issuer, resource and
+// redirect: each an address (a client metadata document's, for `cimd`) or an
+// id, which internal/config refuses past it where it is configured and
+// internal/engine where the vendor or this engine's address gives it, before a
+// sign-in sends anybody to consent.
 const MaxGrantAddressBytes = 2 << 10
 
 // MaxGrantScopeBytes bounds one scope a grant names: refused past it where it
@@ -216,11 +222,11 @@ const MaxGrantAddressBytes = 2 << 10
 const MaxGrantScopeBytes = 256
 
 // MaxOAuthGrantBytes bounds a grant's record as stored: every field at its
-// bound and every byte JSON may escape six-fold (three addresses, fifty
-// scopes, a hundred accounts and a failure), about 198 KiB. Every read of it
+// bound and every byte JSON may escape six-fold (four addresses, fifty
+// scopes, a hundred accounts and a failure), about 205 KiB. Every read of it
 // decides a renewal or a sign-in a person waits on, so it crosses a leaf's
-// link at the slowest pace in 7.9 s (ADR-0175).
-const MaxOAuthGrantBytes = 200 << 10
+// link at the slowest pace in 8.2 s (ADR-0175).
+const MaxOAuthGrantBytes = 208 << 10
 
 // Failed reports whether the grant's last renewal was refused for good.
 func (g OAuthGrant) Failed() bool { return g.Failure != "" }

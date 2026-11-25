@@ -49,6 +49,9 @@ var kindBriefs = map[Kind]string{
 		"concretely enough that the agent can recognise the call it made and not make it again.",
 	KindToolError: "The text is what a FAILED tool call returned. Keep the cause, the status " +
 		"code, and anything naming what to change — a missing scope, a field, a limit.",
+	KindWriteAnswer: "The text is what a SUCCESSFUL tool call that changed something returned. " +
+		"Keep, verbatim, every identifier it returned (a key, an id, a number, a URL) and say " +
+		"what was created or changed.",
 	KindProduced: "The text is everything an AI agent wrote during one earlier round of its " +
 		"work, ENDING with what it produced. Keep the produced content itself in full " +
 		"detail; compress what it said on the way there hardest.",

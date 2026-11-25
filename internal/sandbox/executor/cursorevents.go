@@ -67,6 +67,8 @@ type cursorCall struct {
 // turn_ended, or the script's cap line; the calls for its transcript; and its
 // own spend, the result's usage (a resumed run reports its own).
 type cursorEvents struct {
+	undecidedLines
+
 	sawLine, sawEvent bool
 	sessionID         string
 
@@ -80,13 +82,17 @@ type cursorEvents struct {
 	turnStatus       string
 	turnError        string
 	capped           int
-	responses        map[string]bool
-	spent            cursorUse
-	stated           bool
-	calls            map[string]int
-	seq              int
-	transcript       transcriptLines
-	following        bool
+	// responses is the model responses that called a tool, counted where a
+	// call starts under a model call other than the last one started
+	// ([cursorEvents.responded]); lastCall that model call.
+	responses  int
+	lastCall   string
+	spent      cursorUse
+	stated     bool
+	calls      map[string]int
+	seq        int
+	transcript transcriptLines
+	following  bool
 }
 
 var _ runSpender = (*cursorEvents)(nil)
@@ -99,7 +105,20 @@ func (d *cursorEvents) Entries(end bool) []string {
 }
 
 // Skipped implements [Decoder].
-func (d *cursorEvents) Skipped(n int64, bound int) { d.transcript.skip(n, bound) }
+func (d *cursorEvents) Skipped(line LongLine) {
+	d.transcript.skip(line.Size, line.Bound)
+	// A CALL'S MODEL CALL FOLLOWS ITS ARGUMENTS, so the tail reads it.
+	switch t := lineType(line); {
+	case t == "tool_call" && windowField(line.Head, "subtype", false) == "started":
+		if model := windowField(line.Tail, "model_call_id", true); model != "" {
+			d.responded(model)
+		} else {
+			d.undecided++
+		}
+	case t == "":
+		d.undecided++
+	}
+}
 
 // Line implements [Decoder].
 func (d *cursorEvents) Line(line []byte) {
@@ -125,16 +144,9 @@ func (d *cursorEvents) Line(line []byte) {
 			d.assistant(piText(ev.Message.Content))
 		}
 	case "tool_call":
-		if ev.ModelCallID != "" {
-			if d.responses == nil {
-				d.responses = map[string]bool{}
-			}
-			if len(d.responses) < maxPendingCalls {
-				d.responses[ev.ModelCallID] = true
-			}
-		}
 		switch ev.Subtype {
 		case "started":
+			d.responded(ev.ModelCallID)
 			d.started(ev)
 		case "completed":
 			d.completed(ev)
@@ -246,6 +258,39 @@ func (d *cursorEvents) runSpend() (runSpend, bool) {
 // [cursorSupported]).
 func (d *cursorEvents) Ended() bool { return d.resulted || d.turnEnded || d.capped > 0 }
 
+// Requests implements [Decoder]: the responses that called a tool
+// ([cursorEvents.responded]), and the response that answered, where one did;
+// [cursorEvents.Result]'s Turns too.
+func (d *cursorEvents) Requests() int {
+	text := strings.TrimSpace(firstNonBlank(d.answer, d.result))
+	if text != "" && d.resulted && !d.failed {
+		return d.responses + 1
+	}
+	return d.responses
+}
+
+// InFlight implements [Decoder]: one. The follower interrupts Cursor once it
+// reads the cap-th response that calls a tool off the stream, and by then the
+// call has run and the next request is made: measured on [cursorSupported],
+// a cap of 3 stopped after 4 requests.
+func (d *cursorEvents) InFlight() int { return 1 }
+
+// responded counts the response a call that starts under modelCall made, once:
+// a response's calls all start before the next request is made, which needs
+// their results, so a model call other than the last one started is a new
+// response. EXACT AT ANY LENGTH, where a set of the model calls seen would be
+// bounded and under-count past its bound. A call's end can come later (one in
+// the background), so only starts are read. Measured on [cursorSupported]:
+// 119, 167 and 4 responses counted alike by starts and by every model call
+// seen.
+func (d *cursorEvents) responded(modelCall string) {
+	if modelCall == "" || modelCall == d.lastCall {
+		return
+	}
+	d.lastCall = modelCall
+	d.responses++
+}
+
 // Result implements [Decoder]: the answer, and how the run ended. A RESULT
 // WINS: a run whose cap-th response was its answer finished before the
 // interrupt reached it.
@@ -258,10 +303,7 @@ func (d *cursorEvents) Result() sandbox.Result {
 	}
 	text := strings.TrimSpace(firstNonBlank(d.answer, d.result))
 	res := sandbox.Result{Text: text, SessionID: d.sessionID, DeliveredRefs: deliveredRefs(text),
-		Turns: len(d.responses)}
-	if text != "" && d.resulted && !d.failed {
-		res.Turns++
-	}
+		Turns: d.Requests()}
 	res.Transcript, res.TranscriptElidedLines, res.TranscriptElidedBytes = d.transcript.result()
 	if spent, stated := d.runSpend(); stated {
 		res = spent.on(res)

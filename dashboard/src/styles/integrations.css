@@ -273,11 +273,6 @@ a.int-feed-what:hover {
   min-width: 0;
   max-width: 44rem;
 }
-/* Beside its steps the pane gives back part of its end inset, so the box
-   stands one small step from the pane's edge. */
-.int-setup--beside {
-  margin-inline-end: calc(var(--spacing-2) - var(--crewlet-list-detail-end, var(--spacing-5)));
-}
 .int-setup:not(.int-setup--beside) .int-setup-actions {
   max-width: 44rem;
 }
@@ -290,9 +285,12 @@ a.int-feed-what:hover {
   gap: var(--spacing-2);
   margin-block: calc(-1 * var(--spacing-1));
 }
-/* Put away, the steps are one button at the column's top end. */
+/* Put away, or on a narrow pane, the steps are one button at the end edge,
+   wrapped under the title or not. */
 .int-steps-toggle {
+  display: flex;
   align-self: flex-end;
+  margin-inline-start: auto;
 }
 .int-setup-title {
   margin: 0;
@@ -313,11 +311,53 @@ a.int-feed-what:hover {
   flex-direction: column;
   gap: var(--spacing-1);
 }
-/* A setup step: its sentence, then its grants as a wrapping row of chips. */
+/* A setup step: its title and place, its sentence, its grants as a wrapping
+   row of chips, what shows it worked, and what people hit there. */
 .int-step {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
+}
+/* The title on the number's line, the place under it on every step alike. */
+.int-step-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+}
+.int-step-title {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.int-step-result {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+  color: var(--color-text-secondary);
+}
+/* The mark stands on the result's first line, however many it wraps to. */
+.int-step-result-mark {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 1lh;
+  color: var(--color-feedback-success-ink);
+}
+.int-step-trouble {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.int-step-trouble > li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-0-5, 2px);
+}
+.int-step-sign {
+  font-weight: var(--font-weight-medium);
 }
 .int-step-grants {
   display: flex;
@@ -838,4 +878,118 @@ details > summary.int-summary::-webkit-details-marker {
 .int-subject-more:hover {
   color: var(--color-text-primary);
   border-color: var(--color-text-muted);
+}
+
+/* The Google page's products: a row each, the switch at the row's end. */
+.int-google-products {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+}
+.int-google-product {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--spacing-3);
+  align-items: start;
+  padding: var(--spacing-3) var(--spacing-4);
+}
+.int-google-product + .int-google-product {
+  border-top: 1px solid var(--color-edge-hairline);
+}
+.int-google-product--preview {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+.int-google-product[data-focused] {
+  background: var(--color-surface-hover);
+}
+.int-google-mark {
+  margin-top: 2px;
+}
+.int-google-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.int-google-name {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+a.int-google-name {
+  text-decoration: none;
+}
+a.int-google-name:hover {
+  text-decoration: underline;
+}
+.int-google-does {
+  margin: 0;
+}
+.int-google-end {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+}
+/* A product's next step, under its state, on the inset a step is drawn on. */
+.int-google-next {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+  padding: var(--spacing-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-inset);
+}
+.int-google-next > p {
+  margin: 0;
+}
+.int-google-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+.int-google-inline {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+.int-google-lead {
+  margin: 0 0 var(--spacing-3);
+}
+.int-google-reader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.int-google-disconnect {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+  margin-top: var(--spacing-4);
+}
+.int-google-disconnect > p {
+  margin: 0;
+}
+
+/* On a phone the switch keeps the name's end, and the words take the width under it. */
+@media (width < 640px) {
+  .int-google-product {
+    position: relative;
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: var(--spacing-3);
+  }
+  .int-google-end {
+    position: absolute;
+    inset-block-start: var(--spacing-3);
+    inset-inline-end: var(--spacing-3);
+  }
+  .int-google-main > .int-google-name {
+    padding-inline-end: 7rem;
+  }
 }

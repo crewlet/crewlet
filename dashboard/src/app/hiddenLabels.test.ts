@@ -18,6 +18,11 @@ interface Declared {
 
 const DECLARED: Declared[] = [
   {
+    where: "routes/settings/integrations/GooglePane.tsx",
+    element: "Switch",
+    why: "Each product's switch ends its row, whose first line is the product's name.",
+  },
+  {
     where: "ui/FacetRail.tsx",
     element: "FilterChipGroup",
     why: "The rail sits under the control it narrows, which names the dimension.",

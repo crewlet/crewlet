@@ -323,7 +323,7 @@ test("the directory groups by need, with Crewlet's own service first in each", a
     ["Observability", ["Datadog"]],
     [
       "Cloud and Infrastructure",
-      ["AWS", "Cloudflare", "DigitalOcean", "Google Cloud", "Scaleway", "SSH"],
+      ["AWS", "Cloudflare", "DigitalOcean", "Google", "Google Cloud", "Scaleway", "SSH"],
     ],
     ["Mobile apps", ["Expo", "App Store Connect", "Google Play"]],
     ["Advertising", ["Google Ads", "Meta Ads Manager", "Apple Ads"]],
@@ -371,7 +371,7 @@ test("the summary lists what needs a look and links to each app", async () => {
   const tile = screen.getByText(expiring).closest(".int-issue") as HTMLElement;
   const open = within(tile).getByRole("link", { name: "Replace key GitLab" });
   expect(open.textContent).toBe("Replace key");
-  expect(open.getAttribute("href")).toBe("#/company/integrations/gitlab?open=rotate");
+  expect(open.getAttribute("href")).toBe("#/company/integrations/gitlab?edit=key");
 });
 
 // ON A PHONE THE BARE ADDRESS LEADS WITH WHAT NEEDS A LOOK, then the
@@ -492,7 +492,7 @@ test("the home shows only what is in use, each a compact card with one action", 
   const gitlab = within(inUse).getByRole("link", { name: "GitLab" }).closest("li") as HTMLElement;
   expect(
     within(gitlab).getByRole("link", { name: "Replace key GitLab" }).getAttribute("href"),
-  ).toBe("#/company/integrations/gitlab?open=rotate");
+  ).toBe("#/company/integrations/gitlab?edit=key");
   // THE COUNT BESIDE IN USE is of every card under it, the services included.
   expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 7");
 });
@@ -537,18 +537,20 @@ test("each card's action is named for its app, and no two share a name", async (
   expect(new Set(names).size).toBe(names.length);
 });
 
-// A FIX LANDS WITH ITS FORM OPEN, read once and taken out of the address.
-test("an arrival naming a form opens it, and leaves the address", async () => {
-  location.hash = "#/company/integrations/gitlab?open=rotate";
-  mount(ADMIN, "gitlab");
+// A FIX LANDS ON ITS FORM'S OWN ADDRESS, which stays: a reload or a copied
+// link opens the same form, inside the Settings tab under the page's header.
+test("an address naming a form opens it in place, and keeps it", async () => {
+  location.hash = "#/company/integrations/gitlab?edit=key";
+  mount(ADMIN, ROUTED);
   expect(await screen.findByRole("form", { name: "Replace the GitLab key" })).toBeTruthy();
-  await waitFor(() => expect(location.hash).not.toContain("open="));
+  expect(screen.getByRole("heading", { level: 2, name: "GitLab" })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Settings", selected: true })).toBeTruthy();
+  await settled();
+  expect(location.hash).toBe("#/company/integrations/gitlab?edit=key");
 });
 
 // A FIX FOLLOWED FROM THE HOME OPENS ITS FORM: the page stays mounted while
-// the address moves, so the intent is read with the selection it arrived on
-// rather than once when the page first mounted. Mutation: read the intent
-// once at mount and the form never opens.
+// the address moves, and the form is the address's, not a mount's.
 test("a fix followed from the home opens its form on the app's page", async () => {
   mount(ADMIN, ROUTED);
   const inUse = await screen.findByRole("region", { name: /^In use/ });
@@ -557,23 +559,100 @@ test("a fix followed from the home opens its form on the app's page", async () =
     .getByRole("link", { name: /^Replace key/ })
     .getAttribute("href")!;
   expect(await screen.findByRole("form", { name: "Replace the GitLab key" })).toBeTruthy();
-  await waitFor(() => expect(location.hash).not.toContain("open="));
 });
 
-// AN ARRIVAL IS SPENT ON ITS OWN SELECTION: leaving for another app and
-// coming back through the list shows the app's page, not the form again.
-// Mutation: keep the intent across selections and the form reopens.
-test("coming back to an app through the list does not reopen the arrival's form", async () => {
-  location.hash = "#/company/integrations/gitlab?open=rotate";
+// COMING BACK THROUGH THE LIST LANDS ON THE PAGE, not the form: the list links
+// the bare address, which for a working app is its Agents tab.
+test("coming back to an app through the list does not reopen its form", async () => {
+  location.hash = "#/company/integrations/gitlab?edit=key";
   mount(ADMIN, ROUTED);
   expect(await screen.findByRole("form", { name: "Replace the GitLab key" })).toBeTruthy();
-  await waitFor(() => expect(location.hash).not.toContain("open="));
   location.hash = (await line(/GitHub/)).getAttribute("href")!;
   expect(await screen.findByRole("heading", { level: 2, name: "GitHub" })).toBeTruthy();
   location.hash = (await line(/GitLab/)).getAttribute("href")!;
   expect(await screen.findByRole("heading", { level: 2, name: "GitLab" })).toBeTruthy();
-  expect(screen.getByRole("tab", { name: /Agents/ })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: /Agents/, selected: true })).toBeTruthy();
   expect(screen.queryByRole("form", { name: "Replace the GitLab key" })).toBeNull();
+});
+
+// EACH TAB IS AN ADDRESS: a tab pressed is written into the address (so Back,
+// a reload and a copied link land on it), and an address naming a tab opens
+// on it. Mutation: hold the tab in state again and the address never moves.
+test("each tab of an app's page has its own address", async () => {
+  location.hash = "#/company/integrations/gitlab?tab=activity";
+  mount(ADMIN, ROUTED);
+  expect(await screen.findByRole("tab", { name: "Activity", selected: true })).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+  await waitFor(() => expect(location.hash).toBe("#/company/integrations/gitlab?tab=settings"));
+  expect(await screen.findByRole("tab", { name: "Settings", selected: true })).toBeTruthy();
+  location.hash = "#/company/integrations/gitlab?tab=agents";
+  expect(await screen.findByRole("tab", { name: /Agents/, selected: true })).toBeTruthy();
+});
+
+// EDIT SETTINGS OPENS IN PLACE: the header, its facts and the tabs stay, the
+// form is inside the Settings tab at its own address, and Cancel returns to
+// the tab's read view. Mutation: draw the form in place of the page again and
+// the tabs are gone.
+test("Edit settings opens the form inside the Settings tab, and Cancel returns to it", async () => {
+  location.hash = "#/company/integrations/gitlab?tab=settings";
+  mount(ADMIN, ROUTED);
+  fireEvent.click(await screen.findByRole("button", { name: "Edit settings" }));
+  expect(await screen.findByRole("form", { name: "GitLab settings" })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 2, name: "GitLab" })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Settings", selected: true })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: /Agents/ })).toBeTruthy();
+  expect(location.hash).toBe("#/company/integrations/gitlab?edit=settings");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(location.hash).toBe("#/company/integrations/gitlab?tab=settings"));
+  expect(screen.queryByRole("form", { name: "GitLab settings" })).toBeNull();
+  expect(await screen.findByRole("button", { name: "Edit settings" })).toBeTruthy();
+});
+
+/** The listing with GitLab's own connection set but not finished. */
+const unfinished = {
+  ...listing,
+  tools: listing.tools.map((t) =>
+    t.key === "gitlab" ? { ...t, satisfied: false, form_complete: false } : t,
+  ),
+} as unknown as SetupListing;
+
+// A SAVE THAT FINISHES THE SETUP LANDS ON AGENTS, decided from the reading that
+// shows the save, never from the one before it, which would open the form again.
+// Mutation: close the form at once on an unfinished connection and the page
+// lands back on the form.
+test("saving the last answer of an unfinished connection lands on Agents", async () => {
+  location.hash = "#/company/integrations/gitlab";
+  // THE READ AFTER THE SAVE STILL PREDATES IT, as an engine's may; the next has it.
+  let after = -1;
+  const setup = {
+    status: 200,
+    get body(): unknown {
+      if (after < 0) return unfinished;
+      return after++ === 0 ? unfinished : listing;
+    },
+  };
+  mount(ADMIN, ROUTED, BUILT_IN, setup);
+  const form = await screen.findByRole("form", { name: "GitLab settings" });
+  fireEvent.change(within(form).getByLabelText(/Admin token/), { target: { value: "glpat-new" } });
+  after = 0;
+  fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(location.hash).toBe("#/company/integrations/gitlab"));
+  expect(await screen.findByRole("tab", { name: /Agents/, selected: true })).toBeTruthy();
+  expect(screen.queryByRole("form", { name: "GitLab settings" })).toBeNull();
+});
+
+// AN UNFINISHED CONNECTION LEADS WITH ITS SETUP: the bare address opens the
+// form (written into the address), and its Agents tab says what is next
+// rather than offering agents it cannot give access to yet.
+test("an unfinished connection opens on its form, and its Agents tab leads with the next step", async () => {
+  location.hash = "#/company/integrations/gitlab";
+  mount(ADMIN, ROUTED, BUILT_IN, { status: 200, body: unfinished });
+  expect(await screen.findByRole("form", { name: "GitLab settings" })).toBeTruthy();
+  await waitFor(() => expect(location.hash).toBe("#/company/integrations/gitlab?edit=settings"));
+  location.hash = "#/company/integrations/gitlab?tab=agents";
+  expect(await screen.findByText("Finish setting up GitLab")).toBeTruthy();
+  expect(screen.queryByRole("form", { name: "GitLab settings" })).toBeNull();
+  expect(screen.queryByRole("table")).toBeNull();
 });
 
 // A HOME WITH NOTHING IN USE says so and points at the list.
@@ -584,15 +663,17 @@ test("a company with nothing in use is told to pick from the list", async () => 
 });
 
 // AN APP'S PAGE: its header, its tabs, and the one action the engine's state
-// asks for. Replace key opens the settings form in place of the tabs, saying
-// why, with the directory still beside it.
-test("an app's page offers Replace key, which opens its form in the pane", async () => {
-  mount(ADMIN, "gitlab");
+// asks for. Replace key opens the settings form in place inside the Settings
+// tab, saying why, with the header, the tabs and the directory still there.
+test("an app's page offers Replace key, which opens its form in the Settings tab", async () => {
+  location.hash = "#/company/integrations/gitlab";
+  mount(ADMIN, ROUTED);
   expect(await screen.findByRole("heading", { level: 2, name: "GitLab" })).toBeTruthy();
   expect(screen.getByRole("tab", { name: /Agents/, selected: true })).toBeTruthy();
   fireEvent.click(await screen.findByRole("button", { name: "Replace key GitLab" }));
   expect(await screen.findByRole("form", { name: "Replace the GitLab key" })).toBeTruthy();
-  expect(screen.queryByRole("tab", { name: /Agents/ })).toBeNull();
+  expect(screen.getByRole("tab", { name: "Settings", selected: true })).toBeTruthy();
+  expect(location.hash).toBe("#/company/integrations/gitlab?edit=key");
   expect(await line(/GitLab/)).toBeTruthy();
 });
 

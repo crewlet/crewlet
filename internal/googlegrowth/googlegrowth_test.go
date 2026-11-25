@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -255,10 +256,12 @@ func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f
 // A FAILURE IS A CLOSED REASON, never Google's words, read off what Google
 // answered through the real request path: a read that got no answer is
 // unavailable or timed out, and a write that got none may have reached Google,
-// so what it did is not known.
+// so what it did is not known; one whose context ended before its request
+// left reached nothing, and timed out.
 //
 // Mutation: map a write's reset or deadline as a read's, or flatten the
-// transport's error, and an applied change is recorded as never made.
+// transport's error, and an applied change is recorded as never made; send a
+// request whose context already ended, and it is recorded as unknown.
 func TestAFailureIsAClosedReason(t *testing.T) {
 	t.Parallel()
 	statusOf := func(status int) roundTrip {
@@ -271,10 +274,8 @@ func TestAFailureIsAClosedReason(t *testing.T) {
 	reset := roundTrip(func(*http.Request) (*http.Response, error) {
 		return nil, &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset by peer")}
 	})
-	late := roundTrip(func(r *http.Request) (*http.Response, error) {
-		<-r.Context().Done()
-		return nil, r.Context().Err()
-	})
+	// THE DEADLINE ENDS DURING THE SEND, as a transport's own does.
+	late := roundTrip(func(*http.Request) (*http.Response, error) { return nil, context.DeadlineExceeded })
 	for _, tc := range []struct {
 		name        string
 		rt          roundTrip
@@ -286,6 +287,7 @@ func TestAFailureIsAClosedReason(t *testing.T) {
 		{"403", statusOf(http.StatusForbidden), growth.FailureVendorRefused, growth.FailureVendorRefused},
 		{"a reset", reset, growth.FailureVendorUnavailable, growth.FailureUnknownOutcome},
 		{"a deadline", late, growth.FailureTimedOut, growth.FailureUnknownOutcome},
+		{"a deadline before the send", late, growth.FailureTimedOut, growth.FailureTimedOut},
 	} {
 		w := newWorld(t, tc.rt)
 		for _, op := range []growth.Operation{
@@ -294,7 +296,7 @@ func TestAFailureIsAClosedReason(t *testing.T) {
 		} {
 			req, _ := googlegrowth.NewRequest(op, map[string]string{"itemsId": "1"}, nil, nil)
 			deadline := time.Unix(1<<40, 0)
-			if tc.name == "a deadline" {
+			if tc.name == "a deadline before the send" {
 				deadline = time.Unix(0, 0)
 			}
 			ctx, cancel := context.WithDeadline(t.Context(), deadline)
@@ -528,7 +530,7 @@ integrations:
   google_cloud:
     enabled: true
     provisioning:
-      provisioner: crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com
+      identity_project: acme-crewlet-id
       provider: projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine
       federation_key: "${GOOGLE_CLOUD_FEDERATION_KEY}"
 `))
@@ -750,8 +752,8 @@ func TestAProductsLastCheckRunsUnderTheLease(t *testing.T) {
 			leased = held && bounded && read.Binding == h.Binding
 			return &googlegrowth.CallError{Failure: growth.FailureCapExceeded, Err: errors.New("over the daily cap")}
 		}}, h.Binding)
-	if err == nil || !leased {
-		t.Fatalf("a refused check answered %v (checked under the lease: %v)", err, leased)
+	if err == nil || !leased || !errors.Is(err, growth.ErrNotSent) {
+		t.Fatalf("a refused check answered %v (checked under the lease: %v), want it not sent", err, leased)
 	}
 	got := w.audit.taken()
 	w.audit.mu.Lock()
@@ -764,6 +766,88 @@ func TestAProductsLastCheckRunsUnderTheLease(t *testing.T) {
 	defer it.mu.Unlock()
 	if it.writes != 0 {
 		t.Errorf("Google was written %d times", it.writes)
+	}
+}
+
+// AN ACT IS NOT SENT UNTIL ITS REQUEST LEAVES, and sent once it has: a check
+// that failed before it, or a context that ended before the request was made,
+// answers the act not sent; a write Google took and whose answer was cut off
+// is not, since what it did is unknown. A read again or a query's fill whose
+// answer was lost changed nothing, so it is never recorded as unknown.
+//
+// Mutation: drop failEarly's mark or the unsent mark on a context ended before
+// Do, mark every failure, or classify a failure before marking it, and this
+// fails.
+func TestAnActIsNotSentUntilItsRequestLeaves(t *testing.T) {
+	t.Parallel()
+	it := &item{name: "old", reads: make(chan struct{}, 8), release: make(chan struct{}), writing: make(chan struct{}, 1)}
+	close(it.release)
+	srv := httptest.NewServer(http.HandlerFunc(it.serve))
+	t.Cleanup(srv.Close)
+	w := newWorld(t, httpxtest.Rewrite(t, srv))
+	req, _ := googlegrowth.NewRequest(patch, map[string]string{"accountsId": "1", "itemsId": "2"},
+		map[string]string{"updateMask": "name"}, map[string]any{"name": "new"})
+	req.Account = "accounts/1"
+	h, _ := w.client.Read(t.Context(), "seat-a", req)
+	call := growth.Call{Handle: "seat-a", Tool: "x_ads_spend", HeldCall: "held-1", Approver: "founder"}
+	unread := &googlegrowth.CallError{Failure: growth.FailureTimedOut, Err: fmt.Errorf("re-read: %w",
+		context.DeadlineExceeded)}
+	_, err := w.client.Apply(t.Context(), call, googlegrowth.Write{Req: req, Class: growth.ClassSpend,
+		Check: func(context.Context, googlegrowth.Held) error { return unread }}, h.Binding)
+	if !errors.Is(err, growth.ErrNotSent) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a check that timed out before the write = %v, want not sent", err)
+	}
+	ended, end := context.WithCancel(t.Context())
+	call.HeldCall = "held-2"
+	_, err = w.client.Apply(ended, call, googlegrowth.Write{Req: req, Class: growth.ClassSpend,
+		Check: func(context.Context, googlegrowth.Held) error { end(); return nil }}, h.Binding)
+	if !errors.Is(err, growth.ErrNotSent) || !errors.Is(err, context.Canceled) {
+		t.Errorf("a context ended before the write's request = %v, want not sent", err)
+	}
+	// AN ANSWER LOST BEFORE THE WRITE (past the bound one call reads, or not
+	// decodable, as an AdMob target read fails) is the vendor failing to answer.
+	lost := &googlegrowth.CallError{Failure: growth.FailureUnknownOutcome,
+		Err: errors.New("decode the target: unexpected end of JSON input")}
+	filled := req
+	filled.Fill = func(context.Context, url.Values) (url.Values, error) { return nil, lost }
+	for i, tc := range []struct {
+		name  string
+		write googlegrowth.Write
+	}{
+		{"a read again", googlegrowth.Write{Req: req, Class: growth.ClassSpend,
+			Read: func(context.Context) ([]byte, error) { return nil, lost }}},
+		{"a query's fill", googlegrowth.Write{Req: filled, Class: growth.ClassSpend}},
+	} {
+		call.HeldCall = fmt.Sprintf("held-lost-%d", i)
+		_, err = w.client.Apply(t.Context(), call, tc.write, h.Binding)
+		w.audit.mu.Lock()
+		last := w.audit.recs[len(w.audit.recs)-1]
+		w.audit.mu.Unlock()
+		if !errors.Is(err, growth.ErrNotSent) || last.Failure != growth.FailureVendorUnavailable {
+			t.Errorf("%s whose answer was lost = %v, recorded %q, want not sent and vendor_unavailable", tc.name,
+				err, last.Failure)
+		}
+	}
+	it.mu.Lock()
+	writes := it.writes
+	it.mu.Unlock()
+	if writes != 0 {
+		t.Fatalf("Google was written %d times before any write was sent", writes)
+	}
+	cut := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			it.serve(rw, r)
+			return
+		}
+		conn, _, _ := http.NewResponseController(rw).Hijack()
+		_ = conn.Close()
+	}))
+	t.Cleanup(cut.Close)
+	w = newWorld(t, httpxtest.Rewrite(t, cut))
+	call.HeldCall = "held-3"
+	_, err = w.client.Apply(t.Context(), call, googlegrowth.Write{Req: req, Class: growth.ClassSpend}, h.Binding)
+	if err == nil || errors.Is(err, growth.ErrNotSent) {
+		t.Errorf("a write whose answer was cut off = %v, want a failure never told as not sent", err)
 	}
 }
 

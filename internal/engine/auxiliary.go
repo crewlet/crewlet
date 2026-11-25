@@ -32,13 +32,12 @@ import (
 // judge and delegated workers through meterFor's meter, and an executor's
 // launch when its spend is collected (executor_collected).
 
-// phaseHeads is the phase registry's resolution as the seam reads it: the head
-// of a seat's chain for a phase, taken for the work (an LLM fleet's pick).
-// *phase.Registry satisfies it as written, so which model answers a seat's
-// cheap questions is still decided in one place: the one the config
-// validator checks.
+// phaseHeads is the phase registry's resolution as the seam reads it: a seat's
+// walk for a phase (an LLM fleet's picks). *phase.Registry satisfies it as
+// written, so which model answers a seat's cheap questions is still decided in
+// one place: the one the config validator checks.
 type phaseHeads interface {
-	Take(role *org.Role, ph phase.Phase) (chain.Member, error)
+	Walk(role *org.Role, ph phase.Phase) (phase.Walk, error)
 	Begin(role *org.Role, ph phase.Phase, key string) (end func())
 }
 
@@ -75,7 +74,9 @@ type auxiliarySeam struct {
 }
 
 // Auxiliary resolves the seat's auxiliary chain head, wrapped so every
-// completion made through it is charged and recorded under use.
+// completion made through it is charged and recorded under use. On an LLM
+// fleet it is a chain over every member, the head first, so a limit before an
+// answer moves the call on; a pinned list keeps its head alone.
 //
 // An attribution the record cannot be filed under (no stage or no purpose) is
 // refused before a model is resolved: every breakdown would show its spend as
@@ -84,16 +85,30 @@ func (s auxiliarySeam) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member
 	if err := use.Validate(); err != nil {
 		return chain.Member{}, err
 	}
-	member, err := s.heads.Take(role, phase.Auxiliary)
+	walk, err := s.heads.Walk(role, phase.Auxiliary)
 	if err != nil {
-		return member, err
+		return chain.Member{}, err
 	}
-	member = s.recorded(role, member, use)
-	recorded := member.Provider.(recordedProvider)
-	key := member.Key
-	recorded.begin = func() func() { return s.heads.Begin(role, phase.Auxiliary, key) }
-	member.Provider = recorded
-	return member, nil
+	members := walk.Members
+	if len(walk.Picks) == 0 {
+		members = members[:1]
+	}
+	for i, m := range members {
+		member := s.recorded(role, m, use)
+		recorded := member.Provider.(recordedProvider)
+		key := member.Key
+		recorded.begin = func() func() { return s.heads.Begin(role, phase.Auxiliary, key) }
+		member.Provider = recorded
+		members[i] = member
+	}
+	if len(walk.Picks) == 0 {
+		return members[0], nil
+	}
+	walked, err := chain.New(members, chain.Options{Fleet: walk.Picks})
+	if err != nil {
+		return chain.Member{}, err
+	}
+	return chain.Member{Key: members[0].Key, Provider: walked}, nil
 }
 
 // recordedMembers wraps members of the seat's own chains as

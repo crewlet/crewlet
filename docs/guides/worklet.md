@@ -684,7 +684,7 @@ Nineteen tools, and they are deliberately few: ten that act on a task, three tha
 |---|---|
 | `list_work_items` | the query surface above, filtered any way a view can be, with every row filtered **on its own** whatever a named view's shape says (the grammar's `collapsed` default would filter only the ROOT and let its subtree ride along, which draws a board and misreports a list). Subtasks are asked for with `parent`, which that mode never applied to, including `preset=my_queue` (the seat's own open work). Filters: `type`, `priority`, `parent`, `reporter`, `watcher`, `unit`, the date keys `due`, `updated`, `created`, `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug, which reaches the company's custom fields |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to parts (`body`, `comments`, `history`, `links`, `fields`; all five by default), so each part alone fits one answer; a read naming other parts says the description was left out and how large it is. `comments_cursor` pages back through a long thread; **`comment`** answers one comment by id and nothing else. **Nothing is cut**: a comment page holds as many whole comments as fit 16 KiB (at least one), `comments_cursor` continues exactly where it stopped, and the description is whole. Each field value comes with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored from another tracker) or **undeclared** (a value this company explains nowhere) |
-| `create_work_item` | file a task or subtask. A subtask is filed in its **parent's** project when none is named (the caller's team is the default only for an item with no parent). It lands in `todo` unless `status` names another (a board lane's **+** files into that lane in one record; an unknown status is refused by name). Without an `assignee` it goes to the project's **default assignee** (the lead's `write_project` setting, read inside the create); it lands in triage, where the lead is told, only when the project names none or names a seat that has left the chart, which the answer's `warnings` say. The answer's `assignee` is who it was filed to. `fields` sets custom fields by **slug**; the create is refused naming any the project requires and the call leaves out. It also takes the four **scheduling** arguments below, and `ask` (optional `decision`) to file the item **as a question**: see [Asking for a decision](#asking-for-a-decision) |
+| `create_work_item` | file a task or subtask. A subtask is filed in its **parent's** project when none is named (the caller's team is the default only for an item with no parent). It lands in `todo` unless `status` names another (a board lane's **+** files into that lane in one record; an unknown status is refused by name). Without an `assignee` it goes to the project's **default assignee** (the lead's `write_project` setting, read inside the create); it lands in triage, where the lead is told, only when the project names none or names a seat that has left the chart, which the answer's `warnings` say. The answer's `assignee` is who it was filed to; filed to the caller, it wakes nobody, the lead included ([who hears](#which-notices-start-a-turn)). `fields` sets custom fields by **slug**; the create is refused naming any the project requires and the call leaves out. It also takes the four **scheduling** arguments below, and `ask` (optional `decision`) to file the item **as a question**: see [Asking for a decision](#asking-for-a-decision) |
 | `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and belongs to the **lead** of the project the item is filed in (or an administrator), because it decides which team hears about somebody else's work: see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is about the CALLER only; the engine resolves it against the current watchers in its own transaction, so following never removes an existing follower. `waiting_on`, `blocking`, `linked`, `linked_pages` and `linked_entries` are **set-valued** (see below); `fields` sets custom fields by slug, checked against each field's declaration. It takes the four **scheduling** arguments, where `null` CLEARS one. An `assignee` may carry a **`reason`**: one line, at most 500 characters, which the new assignee is woken with and the history shows beside the hand-off; a `reason` without an `assignee` is refused (explaining any other change is a comment). **`checklist`** makes one change to the item's checklists: see [Checklists](#checklists) |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`, with a `decision` when they must choose) or as the **answer** that closes one (`answers`, with a `choice` naming an option; `body` is then optional) |
@@ -849,7 +849,7 @@ An `in_progress` item nobody is moving reads like one somebody is. So every item
 - **In the agents' tools.** `list_work_items`, `get_work_item` and `my_work` carry each item's flow and the answer's `flow_live`, read by the data node
   that answers the call, and their descriptions say what both mean.
 - **`departed` needs a chart.** An assignee is gone once the chart's seats have been applied to the tracker and do not name them; a tracker never told the chart departs nobody.
-- **A departed seat's work is re-homed a day later.** The item keeps the seat's handle through the 24 hours a removal can be undone in, then the seat's retirement hands each open item to its lead or returns it to `todo`, unassigned, with a history note naming the seat: see [Seat Ownership § The removed seat](../concepts/seat-ownership.md#the-removed-seat).
+- **A departed seat's work is re-homed a day later.** The item keeps the seat's handle through the 24 hours a removal can be undone in, then the seat's retirement hands each open item to its lead or returns it to `todo`, unassigned, with a history note naming the seat. Each lead hears of the items it returned unassigned once, in one notice listing them: see [Seat Ownership § The removed seat](../concepts/seat-ownership.md#the-removed-seat).
 
 ### A project's stuck window
 
@@ -1470,6 +1470,17 @@ that somebody's work now waits on yours all outrank being the assignee. Below
 those come assignee, then reporter, then collaborator, watcher, and last the lead
 fallback, which reaches a lead only when the change named nobody else at all.
 
+**The lead fallback is about ownership, not audience.** It wakes the lead for
+work with no owner: filed unassigned, left unassigned by whoever took the
+assignee off (the previous assignee is told, and is no longer its audience), or
+held by a seat the company no longer employs. A hand-off wakes only the new
+assignee. A change the task's owner (its assignee
+or a collaborator, never its reporter) makes to work it keeps, with nobody else
+to tell, tells the lead in the inbox and starts no turn: filing work for
+yourself, moving its status, commenting on it. A move into another project
+still wakes the receiving project's lead, who has never heard of the work. A
+task that needs the lead's decision says so with `ask` or an @-mention.
+
 **What a task wake asks follows its reason.** Eight reasons ask something:
 mentioned, asked, answered, a thread reply, assignee, reporter, blocking and
 `prioritised`. The [turn
@@ -1523,7 +1534,7 @@ the seat
 | `prioritised`, `asked`, `answered` | always: the change was put to this seat, or answers its question |
 | `unblocked`, `blocking`, `routed_to`, `parent_assignee`, `checklist`, `purged` | always: work the seat answers for moved |
 | `flow` | always: nobody is moving an item in a project the seat leads ([Notices](#notices)) |
-| `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment, a person's comment that names somebody, and a change to who watches the task and nothing else |
+| `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment, a person's comment that names somebody, and a change to who watches the task and nothing else; `lead_fallback` also not for a change the task's owner made to work it keeps |
 | `watcher` | for a person's comment that names nobody |
 | `thread` | for a seat with a stake in the thread (an open ask it made there, or one made of it that it still owes) on any reply by somebody else, whatever it names, except a reply by a co-asker (agent or person) whose only stake is awaiting the same seat; and for every participant on a person's comment that names nobody |
 | `unassigned`, `unwatched` | never |

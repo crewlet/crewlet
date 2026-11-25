@@ -6,7 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-var _ trimmer = OpenCode{}
+var _ recordTrimmer = OpenCode{}
 
 // trimRelease is the release OpenCode's trim was measured on ([trimmer]): the
 // one this runner supports ([openCodeRelease]).

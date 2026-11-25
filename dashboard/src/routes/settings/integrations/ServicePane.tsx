@@ -41,7 +41,7 @@
  * Crewlet hosts none of the company's code rather than naming a replacement.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import {
   ButtonLink,
   Callout,
@@ -55,7 +55,9 @@ import {
 } from "@crewlethq/ui";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
-import { href } from "~/app/router.tsx";
+import { href, useNavigator, useRoute } from "~/app/router.tsx";
+import type { IntegrationTab } from "~/app/routes.ts";
+import { tabOf } from "./address.ts";
 import { PROJECT_PAGE } from "~/contract/work.ts";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
 import { UnreadSetting } from "~/components/SettingEditor.tsx";
@@ -351,11 +353,13 @@ function verb(kind: string): string {
   return VERBS[kind] ?? kind.replace(/_/g, " ");
 }
 
-type Tab = "agents" | "activity" | "settings";
+type Tab = IntegrationTab;
 
+/** The tab the address names (`tab=`, `address.ts`), Agents where it names none. */
 function useTab(): [Tab, (t: string) => void] {
-  const [tab, setTab] = useState<Tab>("agents");
-  return [tab, (t) => setTab(t as Tab)];
+  const route = useRoute();
+  const nav = useNavigator();
+  return [tabOf(route.query.get("tab")) ?? "agents", (t) => nav.to(route.path, { tab: t })];
 }
 
 function ServiceTabs({

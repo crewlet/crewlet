@@ -72,6 +72,11 @@ func (w Windows) Validate() error {
 		case w[i].Label == "":
 			return fmt.Errorf("coord: the %s window has no label; cut it with period.At "+
 				"(coord.WindowsAt) on a moment inside the years 0000-9999", p)
+		case w[i].Shift(0).Label != w[i].Label:
+			// A LABEL period.At DID NOT CUT: a slot keeps it, so one assembled
+			// by hand would put words of any length in a counter's record.
+			return fmt.Errorf("coord: the %s window's label %q is none period.At cuts; cut it "+
+				"with period.At (coord.WindowsAt)", p, w[i].Label)
 		}
 	}
 	return nil

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -374,7 +375,7 @@ func modelRecord() coord.NodeStatusRecord {
 			ParkedCount: 1, ParkedSince: at.Add(time.Second),
 			Limits: []coord.ModelLimit{
 				{Window: "session", Hours: 5, State: "reached", Used: ptr(1.02), ResetsAt: at.Add(3 * time.Hour), Seen: at},
-				{Window: "weekly", Hours: 168, State: "ok", Used: ptr(0.0), Seen: at},
+				{Window: "weekly", Hours: 168, State: "ok", Used: ptr(0.0), Seen: at, Read: true},
 				{Window: "model", Hours: 168, Model: "opus", State: "warning", Seen: at.Add(-time.Minute)},
 			},
 		}, {
@@ -502,29 +503,29 @@ func TestAModelRowsParkedSeatsAreBounded(t *testing.T) {
 	}
 }
 
-// A MODEL ROW'S FLEET HOMES TRAVEL WHOLE, the most recently taken first and
-// at most [coord.MaxModelFleetHomes] of them, so a row does not grow with the
-// company; a peer's home naming no fleet or subject is dropped, as it steers
-// no pick. Mutation: publish every home, or the oldest, and this fails.
-func TestAModelRowsFleetHomesAreTheNewestAndBounded(t *testing.T) {
+// A MODEL ROW'S FLEET HOMES TRAVEL the most recently taken first, every one
+// its row holds: ninety-six short ones whole and uncounted; a peer's home
+// naming no fleet or subject is dropped, as it steers no pick. Mutation:
+// publish the oldest first, or cap the list below what the row holds, and
+// this fails.
+func TestAModelRowsFleetHomesAreTheNewestFirst(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
 	var homes []coord.FleetHome
-	for i := range 3 * coord.MaxModelFleetHomes {
+	for i := range 96 {
 		homes = append(homes, coord.FleetHome{Fleet: "opus", Subject: fmt.Sprintf("seat-%d", i),
 			Job: "execute", At: at.Add(-time.Duration(i) * time.Minute)})
 	}
+	slices.Reverse(homes)
 	got := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1,
 		Models: []coord.ModelStatus{{Key: "max", SignIn: "token", Homes: homes}}})
 	row := got.Models[0]
-	if len(row.Homes) != coord.MaxModelFleetHomes {
-		t.Fatalf("the row carried %d home(s), want %d", len(row.Homes), coord.MaxModelFleetHomes)
+	if len(row.Homes) != len(homes) || row.HomesCount != 0 {
+		t.Fatalf("the row carried %d home(s) counted %d, want all %d uncounted", len(row.Homes), row.HomesCount,
+			len(homes))
 	}
-	if h := row.Homes[0]; h != homes[0] {
-		t.Errorf("first home = %+v, want the newest whole: %+v", h, homes[0])
-	}
-	if last := row.Homes[len(row.Homes)-1]; last.Subject != fmt.Sprintf("seat-%d", coord.MaxModelFleetHomes-1) {
-		t.Errorf("last home = %+v, want the %dth newest", last, coord.MaxModelFleetHomes)
+	if h := row.Homes[0]; h != homes[len(homes)-1] {
+		t.Errorf("first home = %+v, want the newest whole: %+v", h, homes[len(homes)-1])
 	}
 	wire := map[string]any{"node": "n1", "epoch": 1, "at": at.Format(time.RFC3339Nano),
 		"models": []any{map[string]any{"key": "max", "homes": []any{
@@ -650,15 +651,15 @@ func TestAStatusRecordCarriesItsGrowthSignals(t *testing.T) {
 	}
 }
 
-// A MODEL ROW'S WORK IN FLIGHT TRAVELS WHOLE, at most
-// [coord.MaxModelFleetRunning] of it, pinned work naming no fleet; a peer's
-// work naming no subject serves nobody and is dropped. Mutation: drop the
-// running list from the row, and this fails.
-func TestAModelRowsWorkInFlightTravelsBounded(t *testing.T) {
+// A MODEL ROW'S WORK IN FLIGHT TRAVELS as far as its row holds, pinned work
+// naming no fleet: a hundred short calls whole and uncounted; a peer's work
+// naming no subject serves nobody and is dropped. Mutation: drop the running
+// list from the row, or cap it below what the row holds, and this fails.
+func TestAModelRowsWorkInFlightTravelsAsFarAsItsRowHolds(t *testing.T) {
 	t.Parallel()
 	since := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
 	var running []coord.FleetRunning
-	for i := range 2 * coord.MaxModelFleetRunning {
+	for i := range 100 {
 		running = append(running, coord.FleetRunning{Fleet: "opus", Subject: fmt.Sprintf("seat-%d", i),
 			Job: "review", Since: since.Add(time.Duration(i) * time.Second)})
 	}
@@ -666,8 +667,9 @@ func TestAModelRowsWorkInFlightTravelsBounded(t *testing.T) {
 	got := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1,
 		Models: []coord.ModelStatus{{Key: "max", SignIn: "token", Running: running}}})
 	row := got.Models[0]
-	if len(row.Running) != coord.MaxModelFleetRunning {
-		t.Fatalf("the row carried %d running, want %d", len(row.Running), coord.MaxModelFleetRunning)
+	if len(row.Running) != len(running) || row.RunningCount != 0 {
+		t.Fatalf("the row carried %d running counted %d, want all %d uncounted", len(row.Running),
+			row.RunningCount, len(running))
 	}
 	if row.Running[0] != running[0] || row.Running[1] != running[1] {
 		t.Errorf("running = %+v, want the first whole, pinned work with no fleet", row.Running[:2])

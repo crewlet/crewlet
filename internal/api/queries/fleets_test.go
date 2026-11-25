@@ -245,6 +245,61 @@ func TestASeatWaitsForItsFleetsEarliestRoom(t *testing.T) {
 	}
 }
 
+// WORK OR HOMES A ROW COULD NOT NAME ARE COUNTED AND NEVER GUESSED: a member
+// whose records counted work in flight past what they name says how much,
+// and a subject with none named on a member it may run on is unlisted, never
+// predicted next; a fleet's job with no home named is unlisted where a member
+// has homes it could not name, while one homed, or pinned elsewhere, is
+// predicted as before.
+//
+// Mutation: drop the unlisted branch from fleetReader.flying, or read a
+// member's homes as named whole, and this fails.
+func TestWorkOrHomesARowCouldNotNameAreCountedAndNeverGuessed(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	minute := pinned.Add(-time.Minute)
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{Models: []coord.ModelStatus{
+		{Key: "max", SignIn: "token", Resolves: true, RunningCount: 3,
+			Running: []coord.FleetRunning{{Fleet: "opus", Subject: "nobody-here", Job: "review", Since: minute}}},
+		{Key: "a", SignIn: "token", Resolves: true,
+			Homes: []coord.FleetHome{{Fleet: "busy", Subject: "night", Job: "execute", At: minute}}},
+		{Key: "b", SignIn: "token", Resolves: true, HomesCount: 4},
+		{Key: "solo", SignIn: "token", Resolves: true},
+	}})
+	got := llmFleetsOf(t, llmFleetSources(t, backend, nil))
+	for _, m := range llmFleetNamed(t, got, "opus").Members {
+		if want := map[string]int{"max": 2}[m.Entry]; m.UnlistedServing != want {
+			t.Errorf("opus member %s counts %d unlisted in flight, want %d", m.Entry, m.UnlistedServing, want)
+		}
+	}
+	for _, m := range llmFleetNamed(t, got, "busy").Members {
+		if want := map[string]int{"b": 4}[m.Entry]; m.UnlistedHomes != want {
+			t.Errorf("busy member %s counts %d unlisted homes, want %d", m.Entry, m.UnlistedHomes, want)
+		}
+	}
+	for _, subject := range []string{"engineer", "assistant"} {
+		if a := assignmentOf(t, got, subject); a.Now != nil || a.NowKind != queries.NowUnlisted ||
+			a.WaitingUntil != nil {
+			t.Errorf("%s on opus = now %v (%s) waiting %v, want unlisted: max runs work its row could not name",
+				subject, deref(a.Now), a.NowKind, deref(a.WaitingUntil))
+		}
+	}
+	night := assignmentOf(t, got, "night")
+	kinds := map[string]queries.NowKind{}
+	for _, j := range night.Jobs {
+		kinds[j.Job] = j.NowKind
+	}
+	if kinds["executor"] != queries.NowNext || kinds["review"] != queries.NowNext ||
+		kinds["subagent"] != queries.NowUnlisted {
+		t.Errorf("night's jobs read %v, want its homed executor and its reviewer pinned to solo next, its "+
+			"unhomed subagent unlisted: b has homes its row could not name", kinds)
+	}
+	if w := assignmentOf(t, got, "writer"); deref(w.Now) != "a" || w.NowKind != queries.NowNext {
+		t.Errorf("writer pinned to a = now %v (%s), want a next: a pinned entry has no home to steer it",
+			deref(w.Now), w.NowKind)
+	}
+}
+
 // A SEAT CARRIES EACH OF ITS JOBS BY THE ENGINE'S NAME, each resolved as the
 // engine resolves it: a reviewer pinned beside a fleet stays pinned. Helpers
 // carry their field: a fleet, or off.

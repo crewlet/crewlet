@@ -2633,7 +2633,7 @@ func (c *Coordinator) publishCollected(ctx context.Context, run PendingRun, resu
 		return run.Launch
 	}
 	// MEASURED WITH THE RECORD, under its guard: once per launch.
-	c.meterCarry(facts, rec.SessionNotContinued)
+	c.meterCarry(facts, result, rec.SessionNotContinued)
 	facts.Published = true
 	return facts
 }
@@ -2746,6 +2746,9 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, pinned i
 		}
 		rec.ErrorKind = types.ExecutorErrorLaunchFailed
 		switch {
+		case result.TurnCapExceeded:
+			// FIRST: whatever else ended the run, nothing held it to its cap.
+			rec.ErrorKind = types.ExecutorErrorTurnCapExceeded
 		case ranOutOfContext(run, result):
 			rec.ErrorKind = types.ExecutorErrorContextExhausted
 		case requestRefused(run, result):

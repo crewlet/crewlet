@@ -321,6 +321,15 @@ type contextReader interface {
 	request() contextRead
 }
 
+// enforcerReporter is a decoder that tells from its stream whether what holds
+// the run to its cap in its box ran at all: Copilot's and Pi's extensions.
+// unheld says why it did not, "" where it ran or the run had no cap. A REPORT
+// NEVER OUTWEIGHS IT, as it does the harness's own words of a failure
+// ([Runner.Collect]): the run went on with nothing holding it to its cap.
+type enforcerReporter interface {
+	unheld() string
+}
+
 // limitReporter is a decoder that keeps its run's last limit report line
 // ([sandbox.Result.Limits]): Claude Code's `rate_limit_event`.
 type limitReporter interface {
@@ -1108,12 +1117,16 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	var refused []string
 
 	var (
-		result  sandbox.Result
-		ended   bool
-		spent   *runSpend
-		request contextRead
-		window  int64
-		limits  string
+		result    sandbox.Result
+		ended     bool
+		spent     *runSpend
+		request   contextRead
+		window    int64
+		limits    string
+		requests  int
+		unheld    string
+		inFlight  int
+		undecided int
 	)
 	if out.Events {
 		streamed, refusal, err := r.decodeStream(pieces.stream, false)
@@ -1125,6 +1138,8 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 		result, spent, request = streamed.result, streamed.spent, streamed.request
 		window, limits, ended = streamed.window, streamed.limits, streamed.ended
+		requests, unheld, inFlight = streamed.requests, streamed.unheld, streamed.inFlight
+		undecided = streamed.undecided
 	}
 	// THE STREAM BEFORE THE RESULT FILE, keeping not its last line: what its
 	// reading holds after is the record's halves, so the file is parsed beside
@@ -1389,6 +1404,30 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	} else if unbridged {
 		sentences = append(sentences, bridgeUnconnected)
 	}
+	// A RUN PAST ITS CAP fails next, whatever it reported: decided here, after
+	// the report's success above and nowhere else, so no runner can let a
+	// defeated cap collect as a success ([capVerdict]).
+	if verdict, past := capVerdict(handle.TurnCap, requests, inFlight, result.RoundCapped); past {
+		result.Success, result.TurnCapExceeded = false, verdict.exceeded
+		result.RoundCapped = !verdict.exceeded
+		sentences = append(sentences, verdict.sentence)
+	}
+	// AND A CAPPED RUN WHOSE STREAM MAY HIDE REQUESTS in lines past the bound
+	// ([Decoder.Undecided]) that could take it past its cap: each such line
+	// hides one request at most, so a run within its cap with all of them
+	// counted is judged within it.
+	if handle.TurnCap > 0 && undecided > 0 && requests+undecided > handle.TurnCap {
+		result.Success = false
+		sentences = append(sentences, fmt.Sprintf("the run's turn cap of %d could not be judged: %d line(s) of its "+
+			"stream, past the %s a line is read within, may hold a model request whose marker neither end of the "+
+			"line showed", handle.TurnCap, undecided, humanSize(int64(r.lineBound))))
+	}
+	// AND A RUN WHOSE CAP'S ENFORCER NEVER RAN, which a report made a success
+	// above: a failure its decoder said is already among its sentences.
+	if unheld != "" && result.Success {
+		result.Success = false
+		sentences = append(sentences, unheld)
+	}
 	sentences = append(append(sentences, refused...), said...)
 	var once secretsOnce
 	result.Error = failureDetail(sentences, errStream, unread, r.failureBound, once.of)
@@ -1405,6 +1444,34 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// it again ([sandbox.MaxRunTextBytes]).
 	result.Transcript = redact.Secrets(result.Transcript)
 	return result, nil
+}
+
+// capJudgment is [capVerdict]'s: which failure a run past its cap collects
+// as, and the sentence that says so.
+type capJudgment struct {
+	exceeded bool
+	sentence string
+}
+
+// capVerdict is the one verdict on a run whose stream shows more model
+// requests than the cap its launch handed it ([sandbox.RunHandle.TurnCap]),
+// past false for a run within it or with none. THE ENGINE'S CAP over THE
+// STREAM'S COUNT ([Decoder.Requests]), never what the box says of either: the
+// stream bounds a harness whose own enforcer died or ignored its cap, never a
+// shell that rewrites the stream (docs/concepts/code-sandbox.md, "What ends a
+// run"). A run past it is NEVER A SUCCESS: past by no more than its runner's
+// in-flight requests ([Decoder.InFlight]), with its enforcer's stop in its
+// stream (stopped), it collects as stopped at its cap; else as past it.
+func capVerdict(turnCap, requests, inFlight int, stopped bool) (capJudgment, bool) {
+	if turnCap <= 0 || requests <= turnCap {
+		return capJudgment{}, false
+	}
+	if stopped && requests <= turnCap+max(inFlight, 0) {
+		return capJudgment{sentence: fmt.Sprintf("the run was stopped at its turn cap of %d: it made %d model "+
+			"requests, the last already made as its harness was stopped", turnCap, requests)}, true
+	}
+	return capJudgment{exceeded: true, sentence: fmt.Sprintf("the turn cap of %d was exceeded: the run made %d "+
+		"model requests", turnCap, requests)}, true
 }
 
 // bridgeUnconnected is a run's failure where its harness ended it without ever
@@ -1669,7 +1736,8 @@ func (r *Runner) decodeLines(stream io.Reader, keepLast bool) (decodedStream, st
 	if err := eachLine(stream, dec, r.lineBound); err != nil {
 		return decodedStream{}, "", fmt.Errorf("executor: reading the event stream: %w", err)
 	}
-	out := decodedStream{result: events.Result(), last: kept.last, ended: events.Ended()}
+	out := decodedStream{result: events.Result(), last: kept.last, ended: events.Ended(),
+		requests: events.Requests(), inFlight: events.InFlight(), undecided: events.Undecided()}
 	if spender, ok := events.(runSpender); ok {
 		if spent, stated := spender.runSpend(); stated {
 			out.spent = &spent
@@ -1683,6 +1751,9 @@ func (r *Runner) decodeLines(stream io.Reader, keepLast bool) (decodedStream, st
 	}
 	if reporter, ok := events.(limitReporter); ok {
 		out.limits = reporter.limitReport()
+	}
+	if reporter, ok := events.(enforcerReporter); ok {
+		out.unheld = reporter.unheld()
 	}
 	return out, "", nil
 }
@@ -1702,6 +1773,15 @@ type decodedStream struct {
 	limits string
 	// ended is whether the stream said how the run ended ([Decoder.Ended]).
 	ended bool
+	// requests is the model requests the stream shows ([Decoder.Requests]).
+	requests int
+	// unheld is why what holds the run to its cap never ran
+	// ([enforcerReporter]), "" where it ran.
+	unheld string
+	// inFlight is the requests the runner's enforcer cannot stop
+	// ([Decoder.InFlight]); undecided the skipped lines that may hold a
+	// request the count could not read ([Decoder.Undecided]).
+	inFlight, undecided int
 }
 
 // streamLast is an event stream's last line, as `tail -n 1` would copy it
@@ -1753,9 +1833,9 @@ func (k *keepingLast) Line(line []byte) {
 	k.Decoder.Line(line)
 }
 
-func (k *keepingLast) Skipped(n int64, bound int) {
-	k.last.line, k.last.skipped, k.last.bound = k.last.line[:0], n, bound
-	k.Decoder.Skipped(n, bound)
+func (k *keepingLast) Skipped(line LongLine) {
+	k.last.line, k.last.skipped, k.last.bound = k.last.line[:0], line.Size, line.Bound
+	k.Decoder.Skipped(line)
 }
 
 // readWhole reads a file meant to be read whole, answering a file past

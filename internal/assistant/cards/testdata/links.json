@@ -75,6 +75,11 @@
     "href": "#/live/executors/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
   },
   {
+    "label": "Google",
+    "screen": "google",
+    "href": "#/company/integrations/google"
+  },
+  {
     "label": "Home",
     "screen": "home",
     "href": "#/home"
@@ -83,6 +88,31 @@
     "label": "Inbox",
     "screen": "inbox",
     "href": "#/inbox"
+  },
+  {
+    "label": "Open Google Cloud",
+    "screen": "integration",
+    "href": "#/company/integrations/google_cloud"
+  },
+  {
+    "label": "Open Google Cloud's activity",
+    "screen": "integration-activity",
+    "href": "#/company/integrations/google_cloud?tab=activity"
+  },
+  {
+    "label": "Open Google Cloud's agents",
+    "screen": "integration-agents",
+    "href": "#/company/integrations/google_cloud?tab=agents"
+  },
+  {
+    "label": "Open Google Cloud's settings",
+    "screen": "integration-settings",
+    "href": "#/company/integrations/google_cloud?tab=settings"
+  },
+  {
+    "label": "Open Google Cloud setup",
+    "screen": "integration-setup",
+    "href": "#/company/integrations/google_cloud?edit=settings"
   },
   {
     "label": "Integrations",

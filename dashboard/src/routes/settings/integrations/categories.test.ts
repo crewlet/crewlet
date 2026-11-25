@@ -52,7 +52,8 @@ test("this build draws the table over its own catalogue, every drawn app line se
     expect(group.lines.length, group.label).toBeGreaterThan(0);
     for (const line of group.lines) {
       if (line.kind === "service") continue;
-      const app = line.kind === "product" ? line.app : line.key;
+      const app =
+        line.kind === "product" ? line.app : line.kind === "google" ? "google_cloud" : line.key;
       expect(
         CATALOG.some((e) => e.key === app),
         line.key,
@@ -65,7 +66,8 @@ test("only a growth product is filed ahead of its catalogue entry: any other uns
   for (const group of DIRECTORY) {
     for (const line of group.lines) {
       if (line.kind === "service") continue;
-      const app = line.kind === "product" ? line.app : line.key;
+      const app =
+        line.kind === "product" ? line.app : line.kind === "google" ? "google_cloud" : line.key;
       if (CATALOG.some((e) => e.key === app)) continue;
       expect(GROWTH_PRODUCTS.has(app), `${group.label}: ${app}`).toBe(true);
     }

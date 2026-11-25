@@ -4209,6 +4209,13 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
+	save_assistant_instructions: {
+		args: ["instructions", "if_match"],
+		domain: null,
+		apps: [],
+		refreshes: ["assistant_instructions"],
+		scope: "person"
+	},
 	save_home_board: {
 		args: ["board", "if_match"],
 		domain: null,
