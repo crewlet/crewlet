@@ -259,8 +259,8 @@
 // executor's job finished and whose last resume there failed on a condition
 // only an operator clears (internal/sandbox's Coordinator.ResumesBlocked). It
 // is ON THE RECORD because the node holding the seat is the only one that
-// knows, and it may be one with no alarm table to raise it on: a satellite
-// (`roles: [seats]`) runs no state log, so it evaluates none. So the
+// knows, and it may be a satellite (`roles: [seats]`), whose own table judges
+// only what it measures of itself (statelog.LocalKinds). So the
 // `executor_resume_blocked` alarm is judged by every data node off the live
 // records, as the model alarms are. The record carries THE COUNT, AND THE RUN
 // WAITING LONGEST BY ITS SEAT, ITS CONDITION AND SINCE WHEN, the seat and the

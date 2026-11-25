@@ -129,14 +129,16 @@ func TestAToldCallLikeAHeldCallALeadTellsIsMarked(t *testing.T) {
 	}
 	lateAsk := digested(numbered("tr_close_issue", map[string]any{"id": "9"}, 3, 3))
 	lateAsk.Late = true
+	// A FRESH RUN'S LINE OF A WRITE ENDS WITH WHAT IT RETURNED (ledger's
+	// FormatOptions.Answers), and the mark after it.
+	lateLine := `- tr_close_issue({"id":"9"}) → success: ` + lateAsk.Result + toldApart
 	brief = denied("held-1", asked, heldFor("tr_close_issue", 2, 2), lateAsk)
-	if !strings.Contains(brief, heldLine+toldApart) ||
-		!strings.Contains(brief, `- tr_close_issue({"id":"9"}) → success`+toldApart) {
+	if !strings.Contains(brief, heldLine+toldApart) || !strings.Contains(brief, lateLine) {
 		t.Errorf("the held call and a late call of its tool are not both marked:\n%s", brief)
 	}
 	// A LEAD WHOSE HELD CALL NAMES NO ID still tells a call of its tool.
 	brief = denied("", asked, lateAsk)
-	if !strings.Contains(brief, `- tr_close_issue({"id":"9"}) → success`+toldApart) {
+	if !strings.Contains(brief, lateLine) {
 		t.Errorf("a late call like the held call a lead naming no id tells is not marked:\n%s", brief)
 	}
 }

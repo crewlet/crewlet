@@ -2,7 +2,45 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/mcpbridge`
-- **Enforced-by:** `internal/api/mcpbridge.TestTheRelayedBridgeKeepsTheToolSessionContract`, `internal/api/mcpbridge.TestARunWhoseSeatMovedIsServedByItsNewHolder`, `internal/api/mcpbridge.TestAFencedOpeningDefersToTheSeatsHolder`, `internal/httprelay.TestAStreamReachesTheClientAsItIsWritten`, `internal/engine.TestTheBridgeFollowsTheSeat`, `internal/api.TestTheProbeSurfaceServesItsOwnBoxesOnThisHostAlone`, `cmd/crewlet.TestADirectBoxDialsTheListenerItsNodeBound`, `cmd/crewlet.TestASeatsNodeServesItsOwnBoxesTheirToolsOnLoopback`, `internal/e2e.TestAStatelessNodesBoxReachesItsToolsOnItsOwnListener`, `internal/api/mcpbridge.TestABridgedCallsAnswerStartsBeforeItsToolReturns`, `internal/api/mcpbridge.TestACallTheBridgeAnswersWithoutRunningGetsNoProgress`, `internal/api/mcpbridge.TestABoxWaitsAsLongAsTheBridgeCanTakeToAnswer`, `internal/toolsession.TestARunningCallsFirstProgressReachesAnHTTPClientWhileItsToolIsHeld`, `internal/toolsession.TestARunningCallsProgressKeepsComingUntilItsToolReturns`, `internal/toolsession.TestACallAnsweredWithoutRunningGetsNoProgress`, `internal/toolsession.TestARequestWithNoProgressTokenGetsOnlyItsAnswer`, `internal/toolsession.TestAServerThatKeepsNothingGoingSendsNoProgress`, `internal/sandbox/executor.TestABridgedEntryTellsEitherHarnessHowLongToWait`, `internal/engine.TestEveryServerABoxIsHandedWaitsAsLongAsItsBridgeCanTakeToAnswer`, `internal/mcp.TestAToolIsBoundByItsServersRequestTimeout`, `internal/agent/subagent.TestTheDelegateToolIsBoundByItsCallCap`, `internal/engine.TestARelaunchsBoxWaitsAsLongAsItsBridgeCanTakeToAnswerWhicheverSessionItStarts`, `internal/toolsession.TestARunningCallsAnswerWaitsForAProgressAlreadyOnItsWay`, `internal/toolsession.TestACancelledCallIsSentNoMoreProgress`, `internal/api/mcpbridge.TestEveryEndingOfAnOpeningReturnsWhileACallIsHeld`, `internal/api/mcpbridge.TestAnOpeningsEndAnswersItsRunningCallsBeforeItClosesTheirSessions`, `internal/api/mcpbridge.TestAnOpeningsEndIsHeldNoLongerThanItsBoundByABoxThatDoesNotRead`, `internal/api/mcpbridge.TestACallWhoseToolReturnedBeforeItsOpeningEndedIsAnsweredWithItsOwnResult`, `internal/api/mcpbridge.TestACallReachingAnOpeningAfterItsEndIsToldWhatTheEndMeans`, `internal/api/mcpbridge.TestABridgeAwaitsEveryCallItRunsUntilItIsRecorded`, `internal/toolsession.TestACallsRequestIsOverOnlyOnceItsAnswerIsWritten`, `internal/engine.TestASeatHandedOnWhileACallOfItsRunIsHeldIsReleasedAtOnce`, `internal/engine.TestADrainGivesItsSeatsBackAndThenWaitsForTheirBridgedCalls`, `internal/api/mcpbridge.TestAnOpeningHoldsACallUntilItsAnswerIsOutWhateverItAdmitsAfter`, `internal/api/mcpbridge.TestAnOpeningsEndWaitsForTheAnswerOfACallItRefusedBeforeItCloses`, `internal/api/mcpbridge.TestARelayedCallWhoseOpeningLeftAfterItsAdmissionIsAnsweredAsTheNodeCanNow`, `internal/api/mcpbridge.TestARequestOpeningASessionAsItsOpeningEndsIsTurnedAwayToAskAgain`, `internal/api/mcpbridge.TestAnOpeningsEndWaitsForASessionItLetOpenAndThenClosesIt`
+- **Enforced-by:**
+  - `internal/api/mcpbridge.TestTheRelayedBridgeKeepsTheToolSessionContract`
+  - `internal/api/mcpbridge.TestARunWhoseSeatMovedIsServedByItsNewHolder`
+  - `internal/api/mcpbridge.TestAFencedOpeningDefersToTheSeatsHolder`
+  - `internal/httprelay.TestAStreamReachesTheClientAsItIsWritten`
+  - `internal/engine.TestTheBridgeFollowsTheSeat`
+  - `internal/api.TestTheProbeSurfaceServesItsOwnBoxesOnThisHostAlone`
+  - `cmd/crewlet.TestADirectBoxDialsTheListenerItsNodeBound`
+  - `cmd/crewlet.TestASeatsNodeServesItsOwnBoxesTheirToolsOnLoopback`
+  - `internal/e2e.TestAStatelessNodesBoxReachesItsToolsOnItsOwnListener`
+  - `internal/api/mcpbridge.TestABridgedCallsAnswerStartsBeforeItsToolReturns`
+  - `internal/api/mcpbridge.TestACallTheBridgeAnswersWithoutRunningGetsNoProgress`
+  - `internal/api/mcpbridge.TestABoxWaitsAsLongAsTheBridgeCanTakeToAnswer`
+  - `internal/toolsession.TestARunningCallsFirstProgressReachesAnHTTPClientWhileItsToolIsHeld`
+  - `internal/toolsession.TestARunningCallsProgressKeepsComingUntilItsToolReturns`
+  - `internal/toolsession.TestACallAnsweredWithoutRunningGetsNoProgress`
+  - `internal/toolsession.TestARequestWithNoProgressTokenGetsOnlyItsAnswer`
+  - `internal/toolsession.TestAServerThatKeepsNothingGoingSendsNoProgress`
+  - `internal/sandbox/executor.TestABridgedEntryTellsEitherHarnessHowLongToWait`
+  - `internal/engine.TestEveryServerABoxIsHandedWaitsAsLongAsItsBridgeCanTakeToAnswer`
+  - `internal/mcp.TestAToolIsBoundByItsServersRequestTimeout`
+  - `internal/agent/subagent.TestTheDelegateToolIsBoundByItsCallCap`
+  - `internal/engine.TestARelaunchsBoxWaitsAsLongAsItsBridgeCanTakeToAnswerWhicheverSessionItStarts`
+  - `internal/toolsession.TestARunningCallsAnswerWaitsForAProgressAlreadyOnItsWay`
+  - `internal/toolsession.TestACancelledCallIsSentNoMoreProgress`
+  - `internal/api/mcpbridge.TestEveryEndingOfAnOpeningReturnsWhileACallIsHeld`
+  - `internal/api/mcpbridge.TestAnOpeningsEndAnswersItsRunningCallsBeforeItClosesTheirSessions`
+  - `internal/api/mcpbridge.TestAnOpeningsEndIsHeldNoLongerThanItsBoundByABoxThatDoesNotRead`
+  - `internal/api/mcpbridge.TestACallWhoseToolReturnedBeforeItsOpeningEndedIsAnsweredWithItsOwnResult`
+  - `internal/api/mcpbridge.TestACallReachingAnOpeningAfterItsEndIsToldWhatTheEndMeans`
+  - `internal/api/mcpbridge.TestABridgeAwaitsEveryCallItRunsUntilItIsRecorded`
+  - `internal/toolsession.TestACallsRequestIsOverOnlyOnceItsAnswerIsWritten`
+  - `internal/engine.TestASeatHandedOnWhileACallOfItsRunIsHeldIsReleasedAtOnce`
+  - `internal/engine.TestADrainGivesItsSeatsBackAndThenWaitsForTheirBridgedCalls`
+  - `internal/api/mcpbridge.TestAnOpeningHoldsACallUntilItsAnswerIsOutWhateverItAdmitsAfter`
+  - `internal/api/mcpbridge.TestAnOpeningsEndWaitsForTheAnswerOfACallItRefusedBeforeItCloses`
+  - `internal/api/mcpbridge.TestARelayedCallWhoseOpeningLeftAfterItsAdmissionIsAnsweredAsTheNodeCanNow`
+  - `internal/api/mcpbridge.TestARequestOpeningASessionAsItsOpeningEndsIsTurnedAwayToAskAgain`
+  - `internal/api/mcpbridge.TestAnOpeningsEndWaitsForASessionItLetOpenAndThenClosesIt`
 - **Cost-when-tried:** the box dialled its launching node's own address. A load balancer in front of several nodes sent calls to peers that never held the session, and they answered 401 to a live run. A run whose seat moved to a peer kept dialling the node that lost it, which answered that the run's tools were closed until the run ended. And a node without the ingress role had to bind a public listener for its seats' bridge alone, so a satellite that accepts no inbound connection could run no seat whose executor ran in a box.
 - **Tag-status:** unreleased
 

@@ -1851,8 +1851,8 @@ its home raises [`code_maintenance_refused`](../reference/alarms.md), its
 Every figure above is of the memory the executor's pools, the answers in flight, the store's
 [page cache](#the-page-cache) and the read lane leave: a Gitlet node keeps them first and sizes
 Gitlet by what is left
-([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 97 MiB for the
-transcript reads its API answers and 1 805 MiB where it runs seats too, 284 MiB for the answers in flight, a
+([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 107 MiB for the
+transcript reads its API answers and 1 834 MiB where it runs seats too, 284 MiB for the answers in flight, a
 sixteenth of its memory for the page cache and 128 MiB a core for git's reads, so give it that much more. They are the executor's in-process pools alone: a node
 running seats also holds its harness calls and boxes
 ([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's pools

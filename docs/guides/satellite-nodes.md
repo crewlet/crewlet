@@ -315,6 +315,19 @@ first that does not in `reason`:
 | `no_presence` | It does not hold its presence lease, so peers do not count it and nothing routes to it. |
 | `admission_withheld` | No data node has yet answered that a copy of the estate admits a seat, or the node cannot serve the seats it holds, so it claims nothing. A fresh satellite sits here until admitted, and returns here while no data node is reachable. |
 
+### Its alarms
+
+A satellite without `data` runs no state log, so it evaluates only the
+[alarms](../reference/alarms.md#how-an-alarm-reaches-you) it measures of
+itself: `objective_burn` (its seats' runs carrying their sessions, and their
+artifact publishes), `volume_low`, `wal_large` and `pool_starved` (its scratch
+store). Each reaches you from the satellite: its own `alarm_raised` line and
+`crewlet.alarm.active` gauge, its row on **Settings › Nodes** and `GET /fleet`,
+and the administrators' notices. `/health` counts them, and no alarm makes a
+probe fail: neither restarting the node nor withdrawing its seats clears one.
+The data nodes raise every other alarm, among them the model, MCP server and
+`executor_resume_blocked` alarms of the satellite's seats.
+
 Two failures to know by sight:
 
 - **`seats_unplaceable`** — no live node matches the selector, or the only one

@@ -2,7 +2,21 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant/wire`
-- **Enforced-by:** `internal/assistant/catalog.TestAGenericListReadIsOnePage`, `internal/assistant/cards.TestARecordCarriesTheKeyProseWritesItBy`, `internal/assistant/cards.TestTheModelIsToldARecordsKey`, `internal/assistant/cards.TestAKeyedKindNeedsItsKeyAndNoOtherHasOne`, `internal/assistant/catalog.TestAReadTooLargeToShowIsNamedAndToldToTheModel`, `internal/assistant/catalog.TestACutReadTellsTheModelOnlyWhatTheEngineKnows`, `internal/assistant/catalog.TestEveryModelTextGoesThroughThePipeline`, `internal/assistant/catalog.TestEveryNarrowingArgumentNarrows`, `internal/api/queries.TestTheAssistantsPageOfRoomsIsReadInOneStep`, `internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol`, and the dashboard's `mentions.test.tsx`, `reads.test.tsx`, `Thread.test.tsx`, `inert.test.tsx`, `components/InlineToken.test.tsx` (`checked links`), `lib/markdown.test.tsx` (`prose`), `routes/chatlet/Room.test.tsx` (`a message's links`) and `routes/live/Executors.test.tsx` (`a parked run's question opens only what the dashboard built`)
+- **Enforced-by:**
+  - `internal/assistant/catalog.TestAGenericListReadIsOnePage`
+  - `internal/assistant/cards.TestARecordCarriesTheKeyProseWritesItBy`
+  - `internal/assistant/cards.TestTheModelIsToldARecordsKey`
+  - `internal/assistant/cards.TestAKeyedKindNeedsItsKeyAndNoOtherHasOne`
+  - `internal/assistant/catalog.TestAReadTooLargeToShowIsNamedAndToldToTheModel`
+  - `internal/assistant/catalog.TestACutReadTellsTheModelOnlyWhatTheEngineKnows`
+  - `internal/assistant/catalog.TestEveryModelTextGoesThroughThePipeline`
+  - `internal/assistant/catalog.TestEveryNarrowingArgumentNarrows`
+  - `internal/api/queries.TestTheAssistantsPageOfRoomsIsReadInOneStep`
+  - `internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol`, and the dashboard's `mentions.test.tsx`
+  - `reads.test.tsx`
+  - `Thread.test.tsx`
+  - `inert.test.tsx`
+  - `components/InlineToken.test.tsx` (`checked links`), `lib/markdown.test.tsx` (`prose`), `routes/chatlet/Room.test.tsx` (`a message's links`) and `routes/live/Executors.test.tsx` (`a parked run's question opens only what the dashboard built`)
 - **Cost-when-tried:** the drawer drew a folded card for every read a turn made. An answer on the Inbox that read two tasks, a table and an agent, and then both tasks again, stood six cards of about 140px each between the reader and the answer in a 560px drawer, each saying its key twice (in its summary and as its link's label), and the same record twice. An answer on Company › Brand added a blue notice per read and table cards whose CSV, XLSX and link wrapped onto a second line or not depending on the length of the title.
 - **Tag-status:** unreleased
 

@@ -2,7 +2,15 @@
 
 - **Status:** accepted
 - **Authority:** `internal/decision`
-- **Enforced-by:** `internal/decision.TestAnAgentsDecisionRecommendsOneOptionAndSaysWhy`, `internal/decision.TestADecisionIsValidatedField`, `internal/worklet.TestAnAgentsDecisionRecommendsOneOptionAndSaysWhy`, `internal/agent/builtin.TestAnAgentsQuestionToAPersonIsADecision`, `internal/agent/builtin.TestAnAgentsRequestThatNamesAPersonIsAnAsk`, `internal/agent/builtin.TestAnAgentsPageCommentThatAsksAPersonIsRefused`, `internal/agent/builtin.TestARunsAskAlwaysOffersOptions`, `internal/sandbox.TestAnOwnQuestionIsAlwaysAChoice`
+- **Enforced-by:**
+  - `internal/decision.TestAnAgentsDecisionRecommendsOneOptionAndSaysWhy`
+  - `internal/decision.TestADecisionIsValidatedField`
+  - `internal/worklet.TestAnAgentsDecisionRecommendsOneOptionAndSaysWhy`
+  - `internal/agent/builtin.TestAnAgentsQuestionToAPersonIsADecision`
+  - `internal/agent/builtin.TestAnAgentsRequestThatNamesAPersonIsAnAsk`
+  - `internal/agent/builtin.TestAnAgentsPageCommentThatAsksAPersonIsRefused`
+  - `internal/agent/builtin.TestARunsAskAlwaysOffersOptions`
+  - `internal/sandbox.TestAnOwnQuestionIsAlwaysAChoice`
 - **Measured:** one company's owner over seven days: 18 of 50 answered questions (36%) were asked in prose with no decision, every one answered in words; 31 of the 32 asked as decisions were answered with one press. One run's question and the one question still open were prose too.
 - **Cost-when-tried:** [ADR-0023](0023-a-decision-is-a-structured-ask.md) and [ADR-0068](0068-a-run-asks-a-person-in-the-shape-a-decision-is-asked.md) made the decision available and left it optional, "where the person is to choose", with the recommendation "empty when it has no view". Agents read that as permission: a request ("the merge is yours", "please run the script on production", "QA passed, over to you") went out as an `ask` with a paragraph and nothing to press, and four of them wrote their options and a recommendation into the prose instead.
 - **Tag-status:** unreleased
