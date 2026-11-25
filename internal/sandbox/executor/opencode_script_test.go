@@ -748,11 +748,11 @@ func forEachShell(t *testing.T, test func(t *testing.T, sh boxShell)) {
 
 // loginFree reports whether name, in a box's work directory, is a file a run's
 // script leaves there that holds no login: its configuration ([scriptConfig]),
-// its session record, export and export digests, and its end protocol's pid
-// and end records.
+// its session record, export and export digests, its end protocol's pid and
+// end records, and its checkouts' directory ([Paths.OpenCodeCheckouts]).
 func loginFree(p executor.Paths, name string) bool {
 	for _, path := range []string{p.OpenCodeConfig(), p.SessionRecord(), p.SessionCapture(), p.SessionDigests(),
-		p.JobScript(), p.JobEnded()} {
+		p.JobScript(), p.JobEnded(), p.OpenCodeCheckouts()} {
 		if name == filepath.Base(path) {
 			return true
 		}
