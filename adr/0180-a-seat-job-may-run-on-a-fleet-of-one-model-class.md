@@ -2,7 +2,13 @@
 
 - **Status:** accepted
 - **Authority:** `docs/concepts/llm-fleets.md`
-- **Enforced-by:** `internal/config.TestAFleetReferenceIsAcceptedWhereOneKeyIsAndRefusedInAList`, `internal/config.TestEveryFleetRuleRefusesWhereWrittenInItsWords`, `internal/config.TestDefaultFleetIsSynthesisedAndNeverServedUnwritten`, `internal/config.TestAPinnedSeatIsUnchangedByFleets`, `internal/api/configapi.TestDefaultFleetCannotBeDeletedOrRenamed`, `internal/api/configapi.TestDefaultFleetIsWrittenOnlyOnceChanged`
+- **Enforced-by:**
+  - `internal/config.TestAFleetReferenceIsAcceptedWhereOneKeyIsAndRefusedInAList`
+  - `internal/config.TestEveryFleetRuleRefusesWhereWrittenInItsWords`
+  - `internal/config.TestDefaultFleetIsSynthesisedAndNeverServedUnwritten`
+  - `internal/config.TestAPinnedSeatIsUnchangedByFleets`
+  - `internal/api/configapi.TestDefaultFleetCannotBeDeletedOrRenamed`
+  - `internal/api/configapi.TestDefaultFleetIsWrittenOnlyOnceChanged`
 - **Tag-status:** unreleased
 
 ## The decision

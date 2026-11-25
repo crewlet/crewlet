@@ -2,7 +2,16 @@
 
 - **Status:** accepted
 - **Authority:** `internal/config`
-- **Enforced-by:** `internal/config.TestANodeHoldsTheCompanysSignInPolicyWithinItsLimits`, `internal/config.TestAWritePastThisNodesSignInLimitIsRefused`, `internal/config.TestAWeakeningSignInChangeWarnsAndAStrengtheningOneDoesNot`, `internal/api/configapi.TestASignInValuePastThisNodesLimitIsRefusedAtItsDoor`, `internal/api/configapi.TestAWeakeningSignInChangeIsWarnedOfIt`, `internal/iam/session.TestALoweredLifetimeEndsALiveSessionAndARaisedOneStretchesNone`, `internal/iam/session.TestALoweredIdleLimitEndsALiveSessionAndARaisedOneStretchesNone`, `internal/api/authapi.TestASignInReadsTheCompanysPolicyAsItStandsThen`, `internal/api.TestTheSignInPolicyIsTheCompanysWithinThisNodesLimits`
+- **Enforced-by:**
+  - `internal/config.TestANodeHoldsTheCompanysSignInPolicyWithinItsLimits`
+  - `internal/config.TestAWritePastThisNodesSignInLimitIsRefused`
+  - `internal/config.TestAWeakeningSignInChangeWarnsAndAStrengtheningOneDoesNot`
+  - `internal/api/configapi.TestASignInValuePastThisNodesLimitIsRefusedAtItsDoor`
+  - `internal/api/configapi.TestAWeakeningSignInChangeIsWarnedOfIt`
+  - `internal/iam/session.TestALoweredLifetimeEndsALiveSessionAndARaisedOneStretchesNone`
+  - `internal/iam/session.TestALoweredIdleLimitEndsALiveSessionAndARaisedOneStretchesNone`
+  - `internal/api/authapi.TestASignInReadsTheCompanysPolicyAsItStandsThen`
+  - `internal/api.TestTheSignInPolicyIsTheCompanysWithinThisNodesLimits`
 - **Tag-status:** unreleased
 
 ## The decision

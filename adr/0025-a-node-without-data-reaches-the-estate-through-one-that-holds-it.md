@@ -2,7 +2,25 @@
 
 - **Status:** accepted
 - **Authority:** `internal/estate`
-- **Enforced-by:** `internal/e2e.TestASeatOnAStatelessNodeWritesThroughADataNode`, `internal/estate.TestADataNodeRunsNothingOfARequestItsBuildCannotReadWhole`, `internal/estate.TestARequestOneBuildCannotReadIsServedByAnother`, `internal/estate.TestARequestNoDataNodeCanReadWholeSaysWhatWouldServeIt`, `internal/estate.TestARefusalNeverHidesAWriteThatMayHaveLanded`, `internal/estate.TestEveryFieldAnOperationTakesLeavesTheWireAtItsZero`, `internal/estate.TestEveryZeroAMethodDecidesDropsNothingAReaderMisses`, `internal/estate.TestNoTypeAnOperationTakesDecodesAKeyAwayByItself`, `internal/estate.TestNoPointerAtAZeroCrossesWhereAReaderWouldMissIt`, `internal/estate.TestADateClearedThroughTheRouterReachesTheDataNodeAsAClear`, `internal/estate.TestAWriteHoldingTheZeroInstantIsRefusedBeforeItIsAskedFromEveryNode`, `internal/estate.TestAHomeThatCannotReadARequestWholePassesTheFill`, `internal/estate.TestARefusalMovesOnlyTheRequestsCarryingWhatItRefused`, `internal/estate.TestAnAnswerACallerWritesBackIsReadWholeOrRefused`, `internal/estate.TestACarriedReadIsReadWholeAndTheShownOneIsNot`, `internal/estate.TestAViewSavedAgainIsListedWholeAndTheStripShownIsNot`, `internal/estate.TestEveryAnswerReadWholeIsOneACallerCarriesIntoAnotherRequest`, `internal/engine.TestTheLogsAnswerIsReadAsWhatTheSandboxDoesNext`
+- **Enforced-by:**
+  - `internal/e2e.TestASeatOnAStatelessNodeWritesThroughADataNode`
+  - `internal/estate.TestADataNodeRunsNothingOfARequestItsBuildCannotReadWhole`
+  - `internal/estate.TestARequestOneBuildCannotReadIsServedByAnother`
+  - `internal/estate.TestARequestNoDataNodeCanReadWholeSaysWhatWouldServeIt`
+  - `internal/estate.TestARefusalNeverHidesAWriteThatMayHaveLanded`
+  - `internal/estate.TestEveryFieldAnOperationTakesLeavesTheWireAtItsZero`
+  - `internal/estate.TestEveryZeroAMethodDecidesDropsNothingAReaderMisses`
+  - `internal/estate.TestNoTypeAnOperationTakesDecodesAKeyAwayByItself`
+  - `internal/estate.TestNoPointerAtAZeroCrossesWhereAReaderWouldMissIt`
+  - `internal/estate.TestADateClearedThroughTheRouterReachesTheDataNodeAsAClear`
+  - `internal/estate.TestAWriteHoldingTheZeroInstantIsRefusedBeforeItIsAskedFromEveryNode`
+  - `internal/estate.TestAHomeThatCannotReadARequestWholePassesTheFill`
+  - `internal/estate.TestARefusalMovesOnlyTheRequestsCarryingWhatItRefused`
+  - `internal/estate.TestAnAnswerACallerWritesBackIsReadWholeOrRefused`
+  - `internal/estate.TestACarriedReadIsReadWholeAndTheShownOneIsNot`
+  - `internal/estate.TestAViewSavedAgainIsListedWholeAndTheStripShownIsNot`
+  - `internal/estate.TestEveryAnswerReadWholeIsOneACallerCarriesIntoAnotherRequest`
+  - `internal/engine.TestTheLogsAnswerIsReadAsWhatTheSandboxDoesNext`
 - **Tag-status:** unreleased
 
 ## The decision

@@ -2,7 +2,22 @@
 
 - **Status:** accepted
 - **Authority:** `internal/growth`
-- **Enforced-by:** `internal/delegated.TestTheGrowthActsAreNeverDelegated`, `internal/config.TestADelegateIsAnAgentThatCannotRequestWhatItDecides`, `internal/authz.TestAGrowthActIsAnsweredByAnAdministratorInPerson`, `internal/agent/builtin.TestAGrowthSpendOrAdminCallIsHeldForAnAdministrator`, `internal/agent/builtin.TestAnApprovedGrowthCallIsMadeOnlyOnWhatWasApproved`, `internal/agent/builtin.TestAGrowthWriteIsMadeOnlyWithinItsToolsClass`, `internal/engine.TestAGrowthActLapsesADayAfterItWasHeld`, `internal/api/mcpapi.TestALapsedGrowthActTakesDenyAlone`, `internal/sandbox.TestALapsedGrowthActIsNeverAllowed`, `internal/spendguard.TestTheTwinKeepsTheSpendContract`, `internal/spendguard.TestAnApplyReadsAndAppliesInsideTheLease`, `internal/agent/builtin.TestAHeldGrowthCallsAskIsRecordedOnceItIsHeld`, `internal/accessdomain.TestAGrowthActHoldsOneAnswerAndOneOutcome`, `internal/googlegrowth.TestTwoAppliesOnOneTargetMakeOneCall`, `internal/googlegrowth.TestAHeldCallsAnswerIsRecordedBeforeItActs`
+- **Enforced-by:**
+  - `internal/delegated.TestTheGrowthActsAreNeverDelegated`
+  - `internal/config.TestADelegateIsAnAgentThatCannotRequestWhatItDecides`
+  - `internal/authz.TestAGrowthActIsAnsweredByAnAdministratorInPerson`
+  - `internal/agent/builtin.TestAGrowthSpendOrAdminCallIsHeldForAnAdministrator`
+  - `internal/agent/builtin.TestAnApprovedGrowthCallIsMadeOnlyOnWhatWasApproved`
+  - `internal/agent/builtin.TestAGrowthWriteIsMadeOnlyWithinItsToolsClass`
+  - `internal/engine.TestAGrowthActLapsesADayAfterItWasHeld`
+  - `internal/api/mcpapi.TestALapsedGrowthActTakesDenyAlone`
+  - `internal/sandbox.TestALapsedGrowthActIsNeverAllowed`
+  - `internal/spendguard.TestTheTwinKeepsTheSpendContract`
+  - `internal/spendguard.TestAnApplyReadsAndAppliesInsideTheLease`
+  - `internal/agent/builtin.TestAHeldGrowthCallsAskIsRecordedOnceItIsHeld`
+  - `internal/accessdomain.TestAGrowthActHoldsOneAnswerAndOneOutcome`
+  - `internal/googlegrowth.TestTwoAppliesOnOneTargetMakeOneCall`
+  - `internal/googlegrowth.TestAHeldCallsAnswerIsRecordedBeforeItActs`
 - **Tag-status:** unreleased
 
 ## The decision

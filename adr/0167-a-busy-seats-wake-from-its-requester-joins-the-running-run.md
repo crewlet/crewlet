@@ -2,7 +2,28 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestOnlyTheRunsRequesterJoinsItAndOnlyAboutItsWork`, `internal/engine.TestARequestersFollowUpJoinsTheRunOnceAndItsDeliveryIsSkippedNamingTheTurn`, `internal/engine.TestAWakeTheRunReadBindsItsTurnAndReadsItsConversationThrough`, `internal/engine.TestAnUnreadOrRefusedWakeRunsAsATurnOfItsOwn`, `internal/engine.TestAWakeIsClaimedByTheKeysItsDeliveryIsDroppedBy`, `internal/engine.TestARouterLivesWhileItsSeatIsBusyAndEndsWithTheEngine`, `internal/engine.TestTheRoutersOutcomesAndRulesAreClosed`, `internal/sandbox.TestTheSeatsRouterIsToldWhenItsRunsHoldItAndWhenTheSeatGoes`, `internal/queue/memory.TestConformance`, `internal/queue/jetstream.TestConformance`, `internal/coord/kv.TestFleetContract`, `internal/usage.TestASeatsCodeDayIsStampedByWhatItCounts`, `internal/store.TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns`, `internal/engine.TestTheRequestersWakeAboutWhatTheRunWroteJoinsAndAnyoneElsesIsTriaged`, `internal/engine.TestAWakeIsAboutWhatARunWroteByExactIdentity`, `internal/engine.TestAWakeAboutARecordTheRunWroteReachesTheRunningRun`, `internal/sandbox.TestPendingStoreContract`, `internal/events/types.TestAWrittenSetHoldsEachRecordOnceAndDropsNothingAtItsBound`, `internal/agent/builtin.TestAWriteRecordsWhatItWroteOnceItLanded`, `internal/api/mcpbridge.TestABridgedCallRecordsWhatItCommitted`, `internal/chatlet.TestAReplyIsStampedWithTheConversationThePostRecords`
+- **Enforced-by:**
+  - `internal/engine.TestOnlyTheRunsRequesterJoinsItAndOnlyAboutItsWork`
+  - `internal/engine.TestARequestersFollowUpJoinsTheRunOnceAndItsDeliveryIsSkippedNamingTheTurn`
+  - `internal/engine.TestAWakeTheRunReadBindsItsTurnAndReadsItsConversationThrough`
+  - `internal/engine.TestAnUnreadOrRefusedWakeRunsAsATurnOfItsOwn`
+  - `internal/engine.TestAWakeIsClaimedByTheKeysItsDeliveryIsDroppedBy`
+  - `internal/engine.TestARouterLivesWhileItsSeatIsBusyAndEndsWithTheEngine`
+  - `internal/engine.TestTheRoutersOutcomesAndRulesAreClosed`
+  - `internal/sandbox.TestTheSeatsRouterIsToldWhenItsRunsHoldItAndWhenTheSeatGoes`
+  - `internal/queue/memory.TestConformance`
+  - `internal/queue/jetstream.TestConformance`
+  - `internal/coord/kv.TestFleetContract`
+  - `internal/usage.TestASeatsCodeDayIsStampedByWhatItCounts`
+  - `internal/store.TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns`
+  - `internal/engine.TestTheRequestersWakeAboutWhatTheRunWroteJoinsAndAnyoneElsesIsTriaged`
+  - `internal/engine.TestAWakeIsAboutWhatARunWroteByExactIdentity`
+  - `internal/engine.TestAWakeAboutARecordTheRunWroteReachesTheRunningRun`
+  - `internal/sandbox.TestPendingStoreContract`
+  - `internal/events/types.TestAWrittenSetHoldsEachRecordOnceAndDropsNothingAtItsBound`
+  - `internal/agent/builtin.TestAWriteRecordsWhatItWroteOnceItLanded`
+  - `internal/api/mcpbridge.TestABridgedCallRecordsWhatItCommitted`
+  - `internal/chatlet.TestAReplyIsStampedWithTheConversationThePostRecords`
 - **Cost-when-tried:** before this record every wake reaching a seat whose executor run held it waited for the run to end, the requester's own follow-up ("use staging, not production") included, so a run of an hour worked the whole hour on what the follow-up corrected and a second turn then started over the result.
 - **Tag-status:** unreleased
 

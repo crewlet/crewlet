@@ -2,7 +2,11 @@
 
 - **Status:** accepted
 - **Authority:** `internal/artifactdata`
-- **Enforced-by:** `internal/artifactdata.TestAConditionalWriteIsSkippedIdenticallyOnEveryNode`, `internal/artifactdata.TestTheWriterReadsItsVerdictFromItsOwnRows`, `internal/artifactdata.TestTheApplierDecidesFromTheStampedAuthorityAlone`, `internal/artifactdata.TestTheApplierReadsNoOtherDomain`
+- **Enforced-by:**
+  - `internal/artifactdata.TestAConditionalWriteIsSkippedIdenticallyOnEveryNode`
+  - `internal/artifactdata.TestTheWriterReadsItsVerdictFromItsOwnRows`
+  - `internal/artifactdata.TestTheApplierDecidesFromTheStampedAuthorityAlone`
+  - `internal/artifactdata.TestTheApplierReadsNoOtherDomain`
 - **Tag-status:** unreleased
 
 ## The decision

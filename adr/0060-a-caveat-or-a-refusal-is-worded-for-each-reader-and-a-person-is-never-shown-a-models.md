@@ -2,7 +2,33 @@
 
 - **Status:** accepted
 - **Authority:** `internal/caveat`
-- **Enforced-by:** `internal/caveat.TestEveryCaveatAPersonCanBeShownIsWordedForAPerson`, `internal/caveat.TestTheWalkCoversEveryConstructorAndCode`, `internal/caveat.TestEveryCodeStatesWhatItAsksOfAPerson`, `internal/caveat.TestTheDashboardReadsWhatACaveatAsks`, `internal/agent/builtin.TestOnlyTheCaveatHelperWritesAToolsWarnings`, `internal/api/operator.TestAnActAnswersCaveatsInAPersonsWordsAndNeverTheModels`, `internal/caveat.TestEveryRefusalAPersonCanBeShownIsWordedForAPerson`, `internal/caveat.TestTheCheckRefusesAModelsRefusal`, `internal/caveat.TestARefusalsWordsRideItsError`, `internal/api/operator.TestEveryRefusalTheActRouteAnswersIsWordedForAPerson`, `internal/api/operator.TestAnActRefusalIsAPersonsWordsOrItsCodes`, `internal/estate.TestARefusalsPersonWordsCrossTheRouter`, `internal/caveat.TestNoTextBecomesAPersonsWordsByBeingDecoded`, `internal/caveat.TestOnlyTheEstateRouterRebuildsAPeersWords`, `internal/caveat.TestACaveatCrossesTheEstateRouterWhole`, `internal/api/operator.TestEveryAnswerTheActRouteGivesIsWordedForAPerson`, `internal/api/workapi.TestTheWorkSurfaceAnswersAPersonInAPersonsWords`, `internal/agent/builtin.TestEveryAnswerAPersonCanBeGivenIsWordedForAPerson`, `internal/api.TestARefusedAssistedWriteTellsTheModelAndNeverTheAnswer`, `internal/caveat.TestEveryRemedyNamesAKnownSetting`, `internal/caveat.TestARefusalCrossesToAPeerWithItsRemedy`, `internal/caveat.TestTheDashboardKnowsEverySettingARemedyNames`, `internal/caveat.TestTheDashboardReadsARemedyAsTheEngineWritesIt`, `internal/assistant.TestASpentBudgetNamesTheCeilingToRaise`, `internal/api/assistantapi.TestABudgetRefusalIsATooManyRequestsWithItsReset`, `internal/api/operator.TestASpentBudgetAnswersBudgetExhausted`, and the compile errors a caveat or a refusal phrasing built outside its package meets (their fields are unexported), and a free sentence handed to `operator.Fail` meets (it takes a `caveat.Refusal`)
+- **Enforced-by:**
+  - `internal/caveat.TestEveryCaveatAPersonCanBeShownIsWordedForAPerson`
+  - `internal/caveat.TestTheWalkCoversEveryConstructorAndCode`
+  - `internal/caveat.TestEveryCodeStatesWhatItAsksOfAPerson`
+  - `internal/caveat.TestTheDashboardReadsWhatACaveatAsks`
+  - `internal/agent/builtin.TestOnlyTheCaveatHelperWritesAToolsWarnings`
+  - `internal/api/operator.TestAnActAnswersCaveatsInAPersonsWordsAndNeverTheModels`
+  - `internal/caveat.TestEveryRefusalAPersonCanBeShownIsWordedForAPerson`
+  - `internal/caveat.TestTheCheckRefusesAModelsRefusal`
+  - `internal/caveat.TestARefusalsWordsRideItsError`
+  - `internal/api/operator.TestEveryRefusalTheActRouteAnswersIsWordedForAPerson`
+  - `internal/api/operator.TestAnActRefusalIsAPersonsWordsOrItsCodes`
+  - `internal/estate.TestARefusalsPersonWordsCrossTheRouter`
+  - `internal/caveat.TestNoTextBecomesAPersonsWordsByBeingDecoded`
+  - `internal/caveat.TestOnlyTheEstateRouterRebuildsAPeersWords`
+  - `internal/caveat.TestACaveatCrossesTheEstateRouterWhole`
+  - `internal/api/operator.TestEveryAnswerTheActRouteGivesIsWordedForAPerson`
+  - `internal/api/workapi.TestTheWorkSurfaceAnswersAPersonInAPersonsWords`
+  - `internal/agent/builtin.TestEveryAnswerAPersonCanBeGivenIsWordedForAPerson`
+  - `internal/api.TestARefusedAssistedWriteTellsTheModelAndNeverTheAnswer`
+  - `internal/caveat.TestEveryRemedyNamesAKnownSetting`
+  - `internal/caveat.TestARefusalCrossesToAPeerWithItsRemedy`
+  - `internal/caveat.TestTheDashboardKnowsEverySettingARemedyNames`
+  - `internal/caveat.TestTheDashboardReadsARemedyAsTheEngineWritesIt`
+  - `internal/assistant.TestASpentBudgetNamesTheCeilingToRaise`
+  - `internal/api/assistantapi.TestABudgetRefusalIsATooManyRequestsWithItsReset`
+  - `internal/api/operator.TestASpentBudgetAnswersBudgetExhausted`, and the compile errors a caveat or a refusal phrasing built outside its package meets (their fields are unexported), and a free sentence handed to `operator.Fail` meets (it takes a `caveat.Refusal`)
 - **Cost-when-tried:** answering a decision in the dashboard Inbox left a warning toast that never went away, telling a person "backend-engineer is woken by this but is not asked to answer it. Use ask: backend-engineer, or @-mention them, if you are expecting a reply." The sentence was `comment_on_work_item`'s `warnings`, written for a model, and `useAct` showed every receipt warning verbatim as a sticky toast. The same path carried a project's default-assignee advice naming `write_project` and `default_assignee`, internal task ids from a retried create, and a near-duplicate tag sentence appended into the `labels_created` list of slugs. PR #408 fixed the one branch that fired on an answer, and the class stayed open. Refusals took the same route: `operator.Fail` put the tool's sentence in `detail` and the dashboard's `RefusalNote` drew it, so a decision answered with a choice the question did not offer was refused with "comment_on_work_item was refused: … change the argument this names (`answers`, or `choice`) and comment again".
 - **Tag-status:** unreleased
 
