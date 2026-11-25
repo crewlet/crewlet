@@ -283,7 +283,7 @@ func TestTheVerdictTakesTheKernelThenTheRoutesThenTheLine(t *testing.T) {
 		"the engine's own connection failed": {o: outcome{engine: testKernel, stdout: clean,
 			undrained: errors.New("refused")}, want: unchecked("its own listener to finish the check: refused")},
 		"silent past the bound": {o: outcome{engine: testKernel, timedOut: true, exit: 124},
-			want: unchecked("answered nothing within 30 s")},
+			want: unchecked("answered nothing within 30s")},
 		"an exec that could not run": {o: outcome{engine: testKernel, runErr: errors.New("no such container")},
 			want: unchecked("could not run: no such container")},
 		"a non-zero exit with no line": {o: outcome{engine: testKernel, exit: 137, stdout: "\n"},
@@ -292,7 +292,7 @@ func TestTheVerdictTakesTheKernelThenTheRoutesThenTheLine(t *testing.T) {
 		"a line off the grammar": {o: outcome{engine: testKernel, stdout: line(string(testKernel), "maybe")},
 			want: unchecked("a line this engine does not read")},
 		"held": {o: outcome{engine: testKernel, stdout: line(string(testKernel), "held")},
-			want: unchecked("held open without an answer for 5 s")},
+			want: unchecked("held open without an answer for 5s")},
 		"too many": {o: outcome{engine: testKernel, stdout: line(string(testKernel), "too_many")},
 			want: unchecked("more than 64 addresses")},
 		"unreadable tables": {o: outcome{engine: testKernel, stdout: line(string(testKernel), "unreadable")},
@@ -604,8 +604,8 @@ func TestACheckThatAnswersNothingIsCutAtItsBound(t *testing.T) {
 				return "", 124, nil
 			},
 		})
-		if err != nil || v.Off || v.Cause != browser.CauseUnchecked || !strings.Contains(v.Detail, "within 30 s") {
-			t.Errorf("the verdict is %+v (%v), want unchecked, answered nothing within 30 s", v, err)
+		if err != nil || v.Off || v.Cause != browser.CauseUnchecked || !strings.Contains(v.Detail, "within 30s") {
+			t.Errorf("the verdict is %+v (%v), want unchecked, answered nothing within 30s", v, err)
 		}
 		if took != CheckTimeout || capped != CheckTimeout {
 			t.Errorf("the box was cut after %v with a cap of %v, want exactly %v for both", took, capped, CheckTimeout)
