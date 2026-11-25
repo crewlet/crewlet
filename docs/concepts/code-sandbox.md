@@ -3638,8 +3638,7 @@ of it came from a chunk that authenticated.
 
 **A node decodes two transcripts at a time.** One read holds no line and no
 message, only a value to 2 MiB, which a longer one streams past: at most 32 MiB
-measured (Cursor Agent's apart: its reader still holds each line whole, up to
-166 MiB), a value streamed at any length or one held just within the bound,
+measured, a value streamed at any length or one held just within the bound,
 where holding costs no more than streaming (held, a value is redacted whole,
 which holds about thirteen times a value of `pwd=x` lines, whose redaction
 lengthens most). Its time is the redaction's, and what harnesses and ordinary
