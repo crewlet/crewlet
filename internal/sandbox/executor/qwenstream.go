@@ -111,7 +111,9 @@ type qwenCall struct {
 // THE ANSWER IS THE LAST REPLY'S TEXT: the message chunks since the last call
 // or note. A thought is never the answer nor in the transcript, as Claude
 // Code's thinking is not. A subagent's update (`_meta.parentToolCallId`) is
-// passed over; the run denies the agent tool, so none is expected.
+// passed over but for its request, which the run's count and spend take: the
+// run denies the agent tool (measured on 0.28.4: none offered), so none is
+// expected, and one a repository's settings let through is still the run's.
 type qwenEvents struct {
 	transcript transcriptLines
 
@@ -210,14 +212,17 @@ func (d *qwenEvents) update(raw json.RawMessage) {
 	if wireObject(u.Meta) && wireAlias(u.Meta, &meta) != nil {
 		meta = qwenMetaWire{}
 	}
+	// EVERY REQUEST COUNTS, a subagent's too ([qwenEvents.Requests]); the rest of
+	// a subagent's update is its own thread, never the run's answer.
+	chunk := looseString(u.SessionUpdate) == "agent_message_chunk"
+	if chunk && wireObject(meta.Usage) {
+		d.countRequest(meta.Usage)
+	}
 	if looseString(meta.ParentToolCallID) != "" {
 		return
 	}
 	switch looseString(u.SessionUpdate) {
 	case "agent_message_chunk":
-		if wireObject(meta.Usage) {
-			d.countRequest(meta.Usage)
-		}
 		var content struct {
 			Text json.RawMessage `json:"text"`
 		}
@@ -343,8 +348,9 @@ func (d *qwenEvents) reportedWindow() int64 { return d.window }
 // Ended implements [Decoder]: the stream's end line.
 func (d *qwenEvents) Ended() bool { return d.endSaid }
 
-// Requests implements [Decoder]: the usage the driver writes for each
-// request.
+// Requests implements [Decoder]: the usage the driver writes for each request,
+// a subagent's included. Measured on 0.28.4 against a stand-in: 31 for 31, and
+// a 429 and a 500 it retried wrote none of their own.
 func (d *qwenEvents) Requests() int { return d.requests }
 
 func (d *qwenEvents) Result() sandbox.Result {
