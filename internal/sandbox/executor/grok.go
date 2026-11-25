@@ -191,18 +191,20 @@ func grokScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	b.WriteString(`grokguard || { ` + strings.TrimSuffix(grokRestoreConfig(paths), "\n") + "; exit 1; }\n")
 	// THE CHECKOUTS BELOW THE START DIRECTORY ([grokCheckoutHome]), and once
 	// grok has stopped, on a failure before and on a teardown's signal,
-	// ~/.grok/AGENTS.md back, the copies gone and what a firing left out
-	// said, each whatever came of the other ([everyStep]); a run killed
-	// outright leaves the put-back to the next run's clear ([homeKeeper]).
+	// ~/.grok/AGENTS.md back, the copies gone, what a firing left out said
+	// and the box's own settings back ([grokRestoreConfig]), each whatever
+	// came of the others ([everyStep]); a run killed outright leaves the
+	// put-back to the next run's clear ([homeKeeper]) and the settings to the
+	// next run, which starts from the box's own kept copy.
 	home := grokCheckoutHome(paths)
-	line(`grokput() { %s; }`, everyStep(home.restore(), home.saySkipped()))
+	line(`grokput() { %s; }`, everyStep(home.restore(), home.saySkipped(),
+		strings.TrimSuffix(grokRestoreConfig(paths), "\n")))
 	line(`grokquit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; grokput; exit "$1"; }`)
 	line(`trap grokput EXIT; trap 'grokquit 143' TERM; trap 'grokquit 130' INT; trap 'grokquit 129' HUP`)
 	line(`mkdir -p %s || exit 1`, q(paths.GrokHome()))
 	b.WriteString(home.gate())
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	line(`grokput; trap - EXIT TERM INT HUP`)
-	b.WriteString(grokRestoreConfig(paths))
 	b.WriteString(grokMainRecord(paths))
 	b.WriteString(grokCapture(paths))
 	line(`exit "$code"`)
