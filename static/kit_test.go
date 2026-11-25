@@ -168,6 +168,7 @@ var shippedKits = []string{
 	"0.188.1",
 	"0.188.2",
 	"0.189.0",
+	"0.190.0",
 }
 
 // TestEveryShippedKitVersionStaysEmbedded: each version in the ledger is still
