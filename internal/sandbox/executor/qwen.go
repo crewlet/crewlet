@@ -119,7 +119,7 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`if [ "$k" = yes ]; then m=load; else m=new; fi`)
 	b.WriteString(launchHarness("node "+q(paths.QwenHelper())+" run "+q(paths.QwenHelperConfig())+` "$s" "$m"`, paths))
 	line(qwenLocate(paths))
-	b.WriteString(chatPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()}, paths.QwenDir()))
+	b.WriteString(chatCapture(paths, paths.QwenDir(), QwenCode{}))
 	line(`exit "$code"`)
 	return b.String()
 }

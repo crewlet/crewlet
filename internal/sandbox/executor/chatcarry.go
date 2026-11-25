@@ -139,15 +139,31 @@ func chatSessionGate(session Session, paths Paths, g chatGate) string {
 const tornCut = `torn() { if [ -s "$1" ] && [ "$(tail -c 1 "$1" | wc -l)" -eq 0 ]; then cl=$(wc -l < "$1"); ` +
 	`if [ "$cl" -gt 0 ] 2> /dev/null; then head -n $cl "$1" > "$1.cut" && mv -f "$1.cut" "$1"; fi; fi; }`
 
-// chatPack is the pack of the session "$s" names whose chat file is cm,
+// chatCapture is the part of a run's script that packs its session once its
+// harness has exited ([chatPack]), trimmed by the box's bare release
+// ([trimRelVar], read off v as [releaseOf] reads it) and its run's start
+// ([chatRunStartFrom]).
+func chatCapture(paths Paths, cfg string, t trimmer) string {
+	return bareReleaseShell(trimRelVar) + chatPack(paths, packAt{staged: paths.SessionStaging(),
+		dest: paths.SessionCapture()}, cfg, t)
+}
+
+// chatPack is ONE PACK of t's chat file, the run's end's, a pack on demand's
+// and a save's, at the bounds a take keeps ([trimAt]): [chatPackAt].
+func chatPack(paths Paths, at packAt, cfg string, t trimmer) string {
+	return chatPackAt(paths, at, cfg, t, trimAt)
+}
+
+// chatPackAt is the pack of the session "$s" names whose chat file is cm,
 // relative to cfg (the shell has set cm, "" for none): one gzipped tar of
 // that file alone, made in at.staged, its digest recorded ([packDigest]) and
-// moved over at.dest whole, packed set where it was. A pack beside a harness
-// that may still be writing is held to [claudeHeldTar]'s rule; one made once
-// the harness is gone takes GNU tar's "file changed as we read it" as whole,
-// the one writer left having outlived the harness. Nothing to pack is said
+// moved over at.dest whole, packed set where it was, and its trim past trim
+// said beside it ([trimTar], [trimMarked]). A pack beside a harness that may
+// still be writing is held to [claudeHeldTar]'s rule; one made once the
+// harness is gone takes GNU tar's "file changed as we read it" as whole, the
+// one writer left having outlived the harness. Nothing to pack is said
 // nowhere; a failed pack is said on the error stream, never the run's status.
-func chatPack(paths Paths, at packAt, cfg string) string {
+func chatPackAt(paths Paths, at packAt, cfg string, t trimmer, trim trimPoints) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
@@ -159,9 +175,10 @@ func chatPack(paths Paths, at packAt, cfg string) string {
 	if at.working {
 		tar = claudeHeldTar(cfg, at.staged)
 	}
-	line(`    rm -rf %s; if mkdir -p %s && %s && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(at.staged), q(at.staged), tar, packDigest(paths, "s", at.staged), q(at.staged+"/capture"), q(at.dest),
-		q(at.staged+"/error"))
+	tar = trimTar(t, trim, q(cfg), `"$cm"`, at.staged, tar)
+	line(`    rm -rf %s; if mkdir -p %s && %s && %s && %s && mv -f %s %s; then packed=1; %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(at.staged), q(at.staged), tar, packDigest(paths, "s", at.staged), trimUnmark(at.dest),
+		q(at.staged+"/capture"), q(at.dest), trimMarked(at.dest), q(at.staged+"/error"))
 	line(`    rm -rf %s`, q(at.staged))
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)
@@ -171,12 +188,13 @@ func chatPack(paths Paths, at packAt, cfg string) string {
 }
 
 // chatOnDemand is a pack the engine makes of session outside the run's own
-// script, at at, its chat file found by locate (which sets cm): [packNothing]
-// where the box holds no chat file of it, [packFailed] where no archive was made.
-func chatOnDemand(paths Paths, session string, at packAt, cfg, locate string) string {
+// script, at at, its chat file found by locate (which sets cm) and trimmed as
+// t's ([chatPack]): [packNothing] where the box holds no chat file of it,
+// [packFailed] where no archive was made.
+func chatOnDemand(paths Paths, session string, at packAt, cfg, locate string, t trimmer) string {
 	return "s=" + shellword.Quote(session) + " packed=\n" + locate + "\n" +
 		fmt.Sprintf("[ -n \"$cm\" ] || exit %d\n", packNothing) +
-		chatPack(paths, at, cfg) +
+		chatPack(paths, at, cfg, t) +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
 
