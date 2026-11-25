@@ -235,13 +235,16 @@ class Run {
       profile: f("profile"),
       output: f("output"),
       artifacts: f("artifacts"),
-      sockets: { browser: f(BROWSER_SOCKET) },
+      sockets: { browser: f(BROWSER_SOCKET), relay: f(RELAY_SOCKET) },
       log: f("supervisor.log"),
       launch_timeout_ms: this.config.launch_timeout_ms,
       relaunch: this.config.relaunch,
       stop_grace_ms: this.config.stop_grace_ms,
       hello_ms: this.config.hello_ms,
       mcp: this.config.mcp,
+      frames: this.config.frames,
+      state: this.config.state,
+      relay: { header_bytes: this.config.relay.header_bytes },
     }
     const env = { ...this.childEnv }
     if (choice.route === "channel" && choice.browsers_path !== undefined) env.PLAYWRIGHT_BROWSERS_PATH = choice.browsers_path

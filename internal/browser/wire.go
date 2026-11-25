@@ -65,11 +65,11 @@ const (
 	RelayWiringVersion = 1
 )
 
-// jpegHeaderBytes is how far into a frame image/jpeg reads its header: the
-// most one marker segment takes, so an encoder's tables and one segment of
-// metadata fit before the frame header, and a box can make the check read no
-// more.
-const jpegHeaderBytes = 64 << 10
+// JPEGHeaderBytes is how far into a frame image/jpeg reads its header, here
+// and in the box, which drops a frame whose header lies further: the most one
+// marker segment takes, so an encoder's tables and one segment of metadata
+// fit before the frame header, and a box can make the check read no more.
+const JPEGHeaderBytes = 64 << 10
 
 // wireVersion is the shape of every message this build reads: a later one is
 // refused, never read short of what it says.
@@ -203,7 +203,7 @@ func ParseFrameMeta(header string, body int) (FrameMeta, error) {
 
 // CheckJPEG holds frame to the JPEG m names: it begins with a start of image
 // and ends with an end of image, and image/jpeg reads its header within its
-// first jpegHeaderBytes (a baseline, extended or progressive frame), why
+// first JPEGHeaderBytes (a baseline, extended or progressive frame), why
 // not_jpeg where any of that fails; and that header's size is m's, why
 // dimensions where it is not. It reads the markers up to the frame header and
 // decodes no pixel.
@@ -211,9 +211,9 @@ func CheckJPEG(frame []byte, m FrameMeta) error {
 	if !bytes.HasPrefix(frame, []byte{0xff, 0xd8}) || !bytes.HasSuffix(frame, []byte{0xff, 0xd9}) {
 		return refuse(WhyNotJPEG, "the frame does not begin and end as a JPEG")
 	}
-	cfg, err := jpeg.DecodeConfig(bytes.NewReader(frame[:min(len(frame), jpegHeaderBytes)]))
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(frame[:min(len(frame), JPEGHeaderBytes)]))
 	if err != nil {
-		return refuse(WhyNotJPEG, "no JPEG frame header image/jpeg reads within the first %d bytes", jpegHeaderBytes)
+		return refuse(WhyNotJPEG, "no JPEG frame header image/jpeg reads within the first %d bytes", JPEGHeaderBytes)
 	}
 	if cfg.Width != m.Width || cfg.Height != m.Height {
 		return refuse(WhyDimensions, "the JPEG is %d by %d, and its metadata says %d by %d", cfg.Width, cfg.Height,

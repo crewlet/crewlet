@@ -15,6 +15,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/browser/boxhelper"
+	"github.com/crewlet/crewlet/internal/browser/boxhelper/boxhelpertest"
+	"github.com/crewlet/crewlet/internal/browser/boxhelper/live"
 )
 
 // recorder is a box that keeps every file written into it, in order, and
@@ -42,18 +44,18 @@ func (r *recorder) WriteFile(_ context.Context, path string, content []byte) err
 	return nil
 }
 
-// THE BOX IS WRITTEN THE EMBEDDED HELPER, THEN A CONFIG NAMING IT: Write puts
-// every module of Files into the box's .crewlet/browser-box in Files' order,
-// then the committed manifest and lock as tree-package.json and
-// tree-package-lock.json, byte for byte, and config.json last, naming the
-// helper's Version, the release, the lock's digest, the installed digest, the
-// floors, the launch's sandbox, and bounds that nest: npm's fetches in the
-// install's, a launch in the supervisor's wait, both in ensure's deadline, and
-// that under EnsureTimeout and a lock's takeover.
+// THE BOX IS WRITTEN THE EMBEDDED HELPER, THEN A CONFIG NAMING IT: Files in
+// order into .crewlet/browser-box, the committed manifest and lock as
+// tree-package.json and tree-package-lock.json, then config.json naming the
+// Version, release, digests, floors, sandbox and the live view's blocks, each
+// its constant's, and bounds that nest: npm's fetches in the install's, a
+// launch in the supervisor's wait, both in ensure's deadline, under
+// EnsureTimeout and a takeover; a quiet capture no sooner than a watch slot;
+// a state within a relay.sock header; the oversize capture smaller.
 //
 // Mutations, each red: config.json first; the digest over the lock alone; the
 // lock as tree-package.json; npm_floor from MinNodeMajor; a 30 s fetch
-// timeout; an ensure deadline of EnsureTimeout; the sandbox always required.
+// timeout; ensure's deadline EnsureTimeout; quiet_ms a literal 50.
 func TestTheBoxIsWrittenTheEmbeddedHelperThenAConfigNamingIt(t *testing.T) {
 	t.Parallel()
 	const home = "/home/user"
@@ -143,6 +145,54 @@ func TestTheBoxIsWrittenTheEmbeddedHelperThenAConfigNamingIt(t *testing.T) {
 			"the engine's bound, and a lock is taken over only once a whole ensure is past it", deadline, takeover,
 			engine)
 	}
+
+	frames, _ := config["frames"].(map[string]any)
+	state, _ := config["state"].(map[string]any)
+	relay, _ := config["relay"].(map[string]any)
+	for block, want := range map[string]map[string]any{
+		"frames": {"quality": browser.FrameQuality, "max_width": browser.MaxFrameWidth,
+			"max_height": browser.MaxFrameHeight, "max_bytes": browser.MaxFrameBytes,
+			"meta_bytes": browser.MaxFrameMetaBytes, "jpeg_header_bytes": browser.JPEGHeaderBytes,
+			"device_max": browser.MaxDeviceSize, "scale_min": browser.MinPageScale, "scale_max": browser.MaxPageScale,
+			"watch_fps": browser.WatchFPS, "flow_major": live.ScreencastFlowMajor, "quiet_ms": live.QuietMS,
+			"oversize_quality": live.OversizeQuality, "oversize_scale": live.OversizeScale},
+		"state": {"max_bytes": browser.MaxStateBytes, "max_tabs": browser.MaxTabs,
+			"title_chars": browser.MaxTitleChars, "url_bytes": browser.MaxURLBytes, "title_ms": live.TitleMS},
+		"relay": {"header_bytes": live.MaxHeaderBytes},
+	} {
+		got, _ := config[block].(map[string]any)
+		for key, v := range want {
+			if f, ok := got[key].(float64); !ok || f != toFloat(v) {
+				t.Errorf("config.json's %s.%s is %v, want %v, its constant's", block, key, got[key], v)
+			}
+		}
+		if len(got) != len(want) {
+			t.Errorf("config.json's %s holds %d keys, want the %d its constants name", block, len(got), len(want))
+		}
+	}
+	if slot := 1000 / count(frames, "watch_fps"); count(frames, "quiet_ms") < slot {
+		t.Errorf("frames.quiet_ms %d is under one watch slot, %d ms: a capture would race the screencast's own last "+
+			"frame", count(frames, "quiet_ms"), slot)
+	}
+	if header := count(relay, "header_bytes"); header <= count(state, "max_bytes") || header < count(frames, "meta_bytes") {
+		t.Errorf("relay.header_bytes %d holds no state of %d bytes with its record's own fields, or no frame's "+
+			"metadata", header, count(state, "max_bytes"))
+	}
+	if count(frames, "oversize_quality") >= count(frames, "quality") || toFloat(frames["oversize_scale"]) >= 1 {
+		t.Errorf("the oversize capture is at quality %v and scale %v: a frame past its bound is replaced by a "+
+			"smaller one", frames["oversize_quality"], frames["oversize_scale"])
+	}
+}
+
+// toFloat is a constant as encoding/json decodes it.
+func toFloat(v any) float64 {
+	switch n := v.(type) {
+	case int:
+		return float64(n)
+	case float64:
+		return n
+	}
+	return math.NaN()
 }
 
 // A WRITE THE BOX REFUSES REACHES THE CALLER AS ITSELF: whichever file of
@@ -189,4 +239,65 @@ func TestASandboxNobodyResolvedIsRefusedNeverReadAsEither(t *testing.T) {
 				"nothing written", sandbox, err, box.paths)
 		}
 	}
+}
+
+// A CONFIG OF ANOTHER LIVE SHAPE IS REFUSED WHOLE: readConfig refuses a
+// config.json whose frames, state or relay block is missing, or holds a key
+// missing, of another type, or past its range, naming the key, so a box
+// never runs its live view on a bound it guessed; the engine's own is read.
+// On each Node, whose JSON and numbers the helper reads them with.
+//
+// Mutation: read frames without holding it to its shape.
+func TestAConfigOfAnotherLiveShapeIsRefusedWhole(t *testing.T) {
+	cases := []struct {
+		block, key string
+		value      any // nil leaves the key out
+	}{
+		{"frames", "", nil}, {"state", "", nil}, {"relay", "", nil},
+		{"frames", "quality", 0}, {"frames", "quality", 101}, {"frames", "quality", "70"},
+		{"frames", "max_width", 0}, {"frames", "max_height", nil}, {"frames", "max_bytes", 0},
+		{"frames", "meta_bytes", -1}, {"frames", "jpeg_header_bytes", 3}, {"frames", "device_max", 0},
+		{"frames", "scale_min", 0}, {"frames", "scale_max", 0.05}, {"frames", "watch_fps", 0},
+		{"frames", "watch_fps", 61}, {"frames", "flow_major", 0}, {"frames", "quiet_ms", 0},
+		{"frames", "oversize_quality", nil}, {"frames", "oversize_scale", 1.5}, {"frames", "oversize_scale", 0},
+		{"state", "max_bytes", 0}, {"state", "max_tabs", 1001}, {"state", "title_chars", -1},
+		{"state", "url_bytes", nil}, {"state", "title_ms", 0}, {"relay", "header_bytes", 1},
+	}
+	boxhelpertest.EachNode(t, func(t *testing.T, env boxhelpertest.Env) {
+		box := boxhelpertest.Start(t, env, boxhelpertest.Options{})
+		probe := box.Probe(t)
+		type answer struct {
+			OK      bool   `json:"ok"`
+			Refused string `json:"refused"`
+		}
+		var read answer
+		probe.Do(map[string]any{"op": "config_read"}, &read)
+		if !read.OK {
+			t.Fatalf("the engine's own config.json was refused: %s", read.Refused)
+		}
+		engine := box.Config(t)
+		for _, c := range cases {
+			box.SetConfig(t, engine)
+			config := box.Config(t)
+			named := c.block
+			if c.key == "" {
+				delete(config, c.block)
+			} else {
+				named += "." + c.key
+				block := config[c.block].(map[string]any)
+				if c.value == nil {
+					delete(block, c.key)
+				} else {
+					block[c.key] = c.value
+				}
+			}
+			box.SetConfig(t, config)
+			read := answer{}
+			probe.Do(map[string]any{"op": "config_read"}, &read)
+			if read.OK || !strings.Contains(read.Refused, " has "+named+" ") {
+				t.Errorf("config.json with %s %v was answered %+v, want it refused naming %s", named, c.value, read, named)
+			}
+		}
+		box.SetConfig(t, engine)
+	})
 }

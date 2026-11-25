@@ -123,7 +123,11 @@
 // `docker exec -i`, with the same client; [Box.Shim] hands a case whose
 // subject is the bytes the shim's stdio itself. A case waits on what the box's
 // supervisor records ([Box.AwaitSupervisor]), never on the time, and reads
-// what still runs on a box's profile ([Box.Browsers]).
+// what still runs on a box's profile ([Box.Browsers]). It reaches the live
+// view as a job's relay does, over relay.sock ([Box.DialRelay]): it writes
+// the relay's records and reads the supervisor's, each kept in the order it
+// came and held to the socket's bounds, and acknowledges each frame as it
+// comes where it plays a relay whose posts are answered at once.
 //
 // # What a dead test binary leaves
 //

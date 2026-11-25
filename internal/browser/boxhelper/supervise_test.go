@@ -824,3 +824,33 @@ func TestTheSupervisorsBootOutlivesARelaunch(t *testing.T) {
 		t.Errorf("the next supervisor's boot is %q, and the last's %q: want sixteen hex digits drawn anew", next, boot)
 	}
 }
+
+// AN ATTACHMENT THAT FAILS COSTS THE MODEL NOTHING: a box whose relay.sock
+// path is a directory, where the live view cannot listen, still has ensure
+// answer ready, and a shim browses its browser; the supervisor logs the
+// attachment's failure and serves on. Newest alone: the rule is the
+// supervisor's, which no Node or pin moves.
+//
+// Mutation: fail the supervisor on an attachment's error.
+func TestAnAttachmentThatFailsCostsTheModelNothing(t *testing.T) {
+	base := pages(t, map[string]string{"/": "<title>Served</title><p>served"})
+	box := boxhelpertest.Start(t, boxhelpertest.Newest(t), boxhelpertest.Options{})
+	if err := os.Mkdir(filepath.Join(box.Folder, "relay.sock"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := box.Ensure(t); got.Verdict != browser.EnsureReady {
+		t.Fatalf("with relay.sock a directory, ensure answered %+v, want ready", got)
+	}
+	m := session(t, box, jobA)
+	r := m.Call("browser_navigate", map[string]any{"url": base + "/"})
+	if acted(t, r, "the navigate"); !strings.Contains(r.Text(), "Served") {
+		t.Errorf("with the live view failed, the model's navigate answered %q", r.Text())
+	}
+	log, err := os.ReadFile(filepath.Join(box.Folder, "supervisor.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), "attachment_failed") {
+		t.Errorf("supervisor.log records no failed attachment:\n%s", log)
+	}
+}

@@ -1,9 +1,10 @@
 // helper.mjs: the box helper's entry, `node helper.mjs <subcommand>`, run
 // from the helper's folder in a box. ensure prints its one line; supervise
-// runs the box's supervisor from the launch ensure wrote; stop ends that
-// supervisor and its browser; mcp is the shim, a job's browser server on
-// stdio. An unknown subcommand or flag exits 64 with one line on stderr.
-// internal/browser/boxhelper's package doc carries the argument.
+// runs the box's supervisor from the launch ensure wrote, the live view
+// (live.mjs) attached to it; stop ends that supervisor and its browser; mcp
+// is the shim, a job's browser server on stdio. An unknown subcommand or flag
+// exits 64 with one line on stderr. internal/browser/boxhelper's package doc
+// carries the argument.
 
 import path from "node:path"
 
@@ -50,7 +51,8 @@ switch (subcommand) {
       usage(`supervise takes --launch and launch.json's absolute path, and was given ${JSON.stringify(flags)}`)
     }
     const { run } = await import("./supervise.mjs")
-    await run(flags[1])
+    const { attachment } = await import("./live.mjs")
+    await run(flags[1], [attachment()])
     break
   }
   case "mcp": {

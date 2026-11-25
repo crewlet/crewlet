@@ -63,24 +63,27 @@
 //   {"op":"launch_failure","message":M,"name":N,"sandbox":S,"uid":U,"files":F}
 //                                          the reason and cause of a launch
 //                                          that failed with that error
-//   {"op":"supervise","launch":L,"reject_first":R,"fail":X,"umask":U,"live":A}
+//   {"op":"supervise","launch":L,"reject_first":R,"fail":X,"umask":U,"live":A,"at_once":O}
 //                                          the supervisor of launch.json L in
 //                                          this process, on the probe's own
 //                                          clock, its profile's lock read
 //                                          through X's file system, once it is
-//                                          ready or failed; with R an
-//                                          unhandled rejection is raised just
-//                                          before it starts, with U the
-//                                          probe's umask is U as it starts, as
-//                                          a looser starter's would be, and A
-//                                          names its attachments, in order:
-//                                          "record", a stand-in recording each
-//                                          call it is told; "fail", one whose
-//                                          attach throws; "fail_hooks", one
-//                                          whose every hook throws or rejects;
-//                                          "stop", one that stops the
-//                                          supervisor as it attaches, its
-//                                          close recorded
+//                                          ready or failed, or with O at once;
+//                                          with R an unhandled rejection is
+//                                          raised just before it starts, with
+//                                          U the probe's umask is U as it
+//                                          starts, as a looser starter's would
+//                                          be, and A names its attachments, in
+//                                          order: "record", a stand-in
+//                                          recording each call it is told;
+//                                          "fail", one whose attach throws;
+//                                          "fail_hooks", one whose every hook
+//                                          throws or rejects; "stop", one that
+//                                          stops the supervisor as it
+//                                          attaches, its close recorded;
+//                                          "hold", one whose attach waits for
+//                                          the release op; "live", the live
+//                                          view (live.mjs)
 //   {"op":"attached","until":U}            answer once "record" has recorded
 //                                          a call whose fields hold U's values
 //   {"op":"advance","ms":N}                move the clock N ms, every timer due
@@ -114,6 +117,51 @@
 //   {"op":"tools","launch":L}              the tools the pinned server lists
 //                                          under launch.json L's config, no
 //                                          edit between
+// The live view's (internal/browser/boxhelper/live), on the box's config:
+//   {"op":"config_read"}                   readConfig's answer for the box's
+//                                          config.json: ok, or its refusal
+//   {"op":"cdp"}                           the table: every command with its
+//                                          parameters, every event, the flow
+//                                          pair
+//   {"op":"cdp_send","method":M,"params":P}
+//                                          what send does with M and P on a
+//                                          session the probe plays: sent, or
+//                                          its refusal
+//   {"op":"jpeg_size","jpeg_b64":J}        the width and height jpeg.mjs reads
+//                                          of J, or none
+//   {"op":"tabs_listed","answer":A}        what a browser_tabs answer A lists
+//   {"op":"state_make","boot":B,"running":R,"tabs":T,"times":N}
+//                                          the document made of T N times over
+//                                          (default 1), the last, and its bytes
+//                                          as the relay posts it
+//   {"op":"tabs_overflow","next":N,"live":L}
+//                                          a registry whose next number is N
+//                                          numbers L pages, then one more: each
+//                                          id, and the boot before and after
+//   {"op":"screen","major":M,"fps":F,"shot_b64":S,"viewport":V}
+//                                          a screen on the probe's clock over
+//                                          a session the probe plays, at
+//                                          Chromium major M, its page in view
+//                                          and watched at F, its viewport V
+//                                          ({width, height}, 1280 by 800 by
+//                                          default), each capture answered
+//                                          with S
+//   {"op":"cdp_frame","jpeg_b64":J,"metadata":D,"session_id":I}
+//                                          the session sends the screen a
+//                                          frame
+//   {"op":"cdp_resized","times":N}         the session says, N times at
+//                                          once, the page resized
+//   {"op":"frame_ack","seq":N}             the relay acknowledges frame N
+//   {"op":"cdp_fail"}                      every later call of the session
+//                                          fails
+//   {"op":"page_closed"}                   no page is in view
+//   {"op":"watch","on":O,"fps":F}          the relay's watch moves
+//   {"op":"relay_gone"}                    the relay's connection closes
+// Each screen op answers what the screen did so far, in order, each by the
+// probe's own word for it, so a case spells no DevTools method: the session
+// told metrics, captured (a capture), started {params} (the screencast),
+// stopped, or chromium_ack {session_id}; forwarded {the frame's header and
+// its bytes}; logged {log}; and the rejections nobody handled in the probe.
 // A fault X is {method, errno, after, times, kill, uid, kill_holder,
 // kill_reading, blank_reading, hold}: every call of the file system's method
 // after the first `after`, or with times only that many, throws the error
@@ -148,6 +196,12 @@ const { holdFolder, takeLock } = await module("ensure.mjs")
 const { supervise } = await module("supervise.mjs")
 const { fence } = await module("fence.mjs")
 const { Edits, mcpConfig } = await module("serve.mjs")
+const cdp = await module("cdp.mjs")
+const { jpegSize } = await module("jpeg.mjs")
+const { States } = await module("state.mjs")
+const { Pages, tabsListed } = await module("pages.mjs")
+const { Screen } = await module("screen.mjs")
+const { attachment: liveView } = await module("live.mjs")
 
 const answer = (fields) => process.stdout.write(JSON.stringify(fields) + "\n")
 
@@ -356,6 +410,15 @@ const attachments = {
       return { close: closed(s) }
     },
   },
+  hold: {
+    async attach() {
+      await held
+      return undefined
+    },
+  },
+  live: {
+    attach: (s) => liveView().attach(s),
+  },
 }
 
 // listed is a server's answer to tools/list under config, over a transport of
@@ -396,7 +459,7 @@ function settled(states) {
 
 // supervised is a supervisor's state, every event it logged and every call
 // "record" recorded.
-const supervised = () => ({ state: supervisor.state, events, reports, attached })
+const supervised = () => ({ state: supervisor?.state ?? "starting", events, reports, attached })
 
 // gate is a promise and the function that settles it.
 function gate() {
@@ -467,7 +530,164 @@ function takeovers(folder, config, planted) {
   return { steps, readHolder: { B: g.B, C: g.C } }
 }
 
+// unhandled counts the rejections nobody handled in the probe, from the
+// first screen op on.
+let unhandled = 0
+let countingUnhandled = false
+
+// session is a DevTools session the probe plays: each call recorded and
+// answered as the browser would, failing where a case says, and each event
+// the case raises handed to its listeners.
+class Session {
+  constructor(shot, viewport) {
+    this.shot = shot
+    this.viewport = viewport
+    this.listeners = new Map()
+    this.failing = false
+  }
+  async send(method, params) {
+    const told = {
+      "Page.getLayoutMetrics": () => ({ kind: "metrics" }),
+      "Page.captureScreenshot": () => ({ kind: "captured", params }),
+      "Page.startScreencast": () => ({ kind: "started", params }),
+      "Page.stopScreencast": () => ({ kind: "stopped" }),
+      "Page.screencastFrameAck": () => ({ kind: "chromium_ack", session_id: params.sessionId }),
+    }[method]
+    screened.push({ ...(told?.() ?? { kind: "called", method }), at: clock.now() })
+    if (this.failing) throw new Error(`the probe fails ${method}`)
+    if (method === "Page.getLayoutMetrics") {
+      const viewport = { pageX: 0, pageY: 0, clientWidth: this.viewport.width, clientHeight: this.viewport.height }
+      return { cssLayoutViewport: viewport, cssVisualViewport: { ...viewport, offsetX: 0, offsetY: 0, scale: 1, zoom: 1 } }
+    }
+    if (method === "Page.captureScreenshot") return { data: this.shot }
+    return {}
+  }
+  on(event, f) {
+    this.listeners.set(event, [...(this.listeners.get(event) ?? []), f])
+  }
+  off(event, f) {
+    this.listeners.set(event, (this.listeners.get(event) ?? []).filter((g) => g !== f))
+  }
+  emit(event, params) {
+    for (const f of this.listeners.get(event) ?? []) f(params)
+  }
+}
+
+// screened is everything the probe's screen did, in order; screen is it,
+// and stage the page it shows, on its session.
+const screened = []
+let screen
+let stage
+
+// settled answers once the screen's promises of the moment have run.
+const settledScreen = () => new Promise((resolve) => setImmediate(resolve))
+
+// screenAnswer is what the screen did so far.
+const screenAnswer = async () => {
+  await settledScreen()
+  return { screen: screened, unhandled }
+}
+
 const commands = {
+  async config_read() {
+    try {
+      await readConfig(folder)
+      return { ok: true }
+    } catch (err) {
+      return { refused: err.message }
+    }
+  },
+  cdp() {
+    return { sends: cdp.SENDS, reads: cdp.READS, flow: cdp.FLOW }
+  },
+  async cdp_send({ method, params }) {
+    const sent = []
+    try {
+      await cdp.send({ send: async (m, p) => sent.push({ method: m, params: p }) }, method, params)
+      return { sent }
+    } catch (err) {
+      return { refused: err.message, off_table: err instanceof cdp.OffTable, sent }
+    }
+  },
+  async jpeg_size({ jpeg_b64: jpeg }) {
+    const config = await readConfig(folder)
+    return { size: jpegSize(Buffer.from(jpeg, "base64"), config.frames.jpeg_header_bytes) ?? null }
+  },
+  tabs_listed({ answer }) {
+    return { listed: tabsListed(answer) ?? null }
+  },
+  async state_make({ boot, running, tabs, times = 1 }) {
+    const config = await readConfig(folder)
+    const states = new States(config.state)
+    let doc
+    for (let i = 0; i < times; i++) doc = states.make(boot, running, tabs)
+    return { doc, bytes: Buffer.byteLength(JSON.stringify(doc)) }
+  },
+  tabs_overflow({ next, live }) {
+    const logged = []
+    const boots = ["00000000000000a1", "00000000000000b2"]
+    const pages = new Pages({
+      boot: "00000000000000f0",
+      newBoot: () => boots.shift(),
+      log: (kind, fields) => logged.push({ kind, ...fields }),
+      onChange: () => {},
+    })
+    pages.next = next
+    const before = pages.boot
+    for (let i = 0; i < live; i++) pages.records.push({ id: pages.nextID() })
+    const numbered = pages.records.map((r) => r.id)
+    const added = pages.nextID()
+    return { numbered, ids: pages.records.map((r) => r.id), added, boot_before: before, boot: pages.boot, logged }
+  },
+  async screen({ major, fps, shot_b64: shot, viewport = { width: 1280, height: 800 } }) {
+    if (!countingUnhandled) {
+      countingUnhandled = true
+      process.on("unhandledRejection", () => {
+        unhandled += 1
+      })
+    }
+    const config = await readConfig(folder)
+    stage = { id: "t1", session: new Session(shot, viewport) }
+    screen = new Screen({
+      clock,
+      log: (kind, fields = {}) => screened.push({ kind: "logged", log: kind, ...fields, at: clock.now() }),
+      frames: config.frames,
+      major: () => major,
+      boot: () => "0123456789abcdef",
+      emit: (header, jpeg) => screened.push({ kind: "forwarded", ...header, bytes: jpeg.length, at: clock.now() }),
+    })
+    screen.show(stage)
+    screen.watched({ on: true, fps })
+    return screenAnswer()
+  },
+  cdp_frame({ jpeg_b64: jpeg, metadata, session_id: sessionId }) {
+    stage.session.emit("Page.screencastFrame", { data: jpeg, metadata, sessionId })
+    return screenAnswer()
+  },
+  cdp_resized({ times }) {
+    for (let i = 0; i < times; i++) stage.session.emit("Page.frameResized", {})
+    return screenAnswer()
+  },
+  frame_ack({ seq }) {
+    screen.acked("0123456789abcdef", seq)
+    return screenAnswer()
+  },
+  cdp_fail() {
+    stage.session.failing = true
+    return screenAnswer()
+  },
+  page_closed() {
+    screen.show(undefined)
+    return screenAnswer()
+  },
+  watch({ on, fps }) {
+    screen.watched({ on, fps })
+    return screenAnswer()
+  },
+  relay_gone() {
+    screen.watched(undefined)
+    return screenAnswer()
+  },
   async install({ folder, fail, abort }) {
     const pids = []
     const caller = new AbortController()
@@ -572,7 +792,7 @@ const commands = {
     const failed = await chromium.launchFailure(err, sandbox, () => chromium.sandboxCause({ uid, read: files(texts) }))
     return { reason: failed.reason, cause: failed.cause }
   },
-  async supervise({ launch, reject_first: rejectFirst, fail, umask, live }) {
+  async supervise({ launch, reject_first: rejectFirst, fail, umask, live, at_once: atOnce }) {
     const io = {
       clock,
       fs: faulty(fail),
@@ -590,7 +810,11 @@ const commands = {
     const names = live ?? []
     const unknown = names.find((name) => !Object.hasOwn(attachments, name))
     if (unknown !== undefined) throw new Error(`no attachment is named ${unknown}`)
-    supervisor = await supervise(launch, io, names.map((name) => attachments[name]))
+    const started = supervise(launch, io, names.map((name) => attachments[name])).then((s) => {
+      supervisor = s
+    })
+    if (!atOnce) await started
+    else started.catch((err) => events.push({ kind: "supervise_failed", error: String(err?.message ?? err) }))
     return supervised()
   },
   async attached({ until = {} }) {
@@ -607,9 +831,10 @@ const commands = {
     }
     return supervised()
   },
-  advance({ ms }) {
+  async advance({ ms }) {
     clock.advance(ms)
-    return { now: clock.now() }
+    if (screen === undefined) return { now: clock.now() }
+    return { now: clock.now(), ...(await screenAnswer()) }
   },
   async kill_chromium({ until }) {
     const pid = supervisor.current?.pid

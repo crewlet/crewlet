@@ -17,8 +17,9 @@
 // alone, embedded ([Files]) as the OpenCode plugins are, so a box runs the
 // helper this build's suite ran: helper.mjs, the entry, whose subcommands are
 // ensure and stop (ensure.mjs), supervise (supervise.mjs; serve.mjs, its
-// socket; fence.mjs) and mcp (shim.mjs), beside chromium.mjs, tree.mjs and
-// common.mjs.
+// socket; fence.mjs; and the live view it attaches, the modules of
+// internal/browser/boxhelper/live, written between the helper's and the
+// entry) and mcp (shim.mjs), beside chromium.mjs, tree.mjs and common.mjs.
 // No build step stands between them and the binary: [Write] puts each into
 // the box's [Folder] whole, after every module it imports; then the lock's two
 // files, as tree-package.json and tree-package-lock.json, names neither npm
