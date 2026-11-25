@@ -286,6 +286,9 @@ func (r engineRuntime) MCPSignIns() mcpapi.SignIns { return mcpSignIns{e: r.engi
 // MCPGrants is the engine's read of each MCP server's OAuth grant.
 func (r engineRuntime) MCPGrants() queries.MCPGrantReader { return r.engine }
 
+// OAuthClients is the engine's read of the OAuth clients a person registered.
+func (r engineRuntime) OAuthClients() queries.OAuthClientReader { return r.engine }
+
 // OAuthLanding is the engine finishing a sign-in where the vendor sends the
 // person back, its refusals mapped onto the page's ([oauthLanding]).
 func (r engineRuntime) OAuthLanding() webhooks.OAuthSignIns { return oauthLanding{e: r.engine} }

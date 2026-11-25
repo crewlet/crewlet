@@ -801,6 +801,18 @@ func TestAGrantTheFleetCouldNotKeepIsRefusedBeforeAnybodyConsents(t *testing.T) 
 		t.Errorf("a cimd sign-in past the bound started with %v, want it refused naming this engine's address", err)
 	}
 
+	// ITS SIGN-IN CALLBACK, which the grant records, likewise.
+	long := newOAuthVendor(t)
+	a, _ = oauthNodes(t, long, "dcr")
+	a.webhookBase = "https://crewlet.example.com/" + strings.Repeat("p", coord.MaxGrantAddressBytes)
+	_, err = a.StartMCPSignIn(t.Context(), "vendor", signingJane)
+	refusal = nil
+	if !errors.As(err, &refusal) || !strings.Contains(refusal.Reason, "sign-in callback") ||
+		!strings.Contains(refusal.Remedy, "external_url") {
+		t.Errorf("a sign-in whose callback is past the bound started with %v, want it refused naming this "+
+			"engine's address", err)
+	}
+
 	v := newOAuthVendor(t)
 	v.granted = "read " + strings.Repeat("s", coord.MaxGrantScopeBytes+1)
 	a, b := oauthNodes(t, v, "dcr")

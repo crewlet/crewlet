@@ -186,6 +186,9 @@ func (f *fakeRuntime) MCPSignIns() mcpapi.SignIns { return noSignIns{} }
 // MCPGrants reads no server's grant, and no address for a sign-in.
 func (f *fakeRuntime) MCPGrants() queries.MCPGrantReader { return noSignIns{} }
 
+// OAuthClients reads no OAuth client, so no redirect notice is raised.
+func (f *fakeRuntime) OAuthClients() queries.OAuthClientReader { return nil }
+
 // OAuthLanding finishes no sign-in: the callback answers as an engine that
 // finishes none.
 func (f *fakeRuntime) OAuthLanding() webhooks.OAuthSignIns { return nil }
