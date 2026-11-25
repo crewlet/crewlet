@@ -90,3 +90,8 @@ func (p Paths) GeminiTakes(session string) string {
 // never pruned: a box serves one turn's launches and is reclaimed as its run
 // settles (code-sandbox.md, "Reuse across launches"), so it holds a few.
 func (p Paths) GeminiTakesDir() string { return p.WorkDir() + "/gemini-takes" }
+
+// GeminiUnbridged is where the BeforeTool hook says why it stopped a call
+// named inside the bridge's names, which the run's script reads once Gemini
+// CLI exits ([geminiBridgedHook]).
+func (p Paths) GeminiUnbridged() string { return p.WorkDir() + "/gemini-unbridged" }

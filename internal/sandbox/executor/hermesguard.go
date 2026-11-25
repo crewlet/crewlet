@@ -22,6 +22,17 @@ import (
 // false`, `disabled: true`, a `tools` list leaving out or hiding its tools).
 // Entries naming another server, toolset or plugin pass.
 
+// hermesGuarded is the servers the guard judges: Crewlet's own, the run's and
+// a fresh session's ([crewletServers]), sorted.
+func hermesGuarded(req sandbox.RunRequest) []string {
+	names := crewletServers(req.MCPServers)
+	if f := req.FreshWiring; f != nil {
+		names = append(names, crewletServers(f.MCPServers)...)
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
 // hermesGuard is the part of a run's script that ends it before Hermes starts
 // where the guard refuses it, saying why. A guard that cannot read the box's
 // configuration is no verdict: Hermes's own load decides then, as it does on
