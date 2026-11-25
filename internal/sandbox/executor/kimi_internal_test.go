@@ -96,7 +96,7 @@ func TestALaunchedKimiRunReadsAsItsAnswerSpendAndNote(t *testing.T) {
 			t.Errorf("%s: the transcript does not show the note:\n%s", release, res.Transcript)
 		}
 		held, err := kimiNotesHeld(t.Context(), bytes.NewReader(kimiFixture(t, release, "launched.wire.jsonl")),
-			kimiServed(kimiSteeredInbox))
+			kimiServed(kimiSteeredInbox), nil)
 		if err != nil || !slices.Equal(held, []string{kimiSteeredInbox}) {
 			t.Fatalf("%s: held = %v (%v), want the note", release, held, err)
 		}
@@ -262,7 +262,7 @@ func TestAKimiNoteIsConfirmedOnlyOnceARequestCarriedItPlain(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			held, err := kimiNotesHeld(t.Context(), bytes.NewReader(raw), kimiServed(tc.inbox, "never"))
+			held, err := kimiNotesHeld(t.Context(), bytes.NewReader(raw), kimiServed(tc.inbox, "never"), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -288,12 +288,12 @@ func TestAKimiRecordAnswersInServeOrderAndNotOffATornLine(t *testing.T) {
 	}
 	usage := `{"type":"usage.record","agentId":"main","usage":{"inputOther":1},"usageScope":"turn"}`
 	wire := note("one") + note("two") + usage + "\n"
-	held, err := kimiNotesHeld(t.Context(), strings.NewReader(wire), kimiServed("two", "one", "two"))
+	held, err := kimiNotesHeld(t.Context(), strings.NewReader(wire), kimiServed("two", "one", "two"), nil)
 	if err != nil || !slices.Equal(held, []string{"two", "one"}) {
 		t.Fatalf("held = %v (%v), want two then one, once each", held, err)
 	}
 	torn := note("one") + usage
-	if held, err := kimiNotesHeld(t.Context(), strings.NewReader(torn), kimiServed("one")); err != nil || len(held) != 0 {
+	if held, err := kimiNotesHeld(t.Context(), strings.NewReader(torn), kimiServed("one"), nil); err != nil || len(held) != 0 {
 		t.Fatalf("held = %v (%v) off a record whose last line was cut off", held, err)
 	}
 }
@@ -314,7 +314,7 @@ func TestAKimiLineReadOnlyInPartCountsByItsType(t *testing.T) {
 		if name == "a compaction" {
 			wire += usage
 		}
-		held, err := kimiNotesHeld(t.Context(), strings.NewReader(wire), kimiServed("one"))
+		held, err := kimiNotesHeld(t.Context(), strings.NewReader(wire), kimiServed("one"), nil)
 		if err != nil || len(held) != 0 {
 			t.Errorf("%s that does not decode whole: held = %v (%v), want none", name, held, err)
 		}
@@ -339,17 +339,17 @@ func TestAKimiNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 		}
 		return sandbox.ExecResult{Stdout: found}, nil
 	}
-	held, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: session}, kimiServed(kimiSteeredInbox))
+	held, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: session}, kimiServed(kimiSteeredInbox), nil)
 	if err != nil || !slices.Equal(held, []string{kimiSteeredInbox}) {
 		t.Fatalf("held = %v (%v), want the note", held, err)
 	}
 	for _, out := range []string{"", record + "\n" + record + "2"} {
 		found = out
-		if _, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: session}, kimiServed(kimiSteeredInbox)); err == nil {
+		if _, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: session}, kimiServed(kimiSteeredInbox), nil); err == nil {
 			t.Errorf("records %q decided the take", out)
 		}
 	}
-	if _, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: "../x"}, nil); err == nil {
+	if _, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: "../x"}, nil, nil); err == nil {
 		t.Error("a session id no Kimi run names was looked for")
 	}
 }

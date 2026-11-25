@@ -1,18 +1,17 @@
 // Package executor is the detached-run plumbing every harness runner
 // shares.
 //
-// Both supported harnesses run headless in a box and follow the same shape: a
-// background process redirects its output to a file and drops a done marker,
-// Poll checks that marker and whether the process is still alive, Collect
-// decodes the stream and reads the result,
-// and an ask overlay surfaces a mid-run clarification. This package owns that
-// plumbing so each runner supplies only what is its own: its invocation, its
-// config, where its output lands, and how its stream and result are read —
-// and how a person's notes to its run's turn reach it between its own steps
-// (ADR-0177; claudesteer.go's hooks, opencode_steer.js's plugin), and how the
-// skills a run is handed as its own reach its harness and its loads reach the
-// run's bridge (claudeskills.go's plugin; opencodeskills.go's skills directory
-// and opencode_skills.js).
+// Every harness runs headless in a box in the same shape: a background process
+// redirects its output to a file and drops a done marker, Poll checks that
+// marker and whether the process is still alive, Collect decodes the stream and
+// reads the result, and an ask overlay surfaces a mid-run clarification. This
+// package owns that plumbing so each runner supplies only what is its own: its
+// invocation, its config, where its output lands, and how its stream and result
+// are read — and how a person's notes to its run's turn reach it between its
+// own steps (ADR-0177; claudesteer.go's hooks, opencode_steer.js's plugin), and
+// how the skills a run is handed as its own reach its harness and its loads
+// reach the run's bridge (claudeskills.go's plugin; opencodeskills.go's skills
+// directory and opencode_skills.js).
 //
 // # A run's commits credit Crewlet, through git
 //
@@ -29,8 +28,7 @@
 // ever read whole: the stream is decoded a line at a time in bounded memory
 // and the error stream is read from its end, while the files meant to be
 // read whole (the report, the question, the result line) are, and one too
-// large degrades only itself. See stream.go for the reasons, and what each
-// used to cost.
+// large degrades only itself; stream.go says why.
 //
 // # A Claude Code thread is read a line at a time, holding what its readers read
 //
@@ -391,6 +389,9 @@
 // archive's bound admits, a 46 MiB OpenCode image (a 64.3 MB data URI), held
 // it 8.7 s (4.8 from the memo) and 19 MiB in a real take.
 //
+// A summary is read on its runner's pinned release alone: a box on another
+// answers unread, naming it ([summaryReleaseWhy]).
+//
 // # The memory a node keeps for these pools
 //
 // [NodeWork.MemoryPools] adds up the pools a node runs, each at its worst by
@@ -415,15 +416,14 @@
 //
 // A PAIR is a main-thread chained `hook_system_message` at event E whose
 // content names the take's token ([threadLine.HookTakes]), then the
-// `hook_additional_context` of the same firing at E after it. A firing is
-// keyed by the digest of its `toolUseID` and E, never the string, so what the
-// reading keeps is fixed in size whatever the thread wrote: per asked take
-// (at most 64; an ask of more, which a row a peer with wider bounds wrote may
-// make, decides none) the firing's digest, its event as one of two constants,
-// the two records' handles, the system message's line, and the firing of the
-// first success whose stdout names the take. A context before its system
-// message pairs nothing. The success's stdout is the hook's whole answer, so
-// it is never a confirmation.
+// `hook_additional_context` of the same firing at E after it. A firing is keyed
+// by the digest of its `toolUseID` and E, never the string, so what the reading
+// keeps is fixed in size whatever the thread wrote: per asked take (at most 64,
+// [unreadTakes]) the firing's digest, its event as one of two constants, the
+// two records' handles, the system message's line, and the firing of the first
+// success whose stdout names the take. A context before its system message
+// pairs nothing. The success's stdout is the hook's whole answer, so it is
+// never a confirmation.
 //
 // HELD where the pair's two records are handed ([threadChain.Handed]) and read
 // alike by every size path of the resume ([threadChain.Alike]: the box's copy
@@ -610,26 +610,26 @@
 // harness exits ([Paths.SessionCapture], [Runner.OpenCapture]); a run handed a
 // session packed in another box restores it before its harness takes it up,
 // never over a box whose copy holds that archive ([Paths.SessionDigests]), and
-// starts its own, saying why, where it can do neither. Whether a
-// box can continue a carried session is its harness's release, asked of the
-// box ([Runner.CheckCarry]). What each archive holds is its harness's: see
-// carry.go and each runner's own carry.
+// starts its own, saying why, where it can do neither. Whether a box can
+// continue a carried session is its harness's release, asked of the box
+// ([Runner.CheckCarry]). What each archive holds is its harness's: see carry.go
+// and each runner's own carry.
 //
-// A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
-// it, by the pack the run's own end makes held to a stricter rule — every file
-// it packs listed before the tar and checked after it, so a file the harness
+// A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside it,
+// by the pack the run's own end makes held to a stricter rule — every file it
+// packs listed before the tar and checked after it, so a file the harness
 // rewrote under the pack fails the pack rather than riding the archive torn
 // ([claudeHeldTar]): a job a box would not end, packed on demand for the read
 // that packs it alone ([Runner.PackCapture], [Paths.SessionPackHeld]), and a
 // SAVE, packed to a place of that save's own, named after its taker
 // ([Runner.PackSave], [Paths.SessionSave]), for the take that names it alone —
 // neither ever where the job's final archive is read. Every runner saves
-// ([saver], [Runner.Saves]), OpenCode by its own export (below);
-// whether a job moved since its last save is how far its harness's event
-// stream ran ([Runner.Streamed]); and a save no take will read is removed
-// from its box ([Runner.ReleaseSave]). And a job that is over and left no archive is
-// packed on demand for its read alone too, by the run's own end's rule: the
-// capture is the job's own script's, which nothing else writes.
+// ([saver], [Runner.Saves]), OpenCode by its own export (below); whether a job
+// moved since its last save is how far its harness's event stream ran
+// ([Runner.Streamed]); and a save no take will read is removed from its box
+// ([Runner.ReleaseSave]). And a job that is over and left no archive is packed
+// on demand for its read alone too, by the run's own end's rule: the capture is
+// the job's own script's, which nothing else writes.
 //
 // # An OpenCode session saved beside its running server
 //

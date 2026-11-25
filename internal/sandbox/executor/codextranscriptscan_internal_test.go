@@ -203,11 +203,11 @@ func TestACollectionsReadOfACodexSessionIsItsWholeLineRead(t *testing.T) {
 	for name, record := range records {
 		for _, from := range []int{0, 1} {
 			want, wantErr := codexNotesHeldWhole(strings.NewReader(record), takes, from)
-			got, err := codexNotesHeld(t.Context(), strings.NewReader(record), takes, from)
+			got, err := codexNotesHeld(t.Context(), strings.NewReader(record), takes, from, nil)
 			if !slices.Equal(got, want) || fmt.Sprint(err) != fmt.Sprint(wantErr) {
 				t.Errorf("%s from %d: held %v (%v), want %v (%v)", name, from, got, err, want, wantErr)
 			}
-			got, err = codexNotesHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, takes, from)
+			got, err = codexNotesHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, takes, from, nil)
 			if !slices.Equal(got, want) || fmt.Sprint(err) != fmt.Sprint(wantErr) {
 				t.Errorf("%s from %d in pieces: held %v (%v), want %v (%v)", name, from, got, err, want, wantErr)
 			}
@@ -258,14 +258,14 @@ func TestACodexCountOnTheWalkIsItsWholeLineRead(t *testing.T) {
 	for name, record := range records {
 		archive := codexArchiveOf(t, record)
 		var walk, whole codexCounting
-		err := codexArchiveRollout(bytes.NewReader(archive), func(r io.Reader) error { return walk.read(t.Context(), r) })
+		err := codexArchiveRollout(bytes.NewReader(archive), func(r io.Reader) error { return walk.read(t.Context(), r, nil) })
 		wantErr := codexArchiveRollout(bytes.NewReader(archive), func(r io.Reader) error {
 			return whole.readWhole(t.Context(), r)
 		})
 		if fmt.Sprint(err) != fmt.Sprint(wantErr) || fmt.Sprintf("%+v", walk) != fmt.Sprintf("%+v", whole) {
 			t.Errorf("%s: counts %+v (%v), want %+v (%v)", name, walk, err, whole, wantErr)
 		}
-		read, err := codexMeter(t.Context(), &exportPieces{r: bytes.NewReader(archive), n: 17}, codexCarryRelease)
+		read, err := codexMeter(t.Context(), &exportPieces{r: bytes.NewReader(archive), n: 17}, codexCarryRelease, nil)
 		if fmt.Sprint(err) != fmt.Sprint(wantErr) || err == nil && read.tokens != whole.figure {
 			t.Errorf("%s in pieces: the meter reads %+v (%v), want the figure %d (%v)", name, read, err,
 				whole.figure, wantErr)
@@ -299,7 +299,7 @@ func TestACodexCompactionWhoseWindowIDNoCountCarriesLeavesItsCountUnread(t *test
 		{"an empty id", `{"window_id":""}`, "ordinal-9", true},
 		{"no id", `{}`, "ordinal-9", true},
 	} {
-		read, err := codexMeter(t.Context(), bytes.NewReader(codexArchiveOf(t, compacted(c.payload))), codexCarryRelease)
+		read, err := codexMeter(t.Context(), bytes.NewReader(codexArchiveOf(t, compacted(c.payload))), codexCarryRelease, nil)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}

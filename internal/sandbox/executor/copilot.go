@@ -51,6 +51,8 @@ var (
 	_ notesOffExplainer = Copilot{}
 	_ sessionJudge      = Copilot{}
 	_ recordConfirmer   = Copilot{}
+	_ threadHarness     = Copilot{}
+	_ mainThreadHarness = Copilot{}
 )
 
 // NewCopilot returns the runner.

@@ -117,6 +117,37 @@ test("the counts are agents by state, a pause apart from a stop", () => {
   });
 });
 
+// A PAUSED SEAT COUNTS AS PAUSED while its turn finishes or its executor asks,
+// and its row still says what it is doing. Mutation: count `state` again, and
+// the two count as Working and Needs you with Paused or stopped at none.
+test("a seat paused mid-turn or while its executor asks counts and filters as paused", () => {
+  const pausing = live(row({ activity: "working", paused: { by: "ana" } }));
+  const held = live(row({ activity: "needs", paused: { by: "ana" } }));
+  const working = live(row({ activity: "working" }));
+  const needs = live(row({ activity: "needs" }));
+  const c = countsOf([pausing, held, working, needs, live(row({ activity: "idle" }))]);
+  expect(c).toMatchObject({ all: 5, working: 1, needs: 1, paused: 2, stopped: 0, idle: 1 });
+  expect(c.working + c.needs + c.paused + c.stopped + c.idle + c.offline).toBe(c.all);
+  for (const s of [pausing, held]) {
+    expect([matches(s, "stopped"), matches(s, "working"), matches(s, "needs")]).toEqual([
+      true,
+      false,
+      false,
+    ]);
+  }
+  expect([working, needs].map((s) => [matches(s, "working"), matches(s, "needs")])).toEqual([
+    [true, false],
+    [false, true],
+  ]);
+  expect([working, needs].some((s) => matches(s, "stopped"))).toBe(false);
+  expect([pausing.word, pausing.pauseNote, held.word, held.pauseNote]).toEqual([
+    "Working",
+    "pausing",
+    "Needs you",
+    "held",
+  ]);
+});
+
 test("a chip keeps the agents in its state, and only All keeps a person", () => {
   const paused = live(row({ activity: "stopped", stopped_reason: "paused" }));
   const person = live(undefined, { kind: "human" });

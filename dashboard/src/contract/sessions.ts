@@ -228,6 +228,13 @@ export interface ExecutorSessionRow {
   object_bytes: number;
   media_bytes: number;
   /**
+   * The row keeps the newest compaction summary its harness wrote of the
+   * session, apart from it, `summary_bytes` long as kept: what a transcript of
+   * a row that keeps no session reads as (`summary`).
+   */
+  summary_kept: boolean;
+  summary_bytes: number;
+  /**
    * The row names the session of a turn that has not ended: the newest its
    * runs have kept, which its run may have gone on past
    * (`executordomain.Session.InProgress`).
@@ -314,9 +321,11 @@ export interface ExecutorSessionsAnswer {
   complete: boolean;
 }
 
-/** What reading a session's object came to (`executorread.TranscriptStates`). */
+/** What reading a session's object came to (`executorread.TranscriptStates`):
+ *  `summary` is a row keeping no session whose newest summary is kept apart,
+ *  its one entry, beside why the session is not kept. */
 export type TranscriptState =
-  "read" | "none" | "missing" | "unreadable" | "malformed" | "unsupported";
+  "read" | "none" | "missing" | "unreadable" | "malformed" | "unsupported" | "summary";
 
 /** Who an entry of a transcript is from (`executor.EntryKinds`): a note is
  *  one a person sent the run while it worked, a late call one of the work's
@@ -360,6 +369,9 @@ export interface TranscriptEntry {
    *  its redaction took out was. */
   bytes: number;
   cut?: boolean;
+  /** The text cut is the entry's end, marked at its start, never its opening:
+   *  a kept summary's, whose last part says what to do next. */
+  tail?: boolean;
 }
 
 /** What every read of a transcript is held to. */
