@@ -15,12 +15,13 @@ import (
 // resume loads"): a pack whose session the take would refuse whole keeps only
 // what its harness's resume loads: everything from its newest compaction on,
 // and before it what that release reads there (Codex its first line, Copilot
-// all but the turns the summary replaced, Muse Code nothing). It cuts the
-// pack's copy, never the live record, so it runs on every pack, a save's and a
-// stop's as the end's, and costs no model call. Only the release a rule was
-// measured on is trimmed ([trimmer]); every other harness and release packs
-// whole, and a pack still past the bound once trimmed is refused as one never
-// trimmed is.
+// all but the turns the summary replaced, Muse Code nothing, Gemini CLI and
+// Qwen Code their first line and every line from their run's start:
+// chattrim.go). It cuts the pack's copy, never the live record, so it runs on
+// every pack, a save's and a stop's as the end's, and costs no model call.
+// Only the release a rule was measured on is trimmed ([trimmer]); every other
+// harness and release packs whole, and a pack still past the bound once
+// trimmed is refused as one never trimmed is.
 
 // NO TRIM, BY HARNESS: Claude Code's own trim rewrites its transcript, and its
 // subagent threads stay whole, since 2.1.310 continues one spawned before the
@@ -75,11 +76,12 @@ const trimRelVar = "trel"
 
 // trimCut is the shell that cuts the staged record at the shell word member to
 // what t's resume loads, where it can, and says so in trw: `<bytes before>
-// <bytes kept>`. Its status is never the pack's: a record it cannot cut is
-// packed whole, for the take to refuse.
+// <bytes kept>`, and after them the run's start restated over the cut copy
+// where the cut set trp ([chatTrimRecord]). Its status is never the pack's: a
+// record it cannot cut is packed whole, for the take to refuse.
 func trimCut(t trimmer, member string) string {
 	cut := member + ".trim"
-	return fmt.Sprintf(`trz=$(wc -c < %[1]s | tr -d ' ') && { %[3]s; } && trk=$(wc -c < %[2]s | tr -d ' ') && mv -f %[2]s %[1]s && trw="$trz $trk"; rm -f %[2]s`,
+	return fmt.Sprintf(`trp= && trz=$(wc -c < %[1]s | tr -d ' ') && { %[3]s; } && trk=$(wc -c < %[2]s | tr -d ' ') && mv -f %[2]s %[1]s && trw="$trz $trk${trp:+ $trp}"; rm -f %[2]s`,
 		member, cut, t.trimRecord(member, cut))
 }
 
@@ -137,7 +139,7 @@ func trimUnmark(dest string) string {
 
 // trimMarked is the shell a pack runs once its archive is at dest: where it
 // was trimmed (trw), the word `<archive bytes> <record bytes> <kept bytes>`
-// beside it. Best effort: an archive with no word is kept as one that was not
+// beside it, a chat file's restated run start after them ([trimCut]). Best effort: an archive with no word is kept as one that was not
 // trimmed, which loses only the saying so.
 func trimMarked(dest string) string {
 	q := shellword.Quote
@@ -146,8 +148,9 @@ func trimMarked(dest string) string {
 }
 
 // trimMarkMaxBytes is the longest word [Runner.trimOf] reads: three decimals
-// of an int64 and their separators. A longer file is no word of a pack's.
-const trimMarkMaxBytes = 3*19 + 3
+// of an int64 and their separators, then a run start's ([chatRunStartMax])
+// and its own. A longer file is no word of a pack's.
+var trimMarkMaxBytes = 3*19 + 3 + 1 + chatRunStartMax
 
 // trimOf is what the box says its pack trimmed of archive ([trimMarked]):
 // read only for a [trimmer] on its release, and held to the archive it names
@@ -166,34 +169,54 @@ func (r *Runner) trimOf(ctx context.Context, box sandbox.Sandbox, archive sandbo
 				"pack trimmed the session could not be read, so the capture is kept saying it was not")
 		return sandbox.ArchiveTrim{}
 	}
-	if mark.Size > trimMarkMaxBytes {
+	if mark.Size > int64(trimMarkMaxBytes) {
 		return sandbox.ArchiveTrim{}
 	}
 	return parseTrimMark(string(mark.Data), archive.Size)
 }
 
-// parseTrimMark reads a pack's word on its trim ([trimMarked]): exactly three
+// parseTrimMark reads a pack's word on its trim ([trimMarked]): three
 // decimals and a line break, the first the size of the archive it describes,
 // which must be size, the record's bytes before the cut above its bytes kept,
-// and those above zero. Anything else is no trim.
+// and those above zero; or those three and a run start restated, read as
+// [chatRunStartOf] reads a `from`, within the bytes kept. Anything else is no
+// trim.
 func parseTrimMark(mark string, size int64) sandbox.ArchiveTrim {
 	line, ok := strings.CutSuffix(mark, "\n")
-	fields := strings.Split(line, " ")
-	if !ok || len(fields) != 3 {
+	fields := strings.SplitN(line, " ", 4)
+	if !ok || len(fields) < 3 {
 		return sandbox.ArchiveTrim{}
 	}
+	var prefix sandbox.LinePrefix
+	if len(fields) == 4 {
+		if prefix = chatRunStartOf(fields[3]); prefix.Lines == 0 {
+			return sandbox.ArchiveTrim{}
+		}
+	}
 	var n [3]int64
-	for i, f := range fields {
+	for i, f := range fields[:3] {
 		v, err := strconv.ParseInt(f, 10, 64)
 		if err != nil || v <= 0 || strconv.FormatInt(v, 10) != f {
 			return sandbox.ArchiveTrim{}
 		}
 		n[i] = v
 	}
-	if n[0] != size || n[1] <= n[2] {
+	if n[0] != size || n[1] <= n[2] || prefix.Bytes > n[2] {
 		return sandbox.ArchiveTrim{}
 	}
-	return sandbox.ArchiveTrim{RecordBytes: n[1], KeptBytes: n[2]}
+	return sandbox.ArchiveTrim{RecordBytes: n[1], KeptBytes: n[2], Prefix: prefix}
+}
+
+// trimmedPrefix is where a trimmed archive's run began ([sandbox.LinePrefix]):
+// its pack's restatement over the cut copy, where the record named a start
+// (recorded) at least as long; none otherwise, since the record's names lines
+// the cut left out. The take checks it against the archive's bytes as it
+// checks the record's ([prefixCheck]).
+func trimmedPrefix(trim sandbox.ArchiveTrim, recorded sandbox.LinePrefix) sandbox.LinePrefix {
+	if recorded.Lines == 0 || trim.Prefix.Lines > recorded.Lines {
+		return sandbox.LinePrefix{}
+	}
+	return trim.Prefix
 }
 
 // logTrim says what a take's archive was trimmed of, where it was

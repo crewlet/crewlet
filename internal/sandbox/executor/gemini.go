@@ -102,7 +102,7 @@ const geminiRelease = "0.70.0"
 // into the home's and guard what outranks them ([geminiGuard]), record the
 // session, export the harness's prompt with the run's text after it, run the
 // brief (stdin), append the run's spend ([geminiUsageEvent]), pack the session
-// ([chatPack]), and put the home's settings back ([homeKeeper]).
+// ([chatCapture]), and put the home's settings back ([homeKeeper]).
 //
 // THE ADD-TO CHANNEL IS BUILT, since Gemini CLI has none: GEMINI_SYSTEM_MD
 // replaces its prompt, so the script has it write the prompt out
@@ -195,8 +195,7 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		run,
 		"node "+q(paths.GeminiHelper())+" usage "+q(paths.GeminiChats())+` "$s" `+before,
 		geminiLocate(paths),
-		strings.TrimSuffix(chatPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()},
-			paths.GeminiSlugDir()), "\n"),
+		strings.TrimSuffix(chatCapture(paths, paths.GeminiSlugDir(), GeminiCLI{}), "\n"),
 		"exit $code"), "\n")
 }
 
