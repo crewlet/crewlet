@@ -49,7 +49,10 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(),
 		p.MCPConfig(), p.Findings(), p.BinDir(),
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
-		p.ClaudeHooksOff(), p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.CommitAttribution(), p.AttributionHook(), p.GitHooks(),
+		p.ClaudeHooksOff(), p.ClaudeHooksOffBy(), p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(),
+		p.ClaudeSettingsGuarded(),
+		p.ClaudeNotesSettingsGuarded(), p.ClaudeBridgeGuard(), p.ClaudeUnbridged(), p.CommitAttribution(),
+		p.AttributionHook(), p.GitHooks(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.SessionStaging(), p.SessionDigests(),
 		p.SessionPackStaging("a-pack"), p.SessionPackHeld("a-pack"), p.ClaudeConfigDir(), p.JobScript(),
 		p.JobEnded(), p.SessionSave("node-a:a-taker", "a-save"), p.SessionSaveStaging("node-a:a-taker", "a-save"),
@@ -207,7 +210,9 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 		// The previous run's instructions, which are not this run's — its
 		// hooks name a bridge session its end closed.
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
-		p.ClaudeHooksOff(), p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.OpenCodeConfig(),
+		p.ClaudeHooksOff(), p.ClaudeHooksOffBy(), p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(),
+		p.ClaudeSettingsGuarded(),
+		p.ClaudeNotesSettingsGuarded(), p.ClaudeBridgeGuard(), p.ClaudeUnbridged(), p.OpenCodeConfig(),
 		// And its MCP configuration under either token, which names a bridge
 		// session that is over, and which this run's start writes as a new file.
 		"'" + p.MCPConfig() + "'", "'" + p.MCPConfigFresh() + "'",
@@ -246,13 +251,14 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 			cleared)
 	}
 	// The CHECKOUT is left alone (that disk state is why a box is reused), and
-	// so are the harness's own session store, which a run here continues, and
-	// the digests of what it holds, without which an archive the box packed
+	// so are the harness's own session store, which a run here continues (the
+	// home's own CLAUDE.md alone is put back there, [executor.Paths.ClaudeHomeInstructions]),
+	// and the digests of what it holds, without which an archive the box packed
 	// itself would be restored over the copy that ran on past it.
 	if strings.Contains(cleared, "/"+sandbox.WorkspaceSubdir) {
 		t.Fatalf("the clear reached into the checkout: %s", cleared)
 	}
-	if strings.Contains(cleared, p.ClaudeConfigDir()) {
+	if strings.Contains(strings.ReplaceAll(cleared, p.ClaudeConfigDir()+"/CLAUDE.md'", ""), p.ClaudeConfigDir()) {
 		t.Fatalf("the clear reached into the harness's own sessions: %s", cleared)
 	}
 	if strings.Contains(cleared, p.SessionDigests()) {

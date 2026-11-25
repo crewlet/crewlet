@@ -157,3 +157,35 @@ func TestAStandInsClaimIsTakenByOneProcess(t *testing.T) {
 // uutils' mkdir lost exclusivity in about three rounds of four, so a
 // non-exclusive claim cannot survive fifty, at only a hundred short shells.
 const claimRounds = 50
+
+// boxPathWithout fills bin with every program this machine's PATH finds, as a
+// box image has them, but those named in absent and the harness the case
+// stands in, so a case about a box lacking a program runs every other part of
+// the script on the tools a box has.
+func boxPathWithout(t *testing.T, bin string, absent ...string) {
+	t.Helper()
+	skip := map[string]bool{"claude": true}
+	for _, name := range absent {
+		skip[name] = true
+	}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if skip[name] || e.IsDir() {
+				continue
+			}
+			path := filepath.Join(dir, name)
+			if info, err := os.Stat(path); err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+				continue
+			}
+			skip[name] = true // the first a PATH lookup finds
+			if err := os.Symlink(path, filepath.Join(bin, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}

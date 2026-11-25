@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -20,8 +21,8 @@ import (
 // OpenCode's Code Mode): the engine's tools are needed on every request, a
 // seat's vendor tools a few at a time (internal/sandbox's MCPServer.AlwaysLoaded). The
 // set is fixed at the opening ([Servers]): a run is handed one URL per server
-// and dials no other, so a tool arriving later from an unserved server is
-// served as one of the engine's own.
+// and dials no other, so a tool arriving later from an unserved server is one
+// of the engine's own, under an alias where its name needs one ([aliased]).
 
 // ServerPattern is the mux pattern of one of an opening's servers, beneath the
 // job's endpoint: under the bridge's prefix, so every gate covering the bridge
@@ -72,9 +73,9 @@ func Servers(surface Surface) []string {
 
 // Listed is what the engine's own server of an opening of s lists as it
 // opens, by name, sorted: each tool the surface offers that no server of the
-// opening's own serves ([Servers], [binding.endpointOf]), less the bridge's
-// skill loader where the run's harness loads its skills itself
-// ([binding.offeredTool]). A surface only adds tools ([tools.Surface.Activate]),
+// opening's own serves ([Servers], [binding.endpointOf]), under its alias where
+// it has one ([aliased]), less the bridge's skill loader where the run's
+// harness loads its skills itself ([binding.offeredTool]). A surface only adds tools ([tools.Surface.Activate]),
 // so a run's harness lists every one of them for as long as the run lasts:
 // what a runner holds the harness's offer to ([sandbox.MCPServer.Tools]).
 func Listed(s *Session) []string {
@@ -94,8 +95,30 @@ func Listed(s *Session) []string {
 		}
 		out = append(out, def.Name)
 	}
+	// UNDER THE NAMES IT LISTS, an alias for one it cannot ([aliasesOf]).
+	alias := aliasesOf(out)
+	for i, name := range out {
+		if a, ok := alias[name]; ok {
+			out[i] = a
+		}
+	}
 	slices.Sort(out)
 	return out
+}
+
+// Listed is how many tools an opening of the session lists its run's harness
+// now, across its servers, the engine's own and each MCP server's: what a
+// launch weighs a harness that hides every MCP tool past a count of them
+// against (internal/sandbox's Opening.Tools). Counted by the rule each server
+// lists by ([Session.lists]), so the count and the lists cannot disagree.
+func (s *Session) Listed() int {
+	n := 0
+	for _, def := range s.Surface.ToolDefs() {
+		if s.lists(def.Name) {
+			n++
+		}
+	}
+	return n
 }
 
 // seatOf is surface where it is a seat's, or nil: the one surface a seat's
@@ -111,11 +134,22 @@ type endpoint struct {
 	opening *binding
 	name    string
 	server  *toolsession.Server
+
+	// mu guards toolOf: the tool each alias the engine's own server last
+	// listed names ([aliased]), which a call on the alias is made as.
+	mu     sync.Mutex
+	toolOf map[string]string
 }
 
 var _ toolsession.Dispatcher = (*endpoint)(nil)
 
 // Offered is what the surface offers now of this endpoint's tools.
+//
+// THE ENGINE'S OWN SERVER LISTS ONLY A NAME NO OTHER SERVER CAN SPELL in a
+// harness joining server and tool with `__` or `-`
+// ([harnessprofile.BridgeToolName]): every built-in has one, and any other
+// tool of its, one of a server the opening does not serve, is listed under
+// its alias ([aliased]; the package doc, "A name `crewlet` cannot list").
 func (e *endpoint) Offered() []toolsession.Tool {
 	all := e.opening.Offered()
 	out := make([]toolsession.Tool, 0, len(all))
@@ -124,6 +158,13 @@ func (e *endpoint) Offered() []toolsession.Tool {
 			out = append(out, tool)
 		}
 	}
+	if e.name != "" {
+		return out
+	}
+	out, toolOf := aliased(out)
+	e.mu.Lock()
+	e.toolOf = toolOf
+	e.mu.Unlock()
 	return out
 }
 
@@ -134,7 +175,15 @@ func (e *endpoint) Revision() uint64 { return e.opening.Revision() }
 // Call is the opening's, through whichever endpoint the harness reached. The
 // calling endpoint syncs its own list once answered ([toolsession.Server]); the
 // others are synced here, since a call on one can move what another offers.
+//
+// A call on an alias is made as the tool it names, so the surface, the record
+// and the seat's guards see the tool's own name.
 func (e *endpoint) Call(in toolsession.Call) toolsession.Result {
+	e.mu.Lock()
+	if name, ok := e.toolOf[in.Name]; ok {
+		in.Name = name
+	}
+	e.mu.Unlock()
 	res := e.opening.Call(in)
 	for _, other := range e.opening.order {
 		if other != e {

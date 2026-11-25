@@ -99,6 +99,28 @@ Every round is one launch of the vendor's harness, so the model and the harness'
 
 Before switching, run the evaluation suites against the candidate (`crewlet assistant eval`, below).
 
+## Instructions
+
+Ask Crewlet answers as briefly as each question allows: the answer first, a requested TL;DR or short answer kept to a few lines, each fact said once, and lists, tables and headings only where they carry structure. Instructions change how it writes, in two layers, both on **Settings › Ask Crewlet**:
+
+- **The company's**, `assistant.instructions` in the company document, set by an administrator and saved as a configuration revision like any other change. Every member reads them there.
+- **Each person's own**, set by the person for themselves and kept under the seat they hold (`save_assistant_instructions`, read with `GET /ask/instructions`). They win where the two differ, pass with the seat to its next holder, and are forgotten a grace after the seat leaves, as its Home board is.
+
+Each layer holds a length (`brief`, `balanced` or `detailed`), a layout (`lead`, the answer first in plain sentences; `lists`, bullets and tables where they help; or `tldr`, a one-line TL;DR first) and free text of at most 1000 characters for tone, terms and structure. A text holding what looks like a credential is refused, never stored or echoed. A change applies from the next question; the drawer says when instructions are in use and links to the page.
+
+```yaml
+assistant:
+  model: assistant
+  instructions:
+    length: brief
+    format: tldr
+    text: Use British spelling. Name tasks by their key.
+```
+
+**They shape how it writes, never what it may do.** Instructions reach the model after every rule, under a preamble confining them to tone, length and layout, and each free text is fenced as its writer's (`assistant_instructions`; the company's at company trust, as the brand's voice is). An instruction to skip approvals, change settings without asking or read more than the person may changes nothing: every change is still a proposal the person approves, and every read and write is decided by the engine as that person, whatever the prompt says. A question that asks for something else (a full explanation after "brief") wins over both layers. Briefs keep their fixed shape and take no instructions.
+
+Asked to answer differently from now on ("shorter from now on"), Ask Crewlet proposes the change to the person's own instructions for them to approve, keeping what they hold; it never proposes the company's for it.
+
 ## Briefs
 
 The drawer's **Brief me on this page** row (or "Brief me on this decision", "this task", "this agent", "this room" where one record is open) asks a **brief turn**: an ordinary turn of a new conversation, started, admitted, metered, recorded and streamed like any question, answering in a fixed shape. What a person sees is on the [concept page](../concepts/assistant.md#opening-it). For you:

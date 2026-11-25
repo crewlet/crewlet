@@ -1156,3 +1156,42 @@ func TestAStepAtTheVendorTakesNoValueAndHoldsUpNothing(t *testing.T) {
 		t.Errorf("a sign-in was given a redirect: %+v", reqs[1].Redirect)
 	}
 }
+
+// THE STEP A PERSON IS ON IS THE FIRST NOT DONE: a step is done once the field
+// it yields holds a value that resolves, or the integration it connects first
+// is connected, and every step before a done one is done, since they run in
+// order. Mutation: mark a step done by its own field alone, and the Cloud
+// Shell step reads undone once the provider is saved.
+func TestTheStepAPersonIsOnIsTheFirstNotDone(t *testing.T) {
+	t.Parallel()
+	yes, no := true, false
+	steps := func() []setup.Step {
+		return []setup.Step{{}, {Yields: "provisioner"}, {}, {Yields: "provider"}}
+	}
+	for name, c := range map[string]struct {
+		reqs []setup.Requirement
+		want []bool
+	}{
+		"nothing saved": {[]setup.Requirement{{Field: "provisioner"}, {Field: "provider"}},
+			[]bool{false, false, false, false}},
+		"the provisioner saved": {[]setup.Requirement{{Field: "provisioner", Present: true},
+			{Field: "provider"}}, []bool{true, true, false, false}},
+		"a reference to nothing": {[]setup.Requirement{{Field: "provisioner", Present: true,
+			Resolved: &no}, {Field: "provider"}}, []bool{false, false, false, false}},
+		"the provider saved": {[]setup.Requirement{{Field: "provisioner", Present: true,
+			Resolved: &yes}, {Field: "provider", Present: true}}, []bool{true, true, true, true}},
+	} {
+		got := steps()
+		setup.MarkDone(got, c.reqs)
+		for i, step := range got {
+			if step.Done != c.want[i] {
+				t.Errorf("%s: step %d done = %v, want %v", name, i+1, step.Done, c.want[i])
+			}
+		}
+	}
+	needs := []setup.Step{{Needs: "google_cloud", Connected: &yes}, {Yields: "id"}}
+	setup.MarkDone(needs, nil)
+	if !needs[0].Done || needs[1].Done {
+		t.Errorf("a step connecting what is connected = %+v", needs)
+	}
+}

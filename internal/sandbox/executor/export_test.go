@@ -245,6 +245,10 @@ func AttributionHook(a sandbox.CommitAttribution, hooks string) ([]byte, error) 
 // at the hooks directory hooks with ([hooksParameter]).
 func HooksParameter(hooks string) string { return hooksParameter(hooks) }
 
+// ClaudeNoProxyHolder stands in a run's settings for its NO_PROXY list until
+// the script merges it ([claudeNoProxyHolder]).
+const ClaudeNoProxyHolder = claudeNoProxyHolder
+
 // ClaudeSkillsFloor, ClaudeNotesFloor and ClaudeSettingsPinFloor are the
 // oldest Claude Code releases a run is started with its skills' plugin, and the
 // settings that keep its hook on, with its notes' hooks, and with its settings'
@@ -272,7 +276,7 @@ func StreamRequest(h Harness, lines ...string) (sandbox.RequestMeasure, string, 
 	dec := h.Events()
 	for _, line := range lines {
 		if line == SkippedLine {
-			dec.Skipped(int64(maxLineBytes)+1, maxLineBytes)
+			dec.Skipped(LongLine{Size: int64(maxLineBytes) + 1, Bound: maxLineBytes})
 			continue
 		}
 		dec.Line([]byte(line))
@@ -373,3 +377,7 @@ const (
 	QwenClearsAt              = qwenClearsAt
 	QwenSyntheticFailureBytes = qwenSyntheticFailureBytes
 )
+
+// EachLine is [eachLine], for the cases of a line past a bound the suite
+// lowers.
+func EachLine(r io.Reader, dec Decoder, bound int) error { return eachLine(r, dec, bound) }

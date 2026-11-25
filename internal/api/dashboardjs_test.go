@@ -1053,14 +1053,15 @@ const (
 	// the shell links: everything a reader downloads before the first screen
 	// can draw. It began at 300 KiB, under two seconds on a 1.5 Mbit/s link
 	// (the slow end of a phone tether), and has moved up with each kit release
-	// and frame feature; the last measure was 444.0 KiB, about 2.43 seconds,
-	// on kit 0.188.0, whose one sheet carries the fleet primitives' rules.
+	// and frame feature; the last measure was 446.4 KiB, about 2.44 seconds,
+	// on kit 0.190.0 with the Google page's and integration pages' addresses
+	// in the frame.
 	// The one sheet carries every design-system rule by rule (see
 	// TestNoLazyStylesheetCarriesTheDesignSystem), so kit releases grow it even
 	// when no screen joins the entry. A raise names the measured size and its
 	// cause in its commit; a screen's module in the entry is the failure to fix
 	// rather than raise for.
-	initialBudget = 445 << 10
+	initialBudget = 447 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1079,12 +1080,10 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7480.5 KiB,
-	// on kit 0.188.2, with the MCP wizard keeping the headers an integration
-	// does not send, a consent product's OAuth client on the connect form, and
-	// Ask Crewlet reading an outline of the screen. A raise names the measured
-	// size and its cause in its commit.
-	treeBudget = 5<<20 + 2361<<10
+	// kit releases account for its growth, and the last measure was 7535.9 KiB,
+	// on kit 0.190.0, with the Google page for every Google product's shared
+	// setup. A raise names the measured size and its cause in its commit.
+	treeBudget = 5<<20 + 2416<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

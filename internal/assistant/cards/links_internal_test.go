@@ -11,26 +11,27 @@ import (
 // spells the record, and "Open seat" is what a person reads. A task, a project
 // or a space keeps its key, which people know.
 //
-// DERIVED FROM THE TABLE, every screen of it: one whose address takes an
-// opaque value ({id}, {turn_id}, {handle} or {unit}) carries a noun and is
-// named by it, unless its {id} is a key a person reads too (a task's), and one
-// that takes a key ({KEY}, {CONTAINER}) is named by the key. A screen the table
-// gains is held the day it lands. Mutation: drop the chat screen's noun, or
-// fall back to the first path value, and this fails.
+// DERIVED FROM THE TABLE: a screen taking an opaque value ({id}, {turn_id},
+// {handle}) is named by its noun unless its {id} is also a key (a task's), one
+// taking a key ({KEY}, {CONTAINER}) by the key, and one taking an integration
+// ({kind}) by its name. Mutation: drop the chat screen's noun, or fall back to
+// the first path value, and this fails.
 func TestARecordLinkIsNamedByWhatItOpens(t *testing.T) {
 	t.Parallel()
 	const uuid = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
 	opaque := map[string]string{"{id}": uuid, "{turn_id}": uuid, "{handle}": "pm"}
 	keys := map[string]string{"{KEY}": "FAIR", "{CONTAINER}": "HOME"}
 	walked := 0
-	for name, s := range links {
-		params, key, takesOpaque := map[string]string{}, "", false
+	for name, s := range links() {
+		params, key, takesOpaque, named := map[string]string{}, "", false, false
 		for _, segment := range strings.Split(s.address, "/") {
-			p, ok := placeholders[segment]
+			p, ok := placeholders()[segment]
 			if !ok {
 				continue
 			}
 			switch v, keyed := keys[segment]; {
+			case segment == "{kind}":
+				params[p.param], key, named = "google_cloud", "Open Google Cloud", true
 			case segment == "{id}" && s.id != nil:
 				// A KEY AS WELL AS AN ID, as a task's {id} is: named by the
 				// key a person reads.
@@ -49,6 +50,10 @@ func TestARecordLinkIsNamedByWhatItOpens(t *testing.T) {
 		switch {
 		case err != nil:
 			t.Errorf("%s: %v", name, err)
+		case named:
+			if !strings.HasPrefix(link.Label, key) {
+				t.Errorf("an integration's link reads %q, want it to open with %q", link.Label, key)
+			}
 		case takesOpaque && (s.noun == "" || link.Label != "Open "+s.noun):
 			t.Errorf("a %s link with no name reads %q: its address takes a value nobody "+
 				"reads, so the screen names its record by a noun", name, link.Label)

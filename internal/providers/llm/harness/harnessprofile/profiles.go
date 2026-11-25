@@ -271,6 +271,7 @@ func (p Profile) Clone() Profile {
 	out.Requests = p.Requests.clone()
 	out.Cap = p.Cap.clone()
 	out.FailureMarkers = append([]string(nil), p.FailureMarkers...)
+	out.PlanRead = p.PlanRead.clone()
 	p.cloneSignIn(&out)
 	return out
 }

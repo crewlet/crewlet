@@ -487,7 +487,9 @@ has none) and **Agents with problems**, which is named apart from the
 configuration check's pill in the toolbar ("Configuration OK", or "*N*
 configuration problems"), since one is about the agents and the other the
 document. Rows are pruned to the seats the chip keeps, a team kept while it
-holds one.
+holds one. A seat counts in **Paused or stopped** from the moment it is paused,
+while the turn it is on finishes or its executor asks too, so the state chips
+always add up to **All agents**; its Status still says what it is doing.
 
 **The status legend** on the chart, at the canvas's bottom right across from the
 zoom controls, has **Working**, **Needs you**, **Paused or stopped** and
@@ -670,9 +672,9 @@ Shown and not changed: each schedule's cron, timezone, runner and task, and the 
 | Learning | Agent seats, on **Advanced**. `learning_enabled`: the company's default (unset), on or off. Off skips reflection after the seat's turns; episodes are still written. |
 | Workers it may delegate to | Agent seats, on **Advanced**. `workers`, chosen from the delegate templates the company publishes; empty is every one. |
 | Placement: pinned to node, node labels | Agent seats, on **Advanced**. `placement.node` and `placement.labels`, each label written `key=value`; a node must carry every label to run the seat. |
-| Executor box: paused for, rounds per run | Agent seats, on **Advanced**. `sandbox.pause_ttl_seconds` and `sandbox.max_turns`, whole numbers; empty is the default, and 0 is a setting (never pause, or no round cap). |
+| Executor box: paused for, rounds per run, runs at once | Agent seats, on **Advanced**. `sandbox.pause_ttl_seconds`, `sandbox.max_turns` and `sandbox.max_concurrent_runs`, whole numbers; empty is the default. 0 is a setting for the first two (never pause, or no round cap); runs at once takes 1 or more. |
 
-Shown and not changed, each depending on a company-level block the builder does not edit: the rest of the executor box (setup steps, variables and tool servers; where it runs is its model entry's `run_in`), tool credentials (names only) and whether the seat is the Datadog fallback.
+Shown and not changed, each depending on a company-level block the builder does not edit: the rest of the executor box (setup steps, variables, tool servers and its browser; where it runs is its model entry's `run_in`), tool credentials (names only) and whether the seat is the Datadog fallback.
 
 **Delete seat** is on the editor's last tab (**Advanced** for an agent seat, **Work** for a human seat) and opens the same dialog as the chart's Delete.
 

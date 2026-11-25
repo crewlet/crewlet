@@ -19,7 +19,7 @@ import (
 // end applies ([wentOnVersion]). A record above it is RETAINED rather than
 // skipped (the framework's deferral contract), so a rolling upgrade reduces
 // coverage rather than causing an outage.
-const RecordVersion = trimmedVersion
+const RecordVersion = summaryPlaceVersion
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -72,6 +72,18 @@ const mediaVersion = 9
 // readers would not say the history before the cut is gone.
 const trimmedVersion = 10
 
+// summaryVersion stamps an end that names the newest summary a box read of
+// its turn kept ([executorkeep.Ending.Summary]), which the apply names on the
+// turn's summary row. An older build retains it: applied without it, its
+// estate would name no summary the collector keeps, and read none.
+const summaryVersion = 11
+
+// summaryPlaceVersion stamps an end whose summary names the capture whose
+// stamp first named it ([executorkeep.Summary.Place]), which the apply keeps on
+// the turn's summary row. An older build retains it: applied without it, its
+// row would name a summary no reader can tell newer than a capture or not.
+const summaryPlaceVersion = 12
+
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER: a node's eviction, the one gate here. A field such a record needs that
 // it cannot have belongs somewhere else.
@@ -107,6 +119,10 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "ending", "spent_sessions"}},
 	{Name: "Capture.Media", Since: mediaVersion, Op: string(OpCapture), Path: []string{"mutation", "media"}},
 	{Name: "Capture.Trimmed", Since: trimmedVersion, Op: string(OpCapture), Path: []string{"mutation", "trimmed"}},
+	{Name: "End.Ending.Summary", Since: summaryVersion, Op: string(OpEnd),
+		Path: []string{"mutation", "ending", "summary"}},
+	{Name: "End.Ending.Summary.Place", Since: summaryPlaceVersion, Op: string(OpEnd),
+		Path: []string{"mutation", "ending", "summary", "place"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

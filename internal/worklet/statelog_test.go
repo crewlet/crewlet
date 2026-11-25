@@ -186,6 +186,23 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// A CREDENTIAL'S WRITE WHOSE HISTORY ROW KEEPS ITS APPS.
 		record.Actor, record.ActorKind, record.OperatorID = "token:ci", worklet.AuthorOperator, "token:ci"
 		record.ActorApps, record.ActorAppsKept = []iam.Grant{iam.GrantWorklet}, true
+	case "Snapshot.ByOwner":
+		// A CHANGE ITS OWNER MADE, whose lead a build before the rule wakes.
+		record.Actor, record.ActorKind = "ada", worklet.AuthorAgent
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated,
+			Snapshot: worklet.Snapshot{Assignee: "ada", ProjectLead: "lead", ByOwner: true}}
+	case "Snapshot.LeftUnassigned":
+		// A TASK LEFT UNASSIGNED, whose lead a build before the rule is never
+		// offered.
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeAssignee,
+			Fields:   map[string]worklet.Delta{"assignee": {From: "ada"}},
+			Snapshot: worklet.Snapshot{PrevAssignee: "ada", ProjectLead: "lead", LeftUnassigned: true}}
+	case "Snapshot.DepartureLead":
+		// THE ONE NOTICE A DEPARTURE GIVES ITS LEAD, which a build before the
+		// rule never offers.
+		record.Notify = &worklet.Notify{Kind: worklet.ChangeAssignee,
+			Fields:   map[string]worklet.Delta{"assignee": {From: "ada"}},
+			Snapshot: worklet.Snapshot{PrevAssignee: "ada", DepartureLead: "lead", LeftUnassigned: true}}
 	case "MutationRecord.NoticeAsksKept":
 		// AN AGENT'S COMMENT WHOSE NOTICE ROWS KEEP ITS STATEMENT.
 		asks := false

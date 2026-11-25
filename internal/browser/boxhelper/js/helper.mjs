@@ -1,9 +1,9 @@
 // helper.mjs: the box helper's entry, `node helper.mjs <subcommand>`, run
 // from the helper's folder in a box. ensure prints its one line; supervise
-// runs the box's supervisor from the launch ensure wrote; mcp is the shim, a
-// job's browser server on stdio. An unknown subcommand or flag exits 64 with
-// one line on stderr. internal/browser/boxhelper's package doc carries the
-// argument.
+// runs the box's supervisor from the launch ensure wrote; stop ends that
+// supervisor and its browser; mcp is the shim, a job's browser server on
+// stdio. An unknown subcommand or flag exits 64 with one line on stderr.
+// internal/browser/boxhelper's package doc carries the argument.
 
 import path from "node:path"
 
@@ -33,6 +33,18 @@ switch (subcommand) {
     process.stdout.write(`${line}\n`, () => process.exit(0))
     break
   }
+  case "stop": {
+    if (flags.length > 0) usage(`stop takes no flags, and was given ${JSON.stringify(flags)}`)
+    const { stop } = await import("./ensure.mjs")
+    try {
+      await stop(folder)
+    } catch (err) {
+      process.stderr.write(`stop: ${err?.stack ?? err}\n`)
+      process.exit(1)
+    }
+    process.exit(0)
+    break
+  }
   case "supervise": {
     if (flags.length !== 2 || flags[0] !== "--launch" || !path.isAbsolute(flags[1])) {
       usage(`supervise takes --launch and launch.json's absolute path, and was given ${JSON.stringify(flags)}`)
@@ -58,5 +70,5 @@ switch (subcommand) {
     break
   }
   default:
-    usage(`unknown subcommand ${JSON.stringify(subcommand)}: ensure, supervise or mcp`)
+    usage(`unknown subcommand ${JSON.stringify(subcommand)}: ensure, supervise, stop or mcp`)
 }

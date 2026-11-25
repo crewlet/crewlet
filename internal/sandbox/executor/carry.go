@@ -167,9 +167,12 @@ var chatRunStartMax = len(strconv.Itoa(sandbox.MaxRunStartLines)) + len(strconv.
 // is gated, cut and torn back ([chatSessionGate]), setting n to its line count
 // (0 where there is none) and from to `<lines> <crc> <bytes>`, the count and
 // the POSIX cksum of exactly those lines, "" where the run did not continue,
-// the file holds no whole line or the digest was not taken.
-const chatRunStartFrom = `n=0 from=; if [ -n "$cf" ]; then n=$(wc -l < "$cf" | tr -d ' ') || n=0; ` +
-	`if [ "$k" = yes ] && [ "$n" -gt 0 ] 2> /dev/null && c=$(head -n "$n" "$cf" | cksum); then from="$n $c"; fi; fi`
+// the file holds no whole line or the digest was not taken; and the trim's
+// start ([trimStartVar]) to the lines from names, 0 where the run starts its
+// own session, unset where neither.
+const chatRunStartFrom = `n=0 from= ` + trimStartVar + `=; if [ -n "$cf" ]; then n=$(wc -l < "$cf" | tr -d ' ') || n=0; ` +
+	`if [ "$k" = yes ] && [ "$n" -gt 0 ] 2> /dev/null && c=$(head -n "$n" "$cf" | cksum); then from="$n $c" ` +
+	trimStartVar + `=$n; fi; elif [ "$k" = no ]; then ` + trimStartVar + `=0; fi`
 
 // chatRecordFrom is the record's `from` line, written only where the run
 // recorded one ([chatRunStartFrom]), between `why` and `release`.

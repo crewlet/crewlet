@@ -1005,3 +1005,42 @@ func codexShellExcluded(t *testing.T, argv []string) []string {
 	t.Fatalf("the app-server's argv sets no shell policy: %q", argv)
 	return nil
 }
+
+// A CODEX RUN STARTS NOTHING WHERE ANOTHER SERVER WOULD RENAME ITS BRIDGE,
+// naming that server, and an ordinary server runs: Codex 0.171.0 hashes the
+// bridge's namespace beside a server `mcp::crewlet` and its `submit_work`
+// beside a server `crewle` listing `tsubmit_work` (measured), so the run's
+// script asks the app-server, before `exec`, through the note helper the
+// engine embeds (internal/notehelper's codex-bridge).
+//
+// Mutation: drop the script's bridge check, and the first two rows run.
+func TestACodexRunStartsNothingWhereAnotherServerWouldRenameItsBridge(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		server, tools string
+		refused       bool
+	}{{"mcp::crewlet", "x", true}, {"crewle", "tsubmit_work", true}, {"docs", "search tsubmit_work", false}} {
+		t.Run(c.server, func(t *testing.T) {
+			t.Parallel()
+			runner, box, record := codexBox(t, "0.171.0")
+			if err := os.MkdirAll(filepath.Join(record, "tools"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(record, "tools", c.server), []byte(c.tools), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", MCPServers: map[string]sandbox.MCPServer{
+				"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, AlwaysLoaded: true},
+				c.server:  {Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:9/other"},
+			}})
+			_, err := os.Stat(filepath.Join(record, "exec-argv"))
+			if ran := err == nil; ran == c.refused || res.Success == c.refused {
+				t.Fatalf("exec ran %v and the run succeeded %v, want both %v:\n%s", ran, res.Success, !c.refused,
+					boxFile(t, box, executor.PathsFor(box).Err()))
+			}
+			if errs := boxFile(t, box, executor.PathsFor(box).Err()); c.refused && !strings.Contains(errs, `"`+c.server+`"`) {
+				t.Errorf("the error stream does not name the server %q:\n%s", c.server, errs)
+			}
+		})
+	}
+}

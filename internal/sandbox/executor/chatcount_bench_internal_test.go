@@ -14,16 +14,16 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// BenchmarkAChatCountAtItsBounds measures Qwen Code's and Gemini CLI's count,
-// the take's meter (meter) and a collection's of the box's copy (copy),
-// against [meterBaseHeldBytes] and [baseTierReadBytes]: a line just within the
-// line bound passed over (skipped), in a person's words, an answer or a call's
-// arguments, past it (past, failing the read), or none (plain); the most ids a
-// count keeps, as uuids (ids) and at the word bound (ids_long), and Gemini
-// CLI's at its base beside a line of as many (ids_base). One case a process:
-// held is the largest live heap at GOGC=10 under gctrace, held-MiB the same as
-// each GC marks it. An unread count fails, but past the bound; an answer, or
-// Qwen Code's calls, at the bound read as masked.
+// BenchmarkAChatCountAtItsBounds measures Qwen Code's and Gemini CLI's count:
+// the take's meter (meter) and a collection's of the box's copy, alone (copy),
+// followed by its summary's reading (summary) or that alone (summary_alone),
+// against [meterBaseHeldBytes] and [baseTierReadBytes]. A line just within the
+// bound passed over (skipped), in words, an answer or a call's arguments, past
+// it (past, failing the read), or none (plain); the most ids a count keeps, as
+// uuids (ids) and at the word bound (ids_long), and Gemini CLI's at its base
+// beside a line of as many (ids_base). One case a process: held is the most
+// live heap at GOGC=10 under gctrace, held-MiB as each GC marks it. An unread
+// count fails but past the bound; an answer or Qwen Code's calls at it read masked.
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAChatCountAtItsBounds$/^<case>$' -benchtime 1x
 func BenchmarkAChatCountAtItsBounds(b *testing.B) {
@@ -47,12 +47,8 @@ func BenchmarkAChatCountAtItsBounds(b *testing.B) {
 			if c.big == nil && c.name != "plain" {
 				continue
 			}
-			for _, archive := range []bool{true, false} {
-				how := "copy"
-				if archive {
-					how = "meter"
-				}
-				b.Run(h.name+"_"+how+"_"+c.name, func(b *testing.B) { chatBenchRead(b, h, archive, c.name == "past", c.big) })
+			for _, how := range []string{"meter", "copy", "summary", "summary_alone"} {
+				b.Run(h.name+"_"+how+"_"+c.name, func(b *testing.B) { chatBenchRead(b, h, how, c.name == "past", c.big) })
 			}
 		}
 	}
@@ -71,6 +67,7 @@ type chatBenchHarness struct {
 	skipped, words, answer, call func(quoted string) string
 	ids                          func(n int) string
 	idsBase                      func() string
+	summary                      func() *chatSummaryLines
 }
 
 // chatBenchID is the i'th id of n bytes.
@@ -100,6 +97,7 @@ func chatBenchHarnesses() []chatBenchHarness {
 				return `{"type":"assistant","message":{"role":"model","parts":[{"functionCall":{"id":"c1",` +
 					`"name":"run_shell_command","args":{"command":` + q + `}}}]}}`
 			},
+			summary: func() *chatSummaryLines { return &newQwenSummaryReading(&summaryRead{}).chatSummaryLines },
 			ids: func(n int) string {
 				parts := make([]string, qwenCountIDs)
 				for i := range parts {
@@ -131,6 +129,7 @@ func chatBenchHarnesses() []chatBenchHarness {
 				}
 				return strings.Join(lines, "\n")
 			},
+			summary: func() *chatSummaryLines { return &newGeminiSummaryReading(newGeminiSummaries()).chatSummaryLines },
 			idsBase: func() string {
 				lines := make([]string, geminiCountBaseIDs-1)
 				for i := range lines {
@@ -150,8 +149,9 @@ func chatBenchHarnesses() []chatBenchHarness {
 // chatBenchRead measures one count of h's chat file around the line big
 // writes, none for nil, as the take's meter reads its archive or as a
 // collection reads the box's copy; past where it fails the read.
-func chatBenchRead(b *testing.B, h chatBenchHarness, archive, past bool, big func() string) {
+func chatBenchRead(b *testing.B, h chatBenchHarness, how string, past bool, big func() string) {
 	file := filepath.Join(b.TempDir(), "chat")
+	archive := how == "meter"
 	chatBenchWrite(b, h, archive, big, file)
 	runtime.GC()
 	debug.FreeOSMemory()
@@ -166,12 +166,23 @@ func chatBenchRead(b *testing.B, h chatBenchHarness, archive, past bool, big fun
 		start := time.Now()
 		c := h.counter()
 		var read error
+		var summary *chatSummaryLines
+		counted := c
+		switch how {
+		case "summary":
+			summary = h.summary()
+		case "summary_alone":
+			summary, counted = h.summary(), nil
+		}
 		if archive {
 			_, read = chatMeter(b.Context(), c, f, h.isMember, h.release, h.release, new(passBudget))
 		} else {
 			_, read = countChat(h.release, h.release, func() error {
-				return chatFileLines(b.Context(), f, c, new(passBudget))
+				return chatFileFollowed(b.Context(), f, counted, summary)
 			})
+		}
+		if summary != nil && summary.err != nil && !past {
+			b.Fatalf("the summary read: %v", summary.err)
 		}
 		count := c.count(0, 0)
 		elapsed := time.Since(start) //fixedwait:measure the read's time is what the case reports
@@ -181,7 +192,7 @@ func chatBenchRead(b *testing.B, h chatBenchHarness, archive, past bool, big fun
 		switch {
 		case past && read == nil:
 			b.Fatalf("the count read %s, want it failed past the bound", countString(count))
-		case !past && (read != nil || count.Mark == sandbox.CountUnread):
+		case !past && (read != nil || counted != nil && count.Mark == sandbox.CountUnread):
 			b.Fatalf("the count read %s (%v), want it read", countString(count), read)
 		}
 	}

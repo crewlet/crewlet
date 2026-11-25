@@ -134,9 +134,9 @@ type NodeStatus struct {
 	// table bounds the marks, so nothing here needs clipping.
 	Alarms []AlarmMark
 
-	// AlarmsEvaluated is whether this node has evaluated an alarm table:
-	// false on a node without `data` (no table) and before its first
-	// evaluation. A FLAG, NOT A NIL LIST: "nothing firing" and "cannot say"
+	// AlarmsEvaluated is whether this node has evaluated an alarm table,
+	// false before its first evaluation: a data node's whole table, or a
+	// node without `data`'s own (statelog.LocalKinds). A FLAG, NOT A NIL LIST: "nothing firing" and "cannot say"
 	// are opposite claims, and a nil slice is also what collecting no marks
 	// produces.
 	AlarmsEvaluated bool

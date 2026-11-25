@@ -22,7 +22,7 @@ integrations:
   google_cloud:
     enabled: true
     provisioning:
-      provisioner: ` + gcpProvisioner + `
+      identity_project: acme-crewlet-id
       provider: ` + gcpProvider + `
       federation_key: "${` + googlecloud.FederationKeySecret + `}"
   google_analytics:

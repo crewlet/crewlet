@@ -65,29 +65,63 @@ func (e *Engine) publishFleetEvent(ctx context.Context, payload events.Payload) 
 }
 
 // helperRun is the helper's run a helper field resolves to on this node: the
-// entry, its run, and an LLM fleet's decision record where one picked it.
+// entry and its run, and on an LLM fleet every member a helper can run on, in
+// the walk's order, with the fleet's picks of them and its decision record.
 type helperRun struct {
 	key      string
 	provider llm.Provider
-	fleet    types.FleetDecision
+	// members and picks are the fleet's walk, index for index; nil when pinned.
+	members []chain.Member
+	picks   []*fleet.Pick
+	fleet   types.FleetDecision
 	// job is the helper's work as the ledger records it in flight: under its
 	// fleet, none when pinned.
 	job fleet.Job
 }
 
-// inFlight is what records each of run's calls in flight on its entry on
-// ledger, nil where there is no ledger.
-func (run helperRun) inFlight(ledger *fleet.Ledger) func() (end func()) {
+// inFlight is what records each call on member key in flight on ledger, nil
+// where there is no ledger.
+func (run helperRun) inFlight(ledger *fleet.Ledger, key string) func() (end func()) {
 	if ledger == nil {
 		return nil
 	}
-	return func() func() { return ledger.Begin(run.job, run.key) }
+	return func() func() { return ledger.Begin(run.job, key) }
 }
 
+// called is run as the provider a helper calls, each member wrapped by wrap: the
+// entry itself when pinned, and on an LLM fleet a chain over every member, so a
+// limit or failure before an answer moves the call to the next one and only a
+// walk no member answers fails ([chain.Chain.Complete]).
+func (run helperRun) called(wrap func(key string, inner llm.Provider) llm.Provider) (llm.Provider, error) {
+	if len(run.members) == 0 {
+		return wrap(run.key, run.provider), nil
+	}
+	members := make([]chain.Member, len(run.members))
+	for i, m := range run.members {
+		members[i] = chain.Member{Key: m.Key, Provider: wrap(m.Key, m.Provider)}
+	}
+	walk, err := chain.New(members, chain.Options{Fleet: run.picks})
+	if err != nil {
+		return nil, err
+	}
+	return helperChain{Chain: walk, fleet: run.fleet}, nil
+}
+
+// helperChain is a helper's walk over its LLM fleet, which says why its first
+// member was picked.
+type helperChain struct {
+	*chain.Chain
+	fleet types.FleetDecision
+}
+
+// FleetDecision is why the fleet picked the walk's first member.
+func (c helperChain) FleetDecision() types.FleetDecision { return c.fleet }
+
 // helperPick resolves a helper's field ref (field names it) to the helper's
-// run of an entry: the entry itself, or its fleet's first pick a helper can
-// run on, taken where take is so it becomes the helper's home. A fleet with
-// no such member is its [*phase.EmptyFleetError].
+// run of an entry: the entry itself, or every member of its fleet a helper can
+// run on, in the walk's order (the head first, its home where it keeps one).
+// take makes the head the helper's home now; a call takes the member that
+// serves it. A fleet with no such member is its [*phase.EmptyFleetError].
 func helperPick(c *Company, field, ref, subject string, take bool) (helperRun, error) {
 	fleetKey, onFleet := config.FleetOf(ref)
 	if !onFleet {
@@ -98,23 +132,58 @@ func helperPick(c *Company, field, ref, subject string, take bool) (helperRun, e
 		}
 		return helperRun{key: ref, provider: provider, job: fleet.Job{Subject: subject, Job: subject}}, nil
 	}
-	picks, err := c.Models.FleetWalk(fleetKey, fleet.Job{Fleet: fleetKey, Subject: subject, Job: subject})
+	job := fleet.Job{Fleet: fleetKey, Subject: subject, Job: subject}
+	picks, err := c.Models.FleetWalk(fleetKey, job)
 	if err != nil {
 		return helperRun{}, fmt.Errorf("engine: %s: %w", field, err)
 	}
+	run := helperRun{job: job}
 	for _, p := range picks {
 		provider, ok := c.Helpers[p.Key]
 		if !ok {
 			continue
 		}
-		if take {
-			p.Take()
-		}
-		return helperRun{key: p.Key, provider: provider,
-			fleet: runner.FleetDecision([]*fleet.Pick{p}, p.Key),
-			job:   fleet.Job{Fleet: fleetKey, Subject: subject, Job: subject}}, nil
+		run.members = append(run.members, chain.Member{Key: p.Key, Provider: provider})
+		run.picks = append(run.picks, p)
 	}
-	return helperRun{}, fmt.Errorf("engine: %s: %w", field, &phase.EmptyFleetError{Fleet: fleetKey})
+	if len(run.members) == 0 {
+		return helperRun{}, fmt.Errorf("engine: %s: %w", field, &phase.EmptyFleetError{Fleet: fleetKey})
+	}
+	head := run.picks[0]
+	if take {
+		head.Take()
+	}
+	run.key, run.provider = head.Key, run.members[0].Provider
+	run.fleet = runner.FleetDecision([]*fleet.Pick{head}, head.Key)
+	return run, nil
+}
+
+// unready is the failure a call through run would meet as far as its members
+// know without a call, nil where any may answer; on an LLM fleet, the fleet's
+// walk exhausted ([chain.Error]), as a call through it would be.
+func (run helperRun) unready(ctx context.Context) error {
+	first := chain.Unready(ctx, run.providers())
+	if first == nil || len(run.members) == 0 {
+		return first
+	}
+	exhausted := &chain.Error{Err: first, Fleet: run.job.Fleet}
+	for _, member := range run.members {
+		exhausted.Attempted = append(exhausted.Attempted, member.Key)
+		exhausted.Failures = append(exhausted.Failures, chain.Unready(ctx, []llm.Provider{member.Provider}))
+	}
+	return exhausted
+}
+
+// providers is every provider a call through run may reach, in order.
+func (run helperRun) providers() []llm.Provider {
+	if len(run.members) == 0 {
+		return []llm.Provider{run.provider}
+	}
+	out := make([]llm.Provider, len(run.members))
+	for i, m := range run.members {
+		out[i] = m.Provider
+	}
+	return out
 }
 
 // inFlightProvider is a provider whose every call is recorded in flight on

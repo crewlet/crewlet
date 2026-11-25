@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -431,15 +430,19 @@ func TestAGeminiFileShorterThanItsStartIsNotRead(t *testing.T) {
 // A GEMINI CLI PART BEFORE THE NEWEST COMPACTION NEVER COUNTS: a summary
 // between the rounds leaves round 2's parts alone, compacted; a run whose two
 // compressions each straddle a call counts none, and a run after them none;
-// of two summaries, a padded one included, only the newer restarts.
+// of two summaries, found by their lines whatever they open with, only the
+// newer restarts.
 //
-// Mutation: ignore the summary, or restart at the oldest, and a case goes red.
+// Mutation: ignore the summary, find it by its words, or restart at the
+// oldest, and a case goes red.
 func TestAGeminiPartBeforeTheNewestCompactionNeverCounts(t *testing.T) {
 	t.Parallel()
 	ghReadCases(t, "round.snapshot", "compressed.run1", "compressed.run2")
 	first, second := ohCall(1, "echo", `{"t":1}`, "one"), ohCall(2, "echo", `{"t":2}`, "two")
 	snapshot := func(id string) string {
-		return `{"id":"` + id + `","type":"user","content":[{"text":"  <state_snapshot>a summary"}]}`
+		return `{"$set":{"sessionId":"` + ghSession + `"}}` + "\n" + `{"id":"` + id + `","timestamp":"t",` +
+			`"type":"user","content":[{"text":"  <scratchpad>a preamble</scratchpad><state_snapshot>a summary"}]}` +
+			"\n" + `{"id":"` + id + `-ack","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}`
 	}
 	h, err := ghRead(t, ghFile(snapshot("s1"), ghReply("r1", ghCallOf("c1", "echo", `{"t":1}`)),
 		ghAnswers("u1", ghAnswerOf("c1", "echo", "one")), snapshot("s2"),
@@ -889,30 +892,29 @@ const ghLineAllocates = 256 << 10
 // is read and its cut call held, within [ghLineAllocates] whatever the
 // line's length.
 //
-// Not parallel: it reads the process's allocation count.
+// Not parallel: it reads the process's allocation count, the fewest bytes of
+// three reads ([allocationsOf]).
 //
 // Mutation: hold an output or a line whole, and this goes red.
 func TestGeminiReadingHoldsNoLine(t *testing.T) {
 	text := strings.Repeat("v", 64<<20)
 	call := ohCut(ohCall(1, "echo", `{"t":1}`, text))
 	head, tail, _ := strings.Cut(ghRound(`{"t":1}`, "PLACE"), "PLACE")
-	file := head + text + tail
-	read := func() (sandbox.SessionHoldings, error) {
-		return readGeminiHoldings(context.Background(), clArchive(t, [3]string{ghMember(ghSession), "0", file}),
-			ghSession, ghBegan, sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{call}, Resumer: "0.70.0"})
-	}
-	h, err := read()
+	archive, _ := io.ReadAll(clArchive(t, [3]string{ghMember(ghSession), "0", head + text + tail}))
+	ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{call}, Resumer: "0.70.0"}
+	var (
+		tarred bytes.Reader
+		h      sandbox.SessionHoldings
+		err    error
+	)
+	_, allocated := allocationsOf(func() {
+		tarred.Reset(archive)
+		h, err = readGeminiHoldings(context.Background(), &tarred, ghSession, ghBegan, ask)
+	})
 	if got := ohHeld(t, h, err, call); len(got) != 1 {
 		t.Fatalf("a 64 MiB answer: held %v; want the call", got)
 	}
-	tarred := clArchive(t, [3]string{ghMember(ghSession), "0", file})
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	_, _ = readGeminiHoldings(context.Background(), tarred, ghSession, ghBegan,
-		sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{call}, Resumer: "0.70.0"})
-	runtime.ReadMemStats(&after)
-	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > ghLineAllocates {
+	if allocated > ghLineAllocates {
 		t.Errorf("a 64 MiB line allocated %d bytes; want at most %d", allocated, ghLineAllocates)
 	}
 }

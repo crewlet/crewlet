@@ -63,9 +63,10 @@ func TestTheProbeSaysWhatToDo(t *testing.T) {
 	}
 }
 
-// A STACK'S VERDICT SAYS WHO IT SIGNS IN AS AS FACTS, AND WHAT TO DO AS ACTIONS.
-// Mutation: drop the quota warning's action, or write the drift as warnings,
-// and the lists differ.
+// A STACK'S VERDICT SAYS WHO IT SIGNS IN AS AS FACTS, AND WHAT TO DO AS ACTIONS;
+// a refusal first lists the parts that passed and the one that failed.
+// Mutation: drop the quota warning's action, write the drift as warnings, or
+// leave the parts out of a refusal, and the lists differ.
 func TestAStacksVerdictSortsItsFactsFromItsActions(t *testing.T) {
 	t.Parallel()
 	conn, err := NewConnection(testProvisioning(t))
@@ -92,7 +93,10 @@ func TestAStacksVerdictSortsItsFactsFromItsActions(t *testing.T) {
 	drifted := matches
 	drifted.Drift = []string{"The policy a is missing.", "The policy b is not the one this engine expects (x)."}
 	got = verdictOf(conn, drifted)
-	if want := []setup.Fact{{Label: "Differs", Value: "The policy a is missing"}, {Label: "Differs", Value: "The policy b is not the one this engine expects (x)"}}; !slices.Equal(got.Facts, want) {
+	want := setup.Refused("", setup.Parts(probeParts, partPolicies)...).Facts
+	want = append(want, setup.Fact{Label: "Differs", Value: "The policy a is missing"},
+		setup.Fact{Label: "Differs", Value: "The policy b is not the one this engine expects (x)"})
+	if !slices.Equal(got.Facts, want) {
 		t.Errorf("a drifted stack's facts = %+v, want %+v", got.Facts, want)
 	}
 	if !slices.Equal(got.Warnings, []setup.Warning{{Action: rerun}}) {
@@ -111,9 +115,11 @@ func TestAStacksVerdictSortsItsFactsFromItsActions(t *testing.T) {
 	}
 }
 
-// THE FORM ASKS IN ORDER: the stack output is required only once the
-// certificate authority is held, which is minted and never pasted.
-func TestTheConnectFormAsksForTheOutputOnceTheCAIsHeld(t *testing.T) {
+// THE FORM ASKS IN ORDER: the stack output is printed by the certificate
+// authority's block, so it is required to finish and never holds the save that
+// mints the authority, which is never pasted. Mutation: require it only once the
+// authority is held again, or drop printed_by, and this fails.
+func TestTheStackOutputIsPrintedByTheAuthoritysBlock(t *testing.T) {
 	t.Parallel()
 	resolve := func(ref string) (string, bool) { return "bundle", ref != "" }
 	field := func(reqs []setup.Requirement, name string) setup.Requirement {
@@ -126,7 +132,8 @@ func TestTheConnectFormAsksForTheOutputOnceTheCAIsHeld(t *testing.T) {
 		return setup.Requirement{}
 	}
 	before := Requirements(nil, "Acme Robotics, Inc.", resolve)
-	if field(before, "connection").Required || field(before, "slug").Default != "acme-robotics-inc" {
+	if out := field(before, "connection"); !out.Required || out.PrintedBy != "certificate_authority" ||
+		field(before, "slug").Default != "acme-robotics-inc" {
 		t.Errorf("before the mint: %+v %+v", field(before, "connection"), field(before, "slug"))
 	}
 	ca := field(before, "certificate_authority")
@@ -211,5 +218,45 @@ func TestTheConnectFormShowsTheCloudShellBlock(t *testing.T) {
 		if r.Field == "certificate_authority" && r.Public != nil {
 			t.Error("a block was rendered with no home Region")
 		}
+	}
+}
+
+// THE BLOCK SAYS WHICH SAVED ANSWERS IT IS DRAWN FROM, and exactly those: a
+// form hides it while one of them has an unsaved change. Mutation: leave
+// atlas_read out of drawn_from, or add the connection, and this fails.
+func TestTheBlockIsDrawnFromExactlyTheFieldsItNames(t *testing.T) {
+	t.Parallel()
+	bundle := mustBundle(t)
+	resolve := func(name string) (string, bool) { return bundle, name == CertificateAuthoritySecret }
+	base := config.AWSProvisioning{Slug: "acme", HomeRegion: "us-east-2",
+		CertificateAuthority: "${" + CertificateAuthoritySecret + "}"}
+	block := func(p config.AWSProvisioning) *setup.PublicView {
+		for _, r := range Requirements(&config.AWS{Enabled: true, Provisioning: &p}, "Acme", resolve) {
+			if r.Field == "certificate_authority" && r.Public != nil {
+				return r.Public
+			}
+		}
+		t.Fatal("the authority's row carries no block")
+		return nil
+	}
+	plain := block(base)
+	changes := map[string]func(*config.AWSProvisioning){
+		"slug":        func(p *config.AWSProvisioning) { p.Slug = "acme-two" },
+		"home_region": func(p *config.AWSProvisioning) { p.HomeRegion = "eu-west-1" },
+		"atlas_read":  func(p *config.AWSProvisioning) { p.AtlasRead = true },
+		"iam_read":    func(p *config.AWSProvisioning) { p.IAMRead = true },
+		"connection":  func(p *config.AWSProvisioning) { p.Connection = "a,b,c,d,e" },
+	}
+	var drawn []string
+	for _, field := range []string{"slug", "home_region", "connection", "iam_read", "atlas_read"} {
+		p := base
+		changes[field](&p)
+		if block(p).Text != plain.Text {
+			drawn = append(drawn, field)
+		}
+	}
+	if want := []string{"slug", "home_region", "atlas_read"}; !slices.Equal(drawn, want) ||
+		!slices.Equal(plain.DrawnFrom, want) {
+		t.Errorf("the block changes with %v and names %v", drawn, plain.DrawnFrom)
 	}
 }
