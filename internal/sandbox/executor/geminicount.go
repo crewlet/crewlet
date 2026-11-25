@@ -46,7 +46,8 @@ const geminiCollapseKeptTurns = 3
 const geminiContextAllowance = 64 << 10
 
 // geminiCountIDs bounds the ids one count keeps: past 1<<16 records, answers
-// and calls, the session is unread rather than held in memory.
+// and calls, the session is unread rather than held in memory, and the count
+// keeps no id after the line that passed it ([geminiCounting.full]).
 const geminiCountIDs = 1 << 16
 
 // geminiCountBaseIDs is the most ids a count keeps at its base, holding no
@@ -99,9 +100,12 @@ type geminiCounting struct {
 	snapshot        map[string]bool
 	compressions    geminiCompressionLines[string]
 	marks           countMarks
-	l               geminiCountLine
-	seps            lineSeparators
-	head            lineFormHead
+	// full says the ids passed [geminiCountIDs]: the count is unread, and
+	// keeps no more of them.
+	full bool
+	l    geminiCountLine
+	seps lineSeparators
+	head lineFormHead
 }
 
 func newGeminiCounting() *geminiCounting {
@@ -352,7 +356,9 @@ func (c *geminiCounting) read(object bool) string {
 			c.take(&l.updates[i])
 		}
 		for _, id := range l.removes {
-			c.removed[id] = true
+			if !c.full {
+				c.removed[id] = true
+			}
 		}
 	case l.set, l.rewind, l.session && l.typeAbsent:
 	case !l.entry:
@@ -366,14 +372,18 @@ func (c *geminiCounting) read(object bool) string {
 	}
 	if len(c.quarters)+len(c.answers)+len(c.calls)+len(c.removed) > geminiCountIDs {
 		c.marks = c.marks.with(sandbox.CountUnread)
+		c.full = true
 	}
 	return user
 }
 
-// take takes one copy of a record.
+// take takes one copy of a record, none once the count is full.
 func (c *geminiCounting) take(r *geminiCountRecord) {
 	if !r.idOK || r.past {
 		c.marks = c.marks.with(sandbox.CountUnread)
+		return
+	}
+	if c.full {
 		return
 	}
 	id := r.id.key()

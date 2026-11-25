@@ -445,6 +445,31 @@ func TestAChatCountPastItsCallsBoundIsUnread(t *testing.T) {
 	}
 }
 
+// A GEMINI CLI COUNT PAST ITS IDS KEEPS NO MORE: once its ids pass
+// [geminiCountIDs] the count is unread, and no record, answer, call or
+// removal of a later line is held, so a session of any length holds the
+// bound and the one line that passed it.
+//
+// Mutation: keep taking records or removals once full: the count holds more.
+func TestAGeminiCountPastItsIDsKeepsNoMore(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	b.WriteString(geminiCountBase + "\n")
+	for i := range geminiCountIDs + 1000 {
+		fmt.Fprintf(&b, `{"id":"k%07d","type":"gemini","content":"x"}`+"\n", i)
+	}
+	b.WriteString(`{"$patch":{"removeIds":["k0000001","b0"]}}` + "\n")
+	c := newGeminiCounting()
+	if err := chatFileLines(t.Context(), strings.NewReader(b.String()), c, new(passBudget), nil); err != nil {
+		t.Fatal(err)
+	}
+	held := len(c.quarters) + len(c.answers) + len(c.calls) + len(c.removed)
+	if got := c.count(0, 0); got.Mark != sandbox.CountUnread || held > geminiCountIDs+1 {
+		t.Errorf("a count past its ids reads %s holding %d ids; want unread, holding at most %d", countString(got),
+			held, geminiCountIDs+1)
+	}
+}
+
 // A CHAT COUNT'S RESTART NO COUNT CARRIES LEAVES IT UNREAD: a Qwen Code
 // compression's uuid, or a Gemini CLI summary's record id, past
 // [sandbox.RestartIDMaxBytes] or past the walk's word bound names no restart
