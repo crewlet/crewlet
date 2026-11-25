@@ -345,8 +345,8 @@ func TestCodexAndPiCheckoutFormsCarryNoGateBesideHermess(t *testing.T) {
 		}
 		return slices.Sorted(maps.Keys(config))
 	}
-	plain := []string{"agents", "copied", "first", "importInstructions", "instructions", "limit", "nestedSkillsOnly", "reserved",
-		"skillDirs", "skills", "state"}
+	plain := []string{"agents", "copied", "firingLimit", "first", "importInstructions", "instructions", "limit",
+		"nestedSkillsOnly", "reserved", "roots", "skillDirs", "skillSep", "skills", "state"}
 	for name, c := range map[string]struct {
 		home  checkoutHome
 		spec  checkoutSpec
