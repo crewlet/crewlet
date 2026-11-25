@@ -64,9 +64,11 @@ test("every link the engine renders opens the screen it names", () => {
 /**
  * The router's screen a link-table screen opens: the table names the map
  * opened on an entry, and lit along a trace, as screens of their own, and
- * both are the atlas to the router, told apart by their query.
+ * both are the atlas to the router, told apart by their query; the Google
+ * page is an Integrations page.
  */
 function routeScreenOf(screen: string): string {
+  if (screen === "google") return "integrations";
   return screen === "atlas-entry-on-map" || screen === "atlas-trace-on-map" ? "atlas" : screen;
 }
 
