@@ -3049,7 +3049,7 @@ reading's wait, a reading past which is no reading.
 thread, which records and in what orders, is not stated here: it is the model
 of that resume, `threadChain` (internal/sandbox/executor, claudechain.go),
 whose type doc is the authority, every rule in it beside the offsets of the
-code of 2.1.310 and 2.1.322 it restates, under every variant of the release
+code of 2.1.310, 2.1.322 and 2.1.330 it restates, under every variant of the release
 and of the flags Anthropic's servers set that a reading cannot see, with three
 answers, handed, not handed and cannot tell, and the reason for each. In the
 main thread it is `claude --resume`'s load as the loader's caller hands it on,
@@ -3206,8 +3206,8 @@ reader loads a thread past 5,242,880 bytes; the model reads both, so it costs
 only a reading of a thread the two may load otherwise, which is no reading. A
 switch of such a file that no read of the releases found is left with them,
 as is a harness that answers `--version` as a release the model was read from
-and resumes otherwise. A release before, between or after 2.1.310 and 2.1.322
-is not left: the gate refuses it, and adding one is reading its resume against
+and resumes otherwise. A release before, between or after 2.1.310, 2.1.322 and
+2.1.330 is not left: the gate refuses it, and adding one is reading its resume against
 every step of the model and running the model's census over sessions it wrote
 and resumed (`claudeResumeRead`'s doc).
 
