@@ -21,6 +21,12 @@ import (
 // ([trimmer]); every other harness and release packs whole, and a pack still
 // past the bound once trimmed is refused as one never trimmed is.
 
+// NO TRIM, BY HARNESS: Claude Code's own trim rewrites its transcript, and its
+// subagent threads stay whole, since 2.1.310 continues one spawned before the
+// newest compaction after a resume (measured); Kimi Code's replay folds every
+// record before its compaction into the state it resumes; Cursor Agent carries
+// no chat a compaction summarized. None is a [trimmer], so each packs whole.
+
 // trimTarSlack is what the plaintext point leaves the tar's own bytes beside
 // its members': a 512-byte header and up to 511 of padding a member, its long
 // name's header pair, and the 1 KiB end. ONE MEBIBYTE holds every layout's

@@ -1,1 +1,0 @@
-import{Ni as e}from"./Modal-Bu7CoixP.js";import{v as t}from"./roomNames-CpPjligV.js";function n(n,r,i=`section`,a=r[0]){let[o,s]=e(n,a,i),c=r.includes(o)?o:a;return t({tab:{run:(e,t)=>s(r[t]),when:e=>i===`section`&&e<r.length}}),[c,s]}export{n as t};
