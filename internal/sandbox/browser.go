@@ -170,10 +170,11 @@ func EnsureBrowser(ctx context.Context, box Sandbox, step BrowserStep) (BrowserO
 // to that count, from listed, its servers' below it, the bridge's and the
 // box's own: its own tools sent whole without the browser and hidden with it.
 // Servers at the count alone are hidden either way, so their run keeps its
-// browser, and none are below a count of none. A repository's own servers
-// are not counted, since the launch does not know them. It reads the launch
-// alone, so the launch decides it before it asks its host or the box anything
-// and, as for the cell and the web, stops no browser the box already runs.
+// browser, and none are below a count of none. Servers the harness loads of
+// its own, its box home's and a repository's, are not counted, since the
+// launch does not know them. It reads the launch alone, so the launch decides
+// it before it asks its host or the box anything and, as for the cell and the
+// web, stops no browser the box already runs.
 func hidesBridge(deferAt, listed int) bool {
 	return listed < deferAt && listed+len(boxhelper.Tools()) >= deferAt
 }
