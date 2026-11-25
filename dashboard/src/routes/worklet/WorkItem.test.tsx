@@ -52,7 +52,7 @@ import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { DUPLICATE, DUPLICATE_TITLE, SHARED_KEY, collidingHits } from "~/test/keyCollision.ts";
 import { pick } from "~/testing.tsx";
 import { settled } from "~/test/settle.ts";
-import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
+import { ENGINE_HEADERS, engineJson } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -2387,17 +2387,21 @@ test("the title and the description do not shut each other", async () => {
 });
 
 // A REFUSED DATE WAS DROPPED: the editor shut on any answer, so the reader lost
-// what they typed to read a refusal about it.
+// what they typed to read a refusal about it. THE ENGINE'S REFUSAL, code and
+// mark: a stub without them is an answer nobody vouches for, which the press
+// asks again for seconds after the case ends, into whichever case runs then.
 test("a refused date stays in its editor", async () => {
   vi.stubGlobal(
     "fetch",
-    vi.fn(
-      async () =>
-        new Response(JSON.stringify({ code: "invalid_args", detail: "No." }), {
-          status: 422,
-          headers: ENGINE_HEADERS,
-        }),
-    ),
+    vi.fn(async (url: string, init: RequestInit) => {
+      const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
+      const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
+      posted.push({ tool, args: body.args });
+      return engineJson(
+        { error: "invalid", tool, detail: "The due date is past the project's end." },
+        422,
+      );
+    }),
   );
   mount(<WorkItemPage id="ENG-42" />);
   await settle();
@@ -2410,6 +2414,10 @@ test("a refused date stays in its editor", async () => {
   expect((screen.getByLabelText("Due date of ENG-42") as HTMLInputElement).value).toBe(
     "2031-05-01",
   );
+  expect(screen.getByText(/The due date is past the project's end\./)).toBeTruthy();
+  expect(posted).toEqual([
+    { tool: "update_work_item", args: { item: "ENG-42", if_match: 7, due: "2031-05-01" } },
+  ]);
 });
 
 // ESCAPE IN A PEEK'S FIELD IS THE FIELD'S: it closed the whole rail with the editor.
