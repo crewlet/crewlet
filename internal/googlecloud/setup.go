@@ -14,9 +14,9 @@ import (
 // ONE PASS, IN ORDER: the provisioner is entered and saved, which mints the
 // federation key; the Cloud Shell block uploads the key's public half and
 // prints the provider; the provider is pasted and tested. So the provider is
-// required only once the key is held, and the key's row carries the block
-// ([CloudShellBlock]) from then on, rendered for company's issuer and subject
-// and the growth products the company turns on.
+// printed by the key's row, which carries the block ([CloudShellBlock]) once
+// the key is held, rendered for company's issuer and subject and the growth
+// products the company turns on.
 func Requirements(
 	company string, in *config.GoogleCloud, growth []googleauth.Product, resolve func(string) (string, bool),
 ) []setup.Requirement {
@@ -72,8 +72,9 @@ func Requirements(
 			Label:      "Workload identity provider",
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.google_cloud.provisioning.provider",
-			Required:   keyHeld,
+			Required:   true,
 			Connect:    true,
+			PrintedBy:  "federation_key",
 			Checkable:  true,
 			CheckWith:  []string{"provisioner", "federation_key"},
 			Format:     "projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>",
@@ -117,6 +118,9 @@ func Requirements(
 			if keyHeld {
 				reqs[i].Public = cloudShellView(company, setup.Deref(provisioner, resolve), setup.Deref(key, resolve), atlas,
 					growth)
+				if reqs[i].Public != nil {
+					reqs[i].Public.DrawnFrom = []string{"provisioner", "atlas_read"}
+				}
 			}
 		case "provider":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(provider, resolve)

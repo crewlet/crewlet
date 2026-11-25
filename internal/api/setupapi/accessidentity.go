@@ -317,9 +317,9 @@ func IdentityVerdict(c seataccess.IdentityCheck, guide *seataccess.IdentityGuide
 		if guide != nil && checkID(read, guide.Checks) != "" {
 			continue
 		}
-		value := "Failed"
+		value := setup.PartFailed
 		if read.OK {
-			value = "Passed"
+			value = setup.PartPassed
 		}
 		if read.Said != "" {
 			value += ": " + strings.TrimSuffix(read.Said, ".")

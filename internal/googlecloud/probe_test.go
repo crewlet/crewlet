@@ -81,31 +81,34 @@ func TestAWholeConnectionWorksAndSaysWhatItReaches(t *testing.T) {
 	w.f.onlyGoogle(t)
 }
 
-// EACH HALF THAT REFUSES IS NAMED WITH ITS FIX, and nothing the probe signed or
-// minted reaches the sentence.
+// EACH HALF THAT REFUSES IS NAMED WITH ITS FIX, after the parts that passed
+// and the one that failed, and nothing the probe signed or minted reaches the
+// sentence. Mutation: drop the parts from a refusal, or fail the wrong one,
+// and this fails.
 func TestEachRefusedHalfIsNamedWithItsFix(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		breakIt func(*fakeGoogle)
+		failed  string
 		says    []string
 	}{
 		{"an untrusted key", func(f *fakeGoogle) {
 			other, _ := fakeKey(t)
 			f.pub = &other.PublicKey
-		}, []string{"Security Token Service", "crewlet:acme", "Cloud Shell block"}},
+		}, "Federation", []string{"Security Token Service", "crewlet:acme", "Cloud Shell block"}},
 		{"no Workload Identity User", func(f *fakeGoogle) {
 			f.refuse["POST /v1/projects/-/serviceAccounts/"+provisioner+":generateAccessToken"] = http.StatusForbidden
-		}, []string{"Federation works", "Workload Identity User", "principal://iam.googleapis.com/"}},
+		}, "Acting as the provisioner", []string{"Federation works", "Workload Identity User", "principal://iam.googleapis.com/"}},
 		{"an API not enabled", func(f *fakeGoogle) {
 			delete(f.projects[identity].Services, "iamcredentials.googleapis.com")
-		}, []string{"iamcredentials.googleapis.com", identity}},
+		}, "Identity project's APIs", []string{"iamcredentials.googleapis.com", identity, "Cloud Shell block"}},
 		{"no Service Usage Viewer", func(f *fakeGoogle) {
 			f.refuse["GET /v1/projects/"+identity+"/services"] = http.StatusForbidden
-		}, []string{"Service Usage Viewer"}},
+		}, "Identity project's APIs", []string{"Service Usage Viewer"}},
 		{"no Service Account Admin", func(f *fakeGoogle) {
 			f.refuse["POST /v1/projects/"+identity+":testIamPermissions"] = http.StatusForbidden
-		}, []string{"its own permissions on " + identity}},
+		}, "Provisioner's grants", []string{"its own permissions on " + identity, "Service Account Admin", "Cloud Shell block"}},
 	} {
 		w := newProbeWorld(t)
 		w.f.edit(tc.breakIt)
@@ -113,6 +116,11 @@ func TestEachRefusedHalfIsNamedWithItsFix(t *testing.T) {
 		if err != nil || verdict.Outcome != setup.VerifyRefused {
 			t.Errorf("%s: %+v, %v; want refused", tc.name, verdict, err)
 			continue
+		}
+		at := slices.Index(googlecloud.ProbeParts, tc.failed)
+		want := setup.Refused("", setup.Parts(googlecloud.ProbeParts, at)...).Facts
+		if at < 0 || len(verdict.Facts) < len(want) || !slices.Equal(verdict.Facts[:len(want)], want) {
+			t.Errorf("%s: facts %+v, want them to open with %+v", tc.name, verdict.Facts, want)
 		}
 		for _, want := range tc.says {
 			if !strings.Contains(said(verdict), want) {
