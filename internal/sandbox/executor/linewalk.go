@@ -88,6 +88,12 @@ type lineWalk struct {
 	// idSum digests a word past the bound a walk for notes tells apart
 	// ([recordWord]).
 	idSum hash.Hash
+	// head holds a string's opening as it is told ([lineWalk.opening]).
+	head []byte
+	// inner reads, through innerSrc, the JSON text a string holds
+	// ([lineWalk.decoded]).
+	inner    *jsonscan.Scanner
+	innerSrc stringWords
 }
 
 // setup makes w rd's walk into b of the members lines reads.

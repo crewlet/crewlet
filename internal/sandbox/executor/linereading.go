@@ -288,11 +288,19 @@ func textAs(b *transcriptBuilder, j *textJoin, s *entryShape, kind EntryKind) pe
 
 // wholeText reads the current string into j as one part of j's kind: a text a
 // record holds whole, joined as a list of one would be.
-func (w *lineWalk) wholeText(j *textJoin) error {
+func (w *lineWalk) wholeText(j *textJoin) error { return w.wholeTextFrom(j, nil, false) }
+
+// wholeTextFrom is [lineWalk.wholeText] of a string whose opening, head, is
+// read already, and the whole of it where ended says so.
+func (w *lineWalk) wholeTextFrom(j *textJoin, head []byte, ended bool) error {
 	j.partStart()
 	j.partType(j.rule.kind)
 	j.partText()
-	err := w.read(j)
+	_, _ = j.Write(head)
+	var err error
+	if !ended {
+		err = w.read(j)
+	}
 	j.partEnd()
 	return err
 }

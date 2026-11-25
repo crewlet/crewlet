@@ -102,9 +102,9 @@ type hermesReading struct {
 	calls     callList
 	callsTook bool
 	call      hermesCallRead
-	// inner reads a tool_calls string's words as JSON, through innerSrc.
-	inner    *jsonscan.Scanner
-	innerSrc stringWords
+	// stored says the content was stored as JSON ([hermesContentJSON]), and
+	// storedOdd that it decodes as no shape this read knows.
+	stored, storedOdd bool
 	// name is a tool's name, input a call's arguments, as read.
 	name, input valueText
 	compactor   jsonCompactor
@@ -154,16 +154,18 @@ func (r *hermesReading) start() {
 // rowStart starts the line's row: one written again replaces it.
 func (r *hermesReading) rowStart() {
 	r.rowMistyped, r.summary, r.uid, r.role = false, false, recordWord{}, ""
-	r.wordsStart(false)
+	r.wordsStart(false, hermesParts)
 	r.wordsTook = true
 	r.callID, r.tool, r.toolBlank, r.at = "", toolName{}, true, time.Time{}
 	r.calls.reset(r.b.seen)
 	r.callsTook = false
 }
 
-// wordsStart starts the row's words, shaped where shaped says.
-func (r *hermesReading) wordsStart(shaped bool) {
-	r.words.start(r.b, TranscriptEntry{Kind: EntryModel}, shaped, hermesParts)
+// wordsStart starts the row's words, joined by rule, shaped where shaped
+// says.
+func (r *hermesReading) wordsStart(shaped bool, rule joinRule) {
+	r.stored, r.storedOdd = false, false
+	r.words.start(r.b, TranscriptEntry{Kind: EntryModel}, shaped, rule)
 	r.frame.frame(hermesNoteOpen, hermesNoteClose)
 	r.words.frame = &r.frame
 }
@@ -213,8 +215,8 @@ func (r *hermesReading) messageMember(name string, k jsonscan.Kind) error {
 	case "content":
 		shaped := b.shapes(EntrySummary, b.seen) || b.shapes(EntryBrief, b.seen) || b.shapes(EntryModel, b.seen) ||
 			b.shapes(EntryToolResult, b.seen)
-		r.wordsStart(shaped)
-		r.wordsTook, err = r.content(k)
+		r.wordsStart(shaped, hermesParts)
+		r.wordsTook, err = r.content(k, shaped)
 	case "tool_calls":
 		r.calls.reset(b.seen)
 		r.callsTook, err = r.toolCalls(k)
@@ -235,16 +237,30 @@ func (r *hermesReading) nameField(k jsonscan.Kind) (toolName, bool, bool, error)
 }
 
 // content reads a row's content as its whole-line decode read it: a string its
-// words, a list its `text` parts joined, and anything else none. It reports
-// whether the list's decode, if a list, takes it.
-func (r *hermesReading) content(k jsonscan.Kind) (bool, error) {
+// words, or those of the content stored in it ([hermesReading.storedContent]),
+// a list its `text` parts joined, and anything else none. It reports whether
+// the list's decode, if a list, takes it.
+func (r *hermesReading) content(k jsonscan.Kind, shaped bool) (bool, error) {
 	switch k {
 	case jsonscan.String:
-		return true, r.wholeText(&r.words)
+		head, stored, ended, err := r.opening(hermesContentJSON)
+		switch {
+		case err != nil:
+			return true, err
+		case stored && !ended:
+			return true, r.storedContent(shaped)
+		}
+		return true, r.wholeTextFrom(&r.words, head, ended)
 	case jsonscan.ArrayStart:
 	default:
 		return true, r.scan.Skip()
 	}
+	return r.parts(k)
+}
+
+// parts reads a list of parts the row's words join, and reports whether its
+// decode takes it.
+func (r *hermesReading) parts(jsonscan.Kind) (bool, error) {
 	took := true
 	err := r.elements(func(k jsonscan.Kind) (bool, error) {
 		ok, err := r.joinPart(&r.words, k, nil)
@@ -252,6 +268,31 @@ func (r *hermesReading) content(k jsonscan.Kind) (bool, error) {
 		return true, err
 	})
 	return took, err
+}
+
+// storedContent reads the rest of a content string as the JSON Hermes stored
+// it as: a string its words, a list or an envelope its parts joined
+// ([hermesStoredParts]), anything else said ([hermesStoredOdd]).
+func (r *hermesReading) storedContent(shaped bool) error {
+	r.wordsStart(shaped, hermesStoredParts)
+	r.stored = true
+	took, err := r.decoded(func(k jsonscan.Kind) (bool, error) {
+		switch k {
+		case jsonscan.String:
+			return true, r.wholeText(&r.words)
+		case jsonscan.ArrayStart:
+			return r.parts(k)
+		case jsonscan.ObjectStart:
+			return r.storedEnvelope(func(k jsonscan.Kind) (bool, error) {
+				r.wordsStart(shaped, hermesStoredParts)
+				r.stored = true
+				return r.parts(k)
+			})
+		}
+		return false, r.scan.Skip()
+	})
+	r.storedOdd = !took
+	return err
 }
 
 // instant is when a row was recorded: seconds since the epoch, a number or a
@@ -299,59 +340,12 @@ func (r *hermesReading) toolCalls(k jsonscan.Kind) (bool, error) {
 	default:
 		return false, r.scan.Skip()
 	}
-	outer := r.scan
-	r.innerSrc = stringWords{scan: outer}
-	if r.inner == nil {
-		r.inner = jsonscan.New(&r.innerSrc)
-	} else {
-		r.inner.Reset(&r.innerSrc)
-	}
-	r.scan = r.inner
-	took, err := r.innerCalls()
-	r.scan = outer
-	if r.innerSrc.err != nil {
-		return false, r.innerSrc.err
-	}
-	if _, scanned := errors.AsType[*jsonscan.Error](err); err != nil && !scanned && !errors.Is(err, io.EOF) {
-		return false, err
-	}
-	if err != nil {
-		took = false
-	}
-	// The string's words left past a fault are passed over.
-	for {
-		_, readErr := outer.Read(r.piece)
-		switch {
-		case errors.Is(readErr, io.EOF):
-			return took, nil
-		case readErr != nil:
-			return false, readErr
+	return r.decoded(func(k jsonscan.Kind) (bool, error) {
+		if k == jsonscan.ArrayStart {
+			return r.callList(k)
 		}
-	}
-}
-
-// innerCalls reads the one JSON list a tool_calls string holds, nothing but
-// blanks after it.
-func (r *hermesReading) innerCalls() (bool, error) {
-	k, err := r.scan.Next()
-	if err != nil {
-		return false, err
-	}
-	took := false
-	switch k {
-	case jsonscan.ArrayStart:
-		if took, err = r.callList(k); err != nil {
-			return false, err
-		}
-	default:
-		if err = r.scan.Skip(); err != nil {
-			return false, err
-		}
-	}
-	if _, err = r.scan.Next(); !errors.Is(err, io.EOF) {
-		return false, err
-	}
-	return took, nil
+		return false, r.scan.Skip()
+	})
 }
 
 // callList reads a list of calls into r.calls, and reports whether its decode
@@ -503,6 +497,8 @@ func (r *hermesReading) prose(s *entryShape, kind EntryKind) bool {
 	text, held := j.text()
 	switch {
 	case !r.wordsTook:
+	case r.storedOdd:
+		s.add(b, b.held(TranscriptEntry{Kind: EntryUnread}, hermesStoredOdd, s.next()), time.Time{})
 	case j.lost:
 		s.add(b, j.entry(s.next()), time.Time{})
 	case held:
@@ -525,6 +521,8 @@ func (r *hermesReading) result(s *entryShape) pendingEntry {
 	switch {
 	case !r.wordsTook:
 		return b.held(TranscriptEntry{Kind: EntryToolResult}, "", s.next())
+	case r.storedOdd:
+		return b.held(TranscriptEntry{Kind: EntryUnread}, hermesStoredOdd, s.next())
 	case r.left() && !j.lost:
 		r.frame.end()
 	}
@@ -559,20 +557,4 @@ func hermesCopy(read map[[16]byte]struct{}, uid recordWord) bool {
 	}
 	read[key] = struct{}{}
 	return false
-}
-
-// stringWords is a string's words as the scanner reading it hands them: what
-// a scanner of a JSON text a string holds reads ([hermesReading.toolCalls]).
-// err keeps the outer scan's own failure, which no inner fault hides.
-type stringWords struct {
-	scan *jsonscan.Scanner
-	err  error
-}
-
-func (s *stringWords) Read(p []byte) (int, error) {
-	n, err := s.scan.Read(p)
-	if err != nil && !errors.Is(err, io.EOF) {
-		s.err = err
-	}
-	return n, err
 }
