@@ -68,7 +68,7 @@ func engineCall(opID string) executordomain.Call {
 func fullSummary() *executorkeep.Summary {
 	return &executorkeep.Summary{Object: objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte("summary")),
 		Size: 512}, ContentKey: "k1", At: crossedAt, Bytes: 4096, Kept: 400, Cut: true, Harness: "claude-code",
-		Session: "sess-1"}
+		Session: "sess-1", Place: executorkeep.CapturePlace{LaunchSeq: 2, CaptureSeq: 3}}
 }
 
 // fullEnding is an ending with every field set.
