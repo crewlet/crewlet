@@ -266,6 +266,11 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]pla
 			said.say("the skill %s is left out: the home's skills hold %s already", d.src, name)
 			continue
 		}
+		if at, ok := spec.taken[name]; ok {
+			said.say("the skill %s is left out: %s, which the harness lists too, is a skill named %s already, "+
+				"and of two of one name it loads neither", d.src, at, name)
+			continue
+		}
 		plan, cost, err := planSkill(d.src, realRoot, name)
 		if err != nil {
 			if !errors.Is(err, errNoFrontmatter) {
@@ -545,4 +550,62 @@ func copyFile(it copyItem, dst string) error {
 		err = cerr
 	}
 	return err
+}
+
+// listedSkillNames is the skills of dirs, each absolute or under work and
+// walked as its slot says, by the name the harness lists each under (its
+// SKILL.md's frontmatter name, else its directory's), each its directory: a
+// copy taking one of those names would make both unloadable (OpenCode 2.3.2
+// lists two of one name and loads neither, measured). A directory that does
+// not read, or runs past the walk's bounds, holds none.
+func listedSkillNames(work string, dirs []skillDirSlot) map[string]string {
+	names := map[string]string{}
+	for _, slot := range dirs {
+		dir := slot.Dir
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(work, dir)
+		}
+		real, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			continue
+		}
+		found, _ := checkoutSkillDirs(real, checkoutSpec{SkillDirs: []skillDirSlot{{Recursive: slot.Recursive,
+			Depth: slot.Depth}}})
+		for _, d := range found {
+			name := d.name
+			if raw, err := readBounded(filepath.Join(d.src, "SKILL.md"), maxListedSkill); err == nil {
+				if front := frontName(raw); front != "" {
+					name = front
+				}
+			}
+			if _, ok := names[name]; !ok {
+				names[name] = d.src
+			}
+		}
+	}
+	return names
+}
+
+// maxListedSkill is the most of a listed skill's SKILL.md read for its name,
+// which sits in the frontmatter at its top.
+const maxListedSkill = 64 << 10
+
+// frontName is the `name` raw's frontmatter gives, its quotes trimmed; "" for
+// none.
+func frontName(raw []byte) string {
+	front, ok := frontmatter(raw)
+	if !ok {
+		return ""
+	}
+	for _, l := range front {
+		if key, ok := frontKey(strings.TrimSuffix(l, "\r")); ok && key == "name" {
+			_, v, _ := strings.Cut(l, ":")
+			v = strings.TrimSpace(strings.TrimSuffix(v, "\r"))
+			if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+				v = v[1 : len(v)-1]
+			}
+			return v
+		}
+	}
+	return ""
 }

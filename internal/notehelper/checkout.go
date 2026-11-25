@@ -30,26 +30,29 @@ import (
 
 // checkoutSpec is what a harness reads from a checkout's root and where a run
 // puts its copies: Instructions, the slots ([instructionSlot]), every slot's
-// text in order, within Limit, the harness's own bound on them in bytes (nil
-// where it has none); SkillDirs, the skill directories ([skillDirSlot]), an
-// earlier one's skill winning a name; Skills, the run's skills directory (""
-// copies none), and Copied, the file listing each skill copied there;
-// Reserved, the tags no repository takes; ImportInstructions, for a harness
-// that reads its instruction files itself, each file named as an import in
-// place of its text ([rootImports]), Limit not applying; SkillSep, what joins
-// a copy's tag and skill ([skillName]); FiringLimit, the bound in bytes on
-// what one nested firing hands of all its checkouts' instructions, frames
-// counted, nil for none ([fitFiring]).
+// text in order, within Limit, the harness's bound in bytes (nil for none);
+// SkillDirs, the skill directories ([skillDirSlot]), an earlier one's winning
+// a name; Listed, the harness's other skill directories, absolute or under the
+// working directory, whose skills' names no copy takes ([listedSkillNames]);
+// Skills, the run's skills directory ("" copies none), and Copied, the file
+// listing each copy; Reserved, the tags no repository takes;
+// ImportInstructions, each file named as an import ([rootImports]), Limit not
+// applying; SkillSep, what joins a copy's tag and skill ([skillName]);
+// FiringLimit, a nested firing's bound in bytes on its files ([fitFiring]).
 type checkoutSpec struct {
 	Instructions       []instructionSlot `json:"instructions"`
 	Limit              *int              `json:"limit,omitempty"`
 	FiringLimit        *int              `json:"firingLimit,omitempty"`
 	SkillDirs          []skillDirSlot    `json:"skillDirs,omitempty"`
+	Listed             []skillDirSlot    `json:"listed,omitempty"`
 	Skills             string            `json:"skills,omitempty"`
 	Copied             string            `json:"copied,omitempty"`
 	Reserved           []string          `json:"reserved,omitempty"`
 	ImportInstructions bool              `json:"importInstructions,omitempty"`
 	SkillSep           skillSep          `json:"skillSep,omitempty"`
+
+	// taken is Listed's skills by name, each its directory, read once a firing.
+	taken map[string]string
 }
 
 // skillSep is what joins a copy's tag and skill: `:` (the zero value), or `-`
@@ -447,6 +450,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 	if err != nil {
 		return nil, err
 	}
+	spec.taken = listedSkillNames(work, spec.Listed)
 	tags := newCheckoutTags(spec.Reserved)
 	for _, name := range seen {
 		tags.take(name)

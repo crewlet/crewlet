@@ -155,6 +155,10 @@
 //     deep or 1,024 entries it is left out whole, said. Pi also follows a
 //     link out of the checkout, lists a loose root `.md` skill, and honours
 //     .gitignore, .ignore and .fdignore; the walk does none of these;
+//   - `listed`: the harness's other skill directories, absolute or under W,
+//     walked as skill directories are, a copy whose name one of their skills
+//     takes (its frontmatter name, else its directory's) left out, said, as
+//     OpenCode 2.3.2 loads neither of two skills of one name (measured);
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (`skillSep` `-` joining them for Gemini CLI,
