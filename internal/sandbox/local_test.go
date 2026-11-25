@@ -3,13 +3,16 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -521,44 +524,174 @@ func TestClosingABoxRemovesItsDirectory(t *testing.T) {
 // pause / resume / kill
 // ---------------------------------------------------------------------
 
-// groupStates is the state ps reports for every process of group pgid, by
-// pid: T for a stopped one and Z for one that has exited unreaped, on both
-// release platforms.
-func groupStates(t *testing.T, pgid int) map[int]string {
+// groupThreads is the state the kernel keeps for each thread of every process
+// of group pgid, by pid: T for a stopped one, Z, X or x for one that has
+// exited. On Linux each thread's own (/proc/<pid>/task/<tid>/stat), since a
+// process's stat line, and ps's STAT, is its main thread's alone, and a group
+// stop reaches each thread separately; on darwin ps's STAT, one for the whole
+// process: XNU's p_stat, which is the process's own. A record the kernel will
+// not give fails the case, for a member it hides could be one that runs.
+func groupThreads(t *testing.T, pgid int) map[int][]string {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		return groupStatesByPS(t, pgid)
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Fatalf("listing /proc for the members of group %d: %v", pgid, err)
+	}
+	group := map[int][]string{}
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		// pgrp, field 5: the same for every thread of the process.
+		fields, found := procStat(t, filepath.Join("/proc", entry.Name(), "stat"))
+		if !found || fields[5-procStateField] != strconv.Itoa(pgid) {
+			continue
+		}
+		tasks, err := os.ReadDir(filepath.Join("/proc", entry.Name(), "task"))
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("listing the threads of pid %d: %v", pid, err)
+		}
+		states := []string{}
+		for _, task := range tasks {
+			if fields, found := procStat(t, filepath.Join("/proc", entry.Name(), "task", task.Name(), "stat")); found {
+				states = append(states, fields[0])
+			}
+		}
+		group[pid] = states
+	}
+	return group
+}
+
+// procStateField is the number proc(5) gives the state, the first field after
+// the command: field n of a stat line is element n-procStateField of
+// [procStat]'s.
+const procStateField = 3
+
+// procStat is the fields after the command of the stat line at path, counted
+// from its LAST closing parenthesis, since a process names its own command;
+// false where the process or thread has gone, which a read reports as ESRCH
+// once it is reaped between the open and the read.
+func procStat(t *testing.T, path string) ([]string, bool) {
+	t.Helper()
+	raw, err := os.ReadFile(path) //nolint:gosec // the kernel's record of a process
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+		return nil, false
+	}
+	if err != nil {
+		t.Fatalf("reading %s, which may be a member's: %v", path, err)
+	}
+	end := bytes.LastIndexByte(raw, ')')
+	if end < 0 {
+		t.Fatalf("%s holds no stat line: %q", path, raw)
+	}
+	fields := strings.Fields(string(raw[end+1:]))
+	if len(fields) <= 5-procStateField {
+		t.Fatalf("%s holds no stat line: %q", path, raw)
+	}
+	return fields, true
+}
+
+// groupStatesByPS is [groupThreads] on darwin: ps's STAT for each process of
+// group pgid, the process's own state, as its one entry.
+func groupStatesByPS(t *testing.T, pgid int) map[int][]string {
 	t.Helper()
 	out, err := exec.CommandContext(t.Context(), "ps", "-A", "-o", "pid=,pgid=,stat=").Output()
 	if err != nil {
 		t.Fatalf("reading the processes' states through ps: %v", err)
 	}
-	states := map[int]string{}
+	group := map[int][]string{}
 	for line := range strings.Lines(string(out)) {
 		fields := strings.Fields(line)
 		if len(fields) != 3 {
 			continue
 		}
 		pid, pidErr := strconv.Atoi(fields[0])
-		group, groupErr := strconv.Atoi(fields[1])
-		if pidErr == nil && groupErr == nil && group == pgid {
-			states[pid] = fields[2]
+		member, groupErr := strconv.Atoi(fields[1])
+		if pidErr == nil && groupErr == nil && member == pgid {
+			group[pid] = []string{fields[2]}
 		}
 	}
-	return states
+	return group
+}
+
+// halted is whether a process whose threads read states, as [groupThreads]
+// reads them, runs nothing until something continues it, each thread stopped
+// (T) or exited, and whether it is over, each exited: Z, X or x, as
+// internal/procgroup's parseProcStat reads a state. Only a main thread reads Z
+// beside others, every other being released as it exits, so a process whose
+// threads all read exited is procgroup's zombie, and one whose main thread
+// reads T or Z while another runs is neither halted nor over.
+func halted(states []string) (still, over bool) {
+	over = true
+	for _, state := range states {
+		switch {
+		case strings.HasPrefix(state, "T"):
+			over = false
+		case strings.HasPrefix(state, "Z"), strings.HasPrefix(state, "X"), strings.HasPrefix(state, "x"):
+			// Exited: it runs nothing.
+		default:
+			return false, false
+		}
+	}
+	return true, over
 }
 
 // stoppedTree reports whether the job whose group leader is leader, its
-// group's states as [groupStates] reads them, runs nothing and can run nothing
-// until something continues it: its leader stopped, and every other process of
-// it stopped or exited.
-func stoppedTree(states map[int]string, leader int) bool {
-	if !strings.HasPrefix(states[leader], "T") {
+// group's threads as [groupThreads] reads them, runs nothing and can run
+// nothing until something continues it: its leader halted and not over, and
+// every other process of it halted ([halted]).
+func stoppedTree(group map[int][]string, leader int) bool {
+	if still, over := halted(group[leader]); !still || over {
 		return false
 	}
-	for _, state := range states {
-		if !strings.HasPrefix(state, "T") && !strings.HasPrefix(state, "Z") {
+	for _, states := range group {
+		if still, _ := halted(states); !still {
 			return false
 		}
 	}
 	return true
+}
+
+// A TREE IS STOPPED ONLY WHILE EACH THREAD OF IT IS, or has exited: a group
+// stop reaches each thread separately, and a process's own state, its stat
+// line or ps's STAT on Linux, is its main thread's, so a stopped or exited
+// main thread beside one that runs is a tree that still runs. Its leader must
+// be stopped and not over, since an ended job is no paused one.
+//
+// Mutation: read each process by its main thread alone, the first state here,
+// as ps's STAT does on Linux, and the rows of a thread running beside it go red.
+func TestATreeIsStoppedOnlyWhileEachThreadOfItIs(t *testing.T) {
+	t.Parallel()
+	const leader, child = 4242, 4250
+	for _, tc := range []struct {
+		name    string
+		group   map[int][]string
+		stopped bool
+	}{
+		{"every thread stopped", map[int][]string{leader: {"T"}, child: {"T", "T"}}, true},
+		{"a child over", map[int][]string{leader: {"T"}, child: {"Z"}}, true},
+		{"a child reaped", map[int][]string{leader: {"T"}, child: {"X"}}, true},
+		{"a child reaped, on kernels 2.6.33 to 3.13", map[int][]string{leader: {"T"}, child: {"x"}}, true},
+		{"a main thread exited beside a stopped one", map[int][]string{leader: {"T"}, child: {"Z", "T"}}, true},
+		{"darwin's ps, flags after the state", map[int][]string{leader: {"Ts"}, child: {"T+"}}, true},
+		{"a child running", map[int][]string{leader: {"T"}, child: {"S"}}, false},
+		{"a stopped main thread beside one that runs", map[int][]string{leader: {"T", "R"}}, false},
+		{"a main thread exited beside one that runs", map[int][]string{leader: {"T"}, child: {"Z", "S"}}, false},
+		{"the leader over", map[int][]string{leader: {"Z"}, child: {"T"}}, false},
+		{"no leader", map[int][]string{child: {"T"}}, false},
+	} {
+		if got := stoppedTree(tc.group, leader); got != tc.stopped {
+			t.Errorf("%s: a group whose threads read %v reads stopped %v, want %v", tc.name, tc.group, got,
+				tc.stopped)
+		}
+	}
 }
 
 // awaitStopped waits for a paused job's tree to stop ([stoppedTree]), failing
@@ -576,20 +709,20 @@ func awaitStopped(t *testing.T, leader int, what string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		states := groupStates(t, leader)
-		if stoppedTree(states, leader) {
+		group := groupThreads(t, leader)
+		if stoppedTree(group, leader) {
 			return
 		}
 		//fixedwait:measure the poll's own deadline: it only ends a wait for a stop that must come, failing the case
 		if time.Now().After(deadline) {
-			t.Fatalf("%s: the group %d leads reads %v", what, leader, states)
+			t.Fatalf("%s: the threads of the group %d leads read %v", what, leader, group)
 		}
 		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 	}
 }
 
-// PAUSE STOPS THE TREE, read off the state the kernel keeps for each of its
-// processes ([awaitStopped]), and Connect resumes it, which its work shows.
+// PAUSE STOPS THE TREE, read off the state the kernel keeps for each thread of
+// it ([awaitStopped]), and Connect resumes it, which its work shows.
 //
 // Mutation: pause nothing, and the tree never stops; resume nothing on
 // Connect, and the job never works again.
@@ -657,8 +790,8 @@ func TestAttachingToAPausedBoxLeavesItPaused(t *testing.T) {
 	if state, err := attached.Job(t.Context(), handle); err != nil || state != JobRunning {
 		t.Fatalf("the stopped job reads as %v, %v; want it running and readable", state, err)
 	}
-	if states := groupStates(t, leader); !stoppedTree(states, leader) {
-		t.Fatalf("attaching resumed the paused box: its job's tree reads %v", states)
+	if group := groupThreads(t, leader); !stoppedTree(group, leader) {
+		t.Fatalf("attaching resumed the paused box: its job's threads read %v", group)
 	}
 }
 
@@ -1349,10 +1482,10 @@ func TestARecycledPidIsNeverSignalled(t *testing.T) {
 // CASE COULD HAVE SENT, so no quiet window passes a signal acted on late.
 //
 // A SIGKILL or SIGTERM leaves a zombie (this test's unreaped child) that never
-// writes it; a SIGSTOP reads T in ps, the shell's or its sleep's
-// ([awaitStopped]). Both are read off the kernel's record and ps, since
-// [procgroup.Leader.Current] calls either current. A SIGCONT is trapped, and
-// the shell runs caught traps in signal-number order, SIGCONT's before
+// writes it; a SIGSTOP stops each thread of the shell or of its sleep, any one
+// of them reading T ([groupThreads]). Both are read off the kernel's records,
+// since [procgroup.Leader.Current] calls either current. A SIGCONT is trapped,
+// and the shell runs caught traps in signal-number order, SIGCONT's before
 // SIGWINCH's on both release platforms, so heard precedes the witness.
 func assertUntouched(t *testing.T, stranger strangerGroup, when string) {
 	t.Helper()
@@ -1372,10 +1505,10 @@ func assertUntouched(t *testing.T, stranger strangerGroup, when string) {
 			t.Fatalf("%s the stranger is gone (record %+v, found %v, %v): a recycled pid was signalled",
 				when, proc, found, err)
 		}
-		for pid, state := range groupStates(t, stranger.PID) {
-			if strings.HasPrefix(state, "T") {
-				t.Fatalf("%s the stranger's group is stopped (pid %d reads %s): a recycled pid was signalled",
-					when, pid, state)
+		for pid, states := range groupThreads(t, stranger.PID) {
+			if slices.ContainsFunc(states, func(state string) bool { return strings.HasPrefix(state, "T") }) {
+				t.Fatalf("%s the stranger's group is stopped (pid %d's threads read %v): a recycled pid was "+
+					"signalled", when, pid, states)
 			}
 		}
 		return false
