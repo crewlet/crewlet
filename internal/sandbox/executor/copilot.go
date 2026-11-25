@@ -52,6 +52,9 @@ var (
 	_ notesOffExplainer = Copilot{}
 	_ sessionJudge      = Copilot{}
 	_ recordConfirmer   = Copilot{}
+	_ threadHarness     = Copilot{}
+	_ mainThreadHarness = Copilot{}
+	_ trimmer           = Copilot{}
 )
 
 // NewCopilot returns the runner.
@@ -88,6 +91,16 @@ var copilotFloor = sync.OnceValue(func() string {
 // copilotSessionState is the directory under the run's home that Copilot files
 // each session's directory in.
 const copilotSessionState = "session-state"
+
+// copilotWorkspace and copilotCheckpoints are what a resume reads beside
+// events.jsonl for the checkpoint listing its system prompt carries: the count
+// of its compactions' checkpoints from the one, their index from the other
+// (measured on 1.0.114). Carried together or not at all: a resume without the
+// workspace resets the index and writes its next checkpoint over the first.
+const (
+	copilotWorkspace   = "workspace.yaml"
+	copilotCheckpoints = "checkpoints"
+)
 
 // Session is the session a Copilot run works in ([Harness.Session]): the one it
 // continues, or a new one under a UUID minted for it — `--session-id` starts a
@@ -188,6 +201,10 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 	// extension, which enforces it, never ran ([copilotEvents]).
 	if req.Limits.MaxTurns > 0 {
 		line(`printf '%%s\n' %s`, q(copilotCapLine(req.Limits.MaxTurns)))
+	}
+	// AND THE GUARD, for the same reason, where the run has a bridge.
+	if configPath != "" && len(crewletServers(req.MCPServers)) > 0 {
+		line(`printf '%%s\n' %s`, q(`{"type":"`+copilotBridgeGuardMark+`"}`))
 	}
 	line(`set --`)
 	b.WriteString(copilotSessionGate(session, paths, req.FreshWiring != nil && configPath != ""))
@@ -316,7 +333,11 @@ func copilotSessionGate(session Session, paths Paths, rewired bool) string {
 		"rm -rf " + q(held),
 		"mkdir -p " + q(held),
 		"mv " + q(from+"/events.jsonl") + " " + q(held+"/events.jsonl"),
-		"{ [ -L " + q(from+"/"+copilotKeptSets) + " ] || [ ! -f " + q(from+"/"+copilotKeptSets) + " ] || mv " +
+		"{ [ ! -f " + q(from+"/"+copilotWorkspace) + " ] || [ -L " + q(from+"/"+copilotWorkspace) + " ] || mv " +
+			q(from+"/"+copilotWorkspace) + " " + q(held+"/"+copilotWorkspace) + "; }",
+		"{ [ ! -d " + q(from+"/"+copilotCheckpoints) + " ] || [ -L " + q(from+"/"+copilotCheckpoints) + " ] || mv " +
+			q(from+"/"+copilotCheckpoints) + " " + q(held+"/"+copilotCheckpoints) + "; }",
+		"{ [ ! -f " + q(from+"/"+copilotKeptSets) + " ] || [ -L " + q(from+"/"+copilotKeptSets) + " ] || mv " +
 			q(from+"/"+copilotKeptSets) + " " + q(held+"/"+copilotKeptSets) + "; }",
 	}, " && ")
 	line(`s=%s k=yes w= h= d= bf=%s`, q(session.ID), q(paths.Brief()))
@@ -424,12 +445,14 @@ func copilotLastRotated(v string) string {
 
 // copilotArchiveFormat is the layout a Copilot run packs its session in
 // ([copilotPack]) and the one it restores ([copilotSessionGate]): one gzipped
-// tar of members named relative to the run's home,
-// `session-state/<session>/events.jsonl`, the conversation, which a resume
-// takes up whole on its own (measured on 1.0.114), a rotated one's too: its head
-// copies every record a resume reads ([copilotLastRotated]); and, where the
-// session keeps one, its [copilotKeptSets]. A change is a new format.
-const copilotArchiveFormat = 2
+// tar of members named relative to the run's home, under
+// `session-state/<session>/`: events.jsonl, the conversation, which a resume
+// takes up whole on its own, a rotated one's too: its head copies every record
+// a resume reads ([copilotLastRotated]); and workspace.yaml, checkpoints/ and
+// the kept launch sets ([copilotKeptSets]) where the session has them
+// ([copilotWorkspace]), which every reader passes over (measured on 1.0.114).
+// A layout an older reader cannot read is a new format.
+const copilotArchiveFormat = 1
 
 // ArchiveFormat is the layout a Copilot run packs its session in ([carrier]).
 func (Copilot) ArchiveFormat() int { return copilotArchiveFormat }
@@ -499,20 +522,25 @@ func sameRelease(version, release string) bool {
 }
 
 // copilotCapture is the part of a run's script that packs its session once its
-// harness has exited ([copilotPack]).
+// harness has exited ([copilotPack]), trimmed by the box's bare release
+// ([trimRelVar], read off v as [releaseOf] reads it).
 func copilotCapture(paths Paths) string {
-	return copilotPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()})
+	return bareReleaseShell(trimRelVar) + copilotPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()})
 }
 
-// copilotPack packs the session s names into at.staged and moves it over
-// at.dest, its digest kept ([packDigest]): its events.jsonl and kept sets, never the
-// files a rotation left ([copilotArchiveFormat]). Copilot writes workspace.yaml
-// and checkpoints/ again on a resume (measured on 1.0.114).
-// NEVER session.db or its -journal, the sql tool's tables, so that tool's data
-// does not carry to a continued session: a binary SQLite file cannot pass the
-// archive's text scrub without being corrupted. A pack beside a working harness
-// is held to [claudeHeldTar]'s rule.
-func copilotPack(paths Paths, at packAt) string {
+// copilotPack is ONE PACK, the run's end's, a pack on demand's and a save's, at
+// the bounds a take keeps ([trimAt]): [copilotPackAt].
+func copilotPack(paths Paths, at packAt) string { return copilotPackAt(paths, at, trimAt) }
+
+// copilotPackAt packs the session s names into at.staged and moves it over
+// at.dest, its digest kept ([packDigest]) and its trim past trim said beside it
+// ([trimTar], [trimMarked]): its events.jsonl, and its workspace.yaml,
+// checkpoints/ and kept launch sets where they are ([copilotArchiveFormat]),
+// never the files a rotation left. NEVER session.db or its -journal, the sql
+// tool's tables, so that tool's data does not carry to a continued session: a
+// binary SQLite file cannot pass the archive's text scrub without being
+// corrupted. A pack beside a working harness is held to [claudeHeldTar]'s rule.
+func copilotPackAt(paths Paths, at packAt, trim trimPoints) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
@@ -521,15 +549,20 @@ func copilotPack(paths Paths, at packAt) string {
 	line(`if [ -s %s/%s/events.jsonl ]; then`, q(home), dir)
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
 	line(`    set -- %s/events.jsonl`, dir)
-	line(`    [ ! -f %s/%s/%s ] || set -- "$@" %[2]s/%[3]s`, q(home), dir, copilotKeptSets)
+	for _, beside := range []struct{ test, name string }{{"-f", copilotWorkspace}, {"-d", copilotCheckpoints},
+		{"-f", copilotKeptSets}} {
+		line(`    if [ %[1]s %[2]s/%[3]s/%[4]s ] && [ ! -L %[2]s/%[3]s/%[4]s ]; then set -- "$@" %[3]s/%[4]s; fi`,
+			beside.test, q(home), dir, beside.name)
+	}
 	tar := fmt.Sprintf(`{ tar -czf %s -C %s "$@" < /dev/null > /dev/null 2> %s; t=$?; [ "$t" = 0 ] || { [ "$t" = 1 ] && grep -q 'changed as we read it' %s; }; }`,
 		q(at.staged+"/capture"), q(home), q(at.staged+"/error"), q(at.staged+"/error"))
 	if at.working {
 		tar = claudeHeldTar(home, at.staged)
 	}
-	line(`    rm -rf %s; if mkdir -p %s && %s && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(at.staged), q(at.staged), tar, packDigest(paths, "s", at.staged), q(at.staged+"/capture"), q(at.dest),
-		q(at.staged+"/error"))
+	tar = trimTar(Copilot{}, trim, q(home), dir+"/events.jsonl", at.staged, tar)
+	line(`    rm -rf %s; if mkdir -p %s && %s && %s && %s && mv -f %s %s; then packed=1; %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(at.staged), q(at.staged), tar, packDigest(paths, "s", at.staged), trimUnmark(at.dest),
+		q(at.staged+"/capture"), q(at.dest), trimMarked(at.dest), q(at.staged+"/error"))
 	line(`    rm -rf %s`, q(at.staged))
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)
@@ -647,7 +680,7 @@ type copilotSettings struct {
 // directory, once the guard has passed the run ([copilotGuard]): its
 // settings' keys ([copilotMergedSettings]); its standing instructions
 // ([Paths.CopilotInstructions]), told of notes where it is wired to them; its
-// extension where it reads notes or has a turn cap
+// extension where it reads notes, has a turn cap or a bridge to guard
 // ([Paths.CopilotExtension]); and its MCP servers, returning the file
 // `--additional-mcp-config` names, which Copilot adds to the home's own
 // `mcp-config.json`, with a fresh session's copies beside them
@@ -701,11 +734,12 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 	if err = box.WriteFile(ctx, paths.CopilotCheckoutLaunch(), launch); err != nil {
 		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
-	if req.Steer.Set() || req.Limits.MaxTurns > 0 || handing {
+	bridges := crewletServers(req.MCPServers)
+	if req.Steer.Set() || req.Limits.MaxTurns > 0 || len(bridges) > 0 || handing {
 		// THIS LAUNCH'S OWN KEY, never the session's: a continued session keeps
 		// its id across runs, and a state an earlier run left must count nothing.
-		settings := copilotExtensionSettings{Cap: req.Limits.MaxTurns, State: paths.CopilotNotesState(),
-			Run: uuid.NewString(), Attempt: paths.CopilotAttempt()}
+		settings := copilotExtensionSettings{Cap: req.Limits.MaxTurns, Bridges: bridges,
+			State: paths.CopilotNotesState(), Run: uuid.NewString(), Attempt: paths.CopilotAttempt()}
 		if handing {
 			settings.Helper, settings.Nested = paths.CopilotNoteHelper(), paths.CopilotRepo()+"/nested.json"
 		}
@@ -714,7 +748,9 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 			return "", err
 		}
 		if f := req.FreshWiring; f != nil {
-			if err := writeCopilotExtension(ctx, box, paths.CopilotExtensionFresh(), f.Steer, settings); err != nil {
+			fresh := settings
+			fresh.Bridges = crewletServers(f.MCPServers)
+			if err := writeCopilotExtension(ctx, box, paths.CopilotExtensionFresh(), f.Steer, fresh); err != nil {
 				return "", err
 			}
 		}

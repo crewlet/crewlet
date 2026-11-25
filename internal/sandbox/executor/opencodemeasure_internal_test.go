@@ -82,7 +82,7 @@ func decodedExportInput(r io.Reader) (int64, error) {
 // exportFigure is the floor's figure the meter reads off an export: one walk
 // of it ([meterExport]), the count beside it unread here.
 func exportFigure(t *testing.T, r io.Reader) (int64, error) {
-	read, err := meterExport(t.Context(), r, "2.3.2")
+	read, err := meterExport(t.Context(), r, "2.3.2", nil)
 	return read.figure, err
 }
 

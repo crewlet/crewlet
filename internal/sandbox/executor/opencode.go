@@ -618,6 +618,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 		line(`  sleep 0.5`)
 		line(`done`)
 	}
+	b.WriteString(openCodeBridgeDeclared(req.MCPServers, ans, secs(times.call)))
 
 	// WHERE THE RUN BEGAN IN THE SESSION IT CONTINUES, recorded before the
 	// run takes it up: see [openCodeRunStart].
@@ -1126,6 +1127,34 @@ func openCodeShadowCheck(servers map[string]sandbox.MCPServer) string {
 			"\"%s\" (\"%s\"_<tool>); rename it in the image's or the repository's OpenCode configuration\" >&2; exit 1;; esac\n",
 			kept, shellword.Quote(name), shellword.Quote(name), shellword.Quote(name))
 		fmt.Fprintf(&b, "  done\n")
+	}
+	return b.String()
+}
+
+// openCodeBridgeDeclared ends a run before its brief where a configuration
+// document other than the run's declares the bridge's name ([sandbox.MCPServer.
+// AlwaysLoaded]): OpenCode 2.3.2 replaces a server WHOLE by the last document
+// naming it, and loads /etc/opencode after OPENCODE_CONFIG_CONTENT, so its
+// `crewlet` stood in for the bridge with `mcp.list` reading as ever (measured).
+// `config.get` lists every document, the run's own among them, so the name
+// is declared exactly once or the run does not start. Matched as literal
+// text, since a box may have no JSON parser. A plugin is code inside OpenCode
+// and can still rewrite a server or a tool later; no name guard reaches it.
+func openCodeBridgeDeclared(servers map[string]sandbox.MCPServer, ans string, wait int) string {
+	var b strings.Builder
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
+		if !servers[name].AlwaysLoaded {
+			continue
+		}
+		key := shellword.Quote(jsonStringify(name) + ":{")
+		fmt.Fprintf(&b, "if [ -z \"$endasked\" ]; then bounded mcp %d e opencode api --server \"$url\" config.get > %s 2> /dev/null; "+
+			"c=$(cat %s 2> /dev/null); rm -f %s; r=$c n=0\n", wait, ans, ans, ans)
+		fmt.Fprintf(&b, "  while :; do case \"$r\" in *%s*) r=${r#*%s}; n=$((n + 1));; *) break;; esac; done\n", key, key)
+		fmt.Fprintf(&b, "  if [ \"$n\" != 1 ] && [ -z \"$endasked\" ]; then echo \"crewlet: OpenCode's configuration documents "+
+			"declare the MCP server %s $n times, not once in the run's own: a repository's or home's MCP server may not "+
+			"take Crewlet's own server's place. Look in /etc/opencode, the repository's opencode.json and .opencode/, "+
+			"and the account's documents (opencode api config.get); rename or remove it\" >&2; exit 1; fi\nfi\n",
+			shellword.Quote(name))
 	}
 	return b.String()
 }
@@ -2220,7 +2249,9 @@ const openCodeChargeBytes sandbox.Charge = 4
 // threadTraits is what OpenCode's main-thread read settles: its export, taken
 // as its script ends, may lack what a cut-off copy holds, so such a copy is
 // not counted; its plugin's serves confirm themselves, so it asks no receipts.
-func (OpenCode) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{} }
+func (OpenCode) threadTraits() sandbox.ThreadTraits {
+	return sandbox.ThreadTraits{Reads: true, Summaries: true}
+}
 
 // sessionTraits is how a relaunch judges an OpenCode session: at the point its
 // box says, its calls keyed by their place in the round's log, a brief at

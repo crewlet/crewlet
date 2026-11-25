@@ -1,6 +1,7 @@
 // crewlet-notes — the extension a Copilot run loads from its own
 // $COPILOT_HOME/extensions/crewlet-notes/extension.mjs: it hands the run a
-// person's notes between its steps and holds it to its seat's turn cap.
+// person's notes between its steps, holds it to its seat's turn cap, and keeps
+// every other MCP server off the bridge's names.
 //
 // The engine embeds this file (copilotsteer.go) and writes it with the run's
 // own settings in place of the `config` placeholder below: the notes route, the
@@ -32,6 +33,14 @@
 // starts. A log line the run's stream carries (capMessage) comes first. The
 // line labels an ending and never makes one: the runner reads a capped run only
 // where the stream also shows the abort (copilotevents.go).
+//
+// THE BRIDGE'S NAMES. A custom agent's own `mcp-servers` entry named as the
+// bridge (`crewlet`) connects for that agent and serves the bridge's tool names
+// in its calls (a repository's `.github/agents/<n>.agent.md`, measured on
+// 1.0.114). Copilot announces it as a `session.mcp_server_status_changed` under
+// the agent's id, before the agent's first call; the bridge's own carries none.
+// On it the run is stopped (unbridgedMessage, then the abort), and a call the
+// agent makes under the bridge's names meanwhile is refused (onPreToolUse).
 //
 // Bounded, paced and refused as opencode_steer.js: every request is bounded,
 // a failure waits a second doubling to thirty, an empty answer is never
@@ -137,11 +146,16 @@ const removeFailedMessage = "crewlet: the refused launch's session could not be 
 // lacks it is collected as a failure, the cap never enforced.
 const armedMessage = "crewlet: the run's extension is running"
 
+// unbridgedMessage opens the error logged as the run is stopped for an agent's
+// server under a bridge's name (copilotsteer.go, copilotUnbridgedMessage).
+const unbridgedMessage =
+  "crewlet: a repository's or home's MCP server may not take a name inside Crewlet's own server's tool names, or its place"
+
 if (config !== null && typeof config === "object") {
   await arm(config)
 }
 
-async function arm({ url, cap, state, run, helper, nested, attempt }) {
+async function arm({ url, cap, bridges, state, run, helper, nested, attempt }) {
   // kept is what an earlier process of this launch left (A RESTART RESUMES THE
   // RUN, above): the requests counted, the cursor, and the inbox ids sent; or
   // broken, a file this process cannot read, which sends no note. The launch
@@ -151,7 +165,8 @@ async function arm({ url, cap, state, run, helper, nested, attempt }) {
   const polling = typeof url === "string" && url !== "" && !kept.broken
   const capped = Number.isSafeInteger(cap) && cap > 0
   const handing = typeof helper === "string" && helper !== "" && typeof nested === "string" && nested !== ""
-  if (!polling && !capped && !handing) return
+  const guarded = Array.isArray(bridges) ? bridges.filter((b) => typeof b === "string" && b !== "") : []
+  if (!polling && !capped && !handing && guarded.length === 0) return
 
   // life is the extension's whole run; a refusal of the route ends its polling.
   const life = new AbortController()
@@ -169,6 +184,10 @@ async function arm({ url, cap, state, run, helper, nested, attempt }) {
   // note once, and the second moves past it only once the first's send has gone.
   const admitted = new Map()
   let aborting = false
+  // agents names each subagent by its id, and taken holds the ids of those
+  // that connected a server of their own under a bridge's name.
+  const agents = new Map()
+  const taken = new Set()
 
   const open = () => {
     if (!polling || gate !== null || life.signal.aborted) return
@@ -343,12 +362,35 @@ async function arm({ url, cap, state, run, helper, nested, attempt }) {
     }
   }
 
+  // unbridged stops the run once for the agent agentId's server under a
+  // bridge's name: the error that fails it, then the abort.
+  const unbridged = async (agentId, server) => {
+    if (aborting) return
+    aborting = true
+    close()
+    const agent = agents.get(agentId) ?? "a custom agent"
+    try {
+      await session.log(
+        `${unbridgedMessage}: ${agent} connected its own MCP server ${server}, most likely from its ` +
+          "mcp-servers in its file under .github/agents/ in the repository, so the run was stopped",
+        { level: "error" },
+      )
+    } finally {
+      await session.abort()
+    }
+  }
+
   // JOINED LAST, every function it can call defined: the hook may fire as
   // soon as the session is joined.
   const session = await joinSession({
     hooks: {
       onSessionStart: async (input) => {
         source = input?.source ?? null
+      },
+      onPreToolUse: async (input) => {
+        if (typeof input?.agentId !== "string" || !taken.has(input.agentId)) return
+        if (!guarded.some((b) => String(input.toolName).startsWith(b + "-"))) return
+        return { permissionDecision: "deny", permissionDecisionReason: unbridgedMessage }
       },
       onPostToolUse: async (input) => {
         await capAfterTool(input)
@@ -364,8 +406,20 @@ async function arm({ url, cap, state, run, helper, nested, attempt }) {
   session.on((event) => {
     if (event === null || typeof event !== "object") return
     if (event.type === "assistant.message") answered = true
+    if (event.type === "subagent.started" && typeof event.agentId === "string") {
+      agents.set(event.agentId, named(event.data?.agentName))
+    }
     if (event.type === "session.warning" && event.data?.warningType === blockedWarning && !answered && source === "new") {
       quietly(removeRefused())
+      return
+    }
+    if (
+      event.type === "session.mcp_server_status_changed" &&
+      typeof event.agentId === "string" &&
+      guarded.includes(event.data?.serverName)
+    ) {
+      taken.add(event.agentId)
+      quietly(unbridged(event.agentId, event.data.serverName))
       return
     }
     if (mainAgent(event) === false) return
@@ -412,6 +466,13 @@ function attemptOf(run, attempt) {
   } catch {
     return null
   }
+}
+
+// named is an agent's name for the run's error: the characters of a name
+// alone, at most 64, since a repository wrote it.
+function named(name) {
+  const clean = String(name ?? "").replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 64)
+  return clean === "" ? "a custom agent" : `the custom agent ${clean}`
 }
 
 // resume is what the state file holds for run: nothing counted where there is
