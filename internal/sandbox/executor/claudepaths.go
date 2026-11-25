@@ -75,3 +75,24 @@ func (p Paths) ClaudeNotesSettingsPinned() string {
 // them or the next run in the box would find them; and its own, removed whole
 // before every run ([Runner.ClearArtifacts]).
 func (p Paths) ClaudeSkillsPlugin() string { return p.WorkDir() + "/claude-skills" }
+
+// ClaudeSettingsGuarded is the guarded copy of a run's settings, handed to a
+// run with a bridge in place of every run's and
+// the skills' pinned copies ([claudePinGate]): the pin, hooks on, and the
+// bridge's guard ([claudeGuardHooks]). Beside them, for their reason.
+func (p Paths) ClaudeSettingsGuarded() string { return p.WorkDir() + "/claude-settings-guarded.json" }
+
+// ClaudeNotesSettingsGuarded is [Paths.ClaudeNotesSettingsPinned]'s guarded
+// copy: the notes' hooks beside the guard's ([Paths.ClaudeSettingsGuarded]).
+func (p Paths) ClaudeNotesSettingsGuarded() string {
+	return p.WorkDir() + "/claude-settings-notes-guarded.json"
+}
+
+// ClaudeBridgeGuard is the script the guard's PreToolUse hook runs
+// ([claudeGuardScript]). Under WorkDir, never in the checkout.
+func (p Paths) ClaudeBridgeGuard() string { return p.WorkDir() + "/claude-bridge-guard.sh" }
+
+// ClaudeUnbridged is where the guard records the server's source and the agent
+// of a call it refused, which the run's script reads once the harness exits
+// ([claudeGuardLines]).
+func (p Paths) ClaudeUnbridged() string { return p.WorkDir() + "/claude-unbridged" }

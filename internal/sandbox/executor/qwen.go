@@ -389,9 +389,17 @@ type qwenHelperConfig struct {
 	QwenHome string `json:"qwenHome"`
 	// Servers are the run's MCP servers, waited for before the prompt; Bridge
 	// is the one without which the run is not started.
-	Servers   []string `json:"servers"`
-	Bridge    string   `json:"bridge,omitempty"`
-	MCPWaitMs int64    `json:"mcpWaitMs"`
+	Servers []string `json:"servers"`
+	Bridge  string   `json:"bridge,omitempty"`
+	// BridgeURL is the only address Bridge may be served from: Qwen Code
+	// 0.28.4 merges servers by name, a system or repository settings file's
+	// over the home's, so another `crewlet` would serve the bridge's names
+	// unseen. Its status answer gives the connected server's configuration
+	// and origin, which the helper holds to this before the prompt (its
+	// `mcp__<server>__<tool>` grammar lets no other name take a bridge
+	// tool's, [harnessprofile.BridgeToolName]).
+	BridgeURL string `json:"bridgeURL,omitempty"`
+	MCPWaitMs int64  `json:"mcpWaitMs"`
 	// Notes is the run's notes route, Skills its skill route, each "" for none.
 	Notes     string `json:"notes,omitempty"`
 	Skills    string `json:"skills,omitempty"`
@@ -414,8 +422,8 @@ func qwenHelperConfigOf(req sandbox.RunRequest, paths Paths) qwenHelperConfig {
 		MCPWaitMs: qwenMCPWait.Milliseconds(),
 		Namespace: sandbox.SkillNamespace,
 	}
-	if _, ok := req.MCPServers[config.ToolServerName]; ok {
-		c.Bridge = config.ToolServerName
+	if bridge, ok := req.MCPServers[config.ToolServerName]; ok {
+		c.Bridge, c.BridgeURL = config.ToolServerName, bridge.URL
 	}
 	if req.Steer.Set() {
 		c.Notes = req.Steer.URL
