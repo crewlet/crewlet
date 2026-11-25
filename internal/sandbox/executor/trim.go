@@ -12,17 +12,17 @@ import (
 )
 
 // TRIMMED BEFORE THE BOUND (ADR-0073, "A kept session is what its harness's
-// resume loads"): a pack whose session the take would refuse whole keeps only
-// what its harness's resume loads: everything from its newest compaction on,
-// and before it what that release reads there (Codex its first line, Copilot
-// all but the turns the summary replaced, Muse Code nothing, Gemini CLI and
-// Qwen Code their first line and every line from their run's start
-// (chattrim.go), Hermes every row but the messages the compaction replaced,
-// its settled admissions' results slimmed). It cuts the pack's copy, never the
-// live record, so it runs on every pack, a save's and a stop's as the end's,
-// and costs no model call. Only the release a rule was measured on is trimmed
-// ([trimmer]); every other harness and release packs whole, and a pack still
-// past the bound once trimmed is refused as one never trimmed is.
+// resume loads"): a pack whose session the take would refuse whole keeps what
+// its harness's resume loads, everything from its newest compaction on and,
+// before it, what that release reads there (Codex its first line, Copilot all
+// but the turns the summary replaced, Muse Code nothing, Gemini CLI and Qwen
+// Code their first line, Hermes every row but the messages the compaction
+// replaced, its settled admissions' results slimmed, OpenCode its `info` and
+// kept turns), never past a run's start that it records ([trimStartVar]). It
+// cuts the pack's copy, never the live record, on every pack, and costs no
+// model call. Only the release a rule was measured on is trimmed ([trimmer]);
+// every other harness and release packs whole, and a pack still past the bound
+// once trimmed is refused as one never trimmed is.
 
 // NO TRIM, BY HARNESS: Claude Code's own trim rewrites its transcript, and its
 // subagent threads stay whole, since 2.1.310 continues one spawned before the
@@ -74,6 +74,31 @@ type trimmer interface {
 // session from: the run's script sets it from its own `--version`, and
 // [Runner.packNow] from the record, for a pack on demand and a save.
 const trimRelVar = "trel"
+
+// trimStartVar is the shell variable a pack reads its run's start from, the
+// place no trim cuts past ([sandbox.RunStart]): a chat file's lines before the
+// run began ([chatRunStartFrom]) or the cursor an OpenCode run recorded
+// ([openCodeRunStart]), 0 where the run began its session, unset where that is
+// not known, which cuts nothing. The run's script sets it, and
+// [Runner.packNow] from the record ([trimStartOf]).
+const trimStartVar = "trs"
+
+// trimStartOf is [trimStartVar]'s value for rec's run as h records it: its
+// start's lines, or the cursor [runStartOf] reads its message from, each a
+// word of letters, digits, `-` and `_`; 0 where it began its session; "" where
+// none is known.
+func trimStartOf(rec sessionRecord, h Harness) string {
+	start, prefix := rec.runStart(h)
+	switch {
+	case start.Began:
+		return "0"
+	case prefix.Lines > 0:
+		return strconv.FormatInt(prefix.Lines, 10)
+	case start.After != "":
+		return rec.from
+	}
+	return ""
+}
 
 // trimCut is the shell that cuts the staged record at the shell word member to
 // what t's resume loads, where it can, and says so in trw: `<bytes before>
