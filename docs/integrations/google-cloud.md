@@ -313,6 +313,8 @@ Each ends by itself. A sync that cannot see its own write after 3 minutes says s
 
 ## Google's growth products sign in through this identity
 
+The **Google page** (Company › Integrations › Google) holds what every Google product shares, once: this connection, the company reader, the Google sign-in client, and a switch per product. Turning a product on there is all it takes on Crewlet's side; each product's own page keeps its agents, their access and its activity.
+
 Google's growth products (Google Analytics, Search Console, Google Ads and Google Play) sign in through the identity project this connection sets up. No Google Cloud project needs to be prepared for them, but each needs Google Cloud connected with its provisioning block. The design is [ADR-0172](../../adr/0172-a-google-growth-product-signs-in-as-each-seats-own-growth-identity-never-its-cloud-identity.md).
 
 **Each agent gets a second account, its growth identity,** used for those products alone:
@@ -335,12 +337,12 @@ AdSense and AdMob accept no service account, so the company reaches them through
 
 ### The company's own OAuth client
 
-AdSense and AdMob sign in as it, and Google Analytics and Google Play use it, optionally, for **Add it for me**. Each product's connect form shows the values below; one client and one secret variable may serve every product.
+AdSense and AdMob sign in as it, and Google Analytics and Google Play use it, optionally, for **Add it for me**. It is set once, under **Google sign-in** on the Google page's Settings tab (Company › Integrations › Google), which shows the values below, and kept at `integrations.google_cloud.sign_in_client`. A product's own `oauth` block, where written, overrides it for that product alone.
 
 1. In a Google Cloud project you control, open **Google Cloud › Credentials** and create an OAuth client ID of type **Web application**, after turning on the APIs the product's page names.
 2. Under **Authorized redirect URIs**, add `<api.public.external_url>/webhooks/mcp-oauth` (`<api.external_url>/webhooks/mcp-oauth` without a public listener), exactly as the form shows it: Google refuses any address not registered exactly. Leave **Authorized JavaScript origins** empty, since the engine exchanges the code itself. When the address changes, as a temporary tunnel's can on restart, add the new URI before the next sign-in: each sign-in records the redirect it came back through, so the [redirect notice](../guides/advisor.md#platform-notices) lists every client still signed in through an earlier address, with the new URI to copy, and the product's form says **Redirect URI out of date**. Sign-ins already made keep working. With no public address the form says so, and a sign-in is refused.
 3. In **Google Auth Platform › Audience**, choose **Internal** if whoever signs in is in the project's Google Cloud organization. Otherwise choose **External** and press **Publish app** (Google's unverified-app warning is fine for the few people who sign in), or keep it in **Testing** and add each person who signs in as a test user: Google ends a test user's sign-in seven days after consent, and a refusal about then says so ([Manage App Audience](https://support.google.com/cloud/answer/15549945)).
-4. Put the client's ID and secret in the product's `oauth.client_id` and `oauth.client_secret`, the secret as a `${VAR}`, or paste them on its page.
+4. Paste the client's ID and secret under **Google sign-in** on the Google page, or write them in `integrations.google_cloud.sign_in_client`, the secret as a `${VAR}`.
 
 ## Configuration
 
@@ -353,6 +355,9 @@ integrations:
       provider: projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine
       federation_key: "${GOOGLE_CLOUD_FEDERATION_KEY}"
       atlas_read: false
+    sign_in_client:                 # optional: the OAuth client every Google sign-in is made as
+      client_id: "123456789012-abc.apps.googleusercontent.com"
+      client_secret: ${GOOGLE_SIGN_IN_CLIENT_SECRET}
 roles:
   - handle: sre
     integrations:

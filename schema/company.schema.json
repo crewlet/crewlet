@@ -153,7 +153,7 @@
           ]
         },
         "enabled": {
-          "description": "Turn the integration on. Needs oauth, the company's own OAuth client, and a person's Google sign-in on the integration's page.",
+          "description": "Turn the integration on. Needs the company's own OAuth client (integrations.google_cloud.sign_in_client, or oauth here) and a person's Google sign-in, made on the Google page.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -163,7 +163,7 @@
         },
         "oauth": {
           "$ref": "#/$defs/GoogleOAuthClient",
-          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls), which the sign-in is made as. Required when enabled."
+          "description": "The OAuth client AdMob alone signs in as, in place of integrations.google_cloud.sign_in_client. Optional."
         }
       },
       "type": [
@@ -205,7 +205,7 @@
           ]
         },
         "enabled": {
-          "description": "Turn the integration on. Needs oauth, the company's own OAuth client, and a person's Google sign-in on the integration's page.",
+          "description": "Turn the integration on. Needs the company's own OAuth client (integrations.google_cloud.sign_in_client, or oauth here) and a person's Google sign-in, made on the Google page.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -215,7 +215,7 @@
         },
         "oauth": {
           "$ref": "#/$defs/GoogleOAuthClient",
-          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls), which the sign-in is made as; AdMob may share it. Required when enabled."
+          "description": "The OAuth client AdSense alone signs in as, in place of integrations.google_cloud.sign_in_client. Optional."
         }
       },
       "type": [
@@ -2592,7 +2592,7 @@
         },
         "oauth": {
           "$ref": "#/$defs/GoogleOAuthClient",
-          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls), which a Google Analytics Administrator signs in as so Crewlet adds each agent's identity to its properties itself; other Google products may share it. Optional: without it a person adds each agent's identity in Google Analytics."
+          "description": "The OAuth client Google Analytics' admin sign-in alone is made as, in place of integrations.google_cloud.sign_in_client. Optional."
         },
         "properties": {
           "description": "Numeric Google Analytics property IDs agents may be given, at most 200. Absent: every property an agent's identity is added to. Optional.",
@@ -2630,6 +2630,10 @@
         "provisioning": {
           "$ref": "#/$defs/GoogleCloudProvisioning",
           "description": "The provisioner service account, the Workload Identity Federation provider and the engine's federation key the agents' service accounts are made with. Required when enabled."
+        },
+        "sign_in_client": {
+          "$ref": "#/$defs/GoogleOAuthClient",
+          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls) every Google sign-in is made as: AdMob's and AdSense's, and the admin sign-ins of Google Analytics and Google Play. A product's own oauth overrides it for that product. Optional."
         }
       },
       "type": [
@@ -2770,7 +2774,7 @@
         },
         "oauth": {
           "$ref": "#/$defs/GoogleOAuthClient",
-          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls), which a Play Console admin signs in as so Crewlet adds each agent's identity to its apps itself; other Google products may share it. Optional: without it a person invites each agent's identity in Play Console."
+          "description": "The OAuth client Google Play's admin sign-in alone is made as, in place of integrations.google_cloud.sign_in_client. Optional."
         },
         "reports_buckets": {
           "description": "Each developer account's monthly reports bucket, as Play Console's Download reports page copies it (pubsite_prod_rev_ followed by digits), at most 20. The company reader reads them. Optional.",

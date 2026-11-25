@@ -81,6 +81,8 @@ function lastDelivery(tool: Tool, rows: Map<string, IntegrationRow>): string | n
 /** Whether a line is in use: a service the company runs, or a connected app or product. */
 function active(line: Line, model: Model | null, services: BuiltInService[]): boolean {
   if (line.kind === "service") return services.some((s) => s.key === line.key && s.known && s.on);
+  // GOOGLE IS NO CARD OF ITS OWN: each Google product in use is one.
+  if (line.kind === "google") return false;
   const tool = model?.byKey.get(entryOf(line)!.key);
   if (!tool) return false;
   return line.kind === "product"

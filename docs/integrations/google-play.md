@@ -38,7 +38,7 @@ An agent's identity at Google Play is its own Google growth identity, which Crew
 2. Paste the agent's email.
 3. Under **App permissions**, add the agent's apps and tick what its level needs: at `read`, **View app information (read-only)**; at `operate`, also **Reply to reviews**, **Manage store presence**, **Release to testing tracks**, **Manage testing tracks and edit tester lists** and **Release to production**; at `administer`, also **Manage orders and subscriptions**. Leave Account permissions empty and press **Invite user**.
 
-**Add it for me.** With the company's own OAuth client (`oauth`, made as [Google Cloud's page describes](google-cloud.md#the-companys-own-oauth-client), which Google Analytics may share) and a Play Console admin's sign-in on the Settings tab, **Add it for me** takes those steps through Play's users and grants API, in the developer account `developer_accounts` names that holds each app, with exactly the level's permissions and keeping any the identity holds already. Turning the agent off takes the identity out of those accounts. The sign-in only adds, reads and removes agents' identities; no agent's call is made with it.
+**Add it for me.** With the company's Google sign-in client (set once on the Google page, as [Google Cloud's page describes](google-cloud.md#the-companys-own-oauth-client), or `oauth` here) and a Play Console admin's sign-in on the Google page, **Add it for me** takes those steps through Play's users and grants API, in the developer account `developer_accounts` names that holds each app, with exactly the level's permissions and keeping any the identity holds already. Turning the agent off takes the identity out of those accounts. The sign-in only adds, reads and removes agents' identities; no agent's call is made with it.
 
 **The check, on every pass:** Crewlet signs in as the identity and reads one review of each app; an app Play refuses is not added yet. With the admin sign-in it also reads the identity's permissions on each app: fewer than the level needs is the wrong role, naming what is missing, and Admin below `administer` is a warning; without the admin sign-in the row reads **Role not checked**, never In sync, and says which permissions to tick. Play can take up to two days to apply new permissions; while the admin sign-in shows the identity added and Play does not let it in yet, the box says so. The agent is ready once every app passes, and reads Needs you again if somebody removes it there; calls Google refuses meanwhile name what is missing.
 
@@ -93,7 +93,7 @@ roles:
       google_play: {enabled: true, level: read, apps: ["com.example.app"]}
 ```
 
-The block needs `integrations.google_cloud` on with its provisioning block. Its one secret is the optional OAuth client's.
+The block needs `integrations.google_cloud` on with its provisioning block. Its one secret is the optional OAuth client's, where it names its own.
 
 ## Every method, and its class
 

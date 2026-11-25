@@ -25,6 +25,10 @@ type GoogleCloud struct {
 	// Provisioning is the provisioner the agents' accounts are made by, the
 	// federation provider it is reached through, and the key that signs for it.
 	Provisioning *GoogleCloudProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"The provisioner service account, the Workload Identity Federation provider and the engine's federation key the agents' service accounts are made with. Required when enabled."`
+
+	// SignInClient is the one OAuth client every Google sign-in is made as;
+	// a product's own oauth block overrides it ([Integrations.GoogleSignInClient]).
+	SignInClient *GoogleOAuthClient `yaml:"sign_in_client,omitempty" json:"sign_in_client,omitempty" desc:"The company's own OAuth client (a Web application, in a Google Cloud project it controls) every Google sign-in is made as: AdMob's and AdSense's, and the admin sign-ins of Google Analytics and Google Play. A product's own oauth overrides it for that product. Optional."`
 }
 
 // GoogleCloudProvisioning is what the engine needs to make, grant, disable and
@@ -165,6 +169,7 @@ func GoogleCloudProvider(name string) bool {
 
 func (g *GoogleCloud) validate(path Path) error {
 	var p problems
+	g.SignInClient.validate(&p, at(path, "sign_in_client"), g.SignInClient != nil)
 	if !g.Enabled {
 		return p.err()
 	}
@@ -232,4 +237,17 @@ func (c *Company) checkGoogleCloud(p *problems, path Path, b *RoleGoogleCloud) {
 		seen[id] = true
 	}
 	checkSeatGrants(p, at(path, "grants"), b.Grants)
+}
+
+// GoogleSignInClient is the OAuth client a Google product signs in as: own,
+// its block's oauth, where it names one, else the company's sign_in_client;
+// nil where neither is set.
+func (i *Integrations) GoogleSignInClient(own *GoogleOAuthClient) *GoogleOAuthClient {
+	if own != nil && strings.TrimSpace(own.ClientID) != "" {
+		return own
+	}
+	if i != nil && i.GoogleCloud != nil && i.GoogleCloud.SignInClient != nil {
+		return i.GoogleCloud.SignInClient
+	}
+	return nil
 }

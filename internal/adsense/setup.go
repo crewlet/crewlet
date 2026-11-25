@@ -10,13 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
-// credentialsURL is where a person makes the company's OAuth client.
-const credentialsURL = "https://console.cloud.google.com/apis/credentials"
-
-// Requirements says what the company still needs for AdSense: the
-// integration on, and its own OAuth client, which the sign-in is made as. A
-// nil block answers every field absent, so the form still renders.
-func Requirements(c *config.Company, resolve func(string) (string, bool)) []setup.Requirement {
+// Requirements says what the company still needs for AdSense: the integration
+// on, and a person's Google sign-in, made as the company's sign-in client
+// (googlegrowth.SignInClient). A nil block answers every field absent.
+func Requirements(c *config.Company) []setup.Requirement {
 	var block config.AdSense
 	if c != nil && c.Integrations.AdSense != nil {
 		block = *c.Integrations.AdSense
@@ -29,12 +26,10 @@ func Requirements(c *config.Company, resolve func(string) (string, bool)) []setu
 		ConfigPath: base + ".enabled", Required: true, Hidden: true, Default: "true",
 	}
 	enabled.Present, enabled.Resolved, enabled.Stored = setup.Toggle(block.Enabled)
-	ask := googlegrowth.OAuthClientAsk{Kind: string(Kind), Client: block.OAuth, Required: true,
-		Purpose: vendortext.Of(vendortext.W("The client's ID, from "),
-			vendortext.UI("Google Cloud", "Credentials").At(credentialsURL), vendortext.W(".")),
+	signIn := googlegrowth.SignIn(googlegrowth.SignInAsk{Kind: string(Kind), Required: true,
 		SignIn: vendortext.Of(vendortext.W("As an AdSense "), vendortext.UI("Administrator"),
-			vendortext.W(" or "), vendortext.UI("Standard"), vendortext.W(" user; again once agents may change."))}
-	return append([]setup.Requirement{enabled}, googlegrowth.OAuthClient(ask, resolve)...)
+			vendortext.W(" or "), vendortext.UI("Standard"), vendortext.W(" user; again once agents may change."))})
+	return append([]setup.Requirement{enabled}, signIn...)
 }
 
 // Guide is what the connect form says around its fields.

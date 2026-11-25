@@ -340,6 +340,20 @@ export const MODELS_PATH: readonly string[] = ["settings", "models"];
 export const INTEGRATION_TABS = ["agents", "activity", "settings"] as const;
 export type IntegrationTab = (typeof INTEGRATION_TABS)[number];
 
+/** The Google page's tabs, and the products its `product=` may name. */
+export const GOOGLE_TABS = ["products", "settings"] as const;
+export type GoogleTab = (typeof GOOGLE_TABS)[number];
+export const GOOGLE_PRODUCTS = [
+  "google_cloud",
+  "google_analytics",
+  "search_console",
+  "google_ads",
+  "admob",
+  "adsense",
+  "google_play",
+] as const;
+export type GoogleProduct = (typeof GOOGLE_PRODUCTS)[number];
+
 /**
  * Where a new artifact of a kind is made: each kind has its own page
  * (`routes/artifacts/new/`), because writing a doc, laying out a deck and
