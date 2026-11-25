@@ -533,16 +533,16 @@ func benchEveryVariant(t *benchThread) {
 
 // benchEveryVariantRead holds every_variant_distinct's chain to four orders,
 // warm_mochi's and the rest per release, the retraction taking a quarter of
-// the bound out of 2.1.322's.
+// the bound out of 2.1.322's and 2.1.330's.
 func benchEveryVariantRead(b *testing.B, read benchRead, t *benchThread) {
 	orders := benchModelled(b, read.c, 4)
 	benchHolds(b, read.c, t, threadChainMaxRecords, t.handles[0], true)
-	want := []chainVariants{variant322SpringMochi | variant322SpringMochiMetcalfe,
-		variant322Off | variant322Spring | variant322SpringMetcalfe, variant310SpringMochi, variant310Off | variant310Spring}
+	want := []chainVariants{variantsMochi &^ variant310SpringMochi, allVariants &^ variantsMochi &^ variants310,
+		variant310SpringMochi, variant310Off | variant310Spring}
 	lens := []int{t.records - threadChainMaxRecords/4, t.records - threadChainMaxRecords/4, t.records, t.records}
 	for i, o := range orders {
 		if o.Variants() != want[i] || o.Len() != lens[i] {
-			b.Fatalf("order %d of the variants %08b hands %d records; want the variants %08b to hand %d", i,
+			b.Fatalf("order %d of the variants %013b hands %d records; want the variants %013b to hand %d", i,
 				o.Variants(), o.Len(), want[i], lens[i])
 		}
 	}

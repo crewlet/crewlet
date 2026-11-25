@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -43,17 +44,35 @@ type geminiEntryWire struct {
 // history.
 func geminiSyncEnds(patch, rewind json.RawMessage) bool { return len(patch) > 0 || len(rewind) > 0 }
 
-// geminiSummary is the summary content holds, trimmed as the walk trims it,
-// and whether it is a compression's: its first text part, opening with
-// [geminiSnapshot].
-func geminiSummary(content json.RawMessage, valueMax int) (string, bool) {
+// geminiSummary is the summary a compression's user entry content holds,
+// trimmed as the walk trims it: its first text part a thought is not.
+func geminiSummary(content json.RawMessage, valueMax int) string {
 	for _, part := range geminiParts(content) {
 		if part.Text != nil && !part.Thought {
-			text := chatTrim(*part.Text, valueMax)
-			return text, strings.HasPrefix(text, geminiSnapshot)
+			return chatTrim(*part.Text, valueMax)
 		}
 	}
-	return "", false
+	return ""
+}
+
+// geminiRecordWhole is what of r the whole-line oracles read, held whole:
+// up to the last line break before r failed, and r's error; and which of
+// its lines, by number from 0, are a compression's summary, each found as
+// the three lines it is ([geminiCompressionSet]) on the record split whole.
+func geminiRecordWhole(r io.Reader) ([]byte, map[int]bool, error) {
+	record, err := io.ReadAll(r)
+	if err != nil {
+		record = record[:bytes.LastIndexByte(record, '\n')+1]
+	}
+	lines := bytes.Split(record, []byte("\n"))
+	summaries := map[int]bool{}
+	for i := 1; i+1 < len(lines); i++ {
+		if geminiCompressionSet.holds(lines[i-1]) && geminiCompressionUser.holds(lines[i]) &&
+			geminiCompressionAck.holds(lines[i+1]) {
+			summaries[i] = true
+		}
+	}
+	return record, summaries, err
 }
 
 // geminiResponseWhole is one `gemini` entry held until the next entry begins.
@@ -79,8 +98,10 @@ func (b *transcriptBuilder) geminiSessionWhole(ctx context.Context, r io.Reader)
 		held = nil
 		return b.geminiRespondedWhole(response)
 	}
-	read := 0
-	err := readLines(bufio.NewReaderSize(r, lineChunkBytes), maxLineBytes, func(line []byte) error {
+	record, summaries, readErr := geminiRecordWhole(r)
+	read, physical := 0, -1
+	err := readLines(bufio.NewReaderSize(bytes.NewReader(record), lineChunkBytes), maxLineBytes, func(line []byte) error {
+		physical++
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -123,19 +144,26 @@ func (b *transcriptBuilder) geminiSessionWhole(ctx context.Context, r io.Reader)
 			if err := flush(); err != nil {
 				return err
 			}
-			if summary, ok := geminiSummary(w.Content, b.valueMax); ok {
+			if summaries[physical] {
 				restating = true
-				return b.add(TranscriptEntry{Kind: EntrySummary, At: at, Thread: b.thread}, summary)
+				if summary := geminiSummary(w.Content, b.valueMax); summary != "" {
+					return b.add(TranscriptEntry{Kind: EntrySummary, At: at, Thread: b.thread}, summary)
+				}
+				return nil
 			}
 			return b.userPartsWhole(at, w.Content, geminiSessionContext)
 		}
 		return nil
 	}, func(n int64) error {
+		physical++
 		if err := flush(); err != nil {
 			return err
 		}
 		return b.chatPastWhole(n)
 	})
+	if err == nil {
+		err = readErr
+	}
 	if err != nil {
 		return err
 	}
@@ -183,8 +211,9 @@ func (b *transcriptBuilder) geminiRespondedWhole(r geminiResponseWhole) error {
 // over, as a torn last line is, and counted.
 func geminiConfirmedWhole(_ context.Context, r io.Reader, takes []geminiAskedTake, bound int) ([]bool, error) {
 	confirmed := make([]bool, len(takes))
+	record, summaries, readErr := geminiRecordWhole(r)
 	next, restating, at := 0, false, -1
-	err := readLines(bufio.NewReaderSize(r, lineChunkBytes), bound, func(line []byte) error {
+	err := readLines(bufio.NewReaderSize(bytes.NewReader(record), lineChunkBytes), bound, func(line []byte) error {
 		at++
 		var entry struct {
 			Type    string          `json:"type"`
@@ -201,7 +230,7 @@ func geminiConfirmedWhole(_ context.Context, r io.Reader, takes []geminiAskedTak
 		if restating || entry.Type != "user" {
 			return nil
 		}
-		if _, ok := geminiSummary(entry.Content, maxLineBytes); ok {
+		if summaries[at] {
 			restating = true
 			return nil
 		}
@@ -219,5 +248,8 @@ func geminiConfirmedWhole(_ context.Context, r io.Reader, takes []geminiAskedTak
 		}
 		return nil
 	}, func(int64) error { at++; return nil })
+	if err == nil {
+		err = readErr
+	}
 	return confirmed, err
 }

@@ -21,7 +21,7 @@ import (
 // of every gemini process, and what a resume sends. Only a user entry's text
 // part counts, whole. A compression's
 // summary confirms nothing, its restatement of the kept entries neither
-// (geminirecord.go): a note was sent plain before any compression could fold
+// (geminicompression.go): a note was sent plain before any compression could fold
 // it, so its plain entry confirms it, even once a later `$patch` drops it.
 
 // geminiAskedTake is one take [geminiConfirmed] is asked of: its rendered
@@ -50,11 +50,13 @@ func geminiConfirmed(ctx context.Context, r io.Reader, takes []geminiAskedTake, 
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), bound)
 	l := geminiNoteLine{takes: takes}
+	var compression geminiCompressionWatch
 	for {
 		read := func() error { return w.scan.Skip() }
 		if next < len(takes) {
 			read = func() error { return l.read(&w, next, at+1) }
 		}
+		compression.next(w.lines)
 		line, err := w.noteLine(ctx, read)
 		if err != nil {
 			return nil, fmt.Errorf("executor: reading which takes the Gemini CLI session holds: %w", err)
@@ -69,7 +71,7 @@ func geminiConfirmed(ctx context.Context, r io.Reader, takes []geminiAskedTake, 
 			}
 			switch {
 			case restating || l.typ != "user":
-			case l.snapshot:
+			case compression.summary(w.lines):
 				restating = true
 			default:
 				for _, i := range l.confirmed {
@@ -88,19 +90,17 @@ func geminiConfirmed(ctx context.Context, r io.Reader, takes []geminiAskedTake, 
 // geminiNoteLine is what the confirm reader reads of one session line: its
 // type, whole where it is of its whole-line decode's kind, whether it closes
 // a sync, and which takes its content's text parts would confirm, from next
-// on, at its line, and whether its first text a thought is not opens a
-// compression's summary.
+// on, at its line.
 type geminiNoteLine struct {
-	takes                 []geminiAskedTake
-	typ                   string
-	whole, patched        bool
-	from, next, at        int
-	confirmed             []int
-	firstSeen, snapshot   bool
-	partText, partThought bool
-	partDigest            string
-	h                     hash.Hash
-	opening               textTrim
+	takes          []geminiAskedTake
+	typ            string
+	whole, patched bool
+	from, next, at int
+	confirmed      []int
+	partText       bool
+	partDigest     string
+	h              hash.Hash
+	opening        textTrim
 }
 
 // read reads one line's members, confirming from next at line at. A KEY
@@ -130,14 +130,14 @@ func (l *geminiNoteLine) read(w *lineWalk, next, at int) error {
 
 // contentStart starts a content: no part read, nothing confirmed.
 func (l *geminiNoteLine) contentStart() {
-	l.next, l.confirmed, l.firstSeen, l.snapshot = l.from, l.confirmed[:0], false, false
+	l.next, l.confirmed = l.from, l.confirmed[:0]
 }
 
 // content reads a content's text parts as [chatReading.parts] reads them.
 func (l *geminiNoteLine) content(w *lineWalk, k jsonscan.Kind) error {
 	switch k {
 	case jsonscan.String:
-		l.partText, l.partThought = true, false
+		l.partText = true
 		if err := l.text(w); err != nil {
 			return err
 		}
@@ -150,15 +150,12 @@ func (l *geminiNoteLine) content(w *lineWalk, k jsonscan.Kind) error {
 			if k != jsonscan.ObjectStart {
 				return true, w.scan.Skip()
 			}
-			l.partText, l.partThought = false, false
+			l.partText = false
 			err := w.members(func(name string, k jsonscan.Kind) error {
-				switch name {
-				case "text":
+				if name == "text" {
 					if l.partText = k == jsonscan.String; l.partText {
 						return l.text(w)
 					}
-				case "thought":
-					l.partThought = k == jsonscan.True
 				}
 				return w.scan.Skip()
 			})
@@ -191,13 +188,10 @@ func (l *geminiNoteLine) text(w *lineWalk) error {
 }
 
 // partEnd confirms the first take from next its text's digest is, delivered
-// by the line, and reads the first text a thought is not for a summary.
+// by the line.
 func (l *geminiNoteLine) partEnd() {
 	if !l.partText {
 		return
-	}
-	if !l.firstSeen && !l.partThought {
-		l.firstSeen, l.snapshot = true, l.opening.opens(geminiSnapshot)
 	}
 	for i := l.next; i < len(l.takes); i++ {
 		t := l.takes[i]
