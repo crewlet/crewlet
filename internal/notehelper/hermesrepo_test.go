@@ -157,6 +157,45 @@ func TestAHermesCheckoutWithNoRoomWaitsForALaterFiring(t *testing.T) {
 	}
 }
 
+// A CHECKOUT A LAUNCH LEFT WITH NO HAND TO COME IS NAMED WITH ITS FILES: the
+// skip log's line for it names the files the launch's gate read its
+// instructions from, as a named block does; the instruction files at its root
+// where Hermes rendered nothing for it; no file where the gate found no
+// instructions there.
+//
+// Mutation: name the root in place of its files, or name none, and a row goes
+// red.
+func TestACheckoutALaunchLeftWithNoHandIsNamedWithItsFiles(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, map[string]string{"late/.git/": ""})
+	root := filepath.Join(r.workdir(t), "late")
+	files := []string{root + "/AGENTS.md", root + "/.cursor/rules/a.mdc"}
+	rendered := checkoutGate{Checkouts: map[string]gatedCheckout{root: {Text: "## AGENTS.md\n\nLATE", Files: files}}}
+	r.hermesLaunch(t, []byte("OWN"), len("OWN")+10, rendered)
+	head := "crewlet: " + root + " is not handed its instructions and skills, since the run hands no checkout after " +
+		"its launch"
+	for _, c := range []struct {
+		name string
+		gate checkoutGate
+		want string
+	}{
+		{"rendered", rendered, head + "; read " + files[0] + ", " + files[1] + " for its instructions\n"},
+		{"not rendered", checkoutGate{}, head + "; read the instruction files at its root for its instructions\n"},
+		{"no instructions", checkoutGate{Checkouts: map[string]gatedCheckout{root: {Skills: []string{root + "/s"}}}},
+			head + "\n"},
+	} {
+		in, _ := json.Marshal(c.gate)
+		var out, errs strings.Builder
+		if code := runHermesPeek(context.Background(), flags{config: filepath.Join(r.state, "nested.json"), left: true},
+			bytesReader(in), &out, &errs, os.Getenv); code != exitDone {
+			t.Fatalf("%s: hermes-peek -left exited %d: %s", c.name, code, errs.String())
+		}
+		if out.String() != c.want {
+			t.Errorf("%s: hermes-peek -left printed %q, want %q", c.name, out.String(), c.want)
+		}
+	}
+}
+
 // A CHECKOUT CLONED DURING A HERMES RUN IS HANDED ONCE, THROUGH ITS GATE: a
 // candidate the gate does not answer for waits; one it does is handed whole
 // within the result's room (counted in characters, as Hermes's len counts

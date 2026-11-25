@@ -64,9 +64,9 @@ func hermesLaunchHome(paths Paths, model string) checkoutHome {
 	h.gateCmd = hermesGateCommand(paths, model, hermesGateWait)
 	// EACH CHECKOUT THE LAUNCH LEFT FOR A FIRING where none will come (one that
 	// waited for room or the copy bound, or every one Hermes could not render)
-	// named in the skip log with what to read.
-	h.afterLaunch = fmt.Sprintf(`if [ -e "$rr/%s" ]; then "$rh" -adapter hermes-peek -lines -config %s < /dev/null | while IFS= read -r hr; do printf 'crewlet: %%s is not handed its instructions and skills, since the run hands no checkout after its launch; read %%s for its instructions\n' "$hr" "$hr" >> "$rr/skipped"; done; fi`,
-		hermesNestedOff, shellword.Quote(paths.HermesCheckoutLaunch()))
+	// named in the skip log with the files to read, from the launch's gate.
+	h.afterLaunch = fmt.Sprintf(`if [ -e "$rr/%s" ]; then "$rh" -adapter hermes-peek -left -config %s < %s >> "$rr/skipped"; fi`,
+		hermesNestedOff, shellword.Quote(paths.HermesCheckoutLaunch()), shellword.Quote(h.gateFile()))
 	return h
 }
 

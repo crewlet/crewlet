@@ -149,20 +149,21 @@ type peekConfig struct {
 	First   []string `json:"first"`
 }
 
-// runHermesPeek prints, as {"roots": [...]} (with -lines, a root a line),
-// the root of each checkout a firing could claim now: finished
-// ([cloneFinished]), not handed, in [checkoutNames]' order, none once the run
-// is ended. It claims nothing, so the gate the run's Hermes then answers for
-// them is read before any claim. Exit 1 where it cannot say.
-func runHermesPeek(_ context.Context, f flags, _ io.Reader, stdout, stderr io.Writer, _ func(string) string) int {
+// runHermesPeek prints, as {"roots": [...]}, the root of each checkout a
+// firing could claim now: finished ([cloneFinished]), not handed, in
+// [checkoutNames]' order, none once the run is ended. It claims nothing, so
+// the gate the run's Hermes then answers for them is read before any claim.
+// With -left it prints instead, for a launch whose run has no nested hand,
+// the skip log's line for each, from the launch's gate on stdin
+// ([hermesLeft]). Exit 1 where it cannot say.
+func runHermesPeek(_ context.Context, f flags, stdin io.Reader, stdout, stderr io.Writer, _ func(string) string) int {
 	roots, err := hermesPeek(f.config)
 	switch {
 	case err != nil:
-	case f.lines:
-		for _, root := range roots {
-			if _, err = fmt.Fprintln(stdout, root); err != nil {
-				break
-			}
+	case f.left:
+		var gate *checkoutGate
+		if gate, err = readGate(stdin); err == nil {
+			_, err = io.WriteString(stdout, hermesLeft(roots, gate))
 		}
 	default:
 		err = json.NewEncoder(stdout).Encode(map[string][]string{"roots": roots})
@@ -172,6 +173,29 @@ func runHermesPeek(_ context.Context, f flags, _ io.Reader, stdout, stderr io.Wr
 		return exitError
 	}
 	return exitDone
+}
+
+// hermesLeft is the skip log's line for each checkout at roots a launch left
+// for a firing where none will come, naming the files to read for its
+// instructions as a firing's named block does ([hermesRoom.hermesNamed]): the
+// ones the gate read them from, the instruction files at its root where the
+// gate answers nothing for it (Hermes could not render it), none where the
+// gate found no instructions there.
+func hermesLeft(roots []string, gate *checkoutGate) string {
+	var b strings.Builder
+	for _, root := range roots {
+		b.WriteString("crewlet: " + root + " is not handed its instructions and skills, since the run hands no " +
+			"checkout after its launch")
+		g, held := gate.Checkouts[root]
+		switch {
+		case !held:
+			b.WriteString("; read the instruction files at its root for its instructions")
+		case len(g.Files) > 0:
+			b.WriteString("; read " + strings.Join(g.Files, ", ") + " for its instructions")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // hermesPeek is [runHermesPeek]'s roots under the config at path.

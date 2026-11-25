@@ -345,7 +345,7 @@ func TestAHermesWhoseReadCodeMovedStartsWithoutItsCheckouts(t *testing.T) {
 		"skills: Hermes Agent 0.23.3 moved what the runner reads of its code " +
 		"(agent.prompt_builder.discover_context_files is gone)",
 		"crewlet: " + work + "/repo is not handed its instructions and skills, since the run hands no checkout after " +
-			"its launch; read " + work + "/repo for its instructions"} {
+			"its launch; read the instruction files at its root for its instructions"} {
 		if strings.Count(errs, line) != 1 {
 			t.Errorf("the run's error stream says %q %d times, want once:\n%s", line, strings.Count(errs, line), errs)
 		}
