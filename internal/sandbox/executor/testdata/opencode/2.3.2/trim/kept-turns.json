@@ -1,0 +1,734 @@
+{
+  "info": {
+    "id": "ses_7458e3524b895a5161071b7f375bdd19",
+    "projectID": "6af72c5db6ed8f112517b1577cf77c9e1d825649",
+    "model": {
+      "id": "m",
+      "providerID": "stub",
+      "variant": "default"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 130,
+      "output": 65,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1795563844463,
+      "updated": 1795563848408,
+      "busy": 1795563848411,
+      "idle": 1795563848480
+    },
+    "title": "crewlet",
+    "location": {
+      "directory": "/tmp/work"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_20ff1f643001bLkFry96sIVJB7",
+      "time": {
+        "created": 1795563845430
+      },
+      "text": "CALLTOOL: b one\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20ff1f742001py3J0UM2a4U4Z9",
+      "time": {
+        "created": 1795563845451,
+        "firstToken": 1795563845480,
+        "streamed": 1795563845491,
+        "completed": 1795563845634
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_1",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "seq 1 200"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n"
+              }
+            ],
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "time": {
+            "created": 1795563845482,
+            "ran": 1795563845488,
+            "completed": 1795563845627
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20ff1f817001pjZozJYb8rVa58",
+      "time": {
+        "created": 1795563845662,
+        "firstToken": 1795563845674,
+        "streamed": 1795563845680,
+        "completed": 1795563845683
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "after-tool reply"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20ff1f8370015HKxmk5FZDhg8Q",
+      "time": {
+        "created": 1795563845687
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_20ff1f8cd0010BYr8bSSU23LE2",
+      "time": {
+        "created": 1795563845853
+      },
+      "text": "CALLTOOL: b two\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20ff1f8e3001kOI4ztl4VjoZ9n",
+      "time": {
+        "created": 1795563845865,
+        "firstToken": 1795563845878,
+        "streamed": 1795563845887,
+        "completed": 1795563845903
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_3",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "seq 1 200"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n"
+              }
+            ],
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "time": {
+            "created": 1795563845880,
+            "ran": 1795563845885,
+            "completed": 1795563845901
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20ff1f91b001e67k1Cnbl4uZoA",
+      "time": {
+        "created": 1795563845922,
+        "firstToken": 1795563845931,
+        "streamed": 1795563845939,
+        "completed": 1795563845940
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "after-tool reply"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20ff1f938001S4QTWQLbc4s3UT",
+      "time": {
+        "created": 1795563845944
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "type": "compaction",
+      "id": "msg_20ff1fbac001ELKf6aJXGEsb4Z",
+      "metadata": {
+        "keepID": "msg_20ff1f8cd0010BYr8bSSU23LE2"
+      },
+      "time": {
+        "created": 1795563846584
+      },
+      "status": "completed",
+      "reason": "manual",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "summary": "## Objective\n- Stub summary 5.\n\n## Next Move\n1. (none)",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20ff1fbd7001d2SS04oGGupkIi",
+      "time": {
+        "created": 1795563846615
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_20ff1fd850010VoGgAYnrGVlj0",
+      "time": {
+        "created": 1795563847062
+      },
+      "text": "CALLTOOL: b three\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20ff1fd9e001BwwQoKIK5MTae1",
+      "time": {
+        "created": 1795563847080,
+        "firstToken": 1795563847091,
+        "streamed": 1795563847106,
+        "completed": 1795563847132
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_6",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "seq 1 200"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n"
+              }
+            ],
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "time": {
+            "created": 1795563847094,
+            "ran": 1795563847101,
+            "completed": 1795563847127
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20ff1fde9001LO4Z2rQQOi2azY",
+      "time": {
+        "created": 1795563847152,
+        "firstToken": 1795563847163,
+        "streamed": 1795563847172,
+        "completed": 1795563847175
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "after-tool reply"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20ff1fe0d0012oruVUNwHlDDB0",
+      "time": {
+        "created": 1795563847181
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_20ff1feb300155WpDD5Ox9T8Zz",
+      "time": {
+        "created": 1795563847347
+      },
+      "type": "model-switched",
+      "model": {
+        "id": "m2",
+        "providerID": "stub"
+      },
+      "previous": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      }
+    },
+    {
+      "id": "msg_20ff1feb1001OpWFI9bNzSLwLD",
+      "time": {
+        "created": 1795563847362
+      },
+      "text": "CALLTOOL: b four\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20ff1fec9001hOJAAhCl5OOa5K",
+      "time": {
+        "created": 1795563847375,
+        "firstToken": 1795563847387,
+        "streamed": 1795563847394,
+        "completed": 1795563847414
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m2",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_8",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "seq 1 200"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n"
+              }
+            ],
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "time": {
+            "created": 1795563847388,
+            "ran": 1795563847393,
+            "completed": 1795563847412
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20ff1ff02001nr705NbAD2WfMs",
+      "time": {
+        "created": 1795563847433,
+        "firstToken": 1795563847440,
+        "streamed": 1795563847446,
+        "completed": 1795563847447
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m2",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "after-tool reply"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20ff1ff1b001IDHNjhLN18LYnt",
+      "time": {
+        "created": 1795563847451
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_20ff1ff9b001eFC2HdTuXdDAP1",
+      "time": {
+        "created": 1795563847591
+      },
+      "text": "PLAIN: b five\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20ff1ffae001Qe2ImBnzJXRoJ8",
+      "time": {
+        "created": 1795563847604,
+        "firstToken": 1795563847615,
+        "streamed": 1795563847620,
+        "completed": 1795563847621
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m2",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "reply to PLAIN: b five"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20ff1ffc8001UtYp4RgKTEfW31",
+      "time": {
+        "created": 1795563847624
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_20ff2004a001NJ3g882AWLCzYQ",
+      "time": {
+        "created": 1795563847754
+      },
+      "type": "model-switched",
+      "model": {
+        "id": "m",
+        "providerID": "stub"
+      },
+      "previous": {
+        "id": "m2",
+        "providerID": "stub",
+        "variant": "default"
+      }
+    },
+    {
+      "id": "msg_20ff200490017jFoEjcRoPbQQP",
+      "time": {
+        "created": 1795563847765
+      },
+      "text": "CALLTOOL: b six\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20ff2005c001ayy6I0dpI2C0jA",
+      "time": {
+        "created": 1795563847779,
+        "firstToken": 1795563847791,
+        "streamed": 1795563847797,
+        "completed": 1795563847810
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_11",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "seq 1 200"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n"
+              }
+            ],
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "time": {
+            "created": 1795563847792,
+            "ran": 1795563847796,
+            "completed": 1795563847808
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20ff2008e001U0coPQkSgazwht",
+      "time": {
+        "created": 1795563847829,
+        "firstToken": 1795563847839,
+        "streamed": 1795563847847,
+        "completed": 1795563847849
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "after-tool reply"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20ff200ad001Wac8h5KpexrbCf",
+      "time": {
+        "created": 1795563847853
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "type": "compaction",
+      "id": "msg_20ff202d6001THPVfFBhgtIlAw",
+      "metadata": {
+        "keepID": "msg_20ff1feb1001OpWFI9bNzSLwLD"
+      },
+      "time": {
+        "created": 1795563848425
+      },
+      "status": "completed",
+      "reason": "manual",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "summary": "## Objective\n- Stub summary 13.\n\n## Next Move\n1. (none)",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20ff20320001yp2Ic3w1jg4GBC",
+      "time": {
+        "created": 1795563848480
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}
