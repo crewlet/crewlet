@@ -168,12 +168,13 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 	b.WriteString(piSessionGate(session, paths, req.FreshWiring != nil && extension != ""))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
-	// THE CHECKOUTS BELOW THE START DIRECTORY ([piCheckoutHome]), and the
-	// agent directory's own instruction file back once pi has stopped, on a
-	// failure before and on a teardown's signal; a run killed outright leaves
-	// it to the next run's clear ([homeKeeper]).
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([piCheckoutHome]), and once
+	// pi has stopped, on a failure before and on a teardown's signal, the
+	// agent directory's own instruction file back and what a firing left out
+	// said, each step whatever came of the other ([everyStep]); a run killed
+	// outright leaves the put-back to the next run's clear ([homeKeeper]).
 	home := piCheckoutHome(paths)
-	line(`piput() { %s; }`, home.restore())
+	line(`piput() { %s; }`, everyStep(home.restore(), home.saySkipped()))
 	line(`piquit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; piput; exit "$1"; }`)
 	line(`trap piput EXIT; trap 'piquit 143' TERM; trap 'piquit 130' INT; trap 'piquit 129' HUP`)
 	line(`mkdir -p %s %s || exit 1`, q(paths.PiAgentDir()), q(paths.PiCheckoutSkills()))

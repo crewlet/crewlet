@@ -131,10 +131,12 @@ func TestAPiFiringWithoutItsConfigPrintsNothing(t *testing.T) {
 
 // TWO SKILLS OF ONE NAME IN ONE WALK ARE SAID: a walk reaching web/deploy and
 // infra/deploy copies the first as `late:deploy` and leaves the second out,
-// saying so with both paths, since no precedence of Pi's picks one; a name
-// .agents/skills loses to .pi/skills is Pi's own order, and silent.
+// saying so with both paths (on stderr, in the firing's answer after its
+// skills, and in the run's skip log), since no precedence of Pi's picks one;
+// a name .agents/skills loses to .pi/skills is Pi's own order, and silent.
 //
-// Mutation: say nothing, or say the cross-directory clash, and this goes red.
+// Mutation: say nothing, say the cross-directory clash, or leave the line
+// out of the answer or the log, and this goes red.
 func TestTwoSkillsOfOneNameInOneWalkAreSaid(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, nil)
@@ -148,9 +150,15 @@ func TestTwoSkillsOfOneNameInOneWalkAreSaid(t *testing.T) {
 	if !strings.Contains(out, "- late:deploy: Deploys. (file: "+r.skills+"/late:deploy/SKILL.md)") {
 		t.Errorf("the firing printed %q, want late:deploy listed", out)
 	}
-	want := "notehelper: the skill " + root + "/.pi/skills/web/deploy is left out: " + root +
-		"/.pi/skills/infra/deploy, found first, takes its name late:deploy\n"
-	if said != want {
-		t.Errorf("the firing said %q, want %q", said, want)
+	line := "the skill " + root + "/.pi/skills/web/deploy is left out: " + root +
+		"/.pi/skills/infra/deploy, found first, takes its name late:deploy"
+	if said != "notehelper: "+line+"\n" {
+		t.Errorf("the firing said %q, want %q", said, line)
+	}
+	if !strings.HasSuffix(out, "\n\n# Left out of the repositories below the working directory\n\n- "+line) {
+		t.Errorf("the firing printed %q, want its skills then the line", out)
+	}
+	if got := read(t, filepath.Join(r.state, "skipped")); got != "notehelper: "+line+"\n" {
+		t.Errorf("the run's skip log holds %q, want the line once", got)
 	}
 }

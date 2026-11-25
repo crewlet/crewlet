@@ -260,23 +260,23 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, list
 
 // handCheckouts runs the note helper's pi-nested adapter once (pirepo.go):
 // each checkout cloned since its last run, in pi's own shape, "" for none or
-// on a failure, which the run's error stream says with the helper's own
-// words. Asynchronously: the tool's result waits on it, and pi bounds that
-// wait not at all (measured on 1.6.0), so the call carries its own timeout
-// and output bound (pirepo.go, piNestedTimeout), and the rest of the process
-// (the notes poll, MCP, pi's own signal handlers) runs on meanwhile. The
-// helper reads nothing: its input is closed at once.
+// on a failure, which the run's error stream says. Its stderr is not passed
+// on: what a firing leaves out is in its answer and in the run's skip log,
+// which the script prints once pi has stopped (checkouthome.go, saySkipped),
+// so passing it on would say each line twice. Asynchronously: the tool's
+// result waits on it, and pi bounds that wait not at all (measured on
+// 1.6.0), so the call carries its own timeout and output bound (pirepo.go,
+// piNestedTimeout), and the rest of the process (the notes poll, MCP, pi's
+// own signal handlers) runs on meanwhile. Its input is closed at once.
 async function handCheckouts(hand) {
   if (hand === null || typeof hand !== "object" || typeof hand.helper !== "string" || hand.helper === "") return ""
   const run = execFileAsync(hand.helper, ["-adapter", "pi-nested", "-config", hand.config],
     { encoding: "utf8", timeout: hand.timeoutMs, maxBuffer: hand.maxOutput })
   run.child.stdin?.end()
   try {
-    const { stdout, stderr } = await run
-    if (stderr !== "") process.stderr.write(stderr)
+    const { stdout } = await run
     return stdout
   } catch (error) {
-    if (typeof error?.stderr === "string" && error.stderr !== "") process.stderr.write(error.stderr)
     let why = String(error?.message ?? error)
     if (error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") why = "it printed past " + hand.maxOutput + " bytes"
     else if (error?.killed) why = "it ran past its bound of " + hand.timeoutMs + " ms and was stopped"
