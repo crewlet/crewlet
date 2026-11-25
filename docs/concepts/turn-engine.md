@@ -1286,7 +1286,7 @@ turn_engine:
     task_timeout_seconds: 300            # wall-clock cap on one worker
     call_timeout_seconds: 900            # wall-clock cap on the whole call, waves included;
                                          #   also counts toward an executor box's wait for a call
-  executor_min_budget_tokens: 25000      # refuse an executor launch below this remaining
+  executor_min_budget_tokens: 65000      # refuse an executor launch below this remaining
                                          #   budget with the launch's brief beside it; a
                                          #   ceiling below it is refused
   delegation_depth_limit: 3

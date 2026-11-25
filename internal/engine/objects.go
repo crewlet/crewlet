@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
@@ -171,11 +174,71 @@ func newCollectorDuty(c *collect.Collector, decidesFrom []string,
 
 // collectionReport is what the collector's duty records in the coordination
 // store after each pass, and what every node's status surface reads: who ran
-// it, against which backend, and what it found.
+// it, against which backend, and what it found ([encodeCollection]).
+//
+// THE BACKEND BY ITS IDENTITY'S SHA-256: an identity is up to 13,292 bytes
+// (internal/config's S3 bounds), which beside the findings would pass the
+// small value the record is, and its one reader compares it with its own.
 type collectionReport struct {
 	Node    string         `json:"node"`
-	Backend string         `json:"backend"`
+	Backend string         `json:"backend_sha256"`
 	Status  collect.Status `json:"status"`
+}
+
+// maxCollectionWordsBytes is the most each sentence a collection report keeps
+// takes as stored (a pass's error, its sweep's, why it stopped judging, an
+// audit's error): a store's or a listing's error whole, and the four a
+// quarter of the record. maxMissingNameBytes is a missing file's name's, a
+// project and a path.
+const (
+	maxCollectionWordsBytes = 1 << 10
+	maxMissingNameBytes     = 512
+)
+
+// encodeCollection is the record of status, run by node against the store
+// identity names: a small value ([coord.SmallValueBytes]), its sentences and
+// each file's name cut to what they take as stored ([coord.FitText]), and
+// its unreadable files the longest opening of their list that fits. EVERY
+// COUNT IS WHOLE: a reader says how many files the list leaves out by the
+// findings' counts, as it does past [collect.MissingShown].
+func encodeCollection(node, identity string, status collect.Status) ([]byte, error) {
+	sum := sha256.Sum256([]byte(identity))
+	r := collectionReport{Node: node, Backend: hex.EncodeToString(sum[:]), Status: status}
+	c, a := &r.Status.Collect, &r.Status.Audit
+	for _, words := range []*string{&c.Skipped, &c.SweepError, &c.Error, &a.Error} {
+		*words = coord.FitText(*words, maxCollectionWordsBytes)
+	}
+	if a.Found == nil {
+		return json.Marshal(r)
+	}
+	found := *a.Found
+	found.MissingFiles = make([]collect.MissingFile, len(a.Found.MissingFiles))
+	for i, m := range a.Found.MissingFiles {
+		m.NamedBy = coord.FitText(m.NamedBy, maxMissingNameBytes)
+		found.MissingFiles[i] = m
+	}
+	a.Found = &found
+	all := found.MissingFiles
+	keeping := func(n int) ([]byte, error) {
+		found.MissingFiles = all[:n]
+		return json.Marshal(r)
+	}
+	// The longest opening that fits, by bisection: a longer one never
+	// encodes shorter.
+	fits, over := 0, len(all)+1
+	for over-fits > 1 {
+		mid := fits + (over-fits)/2
+		raw, err := keeping(mid)
+		if err != nil {
+			return nil, err
+		}
+		if len(raw) <= coord.SmallValueBytes {
+			fits = mid
+		} else {
+			over = mid
+		}
+	}
+	return keeping(fits)
 }
 
 // startObjectCollector starts the collector's duty against the estate's
@@ -457,9 +520,7 @@ func (e *Engine) resumeCollector(ctx context.Context, duty *collectorDuty) bool 
 
 // recordCollection writes the collector's status where every node reads it.
 func (e *Engine) recordCollection(ctx context.Context, duty *collectorDuty) {
-	raw, err := json.Marshal(collectionReport{
-		Node: e.id, Backend: e.backends.objectsIdentity, Status: duty.collector.Status(),
-	})
+	raw, err := encodeCollection(e.id, e.backends.objectsIdentity, duty.collector.Status())
 	if err == nil {
 		err = e.backends.Fleet.RecordObjectCollection(ctx, raw)
 	}
@@ -642,10 +703,10 @@ func ObjectCollection(ctx context.Context, records CollectionRecords, store stri
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return CollectionReport{}, false, fmt.Errorf("%w: %w", errCollectionUnreadable, err)
 	}
-	if r.Backend != store {
+	if sum := sha256.Sum256([]byte(store)); r.Backend != hex.EncodeToString(sum[:]) {
 		return CollectionReport{}, false, nil
 	}
-	return CollectionReport(r), true, nil
+	return CollectionReport{Node: r.Node, Backend: store, Status: r.Status}, true, nil
 }
 
 // ObjectCollection is the collector's last report on the object store this
@@ -661,7 +722,8 @@ type CollectionRecords interface {
 	ObjectCollection(ctx context.Context) ([]byte, bool, error)
 }
 
-// CollectionReport is the collector's last report — see [collectionReport].
+// CollectionReport is the collector's last report ([collectionReport]), its
+// Backend the reader's own store, whose digest the record names.
 type CollectionReport struct {
 	Node    string
 	Backend string

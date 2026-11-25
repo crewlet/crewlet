@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/executorkeep"
@@ -79,6 +80,35 @@ type ExecutorLaunched struct {
 	// sentence (executorkeep.NotContinued.Sentence). Absent where it lost none.
 	// The collected record carries the final verdict.
 	SessionNotContinued *executorkeep.NotContinued `json:"session_not_continued,omitempty"`
+	// Browser is a browser seat's browser as this launch readied it, nil for
+	// a seat with none.
+	Browser *ExecutorBrowser `json:"browser,omitempty"`
+}
+
+// ExecutorBrowser is a browser seat's browser as its launch readied it: ready,
+// or withheld for a reason and the cause that could be told, with what the
+// box's ensure knew. Every closed value is internal/browser's, as ensure's line
+// was read into it; Node and Pin are versions the box printed, a prerelease's
+// letters included, so they are declared somebody else's words.
+type ExecutorBrowser struct {
+	State  browser.EnsureVerdict `json:"state"`
+	Reason browser.EnsureReason  `json:"reason,omitempty"`
+	Cause  browser.EnsureCause   `json:"cause,omitempty"`
+	// Chromium is the browser's version, and ChromiumMajor its first number,
+	// which no version has at 0; Outdated says it is older than the build the
+	// pinned Playwright expects (browser.Outdated), a warning, never a reason.
+	Chromium      string `json:"chromium,omitempty"`
+	ChromiumMajor int    `json:"chromium_major,omitempty"` //wiregate:absent-is-zero no version ensure learnt
+	Outdated      bool   `json:"outdated,omitempty"`       //wiregate:absent-is-false not known to be older
+	// Build and Sandbox are a ready browser's: whether it is the build the pin
+	// expects, and Chromium's own sandbox.
+	Build   browser.ChromiumBuild   `json:"build,omitempty"`
+	Sandbox browser.ChromiumSandbox `json:"sandbox,omitempty"`
+	// Node is the box's Node.js, Helper the helper's version, Pin the
+	// Playwright MCP release the box runs.
+	Node   string `json:"node,omitempty" untrusted:"name"`
+	Helper string `json:"helper,omitempty"`
+	Pin    string `json:"pin,omitempty" untrusted:"name"`
 }
 
 // EventType is the "executor_launched" wire type.

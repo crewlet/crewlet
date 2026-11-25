@@ -257,11 +257,12 @@ const (
 	// [MaxMentions], THIRTY-TWO: a name and `@channel` are the same wake, so a
 	// collective address wakes no more than one message may name. ONE CONSTANT.
 	//
-	// A WAKE IS ITS SEAT'S EXECUTOR IN A BOX (ADR-0066): about 15k input tokens
-	// (Claude Code) and a 200 to 400 MB process for a `direct` cell, so this is
-	// the most boxes one broadcast starts. It is NOT a node's turn budget
-	// ([github.com/crewlet/crewlet/internal/node.DefaultMaxConcurrent]). Past the
-	// cap the routing keeps the first 32 and sets [Notify.WakesTruncated].
+	// A WAKE IS ITS SEAT'S EXECUTOR IN A BOX (ADR-0066): a first request of
+	// about 48k input tokens (Claude Code) and a 200 to 400 MB process for a
+	// `direct` cell, so this is the most boxes one broadcast starts. It is NOT
+	// a node's turn budget
+	// ([github.com/crewlet/crewlet/internal/node.DefaultMaxConcurrent]). Past
+	// the cap the routing keeps the first 32 and sets [Notify.WakesTruncated].
 	MaxCollectiveRecipients = MaxMentions
 
 	// MaxRecipients bounds the whole resolved recipient set on one post.

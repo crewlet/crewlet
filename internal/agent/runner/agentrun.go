@@ -270,6 +270,10 @@ type Continuation struct {
 	// that job is not carried on again for it.
 	RequestRefused bool
 
+	// LimitedBeforeWork is a launch carrying on a round whose job met its
+	// model's usage limit before any work ([Limited]).
+	LimitedBeforeWork bool
+
 	// ContextTokens is what the last request of that session carried: the
 	// larger of its newest capture's measure, kept or not
 	// ([SessionBasis.CopyContext]), and the job's record's, which the read
@@ -1254,8 +1258,9 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		Retold:   r.retold(),
 		Continue: &Continuation{
 			SessionID: inPlaceSession, Brief: continued,
-			SignInReplaced: isRotated(carry),
-			RequestRefused: isRefused(carry),
+			SignInReplaced:    isRotated(carry),
+			RequestRefused:    isRefused(carry),
+			LimitedBeforeWork: isLimited(carry),
 			// WHAT THAT SESSION SENDS FIRST, as its newest capture measured
 			// it whether the turn kept it or not, or as the read that
 			// collected its job found its newest request carried, the larger

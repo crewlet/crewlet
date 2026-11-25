@@ -146,7 +146,7 @@ export function AccessTab({
             <ButtonLink
               size="small"
               variant="secondary"
-              href={href(["company", "integrations", binding.vendor], { open: "agents" })}
+              href={href(["company", "integrations", binding.vendor], { tab: "agents" })}
             >
               Open its Agents tab
             </ButtonLink>

@@ -13,8 +13,9 @@
 // ECMAScript modules, js/*.mjs, on Node's built-ins and the installed tree
 // alone, embedded ([Files]) as the OpenCode plugins are, so a box runs the
 // helper this build's suite ran: helper.mjs, the entry, whose subcommands are
-// ensure (ensure.mjs), supervise (supervise.mjs; serve.mjs, its socket;
-// fence.mjs) and mcp (shim.mjs), beside chromium.mjs, tree.mjs and common.mjs.
+// ensure and stop (ensure.mjs), supervise (supervise.mjs; serve.mjs, its
+// socket; fence.mjs) and mcp (shim.mjs), beside chromium.mjs, tree.mjs and
+// common.mjs.
 // No build step stands between them and the binary: [Write] puts each into
 // the box's [Folder] whole, after every module it imports; then the lock's two
 // files, as tree-package.json and tree-package-lock.json, names neither npm
@@ -23,14 +24,14 @@
 // and a launch's [Settings]: the helper's [Version], over every module's name,
 // length and bytes; the hello's protocol; the pin and both digests; the
 // floors; the Chromium to look for; the cell's sandbox; the switches; the
-// supervisor's environment by name; and every bound, which a case whose
-// subject is a bound shortens in its own config. config.json goes last, so it
+// supervisor's environment by name; and every bound, which a case about a
+// bound shortens in its own config. config.json goes last, so it
 // never names a file not yet beside it, and the next launch's write repairs a
 // box whose files disagree with it. Modes are the box's.
 //
 // # Ensure
 //
-// The one check the engine runs before a seat's harness starts
+// The engine's last check before a seat's harness starts
 // ([EnsureCommand]), in a login shell as a job's, so it finds a job's node. A
 // POSIX sh prelude answers node_missing and node_too_old (a major below
 // [MinNodeMajor], compared as a number, a prerelease allowed) before Node
@@ -45,10 +46,10 @@
 // at 0600 before any is read, short enough for its socket's path; ensure.lock,
 // made exclusively, so two launches never start two supervisors (a younger
 // holder is waited for, at each change in the folder and every second, which
-// alone wakes it where the kernel refuses a watch; one that is no ensure of
-// this helper, or past lock_takeover_ms, killed first, is taken over, one
-// ensure at a time under ensure.lock.takeover); the tree; the Chromium; the
-// supervisor. A write the folder refuses is folder_unusable, never a missing
+// alone wakes it where the kernel refuses a watch; one that is no ensure or
+// stop of this helper, or past lock_takeover_ms, killed first, is taken over,
+// one ensure at a time under ensure.lock.takeover); the tree; the Chromium;
+// the supervisor. A write the folder refuses is folder_unusable, never a missing
 // line. Its own deadline, ensure_deadline_ms, comes five seconds before
 // [EnsureTimeout], as on the container cell the engine's bound ends only the
 // exec client: during the install, npm is killed at once and given a second to
@@ -62,6 +63,8 @@
 // stopped, TERM then its group killed, and one started detached in a session of
 // its own, which writes ready or failed on fd 3 within supervisor_wait_ms. Then
 // every other entry of pw/ is swept, but one whose recorded npm still runs.
+// Stop ([StopCommand]) ends the live supervisor so, under ensure.lock, where a
+// launch withholds a box's browser for its network.
 //
 // The supervisor's environment is a list of what may pass:
 // hostbox.PassthroughEnv and hostbox.HostUserEnv's names, which config.json
@@ -308,10 +311,8 @@
 // It is the one Node version the tree names (CONTRIBUTING.md, "Which node"),
 // because a weekly check moves it: .github/workflows/pins.yml's leg
 // (scripts/node-pin-check.sh) holds the pin to the newest patch of its major,
-// verifying each release it proposes against the Node releasers' signing
-// keys, and fails from 60 days before the major's end of life, naming the
-// release to raise it to: the newest of the oldest major above it in
-// long-term support whose own end of life is more than 60 days away.
+// verified against the Node releasers' keys, and fails from 60 days before
+// the major's end of life, naming the release to raise it to.
 //
 // # The suite
 //

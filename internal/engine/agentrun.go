@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -466,6 +467,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		Model:       run.model,
 		Effort:      run.effort,
 		WebDenied:   run.webDenied,
+		Browser:     browserLaunch(company, settings),
 		ProviderKey: member.Key,
 		// THE SIGN-IN THE JOB'S HARNESS IS HANDED, on the job's record: what
 		// its collection compares the entry's against ([Engine.signInReplaced]).
@@ -1098,6 +1100,10 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// the bridge answers before ([mcpbridge.Session.CallCeiling]).
 	wait := e.bridge.CallTimeout(s.Surface)
 	opening := bridgeOpening(endpoint, s, inbox != nil, wait)
+	// AND HOW MANY TOOLS ITS SERVERS LIST, which a harness that hides every MCP
+	// tool past a count of them weighs the box's browser against
+	// ([sandbox.Opening.Tools]).
+	opening.Tools = s.Listed()
 	// AND THE SAME UNDER THE JOB'S OTHER TOKEN, for a session its box starts of
 	// its own in place of the one its launch continues: the token its harness
 	// dials is the box's word on which session it started
@@ -1145,8 +1151,9 @@ func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait tim
 }
 
 // withRunsOwn is out with what req says of the run itself beside the launch's
-// decisions: an LLM fleet's decision record of the member it took, the leads
-// its fresh brief opened with, which the launch keeps for its job, and the read
+// decisions: an LLM fleet's decision record of the member it took; how many
+// tools the box's own servers list ([boxServersListed]); the leads its fresh
+// brief opened with, which the launch keeps for its job; and the read
 // its briefs were built from ([sandbox.LaunchRequest.BriefRead]). Set beside
 // [agentLauncher.launch]'s literal rather than in it, since that literal is the
 // launch's decisions (member, cell, reach, environment, login), which
@@ -1155,12 +1162,34 @@ func withRunsOwn(req runner.AgentRunRequest, pick *fleet.Pick, out sandbox.Launc
 	if pick != nil {
 		out.Fleet = runner.FleetDecision([]*fleet.Pick{pick}, pick.Key)
 	}
+	out.MCPTools = boxServersListed(req.Surface, out.MCPServers)
 	out.FreshOwn = req.FreshOwn
 	out.BriefRead = req.BriefRead
 	// AND HOW ITS FRESH BRIEF IS TOLD AGAIN under a verdict the launch decides
 	// in its box, with what the one handed hands of the lost session's summary.
 	out.FreshFor, out.Handover = req.FreshFor, req.Handover
 	return out
+}
+
+// boxServersListed is how many tools servers, the box's own, list its harness,
+// as surface's universe holds them ([sandbox.LaunchRequest.MCPTools]): every
+// tool of each, since the launch hands a box a server only whole
+// ([sandboxMCP]), and the bridge offers none of them, so a run's own servers
+// are the bridge's and these. Counted from the seat's tools rather than asked
+// of the box, which lists them only once the harness runs.
+func boxServersListed(surface *tools.Surface, servers map[string]sandbox.MCPServer) int {
+	if surface == nil || len(servers) == 0 {
+		return 0
+	}
+	n := 0
+	for _, e := range surface.Universe().Entries() {
+		if server, fromMCP := e.FromMCP(); fromMCP {
+			if _, inBox := servers[server]; inBox {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // sandboxContinuation is the runner's carry-on of an asking run in the sandbox
@@ -1179,6 +1208,8 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 		out.Reason = sandbox.FollowUpSignInReplaced
 	case c.RequestRefused:
 		out.Reason = sandbox.FollowUpRequestRefused
+	case c.LimitedBeforeWork:
+		out.Reason = sandbox.FollowUpLimitedBeforeWork
 	}
 	return out
 }
@@ -1192,7 +1223,8 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 // a call's fallback ([chain.Pick]) through onFallback; all sitting out is a
 // [*chain.Error], a chain at its limit ([chain.Limited]): the dispatcher parks
 // the seat and a resume waits ([Dispatcher.Provider], [resumeRefusal];
-// ADR-0064). A run that meets its limit midway is not relaunched elsewhere.
+// ADR-0064). A run that meets its limit midway is not relaunched elsewhere;
+// one that met it before any work is, once ([limitedBeforeWork]).
 func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
 	onFallback func(chain.Fallback)) (_ chain.Member, _ *harness.Provider, _ *fleet.Pick, err error) {
 	defer origin.Stamp(&err)

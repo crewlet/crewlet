@@ -183,8 +183,8 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			//
 			// AN EMPTY LIST IS A NODE THAT LOOKED AND FOUND NOTHING, and
 			// absent is a node with no table it has evaluated (one
-			// running no state log, or one mid-boot): a blank drawn as
-			// "no alarms" would call a node healthy that cannot say.
+			// mid-boot, a node without `data` included): a blank drawn
+			// as "no alarms" would call a node healthy that cannot say.
 			if live.AlarmsEvaluated {
 				marks := make([]map[string]any, 0, len(live.Alarms))
 				for _, m := range live.Alarms {

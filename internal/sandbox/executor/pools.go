@@ -41,7 +41,9 @@ func (w NodeWork) MemoryPools(memory int64) int64 {
 // pass takes it through its own [passBudget] (readMainThread's, take.go's), so
 // one holds it at a time; only a collection's builds a chain, and a take's is
 // its scrub and its meter at once, counted past its base ([takeLargeHeldBytes]).
-// The chain's is whole, its base's 2.7 MiB in it, which the max never reads.
+// The chain's is whole, its base's 2.7 MiB in it, which the max never reads; a
+// collection's Gemini CLI count past its base holds less than a chain
+// ([geminiCountLargeHeldBytes]).
 func largeReadHeldBytes() int64 {
 	return max(threadChainHeldBytes, takeLargeHeldBytes())
 }

@@ -3319,6 +3319,11 @@ type BoxRef struct {
 	// attach ([LaunchRecord.Continued]). Nil where the launch handed none or one
 	// stating no point above zero.
 	Continued *ContinuedPoint
+
+	// Browser is a browser seat's browser as the launch readied it ([EnsureBrowser]),
+	// written onto the record by the same attach ([LaunchRecord.Browser]). Nil for a
+	// seat with none.
+	Browser *types.ExecutorBrowser
 }
 
 // PriorBox is the box a relaunch found on its run's row ([PendingRun.Prior]).
@@ -3796,6 +3801,13 @@ type LaunchRecord struct {
 	// zero, and an older build's record.
 	Continued *ContinuedPoint `json:"continued,omitempty"`
 
+	// Browser is a browser seat's browser as the job's launch readied it
+	// ([EnsureBrowser]): ready, or withheld and why. Written by the attach naming the
+	// command ([BoxRef.Browser]), never carried to the next job's record. Nil for a seat
+	// with none. CLOSED like [ContinuedPoint]: [types.ExecutorBrowser] has no Extra, so
+	// a later fact about the job's browser is a key of this record beside it.
+	Browser *types.ExecutorBrowser `json:"browser,omitempty"`
+
 	// Bridged is what this job's BRIDGED calls cost the engine (auxiliary calls the
 	// seat's tools made for the harness and its delegated workers) as the newest total the
 	// bridge wrote with its calls ([PendingStore.AppendBridgeCall]). The segment resuming
@@ -3970,11 +3982,15 @@ const (
 	// provider refused the request the job before it made in a session it continued.
 	// ONCE: refused again, it is collected and its round ends the turn.
 	FollowUpRequestRefused FollowUpReason = "request_refused"
+	// FollowUpLimitedBeforeWork is a job relaunched on the next executor member
+	// because the job before it met its model's usage limit before any work.
+	// ONCE: limited again, it is collected.
+	FollowUpLimitedBeforeWork FollowUpReason = "limited_before_work"
 )
 
 // Valid reports whether the reason is one this build names.
 func (r FollowUpReason) Valid() bool {
-	return r == FollowUpSignInReplaced || r == FollowUpRequestRefused
+	return r == FollowUpSignInReplaced || r == FollowUpRequestRefused || r == FollowUpLimitedBeforeWork
 }
 
 // AuxTokens is what calls to a seat's AUXILIARY model cost, split as every engine

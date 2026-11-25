@@ -22,25 +22,33 @@ Raising an agent to `operator` or `administer` asks for a fresh sign-in (step-up
 
 Open **Company › Integrations › Google Cloud**.
 
-### Before you start: the identity project
+### The identity project
 
-1. **Create an empty project** on the console's [new project page](https://console.cloud.google.com/projectcreate), in the same organization or folder as the projects agents will work on.
-2. **Leave it empty:** only the provisioner and one service account per agent.
-   - **Never enable Compute Engine or another product there.** The provisioner holds Service Account Admin here, so any other service account is one it could act as. The card warns about any account that is neither the provisioner nor Crewlet's.
+Crewlet's service accounts live in a project of their own, the **identity project**: the provisioner `crewlet-provisioner` and one account per agent, nothing else.
+- **A new, empty project, used only for Crewlet.** The provisioner holds Service Account Admin there, so any other service account is one it could act as. The block refuses a project that runs workloads or holds an account Crewlet did not make.
+- Its ID is all you give Crewlet. The form suggests one; keep it and the block creates the project, or type the ID of an empty project you made on the [new project page](https://console.cloud.google.com/projectcreate) (Google shows the ID under the name, and it can differ from the name). If an older block ran in a project that already runs something, [undo it there](#undo-the-cloud-shell-block).
 
 ### Connecting Crewlet
 
-1. **Enter the provisioner service account** as `crewlet-provisioner@<identity project>.iam.gserviceaccount.com`, and press **Save**.
-   - This makes Crewlet's ES256 federation key, sealed as `GOOGLE_CLOUD_FEDERATION_KEY`; its private half never leaves the secret store. The form then shows a **Cloud Shell block**.
-2. **Open Cloud Shell** in the identity project, paste the block whole, and run it. It:
-   - enables the IAM, IAM Service Account Credentials, Security Token Service, Cloud Resource Manager and Service Usage APIs;
-   - creates the provisioner if missing, and grants it Service Account Admin and Service Usage Viewer on the identity project;
-   - creates the workload identity pool and provider holding Crewlet's public key (inline, nothing uploaded), or updates the provider's key if it exists;
-   - lets Crewlet's subject act as the provisioner (Workload Identity User);
-   - prints the provider's full name as its last line.
-3. **Paste that last line** into **Workload identity provider**, press **Save**, then **Test**.
+The connect form's **Setup steps** say the same, step by step, each with where it happens, what shows it worked and what people hit.
 
-The block pins the provider to this company's subject (`crewlet:<company>`), so no other identity can use it. A provider holds at most 8 keys; when Crewlet's key changes, the block updates the provider with `update-oidc`.
+One block, run once:
+
+1. **Open the form.** Crewlet makes its ES256 federation key at once, sealed as `GOOGLE_CLOUD_FEDERATION_KEY`; its private half never leaves the secret store. The form shows the **Cloud Shell block** straight away, drawn from the **Identity project ID** as you type it.
+2. **Copy the block with its Copy button, open [Cloud Shell](https://console.cloud.google.com/?cloudshell=true), paste it whole and run it.** About a minute. Before it changes anything it stops, with one `Crewlet setup stopped: ...` line saying what to do, if Cloud Shell has no active account (run `gcloud auth login`), if the project runs workloads (Firebase, App Engine, Compute Engine, Cloud Run, Cloud Functions or GKE) or if it holds a service account not named `crewlet-*`. Then it:
+   - creates the identity project if it does not exist;
+   - enables the IAM, IAM Service Account Credentials, Security Token Service, Cloud Resource Manager and Service Usage APIs;
+   - creates the provisioner if missing, and grants it Service Account Admin, Service Usage Viewer and `crewletApiEnabler`, a custom role holding `serviceusage.services.enable` alone, so Crewlet turns on a Google product's APIs itself;
+   - creates the workload identity pool `crewlet` and its provider `crewlet-engine` holding Crewlet's public key (inline, nothing uploaded), or updates the provider's key if it exists;
+   - lets Crewlet's subject act as the provisioner (Workload Identity User);
+   - prints the provider's full name as its last line: `projects/<project number>/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine`, with the project's **number**, not its ID.
+3. **Paste that last line** into **Workload identity provider**, press **Test connection**, then **Save**. The form closes, and within about a minute the status goes from **Needs attention** to **Setting up** to **Connected**.
+
+The block follows what you type and needs no save to appear or change. A save made before the provider is pasted keeps what you typed; the setup finishes once the provider is pasted.
+
+**Connected gives no agent any access yet.** [Prepare each project](#prepare-a-project-for-crewlet) agents should work in, then [turn the agents on](#turning-agents-on).
+
+The block is safe to run again. It pins the provider to this company's subject (`crewlet:<company>`), so no other identity can use it. A provider holds at most 8 keys; when Crewlet's key changes, the block updates the provider with `update-oidc`. Turning on a Google growth product never changes the block.
 
 ### Prepare a project for Crewlet
 
@@ -131,13 +139,50 @@ fi
 
 ### Testing the connection
 
-**Test** checks with reads only. Each failure says what to change:
+**Test connection** checks with reads only, in this order, and a failure lists each part Passed up to the one that Failed, with what to change:
 - Google's Security Token Service accepts Crewlet's federation token;
 - Crewlet can act as the provisioner;
 - the identity project's APIs are on;
+- the provisioner holds Service Account Admin and may turn on APIs (`crewletApiEnabler`);
 - each prepared project carries the three conditions and an exact `crewletOperator`;
 - the identity project holds no account but the provisioner's and Crewlet's;
 - the identity project's service account count is under its quota.
+
+### Turning agents on
+
+Every agent is off until you turn it on. On the integration's **Agents** tab, turn **On** each agent that should use Google Cloud, choose its **Access** level and **Projects** (only prepared projects are offered), then press **Review changes** and **Save and sync**. Crewlet creates the agent's service account in the identity project and grants its level on its projects ([what each change does](#what-each-change-does-at-google-cloud)).
+
+### Undo the Cloud Shell block
+
+The block stops, changing nothing, in a project that runs workloads or holds accounts Crewlet did not make. If an older block ran in the wrong project, or you want to remove Crewlet from its identity project, run this in Cloud Shell as an Owner of that project. Where the block created the project for you, `gcloud projects delete "$IDENTITY"` removes it all at once instead.
+
+```sh
+IDENTITY=the-wrong-project-id
+PROV=crewlet-provisioner@${IDENTITY}.iam.gserviceaccount.com
+
+for ROLE in roles/iam.serviceAccountAdmin roles/serviceusage.serviceUsageViewer \
+  "projects/$IDENTITY/roles/crewletApiEnabler"; do
+  gcloud projects remove-iam-policy-binding "$IDENTITY" --member="serviceAccount:$PROV" \
+    --role="$ROLE" --condition=None --format=none
+done
+gcloud iam roles delete crewletApiEnabler --project="$IDENTITY" --quiet
+gcloud iam service-accounts delete "$PROV" --project="$IDENTITY" --quiet
+gcloud iam workload-identity-pools delete crewlet --project="$IDENTITY" --location=global --quiet
+
+# Only where See more in Atlas was on:
+ATLAS=crewlet-atlas@${IDENTITY}.iam.gserviceaccount.com
+gcloud projects remove-iam-policy-binding "$IDENTITY" --member="serviceAccount:$ATLAS" \
+  --role=roles/serviceusage.serviceUsageConsumer --condition=None --format=none
+gcloud iam service-accounts delete "$ATLAS" --project="$IDENTITY" --quiet
+```
+
+**What this removes:**
+- the provisioner, `crewlet-provisioner`, and its `roles/iam.serviceAccountAdmin`, `roles/serviceusage.serviceUsageViewer` and `crewletApiEnabler` on the project, then that custom role; deleting the provisioner also ends Crewlet's `roles/iam.workloadIdentityUser` on it;
+- the workload identity pool `crewlet` with its provider `crewlet-engine`; Google keeps a deleted pool for 30 days, during which its ID cannot be reused in that project;
+- where See more in Atlas was on, `crewlet-atlas` and its `roles/serviceusage.serviceUsageConsumer`. On each other project it was granted on, remove its binding to `projects/<that project>/roles/crewletAtlasReader` with `gcloud projects remove-iam-policy-binding`, then the role with `gcloud iam roles delete crewletAtlasReader --project=<that project>`;
+- where a Google growth product was turned on, Crewlet made the company's growth reader, `crewlet-gr-...`, there: delete it with `gcloud iam service-accounts delete`.
+
+**It leaves the APIs on**, as a project already running something may use them: `iam.googleapis.com`, `iamcredentials.googleapis.com`, `sts.googleapis.com`, `cloudresourcemanager.googleapis.com` and `serviceusage.googleapis.com`, plus `cloudasset.googleapis.com` with Atlas and the growth products' APIs. Disable one with `gcloud services disable <api> --project="$IDENTITY"` only if nothing else there uses it.
 
 ## Giving each agent its own Google Cloud account
 
@@ -268,6 +313,8 @@ Each ends by itself. A sync that cannot see its own write after 3 minutes says s
 
 ## Google's growth products sign in through this identity
 
+The **Google page** (Company › Integrations › Google) holds what every Google product shares, once: this connection, the company reader, the Google sign-in client, and a switch per product. Turning a product on there is all it takes on Crewlet's side; each product's own page keeps its agents, their access and its activity.
+
 Google's growth products (Google Analytics, Search Console, Google Ads and Google Play) sign in through the identity project this connection sets up. No Google Cloud project needs to be prepared for them, but each needs Google Cloud connected with its provisioning block. The design is [ADR-0172](../../adr/0172-a-google-growth-product-signs-in-as-each-seats-own-growth-identity-never-its-cloud-identity.md).
 
 **Each agent gets a second account, its growth identity,** used for those products alone:
@@ -276,7 +323,9 @@ Google's growth products (Google Analytics, Search Console, Google Ads and Googl
 - Crewlet makes it when the agent's first growth product turns on and turns it off when the last turns off or the agent is removed. It keeps the account, so the roles you gave it return with the agent; delete it in the identity project if the agent will not return. Turning Google Cloud off for an agent leaves it working.
 - It is recorded by Google's unique ID and never adopted by name. If somebody turns it off at Google, Crewlet reports it and leaves it off.
 
-**The company reads its figures as its own reader,** `crewlet-gr-` plus the company's name (cut to 14 characters) plus 4 characters. When a growth product is on, the Cloud Shell block makes it, enables that product's APIs in the identity project, and lets only this company's Crewlet act as it. You add its email once in each product, at the product's read role.
+**The company reads its figures as its own reader,** `crewlet-gr-` plus the company's name (cut to 14 characters) plus 4 characters. When a growth product is turned on, Crewlet turns on that product's APIs in the identity project, makes the reader if it is missing, and lets only this company's Crewlet act as it; no block is run. You add its email once in each product, at the product's read role.
+
+**A connection made with an earlier block** gets one finding, "Run the Cloud Shell block again, once": that block did not grant `crewletApiEnabler`. Copy the block from Google Cloud's settings and run it; turning on another Google product then needs no block.
 
 ### Products that refuse service accounts sign in with a person's consent
 
@@ -288,12 +337,12 @@ AdSense and AdMob accept no service account, so the company reaches them through
 
 ### The company's own OAuth client
 
-AdSense and AdMob sign in as it, and Google Analytics and Google Play use it, optionally, for **Add it for me**. Each product's connect form shows the values below; one client and one secret variable may serve every product.
+AdSense and AdMob sign in as it, and Google Analytics and Google Play use it, optionally, for **Add it for me**. It is set once, under **Google sign-in** on the Google page's Settings tab (Company › Integrations › Google), which shows the values below, and kept at `integrations.google_cloud.sign_in_client`. A product's own `oauth` block, where written, overrides it for that product alone.
 
 1. In a Google Cloud project you control, open **Google Cloud › Credentials** and create an OAuth client ID of type **Web application**, after turning on the APIs the product's page names.
-2. Under **Authorized redirect URIs**, add `<api.public.external_url>/webhooks/mcp-oauth` (`<api.external_url>/webhooks/mcp-oauth` without a public listener), exactly as the form shows it: Google refuses any address not registered exactly. Leave **Authorized JavaScript origins** empty, since the engine exchanges the code itself. When the address changes, as a temporary tunnel's can on restart, update the URI before the next sign-in. With no public address the form says so, and a sign-in is refused.
+2. Under **Authorized redirect URIs**, add `<api.public.external_url>/webhooks/mcp-oauth` (`<api.external_url>/webhooks/mcp-oauth` without a public listener), exactly as the form shows it: Google refuses any address not registered exactly. Leave **Authorized JavaScript origins** empty, since the engine exchanges the code itself. When the address changes, as a temporary tunnel's can on restart, add the new URI before the next sign-in: each sign-in records the redirect it came back through, so the [redirect notice](../guides/advisor.md#platform-notices) lists every client still signed in through an earlier address, with the new URI to copy, and the product's form says **Redirect URI out of date**. Sign-ins already made keep working. With no public address the form says so, and a sign-in is refused.
 3. In **Google Auth Platform › Audience**, choose **Internal** if whoever signs in is in the project's Google Cloud organization. Otherwise choose **External** and press **Publish app** (Google's unverified-app warning is fine for the few people who sign in), or keep it in **Testing** and add each person who signs in as a test user: Google ends a test user's sign-in seven days after consent, and a refusal about then says so ([Manage App Audience](https://support.google.com/cloud/answer/15549945)).
-4. Put the client's ID and secret in the product's `oauth.client_id` and `oauth.client_secret`, the secret as a `${VAR}`, or paste them on its page.
+4. Paste the client's ID and secret under **Google sign-in** on the Google page, or write them in `integrations.google_cloud.sign_in_client`, the secret as a `${VAR}`.
 
 ## Configuration
 
@@ -302,10 +351,13 @@ integrations:
   google_cloud:
     enabled: true
     provisioning:
-      provisioner: crewlet-provisioner@example-crewlet-id.iam.gserviceaccount.com
+      identity_project: example-crewlet-id
       provider: projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine
       federation_key: "${GOOGLE_CLOUD_FEDERATION_KEY}"
       atlas_read: false
+    sign_in_client:                 # optional: the OAuth client every Google sign-in is made as
+      client_id: "123456789012-abc.apps.googleusercontent.com"
+      client_secret: ${GOOGLE_SIGN_IN_CLIENT_SECRET}
 roles:
   - handle: sre
     integrations:
@@ -318,8 +370,8 @@ roles:
 | Field | Required | Meaning |
 |---|---|---|
 | `enabled` | yes | Turn the integration on. |
-| `provisioning.provisioner` | yes | The provisioner's email, `<id>@<identity project>.iam.gserviceaccount.com`. The identity project is read from it. |
-| `provisioning.provider` | once the key is made | The provider's full resource name, as the Cloud Shell block prints it. |
+| `provisioning.identity_project` | yes | The identity project's ID. The provisioner is `crewlet-provisioner@<identity_project>.iam.gserviceaccount.com`. |
+| `provisioning.provider` | to finish | The provider's full resource name, as the Cloud Shell block prints it. Never needed to save the other fields. |
 | `provisioning.federation_key` | yes | Crewlet's ES256 key, made by the dashboard and sealed as `GOOGLE_CLOUD_FEDERATION_KEY`. Keep it a `${VAR}` reference. |
 | `provisioning.atlas_read` | no | Let the atlas search what each project runs, as the account `crewlet-atlas` ([see more in Atlas](#see-more-in-atlas-what-each-project-runs)). Off by default. |
 | `roles[].integrations.google_cloud.enabled` | yes | Whether the agent has its own account. Off disables it and removes its roles. |
@@ -383,7 +435,7 @@ An API not in the table says nothing, including every API a new project has enab
 
 **See more in Atlas** on the connect form (`integrations.google_cloud.provisioning.atlas_read`, off by default) lets the atlas list what each project runs. It is optional and never changes what an agent can do.
 
-**The one step.** Turn it on and save, then run the connection's Cloud Shell block again, as an Owner of the projects. The block now also:
+**The one step.** Turn it on, run the connection's Cloud Shell block (again, if you ran it before) as an Owner of the projects, and save. The block now also:
 
 - enables the Cloud Asset API in the identity project, and lets the new account use it there (Service Usage Consumer);
 - creates the service account `crewlet-atlas` in the identity project, if missing;
@@ -447,7 +499,8 @@ These are Google's, not Crewlet's.
 
 | Finding | What it says | What clears it |
 |---|---|---|
-| `credential_missing` | The provisioner is unset, the federation key did not resolve, or the provider is not pasted yet | Save the provisioner, run the Cloud Shell block, and paste the provider name it prints |
+| `credential_missing` | The identity project is unset, the federation key did not resolve, or the provider is not pasted yet | Run the Cloud Shell block, paste the provider name it prints, and save |
+| `approval_required` | "Run the Cloud Shell block again, once": the provisioner may not turn on APIs, so a Google product's APIs stay off | Run the current block once |
 | `credential_rejected` | Google's Security Token Service refused Crewlet's token, or Crewlet cannot act as the provisioner | Run the Cloud Shell block again: it restores the provider's key and the Workload Identity User binding |
 | `level_unavailable` | A project cannot grant a level an agent uses: a condition or `crewletOperator` is missing or differs | Run [Prepare a project for Crewlet](#prepare-a-project-for-crewlet) again for that project |
 | `grant_excess` | The identity project holds service accounts besides the provisioner and Crewlet's | Move them to another project |

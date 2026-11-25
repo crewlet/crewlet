@@ -270,6 +270,10 @@ var namedRoutes = []struct {
 	// THE CALLER'S OWN HOME BOARD, beside the viewer for its reason. The
 	// WRITE half is the `save_home_board` tool, called through /operator/act.
 	{method: "GET", pattern: "/home/board", what: "home_board"},
+	// THE CALLER'S ASK CREWLET INSTRUCTIONS and the company's. Not under
+	// /assistant/, which no grant reaches: Ask Crewlet reads them before it
+	// proposes a change (`save_assistant_instructions`, through /operator/act).
+	{method: "GET", pattern: "/ask/instructions", what: "assistant_instructions"},
 	// THE ARTIFACTS. The literals `/artifacts/usage` and `/artifacts/trail`
 	// beat the `{id}` wildcard, so neither is read as an artifact of that id; every other
 	// read names the artifact, and a version by its number. The writes, the

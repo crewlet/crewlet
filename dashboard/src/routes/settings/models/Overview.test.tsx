@@ -100,14 +100,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-test("Status is the condition's word and dot on one line, its time in the tooltip", () => {
+test("Status is the condition's word and dot on one line, why and when in the tooltip", () => {
   mount();
   const status = (key: string) => within(row(key)).getAllByRole("cell")[1]!;
   expect(status("spare").textContent?.trim()).toBe("Not tested");
   expect(status("sonnet").textContent?.trim()).toBe("Sign-in refused");
   expect(status("opus").textContent?.trim()).toBe("Sitting out");
   expect(status("opus").querySelector(".models-one-line")?.getAttribute("aria-label")).toMatch(
-    /^Sitting out, back /,
+    /^Sitting out: (session|weekly|model|usage) limit, back /,
   );
 });
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executorkeep"
@@ -232,6 +233,10 @@ type LaunchRequest struct {
 	// ([RunRequest.WebDenied]).
 	WebDenied bool
 
+	// Browser is a browser seat's setting for the browser the launch readies
+	// in its box, nil for a seat with no browser; see [EnsureBrowser].
+	Browser *BrowserLaunch
+
 	// ProviderKey is the providers.llm entry the run was launched on: the
 	// member of the seat's executor chain that took it, which is not always
 	// the chain's head. Written onto the job's record ([LaunchRecord]) so
@@ -431,6 +436,13 @@ type LaunchRequest struct {
 	// environment for the names it shares. Nil sets none.
 	HomePaths map[string]string
 
+	// MCPTools is how many tools MCPServers list the run's harness in all, as
+	// the seat's tools hold them: every tool of each, since a box reaches a
+	// server whole. What a harness that hides every MCP server's tools past a
+	// count of them weighs the box's browser against, beside the bridge's
+	// ([Opening.Tools], [EnsureBrowser]). Zero says none.
+	MCPTools int
+
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
 }
@@ -521,6 +533,13 @@ func (r PendingRun) NamedJob(lastSeq int, callIDMeta string, ceiling time.Durati
 type Opening struct {
 	// Servers join the box's MCP servers.
 	Servers map[string]MCPServer
+
+	// Tools is how many tools Servers list the job's harness in all, as what
+	// serves them lists them now: what a harness that hides every MCP
+	// server's tools past a count of them weighs the box's browser against
+	// ([EnsureBrowser]). Zero for an opening that says none. Read on the
+	// launch's opening alone, never a Fresh's.
+	Tools int
 
 	// Steer is where the job's harness asks for its turn's notes
 	// ([RunRequest.Steer]); the zero value takes none inside the run.
@@ -950,6 +969,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// list the servers a box has.
 	var steer SteerWiring
 	var skillLoads SkillWiring
+	// bridgedTools is how many tools the servers naming the job joins list in
+	// all ([Opening.Tools]).
+	var bridgedTools int
 	// fresh is how the job's box is wired where its script starts a session of
 	// its own in place of the one this launch continues — see
 	// [Opening.Fresh] — nil where what named the job answered none.
@@ -968,7 +990,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 			fresh = &Wiring{MCPServers: withServers(req.MCPServers, f.Servers), Steer: f.Steer,
 				SkillLoads: f.SkillLoads}
 		}
-		req.MCPServers = withServers(req.MCPServers, named.Servers)
+		req.MCPServers, bridgedTools = withServers(req.MCPServers, named.Servers), named.Tools
 		steer = named.Steer
 		skillLoads = named.SkillLoads
 	}
@@ -1055,6 +1077,31 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 			return nil
 		})
 	}
+	// A BROWSER SEAT'S BROWSER, READIED IN THE BOX NOW IT IS READY, a fresh one
+	// set up and read and a kept one refreshed, and before its session is
+	// continued and its harness started: ready, its server joins the box's own,
+	// over a server of that name. Only the launch's own context ending fails it.
+	var browserOut *BrowserOutcome
+	if req.Browser != nil {
+		began := time.Now()
+		outcome, browserErr := EnsureBrowser(ctx, box, BrowserStep{Placement: req.Spec.Placement,
+			Browser: *req.Browser, Env: req.Spec.Env, LaunchID: opened.LaunchID, WebDenied: req.WebDenied,
+			ProviderKey: req.ProviderKey, Harness: req.Spec.Harness, DeferAt: defersMCPAt(runner),
+			Bridged: bridgedTools, InBox: req.MCPTools})
+		if browserErr != nil {
+			c.abandon(ctx, m, req, fence, box.ID())
+			return LaunchResult{}, fmt.Errorf("sandbox: readying the seat's browser: %w", browserErr)
+		}
+		logBrowser(ctx, req, opened.LaunchID, outcome, time.Since(began))
+		browserOut = &outcome
+		if outcome.Server != nil {
+			served := map[string]MCPServer{browser.ServerName: *outcome.Server}
+			req.MCPServers = withServers(req.MCPServers, served)
+			if fresh != nil {
+				fresh.MCPServers = withServers(fresh.MCPServers, served)
+			}
+		}
+	}
 
 	// THE TURN'S SESSION, CONTINUED in whatever box this job got — its kept
 	// capture restored where the box does not hold it, or, in a box of its
@@ -1092,7 +1139,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		freshWiring = fresh
 	}
 	handle, err := runner.Start(ctx, box, RunRequest{
-		System:      buildSystem(req),
+		System:      buildSystem(req, browserOut),
 		Brief:       continued.brief,
 		FreshBrief:  continued.fresh,
 		FreshWiring: freshWiring,
@@ -1189,6 +1236,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// AND THE POINT OF THE KEPT CAPTURE IT HANDED, for a later capture of
 		// the job to be raised to ([LaunchRecord.Continued]).
 		Continued: continued.point,
+		// AND A BROWSER SEAT'S BROWSER AS THE LAUNCH READIED IT
+		// ([LaunchRecord.Browser]).
+		Browser: browserOut.record(),
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)
@@ -1213,6 +1263,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		ConversationKey: req.Turn.ConversationKey,
 		WorkItem:        req.Turn.WorkItem,
 		Task:            req.label(),
+		Browser:         browserOut.record(),
 		// AND THE SESSION IT DID NOT CONTINUE, as the launch decided it, for
 		// the live turn's screens.
 		SessionNotContinued: continued.notContinued,
@@ -1245,7 +1296,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		"sandbox_id", box.ID(), "placement", string(req.Spec.Placement),
 		"harness", req.Spec.Harness, "provider_key", req.ProviderKey,
 		"reused", reused, "continues_session", continued.session != "",
-		"restores_session", continued.carried != nil, "brief", string(continued.kind))
+		"restores_session", continued.carried != nil, "brief", string(continued.kind),
+		"browser", string(browserOut.state()))
 
 	return LaunchResult{
 		LaunchID: opened.LaunchID, SandboxID: box.ID(), CommandID: handle.CommandID,
@@ -1514,22 +1566,22 @@ func summarise(brief string) string {
 // to its system prompt ([RunRequest.System]). THREE PARTS, each present only where it says something: the run's own
 // instructions (the seat's executor prompt), what the environment already
 // provides (the setup steps' own briefs, so the agent does not rediscover
-// that git auth is wired), and how to ask a person. The brief is not among
-// them: these hold for every round of the run, which is what a system prompt
-// is for. The runner adds the report it must write (only it knows the box's
-// path). THE RUN'S OWN TEXT FIRST: it is who the model is; the rest are
-// details of where it works. The environment lists the operator's steps
-// alone: a Gitlet repository is not the box's at launch, and `code_checkout`
-// tells the run where each checkout is and how it pushes.
-func buildSystem(req LaunchRequest) string {
-	names := slices.Collect(maps.Keys(req.MCPServers))
+// that git auth is wired, and a browser seat's browser, browserOut's), and
+// how to ask a person. The brief is not among them: these hold for every
+// round of the run, which is what a system prompt is for. The runner adds the
+// report it must write (only it knows the box's path). THE RUN'S OWN TEXT
+// FIRST: it is who the model is; the rest are details of where it works. The
+// environment lists the operator's steps alone: a Gitlet repository is not
+// the box's at launch, and `code_checkout` tells the run where each checkout
+// is and how it pushes.
+func buildSystem(req LaunchRequest, browserOut *BrowserOutcome) string {
 	own := strings.TrimSpace(req.System)
 	if own != "" {
 		own = agentRunNote + "\n\n" + own
 	}
 	parts := []string{
 		own,
-		strings.TrimSpace(EnvironmentBrief(req.Setup, names)),
+		strings.TrimSpace(EnvironmentBrief(req.Setup, req.MCPServers, browserOut.Brief())),
 		strings.TrimSpace(req.Ask),
 	}
 	return strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), "\n\n")

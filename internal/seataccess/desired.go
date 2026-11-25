@@ -163,7 +163,8 @@ func DesiredOf(role *config.Role, lane Lane) (Desired, bool) {
 		if !ok {
 			return Desired{}, false
 		}
-		d = Desired{Enabled: config.SeatAccessOn(a.On), Level: a.Level, Identity: IdentityMode(a.Identity)}
+		d = Desired{Enabled: config.SeatAccessOn(a.On), Level: GrowthLevelID(a.Level, a.Role),
+			Identity: IdentityMode(a.Identity)}
 	}
 	_, d.Scope = role.SeatScope(string(lane))
 	return d.NormalizedFor(lane), true
@@ -276,12 +277,30 @@ func SetDesired(role *config.Role, lane Lane, d Desired) error {
 		if prior, ok := role.GrowthSeatAccess(string(lane)); ok && identity == "" {
 			identity = prior.Identity
 		}
-		if !role.SetGrowthSeatAccess(string(lane), config.GrowthSeatAccess{On: &on, Level: d.Level, Scope: d.Scope,
-			Identity: identity}) {
+		level, productRole := CutGrowthLevel(d.Level)
+		if !role.SetGrowthSeatAccess(string(lane), config.GrowthSeatAccess{On: &on, Level: level, Role: productRole,
+			Scope: d.Scope, Identity: identity}) {
 			return fmt.Errorf("seataccess: %q is not a lane this build manages", lane)
 		}
 	}
 	return nil
+}
+
+// GrowthLevelID is a growth level and the product role it runs at as one
+// level ID, `operate:marketer`, as the product's levels offer it; the level
+// alone where it runs at its own.
+func GrowthLevelID(level, role string) string {
+	if role = strings.TrimSpace(role); role == "" {
+		return level
+	}
+	return level + ":" + role
+}
+
+// CutGrowthLevel is a growth level ID's level and product role, "" where it
+// names none ([GrowthLevelID]).
+func CutGrowthLevel(id string) (level, role string) {
+	level, role, _ = strings.Cut(id, ":")
+	return level, role
 }
 
 // gitlabLevel is a GitLab block's level.

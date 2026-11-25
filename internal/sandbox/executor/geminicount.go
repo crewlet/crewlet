@@ -1,15 +1,14 @@
 package executor
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"slices"
 	"strconv"
-	"strings"
-	"unicode/utf8"
+	"unicode"
 
-	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -50,6 +49,21 @@ const geminiContextAllowance = 64 << 10
 // and calls, the session is unread rather than held in memory.
 const geminiCountIDs = 1 << 16
 
+// geminiCountBaseIDs is the most ids a count keeps at its base, holding no
+// slot, and the most one line holds until it ends: past it the count holds
+// the large slot to its end ([chatFileLines]), and a line holding more is
+// unread, which no record Gemini CLI writes is. Both at it, at the walk's
+// 256-byte word bound, hold 2.8 MiB live (BenchmarkAChatCountAtItsBounds'
+// ids_base), within the meter's base ([meterBaseHeldBytes]); 2^12 held 5 MiB.
+const geminiCountBaseIDs = 1 << 11
+
+// geminiCountLargeHeldBytes is what the take's meter's count holds at
+// [geminiCountIDs] ids at the walk's word bound, past its base under the large
+// slot: 24.97 MiB live at most over six runs (BenchmarkAChatCountAtItsBounds'
+// meter_ids_long, to the byte as each GC marks it), rounded up. A take counts
+// it past the meter's base ([takeLargeHeldBytes]); its meter reads no summary.
+const geminiCountLargeHeldBytes = 25 << 20
+
 // geminiSyntheticAnswerBytes is the JSON of the answer a resume hands a call
 // with none (213 bytes, 0.70.0). The turn it closes a history ending on a
 // person's record with is the request's alone, never the estimate's (measured).
@@ -74,7 +88,8 @@ type geminiCall struct {
 // count ([geminiCounting.line]): each record's largest copy, in quarter
 // tokens and its text's UTF-8 bytes; each answer's largest; each call; the
 // records removed; the order records came in and whether each is a
-// compression's summary; and what the walk could not read.
+// compression's summary; what the walk could not read; and the line it reads.
+// Each id is kept by its key ([recordWord.key]).
 type geminiCounting struct {
 	quarters, bytes map[string]int64
 	answers         map[string]*geminiAnswer
@@ -84,6 +99,9 @@ type geminiCounting struct {
 	snapshot        map[string]bool
 	compressions    geminiCompressionLines[string]
 	marks           countMarks
+	l               geminiCountLine
+	seps            lineSeparators
+	head            lineFormHead
 }
 
 func newGeminiCounting() *geminiCounting {
@@ -92,77 +110,258 @@ func newGeminiCounting() *geminiCounting {
 		snapshot: map[string]bool{}}
 }
 
-// geminiCountLine is one line of the chat file as the count reads it.
-type geminiCountLine struct {
-	ID        json.RawMessage `json:"id"`
-	Type      json.RawMessage `json:"type"`
-	Content   json.RawMessage `json:"content"`
-	Thoughts  json.RawMessage `json:"thoughts"`
-	ToolCalls json.RawMessage `json:"toolCalls"`
-	Patch     json.RawMessage `json:"$patch"`
-	Set       json.RawMessage `json:"$set"`
-	Rewind    json.RawMessage `json:"$rewindTo"`
-	SessionID json.RawMessage `json:"sessionId"`
+// lineFormHead is a line's first [lineFormMaxBytes] bytes and one more, as
+// the walk takes them, for its forms ([lineForm.holds]): no more, whatever
+// the line's length.
+type lineFormHead []byte
+
+func (h *lineFormHead) Write(p []byte) (int, error) {
+	if room := lineFormMaxBytes + 1 - len(*h); room > 0 {
+		*h = append(*h, p[:min(len(p), room)]...)
+	}
+	return len(p), nil
 }
 
-// line reads one line: the header, a `$set` or a `$rewindTo` (which only
-// over-counts what it rewinds) are passed over; a `$patch` adds its updates
-// as copies of their records and removes what it names, and one that orders
-// the records (`orderIds`, whose effect on the history was not measured) is
-// unread; an entry is a copy of its record. Anything else is unread. A user
-// entry is a compression's summary by its lines ([geminiCompressionLines]),
-// known a line late.
-func (c *geminiCounting) line(raw []byte) {
-	user := c.read(raw)
-	if summary, ok := c.compressions.line(raw, user, user != ""); ok {
+// form is the head as the whole-line count matched a form on the line, its
+// white space trimmed ([codexLines]): from its start alone where the line ran
+// past it, which no whole form holds.
+func (h lineFormHead) form() []byte {
+	if len(h) > lineFormMaxBytes {
+		return bytes.TrimLeftFunc(h, unicode.IsSpace)
+	}
+	return bytes.TrimSpace(h)
+}
+
+// geminiCountLine is what the count reads of one line on the walk: whether
+// it is a patch, its updates and removals held until the line ends
+// ([geminiCounting.patch]), a `$set`, a `$rewindTo` or a session's header, its
+// type, and the record it is where none of those ([geminiCountRecord]); twice
+// says a member the count reads was written twice ([twice]), unread a part of
+// a patch that does not read, or more of them than [geminiCountBaseIDs].
+type geminiCountLine struct {
+	patch, set, rewind, session bool
+	typeAbsent, entry, user     bool
+	twice, unread               bool
+	record                      geminiCountRecord
+	updates                     []geminiCountRecord
+	removes                     []string
+	held                        int
+}
+
+// geminiCountRecord is one copy of a record as the count reads it, held until
+// its line or its patch's update ends: its id; its quarters and its text's
+// bytes; the marks its parts and answers set; and its answers and calls, each by its call's id, or its place
+// where it has none, to at most [geminiCountBaseIDs] of them (past says more).
+type geminiCountRecord struct {
+	id              recordWord
+	idOK            bool
+	quarters, bytes int64
+	past            bool
+	marks           countMarks
+	answers         []geminiCountAnswer
+	calls           []geminiCountCall
+}
+
+// geminiCountPlace is a call's or an answer's key before its record's id is known:
+// its own id's, or with none its place in its record ([geminiCounting.call]).
+type geminiCountPlace struct {
+	id    recordWord
+	keyed bool
+	at    int
+}
+
+// key is the place's key in a record of key id.
+func (p geminiCountPlace) key(id string) string {
+	if p.keyed {
+		return p.id.key()
+	}
+	return "\x00" + id + "\x00" + strconv.Itoa(p.at)
+}
+
+// geminiCountAnswer is one answer as a record's read holds it: its estimate
+// in tokens and its response's JSON bytes.
+type geminiCountAnswer struct {
+	place         geminiCountPlace
+	tokens, bytes int64
+}
+
+// geminiCountCall is one call as a record's read holds it: its name's length.
+type geminiCountCall struct {
+	place geminiCountPlace
+	name  int
+}
+
+// reset starts a record's read, keeping its lists' room.
+func (r *geminiCountRecord) reset() {
+	*r = geminiCountRecord{answers: r.answers[:0], calls: r.calls[:0]}
+}
+
+// answer holds one answer, past the bound marking the record past.
+func (r *geminiCountRecord) answer(a geminiCountAnswer) {
+	if len(r.answers)+len(r.calls) >= geminiCountBaseIDs {
+		r.past = true
+		return
+	}
+	r.answers = append(r.answers, a)
+}
+
+// call holds one call, past the bound marking the record past.
+func (r *geminiCountRecord) call(c geminiCountCall) {
+	if len(r.answers)+len(r.calls) >= geminiCountBaseIDs {
+		r.past = true
+		return
+	}
+	r.calls = append(r.calls, c)
+}
+
+// pastBase reports whether the count keeps more ids than [geminiCountBaseIDs].
+func (c *geminiCounting) pastBase() bool {
+	return len(c.quarters)+len(c.answers)+len(c.calls)+len(c.removed) > geminiCountBaseIDs
+}
+
+// tee is the trim, the line's separators ([lineSeparators]) and its head, for
+// its compression's forms ([geminiCompressionLines]).
+func (c *geminiCounting) tee(trim *lineTrim) io.Writer {
+	return teeTwo{trim, teeTwo{&c.seps, &c.head}}
+}
+
+// start starts the next line.
+func (c *geminiCounting) start() {
+	record, updates, removes := c.l.record, c.l.updates[:0], c.l.removes[:0]
+	c.l = geminiCountLine{record: record, updates: updates, removes: removes}
+	c.l.record.reset()
+	c.seps.reset()
+	c.head = c.head[:0]
+}
+
+// hold counts n more of a patch's parts the line holds, past
+// [geminiCountBaseIDs] leaving it unread, and reports whether it may hold them.
+func (l *geminiCountLine) hold(n int) bool {
+	l.held += n
+	l.unread = l.unread || l.held > geminiCountBaseIDs
+	return !l.unread
+}
+
+// The members a line's reader reads, a bit each for [twice].
+const (
+	geminiCountsID uint16 = 1 << iota
+	geminiCountsType
+	geminiCountsContent
+	geminiCountsThoughts
+	geminiCountsToolCalls
+	geminiCountsPatch
+	geminiCountsSet
+	geminiCountsRewind
+	geminiCountsSession
+)
+
+// record reads the line's members, holding its patch or its record until
+// its line ends.
+func (c *geminiCounting) record(w *lineWalk) error {
+	l := &c.l
+	l.typeAbsent = true
+	var seen uint16
+	return w.members(func(name string, k jsonscan.Kind) error {
+		member := func(bit uint16) { l.twice = twice(&seen, bit) || l.twice }
+		switch name {
+		case "type":
+			member(geminiCountsType)
+			kind, took, err := w.wordField(k)
+			l.typeAbsent, l.entry = k == jsonscan.Null, took && (kind == "user" || kind == "gemini")
+			l.user = took && kind == "user"
+			return err
+		case "$patch":
+			member(geminiCountsPatch)
+			if l.patch = k != jsonscan.Null; l.patch {
+				return c.patch(w, k)
+			}
+			return nil
+		case "$set", "$rewindTo", "sessionId":
+			bit, present := geminiCountsSet, &l.set
+			switch name {
+			case "$rewindTo":
+				bit, present = geminiCountsRewind, &l.rewind
+			case "sessionId":
+				bit, present = geminiCountsSession, &l.session
+			}
+			member(bit)
+			*present = k != jsonscan.Null
+			return w.scan.Skip()
+		}
+		handled, err := c.recordMember(w, name, k, &l.record, &seen, &l.twice)
+		if !handled {
+			err = w.scan.Skip()
+		}
+		return err
+	})
+}
+
+// recordMember reads one member of a record into r where it is one the
+// count reads, and reports whether it was.
+func (c *geminiCounting) recordMember(w *lineWalk, name string, k jsonscan.Kind, r *geminiCountRecord,
+	seen *uint16, again *bool) (bool, error) {
+
+	var err error
+	switch name {
+	case "id":
+		*again = twice(seen, geminiCountsID) || *again
+		var ok bool
+		r.id, ok, err = w.idField(k)
+		r.idOK = ok && k == jsonscan.String && !r.id.empty()
+	case "content":
+		*again = twice(seen, geminiCountsContent) || *again
+		err = w.geminiContent(k, r, again)
+	case "thoughts":
+		*again = twice(seen, geminiCountsThoughts) || *again
+		err = w.geminiThoughts(k, r, again)
+	case "toolCalls":
+		*again = twice(seen, geminiCountsToolCalls) || *again
+		err = w.geminiToolCalls(k, r, again)
+	default:
+		return false, nil
+	}
+	return true, err
+}
+
+// line takes one line ([geminiCounting.read]), and a user entry is a
+// compression's summary by its lines ([geminiCompressionLines]), known a line
+// late, as the whole-line count knew it, by the line's head ([lineFormHead]).
+func (c *geminiCounting) line(object bool) {
+	user := c.read(object)
+	if summary, ok := c.compressions.line(c.head.form(), user, user != ""); ok {
 		c.snapshot[summary] = true
 	}
 }
 
-// read reads one line ([geminiCounting.line]) and is the id of the user
-// entry it holds, "" for none.
-func (c *geminiCounting) read(raw []byte) string {
-	if lineSeparators(raw) {
-		c.marks = c.marks.with(sandbox.CountUnread)
-		return ""
-	}
-	var w geminiCountLine
-	if !wireObject(raw) || wireAlias(raw, &w) != nil {
-		c.marks = c.marks.with(sandbox.CountUnread)
-		return ""
-	}
+// read takes one line: the header, a `$set` or a `$rewindTo` (which only
+// over-counts what it rewinds) are passed over; a `$patch` was taken as it
+// streamed: its updates as copies of their records, its removals, and one
+// that orders the records (`orderIds`, whose effect on the history was not
+// measured) unread; an entry is a copy of its record. Anything else is
+// unread, and so is a line holding a separator ([lineSeparators]). It is the
+// key of the user entry the line is, "" for none.
+func (c *geminiCounting) read(object bool) string {
+	l := &c.l
 	user := ""
 	switch {
-	case !absent(w.Patch):
-		var patch struct {
-			Updates   []json.RawMessage `json:"updates"`
-			RemoveIDs []string          `json:"removeIds"`
-			OrderIDs  json.RawMessage   `json:"orderIds"`
+	case c.seps.found, !object, l.twice, l.unread:
+		c.marks = c.marks.with(sandbox.CountUnread)
+		return ""
+	case l.patch:
+		for i := range l.updates {
+			c.take(&l.updates[i])
 		}
-		if wireDecode(w.Patch, &patch) != nil || !absent(patch.OrderIDs) {
-			c.marks = c.marks.with(sandbox.CountUnread)
-			return ""
-		}
-		for _, u := range patch.Updates {
-			var update geminiCountLine
-			if wireAlias(u, &update) != nil {
-				c.marks = c.marks.with(sandbox.CountUnread)
-				return ""
-			}
-			c.record(update)
-		}
-		for _, id := range patch.RemoveIDs {
+		for _, id := range l.removes {
 			c.removed[id] = true
 		}
-	case !absent(w.Set), !absent(w.Rewind), !absent(w.SessionID) && absent(w.Type):
+	case l.set, l.rewind, l.session && l.typeAbsent:
+	case !l.entry:
+		c.marks = c.marks.with(sandbox.CountUnread)
+		return ""
 	default:
-		var kind string
-		if wireDecode(w.Type, &kind) != nil || (kind != "user" && kind != "gemini") {
-			c.marks = c.marks.with(sandbox.CountUnread)
-			return ""
-		}
-		if id := c.record(w); kind == "user" {
-			user = id
+		c.take(&l.record)
+		if l.user && l.record.idOK {
+			user = l.record.id.key()
 		}
 	}
 	if len(c.quarters)+len(c.answers)+len(c.calls)+len(c.removed) > geminiCountIDs {
@@ -171,219 +370,455 @@ func (c *geminiCounting) read(raw []byte) string {
 	return user
 }
 
-// record reads one copy of a record, and is its id, "" where it has none.
-func (c *geminiCounting) record(w geminiCountLine) string {
-	var id string
-	if wireDecode(w.ID, &id) != nil || id == "" {
-		c.marks = c.marks.with(sandbox.CountUnread)
-		return ""
-	}
-	if _, seen := c.quarters[id]; !seen {
-		c.order = append(c.order, id)
-	}
-	q, text := c.content(id, w.Content)
-	thoughtQ, thoughtText := c.thoughts(w.Thoughts)
-	q += thoughtQ + c.toolCalls(id, w.ToolCalls)
-	c.quarters[id] = max(c.quarters[id], q)
-	c.bytes[id] = max(c.bytes[id], text+thoughtText)
-	return id
-}
-
-// content is the quarter tokens of a record's content, a text or its parts,
-// its answers kept apart and its calls kept, and its texts' UTF-8 bytes.
-func (c *geminiCounting) content(id string, raw json.RawMessage) (int64, int64) {
-	if absent(raw) {
-		return 0, 0
-	}
-	var text string
-	if wireDecode(raw, &text) == nil {
-		return geminiTextQuarters(text), int64(len(text))
-	}
-	var parts []json.RawMessage
-	if wireDecode(raw, &parts) != nil {
-		parts = []json.RawMessage{raw}
-	}
-	var q, bytes int64
-	for i, part := range parts {
-		var p struct {
-			Text     json.RawMessage `json:"text"`
-			Answer   json.RawMessage `json:"functionResponse"`
-			Call     json.RawMessage `json:"functionCall"`
-			Inline   json.RawMessage `json:"inlineData"`
-			FileData json.RawMessage `json:"fileData"`
-		}
-		if wireAlias(part, &p) != nil {
-			c.marks = c.marks.with(sandbox.CountUnread)
-			continue
-		}
-		switch {
-		case !absent(p.Text):
-			var s string
-			if wireDecode(p.Text, &s) != nil {
-				c.marks = c.marks.with(sandbox.CountUnread)
-				continue
-			}
-			q += geminiTextQuarters(s)
-			bytes += int64(len(s))
-		case !absent(p.Answer):
-			c.answer(id, i, p.Answer)
-		case !absent(p.Inline), !absent(p.FileData):
-			c.marks = c.marks.with(sandbox.CountMedia)
-		default:
-			if !absent(p.Call) {
-				var call struct {
-					ID   json.RawMessage `json:"id"`
-					Name json.RawMessage `json:"name"`
-				}
-				if wireAlias(p.Call, &call) != nil {
-					c.marks = c.marks.with(sandbox.CountUnread)
-				}
-				c.call(id, i, call.ID, call.Name)
-			}
-			n, err := jsLength(part)
-			if err != nil {
-				c.marks = c.marks.with(sandbox.CountUnread)
-			}
-			q += n
-		}
-	}
-	return q, bytes
-}
-
-// thoughts is the quarter tokens of a reply's thoughts, each counted as the
-// text `**subject** description` the history holds, though never sent, and
-// their UTF-8 bytes.
-func (c *geminiCounting) thoughts(raw json.RawMessage) (int64, int64) {
-	if absent(raw) {
-		return 0, 0
-	}
-	var thoughts []struct {
-		Subject     string `json:"subject"`
-		Description string `json:"description"`
-	}
-	if wireDecode(raw, &thoughts) != nil {
-		c.marks = c.marks.with(sandbox.CountUnread)
-		return 0, 0
-	}
-	var q, bytes int64
-	for _, t := range thoughts {
-		text := t.Description
-		if t.Subject != "" {
-			text = "**" + t.Subject + "** " + t.Description
-		}
-		q += geminiTextQuarters(text)
-		bytes += int64(len(text))
-	}
-	return q, bytes
-}
-
-// toolCalls is the quarter tokens of a reply's calls, each as the JSON of
-// `{functionCall:{id,name,args}}` at a token a quarter, its id counted; each
-// call is kept and each result read as an answer.
-func (c *geminiCounting) toolCalls(id string, raw json.RawMessage) int64 {
-	if absent(raw) {
-		return 0
-	}
-	var calls []struct {
-		ID     json.RawMessage   `json:"id"`
-		Name   json.RawMessage   `json:"name"`
-		Args   json.RawMessage   `json:"args"`
-		Result []json.RawMessage `json:"result"`
-	}
-	if wireDecode(raw, &calls) != nil {
-		c.marks = c.marks.with(sandbox.CountUnread)
-		return 0
-	}
-	var q int64
-	for i, call := range calls {
-		for j, part := range call.Result {
-			var p struct {
-				Answer json.RawMessage `json:"functionResponse"`
-			}
-			if wireAlias(part, &p) == nil && !absent(p.Answer) {
-				c.answer(id, 1000*(i+1)+j, p.Answer)
-			}
-		}
-		if absent(call.Name) {
-			continue
-		}
-		c.call(id, -(i + 1), call.ID, call.Name)
-		n := int64(len(`{"functionCall":{"id":,"name":,"args":}}`))
-		for _, v := range []json.RawMessage{call.ID, call.Name, call.Args} {
-			if absent(v) {
-				n += 4
-				continue
-			}
-			l, err := jsLength(v)
-			if err != nil {
-				c.marks = c.marks.with(sandbox.CountUnread)
-			}
-			n += l
-		}
-		q += n
-	}
-	return q
-}
-
-// call keeps one call of record id under its id, or with none under at, its
-// place in the record (a content part's index, a toolCalls entry's below
-// zero), with its name's length.
-func (c *geminiCounting) call(id string, at int, rawID, rawName json.RawMessage) {
-	var key, name string
-	if wireDecode(rawID, &key) != nil || key == "" {
-		key = "\x00" + id + "\x00" + strconv.Itoa(at)
-	}
-	_ = wireDecode(rawName, &name)
-	got := c.calls[key]
-	if got == nil {
-		got = &geminiCall{}
-		c.calls[key] = got
-	}
-	got.name = max(got.name, len(name))
-	if n := len(got.carriers); n == 0 || got.carriers[n-1] != id {
-		got.carriers = append(got.carriers, id)
-	}
-}
-
-// answer reads one answer of record id, the at'th it carries: its estimate,
-// `(name + JSON(response)) / 4` rounded up, the largest of its copies, under
-// its call's id (or, with none, its place in its record).
-func (c *geminiCounting) answer(id string, at int, raw json.RawMessage) {
-	var a struct {
-		ID       json.RawMessage `json:"id"`
-		Name     json.RawMessage `json:"name"`
-		Response json.RawMessage `json:"response"`
-		Parts    json.RawMessage `json:"parts"`
-	}
-	if wireAlias(raw, &a) != nil {
+// take takes one copy of a record.
+func (c *geminiCounting) take(r *geminiCountRecord) {
+	if !r.idOK || r.past {
 		c.marks = c.marks.with(sandbox.CountUnread)
 		return
 	}
-	if !absent(a.Parts) {
-		// A TOOL'S MEDIA rides beside its response, estimated at no length.
-		c.marks = c.marks.with(sandbox.CountMedia)
+	id := r.id.key()
+	if _, seen := c.quarters[id]; !seen {
+		c.order = append(c.order, id)
 	}
-	var key, name string
-	if wireDecode(a.ID, &key) != nil || key == "" {
-		key = "\x00" + id + "\x00" + strconv.Itoa(at)
-	}
-	_ = wireDecode(a.Name, &name)
-	response := int64(4)
-	if !absent(a.Response) {
-		l, err := jsLength(a.Response)
-		if err != nil {
-			c.marks = c.marks.with(sandbox.CountUnread)
+	c.marks |= r.marks
+	for _, a := range r.answers {
+		key := a.place.key(id)
+		got := c.answers[key]
+		if got == nil {
+			got = &geminiAnswer{}
+			c.answers[key] = got
 		}
-		response = l
+		got.tokens, got.bytes = max(got.tokens, a.tokens), max(got.bytes, a.bytes)
+		got.carriers = geminiCarried(got.carriers, id)
 	}
-	got := c.answers[key]
-	if got == nil {
-		got = &geminiAnswer{}
-		c.answers[key] = got
+	for _, call := range r.calls {
+		key := call.place.key(id)
+		got := c.calls[key]
+		if got == nil {
+			got = &geminiCall{}
+			c.calls[key] = got
+		}
+		got.name = max(got.name, call.name)
+		got.carriers = geminiCarried(got.carriers, id)
 	}
-	got.tokens = max(got.tokens, (int64(len(name))+response+3)/4)
-	got.bytes = max(got.bytes, response)
-	got.carriers = append(got.carriers, id)
+	c.quarters[id] = max(c.quarters[id], r.quarters)
+	c.bytes[id] = max(c.bytes[id], r.bytes)
+}
+
+// geminiCarried is carriers with id, the newest, where it is not already the
+// newest: only whether a carrier is kept is read ([geminiCounting.count]), so
+// one record copied over and over holds one place.
+func geminiCarried(carriers []string, id string) []string {
+	if n := len(carriers); n == 0 || carriers[n-1] != id {
+		return append(carriers, id)
+	}
+	return carriers
+}
+
+// patch reads a `$patch`, the value k begins: each update, a copy of its
+// record, and each removal, held until the line ends, as A TORN LAST LINE IS
+// NEVER READ; a patch that does not decode, or orders the records, is unread.
+func (c *geminiCounting) patch(w *lineWalk, k jsonscan.Kind) error {
+	l := &c.l
+	if k != jsonscan.ObjectStart {
+		l.unread = true
+		return w.scan.Skip()
+	}
+	var seen uint16
+	return w.members(func(name string, k jsonscan.Kind) error {
+		switch name {
+		case "updates":
+			l.twice = twice(&seen, 1) || l.twice
+			ok, err := w.listField(k, func(k jsonscan.Kind) error {
+				if k != jsonscan.ObjectStart {
+					l.unread = true
+					return w.scan.Skip()
+				}
+				if len(l.updates) < cap(l.updates) {
+					l.updates = l.updates[:len(l.updates)+1]
+				} else {
+					l.updates = append(l.updates, geminiCountRecord{})
+				}
+				r := &l.updates[len(l.updates)-1]
+				r.reset()
+				var fields uint16
+				err := w.members(func(name string, k jsonscan.Kind) error {
+					handled, err := c.recordMember(w, name, k, r, &fields, &l.twice)
+					if !handled {
+						err = w.scan.Skip()
+					}
+					return err
+				})
+				if !l.hold(1 + len(r.answers) + len(r.calls)) {
+					l.updates = l.updates[:len(l.updates)-1]
+				}
+				return err
+			})
+			l.unread = l.unread || !ok
+			return err
+		case "removeIds":
+			l.twice = twice(&seen, 2) || l.twice
+			ok, err := w.listField(k, func(k jsonscan.Kind) error {
+				id, ok, err := w.idField(k)
+				l.unread = l.unread || !ok
+				if ok && l.hold(1) {
+					l.removes = append(l.removes, id.key())
+				}
+				return err
+			})
+			l.unread = l.unread || !ok
+			return err
+		case "orderIds":
+			l.twice = twice(&seen, 4) || l.twice
+			l.unread = l.unread || k != jsonscan.Null
+		}
+		return w.scan.Skip()
+	})
+}
+
+// geminiContent reads a record's content, the value k begins, into r: a text
+// or its parts (an object one part), its answers kept apart and its calls
+// kept, and its texts' UTF-8 bytes.
+func (w *lineWalk) geminiContent(k jsonscan.Kind, r *geminiCountRecord, again *bool) error {
+	switch k {
+	case jsonscan.Null:
+		return nil
+	case jsonscan.String:
+		t, err := w.chatText(false)
+		r.quarters, r.bytes = r.quarters+t.estimate(), r.bytes+t.bytes
+		return err
+	case jsonscan.ObjectStart:
+		return w.geminiPart(k, 0, r, again)
+	case jsonscan.ArrayStart:
+		i := 0
+		return w.elements(func(k jsonscan.Kind) (bool, error) {
+			err := w.geminiPart(k, i, r, again)
+			i++
+			return true, err
+		})
+	}
+	r.marks = r.marks.with(sandbox.CountUnread)
+	return w.scan.Skip()
+}
+
+// The members of a part [lineWalk.geminiPart] reads, a bit each for [twice].
+const (
+	geminiCountPartText uint16 = 1 << iota
+	geminiCountPartAnswer
+	geminiCountPartCall
+	geminiCountPartInline
+	geminiCountPartFile
+)
+
+// geminiPart reads the i'th part of a record's content, the value k begins,
+// into r: a text, an answer, media, or anything else at its JSON's length,
+// its call kept.
+func (w *lineWalk) geminiPart(k jsonscan.Kind, i int, r *geminiCountRecord, again *bool) error {
+	if k != jsonscan.ObjectStart {
+		r.marks = r.marks.with(sandbox.CountUnread)
+		return w.scan.Skip()
+	}
+	var (
+		seen                   uint16
+		text                   chatText
+		textOK, textOn         bool
+		answer                 geminiCountAnswer
+		answerMarks            countMarks
+		answerOn, inline, file bool
+		callOn, callOK         bool
+		call                   geminiCountCall
+	)
+	n, err := w.jsMembers(func(name string, k jsonscan.Kind) (int64, error) {
+		null := k == jsonscan.Null
+		switch name {
+		case "text":
+			*again = twice(&seen, geminiCountPartText) || *again
+			if textOn, textOK = !null, k == jsonscan.String; !textOK {
+				return 4, w.scan.Skip()
+			}
+			var err error
+			text, err = w.chatText(false)
+			return 0, err
+		case "functionResponse":
+			*again = twice(&seen, geminiCountPartAnswer) || *again
+			if answerOn = !null; null {
+				return 4, nil
+			}
+			var err error
+			answer, answerMarks, err = w.geminiAnswer(k, geminiCountPlace{at: i}, again)
+			return 0, err
+		case "inlineData", "fileData":
+			bit, on := geminiCountPartInline, &inline
+			if name == "fileData" {
+				bit, on = geminiCountPartFile, &file
+			}
+			*again = twice(&seen, bit) || *again
+			*on = !null
+			if null {
+				return 4, nil
+			}
+			return 0, w.scan.Skip()
+		case "functionCall":
+			*again = twice(&seen, geminiCountPartCall) || *again
+			callOn, callOK, call = !null, k == jsonscan.ObjectStart, geminiCountCall{place: geminiCountPlace{at: i}}
+			return w.geminiCall(k, &call, again)
+		}
+		return w.jsValue(k)
+	})
+	switch {
+	case err != nil:
+		return err
+	case textOn && !textOK:
+		r.marks = r.marks.with(sandbox.CountUnread)
+	case textOn:
+		r.quarters += text.estimate()
+		r.bytes += text.bytes
+	case answerOn:
+		r.marks |= answerMarks
+		if answerMarks&countMarks(0).with(sandbox.CountUnread) == 0 {
+			r.answer(answer)
+		}
+	case inline || file:
+		r.marks = r.marks.with(sandbox.CountMedia)
+	default:
+		if callOn {
+			if !callOK {
+				r.marks = r.marks.with(sandbox.CountUnread)
+			}
+			r.call(call)
+		}
+		r.quarters += n
+	}
+	return nil
+}
+
+// geminiCall reads a call, the value k begins, into call: its id and its
+// name's length where it is an object; and is its JSON's length.
+func (w *lineWalk) geminiCall(k jsonscan.Kind, call *geminiCountCall, again *bool) (int64, error) {
+	if k != jsonscan.ObjectStart {
+		return w.jsValue(k)
+	}
+	var seen uint16
+	return w.jsMembers(func(name string, k jsonscan.Kind) (int64, error) {
+		switch name {
+		case "id":
+			*again = twice(&seen, 1) || *again
+			n, id, err := w.geminiID(k)
+			call.place.id, call.place.keyed = id, !id.empty()
+			return n, err
+		case "name":
+			*again = twice(&seen, 2) || *again
+			n, text, err := w.geminiName(k)
+			call.name = int(text)
+			return n, err
+		}
+		return w.jsValue(k)
+	})
+}
+
+// geminiID reads an id, the value k begins, and is its JSON's length and the
+// word it is where a string, else the empty word: a key falls back to its
+// place where it is empty ([geminiCountPlace]).
+func (w *lineWalk) geminiID(k jsonscan.Kind) (int64, recordWord, error) {
+	if k != jsonscan.String {
+		n, err := w.jsValue(k)
+		return n, recordWord{}, err
+	}
+	t, err := w.chatText(true)
+	return t.js, t.word, err
+}
+
+// geminiName reads a name, the value k begins, and is its JSON's length and
+// its text's bytes, none where it is no string.
+func (w *lineWalk) geminiName(k jsonscan.Kind) (int64, int64, error) {
+	if k != jsonscan.String {
+		n, err := w.jsValue(k)
+		return n, 0, err
+	}
+	t, err := w.chatText(false)
+	return t.js, t.bytes, err
+}
+
+// geminiAnswer reads an answer, the value k begins: its estimate,
+// `(name + JSON(response)) / 4` rounded up, under its call's id (or, with
+// none, its place), and the marks it sets: unread where it is no object,
+// media where it carries parts.
+func (w *lineWalk) geminiAnswer(k jsonscan.Kind, at geminiCountPlace, again *bool) (geminiCountAnswer,
+	countMarks, error) {
+
+	var marks countMarks
+	if k != jsonscan.ObjectStart {
+		return geminiCountAnswer{}, marks.with(sandbox.CountUnread), w.scan.Skip()
+	}
+	a := geminiCountAnswer{place: at}
+	var name int64
+	response := int64(4)
+	var seen uint16
+	err := w.members(func(member string, k jsonscan.Kind) error {
+		var err error
+		switch member {
+		case "id":
+			*again = twice(&seen, 1) || *again
+			var id recordWord
+			_, id, err = w.geminiID(k)
+			a.place.id, a.place.keyed = id, !id.empty()
+		case "name":
+			*again = twice(&seen, 2) || *again
+			_, name, err = w.geminiName(k)
+		case "response":
+			*again = twice(&seen, 4) || *again
+			response = 4
+			if k != jsonscan.Null {
+				response, err = w.jsValue(k)
+			}
+		case "parts":
+			*again = twice(&seen, 8) || *again
+			if k != jsonscan.Null {
+				// A TOOL'S MEDIA rides beside its response, estimated at no length.
+				marks = marks.with(sandbox.CountMedia)
+			}
+			err = w.scan.Skip()
+		default:
+			err = w.scan.Skip()
+		}
+		return err
+	})
+	a.tokens, a.bytes = (name+response+3)/4, response
+	return a, marks, err
+}
+
+// geminiThoughts reads a reply's thoughts, the value k begins, into r: each
+// counted as the text `**subject** description` the history holds, though
+// never sent, and its UTF-8 bytes.
+func (w *lineWalk) geminiThoughts(k jsonscan.Kind, r *geminiCountRecord, again *bool) error {
+	var q, n int64
+	ok, err := w.listField(k, func(k jsonscan.Kind) error {
+		var subject, description chatText
+		var seen uint16
+		took, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
+			var t *chatText
+			switch name {
+			case "subject":
+				*again = twice(&seen, 1) || *again
+				t = &subject
+			case "description":
+				*again = twice(&seen, 2) || *again
+				t = &description
+			default:
+				return w.scan.Skip()
+			}
+			*t = chatText{}
+			switch k {
+			case jsonscan.Null:
+				return nil
+			case jsonscan.String:
+				var err error
+				*t, err = w.chatText(false)
+				return err
+			}
+			r.marks = r.marks.with(sandbox.CountUnread)
+			return w.scan.Skip()
+		})
+		if !took {
+			r.marks = r.marks.with(sandbox.CountUnread)
+		}
+		text := description
+		if subject.bytes > 0 {
+			// `**` + subject + `** ` + description: the marker holds no `*`
+			// and no space, so it is in the whole only where in a part.
+			text.units += subject.units + 5
+			text.quarters += subject.quarters + 5
+			text.bytes += subject.bytes + 5
+			text.marked = text.marked || subject.marked
+		}
+		q, n = q+text.estimate(), n+text.bytes
+		return err
+	})
+	if !ok {
+		r.marks = r.marks.with(sandbox.CountUnread)
+	}
+	r.quarters, r.bytes = r.quarters+q, r.bytes+n
+	return err
+}
+
+// geminiToolCalls reads a reply's calls, the value k begins, into r: each as
+// the JSON of `{functionCall:{id,name,args}}` at a token a quarter, its id
+// counted; each call is kept and each result read as an answer.
+func (w *lineWalk) geminiToolCalls(k jsonscan.Kind, r *geminiCountRecord, again *bool) error {
+	i := 0
+	ok, err := w.listField(k, func(k jsonscan.Kind) error {
+		defer func() { i++ }()
+		var seen uint16
+		var id, name, args int64 = 4, 4, 4
+		var key recordWord
+		var nameBytes int64
+		named := false
+		took, err := w.objectField(k, func(member string, k jsonscan.Kind) error {
+			var err error
+			switch member {
+			case "id":
+				*again = twice(&seen, 1) || *again
+				id, key, err = w.geminiID(k)
+			case "name":
+				*again = twice(&seen, 2) || *again
+				named = k != jsonscan.Null
+				name, nameBytes, err = w.geminiName(k)
+			case "args":
+				*again = twice(&seen, 4) || *again
+				args, err = w.jsValue(k)
+			case "result":
+				*again = twice(&seen, 8) || *again
+				j := 0
+				listed, listErr := w.listField(k, func(k jsonscan.Kind) error {
+					defer func() { j++ }()
+					return w.geminiResult(k, geminiCountPlace{at: 1000*(i+1) + j}, r, again)
+				})
+				if !listed {
+					r.marks = r.marks.with(sandbox.CountUnread)
+				}
+				return listErr
+			default:
+				err = w.scan.Skip()
+			}
+			return err
+		})
+		if !took {
+			r.marks = r.marks.with(sandbox.CountUnread)
+		}
+		if named {
+			r.call(geminiCountCall{place: geminiCountPlace{id: key, keyed: !key.empty(), at: -(i + 1)}, name: int(nameBytes)})
+			r.quarters += int64(len(`{"functionCall":{"id":,"name":,"args":}}`)) + id + name + args
+		}
+		return err
+	})
+	if !ok {
+		r.marks = r.marks.with(sandbox.CountUnread)
+	}
+	return err
+}
+
+// geminiResult reads one part of a call's result, the value k begins: its
+// answer, where it is an object holding one, into r.
+func (w *lineWalk) geminiResult(k jsonscan.Kind, at geminiCountPlace, r *geminiCountRecord, again *bool) error {
+	if k != jsonscan.ObjectStart {
+		return w.scan.Skip()
+	}
+	var seen uint16
+	return w.members(func(name string, k jsonscan.Kind) error {
+		if name != "functionResponse" {
+			return w.scan.Skip()
+		}
+		*again = twice(&seen, 1) || *again
+		if k == jsonscan.Null {
+			return nil
+		}
+		a, marks, err := w.geminiAnswer(k, at, again)
+		r.marks |= marks
+		if marks&countMarks(0).with(sandbox.CountUnread) == 0 {
+			r.answer(a)
+		}
+		return err
+	})
 }
 
 // count is the count c read, under marks the read set before the walk, with
@@ -432,6 +867,12 @@ func (c *geminiCounting) count(marks countMarks, taken int64) *sandbox.ResumedCo
 	if answers+(taken+3)/4 >= geminiMaskProtect || collapses {
 		marks = marks.with(sandbox.CountMasked)
 	}
+	// A RESTART NO COUNT CARRIES (past [sandbox.RestartIDMaxBytes]) leaves the
+	// count unread as it is read, as a record would hold it
+	// ([sandbox.ResumedCount]), never a bound beside a restart cut short.
+	if len(restart) > sandbox.RestartIDMaxBytes {
+		marks = marks.with(sandbox.CountUnread)
+	}
 	out := &sandbox.ResumedCount{Restart: &restart}
 	switch mark := marks.first(); mark {
 	case "":
@@ -444,43 +885,12 @@ func (c *geminiCounting) count(marks countMarks, taken int64) *sandbox.ResumedCo
 	return out
 }
 
-// geminiTextQuarters is Gemini CLI 0.70.0's estimate of a text, in quarter
-// tokens: a quarter for each UTF-16 unit of an ASCII character, a token and a
-// half for each other unit (an unreadable byte one unit); a text past 100,000
-// units a quarter a unit, unless it holds [redact.Marker].
-//
-// A TEXT HOLDING A MARKER IS CHARGED BY THE SHORT RULE WHATEVER ITS LENGTH:
-// the rule is no sum of its characters, and a marker the scrub wrote in place
-// of a shorter value can carry a kept text past the line the box's own copy
-// stays under, at a sixth of its charge. Every text the scrub changes holds a
-// marker and every other is kept as it was, so with what the scrub took out
-// ([scrubTally]) the count never falls below the copy's.
-func geminiTextQuarters(s string) int64 {
-	marked := strings.Contains(s, redact.Marker)
-	var units, q int64
-	for len(s) > 0 {
-		r, size := utf8.DecodeRuneInString(s)
-		s = s[size:]
-		switch {
-		case r <= 0x7f:
-			units, q = units+1, q+1
-		case r >= 0x10000:
-			units, q = units+2, q+12
-		default:
-			units, q = units+1, q+6
-		}
-	}
-	if units > 100_000 && !marked {
-		return units
-	}
-	return q
-}
-
 // meter reads a Gemini CLI archive for the take's meter ([carrier.meter]):
 // the count of its one chat file, by the rules of [geminiRelease] alone, its
 // bound no estimate of the next request (the launch's floor reads none).
-func (GeminiCLI) meter(ctx context.Context, r io.Reader, _, release string, _ *passBudget) (meterReading, error) {
-	return chatMeter(ctx, newGeminiCounting(), r, geminiChatMember, release, geminiRelease)
+func (GeminiCLI) meter(ctx context.Context, r io.Reader, _, release string, large *passBudget) (meterReading,
+	error) {
+	return chatMeter(ctx, newGeminiCounting(), r, geminiChatMember, release, geminiRelease, large)
 }
 
 // sessionTraits is how a relaunch judges a Gemini CLI session: in the box the

@@ -699,3 +699,20 @@ func TestAReadWithNoPlaceIsNeverRecordedLeftOut(t *testing.T) {
 			again.Continue.Fresh.Omitted, want)
 	}
 }
+
+// A ROUND WHOSE RUN MET ITS LIMIT BEFORE ANY WORK IS RELAUNCHED FRESH, as a
+// follow-up the launch records: told why the run before it could not start, in
+// a session of its own (the next member may be another harness), and marked so
+// a second limit is collected rather than relaunched again.
+//
+// Mutation: drop Limited from carriedRound, and the run is collected instead.
+func TestARoundLimitedBeforeAnyWorkIsRelaunchedFresh(t *testing.T) {
+	t.Parallel()
+	again := freshRelaunch(t, runner.Resume{Limited: &runner.Limited{BoxKept: true}}, buildOpts{})
+	if !strings.Contains(again.Brief, "its usage limit, so it did nothing") {
+		t.Errorf("the fresh run is not told why the run before it did nothing:\n%s", again.Brief)
+	}
+	if again.Continue == nil || !again.Continue.LimitedBeforeWork {
+		t.Errorf("the relaunch is not marked as a limit's follow-up: %+v", again.Continue)
+	}
+}

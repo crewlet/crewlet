@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/delegated"
@@ -872,6 +873,16 @@ func worstRow(t *testing.T) PendingRun {
 		// AND THE RELEASE THAT WROTE THE COPY at the most a release is
 		// ([ValidRelease]).
 		CountRelease: plain(executorkeep.HarnessVersionMaxBytes),
+		// AND A BROWSER SEAT'S BROWSER with every field set, more than either
+		// answer's record carries, each at its widest: a closed word at the
+		// thirty-two bytes this model gives one, the version at the most its
+		// grammar holds and its major at four digits, the node and pin at their
+		// 64 bytes and the helper's version at its sixteen ([LaunchRecord.Browser]).
+		Browser: &types.ExecutorBrowser{State: browser.EnsureVerdict(plain(32)),
+			Reason: browser.EnsureReason(plain(32)), Cause: browser.EnsureCause(plain(32)),
+			Chromium: "9999.9999.999999.999999", ChromiumMajor: 9999, Outdated: true,
+			Build: browser.ChromiumBuild(plain(32)), Sandbox: browser.ChromiumSandbox(plain(32)),
+			Node: plain(64), Helper: plain(16), Pin: plain(64)},
 		// AND WHAT THE HARNESS ESTIMATES ITS NEXT REQUEST AT, nineteen digits
 		// at each rate ([LaunchRecord.NextRequestTokens]).
 		NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
