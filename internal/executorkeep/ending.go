@@ -198,6 +198,12 @@ type CapturePlace struct {
 	CaptureSeq int64 `json:"capture_seq"`
 }
 
+// After reports whether p is a later place than o: a later launch's, or a
+// later capture of the same launch.
+func (p CapturePlace) After(o CapturePlace) bool {
+	return p.LaunchSeq > o.LaunchSeq || (p.LaunchSeq == o.LaunchSeq && p.CaptureSeq > o.CaptureSeq)
+}
+
 // Validate refuses an ending the engine could not mean: an unknown outcome,
 // an engine word past [WordMaxBytes] or not UTF-8, an unkept capture or a last
 // word placed before the first capture, a spent session outside its bounds.
