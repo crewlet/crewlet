@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -77,5 +78,41 @@ func TestAFinishedCursorRunIsChargedItsResultsUsage(t *testing.T) {
 	}
 	if !strings.Contains(res.Transcript, "echo TOOL-RAN") {
 		t.Errorf("the transcript does not name the shell call:\n%s", res.Transcript)
+	}
+}
+
+// A CURSOR RUN'S RESPONSES ARE COUNTED EXACTLY AT ANY LENGTH: each model call
+// once, however many calls it started or how late their ends arrived, and past
+// the bound a set of the calls seen would hold.
+//
+// Mutation: count every start, count a model call again when its call ends
+// after the next response's, or hold the count to a bound, and a row differs.
+func TestACursorRunsResponsesAreCountedExactlyAtAnyLength(t *testing.T) {
+	t.Parallel()
+	call := func(sub, model string) string {
+		return `{"type":"tool_call","subtype":"` + sub + `","call_id":"c","model_call_id":"` + model + `","tool_call":{}}`
+	}
+	var many []string
+	for i := range maxPendingCalls + 5 {
+		m := fmt.Sprintf("m%d", i)
+		many = append(many, call("started", m), call("completed", m))
+	}
+	for name, c := range map[string]struct {
+		lines []string
+		want  int
+	}{
+		"two calls of one response": {[]string{call("started", "a"), call("started", "a"), call("completed", "a"),
+			call("completed", "a"), call("started", "b")}, 2},
+		"an end after the next response's start": {[]string{call("started", "a"), call("started", "b"),
+			call("completed", "a"), call("completed", "b")}, 2},
+		"past a set's bound": {many, maxPendingCalls + 5},
+	} {
+		dec := &cursorEvents{}
+		for _, l := range c.lines {
+			dec.Line([]byte(l))
+		}
+		if dec.Requests() != c.want {
+			t.Errorf("%s: %d responses, want %d", name, dec.Requests(), c.want)
+		}
 	}
 }

@@ -124,20 +124,16 @@ func TestAMuseRunItsCapStoppedReadsAsCapped(t *testing.T) {
 	}
 }
 
-// AN EXEC PAST ITS CAP FAILS WHATEVER EACH RUN SAID: the script names the cap,
-// and the stream's own count of the main thread's requests is held to it.
+// AN EXEC'S REQUESTS ARE EVERY ONE OF ITS RUNS', whatever each run's own cap
+// said: `--max-model-steps` caps each run apart, so the collection holds the
+// exec's whole count to the cap ([Decoder.Requests]). tools made five.
 //
-// Mutation: drop the count check, and a five-request run under a cap of two
-// succeeds.
-func TestAMuseExecPastItsCapFailsWhateverEachRunSaid(t *testing.T) {
-	stream := append([]byte(`{"payload_type":"`+museCapMark+`","turns":2}`+"\n"), museFixture(t, "tools.stream.jsonl")...)
-	res := (Muse{}).Parse(stream)
-	if res.Success || res.RoundCapped || !strings.Contains(res.Error, "turn cap of 2 was not enforced") {
-		t.Fatalf("result %+v, want the unenforced cap", res)
-	}
-	stream = append([]byte(`{"payload_type":"`+museCapMark+`","turns":5}`+"\n"), museFixture(t, "tools.stream.jsonl")...)
-	if res := (Muse{}).Parse(stream); !res.Success {
-		t.Fatalf("a run within its cap reads as %+v", res)
+// Mutation: count one run's requests, or none, and the count is not five.
+func TestAMuseExecsRequestsAreEveryRunsWhateverEachRunSaid(t *testing.T) {
+	dec := &museEvents{}
+	_ = eachLine(bytes.NewReader(museFixture(t, "tools.stream.jsonl")), dec, maxLineBytes)
+	if dec.Requests() != 5 {
+		t.Fatalf("the exec counts %d requests, want five", dec.Requests())
 	}
 }
 
@@ -230,7 +226,7 @@ func TestAMuseRunIsStartedOnItsPosture(t *testing.T) {
 	for _, want := range []string{"muse exec --json --yolo", `--session-id "$s"`, "--disable-reminders",
 		"--disable-request-user-input", "--allow-workspace-switch",
 		"--model '\\''muse-1'\\''", "--reasoning-effort '\\''high'\\''", "--max-model-steps 7",
-		museLayer + ` --prompt-file "$p"`, "at 1 4 25", museCapMark} {
+		museLayer + ` --prompt-file "$p"`, "at 1 4 25"} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("the command lacks %q:\n%s", want, cmd)
 		}
@@ -727,6 +723,27 @@ func TestAMuseServerNameStaysWholeUpTo19Characters(t *testing.T) {
 	for _, name := range []string{readable, long} {
 		if _, err := box.ReadFile(t.Context(), "/s/"+name+"-"+nonce+".json"); err != nil {
 			t.Errorf("the server %s is not written under its name and the run's suffix: %v", name, err)
+		}
+	}
+}
+
+// A MUSE RUN'S FAILED ATTEMPTS ARE NONE OF ITS REQUESTS: its usage states
+// them apart from the calls answered or cut off, and a refused attempt bills
+// nothing, so the run counts the calls answered and cut off; a usage stating
+// no such split is read by its calls.
+//
+// Mutation: count every call the usage states, and the first row counts 8.
+func TestAMuseRunsFailedAttemptsAreNoneOfItsRequests(t *testing.T) {
+	for payload, want := range map[string]int{
+		`{"calls":8,"completed_calls":6,"failed_calls":2,"cancelled_calls":0,"models":[]}`: 6,
+		`{"calls":5,"completed_calls":4,"failed_calls":0,"cancelled_calls":1,"models":[]}`: 5,
+		`{"calls":3,"models":[]}`: 3,
+	} {
+		dec := &museEvents{}
+		_ = eachLine(strings.NewReader(`{"stream":{"kind":"exec.usage","id":"x"},"payload_type":"run.usage","payload":`+
+			payload+`}`), dec, maxLineBytes)
+		if dec.Requests() != want {
+			t.Errorf("%s: %d requests, want %d", payload, dec.Requests(), want)
 		}
 	}
 }
