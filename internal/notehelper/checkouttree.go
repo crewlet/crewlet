@@ -15,10 +15,10 @@ import (
 )
 
 // THE INSTRUCTION TREE: a slot that walks a directory of the checkout for the
-// files whose names end in a suffix, each handed whole in walk order unless
-// its frontmatter scopes it to the paths its harness loads it for itself
-// (Copilot 1.0.114's and Claude Code 2.1.310's .claude/rules), walked and read
-// as the slot's form, its harness, does. The package doc's "Checkouts below
+// files whose names end in a suffix, each handed in walk order unless its
+// frontmatter scopes it to the paths its harness loads it for itself
+// (Copilot 1.0.114's and Claude Code 2.1.310's .claude/rules, Qwen Code
+// 0.28.4's .qwen/rules), walked and read as the slot's form, its harness, does. The package doc's "Checkouts below
 // the working directory" has each form's rules and the measurements they match.
 
 // instructionSlot is one slot of [checkoutSpec.Instructions]: Names, of which
@@ -58,10 +58,11 @@ func (f treeForm) Valid() bool { return f == formCopilot || f == formClaude || f
 // treeRules is how a form walks a tree and reads a file's scope (measured):
 // whether the suffix matches in its own case only, dot entries are walked, a
 // file link and a directory link are followed while they stay in the
-// checkout, and an empty file is left out.
+// checkout, and an empty file is left out; and hand, what of a file's bytes
+// it hands, and whether its scope (nil for none) lets it.
 type treeRules struct {
 	caseExact, dots, fileLinks, dirLinks, skipEmpty bool
-	scopedAway                                      func(raw []byte, s treeScope) bool
+	hand                                            func(raw []byte, s *treeScope) ([]byte, bool)
 }
 
 // rules is f's [treeRules]: Qwen Code follows no link at all (B2b's rules
@@ -70,11 +71,17 @@ func (f treeForm) rules() treeRules {
 	switch f {
 	case formClaude:
 		return treeRules{caseExact: true, dots: true, fileLinks: true, dirLinks: true, skipEmpty: true,
-			scopedAway: claudeScopedAway}
+			hand: whole(claudeScopedAway)}
 	case formQwen:
-		return treeRules{caseExact: true, dots: true, skipEmpty: true, scopedAway: qwenScopedAway}
+		return treeRules{caseExact: true, dots: true, skipEmpty: true, hand: qwenRule}
 	}
-	return treeRules{fileLinks: true, scopedAway: copilotScopedAway}
+	return treeRules{fileLinks: true, hand: whole(copilotScopedAway)}
+}
+
+// whole is the hand of a form whose harness reads a file whole: raw, unless
+// its frontmatter keeps it from a session's start as scopedAway reads it.
+func whole(scopedAway func(raw []byte, s treeScope) bool) func([]byte, *treeScope) ([]byte, bool) {
+	return func(raw []byte, s *treeScope) ([]byte, bool) { return raw, s == nil || !scopedAway(raw, *s) }
 }
 
 // treeScope is the frontmatter keys that scope a file to paths, the first
@@ -142,8 +149,8 @@ type treeWalk struct {
 }
 
 // treeTexts is the files of root's tree t to hand, in walk order, each read
-// once, whole: [treeWalk.walk]'s, less those t's scope leaves out as its form
-// reads it ([treeRules]). A tree past the walk's bounds is left out whole, and
+// once: [treeWalk.walk]'s, as its form hands them ([treeRules]), less those
+// t's scope leaves out as the form reads it. A tree past the walk's bounds is left out whole, and
 // a file that is no longer the file walked is left out, each said.
 func treeTexts(root string, t instructionTree, said *skips) []treeText {
 	realRoot, err := filepath.EvalSymlinks(root)
@@ -167,8 +174,8 @@ func treeTexts(root string, t instructionTree, said *skips) []treeText {
 			said.say("the instruction file %s is left out: %v", f.path, err)
 			continue
 		}
-		if t.Scoped == nil || !w.rules.scopedAway(raw, *t.Scoped) {
-			texts = append(texts, treeText{treeFile: f, raw: raw})
+		if text, ok := w.rules.hand(raw, t.Scoped); ok {
+			texts = append(texts, treeText{treeFile: f, raw: text})
 		}
 	}
 	return texts
@@ -329,22 +336,11 @@ func copilotScopedAway(raw []byte, s treeScope) bool {
 }
 
 // claudeScopedAway reports whether raw is a file Claude Code 2.1.310 does not
-// load at a session's start ([yamlScopedAway]), a list's entries that are no
-// string dropped (measured: `["src/**", 5]` scopes it to src/**, B2a).
-func claudeScopedAway(raw []byte, s treeScope) bool { return yamlScopedAway(raw, s, false) }
-
-// qwenScopedAway reports whether raw is a file Qwen Code 0.28.4 does not load
-// at a session's start ([yamlScopedAway]), a list's entry that is no string
-// scoping it (measured: `[5]` is never loaded where `5` and `[""]` are, B2b).
-func qwenScopedAway(raw []byte, s treeScope) bool { return yamlScopedAway(raw, s, true) }
-
-// yamlScopedAway reports whether raw's frontmatter keeps it from a session's
-// start (measured, B2a's C4 and B2b's rules rows): frontmatter that is not
-// valid YAML, which never loads, or the first of s's keys present in it
-// (case-exact) holding patterns ([yamlPatterns]) with an entry outside
-// s.Whole (Claude Code's `**`, none of Qwen Code's), which it loads only on a
-// matching path or never.
-func yamlScopedAway(raw []byte, s treeScope, others bool) bool {
+// load at a session's start (measured, B2a's C4 rows): its frontmatter is not
+// valid YAML, which it never loads, or the first of s's keys present in it
+// (case-exact) holds patterns ([claudePatterns]) with an entry outside
+// s.Whole, which it loads only on a path that entry matches.
+func claudeScopedAway(raw []byte, s treeScope) bool {
 	front, ok := frontmatter(raw)
 	if !ok {
 		return false
@@ -360,7 +356,7 @@ func yamlScopedAway(raw []byte, s treeScope, others bool) bool {
 	for _, key := range s.Keys {
 		for i := 0; i+1 < len(fields); i += 2 {
 			if fields[i].Value == key {
-				return slices.ContainsFunc(yamlPatterns(fields[i+1], others),
+				return slices.ContainsFunc(claudePatterns(fields[i+1]),
 					func(p string) bool { return !slices.Contains(s.Whole, p) })
 			}
 		}
@@ -368,11 +364,11 @@ func yamlScopedAway(raw []byte, s treeScope, others bool) bool {
 	return false
 }
 
-// yamlPatterns is a frontmatter value as patterns: a string's, or each
-// string's of a list, `,`-separated parts, trimmed, the empty ones dropped; a
-// list's other entries dropped, or each one entry of its own where others; a
-// value of another kind none.
-func yamlPatterns(v *yaml.Node, others bool) []string {
+// claudePatterns is a frontmatter value as Claude Code's patterns: a
+// string's, or each string's of a list, `,`-separated parts, trimmed, the
+// empty ones dropped; a list's other entries are dropped (measured: `["src/**",
+// 5]` scopes the rule to src/**), and a value of another kind holds none.
+func claudePatterns(v *yaml.Node) []string {
 	strs := []*yaml.Node{v}
 	if v.Kind == yaml.SequenceNode {
 		strs = v.Content
@@ -380,9 +376,6 @@ func yamlPatterns(v *yaml.Node, others bool) []string {
 	var patterns []string
 	for _, n := range strs {
 		if n.Kind != yaml.ScalarNode || n.Tag != "!!str" {
-			if others && v.Kind == yaml.SequenceNode {
-				patterns = append(patterns, n.Value)
-			}
 			continue
 		}
 		for _, part := range strings.Split(n.Value, ",") {

@@ -370,10 +370,13 @@ func TestALinkedRulesDirectoryIsWalkedAsClaudeCodeWalksIt(t *testing.T) {
 // start in a checkout (B2b's rules rows): `.md` in its own case (`UP.MD`,
 // `a.txt` not), dot files and dot directories walked, nested directories
 // walked, a file link and a directory link never followed, whatever they lead
-// to, a scoped rule left out, the rest whole, apart by a blank line.
+// to, a scoped rule left out, and each rule as Qwen Code loads it: its body,
+// the frontmatter and HTML comments dropped, trimmed, none where that is
+// empty; apart by a blank line.
 //
 // Mutation: match the suffix in any case, skip dot entries, follow a file or
-// a directory link, or drop the scope, and the text goes red.
+// a directory link, drop the scope, hand the frontmatter or a comment, or
+// hand a rule with no body, and the text goes red.
 func TestATreeHandsItsFilesInQwenCodesWalk(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -384,9 +387,11 @@ func TestATreeHandsItsFilesInQwenCodesWalk(t *testing.T) {
 		".qwen/rules/a.txt":         "TXT\n",
 		".qwen/rules/.dot.md":       "DOTFILE\n",
 		".qwen/rules/.hid/in.md":    "DOTDIR\n",
-		".qwen/rules/sub/nested.md": "NESTED\n",
+		".qwen/rules/sub/nested.md": "NESTED <!-- note --> TEXT\n",
 		".qwen/rules/paths.md":      "---\npaths: [\"src/**/*.ts\"]\n---\nSCOPED\n",
-		".qwen/rules/desc.md":       "---\ndescription: d\n---\nDESC\n",
+		".qwen/rules/desc.md":       "\uFEFF---\r\ndescription: FRONT\r\n---\r\n\r\nDESC\r\n",
+		".qwen/rules/note.md":       "---\ndescription: d\n---\n<!-- only a note -->\n",
+		".qwen/rules/blank.md":      "---\ndescription: d\n---\n   \n",
 		"elsewhere/l.md":            "FILELINK\n",
 		"elsewhere/dir/v.md":        "DIRLINK\n",
 	})
@@ -397,8 +402,7 @@ func TestATreeHandsItsFilesInQwenCodesWalk(t *testing.T) {
 	}
 	var said bytes.Buffer
 	text, _ := rootText(root, 1<<20, append(names([]string{"QWEN.md"}), qwenRules()), &skips{stderr: &said})
-	want := strings.Join([]string{"ROOT\n", "DOTFILE\n", "DOTDIR\n", "---\ndescription: d\n---\nDESC\n", "PLAIN\n",
-		"NESTED\n"}, "\n\n")
+	want := strings.Join([]string{"ROOT\n", "DOTFILE", "DOTDIR", "DESC", "PLAIN", "NESTED  TEXT"}, "\n\n")
 	if text != want || said.Len() > 0 {
 		t.Errorf("the slots hand\n%q\nwant\n%q\nsaying %q", text, want, said.String())
 	}
@@ -406,32 +410,67 @@ func TestATreeHandsItsFilesInQwenCodesWalk(t *testing.T) {
 
 // A SCOPED RULE IS LEFT OUT AS QWEN CODE READS ITS FRONTMATTER, each case a
 // measured row of 0.28.4 (B2b's rules rows): handed where it loads at a
-// session's start (no frontmatter, an unclosed one, no `paths`, `Paths`, an
-// empty or non-pattern `paths`), left out where `paths` names anything, `**`
-// included, or the frontmatter is invalid YAML, read past a BOM or with CRLF.
+// session's start (no frontmatter, an unclosed one, no `paths`, `Paths`, a
+// `paths` naming nothing: empty, a number, null, a list of empty strings,
+// nulls or empty lists, or a list holding a mapping, on which Qwen Code's
+// reading throws; frontmatter its YAML parser refuses read by its line reader
+// to no `paths` or a null one), left out where `paths` names anything, a
+// string of spaces, `**`, a number or `true` in a list included, or its line
+// reader finds a string or a list item, read past a BOM or with CRLF.
 //
-// Mutation: count `**` as matching every path, read `Paths` as paths, take an
-// empty list or a number as a pattern, drop a list's number, hand invalid
-// YAML, or read no BOM or CRLF frontmatter, and a row goes red.
+// Mutation: count `**` as matching every path, read `Paths` as paths, trim a
+// pattern, take an empty list, a null or a number as a pattern, drop a list's
+// number, scope a list holding a mapping, refuse what the YAML parser
+// refuses instead of reading its lines, or read no BOM or CRLF frontmatter,
+// and a row goes red.
 func TestAScopedRuleIsLeftOutAsQwenCodeReadsItsFrontmatter(t *testing.T) {
 	t.Parallel()
 	handed := []string{"X\n", "---\ndescription: d\n---\nX\n", "---\nglobs: [\"src/**\"]\n---\nX\n",
 		"---\napplyTo: \"src/**\"\n---\nX\n", "---\nPaths: [\"src/**\"]\n---\nX\n", "---\npaths: []\n---\nX\n",
 		"---\npaths: \"\"\n---\nX\n", "---\npaths:\n---\nX\n", "---\npaths: 5\n---\nX\n",
-		"---\npaths: [\"src/**\"]\nX\n", "---\npaths: [\"\"]\n---\nX\n"}
+		"---\npaths: [\"src/**\"]\nX\n", "---\npaths: [\"\"]\n---\nX\n", "---\npaths: [null]\n---\nX\n",
+		"---\npaths: [~]\n---\nX\n", "---\npaths: [[]]\n---\nX\n", "---\npaths: [{}]\n---\nX\n",
+		"---\npaths: [\"src/**\", {}]\n---\nX\n", "---\ndescription: [x\n---\nX\n",
+		"---\ndescription: [x\npaths: null\n---\nX\n"}
 	left := []string{"---\npaths: [\"src/**/*.ts\"]\n---\nX\n", "---\npaths: \"**\"\n---\nX\n",
-		"---\npaths: [5]\n---\nX\n", "---\npaths: [\"src/**\", 5]\n---\nX\n",
-		"---\npaths: [bad\n---\nX\n", "\uFEFF---\npaths: [\"src/**\"]\n---\nX\n",
+		"---\npaths: [5]\n---\nX\n", "---\npaths: [\"src/**\", 5]\n---\nX\n", "---\npaths: [true]\n---\nX\n",
+		"---\npaths: \"  \"\n---\nX\n", "---\npaths: [bad\n---\nX\n",
+		"---\ndescription: [x\npaths:\n  - \"src/**\"\n---\nX\n", "\uFEFF---\npaths: [\"src/**\"]\n---\nX\n",
 		"---\r\npaths: [\"src/**\"]\r\n---\r\nX\r\n"}
-	scope := *qwenRules().Tree.Scoped
+	scope := qwenRules().Tree.Scoped
 	for _, file := range handed {
-		if qwenScopedAway([]byte(file), scope) {
+		if _, ok := qwenRule([]byte(file), scope); !ok {
 			t.Errorf("%q is left out, want it handed: Qwen Code loads it at a session's start", file)
 		}
 	}
 	for _, file := range left {
-		if !qwenScopedAway([]byte(file), scope) {
+		if _, ok := qwenRule([]byte(file), scope); ok {
 			t.Errorf("%q is handed, want it left out: Qwen Code does not load it at a session's start", file)
+		}
+	}
+}
+
+// QWEN CODE'S LINE READER IS READ AS IT READS: where its YAML parser refuses a
+// rule's frontmatter, a `paths` value's text decides as JavaScript reads it
+// (read in 0.28.4's source; the list and `[bad` rows measured): a string or a
+// list item other than null or empty names a path, and `true`, `null`, a
+// quoted empty string, a number (0x, 0o and 0b included) or an object does
+// not.
+//
+// Mutation: read a number, `true` or `""` as a string, `Infinity` or `1_0` as
+// a number, an object as a string, or a `null` item as a path, and a row goes
+// red.
+func TestQwenCodesLineReaderDecidesAsItReads(t *testing.T) {
+	t.Parallel()
+	for value, want := range map[string]bool{
+		"paths: src/**": true, "paths: Infinity": true, "paths: 1_0": true, "paths: 0x1p3": true,
+		`paths: "x"`: true, "paths: 'x'": true, "paths:\n  - null\n  - a": true,
+		"paths: true": false, "paths: null": false, `paths: ""`: false, "paths: 5": false, "paths: -1.5e3": false,
+		"paths: 0x1F": false, "paths: 0o7": false, "paths: 0b1": false, "paths:\n  a: b": false,
+		"paths:\n  - null\n  - \"\"": false, "# c\npaths:": false,
+	} {
+		if got := qwenLineScoped(value, *qwenRules().Tree.Scoped); got != want {
+			t.Errorf("%q names a path: %v, want %v", value, got, want)
 		}
 	}
 }

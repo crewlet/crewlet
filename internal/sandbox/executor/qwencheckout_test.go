@@ -47,7 +47,7 @@ echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
 		t.Fatal(err)
 	}
 	seen := func(name string) string { return boxFile(t, box, box.Home()+"/observed/"+name) }
-	want := "HOME-OWN\n\n\nfor `repo` with root " + work + "/repo\n\nREPO-QWEN\n\n\nREPO-AGENTS\n\n\nREPO-RULE\n"
+	want := "HOME-OWN\n\n\nfor `repo` with root " + work + "/repo\n\nREPO-QWEN\n\n\nREPO-AGENTS\n\n\nREPO-RULE"
 	if got := seen("qwen-md"); got != want {
 		t.Errorf("Qwen Code started on a home QWEN.md of\n%q\nwant\n%q", got, want)
 	}
@@ -66,42 +66,73 @@ echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
 }
 
 // A QWEN CODE RUN HANDS A CHECKOUT THE CONTEXT FILES ITS SETTINGS NAME:
-// context.fileName as Qwen Code 0.28.4 settles it, the working directory's
-// over the home's, comments allowed (measured), names the checkout's files in
-// its order, here CTX.md then QWEN.md and no AGENTS.md, and the checkouts'
-// sections go into the first of the home's own of those that is there.
+// context.fileName as Qwen Code 0.28.4 settles it (measured, each row): the
+// highest settings file holding the key decides, the working directory's over
+// the home's, comments allowed, even where it is null, empty or an empty list,
+// which leave QWEN.md then AGENTS.md; names trimmed, a blank one dropped, one
+// with a slash a path from the root; the checkouts' sections go into the
+// first of the home's own of those files that is there. A value Qwen Code
+// stops on (no string), or one naming blanks alone, under which it loads no
+// context file, refuses the run, naming the file.
 //
 // Mutation: hand QWEN.md and AGENTS.md whatever the settings say, let the
-// home's setting win, or write the sections to a home file the settings do
-// not name, and the check goes red.
+// home's setting win, skip a null or empty one, keep a blank name, drop a
+// name with a slash, write the sections to a home file the settings do not
+// name, or start a run Qwen Code stops on, and a row goes red.
 func TestAQwenRunHandsACheckoutTheContextFilesItsSettingsName(t *testing.T) {
 	t.Parallel()
-	runner, box := qwenBox(t, `o=$HOME/observed; mkdir -p "$o"; cat "$HOME/.qwen/QWEN.md" > "$o/qwen-md"
+	for name, tc := range map[string]struct {
+		home, work, want, refused string
+	}{
+		"the working directory's list, commented": {`{"context":{"fileName":["AGENTS.md"]}}`,
+			"// the working directory's\n{\"context\":{\"fileName\":[\"CTX.md\",\"QWEN.md\"]}}\n",
+			"REPO-CTX\n\n\nREPO-QWEN\n", ""},
+		"null over the home's":       {`{"context":{"fileName":["CTX.md"]}}`, `{"context":{"fileName":null}}`, "REPO-QWEN\n\n\nREPO-AGENTS\n", ""},
+		"an empty name":              {`{"context":{"fileName":["CTX.md"]}}`, `{"context":{"fileName":""}}`, "REPO-QWEN\n\n\nREPO-AGENTS\n", ""},
+		"an empty list":              {`{"context":{"fileName":["CTX.md"]}}`, `{"context":{"fileName":[]}}`, "REPO-QWEN\n\n\nREPO-AGENTS\n", ""},
+		"a blank entry and a padded": {`{}`, `{"context":{"fileName":["", " CTX.md "]}}`, "REPO-CTX\n", ""},
+		"a path below the root":      {`{}`, `{"context":{"fileName":["sub/X.md"]}}`, "REPO-SUBX\n", ""},
+		"no string":                  {`{}`, `{"context":{"fileName":[5, "CTX.md"]}}`, "", "which Qwen Code 0.28.4 stops on"},
+		"blanks alone":               {`{}`, `{"context":{"fileName":["", " "]}}`, "", "blank names only"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := qwenBox(t, `o=$HOME/observed; mkdir -p "$o"; cat "$HOME/.qwen/QWEN.md" "$HOME/.qwen/CTX.md" "$HOME/.qwen/sub/X.md" > "$o/home-md" 2> /dev/null
 echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
 `)
-	plant(t, box, map[string]string{
-		".qwen/QWEN.md":                       "HOME-OWN\n",
-		".qwen/settings.json":                 `{"context":{"fileName":["AGENTS.md"]}}`,
-		"workspace/.qwen/settings.json":       "// the working directory's\n{\"context\":{\"fileName\":[\"CTX.md\",\"QWEN.md\"]}}\n",
-		"workspace/repo/.git/HEAD":            "ref: refs/heads/main\n",
-		"workspace/repo/.git/index":           "DIRC",
-		"workspace/repo/.git/refs/heads/main": strings.Repeat("0", 40) + "\n",
-		"workspace/repo/CTX.md":               "REPO-CTX\n",
-		"workspace/repo/QWEN.md":              "REPO-QWEN\n",
-		"workspace/repo/AGENTS.md":            "REPO-AGENTS\n",
-	})
-	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "qwen3-coder-plus",
-		Env: map[string]string{"OPENAI_API_KEY": "key-placeholder"}})
-	p := executor.PathsFor(box)
-	if !res.Success {
-		t.Fatalf("the run failed: %s\n%s", res.Error, boxFile(t, box, p.Err()))
-	}
-	work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), sandbox.WorkspaceSubdir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "HOME-OWN\n\n\nfor `repo` with root " + work + "/repo\n\nREPO-CTX\n\n\nREPO-QWEN\n"
-	if got := boxFile(t, box, box.Home()+"/observed/qwen-md"); got != want {
-		t.Errorf("Qwen Code started on a home QWEN.md of\n%q\nwant\n%q", got, want)
+			plant(t, box, map[string]string{
+				".qwen/QWEN.md":                       "HOME-OWN\n",
+				".qwen/settings.json":                 tc.home,
+				"workspace/.qwen/settings.json":       tc.work,
+				"workspace/repo/.git/HEAD":            "ref: refs/heads/main\n",
+				"workspace/repo/.git/index":           "DIRC",
+				"workspace/repo/.git/refs/heads/main": strings.Repeat("0", 40) + "\n",
+				"workspace/repo/CTX.md":               "REPO-CTX\n",
+				"workspace/repo/QWEN.md":              "REPO-QWEN\n",
+				"workspace/repo/AGENTS.md":            "REPO-AGENTS\n",
+				"workspace/repo/sub/X.md":             "REPO-SUBX\n",
+			})
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "qwen3-coder-plus",
+				Env: map[string]string{"OPENAI_API_KEY": "key-placeholder"}})
+			p := executor.PathsFor(box)
+			stderr := boxFile(t, box, p.Err())
+			if tc.refused != "" {
+				if res.Success || !strings.Contains(stderr, tc.refused) || !strings.Contains(stderr, "/workspace/.qwen/settings.json") {
+					t.Fatalf("the run succeeded: %v, want it refused saying %q, naming the file:\n%s", res.Success, tc.refused, stderr)
+				}
+				return
+			}
+			if !res.Success {
+				t.Fatalf("the run failed: %s\n%s", res.Error, stderr)
+			}
+			work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), sandbox.WorkspaceSubdir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			sections := "for `repo` with root " + work + "/repo\n\n" + tc.want
+			if got := boxFile(t, box, box.Home()+"/observed/home-md"); !strings.Contains(got, sections) {
+				t.Errorf("Qwen Code started on home context files of\n%q\nwant them to hold\n%q", got, sections)
+			}
+		})
 	}
 }

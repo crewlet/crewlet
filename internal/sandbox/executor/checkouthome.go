@@ -67,11 +67,14 @@ func (h checkoutHome) removeSiblingStaging() string {
 // ImportInstructions where the harness reads them itself, each named as an
 // `@<absolute path>` import in place of its text, Limit not applying (Claude
 // Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code import no
-// absolute path from a home file, measured on 0.70.0 and 0.28.4); and SkillSep,
-// what joins a copy's repository and skill, "" for `:`.
+// absolute path from a home file, measured on 0.70.0 and 0.28.4); SkillSep,
+// what joins a copy's repository and skill, "" for `:`; and FiringLimit, the
+// bound in bytes on what one nested firing hands of all its checkouts'
+// instructions, nil for none, a file past it named for the model to read.
 type checkoutSpec struct {
 	Instructions       []checkoutSlot
 	Limit              *int
+	FiringLimit        *int
 	SkillDirs          []checkoutSkillDir
 	NestedSkillsOnly   bool
 	ImportInstructions bool
@@ -158,8 +161,9 @@ var checkoutUnlimited *int
 // no repository's skills are listed under it.
 func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.sections, "first": repos,
-		"instructions": spec.Instructions, "limit": spec.Limit, "skillDirs": spec.SkillDirs,
-		"skills": h.skills, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace},
+		"instructions": spec.Instructions, "limit": spec.Limit, "firingLimit": spec.FiringLimit,
+		"skillDirs": spec.SkillDirs, "skills": h.skills, "copied": h.copied,
+		"reserved":         []string{sandbox.SkillNamespace},
 		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions,
 		"skillSep": spec.SkillSep, "roots": h.roots})
 	return launch // strings, lists and an int cannot fail to encode
@@ -172,7 +176,9 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 // leading nowhere set aside whole, [heldLink]), the copies an earlier run
 // listed and the state with its staging removed, checkout-launch run, and the
 // checkouts' sections written after the home's own through a link as the home
-// keeps the file, which is left untouched where they hand nothing.
+// keeps the file, its directory made where there is none (a fresh home, or a
+// Qwen Code context.fileName naming a path below it; the put-back leaves the
+// directory), the file left untouched where they hand nothing.
 func (h checkoutHome) gate() string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -201,7 +207,7 @@ func (h checkoutHome) gate() string {
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
 	line(`fi`)
 	if h.holdsHome() {
-		line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
+		line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && mkdir -p "$(dirname "$ra")" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
 	}
 	return b.String()
 }

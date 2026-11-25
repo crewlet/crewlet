@@ -817,17 +817,32 @@ function checkoutNames(homes, launch) {
   }
 }
 
-// contextNames is context.fileName as 0.28.4 settles it: the highest of the
-// system defaults, the home's and the working directory's settings that sets
-// it (measured: the working directory's over the home's), a name or a list of
-// names, each a file in a directory (one holding a slash is dropped); else
-// QWEN.md then AGENTS.md.
+// contextNames is context.fileName as 0.28.4 settles it (read in its source;
+// measured): the highest of the system defaults, the home's and the working
+// directory's settings that holds the key decides. A falsy value, an empty
+// list or a blank name is the default, QWEN.md then AGENTS.md; a list's names
+// are trimmed and an empty one dropped; a name with a slash is a path from
+// the directory, as Qwen Code joins it. Throws, naming the file, where Qwen
+// Code would stop on the value (an entry or a value that is no string) or
+// load no context file at all (every entry blank).
 function contextNames() {
-  const plain = (name) => typeof name === "string" && name !== "" && !name.includes("/") && name !== "." && name !== ".."
   for (const file of settingsFiles().reverse()) {
-    const value = readSettings(file)?.context?.fileName
-    const names = (Array.isArray(value) ? value : [value]).filter(plain)
-    if (value !== undefined && names.length > 0) return names
+    const context = readSettings(file)?.context
+    if (context === null || typeof context !== "object" || !("fileName" in context)) continue
+    const value = context.fileName
+    if (!value) break
+    const list = Array.isArray(value) ? value : [value]
+    if (list.some((name) => typeof name !== "string")) {
+      throw new Error(`${file} sets context.fileName to ${JSON.stringify(value)}, which Qwen Code 0.28.4 stops on: ` +
+        "name each file as a string")
+    }
+    const names = list.map((name) => name.trim()).filter((name) => name !== "")
+    if (Array.isArray(value) && value.length > 0 && names.length === 0) {
+      throw new Error(`${file} sets context.fileName to blank names only, so Qwen Code 0.28.4 loads no context ` +
+        "file, where the run hands its repositories' instructions: name a file, or remove the key")
+    }
+    if (names.length === 0) break
+    return names
   }
   return ["QWEN.md", "AGENTS.md"]
 }
