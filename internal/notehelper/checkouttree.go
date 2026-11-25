@@ -15,11 +15,12 @@ import (
 )
 
 // THE INSTRUCTION TREE: a slot that walks a directory of the checkout for the
-// files whose names end in a suffix, each handed whole in walk order unless
-// its frontmatter scopes it to the paths its harness loads it for itself
-// (Copilot 1.0.114's and Claude Code 2.1.310's .claude/rules), walked and read
-// as the slot's form, its harness, does. The package doc's "Checkouts below
-// the working directory" has each form's rules and the measurements they match.
+// files whose names end in a suffix, each handed in walk order unless its
+// frontmatter scopes it to the paths its harness loads it for itself
+// (Copilot 1.0.114's and Claude Code 2.1.310's .claude/rules, Qwen Code
+// 0.28.4's .qwen/rules), walked and read as the slot's form, its harness,
+// does. The package doc's "Checkouts below the working directory" has each
+// form's rules and the measurements they match.
 
 // instructionSlot is one slot of [checkoutSpec.Instructions]: Names, of which
 // it hands the first regular file, or Tree, walked for its files. On the wire
@@ -60,33 +61,52 @@ const (
 	formCopilot treeForm = "copilot"
 	// formClaude is Claude Code 2.1.310's walk and YAML reader.
 	formClaude treeForm = "claude"
+	// formQwen is Qwen Code 0.28.4's walk of .qwen/rules and YAML reader.
+	formQwen treeForm = "qwen"
 	// formGrok is Grok Build 1.0.92's read of .grok/rules and .claude/rules:
-	// the files directly in it, dot files too, the suffix in any case, every
-	// one (measured, rows g4r, g4x), so it takes no scope.
+	// the files directly in it, dot files too, the suffix in any case, a file
+	// link inside followed, every one (measured, rows g4r, g4x), so it takes
+	// no scope.
 	formGrok treeForm = "grok"
 )
 
 // Valid reports whether f is a form the helper walks.
-func (f treeForm) Valid() bool { return f == formCopilot || f == formClaude || f == formGrok }
+func (f treeForm) Valid() bool {
+	return f == formCopilot || f == formClaude || f == formQwen || f == formGrok
+}
 
 // treeRules is how a form walks a tree and reads a file's scope (measured):
 // whether the suffix matches in its own case only, dot entries are walked, a
-// directory link is followed while it stays in the checkout, an empty file is
-// left out, and no directory below the tree is entered (flat).
+// file link and a directory link are followed while they stay in the
+// checkout, an empty file is left out, and no directory below the tree is
+// entered (flat); and hand, what of a file's bytes it hands, and whether its
+// scope (nil for none) lets it, nil for a form that hands every file whole
+// and reads no scope, a slot naming one refused.
 type treeRules struct {
-	caseExact, dots, dirLinks, skipEmpty, flat bool
-	scopedAway                                 func(raw []byte, s treeScope) bool
+	caseExact, dots, fileLinks, dirLinks, skipEmpty, flat bool
+	hand                                                  func(raw []byte, s *treeScope) ([]byte, bool)
 }
 
-// rules is f's [treeRules].
+// rules is f's [treeRules]: Qwen Code follows no link at all (B2b's rules
+// rows), where Claude Code follows both, and Copilot and Grok Build a file
+// link alone.
 func (f treeForm) rules() treeRules {
 	switch f {
 	case formClaude:
-		return treeRules{caseExact: true, dots: true, dirLinks: true, skipEmpty: true, scopedAway: claudeScopedAway}
+		return treeRules{caseExact: true, dots: true, fileLinks: true, dirLinks: true, skipEmpty: true,
+			hand: whole(claudeScopedAway)}
+	case formQwen:
+		return treeRules{caseExact: true, dots: true, skipEmpty: true, hand: qwenRule}
 	case formGrok:
-		return treeRules{dots: true, flat: true}
+		return treeRules{dots: true, fileLinks: true, flat: true}
 	}
-	return treeRules{scopedAway: copilotScopedAway}
+	return treeRules{fileLinks: true, hand: whole(copilotScopedAway)}
+}
+
+// whole is the hand of a form whose harness reads a file whole: raw, unless
+// its frontmatter keeps it from a session's start as scopedAway reads it.
+func whole(scopedAway func(raw []byte, s treeScope) bool) func([]byte, *treeScope) ([]byte, bool) {
+	return func(raw []byte, s *treeScope) ([]byte, bool) { return raw, s == nil || !scopedAway(raw, *s) }
 }
 
 // treeScope is the frontmatter keys that scope a file to paths, the first
@@ -139,9 +159,10 @@ func (s *instructionSlot) UnmarshalJSON(raw []byte) error {
 		return fmt.Errorf("the tree slot's tree %q is no directory below a checkout's root", tree.Tree)
 	}
 	if !tree.Form.Valid() {
-		return fmt.Errorf("the tree slot's form %q is none of %q, %q and %q", tree.Form, formCopilot, formClaude, formGrok)
+		return fmt.Errorf("the tree slot's form %q is none of %q, %q, %q and %q", tree.Form, formCopilot, formClaude,
+			formQwen, formGrok)
 	}
-	if tree.Scoped != nil && tree.Form.rules().scopedAway == nil {
+	if tree.Scoped != nil && tree.Form.rules().hand == nil {
 		return fmt.Errorf("the tree slot's form %q takes every file, and no scope", tree.Form)
 	}
 	s.Tree = &tree
@@ -175,9 +196,10 @@ type treeWalk struct {
 }
 
 // treeTexts is the files of root's tree t to hand, in walk order, each read
-// once, whole: [treeWalk.walk]'s, less those t's scope leaves out as its form
-// reads it ([treeRules]). A tree past the walk's bounds is left out whole, and
-// a file that is no longer the file walked is left out, each said.
+// once: [treeWalk.walk]'s, as its form hands them ([treeRules]), less those
+// t's scope leaves out as the form reads it. A tree past the walk's bounds is
+// left out whole, and a file that is no longer the file walked is left out,
+// each said.
 func treeTexts(root string, t instructionTree, said *skips) []treeText {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -200,8 +222,12 @@ func treeTexts(root string, t instructionTree, said *skips) []treeText {
 			said.say("the instruction file %s is left out: %v", f.path, err)
 			continue
 		}
-		if t.Scoped == nil || !w.rules.scopedAway(raw, *t.Scoped) {
-			texts = append(texts, treeText{treeFile: f, raw: raw})
+		text, ok := raw, true
+		if w.rules.hand != nil {
+			text, ok = w.rules.hand(raw, t.Scoped)
+		}
+		if ok {
+			texts = append(texts, treeText{treeFile: f, raw: text})
 		}
 	}
 	return texts
@@ -253,7 +279,7 @@ func (w *treeWalk) walk(dir string, depth int) error {
 			}
 			continue
 		}
-		if !w.named(name) {
+		if !w.named(name) || (!w.rules.fileLinks && e.Type()&fs.ModeSymlink != 0) {
 			continue
 		}
 		real, err := filepath.EvalSymlinks(path)

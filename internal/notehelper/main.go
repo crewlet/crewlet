@@ -108,8 +108,12 @@
 //   - `instructions`: slots, in order, within `limit`, the harness's own
 //     bound in bytes on what a session started in the checkout reads of them
 //     (Codex: project_doc_max_bytes), omitted for a harness with none, a file
-//     the limit cuts spending all of it. A list of file names relative to a
-//     checkout's root hands its first regular file (Codex:
+//     the limit cuts spending all of it; `firingLimit`, a nested firing's
+//     bound on all its checkouts' files, each counted with its frame, each
+//     that fits handed whole, the rest left out whole and named for the model
+//     to read (none for Grok, whose cut counts code points and whose adapter
+//     fits whole checkouts itself, grokrepo.go). A list of file names
+//     relative to a checkout's root hands its first regular file (Codex:
 //     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>,
 //     "suffix": <s>, "form": <harness>, "scoped": {"keys": [...], "whole":
 //     [...]}}, hands each file below dir whose name ends in s, whole, apart by
@@ -128,12 +132,20 @@
 //     checkout, each directory once, an empty file skipped; frontmatter read
 //     as YAML, a file whose frontmatter is not valid YAML left out (it never
 //     loads), a key's value a string or a list's strings, split on `,`,
-//     trimmed, its other entries and another kind holding none. A tree past 8 directories deep, 1,024 entries or 32 MiB is
-//     left out whole, said: Copilot walks 9 levels and Claude Code 10 at least
-//     (measured), so a deeper tree is the gap. `grok` (Grok Build 1.0.92,
-//     measured): the files directly in dir alone, dot files too, s in any
-//     case, every one, so it takes no scope. For Grok, too, a list of names
-//     as {"names": [...], "inside": true} follows a link only while it stays
+//     trimmed, its other entries and another kind holding none. `qwen`
+//     (0.28.4, .qwen/rules): as `claude`, but no link followed at all, each
+//     file handed as Qwen Code loads it, its body without frontmatter or HTML
+//     comments, none where that is empty, and `paths` read as it reads it
+//     (qwenrule.go): a non-empty string, `**` included, or a list entry
+//     JavaScript's String makes non-empty names a path, a list holding a
+//     mapping none, and frontmatter its YAML parser refuses is read by its
+//     line reader. `grok` (Grok Build 1.0.92, measured): the files directly
+//     in dir alone, dot files too, s in any case, a file link inside
+//     followed, every one, so it takes no scope. A tree past 8
+//     directories deep, 1,024 entries or 32 MiB is left out whole, said:
+//     Copilot walks 9 levels and Claude Code 10 at least (measured), so a
+//     deeper tree is the gap. For Grok, too, a list of names as
+//     {"names": [...], "inside": true} follows a link only while it stays
 //     in the checkout, and "once" on either kind hands no file an earlier
 //     slot handed, by real path;
 //     `importInstructions` for a harness that reads them itself (Claude Code),
@@ -176,7 +188,8 @@
 //     leave the copy out;
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
-//     bound, as `<tag>:<skill>` (at most 64 characters) with its
+//     bound, as `<tag>:<skill>` (`skillSep` `-` joining them for Gemini CLI,
+//     which lists `a:b` as `a-b`; at most 64 characters) with its
 //     frontmatter's name rewritten to that, never over one already there,
 //     built in state/staging (or, where the state is on another filesystem
 //     than the skills, beside the skills directory's real path), outside
@@ -191,14 +204,18 @@
 // it replaces with a section per checkout, "for `<name>` with root <path>"
 // and its instructions, which the runner places where its harness reads them)
 // and `first` (the repositories the run pushes to, handed first; the rest by
-// name), and `nestedSkillsOnly` for a nested adapter that hands no
-// instructions, whose spec then names none to read. It writes state/nested.json, the -config of the harness's nested
+// name), `nestedSkillsOnly` for a nested adapter that hands no instructions,
+// whose spec then names none to read, and `roots`, a file it lists each
+// checkout's root in, a line each, for a harness the runner points at them
+// (Gemini CLI's --include-directories). It writes state/nested.json, the -config of the harness's nested
 // adapter, which the run's post-tool hook runs after each of the main loop's
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
 // (name, description, the copy's SKILL.md) as its hook's context;
-// claude-nested the listing alone, and nothing for a subagent's call;
+// claude-nested the listing alone, and nothing for a subagent's call, as
+// gemini-nested does under AfterTool; qwen-nested each instruction file and
+// rule framed as Qwen Code frames a context file, then the listing;
 // grok-nested each file as Grok's `## From: <path>`, within the 10,000
 // characters Grok hands of one hook's answer, a checkout's whole while they
 // fit and every other named by its files to read; pi-nested the same as
@@ -211,9 +228,8 @@
 // (notes, skill loads) refuses a run. Grok's stays registered when switched
 // off, as Grok 1.0.92 skips it itself (measured: a disabled-hooks line naming
 // it, an unreadable disabled-hooks, the managed-hooks pin). A harness taking
-// checkouts adds a
-// nested adapter, never a second core; its runner holds the home file and the
-// copies (internal/sandbox/executor's checkoutHome). What a nested firing
+// checkouts adds a nested adapter, never a second core; its runner holds the
+// home file and the copies (internal/sandbox/executor's checkoutHome). What a nested firing
 // leaves out (a skill whose name the home's skills hold, one that leads out
 // of its checkout, a tree past a bound) is a line each on its stderr, in its
 // answer, and in state/skipped under the lock, which the runner's script

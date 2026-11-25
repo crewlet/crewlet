@@ -7,7 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -239,11 +241,12 @@ func TestAGeminiRunPutsTheHomesOwnSettingsBack(t *testing.T) {
 }
 
 // A KILLED GEMINI RUN'S SETTINGS LEAVE THE HOME AT THE NEXT RUN'S START,
-// whichever harness that run drives: a run killed while Gemini CLI works never
-// reaches its script's restore, so the home's file still holds its settings,
-// its bridge's token among them; the next run's clear puts the home's own
-// back, its entries and comments as they were, and afterwards no file of the
-// home holds either run's token.
+// whichever harness that run drives: a run killed outright while Gemini CLI
+// works (SIGKILL, as a teardown past its grace or a lost host kills it; a
+// SIGTERM runs the script's restore) never reaches its restore, so the
+// home's file still holds its settings, its bridge's token among them; the
+// next run's clear puts the home's own back, its entries and comments as they
+// were, and afterwards no file of the home holds either run's token.
 //
 // Mutation, red: leave the restore out of the clear (the other harness's case;
 // a Gemini CLI run still builds on the held copy and puts it back).
@@ -263,9 +266,7 @@ if [ -e "$HOME/block" ]; then rm -f "$HOME/block"; : > "$HOME/working"; exec sle
 			}
 			boxFileAppears(t, box, box.Home()+"/observed.settings.json", "Gemini CLI to start")
 			waitForFile(t, filepath.Join(box.Home(), "working"), "the stand-in to work")
-			if err := box.KillJob(t.Context(), handle.CommandID); err != nil {
-				t.Fatalf("KillJob: %v", err)
-			}
+			killOutright(t, handle.CommandID)
 			awaitOver(t, runner, box, handle, 15*time.Second, "the job was killed")
 			if left := homeFilesHolding(t, box.Home(), "GEMINI-RUN-ONE-TOKEN"); !slices.Equal(left, []string{".gemini/settings.json"}) {
 				t.Fatalf("the killed run left its token in %v, want the home's settings alone: the kill let the "+
@@ -373,5 +374,24 @@ func TestGeminisSettingsBuildOnTheHomesHeldCopy(t *testing.T) {
 				t.Errorf("the held copy reads %q, want the home's own %q", kept, homes)
 			}
 		})
+	}
+}
+
+// killOutright sends SIGKILL to the process group of the local job whose
+// handle is id, as a teardown past its grace does: no trap of its script runs.
+// A job in no group of its own fails the case, named, rather than killing the
+// suite's.
+func killOutright(t *testing.T, id string) {
+	t.Helper()
+	pid, err := strconv.Atoi(id)
+	if err != nil || pid <= 1 {
+		t.Fatalf("the job handle %q is no process id", id)
+	}
+	group, err := syscall.Getpgid(pid)
+	if err != nil || group == syscall.Getpgrp() {
+		t.Fatalf("the job %d has no group of its own (%d, %v)", pid, group, err)
+	}
+	if err := syscall.Kill(-group, syscall.SIGKILL); err != nil {
+		t.Fatalf("killing group %d: %v", group, err)
 	}
 }
