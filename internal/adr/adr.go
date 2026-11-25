@@ -154,7 +154,8 @@ type Record struct {
 	// Title is the text after the em dash on the heading line.
 	Title string
 
-	// Fields are the header's key/value lines, keyed as written.
+	// Fields are the header's fields, keyed as written. A field listed beneath
+	// its line holds its entries as the same entries written on it would read.
 	Fields map[string]string
 }
 
@@ -179,8 +180,17 @@ var Required = []string{"Status", "Authority", "Enforced-by", "Tag-status"}
 // fileName matches a record's file: four digits, a dash, a slug.
 var fileName = regexp.MustCompile(`^(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$`)
 
-// headerLine matches one field of the header block.
-var headerLine = regexp.MustCompile(`^- \*\*([A-Za-z][A-Za-z-]*):\*\* (.+)$`)
+// headerLine matches one field of the header block: its key, and its value
+// when that is written on the line rather than listed beneath it.
+var headerLine = regexp.MustCompile(`^- \*\*([A-Za-z][A-Za-z-]*):\*\*(?: (.+))?$`)
+
+// headerEntry matches one entry of a field listed beneath its line.
+var headerEntry = regexp.MustCompile(`^[ \t]+- (.+)$`)
+
+// listForm is how a field listed beneath its line is written, as an error
+// tells a reader to write it.
+const listForm = "`- **Key:**` with nothing after the colon, then each entry " +
+	"on a line of its own as `  - entry`"
 
 // headingForm is the title line every record opens with, as a reader is told
 // to write it.
@@ -245,14 +255,16 @@ func Load(root string) ([]Record, error) {
 
 // parse reads one record's heading and header block.
 //
-// THE HEADER STOPS AT THE FIRST NON-FIELD LINE, so a "- **Note:**" bullet in
-// the body cannot become a field. A record whose header is interrupted is a
-// record whose later fields are invisible, which is why the heading and the
-// block are read together rather than by grepping the whole file.
+// THE HEADER STOPS AT THE FIRST LINE THAT IS NEITHER A FIELD NOR AN ENTRY OF
+// ONE, so a "- **Note:**" bullet in the body cannot become a field. The
+// heading and the block are read together rather than by grepping the file.
 //
-// THE RECORD IS READ WHOLE, so a field's line is as long as its value: a
-// line scanner's cap (64 KiB by default) would refuse a record whose
-// Enforced-by lists more gates than fit under it.
+// A FIELD MAY LIST ITS VALUE BENEATH ITS LINE, one entry per line ([header]):
+// two changes that each append an entry to a list merge, where two that each
+// extend one line conflict, and Enforced-by is a list most changes extend.
+//
+// THE RECORD IS READ WHOLE, so a field's line is as long as its value: a line
+// scanner's cap (64 KiB by default) would refuse a long one-line value.
 func parse(path, name string, number int) (Record, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // a path this package built from its own directory listing
 	if err != nil {
@@ -260,7 +272,7 @@ func parse(path, name string, number int) (Record, error) {
 	}
 
 	rec := Record{Number: number, File: name, Fields: map[string]string{}}
-	inHeader := false
+	h := header{file: name, fields: rec.Fields}
 	for line := range strings.Lines(string(raw)) {
 		line = strings.TrimRight(line, " \t\r\n")
 		if rec.ID == "" {
@@ -282,18 +294,28 @@ func parse(path, name string, number int) (Record, error) {
 			continue
 		}
 		if m := headerLine.FindStringSubmatch(line); m != nil {
-			inHeader = true
-			key := m[1]
-			if _, dup := rec.Fields[key]; dup {
-				return Record{}, fmt.Errorf("adr: %s sets %s twice, so one of "+
-					"the two values is unread", name, key)
+			if err := h.field(m[1], m[2]); err != nil {
+				return Record{}, err
 			}
-			rec.Fields[key] = strings.TrimSpace(strings.Trim(m[2], "`"))
 			continue
 		}
-		if inHeader && strings.TrimSpace(line) != "" {
+		if m := headerEntry.FindStringSubmatch(line); m != nil {
+			if err := h.entry(line, m[1]); err != nil {
+				return Record{}, err
+			}
+			continue
+		}
+		if h.listing != "" && strings.TrimLeft(line, " \t") != line {
+			return Record{}, fmt.Errorf("adr: %s lists %q beneath %s, which "+
+				"is not an entry: write each entry whole on its own line, as %s",
+				name, line, h.listing, listForm)
+		}
+		if h.last != "" && line != "" {
 			break
 		}
+	}
+	if err := h.close(); err != nil {
+		return Record{}, err
 	}
 	if rec.ID == "" {
 		return Record{}, fmt.Errorf("adr: %s has no %s heading, so "+
@@ -301,6 +323,73 @@ func parse(path, name string, number int) (Record, error) {
 	}
 	return rec, nil
 }
+
+// header is a record's field block, read a line at a time.
+//
+// A LISTED FIELD READS AS ITS ENTRIES WRITTEN ON ITS LINE, joined by ", ", so
+// nothing reading a field can tell the two forms apart. An entry is refused
+// anywhere but beneath a field whose line ends at its colon: before the first
+// field it belongs to none, and beneath a value on its line it is a second one.
+type header struct {
+	file    string
+	fields  map[string]string
+	last    string   // the field read last, "" before the first
+	listing string   // the field whose entries are being read, if any
+	entries []string // its entries so far
+}
+
+// field reads a field's line: its value, or none when the value is listed.
+func (h *header) field(key, value string) error {
+	if err := h.close(); err != nil {
+		return err
+	}
+	if _, dup := h.fields[key]; dup {
+		return fmt.Errorf("adr: %s sets %s twice, so one of the two values "+
+			"is unread", h.file, key)
+	}
+	h.last = key
+	if value == "" {
+		// Claimed now, so a second line of the key is a duplicate.
+		h.fields[key], h.listing = "", key
+		return nil
+	}
+	h.fields[key] = fieldValue(value)
+	return nil
+}
+
+// entry reads one entry of the field being listed.
+func (h *header) entry(line, entry string) error {
+	switch {
+	case h.listing != "":
+		h.entries = append(h.entries, strings.TrimSpace(entry))
+		return nil
+	case h.last == "":
+		return fmt.Errorf("adr: %s lists %q before its first field, so it "+
+			"is an entry of none: list it beneath its field, written %s",
+			h.file, line, listForm)
+	}
+	return fmt.Errorf("adr: %s writes %s's value on its line and lists %q "+
+		"beneath it: write the value on the line or list it, as %s, not both",
+		h.file, h.last, line, listForm)
+}
+
+// close ends the list being read, if any.
+func (h *header) close() error {
+	if h.listing == "" {
+		return nil
+	}
+	if len(h.entries) == 0 {
+		return fmt.Errorf("adr: %s writes %s with nothing after its colon and "+
+			"no entry beneath it: write its value on the line, or list it as %s",
+			h.file, h.listing, listForm)
+	}
+	h.fields[h.listing] = fieldValue(strings.Join(h.entries, ", "))
+	h.listing, h.entries = "", nil
+	return nil
+}
+
+// fieldValue is a field's value as written, its outer backticks dropped.
+func fieldValue(raw string) string { return strings.TrimSpace(strings.Trim(raw, "`")) }
 
 // AuthorityPath turns an authority into the file or directory whose doc must
 // carry the record's id, and says whether it is a Go package.

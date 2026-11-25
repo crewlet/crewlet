@@ -438,7 +438,7 @@ func (r *kimiReading) event(k jsonscan.Kind) (bool, error) {
 		case "name":
 			r.tool, ok, err = r.toolName(&r.name, k)
 		case "args":
-			r.call, err = r.rawText(&r.input, &r.compact, TranscriptEntry{Kind: EntryToolCall})
+			r.call, err = r.rawText(&r.input, &r.compact, TranscriptEntry{Kind: EntryToolCall}, k)
 			ok = true
 		case "part":
 			r.partType, r.part = "", readText{}
@@ -493,7 +493,7 @@ func (r *kimiReading) answer(k jsonscan.Kind) (readText, error) {
 		return t, err
 	case jsonscan.ArrayStart:
 	default:
-		return r.rawText(&r.input, &r.compact, e)
+		return r.rawText(&r.input, &r.compact, e, k)
 	}
 	ordinal := r.b.seen
 	shaped := r.b.shapes(EntryToolResult, ordinal)

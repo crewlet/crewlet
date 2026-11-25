@@ -2,7 +2,25 @@
 
 - **Status:** accepted
 - **Authority:** `internal/scaleway`
-- **Enforced-by:** `internal/scaleway.TestTheAtlasApplicationHoldsNamedReadOnlySetsAlone`, `internal/scaleway.TestThePassMakesTheAtlasApplicationOnceAndThenWritesNothing`, `internal/scaleway.TestACheckMakesNoAtlasApplication`, `internal/scaleway.TestSwitchedOffTheAtlasApplicationIsDeletedAndForgotten`, `internal/scaleway.TestAnAtlasApplicationDeletedAtScalewayIsNotMadeAgain`, `internal/scaleway.TestTheAtlasKeyIsRotatedAndAStrangersIsReported`, `internal/scaleway.TestTheAtlasPolicyIsHeldToItsReadOnlySets`, `internal/scaleway.TestASetScalewayDoesNotListIsLeftOutOfTheAtlasPolicy`, `internal/scaleway.TestAFailedCreateLeavesNoAtlasApplication`, `internal/scaleway.TestTheCompanyPassReportsAStrayAtlasApplication`, `internal/scaleway.TestTheAtlasReadsWhatTheProjectsHold`, `internal/scaleway.TestNothingScalewaySendsBesideTheMappedFieldsReachesTheAtlas`, `internal/scaleway.TestNoCredentialShapeReachesTheAtlasFromAScalewayProduct`, `internal/scaleway.TestWithTheSwitchOffNoProductIsRead`, `internal/scaleway.TestAProductScalewayRefusesIsAFindingAndRetiresNothing`, `internal/scaleway.TestAnAtlasKeyThatDoesNotWorkLeavesTheProductsUnread`, `internal/scaleway.TestAProductListingIsReadWholeOrNotAtAll`, `internal/engine.TestAnAtlasApplicationThatCannotBeConvergedIsAFindingNeverAFailedPass`
+- **Enforced-by:**
+  - `internal/scaleway.TestTheAtlasApplicationHoldsNamedReadOnlySetsAlone`
+  - `internal/scaleway.TestThePassMakesTheAtlasApplicationOnceAndThenWritesNothing`
+  - `internal/scaleway.TestACheckMakesNoAtlasApplication`
+  - `internal/scaleway.TestSwitchedOffTheAtlasApplicationIsDeletedAndForgotten`
+  - `internal/scaleway.TestAnAtlasApplicationDeletedAtScalewayIsNotMadeAgain`
+  - `internal/scaleway.TestTheAtlasKeyIsRotatedAndAStrangersIsReported`
+  - `internal/scaleway.TestTheAtlasPolicyIsHeldToItsReadOnlySets`
+  - `internal/scaleway.TestASetScalewayDoesNotListIsLeftOutOfTheAtlasPolicy`
+  - `internal/scaleway.TestAFailedCreateLeavesNoAtlasApplication`
+  - `internal/scaleway.TestTheCompanyPassReportsAStrayAtlasApplication`
+  - `internal/scaleway.TestTheAtlasReadsWhatTheProjectsHold`
+  - `internal/scaleway.TestNothingScalewaySendsBesideTheMappedFieldsReachesTheAtlas`
+  - `internal/scaleway.TestNoCredentialShapeReachesTheAtlasFromAScalewayProduct`
+  - `internal/scaleway.TestWithTheSwitchOffNoProductIsRead`
+  - `internal/scaleway.TestAProductScalewayRefusesIsAFindingAndRetiresNothing`
+  - `internal/scaleway.TestAnAtlasKeyThatDoesNotWorkLeavesTheProductsUnread`
+  - `internal/scaleway.TestAProductListingIsReadWholeOrNotAtAll`
+  - `internal/engine.TestAnAtlasApplicationThatCannotBeConvergedIsAFindingNeverAFailedPass`
 - **Cost-when-tried:** not tried. ADR-0137 read Scaleway's projects under the provisioner key and stopped there, because that key holds no product's permission set and widening it would put product reads on the one key that administers IAM.
 - **Tag-status:** unreleased
 

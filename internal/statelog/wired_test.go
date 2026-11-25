@@ -25,7 +25,7 @@ const wiredLogBytes = 1 << 30
 
 // wiredOpBudget bounds one write or read on a wired node, so a STOPPED applier
 // fails the case rather than holding it to the binary's timeout. Thirty
-// seconds: six [statelog.DefaultBarrierBudget]s and half [statelog.StallGrace];
+// seconds: three [statelog.ElectionBarrierBudget]s and half [statelog.StallGrace];
 // a healthy write takes milliseconds.
 const wiredOpBudget = 30 * time.Second
 

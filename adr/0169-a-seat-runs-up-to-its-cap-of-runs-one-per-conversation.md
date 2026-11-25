@@ -2,7 +2,22 @@
 
 - **Status:** accepted
 - **Authority:** `internal/sandbox`
-- **Enforced-by:** `internal/sandbox.TestASeatAdmitsExactlyItsCapOfRunsAtOnce`, `internal/sandbox.TestAConversationARunWorksStartsNoSecondRun`, `internal/sandbox.TestTheInboxIsHeldAtTheCapAndReleasedBelowIt`, `internal/node.TestASeatRunsUpToItsCapOneTurnPerConversation`, `internal/engine.TestALaunchFloorCountsTheSeatsOtherRuns`, `internal/engine.TestACheckoutOfABranchAnotherRunPushesIsRefused`, `internal/config.TestASeatsRunCapDefaultsToTwoAndRefusesLessThanOne`, `internal/engine.TestAnUnsetSeatAdmitsTwoRunsOfDifferentConversations`, `internal/queue/memory.TestConformance`, `internal/queue/jetstream.TestConformance`, `internal/queue/jetstream.TestAnAsideDeliveryIsKeptPastTheAckWindow`, `internal/sandbox.TestARunLeavingReadmitsWhatWaitedOnItAndNeverWhatAnotherHolds`, `internal/sandbox.TestAnAnsweredFoldInReadmitsTheWakeItDecides`, `internal/engine.TestADeliveryBelowTheCapWaitsAsideOnTheRunItRelatesToOrStartsBeside`, `internal/engine.TestABusySeatsWakeIsRoutedSetAsideAndReadmittedAsTheRunLeaves`
+- **Enforced-by:**
+  - `internal/sandbox.TestASeatAdmitsExactlyItsCapOfRunsAtOnce`
+  - `internal/sandbox.TestAConversationARunWorksStartsNoSecondRun`
+  - `internal/sandbox.TestTheInboxIsHeldAtTheCapAndReleasedBelowIt`
+  - `internal/node.TestASeatRunsUpToItsCapOneTurnPerConversation`
+  - `internal/engine.TestALaunchFloorCountsTheSeatsOtherRuns`
+  - `internal/engine.TestACheckoutOfABranchAnotherRunPushesIsRefused`
+  - `internal/config.TestASeatsRunCapDefaultsToTwoAndRefusesLessThanOne`
+  - `internal/engine.TestAnUnsetSeatAdmitsTwoRunsOfDifferentConversations`
+  - `internal/queue/memory.TestConformance`
+  - `internal/queue/jetstream.TestConformance`
+  - `internal/queue/jetstream.TestAnAsideDeliveryIsKeptPastTheAckWindow`
+  - `internal/sandbox.TestARunLeavingReadmitsWhatWaitedOnItAndNeverWhatAnotherHolds`
+  - `internal/sandbox.TestAnAnsweredFoldInReadmitsTheWakeItDecides`
+  - `internal/engine.TestADeliveryBelowTheCapWaitsAsideOnTheRunItRelatesToOrStartsBeside`
+  - `internal/engine.TestABusySeatsWakeIsRoutedSetAsideAndReadmittedAsTheRunLeaves`
 - **Cost-when-tried:** before this record a seat whose executor run held it took no other work for the run's hours, an unrelated person's ask included, and the rule lived in several places (node admission, the coordinator's hold, the owed resume's wait), each assuming one; nothing let an operator give a seat room for two.
 - **Tag-status:** unreleased
 

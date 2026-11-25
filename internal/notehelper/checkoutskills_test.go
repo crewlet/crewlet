@@ -129,7 +129,7 @@ func TestARefusedWalksSkillsStayOpenToALaterLink(t *testing.T) {
 // or read a negative depth, and the round trip goes red.
 func TestASkillDirectoryKeepsItsShapeOnTheWire(t *testing.T) {
 	t.Parallel()
-	wire := `[".codex/skills",{"dir":".pi/skills","recursive":true},{"depth":6,"dir":".opencode/skills","recursive":true}]`
+	wire := `[".codex/skills",{"dir":".pi/skills","recursive":true},{"dir":".opencode/skills","recursive":true,"depth":6}]`
 	var dirs []skillDirSlot
 	if err := json.Unmarshal([]byte(wire), &dirs); err != nil {
 		t.Fatal(err)
@@ -163,7 +163,8 @@ func TestARecursiveSkillDirectoryWithADepthStopsThere(t *testing.T) {
 		".opencode/skills/a/b/c/d/e/f/seven/SKILL.md":     skill,
 		".opencode/skills/p/q/r/s/t/u/v/w/x/y/z/notes.md": "no skill\n",
 	})
-	spec := checkoutSpec{SkillDirs: []skillDirSlot{{Dir: ".opencode/skills", Recursive: true, Depth: 6}}}
+	spec := checkoutSpec{SkillDirs: []skillDirSlot{{Dir: ".opencode/skills", Recursive: true,
+		skillWalkOptions: skillWalkOptions{Depth: 6}}}}
 	dirs, over := checkoutSkillDirs(root, spec)
 	want := []string{"six=.opencode/skills/a/b/c/d/e/six", "one=.opencode/skills/one"}
 	if got := skillNames(t, root, dirs); !slices.Equal(got, want) || len(over) > 0 {

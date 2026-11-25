@@ -2,7 +2,10 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/pagepolicy`
-- **Enforced-by:** `internal/gitlet/host.TestADownloadIsServedInert`, `internal/api/pagepolicy.TestTheInertPolicyRunsNothing`, `internal/api/auth.TestADownloadIsNeverChallenged`
+- **Enforced-by:**
+  - `internal/gitlet/host.TestADownloadIsServedInert`
+  - `internal/api/pagepolicy.TestTheInertPolicyRunsNothing`
+  - `internal/api/auth.TestADownloadIsNeverChallenged`
 - **Tag-status:** unreleased
 
 ## The decision

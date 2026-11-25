@@ -2,7 +2,11 @@
 
 - **Status:** accepted
 - **Authority:** `internal/authz`
-- **Enforced-by:** `internal/authz.TestASharedRowAdmitsTheRoleItNamesAndEveryRoleAbove`, `internal/authz.TestACallerWithNoRelationIsToldTheArtifactIsNotFound`, `internal/authz.TestTheLeadArmOpensOnlyAnAgentOwnersArtifacts`, `internal/api/stream.TestTheAudienceHoldsExactlyTheAppsThePrincipalCan`
+- **Enforced-by:**
+  - `internal/authz.TestASharedRowAdmitsTheRoleItNamesAndEveryRoleAbove`
+  - `internal/authz.TestACallerWithNoRelationIsToldTheArtifactIsNotFound`
+  - `internal/authz.TestTheLeadArmOpensOnlyAnAgentOwnersArtifacts`
+  - `internal/api/stream.TestTheAudienceHoldsExactlyTheAppsThePrincipalCan`
 - **Tag-status:** unreleased
 
 ## The decision

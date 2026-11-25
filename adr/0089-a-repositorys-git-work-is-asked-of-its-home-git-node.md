@@ -2,7 +2,28 @@
 
 - **Status:** accepted
 - **Authority:** `internal/estate`
-- **Enforced-by:** `internal/estate.TestAGitOperationIsAskedOfItsRepositorysHome`, `internal/estate.TestAGitletNodeThatIsSyncingSendsTheAskerToTheRunnerUp`, `internal/estate.TestOnlyTheEffectiveHomeIsAskedToFill`, `internal/estate.TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp`, `internal/estate.TestTheFillMovesOnlyPastANodeBringingNoCopyUp`, `internal/gitlet.TestAReasonPassesTheFillOnlyWhereNoCopyIsComing`, `internal/gitlet/query.TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill`, `internal/estate.TestAGitletNodeAtItsShareIsHeardInsideItsAskersAttempt`, `internal/estate.TestAGitReadInProcessIsHeldToTheAttemptARemoteOneIs`, `internal/gitlet/query.TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens`, `internal/gitlet/query.TestAReadsOwnGitHasOneBudgetItsProcessesShare`, `internal/estate.TestANodeWithoutGitletRunsNoGitRead`, `internal/estate.TestEveryOperationNamesTheCopyItReads`, `internal/gitlet/query.TestANodeThatHoldsNoCopyFillsOnlyAsHome`, `internal/gitlet/cache.TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne`, `internal/gitlet/gitletcluster.TestEveryMemberRoutesAGitReadToOneHome`, `internal/engine.TestTheGitHalfIsServedOnceAnApplyBuildsGitlet`, `internal/rendezvous.TestNoPackageOrdersByAHashOfItsOwn`, `internal/estate.TestAnEngineWriteThatRanNothingMovesOnWithTheSameWrite`, `internal/estate.TestAGitWriteIsHeldToItsOwnAttempt`, `internal/estate.TestProductionsGitWriteAttemptHoldsAWritesWaits`, and the Gitlet fleet suite's `EveryMemberRoutesAnEngineWriteToTheHome`
+- **Enforced-by:**
+  - `internal/estate.TestAGitOperationIsAskedOfItsRepositorysHome`
+  - `internal/estate.TestAGitletNodeThatIsSyncingSendsTheAskerToTheRunnerUp`
+  - `internal/estate.TestOnlyTheEffectiveHomeIsAskedToFill`
+  - `internal/estate.TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp`
+  - `internal/estate.TestTheFillMovesOnlyPastANodeBringingNoCopyUp`
+  - `internal/gitlet.TestAReasonPassesTheFillOnlyWhereNoCopyIsComing`
+  - `internal/gitlet/query.TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill`
+  - `internal/estate.TestAGitletNodeAtItsShareIsHeardInsideItsAskersAttempt`
+  - `internal/estate.TestAGitReadInProcessIsHeldToTheAttemptARemoteOneIs`
+  - `internal/gitlet/query.TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens`
+  - `internal/gitlet/query.TestAReadsOwnGitHasOneBudgetItsProcessesShare`
+  - `internal/estate.TestANodeWithoutGitletRunsNoGitRead`
+  - `internal/estate.TestEveryOperationNamesTheCopyItReads`
+  - `internal/gitlet/query.TestANodeThatHoldsNoCopyFillsOnlyAsHome`
+  - `internal/gitlet/cache.TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne`
+  - `internal/gitlet/gitletcluster.TestEveryMemberRoutesAGitReadToOneHome`
+  - `internal/engine.TestTheGitHalfIsServedOnceAnApplyBuildsGitlet`
+  - `internal/rendezvous.TestNoPackageOrdersByAHashOfItsOwn`
+  - `internal/estate.TestAnEngineWriteThatRanNothingMovesOnWithTheSameWrite`
+  - `internal/estate.TestAGitWriteIsHeldToItsOwnAttempt`
+  - `internal/estate.TestProductionsGitWriteAttemptHoldsAWritesWaits`, and the Gitlet fleet suite's `EveryMemberRoutesAnEngineWriteToTheHome`
 - **Measured:** `BenchmarkCodeRead` (`internal/gitlet/query`), once over a 32 MB history of 14 080 commits under a 10 000-file tree on git 2.56.0: every kind a warm home answers in 3–231 ms, more than an order of magnitude inside the 10 s of git run time a read is given, and a node holding no copy, asked as the home, syncs the repository whole and answers in 118 ms from the in-process store (`memobj`), 604 ms from the S3 fake answering every request 100 ms late and 1.1 s at 200 ms (no real bucket) — so the 17 s attempt a router gives a git read is a sum of whole budgets (the share's wait, two read budgets, the read's own git and the reply's margin), never a figure a healthy home approaches; the read lane's queue and the short checks of what a read names are left out of it, and come out of the attempt
 - **Cost-when-tried:** not tried here: before this record no seat read a repository server-side at all. The cost it avoids is the one the cold sync measures — 1.4 s for a repository of two hundred pushes and 13.4–13.8 s for one of two thousand against an object store answering every request 100 ms late — paid on whichever Gitlet node a read landed on, and on every one of them over time
 - **Tag-status:** unreleased

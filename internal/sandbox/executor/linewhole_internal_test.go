@@ -17,15 +17,15 @@ import (
 )
 
 // THE WHOLE-LINE READS OF A BOUNDED WALK'S RECORDS (Kimi Code's, Copilot's,
-// Pi's, Grok Build's and Muse Code's) are the oracles a person's read and a
-// collection's read on the walk are held to: each line held and decoded whole,
-// as the reads were before they moved onto the walk, with what the walk
-// decides applied where it decides it, past the value bound: R1, a person's
-// words are one entry, and a hook's carry none; R2, a joined part is kept
-// whatever it holds where written in order, and a join holding one written
-// otherwise is said in its place ([textJoin]); R3, a call's arguments written
-// as a string are shown as written; R6, a tool's name whose redaction the
-// stream refuses makes its call said in its place.
+// Pi's, Grok Build's, Muse Code's and Cursor Agent's) are the oracles a
+// person's read and a collection's read on the walk are held to: each line
+// held and decoded whole, as the reads were before they moved onto the walk,
+// with what the walk decides applied where it decides it, past the value
+// bound: R1, a person's words are one entry, and a hook's carry none; R2, a
+// joined part is kept whatever it holds where written in order, and a join
+// holding one written otherwise is said in its place ([textJoin]); R3, a
+// call's arguments written as a string are shown as written; R6, a tool's
+// name whose redaction the stream refuses makes its call said in its place.
 
 // boundedMember is one member of a bounded walk's archive: its name, and its
 // lines, each ended by a break unless torn ends the last without one.
@@ -192,7 +192,9 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 		members       func(lines []string) []boundedMember
 		note, receipt string
 		head          string
-		held, oracle  func(context.Context, io.Reader, []ServedTake) ([]string, error)
+		// held and oracle are a collection's read and its oracle, nil where
+		// the harness's record confirms no note (Cursor Agent's).
+		held, oracle func(context.Context, io.Reader, []ServedTake) ([]string, error)
 		// bound is the harness's line bound, its break among it, 0 for
 		// [maxLineBytes].
 		bound int
@@ -275,6 +277,10 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 				`"input_text","text":"one"}]}}`,
 			receipt: `{"type":"response_item","payload":{"type":"function_call","name":"x","arguments":"{}"}}`,
 			head:    `{"type":"compacted","payload":{"message":"at the bound"},"pad":"`},
+		{name: CursorAgentName, walk: CursorAgent{}, whole: wholeCursor{}, members: cursorMembers,
+			note:    `{"user":{"content":[{"text":{"text":"one"}}]}}`,
+			receipt: `{"assistant":{"content":[{"text":{"text":"ok"}}]}}`,
+			head:    `{"tool":{"toolCallId":"c1","content":[{"text":{"text":"at the bound"}}]},"pad":"`},
 	} {
 		t.Run(h.name, func(t *testing.T) {
 			t.Parallel()
@@ -301,6 +307,9 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 				archive := boundedArchiveOf(t, members...)
 				if got, want := personReadOf(t, h.walk, archive, r), personReadOf(t, h.whole, archive, r); got != want {
 					t.Errorf("%s:\n%s", c.name, firstApart(got, want))
+				}
+				if h.held == nil {
+					continue
 				}
 				record := strings.Join(c.lines, "\n")
 				if !c.torn {

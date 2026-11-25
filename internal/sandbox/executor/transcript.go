@@ -104,11 +104,11 @@ func (k EntryKind) Valid() bool { return slices.Contains(EntryKinds, k) }
 // upgrade) is read again from the start.
 //
 // RAISED BY ANY CHANGE THAT MOVES AN ORDINAL: a kind added, a record read that
-// was not, one read as more entries or fewer, one no longer read. 10 reads a
-// Codex or Hermes person's words past the value bound as one entry (R1), and a
-// Hermes row by its keys' exact names, as the line walk reads them; what each
+// was not, one read as more entries or fewer, one no longer read. 11 reads a
+// Codex or Hermes line past its bound on its images' bytes, them passed, as
+// its entries, and a Hermes content stored as JSON by its parts; what each
 // earlier one moved is its commit's.
-const TranscriptVersion = 10
+const TranscriptVersion = 11
 
 // TranscriptEntry is one entry of a session's transcript, as a read surface
 // sends it.
@@ -412,10 +412,9 @@ const TranscriptReadsAtOnce = 2
 // on two cores of the build machine, four runs): 32 MiB live at GOGC=10, a
 // Claude Code value of a key's armour and 200-byte tokens streamed to the read
 // budget; OpenCode's at most 31, every credential shape streamed to it; every
-// other streaming reader's at most 29; its heap peaking at 58 MiB at the
-// default GOGC, every credential shape streamed to the read budget. Cursor
-// Agent's alone reads past it, a line held whole (cursortranscript.go), up to
-// 166 MiB: #2024 streams it.
+// other harness's at most 29, Cursor Agent's (two runs) a dense value
+// streamed to the read budget; its heap peaking at 58 MiB at the default GOGC,
+// every credential shape streamed to the read budget.
 const TranscriptReadHeldBytes = 32 << 20
 
 // PersonTranscriptReadWorst is the longest a person's read takes at its

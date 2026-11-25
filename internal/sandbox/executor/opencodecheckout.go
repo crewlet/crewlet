@@ -32,7 +32,8 @@ const openCodeSkillDepth = 6
 // and .agents/skills reaches no deeper than [openCodeSkillDepth], less the
 // Claude Code files env switches off ([openCodeClaudeOff]). OpenCode follows a
 // link out of the checkout; the walk does not (code-sandbox.md's OpenCode
-// section). Listed is every other skill directory it lists for the run.
+// section). HomeSkills is every other skill directory it lists for the run,
+// the home's and the working directory's, whose names no copy takes.
 func openCodeCheckouts(paths Paths, env map[string]string) checkoutSpec {
 	prompt, skills := openCodeClaudeOff(env)
 	names := []string{"AGENTS.md", "CLAUDE.md"}
@@ -40,16 +41,21 @@ func openCodeCheckouts(paths Paths, env map[string]string) checkoutSpec {
 		names = names[:1]
 	}
 	dirs := []string{".opencode/skills", ".opencode/skill", ".claude/skills", ".agents/skills"}
-	home := []string{paths.Home + "/.config/opencode/skills", paths.Home + "/.config/opencode/skill",
-		paths.Home + "/.claude/skills", paths.Home + "/.agents/skills"}
 	if skills {
 		dirs = slices.DeleteFunc(dirs, func(d string) bool { return d == ".claude/skills" })
-		home = slices.DeleteFunc(home, func(d string) bool { return strings.HasSuffix(d, "/.claude/skills") })
+	}
+	work := paths.Home + "/" + sandbox.WorkspaceSubdir
+	home := []string{paths.Home + "/.config/opencode/skills", paths.Home + "/.config/opencode/skill"}
+	for _, d := range dirs[2:] {
+		home = append(home, paths.Home+"/"+d)
+	}
+	for _, d := range dirs {
+		home = append(home, work+"/"+d)
 	}
 	walked := func(dirs []string) []checkoutSkillDir {
 		out := make([]checkoutSkillDir, len(dirs))
 		for i, dir := range dirs {
-			out[i] = checkoutSkillDir{Dir: dir, Recursive: true, Depth: openCodeSkillDepth}
+			out[i] = checkoutSkillDir{Dir: dir, Recursive: true, checkoutWalk: checkoutWalk{Depth: openCodeSkillDepth}}
 		}
 		return out
 	}
@@ -58,7 +64,7 @@ func openCodeCheckouts(paths Paths, env map[string]string) checkoutSpec {
 		Limit:        checkoutUnlimited,
 		FiringLimit:  &openCodeFiringLimit,
 		SkillDirs:    walked(dirs),
-		Listed:       walked(append(home, dirs...)),
+		HomeSkills:   walked(home),
 	}
 }
 
