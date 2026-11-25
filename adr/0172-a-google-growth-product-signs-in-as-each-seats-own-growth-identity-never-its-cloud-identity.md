@@ -2,7 +2,19 @@
 
 - **Status:** accepted
 - **Authority:** `internal/googleauth`
-- **Enforced-by:** `internal/googleauth.TestTheExchangeIsCloudPlatformAndOnlyTheImpersonationCarriesProductScopes`, `internal/googleauth.TestAnIssuedTokenIsKeyedByItsScopeSet`, `internal/googleauth.TestEveryIdentityIDFitsGooglesRuleAndNeverCollides`, `internal/googlecloud.TestASeatsGrowthIdentityIsItsOwnAccountRecordedByUniqueID`, `internal/googlecloud.TestAGrowthIdentityFollowsTheOROfTheSeatsLanes`, `internal/googlecloud.TestAGrowthIdentityIsNeverAdoptedNorReenabledUnasked`, `internal/googlecloud.TestARecordedGrowthIdentityIsNotAnOrphan`, `internal/googlecloud.TestAnAccountMadeByAPassCutShortIsRecordedNeverOrphaned`, `internal/googlecloud.TestATurnOffCutShortIsFinishedNotReportedAsAPersons`, `internal/googlecloud.TestTheCloudShellBlockMakesTheCompanysOwnReaderForItsGrowthProducts`, `internal/engine.TestAGrowthTokenIsMintedOnlyForAUsableRecordedIdentityWithItsScopes`, `internal/engine.TestGoogleCloudsLaneNeverCountsTowardTheGrowthIdentity`
+- **Enforced-by:**
+  - `internal/googleauth.TestTheExchangeIsCloudPlatformAndOnlyTheImpersonationCarriesProductScopes`
+  - `internal/googleauth.TestAnIssuedTokenIsKeyedByItsScopeSet`
+  - `internal/googleauth.TestEveryIdentityIDFitsGooglesRuleAndNeverCollides`
+  - `internal/googlecloud.TestASeatsGrowthIdentityIsItsOwnAccountRecordedByUniqueID`
+  - `internal/googlecloud.TestAGrowthIdentityFollowsTheOROfTheSeatsLanes`
+  - `internal/googlecloud.TestAGrowthIdentityIsNeverAdoptedNorReenabledUnasked`
+  - `internal/googlecloud.TestARecordedGrowthIdentityIsNotAnOrphan`
+  - `internal/googlecloud.TestAnAccountMadeByAPassCutShortIsRecordedNeverOrphaned`
+  - `internal/googlecloud.TestATurnOffCutShortIsFinishedNotReportedAsAPersons`
+  - `internal/googlecloud.TestTheCloudShellBlockMakesTheCompanysOwnReaderForItsGrowthProducts`
+  - `internal/engine.TestAGrowthTokenIsMintedOnlyForAUsableRecordedIdentityWithItsScopes`
+  - `internal/engine.TestGoogleCloudsLaneNeverCountsTowardTheGrowthIdentity`
 - **Cost-when-tried:** not tried. Google's growth products (Analytics, Search Console, Ads, Play) accept a service account added as a user, but the account a seat holds for Google Cloud puts its `cloud-platform` token in the agent's box (ADR-0102).
 - **Tag-status:** unreleased
 
