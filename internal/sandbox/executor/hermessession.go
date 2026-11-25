@@ -22,9 +22,11 @@ import (
 // line walk ([hermesReading], [hermesNotesHeld]): no row is held, and a value
 // past [TranscriptValueMaxBytes] streams into its entry.
 
-// hermesRowMaxBytes bounds one row of a Hermes session's record, its break
-// among it. Hermes cuts a tool's output it keeps to a size far below this; a
-// longer row is not a shape this build read, so it is said and passed over.
+// hermesRowMaxBytes bounds what a reader keeps of one row of a Hermes
+// session's record, its break among it: its bytes but its images', which
+// every reader passes ([lineWalk.pass]). Hermes cuts a tool's output it keeps
+// to a size far below this; a longer row is not a shape this build read, so
+// it is said and passed over.
 const hermesRowMaxBytes = 8 << 20
 
 // A HERMES ROW IS READ AS ITS WHOLE-LINE DECODE READ IT: a line that is no
@@ -138,6 +140,7 @@ func newHermesReading(b *transcriptBuilder, lines *bufio.Reader) *hermesReading 
 	r.setupBounded(b, r, lines)
 	r.bound, r.src.bound = hermesRowMaxBytes, hermesRowMaxBytes
 	r.quiet = true
+	r.passImages()
 	return r
 }
 
@@ -182,11 +185,11 @@ func (r *hermesReading) record() error {
 			r.rowStart()
 			r.rowSet, r.rowAny = true, k == jsonscan.ObjectStart || k == jsonscan.Null
 			if k != jsonscan.ObjectStart || r.table != "" && r.table != "messages" {
-				return r.scan.Skip()
+				return r.skip(k)
 			}
 			return r.members(r.messageMember)
 		}
-		return r.scan.Skip()
+		return r.skip(k)
 	})
 }
 
@@ -223,7 +226,7 @@ func (r *hermesReading) messageMember(name string, k jsonscan.Kind) error {
 	case "timestamp":
 		r.at, err = r.instant(k)
 	default:
-		return r.scan.Skip()
+		return r.skip(k)
 	}
 	r.rowMistyped = r.rowMistyped || !ok
 	return err
@@ -253,7 +256,7 @@ func (r *hermesReading) content(k jsonscan.Kind, shaped bool) (bool, error) {
 		return true, r.wholeTextFrom(&r.words, head, ended)
 	case jsonscan.ArrayStart:
 	default:
-		return true, r.scan.Skip()
+		return true, r.skip(k)
 	}
 	return r.parts(k)
 }
@@ -289,7 +292,7 @@ func (r *hermesReading) storedContent(shaped bool) error {
 				return r.parts(k)
 			})
 		}
-		return false, r.scan.Skip()
+		return false, r.skip(k)
 	})
 	r.storedOdd = !took
 	return err
@@ -313,7 +316,7 @@ func (r *hermesReading) instant(k jsonscan.Kind) (time.Time, error) {
 		}
 		written = word
 	default:
-		return time.Time{}, r.scan.Skip()
+		return time.Time{}, r.skip(k)
 	}
 	return hermesInstant(written), nil
 }
@@ -338,13 +341,13 @@ func (r *hermesReading) toolCalls(k jsonscan.Kind) (bool, error) {
 		return r.callList(k)
 	case jsonscan.String:
 	default:
-		return false, r.scan.Skip()
+		return false, r.skip(k)
 	}
 	return r.decoded(func(k jsonscan.Kind) (bool, error) {
 		if k == jsonscan.ArrayStart {
 			return r.callList(k)
 		}
-		return false, r.scan.Skip()
+		return false, r.skip(k)
 	})
 }
 
@@ -390,17 +393,17 @@ func (r *hermesReading) oneCall(k jsonscan.Kind) (bool, error) {
 					c.fnName, c.fnBlank, fnOK, fnErr = r.nameField(k)
 				case "arguments":
 					if c.args == hermesArgsOwn {
-						return r.scan.Skip()
+						return r.skip(k)
 					}
 					fnOK, fnErr = true, r.args(hermesArgsFunction, k, shaped)
 				default:
-					return r.scan.Skip()
+					return r.skip(k)
 				}
 				took = took && fnOK
 				return fnErr
 			})
 		default:
-			return r.scan.Skip()
+			return r.skip(k)
 		}
 		took = took && ok
 		return err
@@ -447,7 +450,7 @@ func (r *hermesReading) args(from hermesArgsFrom, k jsonscan.Kind, shaped bool) 
 	if err := r.scan.Tee(&r.compactor); err != nil {
 		return err
 	}
-	return r.scan.Skip()
+	return r.skip(k)
 }
 
 // commit commits the entries the row makes: none for a line that is no

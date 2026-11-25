@@ -37,16 +37,17 @@ const storedImage = "data:image/png;base64,AAAA"
 // same on the receipts' walk.
 //
 // Mutation: read a stored content as its words, join its parts with nothing
-// between, or read an envelope whose `_multimodal` is not true: a case fails.
+// between, read an envelope whose `_multimodal` is not true, or keep an
+// image's bytes: a case fails.
 func TestAHermesContentStoredAsJSONIsReadAsHermesReadsItBack(t *testing.T) {
 	t.Parallel()
 	parts := `[{"type": "text", "text": "seen"}, {"type": "image_url", "image_url": {"url": "` + storedImage + `"}}]`
 	for _, c := range []struct {
 		name, content, want string
 	}{
-		{"a list of parts", hermesStored(parts), "seen\n[an image]"},
+		{"a list of parts", hermesStored(parts), "seen\n[an image of 26 bytes]"},
 		{"an envelope", hermesStored(`{"_multimodal": true, "content": ` + parts + `, "text_summary": "s"}`),
-			"seen\n[an image]"},
+			"seen\n[an image of 26 bytes]"},
 		{"an envelope that is none", hermesStored(`{"_multimodal": false, "content": ` + parts + `}`),
 			hermesStoredOdd},
 		{"an envelope of no list", hermesStored(`{"_multimodal": true, "content": "s"}`), hermesStoredOdd},

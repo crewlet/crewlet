@@ -235,6 +235,7 @@ func hermesNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from 
 	earlier := map[[16]byte]struct{}{}
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), hermesRowMaxBytes)
+	w.passImages()
 	var l hermesNoteRow
 	l.parse.setup(takes)
 	if summary != nil {
@@ -380,11 +381,11 @@ func (l *hermesNoteRow) read(w *lineWalk) error {
 			l.rowStart()
 			l.rowSet, l.rowAny = true, k == jsonscan.ObjectStart || k == jsonscan.Null
 			if k != jsonscan.ObjectStart || l.table != "" && l.table != "messages" {
-				return w.scan.Skip()
+				return w.skip(k)
 			}
 			return w.members(func(name string, k jsonscan.Kind) error { return l.member(w, name, k) })
 		}
-		return w.scan.Skip()
+		return w.skip(k)
 	})
 }
 
@@ -418,11 +419,11 @@ func (l *hermesNoteRow) member(w *lineWalk, name string, k jsonscan.Kind) error 
 	case "content":
 		ok, err = true, l.content(w, k)
 	case "tool_calls", "timestamp":
-		return w.scan.Skip()
+		return w.skip(k)
 	case "tool_call_id", "tool_name":
 		ok, err = w.typedField(k, fieldString)
 	default:
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	l.rowMistyped = l.rowMistyped || !ok
 	return err
@@ -449,12 +450,8 @@ func (l *hermesNoteRow) content(w *lineWalk, k jsonscan.Kind) error {
 		case stored && !ended:
 			return l.storedContent(w)
 		}
-		to := words.whole(p)
-		_, _ = to.Write(head)
-		if !ended {
-			if err := w.read(to); err != nil {
-				return err
-			}
+		if err := w.readFrom(words.whole(p), head, ended); err != nil {
+			return err
 		}
 		p.end()
 		return nil
@@ -463,7 +460,7 @@ func (l *hermesNoteRow) content(w *lineWalk, k jsonscan.Kind) error {
 	default:
 		p.none = true
 		words.unshaped(k)
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	took, err := l.parts(w)
 	p.none = !took
@@ -490,7 +487,7 @@ func (l *hermesNoteRow) storedContent(w *lineWalk) error {
 				return l.parts(w)
 			})
 		}
-		return false, w.scan.Skip()
+		return false, w.skip(k)
 	})
 	if !took {
 		p.none = true
@@ -508,6 +505,7 @@ func (l *hermesNoteRow) parts(w *lineWalk) (bool, error) {
 	err := w.elements(func(k jsonscan.Kind) (bool, error) {
 		l.partKind, l.partKinds, l.partTexts, l.partFed = "", 0, 0, false
 		words.partStart()
+		imaged := w.src.skipped
 		ok, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
 			switch name {
 			case "type":
@@ -527,7 +525,7 @@ func (l *hermesNoteRow) parts(w *lineWalk) (bool, error) {
 				default:
 					took = false
 					words.partOdd()
-					return w.scan.Skip()
+					return w.skip(k)
 				}
 				l.partFed = true
 				switch {
@@ -539,12 +537,12 @@ func (l *hermesNoteRow) parts(w *lineWalk) (bool, error) {
 				if words != nil {
 					return w.read(words.part(io.Discard))
 				}
-				return w.scan.Skip()
+				return w.skip(k)
 			}
-			return w.scan.Skip()
+			return w.skip(k)
 		})
 		took = took && ok
-		words.partEnd(ok, l.partKind)
+		words.partEnd(ok, l.partKind, w.src.skipped-imaged)
 		if l.partFed && (l.partKinds != 1 || l.partTexts != 1) {
 			p.unsure = true
 		}
@@ -851,17 +849,17 @@ func (h *hermesSummaryWords) part(w io.Writer) io.Writer {
 	return h.partText.tee(w, true)
 }
 
-// partEnd ends a part, took whether its decode takes it and kind its type:
-// a `text` part's text joins the words, and in a stored list an image part's
-// place ([hermesStoredParts]).
-func (h *hermesSummaryWords) partEnd(took bool, kind string) {
+// partEnd ends a part, took whether its decode takes it, kind its type and
+// image the image bytes passed in it: a `text` part's text joins the words,
+// and in a stored list an image part's place ([hermesStoredParts]).
+func (h *hermesSummaryWords) partEnd(took bool, kind string, image int64) {
 	switch {
 	case h == nil:
 	case !took:
 		h.odd = true
 	case h.stored && kind == hermesStoredParts.image:
 		h.sep()
-		_, _ = h.text.Write([]byte(claudeImagePlaceholder))
+		_, _ = h.text.Write([]byte(imagePlaceholder(image)))
 	case h.stored && kind == hermesStoredParts.kind:
 		h.sep()
 		h.text.joined(&h.partText)
