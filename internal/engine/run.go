@@ -389,6 +389,9 @@ type Engine struct {
 	// ([modelRetries]).
 	retries modelRetries
 
+	// planReads reads every model sign-in's plan with no model call.
+	planReads planReads
+
 	// restarts is this node's watched copy of the fleet's MCP restarts
 	// ([mcpRestarts]).
 	restarts mcpRestarts
@@ -2259,6 +2262,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// record tells the Models page.
 	e.startRunnerProbe(ctx)
 	e.startHostLogins(ctx)
+	// Every sign-in's plan, read with no model call, so no call is a probe.
+	e.startPlanReads(ctx)
 	// The retries people asked for, applied as every node hears them.
 	e.startModelRetries(ctx)
 	e.startDeviceSignIns(ctx)
@@ -2950,6 +2955,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRunnerProbe()
 	e.stopHostLogins()
 	e.stopModelRetries()
+	e.stopPlanReads()
 	// This node's MCP listings' publisher, now its servers are down, and its
 	// status record's writer, whose rows describe them (what each wrote is
 	// removed once the seats are given back, below), and its instances no longer
