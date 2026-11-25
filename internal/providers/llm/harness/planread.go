@@ -33,6 +33,10 @@ var ErrPlanReadRanModel = errors.New("harness: the plan read ran a model turn")
 // and 9 s in a busy home, so thirty seconds is headroom on a loaded host.
 const planReadTimeout = 30 * time.Second
 
+// planReadBudget bounds a read with its wait for the login home, which a
+// person's `crewlet llm login` holds for as long as the browser flow takes.
+const planReadBudget = 2 * planReadTimeout
+
 // ReadsPlan reports whether [Provider.ReadPlan] can read this entry's plan.
 func (p *Provider) ReadsPlan() bool {
 	return p.profile.PlanRead != nil && p.SignsInWithLogin()
@@ -51,6 +55,8 @@ func (p *Provider) ReadPlan(ctx context.Context) ([]llm.LimitReading, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, planReadBudget)
+	defer cancel()
 	var res *rawResult
 	_, err = p.inCredentialHome(ctx, syncRefresh, io.Discard,
 		func(ctx context.Context, home string, env []string) error {
