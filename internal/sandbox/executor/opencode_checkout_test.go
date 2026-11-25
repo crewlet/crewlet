@@ -96,11 +96,11 @@ func openCodeRecorded(t *testing.T, dir, name string, v any) {
 // the skills a walk of its four directories reaches no deeper than 6 come as
 // `repo:<skill>` in the directory the configuration names; nothing else of it
 // reaches the server. A clone during the run is handed at the next tool
-// result of the run's own session as OpenCode frames an instruction file,
-// once, a subagent's firing claiming nothing; no copy outlives the run.
+// result of the run's own session, framed as OpenCode frames an instruction
+// file, once, within 192 KiB; a subagent's claims nothing; no copy outlives it.
 //
-// Mutation: drop the gate, the sections' or skills' entry, the plugin, its
-// session check or the end's restore, walk past 6, or hand twice: red.
+// Mutation: drop the gate, an entry, the plugin, its session check, the
+// end's restore or the bound, walk past 6, or hand twice: red.
 func TestWhatACheckoutBelowTheStartDirectoryBringsAnOpenCodeRun(t *testing.T) {
 	t.Parallel()
 	runner, box, dir := openCodeCheckoutBox(t, "")
@@ -194,6 +194,9 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAnOpenCodeRun(t *testing.T) {
 	}
 	if left, err := os.ReadDir(p.OpenCodeCheckoutSkills()); err != nil || len(left) != 0 {
 		t.Errorf("the checkouts' skills directory holds %v after the run (%v), want the copies removed", left, err)
+	}
+	if nested := boxFile(t, box, p.OpenCodeCheckoutState()+"/nested.json"); !strings.Contains(nested, `"firingLimit":196608`) {
+		t.Errorf("the plugin's nested config holds no firingLimit of 192 KiB:\n%s", nested)
 	}
 	if errs := boxFile(t, box, p.Err()); strings.Contains(errs, "no note helper") || strings.Contains(errs, "crewlet: the note helper") {
 		t.Errorf("the run said its checkouts were not handed:\n%s", errs)

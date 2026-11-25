@@ -35,9 +35,17 @@ func openCodeCheckouts() checkoutSpec {
 		return checkoutSkillDir{Dir: dir, Recursive: true, Depth: openCodeSkillDepth}
 	}
 	return checkoutSpec{Instructions: []checkoutSlot{{Names: []string{"AGENTS.md", "CLAUDE.md"}}},
-		Limit: checkoutUnlimited, SkillDirs: []checkoutSkillDir{walked(".opencode/skills"), walked(".opencode/skill"),
+		Limit: checkoutUnlimited, FiringLimit: &openCodeFiringLimit, SkillDirs: []checkoutSkillDir{walked(".opencode/skills"), walked(".opencode/skill"),
 			walked(".claude/skills"), walked(".agents/skills")}}
 }
+
+// openCodeFiringLimit bounds the files one opencode-nested firing hands, each
+// counted with its frame: the most measured to reach OpenCode 2.3.2's model
+// whole as a text part pushed onto a tool's result is 300,000 bytes (B2b's
+// bigc row), and 192 KiB of framed files beside the listings' 64 KiB stays
+// under it, as Qwen Code's ([qwenFiringLimit]). A file past what is left is
+// named in the skip listing, to be read.
+var openCodeFiringLimit = 192 << 10
 
 // openCodeCheckoutHome is where an OpenCode run keeps its checkouts'
 // instructions and skills ([checkoutHome]): no home file, since the run's
@@ -57,9 +65,9 @@ func openCodeCheckoutHome(paths Paths) checkoutHome {
 const openCodeNestedTimeout = piNestedTimeout
 
 // openCodeNestedMaxOutput is the most an opencode-nested firing may print:
-// OpenCode bounds no instruction file (a 300,000-byte text part reached the
-// model whole, measured), so Pi's bound ([piNestedMaxOutput]), past what any
-// model's context holds.
+// its files and listings stay within some 256 KiB ([openCodeFiringLimit]),
+// so this is only the backstop Pi's runner sets ([piNestedMaxOutput]), past
+// which the firing's answer is dropped and said.
 const openCodeNestedMaxOutput = piNestedMaxOutput
 
 // openCodeNestedHand is the checkouts plugin's options: the note helper, its
@@ -123,11 +131,11 @@ func openCodeCheckoutsGate(paths Paths) string {
 }
 
 // openCodeCheckoutsEnd is the shell the script's every end runs once
-// OpenCode's server has stopped: the run marked ended and its copies removed,
-// then what a firing left out said, each step whatever came of the other
-// ([everyStep]); the clear before the next run removes the rest
-// ([OpenCode.artifactDirs]).
+// OpenCode's server has stopped: what a firing left out said, then the run
+// marked ended and its copies removed, as every checkouts runner ends, each
+// step whatever came of the other ([everyStep]); the clear before the next
+// run removes the rest ([OpenCode.artifactDirs]).
 func openCodeCheckoutsEnd(paths Paths) string {
 	h := openCodeCheckoutHome(paths)
-	return everyStep(h.restore(), h.saySkipped())
+	return everyStep(h.saySkipped(), h.restore())
 }
