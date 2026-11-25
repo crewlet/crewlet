@@ -83,6 +83,20 @@ func TestAStopsLastEventsSpendNoneOfItsAllowance(t *testing.T) {
 	}
 }
 
+// unarmedGiveBacks is how many give-backs e holds in flight that are not yet a
+// step of the stop.
+func unarmedGiveBacks(e *Engine) int {
+	e.giveBacks.mu.Lock()
+	defer e.giveBacks.mu.Unlock()
+	n := 0
+	for g := range e.giveBacks.inFlight {
+		if g.end == nil {
+			n++
+		}
+	}
+	return n
+}
+
 // heldPublishes is a stream that acknowledges a publish only after hold, or
 // when the request's context ends first, recording each one it was asked for.
 type heldPublishes struct {
@@ -126,14 +140,14 @@ func (s *heldPublishes) asked() []heldPublish {
 // ALLOWANCE; ONE GIVEN BACK BEFORE IT, THE DRAIN'S WAIT INCLUDED, IS NOT.
 //
 // The integration loop's pass gives its hold back on the context it was taken
-// on, cancellation removed, and the teardown waits for that pass ([holdLeases]).
-// Against a store stalling each release four allowances: before any stop, and
-// during the drain (whose wait has no bound, so a charge there spends the
-// seats' time), the give-back waits the stall out; in flight as the TEARDOWN
-// begins, or begun after it, it ends with the allowance.
+// on ([holdLeases]). Against a store stalling each release four allowances, it
+// waits the stall out before any stop and during the drain; in flight as the
+// TEARDOWN begins, or begun after it, it is cut by the allowance counted from
+// the teardown's start. Each claim is what ended the release and the deadline
+// its cause names, never a duration. An Engine literal, its TTL below
+// [config.MinLeaseTTL], which New refuses: at the floor it would wait 40 s.
 //
-// An Engine literal with a TTL below [config.MinLeaseTTL], which New refuses:
-// every bound read is a fraction of the TTL, so at the floor it waits 40 s.
+// Mutation: begin the in-flight step when a watcher of the signal wakes.
 func TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance(t *testing.T) {
 	t.Parallel()
 	const ttl = 1500 * time.Millisecond
@@ -147,8 +161,8 @@ func TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance(t *testing.T) {
 		id:       "node-0", incarnation: "node-0:first",
 		leaseTTL: ttl,
 	}
-
 	allowance := seat.StopAllowance(ttl)
+	budget := allowance - e.admissionShare()
 	stall := 4 * allowance
 	hold := e.workerHold("hold-probe", time.Minute)
 	held := func() func() {
@@ -159,72 +173,77 @@ func TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance(t *testing.T) {
 		}
 		return release
 	}
-	giveBack := func() time.Duration {
+	giveBack := func() stalledRelease {
 		t.Helper()
 		release := held()
 		slow.stall.Store(int64(stall))
 		defer slow.stall.Store(0)
-		started := time.Now()
 		release()
-		return time.Since(started)
+		return slow.lastStalled()
 	}
 
-	if took := giveBack(); took < stall {
-		t.Fatalf("before any stop, a hold's give-back ended after %v, inside the "+
-			"%v its store took: a pass ending on its own was charged to a stop", took, stall)
+	if r := giveBack(); r.cut {
+		t.Fatalf("before any stop, a hold's give-back was cut (%v) inside the %v its store "+
+			"took: a pass ending on its own was charged to a stop", r.cause, stall)
 	}
 
 	// THE DRAIN'S ALLOWANCE, as [Engine.Drain] builds it at its first line.
 	drain := e.stopping()
-	if took := giveBack(); took < stall {
-		t.Fatalf("while the drain waited, a hold's give-back ended after %v, "+
-			"inside the %v its store took: a pass ending on its own during the "+
-			"drain was charged to the stop", took, stall)
+	if r := giveBack(); r.cut {
+		t.Fatalf("while the drain waited, a hold's give-back was cut (%v) inside the %v its "+
+			"store took: a pass ending on its own during the drain was charged to the stop",
+			r.cause, stall)
 	}
+	asked := time.Now()
 	step, done := seat.StopStep(seat.WithStopBudget(context.Background(), drain))
 	deadline, _ := step.Deadline()
-	left := time.Until(deadline)
 	done()
-	if budget := allowance - e.admissionShare(); left < budget/2 {
-		t.Fatalf("after a pass gave its hold back during the drain, a seat's "+
-			"give-back has %v of the stop's %v: the pass spent what the seats "+
-			"are owed", left, budget)
+	if left := deadline.Sub(asked); left < budget {
+		t.Fatalf("after a pass gave its hold back during the drain, a seat's give-back "+
+			"has %v of the stop's %v: the pass spent what the seats are owed", left, budget)
 	}
 
 	// IN FLIGHT ACROSS THE TEARDOWN'S START: begun during the drain, against
-	// the stalled store, and the teardown begins while it waits.
+	// the stalled store, and the teardown begins while it waits. Its step is
+	// begun by the teardown's call, so its deadline is inside the allowance
+	// from the call's return.
 	select {
 	case <-slow.entered:
 	default:
 	}
 	release := held()
 	slow.stall.Store(int64(stall))
-	returned := make(chan time.Time, 1)
-	go func() { release(); returned <- time.Now() }()
+	returned := make(chan stalledRelease, 1)
+	go func() { release(); returned <- slow.lastStalled() }()
 	<-slow.entered
-	begun := time.Now()
 	e.tearingDown()
-	var across time.Duration
-	select {
-	case at := <-returned:
-		across = at.Sub(begun)
-	case <-time.After(10 * time.Second):
-		t.Fatal("a hold's give-back in flight when the teardown began never returned")
+	called := time.Now()
+	if n := unarmedGiveBacks(e); n > 0 {
+		t.Fatalf("%d give-back(s) in flight were no step of the stop when the teardown's call "+
+			"returned: a step begun later is cut that much past the allowance", n)
 	}
+	r := <-returned
 	slow.stall.Store(0)
-	// HALF THE STALL separates the outcomes with room on both sides: the
-	// allowance is a quarter of it, and a give-back left to its own bound
-	// takes all of it.
-	if across >= stall/2 {
-		t.Fatalf("a hold's give-back in flight when the teardown began went on "+
-			"%v past it, against an allowance of %v: the teardown waited out "+
-			"its store rather than the stop's allowance", across, allowance)
+	var spent *stopAllowanceSpent
+	if !r.cut || !errors.As(r.cause, &spent) {
+		t.Fatalf("a hold's give-back in flight when the teardown began ended %+v, want it cut "+
+			"by the stop's allowance: the teardown waited out its store", r)
+	}
+	if late := spent.deadline.Sub(called); late > budget {
+		t.Fatalf("a hold's give-back in flight when the teardown began was given until %v "+
+			"past the teardown's call, against an allowance of %v: its step began after the "+
+			"teardown did", late, budget)
 	}
 
-	if took := giveBack(); took >= stall/2 {
-		t.Fatalf("once the teardown had begun, a hold's give-back took %v "+
-			"against an allowance of %v: it waited out its store rather than "+
-			"the stop's allowance", took, allowance)
+	// BEGUN AFTER IT, the give-back is a step from its own start, and the
+	// in-flight one spent the allowance.
+	began := time.Now()
+	if r := giveBack(); !r.cut || !errors.As(r.cause, &spent) {
+		t.Fatalf("once the teardown had begun, a hold's give-back ended %+v, want it cut by "+
+			"the stop's allowance", r)
+	} else if late := spent.deadline.Sub(began); late > budget {
+		t.Fatalf("once the teardown had begun, a hold's give-back was given %v, against an "+
+			"allowance of %v", late, budget)
 	}
 }
 
@@ -296,8 +315,16 @@ type slowReleases struct {
 	stall   atomic.Int64
 	entered chan struct{}
 
-	mu  sync.Mutex
-	cut error
+	mu   sync.Mutex
+	cut  error
+	last stalledRelease
+}
+
+// stalledRelease is how a release the stall held ended: cut is whether its
+// context ended first, and cause that context's cause where it did.
+type stalledRelease struct {
+	cut   bool
+	cause error
 }
 
 func (s *slowReleases) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
@@ -310,9 +337,13 @@ func (s *slowReleases) Release(ctx context.Context, resource, owner string, epoc
 		case <-ctx.Done():
 			s.mu.Lock()
 			s.cut = ctx.Err()
+			s.last = stalledRelease{cut: true, cause: context.Cause(ctx)}
 			s.mu.Unlock()
 			return false, ctx.Err()
 		case <-time.After(d):
+			s.mu.Lock()
+			s.last = stalledRelease{}
+			s.mu.Unlock()
 		}
 	}
 	return s.Backend.Release(ctx, resource, owner, epoch)
@@ -325,6 +356,13 @@ func (s *slowReleases) cutBy() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cut
+}
+
+// lastStalled is how the last release the stall held ended.
+func (s *slowReleases) lastStalled() stalledRelease {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.last
 }
 
 // AN ADMISSION IS WITHDRAWN ON A SHARE NO GIVE-BACK BEFORE IT CAN SPEND.

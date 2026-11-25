@@ -650,7 +650,7 @@ var allowed = []Entry{
 	{File: "internal/engine/steerrun_internal_test.go", Func: "TestANoteFiledDuringTheReviewEndsTheReviewersRun", ExemptWait: 1, ExemptElapsed: 1, Piece: 22},
 	{File: "internal/engine/steerrun_internal_test.go", Func: "batchTake", ExemptWait: 1, ElapsedBound: 1, Piece: 22},
 	{File: "internal/engine/steerrun_internal_test.go", Func: "steerCase.awaitSteered", ExemptWait: 1, ExemptElapsed: 1, Piece: 22},
-	{File: "internal/engine/stopbudget_internal_test.go", Func: "TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance", ExemptWait: 1, ElapsedBound: 3, Piece: 18},
+	{File: "internal/engine/stopbudget_internal_test.go", Func: "TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance", ElapsedBound: 3, Piece: 18},
 	{File: "internal/engine/stopbudget_internal_test.go", Func: "TestAStopsLastEventsSpendNoneOfItsAllowance", ElapsedBound: 2, Piece: 18},
 	{File: "internal/engine/stopbudget_internal_test.go", Func: "TestAnAdmissionIsWithdrawnOnAShareNoGiveBackCanSpend", ElapsedBound: 1, Piece: 18},
 	{File: "internal/engine/stopbudget_internal_test.go", Func: "heldPublishes.Publish", ExemptWait: 1, Piece: 18},

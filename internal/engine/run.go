@@ -471,13 +471,16 @@ type Engine struct {
 
 	// teardownBegun is done from the moment the TEARDOWN begins
 	// ([Engine.tearingDown]), never the drain (whose wait for running turns
-	// the integration loop runs straight through); a give-back no stop's
-	// context reaches watches it to become a step of the stop
-	// ([Engine.stepOnceTornDown]). Made on first use under teardownOnce, so
-	// the zero engine a failed boot tears down has one.
+	// the integration loop runs straight through), its cause the instant it
+	// began ([teardownAt]). Made on first use under teardownOnce, so the zero
+	// engine a failed boot tears down has one.
 	teardownOnce  sync.Once
 	teardownBegun context.Context
-	beginTeardown context.CancelFunc
+	beginTeardown context.CancelCauseFunc
+
+	// giveBacks are the give-backs no stop's context reaches, made steps of
+	// the stop by the teardown's start itself ([Engine.stepOnceTornDown]).
+	giveBacks tornDownGiveBacks
 
 	// stopOnce makes the teardown [Engine.Stop] runs after the drain run once:
 	// every step runs against what the first closed, so a repeat warned that
@@ -2756,8 +2759,9 @@ func (e *Engine) stopping() *seat.StopBudget {
 }
 
 // tearingDown is the stop's allowance ([Engine.stopping]), and the moment the
-// teardown begins, said to every give-back no stop's context reaches
-// ([Engine.stepOnceTornDown]).
+// teardown begins: every give-back no stop's context reaches still in flight
+// becomes a step of the stop at this instant ([Engine.stepOnceTornDown]), and
+// the signal is said with the instant as its cause ([teardownAt]).
 //
 // The teardown and not the drain, because the drain's wait for running turns
 // has no bound and nothing ends the loops that hold until the teardown does: a
@@ -2766,17 +2770,37 @@ func (e *Engine) stopping() *seat.StopBudget {
 // too and begins it the same way.
 func (e *Engine) tearingDown() *seat.StopBudget {
 	b := e.stopping()
+	at := time.Now()
+	e.giveBacks.begin(b)
 	e.teardownSignal()
-	e.beginTeardown()
+	e.beginTeardown(teardownBegan{at: at})
 	return b
 }
 
 // teardownSignal is done once the teardown has begun ([Engine.tearingDown]).
 func (e *Engine) teardownSignal() context.Context {
 	e.teardownOnce.Do(func() {
-		e.teardownBegun, e.beginTeardown = context.WithCancel(context.Background())
+		e.teardownBegun, e.beginTeardown = context.WithCancelCause(context.Background())
 	})
 	return e.teardownBegun
+}
+
+// teardownBegan is the teardown signal's cause: the instant the teardown
+// began, which a bound counted from it reads ([teardownAt]) rather than the
+// moment its watcher was scheduled, later on a loaded node.
+type teardownBegan struct{ at time.Time }
+
+func (teardownBegan) Error() string { return "engine: the teardown has begun" }
+
+// teardownAt is the instant the teardown signalled by begun began, and false
+// where begun has not ended or ended without saying when: the zero instant,
+// which a bound counted from it has long passed.
+func teardownAt(begun context.Context) (time.Time, bool) {
+	var b teardownBegan
+	if !errors.As(context.Cause(begun), &b) {
+		return time.Time{}, false
+	}
+	return b.at, true
 }
 
 // stepOnceTornDown is ctx for a give-back no stop's context reaches — a
@@ -2784,36 +2808,99 @@ func (e *Engine) teardownSignal() context.Context {
 // call that ends it, which the caller defers until the give-back returns.
 //
 // The give-back is a step of the stop's allowance from the moment the teardown
-// begins (at once if it has) and is cancelled when the allowance runs out;
-// before that it keeps ctx's own bound. Counted from the teardown's start, not
-// the give-back's, because the teardown waits for it: one still running then
-// is time the stop spends (against a vanished store, a client's whole request
-// timeout), while one finished during the drain's wait spent nothing the stop
-// is owed.
+// begins (at once if it has) and is cut when the allowance runs out, its cause
+// a [stopAllowanceSpent]; before that it keeps ctx's own bound. Counted from
+// the teardown's start, not the give-back's, because the teardown waits for
+// it: one still running then is time the stop spends (against a vanished
+// store, a client's whole request timeout), while one finished during the
+// drain's wait spent nothing the stop is owed.
 func (e *Engine) stepOnceTornDown(ctx context.Context) (context.Context, func()) {
-	ctx, cancel := context.WithCancel(ctx)
-	begun := e.teardownSignal()
-	finished, watched := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(watched)
-		select {
-		case <-finished:
-			return
-		case <-begun.Done():
-		}
-		step, done := seat.StopStep(seat.WithStopBudget(context.Background(), e.stopping()))
-		defer done()
-		select {
-		case <-finished:
-		case <-step.Done():
-			cancel()
-		}
-	}()
+	ctx, cancel := context.WithCancelCause(ctx)
+	g := e.giveBacks.add(cancel, e.stopping)
 	return ctx, func() {
-		close(finished)
-		<-watched
-		cancel()
+		e.giveBacks.end(g)
+		cancel(nil)
 	}
+}
+
+// tornDownGiveBacks are the give-backs [Engine.stepOnceTornDown] holds. The
+// teardown makes each one in flight a step of the stop IN ITS OWN CALL
+// ([tornDownGiveBacks.begin]): a watcher woken by the signal began the step
+// when it was scheduled, so on a loaded node the cut came that much past the
+// allowance, every give-back's wake latency spent on the stop's clock.
+type tornDownGiveBacks struct {
+	mu       sync.Mutex
+	begun    *seat.StopBudget
+	inFlight map[*tornDownGiveBack]struct{}
+}
+
+// tornDownGiveBack is one give-back: what cuts it, and once it is a step of
+// the stop, what ends the step and stops the cut.
+type tornDownGiveBack struct {
+	cancel context.CancelCauseFunc
+	stop   func() bool
+	end    context.CancelFunc
+}
+
+// stopAllowanceSpent is the cause a give-back is cut with when the stop's
+// allowance runs out, naming the deadline its step was given.
+type stopAllowanceSpent struct{ deadline time.Time }
+
+func (s *stopAllowanceSpent) Error() string {
+	return "engine: the stop's allowance ran out at " + s.deadline.UTC().Format(time.RFC3339Nano)
+}
+
+// add holds a give-back cut by cancel, a step of the stop at once where the
+// teardown has begun.
+func (t *tornDownGiveBacks) add(cancel context.CancelCauseFunc, stopping func() *seat.StopBudget) *tornDownGiveBack {
+	g := &tornDownGiveBack{cancel: cancel}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.begun != nil {
+		g.arm(t.begun)
+		return g
+	}
+	if t.inFlight == nil {
+		t.inFlight = map[*tornDownGiveBack]struct{}{}
+	}
+	t.inFlight[g] = struct{}{}
+	return g
+}
+
+// begin makes every give-back in flight a step of b, from now.
+func (t *tornDownGiveBacks) begin(b *seat.StopBudget) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.begun != nil {
+		return
+	}
+	t.begun = b
+	for g := range t.inFlight {
+		g.arm(b)
+	}
+}
+
+// end lets g go: its step, where it was one, ends with it.
+func (t *tornDownGiveBacks) end(g *tornDownGiveBack) {
+	t.mu.Lock()
+	delete(t.inFlight, g)
+	stop, end := g.stop, g.end
+	t.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+	if end != nil {
+		end()
+	}
+}
+
+// arm makes g a step of b from now, cut when the allowance runs out. The
+// caller holds the set's lock.
+func (g *tornDownGiveBack) arm(b *seat.StopBudget) {
+	step, end := seat.StopStep(seat.WithStopBudget(context.Background(), b))
+	deadline, _ := step.Deadline()
+	g.end = end
+	g.stop = context.AfterFunc(step, func() { g.cancel(&stopAllowanceSpent{deadline: deadline}) })
 }
 
 // stopTTL is the lease TTL a stop's bounds are fractions of: this node's own,
