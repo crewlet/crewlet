@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -893,30 +892,29 @@ const ghLineAllocates = 256 << 10
 // is read and its cut call held, within [ghLineAllocates] whatever the
 // line's length.
 //
-// Not parallel: it reads the process's allocation count.
+// Not parallel: it reads the process's allocation count, the fewest bytes of
+// three reads ([allocationsOf]).
 //
 // Mutation: hold an output or a line whole, and this goes red.
 func TestGeminiReadingHoldsNoLine(t *testing.T) {
 	text := strings.Repeat("v", 64<<20)
 	call := ohCut(ohCall(1, "echo", `{"t":1}`, text))
 	head, tail, _ := strings.Cut(ghRound(`{"t":1}`, "PLACE"), "PLACE")
-	file := head + text + tail
-	read := func() (sandbox.SessionHoldings, error) {
-		return readGeminiHoldings(context.Background(), clArchive(t, [3]string{ghMember(ghSession), "0", file}),
-			ghSession, ghBegan, sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{call}, Resumer: "0.70.0"})
-	}
-	h, err := read()
+	archive, _ := io.ReadAll(clArchive(t, [3]string{ghMember(ghSession), "0", head + text + tail}))
+	ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{call}, Resumer: "0.70.0"}
+	var (
+		tarred bytes.Reader
+		h      sandbox.SessionHoldings
+		err    error
+	)
+	_, allocated := allocationsOf(func() {
+		tarred.Reset(archive)
+		h, err = readGeminiHoldings(context.Background(), &tarred, ghSession, ghBegan, ask)
+	})
 	if got := ohHeld(t, h, err, call); len(got) != 1 {
 		t.Fatalf("a 64 MiB answer: held %v; want the call", got)
 	}
-	tarred := clArchive(t, [3]string{ghMember(ghSession), "0", file})
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	_, _ = readGeminiHoldings(context.Background(), tarred, ghSession, ghBegan,
-		sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{call}, Resumer: "0.70.0"})
-	runtime.ReadMemStats(&after)
-	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > ghLineAllocates {
+	if allocated > ghLineAllocates {
 		t.Errorf("a 64 MiB line allocated %d bytes; want at most %d", allocated, ghLineAllocates)
 	}
 }

@@ -621,7 +621,8 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	b.WriteString(openCodeBridgeDeclared(req.MCPServers, ans, secs(times.call)))
 
 	// WHERE THE RUN BEGAN IN THE SESSION IT CONTINUES, recorded before the
-	// run takes it up: see [openCodeRunStart].
+	// run takes it up: see [openCodeRunStart]. Its end's pack trims by it.
+	b.WriteString(openCodeTrimStart + "\n")
 	if session.Continues {
 		b.WriteString(openCodeRunStart(paths, times, ans))
 	}
@@ -667,14 +668,19 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 // `order=desc` and `limit=1` rather than rest on a default, and reads only the
 // answer's cursor ([openCodeCursor]), never the message. The record is written
 // anew, `from` before `release`, and moved over the old whole, since its
-// reader stops at the release. Anything that fails writes no `from`, and the
-// capture names no start: "not known", never "the whole session".
+// reader stops at the release; the end's pack trims by it ([trimStartVar]).
+// Anything that fails writes no `from`: "not known", never "the whole session".
 func openCodeRunStart(paths Paths, times openCodeTimes, ans string) string {
 	rec := shellword.Quote(paths.SessionRecord())
 	next := shellword.Quote(paths.SessionRecord() + ".next")
-	return fmt.Sprintf(`if [ "$k" = yes ] && bounded start %[1]d e opencode api --server "$url" session.message.list --param sessionID="$sid" --param order=desc --param limit=1 > %[2]s 2> /dev/null; then rs=$(listcursor %[2]s); [ -z "$rs" ] || { printf 'id %%s\ncontinued %%s\nwhy %%s\nfrom %%s\nrelease %%s\n' "$sid" "$k" "$w" "$rs" "$v" > %[4]s && mv -f %[4]s %[3]s; }; fi; rm -f %[2]s %[4]s
-`, secs(times.sessionCall), ans, rec, next)
+	return fmt.Sprintf(`if [ "$k" = yes ] && bounded start %[1]d e opencode api --server "$url" session.message.list --param sessionID="$sid" --param order=desc --param limit=1 > %[2]s 2> /dev/null; then rs=$(listcursor %[2]s); [ -z "$rs" ] || { printf 'id %%s\ncontinued %%s\nwhy %%s\nfrom %%s\nrelease %%s\n' "$sid" "$k" "$w" "$rs" "$v" > %[4]s && mv -f %[4]s %[3]s && %[5]s=$rs; }; fi; rm -f %[2]s %[4]s
+`, secs(times.sessionCall), ans, rec, next, trimStartVar)
 }
+
+// openCodeTrimStart is the script's [trimStartVar] before its run records where
+// it began: 0 where the run began its session, unset where it continues one,
+// which cuts nothing until [openCodeRunStart] records the start.
+const openCodeTrimStart = trimStartVar + `=; [ "$k" != no ] || ` + trimStartVar + `=0`
 
 // openCodeAnswerFile is the file a run's script has a BOUNDED call to its
 // server ([openCodeBounded]) write its answer to, quoted, removed once read:
@@ -843,7 +849,7 @@ fi
 // openCodeCapture exports the session the run worked in (sid) once the run has
 // ended, after its leftover steers are cancelled and before its server stops,
 // to be continued in another box: [openCodePack] through the run's own server,
-// over [Paths.SessionCapture].
+// over [Paths.SessionCapture], trimmed by the box's release ([trimRelVar]).
 //
 // NEVER THE DATABASE: OpenCode keeps its logins in the same file, and a remote
 // box is never handed one. A box without gzip, or a failed export, is said on
@@ -852,23 +858,29 @@ fi
 // read that takes the session packs it on demand ([OpenCode.Pack]), so a hung
 // server costs the bound, never the session.
 func openCodeCapture(paths Paths, times openCodeTimes) string {
-	return openCodePack(paths, paths.SessionStaging(), paths.SessionCapture(), `--server "$url"`,
-		fmt.Sprintf("bounded export %d - ", secs(times.sessionCall)), false)
+	return bareReleaseShell(trimRelVar) + openCodePack(paths, paths.SessionStaging(), paths.SessionCapture(),
+		`--server "$url"`, fmt.Sprintf("bounded export %d - ", secs(times.sessionCall)), false)
 }
 
-// openCodePack exports sid through server, the run's own (`--server "$url"`)
-// or a pack on demand's private one (`--standalone`), gzips it in staged and
-// moves it over dest, its digest kept: ONE PACK for [openCodeCapture] and
-// [openCodePackNow]. An export holds settled messages, never the note inbox;
-// bounded, one empty or past [heldPlainMax] is refused before gzip.
-//
-// THE EXPORT GOES TO A FILE that gzip then reads: a pack on demand measures
-// it there, and the run's script calls through `bounded`, which a pipeline's
-// subshell would keep from an end request ([openCodeAnswerFile]). call
-// prefixes the export: bounded in the run's script, bare in a pack on demand,
-// under [sandbox.SessionPackWait], since OpenCode's WAL database lets it
-// complete beside a live, stopped, killed or writing server.
+// openCodePack is ONE PACK for [openCodeCapture] and [openCodePackNow], at the
+// bounds a take keeps ([trimAt]): [openCodePackAt].
 func openCodePack(paths Paths, staged, dest, server, call string, bounded bool) string {
+	return openCodePackAt(paths, staged, dest, server, call, bounded, trimAt)
+}
+
+// openCodePackAt exports sid through server, the run's own (`--server "$url"`)
+// or a pack on demand's private one (`--standalone`), trims it past at
+// ([trimStaged], [trimPacked]) and gzips it in staged, moved over dest with its
+// digest kept and its trim said ([trimMarked]); bounded, an export empty or
+// past [heldPlainMax] once trimmed is refused before gzip. It holds settled
+// messages, never the note inbox. THE EXPORT GOES TO A FILE that gzip then
+// reads: a pack on demand measures it there, and the run's script calls
+// through `bounded`, which a pipeline's subshell would keep from an end
+// request ([openCodeAnswerFile]). call prefixes the export: bounded in the
+// run's script, bare in a pack on demand, under [sandbox.SessionPackWait],
+// since OpenCode's WAL database lets it complete beside a live, stopped,
+// killed or writing server.
+func openCodePackAt(paths Paths, staged, dest, server, call string, bounded bool, at trimPoints) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
@@ -878,10 +890,12 @@ func openCodePack(paths Paths, staged, dest, server, call string, bounded bool) 
 		bound = fmt.Sprintf(`n=$(($(wc -c < %[1]s))) && { [ "$n" -gt 0 ] || { echo 'OpenCode exported it empty' > %[2]s; false; }; } && { [ "$n" -le %[3]d ] || { echo "its export is $n bytes, past the %[3]d a kept session's scrub reads" > %[2]s; false; }; } && `,
 			export, failed, heldPlainMax)
 	}
+	gz := fmt.Sprintf(`gzip -c < %s > %s`, export, capture)
 	line(`if command -v gzip > /dev/null 2>&1; then`)
-	line(`  rm -rf %s; if mkdir -p %s && %sopencode session export %s "$sid" < /dev/null > %s 2> %s && %sgzip -c < %s > %s && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(staged), q(staged), call, server, export, failed, bound, export, capture, packDigest(paths, "sid", staged),
-		capture, q(dest), failed)
+	line(`  rm -rf %s; if mkdir -p %s && %sopencode session export %s "$sid" < /dev/null > %s 2> %s && %s && %s%s && %s && %s && %s && mv -f %s %s; then packed=1; %s; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(staged), q(staged), call, server, export, failed, trimStaged(OpenCode{}, at, export), bound, gz,
+		trimPacked(OpenCode{}, at, export, capture, gz), packDigest(paths, "sid", staged), trimUnmark(dest),
+		capture, q(dest), trimMarked(dest), failed)
 	line(`  rm -rf %s`, q(staged))
 	line(`else`)
 	line(`  echo 'crewlet: this box has no gzip, so the session was not exported to be continued in another box' >&2`)

@@ -553,6 +553,9 @@ func TestARunWiredToNotesOnAClaudeCodeOlderThanItsFloorIsRefused(t *testing.T) {
 		} {
 			t.Run(tc.version, func(t *testing.T) {
 				p := executor.Paths{Home: t.TempDir()}
+				if err := os.MkdirAll(p.WorkDir(), 0o700); err != nil { // as a launch leaves it
+					t.Fatal(err)
+				}
 				script := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x", System: "be careful",
 					Steer: steerWiring}, p, ""))
 				args, stderr, err := claudeScriptRun(t, sh, script, tc.version)
@@ -725,8 +728,9 @@ func TestARunThatCarriesTheEnginesHooksNeverSwitchesHooksOn(t *testing.T) {
 // A RUN THAT CARRIES NO HOOK OF THE ENGINE'S LEAVES HOOKS AS THE REPOSITORY SETS
 // THEM: its settings hold the retention and no `disableAllHooks`, which would
 // switch the repository's own hooks on for nothing. Such a run is handed no
-// skills and wired to none, wired to its notes on a release that does not
-// read them, or handed advisory skills below the skills' floor.
+// skills and wired to none below the checkouts' floor (a box with the note
+// helper starts the checkouts' hook from it), wired to its notes on a release
+// that does not read them, or handed advisory skills below the skills' floor.
 //
 // Mutation: write disableAllHooks into every run's settings, or add the
 // plugin whatever the release, and a row goes red.
@@ -738,7 +742,7 @@ func TestARunThatCarriesNoHookOfTheEnginesLeavesHooksAsTheyAre(t *testing.T) {
 		skills  []sandbox.Skill
 		pinned  bool
 	}{
-		"handed no skills, wired to none":       {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, nil, true},
+		"handed no skills, wired to none":       {"2.1.309 (Claude Code)", sandbox.SteerWiring{}, nil, false},
 		"handed no skills, on an older release": {"2.1.150 (Claude Code)", sandbox.SteerWiring{}, nil, false},
 		"handed advisory skills, below the skills' floor": {"2.1.117 (Claude Code)", sandbox.SteerWiring{},
 			handedSkills()[1:], false},
@@ -1011,18 +1015,23 @@ func TestEveryPinnedSettingsCopyBlanksWhatMovesWhatAResumeHandsItsModel(t *testi
 // row goes red.
 func TestAReleaseThatTakesThePinIsHandedThePinnedCopy(t *testing.T) {
 	t.Parallel()
-	p := executor.Paths{Home: "/box"}
 	variants := []struct {
 		name string
 		req  sandbox.RunRequest
-		file string
+		file func(executor.Paths) string
 	}{
-		{"every run's", sandbox.RunRequest{Brief: "x"}, p.ClaudeSettings()},
+		{"every run's", sandbox.RunRequest{Brief: "x"}, executor.Paths.ClaudeSettings},
 		{"every run's, handed skills", sandbox.RunRequest{Brief: "x", Skills: handedSkills(), SkillLoads: skillWiring()},
-			p.ClaudeSettings()},
-		{"the notes'", sandbox.RunRequest{Brief: "x", Steer: steerWiring}, p.ClaudeNotesSettings()},
+			executor.Paths.ClaudeSettings},
+		{"the notes'", sandbox.RunRequest{Brief: "x", Steer: steerWiring}, executor.Paths.ClaudeNotesSettings},
 	}
 	forEachShell(t, func(t *testing.T, sh boxShell) {
+		// The work directory a launch leaves, which the checkouts' gate holds the
+		// home's CLAUDE.md in from 2.1.310; one per sh, the shells run at once.
+		p := executor.Paths{Home: t.TempDir()}
+		if err := os.MkdirAll(p.WorkDir(), 0o700); err != nil {
+			t.Fatal(err)
+		}
 		for _, v := range variants {
 			script := scriptOf(t, commandOf(claude(), v.req, p, ""))
 			for _, tc := range []struct {
@@ -1036,9 +1045,9 @@ func TestAReleaseThatTakesThePinIsHandedThePinnedCopy(t *testing.T) {
 			} {
 				t.Run(v.name+" on "+tc.version, func(t *testing.T) {
 					args, _ := scriptArgv(t, sh, script, tc.version)
-					want := v.file
+					want := v.file(p)
 					if tc.pinned {
-						want = pinnedOf(p, v.file)
+						want = pinnedOf(p, want)
 					}
 					if n := strings.Count(strings.Join(args, "\n"), "--settings"); n != 1 ||
 						after(args, "--settings") != want {
