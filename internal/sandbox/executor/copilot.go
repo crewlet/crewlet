@@ -89,6 +89,16 @@ var copilotFloor = sync.OnceValue(func() string {
 // each session's directory in.
 const copilotSessionState = "session-state"
 
+// copilotWorkspace and copilotCheckpoints are what a resume reads beside
+// events.jsonl for the checkpoint listing its system prompt carries: the count
+// of its compactions' checkpoints from the one, their index from the other
+// (measured on 1.0.114). Carried together or not at all: a resume without the
+// workspace resets the index and writes its next checkpoint over the first.
+const (
+	copilotWorkspace   = "workspace.yaml"
+	copilotCheckpoints = "checkpoints"
+)
+
 // Session is the session a Copilot run works in ([Harness.Session]): the one it
 // continues, or a new one under a UUID minted for it — `--session-id` starts a
 // session under a UUID it is handed — and, for a run that continues one, a
@@ -313,6 +323,10 @@ func copilotSessionGate(session Session, paths Paths, rewired bool) string {
 		"rm -rf " + q(held),
 		"mkdir -p " + q(held),
 		"mv " + q(from+"/events.jsonl") + " " + q(held+"/events.jsonl"),
+		"{ [ ! -f " + q(from+"/"+copilotWorkspace) + " ] || [ -L " + q(from+"/"+copilotWorkspace) + " ] || mv " +
+			q(from+"/"+copilotWorkspace) + " " + q(held+"/"+copilotWorkspace) + "; }",
+		"{ [ ! -d " + q(from+"/"+copilotCheckpoints) + " ] || [ -L " + q(from+"/"+copilotCheckpoints) + " ] || mv " +
+			q(from+"/"+copilotCheckpoints) + " " + q(held+"/"+copilotCheckpoints) + "; }",
 	}, " && ")
 	line(`s=%s k=yes w= h= d=`, q(session.ID))
 	line(`[ -s %s ] && h=1`, q(held+"/events.jsonl"))
@@ -419,10 +433,12 @@ func copilotLastRotated(v string) string {
 
 // copilotArchiveFormat is the layout a Copilot run packs its session in
 // ([copilotPack]) and the one it restores ([copilotSessionGate]): one gzipped
-// tar of one member named relative to the run's home,
-// `session-state/<session>/events.jsonl`, the conversation, which a resume
-// takes up whole on its own (measured on 1.0.114), a rotated one's too: its head
-// copies every record a resume reads ([copilotLastRotated]). A change is a new
+// tar of members named relative to the run's home, under
+// `session-state/<session>/`: events.jsonl, the conversation, which a resume
+// takes up whole on its own, a rotated one's too: its head copies every record
+// a resume reads ([copilotLastRotated]); and workspace.yaml and checkpoints/
+// where the session has them ([copilotWorkspace]), which every reader passes
+// over (measured on 1.0.114). A layout an older reader cannot read is a new
 // format.
 const copilotArchiveFormat = 1
 
@@ -500,13 +516,12 @@ func copilotCapture(paths Paths) string {
 }
 
 // copilotPack packs the session s names into at.staged and moves it over
-// at.dest, its digest kept ([packDigest]): its events.jsonl alone, never the
-// files a rotation left ([copilotArchiveFormat]). Copilot writes workspace.yaml
-// and checkpoints/ again on a resume (measured on 1.0.114).
-// NEVER session.db or its -journal, the sql tool's tables, so that tool's data
-// does not carry to a continued session: a binary SQLite file cannot pass the
-// archive's text scrub without being corrupted. A pack beside a working harness
-// is held to [claudeHeldTar]'s rule.
+// at.dest, its digest kept ([packDigest]): its events.jsonl, and its workspace.yaml and
+// checkpoints/ where they are ([copilotArchiveFormat]), never the files a
+// rotation left. NEVER session.db or its -journal, the sql tool's tables, so
+// that tool's data does not carry to a continued session: a binary SQLite file
+// cannot pass the archive's text scrub without being corrupted. A pack beside a
+// working harness is held to [claudeHeldTar]'s rule.
 func copilotPack(paths Paths, at packAt) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -516,6 +531,10 @@ func copilotPack(paths Paths, at packAt) string {
 	line(`if [ -s %s/%s/events.jsonl ]; then`, q(home), dir)
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
 	line(`    set -- %s/events.jsonl`, dir)
+	for _, beside := range []struct{ test, name string }{{"-f", copilotWorkspace}, {"-d", copilotCheckpoints}} {
+		line(`    if [ %[1]s %[2]s/%[3]s/%[4]s ] && [ ! -L %[2]s/%[3]s/%[4]s ]; then set -- "$@" %[3]s/%[4]s; fi`,
+			beside.test, q(home), dir, beside.name)
+	}
 	tar := fmt.Sprintf(`{ tar -czf %s -C %s "$@" < /dev/null > /dev/null 2> %s; t=$?; [ "$t" = 0 ] || { [ "$t" = 1 ] && grep -q 'changed as we read it' %s; }; }`,
 		q(at.staged+"/capture"), q(home), q(at.staged+"/error"), q(at.staged+"/error"))
 	if at.working {
