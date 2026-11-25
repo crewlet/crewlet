@@ -154,12 +154,12 @@ func (b *transcriptBuilder) geminiSessionWhole(ctx context.Context, r io.Reader)
 			return b.userPartsWhole(at, w.Content, geminiSessionContext)
 		}
 		return nil
-	}, func(n int64, _, _ []byte) error {
+	}, func(n int64) error {
 		physical++
 		if err := flush(); err != nil {
 			return err
 		}
-		return b.chatPastWhole(n, nil, nil)
+		return b.chatPastWhole(n)
 	})
 	if err == nil {
 		err = readErr
@@ -247,7 +247,7 @@ func geminiConfirmedWhole(_ context.Context, r io.Reader, takes []geminiAskedTak
 			}
 		}
 		return nil
-	}, func(int64, []byte, []byte) error { at++; return nil })
+	}, func(int64) error { at++; return nil })
 	if err == nil {
 		err = readErr
 	}

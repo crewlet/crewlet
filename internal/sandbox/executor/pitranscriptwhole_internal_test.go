@@ -81,7 +81,7 @@ func (b *transcriptBuilder) piRecordWhole(ctx context.Context, lines *bufio.Read
 			return b.linesPast("record", "lines")
 		}
 		return b.piLineWhole(line)
-	}, func(n int64, _, _ []byte) error {
+	}, func(n int64) error {
 		return b.unread(fmt.Sprintf("a line of %s of the harness's record is past the %s one read reads, "+
 			"and was not read", humanSize(n), humanSize(maxLineBytes)))
 	})
@@ -226,7 +226,7 @@ func piNotesHeldWhole(ctx context.Context, r io.Reader, takes []ServedTake) ([]s
 		nodes[e.ID] = n
 		held = e.ID
 		return nil
-	}, func(int64, []byte, []byte) error { return nil })
+	}, func(int64) error { return nil })
 	if err != nil {
 		return nil, fmt.Errorf("executor: reading which notes the Pi session holds: %w", err)
 	}

@@ -77,7 +77,7 @@ func (b *transcriptBuilder) grokRecordWhole(ctx context.Context, lines *bufio.Re
 			return b.linesPast("record", "lines")
 		}
 		return b.grokLineWhole(line)
-	}, func(n int64, _, _ []byte) error {
+	}, func(n int64) error {
 		return b.unread(fmt.Sprintf("a line of %s of the harness's record is past the %s one read reads, "+
 			"and was not read", humanSize(n), humanSize(maxLineBytes)))
 	})
@@ -290,7 +290,7 @@ func grokHeldWhole(r io.Reader) (map[string]bool, error) {
 			clear(pending)
 		}
 		return nil
-	}, func(size int64, _, _ []byte) error {
+	}, func(size int64) error {
 		if err := next(); err != nil {
 			return err
 		}
