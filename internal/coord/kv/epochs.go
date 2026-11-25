@@ -103,7 +103,7 @@ func openEpochs(ctx context.Context, hold, js jetstream.JetStream, cfg EpochsCon
 	// the previous tenure still writes under. A peer's aged bucket is reported,
 	// not refused ([reportRetention]), with the remedy that fixes it.
 	reportRetention(ctx, bucket.Bucket(), 0, facts)
-	held, read, err := bindHold(ctx, hold, bucket, cfg.Reach)
+	held, read, err := bindHold(ctx, hold, bucket, cfg.Reach, epochsHolding)
 	if err != nil {
 		return nil, err
 	}

@@ -693,6 +693,30 @@ func TestAConsentGrantGoesOnlyWithTheClientItWasMadeAs(t *testing.T) {
 	}
 }
 
+// A CONSENT PRODUCT WITH NO SIGN-IN CLIENT SAYS SO, not that nobody signed in:
+// the finding names the shared client, whose subject the Google page answers
+// with its client form; with a client and no grant, it waits for a sign-in.
+//
+// Mutation: drop the client check from IntegrationGrantFinding, and the first
+// case reads as a sign-in nobody made.
+func TestAConsentProductWithNoClientAsksForTheClientFirst(t *testing.T) {
+	t.Parallel()
+	g := newFakeGoogle(t)
+	a, _, _ := consentNodes(t, g)
+	for _, c := range []struct {
+		kind, client, subject string
+	}{
+		{"consent_no_client", "", SignInClientSubject},
+		{"consent_with_client", clientOne, ""},
+	} {
+		kind := consentProduct(t, c.kind, c.client, nil)
+		f, err := a.IntegrationGrantFinding(t.Context(), kind)
+		if err != nil || f == nil || f.Kind != integration.FindingCredentialMissing || f.Subject != c.subject {
+			t.Errorf("%s: finding = %+v, %v; want credential_missing on %q", c.kind, f, err, c.subject)
+		}
+	}
+}
+
 // grantFleet is the fleet store unreadGrants wraps.
 type grantFleet interface{ coord.Fleet }
 

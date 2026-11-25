@@ -139,6 +139,9 @@ func (f *FleetStore) CreateMailbox(ctx context.Context, rec coord.MailboxRecord)
 	if rec.Seat == uuid.Nil {
 		return coord.MailboxRecord{}, false, errors.New("coord/kv: a mailbox record needs a seat id")
 	}
+	if err := rec.Check(); err != nil {
+		return coord.MailboxRecord{}, false, err
+	}
 	raw, err := encodeMailbox(rec)
 	if err != nil {
 		return coord.MailboxRecord{}, false, err
@@ -157,6 +160,9 @@ func (f *FleetStore) CreateMailbox(ctx context.Context, rec coord.MailboxRecord)
 func (f *FleetStore) UpdateMailbox(ctx context.Context, rec coord.MailboxRecord) (coord.MailboxRecord, bool, error) {
 	if rec.Seat == uuid.Nil {
 		return coord.MailboxRecord{}, false, errors.New("coord/kv: a mailbox record needs a seat id")
+	}
+	if err := rec.Check(); err != nil {
+		return coord.MailboxRecord{}, false, err
 	}
 	if rec.Version == 0 {
 		// NO VERSION IS A LOST RACE: the client reads revision 0 as "must

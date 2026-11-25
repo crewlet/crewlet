@@ -83,7 +83,7 @@ A write is classed by what its target is when it is made: an edit to a version i
 
 ## Decisions
 
-A public or admin call is held for an administrator, who answers **Allow once** or **Deny** at a fresh sign-in, never a delegate ([ADR-0171](../../adr/0171-spend-public-and-admin-acts-are-held-for-an-administrator-never-a-delegate.md)); an allowed call is sent with the asking agent's own key. The administrator reads the exact request and the target as it is now; if the target changes before the answer, Allow once sends nothing and the agent is told to ask again. An unanswered ask lapses after a day. Every call, ask, answer and outcome is in the access log.
+A public or admin call is held for an administrator, who answers **Allow once** or **Deny** at a fresh sign-in, never a delegate ([ADR-0171](../../adr/0171-spend-public-and-admin-acts-are-held-for-an-administrator-never-a-delegate.md)); an allowed call is sent with the asking agent's own key. The administrator reads the exact request and the target as it is now; if the target changes before the answer, Allow once sends nothing and the agent is told to ask again. An unanswered ask lapses after a day. Every call, ask, answer and outcome is in the access log. A call that failed before its request left (its lease, the target's read again, its context's end) is recorded as failed for that cause and told to the agent as not sent; a write whose request got no answer from Apple is recorded as an unknown outcome, and such a reply is reported `unknown`, to check on the review.
 
 ## Limits
 

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/words"
@@ -32,6 +33,29 @@ var accountAdmin = []string{
 	"iam.serviceAccounts.enable", "iam.serviceAccounts.get", "iam.serviceAccounts.getIamPolicy",
 	"iam.serviceAccounts.list", "iam.serviceAccounts.setIamPolicy",
 }
+
+// probeParts are the parts of the Test, in the order it runs them, which a
+// refusal lists up to the one that failed ([setup.Parts]).
+//
+//nolint:gochecknoglobals // an immutable list, not state
+var probeParts = []string{
+	"Federation", "Acting as the provisioner", "Identity project's APIs", "Provisioner's grants",
+	"Identity project's accounts", "Prepared projects",
+}
+
+// The index of each of [probeParts].
+const (
+	atFederation = iota
+	atImpersonation
+	atAPIs
+	atGrants
+	atAccounts
+	atProjects
+)
+
+// offeredLabel names the projects a working connection offers agents, as the
+// Test result and the setup steps say it.
+const offeredLabel = "Agents may use"
 
 // defaultAccountQuota is Google's default Service Account Count per project,
 // which the Test button reports the identity project's accounts against.
@@ -64,19 +88,22 @@ func Probe(httpClient *http.Client) setup.Probe {
 func probeCheck(
 	ctx context.Context, company string, value func(string) string, hc *http.Client, clk *googleauth.Clock,
 ) (setup.Verdict, error) {
-	email, provider, key := strings.TrimSpace(value("provisioner")), strings.TrimSpace(value("provider")),
+	project, provider, key := strings.TrimSpace(value("identity_project")), strings.TrimSpace(value("provider")),
 		strings.TrimSpace(value("federation_key"))
 	switch {
-	case email == "":
-		return setup.Verdict{}, setup.Unusable("Enter the provisioner service account's email to test the connection.")
+	case project == "":
+		return setup.Verdict{}, setup.Unusable("Enter the identity project's ID to test the connection.")
+	case !config.GoogleCloudIdentityProject(project):
+		return setup.Verdict{}, setup.Unusable("The Identity project ID is not a Google Cloud project ID.")
 	case key == "":
-		return setup.Verdict{}, setup.Unusable("Save the provisioner first: that mints the federation key the " +
+		return setup.Verdict{}, setup.Unusable("Open the form again so Crewlet makes the federation key the " +
 			"provider holds the public half of.")
 	case provider == "":
 		return setup.Verdict{}, setup.Unusable("Paste the provider name the Cloud Shell block prints to test it.")
 	}
 	client, err := NewClient(googleauth.Options{
-		Company: company, Provisioner: email, Provider: provider, FederationKey: key, HTTP: hc,
+		Company: company, Provisioner: config.GoogleCloudProvisioner(project), Provider: provider,
+		FederationKey: key, HTTP: hc,
 	})
 	if err != nil {
 		return setup.Verdict{}, setup.Unusable(googleauth.Sentence(err) + ".")
@@ -92,33 +119,49 @@ func probeCheck(
 	identity := client.IdentityProject()
 	enabled, err := client.EnabledServices(ctx, identity)
 	if err != nil {
-		return readRefusal(ctx, err, "the APIs enabled on "+identity,
+		return readRefusal(ctx, err, atAPIs, "the APIs enabled on "+identity,
 			"Grant the provisioner Service Usage Viewer on "+identity+" (the Cloud Shell block does)"), nil
 	}
 	if missing := absent(identityAPIs, enabled); len(missing) > 0 {
 		return setup.Refused("Crewlet reaches the provisioner, but "+identity+" lacks an API it needs.",
-			setup.Fact{Label: "Not enabled", Value: words.And(unquoted(missing))},
-			setup.Warning{Action: "Enable " + pronoun(len(missing)) + " on the identity project's APIs page, then test again."}), nil
+			append(setup.Parts(probeParts, atAPIs),
+				setup.Fact{Label: "Not enabled", Value: words.And(unquoted(missing))},
+				setup.Warning{Action: "Enable " + pronoun(len(missing)) + " on the identity project's APIs page, " +
+					"or run the Cloud Shell block again, then test again."})...), nil
 	}
-	held, err := client.TestProjectPermissions(ctx, identity, accountAdmin)
+	held, err := client.TestProjectPermissions(ctx, identity, append(slices.Clone(accountAdmin), EnablerPermission))
 	if err != nil {
-		return readRefusal(ctx, err, "its own permissions on "+identity, ""), nil
+		return readRefusal(ctx, err, atGrants, "its own permissions on "+identity, adminFix(identity)), nil
 	}
 	if missing := absent(accountAdmin, set(held)); len(missing) > 0 {
 		return setup.Refused("The provisioner cannot manage service accounts in "+identity+".",
-			setup.Fact{Label: "It lacks", Value: words.And(unquoted(missing))},
-			setup.Warning{Action: "Grant it Service Account Admin on that project, then test again."}), nil
+			append(setup.Parts(probeParts, atGrants),
+				setup.Fact{Label: "It lacks", Value: words.And(unquoted(missing))},
+				setup.Warning{Action: "Grant it Service Account Admin on that project, or run the Cloud Shell block " +
+					"again, then test again."})...), nil
+	}
+	if !slices.Contains(held, EnablerPermission) {
+		return setup.Refused("The provisioner cannot turn on a Google product's APIs in "+identity+".",
+			append(setup.Parts(probeParts, atGrants),
+				setup.Fact{Label: "It lacks", Value: EnablerPermission},
+				setup.Warning{Action: "Run the Cloud Shell block again, once: it grants " + EnablerRoleID +
+					", and turning on another Google product then needs no block."})...), nil
 	}
 	accounts, err := client.ServiceAccounts(ctx)
 	if err != nil {
-		return readRefusal(ctx, err, "the accounts of "+identity, ""), nil
+		return readRefusal(ctx, err, atAccounts, "the accounts of "+identity, adminFix(identity)), nil
 	}
 	found, err := discover(ctx, client)
 	if err != nil {
-		return readRefusal(ctx, err, "its projects",
+		return readRefusal(ctx, err, atProjects, "its projects",
 			"Grant the provisioner its three Project IAM Admin conditions on each project agents may use"), nil
 	}
 	return works(client, accounts, found), nil
+}
+
+// adminFix is the fix for a read Service Account Admin on identity allows.
+func adminFix(identity string) string {
+	return "Grant the provisioner Service Account Admin on " + identity + " (the Cloud Shell block does)"
 }
 
 // reachRefusal is the verdict for a provisioner Crewlet cannot reach, and
@@ -134,34 +177,40 @@ func reachRefusal(ctx context.Context, c *Client, company string, err error) set
 	}
 	switch {
 	case staged && st.Stage == googleauth.StageFederation:
-		return setup.Refused("Google's Security Token Service refused Crewlet's federation token.", said,
-			setup.Warning{Action: "Run the Cloud Shell block again so the provider holds Crewlet's current public " +
-				"key and accepts the subject `" + googleauth.Subject(company) + "`. Check the provider name is the one the block printed."})
+		return setup.Refused("Google's Security Token Service refused Crewlet's federation token.",
+			append(setup.Parts(probeParts, atFederation), said,
+				setup.Warning{Action: "Run the Cloud Shell block again so the provider holds Crewlet's current public " +
+					"key and accepts the subject `" + googleauth.Subject(company) + "`. Check the provider name is the one " +
+					"the block printed."})...)
 	case staged && st.Stage == googleauth.StageImpersonation:
-		return setup.Refused("Federation works, but Crewlet cannot act as "+c.Provisioner()+".", said,
-			setup.Warning{Action: "Grant `" + googleauth.Principal(c.auth.Provider(), company) + "` Workload Identity User on that service " +
-				"account. The Cloud Shell block does. Enable the IAM Service Account Credentials API on " +
-				c.IdentityProject() + "."})
+		return setup.Refused("Federation works, but Crewlet cannot act as "+c.Provisioner()+".",
+			append(setup.Parts(probeParts, atImpersonation), said,
+				setup.Warning{Action: "Grant `" + googleauth.Principal(c.auth.Provider(), company) + "` Workload Identity " +
+					"User on that service account. The Cloud Shell block does. Enable the IAM Service Account " +
+					"Credentials API on " + c.IdentityProject() + "."})...)
 	default:
 		return setup.Unreachable("Crewlet could not sign in as the provisioner.", setup.ErrorOf(err))
 	}
 }
 
 // readRefusal is the verdict for a read the provisioner was refused or that
-// failed, with fix where the read names one.
-func readRefusal(ctx context.Context, err error, what, fix string) setup.Verdict {
+// failed at part, with fix where the read names one. A read Google did not
+// answer fails no part: only the parts before it are said.
+func readRefusal(ctx context.Context, err error, part int, what, fix string) setup.Verdict {
+	passed := setup.Parts(probeParts[:part], -1)
 	if errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-		return setup.Unreachable("Google did not answer in time while Crewlet read " + what + ".")
+		return setup.Unreachable("Google did not answer in time while Crewlet read "+what+".", passed...)
 	}
 	summary := "Crewlet reaches the provisioner, but could not read " + what + "."
 	api, ok := errors.AsType[*googleauth.APIError](err)
 	if !ok || api.Status >= http.StatusInternalServerError || api.Status == http.StatusTooManyRequests {
-		return setup.Unreachable(summary, setup.ErrorOf(err))
+		return setup.Unreachable(summary, append(passed, setup.ErrorOf(err))...)
 	}
+	failed := append(setup.Parts(probeParts, part), setup.SaidBy("Google", api.Message))
 	if api.Status == http.StatusForbidden && fix != "" {
-		return setup.Refused(summary, setup.SaidBy("Google", api.Message), setup.Warning{Action: fix + ", then test again."})
+		return setup.Refused(summary, append(failed, setup.Warning{Action: fix + ", then test again."})...)
 	}
-	return setup.Refused(summary, setup.SaidBy("Google", api.Message))
+	return setup.Refused(summary, failed...)
 }
 
 // works is the Test button's verdict for a connection that works: who it acts
@@ -183,7 +232,7 @@ func works(c *Client, accounts []ServiceAccount, found discovery) setup.Verdict 
 		for _, id := range offered {
 			listed = append(listed, words.Said(cmpName(names[id], id)))
 		}
-		details = append(details, setup.Fact{Label: "Agents may use", Value: words.And(listed)})
+		details = append(details, setup.Fact{Label: offeredLabel, Value: words.And(listed)})
 	}
 	for _, p := range found {
 		for _, problem := range p.Problems {
@@ -194,7 +243,7 @@ func works(c *Client, accounts []ServiceAccount, found discovery) setup.Verdict 
 	}
 	var foreign []string
 	for _, a := range accounts {
-		if a.Email != c.Provisioner() && !strings.HasPrefix(a.Email, accountPrefix) {
+		if !crewletsOwn(a.Email) {
 			foreign = append(foreign, a.Email)
 		}
 	}

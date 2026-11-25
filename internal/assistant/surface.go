@@ -562,6 +562,9 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 	}
 	step := s.t.stepStart(tool, args, s.cardOptions(ctx), request, pattern)
 	permitted, status, size := cards.MayOpen(link.Screen, s.t.person), 0, 0
+	// THE MODEL READS THE TABLE'S OWN WORDS for the link; the card may be
+	// named by the record, which is somebody's words and stays off the model.
+	said := link.Label
 	if probe != nil {
 		resp, err := s.t.svc.dispatcher.Do(ctx, s.t.read, *probe)
 		switch {
@@ -575,6 +578,9 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 			return toolloop.ToolResult{}, errGrantEnded
 		default:
 			permitted, status, size = cards.Permitted(resp.Status), resp.Status, len(resp.Body)
+			if title := catalog.OpenedTitle(link.Screen, resp.Body); permitted && title != "" {
+				link.Label = title
+			}
 		}
 	}
 	summary := "Ready to open"
@@ -582,15 +588,25 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 		summary = "Not permitted"
 	}
 	s.t.stepEnd(ctx, step, wire.StepDone, summary, nil, status, size)
-	s.t.emitCard(ctx, cards.OpenInApp(link, permitted), nil)
+	card := cards.OpenInApp(link, permitted)
+	names, setup := cards.Names(link.Screen, catalog.LinkParams(args))
+	if permitted && s.t.openedAsked(append(names, link.Label), setup) {
+		card.OpenInApp.Asked = true
+	}
+	s.t.emitCard(ctx, card, nil)
 	if !permitted {
 		return toolloop.ToolResult{Output: "The person may not open that, or it does not " +
 			"exist. Say you cannot open it for them."}, nil
 	}
+	if card.OpenInApp.Asked {
+		return toolloop.ToolResult{Output: "The person asked for " + said + ", so their " +
+			"dashboard opens it now; say it is open. It does not answer their question: " +
+			"still state in your reply the facts they asked for."}, nil
+	}
 	// A LINK IS NOT AN ANSWER: the model is told so where it reads that the
 	// link was shown, since "I've added a link above" was once a whole reply
 	// to a question the turn had read the facts for.
-	return toolloop.ToolResult{Output: "A link to " + link.Label + " is shown to the " +
+	return toolloop.ToolResult{Output: "A link to " + said + " is shown to the " +
 		"person. It does not answer their question: still state in your reply the facts " +
 		"they asked for."}, nil
 }

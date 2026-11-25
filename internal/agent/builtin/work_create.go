@@ -36,9 +36,11 @@ func (t *createWorkItem) Description() string {
 		"goes straight to their queue; leave it empty and it goes to the " +
 		"project's default assignee, or lands in triage — where the " +
 		"team's lead is told about it — when the project names none. The " +
-		"answer's `assignee` says which. Name " +
+		"answer's `assignee` says which. Work you file for yourself wakes " +
+		"nobody, your lead included. Name " +
 		"`ask` to file the item AS a question to that person — the title " +
-		"is the question — with `decision` when they have to choose."
+		"is the question — with `decision` when they have to choose; do so " +
+		"whenever the work waits on somebody's decision, your lead's too."
 }
 
 func (t *createWorkItem) Parameters() map[string]any {

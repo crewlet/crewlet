@@ -178,6 +178,8 @@ func fakeStore() {
 		fakeDeviceLogin()
 	case "store-status":
 		fakeStatus()
+	case "store-plan":
+		fakePlanRead()
 	case "store-list":
 		for _, c := range read() {
 			fmt.Println(c["id"])

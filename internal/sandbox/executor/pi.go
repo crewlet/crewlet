@@ -110,9 +110,8 @@ func (Pi) Command(req sandbox.RunRequest, session Session, paths Paths, configPa
 
 // piExtensionMark is the type of the line a run's script prints before its
 // harness starts ([piScript]): the run loads the extension, which says it ran
-// ([piArmedType]), and with it the cap the line names, 0 for none. A stream
-// that has the line and lacks the extension's word ran without the seat's tools,
-// notes or cap ([piEvents.Result]).
+// ([piArmedType]). A stream that has the line and lacks the extension's word
+// ran without the seat's tools, notes or cap ([piEvents.Result]).
 const piExtensionMark = "crewlet.extension"
 
 // piScript is a Pi run's script, giving its harness stop to go once asked to
@@ -163,7 +162,7 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 	b.WriteString(piReleaseParse())
 	b.WriteString(piReleaseRefusal())
 	if extension != "" {
-		line(`printf '%%s\n' %s`, q(piMarkLine(req.Limits.MaxTurns)))
+		line(`printf '%%s\n' %s`, q(piMarkLine()))
 	}
 	b.WriteString(piHeader)
 	line(`set --`)
@@ -188,10 +187,8 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 	return b.String()
 }
 
-// piMarkLine is the [piExtensionMark] line for a cap of turns.
-func piMarkLine(turns int) string {
-	return fmt.Sprintf(`{"type":%q,"cap":%d}`, piExtensionMark, max(turns, 0))
-}
+// piMarkLine is the [piExtensionMark] line.
+func piMarkLine() string { return fmt.Sprintf(`{"type":%q}`, piExtensionMark) }
 
 // piReleaseRead reads the box's `pi --version` once, as v.
 const piReleaseRead = "v=$(pi --version < /dev/null 2> /dev/null)\n"

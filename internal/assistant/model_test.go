@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
 
 // modelFailure is a classified failure of the entry `assistant`.
@@ -52,6 +53,13 @@ func TestEveryModelFailureIsToldInItsOwnWords(t *testing.T) {
 		"a spent plan, to an administrator": {err: modelFailure(llm.KindRateLimit, errors.New("spent"), reset),
 			admin: true, code: wire.ErrorModelBusy, message: "usage limit", hint: "assign it another model",
 			retryable: true, wait: 1800},
+		"every member of its fleet spent, to an administrator": {err: &chain.Error{
+			Attempted: []string{"a", "b"}, Fleet: "opus",
+			Failures: []error{modelFailure(llm.KindRateLimit, errors.New("spent"), reset.Add(time.Hour)),
+				modelFailure(llm.KindRateLimit, errors.New("spent"), reset)},
+			Err: modelFailure(llm.KindRateLimit, errors.New("spent"), reset)},
+			admin: true, code: wire.ErrorModelBusy, message: "usage limit",
+			hint: "add a model on another sign-in to the fleet", retryable: true, wait: 1800},
 		"a timeout": {err: modelFailure(llm.KindTimeout, errors.New("ran out of time"), time.Time{}),
 			code: wire.ErrorModelTimeout, message: "took too long", hint: "narrower question",
 			retryable: true},
@@ -93,6 +101,9 @@ func TestEveryModelFailureIsToldInItsOwnWords(t *testing.T) {
 			}
 			if tc.hint == "" && got.Hint != "" || !strings.Contains(got.Hint, tc.hint) {
 				t.Errorf("hint = %q, want one naming %q", got.Hint, tc.hint)
+			}
+			if strings.Contains(tc.hint, "fleet") && strings.Contains(got.Hint, "assign it another model") {
+				t.Errorf("a fleet's limit is told to assign another model: %q", got.Hint)
 			}
 			if !tc.admin && strings.Contains(got.Hint, "crewlet llm") {
 				t.Errorf("a person who is not an administrator was handed a command: %q", got.Hint)

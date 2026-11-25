@@ -307,6 +307,9 @@ type NodeRuntime interface {
 	// given, which the servers' answers carry.
 	MCPSignIns() mcpapi.SignIns
 	MCPGrants() queries.MCPGrantReader
+	// OAuthClients reads the OAuth clients a person registered at their
+	// vendors, which the redirect notice is read off; nil raises none.
+	OAuthClients() queries.OAuthClientReader
 	// OAuthLanding finishes a sign-in where the vendor sends the person back
 	// (`GET /webhooks/mcp-oauth`) and publishes the engine's client
 	// metadata document; nil answers both as an engine that finishes none.

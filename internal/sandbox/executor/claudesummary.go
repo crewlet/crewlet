@@ -2,13 +2,11 @@ package executor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
+	"io"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // claudeSummaryReleases are the Claude Code releases this build pins its
@@ -91,45 +89,43 @@ func (r *claudeSummaryReading) reading(ctx context.Context, box sandbox.Sandbox,
 }
 
 // claudeSummaryLine is the summary the line of file at offset at, size bytes
-// with its break, holds: read in the box alone, checked by the walk's own
-// reader to be a summary's record, and its message's content, a string.
+// with its break, holds: streamed from the box ([sandbox.Sandbox.OpenRange])
+// through the walk's own reader in one pass, which checks it is a summary's
+// record and reads its message's content, a string, as it passes
+// ([threadReader.Summarizing]). It holds no line, only that text, itself
+// held to [summaryReadMaxBytes].
 func claudeSummaryLine(ctx context.Context, box sandbox.Sandbox, file string, at, size int64) (string, error) {
 	if size > claudeSummaryLineMaxBytes {
 		return "", errSummaryPast
 	}
-	res, err := box.Exec(ctx, fmt.Sprintf("tail -c +%d %s | head -c %d", at+1, shellword.Quote(file), size),
-		sandbox.ExecOptions{})
-	switch {
-	case err != nil:
-		return "", fmt.Errorf("the summary's line could not be read: %w", err)
-	case res.ExitCode != 0:
-		return "", fmt.Errorf("the summary's line could not be read: %s", firstLine(res.Stderr,
-			transcriptDetailLimit))
-	case int64(len(res.Stdout)) != size || !strings.HasSuffix(res.Stdout, "\n"):
-		return "", errors.New("the summary's line is not where the walk read it: the thread changed under the read")
-	}
-	l, err := newThreadReader(strings.NewReader(res.Stdout), size).Next(ctx)
+	body, _, err := box.OpenRange(ctx, file, at, size)
 	if err != nil {
+		return "", fmt.Errorf("the summary's line could not be read: %w", err)
+	}
+	defer func() { _ = body.Close() }()
+	var text summaryText
+	r := newThreadReader(body, size)
+	r.Summarizing(&text)
+	l, err := r.Next(ctx)
+	moved := errors.New("the summary's line is not where the walk read it: the thread changed under the read")
+	refused, isRefused := errors.AsType[*threadLineError](err)
+	switch {
+	case errors.Is(err, io.EOF), isRefused && int64(refused.Size) != size, err == nil && int64(l.Size) != size:
+		return "", moved
+	case err != nil && !isRefused && !errors.Is(err, errThreadBound) && ctx.Err() == nil:
+		return "", fmt.Errorf("the summary's line could not be read: %w", err)
+	case err != nil:
 		return "", fmt.Errorf("the summary's line no longer reads as a record: %w", err)
 	}
 	summary, _ := l.IsCompactSummary()
 	if meta, _ := l.IsMeta(); l.Head.Type != recordUser || !summary || meta {
 		return "", errors.New("the summary's line is no longer a summary's record: the thread changed under the read")
 	}
-	var rec struct {
-		Message json.RawMessage `json:"message"`
-	}
-	var msg struct {
-		Content json.RawMessage `json:"content"`
-	}
-	var text string
-	line := []byte(strings.TrimSuffix(res.Stdout, "\n"))
-	if wireAlias(line, &rec) != nil || !wireObject(rec.Message) || wireAlias(rec.Message, &msg) != nil ||
-		len(msg.Content) == 0 || msg.Content[0] != '"' || wireDecode(msg.Content, &text) != nil {
+	switch {
+	case !text.set:
 		return "", errors.New("the summary's content is no text, the one shape this read holds")
-	}
-	if len(text) > summaryReadMaxBytes {
+	case text.past:
 		return "", errSummaryPast
 	}
-	return text, nil
+	return string(text.buf), nil
 }

@@ -34,7 +34,7 @@ func TestACoordinationValueIsHeldToWhatItsLeadersReadCarriesBackAcrossALink(t *t
 	if err != nil {
 		t.Fatalf("open the bucket through the leaf: %v", err)
 	}
-	b := settled(client, raw, AcrossLink, undeclaredHolding)
+	b := settled(client, raw, AcrossLink, runsHolding)
 	room := coord.MaxValueBytes
 	if want := jsapi.MaxReadable(client.Conn().MaxPayload()) - kvHeaderBytes; room != want {
 		t.Fatalf("a value is held to %d bytes, and a leaf's link carries back one of %d", room, want)
@@ -88,7 +88,7 @@ func TestACreateRefusedForItsValuesSizeWasNeverSent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the bucket through the leaf: %v", err)
 	}
-	b := settled(client, raw, AcrossLink, undeclaredHolding)
+	b := settled(client, raw, AcrossLink, runsHolding)
 	_, err = createKey(ctx, client, b, "too-large", make([]byte, coord.MaxValueBytes+1), nil)
 	if !errors.Is(err, coord.ErrValueTooLarge) || errors.Is(err, errCreateUnanswered) {
 		t.Fatalf("a create a byte past the bound = %v, want coord.ErrValueTooLarge and not a "+

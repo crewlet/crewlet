@@ -6,20 +6,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"unicode"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
 // chatSummaryLines is a transcript's own reading of a Gemini CLI or Qwen Code
-// chat file ([chatReading]), handed its lines one at a time by the count's walk
-// of the file ([chatCopyCount]), so the newest summary is read in that one walk
-// by the decode the transcript reads it by. Its builder is its own, holding
-// none of what it reads.
+// chat file ([chatReading]), following the count's walk of the file
+// ([chatCopyCount]) or handed a record by a walk for notes, so the newest
+// summary is read in that one walk by the decode the transcript reads it by.
+// Its builder is its own, holding none of what it reads.
 type chatSummaryLines struct {
 	chatReading
 	raw bytes.Reader
 	// err is what ended the reading, after which it reads no line.
 	err error
+	// next, where not nil, is told each line before it is read, as the
+	// count's walk took it (its white space trimmed), a blank or a torn last
+	// one never ([chatSummaryLines.follow]).
+	next func(line []byte)
 }
 
 // errChatSummaryLines is a chat file past the lines and elements a read reads.
@@ -40,6 +46,39 @@ func (c *chatSummaryLines) take(ctx context.Context, raw []byte) {
 	c.raw.Reset(raw)
 	c.lines.Reset(&c.raw)
 	_, c.err = c.line(ctx)
+}
+
+// follow reads r, the chat file as the count's walk hands it on
+// ([chatFileFollowed]), to its end or the reading's: its last line, one with
+// no break, unread, as the walk passes a torn one over.
+func (c *chatSummaryLines) follow(ctx context.Context, r io.Reader) {
+	c.lines.Reset(r)
+	c.tornUnread = true
+	for c.err == nil {
+		if line, ok := nextWholeLine(c.lines); ok && c.next != nil {
+			c.next(line)
+		}
+		var ended bool
+		if ended, c.err = c.line(ctx); ended {
+			return
+		}
+	}
+}
+
+// nextWholeLine is the line lines reads next as a whole-line walk hands it
+// on ([codexLines]), without reading it: within [lineFormMaxBytes] trimmed of
+// its white space, past it its first [lineFormMaxBytes] and one more, which
+// no whole form holds; none for a blank line, or a last one with no break.
+func nextWholeLine(lines *bufio.Reader) ([]byte, bool) {
+	ahead, _ := lines.Peek(lineFormMaxBytes + 1)
+	var line []byte
+	switch i := bytes.IndexByte(ahead, '\n'); {
+	case i >= 0:
+		line = bytes.TrimSpace(ahead[:i])
+	case len(ahead) > lineFormMaxBytes:
+		line = bytes.TrimLeftFunc(ahead, unicode.IsSpace)
+	}
+	return line, len(line) > 0
 }
 
 func (*chatSummaryLines) own(*valueText) error { return nil }
@@ -130,16 +169,17 @@ type geminiSnapRecord struct {
 func newGeminiSummaryReading(g *geminiSummaries) *geminiSummaryReading {
 	r := &geminiSummaryReading{g: g}
 	r.setup(r)
+	r.next = r.forms
 	return r
 }
 
-// take reads raw, the file's next line ([chatSummaryLines.take]), once the
-// record held before it is replayed, a summary where raw is its reply.
-func (r *geminiSummaryReading) take(ctx context.Context, raw []byte) {
-	r.end(geminiCompressionAck.holds(raw))
-	r.opens = r.set && geminiCompressionUser.holds(raw)
-	r.set = geminiCompressionSet.holds(raw)
-	r.chatSummaryLines.take(ctx, raw)
+// forms judges line, the file's next, by a compression's forms before it is
+// read: the record held before it replayed, a summary where line is its
+// reply; whether line opens as a summary, after its sync's `$set`.
+func (r *geminiSummaryReading) forms(line []byte) {
+	r.end(geminiCompressionAck.holds(line))
+	r.opens = r.set && geminiCompressionUser.holds(line)
+	r.set = geminiCompressionSet.holds(line)
 }
 
 // end replays the record held, a summary where summary says so: the file's

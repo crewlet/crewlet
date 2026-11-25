@@ -74,5 +74,7 @@
 // held call records its allow before it acts, and acts only when that allow
 // landed as its one answer; every way an allowed call ends records one
 // outcome. Everything done under an act's lease is cut at growth.ApplyBound,
-// which the lease outlives; a write cut there is an unknown outcome.
+// which the lease outlives; a write cut there is an unknown outcome. A request
+// that never left, and an act whose write never did, fail as their cause did,
+// never as an unknown outcome.
 package appstoreconnect

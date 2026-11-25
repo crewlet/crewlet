@@ -66,8 +66,8 @@ func Status(err error) int {
 }
 
 // ConfigError is a connection input that would fail every call with a
-// misleading refusal. Sentence names the document's field to change, in words
-// a person reads as they are, with no package's name.
+// misleading refusal. Sentence names the field to change as the setup form
+// labels it, in words a person reads as they are: no config path, no package.
 type ConfigError struct {
 	Sentence string
 	// Err is what the input's fault is an instance of, such as
@@ -133,6 +133,11 @@ func Reject(err error) error {
 // ErrUnreached is a call that got no answer from Google: a failure a wait
 // clears.
 var ErrUnreached = errors.New("no answer from Google")
+
+// ErrUnsent is a call that failed before its request left for Google: its
+// body could not be encoded, its request built, or its context ended first.
+// Nothing reached Google, whatever the call would have changed.
+var ErrUnsent = errors.New("the request was not sent to Google")
 
 // ErrTooLarge is an answer longer than one call reads (8 MiB): a narrower
 // request is the fix.

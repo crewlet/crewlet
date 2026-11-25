@@ -173,40 +173,27 @@ func TestARecordedGrowthIdentityIsNotAnOrphan(t *testing.T) {
 	}
 }
 
-// THE COMPANY'S READER IS ITS OWN, AND ONLY ITS OWN SUBJECT ACTS AS IT: with a
-// growth product on, the block enables the product's APIs and makes the
-// reader under the company's own ID, granting Workload Identity User to this
-// company's principal alone; with none on, it makes nothing for growth.
+// THE BLOCK NEVER CARRIES A PRODUCT: no reader, no product API, so turning a
+// Google product on never changes what a person ran. The reader is one per
+// company, within Google's 30 characters.
 //
 // Mutation: name the reader by a fixed ID, and two companies sharing an
 // identity project read each other's figures.
-func TestTheCloudShellBlockMakesTheCompanysOwnReaderForItsGrowthProducts(t *testing.T) {
+func TestTheCloudShellBlockNeverCarriesAGrowthProduct(t *testing.T) {
 	t.Parallel()
 	_, pemText := fakeKey(t)
-	analytics := googleauth.Product{Kind: "test_analytics", Name: "Test Analytics",
-		APIs: []string{"analyticsdata.googleapis.com", "analyticsadmin.googleapis.com"}}
-	text, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText, false, []googleauth.Product{analytics})
+	text, err := googlecloud.CloudShellBlock(testCompany, identity, pemText, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	reader := googleauth.ReaderAccountID(testCompany)
-	principal := googleauth.Principal(googlecloud.ProviderName("${NUMBER}"), testCompany)
-	for _, want := range []string{
-		"gcloud services enable analyticsdata.googleapis.com analyticsadmin.googleapis.com",
-		"READER=" + reader + `@"$IDENTITY"`,
-		"gcloud iam service-accounts create " + reader,
-		`--role=roles/iam.workloadIdentityUser --format=none --member="` + principal + `"`,
-	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("the block lacks %q", want)
+	for _, never := range []string{reader, "READER=", "analytics", "androidpublisher", "searchconsole", "googleads"} {
+		if strings.Contains(text, never) {
+			t.Errorf("the block names %q", never)
 		}
 	}
 	if other := googleauth.ReaderAccountID("Other Corp"); other == reader || len(reader) > 30 {
 		t.Errorf("readers %q and %q: want one per company, within Google's 30 characters", reader, other)
-	}
-	plain, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText, false, nil)
-	if err != nil || strings.Contains(plain, "READER=") {
-		t.Errorf("a block with no growth product makes a reader (%v)", err)
 	}
 }
 

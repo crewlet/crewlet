@@ -49,6 +49,51 @@ var leaseMetaCases = []testCase{
 	}},
 }
 
+// leaseNameCases hold every backend to [coord.MaxLeaseNameBytes] on each name
+// a lease's record holds, as stored: a lease naming each at it beside a Meta
+// at its bound is taken whole, the widest record the class must hold, and one
+// naming any past it, a byte JSON writes as six counted as six, is refused as
+// too large before anything is written.
+//
+// Mutation: drop the owner's HoldLeaseName from a backend's validate, and its
+// past case is granted.
+var leaseNameCases = []testCase{
+	{"a_lease_naming_each_name_at_its_bound_is_taken_whole_and_one_past_is_refused", func(h *harness) {
+		name := func(n int) string { return strings.Repeat("n", n) }
+		resource := coord.NodeResource(name(coord.MaxLeaseNameBytes - len(coord.NodeResource(""))))
+		widest := coord.AcquireOptions{Owner: name(coord.MaxLeaseNameBytes), TTL: LongTTL, Ungated: true,
+			Preferred: name(coord.MaxLeaseNameBytes), Meta: metaOf(h, coord.MaxLeaseMetaBytes)}
+		h.claim(resource, widest)
+		if got := h.mustHold(resource, widest.Owner); got.Preferred != widest.Preferred {
+			h.t.Fatalf("the widest lease reads back preferring %q, want %q", got.Preferred, widest.Preferred)
+		}
+
+		escaped := strings.Repeat("\x01", coord.MaxLeaseNameBytes/6+1)
+		for what, c := range map[string]struct {
+			resource string
+			opts     coord.AcquireOptions
+		}{
+			"resource": {resource + "n", coord.AcquireOptions{Owner: "n1:a", TTL: LongTTL, Ungated: true}},
+			"owner":    {coord.NodeResource("n2"), coord.AcquireOptions{Owner: widest.Owner + "n", TTL: LongTTL, Ungated: true}},
+			"escaped owner": {coord.NodeResource("n2"),
+				coord.AcquireOptions{Owner: escaped, TTL: LongTTL, Ungated: true}},
+			"preferred node": {coord.NodeResource("n2"), coord.AcquireOptions{Owner: "n2:a", TTL: LongTTL,
+				Ungated: true, Preferred: widest.Preferred + "n"}},
+		} {
+			lease, _, err := h.b.TryAcquire(h.ctx, c.resource, c.opts)
+			if !errors.Is(err, coord.ErrValueTooLarge) || errors.Is(err, coord.ErrUnavailable) ||
+				!strings.Contains(err.Error(), strconv.Itoa(coord.MaxLeaseNameBytes)) {
+				h.t.Errorf("a claim whose %s is past its bound = %v, want coord.ErrValueTooLarge naming %d",
+					what, err, coord.MaxLeaseNameBytes)
+			}
+			if lease != nil {
+				h.t.Errorf("a claim whose %s is past its bound was granted", what)
+			}
+		}
+		h.mustBeUnheld(coord.NodeResource("n2"))
+	}},
+}
+
 // metaOf is a Meta that encodes, as the store encodes a lease's, to exactly
 // size bytes — measured by [coord.LeaseMetaBytes] rather than assumed, so a
 // case named for the bound is at it.
