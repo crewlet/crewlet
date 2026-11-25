@@ -15,11 +15,12 @@ import (
 // resume loads"): a pack whose session the take would refuse whole keeps only
 // what its harness's resume loads: everything from its newest compaction on,
 // and before it what that release reads there (Codex its first line, Copilot
-// all but the turns the summary replaced). It cuts the pack's copy, never the
-// live record, so it runs on every pack, a save's and a stop's as the end's,
-// and costs no model call. Only the release a rule was measured on is trimmed
-// ([trimmer]); every other harness and release packs whole, and a pack still
-// past the bound once trimmed is refused as one never trimmed is.
+// all but the turns the summary replaced, Muse Code nothing). It cuts the
+// pack's copy, never the live record, so it runs on every pack, a save's and a
+// stop's as the end's, and costs no model call. Only the release a rule was
+// measured on is trimmed ([trimmer]); every other harness and release packs
+// whole, and a pack still past the bound once trimmed is refused as one never
+// trimmed is.
 
 // trimTarSlack is what the plaintext point leaves the tar's own bytes beside
 // its members': a 512-byte header and up to 511 of padding a member, its long
