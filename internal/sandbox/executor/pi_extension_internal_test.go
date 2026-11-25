@@ -536,6 +536,19 @@ func TestThePiExtensionAddsWhatTheNoteHelperHandsToTheToolsResult(t *testing.T) 
 	}
 }
 
+// THE EXTENSION'S OUTPUT BOUND HOLDS A WHOLE ANSWER: a pi-nested firing
+// prints at most its files within piFiringLimit and the listings' 64 KiB, and
+// the extension hands nothing of an answer past its bound (measured), so the
+// bound must hold the largest.
+//
+// Mutation: raise the firing's bound past the output bound, and this goes red.
+func TestThePiExtensionsOutputBoundHoldsAWholeAnswer(t *testing.T) {
+	t.Parallel()
+	if answer := piFiringLimit + 64<<10; answer > piNestedMaxOutput {
+		t.Errorf("a firing may print %d bytes, past the extension's bound of %d", answer, piNestedMaxOutput)
+	}
+}
+
 // THE NOTES POLL RUNS ON WHILE THE NOTE HELPER DOES: a firing still running
 // holds the tool's result, never the process, so a poll answered meanwhile is
 // followed by the next at once, before the helper is let go.

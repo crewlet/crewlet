@@ -61,11 +61,11 @@ func (Pi) homeRestore(p Paths) string {
 // the build VM.
 const piNestedTimeout = codexNestedTimeout * time.Second
 
-// piNestedMaxOutput is the most a pi-nested firing may print. Pi bounds no
-// instruction file, so Node's 1 MiB default would lose a large one a session
-// in the checkout reads whole; 64 MiB is past what any model's context holds
-// (a million tokens is some 4 MB of text), so nothing past it reaches a model.
-const piNestedMaxOutput = 64 << 20
+// piNestedMaxOutput is the most a pi-nested firing may print, past which the
+// extension hands nothing of it (measured): its answer is at most
+// [piFiringLimit] and the listings' 64 KiB, 218 KiB, so Node's default of
+// 1 MiB holds it whole, and only a helper gone wrong prints past it.
+const piNestedMaxOutput = 1 << 20
 
 // piNestedHand is the extension's settings for a pi-nested firing: the note
 // helper, its config (written by checkout-launch), and the bounds above.
