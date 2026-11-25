@@ -1,0 +1,1 @@
+import{ts as e,ws as t}from"./Modal-CMN31W28.js";import{t as n}from"./ago-DB-t3xIh.js";import{n as r}from"./clock-D7J_s980.js";import{t as i}from"./react-C1iE8mnY.js";var a=i();function o({value:i,now:o,...s}){let c=r(e=>n(i,o??e,s));return t(i)?(0,a.jsx)(`time`,{dateTime:i??void 0,title:e(i),children:c}):(0,a.jsx)(a.Fragment,{children:`–`})}export{o as t};
