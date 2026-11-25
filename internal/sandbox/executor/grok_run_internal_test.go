@@ -135,40 +135,64 @@ func readBox(t *testing.T, b sandbox.Sandbox, path string) string {
 	return string(raw)
 }
 
-// EVERY GROK RUN NAMES ITS SERVERS UNDER A NONCE OF ITS OWN, AND ITS SHELL
-// KEEPS ITS SIGN-IN: the settings' servers and the agent file's tool
-// instruction name one nonce, new every run, and the settings set no shell
-// policy, so the model's shell starts with the sign-in as a person's does.
+// EVERY GROK SESSION NAMES ITS SERVERS UNDER A NONCE OF ITS OWN, ON EVERY RUN
+// OF IT, AND ITS SHELL KEEPS ITS SIGN-IN: the settings' servers and the agent
+// file's tool instruction name one nonce, the session's, so a run continuing
+// it names them as its first run did (the record hands the model each
+// earlier `use_tool` call by that name, and Grok answers one to a name the
+// run no longer has "Tool not found", measured on 1.0.92); the session a
+// continuing run may start instead has settings and an agent file naming its
+// own; and the settings set no shell policy.
 //
-// Mutations, each red: write a shell policy; draw the nonce twice in one run;
-// draw one nonce for every run.
-func TestEveryGrokRunNamesItsServersUnderANonceOfItsOwn(t *testing.T) {
+// Mutations, each red: write a shell policy; draw the nonce per run; name
+// the fresh session's servers or agent file for the continued session.
+func TestEveryGrokSessionNamesItsServersUnderANonceOfItsOwn(t *testing.T) {
 	t.Parallel()
-	req := sandbox.RunRequest{Brief: "x",
-		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://e/mcp"}}}
+	const session, freshID = "0b5e0000-0000-4000-8000-0000000000b1", "0b5e0000-0000-4000-8000-0000000000b2"
+	servers := map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://e/mcp"}}
 	server := regexp.MustCompile(`\[mcp_servers\.crewlet_([0-9a-f]{6})\]`)
+	nonceOf := func(config string) string {
+		m := server.FindStringSubmatch(config)
+		if m == nil {
+			t.Fatalf("the settings name no server under a nonce:\n%s", config)
+		}
+		return m[1]
+	}
 	var nonces []string
-	for range 2 {
+	for _, s := range []Session{{ID: session}, {ID: session, Continues: true, Fresh: freshID}, {ID: freshID}} {
 		b := grokFakeBox()
 		paths := PathsFor(b)
-		if _, err := (Grok{}).WriteConfig(t.Context(), b, req, Session{ID: "s"}, paths); err != nil {
+		req := sandbox.RunRequest{Brief: "x", MCPServers: servers}
+		if s.Continues {
+			req.Resume, req.FreshWiring = s.ID, &sandbox.Wiring{MCPServers: servers}
+		}
+		if _, err := (Grok{}).WriteConfig(t.Context(), b, req, s, paths); err != nil {
 			t.Fatalf("WriteConfig: %v", err)
 		}
 		config := readBox(t, b, paths.GrokConfig())
 		if strings.Contains(config, "shell_environment_policy") {
 			t.Errorf("the settings start the model's shell without what a person's has:\n%s", config)
 		}
-		m := server.FindStringSubmatch(config)
-		if m == nil {
-			t.Fatalf("the settings name no server under a nonce:\n%s", config)
+		n := nonceOf(config)
+		if agent := readBox(t, b, paths.GrokAgent()); !strings.Contains(agent, "`crewlet_"+n+"`") {
+			t.Errorf("the agent file names another server than crewlet_%s:\n%s", n, agent)
 		}
-		if agent := readBox(t, b, paths.GrokAgent()); !strings.Contains(agent, "`crewlet_"+m[1]+"`") {
-			t.Errorf("the agent file names another server than crewlet_%s:\n%s", m[1], agent)
+		if s.Continues {
+			fresh := nonceOf(readBox(t, b, paths.GrokConfigFresh()))
+			agent := readBox(t, b, paths.GrokAgentFresh())
+			if fresh != sessionNonce(freshID) || !strings.Contains(agent, "`crewlet_"+fresh+"`") {
+				t.Errorf("the session a continuing run may start names crewlet_%s, its agent file:\n%s", fresh, agent)
+			}
 		}
-		nonces = append(nonces, m[1])
+		nonces = append(nonces, n)
 	}
-	if nonces[0] == nonces[1] {
-		t.Errorf("two runs named their servers under one nonce, %s", nonces[0])
+	if nonces[0] != nonces[1] || nonces[0] != sessionNonce(session) || nonces[2] == nonces[0] {
+		t.Errorf("a session's runs named their servers under %s and %s, another session's under %s",
+			nonces[0], nonces[1], nonces[2])
+	}
+	if _, err := (Grok{}).WriteConfig(t.Context(), grokFakeBox(), sandbox.RunRequest{Brief: "x"}, Session{},
+		PathsFor(grokFakeBox())); err == nil {
+		t.Error("a run naming no session was written")
 	}
 }
 
@@ -310,7 +334,8 @@ func newGrokGateBox(t *testing.T, sh string, linked bool) grokGateBox {
 	rules, _ := grokRulesJSON("RENEWED")
 	_ = os.WriteFile(g.paths.GrokRules(), rules, 0o600)
 	for path, body := range map[string]string{g.paths.GrokConfig(): "OLD", g.paths.GrokConfigFresh(): "FRESH",
-		g.paths.GrokTakeConfig(): "OLD-TAKE", g.paths.GrokTakeConfigFresh(): "FRESH-TAKE"} {
+		g.paths.GrokTakeConfig(): "OLD-TAKE", g.paths.GrokTakeConfigFresh(): "FRESH-TAKE",
+		g.paths.GrokAgent(): "OLD-AGENT", g.paths.GrokAgentFresh(): "FRESH-AGENT"} {
 		writeHere(t, path)
 		_ = os.WriteFile(path, []byte(body), 0o600)
 	}
@@ -329,11 +354,11 @@ func (g grokGateBox) read(path string) string {
 // relaunch replaces it, its digest then recorded; a box on another release
 // starts the minted session and says why; an archive holding a link is not
 // restored, the box's copy left whole; and a rewired run that starts the
-// minted session is wired with the fresh configs, one that continues drops
-// them.
+// minted session is wired with the fresh configs and agent file, one that
+// continues drops them.
 //
 // Mutations, each red: drop the release check; drop the digest check; drop the
-// link check; drop either rewired mv; record no digest.
+// link check; drop any rewired mv; keep the fresh agent file; record no digest.
 func TestAGrokSessionContinuesInItsBoxOnlyAsItsGateSays(t *testing.T) {
 	t.Parallel()
 	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
@@ -390,6 +415,12 @@ func TestAGrokSessionContinuesInItsBoxOnlyAsItsGateSays(t *testing.T) {
 				}
 				if take := g.read(g.paths.GrokTakeConfig()); take != tc.config+"-TAKE" {
 					t.Errorf("the run's take config is %q, want %q", take, tc.config+"-TAKE")
+				}
+				if agent := g.read(g.paths.GrokAgent()); agent != tc.config+"-AGENT" {
+					t.Errorf("the run's agent file is %q, want %q", agent, tc.config+"-AGENT")
+				}
+				if left := g.read(g.paths.GrokAgentFresh()); left != "" {
+					t.Errorf("the fresh session's agent file is left behind: %q", left)
 				}
 			}
 		})

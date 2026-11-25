@@ -1052,6 +1052,10 @@ type Engine struct {
 	steers         *steerDesk
 	stopSteerServe queue.Unsubscribe
 
+	// connectMarks is this node's writes of a harness's bridge connection under
+	// way, which a collection waits for (connectmarks.go).
+	connectMarks *connectMarks
+
 	// runSteers is this node's half of the notes a turn's executor holds on
 	// its record, from launch to the turn's end (runsteer.go, ADR-0067).
 	runSteers *runSteers
@@ -1625,6 +1629,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// Over the fleet's run records, built here, not with the sandbox runtime:
 		// an ingress-only node with no runtime still files a person's note on a
 		// run another node launched.
+		connectMarks: newConnectMarks(),
 		runSteers: newRunSteers(steerSeals, sandbox.NewCoordStore(backends.Fleet), backends.Queue).
 			claimingIn(ledgerstore.NewFleetCompletions(backends.Fleet)).
 			seeingThrough(ledgerstore.NewSeenThrough(backends.Fleet)),
