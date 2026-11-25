@@ -122,54 +122,72 @@ func TestARunItsWatchEndedIsAnnouncedByThePoll(t *testing.T) {
 	}
 }
 
-// A RUN ITS WATCH ENDED IS COLLECTED AS PAST ITS TURN CAP: its job is asked to
-// end before its box is read, it fails as `turn_cap_exceeded` whatever it
-// reported, says the engine ended it at its turn cap and never that a
-// wall-clock cap did, and is parked on no question it asked on its way out,
-// the question said in its note.
+// A RUN ITS WATCH ENDED IS COLLECTED AS PAST ITS TURN CAP, whichever count
+// ended it, past the cap or with lines that may hide requests past it: its job
+// is asked to end before its box is read, it fails as `turn_cap_exceeded`
+// whatever it reported, says the engine ended it at its turn cap for either
+// cause and never that a wall-clock cap did, and is parked on no question it
+// asked on its way out, the question said in its note.
 //
 // Mutation: read the box before ending the job, leave the record's word out of
-// the collection, word it as the deadline, or park it, and a check goes red.
+// the collection, word it as the deadline or as past the cap alone, or park
+// it, and a case goes red.
 func TestARunItsWatchEndedIsCollectedAsPastItsTurnCap(t *testing.T) {
 	t.Parallel()
-	rig := newCoordRig(t)
-	run := rig.launchCapped("t1", 3)
-	rig.coordinator.countRun("swe", StatusRunning)
-	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Decision: choosing("which branch?"),
-		Branch: "wip/t1"})
-	if ok, err := rig.pending.MarkEndedAtTurnCap(t.Context(), "t1", run.LaunchID); err != nil || !ok {
-		t.Fatalf("MarkEndedAtTurnCap = %v, %v", ok, err)
-	}
-	rig.runner.EndsAs(Result{Text: "halfway through", JobEnd: JobEndAsked, Error: "the run was ended on " +
-		"request before it finished: its harness was told to stop and exited 143"})
-	askedFirst := false
-	rig.runner.CollectFunc = func(context.Context) error {
-		askedFirst = rig.runner.Asks() == 1
-		return nil
-	}
+	for _, tc := range []struct {
+		name  string
+		shown RequestCount
+	}{
+		{name: "past its cap", shown: RequestCount{Requests: 5, InFlight: 1}},
+		{name: "with lines that may hide a request past it", shown: RequestCount{Requests: 3, Undecided: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			rig.launchCapped("t1", 3)
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester,
+				Decision: choosing("which branch?"), Branch: "wip/t1"})
+			rig.tick()
+			rig.runner.Show(tc.shown)
+			if fired := rig.waiter.WatchTick(t.Context()); fired != 1 {
+				t.Fatalf("the premise: the watch ended %d runs of a count of %+v under a cap of 3", fired, tc.shown)
+			}
+			rig.runner.EndsAs(Result{Text: "halfway through", JobEnd: JobEndAsked, Error: "the run was ended " +
+				"on request before it finished: its harness was told to stop and exited 143"})
+			askedFirst := false
+			rig.runner.CollectFunc = func(context.Context) error {
+				askedFirst = rig.runner.Asks() == 1
+				return nil
+			}
 
-	payload, ev := rig.completion("t1")
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Fatalf("OnCompleted: %v", err)
-	}
-	if !askedFirst {
-		t.Fatalf("the box was read with %d requests to end its job made, want the one before", rig.runner.Asks())
-	}
-	calls := rig.resumer.calls()
-	if len(calls) != 1 {
-		t.Fatalf("resumed %d times, want the turn back with what its run did", len(calls))
-	}
-	if calls[0].Success || !strings.Contains(calls[0].Answer, "turn cap of 3") ||
-		strings.Contains(calls[0].Answer, "wall-clock") || !strings.Contains(calls[0].Answer, "It had asked: which branch?") {
-		t.Errorf("the resume reads success %v and %q; want the turn cap's ending, the question it had asked "+
-			"said, and no wall-clock cap", calls[0].Success, calls[0].Answer)
-	}
-	recs := rig.collected()
-	if len(recs) != 1 || !recs[0].Failed || recs[0].ErrorKind != types.ExecutorErrorTurnCapExceeded {
-		t.Fatalf("the run's record is %+v; want it failed as %s", recs, types.ExecutorErrorTurnCapExceeded)
-	}
-	if asked := rig.questions(); len(asked) != 0 || calls[0].Run.Question != "" {
-		t.Errorf("announced %+v and resumed carrying %q; a run its turn cap ended asks nobody", asked,
-			calls[0].Run.Question)
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+			if !askedFirst {
+				t.Fatalf("the box was read with %d requests to end its job made, want the one before",
+					rig.runner.Asks())
+			}
+			calls := rig.resumer.calls()
+			if len(calls) != 1 {
+				t.Fatalf("resumed %d times, want the turn back with what its run did", len(calls))
+			}
+			answer := calls[0].Answer
+			if calls[0].Success || !strings.Contains(answer, "turn cap of 3") ||
+				!strings.Contains(answer, "or lines too long to read that could hide them") ||
+				strings.Contains(answer, "wall-clock") || !strings.Contains(answer, "It had asked: which branch?") {
+				t.Errorf("the resume reads success %v and %q; want the turn cap's ending for either cause, the "+
+					"question it had asked said, and no wall-clock cap", calls[0].Success, answer)
+			}
+			recs := rig.collected()
+			if len(recs) != 1 || !recs[0].Failed || recs[0].ErrorKind != types.ExecutorErrorTurnCapExceeded {
+				t.Fatalf("the run's record is %+v; want it failed as %s", recs, types.ExecutorErrorTurnCapExceeded)
+			}
+			if asked := rig.questions(); len(asked) != 0 || calls[0].Run.Question != "" {
+				t.Errorf("announced %+v and resumed carrying %q; a run its turn cap ended asks nobody", asked,
+					calls[0].Run.Question)
+			}
+		})
 	}
 }

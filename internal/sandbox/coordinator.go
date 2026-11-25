@@ -2500,13 +2500,15 @@ func endedAtDeadline(result Result, deadline time.Time, asked string) Result {
 }
 
 // endedAtTurnCap is what a run its turn cap's watch ended reports
-// ([LaunchRecord.EndedAtTurnCap]): what it said up to then, failed as past its
-// cap (`turn_cap_exceeded`), whatever its box said by the time it was read, and
+// ([LaunchRecord.EndedAtTurnCap]), past its cap or with lines that may hide
+// requests past it ([RequestCount.PastCap]): what it said up to then, failed as
+// past its cap (`turn_cap_exceeded`), whatever its box said by then, and
 // parked on no question, its question said as [endedAtDeadline] says it. Never
 // worded as the wall-clock cap: the two endings are told apart.
 func endedAtTurnCap(result Result, turnCap int, asked string) Result {
-	why := fmt.Sprintf("the engine ended the run at its turn cap of %d model requests: its stream showed "+
-		"it past the cap while it worked; what it had done by then is collected", turnCap)
+	why := fmt.Sprintf("the engine ended the run at its turn cap of %d model requests: while it worked its "+
+		"stream showed more requests than the cap allows, or lines too long to read that could hide them; "+
+		"what it had done by then is collected", turnCap)
 	if asked != "" {
 		why += ". It had asked: " + asked
 	}
