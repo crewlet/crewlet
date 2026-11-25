@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/browser"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Request is what [Check] is handed of one launch's box.
@@ -208,7 +209,7 @@ const (
 	remedyDisturbed = "something on this host other than the box connected to the check's port on this " +
 		"engine's loopback (%s), so the check could not tell the box's routes from it; the next launch checks " +
 		"again"
-	remedyHeld = "a connection the box made for the check was held open without an answer for %d s: something " +
+	remedyHeld = "a connection the box made for the check was held open without an answer for %s: something " +
 		"in the box listens on the check's port, or a proxy did not answer; the next launch checks again on " +
 		"another port"
 	remedyTooMany = "the box names more than %d addresses in its hosts file and routing tables, or more than %d " +
@@ -288,7 +289,7 @@ func decide(o outcome) Verdict {
 			"the check: "+o.undrained.Error())
 	case o.timedOut:
 		return withheld(browser.CauseUnchecked, fmt.Sprintf("the check of the box's network answered nothing "+
-			"within %d s: give the box more CPU and memory", int(CheckTimeout.Seconds())))
+			"within %s: give the box more CPU and memory", statelog.Spoken(CheckTimeout)))
 	case o.runErr != nil && o.stdout == "":
 		return withheld(browser.CauseUnchecked, "the check of the box's network could not run: "+o.runErr.Error())
 	case state == lineNone && o.exit != 0:
@@ -306,7 +307,7 @@ func decide(o outcome) Verdict {
 	case wordNoNode:
 		return Verdict{Reason: browser.ReasonNodeMissing, Cause: browser.CauseNotOnPath, Detail: remedyNoNode}
 	case wordHeld:
-		return withheld(browser.CauseUnchecked, fmt.Sprintf(remedyHeld, int(AnswerBound.Seconds())))
+		return withheld(browser.CauseUnchecked, fmt.Sprintf(remedyHeld, statelog.Spoken(AnswerBound)))
 	case wordTooMany:
 		return withheld(browser.CauseUnchecked, fmt.Sprintf(remedyTooMany, maxAddresses, maxProxyAddresses))
 	case wordForwarded:
