@@ -156,8 +156,8 @@ const (
 	MCPBindingRecognised = "recognised"
 )
 
-// MCPBoundKey is one credential a per-agent server is started with: which of
-// the integration's credentials, and the header or variable it goes in.
+// MCPBoundKey is one value the integration hands a per-agent server: which of
+// its seat credentials or its own values, and the header or variable it goes in.
 type MCPBoundKey struct {
 	Field string `json:"field"`
 	Key   string `json:"key"`
@@ -183,7 +183,7 @@ func resolvedOf(company *config.Company, roster *org.Organization, server *confi
 	out := MCPResolved{
 		Auth:     authOf(server),
 		Timeouts: timeoutsOf(server),
-		Binding:  bindingOf(server),
+		Binding:  bindingOf(company, server),
 		BoxSeats: []MCPBoxSeat{},
 		Warnings: []MCPPlacementWarning{},
 	}
@@ -263,9 +263,10 @@ func timeoutsOf(server *config.MCPServer) MCPTimeouts {
 	return out
 }
 
-// bindingOf is the integration server reads each agent's credential from, nil
-// for one that reads none.
-func bindingOf(server *config.MCPServer) *MCPBinding {
+// bindingOf is the integration server reads each agent's credential from, and
+// the integration's own values company hands it beside, nil for one that reads
+// none.
+func bindingOf(company *config.Company, server *config.MCPServer) *MCPBinding {
 	bound := server.SeatBindings()
 	if len(bound) == 0 {
 		return nil
@@ -276,6 +277,11 @@ func bindingOf(server *config.MCPServer) *MCPBinding {
 	}
 	for _, k := range bound {
 		out.Keys = append(out.Keys, MCPBoundKey{Field: k.Field, Key: k.Key})
+	}
+	if company != nil {
+		for _, k := range company.HandedOrgKeys(server) {
+			out.Keys = append(out.Keys, MCPBoundKey{Field: k.Field, Key: k.Key})
+		}
 	}
 	return out
 }

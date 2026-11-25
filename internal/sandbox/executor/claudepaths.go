@@ -48,15 +48,11 @@ func (p Paths) ClaudeNoProxy() string { return p.WorkDir() + "/claude-no-proxy" 
 // reason it is.
 func (p Paths) ClaudeNotesSettings() string { return p.WorkDir() + "/claude-settings-notes.json" }
 
-// ClaudeHooksSettings is where a Claude Code run has its settings written with
-// hooks switched on ([claudeHooksOnSettings]), so a hook of the run's own (its
-// skills' load report, its checkouts' hook) runs whatever the repository's own
-// settings say: the file the run's script names in place of
-// [Paths.ClaudeSettings] where it starts one ([claudeSkillsGate],
-// [claudeCheckoutsGate]), unless it starts the notes' hooks, whose own
-// settings switch hooks on too ([Paths.ClaudeNotesSettings]). Beside the
-// others, for their reason.
-func (p Paths) ClaudeHooksSettings() string { return p.WorkDir() + "/claude-settings-hooks.json" }
+// ClaudeHooksOff is why the settings a Claude Code run loads would run none of
+// its hooks ([claudeHooksOff]), empty where nothing switches them off: written
+// for a run that may start a hook of the engine's, read by the script once its
+// gates have started one ([claudeHooksOffGate]).
+func (p Paths) ClaudeHooksOff() string { return p.WorkDir() + "/claude-hooks-off" }
 
 // ClaudeSettingsPinned is [Paths.ClaudeSettings]'s pinned copy: the same
 // settings with the compaction point and a resume's load pinned besides
@@ -68,12 +64,6 @@ func (p Paths) ClaudeSettingsPinned() string { return p.WorkDir() + "/claude-set
 // ([Paths.ClaudeSettingsPinned]).
 func (p Paths) ClaudeNotesSettingsPinned() string {
 	return p.WorkDir() + "/claude-settings-notes-pinned.json"
-}
-
-// ClaudeHooksSettingsPinned is [Paths.ClaudeHooksSettings]'s pinned copy
-// ([Paths.ClaudeSettingsPinned]).
-func (p Paths) ClaudeHooksSettingsPinned() string {
-	return p.WorkDir() + "/claude-settings-hooks-pinned.json"
 }
 
 // ClaudeSkillsPlugin is the DIRECTORY of the plugin a Claude Code run is handed

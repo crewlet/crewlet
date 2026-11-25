@@ -3,6 +3,7 @@ package googlegrowth
 import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/googleauth"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/vendortext"
 )
@@ -43,38 +44,107 @@ func ReaderEmail(c *config.Company) string {
 	return googleauth.AccountEmail(googleauth.ReaderAccountID(c.Name), identity)
 }
 
-// credentialsURL is where a person makes the company's OAuth client.
-const credentialsURL = "https://console.cloud.google.com/apis/credentials"
+// The Google pages a person makes and sets up the company's OAuth client on.
+const (
+	credentialsURL = "https://console.cloud.google.com/apis/credentials"
+	audienceURL    = "https://console.cloud.google.com/auth/audience"
+	audienceDocURL = "https://support.google.com/cloud/answer/15549945"
+)
+
+// CloudFirst is the first step of a product whose agents sign in as their own
+// Google identities: connecting Google Cloud, whose Cloud Shell block, run
+// again, turns on apis and makes the company reader. setupapi answers whether
+// Google Cloud is connected ([setup.Step.Connected]).
+func CloudFirst(apis string) setup.Step {
+	return setup.Step{Needs: integration.KindGoogleCloud, Text: vendortext.Plain("Connect Google Cloud " +
+		"first; no project needs preparing. Its Cloud Shell block, run again, turns on " + apis +
+		" and makes the company reader.")}
+}
+
+// ClientStep is the step making the OAuth client a consent product signs in
+// as, in a project where api is turned on.
+func ClientStep(api string) setup.Step {
+	return setup.Step{Text: vendortext.Of(vendortext.W("In a Google Cloud project you control, turn on the "+
+		api+" and make a "), vendortext.UI("Web application"), vendortext.W(" OAuth client at "),
+		vendortext.UI("Google Cloud", "Credentials").At(credentialsURL),
+		vendortext.W(" with the redirect URI and audience the form gives."))}
+}
 
 // AdminSignIn is the optional admin sign-in a product with an API for adding
 // identities offers (Play, Analytics): the company's own OAuth client, and
 // the sign-in of who, an admin there, so Crewlet adds each agent's identity
 // itself. Nothing blocks without it: a person adds each identity by hand.
 func AdminSignIn(kind, name, who string, client *config.GoogleOAuthClient,
-	resolve func(string) (string, bool)) []setup.Requirement {
+	resolve func(string) (string, bool),
+) []setup.Requirement {
+	return OAuthClient(OAuthClientAsk{
+		Kind: kind, Client: client,
+		Purpose: vendortext.Plain("Lets " + who + " sign in so Crewlet adds each agent itself."),
+		More: vendortext.Plain("Without it, you add each agent's identity in " + name +
+			" yourself. Another Google product may share this client."),
+		SignIn: vendortext.Plain("As " + who + "; Crewlet then adds each agent's identity for you."),
+	}, resolve)
+}
+
+// OAuthClientAsk is one consent product's words around its OAuth client.
+type OAuthClientAsk struct {
+	// Kind is the integration's kind, whose block holds the client.
+	Kind   string
+	Client *config.GoogleOAuthClient
+	// Required is a product reached only through the sign-in (AdMob,
+	// AdSense); otherwise the client and the sign-in are optional.
+	Required bool
+	// Purpose is the hint under the client ID, More what follows it.
+	Purpose, More vendortext.Text
+	// SignIn is the hint under the sign-in: who signs in.
+	SignIn vendortext.Text
+}
+
+// OAuthClient is the company's own OAuth client and its sign-in, asked the
+// same way by every consent product (googleauth.Consent): the redirect URI to
+// register, which setupapi fills from the engine ([setup.FillRedirects]), the
+// client's ID and secret, and the sign-in.
+func OAuthClient(ask OAuthClientAsk, resolve func(string) (string, bool)) []setup.Requirement {
 	var held config.GoogleOAuthClient
-	if client != nil {
-		held = *client
+	if ask.Client != nil {
+		held = *ask.Client
 	}
-	base := "integrations." + kind + ".oauth"
-	id := setup.Requirement{Field: "client_id", Label: "OAuth client ID (optional)", Kind: setup.KindID,
-		ConfigPath: base + ".client_id", Format: "<project number>-<id>.apps.googleusercontent.com",
-		Hint: vendortext.Of(vendortext.W("A "), vendortext.UI("Web application"), vendortext.W(" client from "),
-			vendortext.UI("Google Cloud", "Credentials").At(credentialsURL), vendortext.W(", in a project you control.")),
-		More: vendortext.Of(vendortext.W("With it, "+who+" signs in once and Crewlet adds each agent's identity in "+name+
-			" itself; without it you add each one by hand. Add Crewlet's callback address to its "),
-			vendortext.UI("Authorized redirect URIs"), vendortext.W(" and publish its consent screen: a client left in "),
-			vendortext.UI("Testing"), vendortext.W(" loses its sign-in after seven days.")),
+	var blocks integration.FindingKind
+	if ask.Required {
+		blocks = integration.FindingCredentialMissing
 	}
+	base := "integrations." + ask.Kind + ".oauth"
+	redirect := setup.Requirement{Field: "redirect_uri", Label: "Authorized redirect URI", Kind: setup.KindRedirect,
+		Required: ask.Required, Connect: ask.Required,
+		Hint: vendortext.Of(vendortext.W("Make a "), vendortext.UI("Web application"), vendortext.W(" client at "),
+			vendortext.UI("Google Cloud", "Credentials").At(credentialsURL), vendortext.W(" with this redirect URI.")),
+		More: vendortext.Of(vendortext.W("Leave "), vendortext.UI("Authorized JavaScript origins"),
+			vendortext.W(" empty. In "), vendortext.UI("Google Auth Platform", "Audience").At(audienceURL),
+			vendortext.W(", choose "), vendortext.UI("Internal"),
+			vendortext.W(" if whoever signs in is in the project's organization. Otherwise choose "),
+			vendortext.UI("External"), vendortext.W(" and press "), vendortext.UI("Publish app"),
+			vendortext.W(", or add them as a test user: Google ends a "), vendortext.UI("Testing"),
+			vendortext.W(" app's sign-in after 7 days ("), vendortext.W("Google's guide").At(audienceDocURL),
+			vendortext.W(")."))}
+	id := setup.Requirement{Field: "client_id", Label: "OAuth client ID", Kind: setup.KindID,
+		ConfigPath: base + ".client_id", Required: ask.Required, Connect: ask.Required,
+		Format: "<project number>-<id>.apps.googleusercontent.com", Hint: ask.Purpose, More: ask.More,
+		Blocks: blocks}
 	id.Present, id.Resolved, id.Stored = setup.Held(held.ClientID, resolve)
-	secret := setup.Requirement{Field: "client_secret", Label: "OAuth client secret (optional)",
-		Kind: setup.KindSecret, ConfigPath: base + ".client_secret",
+	secret := setup.Requirement{Field: "client_secret", Label: "OAuth client secret", Kind: setup.KindSecret,
+		ConfigPath: base + ".client_secret", Required: ask.Required, Connect: ask.Required,
 		Hint: vendortext.Of(vendortext.W("The same client's secret, from "),
 			vendortext.UI("Google Cloud", "Credentials").At(credentialsURL),
-			vendortext.W("; another Google product may share it.")),
-		CheckNote: "The client is proven by the sign-in, once saved."}
+			vendortext.W("; other Google products may share it.")),
+		CheckNote: "The client is proven by the Google sign-in, once saved.", Blocks: blocks}
 	secret.Present, secret.Resolved, secret.Stored = setup.Held(held.ClientSecret, resolve)
-	consent := setup.Requirement{Field: "google_sign_in", Label: "Admin sign-in (optional)",
-		Kind: setup.KindConsent, Hint: vendortext.Plain("As " + who + "; Crewlet then adds each agent's identity for you.")}
-	return []setup.Requirement{id, secret, consent}
+	label := "Admin sign-in"
+	if ask.Required {
+		label = "Sign in with Google"
+	}
+	// THE SIGN-IN IS THE ENGINE'S TO HOLD, never a value: whether it is held is
+	// the pass's finding, so it blocks nothing here ([setup.Kind.AtVendor]).
+	consent := setup.Requirement{Field: "google_sign_in", Label: label, Kind: setup.KindConsent,
+		Required: ask.Required, Connect: ask.Required, Hint: ask.SignIn}
+	return []setup.Requirement{redirect, id, secret, consent}
 }

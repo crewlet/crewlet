@@ -93,8 +93,8 @@ func TestAClaudeRunsNoProxyCopiesAreItsArtifacts(t *testing.T) {
 	t.Parallel()
 	p := PathsFor(sandbox.NewFakeSandbox("b"))
 	files := (ClaudeCode{}).artifactFiles(p)
-	for _, settings := range []string{p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeHooksSettings(),
-		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeHooksSettingsPinned()} {
+	for _, settings := range []string{p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSettingsPinned(),
+		p.ClaudeNotesSettingsPinned()} {
 		if !strings.Contains(strings.Join(files, "\n")+"\n", settings+".np\n") {
 			t.Errorf("%s.np is not among a Claude Code run's artifacts %v", settings, files)
 		}

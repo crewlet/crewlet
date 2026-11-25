@@ -19,12 +19,13 @@ const (
 	InputMaxRunes = 4000
 
 	// PageContextMaxBytes is the most a turn's page context may encode to.
-	// Sixteen kibibytes: fifty resource ids with their filters take about
-	// four, and an open draft's snapshot ([PageDraft]) the rest, which holds
+	// Twenty-four kibibytes: fifty resource ids with their filters take
+	// about four, an open draft's snapshot ([PageDraft]) twelve, which holds
 	// a brand kit's every field with room over and forty fields averaging
-	// three hundred bytes. A draft past it sheds fields from its end, each
+	// three hundred bytes, and the screen's outline its own eight
+	// ([PageViewMaxBytes]). A draft past it sheds fields from its end, each
 	// counted in its `more`, rather than the turn being refused.
-	PageContextMaxBytes = 16 << 10
+	PageContextMaxBytes = 24 << 10
 
 	// PageContextMaxResources is the most resources a page context names.
 	PageContextMaxResources = 50
@@ -738,10 +739,13 @@ const (
 	// ConfirmNone applies at once with an Undo receipt, for a pure view
 	// change the screen itself declares so (D11).
 	ConfirmNone ActionConfirm = "none"
+	// ConfirmRead changes nothing: the page answers at once with itself as
+	// it is now, and the turn waits for that answer.
+	ConfirmRead ActionConfirm = "read"
 )
 
-// ActionConfirms are the two, in declaration order.
-var ActionConfirms = []ActionConfirm{ConfirmApprove, ConfirmNone}
+// ActionConfirms are the three, in declaration order.
+var ActionConfirms = []ActionConfirm{ConfirmApprove, ConfirmNone, ConfirmRead}
 
 // Valid reports whether c is a confirmation this build knows.
 func (c ActionConfirm) Valid() bool { return slices.Contains(ActionConfirms, c) }

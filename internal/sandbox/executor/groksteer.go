@@ -107,6 +107,18 @@ func (Grok) hookAnswer(event, take string, notes []HookNote) string {
 // whether it takes notes: the two after a call, and the finish.
 var grokHookEvents = []string{"PostToolUse", "PostToolUseFailure", "Stop"}
 
+// grokHooked is the events of [grokHookEvents] a run registers a hook at: each
+// where it takes notes, PostToolUse alone where it reports loads only.
+func grokHooked(notes, loads bool) []string {
+	var events []string
+	for _, event := range grokHookEvents {
+		if notes || loads && event == "PostToolUse" {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
 // grokHooks is the run's hooks in its settings: one per [grokHookEvents] where
 // notes says so, each the note helper at its path once per firing, held to the
 // run's own session ([Paths.GrokThread]), the first also reporting a load of
@@ -114,16 +126,10 @@ var grokHookEvents = []string{"PostToolUse", "PostToolUseFailure", "Stop"}
 // so, and PostToolUse alone, taking nothing, where the run reports loads and
 // takes no notes.
 func grokHooks(paths Paths, notes, loads bool, skills []sandbox.Skill) string {
-	if !notes && !loads {
-		return ""
-	}
 	var b strings.Builder
-	for _, event := range grokHookEvents {
+	for _, event := range grokHooked(notes, loads) {
 		takes := notes
 		reports := loads && event == "PostToolUse"
-		if !takes && !reports {
-			continue
-		}
 		command := []string{paths.GrokNoteHelper(), "-adapter", "grok-hook", "-config", paths.GrokTakeConfig(),
 			"-thread-file", paths.GrokThread()}
 		if reports {
@@ -145,13 +151,9 @@ func grokHooks(paths Paths, notes, loads bool, skills []sandbox.Skill) string {
 	return b.String()
 }
 
-// notesOffWhy is what switches a Grok Build run's reading of notes off: a
-// managed policy that allows only managed hooks, the box's own switches that
-// turn its settings' hooks off (`~/.grok/disabled-hooks`, `requirements.toml`,
-// which a run loads as a person's Grok does), or a note helper that could not
-// reach the run's notes route, which its hooks' errors name in the session.
+// notesOffWhy is what switches a Grok Build run's reading of notes off once
+// its guard has passed ([grokGuard]): a note helper that could not reach the
+// run's notes route, which its hooks' errors name in the session.
 func (Grok) notesOffWhy() string {
-	return "a managed policy that allows only managed hooks, the box's own ~/.grok/disabled-hooks or " +
-		"requirements.toml turning its settings' hooks off, or a note helper that could not reach the run's " +
-		"notes route, which the session's hook errors name"
+	return "a note helper that could not reach the run's notes route, which the session's hook errors name"
 }

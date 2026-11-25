@@ -286,12 +286,13 @@ func TestACompactedHermesSessionReadsEachMessageOnceItsSummaryAsTheSummary(t *te
 // THE OVERLAY CARRIES THE RUN'S SERVERS, ITS WEB DENIAL AND ITS ALWAYS-LOADED
 // TOOLS, and only those: each server as written, the web, browser and x_search
 // toolsets disabled on a web-denied run alone, tool search off where a server
-// is always loaded alone (Hermes exempts no server from it), and a value
-// Hermes would expand refused.
+// is always loaded alone (Hermes exempts no server from it), no switch or
+// tools list a person's entry could set stated back, and a value Hermes would
+// expand refused.
 //
 // Mutation: drop a server's header, disable the web on an allowed run, leave
-// tool search on beside an always-loaded server or turn it off with none, or
-// let a `${` through, and a row goes red.
+// tool search on beside an always-loaded server or turn it off with none,
+// state `enabled`, `disabled` or `tools`, or let a `${` through: red.
 func TestTheHermesOverlayCarriesTheServersAndTheWebDenial(t *testing.T) {
 	t.Parallel()
 	servers := map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://bridge.example.com/mcp",
@@ -318,6 +319,17 @@ func TestTheHermesOverlayCarriesTheServersAndTheWebDenial(t *testing.T) {
 	}
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
+	}
+	var entries struct {
+		Servers map[string]map[string]json.RawMessage `json:"mcp_servers"`
+	}
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"enabled", "disabled", "tools"} {
+		if v, ok := entries.Servers["crewlet"][key]; ok {
+			t.Errorf("the overlay states %s %s over a person's entry, which the guard refuses instead", key, v)
+		}
 	}
 	s := got.Servers["crewlet"]
 	if s.URL != "http://bridge.example.com/mcp" || s.Headers["Authorization"] != "Bearer t" || s.Timeout != 600 {
@@ -492,6 +504,18 @@ def get_default_hermes_root(*, home=None):
             k, v = line.split("=", 1)
             out[k.strip()] = v.strip()
     return out
+`,
+	"hermes_cli/skills_config.py": `def get_disabled_skills(config, platform=None):
+    def names(values):
+        values = [values] if isinstance(values, str) else values or []
+        return {str(v).strip() for v in values if str(v).strip()}
+    cfg = config.get("skills") or {}
+    if not isinstance(cfg, dict):
+        return set()
+    off = names(cfg.get("disabled"))
+    if platform is not None and isinstance(cfg.get("platform_disabled"), dict):
+        off |= names(cfg["platform_disabled"].get(platform))
+    return off
 `,
 	"agent/skill_utils.py": `import json
 def parse_config_string_list(value):

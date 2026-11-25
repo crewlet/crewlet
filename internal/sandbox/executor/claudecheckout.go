@@ -68,22 +68,25 @@ type claudeCommandHook struct {
 // adapter after every tool call, which hands each checkout cloned since the
 // listing of its skills, since Claude Code lists none copied during a session
 // (internal/notehelper's runClaudeNested). The hook is a command, the helper
-// reading the box's files, which no call over the bridge could.
-func writeClaudeCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
-	if err := writeNoteHelper(ctx, box, paths.ClaudeNoteHelper()); err != nil && !errors.Is(err, errNoHelperBuild) {
-		return err
+// reading the box's files, which no call over the bridge could. It reports
+// whether the box holds the helper, so the run may start the hook.
+func writeClaudeCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (bool, error) {
+	if err := writeNoteHelper(ctx, box, paths.ClaudeNoteHelper()); errors.Is(err, errNoHelperBuild) {
+		return false, nil
+	} else if err != nil {
+		return false, err
 	}
 	home := claudeCheckoutHome(paths)
 	if err := box.WriteFile(ctx, paths.ClaudeCheckoutLaunch(), home.launchConfig(claudeCheckouts, req.ReportedRepos)); err != nil {
-		return fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
+		return false, fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
 	manifest, err := json.MarshalIndent(claudeSkillsManifest{Name: claudeCheckoutsPluginName,
 		Description: "Hands this run the skills of a repository checked out during it."}, "", "  ")
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err = box.WriteFile(ctx, paths.ClaudeCheckoutsPlugin()+"/.claude-plugin/plugin.json", manifest); err != nil {
-		return fmt.Errorf("executor: writing the run's checkouts plugin: %w", err)
+		return false, fmt.Errorf("executor: writing the run's checkouts plugin: %w", err)
 	}
 	q := shellword.Quote
 	command := q(paths.ClaudeNoteHelper()) + " -adapter claude-nested -config " + q(paths.ClaudeRepo()+"/nested.json")
@@ -92,31 +95,30 @@ func writeClaudeCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			Timeout: int(ClaudeHookTimeout.Seconds())}}},
 	}}}, "", "  ")
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err = box.WriteFile(ctx, paths.ClaudeCheckoutsPlugin()+"/hooks/hooks.json", hooks); err != nil {
-		return fmt.Errorf("executor: writing the run's checkouts hook: %w", err)
+		return false, fmt.Errorf("executor: writing the run's checkouts hook: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // claudeCheckoutsGate is the part of a run's script that, on a release at or
 // after [claudeCheckoutsFloor], hands the harness its checkouts' instructions
 // and skills ([checkoutHome.gate]) and, where the box holds the helper, starts
-// the checkouts' plugin with hooks switched on: the every-run settings give
-// way to [Paths.ClaudeHooksSettings], the skills' or the notes' settings
-// switching them on already. After the skills' and notes' gates, before the
-// pin's ([claudePinGate]). Once the gate has removed an earlier run's state,
+// the checkouts' plugin, its hook one of the engine's: hk, which the gate
+// sets for the helper, says after it whether any gate started one, for the
+// refusal that follows ([claudeHooksOffGate]). After the skills' and notes'
+// gates, before the pin's ([claudePinGate]). Once the gate has removed an earlier run's state,
 // the script's end says what the nested hook left out before it puts the home
 // back ([checkoutHome.saySkipped]): never before, or a killed run's lines would
 // read as this one's.
 func claudeCheckoutsGate(paths Paths) string {
 	q := shellword.Quote
 	h := claudeCheckoutHome(paths)
-	return "if at " + floorArgs(claudeCheckoutsFloor) + "; then\n" + h.gate() +
+	return "if at " + floorArgs(claudeCheckoutsFloor) + "; then\nho=$hk\n" + h.gate() +
 		"chome() { " + h.saySkipped() + "; " + h.restore() + "; }\n" +
-		`if [ -n "$hk" ]; then set -- "$@" --plugin-dir ` + q(paths.ClaudeCheckoutsPlugin()) + "; case $cs in " +
-		q(paths.ClaudeSettings()) + ") cs=" + q(paths.ClaudeHooksSettings()) + " ;; esac; fi\n" +
+		`if [ -n "$hk" ]; then set -- "$@" --plugin-dir ` + q(paths.ClaudeCheckoutsPlugin()) + "; else hk=$ho; fi\n" +
 		`else echo "crewlet: this box runs Claude Code $n, older than ` + claudeCheckoutsFloor + `, the oldest ` +
 		`that is handed the instructions and skills of its repositories; the run starts without them" >&2; fi` + "\n"
 }
