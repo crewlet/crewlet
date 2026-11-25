@@ -224,7 +224,7 @@ func (stoppedAlarm) Stop() bool { return true }
 // chain naming an entry on the sign-in waits for a probe armed at the reset it
 // was told, so the probe is re-armed at once, as a person's Clear does.
 //
-// Mutation: drop the re-arm from the reader, and the probe still waits days.
+// Mutation: match no entry in rearmProbesOn, and the probe still waits days.
 func TestAReadingThatEndsASitOutTriesParkedSeatsNow(t *testing.T) {
 	t.Parallel()
 	e, c := planNode(t, coordmemory.NewFleet(), 3)
