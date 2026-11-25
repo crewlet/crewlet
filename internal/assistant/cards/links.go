@@ -66,6 +66,9 @@ var links = map[string]screen{
 	"budgets":          {address: "#/company/budgets", label: "Budgets"},
 	"schedules":        {address: "#/company/schedules", label: "Schedules"},
 	"integrations":     {address: "#/company/integrations", app: iam.GrantAdmin, label: "Integrations"},
+	// THE GOOGLE PAGE: the connection, reader and sign-in client every Google
+	// product shares, and a switch per product.
+	"google":           {address: "#/company/integrations/google", app: iam.GrantAdmin, label: "Google"},
 	"live":             {address: "#/live", label: "Now running"},
 	"turns":            {address: "#/live/turns", label: "Turns"},
 	"turn":             {address: "#/live/turns/{id}", noun: "turn"},
