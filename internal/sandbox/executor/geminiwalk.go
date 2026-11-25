@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"slices"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
@@ -175,12 +174,12 @@ func geminiIDOf(raw []byte, k jsonscan.Kind, whole bool) (id geminiID, ok, long 
 }
 
 // geminiContent is what a walk keeps of a record's `content`: its kind,
-// whether its first part opens a compression's summary, whether every part
-// is one answer alone, and its answers, a range of the line's.
+// whether every part is one answer alone, and its answers, a range of the
+// line's.
 type geminiContent struct {
-	kind                  jsonscan.Kind // "" where absent
-	snapshot, answersOnly bool
-	from, to              int
+	kind        jsonscan.Kind // "" where absent
+	answersOnly bool
+	from, to    int
 }
 
 // geminiCallFact is one `toolCalls` element as a walk keeps it: its id, its
@@ -226,7 +225,7 @@ type geminiLine struct {
 }
 
 // geminiRec is one id ever: its place, its kind, whether it is in the view
-// and opens a summary, and its run facts ([geminiRun], -1 where it first
+// and a compression's summary ([geminiCompressionLines]), and its run facts ([geminiRun], -1 where it first
 // appeared before the run's start).
 type geminiRec struct {
 	place                   int32
@@ -269,6 +268,10 @@ type geminiHoldingsWalk struct {
 	// header is whether line 1 was the session's header.
 	header bool
 	ln     geminiLine
+	// head is the line's opening, compressions what its forms say of the
+	// summaries it ends ([geminiCompressionLines]).
+	head         lineHead
+	compressions geminiCompressionLines[geminiID]
 	// lineCalls and lineAnswers are where the line's calls and answers begin
 	// in the arenas, written there as read and named by a run only once
 	// applied.
@@ -304,10 +307,10 @@ type geminiHoldingsWalk struct {
 	span   []int32
 }
 
-// geminiPartState is what a walk keeps of a content part: whether it is the
-// first, holds a name but `text` and `functionResponse`, and opens a summary.
+// geminiPartState is what a walk keeps of a content part: whether it holds a
+// name but `text` and `functionResponse`.
 type geminiPartState struct {
-	first, other, snapshot bool
+	other bool
 }
 
 // geminiAnswerState is what a walk keeps of a `functionResponse`: its id,
@@ -329,6 +332,7 @@ func newGeminiHoldingsWalk(ctx context.Context, session string, start sandbox.Ru
 		calls: map[sandbox.CallClass]int{}, classIndex: map[sandbox.CallClass]int32{},
 		keyIndex: map[partKey]int32{}, candidates: map[partKey][]sandbox.CallClass{}, ids: map[geminiID]int32{},
 		callHint: map[uint32]int32{}, piece: make([]byte, textDigestBytes),
+		head: lineHead{head: make([]byte, 0, lineFormMaxBytes+1)},
 		held: make([]byte, 0, 2*len(geminiWrapClose)), tail: make([]byte, 0, len(geminiWrapNeedle)),
 		edge: make([]byte, 0, 2*len(geminiWrapNeedle))}
 	var openings []int
@@ -381,7 +385,8 @@ var (
 // line reads line n of the chat file, body, and applies its facts once body
 // answered io.EOF ([chatLines]).
 func (w *geminiHoldingsWalk) line(n int, body io.Reader) error {
-	w.sc.Reset(body)
+	w.head.reset(body)
+	w.sc.Reset(&w.head)
 	w.ln = geminiLine{n: n, updates: w.ln.updates[:0], removes: w.ln.removes[:0]}
 	w.lineCalls, w.lineAnswers = len(w.callArena), len(w.answerArena)
 	k, err := w.sc.Next()
@@ -401,6 +406,14 @@ func (w *geminiHoldingsWalk) line(n int, body io.Reader) error {
 	w.ln.keys = keys
 	if err = w.apply(); err != nil {
 		return err
+	}
+	// A SUMMARY IS KNOWN A LINE LATE, by the reply after it; a record its
+	// id's next line rewrites is read afresh ([geminiHoldingsWalk.entry]).
+	user := w.ln.n > 1 && w.ln.typed && !w.ln.reply
+	if summary, ok := w.compressions.line(w.head.head, w.ln.id, user); ok {
+		if i, known := w.ids[summary]; known && !w.recs[i].reply {
+			w.recs[i].snapshot = true
+		}
 	}
 	w.compact()
 	return nil
@@ -828,12 +841,11 @@ func (w *geminiHoldingsWalk) content(c *geminiContent) error {
 		if k != jsonscan.ObjectStart {
 			return errGeminiShape
 		}
-		w.part = geminiPartState{first: parts == 0}
+		w.part = geminiPartState{}
 		keys, err := w.object(goPart)
 		if err != nil {
 			return err
 		}
-		c.snapshot = c.snapshot || w.part.snapshot
 		if keys != geminiSetOf(gnFunctionResponse) || w.part.other {
 			c.answersOnly = false
 		}
@@ -844,8 +856,8 @@ func (w *geminiHoldingsWalk) content(c *geminiContent) error {
 	return nil
 }
 
-// partMember reads a part's text (the first part's opening) and its answer;
-// any other name marks it as no answer alone.
+// partMember reads a part's text and its answer; any other name marks it as
+// no answer alone.
 func (w *geminiHoldingsWalk) partMember(name geminiName) error {
 	switch name {
 	case gnText:
@@ -856,9 +868,6 @@ func (w *geminiHoldingsWalk) partMember(name geminiName) error {
 		case k != jsonscan.String:
 			w.part.other = true
 			return w.sc.Skip()
-		case w.part.first:
-			w.part.snapshot, err = w.opensSnapshot()
-			return err
 		}
 		return nil
 	case gnFunctionResponse:
@@ -878,35 +887,6 @@ func (w *geminiHoldingsWalk) partMember(name geminiName) error {
 	}
 	w.part.other = true
 	return w.skip()
-}
-
-// opensSnapshot reports whether the current string, its leading white space
-// trimmed as strings.TrimSpace trims it, opens a compression's summary
-// ([geminiStateSnapshot]), as the count reads it (geminicount.go); its rest is
-// passed by the next Next.
-func (w *geminiHoldingsWalk) opensSnapshot() (bool, error) {
-	var head [len(geminiStateSnapshot)]byte
-	n, trimming := 0, true
-	for n < len(head) {
-		m, err := w.sc.Read(w.piece)
-		p := w.piece[:m]
-		for trimming && len(p) > 0 {
-			r, size := utf8.DecodeRune(p)
-			if !unicode.IsSpace(r) {
-				trimming = false
-				break
-			}
-			p = p[size:]
-		}
-		n += copy(head[n:], p)
-		switch {
-		case errors.Is(err, io.EOF):
-			return n == len(head) && string(head[:]) == geminiStateSnapshot, nil
-		case err != nil:
-			return false, err
-		}
-	}
-	return string(head[:]) == geminiStateSnapshot, nil
 }
 
 // answerMember reads an answer's id, name and response; any other name marks
@@ -1130,7 +1110,7 @@ func (w *geminiHoldingsWalk) entry() error {
 		w.place(i)
 	}
 	r := &w.recs[i]
-	r.reply, r.snapshot = ln.reply, !ln.reply && ln.content.snapshot
+	r.reply, r.snapshot = ln.reply, false
 	if r.run < 0 {
 		return nil
 	}
@@ -1157,7 +1137,6 @@ func (w *geminiHoldingsWalk) patch() error {
 			continue
 		}
 		r := &w.recs[i]
-		r.snapshot = !r.reply && u.content.snapshot
 		if r.run < 0 {
 			continue
 		}
