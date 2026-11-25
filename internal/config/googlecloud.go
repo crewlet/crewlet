@@ -30,9 +30,9 @@ type GoogleCloud struct {
 // GoogleCloudProvisioning is what the engine needs to make, grant, disable and
 // delete one service account per agent seat.
 type GoogleCloudProvisioning struct {
-	// Provisioner is the provisioner service account's email. The project in
-	// it is the identity project every agent's account is made in.
-	Provisioner string `yaml:"provisioner,omitempty" json:"provisioner,omitempty" desc:"Email of the provisioner service account, <id>@<identity project>.iam.gserviceaccount.com. The agents' service accounts are created in its project."`
+	// IdentityProject is the project kept for Crewlet's own service accounts:
+	// the provisioner ([GoogleCloudProvisioner]) and every agent's account.
+	IdentityProject string `yaml:"identity_project,omitempty" json:"identity_project,omitempty" desc:"ID of the Google Cloud project kept for Crewlet's own service accounts: the provisioner crewlet-provisioner@<identity_project>.iam.gserviceaccount.com and every agent's account are made in it. A new, empty project; the Cloud Shell block creates it if it does not exist."`
 
 	// Provider is the federation provider's full resource name, which is also
 	// the audience of every token the engine signs.
@@ -46,6 +46,27 @@ type GoogleCloudProvisioning struct {
 	// holds only its public half, and it signs nothing but a ten-minute token
 	// for the one provider.
 	FederationKey string `secret:"true" yaml:"federation_key,omitempty" json:"federation_key,omitempty" desc:"The engine's ES256 private key (PKCS#8 PEM) whose public half the federation provider holds. Minted by the connect form and never shown; it can act as the provisioner, which can create service accounts in the identity project and grant the agent levels."`
+}
+
+// Started reports whether a person began connecting g: anything set but the
+// federation key the connect form makes when it opens, which alone is no
+// connection to list, pause or finish.
+func (g *GoogleCloud) Started() bool {
+	if g == nil {
+		return false
+	}
+	p := g.Provisioning
+	return g.Enabled || p == nil || p.IdentityProject != "" || p.Provider != "" || p.AtlasRead
+}
+
+// Identity is the identity project g names as written, false where it names
+// none or a `${VAR}`, which only a resolver reads.
+func (g *GoogleCloud) Identity() (string, bool) {
+	if g == nil || g.Provisioning == nil {
+		return "", false
+	}
+	project := strings.TrimSpace(g.Provisioning.IdentityProject)
+	return project, GoogleCloudIdentityProject(project)
 }
 
 // The levels a seat's service account is granted on its projects, least access
@@ -87,6 +108,15 @@ func (r *RoleGoogleCloud) LevelOrDefault() string {
 	return GoogleCloudLevelViewer
 }
 
+// GoogleCloudProvisionerID is the provisioner's account ID in the identity
+// project: Crewlet's name, so a person types only the project.
+const GoogleCloudProvisionerID = "crewlet-provisioner"
+
+// GoogleCloudProvisioner is the provisioner's email in the identity project.
+func GoogleCloudProvisioner(project string) string {
+	return GoogleCloudProvisionerID + "@" + strings.TrimSpace(project) + ".iam.gserviceaccount.com"
+}
+
 // The shapes Google gives a project ID (6 to 30 lowercase letters, digits and
 // hyphens, from a letter, or a legacy domain-scoped `example.com:id`), a
 // service account's email, and a workload identity provider's resource name.
@@ -109,6 +139,13 @@ var (
 
 // GoogleCloudProjectID reports whether id is a Google Cloud project ID.
 func GoogleCloudProjectID(id string) bool { return googleProjectID().MatchString(id) }
+
+// GoogleCloudIdentityProject reports whether id can be an identity project: a
+// project ID a service account's email can name, so not a legacy domain-scoped
+// one.
+func GoogleCloudIdentityProject(id string) bool {
+	return GoogleCloudProjectID(id) && !strings.Contains(id, ":")
+}
 
 // GoogleCloudServiceAccount is the project a service account's email names,
 // and false for a value that is no service account's email.
@@ -138,20 +175,16 @@ func (g *GoogleCloud) validate(path Path) error {
 		return p.err()
 	}
 	prov := g.Provisioning
-	email := strings.TrimSpace(prov.Provisioner)
-	switch {
-	case email == "":
-		p.add(at(path, "provisioning.provisioner"), ErrMissing,
-			"required when google_cloud is enabled: the provisioner service account's email, "+
-				"crewlet-provisioner@<identity project>.iam.gserviceaccount.com")
-	case envref.Has(email):
+	switch project := strings.TrimSpace(prov.IdentityProject); {
+	case project == "":
+		p.add(at(path, "provisioning.identity_project"), ErrMissing,
+			"required when google_cloud is enabled: the ID of the project kept for Crewlet's service accounts")
+	case envref.Has(project):
 		// Resolved and checked where the client is built.
-	default:
-		if _, ok := GoogleCloudServiceAccount(email); !ok {
-			p.add(at(path, "provisioning.provisioner"), ErrUnknownValue,
-				"%q is not a service account email, which reads <id>@<project>.iam.gserviceaccount.com",
-				prov.Provisioner)
-		}
+	case !GoogleCloudIdentityProject(project):
+		p.add(at(path, "provisioning.identity_project"), ErrUnknownValue,
+			"%q is not a Google Cloud project ID: 6 to 30 lowercase letters, digits and hyphens, starting "+
+				"with a letter, as the console shows it under the project's name", prov.IdentityProject)
 	}
 	// THE PROVIDER MAY FOLLOW THE KEY: the connect form mints the key first,
 	// and the provider exists only once its public half is uploaded. Absent,

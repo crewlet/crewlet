@@ -17,9 +17,9 @@ import (
 
 // The values an outside step's case saves and pastes. Obviously fake.
 const (
-	gcpProvisioner = "crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com"
-	gcpProvider    = "projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine"
-	awsConnection  = "arn:aws:rolesanywhere:us-east-2:123456789012:trust-anchor/0f0e0d0c-0b0a-4908-8706-050403020100," +
+	gcpIdentity   = "acme-crewlet-id"
+	gcpProvider   = "projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine"
+	awsConnection = "arn:aws:rolesanywhere:us-east-2:123456789012:trust-anchor/0f0e0d0c-0b0a-4908-8706-050403020100," +
 		"arn:aws:rolesanywhere:us-east-2:123456789012:profile/00010203-0405-4607-8809-0a0b0c0d0e0f," +
 		"arn:aws:iam::123456789012:role/crewlet/acme/crewlet-acme-provisioner," +
 		"arn:aws:rolesanywhere:us-east-2:123456789012:profile/10010203-0405-4607-8809-0a0b0c0d0e0f," +
@@ -37,7 +37,7 @@ type outsideStep struct {
 }
 
 var outsideSteps = []outsideStep{
-	{integration.KindGoogleCloud, `{"values": {"enabled": "true", "provisioner": "` + gcpProvisioner + `"},
+	{integration.KindGoogleCloud, `{"values": {"enabled": "true", "identity_project": "` + gcpIdentity + `"},
 		"generate": ["federation_key"]}`, "provider", gcpProvider, "federation_key"},
 	{integration.KindAWS, `{"values": {"enabled": "true", "slug": "acme", "home_region": "us-east-2"},
 		"generate": ["certificate_authority"]}`, "connection", awsConnection, "certificate_authority"},

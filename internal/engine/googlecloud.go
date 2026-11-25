@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/googleauth"
@@ -15,7 +16,8 @@ import (
 // googleCloudPass adapts googlecloud.Reconcile to the pass contract: the
 // provisioner the engine reaches by federation, the levels Google's roles
 // leave grantable and the identity project's accounts, each agent's growth
-// identity (googlegrowth.go), then each agent's own Google Cloud account.
+// identity (googlegrowth.go), the growth products' APIs and the company
+// reader, then each agent's own Google Cloud account.
 //
 // NO TEARDOWN: the engine puts nothing company-wide at Google. Every agent's
 // account is disabled or deleted by the disconnect's access sync
@@ -101,5 +103,12 @@ func (p *googleCloudPass) run(ctx context.Context, _ setup.PassInput) ([]integra
 	if err != nil {
 		return nil, fmt.Errorf("engine: google identity pass: %w", err)
 	}
-	return append(res.Findings(), growth...), nil
+	// THE PRODUCTS' CHORES, so turning a Google product on needs no block:
+	// its APIs on and the company reader made.
+	chores, err := googlecloud.ConvergeGrowthProducts(ctx, client, company.Config.Name,
+		googleauth.EnabledProducts(company.Config))
+	if err != nil {
+		return nil, fmt.Errorf("engine: google growth products: %w", err)
+	}
+	return slices.Concat(res.Findings(), growth, chores), nil
 }

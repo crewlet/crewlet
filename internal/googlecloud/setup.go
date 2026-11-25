@@ -1,8 +1,10 @@
 package googlecloud
 
 import (
+	"cmp"
+	"strings"
+
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/vendortext"
@@ -11,41 +13,40 @@ import (
 // Requirements says what company still needs for Google Cloud. A nil block
 // answers every field absent, so the form still renders.
 //
-// ONE PASS, IN ORDER: the provisioner is entered and saved, which mints the
-// federation key; the Cloud Shell block uploads the key's public half and
-// prints the provider; the provider is pasted and tested. So the provider is
-// printed by the key's row, which carries the block ([CloudShellBlock]) once
-// the key is held, rendered for company's issuer and subject and the growth
-// products the company turns on.
-func Requirements(
-	company string, in *config.GoogleCloud, growth []googleauth.Product, resolve func(string) (string, bool),
-) []setup.Requirement {
-	var provisioner, provider, key string
+// ONE PASS, ONE SAVE: the federation key is made when the form opens
+// (MintFirst), so the key's row carries the block ([CloudShellBlock]) at once,
+// drawn from the identity project as typed (a live view the form redraws); the
+// block prints the provider, which is pasted, and one save stores both.
+func Requirements(company string, in *config.GoogleCloud, resolve func(string) (string, bool)) []setup.Requirement {
+	var project, provider, key string
 	var enabled, atlas bool
 	if in != nil {
 		enabled = in.Enabled
 		if in.Provisioning != nil {
-			provisioner, provider, key = in.Provisioning.Provisioner, in.Provisioning.Provider,
+			project, provider, key = in.Provisioning.IdentityProject, in.Provisioning.Provider,
 				in.Provisioning.FederationKey
 			atlas = in.Provisioning.AtlasRead
 		}
 	}
 	keyPresent, keyResolved := setup.Resolution(key, resolve)
 	keyHeld := keyPresent && keyResolved != nil && *keyResolved
+	suggested := SuggestedProject(company)
 	reqs := []setup.Requirement{
 		{
-			Field:      "provisioner",
-			Label:      "Provisioner service account",
+			Field:      "identity_project",
+			Label:      "Identity project ID",
 			Kind:       setup.KindID,
-			ConfigPath: "integrations.google_cloud.provisioning.provisioner",
+			ConfigPath: "integrations.google_cloud.provisioning.identity_project",
 			Required:   true,
 			Connect:    true,
-			Format:     "crewlet-provisioner@<identity project>.iam.gserviceaccount.com",
-			Shape:      setup.ShapeGoogleServiceAccount,
-			Hint:       vendortext.Plain("The service account Crewlet acts as, in a project kept for it."),
-			More: vendortext.Of(vendortext.W("Every agent's service account is made in that project. Create it on your "),
-				vendortext.W("new project page").At(newProjectURL), vendortext.W(", save, then run the block below in "),
-				vendortext.W("Cloud Shell").At(cloudShellURL), vendortext.W("; it creates this account if it does not exist.")),
+			Default:    suggested,
+			Format:     "6 to 30 lowercase letters, digits and hyphens, starting with a letter",
+			Shape:      setup.ShapeGoogleProject,
+			Hint:       vendortext.Plain("A new project kept for Crewlet alone. Its ID can differ from its name."),
+			More: vendortext.Of(vendortext.W("The block below creates it if it does not exist. To use one you made "+
+				"on your "), vendortext.W("new project page").At(newProjectURL), vendortext.W(", type the ID Google "+
+				"shows under its name. Crewlet acts in it as "+config.GoogleCloudProvisioner("{identity_project}")+
+				", which the block makes.")),
 			Blocks: integration.FindingCredentialMissing,
 		},
 		{
@@ -58,12 +59,17 @@ func Requirements(
 			Connect:    true,
 			// MINTABLE, because Google needs only its public half: the engine
 			// makes the key, seals the private half, and nobody downloads a
-			// credential at all.
-			Mintable: true,
-			Shape:    setup.ShapeES256Key,
-			Hint:     vendortext.Of(vendortext.W("Run this block in "), vendortext.W("Cloud Shell").At(cloudShellURL), vendortext.W(".")),
-			More: vendortext.Plain("Crewlet made this key when you saved, and sealed it as " + FederationKeySecret + ". " +
-				"Google holds only its public half; the private half is never shown or exported."),
+			// credential at all. FIRST, so the block shows before any save.
+			Mintable:  true,
+			MintFirst: true,
+			Shape:     setup.ShapeES256Key,
+			Hint:      vendortext.Of(vendortext.W("Run this block in "), vendortext.W("Cloud Shell").At(cloudShellURL), vendortext.W(".")),
+			More: vendortext.Plain("If the block stops, its last line starts \"" + strings.TrimSpace(StopPrefix) +
+				"\" and says what to do: run gcloud auth login when Cloud Shell has no active account, or type the ID " +
+				"of a new, empty project when this one runs workloads, holds service accounts Crewlet did not make " +
+				"or cannot be created. It is safe to run again. Crewlet made this key when you started connecting " +
+				"and sealed it as " + FederationKeySecret + "; Google holds only its public half. The block stays " +
+				"the same when you turn on another Google product."),
 			CheckNote: "It is tested with the provider.",
 			Blocks:    integration.FindingCredentialMissing,
 		},
@@ -76,7 +82,7 @@ func Requirements(
 			Connect:    true,
 			PrintedBy:  "federation_key",
 			Checkable:  true,
-			CheckWith:  []string{"provisioner", "federation_key"},
+			CheckWith:  []string{"identity_project", "federation_key"},
 			Format:     "projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>",
 			Shape:      setup.ShapeGoogleProvider,
 			Hint:       vendortext.Plain("The last line the Cloud Shell block prints."),
@@ -93,9 +99,9 @@ func Requirements(
 			Hint: vendortext.Plain("Lets Atlas list what each project runs, as a service account of its own."),
 			More: vendortext.Plain("Atlas then shows each project's instances, databases, Cloud Run services, functions, buckets " +
 				"and topics, by name and type, read hourly as " + AtlasAccountID + " through Cloud Asset Inventory. " +
-				"It reads no configuration, label, environment or data. One step: turn this on and save, then run " +
-				"the Cloud Shell block above again. To undo it, turn this off and delete the " + AtlasAccountID +
-				" service account in the identity project."),
+				"It reads no configuration, label, environment or data. Turning it on adds Atlas's lines to the " +
+				"Cloud Shell block above: run it, again if you ran it before, then save. To undo it, turn this off " +
+				"and delete the " + AtlasAccountID + " service account in the identity project."),
 		},
 		{
 			// Hidden and on: connecting a switched-off integration is not a
@@ -111,16 +117,15 @@ func Requirements(
 	}
 	for i := range reqs {
 		switch reqs[i].Field {
-		case "provisioner":
-			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(provisioner, resolve)
+		case "identity_project":
+			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(project, resolve)
 		case "federation_key":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(key, resolve)
 			if keyHeld {
-				reqs[i].Public = cloudShellView(company, setup.Deref(provisioner, resolve), setup.Deref(key, resolve), atlas,
-					growth)
-				if reqs[i].Public != nil {
-					reqs[i].Public.DrawnFrom = []string{"provisioner", "atlas_read"}
-				}
+				// WHAT IS SAVED, else the suggestion the form opens with; the
+				// form redraws it from what is typed ([Draw]).
+				drawn := cmp.Or(setup.Deref(project, resolve), suggested)
+				reqs[i].Public = cloudShellView(company, drawn, setup.Deref(key, resolve), atlas)
 			}
 		case "provider":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(provider, resolve)
@@ -133,6 +138,23 @@ func Requirements(
 	return reqs
 }
 
+// Draw is the block drawn from what the form holds ([setup.Drawer]): the
+// identity project and See more in Atlas as typed, and the key Crewlet made.
+func Draw(d setup.Draw) (*setup.PublicView, error) {
+	if d.Field != "federation_key" {
+		return nil, setup.NotDrawable("Google Cloud", d.Field)
+	}
+	key := strings.TrimSpace(d.Value("federation_key"))
+	if key == "" {
+		return nil, setup.Unusable("Open the form again so Crewlet makes the federation key the block uploads.")
+	}
+	block, err := CloudShellBlock(d.Company, d.Value("identity_project"), key, d.Value("atlas_read") == "true")
+	if err != nil {
+		return nil, setup.Unusable("Type the identity project's ID to see the block.")
+	}
+	return liveView(key, block)
+}
+
 // The console's new project page, and Cloud Shell opened over the console.
 const (
 	newProjectURL = "https://console.cloud.google.com/projectcreate"
@@ -140,23 +162,22 @@ const (
 )
 
 // Guide is what the connect form says around its fields: one pass, in order,
-// from an empty project to the provider the Cloud Shell block prints.
+// from a project ID to the provider the Cloud Shell block prints.
 func Guide() setup.Guide {
 	return setup.Guide{
 		Summary: "Crewlet gives each agent its own service account and issues its token for an hour at a " +
 			"time. No service account key is made or downloaded.",
 		Prepare: []setup.Step{
-			{Text: vendortext.Of(vendortext.W("Create an empty project for Crewlet's service accounts on your "),
-				vendortext.W("new project page").At(newProjectURL), vendortext.W("."))},
 			{
-				Text:   vendortext.Plain("Enter the provisioner's address here and save, so Crewlet makes its key."),
-				Yields: "provisioner",
+				Text: vendortext.Plain("Keep the suggested project ID, or type the ID of an empty project you " +
+					"made for Crewlet."),
+				Yields: "identity_project",
 			},
 			{
-				Text: vendortext.Of(vendortext.W("Run the block Crewlet shows in "), vendortext.W("Cloud Shell").At(cloudShellURL),
-					vendortext.W(". It creates the provisioner if needed and uploads Crewlet's public key.")),
+				Text: vendortext.Of(vendortext.W("Copy the block and run it in "), vendortext.W("Cloud Shell").At(cloudShellURL),
+					vendortext.W(". It creates the project if needed and uploads Crewlet's public key.")),
 			},
-			{Text: vendortext.Plain("Paste the last line the block prints, then test it."), Yields: "provider"},
+			{Text: vendortext.Plain("Paste the last line the block prints, then save."), Yields: "provider"},
 		},
 	}
 }
