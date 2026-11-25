@@ -264,7 +264,7 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 			return "", err
 		}
 	}
-	if _, err = holdHome(ctx, box, paths.CodexLiveConfig(), paths.CodexHomeConfig()); err != nil {
+	if err = holdHome(ctx, box, paths.CodexLiveConfig(), paths.CodexHomeConfig()); err != nil {
 		return "", err
 	}
 	if err = box.WriteFile(ctx, paths.CodexConfig(), []byte(config)); err != nil {

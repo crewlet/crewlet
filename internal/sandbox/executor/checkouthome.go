@@ -17,11 +17,14 @@ import (
 // home's own copy of it held beside the run while it runs (held), the file
 // the helper writes the checkouts' sections into (sections), and the skills
 // directory they are copied into, with the list of copies the next run
-// removes. A copy is built in state/staging ([checkoutHome.staging]).
+// removes. A copy is built in state/staging ([checkoutHome.staging]). own,
+// where set, is a file of the run's own instructions written first, ahead of
+// the home's (Copilot's standing instructions share its one home file).
 type checkoutHome struct {
 	state, helper, launch  string
 	agents, held, sections string
 	skills, copied         string
+	own                    string
 }
 
 // staging is where the helper builds a checkout's skill before one rename
@@ -51,6 +54,10 @@ type checkoutSpec struct {
 	Limit        *int
 	SkillDirs    []string
 }
+
+// checkoutUnlimited is the [checkoutSpec.Limit] of a harness that bounds no
+// instruction file it reads.
+var checkoutUnlimited *int
 
 // checkoutSlot is one instruction slot as the helper reads it: Names, the
 // file names of which it hands the first, written as a list; or Tree, a
@@ -104,7 +111,12 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 // listed and the state with its staging removed, checkout-launch run, and the
 // checkouts' sections written after the home's own through a link as the home
 // keeps the file, which is left untouched where they hand nothing.
-func (h checkoutHome) gate() string {
+func (h checkoutHome) gate() string { return h.prepare() + h.compose() }
+
+// prepare is [checkoutHome.gate] up to checkout-launch: the hold, the
+// removals and the launch, which write the sections [checkoutHome.compose]
+// puts in place.
+func (h checkoutHome) prepare() string {
 	q := shellword.Quote
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -124,8 +136,21 @@ func (h checkoutHome) gate() string {
 	line(`else`)
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
 	line(`fi`)
-	line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
 	return b.String()
+}
+
+// compose is the shell writing the home's instruction file from what
+// [checkoutHome.prepare] held and the launch wrote: the run's own (where h has
+// a file of them), the home's own, then the sections, through a link as the
+// home keeps it; left untouched where the run adds nothing. A Copilot run
+// composes again for each launch attempt (copilotAttempts).
+func (h checkoutHome) compose() string {
+	if h.own == "" {
+		return `if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi` + "\n"
+	}
+	o := shellword.Quote(h.own)
+	return fmt.Sprintf(`if [ -s "$rq" ] || [ -s %[1]s ]; then { rs=; for rf in %[1]s "$rha" "$rq"; do if [ -s "$rf" ]; then printf "$rs"; cat "$rf"; rs='\n\n'; fi; done; } `+
+		`> "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`+"\n", o)
 }
 
 // restore is the shell marking the run ended, so a firing still running
