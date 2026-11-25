@@ -320,8 +320,8 @@ const (
 	// every one a removed seat's rows keep.
 	insertSummaryStatement = `
 		INSERT INTO executor_session_summaries (agent_handle, turn_id, object, object_hash, object_size,
-			content_key, harness, session_id, kept_at, bytes, kept_bytes, cut, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			content_key, harness, session_id, kept_at, bytes, kept_bytes, cut, launch_seq, capture_seq, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (agent_handle, turn_id) DO NOTHING`
 	releaseSummaryStatement = `
 		DELETE FROM executor_session_summaries INDEXED BY ` + summaryKey + `
@@ -1245,7 +1245,8 @@ func nameSummary(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, e
 	}
 	res, err := tx.ExecContext(ctx, insertSummaryStatement, p.Handle, p.Turn, summary.Object.Key.String(),
 		string(summary.Object.Hash), summary.Object.Size, summary.ContentKey, summary.Harness, summary.Session,
-		store.EncodeTime(summary.At), summary.Bytes, summary.Kept, flag(summary.Cut), c.packed)
+		store.EncodeTime(summary.At), summary.Bytes, summary.Kept, flag(summary.Cut), summary.Place.LaunchSeq,
+		summary.Place.CaptureSeq, c.packed)
 	if err != nil {
 		return 0, fmt.Errorf("executordomain: name %s's summary of turn %s at %s: %w",
 			p.Handle, p.Turn, c.position, err)

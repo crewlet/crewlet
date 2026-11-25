@@ -47,8 +47,8 @@ func TestASummaryPastItsBoundKeepsItsEnd(t *testing.T) {
 
 // AN ENDING REFUSES A SUMMARY NO READER COULD OPEN OR PLACE: no object, one
 // past a sealed summary's bound, no keyring key, no instant, no bytes kept,
-// more kept than it holds or past a kept summary's bound, or no harness; and
-// takes one that names all of them. Such a summary is not Within, while the
+// more kept than it holds or past a kept summary's bound, no harness, or no
+// place among the turn's captures; and takes one that names all of them. Such a summary is not Within, while the
 // ending's other fields leave the ending Within, so a reader drops the summary
 // alone.
 //
@@ -59,7 +59,8 @@ func TestAnEndingRefusesASummaryNoReaderCouldOpen(t *testing.T) {
 	whole := func() Summary {
 		return Summary{Object: objstore.Object{Key: objstore.KeyAt(time.Unix(1_700_000_000, 0)),
 			Hash: objstore.Hash(strings.Repeat("ab", 32)), Size: 512}, ContentKey: "k1",
-			At: time.Unix(1_700_000_000, 0).UTC(), Bytes: 400, Kept: 400, Harness: "claude-code", Session: "s-1"}
+			At: time.Unix(1_700_000_000, 0).UTC(), Bytes: 400, Kept: 400, Harness: "claude-code", Session: "s-1",
+			Place: CapturePlace{LaunchSeq: 1, CaptureSeq: 2}}
 	}
 	ok := whole()
 	if err := (Ending{Outcome: OutcomeCompleted, Summary: &ok}).Validate(); err != nil {
@@ -76,6 +77,8 @@ func TestAnEndingRefusesASummaryNoReaderCouldOpen(t *testing.T) {
 		"kept past its bound": func(s *Summary) { s.Bytes, s.Kept = SummaryMaxBytes+2, SummaryMaxBytes+1 },
 		"no harness":          func(s *Summary) { s.Harness = "" },
 		"a session too long":  func(s *Summary) { s.Session = strings.Repeat("s", SessionIDMaxBytes+1) },
+		"no place":            func(s *Summary) { s.Place = CapturePlace{} },
+		"no capture placed":   func(s *Summary) { s.Place.CaptureSeq = 0 },
 	} {
 		s := whole()
 		broken(&s)
