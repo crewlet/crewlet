@@ -52,7 +52,18 @@
 // as a signing-only webhook secret, how the vendor proves it (CheckNote).
 // setup/setuptest runs every probe through one suite whose meta-test hands it
 // vendors that lie, because a probe answering "works" for a refused key is the
-// failure nobody can see.
+// failure nobody can see. A value that is not a credential is checked the same
+// way when its requirement says Checkable (a connection the vendor's own block
+// printed).
+//
+// # An outside step's output
+//
+// Some values are printed by a block a person runs at the vendor (Google
+// Cloud's provider, AWS's stack output), drawn from what is saved
+// ([PublicView.DrawnFrom]) with a key the first save mints. Such a value
+// ([Requirement.PrintedBy]) is Required, so the setup stays unfinished until
+// it is pasted, and never holds a save of the answers before it: a form that
+// did would wait on a block it cannot draw until that save.
 //
 // # The words are split by job
 //
@@ -313,6 +324,11 @@ type Requirement struct {
 	// send. Nil where there is nothing to show.
 	Public *PublicView `json:"public,omitempty"`
 
+	// PrintedBy names the field of the same list whose [Requirement.Public]
+	// block, run at the vendor, prints this value. Required to finish, it never
+	// holds a save (the package doc's "An outside step's output").
+	PrintedBy string `json:"printed_by,omitempty"`
+
 	// Identity is a [KindAddIdentity] requirement's step, nil for any other
 	// kind.
 	Identity *IdentityStep `json:"identity,omitempty"`
@@ -321,9 +337,9 @@ type Requirement struct {
 	// kind and until [FillRedirects] runs.
 	Redirect *RedirectStep `json:"redirect,omitempty"`
 
-	// Checkable reports that this credential can be checked at the vendor
-	// before it is stored, with a read-only call, so a form offers a Test
-	// button for it. See [Probe].
+	// Checkable reports that this value, a credential or not, can be checked
+	// at the vendor before it is stored, with a read-only call, so a form
+	// offers a Test control for it. See [Probe].
 	Checkable bool `json:"checkable,omitempty"`
 
 	// CheckNote is, for a credential that cannot be checked ahead, when the
@@ -433,6 +449,9 @@ type Requirement struct {
 type PublicView struct {
 	Text     string `json:"text"`
 	Language string `json:"language"`
+	// DrawnFrom names the fields of the same list whose saved answers Text is
+	// drawn from, so a form knows an unsaved change to one makes it stale.
+	DrawnFrom []string `json:"drawn_from,omitempty"`
 }
 
 // privateKeyBlock matches the armour of a PEM private key of any kind: PKCS#8,
