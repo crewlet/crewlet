@@ -104,11 +104,11 @@ func (k EntryKind) Valid() bool { return slices.Contains(EntryKinds, k) }
 // upgrade) is read again from the start.
 //
 // RAISED BY ANY CHANGE THAT MOVES AN ORDINAL: a kind added, a record read that
-// was not, one read as more entries or fewer, one no longer read. 10 reads a
-// Codex or Hermes person's words past the value bound as one entry (R1), and a
-// Hermes row by its keys' exact names, as the line walk reads them; what each
+// was not, one read as more entries or fewer, one no longer read. 11 reads a
+// Codex or Hermes line past its bound on its images' bytes, them passed, as
+// its entries, and a Hermes content stored as JSON by its parts; what each
 // earlier one moved is its commit's.
-const TranscriptVersion = 10
+const TranscriptVersion = 11
 
 // TranscriptEntry is one entry of a session's transcript, as a read surface
 // sends it.
