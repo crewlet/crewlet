@@ -35,6 +35,13 @@
 //     passed over, as Qwen Code reads it as empty. Where only the checkouts'
 //     hook is off, the run goes on and the skip log says so (D709).
 //
+//   node qwen-helper.mjs checkouts <homes> <launch>
+//     Settles context.fileName as Qwen Code does (qwencheckout.go): the home's
+//     own context files to homes, a path a line, and the launch config's
+//     instruction files; a line for the run's skip log on stdout where it
+//     names blanks alone. Exits 1, naming the file, on a value Qwen Code
+//     stops on.
+//
 // NOTES (the runner note contract's poll channel). While the turn runs, the
 // helper polls the notes route and keeps what it fetched. Qwen Code asks for
 // mid-turn messages after every tool batch of the main agent
@@ -800,10 +807,15 @@ function sleep(ms, signal) {
 // checkoutNames writes to homes the home's own context files 0.28.4 reads
 // ([contextNames]), a path a line, and, where the launch config is there,
 // makes its instruction files those names, in that order, before its rules
-// (qwencheckout.go): 0 done, else 1, said on stderr.
+// (qwencheckout.go); where the setting names blanks alone, none, and says so
+// on stdout, a line for the run's skip log: 0 done, else 1, said on stderr.
 function checkoutNames(homes, launch) {
   try {
-    const names = contextNames()
+    const { names, blank } = contextNames()
+    if (blank) {
+      process.stdout.write(`crewlet: ${blank} sets context.fileName to blank names only, so Qwen Code loads no ` +
+        "context file, nor the run its repositories': it hands their rules only to a checkout cloned during it\n")
+    }
     fs.writeFileSync(homes, names.map((name) => path.join(os.homedir(), ".qwen", name) + "\n").join(""))
     if (!fs.existsSync(launch)) return 0
     const config = JSON.parse(fs.readFileSync(launch, "utf8"))
@@ -822,9 +834,10 @@ function checkoutNames(homes, launch) {
 // directory's settings that holds the key decides. A falsy value, an empty
 // list or a blank name is the default, QWEN.md then AGENTS.md; a list's names
 // are trimmed and an empty one dropped; a name with a slash is a path from
-// the directory, as Qwen Code joins it. Throws, naming the file, where Qwen
-// Code would stop on the value (an entry or a value that is no string) or
-// load no context file at all (every entry blank).
+// the directory, as Qwen Code joins it. Every entry blank is no name at all,
+// under which it loads no context file (measured), blank naming the file.
+// Throws, naming the file, where Qwen Code would stop on the value (an entry
+// or a value that is no string).
 function contextNames() {
   for (const file of settingsFiles().reverse()) {
     const context = readSettings(file)?.context
@@ -837,14 +850,11 @@ function contextNames() {
         "name each file as a string")
     }
     const names = list.map((name) => name.trim()).filter((name) => name !== "")
-    if (Array.isArray(value) && value.length > 0 && names.length === 0) {
-      throw new Error(`${file} sets context.fileName to blank names only, so Qwen Code 0.28.4 loads no context ` +
-        "file, where the run hands its repositories' instructions: name a file, or remove the key")
-    }
+    if (Array.isArray(value) && value.length > 0 && names.length === 0) return { names, blank: file }
     if (names.length === 0) break
-    return names
+    return { names }
   }
-  return ["QWEN.md", "AGENTS.md"]
+  return { names: ["QWEN.md", "AGENTS.md"] }
 }
 
 // ---- the guard -------------------------------------------------------------

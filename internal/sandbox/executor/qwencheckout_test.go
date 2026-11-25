@@ -1,6 +1,8 @@
 package executor_test
 
 import (
+	"maps"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,37 +69,49 @@ echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
 
 // A QWEN CODE RUN HANDS A CHECKOUT THE CONTEXT FILES ITS SETTINGS NAME, as
 // Qwen Code 0.28.4 settles context.fileName (measured, each row): the highest
-// settings file holding the key decides, comments allowed, even null, empty
-// or an empty list, which leave QWEN.md then AGENTS.md; names trimmed, a blank
-// one dropped, one with a slash a path from the root; the sections go into
-// the first of the home's own files that is there. A value Qwen Code stops on
-// (no string), or blanks alone, refuses the run, naming the file.
+// settings file holding the key decides, even null, empty or an empty list
+// (QWEN.md then AGENTS.md); names trimmed, a blank one dropped, one with a
+// slash a path from the root, its home directory made and removed after the
+// run where the home had none; blanks alone hand none, said once. The
+// sections go into the first of the home's own files that is there. A value
+// Qwen Code stops on (no string) refuses the run, naming the file.
 //
-// Mutation: ignore the settings, let the home's win, skip a null or empty
-// one, keep a blank name, drop a slashed one, write the sections elsewhere,
-// or start a run Qwen Code stops on, and a row goes red.
+// Mutation: ignore the settings, let the home's win, skip a null one, keep a
+// blank name, drop a slashed one, keep or remove a directory amiss, refuse
+// or hand blanks alone, or start a run Qwen Code stops on, and a row goes red.
 func TestAQwenRunHandsACheckoutTheContextFilesItsSettingsName(t *testing.T) {
 	t.Parallel()
+	const blank = "context.fileName to blank names only, so Qwen Code loads no context file"
 	for name, tc := range map[string]struct {
-		home, work, want, refused string
+		home, work, want, refused, said, gone, kept string
+		own                                         map[string]string
 	}{
-		"the working directory's list, commented": {`{"context":{"fileName":["AGENTS.md"]}}`,
-			"// the working directory's\n{\"context\":{\"fileName\":[\"CTX.md\",\"QWEN.md\"]}}\n",
-			"REPO-CTX\n\n\nREPO-QWEN\n", ""},
-		"null over the home's":       {`{"context":{"fileName":["CTX.md"]}}`, `{"context":{"fileName":null}}`, "REPO-QWEN\n\n\nREPO-AGENTS\n", ""},
-		"an empty name":              {`{"context":{"fileName":["CTX.md"]}}`, `{"context":{"fileName":""}}`, "REPO-QWEN\n\n\nREPO-AGENTS\n", ""},
-		"an empty list":              {`{"context":{"fileName":["CTX.md"]}}`, `{"context":{"fileName":[]}}`, "REPO-QWEN\n\n\nREPO-AGENTS\n", ""},
-		"a blank entry and a padded": {`{}`, `{"context":{"fileName":["", " CTX.md "]}}`, "REPO-CTX\n", ""},
-		"a path below the root":      {`{}`, `{"context":{"fileName":["sub/X.md"]}}`, "REPO-SUBX\n", ""},
-		"no string":                  {`{}`, `{"context":{"fileName":[5, "CTX.md"]}}`, "", "which Qwen Code 0.28.4 stops on"},
-		"blanks alone":               {`{}`, `{"context":{"fileName":["", " "]}}`, "", "blank names only"},
+		"the working directory's list, commented": {home: `{"context":{"fileName":["AGENTS.md"]}}`,
+			work: "// the working directory's\n{\"context\":{\"fileName\":[\"CTX.md\",\"QWEN.md\"]}}\n",
+			want: "REPO-CTX\n\n\nREPO-QWEN\n"},
+		"null over the home's": {home: `{"context":{"fileName":["CTX.md"]}}`, work: `{"context":{"fileName":null}}`,
+			want: "REPO-QWEN\n\n\nREPO-AGENTS\n"},
+		"an empty name": {home: `{"context":{"fileName":["CTX.md"]}}`, work: `{"context":{"fileName":""}}`,
+			want: "REPO-QWEN\n\n\nREPO-AGENTS\n"},
+		"an empty list": {home: `{"context":{"fileName":["CTX.md"]}}`, work: `{"context":{"fileName":[]}}`,
+			want: "REPO-QWEN\n\n\nREPO-AGENTS\n"},
+		"a blank entry and a padded": {home: `{}`, work: `{"context":{"fileName":["", " CTX.md "]}}`, want: "REPO-CTX\n"},
+		"a path below the root": {home: `{}`, work: `{"context":{"fileName":["a/b/X.md"]}}`, want: "REPO-ABX\n",
+			gone: "a"},
+		"a path below the root, the home's directory there": {home: `{}`,
+			work: `{"context":{"fileName":["sub/X.md"]}}`, want: "REPO-SUBX\n", kept: "sub/OWN.md",
+			own: map[string]string{".qwen/sub/OWN.md": "HOME-SUB\n"}},
+		"no string": {home: `{}`, work: `{"context":{"fileName":[5, "CTX.md"]}}`,
+			refused: "which Qwen Code 0.28.4 stops on"},
+		"blanks alone": {home: `{}`, work: `{"context":{"fileName":["", " "]}}`, said: blank},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			runner, box := qwenBox(t, `o=$HOME/observed; mkdir -p "$o"; cat "$HOME/.qwen/QWEN.md" "$HOME/.qwen/CTX.md" "$HOME/.qwen/sub/X.md" > "$o/home-md" 2> /dev/null
+			runner, box := qwenBox(t, `o=$HOME/observed; mkdir -p "$o"; q=$HOME/.qwen
+cat "$q/QWEN.md" "$q/CTX.md" "$q/sub/X.md" "$q/a/b/X.md" > "$o/home-md" 2> /dev/null
 echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
 `)
-			plant(t, box, map[string]string{
+			files := map[string]string{
 				".qwen/QWEN.md":                       "HOME-OWN\n",
 				".qwen/settings.json":                 tc.home,
 				"workspace/.qwen/settings.json":       tc.work,
@@ -108,7 +122,10 @@ echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
 				"workspace/repo/QWEN.md":              "REPO-QWEN\n",
 				"workspace/repo/AGENTS.md":            "REPO-AGENTS\n",
 				"workspace/repo/sub/X.md":             "REPO-SUBX\n",
-			})
+				"workspace/repo/a/b/X.md":             "REPO-ABX\n",
+			}
+			maps.Copy(files, tc.own)
+			plant(t, box, files)
 			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "qwen3-coder-plus",
 				Env: map[string]string{"OPENAI_API_KEY": "key-placeholder"}})
 			p := executor.PathsFor(box)
@@ -122,13 +139,41 @@ echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
 			if !res.Success {
 				t.Fatalf("the run failed: %s\n%s", res.Error, stderr)
 			}
-			work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), sandbox.WorkspaceSubdir))
-			if err != nil {
-				t.Fatal(err)
+			if n := strings.Count(stderr, blank); n != map[bool]int{false: 0, true: 1}[tc.said != ""] ||
+				(n == 1 && !strings.Contains(stderr, "/workspace/.qwen/settings.json sets context.fileName")) {
+				t.Errorf("the run's error stream says the blank names %d times, naming the file and key once where "+
+					"they are blank:\n%s", n, stderr)
 			}
-			sections := "for `repo` with root " + work + "/repo\n\n" + tc.want
-			if got := boxFile(t, box, box.Home()+"/observed/home-md"); !strings.Contains(got, sections) {
-				t.Errorf("Qwen Code started on home context files of\n%q\nwant them to hold\n%q", got, sections)
+			got := boxFile(t, box, box.Home()+"/observed/home-md")
+			if tc.want == "" {
+				if got != "HOME-OWN\n" {
+					t.Errorf("Qwen Code started on home context files of\n%q\nwant the home's own alone", got)
+				}
+			} else {
+				work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), sandbox.WorkspaceSubdir))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if sections := "for `repo` with root " + work + "/repo\n\n" + tc.want; !strings.Contains(got, sections) {
+					t.Errorf("Qwen Code started on home context files of\n%q\nwant them to hold\n%q", got, sections)
+				}
+			}
+			if tc.gone != "" {
+				if _, err := os.Lstat(filepath.Join(p.QwenDir(), tc.gone)); !os.IsNotExist(err) {
+					t.Errorf("~/.qwen/%s, which the run made, is left after it (%v)", tc.gone, err)
+				}
+			}
+			if tc.kept != "" {
+				if got := boxFile(t, box, filepath.Join(p.QwenDir(), tc.kept)); got != "HOME-SUB\n" {
+					t.Errorf("the home's own ~/.qwen/%s reads %q after the run, want it kept", tc.kept, got)
+				}
+			}
+			if entries, _ := os.ReadDir(filepath.Dir(p.QwenHomeInstructions())); len(entries) > 0 {
+				for _, e := range entries {
+					if strings.HasPrefix(e.Name(), filepath.Base(p.QwenHomeInstructions())) {
+						t.Errorf("the run left %s behind", e.Name())
+					}
+				}
 			}
 		})
 	}
