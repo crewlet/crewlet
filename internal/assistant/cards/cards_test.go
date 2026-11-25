@@ -272,11 +272,13 @@ func TestALinkHoldsEachParameterToItsGrammar(t *testing.T) {
 		screen string
 		params map[string]string
 	}{
-		"a project key as a task":  {"item", map[string]string{"id": "ENG"}},
-		"a path as a page":         {"page", map[string]string{"id": "../../settings/secrets"}},
-		"a parameter not taken":    {"home", map[string]string{"id": "x"}},
-		"a screen the table lacks": {"secrets", nil},
-		"a turn named by a key":    {"turn", map[string]string{"id": "ENG-1"}},
+		"a project key as a task":   {"item", map[string]string{"id": "ENG"}},
+		"a path as a page":          {"page", map[string]string{"id": "../../settings/secrets"}},
+		"a parameter not taken":     {"home", map[string]string{"id": "x"}},
+		"a screen the table lacks":  {"secrets", nil},
+		"a turn named by a key":     {"turn", map[string]string{"id": "ENG-1"}},
+		"an integration not served": {"integration", map[string]string{"kind": "gcp"}},
+		"a path as an integration":  {"integration", map[string]string{"kind": "../../settings"}},
 	} {
 		if _, err := cards.Link(c.screen, c.params, ""); !errors.Is(err, cards.ErrNoLink) {
 			t.Errorf("%s: Link = %v, want ErrNoLink", name, err)
@@ -292,7 +294,7 @@ func TestALinkHoldsEachParameterToItsGrammar(t *testing.T) {
 // fixture, of the shape the dashboard's router fixture fills them with.
 var linkSamples = map[string]string{
 	"id": "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f", "key": "ENG", "handle": "pm", "unit": "platform",
-	"direction": "up",
+	"direction": "up", "kind": "google_cloud",
 }
 
 // THE LINK TABLE FIXTURE is every screen the engine links to, as the engine

@@ -111,6 +111,8 @@ var contract = []Entry{
 	{"ACCESS_OPTION_PREFIX", ReadScalar, "internal/advisor.TestTheDashboardKnowsAGrantOptionByTheEnginesPrefix"},
 	{"PAUSED_SEAT_CLASSES", ReadLiteral, "internal/advisor.TestTheDashboardKnowsEveryClassAPausedSeatRaises"},
 	{"ADVISOR_PAGES", ReadLiteral, "internal/advisor.TestTheDashboardTakesEveryPageAFixOpens"},
+	{"OAUTH_REDIRECT_MOVED", ReadScalar, "internal/notice.TestTheDashboardKnowsTheRedirectNoticeAndItsVendors"},
+	{"OAUTH_CLIENT_VENDORS", ReadLiteral, "internal/notice.TestTheDashboardKnowsTheRedirectNoticeAndItsVendors"},
 	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"PROJECT_FILE_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
@@ -296,6 +298,12 @@ var contract = []Entry{
 	// providersteps.ts
 	{"PROVIDER_STEPS", ReadScalar, "cmd/crewlet.TestTheFirstModelStepsRunOnACompanyOnlyTheStoreHolds"},
 
+	// instructions.ts
+	{"AnswerLength", ReadUnion, "internal/config.TestTheDashboardHoldsInstructionsToTheEnginesRules"},
+	{"AnswerFormat", ReadUnion, "internal/config.TestTheDashboardHoldsInstructionsToTheEnginesRules"},
+	{"ASSISTANT_INSTRUCTIONS_MAX_RUNES", ReadScalar, "internal/config.TestTheDashboardHoldsInstructionsToTheEnginesRules"},
+	{"AssistantInstructions", ReadInterface, "internal/config.TestTheDashboardHoldsInstructionsToTheEnginesRules"},
+
 	// models.ts
 	{"HarnessAuthMode", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_HARNESS", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
@@ -398,6 +406,7 @@ var contract = []Entry{
 	{"IntegrationTool", ReadInterface, "internal/api/queries.TestTheIntegrationsRoomReadsWhatThisAnswerSends"},
 	{"IntegrationToolState", ReadUnion, "internal/integration.TestTheDashboardKnowsExactlyTheRollupStates"},
 	{"INTEGRATION_TOOLS", ReadLiteral, "internal/integration.TestTheDashboardGroupsSurfacesAsTheEngineDoes"},
+	{"INTEGRATION_TOOL_NAMES", ReadLiteral, "internal/integration.TestTheDashboardNamesEachToolAsTheEngineDoes"},
 	{"LinkHost", ReadInterface, "internal/api/queries.TestTheLinkHostsAnswerCarriesHostsAndNothingElse"},
 	{"LinkHostsAnswer", ReadInterface, "internal/api/queries.TestTheLinkHostsAnswerCarriesHostsAndNothingElse"},
 	{"LinkHostKind", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheLinkHostKinds"},
@@ -408,6 +417,7 @@ var contract = []Entry{
 	// setup.ts
 	{"SetupRequirementKind", ReadUnion, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupStep", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupTrouble", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupCaution", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupRequirement", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupToolState", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
@@ -423,6 +433,7 @@ var contract = []Entry{
 	{"SetupVerdictStep", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupConsentSignIn", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupRedirectStep", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupPublicView", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupConsentRevocation", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 
 	// memory.ts
@@ -962,6 +973,8 @@ var contract = []Entry{
 	{"AccessGuideStep", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessGuideCopy", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessGuideLink", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessIdentityEntry", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessGuideWider", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessGuideBack", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessGuideDetail", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessGuideMake", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},

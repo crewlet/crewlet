@@ -41,6 +41,13 @@ func (c SessionClaim) Validate() error {
 	if c.Session == "" || c.Turn == "" || c.Launch == "" {
 		return errors.New("coord: a session claim names its session, its run's turn and its job")
 	}
+	for _, f := range []struct{ field, value string }{
+		{"session", c.Session}, {"turn", c.Turn}, {"job", c.Launch},
+	} {
+		if err := holdField("a session claim", f.field, f.value, MaxSessionClaimPartBytes); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

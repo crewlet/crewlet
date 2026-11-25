@@ -263,6 +263,14 @@ type claudeEvents struct {
 	spent      map[string]int
 	spentTotal int
 
+	// requests is each assistant message id the stream named: one model
+	// request each, its lines repeating the id as the message grows
+	// ([claudeEvents.Requests]); compactions the compactions it recorded, each
+	// one summary request no assistant message names.
+	requests    map[string]struct{}
+	compactions int
+	undecidedLines
+
 	// own is the run's own spend, its results' per-model figures summed
 	// ([claudeResult.sinceLastResult]); stated whether any result carried
 	// them, unread whether one carried them unreadably ([claudeEvents.runSpend]).
@@ -416,11 +424,15 @@ func (d *claudeEvents) Line(line []byte) {
 		d.transcript.add(activityline.Words(activityline.TagError, "the run ended: "+firstLine(
 			claudeUnbridgedFailure(looseString(ev.Source), looseString(ev.Agent)), transcriptDetailLimit)))
 	case "system":
+		if looseString(ev.Subtype) == subtypeCompactBoundary {
+			d.compactions++
+		}
 		if line, ok := claudeSteerLine(looseString(ev.Subtype), ev.Content); ok {
 			d.transcript.add(line)
 		}
 	case "assistant":
 		message := claudeMessageOf(ev.Message)
+		d.requested(looseString(message.ID))
 		d.count(looseString(message.ID), looseUsage(message.Usage))
 		d.measure(ev.ParentToolUseID, message.Usage)
 		_ = eachClaudeBlock(message.Content, func(block claudeBlock) error {
@@ -500,10 +512,23 @@ func (d *claudeEvents) reportedWindow() int64 { return d.window }
 
 // Skipped counts a line past the stream's bound into the transcript and clears
 // the newest request's figure ([claudeEvents.lost]).
-func (d *claudeEvents) Skipped(n int64, bound int) {
+func (d *claudeEvents) Skipped(line LongLine) {
+	n, bound := line.Size, line.Bound
 	d.transcript.skip(n, bound)
 	d.lost(fmt.Sprintf("a line of %s, past the %s a line of the stream is read within,", humanSize(n),
 		humanSize(int64(bound))))
+	// THE MESSAGE'S ID LEADS ITS LINE, before its content (measured at 31
+	// bytes in), so the head reads it.
+	switch lineType(line) {
+	case "assistant":
+		if id := windowField(line.Head, "id", false); id != "" {
+			d.requested(id)
+		} else {
+			d.undecided++
+		}
+	case "":
+		d.undecided++
+	}
 }
 
 // lost clears the newest request's figure for a line the decoder could not
@@ -525,6 +550,33 @@ func (d *claudeEvents) Entries(end bool) []string { return d.transcript.take(end
 // Ended implements [Decoder]: a `result` line, which Claude Code prints as its
 // run ends.
 func (d *claudeEvents) Ended() bool { return d.ended }
+
+// Requests implements [Decoder]: the assistant messages the stream named, by
+// id, every thread's, a subagent's included, and a summary request for each
+// compaction it recorded ([subtypeCompactBoundary]), whose request no message
+// names. Never the result's `num_turns`, which is the harness's own word on
+// its count and absent where it was cut off. Measured on 2.1.330 against a
+// stand-in: ids equal the requests answered (31 of 31; 7 of 7 with a
+// subagent's 3, where num_turns said 1; 3 under a cap of 3, where it said 4),
+// and a 429 or 500 retried names no id of its own; a run that compacted once
+// wrote one boundary and no message for its summary, and a summary request it
+// made again, after the stand-in's unusable answer, wrote nothing to count.
+func (d *claudeEvents) Requests() int { return len(d.requests) + d.compactions }
+
+// InFlight implements [Decoder]: none, as Claude Code's own --max-turns
+// stops before the next request (measured on 2.1.330: a cap of 3, 3 requests).
+func (d *claudeEvents) InFlight() int { return 0 }
+
+// requested records one assistant message's id.
+func (d *claudeEvents) requested(id string) {
+	if id == "" {
+		return
+	}
+	if d.requests == nil {
+		d.requests = map[string]struct{}{}
+	}
+	d.requests[id] = struct{}{}
+}
 
 func (d *claudeEvents) Result() sandbox.Result {
 	var r sandbox.Result

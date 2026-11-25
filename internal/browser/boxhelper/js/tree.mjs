@@ -244,13 +244,14 @@ async function discard(staging, io) {
 // the box's registry; prefer-online refetches a warm cache; no audit, fund,
 // update check or progress, so no request but the tarballs; no log file. The
 // log level decides what the helper reads of npm, its --json answer. Where
-// the bytes come from stays the box's: no --cache, --offline or --registry.
-function npmArgs(staging, bounds) {
+// the bytes come from stays the box's: no --cache, --offline or --registry,
+// nor --prefix, under which npm reads its global npmrc from the prefix. npm
+// installs into staging, its working directory, which holds the lock, where
+// --no-workspaces ends its search for the project.
+function npmArgs(bounds) {
   const wait = bounds.fetch_retry_wait_ms
   return [
     "ci",
-    "--prefix",
-    staging,
     "--ignore-scripts",
     "--install-strategy=hoisted",
     "--no-bin-links",
@@ -286,7 +287,7 @@ function runNPM(staging, config, { env, io, clock, abort, spawned }) {
     if (abort?.aborted) return resolve({ aborted: true })
     let child
     try {
-      child = spawn("npm", npmArgs(staging, config.install), {
+      child = spawn("npm", npmArgs(config.install), {
         cwd: staging,
         env,
         stdio: ["ignore", "pipe", "pipe"],

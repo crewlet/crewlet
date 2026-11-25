@@ -74,6 +74,11 @@ const (
 	// writes, read by an agent before it writes an artifact.
 	SourceBrandVoice Source = "brand_voice"
 
+	// SourceAssistantInstructions is how Ask Crewlet is asked to write: the
+	// company's instructions, at [TrustCompany] as the brand's voice is, and
+	// the person's own. Like the voice, it governs tone, length and layout only.
+	SourceAssistantInstructions Source = "assistant_instructions"
+
 	// SourceRepoFile is a file's lines in one of the company's git
 	// repositories, read at a commit — a blamed line's among them — and
 	// SourceRepoPatch one file's patch between two commits. Neither names a
@@ -217,7 +222,7 @@ var Sources = []Source{
 	SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
 	SourceChangeDescription, SourceChangeReview, SourceChangeComment, SourceCheckLog,
 	SourceTurnEnding, SourceServerOutput, SourceDelegatedRequest, SourceAtlas, SourceWebPage,
-	SourceBrowserPage,
+	SourceBrowserPage, SourceAssistantInstructions,
 }
 
 // Valid reports whether s is one of [Sources].

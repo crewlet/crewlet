@@ -3,6 +3,8 @@ package memory
 import (
 	"context"
 	"errors"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // ---- the seats' seen-through marks ------------------------------------- //
@@ -30,6 +32,9 @@ func (f *Fleet) MarkSeenThrough(_ context.Context, scope, conversation, mark str
 
 	if scope == "" || conversation == "" || mark == "" {
 		return false, errors.New("coord/memory: a seen-through mark names its seat, its conversation and its position")
+	}
+	if err := coord.CheckSeenMark(mark); err != nil {
+		return false, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

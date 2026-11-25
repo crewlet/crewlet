@@ -1,12 +1,16 @@
 package coord_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -47,15 +51,24 @@ func widestRecord(unlisted int) coord.NodeStatusRecord {
 			Window: long, Said: long},
 		LastAnswer:  widestInstant,
 		LastFailure: &coord.ModelFailure{Kind: long, At: widestInstant, Said: long},
-		ParkedCount: math.MaxInt, ParkedSince: widestInstant,
+		ParkedCount: math.MaxInt, ParkedSince: widestInstant, HomesCount: math.MaxInt, RunningCount: math.MaxInt,
 		HostLogin: &coord.HostLogin{State: coord.HostLoginState(long), Method: long, Account: long, Detail: long,
 			CheckedAt: widestInstant}}
 	for range 4 * coord.MaxModelParkedSeats {
 		model.Parked = append(model.Parked, coord.ParkedSeat{Seat: seat, Since: widestInstant})
 	}
+	name := func(i int) string { return fmt.Sprintf("%0*d", coord.MaxFleetHomeNameBytes, i) }
+	for i := range widestFleetWork {
+		model.Homes = append(model.Homes, coord.FleetHome{Fleet: name(i), Subject: name(i), Job: name(i),
+			At: widestInstant})
+	}
+	for i := range widestFleetWork {
+		model.Running = append(model.Running, coord.FleetRunning{Fleet: name(i), Subject: name(i), Job: name(i),
+			Since: widestInstant})
+	}
 	for range 4 * coord.MaxModelLimits {
 		model.Limits = append(model.Limits, coord.ModelLimit{Window: long, Hours: math.MaxInt, Model: long,
-			State: long, Used: &used, ResetsAt: widestInstant, Seen: widestInstant})
+			State: long, Used: &used, ResetsAt: widestInstant, Seen: widestInstant, Read: true})
 	}
 	growth := &coord.GrowthSignals{}
 	for range 4 * coord.MaxGrowthSignals {
@@ -153,6 +166,189 @@ func TestAnMCPRowsUnlistedKeysAreKeptWholeAndCountedPastTheRow(t *testing.T) {
 		t.Errorf("two unlisted keys read back as %v counted %d, want both, uncounted", got.Unlisted,
 			got.UnlistedCount)
 	}
+}
+
+// widestFleetWork is how many homes and calls in flight the widest record's
+// model row carries: past what any row holds at their widest names.
+const widestFleetWork = 256
+
+// A MODEL ROW'S FLEET WORK IS KEPT AS FAR AS ITS ROW HOLDS, AND COUNTED WHOLE:
+// an entry with its widest work in flight and homes beside the row's widest
+// other parts names its work in flight first, in order, then its homes, as
+// many of each as the row holds, and each list's whole count where it names
+// fewer, the writer's own where it is the larger, so a reader knows by how
+// much it under-reports. Lists that fit travel whole and uncounted.
+//
+// Mutation: keep every entry in fitFleetWork whatever the row holds, and the
+// widest record's model row is refused as past its class; count what the
+// lists name rather than what the writer had, and the counts are wrong.
+func TestAModelRowsFleetWorkIsKeptAsFarAsItsRowHoldsAndCounted(t *testing.T) {
+	t.Parallel()
+	r := widestRecord(0)
+	rows, err := r.Rows()
+	if err != nil {
+		t.Fatalf("the widest record's rows: %v", err)
+	}
+	got, want := coord.AssembleNodeStatusRecords(rows, nil)[0].Models[0], r.Models[0]
+	if len(got.Running) == 0 || got.RunningCount != math.MaxInt || got.Running[0].Subject != want.Running[0].Subject ||
+		got.HomesCount != math.MaxInt || len(got.Homes) >= widestFleetWork {
+		t.Errorf("the widest model row names %d running of %d counted, %d homes of %d counted, want the "+
+			"opening of each that fits and every list's whole count", len(got.Running), got.RunningCount,
+			len(got.Homes), got.HomesCount)
+	}
+	if len(got.Limits) != coord.MaxModelLimits || got.SittingOut == nil || got.HostLogin == nil {
+		t.Errorf("the fleet work crowded out the row's other parts: %+v", got)
+	}
+
+	// SHORT NAMES PAST WHAT THE ROW HOLDS: cut by bytes, counted by what the
+	// writer had.
+	many := coord.ModelStatus{Key: "default"}
+	for i := range 1000 {
+		many.Running = append(many.Running, coord.FleetRunning{Fleet: "opus", Subject: fmt.Sprint(i),
+			Job: "execute", Since: widestInstant})
+		many.Homes = append(many.Homes, coord.FleetHome{Fleet: "opus", Subject: fmt.Sprint(i), Job: "execute",
+			At: widestInstant})
+	}
+	read := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1, Models: []coord.ModelStatus{many}}).Models[0]
+	if len(read.Running) == 0 || len(read.Running) >= 1000 || read.RunningCount != 1000 || read.HomesCount != 1000 {
+		t.Errorf("a thousand short calls and homes read back as %d running counted %d and %d homes counted %d, "+
+			"want the opening of each counted a thousand", len(read.Running), read.RunningCount, len(read.Homes),
+			read.HomesCount)
+	}
+
+	few := coord.NodeStatusRecord{Node: "n1", Epoch: 1, Models: []coord.ModelStatus{{Key: "default",
+		Running: []coord.FleetRunning{{Fleet: "opus", Subject: "sre", Job: "execute", Since: widestInstant}},
+		Homes:   []coord.FleetHome{{Fleet: "opus", Subject: "sre", Job: "execute", At: widestInstant}}}}}
+	if got := recorded(t, few).Models[0]; len(got.Running) != 1 || len(got.Homes) != 1 ||
+		got.RunningCount != 0 || got.HomesCount != 0 {
+		t.Errorf("one running and one home read back as %d and %d, counted %d and %d, want both whole, "+
+			"uncounted", len(got.Running), len(got.Homes), got.RunningCount, got.HomesCount)
+	}
+	few.Models[0].RunningCount, few.Models[0].HomesCount = 300, 40
+	if got := recorded(t, few).Models[0]; len(got.Running) != 1 || got.RunningCount != 300 || got.HomesCount != 40 {
+		t.Errorf("a writer counting 300 running and 40 homes read back as %d running counted %d, homes "+
+			"counted %d, want its own counts", len(got.Running), got.RunningCount, got.HomesCount)
+	}
+}
+
+// EVERY MODEL ROW HOLDS ITS FLEET WORK AND ITS COUNTS WITHIN ITS BOUND, at
+// every name's width, count and epoch: work in flight that fills the row
+// still leaves the homes the count they keep where none of them fit, so the
+// row is within coord.MaxNodeStatusRowBytes at the widest epoch, and it holds
+// as much of each list as fits, work in flight first: one more entry of a cut
+// list would pass the bound beside the least the lists after it take, their
+// count. Each list is counted exactly where it is cut.
+//
+// Mutation: fit the work in flight before the homes' count is in the row, and
+// rows pass the bound; reserve the homes' empty list too, or keep the work in
+// flight's count while fitting it whole, and a row holds an entry fewer.
+func TestEveryModelRowHoldsItsFleetWorkAndCountsWithinItsBound(t *testing.T) {
+	t.Parallel()
+	const calls = 256 // past what a row holds at any width: 16 KiB is 186 of the shortest
+	since := widestInstant.Format(time.RFC3339Nano)
+	for width := 1; width <= coord.MaxFleetHomeNameBytes; width++ {
+		var running []coord.FleetRunning
+		var homes []coord.FleetHome
+		var wireRunning, wireHomes []map[string]any
+		for i := range calls {
+			name := fmt.Sprintf("%0*d", width, i)
+			running = append(running, coord.FleetRunning{Fleet: "opus", Subject: name, Job: "execute",
+				Since: widestInstant})
+			homes = append(homes, coord.FleetHome{Fleet: "opus", Subject: name, Job: "execute", At: widestInstant})
+			wireRunning = append(wireRunning, map[string]any{"fleet": "opus", "subject": name, "job": "execute",
+				"since": since})
+			wireHomes = append(wireHomes, map[string]any{"fleet": "opus", "subject": name, "job": "execute",
+				"at": since})
+		}
+		// Strides of five and four meet every homes case at every epoch.
+		h := []struct{ named, count int }{{0, 0}, {3, 0}, {3, 10}, {3, 5000}, {3, math.MaxInt}}[width%5]
+		epoch := []int64{1, 42, 1_000_000, math.MaxInt64}[width%4]
+		// Calls that fill the row, then as many as it held and one more:
+		// where the list just fits whole, uncounted.
+		for n := calls; ; {
+			m := coord.ModelStatus{Key: "default", Running: running[:n], Homes: homes[:h.named], HomesCount: h.count}
+			what := fmt.Sprintf("%d running of width %d beside %d homes counted %d, epoch %d", n, width, h.named,
+				h.count, epoch)
+			kept := fleetWorkFits(t, what, coord.NodeStatusRecord{Node: "n1", Epoch: epoch,
+				Models: []coord.ModelStatus{m}}, []fleetWorkList{{"running", wireRunning[:n], n},
+				{"homes", wireHomes[:h.named], max(h.count, h.named)}})
+			if n != calls || kept >= n {
+				break
+			}
+			n = kept + 1
+		}
+	}
+}
+
+// fleetWorkList is one fleet work list as a model row names it whole, and the
+// count its writer had.
+type fleetWorkList struct {
+	key   string
+	wire  []map[string]any
+	whole int
+}
+
+// fleetWorkFits holds r's one model row within its bound at the widest
+// epoch, its lists a prefix of what the writer had, counted where cut, and
+// each cut list as long as the row holds beside the counts of the lists after
+// it; it is how many entries the first list kept.
+func fleetWorkFits(t *testing.T, what string, r coord.NodeStatusRecord, lists []fleetWorkList) int {
+	t.Helper()
+	rows, err := r.Rows()
+	if err != nil {
+		t.Errorf("%s: the rows are refused: %v", what, err)
+		return 0
+	}
+	i := slices.IndexFunc(rows, func(row coord.NodeStatusRow) bool { return row.Key.Class == coord.NodeStatusModel })
+	dec := json.NewDecoder(bytes.NewReader(rows[i].Value))
+	dec.UseNumber()
+	var row map[string]any
+	if err := dec.Decode(&row); err != nil {
+		t.Fatalf("%s: the model row %s does not decode: %v", what, rows[i].Value, err)
+	}
+	row["epoch"] = json.Number(fmt.Sprint(int64(math.MaxInt64)))
+	size := func(row map[string]any) int {
+		raw, _ := json.Marshal(row)
+		return len(raw)
+	}
+	if got := size(row); got > coord.MaxNodeStatusRowBytes {
+		t.Errorf("%s: the model row at the widest epoch is %d bytes, past %d", what, got, coord.MaxNodeStatusRowBytes)
+	}
+	first := 0
+	for at, list := range lists {
+		kept, _ := row[list.key].([]any)
+		for j, entry := range kept {
+			if j >= len(list.wire) || !reflect.DeepEqual(entry, any(list.wire[j])) {
+				t.Fatalf("%s: premise: %s entry %d is %v, want %v", what, list.key, j, entry, list.wire[j])
+			}
+		}
+		if at == 0 {
+			first = len(kept)
+		}
+		count, counted := row[list.key+"_count"]
+		if want := fmt.Sprint(list.whole); counted != (len(kept) < list.whole) || counted && fmt.Sprint(count) != want {
+			t.Errorf("%s: %d of %s kept counted %v, want %s counted only where cut", what, len(kept), list.key,
+				count, want)
+		}
+		if len(kept) == len(list.wire) {
+			continue
+		}
+		more := maps.Clone(row)
+		more[list.key] = append(slices.Clone(kept), any(list.wire[len(kept)]))
+		if len(kept)+1 == list.whole {
+			delete(more, list.key+"_count")
+		}
+		for _, later := range lists[at+1:] {
+			if delete(more, later.key); later.whole > 0 {
+				more[later.key+"_count"] = later.whole
+			}
+		}
+		if got := size(more); got <= coord.MaxNodeStatusRowBytes {
+			t.Errorf("%s: the row keeps %d of %s where %d fit (%d bytes)", what, len(kept), list.key,
+				len(kept)+1, got)
+		}
+	}
+	return first
 }
 
 // A TEXT IS HELD TO ITS BOUND AS STORED, and keeps the longest cut that fits

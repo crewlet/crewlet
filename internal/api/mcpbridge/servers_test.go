@@ -292,6 +292,47 @@ func TestALaunchIsHandedTheToolsTheEnginesOwnServerLists(t *testing.T) {
 	}
 }
 
+// A LAUNCH IS HANDED HOW MANY TOOLS ITS OPENING LISTS IN ALL: the engine's own
+// at the job's endpoint and each MCP server's beneath it, the bridge's loader
+// among them only for a harness handed no skills of its own, exactly as the
+// endpoints list them. A harness that hides every MCP tool once its run's
+// servers list some number of them is weighed against it.
+//
+// Mutations, each red: count the surface's tools whatever the opening lists;
+// count the engine's own alone.
+func TestALaunchIsHandedHowManyToolsItsOpeningListsInAll(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		skills map[string]string
+		want   int
+	}{"handed skills of its own": {skills: handed, want: 4}, "handed none": {want: 5}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			reg := tools.NewRegistry()
+			for tool, origin := range map[string]string{"read_page": tools.OriginBuiltin,
+				toolname.LoadToolSkill: tools.OriginBuiltin, "create_issue": tools.Origin("github"),
+				"search_issues": tools.Origin("github"), "create_ticket": tools.Origin("jira")} {
+				if err := reg.Register(&stubTool{name: tool}, origin); err != nil {
+					t.Fatalf("Register(%s): %v", tool, err)
+				}
+			}
+			surface := tools.NewSurface("execute", reg.Snapshot(), []string{"read_page", toolname.LoadToolSkill,
+				"create_issue", "search_issues", "create_ticket"}).ForTurn(seatTurn())
+			var session *mcpbridge.Session
+			f := openServers(t, surface, func(s *mcpbridge.Session) { s.Skills, session = tc.skills, s })
+			own, _ := listed(t, f.endpoint)
+			total := len(own)
+			for _, server := range mcpbridge.Servers(surface) {
+				names, _ := listed(t, mcpbridge.ServerURL(f.endpoint, server))
+				total += len(names)
+			}
+			if got := session.Listed(); got != total || total != tc.want {
+				t.Errorf("Listed is %d and the endpoints list %d in all, want both %d", got, total, tc.want)
+			}
+		})
+	}
+}
+
 // A CALL ON A SERVER'S ENDPOINT IS THE OPENING'S: decided by the same surface
 // and on the run's record, so the delivery check and the reviewer see it.
 //

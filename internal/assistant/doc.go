@@ -49,7 +49,10 @@
 //
 // The prompt is built in cache order (prompt.go): rules stamped
 // [PromptVersion], provenance.StandingInstruction, the company clock, the
-// person and the writes they may propose, the last twelve messages with cards
+// person and the writes they may propose, the company's and the person's
+// instructions on how to write, fenced below every rule as their writers'
+// (they shape tone, length and layout, never what a turn may do), the last
+// twelve messages with cards
 // as one-line summaries, then the question after the page context, fenced as
 // page_context. The surface refuses an identity argument or one its schema does
 // not declare before anything is sent, holds every request to a route its tool
@@ -124,6 +127,14 @@
 // revision (internal/assistant/proposal), the loop suspends with the call
 // unanswered, and only the person's approval, made from their own browser,
 // sends it, once (ADR-0051).
+//
+// # A place opens by itself only when the person asked
+//
+// An open in app card is marked asked ([askedToOpen]) only when the turn's own
+// question, the person's words, both asks to go somewhere ("open", "go to",
+// and for a setup page "connect") and names the place the link opens; the
+// page context, a read's answer and the model's call never count. One card
+// per answer at most, and the drawer opens it only in the tab that asked.
 //
 // # One model, and no tool of its own
 //

@@ -107,9 +107,13 @@ func TestAFetchTheBrokerRefusedIsAFailure(t *testing.T) {
 			}}
 			a := &attachment{cons: cons, fetching: t.Context()}
 			taken := 0
-			err := a.fetch(1, time.Second, func(jetstream.Msg) { taken++ })
+			answered, err := a.fetch(1, time.Second, func(jetstream.Msg) { taken++ })
 			if !errors.Is(err, refusal) {
 				t.Errorf("a fetch the broker refused with %v returned %v", refusal, err)
+			}
+			if answered {
+				t.Errorf("a fetch the broker refused with %v reads as answered: the loop "+
+					"would send what it owes ahead of the mail still waiting", refusal)
 			}
 			if taken != 1 {
 				t.Errorf("a refused fetch handed over %d of the 1 message delivered before the refusal", taken)

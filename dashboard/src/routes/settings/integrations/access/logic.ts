@@ -630,6 +630,17 @@ export function scopeQuiet(lane: Lane, id: string): string {
     .join(" · ");
 }
 
+/**
+ * Whether `text` may be added as an entry a person typed: the lane takes typed
+ * entries and the text has the shape the engine holds entries to
+ * (`scope_typed`), so a name typed to search is never stored as an ID.
+ */
+export function takesTyped(lane: Lane, text: string): boolean {
+  const entry = text.trim();
+  if (!lane.scope_open || entry === "") return false;
+  return lane.scope_typed ? new RegExp(lane.scope_typed).test(entry) : true;
+}
+
 /** What a scope picker says in place of itself, and where a person makes an entry to offer. */
 export interface ScopeUnavailable {
   words: string;
@@ -682,7 +693,11 @@ const STATUS_WORDS: Record<AccessLaneStatus, (lane: Lane) => Status> = {
   refused: () => ({ label: "Refused", tone: "danger" }),
   changed_at_vendor: (lane) => ({ label: `Changed at ${lane.name}`, tone: "warning" }),
   needs_you: () => ({ label: "Needs you", tone: "warning" }),
+  // WAITING ON THE VENDOR ALONE: nothing a person can do yet.
+  preparing: () => ({ label: "Getting ready", tone: "info", busy: true }),
   next_sync: () => ({ label: "Next sync", tone: "info" }),
+  // WORKS, ROLE UNVERIFIED: said plainly, never the checked In sync.
+  role_unchecked: () => ({ label: "Role not checked", tone: "info" }),
   in_sync: () => ({ label: "In sync", tone: "success" }),
   off_account_kept: () => ({ label: "Off, account kept", tone: "neutral" }),
   off: () => ({ label: "Off", tone: "neutral", outline: true }),

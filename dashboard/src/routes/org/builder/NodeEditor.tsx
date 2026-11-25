@@ -2555,7 +2555,8 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string }) {
       key: "sandbox",
       label: "Executor box setup",
       value: sandboxWords(data),
-      reason: "Its setup, environment and tool servers are edited in the configuration file.",
+      reason:
+        "Its setup, environment, tool servers and browser are edited in the configuration file.",
     });
   }
   const credentials = toolCredentialNames(data);

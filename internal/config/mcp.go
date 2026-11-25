@@ -82,11 +82,13 @@ type MCPServer struct {
 	// [MCPServer.IsEnabled].
 	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Run this server (default on). Off keeps the entry and everything that names it, and starts nothing."`
 
-	// Description says what the server is for, in the operator's words. The
-	// executor's prompt lists it beside the server's name, which is all a
-	// model is shown of a server before it asks for its tools, so it is
-	// what tells the model which server to look in. See
-	// [MaxMCPDescription] for its bound.
+	// Description says what the server is for, in the operator's words: all a
+	// model is shown of a server before it asks for its tools, so it is what
+	// tells the model which server to look in. A phase that discovers tools
+	// sees it beside the server's name under "## Tools to discover", as an
+	// executor's environment brief lists it for a server the executor's box
+	// runs itself; the tool bridge says it as the server's own MCP
+	// instructions. See [MaxMCPDescription] for its bound.
 	Description string `yaml:"description,omitempty" json:"description,omitempty" js:"maxlen=200" desc:"What this server is for, one line of at most 200 characters; listed beside its name in each agent's prompt."`
 
 	Transport MCPTransport `yaml:"transport,omitempty" json:"transport,omitempty" js:"enum=stdio|http" desc:"stdio (default) or http."`

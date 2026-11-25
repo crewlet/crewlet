@@ -650,7 +650,7 @@ func TestTheNextTurnSaysItContinuesTheHeadsOlderCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionMeter{metrics: rec, objectives: objectives.NewMeter(rec, nil)}.SessionCarried(n)
+	sessionMeter{metrics: rec, objectives: objectives.NewMeter(rec, nil)}.SessionCarried(n, sandbox.HandoverNone)
 	var bad uint64
 	for _, s := range rec.Read() {
 		if s.Name == metrics.ObjectivesEvents && s.Attrs["objective"] == string(objectives.SessionCarry) &&

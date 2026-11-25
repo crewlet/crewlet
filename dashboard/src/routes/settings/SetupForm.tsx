@@ -42,7 +42,16 @@
  * no way for a closed tab to leave the write half done.
  */
 
-import { Fragment, useCallback, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   ASIDE_LAYOUT_SPLIT_REM,
   AsideLayout,
@@ -78,6 +87,7 @@ import { useAssistantDraft, useDraftState, writeVia } from "~/app/assistant/draf
 import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
 import { linkSegment } from "~/lib/segment.ts";
 import { VendorWords } from "~/ui/VendorWords.tsx";
+import { LiveBlock, useMintFirst } from "./LiveBlock.tsx";
 import { NeedsFirst, SetupStepsAside, SetupStepsSheet } from "./SetupSteps.tsx";
 import { RedirectStep } from "./RedirectStep.tsx";
 import { AddIdentity } from "~/components/growth/SetupSteps.tsx";
@@ -361,6 +371,48 @@ export function neededField(r: SetupRequirement, answered: Answered): boolean {
 }
 
 /**
+ * Whether an empty answer here holds a save: needed, and not printed by a block
+ * the person runs at the app, which is drawn from what is saved
+ * (`setup.Requirement.PrintedBy`). Such a value is needed to finish only.
+ */
+export function holdsSave(r: SetupRequirement, answered: Answered): boolean {
+  return neededField(r, answered) && !r.printed_by;
+}
+
+/**
+ * What a save leaves to do at the app, from a section's requirements before and
+ * after it: the blocks whose text changed under a printed value already pasted,
+ * to run again (`rerun`, by field), and whether a printed value is still to
+ * paste (`pending`). Either keeps the form open on the block.
+ */
+export function outsideAfterSave(
+  before: SetupRequirement[],
+  after: SetupRequirement[],
+): { rerun: string[]; pending: boolean } {
+  const pasted = (block: string) => after.some((p) => p.printed_by === block && p.present);
+  const rerun = after
+    .filter((b) => publicView(b) !== undefined && pasted(b.field))
+    .filter((b) => before.find((o) => o.field === b.field)?.public?.text !== b.public?.text)
+    .map((b) => b.field);
+  return { rerun, pending: after.some((r) => !!r.printed_by && r.required && !r.present) };
+}
+
+/** The Test control's name, for what it checks: a connection, or one key or several. */
+export function checkLabel(r: SetupRequirement): string {
+  if (r.kind !== "secret") return "Test connection";
+  return r.check_with && r.check_with.length > 0 ? "Test keys" : "Test key";
+}
+
+/** Why a Test cannot run yet, given the labels of what it still needs, or undefined. */
+export function checkBlocked(r: SetupRequirement, missing: string[]): string | undefined {
+  if (missing.length === 0) return undefined;
+  if (r.kind !== "secret") return `Fill in ${listed(missing)} to test the connection`;
+  if (r.check_with && r.check_with.length > 0)
+    return `Fill in ${listed(missing)} to test the keys together`;
+  return "Type or paste a key to test it";
+}
+
+/**
  * The two halves of a form: what connects the app, and what configures what
  * happens over the connection.
  *
@@ -480,6 +532,16 @@ function sectionKey(section: SetupSection): string {
 function seatOf(section: SetupSection): SetupSeatState | undefined {
   if (section.seat === undefined) return undefined;
   return (section.tool.seats ?? []).find((s) => s.handle === section.seat);
+}
+
+/** A section's requirements in a tool state a write answered, [] without one. */
+function requirementsOf(
+  section: SetupSection,
+  state: SetupToolState | undefined,
+): SetupRequirement[] {
+  if (!state) return [];
+  if (section.seat === undefined) return state.requirements;
+  return (state.seats ?? []).find((s) => s.handle === section.seat)?.requirements ?? [];
 }
 
 /** One engine surface inside a tool's dialog. */
@@ -657,9 +719,10 @@ export function SetupForm({
     () => sections.find((section) => (section.tool.prepare ?? []).length > 0)?.tool.prepare ?? [],
     [sections],
   );
-  // OPEN WHILE CONNECTING, put away once connected: the steps are the work
-  // of connecting, and noise to someone changing a setting later. A
-  // person's own choice wins.
+  // OPEN UNTIL THE FORM IS FINISHED, put away once it is: the steps are the
+  // work of connecting, half set up included, and noise to someone changing
+  // a setting later. A person's own choice wins.
+  const unfinished = connecting || sections.some((section) => !section.tool.form_complete);
   const [ownChoice, setOwnChoice] = useState<boolean | null>(null);
   const chosen = onStepsOpen ? (stepsOpen ?? null) : ownChoice;
   const chooseSteps = onStepsOpen ?? setOwnChoice;
@@ -709,6 +772,26 @@ export function SetupForm({
       },
     [values],
   );
+  // WHAT A LIVE BLOCK IS DRAWN FROM, as typed: the engine redraws it from these.
+  function typedIn(section: SetupSection, fields: string[]): Record<string, string> {
+    const answered = answeredIn(section, ownBy.get(sectionKey(section)) ?? []);
+    return Object.fromEntries(fields.map((field) => [field, answered(field).trim()]));
+  }
+  // A KEY A BLOCK NEEDS IS MADE WHEN THE FORM OPENS (`mint_first`), so the block
+  // shows before anything is saved.
+  const minting = useMemo(
+    () =>
+      sections.map((section) => ({
+        kind: section.tool.key,
+        ...(section.seat ? { seat: section.seat } : {}),
+        requirements: ownBy.get(sectionKey(section)) ?? [],
+      })),
+    [sections, ownBy],
+  );
+  const refresh = useCallback(async () => {
+    await onDone();
+  }, [onDone]);
+  const mintFailed = useMintFirst(minting, refresh);
   const grouped = useMemo(
     () =>
       sections
@@ -831,6 +914,19 @@ export function SetupForm({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   // Whether the banner counts the unanswered fields a submit marked. See [bannerText].
   const [counting, setCounting] = useState(false);
+  // THE BLOCKS A SAVE CHANGED under a printed value already pasted, by value
+  // key, until that value is edited. See [outsideAfterSave].
+  const [rerun, setRerun] = useState<Record<string, true>>({});
+  // The block a save left the next step at, brought into view once drawn.
+  const [reveal, setReveal] = useState<string | null>(null);
+  const blockIds = useId();
+  useEffect(() => {
+    if (reveal === null) return;
+    const row = document.getElementById(`${blockIds}${reveal}`);
+    row?.scrollIntoView?.({ block: "start" });
+    row?.focus({ preventScroll: true });
+    setReveal(null);
+  }, [reveal, blockIds]);
 
   /**
    * Open whatever a refusal NAMES, so an error is never hidden behind a fold.
@@ -945,7 +1041,7 @@ export function SetupForm({
       const answered = answeredIn(section, own);
       for (const r of own) {
         const key = valueKey(section, r);
-        if (!drawn.has(key) || !neededField(r, answered)) continue;
+        if (!drawn.has(key) || !holdsSave(r, answered)) continue;
         if ((values[key] ?? "").trim() !== "" || r.present) continue;
         out[key] = r.required_when ? "Needed by the answer above." : NEEDED;
       }
@@ -1096,6 +1192,7 @@ export function SetupForm({
     }
     try {
       let rotated = false;
+      const answers: { section: SetupSection; state?: SetupToolState }[] = [];
       for (const { section, body } of work) {
         // WHICH AGENT THE ENGINE WAS ANSWERING ABOUT. A per-seat app writes
         // one request per agent, so a banner reporting the third one's
@@ -1109,9 +1206,30 @@ export function SetupForm({
           },
         )) as Submitted;
         rotated = rotated || answer.reloaded === true;
+        answers.push({ section, state: answer.state });
       }
       refused.current = undefined;
       await onDone();
+      // WHAT IS LEFT AT THE APP keeps the form open on the block, redrawn from
+      // what was just saved: closing it sent the person to reopen the form
+      // to find the block their next step is.
+      const again: Record<string, true> = {};
+      let next: string | null = null;
+      for (const { section, state } of answers) {
+        const after = requirementsOf(section, state);
+        const left = outsideAfterSave(ownBy.get(sectionKey(section)) ?? [], after);
+        for (const field of left.rerun) again[refKey(section, field)] = true;
+        const block = after.find(
+          (b) => publicView(b) !== undefined && (left.pending || left.rerun.includes(b.field)),
+        );
+        if (next === null && block) next = refKey(section, block.field);
+      }
+      // CONNECTED ONCE NOTHING IS LEFT AT THE APP: a first save that mints a key
+      // and draws its block is progress, and a save that finishes is a connect.
+      const finished =
+        !sections.every((section) => section.tool.satisfied) &&
+        answers.every(({ state }) => state?.satisfied === true);
+      const connected = next === null && (connecting || finished);
       // WHAT THE BUTTON SAID. The title and the button already branch on
       // `connecting` — "a title reading Connect over a Save button is the
       // wrong promise" — and the toast did not, so a dialog headed "Datadog
@@ -1119,11 +1237,16 @@ export function SetupForm({
       toast.ok(
         rotated
           ? `${title} credentials rotated and republished`
-          : connecting
+          : connected
             ? `${title} connected`
             : `${title} settings saved`,
       );
-      onClose();
+      if (next === null) {
+        onClose();
+        return;
+      }
+      setRerun(again);
+      setReveal(next);
     } catch (err) {
       const at = refused.current;
       if (at?.seat !== undefined) setSeatOpen(sectionKey(at), true);
@@ -1210,7 +1333,7 @@ export function SetupForm({
             <SetupStepsAside
               steps={steps}
               resolveUrl={stepUrl}
-              open={chosen ?? connecting}
+              open={chosen ?? unfinished}
               onOpenChange={chooseSteps}
             />
           ) : null
@@ -1445,6 +1568,15 @@ export function SetupForm({
             )}
           </div>
 
+          {mintFailed && (
+            <Callout
+              variant="danger"
+              role="alert"
+              title="Crewlet could not make the setup block's key"
+            >
+              {asSentence(mintFailed)} Close the form and open it again to retry.
+            </Callout>
+          )}
           {banner && (
             // The kit's banner around [Problems], which lays a refusal's several
             // problems out one per line rather than as one run.
@@ -1556,7 +1688,11 @@ export function SetupForm({
     const shown = publicView(r);
     const help = <FieldHelp r={r} fill={fill} resolveUrl={(url) => urlIn(section, url)} />;
     return (
-      <div key={key} className="col gap-1">
+      <div
+        key={key}
+        className="col gap-1"
+        {...(shown ? { id: `${blockIds}${key}`, tabIndex: -1 } : {})}
+      >
         {r.kind === "add_identity" && r.identity ? (
           <AddIdentity step={r.identity} product={section.name} why={r.hint} />
         ) : r.kind === "consent" ? (
@@ -1568,12 +1704,12 @@ export function SetupForm({
             help={help}
           />
         ) : r.kind === "redirect" ? (
-          <RedirectStep r={r} />
+          <RedirectStep r={r} integrations={[section.tool.key]} />
         ) : shown ? (
           // WHAT THE ENGINE RENDERED, copied whole: a block a person pastes
           // into the app's own shell, which this form keeps no text of.
           <FormField as="fieldset" label={r.label} helper={help}>
-            <CodeBlock code={shown.text} language={shown.language} wrap={false} />
+            {renderBlock(section, r, key, shown)}
           </FormField>
         ) : editable(section, r) ? (
           <ValueField
@@ -1595,6 +1731,16 @@ export function SetupForm({
                 delete next[key];
                 return next;
               });
+              // A NEW PRINTED VALUE ANSWERS A BLOCK THAT CHANGED.
+              if (r.printed_by) {
+                const block = refKey(section, r.printed_by);
+                setRerun((was) => {
+                  if (!(block in was)) return was;
+                  const next = { ...was };
+                  delete next[block];
+                  return next;
+                });
+              }
               // A VERDICT IS ABOUT THE VALUES IT CHECKED: typing over one
               // makes it a verdict about something no longer in the box,
               // whether this field's own or a check this field is part of.
@@ -1657,12 +1803,79 @@ export function SetupForm({
           <KeyCheck
             verdict={verdicts[key]}
             onTest={() => void check(section, r)}
-            keeps={r.present === true && (values[key] ?? "").trim() === ""}
-            together={r.check_with !== undefined && r.check_with.length > 0}
-            missing={missingFor(section, r)}
+            keeps={r.kind === "secret" && r.present === true && (values[key] ?? "").trim() === ""}
+            label={checkLabel(r)}
+            blocked={checkBlocked(r, missingFor(section, r))}
           />
         )}
       </div>
+    );
+  }
+
+  /**
+   * A block the person runs at the app, or, while a field it is drawn from has
+   * an unsaved change, why it is not shown: it is drawn from what is saved, and
+   * a block for answers never saved would set up something Crewlet does not
+   * know (`setup.PublicView.DrawnFrom`).
+   */
+  function renderBlock(
+    section: SetupSection,
+    r: SetupRequirement,
+    key: string,
+    shown: NonNullable<SetupRequirement["public"]>,
+  ) {
+    const own = ownBy.get(sectionKey(section)) ?? [];
+    const printed = own.find((o) => o.printed_by === r.field);
+    const changed = (shown.drawn_from ?? []).flatMap((field) => {
+      const other = own.find((o) => o.field === field);
+      if (!other || !editable(section, other)) return [];
+      const value = values[valueKey(section, other)];
+      return value !== undefined && value.trim() !== (other.value ?? "").trim()
+        ? [other.label]
+        : [];
+    });
+    // A LIVE BLOCK FOLLOWS WHAT IS TYPED, so a change never waits on a save;
+    // after a run, the new block is still to run again.
+    if (shown.live) {
+      return (
+        <>
+          {changed.length > 0 && printed?.present && (
+            <Callout variant="warning" title="This block changed" live="polite">
+              {`You changed ${listed(changed)}. Run the new block, then paste its new last line into ${printed.label}.`}
+            </Callout>
+          )}
+          <LiveBlock
+            kind={section.tool.key}
+            field={r.field}
+            view={shown}
+            typed={typedIn(section, shown.drawn_from ?? [])}
+            onRefused={(field, said) => {
+              const at = own.find((o) => o.field === field);
+              if (at) setFieldErrors((was) => ({ ...was, [valueKey(section, at)]: said }));
+            }}
+          />
+        </>
+      );
+    }
+    if (changed.length > 0) {
+      return (
+        <Callout variant="neutral" title="Save to update this block" live="polite">
+          {`You changed ${listed(changed)}. This block is drawn from what is saved, so save to update it` +
+            (printed?.present
+              ? `, then run it again and paste its new last line into ${printed.label}.`
+              : ".")}
+        </Callout>
+      );
+    }
+    return (
+      <>
+        {rerun[key] && printed && (
+          <Callout variant="warning" title="This block changed when you saved" live="polite">
+            {`Run it again, then paste its new last line into ${printed.label}.`}
+          </Callout>
+        )}
+        <CodeBlock code={shown.text} language={shown.language} wrap={false} />
+      </>
     );
   }
 
@@ -1697,6 +1910,9 @@ export function SetupForm({
       .filter((other) => {
         const typed = (values[valueKey(section, other)] ?? "").trim();
         if (typed !== "") return false;
+        // A KEY CREWLET MADE has no box to type in, and the engine reads it from
+        // the store, so it counts once it is held.
+        if (other.kind === "secret" && other.mintable) return !other.present;
         return other.kind === "secret" || defaultOf(section, other.field).trim() === "";
       })
       .map((other) => other.label);
@@ -1752,36 +1968,32 @@ export function SetupForm({
 }
 
 /**
- * A credential's Test control and what the app said about the value in the box.
+ * A Test control, named for what it checks ([checkLabel]), and what the app
+ * said about the values in the boxes.
  *
  * A TEST OF THE BOX, NEVER OF THE STORE: an empty box over a held key has
- * nothing to send, so the control waits for a value (`missing`), and says the
+ * nothing to send, so the control waits for a value (`blocked`), and says the
  * held one stays when nothing is typed (`keeps`).
  *
- * ONE CONTROL FOR KEYS CHECKED TOGETHER (`together`): it waits for every
- * field the check is made with (`missing` names those still empty), and the
- * one result it shows is about all of them, in the engine's words, which name
- * the key that failed.
+ * ONE CONTROL FOR VALUES CHECKED TOGETHER: it waits for every field the check
+ * is made with, and the one result it shows is about all of them, in the
+ * engine's words, which name the part that failed.
  */
 function KeyCheck({
   verdict,
   onTest,
   keeps,
-  together,
-  missing,
+  label,
+  blocked,
 }: {
   verdict: SetupVerdict | "checking" | undefined;
   onTest: () => void;
   keeps: boolean;
-  together: boolean;
-  missing: string[];
+  /** What the control checks ([checkLabel]). */
+  label: string;
+  /** Why it cannot run yet ([checkBlocked]), undefined once it can. */
+  blocked: string | undefined;
 }) {
-  const blocked =
-    missing.length === 0
-      ? undefined
-      : together
-        ? `Fill in ${listed(missing)} to test the keys together`
-        : "Type or paste a key to test it";
   return (
     <div className="int-key-check">
       <Button
@@ -1793,7 +2005,7 @@ function KeyCheck({
           if (blocked === undefined) onTest();
         }}
       >
-        {verdict === "checking" ? "Testing" : together ? "Test keys" : "Test key"}
+        {verdict === "checking" ? "Testing" : label}
       </Button>
       {verdict !== undefined && verdict !== "checking" ? (
         <VerdictResult verdict={verdict} />
@@ -1810,7 +2022,7 @@ function KeyCheck({
  * address the engine answers. The engine keeps what the vendor grants, so the
  * form holds no value for it.
  */
-function ConsentSignIn({
+export function ConsentSignIn({
   kind,
   label,
   optional,

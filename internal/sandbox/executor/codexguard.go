@@ -26,8 +26,8 @@ import (
 // loads for the start directory ([codexGuardCommand]) and refuses the run
 // where one other than the run's own file or command line holds the server's
 // entry, naming the file, key and entry ([codexGuardVerdict]); the same
-// answer is the run's project_doc_max_bytes ([codexDocLimit]), and where hooked
-// it refuses a layer that switches the run's nested hook off ([codexHooksVerdict]).
+// answer is the run's project_doc_max_bytes ([codexDocLimit]) and what
+// switches the nested hook off ([codexHooksSwitchedOff]), which only skips it.
 
 // codexGuardAnswer is how long [codexGuardCommand] waits for its app-server's
 // answer: as long as the run's script waits for its own to listen
@@ -39,19 +39,20 @@ const codexGuardAnswer = codexListenWait
 // than the run's own holds the entry of one of Crewlet's own servers
 // ([codexGuardVerdict]), and is the project_doc_max_bytes Codex reads for the
 // start directory ([codexDocLimit]) with what the run's error stream is to say
-// of it. ONLY CREWLET'S SERVERS REFUSE A RUN: where the ask itself fails, a run
-// with none of them starts on [codexProjectDocMaxBytes], saying so. hooked: the
-// box holds the helper the nested hook runs. home is the home's own
-// configuration ([codexHomeConfig]).
+// of it, and, where hooked, what switches the nested hook off
+// ([codexHooksSwitchedOff]). ONLY CREWLET'S SERVERS REFUSE A RUN: where the ask
+// itself fails, a run with none of them starts on [codexProjectDocMaxBytes],
+// saying so. hooked: the box holds the helper the nested hook runs. home is
+// the home's own configuration ([codexHomeConfig]).
 func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths, home string,
-	hooked bool) (int, string, error) {
+	hooked bool) (int, string, []string, error) {
 	servers := crewletServers(req.MCPServers)
 	config, err := codexConfigOver(home, codexConfigTOML(codexGuardServers(req, servers), "", req.Model))
 	if err != nil {
-		return 0, "", err
+		return 0, "", nil, err
 	}
 	if err = box.WriteFile(ctx, paths.CodexGuardConfig(), []byte(config)); err != nil {
-		return 0, "", fmt.Errorf("executor: writing the configuration the launch asks Codex about: %w", err)
+		return 0, "", nil, fmt.Errorf("executor: writing the configuration the launch asks Codex about: %w", err)
 	}
 	// A LOGIN SHELL WITH THE BOX'S BIN DIRECTORY FIRST, as the run's wrapper
 	// finds its codex ([Runner.boxRelease]).
@@ -64,19 +65,18 @@ func codexGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest
 		if len(servers) == 0 {
 			return codexProjectDocMaxBytes, fmt.Sprintf("crewlet: the box's Codex could not be asked which "+
 				"project_doc_max_bytes it reads for the start directory (%v), so each repository's instructions "+
-				"are handed within its default, %d bytes", err, codexProjectDocMaxBytes), nil
+				"are handed within its default, %d bytes", err, codexProjectDocMaxBytes), nil, nil
 		}
-		return 0, "", fmt.Errorf("executor: asking the box's Codex which configuration it loads for the start directory: %w", err)
+		return 0, "", nil, fmt.Errorf("executor: asking the box's Codex which configuration it loads for the start directory: %w", err)
 	}
 	if err = codexGuardVerdict(res.Stdout, servers); err != nil {
-		return 0, "", err
+		return 0, "", nil, err
 	}
+	var off []string
 	if hooked {
-		if err = codexHooksVerdict(res.Stdout, paths.CodexHome()+"/config.toml"); err != nil {
-			return 0, "", err
-		}
+		off = codexHooksSwitchedOff(res.Stdout, paths.CodexHome()+"/config.toml")
 	}
-	return codexDocLimit(res.Stdout), "", nil
+	return codexDocLimit(res.Stdout), "", off, nil
 }
 
 // CodexGuardSaid is what the launch's guard has the run's error stream say
@@ -189,13 +189,15 @@ const codexRequirementsMark = "crewlet-codex-requirements"
 // by, either false switching every hook off (measured).
 var codexHookFeatures = []string{"codex_hooks", "hooks"}
 
-// codexHooksVerdict refuses the run where out's `config/read` answer switches
-// the run's nested hook off: a hooks feature false in the configuration Codex
-// settles on, named by the highest loaded layer setting it (a trusted
-// project's counts), or the hook's own state `enabled = false` in a loaded
-// layer other than a project's, which Codex ignores there (measured). home
-// names the layer the guard's own home stands in for, the box home's file.
-func codexHooksVerdict(out, home string) error {
+// codexHooksSwitchedOff is each file and key by which out's `config/read`
+// answer switches the run's nested hook off: a hooks feature false in the
+// configuration Codex settles on, named by the highest loaded layer setting
+// it (a trusted project's counts), or the hook's own state `enabled = false`
+// in a loaded layer other than a project's, which Codex ignores there
+// (measured), or the machine's requirements running managed hooks alone.
+// home names the layer the guard's own home stands in for, the box home's
+// file.
+func codexHooksSwitchedOff(out, home string) []string {
 	var read codexConfigRead
 	for l := range strings.SplitSeq(out, "\n") {
 		var r codexConfigRead
@@ -215,7 +217,7 @@ func codexHooksVerdict(out, home string) error {
 		}
 	}
 	if read.Result == nil {
-		return codexHooksRefusal(said)
+		return said
 	}
 	file := func(i int) string {
 		layer := read.Result.Layers[i]
@@ -246,18 +248,7 @@ func codexHooksVerdict(out, home string) error {
 			said = append(said, fmt.Sprintf("%s sets hooks.state.%q.enabled = false", file(i), codexNestedHookKey))
 		}
 	}
-	return codexHooksRefusal(said)
-}
-
-// codexHooksRefusal is the run's refusal for said, what switches its nested
-// hook off; nil for nothing.
-func codexHooksRefusal(said []string) error {
-	if len(said) == 0 {
-		return nil
-	}
-	return fmt.Errorf("executor: Codex would run without the run's hook that hands a checkout cloned during it "+
-		"its instructions: %s, and the run never switches on a hook the box switched off; remove that key",
-		strings.Join(said, "; "))
+	return said
 }
 
 // codexGuardVerdict refuses the run where out, an app-server's stdout, holds

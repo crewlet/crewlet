@@ -17,7 +17,9 @@ import (
 
 // Leases hold an app's write lease across the fleet (the engine's growth act
 // lease): one Play commit at a time per app, since a commit invalidates every
-// other open edit of it.
+// other open edit of it. Hold's error wraps [growth.ErrActHeld] where another
+// holder has the lease; any other is the lease store's failure or ctx's end,
+// and nothing was taken.
 type Leases interface {
 	Hold(ctx context.Context, resource string) (func(), error)
 }
