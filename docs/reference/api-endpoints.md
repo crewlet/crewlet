@@ -7549,6 +7549,8 @@ page handed out. Also served as the `executor_sessions` query.
       "kept": true,
       "object_bytes": 41234,
       "media_bytes": 0,
+      "summary_kept": true,
+      "summary_bytes": 6144,
       "in_progress": false,
       "base_turn": "0193f0b8-2d4c-7e1a-9b3f-5c8d7e6f1a20",
       "continued_by": "next_turn",
@@ -7601,6 +7603,10 @@ page handed out. Also served as the `executor_sessions` query.
   The prose among them, and `ask_excerpt` (the first kibibyte of what the turn
   was asked), are a model's or a person's words, **redacted at this read**,
   `unkept.reason` included.
+- **`summary_kept`** says the row keeps its session's newest compaction summary
+  apart from it, `summary_bytes` the bytes kept of it
+  ([Code Sandbox](../concepts/code-sandbox.md#a-sessions-newest-summary-kept-apart)):
+  a row naming no object then reads as that summary (`state: summary`).
 - **`kept`** says the row still names a session's object, of `object_bytes`
   sealed. A row naming none is an ending alone, for one of four reasons its
   transcript's `why` and its `not_continuable` say: its turn captured nothing
@@ -7820,7 +7826,10 @@ scanned only to be dropped.
 **Bounded, and the cut said.** A page holds at most `bounds.entries` (200)
 entries and `bounds.bytes` (1 MiB) of their text; an entry's text is at most
 `bounds.entry_bytes` (16 KiB), cut on a character and marked, with
-`cut: true`. Every entry's text is redacted whole before it is cut, and its
+`cut: true`. A row's newest summary, read where its session is not kept
+(`state: summary`), is cut from its **end** instead, where every summary
+puts what to do next: its entry says `tail: true`, and its text is the
+summary's last part, marked at its start. Every entry's text is redacted whole before it is cut, and its
 `bytes` is always the size of what its whole text redacts to, the text it would
 show whole. **Never the size as recorded**, which beside a text shown whole
 says how long each value its redaction took out was. A line of the
@@ -7890,6 +7899,7 @@ held:
 | `unreadable` | The object does not open: it is sealed under a keyring key this fleet no longer holds, or its bytes are not the ones sealed for this turn |
 | `malformed` | It opened, and is not an archive of its harness's format, and `why` says which of six ways: it is not gzip-compressed, its compressed bytes are corrupt, it ends part way through, it holds no tar of its harness's files, it holds no export document of its harness's, or its bytes are not laid out as its format describes (a box's own agent can rewrite what its run packs before a collection takes it) |
 | `unsupported` | It is of a harness or an archive format this build does not read |
+| `summary` | The row names no object, for a reason `none` lists, and keeps its session's newest compaction summary apart ([Code Sandbox](../concepts/code-sandbox.md#a-sessions-newest-summary-kept-apart)): the entries are that summary alone, one `summary` entry, and `why` says why the session is not kept. A summary gone or not opening is `none`, its `why` saying so |
 
 A store that did not answer is `503 unavailable` with a `Retry-After`, and a
 turn the seat keeps no row of is `404 not_found`, saying how a row goes: its

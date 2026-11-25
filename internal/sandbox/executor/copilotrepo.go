@@ -22,7 +22,7 @@ func copilotCheckouts() checkoutSpec {
 		{Names: []string{"AGENTS.md"}}, {Names: []string{"CLAUDE.md"}}, {Names: []string{"GEMINI.md"}},
 		{Tree: &checkoutTree{Tree: ".claude/rules", Suffix: ".md", Scoped: &checkoutScope{
 			Keys: []string{"applyTo", "paths"}, Whole: []string{"**", "**/*", "*"}}}}},
-		Limit: checkoutUnlimited, SkillDirs: []string{".github/skills", ".agents/skills", ".claude/skills"}}
+		Limit: checkoutUnlimited, SkillDirs: []checkoutSkillDir{{Dir: ".github/skills"}, {Dir: ".agents/skills"}, {Dir: ".claude/skills"}}}
 }
 
 // copilotCheckoutHome is where a Copilot run keeps its checkouts'
@@ -33,7 +33,7 @@ func copilotCheckouts() checkoutSpec {
 // skill without a word (measured, row k2).
 func copilotCheckoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.CopilotRepo(), helper: paths.CopilotNoteHelper(),
-		launch: paths.CopilotCheckoutLaunch(), agents: paths.CopilotInstructions(),
+		launch: paths.CopilotCheckoutLaunch(), agents: []string{paths.CopilotInstructions()},
 		held: paths.CopilotHeldInstructions(), sections: paths.CopilotRepoInstructions(),
 		skills: paths.CopilotSkills(), copied: paths.CopilotRepoSkills(), own: paths.CopilotRunInstructions()}
 }

@@ -7,7 +7,8 @@
 // [PathMaxBytes]) — and of the turn it was taken in ([TurnIDMaxBytes]), the
 // shapes it is sealed and uploaded as ([SealedSpool], [SealedObject],
 // [MediaSpool], [MediaObject]), and the frames that keep its media apart
-// ([FrameText], [FrameMedia]).
+// ([FrameText], [FrameMedia]); and a session's newest summary, kept apart,
+// as an end names it ([Summary], [SummaryMaxBytes]).
 //
 // # Why it is not internal/executordomain's
 //

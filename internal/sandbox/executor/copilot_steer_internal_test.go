@@ -288,7 +288,7 @@ func copilotNote(seq int, inbox, words string) string {
 func TestTheCopilotExtensionSendsANoteWhileTheMainAgentWorks(t *testing.T) {
 	route := newCopilotRoute(t)
 	p := startCopilotProbe(t, copilotExtensionSettings{URL: route.url})
-	if joined := p.expect("joined"); strings.Join(joined.Hooks, ",") != "onAgentStop,onPostToolUse,onPostToolUseFailure,onSessionStart" {
+	if joined := p.expect("joined"); strings.Join(joined.Hooks, ",") != "onAgentStop,onPostToolUse,onPostToolUseFailure,onPreToolUse,onSessionStart" {
 		t.Fatalf("hooks = %v", joined.Hooks)
 	}
 	p.expectArmed()

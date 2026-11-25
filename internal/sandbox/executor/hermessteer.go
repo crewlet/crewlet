@@ -83,37 +83,106 @@ func hermesSteered(text string) (string, bool) {
 // ([Paths.HermesRunStart]). The plugin never confirms, so the record is the
 // one confirm path ([recordConfirmer]).
 func (Hermes) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
-	takes []ServedTake) ([]string, error) {
+	takes []ServedTake, summary *summaryRead) ([]string, error) {
 	if !sandbox.ValidSessionID(session.ID) {
-		return nil, fmt.Errorf("executor: %q is no Hermes session the run named", session.ID)
+		return nil, summary.failedBy(fmt.Errorf("executor: %q is no Hermes session the run named", session.ID))
 	}
-	from, err := hermesRunFrom(ctx, box, session.ID)
+	// A LAUNCH'S START THAT DOES NOT READ decides no take, and the walk reads
+	// the summary alone: it needs no start.
+	from, fromErr := hermesRunFrom(ctx, box, session.ID)
+	if fromErr != nil && summary == nil {
+		return nil, fromErr
+	}
+	if fromErr != nil {
+		takes = nil
+	}
+	body, err := hermesRecordDump(ctx, box, session.ID)
 	if err != nil {
-		return nil, err
+		return nil, summary.failedBy(err)
 	}
+	defer func() { _ = body.Close() }()
+	held, err := hermesNotesHeld(ctx, body, takes, from, summary)
+	switch {
+	case err != nil:
+		return nil, summary.failedBy(fmt.Errorf("executor: reading Hermes's record of session %s: %w",
+			session.ID, err))
+	case fromErr != nil:
+		return nil, fromErr
+	}
+	return held, nil
+}
+
+// summaryWhy is why ask's summary is not read off its record, "" where it is:
+// on the release its summary was read on, of a session the run named.
+func (Hermes) summaryWhy(ask sandbox.MainThreadAsk) string {
+	if why := summaryReleaseWhy(ask.Release, hermesFloor()); why != "" {
+		return why
+	}
+	if !sandbox.ValidSessionID(ask.Session) {
+		return fmt.Sprintf("%q is no Hermes session the run named", ask.Session)
+	}
+	return ""
+}
+
+// recordSummary reports whether the receipts' walk reads ask's summary: its
+// record is the one walk that reads it.
+func (h Hermes) recordSummary(ask sandbox.MainThreadAsk) bool { return h.summaryWhy(ask) == "" }
+
+// hermesRecordDump is session's record in box, the store dumped as the pack
+// dumps it ([hermesCarryScript]), opened.
+func hermesRecordDump(ctx context.Context, box sandbox.Sandbox, session string) (io.ReadCloser, error) {
 	paths := PathsFor(box)
 	q := shellword.Quote
 	read := paths.HermesRecordRead()
 	res, err := box.Exec(ctx, hermesCarryRun(paths)+fmt.Sprintf("hcarry dump %s %s /dev/null %s",
-		q(paths.HermesStateDB()), q(session.ID), q(read)), sandbox.ExecOptions{})
+		q(paths.HermesStateDB()), q(session), q(read)), sandbox.ExecOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("executor: reading Hermes's record of session %s: %w", session.ID, err)
+		return nil, fmt.Errorf("executor: reading Hermes's record of session %s: %w", session, err)
 	}
 	if got := strings.TrimSpace(res.Stdout); got != "crewlet-carry ok" {
-		return nil, fmt.Errorf("executor: reading Hermes's record of session %s answered %q: %s", session.ID,
+		return nil, fmt.Errorf("executor: reading Hermes's record of session %s answered %q: %s", session,
 			firstLine(got, transcriptDetailLimit), firstLine(res.Stderr, transcriptDetailLimit))
 	}
 	body, err := box.OpenFile(ctx, read)
 	if err != nil {
-		return nil, fmt.Errorf("executor: opening Hermes's record of session %s: %w", session.ID, err)
+		return nil, fmt.Errorf("executor: opening Hermes's record of session %s: %w", session, err)
+	}
+	return body, nil
+}
+
+var (
+	_ recordConfirmer   = Hermes{}
+	_ threadHarness     = Hermes{}
+	_ mainThreadHarness = Hermes{}
+)
+
+// readMainThread reads the newest summary of ask's session in box off its
+// record ([hermesNotesHeld]), on the release its summary was read on alone.
+// Its receipts are its record's ([recordConfirmer]).
+func (h Hermes) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
+	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
+
+	if !ask.Summary {
+		return sandbox.MainThreadReading{}
+	}
+	if why := h.summaryWhy(ask); why != "" {
+		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
+	}
+	var summary summaryRead
+	body, err := hermesRecordDump(ctx, box, ask.Session)
+	if err != nil {
+		return sandbox.MainThreadReading{Summary: summaryUnread(err.Error())}
 	}
 	defer func() { _ = body.Close() }()
-	held, err := hermesNotesHeld(ctx, body, takes, from)
-	if err != nil {
-		return nil, fmt.Errorf("executor: reading Hermes's record of session %s: %w", session.ID, err)
+	if _, readErr := hermesNotesHeld(ctx, body, nil, 0, &summary); readErr != nil {
+		summary.fail("the session's record did not read to its end: " + readErr.Error())
 	}
-	return held, nil
+	return sandbox.MainThreadReading{Summary: summary.reading()}
 }
+
+// threadTraits is what Hermes's main-thread read settles: the newest summary
+// alone, its record's receipts added by [Runner.ThreadTraits].
+func (Hermes) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{Summaries: true} }
 
 // hermesRunFrom is the newest message id the store held as the box's last
 // launch began, off its record ([Paths.HermesRunStart]). One that cannot be
@@ -148,8 +217,10 @@ func hermesRunFrom(ctx context.Context, box sandbox.Sandbox, session string) (in
 // only by a finished reply stored after it ([hermesNoteRow.replied]; the note
 // rides the request after the tool result, testdata request-steered.json);
 // one no reply follows is not held, so it is served again. A row past
-// [hermesRowMaxBytes] drops every pending match.
-func hermesNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from int64) ([]string, error) {
+// [hermesRowMaxBytes] drops every pending match. summary, if not nil, takes
+// the newest summary ([hermesNoteRow.summarised]).
+func hermesNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from int64,
+	summary *summaryRead) ([]string, error) {
 	type match struct {
 		inbox string
 		row   int64
@@ -166,6 +237,9 @@ func hermesNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from 
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), hermesRowMaxBytes)
 	var l hermesNoteRow
 	l.parse.setup(takes)
+	if summary != nil {
+		l.words = &hermesSummaryWords{}
+	}
 	for {
 		l.start(next)
 		line, err := w.noteLine(ctx, func() error { return l.read(&w) })
@@ -176,7 +250,14 @@ func hermesNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from 
 			return settled, nil
 		case line.past:
 			pending = pending[:0]
+			if summary != nil {
+				summary.unshaped(fmt.Sprintf("a row of the session runs past the %d bytes one row is read to",
+					hermesRowMaxBytes))
+			}
 		case line.object && l.row():
+			if summary != nil {
+				l.summarised(summary)
+			}
 			switch {
 			case l.id <= from:
 				hermesCopy(earlier, l.uid)
@@ -239,6 +320,9 @@ type hermesNoteRow struct {
 	partKind             string
 	partKinds, partTexts int
 	partFed              bool
+	// words, where a read asks the newest summary, is the row's content as
+	// the transcript joins it ([hermesSummaryWords]).
+	words *hermesSummaryWords
 }
 
 // start starts the line, its notes matched from the take at base.
@@ -253,6 +337,19 @@ func (l *hermesNoteRow) rowStart() {
 	l.rowMistyped, l.id, l.inactive, l.compacted, l.summary = false, 0, false, false, false
 	l.finished, l.display, l.role, l.uid = false, "", "", recordWord{}
 	l.parse.reset(l.parse.base)
+	if l.words != nil {
+		l.words.start()
+	}
+}
+
+// summarised makes the row, read whole, the newest summary where it is one:
+// a compaction's summary still in the conversation (`active`), of any
+// launch, its words as the whole row's decode joins them ([hermesParts]); a
+// content of no shape it decodes holds none, as it holds no words.
+func (l *hermesNoteRow) summarised(s *summaryRead) {
+	if l.summary && !l.inactive && !l.words.odd {
+		s.taken(&l.words.text)
+	}
 }
 
 // row reports whether the line is a `messages` row its decode takes.
@@ -338,35 +435,47 @@ func (l *hermesNoteRow) member(w *lineWalk, name string, k jsonscan.Kind) error 
 func (l *hermesNoteRow) content(w *lineWalk, k jsonscan.Kind) error {
 	p := &l.parse
 	p.reset(p.base)
+	words := l.words
+	if words != nil {
+		words.start()
+	}
 	switch k {
 	case jsonscan.String:
-		if err := w.read(p); err != nil {
+		if err := w.read(words.whole(p)); err != nil {
 			return err
 		}
 		p.end()
 		return nil
 	case jsonscan.ArrayStart:
+		words.list()
 	default:
 		p.none = true
+		words.unshaped(k)
 		return w.scan.Skip()
 	}
 	took := true
 	err := w.elements(func(k jsonscan.Kind) (bool, error) {
 		l.partKind, l.partKinds, l.partTexts, l.partFed = "", 0, 0, false
+		words.partStart()
 		ok, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
 			switch name {
 			case "type":
 				kind, ok, err := w.wordField(k)
 				l.partKind, l.partKinds, took = kind, l.partKinds+1, took && ok
+				if !ok {
+					words.partOdd()
+				}
 				return err
 			case "text":
 				l.partTexts++
 				switch k {
 				case jsonscan.String:
 				case jsonscan.Null:
+					words.partNull()
 					return nil
 				default:
 					took = false
+					words.partOdd()
 					return w.scan.Skip()
 				}
 				l.partFed = true
@@ -374,13 +483,17 @@ func (l *hermesNoteRow) content(w *lineWalk, k jsonscan.Kind) error {
 				case l.partKinds != 1:
 					p.unsure = true
 				case l.partKind == "text" && l.partTexts == 1:
-					return w.read(p)
+					return w.read(words.part(p))
+				}
+				if words != nil {
+					return w.read(words.part(io.Discard))
 				}
 				return w.scan.Skip()
 			}
 			return w.scan.Skip()
 		})
 		took = took && ok
+		words.partEnd(ok, l.partKind)
 		if l.partFed && (l.partKinds != 1 || l.partTexts != 1) {
 			p.unsure = true
 		}
@@ -605,4 +718,86 @@ func (p *hermesSteerParse) notes() []int {
 		return out
 	}
 	return best(0, p.base).takes
+}
+
+// hermesSummaryWords is a row's content as the transcript joins it, read as
+// the notes walk reads the row, which may name the row a summary only after
+// its content ([hermesNoteRow.summarised]): a string whole, or each part's
+// `text` whose `type` is `text`, joined, each part's last of either
+// ([hermesParts]). odd says the content decodes as neither, a list one of
+// whose parts is of no shape included; text is held to [summaryReadMaxBytes].
+type hermesSummaryWords struct {
+	text, partText summaryText
+	odd            bool
+}
+
+// start starts the row's content.
+func (h *hermesSummaryWords) start() {
+	h.text.reset()
+	h.text.set, h.odd = true, false
+}
+
+// whole is where a string content's words are written, w beside them.
+func (h *hermesSummaryWords) whole(w io.Writer) io.Writer {
+	if h == nil {
+		return w
+	}
+	return h.text.tee(w, true)
+}
+
+// list starts a list content.
+func (h *hermesSummaryWords) list() {
+	if h != nil {
+		h.start()
+	}
+}
+
+// unshaped says a content of kind k, neither a string nor a list: null is no
+// words, any other kind no shape the transcript reads.
+func (h *hermesSummaryWords) unshaped(k jsonscan.Kind) {
+	if h != nil {
+		h.odd = k != jsonscan.Null
+	}
+}
+
+// partStart starts one part of a list.
+func (h *hermesSummaryWords) partStart() {
+	if h != nil {
+		h.partText.reset()
+	}
+}
+
+// partOdd is a part's text of another kind than a string or null.
+func (h *hermesSummaryWords) partOdd() {
+	if h != nil {
+		h.odd = true
+	}
+}
+
+// partNull is a part's null text, which a later one replaces.
+func (h *hermesSummaryWords) partNull() {
+	if h != nil {
+		h.partText.reset()
+	}
+}
+
+// part is where a part's string text is written, w beside it; the last
+// written is the part's.
+func (h *hermesSummaryWords) part(w io.Writer) io.Writer {
+	if h == nil {
+		return w
+	}
+	return h.partText.tee(w, true)
+}
+
+// partEnd ends a part, took whether its decode takes it and kind its type:
+// a `text` part's text joins the words.
+func (h *hermesSummaryWords) partEnd(took bool, kind string) {
+	switch {
+	case h == nil:
+	case !took:
+		h.odd = true
+	case kind == "text" && h.partText.set:
+		h.text.joined(&h.partText)
+	}
 }

@@ -13,19 +13,27 @@ import (
 // working directory their instructions and skills through the note helper's
 // checkout core (internal/notehelper's "Checkouts below the working
 // directory") keeps them: the helper and its state, the launch config
-// ([checkoutSpec]), the home instruction file the harness reads (agents), the
-// home's own copy of it held beside the run while it runs (held), the file
-// the helper writes the checkouts' sections into (sections), and the skills
-// directory they are copied into, with the list of copies the next run
-// removes. A copy is built in state/staging ([checkoutHome.staging]). own,
-// where set, is a file of the run's own instructions written first, ahead of
-// the home's (Copilot's standing instructions share its one home file).
+// ([checkoutSpec]), the home instruction file the harness reads (agents: the
+// first of its candidates that exists, else the first, as a harness reading
+// one file of several names finds it), the home's own copy of it held beside
+// the run while it runs (held), the file the helper writes the checkouts'
+// sections into (sections), and the skills directory they are copied into,
+// with the list of copies the next run removes. A copy is built in
+// state/staging ([checkoutHome.staging]). own, where set, is a file of the
+// run's own instructions written first, ahead of the home's (Copilot's
+// standing instructions share its one home file).
 type checkoutHome struct {
-	state, helper, launch  string
-	agents, held, sections string
-	skills, copied         string
-	own                    string
+	state, helper, launch string
+	agents                []string
+	held, sections        string
+	skills, copied        string
+	own                   string
 }
+
+// heldLive marks which of several home instruction files a run holds
+// (held+heldLive names it), so the put-back restores the one that existed,
+// or removes the one the run made, whichever the next run would choose.
+const heldLive = ".live"
 
 // staging is where the helper builds a checkout's skill before one rename
 // moves it into the skills directory (internal/notehelper's stagingDir):
@@ -48,16 +56,30 @@ func (h checkoutHome) removeSiblingStaging() string {
 // checkoutSpec is what a runner's harness reads from a checkout's root, for
 // [checkoutHome.launchConfig]: Instructions, the slots ([checkoutSlot]);
 // Limit, the harness's own bound in bytes on a checkout's instructions, nil
-// for a harness with none; SkillDirs, the checkout's skill directories.
+// for a harness with none; SkillDirs, the checkout's skill directories
+// ([checkoutSkillDir]).
 type checkoutSpec struct {
 	Instructions []checkoutSlot
 	Limit        *int
-	SkillDirs    []string
+	SkillDirs    []checkoutSkillDir
 }
 
-// checkoutUnlimited is the [checkoutSpec.Limit] of a harness that bounds no
-// instruction file it reads.
-var checkoutUnlimited *int
+// checkoutSkillDir is a checkout's skill directory as the helper reads it:
+// Dir, below the checkout's root, whose skills are the directories directly
+// in it, written as a string; or, Recursive, every one a walk of it reaches,
+// written as {"dir": ..., "recursive": true}.
+type checkoutSkillDir struct {
+	Dir       string
+	Recursive bool
+}
+
+// MarshalJSON writes d in the helper's shape.
+func (d checkoutSkillDir) MarshalJSON() ([]byte, error) {
+	if !d.Recursive {
+		return json.Marshal(d.Dir)
+	}
+	return json.Marshal(map[string]any{"dir": d.Dir, "recursive": true})
+}
 
 // checkoutSlot is one instruction slot as the helper reads it: Names, the
 // file names of which it hands the first, written as a list; or Tree, a
@@ -93,6 +115,10 @@ func (s checkoutSlot) MarshalJSON() ([]byte, error) {
 	return json.Marshal(s.Names)
 }
 
+// checkoutUnlimited is the [checkoutSpec.Limit] of a harness that bounds no
+// instruction file it reads.
+var checkoutUnlimited *int
+
 // launchConfig is the helper's checkout-launch config: spec, h's places, the
 // repositories the run pushes to first, and the seats' namespace reserved, so
 // no repository's skills are listed under it.
@@ -120,9 +146,24 @@ func (h checkoutHome) prepare() string {
 	q := shellword.Quote
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; rq=%s; hk=`, q(h.state), q(h.helper), q(h.skills), q(h.agents),
+	ra := ""
+	if len(h.agents) == 1 {
+		ra = q(h.agents[0])
+	}
+	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; rq=%s; hk=`, q(h.state), q(h.helper), q(h.skills), ra,
 		q(h.held), q(h.copied), q(h.sections))
-	line(`%s || exit 1`, putBackHome(h.agents, h.held))
+	line(`%s || exit 1`, h.putBack())
+	if len(h.agents) > 1 {
+		// THE FILE THE HARNESS READS, named before it is held, so a run killed
+		// past here is put back by the next ([checkoutHome.putBack]).
+		words := make([]string, len(h.agents))
+		for i, a := range h.agents {
+			words[i] = q(a)
+		}
+		line(`for rc in %s; do if [ -e "$rc" ]; then ra=$rc; break; fi; done; [ -n "$ra" ] || ra=%s`,
+			strings.Join(words, " "), q(h.agents[0]))
+		line(`printf '%%s\n' "$ra" > "$rha%s" || exit 1`, heldLive)
+	}
 	line(`if [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
 		`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
 	line(`%s || exit 1`, h.removeCopies())
@@ -153,8 +194,10 @@ func (h checkoutHome) compose() string {
 		`> "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`+"\n", o)
 }
 
-// restore is the shell marking the run ended, so a firing still running
-// claims nothing more (internal/notehelper's endedMarker), putting the home's
+// restore is the shell marking the run ended once no firing holds the
+// state's lock, so a firing that began claims and copies all it will before
+// the copies are removed, and one after claims nothing (internal/notehelper's
+// endedMarker; [checkoutEndedWait]), putting the home's
 // own instruction file back once the harness has stopped ([putBackHome]), and
 // removing the run's copies ([checkoutHome.removeCopies]) and what a firing
 // left in staging ([checkoutHome.staging], [checkoutHome.removeSiblingStaging]),
@@ -164,8 +207,9 @@ func (h checkoutHome) compose() string {
 // before it ran.
 func (h checkoutHome) restore() string {
 	q := shellword.Quote
-	ended := fmt.Sprintf(`[ ! -d %[1]s ] || : > %[1]s/ended`, q(h.state))
-	return everyStep(ended, putBackHome(h.agents, h.held), h.removeCopies(), "rm -rf "+q(h.staging()),
+	ended := fmt.Sprintf(`[ ! -d %[1]s ] || flock -w %[2]d %[1]s/lock touch %[1]s/ended 2> /dev/null || : > %[1]s/ended`,
+		q(h.state), checkoutEndedWait)
+	return everyStep(ended, h.putBack(), h.removeCopies(), "rm -rf "+q(h.staging()),
 		h.removeSiblingStaging())
 }
 
@@ -178,6 +222,20 @@ func (h checkoutHome) removeCopies() string {
 		`esac; done < %[1]s; fi && rm -f %[1]s; }`, q(h.copied), q(h.skills))
 }
 
+// checkoutEndedWait is the most seconds restore waits for a firing to let go
+// of the state's lock before it marks the run ended all the same: a firing's
+// own bound (codexNestedTimeout, piNestedTimeout), past which its harness has
+// given up on it. A box without flock(1) marks it at once, as before.
+const checkoutEndedWait = codexNestedTimeout
+
+// dropSkipped is the shell removing a skip log no script printed
+// ([checkoutHome.saySkipped]), a killed run's: run by the clear before every
+// run, so the next run's script, ended before its gate remakes the state,
+// prints no line of another run's as its own.
+func (h checkoutHome) dropSkipped() string {
+	return "rm -f " + shellword.Quote(h.state+"/skipped")
+}
+
 // saySkipped is the shell printing what the run's nested hook left out
 // (internal/notehelper's skippedLog) to the run's error stream once the
 // harness has stopped, and removing it, so a second run of it, or of the
@@ -186,4 +244,17 @@ func (h checkoutHome) removeCopies() string {
 // Code 2.1.330 only in its session transcript).
 func (h checkoutHome) saySkipped() string {
 	return fmt.Sprintf(`if [ -s %[1]s ]; then cat %[1]s >&2; rm -f %[1]s; fi`, shellword.Quote(h.state+"/skipped"))
+}
+
+// putBack is the shell putting the home's own instruction file back
+// ([putBackHome]): of several candidates, the one the run held, named at
+// held+[heldLive], which goes last, so it runs any number of times. One
+// candidate is the only file the run can hold, so nothing names it.
+func (h checkoutHome) putBack() string {
+	if len(h.agents) == 1 {
+		return putBackHome(h.agents[0], h.held)
+	}
+	at := shellword.Quote(h.held + heldLive)
+	return fmt.Sprintf(`{ if [ -f %[1]s ]; then rhl=$(cat %[1]s) && %[2]s && rm -f %[1]s; fi; }`, at,
+		putBackHomeAt(`"$rhl"`, h.held))
 }
