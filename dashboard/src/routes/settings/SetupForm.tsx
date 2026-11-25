@@ -719,9 +719,10 @@ export function SetupForm({
     () => sections.find((section) => (section.tool.prepare ?? []).length > 0)?.tool.prepare ?? [],
     [sections],
   );
-  // OPEN WHILE CONNECTING, put away once connected: the steps are the work
-  // of connecting, and noise to someone changing a setting later. A
-  // person's own choice wins.
+  // OPEN UNTIL THE FORM IS FINISHED, put away once it is: the steps are the
+  // work of connecting, half set up included, and noise to someone changing
+  // a setting later. A person's own choice wins.
+  const unfinished = connecting || sections.some((section) => !section.tool.form_complete);
   const [ownChoice, setOwnChoice] = useState<boolean | null>(null);
   const chosen = onStepsOpen ? (stepsOpen ?? null) : ownChoice;
   const chooseSteps = onStepsOpen ?? setOwnChoice;
@@ -1332,7 +1333,7 @@ export function SetupForm({
             <SetupStepsAside
               steps={steps}
               resolveUrl={stepUrl}
-              open={chosen ?? connecting}
+              open={chosen ?? unfinished}
               onOpenChange={chooseSteps}
             />
           ) : null
