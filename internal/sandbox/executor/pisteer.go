@@ -62,6 +62,9 @@ type piExtensionSettings struct {
 	// SettingsFiles is the settings files pi merges, the later winning
 	// ([piSettingsFiles]), which the extension names a codemode mode from.
 	SettingsFiles []string `json:"settingsFiles,omitempty"`
+	// Checkouts is how the extension hands a checkout cloned during the run
+	// its instructions and skills, nil where the box has no note helper.
+	Checkouts *piNestedHand `json:"checkouts,omitempty"`
 }
 
 // piServer is one MCP server the extension registers: its name and the
