@@ -31,6 +31,8 @@ const member = (entry: string, state: Fleet["members"][number]["state"]) => ({
   overflow: false,
   last_served_at: null,
   serving: [],
+  unlisted_serving: 0,
+  unlisted_homes: 0,
 });
 
 describe("a fleet stands alone in a chain", () => {

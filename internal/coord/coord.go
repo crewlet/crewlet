@@ -111,8 +111,8 @@
 // # A read is given the time its bytes take to cross
 //
 // A read across a leaf's link is given the time its key class's bound
-// ([HoldValue]) takes to cross at the slowest pace allowed (a bucket
-// declaring no class yet, until #1814, is read at the term). A reader that
+// ([HoldValue]) takes to cross at the slowest pace allowed, every key's
+// class declared by its bucket (ADR-0175). A reader that
 // cannot wait (a probe, a boot) reads a small record naming large bytes by
 // size and digest; only the reader that needs them pays their crossing
 // (ADR-0175). So the pointer names its body ([BodyRef]).
@@ -845,12 +845,15 @@ func (c Class) Name(resource string) (string, bool) {
 
 // CheckResource refuses a resource name that cannot address a key: an empty
 // segment is a value lost on the way here, whose key [DocumentSegments]
-// refuses. Checked at the surface, not the encoder, because a lease under an
-// undecodable key is one no listing returns, so its seat looks free to every
-// node and is handed out twice.
+// refuses, and one past [MaxLeaseNameBytes]. Checked at the surface, not the
+// encoder, because a lease under an undecodable key is one no listing returns,
+// so its seat looks free to every node and is handed out twice.
 func CheckResource(resource string) error {
 	if resource == "" {
 		return fmt.Errorf("coord: a resource name is required")
+	}
+	if err := HoldLeaseName("resource", resource); err != nil {
+		return err
 	}
 	for i, seg := range ResourceSegments(resource) {
 		if seg == "" {

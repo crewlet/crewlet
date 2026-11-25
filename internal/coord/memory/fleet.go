@@ -402,6 +402,9 @@ func (f *Fleet) Record(_ context.Context, scope, key, detail string, at time.Tim
 	if scope == "" || key == "" {
 		return errors.New("coord/memory: a ledger entry needs a scope and a key")
 	}
+	if err := coord.CheckLedgerDetail(detail); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -547,6 +550,9 @@ func (f *Fleet) Target(context.Context) (coord.Activation, bool, error) {
 func (f *Fleet) RecordApply(_ context.Context, status coord.NodeApply) error {
 	if status.NodeID == "" {
 		return errors.New("coord/memory: an apply status needs a node id")
+	}
+	if err := status.Check(); err != nil {
+		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -775,6 +781,9 @@ func (f *Fleet) OpenChannel(_ context.Context, ch coord.Channel) error {
 	if ch.ID == "" {
 		return errors.New("coord/memory: a channel needs an id")
 	}
+	if err := ch.Check(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, exists := f.channels[ch.ID]; exists {
@@ -925,6 +934,9 @@ func (f *Fleet) FireMinuteClaimed(_ context.Context, minute string) (bool, error
 func (f *Fleet) ClaimCustody(_ context.Context, batch, node string) (string, error) {
 	if batch == "" || node == "" {
 		return "", errors.New("coord/memory: a custody claim needs a batch and a node")
+	}
+	if err := coord.CheckCustodyNode(node); err != nil {
+		return "", err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1217,6 +1229,9 @@ func (f *Fleet) Follow(_ context.Context, backend, handle, channel, thread strin
 	key := followKey(backend, handle, channel, thread)
 	held, following := f.follows[key]
 	reason := choose(held.reason, following)
+	if err := coord.CheckFollowReason(reason); err != nil {
+		return "", err
+	}
 	f.follows[key] = followEntry{reason: reason, at: at.UTC()}
 	return reason, nil
 }

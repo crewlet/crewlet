@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
@@ -430,5 +431,23 @@ func TestTheBackendsTargetingOutranksTheText(t *testing.T) {
 			t.Errorf("%s: %+v, want deliver=%v reason=%q",
 				c.name, got, c.deliver, c.reason)
 		}
+	}
+}
+
+// EVERY FOLLOW REASON FITS WHAT A FOLLOW'S RECORD HOLDS: the store refuses a
+// reason past coord.MaxFollowReasonBytes, so a word of the vocabulary past it
+// would fail every follow asserted for it.
+//
+// Mutation: lower coord.MaxFollowReasonBytes to 8, and the collective reason
+// is red.
+func TestEveryFollowReasonFitsWhatAFollowHolds(t *testing.T) {
+	t.Parallel()
+	for _, reason := range notify.FollowReasons {
+		if err := coord.CheckFollowReason(string(reason)); err != nil {
+			t.Errorf("the follow reason %q: %v", reason, err)
+		}
+	}
+	if len(notify.FollowReasons) < 3 {
+		t.Fatalf("premise: %d follow reasons, want the vocabulary's three", len(notify.FollowReasons))
 	}
 }
