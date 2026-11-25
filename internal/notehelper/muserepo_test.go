@@ -404,3 +404,27 @@ func TestAMuseCopyAHomeSkillIsListedBesideIsLeftOutSaid(t *testing.T) {
 		t.Errorf("the skip log holds %q, want the line once", log)
 	}
 }
+
+// A HOME SKILL'S NAME IS READ AS YAML READS A ONE-LINE SCALAR: a plain value
+// up to a comment, trimmed; a quoted one's inside, a `#` in it kept and a
+// comment after it dropped; so `name: repo:x  # mine` takes repo:x from a copy.
+//
+// Mutation: keep a plain value's comment, or cut a quoted value at its `#`.
+func TestAHomeSkillsNameIsReadAsYAMLReadsIt(t *testing.T) {
+	t.Parallel()
+	for line, want := range map[string]string{
+		`name: repo:x  # mine`:               "repo:x",
+		`name: repo:x	# a tab before it`:     "repo:x",
+		`name: repo:x#tag`:                   "repo:x#tag",
+		`name: "repo:x # kept"  # a comment`: "repo:x # kept",
+		`name: 'it''s # kept'`:               "it's # kept",
+		`name: "repo:x"`:                     "repo:x",
+		`name: # no value`:                   "",
+		`name:   repo:x   `:                  "repo:x",
+	} {
+		got, ok := skillFrontName([]byte("---\n" + line + "\ndescription: d\n---\nbody\n"))
+		if !ok || got != want {
+			t.Errorf("%q reads as %q (%v), want %q", line, got, ok, want)
+		}
+	}
+}

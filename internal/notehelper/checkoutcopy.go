@@ -346,14 +346,43 @@ func skillFrontName(raw []byte) (string, bool) {
 		}
 		if key, ok := frontKey(l); ok && key == "name" {
 			_, value, _ := strings.Cut(l, ":")
-			value = strings.TrimSpace(value)
-			if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
-				value = value[1 : len(value)-1]
-			}
-			return value, true
+			return yamlScalar(strings.TrimSpace(value)), true
 		}
 	}
 	return "", false
+}
+
+// yamlScalar is a one-line YAML scalar's value: a quoted one's inside (in
+// single quotes, a doubled quote read as one), a comment after it dropped; a
+// plain one up to a comment (` #` or a leading `#`), trimmed.
+func yamlScalar(v string) string {
+	if v != "" && (v[0] == '"' || v[0] == '\'') {
+		q := v[0]
+		for i := 1; i < len(v); i++ {
+			switch {
+			case q == '"' && v[i] == '\\':
+				i++
+			case v[i] == q && q == '\'' && i+1 < len(v) && v[i+1] == '\'':
+				i++
+			case v[i] == q:
+				inner := v[1:i]
+				if q == '\'' {
+					inner = strings.ReplaceAll(inner, "''", "'")
+				}
+				return inner
+			}
+		}
+		return v
+	}
+	if strings.HasPrefix(v, "#") {
+		return ""
+	}
+	for j := 1; j < len(v); j++ {
+		if v[j] == '#' && (v[j-1] == ' ' || v[j-1] == '\t') {
+			return strings.TrimSpace(v[:j])
+		}
+	}
+	return v
 }
 
 // errNoFrontmatter is a SKILL.md that opens with no frontmatter.
