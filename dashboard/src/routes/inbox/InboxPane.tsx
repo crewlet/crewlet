@@ -68,6 +68,7 @@ import { HeldCallTitle, holdLine, ReassignItem } from "~/components/DecisionRow.
 import { accessNote, type SeatCondition } from "~/lib/decisions.ts";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { LimitRemedy } from "~/components/LimitRemedy.tsx";
+import { RedirectMovedClients } from "~/components/RedirectMoved.tsx";
 import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
 import { AnswerChoices, AnsweredChoices } from "~/components/AnswerChoices.tsx";
 import { HeldCallButtons } from "~/components/HeldCallButtons.tsx";
@@ -1883,6 +1884,7 @@ function ConditionPane({ item, frame, now }: { item: Attention; frame: Frame; no
       <ReadingPaneLead>
         <p>{item.detail}</p>
       </ReadingPaneLead>
+      {item.redirect && <RedirectMovedClients moved={item.redirect} />}
       <TechnicalDetails text={item.technical} />
       {item.remedy ? (
         <Stack gap={2} align="start">

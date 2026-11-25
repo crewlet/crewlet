@@ -187,17 +187,22 @@ func TestTheSectionsGoIntoTheHomeFileTheHarnessReads(t *testing.T) {
 	}
 }
 
-// ONE CANDIDATE KEEPS THE SCRIPT IT ALWAYS HAD: Codex's home file is the only
-// one it reads, so its gate and put-back name nothing more.
+// ONE CANDIDATE NAMES NO HELD FILE: Codex's home file is the only one it
+// reads, so its gate and put-back never write or read which candidate is
+// held, and its put-back is the file's own, then the removal of a directory
+// the gate made for it ([heldMade]).
 //
-// Mutation: name the held file of one candidate, and the script goes red.
+// Mutation: name the held file of one candidate, or drop the made directory's
+// removal, and the script goes red.
 func TestOneHomeFileCandidateNamesNoHeldFile(t *testing.T) {
 	t.Parallel()
 	h := codexCheckoutHome(Paths{Home: "/home/box"})
 	if strings.Contains(h.gate()+h.restore(), heldLive) {
 		t.Errorf("Codex's gate or put-back names the held file:\n%s\n%s", h.gate(), h.restore())
 	}
-	if got, want := h.putBack(), putBackHome("/home/box/.codex/AGENTS.md", h.held); got != want {
+	live := "/home/box/.codex/AGENTS.md"
+	want := "{ " + putBackHome(live, h.held) + " && " + h.removeMade(shellword.Quote(live)) + "; }"
+	if got := h.putBack(); got != want {
 		t.Errorf("Codex's put-back is\n%s\nwant\n%s", got, want)
 	}
 }

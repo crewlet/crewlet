@@ -2,7 +2,21 @@
 
 - **Status:** accepted
 - **Authority:** `internal/googlecloud`
-- **Enforced-by:** `internal/googlecloud.TestTheAtlasReadsProjectsAndWhatTheirServicesSay`, `internal/googlecloud.TestTheGoogleCloudReadAndTheSettingsNameOneIdentityProject`, `internal/googlecloud.TestAProjectsServicesGoogleRefusesAreAFindingAndWithdrawNothing`, `internal/googlecloud.TestAGoogleCloudProjectTwoReadsMissIsRetired`, `internal/googlecloud.TestNoCredentialShapeReachesTheAtlasFromGoogleCloud`, `internal/googlecloud.TestAListingThatFailsOrIsRateLimitedFailsTheGoogleCloudRead`, `internal/googlecloud.TestAReadWaitsOutGooglesRateLimitAndAWriteDoesNot`, `internal/googlecloud.TestTheGoogleCloudProjectsAreWalkedToTheirBounds`, `internal/scaleway.TestTheAtlasReadsTheOrganizationsProjects`, `internal/scaleway.TestTheScalewayReadAndTheSettingsNameOneOrganization`, `internal/scaleway.TestAListingScalewayRefusesIsAFindingAndRetiresNothing`, `internal/scaleway.TestAScalewayProjectTwoReadsMissIsRetired`, `internal/scaleway.TestNoCredentialShapeReachesTheAtlasFromScaleway`, `internal/scaleway.TestAListingThatFailsFailsTheScalewayRead`
+- **Enforced-by:**
+  - `internal/googlecloud.TestTheAtlasReadsProjectsAndWhatTheirServicesSay`
+  - `internal/googlecloud.TestTheGoogleCloudReadAndTheSettingsNameOneIdentityProject`
+  - `internal/googlecloud.TestAProjectsServicesGoogleRefusesAreAFindingAndWithdrawNothing`
+  - `internal/googlecloud.TestAGoogleCloudProjectTwoReadsMissIsRetired`
+  - `internal/googlecloud.TestNoCredentialShapeReachesTheAtlasFromGoogleCloud`
+  - `internal/googlecloud.TestAListingThatFailsOrIsRateLimitedFailsTheGoogleCloudRead`
+  - `internal/googlecloud.TestAReadWaitsOutGooglesRateLimitAndAWriteDoesNot`
+  - `internal/googlecloud.TestTheGoogleCloudProjectsAreWalkedToTheirBounds`
+  - `internal/scaleway.TestTheAtlasReadsTheOrganizationsProjects`
+  - `internal/scaleway.TestTheScalewayReadAndTheSettingsNameOneOrganization`
+  - `internal/scaleway.TestAListingScalewayRefusesIsAFindingAndRetiresNothing`
+  - `internal/scaleway.TestAScalewayProjectTwoReadsMissIsRetired`
+  - `internal/scaleway.TestNoCredentialShapeReachesTheAtlasFromScaleway`
+  - `internal/scaleway.TestAListingThatFailsFailsTheScalewayRead`
 - **Cost-when-tried:** not tried. Cloudflare, Datadog, GitHub and GitLab each hold things the vocabulary already had a kind for. A cloud is the first vendor whose first layer is a container of everything else, and the first whose existing credential reads that layer and nothing inside it.
 - **Tag-status:** unreleased
 

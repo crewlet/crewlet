@@ -132,7 +132,7 @@ func (e *Engine) consentConfigured(kind string) (googleauth.Consent, googleauth.
 	case !on:
 		return p, client, needed("the integration is turned off")
 	case client.ID == "" || client.Secret == "":
-		return p, client, needed("the integration names no OAuth client; set oauth.client_id and oauth.client_secret")
+		return p, client, needed("no Google sign-in client is set; add it on the Google page's Settings tab")
 	}
 	return p, client, nil
 }
@@ -230,11 +230,20 @@ func (e *Engine) IntegrationGrant(ctx context.Context, kind integration.Kind) (c
 	return e.backends.Fleet.OAuthGrant(ctx, coord.IntegrationGrantFamily, string(kind))
 }
 
+// SignInClientSubject is the subject of a consent product's finding that no
+// Google sign-in client is set.
+const SignInClientSubject = "integrations.google_cloud.sign_in_client"
+
 // IntegrationGrantFinding is what kind's pass reports of its grant: nil while
-// it renews, `credential_missing` while nobody has signed in, and
-// `credential_rejected` once its vendor refused it for good, in the vendor's
-// redacted words. It raises where the store could not be read.
+// it renews, `credential_missing` while no sign-in client is set or nobody has
+// signed in, and `credential_rejected` once its vendor refused it for good, in
+// the vendor's redacted words. It raises where the store could not be read.
 func (e *Engine) IntegrationGrantFinding(ctx context.Context, kind integration.Kind) (*integration.Finding, error) {
+	if _, client, _ := e.consentConfigured(string(kind)); client.ID == "" {
+		return &integration.Finding{Kind: integration.FindingCredentialMissing, Subject: SignInClientSubject,
+			Detail: "No Google sign-in client is set, so nobody can sign in yet.",
+			Remedy: "Add the sign-in client on the Google page's Settings tab, then sign in."}, nil
+	}
 	g, found, err := e.IntegrationGrant(ctx, kind)
 	switch {
 	case err != nil:

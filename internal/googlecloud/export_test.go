@@ -79,6 +79,12 @@ func OpenAccess(
 	return vendor.(accessVendor).open(in, hc, &googleauth.Clock{Now: now, Sleep: sleep})
 }
 
+// ProbeParts are the Test's parts, in the order it runs them.
+var ProbeParts = probeParts
+
+// Ours is the rule for an account Crewlet keeps in the identity project.
+var Ours = crewletsOwn
+
 // ProbeWith is the Test probe on a test's transport and clock.
 func ProbeWith(
 	ctx context.Context, company string, value func(string) string, hc *http.Client,
@@ -86,3 +92,9 @@ func ProbeWith(
 ) (setup.Verdict, error) {
 	return probeCheck(ctx, company, value, hc, &googleauth.Clock{Now: now, Sleep: sleep})
 }
+
+// The guide's facts that the block and the docs page are held to.
+const (
+	ProjectNumber = projectNumber
+	DocsURL       = docsURL
+)

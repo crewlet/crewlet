@@ -38,9 +38,12 @@ type Case struct {
 	Answers []CaseAnswer  `yaml:"answers"`
 	// Search is a model whose harness has a search-only run, so search_web
 	// is offered.
-	Search bool        `yaml:"search"`
-	Script []CaseRound `yaml:"script"`
-	Expect Expect      `yaml:"expect"`
+	Search bool `yaml:"search"`
+	// Instructions are the company's and the person's layers of how Ask
+	// Crewlet writes, each validated as its own save is.
+	Instructions CaseInstructions `yaml:"instructions"`
+	Script       []CaseRound      `yaml:"script"`
+	Expect       Expect           `yaml:"expect"`
 
 	page *wire.PageContext
 }
@@ -58,6 +61,12 @@ type CaseAnswer struct {
 	Route  string `yaml:"route"`
 	Status int    `yaml:"status"`
 	Body   any    `yaml:"body"`
+}
+
+// CaseInstructions are the two layers a case's question is asked under.
+type CaseInstructions struct {
+	Company config.AssistantInstructions `yaml:"company"`
+	Person  config.AssistantInstructions `yaml:"person"`
 }
 
 // CaseRound is one round the scripted model answers with: a tool call, or
@@ -87,6 +96,9 @@ type Expect struct {
 	// ignoring case.
 	Says      []string `yaml:"says"`
 	NeverSays []string `yaml:"never_says"`
+	// MaxWords is the most words the answer may run to, 0 for no ceiling:
+	// what a request for a TL;DR or a short answer is held to.
+	MaxWords int `yaml:"max_words"`
 	// Shows is text the turn's cards carry, ignoring case: a table's title,
 	// columns and cells, an entity's facts, a proposal's rows and note. What
 	// the person was shown, and what the model read of it, which the answer's
@@ -131,7 +143,7 @@ type ExpectBrief struct {
 // empty reports whether e expects nothing.
 func (e Expect) empty() bool {
 	return len(e.Calls) == 0 && len(e.Never) == 0 && e.Proposals == nil && e.StepUp == nil && e.State == "" &&
-		len(e.Says) == 0 && len(e.NeverSays) == 0 && len(e.Shows) == 0 &&
+		len(e.Says) == 0 && len(e.NeverSays) == 0 && e.MaxWords == 0 && len(e.Shows) == 0 &&
 		len(e.NeverShows) == 0 && e.Brief == nil && len(e.Refusals) == 0 && e.Taint == ""
 }
 
@@ -233,6 +245,12 @@ func (c Case) Validate() error {
 	}
 	if c.Expect.empty() {
 		fail("expect: the case expects nothing, so it cannot fail")
+	}
+	if err := c.Instructions.Company.Validate(config.Path{"instructions", "company"}); err != nil {
+		fail("%w", err)
+	}
+	if err := c.Instructions.Person.Validate(config.Path{"instructions", "person"}); err != nil {
+		fail("%w", err)
 	}
 	for i, app := range c.Person.Apps {
 		if !app.Valid() {

@@ -79,7 +79,9 @@ func (q *Queue) SubscribeBatch(
 	})
 }
 
-// drain collects one cycle's worth of deliveries.
+// drain collects one cycle's worth of deliveries, then sends the spaced returns
+// the loop owes behind them, or behind none waiting; a failed fetch keeps them
+// owed ([attachment.sendSpaced]).
 //
 // Options are read HERE, once per cycle, so a live config reload takes effect
 // on the next batch with no re-subscription — and once the cycle's FIRST
@@ -115,11 +117,15 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 	}
 	if len(batch) == 0 {
 		//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
-		if err := a.fetch(1, a.q.fetchWait(), collect); err != nil {
+		answered, err := a.fetch(1, a.q.fetchWait(), collect)
+		if err != nil {
 			a.logFetchErr(ctx, err)
 			return nil
 		}
 		if len(batch) == 0 {
+			if answered {
+				a.sendSpaced()
+			}
 			return nil
 		}
 	}
@@ -142,7 +148,7 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 			wait = min(remaining, a.q.fetchWait())
 		}
 		//nolint:contextcheck // the attachment's fetch scope, as above
-		if err := a.fetch(maxBatch-len(batch), wait, collect); err != nil {
+		if _, err := a.fetch(maxBatch-len(batch), wait, collect); err != nil {
 			break
 		}
 		// THE WINDOW IS THE BOUND, and only the window: also requiring an
@@ -160,6 +166,7 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 		// every 25 ms.
 		a.lingering.Store(true)
 	}
+	a.sendSpaced()
 	return batch
 }
 

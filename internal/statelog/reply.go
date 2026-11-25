@@ -22,7 +22,7 @@ type replyBy struct{ at, deadline time.Time }
 // that deadline, so the node SENDS the answer while its asker still listens. Run
 // to the deadline, the answer reaches nobody and the asker judges a node merely
 // behind to be wedged; sizing the attempt as the sum of the waits (two
-// [ReadBudget]s and two [DefaultBarrierBudget]s) is too long for a test to scale.
+// [ReadBudget]s and two [ElectionBarrierBudget]s) is too long for a test to scale.
 //
 // The margin is the CALLER'S: the answer's trip back plus the skew between the
 // asker's clock and this node's. Without a deadline, or with a margin that is not

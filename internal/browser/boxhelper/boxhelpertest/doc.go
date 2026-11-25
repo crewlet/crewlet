@@ -90,7 +90,8 @@
 // Its ~/.npm is a copy of the suite tree's npm cache, unless the case wants it
 // empty, and its environment ([Box.Environ]) points npm at a registry on a
 // port nothing listens on, so every box installs for real and offline, a miss
-// failing in about 2.4 s, and names an empty global npmrc of the box's own, so
+// failing in about 2.4 s, and names a global prefix of the box's own, under
+// which npm finds an empty global npmrc as an image's npm finds its own, so
 // the machine's never reaches it; a case's variables come after and win. A
 // case that wants a registry starts a stand-in on 127.0.0.1, which serves the
 // lock's tarballs from the suite tree's cache by integrity, or answers 404 or

@@ -2,7 +2,28 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant`
-- **Enforced-by:** `internal/assistant.TestTheAssistantImportsNoWriterAndNoSeat`, `internal/iam.TestAnAssistedPrincipalIsAPersonCarryingItsScope`, `internal/iam.TestAnAssistGrantsNameIsNobodysLogin`, `internal/api/auth.TestAnAssistGrantOverTheWireIsRefused`, `internal/api/auth.TestAnAssistGrantIsTheSessionsPrincipalRecomposed`, `internal/api/auth.TestARevokedSessionEndsItsGrant`, `internal/api/auth.TestAnExecGrantCarriesOnlyItsBoundRequestOnce`, `internal/api/auth.TestAnAssistGrantIsRefusedTheGuardedEdges`, `internal/api/auth.TestAnAssistGrantNeverProvesAFresherIdentityThanItsSession`, `internal/api/auth.TestOnlyASessionPersonDerivesAGrant`, `internal/api.TestTheDispatcherServesTheAPIsOwnHandler`, `internal/api.TestTheGuardAndTheAuthorityTableAgreeOnTheAssistant`, `internal/assistant.TestTheAssistantReachesToolsOnlyAsRequests`, `internal/assistant.TestTheAssistantSendsThroughTheDispatcherAlone`, `internal/assistant.TestNoTokenReachesARecordALogOrAPrompt`, `internal/assistant.TestAGrantEndingMidTurnEndsTheTurn`, `internal/config.TestAHelperRefusesOnlyAHarnessItCannotRunWithNoToolOfItsOwn`, `internal/providers/llm/harness.TestTheAssistantArgvLeavesTheHarnessWithNoToolOfItsOwn`, `internal/api.TestPermissionParityAcrossFivePrincipals`, `internal/api.TestTheAssistantRouteTableIsTheAppsOwn`, `internal/assistant/catalog.TestAGenericCallNamesARouteOfTheTable`
+- **Enforced-by:**
+  - `internal/assistant.TestTheAssistantImportsNoWriterAndNoSeat`
+  - `internal/iam.TestAnAssistedPrincipalIsAPersonCarryingItsScope`
+  - `internal/iam.TestAnAssistGrantsNameIsNobodysLogin`
+  - `internal/api/auth.TestAnAssistGrantOverTheWireIsRefused`
+  - `internal/api/auth.TestAnAssistGrantIsTheSessionsPrincipalRecomposed`
+  - `internal/api/auth.TestARevokedSessionEndsItsGrant`
+  - `internal/api/auth.TestAnExecGrantCarriesOnlyItsBoundRequestOnce`
+  - `internal/api/auth.TestAnAssistGrantIsRefusedTheGuardedEdges`
+  - `internal/api/auth.TestAnAssistGrantNeverProvesAFresherIdentityThanItsSession`
+  - `internal/api/auth.TestOnlyASessionPersonDerivesAGrant`
+  - `internal/api.TestTheDispatcherServesTheAPIsOwnHandler`
+  - `internal/api.TestTheGuardAndTheAuthorityTableAgreeOnTheAssistant`
+  - `internal/assistant.TestTheAssistantReachesToolsOnlyAsRequests`
+  - `internal/assistant.TestTheAssistantSendsThroughTheDispatcherAlone`
+  - `internal/assistant.TestNoTokenReachesARecordALogOrAPrompt`
+  - `internal/assistant.TestAGrantEndingMidTurnEndsTheTurn`
+  - `internal/config.TestAHelperRefusesOnlyAHarnessItCannotRunWithNoToolOfItsOwn`
+  - `internal/providers/llm/harness.TestTheAssistantArgvLeavesTheHarnessWithNoToolOfItsOwn`
+  - `internal/api.TestPermissionParityAcrossFivePrincipals`
+  - `internal/api.TestTheAssistantRouteTableIsTheAppsOwn`
+  - `internal/assistant/catalog.TestAGenericCallNamesARouteOfTheTable`
 - **Cost-when-tried:** the one existing path that runs a model against the company's tools on somebody's behalf, the sandbox MCP bridge, replaces the request's principal with the SEAT (`internal/api/mcpbridge`'s `actingAs`), and a seat holds every app, so a person without the tracker app routed through it would read the tracker; and the agent turn context falls back to a seat's principal when none is set
 - **Tag-status:** unreleased
 

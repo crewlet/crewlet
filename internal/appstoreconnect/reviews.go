@@ -331,6 +331,7 @@ func (p *Product) applyReplies(ctx context.Context, call growth.Call, approved s
 	defer cancel()
 	out := Posted{App: m.app}
 	failed, unknown := 0, false
+	var first growth.Failure
 	for _, r := range rs {
 		body := map[string]any{"data": map[string]any{"type": "customerReviewResponses",
 			"attributes":    map[string]any{"responseBody": r.text},
@@ -338,13 +339,16 @@ func (p *Product) applyReplies(ctx context.Context, call growth.Call, approved s
 		_, err := m.do(act, Request{Method: "POST", Path: "/v1/customerReviewResponses", Body: body,
 			Reserved: true})
 		pr := PostedReply{Review: r.review.ID, Status: "posted"}
-		switch {
-		case writeFailure(err) == growth.FailureUnknownOutcome:
+		switch f := writeFailure(err); {
+		case f == growth.FailureUnknownOutcome:
 			unknown = true
 			pr.Status, pr.Error = "unknown", "the reply was cut before Apple answered: read the review to see "+
 				"whether it was posted."
 		case err != nil:
 			failed++
+			if first == "" {
+				first = f
+			}
 			pr.Status, pr.Error = "failed", said(err).Error()
 		}
 		out.Replies = append(out.Replies, pr)
@@ -354,7 +358,9 @@ func (p *Product) applyReplies(ctx context.Context, call growth.Call, approved s
 		rec.Failure = growth.FailureUnknownOutcome
 		p.note(ctx, growth.StepFailed, rec)
 	case failed == len(rs):
-		rec.Failure = growth.FailureVendorRefused
+		// EVERY REPLY FAILED, the act as its first reply did: Apple's refusal,
+		// or a request never sent, which is not Apple's.
+		rec.Failure = first
 		p.note(ctx, growth.StepFailed, rec)
 	default:
 		p.note(ctx, growth.StepApplied, rec)

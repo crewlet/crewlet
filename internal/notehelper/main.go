@@ -21,12 +21,11 @@
 //
 // # What it does
 //
-// It polls the bridge's notes route OUTBOUND, as OpenCode's plugin does
-// (internal/sandbox/executor's opencode_steer.js; internal/api/mcpbridge's
-// SteerPattern), and hands each note it is served, oldest first, to the
-// harness through the ADAPTER -adapter names. The loop, its pauses and its
-// shutdown are the helper's and name no harness ([harness]); an adapter is
-// one harness's way in. A later harness with neither route adds an adapter,
+// It polls the bridge's notes route OUTBOUND, as OpenCode's plugin does, and
+// hands each note it is served, oldest first, to the harness through the
+// ADAPTER -adapter names. The loop, its pauses and its shutdown are the
+// helper's and name no harness ([harness]); an adapter is one harness's way
+// in. A later harness with neither route adds an adapter,
 // never a second program.
 //
 // # It confirms nothing
@@ -50,20 +49,20 @@
 // # When it polls
 //
 // Only while the harness takes a note now ([harness.ready]: for Codex, a turn
-// in flight), as OpenCode's plugin polls only while its session's execution
-// runs: a note served after the run's last turn waits on the run's record for
-// its review, never in the helper. The pauses are the plugin's: a failed poll
-// or refused note waits a second, doubling to thirty, reset by the next
-// success, and a poll that handed nothing over starts the next no sooner than
-// a second after it began, so no answer can drive the helper into a loop of
+// in flight): a note served after the run's last turn waits on the run's record
+// for its review, never in the helper. The pauses are the plugin's: a failed
+// poll or refused note waits a second, doubling to thirty, reset by the next
+// success, and a poll that handed nothing over starts the next no sooner than a
+// second after it began, so no answer can drive the helper into a loop of
 // requests.
 //
 // # The step cap
 //
-// -step-cap N ends a turn at its Nth model response, counted per turn, the
-// unit of Claude Code's --max-turns, which a context compaction's request is
-// not: the adapter counts the responses ([events]), and at N the helper
-// writes -cap-marker, by a rename, and then interrupts the turn ([stepCap]).
+// -step-cap N ends the run at its Nth model response, counted over all its
+// turns, a note's included, which a context compaction's request is not: the
+// adapter counts the responses ([events]), and at N the helper writes
+// -cap-marker, by a rename, and then interrupts the turn ([stepCap]); a turn
+// started after that is interrupted as it starts.
 // The marker says the cap fired, never that a turn was cut short: a turn
 // whose Nth response was its final answer completes, and the run reads its
 // cap only where its record of the turn says the interrupt aborted it. An
@@ -88,12 +87,11 @@
 //
 // A harness whose hooks run a program (Muse Code's, Grok Build's) runs the
 // helper once per firing instead (once.go): it takes the run's notes over the
-// bridge's steer_take, as a hook that calls an MCP tool would, hands the
-// answer over through the adapter, and exits 0 whatever happened, so a firing
-// never stops the harness; a take the harness never got is told again. A run
-// that continues a Codex session runs it first as codex-renew, which rewrites
-// the standing instructions its rollout replays to the run's own
-// (codexrenew.go).
+// bridge's steer_take, hands the answer over through the adapter, and exits 0
+// whatever happened, so a firing never stops the harness; a take the harness
+// never got is told again. A run that continues a Codex session runs it first
+// as codex-renew, which rewrites the standing instructions its rollout replays
+// to the run's own (codexrenew.go).
 //
 // # Checkouts below the working directory
 //
@@ -107,8 +105,11 @@
 //   - `instructions`: slots, in order, within `limit`, the harness's own
 //     bound in bytes on what a session started in the checkout reads of them
 //     (Codex: project_doc_max_bytes), omitted for a harness with none, a file
-//     the limit cuts spending all of it. A list of file names relative to a
-//     checkout's root hands its first regular file (Codex:
+//     the limit cuts spending all of it; `firingLimit`, a nested firing's
+//     bound on all its checkouts' files, each counted with its frame, each
+//     that fits handed whole, the rest left out whole and named for the model
+//     to read (Grok sets none: grokrepo.go). A list of file names
+//     relative to a checkout's root hands its first regular file (Codex:
 //     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>,
 //     "suffix": <s>, "form": <harness>, "scoped": {"keys": [...], "whole":
 //     [...]}}, hands each file below dir whose name ends in s, whole, apart by
@@ -127,9 +128,19 @@
 //     checkout, each directory once, an empty file skipped; frontmatter read
 //     as YAML, a file whose frontmatter is not valid YAML left out (it never
 //     loads), a key's value a string or a list's strings, split on `,`,
-//     trimmed, its other entries and another kind holding none. A tree past 8 directories deep, 1,024 entries or 32 MiB is
-//     left out whole, said: Copilot walks 9 levels and Claude Code 10 at least
-//     (measured), so a deeper tree is the gap;
+//     trimmed, its other entries and another kind holding none. `qwen`
+//     (0.28.4, .qwen/rules): as `claude`, but no link followed at all, each
+//     file handed as Qwen Code loads it, its body without frontmatter or HTML
+//     comments, none where that is empty, and `paths` read as it reads it
+//     (qwenrule.go): a non-empty string, `**` included, or a list entry
+//     JavaScript's String makes non-empty names a path, a list holding a
+//     mapping none, and frontmatter its YAML parser refuses is read by its
+//     line reader. `grok` (1.0.92): files directly in dir, dot files too, s
+//     in any case, a file link inside followed, none scoped.
+//     A tree past 8 directories deep, 1,024 entries or 32 MiB is left out
+//     whole, said. Names as {"names": [...],
+//     "inside": true} follow a link only inside the checkout, and "once" on
+//     either kind hands no file an earlier slot did, by real path (Grok's);
 //     `importInstructions` for a harness that reads them itself (Claude Code),
 //     each file then named as one `@<absolute path>` import in place of its
 //     text, no limit applying (checkoutimport.go);
@@ -139,13 +150,28 @@
 //     Pi 1.6.0 does (measured): a directory holding SKILL.md is a skill and
 //     ends the descent, dot directories and node_modules are skipped, and a
 //     skill reached twice, by real path, is copied once, and of two of one
-//     name, the first, the other left out, said; past 8 directories
-//     deep or 1,024 entries it is left out whole, said. Pi also follows a
-//     link out of the checkout, lists a loose root `.md` skill, and honours
-//     .gitignore, .ignore and .fdignore; the walk does none of these;
+//     name, the first, the other left out, said; past 8 directories deep,
+//     4,096 directories read or 1,024 skills it is left out whole, said. Pi
+//     also follows a link out of the checkout, lists a loose root `.md` skill,
+//     and honours .gitignore, .ignore and .fdignore; the walk does none of
+//     these. As Grok 1.0.92 walks: "through" on below a skill, "every" into
+//     dot directories and node_modules, "depth" N no deeper (Grok: 6);
+//     {"dir": <d>, "commands": true} each `*.md` directly in d, dot files
+//     too, as a skill named by its file less `.md`. Grok follows a link out
+//     too; the walks do not;
+//   - `listedAs`: "grok" for Grok 1.0.92's listing rule (internal/skillname):
+//     a checkout's skills are those a session started in it lists, two
+//     rewriting alike settled as Grok does (a skill whose own name rewrites
+//     to it, or a command, first; another falls back to its own rewritten
+//     name, else is unlisted: rows x1-x7, g4x; a command's lead inferred),
+//     one with no frontmatter under its own name; a copy is `<tag>:<listed>`,
+//     left out, said, where a skill of `skills` or `homeSkills` (the home's
+//     other skill directories, read once a firing) lists under, or rewrites
+//     its own name to, its rewritten name (the latter inferred);
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
-//     bound, as `<tag>:<skill>` (at most 64 characters) with its
+//     bound, as `<tag>:<skill>` (`skillSep` `-` joining them for Gemini CLI,
+//     which lists `a:b` as `a-b`; at most 64 characters) with its
 //     frontmatter's name rewritten to that, never over one already there,
 //     built in state/staging (or, where the state is on another filesystem
 //     than the skills, beside the skills directory's real path), outside
@@ -160,41 +186,43 @@
 // it replaces with a section per checkout, "for `<name>` with root <path>"
 // and its instructions, which the runner places where its harness reads them)
 // and `first` (the repositories the run pushes to, handed first; the rest by
-// name), and `nestedSkillsOnly` for a nested adapter that hands no
-// instructions, whose spec then names none to read. It writes state/nested.json, the -config of the harness's nested
+// name), `nestedSkillsOnly` for a nested adapter that hands no instructions,
+// whose spec then names none to read, and `roots`, a file it lists each
+// checkout's root in, a line each, for a harness the runner points at them
+// (Gemini CLI's --include-directories). It writes state/nested.json, the -config of the harness's nested
 // adapter, which the run's post-tool hook runs after each of the main loop's
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
 // (name, description, the copy's SKILL.md) as its hook's context;
-// claude-nested the listing alone, and nothing for a subagent's call;
-// hermes-nested the same as codex-nested through the gate, added to the
-// tool's result by the run's plugin; pi-nested the same as codex-nested with
-// each file in Pi's `<project_instructions path=...>`, on stdout for the
-// run's extension to add to the tool's result (Pi lists no skill it did not
-// start with and loads instructions only as it starts, measured on 1.6.0). A
-// harness taking checkouts adds a nested adapter, never a second core; its
-// runner holds the home file and the copies (internal/sandbox/executor's
-// checkoutHome). What a nested firing
-// leaves out (a skill whose name the home's skills hold, one that leads out
-// of its checkout, a tree past a bound) is a line each on its stderr, in its
-// answer, and in state/skipped under the lock, which the runner's script
-// prints to the run's error stream once the harness has stopped, since no
-// harness shows a hook's stderr; checkout-launch's stderr is the run's own.
-// A gated spec (`gated`: Hermes Agent's) reads its gate on stdin
-// (checkoutgate.go): what the harness's own code makes of each candidate,
-// whose text, files and skill directories stand in for the slots, the skill
-// walk and a home check of the names its skills take, so a checkout
-// brings what a session started there loads and no more (Hermes 0.23.3
-// blocks an injection-scanned file and loads a checkout's skills only where
-// trusted, read in its code). hermes-peek names the candidates first, since a
-// gate is read before the claim; a candidate the gate does not name waits.
-// checkout-launch's `budget`, {"form": "hermes", "own": <file>, "bytes": N},
-// is the bound its sections share with the run's own text in Hermes's
-// system prompt; hermes-nested's -room, the characters a tool's result has
-// left before Hermes spills it to a file: each checkout is handed whole while
-// it fits, else named by the files to read, else left for a later firing,
-// then the skills copied and what was left out (hermesrepo.go).
+// claude-nested the listing alone, and nothing for a subagent's call, as
+// gemini-nested does under AfterTool; qwen-nested each instruction file and
+// rule framed as Qwen Code frames a context file, then the listing;
+// grok-nested each file as Grok's `## From: <path>` within its hook cut of
+// 10,000 code points, checkouts whole while they fit, the rest named by path;
+// hermes-nested as codex-nested through the gate, for the run's plugin to add
+// to the tool's result; pi-nested the same as codex-nested with
+// each file in Pi's `<project_instructions path=...>`, on stdout for the run's
+// extension to add to the tool's result. A nested hook only adds to the launch: a run whose settings switch it off starts, its
+// skip log saying so once; only losing a contract hook (notes, skill loads)
+// refuses. Grok's stays registered, as Grok 1.0.92 skips it itself
+// (measured). A harness taking checkouts adds a nested adapter, never a second
+// core; its runner holds the home file and the copies
+// (internal/sandbox/executor's checkoutHome). What a nested firing leaves out
+// (a skill whose name the home's skills hold, one that leads out of its
+// checkout, a tree past a bound) is a line each on its stderr, in its answer,
+// and in state/skipped under the lock, which the runner's script prints to the
+// run's error stream once the harness has stopped, since no harness shows a
+// hook's stderr; checkout-launch's stderr is the run's own.
+// A gated spec (`gated`: Hermes Agent's) takes on stdin what the harness's
+// own code makes of each candidate (checkoutgate.go): its text, files and
+// skill directories stand in for the slots and the skill walk, beside the
+// names the home's skills take; a candidate it does not name waits, so
+// hermes-peek names them first. checkout-launch's `budget` ({"form":
+// "hermes", "own": <file>, "bytes": N}) bounds its sections with the run's own
+// text, and hermes-nested's -room is what the tool's result has left before
+// Hermes spills it: each checkout whole while it fits, else named by its
+// files, else left for a later firing (hermesrepo.go).
 // The runner's restore marks the state ended, after which a firing claims
 // nothing. A run killed before its script printed the log loses it: the next
 // run's gate removes the state unprinted, as its lines in another run's error
@@ -206,12 +234,10 @@
 // message its first turn's context opens with, and a resume replays that
 // message from the rollout: the resumed thread's configuration never reaches
 // the model again, whether config.toml's or thread/resume's
-// developerInstructions (both measured on 0.171.0 through the app-server; core
-// restores the rollout's reference context and records only world-state
-// changes, and the client's instructions are none). turn/start sets only a
+// developerInstructions (measured on 0.171.0). turn/start sets only a
 // collaboration mode's instructions, another section, and `exec --remote`,
-// which drives the run, resumes with the thread id alone. So
-// codex-renew, run by the session gate before the app-server starts, rewrites
+// which drives the run, resumes with the thread id alone. So codex-renew, run
+// by the session gate before the app-server starts, rewrites
 // each item the rollout records them in (content kind
 // generic.developer_instructions, at any depth: a compaction's replacement
 // history too) to the run's text, every other line byte for byte, its line
@@ -230,10 +256,8 @@
 // `mcp__`), under each tool's cleaned name. Two servers whose namespaces clean
 // alike BOTH get a hashed namespace; of two tools whose namespace and name
 // joined with no separator spell the same, one keeps its name and the other
-// is hashed (codex-rs/codex-mcp/src/tools.rs). So a server `mcp__crewlet` or
-// `mcp::crewlet` from any layer renames the engine's own `mcp__crewlet`
-// namespace, and a server `crewle` listing `tsubmit_work` renames its
-// `submit_work` to `submit_work_<hash>` (measured), each unseen. The helper
+// is hashed (codex-rs/codex-mcp/src/tools.rs), so a server from any layer can
+// rename the engine's own namespace or tools, unseen (measured). The helper
 // reads Codex's effective configuration with its layers (config/read, from
 // the working directory the thread starts in) and every server's tools as the
 // server names them (mcpServerStatus/list, which starts each server once, as
@@ -258,9 +282,8 @@
 // Codex runs, so codex-materialize writes plain, first, every compressed
 // rollout of the thread under -sessions as Codex would: decoded beside it,
 // its mode and mtime kept, linked in under the plain name and never over a
-// file there, which wins (Codex writes it before removing the `.zst`), the
-// `.zst` then removed: a resume takes a stale `.zst` over a plain copy
-// elsewhere (measured on 0.171.0).
+// file there, which wins, the `.zst` then removed: a resume takes a stale
+// `.zst` over a plain copy elsewhere (measured on 0.171.0).
 //
 // # Exit
 //
@@ -375,7 +398,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	set.StringVar(&f.socket, "socket", "", "the harness's unix socket")
 	set.StringVar(&f.threadFile, "thread-file", "", "the file the run's script writes the harness's thread id to")
 	set.StringVar(&f.notesEnv, "notes-env", "", "the environment variable holding the bridge's notes route")
-	set.IntVar(&f.stepCap, "step-cap", 0, "end a turn at this many model responses (0: no cap)")
+	set.IntVar(&f.stepCap, "step-cap", 0, "end the run at this many model responses, over all its turns (0: no cap)")
 	set.StringVar(&f.capMarker, "cap-marker", "", "the file written, before the interrupt, when the step cap ends a turn")
 	set.BoolVar(&f.interruptOnce, "interrupt-once", false, "interrupt the turn in flight, if any, and exit")
 	set.StringVar(&f.skillsEnv, "skills-env", "", "the environment variable holding the bridge's skill route")
@@ -440,7 +463,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	var capped *stepCap
 	if f.stepCap > 0 {
 		capped = newStepCap(f.stepCap, f.capMarker)
-		ev.step = capped.step
+		ev.begin, ev.step = capped.begin, capped.step
 	}
 	if skills != nil {
 		ev.skill = skills.loaded

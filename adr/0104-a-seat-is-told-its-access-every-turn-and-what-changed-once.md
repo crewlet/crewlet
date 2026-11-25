@@ -2,7 +2,40 @@
 
 - **Status:** accepted
 - **Authority:** `internal/capability`
-- **Enforced-by:** `internal/capability.TestYourAccessIsInEverySystemPrompt`, `internal/capability.TestYourAccessIsByteStableWhileAccessIs`, `internal/capability.TestASnapshotHoldsNoCredential`, `internal/capability.TestARevertIsToldAsAChangeBack`, `internal/capability.TestARotationIsNoChange`, `internal/engine.TestABaselineTurnCarriesNoBlock`, `internal/engine.TestASeatIsToldAChangeOnce`, `internal/engine.TestManyRevisionsAreToldAsOne`, `internal/engine.TestATurnThatNeverLaunchedToldNothing`, `internal/agent/runner.TestARelaunchCarriesTheSameBlock`, `internal/agent/runner.TestAContinuedConversationIsToldTheChange`, `internal/agent/prefetch.TestANoteOlderThanAChangeNamingItIsMarked`, `internal/capability.TestADefaultToolLevelChangeIsTold`, `internal/capability.TestTheLargestSnapshotFitsItsRecord`, `internal/capability.TestAShortenedSnapshotIsComparedAtItsOwnLevel`, `internal/engine.TestATurnsLaunchWritesItsToldRecordOnce`, `internal/engine.TestAnIncompleteBaselineTellsOnlyTheAccess`, `internal/engine.TestASnapshotPastItsBoundIsKeptAsItsDigest`, `internal/capability.TestEachTurnStatesTheBoxItsRunsUse`, `internal/capability.TestABoxChangeIsToldAsWhatMoved`, `internal/capability.TestABaselineFromBeforeBoxesTellsNoBoxChange`, `internal/engine.TestASeatIsToldItsBoxAsARunLastFoundIt`, `internal/sandbox.TestAFreshBoxIsReadOnceAndTheLaunchSaysWhatItFound`, `internal/sandbox.TestABoxIsReadIntoClosedValuesOnly`, `internal/learning.TestANoteIsHeldBackOnlyWhereItMayHaveBecomeFalse`, `internal/agent/prefetch.TestANoteThatMayHaveBecomeFalseIsHeldBack`, `internal/learning.TestTheHeldPredicateIsHeldBack`, `internal/learning.TestAHeldNoteIsRetiredAfterItsLife`, `internal/engine.TestASeatsAccessInstantDoesNotAgeOut`, `internal/capability.TestASnapshotReadsWhatTheSeatReaches`, `internal/capability.TestAPermissionOnlyTheAppHoldsIsTheGrantsToAdd`, `internal/capability.TestAnOlderBaselineIsNoChangeFromWhatTheAppHolds`, `internal/seataccess.TestEveryLanesGrantIsPlacedOnItsIntegrationsCard`
+- **Enforced-by:**
+  - `internal/capability.TestYourAccessIsInEverySystemPrompt`
+  - `internal/capability.TestYourAccessIsByteStableWhileAccessIs`
+  - `internal/capability.TestASnapshotHoldsNoCredential`
+  - `internal/capability.TestARevertIsToldAsAChangeBack`
+  - `internal/capability.TestARotationIsNoChange`
+  - `internal/engine.TestABaselineTurnCarriesNoBlock`
+  - `internal/engine.TestASeatIsToldAChangeOnce`
+  - `internal/engine.TestManyRevisionsAreToldAsOne`
+  - `internal/engine.TestATurnThatNeverLaunchedToldNothing`
+  - `internal/agent/runner.TestARelaunchCarriesTheSameBlock`
+  - `internal/agent/runner.TestAContinuedConversationIsToldTheChange`
+  - `internal/agent/prefetch.TestANoteOlderThanAChangeNamingItIsMarked`
+  - `internal/capability.TestADefaultToolLevelChangeIsTold`
+  - `internal/capability.TestTheLargestSnapshotFitsItsRecord`
+  - `internal/capability.TestAShortenedSnapshotIsComparedAtItsOwnLevel`
+  - `internal/engine.TestATurnsLaunchWritesItsToldRecordOnce`
+  - `internal/engine.TestAnIncompleteBaselineTellsOnlyTheAccess`
+  - `internal/engine.TestASnapshotPastItsBoundIsKeptAsItsDigest`
+  - `internal/capability.TestEachTurnStatesTheBoxItsRunsUse`
+  - `internal/capability.TestABoxChangeIsToldAsWhatMoved`
+  - `internal/capability.TestABaselineFromBeforeBoxesTellsNoBoxChange`
+  - `internal/engine.TestASeatIsToldItsBoxAsARunLastFoundIt`
+  - `internal/sandbox.TestAFreshBoxIsReadOnceAndTheLaunchSaysWhatItFound`
+  - `internal/sandbox.TestABoxIsReadIntoClosedValuesOnly`
+  - `internal/learning.TestANoteIsHeldBackOnlyWhereItMayHaveBecomeFalse`
+  - `internal/agent/prefetch.TestANoteThatMayHaveBecomeFalseIsHeldBack`
+  - `internal/learning.TestTheHeldPredicateIsHeldBack`
+  - `internal/learning.TestAHeldNoteIsRetiredAfterItsLife`
+  - `internal/engine.TestASeatsAccessInstantDoesNotAgeOut`
+  - `internal/capability.TestASnapshotReadsWhatTheSeatReaches`
+  - `internal/capability.TestAPermissionOnlyTheAppHoldsIsTheGrantsToAdd`
+  - `internal/capability.TestAnOlderBaselineIsNoChangeFromWhatTheAppHolds`
+  - `internal/seataccess.TestEveryLanesGrantIsPlacedOnItsIntegrationsCard`
 - **Cost-when-tried:** a seat whose access to production was granted kept answering from an earlier turn of its continued session that agents cannot touch production, and a seat asked about a failing commit status had no way to know which GitHub permissions it held. The policy and the grant were both current in the system prompt; nothing said they had changed.
 - **Tag-status:** unreleased
 

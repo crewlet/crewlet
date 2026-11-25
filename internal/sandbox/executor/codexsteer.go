@@ -195,6 +195,7 @@ func codexConversation(ctx context.Context, r io.Reader, from int, summary *summ
 	each func(kind codexTurnKind, digest string)) (bool, error) {
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), codexWalkBound)
+	w.passImages()
 	var l codexNoteLine
 	if summary != nil {
 		l.compaction = &codexCompaction{}
@@ -277,14 +278,14 @@ func (l *codexNoteLine) read(w *lineWalk) error {
 			l.compactionOutput = false
 			ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
 				if name != "compaction_output" {
-					return w.scan.Skip()
+					return w.skip(k)
 				}
 				flag, took, flagErr := w.flagField(k)
 				l.compactionOutput, l.fragment = flag, l.fragment || !took
 				return flagErr
 			})
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		l.fragment = l.fragment || !ok
 		return err
@@ -316,7 +317,7 @@ func (l *codexNoteLine) payload(w *lineWalk, k jsonscan.Kind) error {
 		case "internal_chat_message_metadata_passthrough":
 			ok, err = l.meta.read(w, k)
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		l.itemTook = l.itemTook && ok
 		return err
@@ -349,7 +350,7 @@ func (l *codexNoteLine) contentPart(w *lineWalk, k jsonscan.Kind) (bool, error) 
 				return nil
 			default:
 				took = false
-				return w.scan.Skip()
+				return w.skip(k)
 			}
 			state, err := l.words.(encoding.BinaryMarshaler).MarshalBinary()
 			if err != nil {
@@ -361,7 +362,7 @@ func (l *codexNoteLine) contentPart(w *lineWalk, k jsonscan.Kind) (bool, error) 
 			text = true
 			return w.read(l.part)
 		}
-		return w.scan.Skip()
+		return w.skip(k)
 	})
 	if err == nil && ok && took && text && kind == "input_text" {
 		state, mErr := l.part.(encoding.BinaryMarshaler).MarshalBinary()
@@ -440,11 +441,11 @@ func (m *codexMeta) read(w *lineWalk, k jsonscan.Kind) (bool, error) {
 			ok, err = w.listField(k, func(k jsonscan.Kind) error {
 				part, partErr := w.objectField(k, func(name string, k jsonscan.Kind) error {
 					if name != "provenance" {
-						return w.scan.Skip()
+						return w.skip(k)
 					}
 					prov, provErr := w.objectField(k, func(name string, k jsonscan.Kind) error {
 						if name != "type" {
-							return w.scan.Skip()
+							return w.skip(k)
 						}
 						typ, word, typErr := w.wordField(k)
 						m.harness = m.harness || typ == "harness"
@@ -458,7 +459,7 @@ func (m *codexMeta) read(w *lineWalk, k jsonscan.Kind) (bool, error) {
 				return partErr
 			})
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		took = took && ok
 		return err

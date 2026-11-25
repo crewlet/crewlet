@@ -4,12 +4,21 @@
  * field marked once.
  */
 
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { LayerHost } from "@crewlethq/ui";
 import { afterEach, expect, test, vi } from "vitest";
 import { SetupForm } from "./SetupForm.tsx";
-import type { SetupRequirement, SetupStep, SetupToolState } from "~/protocol/index.ts";
+import {
+  Store,
+  type SetupRequirement,
+  type SetupStep,
+  type SetupToolState,
+} from "~/protocol/index.ts";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
+import { healthFrame } from "~/test/health.ts";
+import { ADMIN_VIEWER } from "~/test/viewer.ts";
 
 const CALLBACK = "https://crewlet.example.com/webhooks/mcp-oauth";
 
@@ -36,8 +45,9 @@ function analytics(
       text: [{ text: "Connect Google Cloud first; no project needs preparing." }],
       needs: "google_cloud",
       connected: over.connected ?? false,
+      done: false,
     },
-    { text: [{ text: "Add the company reader below to each property." }] },
+    { text: [{ text: "Add the company reader below to each property." }], done: false },
   ];
   return {
     key: "google_analytics",
@@ -84,8 +94,30 @@ function analytics(
   };
 }
 
+/** The frame a form is drawn in: an administrator, the engine raising no notice. */
+function Frame({ children }: { children: ReactNode }) {
+  const store = new Store();
+  store.applyHealth(healthFrame({ nodes: 1 }));
+  const socket = {
+    query: async (what: string) =>
+      what === "viewer"
+        ? ADMIN_VIEWER
+        : what === "advisor_notices"
+          ? { notices: [], unread: [] }
+          : {},
+    focus: () => {},
+  };
+  return (
+    <ClientContext.Provider value={{ store, socket } as never}>
+      <ViewerProvider>
+        <LayerHost>{children}</LayerHost>
+      </ViewerProvider>
+    </ClientContext.Provider>
+  );
+}
+
 function render(ui: ReactElement): ReturnType<typeof rtlRender> {
-  return rtlRender(ui, { wrapper: LayerHost });
+  return rtlRender(ui, { wrapper: Frame });
 }
 
 function form(tool: SetupToolState) {

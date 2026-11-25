@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/executorkeep"
@@ -79,6 +80,35 @@ type ExecutorLaunched struct {
 	// sentence (executorkeep.NotContinued.Sentence). Absent where it lost none.
 	// The collected record carries the final verdict.
 	SessionNotContinued *executorkeep.NotContinued `json:"session_not_continued,omitempty"`
+	// Browser is a browser seat's browser as this launch readied it, nil for
+	// a seat with none.
+	Browser *ExecutorBrowser `json:"browser,omitempty"`
+}
+
+// ExecutorBrowser is a browser seat's browser as its launch readied it: ready,
+// or withheld for a reason and the cause that could be told, with what the
+// box's ensure knew. Every closed value is internal/browser's, as ensure's line
+// was read into it; Node and Pin are versions the box printed, a prerelease's
+// letters included, so they are declared somebody else's words.
+type ExecutorBrowser struct {
+	State  browser.EnsureVerdict `json:"state"`
+	Reason browser.EnsureReason  `json:"reason,omitempty"`
+	Cause  browser.EnsureCause   `json:"cause,omitempty"`
+	// Chromium is the browser's version, and ChromiumMajor its first number,
+	// which no version has at 0; Outdated says it is older than the build the
+	// pinned Playwright expects (browser.Outdated), a warning, never a reason.
+	Chromium      string `json:"chromium,omitempty"`
+	ChromiumMajor int    `json:"chromium_major,omitempty"` //wiregate:absent-is-zero no version ensure learnt
+	Outdated      bool   `json:"outdated,omitempty"`       //wiregate:absent-is-false not known to be older
+	// Build and Sandbox are a ready browser's: whether it is the build the pin
+	// expects, and Chromium's own sandbox.
+	Build   browser.ChromiumBuild   `json:"build,omitempty"`
+	Sandbox browser.ChromiumSandbox `json:"sandbox,omitempty"`
+	// Node is the box's Node.js, Helper the helper's version, Pin the
+	// Playwright MCP release the box runs.
+	Node   string `json:"node,omitempty" untrusted:"name"`
+	Helper string `json:"helper,omitempty"`
+	Pin    string `json:"pin,omitempty" untrusted:"name"`
 }
 
 // EventType is the "executor_launched" wire type.
@@ -247,8 +277,9 @@ type ExecutorCollected struct {
 	// reason, redacted; the kind is [ExecutorErrorContextExhausted] where the
 	// harness said its conversation no longer fits the model's context,
 	// [ExecutorErrorOutOfMemory] where the kernel killed its harness for
-	// memory, [ExecutorErrorMaxTurns] where it ended on its round cap, and
-	// [ExecutorErrorLaunchFailed] for every other cause.
+	// memory, [ExecutorErrorMaxTurns] where it ended on its round cap,
+	// [ExecutorErrorTurnCapExceeded] where it made more requests than that cap,
+	// and [ExecutorErrorLaunchFailed] for every other cause.
 	Failed    bool   `json:"failed"`
 	Error     string `json:"error"`
 	ErrorKind string `json:"error_kind"`
@@ -334,6 +365,10 @@ const (
 	// launch handed it (role.sandbox.max_turns, else the provider default)
 	// before it finished: Claude Code's `error_max_turns`.
 	ExecutorErrorMaxTurns = "max_turns"
+	// ExecutorErrorTurnCapExceeded is a run whose stream shows more model
+	// requests than the round cap its launch handed it: what held the cap in
+	// its box did not, and the run fails whatever it reported.
+	ExecutorErrorTurnCapExceeded = "turn_cap_exceeded"
 )
 
 // EventType is the "executor_collected" wire type.

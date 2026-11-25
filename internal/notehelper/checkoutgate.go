@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 )
 
@@ -80,24 +79,18 @@ type claimRoom interface {
 	take(h handedCheckout, said *skips) bool
 }
 
+// taken is the skill of the home's found by name, where g answers (nil for
+// none) and one is.
+func (g *checkoutGate) taken(name string) (string, bool) {
+	if g == nil {
+		return "", false
+	}
+	held, ok := g.Taken[name]
+	return held, ok
+}
+
 // holds reports whether g answers for the checkout at root.
 func (g *checkoutGate) holds(root string) bool {
 	_, ok := g.Checkouts[root]
 	return ok
-}
-
-// homeHolds is why a copy named name may not be made, "" where it may: the
-// run's skills hold an entry of that name, or, where a gate answers, a skill
-// of the home's is found by that name ([checkoutGate.Taken]), which keeps it
-// and leaves the copy out.
-func homeHolds(spec checkoutSpec, name string) string {
-	if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil {
-		return "the home's skills hold " + name + " already"
-	}
-	if spec.gate != nil {
-		if held, ok := spec.gate.Taken[name]; ok {
-			return "the home's skill " + held + " is found by its name " + name
-		}
-	}
-	return ""
 }

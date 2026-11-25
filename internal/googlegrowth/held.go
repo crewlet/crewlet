@@ -211,6 +211,9 @@ func (c *Client) Apply(ctx context.Context, call growth.Call, w Write, binding s
 		}
 	}
 	out, err := c.SendAndRead(act, call.Handle, h.Req, w.Cut)
+	if Unsent(err) {
+		err = growth.NotSent(err)
+	}
 	switch {
 	case err != nil:
 		r.Failure = failureOfStep(err)
@@ -244,17 +247,22 @@ func (c *Client) hold(ctx context.Context, resource string) (func(), error) {
 			"was sent.")
 	}
 	release, err := c.Leases.Hold(ctx, resource)
-	if err != nil {
+	switch {
+	case errors.Is(err, growth.ErrActHeld):
 		return nil, growth.Refuse(growth.RefusedUnavailable, "another act on the same "+c.Name+" account is "+
 			"being made; nothing was sent. Call again.")
+	case err != nil:
+		return nil, fmt.Errorf("googlegrowth: hold the %s account's act lease: %w", c.Name, err)
 	}
 	return release, nil
 }
 
-// failEarly records the failed outcome of an allowed held call that ended
-// before its write was sent, and answers err; an operate call that sent
-// nothing is no act.
+// failEarly answers err, a call's failure before its write was sent, marked
+// so ([growth.NotSent]), and records it as an allowed held call's outcome; an
+// operate call that sent nothing is no act. The mark comes first, since the
+// reason recorded reads it ([failureOfStep]).
 func (c *Client) failEarly(ctx context.Context, held bool, r growth.Record, err error) error {
+	err = growth.NotSent(err)
 	if held {
 		r.Failure = failureOfStep(err)
 		c.note(ctx, growth.StepFailed, r)

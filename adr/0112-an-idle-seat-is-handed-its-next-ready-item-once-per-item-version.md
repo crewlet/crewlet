@@ -2,7 +2,36 @@
 
 - **Status:** accepted
 - **Authority:** `internal/pickup`
-- **Enforced-by:** `internal/pickup.TestAPickupIsKeyedOnTheItemsVersionBySomebodyElse`, `internal/worklet.TestAnItemWaitsUntilItsDateAndSaysWhy`, `internal/worklet.TestAReviewIsReadyForTheSeatThatHoldsIt`, `internal/worklet.TestANoAskCommentOrWatcherChangeDoesNotReArmThePickup`, `internal/pickup.TestASeatThatIsNotIdleIsHandedNothing`, `internal/worklet.TestReadyWorkComesStartedFirstThenTheListThenTheQueue`, `internal/worklet.TestReadyWorkLeavesOutWhatCannotStartNow`, `internal/pickup.TestAnIdleSeatIsHandedItsReadyItemOnce`, `internal/pickup.TestAPickupThatCannotBeSentIsTriedAgain`, `internal/pickup.TestADeclinedItemGivesWayToTheNext`, `internal/pickup.TestThePickupReadsPastTheFirstPageAndRemembersAnAllOfferedSet`, `internal/engine.TestAPickupIsWorkedForWhomItsItemIsFor`, `internal/agent/builtin.TestAPickupTurnIsHeldAsTheAssignmentTurnIs`, `internal/pickup.TestProgressHandsAStartedItemBackOncePerCooldown`, `internal/pickup.TestARequesterNoLongerHeldIsWorkedForAsAStranger`, `internal/worklet.TestReadyWorkSaysWhomTheWorkIsFor`, `internal/worklet.TestAPickupReadsTheAssignmentWhateverKindItsRecordEndsWith`, `internal/worklet.TestAPickupWorksForWhomItsAssignmentWasWrittenFor`, `internal/worklet.TestWorkASeatFiledForSomebodyIsTheirs`, `internal/worklet.TestATakeMadeForSomebodyIsWorkedForThem`, `internal/worklet.TestWorkHandedBackToTheSeatItWasDoneForIsItsOwn`, `internal/worklet.TestAReviewIsWorkedForWhomItsAssignmentWasMadeFor`, `internal/worklet.TestASeatsOwnRowIsAdmittedOnlyAsAnAgentsRowForSomebody`, `internal/worklet.TestReadyWorkTimesAndProgressFollowTheKey`, `internal/worklet.TestAHistoryRowKeepsAppsOnlyFromTheVersionThatSaysSo`, `internal/engine.TestAPickupIsAWakeOfItsOwnType`, `internal/pickup.TestACoolingItemGivesWayToTheNext`, `internal/pickup.TestAPassTakesTheSeatsCooldownOnce`, `internal/sandbox.TestASeatWaitingPastThePauseTTLIsHandedWork`
+- **Enforced-by:**
+  - `internal/pickup.TestAPickupIsKeyedOnTheItemsVersionBySomebodyElse`
+  - `internal/worklet.TestAnItemWaitsUntilItsDateAndSaysWhy`
+  - `internal/worklet.TestAReviewIsReadyForTheSeatThatHoldsIt`
+  - `internal/worklet.TestANoAskCommentOrWatcherChangeDoesNotReArmThePickup`
+  - `internal/pickup.TestASeatThatIsNotIdleIsHandedNothing`
+  - `internal/worklet.TestReadyWorkComesStartedFirstThenTheListThenTheQueue`
+  - `internal/worklet.TestReadyWorkLeavesOutWhatCannotStartNow`
+  - `internal/pickup.TestAnIdleSeatIsHandedItsReadyItemOnce`
+  - `internal/pickup.TestAPickupThatCannotBeSentIsTriedAgain`
+  - `internal/pickup.TestADeclinedItemGivesWayToTheNext`
+  - `internal/pickup.TestThePickupReadsPastTheFirstPageAndRemembersAnAllOfferedSet`
+  - `internal/engine.TestAPickupIsWorkedForWhomItsItemIsFor`
+  - `internal/agent/builtin.TestAPickupTurnIsHeldAsTheAssignmentTurnIs`
+  - `internal/pickup.TestProgressHandsAStartedItemBackOncePerCooldown`
+  - `internal/pickup.TestARequesterNoLongerHeldIsWorkedForAsAStranger`
+  - `internal/worklet.TestReadyWorkSaysWhomTheWorkIsFor`
+  - `internal/worklet.TestAPickupReadsTheAssignmentWhateverKindItsRecordEndsWith`
+  - `internal/worklet.TestAPickupWorksForWhomItsAssignmentWasWrittenFor`
+  - `internal/worklet.TestWorkASeatFiledForSomebodyIsTheirs`
+  - `internal/worklet.TestATakeMadeForSomebodyIsWorkedForThem`
+  - `internal/worklet.TestWorkHandedBackToTheSeatItWasDoneForIsItsOwn`
+  - `internal/worklet.TestAReviewIsWorkedForWhomItsAssignmentWasMadeFor`
+  - `internal/worklet.TestASeatsOwnRowIsAdmittedOnlyAsAnAgentsRowForSomebody`
+  - `internal/worklet.TestReadyWorkTimesAndProgressFollowTheKey`
+  - `internal/worklet.TestAHistoryRowKeepsAppsOnlyFromTheVersionThatSaysSo`
+  - `internal/engine.TestAPickupIsAWakeOfItsOwnType`
+  - `internal/pickup.TestACoolingItemGivesWayToTheNext`
+  - `internal/pickup.TestAPassTakesTheSeatsCooldownOnce`
+  - `internal/sandbox.TestASeatWaitingPastThePauseTTLIsHandedWork`
 - **Measured:** on a company running this engine, over about five hours: 200 turns, a median of 20 seconds and none over five minutes, while 28 items assigned to agents, none of them waiting on an open blocker, sat untouched for 20 to 260 hours, and several items in progress had no run behind them.
 - **Cost-when-tried:** the workaround that company ran, a schedule per role whose task text said "pick up your next ready item", fired on a clock whether or not the seat was busy, could not tell which item it meant, and woke a seat with nothing ready as often as one with ten.
 - **Tag-status:** unreleased

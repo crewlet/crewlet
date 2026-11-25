@@ -42,6 +42,7 @@ package spendguard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	_ "time/tzdata" // an account's zone loads on a minimal host too
 )
@@ -180,20 +181,27 @@ func (g *Guard[Op]) Check(ctx context.Context, account Account, caps Caps, op Op
 // Apply makes op on account once, under the account's lease: it reads the
 // account and caps again (read), re-checks every rule against live capacity,
 // and calls apply only if they pass. read answers the account as its vendor
-// does now and the caps as the running document sets them.
+// does now and the caps as the running document sets them. Every failure
+// before apply is called, the lease's and the recheck's, wraps
+// [ErrNotApplied]; apply's own error is answered as it is.
 func (g *Guard[Op]) Apply(ctx context.Context, account string, op Op,
 	read func(ctx context.Context) (Account, Caps, error), apply func(ctx context.Context) error) (Figures, error) {
 	release, err := g.leases.Hold(ctx, Resource(g.kind, account))
 	if err != nil {
-		return Figures{}, fmt.Errorf("spendguard: holding %s's apply lease: %w", account, err)
+		return Figures{}, fmt.Errorf("%w: spendguard: holding %s's apply lease: %w", ErrNotApplied, account, err)
 	}
 	defer release()
 	f, err := g.Recheck(ctx, op, read)
 	if err != nil {
-		return f, err
+		return f, fmt.Errorf("%w: %w", ErrNotApplied, err)
 	}
 	return f, apply(ctx)
 }
+
+// ErrNotApplied marks a failure of [Guard.Apply] before it called apply: the
+// change was never sent, which a product tells its caller (internal/growth's
+// ErrNotSent, which this package cannot import).
+var ErrNotApplied = errors.New("spendguard: the change was not applied")
 
 // Recheck is Apply's checks for a product that holds the account's one apply
 // lease itself, around every write it makes there: it reads the account and

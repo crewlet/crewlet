@@ -2,7 +2,12 @@
 
 - **Status:** accepted
 - **Authority:** `internal/chatlet`
-- **Enforced-by:** `internal/chatlet.TestTheScopeAlphabetHasNoPerMessageTerm`, `internal/chatlet.TestAPostIntoARoomArchivedAheadOfItIsRefusedAndSoIsItsRetry`, `internal/chatlet.TestAReactionPastTheCapIsRefusedAndTheWriterIsTold`, `internal/chatlet.TestASecondCopyOfAnOperationDoesNothing`, `internal/chatlet.TestAVerdictTheHorizonLetGoIsUnknownNeverDropped`
+- **Enforced-by:**
+  - `internal/chatlet.TestTheScopeAlphabetHasNoPerMessageTerm`
+  - `internal/chatlet.TestAPostIntoARoomArchivedAheadOfItIsRefusedAndSoIsItsRetry`
+  - `internal/chatlet.TestAReactionPastTheCapIsRefusedAndTheWriterIsTold`
+  - `internal/chatlet.TestASecondCopyOfAnOperationDoesNothing`
+  - `internal/chatlet.TestAVerdictTheHorizonLetGoIsUnknownNeverDropped`
 - **Measured:** a declared census of 20,000 messages a day against a compare-and-set budget of 16 rounds, and one deferral cascade in which a message-scoped post lets a node mint a sequence a deferred sibling should have had
 - **Cost-when-tried:** two shapes. ARBITRATED, the one the framework's other strict domains use everywhere: the busiest subject in the company serialises behind itself, and its failure mode is the one a chat system may not have — `ErrConflict` on a message somebody typed. ADDITIVE, the one this record first chose: it called the records commutative while the applier decided four of them against rows the writer's snapshot could not see — it declined the thirty-third distinct emoji, skipped an edit of a tombstone, and wrote a post into a room a record ahead of it had archived or taken its author out of — and the writer answered `applied` for every one, a record the applier dropped included, while the change feed woke seats about posts the room never held; and a second copy of an edit, landing after a later edit, put the older words back.
 - **Tag-status:** unreleased

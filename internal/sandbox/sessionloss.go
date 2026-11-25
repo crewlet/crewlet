@@ -86,13 +86,14 @@ func (c *Coordinator) placingRow(ctx context.Context, by time.Time, turnID strin
 
 // SessionMeter is told, once per collected launch that had a session to
 // continue, its final verdict ([LaunchRecord.NotContinued], nil where it
-// continued it): the engine counts each loss
+// continued it) and what the brief its run read handed of the lost session's
+// summary ([LaunchRecord.Handover]): the engine counts each loss
 // (`crewlet.executor.session.not_continued`) and records the session_carry
 // objective (internal/objectives); this package links no state log. It is
 // told too of each capture kept trimmed ([SessionCapture.Trimmed]), by the
 // harness that wrote it (`crewlet.executor.session.trimmed`).
 type SessionMeter interface {
-	SessionCarried(verdict *executorkeep.NotContinued)
+	SessionCarried(verdict *executorkeep.NotContinued, handover SummaryHandover)
 	SessionTrimmed(harness string)
 }
 
@@ -124,13 +125,18 @@ func (r PendingRun) ConversationNotice() *executorkeep.NotContinued {
 // meterCarry tells the meter a collected launch's verdict, where it had a
 // session to continue: its brief continued one, or it says what it lost. A
 // launch with neither (a conversation's first turn, a company or harness that
-// keeps none) is no event. Called under the record's once-per-launch guard
-// ([LaunchRecord.Published]).
-func (c *Coordinator) meterCarry(facts LaunchRecord, verdict *executorkeep.NotContinued) {
+// keeps none) is no event. The hand-over is the brief's its run read: the
+// fresh one where its box fell back to it (result). Called under the record's
+// once-per-launch guard ([LaunchRecord.Published]).
+func (c *Coordinator) meterCarry(facts LaunchRecord, result Result, verdict *executorkeep.NotContinued) {
 	if c.sessionMeter == nil || (verdict == nil && !facts.Brief.Continues()) {
 		return
 	}
-	c.sessionMeter.SessionCarried(verdict)
+	handover := facts.Handover
+	if result.FellBack != "" {
+		handover = facts.FreshHandover
+	}
+	c.sessionMeter.SessionCarried(verdict, handover)
 }
 
 // meterTrim tells the meter of a capture kept trimmed, where stamp landed one
@@ -151,12 +157,7 @@ func finalNotContinued(run PendingRun, facts LaunchRecord, result Result) *execu
 	if result.FellBack == "" {
 		return facts.NotContinued
 	}
-	verdict := executorkeep.Lost(executorkeep.LossRestoreFailed, executorkeep.InsteadFresh,
-		BoundFellBack(result.FellBack))
-	if facts.Brief == BriefContinuedConversation && run.Base != nil && run.Base.Session != nil {
-		verdict.LostTurn = run.Base.Session.Turn
-	}
-	fitted := verdict.Fit()
+	fitted := fellBack(facts.Brief, run.Base, BoundFellBack(result.FellBack)).Fit()
 	return &fitted
 }
 
@@ -168,12 +169,8 @@ func (r PendingRun) launchVerdict() *executorkeep.NotContinued {
 	if !r.Launch.Brief.Continues() || r.Launch.SessionStart != SessionStartFresh {
 		return r.Launch.NotContinued
 	}
-	verdict := executorkeep.Lost(executorkeep.LossRestoreFailed, executorkeep.InsteadFresh,
+	return fellBack(r.Launch.Brief, r.Base,
 		"the box's restore of the session it was handed failed, and its script started a session of its own")
-	if r.Launch.Brief == BriefContinuedConversation && r.Base != nil && r.Base.Session != nil {
-		verdict.LostTurn = r.Base.Session.Turn
-	}
-	return verdict
 }
 
 // turnVerdicts is the turn's verdicts with its current job's beside them

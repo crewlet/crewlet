@@ -24,7 +24,7 @@ const analyticsCloud = `{
   "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "integrations": {
     "google_cloud": {"enabled": true, "provisioning": {
-      "provisioner": "crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com",
+      "identity_project": "acme-crewlet-id",
       "provider": "projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine",
       "federation_key": "${GOOGLE_CLOUD_FEDERATION_KEY}"}}},
   "roles": [{"name": "CTO", "handle": "cto", "llm": "zulu"}]
@@ -65,16 +65,38 @@ func redirectOf(state setupapi.ToolState) *setup.Requirement {
 	return nil
 }
 
-// EVERY CONSENT PRODUCT'S FORM SHOWS THE REDIRECT URI ITS CLIENT REGISTERS:
-// the engine's own sign-in callback and the setting it is built on, before
-// the client's ID, for every kind the consent registry holds; and an engine
-// with no public address answers it empty, for the form to say so.
+// THE ONE SIGN-IN CLIENT IS ASKED ONCE, ON GOOGLE CLOUD'S ANSWER: its redirect
+// URI (the engine's own callback and the setting it is built on) just before
+// its ID, all in the sign-in group, written under google_cloud.sign_in_client;
+// no consent product asks a client or a redirect of its own, only its
+// sign-in; and an engine with no public address answers the URI empty.
 //
-// Mutation: drop FillRedirects, or a product's redirect row, and a case goes red.
-func TestAConsentProductsFormShowsTheEnginesRedirectURI(t *testing.T) {
+// Mutation: drop FillRedirects, the group, or append the client to a product
+// again, and a case goes red.
+func TestTheOneSignInClientIsAskedOnceWithTheEnginesRedirectURI(t *testing.T) {
 	t.Parallel()
 	s := consentSurface(t, testCallback)
 	s.seed(t)
+	cloud := toolState(t, s, integration.KindGoogleCloud)
+	r := redirectOf(cloud)
+	switch {
+	case r == nil:
+		t.Fatal("Google Cloud's answer shows no redirect URI for the sign-in client")
+	case r.Redirect == nil || r.Redirect.URL != testCallback || r.Redirect.Key != "api.public.external_url":
+		t.Errorf("the redirect URI = %+v, want %s on api.public.external_url", r.Redirect, testCallback)
+	case indexOf(cloud, "sign_in_client_id") != indexOf(cloud, "redirect_uri")+1:
+		t.Error("the redirect URI is not asked just before the client's ID")
+	}
+	for _, field := range []string{"redirect_uri", "sign_in_client_id", "sign_in_client_secret"} {
+		i := indexOf(cloud, field)
+		if i < 0 || cloud.Requirements[i].Group != setup.GroupSignIn {
+			t.Errorf("%s is not asked in the sign-in group", field)
+		}
+	}
+	if got := cloud.Requirements[indexOf(cloud, "sign_in_client_id")].ConfigPath; got !=
+		"integrations.google_cloud.sign_in_client.client_id" {
+		t.Errorf("the client ID is written to %q", got)
+	}
 	var products int
 	for _, kind := range integration.Kinds {
 		if _, ok := googleauth.ConsentOf(kind); !ok {
@@ -82,14 +104,11 @@ func TestAConsentProductsFormShowsTheEnginesRedirectURI(t *testing.T) {
 		}
 		products++
 		state := toolState(t, s, kind)
-		r := redirectOf(state)
-		switch {
-		case r == nil:
-			t.Errorf("%s: the form shows no redirect URI for its OAuth client", kind)
-		case r.Redirect == nil || r.Redirect.URL != testCallback || r.Redirect.Key != "api.public.external_url":
-			t.Errorf("%s: the redirect URI = %+v, want %s on api.public.external_url", kind, r.Redirect, testCallback)
-		case state.Requirements[indexOf(state, "client_id")-1].Kind != setup.KindRedirect:
-			t.Errorf("%s: the redirect URI is not asked just before the client's ID", kind)
+		if redirectOf(state) != nil || indexOf(state, "client_id") >= 0 || indexOf(state, "client_secret") >= 0 {
+			t.Errorf("%s asks a client of its own", kind)
+		}
+		if i := indexOf(state, "google_sign_in"); i < 0 || state.Requirements[i].Kind != setup.KindConsent {
+			t.Errorf("%s does not ask its sign-in", kind)
 		}
 	}
 	if products < 4 {
@@ -98,7 +117,7 @@ func TestAConsentProductsFormShowsTheEnginesRedirectURI(t *testing.T) {
 
 	none := consentSurface(t, "")
 	none.seed(t)
-	if r := redirectOf(toolState(t, none, integration.KindGoogleAnalytics)); r == nil || r.Redirect == nil ||
+	if r := redirectOf(toolState(t, none, integration.KindGoogleCloud)); r == nil || r.Redirect == nil ||
 		r.Redirect.URL != "" || r.Redirect.Key == "" {
 		t.Errorf("with no public address the redirect URI = %+v, want empty with its setting", r)
 	}

@@ -513,16 +513,15 @@ func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 
 // A BARRIER WHOSE LOG'S USAGE CANNOT BE READ IS NEVER APPENDED, AND SAYS SO.
 //
-// Admission reads the log's usage first; a broker whose meta group has no
-// leader answers 503, err_code 10008. The read is refused as an unconfirmed
-// barrier, by member count, in this package's words, never claiming an append
-// that was not made.
+// Admission reads the log's usage first; here the broker does not answer it.
+// The read is refused as an unconfirmed barrier, by member count, in this
+// package's words, never claiming an append that was not made. (A usage read
+// answered leaderless is waited out first: election_test.go.)
 //
 // Mutation: drop barrierRefusal's usage_unknown arm and the detail goes red.
 func TestABarrierWhoseLogUsageCannotBeReadIsNeverAppended(t *testing.T) {
 	t.Parallel()
-	leaderless := &jetstream.APIError{Code: 503, ErrorCode: 10008,
-		Description: "JetStream system temporarily unavailable"}
+	unanswered := fmt.Errorf("read the log's state: %w", nats.ErrTimeout)
 	for _, c := range []struct {
 		members int
 		want    statelog.ReadRefusal
@@ -531,7 +530,7 @@ func TestABarrierWhoseLogUsageCannotBeReadIsNeverAppended(t *testing.T) {
 			t.Parallel()
 			h := newHarness(t)
 			unread, err := statelog.NewReserve(probeDomain{}.Stream(),
-				func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, leaderless })
+				func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, unanswered })
 			if err != nil {
 				t.Fatalf("NewReserve: %v", err)
 			}
@@ -555,7 +554,7 @@ func TestABarrierWhoseLogUsageCannotBeReadIsNeverAppended(t *testing.T) {
 				t.Errorf("detail = %q, want it to say the barrier on its subject was never "+
 					"appended", refusal.Detail)
 			}
-			if strings.Contains(err.Error(), "10008") {
+			if strings.Contains(err.Error(), nats.ErrTimeout.Error()) {
 				t.Errorf("the refusal carries the broker's own words to the caller: %q", err)
 			}
 			if n := appends.Load(); n != 0 {

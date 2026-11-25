@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -51,6 +52,15 @@ provides_hooks:
 // offers none of their tools, on a session created allowing them too.
 var hermesWebToolsets = []string{"web", "browser", "x_search"}
 
+// hermesBrowserToolset is Hermes's own browser (browser_exec and its
+// siblings), which installs and runs a Chromium in whatever box the run lands
+// in, so every run disables it but one handed a seat's browser, which runs
+// only in a container box the launch checked (internal/browser). 0.23.3 merges
+// a server named like a built-in toolset into it (toolsets.get_toolset), so
+// disabling it beside the seat's `browser` server would hide that server too:
+// measured, its tools and the server's alike were gone.
+const hermesBrowserToolset = "browser"
+
 // hermesSystemMaxBytes bounds a Hermes run's standing instructions, which ride
 // one environment variable (HERMES_EPHEMERAL_SYSTEM_PROMPT): Linux holds one
 // variable to 128 KiB with its name, its `=` and its NUL (MAX_ARG_STRLEN).
@@ -58,11 +68,12 @@ const hermesSystemMaxBytes = 128<<10 - len("HERMES_EPHEMERAL_SYSTEM_PROMPT=") - 
 
 // hermesOverlay is a Hermes run's overlay ([Paths.HermesManaged]): its MCP
 // servers, every value as written, and on each of Crewlet's own
-// ([crewletServers]) the leaves [hermesOwnLeaves] states; on a web-denied run
-// the toolsets [hermesWebToolsets], which the box adds its own to
-// ([hermesInstallOverlay]); and where a server is always loaded, Hermes's tool
-// search off. JSON, which Hermes's YAML reader reads. Hermes merges it over
-// the box's configuration per leaf (measured on 0.23.3), so the box's own
+// ([crewletServers]) the leaves [hermesOwnLeaves] states; the toolsets it
+// disables, which the box adds its own to ([hermesInstallOverlay]):
+// [hermesWebToolsets] on a web-denied run, else [hermesBrowserToolset] on a
+// run handed no seat's browser; and where a server is always loaded, Hermes's
+// tool search off. JSON, which Hermes's YAML reader reads. Hermes merges it
+// over the box's configuration per leaf (measured on 0.23.3), so the box's own
 // servers stay. Tool search defers every MCP server's tools and exempts none by
 // server (0.23.3's is_deferrable_tool_name), so it goes whole: every tool on
 // every request.
@@ -99,8 +110,12 @@ func hermesOverlay(servers map[string]sandbox.MCPServer, webDenied bool) ([]byte
 		}
 		overlay["mcp_servers"] = out
 	}
-	if webDenied {
+	_, seatBrowser := servers[browser.ServerName]
+	switch {
+	case webDenied:
 		overlay["agent"] = map[string]any{"disabled_toolsets": hermesWebToolsets}
+	case !seatBrowser:
+		overlay["agent"] = map[string]any{"disabled_toolsets": []string{hermesBrowserToolset}}
 	}
 	if slices.ContainsFunc(slices.Collect(maps.Values(servers)), func(s sandbox.MCPServer) bool { return s.AlwaysLoaded }) {
 		overlay["tools"] = map[string]any{"tool_search": map[string]any{"enabled": "off"}}

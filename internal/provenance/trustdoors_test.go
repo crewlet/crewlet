@@ -170,6 +170,14 @@ var trustDoors = map[string]trustDoor{
 		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 		"internal/assistant.TestARunAnswersReceiptIsReadAtTheRunsTrust",
 	}},
+	// HOW ASK CREWLET IS ASKED TO WRITE: the company's, adopted for everybody,
+	// and the person's own, kept under their seat.
+	"internal/assistant/prompt.go:companyInstructionsFence": {adopted, []string{
+		"internal/assistant.TestInstructionsAreFencedBelowEveryRule",
+	}},
+	"internal/assistant/prompt.go:personInstructionsFence": {hosted, []string{
+		"internal/assistant.TestInstructionsAreFencedBelowEveryRule",
+	}},
 	"internal/assistant/prompt.go:pageFence": {hosted, []string{
 		"internal/assistant.TestThePageContextIsFencedAndARemovedPageIsAbsent",
 		"internal/assistant.TestTheOpenDraftReachesTheModelFencedAndRedacted",
@@ -211,6 +219,16 @@ var trustDoors = map[string]trustDoor{
 	}},
 	"internal/engine/runsaround.go:file": {vendor, []string{
 		"internal/engine.TestAnotherRunsMessageIsReadFencedAtTheNextStepAsInformation",
+	}},
+	// A LOST SESSION'S NEWEST SUMMARY, as a brief hands it to the run that does
+	// not continue that session (ADR-0073's amendment): its harness's model's
+	// account of a past run, written from tool output and people's words, so
+	// the rule for a kept session (ExecutorSession), read at the least trust,
+	// fenced under the turn's token and never told as instructions.
+	"internal/agent/prompts/lostsession.go:LostSessionSection": {vendor, []string{
+		"internal/agent/prompts.TestTheLostSessionSectionHandsTheSummaryFenced",
+		"internal/agent/prompts.TestASummarysOwnFenceIsDefused",
+		"internal/agent/runner.TestABriefTellsTheSessionItDoesNotContinue",
 	}},
 	"internal/agent/runner/asked.go:waited": {vendor, []string{
 		"internal/agent/runner.TestAWaitedRunsAccountIsToldInItsFence",

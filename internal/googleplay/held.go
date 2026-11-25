@@ -3,6 +3,7 @@ package googleplay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -235,6 +236,9 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 	}
 	s := a.steps[0]
 	out, err := p.send(bound, call.Handle, s)
+	if googlegrowth.Unsent(err) {
+		err = growth.NotSent(err)
+	}
 	return p.outcome(ctx, held, rec, out, err)
 }
 
@@ -286,10 +290,12 @@ func (p *Product) commitEdit(bound, records context.Context, call growth.Call, a
 		}
 		return nil, growth.ErrMoved
 	}
+	// NOTHING CHANGES BEFORE THE COMMIT: a staged change in an edit is
+	// discarded with it, so every failure until the commit leaves is not sent.
 	for _, s := range a.steps {
 		s.req = inEdit(s.req, id)
 		if _, err = p.send(bound, call.Handle, s); err != nil {
-			return p.outcome(records, held, rec, googlegrowth.Answer{}, err)
+			return p.outcome(records, held, rec, googlegrowth.Answer{}, growth.NotSent(err))
 		}
 	}
 	validate, err := p.sessionRequest(opEditValidate, a.app, id, nil)
@@ -297,14 +303,17 @@ func (p *Product) commitEdit(bound, records context.Context, call growth.Call, a
 		_, err = p.client.Send(bound, call.Handle, validate)
 	}
 	if err != nil {
-		return p.outcome(records, held, rec, googlegrowth.Answer{}, err)
+		return p.outcome(records, held, rec, googlegrowth.Answer{}, growth.NotSent(err))
 	}
 	commit, err := p.sessionRequest(opEditCommit, a.app, id, commitQuery(a))
 	if err != nil {
-		return p.outcome(records, held, rec, googlegrowth.Answer{}, err)
+		return p.outcome(records, held, rec, googlegrowth.Answer{}, growth.NotSent(err))
 	}
 	out, err := p.client.SendAndRead(bound, call.Handle, commit, nil)
 	committed = err == nil
+	if googlegrowth.Unsent(err) {
+		err = growth.NotSent(err)
+	}
 	return p.outcome(records, held, rec, out, inReview(err))
 }
 
@@ -335,9 +344,11 @@ func (p *Product) outcome(ctx context.Context, held bool, rec growth.Record, out
 	return out, nil
 }
 
-// failEarly records the failed outcome of an allowed call that ended before
-// anything was sent, and answers err.
+// failEarly answers err, a call's failure before its change was sent, marked
+// so ([growth.NotSent]), and records it as an allowed held call's outcome.
+// The mark comes first, since the reason recorded reads it.
 func (p *Product) failEarly(ctx context.Context, held bool, rec growth.Record, err error) error {
+	err = growth.NotSent(err)
 	if held {
 		rec.Failure = googlegrowth.StepFailure(err)
 		p.client.Note(ctx, growth.StepFailed, rec)
@@ -352,9 +363,12 @@ func (p *Product) hold(ctx context.Context, resource string) (func(), error) {
 			"was sent.")
 	}
 	release, err := p.deps.Leases.Hold(ctx, resource)
-	if err != nil {
+	switch {
+	case errors.Is(err, growth.ErrActHeld):
 		return nil, refusal(growth.RefusedUnavailable, "another change to the same app is being made; nothing "+
 			"was sent. Call again.")
+	case err != nil:
+		return nil, fmt.Errorf("googleplay: hold the app's write lease: %w", err)
 	}
 	return release, nil
 }

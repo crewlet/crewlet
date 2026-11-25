@@ -2,7 +2,10 @@
 
 - **Status:** accepted
 - **Authority:** `internal/gitlet`
-- **Enforced-by:** `internal/gitlet.TestChangesHaveNoSpendColumns`, `internal/gitlet.TestTheCodeFeedDerivesOnlyWakes`, `internal/engine.TestACodeWakeNamesItsWorkItem`
+- **Enforced-by:**
+  - `internal/gitlet.TestChangesHaveNoSpendColumns`
+  - `internal/gitlet.TestTheCodeFeedDerivesOnlyWakes`
+  - `internal/engine.TestACodeWakeNamesItsWorkItem`
 - **Tag-status:** unreleased
 
 ## The decision

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -287,10 +288,10 @@ func TestACompactedHermesSessionReadsEachMessageOnceItsSummaryAsTheSummary(t *te
 
 // THE OVERLAY CARRIES THE RUN'S SERVERS, ITS WEB DENIAL AND ITS ALWAYS-LOADED
 // TOOLS, and only those: each server as written, the web, browser and x_search
-// toolsets disabled on a web-denied run alone, tool search off where a server
-// is always loaded alone (Hermes exempts no server from it), no switch or
-// tools list a person's entry could set stated back, and a value Hermes would
-// expand refused.
+// toolsets disabled on a web-denied run alone (an allowed run's own browser
+// has its case below), tool search off where a server is always loaded alone
+// (Hermes exempts no server from it), no switch or tools list a person's entry
+// could set stated back, and a value Hermes would expand refused.
 //
 // Mutation: drop a server's header, disable the web on an allowed run, leave
 // tool search on beside an always-loaded server or turn it off with none,
@@ -345,12 +346,61 @@ func TestTheHermesOverlayCarriesTheServersAndTheWebDenial(t *testing.T) {
 	}
 	delete(servers, "crewlet")
 	allowed, err := hermesOverlay(servers, false)
-	if err != nil || strings.Contains(string(allowed), "disabled_toolsets") || strings.Contains(string(allowed), "tool_search") {
-		t.Errorf("an allowed run with no always-loaded server disables toolsets or tool search: %s (%v)", allowed, err)
+	if err != nil || strings.Contains(string(allowed), `"web"`) || strings.Contains(string(allowed), "tool_search") {
+		t.Errorf("an allowed run with no always-loaded server disables the web or tool search: %s (%v)", allowed, err)
 	}
 	servers["crewlet"] = sandbox.MCPServer{Transport: sandbox.TransportHTTP, URL: "http://x/${HOME}"}
 	if _, err := hermesOverlay(servers, false); err == nil {
 		t.Error("a value Hermes would expand was let through")
+	}
+}
+
+// EVERY HERMES RUN BUT ONE HANDED A SEAT'S BROWSER TURNS HERMES'S OWN BROWSER
+// OFF: a run with no browser server, a browser seat's whose browser the launch
+// withheld, and a web-denied run each disable the `browser` toolset
+// (browser_exec and its siblings, which install and run a Chromium in whatever
+// box the run lands in); a run handed the seat's browser leaves it on, since
+// Hermes 0.23.3 merges the seat's `browser` server into that toolset, so
+// disabling it would hide the server too.
+//
+// Mutations, each red: disable it on every run; on a web-denied run alone; on
+// a run handed the seat's browser alone.
+func TestEveryHermesRunButOneHandedASeatsBrowserTurnsItsOwnBrowserOff(t *testing.T) {
+	t.Parallel()
+	bridge := sandbox.MCPServer{Name: "crewlet", Transport: sandbox.TransportHTTP, URL: "http://bridge.example.com/mcp",
+		AlwaysLoaded: true}
+	seat := sandbox.MCPServer{Name: browser.ServerName, Transport: sandbox.TransportStdio, Command: "node",
+		Args: []string{"/home/user/.crewlet/browser-box/helper.mjs", "mcp"}}
+	for name, c := range map[string]struct {
+		servers   map[string]sandbox.MCPServer
+		webDenied bool
+		want      []string
+	}{
+		"a run with no browser": {servers: map[string]sandbox.MCPServer{"crewlet": bridge},
+			want: []string{"browser"}},
+		"a seat's browser handed": {servers: map[string]sandbox.MCPServer{"crewlet": bridge,
+			browser.ServerName: seat}},
+		"a web-denied run": {servers: map[string]sandbox.MCPServer{"crewlet": bridge}, webDenied: true,
+			want: []string{"web", "browser", "x_search"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			raw, err := hermesOverlay(c.servers, c.webDenied)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Agent struct {
+					Disabled []string `json:"disabled_toolsets"`
+				} `json:"agent"`
+			}
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got.Agent.Disabled, c.want) {
+				t.Errorf("the run disables %v, want %v:\n%s", got.Agent.Disabled, c.want, raw)
+			}
+		})
 	}
 }
 
@@ -776,8 +826,8 @@ func TestAHermesRunsManagedScopeIsTheBoxsWithTheRunsKeysOver(t *testing.T) {
 		}
 	})
 	t.Run("a box's managed scope, web allowed", func(t *testing.T) {
-		if got, _, _ := install(t, scope, false); !slices.Equal(got.Agent.Disabled, []string{"homeassistant"}) {
-			t.Errorf("disabled toolsets = %v, want the box's alone", got.Agent.Disabled)
+		if got, _, _ := install(t, scope, false); !slices.Equal(got.Agent.Disabled, []string{"homeassistant", "browser"}) {
+			t.Errorf("disabled toolsets = %v, want the box's and then Hermes's own browser", got.Agent.Disabled)
 		}
 	})
 	t.Run("no managed scope, web denied", func(t *testing.T) {

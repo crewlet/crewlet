@@ -2,7 +2,15 @@
 
 - **Status:** accepted
 - **Authority:** `internal/advisor`
-- **Enforced-by:** `internal/advisor.TestTheAdvisorImportsNoWritePath`, `internal/advisor.TestEveryOptionOfEveryChangeClearsItsFindingAndBreaksNoRule`, `internal/advisor.TestEveryClassHasWordsAndAFix`, `internal/advisor.TestTheLiveShapeRaisesExactlyTheStaticClasses`, `internal/config.TestEveryAdvisoryClassIsValidAndRaisedSomewhere`, `internal/advisor.TestNoDetectorCallsAModel`, `internal/advisor.TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend`, `internal/worklet.TestEveryEngineDetectorFiresOnItsOwnTimelineAlone`
+- **Enforced-by:**
+  - `internal/advisor.TestTheAdvisorImportsNoWritePath`
+  - `internal/advisor.TestEveryOptionOfEveryChangeClearsItsFindingAndBreaksNoRule`
+  - `internal/advisor.TestEveryClassHasWordsAndAFix`
+  - `internal/advisor.TestTheLiveShapeRaisesExactlyTheStaticClasses`
+  - `internal/config.TestEveryAdvisoryClassIsValidAndRaisedSomewhere`
+  - `internal/advisor.TestNoDetectorCallsAModel`
+  - `internal/advisor.TestAnEvidenceFindingIsTheEnginesAndOffersNothingToSend`
+  - `internal/worklet.TestEveryEngineDetectorFiresOnItsOwnTimelineAlone`
 - **Tag-status:** unreleased
 
 ## The decision

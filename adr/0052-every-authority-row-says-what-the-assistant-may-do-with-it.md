@@ -2,7 +2,27 @@
 
 - **Status:** accepted
 - **Authority:** `internal/authz`
-- **Enforced-by:** `internal/authz.TestEveryRowDecidesTheAssistant`, `internal/authz.TestARowStatesItsNatureAndTheListAloneSaysNever`, `internal/authz.TestTheHumanOnlyListIsExactlyTheIntendedSet`, `internal/authz.TestAHumanOnlyRefusalSaysWhyInPlainWords`, `internal/assistant/catalog.TestAHumanOnlyGestureIsRefusedInThePersonsWords`, `internal/authz.TestAnAssistNeverRowRefusesAnAssistedPrincipal`, `internal/authz.TestAPresenceRowRefusesAReadGrantAndAdmitsAnApprovedOne`, `internal/authz.TestAReadGrantTakesOnlyAssistReadRows`, `internal/agent/builtin.TestAnAssistReadVerbIsAToolThatOnlyReads`, `internal/iamdomain.TestTheAssistantWritesNoSignInCeremony`, `internal/iamdomain.TestATokenIsNeverMintedThroughTheAssistant`, `internal/api.TestEveryGuardedRouteAdmitsTheAssistantAsItsPerson`, `internal/api.TestPermissionParityAcrossFivePrincipals`, `internal/api.TestTheAssistantRouteTableIsTheAppsOwn`, `internal/api.TestAHumanOnlyRouteIsNeverOffered`, `internal/api.TestAnAgentSeatIsAddedThroughTheGenericChange`, `internal/api/queries.TestAnAssistedQuestionIsAnsweredAsItsPersonsOwn`, `internal/api/configapi.TestACharterWriteThroughTheAssistantIsTheAdministratorsOwn`, `internal/api.TestAnApprovedPrinciplesChangeIsThePagesOwnWrite`, `internal/assistant/catalog.TestACallOnTheActRouteIsTitledByItsTool`
+- **Enforced-by:**
+  - `internal/authz.TestEveryRowDecidesTheAssistant`
+  - `internal/authz.TestARowStatesItsNatureAndTheListAloneSaysNever`
+  - `internal/authz.TestTheHumanOnlyListIsExactlyTheIntendedSet`
+  - `internal/authz.TestAHumanOnlyRefusalSaysWhyInPlainWords`
+  - `internal/assistant/catalog.TestAHumanOnlyGestureIsRefusedInThePersonsWords`
+  - `internal/authz.TestAnAssistNeverRowRefusesAnAssistedPrincipal`
+  - `internal/authz.TestAPresenceRowRefusesAReadGrantAndAdmitsAnApprovedOne`
+  - `internal/authz.TestAReadGrantTakesOnlyAssistReadRows`
+  - `internal/agent/builtin.TestAnAssistReadVerbIsAToolThatOnlyReads`
+  - `internal/iamdomain.TestTheAssistantWritesNoSignInCeremony`
+  - `internal/iamdomain.TestATokenIsNeverMintedThroughTheAssistant`
+  - `internal/api.TestEveryGuardedRouteAdmitsTheAssistantAsItsPerson`
+  - `internal/api.TestPermissionParityAcrossFivePrincipals`
+  - `internal/api.TestTheAssistantRouteTableIsTheAppsOwn`
+  - `internal/api.TestAHumanOnlyRouteIsNeverOffered`
+  - `internal/api.TestAnAgentSeatIsAddedThroughTheGenericChange`
+  - `internal/api/queries.TestAnAssistedQuestionIsAnsweredAsItsPersonsOwn`
+  - `internal/api/configapi.TestACharterWriteThroughTheAssistantIsTheAdministratorsOwn`
+  - `internal/api.TestAnApprovedPrinciplesChangeIsThePagesOwnWrite`
+  - `internal/assistant/catalog.TestACallOnTheActRouteIsTitledByItsTool`
 - **Tag-status:** unreleased
 
 ## The decision

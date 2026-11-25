@@ -2,7 +2,32 @@
 
 - **Status:** accepted
 - **Authority:** `internal/worklet`
-- **Enforced-by:** `internal/worklet.TestAnItemInProgressSaysWhyItIsNotMoving`, `internal/worklet.TestTheFlowIsReadInThePagesOwnStatement`, `internal/worklet.TestWorkloadCountsOnlyWorkThatWantsTheSeat`, `internal/worklet.TestADueItemComesRightAfterUrgentWork`, `internal/engine.TestAWakeWhoseRelationEndedStartsNoTurn`, `internal/engine.TestAStateNoticeATurnOnItsItemReadPastStartsNoTurn`, `internal/engine.TestAPickupMovesItsItemsSeenThroughMark`, `internal/pickup.TestADueItemIsHandedToABusySeatOnItsLane`, `internal/pickup.TestALanePickupWaitsForAnEmptyLane`, `internal/worklet.TestARemovedSeatsWorkIsReturnedOrHandedToItsLead`, `internal/maintenance.TestARetirementReHomesTheSeatsWorkBeforeItDeletesItsMailbox`, `internal/api/livestate.TestAFlowReadsTheSeatsStopReasonAndItsReset`, `internal/agent/builtin.TestTheWorkToolsSayWhyAnItemIsNotMoving`, `internal/worklet.TestAFlowRecordMovesNothingTheItemOwns`, `internal/worklet.TestALateCheckIsToldOncePerStart`, `internal/worklet.TestAForgottenItemIsToldThenItsLead`, `internal/worklet.TestAHeldItemTellsTheLeadOnlyWhenItCosts`, `internal/engine.TestAFlowNoticeWhoseItemLeftItsStateStartsNoTurn`, `internal/engine.TestTheFlowDutyIsHeldWhereThePostureIsLive`, `internal/worklet.TestABackfilledFlowIsTheRecordedFlow`, `internal/worklet.TestTheBackfillRecordsThePastBeforeTheDutyOnce`, `internal/engine.TestASeatsStopsAreItsPausesAndParks`, `internal/worklet.TestTheDashboardDrawsEveryFlowStateAndCause`, `internal/worklet.TestTheBackfillLeavesTheStateTheDutyFirstReadToTheDuty`
+- **Enforced-by:**
+  - `internal/worklet.TestAnItemInProgressSaysWhyItIsNotMoving`
+  - `internal/worklet.TestTheFlowIsReadInThePagesOwnStatement`
+  - `internal/worklet.TestWorkloadCountsOnlyWorkThatWantsTheSeat`
+  - `internal/worklet.TestADueItemComesRightAfterUrgentWork`
+  - `internal/engine.TestAWakeWhoseRelationEndedStartsNoTurn`
+  - `internal/engine.TestAStateNoticeATurnOnItsItemReadPastStartsNoTurn`
+  - `internal/engine.TestAPickupMovesItsItemsSeenThroughMark`
+  - `internal/pickup.TestADueItemIsHandedToABusySeatOnItsLane`
+  - `internal/pickup.TestALanePickupWaitsForAnEmptyLane`
+  - `internal/worklet.TestARemovedSeatsWorkIsReturnedOrHandedToItsLead`
+  - `internal/maintenance.TestARetirementReHomesTheSeatsWorkBeforeItDeletesItsMailbox`
+  - `internal/api/livestate.TestAFlowReadsTheSeatsStopReasonAndItsReset`
+  - `internal/agent/builtin.TestTheWorkToolsSayWhyAnItemIsNotMoving`
+  - `internal/worklet.TestAFlowRecordMovesNothingTheItemOwns`
+  - `internal/worklet.TestALateCheckIsToldOncePerStart`
+  - `internal/worklet.TestAForgottenItemIsToldThenItsLead`
+  - `internal/worklet.TestAHeldItemTellsTheLeadOnlyWhenItCosts`
+  - `internal/engine.TestAFlowNoticeWhoseItemLeftItsStateStartsNoTurn`
+  - `internal/engine.TestTheFlowDutyIsHeldWhereThePostureIsLive`
+  - `internal/worklet.TestABackfilledFlowIsTheRecordedFlow`
+  - `internal/worklet.TestTheBackfillRecordsThePastBeforeTheDutyOnce`
+  - `internal/engine.TestASeatsStopsAreItsPausesAndParks`
+  - `internal/worklet.TestTheDashboardDrawsEveryFlowStateAndCause`
+  - `internal/worklet.TestTheBackfillLeavesTheStateTheDutyFirstReadToTheDuty`
+  - `internal/worklet.TestADepartureTellsEachLeadOnceOfItsUnownedWork`
 - **Measured:** on a company running this engine, one agent seat's background mailbox held more than 300 Worklet wakes for hours and drained at about one a minute, a model turn each; many named a dependent that had already finished, and several queued wakes about one item each cost a turn of their own. An item its agent parked for a day until a release's health check (`start_at` and `wait_reason` set) read `in_progress` on every list and counted as load on Workload; when the start passed while the seat was busy, the check ran hours late and nothing showed it or told anybody. An urgent item assigned to a seat out of its model limit read a bare `in_progress`. Items assigned to an agent seat removed from the chart kept its handle with nobody to work them.
 - **Cost-when-tried:** the two shapes this replaces ran here. A passed start was handed only to an idle seat with both mailboxes empty ([ADR-0112](0112-an-idle-seat-is-handed-its-next-ready-item-once-per-item-version.md)), so a seat with a backlog never reached it. A Worklet notice about work a seat holds was an obligation [ADR-0120](0120-a-wake-a-completed-turn-already-read-past-starts-no-turn.md) never absorbs, so every queued `assignee` and `blocking` notice on an item cost a turn after a turn on that item had read past it.
 - **Tag-status:** unreleased
@@ -86,3 +111,7 @@ No reader adds a statement per row: the expression's subqueries are index seeks 
 ## What this does not decide
 
 It changes no status except a removed seat's re-homing, which is a write with a history note. It does not restart a paused seat, warn when every seat shares one model account, page anybody outside the Inbox and the agents' inboxes, or judge whether a moving item's work is good. Items to do or in review have no flow state. It does not change the pickup's daily recheck ([ADR-0122](0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)), the lane's age order, or what a Worklet wake wakes.
+
+## Amendment: a departure tells each lead once of the work it left without an owner
+
+Work left without an owner reaches its lead, and a seat's departure must not wake that lead once an item. The re-homing writes name no lead to fall back on. For each lead (the project's, else the routing unit's) of the items a departure leaves unassigned, the last such item's record names that lead as an ordinary `lead_fallback` candidate, and its history note lists the items. A seat leaving with many items wakes each lead once. Items handed to a lead still reach it as their assignee, as before.

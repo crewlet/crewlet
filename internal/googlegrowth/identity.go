@@ -1,6 +1,7 @@
 package googlegrowth
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -33,6 +34,9 @@ type Identity struct {
 	// what each level needs of them.
 	Roles Roles
 	Needs func(level growth.Level) Need
+	// RoleNeeds is what a level run at one of the product's roles needs
+	// (Analytics' operate as Marketer), by that role; nil where it offers none.
+	RoleNeeds func(role string) Need
 
 	// Steps are a person's steps at the product in its exact labels, the
 	// page linked on the first that names it, and Note what it allows that
@@ -51,6 +55,24 @@ type Identity struct {
 	// Admin adds and reads the identity with the company's admin sign-in;
 	// nil where the product has no API for it (Ads, Search Console).
 	Admin *Admin
+
+	// AddURL is the product's page that adds a user on an entry, its
+	// holder known or not; nil where the product has none per entry.
+	AddURL func(e Listed) string
+
+	// Wider is adding the identity once to what holds the entries instead;
+	// nil where the product has no such place.
+	Wider *Wider
+}
+
+// Wider is a product's one add on what holds a seat's entries (an Analytics
+// account), which reaches every entry there, now and later.
+type Wider struct {
+	Label string
+	Does  vendortext.Text
+	// URL is the page that adds a user on what holds e, "" where e's holder
+	// is not known.
+	URL func(e Listed) string
 }
 
 // Admin is a product's calls with the company's admin sign-in (a consent
@@ -105,17 +127,21 @@ type AdminCall struct {
 // Reached is one scope entry as the identity's reads found it.
 type Reached struct {
 	Entry string
-	// Name is the product's name for it, "" where it shows none, and
-	// Parent what holds it (an Analytics property's account).
-	Name, Parent string
+	// Name is the product's name for it, "" where it shows none, Parent
+	// what holds it (an Analytics property's account) and ParentName that
+	// holder's name.
+	Name, Parent, ParentName string
 	// OK is whether the identity reaches it, and Said why not in Google's
 	// words.
 	OK   bool
 	Said string
 	// Roles are the role IDs the product showed the identity holds there,
-	// and Read whether it showed them.
-	Roles []string
-	Read  bool
+	// and Read whether it showed them. AtLeast marks Roles as a floor a read
+	// proves (any listed Analytics property is held at Viewer or above)
+	// rather than the role itself.
+	Roles   []string
+	Read    bool
+	AtLeast bool
 	// Added is an entry the admin shows the identity added to that it does
 	// not reach yet: the product is still applying it.
 	Added bool
@@ -154,6 +180,9 @@ type Need struct {
 	More vendortext.Text
 	// Broad are roles more than the level needs, which the check warns of.
 	Broad []string
+	// Manual is why only a person can give these roles (an API that cannot
+	// grant them), "" where the admin sign-in can.
+	Manual string
 }
 
 // all is every role of r, ladder or permissions.
@@ -265,12 +294,23 @@ const (
 	readRole  = "role"
 )
 
-// levelOf is d's level, read where it names none.
+// levelOf is d's level, read where it names none, without the product role
+// it may run at (seataccess.GrowthLevelID).
 func levelOf(d seataccess.Desired) growth.Level {
-	if l := growth.Level(d.Level); l.Valid() {
+	level, _ := seataccess.CutGrowthLevel(d.Level)
+	if l := growth.Level(level); l.Valid() {
 		return l
 	}
 	return growth.LevelRead
+}
+
+// need is what d's level needs at the product, at the product role it runs
+// at where it names one.
+func (id *Identity) need(d seataccess.Desired) Need {
+	if _, role := seataccess.CutGrowthLevel(d.Level); role != "" && id.RoleNeeds != nil {
+		return id.RoleNeeds(role)
+	}
+	return id.Needs(levelOf(d))
 }
 
 // guide is the sheet for seat on product v's lane.
@@ -278,7 +318,7 @@ func (v SeatAccess) guide(c *config.Company, seat seataccess.SeatRef, want seata
 	email string) seataccess.IdentityGuide {
 	id := v.Identity()
 	level := levelOf(want)
-	need := id.Needs(level)
+	need := id.need(want)
 	needs := id.Roles.Words(need.Roles)
 	g := Guided{Agent: seat.Label(), Email: email, Entries: want.Scope, Level: level, Need: need,
 		NeedNames: id.Roles.Names(need.Roles), NeedWords: needs, Company: c}
@@ -294,6 +334,12 @@ func (v SeatAccess) guide(c *config.Company, seat seataccess.SeatRef, want seata
 			Text: vendortext.Plain("Nothing to bring back: Crewlet checks " + v.Name + " as the identity.")},
 		Checks: v.checks(email, false),
 	}
+	for _, entry := range want.Scope {
+		out.Entries = append(out.Entries, v.entry(Listed{ID: entry}))
+	}
+	if id.Wider != nil {
+		out.Wider = &seataccess.GuideWider{Label: id.Wider.Label, Does: slices.Clone(id.Wider.Does)}
+	}
 	if len(need.More) > 0 {
 		if len(out.Note) > 0 {
 			out.Note = append(out.Note, vendortext.W(" "))
@@ -305,7 +351,7 @@ func (v SeatAccess) guide(c *config.Company, seat seataccess.SeatRef, want seata
 			Does: vendortext.Of(append(append([]vendortext.Part{vendortext.W("With " + id.Admin.Who +
 				"'s sign-in, Crewlet adds " + email + " to " + and(want.Scope) + " with ")}, vendortext.And(g.NeedNames...)...),
 				vendortext.W("."))...),
-			Unavailable: id.Admin.Unavailable(c)}
+			Unavailable: cmp.Or(need.Manual, id.Admin.Unavailable(c))}
 	}
 	return out
 }
@@ -336,23 +382,30 @@ type checkInput struct {
 	now     time.Time
 }
 
+// IdentitySettles is how long after Crewlet makes a seat's identity a person
+// can add it: Google's new accounts settle in up to about two minutes
+// (googlecloud's await.go), and Analytics refuses an add before then.
+const IdentitySettles = 2 * time.Minute
+
 // check reads the seat's identity at the product and judges it against its
-// level: alive (a token mints), reach (every entry answers), role (where the
-// product shows it, as the identity or to the admin). A fault (Google or the
-// engine unreachable) is an error and judges nothing.
+// level: alive, every entry reached, the role where anybody can read it. One
+// too new to find is getting ready; a fault is an error and judges nothing.
 func (v SeatAccess) check(ctx context.Context, in checkInput) (seataccess.IdentityCheck, error) {
 	id := v.Identity()
-	level := levelOf(in.want)
-	need := id.Needs(level)
+	need := id.need(in.want)
 	out := seataccess.IdentityCheck{Needs: id.Roles.Words(need.Roles), At: in.now}
 	agent := in.seat.Label()
-	token, email, err := in.tokens.SeatToken(ctx, v.Product, in.seat.Handle, id.Scopes)
+	seat, err := in.tokens.SeatToken(ctx, v.Product, in.seat.Handle, id.Scopes)
+	email := seat.Account
 	out.ID, out.Name = email, email
 	switch {
 	case errors.Is(err, seataccess.ErrNotIssued):
-		out.Status = seataccess.IdentityNone
-		out.Said = "Crewlet is still making " + agent + "'s Google identity; the next pass checks it."
+		out.Status = seataccess.IdentityPreparing
+		out.ReadyAt = readyAt(seat.Made, in.now)
+		out.Said = "Crewlet is still making " + agent + "'s Google identity; " + v.Name +
+			" can find it in about a minute."
 		out.Reads = []seataccess.IdentityRead{{Label: "Sign in as the identity", Said: "not made yet"}}
+		out.Entries = v.entries(in.want.Scope, nil, v.namer(ctx, in, nil), need)
 		return out, nil
 	case googleauth.Status(err) == http.StatusForbidden || googleauth.Status(err) == http.StatusNotFound:
 		out.Status = seataccess.IdentityRefused
@@ -366,24 +419,123 @@ func (v SeatAccess) check(ctx context.Context, in checkInput) (seataccess.Identi
 		return seataccess.IdentityCheck{}, fmt.Errorf("googlegrowth: sign in as %s's identity: %w", in.seat.Handle, err)
 	}
 	out.Reads = append(out.Reads, seataccess.IdentityRead{Label: "Sign in as " + email, OK: true})
-	reached, err := id.Reach(ctx, Probe{Company: in.company, Email: email, Scope: in.want.Scope, Token: token,
+	reached, err := id.Reach(ctx, Probe{Company: in.company, Email: email, Scope: in.want.Scope, Token: seat.Token,
 		Send: in.send})
 	if err != nil {
 		return seataccess.IdentityCheck{}, fmt.Errorf("googlegrowth: read what %s reaches: %w", email, err)
 	}
-	if id.Admin != nil && slices.ContainsFunc(reached, func(r Reached) bool { return !r.Read }) {
+	// AN ENTRY NOT REACHED MAY BE APPLYING, which only the admin's read shows.
+	if id.Admin != nil && slices.ContainsFunc(reached, func(r Reached) bool {
+		return !r.OK || unread(id.Roles, r, need)
+	}) {
 		if reached, err = v.adminRoles(ctx, in, email, need, reached); err != nil {
 			return seataccess.IdentityCheck{}, err
 		}
 	}
-	return v.verdict(out, agent, email, need, reached), nil
+	out = v.verdict(out, agent, email, need, reached)
+	out.Entries = v.entries(in.want.Scope, reached, v.namer(ctx, in, reached), need)
+	if r := readyAt(seat.Made, in.now); out.Status == seataccess.IdentityNone && !r.IsZero() &&
+		!slices.ContainsFunc(reached, func(r Reached) bool { return r.OK || r.Added }) {
+		// TOO NEW TO FIND: an add now fails at the product, so it is not the person's yet.
+		out.Status, out.ReadyAt, out.Remedy = seataccess.IdentityPreparing, r, ""
+		out.Said = "Crewlet made " + agent + "'s Google identity a moment ago; " + v.Name +
+			" can find it in about a minute, then add it there."
+	}
+	return out, nil
 }
 
-// adminRoles fills each reached entry's roles from the admin's read, and
-// marks an entry not reached that the admin shows it added to, where somebody
-// signed in as the product's admin; reached as it was where nobody did. An
-// entry the admin shows no role on is left unread: it may reach it through
-// what the admin's read does not show (a user group).
+// readyAt is when an identity made at made can be added at a product, zero
+// where that is already so or its making is unknown.
+func readyAt(made, now time.Time) time.Time {
+	if made.IsZero() || !now.Before(made.Add(IdentitySettles)) {
+		return time.Time{}
+	}
+	return made.Add(IdentitySettles).UTC()
+}
+
+// unread reports an entry reached whose role the reads have not shown to be
+// what need asks: none read, or only a floor short of it.
+func unread(roles Roles, r Reached, need Need) bool {
+	return r.OK && (!r.Read || (r.AtLeast && len(roles.Missing(r.Roles, need)) > 0))
+}
+
+// namer is the company reader's listing, read only where the identity's own
+// reads left one of the seat's entries unnamed or unplaced; nil otherwise.
+func (v SeatAccess) namer(ctx context.Context, in checkInput, reached []Reached) Listing {
+	named := map[string]bool{}
+	for _, r := range reached {
+		named[r.Entry] = r.Name != "" && (r.Parent != "" || v.Identity().Wider == nil)
+	}
+	if !slices.ContainsFunc(in.want.Scope, func(e string) bool { return !named[e] }) {
+		return nil
+	}
+	listed, _ := v.readerListing(ctx, in.company, in.tokens, in.send)
+	return listingOf(listed)
+}
+
+// entries are the seat's entries as the check found its identity on each,
+// named from its reads or else the reader's, with where to add it.
+func (v SeatAccess) entries(scope []string, reached []Reached, names Listing, need Need) []seataccess.IdentityEntry {
+	id := v.Identity()
+	out := make([]seataccess.IdentityEntry, 0, len(scope))
+	for _, entry := range scope {
+		r := Reached{Entry: entry}
+		if i := slices.IndexFunc(reached, func(r Reached) bool { return r.Entry == entry }); i >= 0 {
+			r = reached[i]
+		}
+		l := names[entry]
+		l.ID = entry
+		l.Name, l.Parent = firstNonEmpty(r.Name, l.Name), firstNonEmpty(r.Parent, l.Parent)
+		l.ParentName = firstNonEmpty(r.ParentName, l.ParentName)
+		e := v.entry(l)
+		switch {
+		case !r.OK && r.Added:
+			e.State = seataccess.EntryApplying
+		case !r.OK:
+			e.State = seataccess.EntryMissing
+		case unread(id.Roles, r, need) || !knownRoles(id.Roles, r.Roles):
+			e.State = seataccess.EntryUnchecked
+		case len(id.Roles.Missing(r.Roles, need)) > 0:
+			e.State, e.Role = seataccess.EntryWrongRole, id.Roles.Words(r.Roles)
+		default:
+			e.State = seataccess.EntryAdded
+			if !r.AtLeast {
+				e.Role = id.Roles.Words(r.Roles)
+			}
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// entry is l as the sheet lists it, with the product's pages that add a user
+// on it and on what holds it.
+func (v SeatAccess) entry(l Listed) seataccess.IdentityEntry {
+	id := v.Identity()
+	e := seataccess.IdentityEntry{ID: l.ID, Name: l.Name, Group: l.ParentName}
+	if id.AddURL != nil {
+		e.AddURL = id.AddURL(l)
+	}
+	if id.Wider != nil && id.Wider.URL != nil {
+		e.GroupURL = id.Wider.URL(l)
+	}
+	return e
+}
+
+// knownRoles reports roles the product's catalogue names: one Crewlet does
+// not know is unread, never judged short.
+func knownRoles(roles Roles, held []string) bool {
+	for _, h := range held {
+		if !slices.ContainsFunc(roles.all(), func(r RoleName) bool { return r.ID == h }) {
+			return false
+		}
+	}
+	return true
+}
+
+// adminRoles fills each reached entry's roles from the admin's read and marks
+// one not reached that the admin shows added; an entry the admin shows no
+// role on keeps its own reads (it may reach it through a user group).
 func (v SeatAccess) adminRoles(ctx context.Context, in checkInput, email string, need Need,
 	reached []Reached) ([]Reached, error) {
 	token, err := in.tokens.AdminToken(ctx, v.Product)
@@ -408,7 +560,7 @@ func (v SeatAccess) adminRoles(ctx context.Context, in checkInput, email string,
 		switch {
 		case len(held) == 0:
 		case reached[i].OK:
-			reached[i].Roles, reached[i].Read = held, true
+			reached[i].Roles, reached[i].Read, reached[i].AtLeast = held, true, false
 		default:
 			reached[i].Added = true
 		}
@@ -417,11 +569,11 @@ func (v SeatAccess) adminRoles(ctx context.Context, in checkInput, email string,
 }
 
 // verdict judges what the reads found: every entry reached, at the role the
-// level needs where the product showed it.
+// level needs; a role nobody could read leaves it working, never ready.
 func (v SeatAccess) verdict(out seataccess.IdentityCheck, agent, email string, need Need,
 	reached []Reached) seataccess.IdentityCheck {
 	id := v.Identity()
-	var missing, applying, wrong, unread, broad []string
+	var missing, applying, wrong, unchecked, broad []string
 	var held, short []string
 	reach := seataccess.IdentityRead{Label: "Find each of the agent's " + id.Entries, OK: true}
 	role := seataccess.IdentityRead{Label: "Read its role on each " + id.Entry, OK: true}
@@ -433,15 +585,17 @@ func (v SeatAccess) verdict(out seataccess.IdentityCheck, agent, email string, n
 		case !r.OK:
 			missing = append(missing, r.label())
 			reach.OK, reach.Said = false, firstNonEmpty(reach.Said, r.Said)
-		case !r.Read:
-			unread = append(unread, r.label())
+		case unread(id.Roles, r, need) || !knownRoles(id.Roles, r.Roles):
+			unchecked = append(unchecked, r.label())
 		case len(id.Roles.Missing(r.Roles, need)) > 0:
 			wrong = append(wrong, firstNonEmpty(id.Roles.Words(r.Roles), "no role")+" on "+r.label())
 			short = append(short, r.Roles...)
 			role.OK = false
 		default:
-			held = append(held, r.Roles...)
-			broad = append(broad, broader(r.Roles, need)...)
+			if !r.AtLeast {
+				held = append(held, r.Roles...)
+				broad = append(broad, broader(r.Roles, need)...)
+			}
 		}
 	}
 	slices.Sort(held)
@@ -464,8 +618,8 @@ func (v SeatAccess) verdict(out seataccess.IdentityCheck, agent, email string, n
 	switch {
 	case len(wrong) > 0:
 		role.Said = and(wrong)
-	case len(unread) > 0:
-		role.OK, role.Said = true, v.Name+" shows the role only to "+adminWho(id)
+	case len(unchecked) > 0:
+		role.OK, role.Said = false, v.Name+" shows the role only to "+adminWho(id)
 	}
 	out.Reads = append(out.Reads, role)
 	if len(wrong) > 0 {
@@ -481,12 +635,22 @@ func (v SeatAccess) verdict(out seataccess.IdentityCheck, agent, email string, n
 	if len(held) > 0 {
 		out.Role = id.Roles.Words(held)
 	}
-	out.Status = seataccess.IdentityReady
-	out.Said = agent + " reaches every one of its " + id.Entries + " as its own Google identity."
-	if len(unread) > 0 {
-		out.Said += " " + v.Name + " shows its role only to " + adminWho(id) + ", so a call it refuses names " +
-			"the role it lacks."
+	if len(unchecked) > 0 {
+		out.Status = seataccess.IdentityUnchecked
+		out.Said = agent + " reaches every one of its " + id.Entries + ", but its role on " + and(unchecked) +
+			" is not checked: " + v.Name + " shows it only to " + adminWho(id) + "."
+		out.Remedy = "Make sure it holds " + out.Needs + " there in " + v.Name + "."
+		if id.Admin != nil {
+			out.Remedy += " With " + id.Admin.Who + "'s sign-in on the Settings tab, Crewlet checks it on every pass."
+		}
+		return out
 	}
+	out.Status = seataccess.IdentityReady
+	out.Said = agent + " reaches every one of its " + id.Entries + " as its own Google identity"
+	if out.Role != "" {
+		out.Said += ", at " + out.Role
+	}
+	out.Said += "."
 	if len(broad) > 0 {
 		slices.Sort(broad)
 		out.Broader = true

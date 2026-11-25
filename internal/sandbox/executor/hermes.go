@@ -266,11 +266,12 @@ const hermesRequestEvent = "crewlet.hermes_request"
 // then SIGKILL. 0 where there was none. A pid file naming another process (a
 // gateway killed and its pid reused) is left alone: the kernel's start time of
 // the pid must be the one the file records, or, with no /proc, its command
-// line must be a `gateway run`. A gateway that exited is
-// gone though its parent, the client, has not reaped it yet (`gwgone`).
+// line must be a `gateway run`. A gateway that exited is gone though its
+// parent, the client, has not reaped it yet, and one whose main thread alone
+// has exited is not (`gwgone`, reading its stat as internal/procgroup does).
 func hermesStopGateway(paths Paths, gateway time.Duration) string {
 	return fmt.Sprintf(`endgw() { gp=$(sed -n 's/.*"pid": *\([0-9][0-9]*\).*/\1/p' %[1]s 2> /dev/null | head -n 1); [ -n "$gp" ] || return 0; gs=$(sed -n 's/.*"start_time": *\([0-9][0-9]*\).*/\1/p' %[1]s 2> /dev/null | head -n 1); if [ -r /proc/"$gp"/stat ]; then [ -n "$gs" ] && [ "$(sed 's/.*) //' /proc/"$gp"/stat | cut -d' ' -f20)" = "$gs" ] || return 0; else case "$(ps -o args= -p "$gp" 2> /dev/null)" in *'gateway run'*) ;; *) return 0;; esac; fi; kill -s TERM -- "-$gp" 2> /dev/null || kill -s TERM "$gp" 2> /dev/null || return 0; i=0; while ! gwgone && [ "$i" -lt %[2]d ]; do sleep 0.1; i=$((i+1)); done; gwgone || kill -s KILL -- "-$gp" 2> /dev/null || kill -s KILL "$gp" 2> /dev/null; return 0; }
-gwgone() { ! kill -0 "$gp" 2> /dev/null || case "$(ps -o stat= -p "$gp" 2> /dev/null)" in Z*) true;; *) false;; esac; }
+gwgone() { ! kill -0 "$gp" 2> /dev/null || if [ -r /proc/self/stat ]; then { read -r gt < /proc/"$gp"/stat; } 2> /dev/null || return 0; set -- ${gt##*) }; case "$1" in [Xx]) true;; Z) [ "${18}" -le 1 ] 2> /dev/null;; *) false;; esac; else case "$(ps -o stat= -p "$gp" 2> /dev/null)" in Z*) true;; *) false;; esac; fi; }
 `, shellword.Quote(paths.HermesGatewayPID()), int(gateway/(100*time.Millisecond)))
 }
 

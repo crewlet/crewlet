@@ -3,6 +3,7 @@ package worklet_test
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -263,6 +264,113 @@ func TestARemovedSeatsWorkIsReturnedOrHandedToItsLead(t *testing.T) {
 		}
 		if leaderless := len(moved) == 1 && moved[0].Leaderless; leaderless != (c.want == "") {
 			t.Errorf("%s: answered %+v, want leaderless %t", c.name, moved, c.want == "")
+		}
+	}
+}
+
+// A DEPARTURE TELLS EACH LEAD ONCE OF THE WORK IT LEFT WITHOUT AN OWNER
+// (ADR-0162's amendment): a seat leaving with many items wakes the lead of
+// each project once, on one record listing that lead's items, never once an
+// item, whether the items are watched (OPS) or not (ENG), and the applier's
+// rows and the wake path agree.
+//
+// Mutation: build each item's record with its leads, or name the departure's
+// lead on every item, and a lead is woken once an item; offer that lead as a
+// fallback, and a watched item's watcher keeps it quiet.
+func TestADepartureTellsEachLeadOnceOfItsUnownedWork(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.applyWhileWriting()
+	r.ledBy(departureLeads{projects: map[string]string{"ENG": "lin", "OPS": "olu"}})
+	if _, err := r.writer.WriteDocument(t.Context(), "op-ops", worklet.ProjectSubject("OPS"), "",
+		worklet.Project{V: 1, Key: "OPS", Name: "Operations", CreatedAt: wednesday, UpdatedAt: wednesday},
+		worklet.ChangeProjectCreated, nil); err != nil {
+		t.Fatalf("seed OPS: %v", err)
+	}
+	pm := r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{})
+	want := map[string][]string{}
+	file := func(project, id string, status worklet.Status) {
+		t.Helper()
+		task := newTask(id)
+		task.Project, task.Key = project, project+"-"+id
+		task.Assignee, task.Status, task.StatusGroup = "ada", status, status.Group()
+		if project == "OPS" {
+			task.Watchers = []string{"pm"}
+		}
+		if _, err := pm.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+		lead := map[string]string{"ENG": "lin", "OPS": "olu"}[project]
+		want[lead] = append(want[lead], r.task(t, id).Task.Key)
+	}
+	for _, id := range []string{"a", "b", "c", "d", "e", "f"} {
+		file("ENG", id, worklet.StatusTodo)
+	}
+	file("ENG", "g", worklet.StatusInProgress)
+	file("ENG", "h", worklet.StatusInProgress)
+	for _, id := range []string{"x", "y", "z"} {
+		file("OPS", id, worklet.StatusTodo)
+	}
+
+	from := r.end()
+	engine := r.writer.As("node-a", worklet.AuthorSystem, worklet.Provenance{})
+	if _, err := engine.RehomeDeparted(t.Context(), worklet.Departure{Handle: "ada", At: r.at}); err != nil {
+		t.Fatalf("RehomeDeparted: %v", err)
+	}
+	r.drain()
+
+	woken := map[string]int{}
+	notes := map[string]string{}
+	parser := worklet.NewParser(worklet.ParserOptions{})
+	staff := func(h string) bool { return h != "ada" }
+	for seq := from + 1; seq <= r.end(); seq++ {
+		_, payload, _, ok, err := r.log.At(t.Context(), seq)
+		if err != nil || !ok {
+			t.Fatalf("read record %d: %v", seq, err)
+		}
+		rec, err := worklet.Decode(r.open(seq, payload))
+		if err != nil || rec.Notify == nil {
+			continue
+		}
+		routed := worklet.Route(worklet.Candidates(rec.Notify), staff, rec.Actor)
+		parsed, err := parser.Parse(t.Context(), delivery(t, rec), registry(t, "lin", "olu", "pm"))
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		var byParser, byRows []string
+		for _, p := range parsed {
+			if !p.Held {
+				byParser = append(byParser, p.To.Handle)
+			}
+		}
+		byRows = r.startedTurns(rec)
+		var byRoute []string
+		for _, c := range routed {
+			byRoute = append(byRoute, c.Handle)
+			woken[c.Handle]++
+			notes[c.Handle] = rec.Notify.Excerpt
+		}
+		slices.Sort(byParser)
+		slices.Sort(byRoute)
+		if !slices.Equal(byRoute, byParser) || !slices.Equal(byRoute, byRows) {
+			t.Errorf("%s: Route wakes %v, the parser %v and the notice rows %v; they must agree",
+				rec.Subject.ID, byRoute, byParser, byRows)
+		}
+	}
+	if len(woken) != 2 || woken["lin"] != 1 || woken["olu"] != 1 {
+		t.Fatalf("the departure woke %v, want lin and olu once each", woken)
+	}
+	for lead, keys := range want {
+		note := notes[lead]
+		if !strings.Contains(note, fmt.Sprintf("%d items ada held have no owner now", len(keys))) {
+			t.Errorf("%s's one notice says %q, want it to count the %d items", lead, note, len(keys))
+		}
+		for _, key := range keys {
+			if !strings.Contains(note, " "+key+",") && !strings.Contains(note, " "+key+" ") &&
+				!strings.Contains(note, " "+key+".") {
+				t.Errorf("%s's one notice %q does not name %s", lead, note, key)
+			}
 		}
 	}
 }

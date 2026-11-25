@@ -825,7 +825,7 @@ func gitInstruments() []Instrument {
 			Shows: "How long a git process waited for a slot on this node, by " +
 				"`class` (`read`, `transfer`, `maintenance`). A p95 " +
 				"approaching ten seconds is a node about to answer clones and pushes " +
-				"with 503 — every slot of one lane busy for a whole read attempt. " +
+				"with 503 — every slot of one lane busy for as long as a local git read may take. " +
 				"`transfer` waiting is a node serving as many clones, pushes and downloads as " +
 				"`gitlet.max_transfers` admits (more Gitlet nodes, or more memory and a " +
 				"wider `gitlet.max_transfers`); `read` waiting is a node out of " +

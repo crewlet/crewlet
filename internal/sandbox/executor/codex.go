@@ -200,7 +200,13 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	// ([codexCheckoutHome]), and the nested hook that hands a later checkout's
 	// where the box holds the helper it runs ([codexNestedHookFlags]).
 	line(`[ ! -s %[1]s ] || cat %[1]s >&2`, q(paths.CodexGuardSaid()))
-	b.WriteString(codexCheckoutHome(paths).gate())
+	h := codexCheckoutHome(paths)
+	b.WriteString(h.gate())
+	// A BOX THAT SWITCHES HOOKS OFF starts Codex without the nested hook, the
+	// skip log saying so once Codex has stopped (D709, [Paths.CodexHooksOffBy]).
+	line(`if [ -n "$hk" ] && [ -s %[1]s ]; then hk=; printf 'crewlet: checkouts cloned during the run are not `+
+		`handed their instructions and skills: %%s, so Codex runs no hook of this run\n' "$(cat %[1]s)" >> %[2]s; fi`,
+		q(paths.CodexHooksOffBy()), q(h.skipped()))
 	hook, state := codexNestedHookFlags(paths)
 	line(`hp=%s; hs=%s`, q(hook), q(state))
 	// The config.toml it loads is the home's with the run's over it
@@ -301,7 +307,7 @@ func codexFreshRoutes(req sandbox.RunRequest, paths Paths) string {
 // codexCappedEvent is the line a run's script adds to its stream, exiting 1,
 // where the note helper marked the run's round cap ([Paths.CodexCapFired])
 // AND the rollout lines the run appended record its turn aborted as
-// interrupted (the script's `aborted`): the cap is model responses per turn,
+// interrupted (the script's `aborted`): the cap is the run's model responses,
 // and a turn whose last counted response was its final answer completed.
 // Read as [sandbox.Result.RoundCapped] only beside that turn_aborted line
 // too, so no other interrupt is taken for the cap.
@@ -428,19 +434,30 @@ func codexAborted(paths Paths) string {
 // session is the thread Codex reported, else the one it continued, as
 // collection reads it ([Runner.ReportedSession]); the rollout lines the run
 // appended of the kinds the result reads go to the stream
-// ([codexRolloutEvent]); and the session is packed ([codexCapture]).
+// ([codexRolloutEvent]), each told by the kind its line opens with, as
+// [codexRolloutKinds] matches it; and the session is packed ([codexCapture]).
 func codexFinish(paths Paths) string {
 	var b strings.Builder
 	b.WriteString("finish() {\n")
 	b.WriteString(`[ -z "$tid" ] || sid=$tid` + "\n")
 	fmt.Fprintf(&b, `r=; [ -z "$sid" ] || r=$(find %s -type f -name "rollout-*-$sid.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1)`+"\n",
 		shellword.Quote(paths.CodexSessions()))
-	fmt.Fprintf(&b, `[ -z "$r" ] || tail -n +$((before + 1)) "$r" | grep -E '"type": *"(turn_context|token_usage_record|token_count|turn_aborted)"' | sed 's/^/{"type":"%s","line":/; s/$/}/'`+"\n",
-		codexRolloutEvent)
+	fmt.Fprintf(&b, `[ -z "$r" ] || tail -n +$((before + 1)) "$r" | grep -E '%s' | sed 's/^/{"type":"%s","line":/; s/$/}/'`+"\n",
+		codexRolloutKinds, codexRolloutEvent)
 	b.WriteString(codexCapture(paths))
 	b.WriteString("}\n")
 	return b.String()
 }
+
+// codexRolloutKinds matches a rollout line of a kind a run's result reads, as
+// Codex 0.171.0 opens one (its envelope's time, ordinal and type, and an
+// event's own type first in its payload): a turn's context or spend, a token
+// count or an aborted turn. Matched at the line's head, never anywhere in it,
+// so no other line that quotes one in its text reaches the result's
+// whole-line read ([readCodexRollout]): an MCP call's end whose structured
+// content names one runs past its bound beside an image.
+const codexRolloutKinds = `^[{]"timestamp":"[^"]*","ordinal":[0-9][0-9]*,"type":"(turn_context|token_usage_record|` +
+	`event_msg","payload":[{]"type":"(token_count|turn_aborted))"`
 
 // Output is where a Codex run's stream lands, which is its result: its
 // stdout, `exec --json`, with the rollout lines its script adds after it
@@ -476,5 +493,6 @@ func (Codex) artifactFiles(p Paths) []string {
 	return []string{p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
 		p.CodexCapFired(), p.CodexHelperLost(), p.CodexSkillsURL(), p.CodexSkillsURLFresh(),
 		p.CodexThread(), p.CodexThread() + ".next", p.CodexNoteHelper(), p.CodexNotesURL(),
-		p.CodexNotesURLFresh(), p.CodexRenew(), p.CodexRepoAgents(), p.WorkDir() + "/codex-server.log"}
+		p.CodexNotesURLFresh(), p.CodexRenew(), p.CodexRepoAgents(), p.CodexHooksOffBy(),
+		p.WorkDir() + "/codex-server.log"}
 }

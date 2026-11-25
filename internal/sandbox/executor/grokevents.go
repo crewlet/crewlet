@@ -82,6 +82,8 @@ const grokRecordMark = "crewlet.main_record"
 // `error` and the cap's event; the calls for its transcript; its spend, off
 // every request's `usage`.
 type grokEvents struct {
+	undecidedLines
+
 	sawLine, sawEvent bool
 	sessionID         string
 
@@ -129,7 +131,14 @@ func (d *grokEvents) Entries(end bool) []string {
 
 // Skipped implements [Decoder]. A record line past the bound may be a request
 // that made a call, so it takes the answer back.
-func (d *grokEvents) Skipped(n int64, bound int) {
+func (d *grokEvents) Skipped(line LongLine) {
+	n, bound := line.Size, line.Bound
+	switch lineType(line) {
+	case "usage":
+		d.requests++
+	case "":
+		d.undecided++
+	}
 	if d.marked {
 		d.recorded = ""
 		return
@@ -305,6 +314,19 @@ func (d *grokEvents) limitReport() string { return d.limit }
 // Ended implements [Decoder]: the run's `end`, its turn cap's event, or an
 // `error`, which 1.0.92 prints with no `end` after it (measured).
 func (d *grokEvents) Ended() bool { return d.ended || d.capped || d.failure != "" }
+
+// Requests implements [Decoder]: the `usage` lines, one a request, every
+// agent's, a subagent's included. NOT COUNTED: the session title's request,
+// which writes no usage line. Measured on 1.0.92 against a stand-in: one
+// title request a run beside the loop's, whose 12 of 12 and 3 under a cap of
+// 3 were counted, and 6 with a 429 and a 500 retried. NOR a compaction's
+// summary requests, which write no usage line either: a run whose 8
+// compactions failed on the stand-in's summary made 40 of them, none counted.
+func (d *grokEvents) Requests() int { return d.requests }
+
+// InFlight implements [Decoder]: none, as Grok's own --max-turns stops before
+// the next request (measured on 1.0.92: a cap of 3, 3 requests of its loop).
+func (d *grokEvents) InFlight() int { return 0 }
 
 // Result implements [Decoder]: the answer, and how the run ended.
 func (d *grokEvents) Result() sandbox.Result {
