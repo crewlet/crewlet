@@ -160,7 +160,7 @@ func hermesRows(r io.Reader, each func(hermesRow) error, long func() error) erro
 			return each(row)
 		}
 		return nil
-	}, func(int64) error {
+	}, func(int64, []byte, []byte) error {
 		if long == nil {
 			return nil
 		}

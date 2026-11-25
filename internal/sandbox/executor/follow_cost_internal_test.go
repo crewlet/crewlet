@@ -15,7 +15,8 @@ type presetEntries struct {
 }
 
 func (d *presetEntries) Line([]byte)            { d.seen++ }
-func (d *presetEntries) Skipped(int64, int)     {}
+func (d *presetEntries) Skipped(LongLine)       {}
+func (d *presetEntries) Undecided() int         { return 0 }
 func (d *presetEntries) Result() sandbox.Result { return sandbox.Result{} }
 func (d *presetEntries) Ended() bool            { return false }
 func (d *presetEntries) Requests() int          { return 0 }

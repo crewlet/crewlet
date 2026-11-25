@@ -111,7 +111,7 @@ func (b *transcriptBuilder) kimiRecordWhole(ctx context.Context, thread string, 
 		}
 		b.thread = thread
 		return b.kimiEntryWhole(l, line)
-	}, func(n int64) error {
+	}, func(n int64, _, _ []byte) error {
 		return b.unread(fmt.Sprintf("a line of %s of the harness's record is past the %s one read reads, "+
 			"and was not read", humanSize(n), humanSize(maxLineBytes)))
 	})
@@ -255,7 +255,7 @@ func kimiNotesHeldWhole(ctx context.Context, wire io.Reader, takes []ServedTake)
 			clear(pending)
 		}
 		return nil
-	}, func(int64) error { moved = moved[:0]; return nil })
+	}, func(int64, []byte, []byte) error { moved = moved[:0]; return nil })
 	if err != nil {
 		return nil, err
 	}

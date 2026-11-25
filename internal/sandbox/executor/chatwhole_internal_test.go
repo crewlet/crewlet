@@ -138,7 +138,7 @@ func chatObjectWhole(line []byte) []byte {
 }
 
 // chatPastWhole says a line past the line bound, as a bounded walk does.
-func (b *transcriptBuilder) chatPastWhole(n int64) error {
+func (b *transcriptBuilder) chatPastWhole(n int64, _, _ []byte) error {
 	return b.unread(fmt.Sprintf("a line of %s of the harness's record is past the %s one read reads, "+
 		"and was not read", humanSize(n), humanSize(maxLineBytes)))
 }

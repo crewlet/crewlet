@@ -67,6 +67,8 @@ type cursorCall struct {
 // turn_ended, or the script's cap line; the calls for its transcript; and its
 // own spend, the result's usage (a resumed run reports its own).
 type cursorEvents struct {
+	undecidedLines
+
 	sawLine, sawEvent bool
 	sessionID         string
 
@@ -103,7 +105,20 @@ func (d *cursorEvents) Entries(end bool) []string {
 }
 
 // Skipped implements [Decoder].
-func (d *cursorEvents) Skipped(n int64, bound int) { d.transcript.skip(n, bound) }
+func (d *cursorEvents) Skipped(line LongLine) {
+	d.transcript.skip(line.Size, line.Bound)
+	// A CALL'S MODEL CALL FOLLOWS ITS ARGUMENTS, so the tail reads it.
+	switch t := lineType(line); {
+	case t == "tool_call" && windowField(line.Head, "subtype", false) == "started":
+		if model := windowField(line.Tail, "model_call_id", true); model != "" {
+			d.responded(model)
+		} else {
+			d.undecided++
+		}
+	case t == "":
+		d.undecided++
+	}
+}
 
 // Line implements [Decoder].
 func (d *cursorEvents) Line(line []byte) {

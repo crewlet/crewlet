@@ -101,6 +101,7 @@ type codexEvents struct {
 	// ([codexEvents.Requests]), counted as each line is fed, whatever the
 	// rollout's bound kept of it.
 	responses int
+	undecidedLines
 	// rollout is the rollout lines the script appended, each with its line
 	// break, held to [codexEvents.bound]; rolloutDropped counts what was not.
 	rollout        bytes.Buffer
@@ -324,9 +325,22 @@ func (d *codexEvents) keepRollout(line json.RawMessage) {
 }
 
 // Skipped implements [Decoder].
-func (d *codexEvents) Skipped(n int64, bound int) {
+func (d *codexEvents) Skipped(line LongLine) {
 	d.sawLine = true
-	d.transcript.skip(n, bound)
+	d.transcript.skip(line.Size, line.Bound)
+	// A ROLLOUT LINE NAMES ITS KIND AT ITS HEAD; a response's token_count is
+	// numbers alone, so its usage is in one window or the other.
+	switch lineType(line) {
+	case codexRolloutEvent:
+		switch {
+		case !inEither(line, `"token_count"`) && !bytes.Contains(line.Head, []byte(`"payload"`)):
+			d.undecided++
+		case inEither(line, `"token_count"`) && inEither(line, `"last_token_usage":{`):
+			d.responses++
+		}
+	case "":
+		d.undecided++
+	}
 }
 
 // figures is what the run's appended rollout lines say, and false where the

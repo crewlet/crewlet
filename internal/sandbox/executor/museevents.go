@@ -119,6 +119,8 @@ const museChildMark = "crewlet.child_usage"
 // MAY HOLD SEVERAL RUNS: Muse starts another once a subagent's result arrives
 // after its run ended (measured on 1.4.25).
 type museEvents struct {
+	undecidedLines
+
 	sawLine, sawEvent bool
 	sessionID         string
 
@@ -173,7 +175,25 @@ func (d *museEvents) Entries(end bool) []string {
 }
 
 // Skipped implements [Decoder].
-func (d *museEvents) Skipped(n int64, bound int) { d.transcript.skip(n, bound) }
+func (d *museEvents) Skipped(line LongLine) {
+	d.transcript.skip(line.Size, line.Bound)
+	switch t := windowField(line.Head, "payload_type", false); {
+	case t == "run.usage":
+		p := musePayload{}
+		if n, ok := windowInt(line.Head, "calls", false); ok {
+			p.Calls = n
+			if c, ok := windowInt(line.Head, "completed_calls", false); ok {
+				p.Completed = &c
+			}
+			p.Cancelled, _ = windowInt(line.Head, "cancelled_calls", false)
+			d.requests += p.calls()
+		} else {
+			d.undecided++
+		}
+	case t == "":
+		d.undecided++
+	}
+}
 
 // Line implements [Decoder].
 func (d *museEvents) Line(line []byte) {

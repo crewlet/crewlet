@@ -50,6 +50,8 @@ type hermesRequest struct {
 // tool calls for the transcript, the result event's answer and status, and,
 // once the run is over, the plugin's record and the round cap's line.
 type hermesEvents struct {
+	undecidedLines
+
 	transcript transcriptLines
 	// seq numbers the run's tool calls, and calls each started call's number.
 	seq   int
@@ -170,9 +172,17 @@ func (d *hermesEvents) keepAnswer(text string) {
 }
 
 // Skipped implements [Decoder].
-func (d *hermesEvents) Skipped(n int64, bound int) {
+func (d *hermesEvents) Skipped(line LongLine) {
 	d.sawLine = true
-	d.transcript.skip(n, bound)
+	d.transcript.skip(line.Size, line.Bound)
+	switch lineType(line) {
+	case hermesRequestEvent:
+		if !d.following {
+			d.requests = append(d.requests, hermesRequest{})
+		}
+	case "":
+		d.undecided++
+	}
 }
 
 // runSpend implements [runSpender]: the responses the plugin recorded, every

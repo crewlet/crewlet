@@ -272,7 +272,7 @@ func StreamRequest(h Harness, lines ...string) (sandbox.RequestMeasure, string, 
 	dec := h.Events()
 	for _, line := range lines {
 		if line == SkippedLine {
-			dec.Skipped(int64(maxLineBytes)+1, maxLineBytes)
+			dec.Skipped(LongLine{Size: int64(maxLineBytes) + 1, Bound: maxLineBytes})
 			continue
 		}
 		dec.Line([]byte(line))
@@ -373,3 +373,7 @@ const (
 	QwenClearsAt              = qwenClearsAt
 	QwenSyntheticFailureBytes = qwenSyntheticFailureBytes
 )
+
+// EachLine is [eachLine], for the cases of a line past a bound the suite
+// lowers.
+func EachLine(r io.Reader, dec Decoder, bound int) error { return eachLine(r, dec, bound) }

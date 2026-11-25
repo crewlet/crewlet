@@ -115,6 +115,8 @@ type geminiTokens struct {
 // event of any other kind. A run handed a note at its finish answers again
 // after the block's warning, and that later reply is the answer.
 type geminiEvents struct {
+	undecidedLines
+
 	transcript transcriptLines
 
 	// said is the assistant text since the last other event, written to the
@@ -270,10 +272,22 @@ func (d *geminiEvents) flushSaid() {
 }
 
 // Skipped counts a line past the stream's bound into the transcript.
-func (d *geminiEvents) Skipped(n int64, bound int) {
+func (d *geminiEvents) Skipped(line LongLine) {
 	d.sawLine = true
 	d.flushSaid()
-	d.transcript.skip(n, bound)
+	d.transcript.skip(line.Size, line.Bound)
+	switch lineType(line) {
+	case geminiUsageEvent:
+		if n, ok := windowInt(line.Head, "requests", false); ok {
+			d.requests = n
+		} else if n, ok := windowInt(line.Tail, "requests", true); ok {
+			d.requests = n
+		} else {
+			d.undecided++
+		}
+	case "":
+		d.undecided++
+	}
 }
 
 // runSpend is the run's own spend, every request its process made, whether it

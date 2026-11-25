@@ -82,6 +82,8 @@ const grokRecordMark = "crewlet.main_record"
 // `error` and the cap's event; the calls for its transcript; its spend, off
 // every request's `usage`.
 type grokEvents struct {
+	undecidedLines
+
 	sawLine, sawEvent bool
 	sessionID         string
 
@@ -129,7 +131,14 @@ func (d *grokEvents) Entries(end bool) []string {
 
 // Skipped implements [Decoder]. A record line past the bound may be a request
 // that made a call, so it takes the answer back.
-func (d *grokEvents) Skipped(n int64, bound int) {
+func (d *grokEvents) Skipped(line LongLine) {
+	n, bound := line.Size, line.Bound
+	switch lineType(line) {
+	case "usage":
+		d.requests++
+	case "":
+		d.undecided++
+	}
 	if d.marked {
 		d.recorded = ""
 		return
