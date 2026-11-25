@@ -99,6 +99,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
 		{"ALaunchAnswersTheJobItOpened", testALaunchAnswersTheJobItOpened},
 		{"ABoxsSessionStartIsRecordedOnceForItsOwnJob", testABoxsSessionStartIsRecordedOnceForItsOwnJob},
+		{"AHarnessConnectingItsBridgeIsRecordedOnceForItsOwnJob", testAHarnessConnectingItsBridgeIsRecordedOnceForItsOwnJob},
 		{"AMintedSessionIsBoundOnceToItsOwnJob", testAMintedSessionIsBoundOnceToItsOwnJob},
 		{"AMintedSessionIsOneLiveRuns", testAMintedSessionIsOneLiveRuns},
 		{"AJobItsCapEndedIsRecordedOnceForItsOwnJob", testAJobItsCapEndedIsRecordedOnceForItsOwnJob},
@@ -475,6 +476,45 @@ func testABoxsSessionStartIsRecordedOnceForItsOwnJob(t *testing.T, s sandbox.Pen
 	}
 	if ok, err := s.MarkSessionStart(ctx, "t-none", "job-1", sandbox.SessionStartContinued); err != nil || ok {
 		t.Errorf("a start for a run with no record = %v, %v", ok, err)
+	}
+}
+
+// A JOB'S HARNESS CONNECTING ITS BRIDGE IS RECORDED ONCE, AND ONLY FOR ITS OWN
+// JOB: a record naming a job the row has moved on from is nothing, as is one for
+// a run with no record, and the next launch's job starts with nothing said, so a
+// relaunch whose harness never connects is not read as one that did.
+//
+// Mutation: record it on another job's row, answer a second record as taken, or
+// carry it across a relaunch, and a check goes red.
+func testAHarnessConnectingItsBridgeIsRecordedOnceForItsOwnJob(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-bridge"))
+	if mustGet(t, s, "t-bridge").Launch.BridgeConnected {
+		t.Fatal("a job's record says its harness connected its bridge before anything said so")
+	}
+	if ok, err := s.MarkBridgeConnected(ctx, "t-bridge", "another-job"); err != nil || ok {
+		t.Errorf("a connect for a job the record does not hold = %v, %v", ok, err)
+	}
+	if mustGet(t, s, "t-bridge").Launch.BridgeConnected {
+		t.Error("another job's connect was recorded on this one")
+	}
+	if ok, err := s.MarkBridgeConnected(ctx, "t-bridge", launch); err != nil || !ok {
+		t.Fatalf("MarkBridgeConnected = %v, %v", ok, err)
+	}
+	if ok, err := s.MarkBridgeConnected(ctx, "t-bridge", launch); err != nil || ok {
+		t.Errorf("a second connect was recorded again: %v, %v", ok, err)
+	}
+	got := mustGet(t, s, "t-bridge")
+	if !got.Launch.BridgeConnected || got.Handle().BridgeUnconnected {
+		t.Errorf("the record says connected %v, its handle unconnected %v; want connected",
+			got.Launch.BridgeConnected, got.Handle().BridgeUnconnected)
+	}
+	mustBeginLaunch(t, s, run("t-bridge"))
+	if next := mustGet(t, s, "t-bridge"); next.Launch.BridgeConnected || !next.Handle().BridgeUnconnected {
+		t.Error("the next job's record says its harness connected its bridge, which only the job before did")
+	}
+	if ok, err := s.MarkBridgeConnected(ctx, "t-none", "job-1"); err != nil || ok {
+		t.Errorf("a connect for a run with no record = %v, %v", ok, err)
 	}
 }
 

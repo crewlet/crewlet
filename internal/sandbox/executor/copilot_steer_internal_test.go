@@ -94,6 +94,7 @@ type copilotProbeReport struct {
 	Message string         `json:"message"`
 	Level   string         `json:"level"`
 	Name    string         `json:"name"`
+	Output  map[string]any `json:"output"`
 }
 
 // copilotProbe is the rendered extension running under node against the
@@ -265,7 +266,7 @@ func copilotNote(seq int, inbox, words string) string {
 func TestTheCopilotExtensionSendsANoteWhileTheMainAgentWorks(t *testing.T) {
 	route := newCopilotRoute(t)
 	p := startCopilotProbe(t, copilotExtensionSettings{URL: route.url})
-	if joined := p.expect("joined"); strings.Join(joined.Hooks, ",") != "onAgentStop,onPostToolUse,onPostToolUseFailure" {
+	if joined := p.expect("joined"); strings.Join(joined.Hooks, ",") != "onAgentStop,onPostToolUse,onPostToolUseFailure,onPreToolUse" {
 		t.Fatalf("hooks = %v", joined.Hooks)
 	}
 	p.expectArmed()

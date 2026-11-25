@@ -152,6 +152,9 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		// on its first request here — the same token it dialled the node it
 		// was taken from with ([reopenedStarted]).
 		Started: reopenedStarted(ledger, run, reopened.Started),
+		// AND THAT ITS HARNESS CONNECTED ITS BRIDGE, where its first list
+		// reaches this node: once per job, so one recorded already stands.
+		Connected: func(ctx context.Context) { ledger.connected(ctx, run.TurnID) },
 	}
 	// AND THE RUN'S NOTE INBOX, built from its record alone — its turn, its
 	// job and its round — so a note to the turn reaches the run between its

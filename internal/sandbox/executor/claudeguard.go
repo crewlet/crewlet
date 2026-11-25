@@ -24,10 +24,12 @@ import (
 // a run whose own server, or a tool the engine says it lists, is not there in
 // that event ([claudeGuard]), naming the file and the entry.
 
-// crewletServers is servers' of Crewlet's own, by name, which a guard holds
-// the harness to: the engine's own tools, the bridge's `crewlet`
+// crewletServers is servers' of Crewlet's own, by name, sorted, which a guard
+// holds the harness to: the engine's own tools, the bridge's `crewlet`
 // ([sandbox.MCPServer.AlwaysLoaded]). A seat's other servers are its own,
-// which a home may switch off as a person's would.
+// which a home may switch off as a person's would; no other server may take
+// these names or a tool name inside them (code-sandbox.md, each harness's
+// section).
 func crewletServers(servers map[string]sandbox.MCPServer) []string {
 	var names []string
 	for _, name := range slices.Sorted(maps.Keys(servers)) {

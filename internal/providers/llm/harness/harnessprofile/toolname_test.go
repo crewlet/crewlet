@@ -93,3 +93,26 @@ func TestAToolNameHoldsOnlyWhatAModelReads(t *testing.T) {
 		}
 	}
 }
+
+// A BRIDGE TOOL NAME IS RUNS OF LETTERS AND DIGITS JOINED BY SINGLE `_`: what
+// no other server's tool is named like under `<server>__<tool>` or
+// `<server>-<tool>`. Each refused name is one a measured or derived collision
+// needs: `_x` (a server `crewlet_`), `dup__x` (`crewlet__dup`), `a-b`
+// (`crewlet-a`).
+//
+// Mutation: allow `-`, a leading `_` or `__`, or a name of [ToolNameMax],
+// and this is red.
+func TestABridgeToolNameIsOneNoOtherServerSpells(t *testing.T) {
+	t.Parallel()
+	for name, want := range map[string]bool{
+		"submit_work": true, "ask_and_wait": true, "x": true, "Read2_file": true,
+		"_x": false, "dup__x": false, "a-b": false, "x_": false, "": false, "a.b": false,
+		// Pi 1.6.0 cuts `mcp__crewlet__dup__…` (64 and over) to 55, `_` and 8 hex:
+		// a 50-character bridge name could be that cut name.
+		strings.Repeat("a", ToolNameMax()-1): true, strings.Repeat("a", ToolNameMax()): false,
+	} {
+		if got := BridgeToolName(name); got != want {
+			t.Errorf("BridgeToolName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
