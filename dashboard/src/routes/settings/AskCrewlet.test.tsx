@@ -6,6 +6,7 @@
 import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ASSISTANT_INSTRUCTIONS_MAX_RUNES } from "~/contract/instructions.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { mountSettings, READER_VIEWER } from "~/test/settingsScreen.tsx";
 import { afterMicrotasks } from "~/test/settle.ts";
@@ -32,6 +33,25 @@ async function show(
 }
 
 const card = (title: string) => screen.getByRole("heading", { name: title }).closest("section")!;
+
+// A READER WHO CANNOT SAVE THEIR OWN is told why on Save, and nothing is sent.
+// Mutation: drop the act's access from Save's reason and this fails.
+test.each([
+  [
+    "an anonymous reader",
+    { ...READER_VIEWER, login: "", acts: [], grants: [] },
+    WRITE_REASONS.anonymous,
+  ],
+  ["a person the engine does not serve", { ...READER_VIEWER, acts: [] }, WRITE_REASONS.not_served],
+])("Save for %s says why it cannot save", async (_, viewer, reason) => {
+  await show({ mine: { text: "Lead with the numbers." } }, viewer);
+  const save = within(card("Your instructions")).getByRole("button", { name: "Save" });
+  expect(save.getAttribute("aria-disabled")).toBe("true");
+  const described = (save.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent);
+  expect(described).toContain(reason);
+});
 
 // A TEXT IS COUNTED AGAINST THE ENGINE'S CAP WHERE IT IS TYPED, and Save holds
 // past it. Mutation: drop overCap from Save's reason and this fails.
