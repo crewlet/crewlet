@@ -398,6 +398,63 @@ func TestARequestThatMustWaitIsRefusedOnlyWithoutAPlace(t *testing.T) {
 	refused(t, "w's request with the room full", <-begin(ctx, t, b, "w", 5, 5, time.Minute).out)
 }
 
+// A WAITER IS COUNTED ONLY ONCE ITS HEAD IS IN ITS PLACE: start hands the head
+// off (waiting) in the step that places the waiter, so no reader of the queue
+// or the places — SpoolWaiting, SpoolPlaces, a grant — sees a waiter whose
+// head is still charged to the request memory. A request granted at once or
+// refused a place keeps its head where it was: waiting is never called.
+//
+// Mutation: call waiting after start lets go of a.mu — the hand-off runs
+// where a reader may count the waiter first, red; call it before placeLocked
+// — it runs with no place to hold the head, red.
+func TestAWaiterIsCountedOnlyOnceItsHeadIsInItsPlace(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	a := newSpools(spoolSizes{limit: 10, share: 10, request: 10, grain: 1, places: 1, placesPerCredential: 1})
+	never := func(what string) func() {
+		return func() { t.Errorf("%s handed its head off", what) }
+	}
+	st, _, err := a.start(ctx, "x", 10, 10, 10, time.Minute, never("a request granted at once"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	handOff := func() {
+		calls++
+		// Read under the lock start holds: a reader that could lock now
+		// could count this waiter before its head left the request memory.
+		if a.mu.TryLock() {
+			a.mu.Unlock()
+			t.Error("the head was handed off outside start's lock, where a reader may count the waiter first")
+			return
+		}
+		if a.inPlaces != 1 || len(a.queue) != 1 {
+			t.Errorf("the head was handed off with %d places held and %d waiting, want its own place and "+
+				"place in the queue", a.inPlaces, len(a.queue))
+		}
+	}
+	waiter := queued(t, a, "y's start", func() turn {
+		st, sw, err := a.start(ctx, "y", 10, 1, 1, time.Minute, handOff)
+		return turn{st, sw, err}
+	})
+	r := <-queued(t, a, "z's start", func() turn {
+		st, sw, err := a.start(ctx, "z", 10, 1, 1, time.Minute, never("a request refused a place"))
+		return turn{st, sw, err}
+	}).out
+	var unserved *spoolUnserved
+	if !errors.As(r.err, &unserved) || unserved.reason != spoolRefused {
+		t.Fatalf("a request beside a full waiting room answered %v, want refused a place", r.err)
+	}
+	a.ended(st.body, 10)
+	a.release(st.body)
+	got := granted(t, "y's start", waiter)
+	if calls != 1 || !got.t.placed {
+		t.Errorf("y's head was handed off %d times and it started placed %v, want once and placed", calls,
+			got.t.placed)
+	}
+	a.unplace("y")
+}
+
 // A WAIT ENDS AT ITS BOUND, unserved: errSpoolFull saying what held it back,
 // counted expired, and its place given back — and a request it held back from
 // the node is granted as it leaves. In a bubble, whose clock moves only while
