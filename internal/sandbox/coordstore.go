@@ -839,18 +839,32 @@ func (s *CoordStore) stampCapture(ctx context.Context, turnID string, capture Se
 	// SET ON EVERY ASK OF decide, which reruns on a lost race: the last is the
 	// row the answer is about, if the last attempt found one
 	// ([CoordStore.writeFound]).
-	var held bool
-	_, won, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
-		held = holdsStamp(*run, capture)
+	var held, stamped bool
+	_, _, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		held, stamped = holdsStamp(*run, capture), false
+		named := nameSummary(run, capture.Summary)
 		if over != nil && !over(*run, capture) {
-			return false
+			return named
 		}
-		return stampOnto(run, capture)
+		stamped = stampOnto(run, capture)
+		return stamped || named
 	})
 	if err != nil {
 		return false, err
 	}
-	return won || (found && held), nil
+	return found && (stamped || held), nil
+}
+
+// nameSummary names summary, the newest a take's read kept, on run's row where
+// it is newer than the one the row names ([SummaryStamp.newerThan]), reporting
+// whether it did.
+func nameSummary(run *PendingRun, summary *SummaryStamp) bool {
+	if summary == nil || summary.Bounded() != nil || (run.Summary != nil && !summary.newerThan(*run.Summary)) {
+		return false
+	}
+	named := *summary
+	run.Summary = &named
+	return true
 }
 
 // RetireSessions records the sessions a job of the turn spent, and how. See the

@@ -1066,6 +1066,12 @@ type PendingRun struct {
 	// other's in Extra.
 	SpentSessions []executorkeep.SpentSession `json:"spent_sessions,omitempty"`
 
+	// Summary is the newest compaction summary a box read of the turn's jobs
+	// kept ([SummaryStamp], summary.go), which the turn's end names on the
+	// executor log. The TURN'S, kept by every relaunch; moved only to a newer
+	// one, by the stamp of the take that kept it ([SessionCapture.Summary]).
+	Summary *SummaryStamp `json:"summary,omitempty"`
+
 	// NotContinued is the verdicts of this turn's earlier jobs on the sessions
 	// they did not continue, at most [executorkeep.NotContinuedMaxEntries]: the
 	// first, and the newest, folded in as the next launch replaces a job's

@@ -178,11 +178,11 @@ func TestACollectionsReadOfACopilotSessionIsItsWholeLineRead(t *testing.T) {
 	for name, record := range records {
 		takes := served(append(copilotInboxesIn(record), "never")...)
 		want, wantErr := copilotNotesHeldWhole(t.Context(), strings.NewReader(record), takes)
-		got, err := copilotNotesHeld(t.Context(), strings.NewReader(record), takes)
+		got, err := copilotNotesHeld(t.Context(), strings.NewReader(record), takes, nil)
 		if !slices.Equal(got, want) || (err != nil) != (wantErr != nil) {
 			t.Errorf("%s: held %v (%v), want %v (%v)", name, got, err, want, wantErr)
 		}
-		got, err = copilotNotesHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, takes)
+		got, err = copilotNotesHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, takes, nil)
 		if !slices.Equal(got, want) || (err != nil) != (wantErr != nil) {
 			t.Errorf("%s in pieces: held %v (%v), want %v (%v)", name, got, err, want, wantErr)
 		}

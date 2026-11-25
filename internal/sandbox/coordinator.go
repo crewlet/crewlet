@@ -2291,11 +2291,14 @@ func (c *Coordinator) readBoxFor(ctx context.Context, run PendingRun, read BoxRe
 	// and written with how the harness ended after the take; and the receipts of
 	// its hooks' serves, settled BEFORE the take, a verdict the store does not
 	// answer handing the read back box-answered ([boxAnsweredError]).
-	reading := c.readMainThread(ctx, run, box, runner, read, at, result)
+	asked := c.asksSummary(runner)
+	reading := c.readMainThread(ctx, run, box, runner, read, at, result, asked)
 	result.ResumedCount, result.CountProvider, result.NextRequest = reading.Count, reading.Provider, reading.Next
 	if err := c.settleReceipts(ctx, run, reading.Receipts, read); err != nil {
 		return Result{}, false, &boxAnsweredError{err: err, end: at.harnessEnd()}
 	}
+	// ITS NEWEST SUMMARY, which the take keeps beside the session (summary.go).
+	at.summary = c.foundSummary(ctx, run, runner, asked, reading.Summary)
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
 	c.keepLater(ctx, spooled)

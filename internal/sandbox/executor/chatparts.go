@@ -69,8 +69,10 @@ type chatSinks struct {
 	user *entryShape
 	own  string
 	// summary takes the content's first text a thought is not where it opens
-	// a compression's summary.
+	// a compression's summary, and snap its words as held, for a box read's
+	// newest summary ([geminiSummaryReading]).
 	summary *entryShape
+	snap    *summaryText
 	// words take a content written as one string, as the model's words (each
 	// reading of a Gemini CLI response).
 	words []*entryShape
@@ -379,10 +381,13 @@ func (r *chatReading) partEnd(sk *chatSinks, str bool) {
 			s.add(b, r.textAs(s, EntryBrief), time.Time{})
 		}
 	}
-	if s := sk.summary; s != nil && p.text && !p.thought && !r.firstSeen {
+	if (sk.summary != nil || sk.snap != nil) && p.text && !p.thought && !r.firstSeen {
 		r.firstSeen, r.snapshot = true, r.trim.opens(geminiSnapshot)
-		if r.snapshot {
+		if s := sk.summary; s != nil && r.snapshot {
 			s.add(b, r.textAs(s, EntrySummary), time.Time{})
+		}
+		if sk.snap != nil && r.snapshot {
+			sk.snap.heldFrom(&r.text)
 		}
 	}
 	for _, s := range sk.words {
