@@ -27,7 +27,8 @@ func escapedTo(size, frame int) string {
 // EVERY POSITIONS CLASS'S WIDEST RECORD FITS ITS BOUND, as the store encodes
 // it: a definition whose schemas and words are each at what [Fits] keeps, in
 // a byte JSON writes as six, beside its digest, instant and names; and a Home
-// board at what a save keeps, beside its two instants. Past the bound, the
+// board and a person's instructions at what a save keeps, beside their two
+// instants. Past the bound, the
 // KV backend refuses the write.
 //
 // Mutation: drop the 512 from MaxMCPDefinitionBytes, or the 256 from
@@ -70,6 +71,20 @@ func TestEveryPositionsClassesWidestRecordFitsItsBound(t *testing.T) {
 	if size := record.Len() - len("\n"); size > coord.MaxHomeBoardRecordBytes {
 		t.Errorf("the widest Home board is stored as %d bytes, past its class's %d", size,
 			coord.MaxHomeBoardRecordBytes)
+	}
+
+	doc := []byte(`{"text":"` + strings.Repeat("<", coord.MaxAssistantInstructionsBytes-len(`{"text":""}`)) + `"}`)
+	if err := coord.CheckAssistantInstructions(doc); err != nil {
+		t.Fatalf("premise: the widest instructions are refused: %v", err)
+	}
+	record.Reset()
+	if err := enc.Encode(coord.SeatInstructions{Instructions: doc, UpdatedAt: widestInstant,
+		AbsentSince: widestInstant}); err != nil {
+		t.Fatal(err)
+	}
+	if size := record.Len() - len("\n"); size > coord.MaxAssistantInstructionsRecordBytes {
+		t.Errorf("the widest instructions are stored as %d bytes, past their class's %d", size,
+			coord.MaxAssistantInstructionsRecordBytes)
 	}
 }
 

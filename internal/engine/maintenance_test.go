@@ -71,6 +71,8 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// retired by a record (the applier's history term, the trash
 		// reaper), not a local delete.
 		"artifacts_ops",
+		// Each human seat's Ask Crewlet instructions, beside its Home board.
+		"assistant_instructions",
 		// The assistant log's. Its conversations are Replicated (the trash
 		// reaper's retention purge), and its anchors go by the trim (see
 		// pages_ops).
@@ -306,14 +308,15 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 	for table, horizon := range map[string]time.Duration{
 		// Not turn_completions or chat_thread_follows: coordination
 		// buckets age them, and coordtest holds those horizons.
-		"scheduled_runs":        maintenance.ScheduledRunRetention,
-		"a2a_channels":          maintenance.ChannelRetention,
-		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
-		"activation_bodies":     coord.BodyRetention,
-		"counterparty_profiles": maintenance.CounterpartyRetention,
-		"seat_mailboxes":        maintenance.MailboxRetirementGrace,
-		"chat_read_state":       maintenance.ChatReadForgetGrace,
-		"home_board":            maintenance.HomeBoardForgetGrace,
+		"scheduled_runs":         maintenance.ScheduledRunRetention,
+		"a2a_channels":           maintenance.ChannelRetention,
+		"a2a_channels_idle":      maintenance.ChannelIdleTimeout,
+		"activation_bodies":      coord.BodyRetention,
+		"counterparty_profiles":  maintenance.CounterpartyRetention,
+		"seat_mailboxes":         maintenance.MailboxRetirementGrace,
+		"chat_read_state":        maintenance.ChatReadForgetGrace,
+		"home_board":             maintenance.HomeBoardForgetGrace,
+		"assistant_instructions": maintenance.HomeBoardForgetGrace,
 		// No native backend has a row sweep: an applier writes its rows,
 		// and chat's message horizon is a prune record a fleet duty
 		// publishes. Their operation ledgers are the exception, one entry

@@ -18,7 +18,7 @@ import (
 // writers' own), beside coordtest.WidestPositionsRecords.
 var coveredEarlier = []string{coord.MCPListingClass, coord.MCPDefinitionClass, coord.MCPCheckClass,
 	coord.AccessReviewClass, coord.SeatAccessClass, coord.HomeBoardClass, coord.AtlasWakeClass,
-	coord.DeviceSignInClass}
+	coord.DeviceSignInClass, coord.AssistantInstructionsClass}
 
 // EVERY POSITIONS FAMILY IS DECLARED AT THE BOUND ITS WIDEST RECORD FITS: the
 // register's holding gives each family's keys a class of their own, never its

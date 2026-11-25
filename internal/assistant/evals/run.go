@@ -18,6 +18,9 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/words"
@@ -94,6 +97,29 @@ func RunSuite(ctx context.Context, cases []Case, o Options) ([]Result, error) {
 	return out, nil
 }
 
+// under is company with the case's company layer set, a copy per read.
+func (i CaseInstructions) under(company assistant.Company) assistant.Company {
+	if i.Company.IsZero() {
+		return company
+	}
+	return func() (*config.Company, *org.Organization) {
+		c, o := company()
+		held := *c
+		held.Assistant.Instructions = i.Company
+		return &held, o
+	}
+}
+
+// person is the case's person layer as the seam answers it, nil for none.
+func (i CaseInstructions) person() assistant.Instructions {
+	if i.Person.IsZero() {
+		return nil
+	}
+	return func(context.Context, iam.Principal) (config.AssistantInstructions, error) {
+		return i.Person, nil
+	}
+}
+
 // runCase asks one case's question once and judges the turn.
 func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	person := Person("eval", "eval", c.Person.Apps...)
@@ -121,9 +147,9 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	if err != nil {
 		return Trial{}, err
 	}
-	rig, err := Assemble(RigOptions{Person: &person, Company: company,
+	rig, err := Assemble(RigOptions{Person: &person, Company: c.Instructions.under(company),
 		Models: &Models{Provider: meter, Key: meter.key, Search: c.Search}, Catalogue: tools,
-		Acts: c.Person.Acts, Handler: handler})
+		Acts: c.Person.Acts, Handler: handler, Instructions: c.Instructions.person()})
 	if err != nil {
 		return Trial{}, err
 	}
@@ -328,6 +354,9 @@ func judge(e Expect, frames []wire.Frame, refusals []string, heard bool) Trial {
 		if strings.Contains(lower, strings.ToLower(s)) {
 			fail("never_says: %q in the answer", s)
 		}
+	}
+	if n := len(strings.Fields(t.Answer)); e.MaxWords > 0 && n > e.MaxWords {
+		fail("max_words: the answer runs to %d words, want at most %d", n, e.MaxWords)
 	}
 	cardText := strings.ToLower(shown.String())
 	for _, s := range e.Shows {

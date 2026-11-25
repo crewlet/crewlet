@@ -79,6 +79,9 @@ type Fleet struct {
 	// homeBoards is each seat's Home board, by handle, its revisions drawn
 	// from version.
 	homeBoards map[string]homeBoard
+	// instructions is each seat's Ask Crewlet instructions, by handle, their
+	// revisions drawn from version.
+	instructions map[string]seatInstructions
 	// atlasWakes is each owning seat's atlas wake record, by its key, and the
 	// counter its revisions are drawn from.
 	atlasWakes        map[string]coord.AtlasWake
@@ -252,6 +255,7 @@ func NewFleet() *Fleet {
 		grantRequests:     map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
 		homeBoards:        map[string]homeBoard{},
+		instructions:      map[string]seatInstructions{},
 		atlasWakes:        map[string]coord.AtlasWake{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
 		sessionClaims:     map[string]coord.SessionClaim{},

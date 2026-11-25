@@ -526,6 +526,11 @@ type Sources struct {
 	// Nil leaves `home_board` unregistered: this node keeps none.
 	HomeBoards HomeBoards
 
+	// Instructions is where each person's own Ask Crewlet instructions are
+	// kept, beside their Home board. Nil leaves `assistant_instructions`
+	// unregistered.
+	Instructions InstructionsStore
+
 	// WebhookBase is where a THIRD-PARTY APP reaches this deployment
 	// (`config.API.WebhookBase`: `api.public.external_url` where `api.public`
 	// is set, `api.external_url` otherwise), or nil when it cannot say.
@@ -845,6 +850,10 @@ func Register(r *Registry, s Sources) {
 	// this node reaches the store that keeps it.
 	if s.HomeBoards != nil {
 		r.Register("home_board", Everybody(), s.homeBoard)
+	}
+	// AND THE ASKER'S ASK CREWLET INSTRUCTIONS, with the company's beside them.
+	if s.Instructions != nil {
+		r.Register("assistant_instructions", Everybody(), s.assistantInstructions)
 	}
 	if s.Catalogue != nil {
 		r.Register("llm_models", Requires(iam.GrantAdmin), s.llmModels)

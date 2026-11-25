@@ -263,6 +263,8 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		AtlasRefresh: builtin.AtlasRefreshDeps{Sources: stillSources{}, Actor: builtin.PrincipalActor},
 		// And a person's Home board, on the coordination twin.
 		HomeBoard: builtin.HomeBoardDeps{Boards: coordmem.NewFleet(), Actor: builtin.PrincipalActor},
+		// And their own Ask Crewlet instructions.
+		Instructions: builtin.InstructionsDeps{Store: coordmem.NewFleet(), Actor: builtin.PrincipalActor},
 		// The code tools, over the seat registry's seams, read as the
 		// request's principal.
 		Code: builtin.CodeDeps{Code: full.Code.Code, Writer: full.Code.Writer, Holder: full.Code.Holder,

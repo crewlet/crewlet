@@ -400,12 +400,14 @@ providers:
 assistant:
   model: sonnet                         # a providers.llm key; absent: off
   token_budget: { day: 200000 }         # per person, optional
+  instructions: { length: brief }       # how it writes for everybody, optional
 ```
 
 | Field | Default | Meaning |
 |---|---|---|
 | `model` | none | The `providers.llm` entry Ask Crewlet runs on. Absent, it is off. |
 | `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's. |
+| `instructions` | none | How Ask Crewlet writes for everybody: `length` (`brief`, `balanced`, `detailed`), `format` (`lead`, `lists`, `tldr`) and `text`, at most 1000 characters and never a credential. Each person's own win over them. They shape tone, length and layout only ([Instructions](../guides/assistant.md#instructions)). |
 
 Nothing else about a turn is a setting. A turn takes at most 40 model rounds
 and 20 minutes, a proposed change waits 15 minutes for its owner's approval,
