@@ -52,7 +52,10 @@ type ToolSurface struct {
 // once, and the dashboard's copy is held against it (`INTEGRATION_TOOLS`,
 // `TestTheDashboardGroupsSurfacesAsTheEngineDoes`).
 type Tool struct {
-	Key      string
+	Key string
+	// Name is how a person names the tool: its page's heading, and a link's
+	// text for its page.
+	Name     string
 	Surfaces []ToolSurface
 }
 
@@ -61,9 +64,9 @@ type Tool struct {
 // Every surface in [Kinds] belongs to exactly one tool, and so does the Forge
 // relay; `TestEverySurfaceBelongsToOneTool` holds both.
 var Tools = []Tool{
-	{Key: "slack", Surfaces: []ToolSurface{{string(KindSlack), "Slack"}}},
-	{Key: "mattermost", Surfaces: []ToolSurface{{string(KindMattermost), "Mattermost"}}},
-	{Key: "atlassian", Surfaces: []ToolSurface{
+	{Key: "slack", Name: "Slack", Surfaces: []ToolSurface{{string(KindSlack), "Slack"}}},
+	{Key: "mattermost", Name: "Mattermost", Surfaces: []ToolSurface{{string(KindMattermost), "Mattermost"}}},
+	{Key: "atlassian", Name: "Atlassian", Surfaces: []ToolSurface{
 		// THE ORGANIZATION FIRST: it is where an agent's account is
 		// created, and the two products are what that account works in.
 		{string(KindAtlassian), "Organization"},
@@ -71,25 +74,25 @@ var Tools = []Tool{
 		{string(KindJira), "Jira"},
 		{"forge", "Forge relay"},
 	}},
-	{Key: "github", Surfaces: []ToolSurface{{string(KindGitHub), "GitHub"}}},
-	{Key: "gitlab", Surfaces: []ToolSurface{{string(KindGitLab), "GitLab"}}},
-	{Key: "datadog", Surfaces: []ToolSurface{{string(KindDatadog), "Datadog"}}},
-	{Key: "cloudflare", Surfaces: []ToolSurface{{string(KindCloudflare), "Cloudflare"}}},
-	{Key: "expo", Surfaces: []ToolSurface{{string(KindExpo), "Expo"}}},
-	{Key: "digitalocean", Surfaces: []ToolSurface{{string(KindDigitalOcean), "DigitalOcean"}}},
-	{Key: "scaleway", Surfaces: []ToolSurface{{string(KindScaleway), "Scaleway"}}},
-	{Key: "aws", Surfaces: []ToolSurface{{string(KindAWS), "AWS"}}},
-	{Key: "google_cloud", Surfaces: []ToolSurface{{string(KindGoogleCloud), "Google Cloud"}}},
-	{Key: "ssh", Surfaces: []ToolSurface{{string(KindSSH), "SSH"}}},
-	{Key: "meta_ads", Surfaces: []ToolSurface{{string(KindMetaAds), "Meta Ads Manager"}}},
-	{Key: "app_store_connect", Surfaces: []ToolSurface{{string(KindAppStoreConnect), "App Store Connect"}}},
-	{Key: "apple_ads", Surfaces: []ToolSurface{{string(KindAppleAds), "Apple Ads"}}},
-	{Key: "google_analytics", Surfaces: []ToolSurface{{string(KindGoogleAnalytics), "Google Analytics"}}},
-	{Key: "admob", Surfaces: []ToolSurface{{string(KindAdMob), "AdMob"}}},
-	{Key: "adsense", Surfaces: []ToolSurface{{string(KindAdSense), "AdSense"}}},
-	{Key: "google_ads", Surfaces: []ToolSurface{{string(KindGoogleAds), "Google Ads"}}},
-	{Key: "search_console", Surfaces: []ToolSurface{{string(KindSearchConsole), "Search Console"}}},
-	{Key: "google_play", Surfaces: []ToolSurface{{string(KindGooglePlay), "Google Play"}}},
+	{Key: "github", Name: "GitHub", Surfaces: []ToolSurface{{string(KindGitHub), "GitHub"}}},
+	{Key: "gitlab", Name: "GitLab", Surfaces: []ToolSurface{{string(KindGitLab), "GitLab"}}},
+	{Key: "datadog", Name: "Datadog", Surfaces: []ToolSurface{{string(KindDatadog), "Datadog"}}},
+	{Key: "cloudflare", Name: "Cloudflare", Surfaces: []ToolSurface{{string(KindCloudflare), "Cloudflare"}}},
+	{Key: "expo", Name: "Expo", Surfaces: []ToolSurface{{string(KindExpo), "Expo"}}},
+	{Key: "digitalocean", Name: "DigitalOcean", Surfaces: []ToolSurface{{string(KindDigitalOcean), "DigitalOcean"}}},
+	{Key: "scaleway", Name: "Scaleway", Surfaces: []ToolSurface{{string(KindScaleway), "Scaleway"}}},
+	{Key: "aws", Name: "AWS", Surfaces: []ToolSurface{{string(KindAWS), "AWS"}}},
+	{Key: "google_cloud", Name: "Google Cloud", Surfaces: []ToolSurface{{string(KindGoogleCloud), "Google Cloud"}}},
+	{Key: "ssh", Name: "SSH", Surfaces: []ToolSurface{{string(KindSSH), "SSH"}}},
+	{Key: "meta_ads", Name: "Meta Ads Manager", Surfaces: []ToolSurface{{string(KindMetaAds), "Meta Ads Manager"}}},
+	{Key: "app_store_connect", Name: "App Store Connect", Surfaces: []ToolSurface{{string(KindAppStoreConnect), "App Store Connect"}}},
+	{Key: "apple_ads", Name: "Apple Ads", Surfaces: []ToolSurface{{string(KindAppleAds), "Apple Ads"}}},
+	{Key: "google_analytics", Name: "Google Analytics", Surfaces: []ToolSurface{{string(KindGoogleAnalytics), "Google Analytics"}}},
+	{Key: "admob", Name: "AdMob", Surfaces: []ToolSurface{{string(KindAdMob), "AdMob"}}},
+	{Key: "adsense", Name: "AdSense", Surfaces: []ToolSurface{{string(KindAdSense), "AdSense"}}},
+	{Key: "google_ads", Name: "Google Ads", Surfaces: []ToolSurface{{string(KindGoogleAds), "Google Ads"}}},
+	{Key: "search_console", Name: "Search Console", Surfaces: []ToolSurface{{string(KindSearchConsole), "Search Console"}}},
+	{Key: "google_play", Name: "Google Play", Surfaces: []ToolSurface{{string(KindGooglePlay), "Google Play"}}},
 }
 
 // ToolState is a tool's standing in the one question a person asks of it: does

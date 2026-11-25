@@ -18,7 +18,9 @@
 // # A link is the engine's and is decided for the person
 //
 // An open in app card's address comes from this package's link table, held
-// against the dashboard's own route table, never from a URL a model wrote. Its
+// against the dashboard's own route table, never from a URL a model wrote, and
+// so do its words: the screen's own, or a record's name as its read answered,
+// so a card never names a place its link does not open. Its
 // `permitted` is asked for the person, by sending the record's own read
 // through their grant: an answer is permitted, while a refusal and an absence
 // are both "not permitted" and never told apart, because the read itself does

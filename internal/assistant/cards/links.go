@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -33,14 +34,16 @@ type screen struct {
 	// is how the address spells it, and "pm" or a UUID on a button names
 	// nothing a person knows.
 	noun string
+	// title, where set, is the link's text from its parameters when nothing
+	// names it: an integration's page by the integration's name.
+	title func(params map[string]string) string
 	// id, where set, is the grammar this screen's `{id}` is held to in place
 	// of a uuid: a task is named by its key as well as its id.
 	id func() *regexp.Regexp
 }
 
 // links is the link table: every screen the assistant may link to, by the
-// dashboard's own screen name (app/routes.ts), at the address its router
-// resolves.
+// dashboard's own screen name (app/routes.ts), at the address its router resolves.
 //
 // HELD AGAINST THE ROUTER, twice: the dashboard's printed-address suite
 // (app/links.test.ts) resolves every address below with its placeholders
@@ -49,73 +52,118 @@ type screen struct {
 // moved there fails here.
 //
 // The placeholders are the router fixture's own (`{KEY}`, `{id}`, `{handle}`,
-// `{CONTAINER}`, `{turn_id}`), so one table fills them on both sides.
-var links = map[string]screen{
-	"home":             {address: "#/home", label: "Home"},
-	"inbox":            {address: "#/inbox", app: iam.GrantWorklet, label: "Inbox"},
-	"me":               {address: "#/me", app: iam.GrantWorklet, label: "My work"},
-	"worklet-projects": {address: "#/worklet", app: iam.GrantWorklet, label: "Projects"},
-	"worklet-tasks":    {address: "#/worklet/tasks", app: iam.GrantWorklet, label: "Tasks"},
-	"worklet-search":   {address: "#/worklet/search", app: iam.GrantWorklet, label: "Search"},
-	"project":          {address: "#/worklet/{KEY}", app: iam.GrantWorklet},
-	"item":             {address: "#/worklet/{id}", app: iam.GrantWorklet, id: taskName},
-	"structure":        {address: "#/company/org", label: "Org chart"},
-	"structure-table":  {address: "#/company/org/table", label: "Table"},
-	"principles":       {address: "#/company/principles", label: "Principles"},
-	"seat":             {address: "#/company/org/seats/{handle}", noun: "seat"},
-	"budgets":          {address: "#/company/budgets", label: "Budgets"},
-	"schedules":        {address: "#/company/schedules", label: "Schedules"},
-	"integrations":     {address: "#/company/integrations", app: iam.GrantAdmin, label: "Integrations"},
-	"live":             {address: "#/live", label: "Now running"},
-	"turns":            {address: "#/live/turns", label: "Turns"},
-	"turn":             {address: "#/live/turns/{id}", noun: "turn"},
-	"executors":        {address: "#/live/executors/{turn_id}", noun: "executor"},
-	"doclet":           {address: "#/doclet", app: iam.GrantDoclet, label: "Doclet"},
-	"container":        {address: "#/doclet/{CONTAINER}", app: iam.GrantDoclet},
-	"page":             {address: "#/doclet/pages/{id}", app: iam.GrantDoclet, noun: "page"},
-	"chatlet":          {address: "#/chatlet/{id}", app: iam.GrantChatlet, noun: "room"},
-	"chatlet-activity": {address: "#/chatlet/activity", app: iam.GrantChatlet, label: "Activity"},
-	"chatlet-search":   {address: "#/chatlet/search", app: iam.GrantChatlet, label: "Search chat"},
-	"artifacts":        {address: "#/artifacts", label: "Artifacts"},
-	"artifact":         {address: "#/artifacts/{id}", noun: "artifact"},
-	"spend":            {address: "#/settings/spend", label: "Token spend"},
-	"spend-tasks":      {address: "#/settings/spend/tasks", app: iam.GrantWorklet, label: "Expensive tasks"},
-	"nodes":            {address: "#/settings/nodes", app: iam.GrantAdmin, label: "Nodes"},
-	"backups":          {address: "#/settings/backups", app: iam.GrantAdmin, label: "Backups"},
-	"config":           {address: "#/settings/config/revisions", app: iam.GrantAdmin, label: "Configuration"},
-	// THE ATLAS, by the keys its screens read on arrival: an entry's page by
-	// its id, and the map with the frame's peek open on an entry (the
-	// frame's `peek=` key, `app/frame/peekAddress.ts`), lit along its trace
-	// where the answer was one (the map's `trace=` key). Both map links read
-	// "Show on the map", which is what they do.
-	"atlas":       {address: "#/company/atlas", app: iam.GrantAtlas, label: "Atlas"},
-	"atlas-entry": {address: "#/company/atlas/{id}", app: iam.GrantAtlas, noun: "entry"},
-	"atlas-entry-on-map": {address: "#/company/atlas", query: "peek=atlas:{id}",
-		app: iam.GrantAtlas, label: "Show on the map"},
-	"atlas-trace-on-map": {address: "#/company/atlas", query: "peek=atlas:{id}&trace={direction}",
-		app: iam.GrantAtlas, label: "Show on the map"},
-}
+// `{CONTAINER}`, `{turn_id}`, `{kind}`), so one table fills them on both sides.
+// Built at first use, so a push's hook pays nothing for it at init.
+var links = sync.OnceValue(func() map[string]screen {
+	return map[string]screen{
+		"home":             {address: "#/home", label: "Home"},
+		"inbox":            {address: "#/inbox", app: iam.GrantWorklet, label: "Inbox"},
+		"me":               {address: "#/me", app: iam.GrantWorklet, label: "My work"},
+		"worklet-projects": {address: "#/worklet", app: iam.GrantWorklet, label: "Projects"},
+		"worklet-tasks":    {address: "#/worklet/tasks", app: iam.GrantWorklet, label: "Tasks"},
+		"worklet-search":   {address: "#/worklet/search", app: iam.GrantWorklet, label: "Search"},
+		"project":          {address: "#/worklet/{KEY}", app: iam.GrantWorklet},
+		"item":             {address: "#/worklet/{id}", app: iam.GrantWorklet, id: taskName},
+		"structure":        {address: "#/company/org", label: "Org chart"},
+		"structure-table":  {address: "#/company/org/table", label: "Table"},
+		"principles":       {address: "#/company/principles", label: "Principles"},
+		"seat":             {address: "#/company/org/seats/{handle}", noun: "seat"},
+		"budgets":          {address: "#/company/budgets", label: "Budgets"},
+		"schedules":        {address: "#/company/schedules", label: "Schedules"},
+		"integrations":     {address: "#/company/integrations", app: iam.GrantAdmin, label: "Integrations"},
+		"integration": {address: "#/company/integrations/{kind}", app: iam.GrantAdmin,
+			title: func(p map[string]string) string { return "Open " + integrationName(p["kind"]) + " setup" }},
+		"live":             {address: "#/live", label: "Now running"},
+		"turns":            {address: "#/live/turns", label: "Turns"},
+		"turn":             {address: "#/live/turns/{id}", noun: "turn"},
+		"executors":        {address: "#/live/executors/{turn_id}", noun: "executor"},
+		"doclet":           {address: "#/doclet", app: iam.GrantDoclet, label: "Doclet"},
+		"container":        {address: "#/doclet/{CONTAINER}", app: iam.GrantDoclet},
+		"page":             {address: "#/doclet/pages/{id}", app: iam.GrantDoclet, noun: "page"},
+		"chatlet":          {address: "#/chatlet/{id}", app: iam.GrantChatlet, noun: "room"},
+		"chatlet-activity": {address: "#/chatlet/activity", app: iam.GrantChatlet, label: "Activity"},
+		"chatlet-search":   {address: "#/chatlet/search", app: iam.GrantChatlet, label: "Search chat"},
+		"artifacts":        {address: "#/artifacts", label: "Artifacts"},
+		"artifact":         {address: "#/artifacts/{id}", noun: "artifact"},
+		"spend":            {address: "#/settings/spend", label: "Token spend"},
+		"spend-tasks":      {address: "#/settings/spend/tasks", app: iam.GrantWorklet, label: "Expensive tasks"},
+		"nodes":            {address: "#/settings/nodes", app: iam.GrantAdmin, label: "Nodes"},
+		"backups":          {address: "#/settings/backups", app: iam.GrantAdmin, label: "Backups"},
+		"config":           {address: "#/settings/config/revisions", app: iam.GrantAdmin, label: "Configuration"},
+		// THE ATLAS, by the keys its screens read on arrival: an entry's page by
+		// its id, and the map with the frame's peek open on an entry (the
+		// frame's `peek=` key, `app/frame/peekAddress.ts`), lit along its trace
+		// where the answer was one (the map's `trace=` key). Both map links read
+		// "Show on the map", which is what they do.
+		"atlas":       {address: "#/company/atlas", app: iam.GrantAtlas, label: "Atlas"},
+		"atlas-entry": {address: "#/company/atlas/{id}", app: iam.GrantAtlas, noun: "entry"},
+		"atlas-entry-on-map": {address: "#/company/atlas", query: "peek=atlas:{id}",
+			app: iam.GrantAtlas, label: "Show on the map"},
+		"atlas-trace-on-map": {address: "#/company/atlas", query: "peek=atlas:{id}&trace={direction}",
+			app: iam.GrantAtlas, label: "Show on the map"},
+	}
+})
 
 // placeholder is a link parameter's placeholder and the grammar its value is
 // held to. The grammar is what keeps a value from naming another screen: a task
 // key passed where a project key goes would resolve to the task.
 type placeholder struct {
 	param string
-	// value compiles its grammar at first use ([lazyGrammar]).
-	value func() *regexp.Regexp
+	// value is the grammar, a pattern compiled at first use ([lazyGrammar])
+	// or a set the engine owns ([integrationKeys]).
+	value func() paramGrammar
 }
 
-// placeholders are every placeholder the link table writes.
-var placeholders = map[string]placeholder{
-	"{KEY}":       {"key", lazyGrammar(`^[A-Z][A-Z0-9]{0,15}$`)},
-	"{CONTAINER}": {"key", lazyGrammar(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)},
-	"{id}":        {"id", uuidName},
-	"{turn_id}":   {"id", uuidName},
-	"{handle}":    {"handle", lazyGrammar(`^[a-z0-9][a-z0-9_-]{0,63}$`)},
-	// A TRACE'S DIRECTION, as the atlas walks one: up to what depends on an
-	// entry, down to what it depends on.
-	"{direction}": {"direction", lazyGrammar(`^(?:up|down)$`)},
+// paramGrammar is what a parameter's value is held to; a *regexp.Regexp is one.
+type paramGrammar interface {
+	MatchString(string) bool
+	String() string
 }
+
+// pattern is a placeholder's pattern as its grammar.
+func pattern(compiled func() *regexp.Regexp) func() paramGrammar {
+	return func() paramGrammar { return compiled() }
+}
+
+// integrationKeys holds `{kind}` to the integrations this build serves, by the
+// key their page is addressed by (integration.Tools), so a link never opens a
+// page saying no such integration exists.
+type integrationKeys struct{}
+
+func (integrationKeys) MatchString(v string) bool { return integrationName(v) != "" }
+
+func (integrationKeys) String() string {
+	keys := make([]string, 0, len(integration.Tools))
+	for _, t := range integration.Tools {
+		keys = append(keys, t.Key)
+	}
+	return "one of " + words.Or(keys)
+}
+
+// integrationName is the name of the integration whose page key is key, ""
+// for none.
+func integrationName(key string) string {
+	i := slices.IndexFunc(integration.Tools, func(t integration.Tool) bool { return t.Key == key })
+	if i < 0 {
+		return ""
+	}
+	return integration.Tools[i].Name
+}
+
+// placeholders are every placeholder the link table writes, built at first use.
+var placeholders = sync.OnceValue(func() map[string]placeholder {
+	return map[string]placeholder{
+		"{KEY}":       {"key", pattern(lazyGrammar(`^[A-Z][A-Z0-9]{0,15}$`))},
+		"{CONTAINER}": {"key", pattern(lazyGrammar(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`))},
+		"{id}":        {"id", pattern(uuidName)},
+		"{turn_id}":   {"id", pattern(uuidName)},
+		"{handle}":    {"handle", pattern(lazyGrammar(`^[a-z0-9][a-z0-9_-]{0,63}$`))},
+		// A TRACE'S DIRECTION, as the atlas walks one: up to what depends on an
+		// entry, down to what it depends on.
+		"{direction}": {"direction", pattern(lazyGrammar(`^(?:up|down)$`))},
+		"{kind}":      {"kind", func() paramGrammar { return integrationKeys{} }},
+	}
+})
 
 // queryPair is one pair of a screen's query template: its key, and its value
 // as the literal before and after one placeholder.
@@ -140,7 +188,7 @@ func queryPairs(template string) []queryPair {
 			panic(fmt.Sprintf("cards: the query template %q holds no placeholder in %q", template, pair))
 		}
 		placeholder := value[open : close+1]
-		if _, ok := placeholders[placeholder]; !ok {
+		if _, ok := placeholders()[placeholder]; !ok {
 			panic(fmt.Sprintf("cards: the query template %q names %q, which the table does not hold",
 				template, placeholder))
 		}
@@ -168,12 +216,12 @@ var (
 
 // Screens are every screen name the link table holds, sorted: the closed set
 // open_in_app's `screen` argument takes.
-func Screens() []string { return slices.Sorted(maps.Keys(links)) }
+func Screens() []string { return slices.Sorted(maps.Keys(links())) }
 
 // ScreenApp is the app a person needs to open screen at all, "" for one every
 // person reads, and false for a screen the table does not hold.
 func ScreenApp(name string) (iam.Grant, bool) {
-	s, ok := links[name]
+	s, ok := links()[name]
 	return s.app, ok
 }
 
@@ -181,13 +229,13 @@ func ScreenApp(name string) (iam.Grant, bool) {
 // path's, then its query's.
 func ScreenParams(name string) []string {
 	var out []string
-	for _, segment := range strings.Split(links[name].address, "/") {
-		if p, ok := placeholders[segment]; ok {
+	for _, segment := range strings.Split(links()[name].address, "/") {
+		if p, ok := placeholders()[segment]; ok {
 			out = append(out, p.param)
 		}
 	}
-	for _, pair := range queryPairs(links[name].query) {
-		out = append(out, placeholders[pair.placeholder].param)
+	for _, pair := range queryPairs(links()[name].query) {
+		out = append(out, placeholders()[pair.placeholder].param)
 	}
 	return out
 }
@@ -197,10 +245,11 @@ func ScreenParams(name string) []string {
 var ErrNoLink = errors.New("cards: no such link")
 
 // Link is the link to screen with params, at the address the dashboard's
-// router resolves, labelled label (the screen's own name, or the first
-// parameter's value, where empty).
+// router resolves, labelled label: a record's own name as the engine read it,
+// or, where empty, the screen's own words. Never text a model wrote, so a
+// card cannot name a place its link does not open.
 func Link(name string, params map[string]string, label string) (wire.Link, error) {
-	s, ok := links[name]
+	s, ok := links()[name]
 	if !ok {
 		return wire.Link{}, fmt.Errorf("%w: the screen %q is not one of %s", ErrNoLink, name,
 			words.Or(Screens()))
@@ -209,17 +258,17 @@ func Link(name string, params map[string]string, label string) (wire.Link, error
 	segments := strings.Split(s.address, "/")
 	first := ""
 	for i, segment := range segments {
-		p, ok := placeholders[segment]
+		p, ok := placeholders()[segment]
 		if !ok {
 			continue
 		}
-		v, grammar := params[p.param], p.value()
+		v, held := params[p.param], p.value()
 		if segment == "{id}" && s.id != nil {
-			grammar = s.id()
+			held = s.id()
 		}
-		if !grammar.MatchString(v) {
+		if !held.MatchString(v) {
 			return wire.Link{}, fmt.Errorf("%w: %s takes %s as %s, and %q is not one",
-				ErrNoLink, name, p.param, grammar, v)
+				ErrNoLink, name, p.param, held, v)
 		}
 		segments[i] = url.PathEscape(v)
 		used[p.param] = true
@@ -229,7 +278,7 @@ func Link(name string, params map[string]string, label string) (wire.Link, error
 	}
 	query := url.Values{}
 	for _, pair := range queryPairs(s.query) {
-		p := placeholders[pair.placeholder]
+		p := placeholders()[pair.placeholder]
 		v := params[p.param]
 		if !p.value().MatchString(v) {
 			return wire.Link{}, fmt.Errorf("%w: %s takes %s as %s, and %q is not one",
@@ -245,6 +294,8 @@ func Link(name string, params map[string]string, label string) (wire.Link, error
 	}
 	switch {
 	case label != "":
+	case s.title != nil:
+		label = s.title(params)
 	case s.noun != "":
 		label = "Open " + s.noun
 	case s.label != "":
@@ -275,16 +326,16 @@ func ScreenOf(address string) (string, map[string]string, bool) {
 	path, rawQuery, _ := strings.Cut(address, "?")
 	segments := strings.Split(path, "/")
 	for _, name := range Screens() {
-		template := strings.Split(links[name].address, "/")
+		template := strings.Split(links()[name].address, "/")
 		if len(template) != len(segments) {
 			continue
 		}
-		params, matched := queryParams(links[name].query, rawQuery)
+		params, matched := queryParams(links()[name].query, rawQuery)
 		if !matched {
 			continue
 		}
 		for i, part := range template {
-			p, placeholder := placeholders[part]
+			p, placeholder := placeholders()[part]
 			if !placeholder {
 				if part != segments[i] {
 					matched = false
@@ -293,11 +344,11 @@ func ScreenOf(address string) (string, map[string]string, bool) {
 				continue
 			}
 			value, err := url.PathUnescape(segments[i])
-			grammar := p.value()
-			if part == "{id}" && links[name].id != nil {
-				grammar = links[name].id()
+			held := p.value()
+			if part == "{id}" && links()[name].id != nil {
+				held = links()[name].id()
 			}
-			if err != nil || !grammar.MatchString(value) {
+			if err != nil || !held.MatchString(value) {
 				matched = false
 				break
 			}
@@ -335,7 +386,7 @@ func queryParams(template, rawQuery string) (map[string]string, bool) {
 			return nil, false
 		}
 		inner, cut = strings.CutSuffix(inner, pair.after)
-		p := placeholders[pair.placeholder]
+		p := placeholders()[pair.placeholder]
 		if !cut || !p.value().MatchString(inner) {
 			return nil, false
 		}
@@ -347,7 +398,7 @@ func queryParams(template, rawQuery string) (map[string]string, bool) {
 // checkOpen reports a spec's link naming a screen the table does not hold, or
 // parameters that screen does not take.
 func checkOpen(o *Open) error {
-	if _, ok := links[o.Screen]; !ok {
+	if _, ok := links()[o.Screen]; !ok {
 		return fmt.Errorf("%w: the screen %q is not one of %s", ErrNoLink, o.Screen,
 			words.Or(Screens()))
 	}
@@ -404,7 +455,7 @@ func OpenInApp(link wire.Link, permitted bool) wire.Card {
 // before any record is asked about: the screen's app, held through
 // [iam.Expand] so an administrator opens every app's screens.
 func MayOpen(name string, p iam.Principal) bool {
-	s, ok := links[name]
+	s, ok := links()[name]
 	if !ok {
 		return false
 	}

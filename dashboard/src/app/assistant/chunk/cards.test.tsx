@@ -7,7 +7,7 @@
  * drawn without a count.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type {
   AssistantCardEvent,
@@ -651,4 +651,67 @@ test("a brief's open whose address is not this dashboard's draws no press", () =
   });
   expect(screen.getByText("A row")).toBeDefined();
   expect(screen.queryByRole("button", { name: "Open ENG-1" })).toBeNull();
+});
+
+/** Draws Google Cloud's open in app card on the page `at`, pressed or not. */
+function drawOpen(at: string, opened: boolean, handlers: CardHandlers = on) {
+  window.location.hash = at;
+  return render(
+    <Router>
+      <CardBlock
+        event={{
+          card_id: "open-1",
+          message_id: "m",
+          card: {
+            type: "open_in_app",
+            open_in_app: {
+              link: {
+                label: "Open Google Cloud setup",
+                screen: "integration",
+                href: "#/company/integrations/google_cloud",
+              },
+              permitted: true,
+            },
+          },
+        }}
+        local={undefined}
+        on={handlers}
+        opened={opened}
+      />
+    </Router>,
+  );
+}
+
+// OPEN HERE IS NEVER A PRESS THAT CHANGES NOTHING: on another page it goes
+// there and names the card it was pressed on, so the card can say it opened.
+// Mutation: drop the card id from the press and the call no longer matches.
+test("Open here on another page goes there, naming the card it was pressed on", () => {
+  const openHere = vi.fn();
+  drawOpen("#/company/integrations", false, { ...on, openHere });
+  expect(screen.getByText("Integrations › Google Cloud")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Open here" }));
+  expect(openHere).toHaveBeenCalledWith(
+    { path: ["company", "integrations", "google_cloud"], query: {} },
+    "open-1",
+  );
+});
+
+// A CARD WHOSE PAGE IS ALREADY SHOWING says so, with no button that would
+// change nothing. Mutation: draw it ready and Open here is back.
+test("a card whose page is already showing says it is open, with no Open here", () => {
+  drawOpen("#/company/integrations/google_cloud", false);
+  expect(screen.queryByRole("button", { name: "Open here" })).toBeNull();
+  expect(screen.getByText("Already open beside this conversation.")).toBeDefined();
+});
+
+// A PRESSED CARD READS OPENED WHILE ITS PAGE SHOWS, and offers Open here again
+// once the reader has moved on.
+test("a pressed card reads Opened on its page and is ready again elsewhere", async () => {
+  drawOpen("#/company/integrations/google_cloud", true);
+  expect(screen.getByText("Opened beside this conversation.")).toBeDefined();
+  await act(async () => {
+    window.location.hash = "#/inbox";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  expect(await screen.findByRole("button", { name: "Open here" })).toBeDefined();
 });
