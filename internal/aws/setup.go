@@ -59,7 +59,7 @@ func DefaultSlug(company string) string {
 // ONE PASS, IN ORDER: the slug and the home Region are entered and saved,
 // which mints the certificate authority; the CloudShell block creates the
 // stack holding its certificate and prints the stack output; the output is
-// pasted and tested. So the output is required only once the CA is held.
+// pasted and tested. So the output is printed by the authority's row.
 func Requirements(in *config.AWS, company string, resolve func(string) (string, bool)) []setup.Requirement {
 	var prov config.AWSProvisioning
 	var enabled bool
@@ -77,7 +77,7 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 	}
 	reqs := []setup.Requirement{
 		{
-			Field: "slug", Label: "Short name", Kind: setup.KindID,
+			Field: "slug", Label: slugLabel, Kind: setup.KindID,
 			ConfigPath: "integrations.aws.provisioning.slug", Required: true, Connect: true,
 			Default: DefaultSlug(company), Format: "up to 20 lowercase letters, digits and hyphens",
 			Hint:   vendortext.Plain("Names the stack and every role Crewlet creates. It cannot change later."),
@@ -85,7 +85,7 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			Blocks: integration.FindingCredentialMissing,
 		},
 		{
-			Field: "home_region", Label: "Home Region", Kind: setup.KindChoice,
+			Field: "home_region", Label: regionLabel, Kind: setup.KindChoice,
 			ConfigPath: "integrations.aws.provisioning.home_region", Required: true, Connect: true,
 			Choices: choices,
 			Hint:    vendortext.Plain("Where the Crewlet stack and its sign-in live."),
@@ -93,7 +93,7 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			Blocks:  integration.FindingCredentialMissing,
 		},
 		{
-			Field: "certificate_authority", Label: "Sign-in certificate", Kind: setup.KindSecret,
+			Field: "certificate_authority", Label: certificateLabel, Kind: setup.KindSecret,
 			ConfigPath: "integrations.aws.provisioning.certificate_authority",
 			SecretName: CertificateAuthoritySecret, Required: true, Connect: true,
 			// MINTABLE, because AWS needs only its certificate: the engine
@@ -102,21 +102,23 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			Mintable: true, Shape: setup.ShapeCertificateAuthority,
 			Hint: vendortext.Of(vendortext.W("Run this block in "),
 				vendortext.W("CloudShell in the home Region").At(CloudShellURL), vendortext.W(".")),
-			More: vendortext.Plain("Crewlet made this certificate authority when you saved, and sealed it as " +
+			More: vendortext.Plain("Copy it with its Copy button, as a hand selection can drop a line. Crewlet made " +
+				"this certificate authority when you saved, and sealed it as " +
 				CertificateAuthoritySecret + ". The stack trusts only its certificate; its key is never shown " +
 				"or exported."),
 			CheckNote: "It is tested with the stack output.",
 			Blocks:    integration.FindingCredentialMissing,
 		},
 		{
-			Field: "connection", Label: "Stack output", Kind: setup.KindID,
-			ConfigPath: "integrations.aws.provisioning.connection", Required: caHeld, Connect: true,
+			Field: "connection", Label: outputLabel, Kind: setup.KindID,
+			ConfigPath: "integrations.aws.provisioning.connection", Required: true, Connect: true,
+			PrintedBy: "certificate_authority",
 			Checkable: true, CheckWith: []string{"slug", "home_region", "certificate_authority", "atlas_read"},
-			Format: "five ARNs joined by commas, or seven with the Atlas reader",
+			Format: outputFormat,
 			Hint:   vendortext.Plain("The last line the CloudShell block prints."),
 			More: vendortext.Of(vendortext.W("It is also the "+config.AWSConnectionOutput+" value on the stack's "),
 				vendortext.UI("Outputs"), vendortext.W(" tab, in your "),
-				vendortext.UI("CloudFormation", "Stacks").At("https://console.aws.amazon.com/cloudformation/home"),
+				vendortext.UI("CloudFormation", "Stacks").At(stacksURL),
 				vendortext.W(". Test checks the sign-in, every Crewlet policy, the identity split and the role quota. "+
 					"Paste it again after the block changes what the stack holds.")),
 			Blocks: integration.FindingApprovalRequired,
@@ -185,6 +187,9 @@ func regionsMore(prov config.AWSProvisioning) vendortext.Text {
 // CloudShellURL is CloudShell in the home Region; the form fills {home_region}.
 const CloudShellURL = "https://{home_region}.console.aws.amazon.com/cloudshell/home?region={home_region}"
 
+// stacksURL is CloudFormation's stack list.
+const stacksURL = "https://console.aws.amazon.com/cloudformation/home"
+
 // cloudShellView is the CloudShell block for the held certificate authority:
 // the stack rendered with its certificate, never its key, for the slug, home
 // Region and Regions saved. Nil until the slug and the home Region are. A
@@ -202,6 +207,7 @@ func cloudShellView(prov config.AWSProvisioning, bundle string) *setup.PublicVie
 	if err != nil {
 		return nil
 	}
+	view.DrawnFrom = []string{"slug", "home_region", "atlas_read"}
 	return view
 }
 
@@ -222,18 +228,77 @@ func cloudShellText(company Company, home string, regions []string, atlas bool, 
 	return note + CloudShellBlock(tpl, home, company), nil
 }
 
+// The form's labels and the output's format, which the steps say as the form does.
+const (
+	slugLabel        = "Short name"
+	regionLabel      = "Home Region"
+	certificateLabel = "Sign-in certificate"
+	outputLabel      = "Stack output"
+	outputFormat     = "five ARNs joined by commas, or seven with the Atlas reader"
+)
+
+// shellPlace is where the block runs.
+const shellPlace = "CloudShell"
+
 // Guide is what the connect form says around its fields: one pass, in order,
-// from the name and Region that mint the certificate authority to the stack
-// output that proves the stack holds it.
+// from the name and Region that mint the certificate authority to an agent
+// turned on, each step's place, what shows it worked, and what people hit.
 func Guide() setup.Guide {
+	w, ui := vendortext.W, vendortext.UI
 	return setup.Guide{
 		Summary: "Crewlet gives each agent its own IAM role in your account and signs it in for 15 minutes at " +
 			"a time. No access key is stored.",
 		Prepare: []setup.Step{
-			{Text: vendortext.Plain("Choose a short name and a home Region, then save."), Yields: "home_region"},
-			{Text: vendortext.Of(vendortext.W("Sign in to the account agents will work in, and run the block Crewlet shows in "),
-				vendortext.W("CloudShell in the home Region").At(CloudShellURL), vendortext.W("."))},
-			{Text: vendortext.Plain("Paste the last line the block prints, then test it."), Yields: "connection"},
+			{
+				Title: "Name the stack and its Region", Where: setup.Here,
+				Text: vendortext.Of(w("Enter a "), ui(slugLabel), w(", choose the "), ui(regionLabel),
+					w(", then press "), ui("Connect"), w(".")),
+				Result: vendortext.Of(w("Crewlet makes its certificate authority, and "), ui(certificateLabel),
+					w(" shows the CloudShell block with a "), ui("Copy"), w(" button.")),
+				Yields: "home_region",
+			},
+			{
+				Title: "Run the block in CloudShell", Where: shellPlace,
+				Text: vendortext.Of(w("Copy the block whole with that button, sign in to the account agents will "+
+					"work in as an administrator, open "), w("CloudShell in the home Region").At(CloudShellURL),
+					w(", paste it and press Enter. It is safe to run again.")),
+				Result: vendortext.Plain("It creates the stack crewlet-<name> and prints its output last: " +
+					outputFormat + "."),
+				Trouble: []setup.Trouble{
+					{
+						Sign: vendortext.Plain("It prints `Failed to create/update the stack`."),
+						Fix: vendortext.Of(w("The stack's "), ui("Events"), w(" tab in "),
+							ui("CloudFormation", "Stacks").At(stacksURL), w(" says why. Fix that and run the block "+
+								"again, deleting a stack left in ROLLBACK_COMPLETE first.")),
+					},
+					{
+						Sign: vendortext.Plain("You ran it in the wrong account."),
+						Fix: vendortext.Of(w("Delete the crewlet-<name> stack there in "),
+							ui("CloudFormation", "Stacks").At(stacksURL), w(", which removes all it made.")),
+					},
+				},
+			},
+			{
+				Title: "Paste the stack output", Where: setup.Here,
+				Text: vendortext.Of(w("Paste that last line into "), ui(outputLabel), w(", press "),
+					ui("Test connection"), w(", then press "), ui("Save"), w(".")),
+				Result: vendortext.Of(w("The form closes, and within about a minute the status goes to "),
+					ui("Connected"), w(".")),
+				Trouble: []setup.Trouble{{
+					Sign: vendortext.Plain("Crewlet says it is not a Crewlet stack output."),
+					Fix: vendortext.Plain("Paste the whole last line. After the block changes the stack, paste " +
+						"its new last line."),
+				}},
+				Yields: "connection",
+			},
+			{
+				Title: "Turn agents on", Where: setup.Here,
+				Text: vendortext.Of(w("On the "), ui("Agents"), w(" tab, turn "), ui("On"), w(" each agent that "+
+					"should use AWS, choose its "), ui("Access"), w(" level, then press "), ui("Review changes"),
+					w(" and "), ui("Save and sync"), w(".")),
+				Result: vendortext.Plain("Crewlet creates each agent's IAM role, limited by the Crewlet boundary. " +
+					"An agent you do not turn on has no access."),
+			},
 		},
 	}
 }

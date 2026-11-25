@@ -268,6 +268,14 @@ test("a company change says where it lands once, and its state once", () => {
   expect(screen.getAllByText(/saved/i).map((e) => e.textContent)).toEqual(["Saved"]);
 });
 
+// A CHANGE TO THE PERSON'S OWN RECORD IS THEIRS ALONE, never the company's.
+// Mutation: drop `own` from the subtitle and this is red.
+test("a change to the person's own record says it is only for them", () => {
+  draw({ scope: "server", state: "proposed", title: "Save assistant instructions", own: true });
+  screen.getByText("Only for you");
+  expect(screen.queryByText("For the company")).toBeNull();
+});
+
 // THE EXACT REQUEST IS AN ADMINISTRATOR'S: the engine sends it to them alone,
 // and the card draws it after every other row. Mutation: drop the technical
 // rows, or draw a request the engine did not send.

@@ -70,17 +70,20 @@ func askedEventOf(boundary types.SteerBoundary) hookEvent {
 }
 
 // hookTake is what one walk keeps of one asked take: its pair's firing, by the
-// digest of its toolUseID and its event, the two records' handles and the
-// system message's line; and the firing of the first success whose stdout
+// digest of its toolUseID and its event, the two records' handles, the system
+// message's line and the last restart's line as the pair closed; whether a
+// reply of the model followed the pair before any restart (answered) or no
+// later reply can (lost); and the firing of the first success whose stdout
 // names it. Fixed in size, whatever the thread holds (the package doc's "A
 // hook's note, confirmed off its job's main thread").
 type hookTake struct {
-	firing, stdout        [32]byte
-	event, stdoutEvent    hookEvent
-	system, context       chainHandle
-	systemLine            int
-	opened, closed        bool
-	named, namedElsewhere bool
+	firing, stdout          [32]byte
+	event, stdoutEvent      hookEvent
+	system, context         chainHandle
+	systemLine, closedAfter int
+	opened, closed          bool
+	answered, lost          bool
+	named, namedElsewhere   bool
 }
 
 // hookReading reads, in the one walk beside [chainReading], which of the
@@ -94,6 +97,10 @@ type hookReading struct {
 
 	restarts                 threadRestarts
 	lastRestart, lastCleared int
+	// lastBoundary is the main thread's last compaction boundary's line, and
+	// boundary its record.
+	lastBoundary             int
+	boundary                 chainHandle
 	stray, malformed, broken bool
 	torn                     bool
 	err, askErr              error
@@ -139,13 +146,19 @@ func (r *hookReading) line(l threadLine) {
 		return
 	}
 	switch l.Head.Type {
+	case recordSystem:
+		if l.Head.Subtype == subtypeCompactBoundary {
+			r.lastBoundary, r.boundary = l.N, r.chain.last
+		}
 	case recordAssistant:
 		// A REPLY WHOSE REQUEST CLEARED TOOL RESULTS may have cleared a batch's
 		// note with its result, so every batch pair before it is read as
 		// before a restart; a reply that does not read, as one that did.
-		if cleared, err := l.ToolResultsCleared(); cleared || err != nil {
+		cleared, err := l.ToolResultsCleared()
+		if cleared || err != nil {
 			r.lastCleared = l.N
 		}
+		r.answer(l, cleared || err != nil)
 	case recordAttachment:
 		r.attachment(l, r.chain.last)
 	}
@@ -207,7 +220,30 @@ func (r *hookReading) close(firing [32]byte, event hookEvent, h chainHandle) {
 	for i := range r.takes {
 		t := &r.takes[i]
 		if t.opened && !t.closed && t.firing == firing && t.event == event {
-			t.closed, t.context = true, h
+			t.closed, t.context, t.closedAfter = true, h, r.lastRestart
+		}
+	}
+}
+
+// answer is a main reply on line l, cleared whether its request cleared tool
+// results or says so unreadably: it ANSWERS every closed pair no restart came
+// after, the proof its request carried the note as the conversation then
+// stood, but a batch's where it cleared, which loses it for every later
+// reply too. A reply its harness wrote proves nothing.
+func (r *hookReading) answer(l threadLine, cleared bool) {
+	failed, failedErr := l.APIError()
+	model, modelErr := l.Model()
+	if failed || failedErr != nil || modelErr != nil || model == "<synthetic>" {
+		return
+	}
+	for i := range r.takes {
+		t := &r.takes[i]
+		switch {
+		case !t.closed || t.answered || t.lost || t.closedAfter != r.lastRestart:
+		case cleared && t.event == hookEventBatch:
+			t.lost = true
+		default:
+			t.answered = true
 		}
 	}
 }
@@ -255,7 +291,6 @@ func (r *hookReading) receipts(ctx context.Context, ask sandbox.MainThreadAsk) s
 		}
 	}
 	unplaced, unknown := chain.Unknown()
-	anySize := chain.AnySize()
 	stray := r.stray
 	held := make([]bool, len(ask.Takes))
 	var heldAt [hookEventStop + 1]bool
@@ -270,9 +305,14 @@ func (r *hookReading) receipts(ctx context.Context, ask sandbox.MainThreadAsk) s
 		if !t.opened || !t.closed || t.event != event || event == hookEventNone {
 			continue
 		}
+		compacted := t.systemLine < r.lastBoundary
 		switch {
-		case !anySize:
-			why(take.Take, "the thread is not one every size path of the resume reads alike")
+		case compacted && chain.Alike(r.boundary) && t.answered:
+			out.Restarted = append(out.Restarted, take.Take)
+		case compacted && chain.Alike(r.boundary):
+			why(take.Take, "its pair lies before the last compaction, and no reply of the model followed it there")
+		case !chain.Alike(t.system) || !chain.Alike(t.context):
+			why(take.Take, "the thread is not one every size path of the resume reads alike where its pair lies")
 		case chain.Handed(t.system) != handedYes || chain.Handed(t.context) != handedYes:
 			why(take.Take, "the resume does not hand its pair: "+string(chain.Why(t.system))+", "+
 				string(chain.Why(t.context)))

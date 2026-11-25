@@ -201,25 +201,26 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 	}
 	const at = `"timestamp":"2026-01-01T00:00:00.000Z"`
 	for _, h := range []harness{
-		{name: KimiName, walk: Kimi{}, whole: wholeKimi{}, held: kimiNotesHeld, oracle: kimiNotesHeldWhole,
+		{name: KimiName, walk: Kimi{}, whole: wholeKimi{}, held: heldAlone(kimiNotesHeld),
+			oracle:  kimiNotesHeldWhole,
 			members: func(lines []string) []boundedMember { return kimiMembers(lines, nil) },
 			note:    `{"type":"context.append_message","message":{"role":"user","id":"` + KimiNoteID("one") + `"}}`,
 			receipt: `{"type":"usage.record","usageScope":"turn"}`,
 			head:    `{"type":"context.apply_compaction","summary":"at the bound","pad":"`},
-		{name: CopilotName, walk: Copilot{}, whole: wholeCopilot{}, held: copilotNotesHeld,
+		{name: CopilotName, walk: Copilot{}, whole: wholeCopilot{}, held: heldAlone(copilotNotesHeld),
 			oracle: copilotNotesHeldWhole, members: copilotMembers,
 			note: `{"type":"user.message",` + at + `,"data":{"clientTurnId":"` + CopilotClientTurnID("one") +
 				`","delivery":"steering"}}`,
 			receipt: `{"type":"session.usage_record","timestamp":"2026-01-01T00:00:01.000Z","data":{"usage":` +
 				`{"interactionType":"` + copilotMainRequest + `","duration":500}}}`,
 			head: `{"type":"session.compaction_complete","data":{"summaryContent":"at the bound"},"pad":"`},
-		{name: PiName, walk: Pi{}, whole: wholePi{}, held: piNotesHeld, oracle: piNotesHeldWhole,
+		{name: PiName, walk: Pi{}, whole: wholePi{}, held: heldAlone(piNotesHeld), oracle: piNotesHeldWhole,
 			members: piMembers,
 			note:    `{"type":"custom_message","id":"n1","customType":"` + piNoteType + `","details":{"inbox":"one"}}`,
 			receipt: `{"type":"message","id":"a1","parentId":"n1","message":{"role":"assistant",` +
 				`"stopReason":"stop"}}`,
 			head: `{"type":"compaction","id":"c1","parentId":"n1","summary":"at the bound","pad":"`},
-		{name: QwenCodeName, walk: QwenCode{}, whole: wholeQwen{}, held: qwenHeldOf(qwenNotesHeld),
+		{name: QwenCodeName, walk: QwenCode{}, whole: wholeQwen{}, held: qwenHeldOf(qwenNotesAlone),
 			oracle: qwenHeldOf(qwenNotesHeldWhole), members: qwenMembers,
 			note: `{"type":"user","subtype":"mid_turn_user_message","message":{"parts":[{"text":` +
 				boundedQuoted("\n"+qwenNoteFraming+"one") + `}]}}`,
@@ -232,7 +233,7 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 			head:    `{"type":"gemini","id":"m2","content":"at the bound","pad":"`},
 		{name: GrokName, walk: Grok{}, whole: wholeGrok{}, members: grokMembers,
 			held: func(ctx context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
-				return notesBenchTokens(grokHeld(ctx, r))
+				return notesBenchTokens(grokHeld(ctx, r, nil))
 			},
 			oracle: func(_ context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
 				return notesBenchTokens(grokHeldWhole(r))
@@ -244,7 +245,7 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 		{name: MuseName, walk: Muse{}, whole: wholeMuse{}, members: museMembers,
 			held: func(ctx context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
 				return notesBenchTokens(museHeld(ctx, r, museHooksDigest, map[string]bool{
-					claudeTakeToken(notesBenchTake): true}))
+					claudeTakeToken(notesBenchTake): true}, nil))
 			},
 			oracle: func(_ context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
 				return notesBenchTokens(museHeldWhole(r, museHooksDigest, map[string]bool{
@@ -256,7 +257,7 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 				`"context_compaction_installed","replacement":{"text":"at the bound"}}},"pad":"`},
 		{name: HermesName, walk: Hermes{}, whole: wholeHermes{}, members: hermesMembers, bound: hermesRowMaxBytes,
 			held: digestedHeld(func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
-				return hermesNotesHeld(ctx, r, takes, 0)
+				return hermesNotesHeld(ctx, r, takes, 0, nil)
 			}),
 			oracle: digestedHeld(func(_ context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
 				return hermesNotesHeldWhole(r, takes, 0)
@@ -267,7 +268,7 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 			head:    `{"t": "messages", "r": {"id": 6, "role": "tool", "content": "at the bound"}, "pad": "`},
 		{name: CodexName, walk: Codex{}, whole: wholeCodex{}, members: codexRolloutMembers, bound: codexWalkBound,
 			held: digestedHeld(func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
-				return codexNotesHeld(ctx, r, takes, 0)
+				return codexNotesHeld(ctx, r, takes, 0, nil)
 			}),
 			oracle: digestedHeld(func(_ context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
 				return codexNotesHeldWhole(r, takes, 0)
@@ -330,6 +331,14 @@ func TestABoundedLineAtTheLineBoundIsReadAndOnePastItSaid(t *testing.T) {
 // [humanSize] rounds it, than without.
 const pastBreakShown = 52428
 
+// heldAlone is a record's walk for its notes asked no summary.
+func heldAlone(walk func(context.Context, io.Reader, []ServedTake, *summaryRead) ([]string, error)) func(
+	context.Context, io.Reader, []ServedTake) ([]string, error) {
+	return func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
+		return walk(ctx, r, takes, nil)
+	}
+}
+
 // qwenHeldOf is read, a Qwen Code collection's read, asked of takes whose
 // note's text is their inbox id, from the record's start.
 func qwenHeldOf(read func(context.Context, io.Reader, []ServedTake, int, int) ([]string, error)) func(
@@ -361,6 +370,11 @@ func geminiHeldOf(read func(context.Context, io.Reader, []geminiAskedTake, int) 
 		}
 		return held, err
 	}
+}
+
+// qwenNotesAlone is a Qwen Code record's walk for its notes asked no summary.
+func qwenNotesAlone(ctx context.Context, r io.Reader, takes []ServedTake, from, bound int) ([]string, error) {
+	return qwenNotesHeld(ctx, r, takes, from, bound, nil)
 }
 
 // digestedHeld is read asked of takes whose note's text is their inbox id.

@@ -71,14 +71,14 @@ func (QwenCode) continuesInPlace(box string) (bool, string) {
 // working says so.
 func (QwenCode) Pack(paths Paths, session, staged, dest string, working bool) string {
 	return chatOnDemand(paths, session, packAt{staged: staged, dest: dest, working: working},
-		paths.QwenDir(), qwenLocate(paths))
+		paths.QwenDir(), qwenLocate(paths), QwenCode{})
 }
 
 // PackSave packs a save of rec's session beside a harness that may still be
 // working ([saver]). The record refuses no Qwen Code save, so it never errs.
 func (QwenCode) PackSave(paths Paths, rec sessionRecord, staged, dest string) (string, error) {
 	return chatOnDemand(paths, rec.id, packAt{staged: staged, dest: dest, working: true},
-		paths.QwenDir(), qwenLocate(paths)), nil
+		paths.QwenDir(), qwenLocate(paths), QwenCode{}), nil
 }
 
 // startsByLines says a Qwen Code run records where it began in its chat file as

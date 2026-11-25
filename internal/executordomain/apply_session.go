@@ -79,6 +79,9 @@ const (
 	// (agent_handle, turn_id, digest) builds: one turn's media, one of them by
 	// its digest, and a seat's by the key's first column.
 	mediaKey = "sqlite_autoindex_executor_session_media_1"
+	// summaryKey is the index executor_session_summaries' primary key
+	// (agent_handle, turn_id) builds: one turn's summary.
+	summaryKey = "sqlite_autoindex_executor_session_summaries_1"
 )
 
 // Tombstone reasons: why a turn takes no further record.
@@ -311,6 +314,19 @@ const (
 		DELETE FROM executor_session_media INDEXED BY ` + mediaKey + `
 		WHERE agent_handle = ? AND turn_id = ?`
 	seatMediaDeleteStatement = `DELETE FROM executor_session_media WHERE agent_handle = ?`
+	// insertSummaryStatement names the summary an end named on its turn's
+	// row ([executorkeep.Ending.Summary]); releaseSummaryStatement takes one
+	// turn's off with its row's session or its row, and seatSummariesStatement
+	// every one a removed seat's rows keep.
+	insertSummaryStatement = `
+		INSERT INTO executor_session_summaries (agent_handle, turn_id, object, object_hash, object_size,
+			content_key, harness, session_id, kept_at, bytes, kept_bytes, cut, launch_seq, capture_seq, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (agent_handle, turn_id) DO NOTHING`
+	releaseSummaryStatement = `
+		DELETE FROM executor_session_summaries INDEXED BY ` + summaryKey + `
+		WHERE agent_handle = ? AND turn_id = ?`
+	seatSummariesStatement = `DELETE FROM executor_session_summaries WHERE agent_handle = ?`
 
 	// tombStatement writes a turn's tombstone, keeping the first one a turn
 	// was given.
@@ -1181,6 +1197,11 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 			p.Handle, p.Turn, c.position, err)
 	}
 	written += affected(res)
+	named, err := nameSummary(ctx, tx, c, p)
+	if err != nil {
+		return written, err
+	}
+	written += named
 	retired, err := retireSpent(ctx, tx, c, p)
 	if err != nil {
 		return written, err
@@ -1210,6 +1231,37 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 	}
 	n, err := tomb(ctx, tx, c, p.Handle, p.Turn, p.ConversationKey, tombEnded)
 	return written + n, err
+}
+
+// nameSummary names on the ending turn's row the newest summary its end names
+// ([executorkeep.Ending.Summary]), where it names one every reader can parse.
+// A SPENT, STALE OR BUDGET-RELEASED SESSION KEEPS IT: a summary is what a run
+// that cannot continue the session starts from, and the seat's budget counts
+// none, so only what deletes the row releases it ([releaseSummary]).
+func nameSummary(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
+	summary := p.Ending.Summary
+	if summary == nil || !summary.Within() {
+		return 0, nil
+	}
+	res, err := tx.ExecContext(ctx, insertSummaryStatement, p.Handle, p.Turn, summary.Object.Key.String(),
+		string(summary.Object.Hash), summary.Object.Size, summary.ContentKey, summary.Harness, summary.Session,
+		store.EncodeTime(summary.At), summary.Bytes, summary.Kept, flag(summary.Cut), summary.Place.LaunchSeq,
+		summary.Place.CaptureSeq, c.packed)
+	if err != nil {
+		return 0, fmt.Errorf("executordomain: name %s's summary of turn %s at %s: %w",
+			p.Handle, p.Turn, c.position, err)
+	}
+	return affected(res), nil
+}
+
+// releaseSummary takes one turn's summary off with its row.
+func releaseSummary(ctx context.Context, tx *sql.Tx, c applyContext, handle, turn string) (int, error) {
+	res, err := tx.ExecContext(ctx, releaseSummaryStatement, handle, turn)
+	if err != nil {
+		return 0, fmt.Errorf("executordomain: release %s's summary of turn %s at %s: %w",
+			handle, turn, c.position, err)
+	}
+	return affected(res), nil
 }
 
 // retireSpent takes each session a launch of the turn spent off every ended row
@@ -1393,6 +1445,11 @@ func dropUnheld(ctx context.Context, tx *sql.Tx, c applyContext, statement, hand
 		return 0, nil
 	}
 	n, err := dropMedia(ctx, tx, c, handle, turn)
+	if err != nil {
+		return deleted + n, err
+	}
+	m, err := releaseSummary(ctx, tx, c, handle, turn)
+	n += m
 	return deleted + n, err
 }
 
@@ -1424,7 +1481,7 @@ func applyDelete(ctx context.Context, tx *sql.Tx, c applyContext, p Delete) (int
 	return removeTurn(ctx, tx, c, p.Handle, p.Turn)
 }
 
-// removeTurn deletes one turn's row, its tombstone and its media.
+// removeTurn deletes one turn's row, its tombstone, its media and its summary.
 //
 // THE TOMBSTONE GOES TOO, unlike any other delete's: it refuses a record
 // decided before the row went, and past the retention none can land. The term
@@ -1435,7 +1492,7 @@ func applyDelete(ctx context.Context, tx *sql.Tx, c applyContext, p Delete) (int
 func removeTurn(ctx context.Context, tx *sql.Tx, c applyContext, handle, turn string) (int, error) {
 	written := 0
 	for _, statement := range []string{deleteSessionStatement, deleteTombStatement, turnServedStatement,
-		turnMediaStatement} {
+		turnMediaStatement, releaseSummaryStatement} {
 		res, err := tx.ExecContext(ctx, statement, handle, turn)
 		if err != nil {
 			return written, fmt.Errorf("executordomain: delete %s's turn %s at %s: %w",
@@ -1513,6 +1570,7 @@ func removeSeat(ctx context.Context, tx *sql.Tx, c applyContext, handle string) 
 		{seatRowsStatement, []any{handle}},
 		{seatServedStatement, []any{handle}},
 		{seatMediaDeleteStatement, []any{handle}},
+		{seatSummariesStatement, []any{handle}},
 		{removeSeatStatement, []any{handle, c.packed, c.at()}},
 	} {
 		res, execErr := tx.ExecContext(ctx, statement.sql, statement.args...)

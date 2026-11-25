@@ -18,16 +18,17 @@ func (a attrsSeen) Add(name string, _ uint64, attrs metrics.Attrs) {
 // A COUNTER'S LABELS ARE THE CATALOGUE'S (#423 review): the recorder drops a
 // label the catalogue does not declare without a word, so a "paths" label
 // added to a recording stayed green. Each counter here is held to the
-// catalogue when the package loads, and records exactly the declared labels
-// through a typed method, so a recording of the wrong arity does not compile.
+// catalogue at its first recording, which this makes, and records exactly the
+// declared labels through a typed method, so a recording of the wrong arity
+// does not compile.
 //
-// Mutation: declare a counter with ("tool", "paths") and the package refuses
-// to load; record a second label in toolCounted.add and this names it.
+// Mutation: declare a counter with ("tool", "paths") and its first recording
+// panics; record a second label in toolCounted.add and this names it.
 func TestEveryCounterRecordsTheCataloguesLabels(t *testing.T) {
 	t.Parallel()
 	seen := attrsSeen{}
-	argsOutsideSchema.add(seen, "make_thing")
-	policyRefusalLoops.add(seen, "make_thing")
+	argsOutsideSchema().add(seen, "make_thing")
+	policyRefusalLoops().add(seen, "make_thing")
 	for _, inst := range metrics.Catalogue() {
 		got, recorded := seen[inst.Name]
 		if !recorded {
@@ -54,5 +55,26 @@ func TestEveryCounterRecordsTheCataloguesLabels(t *testing.T) {
 			}()
 			bad()
 		}()
+	}
+}
+
+// A COUNTER BUILT AT ITS FIRST RECORDING IS THE ONE INIT BUILT: the same name,
+// held to the same declaration, so moving the check off the package's init
+// changes nothing a recording does.
+//
+// Mutation: build either counter from another catalogue name, and a case goes
+// red.
+func TestACounterBuiltAtFirstUseIsTheOneInitBuilt(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		lazy func() toolCounted
+		want toolCounted
+	}{
+		metrics.ToolArgsOutsideSchema:  {argsOutsideSchema, countedByTool(metrics.ToolArgsOutsideSchema)},
+		metrics.ToolPolicyRefusalLoops: {policyRefusalLoops, countedByTool(metrics.ToolPolicyRefusalLoops)},
+	} {
+		if got := c.lazy(); got != c.want || got.name != name {
+			t.Errorf("%s is built as %+v, want %+v", name, got, c.want)
+		}
 	}
 }

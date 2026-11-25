@@ -265,7 +265,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer ssh-held-words objects-answer broker-answer assistant-fixtures retention-alarms \
+.PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer setup-steps ssh-held-words objects-answer broker-answer assistant-fixtures retention-alarms \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint notehelper notehelper-check \
         check fmt-check tidy-check signoff-check signoff-test git-test chromium-test node-test playwright-tree-test vet lint test test-norace test-cross test-solo \
         require-npm bench git test-gitproc test-capture chromium node playwright-tree \
@@ -434,9 +434,11 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifact
 # commit), an empty build id, and gzipbuild's compress/gzip in place of the
 # gzip program, whose output is its version's. x/net/websocket and
 # klauspost/compress/zstd are its modules beyond std, as only they save
-# hand-rolling RFC 6455 and RFC 8878, which #1818's ruling forbids; their
-# versions are in the build info, so their bumps rebuild
-# (.github/workflows/dependabot-notehelper.yml). `go doc ./internal/notehelper`.
+# hand-rolling RFC 6455 and RFC 8878, which #1818's ruling forbids, and
+# yaml.v3, the engine's own YAML module, as Claude Code reads a rule's
+# frontmatter as YAML; their versions are in the build info, so their bumps
+# rebuild (.github/workflows/dependabot-notehelper.yml). `go doc
+# ./internal/notehelper`.
 NOTEHELPER_OUT := internal/sandbox/executor/notehelper
 NOTEHELPER_GO := go$(shell sed -n 's/^go //p' go.mod)
 
@@ -1243,6 +1245,14 @@ derived: ## regenerate internal/config/testdata/derived/*.derived.json from the 
 gate-answer: ## regenerate internal/api/testdata/gate_answer.json from the gate routes' renderer
 	CREWLET_REGENERATE_GATE_ANSWER=1 $(GO) test ./internal/api -count=1 \
 	  -run TestTheGateAnswerMatchesItsGoldenFile
+
+# internal/api/setupapi/testdata/setup_steps.json is the setup route's answer
+# at each point of the outside-step integrations' steps; the dashboard's Setup
+# steps suite renders the form from the SAME file and finds every field and
+# control a step taken in Crewlet names. Read the diff before committing it.
+setup-steps: ## regenerate internal/api/setupapi/testdata/setup_steps.json from the setup route
+	CREWLET_REGENERATE_SETUP_STEPS=1 $(GO) test ./internal/api/setupapi -count=1 \
+	  -run TestTheSetupStepsMatchTheirGoldenFile
 
 # Rewrites internal/agent/builtin/testdata/ssh_operate_held.json, the words an
 # ssh_operate call puts to a person, from the tool itself; the dashboard's Inbox

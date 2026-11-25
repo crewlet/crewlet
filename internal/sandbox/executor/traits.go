@@ -12,7 +12,9 @@ import (
 // [Runner.ThreadTraits]) or looked up by the harness's name (the engine's,
 // [Window], [SessionTraits]), so a harness that states none reads as zero.
 
-// threadHarness is a [mainThreadHarness] stating what its read settles.
+// threadHarness is a [mainThreadHarness] stating what its read settles: Reads
+// for the seven that count a thread, never for one that reads its summary
+// alone, which a collection would otherwise ask a count it never answers.
 type threadHarness interface {
 	threadTraits() sandbox.ThreadTraits
 }
@@ -22,11 +24,8 @@ type threadHarness interface {
 // Receipts for one that confirms off its session record ([recordConfirmer]).
 func (r *Runner) ThreadTraits() sandbox.ThreadTraits {
 	traits := sandbox.ThreadTraits{}
-	if _, reads := r.harness.(mainThreadHarness); reads {
-		if h, ok := r.harness.(threadHarness); ok {
-			traits = h.threadTraits()
-		}
-		traits.Reads = true
+	if h, ok := r.harness.(threadHarness); ok {
+		traits = h.threadTraits()
 	}
 	if _, records := r.harness.(recordConfirmer); records {
 		traits.Receipts = true
@@ -214,6 +213,22 @@ func routeNames(vars []routeVar) []string {
 		names[i] = v.Name
 	}
 	return names
+}
+
+// mcpDeferrer is a harness that hides every MCP server's tools behind a
+// search of its own once a run's servers list some number of them in all.
+type mcpDeferrer interface{ defersMCPAt() int }
+
+var _ sandbox.MCPDeferrer = (*Runner)(nil)
+
+// DefersMCPAt is how many tools, across a run's MCP servers, make the
+// runner's harness hide every one of them ([sandbox.MCPDeferrer]), 0 for a
+// harness that hides none by their count.
+func (r *Runner) DefersMCPAt() int {
+	if h, ok := r.harness.(mcpDeferrer); ok {
+		return h.defersMCPAt()
+	}
+	return 0
 }
 
 // harnessNamed is the harness named name, nil for one this build does not

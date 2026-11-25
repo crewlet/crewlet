@@ -66,6 +66,8 @@ func codexRawWindow(reported int64) int64 {
 // window and window id, held to [transcriptNameMaxBytes] (windowLong says it
 // ran past). A line one member refuses is read as none.
 type codexCountLine struct {
+	// compaction, where a read asks the newest summary, is the line's.
+	compaction   *codexCompaction
 	typ          string
 	ordinal      int64
 	took         bool
@@ -79,19 +81,25 @@ type codexCountLine struct {
 
 // read reads the line's members, its opening brace current.
 func (l *codexCountLine) read(w *lineWalk) error {
-	*l = codexCountLine{took: true}
+	*l = codexCountLine{took: true, compaction: l.compaction}
+	l.compaction.start()
 	return w.members(func(name string, k jsonscan.Kind) error {
 		var ok bool
 		var err error
 		switch name {
 		case "type":
 			l.typ, ok, err = w.wordField(k)
+			l.compaction.envelopeTook(ok)
 		case "ordinal":
 			l.ordinal, ok, err = w.intField(k)
 		case "payload":
 			l.payloadType, l.info, l.last, l.input, l.total, l.window = "", false, false, 0, 0, 0
 			l.windowID, l.windowLong = "", false
+			l.compaction.payloadStart()
 			ok, err = w.objectField(k, l.payloadMember(w))
+			l.compaction.payloadTook(ok)
+		case "timestamp", "metadata":
+			return l.compaction.envelopeField(w, name, k)
 		default:
 			return w.scan.Skip()
 		}
@@ -115,6 +123,8 @@ func (l *codexCountLine) payloadMember(w *lineWalk) func(name string, k jsonscan
 		case "info":
 			l.info, l.last, l.input, l.total, l.window = k == jsonscan.ObjectStart, false, 0, 0, 0
 			ok, err = w.objectField(k, l.infoMember(w))
+		case "message":
+			return l.compaction.messageField(w, k, l.typ)
 		default:
 			return w.scan.Skip()
 		}
@@ -218,15 +228,16 @@ var errCodexArchive = errors.New("executor: the archive holds no one Codex rollo
 
 // codexMeter reads a Codex archive, as kept, once within ctx: the figure,
 // Codex's count of the session by the rules of release, and the estimate of
-// its next request, the count's bound. An archive that does not read to its
-// end, or holds no one rollout, has no figure and an unread count.
-func codexMeter(ctx context.Context, r io.Reader, release string) (meterReading, error) {
+// its next request, the count's bound; and, into summary where it is not nil,
+// the newest compaction's summary. An archive that does not read to its end,
+// or holds no one rollout, has no figure and an unread count.
+func codexMeter(ctx context.Context, r io.Reader, release string, summary *summaryRead) (meterReading, error) {
 	var marks countMarks
 	if !codexCountRead(release) {
 		marks = marks.with(sandbox.CountRelease)
 	}
 	var c codexCounting
-	err := codexArchiveRollout(r, func(rollout io.Reader) error { return c.read(ctx, rollout) })
+	err := codexArchiveRollout(r, func(rollout io.Reader) error { return c.read(ctx, rollout, summary) })
 	if err != nil {
 		return meterReading{count: (&codexCounting{}).count(marks.with(sandbox.CountUnread))}, err
 	}
@@ -238,12 +249,16 @@ func codexMeter(ctx context.Context, r io.Reader, release string) (meterReading,
 }
 
 // read reads a rollout's lines into c on the notes walk ([lineWalk.setupNotes]),
+// and each compaction's into summary where it is not nil ([codexCompaction]),
 // holding no line: a torn last line is never read, and a line past its bound
 // fails the read ([errCodexRolloutLine]).
-func (c *codexCounting) read(ctx context.Context, rollout io.Reader) error {
+func (c *codexCounting) read(ctx context.Context, rollout io.Reader, summary *summaryRead) error {
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(rollout, lineChunkBytes), codexWalkBound)
 	var l codexCountLine
+	if summary != nil {
+		l.compaction = &codexCompaction{}
+	}
 	for n := 1; ; n++ {
 		line, err := w.noteLine(ctx, func() error { return l.read(&w) })
 		switch {
@@ -258,6 +273,9 @@ func (c *codexCounting) read(ctx context.Context, rollout io.Reader) error {
 		}
 		if line.object && l.took {
 			c.line(&l)
+		}
+		if summary != nil && line.object {
+			l.compaction.into(summary, l.typ, false)
 		}
 		if line.ended {
 			return nil
@@ -300,43 +318,59 @@ func codexArchiveRollout(r io.Reader, each func(io.Reader) error) error {
 // meter reads a Codex archive for the take's meter ([carrier.meter],
 // [codexMeter]).
 func (Codex) meter(ctx context.Context, r io.Reader, _, release string, _ *passBudget) (meterReading, error) {
-	return codexMeter(ctx, r, release)
+	return codexMeter(ctx, r, release, nil)
 }
 
 var _ mainThreadHarness = Codex{}
 
 // readMainThread is Codex's read of ask's session in box: the archive the
 // job's script packed as the job ended ([codexCapture]), walked once for the
-// count and the estimate ([codexMeter]), cheapest check first: a release
-// whose rule was not read is [sandbox.CountRelease] with no read; an archive
-// the box holds none of is [sandbox.CountUnread].
+// count, the estimate and the newest summary ([codexMeter]), cheapest check
+// first: a release whose rule was not read is [sandbox.CountRelease], and
+// one whose summary was not read [summaryReleaseWhy], with no read; an
+// archive the box holds none of is [sandbox.CountUnread].
 func (Codex) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
-	if !ask.Count && !ask.Next {
-		return sandbox.MainThreadReading{}
+	var reading sandbox.MainThreadReading
+	counts := (ask.Count || ask.Next) && codexCountRead(ask.Release)
+	if ask.Count && !codexCountRead(ask.Release) {
+		reading.Count = &sandbox.ResumedCount{Mark: sandbox.CountRelease}
 	}
-	marked := func(mark sandbox.CountMark) sandbox.MainThreadReading {
-		if !ask.Count {
-			return sandbox.MainThreadReading{}
+	var summary *summaryRead
+	if ask.Summary {
+		if why := summaryReleaseWhy(ask.Release, codexCarryRelease); why != "" {
+			reading.Summary = summaryUnread(why)
+		} else {
+			summary = &summaryRead{}
 		}
-		return sandbox.MainThreadReading{Count: &sandbox.ResumedCount{Mark: mark}}
 	}
-	if !codexCountRead(ask.Release) {
-		return marked(sandbox.CountRelease)
+	if !counts && summary == nil {
+		return reading
 	}
 	body, err := box.OpenFile(ctx, paths.SessionCapture())
 	if err != nil {
-		return marked(sandbox.CountUnread)
+		if ask.Count && counts {
+			reading.Count = &sandbox.ResumedCount{Mark: sandbox.CountUnread}
+		}
+		if summary != nil {
+			reading.Summary = summaryUnread("the session's archive did not open: " + err.Error())
+		}
+		return reading
 	}
 	defer func() { _ = body.Close() }()
-	read, _ := codexMeter(ctx, body, ask.Release)
-	var reading sandbox.MainThreadReading
-	if ask.Count {
+	read, err := codexMeter(ctx, body, ask.Release, summary)
+	if ask.Count && counts {
 		reading.Count = read.count
 	}
-	if ask.Next {
+	if ask.Next && counts {
 		reading.Next = read.next
+	}
+	if summary != nil {
+		if err != nil {
+			summary.fail("the session's archive did not read to its end: " + err.Error())
+		}
+		reading.Summary = summary.reading()
 	}
 	return reading
 }
@@ -345,7 +379,9 @@ func (Codex) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Path
 // script packs as it ends, which a cut-off copy may lack what it holds, so
 // such a copy is not counted. Receipts come of its confirm off the rollout
 // ([recordConfirmer]), which [Runner.ThreadTraits] adds.
-func (Codex) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{} }
+func (Codex) threadTraits() sandbox.ThreadTraits {
+	return sandbox.ThreadTraits{Reads: true, Summaries: true}
+}
 
 // sessionTraits is how a relaunch judges a Codex session: by the run's window,
 // whose limit the runner pins and Codex compacts at; its calls keyed by their

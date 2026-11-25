@@ -150,6 +150,11 @@ type Ending struct {
 	// conversation lost going into the turn) and its newest (what its final
 	// session lacks). The reader's surfaces say it in its [NotContinued.Sentence].
 	NotContinued []NotContinued `json:"not_continued,omitempty"`
+
+	// Summary names the newest compaction summary a box read of the turn kept
+	// ([Summary]): its object, never its words. Nil where none was kept. The
+	// log's apply names it on the turn's row, which releases it with the row.
+	Summary *Summary `json:"summary,omitempty"`
 }
 
 // SpentSession is a session a launch of a turn could not go on in, and how
@@ -191,6 +196,12 @@ type Unkept struct {
 type CapturePlace struct {
 	LaunchSeq  int64 `json:"launch_seq"`
 	CaptureSeq int64 `json:"capture_seq"`
+}
+
+// After reports whether p is a later place than o: a later launch's, or a
+// later capture of the same launch.
+func (p CapturePlace) After(o CapturePlace) bool {
+	return p.LaunchSeq > o.LaunchSeq || (p.LaunchSeq == o.LaunchSeq && p.CaptureSeq > o.CaptureSeq)
 }
 
 // Validate refuses an ending the engine could not mean: an unknown outcome,
@@ -247,6 +258,11 @@ func (e Ending) Validate() error {
 	if w := e.LastWord; w != nil && (w.LaunchSeq <= 0 || w.CaptureSeq <= 0) {
 		return fmt.Errorf("the ending's last word is placed at (%d, %d), and every capture is placed "+
 			"from (1, 1)", w.LaunchSeq, w.CaptureSeq)
+	}
+	if s := e.Summary; s != nil {
+		if err := s.Validate(); err != nil {
+			return fmt.Errorf("the ending's summary: %w", err)
+		}
 	}
 	for _, p := range prose {
 		if !utf8.ValidString(p.value) {

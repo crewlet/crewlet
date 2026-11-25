@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -26,9 +27,10 @@ import (
 // server does: written after, a loaded runner's script presented it first and
 // was refused. A server's end is read off `serve.alive`, which only it holds
 // open and the kernel closes as it exits ([serverPipe]), never its pid, which
-// kill -0 finds until reaped (#1164); `up` reads the pid's state, since sh
-// cannot ask a pipe without blocking. Pages print byte for byte, as the budget
-// cases measure them.
+// kill -0 finds until reaped (#1164); `up` reads the pid's state as
+// internal/procgroup does, since sh cannot ask a pipe without blocking. Pages
+// print byte for byte, as the budget cases measure them; config.get, one
+// document declaring both bridge names.
 // FAKE_RUN_SLEEP alone `exec`s the sleep: dash holds a SIGINT landing as it
 // forks a foreground command, so a shell in front could miss a group SIGINT.
 // Exports are slowed by a sleep, not a packer stand-in busybox would bypass.
@@ -54,8 +56,8 @@ held() { [ -n "$1" ] && [ -e "$d/sessions/$1" ]; }
 serving() { : > "$d/serve-settled"; exec sleep 60; }
 up() {
   p=$(cat "$d/serve.pid" 2> /dev/null); [ -n "$p" ] || return 1
-  if [ -r /proc/self/stat ]; then st=$(sed 's/.*) //' "/proc/$p/stat" 2> /dev/null); else st=$(ps -o stat= -p "$p" 2> /dev/null | tr -d ' '); fi
-  case "$st" in '' | [ZX]*) return 1 ;; esac
+  if [ -r /proc/self/stat ]; then set -- $(sed 's/.*) //' "/proc/$p/stat" 2> /dev/null); else set -- $(ps -o stat= -p "$p" 2> /dev/null); fi
+  case "${1-}" in '' | [Xx]*) return 1 ;; Z*) [ "${18:-1}" -gt 1 ] ;; esac
 }
 case "$1" in
 debug) cat "$d/agents.json" 2> /dev/null || echo '[]' ;;
@@ -95,7 +97,6 @@ serve)
 api)
   if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; hangs "$1"; fi
   case "$1" in
-  config.get) cat "$d/config-get.json" 2> /dev/null || echo '[]' ;;
   credential.list)
     [ -e "$d/creds" ] || for id in ${FAKE_CREDS-}; do echo "$id"; done > "$d/creds"
     printf '{"data":[' ; sep=
@@ -104,6 +105,10 @@ api)
   credential.remove)
     id=${3#credentialID=}; echo "$id" >> "$d/removed"
     [ "$id" = "${FAKE_STUCK_CRED-}" ] || { grep -vxF "$id" "$d/creds" > "$d/creds.next"; mv "$d/creds.next" "$d/creds"; } ;;
+  config.get)
+    docs=${FAKE_DOCUMENTS-}
+    [ -n "$docs" ] || docs='[{"type":"document","info":{"mcp":{"servers":{"crewlet":{"type":"remote"},"crewlet-bridge":{"type":"remote"}}}}}]'
+    printf '%s\n' "$docs" ;;
   mcp.list)
     n=$(cat "$d/polls" 2> /dev/null || echo 0); n=$((n+1)); echo "$n" > "$d/polls"
     if [ -n "${FAKE_MCP_LIST:-}" ]; then printf '%s\n' "$FAKE_MCP_LIST"; exit 0; fi
@@ -607,7 +612,7 @@ func (j *scriptJob) assertGroupGone() {
 		if errors.Is(err, syscall.ESRCH) {
 			return
 		}
-		live, readable := liveInGroup(pgid)
+		live, readable := liveInGroup(j.t, pgid)
 		if readable && len(live) == 0 {
 			return
 		}
@@ -619,30 +624,28 @@ func (j *scriptJob) assertGroupGone() {
 	}
 }
 
-// liveInGroup lists the processes of group pgid that are not zombies, read from
-// /proc — false where there is no /proc to read, as on darwin.
-func liveInGroup(pgid int) ([]string, bool) {
+// liveInGroup lists the processes of group pgid that can still run, each read
+// as internal/procgroup reads one (a zombie runs nothing, but one whose main
+// thread alone has exited runs on), over a listing of /proc: false where there
+// is none to list, as on darwin. A record the kernel will not give fails the
+// case, since a group must not read as gone on "unknown".
+func liveInGroup(t *testing.T, pgid int) ([]string, bool) {
+	t.Helper()
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, false
 	}
 	var live []string
 	for _, e := range entries {
-		if _, err := strconv.Atoi(e.Name()); err != nil {
-			continue
-		}
-		stat, err := os.ReadFile(filepath.Join("/proc", e.Name(), "stat")) //nolint:gosec // /proc
+		pid, err := strconv.Atoi(e.Name())
 		if err != nil {
 			continue
 		}
-		// pid (comm) state ppid pgrp …, comm in parentheses and free to
-		// hold spaces, so the fields are counted from its closing one.
-		end := bytes.LastIndexByte(stat, ')')
-		if end < 0 {
-			continue
+		proc, found, err := procgroup.Inspect(pid)
+		if err != nil {
+			t.Fatalf("reading the kernel's record of pid %d: %v", pid, err)
 		}
-		fields := strings.Fields(string(stat[end+1:]))
-		if len(fields) < 3 || fields[2] != strconv.Itoa(pgid) || fields[0] == "Z" {
+		if !found || proc.Group != pgid || proc.Zombie {
 			continue
 		}
 		cmdline, _ := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline")) //nolint:gosec // /proc
@@ -1164,6 +1167,30 @@ func TestOpenCodeServersThatShadowTheEnginesToolsAreRefused(t *testing.T) {
 			})
 		})
 	}
+}
+
+// AN OPENCODE RUN WHOSE BRIDGE /etc/opencode REPLACES IS REFUSED BEFORE ITS
+// BRIEF: config.get lists the run's own document and /etc's, each declaring
+// `crewlet` (measured on 2.3.2, where /etc's took the bridge's place with
+// mcp.list as ever), so the script ends before `opencode run`, under every sh.
+//
+// Mutation: leave the check over config.get out of the script.
+func TestAnOpenCodeRunWhoseBridgeEtcReplacesIsRefusedBeforeItsBrief(t *testing.T) {
+	t.Parallel()
+	engine := sandbox.MCPServer{Name: "crewlet", Command: "false", AlwaysLoaded: true}
+	docs := `[{"type":"document","info":{"mcp":{"servers":{"crewlet":{"type":"remote"}}}}},` +
+		`{"type":"document","path":"/etc/opencode/opencode.json","info":{"mcp":{"servers":{"crewlet":{"type":"local"}}}}}]`
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		run := runScript(t, scriptOpts{shell: sh, req: sandbox.RunRequest{MCPServers: map[string]sandbox.MCPServer{"crewlet": engine}},
+			env:   []string{`FAKE_MCP_LIST={"data":[{"name":"crewlet","status":{"status":"connected"}}]}`, "FAKE_DOCUMENTS=" + docs},
+			times: &executor.OpenCodeTimes{MCP: 3 * time.Second, Sync: time.Hour}})
+		if run.code == 0 || run.callIndex("run ") >= 0 {
+			t.Fatalf("the run started (exit %d):\n%s", run.code, strings.Join(run.calls, "\n"))
+		}
+		if !strings.Contains(run.stderr, "declare the MCP server 'crewlet' 2 times") {
+			t.Errorf("the refusal does not say the bridge is declared twice:\n%s", run.stderr)
+		}
+	})
 }
 
 // JSON.stringify's spelling, to the byte: `"`, `\` and the control characters

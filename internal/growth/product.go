@@ -3,6 +3,7 @@ package growth
 import (
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 )
@@ -76,6 +77,37 @@ func (r *Refusal) Error() string { return r.Said }
 
 // Refuse is a refusal of kind, said.
 func Refuse(kind RefusalKind, said string) error { return &Refusal{Kind: kind, Said: said} }
+
+// ErrActHeld is the one failure of an act's lease (a product's Leaser) that
+// means another act on the account holds it: a provider wraps it, and a
+// product answers it as unavailable, to call again. Any other failure is the
+// lease store's, answered as itself beside [ErrNotSent]: told to call again, a
+// caller would retry a refusal no retry changes.
+var ErrActHeld = errors.New("growth: another act holds the account's lease")
+
+// ErrNotSent marks an act that failed before the request making its change
+// left for the vendor: its account's or its spend's lease could not be
+// taken, a read or a check before it failed, its context ended, or its
+// request could not be built. Where an act stages its change (an edit
+// committed last), before its commit left. Every product wraps it beside the
+// failure ([NotSent]) at the one point it knows that, so a caller tells what
+// was done truthfully, nothing, and tells a condition a wait clears from a
+// fault, never "the outcome is unknown". A failure after that point never
+// carries it, nor does one outside an act.
+var ErrNotSent = errors.New("growth: the act's change was not sent to the vendor")
+
+// NotSent marks err, an act's failure before its change was sent, with
+// [ErrNotSent]. A refusal, which says so in its own words, and nil are
+// answered as they are.
+func NotSent(err error) error {
+	if err == nil || errors.Is(err, ErrNotSent) {
+		return err
+	}
+	if _, refused := errors.AsType[*Refusal](err); refused {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrNotSent, err)
+}
 
 // ErrMoved is an approved call whose target changed since a person was asked:
 // nothing was sent.

@@ -153,7 +153,7 @@
           ]
         },
         "enabled": {
-          "description": "Turn the integration on. Needs oauth, the company's own OAuth client, and a person's Google sign-in on the integration's page.",
+          "description": "Turn the integration on. Needs the company's own OAuth client (integrations.google_cloud.sign_in_client, or oauth here) and a person's Google sign-in, made on the Google page.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -163,7 +163,7 @@
         },
         "oauth": {
           "$ref": "#/$defs/GoogleOAuthClient",
-          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls), which the sign-in is made as. Required when enabled."
+          "description": "The OAuth client AdMob alone signs in as, in place of integrations.google_cloud.sign_in_client. Optional."
         }
       },
       "type": [
@@ -205,7 +205,7 @@
           ]
         },
         "enabled": {
-          "description": "Turn the integration on. Needs oauth, the company's own OAuth client, and a person's Google sign-in on the integration's page.",
+          "description": "Turn the integration on. Needs the company's own OAuth client (integrations.google_cloud.sign_in_client, or oauth here) and a person's Google sign-in, made on the Google page.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -215,7 +215,7 @@
         },
         "oauth": {
           "$ref": "#/$defs/GoogleOAuthClient",
-          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls), which the sign-in is made as; AdMob may share it. Required when enabled."
+          "description": "The OAuth client AdSense alone signs in as, in place of integrations.google_cloud.sign_in_client. Optional."
         }
       },
       "type": [
@@ -449,6 +449,10 @@
     "Assistant": {
       "additionalProperties": false,
       "properties": {
+        "instructions": {
+          "$ref": "#/$defs/AssistantInstructions",
+          "description": "How Ask Crewlet writes for everybody in the company: answer length, layout and free text on tone and style. Each person may add their own, which win where the two differ. Instructions never change what Ask Crewlet may read, propose or do."
+        },
         "model": {
           "description": "The providers.llm key Ask Crewlet runs on: any entry on a harness the engine can run with no tool of its own (Claude Code or pi), which turns the harness's own web tools off for Ask Crewlet whatever the entry says. Absent: Ask Crewlet is off.",
           "type": [
@@ -461,6 +465,45 @@
         "token_budget": {
           "$ref": "#/$defs/TokenBudget",
           "description": "Each person's Ask Crewlet token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AssistantInstructions": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "description": "How answers are laid out: lead (the answer first, in plain sentences), lists (bullets and tables where they help) or tldr (a one-line TL;DR first). Absent: the answer first, with lists and tables only where they carry structure.",
+          "enum": [
+            "lead",
+            "lists",
+            "tldr",
+            "",
+            null
+          ]
+        },
+        "length": {
+          "description": "How long answers run: brief (a few sentences), balanced (a short paragraph or list) or detailed (the reasons and relevant detail too). Absent: as short as each question allows.",
+          "enum": [
+            "brief",
+            "balanced",
+            "detailed",
+            "",
+            null
+          ]
+        },
+        "text": {
+          "description": "Anything else about how Ask Crewlet writes, in your own words: tone, terms to use or avoid, structure. At most 1000 characters. A credential is refused: the text reaches every answer's prompt.",
+          "maxLength": 1000,
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
       "type": [
@@ -2592,7 +2635,7 @@
         },
         "oauth": {
           "$ref": "#/$defs/GoogleOAuthClient",
-          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls), which a Google Analytics Administrator signs in as so Crewlet adds each agent's identity to its properties itself; other Google products may share it. Optional: without it a person adds each agent's identity in Google Analytics."
+          "description": "The OAuth client Google Analytics' admin sign-in alone is made as, in place of integrations.google_cloud.sign_in_client. Optional."
         },
         "properties": {
           "description": "Numeric Google Analytics property IDs agents may be given, at most 200. Absent: every property an agent's identity is added to. Optional.",
@@ -2630,6 +2673,10 @@
         "provisioning": {
           "$ref": "#/$defs/GoogleCloudProvisioning",
           "description": "The provisioner service account, the Workload Identity Federation provider and the engine's federation key the agents' service accounts are made with. Required when enabled."
+        },
+        "sign_in_client": {
+          "$ref": "#/$defs/GoogleOAuthClient",
+          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls) every Google sign-in is made as: AdMob's and AdSense's, and the admin sign-ins of Google Analytics and Google Play. A product's own oauth overrides it for that product. Optional."
         }
       },
       "type": [
@@ -2659,8 +2706,8 @@
           ],
           "x-crewlet-secret": true
         },
-        "provider": {
-          "description": "Full resource name of the Workload Identity Federation provider holding the engine's public key: projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>. Until it is set, no agent's account can be made.",
+        "identity_project": {
+          "description": "ID of the Google Cloud project kept for Crewlet's own service accounts: the provisioner crewlet-provisioner@<identity_project>.iam.gserviceaccount.com and every agent's account are made in it. A new, empty project; the Cloud Shell block creates it if it does not exist.",
           "type": [
             "string",
             "number",
@@ -2668,8 +2715,8 @@
             "null"
           ]
         },
-        "provisioner": {
-          "description": "Email of the provisioner service account, <id>@<identity project>.iam.gserviceaccount.com. The agents' service accounts are created in its project.",
+        "provider": {
+          "description": "Full resource name of the Workload Identity Federation provider holding the engine's public key: projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>. Until it is set, no agent's account can be made.",
           "type": [
             "string",
             "number",
@@ -2770,7 +2817,7 @@
         },
         "oauth": {
           "$ref": "#/$defs/GoogleOAuthClient",
-          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls), which a Play Console admin signs in as so Crewlet adds each agent's identity to its apps itself; other Google products may share it. Optional: without it a person invites each agent's identity in Play Console."
+          "description": "The OAuth client Google Play's admin sign-in alone is made as, in place of integrations.google_cloud.sign_in_client. Optional."
         },
         "reports_buckets": {
           "description": "Each developer account's monthly reports bucket, as Play Console's Download reports page copies it (pubsite_prod_rev_ followed by digits), at most 20. The company reader reads them. Optional.",
@@ -3512,6 +3559,15 @@
     "LocalSandbox": {
       "additionalProperties": false,
       "properties": {
+        "chromium_sandbox": {
+          "description": "Chromium's own sandbox in a browser seat's container box: required (default) or waived, which runs Chromium with --no-sandbox.",
+          "enum": [
+            "required",
+            "waived",
+            "",
+            null
+          ]
+        },
         "image": {
           "description": "Container image: with the harness installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run is placed in a container; on a company hosting code (code.backend: gitlet), setting it runs the repositories' checks in containers made from it, and leaving it out runs none.",
           "type": [
@@ -4893,7 +4949,7 @@
         },
         "sandbox": {
           "$ref": "#/$defs/RoleSandbox",
-          "description": "What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns, max_concurrent_runs. Absent = the engine-wide settings only."
+          "description": "What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns, max_concurrent_runs, browser. Absent = the engine-wide settings only."
         },
         "schedules": {
           "description": "Recurring work fired into this seat's inbox.",
@@ -5645,6 +5701,14 @@
             "array",
             "null"
           ]
+        },
+        "role": {
+          "description": "At operate only: marketer runs the agent at Google Analytics' Marketer role, its changes held to audiences, key events, attribution and event create rules; absent is Editor's, every reversible change. Optional.",
+          "enum": [
+            "marketer",
+            "",
+            null
+          ]
         }
       },
       "type": [
@@ -6117,6 +6181,15 @@
     "RoleSandbox": {
       "additionalProperties": false,
       "properties": {
+        "browser": {
+          "description": "Give this seat's executor a browser in its box: a headless Chromium its harness drives through the browser MCP server. Refused unless every run of the seat lands in a container box off the host's network, on a providers.llm entry that keeps its web tools.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "env": {
           "additionalProperties": {
             "type": [
@@ -7657,7 +7730,7 @@
           ]
         },
         "executor_min_budget_tokens": {
-          "description": "Fixed part of an executor launch's budget floor, counted beside the launch's brief: below the two, the launch is refused and the seat parked (default 25000; 0 = no floor for a launch whose session context is unknown).",
+          "description": "Fixed part of an executor launch's budget floor, counted beside the launch's brief: below the two, the launch is refused and the seat parked (default 65000; 0 = no floor for a launch whose session context is unknown).",
           "minimum": 0,
           "type": [
             "integer",

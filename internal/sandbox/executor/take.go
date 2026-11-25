@@ -196,8 +196,12 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return sandbox.TakenSession{}, fmt.Errorf("executor: the session's archive is %d bytes, past the %d "+
 			"a session is kept at: %w", archive.Size, take.MaxBytes, executorkeep.ErrSessionTooLarge)
 	}
-	// WHAT ITS PACK TRIMMED, the box's word beside the archive (trim.go).
+	// WHAT ITS PACK TRIMMED, the box's word beside the archive (trim.go), and
+	// so where a chat file's run began in the copy the cut left.
 	archive.Trim = r.trimOf(ctx, box, archive)
+	if archive.Trim.Trimmed() {
+		archive.Prefix = trimmedPrefix(archive.Trim, archive.Prefix)
+	}
 	logTrim(ctx, r.harness.Name(), archive)
 	// ONE PASS, the scrub and its meter: held to the base, past it the one
 	// large slot both share while either holds a piece past it (the package
@@ -848,9 +852,11 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox, bound string,
 		return sessionRecord{}, false, err
 	}
 	// THE RELEASE THAT WROTE THE SESSION, off the record the engine read, which
-	// a pack trims by alone ([trimRelVar]).
+	// a pack trims by alone ([trimRelVar]), and its run's start, which no trim
+	// cuts past ([trimStartVar]).
 	script := "PATH=" + shellword.Quote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" +
-		trimRelVar + "=" + shellword.Quote(releaseOf(rec.release)) + "\n" + packs
+		trimRelVar + "=" + shellword.Quote(releaseOf(rec.release)) + "\n" + trimStartVar + "=" +
+		trimStartOf(rec, r.harness) + "\n" + packs
 	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(script),
 		sandbox.ExecOptions{TimeoutSec: sandbox.SessionPackWait.Seconds()})
 	if err != nil {

@@ -15,6 +15,7 @@ import {
   DescriptionList,
   Text,
   type AgentIdentityBrought,
+  type AgentIdentityEntry,
   type AgentIdentityHandIn,
   type AgentIdentityStepNote,
   type AgentIdentityVerdict,
@@ -26,6 +27,7 @@ import type {
   AccessIdentityGuide,
   AccessSeat,
 } from "~/contract/access.ts";
+import { useEffect, useState } from "react";
 import type { SetupVerdict, SetupVerdictStep } from "~/contract/setup.ts";
 import { Modal } from "~/components/Modal.tsx";
 import { VendorWords } from "~/ui/VendorWords.tsx";
@@ -178,6 +180,34 @@ export interface IdentitySheetProps {
   onCheck: (brought: AgentIdentityBrought) => Promise<AgentIdentityVerdict>;
 }
 
+/**
+ * Whether a new identity is still settling at the vendor (`ready_at` ahead),
+ * drawn again the moment it passes, so its add links open when they work.
+ */
+export function useSettling(readyAt: string | undefined): boolean {
+  const at = readyAt ? Date.parse(readyAt) : Number.NaN;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!(at > now)) return undefined;
+    const timer = setTimeout(() => setNow(Date.now()), at - now + 250);
+    return () => clearTimeout(timer);
+  }, [at, now]);
+  return at > now;
+}
+
+/** The guide's entries as the kit's checklist rows: unread ones carry no state. */
+export function entriesOf(guide: AccessIdentityGuide): AgentIdentityEntry[] | undefined {
+  if (!guide.entries?.length) return undefined;
+  return guide.entries.map((e) => ({
+    id: e.id,
+    name: e.name || e.id,
+    ...(e.group ? { group: e.group } : {}),
+    ...(e.add_url ? { href: e.add_url } : {}),
+    state: e.state || "unknown",
+    ...(e.state === "wrong_role" && e.role ? { note: `Holds ${e.role}` } : {}),
+  }));
+}
+
 /** The three-step sheet, driven by the engine's guide alone. */
 export function IdentitySheet({
   seat,
@@ -187,6 +217,8 @@ export function IdentitySheet({
   onClose,
   onCheck,
 }: IdentitySheetProps) {
+  const settling = useSettling(guide.ready_at);
+  const widerLinks = guide.wider?.links ?? [];
   return (
     <AgentIdentitySheet
       open
@@ -199,6 +231,22 @@ export function IdentitySheet({
         text: <VendorWords text={s.text} />,
         ...(s.copy ? { copy: s.copy } : {}),
       }))}
+      entries={entriesOf(guide)}
+      entryAction={`Open in ${guide.vendor}`}
+      wider={
+        guide.wider && widerLinks.length > 0
+          ? {
+              title: guide.wider.label,
+              body: <VendorWords text={guide.wider.does} />,
+              links: widerLinks.map((l) => ({ label: l.label, href: l.url })),
+            }
+          : undefined
+      }
+      notReady={
+        settling
+          ? `Ready to add in about a minute: Google is still taking in ${seat.name}'s new identity, and ${guide.vendor} refuses it until then.`
+          : undefined
+      }
       link={guide.link ? { label: guide.link.label, href: guide.link.url } : undefined}
       note={guide.note ? <VendorWords text={guide.note} /> : undefined}
       caution={identity.blocked}

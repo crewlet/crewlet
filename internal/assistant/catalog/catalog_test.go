@@ -286,6 +286,49 @@ func TestAnOpenInAppLinkProbesTheRecordsOwnRead(t *testing.T) {
 	}
 }
 
+// AN OPEN IN APP CARD NAMES ONLY WHAT IT OPENS: the tool takes no text for the
+// link, so its words are the table's own or the record's as its read answered,
+// and an integration's page is named by that integration.
+//
+// Mutation: take a label argument again, or read the title from another field,
+// and this fails.
+func TestAnOpenInAppCardNamesOnlyWhatItOpens(t *testing.T) {
+	t.Parallel()
+	open := assistanttest.Tool(t, "open_in_app")
+	if err := open.Check(map[string]any{"screen": "integrations",
+		"label": "Open Google Cloud setup"}); err == nil {
+		t.Error("open_in_app took a label for its link")
+	}
+	link, _, _ := catalog.Open(catalog.Args{"screen": "integrations",
+		"label": "Open Google Cloud setup"})
+	if link.Label != "Integrations" {
+		t.Errorf("the list's link reads %q, want the screen's own name", link.Label)
+	}
+	link, probe, err := catalog.Open(catalog.Args{"screen": "integration-setup", "kind": "google_cloud"})
+	if err != nil || probe != nil || link.Label != "Open Google Cloud setup" ||
+		link.Href != "#/company/integrations/google_cloud?edit=settings" {
+		t.Errorf("an integration's link = %+v, probe %+v, %v", link, probe, err)
+	}
+	if _, _, err := catalog.Open(catalog.Args{"screen": "integration", "kind": "gcp"}); !errors.Is(err,
+		catalog.ErrInvalidArguments) {
+		t.Errorf("a link to an integration this build lacks = %v", err)
+	}
+	for screen, c := range map[string]struct {
+		answer, want string
+	}{
+		"item":    {`{"task":{"key":"ENG-12","title":"Fix the flaky sign-in test"}}`, "Fix the flaky sign-in test"},
+		"page":    {`{"page":{"id":"x","title":"Runbook"}}`, "Runbook"},
+		"chatlet": {`{"channel":{"id":"x","name":"general"}}`, "#general"},
+		"seat":    {`{"handle":"pm","role":"Product Manager"}`, "Product Manager"},
+		"budgets": {`{"title":"Somebody else's words"}`, ""},
+		"project": {`{"key":"ENG"}`, ""},
+	} {
+		if got := catalog.OpenedTitle(screen, []byte(c.answer)); got != c.want {
+			t.Errorf("%s answered %s is named %q, want %q", screen, c.answer, got, c.want)
+		}
+	}
+}
+
 // EVERY TABLE FITS THE DRAWER: it names the few columns the drawer draws, the
 // first of them the text a row is known by (never a figure or a date), and
 // leaves the rest to the downloads and the model.

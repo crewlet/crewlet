@@ -72,7 +72,7 @@ func grokReachesTheBridgesTool(t *testing.T) {
 	if _, err := (executor.Grok{}).WriteConfig(t.Context(), box, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: endpoint}},
 		Steer:      sandbox.SteerWiring{Server: "crewlet", Tool: mcpbridge.SteerTool, URL: mcpbridge.SteerURL(endpoint)},
-	}, executor.Session{}, p); err != nil {
+	}, executor.Session{ID: "s"}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	settings, _ := box.ReadFile(t.Context(), p.GrokConfig())

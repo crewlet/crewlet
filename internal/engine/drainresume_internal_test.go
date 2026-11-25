@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -23,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -128,14 +130,40 @@ func (r *drainRig) start(t *testing.T) *Engine {
 	eventually(t, "the swe seat's control topic to be attached", func() bool {
 		return e.sandboxSeatAttached("swe")
 	})
-	// A MODEL THAT ANSWERS, so a resume the rig admits runs its turn to the
-	// end and settles the run, once: with none, every resume failed and gave
-	// its claim back, and the waiter's next announcement claimed and
-	// collected the run again, so "collected once" was a race between that
-	// announcement and the case's own poll rather than a fact about the
-	// claim. A case that needs another model installs it after this.
-	withModels(t, e, answers{})
+	// A REVIEWER THAT ENDS THE TURN, so a resume the rig admits ends in its
+	// first round and settles the run, once. A model answering in prose left
+	// the review undecided, the turn sent itself back to a second round whose
+	// relaunch this company cannot make, and the failed resume handed its
+	// claim back to be collected again: "collected once" was then a race with
+	// the case's own poll. A case needing another model installs it after.
+	withModels(t, e, reviewer)
 	return e
+}
+
+// reviewer is a model whose every review ends the turn, on the real tool
+// session, and whose every other call answers "done". It ends it as failed:
+// the rig's run awaits its reply by a tool its job never calls, so a done
+// would be sent back as undelivered ([turn.OverrideDone]).
+var reviewer = phasedHarness{model: "opus", pick: func(offered []string) llmtest.Run {
+	if offers(offered, runner.SubmitReviewTool) {
+		return calling(runner.SubmitReviewTool, map[string]any{
+			"decision": "failed", "notes": "a rig's turn: nothing here to deliver",
+		}, llm.Usage{})
+	}
+	return calling(runner.SubmitWorkTool, map[string]any{
+		"outcome": "blocked", "summary": "nothing to do here", "evidence": "a rig's turn",
+	}, llm.Usage{})
+}}
+
+// settled reports whether the run of turnID is over: its record is gone, so
+// nothing can claim or collect it again.
+func (r *drainRig) settled(t *testing.T, e *Engine, turnID string) bool {
+	t.Helper()
+	_, found, err := sandbox.NewCoordStore(e.backends.Fleet).Get(t.Context(), turnID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", turnID, err)
+	}
+	return !found
 }
 
 // stopWaiter stops e's waiter, which drives the rig's direct box (ADR-0065),
@@ -618,11 +646,11 @@ func TestACompletionRefusedOnAWaitResumesOnceItClears(t *testing.T) {
 			if tc.signal {
 				e.readmitResumes(waitLimit, "swe")
 			}
-			eventually(t, "the run to be collected once the limit cleared", func() bool {
-				return r.collected.Load() > 0
-			})
-			eventually(t, "the run to leave running", func() bool {
-				return r.run(t, e, "t1").Status != sandbox.StatusRunning
+			// SETTLED, NOT MERELY CLAIMED: a claim's status leaves running
+			// too, and a resume that failed would give it back to be
+			// collected again. With the record gone nothing can.
+			eventually(t, "the run to be settled once the limit cleared", func() bool {
+				return r.settled(t, e, "t1")
 			})
 			if got := r.collected.Load(); got != 1 {
 				t.Fatalf("the run was collected %d times, want once", got)

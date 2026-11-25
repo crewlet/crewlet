@@ -26,6 +26,10 @@ type ThreadTraits struct {
 	// PlacesWithResumeRead says a capture is placed at a save point only
 	// where its release's resume was read ([TakenSession.ResumeRead]).
 	PlacesWithResumeRead bool
+	// Summaries says the runner reads its main thread's newest compaction
+	// summary ([MainThreadAsk.Summary]) at every box read, whether or not it
+	// counts the thread (Reads).
+	Summaries bool
 }
 
 // ThreadTraitsOf is runner's [ThreadTraits], zero for a runner that states
@@ -170,4 +174,22 @@ type telemetryExporter interface{ ExportsTelemetry() bool }
 func exportsTelemetry(runner Runner) bool {
 	exporter, ok := runner.(telemetryExporter)
 	return ok && exporter.ExportsTelemetry()
+}
+
+// MCPDeferrer is a [Runner] whose harness hides every MCP server's tools
+// behind a search of its own once a run's servers list DefersMCPAt of them in
+// all, its bridge's among them, which a browser would bring a run to
+// ([EnsureBrowser]). Optional: a runner that is none sends what it is handed.
+// EXPORTED so a runner asserts it implements it, as [CallIdentifier] is: a
+// renamed method would read as a harness that hides none, and a browser would
+// hide a run's own tools without a word.
+type MCPDeferrer interface{ DefersMCPAt() int }
+
+// defersMCPAt is how many MCP tools make runner's harness hide them all, 0 for
+// a runner that states none.
+func defersMCPAt(runner Runner) int {
+	if deferrer, ok := runner.(MCPDeferrer); ok {
+		return deferrer.DefersMCPAt()
+	}
+	return 0
 }

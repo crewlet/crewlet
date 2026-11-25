@@ -347,6 +347,34 @@ const UnreadFindings = "findings"
 // could not be said; the build's own API retirements still are.
 const UnreadGrowthSignals = "growth_signals"
 
+// UnreadOAuthGrants is the unread word of a node that could not read the
+// company's OAuth grants, so which registered clients a moved address left
+// behind could not be said.
+const UnreadOAuthGrants = "oauth_grants"
+
+// OAuthClientReader reads the OAuth clients a person registered at their
+// vendors, each with the redirect its last grant came back through, and the
+// callback a sign-in comes back to now, "" with no public address.
+type OAuthClientReader interface {
+	RegisteredClients(ctx context.Context) ([]notice.RegisteredClient, error)
+	CallbackURL() string
+}
+
+// redirectNotices is the notice of the OAuth clients a person registered whose
+// last sign-in came back to another address than this node's callback now
+// ([notice.FromRedirects]); false where the grants cannot be read.
+func (s Sources) redirectNotices(ctx context.Context) ([]notice.Notice, bool) {
+	if s.OAuthClients == nil {
+		return nil, true
+	}
+	clients, err := s.OAuthClients.RegisteredClients(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "advisor_oauth_grants_unread", "error", err.Error())
+		return nil, false
+	}
+	return notice.FromRedirects(s.OAuthClients.CallbackURL(), clients), true
+}
+
 // growthNotices is the notices of what the growth products meet: this build's
 // catalogs' retirements, and every live node's growth signals off its status
 // record; false where those records cannot be read.
@@ -415,7 +443,11 @@ func (s Sources) advisorNotices(ctx context.Context, _ Params) (any, error) {
 	if !vendorsKnown {
 		out.Unread = append(out.Unread, UnreadGrowthSignals)
 	}
-	out.Notices = notice.WithFindings(notice.Read(findings, fleet, held, vendors, now), listed)
+	redirects, redirectsKnown := s.redirectNotices(ctx)
+	if !redirectsKnown {
+		out.Unread = append(out.Unread, UnreadOAuthGrants)
+	}
+	out.Notices = notice.WithFindings(notice.Read(findings, fleet, held, vendors, redirects, now), listed)
 	return out, nil
 }
 

@@ -53,9 +53,9 @@ const (
 	// Servers are shown only its public line.
 	ShapeSSHCertificateAuthority Shape = "ssh_certificate_authority"
 
-	// ShapeGoogleServiceAccount is a Google Cloud service account's email,
-	// `<id>@<project>.iam.gserviceaccount.com`, as config holds it.
-	ShapeGoogleServiceAccount Shape = "google_service_account"
+	// ShapeGoogleProject is a Google Cloud project's ID that a service
+	// account's email can name, as the console shows it under the name.
+	ShapeGoogleProject Shape = "google_project"
 
 	// ShapeGoogleProvider is a workload identity provider's full resource
 	// name, as config holds it.
@@ -187,12 +187,13 @@ func (s Shape) Problem(noun, value string) string {
 		}
 		return fmt.Sprintf("This %s is not a Meta access token: it is EAA followed by letters and digits. "+
 			"Paste the token Business Settings, System users, Generate new token shows once.", noun)
-	case ShapeGoogleServiceAccount:
-		if _, ok := config.GoogleCloudServiceAccount(value); ok {
+	case ShapeGoogleProject:
+		if config.GoogleCloudIdentityProject(value) {
 			return ""
 		}
-		return fmt.Sprintf("This %s is not a service account's email: it reads "+
-			"<id>@<project>.iam.gserviceaccount.com, as the service account's page shows it.", noun)
+		return fmt.Sprintf("This %s is not a Google Cloud project ID: 6 to 30 lowercase letters, digits and "+
+			"hyphens, starting with a letter and not ending with a hyphen. Google shows it under the project's "+
+			"name, and it can differ from the name.", noun)
 	case ShapeGoogleProvider:
 		if config.GoogleCloudProvider(value) {
 			return ""
@@ -234,7 +235,7 @@ func opaqueTokenRune(r rune) bool {
 // field, which is where a shared token ends up.
 //
 // A VENDOR-ISSUED IDENTIFIER IS NEVER MINTED: a value of [ShapeUUID],
-// [ShapeScalewayAccessKey], [ShapeGoogleServiceAccount], [ShapeGoogleProvider],
+// [ShapeScalewayAccessKey], [ShapeGoogleProject], [ShapeGoogleProvider],
 // [ShapeAppleAdsKey] or [ShapeAppleAdsID] names something the vendor
 // or the person made, and one Crewlet made up would name nothing.
 func (s Shape) Mint(token func() string) (string, error) {
@@ -250,7 +251,7 @@ func (s Shape) Mint(token func() string) (string, error) {
 	case ShapeMetaToken:
 		// MINTED BY META ALONE: one Crewlet made up would sign nothing in.
 		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
-	case ShapeUUID, ShapeScalewayAccessKey, ShapeGoogleServiceAccount, ShapeGoogleProvider,
+	case ShapeUUID, ShapeScalewayAccessKey, ShapeGoogleProject, ShapeGoogleProvider,
 		ShapeAppleAdsKey, ShapeAppleAdsID:
 		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
 	default:

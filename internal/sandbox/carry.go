@@ -79,19 +79,25 @@ type SessionArchive struct {
 	// a harness with no guard, a box that failed it, an older build's word.
 	Unshadowed bool
 
-	// Trim is the box's word that its pack cut the session's record to what
-	// its harness's resume loads (internal/sandbox/executor's trim.go), read by
-	// a take alone and kept as [SessionCapture.Trimmed]; zero where it was not
+	// Trim is the box's word that its pack cut the session to what its
+	// harness's resume loads (internal/sandbox/executor's trim.go), read by a
+	// take alone and kept as [SessionCapture.Trimmed]; zero where it was not
 	// cut or the box said nothing this build reads.
 	Trim ArchiveTrim
 }
 
-// ArchiveTrim is what a pack's trim cut of a session's record, as its box
-// counted it: the record's bytes before the cut and those kept. The zero
-// value is no trim.
-type ArchiveTrim struct{ RecordBytes, KeptBytes int64 }
+// ArchiveTrim is what a pack's trim cut of a session, as its box counted it:
+// the bytes before the cut and those kept, of its record or, where the trim
+// leaves files out, of every file it packs; and where the cut left out lines a
+// chat file's run began after, that start restated over the cut copy
+// ([SessionArchive.Prefix], which a take checks it as). The zero value is no
+// trim.
+type ArchiveTrim struct {
+	RecordBytes, KeptBytes int64
+	Prefix                 LinePrefix
+}
 
-// Trimmed reports whether t says the pack kept less of the record than it held.
+// Trimmed reports whether t says the pack kept less than it held.
 func (t ArchiveTrim) Trimmed() bool { return t.KeptBytes > 0 && t.RecordBytes > t.KeptBytes }
 
 // RunStart is where the run that packed a session's archive began in that

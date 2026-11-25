@@ -41,8 +41,9 @@ func (e *Engine) ResearchSearch(ctx context.Context, query string) (research.Res
 func (e *Engine) CanResearchSearch() bool { return e.researchSearcher() != nil }
 
 // researchSearcher is the search run of the entry Ask Crewlet runs on now:
-// its model's, or, on an LLM fleet, its home's or else the pick it would
-// take ([helperPick], read without taking). Nil where that entry has none.
+// its model's, or, on an LLM fleet, its home's while it is not sitting out,
+// else the first member in the walk with a search run that is not ([helperPick],
+// read without taking). Nil where none has one.
 func (e *Engine) researchSearcher() *harness.Provider {
 	c := e.Company()
 	if c == nil || c.Config == nil || len(c.Searchers) == 0 {
@@ -55,13 +56,27 @@ func (e *Engine) researchSearcher() *harness.Provider {
 	key := ref
 	if fleetKey, onFleet := config.FleetOf(ref); onFleet {
 		key = c.Models.Home(fleet.Job{Fleet: fleetKey, Subject: "assistant", Job: "assistant"})
-		if c.Searchers[key] == nil {
-			run, err := helperPick(c, "assistant.model", ref, "assistant", false)
-			if err != nil {
-				return nil
-			}
-			key = run.key
+		if s := c.Searchers[key]; s != nil && s.SittingOut() == nil {
+			return s
 		}
+		run, err := helperPick(c, "assistant.model", ref, "assistant", false)
+		if err != nil {
+			return nil
+		}
+		var first *harness.Provider
+		for _, m := range run.members {
+			s := c.Searchers[m.Key]
+			if s == nil {
+				continue
+			}
+			if s.SittingOut() == nil {
+				return s
+			}
+			if first == nil {
+				first = s
+			}
+		}
+		return first
 	}
 	return c.Searchers[key]
 }

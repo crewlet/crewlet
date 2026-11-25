@@ -307,8 +307,8 @@ var secretsValueCases = []fleetCase{
 // refused as too large and nothing is written; at it, each is written and
 // read back whole.
 //
-// Mutation: hold a twin's atlas class to coord.MaxValueBytes (or declare the
-// KV's undeclared), and that backend writes the value past its bound.
+// Mutation: hold a twin's atlas class to coord.MaxValueBytes, and that backend
+// writes the value past its bound.
 var atlasValueCases = []fleetCase{
 	{"an atlas record past its class's bound is refused as too large, and at it is written", func(h *fleetHarness) {
 		for _, c := range []struct {

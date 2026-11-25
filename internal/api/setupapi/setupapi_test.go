@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
@@ -334,6 +335,9 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	}
 	if opts.Probes == nil {
 		opts.Probes = inertProbes()
+	}
+	if opts.Drawers == nil {
+		opts.Drawers = map[integration.Kind]setup.Drawer{integration.KindGoogleCloud: googlecloud.Draw}
 	}
 	if opts.Sink == nil {
 		opts.Sink = func(by iam.Actor) (provision.TokenSink, error) {

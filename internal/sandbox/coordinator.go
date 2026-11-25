@@ -430,6 +430,15 @@ type CoordinatorOptions struct {
 	// Nil serves nothing again.
 	Recovered func(ctx context.Context, run PendingRun)
 
+	// ConnectSettled waits for this node's write, under way, of the record that a
+	// run's harness connected its bridge ([PendingStore.MarkBridgeConnected]),
+	// which is made off the harness's list, on its completion or ctx's end (its
+	// error), and answers whether this node saw the harness connect with no write
+	// of it landed. A collection reading a row without the mark settles it and
+	// reads the row again, or makes the write itself, so a run that listed is
+	// never failed as one that never connected. Nil settles none.
+	ConnectSettled func(ctx context.Context, turnID string) (unrecorded bool, err error)
+
 	// Unresumable judges each run parked on a question as its seat is recovered:
 	// non-nil is a run no build will ever resume, ended there rather than left
 	// holding its seat for an answer it cannot take. Nil judges none.
@@ -765,8 +774,10 @@ type Coordinator struct {
 	ended  func(runID string)
 	// recovered is [CoordinatorOptions.Recovered].
 	recovered func(ctx context.Context, run PendingRun)
-	stopped   func(ctx context.Context, handle, turnID string)
-	parked    func(ctx context.Context, run PendingRun)
+	// connectSettled is [CoordinatorOptions.ConnectSettled].
+	connectSettled func(ctx context.Context, turnID string) (bool, error)
+	stopped        func(ctx context.Context, handle, turnID string)
+	parked         func(ctx context.Context, run PendingRun)
 	// waitedFor is [CoordinatorOptions.WaitedFor].
 	waitedFor func(ctx context.Context, run PendingRun) (types.RunWaited, bool)
 	// unresumable is [CoordinatorOptions.Unresumable].
@@ -1099,6 +1110,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		condense:           opts.Condense,
 		ended:              opts.Ended,
 		recovered:          opts.Recovered,
+		connectSettled:     opts.ConnectSettled,
 		unresumable:        opts.Unresumable,
 		stopped:            opts.Stopped,
 		parked:             opts.Parked,
@@ -1799,6 +1811,38 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	return err
 }
 
+// settledConnect is run as a collection reads it, where its row holds no
+// record that its harness connected its bridge: once this node's write of one
+// under way is over ([CoordinatorOptions.ConnectSettled]), with the record
+// read again, and where this node saw the harness connect with no write
+// landed, with the record written here. An error (the wait's, the read's or
+// the write's) fails the read, which is retried: never a run read as one
+// that did not connect because a write had not landed.
+func (c *Coordinator) settledConnect(ctx context.Context, run PendingRun, read BoxRead) (PendingRun, error) {
+	if read != BoxReadCollect || run.Launch.BridgeConnected || c.connectSettled == nil {
+		return run, nil
+	}
+	unrecorded, err := c.connectSettled(ctx, run.TurnID)
+	if err != nil {
+		return run, fmt.Errorf("sandbox: waiting for the record that run %s's harness connected its bridge: %w",
+			run.TurnID, err)
+	}
+	if unrecorded {
+		if _, err = c.pending.MarkBridgeConnected(ctx, run.TurnID, run.LaunchID); err != nil {
+			return run, fmt.Errorf("sandbox: run %s's harness connected its bridge, and the record of it "+
+				"could not be written: %w", run.TurnID, err)
+		}
+	}
+	again, found, err := c.pending.Get(ctx, run.TurnID)
+	if err != nil {
+		return run, fmt.Errorf("sandbox: reading run %s's record of its bridge connection: %w", run.TurnID, err)
+	}
+	if found && again.LaunchID == run.LaunchID {
+		run.Launch.BridgeConnected = again.Launch.BridgeConnected
+	}
+	return run, nil
+}
+
 // collectClaimed reads a claimed run's job back and records its result, charge
 // and launch record on the claimed row, so a handed-back claim carries them.
 // collected is false where the box could not be read (err is
@@ -2153,6 +2197,13 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 // packed beside a writing harness the session was never final. That the cap ended
 // the job is recorded before it is asked or killed ([LaunchRecord.EndedAtDeadline]).
 func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
+	return c.readBoxFor(ctx, run, read, false)
+}
+
+// readBoxFor is [Coordinator.readBox] for the node collecting the run: away
+// where that is another node than this, the box's host, so the run's seat
+// moved since its launch ([RunHandle.BridgeHolderChanged]).
+func (c *Coordinator) readBoxFor(ctx context.Context, run PendingRun, read BoxRead, away bool) (Result, bool, error) {
 	manager := c.mgr()
 	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {
@@ -2188,7 +2239,9 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 			over = c.endJob(ctx, run, box, runner, sawWorking)
 		}
 	}
-	result, err := runner.Collect(ctx, box, run.Handle(), c.answerBudget)
+	handle := run.Handle()
+	handle.BridgeHolderChanged = away
+	result, err := runner.Collect(ctx, box, handle, c.answerBudget)
 	if err != nil {
 		return Result{}, false, err
 	}
@@ -2238,11 +2291,14 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// and written with how the harness ended after the take; and the receipts of
 	// its hooks' serves, settled BEFORE the take, a verdict the store does not
 	// answer handing the read back box-answered ([boxAnsweredError]).
-	reading := c.readMainThread(ctx, run, box, runner, read, at, result)
+	asked := c.asksSummary(runner)
+	reading := c.readMainThread(ctx, run, box, runner, read, at, result, asked)
 	result.ResumedCount, result.CountProvider, result.NextRequest = reading.Count, reading.Provider, reading.Next
 	if err := c.settleReceipts(ctx, run, reading.Receipts, read); err != nil {
 		return Result{}, false, &boxAnsweredError{err: err, end: at.harnessEnd()}
 	}
+	// ITS NEWEST SUMMARY, which the take keeps beside the session (summary.go).
+	at.summary = c.foundSummary(ctx, run, runner, asked, reading.Summary)
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
 	c.keepLater(ctx, spooled)
@@ -2690,6 +2746,9 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, pinned i
 		}
 		rec.ErrorKind = types.ExecutorErrorLaunchFailed
 		switch {
+		case result.TurnCapExceeded:
+			// FIRST: whatever else ended the run, nothing held it to its cap.
+			rec.ErrorKind = types.ExecutorErrorTurnCapExceeded
 		case ranOutOfContext(run, result):
 			rec.ErrorKind = types.ExecutorErrorContextExhausted
 		case requestRefused(run, result):

@@ -138,9 +138,10 @@ func TestAGoogleIdentifierIsHeldToItsShapeAndNeverMinted(t *testing.T) {
 		value string
 		ok    bool
 	}{
-		{setup.ShapeGoogleServiceAccount, "crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com", true},
-		{setup.ShapeGoogleServiceAccount, "ops@acme.example", false},
-		{setup.ShapeGoogleServiceAccount, "acme-crewlet-id", false},
+		{setup.ShapeGoogleProject, "acme-crewlet-id", true},
+		{setup.ShapeGoogleProject, "Acme Crewlet", false},
+		{setup.ShapeGoogleProject, "example.com:acme-crewlet", false},
+		{setup.ShapeGoogleProject, "crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com", false},
 		{setup.ShapeGoogleProvider,
 			"projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine", true},
 		{setup.ShapeGoogleProvider, "projects/123456789012/locations/global/workloadIdentityPools/crewlet", false},
@@ -154,7 +155,7 @@ func TestAGoogleIdentifierIsHeldToItsShapeAndNeverMinted(t *testing.T) {
 			t.Errorf("%s: the refusal quotes the value", tc.shape)
 		}
 	}
-	for _, shape := range []setup.Shape{setup.ShapeGoogleServiceAccount, setup.ShapeGoogleProvider} {
+	for _, shape := range []setup.Shape{setup.ShapeGoogleProject, setup.ShapeGoogleProvider} {
 		if value, err := shape.Mint(func() string { return "minted" }); err == nil || value != "" {
 			t.Errorf("%s minted %q", shape, value)
 		}

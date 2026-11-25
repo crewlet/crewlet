@@ -25,4 +25,23 @@ describe("a page of this dashboard's own", () => {
     expect(appRoute("#/inbox\\..")).toBeNull();
     expect(appRoute("javascript:alert(1)")).toBeNull();
   });
+
+  // A SHAREABLE TAB SURVIVES, AND NOTHING ELSE: an integration's tab is a read
+  // view held to its own names, so a pasted link lands on it; a form (`edit=`),
+  // an unknown key or a tab the page does not have is dropped, as every query
+  // on a page that lists no tab is. Mutation: keep every key, or every value,
+  // and a case fails.
+  test("keeps only a tab the page lists as shareable, and never a form", () => {
+    const page = "#/company/integrations/google_cloud";
+    expect(appRoute(`${page}?tab=settings`)?.canonical).toBe(`${page}?tab=settings`);
+    expect(appRoute(`${page}?tab=settings&edit=settings`)?.canonical).toBe(`${page}?tab=settings`);
+    expect(appRoute(`${page}?edit=key`)?.canonical).toBe(page);
+    expect(appRoute(`${page}?tab=edit`)?.canonical).toBe(page);
+    expect(appRoute(`${page}?tab=agents&provisioner=x%40evil.example`)?.canonical).toBe(
+      `${page}?tab=agents`,
+    );
+    expect(appRoute("#/company/org/seats/pm?tab=settings")?.canonical).toBe(
+      "#/company/org/seats/pm",
+    );
+  });
 });

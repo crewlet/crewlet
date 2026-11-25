@@ -281,6 +281,11 @@ type claimed struct {
 func (b *Backend) tryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions,
 	metaOf metaRule) (claimed, error) {
 
+	// THE STORE'S BOUND ON A PLACEMENT HINT, refused as the KV backend
+	// refuses it, before anything is decided.
+	if err := coord.HoldLeaseName("preferred node", opts.Preferred); err != nil {
+		return claimed{}, err
+	}
 	c, pending, err := b.decide(resource, opts, metaOf)
 	if err != nil || pending == nil {
 		return c, err
@@ -724,7 +729,7 @@ func validate(resource, owner string) error {
 	if owner == "" {
 		return errNoOwner
 	}
-	return nil
+	return coord.HoldLeaseName("owner", owner)
 }
 
 // validateTTL adds the deadline check for the calls that set one. A

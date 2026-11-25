@@ -2,9 +2,8 @@ package executor
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -49,6 +48,7 @@ var (
 	_ artifactHolder = Grok{}
 	_ sessionJudge   = Grok{}
 	_ inPlaceGate    = Grok{}
+	_ trimmer        = Grok{}
 )
 
 // NewGrok returns the runner.
@@ -169,7 +169,7 @@ func grokScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`if [ -z "$n" ] || ! at %s; then printf 'crewlet: this box runs Grok Build %%s, and this runner runs Grok Build %s or newer (a release it cannot read counts as older): install Grok Build %s\n' "${r:-that prints no release}" >&2; exit 1; fi`,
 		floorArgs(grokSupported()), grokSupported(), grokSupported())
 	line(`p=%s`, q(paths.Brief()))
-	b.WriteString(grokSessionGate(session, paths, req.FreshWiring != nil))
+	b.WriteString(grokSessionGate(session, paths, freshSessionWiring(req, session) != nil))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
 	// THE MAIN SESSION NAMED for the note hooks, which fire in a subagent's
@@ -310,7 +310,7 @@ func grokSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`rm -f %s`, carried)
 	line(`if [ -z "$w" ]; then`)
 	if rewired {
-		line(`  rm -f %s %s`, q(paths.GrokConfigFresh()), q(paths.GrokTakeConfigFresh()))
+		line(`  rm -f %s %s %s`, q(paths.GrokConfigFresh()), q(paths.GrokTakeConfigFresh()), q(paths.GrokAgentFresh()))
 	} else {
 		line(`  :`)
 	}
@@ -322,8 +322,8 @@ func grokSessionGate(session Session, paths Paths, rewired bool) string {
 	if rewired {
 		// THE NEW SESSION WIRED TO ITS OWN TOKEN, or not started:
 		// [claudeSessionGate]'s reason.
-		line(`  mv -f %s %s || { echo 'crewlet: the new session could not be wired to the tools of its seat, so the run does not start' >&2; exit 1; }`,
-			q(paths.GrokConfigFresh()), q(paths.GrokConfig()))
+		line(`  { mv -f %s %s && mv -f %s %s; } || { echo 'crewlet: the new session could not be wired to the tools of its seat, so the run does not start' >&2; exit 1; }`,
+			q(paths.GrokConfigFresh()), q(paths.GrokConfig()), q(paths.GrokAgentFresh()), q(paths.GrokAgent()))
 		line(`  if [ -f %s ]; then mv -f %s %s || { echo 'crewlet: the new session could not be wired to its notes, so the run does not start' >&2; exit 1; }; fi`,
 			q(paths.GrokTakeConfigFresh()), q(paths.GrokTakeConfigFresh()), q(paths.GrokTakeConfig()))
 	}
@@ -374,11 +374,12 @@ const (
 // members named from [Paths.GrokSessions] down, the session's directory,
 // `<key>/<session>/`, its record (chat_history.jsonl) first and every other
 // regular file under it but the harness's locks (`*.lock`), its `terminal/`
-// call logs included; then, alike, each subagent's session directory its
-// updates.jsonl names (`subagent_spawned`), under the key of the directory it
-// was started in. The restore puts the session, and each subagent's filed
-// beside it, under its own box's key. A resume needs no file outside it, and
-// one from such an archive continues (measured on 1.0.92). A change is a new
+// call logs included, past the bound those of [grokTrimmedDirs] left out; then,
+// alike, each subagent's session directory its updates.jsonl names
+// (`subagent_spawned`), under the key of the directory it was started in. The
+// restore puts the session, and each subagent's filed beside it, under its own
+// box's key. A resume needs no file outside it, and one from such an archive
+// continues (measured on 1.0.92). A layout an older reader cannot read is a new
 // format.
 const grokArchiveFormat = 2
 
@@ -450,17 +451,23 @@ func (Grok) meter(context.Context, io.Reader, string, string, *passBudget) (mete
 }
 
 // grokCapture is the part of a run's script that packs its session once its
-// harness has exited ([grokPack]).
+// harness has exited ([grokPack]), trimmed by the box's bare release
+// ([trimRelVar], read off v as [releaseOf] reads it).
 func grokCapture(paths Paths) string {
-	return grokPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()})
+	return bareReleaseShell(trimRelVar) + grokPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()})
 }
 
-// grokPack packs the session s names into at.staged and moves it over at.dest,
-// its digest kept ([packDigest]): the members [grokArchiveFormat] names, its
+// grokPack is ONE PACK, the run's end's, a pack on demand's and a save's, at
+// the bounds a take keeps ([trimAt]): [grokPackAt].
+func grokPack(paths Paths, at packAt) string { return grokPackAt(paths, at, trimAt) }
+
+// grokPackAt packs the session s names into at.staged and moves it over
+// at.dest, its digest kept ([packDigest]) and its trim past trim said beside it
+// ([grokTrimTar], [trimMarked]): the members [grokArchiveFormat] names, its
 // record first, each named on tar's command line so no lock or link is
 // packed. A pack beside a working harness is held to [claudeHeldTar]'s rule,
 // which reads the first member as the session's transcript.
-func grokPack(paths Paths, at packAt) string {
+func grokPackAt(paths Paths, at packAt, trim trimPoints) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
@@ -494,9 +501,10 @@ func grokPack(paths Paths, at packAt) string {
 	if at.working {
 		tar = claudeHeldTar(sessions, at.staged)
 	}
-	line(`    rm -rf %s; if mkdir -p %s && %s && %s && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(at.staged), q(at.staged), list, tar, packDigest(paths, "s", at.staged), q(at.staged+"/capture"), q(at.dest),
-		q(at.staged+"/error"))
+	tar = grokTrimTar(trim, q(sessions), q(at.staged+"/capture"), tar)
+	line(`    rm -rf %s; if mkdir -p %s && %s && %s && %s && %s && mv -f %s %s; then packed=1; %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(at.staged), q(at.staged), list, tar, packDigest(paths, "s", at.staged), trimUnmark(at.dest),
+		q(at.staged+"/capture"), q(at.dest), trimMarked(at.dest), q(at.staged+"/error"))
 	line(`    rm -rf %s`, q(at.staged))
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)
@@ -563,20 +571,13 @@ func (Grok) Events() Decoder { return &grokEvents{} }
 // result IS its stream.
 func (Grok) Parse(stdout []byte) sandbox.Result { return decodeAll(&grokEvents{}, stdout) }
 
-// grokNonce is a run's own suffix to its servers' names: six hex digits (24
-// bits) from the system's random source, new every run, so no file a
-// repository holds can name a server of the run's beforehand (a repository's
-// `.grok/config.toml` naming one replaces it, measured on 1.0.92).
-func grokNonce() string {
-	var b [3]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
-}
-
-// grokServerName is name with the run's nonce, as Grok Build names a server's
-// tools (`<server>__<tool>`), and false for a name it would skip: one that
-// opens with neither a letter nor `_`, holds anything but letters, digits, `-`
-// and `_`, or holds `__`, which would split the catalogue key twice.
+// grokServerName is name with its session's nonce ([sessionNonce]), which no
+// file a repository or image holds can name beforehand (a repository's
+// `.grok/config.toml` naming a server replaces it, measured on 1.0.92), as
+// Grok Build names a server's tools (`<server>__<tool>`), and false for a
+// name it would skip: one that opens with neither a letter nor `_`, holds
+// anything but letters, digits, `-` and `_`, or holds `__`, which would split
+// the catalogue key twice.
 func grokServerName(name, nonce string) (string, bool) {
 	full := name + "_" + nonce
 	if name == "" || strings.Contains(full, "__") {
@@ -592,6 +593,18 @@ func grokServerName(name, nonce string) (string, bool) {
 		}
 	}
 	return full, true
+}
+
+// grokNames is each of servers' names with nonce, as the run's settings
+// write them ([grokServerName]).
+func grokNames(servers map[string]sandbox.MCPServer, nonce string) []string {
+	var named []string
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
+		if full, ok := grokServerName(name, nonce); ok {
+			named = append(named, full)
+		}
+	}
+	return named
 }
 
 // grokToolsInstruction is what a Grok Build run is told of its MCP servers:
@@ -961,27 +974,22 @@ func grokRulesJSON(system string) ([]byte, error) {
 // WriteConfig writes what a Grok Build run reads beside what its box already
 // holds, which Grok loads as a person's would: its settings, the box's own with
 // the run's tables laid in ([grokMergeConfig]), with a fresh session's beside
-// them ([sandbox.RunRequest.FreshWiring]); its agent
-// file and the renewal a continued session is handed; its skills; its take
-// config and note helper where it is wired to its notes or its skills' loads;
-// its brief, and the brief a new session is handed in a continued one's place,
-// each as words ([briefNotACommand]).
-func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+// them ([freshSessionWiring]), each naming its servers for its session; its
+// agent files and the renewal a continued session is handed; its skills; its
+// take config and note helper where it is wired to its notes or its skills'
+// loads; and, once the box's Grok runs the run's servers as they are written
+// ([grokServersHeld]), its brief, and the brief a new session is handed in a
+// continued one's place, each as words ([briefNotACommand]).
+func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
 	paths Paths) (string, error) {
+	if session.ID == "" || (session.Continues && session.Fresh == "") {
+		return "", errors.New("executor: a Grok Build run names no session to name its MCP servers for")
+	}
 	if err := grokSkillsHidden(ctx, box, req.Skills, paths); err != nil {
 		return "", err
 	}
-	nonce := grokNonce()
-	var named []string
-	for _, name := range slices.Sorted(maps.Keys(req.MCPServers)) {
-		if full, ok := grokServerName(name, nonce); ok {
-			named = append(named, full)
-		}
-	}
-	system := strings.TrimSpace(strings.Join([]string{req.System, grokToolsInstruction(named)}, "\n\n"))
-	if req.Steer.Set() {
-		system = withNoteInstruction(system, g.NoteInstruction())
-	}
+	nonce := sessionNonce(session.ID)
+	system := g.system(req, req.MCPServers, nonce)
 	if err := box.WriteFile(ctx, paths.GrokAgent(), grokAgentFile(system)); err != nil {
 		return "", fmt.Errorf("executor: writing Grok Build's agent file: %w", err)
 	}
@@ -1000,13 +1008,9 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err = grokSkillsSwitchedOff(boxOwn, req.Skills, paths); err != nil {
 		return "", err
 	}
-	ours := slices.Clone(named)
-	if f := req.FreshWiring; f != nil {
-		for name := range f.MCPServers {
-			if full, ok := grokServerName(name, nonce); ok {
-				ours = append(ours, full)
-			}
-		}
+	ours := grokNames(req.MCPServers, nonce)
+	if f := freshSessionWiring(req, session); f != nil {
+		ours = append(ours, grokNames(f.MCPServers, sessionNonce(session.Fresh))...)
 	}
 	var record strings.Builder
 	for _, name := range slices.Compact(slices.Sorted(slices.Values(ours))) {
@@ -1044,8 +1048,15 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			return "", fmt.Errorf("executor: recording the ids of the Grok Build run's hooks: %w", err)
 		}
 	}
-	if f := req.FreshWiring; f != nil {
-		freshOwn, ferr := grokConfig(f.MCPServers, nonce, grokHooks(paths, notes, loads, req.Skills))
+	var freshNames []string
+	if f := freshSessionWiring(req, session); f != nil {
+		freshNonce := sessionNonce(session.Fresh)
+		freshNames = grokNames(f.MCPServers, freshNonce)
+		agent := grokAgentFile(g.system(req, f.MCPServers, freshNonce))
+		if err = box.WriteFile(ctx, paths.GrokAgentFresh(), agent); err != nil {
+			return "", fmt.Errorf("executor: writing Grok Build's agent file for a new session: %w", err)
+		}
+		freshOwn, ferr := grokConfig(f.MCPServers, freshNonce, grokHooks(paths, notes, loads, req.Skills))
 		if ferr != nil {
 			return "", ferr
 		}
@@ -1066,6 +1077,9 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			}
 		}
 	}
+	if err = grokServersHeld(ctx, box, req, paths, grokNames(req.MCPServers, nonce), freshNames); err != nil {
+		return "", err
+	}
 	if err = box.WriteFile(ctx, paths.Brief(), []byte(briefNotACommand(req.Brief))); err != nil {
 		return "", fmt.Errorf("executor: writing the brief: %w", err)
 	}
@@ -1075,6 +1089,18 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		}
 	}
 	return paths.GrokConfig(), nil
+}
+
+// system is a session's standing instructions: the request's, the tool
+// instruction naming servers under nonce ([grokToolsInstruction]), and the
+// note instruction where the run takes notes.
+func (g Grok) system(req sandbox.RunRequest, servers map[string]sandbox.MCPServer, nonce string) string {
+	system := strings.TrimSpace(strings.Join([]string{req.System, grokToolsInstruction(grokNames(servers, nonce))},
+		"\n\n"))
+	if req.Steer.Set() {
+		system = withNoteInstruction(system, g.NoteInstruction())
+	}
+	return system
 }
 
 // readsCommands marks Grok Build as running a brief that begins with `/` as one
@@ -1109,13 +1135,13 @@ func writeGrokSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.
 
 // artifactFiles is the files a Grok Build run leaves in its box of its own
 // beside its sessions, which a later run must not find ([artifactHolder]): its
-// agent file, renewal, a fresh session's settings, the note helper, its configs,
+// agent files, renewal, a fresh session's settings, the note helper, its configs,
 // its hooks' ids and the session it names. Never ~/.grok/config.toml, the box's own settings,
 // which the run puts back ([grokRestoreConfig]), nor the copy kept of them
 // while a run runs, nor its sessions and login.
 func (Grok) artifactFiles(p Paths) []string {
-	return []string{p.GrokAgent(), p.GrokRules(), p.GrokConfigFresh(), p.GrokTakeConfig(), p.GrokTakeConfigFresh(),
-		p.GrokThread(), p.GrokNoteHelper(), p.GrokHookIDs()}
+	return []string{p.GrokAgent(), p.GrokAgentFresh(), p.GrokRules(), p.GrokConfigFresh(), p.GrokTakeConfig(),
+		p.GrokTakeConfigFresh(), p.GrokThread(), p.GrokNoteHelper(), p.GrokHookIDs()}
 }
 
 // grokChargeBytes is the fewest bytes a Grok Build session's brief is counted

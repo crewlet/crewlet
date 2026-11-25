@@ -1,10 +1,12 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"slices"
 	"strconv"
+	"unicode"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -55,21 +57,17 @@ const geminiCountIDs = 1 << 16
 // ids_base), within the meter's base ([meterBaseHeldBytes]); 2^12 held 5 MiB.
 const geminiCountBaseIDs = 1 << 11
 
-// geminiCountLargeHeldBytes is what a count holds at [geminiCountIDs] ids at
-// the walk's word bound, past its base under the large slot: 24.9 MiB live at
-// most over four runs, the meter's and a collection's twice each
-// (BenchmarkAChatCountAtItsBounds' ids_long, to the byte at GOGC=1 under
-// gcstoptheworld), rounded up. A take counts it past the meter's base
-// ([takeLargeHeldBytes]); a collection's is within a chain's.
+// geminiCountLargeHeldBytes is what the take's meter's count holds at
+// [geminiCountIDs] ids at the walk's word bound, past its base under the large
+// slot: 24.97 MiB live at most over six runs (BenchmarkAChatCountAtItsBounds'
+// meter_ids_long, to the byte as each GC marks it), rounded up. A take counts
+// it past the meter's base ([takeLargeHeldBytes]); its meter reads no summary.
 const geminiCountLargeHeldBytes = 25 << 20
 
 // geminiSyntheticAnswerBytes is the JSON of the answer a resume hands a call
 // with none (213 bytes, 0.70.0). The turn it closes a history ending on a
 // person's record with is the request's alone, never the estimate's (measured).
 const geminiSyntheticAnswerBytes = 213
-
-// geminiSnapshot opens a compression's summary record.
-const geminiStateSnapshot = "<state_snapshot>"
 
 // geminiAnswer is one answer as the count reads it: its estimate in tokens,
 // its response's JSON bytes, and the records that carry it.
@@ -99,15 +97,39 @@ type geminiCounting struct {
 	removed         map[string]bool
 	order           []string
 	snapshot        map[string]bool
+	compressions    geminiCompressionLines[string]
 	marks           countMarks
 	l               geminiCountLine
 	seps            lineSeparators
+	head            lineFormHead
 }
 
 func newGeminiCounting() *geminiCounting {
 	return &geminiCounting{quarters: map[string]int64{}, bytes: map[string]int64{},
 		answers: map[string]*geminiAnswer{}, calls: map[string]*geminiCall{}, removed: map[string]bool{},
 		snapshot: map[string]bool{}}
+}
+
+// lineFormHead is a line's first [lineFormMaxBytes] bytes and one more, as
+// the walk takes them, for its forms ([lineForm.holds]): no more, whatever
+// the line's length.
+type lineFormHead []byte
+
+func (h *lineFormHead) Write(p []byte) (int, error) {
+	if room := lineFormMaxBytes + 1 - len(*h); room > 0 {
+		*h = append(*h, p[:min(len(p), room)]...)
+	}
+	return len(p), nil
+}
+
+// form is the head as the whole-line count matched a form on the line, its
+// white space trimmed ([codexLines]): from its start alone where the line ran
+// past it, which no whole form holds.
+func (h lineFormHead) form() []byte {
+	if len(h) > lineFormMaxBytes {
+		return bytes.TrimLeftFunc(h, unicode.IsSpace)
+	}
+	return bytes.TrimSpace(h)
 }
 
 // geminiCountLine is what the count reads of one line on the walk: whether
@@ -118,7 +140,7 @@ func newGeminiCounting() *geminiCounting {
 // a patch that does not read, or more of them than [geminiCountBaseIDs].
 type geminiCountLine struct {
 	patch, set, rewind, session bool
-	typeAbsent, entry           bool
+	typeAbsent, entry, user     bool
 	twice, unread               bool
 	record                      geminiCountRecord
 	updates                     []geminiCountRecord
@@ -127,15 +149,14 @@ type geminiCountLine struct {
 }
 
 // geminiCountRecord is one copy of a record as the count reads it, held until
-// its line or its patch's update ends: its id; its quarters, its text's bytes
-// and whether it opens with a compression's summary; the marks its parts and
-// answers set; and its answers and calls, each by its call's id, or its place
+// its line or its patch's update ends: its id; its quarters and its text's
+// bytes; the marks its parts and answers set; and its answers and calls, each by its call's id, or its place
 // where it has none, to at most [geminiCountBaseIDs] of them (past says more).
 type geminiCountRecord struct {
 	id              recordWord
 	idOK            bool
 	quarters, bytes int64
-	snapshot, past  bool
+	past            bool
 	marks           countMarks
 	answers         []geminiCountAnswer
 	calls           []geminiCountCall
@@ -198,8 +219,11 @@ func (c *geminiCounting) pastBase() bool {
 	return len(c.quarters)+len(c.answers)+len(c.calls)+len(c.removed) > geminiCountBaseIDs
 }
 
-// tee is the trim and the line's separators ([lineSeparators]).
-func (c *geminiCounting) tee(trim *lineTrim) io.Writer { return teeTwo{trim, &c.seps} }
+// tee is the trim, the line's separators ([lineSeparators]) and its head, for
+// its compression's forms ([geminiCompressionLines]).
+func (c *geminiCounting) tee(trim *lineTrim) io.Writer {
+	return teeTwo{trim, teeTwo{&c.seps, &c.head}}
+}
 
 // start starts the next line.
 func (c *geminiCounting) start() {
@@ -207,6 +231,7 @@ func (c *geminiCounting) start() {
 	c.l = geminiCountLine{record: record, updates: updates, removes: removes}
 	c.l.record.reset()
 	c.seps.reset()
+	c.head = c.head[:0]
 }
 
 // hold counts n more of a patch's parts the line holds, past
@@ -243,6 +268,7 @@ func (c *geminiCounting) record(w *lineWalk) error {
 			member(geminiCountsType)
 			kind, took, err := w.wordField(k)
 			l.typeAbsent, l.entry = k == jsonscan.Null, took && (kind == "user" || kind == "gemini")
+			l.user = took && kind == "user"
 			return err
 		case "$patch":
 			member(geminiCountsPatch)
@@ -297,18 +323,30 @@ func (c *geminiCounting) recordMember(w *lineWalk, name string, k jsonscan.Kind,
 	return true, err
 }
 
-// line takes one line: the header, a `$set` or a `$rewindTo` (which only
+// line takes one line ([geminiCounting.read]), and a user entry is a
+// compression's summary by its lines ([geminiCompressionLines]), known a line
+// late, as the whole-line count knew it, by the line's head ([lineFormHead]).
+func (c *geminiCounting) line(object bool) {
+	user := c.read(object)
+	if summary, ok := c.compressions.line(c.head.form(), user, user != ""); ok {
+		c.snapshot[summary] = true
+	}
+}
+
+// read takes one line: the header, a `$set` or a `$rewindTo` (which only
 // over-counts what it rewinds) are passed over; a `$patch` was taken as it
 // streamed: its updates as copies of their records, its removals, and one
 // that orders the records (`orderIds`, whose effect on the history was not
 // measured) unread; an entry is a copy of its record. Anything else is
-// unread, and so is a line holding a separator ([lineSeparators]).
-func (c *geminiCounting) line(object bool) {
+// unread, and so is a line holding a separator ([lineSeparators]). It is the
+// key of the user entry the line is, "" for none.
+func (c *geminiCounting) read(object bool) string {
 	l := &c.l
+	user := ""
 	switch {
 	case c.seps.found, !object, l.twice, l.unread:
 		c.marks = c.marks.with(sandbox.CountUnread)
-		return
+		return ""
 	case l.patch:
 		for i := range l.updates {
 			c.take(&l.updates[i])
@@ -319,13 +357,17 @@ func (c *geminiCounting) line(object bool) {
 	case l.set, l.rewind, l.session && l.typeAbsent:
 	case !l.entry:
 		c.marks = c.marks.with(sandbox.CountUnread)
-		return
+		return ""
 	default:
 		c.take(&l.record)
+		if l.user && l.record.idOK {
+			user = l.record.id.key()
+		}
 	}
 	if len(c.quarters)+len(c.answers)+len(c.calls)+len(c.removed) > geminiCountIDs {
 		c.marks = c.marks.with(sandbox.CountUnread)
 	}
+	return user
 }
 
 // take takes one copy of a record.
@@ -358,9 +400,6 @@ func (c *geminiCounting) take(r *geminiCountRecord) {
 		}
 		got.name = max(got.name, call.name)
 		got.carriers = geminiCarried(got.carriers, id)
-	}
-	if r.snapshot {
-		c.snapshot[id] = true
 	}
 	c.quarters[id] = max(c.quarters[id], r.quarters)
 	c.bytes[id] = max(c.bytes[id], r.bytes)
@@ -439,8 +478,7 @@ func (c *geminiCounting) patch(w *lineWalk, k jsonscan.Kind) error {
 
 // geminiContent reads a record's content, the value k begins, into r: a text
 // or its parts (an object one part), its answers kept apart and its calls
-// kept, its texts' UTF-8 bytes, and whether it opens with a compression's
-// summary.
+// kept, and its texts' UTF-8 bytes.
 func (w *lineWalk) geminiContent(k jsonscan.Kind, r *geminiCountRecord, again *bool) error {
 	switch k {
 	case jsonscan.Null:
@@ -533,7 +571,6 @@ func (w *lineWalk) geminiPart(k jsonscan.Kind, i int, r *geminiCountRecord, agai
 	case textOn && !textOK:
 		r.marks = r.marks.with(sandbox.CountUnread)
 	case textOn:
-		r.snapshot = r.snapshot || i == 0 && text.snapshot
 		r.quarters += text.estimate()
 		r.bytes += text.bytes
 	case answerOn:

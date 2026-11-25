@@ -435,12 +435,13 @@ func TestACollectedRecordNamesAContextExhaustedRun(t *testing.T) {
 }
 
 // A RUN WHOSE HARNESS THE KERNEL KILLED FOR MEMORY HAS ITS OWN KIND, as does one that ended on
-// its round cap, where its box has a memory domain of its own; a direct box shares the engine
+// its round cap, and one past it before any other, where its box has a memory domain of its own; a direct box shares the engine
 // host's, so a kill there is recorded and never the run's ending. Every record says the kills
 // its job saw and the ceiling, so its box's size is evidence on any end.
 //
-// Mutation: class the run by its kills alone, class a direct box's, or drop
-// the kills from a record that did not fail, and a row goes red.
+// Mutation: class the run by its kills alone, class a direct box's, class a run
+// past its cap by anything else first, or drop the kills from a record that did
+// not fail, and a row goes red.
 func TestACollectedRecordNamesARunKilledForMemory(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -462,6 +463,8 @@ func TestACollectedRecordNamesARunKilledForMemory(t *testing.T) {
 		{"its round cap", Container, Result{Error: "error_max_turns", RoundCapped: true},
 			types.ExecutorErrorMaxTurns, 0},
 		{"its round cap, finishing", Container, Result{Success: true, RoundCapped: true}, "", 0},
+		{"past its round cap, first", Container, Result{Error: "exceeded", TurnCapExceeded: true,
+			ContextExhausted: true, OutOfMemory: true, MemoryKills: 1}, types.ExecutorErrorTurnCapExceeded, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

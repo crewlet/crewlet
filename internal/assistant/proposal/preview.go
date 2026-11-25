@@ -62,6 +62,10 @@ type Preview struct {
 	// (decision D09), one phrase each.
 	Audience []wire.Phrase
 
+	// Own is a write to the person's own record (their instructions, pins or
+	// Home board), which reaches nobody else.
+	Own bool
+
 	// StepUp is a write whose approval asks the person to confirm it is
 	// them: a verb whose row asks a recent proof, or a share to the whole
 	// company (decision D09).

@@ -22,35 +22,41 @@ import (
 // there does not load as a session started in the checkout would. It names no
 // harness: a [checkoutSpec] says what one reads from a checkout's root and
 // where the run's copies go, checkout-launch runs it once before the harness
-// starts, and a harness's nested adapter (codex-nested) runs it after each of
-// the main loop's tool calls and writes what it claimed in its harness's shape.
+// starts, and a harness's nested adapter (codex-nested, pi-nested) runs it
+// after each of the main loop's tool calls and writes what it claimed in its
+// harness's shape.
 // The package doc's "Checkouts below the working directory" has the contract.
 
 // checkoutSpec is what a harness reads from a checkout's root and where a run
 // puts its copies: Instructions, the slots ([instructionSlot]), every slot's
 // text in order, within Limit, the harness's own bound on them in bytes (nil
-// where it has none);
-// SkillDirs, the skill directories, an earlier one's skill winning a name;
-// Skills, the run's skills directory ("" copies none), and Copied, the file
-// listing each skill copied there; Reserved, the tags no repository takes.
+// where it has none); SkillDirs, the skill directories ([skillDirSlot]), an
+// earlier one's skill winning a name; Skills, the run's skills directory (""
+// copies none), and Copied, the file listing each skill copied there;
+// Reserved, the tags no repository takes; ImportInstructions, for a harness
+// that reads its instruction files itself, each file named as an import in
+// place of its text ([rootImports]), Limit not applying.
 type checkoutSpec struct {
-	Instructions []instructionSlot `json:"instructions"`
-	Limit        *int              `json:"limit,omitempty"`
-	SkillDirs    []string          `json:"skillDirs,omitempty"`
-	Skills       string            `json:"skills,omitempty"`
-	Copied       string            `json:"copied,omitempty"`
-	Reserved     []string          `json:"reserved,omitempty"`
+	Instructions       []instructionSlot `json:"instructions"`
+	Limit              *int              `json:"limit,omitempty"`
+	SkillDirs          []skillDirSlot    `json:"skillDirs,omitempty"`
+	Skills             string            `json:"skills,omitempty"`
+	Copied             string            `json:"copied,omitempty"`
+	Reserved           []string          `json:"reserved,omitempty"`
+	ImportInstructions bool              `json:"importInstructions,omitempty"`
 }
 
 // launchConfig is what -config names for checkout-launch: the run's checkout
 // state directory (the checkouts handed, the lock), the instruction file it
 // replaces with the launch's sections, the checkouts handed first, in order
-// (the repositories the run pushes to), and the spec. The working directory
-// is the adapter's own.
+// (the repositories the run pushes to), the spec, and NestedSkillsOnly for a
+// nested adapter that hands skills alone, whose spec then names no instruction
+// file to read. The working directory is the adapter's own.
 type launchConfig struct {
-	State  string   `json:"state"`
-	Agents string   `json:"agents"`
-	First  []string `json:"first"`
+	State            string   `json:"state"`
+	Agents           string   `json:"agents"`
+	First            []string `json:"first"`
+	NestedSkillsOnly bool     `json:"nestedSkillsOnly,omitempty"`
 	checkoutSpec
 }
 
@@ -68,10 +74,18 @@ type nestedConfig struct {
 const maxSkillDescription = 1024
 
 // handedCheckout is a checkout claimed: its name under the working directory,
-// its root, its instructions ("" for none) and the skills copied for it.
+// its root, its instructions ("" for none), the files they were read from, and
+// the skills copied for it.
 type handedCheckout struct {
 	name, root, text string
+	parts            []instructionPart
 	skills           []handedSkill
+}
+
+// instructionPart is one file of a checkout's instructions: its path and the
+// text handed of it, for an adapter whose harness wraps each file by its path.
+type instructionPart struct {
+	path, text string
 }
 
 // handedSkill is a checkout's skill as the run lists it: its name, its
@@ -136,7 +150,11 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 			return err
 		}
 	}
-	nested, err := json.Marshal(nestedConfig{State: c.State, Workdir: work, checkoutSpec: c.checkoutSpec})
+	spec := c.checkoutSpec
+	if c.NestedSkillsOnly {
+		spec.Instructions, spec.Limit = nil, nil
+	}
+	nested, err := json.Marshal(nestedConfig{State: c.State, Workdir: work, checkoutSpec: spec})
 	if err != nil {
 		return err
 	}
@@ -163,11 +181,13 @@ const maxSkippedLog = 64 << 10
 const skippedCut = "notehelper: more was left out than the run keeps; the rest is not listed\n"
 
 // skips is what a firing left out, a line each naming the checkout, the
-// skill or tree, and why: said on stderr as it is found, held for the
-// firing's answer ([skippedListing]), and, where keep names a file, appended
-// to it under state's lock ([handCheckouts]) for the run's end. A checkout
-// that waits for a later firing's room is said on stderr alone: it is handed
-// then, never left out.
+// skill or tree, and why: held for the firing's answer ([skippedListing]),
+// and, where keep names a file, appended to it under state's lock
+// ([handCheckouts]) for the run's end, else said on stderr as it is found.
+// One place each: a runner that prints the log and passes a firing's stderr
+// on (Pi's) says each line once, and the helper's own trouble stays on
+// stderr. A checkout that waits for a later firing's room is said on stderr
+// alone: it is handed then, never left out.
 type skips struct {
 	stderr io.Writer
 	keep   string
@@ -178,7 +198,9 @@ type skips struct {
 func (s *skips) say(format string, args ...any) {
 	line := fmt.Sprintf(format, args...)
 	s.lines = append(s.lines, line)
-	fmt.Fprintf(s.stderr, "notehelper: %s\n", line)
+	if s.keep == "" {
+		fmt.Fprintf(s.stderr, "notehelper: %s\n", line)
+	}
 }
 
 // sayAll says each of lines ([skips.say]).
@@ -239,9 +261,11 @@ func endsCut(file *os.File, size int64) bool {
 
 // endedMarker is the file under a run's checkout state its runner's restore
 // writes once the harness has stopped (internal/sandbox/executor's
-// checkoutHome.restore): a firing still running then, orphaned by the
-// harness's end, claims nothing, so nothing is copied after the restore
-// removed the run's copies.
+// checkoutHome.restore), under state's lock, which a firing holds for all
+// its work ([handCheckouts]): one that began finishes first, and one after,
+// orphaned by the harness's end, claims nothing, so nothing is copied after
+// the restore removed the run's copies. A box without flock(1) writes it
+// unlocked, and there a firing already past its check may still copy.
 const endedMarker = "ended"
 
 // handNested is a nested adapter's firing under c ([handCheckouts]): the
@@ -428,8 +452,13 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, said *
 	}
 	for _, name := range claimed {
 		root := filepath.Join(work, name)
-		text, _ := rootInstructions(root, limit, spec.Instructions, said)
-		h := handedCheckout{name: name, root: root, text: text}
+		h := handedCheckout{name: name, root: root}
+		if spec.ImportInstructions {
+			h.text = rootImports(root, spec.Instructions, said)
+		} else {
+			parts, _ := instructionParts(root, limit, spec.Instructions, said)
+			h.text, h.parts = joinParts(parts), parts
+		}
 		for _, p := range plans[name] {
 			skill, err := copyPlanned(p, spec, staging, said)
 			if err != nil {
@@ -485,23 +514,23 @@ func checkoutName(work, name string) bool {
 	return err == nil
 }
 
-// rootInstructions is root's instructions, each slot's in order (a slot of
-// names its first regular file, links followed; a tree's files, [treeTexts]),
-// every file cut to what is left of limit on a rune boundary, invalid UTF-8
-// replaced, the files' texts apart by a blank line, and how many bytes they
-// took. A file the limit cut spends all of it, as a harness charging what it
-// read hands nothing after it, never the bytes a split rune left. A file of
-// whitespace alone, as a harness reads one, is its slot's file and hands
-// nothing, charged nothing.
-func rootInstructions(root string, limit int, slots []instructionSlot, said *skips) (string, int) {
-	var texts []string
+// instructionParts is root's instructions, file by file, each slot's in order
+// (a slot of names its first regular file, links followed; a tree's files,
+// [treeTexts]): each file's path and its text, cut to what is left of limit
+// on a rune boundary, invalid UTF-8 replaced, and how many bytes they took
+// ([joinParts] hands them as one text). A file the limit cut spends all of
+// it, as a harness charging what it read hands nothing after it, never the
+// bytes a split rune left. A file of whitespace alone, as a harness reads
+// one, is its slot's file and hands nothing, charged nothing.
+func instructionParts(root string, limit int, slots []instructionSlot, said *skips) ([]instructionPart, int) {
+	var texts []instructionPart
 	spent := 0
 	for _, slot := range slots {
 		if slot.Tree != nil {
-			for _, raw := range treeTexts(root, *slot.Tree, said) {
-				text, n, cut := fitInstructions(raw, limit-spent)
+			for _, file := range treeTexts(root, *slot.Tree, said) {
+				text, n, cut := fitInstructions(file.raw, limit-spent)
 				if n > 0 {
-					texts, spent = append(texts, text), spent+n
+					texts, spent = append(texts, instructionPart{path: file.path, text: text}), spent+n
 				}
 				if cut {
 					spent = limit
@@ -517,7 +546,7 @@ func rootInstructions(root string, limit int, slots []instructionSlot, said *ski
 			}
 			text, n, cut := readInstructions(path, info.Size(), limit-spent)
 			if n > 0 {
-				texts, spent = append(texts, text), spent+n
+				texts, spent = append(texts, instructionPart{path: path, text: text}), spent+n
 			}
 			if cut {
 				spent = limit
@@ -525,7 +554,16 @@ func rootInstructions(root string, limit int, slots []instructionSlot, said *ski
 			break
 		}
 	}
-	return strings.Join(texts, "\n\n"), spent
+	return texts, spent
+}
+
+// joinParts is parts' texts as one, apart by a blank line.
+func joinParts(parts []instructionPart) string {
+	texts := make([]string, len(parts))
+	for i, p := range parts {
+		texts[i] = p.text
+	}
+	return strings.Join(texts, "\n\n")
 }
 
 // readInstructions is the file at path, of size bytes, cut to room bytes on a

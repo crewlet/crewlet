@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -32,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
@@ -720,6 +722,42 @@ func TestAStatelessNodeRunsItsIssueReportSender(t *testing.T) {
 		}
 		waitFor(t, name+"'s sender to run", reporter.Sending)
 	}
+}
+
+// A STATELESS NODE'S OBJECTIVE BURN REACHES THE FLEET: it runs no state log,
+// yet a seat's runs there measure session_carry, so it judges the burn on its
+// own table and its presence carries the alarm, where a data node (its fleet
+// view, its notices, an operator reading /fleet) reads it.
+//
+// Mutation: start no alarm loop on a node without data, and the data node
+// never reads the alarm.
+func TestAStatelessNodesObjectiveBurnReachesTheFleet(t *testing.T) {
+	t.Parallel()
+	p := startStatelessPair(t)
+	for range 10 {
+		p.agent.engine.Objectives().RecordOutcome(objectives.SessionCarry, false)
+	}
+	said := func() (coord.NodeStatus, bool) {
+		leases, err := p.data.engine.Backends().Coord.ListLive(t.Context(), coord.ClassNode)
+		if err != nil {
+			return coord.NodeStatus{}, false
+		}
+		for _, lease := range leases {
+			if node, _ := coord.NodeID(lease.Resource); node == "agent-1" {
+				return coord.StatusFromMeta(lease.Meta)
+			}
+		}
+		return coord.NodeStatus{}, false
+	}
+	waitFor(t, "the data node to read objective_burn on the stateless node's presence", func() bool {
+		status, ok := said()
+		return ok && status.AlarmsEvaluated && slices.ContainsFunc(status.Alarms, func(m coord.AlarmMark) bool {
+			return m.Kind == string(statelog.KindObjectiveBurn)
+		})
+	}, func() string {
+		status, ok := said()
+		return fmt.Sprintf("read %v: evaluated %v, alarms %v", ok, status.AlarmsEvaluated, status.Alarms)
+	})
 }
 
 func TestAStatelessNodeAnswersItsProbes(t *testing.T) {

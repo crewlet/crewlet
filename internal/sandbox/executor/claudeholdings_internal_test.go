@@ -79,6 +79,12 @@ var hsFixtures = map[string]string{
 		"Agent call's result the resume's own) and the subagent sent a message, answered by its notification",
 	"2.1.310/DT": "probe P2(d), its box's copy: as DW, but the torn last piece of the subagent's thread was left " +
 		"uncut, and its next record written onto it (line 25)",
+	"2.1.330/n1": "row n1: a note handed at a batch and one at Stop, each answered, then resumed with both in " +
+		"its first request: the main thread before the resume",
+	"2.1.330/t1": "row t1: a note handed at a batch, the next request never answered and the harness stopped, " +
+		"then resumed with the note in its first request: the main thread before the resume",
+	"2.1.330/c1": "row c1: a note at a batch, answered, an auto-compaction, then a note at a batch, answered: the " +
+		"main thread, its boundary at line 38",
 }
 
 // hsFixture is the fixture of release and name ([hsFixtures]) as its archive

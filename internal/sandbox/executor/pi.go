@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -40,6 +41,8 @@ var (
 	_ saver             = Pi{}
 	_ inboxDelivery     = Pi{}
 	_ recordConfirmer   = Pi{}
+	_ threadHarness     = Pi{}
+	_ mainThreadHarness = Pi{}
 	_ noteReader        = Pi{}
 	_ notesOffExplainer = Pi{}
 	_ artifactDirHolder = Pi{}
@@ -107,9 +110,8 @@ func (Pi) Command(req sandbox.RunRequest, session Session, paths Paths, configPa
 
 // piExtensionMark is the type of the line a run's script prints before its
 // harness starts ([piScript]): the run loads the extension, which says it ran
-// ([piArmedType]), and with it the cap the line names, 0 for none. A stream
-// that has the line and lacks the extension's word ran without the seat's tools,
-// notes or cap ([piEvents.Result]).
+// ([piArmedType]). A stream that has the line and lacks the extension's word
+// ran without the seat's tools, notes or cap ([piEvents.Result]).
 const piExtensionMark = "crewlet.extension"
 
 // piScript is a Pi run's script, giving its harness stop to go once asked to
@@ -148,7 +150,9 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 	if len(req.Skills) > 0 {
 		parts = append(parts, "--skill", q(paths.PiSkills()))
 	}
-	parts = append(parts, `"$@"`)
+	// THE CHECKOUTS' SKILLS IN A DIRECTORY OF THEIR OWN ([piCheckoutHome]), so
+	// the seat's stays its skills alone, each of which the extension reports.
+	parts = append(parts, "--skill", q(paths.PiCheckoutSkills()), `"$@"`)
 
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -158,23 +162,33 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 	b.WriteString(piReleaseParse())
 	b.WriteString(piReleaseRefusal())
 	if extension != "" {
-		line(`printf '%%s\n' %s`, q(piMarkLine(req.Limits.MaxTurns)))
+		line(`printf '%%s\n' %s`, q(piMarkLine()))
 	}
 	b.WriteString(piHeader)
 	line(`set --`)
 	b.WriteString(piSessionGate(session, paths, req.FreshWiring != nil && extension != ""))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([piCheckoutHome]), and once
+	// pi has stopped, on a failure before and on a teardown's signal, the
+	// agent directory's own instruction file back and what a firing left out
+	// said, each step whatever came of the other ([everyStep]); a run killed
+	// outright leaves the put-back to the next run's clear ([homeKeeper]).
+	home := piCheckoutHome(paths)
+	line(`piput() { %s; }`, everyStep(home.restore(), home.saySkipped()))
+	line(`piquit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; piput; exit "$1"; }`)
+	line(`trap piput EXIT; trap 'piquit 143' TERM; trap 'piquit 130' INT; trap 'piquit 129' HUP`)
+	line(`mkdir -p %s %s || exit 1`, q(paths.PiAgentDir()), q(paths.PiCheckoutSkills()))
+	b.WriteString(home.gate())
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
+	line(`piput; trap - EXIT TERM INT HUP`)
 	b.WriteString(piCapture(paths))
 	line(`exit "$code"`)
 	return b.String()
 }
 
-// piMarkLine is the [piExtensionMark] line for a cap of turns.
-func piMarkLine(turns int) string {
-	return fmt.Sprintf(`{"type":%q,"cap":%d}`, piExtensionMark, max(turns, 0))
-}
+// piMarkLine is the [piExtensionMark] line.
+func piMarkLine() string { return fmt.Sprintf(`{"type":%q}`, piExtensionMark) }
 
 // piReleaseRead reads the box's `pi --version` once, as v.
 const piReleaseRead = "v=$(pi --version < /dev/null 2> /dev/null)\n"
@@ -499,13 +513,26 @@ func (p Pi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.Ru
 		}
 		skills[at] = s.Listed()
 	}
+	// THE NOTE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR, which hands
+	// the checkouts below the start directory theirs ([piCheckoutHome]); a box
+	// with none starts without them, its gate saying so.
+	var nested *piNestedHand
+	if err := writeNoteHelper(ctx, box, paths.PiNoteHelper()); err == nil {
+		nested = piNested(paths)
+	} else if !errors.Is(err, errNoHelperBuild) {
+		return "", err
+	}
+	launch := piCheckoutHome(paths).launchConfig(piCheckouts(), req.ReportedRepos)
+	if err := box.WriteFile(ctx, paths.PiCheckoutLaunch(), launch); err != nil {
+		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
+	}
 	if err := p.writeExtension(ctx, box, paths, paths.PiExtension(), req, req.MCPServers, req.Steer,
-		req.SkillLoads, skills); err != nil {
+		req.SkillLoads, skills, nested); err != nil {
 		return "", err
 	}
 	if f := req.FreshWiring; f != nil {
 		if err := p.writeExtension(ctx, box, paths, paths.PiExtensionFresh(), req, f.MCPServers, f.Steer,
-			f.SkillLoads, skills); err != nil {
+			f.SkillLoads, skills, nested); err != nil {
 			return "", err
 		}
 	}
@@ -529,11 +556,12 @@ func piSettingsFiles(paths Paths) []string {
 }
 
 // writeExtension writes the extension, wired to servers, steer's notes route
-// and loads' skill route, with req's cap, to file: the seat's system text told
+// and loads' skill route, with req's cap and nested's hand of a checkout
+// cloned during the run (nil for none), to file: the seat's system text told
 // of notes where the run is wired to them.
 func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, paths Paths, file string,
 	req sandbox.RunRequest, servers map[string]sandbox.MCPServer, steer sandbox.SteerWiring, loads sandbox.SkillWiring,
-	skills map[string]string) error {
+	skills map[string]string, nested *piNestedHand) error {
 
 	system := req.System
 	if steer.Set() {
@@ -541,7 +569,7 @@ func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, paths Paths
 	}
 	settings := piExtensionSettings{System: system, Cap: max(req.Limits.MaxTurns, 0),
 		Required: piRequired(servers), MCPFiles: piMCPFiles(paths), SettingsFiles: piSettingsFiles(paths),
-		Listed: len(skills) > 0}
+		Listed: len(skills) > 0, Checkouts: nested}
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		settings.Servers = append(settings.Servers, piServer{Name: name, Config: piMCP(servers[name])})
 	}
