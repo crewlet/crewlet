@@ -117,3 +117,39 @@ func TestAGeminiRunWhoseOnlyHookIsItsCheckoutsStartsWithoutIt(t *testing.T) {
 		})
 	}
 }
+
+// A GEMINI CLI RUN ENDED BY A TEARDOWN'S SIGNAL STILL TAKES ITS CHECKOUTS'
+// SKILLS OUT OF THE HOME and puts the home's settings back: the box's sh
+// (dash on most images) runs no EXIT trap for a signal it dies of, so the
+// script traps SIGTERM itself, here sent to it while Gemini CLI runs.
+//
+// Mutation: drop the TERM trap, or its restore, and a check goes red.
+func TestAGeminiRunEndedByASignalTakesItsCopiesOut(t *testing.T) {
+	t.Parallel()
+	runner, box := geminiBox(t, `ls "$HOME/.gemini/skills" > "$HOME/observed-skills"; kill -TERM "$PPID"
+cat > /dev/null
+`)
+	p := executor.PathsFor(box)
+	plant(t, box, map[string]string{
+		".gemini/settings.json":                        `{"ui":{"theme":"home-own"}}`,
+		"workspace/repo/.git/HEAD":                     "ref: refs/heads/main\n",
+		"workspace/repo/.git/index":                    "DIRC",
+		"workspace/repo/.git/refs/heads/main":          strings.Repeat("0", 40) + "\n",
+		"workspace/repo/.gemini/skills/check/SKILL.md": "---\nname: check\ndescription: Checks.\n---\nCheck.\n",
+	})
+	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "gemini-2.5-pro",
+		Env: map[string]string{"GEMINI_API_KEY": "key-placeholder"}})
+	if res.Success || !strings.Contains(res.Error, "status 143") {
+		t.Fatalf("the run ended %v, %q, want it ended by the signal (143):\n%s", res.Success, res.Error,
+			boxFile(t, box, p.Err()))
+	}
+	if seen := boxFile(t, box, box.Home()+"/observed-skills"); !strings.Contains(seen, "repo-check\n") {
+		t.Fatalf("Gemini CLI started with the home's skills %q, want repo-check among them", seen)
+	}
+	if left := boxFile(t, box, p.GeminiSkills()+"/repo-check/SKILL.md"); left != "" {
+		t.Errorf("the checkout's skill stayed in the home after the signal:\n%s", left)
+	}
+	if got := boxFile(t, box, p.GeminiDir()+"/settings.json"); got != `{"ui":{"theme":"home-own"}}` {
+		t.Errorf("the home's settings read %q after the signal, want their own back", got)
+	}
+}
