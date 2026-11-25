@@ -377,15 +377,21 @@ func TestGeminisSettingsBuildOnTheHomesHeldCopy(t *testing.T) {
 	}
 }
 
-// killOutright sends SIGKILL to the local job whose handle is id, its process
-// group whole, as a teardown past its grace does: no trap of its script runs.
+// killOutright sends SIGKILL to the process group of the local job whose
+// handle is id, as a teardown past its grace does: no trap of its script runs.
+// A job in no group of its own fails the case, named, rather than killing the
+// suite's.
 func killOutright(t *testing.T, id string) {
 	t.Helper()
 	pid, err := strconv.Atoi(id)
 	if err != nil || pid <= 1 {
 		t.Fatalf("the job handle %q is no process id", id)
 	}
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
-		t.Fatalf("killing the job's group: %v", err)
+	group, err := syscall.Getpgid(pid)
+	if err != nil || group == syscall.Getpgrp() {
+		t.Fatalf("the job %d has no group of its own (%d, %v)", pid, group, err)
+	}
+	if err := syscall.Kill(-group, syscall.SIGKILL); err != nil {
+		t.Fatalf("killing group %d: %v", group, err)
 	}
 }
