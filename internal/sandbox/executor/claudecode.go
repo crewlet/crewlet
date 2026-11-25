@@ -210,11 +210,22 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	if req.Steer.Set() {
 		b.WriteString(claudeNotesGate(paths.ClaudeNotesSettings(), paths.ClaudeNotesSystem()))
 	}
+	// THE HOME'S OWN CLAUDE.md BACK HOWEVER THE SCRIPT ENDS from here
+	// ([ClaudeCode.homeRestore]): its last line, an exit before the harness
+	// (the NO_PROXY steps, the session gate, a refusal below) or a teardown's
+	// signal, which ends the harness first. Set before the gate, whose own exits
+	// it covers too; the put-back does nothing where nothing is held.
+	line(`chome() { %s; }; trap chome EXIT`, claudeCheckoutHome(paths).restore())
+	line(`trap 'end "$harness"; chome; trap - EXIT; exit 143' TERM; trap 'end "$harness"; chome; trap - EXIT; exit 130' INT; trap 'end "$harness"; chome; trap - EXIT; exit 129' HUP`)
+	// THE CHECKOUTS' INSTRUCTIONS AND SKILLS, and the hook that hands a later
+	// checkout's skills ([claudeCheckoutsGate]), started only where hooks run
+	// or another hook of the engine's has the run refused.
+	b.WriteString(claudeCheckoutsGate(paths))
 	// NO HOOK OF THE ENGINE'S STARTED SWITCHED OFF: refused, naming the file
 	// and key, where the box's settings would run none ([claudeHooksOffGate]).
-	if len(req.Skills) > 0 || req.Steer.Set() || guarded {
-		b.WriteString(claudeHooksOffGate(paths))
-	}
+	// After every gate that starts one; the launch found nothing where the run
+	// can start none, and the gate then says nothing.
+	b.WriteString(claudeHooksOffGate(paths))
 	// THE COMPACTION POINT AND A RESUME'S LOAD PINNED IN THE SETTINGS AS WELL,
 	// on a release whose settings take the pin ([claudeSettingsPinFloor]): the
 	// pinned copy of whichever file the gates above chose ([claudePinGate]), so
@@ -808,9 +819,9 @@ func floorArgs(version string) string {
 // [Paths.ClaudeSettings]) and with what its notes need
 // ([Paths.ClaudeNotesSystem], [Paths.ClaudeNotesSettings]); the box picks by
 // the harness's release ([claudeNotesGate]). Its SKILLS are a plugin with a
-// load-reporting hook ([writeClaudeSkills], [claudeSkillsGate]). EVERY
-// SETTINGS FILE HAS A PINNED COPY BESIDE IT ([claudeSettingsPin]), handed in
-// its place to a release that takes it ([claudePinGate]).
+// load-reporting hook ([writeClaudeSkills]), its checkouts' hook another
+// ([writeClaudeCheckouts]). EVERY SETTINGS FILE HAS A PINNED COPY BESIDE IT
+// ([claudeSettingsPin]), handed to a release that takes it ([claudePinGate]).
 func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
 	if req.System != "" {
@@ -830,47 +841,62 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		bypass = map[string]string{"NO_PROXY": claudeNoProxyHolder, "no_proxy": claudeNoProxyHolder}
 		list = strings.Join(entries, ",")
 	}
-	if err := box.WriteFile(ctx, paths.ClaudeNoProxy(), []byte(list)); err != nil {
+	if err = box.WriteFile(ctx, paths.ClaudeNoProxy(), []byte(list)); err != nil {
 		return "", fmt.Errorf("executor: writing the Claude Code settings' NO_PROXY entries: %w", err)
 	}
 	pin := claudeSettingsPin(claudeCodeWindow(req.Model))
 	maps.Copy(pin, bypass)
-	if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSettings(), paths.ClaudeSettingsPinned(),
+	if err = writeClaudeSettingsPair(ctx, box, paths.ClaudeSettings(), paths.ClaudeSettingsPinned(),
 		newClaudeSettings(bypass), newClaudeSettings(pin)); err != nil {
 		return "", err
 	}
 	if len(req.Skills) > 0 {
-		if err := writeClaudeSkills(ctx, box, req.Skills, req.SkillLoads, paths); err != nil {
+		if err = writeClaudeSkills(ctx, box, req.Skills, req.SkillLoads, paths); err != nil {
 			return "", err
 		}
 	}
+	helped, err := writeClaudeCheckouts(ctx, box, req, paths)
+	if err != nil {
+		return "", err
+	}
 	guarded := len(crewletServers(req.MCPServers)) > 0
-	if len(req.Skills) > 0 || req.Steer.Set() || guarded {
-		off, err := claudeHooksOff(ctx, box, paths, req.Steer.Set() || guarded, req.Skills)
-		if err != nil {
+	// The hooks a run is refused for ([claudeHooksOffGate]); the checkouts' is
+	// started or not on the files and keys alone ([claudeCheckoutsGate]).
+	refusing := len(req.Skills) > 0 || req.Steer.Set() || guarded
+	if refusing || helped {
+		var off string
+		var by []string
+		if off, by, err = claudeHooksOff(ctx, box, paths, req.Steer.Set() || guarded, req.Skills); err != nil {
 			return "", err
 		}
-		if err = box.WriteFile(ctx, paths.ClaudeHooksOff(), []byte(off)); err != nil {
-			return "", fmt.Errorf("executor: writing why the box's settings switch the run's hooks off: %w", err)
+		if refusing {
+			if err = box.WriteFile(ctx, paths.ClaudeHooksOff(), []byte(off)); err != nil {
+				return "", fmt.Errorf("executor: writing why the box's settings switch the run's hooks off: %w", err)
+			}
+		}
+		if helped {
+			if err = box.WriteFile(ctx, paths.ClaudeHooksOffBy(), []byte(strings.Join(by, "; "))); err != nil {
+				return "", fmt.Errorf("executor: writing which settings switch the run's hooks off: %w", err)
+			}
 		}
 	}
 	if req.Steer.Set() {
-		if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned(),
+		if err = writeClaudeSettingsPair(ctx, box, paths.ClaudeNotesSettings(), paths.ClaudeNotesSettingsPinned(),
 			claudeSteerSettings(req.Steer, bypass), claudeSteerSettings(req.Steer, pin)); err != nil {
 			return "", err
 		}
 		told := withNoteInstruction(req.System, c.NoteInstruction())
-		if err := box.WriteFile(ctx, paths.ClaudeNotesSystem(), []byte(told)); err != nil {
+		if err = box.WriteFile(ctx, paths.ClaudeNotesSystem(), []byte(told)); err != nil {
 			return "", fmt.Errorf("executor: writing the system prompt told of notes: %w", err)
 		}
 	}
 	if len(req.MCPServers) == 0 {
 		return "", nil
 	}
-	if err := writeClaudeGuard(ctx, box, req, paths, pin); err != nil {
+	if err = writeClaudeGuard(ctx, box, req, paths, pin); err != nil {
 		return "", err
 	}
-	if err := writeClaudeMCP(ctx, box, paths.MCPConfig(), req.MCPServers); err != nil {
+	if err = writeClaudeMCP(ctx, box, paths.MCPConfig(), req.MCPServers); err != nil {
 		return "", err
 	}
 	// AND UNDER THE JOB'S OTHER BRIDGE TOKEN, for a session the run's script
@@ -880,7 +906,7 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 	// differs: the run's hooks name the bridge by its server's name, never its
 	// address.
 	if f := req.FreshWiring; f != nil {
-		if err := writeClaudeMCP(ctx, box, paths.MCPConfigFresh(), f.MCPServers); err != nil {
+		if err = writeClaudeMCP(ctx, box, paths.MCPConfigFresh(), f.MCPServers); err != nil {
 			return "", err
 		}
 	}
@@ -1857,14 +1883,18 @@ func (ClaudeCode) resumeRead(release string) bool { return claudeResumeRead(rele
 // artifactFiles is the files a Claude Code run leaves in its box of its own.
 func (ClaudeCode) artifactFiles(p Paths) []string {
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeHooksOff(),
+		p.ClaudeHooksOffBy(),
 		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeNoProxy(),
 		p.ClaudeSettingsGuarded(), p.ClaudeNotesSettingsGuarded(), p.ClaudeBridgeGuard(), p.ClaudeUnbridged(),
 		// Each one's copy with the NO_PROXY list written in ([claudeNoProxyMerge]).
 		p.ClaudeSettings() + ".np", p.ClaudeNotesSettings() + ".np",
 		p.ClaudeSettingsPinned() + ".np", p.ClaudeNotesSettingsPinned() + ".np",
-		p.ClaudeSettingsGuarded() + ".np", p.ClaudeNotesSettingsGuarded() + ".np"}
+		p.ClaudeSettingsGuarded() + ".np", p.ClaudeNotesSettingsGuarded() + ".np",
+		p.ClaudeCheckoutLaunch(), p.ClaudeNoteHelper(), p.ClaudeRepoInstructions()}
 }
 
 // artifactDirs is the directories a Claude Code run leaves in its box of its
 // own.
-func (ClaudeCode) artifactDirs(p Paths) []string { return []string{p.ClaudeSkillsPlugin()} }
+func (ClaudeCode) artifactDirs(p Paths) []string {
+	return []string{p.ClaudeSkillsPlugin(), p.ClaudeCheckoutsPlugin(), p.ClaudeRepo()}
+}

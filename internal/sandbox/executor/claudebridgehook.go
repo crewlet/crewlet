@@ -90,7 +90,8 @@ type claudeGuardMatcher struct {
 	Hooks   []claudeCommandHook `json:"hooks"`
 }
 
-// claudeCommandHook is one hook that runs a command; the guard's only.
+// claudeCommandHook is one hook that runs a command: the bridge guard's, and
+// the checkouts' plugin's ([writeClaudeCheckouts]).
 type claudeCommandHook struct {
 	Type    string `json:"type"`
 	Command string `json:"command"`
