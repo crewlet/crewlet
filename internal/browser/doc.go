@@ -2,9 +2,11 @@
 // one package reads: the oldest major the engine accepts and the suite
 // certifies ([MinChromiumMajor]), the Playwright release a seat's box installs
 // and the Chromium build it expects ([PlaywrightMCPRelease],
-// [ExpectedChromiumVersion]), the closed values of a box's ensure answer
-// ([EnsureReason] and its fellows), and that no Go but the artifact render's
-// client speaks DevTools (ADR-0165).
+// [ExpectedChromiumVersion]) and whether a box's is older ([Outdated]), the
+// closed values of a box's ensure answer ([EnsureReason] and its fellows), the
+// name of a seat's browser server ([ServerName]) and where a seat's browser
+// may run, and that no Go but the artifact render's client speaks DevTools
+// (ADR-0165).
 //
 // # The floor
 //
@@ -47,12 +49,93 @@
 // rather than a panic: its verdict ([EnsureVerdict]); why a browser is
 // withheld and the cause ensure could tell ([EnsureReason], [EnsureCause]),
 // every reason with the causes it takes, the box's in the order ensure checks
-// them and then the engine's own ([EnsureReason.Printed]); the build it chose
+// them and then the engine's own ([EnsureReason.Printed]), each pair held to
+// one rule ([EnsureReason.Takes]); the build it chose
 // ([ChromiumBuild]); the cell's sandbox ([ChromiumSandbox], whose zero value
 // is neither setting); and how its supervisor was come by
 // ([SupervisorStart]). They live here, never in the helper that prints them,
 // so a package that reads them, a configuration or an event's record, links
 // none of the helper's embedded modules and depends on no helper.
+//
+// # A seat's browser
+//
+// A seat whose role.sandbox sets browser gets a headless Chromium in its
+// executor's box, driven by its harness through the box's own MCP server,
+// [ServerName], a name config reserves so that no company server takes it.
+// Where it may run is recorded as ADR-0181.
+//
+// The rule names the one cell it admits: every run of the seat lands in a
+// container box, off its host's network. A direct box is the engine host
+// itself, where a page would reach an agent running as the engine's user
+// beside the fleet's keys, and a container on the host's network reaches
+// every service listening on the host's loopback, where a page could lead
+// the agent. A cell the rule does not name is refused by the same comparison,
+// with no branch of its own, so a cell added later is refused until a
+// decision admits it. A seat whose entry denies its harness the web
+// (web_tools: denied) is refused too: a browser would open the web that
+// denial closes.
+//
+// Config refuses a seat any of whose runs can land elsewhere, by its boxes
+// placed as the engine places them. It is an admission rule, since nothing
+// that runs depends on it, so a revision another build admitted still
+// applies, with a warning.
+//
+// So the launch holds the rule again: a revision another build admitted, or a
+// default a reload moved, can still land a run outside a container
+// (cell_not_container) or on an entry that denies the web (web_denied), each
+// withheld before anything runs in the box. Whether the box is off its host's
+// network the launch asks the box itself, before it writes the helper
+// (host_network, internal/browser/hostreach): a kept box keeps the network it
+// was made on whatever a later revision says, and a runtime's own
+// configuration or a virtual machine's design leads a box to the host's
+// loopback by no setting config reads. A browser the box already runs, a kept
+// box's from a launch whose check passed, is stopped there, so its pages run
+// on in no box that may reach the host's loopback.
+//
+// Nor does a browser go where it would hide the run's own tools. A harness
+// that hides every MCP server's tools behind its own search once a run's
+// servers list some number of them (Muse Code, whose runner states the number
+// it was measured to hide them at) would hide submit_work and ask_and_wait
+// with the browser's, which a run needs on every request and a browser cannot
+// make up for. So the launch withholds the browser where the run's servers,
+// the bridge's and the box's own, list fewer tools than that number and with
+// the browser's would reach it (bridge_deferred), counting the browser's from
+// the list a box serves (boxhelper.Tools), never a figure of its own, and the
+// box's own servers' from the seat's tools, each whole, as a box reaches a
+// server. Servers at the number on their own are hidden either way, so their
+// run keeps its browser; servers the harness loads of its own, its box home's
+// and a repository's, are not counted, since the launch does not know them.
+// It reads only the launch's own counts, so it is decided after web_denied
+// and before host_network, whose check reads the engine's host and runs in
+// the box: no verdict of that check could hand such a run its browser, so it
+// pays for none. And, as for the cell and the web, it stops no browser a kept
+// box already runs: the run is handed no server, and only host_network finds
+// that the box may lead a page to its host's loopback.
+//
+// Chromium keeps its own sandbox in the box unless the catalogue waives it
+// (local.chromium_sandbox). A value this build does not know reads as
+// required, the stricter, so this build runs a later build's revision rather
+// than refusing it and splitting the fleet's epoch.
+//
+// Every launch writes the helper and runs ensure, a kept box's too, since the
+// engine's build decides the helper and a kept box's supervisor may be another
+// build's. Ensure runs in the box's home with the run's environment, the one
+// its setup ran with, so the box's npm reaches the mirror, token, proxy and CA
+// the run's own npm would; a kept container box holds no environment of its
+// own, so the launch hands it. The supervisor keeps its allowlist.
+//
+// The run is handed the box's browser server only where ensure answered
+// ready: a box that cannot run the browser would hand the model a server that
+// fails its first call. The server is the shim's plain command line for the
+// job, rooted at the box's workspace, with no environment and no secret, the
+// same in a fresh session's wiring, and it replaces a server of its name.
+// What the box prints is read into this package's closed values and never
+// reaches a prompt: the run is told its browser, or why it has none, in the
+// engine's words. An engine reason takes a cause only where one can be told.
+//
+// [Outdated] warns and never withholds: a browser older than the build the
+// pin expects is recorded so, since a floor at the patch level would withhold
+// every image's browser each time the pin moves.
 //
 // # DevTools only through the artifact render's client
 //

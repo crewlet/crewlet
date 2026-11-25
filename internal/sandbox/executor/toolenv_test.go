@@ -293,12 +293,15 @@ func TestEveryOpenCodeRunNamesTheToolEnvironmentPluginLast(t *testing.T) {
 			t.Parallel()
 			_, raw, b := writeOpenCodeConfigIn(t, req)
 			var cfg struct {
-				Plugins []toolEnvPlugin `json:"plugins"`
+				Plugins []json.RawMessage `json:"plugins"`
 			}
 			if err := json.Unmarshal([]byte(raw), &cfg); err != nil || len(cfg.Plugins) == 0 {
 				t.Fatalf("the configuration names no plugin (%v):\n%s", err, raw)
 			}
-			last := cfg.Plugins[len(cfg.Plugins)-1]
+			var last toolEnvPlugin
+			if err := json.Unmarshal(cfg.Plugins[len(cfg.Plugins)-1], &last); err != nil {
+				t.Fatalf("the last plugin entry is no plugin (%v):\n%s", err, raw)
+			}
 			if p := executor.PathsFor(b); last.Package != p.OpenCodeToolEnvPlugin() {
 				t.Fatalf("the last plugin is %q, want %q:\n%s", last.Package, p.OpenCodeToolEnvPlugin(), raw)
 			}
