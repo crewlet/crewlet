@@ -507,8 +507,8 @@ func TestATrimmedChatTakeFindsItsRunStartInTheCutCopy(t *testing.T) {
 // from holds the same lines under `LC_ALL=C awk` as under [lineForm.holds]:
 // every line of the measured chat files, and lines whose holes escape a quote
 // or a backslash, end on a backslash at the bound, run to the bound and one
-// past it whole and to their opening's end, or hold a character of several
-// bytes before it.
+// past it whole and to their opening's end, hold a whole form to the bound
+// and a byte more, or hold a character of several bytes before it.
 //
 // Mutation: count the bound in characters, walk a hole past an escaped quote,
 // or read a whole form by its opening, in either, and a line goes red.
@@ -535,6 +535,7 @@ func TestALineFormReadsAlikeInGoAndInAwk(t *testing.T) {
 	for _, l := range []string{
 		set(`a\"b`), set(`a\\`), set(`a\\\"`), set(`a\`), set(`é`),
 		set(fill(lineFormMaxBytes, whole)), set(fill(lineFormMaxBytes+1, whole)),
+		set(fill(lineFormMaxBytes, whole)) + "}",
 		set("é" + fill(lineFormMaxBytes-1, whole)), set(strings.Repeat("x", lineFormMaxBytes)),
 		`{"id":"` + fill(lineFormMaxBytes+1, user) + `","timestamp":"t","type":"user","content":[`,
 		`{"id":"` + fill(lineFormMaxBytes+2, user) + `","timestamp":"t","type":"user","content":[`,
