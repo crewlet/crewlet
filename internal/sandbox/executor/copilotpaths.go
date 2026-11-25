@@ -101,3 +101,8 @@ func (p Paths) CopilotAttempt() string { return p.WorkDir() + "/copilot-attempt"
 // CopilotStoreCheck is the run's copy of copilot_storecheck.mjs, which its
 // script runs after a refused launch attempt ([copilotAttempts]).
 func (p Paths) CopilotStoreCheck() string { return p.WorkDir() + "/copilot-storecheck.mjs" }
+
+// CopilotExtensionOff is why the run's extension does no checkout work, a
+// line its script adds to the run's skip log ([copilotExtensionOff]); absent
+// where it does.
+func (p Paths) CopilotExtensionOff() string { return p.WorkDir() + "/copilot-extension-off" }

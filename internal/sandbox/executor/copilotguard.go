@@ -62,40 +62,45 @@ var copilotRuleFamilies = []string{"Bash", "Shell", "PowerShell", "Read", "Edit"
 	"CustomTool"}
 
 // copilotGuard refuses req's run where something the run cannot undo switches
-// off its own servers ([crewletServers]) or, for a run written the notes
-// extension, that extension: a run with notes or a cap, and every run handing
-// its checkouts (handing), whose extension hands a checkout cloned during it
-// and removes a launch attempt Copilot refused. settings is the home's
-// settings.json as the run will write it, which the box's Copilot is asked
-// about in a home of its own, so a value the run's own key replaces is not
-// held against it. A box with no copilot is the script's to refuse; its
-// policy file is still read.
+// off its own servers ([crewletServers]) or, for a run with notes or a cap,
+// its notes extension. settings is the home's settings.json as the run will
+// write it, which the box's Copilot is asked about in a home of its own, so a
+// value the run's own key replaces is not held against it. A box with no
+// copilot is the script's to refuse; its policy file is still read. off is
+// what switches the extension off for a run that needs it for its checkouts
+// alone, which never refuses the run (copilotExtensionOff); nil where the guard
+// asked nothing, as for a run with neither servers nor notes.
 func copilotGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths,
-	policy copilotPolicy, settings []byte, handing bool) error {
+	policy copilotPolicy, settings []byte) (off []string, err error) {
 	servers := crewletServers(req.MCPServers)
-	notes := req.Steer.Set() || req.Limits.MaxTurns > 0 || handing
+	notes := req.Steer.Set() || req.Limits.MaxTurns > 0
 	if len(servers) == 0 && !notes {
-		return nil
+		return nil, nil
 	}
-	if err := box.WriteFile(ctx, paths.CopilotGuardSettings(), settings); err != nil {
-		return fmt.Errorf("executor: writing the settings the launch asks Copilot about: %w", err)
+	if err = box.WriteFile(ctx, paths.CopilotGuardSettings(), settings); err != nil {
+		return nil, fmt.Errorf("executor: writing the settings the launch asks Copilot about: %w", err)
 	}
 	// A LOGIN SHELL WITH THE BOX'S BIN DIRECTORY FIRST, as the run's wrapper
 	// finds its copilot.
 	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(copilotGuardCommand(paths, policy.path(), len(servers) > 0)),
 		sandbox.ExecOptions{TimeoutSec: copilotGuardWait.Seconds()})
 	if err != nil {
-		return fmt.Errorf("executor: asking the box's Copilot what it loads for the run: %w", err)
+		return nil, fmt.Errorf("executor: asking the box's Copilot what it loads for the run: %w", err)
 	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("executor: asking the box's Copilot what it loads for the run: exit %d: %s",
+		return nil, fmt.Errorf("executor: asking the box's Copilot what it loads for the run: exit %d: %s",
 			res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
 	}
 	said := copilotGuardVerdict(res.Stdout, req, paths, policy, servers, notes)
-	if len(said) == 0 {
-		return nil
+	if !notes {
+		// THE EXTENSION'S OWN SWITCHES are the lines a run that needs it adds.
+		off = slices.DeleteFunc(copilotGuardVerdict(res.Stdout, req, paths, policy, servers, true),
+			func(l string) bool { return slices.Contains(said, l) })
 	}
-	return fmt.Errorf("executor: Copilot would start without what the run's tools, notes or checkouts rest on, and no "+
+	if len(said) == 0 {
+		return off, nil
+	}
+	return nil, fmt.Errorf("executor: Copilot would start without what the run's tools or notes rest on, and no "+
 		"setting of the run's undoes it: %s. Change those entries, or run on a box without them",
 		strings.Join(said, "; "))
 }

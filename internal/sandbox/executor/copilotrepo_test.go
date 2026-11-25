@@ -170,15 +170,18 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACopilotRun(t *testing.T) {
 }
 
 // copilotBudgetStandIn is the `copilot` the budget rows run, its extension's
-// part played by the script (copilot_steer.js): Copilot 1.0.114's static
-// budget as a byte bound ($HOME/limit) on the home's copilot-instructions.md.
+// part played where the run wrote one that hands checkouts (copilot_steer.js),
+// the guard's `config --list` answered from $HOME/answer.settings and an
+// extension written said to run, as copilotGuardStandIn says it: Copilot
+// 1.0.114's static budget as a byte bound ($HOME/limit) on copilot-instructions.md.
 // A new session stores its attempt's kept sets. Past the bound the launch is
 // refused before any request (section 13's stream, exit 1) and a new session
 // deleted (row R19w) unless $HOME/leave says the delete failed. Within it the
 // run answers, or with $HOME/late is stopped after its first answer (row
 // R15h). Each attempt's home file, brief, directories and number are recorded.
 const copilotBudgetStandIn = `#!/bin/sh
-case "$1" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; config|mcp) exit 0;; esac
+case "$1" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; mcp) exit 0;; config) cat "$HOME/answer.settings" 2> /dev/null; exit 0;; esac
+ext=; grep -q '"helper":"/' "$COPILOT_HOME/extensions/crewlet-notes/extension.mjs" 2> /dev/null && ext=1
 id=; prev=; for a in "$@"; do [ "$prev" = --session-id ] && id=$a; prev=$a; done
 d="$COPILOT_HOME/session-state/$id"; s="$HOME/seen"; mkdir -p "$s"
 n=$(($(cat "$s/attempts" 2> /dev/null | wc -l) + 1))
@@ -189,9 +192,11 @@ printf '%s|%s\n' "${COPILOT_CUSTOM_INSTRUCTIONS_DIRS-unset}" "$(cat "$HOME/.crew
 size=$(wc -c < "$COPILOT_HOME/copilot-instructions.md" 2> /dev/null) || size=0
 src=new; [ ! -f "$d/events.jsonl" ] || src=resume
 mkdir -p "$d"; printf '{"type":"user.message","data":{"content":"brief"}}\n' >> "$d/events.jsonl"
-[ "$src" = resume ] || { kf="$HOME/.crewlet/copilot-repo/kept"; if [ -f "$kf" ]; then cp "$kf" "$d/crewlet-checkouts"; else : > "$d/crewlet-checkouts"; fi; }
+[ "$src" = resume ] || [ -z "$ext" ] || { kf="$HOME/.crewlet/copilot-repo/kept"; if [ -f "$kf" ]; then cp "$kf" "$d/crewlet-checkouts"; else : > "$d/crewlet-checkouts"; fi; }
+[ ! -f "$COPILOT_HOME/extensions/crewlet-notes/extension.mjs" ] ||
+  echo '{"type":"session.info","data":{"message":"crewlet: the run'"'"'s extension is running"}}'
 if [ "$size" -gt "$(cat "$HOME/limit")" ]; then
-  [ "$src" = resume ] || [ -e "$HOME/leave" ] || rm -rf "$d"
+  [ "$src" = resume ] || [ -z "$ext" ] || [ -e "$HOME/leave" ] || rm -rf "$d"
   printf '%s\n' '{"type":"session.warning","data":{"warningType":"compaction_static_context_blocked","message":"Static system messages and tool definitions exceed the budget."}}' \
     '{"type":"assistant.turn_end","data":{}}' \
     '{"type":"session.error","data":{"errorType":"query","message":"No response was returned because static system messages and tool definitions exceed this model context budget."}}' \
@@ -405,4 +410,43 @@ func TestACopilotResumeLaunchesTheSetsItsSessionStored(t *testing.T) {
 				copilotAttemptsSeen(t, box))
 		}
 	})
+}
+
+// A RUN THAT NEEDS ITS EXTENSION FOR ITS CHECKOUTS ALONE NEVER FAILS FOR IT
+// BEING OFF (D709): with the home's extensions switched off, a run with a
+// bridge and no notes is written no checkout extension and says once, through
+// its skip log, that a repository cloned during it is not handed; a launch that
+// fits runs, and one Copilot refuses fails, typed, naming the extension, its
+// refused session left as Copilot wrote it (nothing deletes it from outside).
+//
+// Mutation: refuse the run, say it at every attempt or not at all, or relaunch
+// without the extension's delete.
+func TestACopilotRunWithItsExtensionOffGoesOnWithoutItsCheckoutWork(t *testing.T) {
+	t.Parallel()
+	for name, limit := range map[string]int{"a launch that fits": 1 << 20, "a refused launch": 3000} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := copilotBudgetBox(t, limit, "alpha", "beta")
+			plantFile(t, box.Home()+"/answer.settings", "extensions.mode=disabled\n")
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge})
+			errs := boxFile(t, box, executor.PathsFor(box).Err())
+			if n := strings.Count(errs, "a repository cloned during the run is not handed"); n != 1 ||
+				!strings.Contains(errs, `extensions.mode to "disabled"`) {
+				t.Errorf("the run said its extension is off %d times, want once, naming the setting:\n%s", n, errs)
+			}
+			attempts := copilotAttemptsSeen(t, box)
+			if limit > 3000 {
+				if !res.Success || len(attempts) != 1 {
+					t.Fatalf("a fitting launch with the extension off made %q and ended %q, want it run", attempts, res.Error)
+				}
+				return
+			}
+			id := strings.TrimSpace(boxFile(t, box, box.Home()+"/seen/id"))
+			if _, err := os.Stat(executor.PathsFor(box).CopilotSessionDir(id)); len(attempts) != 1 || res.Success ||
+				!strings.Contains(res.Error, "the run's extension, which removes a refused attempt") || err != nil {
+				t.Fatalf("a refused launch with the extension off made %q and ended %q (session %v), want one attempt, "+
+					"a typed failure naming the extension and its session left", attempts, res.Error, err)
+			}
+		})
+	}
 }

@@ -877,7 +877,7 @@ What applies to some paths only, and what lies deeper, Copilot loads itself the 
 - The sets an attempt kept are stored in its new session as it starts (`crewlet-checkouts`, packed with it, a save taken while it runs included). A resume launches with exactly those, never searching again; Copilot checks its budget at every launch, and a resume it refuses fails and removes nothing.
 - A run whose static context grows past the budget after it began (an MCP server announcing its tools late) is stopped by Copilot and fails saying a tool may have run.
 
-The guard above refuses a run whose home or policy switches the extension off wherever the box holds the note helper, notes or not, since the extension hands cloned checkouts and removes refused attempts.
+**The extension switched off refuses only a run that needs it for notes or a cap** (the guard above). Where the home or the machine's policy switches it off (`extensions.mode`, `extensions.disabledExtensions`, `strictPluginOnlyCustomization`) for a run that needs it for its checkouts alone, the run is written no such extension and starts with its launch handing, saying once on its error stream, naming the setting, that a repository cloned during it is not handed; a launch Copilot then refuses for its budget fails rather than start again, since nothing removed the refused attempt. The guard asks Copilot only for a run with Crewlet's servers, notes or a cap, as before; for a run with none of them it does not know, writes the extension, and a refusal the extension did not remove fails on the check above.
 
 **Gaps against Claude Code:**
 

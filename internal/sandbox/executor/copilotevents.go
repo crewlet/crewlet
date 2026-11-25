@@ -363,6 +363,10 @@ func copilotRefusal(data copilotData) string {
 	case "store":
 		return fmt.Sprintf("Copilot refused a launch attempt, and its session %s was not removed from Copilot's "+
 			"session store, so the run is not started again onto it: %s", data.Session, data.Message)
+	case "extension":
+		return "Copilot refused the launch for its static budget, and the run's extension, which removes a refused " +
+			"attempt before the run starts again with fewer repositories' instructions, is switched off in the box's " +
+			"Copilot settings or policy (the run's error stream names the setting), so it is not started again"
 	case "node":
 		return fmt.Sprintf("Copilot refused the launch for its static budget, and before starting it again with "+
 			"fewer repositories' instructions the run checks Copilot's session store with the box's node, which must "+

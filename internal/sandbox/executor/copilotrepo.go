@@ -73,6 +73,18 @@ func copilotLaunchCompose(paths Paths, args string) string {
 //go:embed copilot_storecheck.mjs
 var copilotStoreCheck string
 
+// copilotExtensionOff is the line a run says once, through its skip log
+// ([checkoutHome.saySkipped]), where its home or the machine's policy switches
+// the extension off (off, as the guard names each) and the run needs it for
+// its checkouts alone: that never refuses the run (as a person's own session
+// loads no extension either), so a checkout cloned during it is not handed,
+// and a launch Copilot refuses for its static budget fails rather than start
+// again onto an attempt nothing deleted ([copilotAttempts]).
+func copilotExtensionOff(off []string) string {
+	return "crewlet: a repository cloned during the run is not handed, and a launch Copilot refuses for its static " +
+		"budget is not started again, since the run's extension is switched off: " + strings.Join(off, "; ") + "\n"
+}
+
 // copilotKeptSets is the file in a Copilot session's directory naming the
 // checkouts whose launch sets its accepted launch kept, a name a line, packed
 // with the session ([copilotPack]), written by the extension as the new
@@ -115,6 +127,7 @@ func copilotAttempts(paths Paths, harness string) string {
 	}
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	line(`[ ! -s %s ] || [ ! -d "$rr" ] || cat %[1]s >> "$rr/skipped"`, q(paths.CopilotExtensionOff()))
 	line(`ks=%s/"$s"/%s; kf=-keep kv=-1 n=0 at=0`, sessions, copilotKeptSets)
 	line(`[ "$k" = no ] || { kf=-kept; kv=$ks; }`)
 	line(`refused() { tail -c +"$((so + 1))" %[1]s 2> /dev/null | grep -qF '"warningType":"%[2]s"' && `+
@@ -139,6 +152,7 @@ func copilotAttempts(paths Paths, harness string) string {
 	line(`if [ "$k" = yes ]; then %s; break; fi`, refused("resume"))
 	line(`left=$((n)); [ "$kv" = -1 ] || left=$kv`)
 	line(`if [ "$left" -le 0 ]; then %s; break; fi`, refused("alone"))
+	line(`if [ -f %s ]; then %s; break; fi`, q(paths.CopilotExtensionOff()), refused("extension"))
 	line(`sqlite || break`)
 	line(`gone || break`)
 	line(`kv=$((left - 1))`)

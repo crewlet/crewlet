@@ -618,11 +618,10 @@
 // A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
 // it, by the pack the run's own end makes held to a stricter rule: a file the
 // harness rewrote under the pack fails it rather than riding the archive torn
-// ([claudeHeldTar]): a job a box would not end, packed on demand for the read
-// that packs it alone ([Runner.PackCapture], [Paths.SessionPackHeld]), and a
-// SAVE, packed to a place of that save's own, named after its taker
-// ([Runner.PackSave], [Paths.SessionSave]), for the take that names it alone —
-// neither ever where the job's final archive is read. Every runner saves
+// ([claudeHeldTar]): a job a box would not end, packed on demand for its read
+// alone ([Runner.PackCapture], [Paths.SessionPackHeld]), and a SAVE, packed
+// where its taker names ([Runner.PackSave], [Paths.SessionSave]) for that take
+// alone; neither where the job's final archive is read. Every runner saves
 // ([saver], [Runner.Saves]), OpenCode by its own export (below);
 // whether a job moved since its last save is how far its harness's event
 // stream ran ([Runner.Streamed]); and a save no take will read is removed
@@ -1208,12 +1207,13 @@
 //
 // # Copilot's internal client
 //
-// A refused launch keeps its session, which a relaunch would resume and
-// session_store_sql reads. The extension SDK has no delete, so the run's
-// extension calls sessions.bulkDelete through a second client on the
-// undocumented `_internalConnection` (copilot_steer.js): a refusal costs about
-// 4.4 s on 1.0.114, 65 s on 1.0.115. A release moved to re-measures that
-// client, the refusal's warningType and the store's tables.
+// A refused launch keeps its session, which a relaunch would resume and the
+// store keeps. The extension SDK has no delete, so the run's extension calls
+// sessions.bulkDelete through a second client on the internal
+// `_internalConnection` (copilot_steer.js); a refusal costs 4.4 s on 1.0.114,
+// 65 s on 1.0.115. Extensions off refuse only a run whose notes or cap need
+// it; one needing it for checkouts alone runs but is not relaunched. A release
+// moved re-measures the client, the warningType, the store's tables.
 //
 // # A box's release is pinned
 //
@@ -1234,9 +1234,9 @@
 //
 // # A run ends on request
 //
-// A read that takes a stopped or lost job's session, or one past its turn's
-// cap, first asks the job to end ([Runner.AskEnd]): SIGUSR1 to its script's
-// recorded pid ([Paths.JobScript]), which ends its harness, packs the session
+// Taking a stopped, lost or capped job's session first asks the job to end
+// ([Runner.AskEnd]): SIGUSR1 to its script's recorded pid
+// ([Paths.JobScript]), which ends its harness, packs the session
 // as its exit does, records how ([Paths.JobEnded]) and exits with the
 // harness's status, never a success ([sandbox.Result.JobEnd]). See end.go.
 //
