@@ -477,7 +477,7 @@ writer keeps it within and read in the time that bound takes to cross:
 | Home boards | the board's 512 KiB and 256 bytes | its crossing: 20 s |
 | atlas wakes, device sign-ins | 16 KiB, a sign-in's detail cut to fit | the read term |
 | model checks | 68 KiB, an answer's lines cut to fit | its crossing: 2.7 s |
-| OAuth grants | 200 KiB, a scope at most 256 bytes and an address 2,048 | its crossing: 7.9 s |
+| OAuth grants | 208 KiB, a scope at most 256 bytes and an address 2,048 | its crossing: 8.2 s |
 | OAuth sign-ins | 56 KiB, one whose authorization server outgrows it refused as it starts | its crossing: 2.2 s |
 | every other record of the positions register: a node's positions, a trim hold, floor and backup point, a capacity window, its admissions and acknowledgements, a retired node id, a feed mark, a seat's pause, a box reading, a conversation hold, a grant request, a model retry, an MCP tool's acceptance and restart, an SSH test, an issue report, an insight record, a Google identity | 16 KiB, every field bounded, a capacity window at 16 participants counted, 32 recorded and 16 excluded | the read term |
 | the upload reservation ledger | 72 KiB | its crossing: 2.9 s |

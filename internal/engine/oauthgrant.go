@@ -305,8 +305,8 @@ func (e *Engine) startSignIn(ctx context.Context, st signInStart, by iam.Actor) 
 }
 
 // grantUnkeepable refuses a sign-in whose grant the fleet could not record,
-// before anybody is sent to consent: a client id, issuer or resource past
-// [coord.MaxGrantAddressBytes], or a scope it would ask for past
+// before anybody is sent to consent: a client id, issuer, resource or redirect
+// past [coord.MaxGrantAddressBytes], or a scope it would ask for past
 // [coord.MaxGrantScopeBytes], each named by where it came from (this engine's
 // address, or the authorization server) with the remedy that source takes. Refused after consent, the grant would be
 // sealed and unrecorded.
@@ -331,6 +331,12 @@ func grantUnkeepable(st signInStart) *SignInRefusal {
 		case catalogue.ClientDCR:
 			return vendor("client id from its registration", size, coord.MaxGrantAddressBytes)
 		}
+	}
+	if size := len(st.redirect); size > coord.MaxGrantAddressBytes {
+		return &SignInRefusal{Status: http.StatusConflict,
+			Reason: fmt.Sprintf("this engine's sign-in callback is %d bytes, past the %d the grant a sign-in "+
+				"makes can keep", size, coord.MaxGrantAddressBytes),
+			Remedy: "Set a shorter api.public.external_url (or api.external_url where no public listener is set)"}
 	}
 	for _, f := range []struct {
 		field, value string
@@ -514,7 +520,7 @@ func (e *Engine) CompleteSignIn(ctx context.Context, landing SignInLanding) (Sig
 	}
 	record := coord.OAuthGrant{
 		Name: name, Grant: grant.Grant, Client: string(sealed.Client.Kind), ClientID: sealed.Client.ID,
-		Issuer: ep.Issuer, Scopes: keptScopes(ctx, name, scopes),
+		Issuer: ep.Issuer, Redirect: sealed.Redirect, Scopes: keptScopes(ctx, name, scopes),
 		By: session.By, ByKind: session.ByKind, OperatorID: session.OperatorID, At: e.now(),
 		Expiry: instantOrNil(tokens.RefreshExpiry),
 	}
