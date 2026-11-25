@@ -323,7 +323,7 @@ test("the directory groups by need, with Crewlet's own service first in each", a
     ["Observability", ["Datadog"]],
     [
       "Cloud and Infrastructure",
-      ["AWS", "Cloudflare", "DigitalOcean", "Google Cloud", "Scaleway", "SSH"],
+      ["AWS", "Cloudflare", "DigitalOcean", "Google", "Google Cloud", "Scaleway", "SSH"],
     ],
     ["Mobile apps", ["Expo", "App Store Connect", "Google Play"]],
     ["Advertising", ["Google Ads", "Meta Ads Manager", "Apple Ads"]],

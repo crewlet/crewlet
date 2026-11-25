@@ -20,8 +20,9 @@
  *
  * `#/company/integrations/{kind}` selects a line: an app's key, a surface
  * (`jira`, `confluence`, the `forge` relay and `atlassian` select Jira's
- * line, on the Atlassian page), or a service (`worklet`, `doclet`, `chat`,
- * `gitlet`); an app's tab and form are its query (`address.ts`).
+ * line, on the Atlassian page), a service (`worklet`, `doclet`, `chat`,
+ * `gitlet`), or `google`, the connection every Google product shares; an
+ * app's tab and form are its query (`address.ts`).
  * The bare address shows what the company has active.
  *
  * # Who reads it
@@ -79,6 +80,9 @@ import { SHOWN, entryOf, type Group, type Line } from "./categories.ts";
 import { Landing } from "./Landing.tsx";
 import { ServicePane } from "./ServicePane.tsx";
 import { ServiceDot, ServiceMark, useDisconnect } from "./parts.tsx";
+import { GOOGLE } from "./address.ts";
+import { googlePlace } from "./google.ts";
+import { GooglePane, googleWords } from "./GooglePane.tsx";
 
 /** Which line a route segment selects: Atlassian and its relay select Jira's. */
 function selects(line: Line, kind: string | undefined): boolean {
@@ -121,6 +125,17 @@ export function directoryGroups(
           label: s.name,
           ...(s.vendor ? { hint: s.vendor } : {}),
           status: <ServiceDot service={s} />,
+        };
+      }
+      if (line.kind === "google") {
+        const words = model ? googleWords(googlePlace(model)) : null;
+        return {
+          key: line.key,
+          href: itemHref,
+          selected,
+          mark: <VendorMark vendor="google" size="md" />,
+          label: "Google",
+          ...(words ? { status: <StatusDot tone={words.tone}>{words.label}</StatusDot> } : {}),
         };
       }
       const app = entryOf(line, catalog)!;
@@ -191,7 +206,8 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
     (l): l is Extract<Line, { kind: "product" }> => l.kind === "product" && l.key === kind,
   );
   // THE CRUMB NAMES WHAT THE PAGE IS ABOUT, not the segment.
-  const crumb = service?.name ?? product?.name ?? entry?.name;
+  const google = kind === GOOGLE;
+  const crumb = google ? "Google" : (service?.name ?? product?.name ?? entry?.name);
   usePageLabels(useMemo(() => (kind && crumb ? { [kind]: crumb } : {}), [kind, crumb]));
   const { disconnect, node } = useDisconnect(model);
 
@@ -203,8 +219,13 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
   );
 
   let pane: ReactNode;
+  const cloud = model?.byKey.get("google_cloud");
   if (service) {
     pane = <ServicePane key={service.key} service={service} model={model} />;
+  } else if (google && model && cloud) {
+    pane = <GooglePane model={model} onDisconnect={() => disconnect(cloud)} />;
+  } else if (google && !model) {
+    pane = <GoogleHeld />;
   } else if (tool && model) {
     pane = (
       <AppPane
@@ -287,6 +308,22 @@ function HeldPane({ entry }: { entry: Entry }) {
   return (
     <>
       <ObjectHeader {...appHeading(entry, 36)} description={entry.description} />
+      <AdminNote />
+    </>
+  );
+}
+
+/** The Google page for a reader without Admin. */
+function GoogleHeld() {
+  return (
+    <>
+      <ObjectHeader
+        kind="Integration"
+        icon="plug"
+        mark={<VendorMark vendor="google" size={36} />}
+        title="Google"
+        description="One connection for every Google product your agents use."
+      />
       <AdminNote />
     </>
   );

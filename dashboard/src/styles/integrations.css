@@ -839,3 +839,117 @@ details > summary.int-summary::-webkit-details-marker {
   color: var(--color-text-primary);
   border-color: var(--color-text-muted);
 }
+
+/* The Google page's products: a row each, the switch at the row's end. */
+.int-google-products {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+}
+.int-google-product {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--spacing-3);
+  align-items: start;
+  padding: var(--spacing-3) var(--spacing-4);
+}
+.int-google-product + .int-google-product {
+  border-top: 1px solid var(--color-edge-hairline);
+}
+.int-google-product--preview {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+.int-google-product[data-focused] {
+  background: var(--color-surface-hover);
+}
+.int-google-mark {
+  margin-top: 2px;
+}
+.int-google-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.int-google-name {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+a.int-google-name {
+  text-decoration: none;
+}
+a.int-google-name:hover {
+  text-decoration: underline;
+}
+.int-google-does {
+  margin: 0;
+}
+.int-google-end {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+}
+/* A product's next step, under its state, on the inset a step is drawn on. */
+.int-google-next {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+  padding: var(--spacing-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-inset);
+}
+.int-google-next > p {
+  margin: 0;
+}
+.int-google-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+.int-google-inline {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+.int-google-lead {
+  margin: 0 0 var(--spacing-3);
+}
+.int-google-reader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.int-google-disconnect {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+  margin-top: var(--spacing-4);
+}
+.int-google-disconnect > p {
+  margin: 0;
+}
+
+/* On a phone the switch keeps the name's end, and the words take the width under it. */
+@media (width < 640px) {
+  .int-google-product {
+    position: relative;
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: var(--spacing-3);
+  }
+  .int-google-end {
+    position: absolute;
+    inset-block-start: var(--spacing-3);
+    inset-inline-end: var(--spacing-3);
+  }
+  .int-google-main > .int-google-name {
+    padding-inline-end: 7rem;
+  }
+}
