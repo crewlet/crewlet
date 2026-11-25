@@ -56,20 +56,34 @@ func (v SeatAccess) readerListing(ctx context.Context, c *config.Company, tokens
 	}
 	entries := v.Identity().Entries
 	token, err := tokens.ReaderToken(ctx, v.Product)
+	stage, _ := errors.AsType[*googleauth.StageError](err)
 	switch status := googleauth.Status(err); {
 	case errors.Is(err, seataccess.ErrNotIssued):
 		return nil, "Connect Google Cloud so Crewlet's company reader can list your " + entries + "."
-	case status == http.StatusForbidden || status == http.StatusNotFound:
-		return nil, "Crewlet cannot sign in as the company reader yet, so it cannot list your " + entries + "."
+	case stage != nil && stage.Stage == googleauth.StageFederation:
+		return nil, "Crewlet cannot sign in through the Google Cloud connection, so it cannot list your " +
+			entries + "; Google Cloud's page says why."
+	case stage != nil || status == http.StatusForbidden || status == http.StatusNotFound:
+		return nil, "Crewlet cannot act as the company reader yet, so it cannot list your " + entries + "."
 	case err != nil:
-		return nil, "Crewlet could not sign in as the company reader to list your " + entries + ": " +
-			googleauth.Sentence(err)
+		return nil, "Google did not answer the company reader's sign-in, so your " + entries +
+			" are not listed now; Crewlet asks again shortly."
 	}
 	listed, err := v.List(ctx, Lister{Company: c, Token: token, Send: send})
-	if err != nil {
-		return nil, v.Name + " did not list your " + entries + " to the company reader: " + googleauth.Sentence(err)
+	return listed, listingRefused(err, v.Name, entries, "the company reader")
+}
+
+// listingRefused is why a listing as who found nothing, in a person's words;
+// "" where it answered.
+func listingRefused(err error, product, entries, who string) string {
+	switch status := googleauth.Status(err); {
+	case err == nil:
+		return ""
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return product + " does not let " + who + " list your " + entries + " yet."
 	}
-	return listed, ""
+	return product + " did not answer the listing, so your " + entries + " are not listed now; Crewlet asks " +
+		"again shortly."
 }
 
 // options is the lane's offer with what the company's reader lists.
@@ -93,14 +107,11 @@ func GrantOptions(ctx context.Context, g Granted, tokens seataccess.IssuedTokens
 		return listedOptions(out, true, nil, "Sign in with Google on "+g.Name+"'s Settings tab so Crewlet can "+
 			"list your "+g.Entries+".")
 	case err != nil:
-		return listedOptions(out, true, nil, "Crewlet could not use the company's Google sign-in to list your "+
-			g.Entries+": "+googleauth.Sentence(err))
+		return listedOptions(out, true, nil, "Google did not answer the company's sign-in for "+g.Name+", so "+
+			"your "+g.Entries+" are not listed now; Crewlet asks again shortly.")
 	}
 	listed, err := g.List(ctx, Lister{Token: token, Send: googleauth.NewTransport(g.HTTP)})
-	if err != nil {
-		return listedOptions(out, true, nil, g.Name+" did not list your "+g.Entries+": "+googleauth.Sentence(err))
-	}
-	return listedOptions(out, true, listed, "")
+	return listedOptions(out, true, listed, listingRefused(err, g.Name, g.Entries, "the company's sign-in"))
 }
 
 // Granted is a consent product's lane, as [GrantOptions] lists it.
