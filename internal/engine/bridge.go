@@ -148,6 +148,14 @@ type bridgeLedger struct {
 	// record ([runner.BridgedSpend]). Nil records the calls alone.
 	spend bridgedMeter
 
+	// marks is this node's harness connections not yet on their rows, which
+	// a collection here waits for ([connectMarks]); nil holds none.
+	marks *connectMarks
+
+	// seat is the handle of the seat the run is on, whose release here waits
+	// for its runs' marks ([connectMarks.release]).
+	seat string
+
 	// nudge tells the waiter that drives the run that its work is in
 	// ([sandbox.NudgeSubmitted]) once a `submit_work` is in its log. Nil
 	// leaves it to the run's next poll.
@@ -429,7 +437,8 @@ func (l *bridgeLedger) notRecorded(ctx context.Context, runID, launch string, ca
 }
 
 // sessionStartRecordBudget bounds the write recording which session a job's
-// box started ([bridgeLedger.recordStart]), beside the row's crossing time
+// box started ([bridgeLedger.recordStart]), and the one recording that its
+// harness connected its bridge ([bridgeLedger.recordConnected]), beside the row's crossing time
 // (sandbox.RowBudget): FIVE SECONDS, as [steerPublishBudget] and for its
 // reason: one compare-and-swap of one row, and a store silent for five is in
 // an outage this write waits out no better. A missed record reads as a session
@@ -485,6 +494,44 @@ func (l *bridgeLedger) recordStart(base context.Context, runID, launch string, s
 			"detail", "the run's tools are held to the session its box started; a later "+
 				"rebuild of its skill guard takes that session for one of its own")
 	}
+}
+
+// connected records that the job's harness connected its bridge
+// ([sandbox.PendingStore.MarkBridgeConnected]), which its collection fails a
+// job that ended without (internal/api/mcpbridge, connected.go). OFF THE
+// LIST'S PATH, uncancellable, and held on this node until the row says so
+// ([connectMarks]): the harness's first request never waits on a row write,
+// and no collection reads the run as one that did not connect.
+func (l *bridgeLedger) connected(ctx context.Context, runID string) {
+	if l == nil || l.store == nil {
+		return
+	}
+	l.mu.Lock()
+	launch := l.launch
+	l.mu.Unlock()
+	if launch == "" {
+		return
+	}
+	l.marks.record(context.WithoutCancel(ctx), runID, l.seat, func(ctx context.Context) error {
+		return l.recordConnected(ctx, runID, launch)
+	})
+}
+
+// recordConnected is one try of [bridgeLedger.connected]'s write, under base,
+// within [sessionStartRecordBudget] plus the row's crossing
+// (sandbox.RowBudget). A try the store refuses is logged and answered; its
+// mark holds what the next try or a collection needs ([connectMarks]).
+func (l *bridgeLedger) recordConnected(base context.Context, runID, launch string) error {
+	ctx, cancel := context.WithTimeout(base, sandbox.RowBudget(l.store, sessionStartRecordBudget))
+	defer cancel()
+	if _, err := l.store.MarkBridgeConnected(ctx, runID, launch); err != nil {
+		l.logger().WarnContext(ctx, "executor_bridge_connect_unrecorded", "run_id", runID,
+			"launch_id", launch, "error", err.Error(),
+			"detail", "the run's harness connected its bridge, and this try to record it failed: it is "+
+				"tried again, and a collection on this node writes it before it reads the run")
+		return err
+	}
+	return nil
 }
 
 // boxStarted is what a job's bridge session does once its box says which
