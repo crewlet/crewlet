@@ -68,6 +68,18 @@ type copilotData struct {
 	// Turns is the cap the script's [copilotCapMark] line names.
 	Turns int `json:"turns"`
 
+	// WarningType is a `session.warning`'s kind ([copilotStaticBlocked]).
+	WarningType string `json:"warningType"`
+
+	// A launch attempt's lines ([copilotAttempts]): a relaunch's sets Kept of
+	// Sets, and a refusal's Reason, with the Session, the Node or the Message
+	// it names.
+	Kept    int    `json:"kept"`
+	Sets    int    `json:"sets"`
+	Reason  string `json:"reason"`
+	Session string `json:"session"`
+	Node    string `json:"node"`
+
 	// Usage is one model request's, on a `session.usage_record`.
 	Usage *copilotUsageRecord `json:"usage"`
 }
@@ -184,6 +196,12 @@ type copilotEvents struct {
 	mainRequests int
 	window       int64
 
+	// blocked is a refusal of the static budget ([copilotStaticBlocked]),
+	// blockedLate one after a request of the attempt was answered (answered),
+	// and refused the script's word on a launch it ended ([copilotRefusedMark]).
+	blocked, blockedLate, answered bool
+	refused                        string
+
 	transcript transcriptLines
 	following  bool
 }
@@ -233,6 +251,7 @@ func (d *copilotEvents) Line(line []byte) {
 		d.sessionID = firstNonBlank(ev.SessionID, d.sessionID)
 		d.exit = int(looseInt(ev.ExitCode))
 	case "assistant.message":
+		d.answered = true
 		if !root {
 			return
 		}
@@ -262,6 +281,9 @@ func (d *copilotEvents) Line(line []byte) {
 	case "assistant.idle":
 		d.idleAborted = d.idleAborted || (root && data.Aborted)
 	case "session.warning", "session.info":
+		if data.WarningType == copilotStaticBlocked {
+			d.blocked, d.blockedLate = true, d.answered
+		}
 		switch {
 		case strings.HasPrefix(data.Message, copilotCapMessage):
 			d.capped = strings.TrimPrefix(data.Message, "crewlet: ")
@@ -272,6 +294,13 @@ func (d *copilotEvents) Line(line []byte) {
 		}
 	case copilotCapMark:
 		d.capTurns = data.Turns
+	case copilotRelaunchMark:
+		d.nextAttempt()
+		d.transcript.add(activityline.Words(activityline.TagNote, fmt.Sprintf("Copilot refused the launch: its "+
+			"static context passed the model's budget, so the run started again with the launch instructions of %d of "+
+			"its %d repositories; the rest arrive when a file in them is first viewed", data.Kept, data.Sets)))
+	case copilotRefusedMark:
+		d.refused = copilotRefusal(data)
 	case copilotUsageMark:
 		d.marked = true
 	case "session.usage_record":
@@ -292,6 +321,43 @@ func (d *copilotEvents) Line(line []byte) {
 			}
 		}
 	}
+}
+
+// nextAttempt forgets how a refused launch attempt ended, the stream after
+// the script's [copilotRelaunchMark] being the next attempt's.
+func (d *copilotEvents) nextAttempt() {
+	d.answer, d.result, d.exit = "", false, 0
+	d.failure, d.failureLine, d.failureType, d.limit = "", "", "", ""
+	d.aborted, d.idleAborted, d.capped, d.unkept, d.armed, d.denied = false, false, "", "", false, ""
+	d.blocked, d.blockedLate, d.answered, d.calls = false, false, false, nil
+}
+
+// copilotLaunchRefused is why Copilot refused a launch before any request.
+const copilotLaunchRefused = "Copilot refused to start the run: its static context (its own prompt, the " +
+	"instructions in its home, its tools and its skills) passes the model's budget before any request"
+
+// copilotRefusal is the failure a [copilotRefusedMark] line names.
+func copilotRefusal(data copilotData) string {
+	switch data.Reason {
+	case "alone":
+		return copilotLaunchRefused + ", with no repository's instructions handed: what is in the home, the run's " +
+			"instructions, its tools or its skills are over it by themselves"
+	case "resume":
+		return "Copilot refused to resume the session: its static context, with the repositories' instructions the " +
+			"session was started with, passes the model's budget, which Copilot checks again at every launch; " +
+			"nothing of the session was removed"
+	case "state":
+		return fmt.Sprintf("Copilot refused a launch attempt, and its session %s was not removed: its directory "+
+			"is still in Copilot's session-state, so the run is not started again onto it", data.Session)
+	case "store":
+		return fmt.Sprintf("Copilot refused a launch attempt, and its session %s was not removed from Copilot's "+
+			"session store, so the run is not started again onto it: %s", data.Session, data.Message)
+	case "node":
+		return fmt.Sprintf("the run's checkouts may make Copilot refuse its launch, after which the run checks "+
+			"Copilot's session store with the box's node, which must load node:sqlite without a flag (Node 22.13, "+
+			"23.4 or later), and this box's node is %s: install one in the box image", data.Node)
+	}
+	return "the run's launch was refused: " + firstNonBlank(data.Message, data.Reason, "for a reason it did not name")
 }
 
 // started notes a call's start and adds its line.
@@ -408,6 +474,10 @@ func (d *copilotEvents) Result() sandbox.Result {
 	}
 	capped := d.capped != "" && d.aborted && d.idleAborted && d.result && d.exit == 1 && d.failure == ""
 	switch {
+	case d.refused != "":
+		res.Error = d.refused
+	case d.blocked && !d.blockedLate:
+		res.Error = copilotLaunchRefused
 	case d.capTurns > 0 && d.mainRequests > d.capTurns:
 		// THE RECORD'S OWN COUNT, whatever the extension said: a policy that
 		// let it run and stopped its hooks leaves its line and no cap.
@@ -419,6 +489,10 @@ func (d *copilotEvents) Result() sandbox.Result {
 			"it never ran, so the cap was not enforced: %s", d.capTurns, (Copilot{}).notesOffWhy())
 	case d.denied != "":
 		res.Error = d.denied
+	case d.blocked:
+		// NEVER "nothing ran": a tool of the run may have run before it.
+		res.Error = "Copilot stopped the run after it began: its static context grew past the model's budget " +
+			"(an MCP server announcing tools late, for one), so a tool the run called may have run"
 	case d.failure != "":
 		res.Error = d.failure
 		res.ContextExhausted = d.failureType == copilotContextLimit ||

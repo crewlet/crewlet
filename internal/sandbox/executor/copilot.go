@@ -199,8 +199,7 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 	// person's own instruction directories (pi, ps).
 	line(`pi=${COPILOT_CUSTOM_INSTRUCTIONS_DIRS-}; ps=${COPILOT_CUSTOM_INSTRUCTIONS_DIRS+1}`)
 	b.WriteString(copilotCheckoutHome(paths).prepare())
-	b.WriteString(copilotLaunchCompose(paths, "-keep -1"))
-	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
+	b.WriteString(copilotAttempts(paths, strings.Join(parts, " ")))
 	b.WriteString(copilotUsage())
 	b.WriteString(copilotCapture(paths))
 	line(`exit "$code"`)
@@ -295,7 +294,7 @@ func copilotSessionGate(session Session, paths Paths, rewired bool) string {
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
 	if !session.Continues {
-		line(`s=%s k=no w=`, q(session.ID))
+		line(`s=%s k=no w= bf=%s`, q(session.ID), q(paths.Brief()))
 		line(`set -- "$@" --session-id %s`, q(session.ID))
 		return b.String()
 	}
@@ -317,8 +316,10 @@ func copilotSessionGate(session Session, paths Paths, rewired bool) string {
 		"rm -rf " + q(held),
 		"mkdir -p " + q(held),
 		"mv " + q(from+"/events.jsonl") + " " + q(held+"/events.jsonl"),
+		"{ [ -L " + q(from+"/"+copilotKeptSets) + " ] || [ ! -f " + q(from+"/"+copilotKeptSets) + " ] || mv " +
+			q(from+"/"+copilotKeptSets) + " " + q(held+"/"+copilotKeptSets) + "; }",
 	}, " && ")
-	line(`s=%s k=yes w= h= d=`, q(session.ID))
+	line(`s=%s k=yes w= h= d= bf=%s`, q(session.ID), q(paths.Brief()))
 	line(`[ -s %s ] && h=1`, q(held+"/events.jsonl"))
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
 	if session.Replaces {
@@ -353,7 +354,7 @@ func copilotSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`  printf '%%s%%s\n' %s "$w" >&2`, q("crewlet: this run was asked to continue the Copilot session "+
 		session.ID+", and starts a new session, "+session.Fresh+", instead: "))
 	line(`  set -- "$@" --session-id %s`, q(session.Fresh))
-	line(`  [ ! -s %s ] || exec < %s`, q(paths.FreshBrief()), q(paths.FreshBrief()))
+	line(`  [ ! -s %[1]s ] || { exec < %[1]s; bf=%[1]s; }`, q(paths.FreshBrief()))
 	if rewired {
 		// THE NEW SESSION WIRED TO ITS OWN TOKEN, the bridge's and the notes
 		// route's alike, or not started: [claudeSessionGate]'s reason.
@@ -423,12 +424,12 @@ func copilotLastRotated(v string) string {
 
 // copilotArchiveFormat is the layout a Copilot run packs its session in
 // ([copilotPack]) and the one it restores ([copilotSessionGate]): one gzipped
-// tar of one member named relative to the run's home,
+// tar of members named relative to the run's home,
 // `session-state/<session>/events.jsonl`, the conversation, which a resume
 // takes up whole on its own (measured on 1.0.114), a rotated one's too: its head
-// copies every record a resume reads ([copilotLastRotated]). A change is a new
-// format.
-const copilotArchiveFormat = 1
+// copies every record a resume reads ([copilotLastRotated]); and, where the
+// session keeps one, its [copilotKeptSets]. A change is a new format.
+const copilotArchiveFormat = 2
 
 // ArchiveFormat is the layout a Copilot run packs its session in ([carrier]).
 func (Copilot) ArchiveFormat() int { return copilotArchiveFormat }
@@ -504,7 +505,7 @@ func copilotCapture(paths Paths) string {
 }
 
 // copilotPack packs the session s names into at.staged and moves it over
-// at.dest, its digest kept ([packDigest]): its events.jsonl alone, never the
+// at.dest, its digest kept ([packDigest]): its events.jsonl and kept sets, never the
 // files a rotation left ([copilotArchiveFormat]). Copilot writes workspace.yaml
 // and checkpoints/ again on a resume (measured on 1.0.114).
 // NEVER session.db or its -journal, the sql tool's tables, so that tool's data
@@ -520,6 +521,7 @@ func copilotPack(paths Paths, at packAt) string {
 	line(`if [ -s %s/%s/events.jsonl ]; then`, q(home), dir)
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
 	line(`    set -- %s/events.jsonl`, dir)
+	line(`    [ ! -f %s/%s/%s ] || set -- "$@" %[2]s/%[3]s`, q(home), dir, copilotKeptSets)
 	tar := fmt.Sprintf(`{ tar -czf %s -C %s "$@" < /dev/null > /dev/null 2> %s; t=$?; [ "$t" = 0 ] || { [ "$t" = 1 ] && grep -q 'changed as we read it' %s; }; }`,
 		q(at.staged+"/capture"), q(home), q(at.staged+"/error"), q(at.staged+"/error"))
 	if at.working {
@@ -691,6 +693,9 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 		if err = writeHelperBuild(ctx, box, paths.CopilotNoteHelper(), helper); err != nil {
 			return "", err
 		}
+		if err = box.WriteFile(ctx, paths.CopilotStoreCheck(), []byte(copilotStoreCheck)); err != nil {
+			return "", fmt.Errorf("executor: writing the check of a refused launch: %w", err)
+		}
 	}
 	launch := copilotCheckoutHome(paths).launchConfig(copilotCheckouts(), req.ReportedRepos)
 	if err = box.WriteFile(ctx, paths.CopilotCheckoutLaunch(), launch); err != nil {
@@ -700,7 +705,7 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 		// THIS LAUNCH'S OWN KEY, never the session's: a continued session keeps
 		// its id across runs, and a state an earlier run left must count nothing.
 		settings := copilotExtensionSettings{Cap: req.Limits.MaxTurns, State: paths.CopilotNotesState(),
-			Run: uuid.NewString()}
+			Run: uuid.NewString(), Attempt: paths.CopilotAttempt()}
 		if handing {
 			settings.Helper, settings.Nested = paths.CopilotNoteHelper(), paths.CopilotRepo()+"/nested.json"
 		}
@@ -825,7 +830,7 @@ func (Copilot) exportsTelemetry() bool { return true }
 func (Copilot) artifactFiles(p Paths) []string {
 	return []string{p.CopilotExtensionFresh(), p.CopilotNotesState(), p.CopilotNotesState() + ".tmp",
 		p.CopilotGuardSettings(), p.CopilotRunInstructions(), p.CopilotNoteHelper(), p.CopilotCheckoutLaunch(),
-		p.CopilotRepoInstructions()}
+		p.CopilotRepoInstructions(), p.CopilotAttempt(), p.CopilotStoreCheck()}
 }
 
 var _ homeKeeper = Copilot{}

@@ -28,11 +28,13 @@ const copilotInstructionsDir = ".github/instructions"
 const copilotPointer = ": its instructions arrive when you first view a file in it"
 
 // Files under a run's checkout state copilot-launch writes for the run's
-// script: the directories it hands Copilot, joined by `,`, and the names of
-// the checkouts whose launch sets it kept, a name a line.
+// script: the directories it hands Copilot, joined by `,`, the names of the
+// checkouts whose launch sets it kept, and of every checkout with one, a name
+// a line.
 const (
 	copilotDirsFile = "dirs"
 	copilotKeptFile = "kept"
+	copilotSetsFile = "sets"
 )
 
 // copilotSet is one checkout's launch set: its section of the home
@@ -82,8 +84,9 @@ func copilotLaunch(config string, keep int, keptFrom string, stderr io.Writer) (
 	if err != nil {
 		return 0, err
 	}
-	var sections, dirs, names []string
+	var sections, dirs, names, all []string
 	for _, s := range sets {
+		all = append(all, s.name)
 		switch {
 		case !kept[s.name]:
 			sections = append(sections, checkoutHeader(s.name, s.root)+copilotPointer)
@@ -106,6 +109,9 @@ func copilotLaunch(config string, keep int, keptFrom string, stderr io.Writer) (
 		}
 	}
 	if err = os.WriteFile(filepath.Join(c.State, copilotDirsFile), []byte(strings.Join(dirs, ",")), 0o600); err != nil {
+		return 0, err
+	}
+	if err = writeNames(filepath.Join(c.State, copilotSetsFile), all); err != nil {
 		return 0, err
 	}
 	return len(sets), writeNames(filepath.Join(c.State, copilotKeptFile), names)

@@ -58,6 +58,16 @@
 // additionalContext is cut at 10,240 characters without a word (measured on
 // 1.0.114). Its instructions Copilot loads itself on the first view of a file
 // in it. The helper's own skip lines are kept for the run's end, not repeated.
+//
+// A LAUNCH COPILOT REFUSED. Copilot refuses a launch whose static context
+// passes the model's budget before any request (`session.warning`
+// compaction_static_context_blocked), and the run's script starts it again
+// with fewer of its checkouts' instructions (copilotrepo.go). A refused attempt
+// of a NEW session is deleted here, whole, so the next attempt starts clean and
+// no model ever reads it from the session store: once a request has gone, or
+// for a resumed session, nothing is. Each attempt is its own launch: its state
+// is keyed by the attempt the script names, so a refused attempt's count, cursor
+// and sent notes count nothing, and a note it sent is sent again.
 
 import { execFileSync } from "node:child_process"
 import { readFileSync, renameSync, writeFileSync } from "node:fs"
@@ -114,6 +124,14 @@ const nestedMaxBuffer = 1 << 20
 const nestedFailedMessage =
   "crewlet: the note helper handing a checkout cloned during the run failed, so its skills are not listed: "
 
+// blockedWarning is the warningType of Copilot's refusal of a launch, or of a
+// request, past its static budget (measured on 1.0.114).
+const blockedWarning = "compaction_static_context_blocked"
+
+// removeFailedMessage opens the log line written where a refused attempt
+// could not be deleted; the script finds it left and fails the run.
+const removeFailedMessage = "crewlet: the refused launch's session could not be removed: "
+
 // armedMessage is the log line written once the extension runs in the session
 // (copilotsteer.go, copilotArmedMessage): a run with a turn cap whose stream
 // lacks it is collected as a failure, the cap never enforced.
@@ -123,11 +141,13 @@ if (config !== null && typeof config === "object") {
   await arm(config)
 }
 
-async function arm({ url, cap, state, run, helper, nested }) {
+async function arm({ url, cap, state, run, helper, nested, attempt }) {
   // kept is what an earlier process of this launch left (A RESTART RESUMES THE
   // RUN, above): the requests counted, the cursor, and the inbox ids sent; or
-  // broken, a file this process cannot read, which sends no note.
-  const kept = resume(state, run)
+  // broken, a file this process cannot read, which sends no note. The launch
+  // is this attempt's (A LAUNCH COPILOT REFUSED, above).
+  const launch = attemptOf(run, attempt)
+  const kept = launch === null ? { turns: 0, cursor: 0, sent: [], broken: true } : resume(state, launch)
   const polling = typeof url === "string" && url !== "" && !kept.broken
   const capped = Number.isSafeInteger(cap) && cap > 0
   const handing = typeof helper === "string" && helper !== "" && typeof nested === "string" && nested !== ""
@@ -139,7 +159,7 @@ async function arm({ url, cap, state, run, helper, nested }) {
   let cursor = kept.cursor
   let turns = kept.turns
   const sent = new Set(kept.sent)
-  const save = () => keep(state, run, { turns, cursor, sent: [...sent] })
+  const save = () => launch !== null && keep(state, launch, { turns, cursor, sent: [...sent] })
   // unkept is a capped run whose count was not kept, or not read back.
   let unkept = capped && kept.broken
   // notesSaid is whether the run's stream was told a note's id could not be kept.
@@ -290,10 +310,46 @@ async function arm({ url, cap, state, run, helper, nested }) {
     return { modifiedResult: { ...result, textResultForLlm: (result.textResultForLlm ?? "") + "\n\n" + listing } }
   }
 
+  // source is how Copilot started the session (sessionStart's), and answered
+  // whether a model request of it was answered: a refusal deletes only a new
+  // session no request reached.
+  let source = null
+  let answered = false
+  let removing = false
+
+  // removeRefused deletes this attempt's own session, Copilot's process being
+  // the one it is joined to: the extension SDK offers no delete, so a second
+  // client on the internal parent-process connection asks Copilot's own
+  // sessions.bulkDelete for exactly its id (measured on 1.0.114: the session's
+  // directory and its store rows gone, the launch exiting in about 4.4 s as
+  // without it; 1.0.115 holds it 60 s more, a release this runner does not
+  // run). It stops nothing else; the script checks it is gone before the next
+  // attempt (copilot_storecheck.mjs). executor's package doc, "Copilot's
+  // internal client", has why and what breaks without it.
+  const removeRefused = async () => {
+    if (removing) return
+    removing = true
+    life.abort()
+    close()
+    try {
+      const id = process.env.SESSION_ID
+      if (typeof id !== "string" || id === "") throw new Error("Copilot named no session")
+      const sdk = await import("@microsoft/copilot-sdk")
+      const client = new sdk.CopilotClient({ mode: "coding-agent", _internalConnection: { kind: "parent-process" } })
+      await client.start()
+      await client.rpc.sessions.bulkDelete({ sessionIds: [id] })
+    } catch (error) {
+      quietly(session.log(removeFailedMessage + String(error?.message ?? error).split("\n")[0], { level: "warning" }))
+    }
+  }
+
   // JOINED LAST, every function it can call defined: the hook may fire as
   // soon as the session is joined.
   const session = await joinSession({
     hooks: {
+      onSessionStart: async (input) => {
+        source = input?.source ?? null
+      },
       onPostToolUse: async (input) => {
         await capAfterTool(input)
         return handNested(input)
@@ -306,7 +362,13 @@ async function arm({ url, cap, state, run, helper, nested }) {
     },
   })
   session.on((event) => {
-    if (event === null || typeof event !== "object" || mainAgent(event) === false) return
+    if (event === null || typeof event !== "object") return
+    if (event.type === "assistant.message") answered = true
+    if (event.type === "session.warning" && event.data?.warningType === blockedWarning && !answered && source === "new") {
+      quietly(removeRefused())
+      return
+    }
+    if (mainAgent(event) === false) return
     switch (event.type) {
       case "assistant.turn_start":
         turns++
@@ -336,6 +398,19 @@ async function stop(session, line) {
     await session.log(line, { level: "warning" })
   } finally {
     await session.abort()
+  }
+}
+
+// attemptOf is this launch's key: run and the attempt the script wrote to the
+// file attempt names, run alone where there is no file to read; null where it
+// cannot be read, which counts as nothing known.
+function attemptOf(run, attempt) {
+  if (typeof attempt !== "string" || attempt === "") return run
+  try {
+    const n = readFileSync(attempt, "utf8").trim()
+    return /^[0-9]+$/.test(n) ? run + "/" + n : null
+  } catch {
+    return null
   }
 }
 

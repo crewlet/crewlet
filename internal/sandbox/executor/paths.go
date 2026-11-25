@@ -617,9 +617,8 @@
 // carry.go and each runner's own carry.
 //
 // A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
-// it, by the pack the run's own end makes held to a stricter rule — every file
-// it packs listed before the tar and checked after it, so a file the harness
-// rewrote under the pack fails the pack rather than riding the archive torn
+// it, by the pack the run's own end makes held to a stricter rule: a file the
+// harness rewrote under the pack fails it rather than riding the archive torn
 // ([claudeHeldTar]): a job a box would not end, packed on demand for the read
 // that packs it alone ([Runner.PackCapture], [Paths.SessionPackHeld]), and a
 // SAVE, packed to a place of that save's own, named after its taker
@@ -628,9 +627,8 @@
 // ([saver], [Runner.Saves]), OpenCode by its own export (below);
 // whether a job moved since its last save is how far its harness's event
 // stream ran ([Runner.Streamed]); and a save no take will read is removed
-// from its box ([Runner.ReleaseSave]). And a job that is over and left no archive is
-// packed on demand for its read alone too, by the run's own end's rule: the
-// capture is the job's own script's, which nothing else writes.
+// from its box ([Runner.ReleaseSave]). A job over with no archive is packed on
+// demand for its read alone, by the run's own end's rule.
 //
 // # An OpenCode session saved beside its running server
 //
@@ -1209,6 +1207,15 @@
 // point, which none has yet. So the set admits each release alone, and a pair
 // of two differing releases is none.
 //
+// # Copilot's internal client
+//
+// A launch Copilot refuses past its static budget keeps its session, which a
+// relaunch would resume and session_store_sql reads. The extension SDK has no
+// delete, so the run's extension calls sessions.bulkDelete through a second
+// client on the undocumented `_internalConnection` (copilot_steer.js). A
+// Copilot release moved to re-measures that client, the refusal's
+// warningType, the store's tables (copilot_storecheck.mjs) and the time.
+//
 // # A box's release is pinned
 //
 // A box is asked its harness's release before a run continues a session in it
@@ -1228,16 +1235,11 @@
 //
 // # A run ends on request
 //
-// The read that takes a stopped or lost job's session, or that of a job still
-// working past its turn's cap, first asks the job to end: SIGUSR1 to the run's
-// script, by the pid it recorded in its box before it did anything else
-// ([Paths.JobScript], [Runner.AskEnd]). The script ends its
-// harness — SIGTERM, then SIGKILL after the grace; an OpenCode run first
-// interrupts its session through its own server, so the step in flight is
-// settled in what it exports — packs the session as its own exit packs it,
-// records that it was ended and how ([Paths.JobEnded]), and exits with its
-// harness's status, which the collection never reads as a success
-// ([sandbox.Result.JobEnd]). See end.go.
+// A read that takes a stopped or lost job's session, or one past its turn's
+// cap, first asks the job to end ([Runner.AskEnd]): SIGUSR1 to its script's
+// recorded pid ([Paths.JobScript]), which ends its harness, packs the session
+// as its exit does, records how ([Paths.JobEnded]) and exits with the
+// harness's status, never a success ([sandbox.Result.JobEnd]). See end.go.
 //
 // It touches only the [sandbox.Sandbox] interface, so the in-process fake is a
 // faithful substitute and every runner is testable without a real harness.

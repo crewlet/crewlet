@@ -127,10 +127,15 @@ func startCopilotProbe(t *testing.T, settings copilotExtensionSettings) *copilot
 	if err != nil {
 		t.Fatal(err)
 	}
+	client, err := os.ReadFile("copilot_client_probe.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, body := range map[string]string{
 		filepath.Join(sdk, "package.json"): `{"name":"@microsoft/copilot-sdk","type":"module",` +
-			`"exports":{"./extension":"./extension.mjs"}}`,
+			`"exports":{".":"./index.mjs","./extension":"./extension.mjs"}}`,
 		filepath.Join(sdk, "extension.mjs"):        string(stub),
+		filepath.Join(sdk, "index.mjs"):            string(client),
 		filepath.Join(dir, "ext", "extension.mjs"): source,
 	} {
 		if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
@@ -143,7 +148,7 @@ func startCopilotProbe(t *testing.T, settings copilotExtensionSettings) *copilot
 	p := &copilotProbe{t: t, reports: make(chan copilotProbeReport, 256)}
 	cmd := exec.Command(node, filepath.Join(dir, "ext", "extension.mjs")) //nolint:gosec // the suite's own probe
 	p.cmd = cmd
-	cmd.Env = append(os.Environ(), "NODE_NO_WARNINGS=1")
+	cmd.Env = append(os.Environ(), "NODE_NO_WARNINGS=1", "SESSION_ID="+copilotProbeSession)
 	if p.stdin, err = cmd.StdinPipe(); err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +178,23 @@ func startCopilotProbe(t *testing.T, settings copilotExtensionSettings) *copilot
 		_ = cmd.Wait()
 	})
 	return p
+}
+
+// copilotProbeSession is the session Copilot names to the probe's extension,
+// as it names its own to an extension it starts (SESSION_ID).
+const copilotProbeSession = "probe-session"
+
+// quiet fails the case on any report within d, a liveness bound on a report
+// that would come at once.
+func (p *copilotProbe) quiet(d time.Duration, why string) {
+	p.t.Helper()
+	select {
+	case r, ok := <-p.reports:
+		if ok {
+			p.t.Fatalf("%s, and the probe reported %s (%+v)", why, r.Op, r)
+		}
+	case <-time.After(d): //fixedwait:liveness
+	}
 }
 
 // end ends the extension's process as Copilot's extensions_reload does, and
@@ -266,7 +288,7 @@ func copilotNote(seq int, inbox, words string) string {
 func TestTheCopilotExtensionSendsANoteWhileTheMainAgentWorks(t *testing.T) {
 	route := newCopilotRoute(t)
 	p := startCopilotProbe(t, copilotExtensionSettings{URL: route.url})
-	if joined := p.expect("joined"); strings.Join(joined.Hooks, ",") != "onAgentStop,onPostToolUse,onPostToolUseFailure" {
+	if joined := p.expect("joined"); strings.Join(joined.Hooks, ",") != "onAgentStop,onPostToolUse,onPostToolUseFailure,onSessionStart" {
 		t.Fatalf("hooks = %v", joined.Hooks)
 	}
 	p.expectArmed()
