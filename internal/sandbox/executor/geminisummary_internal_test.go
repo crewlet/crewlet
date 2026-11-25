@@ -313,28 +313,31 @@ func TestAGeminiSummaryOnTheCountsWalkIsItsWholeLineReplay(t *testing.T) {
 	})
 }
 
-// A GEMINI CLI SUMMARY IS THE NEWEST STANDING IN ITS HISTORY: two
-// compressions read the newer; a patch's removal or a rewind past it reads
-// the one before; a patch's copy of a summary as a user entry is it, one of
-// another kind takes it away; its words are its first text a thought is not,
-// trimmed; a blank newest is none; one past the bound, or past the bound the
-// newer leaves it, is unread; a patch of no shape or a rewind to no record
-// standing leaves the summaries before it unsaid. A summary on a line the
-// count cannot read (a separator in it, a key written twice), or of a record
-// gone and written again, which Gemini CLI never writes, is unsaid.
+// A GEMINI CLI SUMMARY IS THE NEWEST STANDING IN ITS HISTORY: a removal or a
+// rewind past the newer reads the one before; a patch's copy as a user entry
+// is it, one of another kind takes it away; its words are its first text a
+// thought is not, trimmed; a blank newest is none, one past the bound unread;
+// a patch of no shape or a rewind to no record standing leaves those before
+// it unsaid; its reply is judged as the line trimmed whole, its white space
+// past the head too, never on a torn last line (a case named so). A summary
+// on a line the count cannot read, or of a record gone and written again
+// (never written by Gemini CLI), is unsaid.
 //
-// Mutation: drop the rewind's spans, the removal of a summary, the trim, or
-// the unsaid summary: a case fails.
+// Mutation: drop the rewind's spans, the removal of a summary, the trim, the
+// unsaid summary, or judge a torn last line: a case fails.
 func TestAGeminiSummaryIsTheNewestStandingInItsHistory(t *testing.T) {
 	t.Parallel()
 	user := func(id, content string) string {
 		return `{"id":"` + id + `","timestamp":"t","type":"user","content":` + content + `}`
 	}
 	text := func(s string) string { return `[{"text":"` + s + `"}]` }
-	comp := func(id, content string) string {
-		return `{"$set":{"sessionId":"s"}}` + "\n" + user(id, content) + "\n" + `{"id":"` + id +
-			`a","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}`
+	ack := func(id string) string {
+		return `{"id":"` + id + `a","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}`
 	}
+	comp := func(id, content string) string {
+		return `{"$set":{"sessionId":"s"}}` + "\n" + user(id, content) + "\n" + ack(id)
+	}
+	spaces := func(n int) string { return strings.Repeat(" ", n-len(ack("s1"))) }
 	rec := func(id string) string { return `{"id":"` + id + `","type":"user","content":"x"}` }
 	update := func(id, rest string) string { return `{"$patch":{"updates":[{"id":"` + id + `"` + rest + `}]}}` }
 	big := strings.Repeat("w", 1_500_000)
@@ -400,9 +403,18 @@ func TestAGeminiSummaryIsTheNewestStandingInItsHistory(t *testing.T) {
 			`{"$patch":{"removeIds":["s2"]}}`, comp("s2", text("two again"))}, regone},
 		{"a summary written again once rewound", []string{rec("a"), comp("s1", text("one")),
 			`{"$rewindTo":"a"}`, comp("s1", text("again"))}, regone},
+		{"a reply led past the head", []string{`{"$set":{"sessionId":"s"}}`, user("s1", text("one")),
+			spaces(3*lineFormMaxBytes) + ack("s1")}, words("one")},
+		{"a reply trailed past the head", []string{`{"$set":{"sessionId":"s"}}`, user("s1", text("one")),
+			ack("s1") + spaces(lineFormMaxBytes+1)}, words("one")},
+		{"a reply led past the head, torn", []string{`{"$set":{"sessionId":"s"}}`, user("s1", text("one")),
+			spaces(lineFormMaxBytes+1) + ack("s1")}, "none"},
 	} {
 		chat := `{"sessionId":"s","projectHash":"h","startTime":"t","kind":"main"}` + "\n" +
-			strings.Join(c.lines, "\n") + "\n"
+			strings.Join(c.lines, "\n")
+		if !strings.HasSuffix(c.name, ", torn") {
+			chat += "\n"
+		}
 		if got := geminiSummaryString(geminiSummaryOnTheWalk(t.Context(), chat)); got != c.want {
 			t.Errorf("%s: the summary reads %s, want %s", c.name, got, c.want)
 		}
