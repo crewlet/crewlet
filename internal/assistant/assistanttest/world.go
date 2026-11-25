@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
@@ -186,6 +187,7 @@ var ProposalArgs = map[string]map[string]any{
 	"share_artifact":            {"artifact": RecordID, "to": "company", "role": "viewer"},
 	"unshare_artifact":          {"artifact": RecordID, "from": "unit:platform"},
 	"propose_page_change":       {"action": "work.filter.apply", "args": map[string]any{"status": "blocked"}},
+	"read_screen":               {},
 	"update_company_principles": {"mission": "Help friends share costs fairly."},
 	"post_chat_message":         {"channel": RecordID, "body": "Ship it on Friday."},
 	"reply_in_chat_thread":      {"channel": RecordID, "reply_to": RecordID, "body": "Agreed."},
@@ -239,13 +241,15 @@ func Answer(world map[string]any, r exec.Request) exec.Response {
 }
 
 // FilterPage is the task list's page context, accepting the filter the page
-// change in [ProposalArgs] applies.
+// change in [ProposalArgs] applies and the screen read every page offers.
 func FilterPage() *wire.PageContext {
 	return &wire.PageContext{Screen: "worklet-tasks", Title: "Worklet › Tasks",
 		Params: map[string]string{}, Query: map[string]string{},
 		Resources:      []wire.Resource{{Kind: wire.ResourceProject, ID: "ENG"}},
-		SourceRevision: "url:3f9c1a0e", Accepts: []string{"work.filter.apply"},
-		ActionArgs: map[string]*wire.ActionArgs{"work.filter.apply": StatusFilterArgs()}}
+		SourceRevision: "url:3f9c1a0e", Accepts: []string{"work.filter.apply", catalog.ReadScreen},
+		ActionArgs: map[string]*wire.ActionArgs{"work.filter.apply": StatusFilterArgs(),
+			catalog.ReadScreen: {Type: wire.ArgTypes{wire.ArgObject}, AdditionalProperties: new(false)}},
+		ActionRevisions: map[string]string{catalog.ReadScreen: "screen"}}
 }
 
 // StatusFilterArgs are the arguments a task list's filter takes, as the

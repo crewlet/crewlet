@@ -167,8 +167,11 @@ func (e *Engine) statusRecordRows(ctx context.Context) coord.NodeStatusRecord {
 	// AND THE WINDOWS THE MODEL ROWS CARRY, kept in this node's own file, since
 	// a clean stop deletes the record.
 	e.keepReadings(ctx, e.Company())
+	mcpRows := e.mcpStatus(ctx)
+	// AND EACH INSTANCE'S OUTAGE, which a restart would otherwise date anew.
+	e.keepMCPDown(ctx)
 	return coord.NodeStatusRecord{
-		MCP: e.mcpStatus(ctx), Models: e.modelStatus(ctx), Runners: e.runnerStatus(),
+		MCP: mcpRows, Models: e.modelStatus(ctx), Runners: e.runnerStatus(),
 		Infra: NodeInfra(e.boot), ResumesBlocked: e.resumesBlocked(), Growth: e.growthSignalRows(),
 	}
 }

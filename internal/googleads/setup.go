@@ -36,8 +36,7 @@ func Guide() setup.Guide {
 		Summary: "Agents use your Google Ads accounts as their own Google identity, at the level you give it, " +
 			"spend held to your caps. No token reaches an agent's box.",
 		Prepare: []setup.Step{
-			{Text: vendortext.Plain("Connect Google Cloud first; no project needs preparing. Its Cloud Shell block, " +
-				"run again, turns on the Google Ads API and makes the company reader.")},
+			googlegrowth.CloudFirst("the Google Ads API"),
 			{Text: vendortext.Of(vendortext.W("Apply for "), vendortext.UI("Explorer"), vendortext.W(" or "),
 				vendortext.UI("Basic"), vendortext.W(" access to the Google Ads API on the identity project's API page."))},
 			{Text: vendortext.Of(vendortext.W("Add the company reader below to each account at "),

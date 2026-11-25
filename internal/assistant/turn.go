@@ -117,6 +117,10 @@ type turn struct {
 	attachments []StoredFile
 	// brief is a brief turn's own state ([wire.TurnBrief], brief.go).
 	brief briefState
+	// afterPark are frames told only once the park record has landed: a
+	// screen read the page answers at once, whose report resumes only a
+	// parked turn.
+	afterPark []wire.Frame
 }
 
 // write is the record caller for this segment, with no step yet.
@@ -678,10 +682,17 @@ func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) as
 			end.State, end.ErrorCode = state, string(failure.Code)
 		}
 	}
+	t.mu.Lock()
+	held := t.afterPark
+	t.afterPark = nil
+	t.mu.Unlock()
 	settled := true
 	if state != wire.TurnWaitingForApproval {
 		settled = t.closeOnce(ctx, end)
 	} else {
+		for _, f := range held {
+			t.emit(f)
+		}
 		t.emit(wire.Frame{Kind: wire.EventStatus, Status: &wire.StatusEvent{
 			State: wire.StatusWaitingForApproval, StepsDone: end.Steps}})
 	}
@@ -855,7 +866,7 @@ func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	t.mu.Lock()
 	keep := parked{V: parkedVersion, Messages: res.Messages, PendingCall: res.PendingToolCallID,
 		PendingTool: res.PendingToolName, Steps: t.steps, Cards: t.cards, Count: t.messages,
-		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail,
+		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail + uint64(len(t.afterPark)),
 		Page: t.page, Outside: string(t.outside), Subjects: t.subjects}
 	if t.anchor != uuid.Nil {
 		keep.Anchor = t.anchor.String()

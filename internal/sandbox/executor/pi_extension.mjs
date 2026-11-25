@@ -193,6 +193,11 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, list
       const missing = (Array.isArray(required) ? required : []).filter(
         (server) => !names.some((n) => n.startsWith("mcp__" + server + "__")),
       )
+      const removed = missing.length > 0 ? mcpRemovedBy(settingsFiles) : ""
+      if (removed !== "") {
+        stop(ctx, bridgeType, { removed }, "the seat's tools never reached this run: " + removed)
+        return
+      }
       if (missing.length > 0) {
         stop(ctx, bridgeType, { missing }, "the seat's tools never reached this run: no tool of " +
           missing.join(", ") + " was offered, so its MCP server was unreachable or refused the run's token")
@@ -288,6 +293,26 @@ function hiddenBy(pi, servers, files) {
   }
   return "codemode.mode \"only\" in " + from + " has pi declare only its codemode tool while codemode is active, " +
     "leaving every other tool out of the model's requests; set it to \"on\" or remove it"
+}
+
+// mcpRemovedBy says which settings files take pi's own MCP support away, ""
+// where none does: pi 1.6.0 loads it unless a file's `extensions` holds
+// "-builtin:mcp", the home's or the repository's, and then connects no server
+// a launch registers, with no word but a line on its error stream (measured).
+// The run never loads it back over the person's removal.
+function mcpRemovedBy(files) {
+  const set = []
+  for (const file of Array.isArray(files) ? files : []) {
+    if (typeof file !== "string" || file === "") continue
+    const path = resolve(process.cwd(), file)
+    try {
+      const list = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""))?.extensions
+      if (Array.isArray(list) && list.includes("-builtin:mcp")) set.push(path + "'s extensions holds \"-builtin:mcp\"")
+    } catch {}
+  }
+  if (set.length === 0) return ""
+  return set.join(", and ") + ", which takes pi's MCP support away, so no server of the run's connects; remove " +
+    "that entry"
 }
 
 // unlistedBy says why pi lists none of the run's skills, "" where it lists
