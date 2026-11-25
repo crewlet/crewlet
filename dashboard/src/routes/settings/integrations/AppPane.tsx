@@ -357,7 +357,7 @@ export function AppPane({
     (i) =>
       !i.seat &&
       !(data?.notice && i.kind === "credential_shared") &&
-      !(googleRow?.next && sharedGoogleIssue(i, googleRow)),
+      !(googleRow && sharedGoogleIssue(i, googleRow)),
   );
   const waitsOnGoogle = googleRow?.state === "waits";
   // ONLY WHERE A PASS RUNS: a tool whose accounts are made by hand has no
@@ -495,10 +495,8 @@ export function AppPane({
             <div className="int-tab">
               {form || (
                 <>
-                  {/* A GOOGLE PRODUCT'S SHARED SETTINGS ARE GOOGLE'S, one row away. */}
-                  {googleRow ? (
-                    <GoogleRelated row={googleRow} />
-                  ) : (
+                  {/* A GOOGLE PRODUCT KEEPS ITS OWN SECTIONS; its shared settings are Google's. */}
+                  {!googleRow && (
                     <>
                       <SettingsSummary tool={tool} />
                       {/* EDIT SETTINGS EDITS THE SUMMARY ABOVE IT, so it sits under
@@ -524,6 +522,7 @@ export function AppPane({
                       row={model.rows.get(tool.entry.key)}
                     />
                   )}
+                  {googleRow && <GoogleRelated row={googleRow} />}
                   <DocsLink tool={tool} />
                 </>
               )}
