@@ -344,14 +344,16 @@ func (p *Product) outcome(ctx context.Context, held bool, rec growth.Record, out
 	return out, nil
 }
 
-// failEarly records the failed outcome of an allowed call that ended before
-// its change was sent, and answers err marked so ([growth.NotSent]).
+// failEarly answers err, a call's failure before its change was sent, marked
+// so ([growth.NotSent]), and records it as an allowed held call's outcome.
+// The mark comes first, since the reason recorded reads it.
 func (p *Product) failEarly(ctx context.Context, held bool, rec growth.Record, err error) error {
+	err = growth.NotSent(err)
 	if held {
 		rec.Failure = googlegrowth.StepFailure(err)
 		p.client.Note(ctx, growth.StepFailed, rec)
 	}
-	return growth.NotSent(err)
+	return err
 }
 
 // hold takes resource's lease, or answers why it could not.
