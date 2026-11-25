@@ -309,6 +309,13 @@ const CompactBytesPerObject = 550
 // epoch's limit, since what it holds follows the blobs' size.
 func CompactWindowBytes(limits gitlet.Limits) int64 { return 6 * limits.MaxBlobBytes }
 
+// RowReadAttempt bounds a read of a repository's rows the cache makes for its
+// own work, with no asker's deadline to inherit: one estate read attempt
+// (estate.ReadAttempt), which holds a linearizable read's barrier through an
+// election. This package imports no engine package, so estate's
+// TestTheCachesRowReadIsOneReadAttempt holds the two equal.
+const RowReadAttempt = 15 * time.Second
+
 // VerifyHashPerMiB is what a check's hashing is given for each mebibyte of
 // the bundles it reads (CheckBudget), beside the connectivity check's own
 // gitproc.PackWorkDeadline.
