@@ -135,7 +135,8 @@
 //     ends the descent, dot directories and node_modules are skipped, and a
 //     skill reached twice, by real path, is copied once, and of two of one
 //     name, the first, the other left out, said; past 8 directories
-//     deep or 1,024 entries it is left out whole, said. Pi also follows a
+//     deep, 4,096 directories read or 1,024 skills it is left out whole,
+//     said, the files beside them uncounted. Pi also follows a
 //     link out of the checkout, lists a loose root `.md` skill, and honours
 //     .gitignore, .ignore and .fdignore; the walk does none of these. As
 //     Grok Build 1.0.92 walks (measured): "through" goes on below a skill,
@@ -150,13 +151,18 @@
 //     session started in it lists, two that rewrite alike settled as Grok
 //     settles them (a skill whose own name rewrites to the name, or a
 //     command, takes it first, in order; another falls back to its own
-//     rewritten name, else is not listed: rows x1-x7, g4x), a SKILL.md or
-//     command with no frontmatter listed under its own name, and a copy is
-//     named, kept apart from the others and listed by its rewritten name; a
-//     copy whose rewritten name a skill or command of `skills` or of
-//     `homeSkills` (the home's other skill directories, as slots) lists
-//     under, or rewrites its own name to, is left out, said: the person's
-//     skill keeps its name;
+//     rewritten name, else is not listed: rows x1-x7, g4x; that a command
+//     takes its name whatever its place is inferred from one row, g4x's
+//     cmdclash), a SKILL.md or command with no frontmatter listed under its
+//     own name, and a copy is named after the name it lists under
+//     (`<tag>:<listed>`), kept apart from the others and listed by its
+//     rewritten name; a copy whose rewritten name a skill or command of
+//     `skills` or of `homeSkills` (the home's other skill directories, as
+//     slots; read once a firing, the firing's copies added as they land)
+//     lists under, or rewrites its own name to, is left out, said: the
+//     person's skill keeps its name. The second (a home directory that
+//     rewrites alike while its skill lists elsewhere) is inferred, erring to
+//     leave the copy out;
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (at most 64 characters) with its

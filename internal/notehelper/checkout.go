@@ -47,6 +47,8 @@ type checkoutSpec struct {
 	Reserved     []string          `json:"reserved,omitempty"`
 	ListedAs     string            `json:"listedAs,omitempty"`
 	HomeSkills   []skillDirSlot    `json:"homeSkills,omitempty"`
+	// held is the names the home takes, read once a firing ([homeNames]).
+	held *homeNames
 }
 
 // launchConfig is what -config names for checkout-launch: the run's checkout
@@ -354,6 +356,7 @@ func readNested(path string) (nestedConfig, error) {
 // skills copied as `<tag>:<skill>` ([copyPlanned]). What it leaves out is
 // said to said, and kept where said asks, under the lock.
 func handCheckouts(state, work string, first []string, spec checkoutSpec, said *skips) ([]handedCheckout, error) {
+	spec.held = &homeNames{}
 	lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
