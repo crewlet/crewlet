@@ -20,18 +20,22 @@ var museRulesNames = []string{"AGENTS.md", "CLAUDE.md", ".agents/AGENTS.md", ".c
 // winning a name; all of a checkout's whole, within the rules reminder's bound
 // it shares with the home's file and the start directory's own (the core's
 // "muse" budget); never its hooks, MCP servers, settings, agents or commands.
-// A copy is left out where a skill of its name in a directory Muse lists before
-// ~/.agents/skills would take its place: ~/.config/muse/skills (measured),
-// the start directory's skill directories (a project's wins, measured), and the
-// foreign personal ones, ~/.claude/skills and ~/.codex/skills, whose order
-// against it was not measured.
-func museCheckouts(paths Paths) checkoutSpec {
+// A copy is left out where Muse would not list it beside a skill listed under
+// its name (rows so1-so6, fn1-fn4): in ~/.config/muse/skills or the start
+// directory's (listed in its place), ~/.agents/skills (neither listed), and,
+// where foreign says Muse lists them, ~/.claude/skills and ~/.codex/skills
+// (the copy listed in theirs).
+func museCheckouts(paths Paths, foreign bool) checkoutSpec {
 	work := paths.Home + "/" + sandbox.WorkspaceSubdir
 	spec := checkoutSpec{Instructions: []checkoutSlot{{Names: museRulesNames}}, Limit: checkoutUnlimited,
 		SkillDirs: []checkoutSkillDir{{Dir: ".agents/skills"}, {Dir: ".claude/skills"}, {Dir: ".codex/skills"}},
 		Budget:    museBudget}
-	for _, dir := range []string{paths.MuseConfig() + "/skills", work + "/.agents/skills", work + "/.claude/skills",
-		work + "/.codex/skills", paths.Home + "/.claude/skills", paths.Home + "/.codex/skills"} {
+	dirs := []string{paths.MuseConfig() + "/skills", paths.MuseSkills(), work + "/.agents/skills",
+		work + "/.claude/skills", work + "/.codex/skills"}
+	if foreign {
+		dirs = append(dirs, paths.Home+"/.claude/skills", paths.Home+"/.codex/skills")
+	}
+	for _, dir := range dirs {
 		spec.HomeSkills = append(spec.HomeSkills, checkoutSkillDir{Dir: dir})
 	}
 	return spec
@@ -73,19 +77,27 @@ func museForeignRules(paths Paths) []string {
 	return []string{paths.Home + "/.claude/CLAUDE.md", paths.Home + "/.codex/AGENTS.md"}
 }
 
-// writeMuseForeign records for the run's gate the foreign personal rules
-// files Muse would load in place of a home rules file that is not there
-// ([Paths.MuseForeignRules]): none where the home's settings, held, set
-// `context.foreign_personal_rules` false, which Muse then loads none of.
-func writeMuseForeign(ctx context.Context, box sandbox.Sandbox, paths Paths, settings []byte) error {
+// museForeignOn is whether the home's settings leave Muse loading another
+// harness's personal rules and skills: `context.foreign_personal_rules` and
+// `foreign_personal_skills`, each on unless false (measured, rows fr4-fr7 and
+// swforeign). Settings Muse cannot read refuse the run at its start.
+func museForeignOn(settings []byte) (rules, skills bool) {
 	var held struct {
 		Context struct {
-			Foreign json.RawMessage `json:"foreign_personal_rules"`
+			Rules  json.RawMessage `json:"foreign_personal_rules"`
+			Skills json.RawMessage `json:"foreign_personal_skills"`
 		} `json:"context"`
 	}
-	_ = json.Unmarshal(settings, &held) // settings Muse cannot read refuse the run at its start
+	_ = json.Unmarshal(settings, &held)
+	return string(held.Context.Rules) != "false", string(held.Context.Skills) != "false"
+}
+
+// writeMuseForeign records for the run's gate the foreign personal rules
+// files Muse would load in place of a home rules file that is not there
+// ([Paths.MuseForeignRules]): none where rules says Muse loads none.
+func writeMuseForeign(ctx context.Context, box sandbox.Sandbox, paths Paths, rules bool) error {
 	files := museForeignRules(paths)
-	if string(held.Context.Foreign) == "false" {
+	if !rules {
 		files = nil
 	}
 	body := ""

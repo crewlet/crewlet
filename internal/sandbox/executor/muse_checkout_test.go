@@ -119,6 +119,9 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAMuseRun(t *testing.T) {
 			settings: `{"schema_version":1,"context":{"foreign_personal_rules":false}}`,
 			home:     map[string]string{".claude/CLAUDE.md": "FOREIGN-CLAUDE\n"}},
 		{name: "a checkout too big beside the start directory's own", into: ".config/muse/AGENTS.md", big: true},
+		{name: "an empty AGENTS.md, which Muse loads before CLAUDE.md or a foreign file", into: ".config/muse/AGENTS.md",
+			home: map[string]string{".config/muse/AGENTS.md": "", ".config/muse/CLAUDE.md": "HOME-CLAUDE\n",
+				".claude/CLAUDE.md": "FOREIGN-CLAUDE\n"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -126,7 +129,7 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAMuseRun(t *testing.T) {
 			p := executor.PathsFor(box)
 			plant(t, box, repo)
 			plant(t, box, c.home)
-			plant(t, box, map[string]string{".config/muse/skills/repo:hidden/SKILL.md": "---\nname: repo:hidden\n---\n"})
+			plant(t, box, map[string]string{".config/muse/skills/pdir/SKILL.md": "---\nname: repo:hidden\n---\n"})
 			if c.settings != "" {
 				plantFile(t, p.MuseSettings(), c.settings)
 			}
@@ -192,7 +195,7 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAMuseRun(t *testing.T) {
 				}
 			}
 			line := "the skill " + work + "/repo/.codex/skills/hidden is left out: the home's " + p.MuseConfig() +
-				"/skills/repo:hidden takes the name repo:hidden in its place"
+				"/skills/pdir is listed as repo:hidden too, and Muse Code would not list both"
 			if n := strings.Count(errs, line); n != 1 {
 				t.Errorf("skills: the run's error stream says the hidden copy %d times, want once:\n%s", n, errs)
 			}

@@ -764,3 +764,30 @@ func TestAMuseRunIsRefusedForItsNestedHookOnlyWhereTheBoxHoldsIt(t *testing.T) {
 		}
 	}
 }
+
+// A MUSE COPY IS CHECKED AGAINST EVERY SKILL DIRECTORY MUSE WOULD LIST BESIDE
+// IT (measured, rows so1-so6): ~/.config/muse/skills, ~/.agents/skills and
+// the start directory's three, and ~/.claude/skills and ~/.codex/skills only
+// where the home's settings leave Muse listing another harness's skills.
+//
+// Mutation: drop a directory, or check the foreign ones whatever the setting.
+func TestAMuseCopyIsCheckedAgainstTheSkillsMuseListsBesideIt(t *testing.T) {
+	p := Paths{Home: "/h"}
+	for _, foreign := range []bool{true, false} {
+		var got []string
+		for _, d := range museCheckouts(p, foreign).HomeSkills {
+			got = append(got, d.Dir)
+		}
+		want := []string{"/h/.config/muse/skills", "/h/.agents/skills", "/h/workspace/.agents/skills",
+			"/h/workspace/.claude/skills", "/h/workspace/.codex/skills"}
+		if foreign {
+			want = append(want, "/h/.claude/skills", "/h/.codex/skills")
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("foreign skills %v: the copies are checked against %q, want %q", foreign, got, want)
+		}
+	}
+	if rules, skills := museForeignOn([]byte(`{"context":{"foreign_personal_skills":false}}`)); !rules || skills {
+		t.Errorf("foreign_personal_skills false read as rules %v, skills %v", rules, skills)
+	}
+}

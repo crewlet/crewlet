@@ -970,15 +970,16 @@ func writeMuseCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbox.Ru
 	if hooked {
 		nested = museNestedCommand(paths)
 	}
-	launch := museCheckoutHome(paths).launchConfig(museCheckouts(paths), req.ReportedRepos)
-	if err := box.WriteFile(ctx, paths.MuseCheckoutLaunch(), launch); err != nil {
-		return fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
-	}
 	settings, err := box.ReadFile(ctx, paths.MuseSettings())
 	if err != nil {
 		return fmt.Errorf("executor: reading the box home's Muse Code settings (%s): %w", paths.MuseSettings(), err)
 	}
-	if err = writeMuseForeign(ctx, box, paths, settings); err != nil {
+	rules, skills := museForeignOn(settings)
+	launch := museCheckoutHome(paths).launchConfig(museCheckouts(paths, skills), req.ReportedRepos)
+	if err = box.WriteFile(ctx, paths.MuseCheckoutLaunch(), launch); err != nil {
+		return fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
+	}
+	if err = writeMuseForeign(ctx, box, paths, rules); err != nil {
 		return err
 	}
 	if notes || loads {
