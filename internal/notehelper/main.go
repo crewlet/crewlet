@@ -142,7 +142,13 @@
 // it replaces with a section per checkout, "for `<name>` with root <path>"
 // and its instructions, which the runner places where its harness reads them)
 // and `first` (the repositories the run pushes to, handed first; the rest by
-// name). It writes state/nested.json, the -config of the harness's nested
+// name). It keeps every checkout it handed, in order, with its instructions in
+// state/launched.json, from which copilot-launch composes each launch attempt
+// of a Copilot run (copilotrepo.go): a checkout's launch set is its section
+// and its .github/instructions, named in COPILOT_CUSTOM_INSTRUCTIONS_DIRS;
+// -keep N keeps the first N sets, -kept FILE those a session stored, and a
+// set dropped to fit Copilot's static budget leaves a line pointing at the
+// lazy load. It writes state/nested.json, the -config of the harness's nested
 // adapter, which the run's post-tool hook runs after each of the main loop's
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
@@ -287,6 +293,10 @@ type flags struct {
 	// codex-materialize's: Codex's sessions directory, and the thread whose
 	// compressed rollouts it writes plain.
 	sessions, thread string
+	// copilot-launch's: how many launch sets it keeps (-1, all), or the file
+	// naming those it keeps.
+	keep int
+	kept string
 }
 
 // run is the whole program: the exit status for args, the environment

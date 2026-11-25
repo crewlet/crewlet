@@ -41,21 +41,16 @@ func holdHomeShell(live, held string) string {
 		`elif [ -L %[3]s ]; then mv -f %[3]s %[4]s; printf n; else : > %[2]s; printf n; fi`, h, none, l, link, part)
 }
 
-// holdHome runs [holdHomeShell] in box, returning the home's own text, "" for
-// none.
-func holdHome(ctx context.Context, box sandbox.Sandbox, live, held string) (string, error) {
+// holdHome runs [holdHomeShell] in box.
+func holdHome(ctx context.Context, box sandbox.Sandbox, live, held string) error {
 	res, err := box.Exec(ctx, holdHomeShell(live, held), sandbox.ExecOptions{})
 	if err == nil && res.ExitCode != 0 {
 		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
 	}
 	if err != nil {
-		return "", fmt.Errorf("executor: holding the box home's own %s: %w", live, err)
+		return fmt.Errorf("executor: holding the box home's own %s: %w", live, err)
 	}
-	own, had := strings.CutPrefix(res.Stdout, "h")
-	if !had {
-		return "", nil
-	}
-	return own, nil
+	return nil
 }
 
 // putBackHome is the shell putting a held home file back once the run has

@@ -1326,7 +1326,7 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 	if settings["experimental"] != true {
 		t.Errorf("settings = %v, want experimental", settings)
 	}
-	if got := read(paths.CopilotInstructions()); !strings.HasPrefix(got, "Work well.\n\n") ||
+	if got := read(paths.CopilotRunInstructions()); !strings.HasPrefix(got, "Work well.\n\n") ||
 		!strings.HasSuffix(got, CopilotSteerInstruction) {
 		t.Errorf("instructions = %q, want the system text then the notes instruction", got)
 	}
@@ -1388,7 +1388,8 @@ func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 	}
 	files, dirs := (Copilot{}).artifactFiles(paths), (Copilot{}).artifactDirs(paths)
 	if !slices.Equal(files, []string{paths.CopilotExtensionFresh(), paths.CopilotNotesState(),
-		paths.CopilotNotesState() + ".tmp", paths.CopilotGuardSettings()}) ||
+		paths.CopilotNotesState() + ".tmp", paths.CopilotGuardSettings(), paths.CopilotRunInstructions(),
+		paths.CopilotNoteHelper(), paths.CopilotCheckoutLaunch(), paths.CopilotRepoInstructions()}) ||
 		!slices.Equal(dirs, []string{paths.CopilotExtension()}) {
 		t.Fatalf("artifacts = %v, %v", files, dirs)
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -171,7 +172,9 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	// THE HOME'S OWN SETTINGS AND INSTRUCTIONS BACK however the script exits;
 	// a run killed first leaves them to the next run's clear ([homeKeeper]).
-	line(`cput() { %s; }; trap cput EXIT`, Copilot{}.homeRestore(paths))
+	// AND WHAT THE RUN'S HANDING LEFT OUT SAID first ([checkoutHome.saySkipped]),
+	// once per run, whatever its attempts.
+	line(`cput() { %s; %s; }; trap cput EXIT`, copilotCheckoutHome(paths).saySkipped(), Copilot{}.homeRestore(paths))
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
 	b.WriteString(copilotRelease)
@@ -192,6 +195,11 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 		q(paths.SessionRecord()))
 	line(`ev=%s/"$s"/events.jsonl`, q(paths.CopilotHome()+"/"+copilotSessionState))
 	b.WriteString(copilotJournalAtLaunch())
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([copilotCheckoutHome]), beside the
+	// person's own instruction directories (pi, ps).
+	line(`pi=${COPILOT_CUSTOM_INSTRUCTIONS_DIRS-}; ps=${COPILOT_CUSTOM_INSTRUCTIONS_DIRS+1}`)
+	b.WriteString(copilotCheckoutHome(paths).prepare())
+	b.WriteString(copilotLaunchCompose(paths, "-keep -1"))
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(copilotUsage())
 	b.WriteString(copilotCapture(paths))
@@ -649,11 +657,15 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 	if err != nil {
 		return "", err
 	}
+	helper, helperErr := noteHelperFor(ctx, box)
+	if helperErr != nil && !errors.Is(helperErr, errNoHelperBuild) {
+		return "", helperErr
+	}
 	// THE GUARD BEFORE ANY WRITE: a refused run leaves the home as it found it.
 	if err = copilotGuard(ctx, box, req, paths, c.policy, settings); err != nil {
 		return "", err
 	}
-	if _, err = holdHome(ctx, box, paths.CopilotSettings(), paths.CopilotHeldSettings()); err != nil {
+	if err = holdHome(ctx, box, paths.CopilotSettings(), paths.CopilotHeldSettings()); err != nil {
 		return "", err
 	}
 	if err = writeHome(ctx, box, paths, paths.CopilotSettings(), settings); err != nil {
@@ -665,17 +677,23 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 	}
 	if system != "" {
 		// THE PERSON'S OWN INSTRUCTIONS STILL LOAD, after the run's, in the one
-		// file Copilot reads them from; the home's file comes back as the run ends.
-		own, err := holdHome(ctx, box, paths.CopilotInstructions(), paths.CopilotHeldInstructions())
-		if err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(own) != "" {
-			system += "\n\n" + own
-		}
-		if err := writeHome(ctx, box, paths, paths.CopilotInstructions(), []byte(system)); err != nil {
+		// file Copilot reads them from: the script writes both and the
+		// checkouts' sections, and puts the home's back as the run ends
+		// ([copilotCheckoutHome]).
+		if err = box.WriteFile(ctx, paths.CopilotRunInstructions(), []byte(system)); err != nil {
 			return "", fmt.Errorf("executor: writing Copilot's standing instructions: %w", err)
 		}
+	}
+	// THE HELPER WHERE THE ENGINE HAS A BUILD FOR THE BOX: without one the run
+	// starts without its checkouts, as its script says.
+	if helperErr == nil {
+		if err = writeHelperBuild(ctx, box, paths.CopilotNoteHelper(), helper); err != nil {
+			return "", err
+		}
+	}
+	launch := copilotCheckoutHome(paths).launchConfig(copilotCheckouts(), req.ReportedRepos)
+	if err = box.WriteFile(ctx, paths.CopilotCheckoutLaunch(), launch); err != nil {
+		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
 	if req.Steer.Set() || req.Limits.MaxTurns > 0 {
 		// THIS LAUNCH'S OWN KEY, never the session's: a continued session keeps
@@ -804,18 +822,19 @@ func (Copilot) exportsTelemetry() bool { return true }
 // ([Copilot.homeRestore]).
 func (Copilot) artifactFiles(p Paths) []string {
 	return []string{p.CopilotExtensionFresh(), p.CopilotNotesState(), p.CopilotNotesState() + ".tmp",
-		p.CopilotGuardSettings()}
+		p.CopilotGuardSettings(), p.CopilotRunInstructions(), p.CopilotNoteHelper(), p.CopilotCheckoutLaunch(),
+		p.CopilotRepoInstructions()}
 }
 
 var _ homeKeeper = Copilot{}
 
-// homeRestore puts the home's own settings.json and copilot-instructions.md
-// back over the run's ([putBackHome]), each whatever came of the other
+// homeRestore puts the home's own settings.json back over the run's
+// ([putBackHome]) and its checkout home as it was ([checkoutHome.restore]:
+// copilot-instructions.md, the copied skills), each whatever came of the other
 // ([everyStep]), run by the script as it exits and by the clear before every
 // run whichever harness it runs.
 func (Copilot) homeRestore(p Paths) string {
-	return everyStep(putBackHome(p.CopilotSettings(), p.CopilotHeldSettings()),
-		putBackHome(p.CopilotInstructions(), p.CopilotHeldInstructions()))
+	return everyStep(putBackHome(p.CopilotSettings(), p.CopilotHeldSettings()), copilotCheckoutHome(p).restore())
 }
 
 // artifactDirs is the run's own notes extension ([Paths.CopilotExtension]),

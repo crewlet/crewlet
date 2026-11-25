@@ -15,10 +15,11 @@ func (p Paths) CopilotHome() string { return p.Home + "/.copilot" }
 func (p Paths) CopilotSettings() string { return p.CopilotHome() + "/settings.json" }
 
 // CopilotInstructions is where a Copilot run's standing instructions are
-// written, the home's own after them: Copilot appends this file to its own
-// system prompt after its tool list and before the repository's instructions,
-// and renders it afresh on every resume (measured on 1.0.114), so a continued
-// run is told by its own launch. The home's file is held and put back.
+// written, the home's own and its checkouts' sections after them
+// ([copilotCheckoutHome]): Copilot appends this file to its own system prompt
+// after its tool list and before the repository's instructions, and renders it
+// afresh on every resume (measured on 1.0.114), so a continued run is told by
+// its own launch. The home's file is held and put back.
 func (p Paths) CopilotInstructions() string { return p.CopilotHome() + "/copilot-instructions.md" }
 
 // CopilotHeldInstructions is the home's own [Paths.CopilotInstructions], held
@@ -59,3 +60,35 @@ func (p Paths) CopilotNotesState() string { return p.WorkDir() + "/copilot-notes
 // the box's Copilot about ([copilotGuard]), which the guard's shell moves into
 // a home of its own. Beside the run's other artefacts, never in the home.
 func (p Paths) CopilotGuardSettings() string { return p.WorkDir() + "/copilot-guard-settings.json" }
+
+// CopilotSkills is the home's skills directory, which Copilot lists every
+// `<dir>/SKILL.md` of at launch (measured on 1.0.114), where a run copies its
+// checkouts' skills ([copilotCheckoutHome]).
+func (p Paths) CopilotSkills() string { return p.CopilotHome() + "/skills" }
+
+// CopilotNoteHelper is the note helper a Copilot run hands its checkouts
+// with (internal/notehelper), written at every launch.
+func (p Paths) CopilotNoteHelper() string { return p.WorkDir() + "/copilot-notehelper" }
+
+// CopilotRepo is the run's checkout state ([copilotCheckoutHome]): the
+// checkouts handed, the lock, the nested adapter's config and each launch
+// attempt's directories and kept sets, remade by every run.
+func (p Paths) CopilotRepo() string { return p.WorkDir() + "/copilot-repo" }
+
+// CopilotCheckoutLaunch is the run's checkout-launch config, which its launch
+// writes ([copilotCheckouts]) and its script hands the note helper.
+func (p Paths) CopilotCheckoutLaunch() string { return p.WorkDir() + "/copilot-checkout-launch.json" }
+
+// CopilotRepoInstructions is where a launch attempt's checkout sections are
+// written, which the script writes after the home's own into
+// [Paths.CopilotInstructions].
+func (p Paths) CopilotRepoInstructions() string { return p.WorkDir() + "/copilot-repo-instructions.md" }
+
+// CopilotRepoSkills lists, a name a line, the checkouts' skills a run copied
+// into [Paths.CopilotSkills], so the run's restore and the next run remove
+// them and none of the home's.
+func (p Paths) CopilotRepoSkills() string { return p.WorkDir() + "/copilot-repo-skills" }
+
+// CopilotRunInstructions is the run's standing instructions, which its script
+// writes first into [Paths.CopilotInstructions], the home's own after them.
+func (p Paths) CopilotRunInstructions() string { return p.WorkDir() + "/copilot-run-instructions.md" }
