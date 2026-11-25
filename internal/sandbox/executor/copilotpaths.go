@@ -106,3 +106,8 @@ func (p Paths) CopilotStoreCheck() string { return p.WorkDir() + "/copilot-store
 // line its script adds to the run's skip log ([copilotExtensionOff]); absent
 // where it does.
 func (p Paths) CopilotExtensionOff() string { return p.WorkDir() + "/copilot-extension-off" }
+
+// CopilotArmed is the mark the run's extension writes as its session starts,
+// removed before every attempt: its absence says the extension never ran
+// ([copilotAttempts]).
+func (p Paths) CopilotArmed() string { return p.WorkDir() + "/copilot-armed" }

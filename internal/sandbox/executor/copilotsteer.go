@@ -79,8 +79,9 @@ func CopilotClientTurnID(inbox string) string { return copilotTurnPrefix + inbox
 // the note helper and its nested config, which hand a checkout cloned during
 // the run its skills ([copilotCheckoutHome]), "" for a box without the helper;
 // the file the script names each launch attempt in, which keys the state per
-// attempt ([Paths.CopilotAttempt]); and the attempt's kept launch sets and the
-// session-state directory its new session stores them in ([copilotKeptSets]).
+// attempt ([Paths.CopilotAttempt]); the attempt's kept launch sets and the
+// session-state directory its new session stores them in ([copilotKeptSets]);
+// and the mark it writes as its session starts ([Paths.CopilotArmed]).
 type copilotExtensionSettings struct {
 	URL      string   `json:"url"`
 	Cap      int      `json:"cap"`
@@ -92,6 +93,7 @@ type copilotExtensionSettings struct {
 	Attempt  string   `json:"attempt"`
 	Kept     string   `json:"kept"`
 	Sessions string   `json:"sessions"`
+	Armed    string   `json:"armed"`
 }
 
 // copilotUnbridgedMessage opens the error copilot_steer.js logs as it stops a

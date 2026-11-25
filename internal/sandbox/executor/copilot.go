@@ -754,6 +754,7 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 			settings.Helper, settings.Nested = paths.CopilotNoteHelper(), paths.CopilotRepo()+"/nested.json"
 			settings.Kept = paths.CopilotRepo() + "/kept"
 			settings.Sessions = paths.CopilotHome() + "/" + copilotSessionState
+			settings.Armed = paths.CopilotArmed()
 		}
 		if err := writeCopilotExtension(ctx, box, paths.CopilotExtension()+"/extension.mjs", req.Steer,
 			settings); err != nil {
@@ -878,7 +879,7 @@ func (Copilot) exportsTelemetry() bool { return true }
 func (Copilot) artifactFiles(p Paths) []string {
 	return []string{p.CopilotExtensionFresh(), p.CopilotNotesState(), p.CopilotNotesState() + ".tmp",
 		p.CopilotGuardSettings(), p.CopilotRunInstructions(), p.CopilotNoteHelper(), p.CopilotCheckoutLaunch(),
-		p.CopilotRepoInstructions(), p.CopilotAttempt(), p.CopilotStoreCheck(), p.CopilotExtensionOff()}
+		p.CopilotRepoInstructions(), p.CopilotAttempt(), p.CopilotStoreCheck(), p.CopilotExtensionOff(), p.CopilotArmed()}
 }
 
 var _ homeKeeper = Copilot{}

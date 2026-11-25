@@ -172,7 +172,7 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACopilotRun(t *testing.T) {
 // copilotBudgetStandIn is the `copilot` the budget rows run, its extension's
 // part played where the run wrote one that hands checkouts (copilot_steer.js),
 // the guard's `config --list` answered from $HOME/answer.settings and an
-// extension written said to run, as copilotGuardStandIn says it: Copilot
+// extension written said to run (its mark written) unless $HOME/noext: Copilot
 // 1.0.114's static budget as a byte bound ($HOME/limit) on copilot-instructions.md.
 // A new session stores its attempt's kept sets. Past the bound the launch is
 // refused before any request (section 13's stream, exit 1) and a new session
@@ -181,7 +181,7 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACopilotRun(t *testing.T) {
 // R15h). Each attempt's home file, brief, directories and number are recorded.
 const copilotBudgetStandIn = `#!/bin/sh
 case "$1" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; mcp) exit 0;; config) cat "$HOME/answer.settings" 2> /dev/null; exit 0;; esac
-ext=; grep -q '"helper":"/' "$COPILOT_HOME/extensions/crewlet-notes/extension.mjs" 2> /dev/null && ext=1
+ext=; if [ ! -e "$HOME/noext" ] && grep -q '"helper":"/' "$COPILOT_HOME/extensions/crewlet-notes/extension.mjs" 2> /dev/null; then ext=1; fi
 id=; prev=; for a in "$@"; do [ "$prev" = --session-id ] && id=$a; prev=$a; done
 d="$COPILOT_HOME/session-state/$id"; s="$HOME/seen"; mkdir -p "$s"
 n=$(($(cat "$s/attempts" 2> /dev/null | wc -l) + 1))
@@ -193,7 +193,8 @@ size=$(wc -c < "$COPILOT_HOME/copilot-instructions.md" 2> /dev/null) || size=0
 src=new; [ ! -f "$d/events.jsonl" ] || src=resume
 mkdir -p "$d"; printf '{"type":"user.message","data":{"content":"brief"}}\n' >> "$d/events.jsonl"
 [ "$src" = resume ] || [ -z "$ext" ] || { kf="$HOME/.crewlet/copilot-repo/kept"; if [ -f "$kf" ]; then cp "$kf" "$d/crewlet-checkouts"; else : > "$d/crewlet-checkouts"; fi; }
-[ ! -f "$COPILOT_HOME/extensions/crewlet-notes/extension.mjs" ] ||
+[ -z "$ext" ] || : > "$HOME/.crewlet/copilot-armed"
+[ ! -f "$COPILOT_HOME/extensions/crewlet-notes/extension.mjs" ] || [ -e "$HOME/noext" ] ||
   echo '{"type":"session.info","data":{"message":"crewlet: the run'"'"'s extension is running"}}'
 if [ "$size" -gt "$(cat "$HOME/limit")" ]; then
   [ "$src" = resume ] || [ -z "$ext" ] || [ -e "$HOME/leave" ] || rm -rf "$d"
@@ -446,6 +447,59 @@ func TestACopilotRunWithItsExtensionOffGoesOnWithoutItsCheckoutWork(t *testing.T
 				!strings.Contains(res.Error, "the run's extension, which removes a refused attempt") || err != nil {
 				t.Fatalf("a refused launch with the extension off made %q and ended %q (session %v), want one attempt, "+
 					"a typed failure naming the extension and its session left", attempts, res.Error, err)
+			}
+		})
+	}
+}
+
+// AN EXTENSION THAT NEVER RAN IS SEEN FROM ITS MISSING MARK: where Copilot
+// loaded the run's checkout extension (its mark written as the session
+// started) the run says nothing; where it loaded none, unseen by the guard (no
+// servers, notes or cap to ask Copilot for), a fitting launch runs and says
+// once that a repository cloned during it was not handed, naming the likely
+// settings, and a launch Copilot refuses fails typed ("extension"), its
+// session left as Copilot wrote it.
+//
+// Mutation: drop the mark's check at the refusal or after the run, or keep a
+// stale mark across attempts.
+func TestACopilotExtensionThatNeverRanIsSeenFromItsMissingMark(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		limit int
+		noext bool
+	}{
+		"ran":                {limit: 1 << 20},
+		"never ran":          {limit: 1 << 20, noext: true},
+		"never ran, refused": {limit: 3000, noext: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := copilotBudgetBox(t, tc.limit, "alpha", "beta")
+			if tc.noext {
+				plantFile(t, box.Home()+"/noext", "")
+			}
+			// A STALE MARK, as an earlier run or attempt would leave, read nowhere.
+			plantFile(t, executor.PathsFor(box).CopilotArmed(), "")
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"})
+			errs := boxFile(t, box, executor.PathsFor(box).Err())
+			said := strings.Count(errs, "since the run's extension did not run")
+			if want := map[bool]int{false: 0, true: 1}[tc.noext]; said != want || (tc.noext &&
+				!strings.Contains(errs, "extensions.disabledExtensions")) {
+				t.Errorf("the run said its extension did not run %d times, want %d, naming the settings:\n%s",
+					said, want, errs)
+			}
+			attempts := copilotAttemptsSeen(t, box)
+			if tc.limit > 3000 {
+				if !res.Success || len(attempts) != 1 {
+					t.Fatalf("a fitting launch made %q and ended %q, want it run", attempts, res.Error)
+				}
+				return
+			}
+			id := strings.TrimSpace(boxFile(t, box, box.Home()+"/seen/id"))
+			if _, err := os.Stat(executor.PathsFor(box).CopilotSessionDir(id)); len(attempts) != 1 || res.Success ||
+				!strings.Contains(res.Error, "the run's extension, which removes a refused attempt") || err != nil {
+				t.Fatalf("a refused launch whose extension never ran made %q and ended %q (session %v), want one "+
+					"attempt and the typed extension refusal", attempts, res.Error, err)
 			}
 		})
 	}
