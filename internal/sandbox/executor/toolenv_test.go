@@ -283,7 +283,7 @@ func TestEveryOpenCodeRunNamesTheToolEnvironmentPluginLast(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the plugin's source: %v", err)
 	}
-	want := []string{"OPENCODE_CONFIG_CONTENT", "CREWLET_STEER_SESSION"}
+	want := []string{"OPENCODE_CONFIG_CONTENT", "CREWLET_RUN_SESSION"}
 	for name, req := range map[string]sandbox.RunRequest{
 		"wired to nothing": {Brief: "x"},
 		"wired to its notes and skills": {Brief: "x", Skills: handedSkills(), SkillLoads: skillWiring(),
@@ -355,10 +355,10 @@ func TestTheToolEnvironmentPluginTakesEachNameFromACommandAndNoneFromTheServer(t
 	env := seatEnv()
 	env["ANTHROPIC_API_KEY"] = "sk-ant-api03-placeholder"
 	env["OPENCODE_CONFIG_CONTENT"] = "{}"
-	env["CREWLET_STEER_SESSION"] = "ses_1"
+	env["CREWLET_RUN_SESSION"] = "ses_1"
 	env["OTEL_EXPORTER_OTLP_ENDPOINT"] = "https://engine.example.com/otlp/token-placeholder"
 	env["TRACEPARENT"] = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
-	hooked, command, server := probeToolEnv(t, `{"names":["OPENCODE_CONFIG_CONTENT","CREWLET_STEER_SESSION"]}`, env)
+	hooked, command, server := probeToolEnv(t, `{"names":["OPENCODE_CONFIG_CONTENT","CREWLET_RUN_SESSION"]}`, env)
 	if !slices.Equal(hooked, []string{"create.before"}) {
 		t.Fatalf("the plugin registered %v, want the shell's create.before", hooked)
 	}
@@ -366,7 +366,7 @@ func TestTheToolEnvironmentPluginTakesEachNameFromACommandAndNoneFromTheServer(t
 		if server[name] != value {
 			t.Errorf("the server's own %s = %q, want %q", name, server[name], value)
 		}
-		taken := name == "OPENCODE_CONFIG_CONTENT" || name == "CREWLET_STEER_SESSION"
+		taken := name == "OPENCODE_CONFIG_CONTENT" || name == "CREWLET_RUN_SESSION"
 		if got, held := command[name]; held == taken || (held && got != value) {
 			t.Errorf("the command started with %s=%q (held %v), want it taken %v", name, got, held, taken)
 		}
