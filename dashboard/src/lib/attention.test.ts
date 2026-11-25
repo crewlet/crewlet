@@ -1102,3 +1102,52 @@ test("a newer report that differs from what the reader set is theirs to decide, 
   // NOTHING ELSE OF THE REVIEW REACHES AN INBOX: with no drift there is no row.
   expect(attentionQueue(input()).some((a) => a.subject === "atlas")).toBe(false);
 });
+
+/** The engine's redirect notice, naming a shared Google client and an MCP server's own. */
+const REDIRECT_NOTICE: Notice = {
+  class: "oauth_redirect_moved",
+  subject: { kind: "company" },
+  title: "Add the new redirect URI to 2 OAuth clients",
+  person:
+    "This engine's address changed, so every OAuth sign-in now comes back to https://crewlet.example.com/webhooks/mcp-oauth.",
+  redirect: {
+    uri: "https://crewlet.example.com/webhooks/mcp-oauth",
+    clients: [
+      {
+        vendor: "google",
+        id: "123456789012-abcdefghij.apps.googleusercontent.com",
+        label: "123456789012-abcdefgh…",
+        uses: [
+          { name: "adsense", title: "AdSense" },
+          { name: "admob", title: "AdMob" },
+        ],
+        redirect: "https://old-tunnel.example.com/webhooks/mcp-oauth",
+        at: "2026-01-01T09:00:00Z",
+      },
+      {
+        vendor: "mcp",
+        id: "search-client",
+        label: "search",
+        uses: [{ name: "search", title: "search" }],
+        redirect: "https://old-tunnel.example.com/webhooks/mcp-oauth",
+        at: "2026-01-01T09:00:00Z",
+      },
+    ],
+  },
+  finding: null,
+};
+
+test("OAuth clients a moved address left behind are one row carrying the URI and every client", () => {
+  const queue = attentionQueue(input({ notices: [REDIRECT_NOTICE] }));
+  const row = queue.find((a) => a.id === "notice-oauth_redirect_moved");
+  expect(row?.title).toBe("Add the new redirect URI to 2 OAuth clients");
+  expect(row?.detail).toBe(REDIRECT_NOTICE.person);
+  expect(row?.redirect).toEqual(REDIRECT_NOTICE.redirect);
+  expect(row?.clears).toBe("Clears for each client once it signs in through the new address.");
+  // EACH CLIENT LINKS TO ITS OWN PAGE, so the row offers no one button.
+  expect(row?.path).toBeUndefined();
+  // IT SPREADS AS MORE CLIENTS ARE LEFT BEHIND, which brings a put-off row back.
+  expect(row?.spread).toBe(2);
+  expect(conditionsToDecide(queue)).toContainEqual(row);
+  expect(attentionQueue(input()).some((a) => a.id === "notice-oauth_redirect_moved")).toBe(false);
+});

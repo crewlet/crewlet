@@ -44,12 +44,12 @@ import { callsOf, turnById } from "./seatturn.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 import { andList } from "./words.ts";
 import { inboxRowKey, type InboxRowKey } from "~/app/routes.ts";
-import type { AdvisorNotice } from "~/protocol/advisor.ts";
+import type { AdvisorNotice, AdvisorRedirectMoved } from "~/protocol/advisor.ts";
 import type { AdvisorNoticesAnswer } from "~/protocol/advisorFindings.ts";
 import { alarmHome, alarmTitle, alarmsLink, drawnOnBackups } from "./alarms.ts";
 import { ALARM } from "./mcpAlarmWords.ts";
 import { HELD_CLASS, heldItem, heldReason, heldSetting } from "./heldConversation.ts";
-import { PAUSED_SEAT_CLASSES } from "~/contract/advisor.ts";
+import { OAUTH_REDIRECT_MOVED, PAUSED_SEAT_CLASSES } from "~/contract/advisor.ts";
 import { unreadSentences, unreadTitle } from "./advisorUnread.ts";
 
 /** A tool server alarm's tone as the queue's severity. */
@@ -224,6 +224,11 @@ interface AttentionFacts {
    * which of the alarms it counts are in Needs you.
    */
   alarm?: string;
+  /**
+   * The redirect URI to add and the OAuth clients still registered without it,
+   * on the `oauth_redirect_moved` notice's row alone: its pane draws them.
+   */
+  redirect?: AdvisorRedirectMoved;
 }
 
 export interface AttentionInput {
@@ -626,6 +631,25 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         action: item ? "Open the item" : "Open the seat",
         clears: `Clears when somebody writes on the conversation or the seat's ${heldSetting(n)} change.`,
         ...(seat ? { who: seat } : {}),
+        ...at,
+      });
+      continue;
+    }
+    // OAUTH CLIENTS A MOVED ENGINE ADDRESS LEFT BEHIND: the engine's words, and
+    // the URI to add with each client, which the pane draws. It spreads as more
+    // clients are left behind.
+    if (n.class === OAUTH_REDIRECT_MOVED && n.redirect) {
+      out.push({
+        id: `notice-${OAUTH_REDIRECT_MOVED}`,
+        severity: "caution",
+        subject: "setup",
+        icon: "unlink",
+        title: n.title || "Add the new redirect URI to your OAuth clients",
+        detail:
+          n.person || "This engine's address changed, so each OAuth client below must list it.",
+        clears: "Clears for each client once it signs in through the new address.",
+        redirect: n.redirect,
+        spread: n.redirect.clients.length,
         ...at,
       });
       continue;
