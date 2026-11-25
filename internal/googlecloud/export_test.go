@@ -79,6 +79,9 @@ func OpenAccess(
 	return vendor.(accessVendor).open(in, hc, &googleauth.Clock{Now: now, Sleep: sleep})
 }
 
+// ProbeParts are the Test's parts, in the order it runs them.
+var ProbeParts = probeParts
+
 // ProbeWith is the Test probe on a test's transport and clock.
 func ProbeWith(
 	ctx context.Context, company string, value func(string) string, hc *http.Client,

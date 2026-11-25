@@ -287,6 +287,28 @@ func Unreachable(summary string, details ...Detail) Verdict {
 	return verdict(VerifyUnreachable, summary, append(details, NothingStored))
 }
 
+// What one part of a check came to, as a fact's value ([Parts]).
+const (
+	PartPassed = "Passed"
+	PartFailed = "Failed"
+)
+
+// Parts says a check's parts, in the order it ran them, as facts: each before
+// failed Passed and the one at failed Failed; none after it ran. A negative
+// failed says every part passed.
+func Parts(parts []string, failed int) []Detail {
+	out := make([]Detail, 0, len(parts))
+	for i, part := range parts {
+		switch {
+		case failed < 0 || i < failed:
+			out = append(out, Fact{Label: part, Value: PartPassed})
+		case i == failed:
+			return append(out, Fact{Label: part, Value: PartFailed})
+		}
+	}
+	return out
+}
+
 // Unchecked is the verdict for a field that cannot be checked ahead.
 func Unchecked(summary string) Verdict {
 	return verdict(VerifyUnchecked, summary, nil)
