@@ -73,10 +73,8 @@ func (h checkoutHome) removeSiblingStaging() string {
 // `@<absolute path>` import in place of its text, Limit not applying (Claude
 // Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code import no
 // absolute path from a home file, measured on 0.70.0 and 0.28.4); SkillSep,
-// what joins a copy's repository and skill, "" for `:`; FiringLimit, a
-// nested firing's bound in bytes on all its checkouts' files, nil for none;
-// and ListedAs and HomeSkills as the helper's ("grok", Grok Build's listing
-// rule).
+// what joins a copy's repository and skill, "" for `:`; and FiringLimit, a
+// nested firing's bound in bytes on all its checkouts' files, nil for none.
 type checkoutSpec struct {
 	Instructions       []checkoutSlot
 	Limit              *int
@@ -85,8 +83,10 @@ type checkoutSpec struct {
 	NestedSkillsOnly   bool
 	ImportInstructions bool
 	SkillSep           checkoutSkillSep
-	ListedAs           string
-	HomeSkills         []checkoutSkillDir
+	// ListedAs and HomeSkills are the helper's ("grok", Grok Build's listing
+	// rule).
+	ListedAs   string
+	HomeSkills []checkoutSkillDir
 }
 
 // checkoutSkillSep is what joins a copy's repository and skill (the helper's
