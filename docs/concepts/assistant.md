@@ -88,7 +88,7 @@ What a step read is drawn from the answer's own shape and named for what it read
 
 **Attach images** (a screenshot, sketch, current logo) by picking, dropping on the panel or pasting: up to four PNG, JPEG, WebP or GIF images of at most 5 MiB each. The model reads them where it can take images; where it cannot, Attach image is disabled with that reason and a pasted or dropped image is refused: paste the text the image shows, or ask an administrator to assign a model that reads images. A question reaching the engine with images anyway gets the same advice.
 
-**Take you somewhere:** an **Open in app** card links to the dashboard page a record lives on. Links come only from the engine's route table, never text the model wrote.
+**Take you somewhere:** an **Open in app** card links to the dashboard page a record lives on, or to a screen such as one integration's own setup page ("Open Google Cloud setup"). Links and their words come only from the engine: the screen's own name, or the record's name as your own read of it returned it, never text the model wrote, so a card cannot name a place its link does not open. **Open here** moves the page and the card then reads **Opened**; a card for the page you are already on says it is open already.
 
 ## Approving a change
 

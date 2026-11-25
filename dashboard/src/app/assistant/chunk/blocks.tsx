@@ -64,7 +64,7 @@ import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, fmtExact, fmtTime } fro
 import { accessNames, youNeedWords } from "~/lib/access.ts";
 import { remedyFor } from "~/lib/authorityRemedy.ts";
 import { crumbsFor } from "../../crumbs.ts";
-import { href as hrefOf } from "../../router.tsx";
+import { href as hrefOf, useIsShowing } from "../../router.tsx";
 import { openInApp, type InAppTarget } from "./openInApp.ts";
 import { pageActionPreview, usePageSnapshot, type PageActionPreview } from "../context.ts";
 import { changedNothing, type ActionLocal, type ActionLocalState } from "./pageActions.ts";
@@ -501,8 +501,11 @@ export function prepareAgainQuestion(proposal: AssistantProposalCard): string {
 
 /** What the person does with a card that leads somewhere. */
 export interface CardHandlers extends ProposalHandlers {
-  /** Go to an address the engine built, already checked to be this dashboard's own. */
-  openHere: (target: InAppTarget) => void;
+  /**
+   * Go to an address the engine built, already checked to be this dashboard's
+   * own; `cardId` is the open in app card it was pressed on.
+   */
+  openHere: (target: InAppTarget, cardId?: string) => void;
   /** Ask a question in this conversation: a brief's follow-up, or its ask action. */
   ask: (question: string) => void;
   /** Undo a page change from its receipt. */
@@ -784,6 +787,39 @@ function Brief({ brief, on }: { brief: AssistantBriefCard; on: CardHandlers }) {
   );
 }
 
+/**
+ * An open in app card, opened while its page is the one showing: "Opened" once
+ * pressed, and said to be open already where the person was there before, so
+ * Open here is never a press that changes nothing.
+ */
+function OpenTarget({
+  title,
+  target,
+  opened,
+  onOpenHere,
+}: {
+  title: string;
+  target: InAppTarget;
+  opened: boolean;
+  onOpenHere: () => void;
+}) {
+  const showing = useIsShowing(target.path, target.query);
+  return (
+    <OpenInAppCard
+      icon={<LayoutDashboardGlyph size="md" />}
+      title={title}
+      path={placeOf(target)}
+      href={hrefOf(target.path, target.query)}
+      onOpenHere={onOpenHere}
+      state={showing ? "opened" : "ready"}
+      labels={showing && !opened ? ALREADY_OPEN : undefined}
+    />
+  );
+}
+
+/** The card's words for a page that was showing before anything was pressed. */
+const ALREADY_OPEN = { opened: "Open", openedNotice: "Already open beside this conversation." };
+
 /** One card of an answer, drawn as the design system's component for its kind. */
 export function CardBlock({
   event,
@@ -828,13 +864,11 @@ export function CardBlock({
         );
       }
       return (
-        <OpenInAppCard
-          icon={<LayoutDashboardGlyph size="md" />}
+        <OpenTarget
           title={link.label}
-          path={placeOf(target)}
-          href={hrefOf(target.path, target.query)}
-          onOpenHere={() => on.openHere(target)}
-          state={opened ? "opened" : "ready"}
+          target={target}
+          opened={opened}
+          onOpenHere={() => on.openHere(target, event.card_id)}
         />
       );
     }
