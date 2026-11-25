@@ -374,3 +374,44 @@ func TestAStoredSessionOpensOnlyForItsOwnRow(t *testing.T) {
 		}
 	}
 }
+
+// A SUMMARY COPIED UNDER A FRESH KEY OPENS AS THE SAME WORDS, UNDER ITS OWN: the
+// copy is a new object, sealed again under the turn and its new key, so the
+// row naming it opens it and the one naming the old key still opens the old;
+// a summary gone copies nothing and says it is unreadable.
+//
+// Mutation: copy the sealed bytes as they are, and the copy does not open
+// under its own key.
+func TestASummaryCopiedUnderAFreshKeyOpensAsTheSameWords(t *testing.T) {
+	t.Parallel()
+	store, backend := sessionStore(t, "k1")
+	turn := statelog.NewOpID(time.Now(), "")
+	const words = "## Next Move\n\nRerun the cache test."
+	put, err := store.PutSummary(t.Context(), "ana", turn, bytes.NewReader([]byte(words)))
+	if err != nil {
+		t.Fatalf("PutSummary: %v", err)
+	}
+	copied, err := store.CopySummary(t.Context(), "ana", turn, put.Object)
+	if err != nil || copied.Object.Key == put.Object.Key || copied.ContentKey != "k1" {
+		t.Fatalf("CopySummary answered %+v (%v), want a new object sealed under k1", copied, err)
+	}
+	for name, object := range map[string]objstore.Object{"the copy": copied.Object, "the original": put.Object} {
+		body, err := store.OpenSummary(t.Context(), executordomain.Session{Handle: "ana", Turn: turn,
+			Summary: &executorkeep.Summary{Object: object}})
+		if err != nil {
+			t.Fatalf("%s does not open: %v", name, err)
+		}
+		got, err := io.ReadAll(body)
+		_ = body.Close()
+		if err != nil || string(got) != words {
+			t.Errorf("%s reads %q (%v), want the summary's words", name, got, err)
+		}
+	}
+	if err := backend.Delete(t.Context(), put.Object.Key.Name()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CopySummary(t.Context(), "ana", turn, put.Object); !errors.Is(err,
+		executordomain.ErrUnreadable) {
+		t.Errorf("a summary gone copied as %v, want ErrUnreadable", err)
+	}
+}

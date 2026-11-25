@@ -22,10 +22,10 @@ import (
 // ([baseTierReadBytes]): a note and its request around a line of plain words
 // at the harness's line bound in a member the read passes over (skipped), one
 // a whole-line decode keeps raw (raw), one past the bound (past: last where a
-// later line leaves the read undecided; a Codex read fails), none (plain), or
-// the most rows a read keeps a fact of (uids, Hermes's). One case a process
-// under GODEBUG=gctrace=1: held is the largest live heap at GOGC=10. A read
-// that holds no note fails.
+// later line leaves the read undecided; a Codex read fails), none (plain), the
+// most rows a read keeps a fact of (uids, Hermes's), or a summary at the read's
+// bound (summary). One case a process under GODEBUG=gctrace=1: held is the
+// largest live heap at GOGC=10. A read that holds no note fails.
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkACollectionsReadAtItsBounds$/^<case>$' -benchtime 1x
 func BenchmarkACollectionsReadAtItsBounds(b *testing.B) {
@@ -45,6 +45,15 @@ func BenchmarkACollectionsReadAtItsBounds(b *testing.B) {
 		}
 		if h.many != nil {
 			b.Run(h.name+"_uids", func(b *testing.B) { notesBenchRead(b, h, false, h.many) })
+		}
+		if h.summary != nil {
+			summarised := h
+			summarised.held, summarised.last = h.heldSummary, true
+			b.Run(h.name+"_summary", func(b *testing.B) {
+				notesBenchRead(b, summarised, false, func() string {
+					return h.summary(personBenchQuoted("plain", summaryReadMaxBytes-128<<10))
+				})
+			})
 		}
 	}
 }
@@ -66,6 +75,27 @@ type notesBenchHarness struct {
 	bound         int
 	// many is the most rows a read keeps a fact of, where it bounds them.
 	many func() string
+	// summary is a line holding a compaction's summary of the words quoted,
+	// and heldSummary the read that takes it with the receipts, where the
+	// harness's receipts walk reads the summary; last writes the line big
+	// writes after the note's request.
+	summary     func(quoted string) string
+	heldSummary func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error)
+	last        bool
+}
+
+// summaryHeld is read asked the newest summary too, failing where it reads
+// none.
+func summaryHeld(read func(context.Context, io.Reader, []ServedTake, *summaryRead) ([]string, error)) func(
+	context.Context, io.Reader, []ServedTake) ([]string, error) {
+	return digestedHeld(func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
+		var s summaryRead
+		held, err := read(ctx, r, takes, &s)
+		if err == nil && s.reading().Text == "" {
+			return nil, fmt.Errorf("the read took no summary: %+v", s.reading())
+		}
+		return held, err
+	})
 }
 
 // notesBenchInbox is the inbox id of the one note each record holds, and
@@ -89,7 +119,7 @@ func notesBenchTokens(held map[string]bool, err error) ([]string, error) {
 // a line at a time.
 func notesBenchHarnesses() []notesBenchHarness {
 	return []notesBenchHarness{
-		{name: KimiName, held: kimiNotesHeld,
+		{name: KimiName, held: heldAlone(kimiNotesHeld),
 			before: `{"type":"context.append_message","message":{"role":"user","content":[],"id":"` +
 				KimiNoteID(notesBenchInbox) + `"}}`,
 			after: `{"type":"usage.record","usageScope":"turn"}`,
@@ -101,7 +131,7 @@ func notesBenchHarnesses() []notesBenchHarness {
 				return `{"type":"context.append_message","message":{"role":"user","id":"m1","content":` +
 					`[{"type":"text","text":` + q + `}]}}`
 			}},
-		{name: CopilotName, held: copilotNotesHeld,
+		{name: CopilotName, held: heldAlone(copilotNotesHeld),
 			before: `{"type":"user.message","timestamp":"2026-01-01T00:00:00.000Z","data":{"clientTurnId":"` +
 				CopilotClientTurnID(notesBenchInbox) + `","delivery":"steering","content":"a note"}}`,
 			after: `{"type":"session.usage_record","timestamp":"2026-01-01T00:00:01.000Z","data":{"usage":` +
@@ -114,7 +144,7 @@ func notesBenchHarnesses() []notesBenchHarness {
 				return `{"type":"hook.end","timestamp":"2026-01-01T00:00:00.100Z","data":` +
 					`{"hookInvocationId":"h1","hookType":"postToolUse","output":` + q + `}}`
 			}},
-		{name: PiName, held: piNotesHeld,
+		{name: PiName, held: heldAlone(piNotesHeld),
 			before: `{"type":"custom_message","id":"n1","parentId":"","customType":"` + piNoteType +
 				`","content":"a note","details":{"inbox":"` + notesBenchInbox + `"}}`,
 			after: `{"type":"message","id":"a1","parentId":"n1","message":{"role":"assistant","content":[],` +
@@ -128,7 +158,7 @@ func notesBenchHarnesses() []notesBenchHarness {
 			}},
 		{name: GrokName, pastLast: true,
 			held: func(ctx context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
-				return notesBenchTokens(grokHeld(ctx, r))
+				return notesBenchTokens(grokHeld(ctx, r, nil))
 			},
 			before: `{"type":"user","content":[{"type":"text","text":` + benchStringOf(grokHookHeads[0]+
 				"## A note from ada\n\nUse main.\n\n"+claudeTakeToken(notesBenchTake)+grokReminderTail) +
@@ -141,7 +171,7 @@ func notesBenchHarnesses() []notesBenchHarness {
 		{name: MuseName, pastLast: true,
 			held: func(ctx context.Context, r io.Reader, _ []ServedTake) ([]string, error) {
 				return notesBenchTokens(museHeld(ctx, r, museHooksDigest,
-					map[string]bool{claudeTakeToken(notesBenchTake): true}))
+					map[string]bool{claudeTakeToken(notesBenchTake): true}, nil))
 			},
 			before: `{"payload_type":"tool_batch.effect.terminal","payload":{"record":{"call_id":"c1",` +
 				`"kind":"terminal"}}}` + "\n" + `{"payload_type":"runtime.session","payload":{"event":{"effects":` +
@@ -157,7 +187,7 @@ func notesBenchHarnesses() []notesBenchHarness {
 			raw: func(q string) string {
 				return `{"payload_type":"runtime.session","payload":{"event":{"chunk":` + q + `,"kind":"output"}}}`
 			}},
-		{name: QwenCodeName, held: qwenHeldOf(qwenNotesHeld), pastLast: true,
+		{name: QwenCodeName, held: qwenHeldOf(qwenNotesAlone), pastLast: true,
 			before: `{"type":"user","subtype":"mid_turn_user_message","message":{"role":"user","parts":[{"text":` +
 				benchStringOf("\n"+qwenNoteFraming+notesBenchInbox) + `}]}}`,
 			after: `{"type":"assistant","message":{"role":"model","parts":[{"text":"ok"}]}}`,
@@ -177,8 +207,16 @@ func notesBenchHarnesses() []notesBenchHarness {
 			},
 			raw: func(q string) string { return `{"id":"m1","type":"gemini","content":` + q + `}` }},
 		{name: HermesName, held: digestedHeld(func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
-			return hermesNotesHeld(ctx, r, takes, 0)
+			return hermesNotesHeld(ctx, r, takes, 0, nil)
 		}), pastLast: true, bound: hermesRowMaxBytes,
+			heldSummary: summaryHeld(func(ctx context.Context, r io.Reader, takes []ServedTake,
+				s *summaryRead) ([]string, error) {
+				return hermesNotesHeld(ctx, r, takes, 0, s)
+			}),
+			summary: func(q string) string {
+				return `{"t": "messages", "r": {"id": 8, "role": "user", "content": ` + q +
+					`, "_compressed_summary": 1, "message_uid": "u8"}}`
+			},
 			many: func() string { return strings.TrimSuffix(hermesUIDRows(hermesUIDsMax-2, 6), "\n") },
 			before: `{"t": "messages", "r": {"id": 5, "role": "user", "content": ` +
 				benchStringOf(hermesNoteOpen+notesBenchInbox+hermesNoteClose) + `, "display_kind": "steer", ` +
@@ -192,8 +230,13 @@ func notesBenchHarnesses() []notesBenchHarness {
 				return `{"t": "messages", "r": {"id": 6, "role": "tool", "content": ` + q + `}}`
 			}},
 		{name: CodexName, held: digestedHeld(func(ctx context.Context, r io.Reader, takes []ServedTake) ([]string, error) {
-			return codexNotesHeld(ctx, r, takes, 0)
+			return codexNotesHeld(ctx, r, takes, 0, nil)
 		}), pastFails: true, bound: codexRolloutLineMaxBytes,
+			heldSummary: summaryHeld(func(ctx context.Context, r io.Reader, takes []ServedTake,
+				s *summaryRead) ([]string, error) {
+				return codexNotesHeld(ctx, r, takes, 0, s)
+			}),
+			summary: func(q string) string { return `{"type":"compacted","payload":{"message":` + q + `}}` },
 			before: `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":` +
 				`"input_text","text":"` + notesBenchInbox + `"}]}}`,
 			after: `{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{}"}}`,
@@ -212,7 +255,7 @@ func notesBenchHarnesses() []notesBenchHarness {
 func notesBenchRead(b *testing.B, h notesBenchHarness, past bool, big func() string) {
 	fails := past && h.pastFails
 	file := filepath.Join(b.TempDir(), "record.jsonl")
-	notesBenchWrite(b, h, past && h.pastLast, big, file)
+	notesBenchWrite(b, h, past && h.pastLast || h.last, big, file)
 	takes := []ServedTake{{InboxID: notesBenchInbox}}
 	runtime.GC()
 	debug.FreeOSMemory()

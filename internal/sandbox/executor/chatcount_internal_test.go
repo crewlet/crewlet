@@ -127,7 +127,7 @@ func geminiChatArchive(t *testing.T, chat []byte) []byte {
 func geminiCountOf(t *testing.T, lines [][]byte) (*geminiCounting, *sandbox.ResumedCount) {
 	t.Helper()
 	c := newGeminiCounting()
-	if err := chatFileLines(t.Context(), bytes.NewReader(bytes.Join(lines, nil)), c, new(passBudget)); err != nil {
+	if err := chatFileLines(t.Context(), bytes.NewReader(bytes.Join(lines, nil)), c, new(passBudget), nil); err != nil {
 		t.Fatal(err)
 	}
 	return c, c.count(0, 0)
