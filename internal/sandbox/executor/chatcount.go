@@ -219,22 +219,24 @@ var errChatFile = errors.New("no one chat file in the box names the session")
 // ([chatSummaryLines.follow]): the walk's bytes handed on through a pipe as
 // it takes them, each line's break among them, so the summary is read off
 // the one walk and neither holds a line. The pipe ends with the walk's error.
+// Both hold the one large slot of the pass, each once past its own base.
 func chatFileFollowed(ctx context.Context, r io.Reader, c chatCounter, summary *chatSummaryLines) error {
 	if c == nil {
 		c = chatSkip{}
 	}
+	large := new(passBudget)
 	if summary == nil {
-		return chatFileLines(ctx, r, c, new(passBudget), nil)
+		return chatFileLines(ctx, r, c, large, nil)
 	}
 	pr, pw := io.Pipe()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		summary.follow(ctx, pr)
+		summary.follow(ctx, pr, large)
 		// A reading that ended early lets the walk's writes go by unread.
 		_ = pr.Close()
 	}()
-	err := chatFileLines(ctx, r, c, new(passBudget), pw)
+	err := chatFileLines(ctx, r, c, large, pw)
 	_ = pw.CloseWithError(err)
 	<-done
 	return err

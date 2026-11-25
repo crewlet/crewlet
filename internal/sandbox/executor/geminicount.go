@@ -55,13 +55,21 @@ const geminiCountIDs = 1 << 16
 // ids_base), within the meter's base ([meterBaseHeldBytes]); 2^12 held 5 MiB.
 const geminiCountBaseIDs = 1 << 11
 
-// geminiCountLargeHeldBytes is what a count holds at [geminiCountIDs] ids at
-// the walk's word bound, past its base under the large slot: 24.9 MiB live at
-// most over four runs, the meter's and a collection's twice each
-// (BenchmarkAChatCountAtItsBounds' ids_long, to the byte at GOGC=1 under
-// gcstoptheworld), rounded up. A take counts it past the meter's base
-// ([takeLargeHeldBytes]); a collection's is within a chain's.
+// geminiCountLargeHeldBytes is what the take's meter's count holds at
+// [geminiCountIDs] ids at the walk's word bound, past its base under the large
+// slot: 24.97 MiB live at most over six runs (BenchmarkAChatCountAtItsBounds'
+// meter_ids_long, to the byte as each GC marks it), rounded up. A take counts
+// it past the meter's base ([takeLargeHeldBytes]); its meter reads no summary.
 const geminiCountLargeHeldBytes = 25 << 20
+
+// geminiCopyLargeHeldBytes is what a collection's read of a Gemini CLI copy
+// holds past its base under the large slot: its count beside its summary's
+// reading ([chatFileFollowed]), whose records' places a reading keeps to
+// [geminiCountIDs], 44.62 MiB live at most over eight runs at the word bound
+// (summary_ids_long; the count alone 25.54, the summary alone 20.71), rounded
+// up with a margin for that spread. Counted among the slot's holders
+// ([largeReadHeldBytes]).
+const geminiCopyLargeHeldBytes = 46 << 20
 
 // geminiSyntheticAnswerBytes is the JSON of the answer a resume hands a call
 // with none (213 bytes, 0.70.0). The turn it closes a history ending on a

@@ -89,3 +89,54 @@ func TestASummarysReadingThatEndsEarlyLetsTheWalkEnd(t *testing.T) {
 		}
 	}
 }
+
+// A GEMINI CLI SUMMARY PAST ITS BASE HOLDS THE LARGE SLOT, beside a count or
+// alone: its reading keeping [geminiCountBaseIDs] records' places takes no
+// slot, held elsewhere or not; one keeping one more waits for it, reads on
+// once it is freed, and holds nothing once the walk ends.
+//
+// Mutation: count no record of the summary's toward its base, or keep the
+// slot past the walk: a case goes red.
+func TestAGeminiSummaryPastItsBaseHoldsTheLargeSlot(t *testing.T) {
+	records := func(n int) string {
+		var b strings.Builder
+		b.WriteString(geminiCountBase + "\n")
+		for i := range n - 1 {
+			fmt.Fprintf(&b, `{"id":"r%d","type":"user","content":"x"}`+"\n", i)
+		}
+		return b.String()
+	}
+	free := holdLargeSlot(t)
+	summary := newGeminiSummaries()
+	ctx := &chatSlotWait{Context: t.Context(), waited: make(chan struct{})}
+	lines := &newGeminiSummaryReading(summary).chatSummaryLines
+	if err := chatFileFollowed(ctx, strings.NewReader(records(geminiCountBaseIDs)), nil, lines); err != nil ||
+		lines.err != nil {
+		t.Fatalf("a summary at its base: %v, %v", err, lines.err)
+	}
+	select {
+	case <-ctx.waited:
+		t.Error("a summary at its base waited for the large slot")
+	default:
+	}
+	free()
+	free = holdLargeSlot(t)
+	ctx = &chatSlotWait{Context: t.Context(), waited: make(chan struct{})}
+	lines = &newGeminiSummaryReading(newGeminiSummaries()).chatSummaryLines
+	done := make(chan error)
+	go func() {
+		done <- chatFileFollowed(ctx, strings.NewReader(records(geminiCountBaseIDs+1)), nil, lines)
+	}()
+	select {
+	case <-ctx.waited:
+	case err := <-done:
+		t.Fatalf("a summary past its base read to its end (%v, %v) with the slot held elsewhere", err, lines.err)
+	}
+	free()
+	if err := <-done; err != nil || lines.err != nil {
+		t.Errorf("a summary freed to read on: %v, %v, want it read", err, lines.err)
+	}
+	if n := len(collectionLargeReads); n != 0 {
+		t.Errorf("once the summary ended, %d large slots are held, want none", n)
+	}
+}
