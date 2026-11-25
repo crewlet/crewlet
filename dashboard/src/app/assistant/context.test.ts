@@ -25,6 +25,8 @@ import {
   applyPageAction,
   buildPageContext,
   framePageOf,
+  pageIdentity,
+  pageIdentityAt,
   pageSnapshot,
   registerPage,
   resetPageContextForTest,
@@ -451,4 +453,21 @@ describe("an action's own revision", () => {
     const context = pageSnapshot()!.context;
     expect(context.action_revisions?.["work.filter.apply"]).toBe(context.source_revision);
   });
+});
+
+// ONE PAGE IS ITS SCREEN AND RECORD: a tab or filter in the query is the same
+// page, another record or screen is another. The chip and the drawer's reopen
+// rule both read this.
+test("a page's identity is its screen and path, never its query", () => {
+  const at = (path: string[], query: string) =>
+    pageIdentity(framePageOf(path, new URLSearchParams(query), crumbsFor(path, {}))!);
+  const github = ["company", "integrations", "github"];
+  expect(at(github, "tab=agents")).toBe(at(github, "tab=settings"));
+  expect(at(github, "")).toBe(pageIdentityAt(github));
+  expect(at(github, "")).not.toBe(at(["company", "integrations", "slack"], ""));
+  expect(at(["worklet", "tasks"], "blocked=true")).toBe(at(["worklet", "tasks"], ""));
+  expect(pageIdentityAt(["worklet", "ENG-1"])).not.toBe(pageIdentityAt(["worklet", "ENG-2"]));
+  setFramePage(PAGE);
+  expect(pageSnapshot()?.key).toBe(pageIdentity(PAGE));
+  expect(pageIdentityAt(["no-such-place"])).toBeNull();
 });

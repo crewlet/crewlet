@@ -99,8 +99,17 @@ type AgentRunRequest struct {
 	// person sent the turn that it has already read, and then Notes — and
 	// the whole of what the harness is prompted with; of a round carried on
 	// ([AgentRunRequest.Continue]), what became of the run before it and every
-	// call of the round so far too.
-	Brief string
+	// call of the round so far too. Handover is what it hands of the summary
+	// of the session the run does not continue ([Runner.lostSection]).
+	Brief    string
+	Handover sandbox.SummaryHandover
+
+	// FreshFor is Brief told under another verdict, the one a launch decides
+	// after the briefs were built (its floor, or its box: sandbox's
+	// LaunchRequest.FreshFor), its lost-session section rendered for it. The
+	// runner publishes the brief it last told as the run's prompt where its run
+	// starts a session of its own. Nil from a runner that tells none.
+	FreshFor func(verdict *executorkeep.NotContinued) sandbox.FreshBrief
 
 	// Notes are the notes this brief is the FIRST to read, in the order the
 	// brief renders them ([SteerSource.Brief]): the launch records them read
@@ -376,6 +385,10 @@ type SessionContinuation struct {
 	// left, the fresh brief's, which Replaced holds whole.
 	Told sandbox.BriefTold
 
+	// Handover is what every telling of it hands of the summary of a newer
+	// session the run does not continue ([Runner.lostSection]).
+	Handover sandbox.SummaryHandover
+
 	// Exact is the briefs told by a reading of what the kept capture holds
 	// ([HoldingsAsker]), beside Brief and Replaced, which tell every call
 	// after the session's save point; nil where no reading was read, or its
@@ -637,9 +650,43 @@ type SessionBasis struct {
 	// relaunch, where the turn's row was read holding it; empty where none
 	// is kept, the probe read nothing, or what it read may be gone. A run
 	// that starts a session of its own beside it is told it may read it
-	// ([prompts.KeptSession]), which its model cannot otherwise know — a
+	// ([prompts.LostSessionSection]), which its model cannot otherwise know: a
 	// round lost a second time too, which continues none.
 	KeptTurn string
+
+	// Summary is the newest summary of the session NotContinued names, as the
+	// launcher read it to hand ([LostSummary]): nil where none is kept for it.
+	// SummaryUnread says one is kept that could not be read.
+	Summary       *LostSummary
+	SummaryUnread bool
+}
+
+// LostSummary is the newest summary its harness kept of a session a launch does
+// not continue, as a brief hands it (internal/agent/prompts' HandedSummary):
+// its kept end within what the brief may hand (internal/engine's handOverBytes).
+type LostSummary struct {
+	// Text is the summary, its harness's model's words from what others
+	// wrote, fenced wherever it is rendered.
+	Text string `untrusted:"fence"`
+
+	// Turn is whose session it summarises, and At when the box read that
+	// found it kept it.
+	Turn string
+	At   time.Time
+
+	// Bytes is the whole summary's size; Cut says Text is its last part, and
+	// KeptCut that the summary kept was itself cut, so no reader holds more.
+	Bytes        int64
+	Cut, KeptCut bool
+
+	// Newer says it is newer than the session the basis continues in the lost
+	// one's place (its place among the turn's captures after that session's),
+	// so a continuation is handed it; a fresh run is handed it either way.
+	Newer bool
+
+	// Readable says its turn's row on the executor log names it, so
+	// `read_session` reads it under Turn.
+	Readable bool
 }
 
 // Continues reports whether the basis names a kept session of the turn's own to
@@ -782,7 +829,10 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		return turn.Work{}, turn.Surface{}, err
 	}
 	surface = built
-	briefs := launchBriefs{fresh: user, freshReported: true}
+	// THE CONTINUATION'S OWN TELLING OF A NEWER SESSION IT DOES NOT CONTINUE,
+	// where it continues an older one in its place ([Runner.lostSection]).
+	contSection, contHandover := r.lostSection(basis, basis.NotContinued, built, true)
+	briefs := launchBriefs{freshReported: true}
 	switch {
 	case basis.Continues() && r.cfg.Resume != nil:
 		// THE COLLECTED ROUND'S CALLS, the ones its log dropped from the
@@ -800,7 +850,8 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// its harness may hand the session to its model as a summary, the
 		// telling of a session that may be one is handed ([firstRequest]).
 		briefs.kept, briefs.keptHolds, briefs.exact, briefs.unheldHolds = r.keptTellings(ctx, basis, collected,
-			round, nil, history, built, fresh, "").led(ctx, r, r.sendBackLead(notes).Text, reviewLead(history))
+			round, nil, history, built, fresh, "").led(ctx, r, withLost(r.sendBackLead(notes).Text, contSection),
+			reviewLead(history))
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
 		// launch armed only where its box said it took them up.
@@ -815,13 +866,25 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// for a later brief to a session that may lack this one to tell again,
 		// with the turn's answers this brief tells after it, or is to tell where
 		// its read of them failed ([Runner.taskAgain]).
-		briefs.kept = r.baseSession(basis, user.Text, sandbox.BriefTold{Own: taskLead(round, history, notes)})
+		briefs.kept = r.baseSession(basis, user.Then(prompts.KeyLostSession, contSection).Text,
+			sandbox.BriefTold{Own: taskLead(round, history, notes)})
 	}
-	// AND THE FRESH BRIEF NAMES THE KEPT SESSION IT DOES NOT CONTINUE, after
-	// the base's continuation took it whole: a run that starts a session of
-	// its own cannot otherwise know one it could read is there.
-	user = r.namingKeptSession(user, basis, built)
-	briefs.fresh = user
+	// AND THE FRESH BRIEF TELLS THE SESSION IT DOES NOT CONTINUE, its own
+	// telling after the continuation's: under the probe's verdict, or beside a
+	// continuation under the restore its box may fall back from, told again
+	// under the verdict its launch decides ([AgentRunRequest.FreshFor]).
+	freshVerdict := asFresh(basis.NotContinued)
+	if briefs.kept != nil {
+		briefs.kept.Handover, freshVerdict = contHandover, restoreFailed(basis)
+	}
+	head := user
+	var firstTold sandbox.FreshBrief
+	briefs.fresh, firstTold = newToldFresh(func(section string) prompts.Prompt {
+		return head.Then(prompts.KeyLostSession, section)
+	}, func(v *executorkeep.NotContinued) (string, sandbox.SummaryHandover) {
+		return r.lostSection(basis, v, built, false)
+	}, freshVerdict)
+	user, _ = briefs.fresh.now()
 	system := r.executorSystem(built)
 	// ITS TOOL SKILLS, handed to its harness as the harness's own rather
 	// than listed in its prompt (handedskills.go), matched against the
@@ -856,10 +919,12 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	decided := &launchDecided{}
 
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
-		System: system.Text,
-		Brief:  user.Text,
-		Notes:  fresh,
-		Retold: r.retold(),
+		System:   system.Text,
+		Brief:    user.Text,
+		Handover: firstTold.Handover,
+		FreshFor: briefs.fresh.under,
+		Notes:    fresh,
+		Retold:   r.retold(),
 		// A SEND-BACK'S READ, the collection's this segment made, whose round
 		// its opening carries the unread calls of into the new one; none on a
 		// turn's first launch.
@@ -1017,7 +1082,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// ([carried.tellsHeld]). THE PROBE IS ASKED OF EVERY RELAUNCH: even a
 	// twice-lost round continues nothing, but the session read is the only
 	// record of what the jobs did, and the run may read it
-	// ([Runner.namingKeptSession]).
+	// ([Runner.lostSection]).
 	basis := r.sessionBasis(ctx)
 	// UNDER THE TURN'S OWN FENCE TOKEN, which the relaunched run's tools fence
 	// what they read with: a reply carried on is somebody's words, fenced as
@@ -1125,20 +1190,24 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// remembers none of it. Each a section of its own, so the prompt published
 	// as the phase's opening frame where the box starts a session of its own
 	// keeps its outline ([prompts.Prompt.Then]).
-	reseed := user.Then(prompts.KeyAnswersBefore, answers.section.Text).
-		Then(prompts.KeyCarriedOn, carry.reseed(fence)).
-		Then(prompts.KeyRoundSoFar, prompts.CalledBefore(freshTold))
+	head := user.Then(prompts.KeyAnswersBefore, answers.section.Text).Then(prompts.KeyCarriedOn, carry.reseed(fence))
+	reseedWith := func(section string) prompts.Prompt {
+		return head.Then(prompts.KeyLostSession, section).Then(prompts.KeyRoundSoFar, prompts.CalledBefore(freshTold))
+	}
 	// AND THE SESSION OF THE JOB IT FOLLOWS, as its launcher answered it
 	// above, led by what carries it on: what cut the run off, or the answer
 	// to its question and what the call the person approved returned, now
 	// that it is made.
 	inPlaceSession := carry.session()
-	briefs := launchBriefs{fresh: reseed, state: state, bridged: bridgedCalls, inPlaceHolds: inPlaceHolds,
-		owed: r.cfg.Resume.Owed}
+	briefs := launchBriefs{state: state, bridged: bridgedCalls, inPlaceHolds: inPlaceHolds, owed: r.cfg.Resume.Owed}
 	if carry.keeps() {
+		// THE CONTINUATION'S OWN TELLING OF A NEWER SESSION IT DOES NOT
+		// CONTINUE, after its lead and before the calls it tells.
+		contSection, contHandover := r.lostSection(basis, basis.NotContinued, built, true)
 		switch {
 		case basis.Continues():
-			briefs.kept, briefs.keptHolds, briefs.exact, briefs.unheldHolds = kept.led(ctx, r, lead, own)
+			briefs.kept, briefs.keptHolds, briefs.exact, briefs.unheldHolds = kept.led(ctx, r,
+				withLost(lead, contSection), own)
 		case basis.ContinuesBase():
 			// A TURN THAT HAS KEPT NO SESSION OF ITS OWN — its job lost with
 			// its box before anything of it was kept — continues the one its
@@ -1146,8 +1215,12 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// round's jobs did and what became of the last, and so leaves out
 			// what the reseed leaves out; and the turn's answers it tells
 			// after the task are told again with the task ([Runner.taskAgain]).
-			briefs.kept = r.baseSession(basis, reseed.Text, sandbox.BriefTold{Omitted: freshOmitted.reads,
-				LateOmitted: freshOmitted.late, Own: append(taskLead(state.Round, history, ""), own...)})
+			briefs.kept = r.baseSession(basis, reseedWith(contSection).Text, sandbox.BriefTold{
+				Omitted: freshOmitted.reads, LateOmitted: freshOmitted.late,
+				Own: append(taskLead(state.Round, history, ""), own...)})
+		}
+		if briefs.kept != nil {
+			briefs.kept.Handover = contHandover
 		}
 	} else {
 		// A ROUND LOST A SECOND TIME CONTINUES NOTHING, but the session its
@@ -1156,19 +1229,33 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		// and nothing else the probe answered reaches the launch.
 		basis, inPlaceSession = SessionBasis{KeptTurn: basis.KeptTurn}, ""
 	}
-	// AND THE RESEED NAMES THE KEPT SESSION IT DOES NOT CONTINUE, as a fresh
-	// launch's brief does.
-	reseed = r.namingKeptSession(reseed, basis, built)
-	briefs.fresh = reseed
+	// AND THE RESEED TELLS THE SESSION IT DOES NOT CONTINUE, as a fresh
+	// launch's brief does: beside a continuation, under the restore its box may
+	// fall back from.
+	freshVerdict := asFresh(basis.NotContinued)
+	switch {
+	case briefs.kept != nil:
+		freshVerdict = restoreFailed(basis)
+	case inPlaceSession != "":
+		freshVerdict = restoreFailed(SessionBasis{})
+	}
+	var firstTold sandbox.FreshBrief
+	briefs.fresh, firstTold = newToldFresh(reseedWith,
+		func(v *executorkeep.NotContinued) (string, sandbox.SummaryHandover) {
+			return r.lostSection(basis, v, built, false)
+		}, freshVerdict)
+	reseed, _ := briefs.fresh.now()
 	if inPlaceSession != "" {
 		briefs.inPlace, briefs.inPlaceSummarized = continued, summarized
 	}
 	decided := &launchDecided{}
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
-		System: system.Text,
-		Brief:  reseed.Text,
-		Notes:  fresh,
-		Retold: r.retold(),
+		System:   system.Text,
+		Brief:    reseed.Text,
+		Handover: firstTold.Handover,
+		FreshFor: briefs.fresh.under,
+		Notes:    fresh,
+		Retold:   r.retold(),
 		Continue: &Continuation{
 			SessionID: inPlaceSession, Brief: continued,
 			SignInReplaced:    isRotated(carry),

@@ -20,6 +20,9 @@ const (
 	PieceError PieceKind = "error"
 	// PieceProduced is a prior round's produced text.
 	PieceProduced PieceKind = "produced"
+	// PieceAnswer is the text a successful write returned
+	// ([FormatOptions.Answers]).
+	PieceAnswer PieceKind = "answer"
 )
 
 // Piece is one payload a render would show past its budget.
@@ -127,6 +130,9 @@ func CallPieces(calls []Call, opts FormatOptions) []Piece {
 		}
 		if call.Failed && over(call.Result, opts.ValueLimit) {
 			add(Piece{Kind: PieceError, Text: call.Result, Limit: opts.ValueLimit})
+		}
+		if answers(call, opts) && over(call.Result, opts.ValueLimit) {
+			add(Piece{Kind: PieceAnswer, Text: call.Result, Limit: opts.ValueLimit})
 		}
 	}
 	return out

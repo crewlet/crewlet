@@ -76,3 +76,41 @@ func TestReviewsEvidenceLogKeepsAToolsLineBreaks(t *testing.T) {
 			got, want)
 	}
 }
+
+// A FRESH RUN IS TOLD WHAT ITS WRITES RETURNED, NEVER A READ'S: under Answers a
+// successful write's line ends with its answer, on one line, fitted past
+// ValueLimit as an error is (a piece the caller rewrites); a read, a failed
+// call and a write that returned nothing keep their lines; and without Answers
+// no line changes.
+//
+// Mutation: show a read's answer, cut a long answer rather than name it a
+// piece, or show answers without Answers, and a case goes red.
+func TestAFreshRunIsToldWhatItsWritesReturned(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("a", ValueLimit) + " ENG-9"
+	opts := Format(nil, []string{"tr_search"})
+	opts.Answers = true
+	opts.Fitted = Fitted{{Kind: PieceAnswer, Text: long, Limit: ValueLimit}: "(created ENG-9)"}
+	for name, c := range map[string]struct {
+		call    Call
+		outcome string
+	}{
+		"a write":                   {Call{Name: "tr_create", Result: "Created ENG-8\nat /eng/8"}, "success: Created ENG-8 at /eng/8"},
+		"a write past the limit":    {Call{Name: "tr_create", Result: long}, "success: (created ENG-9)"},
+		"a read":                    {Call{Name: "tr_search", Result: "ENG-1, ENG-2"}, "success"},
+		"a failed write":            {Call{Name: "tr_create", Result: "denied", Failed: true}, "error: denied"},
+		"a write returning nothing": {Call{Name: "tr_close"}, "success"},
+	} {
+		if _, got := CallLine(c.call, opts); got != c.outcome {
+			t.Errorf("%s: the line ends %q, want %q", name, got, c.outcome)
+		}
+	}
+	pieces := CallPieces([]Call{{Name: "tr_create", Result: long}, {Name: "tr_search", Result: long}}, opts)
+	if len(pieces) != 1 || pieces[0] != (Piece{Kind: PieceAnswer, Text: long, Limit: ValueLimit}) {
+		t.Errorf("the pieces to fit are %+v, want the write's answer alone", pieces)
+	}
+	opts.Answers = false
+	if _, got := CallLine(Call{Name: "tr_create", Result: "Created ENG-8"}, opts); got != "success" {
+		t.Errorf("without Answers a write's line ends %q, want success", got)
+	}
+}
