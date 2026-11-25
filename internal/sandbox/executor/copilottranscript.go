@@ -303,7 +303,7 @@ func (r *copilotReading) failed(k jsonscan.Kind) error {
 		return err
 	case jsonscan.ObjectStart:
 	default:
-		r.failure, err = r.rawText(&r.input, &r.compactor, e)
+		r.failure, err = r.rawText(&r.input, &r.compactor, e, k)
 		return err
 	}
 	ordinal := r.b.seen

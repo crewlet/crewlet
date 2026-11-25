@@ -24,12 +24,13 @@ import (
 // do not name is skipped, and a last line with no newline is torn: still being
 // written, never read as whole.
 
-// codexRolloutLineMaxBytes bounds one rollout line. The longest line Codex
-// writes is a steered note: turn/steer refuses more than 1,048,576 code points
-// ([codexSteerMaxCodePoints]), at most 4 bytes each in UTF-8 or 6 as a JSON
-// escape, so 6 MiB, plus the line's envelope and metadata. Tool output is cut
-// by Codex itself far below this. A longer line is not a shape this build read,
-// so the rollout is refused as unreadable rather than read without it.
+// codexRolloutLineMaxBytes bounds what a reader keeps of one rollout line: its
+// bytes but its images', which every reader passes ([lineWalk.pass]). The
+// longest text Codex writes is a steered note: turn/steer refuses more than
+// 1,048,576 code points ([codexSteerMaxCodePoints]), at most 4 bytes each in
+// UTF-8 or 6 as a JSON escape, so 6 MiB, plus the line's envelope and
+// metadata; tool output Codex cuts far below. A longer line is not a shape
+// this build read, so it is said or refused rather than read without it.
 const codexRolloutLineMaxBytes = 8 << 20
 
 // codexSteerMaxCodePoints is turn/steer's input bound, which Codex 0.171.0

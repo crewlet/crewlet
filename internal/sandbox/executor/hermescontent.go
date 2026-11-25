@@ -12,9 +12,11 @@ import (
 // content as (a list of parts, or a tool's `_multimodal` envelope of them),
 // decoded as its _decode_content decodes it (0.23.3,
 // persistence/sqlite/conversation/_store/messages.py) and read through the
-// walk's inner scanner, holding none of it ([lineWalk.decoded]), an image
-// part in its place ([hermesStoredParts]). A content that decodes as no shape
-// Hermes reads is said in its place ([hermesStoredOdd]).
+// walk's inner scanner, holding none of it ([lineWalk.decoded]). It is the only
+// shape an image reaches a row in: a compaction keeps the newest image-bearing
+// tool results as they were, so each image is passed ([lineWalk.pass]) and its
+// place joined ([hermesStoredParts]). A content that decodes as no shape Hermes
+// reads is said in its place ([hermesStoredOdd]).
 
 // hermesContentJSON opens a content Hermes stored as JSON: its words after it
 // are the JSON text.
@@ -141,7 +143,7 @@ func (w *lineWalk) storedEnvelope(parts func(k jsonscan.Kind) (bool, error)) (bo
 		case name == "content":
 			listed = false
 		}
-		return w.scan.Skip()
+		return w.skip(k)
 	})
 	return multimodal && listed && took, err
 }
