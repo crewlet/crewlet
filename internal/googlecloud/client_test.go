@@ -241,7 +241,7 @@ func TestAClientThatWouldFailEveryCallIsRefused(t *testing.T) {
 		edit  func(*googleauth.Options)
 		field string
 	}{
-		{"a person's email", func(o *googleauth.Options) { o.Provisioner = "ops@acme.example" }, "provisioner"},
+		{"a person's email", func(o *googleauth.Options) { o.Provisioner = "ops@acme.example" }, "identity_project"},
 		{"a pool as the provider", func(o *googleauth.Options) {
 			o.Provider = "projects/1/locations/global/workloadIdentityPools/crewlet"
 		}, "provider"},
