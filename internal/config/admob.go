@@ -55,8 +55,11 @@ const AdMobKind = "admob"
 // agency, which connects each client's company.
 const adMobMaxAccounts = 50
 
-// googlePublisher is a publisher ID as AdMob and AdSense write it.
-var googlePublisher = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^pub-[0-9]{16}$`) })
+// GooglePublisherPattern is a publisher ID as AdMob and AdSense write it;
+// their seat pickers offer a typed account by it too.
+const GooglePublisherPattern = `^pub-[0-9]{16}$`
+
+var googlePublisher = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(GooglePublisherPattern) })
 
 // googleOAuthClientID is an OAuth client ID: the project number, a hyphen and
 // the client's own part.

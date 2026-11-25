@@ -36,7 +36,9 @@ func (*standingVendor) IdentityGuide(*config.Company, seataccess.SeatRef, seatac
 	seataccess.Desired) seataccess.IdentityGuide {
 	return seataccess.IdentityGuide{Vendor: "Google Play", Noun: "Google identity", Name: "crewlet-growth-ffffff",
 		Steps: []seataccess.GuideStep{{Text: vendortext.Plain("Email address:"), Copy: &seataccess.GuideCopy{Label: "email",
-			Value: "crewlet-growth-ffffff"}}}}
+			Value: "crewlet-growth-ffffff"}}},
+		Entries: []seataccess.IdentityEntry{{ID: "com.acme.app"}},
+		Wider:   &seataccess.GuideWider{Label: "Add it once to the developer account"}}
 }
 
 func (*standingVendor) Kind() integration.Kind { return integration.KindGooglePlay }
@@ -155,7 +157,7 @@ func TestAStandingIdentityIsKeptExactlyWhileItPasses(t *testing.T) {
 	}
 	want, _ := seataccess.DesiredOf(&c.Roles[0], standingLane)
 	answer := seataccess.IdentityOf(v, c, seataccess.SeatRef{Handle: "growth", Name: "Growth"}, standingLane, want,
-		seataccess.Observed{}, got)
+		seataccess.Observed{}, got, time.Now())
 	if answer.Holds != seataccess.HoldsOwn || !strings.Contains(answer.Said, "Google Play refuses its calls") ||
 		answer.Problem == nil || !strings.Contains(answer.Problem.Body, "not added") || answer.Name != standingEmail {
 		t.Fatalf("the box before it is added: %+v", answer)
@@ -208,7 +210,7 @@ func TestAStandingIdentityIsReadAlikeNamedAsItIsAndDroppedWhereItReached(t *test
 	}
 	want, _ := seataccess.DesiredOf(&c.Roles[0], standingLane)
 	answer := seataccess.IdentityOf(v, c, seataccess.SeatRef{Handle: "growth"}, standingLane, want,
-		seataccess.Observed{}, got)
+		seataccess.Observed{}, got, time.Now())
 	if answer.Guide == nil || answer.Guide.Name != standingEmail || answer.Guide.Steps[0].Copy.Value != standingEmail {
 		t.Errorf("the guide names %+v, want the identity that exists", answer.Guide)
 	}
@@ -216,5 +218,62 @@ func TestAStandingIdentityIsReadAlikeNamedAsItIsAndDroppedWhereItReached(t *test
 	if got = standingSync(t, v, ledger, playCompany(false), nil); got != nil || v.dropped != 1 ||
 		len(v.droppedScope) != 1 || v.droppedScope[0] != "com.acme.app" {
 		t.Errorf("off with no apps: %+v, dropped %d off %v", got, v.dropped, v.droppedScope)
+	}
+}
+
+// A NEW IDENTITY GETS READY ON THE VENDOR'S CLOCK, then is the person's: the
+// box says it is getting ready, with no problem to fix, until Google can find
+// it, and needs the person from then on, without waiting for the next check.
+// The check's reading of each entry is laid over the guide's, and its
+// account-level alternative links each holder of an entry still missing it.
+//
+// Mutation: read the stored status alone, and the row reads Getting ready
+// until the next pass though the person could add it already.
+func TestAGettingReadyIdentityIsThePersonsOnceGoogleCanFindIt(t *testing.T) {
+	t.Parallel()
+	v := &standingVendor{}
+	c := playCompany(true)
+	want, _ := seataccess.DesiredOf(&c.Roles[0], standingLane)
+	made := time.Date(2026, 11, 25, 6, 0, 0, 0, time.UTC)
+	rec := &seataccess.IdentityRecord{Attempt: &seataccess.IdentityCheck{Status: seataccess.IdentityPreparing,
+		ReadyAt: made.Add(2 * time.Minute), Said: "Google Play can find it in about a minute.",
+		Entries: []seataccess.IdentityEntry{{ID: "com.acme.app", Name: "Acme", Group: "Acme Studio",
+			State: seataccess.EntryMissing, GroupURL: "https://play.example/acme"}}}}
+	seat := seataccess.SeatRef{Handle: "growth", Name: "Growth"}
+	early := seataccess.IdentityOf(v, c, seat, standingLane, want, seataccess.Observed{}, rec, made.Add(time.Minute))
+	if early.Status != seataccess.IdentityPreparing || early.Problem != nil ||
+		!strings.HasPrefix(early.Said, "Getting ready: ") || !early.Guide.ReadyAt.Equal(made.Add(2*time.Minute)) {
+		t.Fatalf("a minute after it was made: %+v", early)
+	}
+	if g := early.Guide; len(g.Entries) != 1 || g.Entries[0].Name != "Acme" || g.Wider == nil ||
+		len(g.Wider.Links) != 1 || g.Wider.Links[0].Label != "Acme Studio" {
+		t.Errorf("the guide's entries %+v, wider %+v", g.Entries, g.Wider)
+	}
+	later := seataccess.IdentityOf(v, c, seat, standingLane, want, seataccess.Observed{}, rec, made.Add(3*time.Minute))
+	if later.Status != seataccess.IdentityNone || !later.Guide.ReadyAt.IsZero() {
+		t.Errorf("three minutes after it was made: %+v", later)
+	}
+}
+
+// A LANE IS IN SYNC ONLY ON A CHECKED ROLE: an identity that works with its
+// role unread reads Role not checked, and one the vendor cannot find yet
+// reads Getting ready, never Needs you.
+//
+// Mutation: let an unchecked identity work as Ready does, and the row reads
+// In sync.
+func TestALaneIsInSyncOnlyOnACheckedRole(t *testing.T) {
+	t.Parallel()
+	on := seataccess.Desired{Enabled: true}
+	for status, want := range map[seataccess.IdentityStatus]seataccess.LaneStatus{
+		seataccess.IdentityReady:     seataccess.StatusInSync,
+		seataccess.IdentityUnchecked: seataccess.StatusRoleUnchecked,
+		seataccess.IdentityPreparing: seataccess.StatusPreparing,
+		seataccess.IdentityNone:      seataccess.StatusNeedsYou,
+	} {
+		la := seataccess.LaneAnswer{Desired: on, Identity: &seataccess.IdentityAnswer{Offered: true,
+			Holds: seataccess.HoldsOwn, Status: status}}
+		if got := seataccess.StatusOf(la, false, false); got != want {
+			t.Errorf("identity %s reads %s, want %s", status, got, want)
+		}
 	}
 }

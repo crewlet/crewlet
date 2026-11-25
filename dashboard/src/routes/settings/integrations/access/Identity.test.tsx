@@ -308,3 +308,48 @@ test("the verdict is the headline, the identity's facts and the next step", () =
   expect(screen.getByText("Next step")).toBeTruthy();
   expect(screen.getByText("Check the key's Access in Team Keys.")).toBeTruthy();
 });
+
+// A SHEET OPEN WHILE GOOGLE CANNOT FIND THE IDENTITY YET HOLDS ITS ADD LINKS,
+// saying when they work, and opens them the moment ready_at passes.
+//
+// Mutation: drop notReady, and a person opens a page whose add Google refuses.
+test("each entry's add link waits until Google can find the identity", () => {
+  vi.useFakeTimers({ now: Date.parse("2026-11-25T08:00:00Z") });
+  try {
+    const guide: AccessIdentityGuide = {
+      ...PLAY_GUIDE,
+      ready_at: "2026-11-25T08:01:00Z",
+      entries: [
+        {
+          id: "com.acme.app",
+          name: "Acme",
+          state: "missing",
+          add_url: "https://play.example/acme",
+        },
+      ],
+    };
+    render(
+      <LayerHost>
+        <IdentitySheet
+          seat={SEAT}
+          identity={NOT_ADDED}
+          guide={guide}
+          onClose={vi.fn()}
+          onCheck={vi.fn()}
+        />
+      </LayerHost>,
+    );
+    const sheet = screen.getByRole("dialog");
+    expect(sheet.textContent).toContain("Ready to add in about a minute");
+    expect(within(sheet).queryByRole("link", { name: /Acme/ })).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(61_000);
+    });
+    expect(sheet.textContent).not.toContain("Ready to add in about a minute");
+    expect(within(sheet).getByRole("link", { name: /Acme/ }).getAttribute("href")).toBe(
+      "https://play.example/acme",
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});

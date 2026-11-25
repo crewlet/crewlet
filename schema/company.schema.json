@@ -5654,6 +5654,14 @@
             "array",
             "null"
           ]
+        },
+        "role": {
+          "description": "At operate only: marketer runs the agent at Google Analytics' Marketer role, its changes held to audiences, key events, attribution and event create rules; absent is Editor's, every reversible change. Optional.",
+          "enum": [
+            "marketer",
+            "",
+            null
+          ]
         }
       },
       "type": [

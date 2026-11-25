@@ -30,8 +30,12 @@ const (
 // where somebody signed in.
 type issued struct{ admin bool }
 
-func (i issued) SeatToken(context.Context, integration.Kind, string, []string) (string, string, error) {
-	return seatToken, seatEmail, nil
+func (i issued) SeatToken(context.Context, integration.Kind, string, []string) (seataccess.IssuedSeat, error) {
+	return seataccess.IssuedSeat{Token: seatToken, Account: seatEmail}, nil
+}
+
+func (i issued) ReaderToken(context.Context, integration.Kind) (string, error) {
+	return "", seataccess.ErrNotIssued
 }
 
 func (i issued) AdminToken(context.Context, integration.Kind) (string, error) {
@@ -240,8 +244,8 @@ func session(t *testing.T, company *config.Company, access googlegrowth.SeatAcce
 }
 
 // A PLAY SEAT NEEDS ITS PERSON UNTIL ITS IDENTITY REACHES EVERY APP: not
-// invited, the check says so and names the app; invited, it is ready, its
-// role unread where nobody signed in as a Play Console admin.
+// invited, the check says so and names the app; invited, it works with its
+// role unchecked where nobody signed in as a Play Console admin.
 //
 // Mutation: answer ready where an app refuses the identity, and the first
 // check reads ready.
@@ -262,7 +266,7 @@ func TestAPlaySeatNeedsYouUntilItsIdentityIsInvitedToItsApps(t *testing.T) {
 	if check, err = maker.CheckIdentity(t.Context(), in); err != nil {
 		t.Fatal(err)
 	}
-	if check.Status != seataccess.IdentityReady || check.Role != "" || !strings.Contains(check.Said, "a Play Console admin") {
+	if check.Status != seataccess.IdentityUnchecked || check.Role != "" || !strings.Contains(check.Said, "a Play Console admin") {
 		t.Errorf("invited, no admin: %+v", check)
 	}
 }
@@ -479,7 +483,7 @@ func TestThePlayGuideNamesTheEmailTheAppsAndThePermissions(t *testing.T) {
 
 // AN ADMIN WHO SEES TOO LITTLE LEAVES THE ROLE UNREAD, never the check
 // failed: a sign-in Play lets list no users reads the identity as reaching
-// its apps, its role named by the first call Play refuses.
+// its apps with its role unchecked, never ready.
 //
 // Mutation: hand the admin read's 403 back as the check's fault, and every
 // pass fails to read the identity.
@@ -491,7 +495,7 @@ func TestAnAdminWhoSeesTooLittleLeavesThePlayRoleUnread(t *testing.T) {
 	company, access := identityWorld(t, "read", f)
 	maker, in := session(t, company, access, issued{admin: true})
 	check, err := maker.CheckIdentity(t.Context(), in)
-	if err != nil || check.Status != seataccess.IdentityReady || check.Role != "" {
+	if err != nil || check.Status != seataccess.IdentityUnchecked || check.Role != "" {
 		t.Errorf("a narrow admin: %+v, %v", check, err)
 	}
 }

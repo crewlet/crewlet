@@ -65,6 +65,9 @@ import {
   onLane,
   scalewayAnswer,
   seat,
+  gaEntry,
+  googleAnalyticsAnswer,
+  googleAnalyticsIdentityAnswer,
 } from "./fixtures.ts";
 import { laneWords, OPERATOR_MANAGED } from "./words.ts";
 
@@ -2748,4 +2751,118 @@ test("the setup step that turns agents on names this tab's own controls", async 
     }
     cleanup();
   }
+});
+
+/** Opens Digital Marketer's Google Analytics chooser, turning the agent on first. */
+async function openPropertyChooser() {
+  fireEvent.click(screen.getByRole("switch", { name: "Digital Marketer on Google Analytics" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Choose Digital Marketer's Google Analytics properties" }),
+  );
+  return screen.findByRole("dialog", { name: "Digital Marketer's Google Analytics properties" });
+}
+
+// THE CHOOSER LISTS WHAT THE COMPANY READER SEES, each property by its name
+// under its account with its ID quiet, searched by name, account or ID, and
+// Choose all ticks every one listed. Mutation: drop scope_groups from the
+// rows, and two accounts' properties read as one list with no account.
+test("the Google Analytics chooser lists the reader's properties by account and name", async () => {
+  draw(googleAnalyticsAnswer());
+  const dialog = await openPropertyChooser();
+  for (const account of ["Example Apps", "Trail Co"]) {
+    expect(within(dialog).getByRole("group", { name: account })).toBeTruthy();
+  }
+  expect(
+    within(within(dialog).getByRole("group", { name: "Trail Co" })).getByRole("checkbox", {
+      name: "Trail Maps",
+    }),
+  ).toBeTruthy();
+  expect(within(dialog).getByText("398765432")).toBeTruthy();
+  expect(within(dialog).getByText(laneWords("google_analytics").scope!.listed!)).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Choose all" }));
+  expect(within(dialog).getByText("3 of 3 chosen")).toBeTruthy();
+});
+
+// ONE PROPERTY LISTED IS CHOSEN AT TURN-ON, the only one there is, and the
+// chooser shows it ticked under its account.
+test("with one property listed, turning the agent on chooses it", async () => {
+  draw(googleAnalyticsAnswer(["398765432"]));
+  fireEvent.click(screen.getByRole("switch", { name: "Digital Marketer on Google Analytics" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Edit Digital Marketer's Google Analytics properties" }),
+  );
+  const dialog = await screen.findByRole("dialog", {
+    name: "Digital Marketer's Google Analytics properties",
+  });
+  const only = within(dialog).getByRole("checkbox", { name: "Trail Maps" }) as HTMLInputElement;
+  expect(only.checked).toBe(true);
+  expect(within(dialog).getByText("1 of 1 chosen")).toBeTruthy();
+  expect(within(dialog).getByRole("group", { name: "Trail Co" })).toBeTruthy();
+});
+
+// WITH NOTHING LISTED, THE CHOOSER SAYS WHY, and takes a property only by its
+// ID's shape, the engine's: a name typed is never offered as an entry.
+// Mutation: drop scope_typed's check, and "Field Notes" is offered as "Add".
+test("with no property listed the chooser says why and takes only a property ID", async () => {
+  const why = "Connect Google Cloud so Crewlet's company reader can list your properties.";
+  draw(googleAnalyticsAnswer([], why));
+  const dialog = await openPropertyChooser();
+  expect(within(dialog).getByText(why)).toBeTruthy();
+  const add = within(dialog).getByRole("textbox", { name: "Add a property by its ID" });
+  const button = within(dialog).getByRole("button", { name: "Add" });
+  fireEvent.change(add, { target: { value: "Field Notes" } });
+  expect(button.getAttribute("aria-disabled")).toBe("true");
+  expect(dialog.textContent).toContain(laneWords("google_analytics").scope!.typedHint!);
+  fireEvent.change(add, { target: { value: "412345670" } });
+  fireEvent.click(button);
+  expect(
+    (within(dialog).getByRole("checkbox", { name: "412345670" }) as HTMLInputElement).checked,
+  ).toBe(true);
+});
+
+// A NEW IDENTITY IS GETTING READY, NOT THE PERSON'S YET: the row reads
+// Getting ready and the box offers nothing to do; once Google can find it the
+// row needs the person, and each missing property opens its own access page.
+// Mutation: map preparing to Needs you, and the row sends the person to add an
+// identity Google refuses for another minute.
+test("a new Google Analytics identity is getting ready, then added property by property", async () => {
+  draw(googleAnalyticsIdentityAnswer("preparing"));
+  expect(cellWith("Getting ready")).toBeTruthy();
+  expect(screen.queryByText("Needs you")).toBeNull();
+  details("Digital Marketer", "Google Analytics");
+  const box = screen.getByRole("region", { name: "Identity at Google Analytics" });
+  expect(box.textContent).toContain("in about a minute");
+  expect(within(box).queryByRole("button", { name: /Set up identity/ })).toBeNull();
+  cleanup();
+
+  draw(googleAnalyticsIdentityAnswer("none"));
+  expect(cellWith("Needs you")).toBeTruthy();
+  details("Digital Marketer", "Google Analytics");
+  fireEvent.click(screen.getByRole("button", { name: "Set up identity: Digital Marketer" }));
+  const sheet = await screen.findByRole("dialog");
+  expect(sheet.textContent).not.toContain("Ready to add in about a minute");
+  expect(sheet.textContent).toContain("Notify new users by email");
+  const links = within(sheet).getAllByRole("link", { name: /Open in Google Analytics/ });
+  expect(links.map((l) => l.getAttribute("href"))).toEqual([
+    gaEntry("412345678", "missing").add_url,
+    gaEntry("412345679", "missing").add_url,
+  ]);
+  expect(within(sheet).getByText("Add it once to the account instead")).toBeTruthy();
+});
+
+// A ROLE CREWLET COULD NOT READ IS NEVER IN SYNC: the row says Role not
+// checked and the box which role to set. Mutation: map role_unchecked to In
+// sync's words, and the row claims a role nobody read.
+test("an identity whose role is not checked reads Role not checked, never In sync", () => {
+  draw(
+    googleAnalyticsIdentityAnswer("unchecked", [
+      gaEntry("412345678", "unchecked"),
+      gaEntry("412345679", "unchecked"),
+    ]),
+  );
+  expect(cellWith("Role not checked")).toBeTruthy();
+  expect(screen.queryByText("In sync")).toBeNull();
+  details("Digital Marketer", "Google Analytics");
+  const box = screen.getByRole("region", { name: "Identity at Google Analytics" });
+  expect(box.textContent).toContain("Make sure it holds Editor");
 });

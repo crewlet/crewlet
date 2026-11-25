@@ -1009,3 +1009,28 @@ func TestABatchOfAccessBindingsBindsToThoseBindings(t *testing.T) {
 		t.Errorf("a reorder asked Google %v, want its write alone", got)
 	}
 }
+
+// OPERATE AS MARKETER MAKES MARKETER'S CHANGES ONLY: a key event is marked,
+// and a custom dimension, which needs Editor, is refused before Google,
+// whatever role its identity holds there.
+//
+// Mutation: drop the seat role's check, and the Marketer seat creates a
+// custom dimension.
+func TestOperateAsMarketerMakesMarketersChangesOnly(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "operate, role: marketer")
+	if _, err := w.call(t, "google_analytics_mark_key_event", map[string]any{"property": "111",
+		"event_name": "purchase"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := w.call(t, "google_analytics_operate", map[string]any{
+		"operation": "analyticsadmin.properties.customDimensions.create",
+		"path":      map[string]any{"propertiesId": "111"},
+		"body":      map[string]any{"parameterName": "plan", "displayName": "Plan", "scope": "EVENT"}})
+	if !refused(err) || !strings.Contains(err.Error(), "needs Editor or above") {
+		t.Fatalf("a custom dimension at Marketer answered %v", err)
+	}
+	if w.f.writes != 1 {
+		t.Errorf("Google got %d writes, want the key event alone", w.f.writes)
+	}
+}

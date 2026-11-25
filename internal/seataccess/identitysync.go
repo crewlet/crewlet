@@ -227,7 +227,7 @@ func (s *syncer) keepIdentity(ctx context.Context, maker IdentityMaker, spec Ide
 		return in.Record, err
 	}
 	kept.Check.At = s.now
-	if kept.Check.Status != IdentityReady {
+	if !kept.Check.Status.Keeps() {
 		check := kept.Check
 		out.Attempt = unrevoked(&check, s.revokeMinted(ctx, kept.Minted))
 		return &out, nil
@@ -340,7 +340,7 @@ func (s *syncer) standIdentity(ctx context.Context, maker IdentityMaker, in Iden
 	check := kept.Check
 	check.At = s.now
 	scope := slices.Clone(in.Want.Scope)
-	if check.Status != IdentityReady {
+	if !check.Status.Keeps() {
 		return &IdentityRecord{Attempt: &check, Scope: scope}, nil
 	}
 	out := &IdentityRecord{Way: kept.Way, ID: kept.ID, Name: kept.Name, Since: s.now, Check: &check, Scope: scope}

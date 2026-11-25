@@ -32,7 +32,7 @@ Google Ads' access levels, least first: **Email only** and **Billing** (no API m
 
 ## Give an agent its own identity
 
-An agent's identity at Google Ads is its own Google growth identity, which Crewlet made; what is left is an Admin adding it, since Google Ads adds a user by API only as an invitation a mailbox accepts. Its row on the Agents tab reads **Needs you** until the identity reaches each of its accounts, and **Set up identity** in its box shows the steps, with the email ready to copy:
+An agent's identity at Google Ads is its own Google growth identity, which Crewlet made; what is left is an Admin adding it, since Google Ads adds a user by API only as an invitation a mailbox accepts. The agent's **Accounts** list what the company reader sees, each by its name under its manager, and take a ten-digit customer ID for one it cannot see yet. A new identity reads **Getting ready** for up to about two minutes, until Google lets a person add it. Then its row reads **Needs you** until the identity reaches each of its accounts, and **Set up identity** in its box shows the steps, with the email ready to copy:
 
 1. In Google Ads, open the account, or the manager account its accounts are reached through (`manager`), then **Admin**, **Access and security**.
 2. On the **Users** tab, press **+** and paste the agent's email.
@@ -40,7 +40,7 @@ An agent's identity at Google Ads is its own Google growth identity, which Crewl
 
 Added once to a manager account, the identity reaches every account under it; one email reaches at most 20 accounts directly.
 
-**The check, on every pass:** Crewlet signs in as the identity and reads each account, through its manager where it has one; an account Google refuses is not added yet. It then reads the identity's own access level as a user of the account it was added to, where Google Ads lets it: one below the level's is the wrong role, and Admin below `administer` is a warning. The agent is ready once every account passes, and reads Needs you again if somebody removes it there; calls Google refuses meanwhile name what is missing.
+**The check, on every pass:** Crewlet signs in as the identity and reads each account, through its manager where it has one; an account Google refuses is not added yet. It then reads the identity's own access level as a user of the account it was added to, where Google Ads lets it: one below the level's is the wrong role, and Admin below `administer` is a warning. Where Google Ads does not let it read its level, the row reads **Role not checked**, never In sync, and says which level to set. The agent is ready once every account passes, and reads Needs you again if somebody removes it there; calls Google refuses meanwhile name what is missing.
 
 ## The agents' tools
 
