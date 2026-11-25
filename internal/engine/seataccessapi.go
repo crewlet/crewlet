@@ -891,7 +891,7 @@ func (e *Engine) MigrateSeatAccess(ctx context.Context, doc accessmigrate.Docume
 // its access pass to say, and forgets the ones moved.
 func (e *Engine) rememberSeatAccessPending(result accessmigrate.Result) {
 	for kind, why := range result.Pending {
-		e.seatAccessPending.Store(kind, why.Error())
+		e.seatAccessPending.Store(kind, accessmigrate.Said(why))
 	}
 	for _, kind := range result.Migrated {
 		e.seatAccessPending.Delete(kind)

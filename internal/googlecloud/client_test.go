@@ -230,7 +230,8 @@ func TestTheFederationIdentityIsAPureFunctionOfTheCompany(t *testing.T) {
 	}
 }
 
-// A CLIENT THAT WOULD FAIL EVERY CALL IS REFUSED, naming the field.
+// A CLIENT THAT WOULD FAIL EVERY CALL IS REFUSED, naming the field as the setup
+// form labels it.
 func TestAClientThatWouldFailEveryCallIsRefused(t *testing.T) {
 	t.Parallel()
 	_, pemText := fakeKey(t)
@@ -241,11 +242,11 @@ func TestAClientThatWouldFailEveryCallIsRefused(t *testing.T) {
 		edit  func(*googleauth.Options)
 		field string
 	}{
-		{"a person's email", func(o *googleauth.Options) { o.Provisioner = "ops@acme.example" }, "provisioner"},
+		{"a person's email", func(o *googleauth.Options) { o.Provisioner = "ops@acme.example" }, "Provisioner service account"},
 		{"a pool as the provider", func(o *googleauth.Options) {
 			o.Provider = "projects/1/locations/global/workloadIdentityPools/crewlet"
-		}, "provider"},
-		{"no key", func(o *googleauth.Options) { o.FederationKey = "" }, "federation_key"},
+		}, "Workload identity provider"},
+		{"no key", func(o *googleauth.Options) { o.FederationKey = "" }, "federation key"},
 		{"a nameless company", func(o *googleauth.Options) { o.Company = "!!" }, "company"},
 	} {
 		opts := ok
