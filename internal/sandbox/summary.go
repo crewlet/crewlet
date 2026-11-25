@@ -194,8 +194,12 @@ func summaryDigest(text string) string {
 // run's row names it ([PendingRun.Summary]): the object, never its words. A
 // WIRE FORMAT like the rest of the row, with an Extra of its own (wirekeys.go).
 type SummaryStamp struct {
-	// LaunchSeq is the launch whose box read kept it.
-	LaunchSeq int64 `json:"launch_seq"`
+	// LaunchSeq and CaptureSeq are its place: the capture whose stamp first
+	// named it on the row ([nameSummary]), the take of the box read that
+	// found it. A session captured at or after that place holds what it
+	// tells (executorkeep.Summary.Place). CaptureSeq is 0 until it is named.
+	LaunchSeq  int64 `json:"launch_seq"`
+	CaptureSeq int64 `json:"capture_seq"`
 
 	// Object, ObjectHash and ObjectSize are the sealed object, and ContentKey
 	// the keyring key that sealed it.
@@ -224,10 +228,18 @@ type SummaryStamp struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// newerThan reports whether s was kept after o: by a later launch's read, or
-// later within one launch.
+// newerThan reports whether s was kept after o: at a later place, or later at
+// the same one.
 func (s SummaryStamp) newerThan(o SummaryStamp) bool {
-	return s.LaunchSeq > o.LaunchSeq || (s.LaunchSeq == o.LaunchSeq && s.At.After(o.At))
+	if p, q := s.place(), o.place(); p != q {
+		return p.After(q)
+	}
+	return s.At.After(o.At)
+}
+
+// place is where s stands among the turn's captures.
+func (s SummaryStamp) place() executorkeep.CapturePlace {
+	return executorkeep.CapturePlace{LaunchSeq: s.LaunchSeq, CaptureSeq: s.CaptureSeq}
 }
 
 // names reports whether s names the summary digest tells apart under a key
@@ -251,14 +263,18 @@ func (s SummaryStamp) Named() (executorkeep.Summary, error) {
 	}
 	kept := executorkeep.Summary{Object: objstore.Object{Key: key, Hash: hash, Size: s.ObjectSize},
 		ContentKey: s.ContentKey, At: s.At.UTC(), Bytes: s.Bytes, Kept: s.Kept, Cut: s.Cut, Harness: s.Harness,
-		Session: s.Session}
+		Session: s.Session, Place: s.place()}
 	return kept, kept.Validate()
 }
 
 // Bounded refuses a stamp past what the run's row carries for it: every bound
-// [SummaryStamp.Named] holds the end's to, and a digest that is none.
+// [SummaryStamp.Named] holds the end's to, and a digest that is none. A stamp
+// not yet named is held to them at the first capture of its launch, its own
+// place being set only as it is named ([nameSummary]).
 func (s SummaryStamp) Bounded() error {
-	if _, err := s.Named(); err != nil {
+	placed := s
+	placed.CaptureSeq = max(placed.CaptureSeq, 1)
+	if _, err := placed.Named(); err != nil {
 		return err
 	}
 	if len(s.Digest) != hex.EncodedLen(sha256.Size) {

@@ -52,22 +52,25 @@ func (h checkoutHome) removeSiblingStaging() string {
 }
 
 // checkoutSpec is what a runner's harness reads from a checkout's root, for
-// [checkoutHome.launchConfig]: Instructions, the slots ([checkoutSlot]);
-// Limit, the harness's own bound in bytes on a checkout's instructions, nil
-// for a harness with none; SkillDirs, the checkout's skill directories
-// ([checkoutSkillDir]); HomeSkills, the home's other skill directories the
-// harness lists before the run's skills directory, whose names a copy may
-// not take; Budget, the helper's form of a bound the sections share with what
-// the harness loads beside them ("" for none; internal/notehelper's
-// "Checkouts below the working directory"); Skipped, lines the launch keeps in
-// the run's skip log.
+// [checkoutHome.launchConfig]: Instructions ([checkoutSlot]); Limit, its own
+// bound in bytes on them, nil for none; SkillDirs ([checkoutSkillDir]);
+// NestedSkillsOnly where its nested adapter hands skills alone; and
+// ImportInstructions where it reads them itself, each named as an
+// `@<absolute path>` import, Limit not applying (Claude Code, measured on
+// 2.1.310 and 2.1.330; Gemini CLI and Qwen Code need their own measurement).
+// HomeSkills, the home's skill directories it lists beside the run's, whose
+// listed names a copy may not take; Budget, the helper's form of a bound the
+// sections share with what it loads beside them ("" for none); Skipped, lines
+// the launch keeps in the run's skip log.
 type checkoutSpec struct {
-	Instructions []checkoutSlot
-	Limit        *int
-	SkillDirs    []checkoutSkillDir
-	HomeSkills   []checkoutSkillDir
-	Budget       string
-	Skipped      []string
+	Instructions       []checkoutSlot
+	Limit              *int
+	SkillDirs          []checkoutSkillDir
+	NestedSkillsOnly   bool
+	ImportInstructions bool
+	HomeSkills         []checkoutSkillDir
+	Budget             string
+	Skipped            []string
 }
 
 // checkoutSkillDir is a checkout's skill directory as the helper reads it:
@@ -97,13 +100,21 @@ type checkoutSlot struct {
 }
 
 // checkoutTree is a tree slot: the directory below a checkout's root, the
-// suffix of a handed file's name, and the frontmatter scope that leaves a
-// file out, nil for none.
+// suffix of a handed file's name, the harness whose walk and frontmatter
+// reading the helper follows, and the frontmatter scope that leaves a file
+// out, nil for none.
 type checkoutTree struct {
 	Tree   string         `json:"tree"`
 	Suffix string         `json:"suffix"`
+	Form   checkoutForm   `json:"form"`
 	Scoped *checkoutScope `json:"scoped,omitempty"`
 }
+
+// checkoutForm is a harness whose tree walk the helper knows (its treeForm).
+type checkoutForm string
+
+// checkoutFormClaude is Claude Code's walk of .claude/rules.
+const checkoutFormClaude checkoutForm = "claude"
 
 // checkoutScope is the frontmatter keys that scope a file to paths, the first
 // present deciding, and the patterns that match every path.
@@ -132,7 +143,8 @@ var checkoutUnlimited *int
 func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	config := map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "skillDirs": spec.SkillDirs,
-		"skills": h.skills, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace}}
+		"skills": h.skills, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace},
+		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions}
 	if len(spec.HomeSkills) > 0 {
 		config["homeSkills"] = spec.HomeSkills
 	}
@@ -264,8 +276,12 @@ func (h checkoutHome) dropSkipped() string {
 // run's output (measured: Codex 0.171.0, and 0.172.0, keep it nowhere; Claude
 // Code 2.1.330 only in its session transcript).
 func (h checkoutHome) saySkipped() string {
-	return fmt.Sprintf(`if [ -s %[1]s ]; then cat %[1]s >&2; rm -f %[1]s; fi`, shellword.Quote(h.state+"/skipped"))
+	return fmt.Sprintf(`if [ -s %[1]s ]; then cat %[1]s >&2; rm -f %[1]s; fi`, shellword.Quote(h.skipped()))
 }
+
+// skipped is the run's skip log (internal/notehelper's skippedLog), which
+// [checkoutHome.saySkipped] prints once the harness has stopped.
+func (h checkoutHome) skipped() string { return h.state + "/skipped" }
 
 // putBack is the shell putting the home's own instruction file back
 // ([putBackHome]): of several candidates, the one the run held, named at

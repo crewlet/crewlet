@@ -20,6 +20,14 @@ func geminiSessionLine(typ, id, content, more string) string {
 		more + `}`
 }
 
+// geminiCompressed is the three lines a 0.70.0 compression opens its sync
+// with ([geminiCompressionSet]): the `$set` of the session, its summary's
+// user entry of content, and the harness's reply.
+func geminiCompressed(content string) string {
+	return `{"$set":{"sessionId":"s"}}` + "\n" + geminiSessionLine("user", "s1", content, "") + "\n" +
+		geminiSessionLine("gemini", "a1", `[{"text":"`+geminiAck+`"}]`, "")
+}
+
 // geminiPersonVariants are session lines written every way a person's read on
 // the walk reads apart from a line held whole, past a value bound of a
 // kibibyte: a response's words trimmed and past the bound, its copies under
@@ -27,8 +35,9 @@ func geminiSessionLine(typ, id, content, more string) string {
 // entry between two copies, calls of every input and a tool's name past the
 // bound beside the results Gemini CLI writes into them; a user entry's own
 // context, brief and notes within and past the bound, its function responses,
-// a compression's summary within and past the bound and the restatement after
-// it, closed by `$patch` or `$rewindTo`; members of another kind, a type and
+// a compression's summary within and past the bound, opening with anything,
+// and the restatement after it, closed by `$patch` or `$rewindTo`, beside
+// lines one of its three lines short or out of its order; members of another kind, a type and
 // an id written last, and lines that are no record. A variant of several
 // lines is one string, its lines joined.
 func geminiPersonVariants() []string {
@@ -47,7 +56,9 @@ func geminiPersonVariants() []string {
 		return `{"functionResponse":{"id":"c1","name":"run_shell_command","response":` + body + `}}`
 	}
 	long := strings.Repeat("a", 300)
-	snapshot := u(parts(text("<state_snapshot>\nthe summary\n</state_snapshot>")))
+	snapshot := geminiCompressed(parts(text("<state_snapshot>\nthe summary\n</state_snapshot>")))
+	set := `{"$set":{"sessionId":"s"}}`
+	ack := g("a1", parts(text(geminiAck)), "")
 	return append([]string{
 		g("m1", q("the model's words"), ""),
 		g("m1", q("  padded words \n"), ""),
@@ -85,12 +96,24 @@ func geminiPersonVariants() []string {
 		u(parts(`{"functionCall":{"id":"c1","name":"x","args":{}},"text":"a call in a user entry"}`)),
 		snapshot + "\n" + u(parts(text("a restated entry"))) + "\n" + g("m9", q("a restated reply"), "") + "\n" +
 			`{"$rewindTo":"x"}` + "\n" + u(parts(text("read again"))),
-		u(q("<state_snapshot>"+h.words)) + "\n" + u(parts(text("restated"))) + "\n" + `{"$patch":null}`,
-		u(parts(text("  \n<state_snapshot>padded</state_snapshot>  "))) + "\n" + `{"$patch":{},"type":"user",` +
-			`"content":"a sync's end is no entry"}` + "\n" + u(parts(text("after"))),
-		u(parts(text("  "), text("<state_snapshot>a blank first"))),
-		u(parts(`{"text":5}`, text("<state_snapshot>no text first"))),
+		geminiCompressed(parts(text("<state_snapshot>"+h.words))) + "\n" + u(parts(text("restated"))) + "\n" +
+			`{"$patch":null}`,
+		geminiCompressed(parts(text("  \n<state_snapshot>padded</state_snapshot>  "))) + "\n" +
+			`{"$patch":{},"type":"user","content":"a sync's end is no entry"}` + "\n" + u(parts(text("after"))),
+		geminiCompressed(parts(text("  "), text("<state_snapshot>a blank first"))) + "\n" + `{"$patch":{}}`,
+		geminiCompressed(parts(`{"text":5}`, text("<state_snapshot>no text first"))) + "\n" + `{"$patch":{}}`,
+		geminiCompressed(parts(`{"text":"thinking","thought":true}`, text("<scratchpad>a preamble</scratchpad>\n"+
+			"<state_snapshot>the summary</state_snapshot>"), text("more"))) + "\n" + `{"$patch":{}}`,
+		geminiCompressed(parts(text(""))) + "\n" + `{"$patch":{}}` + "\n" + u(parts(text("after an empty one"))),
+		geminiCompressed(q("a string")) + "\n" + `{"$patch":{}}`,
 		snapshot + "\n" + u(parts(text("an unclosed restatement"))),
+		set + "\n" + u(parts(text("a resume's brief"))) + "\n" + g("m1", q("a reply"), ""),
+		set + "\n" + u(parts(text("<state_snapshot>no reply after"))),
+		u(parts(text("<state_snapshot>no set before"))) + "\n" + ack,
+		set + "\n" + `{"type":"user","id":"s1","content":[{"text":"keys out of order"}]}` + "\n" + ack,
+		set + "\n\n" + u(parts(text("a blank line between"))) + "\n" + ack,
+		set + "\n" + u(parts(text("a reply of other words"))) + "\n" + g("a1", parts(text("Got it.")), ""),
+		`{"$set":{"sessionId":"s","lastUpdated":"x"}}` + "\n" + u(parts(text("a set of more"))) + "\n" + ack,
 		`{"content":[{"text":"typed last"}],"timestamp":"2026-11-21T18:48:00Z","type":"user"}`,
 		`{"content":"id last","type":"gemini","id":"m1"}` + "\n" + g("m1", q("copy"), ""),
 		`{"type":"gemini","id":"m1","content":"one","content":"two"}`,
@@ -163,8 +186,10 @@ func TestACollectionsReadOfAGeminiSessionIsItsWholeLineRead(t *testing.T) {
 		records[fixture.name] = strings.Join(fixture.lines, "\n") + "\n"
 	}
 	lines := append(geminiPersonVariants(), note("one"), note("two"),
+		geminiCompressed(`[{"text":"<state_snapshot>s"},{"text":"one"}]`),
+		geminiCompressed(`[{"text":"one","thought":true},{"text":" <state_snapshot>s"}]`),
+		geminiCompressed(`[{"text":"<scratchpad>p</scratchpad><state_snapshot>s"},{"text":"one"}]`),
 		geminiSessionLine("user", "s", `[{"text":"<state_snapshot>s"},{"text":"one"}]`, ""),
-		geminiSessionLine("user", "s", `[{"text":"one","thought":true},{"text":" <state_snapshot>s"}]`, ""),
 		geminiSessionLine("user", "s", `[{"text":"one","thought":true},{"text":"two"}]`, ""),
 		`{"content":[{"text":"one"}],"type":"user"}`, `{"content":[{"text":"one"}],"type":5}`,
 		`{"content":"one","type":"user"}`, `{"content":"","type":"user"}`, `{"content":[{"text":""}],"type":"user"}`,
@@ -172,7 +197,7 @@ func TestACollectionsReadOfAGeminiSessionIsItsWholeLineRead(t *testing.T) {
 		`{"content":[{"text":"one"}],"type":"gemini"}`, `{"type":"user","content":[{"text":5}]}`, `null`,
 		`{"type":"user","Content":[{"text":"one"}]}`, `{"TYPE":"user","content":[{"text":"two"}]}`,
 		`{"$Patch":null,"type":"user","content":[{"text":"two"}]}`,
-		geminiSessionLine("user", "s", `[{"text":"<state_snapshot>s"}]`, "")+"\n"+`{"$Patch":null}`+"\n"+note("one"))
+		geminiCompressed(`[{"text":"<state_snapshot>s"}]`)+"\n"+`{"$Patch":null}`+"\n"+note("one"))
 	for i, l := range lines {
 		records[fmt.Sprintf("line %d %.80q", i, l)] = l + "\n" + note("one") + "\n" + l + "\n" + note("two") + "\n"
 		records[fmt.Sprintf("torn after line %d", i)] = note("one") + "\n" + l
