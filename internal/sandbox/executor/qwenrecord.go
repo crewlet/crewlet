@@ -329,14 +329,26 @@ func (c *qwenCompaction) partEnd() {
 	}
 }
 
-// commit commits the record's summary into s at its line's first ordinal:
-// the texts of the entries before the prefix; one past the bound, or a
-// payload of no shape, said in its place.
+// commit commits the record's summary into s at its line's first ordinal
+// ([qwenCompaction.summary]), or why it is not read in its place.
 func (c *qwenCompaction) commit(b *transcriptBuilder, s *entryShape, at time.Time) error {
 	s.reset(b.seen)
+	switch words, unread := c.summary(); {
+	case unread != "":
+		s.add(b, b.held(TranscriptEntry{Kind: EntryUnread}, unread, s.next()), time.Time{})
+	case words != "":
+		s.add(b, b.held(TranscriptEntry{Kind: EntrySummary}, words, s.next()), time.Time{})
+	}
+	return b.commitThread(s, at)
+}
+
+// summary is the record's summary, the texts of the entries before the
+// prefix, "" for none; or, for one past the bound or a payload of no shape,
+// why it is not read. The transcript and a box read's newest summary
+// ([qwenSummaryReading]) both take it.
+func (c *qwenCompaction) summary() (words, unread string) {
 	if !c.object || c.refused {
-		s.add(b, b.held(TranscriptEntry{Kind: EntryUnread}, qwenCompactionUnread, s.next()), time.Time{})
-		return b.commitThread(s, at)
+		return "", qwenCompactionUnread
 	}
 	prefix := c.entries
 	if c.prefixSet && c.prefix >= 0 {
@@ -345,12 +357,12 @@ func (c *qwenCompaction) commit(b *transcriptBuilder, s *entryShape, at time.Tim
 	end := c.summaryEnd(prefix)
 	switch {
 	case c.over >= 0 && prefix > c.over:
-		s.add(b, b.held(TranscriptEntry{Kind: EntryUnread}, fmt.Sprintf("a compaction record's summary runs "+
-			"past %s, and was not read", humanSize(int64(c.max))), s.next()), time.Time{})
+		return "", fmt.Sprintf("a compaction record's summary runs past %s, and was not read",
+			humanSize(int64(c.max)))
 	case end > 0:
-		s.add(b, b.held(TranscriptEntry{Kind: EntrySummary}, string(c.held[:end]), s.next()), time.Time{})
+		return string(c.held[:end]), ""
 	}
-	return b.commitThread(s, at)
+	return "", ""
 }
 
 // qwenCompactionUnread is what a compaction record whose payload has no shape

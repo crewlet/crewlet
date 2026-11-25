@@ -1801,7 +1801,8 @@ func lastLine(text []byte) []byte {
 // is counted (its thread is the copy itself), its hooks' serves show in the
 // thread, and a capture is raised only where its release's resume was read.
 func (ClaudeCode) threadTraits() sandbox.ThreadTraits {
-	return sandbox.ThreadTraits{CountsCutOff: true, Receipts: true, PlacesWithResumeRead: true}
+	return sandbox.ThreadTraits{Reads: true, CountsCutOff: true, Receipts: true, PlacesWithResumeRead: true,
+		Summaries: true}
 }
 
 // sessionTraits is how a relaunch judges a Claude Code session: by the run's

@@ -85,7 +85,7 @@ type chatCounter interface {
 func chatMeter(ctx context.Context, c chatCounter, r io.Reader, member func(string) bool,
 	release, measured string) (meterReading, error) {
 
-	marks, err := countChat(ctx, c, release, measured, func(line func([]byte) error) error {
+	marks, err := countChat(ctx, c.line, release, measured, func(line func([]byte) error) error {
 		return chatMemberLines(r, member, line)
 	})
 	return meterReading{count: c.count(marks, 0), recount: &chatRecount{c: c, marks: marks}}, err
@@ -98,22 +98,22 @@ type chatRecount struct {
 	marks countMarks
 }
 
-// countChat hands c the lines each hands it and is the marks of its count, by
-// the rules of measured, the one release they were read in, alone:
+// countChat hands line the lines each hands it and is the marks of its count,
+// by the rules of measured, the one release they were read in, alone:
 // [sandbox.CountRelease] for a chat file release wrote, [sandbox.CountUnread]
 // with each's error where it did not hand every line (ctx's end among them).
-func countChat(ctx context.Context, c chatCounter, release, measured string,
+func countChat(ctx context.Context, line func([]byte), release, measured string,
 	each func(line func([]byte) error) error) (countMarks, error) {
 
 	var marks countMarks
 	if release != measured {
 		marks = marks.with(sandbox.CountRelease)
 	}
-	err := each(func(line []byte) error {
+	err := each(func(raw []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		c.line(line)
+		line(raw)
 		return nil
 	})
 	if err != nil {
@@ -129,25 +129,47 @@ func countChat(ctx context.Context, c chatCounter, release, measured string,
 // whose job continues it in place resumes that file, unscrubbed, so a relaunch
 // continuing the copy, or a capture of it taken whole, is judged by this count
 // ([sandbox.LaunchRecord.ResumedCount]); a release but measured counts nothing.
+// The same walk hands each line to also where it is not nil, and err is why it
+// did not read the file to its end; c nil counts nothing.
 func chatCopyCount(ctx context.Context, box sandbox.Sandbox, file string, c chatCounter,
-	release, measured string) *sandbox.ResumedCount {
+	release, measured string, also func([]byte)) (count *sandbox.ResumedCount, err error) {
 
+	marked := func(mark sandbox.CountMark) *sandbox.ResumedCount {
+		if c == nil {
+			return nil
+		}
+		return &sandbox.ResumedCount{Mark: mark}
+	}
 	if release != measured {
-		return &sandbox.ResumedCount{Mark: sandbox.CountRelease}
+		return marked(sandbox.CountRelease), fmt.Errorf("the job ran release %q, and this build reads %s alone",
+			release, measured)
 	}
 	if file == "" {
-		return &sandbox.ResumedCount{Mark: sandbox.CountUnread}
+		return marked(sandbox.CountUnread), errChatFile
 	}
 	r, err := box.OpenFile(ctx, file)
 	if err != nil {
-		return &sandbox.ResumedCount{Mark: sandbox.CountUnread}
+		return marked(sandbox.CountUnread), err
 	}
 	defer func() { _ = r.Close() }()
-	marks, _ := countChat(ctx, c, release, measured, func(line func([]byte) error) error {
+	marks, err := countChat(ctx, func(raw []byte) {
+		if c != nil {
+			c.line(raw)
+		}
+		if also != nil {
+			also(raw)
+		}
+	}, release, measured, func(line func([]byte) error) error {
 		return chatFileLines(r, line)
 	})
-	return c.count(marks, 0)
+	if c == nil {
+		return nil, err
+	}
+	return c.count(marks, 0), err
 }
+
+// errChatFile is a session no one chat file in its box names.
+var errChatFile = errors.New("no one chat file in the box names the session")
 
 // lineSeparators reports whether raw, a chat file line, holds U+2028 or
 // U+2029, raw or escaped: a JavaScript reader may split the line there, so

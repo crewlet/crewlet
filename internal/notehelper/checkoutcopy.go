@@ -173,37 +173,63 @@ type plannedSkill struct {
 }
 
 // skillDir is a directory under one of a checkout's skill directories that
-// holds a SKILL.md: its path and its name.
-type skillDir struct{ src, name string }
+// holds a SKILL.md: its path, its name, and which of the spec's skill
+// directories it is under.
+type skillDir struct {
+	src, name string
+	slot      int
+}
 
 // checkoutSkillDirs is the skill directories under root's skill directories,
-// in order, each skill directory read within the entry bound; one past it is
-// named in over, its skills left out.
+// in order, each skill directory read within the entry bound, a recursive one
+// walked ([skillWalk]); one past a bound is left out whole, over saying why.
 func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []string) {
-	for _, dir := range spec.SkillDirs {
-		entries, past, err := readDirBounded(filepath.Join(root, dir))
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, nil
+	}
+	reached := map[string]bool{}
+	for i, slot := range spec.SkillDirs {
+		dir := filepath.Join(root, slot.Dir)
+		if slot.Recursive {
+			found, err := walkSkills(realRoot, dir, reached)
+			if err != nil {
+				over = append(over, fmt.Sprintf("the skills of %s are left out: %v", dir, err))
+				continue
+			}
+			for _, d := range found {
+				d.slot = i
+				dirs = append(dirs, d)
+			}
+			continue
+		}
+		entries, past, err := readDirBounded(dir)
 		if err != nil {
 			continue
 		}
 		if past {
-			over = append(over, filepath.Join(root, dir))
+			over = append(over, fmt.Sprintf("the skills of %s are left out: it holds more than %d entries", dir, maxCopyFiles))
 			continue
 		}
 		for _, e := range entries {
 			if strings.HasPrefix(e.Name(), ".") {
 				continue
 			}
-			src := filepath.Join(root, dir, e.Name())
-			if info, err := os.Stat(src); err != nil || !info.IsDir() {
+			src := filepath.Join(dir, e.Name())
+			if info, err := os.Stat(src); err != nil || !info.IsDir() || !holdsSkill(src) {
 				continue
 			}
-			if info, err := os.Stat(filepath.Join(src, "SKILL.md")); err != nil || !info.Mode().IsRegular() {
-				continue
-			}
-			dirs = append(dirs, skillDir{src: src, name: e.Name()})
+			dirs = append(dirs, skillDir{src: src, name: e.Name(), slot: i})
 		}
 	}
 	return dirs, over
+}
+
+// holdsSkill reports whether the directory dir holds a SKILL.md, a regular
+// file or a link to one.
+func holdsSkill(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, "SKILL.md"))
+	return err == nil && info.Mode().IsRegular()
 }
 
 // planCheckoutSkills plans each skill under root's skill directories
@@ -214,23 +240,26 @@ func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []
 // it could copy. A directory without a SKILL.md, one whose SKILL.md opens with
 // no frontmatter (no harness lists it), and one whose name an earlier skill
 // directory's skill took, as the harness's own order has it, are left out;
-// one whose name the home's skills already hold, and one that cannot be
-// planned, are left out said.
+// one whose name the home's skills already hold, one that cannot be planned,
+// and one whose name a skill of its own skill directory took (a walk reaching
+// two directories of one name, which no order of the harness's decides), are
+// left out said.
 func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]plannedSkill, bool) {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, false
 	}
 	dirs, over := checkoutSkillDirs(root, spec)
-	for _, dir := range over {
-		said.say("the skills of %s are left out: it holds more than %d entries", dir, maxCopyFiles)
-	}
+	said.sayAll(over)
 	var plans []plannedSkill
-	planned := map[string]bool{}
+	planned := map[string]skillDir{}
 	files, bytes := 0, int64(0)
 	for _, d := range dirs {
 		name := skillName(tag, d.name)
-		if planned[name] {
+		if first, ok := planned[name]; ok {
+			if first.slot == d.slot {
+				said.say("the skill %s is left out: %s, found first, takes its name %s", d.src, first.src, name)
+			}
 			continue
 		}
 		if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil {
@@ -251,7 +280,7 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]pla
 			return plans, true
 		}
 		files, bytes = files+len(plan.items), bytes+plan.bytes
-		planned[name] = true
+		planned[name] = d
 		plans = append(plans, plan)
 	}
 	return plans, false
