@@ -336,7 +336,9 @@ func TestATakeReadsItsPacksTrimOnlyBesideItsOwnArchive(t *testing.T) {
 		"a start of fewer bytes":     {NewGeminiCLI(), geminiRelease, chat("19 123 18"), sandbox.ArchiveTrim{}},
 		"a start past what was kept": {NewGeminiCLI(), geminiRelease, chat(fmt.Sprintf("19 123 %d", 40<<20+1)),
 			sandbox.ArchiveTrim{}},
-		"a start past the CRC": {NewGeminiCLI(), geminiRelease, chat("19 4294967296 4567"), sandbox.ArchiveTrim{}},
+		"a start past the CRC":      {NewGeminiCLI(), geminiRelease, chat("19 4294967296 4567"), sandbox.ArchiveTrim{}},
+		"hermes on its release":     {NewHermes(), hermesFloor(), word, trimmed},
+		"hermes on another release": {NewHermes(), "0.23.4", word, sandbox.ArchiveTrim{}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
