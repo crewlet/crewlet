@@ -2640,13 +2640,15 @@ A `secret`'s **credential** is never echoed. Its `value` carries the field's `${
 
 `present` and `resolved` are `secret_present` and `secret_usable` asked per field: written down, and usable in this process. `resolved` is `null` for a field the document leaves empty. `blocks` names the [reconcile finding](../concepts/integration-reconcile.md) that this input being absent produces, so a row reporting `credential_missing` can offer exactly the fields that clear it.
 
-`mintable` means the engine can generate the value, so nobody is asked to invent it. **No route here ever returns a credential.** Most minted values are a random token; a field that signs takes an ES256 key, an ECDSA P-256 private key in PKCS#8 PEM, sealed whole and never shown. Where a person must hand the vendor something made from a minted value, the field carries `public`: `{"text": ..., "language": "sh"}`, text rendered from the public half alone (a key set, or a command block holding it), drawn as code to copy. A requirement whose public view would hold the value itself or any private key is never sent. A field that depends on a minted value is `required` only once that value is held, so the Save that mints it can leave the dependent field empty.
+`mintable` means the engine can generate the value, so nobody is asked to invent it. **No route here ever returns a credential.** Most minted values are a random token; a field that signs takes an ES256 key, an ECDSA P-256 private key in PKCS#8 PEM, sealed whole and never shown. Where a person must hand the vendor something made from a minted value, the field carries `public`: `{"text": ..., "language": "sh"}`, text rendered from the public half alone (a key set, or a command block holding it), drawn as code to copy, with `drawn_from`: the fields whose saved answers the text is drawn from, so a form puts the block away while one of them holds an unsaved change. A requirement whose public view would hold the value itself or any private key is never sent.
+
+`printed_by` names the field whose `public` block, run at the vendor, prints this value (Google Cloud's `provider`, AWS's `connection`). Such a field is `required`, so the integration stays unfinished until it is pasted, and it never holds a save of the answers before it: the block is drawn from what is saved, so the Save that mints its key, or changes an answer it is drawn from, leaves the printed field as it is.
 
 `multiline` marks a value that spans lines, a PEM private key, which a form draws in a box that keeps line breaks; `accept` names the file types it comes in (`.pem,.key`), for a file picker. A PEM key whose line breaks a one-line box dropped, or turned into spaces, is taken: its line breaks are written back before it is judged and sealed, and anything that is not one key of the field's kind is still refused.
 
-`checkable` means the credential can be [checked at its vendor](#checking-a-credential-before-it-is-stored) before it is stored, so a form offers a Test button. A `secret` that cannot be checked ahead carries `check_note` instead: when the vendor proves it, which a form says after `more`. A webhook signing secret is the usual case: the vendor never presents it, only signs deliveries with it.
+`checkable` means the value, a credential or a connection a block printed, can be [checked at its vendor](#checking-a-credential-before-it-is-stored) before it is stored, so a form offers a Test control: **Test connection** under a field that is not a `secret`, **Test key** or **Test keys** under one. A `secret` that cannot be checked ahead carries `check_note` instead: when the vendor proves it, which a form says after `more`. A webhook signing secret is the usual case: the vendor never presents it, only signs deliveries with it.
 
-`check_with`, on a `checkable` field only, names the other fields of the same list that one check is made with, for a vendor that accepts or refuses several values together. A form offers one Test control after that field, enabled once it and every named field holds a value, and sends them in one request. A credential named there is not `checkable` on its own, and its `check_note` says where it is tested. Datadog alone uses it: `app_key` carries `"check_with": ["site", "api_key"]`. Absent, a field is checked on its own.
+`check_with`, on a `checkable` field only, names the other fields of the same list that one check is made with, for a vendor that accepts or refuses several values together. A form offers one Test control after that field, enabled once it and every named field holds a value (a minted key once it is held), and sends them in one request. A credential named there is not `checkable` on its own, and its `check_note` says where it is tested. Datadog's `app_key` carries `"check_with": ["site", "api_key"]`, Google Cloud's `provider` `["provisioner", "federation_key"]`. Absent, a field is checked on its own.
 
 ### Supplying them
 
@@ -2681,7 +2683,7 @@ Answers `201 {"revision_id", "epoch", "wrote_secrets", "reloaded", "state"}`. Re
 
 ### Checking a credential before it is stored
 
-`POST /setup/integrations/{kind}/verify` asks the vendor whether a typed credential works, with one read-only identity call, and **stores nothing**: not the value, not a `${VAR}` pointer, not a revision, not a reconcile finding. It is what a connect form's Test button calls, so a key is checked while the vendor's page is still open rather than by the next reconcile pass. It is `setup.connect`, the verb connecting is, because it spends a credential at a vendor on a person's hand.
+`POST /setup/integrations/{kind}/verify` asks the vendor whether a typed value works, a credential or a connection a block printed, through the integration's own probe with read-only calls, and **stores nothing**: not the value, not a `${VAR}` pointer, not a revision, not a reconcile finding. It is what a connect form's Test button calls, so a key is checked while the vendor's page is still open rather than by the next reconcile pass. It is `setup.connect`, the verb connecting is, because it spends a credential at a vendor on a person's hand.
 
 ```bash
 curl -X POST https://engine.example.com/setup/integrations/datadog/verify \
@@ -2692,7 +2694,7 @@ curl -X POST https://engine.example.com/setup/integrations/datadog/verify \
 
 | Field | Meaning |
 |---|---|
-| `field` | The requirement to check, by its `field`. It must be a `secret` |
+| `field` | The requirement to check, by its `field`. It must be `checkable`, or carry a `check_note` |
 | `value` | What was typed, or a whole `${NAME}` naming a stored secret |
 | `seat` | The seat a per-seat credential belongs to, such as a Slack agent's bot token |
 | `values` | The other fields typed in the same form, by `field`. Each may be a whole `${NAME}` too |
@@ -2719,15 +2721,17 @@ What each surface checks, and with what:
 | Surface | Checkable | Read-only call | Proved later, by the vendor's first delivery |
 |---|---|---|---|
 | `atlassian` | `api_key`, against `org_id` | one page of the organization's service accounts, which a scoped key is refused | |
+| `aws` | `connection`, with `slug`, `home_region`, the held `certificate_authority` and `atlas_read` | in parts, a refusal listing each part `Passed` up to the one `Failed`: Sign-in (IAM Roles Anywhere as the provisioner), Stack read, Stack version, Identity split, Policies and roles | |
 | `confluence` | `token`, with `email` on Cloud | `GET /rest/api/user/current` | `webhook_token` (Cloud), `webhook_secret` (Data Center) |
 | `datadog` | `app_key`, checked with `api_key` in `site` (`check_with`); `api_key` alone answers its `check_note` | in stages, stopping at the first refusal so the summary names the key or permission that failed: `GET /api/v1/validate` (the API key alone), `GET /api/v1/org` (both keys), then one row of `/api/v2/users` and `/api/v2/roles` and a read of the configured webhook (absent is fine). See [Testing the keys](../integrations/datadog.md#testing-the-keys-before-you-save-them) | `webhook_token` |
 | `github` | `token`, at `url` for Enterprise Server | `GET /user` | `webhook_secret` |
 | `gitlab` | `admin_token` (needs `api`) and `token` (needs `read_api`), at `url` | `GET /user`, then the token's own scopes and expiry where the instance describes them | `signing_secret` |
+| `google_cloud` | `provider`, with `provisioner` and the held `federation_key` | in parts, a refusal listing each part `Passed` up to the one `Failed`: Federation, Acting as the provisioner, the identity project's APIs, the provisioner's grants, the identity project's accounts, prepared projects | |
 | `jira` | `token`, with `email` on Cloud | `GET /myself` | `webhook_secret` |
 | `mattermost` | `admin_token`, at `url` | `GET /users/me`, and the `system_admin` role | |
 | `slack` | a seat's `bot_token` | `auth.test` | a seat's `signing_secret` |
 
-Refusals: `400 invalid_body` for an unknown key; `400 invalid_input` when `field` is not a requirement of that surface (or seat) or is not a `secret`, when `value` is empty, when a key in `values` is not a field of the surface, when a `${NAME}` names no stored secret ("There is no secret NAME."), when a typed value is one its field refuses as a save would (whitespace or an invisible character inside a credential, a space inside an address or identifier, a character outside the vendor's alphabet where the field declares one), with `field` and `path` and before any vendor is asked, and when the check cannot be made from what was given (Datadog's other key, a site address, an organization id), each with a sentence saying what is missing; `404 unknown_kind`; `404 invalid_input` for a seat that takes no per-seat setup; `409 no_active_revision`; `409` under one of the five codes for a revision this node [cannot open](#a-revision-this-node-cannot-open-is-refused-whichever-route-reads-it).
+Refusals: `400 invalid_body` for an unknown key; `400 invalid_input` when `field` is not a requirement of that surface (or seat) or is neither `checkable` nor carries a `check_note` (one another field is checked with names that field), when `value` is empty, when a key in `values` is not a field of the surface, when a `${NAME}` names no stored secret ("There is no secret NAME."), when a typed value is one its field refuses as a save would (whitespace or an invisible character inside a credential, a space inside an address or identifier, a character outside the vendor's alphabet where the field declares one), with `field` and `path` and before any vendor is asked, and when the check cannot be made from what was given (Datadog's other key, a site address, an organization id), each with a sentence saying what is missing; `404 unknown_kind`; `404 invalid_input` for a seat that takes no per-seat setup; `409 no_active_revision`; `409` under one of the five codes for a revision this node [cannot open](#a-revision-this-node-cannot-open-is-refused-whichever-route-reads-it).
 
 ### Running the provisioning pass
 
