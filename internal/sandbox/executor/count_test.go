@@ -62,12 +62,13 @@ func TestEveryRunnerIsCountedLiveOrSaysWhyNot(t *testing.T) {
 // inside a line past the bound), a read at a time of a few bytes, and after
 // a rewrite that shrank it, ends on exactly the requests, in-flight
 // allowance and undecided lines [executor.Runner.Collect] counts of the
-// whole; and no read's count is ever below the one before.
+// whole; no read's count is ever below the one before; and a read takes only
+// the bytes the stream grew by since the last.
 //
 // Mutation: read from the stream's end as the display does, drop a read's
 // backlog past its bound, keep no partial line between reads, read a line
-// past the bound otherwise than Collect, or let a shrink lower the count, and
-// a runner's row fails.
+// past the bound otherwise than Collect, let a shrink lower the count, or
+// read the stream from its start each time, and a runner's row fails.
 func TestALiveCountIsItsCollectionsCountHoweverTheStreamArrives(t *testing.T) {
 	t.Parallel()
 	const made = 6
@@ -137,6 +138,22 @@ func TestALiveCountIsItsCollectionsCountHoweverTheStreamArrives(t *testing.T) {
 				b.Put(out.Stdout, long)
 				if got := read(c, sandbox.RequestCount{}, "whole"); got != want {
 					t.Fatalf("read past the display's window: %+v; the collection counts %+v", got, want)
+				}
+			})
+			t.Run("a read takes what grew", func(t *testing.T) {
+				// A RUN HOURS LONG costs each tick what it wrote since the
+				// last, never its whole stream again.
+				c := executor.CountingBy(runner, executor.CountReadBytes)
+				noise := strings.Repeat(`{"type":"crewlet.noise"}`+"\n", executor.LiveWindow/16)
+				b.Put(out.Stdout, stream+noise)
+				got := read(c, sandbox.RequestCount{}, "whole")
+				grew := `{"type":"crewlet.noise","grew":true}` + "\n"
+				before := b.Delivered()
+				b.Put(out.Stdout, stream+noise+grew)
+				read(c, got, "grown")
+				if took := b.Delivered() - before; took != int64(len(grew)) {
+					t.Fatalf("a read after the stream grew %d bytes took %d of its %d", len(grew), took,
+						len(stream+noise+grew))
 				}
 			})
 			t.Run("rewritten shorter", func(t *testing.T) {
