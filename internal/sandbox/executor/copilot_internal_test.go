@@ -1445,3 +1445,25 @@ func TestACopilotBoxContinuesItsOwnCopyOnlyOnTheReleaseSupported(t *testing.T) {
 		t.Error("the copilot profile's written_for names no release")
 	}
 }
+
+// A COPILOT COMPACTION IS A REQUEST OF THE RUN'S: its summary request records
+// no usage, so the run's count takes each compaction the stream started beside
+// the usage records ([Decoder.Requests]).
+//
+// Mutation: count the usage records alone, and the run counts two of three.
+func TestACopilotCompactionIsARequestOfTheRuns(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"session.start","data":{"sessionId":"0b5e0000-0000-4000-8000-000000000001"}}`,
+		`{"type":"session.compaction_start","data":{"compactionAttemptId":"a1","trigger":"threshold"}}`,
+		`{"type":"session.compaction_complete","data":{"compactionAttemptId":"a1","success":true}}`,
+		`{"type":"result","sessionId":"0b5e0000-0000-4000-8000-000000000001","exitCode":0}`,
+		`{"type":"crewlet.usage"}`,
+		`{"type":"session.usage_record","data":{"usage":{"inputTokens":1,"outputTokens":1}}}`,
+		`{"type":"session.usage_record","data":{"usage":{"inputTokens":1,"outputTokens":1}}}`,
+	}, "\n")
+	dec := &copilotEvents{}
+	_ = eachLine(strings.NewReader(stream), dec, maxLineBytes)
+	if dec.Requests() != 3 || dec.Result().Turns != 3 {
+		t.Fatalf("requests %d, turns %d; want the 2 recorded and the compaction's", dec.Requests(), dec.Result().Turns)
+	}
+}
