@@ -305,15 +305,22 @@ func ProbeRoutes() []string {
 // alone ([cards.MayOpen]), with no record to ask about.
 var ErrNoProbe = fmt.Errorf("catalog: the screen names no record to ask about")
 
+// LinkParams are the link parameters a call of open_in_app names, as its
+// screen takes them.
+func LinkParams(a Args) map[string]string {
+	params := map[string]string{}
+	for _, name := range cards.ScreenParams(a.String("screen")) {
+		params[name] = a.String(name)
+	}
+	return params
+}
+
 // Open is open_in_app's link and, for a screen that names a record, the read
 // that decides whether the person may open it. A screen with no record is
 // decided by [cards.MayOpen] on the person's grants.
 func Open(a Args) (wire.Link, *exec.Request, error) {
 	screen := a.String("screen")
-	params := map[string]string{}
-	for _, name := range cards.ScreenParams(screen) {
-		params[name] = a.String(name)
-	}
+	params := LinkParams(a)
 	link, err := cards.Link(screen, params, "")
 	if err != nil {
 		return wire.Link{}, nil, fmt.Errorf("%w: %w", ErrInvalidArguments, err)
