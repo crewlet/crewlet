@@ -46,7 +46,7 @@ var (
 	_ artifactDirHolder = Muse{}
 	_ inPlaceGate       = Muse{}
 	_ sessionJudge      = Muse{}
-	_ trimmer           = Muse{}
+	_ recordTrimmer     = Muse{}
 )
 
 // NewMuse returns the runner.
