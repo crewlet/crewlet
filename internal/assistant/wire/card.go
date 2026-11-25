@@ -221,6 +221,9 @@ type ProposalCard struct {
 	// Audience is who will see the result where visibility changes (a
 	// share, a comment others are notified of), one phrase each.
 	Audience []Phrase `json:"audience,omitempty"`
+	// Own is a change to the person's own record, which reaches nobody else:
+	// the card says so in place of the company.
+	Own bool `json:"own,omitempty"`
 	// Taint is the surface (one of provenance.Sources) whose outside text the
 	// turn read before proposing (D25); absent for none.
 	Taint provenance.Source `json:"taint,omitempty"`
