@@ -207,7 +207,10 @@
 // measured on 1.6.0). A nested hook only adds to what the launch hands, so a
 // runner whose box's settings switch it off starts all the same, its skip
 // log saying so once; only the loss of a hook Crewlet's own contract runs on
-// (notes, skill loads) refuses a run. A harness taking checkouts adds a
+// (notes, skill loads) refuses a run. Grok's stays registered when switched
+// off, as Grok 1.0.92 skips it itself (measured: a disabled-hooks line naming
+// it, an unreadable disabled-hooks, the managed-hooks pin). A harness taking
+// checkouts adds a
 // nested adapter, never a second core; its runner holds the home file and the
 // copies (internal/sandbox/executor's checkoutHome). What a nested firing
 // leaves out (a skill whose name the home's skills hold, one that leads out
