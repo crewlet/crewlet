@@ -24,8 +24,8 @@ import (
 // A seat's EXECUTOR reads the sit-out at launch ([Provider.SittingOut]): its run
 // is started in a box, not through [Provider.Complete], so the engine asks first
 // and takes the next member of the executor chain that can run in a box. A run
-// that meets the limit after it started is not relaunched (its work lives in its
-// box and session), but its ending is classified like any call's when collected
+// that meets the limit after it began working is not relaunched (its work lives
+// in its box and session; one that did no work is), but its ending is classified like any call's when collected
 // ([Provider.RunEnded]), so the NEXT launch, and every other seat's on this
 // node, skips the spent entry.
 
