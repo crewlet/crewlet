@@ -276,8 +276,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_380_674
-	measuredSpare       = 351_742
+	measuredOtherFields = 2_380_698
+	measuredSpare       = 351_718
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
