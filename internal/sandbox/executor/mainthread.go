@@ -303,9 +303,11 @@ func (b *passBudget) gate(ctx context.Context) pieceGate {
 }
 
 // mainThreadHarness is a harness that reads the main thread of the session a
-// job's box ran ([Runner.ReadMainThread]): Claude Code, Codex, Gemini CLI, Grok
-// Build, Muse Code, OpenCode and Qwen Code, each read settling what its
-// [threadHarness] says.
+// job's box ran ([Runner.ReadMainThread]): every runner, each read settling
+// what its [threadHarness] says. Claude Code, Codex, Gemini CLI, Grok Build,
+// Muse Code, OpenCode and Qwen Code count it or read its receipts and its
+// newest summary in one walk; Copilot, Hermes Agent, Kimi Code and Pi read
+// its newest summary alone, their receipts their record's ([recordConfirmer]).
 type mainThreadHarness interface {
 	readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
 		ask sandbox.MainThreadAsk) sandbox.MainThreadReading
@@ -315,16 +317,27 @@ type mainThreadHarness interface {
 // for every reading ask asks of it, through the runner's harness: zero for a
 // harness that reads none. A harness that confirms off its session record
 // ([recordConfirmer]) answers the takes asked from that record, through the
-// same receipts, whether or not it reads a whole thread.
+// same receipts, whether or not it reads a whole thread, and reads the newest
+// summary in that walk where it would otherwise walk the record again.
 func (r *Runner) ReadMainThread(ctx context.Context, box sandbox.Sandbox,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
+	records, confirms := r.harness.(recordConfirmer)
+	confirms = confirms && len(ask.Takes) > 0
+	var summary *summaryRead
+	thread := ask
+	if confirms && ask.Summary && records.recordSummary(ask) {
+		summary, thread.Summary = &summaryRead{}, false
+	}
 	var reading sandbox.MainThreadReading
 	if reads, ok := r.harness.(mainThreadHarness); ok {
-		reading = reads.readMainThread(ctx, box, PathsFor(box), ask)
+		reading = reads.readMainThread(ctx, box, PathsFor(box), thread)
 	}
-	if records, ok := r.harness.(recordConfirmer); ok && len(ask.Takes) > 0 {
-		reading.Receipts = recordReceipts(ctx, records, box, ask)
+	if confirms {
+		reading.Receipts = recordReceipts(ctx, records, box, ask, summary)
+	}
+	if summary != nil {
+		reading.Summary = summary.reading()
 	}
 	return reading
 }

@@ -20,6 +20,8 @@ var ReproducibleTables = []string{
 
 	// The media objects a turn's row names, which go with its object.
 	"executor_session_media",
+	// The newest summary a turn's end named, which goes with its row.
+	"executor_session_summaries",
 
 	// The node gate's table and the reanchor's audit row.
 	"executor_evictions", "executor_log_generations",
