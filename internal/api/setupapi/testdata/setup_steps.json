@@ -12,6 +12,7 @@
           "key": "google_cloud",
           "prepare": [
             {
+              "done": false,
               "result": [
                 {
                   "ui": [
@@ -69,6 +70,7 @@
               "yields": "identity_project"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "Its last line is the provider, `projects/\u003cproject number\u003e/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine`, with the project's number, not its ID."
@@ -147,6 +149,7 @@
               "where": "Cloud Shell"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "The form closes, and within about a minute the status goes from "
@@ -236,6 +239,7 @@
               "yields": "provider"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "The test lists the project under "
@@ -279,6 +283,7 @@
               "where": "Cloud Shell"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "Crewlet creates each agent's service account in the identity project and grants its level on its projects. An agent you do not turn on has no access."
@@ -478,6 +483,162 @@
               "required": true,
               "resolved": false,
               "value": "false"
+            },
+            {
+              "config_path": "",
+              "field": "redirect_uri",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "Make a "
+                },
+                {
+                  "ui": [
+                    "Web application"
+                  ]
+                },
+                {
+                  "text": " client at "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": " with this redirect URI."
+                }
+              ],
+              "kind": "redirect",
+              "label": "Authorized redirect URI",
+              "more": [
+                {
+                  "text": "Leave "
+                },
+                {
+                  "ui": [
+                    "Authorized JavaScript origins"
+                  ]
+                },
+                {
+                  "text": " empty. In "
+                },
+                {
+                  "ui": [
+                    "Google Auth Platform",
+                    "Audience"
+                  ],
+                  "url": "https://console.cloud.google.com/auth/audience"
+                },
+                {
+                  "text": ", choose "
+                },
+                {
+                  "ui": [
+                    "Internal"
+                  ]
+                },
+                {
+                  "text": " if whoever signs in is in the project's organization. Otherwise choose "
+                },
+                {
+                  "ui": [
+                    "External"
+                  ]
+                },
+                {
+                  "text": " and press "
+                },
+                {
+                  "ui": [
+                    "Publish app"
+                  ]
+                },
+                {
+                  "text": ", or add them as a test user: Google ends a "
+                },
+                {
+                  "ui": [
+                    "Testing"
+                  ]
+                },
+                {
+                  "text": " app's sign-in after 7 days ("
+                },
+                {
+                  "text": "Google's guide",
+                  "url": "https://support.google.com/cloud/answer/15549945"
+                },
+                {
+                  "text": ")."
+                }
+              ],
+              "present": false,
+              "redirect": {
+                "key": "api.external_url",
+                "url": ""
+              },
+              "required": false,
+              "resolved": null
+            },
+            {
+              "config_path": "integrations.google_cloud.sign_in_client.client_id",
+              "field": "sign_in_client_id",
+              "format": "\u003cproject number\u003e-\u003cid\u003e.apps.googleusercontent.com",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "The client every Google sign-in is made as, from "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "id",
+              "label": "OAuth client ID",
+              "more": [
+                {
+                  "text": "AdMob and AdSense sign in as it, and Google Analytics and Google Play use it to add agents for you. A product's own oauth block overrides it for that product."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": null
+            },
+            {
+              "check_note": "The client is proven by the Google sign-in, once saved.",
+              "config_path": "integrations.google_cloud.sign_in_client.client_secret",
+              "field": "sign_in_client_secret",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "The same client's secret, from "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "secret",
+              "label": "OAuth client secret",
+              "present": false,
+              "required": false,
+              "resolved": null
             }
           ],
           "satisfied": false,
@@ -494,6 +655,7 @@
           "key": "google_cloud",
           "prepare": [
             {
+              "done": true,
               "result": [
                 {
                   "ui": [
@@ -551,6 +713,7 @@
               "yields": "identity_project"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "Its last line is the provider, `projects/\u003cproject number\u003e/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine`, with the project's number, not its ID."
@@ -629,6 +792,7 @@
               "where": "Cloud Shell"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "The form closes, and within about a minute the status goes from "
@@ -718,6 +882,7 @@
               "yields": "provider"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "The test lists the project under "
@@ -761,6 +926,7 @@
               "where": "Cloud Shell"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "Crewlet creates each agent's service account in the identity project and grants its level on its projects. An agent you do not turn on has no access."
@@ -971,6 +1137,162 @@
               "required": true,
               "resolved": true,
               "value": "true"
+            },
+            {
+              "config_path": "",
+              "field": "redirect_uri",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "Make a "
+                },
+                {
+                  "ui": [
+                    "Web application"
+                  ]
+                },
+                {
+                  "text": " client at "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": " with this redirect URI."
+                }
+              ],
+              "kind": "redirect",
+              "label": "Authorized redirect URI",
+              "more": [
+                {
+                  "text": "Leave "
+                },
+                {
+                  "ui": [
+                    "Authorized JavaScript origins"
+                  ]
+                },
+                {
+                  "text": " empty. In "
+                },
+                {
+                  "ui": [
+                    "Google Auth Platform",
+                    "Audience"
+                  ],
+                  "url": "https://console.cloud.google.com/auth/audience"
+                },
+                {
+                  "text": ", choose "
+                },
+                {
+                  "ui": [
+                    "Internal"
+                  ]
+                },
+                {
+                  "text": " if whoever signs in is in the project's organization. Otherwise choose "
+                },
+                {
+                  "ui": [
+                    "External"
+                  ]
+                },
+                {
+                  "text": " and press "
+                },
+                {
+                  "ui": [
+                    "Publish app"
+                  ]
+                },
+                {
+                  "text": ", or add them as a test user: Google ends a "
+                },
+                {
+                  "ui": [
+                    "Testing"
+                  ]
+                },
+                {
+                  "text": " app's sign-in after 7 days ("
+                },
+                {
+                  "text": "Google's guide",
+                  "url": "https://support.google.com/cloud/answer/15549945"
+                },
+                {
+                  "text": ")."
+                }
+              ],
+              "present": false,
+              "redirect": {
+                "key": "api.external_url",
+                "url": ""
+              },
+              "required": false,
+              "resolved": null
+            },
+            {
+              "config_path": "integrations.google_cloud.sign_in_client.client_id",
+              "field": "sign_in_client_id",
+              "format": "\u003cproject number\u003e-\u003cid\u003e.apps.googleusercontent.com",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "The client every Google sign-in is made as, from "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "id",
+              "label": "OAuth client ID",
+              "more": [
+                {
+                  "text": "AdMob and AdSense sign in as it, and Google Analytics and Google Play use it to add agents for you. A product's own oauth block overrides it for that product."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": null
+            },
+            {
+              "check_note": "The client is proven by the Google sign-in, once saved.",
+              "config_path": "integrations.google_cloud.sign_in_client.client_secret",
+              "field": "sign_in_client_secret",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "The same client's secret, from "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "secret",
+              "label": "OAuth client secret",
+              "present": false,
+              "required": false,
+              "resolved": null
             }
           ],
           "satisfied": false,
@@ -987,6 +1309,7 @@
           "key": "google_cloud",
           "prepare": [
             {
+              "done": true,
               "result": [
                 {
                   "ui": [
@@ -1044,6 +1367,7 @@
               "yields": "identity_project"
             },
             {
+              "done": true,
               "result": [
                 {
                   "text": "Its last line is the provider, `projects/\u003cproject number\u003e/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine`, with the project's number, not its ID."
@@ -1122,6 +1446,7 @@
               "where": "Cloud Shell"
             },
             {
+              "done": true,
               "result": [
                 {
                   "text": "The form closes, and within about a minute the status goes from "
@@ -1211,6 +1536,7 @@
               "yields": "provider"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "The test lists the project under "
@@ -1254,6 +1580,7 @@
               "where": "Cloud Shell"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "Crewlet creates each agent's service account in the identity project and grants its level on its projects. An agent you do not turn on has no access."
@@ -1465,6 +1792,162 @@
               "required": true,
               "resolved": true,
               "value": "true"
+            },
+            {
+              "config_path": "",
+              "field": "redirect_uri",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "Make a "
+                },
+                {
+                  "ui": [
+                    "Web application"
+                  ]
+                },
+                {
+                  "text": " client at "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": " with this redirect URI."
+                }
+              ],
+              "kind": "redirect",
+              "label": "Authorized redirect URI",
+              "more": [
+                {
+                  "text": "Leave "
+                },
+                {
+                  "ui": [
+                    "Authorized JavaScript origins"
+                  ]
+                },
+                {
+                  "text": " empty. In "
+                },
+                {
+                  "ui": [
+                    "Google Auth Platform",
+                    "Audience"
+                  ],
+                  "url": "https://console.cloud.google.com/auth/audience"
+                },
+                {
+                  "text": ", choose "
+                },
+                {
+                  "ui": [
+                    "Internal"
+                  ]
+                },
+                {
+                  "text": " if whoever signs in is in the project's organization. Otherwise choose "
+                },
+                {
+                  "ui": [
+                    "External"
+                  ]
+                },
+                {
+                  "text": " and press "
+                },
+                {
+                  "ui": [
+                    "Publish app"
+                  ]
+                },
+                {
+                  "text": ", or add them as a test user: Google ends a "
+                },
+                {
+                  "ui": [
+                    "Testing"
+                  ]
+                },
+                {
+                  "text": " app's sign-in after 7 days ("
+                },
+                {
+                  "text": "Google's guide",
+                  "url": "https://support.google.com/cloud/answer/15549945"
+                },
+                {
+                  "text": ")."
+                }
+              ],
+              "present": false,
+              "redirect": {
+                "key": "api.external_url",
+                "url": ""
+              },
+              "required": false,
+              "resolved": null
+            },
+            {
+              "config_path": "integrations.google_cloud.sign_in_client.client_id",
+              "field": "sign_in_client_id",
+              "format": "\u003cproject number\u003e-\u003cid\u003e.apps.googleusercontent.com",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "The client every Google sign-in is made as, from "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "id",
+              "label": "OAuth client ID",
+              "more": [
+                {
+                  "text": "AdMob and AdSense sign in as it, and Google Analytics and Google Play use it to add agents for you. A product's own oauth block overrides it for that product."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": null
+            },
+            {
+              "check_note": "The client is proven by the Google sign-in, once saved.",
+              "config_path": "integrations.google_cloud.sign_in_client.client_secret",
+              "field": "sign_in_client_secret",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "The same client's secret, from "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "secret",
+              "label": "OAuth client secret",
+              "present": false,
+              "required": false,
+              "resolved": null
             }
           ],
           "satisfied": true,
@@ -1486,6 +1969,7 @@
           "key": "aws",
           "prepare": [
             {
+              "done": false,
               "result": [
                 {
                   "text": "Crewlet makes its certificate authority, and "
@@ -1541,6 +2025,7 @@
               "yields": "home_region"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "It creates the stack crewlet-\u003cname\u003e and prints its output last: five ARNs joined by commas, or seven with the Atlas reader."
@@ -1616,6 +2101,7 @@
               "where": "CloudShell"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "The form closes, and within about a minute the status goes to "
@@ -1677,6 +2163,7 @@
               "yields": "connection"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "Crewlet creates each agent's IAM role, limited by the Crewlet boundary. An agent you do not turn on has no access."
@@ -2072,6 +2559,7 @@
           "key": "aws",
           "prepare": [
             {
+              "done": true,
               "result": [
                 {
                   "text": "Crewlet makes its certificate authority, and "
@@ -2127,6 +2615,7 @@
               "yields": "home_region"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "It creates the stack crewlet-\u003cname\u003e and prints its output last: five ARNs joined by commas, or seven with the Atlas reader."
@@ -2202,6 +2691,7 @@
               "where": "CloudShell"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "The form closes, and within about a minute the status goes to "
@@ -2263,6 +2753,7 @@
               "yields": "connection"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "Crewlet creates each agent's IAM role, limited by the Crewlet boundary. An agent you do not turn on has no access."
@@ -2670,6 +3161,7 @@
           "key": "aws",
           "prepare": [
             {
+              "done": true,
               "result": [
                 {
                   "text": "Crewlet makes its certificate authority, and "
@@ -2725,6 +3217,7 @@
               "yields": "home_region"
             },
             {
+              "done": true,
               "result": [
                 {
                   "text": "It creates the stack crewlet-\u003cname\u003e and prints its output last: five ARNs joined by commas, or seven with the Atlas reader."
@@ -2800,6 +3293,7 @@
               "where": "CloudShell"
             },
             {
+              "done": true,
               "result": [
                 {
                   "text": "The form closes, and within about a minute the status goes to "
@@ -2861,6 +3355,7 @@
               "yields": "connection"
             },
             {
+              "done": false,
               "result": [
                 {
                   "text": "Crewlet creates each agent's IAM role, limited by the Crewlet boundary. An agent you do not turn on has no access."
