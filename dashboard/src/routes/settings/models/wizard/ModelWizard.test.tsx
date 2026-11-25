@@ -1373,6 +1373,8 @@ const homeOf = (cls: string): Fleet => ({
       overflow: true,
       last_served_at: null,
       serving: [],
+      unlisted_serving: 0,
+      unlisted_homes: 0,
     },
   ],
 });

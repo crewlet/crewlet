@@ -3100,11 +3100,12 @@ test("a tool's caution is a warning above the first field, said once", () => {
 });
 
 /** A tool whose form carries Setup steps: three of them, a link and two grants. */
-function stepsTool(configured: boolean): SetupToolState {
+function stepsTool(configured: boolean, finished = configured): SetupToolState {
   return {
     ...tool,
     key: "scaleway",
     configured,
+    form_complete: finished,
     prepare: [
       {
         text: [
@@ -3112,12 +3113,14 @@ function stepsTool(configured: boolean): SetupToolState {
           { text: "IAM applications page", url: "https://console.example.com/applications" },
           { text: "." },
         ],
+        done: false,
       },
       {
         text: [{ text: "Attach one policy to it, with:" }],
         grants: ["IAMApplicationManager", "ProjectReadOnly"],
+        done: false,
       },
-      { text: [{ text: "Paste the keys here and test them." }] },
+      { text: [{ text: "Paste the keys here and test them." }], done: false },
     ],
     requirements: [
       req({
@@ -3131,10 +3134,14 @@ function stepsTool(configured: boolean): SetupToolState {
   };
 }
 
-function stepsForm(configured: boolean, extra: Partial<Parameters<typeof SetupForm>[0]> = {}) {
+function stepsForm(
+  configured: boolean,
+  extra: Partial<Parameters<typeof SetupForm>[0]> = {},
+  finished = configured,
+) {
   return (
     <SetupForm
-      sections={[{ name: "Scaleway", tool: stepsTool(configured) }]}
+      sections={[{ name: "Scaleway", tool: stepsTool(configured, finished) }]}
       title="Scaleway"
       onClose={() => {}}
       onDone={() => {}}
@@ -3173,9 +3180,17 @@ test("the Setup steps stand open beside a form that is connecting", () => {
   expect(screen.queryByRole("button", { name: "Setup steps" })).toBeNull();
 });
 
-// PUT AWAY ONCE CONNECTED, one press from open, focus going into the box.
+// STILL OPEN HALF SET UP: saved, with a box the steps fill still empty, the
+// person is mid-way through them. Mutation: open them only while connecting.
+test("the Setup steps stand open beside a form saved but not finished", () => {
+  render(stepsForm(true, {}, false));
+  const aside = screen.getByRole("complementary", { name: "Setup steps" });
+  expect(stepTexts(aside)).toEqual(STEP_TEXTS);
+});
+
+// PUT AWAY ONCE FINISHED, one press from open, focus going into the box.
 // Mutation: open it whatever the state.
-test("the Setup steps are put away on a connected form, one press from open", async () => {
+test("the Setup steps are put away on a finished form, one press from open", async () => {
   render(stepsForm(true));
   const aside = screen.getByRole("complementary", { name: "Setup steps" });
   expect(within(aside).queryAllByRole("listitem")).toHaveLength(0);
@@ -3340,9 +3355,10 @@ test("on a narrow pane the Setup steps open from the title row in a sheet", asyn
 });
 
 // THE NUMBERS HANG IN THE BOX'S ICON COLUMN, so the steps start where its title
-// does, beside the form and in the sheet. The title row exists only to hold the
-// close button. Mutation: drop the hanging markers, or draw the row in the sheet.
-test("the Setup steps hang their numbers, and draw a title row only around a close button", async () => {
+// does. The title row exists only to hold the close button, and the sheet's own
+// title names the steps once, so the sheet draws no box title and keeps its
+// numbers in a gutter of their own. Mutation: draw the box in the sheet.
+test("the Setup steps hang their numbers, and are named once beside the form and in the sheet", async () => {
   const view = render(stepsForm(false));
   const aside = screen.getByRole("complementary", { name: "Setup steps" });
   const list = within(aside).getByRole("list");
@@ -3358,9 +3374,10 @@ test("the Setup steps hang their numbers, and draw a title row only around a clo
     render(stepsForm(false));
     fireEvent.click(screen.getByRole("button", { name: "Setup steps" }));
     const sheet = await screen.findByRole("dialog", { name: "Setup steps" });
-    expect(within(sheet).getByRole("list").className).toContain("crewlet-list--hanging");
+    expect(within(sheet).getByRole("list").className).not.toContain("crewlet-list--hanging");
     expect(sheet.querySelector(".int-steps-title")).toBeNull();
-    expect(sheet.querySelector(".crewlet-callout__title")?.textContent).toBe("Setup steps");
+    expect(sheet.querySelector(".crewlet-callout__title")).toBeNull();
+    expect(within(sheet).getAllByText("Setup steps")).toHaveLength(1);
   } finally {
     width.mockRestore();
   }
@@ -4019,4 +4036,102 @@ test("answering a marked field clears its error and the banner counts what is le
   expect(screen.getByText("One answer is not filled in yet.")).toBeDefined();
   fireEvent.change(screen.getByLabelText(/^Region/), { target: { value: "eu1" } });
   expect(baseElement.textContent).not.toContain("not filled in yet");
+});
+
+/** Google Cloud before anything is saved: a key Crewlet makes first, and a live block. */
+const googleCloud: SetupToolState = {
+  key: "google_cloud",
+  configured: false,
+  enabled: false,
+  satisfied: false,
+  form_complete: false,
+  inbound_path: "",
+  requirements: [
+    req({
+      field: "identity_project",
+      label: "Identity project ID",
+      kind: "id",
+      config_path: "integrations.google_cloud.provisioning.identity_project",
+      default: "crewlet-nimbus-cda2",
+      connect: true,
+    }),
+    req({
+      field: "federation_key",
+      label: "Federation key",
+      kind: "secret",
+      mintable: true,
+      mint_first: true,
+      config_path: "integrations.google_cloud.provisioning.federation_key",
+      connect: true,
+    }),
+  ],
+};
+
+test("Google Cloud's key is made as the form opens, and its block follows the typed project", async () => {
+  const held: SetupToolState = {
+    ...googleCloud,
+    requirements: googleCloud.requirements.map((r) =>
+      r.field === "federation_key"
+        ? {
+            ...r,
+            present: true,
+            public: {
+              text: "IDENTITY=crewlet-nimbus-cda2",
+              language: "sh",
+              live: true,
+              drawn_from: ["identity_project"],
+            },
+          }
+        : r,
+    ),
+  };
+  const spy = stubFetch((path, init) => {
+    if (path.endsWith("/inputs")) return new Response("{}", { status: 201 });
+    if (path.endsWith("/draw")) {
+      const { values } = JSON.parse(String(init?.body)) as { values: Record<string, string> };
+      if (values.identity_project === "Nimbus-IDs")
+        return new Response(
+          JSON.stringify({
+            code: "invalid_input",
+            detail: "This is not a Google Cloud project ID.",
+            field: "identity_project",
+          }),
+          { status: 400 },
+        );
+      return new Response(
+        JSON.stringify({
+          public: { text: `IDENTITY=${values.identity_project}`, language: "sh", live: true },
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify({ secrets: [] }), { status: 200 });
+  });
+  function Page() {
+    const [tool, setTool] = useState(googleCloud);
+    return (
+      <SetupForm
+        sections={[{ name: "Google Cloud", tool }]}
+        title="Google Cloud"
+        onClose={() => {}}
+        onDone={() => setTool(held)}
+      />
+    );
+  }
+  render(<Page />);
+  await eventually(() => expect(screen.getByText("IDENTITY=crewlet-nimbus-cda2")).toBeTruthy());
+  const mints = spy.mock.calls.filter(([input]) => String(input).endsWith("/inputs"));
+  expect(mints).toHaveLength(1);
+  expect(JSON.parse(String(mints[0]?.[1]?.body))).toMatchObject({ generate: ["federation_key"] });
+  fireEvent.change(screen.getByLabelText("Identity project ID"), {
+    target: { value: "nimbus-ids" },
+  });
+  await eventually(() => expect(screen.getByText("IDENTITY=nimbus-ids")).toBeTruthy());
+  fireEvent.change(screen.getByLabelText("Identity project ID"), {
+    target: { value: "Nimbus-IDs" },
+  });
+  await eventually(() =>
+    expect(screen.getByText("This is not a Google Cloud project ID.")).toBeTruthy(),
+  );
+  expect(screen.queryByText(/IDENTITY=/)).toBeNull();
 });

@@ -102,6 +102,9 @@ func (r RoleIntegrations) holdsGrowthSeat() bool {
 type GrowthSeatAccess struct {
 	On    *bool
 	Level string
+	// Role is the product role the level runs at where the product offers
+	// a choice (Google Analytics' operate as Marketer); "" for the level's own.
+	Role  string
 	Scope []string
 
 	// Identity is who signs the seat's calls ([SeatIdentityOwn] or

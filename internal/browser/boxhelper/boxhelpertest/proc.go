@@ -33,7 +33,7 @@ func commandLine(pid int) ([]string, error) {
 			return nil, err
 		}
 		if len(raw) == 0 {
-			return nil, fmt.Errorf("pid %d holds no command line: it has exited", pid)
+			return nil, fmt.Errorf("pid %d holds no command line: its main thread has exited", pid)
 		}
 		args := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
 		if len(args) == 1 {

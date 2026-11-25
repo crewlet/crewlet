@@ -1126,6 +1126,10 @@ type Profile struct {
 	// [LimitReport] named one ([LimitWindowWording]).
 	LimitWindows []LimitWindowWording `yaml:"limit_windows,omitempty"`
 
+	// PlanRead reads the plan's windows with no model call ([PlanRead]); nil
+	// where the harness has no such read.
+	PlanRead *PlanRead `yaml:"plan_read,omitempty"`
+
 	// SignInEnv lists the variables that sign this harness in when an entry's
 	// env sets one: a cloud provider's switch (CLAUDE_CODE_USE_BEDROCK) or a
 	// gateway's token (ANTHROPIC_AUTH_TOKEN). auth.mode env requires one, and
@@ -1794,6 +1798,7 @@ func (p *Profile) problems() []string {
 		m.Reset.validate(fmt.Sprintf("limit_markers[%d]", i), add)
 	}
 	p.validateLimitEvents(add)
+	p.validatePlanRead(add)
 	p.validateEventReports(add)
 	p.validateAPIKeyModelEnv(add)
 	p.validateSignInArgs(add)

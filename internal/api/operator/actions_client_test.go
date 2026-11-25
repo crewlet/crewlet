@@ -392,6 +392,8 @@ func fullSurface(t *testing.T) *operator.Server {
 			AtlasRefresh: builtin.AtlasRefreshDeps{Sources: struct{ builtin.AtlasSourceDesk }{}},
 			// AND A PERSON'S HOME BOARD, which Home's "Done" sends.
 			HomeBoard: builtin.HomeBoardDeps{Boards: struct{ builtin.HomeBoardStore }{}},
+			// AND THE READER'S ASK CREWLET INSTRUCTIONS, which Settings saves.
+			Instructions: builtin.InstructionsDeps{Store: struct{ builtin.InstructionsStore }{}},
 			// AND A SCHEDULE RUN NOW, which a schedule's page and peek send.
 			ScheduleRuns: builtin.ScheduleRunDeps{Runner: struct{ builtin.ScheduleRunner }{}},
 		}),

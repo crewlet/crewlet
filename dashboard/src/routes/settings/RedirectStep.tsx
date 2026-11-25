@@ -3,11 +3,19 @@
  * the engine's sign-in (`setup.KindRedirect`), copied whole, with its words.
  */
 
-import { Callout, Copyable, FormField, InlineCode } from "@crewlethq/ui";
+import { Callout, Copyable, FormField, InlineCode, Stack } from "@crewlethq/ui";
+import { RedirectStale } from "~/components/RedirectMoved.tsx";
 import type { SetupRequirement } from "~/protocol/index.ts";
 import { VendorWords } from "~/ui/VendorWords.tsx";
 
-export function RedirectStep({ r }: { r: SetupRequirement }) {
+/** `integrations` are the kinds signing in as this address's client, whose stale redirect is said under it. */
+export function RedirectStep({
+  r,
+  integrations,
+}: {
+  r: SetupRequirement;
+  integrations: readonly string[];
+}) {
   const url = r.redirect?.url ?? "";
   const key = r.redirect?.key ?? "";
   return (
@@ -35,13 +43,16 @@ export function RedirectStep({ r }: { r: SetupRequirement }) {
       }
     >
       {url ? (
-        <Copyable
-          value={url}
-          variant="block"
-          monospace
-          truncate={false}
-          ariaLabel={`Copy ${r.label}`}
-        />
+        <Stack gap={2}>
+          <Copyable
+            value={url}
+            variant="block"
+            monospace
+            truncate={false}
+            ariaLabel={`Copy ${r.label}`}
+          />
+          <RedirectStale vendor="google" names={integrations} />
+        </Stack>
       ) : (
         <Callout variant="warning">
           <span>

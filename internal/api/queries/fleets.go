@@ -55,10 +55,18 @@ type FleetMember struct {
 	// Serving is the subjects with work in flight on it now, the longest
 	// running first: never a prediction, so empty while nothing runs.
 	Serving []string `json:"serving"`
+	// UnlistedServing is the work in flight on it the nodes' status records
+	// counted but could not name beside the rest ([coord.ModelStatus]), and
+	// UnlistedHomes the seat jobs' homes on it likewise: zero where they name
+	// every one. Past them, Serving and the predictions under-report.
+	UnlistedServing int `json:"unlisted_serving"`
+	UnlistedHomes   int `json:"unlisted_homes"`
 }
 
 // NowKind says what an assignment's `now` is: the member its work in flight
-// runs on, or the one its next piece of work would go to.
+// runs on, or the one its next piece of work would go to; or that neither is
+// known, as a member it may run on has work or homes its records could not
+// name.
 type NowKind string
 
 const (
@@ -67,10 +75,16 @@ const (
 	// NowNext is where the subject's next piece of work would go, the
 	// predictions of every subject accounting for each other.
 	NowNext NowKind = "next"
+	// NowUnlisted is a subject with no work in flight named on any member it
+	// may run on, where one of them has work in flight its records counted
+	// but could not name, or, for a fleet's job with no home named, homes:
+	// its work may run there, or its home steer its pick, so `now` is null
+	// rather than a guess.
+	NowUnlisted NowKind = "unlisted"
 )
 
 // NowKinds is the closed set.
-var NowKinds = []NowKind{NowRunning, NowNext}
+var NowKinds = []NowKind{NowRunning, NowNext, NowUnlisted}
 
 // Valid reports whether k is one of [NowKinds].
 func (k NowKind) Valid() bool { return slices.Contains(NowKinds, k) }
@@ -83,8 +97,8 @@ type FleetAssignment struct {
 	Name    string      `json:"name"`
 	Target  FleetTarget `json:"target"`
 	Now     *string     `json:"now"`
-	// NowKind says whether Now is running work or the next pick; absent
-	// where Now is null.
+	// NowKind says whether Now is running work or the next pick, or that
+	// neither is known (Now null); absent where Now is null otherwise.
 	NowKind      NowKind    `json:"now_kind,omitempty"`
 	WaitingUntil *time.Time `json:"waiting_until"`
 	Jobs         []FleetJob `json:"jobs,omitempty"`
@@ -152,8 +166,10 @@ func (s Sources) llmFleets(ctx context.Context, _ Params) (any, error) {
 		executors = s.State.ActiveExecutors()
 	}
 	running, serving := inFlight(reports, executors)
+	unlistedRunning, unlistedHomes := unlisted(reports)
 	r := &fleetReader{company: company, now: now, members: map[string]fleet.Member{},
-		homes: homes, served: served, running: running, serving: serving}
+		homes: homes, served: served, running: running, serving: serving,
+		unlistedRunning: unlistedRunning, unlistedHomes: unlistedHomes}
 	// A MEMBER WITH WORK IN FLIGHT TOOK IT LATELY: a tie goes elsewhere.
 	for _, jobs := range running {
 		for _, f := range jobs {
@@ -213,6 +229,9 @@ type fleetReader struct {
 	// in flight on each member, the longest running first.
 	running map[string]map[string]flight
 	serving map[string][]string
+	// unlistedRunning and unlistedHomes are the work in flight and the homes
+	// on each member the records counted but could not name.
+	unlistedRunning, unlistedHomes map[string]int
 	// predicted counts the predictions made, which take their picks in turn.
 	predicted int
 }
@@ -292,6 +311,19 @@ func inFlight(reports []nodeModels, executors []livestate.ExecutorEntry) (map[st
 		}
 	}
 	return running, serving
+}
+
+// unlisted is the work in flight and the homes on each entry that live
+// nodes' rows counted past what they name ([coord.ModelStatus.RunningCount]).
+func unlisted(reports []nodeModels) (running, homes map[string]int) {
+	running, homes = map[string]int{}, map[string]int{}
+	for _, r := range reports {
+		for key, m := range r.models {
+			running[key] += max(m.RunningCount-len(m.Running), 0)
+			homes[key] += max(m.HomesCount-len(m.Homes), 0)
+		}
+	}
+	return running, homes
 }
 
 // reported is whether a live node's record carries key's row.
@@ -402,15 +434,16 @@ func (r *fleetReader) assignments(models phase.Models) []FleetAssignment {
 func (r *fleetReader) helper(subject, ref string) runsOn {
 	if key, ok := config.FleetOf(ref); ok {
 		spec, _ := r.company.Providers.Fleet(key)
-		return r.flying(subject, subject, FleetTarget{Fleet: &key}, func() (*string, *time.Time) {
-			return r.pick(key, spec, fleet.Job{Fleet: key, Subject: subject, Job: subject})
-		})
+		job := fleet.Job{Fleet: key, Subject: subject, Job: subject}
+		return r.flying(subject, subject, FleetTarget{Fleet: &key}, r.mayRun(spec.Members, job),
+			func() (*string, *time.Time) { return r.pick(key, spec, job) })
 	}
 	target := FleetTarget{Pinned: &ref}
 	if ref == "" {
 		return runsOn{target: target}
 	}
-	return r.flying(subject, subject, target, func() (*string, *time.Time) { return r.pinned(ref) })
+	return r.flying(subject, subject, target, r.mayRun([]string{ref}, fleet.Job{}),
+		func() (*string, *time.Time) { return r.pinned(ref) })
 }
 
 // resolved is what a seat job's resolution runs on now: its work in flight,
@@ -421,9 +454,9 @@ func (r *fleetReader) resolved(subject, job string, ph phase.Phase, res phase.Re
 	case res.Fleet != "":
 		key := res.Fleet
 		spec, _ := r.company.Providers.Fleet(key)
-		return r.flying(subject, job, FleetTarget{Fleet: &key}, func() (*string, *time.Time) {
-			return r.pick(key, spec, fleet.Job{Fleet: key, Subject: subject, Job: ph.String()})
-		})
+		homed := fleet.Job{Fleet: key, Subject: subject, Job: ph.String()}
+		return r.flying(subject, job, FleetTarget{Fleet: &key}, r.mayRun(spec.Members, homed),
+			func() (*string, *time.Time) { return r.pick(key, spec, homed) })
 	case len(res.Keys) == 0:
 		return runsOn{target: FleetTarget{Pinned: ptr("")}}
 	}
@@ -432,16 +465,33 @@ func (r *fleetReader) resolved(subject, job string, ph phase.Phase, res phase.Re
 	if res.Source == phase.SourceDefaultEntry || res.Source == phase.SourceFirstEntry {
 		target = FleetTarget{Pinned: ptr("")}
 	}
-	return r.flying(subject, job, target, func() (*string, *time.Time) { return r.pinned(head) })
+	return r.flying(subject, job, target, r.mayRun([]string{head}, fleet.Job{}),
+		func() (*string, *time.Time) { return r.pinned(head) })
+}
+
+// mayRun reports whether a subject with no work in flight named may yet have
+// some on members, or a home among them its pick would take: one of them has
+// work in flight its records counted past what they name, or, for a fleet's
+// job (a zero job for a pinned entry) with no home named, homes likewise.
+func (r *fleetReader) mayRun(members []string, job fleet.Job) bool {
+	_, homed := r.homes[job]
+	return slices.ContainsFunc(members, func(m string) bool {
+		return r.unlistedRunning[m] > 0 || job != (fleet.Job{}) && !homed && r.unlistedHomes[m] > 0
+	})
 }
 
 // flying is target's member with the subject's job in flight on it, else
-// the one next answers.
-func (r *fleetReader) flying(subject, job string, target FleetTarget,
+// unlisted where it may run on work its records could not name
+// ([fleetReader.mayRun]),
+// else the one next answers.
+func (r *fleetReader) flying(subject, job string, target FleetTarget, unnamed bool,
 	next func() (*string, *time.Time)) runsOn {
 	if f, ok := r.running[subject][job]; ok {
 		member := f.member
 		return runsOn{target: target, now: &member, kind: NowRunning}
+	}
+	if unnamed {
+		return runsOn{target: target, kind: NowUnlisted}
 	}
 	now, until := next()
 	on := runsOn{target: target, now: now, until: until}
@@ -496,7 +546,8 @@ func (r *fleetReader) view(key string, spec config.LLMFleet) FleetView {
 	for _, m := range f.Members {
 		member := FleetMember{Entry: m.Key, Kind: string(r.company.Providers.LLM[m.Key].FleetKind()),
 			State: string(m.State), Why: m.Why, Overflow: m.Overflow(f.Strategy),
-			Serving: append([]string{}, r.serving[m.Key]...)}
+			Serving: append([]string{}, r.serving[m.Key]...), UnlistedServing: r.unlistedRunning[m.Key],
+			UnlistedHomes: r.unlistedHomes[m.Key]}
 		if !m.Until.IsZero() {
 			until := m.Until
 			member.Until = &until

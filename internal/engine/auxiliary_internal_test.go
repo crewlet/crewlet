@@ -75,11 +75,11 @@ type staticHeads struct {
 // Begin records nothing in flight: the seam's ledger is the engine's.
 func (staticHeads) Begin(*org.Role, phase.Phase, string) func() { return func() {} }
 
-func (m staticHeads) Take(_ *org.Role, ph phase.Phase) (chain.Member, error) {
+func (m staticHeads) Walk(_ *org.Role, ph phase.Phase) (phase.Walk, error) {
 	if m.asked != nil {
 		*m.asked = append(*m.asked, ph)
 	}
-	return chain.Member{Key: "cheap", Provider: m.provider}, nil
+	return phase.Walk{Members: []chain.Member{{Key: "cheap", Provider: m.provider}}}, nil
 }
 
 // capturedEvents is a publisher keeping what the ledger published.

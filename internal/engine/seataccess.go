@@ -239,6 +239,13 @@ func (e *Engine) withSeatAccessReads(
 	if err != nil {
 		return nil, err
 	}
+	// A CONNECTION STILL WAITING ON ITS SETUP has no agents' accounts to move
+	// onto per-seat access yet: its own finding names the person's next step,
+	// and its seats wait on it rather than reporting a migration.
+	if c := e.Company(); c != nil && c.Config.SeatAccessPending(string(kind)) &&
+		slices.ContainsFunc(findings, integration.Finding.AwaitsSetup) {
+		return findings, nil
+	}
 	report, err := e.syncSeatAccess(ctx, kind, seatSync{
 		sink: in.Sink, by: in.By, operator: in.Operator, webhookBase: in.WebhookBase, reads: reads,
 	})

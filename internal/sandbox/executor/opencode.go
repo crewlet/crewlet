@@ -1371,7 +1371,13 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	if wired.servers != nil {
 		cfg["mcp"] = map[string]any{"servers": wired.servers}
 	}
-	var plugins []any
+	// OPENCODE DESKTOP'S BROWSER PLUGIN OUT OF EVERY RUN, first: a headless run
+	// has no Desktop to attach, so its tools are denied anyway, and it names
+	// its namespace `browser`, under whose description 2.3.2 listed a seat's
+	// browser server's tools in Code Mode's catalogue. Out, that line names
+	// the server and its count alone, and nothing else in a request changes,
+	// with a browser server or without (measured on 2.3.2).
+	plugins := []any{"-opencode.browser"}
 	if req.Steer.Set() {
 		if err := box.WriteFile(ctx, paths.OpenCodeSteerPlugin()+"/"+openCodeSteerEntry, openCodeSteerPlugin); err != nil {
 			return "", fmt.Errorf("executor: writing OpenCode's notes plugin: %w", err)
@@ -1759,6 +1765,8 @@ func decodeOpenCodeEvent(line []byte) (openCodeEvent, bool) {
 // transcript keeps every step's text, and the result prefers the run's report
 // anyway ([Paths.Findings]).
 type openCodeEvents struct {
+	undecidedLines
+
 	// answers is the text of the latest message that produced any, in
 	// order, and message that message's id. A text event that names no
 	// message belongs to the latest one: only a message that names itself
@@ -1784,6 +1792,9 @@ type openCodeEvents struct {
 	sawLine    bool
 	// ended is whether the newest step ended the run ([openCodeEvents.Ended]).
 	ended bool
+	// steps is each message a step_start or step_finish named: one model
+	// request each ([openCodeEvents.Requests]).
+	steps map[string]struct{}
 
 	// usage is the session's usage report, when the script printed one, and
 	// usageBefore the one a continued run's script printed before the run
@@ -1855,8 +1866,10 @@ func (d *openCodeEvents) Line(line []byte) {
 	switch ev.Type {
 	case "step_start":
 		d.ended = false
+		d.step(ev.Part.MessageID)
 	case "step_finish":
 		d.ended = ev.Part.Reason != openCodeStepCalls
+		d.step(ev.Part.MessageID)
 	case "text":
 		if chunk := strings.TrimSpace(ev.Part.Text); chunk != "" {
 			if !d.following {
@@ -2058,8 +2071,19 @@ func (d *openCodeEvents) keepPlain(line []byte) {
 // session's message list where it has found no figure: the line may be a page
 // of it, which may hold the figure, and a later page's would then be an older
 // request's ([openCodeEvents.contextLine]).
-func (d *openCodeEvents) Skipped(n int64, bound int) {
+func (d *openCodeEvents) Skipped(line LongLine) {
+	n, bound := line.Size, line.Bound
 	d.sawLine = true
+	switch lineType(line) {
+	case "step_start", "step_finish":
+		if message := windowField(line.Head, "messageID", false); message != "" {
+			d.step(message)
+		} else {
+			d.undecided++
+		}
+	case "":
+		d.undecided++
+	}
 	if !d.read {
 		d.endContext(contextRead{why: fmt.Sprintf("a line of %s, past the %s a line of the stream is read "+
 			"within, came before any page that measured a prompt", humanSize(n), humanSize(int64(bound)))})
@@ -2081,6 +2105,32 @@ const openCodeStepCalls = "tool-calls"
 // step, a refused request and an interrupted session on an `error`, and a
 // client killed mid-turn on a `tool-calls` step or on nothing.
 func (d *openCodeEvents) Ended() bool { return d.ended }
+
+// Requests implements [Decoder]: the messages the stream's steps named, one a
+// step and a step one model request, whichever of its start and finish the
+// stream holds: a step cut off where its harness was killed has no finish.
+// Measured on 2.3.2 against a stand-in: 31 messages for 31 requests, none for a
+// 429 or a 500 it retried. NOT COUNTED: a subagent's steps, which are its own
+// session's and which `opencode run` does not print: measured, 4 counted of a
+// run's 7 requests, a subagent's 3 among them. NOR a compaction's summary
+// requests: a run whose compaction failed on the stand-in's summary made 2,
+// none counted.
+func (d *openCodeEvents) Requests() int { return len(d.steps) }
+
+// InFlight implements [Decoder]: none, as OpenCode's own steps stops before
+// the next request (measured on 2.3.2: a cap of 3, 3 requests).
+func (d *openCodeEvents) InFlight() int { return 0 }
+
+// step records the message one step event names.
+func (d *openCodeEvents) step(message string) {
+	if message == "" {
+		return
+	}
+	if d.steps == nil {
+		d.steps = map[string]struct{}{}
+	}
+	d.steps[message] = struct{}{}
+}
 
 func (d *openCodeEvents) Result() sandbox.Result {
 	if !d.sawLine {

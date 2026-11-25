@@ -11,7 +11,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -29,12 +31,15 @@ type signedOut struct {
 
 func (*signedOut) Model() string { return "opus" }
 
-func (m *signedOut) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+func (m *signedOut) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	m.calls.Add(1)
 	if m.out.Load() {
 		return nil, &llm.Error{Kind: llm.KindAuth, Key: "default", Err: errors.New("Not logged in · Please run /login")}
 	}
-	return &llm.Completion{Content: "done", Model: "opus"}, nil
+	// SIGNED IN, IT DECIDES, as the rig's reviewer does: in prose the review
+	// sent the turn to a second round the rig cannot launch, and that failed
+	// resume's redelivered completion was admitted a second time.
+	return reviewer.Complete(ctx, req)
 }
 
 // THE SECOND REFUSED REVIEW PAUSES THE SEAT AS THE ENGINE; from then the
@@ -130,17 +135,31 @@ func TestAResumeWhoseModelsRefuseTheirSignInPausesTheSeatAndWaits(t *testing.T) 
 	}
 
 	// THE PERSON SIGNS THE MODEL IN AND RESUMES THE SEAT: the kept completion
-	// resumes on the lift and its review reaches the model once. The waiters
-	// are stopped first, so only the lift can bring the job back.
+	// resumes on the lift and its review reaches the model once. The waiter is
+	// stopped first, and every announcement it made answered (each refused on
+	// the pause is acknowledged, so the seat's control mail drains), so only
+	// the lift can bring the job back: one delivered after the lift would be
+	// admitted beside it.
 	stopWaiter(e)
+	agentID, _ := org.DeriveAgentID("Nimbus", "swe")
+	eventually(t, "every announcement the stopped waiter made to be answered", func() bool {
+		mail, err := e.backends.Queue.Backlog(t.Context(), topics.AgentControl(agentID),
+			topics.AgentControlGroup(agentID), 8)
+		return err == nil && len(mail) == 0
+	})
 	model.out.Store(false)
 	settled = admitted.Load()
 	if lifted, err := e.backends.Fleet.DeleteSeatPause(t.Context(), seat, p.Version); err != nil || !lifted {
 		t.Fatalf("DeleteSeatPause = (%v, %v)", lifted, err)
 	}
-	eventually(t, "the kept job's review to reach the model once the seat was resumed", func() bool {
-		return model.calls.Load() > calls
+	// SETTLED, so nothing is left to admit: a resume that failed would hand
+	// its completion back to be admitted again.
+	eventually(t, "the kept job to be settled once the seat was resumed", func() bool {
+		return r.settled(t, e, "t1")
 	})
+	if got := model.calls.Load(); got != calls+1 {
+		t.Errorf("the kept job's review reached the model %d times on the lift, want once", got-calls)
+	}
 	if got := admitted.Load() - settled; got != 1 {
 		t.Errorf("the kept completion was admitted %d times on the lift, want once", got)
 	}

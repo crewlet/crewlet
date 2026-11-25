@@ -66,7 +66,7 @@ func (w *atlasWorld) input(t *testing.T, edit ...func(*config.Company)) collect.
 	t.Helper()
 	c := &config.Company{Name: testCompany}
 	c.Integrations.GoogleCloud = &config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{
-		Provisioner: provisioner, Provider: "${GCP_PROVIDER}", FederationKey: "${GCP_KEY}",
+		IdentityProject: identity, Provider: "${GCP_PROVIDER}", FederationKey: "${GCP_KEY}",
 	}}
 	for _, e := range edit {
 		e(c)

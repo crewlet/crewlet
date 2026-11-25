@@ -221,6 +221,9 @@ type ProposalCard struct {
 	// Audience is who will see the result where visibility changes (a
 	// share, a comment others are notified of), one phrase each.
 	Audience []Phrase `json:"audience,omitempty"`
+	// Own is a change to the person's own record, which reaches nobody else:
+	// the card says so in place of the company.
+	Own bool `json:"own,omitempty"` //wiregate:absent-is-false a card that says nothing is the company's
 	// Taint is the surface (one of provenance.Sources) whose outside text the
 	// turn read before proposing (D25); absent for none.
 	Taint provenance.Source `json:"taint,omitempty"`
@@ -316,6 +319,9 @@ type OpenInAppCard struct {
 	Link      Link       `json:"link"`
 	Permitted bool       `json:"permitted"`
 	Reason    OpenReason `json:"reason,omitempty"`
+	// Asked marks a place the person's own question asked to be taken to:
+	// the drawer that sent the question opens it once, with no press.
+	Asked bool `json:"asked"`
 }
 
 // ErrorCard is a refusal or a failure in the engine's own words. Phrase is the
@@ -418,6 +424,9 @@ func (c Card) Validate() error {
 		if c.OpenInApp.Permitted != (c.OpenInApp.Reason == "") {
 			return fmt.Errorf("%w: an open in app card is permitted exactly when it names "+
 				"no reason", ErrInvalid)
+		}
+		if c.OpenInApp.Asked && !c.OpenInApp.Permitted {
+			return fmt.Errorf("%w: only a permitted open in app card opens by itself", ErrInvalid)
 		}
 	case CardBrief:
 		return c.Brief.Validate()

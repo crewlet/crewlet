@@ -564,11 +564,8 @@ func googleCloud(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	if g == nil {
 		return
 	}
-	var project string
-	if g.Provisioning != nil {
-		project, _ = config.GoogleCloudServiceAccount(g.Provisioning.Provisioner)
-	}
-	b.account("integrations.google_cloud.provisioning.provisioner", atlas.VendorGoogleCloud, project, project,
+	project, _ := g.Identity()
+	b.account("integrations.google_cloud.provisioning.identity_project", atlas.VendorGoogleCloud, project, project,
 		"Google Cloud", g.Enabled, atlas.CapabilityCompute)
 }
 

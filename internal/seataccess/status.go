@@ -19,6 +19,12 @@ const (
 	// StatusNeedsYou is a lane waiting on a person: a step only a person
 	// takes, or a sync that ended waiting on one.
 	StatusNeedsYou LaneStatus = "needs_you"
+	// StatusPreparing is a lane waiting on the vendor alone: a seat's new
+	// identity it cannot find yet, which a person adds once it can.
+	StatusPreparing LaneStatus = "preparing"
+	// StatusRoleUnchecked is a lane that works whose identity's role nobody
+	// Crewlet signs in as can read: never In sync, which is a checked claim.
+	StatusRoleUnchecked LaneStatus = "role_unchecked"
 	// StatusNextSync is a lane with steps the next sync takes.
 	StatusNextSync LaneStatus = "next_sync"
 	// StatusInSync is a lane that is on and has nothing left to take.
@@ -35,8 +41,8 @@ const (
 // LaneStatuses is every status, in the order a person needs to act on them.
 func LaneStatuses() []LaneStatus {
 	return []LaneStatus{
-		StatusDeparted, StatusSyncing, StatusRefused, StatusChangedAtVendor, StatusNeedsYou,
-		StatusNextSync, StatusInSync, StatusOffAccountKept, StatusOff,
+		StatusDeparted, StatusSyncing, StatusRefused, StatusChangedAtVendor, StatusNeedsYou, StatusPreparing,
+		StatusNextSync, StatusRoleUnchecked, StatusInSync, StatusOffAccountKept, StatusOff,
 	}
 }
 
@@ -57,6 +63,10 @@ func (s LaneStatus) Label(vendor string) string {
 		return "Needs you"
 	case StatusNextSync:
 		return "Next sync"
+	case StatusPreparing:
+		return "Getting ready"
+	case StatusRoleUnchecked:
+		return "Role not checked"
 	case StatusInSync:
 		return "In sync"
 	case StatusOffAccountKept:

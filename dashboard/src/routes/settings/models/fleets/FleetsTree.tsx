@@ -236,7 +236,13 @@ export function FleetsTree({
           case "limits":
             return <FleetLimits fleet={f} data={data} />;
           case "serving":
-            return <ServingFaces handles={f.members.flatMap((m) => m.serving)} data={data} />;
+            return (
+              <ServingFaces
+                handles={f.members.flatMap((m) => m.serving)}
+                unlisted={f.members.reduce((n, m) => n + m.unlisted_serving, 0)}
+                data={data}
+              />
+            );
           // The default fleet is never deleted, so its menu holds Settings alone.
           case "actions":
             return (
@@ -309,7 +315,7 @@ export function FleetsTree({
         case "limits":
           return <MemberLimits entry={m.entry} data={data} />;
         case "serving":
-          return <ServingFaces handles={m.serving} data={data} />;
+          return <ServingFaces handles={m.serving} unlisted={m.unlisted_serving} data={data} />;
         case "actions":
           return (
             <OrgTableActions shown slots={2}>

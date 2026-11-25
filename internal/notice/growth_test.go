@@ -135,7 +135,7 @@ func TestTheGrowthNoticesAreReadWithEveryOther(t *testing.T) {
 	t.Parallel()
 	vendors := notice.FromCatalogs([]growth.Catalog{catalog("fakeads", "Fake Ads API", "v1",
 		growthNow.Add(24*time.Hour))}, nil, growthNow)
-	got := notice.Read(nil, nil, nil, vendors, growthNow)
+	got := notice.Read(nil, nil, nil, vendors, nil, growthNow)
 	if len(got) != 1 || got[0].Class != notice.ClassAPIVersionRetiring {
 		t.Errorf("the notices read are %+v", got)
 	}

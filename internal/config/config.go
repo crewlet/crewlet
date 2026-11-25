@@ -79,6 +79,23 @@
 // never run validate; never an exit code, since a warning that can fail a
 // build gets suppressed.
 //
+// # A seat's browser
+//
+// `role.sandbox.browser` gives a seat a headless Chromium in its executor's
+// box, and every rule about it is an ADMISSION rule: the seat refused where
+// any run of it can land outside a container box off its host's network, or
+// on an entry that denies the web ([Company.validateBrowserSeats]); a server
+// named browser ([Company.validateMCPNames]); a chromium_sandbox nothing reads
+// or off its list. No run depends on them, and a rule this build adds must
+// not refuse a revision another build admitted. internal/browser's package
+// doc argues where a seat's browser may run.
+//
+// The host-network rule reads local.network and run_args alone
+// ([hostNetwork]); its sources are Docker's network overview, run reference
+// and CLI's opts/network.go, podman-run(1) (Podman 5's for slirp4netns),
+// slirp4netns(1) and pasta(1). The launch checks the box itself as well, at
+// every launch (internal/browser/hostreach).
+//
 // # Rules a domain shares
 //
 // This package is the leaf every other imports, so a rule a domain enforces

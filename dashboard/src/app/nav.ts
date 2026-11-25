@@ -18,7 +18,8 @@
  *     row: the user block IS the reader, and opens it from its name and menu.
  *
  * Settings is what the ENGINE runs, and the company-wide basics it runs on: a
- * column of five groups, Company (General: the company's clock), Runtime
+ * column of five groups, Company (General: the company's clock; Ask Crewlet:
+ * how it writes), Runtime
  * (Models, MCP & tools, Secrets, Limits), Spend (the readings, never the
  * ceilings), Access (People, Service accounts, API tokens, Sign-in policy,
  * Delegated decisions, Audit log) and Engine (Nodes, Configuration, Backups &
@@ -1230,6 +1231,17 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["settings", "general"],
         hint: "The company's clock: the time zone its days, weeks and schedules run on",
         keywords: ["timezone", "time zone", "clock", "company clock", "calendar"],
+        group: "Company",
+      },
+      {
+        // EVERY MEMBER'S: each person sets their own instructions here and
+        // reads the company's, which an admin changes.
+        key: "ask-crewlet",
+        label: "Ask Crewlet",
+        icon: "message-square",
+        path: ["settings", "ask-crewlet"],
+        hint: "How Ask Crewlet writes: the company's instructions and your own",
+        keywords: ["assistant", "instructions", "tone", "length", "tldr", "style", "answers"],
         group: "Company",
       },
       {

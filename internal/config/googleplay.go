@@ -32,7 +32,7 @@ type GooglePlay struct {
 
 	// OAuth is the client a Play Console admin signs in as, so Crewlet adds
 	// each agent's identity itself.
-	OAuth *GoogleOAuthClient `yaml:"oauth,omitempty" json:"oauth,omitempty" desc:"The company's own OAuth client (a Web application, in a Google Cloud project it controls), which a Play Console admin signs in as so Crewlet adds each agent's identity to its apps itself; other Google products may share it. Optional: without it a person invites each agent's identity in Play Console."`
+	OAuth *GoogleOAuthClient `yaml:"oauth,omitempty" json:"oauth,omitempty" desc:"The OAuth client Google Play's admin sign-in alone is made as, in place of integrations.google_cloud.sign_in_client. Optional."`
 
 	// Approvers route an agent's held acts: who is asked first.
 	Approvers []string `yaml:"approvers,omitempty" json:"approvers,omitempty" desc:"Handles of human seats an agent's publish, spend and admin acts are routed to first. Only an administrator answers one, at a fresh step-up; without approvers every administrator is asked. Optional."`
@@ -51,6 +51,11 @@ type RoleGooglePlay struct {
 // GooglePlayKind is the integration's kind, config key and lane.
 const GooglePlayKind = "google_play"
 
+// GooglePlayPackagePattern is an Android package name: two or more dotted
+// parts, each a letter then letters, digits or underscores (Play's limit is
+// 150); the seat picker offers a typed app by it too.
+const GooglePlayPackagePattern = `^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$`
+
 // Bounds of a block's lists: a company with more apps is a publisher that
 // connects each studio's company, and more developer accounts than this is an
 // agency.
@@ -60,11 +65,7 @@ const (
 )
 
 var (
-	// googlePlayPackage is an Android package name: two or more dotted parts,
-	// each a letter then letters, digits or underscores (Play's limit is 150).
-	googlePlayPackage = sync.OnceValue(func() *regexp.Regexp {
-		return regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$`)
-	})
+	googlePlayPackage = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(GooglePlayPackagePattern) })
 	// googlePlayDeveloper is a developer account's ID: digits.
 	googlePlayDeveloper = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[0-9]{1,25}$`) })
 	// googlePlayBucket is a monthly reports bucket, new or legacy.

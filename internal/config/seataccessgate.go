@@ -79,7 +79,7 @@ func (c *Company) SeatAccessConnected(kind string) bool {
 	case "aws":
 		return in.AWS != nil
 	case "google_cloud":
-		return in.GoogleCloud != nil
+		return in.GoogleCloud.Started()
 	case "ssh":
 		return in.SSH != nil
 	}

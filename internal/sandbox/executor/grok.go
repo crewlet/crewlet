@@ -48,6 +48,7 @@ var (
 	_ artifactHolder = Grok{}
 	_ sessionJudge   = Grok{}
 	_ inPlaceGate    = Grok{}
+	_ trimmer        = Grok{}
 )
 
 // NewGrok returns the runner.
@@ -388,11 +389,12 @@ const (
 // members named from [Paths.GrokSessions] down, the session's directory,
 // `<key>/<session>/`, its record (chat_history.jsonl) first and every other
 // regular file under it but the harness's locks (`*.lock`), its `terminal/`
-// call logs included; then, alike, each subagent's session directory its
-// updates.jsonl names (`subagent_spawned`), under the key of the directory it
-// was started in. The restore puts the session, and each subagent's filed
-// beside it, under its own box's key. A resume needs no file outside it, and
-// one from such an archive continues (measured on 1.0.92). A change is a new
+// call logs included, past the bound those of [grokTrimmedDirs] left out; then,
+// alike, each subagent's session directory its updates.jsonl names
+// (`subagent_spawned`), under the key of the directory it was started in. The
+// restore puts the session, and each subagent's filed beside it, under its own
+// box's key. A resume needs no file outside it, and one from such an archive
+// continues (measured on 1.0.92). A layout an older reader cannot read is a new
 // format.
 const grokArchiveFormat = 2
 
@@ -464,17 +466,23 @@ func (Grok) meter(context.Context, io.Reader, string, string, *passBudget) (mete
 }
 
 // grokCapture is the part of a run's script that packs its session once its
-// harness has exited ([grokPack]).
+// harness has exited ([grokPack]), trimmed by the box's bare release
+// ([trimRelVar], read off v as [releaseOf] reads it).
 func grokCapture(paths Paths) string {
-	return grokPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()})
+	return bareReleaseShell(trimRelVar) + grokPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()})
 }
 
-// grokPack packs the session s names into at.staged and moves it over at.dest,
-// its digest kept ([packDigest]): the members [grokArchiveFormat] names, its
+// grokPack is ONE PACK, the run's end's, a pack on demand's and a save's, at
+// the bounds a take keeps ([trimAt]): [grokPackAt].
+func grokPack(paths Paths, at packAt) string { return grokPackAt(paths, at, trimAt) }
+
+// grokPackAt packs the session s names into at.staged and moves it over
+// at.dest, its digest kept ([packDigest]) and its trim past trim said beside it
+// ([grokTrimTar], [trimMarked]): the members [grokArchiveFormat] names, its
 // record first, each named on tar's command line so no lock or link is
 // packed. A pack beside a working harness is held to [claudeHeldTar]'s rule,
 // which reads the first member as the session's transcript.
-func grokPack(paths Paths, at packAt) string {
+func grokPackAt(paths Paths, at packAt, trim trimPoints) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
@@ -508,9 +516,10 @@ func grokPack(paths Paths, at packAt) string {
 	if at.working {
 		tar = claudeHeldTar(sessions, at.staged)
 	}
-	line(`    rm -rf %s; if mkdir -p %s && %s && %s && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(at.staged), q(at.staged), list, tar, packDigest(paths, "s", at.staged), q(at.staged+"/capture"), q(at.dest),
-		q(at.staged+"/error"))
+	tar = grokTrimTar(trim, q(sessions), q(at.staged+"/capture"), tar)
+	line(`    rm -rf %s; if mkdir -p %s && %s && %s && %s && %s && mv -f %s %s; then packed=1; %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(at.staged), q(at.staged), list, tar, packDigest(paths, "s", at.staged), trimUnmark(at.dest),
+		q(at.staged+"/capture"), q(at.dest), trimMarked(at.dest), q(at.staged+"/error"))
 	line(`    rm -rf %s`, q(at.staged))
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)

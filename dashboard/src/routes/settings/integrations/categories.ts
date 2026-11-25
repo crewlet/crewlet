@@ -13,11 +13,15 @@
 import type { BuiltInService } from "./model.ts";
 import { CATALOG, type Entry } from "./catalogue.tsx";
 
-/** One line of the directory: a built-in service, an app, or one product of an app. */
+/**
+ * One line of the directory: a built-in service, an app, one product of an
+ * app, or Google, the one connection the Google products share.
+ */
 export type Line =
   | { kind: "service"; key: BuiltInService["key"] }
   | { kind: "app"; key: string }
-  | { kind: "product"; key: string; name: string; app: string };
+  | { kind: "product"; key: string; name: string; app: string }
+  | { kind: "google"; key: "google" };
 
 /** One group of the directory: what a company does with the apps under it. */
 export interface Group {
@@ -70,6 +74,7 @@ export const DIRECTORY: Group[] = [
       { kind: "app", key: "aws" },
       { kind: "app", key: "cloudflare" },
       { kind: "app", key: "digitalocean" },
+      { kind: "google", key: "google" },
       { kind: "app", key: "google_cloud" },
       { kind: "app", key: "scaleway" },
       { kind: "app", key: "ssh" },
@@ -113,7 +118,7 @@ export const DIRECTORY: Group[] = [
 
 /** The catalogue entry an app line or a product line stands for. */
 export function entryOf(line: Line, catalog: readonly Entry[] = CATALOG): Entry | undefined {
-  if (line.kind === "service") return undefined;
+  if (line.kind === "service" || line.kind === "google") return undefined;
   return catalog.find((e) => e.key === (line.kind === "product" ? line.app : line.key));
 }
 
@@ -124,7 +129,14 @@ export function entryOf(line: Line, catalog: readonly Entry[] = CATALOG): Entry 
 export function shownDirectory(catalog: readonly Entry[] = CATALOG): Group[] {
   return DIRECTORY.map((group) => ({
     ...group,
-    lines: group.lines.filter((line) => line.kind === "service" || entryOf(line, catalog)),
+    lines: group.lines.filter(
+      (line) =>
+        line.kind === "service" ||
+        // GOOGLE IS SERVED WHERE ITS CONNECTION, Google Cloud, is.
+        (line.kind === "google"
+          ? catalog.some((e) => e.key === "google_cloud")
+          : entryOf(line, catalog)),
+    ),
   })).filter((group) => group.lines.length > 0);
 }
 
