@@ -179,6 +179,9 @@ type copilotEvents struct {
 	spent    copilotUsageRecord
 	requests int
 	window   int64
+	// compactions is the compactions the run's stream started, each one model
+	// request its usage records leave out ([copilotEvents.Requests]).
+	compactions int
 
 	transcript transcriptLines
 	following  bool
@@ -268,6 +271,8 @@ func (d *copilotEvents) Line(line []byte) {
 		d.capTurns = data.Turns
 	case copilotUsageMark:
 		d.marked = true
+	case "session.compaction_start":
+		d.compactions++
 	case "session.usage_record":
 		// ONLY AFTER THE MARK: the script adds the run's own records there,
 		// and a stream that printed one of its own would be counted twice.
@@ -374,8 +379,12 @@ func (d *copilotEvents) reportedWindow() int64 { return d.window }
 func (d *copilotEvents) Ended() bool { return d.result }
 
 // Requests implements [Decoder]: the usage records of the session's own
-// events the script appends, one a model request, a subagent's included.
-func (d *copilotEvents) Requests() int { return d.requests }
+// events the script appends, one a model request, a subagent's included, and
+// the compactions the stream started, whose summary request records no usage.
+// Measured on 1.0.114 against a stand-in: 31 records for 31 requests, none for
+// a 429 or a 500 it retried; a run compacting before each request made 1,665,
+// 833 recorded and 832 compactions.
+func (d *copilotEvents) Requests() int { return d.requests + d.compactions }
 
 // InFlight implements [Decoder]: none, as the extension aborts before the
 // next request (measured on 1.0.114: a cap of 3, 3 requests).
@@ -410,7 +419,7 @@ func (d *copilotEvents) Result() sandbox.Result {
 		return sandbox.Result{Error: "the harness's output is not its event stream, so it never reported how its run ended"}
 	}
 	text := strings.TrimSpace(d.answer)
-	res := sandbox.Result{Text: text, SessionID: d.sessionID, DeliveredRefs: deliveredRefs(text), Turns: d.requests}
+	res := sandbox.Result{Text: text, SessionID: d.sessionID, DeliveredRefs: deliveredRefs(text), Turns: d.Requests()}
 	res.Transcript, res.TranscriptElidedLines, res.TranscriptElidedBytes = d.transcript.result()
 	if spent, stated := d.runSpend(); stated {
 		res = spent.on(res)
