@@ -19,7 +19,7 @@ Loaded in the run's gateway, it does three things for the run its settings file 
   the run; the plugin never orders itself ahead of another, which would drop that plugin's words.
 
 What it reads of Hermes's own code beyond its hooks (the carry script's checkout_gate and Hermes's result
-budget) is in the carry script's INTERNALS, checked at every launch: a Hermes release bump re-checks that
+budget) is in the carry script's CHECKOUT_INTERNALS, checked at every launch: a Hermes release bump re-checks that
 list, and a launch on a release that moved a part hands no checkout and marks the hand off (nested-off).
 
 The routes carry the job's token, so each is read from its file at each use and never logged.

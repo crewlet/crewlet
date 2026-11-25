@@ -24,7 +24,7 @@
 #   hermes_carry.py gate PEEK OUT MODEL BOUND       what Hermes makes of each checkout PEEK's roots name at the
 #                                                   window it resolves for MODEL, the note helper's gate, written
 #                                                   to OUT (checkout_gate); `off <why>` where Hermes's hook bound is
-#                                                   under BOUND s, `moved <why>` where an INTERNALS entry moved
+#                                                   under BOUND s, `moved <why>` where a CHECKOUT_INTERNALS entry moved
 #
 # Run under Hermes's own interpreter through its launcher (`hermes --run-module cProfile -o /dev/null`),
 # which keeps no exit status, so every command ends on one line of its own on stdout: `crewlet-carry ok`
@@ -32,8 +32,8 @@
 # the store holds no session of that title (or, for renew, no launch Hermes froze with it; for route, no
 # route; for trim, no row to leave out), route answers `crewlet-carry moved` for another route, servers
 # `crewlet-carry taken` and why, and guard `crewlet-carry refused <why>` where the box would switch the run's
-# own plugin or servers off. Anything else is a failure, its traceback on stderr. INTERNALS names what the script
-# reads of Hermes's own code beyond its configuration loader.
+# own plugin or servers off. Anything else is a failure, its traceback on stderr. CHECKOUT_INTERNALS names what the
+# script reads of Hermes's own code for checkout handing, CONTRACT_INTERNALS what the rest reads.
 #
 # A dump is JSON lines: the store's schema ({"ddl", "kind"}, never the full-text index's own tables, which
 # its triggers fill again), the store's own bookkeeping rows whole, then the session's rows ({"t", "r"}),
@@ -532,11 +532,13 @@ def plugoff(plugin):
     return "ok" if not held else "refused " + " and ".join(held)
 
 
-# WHAT THE RUN READS OF HERMES'S OWN CODE to hand it its checkouts, each by module, name and the parameters it is
-# called with (None: a constant): checked at every launch (gate), a release that moved one handing no checkout, said
-# by name, since a wrong render or verdict would hand a model what Hermes itself would not. A Hermes release bump
-# re-checks this list against the new release's source (0.23.3's, read).
-INTERNALS = (
+# WHAT CHECKOUT HANDING ALONE READS OF HERMES'S OWN CODE, each by module, name and the parameters it is called with
+# (None: a constant): checked at every launch (gate). A release that moved one starts the run without its checkouts
+# and the mid-run hand, said once by name, since a wrong render or verdict would hand a model what Hermes itself would
+# not, and nothing but checkout handing needs them. When another plugin rewrites the same tool result, Hermes keeps
+# the first answer, so that clone's instructions are not handed during the run; the plugin never orders itself
+# ahead of another. A Hermes release bump re-checks this list and CONTRACT_INTERNALS against its source (0.23.3's).
+CHECKOUT_INTERNALS = (
     ("agent.prompt_builder", "build_context_files_prompt", ("cwd", "skip_soul", "context_length")),
     ("agent.prompt_builder", "discover_context_files", ("cwd_path",)),
     ("agent.skill_utils", "_skills_cfg_get", ("key",)),
@@ -563,13 +565,27 @@ INTERNALS = (
     ("tools.budget_config", "budget_for_context_window", ("context_length",)),
 )
 
+# WHAT THE RUN'S CONTRACT READS OF HERMES'S OWN CODE, before and apart from checkout handing (the overlay, the guard,
+# the route and the store's carry): judged where each is read, as before, never by the gate. The overlay refuses a
+# run it cannot install; the guard's own failure is no verdict; a route or renew it cannot read starts a session of
+# the run's own.
+CONTRACT_INTERNALS = (
+    ("hermes_cli.managed_scope", "get_managed_dir"), ("hermes_cli.managed_scope", "load_managed_config"),
+    ("hermes_cli.config", "load_config"), ("hermes_cli.config", "read_raw_config"),
+    ("hermes_cli.config", "get_config_path"), ("hermes_cli.config", "DEFAULT_CONFIG"),
+    ("hermes_cli.runtime_provider", "resolve_runtime_provider"), ("gateway.session_local_route", "resolve_launch_route"),
+    ("hermes_cli.env_loader", "load_hermes_dotenv"), ("hermes_cli.gateway_chat", "env_launch_flags"),
+    ("hermes_cli.plugins_discovery", "gate_manifest"), ("hermes_cli.skills_config", "get_disabled_skills"),
+    ("tools.mcp_tool_config", "_suspicious_mcp_issues"), ("hermes_cli.tools_config", "_get_platform_tools"),
+)
+
 
 def internals():
-    """Each INTERNALS entry this Hermes lacks, or whose parameters lack one the run passes, a phrase each."""
+    """Each CHECKOUT_INTERNALS entry this Hermes lacks, or whose parameters lack one the run passes, a phrase each."""
     import importlib
     import inspect
     moved = []
-    for module, name, params in INTERNALS:
+    for module, name, params in CHECKOUT_INTERNALS:
         try:
             found = getattr(importlib.import_module(module), name)
         except (ImportError, AttributeError):
@@ -701,9 +717,9 @@ def skill_names():
 def gate(peek_path, out_path, model, bound):
     """checkout_gate for the roots the note helper's hermes-peek wrote at peek_path, at the window Hermes resolves
     for model (launch_window; asked only where there are roots), written to out_path, under the box's .env as
-    Hermes reads it: moved where an INTERNALS entry moved (the run starts without its checkouts, said), off (the run
-    goes on without its nested hand, said) where plugins.hook_callback_timeout leaves the hand less than bound
-    seconds."""
+    Hermes reads it: moved where a CHECKOUT_INTERNALS entry moved (the run starts without its checkouts, said),
+    off (the run goes on without its nested hand, said) where plugins.hook_callback_timeout leaves the hand less
+    than bound seconds."""
     from hermes_cli.env_loader import load_hermes_dotenv
     load_hermes_dotenv(hermes_home=os.environ.get("HERMES_HOME", ""), load_external_secrets=False)
     moved = internals()

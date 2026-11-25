@@ -15,11 +15,12 @@ import (
 const hermesNestedTimeout = codexNestedTimeout
 
 // hermesGateWait is the most the launch waits for Hermes to render the
-// checkouts ([hermesGateCommand]), past which the run is refused: 60 s. The
-// gate took 1.7 to 1.9 s on 0.23.3 for three checkouts, a 200 KB file among
-// them, its interpreter and modules loading 1.6 s of it, and its window
-// resolver 0.9 s offline for a model it could not place (measured); 60 s is
-// some 30 times that, with room for the probes a resolver makes online.
+// checkouts ([hermesGateCommand]), past which the run starts without them:
+// 60 s. Measured on 0.23.3: 1.7 to 1.9 s for three checkouts (a 200 KB file
+// among them), 1.6 s of it loading Hermes's modules, which a busy box slows
+// some fourfold (its gateway stop: 0.8 s idle, 3.1 s busy). Online, the window
+// resolver may try a few providers' metadata, each bounded at 5 s in its
+// model_metadata.py: some 25 s at worst together. 60 s is twice that.
 const hermesGateWait = 60 * time.Second
 
 // hermesCheckouts is what a Hermes run hands a checkout below its start
@@ -59,13 +60,13 @@ const hermesNestedOff = "nested-off"
 
 // hermesGateCommand is the shell asking Hermes what the checkouts bring
 // before checkout-launch claims them: hermes-peek names them, the carry
-// script's `gate` checks every part of Hermes's own code it reads (its
-// INTERNALS) and renders each at the window Hermes resolves for model, within
-// wait ([hermesGateWait] but in a case about it). Only checkout handing needs
-// any of it, so nothing here refuses the run: a release that moved a part, a
-// gate past its wait or one that fails hands no checkout and turns the nested
-// hand off, and a hook bound under [hermesNestedTimeout] turns the nested
-// hand off alone, each said once in the skip log, naming the cause.
+// script's `gate` checks what checkout handing reads of Hermes's code
+// (CHECKOUT_INTERNALS) and renders each at the window Hermes resolves for
+// model, within wait ([hermesGateWait] but in a case about it). Nothing here
+// refuses the run: a moved part, a late or failed gate hands no checkout and
+// turns the nested hand off, a short hook bound turns the hand off, each said
+// once. Another plugin rewriting the same tool result first takes a clone's
+// hand's place: that clone is not handed during the run (never reordered).
 func hermesGateCommand(paths Paths, model string, wait time.Duration) string {
 	q := shellword.Quote
 	state := paths.HermesCheckouts()

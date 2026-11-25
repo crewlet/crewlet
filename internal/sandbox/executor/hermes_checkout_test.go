@@ -333,3 +333,88 @@ func TestAHermesWhoseReadCodeMovedStartsWithoutItsCheckouts(t *testing.T) {
 		t.Errorf("the run's error stream says %q %d times, want once:\n%s", line, strings.Count(errs, line), errs)
 	}
 }
+
+// A HERMES WHOSE CONTRACT CODE MOVED IS REFUSED AS BEFORE: the code the run's
+// own contract reads (here, the managed scope the overlay installs through)
+// is judged where it is read, so the overlay refuses the run as it always
+// did; the checkout gate's own trouble only skips the checkouts.
+//
+// Mutation: have the gate refuse instead, or the overlay go on, and this goes
+// red.
+func TestAHermesWhoseContractCodeMovedIsRefusedAsBefore(t *testing.T) {
+	t.Parallel()
+	runner, box, bin := hermesCheckoutBox(t)
+	p := executor.PathsFor(box)
+	moved := filepath.Join(bin, "py", "hermes_cli", "managed_scope.py")
+	src, err := os.ReadFile(moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(moved, []byte(strings.Replace(string(src), "def load_managed_config(", "def loaded_managed_config(", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"}); res.Success {
+		t.Fatal("the run started on a Hermes whose managed scope moved")
+	}
+	if errs := boxFile(t, box, p.Err()); !strings.Contains(errs, "crewlet: the Hermes overlay of the run could not be installed, so the run does not start") {
+		t.Errorf("the run was not refused by its overlay:\n%s", errs)
+	}
+}
+
+// A TRUSTED CLONE DURING A HERMES RUN BRINGS ITS SKILLS AS AT LAUNCH: a root
+// skills.trusted_project_dirs names, cloned during the run, is handed in the
+// main loop's next result with its skill copied as `late:fix` and listed, its
+// quarantined skill left out and said once; no copy outlives the run.
+//
+// Mutation: copy no skill of a clone, or copy its quarantined one, and this
+// goes red.
+func TestATrustedCloneDuringAHermesRunBringsItsSkills(t *testing.T) {
+	t.Parallel()
+	runner, box, _ := hermesCheckoutBox(t)
+	p := executor.PathsFor(box)
+	work := filepath.Join(box.Home(), "workspace")
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	real, err := filepath.EvalSymlinks(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plant(t, box, map[string]string{".hermes/config.yaml": `{"skills": {"trusted_project_dirs": ["` + real + `/late"]}}`})
+	late := t.TempDir()
+	for rel, body := range piCheckout("late", map[string]string{"AGENTS.md": "LATE-INSTRUCTIONS\n",
+		".hermes/skills/fix/SKILL.md":  hermesSkill("fix", "LATE-FIX"),
+		".agents/skills/evil/SKILL.md": hermesSkill("evil", "QUARANTINE LATE-EVIL")}) {
+		plantFile(t, filepath.Join(late, rel), body)
+	}
+	plant(t, box, map[string]string{"clone-src": filepath.Join(late, "late"), "clone-dst": filepath.Join(work, "late")})
+	if _, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"}); !res.Success {
+		t.Fatalf("the run failed: %s\n%s", res.Error, boxFile(t, box, p.Err()))
+	}
+	var nested map[string]*string
+	seenBy(t, box, "nested", &nested)
+	quarantined := "the skill " + real + "/late/.agents/skills/evil is left out: Hermes's scan quarantines it"
+	want := "cloned\n\nfor `late` with root " + real + "/late\n\n## AGENTS.md\n\nLATE-INSTRUCTIONS\n\n# Skills of " + real +
+		"/late\n\nEach is a set of local instructions to follow, stored in its `SKILL.md` file; to use one, read that " +
+		"file.\n- late:fix: Does fix. (file: " + p.HermesSkills() + "/late:fix/SKILL.md)\n\n# Left out of the " +
+		"repositories below the working directory\n\n- " + quarantined
+	if got := deref(nested["main-1"]); got != want {
+		t.Errorf("the main loop's next result was\n%q\nwant\n%q", got, want)
+	}
+	var lateSkills map[string]string
+	seenBy(t, box, "skills-late", &lateSkills)
+	if got := lateSkills["late:fix/SKILL.md"]; got != "---\nname: \"late:fix\"\ndescription: Does fix.\n---\nLATE-FIX\n" {
+		t.Errorf("late:fix read %q while the run held it", got)
+	}
+	for name := range lateSkills {
+		if strings.HasPrefix(name, "late:evil") {
+			t.Errorf("the quarantined skill was copied as %s", name)
+		}
+	}
+	if errs := boxFile(t, box, p.Err()); strings.Count(errs, quarantined) != 1 {
+		t.Errorf("the run's error stream says %q %d times, want once:\n%s", quarantined, strings.Count(errs, quarantined), errs)
+	}
+	if _, err := os.Stat(p.HermesSkills() + "/late:fix"); err == nil {
+		t.Error("late:fix outlived the run")
+	}
+}
