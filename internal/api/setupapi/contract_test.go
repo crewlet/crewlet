@@ -29,6 +29,7 @@ func TestTheSetupFormReadsWhatTheSetupWireSends(t *testing.T) {
 		added map[string]bool
 	}{
 		{"SetupStep", reflect.TypeFor[setup.Step](), nil},
+		{"SetupTrouble", reflect.TypeFor[setup.Trouble](), nil},
 		{"VendorTextPart", reflect.TypeFor[vendortext.Part](), nil},
 		{"SetupCaution", reflect.TypeFor[setup.Caution](), nil},
 		{"SetupRequirement", reflect.TypeFor[setup.Requirement](), map[string]bool{"value": true, "multiline": true, "accept": true}},

@@ -19,17 +19,30 @@ export type SetupRequirementKind =
   | "consent"
   | "redirect";
 
-/** One step at the app, its vendor UI names marked and its page linked. */
+/** One step to connect the app, its UI names marked and its page linked. */
 export interface SetupStep {
+  /** The step in a few words, and where it is taken ("Crewlet", or the app's console or shell); both or neither. */
+  title?: string;
+  where?: string;
   text: VendorTextPart[];
   /** Permissions, roles or scopes to grant there, in the app's own words. */
   grants?: string[];
+  /** What the person sees once the step worked. */
+  result?: VendorTextPart[];
+  /** What people hit at this step, each with its fix. */
+  trouble?: SetupTrouble[];
   /** The field the step produces a value for. */
   yields?: string;
   /** The integration this step connects first. */
   needs?: string;
   /** Whether `needs` is connected: on, with nothing it requires outstanding. */
   connected?: boolean;
+}
+
+/** One way a step goes wrong: what the person sees, and the fix. */
+export interface SetupTrouble {
+  sign: VendorTextPart[];
+  fix: VendorTextPart[];
 }
 
 /** The one risk an app's credential carries, said once per form. */

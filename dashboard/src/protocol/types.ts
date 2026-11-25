@@ -4337,6 +4337,7 @@ export type {
   SetupSeatState,
   SetupStep,
   SetupToolState,
+  SetupTrouble,
   SetupVerdict,
   SetupVerdictFact,
   SetupVerdictWarning,
