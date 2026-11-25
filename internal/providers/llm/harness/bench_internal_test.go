@@ -144,18 +144,21 @@ func TestACallQueuedWhenTheEntryIsSatOutLaunchesNothing(t *testing.T) {
 	}
 }
 
-// A SPENT PLAN THAT NAMED NO RESET SITS OUT THE FIRST STEP OF THE BACKOFF,
-// and a reset beyond an hour is held to the hour, so an operator who signs in
-// again or raises the plan has the entry back within it.
-func TestASitOutIsTheFirstBackoffStepWithoutAResetAndNeverPastAnHour(t *testing.T) {
+// A SPENT PLAN SITS OUT UNTIL THE RESET ITS VENDOR NAMED, HOWEVER FAR, and the
+// first step of the backoff where it named none or one past a month (a misread).
+// No hourly cap: a capped window sent a real call back into a plan spent for days.
+//
+// Mutation: cap the window again, and the reset days away is red.
+func TestASitOutRunsToTheNamedResetAndIsTheFirstBackoffStepWithoutOne(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		reset time.Duration
 		want  time.Duration
 	}{
 		"no reset named":        {0, limitBackoff[0]},
-		"a reset days away":     {72 * time.Hour, maxLimitBench},
+		"a reset six days away": {6 * 24 * time.Hour, 6 * 24 * time.Hour},
 		"a reset inside a hour": {20 * time.Minute, 20 * time.Minute},
+		"a reset past a month":  {40 * 24 * time.Hour, limitBackoff[0]},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

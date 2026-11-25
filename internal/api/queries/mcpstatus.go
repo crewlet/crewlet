@@ -107,7 +107,7 @@ type MCPStatusAnswer struct {
 	// Alarms are the MCP alarms standing on this node's latest evaluation,
 	// in the table's order, each server with the gesture that fixes it
 	// ([MCPAlarm]). ALWAYS A LIST, and empty on a node that runs no state
-	// log, which evaluates no alarm.
+	// log, whose own table judges no MCP alarm.
 	Alarms []MCPAlarm `json:"alarms"`
 	// CallbackURL is where a vendor sends a person back after a sign-in,
 	// and ClientMetadataURL the engine's client metadata document (the

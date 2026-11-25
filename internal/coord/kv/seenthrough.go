@@ -5,6 +5,8 @@ import (
 	"errors"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // ---- the seats' seen-through marks ------------------------------------- //
@@ -30,6 +32,9 @@ func (f *FleetStore) MarkSeenThrough(ctx context.Context, scope, conversation, m
 
 	if scope == "" || conversation == "" || mark == "" {
 		return false, errors.New("coord/kv: a seen-through mark names its seat, its conversation and its position")
+	}
+	if err := coord.CheckSeenMark(mark); err != nil {
+		return false, err
 	}
 	key := seenKey(scope, conversation)
 	var err error

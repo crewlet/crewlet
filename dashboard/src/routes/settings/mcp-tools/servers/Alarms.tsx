@@ -64,7 +64,7 @@ function Fix({
         <ButtonLink
           size="small"
           variant="secondary"
-          href={href(["company", "integrations", integration], { open: "agents" })}
+          href={href(["company", "integrations", integration], { tab: "agents" })}
         >
           Open {title}'s Agents tab
         </ButtonLink>

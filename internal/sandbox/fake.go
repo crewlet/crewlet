@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/browser/hostreach"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/queue"
 )
@@ -86,7 +87,20 @@ type FakeSandbox struct {
 	// caller reads: a stream that fails after k bytes, or one slowed inside a
 	// synctest bubble. [FakeSandbox.Delivered] counts what it hands out.
 	Streams func(path string, r io.Reader) io.Reader
+
+	// Kernel is the kernel the double's runtime runs on, which
+	// [FakeSandbox.EngineKernel] answers: empty, [FakeKernel].
+	Kernel hostreach.Kernel
+
+	// ReachFunc, when set, answers the launch's check of the box's network
+	// ([hostreach.Command]) instead of a clean answer on the double's kernel:
+	// a box that dials the engine's port, prints another kernel or nothing.
+	ReachFunc func(ctx context.Context, opts ExecOptions) (ExecResult, error)
 }
+
+// FakeKernel is the kernel a [FakeSandbox]'s runtime runs on unless its
+// Kernel names another: a boot id the double's box prints as its own.
+const FakeKernel hostreach.Kernel = "7d4e1c2a-9b3f-4e6d-a5c8-1f2e3d4c5b6a"
 
 var _ Sandbox = (*FakeSandbox)(nil)
 
@@ -134,6 +148,15 @@ func (s *FakeSandbox) ID() string { return s.id }
 // Home is the box's root directory: a fixed path nothing on disk backs.
 func (s *FakeSandbox) Home() string { return s.home }
 
+// EngineKernel answers as a container box does ([containerBox.EngineKernel]):
+// its Kernel, else [FakeKernel].
+func (s *FakeSandbox) EngineKernel() (hostreach.Kernel, error) {
+	if s.Kernel != "" {
+		return s.Kernel, nil
+	}
+	return FakeKernel, nil
+}
+
 // FakeExec is one command a [FakeSandbox] was asked to run, and the
 // environment and directory it was given.
 type FakeExec struct {
@@ -144,11 +167,21 @@ type FakeExec struct {
 }
 
 // Exec records the command and returns whatever the test queued for it,
-// or an empty success.
+// or an empty success. The launch's check of the box's network is answered
+// first, by ReachFunc, else as a box off its host's loopback on the double's
+// kernel answers it, so the double's boxes ready a browser as a bridged box
+// on the engine's kernel does.
 func (s *FakeSandbox) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
 	s.mu.Lock()
 	s.execs = append(s.execs, FakeExec{Command: cmd, Env: maps.Clone(opts.Env), Cwd: opts.Cwd})
 	s.mu.Unlock()
+	if cmd == hostreach.Command() {
+		if s.ReachFunc != nil {
+			return s.ReachFunc(ctx, opts)
+		}
+		kernel, _ := s.EngineKernel()
+		return ExecResult{Stdout: hostreach.Answer(kernel)}, nil
+	}
 	if s.ExecFunc != nil {
 		return s.ExecFunc(ctx, cmd, opts)
 	}
@@ -475,6 +508,14 @@ func (s *FakeSandbox) Background() []string {
 	return slices.Clone(s.background)
 }
 
+// Files is every path the box holds a file at, sorted: what a case lists of
+// a writer that names its files afresh each time.
+func (s *FakeSandbox) Files() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Sorted(maps.Keys(s.files))
+}
+
 // Put seeds a file, standing in for something the job wrote.
 func (s *FakeSandbox) Put(p, content string) {
 	s.mu.Lock()
@@ -749,6 +790,11 @@ type FakeRunner struct {
 	// switch the reading of notes of the harness this fake stands in for off,
 	// "" where it says nothing. Set it before the first collection.
 	NotesOff string
+
+	// DeferAt is what [FakeRunner.DefersMCPAt] answers: how many MCP tools
+	// make the harness this fake stands in for hide them all, 0 for none. Set
+	// it before the first launch.
+	DeferAt int
 
 	// Reports, where set, makes the fake a minting runner (minted.go): what
 	// [FakeRunner.ReportedSession] answers of a job's box. Set it before the
@@ -1036,11 +1082,18 @@ func (r *FakeRunner) ReportedSession(ctx context.Context, box Sandbox, handle Ru
 // the warning a run that never asked for its notes gets ([notesOffExplainer]).
 func (r *FakeRunner) NotesOffWhy() string { return r.NotesOff }
 
+// DefersMCPAt answers [FakeRunner.DeferAt]: the optional answer a runner whose
+// harness hides every MCP tool past a count gives the launch ([MCPDeferrer]).
+func (r *FakeRunner) DefersMCPAt() int { return r.DeferAt }
+
 // CallIDMeta answers [FakeRunner.CallIDKey]: the optional answer a runner whose
 // harness names each of its calls gives the launch ([CallIdentifier]).
 func (r *FakeRunner) CallIDMeta() string { return r.CallIDKey }
 
-var _ CallIdentifier = (*FakeRunner)(nil)
+var (
+	_ CallIdentifier = (*FakeRunner)(nil)
+	_ MCPDeferrer    = (*FakeRunner)(nil)
+)
 
 // MCPCallCeiling answers [FakeRunner.Ceiling]: the optional answer a runner
 // whose harness gives up on a call at a wait of its own gives the launch

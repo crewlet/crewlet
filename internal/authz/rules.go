@@ -128,6 +128,9 @@ const (
 	// ActionHomeBoardSave is the tool `save_home_board`: a person's Home board,
 	// the widgets they placed and how they arranged them.
 	ActionHomeBoardSave Action = "save_home_board"
+	// ActionAssistantInstructionsSave is the tool `save_assistant_instructions`:
+	// a person's own instructions on how Ask Crewlet writes to them.
+	ActionAssistantInstructionsSave Action = "save_assistant_instructions"
 
 	// THE CODE WRITE TOOLS, decided as the git transport's push is: judged per
 	// repository where decided (an engine write by the grant's ref rule and the
@@ -1193,6 +1196,10 @@ var rules = map[Action]rule{
 	// handle, and it is kept under their SEAT ([iam.RecordOwner]), whose next
 	// holder inherits it. No app: Home is everybody's.
 	ActionHomeBoardSave: {class: ClassOwnRecord, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	// AND SO ARE ONE'S OWN ASK CREWLET INSTRUCTIONS, which Ask Crewlet may
+	// propose ("answer shorter from now on") for the person to approve.
+	ActionAssistantInstructionsSave: {class: ClassOwnRecord, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
 
 	// --- reading the atlas ------------------------------------------- //

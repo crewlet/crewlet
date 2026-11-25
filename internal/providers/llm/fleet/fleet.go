@@ -13,12 +13,13 @@
 // The rule, which the simulation in balance_test.go holds to its promise
 // (the mean spread within the threshold):
 //
-//   - A member's STATE comes from what its sign-in already reported
-//     ([Read]): sitting out a vendor's limit or a `reached` window is
-//     [Limit], a refused sign-in newer than its last answer is [SignedOut],
-//     a session or weekly window from [llm.LimitWarnAt] is [Near], anything
-//     else [Available]. A reading older than [llm.LimitStaleAfter] says
-//     nothing, so the member is available with its share unknown.
+//   - A member's STATE comes from its sign-in's readings and sit-out ([Read]),
+//     which the engine's plan reads keep current with no model call: sitting
+//     out a vendor's limit or a `reached` window is [Limit], a refused sign-in
+//     newer than its last answer is [SignedOut], a session or weekly window
+//     from [llm.LimitWarnAt] is [Near], anything else [Available]. A reading
+//     older than [llm.LimitStaleAfter] says nothing, so the member is
+//     available with its share unknown; a sit-out still holds to its reset.
 //   - Its SHARE is percent, compared in whole points: a plan's is the higher
 //     of its session and weekly use, so plans of different sizes compare by
 //     percent. A key, cloud account or gateway has no spend cap the engine
@@ -52,8 +53,9 @@
 //
 // # Who has to agree
 //
-// This node alone. The readings are the node's own (harness.Plans, which the
-// engine keeps across a restart); the homes and last-served instants are this
+// Nobody. The readings are a vendor's word about an account, kept per sign-in
+// (harness.Plans, which the engine keeps across a restart) and shared through
+// the status records, so every node reads the same plan; the homes and last-served instants are this
 // node's memory ([Ledger]), published on its status record and lost on
 // restart, after which a seat job's next pick is the least-used member. A
 // running turn is never moved by balancing, only by a limit or a sign-out.

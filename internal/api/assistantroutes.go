@@ -8,7 +8,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -55,13 +54,10 @@ func (a *App) AssistantRoutes() []catalog.Route {
 				Absent: policy.Absent, Effect: policy.Effect, DryRun: policy.DryRun,
 				Summary: policy.Summary, Replaces: policy.Replaces})
 		} else if decidedInside[pattern] {
+			// THE ACT ROUTE'S EFFECT is the route table's to state
+			// (catalog.NewRouteTable), as every table builds it.
 			route := catalog.Route{Pattern: pattern, Apps: a.questionApps(named[pattern])}
-			switch pattern {
-			case catalog.ActRoute:
-				// THE ONE POST MOUNTED OUTSIDE A ROUTER, so the table says
-				// what it does: it calls the tool its path names.
-				route.Effect = authz.EffectCalls
-			case catalog.QuestionRoute:
+			if pattern == catalog.QuestionRoute {
 				route.QuestionApps = map[string][]iam.Grant{}
 				for _, what := range a.queries.Names() {
 					route.QuestionApps[what] = a.questionApps(what)

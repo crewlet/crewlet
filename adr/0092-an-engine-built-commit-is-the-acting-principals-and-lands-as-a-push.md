@@ -2,7 +2,25 @@
 
 - **Status:** accepted
 - **Authority:** `internal/gitlet/host`
-- **Enforced-by:** `internal/gitlet/host.TestARetriedEngineWriteIsOnePush`, `internal/gitlet/host.TestEveryPushTakesTheOneLanding`, `internal/gitlet/host.TestAnEngineCommitReadsNoWholeTree`, `internal/gitlet/host.TestAPlanJudgesEachDirectoryOnce`, `internal/gitlet/host.TestAWriteReadsItsPathsInItsBuild`, `internal/gitlet/host.TestAWritePastTheDepthBoundRunsNoGit`, `internal/gitlet.TestAnEngineWriteIsHeldToOneRule`, `internal/gitlet/host.TestAnEngineCommitIsTheActingPrincipals`, `internal/gitlet/host.TestACommitIsNeverDatedBeforeItsParent`, `internal/gitlet/host.TestAnEngineWriteIsHeldToTheRelaysFsck`, `internal/gitlet/host.TestAnEngineWriteNeverWritesInACache`, `internal/gitlet/gitproc.TestOnlyCommitTreeTakesAnIdentity`, `internal/engine.TestTheSignerFallsBackToTheIdentityDomain`, `internal/gitlet/host.TestABoxCannotPushTheEnginesCommitter`, `internal/gitlet/host.TestABoxStoresNoCommitAsTheEngineBesideARefusedUpdate`, `internal/gitlet/host.TestABoxMayPushBackAnEngineCommitTheRepositoryHolds`, and the Gitlet suite's `AnEngineCommitLands`, `AnEngineWriteRetriedIsOnePush`, `AnEngineWriteCrashedAtEveryPointIsOnePush` and `AnEngineWriteWhoseHomeDiesAfterAppendIsOnePush`, with `internal/gitlet/gitlettest.TestTheSuiteCatchesAWriteAnsweredOkWithoutARow` and `internal/gitlet/gitlettest.TestTheSuiteCatchesAnEngineWriteIntoACache` holding the suite able to fail
+- **Enforced-by:**
+  - `internal/gitlet/host.TestARetriedEngineWriteIsOnePush`
+  - `internal/gitlet/host.TestEveryPushTakesTheOneLanding`
+  - `internal/gitlet/host.TestAnEngineCommitReadsNoWholeTree`
+  - `internal/gitlet/host.TestAPlanJudgesEachDirectoryOnce`
+  - `internal/gitlet/host.TestAWriteReadsItsPathsInItsBuild`
+  - `internal/gitlet/host.TestAWritePastTheDepthBoundRunsNoGit`
+  - `internal/gitlet.TestAnEngineWriteIsHeldToOneRule`
+  - `internal/gitlet/host.TestAnEngineCommitIsTheActingPrincipals`
+  - `internal/gitlet/host.TestACommitIsNeverDatedBeforeItsParent`
+  - `internal/gitlet/host.TestAnEngineWriteIsHeldToTheRelaysFsck`
+  - `internal/gitlet/host.TestAnEngineWriteNeverWritesInACache`
+  - `internal/gitlet/gitproc.TestOnlyCommitTreeTakesAnIdentity`
+  - `internal/engine.TestTheSignerFallsBackToTheIdentityDomain`
+  - `internal/gitlet/host.TestABoxCannotPushTheEnginesCommitter`
+  - `internal/gitlet/host.TestABoxStoresNoCommitAsTheEngineBesideARefusedUpdate`
+  - `internal/gitlet/host.TestABoxMayPushBackAnEngineCommitTheRepositoryHolds`, and the Gitlet suite's `AnEngineCommitLands`
+  - `AnEngineWriteRetriedIsOnePush`
+  - `AnEngineWriteCrashedAtEveryPointIsOnePush` and `AnEngineWriteWhoseHomeDiesAfterAppendIsOnePush`, with `internal/gitlet/gitlettest.TestTheSuiteCatchesAWriteAnsweredOkWithoutARow` and `internal/gitlet/gitlettest.TestTheSuiteCatchesAnEngineWriteIntoACache` holding the suite able to fail
 - **Measured:** one write built in two Gitlet nodes' scratches is one commit, byte for byte (`TestAnEngineCommitIsTheActingPrincipals`), and a three-file commit at depth three asks git the same requests beside sibling directories of 10 files and of 10 000 (`TestAnEngineCommitReadsNoWholeTree`): what a build reads and writes follows the change, never the tree; and the read of what a write's paths are, which git walks from the root, grows with the square of their depth — a thousand paths at the 64-component bound, each with every directory above it, took 19 s of git on two E-cores of an Intel Core Ultra 7 265U, which the build's ten seconds refuse too_large. Timed (`BenchmarkEngineWrite`, `BenchmarkEngineCommit`; two runs of ten writes an arm, on two E-cores of an Intel Core Ultra 7 265U, the pinned git 2.56.0, in-process object stores only — the in-memory one and the S3 fake at a 100 and a 200 ms first byte, no real bucket): a one-file commit from a seat's tool call to its adopted pack is 44–78 ms at the p50 from memory and 239–251 ms at a 200 ms first byte, one PUT and no GET a write; sixty-four at once, the repositories kept compacted and every answer counted — refusals with the rest — at most 3.2 s at the p99 at 200 ms, about a twenty-sixth of the 82 s attempt, every stage inside its budget and the share's two-second wait reached whole on a one-unit share, where 20–33% of the writes were answered unready, while eight at once, what one unit serves, were refused none; a hundred files at depth six build in 59–145 ms at the p50, a tree of 10 000 files and one of 100 000 within a tenth of each other in each run; and the widest build, a put into a directory of 100 000 entries, packs 2.3 MB, under the 4 MiB bound
 - **Cost-when-tried:** three designs were judged against the code. A write path of its own beside the relay's is a second place to check a repository's status, its protections, its blob limit and its size and to answer ok, and the relay had already shown two copies of those steps drifting apart before Gitlet took one landing. A whole-tree index per commit (read-tree, update-index, write-tree) is a cost that follows the repository, every engine commit into a 100 000-file tree paying for all of it. A commit stamped with the server's clock and an engine author makes a retry another commit, so one tool call lands twice or is answered stale against its own first attempt, and history names nobody
 - **Tag-status:** unreleased

@@ -2,7 +2,21 @@
 
 - **Status:** accepted
 - **Authority:** `internal/objstore/references`
-- **Enforced-by:** `internal/objstore.TestADeclarationStatesItsStanding`, `internal/objstore.TestAWalkReadsOnlyTheStandingsItsPassIsOwed`, `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`, `internal/objstore/references.TestEveryDeclarationStatesItsStanding`, `internal/objstore/references.TestARetiredTableIsSweptAndOutlivesItsLongestRead`, `internal/objstore/collect.TestARetiredReferenceKeepsItsObjectFromCollection`, `internal/objstore/collect.TestTheAuditAsksOnlyAfterRequiredReferences`, `internal/objstore/collect.TestADerivedReferenceIsKeptAndNeverAudited`, `internal/objstore/collect.TestAStoreMoveWalksTheRequiredAndDerivedTablesAlone`, `internal/objstore/migrate.TestAStoreMoveCopiesADerivedObjectVerified`, `internal/objstore/migrate.TestADerivedObjectTheSourceCannotGiveBackHoldsNothingUp`, `internal/backup.TestABackupCarriesNoRetiredReference`, `internal/backup.TestABackupCarriesNoDerivedObject`, `internal/backup.TestABackupRefusesADeclarationThatStatesNoStanding`
+- **Enforced-by:**
+  - `internal/objstore.TestADeclarationStatesItsStanding`
+  - `internal/objstore.TestAWalkReadsOnlyTheStandingsItsPassIsOwed`
+  - `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`
+  - `internal/objstore/references.TestEveryDeclarationStatesItsStanding`
+  - `internal/objstore/references.TestARetiredTableIsSweptAndOutlivesItsLongestRead`
+  - `internal/objstore/collect.TestARetiredReferenceKeepsItsObjectFromCollection`
+  - `internal/objstore/collect.TestTheAuditAsksOnlyAfterRequiredReferences`
+  - `internal/objstore/collect.TestADerivedReferenceIsKeptAndNeverAudited`
+  - `internal/objstore/collect.TestAStoreMoveWalksTheRequiredAndDerivedTablesAlone`
+  - `internal/objstore/migrate.TestAStoreMoveCopiesADerivedObjectVerified`
+  - `internal/objstore/migrate.TestADerivedObjectTheSourceCannotGiveBackHoldsNothingUp`
+  - `internal/backup.TestABackupCarriesNoRetiredReference`
+  - `internal/backup.TestABackupCarriesNoDerivedObject`
+  - `internal/backup.TestABackupRefusesADeclarationThatStatesNoStanding`
 - **Cost-when-tried:** the object store's page and four comments promised a grace from un-naming that the collector never gave — "the older copy goes a day after nothing names it" — so an operator could have planned a recovery from the bucket that was not there (corrected in ce9454996). The collector's grace is an UPLOAD's; before this record the only way to keep an object past its un-naming was to keep a live row naming it, which the audit checks and every backup carries
 - **Tag-status:** unreleased
 

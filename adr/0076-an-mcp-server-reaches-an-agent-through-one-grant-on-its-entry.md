@@ -2,7 +2,15 @@
 
 - **Status:** accepted
 - **Authority:** `internal/config`
-- **Enforced-by:** `internal/config.TestASeatHoldsAServerOnlyThroughItsGrant`, `internal/config.TestAnMCPEnvBlockForAServerThatDoesNotReachItsSeatIsRefused`, `internal/config.TestAGrantNamesOnlyWhatTheChartHolds`, `internal/config.TestAServerBoundToAVendorCredentialTakesNoAccess`, `internal/engine.TestASharedServersToolsReachOnlyTheSeatsItIsGrantedTo`, `internal/engine.TestAPerAgentServerStartsForTheSeatsItsGrantReaches`, `internal/engine.TestABoxIsGivenOnlyAServerItsSeatIsGranted`, `internal/api/queries.TestTheDetailSaysWhoAServerReachesAndWhy`
+- **Enforced-by:**
+  - `internal/config.TestASeatHoldsAServerOnlyThroughItsGrant`
+  - `internal/config.TestAnMCPEnvBlockForAServerThatDoesNotReachItsSeatIsRefused`
+  - `internal/config.TestAGrantNamesOnlyWhatTheChartHolds`
+  - `internal/config.TestAServerBoundToAVendorCredentialTakesNoAccess`
+  - `internal/engine.TestASharedServersToolsReachOnlyTheSeatsItIsGrantedTo`
+  - `internal/engine.TestAPerAgentServerStartsForTheSeatsItsGrantReaches`
+  - `internal/engine.TestABoxIsGivenOnlyAServerItsSeatIsGranted`
+  - `internal/api/queries.TestTheDetailSaysWhoAServerReachesAndWhy`
 - **Cost-when-tried:** a shared server reached every agent seat with no way to narrow it, and a per-agent server reached exactly the seats holding an `mcp_env` block for it, so a server that needs no credential could not be granted without a placeholder key, a unit could not be granted anything its seats did not each carry a block for, and removing a block to rotate a value silently took the seat's tools away.
 - **Tag-status:** unreleased
 

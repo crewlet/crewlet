@@ -2,7 +2,19 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant/wire`
-- **Enforced-by:** `internal/assistant/wire.TestTheVerdictIsTheNumberOfRows`, `internal/assistant/wire.TestEveryCapTogetherKeepsTheBriefInItsBudget`, `internal/assistant/catalog.TestABriefsSchemaAndItsOwnFaultsComeBackInOnePass`, `internal/assistant/catalog.TestARecordIsCitedByOneRow`, `internal/assistant/wire.TestABriefIsHeldToItsShape`, `internal/assistant/catalog.TestTheBriefSchemaAsksForAVerdictItCanCount`, `internal/assistant/catalog.TestABriefCallIsReadStrictly`, `internal/assistant/catalog.TestEveryBriefCapIsInTheSchemaTheModelReads`, `internal/assistant.TestTheBriefPromptStatesEveryCap`, `internal/assistant.TestABriefIsReReadWholeByTheNextTurn`, `internal/assistantdomain.TestACardInAnEarlierShapeIsReadAsANotice`, `cmd/crewlet.TestTheShippedAssistantEvalSuitePasses`
+- **Enforced-by:**
+  - `internal/assistant/wire.TestTheVerdictIsTheNumberOfRows`
+  - `internal/assistant/wire.TestEveryCapTogetherKeepsTheBriefInItsBudget`
+  - `internal/assistant/catalog.TestABriefsSchemaAndItsOwnFaultsComeBackInOnePass`
+  - `internal/assistant/catalog.TestARecordIsCitedByOneRow`
+  - `internal/assistant/wire.TestABriefIsHeldToItsShape`
+  - `internal/assistant/catalog.TestTheBriefSchemaAsksForAVerdictItCanCount`
+  - `internal/assistant/catalog.TestABriefCallIsReadStrictly`
+  - `internal/assistant/catalog.TestEveryBriefCapIsInTheSchemaTheModelReads`
+  - `internal/assistant.TestTheBriefPromptStatesEveryCap`
+  - `internal/assistant.TestABriefIsReReadWholeByTheNextTurn`
+  - `internal/assistantdomain.TestACardInAnEarlierShapeIsReadAsANotice`
+  - `cmd/crewlet.TestTheShippedAssistantEvalSuitePasses`
 - **Measured:** a dogfood company's Inbox brief of one decision (prompt `assistant.brief.v2`), read back from its transcript: about 800 characters drawn, a head that said "2 need you" over one thing that needed the reader and one fact tagged `neutral`, a recommendation that repeated the first row and its button, and three follow-ups. The v2 caps allowed 1,520 characters (a 200 character summary, three rows of 120 plus 120, a recommendation of 120, three follow-ups of 160). The v3 caps allow 770 (`wire.BriefBudgetRunes`): an about line of 90, three rows of 80 plus 60, a context line of 100, two follow-ups of 80; a brief with nothing to do is the about line alone.
 - **Cost-when-tried:** v2 asked for concision in words ("numbers and names, no filler") and left the shape open to say everything twice. The model followed the words and filled the shape: a summary of counts, a row for a fact to know, and the first row again as the recommendation. The person asked for "what's up in the page, do I need to do anything about it", and the card made them read every row to find out.
 - **Tag-status:** unreleased

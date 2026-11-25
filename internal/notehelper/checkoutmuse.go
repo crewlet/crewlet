@@ -7,14 +7,16 @@ import (
 	"unicode/utf8"
 )
 
-// THE LAUNCH'S BUDGET: a harness that renders the home instruction file the
-// launch writes into one bound it shares with what else it loads at the
-// start would cut a person's own text where the sections took it all. Muse
-// Code 1.4.25 renders every rules file it loads into one reminder of at most
-// 65,536 bytes, the home's file first, and cuts what passes it (measured,
-// rows capa and capb), so the launch hands the checkouts whole while that
-// reminder, the home's own text and the start directory's own file in it,
-// fits, and names every other for the model to read.
+// THE LAUNCH'S BUDGET (launchConfig.Budget): a harness that renders the home
+// instruction file the launch writes into one bound it shares with what else
+// it loads at the start would cut a person's own text where the sections took
+// it all. Muse Code 1.4.25 renders the home's rules file (the own file's
+// text, then the sections) and W's own (the first of the slots' names there,
+// none where it is whitespace), markup escaped, into one reminder of at most
+// 65,536 bytes, cutting what passes it (measured, rows capa and capb), so
+// each checkout is first named ("read <file> for its instructions"), then
+// handed whole, in order, while that reminder fits by Muse's exact
+// rendering; the home's and W's own text are never cut for them.
 
 // budgetMuse is the [launchBudget] form of Muse Code 1.4.25's rules reminder.
 const budgetMuse = "muse"
@@ -194,4 +196,54 @@ func museStartFile(work string, slots []instructionSlot) (string, string, bool) 
 		}
 	}
 	return "", "", false
+}
+
+// museFrontName is the name a SKILL.md's frontmatter gives as Muse Code
+// 1.4.25 reads it (a one-line YAML scalar, [yamlScalar]), and whether it gives
+// one: a file opening with `---` and a `name:` line before the `---` that
+// closes it, read no further ([scanFrontmatter]).
+func museFrontName(path string) (string, bool) {
+	var name string
+	named := scanFrontmatter(path, func(l string) bool { return l == "---" }, func(l string) bool {
+		if key, ok := frontKey(l); !ok || key != "name" {
+			return false
+		}
+		_, value, _ := strings.Cut(l, ":")
+		name = yamlScalar(strings.TrimSpace(value))
+		return true
+	})
+	return name, named
+}
+
+// yamlScalar is a one-line YAML scalar's value: a quoted one's inside (in
+// single quotes, a doubled quote read as one), a comment after it dropped; a
+// plain one up to a comment (` #` or a leading `#`), trimmed.
+func yamlScalar(v string) string {
+	if v != "" && (v[0] == '"' || v[0] == '\'') {
+		q := v[0]
+		for i := 1; i < len(v); i++ {
+			switch {
+			case q == '"' && v[i] == '\\':
+				i++
+			case v[i] == q && q == '\'' && i+1 < len(v) && v[i+1] == '\'':
+				i++
+			case v[i] == q:
+				inner := v[1:i]
+				if q == '\'' {
+					inner = strings.ReplaceAll(inner, "''", "'")
+				}
+				return inner
+			}
+		}
+		return v
+	}
+	if strings.HasPrefix(v, "#") {
+		return ""
+	}
+	for j := 1; j < len(v); j++ {
+		if v[j] == '#' && (v[j-1] == ' ' || v[j-1] == '\t') {
+			return strings.TrimSpace(v[:j])
+		}
+	}
+	return v
 }

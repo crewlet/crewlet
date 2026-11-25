@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+
+	"github.com/crewlet/crewlet/internal/skillname"
 )
 
 // THE SKILL COPY: a checkout's skill is the checkout's own content, copied
@@ -141,24 +143,24 @@ func (r *copyRoom) take(p plannedSkill) bool {
 // spent reports whether nothing is left of r.
 func (r *copyRoom) spent() bool { return r.files <= 0 || r.bytes <= 0 }
 
-// skillName is the name a checkout's skill is listed under: `<tag>:<skill>`,
+// skillName is the name a checkout's skill is listed under: `<tag><sep><skill>`,
 // the skill's directory name lower-cased with every byte outside [a-z0-9_.] a
 // hyphen. Past [maxSkillName] it keeps that shape: the skill part cut (and the
 // tag, to half the room, where the skill leaves too little), then a hyphen and
 // the first 8 hex digits of the full name's SHA-256, so it fits, stays the
 // same for the same skill and differs from every other.
-func skillName(tag, dir string) string {
+func skillName(tag, dir string, sep skillSep) string {
 	skill := slug(dir, "_.")
-	name := tag + ":" + skill
+	name := tag + sep.String() + skill
 	if len(name) <= maxSkillName {
 		return name
 	}
 	sum := sha256.Sum256([]byte(name))
-	room := maxSkillName - len(":") - len("-") - 8
+	room := maxSkillName - len(sep.String()) - len("-") - 8
 	tagRoom := max(room/2, room-len(skill))
 	tag = tag[:min(len(tag), tagRoom)]
 	skill = skill[:min(len(skill), room-len(tag))]
-	return tag + ":" + skill + "-" + hex.EncodeToString(sum[:4])
+	return tag + sep.String() + skill + "-" + hex.EncodeToString(sum[:4])
 }
 
 // plannedSkill is a checkout's skill as planned: its directory, the name it is
@@ -173,16 +175,19 @@ type plannedSkill struct {
 }
 
 // skillDir is a directory under one of a checkout's skill directories that
-// holds a SKILL.md: its path, its name, and which of the spec's skill
-// directories it is under.
+// holds a SKILL.md, or a command file ([commandSkills]): its path, its name,
+// which of the spec's skill directories it is under, whether it is a
+// command, and, listed as Grok lists ([grokSessionSkills]), its listed name.
 type skillDir struct {
-	src, name string
-	slot      int
+	src, name, listed string
+	slot              int
+	command           bool
 }
 
 // checkoutSkillDirs is the skill directories under root's skill directories,
 // in order, each skill directory read within the entry bound, a recursive one
-// walked ([skillWalk]); one past a bound is left out whole, over saying why.
+// walked ([skillWalk]), a commands one read for its files ([commandSkills]);
+// one past a bound is left out whole, over saying why.
 func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []string) {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -191,8 +196,13 @@ func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []
 	reached := map[string]bool{}
 	for i, slot := range spec.SkillDirs {
 		dir := filepath.Join(root, slot.Dir)
-		if slot.Recursive {
-			found, err := walkSkills(realRoot, dir, reached)
+		if slot.Recursive || slot.Commands {
+			var found []skillDir
+			if slot.Commands {
+				found, err = commandSkills(realRoot, dir)
+			} else {
+				found, err = walkSkills(realRoot, dir, reached, slot.skillWalkOptions)
+			}
 			if err != nil {
 				over = append(over, fmt.Sprintf("the skills of %s are left out: %v", dir, err))
 				continue
@@ -251,14 +261,23 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]pla
 	}
 	dirs, over := checkoutSkillDirs(root, spec)
 	said.sayAll(over)
+	grok := spec.ListedAs == listedGrok
+	if grok {
+		dirs = grokSessionSkills(dirs)
+	}
 	var plans []plannedSkill
 	planned := map[string]skillDir{}
 	files, bytes := 0, int64(0)
 	for _, d := range dirs {
-		name := skillName(tag, d.name)
-		if first, ok := planned[name]; ok {
-			if first.slot == d.slot {
-				said.say("the skill %s is left out: %s, found first, takes its name %s", d.src, first.src, name)
+		name := skillName(tag, d.name, spec.SkillSep)
+		key := name
+		if grok { // NAMED AS GROK LISTS IT: two skills of one directory name, apart in the walk, both kept
+			name = skillName(tag, d.listed, spec.SkillSep)
+			key = skillname.Grok(name)
+		}
+		if first, ok := planned[key]; ok {
+			if first.slot == d.slot || grok {
+				said.say("the skill %s is left out: %s, found first, takes its name %s", d.src, first.src, key)
 			}
 			continue
 		}
@@ -266,7 +285,7 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]pla
 			said.say("the skill %s is left out: %s", d.src, why)
 			continue
 		}
-		plan, cost, err := planSkill(d.src, realRoot, name)
+		plan, cost, err := planEntry(d, realRoot, name, grok)
 		if err != nil {
 			if !errors.Is(err, errNoFrontmatter) {
 				said.say("the skill %s is left out: %v", d.src, err)
@@ -280,109 +299,10 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]pla
 			return plans, true
 		}
 		files, bytes = files+len(plan.items), bytes+plan.bytes
-		planned[name] = d
+		planned[key] = d
 		plans = append(plans, plan)
 	}
 	return plans, false
-}
-
-// homeHolds is why a copy named name may not be made, "" where it may: the
-// run's skills hold an entry of that name, which the copy would not replace,
-// or a skill directory of one of the home's other skill directories
-// (spec.HomeSkills) is listed under it, by its frontmatter's name, else its
-// directory's. Muse Code 1.4.25 lists a skill by its frontmatter's name, and
-// of two of one name lists the higher place's alone, or, both in one
-// directory, neither (measured, rows fn1-fn4, so1-so6): either way the copy
-// and the person's skill are not both listed, so the person's keeps its name
-// and the copy is left out, said. A directory past the entry bound may hold
-// the name, so it leaves the copy out too.
-func homeHolds(spec checkoutSpec, name string) string {
-	if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil {
-		return "the home's skills hold " + name + " already"
-	}
-	for _, slot := range spec.HomeSkills {
-		entries, past, err := readDirBounded(slot.Dir)
-		if past {
-			return "the home's " + slot.Dir + " holds more than the entries its names are read in, and may list " + name
-		}
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			dir := filepath.Join(slot.Dir, e.Name())
-			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-				continue
-			}
-			listed := e.Name()
-			if raw, err := readBounded(filepath.Join(dir, "SKILL.md"), maxSkillFrontmatter); err == nil {
-				if n, ok := skillFrontName(raw); ok {
-					listed = n
-				}
-			}
-			if listed == name {
-				return "the home's " + dir + " is listed as " + name + " too, and Muse Code would not list both"
-			}
-		}
-	}
-	return ""
-}
-
-// maxSkillFrontmatter bounds what is read of a home skill's SKILL.md for its
-// name: a frontmatter is a few lines, and past 64 KiB is no skill's.
-const maxSkillFrontmatter = 64 << 10
-
-// skillFrontName is the name a SKILL.md's frontmatter gives, quotes trimmed,
-// and whether it gives one: a file opening with `---` and a `name:` line
-// before the `---` that closes it.
-func skillFrontName(raw []byte) (string, bool) {
-	lines := strings.Split(string(raw), "\n")
-	if strings.TrimSuffix(lines[0], "\r") != "---" {
-		return "", false
-	}
-	for _, line := range lines[1:] {
-		l := strings.TrimSuffix(line, "\r")
-		if l == "---" {
-			return "", false
-		}
-		if key, ok := frontKey(l); ok && key == "name" {
-			_, value, _ := strings.Cut(l, ":")
-			return yamlScalar(strings.TrimSpace(value)), true
-		}
-	}
-	return "", false
-}
-
-// yamlScalar is a one-line YAML scalar's value: a quoted one's inside (in
-// single quotes, a doubled quote read as one), a comment after it dropped; a
-// plain one up to a comment (` #` or a leading `#`), trimmed.
-func yamlScalar(v string) string {
-	if v != "" && (v[0] == '"' || v[0] == '\'') {
-		q := v[0]
-		for i := 1; i < len(v); i++ {
-			switch {
-			case q == '"' && v[i] == '\\':
-				i++
-			case v[i] == q && q == '\'' && i+1 < len(v) && v[i+1] == '\'':
-				i++
-			case v[i] == q:
-				inner := v[1:i]
-				if q == '\'' {
-					inner = strings.ReplaceAll(inner, "''", "'")
-				}
-				return inner
-			}
-		}
-		return v
-	}
-	if strings.HasPrefix(v, "#") {
-		return ""
-	}
-	for j := 1; j < len(v); j++ {
-		if v[j] == '#' && (v[j-1] == ' ' || v[j-1] == '\t') {
-			return strings.TrimSpace(v[:j])
-		}
-	}
-	return v
 }
 
 // errNoFrontmatter is a SKILL.md that opens with no frontmatter.
@@ -399,6 +319,15 @@ type planRead struct {
 // realRoot, to be listed as name ([copyWalk.plan]), and is what it read,
 // whether the plan was refused or not.
 func planSkill(src, realRoot, name string) (plannedSkill, planRead, error) {
+	return planEntry(skillDir{src: src}, realRoot, name, false)
+}
+
+// planEntry is [planSkill] for d, a skill directory or a command file, whose
+// copy is its SKILL.md alone; bare, a SKILL.md or command opening with no
+// frontmatter is planned with one naming it ([bareSkill]) rather than
+// refused, as Grok Build lists one (measured).
+func planEntry(d skillDir, realRoot, name string, bare bool) (plannedSkill, planRead, error) {
+	src := d.src
 	real, err := filepath.EvalSymlinks(src)
 	if err != nil {
 		return plannedSkill{}, planRead{}, err
@@ -406,9 +335,12 @@ func planSkill(src, realRoot, name string) (plannedSkill, planRead, error) {
 	if !within(realRoot, real) {
 		return plannedSkill{}, planRead{}, fmt.Errorf("it leads out of its checkout, to %s", real)
 	}
-	md, err := filepath.EvalSymlinks(filepath.Join(src, "SKILL.md"))
-	if err != nil || !within(realRoot, md) {
-		return plannedSkill{}, planRead{}, fmt.Errorf("its SKILL.md leads out of its checkout")
+	md := real
+	if !d.command {
+		md, err = filepath.EvalSymlinks(filepath.Join(src, "SKILL.md"))
+		if err != nil || !within(realRoot, md) {
+			return plannedSkill{}, planRead{}, fmt.Errorf("its SKILL.md leads out of its checkout")
+		}
 	}
 	raw, err := readBounded(md, maxCopyBytes)
 	cost := planRead{bytes: int64(len(raw))}
@@ -416,10 +348,17 @@ func planSkill(src, realRoot, name string) (plannedSkill, planRead, error) {
 		return plannedSkill{}, cost, err
 	}
 	renamed, description, ok := renameSkill(raw, name)
+	if !ok && bare {
+		renamed, ok = bareSkill(raw, name), true
+	}
 	if !ok {
 		return plannedSkill{}, cost, errNoFrontmatter
 	}
 	p := plannedSkill{src: src, name: name, description: description, renamed: renamed}
+	if d.command {
+		p.bytes, cost.entries = int64(len(raw)), 1
+		return p, cost, nil
+	}
 	walk := copyWalk{realRoot: realRoot}
 	p.items, p.bytes, err = walk.plan(src, "", 0, nil)
 	p.notes, cost.entries = walk.notes, walk.entries
@@ -429,6 +368,15 @@ func planSkill(src, realRoot, name string) (plannedSkill, planRead, error) {
 // copyPlanned copies p to spec.Skills, built in staging, crash-safe (the
 // file's header), saying each entry left out of it, and is it as listed.
 func copyPlanned(p plannedSkill, spec checkoutSpec, staging string, said *skips) (handedSkill, error) {
+	listed := p.name
+	if spec.ListedAs == listedGrok {
+		// ONE FIRING PLANS EVERY CHECKOUT BEFORE IT COPIES ANY, so another
+		// checkout's copy this firing made can take the name only now.
+		if why := homeHolds(spec, p.name); why != "" {
+			return handedSkill{}, errors.New(why)
+		}
+		listed = skillname.Grok(p.name)
+	}
 	if spec.Copied != "" {
 		if err := appendLines(spec.Copied, []string{p.name}); err != nil {
 			return handedSkill{}, fmt.Errorf("listing it for removal: %w", err)
@@ -450,10 +398,13 @@ func copyPlanned(p plannedSkill, spec checkoutSpec, staging string, said *skips)
 		return handedSkill{}, err
 	}
 	_ = os.Remove(staging) // emptied; never one holding another firing's copy
+	if spec.held != nil {
+		spec.held.add(listed, final)
+	}
 	for _, note := range p.notes {
 		said.say("the skill %s is copied without %s", p.src, note)
 	}
-	return handedSkill{name: p.name, description: p.description, path: filepath.Join(final, "SKILL.md")}, nil
+	return handedSkill{name: listed, description: p.description, path: filepath.Join(final, "SKILL.md")}, nil
 }
 
 // copyItem is one entry of a skill's copy: its path relative to the skill,
@@ -467,7 +418,8 @@ type copyItem struct {
 	perm      os.FileMode
 }
 
-// within reports whether path is root or below it, both real paths.
+// within reports whether path is root or below it, both real paths; a root
+// of "" holds every absolute path (the home's own skills, [homeHolds]).
 func within(root, path string) bool {
 	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
 }

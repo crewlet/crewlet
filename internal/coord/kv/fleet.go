@@ -324,7 +324,7 @@ const (
 	uploadsSuffix      = "_uploads"
 	nodeStatusSuffix   = "_node_status"
 	// activationKey holds the pointer, which names the current revision's
-	// sealed body under [bodyPrefix] — see [coord.ActivationRecord].
+	// sealed body under [coord.BodyClass] — see [coord.ActivationRecord].
 	activationKey = "activation"
 )
 
@@ -587,20 +587,20 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 	}{
 		{&store.rate, rateSuffix,
 			"Crewlet notification-valve windows; the bucket TTL reaps a closed window",
-			cfg.MaxRateWindow * rateBucketFactor, undeclaredHolding},
+			cfg.MaxRateWindow * rateBucketFactor, counterHolding},
 		{&store.windows, windowsSuffix,
 			"Crewlet counter windows up to a day wide; the bucket TTL reaps a closed window",
-			coord.MaxCounterWindow * rateBucketFactor, undeclaredHolding},
+			coord.MaxCounterWindow * rateBucketFactor, counterHolding},
 		{&store.claims, claimsSuffix,
 			"Crewlet inbound-delivery claims; each record carries its own deadline, and the " +
 				"bucket age is the longest claim's",
-			cfg.MaxClaimTTL, undeclaredHolding},
+			cfg.MaxClaimTTL, claimHolding},
 		{&store.ledger, ledgerSuffix,
 			"Crewlet turn completions; the bucket TTL is the retention horizon",
-			cfg.LedgerRetention, undeclaredHolding},
+			cfg.LedgerRetention, ledgerHolding},
 		{&store.status, statusSuffix,
 			"Crewlet per-node config-apply status; a node that stops reporting ages out",
-			cfg.StatusFreshness, undeclaredHolding},
+			cfg.StatusFreshness, applyStatusHolding},
 		{&store.nodeStatus, nodeStatusSuffix,
 			"Crewlet per-node status records (MCP, models, runners, infra); a node that stops writing ages out",
 			cfg.StatusFreshness, nodeStatusHolding},
@@ -608,21 +608,21 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			"Crewlet activation pointer and the bodies it names; NO TTL — the pointer's revision IS the epoch", 0, configHolding},
 		{&store.budgets, budgetSuffix,
 			"Crewlet token counters, a slot per calendar window; the bucket TTL outlasts the longest window",
-			cfg.BudgetRetention, undeclaredHolding},
+			cfg.BudgetRetention, counterHolding},
 		{&store.channels, channelSuffix,
-			"Crewlet agent-to-agent channels; NO TTL — an open ask must outlive any clock", 0, undeclaredHolding},
+			"Crewlet agent-to-agent channels; NO TTL — an open ask must outlive any clock", 0, chatterHolding},
 		{&store.follows, followsSuffix,
 			"Crewlet chat thread-follows; the bucket TTL is the last-activity horizon",
-			cfg.FollowRetention, undeclaredHolding},
+			cfg.FollowRetention, chatterHolding},
 		{&store.chatReads, chatReadsSuffix,
 			"Crewlet per-person chat read state; NO TTL — an expired cursor marks a room unread",
 			0, chatReadsHolding},
 		{&store.fires, firesSuffix,
 			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
-			cfg.FireRetention, undeclaredHolding},
+			cfg.FireRetention, claimHolding},
 		{&store.rebases, rebasesSuffix,
 			"Crewlet operation-id rebases; the bucket TTL outlasts the horizon a rebase is inherited within",
-			cfg.RebaseRetention, undeclaredHolding},
+			cfg.RebaseRetention, claimHolding},
 		{&store.runs, runsSuffix,
 			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0, runsHolding},
 		{&store.secrets, secretsSuffix,
@@ -637,12 +637,12 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		{&store.atlasRefresh, atlasRefreshSuffix,
 			"Crewlet atlas source refresh asks; NO TTL, the collect duty drops one once it is honoured", 0, atlasSmallHolding},
 		{&store.mailboxes, mailboxesSuffix,
-			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0, undeclaredHolding},
+			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0, chatterHolding},
 		{&store.objects, objectsSuffix,
-			"Crewlet object store backend; NO TTL — an expired record lets a node record another backend", 0, undeclaredHolding},
+			"Crewlet object store backend; NO TTL — an expired record lets a node record another backend", 0, objectsHolding},
 		{&store.custody, custodySuffix,
 			"Crewlet stateless-node event custody; the bucket TTL outlasts the event log's retention",
-			cfg.CustodyRetention, undeclaredHolding},
+			cfg.CustodyRetention, claimHolding},
 		{&store.uploads, uploadsSuffix,
 			"Crewlet artifact upload reservations and seat save ledgers; the bucket TTL outlasts the longest hold either keeps",
 			cfg.UploadRetention, uploadsHolding},
@@ -980,6 +980,9 @@ func (f *FleetStore) WorkedBy(ctx context.Context, scope string, keys []string) 
 func (f *FleetStore) Record(ctx context.Context, scope, key, detail string, at time.Time) error {
 	if scope == "" || key == "" {
 		return errors.New("coord/kv: a ledger entry needs a scope and a key")
+	}
+	if err := coord.CheckLedgerDetail(detail); err != nil {
+		return err
 	}
 	raw, err := json.Marshal(ledgerRecord{Detail: detail, At: at.UTC()})
 	if err != nil {
@@ -1441,12 +1444,10 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 // node and the broker that stamps the body.
 const flipBy = coord.BodyRetention / 2
 
-// bodyPrefix is the key class of the activation's bodies in the config bucket,
-// beside [activationKey]: `body.<sha256>`, one key one set of bytes.
-const bodyPrefix = "body."
-
-// bodyKey is the key body is stored under.
-func bodyKey(body coord.BodyRef) string { return bodyPrefix + body.SHA256 }
+// bodyKey is the key body is stored under in the config bucket, beside
+// [activationKey]: `body.<sha256>` ([coord.BodyClass]), one key one set of
+// bytes.
+func bodyKey(body coord.BodyRef) string { return coord.DocumentKey(coord.BodyClass, body.SHA256) }
 
 // pointerBytes is the pointer's stored form for req ([coord.ActivationValue])
 // at the instant at, which is decided against the pointer the write replaces
@@ -1697,6 +1698,9 @@ func (f *FleetStore) RecordApply(ctx context.Context, status coord.NodeApply) er
 	if status.NodeID == "" {
 		return errors.New("coord/kv: an apply status needs a node id")
 	}
+	if err := status.Check(); err != nil {
+		return err
+	}
 	detail := coord.TruncateApplyError(status.Error)
 	raw, err := json.Marshal(applyRecord{
 		Epoch: status.Epoch, RevisionID: status.RevisionID, Applied: status.Applied,
@@ -1944,6 +1948,9 @@ func decodeChannelRecord(raw []byte) (coord.Channel, error) {
 func (f *FleetStore) OpenChannel(ctx context.Context, ch coord.Channel) error {
 	if ch.ID == "" {
 		return errors.New("coord/kv: a channel needs an id")
+	}
+	if err := ch.Check(); err != nil {
+		return err
 	}
 	raw, err := encodeChannel(ch)
 	if err != nil {
@@ -2201,6 +2208,9 @@ type custodyKeeper struct {
 func (f *FleetStore) ClaimCustody(ctx context.Context, batch, node string) (string, error) {
 	if batch == "" || node == "" {
 		return "", errors.New("coord/kv: a custody claim needs a batch and a node")
+	}
+	if err := coord.CheckCustodyNode(node); err != nil {
+		return "", err
 	}
 	raw, encodeErr := json.Marshal(custodyRecord{Node: node, At: time.Now().UTC()})
 	if encodeErr != nil {

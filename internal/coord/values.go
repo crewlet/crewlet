@@ -19,7 +19,7 @@ import (
 // write carries, a run's standing in it ([RunStanding]), which internal/coord/kv
 // derives and holds this figure to. It binds a run's row and parts
 // (internal/sandbox's RowBytes) and the activation's body ([BodyRef], held by
-// internal/api/configapi); other records keep far below it.
+// internal/api/configapi); every other class is declared far below it.
 const MaxValueBytes = 6_290_346
 
 // MaxValueCrossing is the longest a CHANGE of a run's value at [MaxValueBytes],
@@ -70,7 +70,8 @@ func HoldValue(key string, size, bound int) error {
 
 // SmallValueBytes is the most a declared class read at the read term alone,
 // given no crossing of its own, may hold (internal/coord/kv's key classes,
-// the activation pointer's among them): at this bound a read's reply
+// the activation pointer's among them, and every bucket's records but a
+// run's, a body and the few classes declared larger): at this bound a read's reply
 // (internal/jsapi's ReplyBytes, the most write header included) is 23,328
 // bytes, 0.67 s at the floor, inside internal/jsprovision's ReadTerm of a
 // second. internal/coord/kv holds the figure to it.

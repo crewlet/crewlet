@@ -26,7 +26,7 @@ import (
 // It moves ONLY with [versionedFields], whose rows name each version's fields,
 // to that table's highest version: statelogtest refuses a build reading a
 // version no field introduced, which would drop the field it was minted for.
-const RecordVersion = 21
+const RecordVersion = 22
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -96,6 +96,11 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Snapshot.Flow", Since: FlowRecordVersion, Path: []string{"notify", "snapshot", "flow"}},
 	{Name: "FlowRecord.Past", Since: FlowPastVersion, Op: string(OpFlow),
 		Path: []string{"mutation", "past"}},
+	{Name: "Snapshot.ByOwner", Since: OwnershipVersion, Path: []string{"notify", "snapshot", "by_owner"}},
+	{Name: "Snapshot.LeftUnassigned", Since: OwnershipVersion,
+		Path: []string{"notify", "snapshot", "left_unassigned"}},
+	{Name: "Snapshot.DepartureLead", Since: OwnershipVersion,
+		Path: []string{"notify", "snapshot", "departure_lead"}},
 }
 
 // FlowRecordVersion is the version from which a record carries an item's flow
@@ -106,6 +111,12 @@ const FlowRecordVersion = 20
 // item's past carries what it read and the instant its past gives
 // ([FlowRecord.Past]), which the applier dates the row by.
 const FlowPastVersion = 21
+
+// OwnershipVersion is the version from which a record says who owns the work
+// once its change is made ([Snapshot.ByOwner], [Snapshot.LeftUnassigned]) and
+// whom a departure tells ([Snapshot.DepartureLead]), which decide the lead's
+// notice rows; every older record routes the lead as before.
+const OwnershipVersion = 22
 
 // VersionedFields is the table, for the conformance suite and for an operator
 // surface that names why a record was held back.
@@ -1181,6 +1192,19 @@ type Snapshot struct {
 	// receiving node cannot reconstruct later.
 	ProjectLead     string `json:"project_lead,omitempty"`
 	RoutingUnitLead string `json:"routing_unit_lead,omitempty"`
+
+	// ByOwner marks a change its author made to a task it keeps that only the
+	// lead's fallback would hear: the lead is told, never woken. LeftUnassigned
+	// marks a change that took the assignee away and named none: the fallback is
+	// offered, and the previous assignee's notice is not its audience. Both
+	// stated by the writer, which alone knows the author ([Notify.ownership]).
+	ByOwner        bool `json:"by_owner,omitempty"`
+	LeftUnassigned bool `json:"left_unassigned,omitempty"`
+
+	// DepartureLead is the lead one record of a seat's departure tells of every
+	// item it left unassigned in their charge, which its excerpt lists
+	// ([Writer.RehomeDeparted]): ordinary, so the item's audience cannot keep it quiet.
+	DepartureLead string `json:"departure_lead,omitempty"`
 
 	// Unblocked names the dependent a late relations commit tells is now
 	// workable, with its assignee. [Writer.TellUnblocked], the unblocked

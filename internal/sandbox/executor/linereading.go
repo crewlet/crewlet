@@ -34,7 +34,7 @@ func (w *lineWalk) stringText(t *valueText, e TranscriptEntry, k jsonscan.Kind) 
 		return readText{p: w.b.held(e, "", ordinal), set: true, blank: true}, true, nil
 	case jsonscan.String:
 	default:
-		return readText{}, false, w.scan.Skip()
+		return readText{}, false, w.skip(k)
 	}
 	t.begin(w.b, e, w.b.shapes(e.Kind, ordinal))
 	if err := w.read(t); err != nil {
@@ -45,18 +45,19 @@ func (w *lineWalk) stringText(t *valueText, e TranscriptEntry, k jsonscan.Kind) 
 	return readText{p: w.textEntry(t, e, ordinal), set: true, blank: blank}, true, nil
 }
 
-// rawText reads the value the current token begins, any value, into t as
-// written and compacted ([compactJSON]) as the scan passes it, as the one
-// entry e it makes at the line's first ordinal.
-func (w *lineWalk) rawText(t *valueText, c *jsonCompactor, e TranscriptEntry) (readText, error) {
+// rawText reads the value k, the current token, begins, any value, into t as
+// written and compacted ([compactJSON]) as the scan passes it, each image as
+// its place ([lineWalk.asWritten]), as the one entry e it makes at the line's
+// first ordinal.
+func (w *lineWalk) rawText(t *valueText, c *jsonCompactor, e TranscriptEntry, k jsonscan.Kind) (readText, error) {
 	ordinal := w.b.seen
 	t.begin(w.b, e, w.b.shapes(e.Kind, ordinal))
-	*c = jsonCompactor{w: t, buf: c.buf}
+	*c = jsonCompactor{w: w.asWritten(t), buf: c.buf}
 	if err := w.scan.Tee(c); err != nil {
 		t.drop()
 		return readText{}, err
 	}
-	if err := w.scan.Skip(); err != nil {
+	if err := w.skip(k); err != nil {
 		t.drop()
 		return readText{}, err
 	}
@@ -80,11 +81,13 @@ func (w *lineWalk) textEntry(t *valueText, e TranscriptEntry, ordinal int) pendi
 
 // joinPart reads one element of a list j joins: an object whose `type` (none
 // for a rule of any kind) and `text` it joins and whose other members more
-// reads (nil for none), or null. It reports whether the element's struct
+// reads (nil for none), or null; the image bytes the walk passed in it size
+// its place ([imagePlaceholder]). It reports whether the element's struct
 // takes it.
 func (w *lineWalk) joinPart(j *textJoin, k jsonscan.Kind,
 	more func(name string, k jsonscan.Kind) (bool, error)) (bool, error) {
 	j.partStart()
+	imaged := w.src.skipped
 	took := true
 	ok, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
 		switch {
@@ -102,15 +105,16 @@ func (w *lineWalk) joinPart(j *textJoin, k jsonscan.Kind,
 				return nil
 			}
 			took = false
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		if more == nil {
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		ok, err := more(name, k)
 		took = took && ok
 		return err
 	})
+	j.partImage = w.src.skipped - imaged
 	j.partEnd()
 	return ok && took, err
 }
@@ -132,7 +136,7 @@ func (w *lineWalk) toolName(t *valueText, k jsonscan.Kind) (toolName, bool, erro
 		return toolName{}, true, nil
 	case jsonscan.String:
 	default:
-		return toolName{}, false, w.scan.Skip()
+		return toolName{}, false, w.skip(k)
 	}
 	t.begin(w.b, TranscriptEntry{}, false)
 	if err := w.read(t); err != nil {
@@ -288,11 +292,15 @@ func textAs(b *transcriptBuilder, j *textJoin, s *entryShape, kind EntryKind) pe
 
 // wholeText reads the current string into j as one part of j's kind: a text a
 // record holds whole, joined as a list of one would be.
-func (w *lineWalk) wholeText(j *textJoin) error {
+func (w *lineWalk) wholeText(j *textJoin) error { return w.wholeTextFrom(j, nil, false) }
+
+// wholeTextFrom is [lineWalk.wholeText] of a string whose opening, head, is
+// read already, and the whole of it where ended says so.
+func (w *lineWalk) wholeTextFrom(j *textJoin, head []byte, ended bool) error {
 	j.partStart()
 	j.partType(j.rule.kind)
 	j.partText()
-	err := w.read(j)
+	err := w.readFrom(j, head, ended)
 	j.partEnd()
 	return err
 }

@@ -46,21 +46,25 @@ func TestANodeKeepsThePoolsItRunsWithTheLimitsRoom(t *testing.T) {
 
 // THE LARGE SLOT IS COUNTED AT THE LARGER OF ITS TWO HOLDERS, never their sum:
 // one pass holds it at a time, a collection's with its chain or a take's, its
-// scrub at the plaintext's bound and the longest value it can hold beside its
-// meter's line, both past the base the take's own slot already counts, each
-// figure from its own definition. A take's outweighs a chain's.
+// scrub at the plaintext's bound and the longest value it can hold beside the
+// most its meter holds, a Claude Code meter's line or a Gemini CLI count at its
+// ids' bound, all past the base the take's own slot already counts, each
+// figure from its own definition. A take's outweighs a chain's, and a Gemini
+// CLI count a Claude Code meter's line.
 //
 // Mutations, each red: count the slot at a chain alone, or at the chain and
-// the take summed; leave the meter's line out of the take, or count its base
-// charge again; count the scrub's base again; size the scrub with no value, or
-// at a reading of nothing.
+// the take summed; leave the meter out of the take, count a Claude Code
+// meter's line alone, or count a meter's base again; count the scrub's base
+// again; size the scrub with no value, or at a reading of nothing.
 func TestTheLargeSlotIsCountedAtTheLargerOfItsTwoHolders(t *testing.T) {
 	t.Parallel()
 	chain := int64(threadChainHeldBytes)
-	take := scrubHeldBytes(scrubPlainMax, scrubLongestMax) - scrubBaseHeldBytes +
-		(threadLineMax-collectionBaseLineCharge)*5/4
-	if take <= chain {
-		t.Fatalf("the premise: a take past its base holds %d bytes, no more than a chain's %d", take, chain)
+	line := int64(threadLineMax-collectionBaseLineCharge) * 5 / 4
+	count := int64(geminiCountLargeHeldBytes - meterBaseHeldBytes)
+	take := scrubHeldBytes(scrubPlainMax, scrubLongestMax) - scrubBaseHeldBytes + max(line, count)
+	if take <= chain || count <= line {
+		t.Fatalf("the premise: a take past its base holds %d bytes, no more than a chain's %d, or a Gemini CLI "+
+			"count past its base %d, no more than a Claude Code meter's line %d", take, chain, count, line)
 	}
 	if got := largeReadHeldBytes(); got != max(chain, take) {
 		t.Errorf("the large slot is counted at %d bytes, want the larger of a chain's %d and a take's %d", got,

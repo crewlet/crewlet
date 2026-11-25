@@ -118,9 +118,11 @@ type Box struct {
 	Home string
 	// Folder is the helper's folder in it, boxhelper.Folder(Home).
 	Folder string
-	// GlobalNPMRC is the box's global npmrc, which its environment names,
-	// empty, so the machine's own never reaches the box: where a case writes
-	// what an image's global npmrc would say.
+	// GlobalNPMRC is the box's global npmrc, empty, so the machine's own never
+	// reaches the box: etc/npmrc under the global prefix its environment
+	// names, where its npm finds it as an image's npm finds its own under the
+	// prefix it was installed in, and where a case writes what an image's
+	// global npmrc would say.
 	GlobalNPMRC string
 	// Workspace is the job's working directory in it, the root its shim names,
 	// as a harness runs there.
@@ -141,11 +143,11 @@ const (
 	supervisorFile = "supervisor"
 )
 
-// globalRC is the name of the box's global npmrc in its home, and npmCalls of
-// where a stand-in npm records its command lines.
+// npmPrefix is the name of the box's global npm prefix in its home, and
+// npmCalls of where a stand-in npm records its command lines.
 const (
-	globalRC = ".npm-globalrc"
-	npmCalls = "npm-calls"
+	npmPrefix = ".npm-prefix"
+	npmCalls  = "npm-calls"
 )
 
 // refusedRegistry is the registry a box's npm is pointed at unless a case
@@ -198,7 +200,7 @@ func Start(t testing.TB, env Env, o Options) *Box {
 	if o.Sandbox == "" {
 		o.Sandbox = browser.SandboxWaived
 	}
-	b := &Box{Home: home, Folder: boxhelper.Folder(home), GlobalNPMRC: filepath.Join(home, globalRC),
+	b := &Box{Home: home, Folder: boxhelper.Folder(home), GlobalNPMRC: filepath.Join(home, npmPrefix, "etc", "npmrc"),
 		Workspace: filepath.Join(home, "workspace"), env: env, opts: o}
 	t.Cleanup(func() { b.Stop(t) })
 	b.layOut(t)
@@ -224,6 +226,9 @@ func (b *Box) layOut(t testing.TB) {
 		if err := os.CopyFS(filepath.Join(b.Home, ".npm"), os.DirFS(filepath.Join(Tree(t), "npm-cache"))); err != nil {
 			t.Fatalf("copying the suite tree's npm cache into the box: %v", err)
 		}
+	}
+	if err := os.MkdirAll(filepath.Dir(b.GlobalNPMRC), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(b.GlobalNPMRC, nil, 0o644); err != nil {
 		t.Fatal(err)
@@ -321,27 +326,28 @@ func (b *Box) SetConfig(t testing.TB, config map[string]any) {
 
 // Environ is the environment the box runs the helper in: its own bin
 // directory alone on PATH, so its npm runs under its node and no case finds
-// the machine's own programs; its home; the refused registry; and its empty
-// global npmrc. A case's own variables go after it, where the last of a name
-// wins.
+// the machine's own programs; its home; the refused registry; and its global
+// npm prefix, under which its npm finds its empty global npmrc. A case's own
+// variables go after it, where the last of a name wins.
 func (b *Box) Environ() []string {
 	return []string{"PATH=" + filepath.Join(b.Home, "bin"), "HOME=" + b.Home, "NPM_CONFIG_REGISTRY=" + refusedRegistry,
-		"NPM_CONFIG_GLOBALCONFIG=" + b.GlobalNPMRC}
+		"NPM_CONFIG_PREFIX=" + filepath.Join(b.Home, npmPrefix)}
 }
 
 // StandInNPM puts a stand-in for npm at the box's bin/npm: an sh script that
 // records each command line it is run with ([Box.NPMCalls]), answers one that
 // carries --version with version, and otherwise runs body, where $REAL_NPM
-// is the case's own npm and $PREFIX the directory --prefix names. The box's
-// PATH is its bin alone, so the script finds the system's tools after it,
-// and the real npm's `env node` still finds the box's node first.
+// is the case's own npm and $DIR the directory it runs in, which npm ci
+// installs into. The box's PATH is its bin alone, so the script finds the
+// system's tools after it, and the real npm's `env node` still finds the
+// box's node first.
 func (b *Box) StandInNPM(t testing.TB, version, body string) {
 	t.Helper()
 	script := "#!/bin/sh\nPATH=\"$PATH:/usr/bin:/bin\"\nREAL_NPM=" + shellword.Quote(b.env.NPM) + "\n" +
 		"printf '%s\\000' \"$@\" >>" + shellword.Quote(filepath.Join(b.Home, npmCalls)) + "\n" +
 		"printf '\\n' >>" + shellword.Quote(filepath.Join(b.Home, npmCalls)) + "\n" +
 		"for a; do [ \"$a\" = --version ] && { echo " + shellword.Quote(version) + "; exit 0; }; done\n" +
-		"PREFIX= prev=\nfor a; do [ \"$prev\" = --prefix ] && PREFIX=$a; prev=$a; done\n" + body + "\n"
+		"DIR=$PWD\n" + body + "\n"
 	npm := filepath.Join(b.Home, "bin", "npm")
 	if err := os.Remove(npm); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)

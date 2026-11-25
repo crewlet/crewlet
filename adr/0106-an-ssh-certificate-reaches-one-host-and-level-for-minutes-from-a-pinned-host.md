@@ -2,7 +2,15 @@
 
 - **Status:** accepted
 - **Authority:** `internal/ssh`
-- **Enforced-by:** `internal/ssh.TestACertificateCarriesTheLockedFields`, `internal/ssh.TestARequestOutsideTheLockedShapesIsNotSigned`, `internal/ssh.TestACertificateForOneHostIsRefusedByAnother`, `internal/ssh.TestAnOperateCertificateRunsOnlyItsForcedCommand`, `internal/ssh.TestAnUnpinnedHostKeyIsRefusedBeforeAuthentication`, `internal/ssh.TestTheClientNeverDialsTheEngineHost`, `internal/ssh.TestTheSetupChangesNothingForOtherUsers`, `internal/ssh.TestAReadCertificateGetsNoShellPtyOrForwarding`
+- **Enforced-by:**
+  - `internal/ssh.TestACertificateCarriesTheLockedFields`
+  - `internal/ssh.TestARequestOutsideTheLockedShapesIsNotSigned`
+  - `internal/ssh.TestACertificateForOneHostIsRefusedByAnother`
+  - `internal/ssh.TestAnOperateCertificateRunsOnlyItsForcedCommand`
+  - `internal/ssh.TestAnUnpinnedHostKeyIsRefusedBeforeAuthentication`
+  - `internal/ssh.TestTheClientNeverDialsTheEngineHost`
+  - `internal/ssh.TestTheSetupChangesNothingForOtherUsers`
+  - `internal/ssh.TestAReadCertificateGetsNoShellPtyOrForwarding`
 - **Tag-status:** unreleased
 
 ## The decision

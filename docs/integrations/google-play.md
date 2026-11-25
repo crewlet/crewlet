@@ -24,7 +24,7 @@ The permissions Play Console gives, each on chosen apps or on all of them: **Adm
 
 ## Connecting Crewlet
 
-1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing, and the form says whether it is connected. Turn Google Play on, then run the Google Cloud connection's Cloud Shell block again: it turns on the Google Play Android Developer and Developer Reporting APIs in the identity project and makes the company reader ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
+1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing, and the form says whether it is connected. Turn Google Play on: Crewlet turns on the Google Play Android Developer and Developer Reporting APIs in the identity project and makes the company reader itself, with no block to run ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
 2. Invite the company reader's email, shown on the form, in Play Console, Users and permissions, with **View app information** for all apps (and View financial data for the financial reports). Name each developer account's monthly reports bucket: Download reports, Copy Cloud Storage URI, without `gs://`. Crewlet reads the company's figures and the monthly reports as this identity.
 3. Turn agents on from the Agents tab, each with its apps, and give each its identity ([below](#give-an-agent-its-own-identity)).
 
@@ -32,15 +32,15 @@ Building and uploading releases stays with [Expo](expo.md) or your pipeline: Cre
 
 ## Give an agent its own identity
 
-An agent's identity at Google Play is its own Google growth identity, which Crewlet made; what is left is adding it in Play Console. Its row on the Agents tab reads **Needs you** until the identity reaches each of its apps, and **Set up identity** in its box shows the steps, with the email ready to copy:
+An agent's identity at Google Play is its own Google growth identity, which Crewlet made; what is left is adding it in Play Console. The agent's **Apps** list what the company reader sees, by name, and take a typed package name for one it cannot see yet. A new identity reads **Getting ready** for up to about two minutes, until Google lets a person add it. Then its row reads **Needs you** until the identity reaches each of its apps, and **Set up identity** in its box shows the steps, with the email ready to copy:
 
 1. In Play Console, open **Users and permissions** and press **Invite new users**.
 2. Paste the agent's email.
 3. Under **App permissions**, add the agent's apps and tick what its level needs: at `read`, **View app information (read-only)**; at `operate`, also **Reply to reviews**, **Manage store presence**, **Release to testing tracks**, **Manage testing tracks and edit tester lists** and **Release to production**; at `administer`, also **Manage orders and subscriptions**. Leave Account permissions empty and press **Invite user**.
 
-**Add it for me.** With the company's own OAuth client (`oauth`, made as [Google Cloud's page describes](google-cloud.md#the-companys-own-oauth-client), which Google Analytics may share) and a Play Console admin's sign-in on the Settings tab, **Add it for me** takes those steps through Play's users and grants API, in the developer account `developer_accounts` names that holds each app, with exactly the level's permissions and keeping any the identity holds already. Turning the agent off takes the identity out of those accounts. The sign-in only adds, reads and removes agents' identities; no agent's call is made with it.
+**Add it for me.** With the company's Google sign-in client (set once on the Google page, as [Google Cloud's page describes](google-cloud.md#the-companys-own-oauth-client), or `oauth` here) and a Play Console admin's sign-in on the Google page, **Add it for me** takes those steps through Play's users and grants API, in the developer account `developer_accounts` names that holds each app, with exactly the level's permissions and keeping any the identity holds already. Turning the agent off takes the identity out of those accounts. The sign-in only adds, reads and removes agents' identities; no agent's call is made with it.
 
-**The check, on every pass:** Crewlet signs in as the identity and reads one review of each app; an app Play refuses is not added yet. With the admin sign-in it also reads the identity's permissions on each app: fewer than the level needs is the wrong role, naming what is missing, and Admin below `administer` is a warning. Play can take up to two days to apply new permissions; while the admin sign-in shows the identity added and Play does not let it in yet, the box says so. The agent is ready once every app passes, and reads Needs you again if somebody removes it there; calls Google refuses meanwhile name what is missing.
+**The check, on every pass:** Crewlet signs in as the identity and reads one review of each app; an app Play refuses is not added yet. With the admin sign-in it also reads the identity's permissions on each app: fewer than the level needs is the wrong role, naming what is missing, and Admin below `administer` is a warning; without the admin sign-in the row reads **Role not checked**, never In sync, and says which permissions to tick. Play can take up to two days to apply new permissions; while the admin sign-in shows the identity added and Play does not let it in yet, the box says so. The agent is ready once every app passes, and reads Needs you again if somebody removes it there; calls Google refuses meanwhile name what is missing.
 
 ## The agents' tools
 
@@ -93,7 +93,7 @@ roles:
       google_play: {enabled: true, level: read, apps: ["com.example.app"]}
 ```
 
-The block needs `integrations.google_cloud` on with its provisioning block. Its one secret is the optional OAuth client's.
+The block needs `integrations.google_cloud` on with its provisioning block. Its one secret is the optional OAuth client's, where it names its own.
 
 ## Every method, and its class
 

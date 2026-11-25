@@ -1,0 +1,3759 @@
+[
+  {
+    "kind": "google_cloud",
+    "states": [
+      {
+        "name": "nothing saved",
+        "tool": {
+          "can_provision": false,
+          "configured": false,
+          "enabled": false,
+          "form_complete": false,
+          "key": "google_cloud",
+          "prepare": [
+            {
+              "done": false,
+              "result": [
+                {
+                  "ui": [
+                    "Federation key"
+                  ]
+                },
+                {
+                  "text": " shows the Cloud Shell block for that project, with a "
+                },
+                {
+                  "ui": [
+                    "Copy"
+                  ]
+                },
+                {
+                  "text": " button."
+                }
+              ],
+              "text": [
+                {
+                  "text": "In "
+                },
+                {
+                  "ui": [
+                    "Identity project ID"
+                  ]
+                },
+                {
+                  "text": ", keep the suggested ID, or type the ID of a new, empty project you made on your "
+                },
+                {
+                  "text": "new project page",
+                  "url": "https://console.cloud.google.com/projectcreate"
+                },
+                {
+                  "text": ". It must hold nothing else, as Crewlet's provisioner may manage every service account in it."
+                }
+              ],
+              "title": "Choose the identity project",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "Use the project's ID, not its name: Google shows it under the name, and `gcloud projects list` prints it."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "Crewlet refuses the ID."
+                    }
+                  ]
+                }
+              ],
+              "where": "Crewlet",
+              "yields": "identity_project"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "Its last line is the provider, `projects/\u003cproject number\u003e/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine`, with the project's number, not its ID."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Copy the block whole with that button, open "
+                },
+                {
+                  "text": "Cloud Shell",
+                  "url": "https://console.cloud.google.com/?cloudshell=true"
+                },
+                {
+                  "text": ", paste it and press Enter. It creates the project if it does not exist, runs for about a minute and is safe to run again."
+                }
+              ],
+              "title": "Run the block in Cloud Shell",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "Run `gcloud auth login`, check `gcloud auth list` marks your account active, and run the block again."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "It says Cloud Shell has no active account."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "It changed nothing there. Choose a new, empty project in step 1 and copy the block again."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "It stops because the project runs workloads or holds a service account Crewlet did not make."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "The line says what failed, under Google's own error. Fix that and run the block again."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "It stops with another `Crewlet setup stopped: ...` line."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "Remove what it made there, as "
+                    },
+                    {
+                      "text": "the docs list",
+                      "url": "https://docs.crewlet.ai/engine/latest/integrations/google-cloud/#undo-the-cloud-shell-block"
+                    },
+                    {
+                      "text": "."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "An older block ran in a project that already runs something."
+                    }
+                  ]
+                }
+              ],
+              "where": "Cloud Shell"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "The form closes, and within about a minute the status goes from "
+                },
+                {
+                  "ui": [
+                    "Needs attention"
+                  ]
+                },
+                {
+                  "text": " to "
+                },
+                {
+                  "ui": [
+                    "Setting up"
+                  ]
+                },
+                {
+                  "text": " to "
+                },
+                {
+                  "ui": [
+                    "Connected"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Paste that last line into "
+                },
+                {
+                  "ui": [
+                    "Workload identity provider"
+                  ]
+                },
+                {
+                  "text": ", press "
+                },
+                {
+                  "ui": [
+                    "Test connection"
+                  ]
+                },
+                {
+                  "text": ", then press "
+                },
+                {
+                  "ui": [
+                    "Save"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Paste the provider",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "Paste the whole last line, which starts with projects/ and a number."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "Crewlet says it is not a workload identity provider's full name."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "Run the block again so the provider holds Crewlet's current key."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "The test says Google refused Crewlet's federation token."
+                    }
+                  ]
+                }
+              ],
+              "where": "Crewlet",
+              "yields": "provider"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "The test lists the project under "
+                },
+                {
+                  "ui": [
+                    "Agents may use"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Connected gives no agent any access yet. As an Owner of each project agents should work in, run the "
+                },
+                {
+                  "text": "Prepare a project",
+                  "url": "https://docs.crewlet.ai/engine/latest/integrations/google-cloud/#prepare-a-project-for-crewlet"
+                },
+                {
+                  "text": " block with `IDENTITY` set to the identity project's ID and `TARGET` to that project."
+                }
+              ],
+              "title": "Prepare each project agents work in",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "It names what the project lacks. Run the block on it again as an Owner."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "The test says a project is not offered."
+                    }
+                  ]
+                }
+              ],
+              "where": "Cloud Shell"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "Crewlet creates each agent's service account in the identity project and grants its level on its projects. An agent you do not turn on has no access."
+                }
+              ],
+              "text": [
+                {
+                  "text": "On the "
+                },
+                {
+                  "ui": [
+                    "Agents"
+                  ]
+                },
+                {
+                  "text": " tab, turn "
+                },
+                {
+                  "ui": [
+                    "On"
+                  ]
+                },
+                {
+                  "text": " each agent that should use Google Cloud, choose its "
+                },
+                {
+                  "ui": [
+                    "Access"
+                  ]
+                },
+                {
+                  "text": " level and "
+                },
+                {
+                  "ui": [
+                    "Projects"
+                  ]
+                },
+                {
+                  "text": ", then press "
+                },
+                {
+                  "ui": [
+                    "Review changes"
+                  ]
+                },
+                {
+                  "text": " and "
+                },
+                {
+                  "ui": [
+                    "Save and sync"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Turn agents on",
+              "where": "Crewlet"
+            }
+          ],
+          "requirements": [
+            {
+              "blocks": "credential_missing",
+              "config_path": "integrations.google_cloud.provisioning.identity_project",
+              "connect": true,
+              "default": "crewlet-acme-7e18",
+              "field": "identity_project",
+              "format": "6 to 30 lowercase letters, digits and hyphens, starting with a letter",
+              "hint": [
+                {
+                  "text": "A new project kept for Crewlet alone. Its ID can differ from its name."
+                }
+              ],
+              "kind": "id",
+              "label": "Identity project ID",
+              "more": [
+                {
+                  "text": "The block below creates it if it does not exist. To use one you made on your "
+                },
+                {
+                  "text": "new project page",
+                  "url": "https://console.cloud.google.com/projectcreate"
+                },
+                {
+                  "text": ", type the ID Google shows under its name. Crewlet acts in it as crewlet-provisioner@{identity_project}.iam.gserviceaccount.com, which the block makes."
+                }
+              ],
+              "present": false,
+              "required": true,
+              "resolved": null,
+              "shape": "google_project"
+            },
+            {
+              "accept": ".pem,.key",
+              "blocks": "credential_missing",
+              "check_note": "It is tested with the provider.",
+              "config_path": "integrations.google_cloud.provisioning.federation_key",
+              "connect": true,
+              "field": "federation_key",
+              "hint": [
+                {
+                  "text": "Run this block in "
+                },
+                {
+                  "text": "Cloud Shell",
+                  "url": "https://console.cloud.google.com/?cloudshell=true"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "secret",
+              "label": "Federation key",
+              "mint_first": true,
+              "mintable": true,
+              "more": [
+                {
+                  "text": "If the block stops, its last line starts \"Crewlet setup stopped:\" and says what to do: run gcloud auth login when Cloud Shell has no active account, or type the ID of a new, empty project when this one runs workloads, holds service accounts Crewlet did not make or cannot be created. It is safe to run again. Crewlet made this key when you started connecting and sealed it as GOOGLE_CLOUD_FEDERATION_KEY; Google holds only its public half. The block stays the same when you turn on another Google product."
+                }
+              ],
+              "multiline": true,
+              "present": false,
+              "required": true,
+              "resolved": null,
+              "secret_name": "GOOGLE_CLOUD_FEDERATION_KEY",
+              "shape": "es256_key"
+            },
+            {
+              "blocks": "approval_required",
+              "check_with": [
+                "identity_project",
+                "federation_key"
+              ],
+              "checkable": true,
+              "config_path": "integrations.google_cloud.provisioning.provider",
+              "connect": true,
+              "field": "provider",
+              "format": "projects/\u003cproject number\u003e/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine",
+              "hint": [
+                {
+                  "text": "The last line the Cloud Shell block prints."
+                }
+              ],
+              "kind": "id",
+              "label": "Workload identity provider",
+              "more": [
+                {
+                  "text": "It names the identity project by its number, not its ID. Find it later under "
+                },
+                {
+                  "ui": [
+                    "Workload Identity Pools"
+                  ],
+                  "url": "https://console.cloud.google.com/iam-admin/workload-identity-pools"
+                },
+                {
+                  "text": ". Test checks federation, the provisioner's grants, the identity project's APIs and every project prepared for Crewlet."
+                }
+              ],
+              "present": false,
+              "printed_by": "federation_key",
+              "required": true,
+              "resolved": null,
+              "shape": "google_workload_provider"
+            },
+            {
+              "config_path": "integrations.google_cloud.provisioning.atlas_read",
+              "default": "false",
+              "field": "atlas_read",
+              "hint": [
+                {
+                  "text": "Lets Atlas list what each project runs, as a service account of its own."
+                }
+              ],
+              "kind": "toggle",
+              "label": "See more in Atlas",
+              "more": [
+                {
+                  "text": "Atlas then shows each project's instances, databases, Cloud Run services, functions, buckets and topics, by name and type, read hourly as crewlet-atlas through Cloud Asset Inventory. It reads no configuration, label, environment or data. Turning it on adds Atlas's lines to the Cloud Shell block above: run it, again if you ran it before, then save. To undo it, turn this off and delete the crewlet-atlas service account in the identity project."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": false,
+              "value": "false"
+            },
+            {
+              "config_path": "integrations.google_cloud.enabled",
+              "default": "true",
+              "field": "enabled",
+              "hidden": true,
+              "kind": "toggle",
+              "label": "Manage agent service accounts",
+              "present": false,
+              "required": true,
+              "resolved": false,
+              "value": "false"
+            },
+            {
+              "config_path": "",
+              "field": "redirect_uri",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "Make a "
+                },
+                {
+                  "ui": [
+                    "Web application"
+                  ]
+                },
+                {
+                  "text": " client at "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": " with this redirect URI."
+                }
+              ],
+              "kind": "redirect",
+              "label": "Authorized redirect URI",
+              "more": [
+                {
+                  "text": "Leave "
+                },
+                {
+                  "ui": [
+                    "Authorized JavaScript origins"
+                  ]
+                },
+                {
+                  "text": " empty. In "
+                },
+                {
+                  "ui": [
+                    "Google Auth Platform",
+                    "Audience"
+                  ],
+                  "url": "https://console.cloud.google.com/auth/audience"
+                },
+                {
+                  "text": ", choose "
+                },
+                {
+                  "ui": [
+                    "Internal"
+                  ]
+                },
+                {
+                  "text": " if whoever signs in is in the project's organization. Otherwise choose "
+                },
+                {
+                  "ui": [
+                    "External"
+                  ]
+                },
+                {
+                  "text": " and press "
+                },
+                {
+                  "ui": [
+                    "Publish app"
+                  ]
+                },
+                {
+                  "text": ", or add them as a test user: Google ends a "
+                },
+                {
+                  "ui": [
+                    "Testing"
+                  ]
+                },
+                {
+                  "text": " app's sign-in after 7 days ("
+                },
+                {
+                  "text": "Google's guide",
+                  "url": "https://support.google.com/cloud/answer/15549945"
+                },
+                {
+                  "text": ")."
+                }
+              ],
+              "present": false,
+              "redirect": {
+                "key": "api.external_url",
+                "url": ""
+              },
+              "required": false,
+              "resolved": null
+            },
+            {
+              "config_path": "integrations.google_cloud.sign_in_client.client_id",
+              "field": "sign_in_client_id",
+              "format": "\u003cproject number\u003e-\u003cid\u003e.apps.googleusercontent.com",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "The client every Google sign-in is made as, from "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "id",
+              "label": "OAuth client ID",
+              "more": [
+                {
+                  "text": "AdMob and AdSense sign in as it, and Google Analytics and Google Play use it to add agents for you. A product's own oauth block overrides it for that product."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": null
+            },
+            {
+              "check_note": "The client is proven by the Google sign-in, once saved.",
+              "config_path": "integrations.google_cloud.sign_in_client.client_secret",
+              "field": "sign_in_client_secret",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "The same client's secret, from "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "secret",
+              "label": "OAuth client secret",
+              "present": false,
+              "required": false,
+              "resolved": null
+            }
+          ],
+          "satisfied": false,
+          "summary": "Crewlet gives each agent its own service account and issues its token for an hour at a time. No service account key is made or downloaded."
+        }
+      },
+      {
+        "name": "the identity project saved",
+        "tool": {
+          "can_provision": false,
+          "configured": true,
+          "enabled": true,
+          "form_complete": false,
+          "key": "google_cloud",
+          "prepare": [
+            {
+              "done": true,
+              "result": [
+                {
+                  "ui": [
+                    "Federation key"
+                  ]
+                },
+                {
+                  "text": " shows the Cloud Shell block for that project, with a "
+                },
+                {
+                  "ui": [
+                    "Copy"
+                  ]
+                },
+                {
+                  "text": " button."
+                }
+              ],
+              "text": [
+                {
+                  "text": "In "
+                },
+                {
+                  "ui": [
+                    "Identity project ID"
+                  ]
+                },
+                {
+                  "text": ", keep the suggested ID, or type the ID of a new, empty project you made on your "
+                },
+                {
+                  "text": "new project page",
+                  "url": "https://console.cloud.google.com/projectcreate"
+                },
+                {
+                  "text": ". It must hold nothing else, as Crewlet's provisioner may manage every service account in it."
+                }
+              ],
+              "title": "Choose the identity project",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "Use the project's ID, not its name: Google shows it under the name, and `gcloud projects list` prints it."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "Crewlet refuses the ID."
+                    }
+                  ]
+                }
+              ],
+              "where": "Crewlet",
+              "yields": "identity_project"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "Its last line is the provider, `projects/\u003cproject number\u003e/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine`, with the project's number, not its ID."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Copy the block whole with that button, open "
+                },
+                {
+                  "text": "Cloud Shell",
+                  "url": "https://console.cloud.google.com/?cloudshell=true"
+                },
+                {
+                  "text": ", paste it and press Enter. It creates the project if it does not exist, runs for about a minute and is safe to run again."
+                }
+              ],
+              "title": "Run the block in Cloud Shell",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "Run `gcloud auth login`, check `gcloud auth list` marks your account active, and run the block again."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "It says Cloud Shell has no active account."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "It changed nothing there. Choose a new, empty project in step 1 and copy the block again."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "It stops because the project runs workloads or holds a service account Crewlet did not make."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "The line says what failed, under Google's own error. Fix that and run the block again."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "It stops with another `Crewlet setup stopped: ...` line."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "Remove what it made there, as "
+                    },
+                    {
+                      "text": "the docs list",
+                      "url": "https://docs.crewlet.ai/engine/latest/integrations/google-cloud/#undo-the-cloud-shell-block"
+                    },
+                    {
+                      "text": "."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "An older block ran in a project that already runs something."
+                    }
+                  ]
+                }
+              ],
+              "where": "Cloud Shell"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "The form closes, and within about a minute the status goes from "
+                },
+                {
+                  "ui": [
+                    "Needs attention"
+                  ]
+                },
+                {
+                  "text": " to "
+                },
+                {
+                  "ui": [
+                    "Setting up"
+                  ]
+                },
+                {
+                  "text": " to "
+                },
+                {
+                  "ui": [
+                    "Connected"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Paste that last line into "
+                },
+                {
+                  "ui": [
+                    "Workload identity provider"
+                  ]
+                },
+                {
+                  "text": ", press "
+                },
+                {
+                  "ui": [
+                    "Test connection"
+                  ]
+                },
+                {
+                  "text": ", then press "
+                },
+                {
+                  "ui": [
+                    "Save"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Paste the provider",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "Paste the whole last line, which starts with projects/ and a number."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "Crewlet says it is not a workload identity provider's full name."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "Run the block again so the provider holds Crewlet's current key."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "The test says Google refused Crewlet's federation token."
+                    }
+                  ]
+                }
+              ],
+              "where": "Crewlet",
+              "yields": "provider"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "The test lists the project under "
+                },
+                {
+                  "ui": [
+                    "Agents may use"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Connected gives no agent any access yet. As an Owner of each project agents should work in, run the "
+                },
+                {
+                  "text": "Prepare a project",
+                  "url": "https://docs.crewlet.ai/engine/latest/integrations/google-cloud/#prepare-a-project-for-crewlet"
+                },
+                {
+                  "text": " block with `IDENTITY` set to the identity project's ID and `TARGET` to that project."
+                }
+              ],
+              "title": "Prepare each project agents work in",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "It names what the project lacks. Run the block on it again as an Owner."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "The test says a project is not offered."
+                    }
+                  ]
+                }
+              ],
+              "where": "Cloud Shell"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "Crewlet creates each agent's service account in the identity project and grants its level on its projects. An agent you do not turn on has no access."
+                }
+              ],
+              "text": [
+                {
+                  "text": "On the "
+                },
+                {
+                  "ui": [
+                    "Agents"
+                  ]
+                },
+                {
+                  "text": " tab, turn "
+                },
+                {
+                  "ui": [
+                    "On"
+                  ]
+                },
+                {
+                  "text": " each agent that should use Google Cloud, choose its "
+                },
+                {
+                  "ui": [
+                    "Access"
+                  ]
+                },
+                {
+                  "text": " level and "
+                },
+                {
+                  "ui": [
+                    "Projects"
+                  ]
+                },
+                {
+                  "text": ", then press "
+                },
+                {
+                  "ui": [
+                    "Review changes"
+                  ]
+                },
+                {
+                  "text": " and "
+                },
+                {
+                  "ui": [
+                    "Save and sync"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Turn agents on",
+              "where": "Crewlet"
+            }
+          ],
+          "requirements": [
+            {
+              "blocks": "credential_missing",
+              "config_path": "integrations.google_cloud.provisioning.identity_project",
+              "connect": true,
+              "default": "crewlet-acme-7e18",
+              "field": "identity_project",
+              "format": "6 to 30 lowercase letters, digits and hyphens, starting with a letter",
+              "hint": [
+                {
+                  "text": "A new project kept for Crewlet alone. Its ID can differ from its name."
+                }
+              ],
+              "kind": "id",
+              "label": "Identity project ID",
+              "more": [
+                {
+                  "text": "The block below creates it if it does not exist. To use one you made on your "
+                },
+                {
+                  "text": "new project page",
+                  "url": "https://console.cloud.google.com/projectcreate"
+                },
+                {
+                  "text": ", type the ID Google shows under its name. Crewlet acts in it as crewlet-provisioner@{identity_project}.iam.gserviceaccount.com, which the block makes."
+                }
+              ],
+              "present": true,
+              "required": true,
+              "resolved": true,
+              "shape": "google_project",
+              "value": "acme-crewlet-id"
+            },
+            {
+              "accept": ".pem,.key",
+              "blocks": "credential_missing",
+              "check_note": "It is tested with the provider.",
+              "config_path": "integrations.google_cloud.provisioning.federation_key",
+              "connect": true,
+              "field": "federation_key",
+              "hint": [
+                {
+                  "text": "Run this block in "
+                },
+                {
+                  "text": "Cloud Shell",
+                  "url": "https://console.cloud.google.com/?cloudshell=true"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "secret",
+              "label": "Federation key",
+              "mint_first": true,
+              "mintable": true,
+              "more": [
+                {
+                  "text": "If the block stops, its last line starts \"Crewlet setup stopped:\" and says what to do: run gcloud auth login when Cloud Shell has no active account, or type the ID of a new, empty project when this one runs workloads, holds service accounts Crewlet did not make or cannot be created. It is safe to run again. Crewlet made this key when you started connecting and sealed it as GOOGLE_CLOUD_FEDERATION_KEY; Google holds only its public half. The block stays the same when you turn on another Google product."
+                }
+              ],
+              "multiline": true,
+              "present": true,
+              "public": {
+                "drawn_from": [
+                  "identity_project",
+                  "atlas_read"
+                ],
+                "language": "sh",
+                "live": true,
+                "text": "# the block, rendered for the saved key\n"
+              },
+              "required": true,
+              "resolved": true,
+              "secret_name": "GOOGLE_CLOUD_FEDERATION_KEY",
+              "shape": "es256_key",
+              "value": "${GOOGLE_CLOUD_FEDERATION_KEY}"
+            },
+            {
+              "blocks": "approval_required",
+              "check_with": [
+                "identity_project",
+                "federation_key"
+              ],
+              "checkable": true,
+              "config_path": "integrations.google_cloud.provisioning.provider",
+              "connect": true,
+              "field": "provider",
+              "format": "projects/\u003cproject number\u003e/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine",
+              "hint": [
+                {
+                  "text": "The last line the Cloud Shell block prints."
+                }
+              ],
+              "kind": "id",
+              "label": "Workload identity provider",
+              "more": [
+                {
+                  "text": "It names the identity project by its number, not its ID. Find it later under "
+                },
+                {
+                  "ui": [
+                    "Workload Identity Pools"
+                  ],
+                  "url": "https://console.cloud.google.com/iam-admin/workload-identity-pools"
+                },
+                {
+                  "text": ". Test checks federation, the provisioner's grants, the identity project's APIs and every project prepared for Crewlet."
+                }
+              ],
+              "present": false,
+              "printed_by": "federation_key",
+              "required": true,
+              "resolved": null,
+              "shape": "google_workload_provider"
+            },
+            {
+              "config_path": "integrations.google_cloud.provisioning.atlas_read",
+              "default": "false",
+              "field": "atlas_read",
+              "hint": [
+                {
+                  "text": "Lets Atlas list what each project runs, as a service account of its own."
+                }
+              ],
+              "kind": "toggle",
+              "label": "See more in Atlas",
+              "more": [
+                {
+                  "text": "Atlas then shows each project's instances, databases, Cloud Run services, functions, buckets and topics, by name and type, read hourly as crewlet-atlas through Cloud Asset Inventory. It reads no configuration, label, environment or data. Turning it on adds Atlas's lines to the Cloud Shell block above: run it, again if you ran it before, then save. To undo it, turn this off and delete the crewlet-atlas service account in the identity project."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": false,
+              "value": "false"
+            },
+            {
+              "config_path": "integrations.google_cloud.enabled",
+              "default": "true",
+              "field": "enabled",
+              "hidden": true,
+              "kind": "toggle",
+              "label": "Manage agent service accounts",
+              "present": true,
+              "required": true,
+              "resolved": true,
+              "value": "true"
+            },
+            {
+              "config_path": "",
+              "field": "redirect_uri",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "Make a "
+                },
+                {
+                  "ui": [
+                    "Web application"
+                  ]
+                },
+                {
+                  "text": " client at "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": " with this redirect URI."
+                }
+              ],
+              "kind": "redirect",
+              "label": "Authorized redirect URI",
+              "more": [
+                {
+                  "text": "Leave "
+                },
+                {
+                  "ui": [
+                    "Authorized JavaScript origins"
+                  ]
+                },
+                {
+                  "text": " empty. In "
+                },
+                {
+                  "ui": [
+                    "Google Auth Platform",
+                    "Audience"
+                  ],
+                  "url": "https://console.cloud.google.com/auth/audience"
+                },
+                {
+                  "text": ", choose "
+                },
+                {
+                  "ui": [
+                    "Internal"
+                  ]
+                },
+                {
+                  "text": " if whoever signs in is in the project's organization. Otherwise choose "
+                },
+                {
+                  "ui": [
+                    "External"
+                  ]
+                },
+                {
+                  "text": " and press "
+                },
+                {
+                  "ui": [
+                    "Publish app"
+                  ]
+                },
+                {
+                  "text": ", or add them as a test user: Google ends a "
+                },
+                {
+                  "ui": [
+                    "Testing"
+                  ]
+                },
+                {
+                  "text": " app's sign-in after 7 days ("
+                },
+                {
+                  "text": "Google's guide",
+                  "url": "https://support.google.com/cloud/answer/15549945"
+                },
+                {
+                  "text": ")."
+                }
+              ],
+              "present": false,
+              "redirect": {
+                "key": "api.external_url",
+                "url": ""
+              },
+              "required": false,
+              "resolved": null
+            },
+            {
+              "config_path": "integrations.google_cloud.sign_in_client.client_id",
+              "field": "sign_in_client_id",
+              "format": "\u003cproject number\u003e-\u003cid\u003e.apps.googleusercontent.com",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "The client every Google sign-in is made as, from "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "id",
+              "label": "OAuth client ID",
+              "more": [
+                {
+                  "text": "AdMob and AdSense sign in as it, and Google Analytics and Google Play use it to add agents for you. A product's own oauth block overrides it for that product."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": null
+            },
+            {
+              "check_note": "The client is proven by the Google sign-in, once saved.",
+              "config_path": "integrations.google_cloud.sign_in_client.client_secret",
+              "field": "sign_in_client_secret",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "The same client's secret, from "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "secret",
+              "label": "OAuth client secret",
+              "present": false,
+              "required": false,
+              "resolved": null
+            }
+          ],
+          "satisfied": false,
+          "summary": "Crewlet gives each agent its own service account and issues its token for an hour at a time. No service account key is made or downloaded."
+        }
+      },
+      {
+        "name": "the provider saved",
+        "tool": {
+          "can_provision": false,
+          "configured": true,
+          "enabled": true,
+          "form_complete": true,
+          "key": "google_cloud",
+          "prepare": [
+            {
+              "done": true,
+              "result": [
+                {
+                  "ui": [
+                    "Federation key"
+                  ]
+                },
+                {
+                  "text": " shows the Cloud Shell block for that project, with a "
+                },
+                {
+                  "ui": [
+                    "Copy"
+                  ]
+                },
+                {
+                  "text": " button."
+                }
+              ],
+              "text": [
+                {
+                  "text": "In "
+                },
+                {
+                  "ui": [
+                    "Identity project ID"
+                  ]
+                },
+                {
+                  "text": ", keep the suggested ID, or type the ID of a new, empty project you made on your "
+                },
+                {
+                  "text": "new project page",
+                  "url": "https://console.cloud.google.com/projectcreate"
+                },
+                {
+                  "text": ". It must hold nothing else, as Crewlet's provisioner may manage every service account in it."
+                }
+              ],
+              "title": "Choose the identity project",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "Use the project's ID, not its name: Google shows it under the name, and `gcloud projects list` prints it."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "Crewlet refuses the ID."
+                    }
+                  ]
+                }
+              ],
+              "where": "Crewlet",
+              "yields": "identity_project"
+            },
+            {
+              "done": true,
+              "result": [
+                {
+                  "text": "Its last line is the provider, `projects/\u003cproject number\u003e/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine`, with the project's number, not its ID."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Copy the block whole with that button, open "
+                },
+                {
+                  "text": "Cloud Shell",
+                  "url": "https://console.cloud.google.com/?cloudshell=true"
+                },
+                {
+                  "text": ", paste it and press Enter. It creates the project if it does not exist, runs for about a minute and is safe to run again."
+                }
+              ],
+              "title": "Run the block in Cloud Shell",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "Run `gcloud auth login`, check `gcloud auth list` marks your account active, and run the block again."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "It says Cloud Shell has no active account."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "It changed nothing there. Choose a new, empty project in step 1 and copy the block again."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "It stops because the project runs workloads or holds a service account Crewlet did not make."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "The line says what failed, under Google's own error. Fix that and run the block again."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "It stops with another `Crewlet setup stopped: ...` line."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "Remove what it made there, as "
+                    },
+                    {
+                      "text": "the docs list",
+                      "url": "https://docs.crewlet.ai/engine/latest/integrations/google-cloud/#undo-the-cloud-shell-block"
+                    },
+                    {
+                      "text": "."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "An older block ran in a project that already runs something."
+                    }
+                  ]
+                }
+              ],
+              "where": "Cloud Shell"
+            },
+            {
+              "done": true,
+              "result": [
+                {
+                  "text": "The form closes, and within about a minute the status goes from "
+                },
+                {
+                  "ui": [
+                    "Needs attention"
+                  ]
+                },
+                {
+                  "text": " to "
+                },
+                {
+                  "ui": [
+                    "Setting up"
+                  ]
+                },
+                {
+                  "text": " to "
+                },
+                {
+                  "ui": [
+                    "Connected"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Paste that last line into "
+                },
+                {
+                  "ui": [
+                    "Workload identity provider"
+                  ]
+                },
+                {
+                  "text": ", press "
+                },
+                {
+                  "ui": [
+                    "Test connection"
+                  ]
+                },
+                {
+                  "text": ", then press "
+                },
+                {
+                  "ui": [
+                    "Save"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Paste the provider",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "Paste the whole last line, which starts with projects/ and a number."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "Crewlet says it is not a workload identity provider's full name."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "Run the block again so the provider holds Crewlet's current key."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "The test says Google refused Crewlet's federation token."
+                    }
+                  ]
+                }
+              ],
+              "where": "Crewlet",
+              "yields": "provider"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "The test lists the project under "
+                },
+                {
+                  "ui": [
+                    "Agents may use"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Connected gives no agent any access yet. As an Owner of each project agents should work in, run the "
+                },
+                {
+                  "text": "Prepare a project",
+                  "url": "https://docs.crewlet.ai/engine/latest/integrations/google-cloud/#prepare-a-project-for-crewlet"
+                },
+                {
+                  "text": " block with `IDENTITY` set to the identity project's ID and `TARGET` to that project."
+                }
+              ],
+              "title": "Prepare each project agents work in",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "It names what the project lacks. Run the block on it again as an Owner."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "The test says a project is not offered."
+                    }
+                  ]
+                }
+              ],
+              "where": "Cloud Shell"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "Crewlet creates each agent's service account in the identity project and grants its level on its projects. An agent you do not turn on has no access."
+                }
+              ],
+              "text": [
+                {
+                  "text": "On the "
+                },
+                {
+                  "ui": [
+                    "Agents"
+                  ]
+                },
+                {
+                  "text": " tab, turn "
+                },
+                {
+                  "ui": [
+                    "On"
+                  ]
+                },
+                {
+                  "text": " each agent that should use Google Cloud, choose its "
+                },
+                {
+                  "ui": [
+                    "Access"
+                  ]
+                },
+                {
+                  "text": " level and "
+                },
+                {
+                  "ui": [
+                    "Projects"
+                  ]
+                },
+                {
+                  "text": ", then press "
+                },
+                {
+                  "ui": [
+                    "Review changes"
+                  ]
+                },
+                {
+                  "text": " and "
+                },
+                {
+                  "ui": [
+                    "Save and sync"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Turn agents on",
+              "where": "Crewlet"
+            }
+          ],
+          "requirements": [
+            {
+              "blocks": "credential_missing",
+              "config_path": "integrations.google_cloud.provisioning.identity_project",
+              "connect": true,
+              "default": "crewlet-acme-7e18",
+              "field": "identity_project",
+              "format": "6 to 30 lowercase letters, digits and hyphens, starting with a letter",
+              "hint": [
+                {
+                  "text": "A new project kept for Crewlet alone. Its ID can differ from its name."
+                }
+              ],
+              "kind": "id",
+              "label": "Identity project ID",
+              "more": [
+                {
+                  "text": "The block below creates it if it does not exist. To use one you made on your "
+                },
+                {
+                  "text": "new project page",
+                  "url": "https://console.cloud.google.com/projectcreate"
+                },
+                {
+                  "text": ", type the ID Google shows under its name. Crewlet acts in it as crewlet-provisioner@{identity_project}.iam.gserviceaccount.com, which the block makes."
+                }
+              ],
+              "present": true,
+              "required": true,
+              "resolved": true,
+              "shape": "google_project",
+              "value": "acme-crewlet-id"
+            },
+            {
+              "accept": ".pem,.key",
+              "blocks": "credential_missing",
+              "check_note": "It is tested with the provider.",
+              "config_path": "integrations.google_cloud.provisioning.federation_key",
+              "connect": true,
+              "field": "federation_key",
+              "hint": [
+                {
+                  "text": "Run this block in "
+                },
+                {
+                  "text": "Cloud Shell",
+                  "url": "https://console.cloud.google.com/?cloudshell=true"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "secret",
+              "label": "Federation key",
+              "mint_first": true,
+              "mintable": true,
+              "more": [
+                {
+                  "text": "If the block stops, its last line starts \"Crewlet setup stopped:\" and says what to do: run gcloud auth login when Cloud Shell has no active account, or type the ID of a new, empty project when this one runs workloads, holds service accounts Crewlet did not make or cannot be created. It is safe to run again. Crewlet made this key when you started connecting and sealed it as GOOGLE_CLOUD_FEDERATION_KEY; Google holds only its public half. The block stays the same when you turn on another Google product."
+                }
+              ],
+              "multiline": true,
+              "present": true,
+              "public": {
+                "drawn_from": [
+                  "identity_project",
+                  "atlas_read"
+                ],
+                "language": "sh",
+                "live": true,
+                "text": "# the block, rendered for the saved key\n"
+              },
+              "required": true,
+              "resolved": true,
+              "secret_name": "GOOGLE_CLOUD_FEDERATION_KEY",
+              "shape": "es256_key",
+              "value": "${GOOGLE_CLOUD_FEDERATION_KEY}"
+            },
+            {
+              "blocks": "approval_required",
+              "check_with": [
+                "identity_project",
+                "federation_key"
+              ],
+              "checkable": true,
+              "config_path": "integrations.google_cloud.provisioning.provider",
+              "connect": true,
+              "field": "provider",
+              "format": "projects/\u003cproject number\u003e/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine",
+              "hint": [
+                {
+                  "text": "The last line the Cloud Shell block prints."
+                }
+              ],
+              "kind": "id",
+              "label": "Workload identity provider",
+              "more": [
+                {
+                  "text": "It names the identity project by its number, not its ID. Find it later under "
+                },
+                {
+                  "ui": [
+                    "Workload Identity Pools"
+                  ],
+                  "url": "https://console.cloud.google.com/iam-admin/workload-identity-pools"
+                },
+                {
+                  "text": ". Test checks federation, the provisioner's grants, the identity project's APIs and every project prepared for Crewlet."
+                }
+              ],
+              "present": true,
+              "printed_by": "federation_key",
+              "required": true,
+              "resolved": true,
+              "shape": "google_workload_provider",
+              "value": "projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine"
+            },
+            {
+              "config_path": "integrations.google_cloud.provisioning.atlas_read",
+              "default": "false",
+              "field": "atlas_read",
+              "hint": [
+                {
+                  "text": "Lets Atlas list what each project runs, as a service account of its own."
+                }
+              ],
+              "kind": "toggle",
+              "label": "See more in Atlas",
+              "more": [
+                {
+                  "text": "Atlas then shows each project's instances, databases, Cloud Run services, functions, buckets and topics, by name and type, read hourly as crewlet-atlas through Cloud Asset Inventory. It reads no configuration, label, environment or data. Turning it on adds Atlas's lines to the Cloud Shell block above: run it, again if you ran it before, then save. To undo it, turn this off and delete the crewlet-atlas service account in the identity project."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": false,
+              "value": "false"
+            },
+            {
+              "config_path": "integrations.google_cloud.enabled",
+              "default": "true",
+              "field": "enabled",
+              "hidden": true,
+              "kind": "toggle",
+              "label": "Manage agent service accounts",
+              "present": true,
+              "required": true,
+              "resolved": true,
+              "value": "true"
+            },
+            {
+              "config_path": "",
+              "field": "redirect_uri",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "Make a "
+                },
+                {
+                  "ui": [
+                    "Web application"
+                  ]
+                },
+                {
+                  "text": " client at "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": " with this redirect URI."
+                }
+              ],
+              "kind": "redirect",
+              "label": "Authorized redirect URI",
+              "more": [
+                {
+                  "text": "Leave "
+                },
+                {
+                  "ui": [
+                    "Authorized JavaScript origins"
+                  ]
+                },
+                {
+                  "text": " empty. In "
+                },
+                {
+                  "ui": [
+                    "Google Auth Platform",
+                    "Audience"
+                  ],
+                  "url": "https://console.cloud.google.com/auth/audience"
+                },
+                {
+                  "text": ", choose "
+                },
+                {
+                  "ui": [
+                    "Internal"
+                  ]
+                },
+                {
+                  "text": " if whoever signs in is in the project's organization. Otherwise choose "
+                },
+                {
+                  "ui": [
+                    "External"
+                  ]
+                },
+                {
+                  "text": " and press "
+                },
+                {
+                  "ui": [
+                    "Publish app"
+                  ]
+                },
+                {
+                  "text": ", or add them as a test user: Google ends a "
+                },
+                {
+                  "ui": [
+                    "Testing"
+                  ]
+                },
+                {
+                  "text": " app's sign-in after 7 days ("
+                },
+                {
+                  "text": "Google's guide",
+                  "url": "https://support.google.com/cloud/answer/15549945"
+                },
+                {
+                  "text": ")."
+                }
+              ],
+              "present": false,
+              "redirect": {
+                "key": "api.external_url",
+                "url": ""
+              },
+              "required": false,
+              "resolved": null
+            },
+            {
+              "config_path": "integrations.google_cloud.sign_in_client.client_id",
+              "field": "sign_in_client_id",
+              "format": "\u003cproject number\u003e-\u003cid\u003e.apps.googleusercontent.com",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "The client every Google sign-in is made as, from "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "id",
+              "label": "OAuth client ID",
+              "more": [
+                {
+                  "text": "AdMob and AdSense sign in as it, and Google Analytics and Google Play use it to add agents for you. A product's own oauth block overrides it for that product."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": null
+            },
+            {
+              "check_note": "The client is proven by the Google sign-in, once saved.",
+              "config_path": "integrations.google_cloud.sign_in_client.client_secret",
+              "field": "sign_in_client_secret",
+              "group": "sign_in",
+              "hint": [
+                {
+                  "text": "The same client's secret, from "
+                },
+                {
+                  "ui": [
+                    "Google Cloud",
+                    "Credentials"
+                  ],
+                  "url": "https://console.cloud.google.com/apis/credentials"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "secret",
+              "label": "OAuth client secret",
+              "present": false,
+              "required": false,
+              "resolved": null
+            }
+          ],
+          "satisfied": true,
+          "summary": "Crewlet gives each agent its own service account and issues its token for an hour at a time. No service account key is made or downloaded."
+        }
+      }
+    ]
+  },
+  {
+    "kind": "aws",
+    "states": [
+      {
+        "name": "nothing saved",
+        "tool": {
+          "can_provision": false,
+          "configured": false,
+          "enabled": false,
+          "form_complete": false,
+          "key": "aws",
+          "prepare": [
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "Crewlet makes its certificate authority, and "
+                },
+                {
+                  "ui": [
+                    "Sign-in certificate"
+                  ]
+                },
+                {
+                  "text": " shows the CloudShell block with a "
+                },
+                {
+                  "ui": [
+                    "Copy"
+                  ]
+                },
+                {
+                  "text": " button."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Enter a "
+                },
+                {
+                  "ui": [
+                    "Short name"
+                  ]
+                },
+                {
+                  "text": ", choose the "
+                },
+                {
+                  "ui": [
+                    "Home Region"
+                  ]
+                },
+                {
+                  "text": ", then press "
+                },
+                {
+                  "ui": [
+                    "Connect"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Name the stack and its Region",
+              "where": "Crewlet",
+              "yields": "home_region"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "It creates the stack crewlet-\u003cname\u003e and prints its output last: five ARNs joined by commas, or seven with the Atlas reader."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Copy the block whole with that button, sign in to the account agents will work in as an administrator, open "
+                },
+                {
+                  "text": "CloudShell in the home Region",
+                  "url": "https://{home_region}.console.aws.amazon.com/cloudshell/home?region={home_region}"
+                },
+                {
+                  "text": ", paste it and press Enter. It is safe to run again."
+                }
+              ],
+              "title": "Run the block in CloudShell",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "The stack's "
+                    },
+                    {
+                      "ui": [
+                        "Events"
+                      ]
+                    },
+                    {
+                      "text": " tab in "
+                    },
+                    {
+                      "ui": [
+                        "CloudFormation",
+                        "Stacks"
+                      ],
+                      "url": "https://console.aws.amazon.com/cloudformation/home"
+                    },
+                    {
+                      "text": " says why. Fix that and run the block again, deleting a stack left in ROLLBACK_COMPLETE first."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "It prints `Failed to create/update the stack`."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "Delete the crewlet-\u003cname\u003e stack there in "
+                    },
+                    {
+                      "ui": [
+                        "CloudFormation",
+                        "Stacks"
+                      ],
+                      "url": "https://console.aws.amazon.com/cloudformation/home"
+                    },
+                    {
+                      "text": ", which removes all it made."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "You ran it in the wrong account."
+                    }
+                  ]
+                }
+              ],
+              "where": "CloudShell"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "The form closes, and within about a minute the status goes to "
+                },
+                {
+                  "ui": [
+                    "Connected"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Paste that last line into "
+                },
+                {
+                  "ui": [
+                    "Stack output"
+                  ]
+                },
+                {
+                  "text": ", press "
+                },
+                {
+                  "ui": [
+                    "Test connection"
+                  ]
+                },
+                {
+                  "text": ", then press "
+                },
+                {
+                  "ui": [
+                    "Save"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Paste the stack output",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "Paste the whole last line. After the block changes the stack, paste its new last line."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "Crewlet says it is not a Crewlet stack output."
+                    }
+                  ]
+                }
+              ],
+              "where": "Crewlet",
+              "yields": "connection"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "Crewlet creates each agent's IAM role, limited by the Crewlet boundary. An agent you do not turn on has no access."
+                }
+              ],
+              "text": [
+                {
+                  "text": "On the "
+                },
+                {
+                  "ui": [
+                    "Agents"
+                  ]
+                },
+                {
+                  "text": " tab, turn "
+                },
+                {
+                  "ui": [
+                    "On"
+                  ]
+                },
+                {
+                  "text": " each agent that should use AWS, choose its "
+                },
+                {
+                  "ui": [
+                    "Access"
+                  ]
+                },
+                {
+                  "text": " level, then press "
+                },
+                {
+                  "ui": [
+                    "Review changes"
+                  ]
+                },
+                {
+                  "text": " and "
+                },
+                {
+                  "ui": [
+                    "Save and sync"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Turn agents on",
+              "where": "Crewlet"
+            }
+          ],
+          "requirements": [
+            {
+              "blocks": "credential_missing",
+              "config_path": "integrations.aws.provisioning.slug",
+              "connect": true,
+              "default": "acme",
+              "field": "slug",
+              "format": "up to 20 lowercase letters, digits and hyphens",
+              "hint": [
+                {
+                  "text": "Names the stack and every role Crewlet creates. It cannot change later."
+                }
+              ],
+              "kind": "id",
+              "label": "Short name",
+              "more": [
+                {
+                  "text": "The stack is named crewlet-\u003cname\u003e, and its roles and policies follow it."
+                }
+              ],
+              "present": false,
+              "required": true,
+              "resolved": false
+            },
+            {
+              "blocks": "credential_missing",
+              "choices": [
+                {
+                  "label": "US East (N. Virginia) us-east-1",
+                  "value": "us-east-1"
+                },
+                {
+                  "label": "US East (Ohio) us-east-2",
+                  "value": "us-east-2"
+                },
+                {
+                  "label": "US West (N. California) us-west-1",
+                  "value": "us-west-1"
+                },
+                {
+                  "label": "US West (Oregon) us-west-2",
+                  "value": "us-west-2"
+                },
+                {
+                  "label": "Africa (Cape Town) af-south-1",
+                  "value": "af-south-1"
+                },
+                {
+                  "label": "Asia Pacific (Hong Kong) ap-east-1",
+                  "value": "ap-east-1"
+                },
+                {
+                  "label": "Asia Pacific (Taipei) ap-east-2",
+                  "value": "ap-east-2"
+                },
+                {
+                  "label": "Asia Pacific (Mumbai) ap-south-1",
+                  "value": "ap-south-1"
+                },
+                {
+                  "label": "Asia Pacific (Hyderabad) ap-south-2",
+                  "value": "ap-south-2"
+                },
+                {
+                  "label": "Asia Pacific (Singapore) ap-southeast-1",
+                  "value": "ap-southeast-1"
+                },
+                {
+                  "label": "Asia Pacific (Sydney) ap-southeast-2",
+                  "value": "ap-southeast-2"
+                },
+                {
+                  "label": "Asia Pacific (Jakarta) ap-southeast-3",
+                  "value": "ap-southeast-3"
+                },
+                {
+                  "label": "Asia Pacific (Melbourne) ap-southeast-4",
+                  "value": "ap-southeast-4"
+                },
+                {
+                  "label": "Asia Pacific (Malaysia) ap-southeast-5",
+                  "value": "ap-southeast-5"
+                },
+                {
+                  "label": "Asia Pacific (New Zealand) ap-southeast-6",
+                  "value": "ap-southeast-6"
+                },
+                {
+                  "label": "Asia Pacific (Thailand) ap-southeast-7",
+                  "value": "ap-southeast-7"
+                },
+                {
+                  "label": "Asia Pacific (Tokyo) ap-northeast-1",
+                  "value": "ap-northeast-1"
+                },
+                {
+                  "label": "Asia Pacific (Seoul) ap-northeast-2",
+                  "value": "ap-northeast-2"
+                },
+                {
+                  "label": "Asia Pacific (Osaka) ap-northeast-3",
+                  "value": "ap-northeast-3"
+                },
+                {
+                  "label": "Canada (Central) ca-central-1",
+                  "value": "ca-central-1"
+                },
+                {
+                  "label": "Canada West (Calgary) ca-west-1",
+                  "value": "ca-west-1"
+                },
+                {
+                  "label": "Europe (Frankfurt) eu-central-1",
+                  "value": "eu-central-1"
+                },
+                {
+                  "label": "Europe (Zurich) eu-central-2",
+                  "value": "eu-central-2"
+                },
+                {
+                  "label": "Europe (Ireland) eu-west-1",
+                  "value": "eu-west-1"
+                },
+                {
+                  "label": "Europe (London) eu-west-2",
+                  "value": "eu-west-2"
+                },
+                {
+                  "label": "Europe (Paris) eu-west-3",
+                  "value": "eu-west-3"
+                },
+                {
+                  "label": "Europe (Milan) eu-south-1",
+                  "value": "eu-south-1"
+                },
+                {
+                  "label": "Europe (Spain) eu-south-2",
+                  "value": "eu-south-2"
+                },
+                {
+                  "label": "Europe (Stockholm) eu-north-1",
+                  "value": "eu-north-1"
+                },
+                {
+                  "label": "Israel (Tel Aviv) il-central-1",
+                  "value": "il-central-1"
+                },
+                {
+                  "label": "Middle East (UAE) me-central-1",
+                  "value": "me-central-1"
+                },
+                {
+                  "label": "Middle East (Bahrain) me-south-1",
+                  "value": "me-south-1"
+                },
+                {
+                  "label": "Mexico (Central) mx-central-1",
+                  "value": "mx-central-1"
+                },
+                {
+                  "label": "South America (São Paulo) sa-east-1",
+                  "value": "sa-east-1"
+                },
+                {
+                  "label": "AWS GovCloud (US-East) us-gov-east-1",
+                  "value": "us-gov-east-1"
+                },
+                {
+                  "label": "AWS GovCloud (US-West) us-gov-west-1",
+                  "value": "us-gov-west-1"
+                }
+              ],
+              "config_path": "integrations.aws.provisioning.home_region",
+              "connect": true,
+              "field": "home_region",
+              "hint": [
+                {
+                  "text": "Where the Crewlet stack and its sign-in live."
+                }
+              ],
+              "kind": "choice",
+              "label": "Home Region",
+              "more": [
+                {
+                  "text": "Agents work in this Region and us-east-1, unless the company document lists other Regions."
+                }
+              ],
+              "present": false,
+              "required": true,
+              "resolved": false
+            },
+            {
+              "blocks": "credential_missing",
+              "check_note": "It is tested with the stack output.",
+              "config_path": "integrations.aws.provisioning.certificate_authority",
+              "connect": true,
+              "field": "certificate_authority",
+              "hint": [
+                {
+                  "text": "Run this block in "
+                },
+                {
+                  "text": "CloudShell in the home Region",
+                  "url": "https://{home_region}.console.aws.amazon.com/cloudshell/home?region={home_region}"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "secret",
+              "label": "Sign-in certificate",
+              "mintable": true,
+              "more": [
+                {
+                  "text": "Copy it with its Copy button, as a hand selection can drop a line. Crewlet made this certificate authority when you saved, and sealed it as AWS_CERTIFICATE_AUTHORITY. The stack trusts only its certificate; its key is never shown or exported."
+                }
+              ],
+              "multiline": true,
+              "present": false,
+              "required": true,
+              "resolved": null,
+              "secret_name": "AWS_CERTIFICATE_AUTHORITY",
+              "shape": "certificate_authority"
+            },
+            {
+              "blocks": "approval_required",
+              "check_with": [
+                "slug",
+                "home_region",
+                "certificate_authority",
+                "atlas_read"
+              ],
+              "checkable": true,
+              "config_path": "integrations.aws.provisioning.connection",
+              "connect": true,
+              "field": "connection",
+              "format": "five ARNs joined by commas, or seven with the Atlas reader",
+              "hint": [
+                {
+                  "text": "The last line the CloudShell block prints."
+                }
+              ],
+              "kind": "id",
+              "label": "Stack output",
+              "more": [
+                {
+                  "text": "It is also the CrewletConnection value on the stack's "
+                },
+                {
+                  "ui": [
+                    "Outputs"
+                  ]
+                },
+                {
+                  "text": " tab, in your "
+                },
+                {
+                  "ui": [
+                    "CloudFormation",
+                    "Stacks"
+                  ],
+                  "url": "https://console.aws.amazon.com/cloudformation/home"
+                },
+                {
+                  "text": ". Test checks the sign-in, every Crewlet policy, the identity split and the role quota. Paste it again after the block changes what the stack holds."
+                }
+              ],
+              "present": false,
+              "printed_by": "certificate_authority",
+              "required": true,
+              "resolved": false
+            },
+            {
+              "config_path": "integrations.aws.provisioning.iam_read",
+              "default": "false",
+              "field": "iam_read",
+              "hint": [
+                {
+                  "text": "Lets agents read IAM users, groups, roles and policies."
+                }
+              ],
+              "kind": "toggle",
+              "label": "Let agents read IAM",
+              "more": [
+                {
+                  "text": "It shows the people in your account, so it is off unless you turn it on."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": false,
+              "value": "false"
+            },
+            {
+              "config_path": "integrations.aws.provisioning.atlas_read",
+              "default": "false",
+              "field": "atlas_read",
+              "hint": [
+                {
+                  "text": "Adds a read-only role for Atlas, which lists what the account runs."
+                }
+              ],
+              "kind": "toggle",
+              "label": "See more in Atlas",
+              "more": [
+                {
+                  "text": "Atlas then shows the Regions in use, instances, databases, load balancers, DNS zones, queues and bucket names, read hourly as crewlet-\u003cname\u003e-atlas, never as an agent. It reads no function, no user data, no parameter and no object. One step: turn this on and save, run the CloudShell block again, and paste its last line. To undo it, turn this off, save and run the block again, which deletes the role."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": false,
+              "value": "false"
+            },
+            {
+              "config_path": "integrations.aws.enabled",
+              "default": "true",
+              "field": "enabled",
+              "hidden": true,
+              "kind": "toggle",
+              "label": "Manage agent roles",
+              "present": false,
+              "required": true,
+              "resolved": false,
+              "value": "false"
+            }
+          ],
+          "satisfied": false,
+          "summary": "Crewlet gives each agent its own IAM role in your account and signs it in for 15 minutes at a time. No access key is stored."
+        }
+      },
+      {
+        "name": "the short name and Region saved",
+        "tool": {
+          "can_provision": false,
+          "configured": true,
+          "enabled": true,
+          "form_complete": false,
+          "key": "aws",
+          "prepare": [
+            {
+              "done": true,
+              "result": [
+                {
+                  "text": "Crewlet makes its certificate authority, and "
+                },
+                {
+                  "ui": [
+                    "Sign-in certificate"
+                  ]
+                },
+                {
+                  "text": " shows the CloudShell block with a "
+                },
+                {
+                  "ui": [
+                    "Copy"
+                  ]
+                },
+                {
+                  "text": " button."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Enter a "
+                },
+                {
+                  "ui": [
+                    "Short name"
+                  ]
+                },
+                {
+                  "text": ", choose the "
+                },
+                {
+                  "ui": [
+                    "Home Region"
+                  ]
+                },
+                {
+                  "text": ", then press "
+                },
+                {
+                  "ui": [
+                    "Connect"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Name the stack and its Region",
+              "where": "Crewlet",
+              "yields": "home_region"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "It creates the stack crewlet-\u003cname\u003e and prints its output last: five ARNs joined by commas, or seven with the Atlas reader."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Copy the block whole with that button, sign in to the account agents will work in as an administrator, open "
+                },
+                {
+                  "text": "CloudShell in the home Region",
+                  "url": "https://{home_region}.console.aws.amazon.com/cloudshell/home?region={home_region}"
+                },
+                {
+                  "text": ", paste it and press Enter. It is safe to run again."
+                }
+              ],
+              "title": "Run the block in CloudShell",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "The stack's "
+                    },
+                    {
+                      "ui": [
+                        "Events"
+                      ]
+                    },
+                    {
+                      "text": " tab in "
+                    },
+                    {
+                      "ui": [
+                        "CloudFormation",
+                        "Stacks"
+                      ],
+                      "url": "https://console.aws.amazon.com/cloudformation/home"
+                    },
+                    {
+                      "text": " says why. Fix that and run the block again, deleting a stack left in ROLLBACK_COMPLETE first."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "It prints `Failed to create/update the stack`."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "Delete the crewlet-\u003cname\u003e stack there in "
+                    },
+                    {
+                      "ui": [
+                        "CloudFormation",
+                        "Stacks"
+                      ],
+                      "url": "https://console.aws.amazon.com/cloudformation/home"
+                    },
+                    {
+                      "text": ", which removes all it made."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "You ran it in the wrong account."
+                    }
+                  ]
+                }
+              ],
+              "where": "CloudShell"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "The form closes, and within about a minute the status goes to "
+                },
+                {
+                  "ui": [
+                    "Connected"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Paste that last line into "
+                },
+                {
+                  "ui": [
+                    "Stack output"
+                  ]
+                },
+                {
+                  "text": ", press "
+                },
+                {
+                  "ui": [
+                    "Test connection"
+                  ]
+                },
+                {
+                  "text": ", then press "
+                },
+                {
+                  "ui": [
+                    "Save"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Paste the stack output",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "Paste the whole last line. After the block changes the stack, paste its new last line."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "Crewlet says it is not a Crewlet stack output."
+                    }
+                  ]
+                }
+              ],
+              "where": "Crewlet",
+              "yields": "connection"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "Crewlet creates each agent's IAM role, limited by the Crewlet boundary. An agent you do not turn on has no access."
+                }
+              ],
+              "text": [
+                {
+                  "text": "On the "
+                },
+                {
+                  "ui": [
+                    "Agents"
+                  ]
+                },
+                {
+                  "text": " tab, turn "
+                },
+                {
+                  "ui": [
+                    "On"
+                  ]
+                },
+                {
+                  "text": " each agent that should use AWS, choose its "
+                },
+                {
+                  "ui": [
+                    "Access"
+                  ]
+                },
+                {
+                  "text": " level, then press "
+                },
+                {
+                  "ui": [
+                    "Review changes"
+                  ]
+                },
+                {
+                  "text": " and "
+                },
+                {
+                  "ui": [
+                    "Save and sync"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Turn agents on",
+              "where": "Crewlet"
+            }
+          ],
+          "requirements": [
+            {
+              "blocks": "credential_missing",
+              "config_path": "integrations.aws.provisioning.slug",
+              "connect": true,
+              "default": "acme",
+              "field": "slug",
+              "format": "up to 20 lowercase letters, digits and hyphens",
+              "hint": [
+                {
+                  "text": "Names the stack and every role Crewlet creates. It cannot change later."
+                }
+              ],
+              "kind": "id",
+              "label": "Short name",
+              "more": [
+                {
+                  "text": "The stack is named crewlet-\u003cname\u003e, and its roles and policies follow it."
+                }
+              ],
+              "present": true,
+              "required": true,
+              "resolved": true,
+              "value": "acme"
+            },
+            {
+              "blocks": "credential_missing",
+              "choices": [
+                {
+                  "label": "US East (N. Virginia) us-east-1",
+                  "value": "us-east-1"
+                },
+                {
+                  "label": "US East (Ohio) us-east-2",
+                  "value": "us-east-2"
+                },
+                {
+                  "label": "US West (N. California) us-west-1",
+                  "value": "us-west-1"
+                },
+                {
+                  "label": "US West (Oregon) us-west-2",
+                  "value": "us-west-2"
+                },
+                {
+                  "label": "Africa (Cape Town) af-south-1",
+                  "value": "af-south-1"
+                },
+                {
+                  "label": "Asia Pacific (Hong Kong) ap-east-1",
+                  "value": "ap-east-1"
+                },
+                {
+                  "label": "Asia Pacific (Taipei) ap-east-2",
+                  "value": "ap-east-2"
+                },
+                {
+                  "label": "Asia Pacific (Mumbai) ap-south-1",
+                  "value": "ap-south-1"
+                },
+                {
+                  "label": "Asia Pacific (Hyderabad) ap-south-2",
+                  "value": "ap-south-2"
+                },
+                {
+                  "label": "Asia Pacific (Singapore) ap-southeast-1",
+                  "value": "ap-southeast-1"
+                },
+                {
+                  "label": "Asia Pacific (Sydney) ap-southeast-2",
+                  "value": "ap-southeast-2"
+                },
+                {
+                  "label": "Asia Pacific (Jakarta) ap-southeast-3",
+                  "value": "ap-southeast-3"
+                },
+                {
+                  "label": "Asia Pacific (Melbourne) ap-southeast-4",
+                  "value": "ap-southeast-4"
+                },
+                {
+                  "label": "Asia Pacific (Malaysia) ap-southeast-5",
+                  "value": "ap-southeast-5"
+                },
+                {
+                  "label": "Asia Pacific (New Zealand) ap-southeast-6",
+                  "value": "ap-southeast-6"
+                },
+                {
+                  "label": "Asia Pacific (Thailand) ap-southeast-7",
+                  "value": "ap-southeast-7"
+                },
+                {
+                  "label": "Asia Pacific (Tokyo) ap-northeast-1",
+                  "value": "ap-northeast-1"
+                },
+                {
+                  "label": "Asia Pacific (Seoul) ap-northeast-2",
+                  "value": "ap-northeast-2"
+                },
+                {
+                  "label": "Asia Pacific (Osaka) ap-northeast-3",
+                  "value": "ap-northeast-3"
+                },
+                {
+                  "label": "Canada (Central) ca-central-1",
+                  "value": "ca-central-1"
+                },
+                {
+                  "label": "Canada West (Calgary) ca-west-1",
+                  "value": "ca-west-1"
+                },
+                {
+                  "label": "Europe (Frankfurt) eu-central-1",
+                  "value": "eu-central-1"
+                },
+                {
+                  "label": "Europe (Zurich) eu-central-2",
+                  "value": "eu-central-2"
+                },
+                {
+                  "label": "Europe (Ireland) eu-west-1",
+                  "value": "eu-west-1"
+                },
+                {
+                  "label": "Europe (London) eu-west-2",
+                  "value": "eu-west-2"
+                },
+                {
+                  "label": "Europe (Paris) eu-west-3",
+                  "value": "eu-west-3"
+                },
+                {
+                  "label": "Europe (Milan) eu-south-1",
+                  "value": "eu-south-1"
+                },
+                {
+                  "label": "Europe (Spain) eu-south-2",
+                  "value": "eu-south-2"
+                },
+                {
+                  "label": "Europe (Stockholm) eu-north-1",
+                  "value": "eu-north-1"
+                },
+                {
+                  "label": "Israel (Tel Aviv) il-central-1",
+                  "value": "il-central-1"
+                },
+                {
+                  "label": "Middle East (UAE) me-central-1",
+                  "value": "me-central-1"
+                },
+                {
+                  "label": "Middle East (Bahrain) me-south-1",
+                  "value": "me-south-1"
+                },
+                {
+                  "label": "Mexico (Central) mx-central-1",
+                  "value": "mx-central-1"
+                },
+                {
+                  "label": "South America (São Paulo) sa-east-1",
+                  "value": "sa-east-1"
+                },
+                {
+                  "label": "AWS GovCloud (US-East) us-gov-east-1",
+                  "value": "us-gov-east-1"
+                },
+                {
+                  "label": "AWS GovCloud (US-West) us-gov-west-1",
+                  "value": "us-gov-west-1"
+                }
+              ],
+              "config_path": "integrations.aws.provisioning.home_region",
+              "connect": true,
+              "field": "home_region",
+              "hint": [
+                {
+                  "text": "Where the Crewlet stack and its sign-in live."
+                }
+              ],
+              "kind": "choice",
+              "label": "Home Region",
+              "more": [
+                {
+                  "text": "Agents work in us-east-2, us-east-1, as integrations.aws.provisioning.regions sets them. Changing them changes the CloudShell block."
+                }
+              ],
+              "present": true,
+              "required": true,
+              "resolved": true,
+              "value": "us-east-2"
+            },
+            {
+              "blocks": "credential_missing",
+              "check_note": "It is tested with the stack output.",
+              "config_path": "integrations.aws.provisioning.certificate_authority",
+              "connect": true,
+              "field": "certificate_authority",
+              "hint": [
+                {
+                  "text": "Run this block in "
+                },
+                {
+                  "text": "CloudShell in the home Region",
+                  "url": "https://{home_region}.console.aws.amazon.com/cloudshell/home?region={home_region}"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "secret",
+              "label": "Sign-in certificate",
+              "mintable": true,
+              "more": [
+                {
+                  "text": "Copy it with its Copy button, as a hand selection can drop a line. Crewlet made this certificate authority when you saved, and sealed it as AWS_CERTIFICATE_AUTHORITY. The stack trusts only its certificate; its key is never shown or exported."
+                }
+              ],
+              "multiline": true,
+              "present": true,
+              "public": {
+                "drawn_from": [
+                  "slug",
+                  "home_region",
+                  "atlas_read"
+                ],
+                "language": "sh",
+                "text": "# the block, rendered for the saved key\n"
+              },
+              "required": true,
+              "resolved": true,
+              "secret_name": "AWS_CERTIFICATE_AUTHORITY",
+              "shape": "certificate_authority",
+              "value": "${AWS_CERTIFICATE_AUTHORITY}"
+            },
+            {
+              "blocks": "approval_required",
+              "check_with": [
+                "slug",
+                "home_region",
+                "certificate_authority",
+                "atlas_read"
+              ],
+              "checkable": true,
+              "config_path": "integrations.aws.provisioning.connection",
+              "connect": true,
+              "field": "connection",
+              "format": "five ARNs joined by commas, or seven with the Atlas reader",
+              "hint": [
+                {
+                  "text": "The last line the CloudShell block prints."
+                }
+              ],
+              "kind": "id",
+              "label": "Stack output",
+              "more": [
+                {
+                  "text": "It is also the CrewletConnection value on the stack's "
+                },
+                {
+                  "ui": [
+                    "Outputs"
+                  ]
+                },
+                {
+                  "text": " tab, in your "
+                },
+                {
+                  "ui": [
+                    "CloudFormation",
+                    "Stacks"
+                  ],
+                  "url": "https://console.aws.amazon.com/cloudformation/home"
+                },
+                {
+                  "text": ". Test checks the sign-in, every Crewlet policy, the identity split and the role quota. Paste it again after the block changes what the stack holds."
+                }
+              ],
+              "present": false,
+              "printed_by": "certificate_authority",
+              "required": true,
+              "resolved": false
+            },
+            {
+              "config_path": "integrations.aws.provisioning.iam_read",
+              "default": "false",
+              "field": "iam_read",
+              "hint": [
+                {
+                  "text": "Lets agents read IAM users, groups, roles and policies."
+                }
+              ],
+              "kind": "toggle",
+              "label": "Let agents read IAM",
+              "more": [
+                {
+                  "text": "It shows the people in your account, so it is off unless you turn it on."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": false,
+              "value": "false"
+            },
+            {
+              "config_path": "integrations.aws.provisioning.atlas_read",
+              "default": "false",
+              "field": "atlas_read",
+              "hint": [
+                {
+                  "text": "Adds a read-only role for Atlas, which lists what the account runs."
+                }
+              ],
+              "kind": "toggle",
+              "label": "See more in Atlas",
+              "more": [
+                {
+                  "text": "Atlas then shows the Regions in use, instances, databases, load balancers, DNS zones, queues and bucket names, read hourly as crewlet-\u003cname\u003e-atlas, never as an agent. It reads no function, no user data, no parameter and no object. One step: turn this on and save, run the CloudShell block again, and paste its last line. To undo it, turn this off, save and run the block again, which deletes the role."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": false,
+              "value": "false"
+            },
+            {
+              "config_path": "integrations.aws.enabled",
+              "default": "true",
+              "field": "enabled",
+              "hidden": true,
+              "kind": "toggle",
+              "label": "Manage agent roles",
+              "present": true,
+              "required": true,
+              "resolved": true,
+              "value": "true"
+            }
+          ],
+          "satisfied": false,
+          "summary": "Crewlet gives each agent its own IAM role in your account and signs it in for 15 minutes at a time. No access key is stored."
+        }
+      },
+      {
+        "name": "the stack output saved",
+        "tool": {
+          "can_provision": false,
+          "configured": true,
+          "enabled": true,
+          "form_complete": true,
+          "key": "aws",
+          "prepare": [
+            {
+              "done": true,
+              "result": [
+                {
+                  "text": "Crewlet makes its certificate authority, and "
+                },
+                {
+                  "ui": [
+                    "Sign-in certificate"
+                  ]
+                },
+                {
+                  "text": " shows the CloudShell block with a "
+                },
+                {
+                  "ui": [
+                    "Copy"
+                  ]
+                },
+                {
+                  "text": " button."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Enter a "
+                },
+                {
+                  "ui": [
+                    "Short name"
+                  ]
+                },
+                {
+                  "text": ", choose the "
+                },
+                {
+                  "ui": [
+                    "Home Region"
+                  ]
+                },
+                {
+                  "text": ", then press "
+                },
+                {
+                  "ui": [
+                    "Connect"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Name the stack and its Region",
+              "where": "Crewlet",
+              "yields": "home_region"
+            },
+            {
+              "done": true,
+              "result": [
+                {
+                  "text": "It creates the stack crewlet-\u003cname\u003e and prints its output last: five ARNs joined by commas, or seven with the Atlas reader."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Copy the block whole with that button, sign in to the account agents will work in as an administrator, open "
+                },
+                {
+                  "text": "CloudShell in the home Region",
+                  "url": "https://{home_region}.console.aws.amazon.com/cloudshell/home?region={home_region}"
+                },
+                {
+                  "text": ", paste it and press Enter. It is safe to run again."
+                }
+              ],
+              "title": "Run the block in CloudShell",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "The stack's "
+                    },
+                    {
+                      "ui": [
+                        "Events"
+                      ]
+                    },
+                    {
+                      "text": " tab in "
+                    },
+                    {
+                      "ui": [
+                        "CloudFormation",
+                        "Stacks"
+                      ],
+                      "url": "https://console.aws.amazon.com/cloudformation/home"
+                    },
+                    {
+                      "text": " says why. Fix that and run the block again, deleting a stack left in ROLLBACK_COMPLETE first."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "It prints `Failed to create/update the stack`."
+                    }
+                  ]
+                },
+                {
+                  "fix": [
+                    {
+                      "text": "Delete the crewlet-\u003cname\u003e stack there in "
+                    },
+                    {
+                      "ui": [
+                        "CloudFormation",
+                        "Stacks"
+                      ],
+                      "url": "https://console.aws.amazon.com/cloudformation/home"
+                    },
+                    {
+                      "text": ", which removes all it made."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "You ran it in the wrong account."
+                    }
+                  ]
+                }
+              ],
+              "where": "CloudShell"
+            },
+            {
+              "done": true,
+              "result": [
+                {
+                  "text": "The form closes, and within about a minute the status goes to "
+                },
+                {
+                  "ui": [
+                    "Connected"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "text": [
+                {
+                  "text": "Paste that last line into "
+                },
+                {
+                  "ui": [
+                    "Stack output"
+                  ]
+                },
+                {
+                  "text": ", press "
+                },
+                {
+                  "ui": [
+                    "Test connection"
+                  ]
+                },
+                {
+                  "text": ", then press "
+                },
+                {
+                  "ui": [
+                    "Save"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Paste the stack output",
+              "trouble": [
+                {
+                  "fix": [
+                    {
+                      "text": "Paste the whole last line. After the block changes the stack, paste its new last line."
+                    }
+                  ],
+                  "sign": [
+                    {
+                      "text": "Crewlet says it is not a Crewlet stack output."
+                    }
+                  ]
+                }
+              ],
+              "where": "Crewlet",
+              "yields": "connection"
+            },
+            {
+              "done": false,
+              "result": [
+                {
+                  "text": "Crewlet creates each agent's IAM role, limited by the Crewlet boundary. An agent you do not turn on has no access."
+                }
+              ],
+              "text": [
+                {
+                  "text": "On the "
+                },
+                {
+                  "ui": [
+                    "Agents"
+                  ]
+                },
+                {
+                  "text": " tab, turn "
+                },
+                {
+                  "ui": [
+                    "On"
+                  ]
+                },
+                {
+                  "text": " each agent that should use AWS, choose its "
+                },
+                {
+                  "ui": [
+                    "Access"
+                  ]
+                },
+                {
+                  "text": " level, then press "
+                },
+                {
+                  "ui": [
+                    "Review changes"
+                  ]
+                },
+                {
+                  "text": " and "
+                },
+                {
+                  "ui": [
+                    "Save and sync"
+                  ]
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "title": "Turn agents on",
+              "where": "Crewlet"
+            }
+          ],
+          "requirements": [
+            {
+              "blocks": "credential_missing",
+              "config_path": "integrations.aws.provisioning.slug",
+              "connect": true,
+              "default": "acme",
+              "field": "slug",
+              "format": "up to 20 lowercase letters, digits and hyphens",
+              "hint": [
+                {
+                  "text": "Names the stack and every role Crewlet creates. It cannot change later."
+                }
+              ],
+              "kind": "id",
+              "label": "Short name",
+              "more": [
+                {
+                  "text": "The stack is named crewlet-\u003cname\u003e, and its roles and policies follow it."
+                }
+              ],
+              "present": true,
+              "required": true,
+              "resolved": true,
+              "value": "acme"
+            },
+            {
+              "blocks": "credential_missing",
+              "choices": [
+                {
+                  "label": "US East (N. Virginia) us-east-1",
+                  "value": "us-east-1"
+                },
+                {
+                  "label": "US East (Ohio) us-east-2",
+                  "value": "us-east-2"
+                },
+                {
+                  "label": "US West (N. California) us-west-1",
+                  "value": "us-west-1"
+                },
+                {
+                  "label": "US West (Oregon) us-west-2",
+                  "value": "us-west-2"
+                },
+                {
+                  "label": "Africa (Cape Town) af-south-1",
+                  "value": "af-south-1"
+                },
+                {
+                  "label": "Asia Pacific (Hong Kong) ap-east-1",
+                  "value": "ap-east-1"
+                },
+                {
+                  "label": "Asia Pacific (Taipei) ap-east-2",
+                  "value": "ap-east-2"
+                },
+                {
+                  "label": "Asia Pacific (Mumbai) ap-south-1",
+                  "value": "ap-south-1"
+                },
+                {
+                  "label": "Asia Pacific (Hyderabad) ap-south-2",
+                  "value": "ap-south-2"
+                },
+                {
+                  "label": "Asia Pacific (Singapore) ap-southeast-1",
+                  "value": "ap-southeast-1"
+                },
+                {
+                  "label": "Asia Pacific (Sydney) ap-southeast-2",
+                  "value": "ap-southeast-2"
+                },
+                {
+                  "label": "Asia Pacific (Jakarta) ap-southeast-3",
+                  "value": "ap-southeast-3"
+                },
+                {
+                  "label": "Asia Pacific (Melbourne) ap-southeast-4",
+                  "value": "ap-southeast-4"
+                },
+                {
+                  "label": "Asia Pacific (Malaysia) ap-southeast-5",
+                  "value": "ap-southeast-5"
+                },
+                {
+                  "label": "Asia Pacific (New Zealand) ap-southeast-6",
+                  "value": "ap-southeast-6"
+                },
+                {
+                  "label": "Asia Pacific (Thailand) ap-southeast-7",
+                  "value": "ap-southeast-7"
+                },
+                {
+                  "label": "Asia Pacific (Tokyo) ap-northeast-1",
+                  "value": "ap-northeast-1"
+                },
+                {
+                  "label": "Asia Pacific (Seoul) ap-northeast-2",
+                  "value": "ap-northeast-2"
+                },
+                {
+                  "label": "Asia Pacific (Osaka) ap-northeast-3",
+                  "value": "ap-northeast-3"
+                },
+                {
+                  "label": "Canada (Central) ca-central-1",
+                  "value": "ca-central-1"
+                },
+                {
+                  "label": "Canada West (Calgary) ca-west-1",
+                  "value": "ca-west-1"
+                },
+                {
+                  "label": "Europe (Frankfurt) eu-central-1",
+                  "value": "eu-central-1"
+                },
+                {
+                  "label": "Europe (Zurich) eu-central-2",
+                  "value": "eu-central-2"
+                },
+                {
+                  "label": "Europe (Ireland) eu-west-1",
+                  "value": "eu-west-1"
+                },
+                {
+                  "label": "Europe (London) eu-west-2",
+                  "value": "eu-west-2"
+                },
+                {
+                  "label": "Europe (Paris) eu-west-3",
+                  "value": "eu-west-3"
+                },
+                {
+                  "label": "Europe (Milan) eu-south-1",
+                  "value": "eu-south-1"
+                },
+                {
+                  "label": "Europe (Spain) eu-south-2",
+                  "value": "eu-south-2"
+                },
+                {
+                  "label": "Europe (Stockholm) eu-north-1",
+                  "value": "eu-north-1"
+                },
+                {
+                  "label": "Israel (Tel Aviv) il-central-1",
+                  "value": "il-central-1"
+                },
+                {
+                  "label": "Middle East (UAE) me-central-1",
+                  "value": "me-central-1"
+                },
+                {
+                  "label": "Middle East (Bahrain) me-south-1",
+                  "value": "me-south-1"
+                },
+                {
+                  "label": "Mexico (Central) mx-central-1",
+                  "value": "mx-central-1"
+                },
+                {
+                  "label": "South America (São Paulo) sa-east-1",
+                  "value": "sa-east-1"
+                },
+                {
+                  "label": "AWS GovCloud (US-East) us-gov-east-1",
+                  "value": "us-gov-east-1"
+                },
+                {
+                  "label": "AWS GovCloud (US-West) us-gov-west-1",
+                  "value": "us-gov-west-1"
+                }
+              ],
+              "config_path": "integrations.aws.provisioning.home_region",
+              "connect": true,
+              "field": "home_region",
+              "hint": [
+                {
+                  "text": "Where the Crewlet stack and its sign-in live."
+                }
+              ],
+              "kind": "choice",
+              "label": "Home Region",
+              "more": [
+                {
+                  "text": "Agents work in us-east-2, us-east-1, as integrations.aws.provisioning.regions sets them. Changing them changes the CloudShell block."
+                }
+              ],
+              "present": true,
+              "required": true,
+              "resolved": true,
+              "value": "us-east-2"
+            },
+            {
+              "blocks": "credential_missing",
+              "check_note": "It is tested with the stack output.",
+              "config_path": "integrations.aws.provisioning.certificate_authority",
+              "connect": true,
+              "field": "certificate_authority",
+              "hint": [
+                {
+                  "text": "Run this block in "
+                },
+                {
+                  "text": "CloudShell in the home Region",
+                  "url": "https://{home_region}.console.aws.amazon.com/cloudshell/home?region={home_region}"
+                },
+                {
+                  "text": "."
+                }
+              ],
+              "kind": "secret",
+              "label": "Sign-in certificate",
+              "mintable": true,
+              "more": [
+                {
+                  "text": "Copy it with its Copy button, as a hand selection can drop a line. Crewlet made this certificate authority when you saved, and sealed it as AWS_CERTIFICATE_AUTHORITY. The stack trusts only its certificate; its key is never shown or exported."
+                }
+              ],
+              "multiline": true,
+              "present": true,
+              "public": {
+                "drawn_from": [
+                  "slug",
+                  "home_region",
+                  "atlas_read"
+                ],
+                "language": "sh",
+                "text": "# the block, rendered for the saved key\n"
+              },
+              "required": true,
+              "resolved": true,
+              "secret_name": "AWS_CERTIFICATE_AUTHORITY",
+              "shape": "certificate_authority",
+              "value": "${AWS_CERTIFICATE_AUTHORITY}"
+            },
+            {
+              "blocks": "approval_required",
+              "check_with": [
+                "slug",
+                "home_region",
+                "certificate_authority",
+                "atlas_read"
+              ],
+              "checkable": true,
+              "config_path": "integrations.aws.provisioning.connection",
+              "connect": true,
+              "field": "connection",
+              "format": "five ARNs joined by commas, or seven with the Atlas reader",
+              "hint": [
+                {
+                  "text": "The last line the CloudShell block prints."
+                }
+              ],
+              "kind": "id",
+              "label": "Stack output",
+              "more": [
+                {
+                  "text": "It is also the CrewletConnection value on the stack's "
+                },
+                {
+                  "ui": [
+                    "Outputs"
+                  ]
+                },
+                {
+                  "text": " tab, in your "
+                },
+                {
+                  "ui": [
+                    "CloudFormation",
+                    "Stacks"
+                  ],
+                  "url": "https://console.aws.amazon.com/cloudformation/home"
+                },
+                {
+                  "text": ". Test checks the sign-in, every Crewlet policy, the identity split and the role quota. Paste it again after the block changes what the stack holds."
+                }
+              ],
+              "present": true,
+              "printed_by": "certificate_authority",
+              "required": true,
+              "resolved": true,
+              "value": "arn:aws:rolesanywhere:us-east-2:123456789012:trust-anchor/0f0e0d0c-0b0a-4908-8706-050403020100,arn:aws:rolesanywhere:us-east-2:123456789012:profile/00010203-0405-4607-8809-0a0b0c0d0e0f,arn:aws:iam::123456789012:role/crewlet/acme/crewlet-acme-provisioner,arn:aws:rolesanywhere:us-east-2:123456789012:profile/10010203-0405-4607-8809-0a0b0c0d0e0f,arn:aws:iam::123456789012:role/crewlet/acme/crewlet-acme-broker"
+            },
+            {
+              "config_path": "integrations.aws.provisioning.iam_read",
+              "default": "false",
+              "field": "iam_read",
+              "hint": [
+                {
+                  "text": "Lets agents read IAM users, groups, roles and policies."
+                }
+              ],
+              "kind": "toggle",
+              "label": "Let agents read IAM",
+              "more": [
+                {
+                  "text": "It shows the people in your account, so it is off unless you turn it on."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": false,
+              "value": "false"
+            },
+            {
+              "config_path": "integrations.aws.provisioning.atlas_read",
+              "default": "false",
+              "field": "atlas_read",
+              "hint": [
+                {
+                  "text": "Adds a read-only role for Atlas, which lists what the account runs."
+                }
+              ],
+              "kind": "toggle",
+              "label": "See more in Atlas",
+              "more": [
+                {
+                  "text": "Atlas then shows the Regions in use, instances, databases, load balancers, DNS zones, queues and bucket names, read hourly as crewlet-\u003cname\u003e-atlas, never as an agent. It reads no function, no user data, no parameter and no object. One step: turn this on and save, run the CloudShell block again, and paste its last line. To undo it, turn this off, save and run the block again, which deletes the role."
+                }
+              ],
+              "present": false,
+              "required": false,
+              "resolved": false,
+              "value": "false"
+            },
+            {
+              "config_path": "integrations.aws.enabled",
+              "default": "true",
+              "field": "enabled",
+              "hidden": true,
+              "kind": "toggle",
+              "label": "Manage agent roles",
+              "present": true,
+              "required": true,
+              "resolved": true,
+              "value": "true"
+            }
+          ],
+          "satisfied": true,
+          "summary": "Crewlet gives each agent its own IAM role in your account and signs it in for 15 minutes at a time. No access key is stored."
+        }
+      }
+    ]
+  }
+]

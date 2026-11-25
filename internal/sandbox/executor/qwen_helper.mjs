@@ -27,12 +27,20 @@
 //     directory's realpath, the one field a resume checks (measured on
 //     0.28.4), and removes every other key's copy of it.
 //
-//   node qwen-helper.mjs guard [--server <name>]... [--hook <name>]
+//   node qwen-helper.mjs guard [--server <name>]... [--hook <name>] [--checkouts <name> --skipped <file>]
 //     Exits 3, naming the file, the key and the entry, where a settings file
 //     the run's system tier cannot overrule takes one of Crewlet's own servers
 //     or its tools away, or, for a run with a hook, where the settings or safe
 //     mode switch every hook off (qwenguard.go). A file that does not read is
-//     passed over, as Qwen Code reads it as empty.
+//     passed over, as Qwen Code reads it as empty. Where only the checkouts'
+//     hook is off, the run goes on and the skip log says so (D709).
+//
+//   node qwen-helper.mjs checkouts <homes> <launch>
+//     Settles context.fileName as Qwen Code does (qwencheckout.go): the home's
+//     own context files to homes, a path a line, and the launch config's
+//     instruction files; a line for the run's skip log on stdout where it
+//     names blanks alone. Exits 1, naming the file, on a value Qwen Code
+//     stops on.
 //
 // NOTES (the runner note contract's poll channel). While the turn runs, the
 // helper polls the notes route and keeps what it fetched. Qwen Code asks for
@@ -794,6 +802,61 @@ function sleep(ms, signal) {
   })
 }
 
+// ---- the checkouts' context files ----------------------------------------
+
+// checkoutNames writes to homes the home's own context files 0.28.4 reads
+// ([contextNames]), a path a line, and, where the launch config is there,
+// makes its instruction files those names, in that order, before its rules
+// (qwencheckout.go); where the setting names blanks alone, none, and says so
+// on stdout, a line for the run's skip log: 0 done, else 1, said on stderr.
+function checkoutNames(homes, launch) {
+  try {
+    const { names, blank } = contextNames()
+    if (blank) {
+      process.stdout.write(`crewlet: ${blank} sets context.fileName to blank names only, so Qwen Code loads no ` +
+        "context file, nor the run its repositories': it hands their rules only to a checkout cloned during it\n")
+    }
+    fs.writeFileSync(homes, names.map((name) => path.join(os.homedir(), ".qwen", name) + "\n").join(""))
+    if (!fs.existsSync(launch)) return 0
+    const config = JSON.parse(fs.readFileSync(launch, "utf8"))
+    const trees = (config.instructions ?? []).filter((slot) => !Array.isArray(slot))
+    config.instructions = [...names.map((name) => [name]), ...trees]
+    fs.writeFileSync(launch, JSON.stringify(config))
+    return 0
+  } catch (err) {
+    process.stderr.write(`crewlet: settling which context files Qwen Code reads: ${err.message}\n`)
+    return 1
+  }
+}
+
+// contextNames is context.fileName as 0.28.4 settles it (read in its source;
+// measured): the highest of the system defaults, the home's and the working
+// directory's settings that holds the key decides. A falsy value, an empty
+// list or a blank name is the default, QWEN.md then AGENTS.md; a list's names
+// are trimmed and an empty one dropped; a name with a slash is a path from
+// the directory, as Qwen Code joins it. Every entry blank is no name at all,
+// under which it loads no context file (measured), blank naming the file.
+// Throws, naming the file, where Qwen Code would stop on the value (an entry
+// or a value that is no string).
+function contextNames() {
+  for (const file of settingsFiles().reverse()) {
+    const context = readSettings(file)?.context
+    if (context === null || typeof context !== "object" || !("fileName" in context)) continue
+    const value = context.fileName
+    if (!value) break
+    const list = Array.isArray(value) ? value : [value]
+    if (list.some((name) => typeof name !== "string")) {
+      throw new Error(`${file} sets context.fileName to ${JSON.stringify(value)}, which Qwen Code 0.28.4 stops on: ` +
+        "name each file as a string")
+    }
+    const names = list.map((name) => name.trim()).filter((name) => name !== "")
+    if (Array.isArray(value) && value.length > 0 && names.length === 0) return { names, blank: file }
+    if (names.length === 0) break
+    return { names }
+  }
+  return { names: ["QWEN.md", "AGENTS.md"] }
+}
+
 // ---- the guard -------------------------------------------------------------
 
 // guard is the mode above: 0 where nothing switches the servers args name off,
@@ -802,15 +865,28 @@ function guard(args) {
   const servers = []
   const hooks = []
   const skills = []
+  const checkouts = []
+  let skipped = ""
   for (let i = 0; i + 1 < args.length; i += 2) {
     if (args[i] === "--server") servers.push(args[i + 1])
     if (args[i] === "--hook") hooks.push(args[i + 1])
     if (args[i] === "--skill") skills.push(args[i + 1])
+    if (args[i] === "--checkouts") checkouts.push(args[i + 1])
+    if (args[i] === "--skipped") skipped = args[i + 1]
   }
   const found = switchedOff(servers)
   if (hooks.length > 0) found.push(...hooksOff(hooks))
   if (skills.length > 0) found.push(...skillsOff(skills))
-  if (found.length === 0) return 0
+  if (found.length === 0) {
+    // THE CHECKOUTS' HOOK CARRIES NOTHING ELSE, so where it is off the run
+    // goes on, its skip log saying so once Qwen Code stops.
+    const off = checkouts.length > 0 ? hooksOff(checkouts) : []
+    if (off.length > 0 && skipped !== "") {
+      fs.appendFileSync(skipped, "crewlet: checkouts cloned during the run are not handed their instructions " +
+        "and skills: " + off.join("; ") + "\n")
+    }
+    return 0
+  }
   process.stderr.write("crewlet: Qwen Code would start without what the run's tools or skill loads go through: " +
     found.join("; ") + ". No setting of the run's undoes it, as Qwen Code adds each such list up across its " +
     "settings files and the run never switches on hooks the box switched off; remove the entry. The run was " +
@@ -1054,6 +1130,8 @@ if (mode === "skill") {
   process.exitCode = restore()
 } else if (mode === "guard") {
   process.exitCode = guard(process.argv.slice(3))
+} else if (mode === "checkouts") {
+  process.exitCode = checkoutNames(process.argv[3], process.argv[4])
 } else {
   process.stderr.write(`crewlet: qwen-helper.mjs has no mode ${JSON.stringify(mode)}\n`)
   process.exitCode = 2

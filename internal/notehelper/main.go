@@ -60,10 +60,11 @@
 //
 // # The step cap
 //
-// -step-cap N ends a turn at its Nth model response, counted per turn, the
-// unit of Claude Code's --max-turns, which a context compaction's request is
-// not: the adapter counts the responses ([events]), and at N the helper
-// writes -cap-marker, by a rename, and then interrupts the turn ([stepCap]).
+// -step-cap N ends the run at its Nth model response, counted over all its
+// turns, a note's included, which a context compaction's request is not: the
+// adapter counts the responses ([events]), and at N the helper writes
+// -cap-marker, by a rename, and then interrupts the turn ([stepCap]); a turn
+// started after that is interrupted as it starts.
 // The marker says the cap fired, never that a turn was cut short: a turn
 // whose Nth response was its final answer completes, and the run reads its
 // cap only where its record of the turn says the interrupt aborted it. An
@@ -107,8 +108,11 @@
 //   - `instructions`: slots, in order, within `limit`, the harness's own
 //     bound in bytes on what a session started in the checkout reads of them
 //     (Codex: project_doc_max_bytes), omitted for a harness with none, a file
-//     the limit cuts spending all of it. A list of file names relative to a
-//     checkout's root hands its first regular file (Codex:
+//     the limit cuts spending all of it; `firingLimit`, a nested firing's
+//     bound on all its checkouts' files, each counted with its frame, each
+//     that fits handed whole, the rest left out whole and named for the model
+//     to read (Grok sets none: grokrepo.go). A list of file names
+//     relative to a checkout's root hands its first regular file (Codex:
 //     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>,
 //     "suffix": <s>, "form": <harness>, "scoped": {"keys": [...], "whole":
 //     [...]}}, hands each file below dir whose name ends in s, whole, apart by
@@ -127,9 +131,20 @@
 //     checkout, each directory once, an empty file skipped; frontmatter read
 //     as YAML, a file whose frontmatter is not valid YAML left out (it never
 //     loads), a key's value a string or a list's strings, split on `,`,
-//     trimmed, its other entries and another kind holding none. A tree past 8 directories deep, 1,024 entries or 32 MiB is
-//     left out whole, said: Copilot walks 9 levels and Claude Code 10 at least
-//     (measured), so a deeper tree is the gap;
+//     trimmed, its other entries and another kind holding none. `qwen`
+//     (0.28.4, .qwen/rules): as `claude`, but no link followed at all, each
+//     file handed as Qwen Code loads it, its body without frontmatter or HTML
+//     comments, none where that is empty, and `paths` read as it reads it
+//     (qwenrule.go): a non-empty string, `**` included, or a list entry
+//     JavaScript's String makes non-empty names a path, a list holding a
+//     mapping none, and frontmatter its YAML parser refuses is read by its
+//     line reader. `grok` (1.0.92): files directly in dir, dot files too, s
+//     in any case, a file link followed, none scoped.
+//     A tree past 8 directories deep, 1,024 entries or 32 MiB is left out
+//     whole, said: Copilot walks 9 levels and Claude Code 10 at least
+//     (measured), so a deeper tree is the gap. Names as {"names": [...],
+//     "inside": true} follow a link only inside the checkout, and "once" on
+//     either kind hands no file an earlier slot did, by real path (Grok's);
 //     `importInstructions` for a harness that reads them itself (Claude Code),
 //     each file then named as one `@<absolute path>` import in place of its
 //     text, no limit applying (checkoutimport.go);
@@ -139,13 +154,23 @@
 //     Pi 1.6.0 does (measured): a directory holding SKILL.md is a skill and
 //     ends the descent, dot directories and node_modules are skipped, and a
 //     skill reached twice, by real path, is copied once, and of two of one
-//     name, the first, the other left out, said; past 8 directories
-//     deep or 1,024 entries it is left out whole, said. Pi also follows a
-//     link out of the checkout, lists a loose root `.md` skill, and honours
-//     .gitignore, .ignore and .fdignore; the walk does none of these;
+//     name, the first, the other left out, said; past 8 directories deep,
+//     4,096 directories read or 1,024 skills it is left out whole, said. Pi
+//     also follows a link out of the checkout, lists a loose root `.md` skill,
+//     and honours .gitignore, .ignore and .fdignore; the walk does none of
+//     these. As Grok 1.0.92 walks: "through" on below a skill, "every" into
+//     dot directories and node_modules, "depth" N no deeper (Grok: 6);
+//     {"dir": <d>, "commands": true} each `*.md` directly in d, dot files
+//     too, as a skill named by its file less `.md`. Grok follows a link out
+//     too; the walks do not;
+//   - `listedAs`: the rule a harness lists a skill by, "grok" (Grok 1.0.92's,
+//     checkoutgrok.go) or "muse" (Muse 1.4.25's); a copy is left out, said,
+//     where a skill of `homeSkills` (Grok's: of `skills` too) takes the name
+//     it lists under (checkouthome.go);
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
-//     bound, as `<tag>:<skill>` (at most 64 characters) with its
+//     bound, as `<tag>:<skill>` (`skillSep` `-` joining them for Gemini CLI,
+//     which lists `a:b` as `a-b`; at most 64 characters) with its
 //     frontmatter's name rewritten to that, never over one already there,
 //     built in state/staging (or, where the state is on another filesystem
 //     than the skills, beside the skills directory's real path), outside
@@ -153,58 +178,50 @@
 //     in before it is written, for the runner's next launch to remove
 //     (checkoutcopy.go); `reserved`: the tags no checkout
 //     takes (the seats' namespace). A tag is the checkout's name lower-cased,
-//     a byte outside [a-z0-9] a hyphen, `-2`, `-3`... where taken;
-//   - `homeSkills`: the home's skill directories (absolute) its harness lists
-//     beside `skills`, a skill there listed under a copy's name (its
-//     frontmatter's, else its directory's) leaving the copy out, said: Muse
-//     lists no two skills of one name (measured), and where the copy would
-//     win (over ~/.claude/skills and ~/.codex/skills, rows so1-so3) the
-//     person's skill keeps its name all the same.
+//     a byte outside [a-z0-9] a hyphen, `-2`, `-3`... where taken.
 //
 // checkout-launch runs once, in W, before the harness: its -config is the spec
 // with `state` (the run's checkout state, remade per run), `agents` (the file
 // it replaces with a section per checkout, "for `<name>` with root <path>"
 // and its instructions, which the runner places where its harness reads them)
 // and `first` (the repositories the run pushes to, handed first; the rest by
-// name), and `nestedSkillsOnly` for a nested adapter that hands no
-// instructions, whose spec then names none to read. Its `budget`, {"form":
-// "muse", "own": <file>}, is a bound the sections share with what the
-// harness loads beside them: Muse Code 1.4.25 renders the home's rules file
-// (the own file's text, then the sections) and W's own (the first of the
-// slots' names there, none where it is whitespace), markup escaped, into one
-// reminder of at most 65,536 bytes, cutting what passes it (measured), so
-// each checkout is first named ("read <file> for its instructions"), then
-// handed whole, in order, where the reminder still fits, by Muse's exact
-// rendering (checkoutmuse.go); the home's and W's own text are never cut for
-// them. Its `skipped`, the runner's lines for the run's skip log (Muse's
-// nested hook switched off, D709), it keeps there under the lock. It writes
-// state/nested.json, the -config of the harness's nested
-// adapter, which the run's post-tool hook runs after each of the main loop's
+// name), `nestedSkillsOnly` for a nested adapter that hands no instructions,
+// whose spec then names none to read, and `roots`, a file it lists each
+// checkout's root in, a line each, for a harness the runner points at them
+// (Gemini CLI's --include-directories). Its `budget` ({"form": "muse",
+// "own": <file>}) bounds the sections with what Muse loads beside them
+// (checkoutmuse.go); its `skipped` lines (D709) go to the skip log. It
+// writes state/nested.json, the -config of the harness's nested adapter, which the run's post-tool hook runs after each of the main loop's
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
 // (name, description, the copy's SKILL.md) as its hook's context;
-// claude-nested the listing alone, and nothing for a subagent's call;
-// muse-nested the same as codex-nested, each file wrapped as Muse wraps a
-// rules file, within the 16,384 bytes Muse reads of a hook's stdout (past
-// them it delivers nothing), a checkout's whole while they fit and every
-// other named by its files to read, after a main-loop call alone (its
-// input's session_id is MUSE_SESSION_ID); pi-nested the same as codex-nested
-// with each file in Pi's `<project_instructions path=...>`, on stdout for the
-// run's extension to add to the tool's result (Pi lists no skill it did not
-// start with and loads instructions only as it starts, measured on 1.6.0). A
+// claude-nested the listing alone, and nothing for a subagent's call, as
+// gemini-nested does under AfterTool; qwen-nested each instruction file and
+// rule framed as Qwen Code frames a context file, then the listing;
+// grok-nested each file as Grok's `## From: <path>` within its hook cut of
+// 10,000 code points, checkouts whole while they fit, the rest named by path;
+// muse-nested as codex-nested, each file as Muse wraps a rules file, within
+// the 16,384 bytes Muse reads of a hook, the rest named, for the main loop
+// alone (muserepo.go); pi-nested the same as codex-nested with each file in
+// Pi's `<project_instructions path=...>`, on stdout for the run's extension to add
+// to the tool's result (Pi lists no skill it did not start with and loads
+// instructions only as it starts, measured on 1.6.0). A nested hook only adds
+// to the launch: a run whose settings switch it off starts, its skip log
+// saying so once; only losing a contract hook (notes, skill loads) refuses.
+// Grok's stays registered, as Grok 1.0.92 skips it itself (measured). A
 // harness taking checkouts adds a nested adapter, never a second core; its
 // runner holds the home file and the copies (internal/sandbox/executor's
-// checkoutHome). What a nested firing
-// leaves out (a skill whose name the home's skills hold, one that leads out
-// of its checkout, a tree past a bound) is a line each on its stderr, in its
-// answer, and in state/skipped under the lock, which the runner's script
-// prints to the run's error stream once the harness has stopped, since no
-// harness shows a hook's stderr; checkout-launch's stderr is the run's own.
-// The runner's restore marks the state ended, after which a firing claims
-// nothing. A run killed before its script printed the log loses it: the next
-// run's gate removes the state unprinted, as its lines in another run's error
-// stream would read as that run's; each was in its firing's answer already.
+// checkoutHome). What a nested firing leaves out (a skill whose name the
+// home's skills hold, one that leads out of its checkout, a tree past a bound)
+// is a line each on its stderr, in its answer, and in state/skipped under the
+// lock, which the runner's script prints to the run's error stream once the
+// harness has stopped, since no harness shows a hook's stderr;
+// checkout-launch's stderr is the run's own. The runner's restore marks the
+// state ended, after which a firing claims nothing. A run killed before its
+// script printed the log loses it: the next run's gate removes the state
+// unprinted, as its lines in another run's error stream would read as that
+// run's; each was in its firing's answer already.
 //
 // # A continued Codex session's standing instructions
 //
@@ -377,7 +394,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	set.StringVar(&f.socket, "socket", "", "the harness's unix socket")
 	set.StringVar(&f.threadFile, "thread-file", "", "the file the run's script writes the harness's thread id to")
 	set.StringVar(&f.notesEnv, "notes-env", "", "the environment variable holding the bridge's notes route")
-	set.IntVar(&f.stepCap, "step-cap", 0, "end a turn at this many model responses (0: no cap)")
+	set.IntVar(&f.stepCap, "step-cap", 0, "end the run at this many model responses, over all its turns (0: no cap)")
 	set.StringVar(&f.capMarker, "cap-marker", "", "the file written, before the interrupt, when the step cap ends a turn")
 	set.BoolVar(&f.interruptOnce, "interrupt-once", false, "interrupt the turn in flight, if any, and exit")
 	set.StringVar(&f.skillsEnv, "skills-env", "", "the environment variable holding the bridge's skill route")
@@ -442,7 +459,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	var capped *stepCap
 	if f.stepCap > 0 {
 		capped = newStepCap(f.stepCap, f.capMarker)
-		ev.step = capped.step
+		ev.begin, ev.step = capped.begin, capped.step
 	}
 	if skills != nil {
 		ev.skill = skills.loaded

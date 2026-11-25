@@ -38,8 +38,13 @@ func museCheckouts(paths Paths, foreign bool) checkoutSpec {
 	for _, dir := range dirs {
 		spec.HomeSkills = append(spec.HomeSkills, checkoutSkillDir{Dir: dir})
 	}
+	spec.ListedAs = museListedAs
 	return spec
 }
+
+// museListedAs is the note helper's listing rule for Muse Code 1.4.25: a
+// home skill listed under its frontmatter's name, else its directory's.
+const museListedAs = "muse"
 
 // museBudget is the note helper's budget form for Muse Code 1.4.25's rules
 // reminder (internal/notehelper's checkoutmuse.go).

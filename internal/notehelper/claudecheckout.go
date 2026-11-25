@@ -22,6 +22,16 @@ import (
 // claims nothing. Exit 0 whatever happened, its trouble on stderr.
 func runClaudeNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr io.Writer,
 	_ func(string) string) int {
+	return runHookNested(f, stdin, stdout, stderr, "PostToolUse", claudeNestedContext)
+}
+
+// runHookNested is one firing of a command hook that hands the checkouts
+// cloned since the last ([handNested]) as its additionalContext under event,
+// in render's shape: Claude Code's, Gemini CLI's and Qwen Code's hooks read
+// one answer alike (measured). A subagent's firing, or one whose input does
+// not read within [maxHookInput], claims nothing ([hookAgent]).
+func runHookNested(f flags, stdin io.Reader, stdout, stderr io.Writer, event string,
+	render func([]handedCheckout, []string) string) int {
 	agent, err := hookAgent(stdin)
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: the hook's input: %v\n", err)
@@ -37,14 +47,14 @@ func runClaudeNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr
 	}
 	handed, skipped, err := handNested(c, stderr)
 	if err != nil {
-		fmt.Fprintf(stderr, "notehelper: handing a checkout's skills: %v\n", err)
+		fmt.Fprintf(stderr, "notehelper: handing a checkout: %v\n", err)
 	}
-	answer := claudeNestedContext(handed, skipped)
+	answer := render(handed, skipped)
 	if answer == "" {
 		return exitDone
 	}
 	out, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]string{
-		"hookEventName": "PostToolUse", "additionalContext": answer}})
+		"hookEventName": event, "additionalContext": answer}})
 	_, _ = stdout.Write(append(out, '\n'))
 	return exitDone
 }

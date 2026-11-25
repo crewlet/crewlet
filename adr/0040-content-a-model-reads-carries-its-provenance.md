@@ -2,7 +2,51 @@
 
 - **Status:** accepted
 - **Authority:** `internal/provenance`
-- **Enforced-by:** `internal/provenance.TestAFenceCannotBeClosedByItsContent`, `internal/provenance.TestASeatsKeptSessionIsReadAtTheLeastTrustWhoeverKeptIt`, `internal/agent/builtin.TestEveryUntrustedReadIsFenced`, `internal/agent/builtin.TestEveryToolThatHandsOverSomebodysWordsIsFenced`, `internal/agent/builtin.TestARecordsDeclaredWordsAreNeverAnsweredUnlabelled`, `internal/provenance.TestEveryDeclaredFieldHoldsText`, `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`, `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`, `internal/engine.TestEveryPromptBuilderIsAWakeSurface`, `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`, `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`, `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`, `internal/knowledge.TestRenderFencesEveryHitUnderItsBackendsLabel`, `internal/estate.TestAKnowledgeHitsLabelCrossesTheWire`, `internal/compact.TestARewriteReadsItsTextFencedUnderATokenOfItsOwn`, `internal/learning.TestAPastTurnsAskIsFencedAsWhoeverWroteIt`, `internal/agent/prefetch.TestAPastTurnsAskIsFencedWhereverItIsRead`, `internal/agent/builtin.TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt`, `internal/learning.TestEveryPostTurnWorkerReadsWhatItsTurnWasToldFenced`, `internal/agent/prefetch.TestEveryBlockDefusesWhatItReads`, `internal/agent/builtin.TestWhatASeatRemembersReachesItDefused`, `internal/agent/builtin.TestAnAnswerReadsItsSourcesAsTheirWritersWords`, `internal/agent/extension.TestTheJudgeReadsForeignWordsUnderItsOwnTokenAndItsReasonIsDefused`, `internal/agent/runner.TestTheJudgeIsToldTheTurnsTokenAndItsReasonReachesTheSeatDefused`, `internal/provenance.TestEveryModelCallIsAccountedFor`, `internal/provenance.TestTextOnAHostedSurfaceIsTrustedByOneRule`, `internal/provenance.TestEveryTrustDecisionIsAccountedFor`, `internal/engine.TestEveryWakeSurfaceReadsAnUnnamedWriterByWhoHostsIt`, `internal/agent/prefetch.TestAThreadsUnnamedSenderIsReadByWhoHostsIt`, `internal/agent/builtin.TestAReadNamingNoWriterIsAColleagues`, `internal/notify.TestAHostedSurfaceVouchesForAWriterItsRecordDoesNotName`, `internal/provenance.TestAContinuedSessionsFencesHoldAcrossTheirTokens`, `internal/sandbox.TestARestoredSessionIsTheSeatsAndTheTurnsOwn`, `internal/sandbox.TestARelaunchContinuesOnlyTheSessionOfTheJobItFollows`, `internal/agent/runner.TestACarriedOnSessionIsToldWhatCameAfterItWasSaved`, `internal/agent/runner.TestAToldAgainAnswerIsFencedUnderTheRelaunchsToken`, `internal/agent/prompts.TestAConversationsEndingsAreFencedUnderTheTurnsToken`, `internal/agent/runner.TestAConversationsNextTurnIsToldWhereItBegins`, `internal/sandbox.TestATurnsFirstLaunchContinuesItsConversationsHead`, `internal/sandbox.TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase`, `internal/sandbox.TestARelaunchContinuesTheBaseOnlyWhileTheTurnHasKeptNone`, `internal/sandbox.TestABaseIsContinuedOnlyInABoxOfItsOwn`, `internal/mcp.TestAnImageOutsideTheRulesIsRefused`, `internal/agent/toolloop.TestAPayloadThatIsNotASmallImageIsRefusedAndNeverSent`
+- **Enforced-by:**
+  - `internal/provenance.TestAFenceCannotBeClosedByItsContent`
+  - `internal/provenance.TestASeatsKeptSessionIsReadAtTheLeastTrustWhoeverKeptIt`
+  - `internal/agent/builtin.TestEveryUntrustedReadIsFenced`
+  - `internal/agent/builtin.TestEveryToolThatHandsOverSomebodysWordsIsFenced`
+  - `internal/agent/builtin.TestARecordsDeclaredWordsAreNeverAnsweredUnlabelled`
+  - `internal/provenance.TestEveryDeclaredFieldHoldsText`
+  - `internal/agent/builtin.TestEveryArtifactToolResultIsFenced`
+  - `internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote`
+  - `internal/engine.TestEveryPromptBuilderIsAWakeSurface`
+  - `internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords`
+  - `internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs`
+  - `internal/agent/prefetch.TestTheTurnStartJudgementsReadSomebodyElsesWordsFenced`
+  - `internal/knowledge.TestRenderFencesEveryHitUnderItsBackendsLabel`
+  - `internal/estate.TestAKnowledgeHitsLabelCrossesTheWire`
+  - `internal/compact.TestARewriteReadsItsTextFencedUnderATokenOfItsOwn`
+  - `internal/learning.TestAPastTurnsAskIsFencedAsWhoeverWroteIt`
+  - `internal/agent/prefetch.TestAPastTurnsAskIsFencedWhereverItIsRead`
+  - `internal/agent/builtin.TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt`
+  - `internal/learning.TestEveryPostTurnWorkerReadsWhatItsTurnWasToldFenced`
+  - `internal/agent/prefetch.TestEveryBlockDefusesWhatItReads`
+  - `internal/agent/builtin.TestWhatASeatRemembersReachesItDefused`
+  - `internal/agent/builtin.TestAnAnswerReadsItsSourcesAsTheirWritersWords`
+  - `internal/agent/extension.TestTheJudgeReadsForeignWordsUnderItsOwnTokenAndItsReasonIsDefused`
+  - `internal/agent/runner.TestTheJudgeIsToldTheTurnsTokenAndItsReasonReachesTheSeatDefused`
+  - `internal/provenance.TestEveryModelCallIsAccountedFor`
+  - `internal/provenance.TestTextOnAHostedSurfaceIsTrustedByOneRule`
+  - `internal/provenance.TestEveryTrustDecisionIsAccountedFor`
+  - `internal/engine.TestEveryWakeSurfaceReadsAnUnnamedWriterByWhoHostsIt`
+  - `internal/agent/prefetch.TestAThreadsUnnamedSenderIsReadByWhoHostsIt`
+  - `internal/agent/builtin.TestAReadNamingNoWriterIsAColleagues`
+  - `internal/notify.TestAHostedSurfaceVouchesForAWriterItsRecordDoesNotName`
+  - `internal/provenance.TestAContinuedSessionsFencesHoldAcrossTheirTokens`
+  - `internal/sandbox.TestARestoredSessionIsTheSeatsAndTheTurnsOwn`
+  - `internal/sandbox.TestARelaunchContinuesOnlyTheSessionOfTheJobItFollows`
+  - `internal/agent/runner.TestACarriedOnSessionIsToldWhatCameAfterItWasSaved`
+  - `internal/agent/runner.TestAToldAgainAnswerIsFencedUnderTheRelaunchsToken`
+  - `internal/agent/prompts.TestAConversationsEndingsAreFencedUnderTheTurnsToken`
+  - `internal/agent/runner.TestAConversationsNextTurnIsToldWhereItBegins`
+  - `internal/sandbox.TestATurnsFirstLaunchContinuesItsConversationsHead`
+  - `internal/sandbox.TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase`
+  - `internal/sandbox.TestARelaunchContinuesTheBaseOnlyWhileTheTurnHasKeptNone`
+  - `internal/sandbox.TestABaseIsContinuedOnlyInABoxOfItsOwn`
+  - `internal/mcp.TestAnImageOutsideTheRulesIsRefused`
+  - `internal/agent/toolloop.TestAPayloadThatIsNotASmallImageIsRefusedAndNeverSent`
 - **Cost-when-tried:** before this record, a page body, a work item's comments, a project file and the chat thread handed to a turn all reached the model as plain text in a tool answer or a prompt block, with no boundary the text could not also write and nothing saying who wrote it or that it was data. Anybody who could write a page, comment on an item or speak in a thread a seat reads could address the seat in the voice of its instructions.
 - **Tag-status:** unreleased
 

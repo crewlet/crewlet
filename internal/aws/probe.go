@@ -21,6 +21,21 @@ const rerun = "Run the CloudShell block on the AWS connection again to update th
 const atlasRerun = "Run the CloudShell block on the AWS connection again and paste its last line, then test again. " +
 	"Agents are not affected."
 
+// probeParts are the parts of the Test, in the order it runs them, which a
+// refusal lists up to the one that failed ([setup.Parts]).
+//
+//nolint:gochecknoglobals // an immutable list, not state
+var probeParts = []string{"Sign-in", "Stack read", "Stack version", "Identity split", "Policies and roles"}
+
+// The index of each of [probeParts].
+const (
+	partSignIn = iota
+	partRead
+	partVersion
+	partSplit
+	partPolicies
+)
+
 // Probe checks the connection with reads only, before or after it is stored:
 // the provisioner's sign-in, every Crewlet policy and role against what this
 // engine renders, the stack's version, the identity split and the account's
@@ -73,12 +88,13 @@ func verdictOf(conn *Connection, r StackReport) setup.Verdict {
 	fix := setup.Warning{Action: rerun}
 	switch {
 	case r.Outdated() && r.Version == "":
-		return setup.Refused("The stack carries no version, where this engine expects version "+StackVersion+".", fix)
+		return setup.Refused("The stack carries no version, where this engine expects version "+StackVersion+".",
+			append(setup.Parts(probeParts, partVersion), fix)...)
 	case r.Outdated():
 		return setup.Refused(fmt.Sprintf("The stack is out of date: version %s, where this engine expects %s.",
-			r.Version, StackVersion), fix)
+			r.Version, StackVersion), append(setup.Parts(probeParts, partVersion), fix)...)
 	case len(r.Split) > 0:
-		details := make([]setup.Detail, 0, len(r.Split))
+		details := setup.Parts(probeParts, partSplit)
 		for _, split := range r.Split {
 			details = append(details, setup.Warning{Title: sentence(split), Action: rerun})
 		}
@@ -86,7 +102,7 @@ func verdictOf(conn *Connection, r StackReport) setup.Verdict {
 	case len(r.Drift) > 0:
 		// EVERY OBJECT THAT DIFFERS HAS THE ONE FIX, so they are facts under one
 		// action rather than a dozen warnings saying the same thing.
-		details := make([]setup.Detail, 0, len(r.Drift)+1)
+		details := setup.Parts(probeParts, partPolicies)
 		for _, drift := range r.Drift {
 			details = append(details, setup.Fact{Label: "Differs", Value: strings.TrimRight(drift, ".")})
 		}
@@ -122,15 +138,15 @@ func checkRefusal(ctx context.Context, conn *Connection, err error) setup.Verdic
 	var api *APIError
 	if errors.As(err, &api) && api.Status >= 400 && api.Status < 500 && api.Status != http.StatusTooManyRequests {
 		return setup.Refused("AWS refused Crewlet's sign-in as "+conn.resolve(provisionerName)+".",
-			setup.SaidBy("AWS", api.Message),
-			setup.Warning{
-				Title:  "The stack's trust anchor must hold this engine's certificate, and the output must be this stack's.",
-				Action: rerun,
-			})
+			append(setup.Parts(probeParts, partSignIn), setup.SaidBy("AWS", api.Message),
+				setup.Warning{
+					Title:  "The stack's trust anchor must hold this engine's certificate, and the output must be this stack's.",
+					Action: rerun,
+				})...)
 	}
 	if status := Status(err); status >= 400 && status < 500 && status != http.StatusTooManyRequests {
 		return setup.Refused("Crewlet signs in, but could not read the stack.",
-			setup.SaidBy("AWS", err.Error()), setup.Warning{Action: rerun})
+			append(setup.Parts(probeParts, partRead), setup.SaidBy("AWS", err.Error()), setup.Warning{Action: rerun})...)
 	}
 	return setup.Unreachable("Crewlet could not read the stack.", setup.ErrorOf(err))
 }

@@ -2,7 +2,17 @@
 
 - **Status:** accepted
 - **Authority:** `internal/queue/jetstream`
-- **Enforced-by:** `internal/queue/jetstream/jetstreamtest.TestTheDataPathOfALeafOnACutOffMemberIsRefused`, `internal/queue/jetstream.TestTheDataPathIsProvenEndToEnd`, `internal/queue/jetstream.TestALeaseLinkThatStopsAnsweringIsMoved`, `internal/queue/jetstream.TestALeaseLinkWhoseFirstHopIsDownIsNotMoved`, `internal/queue/jetstream.TestALeaseLinkIsJudgedOnlyByProbesThatCrossedIt`, `internal/queue/jetstream.TestALeaseLinkBackFromALongCutStaysWhereItLands`, `internal/queue/jetstream.TestRelinkMovesTheLeaseLinkAlone`, `internal/coord/kv.TestACarrierRefusesAHoldBeforeAnythingIsSent`, `internal/engine.TestAHoldIsRefusedWhileTheDataPathIsDead`, `internal/engine.TestALeafsHoldIsRefusedOnceItsDataLinkFallsSilent`
+- **Enforced-by:**
+  - `internal/queue/jetstream/jetstreamtest.TestTheDataPathOfALeafOnACutOffMemberIsRefused`
+  - `internal/queue/jetstream.TestTheDataPathIsProvenEndToEnd`
+  - `internal/queue/jetstream.TestALeaseLinkThatStopsAnsweringIsMoved`
+  - `internal/queue/jetstream.TestALeaseLinkWhoseFirstHopIsDownIsNotMoved`
+  - `internal/queue/jetstream.TestALeaseLinkIsJudgedOnlyByProbesThatCrossedIt`
+  - `internal/queue/jetstream.TestALeaseLinkBackFromALongCutStaysWhereItLands`
+  - `internal/queue/jetstream.TestRelinkMovesTheLeaseLinkAlone`
+  - `internal/coord/kv.TestACarrierRefusesAHoldBeforeAnythingIsSent`
+  - `internal/engine.TestAHoldIsRefusedWhileTheDataPathIsDead`
+  - `internal/engine.TestALeafsHoldIsRefusedOnceItsDataLinkFallsSilent`
 - **Measured:** a probe every 5 s of about 120 bytes, answered in about 700 (164 B/s, 0.5% of the floor); refused 5.03 s after a probe unanswered while the data link carried nothing, 30 s after a success where the fleet answers "not available", and at 246 s on the shipped pings (two minutes, two out) where the link moves and nothing answers; so a data flow that dies silently stops renewals within about ten seconds and frees the node's seats within about 55 s at the shipped 45 s lease, and a member cut off from its peers within 30 s and a probe period, 80 s with the lease. A lease link on a member that answers nothing is moved 5.03 s after its first unanswered probe, 5 to 10 s into the silence, or at the first "not available" 30 s past its last success; at the 15 s floor lease, renewed every 4 s, a lease outlives its last renewal by 11 to 15 s, so a move and the leaf's one-second redial mostly leave a renewal room to land on the new link.
 - **Cost-when-tried:** not tried in the tree. A gate on the first hop alone keeps a cut-off member's leaves holding seats for the whole partition, and a silently dead flow's until the leaf's pings close it, up to six minutes; co-locating the two links needs connection steering the broker does not offer.
 - **Tag-status:** unreleased

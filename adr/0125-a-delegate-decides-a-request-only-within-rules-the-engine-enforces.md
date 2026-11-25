@@ -2,7 +2,54 @@
 
 - **Status:** accepted
 - **Authority:** `internal/delegated`
-- **Enforced-by:** `internal/delegated.TestAPanelAllowsOnlyWhenEveryDelegateAllows`, `internal/delegated.TestALowConfidenceAlwaysEscalates`, `internal/delegated.TestOneDecisionInNIsSpotChecked`, `internal/config.TestADelegateIsAnAgentThatCannotRequestWhatItDecides`, `internal/config.TestAPanelRunsOnTwoModels`, `internal/config.TestAnEscalationNamesAPerson`, `internal/ssh.TestTheAlwaysEscalateListCatchesEveryClass`, `internal/agent/builtin.TestADelegateNeverDecidesARequestItMadeOrLeads`, `internal/agent/builtin.TestAnAlwaysEscalateRequestReachesPeopleWhateverTheDelegateSays`, `internal/agent/builtin.TestADelegatesAllowsStopAtTheirHourlyCaps`, `internal/agent/builtin.TestADelegatesHourlyCapsAreTheCompanys`, `internal/config.TestADelegatedLimitIsTheDocumentsWithinItsRange`, `internal/agent/builtin.TestARequestOnASensitiveItemReachesPeople`, `internal/agent/builtin.TestAVerdictActsOnlyOnTheRequestItWasShown`, `internal/agent/builtin.TestAVerdictActsOnlyOnceRecorded`, `internal/agent/builtin.TestWordsInsideARequestChangeNoEnforcedOutcome`, `internal/agent/builtin.TestAnApprovalAtTheDecisionRunsOnlyTheExactCall`, `internal/worklet.TestOnlyAnApproverChoosesAnActsApprovingOption`, `internal/engine.TestADelegatedRequestReachesPeopleAtItsDeadline`, `internal/engine.TestTurningDelegationOffReturnsEveryRequestToPeople`, `internal/api/queries.TestADelegatedCallIsPutToNobodyUntilEscalated`, `internal/delegated.TestEveryPathClassCatchesItsConventionalPlaces`, `internal/agent/builtin.TestAMergeIsAllowedOnlyWhereGitHubShowsEveryCondition`, `internal/agent/builtin.TestADeployIsAllowedOnlyWhereItsChangesMergedAndItsCommitIsGreen`, `internal/agent/builtin.TestAGitletMergeIsHeldToItsTargetsGate`, `internal/agent/builtin.TestAnApprovedMergeMergesExactlyItsHeadAsTheSeat`, `internal/agent/builtin.TestADeployApprovalIsExactlyWhatWasAsked`, `internal/config.TestAMergeRuleAddsOnlyPathGlobsItCanMatch`, `internal/engine.TestADelegatesOwnRequestReachesPeopleAtOnce`, `internal/github.TestACheckAnAgentReportedCountsForNothing`, `internal/github.TestADeclaredCheckPassesOnlyAsASuccessfulRunOnTheHead`, `internal/github.TestAPlanWithoutProtectionRequiresNothingOfGitHub`, `internal/github.TestAFreePlanPullCarriesItsDeclaredChecksAndItsApprovals`, `internal/config.TestARuleRequiresChecksOnlyOfAGitHubBranchItReleases`, `internal/agent/builtin.TestAFreePlanReleaseStandsOnTheChecksItsRuleDeclares`, `internal/engine.TestAFreePlanReleaseIsJudgedOnItsDeclaredChecks`, `internal/delegated.TestASubjectIsWhatARequestDecidesNeverItsWording`, `internal/sandbox.TestAHeldCallIsOpenFromItsRecordingToItsAnswer`, `internal/sandbox.TestAHeldCallIsInFlightUntilItsAnswerIsCarriedOut`, `internal/agent/builtin.TestARepeatAskJoinsTheRequestStillOpen`, `internal/agent/builtin.TestARepeatAskJoinsTheRequestBeingCarriedOut`, `internal/agent/builtin.TestAMergeWhosePullRequestAlreadyMergedIsSaidToBeDone`, `internal/engine.TestAMergeAlreadyMadeIsAnsweredWithoutWakingItsDelegate`, `internal/agent/builtin.TestAnAskThatDiffersInSubstanceIsItsOwnRequest`, `internal/agent/builtin.TestAnAskAfterItsRequestWasDecidedIsANewRequest`, `internal/agent/builtin.TestAnAskWhoseOpenRequestsCannotBeReadHoldsNothing`, `internal/agent/builtin.TestTwoTurnsAskingAtOnceComeToOneRequest`
+- **Enforced-by:**
+  - `internal/delegated.TestAPanelAllowsOnlyWhenEveryDelegateAllows`
+  - `internal/delegated.TestALowConfidenceAlwaysEscalates`
+  - `internal/delegated.TestOneDecisionInNIsSpotChecked`
+  - `internal/config.TestADelegateIsAnAgentThatCannotRequestWhatItDecides`
+  - `internal/config.TestAPanelRunsOnTwoModels`
+  - `internal/config.TestAnEscalationNamesAPerson`
+  - `internal/ssh.TestTheAlwaysEscalateListCatchesEveryClass`
+  - `internal/agent/builtin.TestADelegateNeverDecidesARequestItMadeOrLeads`
+  - `internal/agent/builtin.TestAnAlwaysEscalateRequestReachesPeopleWhateverTheDelegateSays`
+  - `internal/agent/builtin.TestADelegatesAllowsStopAtTheirHourlyCaps`
+  - `internal/agent/builtin.TestADelegatesHourlyCapsAreTheCompanys`
+  - `internal/config.TestADelegatedLimitIsTheDocumentsWithinItsRange`
+  - `internal/agent/builtin.TestARequestOnASensitiveItemReachesPeople`
+  - `internal/agent/builtin.TestAVerdictActsOnlyOnTheRequestItWasShown`
+  - `internal/agent/builtin.TestAVerdictActsOnlyOnceRecorded`
+  - `internal/agent/builtin.TestWordsInsideARequestChangeNoEnforcedOutcome`
+  - `internal/agent/builtin.TestAnApprovalAtTheDecisionRunsOnlyTheExactCall`
+  - `internal/worklet.TestOnlyAnApproverChoosesAnActsApprovingOption`
+  - `internal/engine.TestADelegatedRequestReachesPeopleAtItsDeadline`
+  - `internal/engine.TestTurningDelegationOffReturnsEveryRequestToPeople`
+  - `internal/api/queries.TestADelegatedCallIsPutToNobodyUntilEscalated`
+  - `internal/delegated.TestEveryPathClassCatchesItsConventionalPlaces`
+  - `internal/agent/builtin.TestAMergeIsAllowedOnlyWhereGitHubShowsEveryCondition`
+  - `internal/agent/builtin.TestADeployIsAllowedOnlyWhereItsChangesMergedAndItsCommitIsGreen`
+  - `internal/agent/builtin.TestAGitletMergeIsHeldToItsTargetsGate`
+  - `internal/agent/builtin.TestAnApprovedMergeMergesExactlyItsHeadAsTheSeat`
+  - `internal/agent/builtin.TestADeployApprovalIsExactlyWhatWasAsked`
+  - `internal/config.TestAMergeRuleAddsOnlyPathGlobsItCanMatch`
+  - `internal/engine.TestADelegatesOwnRequestReachesPeopleAtOnce`
+  - `internal/github.TestACheckAnAgentReportedCountsForNothing`
+  - `internal/github.TestADeclaredCheckPassesOnlyAsASuccessfulRunOnTheHead`
+  - `internal/github.TestAPlanWithoutProtectionRequiresNothingOfGitHub`
+  - `internal/github.TestAFreePlanPullCarriesItsDeclaredChecksAndItsApprovals`
+  - `internal/config.TestARuleRequiresChecksOnlyOfAGitHubBranchItReleases`
+  - `internal/agent/builtin.TestAFreePlanReleaseStandsOnTheChecksItsRuleDeclares`
+  - `internal/engine.TestAFreePlanReleaseIsJudgedOnItsDeclaredChecks`
+  - `internal/delegated.TestASubjectIsWhatARequestDecidesNeverItsWording`
+  - `internal/sandbox.TestAHeldCallIsOpenFromItsRecordingToItsAnswer`
+  - `internal/sandbox.TestAHeldCallIsInFlightUntilItsAnswerIsCarriedOut`
+  - `internal/agent/builtin.TestARepeatAskJoinsTheRequestStillOpen`
+  - `internal/agent/builtin.TestARepeatAskJoinsTheRequestBeingCarriedOut`
+  - `internal/agent/builtin.TestAMergeWhosePullRequestAlreadyMergedIsSaidToBeDone`
+  - `internal/engine.TestAMergeAlreadyMadeIsAnsweredWithoutWakingItsDelegate`
+  - `internal/agent/builtin.TestAnAskThatDiffersInSubstanceIsItsOwnRequest`
+  - `internal/agent/builtin.TestAnAskAfterItsRequestWasDecidedIsANewRequest`
+  - `internal/agent/builtin.TestAnAskWhoseOpenRequestsCannotBeReadHoldsNothing`
+  - `internal/agent/builtin.TestTwoTurnsAskingAtOnceComeToOneRequest`
 - **Measured:** in one company over a month, the person answering one agent's requests took its recommendation on 90 of 95, and another agent's on 31 of 32 (the advisor's `approval.rubber_stamp`). Each was a merge, a deploy or a server command waiting in the Inbox.
 - **Tag-status:** unreleased
 

@@ -4,17 +4,17 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
+	"io"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
-// chatSummaryLines is a transcript's own reading of a Gemini CLI or Qwen Code
-// chat file ([chatReading]), handed its lines one at a time by the count's walk
-// of the file ([chatCopyCount]), so the newest summary is read in that one walk
-// by the decode the transcript reads it by. Its builder is its own, holding
-// none of what it reads.
+// chatSummaryLines is a transcript's own reading of a Qwen Code chat file
+// ([chatReading]), following the count's walk of the file ([chatCopyCount])
+// or handed a record by a walk for notes, so the newest summary is read in
+// that one walk by the decode the transcript reads it by. Its builder is its
+// own, holding none of what it reads.
 type chatSummaryLines struct {
 	chatReading
 	raw bytes.Reader
@@ -40,6 +40,20 @@ func (c *chatSummaryLines) take(ctx context.Context, raw []byte) {
 	c.raw.Reset(raw)
 	c.lines.Reset(&c.raw)
 	_, c.err = c.line(ctx)
+}
+
+// follow reads r, the chat file as the count's walk hands it on
+// ([chatFileFollowed]), to its end or the reading's: its last line, one with
+// no break, unread, as the walk passes a torn one over.
+func (c *chatSummaryLines) follow(ctx context.Context, r io.Reader) {
+	c.lines.Reset(r)
+	c.tornUnread = true
+	for c.err == nil {
+		var ended bool
+		if ended, c.err = c.line(ctx); ended {
+			return
+		}
+	}
 }
 
 func (*chatSummaryLines) own(*valueText) error { return nil }
@@ -94,171 +108,6 @@ func (q *qwenSummaryReading) commit() error {
 		q.newest.unshaped(unread)
 	default:
 		q.newest.take(words)
-	}
-	return nil
-}
-
-// geminiSummaryReading reads a Gemini CLI chat file's lines for the replay of
-// its newest summary ([geminiSummaries]): a record's id and type and, where it
-// opens as a compression's summary ([geminiCompressionSet]), its words, as the
-// transcript's reading takes them ([chatReading.parts]); a `$patch`'s updates
-// and removals; a `$rewindTo`. A summary is known a line late, by the reply
-// after it, so the record that opens as one is held until that line.
-type geminiSummaryReading struct {
-	chatSummaryLines
-	g       *geminiSummaries
-	rec     geminiSnapRecord
-	updates []geminiSnapRecord
-	removes []string
-	rewind  string
-	// patched and rewound say the line is a patch or a rewind; lost that it
-	// is one this replay cannot follow.
-	patched, rewound, lost bool
-	// set says the line before opens a compression's sync, opens that this
-	// one opens as its summary, and held that prior, the record of the line
-	// before, waits on this one's word.
-	set, opens, held bool
-	prior            geminiSnapRecord
-}
-
-// geminiSnapRecord is one copy of a record: its id, type and snapshot's words.
-type geminiSnapRecord struct {
-	id, typ string
-	snap    summaryText
-}
-
-func newGeminiSummaryReading(g *geminiSummaries) *geminiSummaryReading {
-	r := &geminiSummaryReading{g: g}
-	r.setup(r)
-	return r
-}
-
-// take reads raw, the file's next line ([chatSummaryLines.take]), once the
-// record held before it is replayed, a summary where raw is its reply.
-func (r *geminiSummaryReading) take(ctx context.Context, raw []byte) {
-	r.end(geminiCompressionAck.holds(raw))
-	r.opens = r.set && geminiCompressionUser.holds(raw)
-	r.set = geminiCompressionSet.holds(raw)
-	r.chatSummaryLines.take(ctx, raw)
-}
-
-// end replays the record held, a summary where summary says so: the file's
-// last line is none.
-func (r *geminiSummaryReading) end(summary bool) {
-	if r.held {
-		r.held = false
-		r.g.record(&r.prior, summary)
-	}
-}
-
-func (r *geminiSummaryReading) start() {
-	r.rec.id, r.rec.typ, r.rewind = "", "", ""
-	r.rec.snap.reset()
-	r.updates, r.removes = r.updates[:0], r.removes[:0]
-	r.patched, r.rewound, r.lost = false, false, false
-}
-
-func (r *geminiSummaryReading) record() error {
-	return r.members(func(name string, k jsonscan.Kind) error {
-		switch name {
-		case "$patch":
-			r.patched = true
-			return r.patch(k)
-		case "$rewindTo":
-			r.rewound = true
-			var err error
-			r.rewind, err = r.wordValue(k)
-			return err
-		}
-		return r.recordMember(&r.rec, name, k)
-	})
-}
-
-// recordMember reads one member of a record's copy into rec.
-func (r *geminiSummaryReading) recordMember(rec *geminiSnapRecord, name string, k jsonscan.Kind) error {
-	var err error
-	switch name {
-	case "id":
-		rec.id, err = r.wordValue(k)
-	case "type":
-		rec.typ, err = r.wordValue(k)
-	case "content":
-		rec.snap.reset()
-		sinks := chatSinks{snap: &rec.snap}
-		if rec == &r.rec && !r.opens {
-			sinks.snap = nil
-		}
-		err = r.parts(k, &sinks)
-	default:
-		err = r.scan.Skip()
-	}
-	return err
-}
-
-// patch reads a `$patch`: its updates, each a record's copy, and the ids it
-// removes; one that orders the records, or of no shape, is lost.
-func (r *geminiSummaryReading) patch(k jsonscan.Kind) error {
-	if k != jsonscan.ObjectStart {
-		r.lost = true
-		return r.scan.Skip()
-	}
-	list := func(k jsonscan.Kind, each func(k jsonscan.Kind) (bool, error)) error {
-		if k != jsonscan.ArrayStart {
-			r.lost = r.lost || k != jsonscan.Null
-			return r.scan.Skip()
-		}
-		return r.elements(each)
-	}
-	return r.members(func(name string, k jsonscan.Kind) error {
-		switch name {
-		case "updates":
-			r.updates = r.updates[:0]
-			return list(k, func(k jsonscan.Kind) (bool, error) {
-				if k != jsonscan.ObjectStart {
-					r.lost = true
-					return true, r.scan.Skip()
-				}
-				r.updates = append(r.updates, geminiSnapRecord{})
-				u := &r.updates[len(r.updates)-1]
-				return true, r.members(func(name string, k jsonscan.Kind) error { return r.recordMember(u, name, k) })
-			})
-		case "removeIds":
-			r.removes = r.removes[:0]
-			return list(k, func(k jsonscan.Kind) (bool, error) {
-				id, err := r.wordValue(k)
-				if id != "" {
-					r.removes = append(r.removes, id)
-				}
-				return true, err
-			})
-		case "orderIds":
-			r.lost = r.lost || k != jsonscan.Null
-		}
-		return r.scan.Skip()
-	})
-}
-
-func (r *geminiSummaryReading) commit() error {
-	g := r.g
-	switch {
-	case r.lost:
-		g.lost("a patch of the chat file is of no shape this read follows")
-	case r.patched:
-		for i := range r.updates {
-			g.record(&r.updates[i], g.summary[r.updates[i].id])
-		}
-		for _, id := range r.removes {
-			g.remove(id)
-		}
-	case r.rewound:
-		g.rewindTo(r.rewind)
-	case r.opens:
-		r.rec, r.prior, r.held = r.prior, r.rec, true
-	default:
-		g.record(&r.rec, false)
-	}
-	if len(g.place) > geminiCountIDs {
-		return errors.New("the chat file holds more records than a read holds")
 	}
 	return nil
 }

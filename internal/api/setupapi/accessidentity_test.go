@@ -200,7 +200,7 @@ const playIdentityCompany = `{
   "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "integrations": {
     "google_cloud": {"enabled": true, "provisioning": {
-      "provisioner": "crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com",
+      "identity_project": "acme-crewlet-id",
       "provider": "projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine",
       "federation_key": "${GOOGLE_CLOUD_FEDERATION_KEY}"}},
     "google_play": {"enabled": true}},

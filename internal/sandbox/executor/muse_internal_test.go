@@ -18,10 +18,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/browser/boxhelper"
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // museFixture is testdata/muse/1.4.25/<name>: a real Muse Code 1.4.25 run's
@@ -125,20 +127,16 @@ func TestAMuseRunItsCapStoppedReadsAsCapped(t *testing.T) {
 	}
 }
 
-// AN EXEC PAST ITS CAP FAILS WHATEVER EACH RUN SAID: the script names the cap,
-// and the stream's own count of the main thread's requests is held to it.
+// AN EXEC'S REQUESTS ARE EVERY ONE OF ITS RUNS', whatever each run's own cap
+// said: `--max-model-steps` caps each run apart, so the collection holds the
+// exec's whole count to the cap ([Decoder.Requests]). tools made five.
 //
-// Mutation: drop the count check, and a five-request run under a cap of two
-// succeeds.
-func TestAMuseExecPastItsCapFailsWhateverEachRunSaid(t *testing.T) {
-	stream := append([]byte(`{"payload_type":"`+museCapMark+`","turns":2}`+"\n"), museFixture(t, "tools.stream.jsonl")...)
-	res := (Muse{}).Parse(stream)
-	if res.Success || res.RoundCapped || !strings.Contains(res.Error, "turn cap of 2 was not enforced") {
-		t.Fatalf("result %+v, want the unenforced cap", res)
-	}
-	stream = append([]byte(`{"payload_type":"`+museCapMark+`","turns":5}`+"\n"), museFixture(t, "tools.stream.jsonl")...)
-	if res := (Muse{}).Parse(stream); !res.Success {
-		t.Fatalf("a run within its cap reads as %+v", res)
+// Mutation: count one run's requests, or none, and the count is not five.
+func TestAMuseExecsRequestsAreEveryRunsWhateverEachRunSaid(t *testing.T) {
+	dec := &museEvents{}
+	_ = eachLine(bytes.NewReader(museFixture(t, "tools.stream.jsonl")), dec, maxLineBytes)
+	if dec.Requests() != 5 {
+		t.Fatalf("the exec counts %d requests, want five", dec.Requests())
 	}
 }
 
@@ -231,7 +229,7 @@ func TestAMuseRunIsStartedOnItsPosture(t *testing.T) {
 	for _, want := range []string{"muse exec --json --yolo", `--session-id "$s"`, "--disable-reminders",
 		"--disable-request-user-input", "--allow-workspace-switch",
 		"--model '\\''muse-1'\\''", "--reasoning-effort '\\''high'\\''", "--max-model-steps 7",
-		museLayer + ` --prompt-file "$p"`, "at 1 4 25", museCapMark} {
+		museLayer + ` --prompt-file "$p"`, "at 1 4 25"} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("the command lacks %q:\n%s", want, cmd)
 		}
@@ -707,6 +705,67 @@ func TestMuseIsWrittenForTheReleaseItsProfileNames(t *testing.T) {
 	}
 }
 
+// MUSE DEFERS AT A COUNT MEASURED ON THE RELEASE IT RUNS: its runner states
+// the count of MCP tools past which Muse hides them all, for a launch to weigh
+// a seat's browser against, measured on the very release its profile's
+// written_for names, so a bump of the pin fails here until the count is
+// measured again on the new release and both move together.
+//
+// Mutations, each red: state no count; move the pin and not the release the
+// count was measured on.
+func TestMuseDefersAtACountMeasuredOnTheReleaseItRuns(t *testing.T) {
+	t.Parallel()
+	if museDeferral.release != museSupported() {
+		t.Errorf("Muse Code's deferral count was measured on %s, and the runner is written for %s: measure "+
+			"the count again on %s and move both", museDeferral.release, museSupported(), museSupported())
+	}
+	if got := NewMuse().DefersMCPAt(); got <= 0 || got != museDeferral.at {
+		t.Errorf("the Muse Code runner states it hides every MCP tool from %d of them, want the measured %d",
+			got, museDeferral.at)
+	}
+}
+
+// THE DOCS STATE MUSE CODE'S COUNT AND THE BROWSER'S AS THE CODE HOLDS THEM:
+// code-sandbox.md and the company architect's skill name the count from which
+// Muse Code hides every MCP tool (museDeferral) and how many tools a seat's
+// browser lists (boxhelper.Tools, its module's ALLOWED), and the range of
+// servers' tools between them whose browser is withheld, so a re-measure or a
+// Playwright pin that moves either moves the pages in the same commit.
+//
+// Mutation: change a figure on either page, or the count, and this goes red.
+func TestTheDocsStateMusesCountAndTheBrowsersAsTheCodeHoldThem(t *testing.T) {
+	t.Parallel()
+	at, browserTools := museDeferral.at, len(boxhelper.Tools())
+	read := func(rel ...string) string {
+		raw, err := os.ReadFile(filepath.Join(append([]string{sourcetree.Root(t)}, rel...)...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(strings.Fields(string(raw)), " ")
+	}
+	pages := map[string][]string{
+		"docs/concepts/code-sandbox.md": {
+			fmt.Sprintf("**From %d MCP tools Muse hides them all.** Once a run's servers list %d tools or more", at, at),
+			fmt.Sprintf("A [seat's browser](#a-seats-browser) lists %d tools, so a browser seat whose servers list %d "+
+				"to %d without it", browserTools, at-browserTools, at-1),
+			fmt.Sprintf("one whose servers list %d or more keeps it", at),
+			fmt.Sprintf("the browser's %d would bring them to it (`bridge_deferred`): Muse Code, at %d", browserTools, at),
+			fmt.Sprintf("where theirs alone would not: Muse Code, at %d", at),
+		},
+		"skills/company-architect/SKILL.md": {
+			fmt.Sprintf("Muse Code hides every MCP tool behind its search once a run has %d", at),
+		},
+	}
+	for page, says := range pages {
+		text := read(strings.Split(page, "/")...)
+		for _, want := range says {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s does not say %q", page, want)
+			}
+		}
+	}
+}
+
 // A SERVER NAMED IN UP TO 19 CHARACTERS IS SHOWN WHOLE, AND A LONGER ONE STILL
 // RUNS: with the run's `-<6 hex>`, a 19-character name is within the 26 Muse
 // Code shows the model as written, and a 40-character one, which Muse shows
@@ -761,7 +820,8 @@ func TestAKilledMuseRunsPluginRecordsComeBack(t *testing.T) {
 // the start directory's three, and ~/.claude/skills and ~/.codex/skills only
 // where the home's settings leave Muse listing another harness's skills.
 //
-// Mutation: drop a directory, or check the foreign ones whatever the setting.
+// Mutation: drop a directory, check the foreign ones whatever the setting, or
+// name no listing rule (the helper then reads none of them).
 func TestAMuseCopyIsCheckedAgainstTheSkillsMuseListsBesideIt(t *testing.T) {
 	p := Paths{Home: "/h"}
 	for _, foreign := range []bool{true, false} {
@@ -776,6 +836,10 @@ func TestAMuseCopyIsCheckedAgainstTheSkillsMuseListsBesideIt(t *testing.T) {
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("foreign skills %v: the copies are checked against %q, want %q", foreign, got, want)
+		}
+		launch := museCheckoutHome(p).launchConfig(museCheckouts(p, foreign), nil)
+		if !strings.Contains(string(launch), `"listedAs":"muse"`) {
+			t.Errorf("foreign skills %v: the launch names no Muse listing rule, so no home skill is read: %s", foreign, launch)
 		}
 	}
 	if rules, skills := museForeignOn([]byte(`{"context":{"foreign_personal_skills":false}}`)); !rules || skills {
@@ -828,6 +892,27 @@ func TestAMuseRunHoldsTheNestedRejectWhereItReinstallsThePlugin(t *testing.T) {
 		if launch, _ := box.ReadFile(t.Context(), p.MuseCheckoutLaunch()); !strings.Contains(string(launch),
 			`"skipped":["a repository cloned during the run is not handed`) {
 			t.Errorf("loads %v: the launch hands the skip log no line: %s", loads, launch)
+		}
+	}
+}
+
+// A MUSE RUN'S FAILED ATTEMPTS ARE NONE OF ITS REQUESTS: its usage states
+// them apart from the calls answered or cut off, and a refused attempt bills
+// nothing, so the run counts the calls answered and cut off; a usage stating
+// no such split is read by its calls.
+//
+// Mutation: count every call the usage states, and the first row counts 8.
+func TestAMuseRunsFailedAttemptsAreNoneOfItsRequests(t *testing.T) {
+	for payload, want := range map[string]int{
+		`{"calls":8,"completed_calls":6,"failed_calls":2,"cancelled_calls":0,"models":[]}`: 6,
+		`{"calls":5,"completed_calls":4,"failed_calls":0,"cancelled_calls":1,"models":[]}`: 5,
+		`{"calls":3,"models":[]}`: 3,
+	} {
+		dec := &museEvents{}
+		_ = eachLine(strings.NewReader(`{"stream":{"kind":"exec.usage","id":"x"},"payload_type":"run.usage","payload":`+
+			payload+`}`), dec, maxLineBytes)
+		if dec.Requests() != want {
+			t.Errorf("%s: %d requests, want %d", payload, dec.Requests(), want)
 		}
 	}
 }

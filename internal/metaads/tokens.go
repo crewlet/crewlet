@@ -362,8 +362,13 @@ func (p *Product) renew(ctx context.Context, c *conn, t *token) (renewResult, er
 		return out, nil
 	}
 	release, err := p.deps.Leases.Hold(ctx, "refresh/"+Kind)
-	if err != nil {
-		return out, nil //nolint:nilerr // Another node renews now; the next pass reads its result.
+	switch {
+	case errors.Is(err, growth.ErrActHeld):
+		// Another node renews now; the next pass reads its result.
+		return out, nil
+	case err != nil:
+		return out, fmt.Errorf("metaads: hold the %s token's renewal lease, so its renewal was not sent: %w", t.slot,
+			err)
 	}
 	defer release()
 	ctx, cancel := context.WithTimeout(ctx, p.applyBound)

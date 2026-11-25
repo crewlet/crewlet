@@ -377,6 +377,11 @@ type RunHandle struct {
 	// what names the session the job ran ([PendingRun.SessionRan]).
 	FreshSessionID string
 
+	// TurnCap is the round cap the job's launch handed its harness
+	// ([LaunchRecord.TurnCap]), 0 for none: what its collection holds the
+	// requests its stream shows to ([Result.TurnCapExceeded]).
+	TurnCap int
+
 	// BridgeUnconnected says the job's record holds no word that its harness
 	// connected its bridge ([LaunchRecord.BridgeConnected]), as [PendingRun.Handle]
 	// reads it for a collection: a run its harness ended without it is no
@@ -624,6 +629,13 @@ type Result struct {
 	// before it finished (types.ExecutorErrorMaxTurns): Claude Code's
 	// `error_max_turns`. Read only on a run that did not succeed.
 	RoundCapped bool
+
+	// TurnCapExceeded says the run's stream shows more model requests than
+	// the round cap its launch handed it ([RunHandle.TurnCap],
+	// types.ExecutorErrorTurnCapExceeded): whatever held the cap in its box
+	// did not, so the run fails whatever it reported. Set by the runner's
+	// collection, never a decoder, from the engine's own cap.
+	TurnCapExceeded bool
 
 	// Unbridged says the run's guard stopped it because another MCP server
 	// served, or would have served, a call under a name of Crewlet's own

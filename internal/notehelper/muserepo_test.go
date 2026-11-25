@@ -17,7 +17,8 @@ import (
 func museSpec(skills string, home ...string) checkoutSpec {
 	spec := checkoutSpec{Instructions: names([]string{"AGENTS.md", "CLAUDE.md", ".agents/AGENTS.md", ".claude/CLAUDE.md"}),
 		SkillDirs: []skillDirSlot{{Dir: ".agents/skills"}, {Dir: ".claude/skills"}, {Dir: ".codex/skills"}},
-		Skills:    skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
+		Skills:    skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"},
+		ListedAs: listedMuse}
 	for _, dir := range home {
 		spec.HomeSkills = append(spec.HomeSkills, skillDirSlot{Dir: dir})
 	}
@@ -422,7 +423,11 @@ func TestAHomeSkillsNameIsReadAsYAMLReadsIt(t *testing.T) {
 		`name: # no value`:                   "",
 		`name:   repo:x   `:                  "repo:x",
 	} {
-		got, ok := skillFrontName([]byte("---\n" + line + "\ndescription: d\n---\nbody\n"))
+		path := filepath.Join(t.TempDir(), "SKILL.md")
+		if err := os.WriteFile(path, []byte("---\n"+line+"\ndescription: d\n---\nbody\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := museFrontName(path)
 		if !ok || got != want {
 			t.Errorf("%q reads as %q (%v), want %q", line, got, ok, want)
 		}
