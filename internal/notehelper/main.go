@@ -108,10 +108,11 @@
 //   - `instructions`: slots, in order, within `limit`, the harness's own
 //     bound in bytes on what a session started in the checkout reads of them
 //     (Codex: project_doc_max_bytes), omitted for a harness with none, a file
-//     the limit cuts spending all of it; `firingLimit`, a nested firing's bound
-//     on all its checkouts' files, each that fits handed whole, the rest left
-//     out whole and named for the model to read. A list of file names relative to a
-//     checkout's root hands its first regular file (Codex:
+//     the limit cuts spending all of it; `firingLimit`, a nested firing's
+//     bound on all its checkouts' files, each counted with its frame, each
+//     that fits handed whole, the rest left out whole and named for the model
+//     to read. A list of file names relative to a checkout's root hands its
+//     first regular file (Codex:
 //     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>,
 //     "suffix": <s>, "form": <harness>, "scoped": {"keys": [...], "whole":
 //     [...]}}, hands each file below dir whose name ends in s, whole, apart by

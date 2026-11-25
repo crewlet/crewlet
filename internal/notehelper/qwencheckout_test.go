@@ -40,30 +40,38 @@ func TestAQwenFiringHandsAClonesInstructionsRulesAndSkills(t *testing.T) {
 	}
 }
 
-// A QWEN CODE FIRING HANDS ITS FILES WITHIN ITS BOUND: each file that fits
-// what is left of the firing's FiringLimit is framed whole, in order, and one
-// past it is left out whole, never cut, its path named in the answer and in
-// the skip log, for the model to read there.
+// A QWEN CODE FIRING HANDS ITS FILES WITHIN ITS BOUND, FRAMES COUNTED: each
+// file whose text, its path three times and 64 bytes fit what is left of the
+// firing's FiringLimit is framed whole, in order, and one past it is left out
+// whole, never cut, its path named in the answer and in the skip log, for the
+// model to read there; a file whose text alone would fit but not with its
+// frame is left out too.
 //
-// Mutation: hand past the bound, cut the file, or say nothing of it, and the
-// answer or the log goes red.
+// Mutation: hand past the bound, count the text alone, cut the file, or say
+// nothing of it, and the answer or the log goes red.
 func TestAQwenFiringHandsItsFilesWithinItsBound(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, nil)
-	spec := checkoutSpec{Instructions: append(names([]string{"QWEN.md"}, []string{"AGENTS.md"}), qwenRules()),
-		FiringLimit: limited(20), Reserved: []string{"crewlet"}, SkillSep: "-"}
-	r.launchWith(t, spec, false, "")
-	r.add(t, map[string]string{"late/.git/": "", "late/QWEN.md": strings.Repeat("Q", 15),
-		"late/AGENTS.md": strings.Repeat("A", 10), "late/.qwen/rules/r.md": "RULE"})
-	_, got := r.fireAs(t, runQwenNested)
 	late := filepath.Join(r.workdir(t), "late")
+	cost := func(file, text string) int { return len(text) + 3*len(filepath.Join(late, file)) + 64 }
+	qwen, agents, rule := strings.Repeat("Q", 15), strings.Repeat("A", 40), "RULE"
+	spec := checkoutSpec{Instructions: append(names([]string{"QWEN.md"}, []string{"AGENTS.md"}), qwenRules()),
+		FiringLimit: limited(cost("QWEN.md", qwen) + cost(".qwen/rules/r.md", rule)), Reserved: []string{"crewlet"},
+		SkillSep: "-"}
+	if len(agents) > cost(".qwen/rules/r.md", rule) || cost("AGENTS.md", agents) <= cost(".qwen/rules/r.md", rule) {
+		t.Fatal("AGENTS.md's text must fit the room the rule takes and its frame must not")
+	}
+	r.launchWith(t, spec, false, "")
+	r.add(t, map[string]string{"late/.git/": "", "late/QWEN.md": qwen, "late/AGENTS.md": agents,
+		"late/.qwen/rules/r.md": rule})
+	_, got := r.fireAs(t, runQwenNested)
 	frame := func(file, text string) string {
 		return "--- Context from: " + filepath.Join(late, file) + " ---\n" + text + "\n--- End of Context from: " +
 			filepath.Join(late, file) + " ---"
 	}
 	line := "the instruction file " + filepath.Join(late, "AGENTS.md") + " is left out: it passes what is left of " +
 		"the firing's bound on instructions; read it at that path"
-	want := strings.Join([]string{frame("QWEN.md", strings.Repeat("Q", 15)), frame(".qwen/rules/r.md", "RULE"),
+	want := strings.Join([]string{frame("QWEN.md", qwen), frame(".qwen/rules/r.md", rule),
 		skippedListing([]string{line})}, "\n\n")
 	if got != want {
 		t.Errorf("the firing answered\n%q\nwant\n%q", got, want)
