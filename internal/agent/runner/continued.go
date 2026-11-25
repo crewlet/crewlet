@@ -908,6 +908,9 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	}
 	if len(late)+underCalls+len(after)+len(owe) > 0 {
 		opts := ledger.Format(r.cfg.SkipNames, surface.Universe().KnownReads())
+		// A RUN OF ITS OWN IS TOLD WHAT ITS ROUND'S WRITES RETURNED, which it
+		// remembers none of: the key of what one created, the id of a message.
+		opts.Answers = as.fresh
 		// The order the one cap is spent in: late, each subagent's, after the
 		// point, owed, listed again. toldGroups are the first of them.
 		toldGroups := [][]BridgedCall{late}
