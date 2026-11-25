@@ -318,7 +318,7 @@ type OpenInAppCard struct {
 	Reason    OpenReason `json:"reason,omitempty"`
 	// Asked marks a place the person's own question asked to be taken to:
 	// the drawer that sent the question opens it once, with no press.
-	Asked bool `json:"asked,omitempty"`
+	Asked bool `json:"asked"`
 }
 
 // ErrorCard is a refusal or a failure in the engine's own words. Phrase is the

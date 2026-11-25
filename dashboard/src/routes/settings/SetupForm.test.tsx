@@ -3112,12 +3112,14 @@ function stepsTool(configured: boolean): SetupToolState {
           { text: "IAM applications page", url: "https://console.example.com/applications" },
           { text: "." },
         ],
+        done: false,
       },
       {
         text: [{ text: "Attach one policy to it, with:" }],
         grants: ["IAMApplicationManager", "ProjectReadOnly"],
+        done: false,
       },
-      { text: [{ text: "Paste the keys here and test them." }] },
+      { text: [{ text: "Paste the keys here and test them." }], done: false },
     ],
     requirements: [
       req({

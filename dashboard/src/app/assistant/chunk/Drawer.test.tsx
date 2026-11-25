@@ -1245,10 +1245,7 @@ test("Open here on a card leaves that card reading Opened once its page shows", 
 });
 
 /** The golden turn, its open in app card marked as the person's question asked for. */
-const ASKED = FIRST.replace(
-  /("type":"open_in_app","open_in_app":\{.*?"permitted":true)\}/,
-  '$1,"asked":true}',
-);
+const ASKED = FIRST.replace('"permitted":true,"asked":false', '"permitted":true,"asked":true');
 
 // A PLACE THE PERSON'S QUESTION ASKED FOR OPENS AT ONCE, ONCE: the card the
 // engine marked asked moves the page with no press and reads Opened; the same
