@@ -14,12 +14,14 @@ import (
 // copilotGuardStandIn is a `copilot` that answers the guard as Copilot 1.0.114
 // does, from the row's planted answers: `config --list` prints
 // $HOME/answer.settings (its stdout and stderr, as the guard reads them
-// together) and keeps the settings it was asked about; `mcp list` prints
+// together) and keeps the settings it was asked about, and with --repo or
+// --local $HOME/answer.repo or answer.local; `mcp list` prints
 // $HOME/answer.mcp on stderr. As the run it records its start and finishes.
 const copilotGuardStandIn = `#!/bin/sh
 case "$1" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; esac
 case "$1 $2" in
-"config --list") cp "$COPILOT_HOME/settings.json" "$HOME/asked.settings"; cat "$HOME/answer.settings" 2> /dev/null; exit 0;;
+"config --list") case "$3" in --repo|--local) cat "$HOME/answer.${3#--}" 2> /dev/null; exit 0;; esac
+  cp "$COPILOT_HOME/settings.json" "$HOME/asked.settings"; cat "$HOME/answer.settings" 2> /dev/null; exit 0;;
 "mcp list") printf '%s\n' "$COPILOT_HOME" > "$HOME/asked.home"; cat "$HOME/answer.mcp" >&2 2> /dev/null; exit 0;;
 esac
 s= p=; for a; do [ "$p" = --session-id ] && s=$a; p=$a; done
@@ -32,8 +34,9 @@ printf '{"type":"result","sessionId":"%s","exitCode":0}\n' "$s"
 // A HOME OR A MACHINE'S POLICY CANNOT SWITCH COPILOT'S BRIDGE OR NOTES
 // EXTENSION OFF UNSEEN (1.0.114 ranks nothing of the run's above them). Before
 // anything is written, a run is refused naming the file, the key and the entry
-// where its user settings as Copilot lists them switch the extension or --yolo
-// off or are ignored whole, Copilot rejects the home's mcp-config.json, or the
+// where its user or repository settings as Copilot lists them disable the
+// bridge, switch the extension or --yolo off or are ignored whole, Copilot
+// rejects the home's mcp-config.json, or the
 // managed policy blocks the bridge or the extension or is rejected whole; an
 // entry naming another, a case or path Copilot does not match, a check the run
 // has no use for and allowManagedHooksOnly start it. Mutations, each red: drop
@@ -50,6 +53,7 @@ func TestCopilotsBridgeAndExtensionCannotBeSwitchedOffUnseen(t *testing.T) {
 	)
 	for name, tc := range map[string]struct {
 		home, settings, mcp, policy string
+		repo, local                 string // `config --list --repo` and `--local`
 		linked, notOwned            bool
 		bridgeOnly, notesOnly       bool
 		switchOffCase
@@ -57,8 +61,9 @@ func TestCopilotsBridgeAndExtensionCannotBeSwitchedOffUnseen(t *testing.T) {
 		"nothing switches either off": {settings: "experimental=true\n"},
 		"entries naming others, and values Copilot keeps": {
 			home:     `{"model":"m","extensions":{"mode":"load_only"}}`,
-			settings: "experimental=true\nextensions.mode=load_only\nextensions.disabledExtensions=user:other\nextensions.disabledExtensions=crewlet-notes\nmodel=m\n",
-			mcp:      `Warning: MCP config "HOME/.copilot/mcp-config.json": Skipping invalid MCP server "bad": server config must be an object` + "\n" + `Warning: skipping workspace MCP config "HOME/workspace/.mcp.json" because it is malformed: mcpServers: Expected object` + "\n",
+			settings: "experimental=true\nextensions.mode=load_only\nextensions.disabledExtensions=user:other\nextensions.disabledExtensions=crewlet-notes\nmodel=m\ndisabledMcpServers=other\n",
+			repo:     "disabledMcpServers=Crewlet\n", local: "disabledMcpServers=other\n",
+			mcp: `Warning: MCP config "HOME/.copilot/mcp-config.json": Skipping invalid MCP server "bad": server config must be an object` + "\n" + `Warning: skipping workspace MCP config "HOME/workspace/.mcp.json" because it is malformed: mcpServers: Expected object` + "\n",
 			policy: `{"deniedMcpServers":[{"serverName":"other"},{"serverName":"Crewlet"},{"serverUrl":"http://127.0.0.1:9/MCP/*"}],
 				"allowedMcpServers":[{"serverUrl":"HTTP://127.0.0.1:9/*"},{"serverName":"other"}],"allowManagedHooksOnly":true,
 				"strictPluginOnlyCustomization":["skills","hooks"],"permissions":{"deny":["Shell(rm)","shell(git push)"]}}`},
@@ -66,8 +71,15 @@ func TestCopilotsBridgeAndExtensionCannotBeSwitchedOffUnseen(t *testing.T) {
 			settings: dropped + "extensions.mode=disabled\nextensions.disabledExtensions=user:crewlet-notes\n",
 			policy:   `{"strictPluginOnlyCustomization":["extensions"]}`},
 		"the bridge's switches on a run without it": {notesOnly: true,
-			mcp:    "Error: Invalid MCP config at HOME/.copilot/mcp-config.json: mcpServers: Required\n",
-			policy: `{"deniedMcpServers":[{"serverName":"crewlet"}],"allowedMcpServers":[],"permissions":{"deny":["Mcp(crewlet)"]}}`},
+			mcp:      "Error: Invalid MCP config at HOME/.copilot/mcp-config.json: mcpServers: Required\n",
+			settings: "disabledMcpServers=crewlet\n",
+			policy:   `{"deniedMcpServers":[{"serverName":"crewlet"}],"allowedMcpServers":[],"permissions":{"deny":["Mcp(crewlet)"]}}`},
+		"the home disables the bridge": {settings: "experimental=true\ndisabledMcpServers=other\ndisabledMcpServers=crewlet\n",
+			switchOffCase: switchOffCase{fails: []string{settings + " lists crewlet, Crewlet's own MCP server, in disabledMcpServers"}}},
+		"the repository disables the bridge": {repo: "disabledMcpServers=crewlet\n",
+			switchOffCase: switchOffCase{fails: []string{".github/copilot/settings.json lists crewlet, Crewlet's own MCP server"}}},
+		"the repository's local file disables the bridge": {local: "disabledMcpServers=crewlet\n",
+			switchOffCase: switchOffCase{fails: []string{".github/copilot/settings.local.json lists crewlet"}}},
 		"the home switches extensions off": {
 			home:          `{"extensions":{"mode":"disabled"}}`,
 			settings:      "experimental=true\nextensions.mode=disabled\n",
@@ -137,7 +149,8 @@ func TestCopilotsBridgeAndExtensionCannotBeSwitchedOffUnseen(t *testing.T) {
 			if tc.home != "" {
 				plant(t, box, map[string]string{".copilot/settings.json": tc.home})
 			}
-			plant(t, box, map[string]string{"answer.settings": tc.settings, "answer.mcp": at.Replace(tc.mcp)})
+			plant(t, box, map[string]string{"answer.settings": tc.settings, "answer.mcp": at.Replace(tc.mcp),
+				"answer.repo": tc.repo, "answer.local": tc.local})
 			if tc.policy != "" {
 				target := "policy/managed-settings.json"
 				if tc.linked {

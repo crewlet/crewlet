@@ -610,6 +610,128 @@ func museMergeSystem(ctx context.Context, box sandbox.Sandbox, paths Paths, syst
 	return nil
 }
 
+// museSwitchedOff refuses a run where the box home switches off what the run
+// brings of its own, each with no word otherwise (measured on 1.4.25): its
+// notes plugin, where it has one, by the settings' `plugins.activation` "off",
+// a disable recorded in installed.json ([Paths.MuseInstalled]), a reject
+// recorded as a hook's runtime capability, or an installed.json Muse cannot
+// read (it then loads no plugin); a seat skill, by `skills.activation.user`
+// "off" on its file. The plugin's records are read on every run, before the
+// script's remove and install, which would reset them: a run with no use for
+// the plugin is not refused, but its script leaves the plugin alone
+// ([Paths.MusePluginOff]); nothing is switched back on. Settings that do not
+// read are Muse's to refuse, which it does loudly.
+func museSwitchedOff(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
+	path := paths.MuseSettings()
+	raw, err := box.ReadFile(ctx, path)
+	if err != nil {
+		return fmt.Errorf("executor: reading the box home's own Muse Code settings (%s): %w", path, err)
+	}
+	var settings struct {
+		Plugins struct {
+			Activation map[string]json.RawMessage `json:"activation"`
+		} `json:"plugins"`
+		Capabilities map[string]struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"runtime_capabilities"`
+		Skills struct {
+			Activation struct {
+				User map[string]json.RawMessage `json:"user"`
+			} `json:"activation"`
+		} `json:"skills"`
+	}
+	_ = json.Unmarshal(raw, &settings) // a value that does not decode switches nothing off
+	var off []string
+	if string(settings.Plugins.Activation[museNotesPlugin]) == `"off"` {
+		off = append(off, fmt.Sprintf(`%s sets plugins.activation.%s to "off"`, path, museNotesPlugin))
+	}
+	for _, h := range museNoteHooks {
+		key := "plugin:" + museNotesPlugin + ":hook:" + h.id
+		if c, ok := settings.Capabilities[key]; ok && c.Enabled != nil && !*c.Enabled {
+			off = append(off, fmt.Sprintf("%s sets runtime_capabilities.%q.enabled to false (`muse plugins "+
+				"reject`)", path, key))
+		}
+	}
+	installed, err := museInstalledOff(ctx, box, paths)
+	if err != nil {
+		return err
+	}
+	off = append(off, installed...)
+	if err = museMarkPluginOff(ctx, box, paths, len(off) > 0); err != nil {
+		return err
+	}
+	var said []string
+	if req.Steer.Set() || req.SkillLoads.Set() {
+		said = off
+	}
+	for _, s := range req.Skills {
+		file := paths.MuseSkills() + "/" + s.Listed() + "/SKILL.md"
+		if string(settings.Skills.Activation.User[file]) == `"off"` {
+			said = append(said, fmt.Sprintf(`%s sets skills.activation.user[%q] to "off", the seat skill %s`,
+				path, file, s.Listed()))
+		}
+	}
+	if len(said) == 0 {
+		return nil
+	}
+	return fmt.Errorf("executor: the box home switches off what the run brings of its own, which Muse Code "+
+		"would then go without unseen, and the run never switches back on what a person switched off: %s; "+
+		"undo that there (`muse plugins enable` or `approve`, `muse skills enable`), or run without notes, "+
+		"skill loads and skills", strings.Join(said, "; "))
+}
+
+// museInstalledOff is what installed.json ([Paths.MuseInstalled]) says of the
+// notes plugin, read by the box's shell as Muse reads it: a disable
+// (`plugins.<id>.enabled` false), or the file there and unreadable (a link,
+// not a regular file, not readable, no JSON object), which leaves Muse with no
+// plugin at all (measured on 1.4.25). A missing file says nothing.
+func museInstalledOff(ctx context.Context, box sandbox.Sandbox, paths Paths) ([]string, error) {
+	file := paths.MuseInstalled()
+	q := shellword.Quote(file)
+	res, err := box.Exec(ctx, "if [ -L "+q+" ] || { [ -e "+q+" ] && { [ ! -f "+q+" ] || [ ! -r "+q+" ]; }; }; "+
+		"then echo unreadable; elif [ -f "+q+" ]; then echo read; cat -- "+q+"; fi; exit 0", sandbox.ExecOptions{})
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("executor: reading the box home's Muse Code plugin store (%s): %w", file, err)
+	}
+	unreadable := []string{file + " is there but no regular file Muse Code can read, which leaves it no plugin"}
+	head, body, _ := strings.Cut(res.Stdout, "\n")
+	switch head {
+	case "unreadable":
+		return unreadable, nil
+	case "read":
+	default:
+		return nil, nil
+	}
+	var store struct {
+		Plugins map[string]struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"plugins"`
+	}
+	if read := json.Unmarshal([]byte(body), &store) == nil; !read {
+		return []string{file + " does not read as JSON, which leaves Muse Code no plugin"}, nil
+	}
+	if p, ok := store.Plugins[museNotesPlugin]; ok && p.Enabled != nil && !*p.Enabled {
+		return []string{fmt.Sprintf("%s sets plugins.%s.enabled to false (`muse plugins disable`)", file,
+			museNotesPlugin)}, nil
+	}
+	return nil, nil
+}
+
+// museMarkPluginOff records for the run's script whether a person switched the
+// notes plugin off ([Paths.MusePluginOff]): present, the script neither
+// removes, installs nor approves it, so the person's record stays as it is.
+func museMarkPluginOff(ctx context.Context, box sandbox.Sandbox, paths Paths, off bool) error {
+	q := shellword.Quote(paths.MusePluginOff())
+	cmd := "rm -f -- " + q
+	if off {
+		cmd = "mkdir -p " + shellword.Quote(paths.WorkDir()) + " && : > " + q
+	}
+	return execOK(ctx, box, cmd, "recording whether the box home switched the run's notes plugin off")
+}
+
 // museHold holds the box home's settings as the run finds them
 // ([Paths.MuseHeldSettings], empty where the home has none) and returns them:
 // the copy already held where there is one, which is the home's own, the live
@@ -757,6 +879,10 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			"at most %d (run.system_prompt_append): shorten the seat's system prompt, its policies or its "+
 			"memory", n, museSystemMax)
 	}
+	if err := museSwitchedOff(ctx, box, req, paths); err != nil {
+		return "", err
+	}
+	notes, loads := req.Steer.Set(), req.SkillLoads.Set()
 	if system != "" {
 		if err := museMergeSystem(ctx, box, paths, system); err != nil {
 			return "", err
@@ -769,7 +895,6 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err := writeMuseSkills(ctx, box, req.Skills, paths); err != nil {
 		return "", err
 	}
-	notes, loads := req.Steer.Set(), req.SkillLoads.Set()
 	if notes || loads {
 		if err := writeMuseNotes(ctx, box, req, paths); err != nil {
 			return "", err
@@ -842,8 +967,11 @@ func museWiring(paths Paths) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	added := q(paths.MuseServersAdded())
-	line(`muse plugins remove %s --json < /dev/null > /dev/null 2>&1; rm -f %s`, museNotesPlugin, installed)
-	line(`if [ -f %s ]; then`, q(plugin+"/.muse-plugin/plugin.json"))
+	// NOT OVER A PERSON'S OFF ([museSwitchedOff]): the remove and install
+	// reset a disable and a reject, so where one stands they are skipped.
+	off := q(paths.MusePluginOff())
+	line(`[ -e %s ] || muse plugins remove %s --json < /dev/null > /dev/null 2>&1; rm -f %s`, off, museNotesPlugin, installed)
+	line(`if [ ! -e %s ] && [ -f %s ]; then`, off, q(plugin+"/.muse-plugin/plugin.json"))
 	line(`  chmod 0755 %s 2> /dev/null`, q(paths.MuseNoteHelper()))
 	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > %s 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
 		q(plugin), installed, errs, museNotesPlugin, errs)

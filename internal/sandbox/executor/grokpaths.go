@@ -89,6 +89,15 @@ func (p Paths) GrokTakeConfigFresh() string { return p.WorkDir() + "/grok-take-f
 // takes nothing ([grokHooks]).
 func (p Paths) GrokThread() string { return p.WorkDir() + "/grok-thread" }
 
+// GrokHookIDs is the ids Grok Build gives the run's hooks, one a line, as
+// `grok inspect --json` lists them and `~/.grok/disabled-hooks` names them
+// ([grokMergeConfig]), which the guard reads ([grokGuard]).
+func (p Paths) GrokHookIDs() string { return p.WorkDir() + "/grok-hook-ids" }
+
+// GrokDisabledHooks is the box home's list of the hooks Grok Build skips, one
+// id a line ([grokGuard]).
+func (p Paths) GrokDisabledHooks() string { return p.GrokHome() + "/disabled-hooks" }
+
 // GrokNoteHelper is the note helper's build for the box (internal/notehelper),
 // written at each launch of a run wired to its notes or skills.
 func (p Paths) GrokNoteHelper() string { return p.WorkDir() + "/grok-notehelper" }

@@ -54,7 +54,7 @@ func TestAPiRunIsHeadlessAndTrustsItsWorkingDirectory(t *testing.T) {
 		Brief: "BRIEF TEXT", Skills: []sandbox.Skill{{Name: "deploy", Description: "d", Body: "b"}}}
 	script := piScript(req, Session{ID: "s-1"}, paths, paths.PiExtension(), time.Second)
 	for _, want := range []string{
-		`pi --mode json -p --approve -e builtin:mcp --model 'anthropic/claude-sonnet-4-5' --thinking 'high' -e '/home/user/.pi/crewlet/extension.mjs' --skill '/home/user/.pi/crewlet/skills' --skill '/home/user/.pi/crewlet/checkout-skills' "$@"`,
+		`pi --mode json -p --approve --model 'anthropic/claude-sonnet-4-5' --thinking 'high' -e '/home/user/.pi/crewlet/extension.mjs' --skill '/home/user/.pi/crewlet/skills' --skill '/home/user/.pi/crewlet/checkout-skills' "$@"`,
 		`set -- "$@" --session "$f"`, `f='/home/user/.pi/sessions/s-1.jsonl'`,
 		`printf '%s\n' '{"type":"crewlet.extension","cap":0}'`,
 	} {
