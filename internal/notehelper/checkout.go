@@ -37,8 +37,8 @@ import (
 // that reads its instruction files itself, each file named as an import in
 // place of its text ([rootImports]), Limit not applying; SkillSep, what joins
 // a copy's tag and skill ([skillName]); FiringLimit, the bound in bytes on
-// what one nested firing hands of all its checkouts' instructions, nil for
-// none ([fitFiring]).
+// what one nested firing hands of all its checkouts' instructions, frames
+// counted, nil for none ([fitFiring]).
 type checkoutSpec struct {
 	Instructions       []instructionSlot `json:"instructions"`
 	Limit              *int              `json:"limit,omitempty"`
@@ -144,8 +144,9 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = json.Unmarshal(raw, &c); err != nil {
 		return fmt.Errorf("the launch config: %w", err)
 	}
-	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) || (c.FiringLimit != nil && *c.FiringLimit < 0) {
-		return errors.New("the launch config names no state, no instruction file, or a negative limit")
+	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) ||
+		(c.FiringLimit != nil && *c.FiringLimit < 0) {
+		return errors.New("the launch config names no state, no instruction file, or a negative limit or firingLimit")
 	}
 	if !c.SkillSep.Valid() {
 		return fmt.Errorf("the launch config's skillSep %q is neither %q nor %q", c.SkillSep, ":", "-")
@@ -316,22 +317,28 @@ func handNested(c nestedConfig, stderr io.Writer) ([]handedCheckout, []string, e
 }
 
 // fitFiring is parts within left, what is left of a firing's bound on its
-// instructions: each part that fits whole, in order, and the rest left out
-// whole, each said by its path for the model to read there, never cut, as a
-// cut file reads as the whole of it.
+// instructions, each counted with its frame ([framedCost]): each part that
+// fits whole, in order, and the rest left out whole, each said by its path
+// for the model to read there, never cut, as a cut file reads as the whole.
 func fitFiring(parts []instructionPart, left *int, said *skips) []instructionPart {
 	var kept []instructionPart
 	for _, p := range parts {
-		if len(p.text) > *left {
+		if cost := framedCost(p); cost > *left {
 			said.say("the instruction file %s is left out: it passes what is left of the firing's bound on "+
 				"instructions; read it at that path", p.path)
-			continue
+		} else {
+			*left -= cost
+			kept = append(kept, p)
 		}
-		*left -= len(p.text)
-		kept = append(kept, p)
 	}
 	return kept
 }
+
+// framedCost is what part p takes of a firing's bound: its text, its path
+// three times and 64 bytes, more than any adapter wraps a file in
+// (qwen-nested: the path twice and 47 bytes; a checkout's section header, its
+// root and 22 bytes, once per checkout), so the bound holds the answer whole.
+func framedCost(p instructionPart) int { return len(p.text) + 3*len(p.path) + 64 }
 
 // skippedListing is what a firing left out, as a nested adapter hands it to
 // the model, "" for nothing: a line each, so a model told of a repository's
