@@ -1,0 +1,1 @@
+import{r as e}from"./rolldown-runtime-XKyaHtl9.js";import{i as t}from"./react-C1iE8mnY.js";var n=e(t(),1);function r(e){let t=(0,n.useRef)(e);return(0,n.useLayoutEffect)(()=>{t.current=e}),(0,n.useMemo)(()=>{let e={};for(let n of Object.keys(t.current))e[n]=(...e)=>t.current[n](...e);return e},[])}export{r as t};
