@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/gitlet/cache"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
@@ -1279,6 +1280,19 @@ func TestAWedgedNodeCostsAReadTheRoutersOwnReadAttempt(t *testing.T) {
 				"unanswered", firstName)
 		}
 	})
+}
+
+// THE CACHE'S OWN READ OF A REPOSITORY'S ROWS IS ONE READ ATTEMPT: the
+// cache bounds a read it makes with no asker's deadline (a hint's pack row, the
+// row term of a hash) by cache.RowReadAttempt, and shorter, it would end a
+// linearizable read the router still gives its barrier to wait out an election.
+// The cache imports no engine package, so the equality is held here.
+func TestTheCachesRowReadIsOneReadAttempt(t *testing.T) {
+	t.Parallel()
+	if read := Production().ReadAttempt; cache.RowReadAttempt != read {
+		t.Errorf("cache.RowReadAttempt is %v, and a node's router gives a read %v", cache.RowReadAttempt,
+			read)
+	}
 }
 
 // GITPROC'S READ BOUNDS FIT INSIDE ONE PRODUCTION READ ATTEMPT: a local git
