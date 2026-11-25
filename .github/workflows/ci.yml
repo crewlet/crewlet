@@ -843,9 +843,11 @@ jobs:
       # NODE, because this half runs internal/sandbox/executor's probes of
       # the OpenCode plugins and the Kimi Code driver the engine embeds,
       # each under plain `node` against a stand-in of what it talks to, and
-      # internal/browser/boxhelper's cases, which run the box helper under
-      # this node and the floor's, each box installing the Playwright tree
-      # with that Node's own npm, offline — and `make test` refuses to start
+      # of the box helper's relay; internal/browser/boxhelper's cases, its
+      # live view's among them, which run the box helper under this node and
+      # the floor's, each box installing the Playwright tree with that Node's
+      # own npm, offline; and internal/browser/screen's, which carries a real
+      # box's screen across the real bridge — and `make test` refuses to start
       # without them (require-node, require-npm). The cases never skip here:
       # `make test` requires every prerequisite of the suite
       # (internal/prereqtest's CREWLET_REQUIRE_PREREQUISITES), so a missing
