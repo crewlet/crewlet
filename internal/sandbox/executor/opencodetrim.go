@@ -39,6 +39,7 @@ const openCodeTrimAwk = `function unb64(s,   a, i, k, v, w, out) {
   return out
 }
 BEGIN { FS = "\n"; t = ENVIRON["` + trimStartVar + `"]
+  # 0, a session the run began, cuts at the keep point unlike a chat file: OpenCode readers restart at the newest compaction (openCodeRestart).
   if (t != "0") { c = unb64(t)
     if (match(c, /"id"[ \t\r\n]*:[ \t\r\n]*"[A-Za-z0-9_-]+"/)) {
       A = substr(c, RSTART, RLENGTH); sub(/^"id"[ \t\r\n]*:[ \t\r\n]*"/, "", A); sub(/"$/, "", A) }
