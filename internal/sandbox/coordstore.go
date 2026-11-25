@@ -2863,6 +2863,22 @@ func (s *CoordStore) MarkSessionStart(ctx context.Context, turnID, launch string
 	return marked, err
 }
 
+// MarkBridgeConnected records that a job's harness connected its bridge. See
+// the contract on [PendingStore].
+func (s *CoordStore) MarkBridgeConnected(ctx context.Context, turnID, launch string) (bool, error) {
+	if launch == "" {
+		return false, nil
+	}
+	_, marked, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.Launch.BridgeConnected {
+			return false
+		}
+		run.Launch.BridgeConnected = true
+		return true
+	})
+	return marked, err
+}
+
 // BindSession binds a minting job's reported session to its record. See the
 // contract on [PendingStore].
 func (s *CoordStore) BindSession(ctx context.Context, turnID string, bind SessionBind) (PendingRun, error) {

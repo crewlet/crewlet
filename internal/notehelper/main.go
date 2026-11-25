@@ -124,7 +124,15 @@
 //     directories deep, 1,024 entries or 32 MiB is left out whole, said:
 //     Copilot walks 9 levels (measured), so a deeper tree is the gap;
 //   - `skillDirs`: the checkout's skill directories, an earlier one winning a
-//     name (Codex: [".codex/skills",".agents/skills"]);
+//     name (Codex: [".codex/skills",".agents/skills"]), each skill a
+//     directory directly in one. {"dir": <d>, "recursive": true} walks d as
+//     Pi 1.6.0 does (measured): a directory holding SKILL.md is a skill and
+//     ends the descent, dot directories and node_modules are skipped, and a
+//     skill reached twice, by real path, is copied once, and of two of one
+//     name, the first, the other left out, said; past 8 directories
+//     deep or 1,024 entries it is left out whole, said. Pi also follows a
+//     link out of the checkout, lists a loose root `.md` skill, and honours
+//     .gitignore, .ignore and .fdignore; the walk does none of these;
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (at most 64 characters) with its
@@ -147,7 +155,11 @@
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
-// (name, description, the copy's SKILL.md). A harness taking checkouts adds a
+// (name, description, the copy's SKILL.md) as its hook's context; pi-nested
+// the same with each file in Pi's `<project_instructions path=...>`, on
+// stdout for the run's extension to add to the tool's result (Pi lists no
+// skill it did not start with and loads instructions only as it starts,
+// measured on 1.6.0). A harness taking checkouts adds a
 // nested adapter, never a second core; its runner holds the home file and the
 // copies (internal/sandbox/executor's checkoutHome). What a nested firing
 // leaves out (a skill whose name the home's skills hold, one that leads out
@@ -180,6 +192,34 @@
 // and the run starts a session of its own, as Kimi Code's, Grok Build's and
 // Hermes's runners renew theirs or start fresh.
 //
+// # The Codex bridge check
+//
+// A Codex run's script runs the helper once as codex-bridge (codexbridge.go)
+// after its app-server listens and before `codex exec` starts the thread, and
+// the run does not start unless it exits 0. Codex 0.171.0 hands its model a
+// server's tools in namespace `mcp__<server>`, the server's name cleaned (each
+// character outside [A-Za-z0-9_] made `_`, no prefix where it then opens with
+// `mcp__`), under each tool's cleaned name. Two servers whose namespaces clean
+// alike BOTH get a hashed namespace; of two tools whose namespace and name
+// joined with no separator spell the same, one keeps its name and the other
+// is hashed (codex-rs/codex-mcp/src/tools.rs). So a server `mcp__crewlet` or
+// `mcp::crewlet` from any layer renames the engine's own `mcp__crewlet`
+// namespace, and a server `crewle` listing `tsubmit_work` renames its
+// `submit_work` to `submit_work_<hash>` (measured), each unseen. The helper
+// reads Codex's effective configuration with its layers (config/read, from
+// the working directory the thread starts in) and every server's tools as the
+// server names them (mcpServerStatus/list, which starts each server once, as
+// the thread does again), names them as Codex does, and refuses, naming the
+// server and the layer that declares it: a server whose namespace is the
+// bridge's; one of whose tools joins to a bridge tool's name; one it could
+// not list whose namespace opens one; the bridge served other than at the
+// run's own address (its SHA-256 on the config, since the address carries the
+// job's token) or turned off, as a managed layer above the run's own can do;
+// and a feature that renames the tools or lets a server change them after the
+// check (non_prefixed_mcp_tool_names, multi_environment_mcp,
+// mcp_tool_list_changed), which the run pins off on its command line where no
+// managed layer turns them on.
+//
 // # A rollout a person's Codex compressed
 //
 // Codex 0.171.0 behind its local_thread_store_compression feature, a
@@ -200,11 +240,12 @@
 // is over); 1 when the harness cannot be reached; 2 for a command line or
 // environment it cannot run with; checkout-launch exits 1 where it could not
 // write the instructions, codex-renew where it could not renew them, and
-// codex-materialize where a compressed rollout is left. A
-// route that refuses the helper (401 or 404: its token no longer resolves, or
-// the run has no such route) ends only what that route is for, logged: the
-// notes route its polls, the skill route its reports, the cap and the other
-// route going on. -interrupt-once exits 0 once
+// codex-bridge where the run may not start or it cannot tell, and
+// codex-materialize where a compressed rollout is left. A route that refuses
+// the helper (401 or 404: its token no longer resolves, or the run has no such
+// route) ends only what that route is for, logged: the notes route its polls,
+// the skill route its reports, the cap and the other route going on.
+// -interrupt-once exits 0 once
 // it interrupted the turn in flight, 3 where no turn was in flight to
 // interrupt, and 1 where it cannot tell. Every error goes to stderr, which the
 // run's script sends to the run's error stream.

@@ -341,6 +341,9 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// held to it, and the job's record keeps it (internal/api/mcpbridge,
 		// started.go).
 		Started: boxStarted(ledger, l.turn.RunID, continuing.Load, req.Started),
+		// AND THAT ITS HARNESS CONNECTED ITS BRIDGE, on the job's record, which
+		// its collection fails a job that ended without (connected.go there).
+		Connected: func(ctx context.Context) { ledger.connected(ctx, l.turn.RunID) },
 	}
 
 	settings := seatSandbox(company, handle)
@@ -1073,6 +1076,9 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// WHO RUNS THE SESSION'S CALLS, as every entry it writes ahead of a call
 	// names it: what a collection on any node reads this process's liveness by.
 	ledger.runner = e.callRunner()
+	// AND WHERE ITS HARNESS'S CONNECTION IS HELD until its row says so, for a
+	// collection here or the seat's release ([connectMarks]).
+	ledger.marks, ledger.seat = e.connectMarks, s.Handle
 	s.Launch, s.LastSeq, s.CallIDMeta, s.CallCeiling = job.LaunchID, job.LastSeq, job.CallIDMeta, job.CallCeiling
 	s.ParkedCalls = job.ParkedCalls
 	s.Park = e.parkOnCall(s.RunID, job.LaunchID)

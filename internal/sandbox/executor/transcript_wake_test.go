@@ -134,8 +134,7 @@ func TestAHookLineNamingWakesIsAWakeEntry(t *testing.T) {
 		if want := "crewlet: " + tc.said + " " + hookToken; out.SystemMessage != want {
 			t.Errorf("%s: the line is %q, want %q", tc.name, out.SystemMessage, want)
 		}
-		line := `{"type":"system","subtype":"informational","content":` +
-			jsonText(t, "PostToolBatch says: "+out.SystemMessage) + `,"timestamp":"2026-10-30T12:00:03.100Z"}`
-		sameEntries(t, readClaudeRecords(t, []string{line}), []shown{{kind: tc.kind, text: tc.said}})
+		sameEntries(t, readClaudeRecords(t, []string{hookSaid(t, "PostToolBatch", out.SystemMessage,
+			"2026-10-30T12:00:03.100Z")}), []shown{{kind: tc.kind, text: tc.said}})
 	}
 }

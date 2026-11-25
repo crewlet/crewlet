@@ -78,7 +78,8 @@ func claudePersonVariants() []string {
 	call := func(id, input string) string {
 		return `{"type":"tool_use","id":"` + id + `","name":"Bash","input":` + input + `}`
 	}
-	hook := "PostToolBatch says: crewlet: a note reached the run"
+	hook := "crewlet: a note reached the run"
+	said := func(attachment string) string { return `{"type":"attachment","attachment":` + attachment + `}` }
 	escaped := strings.ReplaceAll(q(note), "#", `\u0023`)
 	return []string{
 		`{"type":"user","message":{"role":"user","content":` + q(note+"short") + `}}`,
@@ -108,10 +109,15 @@ func claudePersonVariants() []string {
 		reply(`{"type":"tool_use","id":"toolu_n","name":` + q(w) + `,"input":{}}`),
 		answer("toolu_n", `"named past the bound"`),
 		reply(`{"type":"tool_use","id":` + q(w) + `,"name":"Bash","input":{}}`),
-		`{"type":"system","subtype":"informational","content":` + q(hook+"\n"+note) + `}`,
-		`{"content":` + q(hook) + `,"level":"notice","type":"system","subtype":"informational"}`,
-		`{"type":"system","subtype":"informational","content":` + q(hook+" "+w) + `}`,
-		`{"type":"system","subtype":"informational","content":` + q(hook) + `,"content":5}`,
+		said(`{"type":"hook_system_message","content":` + q(hook+"\n"+note) + `}`),
+		said(`{"content":` + q(hook+" [crewlet take 00000000-0000-4000-8000-000000000001]") +
+			`,"hookName":"Stop","type":"hook_system_message"}`),
+		said(`{"type":"hook_system_message","content":` + q(hook+" "+w) + `}`),
+		said(`{"type":"hook_system_message","content":` + q(hook) + `,"content":5}`),
+		said(`{"type":"hook_system_message","content":` + q(hook) + `,"type":"hook_success"}`),
+		said(`{"type":"hook_system_message","content":` + q(hook) + `},"attachment":{"type":"hook_success"}`),
+		said(`{"type":"hook_system_message","content":` + q("lint passed") + `}`),
+		`{"type":"system","subtype":"informational","content":` + q("PostToolBatch says: "+hook) + `}`,
 		`{"type":"system","subtype":"compact_boundary","content":` + q(note) + `}`,
 		`{"type":"attachment","attachment":{"content":` + q(note) + `}}`,
 		`{"type":"attachment","attachment":{"type":"hook_additional_context","content":[` + q(note) + `]}}`,
