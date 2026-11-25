@@ -7895,12 +7895,13 @@ session budget released the object, or the turn's end did, its newest capture
 not kept — each only of a turn that ended — and an ended turn is never captured
 again.
 
-**Two transcripts at a time on each node.** One read holds at most 29 MiB
-measured, and of what
+**Two transcripts at a time on each node.** One read holds at most 32 MiB
+measured (Cursor Agent's apart: its reader still holds each line whole, up to
+166 MiB), and of what
 harnesses and ordinary tools write takes up to about 49 seconds for a person (58
 for a seat's words): one value of `password:` lines streamed through its
 redaction to `bounds.read_bytes`, beside a second read. So a node decodes at
-most two transcripts at once, 58 MiB live at their worst (87 MiB with the heap's
+most two transcripts at once, 64 MiB live at their worst (96 MiB with the heap's
 room under the engine's memory limit), whichever socket
 question or REST request asks for them. A request past them waits for a slot,
 its session's object not yet opened, for as long as its caller waits, and a
