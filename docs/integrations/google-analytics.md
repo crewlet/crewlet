@@ -24,7 +24,7 @@ The roles Google Analytics gives, least first: **Viewer** (sees settings and dat
 
 ## Connecting Crewlet
 
-1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing, and the form says whether it is connected. Turn Google Analytics on, then run the Google Cloud connection's Cloud Shell block again: it turns on the Analytics Data and Admin APIs in the identity project and makes the company reader ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
+1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing, and the form says whether it is connected. Turn Google Analytics on: Crewlet turns on the Analytics Data and Admin APIs in the identity project and makes the company reader itself, with no block to run ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
 2. Add the company reader's email, shown on the form, to each property at **Viewer**: Google Analytics, Admin, Property access management, Add users. Crewlet reads the company's figures for boards and the atlas as this identity.
 3. Turn agents on from the Agents tab, each with its properties, and give each its identity ([below](#give-an-agent-its-own-identity)).
 

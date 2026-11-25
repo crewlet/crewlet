@@ -38,6 +38,7 @@ const (
 	readEnabled    readBack = "the account to read back as enabled"
 	readDeleted    readBack = "the deleted account to read back as gone"
 	readLastWrites readBack = "the account to read back as the last sync left it"
+	readAPIsOn     readBack = "the APIs Crewlet turned on to read back as on"
 )
 
 // The sentences a seat's tool waits on while Google settles, which the Agents
