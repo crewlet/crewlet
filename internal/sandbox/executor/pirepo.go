@@ -34,9 +34,13 @@ func piCheckoutHome(paths Paths) checkoutHome {
 var _ homeKeeper = Pi{}
 
 // homeRestore puts the agent directory's own instruction file back where a
-// killed Pi run held it ([checkoutHome.restore]), run by the clear before
-// every run, whichever harness it runs.
-func (Pi) homeRestore(p Paths) string { return piCheckoutHome(p).restore() }
+// killed Pi run held it ([checkoutHome.restore]) and drops the skip log it
+// left ([checkoutHome.dropSkipped]), run by the clear before every run,
+// whichever harness it runs.
+func (Pi) homeRestore(p Paths) string {
+	h := piCheckoutHome(p)
+	return everyStep(h.restore(), h.dropSkipped())
+}
 
 // piNestedTimeout bounds one pi-nested firing, which the tool's result waits
 // on and Pi bounds no further (measured on 1.6.0: a 30 s call held the

@@ -472,3 +472,29 @@ func TestAPiNoteHelpersOwnTroubleReachesTheRunsErrorStream(t *testing.T) {
 		t.Errorf("the run's error stream does not say each firing's trouble with its config:\n%s", errs)
 	}
 }
+
+// THE CLEAR DROPS A SKIP LOG NO SCRIPT PRINTED: a run killed before its
+// script printed what its firings left out leaves the log in its checkout
+// state, and the clear before the next run, whichever harness it drives,
+// removes Codex's and Pi's alike, so a script ended before its gate prints
+// no line of another run's as its own.
+//
+// Mutation: drop Codex's removal from its restore, and a row goes red (Pi's
+// state is also under the directory the clear removes whole).
+func TestTheClearDropsASkipLogNoScriptPrinted(t *testing.T) {
+	t.Parallel()
+	_, box := standInBox(t, executor.NewPi(), nil)
+	p := executor.PathsFor(box)
+	logs := map[string]string{"codex": p.CodexRepo() + "/skipped", "pi": p.PiCheckouts() + "/skipped"}
+	for _, log := range logs {
+		plantFile(t, log, "notehelper: a killed run's line\n")
+	}
+	if err := executor.NewClaudeCode().ClearArtifacts(t.Context(), box); err != nil {
+		t.Fatalf("the clear: %v", err)
+	}
+	for name, log := range logs {
+		if _, err := os.Lstat(log); err == nil {
+			t.Errorf("%s: the clear left the killed run's skip log %s", name, log)
+		}
+	}
+}
