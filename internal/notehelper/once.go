@@ -30,6 +30,8 @@ var oneShots = map[string]oneShot{
 	"grok-hook":         {run: runGrokHook, config: true},
 	"checkout-launch":   {run: runCheckoutLaunch, config: true},
 	"codex-nested":      {run: runCodexNested, config: true},
+	"claude-nested":     {run: runClaudeNested, config: true},
+	"codex-bridge":      {run: runCodexBridge, config: true},
 	"pi-nested":         {run: runPiNested, config: true},
 	"codex-renew":       {run: runCodexRenew, config: true},
 	"codex-materialize": {run: runCodexMaterialize},

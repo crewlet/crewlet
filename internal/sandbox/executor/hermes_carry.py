@@ -3,6 +3,9 @@
 #
 #   hermes_carry.py dump DB TITLE POLICY OUT        the session titled TITLE, with its compaction lineage,
 #                                                   written to OUT
+#   hermes_carry.py trim SRC DST                    the dump at SRC as a resume of it loads it, written to DST:
+#                                                   a session's inactive messages below its newest compaction
+#                                                   left out, its settled admissions' results slimmed
 #   hermes_carry.py renew DB TITLE SYSTEM           SYSTEM's text as the standing instructions of the session
 #                                                   titled TITLE, in place of the ones Hermes froze with it
 #   hermes_carry.py restore MEMBER DB POLICY TITLE  a new session store at DB from MEMBER, the launch kept at
@@ -13,6 +16,8 @@
 #                                                   launch's own rows begin
 #   hermes_carry.py route DB TITLE MODEL            whether the box's model route (provider, base URL, model)
 #                                                   is the one Hermes froze with the session titled TITLE
+#   hermes_carry.py servers STAGED                  whether the box's Hermes runs each MCP server of STAGED as
+#                                                   STAGED writes it
 #   hermes_carry.py guard PLUGIN SERVERS            whether the box's Hermes would start with the run's plugin
 #                                                   and its servers (JSON: each name's own header names) as the
 #                                                   run wrote them
@@ -21,14 +26,14 @@
 # which keeps no exit status, so every command ends on one line of its own on stdout: `crewlet-carry ok`
 # (with the restored session's stored id after a restore, the id after top), or `crewlet-carry none` where
 # the store holds no session of that title (or, for renew, no launch Hermes froze with it; for route, no
-# route), and route answers `crewlet-carry moved` for another route, guard `crewlet-carry refused <why>`
-# where the box would switch the run's own plugin or servers off. Anything else is a failure, its traceback
-# on stderr.
+# route; for trim, no row to leave out), route answers `crewlet-carry moved` for another route, servers
+# `crewlet-carry taken` and why, and guard `crewlet-carry refused <why>` where the box would switch the run's
+# own plugin or servers off. Anything else is a failure, its traceback on stderr.
 #
 # A dump is JSON lines: the store's schema ({"ddl", "kind"}, never the full-text index's own tables, which
 # its triggers fill again), the store's own bookkeeping rows whole, then the session's rows ({"t", "r"}),
 # and the launch Hermes froze with it ({"crewlet_policy"}). Text, so the engine's scrub can rewrite it.
-# Standard library only, but for overlay, route and guard, which read the box's configuration through
+# Standard library only, but for overlay, route, servers and guard, which read the box's configuration through
 # Hermes's own modules.
 import base64
 import fnmatch
@@ -169,6 +174,81 @@ def restore(member, db_path, policy_path, title):
     if not stored:
         return "none"
     return "ok " + stored
+
+
+# What 0.23.3's own retirement drops of a settled admission's stored result, its copies of the turn's
+# transcript (persistence/sqlite/conversation/_store/retirement.py, _compact_result), leaving `messages` empty.
+RESULT_TRANSCRIPT = ("messages", "last_reasoning", "tools", "_turn_user_row")
+
+
+def stored_result(value):
+    """An admission's stored result as 0.23.3's terminal.load_result reads it, without the envelope a row
+    stores its closing reply once by ({"_stored": {"v": 1, "reply_ref": i}}, i a message of the result's,
+    whose words final_response holds); None where it does not read so."""
+    try:
+        v = json.loads(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+    if not isinstance(v, dict) or not isinstance(v.get("result"), dict):
+        return None
+    env, messages = v.pop("_stored", None), v["result"].get("messages")
+    if env is None:
+        return v
+    if not isinstance(env, dict) or set(env) != {"v", "reply_ref"} or env["v"] != 1 or not isinstance(messages, list):
+        return None
+    ref = env["reply_ref"]
+    if type(ref) is not int or not 0 <= ref < len(messages) or not isinstance(messages[ref], dict):
+        return None
+    return v
+
+
+def slimmed(line, row):
+    """line, a settled admission's stored result, slimmed as 0.23.3's retirement slims it and written back as
+    the measured trim wrote it; line itself where its value does not read as a result, or the slim cannot be
+    written as text (a lone surrogate the value escaped)."""
+    v = stored_result(row["r"]["value"])
+    if v is None:
+        return line
+    v["result"] = dict({k: x for k, x in v["result"].items() if k not in RESULT_TRANSCRIPT}, messages=[])
+    row["r"]["value"] = json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    out = json.dumps(row, ensure_ascii=False) + "\n"
+    try:
+        out.encode("utf-8")
+    except UnicodeEncodeError:
+        return line
+    return out
+
+
+def trim(src, dst):
+    """The dump at src as a resume of it loads it, into dst (measured on 0.23.3: a resume of the trimmed dump
+    sent the requests a resume of the whole one did). Left out: each session's inactive message rows below its
+    newest active compaction summary, the compaction's archive and the originals of the tail it wrote again,
+    which a resume never loads; an inactive row above it, one an undo left, stays, so the restored ids go on
+    where they did. Each settled admission's stored result is slimmed as Hermes's own retirement slims one;
+    every other line is kept as it is. "none", dst unwritten, where no row is left out. Read a line at a time,
+    twice, the summaries first, so the dump is never held whole."""
+    newest, settled, inactive = {}, set(), []
+    with open(src, encoding="utf-8", newline="") as f:
+        for line in f:
+            o = json.loads(line)
+            r = o.get("r") or {}
+            if o.get("t") == "messages":
+                if r["active"] == 1 and r["_compressed_summary"] == 1:
+                    newest[r["session_id"]] = max(newest.get(r["session_id"], 0), r["id"])
+                elif r["active"] == 0:
+                    inactive.append((r["session_id"], r["id"]))
+            elif o.get("t") == "session_admissions" and r["status"] == "terminal":
+                settled.add(ADMISSION_KEY % r["admission_id"])
+    if not any(i < newest.get(sid, 0) for sid, i in inactive):
+        return "none"
+    with open(src, encoding="utf-8", newline="") as f, open(dst, "w", encoding="utf-8", newline="") as out:
+        for line in f:
+            o = json.loads(line)
+            r = o.get("r") or {}
+            if o.get("t") == "messages" and r["active"] == 0 and r["id"] < newest.get(r["session_id"], 0):
+                continue
+            out.write(slimmed(line, o) if o.get("t") == "state_meta" and r["key"] in settled else line)
+    return "ok"
 
 
 SYSTEM_ENV = "HERMES_EPHEMERAL_SYSTEM_PROMPT"
@@ -335,6 +415,60 @@ def overlay(staged_path, managed_dir, hosts):
     os.makedirs(managed_dir, exist_ok=True)
     put(os.path.join(managed_dir, ".env"), data)
     put(os.path.join(managed_dir, "config.yaml"), json.dumps(config).encode())
+    return "ok"
+
+
+# The leaves of Crewlet's own servers the guard judges (a switch off, a tool filter, a header beside the run's own),
+# which `servers` therefore passes over on those servers.
+GUARDED_LEAVES = ("enabled", "disabled", "tools", "headers")
+
+
+def servers(staged_path, guarded):
+    """Whether the box's Hermes runs each MCP server of the run's overlay at STAGED as the overlay writes it, read
+    through Hermes's own MCP loader as the gateway reads it (its home's config.yaml, the run's managed scope, then
+    every enabled plugin package's mcp.json): `ok`, else `taken` and a sentence naming the server and what
+    declares it. A box's same-named entry is merged under the run's per leaf, so any key of its own changes the
+    server; on GUARDED (a JSON list of Crewlet's own servers) the leaves the guard judges, GUARDED_LEAVES, are
+    its to refuse. A plugin's same-named server loses to the run's entry, but a live endpoint it declares for that
+    name replaces the entry's URL (measured on 0.23.3: the run's `crewlet` then connected to the plugin's server,
+    never the bridge), so a plugin's server under one of the run's names is refused whatever it declares. Hermes
+    names a tool `mcp__<server>__<tool>`, its server's name with each character outside [A-Za-z0-9_] made `_`, so
+    only a server named exactly as the run's can name a tool of the bridge's (code-sandbox.md, "The tool
+    bridge")."""
+    with open(staged_path, encoding="utf-8") as f:
+        run = json.load(f).get("mcp_servers") or {}
+    own = set(json.loads(guarded) or [])
+
+    def judged(name, entry):
+        if name not in own or not isinstance(entry, dict):
+            return entry
+        return {k: v for k, v in entry.items() if k not in GUARDED_LEAVES}
+
+    from hermes_cli import managed_scope
+    from hermes_cli.config import get_config_path, read_user_config_raw
+    from hermes_cli.plugins import get_plugin_manager
+    from tools.mcp_tool_config import _load_mcp_config
+    resolved = _load_mcp_config()
+    owners = get_plugin_manager().get_portable_mcp_server_plugins()
+    home = read_user_config_raw().get("mcp_servers") or {}
+    os.environ.pop("HERMES_MANAGED_DIR", None)
+    managed_scope.invalidate_managed_cache()
+    system = managed_scope.load_managed_config().get("mcp_servers") or {}
+    system_dir = managed_scope.get_managed_dir()
+    for name in sorted(run):
+        if name not in owners and judged(name, resolved.get(name)) == judged(name, run[name]):
+            continue
+        why = []
+        if isinstance(home, dict) and name in home:
+            why.append("%s declares it" % get_config_path())
+        if isinstance(system, dict) and name in system and system_dir is not None:
+            why.append("%s declares it" % (system_dir / "config.yaml"))
+        if name in owners:
+            why.append("the plugin %s declares it" % json.dumps(owners[name]))
+        if name not in resolved:
+            why.append("Hermes runs no server of that name")
+        return "taken the box's Hermes Agent does not run the run's MCP server %s as the run's settings write it " \
+               "(%s); remove that from the box image" % (json.dumps(name), "; ".join(why) or "its configuration changes it")
     return "ok"
 
 
@@ -528,14 +662,14 @@ def guard(plugin, servers, skills):
     return "ok" if not found else "refused " + " | ".join(found).replace("\n", " ")
 
 
-COMMANDS = {"dump": (dump, 4), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 3), "top": (top, 1),
-            "route": (route, 3), "guard": (guard, 3), "plugoff": (plugoff, 1)}
+COMMANDS = {"dump": (dump, 4), "trim": (trim, 2), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 3),
+            "top": (top, 1), "route": (route, 3), "servers": (servers, 2), "guard": (guard, 3), "plugoff": (plugoff, 1)}
 
 if __name__ == "__main__":
     command = COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if command is None or len(sys.argv) != command[1] + 2:
-        sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | renew DB TITLE SYSTEM | "
+        sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | trim SRC DST | renew DB TITLE SYSTEM | "
                          "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED HOSTS | top DB | route DB TITLE MODEL | "
-                         "guard PLUGIN SERVERS SKILLS | plugoff PLUGIN\n")
+                         "servers STAGED GUARDED | guard PLUGIN SERVERS SKILLS | plugoff PLUGIN\n")
         sys.exit(2)
     sys.stdout.write("crewlet-carry %s\n" % command[0](*sys.argv[2:]))

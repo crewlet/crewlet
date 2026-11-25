@@ -734,6 +734,8 @@ type FakeRunner struct {
 	name      string
 	installed map[string]bool
 	started   []RunRequest
+	// collected is each handle a collection read a job's box with.
+	collected []RunHandle
 
 	done   bool
 	result Result
@@ -1178,10 +1180,18 @@ func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (J
 	return JobRunning, nil
 }
 
+// Collected is each handle a collection read a job's box with, in order.
+func (r *FakeRunner) Collected() []RunHandle {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.collected)
+}
+
 // Collect returns the result a test queued with [FakeRunner.Finish], or the
 // one the job's play answered.
 func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle, _ *queue.AnswerBudget) (Result, error) {
 	r.mu.Lock()
+	r.collected = append(r.collected, handle)
 	if r.CollectErr != nil {
 		r.mu.Unlock()
 		return Result{}, r.CollectErr

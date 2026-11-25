@@ -838,7 +838,8 @@ func worstRow(t *testing.T) PendingRun {
 		SignInID: uuid.NewString(), Entry: plain(executorkeep.EntryMaxBytes), FollowUp: FollowUpReason(plain(32)),
 		Brief: BriefKind(plain(32)), NotContinued: worstVerdict(),
 		BriefOmitted: omitted, FreshOmitted: omitted, BriefLateOmitted: lateOmitted, FreshLateOmitted: lateOmitted,
-		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), Minted: plain(128),
+		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), BridgeConnected: true,
+		Minted:      plain(128),
 		ResumeCarry: ResumeCarry(plain(32)), Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt,
 		CollectFailingSince: worstAt,
 		ResumeFailures:      math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,
@@ -1150,8 +1151,9 @@ func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 func worstSummary(t *testing.T) *SummaryStamp {
 	t.Helper()
 	markup := func(n int) string { return strings.Repeat("<", n) }
-	stamp := &SummaryStamp{LaunchSeq: math.MaxInt64, Object: objstore.KeyAt(worstAt).String(),
-		ObjectHash: strings.Repeat("f", 64), ObjectSize: executorkeep.SummarySealedMaxBytes,
+	stamp := &SummaryStamp{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64,
+		Object: objstore.KeyAt(worstAt).String(), ObjectHash: strings.Repeat("f", 64),
+		ObjectSize: executorkeep.SummarySealedMaxBytes,
 		ContentKey: markup(secrets.MaxStreamKeyIDBytes), At: worstAt, Bytes: math.MaxInt64,
 		Kept: executorkeep.SummaryMaxBytes, Cut: true, Harness: markup(executorkeep.HarnessMaxBytes),
 		Session: markup(executorkeep.SessionIDMaxBytes), Digest: markup(64)}

@@ -1340,7 +1340,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// request the other only mentions.
 		result.DeliveredRefs = deliveredRefs(findings, result.Text)
 		result.Text = findings
-		if !crashed && ended {
+		// A RUN ITS GUARD STOPPED stays failed whatever it reported
+		// ([sandbox.Result.Unbridged]).
+		if !crashed && ended && !result.Unbridged {
 			result.Success = true
 			result.Error = ""
 		}
@@ -1360,6 +1362,14 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		said = append(said, result.Error)
 	}
 
+	// A RUN ITS HARNESS ENDED WITHOUT CONNECTING ITS BRIDGE had none of its
+	// seat's tools, so what it reported is no result ([bridgeUnconnected]); its
+	// failure says so first. Not for a run ended on request or never ended,
+	// whose own sentence says more of why nothing was listed.
+	unbridged := handle.BridgeUnconnected && ended && result.JobEnd == ""
+	if unbridged {
+		result.Success = false
+	}
 	if len(refused) > 0 {
 		// A PIECE THAT COULD NOT BE READ IS A RUN THAT DID NOT FULLY REPORT,
 		// so it does not read as a success whatever else it said — and the
@@ -1373,6 +1383,11 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	if result.JobEnd != "" {
 		result.Success = false
 		sentences = append(sentences, endedSentence(result.JobEnd, code))
+	}
+	if unbridged && handle.BridgeHolderChanged {
+		sentences = append(sentences, bridgeHolderLost)
+	} else if unbridged {
+		sentences = append(sentences, bridgeUnconnected)
 	}
 	sentences = append(append(sentences, refused...), said...)
 	var once secretsOnce
@@ -1391,6 +1406,27 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	result.Transcript = redact.Secrets(result.Transcript)
 	return result, nil
 }
+
+// bridgeUnconnected is a run's failure where its harness ended it without ever
+// listing the tools of the engine's own server, its bridge (internal/api/mcpbridge,
+// connected.go, measured eager on every runner): the likely causes, and where they
+// are told apart.
+const bridgeUnconnected = "the run's harness never connected its Crewlet bridge (it never listed the " +
+	"tools of Crewlet's own MCP server, `crewlet`), so the run had none of its seat's tools and what it " +
+	"reported is no result. Likely, a settings file in the box (its home's, the repository's, or a " +
+	"system-wide or managed one), a plugin or an extension switched that server off or put one of its own " +
+	"under its name; else the bridge did not answer the harness's startup in time. See Code Sandbox, " +
+	"\"The tool bridge\", in Crewlet's documentation"
+
+// bridgeHolderLost is bridgeUnconnected for a run collected for another node
+// than the one that launched it ([sandbox.RunHandle.BridgeHolderChanged]): the
+// node that saw its harness list may be gone with what it saw, so the failure
+// says what is known, never that the harness did not connect.
+const bridgeHolderLost = "the node that served the run's bridge was lost before it recorded the connection: " +
+	"the run's seat moved to another node after its launch, and the run's record holds no word that its " +
+	"harness connected its Crewlet bridge (listed the tools of Crewlet's own MCP server, `crewlet`), so " +
+	"whether the run had its seat's tools is unknown and what it reported is no result. See Code Sandbox, " +
+	"\"The tool bridge\", in Crewlet's documentation"
 
 // harnessNoResult is a run's failure where its harness exited without saying
 // how its run ended and its decoder gave no reason of its own.

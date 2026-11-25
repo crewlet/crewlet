@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -132,7 +133,10 @@ func codingCallHeld(ctx context.Context, args codingArgs, hooks codingHooks, thr
 	id := claudeID("toolu_")
 	input := map[string]any{"id": "7"}
 	stream.toolUse(id, heldToolName, input)
-	out, failed := callOverBridge(ctx, tracker, id, heldToolName, input)
+	out, failed, err := callOverBridge(ctx, hooks, thread, tracker, heldServer, id, heldToolName, input)
+	if err != nil {
+		return err
+	}
 	stream.toolResult(id, out, failed)
 	if !failed || !strings.Contains(out, "was NOT called") {
 		return fmt.Errorf("a call to a tool at Needs approval answered %q (failed %v), want it held", out, failed)
@@ -147,10 +151,16 @@ func codingCallHeld(ctx context.Context, args codingArgs, hooks codingHooks, thr
 		return fmt.Errorf("connecting to the bridge at %s: %w", bridge, err)
 	}
 	defer func() { _ = session.Close() }()
+	if err := listBridge(ctx, session); err != nil {
+		return err
+	}
 	id = claudeID("toolu_")
 	submission := map[string]any{"outcome": "delivered", "summary": "Closed before the answer."}
 	stream.toolUse(id, runner.SubmitWorkTool, submission)
-	out, failed = callOverBridge(ctx, session, id, runner.SubmitWorkTool, submission)
+	if out, failed, err = callOverBridge(ctx, hooks, thread, session, config.ToolServerName, id,
+		runner.SubmitWorkTool, submission); err != nil {
+		return err
+	}
 	stream.toolResult(id, out, failed)
 	if !failed || !strings.Contains(out, "parked on their answer") {
 		return fmt.Errorf("a submission after the held call answered %q (failed %v), want it refused as parked",

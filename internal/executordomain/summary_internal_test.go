@@ -14,7 +14,8 @@ import (
 func summaryFor(turn string) *executorkeep.Summary {
 	return &executorkeep.Summary{Object: objstore.Object{Key: keyAt(monday.Add(time.Second)),
 		Hash: objstore.HashOf([]byte("summary/" + turn)), Size: 300}, ContentKey: "k1", At: monday,
-		Bytes: 256, Kept: 200, Cut: true, Harness: "claude-code", Session: "s-" + turn}
+		Bytes: 256, Kept: 200, Cut: true, Harness: "claude-code", Session: "s-" + turn,
+		Place: executorkeep.CapturePlace{LaunchSeq: 2, CaptureSeq: 3}}
 }
 
 // endingWithSummary is turn's end naming its summary.
@@ -38,15 +39,17 @@ func (e *estate) summaryRows(seat, turn string) int {
 }
 
 // A SUMMARY GOES WITH ITS ROW, AND ONLY WITH IT. An end naming a summary
-// writes it beside the turn's row, which reads it back as the end named it;
+// writes it beside the turn's row, which reads it back as the end named it,
+// its place among the turn's captures included;
 // a retirement and the seat's budget, which take the row's session off, keep
 // it, since it is what a run that cannot continue the session starts from and
 // the budget counts none; and an absorption, a dedupe, the retention and the
 // seat's removal each take it with the row, so no summary outlives its row and
 // keeps its object from the collector.
 //
-// Mutation: release the summary in retireSpent or the budget's release, or
-// drop it from any delete of the row, and its case goes red.
+// Mutation: release the summary in retireSpent or the budget's release, drop
+// it from any delete of the row, or write it at no place, and its case goes
+// red.
 func TestASummaryGoesWithItsRow(t *testing.T) {
 	t.Parallel()
 	t.Run("an end names it", func(t *testing.T) {
@@ -60,7 +63,7 @@ func TestASummaryGoesWithItsRow(t *testing.T) {
 		want := end.Ending.Summary
 		if got := s.Summary; got == nil || got.Object != want.Object || got.ContentKey != want.ContentKey ||
 			!got.At.Equal(want.At) || got.Bytes != want.Bytes || got.Kept != want.Kept || got.Cut != want.Cut ||
-			got.Harness != want.Harness || got.Session != want.Session {
+			got.Harness != want.Harness || got.Session != want.Session || got.Place != want.Place {
 			t.Fatalf("the ended row keeps the summary %+v, want the one its end named, %+v", got, want)
 		}
 	})
