@@ -632,10 +632,10 @@ func annotationsFor(name string) tools.Annotations {
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.No,
 		}
-	case SaveHomeBoardTool:
+	case SaveHomeBoardTool, SaveInstructionsTool:
 		// A PERSON'S OWN STATE, so OpenWorld is No. Destructive: it replaces
-		// the board whole, and what it drops is gone. Not idempotent: a repeat
-		// is refused, its revision having moved.
+		// the record whole, and what it drops is gone. Not idempotent: a
+		// repeat is refused, its revision having moved.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes,
 			Idempotent: mcp.No, OpenWorld: mcp.No,

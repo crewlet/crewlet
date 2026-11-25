@@ -3,6 +3,7 @@ package appstoreconnect_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -75,7 +76,7 @@ func TestAnAgentWithNoKeyHoldsNone(t *testing.T) {
 	company := reachCompany("6763222842")
 	want := seataccess.Desired{Enabled: true, Level: "read", Scope: []string{"6763222842"}}
 	id := seataccess.IdentityOf(v, company, seataccess.SeatRef{Handle: "growth", Name: "Growth"},
-		seataccess.LaneAppStoreConnect, want, seataccess.Observed{}, nil)
+		seataccess.LaneAppStoreConnect, want, seataccess.Observed{}, nil, time.Now())
 	if id == nil || id.Holds != seataccess.HoldsNone || !id.SetUp || id.UseCompany {
 		t.Fatalf("a keyless agent's identity answers %+v", id)
 	}

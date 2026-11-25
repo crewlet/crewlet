@@ -43,6 +43,13 @@ type SeatAccess struct {
 	// the admin sign-in: exactly where [Identity.Admin] is set, which each
 	// product's suite holds.
 	Adds bool
+	// List lists every entry a token reaches at the product, which the
+	// picker offers as the company's reader sees them; nil where the product
+	// has no listing.
+	List func(ctx context.Context, in Lister) ([]Listed, error)
+	// Typed is the shape of an entry a person may type (the company
+	// document's own rule, from internal/config).
+	Typed string
 	// HTTP is the transport Google is reached through; nil in production.
 	HTTP *http.Client
 }
@@ -81,10 +88,10 @@ func (v SeatAccess) IdentityGuide(c *config.Company, seat seataccess.SeatRef, _ 
 // for c's seat handle, "" where the Google Cloud connection names no identity
 // project.
 func IdentityEmail(c *config.Company, handle string) string {
-	if c == nil || c.Integrations.GoogleCloud == nil || c.Integrations.GoogleCloud.Provisioning == nil {
+	if c == nil {
 		return ""
 	}
-	project, ok := config.GoogleCloudServiceAccount(c.Integrations.GoogleCloud.Provisioning.Provisioner)
+	project, ok := c.Integrations.GoogleCloud.Identity()
 	if !ok {
 		return ""
 	}
@@ -138,10 +145,10 @@ type seatSession struct {
 	now     func() time.Time
 }
 
-// Options is the levels; the scope is the document's ([SeatAccess.Reach]),
-// which [seataccess.ReadOptions] applies.
-func (s *seatSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
-	return seataccess.Options{Lane: lane, Levels: s.access.Levels()}, nil
+// Options is the levels and what the company's reader lists; the reach is
+// the document's ([SeatAccess.Reach]), which [seataccess.ReadOptions] applies.
+func (s *seatSession) Options(ctx context.Context, lane seataccess.Lane) (seataccess.Options, error) {
+	return s.access.options(ctx, lane, s.company, s.tokens, s.send), nil
 }
 
 // Observe is each seat's setting in the document, its account the growth
@@ -244,6 +251,9 @@ func (s *seatSession) add(ctx context.Context, in seataccess.IdentityInput) erro
 		return &seataccess.Refusal{Said: why, Remedy: "Or add it by hand with the steps shown",
 			Actor: seataccess.ByYou}
 	}
+	if manual := s.access.Identity().need(in.Want).Manual; manual != "" {
+		return &seataccess.Refusal{Said: manual, Remedy: "Add it by hand with the steps shown", Actor: seataccess.ByYou}
+	}
 	call, err := s.adminCall(ctx, in, true)
 	if errors.Is(err, ErrNoAdmin) {
 		return &seataccess.Refusal{Said: "Nobody has signed in as " + admin.Who + " yet",
@@ -279,9 +289,10 @@ func (s *seatSession) adminCall(ctx context.Context, in seataccess.IdentityInput
 	case err != nil:
 		return AdminCall{}, fmt.Errorf("googlegrowth: %s's admin sign-in: %w", s.access.Name, err)
 	}
-	call := AdminCall{Company: s.company, Scope: in.Want.Scope, Need: id.Needs(levelOf(in.Want)), Token: token,
+	call := AdminCall{Company: s.company, Scope: in.Want.Scope, Need: id.need(in.Want), Token: token,
 		Send: s.send}
-	seat, email, err := s.tokens.SeatToken(ctx, s.access.Product, in.Seat.Handle, id.Scopes)
+	seat, err := s.tokens.SeatToken(ctx, s.access.Product, in.Seat.Handle, id.Scopes)
+	email := seat.Account
 	call.Email = email
 	switch {
 	case email == "" || (err != nil && reach):
@@ -290,8 +301,8 @@ func (s *seatSession) adminCall(ctx context.Context, in seataccess.IdentityInput
 	case !reach:
 		return call, nil
 	}
-	if call.Reached, err = id.Reach(ctx, Probe{Company: s.company, Email: email, Scope: in.Want.Scope, Token: seat,
-		Send: s.send}); err != nil {
+	if call.Reached, err = id.Reach(ctx, Probe{Company: s.company, Email: email, Scope: in.Want.Scope,
+		Token: seat.Token, Send: s.send}); err != nil {
 		return AdminCall{}, fmt.Errorf("googlegrowth: read what %s reaches: %w", email, err)
 	}
 	return call, nil

@@ -133,9 +133,11 @@ type Plan struct {
 	// refused sign-in, or a harness that could not be started
 	// ([Provider.remember]). A limit is the sit-out's, not this.
 	lastFailure *Failure
-	// limits are the vendor's windows as the sign-in's calls last reported
-	// them, by [llm.LimitReading.Key] ([Plan.Observe]).
+	// limits are the vendor's windows as the sign-in's calls and plan reads
+	// last reported them, by [llm.LimitReading.Key] ([Plan.Observe]).
 	limits map[string]Limit
+	// readWanted is when a call last opened a window ([Plan.ReadWanted]).
+	readWanted time.Time
 }
 
 func newPlan() *Plan { return &Plan{scoped: map[string]*bench{}, limits: map[string]Limit{}} }
@@ -145,20 +147,30 @@ type Limit struct {
 	llm.LimitReading
 	// Seen is when the run that reported it was read.
 	Seen time.Time
+	// Read is a reading from a plan read ([Provider.ReadPlan]), dated when it
+	// was made: the only kind that may end a sit-out ([Plan.reckon]).
+	Read bool
 }
 
-// Observe keeps what a run read at `at` reported of the sign-in's windows: a
-// window's reading replaces an older one, never a newer, so a run collected
-// late does not undo what a later call heard.
-func (pl *Plan) Observe(readings []llm.LimitReading, at time.Time) {
+// Observe keeps what a run or a plan read at `at` reported of the sign-in's
+// windows, and decides the plan-wide window by it ([Plan.reckon]): a window's
+// reading replaces an older one, never a newer, so a run collected late does
+// not undo what a later call heard.
+func (pl *Plan) Observe(readings []llm.LimitReading, at time.Time) { pl.observe(readings, at, false) }
+
+// observe is [Plan.Observe], read marking a plan read's readings.
+func (pl *Plan) observe(readings []llm.LimitReading, at time.Time, read bool) {
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
+	var newer []llm.LimitReading
 	for _, r := range readings {
-		if held, ok := pl.limits[r.Key()]; ok && held.Seen.After(at) {
+		if held, ok := pl.limits[r.Key()]; ok && !at.After(held.Seen) {
 			continue
 		}
-		pl.limits[r.Key()] = Limit{LimitReading: r, Seen: at.UTC()}
+		pl.limits[r.Key()] = Limit{LimitReading: r, Seen: at.UTC(), Read: read}
+		newer = append(newer, r)
 	}
+	pl.reckon(newer, onTheWall(at), read)
 }
 
 // MaxSaid bounds the vendor's sentence a [Failure] or a [SitOut] carries. The

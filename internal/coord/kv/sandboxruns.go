@@ -49,6 +49,17 @@ func (f *FleetStore) SandboxRun(ctx context.Context, turnID string) (coord.Recor
 // at the broker. Parts are swept off the marker pass ([FleetStore.sweepRunParts]).
 const runRecordKeys = "*"
 
+// runPartClasses is a class for each part a run's record may have beside it
+// ([runPartKey]), held to a run's value: any turn's part under its name.
+func runPartClasses() []keyClass {
+	var out []keyClass
+	for _, part := range coord.RunParts() {
+		out = append(out, keyClass{keys: "*" + coord.KeySeparator + coord.DocumentKey(string(part)),
+			class: runValue})
+	}
+	return out
+}
+
 // runPartKey is the key of part beside turnID's run.
 func runPartKey(turnID string, part coord.RunPart) string {
 	return coord.DocumentKey(turnID, string(part))

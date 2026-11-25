@@ -40,7 +40,7 @@ nineteen in full.
 |------|-------------|
 | `list_work_items` | The board, filtered — what you are assigned, what is open in a project, whether something was already filed |
 | `get_work_item` | One item's description, thread, history and links, by key or id |
-| `create_work_item` | File one. `project` defaults to the seat's own unit's, and is required when the unit owns none. `status` says where it starts (default `todo`). With no `assignee` it goes to the project's default assignee, else to triage for the lead, and the answer's `assignee` says which. `ask` (with an optional `decision`) files it as a question to that person, in one record |
+| `create_work_item` | File one. `project` defaults to the seat's own unit's, and is required when the unit owns none. `status` says where it starts (default `todo`). With no `assignee` it goes to the project's default assignee, else to triage for the lead, and the answer's `assignee` says which. Work filed for yourself wakes nobody, the lead included. `ask` (with an optional `decision`) files it as a question to that person, in one record: the way to reach the lead when the work waits on their decision |
 | `update_work_item` | Move it — status, assignee (with an optional `reason` the new assignee reads), priority, labels, links, one checklist change — with an optional `if_match` that refuses on a concurrent edit |
 | `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once. `ask` puts a question to somebody and `decision` structures it as options; `answers` with `choice` answers one |
 | `request_access` | Ask a person for one more kind of access from a closed list, or for one permission at an integration beside the agent's level (a Cloudflare permission group, for some hours or for good), as a decision on the work item that needs it; the person previews the exact change and applies it, or declines. |
@@ -161,10 +161,12 @@ any Atlas holder's ask that one integration be read for the atlas now rather
 than on its next scheduled read, which the engine honours within a minute and
 refuses for a source read less than five minutes ago
 ([Sources](atlas.md#sources-and-refresh-now)).
-And one more is a person's own arrangement: `save_home_board`, their Home board
+And two more are a person's own: `save_home_board`, their Home board
 on the dashboard, kept under the seat they hold so it follows them to every
 browser, and refused `stale_version` when it was saved again after they read
-it ([Saving your Home board](../reference/api-endpoints.md#saving-your-home-board)).
+it ([Saving your Home board](../reference/api-endpoints.md#saving-your-home-board)),
+and `save_assistant_instructions`, how Ask Crewlet writes to them, kept beside it
+([Saving your Ask Crewlet instructions](../reference/api-endpoints.md#saving-your-ask-crewlet-instructions)).
 Eleven more change the company's atlas, each a claim in the person's own name
 and none an agent's: `atlas_add_entry`, `atlas_correct`, `atlas_confirm`,
 `atlas_relate`, `atlas_unrelate`, `atlas_set_owner`, `atlas_retire`,
@@ -1803,6 +1805,21 @@ Set it back to `true`, or remove the key (on is the default), and the next apply
 starts it with the credentials its seats kept. Removing a server instead takes
 every block that names it: see [Removing a server](#removing-a-server).
 
+### A browser on the engine host
+
+A stdio server that launches Playwright MCP (the `@playwright/mcp` package, its
+`playwright-mcp` command or its `mcr.microsoft.com/playwright/mcp` image) runs a
+web browser on the engine host, outside every box, for every seat and phase
+that reaches it: a page's words reach a model holding the seat's tools, beside
+the engine's own keys. `crewlet validate` and a `/config` write advise each
+such enabled server, at the command or argument that names Playwright MCP, as
+*A browser on the engine host*, and every node logs it as a
+[`config_advisory`](../concepts/configuration.md#what-an-applied-company-is-worth-knowing).
+A seat that needs a browser gets one in its own container box with
+`role.sandbox.browser: true` instead
+([A seat's browser](../concepts/code-sandbox.md#a-seats-browser)): keep such a
+server only where a browser on the engine host is what you mean.
+
 ### Removing a server
 
 Beyond its own entry, a server is named from three places: every seat's and
@@ -1850,6 +1867,12 @@ tools, with the description beside each name:
 - MCP server `handbook`: Searches the engineering handbook and the runbooks
 ```
 
+A server the executor's box runs itself
+([`role.sandbox.mcp.servers`](../concepts/code-sandbox.md#mcp-inside-the-sandbox))
+is reached past the bridge, so the run's
+[standing instructions](../concepts/code-sandbox.md#what-a-harness-is-told)
+give its description beside its name, under `## Your environment`.
+
 A name like `internal` says nothing about what is behind it; the description
 tells an agent which server to look in before it spends a call listing one.
 Editing it reaches the next turn and restarts nothing. It is also on the
@@ -1863,7 +1886,7 @@ write that breaks one is refused at the field, saying what to write instead:
 
 | Field | Rule | Why |
 |---|---|---|
-| `name` | Lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 32 characters; not `crewlet` or `container` | It is the origin of every tool the server serves (`mcp:<name>`), the key seats declare its credentials under, a route segment, and, for a server an executor's box runs, the middle of every tool name the harness hands its model (`mcp__<name>__<tool>`). `crewlet` is the seat's own tools' name; `container` is Claude Code's for its own container's tools, whose results it clears from a long session |
+| `name` | Lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 32 characters; not `crewlet`, `container` or `browser` | It is the origin of every tool the server serves (`mcp:<name>`), the key seats declare its credentials under, a route segment, and, for a server an executor's box runs, the middle of every tool name the harness hands its model (`mcp__<name>__<tool>`). `crewlet` is the seat's own tools' name; `container` is Claude Code's for its own container's tools, whose results it clears from a long session; `browser` is a browser seat's [own browser](../concepts/code-sandbox.md#a-seats-browser) in its box, which takes the place of a server of that name there |
 | `tool_prefix` | Letters, digits, `_` and `-`, at most 49 characters | Put before every tool the server serves; a tool's whole name is at most 50 characters ([below](#a-tools-name)) |
 | A key of an http server's `headers`, of a seat's or a unit's `mcp_env` block for it, or of its `seat_credentials` | An HTTP header name (RFC 9110's token): letters, digits and `-`, no space, colon or quote | The value is sent as a request header |
 | A key of a stdio server's `env`, of a block for it, or of its `seat_credentials` | An environment variable name: letters, digits and `_`, not starting with a digit | The value is an environment variable of the server's process |
@@ -1880,9 +1903,13 @@ breaks it is not started, fails on its row with the reason (the address is
 never quoted, since a resolved one can carry a secret), and no executor's box
 is given it.
 
-These are admission rules: a revision stored before them still applies, and
+A name's characters and length, the prefix, the keys, the address and the name
+`browser` are admission rules: a revision stored before them still applies, and
 `crewlet validate` and the warnings on a config read name each one, at the path
-a write keeping it is refused at.
+a write keeping it is refused at. The names `crewlet` and `container` are
+refused at apply too, like every
+[runnable rule](../concepts/configuration.md#what-a-stored-revision-is-held-to):
+nothing applies a revision with a server under either.
 
 #### A tool's name
 
@@ -2227,13 +2254,13 @@ mcp_servers:
 |---|---|
 | `cimd` | The engine's published client metadata document: its client id is the address `/webhooks/mcp-oauth/client-metadata.json` on your engine's public address. Nothing is registered or kept. Needs `api.external_url` on https |
 | `dcr` | The engine registers a client at the vendor when the sign-in starts (dynamic registration) and keeps what it is issued with the grant |
-| `own` | A client you registered at the vendor beforehand: its `client_id`, and its `client_secret` (a `${VAR}`) where it has one |
+| `own` | A client you registered at the vendor beforehand: its `client_id`, and its `client_secret` (a `${VAR}`) where it has one. Its redirect URI is the Servers answer's `callback_url`; when the engine's public address moves, add the new one to the client, which the [redirect notice](advisor.md#platform-notices) asks for |
 
-`scopes` lists what to ask for, at most 50, each at most 256 bytes; absent, the engine asks for the ones the server lists. A `client_id` is at most 2,048 bytes. Those are what the grant the sign-in makes can keep, so a sign-in whose authorization server gives a longer client id, issuer, resource or scope to ask for is refused before anybody is sent to consent, naming the server and the field; a scope the vendor grants unasked past 256 bytes is left out of the grant and logged as `oauth_scope_not_recorded`. `oauth` is refused on a per-agent server (`shared: false`), a local server, beside an `Authorization` header (the sign-in sends it), and in a seat's `sandbox.mcp.servers`: a box is handed a server's values once, at launch, and an access token runs out within the hour, so a box uses the bridge instead.
+`scopes` lists what to ask for, at most 50, each at most 256 bytes; absent, the engine asks for the ones the server lists. A `client_id` is at most 2,048 bytes, and so is the engine's callback. Those are what the grant the sign-in makes can keep, so a sign-in whose authorization server gives a longer client id, issuer, resource or scope to ask for, or whose callback is longer, is refused before anybody is sent to consent, naming the server and the field; a scope the vendor grants unasked past 256 bytes is left out of the grant and logged as `oauth_scope_not_recorded`. `oauth` is refused on a per-agent server (`shared: false`), a local server, beside an `Authorization` header (the sign-in sends it), and in a seat's `sandbox.mcp.servers`: a box is handed a server's values once, at launch, and an access token runs out within the hour, so a box uses the bridge instead.
 
 **Signing in.** Until somebody signs in, the server is not started and its state is `needs_sign_in`. **Sign in** on the Connection tab's **Sign-in** card, or on the `mcp_oauth_needs_sign_in` alarm (Settings › MCP & tools and the Inbox) ([`POST /mcp-servers/{name}/oauth`](../reference/api-endpoints.md#post-mcp-serversnameoauth)) takes an administrator who stepped up recently, never Ask Crewlet. It opens the vendor's consent page in a new tab (a blocked tab is offered as a link) and waits until the engine says the sign-in is approved or why it failed. The engine refuses an authorization server that does not offer PKCE with S256. On approval the vendor redirects the browser to `/webhooks/mcp-oauth` on your engine's public address, the engine exchanges the code, keeps the grant, and every node starts the server. A vendor that only redirects to allowlisted addresses (Atlassian, for one) is given the two addresses the Servers answer names: `callback_url` and `client_metadata_url`.
 
-**What is kept, and where.** The refresh token, and the client a registration issued, are sealed in the company's secret store under an engine-owned name that no `${VAR}` reaches and no person can list, reveal or delete through Settings, Secrets. Who signed in and when, the authorization server, the scopes and the grant's expiry show on the **Sign-in** card, never a token. The access token is kept in each node's memory alone, never stored, logged or answered; each node renews its own as it runs out, one node at a time across the fleet, so a vendor that retires a refresh token at every renewal never sees a retired one. A server that refuses a token is sent one renewed token once; its refusal then stands. A grant is sent only to the address it was issued for: change the server's `url` and the server waits for a sign-in there.
+**What is kept, and where.** The refresh token, and the client a registration issued, are sealed in the company's secret store under an engine-owned name that no `${VAR}` reaches and no person can list, reveal or delete through Settings, Secrets. Who signed in and when, the authorization server, the scopes and the grant's expiry show on the **Sign-in** card, never a token. The grant also records the redirect URI the sign-in came back through. The access token is kept in each node's memory alone, never stored, logged or answered; each node renews its own as it runs out, one node at a time across the fleet, so a vendor that retires a refresh token at every renewal never sees a retired one. A server that refuses a token is sent one renewed token once; its refusal then stands. A grant is sent only to the address it was issued for: change the server's `url` and the server waits for a sign-in there.
 
 **When a sign-in stops working.** A vendor that refuses a renewal for good (grant revoked, or the person's access ended) is asked no more: the server is stopped, its state is `needs_sign_in`, and the alarm `mcp_oauth_needs_sign_in` quotes the vendor's words. A grant whose vendor states its expiry raises `mcp_oauth_expiring` seven days before. Either way, signing in again replaces the grant, and the agents keep the server.
 

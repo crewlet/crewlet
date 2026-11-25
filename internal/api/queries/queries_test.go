@@ -260,7 +260,8 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"token_series": "everybody", "seat_activity": "everybody", "turn_outcomes": "everybody",
 		"viewer": "everybody", "schedule_runs": "everybody",
 		// THE ASKER'S OWN HOME BOARD, read under their seat and nobody else's.
-		"home_board": "everybody",
+		"home_board":             "everybody",
+		"assistant_instructions": "everybody",
 		// WHAT A PAGE'S LINES NAME: each reference is decided by the
 		// question its own page asks, so the ask itself grants nothing.
 		"references": "everybody",

@@ -969,7 +969,9 @@ against the engine's memory. Size a node running
 and one run per seat at work, builds included (see
 [Replica count](#replica-count)). A `container` box can be bounded
 with `run_args: ["--memory", "4g"]`; one that outgrows it is
-killed inside its container and nowhere else.
+killed inside its container and nowhere else. A browser seat's box holds
+its browser beside the harness, 300 to 600 MiB as measured
+([What the box must carry](../concepts/code-sandbox.md#what-the-box-must-carry)).
 
 When memory runs out, the kernel kills the highest-score process, and on Linux every process a box runs ranks above the engine: the
 engine's own `oom_score_adj` plus 1000, held to the kernel's ceiling of 1000
@@ -1849,8 +1851,8 @@ its home raises [`code_maintenance_refused`](../reference/alarms.md), its
 Every figure above is of the memory the executor's pools, the answers in flight, the store's
 [page cache](#the-page-cache) and the read lane leave: a Gitlet node keeps them first and sizes
 Gitlet by what is left
-([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 97 MiB for the
-transcript reads its API answers and 1 805 MiB where it runs seats too, 284 MiB for the answers in flight, a
+([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 107 MiB for the
+transcript reads its API answers and 1 834 MiB where it runs seats too, 284 MiB for the answers in flight, a
 sixteenth of its memory for the page cache and 128 MiB a core for git's reads, so give it that much more. They are the executor's in-process pools alone: a node
 running seats also holds its harness calls and boxes
 ([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's pools
@@ -2541,7 +2543,7 @@ behind a gate that reads the room left *before* it starts:
   collected, and they reach the seat's counter and the company's in the windows
   of collection. A launch that takes a counter past its cap is logged as
   `sandbox_spend_over_budget`. Its gate is
-  `turn_engine.executor_min_budget_tokens` (default 25 000), with the launch's
+  `turn_engine.executor_min_budget_tokens` (default 65 000), with the launch's
   brief counted beside it: every launch, a turn's first and each relaunch, is
   refused while a capped window of the seat or company has less than that left,
   and the seat [parks](../concepts/agent-runtime.md#the-budget-park) until the

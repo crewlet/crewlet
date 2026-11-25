@@ -128,7 +128,8 @@ func (s *accessSession) DropIdentity(_ context.Context, in seataccess.IdentityIn
 // Options are the three levels and every app of the connected teams the
 // agents' keys listed, by name with its bundle ID, for the chooser.
 func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
-	out := seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane)}
+	out := seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane),
+		ScopeTyped: config.AppStoreConnectAppPattern}
 	for _, a := range s.reach.Apps() {
 		out.Scope = append(out.Scope, a.ID)
 		if a.Name != "" {

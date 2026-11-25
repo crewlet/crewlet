@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -858,20 +859,39 @@ func steerEntry(t *testing.T) string {
 	return filepath.Join(steerPluginOf(t, cfgPath).Package, "index.js")
 }
 
-// openCodePlugin is a run configuration's plugin entry.
+// openCodePlugin is a run configuration's plugin entry: a plugin it names, or
+// the removal of one of OpenCode's own (`-<id>`), whose id Removes holds.
 type openCodePlugin struct {
 	Package string `json:"package"`
 	Options struct {
 		URL string `json:"url"`
 	} `json:"options"`
+	Removes string `json:"-"`
 }
 
-// runPlugins is plugins without the tool-environment plugin every run's
-// configuration names last ([Paths.OpenCodeToolEnvPlugin]), which its own
-// cases hold (opencode_toolenv_test.go).
+// UnmarshalJSON reads an entry of either shape, and refuses a string that
+// removes nothing.
+func (p *openCodePlugin) UnmarshalJSON(raw []byte) error {
+	var removal string
+	if json.Unmarshal(raw, &removal) == nil {
+		id, ok := strings.CutPrefix(removal, "-")
+		if !ok || id == "" {
+			return fmt.Errorf("the plugin entry %q names no plugin of OpenCode's own to remove", removal)
+		}
+		p.Removes = id
+		return nil
+	}
+	type entry openCodePlugin
+	return json.Unmarshal(raw, (*entry)(p))
+}
+
+// runPlugins is plugins without the removals of OpenCode's own plugins and the
+// tool-environment plugin every run's configuration names last
+// ([Paths.OpenCodeToolEnvPlugin]), which their own cases hold
+// (opencode_config_test.go, toolenv_test.go).
 func runPlugins(plugins []openCodePlugin) []openCodePlugin {
 	return slices.DeleteFunc(slices.Clone(plugins), func(p openCodePlugin) bool {
-		return path.Base(p.Package) == "opencode-tool-env"
+		return p.Removes != "" || path.Base(p.Package) == "opencode-tool-env"
 	})
 }
 

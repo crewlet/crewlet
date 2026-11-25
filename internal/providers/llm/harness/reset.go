@@ -83,7 +83,7 @@ const clockResetGrace = 5 * time.Minute
 // date and a time, each optionally followed by the zone it is in:
 //
 //	4:30pm (America/Vancouver)    4pm    16:30 (Asia/Tokyo)    4:31 PM
-//	Mon 9am (Europe/Berlin)       Nov 3rd, 2026 3:45 PM
+//	Mon 9am (Europe/Berlin)       Nov 3rd, 2026 3:45 PM    Nov 30 at 7am (UTC)
 //
 // A TIME ALONE is its NEXT occurrence: the first no more than [clockResetGrace]
 // before now, since a reset is always ahead of its report. "2am" at 11 pm is the
@@ -102,6 +102,8 @@ func clockReset(rest string, now time.Time, zone *time.Location) time.Time {
 	} else if m, d, y, after, ok := readDate(rest); ok {
 		month, day, year, rest = m, d, y, after
 	}
+	// "Nov 30 at 7am": Claude Code's weekly reset joins its day and time with "at".
+	rest = strings.TrimPrefix(strings.TrimLeft(rest, " "), "at ")
 	hour, minute, rest, ok := readTimeOfDay(rest)
 	if !ok {
 		return time.Time{}

@@ -26,12 +26,16 @@
 // # What it costs, measured
 //
 // There is no free handoff: every path back to the broker increments the
-// delivery count, absorbed by the delivery budget (maxDeliver).
-// Redeliveries return BEHIND never-delivered messages, so conversation order
-// comes from event timestamps, not the broker (queue.OrderForDispatch). A
-// CONSUMER'S COUNTERS DO NOT READ YOUR OWN WRITES (the server counts a message
-// after acking its publisher), so anything that must be synchronous with a
-// returned publish reads the STREAM's own state (Backlog).
+// delivery count, absorbed by the delivery budget (maxDeliver). Conversation
+// order is by event timestamp (queue.OrderForDispatch). A CONSUMER'S COUNTERS
+// DO NOT READ YOUR OWN WRITES (the server counts a message after acking its
+// publisher), so anything that must be synchronous with a returned publish
+// reads the STREAM's own state (Backlog).
+//
+// A FAILURE OR A PASS GOES BACK ONCE ITS LOOP HOLDS THE NEXT DELIVERY or heard
+// none waits ([attachment.sendSpaced]): sent sooner, its backoff races that
+// pull, and a due redelivery is served before new mail. A process dying first
+// leaves it to its ack window.
 //
 // # What a broker that does not answer looks like from above
 //
@@ -125,10 +129,9 @@
 // and byte bound together, and every request of a consumer is answered on ONE
 // standing inbox, so a delivery to a request the client stopped counting reaches
 // the next fetch rather than waiting out the ack window. pullrequest.go says why
-// not the library's Messages iterator, whose prefetch holds records in flight
-// whether or not an applier reads. The live feed's and a watch's pulls are the
-// library's standing Consume; a domain group's ([DomainLog.Group]) is a Messages
-// iterator.
+// not the library's Messages iterator. The live feed's and a watch's pulls are
+// the library's standing Consume; a domain group's ([DomainLog.Group]) is a
+// Messages iterator.
 //
 // # A linger window ends on a clock the conformance suite can move
 //
@@ -214,10 +217,9 @@
 //
 // Dead letters live in one stream, CREWLET_DLQ, which every subscription's
 // delivery budget writes to, kept by age (the event stream's
-// `stream.event_retention_hours`) and never by interest, so an entry stays until
-// it ages out whether or not anybody reads it. An entry's keeper header is one
-// message header ([letterHeader]), so a reader that needs only what is kept
-// skips the payload.
+// `stream.event_retention_hours`) whether or not anybody reads them. An entry's
+// keeper header is one message header ([letterHeader]), so a reader that needs
+// only what is kept skips the payload.
 //
 // Three reads, each the cheapest that is honest for its reader. A LISTING
 // ([Queue.DeadLettersOn]) is one ephemeral headers-only consumer filtered to the

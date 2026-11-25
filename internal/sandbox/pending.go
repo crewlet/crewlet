@@ -3316,6 +3316,11 @@ type BoxRef struct {
 	// attach ([LaunchRecord.Continued]). Nil where the launch handed none or one
 	// stating no point above zero.
 	Continued *ContinuedPoint
+
+	// Browser is a browser seat's browser as the launch readied it ([EnsureBrowser]),
+	// written onto the record by the same attach ([LaunchRecord.Browser]). Nil for a
+	// seat with none.
+	Browser *types.ExecutorBrowser
 }
 
 // PriorBox is the box a relaunch found on its run's row ([PendingRun.Prior]).
@@ -3497,6 +3502,13 @@ type LaunchRecord struct {
 	// FollowUp is why this job launched as a follow-up of the previous job in the
 	// round, where the collection acts on it ([FollowUpReason]); empty otherwise.
 	FollowUp FollowUpReason `json:"follow_up,omitempty"`
+
+	// TurnCap is the round cap the job's harness was handed ([Limits.MaxTurns]),
+	// 0 for none. THE ENGINE'S WORD, never the box's: its collection holds the
+	// requests the job's stream shows to it ([RunHandle.TurnCap]), so a cap the
+	// box could rewrite would bound nothing. Absent on a row an older build wrote,
+	// whose job is judged by its harness's cap alone.
+	TurnCap int `json:"turn_cap,omitempty"`
 
 	// Brief is which of three briefs the launch handed the job's run: continuing the
 	// turn's session in the box last worked in, continuing it in a replacement box, or
@@ -3777,6 +3789,13 @@ type LaunchRecord struct {
 	// zero, and an older build's record.
 	Continued *ContinuedPoint `json:"continued,omitempty"`
 
+	// Browser is a browser seat's browser as the job's launch readied it
+	// ([EnsureBrowser]): ready, or withheld and why. Written by the attach naming the
+	// command ([BoxRef.Browser]), never carried to the next job's record. Nil for a seat
+	// with none. CLOSED like [ContinuedPoint]: [types.ExecutorBrowser] has no Extra, so
+	// a later fact about the job's browser is a key of this record beside it.
+	Browser *types.ExecutorBrowser `json:"browser,omitempty"`
+
 	// Bridged is what this job's BRIDGED calls cost the engine (auxiliary calls the
 	// seat's tools made for the harness and its delegated workers) as the newest total the
 	// bridge wrote with its calls ([PendingStore.AppendBridgeCall]). The segment resuming
@@ -3951,11 +3970,15 @@ const (
 	// provider refused the request the job before it made in a session it continued.
 	// ONCE: refused again, it is collected and its round ends the turn.
 	FollowUpRequestRefused FollowUpReason = "request_refused"
+	// FollowUpLimitedBeforeWork is a job relaunched on the next executor member
+	// because the job before it met its model's usage limit before any work.
+	// ONCE: limited again, it is collected.
+	FollowUpLimitedBeforeWork FollowUpReason = "limited_before_work"
 )
 
 // Valid reports whether the reason is one this build names.
 func (r FollowUpReason) Valid() bool {
-	return r == FollowUpSignInReplaced || r == FollowUpRequestRefused
+	return r == FollowUpSignInReplaced || r == FollowUpRequestRefused || r == FollowUpLimitedBeforeWork
 }
 
 // AuxTokens is what calls to a seat's AUXILIARY model cost, split as every engine
@@ -4024,6 +4047,6 @@ func (r PendingRun) Held(now time.Time) bool {
 // Handle is the job this row holds now, as every read of its box is handed it:
 // command and session.
 func (r PendingRun) Handle() RunHandle {
-	return RunHandle{CommandID: r.CommandID, SessionID: r.SessionID,
+	return RunHandle{CommandID: r.CommandID, SessionID: r.SessionID, TurnCap: r.Launch.TurnCap,
 		BridgeUnconnected: !r.Launch.BridgeConnected}
 }

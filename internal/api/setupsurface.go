@@ -81,7 +81,7 @@ func NewSetupSurface(boot *config.Bootstrap, e *engine.Engine, configSurface *co
 		// AND THE CHECK A PERSON CAN MAKE BEFORE ANY OF THAT: one
 		// read-only identity call per vendor, with a credential typed and
 		// not yet stored.
-		Probes: engine.SetupProbes(),
+		Probes: engine.SetupProbes(), Drawers: engine.SetupDrawers(),
 		// WHICH SLACK APP EACH AGENT IS. Named nowhere in the company
 		// document, because the app is what issues the token; the
 		// running transport learned it from Slack when it wired the

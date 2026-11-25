@@ -69,12 +69,13 @@ func TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery(t *testing.T) {
 // inlinePath is every way this package runs a handler: from the verb a caller
 // hands it to, to the call that runs it, and the goroutine that call is made on.
 var inlinePath = []hop{
-	// Subscribe's handler: its consume loop hands it to dispatchOne in the take
-	// of each fetch and of a readmitted delivery's, and dispatchOne to
-	// runHandler, which calls it.
-	{from: "Queue.Subscribe", param: "h", carries: "Handler", to: "dispatchOne",
-		at: place{"Queue.Subscribe", []step{{calls: []string{"attach"}, once: true},
-			{calls: []string{"fetch", "fetchLane", "readmittedOne"}}}}},
+	// Subscribe's handler: its consume loop hands it to takeOne, one cycle,
+	// which hands it to dispatchOne in the take of each fetch and of a
+	// readmitted delivery's, and dispatchOne to runHandler, which calls it.
+	{from: "Queue.Subscribe", param: "h", carries: "Handler", to: "takeOne",
+		at: place{"Queue.Subscribe", []step{{calls: []string{"attach"}, once: true}}}},
+	{from: "attachment.takeOne", param: "h", carries: "Handler", to: "dispatchOne",
+		at: place{"attachment.takeOne", []step{{calls: []string{"fetch", "fetchLane", "readmittedOne"}}}}},
 	{from: "attachment.dispatchOne", param: "h", carries: "Handler", to: "runHandler",
 		at: place{decl: "attachment.dispatchOne"}},
 	{from: "runHandler", param: "h", carries: "Handler", at: place{decl: "runHandler"}},

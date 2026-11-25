@@ -24,8 +24,8 @@ import (
 // A seat's EXECUTOR reads the sit-out at launch ([Provider.SittingOut]): its run
 // is started in a box, not through [Provider.Complete], so the engine asks first
 // and takes the next member of the executor chain that can run in a box. A run
-// that meets the limit after it started is not relaunched (its work lives in its
-// box and session), but its ending is classified like any call's when collected
+// that meets the limit after it began working is not relaunched (its work lives
+// in its box and session; one that did no work is), but its ending is classified like any call's when collected
 // ([Provider.RunEnded]), so the NEXT launch, and every other seat's on this
 // node, skips the spent entry.
 
@@ -38,13 +38,11 @@ import (
 // the generic, unmeasured sentinels (Copilot's "rate limit", Cursor's "quota")
 // safe to bench on.
 
-// The bench is this provider's own, not shared with the fleet: every node learns
-// from its own calls, once per window. It ends at the reset instant the vendor
-// named ([harnessprofile.ResetReading]), never later than [maxLimitBench]; where
-// none was named it grows through [limitBackoff], one step per report that finds
-// the window already over, and restarts once the entry answers after the window.
-// Short at first on purpose: sitting out a plan that has already reset costs the
-// fallback's spend, or the seats' whole afternoon with no fallback.
+// The bench ends at the reset instant the vendor named ([harnessprofile.ResetReading]),
+// however far: the plan's status read ([Provider.ReadPlan]) brings it back sooner
+// when the plan resets, is raised or the sign-in changes, so no call is a probe.
+// Where none was named it grows through [limitBackoff], one step per report that
+// finds the window already over, and restarts once the entry answers after it.
 //
 // A WINDOW IS DATED BY ITS REPORT ([Provider.bench]), not the clock that reads
 // it: a run's ending is read on every collection of its job, and the same
@@ -80,10 +78,9 @@ const ShortestSitOut = time.Minute
 // on the wall clock. See the file's doc for why a window must be.
 func onTheWall(t time.Time) time.Time { return t.Round(0) }
 
-// maxLimitBench caps a reset instant the harness named: an hour, so an operator
-// who signs in again or raises the plan has the entry back within the hour
-// even when the vendor's window runs for days.
-const maxLimitBench = time.Hour
+// maxNamedReset is the furthest a named reset may lie from its report: a month,
+// the longest window a vendor names. One further is a misread and reads as none.
+const maxNamedReset = 31 * 24 * time.Hour
 
 // bench is one window a sign-in sits out and the report behind it, held in its
 // [Plan] and guarded by the plan's mutex.
@@ -119,8 +116,8 @@ type limitReport struct {
 }
 
 // bench sits the entry's sign-in out for a report: until reset (the vendor's
-// instant, or a step of [limitBackoff] when it named none), capped at
-// [maxLimitBench], and answers when the entry is tried again. A report whose
+// instant, or a step of [limitBackoff] when it named none), and answers when
+// the entry is tried again. A window it opens asks for a plan read. A report whose
 // window is one model's ([llm.LimitModel]) holds that model alone
 // ([Plan.scoped]); every other holds the whole sign-in.
 //
@@ -142,12 +139,20 @@ func (p *Provider) bench(report limitReport) time.Time {
 		}
 		b = plan.scoped[model]
 	}
-	return b.record(report)
+	before := b.until
+	until := b.record(report)
+	if until.After(before) && report.at.After(plan.readWanted) {
+		plan.readWanted = onTheWall(report.at)
+	}
+	return until
 }
 
 // record is [Provider.bench] on one window.
 func (b *bench) record(report limitReport) time.Time {
 	var until time.Time
+	if report.reset.Sub(report.at) > maxNamedReset {
+		report.reset = time.Time{}
+	}
 	if report.reset.IsZero() {
 		if report.at.Before(b.until) {
 			// Inside a window already in force: the same refusal, heard
@@ -158,7 +163,7 @@ func (b *bench) record(report limitReport) time.Time {
 		until = report.at.Add(limitBackoff[min(b.unnamed, len(limitBackoff)-1)])
 		b.unnamed++
 	} else {
-		until = report.at.Add(min(report.reset.Sub(report.at), maxLimitBench))
+		until = report.reset
 	}
 	if until.After(b.until) {
 		b.until, b.said, b.resetsAt, b.since = onTheWall(until), report.said,

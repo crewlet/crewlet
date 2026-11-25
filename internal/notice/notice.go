@@ -27,6 +27,16 @@
 // so each node publishes them on its status record (internal/growth's
 // Signals) and every node reads the fleet's: a skew closes once a later signed
 // request is accepted, and a deprecation a day after the vendor last said it.
+//
+// # The redirect a person registered
+//
+// A client a person registered at its vendor (a Google consent product's, an
+// MCP server's own) lists the redirect URIs a sign-in may come back to, and
+// only a person changes that list. Each grant records the redirect it came
+// back through, so [FromRedirects] reads one notice off the clients whose last
+// grant came back elsewhere than the answering node's callback now: an address
+// moved at a restart. It names each client and closes for it once it signs in
+// through the new address; a grant recorded without a redirect proves nothing.
 package notice
 
 import (
@@ -90,6 +100,9 @@ type Notice struct {
 	// Finding is the Advisor's finding whose fix ends the notice, nil where
 	// none stands: an alarm no finding carries, or a held conversation.
 	Finding *FindingRef `json:"finding"`
+	// Redirect is an [ClassOAuthRedirectMoved] notice's new URI and stale
+	// clients; nil on every other notice.
+	Redirect *RedirectMoved `json:"redirect,omitempty"`
 }
 
 // FindingRef names the finding a notice is ended by, as a row draws it.
@@ -321,10 +334,11 @@ func abs(n int) int {
 }
 
 // Read is every notice the advisor's findings, the fleet's alarms, the
-// engine's held conversations and what the growth products meet
-// ([FromCatalogs], [FromClockSkews]) raise at now.
-func Read(findings []advisor.Finding, fleet []NodeAlarms, held, vendors []Notice, now time.Time) []Notice {
-	return Merge(FromFindings(findings), FromAlarms(fleet, now), held, vendors)
+// engine's held conversations, what the growth products meet ([FromCatalogs],
+// [FromClockSkews]) and the OAuth clients a moved address left behind
+// ([FromRedirects]) raise at now.
+func Read(findings []advisor.Finding, fleet []NodeAlarms, held, vendors, redirects []Notice, now time.Time) []Notice {
+	return Merge(FromFindings(findings), FromAlarms(fleet, now), held, vendors, redirects)
 }
 
 // Merge is lists as one notice per class and subject: the earliest instant any

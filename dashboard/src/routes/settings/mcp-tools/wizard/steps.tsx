@@ -486,7 +486,7 @@ function IntegrationNote({ draft }: { draft: Draft }) {
       action={
         <a
           className="t-link"
-          href={href(["company", "integrations", entry.integration], { open: "agents" })}
+          href={href(["company", "integrations", entry.integration], { tab: "agents" })}
         >
           Open its Agents tab
         </a>
@@ -930,7 +930,7 @@ export function TestStep({
           action={
             <a
               className="t-link"
-              href={href(["company", "integrations", bound], { open: "agents" })}
+              href={href(["company", "integrations", bound], { tab: "agents" })}
             >
               Open its Agents tab
             </a>
@@ -975,7 +975,7 @@ export function AccessStep({ draft, set }: { draft: Draft; set: Set }) {
           entry?.integration && (
             <a
               className="t-link"
-              href={href(["company", "integrations", entry.integration], { open: "agents" })}
+              href={href(["company", "integrations", entry.integration], { tab: "agents" })}
             >
               Open its Agents tab
             </a>

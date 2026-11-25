@@ -990,6 +990,25 @@ describe("seat fields", () => {
     expect(section.innerHTML).not.toContain("__redacted__");
   });
 
+  // THE BROWSER STAYS THE DOCUMENT'S: the builder edits only the box's three
+  // numbers, so a block asking for nothing but a browser still has its row.
+  test("a seat whose box asks only for a browser shows it, and where it is edited", () => {
+    const doc = fixtureCompany();
+    Object.assign(doc.units![0]!.roles![1]!, { sandbox: { browser: true } });
+    edit(keyedState(doc), "seat:dev");
+    tab("Advanced");
+    const section = screen
+      .getByRole("heading", { name: "From the configuration document" })
+      .closest("section") as HTMLElement;
+    const box = within(section)
+      .getByText("Executor box setup")
+      .closest(".crewlet-fact-list__row") as HTMLElement;
+    expect(box.textContent).toContain("A browser");
+    expect(box.textContent).toContain(
+      "Its setup, environment, tool servers and browser are edited in the configuration file.",
+    );
+  });
+
   test("the advanced fields apply as one edit, each key the seat's own", () => {
     const doc = fixtureCompany();
     Object.assign(doc.units![0]!.roles![1]!, {
@@ -1809,6 +1828,8 @@ describe("a seat's model pickers offer the fleets, then the models", () => {
     overflow: false,
     last_served_at: null,
     serving: [],
+    unlisted_serving: 0,
+    unlisted_homes: 0,
   });
   const fleet = (key: string, name: string, members: FleetMember[], is_default = false): Fleet => ({
     key,
