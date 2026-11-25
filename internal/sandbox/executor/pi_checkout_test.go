@@ -24,7 +24,8 @@ import (
 // $HOME/clone-dst as a clone during a tool call would and plays that tool's
 // result to the extension twice, recording what each answer made of it
 // (nested-1, nested-2) and the --skill directories after them
-// (skills-late); where $HOME/break-home is, it makes the agent
+// (skills-late), its nested config removed first where $HOME/break-nested
+// is; where $HOME/break-home is, it makes the agent
 // directory's AGENTS.override.md a directory no put-back can write; and it
 // prints a finished answer.
 const piCheckoutStandIn = `import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
@@ -73,6 +74,7 @@ await fire("agent_start", {})
 await fire("turn_start", {})
 if (existsSync(join(home, "clone-src"))) {
   cpSync(readFileSync(join(home, "clone-src"), "utf8"), readFileSync(join(home, "clone-dst"), "utf8"), { recursive: true })
+  if (existsSync(join(home, "break-nested"))) rmSync(join(home, ".pi/crewlet/checkouts/nested.json"), { force: true })
   for (const i of [1, 2]) {
     record("nested-" + i, await fire("tool_result", { toolName: "bash", toolCallId: "call-" + i,
       input: { command: "git clone" }, content: [{ type: "text", text: "cloned" }], isError: false }))
@@ -447,5 +449,26 @@ func TestAPiRunsLeftOutLinesReachItsErrorStreamOnce(t *testing.T) {
 				t.Errorf("the home's none marker is held after the run: %v, want %v (the next try needs it)", err == nil, broken)
 			}
 		})
+	}
+}
+
+// THE NOTE HELPER'S OWN TROUBLE REACHES THE RUN'S ERROR STREAM: a firing that
+// cannot read its config (here removed mid-run) hands nothing and says why,
+// and the extension passes that on, as it passes on all the helper's stderr
+// but what it left out, which the run's skip log carries.
+//
+// Mutation: pass the helper's stderr on nowhere, and this goes red.
+func TestAPiNoteHelpersOwnTroubleReachesTheRunsErrorStream(t *testing.T) {
+	t.Parallel()
+	runner, box := piCheckoutBox(t)
+	late := t.TempDir()
+	for rel, body := range piCheckout("late", map[string]string{"AGENTS.md": "LATE\n"}) {
+		plantFile(t, filepath.Join(late, rel), body)
+	}
+	plant(t, box, map[string]string{"clone-src": filepath.Join(late, "late"),
+		"clone-dst": filepath.Join(box.Home(), "workspace", "late"), "break-nested": ""})
+	runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"})
+	if errs := boxFile(t, box, executor.PathsFor(box).Err()); strings.Count(errs, "notehelper: the nested config: ") != 2 {
+		t.Errorf("the run's error stream does not say each firing's trouble with its config:\n%s", errs)
 	}
 }
