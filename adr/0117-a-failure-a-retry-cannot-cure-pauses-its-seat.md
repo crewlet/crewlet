@@ -2,7 +2,30 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestTheSecondIdenticalFailurePausesTheSeat`, `internal/agent/builtin.TestAPersonsPauseSupersedesTheEnginesFailurePause`, `internal/engine.TestTheSecondContextThatDoesNotFitHoldsTheConversation`, `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`, `internal/engine.TestNewModelsLiftAConversationHold`, `internal/engine.TestARemovedSeatLeavesNoConversationHeld`, `internal/notice.TestAHeldConversationIsANotice`, `internal/engine.TestOnlyARunOfOneFailurePausesTheSeat`, `internal/engine.TestAChangedSettingLiftsTheFailurePause`, `internal/engine.TestEveryFailureKindIsClassified`, `internal/engine.TestAChainThatRefusedEveryCredentialIsAFailureThatWillRepeat`, `internal/queue/jetstream.TestARedeliveryIsSpreadAroundItsSpacing`, `internal/sandbox.TestAContainerThatWouldNotStartIsClassedByWhetherItsImageIsHere`, `internal/engine.TestTheSecondRunKilledForMemoryHoldsTheConversation`, `internal/engine.TestAChangedSandboxLiftsAMemoryHold`, `internal/sandbox/executor.TestAHarnessKilledForMemoryEndedAtItsCeiling`, `internal/sandbox.TestACollectedRecordNamesARunKilledForMemory`, `internal/notice.TestAHeldConversationIsANotice`, `internal/engine.TestTheSecondRequestItsProviderRefusesHoldsTheConversation`, `internal/engine.TestARunWhoseContinuedSessionWasRefusedIsRelaunchedFreshOnce`, `internal/agent/turn.TestARoundItsProviderRefusedEndsTheTurnWithItsMessage`, `internal/sandbox.TestAJobItsProviderRefusedIsRecordedAndRetiresItsSession`, `internal/engine.TestAResumeWhoseModelsRefuseTheirSignInPausesTheSeatAndWaits`
+- **Enforced-by:**
+  - `internal/engine.TestTheSecondIdenticalFailurePausesTheSeat`
+  - `internal/agent/builtin.TestAPersonsPauseSupersedesTheEnginesFailurePause`
+  - `internal/engine.TestTheSecondContextThatDoesNotFitHoldsTheConversation`
+  - `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`
+  - `internal/engine.TestNewModelsLiftAConversationHold`
+  - `internal/engine.TestARemovedSeatLeavesNoConversationHeld`
+  - `internal/notice.TestAHeldConversationIsANotice`
+  - `internal/engine.TestOnlyARunOfOneFailurePausesTheSeat`
+  - `internal/engine.TestAChangedSettingLiftsTheFailurePause`
+  - `internal/engine.TestEveryFailureKindIsClassified`
+  - `internal/engine.TestAChainThatRefusedEveryCredentialIsAFailureThatWillRepeat`
+  - `internal/queue/jetstream.TestARedeliveryIsSpreadAroundItsSpacing`
+  - `internal/sandbox.TestAContainerThatWouldNotStartIsClassedByWhetherItsImageIsHere`
+  - `internal/engine.TestTheSecondRunKilledForMemoryHoldsTheConversation`
+  - `internal/engine.TestAChangedSandboxLiftsAMemoryHold`
+  - `internal/sandbox/executor.TestAHarnessKilledForMemoryEndedAtItsCeiling`
+  - `internal/sandbox.TestACollectedRecordNamesARunKilledForMemory`
+  - `internal/notice.TestAHeldConversationIsANotice`
+  - `internal/engine.TestTheSecondRequestItsProviderRefusesHoldsTheConversation`
+  - `internal/engine.TestARunWhoseContinuedSessionWasRefusedIsRelaunchedFreshOnce`
+  - `internal/agent/turn.TestARoundItsProviderRefusedEndsTheTurnWithItsMessage`
+  - `internal/sandbox.TestAJobItsProviderRefusedIsRecordedAndRetiresItsSession`
+  - `internal/engine.TestAResumeWhoseModelsRefuseTheirSignInPausesTheSeatAndWaits`
 - **Cost-when-tried:** not tried here. Before this record such a failure was NAKed like any other, so a seat whose sandbox image could not start, or whose models all refused their credential, ran the same failing turn on every redelivery until the delivery's budget ran out, rebuilding the turn's whole context each time, and its agents then asked a person about the failure as if it were a business decision.
 - **Tag-status:** unreleased
 

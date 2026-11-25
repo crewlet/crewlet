@@ -2,7 +2,34 @@
 
 - **Status:** accepted
 - **Authority:** `internal/seataccess`
-- **Enforced-by:** `internal/seataccess.TestALapsingGrantLeavesThePlanBeforeItsExpiry`, `internal/seataccess.TestAWriteGrantNeedsTheStepUpTheAdministeringLevelDoes`, `internal/seataccess.TestAGrantIsAddedOrRemovedNeverEdited`, `internal/seataccess.TestAGrantIsCheckedAgainstTheLiveCatalogue`, `internal/seataccess.TestARequestsOptionsCarryItsID`, `internal/cloudflare.TestAGrantRidesTheTokenBesideItsLevel`, `internal/cloudflare.TestAGrantLeavesTheTokenBeforeItsExpiry`, `internal/cloudflare.TestAGrantTheProvisionerLacksIsReportedNamingTheGroup`, `internal/cloudflare.TestGrantsThatMakeUpAHigherLevelAreReadAsGranted`, `internal/cloudflare.TestTheGrantCatalogueIsWhatTheProvisionerCanMint`, `internal/api/setupapi.TestAGrantIsStampedByTheEngineNeverByTheBody`, `internal/api/setupapi.TestAGrantTheCatalogueCannotGiveIsRefused`, `internal/api/setupapi.TestAWriteGrantIsAskedOfAPerson`, `internal/api/setupapi.TestARequestsGrantIsBuiltFromTheRequest`, `internal/agent/builtin.TestAPermissionRequestIsTheEnginesDecision`, `internal/agent/builtin.TestAPermissionRequestNobodyCouldGrantIsRefused`, `internal/agent/builtin.TestAPermissionIsAnsweredOnlyOnceItsAgentHoldsIt`, `internal/integration.TestASurfaceHoldingALapseIsDueAtIt`, `internal/capability.TestASeatIsToldTheGrantsItsCredentialHolds`, `internal/seataccess.TestEveryGrantLaneSaysHowAnAgentReadsItsGrants`, `internal/agent/builtin.TestRequestAccessNamesEveryGrantLanesRefusalAndPermission`, `internal/scaleway.TestAGrantRidesThePolicyBesideItsLevel`, `internal/scaleway.TestAGrantLeavesThePolicyBeforeItsExpiry`, `internal/aws.TestAGrantAttachesBesideTheLevelAndLapsesAlone`, `internal/aws.TestARefusedPolicyIsNeverAttached`, `internal/googlecloud.TestAGrantBindsBesideTheLevel`, `internal/googlecloud.TestAGrantOutsideTheGrantsListIsRefusedNamingIt`
+- **Enforced-by:**
+  - `internal/seataccess.TestALapsingGrantLeavesThePlanBeforeItsExpiry`
+  - `internal/seataccess.TestAWriteGrantNeedsTheStepUpTheAdministeringLevelDoes`
+  - `internal/seataccess.TestAGrantIsAddedOrRemovedNeverEdited`
+  - `internal/seataccess.TestAGrantIsCheckedAgainstTheLiveCatalogue`
+  - `internal/seataccess.TestARequestsOptionsCarryItsID`
+  - `internal/cloudflare.TestAGrantRidesTheTokenBesideItsLevel`
+  - `internal/cloudflare.TestAGrantLeavesTheTokenBeforeItsExpiry`
+  - `internal/cloudflare.TestAGrantTheProvisionerLacksIsReportedNamingTheGroup`
+  - `internal/cloudflare.TestGrantsThatMakeUpAHigherLevelAreReadAsGranted`
+  - `internal/cloudflare.TestTheGrantCatalogueIsWhatTheProvisionerCanMint`
+  - `internal/api/setupapi.TestAGrantIsStampedByTheEngineNeverByTheBody`
+  - `internal/api/setupapi.TestAGrantTheCatalogueCannotGiveIsRefused`
+  - `internal/api/setupapi.TestAWriteGrantIsAskedOfAPerson`
+  - `internal/api/setupapi.TestARequestsGrantIsBuiltFromTheRequest`
+  - `internal/agent/builtin.TestAPermissionRequestIsTheEnginesDecision`
+  - `internal/agent/builtin.TestAPermissionRequestNobodyCouldGrantIsRefused`
+  - `internal/agent/builtin.TestAPermissionIsAnsweredOnlyOnceItsAgentHoldsIt`
+  - `internal/integration.TestASurfaceHoldingALapseIsDueAtIt`
+  - `internal/capability.TestASeatIsToldTheGrantsItsCredentialHolds`
+  - `internal/seataccess.TestEveryGrantLaneSaysHowAnAgentReadsItsGrants`
+  - `internal/agent/builtin.TestRequestAccessNamesEveryGrantLanesRefusalAndPermission`
+  - `internal/scaleway.TestAGrantRidesThePolicyBesideItsLevel`
+  - `internal/scaleway.TestAGrantLeavesThePolicyBeforeItsExpiry`
+  - `internal/aws.TestAGrantAttachesBesideTheLevelAndLapsesAlone`
+  - `internal/aws.TestARefusedPolicyIsNeverAttached`
+  - `internal/googlecloud.TestAGrantBindsBesideTheLevel`
+  - `internal/googlecloud.TestAGrantOutsideTheGrantsListIsRefusedNamingIt`
 - **Tag-status:** unreleased
 
 ## The decision

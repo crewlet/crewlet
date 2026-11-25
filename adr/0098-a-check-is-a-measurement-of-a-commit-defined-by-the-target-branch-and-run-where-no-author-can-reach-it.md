@@ -2,7 +2,14 @@
 
 - **Status:** accepted
 - **Authority:** `internal/gitlet`
-- **Enforced-by:** `internal/gitlet/home.TestCheckDefinitionsComeFromTheTarget`, `internal/gitlet/home.TestATipCheckIsDefinedAtItsLandingsBase`, `internal/gitlet/home.TestARedTipIsBisectedOverLandingRows`, `internal/gitlet.TestTipChecksRunOnAPersonsDirectLanding`, `internal/gitlet/checkrun.TestACheckBoxHoldsNoModelCredential`, `internal/gitlet/checkrun.TestACheckSpendsNoTokens`, `internal/gitlet/checkrun.TestALosingClaimStartsNoBox`
+- **Enforced-by:**
+  - `internal/gitlet/home.TestCheckDefinitionsComeFromTheTarget`
+  - `internal/gitlet/home.TestATipCheckIsDefinedAtItsLandingsBase`
+  - `internal/gitlet/home.TestARedTipIsBisectedOverLandingRows`
+  - `internal/gitlet.TestTipChecksRunOnAPersonsDirectLanding`
+  - `internal/gitlet/checkrun.TestACheckBoxHoldsNoModelCredential`
+  - `internal/gitlet/checkrun.TestACheckSpendsNoTokens`
+  - `internal/gitlet/checkrun.TestALosingClaimStartsNoBox`
 - **Tag-status:** unreleased
 
 ## The decision

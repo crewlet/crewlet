@@ -156,17 +156,17 @@ func fileBytes(path string) (int64, error) {
 //
 // Measured, not read off the gauges: those are published on the trim's tick,
 // far slower than [statelog.AlarmInterval], and a volume fills faster.
-func (r *retention) space(out *statelog.Reading, now time.Time) {
-	if r.db == nil {
+func (m nodeMeasures) space(out *statelog.Reading, now time.Time) {
+	if m.db == nil {
 		return
 	}
-	measure := r.volumes
+	measure := m.volumes
 	if measure == nil {
 		measure = measureVolume
 	}
 	var files []storedFile
 	var unmeasured []string
-	for _, db := range storeFiles(r.db) {
+	for _, db := range storeFiles(m.db) {
 		if wal, err := fileBytes(db.Path() + walSuffix); err == nil && wal > out.WALBytes {
 			// The largest, not the sum: the alarm is about ONE
 			// checkpoint not happening. Named with the copy holding

@@ -9,18 +9,20 @@ import (
 	"sync"
 )
 
-// stepCap ends a turn at its Nth model response (-step-cap), as Claude Code's
-// --max-turns bounds a run: the adapter counts the responses ([stepCap.step]),
-// and the cap writes its marker (-cap-marker) and then asks the harness to
-// interrupt the turn, so the run's collection tells the helper's cap from any
-// other interrupt. Codex has no cap of its own (CODEX-MEASURE §17.1).
+// stepCap ends a run at its Nth model response (-step-cap), counted over every
+// turn of the run: the adapter counts the responses ([stepCap.step]), and the
+// cap writes its marker (-cap-marker) and then asks the harness to interrupt
+// the turn, so the run's collection tells the helper's cap from any other
+// interrupt. A turn a note opens after the cap fired is interrupted as it
+// starts ([stepCap.begin]). PER RUN, never per turn: the engine holds the
+// run's whole count to the same cap, so a cap a note restarted would fail an
+// honest run. Codex has no cap of its own (CODEX-MEASURE §17.1).
 type stepCap struct {
 	n      int
 	marker string
 	fire   chan string
 
 	mu    sync.Mutex
-	turn  string
 	count int
 	fired string
 }
@@ -30,14 +32,25 @@ func newStepCap(n int, marker string) *stepCap {
 }
 
 // step counts one model response of turn, never blocking: the adapter calls
-// it from the harness's reader. A new turn counts from one.
+// it from the harness's reader. The run's count goes on across its turns.
 func (c *stepCap) step(turn string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if turn != c.turn {
-		c.turn, c.count = turn, 0
-	}
 	c.count++
+	c.fireLocked(turn)
+}
+
+// begin is a turn started, never blocking: one started once the run's cap is
+// spent fires as it starts, before its first response is counted.
+func (c *stepCap) begin(turn string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.fireLocked(turn)
+}
+
+// fireLocked fires turn where the run's count is at its cap and turn has not
+// fired yet; c.mu is held.
+func (c *stepCap) fireLocked(turn string) {
 	if c.count < c.n || c.fired == turn {
 		return
 	}

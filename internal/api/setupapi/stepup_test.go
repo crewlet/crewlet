@@ -30,9 +30,11 @@ func (m *recordingMux) Handle(pattern string, h http.Handler) {
 }
 
 // readsSentAsPost are the routes that read with a POST, because what they read
-// about is a body: the plan of an access draft writes nothing, so it is the
-// read verb and asks for no proof.
-var readsSentAsPost = []string{"POST /setup/integrations/{kind}/access/plan"}
+// about is a body: the plan of an access draft and a block drawn from a form's
+// values write nothing, so they are the read verb and ask for no proof.
+var readsSentAsPost = []string{
+	"POST /setup/integrations/{kind}/access/plan", "POST /setup/integrations/{kind}/draw",
+}
 
 // CONNECTING AN INTEGRATION ASKS FOR A RECENT PROOF, AND READING ONE DOES NOT.
 //

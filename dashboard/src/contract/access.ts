@@ -213,6 +213,15 @@ export interface AccessOptions {
    * line. Absent where the vendor gives none.
    */
   scope_details?: Record<string, string>;
+  /**
+   * What holds each `scope` entry (an Analytics property's account), keyed by
+   * the identifier stored, for a picker's headings. Absent where entries stand alone.
+   */
+  scope_groups?: Record<string, string>;
+  /** The shape a typed entry must have, a regular expression; absent where any text may be one. */
+  scope_typed?: string;
+  /** Why the entries could not be listed, in a person's words; absent where they were. */
+  scope_unlisted?: string;
   /** Whether `scope` was read just now, so an empty one means the vendor has none to offer. */
   scope_live?: boolean;
   /** Whether a scope entry outside `scope` may be typed. */
@@ -425,7 +434,9 @@ export type AccessLaneStatus =
   | "refused"
   | "changed_at_vendor"
   | "needs_you"
+  | "preparing"
   | "next_sync"
+  | "role_unchecked"
   | "in_sync"
   | "off_account_kept"
   | "off"
@@ -498,7 +509,15 @@ export type AccessIdentityMode = "own" | "company";
 
 /** Where a seat's identity at a vendor stands: one chip set for every vendor. */
 export type AccessIdentityStatus =
-  "company" | "none" | "ready" | "wrong_role" | "wrong_team" | "refused" | "replacing";
+  | "company"
+  | "none"
+  | "preparing"
+  | "ready"
+  | "unchecked"
+  | "wrong_role"
+  | "wrong_team"
+  | "refused"
+  | "replacing";
 
 /** Whose identity signs the seat's calls now; `none` is a seat whose calls are refused. */
 export type AccessIdentityHolds = "own" | "company" | "none";
@@ -560,12 +579,40 @@ export interface AccessIdentityGuide {
   role: string;
   never?: string;
   steps: AccessGuideStep[];
+  /** The seat's entries to add it to, each with the vendor's page for it and, once checked, where it stands. */
+  entries?: AccessIdentityEntry[];
+  /** Adding it once to what holds the entries (an Analytics account) instead. */
+  wider?: AccessGuideWider;
+  /** When the vendor can find a new identity, while it is getting ready. */
+  ready_at?: string;
   /** The vendor's page as a button, only where no step links it. */
   link?: AccessGuideLink;
   note?: VendorTextPart[];
   back: AccessGuideBack;
   make?: AccessGuideMake;
   checks: AccessGuideCheck[];
+}
+
+/** Where a seat's identity stands on one scope entry. */
+type AccessEntryState = "missing" | "applying" | "added" | "wrong_role" | "unchecked" | "";
+
+/** One of a seat's scope entries as a check found its identity there, and where a person adds it. */
+export interface AccessIdentityEntry {
+  id: string;
+  name?: string;
+  group?: string;
+  /** Empty before any check read it. */
+  state: AccessEntryState;
+  role?: string;
+  add_url?: string;
+  group_url?: string;
+}
+
+/** The one add on what holds a seat's entries, which reaches every entry there. */
+interface AccessGuideWider {
+  label: string;
+  does: VendorTextPart[];
+  links?: AccessGuideLink[];
 }
 
 interface AccessGuideStep {

@@ -2,7 +2,24 @@
 
 - **Status:** accepted
 - **Authority:** `internal/agent/builtin`
-- **Enforced-by:** `internal/agent/builtin.TestATurnSomebodyOutsideTheCompanyWokeReachesNoServer`, `internal/agent/builtin.TestAnOperateCallIsHeldInEveryCase`, `internal/agent/builtin.TestAnOperateCallIsMadeOnlyAsApproved`, `internal/agent/builtin.TestASeatCannotReachAHostItWasNotGranted`, `internal/agent/builtin.TestAReadsOutputIsFencedAndFitsOneAnswer`, `internal/ssh.TestEveryCertificateAndCommandIsRecorded`, `internal/ssh.TestACommandThatDidNotRunIsRecordedByWhatStoppedIt`, `internal/api/mcpapi.TestOnlyAnAdministratorOrANamedApproverAnswersAnOperateCall`, `internal/api/mcpapi.TestApprovingAnOperateCallNeedsAStepUp`, `internal/api/mcpapi.TestAnOperateCallsApproverReadsAllOfIt`, `internal/agent/builtin.TestAReadSeatHasNoOperateTool`, `internal/agent/builtin.TestWhatAServerPrintedReachesTheTurnAndNoRecord`, `internal/agent/builtin.TestAnAskFromAStrangersTurnCarriesTheStranger`, `internal/agent/runner.TestAnApprovedCallsUnkeptOutputReachesTheRunAlone`, `internal/engine.TestTurningSSHOffStopsIssuanceAtOnce`, `internal/ssh.TestAHeldOperateCallApprovedOnceRunsOnce`, `internal/ssh.TestNoOperateMaterialReachesABox`
+- **Enforced-by:**
+  - `internal/agent/builtin.TestATurnSomebodyOutsideTheCompanyWokeReachesNoServer`
+  - `internal/agent/builtin.TestAnOperateCallIsHeldInEveryCase`
+  - `internal/agent/builtin.TestAnOperateCallIsMadeOnlyAsApproved`
+  - `internal/agent/builtin.TestASeatCannotReachAHostItWasNotGranted`
+  - `internal/agent/builtin.TestAReadsOutputIsFencedAndFitsOneAnswer`
+  - `internal/ssh.TestEveryCertificateAndCommandIsRecorded`
+  - `internal/ssh.TestACommandThatDidNotRunIsRecordedByWhatStoppedIt`
+  - `internal/api/mcpapi.TestOnlyAnAdministratorOrANamedApproverAnswersAnOperateCall`
+  - `internal/api/mcpapi.TestApprovingAnOperateCallNeedsAStepUp`
+  - `internal/api/mcpapi.TestAnOperateCallsApproverReadsAllOfIt`
+  - `internal/agent/builtin.TestAReadSeatHasNoOperateTool`
+  - `internal/agent/builtin.TestWhatAServerPrintedReachesTheTurnAndNoRecord`
+  - `internal/agent/builtin.TestAnAskFromAStrangersTurnCarriesTheStranger`
+  - `internal/agent/runner.TestAnApprovedCallsUnkeptOutputReachesTheRunAlone`
+  - `internal/engine.TestTurningSSHOffStopsIssuanceAtOnce`
+  - `internal/ssh.TestAHeldOperateCallApprovedOnceRunsOnce`
+  - `internal/ssh.TestNoOperateMaterialReachesABox`
 - **Tag-status:** unreleased
 
 ## The decision

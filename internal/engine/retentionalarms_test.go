@@ -296,7 +296,7 @@ func TestTheRetentionReadingCarriesTheFleetReadBudget(t *testing.T) {
 	}
 	r := &retention{metrics: recorder}
 	var reading statelog.Reading
-	r.observed(&reading)
+	r.observed(&reading, r.measures().window())
 	if reading.HistoryReadBudget != eventfan.FleetReadBudget {
 		t.Errorf("the reading carries a %s history read budget, want the fan-out's %s",
 			reading.HistoryReadBudget, eventfan.FleetReadBudget)

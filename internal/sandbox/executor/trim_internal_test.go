@@ -300,8 +300,8 @@ func TestEveryCodexPackTrimsAtTheTakesBounds(t *testing.T) {
 // is no trim, and nor is one whose restated start is malformed.
 //
 // Mutation: drop the size's check, read the word for any release or harness,
-// read a word past its bound, or read a restated start loosely, and a case
-// goes red.
+// read none for a harness whose trim leaves files out, read a word past its
+// bound, or read a restated start loosely, and a case goes red.
 func TestATakeReadsItsPacksTrimOnlyBesideItsOwnArchive(t *testing.T) {
 	t.Parallel()
 	const size = 4096
@@ -339,6 +339,8 @@ func TestATakeReadsItsPacksTrimOnlyBesideItsOwnArchive(t *testing.T) {
 		"a start past the CRC":      {NewGeminiCLI(), geminiRelease, chat("19 4294967296 4567"), sandbox.ArchiveTrim{}},
 		"hermes on its release":     {NewHermes(), hermesFloor(), word, trimmed},
 		"hermes on another release": {NewHermes(), "0.23.4", word, sandbox.ArchiveTrim{}},
+		"grok's own archive":        {NewGrok(), grokSupported(), word, trimmed},
+		"grok, another release":     {NewGrok(), "1.0.93", word, sandbox.ArchiveTrim{}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

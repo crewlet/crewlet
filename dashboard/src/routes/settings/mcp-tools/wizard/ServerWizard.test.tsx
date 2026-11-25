@@ -800,7 +800,7 @@ test("with no agent on at the integration, the test says to turn one on and runs
   expect(testDraft).not.toHaveBeenCalled();
   expect(screen.getByText("No agent has Cloudflare on")).toBeDefined();
   expect(screen.getByRole("link", { name: "Open its Agents tab" }).getAttribute("href")).toBe(
-    "#/company/integrations/cloudflare?open=agents",
+    "#/company/integrations/cloudflare?tab=agents",
   );
   expect(screen.queryByRole("combobox", { name: "Test as" })).toBeNull();
 });

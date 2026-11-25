@@ -2,7 +2,10 @@
 
 - **Status:** accepted
 - **Authority:** `internal/growth`
-- **Enforced-by:** `internal/config.TestAGrowthCredentialIsNamedAtItsOwnFieldAlone`, `internal/config.TestAVendorsOwnServerIsRefusedBesideItsProduct`, `internal/agent/builtin.TestAGrowthCallIsMadeOnlyAtTheLevelItsClassNeeds`
+- **Enforced-by:**
+  - `internal/config.TestAGrowthCredentialIsNamedAtItsOwnFieldAlone`
+  - `internal/config.TestAVendorsOwnServerIsRefusedBesideItsProduct`
+  - `internal/agent/builtin.TestAGrowthCallIsMadeOnlyAtTheLevelItsClassNeeds`
 - **Tag-status:** unreleased
 
 ## The decision

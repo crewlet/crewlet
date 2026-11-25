@@ -492,7 +492,7 @@ func TestAFlushTheLeaderNeverDecidedMayHaveLanded(t *testing.T) {
 	}
 	pending := &inFlightForever{}
 	f.chatReads = settledBucket{KeyValue: underneath.KeyValue,
-		js: termed{term: 50 * time.Millisecond, publish: pending.publish}, holding: undeclaredHolding}
+		js: termed{term: 50 * time.Millisecond, publish: pending.publish}, holding: chatReadsHolding}
 
 	_, err := f.AdvanceChatRead(ctx, "founder", coord.ChatReadDelta{
 		Cursors: map[string]int64{coordtest.ChatID("room-c"): 11}, At: chatReadAt0,

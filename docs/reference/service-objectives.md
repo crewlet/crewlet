@@ -65,7 +65,7 @@ An objective alarms when it spends its error budget faster than the month allows
 
 The long window says the burn is real; the short says it is still happening, so `objective_burn` clears within minutes of the fault ending. The long window must also hold at least two bad events: on a quiet node one failure among a dozen requests is a burn of a hundred times the budget, and a single failure is a fault the request's own log line already carries, not a rate.
 
-The alarm names, per burning objective, the fastest pair that fires and both windows' burn rates. It is judged **per node**, like every alarm, over that node's events; the `crewlet.objectives.events` counter, summed across the fleet by your collector, is the company's figure. A self-hosted install gets the same constants as reference objectives.
+The alarm names, per burning objective, the fastest pair that fires and both windows' burn rates. It is judged **per node**, like every alarm, over that node's events, on a node without `data` (a satellite, an operator's seat pod) by that node's own table ([Alarms](alarms.md#how-an-alarm-reaches-you)); the `crewlet.objectives.events` counter, summed across the fleet by your collector, is the company's figure. A self-hosted install gets the same constants as reference objectives.
 
 ## The ready report
 

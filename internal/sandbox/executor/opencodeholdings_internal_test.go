@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -744,23 +743,23 @@ func TestAnEmptyFailureNeverHoldsAnEmptyOutput(t *testing.T) {
 }
 
 // ohAllocated is what reading the export doc opens for calls allocated, in
-// bytes, a small export of its shape read once first so what the process
-// builds once (the tool-name bound's profiles) is none of it.
-func ohAllocated(t *testing.T, doc func() io.Reader, calls ...sandbox.LoggedCall) uint64 {
+// bytes, the fewest of three reads after a warm-up ([allocationsOf]) so what
+// the process builds once (the tool-name bound's profiles) is none of it, and
+// the last read's holdings.
+func ohAllocated(t *testing.T, doc func() io.Reader, calls ...sandbox.LoggedCall) (uint64, sandbox.SessionHoldings) {
 	t.Helper()
 	ask := sandbox.HoldingsAsk{Calls: calls, Resumer: "2.3.2"}
-	if _, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "done"))), ohBegan, calls...); err != nil {
-		t.Fatalf("no reading: %v", err)
-	}
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	h, err := readOpenCodeHoldings(t.Context(), doc(), ohSession, ohBegan, ask)
-	runtime.ReadMemStats(&after)
+	var (
+		h   sandbox.SessionHoldings
+		err error
+	)
+	_, allocated := allocationsOf(func() {
+		h, err = readOpenCodeHoldings(t.Context(), doc(), ohSession, ohBegan, ask)
+	})
 	if err != nil || !h.Read {
 		t.Fatalf("no reading: %v", err)
 	}
-	return after.TotalAlloc - before.TotalAlloc
+	return allocated, h
 }
 
 // A STATE IS READ ONCE WHATEVER ITS KEY ORDER: a part whose `content` comes
@@ -787,8 +786,8 @@ func TestAStateIsReadOnceWhateverItsKeyOrder(t *testing.T) {
 		t.Fatalf("content first: held %v; want it counted", got)
 	}
 	other := strings.Replace(doc, `"crewlet_echo"`, `"notcrew_echo"`, 1)
-	read := ohAllocated(t, func() io.Reader { return strings.NewReader(doc) }, c)
-	none := ohAllocated(t, func() io.Reader { return strings.NewReader(other) }, c)
+	read, _ := ohAllocated(t, func() io.Reader { return strings.NewReader(doc) }, c)
+	none, _ := ohAllocated(t, func() io.Reader { return strings.NewReader(other) }, c)
 	if read > none+exportValueMaxBytes {
 		t.Errorf("the answer read allocated %d bytes, a part never counted %d; want it never held", read, none)
 	}
@@ -1109,12 +1108,10 @@ func TestAReadingHoldsNoMessage(t *testing.T) {
 			return io.MultiReader(strings.NewReader(itemsHead), items, strings.NewReader(itemsTail))
 		}, ohCall(1, "echo", `{"t":1}`, "done")},
 	} {
-		h, err := readOpenCodeHoldings(t.Context(), tc.doc(), ohSession, ohBegan,
-			sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{tc.call}, Resumer: "2.3.2"})
-		if got := ohHeld(t, h, err, tc.call); !slices.Equal(got, []int{1}) {
+		allocated, h := ohAllocated(t, tc.doc, tc.call)
+		if got := ohHeld(t, h, nil, tc.call); !slices.Equal(got, []int{1}) {
 			t.Errorf("%s: held %v; want its call", name, got)
 		}
-		allocated := ohAllocated(t, tc.doc, tc.call)
 		t.Logf("%s: allocated %d bytes", name, allocated)
 		if allocated > ohReadingAllocates {
 			t.Errorf("%s: allocated %d bytes; want at most %d", name, allocated, ohReadingAllocates)

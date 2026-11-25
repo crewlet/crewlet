@@ -2,7 +2,15 @@
 
 - **Status:** accepted
 - **Authority:** `internal/seataccess`
-- **Enforced-by:** `internal/seataccess.TestAnOnSeatsBoxHoldsEveryCredentialItsToolReads`, `internal/seataccess.TestAnOnSeatsBoxIsItsToolWithNoLine`, `internal/seataccess.TestAVendorGainsBoxDefaultsOnlyByAReviewedChange`, `internal/expo.TestAnOnExpoAgentsBoxHoldsItsLiveTokenWithNoLine`, `internal/engine.TestAGitHubAgentsBoxHoldsItsAppTokenAndItsFileWithNoLine`, `internal/engine.TestALineAnIntegrationsCredentialReplacesIsSaid`, `internal/engine.TestAToolTokenUnderASignInNameIsWithheldAndSaid`, `internal/engine.TestAVendorsBoxFileIsWrittenAtLaunchAndKeptByThePoll`
+- **Enforced-by:**
+  - `internal/seataccess.TestAnOnSeatsBoxHoldsEveryCredentialItsToolReads`
+  - `internal/seataccess.TestAnOnSeatsBoxIsItsToolWithNoLine`
+  - `internal/seataccess.TestAVendorGainsBoxDefaultsOnlyByAReviewedChange`
+  - `internal/expo.TestAnOnExpoAgentsBoxHoldsItsLiveTokenWithNoLine`
+  - `internal/engine.TestAGitHubAgentsBoxHoldsItsAppTokenAndItsFileWithNoLine`
+  - `internal/engine.TestALineAnIntegrationsCredentialReplacesIsSaid`
+  - `internal/engine.TestAToolTokenUnderASignInNameIsWithheldAndSaid`
+  - `internal/engine.TestAVendorsBoxFileIsWrittenAtLaunchAndKeptByThePoll`
 - **Cost-when-tried:** an agent on at Expo, its robot's token pasted and sealed, had no `EXPO_TOKEN` in its box until a person wrote `EXPO_TOKEN: "${EXPO_TOKEN_<HANDLE>}"` into its `sandbox.env`, a line whose only correct value the engine already knew. The agent concluded it could not use Expo. GitHub, GitLab, DigitalOcean and Scaleway each asked for the same hand-written lines.
 - **Tag-status:** unreleased
 

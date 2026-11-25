@@ -2,6 +2,8 @@ package queries_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -13,6 +15,13 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 )
+
+// storeDigest is how a collection report names the store it ran against: its
+// identity's SHA-256.
+func storeDigest(identity string) string {
+	sum := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(sum[:])
+}
 
 // failingRecord is a coordination store that will not give the record up.
 type failingRecord struct{ err error }
@@ -62,7 +71,7 @@ func TestTheFleetShowsWhatTheCollectorFound(t *testing.T) {
 	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	fleet := coordmemory.NewFleet()
 	raw, err := json.Marshal(map[string]any{
-		"node": "data-b", "backend": "nats",
+		"node": "data-b", "backend_sha256": storeDigest("nats"),
 		"status": collect.Status{
 			Collect: collect.CollectionReport{Completed: true, Listed: 40, Deleted: 2, At: at},
 			Audit:   collect.AuditReport{Completed: true, Referenced: 38, At: at},
@@ -123,7 +132,7 @@ func TestTheFleetShowsNoReportOfAnotherStore(t *testing.T) {
 	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	fleet := coordmemory.NewFleet()
 	raw, err := json.Marshal(map[string]any{
-		"node": "data-b", "backend": oldStore,
+		"node": "data-b", "backend_sha256": storeDigest(oldStore),
 		"status": collect.Status{
 			Collect: collect.CollectionReport{Completed: true, Listed: 40, At: at},
 			Audit: collect.AuditReport{Completed: true, Referenced: 38, Missing: 1, At: at,

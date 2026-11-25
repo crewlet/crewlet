@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/browser"
+	"github.com/crewlet/crewlet/internal/browser/boxhelper"
 	"github.com/crewlet/crewlet/internal/browser/boxhelper/boxhelpertest"
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -95,26 +96,18 @@ func TestThePinnedServerSpeaksOnlyTheEraTheShimRelays(t *testing.T) {
 	}
 }
 
-// allowedTools is every tool the model may call: the pinned server's core
-// tools less browser_run_code_unsafe.
-var allowedTools = []string{
-	"browser_click", "browser_close", "browser_console_messages", "browser_drag", "browser_drop",
-	"browser_emulate_media", "browser_evaluate", "browser_file_upload", "browser_fill_form", "browser_find",
-	"browser_handle_dialog", "browser_hover", "browser_navigate", "browser_navigate_back", "browser_network_request",
-	"browser_network_requests", "browser_press_key", "browser_resize", "browser_select_option", "browser_snapshot",
-	"browser_tabs", "browser_take_screenshot", "browser_type", "browser_wait_for",
-}
-
 // THE MODEL SEES ONLY THE ALLOWED TOOLS: the box lists the model the allowed
-// tools, which are what the pinned server lists under the box's config less
+// tools, the ones the engine counts (boxhelper.Tools, serve.mjs's ALLOWED),
+// which are what the pinned server lists under the box's config less
 // browser_run_code_unsafe, so a pin that adds or drops a tool fails here
 // until somebody reads it; a call to a tool off the list is answered -32602
 // and never reaches the server; and a list carrying a tool a page registered
 // reaches the model without it.
 //
 // Mutations, each red: filter by a list of what may not pass; forward a call
-// off the list.
+// off the list; have Tools drop a name.
 func TestTheModelSeesOnlyTheAllowedTools(t *testing.T) {
+	allowedTools := slices.Sorted(slices.Values(boxhelper.Tools()))
 	boxhelpertest.Each(t, func(t *testing.T, env boxhelpertest.Env) {
 		box := readyBox(t, env, boxhelpertest.Options{})
 		m := session(t, box, jobA)

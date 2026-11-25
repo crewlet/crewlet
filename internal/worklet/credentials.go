@@ -19,7 +19,7 @@ func (n *Notify) withoutCredentials() *Notify {
 	out := *n
 	s := &out.Snapshot
 	for _, handle := range []*string{&s.Assignee, &s.Reporter, &s.PrevAssignee, &s.CommentAsk,
-		&s.AnsweredAuthor, &s.ParentAssignee, &s.RoutedTo} {
+		&s.AnsweredAuthor, &s.ParentAssignee, &s.RoutedTo, &s.DepartureLead} {
 		if isCredential(*handle) {
 			*handle = ""
 		}

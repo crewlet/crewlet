@@ -87,6 +87,16 @@ func vendorRefusal(req googlegrowth.Request, api *googleauth.APIError) error {
 	return nil
 }
 
+// lowestRole is the least of ids, by the ladder, "any role" where it names none.
+func lowestRole(ids []string) string {
+	for _, r := range roles() {
+		if slices.Contains(ids, r.ID) {
+			return r.Name
+		}
+	}
+	return "any role"
+}
+
 // roleNames are the names of role IDs, for a person.
 func roleNames(ids []string) string {
 	if len(ids) == 0 {
@@ -109,6 +119,12 @@ func (p *Product) inScope(ctx context.Context, handle string, req googlegrowth.R
 	b := p.seat(handle)
 	if b == nil {
 		return refusal(growth.RefusedForbidden, "this agent is off at Google Analytics. No vendor was reached.")
+	}
+	if b.Role == config.GoogleAnalyticsMarketer && !req.Reads() && !slices.Contains(req.Op.Roles, roleMarketer) {
+		// OPERATE AS MARKETER: its changes are Marketer's, whatever its identity holds.
+		return refusal(growth.RefusedForbidden, req.Op.ID+" needs "+lowestRole(req.Op.Roles)+" or above in "+
+			"Google Analytics, and this agent works as a Marketer: audiences, key events, attribution and event "+
+			"create rules. A person raises it to Operate on the Agents tab. No vendor was reached.")
 	}
 	places, err := placesOf(req)
 	if err != nil {

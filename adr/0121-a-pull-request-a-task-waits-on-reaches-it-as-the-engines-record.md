@@ -2,7 +2,15 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/worklet.TestAnItemWaitingOnAPullRequestIsClearedByItsSettle`, `internal/engine.TestAMergeTheWebhookDeliversSettlesTheTasksWaitingOnIt`, `internal/engine.TestThePollSettlesWhatNoDeliveryDid`, `internal/engine.TestAPullRequestOutsideTheCompanysOwnersIsNeitherAcceptedNorRead`, `internal/engine.TestARateLimitedPassResumesWhereItStopped`, `internal/engine.TestAnUnreadablePullRequestBacksOff`, `internal/agent/builtin.TestWaitingOnAPullRequestIsHeldToTheCompanysOwners`, `internal/advisor.TestOnlyThePollSettlingSaysTheWebhookIsSilent`
+- **Enforced-by:**
+  - `internal/worklet.TestAnItemWaitingOnAPullRequestIsClearedByItsSettle`
+  - `internal/engine.TestAMergeTheWebhookDeliversSettlesTheTasksWaitingOnIt`
+  - `internal/engine.TestThePollSettlesWhatNoDeliveryDid`
+  - `internal/engine.TestAPullRequestOutsideTheCompanysOwnersIsNeitherAcceptedNorRead`
+  - `internal/engine.TestARateLimitedPassResumesWhereItStopped`
+  - `internal/engine.TestAnUnreadablePullRequestBacksOff`
+  - `internal/agent/builtin.TestWaitingOnAPullRequestIsHeldToTheCompanysOwners`
+  - `internal/advisor.TestOnlyThePollSettlingSaysTheWebhookIsSilent`
 - **Cost-when-tried:** not tried here. Before this record an item could wait only on another item, so work waiting on a pull request was blocked in words or not at all: the merge reached the agent that opened the pull request, never the item that waited on it, and items stayed blocked after the change they waited on had landed.
 - **Tag-status:** unreleased
 

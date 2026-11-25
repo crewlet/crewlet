@@ -2,6 +2,10 @@ package notify
 
 import "context"
 
+// FollowReasons is the vocabulary a follow is held in, for the case that
+// holds each word to what a follow record keeps.
+var FollowReasons = followReasons
+
 // StatusRequestTimeout is the budget every indicator request runs under, for
 // the cases that measure a teardown against it on a fake clock. A test
 // spelling the number itself would be a second copy free to disagree.

@@ -45,7 +45,11 @@ import {
   type StreamStop,
   type TurnStream,
 } from "~/protocol/assistant.ts";
-import { assistantEventId, type AssistantNarrowFrame } from "~/protocol/assistantWire.ts";
+import {
+  assistantEventId,
+  narrowCard,
+  type AssistantNarrowFrame,
+} from "~/protocol/assistantWire.ts";
 import { newActOpID } from "~/protocol/act.ts";
 import { isAbort, pathSegment, RestError } from "~/protocol/rest.ts";
 import { rereadViewer } from "~/lib/viewer.ts";
@@ -56,6 +60,9 @@ import { CONVERSATION_ID, writeTab } from "../tab.ts";
 import { pageSnapshot, undoPageAction, type PageSnapshot } from "../context.ts";
 import { withView } from "../view.ts";
 import { takeAction } from "./pageActions.ts";
+import { emit } from "../bus.ts";
+import { openInApp } from "./openInApp.ts";
+import { createDraftBox, type DraftBox } from "./AskComposer.tsx";
 import {
   EMPTY,
   activityOf,
@@ -86,13 +93,25 @@ function closeStreams(): void {
   for (const aside of asides) aside.close();
   asides.clear();
 }
+/** The drawer's unsent question, kept across a close for the conversation it resumes. */
+export const drawerDraft: DraftBox = createDraftBox();
+
 /** Bumped by every gesture that replaces the conversation, so a late answer for the last one is dropped. */
 let generation = 0;
 const listeners = new Set<() => void>();
 
+/** The busy flag last kept in the tab, so it is written only as it changes. */
+let keptBusy: boolean | null = null;
+
 function dispatch(event: TurnEvent): void {
   view = reduce(view, event);
-  setAssistantActivity(activityOf(view));
+  const activity = activityOf(view);
+  setAssistantActivity(activity);
+  const busy = activity !== "idle";
+  if (busy !== keptBusy) {
+    keptBusy = busy;
+    writeTab({ busy });
+  }
   for (const listener of listeners) listener();
 }
 
@@ -313,6 +332,50 @@ function invalidated(frame: AssistantNarrowFrame): void {
 /** The turns this tab asked, so a page action answering one of them is this tab's to apply. */
 const asked = new Set<string>();
 
+/** The open in app cards whose place this tab opened: pressed, or asked for. */
+let opened: ReadonlySet<string> = new Set();
+const openedListeners = new Set<() => void>();
+
+/** Mark a card's place as opened beside the conversation. */
+export function markOpened(cardId: string): void {
+  if (opened.has(cardId)) return;
+  opened = new Set(opened).add(cardId);
+  for (const listener of openedListeners) listener();
+}
+
+function subscribeOpened(listener: () => void): () => void {
+  openedListeners.add(listener);
+  return () => {
+    openedListeners.delete(listener);
+  };
+}
+
+/** The cards whose place this tab opened. */
+export function useOpenedCards(): ReadonlySet<string> {
+  return useSyncExternalStore(
+    subscribeOpened,
+    () => opened,
+    () => opened,
+  );
+}
+
+/**
+ * Open, once, a place the person's own question asked for: a card the engine
+ * marked `asked`, on a turn this tab asked, permitted and one of this
+ * dashboard's own pages. Any other card waits for the person's press, and a
+ * card read again (a reload, another tab) never opens.
+ */
+function openAsked(frame: AssistantNarrowFrame): void {
+  if (frame.kind !== "card" || !asked.has(frame.turn_id)) return;
+  const card = narrowCard(frame.card.card);
+  if (card?.type !== "open_in_app" || opened.has(frame.card.card_id)) return;
+  const { link, permitted, asked: wanted } = card.open_in_app;
+  const target = permitted && wanted ? openInApp(link.href) : null;
+  if (!target) return;
+  markOpened(frame.card.card_id);
+  emit("assistant.navigation.open", { path: target.path, query: target.query, mode: "here" });
+}
+
 /** Claim, apply and report a page action the stream carried, if this tab is the one to. */
 function pageAction(frame: AssistantNarrowFrame): void {
   if (frame.kind !== "action" || frame.action.name === ASSISTANT_ACTION_CONTEXT_INVALIDATE) return;
@@ -388,6 +451,7 @@ function read(
         invalidated(frame);
         dispatch({ type: "frame", frame });
         pageAction(frame);
+        openAsked(frame);
         modelFailed(frame);
         if (own && (frame.kind === "done" || frame.kind === "error")) {
           tell({ kind: "moved", conversation: frame.conversation_id, turn: frame.turn_id });
@@ -885,9 +949,12 @@ export function resetSessionForTest(): void {
   creating = null;
   restores.clear();
   asked.clear();
+  opened = new Set();
   approvals.clear();
   declines.clear();
   closeStreams();
   view = EMPTY;
+  keptBusy = null;
+  drawerDraft.write("");
   setAssistantActivity("idle");
 }

@@ -2,7 +2,18 @@
 
 - **Status:** accepted
 - **Authority:** `internal/advisor`
-- **Enforced-by:** `internal/advisor.TestEachAtlasClassNamesTheEntriesItsRuleReads`, `internal/advisor.TestAReaderWithoutTheAtlasAppIsToldHowManyAndNeverWhich`, `internal/advisor.TestAnAtlasFindingNamesAtMostFiveEntriesAndCountsThemAll`, `internal/advisor.TestAnEntryNobodyStandsBehindRaisesNothing`, `internal/advisor.TestADisagreementIsListedAfterAWeekAndNotBefore`, `internal/advisor.TestASourceIsStaleAtThreeReadsAndNotBefore`, `internal/advisor.TestAnUnreadAtlasRaisesNothingAndIsNamed`, `internal/advisor.TestEveryAtlasClassIsRaised`, `internal/api/queries.TestTheAdvisorNamesAnAtlasEntryOnlyToAHolderOfTheAtlasApp`, `internal/api/queries.TestTheAdvisorListsASourceThatStoppedReading`, `internal/insights.TestAnAtlasFindingMakesNoRecord`
+- **Enforced-by:**
+  - `internal/advisor.TestEachAtlasClassNamesTheEntriesItsRuleReads`
+  - `internal/advisor.TestAReaderWithoutTheAtlasAppIsToldHowManyAndNeverWhich`
+  - `internal/advisor.TestAnAtlasFindingNamesAtMostFiveEntriesAndCountsThemAll`
+  - `internal/advisor.TestAnEntryNobodyStandsBehindRaisesNothing`
+  - `internal/advisor.TestADisagreementIsListedAfterAWeekAndNotBefore`
+  - `internal/advisor.TestASourceIsStaleAtThreeReadsAndNotBefore`
+  - `internal/advisor.TestAnUnreadAtlasRaisesNothingAndIsNamed`
+  - `internal/advisor.TestEveryAtlasClassIsRaised`
+  - `internal/api/queries.TestTheAdvisorNamesAnAtlasEntryOnlyToAHolderOfTheAtlasApp`
+  - `internal/api/queries.TestTheAdvisorListsASourceThatStoppedReading`
+  - `internal/insights.TestAnAtlasFindingMakesNoRecord`
 - **Cost-when-tried:** not tried. The atlas shows each of these conditions on the entry it is about, and nothing gathers them: a service nobody owns looks like every other card until somebody opens it.
 - **Tag-status:** unreleased
 

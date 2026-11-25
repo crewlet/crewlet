@@ -63,7 +63,10 @@ func inClear(v string) bool {
 	return v == "" || (tokenShape().MatchString(v) && accessdomain.GrowthValueRecordable(v))
 }
 
-// failureOf is a failure's closed word for the access log.
+// failureOf is a failure's closed word for the access log: a request never
+// sent (the key's reserve among the causes) fails as timed out where its
+// deadline passed first, else as the engine's own; only an answer lost after
+// the request left is an unknown outcome.
 func failureOf(err error) growth.Failure {
 	var apiErr *APIError
 	switch {
@@ -77,23 +80,30 @@ func failureOf(err error) growth.Failure {
 		return growth.FailureVendorRefused
 	case errors.Is(err, context.DeadlineExceeded):
 		return growth.FailureTimedOut
-	case errors.Is(err, ErrRole), errors.Is(err, ErrReserve):
+	case errors.Is(err, ErrRole), errors.Is(err, errUnsent):
 		return growth.FailureEngineError
 	}
 	return growth.FailureUnknownOutcome
 }
 
-// writeFailure is why a write failed: one cut by its deadline or a timeout
-// may have reached Apple, so what it did is not known.
+// writeFailure is why a write failed: one never sent fails as its cause did;
+// one that got no answer of Apple's own after its request left (its deadline,
+// a timeout, a reset, an answer cut off) may have reached Apple, so what it
+// did is not known.
 func writeFailure(err error) growth.Failure {
 	var netErr net.Error
 	switch {
 	case err == nil:
 		return ""
+	case errors.Is(err, errUnsent):
+		return failureOf(err)
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
 		return growth.FailureUnknownOutcome
 	}
-	return failureOf(err)
+	if f := failureOf(err); f != growth.FailureEngineError {
+		return f
+	}
+	return growth.FailureUnknownOutcome
 }
 
 // argsDigest digests a call's arguments, for a step whose request cannot be

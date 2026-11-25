@@ -2,7 +2,17 @@
 
 - **Status:** accepted
 - **Authority:** `internal/atlas/collect`
-- **Enforced-by:** `internal/atlas/collect.TestARefusedPartIsCarriedAndRetiresNothing`, `internal/atlas/collect.TestAVoiceDeniesOnlyWhatItSaidExists`, `internal/atlas.TestAMonitorsStateIsASignalOnWhatItWatches`, `internal/datadog.TestTheAtlasReadsMonitorsServicesHostsAndChecks`, `internal/datadog.TestAnAlertingMonitorIsTheHealthOfWhatItWatches`, `internal/datadog.TestARefusedListingIsAFindingAndRetiresNothing`, `internal/datadog.TestADeletedMonitorRetiresNothingItWatched`, `internal/datadog.TestNoCredentialShapeReachesTheAtlasFromDatadog`, `internal/datadog.TestAListingThatFailsFailsTheRead`, `internal/datadog.TestADatadogCheckWarnsWhatTheAtlasCannotRead`
+- **Enforced-by:**
+  - `internal/atlas/collect.TestARefusedPartIsCarriedAndRetiresNothing`
+  - `internal/atlas/collect.TestAVoiceDeniesOnlyWhatItSaidExists`
+  - `internal/atlas.TestAMonitorsStateIsASignalOnWhatItWatches`
+  - `internal/datadog.TestTheAtlasReadsMonitorsServicesHostsAndChecks`
+  - `internal/datadog.TestAnAlertingMonitorIsTheHealthOfWhatItWatches`
+  - `internal/datadog.TestARefusedListingIsAFindingAndRetiresNothing`
+  - `internal/datadog.TestADeletedMonitorRetiresNothingItWatched`
+  - `internal/datadog.TestNoCredentialShapeReachesTheAtlasFromDatadog`
+  - `internal/datadog.TestAListingThatFailsFailsTheRead`
+  - `internal/datadog.TestADatadogCheckWarnsWhatTheAtlasCannotRead`
 - **Cost-when-tried:** not tried. ADR-0129's one source, Cloudflare, reads under a token whose every Read group the credential check already requires, and claims every entry it names, so neither question arose until a vendor with a permission per listing, whose entries point at other sources' entries, was read.
 - **Tag-status:** unreleased
 

@@ -2,7 +2,11 @@
 
 - **Status:** accepted
 - **Authority:** `internal/jsapi`
-- **Enforced-by:** `internal/jsapi.TestALinksWindowHoldsBothDirectionsWithinARequestsTerm`, `internal/objstore/natsobj.TestARequestBehindAnUploadAndADownloadIsAnsweredInsideItsTerm`, `internal/engine.TestANodesTransfersShareOneWindowAcrossItsLink`, `internal/learning/memsync.TestAPublishAcrossALinkHoldsItsRowsInFlightToTheLinksWindow`
+- **Enforced-by:**
+  - `internal/jsapi.TestALinksWindowHoldsBothDirectionsWithinARequestsTerm`
+  - `internal/objstore/natsobj.TestARequestBehindAnUploadAndADownloadIsAnsweredInsideItsTerm`
+  - `internal/engine.TestANodesTransfersShareOneWindowAcrossItsLink`
+  - `internal/learning/memsync.TestAPublishAcrossALinkHoldsItsRowsInFlightToTheLinksWindow`
 - **Measured:** the window is 139,810 bytes, four seconds at the floor of 30 s a MiB; one piece of an upload takes 132,096 bytes of it and one of a download 135,168, so one crosses at a time whichever way it goes; through a leaf across 100 ms at 100 Mbit/s a lone download ran at 1.04 MB/s against 2.3 with four pieces in hand, and a download and an upload at once at 0.55 each against 2.2 and 1.0 (`internal/objstore/natsobj`'s package doc, "What one window costs").
 - **Cost-when-tried:** each direction was windowed alone (#1359): the object store's puts outbound and a memory replay's pulls inbound, while a download held four pieces in hand unwindowed. A request queued behind a put and answered behind a pull waited 7.75 s at the floor, and behind a download's hand 15 s more, past its 5 s term.
 - **Tag-status:** unreleased

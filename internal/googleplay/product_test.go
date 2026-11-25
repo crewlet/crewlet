@@ -30,14 +30,19 @@ import (
 )
 
 // fakeTokens mints a token naming who it is for, as the engine's issuer and
-// the company reader would.
+// the company reader would. minting, where set, runs as each seat token is
+// minted: just before the request it is for is made.
 type fakeTokens struct {
-	mu     sync.Mutex
-	reader int
+	mu      sync.Mutex
+	reader  int
+	minting func()
 }
 
 func (f *fakeTokens) GoogleGrowthToken(_ context.Context, handle string, scopes []string, _ time.Duration,
 	_ *http.Client) (googleauth.SeatToken, error) {
+	if f.minting != nil {
+		f.minting()
+	}
 	return googleauth.SeatToken{Token: "ya29.seat-" + handle + "-" + strings.Join(scopes, ","),
 		ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
@@ -322,6 +327,16 @@ type world struct {
 
 func newWorld(t *testing.T, level string) *world {
 	t.Helper()
+	f := newFakePlay()
+	srv := httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(srv.Close)
+	return newWorldOn(t, level, f, &http.Client{Transport: httpxtest.Rewrite(t, srv)})
+}
+
+// newWorldOn is [newWorld]'s world reaching Google Play through hc, which
+// answers as f does.
+func newWorldOn(t *testing.T, level string, f *fakePlay, hc *http.Client) *world {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -336,7 +351,7 @@ integrations:
   google_cloud:
     enabled: true
     provisioning:
-      provisioner: crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com
+      identity_project: acme-crewlet-id
       provider: projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine
       federation_key: "${GOOGLE_CLOUD_FEDERATION_KEY}"
   google_play:
@@ -357,14 +372,11 @@ roles:
 	env := config.NewResolver(config.MapSource{
 		"GOOGLE_CLOUD_FEDERATION_KEY": string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
 	})
-	f := newFakePlay()
-	srv := httptest.NewServer(http.HandlerFunc(f.serve))
-	t.Cleanup(srv.Close)
 	w := &world{f: f, tokens: &fakeTokens{}, audit: &fakeAudit{}, leases: &fakeLeases{},
 		media: &fakeMedia{data: []byte("\x89PNG fake screenshot")}}
 	w.p = googleplay.New(googleplay.Deps{Company: func() *config.Company { return company },
 		Env: func() *config.Resolver { return env }, Tokens: w.tokens, Audit: w.audit, Leases: w.leases,
-		Reader: w.tokens, Media: w.media, HTTP: &http.Client{Transport: httpxtest.Rewrite(t, srv)},
+		Reader: w.tokens, Media: w.media, HTTP: hc,
 		Now: func() time.Time { return time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC) }})
 	return w
 }
@@ -381,15 +393,22 @@ func (w *world) call(t *testing.T, tool string, args map[string]any) (any, error
 // runs on what the call changes.
 func (w *world) answer(t *testing.T, tool string, args map[string]any, allow bool, between func()) (any, error) {
 	t.Helper()
+	return w.answerOn(t.Context(), t, tool, args, allow, between)
+}
+
+// answerOn is [world.answer] making every step of the call on ctx.
+func (w *world) answerOn(ctx context.Context, t *testing.T, tool string, args map[string]any, allow bool,
+	between func()) (any, error) {
+	t.Helper()
 	call := growth.Call{ID: "call-1", Handle: "mobile-lead", Turn: "turn-1", Tool: tool, Args: args}
 	def, ok := w.p.Catalog().Tool(tool)
 	if !ok {
 		t.Fatalf("no tool %s", tool)
 	}
 	if def.Class == growth.ClassRead {
-		return w.p.Run(t.Context(), call)
+		return w.p.Run(ctx, call)
 	}
-	hold, err := w.p.Prepare(t.Context(), call)
+	hold, err := w.p.Prepare(ctx, call)
 	if err != nil {
 		return nil, err
 	}
@@ -406,10 +425,10 @@ func (w *world) answer(t *testing.T, tool string, args map[string]any, allow boo
 		w.held++
 		call.HeldCall, call.Approver = fmt.Sprintf("held-%d", w.held), "founder"
 		if !allow {
-			return nil, w.p.Denied(t.Context(), call)
+			return nil, w.p.Denied(ctx, call)
 		}
 	}
-	return w.p.Apply(t.Context(), call, hold.Binding)
+	return w.p.Apply(ctx, call, hold.Binding)
 }
 
 // aboveTool is the framework's refusal of a change above its tool's class.

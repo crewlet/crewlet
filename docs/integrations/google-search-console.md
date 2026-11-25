@@ -24,13 +24,13 @@ The permissions Search Console gives, least first: **Restricted user** (sees per
 
 ## Connecting Crewlet
 
-1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing, and the form says whether it is connected. Turn Search Console on, then run the Google Cloud connection's Cloud Shell block again: it turns on the Search Console, Site Verification and Indexing APIs in the identity project and makes the company reader ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
+1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing, and the form says whether it is connected. Turn Search Console on: Crewlet turns on the Search Console, Site Verification and Indexing APIs in the identity project and makes the company reader itself, with no block to run ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
 2. Add the company reader's email, shown on the form, to each property as a **Restricted user**: Search Console, Settings, Users and permissions, Add user. Crewlet reads the company's own figures as this identity, never as an agent's.
 3. Turn agents on from the Agents tab, each with its sites, and give each its identity ([below](#give-an-agent-its-own-identity)). An agent at `administer` can also verify a property itself and become its owner, once an administrator approves.
 
 ## Give an agent its own identity
 
-An agent's identity at Search Console is its own Google growth identity, which Crewlet made; what is left is an owner adding it to each property, since Search Console has no API that adds a user. Search Console keeps no history of who did what, so the agent's own identity is what lets you remove one agent alone. Its row on the Agents tab reads **Needs you** until the identity reaches each of its properties, and **Set up identity** in its box shows the steps, with the email ready to copy:
+An agent's identity at Search Console is its own Google growth identity, which Crewlet made; what is left is an owner adding it to each property, since Search Console has no API that adds a user. Search Console keeps no history of who did what, so the agent's own identity is what lets you remove one agent alone. The agent's **Sites** list what the company reader sees, and take a typed property (`sc-domain:` and a domain, or a URL prefix ending in a slash) for one it cannot see yet. A new identity reads **Getting ready** for up to about two minutes, until Google lets a person add it. Then its row reads **Needs you** until the identity reaches each of its properties, each listed in the sheet with a button to its Users and permissions, and **Set up identity** in its box shows the steps, with the email ready to copy:
 
 1. In Search Console, choose the property, then open **Settings**, **Users and permissions**.
 2. Press **Add user** and paste the agent's email.

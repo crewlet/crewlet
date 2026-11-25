@@ -28,7 +28,7 @@ func TestTheAlarmReadingCarriesTheObjectivesTheMeterJudgedBurning(t *testing.T) 
 	}
 	r := &retention{metrics: recorder, objectives: meter}
 	var reading statelog.Reading
-	r.burning(&reading)
+	r.measures().read(&reading, time.Now(), nil)
 	if len(reading.ObjectiveBurns) != 1 || reading.ObjectiveBurns[0].Objective != objectives.ViewFirstByte {
 		t.Fatalf("the reading carries %+v, want view_first_byte burning", reading.ObjectiveBurns)
 	}
@@ -50,7 +50,7 @@ func TestTheAlarmReadingCarriesTheObjectivesTheMeterJudgedBurning(t *testing.T) 
 	}
 
 	var quiet statelog.Reading
-	(&retention{}).burning(&quiet)
+	(&retention{}).measures().read(&quiet, time.Now(), nil)
 	if len(quiet.ObjectiveBurns) != 0 {
 		t.Errorf("a node with no meter carries burns %+v", quiet.ObjectiveBurns)
 	}

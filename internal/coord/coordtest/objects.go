@@ -2,6 +2,7 @@ package coordtest
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/coord"
 )
@@ -49,6 +50,29 @@ var objectStoreCases = []fleetCase{{
 		got, found, err := h.f.ObjectCollection(h.ctx)
 		if err != nil || !found || string(got) != `{"node":"b"}` {
 			h.t.Fatalf("the report reads %s (found %v, %v), want the last one", got, found, err)
+		}
+	},
+}, {
+	// EVERY RECORD OF THE OBJECTS BUCKET IS A SMALL VALUE, on every backend:
+	// the agreed store, the collector's report and the trash reaper's past
+	// coord.SmallValueBytes are refused as too large and nothing is written,
+	// and at it each is written. Mutation: hold the twin's collection report
+	// to coord.MaxValueBytes, and its past case is written.
+	name: "an objects record past a small value is refused, and at it is written",
+	fn: func(h *fleetHarness) {
+		at, past := strings.Repeat("s", coord.SmallValueBytes), strings.Repeat("s", coord.SmallValueBytes+1)
+		_, err := h.f.AgreeObjectBackend(h.ctx, past)
+		h.tooLarge("an object backend", err)
+		h.tooLarge("a collection report", h.f.RecordObjectCollection(h.ctx, []byte(past)))
+		h.tooLarge("a trash reap report", h.f.RecordTrashReap(h.ctx, []byte(past)))
+		if got, err := h.f.AgreeObjectBackend(h.ctx, at); err != nil || got != at {
+			h.t.Errorf("an object backend at a small value = %d bytes, %v, want it agreed", len(got), err)
+		}
+		if err := h.f.RecordObjectCollection(h.ctx, []byte(at)); err != nil {
+			h.t.Errorf("a collection report at a small value = %v, want it written", err)
+		}
+		if err := h.f.RecordTrashReap(h.ctx, []byte(at)); err != nil {
+			h.t.Errorf("a trash reap report at a small value = %v, want it written", err)
 		}
 	},
 }, {

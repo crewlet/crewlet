@@ -50,6 +50,8 @@ type hermesRequest struct {
 // tool calls for the transcript, the result event's answer and status, and,
 // once the run is over, the plugin's record and the round cap's line.
 type hermesEvents struct {
+	undecidedLines
+
 	transcript transcriptLines
 	// seq numbers the run's tool calls, and calls each started call's number.
 	seq   int
@@ -170,9 +172,17 @@ func (d *hermesEvents) keepAnswer(text string) {
 }
 
 // Skipped implements [Decoder].
-func (d *hermesEvents) Skipped(n int64, bound int) {
+func (d *hermesEvents) Skipped(line LongLine) {
 	d.sawLine = true
-	d.transcript.skip(n, bound)
+	d.transcript.skip(line.Size, line.Bound)
+	switch lineType(line) {
+	case hermesRequestEvent:
+		if !d.following {
+			d.requests = append(d.requests, hermesRequest{})
+		}
+	case "":
+		d.undecided++
+	}
 }
 
 // runSpend implements [runSpender]: the responses the plugin recorded, every
@@ -227,6 +237,18 @@ func (d *hermesEvents) roundCapped() bool {
 // SIGTERM or SIGKILL, prints none. A relaunch after a discard is read on its
 // own result ([hermesEvents.Line]'s `system`).
 func (d *hermesEvents) Ended() bool { return d.done }
+
+// Requests implements [Decoder]: the responses the run's plugin recorded,
+// which the script appends after Hermes exits ([hermesRequestEvent]); its
+// stdout marks no request. Measured on 0.23.3 against a stand-in: 31 for 31,
+// and 6 with a 429 and a 500 it retried.
+func (d *hermesEvents) Requests() int { return len(d.requests) }
+
+// InFlight implements [Decoder]: none, as Hermes's own --max-turns stops its
+// loop before the next request (measured on 0.23.3: a cap of 3, 3 requests of
+// its loop). NOT COUNTED: the summary request Hermes makes once its loop is
+// capped, which the plugin's record leaves out (a fourth request there).
+func (d *hermesEvents) InFlight() int { return 0 }
 
 // Result implements [Decoder].
 func (d *hermesEvents) Result() sandbox.Result {
