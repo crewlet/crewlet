@@ -33,13 +33,12 @@ import (
 // where it has none); SkillDirs, the skill directories ([skillDirSlot]), an
 // earlier one's skill winning a name; Skills, the run's skills directory (""
 // copies none), and Copied, the file listing each skill copied there;
-// Reserved, the tags no repository takes; ImportInstructions, for a harness
-// that reads its instruction files itself, each file named as an import in
-// place of its text ([rootImports]), Limit not applying; SkillSep, what joins
-// a copy's tag and skill ([skillName]); FiringLimit, the bound in bytes on
-// what one nested firing hands of all its checkouts' instructions, frames
-// counted, nil for none ([fitFiring]); Gated, whether the harness's own code
-// answers for each checkout instead ([checkoutGate]), read on stdin.
+// Reserved, the tags no repository takes; ImportInstructions, each instruction
+// file named as an import in place of its text ([rootImports]), Limit not
+// applying; SkillSep, what joins a copy's tag and skill ([skillName]);
+// FiringLimit, a nested firing's bound in bytes on all its checkouts'
+// instructions, frames counted, nil for none ([fitFiring]); Gated, the
+// harness's own code answering for each checkout ([checkoutGate]) on stdin.
 type checkoutSpec struct {
 	Instructions       []instructionSlot `json:"instructions"`
 	Limit              *int              `json:"limit,omitempty"`

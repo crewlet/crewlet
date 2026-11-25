@@ -9,21 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// checkoutHome is where a runner that hands the checkouts below its run's
-// working directory their instructions and skills through the note helper's
-// checkout core (internal/notehelper's "Checkouts below the working
-// directory") keeps them: the helper and its state, the launch config
-// ([checkoutSpec]), the home instruction file the harness reads (agents: the
-// first of its candidates that exists, else the first; none for a harness
-// handed no instruction text, or whose script hands the sections itself, as
-// Hermes's does in its system prompt, whose home file is never held), the
-// home's own copy held beside the run (held), the file the helper writes the
-// checkouts' sections into (sections), the skills directory they are copied
-// into with the list of copies the run's end removes, the file listing their
-// roots for a harness the script points at them (roots, "" for none), and,
-// for a gated spec ([checkoutSpec.Gated]), gateCmd, writing what
-// checkout-launch reads, and afterLaunch, run once it has claimed. A copy is
-// built in state/staging ([checkoutHome.staging]).
+// checkoutHome is where a runner handing the checkouts below its working
+// directory their instructions and skills through the note helper's core
+// (internal/notehelper's "Checkouts below the working directory") keeps them:
+// the helper, its state and launch config ([checkoutSpec]); the home
+// instruction file the harness reads (agents: the first candidate that exists,
+// else the first; none where no text is handed there, Hermes's sections riding
+// its system prompt), the home's own held beside it (held), the helper's
+// sections (sections); the skills directory copies go into, each built in
+// state/staging, with the list the run's end removes; roots, the file listing
+// their roots for a harness the script points at them ("" for none); and, for a
+// gated spec, gateCmd, writing what checkout-launch reads, and afterLaunch, run
+// once it has claimed.
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
@@ -74,18 +71,15 @@ func (h checkoutHome) removeSiblingStaging() string {
 // checkoutSpec is what a runner's harness reads from a checkout's root, for
 // [checkoutHome.launchConfig]: Instructions, the slots ([checkoutSlot]);
 // Limit, the harness's own bound in bytes on a checkout's instructions, nil
-// for a harness with none; SkillDirs, the checkout's skill directories
-// ([checkoutSkillDir]); NestedSkillsOnly where the harness's nested adapter
-// hands skills alone, so its firings read no instruction file;
-// ImportInstructions where the harness reads them itself, each named as an
-// `@<absolute path>` import in place of its text, Limit not applying (Claude
-// Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code import no
-// absolute path from a home file, measured on 0.70.0 and 0.28.4); SkillSep,
-// what joins a copy's repository and skill, "" for `:`; FiringLimit, a nested
-// firing's bound in bytes on all its checkouts' files, nil for none; Gated
-// where the harness's own code answers for each checkout (internal/notehelper's
-// checkoutGate); and Budget, the bound the sections share with the run's own
-// text, nil for none.
+// for none; SkillDirs ([checkoutSkillDir]); NestedSkillsOnly where the nested
+// adapter hands skills alone; ImportInstructions where the harness reads them
+// itself, each an `@<absolute path>` import, Limit not applying (Claude Code,
+// measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code import no absolute
+// path from a home file, measured on 0.70.0 and 0.28.4); SkillSep, what joins
+// a copy's repository and skill, "" for `:`; FiringLimit, a nested firing's
+// bound in bytes on all its checkouts' files, nil for none; Gated where the
+// harness's own code answers (internal/notehelper's checkoutGate); Budget, the
+// bound the sections share with the run's own text, nil for none.
 type checkoutSpec struct {
 	Instructions       []checkoutSlot
 	Limit              *int
