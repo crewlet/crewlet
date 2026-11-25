@@ -283,7 +283,8 @@ func geminiPieceEdgeLines() []string {
 // geminiFormHeadEdgeLines is a compression whose line meets the head a form
 // is read within ([lineFormMaxBytes]): the summary's opening form ending a
 // byte short of it, at it and a byte past it, and its reply, a whole form,
-// led by white space to a byte short of it and to it.
+// led or trailed by white space to each of them, the line judged trimmed
+// whole ([lineFormHead]); each torn as well (eachChatCountRecord).
 func geminiFormHeadEdgeLines() []string {
 	set := `{"$set":{"sessionId":"s"}}`
 	ack := `{"id":"a","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}`
@@ -292,10 +293,9 @@ func geminiFormHeadEdgeLines() []string {
 	var out []string
 	for _, n := range []int{lineFormMaxBytes - 1, lineFormMaxBytes, lineFormMaxBytes + 1} {
 		out = append(out, set+"\n"+`{"id":"c","timestamp":"`+strings.Repeat("t", n-opening)+
-			`","type":"user","content":[{"text":"<state_snapshot>s"}]}`+"\n"+ack)
-	}
-	for _, n := range []int{lineFormMaxBytes - 1, lineFormMaxBytes} {
-		out = append(out, set+"\n"+user+"\n"+strings.Repeat(" ", n-len(ack))+ack)
+			`","type":"user","content":[{"text":"<state_snapshot>s"}]}`+"\n"+ack,
+			set+"\n"+user+"\n"+strings.Repeat(" ", n-len(ack))+ack,
+			set+"\n"+user+"\n"+ack+strings.Repeat(" ", n-len(ack)))
 	}
 	return out
 }
