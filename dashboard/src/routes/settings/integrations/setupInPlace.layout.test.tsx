@@ -97,6 +97,11 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
     "at %ipx Setup steps ends at the panel's edge, and nothing runs past it",
     async (width) => {
       await mount(width, theme);
+      // An unfinished form opens the box beside it; put away, it leaves the control.
+      const close = host!.querySelector<HTMLButtonElement>(
+        'button[aria-label="Close Setup steps"]',
+      );
+      if (close) flushSync(() => close.click());
       const toggle = [...host!.querySelectorAll("button")].find((b) =>
         b.textContent?.includes("Setup steps"),
       );
