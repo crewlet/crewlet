@@ -835,7 +835,7 @@ func worstRow(t *testing.T) PendingRun {
 	}
 	launch := LaunchRecord{StartedAt: worstAt, Started: true, Model: markup(256), ProviderKey: plain(64),
 		SignInID: uuid.NewString(), Entry: plain(executorkeep.EntryMaxBytes), FollowUp: FollowUpReason(plain(32)),
-		Brief: BriefKind(plain(32)), NotContinued: worstVerdict(),
+		TurnCap: math.MaxInt, Brief: BriefKind(plain(32)), NotContinued: worstVerdict(),
 		Handover: SummaryHandover(plain(32)), FreshHandover: SummaryHandover(plain(32)),
 		BriefOmitted: omitted, FreshOmitted: omitted, BriefLateOmitted: lateOmitted, FreshLateOmitted: lateOmitted,
 		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), BridgeConnected: true,

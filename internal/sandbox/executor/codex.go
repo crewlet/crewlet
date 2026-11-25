@@ -301,7 +301,7 @@ func codexFreshRoutes(req sandbox.RunRequest, paths Paths) string {
 // codexCappedEvent is the line a run's script adds to its stream, exiting 1,
 // where the note helper marked the run's round cap ([Paths.CodexCapFired])
 // AND the rollout lines the run appended record its turn aborted as
-// interrupted (the script's `aborted`): the cap is model responses per turn,
+// interrupted (the script's `aborted`): the cap is the run's model responses,
 // and a turn whose last counted response was its final answer completed.
 // Read as [sandbox.Result.RoundCapped] only beside that turn_aborted line
 // too, so no other interrupt is taken for the cap.
