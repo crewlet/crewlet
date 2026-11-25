@@ -323,13 +323,14 @@ func geminiCountTwices() []string {
 }
 
 // countReplayMaxBytes bounds the count recordings each variant is replayed
-// after, a record a variant: a variant meets what the count keeps of the
-// recording (ids, calls left open, patches, a compression's progress), never
-// its bytes, and every kind of record the five Gemini CLI recordings past it
-// keep (0.9 to 22.7 MB) a smaller one keeps too, g2hi's and m4a's in g3as and
-// c5hi, the same captures smaller. Replayed a variant at a time, those five
-// were nine tenths of the count differential's time; each is followed by
-// every variant at once instead.
+// after, a record a variant. SAFE because a variant after a recording meets
+// only the state the count keeps of it, never its bytes: the ids it kept,
+// calls left open and patched or removed records, a compression open or a
+// restart named. The five Gemini CLI recordings past it (0.9 to 22.7 MB)
+// carry those same kinds, each also in a smaller one (g2hi's and m4a's
+// captures in g3as and c5hi; patches, removals and compressions in
+// compressed.run1 and run2), and every variant at once still follows each.
+// Replayed a variant at a time, they were nine tenths of the time.
 const countReplayMaxBytes = 512 << 10
 
 // eachChatCountRecord hands each every chat file the differential counts for
