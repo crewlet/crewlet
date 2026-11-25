@@ -98,7 +98,8 @@ const maxLineBytes = sandbox.MaxFileBytes
 // The last line need not end in a line break: it is handed on, and a running
 // stream's partial last line is the decoder's to recognise.
 func eachLine(r io.Reader, dec Decoder, bound int) error {
-	return readLines(bufio.NewReaderSize(r, lineChunkBytes), bound,
+	l := streamLines{bound: bound, ends: true}
+	return l.read(bufio.NewReaderSize(r, lineChunkBytes), true,
 		func(line []byte) error {
 			dec.Line(line)
 			return nil
@@ -153,9 +154,9 @@ const lineChunkBytes = 64 << 10
 // subagent) resets one. ONE IMPLEMENTATION for [eachLine] and a captured
 // session's transcript, so there is one answer to how long a line may be: a
 // [streamLines] used for one whole read.
-func readLines(br *bufio.Reader, bound int, line func([]byte) error, skipped func(n int64, head, tail []byte) error) error {
+func readLines(br *bufio.Reader, bound int, line func([]byte) error, skipped func(int64) error) error {
 	l := streamLines{bound: bound}
-	return l.read(br, true, line, skipped)
+	return l.read(br, true, line, func(n int64, _, _ []byte) error { return skipped(n) })
 }
 
 // streamLines is [readLines] with its place kept between reads that may end
@@ -167,8 +168,10 @@ type streamLines struct {
 	held []byte
 	over int64
 	// head and tail are the first and last bytes of a line past bound
-	// ([skipHeadBytes], [skipTailBytes]), all it keeps of one.
+	// ([skipHeadBytes], [skipTailBytes]), all it keeps of one, and only for a
+	// decoder ([eachLine], ends): a record's other readers hold none.
 	head, tail []byte
+	ends       bool
 	// taken is how many bytes of the stream the reads consumed: handed on,
 	// held or counted.
 	taken int64
@@ -189,14 +192,18 @@ func (l *streamLines) read(br *bufio.Reader, end bool, line func([]byte) error,
 		switch {
 		case l.over > 0:
 			l.over += int64(len(chunk))
-			l.keepTail(chunk)
+			if l.ends {
+				l.keepTail(chunk)
+			}
 		case len(l.held)+len(chunk) > l.bound:
 			l.over = int64(len(l.held) + len(chunk))
-			l.head = append(l.head[:0], l.held[:min(len(l.held), skipHeadBytes)]...)
-			l.head = append(l.head, chunk[:min(len(chunk), skipHeadBytes-len(l.head))]...)
-			l.tail = l.tail[:0]
-			l.keepTail(l.held)
-			l.keepTail(chunk)
+			if l.ends {
+				l.head = append(l.head[:0], l.held[:min(len(l.held), skipHeadBytes)]...)
+				l.head = append(l.head, chunk[:min(len(chunk), skipHeadBytes-len(l.head))]...)
+				l.tail = l.tail[:0]
+				l.keepTail(l.held)
+				l.keepTail(chunk)
+			}
 			// RELEASED, not truncated: the buffer has grown to the bound,
 			// and keeping it would hold that much for the rest of the read.
 			l.held = nil

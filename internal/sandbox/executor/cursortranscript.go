@@ -104,7 +104,7 @@ func (b *transcriptBuilder) cursorRecord(ctx context.Context, lines *bufio.Reade
 			return b.linesPast("record", "lines")
 		}
 		return b.cursorLine(line)
-	}, func(n int64, _, _ []byte) error {
+	}, func(n int64) error {
 		return b.unread(fmt.Sprintf("a line of %s of the harness's record is past the %s one read reads, "+
 			"and was not read", humanSize(n), humanSize(maxLineBytes)))
 	})

@@ -325,7 +325,8 @@ func TestAStreamReadInPiecesIsReadAsOneWhole(t *testing.T) {
 		text := b.String()
 		var whole, pieces []string
 		line, skipped := record(&whole)
-		if err := readLines(bufio.NewReaderSize(strings.NewReader(text), 16), bound, line, skipped); err != nil {
+		if err := readLines(bufio.NewReaderSize(strings.NewReader(text), 16), bound, line,
+			func(n int64) error { return skipped(n, nil, nil) }); err != nil {
 			t.Fatal(err)
 		}
 		r := streamLines{bound: bound}

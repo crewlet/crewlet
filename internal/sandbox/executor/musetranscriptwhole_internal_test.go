@@ -68,7 +68,7 @@ func (b *transcriptBuilder) museRecordWhole(ctx context.Context, lines *bufio.Re
 			return b.linesPast("record", "lines")
 		}
 		return b.museLineWhole(line)
-	}, func(n int64, _, _ []byte) error {
+	}, func(n int64) error {
 		return b.unread(fmt.Sprintf("a line of %s of the harness's record is past the %s one read reads, "+
 			"and was not read", humanSize(n), humanSize(maxLineBytes)))
 	})
@@ -349,7 +349,7 @@ func museHeldWhole(r io.Reader, digest string, asked map[string]bool) (map[strin
 			stops = 0
 		}
 		return nil
-	}, func(size int64, _, _ []byte) error {
+	}, func(size int64) error {
 		if err := next(); err != nil {
 			return err
 		}
