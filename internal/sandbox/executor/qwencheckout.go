@@ -27,11 +27,11 @@ var qwenCheckouts = checkoutSpec{Instructions: []checkoutSlot{{Names: []string{"
 	Limit: checkoutUnlimited, FiringLimit: &qwenFiringLimit,
 	SkillDirs: []checkoutSkillDir{{Dir: ".qwen/skills"}, {Dir: ".agents/skills"}}, SkillSep: checkoutSkillSepHyphen}
 
-// qwenFiringLimit bounds the files one qwen-nested firing hands: the most
-// measured to reach Qwen Code 0.28.4's next request whole through a hook's
-// additionalContext is 300,000 bytes (B2b's hookbig row), and 192 KiB of
-// files beside the listings' 64 KiB leaves some 37 KB of that for the
-// frames. A file past what is left is named in the skip listing, to be read.
+// qwenFiringLimit bounds the files one qwen-nested firing hands, each counted
+// with its frame: the most measured to reach Qwen Code 0.28.4's next request
+// whole through a hook's additionalContext is 300,000 bytes (B2b's hookbig
+// row), and 192 KiB of framed files beside the listings' 64 KiB stays under
+// it. A file past what is left is named in the skip listing, to be read.
 var qwenFiringLimit = 192 << 10
 
 // qwenCheckoutHome is where a Qwen Code run keeps its checkouts' instructions
@@ -90,8 +90,8 @@ func qwenCheckoutsEntry(paths Paths) map[string]any {
 // ends, a teardown's signal included, after what the hook left out is said.
 // The run's helper first names the context files context.fileName settles
 // on, in the launch config and the home's list (qwen_helper.mjs `checkouts`),
-// its line where they are none going into the skip log once the gate has
-// made the state afresh.
+// its line where they are none going into the skip log
+// ([qwenBlankNamesSaid]).
 func qwenCheckoutsGate(paths Paths) string {
 	h := qwenCheckoutHome(paths)
 	q := shellword.Quote
@@ -99,6 +99,13 @@ func qwenCheckoutsGate(paths Paths) string {
 		`trap 'end "$harness"; qrestore; trap - EXIT; exit 143' TERM; trap 'end "$harness"; qrestore; trap - EXIT; exit 130' INT; ` +
 		`trap 'end "$harness"; qrestore; trap - EXIT; exit 129' HUP` + "\n" +
 		"qn=$(node " + q(paths.QwenHelper()) + " checkouts " + q(paths.QwenContextHomes()) + " " +
-		q(paths.QwenCheckoutLaunch()) + " < /dev/null) || exit 1\n" + h.gate() +
-		`[ -z "$qn" ] || printf '%s\n' "$qn" >> ` + q(h.skipped()) + " || exit 1\n"
+		q(paths.QwenCheckoutLaunch()) + " < /dev/null) || exit 1\n" + h.gate() + qwenBlankNamesSaid(h)
+}
+
+// qwenBlankNamesSaid is the shell putting the helper's line on blank-only
+// context names ($qn) into h's skip log, once the gate has made the state
+// afresh, and only where the helper ran ($hk): without it no hook hands
+// rules mid-run, and the gate has said nothing is handed.
+func qwenBlankNamesSaid(h checkoutHome) string {
+	return `[ -z "$qn" ] || [ -z "$hk" ] || printf '%s\n' "$qn" >> ` + shellword.Quote(h.skipped()) + " || exit 1\n"
 }
