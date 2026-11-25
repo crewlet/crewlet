@@ -185,6 +185,7 @@ export function SetupStepsSheet({ steps, resolveUrl }: StepsProps) {
         leadingIcon={<ListOrderedGlyph size="sm" />}
         aria-expanded={open}
         aria-controls={open ? id : undefined}
+        className="int-steps-toggle"
         onClick={() => setOpen(true)}
       >
         Setup steps
