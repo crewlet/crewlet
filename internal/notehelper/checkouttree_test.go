@@ -305,12 +305,12 @@ func TestAScopedRuleIsLeftOutAsClaudeCodeReadsItsFrontmatter(t *testing.T) {
 		"---\npaths: [unclosed\n---\nX\n", "---\npaths: [\"src/**\", 5]\n---\nMIXED\n"}
 	scope := *claudeRules().Tree.Scoped
 	for _, file := range handed {
-		if yamlScopedAway([]byte(file), scope) {
+		if claudeScopedAway([]byte(file), scope) {
 			t.Errorf("%q is left out, want it handed: Claude Code loads it at a session's start", file)
 		}
 	}
 	for _, file := range left {
-		if !yamlScopedAway([]byte(file), scope) {
+		if !claudeScopedAway([]byte(file), scope) {
 			t.Errorf("%q is handed, want it left out: Claude Code loads it only on a matching path, or never", file)
 		}
 	}
@@ -410,25 +410,26 @@ func TestATreeHandsItsFilesInQwenCodesWalk(t *testing.T) {
 // included, or the frontmatter is invalid YAML, read past a BOM or with CRLF.
 //
 // Mutation: count `**` as matching every path, read `Paths` as paths, take an
-// empty list or a number as a pattern, hand invalid YAML, or read no BOM or
-// CRLF frontmatter, and a row goes red.
+// empty list or a number as a pattern, drop a list's number, hand invalid
+// YAML, or read no BOM or CRLF frontmatter, and a row goes red.
 func TestAScopedRuleIsLeftOutAsQwenCodeReadsItsFrontmatter(t *testing.T) {
 	t.Parallel()
 	handed := []string{"X\n", "---\ndescription: d\n---\nX\n", "---\nglobs: [\"src/**\"]\n---\nX\n",
 		"---\napplyTo: \"src/**\"\n---\nX\n", "---\nPaths: [\"src/**\"]\n---\nX\n", "---\npaths: []\n---\nX\n",
 		"---\npaths: \"\"\n---\nX\n", "---\npaths:\n---\nX\n", "---\npaths: 5\n---\nX\n",
-		"---\npaths: [\"src/**\"]\nX\n"}
+		"---\npaths: [\"src/**\"]\nX\n", "---\npaths: [\"\"]\n---\nX\n"}
 	left := []string{"---\npaths: [\"src/**/*.ts\"]\n---\nX\n", "---\npaths: \"**\"\n---\nX\n",
+		"---\npaths: [5]\n---\nX\n", "---\npaths: [\"src/**\", 5]\n---\nX\n",
 		"---\npaths: [bad\n---\nX\n", "\uFEFF---\npaths: [\"src/**\"]\n---\nX\n",
 		"---\r\npaths: [\"src/**\"]\r\n---\r\nX\r\n"}
 	scope := *qwenRules().Tree.Scoped
 	for _, file := range handed {
-		if yamlScopedAway([]byte(file), scope) {
+		if qwenScopedAway([]byte(file), scope) {
 			t.Errorf("%q is left out, want it handed: Qwen Code loads it at a session's start", file)
 		}
 	}
 	for _, file := range left {
-		if !yamlScopedAway([]byte(file), scope) {
+		if !qwenScopedAway([]byte(file), scope) {
 			t.Errorf("%q is handed, want it left out: Qwen Code does not load it at a session's start", file)
 		}
 	}
