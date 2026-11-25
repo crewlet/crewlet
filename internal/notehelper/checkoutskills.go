@@ -14,17 +14,23 @@ import (
 
 // skillDirSlot is one of [checkoutSpec.SkillDirs]: Dir, below the checkout's
 // root, its skills the directories directly in it, or, Recursive, every one
-// its walk reaches ([walkSkills]). On the wire a plain one is a string and a
-// recursive one {"dir": ..., "recursive": true}.
+// its walk reaches ([walkSkills]), no deeper than Depth directories below Dir
+// where Depth is set, as far as the harness lists one (OpenCode 2.3.2: 6,
+// measured). On the wire a plain one is a string and a recursive one
+// {"dir": ..., "recursive": true[, "depth": n]}.
 type skillDirSlot struct {
 	Dir       string
 	Recursive bool
+	Depth     int
 }
 
 // MarshalJSON writes s as the helper reads it.
 func (s skillDirSlot) MarshalJSON() ([]byte, error) {
 	if !s.Recursive {
 		return json.Marshal(s.Dir)
+	}
+	if s.Depth > 0 {
+		return json.Marshal(map[string]any{"dir": s.Dir, "recursive": true, "depth": s.Depth})
 	}
 	return json.Marshal(map[string]any{"dir": s.Dir, "recursive": true})
 }
@@ -38,11 +44,15 @@ func (s *skillDirSlot) UnmarshalJSON(raw []byte) error {
 	var slot struct {
 		Dir       string `json:"dir"`
 		Recursive bool   `json:"recursive"`
+		Depth     int    `json:"depth"`
 	}
 	if err := json.Unmarshal(raw, &slot); err != nil {
 		return err
 	}
-	s.Dir, s.Recursive = slot.Dir, slot.Recursive
+	if slot.Depth < 0 {
+		return fmt.Errorf("the skill directory %q's depth %d is below 0", slot.Dir, slot.Depth)
+	}
+	s.Dir, s.Recursive, s.Depth = slot.Dir, slot.Recursive, slot.Depth
 	return nil
 }
 
@@ -53,6 +63,7 @@ type skillWalk struct {
 	realRoot      string
 	seen, reached map[string]bool
 	entries       int
+	depth         int
 	found         []skillDir
 }
 
@@ -65,7 +76,7 @@ type skillWalk struct {
 // it stays in the checkout (realRoot), never back into a directory above it.
 // Past [maxCopyDepth] directories deep or [maxCopyFiles] entries in a
 // directory or in all it is refused, the bound named.
-func walkSkills(realRoot, dir string, reached map[string]bool) ([]skillDir, error) {
+func walkSkills(realRoot, dir string, depth int, reached map[string]bool) ([]skillDir, error) {
 	info, err := os.Stat(dir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -75,7 +86,7 @@ func walkSkills(realRoot, dir string, reached map[string]bool) ([]skillDir, erro
 	case !info.IsDir():
 		return nil, nil
 	}
-	w := skillWalk{realRoot: realRoot, seen: reached, reached: map[string]bool{}, entries: maxCopyFiles}
+	w := skillWalk{realRoot: realRoot, seen: reached, reached: map[string]bool{}, entries: maxCopyFiles, depth: depth}
 	if err = w.walk(dir, 0, []os.FileInfo{info}); err != nil {
 		return nil, err
 	}
@@ -84,10 +95,14 @@ func walkSkills(realRoot, dir string, reached map[string]bool) ([]skillDir, erro
 }
 
 // walk walks dir, depth directories below the skill directory, with the
-// directories on its path in on ([walkSkills]).
+// directories on its path in on ([walkSkills]); none at the walk's own depth
+// bound, past which the harness lists nothing.
 func (w *skillWalk) walk(dir string, depth int, on []os.FileInfo) error {
 	if depth > maxCopyDepth {
 		return fmt.Errorf("its directory %s runs past the bound of %d directories deep", dir, maxCopyDepth)
+	}
+	if w.depth > 0 && depth >= w.depth {
+		return nil
 	}
 	entries, over, err := readDirBounded(dir)
 	if err != nil {
