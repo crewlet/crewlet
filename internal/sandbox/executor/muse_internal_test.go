@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -779,5 +780,44 @@ func TestAMuseCopyIsCheckedAgainstTheSkillsMuseListsBesideIt(t *testing.T) {
 	}
 	if rules, skills := museForeignOn([]byte(`{"context":{"foreign_personal_skills":false}}`)); !rules || skills {
 		t.Errorf("foreign_personal_skills false read as rules %v, skills %v", rules, skills)
+	}
+}
+
+// A RUN WITH NO STANDING TEXT STILL HOLDS THE SETTINGS A NESTED REJECT IS IN
+// (D709): a run with skill loads alone reinstalls the plugin, which drops a
+// person's reject of the nested hook, so its launch holds the home's settings
+// for the script to put back whole, leaves the hook out of the plugin and
+// hands its skip log the line naming the record.
+//
+// Mutation: hold only where there is standing text, or install the hook.
+func TestAMuseRunWithoutStandingTextHoldsTheNestedReject(t *testing.T) {
+	const settings = `{"schema_version":1,"runtime_capabilities":{"plugin:crewlet-notes:hook:posttooluse-checkouts":` +
+		`{"enabled":false}}}`
+	box := sandbox.NewFakeSandbox("b")
+	box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+		if cmd == "uname -m" {
+			return sandbox.ExecResult{Stdout: "x86_64\n"}, nil
+		}
+		return sandbox.ExecResult{}, nil
+	}
+	p := PathsFor(box)
+	if err := box.WriteFile(t.Context(), p.MuseSettings(), []byte(settings)); err != nil {
+		t.Fatal(err)
+	}
+	req := sandbox.RunRequest{Brief: "x", SkillLoads: sandbox.SkillWiring{Server: "crewlet", Tool: "skill_loaded",
+		URL: "http://127.0.0.1:7/mcp/t/skill"}}
+	if _, err := (Muse{}).WriteConfig(t.Context(), box, req, Session{ID: "s"}, p); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	if held, _ := box.ReadFile(t.Context(), p.MuseHeldSettings()); string(held) != settings {
+		t.Errorf("the home's settings were held as %q, want them whole", held)
+	}
+	if manifest, _ := box.ReadFile(t.Context(), p.MuseNotesPlugin()+"/.muse-plugin/plugin.json"); strings.Contains(
+		string(manifest), "muse-nested") {
+		t.Error("the plugin carries the nested hook the person rejected")
+	}
+	if launch, _ := box.ReadFile(t.Context(), p.MuseCheckoutLaunch()); !strings.Contains(string(launch),
+		`"skipped":["a repository cloned during the run is not handed`) {
+		t.Errorf("the launch hands the skip log no line: %s", launch)
 	}
 }
