@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -74,16 +73,16 @@ func Servers(surface Surface) []string {
 // Listed is what the engine's own server of an opening of s lists as it
 // opens, by name, sorted: each tool the surface offers that no server of the
 // opening's own serves ([Servers], [binding.endpointOf]), under its alias where
-// it has one ([aliased]), less the bridge's skill loader where the run's
-// harness loads its skills itself ([binding.offeredTool]). A surface only adds tools ([tools.Surface.Activate]),
-// so a run's harness lists every one of them for as long as the run lasts:
-// what a runner holds the harness's offer to ([sandbox.MCPServer.Tools]).
+// it has one ([aliased]), by the rule each server lists by ([Session.lists]).
+// A surface only adds tools ([tools.Surface.Activate]), so a run's harness
+// lists every one of them for as long as the run lasts: what a runner holds
+// the harness's offer to ([sandbox.MCPServer.Tools]).
 func Listed(s *Session) []string {
 	served := Servers(s.Surface)
 	seat := seatOf(s.Surface)
 	var out []string
 	for _, def := range s.Surface.ToolDefs() {
-		if def.Name == toolname.LoadToolSkill && s.nativeSkills() {
+		if !s.lists(def) {
 			continue
 		}
 		if seat != nil {
@@ -114,7 +113,7 @@ func Listed(s *Session) []string {
 func (s *Session) Listed() int {
 	n := 0
 	for _, def := range s.Surface.ToolDefs() {
-		if s.lists(def.Name) {
+		if s.lists(def) {
 			n++
 		}
 	}
