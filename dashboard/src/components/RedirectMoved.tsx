@@ -81,8 +81,8 @@ export function RedirectStale({ vendor, name }: { vendor: "google" | "mcp"; name
   const google = vendor === "google";
   return (
     <Callout variant="warning" title="Redirect URI out of date">
-      This client last signed in through <InlineCode>{client.redirect}</InlineCode>, an earlier
-      address of this engine. Add the current redirect URI to its{" "}
+      This client last signed in through <InlineCode close=",">{client.redirect}</InlineCode> an
+      earlier address of this engine. Add the current redirect URI to its{" "}
       {google ? "Authorized redirect URIs in Google Cloud" : "redirect URIs at the vendor"} before
       the next sign-in, or {google ? "Google" : "the vendor"} refuses it.
     </Callout>
