@@ -65,14 +65,20 @@ func holdHome(ctx context.Context, box sandbox.Sandbox, live, held string) (stri
 // home had none, a copy cut short while it was held ([heldPart]) removed
 // first. One command group, so its status is the put-back's wherever it is
 // chained. Nothing where none is held, so it runs any number of times;
-// what will not go back says which file on the error stream and fails,
-// leaving it held for the next try.
-func putBackHome(live, held string) string {
+// what will not go back, the run's file that will not go included, says which
+// file on the error stream and fails, leaving it held (the none marker too)
+// for the next try.
+func putBackHome(live, held string) string { return putBackHomeAt(shellword.Quote(live), held) }
+
+// putBackHomeAt is [putBackHome] for the live file the shell word live names,
+// which may be a variable's expansion.
+func putBackHomeAt(live, held string) string {
 	q := shellword.Quote
-	h, none, l, link, part := q(held), q(held+heldNone), q(live), q(held+heldLink), q(held+heldPart)
+	h, none, l, link, part := q(held), q(held+heldNone), live, q(held+heldLink), q(held+heldPart)
 	return fmt.Sprintf(`{ rm -f %[5]s; if [ -L %[4]s ]; then { rm -f %[3]s && mv -f %[4]s %[3]s; } 2> /dev/null || `+
 		`{ echo "crewlet: "%[3]s" was not put back from "%[4]s >&2; false; }; `+
-		`elif [ -e %[2]s ]; then rm -f %[3]s %[2]s; elif [ -e %[1]s ]; then `+
+		`elif [ -e %[2]s ]; then { { rm -f %[3]s; } 2> /dev/null && rm -f %[2]s; } || `+
+		`{ echo "crewlet: "%[3]s" was not put back" >&2; false; }; elif [ -e %[1]s ]; then `+
 		`{ { cat %[1]s > %[3]s; } 2> /dev/null && rm -f %[1]s; } || `+
 		`{ echo "crewlet: "%[3]s" was not put back from "%[1]s >&2; false; }; fi; }`, h, none, l, link, part)
 }
