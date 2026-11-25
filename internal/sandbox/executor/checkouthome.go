@@ -57,11 +57,11 @@ func (h checkoutHome) removeSiblingStaging() string {
 // NestedSkillsOnly where its nested adapter hands skills alone; and
 // ImportInstructions where it reads them itself, each named as an
 // `@<absolute path>` import, Limit not applying (Claude Code, measured on
-// 2.1.310 and 2.1.330; Gemini CLI and Qwen Code need their own measurement).
-// HomeSkills, the home's skill directories it lists beside the run's, whose
-// listed names a copy may not take; Budget, the helper's form of a bound the
-// sections share with what it loads beside them ("" for none); Skipped, lines
-// the launch keeps in the run's skip log.
+// 2.1.310 and 2.1.330; Gemini CLI and Qwen Code need their own measurement of
+// absolute imports before they set it). HomeSkills, the home's skill
+// directories it lists beside the run's, whose listed names a copy may not
+// take; Budget, the helper's form of a bound the sections share with what it
+// loads beside them ("" for none); Skipped, lines for the run's skip log.
 type checkoutSpec struct {
 	Instructions       []checkoutSlot
 	Limit              *int

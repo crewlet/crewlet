@@ -941,15 +941,18 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		return "", err
 	}
 	// THE NESTED HOOK SWITCHED OFF is left out, said once in the skip log
-	// (D709), and the settings holding a person's reject of it held, so the
-	// script's reinstall for the notes never leaves it switched back on.
+	// (D709); where the notes or loads reinstall the plugin, which drops a
+	// person's reject of it, the settings holding it are held to come back.
+	// A run that leaves the plugin alone holds nothing.
 	var skipped []string
 	if nested && len(nestedOff) > 0 {
 		nested, skipped = false, []string{"a repository cloned during the run is not handed its instructions and " +
 			"skills: the box home switches off the hook that hands it, and the run never switches it back on: " +
 			strings.Join(nestedOff, "; ")}
-		if _, err := museHold(ctx, box, paths); err != nil {
-			return "", err
+		if req.Steer.Set() || req.SkillLoads.Set() {
+			if _, err := museHold(ctx, box, paths); err != nil {
+				return "", err
+			}
 		}
 	}
 	if err := writeMuseCheckouts(ctx, box, req, paths, nested, skipped); err != nil {
