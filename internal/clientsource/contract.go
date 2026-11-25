@@ -300,6 +300,7 @@ var contract = []Entry{
 	{"AnswerLength", ReadUnion, "internal/config.TestTheDashboardHoldsInstructionsToTheEnginesRules"},
 	{"AnswerFormat", ReadUnion, "internal/config.TestTheDashboardHoldsInstructionsToTheEnginesRules"},
 	{"ASSISTANT_INSTRUCTIONS_MAX_RUNES", ReadScalar, "internal/config.TestTheDashboardHoldsInstructionsToTheEnginesRules"},
+	{"AssistantInstructions", ReadInterface, "internal/config.TestTheDashboardHoldsInstructionsToTheEnginesRules"},
 
 	// models.ts
 	{"HarnessAuthMode", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
