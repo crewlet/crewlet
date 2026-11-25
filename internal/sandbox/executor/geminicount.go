@@ -55,9 +55,6 @@ const geminiCountIDs = 1 << 16
 // person's record with is the request's alone, never the estimate's (measured).
 const geminiSyntheticAnswerBytes = 213
 
-// geminiSnapshot opens a compression's summary record.
-const geminiStateSnapshot = "<state_snapshot>"
-
 // geminiAnswer is one answer as the count reads it: its estimate in tokens,
 // its response's JSON bytes, and the records that carry it.
 type geminiAnswer struct {
@@ -85,6 +82,7 @@ type geminiCounting struct {
 	removed         map[string]bool
 	order           []string
 	snapshot        map[string]bool
+	compressions    geminiCompressionLines[string]
 	marks           countMarks
 }
 
@@ -111,17 +109,29 @@ type geminiCountLine struct {
 // over-counts what it rewinds) are passed over; a `$patch` adds its updates
 // as copies of their records and removes what it names, and one that orders
 // the records (`orderIds`, whose effect on the history was not measured) is
-// unread; an entry is a copy of its record. Anything else is unread.
+// unread; an entry is a copy of its record. Anything else is unread. A user
+// entry is a compression's summary by its lines ([geminiCompressionLines]),
+// known a line late.
 func (c *geminiCounting) line(raw []byte) {
+	user := c.read(raw)
+	if summary, ok := c.compressions.line(raw, user, user != ""); ok {
+		c.snapshot[summary] = true
+	}
+}
+
+// read reads one line ([geminiCounting.line]) and is the id of the user
+// entry it holds, "" for none.
+func (c *geminiCounting) read(raw []byte) string {
 	if lineSeparators(raw) {
 		c.marks = c.marks.with(sandbox.CountUnread)
-		return
+		return ""
 	}
 	var w geminiCountLine
 	if !wireObject(raw) || wireAlias(raw, &w) != nil {
 		c.marks = c.marks.with(sandbox.CountUnread)
-		return
+		return ""
 	}
+	user := ""
 	switch {
 	case !absent(w.Patch):
 		var patch struct {
@@ -131,13 +141,13 @@ func (c *geminiCounting) line(raw []byte) {
 		}
 		if wireDecode(w.Patch, &patch) != nil || !absent(patch.OrderIDs) {
 			c.marks = c.marks.with(sandbox.CountUnread)
-			return
+			return ""
 		}
 		for _, u := range patch.Updates {
 			var update geminiCountLine
 			if wireAlias(u, &update) != nil {
 				c.marks = c.marks.with(sandbox.CountUnread)
-				return
+				return ""
 			}
 			c.record(update)
 		}
@@ -149,52 +159,51 @@ func (c *geminiCounting) line(raw []byte) {
 		var kind string
 		if wireDecode(w.Type, &kind) != nil || (kind != "user" && kind != "gemini") {
 			c.marks = c.marks.with(sandbox.CountUnread)
-			return
+			return ""
 		}
-		c.record(w)
+		if id := c.record(w); kind == "user" {
+			user = id
+		}
 	}
 	if len(c.quarters)+len(c.answers)+len(c.calls)+len(c.removed) > geminiCountIDs {
 		c.marks = c.marks.with(sandbox.CountUnread)
 	}
+	return user
 }
 
-// record reads one copy of a record.
-func (c *geminiCounting) record(w geminiCountLine) {
+// record reads one copy of a record, and is its id, "" where it has none.
+func (c *geminiCounting) record(w geminiCountLine) string {
 	var id string
 	if wireDecode(w.ID, &id) != nil || id == "" {
 		c.marks = c.marks.with(sandbox.CountUnread)
-		return
+		return ""
 	}
 	if _, seen := c.quarters[id]; !seen {
 		c.order = append(c.order, id)
 	}
-	q, text, snapshot := c.content(id, w.Content)
+	q, text := c.content(id, w.Content)
 	thoughtQ, thoughtText := c.thoughts(w.Thoughts)
 	q += thoughtQ + c.toolCalls(id, w.ToolCalls)
-	if snapshot {
-		c.snapshot[id] = true
-	}
 	c.quarters[id] = max(c.quarters[id], q)
 	c.bytes[id] = max(c.bytes[id], text+thoughtText)
+	return id
 }
 
 // content is the quarter tokens of a record's content, a text or its parts,
-// its answers kept apart and its calls kept, its texts' UTF-8 bytes, and
-// whether it opens with a compression's summary.
-func (c *geminiCounting) content(id string, raw json.RawMessage) (int64, int64, bool) {
+// its answers kept apart and its calls kept, and its texts' UTF-8 bytes.
+func (c *geminiCounting) content(id string, raw json.RawMessage) (int64, int64) {
 	if absent(raw) {
-		return 0, 0, false
+		return 0, 0
 	}
 	var text string
 	if wireDecode(raw, &text) == nil {
-		return geminiTextQuarters(text), int64(len(text)), false
+		return geminiTextQuarters(text), int64(len(text))
 	}
 	var parts []json.RawMessage
 	if wireDecode(raw, &parts) != nil {
 		parts = []json.RawMessage{raw}
 	}
 	var q, bytes int64
-	snapshot := false
 	for i, part := range parts {
 		var p struct {
 			Text     json.RawMessage `json:"text"`
@@ -213,9 +222,6 @@ func (c *geminiCounting) content(id string, raw json.RawMessage) (int64, int64, 
 			if wireDecode(p.Text, &s) != nil {
 				c.marks = c.marks.with(sandbox.CountUnread)
 				continue
-			}
-			if i == 0 && strings.HasPrefix(strings.TrimSpace(s), geminiStateSnapshot) {
-				snapshot = true
 			}
 			q += geminiTextQuarters(s)
 			bytes += int64(len(s))
@@ -241,7 +247,7 @@ func (c *geminiCounting) content(id string, raw json.RawMessage) (int64, int64, 
 			q += n
 		}
 	}
-	return q, bytes, snapshot
+	return q, bytes
 }
 
 // thoughts is the quarter tokens of a reply's thoughts, each counted as the

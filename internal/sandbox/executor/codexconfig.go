@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path"
 	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -97,6 +100,12 @@ func codexPosture(req sandbox.RunRequest) []string {
 		`approval_policy="never"`,
 		`analytics.enabled=false`,
 		`tools.experimental_request_user_input.enabled=false`,
+		// NO FEATURE THAT RENAMES THE BRIDGE'S TOOLS, or lets a server change
+		// its tools after the bridge check ([codexBridgeCheck]), which refuses
+		// one a managed layer, above these flags, turns on.
+		`features.non_prefixed_mcp_tool_names=false`,
+		`features.multi_environment_mcp=false`,
+		`features.mcp_tool_list_changed=false`,
 		`shell_environment_policy.inherit="all"`,
 		`shell_environment_policy.exclude=` + tomlArray(codexShellExcluded()),
 	}
@@ -218,6 +227,23 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	if err != nil {
 		return "", err
 	}
+	// THE RUN'S SKILLS FIRST, so the home's switches are held to their files
+	// as Codex resolves a path ([codexSkillPathsSame]).
+	if err = writeCodexSkills(ctx, box, skills, paths); err != nil {
+		return "", err
+	}
+	if entries := codexSkillEntries(home); len(skills) > 0 && len(entries) > 0 {
+		same, sameErr := codexSkillPathsSame(ctx, box, entries, skills, paths)
+		if sameErr != nil {
+			return "", sameErr
+		}
+		if err = codexSkillsOff(entries, skills, same); err != nil {
+			return "", err
+		}
+	}
+	if err = codexServersOff(home, req.MCPServers); err != nil {
+		return "", err
+	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, c.NoteInstruction())
@@ -226,7 +252,17 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	if err != nil {
 		return "", err
 	}
-	docLimit, said, err := codexGuard(ctx, box, req, paths, home)
+	// THE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR: the nested hook
+	// runs it ([codexNestedHookFlags]), so the guard holds the hook's switches
+	// only where it is written. A run that needs it for its notes, cap,
+	// skills or bridge check ([codexBridgeCheck]) is refused without one;
+	// any other starts without the hook.
+	needed := codexHelped(req) || len(crewletServers(req.MCPServers)) > 0
+	helperErr := writeNoteHelper(ctx, box, paths.CodexNoteHelper())
+	if helperErr != nil && (needed || !errors.Is(helperErr, errNoHelperBuild)) {
+		return "", helperErr
+	}
+	docLimit, said, err := codexGuard(ctx, box, req, paths, home, helperErr == nil)
 	if err != nil {
 		return "", err
 	}
@@ -255,12 +291,6 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 			return "", err
 		}
 	}
-	// THE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR: the nested hook
-	// runs it ([codexNestedHookFlags]). A run that needs it for its notes,
-	// cap or skills is refused without one; any other starts without the hook.
-	if err = writeNoteHelper(ctx, box, paths.CodexNoteHelper()); err != nil && (codexHelped(req) || !errors.Is(err, errNoHelperBuild)) {
-		return "", err
-	}
 	if codexHelped(req) {
 		wired := sandbox.Wiring{Steer: req.Steer, SkillLoads: req.SkillLoads}
 		if err = writeCodexRoutes(ctx, box, req, wired, paths.CodexNotesURL(), paths.CodexSkillsURL()); err != nil {
@@ -273,9 +303,6 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 	launch := codexCheckoutHome(paths).launchConfig(codexCheckouts(docLimit), req.ReportedRepos)
 	if err = box.WriteFile(ctx, paths.CodexCheckoutLaunch(), launch); err != nil {
 		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
-	}
-	if err = writeCodexSkills(ctx, box, skills, paths); err != nil {
-		return "", err
 	}
 	return "", nil
 }
@@ -317,6 +344,205 @@ func codexSkillFiles(skills []sandbox.Skill) ([]codexSkill, error) {
 		out = append(out, codexSkill{name: s.Listed(), file: file})
 	}
 	return out, nil
+}
+
+// codexSkillsTable is a layer's `skills` table as Codex 0.171.0 types it
+// (codex-rs/config/src/skills_config.rs SkillsConfig). One that does not fit,
+// an entry without `enabled` or `max_context_tokens = 0`, switches nothing
+// off unseen: Codex then fails to start the run's thread (measured).
+type codexSkillsTable struct {
+	Bundled *struct {
+		Enabled *bool `toml:"enabled"`
+	} `toml:"bundled"`
+	IncludeInstructions *bool             `toml:"include_instructions"`
+	MaxContextTokens    *uint64           `toml:"max_context_tokens"`
+	Config              []codexSkillEntry `toml:"config"`
+}
+
+// codexSkillEntry is one `[[skills.config]]` entry as Codex 0.171.0 reads it.
+type codexSkillEntry struct {
+	Name    *string `toml:"name"`
+	Path    *string `toml:"path"`
+	Enabled *bool   `toml:"enabled"`
+}
+
+// codexSkillsSettled is, for each of skills, the entry of entries, read in
+// order, that last names it by its listed name or its SKILL.md (same, by the
+// entry's index), where that entry switches it off (measured on 0.171.0: a
+// later entry's enabled true listed a skill an earlier one switched off, a
+// later false hid one an earlier true listed; the directory's path, another
+// case and a project's entry do nothing). As Codex's
+// skill_config_rules_from_stack reads them, a name is trimmed and an entry
+// naming both a name and a path, or neither, is ignored.
+func codexSkillsSettled(entries []codexSkillEntry, skills []string, same func(entry int, skill string) bool) map[string]codexSkillEntry {
+	off := map[string]codexSkillEntry{}
+	for i, c := range entries {
+		if c.Enabled == nil || (c.Name == nil) == (c.Path == nil) {
+			continue
+		}
+		for _, name := range skills {
+			if c.Name != nil && strings.TrimSpace(*c.Name) != name || c.Path != nil && !same(i, name) {
+				continue
+			}
+			if *c.Enabled {
+				delete(off, name)
+			} else {
+				off[name] = c
+			}
+		}
+	}
+	return off
+}
+
+// codexSkillEntries is the home's own configuration's (home,
+// [codexHomeConfig]) `[[skills.config]]` entries as Codex reads them: from
+// that file alone, the user layer (rust-v0.171.0
+// skill_config_rules_from_stack: never /etc/codex, a managed layer or a
+// project's), none where it is no TOML (which the merge refuses) or its
+// table does not fit ([codexSkillsTable]).
+func codexSkillEntries(home string) []codexSkillEntry {
+	var config struct {
+		Skills *codexSkillsTable `toml:"skills"`
+	}
+	if decoded := toml.Unmarshal([]byte(home), &config) == nil; !decoded || config.Skills == nil {
+		return nil
+	}
+	if t := config.Skills; t.MaxContextTokens != nil && *t.MaxContextTokens == 0 ||
+		slices.ContainsFunc(t.Config, func(c codexSkillEntry) bool { return c.Enabled == nil }) {
+		return nil
+	}
+	return config.Skills.Config
+}
+
+// codexSkillPathsSame is, for entries' paths, which of the run's skills'
+// written SKILL.md each names as Codex 0.171.0 resolves a path (measured: a
+// `~/` path from the home, a relative one from the Codex home, a `..` past a
+// directory that is not there, a link to the skills directory and a linked
+// Codex home each hid the skill): made absolute and cleaned here, then held
+// to the file by `test -ef` in the box, which follows links as Codex's
+// canonicalization does. A path naming nothing there names no skill.
+func codexSkillPathsSame(ctx context.Context, box sandbox.Sandbox, entries []codexSkillEntry, skills []codexSkill,
+	paths Paths) (func(entry int, skill string) bool, error) {
+	var b strings.Builder
+	for i, c := range entries {
+		if c.Path == nil {
+			continue
+		}
+		p := *c.Path
+		switch {
+		case p == "~" || strings.HasPrefix(p, "~/"):
+			p = paths.Home + p[1:]
+		case !path.IsAbs(p):
+			p = paths.CodexHome() + "/" + p
+		}
+		for j, s := range skills {
+			fmt.Fprintf(&b, "[ %s -ef %s ] && echo %s%d.%d\n", shellword.Quote(path.Clean(p)),
+				shellword.Quote(paths.CodexSkills()+"/"+s.name+"/SKILL.md"), codexSameMark, i, j)
+		}
+	}
+	same := map[[2]int]bool{}
+	if b.Len() > 0 {
+		b.WriteString("exit 0\n")
+		res, err := box.Exec(ctx, b.String(), sandbox.ExecOptions{})
+		if err == nil && res.ExitCode != 0 {
+			err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+		}
+		if err != nil {
+			return nil, fmt.Errorf("executor: resolving the paths of the box home's Codex skill switches: %w", err)
+		}
+		for line := range strings.Lines(res.Stdout) {
+			var i, j int
+			if _, err := fmt.Sscanf(strings.TrimSpace(line), codexSameMark+"%d.%d", &i, &j); err == nil {
+				same[[2]int{i, j}] = true
+			}
+		}
+	}
+	return func(entry int, skill string) bool {
+		j := slices.IndexFunc(skills, func(s codexSkill) bool { return s.name == skill })
+		return same[[2]int{entry, j}]
+	}, nil
+}
+
+// codexSameMark opens each line of [codexSkillPathsSame]'s answer, so a
+// login profile's output reads as no answer.
+const codexSameMark = "crewlet-same "
+
+// codexSkillsOff refuses a run where the home's entries ([codexSkillEntries])
+// switch one of skills off ([codexSkillsSettled], its paths resolved by
+// same), which Codex leaves unlisted with no word; the run never switches it
+// back on.
+func codexSkillsOff(entries []codexSkillEntry, skills []codexSkill, same func(entry int, skill string) bool) error {
+	names := make([]string, 0, len(skills))
+	for _, s := range skills {
+		names = append(names, s.name)
+	}
+	off := codexSkillsSettled(entries, names, same)
+	var said []string
+	for _, name := range names {
+		if c, ok := off[name]; ok {
+			said = append(said, fmt.Sprintf("a [[skills.config]] entry (%s) sets enabled = false for the seat skill %s",
+				codexSkillSelector(c), name))
+		}
+	}
+	if len(said) == 0 {
+		return nil
+	}
+	return fmt.Errorf("executor: the box home's ~/.codex/config.toml switches off a skill of the run's, which "+
+		"Codex would then go without, with no word: %s; the run never switches back on what a person switched "+
+		"off, so remove that entry", strings.Join(said, "; "))
+}
+
+// codexSkillSelector names an entry by the selector it holds.
+func codexSkillSelector(c codexSkillEntry) string {
+	if c.Name != nil {
+		return fmt.Sprintf("name %q", *c.Name)
+	}
+	return fmt.Sprintf("path %q", *c.Path)
+}
+
+// codexServersOff refuses a run where the home's own configuration (home,
+// [codexHomeConfig]) switches one of Crewlet's own servers off: its
+// `[mcp_servers.<name>]` entry with `enabled = false`, a `disabled_tools`
+// naming one of the tools it lists ([sandbox.MCPServer.Tools]), or an
+// `enabled_tools` leaving one out. The run's own entry replaces the home's of
+// that name ([codexConfigOver]) and states it enabled with no tool disabled,
+// so it would otherwise switch back on what the person switched off. Another
+// layer holding the entry at all is [codexGuard]'s to refuse.
+func codexServersOff(home string, servers map[string]sandbox.MCPServer) error {
+	var config struct {
+		Servers map[string]struct {
+			Enabled  *bool     `toml:"enabled"`
+			Disabled []string  `toml:"disabled_tools"`
+			Only     *[]string `toml:"enabled_tools"`
+		} `toml:"mcp_servers"`
+	}
+	if decoded := toml.Unmarshal([]byte(home), &config) == nil; !decoded {
+		return nil
+	}
+	var said []string
+	for _, name := range crewletServers(servers) {
+		entry, ok := config.Servers[name]
+		if !ok {
+			continue
+		}
+		if entry.Enabled != nil && !*entry.Enabled {
+			said = append(said, fmt.Sprintf("mcp_servers.%s.enabled = false", name))
+		}
+		for _, tool := range servers[name].Tools {
+			if slices.Contains(entry.Disabled, tool) {
+				said = append(said, fmt.Sprintf("mcp_servers.%s.disabled_tools names %s", name, tool))
+			}
+			if entry.Only != nil && !slices.Contains(*entry.Only, tool) {
+				said = append(said, fmt.Sprintf("mcp_servers.%s.enabled_tools leaves %s out", name, tool))
+			}
+		}
+	}
+	if len(said) == 0 {
+		return nil
+	}
+	return fmt.Errorf("executor: the box home's ~/.codex/config.toml switches off Crewlet's own MCP server, "+
+		"which the run's tools go through: %s; the run never switches back on what a person switched off, so "+
+		"remove that key", strings.Join(said, "; "))
 }
 
 // writeCodexSkills writes each of a run's rendered skills as

@@ -124,20 +124,16 @@ func TestAMuseRunItsCapStoppedReadsAsCapped(t *testing.T) {
 	}
 }
 
-// AN EXEC PAST ITS CAP FAILS WHATEVER EACH RUN SAID: the script names the cap,
-// and the stream's own count of the main thread's requests is held to it.
+// AN EXEC'S REQUESTS ARE EVERY ONE OF ITS RUNS', whatever each run's own cap
+// said: `--max-model-steps` caps each run apart, so the collection holds the
+// exec's whole count to the cap ([Decoder.Requests]). tools made five.
 //
-// Mutation: drop the count check, and a five-request run under a cap of two
-// succeeds.
-func TestAMuseExecPastItsCapFailsWhateverEachRunSaid(t *testing.T) {
-	stream := append([]byte(`{"payload_type":"`+museCapMark+`","turns":2}`+"\n"), museFixture(t, "tools.stream.jsonl")...)
-	res := (Muse{}).Parse(stream)
-	if res.Success || res.RoundCapped || !strings.Contains(res.Error, "turn cap of 2 was not enforced") {
-		t.Fatalf("result %+v, want the unenforced cap", res)
-	}
-	stream = append([]byte(`{"payload_type":"`+museCapMark+`","turns":5}`+"\n"), museFixture(t, "tools.stream.jsonl")...)
-	if res := (Muse{}).Parse(stream); !res.Success {
-		t.Fatalf("a run within its cap reads as %+v", res)
+// Mutation: count one run's requests, or none, and the count is not five.
+func TestAMuseExecsRequestsAreEveryRunsWhateverEachRunSaid(t *testing.T) {
+	dec := &museEvents{}
+	_ = eachLine(bytes.NewReader(museFixture(t, "tools.stream.jsonl")), dec, maxLineBytes)
+	if dec.Requests() != 5 {
+		t.Fatalf("the exec counts %d requests, want five", dec.Requests())
 	}
 }
 
@@ -230,7 +226,7 @@ func TestAMuseRunIsStartedOnItsPosture(t *testing.T) {
 	for _, want := range []string{"muse exec --json --yolo", `--session-id "$s"`, "--disable-reminders",
 		"--disable-request-user-input", "--allow-workspace-switch",
 		"--model '\\''muse-1'\\''", "--reasoning-effort '\\''high'\\''", "--max-model-steps 7",
-		museLayer + ` --prompt-file "$p"`, "at 1 4 25", museCapMark} {
+		museLayer + ` --prompt-file "$p"`, "at 1 4 25"} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("the command lacks %q:\n%s", want, cmd)
 		}
@@ -254,7 +250,7 @@ func TestAMuseRunIsStartedOnItsPosture(t *testing.T) {
 // Mutation: write the settings whole, drop `required`, round the wait down,
 // or write the servers into the settings, whose approval drops both.
 func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
-	fixedMuseNonce(t)
+	nonce := sessionNonce("s")
 	box := sandbox.NewFakeSandbox("b")
 	p := PathsFor(box)
 	home := `{"schema_version":1,"run":{"toolset":["shell"],"system_prompt_append":"HOME"},` +
@@ -267,7 +263,7 @@ func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
 			CallTimeout: 6*time.Minute + 500*time.Millisecond},
 		"local": {Command: "srv", Args: []string{"-x"}, Env: map[string]string{"K": "v"}},
 	}}
-	config, err := (Muse{}).WriteConfig(t.Context(), box, req, Session{}, p)
+	config, err := (Muse{}).WriteConfig(t.Context(), box, req, Session{ID: "s"}, p)
 	if err != nil || config != p.MuseSettings() {
 		t.Fatalf("WriteConfig = %q, %v", config, err)
 	}
@@ -284,11 +280,11 @@ func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
 		"mcpServers": map[string]any{"home": map[string]any{"type": "stdio", "command": "h"}}}) {
 		t.Errorf("settings = %v", got)
 	}
-	if got := read(box, p.MuseServers()+"/crewlet-n0nce.json"); !jsonEqual(got, map[string]any{"url": "http://e/mcp",
+	if got := read(box, p.MuseServers()+"/crewlet-"+nonce+".json"); !jsonEqual(got, map[string]any{"url": "http://e/mcp",
 		"headers": map[string]any{"Authorization": "Bearer t"}, "required": true, "tool_timeout_sec": 361.0}) {
 		t.Errorf("crewlet = %v", got)
 	}
-	if got := read(box, p.MuseServers()+"/local-n0nce.json"); !jsonEqual(got, map[string]any{"type": "stdio",
+	if got := read(box, p.MuseServers()+"/local-"+nonce+".json"); !jsonEqual(got, map[string]any{"type": "stdio",
 		"command": "srv", "args": []any{"-x"}, "env": map[string]any{"K": "v"}, "required": true}) {
 		t.Errorf("local = %v", got)
 	}
@@ -296,7 +292,7 @@ func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
 		t.Errorf("the brief file holds %q", brief)
 	}
 	bare := sandbox.NewFakeSandbox("c")
-	if _, err := (Muse{}).WriteConfig(t.Context(), bare, sandbox.RunRequest{System: "SEAT"}, Session{}, p); err != nil {
+	if _, err := (Muse{}).WriteConfig(t.Context(), bare, sandbox.RunRequest{System: "SEAT"}, Session{ID: "s"}, p); err != nil {
 		t.Fatal(err)
 	}
 	if got := read(bare, p.MuseSettings()); !jsonEqual(got, map[string]any{"schema_version": 1.0,
@@ -307,7 +303,7 @@ func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
 	if err := untouched.WriteFile(t.Context(), p.MuseSettings(), []byte(home)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (Muse{}).WriteConfig(t.Context(), untouched, sandbox.RunRequest{}, Session{}, p); err != nil {
+	if _, err := (Muse{}).WriteConfig(t.Context(), untouched, sandbox.RunRequest{}, Session{ID: "s"}, p); err != nil {
 		t.Fatal(err)
 	}
 	if raw, _ := untouched.ReadFile(t.Context(), p.MuseSettings()); string(raw) != home {
@@ -317,13 +313,13 @@ func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
 		if err := untouched.WriteFile(t.Context(), p.MuseSettings(), []byte(broken)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := (Muse{}).WriteConfig(t.Context(), untouched, sandbox.RunRequest{System: "S"}, Session{},
-			p); err == nil || !strings.Contains(err.Error(), p.MuseSettings()) {
+		if _, err := (Muse{}).WriteConfig(t.Context(), untouched, sandbox.RunRequest{System: "S"},
+			Session{ID: "s"}, p); err == nil || !strings.Contains(err.Error(), p.MuseSettings()) {
 			t.Errorf("settings %s: err = %v, want them refused by name", broken, err)
 		}
 	}
 	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{MCPServers: map[string]sandbox.MCPServer{
-		"a b": {Transport: sandbox.TransportHTTP, URL: "http://e"}}}, Session{}, p); err == nil {
+		"a b": {Transport: sandbox.TransportHTTP, URL: "http://e"}}}, Session{ID: "s"}, p); err == nil {
 		t.Error("a server name no file and shell word carries was taken")
 	}
 }
@@ -344,10 +340,10 @@ func jsonEqual(a, b any) bool {
 func TestAMuseRunPastItsSystemLimitIsRefused(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	p := PathsFor(box)
-	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{System: strings.Repeat("x", 65536)}, Session{}, p); err != nil {
+	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{System: strings.Repeat("x", 65536)}, Session{ID: "s"}, p); err != nil {
 		t.Fatalf("65,536 bytes refused: %v", err)
 	}
-	_, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{System: strings.Repeat("x", 65537)}, Session{}, p)
+	_, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{System: strings.Repeat("x", 65537)}, Session{ID: "s"}, p)
 	if err == nil || !strings.Contains(err.Error(), "run.system_prompt_append") {
 		t.Fatalf("65,537 bytes: %v, want the limit named", err)
 	}
@@ -358,38 +354,73 @@ func TestAMuseRunPastItsSystemLimitIsRefused(t *testing.T) {
 		if err := held.WriteFile(t.Context(), p.MuseSettings(), []byte(home)); err != nil {
 			t.Fatal(err)
 		}
-		_, err = (Muse{}).WriteConfig(t.Context(), held, sandbox.RunRequest{System: system}, Session{}, p)
+		_, err = (Muse{}).WriteConfig(t.Context(), held, sandbox.RunRequest{System: system}, Session{ID: "s"}, p)
 		if got := err != nil && strings.Contains(err.Error(), "the box home's run.system_prompt_append"); got != refused {
 			t.Errorf("the home's 65,530 bytes and %d of the run's: %v, want refused %v", len(system), err, refused)
 		}
 	}
 }
 
-// A CONTINUING RUN WRITES A SECOND WIRING for the session its script may
-// start instead, its servers wired to the job's other token, and the brief
-// that session is handed.
+// A CONTINUING RUN NAMES ITS SERVERS AS ITS SESSION'S FIRST RUN DID, and
+// writes a second wiring for the session its script may start instead, its
+// servers wired to the job's other token under that session's own names, and
+// the brief that session is handed. The record hands the model every earlier
+// call under the name it was made by, and Muse refuses a call to a name the
+// run no longer has (measured on 1.4.25). Where the run is handed no second
+// wiring, the new session still names the run's servers for itself.
 //
-// Mutation: write the fresh servers from the continued wiring.
-func TestAContinuingMuseRunWritesTheFreshSessionsWiring(t *testing.T) {
-	fixedMuseNonce(t)
-	box := sandbox.NewFakeSandbox("b")
-	p := PathsFor(box)
+// Mutations, each red: draw the suffix per run; name the fresh servers for
+// the continued session; write the fresh servers from the continued wiring;
+// write no fresh wiring where the request hands none.
+func TestAContinuingMuseRunNamesItsServersAsItsSessionDid(t *testing.T) {
+	const session, freshID = "0b5e0000-0000-4000-8000-0000000000a1", "0b5e0000-0000-4000-8000-0000000000a2"
 	server := func(token string) map[string]sandbox.MCPServer {
 		return map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://e/mcp",
 			Headers: map[string]string{"Authorization": "Bearer " + token}}}
 	}
-	req := sandbox.RunRequest{Resume: "0b5e0000-0000-4000-8000-0000000000a1", FreshBrief: "start over",
-		MCPServers: server("continued"), FreshWiring: &sandbox.Wiring{MCPServers: server("fresh")}}
-	if _, err := (Muse{}).WriteConfig(t.Context(), box, req, Session{}, p); err != nil {
+	first := sandbox.NewFakeSandbox("b")
+	p := PathsFor(first)
+	if _, err := (Muse{}).WriteConfig(t.Context(), first, sandbox.RunRequest{MCPServers: server("first")},
+		Session{ID: session}, p); err != nil {
 		t.Fatal(err)
 	}
-	fresh, _ := box.ReadFile(t.Context(), p.MuseServersFresh()+"/crewlet-n0nce.json")
-	continued, _ := box.ReadFile(t.Context(), p.MuseServers()+"/crewlet-n0nce.json")
+	named := p.MuseServers() + "/crewlet-" + sessionNonce(session) + ".json"
+	if _, err := first.ReadFile(t.Context(), named); err != nil {
+		t.Fatalf("the session's first run wrote no %s: %v", named, err)
+	}
+	box := sandbox.NewFakeSandbox("b")
+	req := sandbox.RunRequest{Resume: session, FreshBrief: "start over",
+		MCPServers: server("continued"), FreshWiring: &sandbox.Wiring{MCPServers: server("fresh")}}
+	if _, err := (Muse{}).WriteConfig(t.Context(), box, req, Session{ID: session, Continues: true, Fresh: freshID},
+		p); err != nil {
+		t.Fatal(err)
+	}
+	continued, _ := box.ReadFile(t.Context(), named)
+	fresh, _ := box.ReadFile(t.Context(), p.MuseServersFresh()+"/crewlet-"+sessionNonce(freshID)+".json")
 	if !strings.Contains(string(fresh), "Bearer fresh") || !strings.Contains(string(continued), "Bearer continued") {
 		t.Fatalf("servers %s, fresh %s", continued, fresh)
 	}
 	if brief, _ := box.ReadFile(t.Context(), p.FreshBrief()); string(brief) != "start over" {
 		t.Errorf("the fresh brief holds %q", brief)
+	}
+	req.FreshWiring = nil
+	unwired := sandbox.NewFakeSandbox("b")
+	if _, err := (Muse{}).WriteConfig(t.Context(), unwired, req, Session{ID: session, Continues: true,
+		Fresh: freshID}, p); err != nil {
+		t.Fatal(err)
+	}
+	own, _ := unwired.ReadFile(t.Context(), p.MuseServersFresh()+"/crewlet-"+sessionNonce(freshID)+".json")
+	if !strings.Contains(string(own), "Bearer continued") {
+		t.Errorf("a run handed one wiring names no server for the session it may start: %q", own)
+	}
+	if !strings.Contains(museScript(req, Session{ID: session, Continues: true, Fresh: freshID}, p, time.Second),
+		p.MuseServersFresh()) {
+		t.Error("the script of a run handed one wiring installs no servers for the session it may start")
+	}
+	for _, s := range []Session{{}, {ID: session, Continues: true}} {
+		if _, err := (Muse{}).WriteConfig(t.Context(), box, req, s, p); err == nil {
+			t.Errorf("a run naming no session (%+v) was written", s)
+		}
 	}
 }
 
@@ -652,33 +683,6 @@ func TestAMuseSessionIsJudgedOnTheSafeSide(t *testing.T) {
 	}
 }
 
-// fixedMuseNonce names every server of the case's runs with the suffix
-// "n0nce", for the case to read the files back by name. Never in a parallel
-// case: the suffix is the package's.
-func fixedMuseNonce(t *testing.T) {
-	t.Helper()
-	was := museNonce
-	museNonce = func() string { return "n0nce" }
-	t.Cleanup(func() { museNonce = was })
-}
-
-// EVERY RUN NAMES ITS SERVERS AFRESH, six hex digits no repository file
-// can know beforehand: a trusted run loads the repository's `.mcp.json`
-// beside the run's own servers, so the run's bridge is never under a name a
-// checkout can hold.
-//
-// Mutation: name the servers as handed, or reuse one suffix.
-func TestEveryMuseRunNamesItsServersAfresh(t *testing.T) {
-	seen := map[string]bool{}
-	for range 64 {
-		n := museNonce()
-		if len(n) != 6 || strings.Trim(n, "0123456789abcdef") != "" || seen[n] {
-			t.Fatalf("suffix %q: want six hex digits, new each run", n)
-		}
-		seen[n] = true
-	}
-}
-
 // MUSE'S ONE RELEASE IS THE ONE ITS PROFILE'S written_for NAMES, read bare
 // as every release here is: never none, so a box or writer whose release
 // does not read ("") never equals it and continues nothing.
@@ -704,7 +708,7 @@ func TestMuseIsWrittenForTheReleaseItsProfileNames(t *testing.T) {
 //
 // Mutation: lengthen the suffix, or refuse a name for its length.
 func TestAMuseServerNameStaysWholeUpTo19Characters(t *testing.T) {
-	nonce := museNonce()
+	nonce := sessionNonce("s")
 	readable := strings.Repeat("a", 19)
 	if full := readable + "-" + nonce; len(full) > museServerNameShown {
 		t.Fatalf("a 19-character name runs as %q, past the %d Muse shows whole", full, museServerNameShown)
@@ -719,6 +723,27 @@ func TestAMuseServerNameStaysWholeUpTo19Characters(t *testing.T) {
 	for _, name := range []string{readable, long} {
 		if _, err := box.ReadFile(t.Context(), "/s/"+name+"-"+nonce+".json"); err != nil {
 			t.Errorf("the server %s is not written under its name and the run's suffix: %v", name, err)
+		}
+	}
+}
+
+// A MUSE RUN'S FAILED ATTEMPTS ARE NONE OF ITS REQUESTS: its usage states
+// them apart from the calls answered or cut off, and a refused attempt bills
+// nothing, so the run counts the calls answered and cut off; a usage stating
+// no such split is read by its calls.
+//
+// Mutation: count every call the usage states, and the first row counts 8.
+func TestAMuseRunsFailedAttemptsAreNoneOfItsRequests(t *testing.T) {
+	for payload, want := range map[string]int{
+		`{"calls":8,"completed_calls":6,"failed_calls":2,"cancelled_calls":0,"models":[]}`: 6,
+		`{"calls":5,"completed_calls":4,"failed_calls":0,"cancelled_calls":1,"models":[]}`: 5,
+		`{"calls":3,"models":[]}`: 3,
+	} {
+		dec := &museEvents{}
+		_ = eachLine(strings.NewReader(`{"stream":{"kind":"exec.usage","id":"x"},"payload_type":"run.usage","payload":`+
+			payload+`}`), dec, maxLineBytes)
+		if dec.Requests() != want {
+			t.Errorf("%s: %d requests, want %d", payload, dec.Requests(), want)
 		}
 	}
 }

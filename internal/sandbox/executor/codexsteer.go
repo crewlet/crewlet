@@ -1,14 +1,18 @@
 package executor
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"strconv"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -57,34 +61,53 @@ func (Codex) pollCeiling() int { return codexSteerMaxCodePoints }
 // session shows reached the model ([codexNotesHeld]): the helper never
 // confirms, so the record is the one confirm path ([recordConfirmer]).
 func (Codex) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
-	takes []ServedTake) ([]string, error) {
+	takes []ServedTake, summary *summaryRead) ([]string, error) {
 
 	find := codexRolloutPath(PathsFor(box), session.ID)
 	if find == "" {
-		return nil, fmt.Errorf("executor: %q is no Codex session the run reported", session.ID)
+		return nil, summary.failedBy(fmt.Errorf("executor: %q is no Codex session the run reported", session.ID))
 	}
-	from, err := codexRunFrom(ctx, box, session.ID)
-	if err != nil {
-		return nil, err
+	// A RUN'S START THAT DOES NOT READ decides no take, and the walk reads the
+	// summary alone: it needs no start.
+	from, fromErr := codexRunFrom(ctx, box, session.ID)
+	if fromErr != nil && summary == nil {
+		return nil, fromErr
+	}
+	if fromErr != nil {
+		takes = nil
 	}
 	found, err := box.Exec(ctx, find, sandbox.ExecOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("executor: finding Codex's rollout of session %s: %w", session.ID, err)
+		return nil, summary.failedBy(fmt.Errorf("executor: finding Codex's rollout of session %s: %w", session.ID,
+			err))
 	}
 	path := strings.TrimSpace(found.Stdout)
 	if path == "" {
-		return nil, fmt.Errorf("executor: the box holds no Codex rollout of session %s", session.ID)
+		return nil, summary.failedBy(fmt.Errorf("executor: the box holds no Codex rollout of session %s",
+			session.ID))
 	}
 	body, err := box.OpenFile(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("executor: opening Codex's rollout of session %s: %w", session.ID, err)
+		return nil, summary.failedBy(fmt.Errorf("executor: opening Codex's rollout of session %s: %w",
+			session.ID, err))
 	}
 	defer func() { _ = body.Close() }()
-	held, err := codexNotesHeld(body, takes, from)
-	if err != nil {
-		return nil, fmt.Errorf("executor: reading Codex's rollout of session %s: %w", session.ID, err)
+	held, err := codexNotesHeld(ctx, body, takes, from, summary)
+	switch {
+	case err != nil:
+		return nil, summary.failedBy(fmt.Errorf("executor: reading Codex's rollout of session %s: %w",
+			session.ID, err))
+	case fromErr != nil:
+		return nil, fromErr
 	}
 	return held, nil
+}
+
+// recordSummary reports whether the receipts' walk of the rollout reads ask's
+// summary: on the release its summary was read on, where no count or next
+// request is asked, whose walk of the session's archive reads it instead.
+func (Codex) recordSummary(ask sandbox.MainThreadAsk) bool {
+	return summaryReleaseWhy(ask.Release, codexCarryRelease) == "" && !ask.Count && !ask.Next
 }
 
 // codexRunFrom is how many lines of session's rollout came before the box's
@@ -118,13 +141,14 @@ func codexRunFrom(ctx context.Context, box sandbox.Sandbox, session string) (int
 // never recorded leaves the later ones to be matched, unheld itself. Whether
 // 0.171.0 can accept a turn/steer and not record it was not measured; the
 // helper takes an accepted steer as delivered, so the match never assumes.
-func codexNotesHeld(r io.Reader, takes []ServedTake, from int) ([]string, error) {
+// summary, if not nil, takes the newest compaction's summary.
+func codexNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from int,
+	summary *summaryRead) ([]string, error) {
 	var settled, pending []string
 	next := 0
-	_, err := codexConversation(r, from, func(kind codexTurnKind, text string) {
+	_, err := codexConversation(ctx, r, from, summary, func(kind codexTurnKind, digest string) {
 		switch kind {
 		case codexPersonsWords:
-			digest := ItemDigest(text)
 			for i := next; i < len(takes); i++ {
 				if takes[i].Digest == digest {
 					pending, next = append(pending, takes[i].InboxID), i+1
@@ -160,43 +184,284 @@ const (
 )
 
 // codexConversation hands each the lines of the rollout r past its first from
-// that make the conversation the model reads, in order. It reports whether
-// the last line was torn, which is never read; a fragment is passed over as
-// Codex passes it, and a line past its bound fails the read
-// ([errCodexRolloutLine]).
-func codexConversation(r io.Reader, from int, each func(kind codexTurnKind, text string)) (bool, error) {
-	return codexLines(r, func(n int, body []byte) error {
-		line, record := codexRecordOf(body)
-		if n <= from || !record {
-			return nil
+// that make the conversation the model reads, in order, a person's words by
+// their digest ([ItemDigest]), on the notes walk ([lineWalk.setupNotes]): no
+// line is held. It reports whether the last line was torn, which is never
+// read; a fragment is passed over as Codex passes it, and a line past its
+// bound fails the read ([errCodexRolloutLine]). Every compaction, from the
+// first line on, is read into summary where it is not nil
+// ([codexCompaction]).
+func codexConversation(ctx context.Context, r io.Reader, from int, summary *summaryRead,
+	each func(kind codexTurnKind, digest string)) (bool, error) {
+	var w lineWalk
+	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), codexWalkBound)
+	var l codexNoteLine
+	if summary != nil {
+		l.compaction = &codexCompaction{}
+	}
+	for n := 1; ; n++ {
+		l.start()
+		line, err := w.noteLine(ctx, func() error { return l.read(&w) })
+		switch {
+		case err != nil:
+			return false, fmt.Errorf("executor: reading codex rollout line %d: %w", n, err)
+		case line.none:
+			return false, nil
+		case line.torn:
+			return true, nil
+		case line.past:
+			return false, fmt.Errorf("%w: line %d is over %d bytes", errCodexRolloutLine, n, codexRolloutLineMaxBytes)
 		}
-		if line.Type == "compacted" {
-			each(codexCompacted, "")
-			return nil
+		if summary != nil && line.object {
+			l.compaction.into(summary, l.typ, l.fragment)
 		}
-		var item codexItemWire
-		if line.Type == "response_item" && wireDecode(line.Payload, &item) == nil {
-			switch {
-			case item.Type == "message" && codexPersonsMessage(item.Role, item.Meta):
-				each(codexPersonsWords, item.text())
-			case codexReply(item) && !line.Metadata.CompactionOutput:
-				each(codexModelReply, "")
-			}
+		if n > from && line.object && !l.fragment {
+			l.tell(each)
 		}
-		return nil
-	}, func(n int) error {
-		return fmt.Errorf("%w: line %d is over %d bytes", errCodexRolloutLine, n, codexRolloutLineMaxBytes)
+		if line.ended {
+			return false, nil
+		}
+	}
+}
+
+// codexNoteLine is what a collection's read keeps of one rollout line: the
+// envelope a note's confirm reads ([codexRecordOf]'s fields), and the item its
+// payload decodes as ([codexItemWire]'s), its person's words digested as read.
+type codexNoteLine struct {
+	typ                        string
+	compactionOutput, fragment bool
+	itemTook                   bool
+	itemType, role             string
+	meta                       codexMeta
+	// words digests the input_text parts read; part a part's text, from
+	// words as it stood before it, kept where the part's type picks it.
+	words, part hash.Hash
+	// compaction, where a read asks the newest summary, is the line's.
+	compaction *codexCompaction
+}
+
+// start starts the line.
+func (l *codexNoteLine) start() {
+	l.typ, l.compactionOutput, l.fragment = "", false, false
+	if l.compaction != nil {
+		l.compaction.start()
+	}
+	l.payloadStart()
+	if l.words == nil {
+		l.words, l.part = sha256.New(), sha256.New()
+	}
+	l.words.Reset()
+}
+
+// payloadStart starts the line's payload: one written again replaces it.
+func (l *codexNoteLine) payloadStart() {
+	l.itemTook, l.itemType, l.role, l.meta = true, "", "", codexMeta{userKinds: true}
+	if l.words != nil {
+		l.words.Reset()
+	}
+}
+
+// read reads the line's envelope, its opening brace current.
+func (l *codexNoteLine) read(w *lineWalk) error {
+	return w.members(func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "timestamp":
+			ok, err = w.typedField(k, fieldString)
+		case "type":
+			l.typ, ok, err = w.wordField(k)
+		case "payload":
+			ok, err = true, l.payload(w, k)
+		case "metadata":
+			l.compactionOutput = false
+			ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
+				if name != "compaction_output" {
+					return w.scan.Skip()
+				}
+				flag, took, flagErr := w.flagField(k)
+				l.compactionOutput, l.fragment = flag, l.fragment || !took
+				return flagErr
+			})
+		default:
+			return w.scan.Skip()
+		}
+		l.fragment = l.fragment || !ok
+		return err
 	})
 }
 
-// codexReply reports whether item is the model's output answering a request:
-// its words, its reasoning or a call it made (as the transcript reads them).
-func codexReply(item codexItemWire) bool {
-	switch item.Type {
+// payload reads the payload as a response item: its type, role, input_text
+// parts and metadata.
+func (l *codexNoteLine) payload(w *lineWalk, k jsonscan.Kind) error {
+	l.payloadStart()
+	l.compaction.payloadStart()
+	took, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "message":
+			return l.compaction.messageField(w, k, l.typ)
+		case "type":
+			l.itemType, ok, err = w.wordField(k)
+		case "role":
+			l.role, ok, err = w.wordField(k)
+		case "content":
+			l.words.Reset()
+			ok, err = w.listField(k, func(k jsonscan.Kind) error {
+				part, partErr := l.contentPart(w, k)
+				l.itemTook = l.itemTook && part
+				return partErr
+			})
+		case "internal_chat_message_metadata_passthrough":
+			ok, err = l.meta.read(w, k)
+		default:
+			return w.scan.Skip()
+		}
+		l.itemTook = l.itemTook && ok
+		return err
+	})
+	l.itemTook = l.itemTook && took
+	l.compaction.payloadTook(took)
+	return err
+}
+
+// contentPart reads one part of a message's content, its text digested into
+// words where its type, read before or after it, is input_text; it reports
+// whether the part's struct takes it.
+func (l *codexNoteLine) contentPart(w *lineWalk, k jsonscan.Kind) (bool, error) {
+	var kind string
+	text := false
+	took := true
+	ok, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
+		switch name {
+		case "type":
+			var ok bool
+			var err error
+			kind, ok, err = w.wordField(k)
+			took = took && ok
+			return err
+		case "text":
+			switch k {
+			case jsonscan.String:
+			case jsonscan.Null:
+				text = false
+				return nil
+			default:
+				took = false
+				return w.scan.Skip()
+			}
+			state, err := l.words.(encoding.BinaryMarshaler).MarshalBinary()
+			if err != nil {
+				return err
+			}
+			if err := l.part.(encoding.BinaryUnmarshaler).UnmarshalBinary(state); err != nil {
+				return err
+			}
+			text = true
+			return w.read(l.part)
+		}
+		return w.scan.Skip()
+	})
+	if err == nil && ok && took && text && kind == "input_text" {
+		state, mErr := l.part.(encoding.BinaryMarshaler).MarshalBinary()
+		if mErr != nil {
+			return false, mErr
+		}
+		err = l.words.(encoding.BinaryUnmarshaler).UnmarshalBinary(state)
+	}
+	return ok && took, err
+}
+
+// tell hands each what the line is to the conversation the model reads.
+func (l *codexNoteLine) tell(each func(kind codexTurnKind, digest string)) {
+	if l.typ == "compacted" {
+		each(codexCompacted, "")
+		return
+	}
+	if l.typ != "response_item" || !l.itemTook {
+		return
+	}
+	switch {
+	case l.itemType == "message" && l.meta.persons(l.role):
+		each(codexPersonsWords, hex.EncodeToString(l.words.Sum(nil)))
+	case codexReply(l.itemType, l.role) && !l.compactionOutput:
+		each(codexModelReply, "")
+	}
+}
+
+// codexReply reports whether an item of kind, by role, is the model's output
+// answering a request: its words, its reasoning or a call it made (as the
+// transcript reads them).
+func codexReply(kind, role string) bool {
+	switch kind {
 	case "message":
-		return item.Role == "assistant"
+		return role == "assistant"
 	case "reasoning", "function_call", "custom_tool_call", "web_search_call", "local_shell_call":
 		return true
 	}
 	return false
+}
+
+// codexMeta is what Codex records beside a message of who wrote it
+// ([codexItemMeta]) as a walk reads it: how many part kinds it records,
+// whether each is a user's text, and whether a part's provenance is the
+// harness's.
+type codexMeta struct {
+	kinds              int
+	userKinds, harness bool
+}
+
+// persons is [codexPersonsMessage] of a message by role with this metadata.
+func (m codexMeta) persons(role string) bool {
+	return role == "user" && (m.kinds > 0 && m.userKinds || m.kinds == 0 && !m.harness)
+}
+
+// read reads a message's metadata passthrough, the value k begins, and
+// reports whether its decode takes it.
+func (m *codexMeta) read(w *lineWalk, k jsonscan.Kind) (bool, error) {
+	*m = codexMeta{userKinds: true}
+	took := true
+	ok, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "content_item_kinds":
+			m.kinds, m.userKinds = 0, true
+			ok, err = w.listField(k, func(k jsonscan.Kind) error {
+				kind, word, wordErr := w.wordField(k)
+				m.kinds++
+				m.userKinds = m.userKinds && kind == "user.text"
+				took = took && word
+				return wordErr
+			})
+		case "content_item_metadata":
+			m.harness = false
+			ok, err = w.listField(k, func(k jsonscan.Kind) error {
+				part, partErr := w.objectField(k, func(name string, k jsonscan.Kind) error {
+					if name != "provenance" {
+						return w.scan.Skip()
+					}
+					prov, provErr := w.objectField(k, func(name string, k jsonscan.Kind) error {
+						if name != "type" {
+							return w.scan.Skip()
+						}
+						typ, word, typErr := w.wordField(k)
+						m.harness = m.harness || typ == "harness"
+						took = took && word
+						return typErr
+					})
+					took = took && prov
+					return provErr
+				})
+				took = took && part
+				return partErr
+			})
+		default:
+			return w.scan.Skip()
+		}
+		took = took && ok
+		return err
+	})
+	return ok && took, err
 }

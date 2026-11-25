@@ -71,6 +71,10 @@ func (p Paths) GrokSkills() string { return p.GrokHome() + "/skills" }
 // system prompt: the run's standing instructions ([grokAgentFile]).
 func (p Paths) GrokAgent() string { return p.WorkDir() + "/grok-agent.md" }
 
+// GrokAgentFresh is [Paths.GrokAgent] for a session a continuing run's script
+// starts of its own, naming that session's servers ([grokSessionGate]).
+func (p Paths) GrokAgentFresh() string { return p.WorkDir() + "/grok-agent-fresh.md" }
+
 // GrokRules is the run's standing instructions as a JSON string's content, which
 // a continuing run's script writes into its session's first line
 // ([grokRenewRules]).
@@ -88,6 +92,15 @@ func (p Paths) GrokTakeConfigFresh() string { return p.WorkDir() + "/grok-take-f
 // its gate has named it, which a note hook reads so that a subagent's firing
 // takes nothing ([grokHooks]).
 func (p Paths) GrokThread() string { return p.WorkDir() + "/grok-thread" }
+
+// GrokHookIDs is the ids Grok Build gives the run's hooks, one a line, as
+// `grok inspect --json` lists them and `~/.grok/disabled-hooks` names them
+// ([grokMergeConfig]), which the guard reads ([grokGuard]).
+func (p Paths) GrokHookIDs() string { return p.WorkDir() + "/grok-hook-ids" }
+
+// GrokDisabledHooks is the box home's list of the hooks Grok Build skips, one
+// id a line ([grokGuard]).
+func (p Paths) GrokDisabledHooks() string { return p.GrokHome() + "/disabled-hooks" }
 
 // GrokNoteHelper is the note helper's build for the box (internal/notehelper),
 // written at each launch of a run wired to its notes or skills.

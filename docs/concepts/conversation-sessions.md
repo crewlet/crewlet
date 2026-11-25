@@ -342,6 +342,21 @@ launch was handed. A turn's transcript is `GET /agents/{id}/sessions/{turn_id}`.
 Rows go as the turns that were handed them end, with the retention, and with their
 seat ([Reading a seat's sessions](code-sandbox.md#reading-a-seats-sessions)).
 
+**A session not kept still has its harness's own account.** Every read of a run's
+box keeps the newest compaction summary its harness wrote of the session, apart
+from it ([A session's newest summary, kept apart](code-sandbox.md#a-sessions-newest-summary-kept-apart)),
+so a row whose session is not kept — too large, refused, retired as spent — reads
+as that summary (`summary_kept`), on the screen and through `read_session`.
+
+**A session kept trimmed says so.** A session packed past the bound a kept session
+is held to keeps only what its harness's resume loads, from its newest compaction
+on ([Each launch's session, kept](code-sandbox.md#each-launchs-session-kept)). Its
+row says, in the engine's one sentence (`trimmed_note`), that the history before
+that compaction was trimmed and its transcript begins there; a seat's
+`read_session` and `list_sessions` say the same. The session is kept and continues
+as the whole one would: nothing is lost to the next turn, only to a reader of its
+earlier history.
+
 ## Schedules
 
 A schedule is a **conversation of each seat that runs it**. The scheduler stamps

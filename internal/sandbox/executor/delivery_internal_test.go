@@ -57,8 +57,8 @@ func (unconfirmedPoll) pluginConfirms() bool { return false }
 // id: one inbox id a line ([recordLines]).
 type recordedPoll struct{ unconfirmedPoll }
 
-func (recordedPoll) notesHeld(ctx context.Context, box sandbox.Sandbox, _ Session, takes []ServedTake) ([]string,
-	error) {
+func (recordedPoll) notesHeld(ctx context.Context, box sandbox.Sandbox, _ Session, takes []ServedTake,
+	_ *summaryRead) ([]string, error) {
 	lines, err := recordLines(ctx, box)
 	if err != nil {
 		return nil, err
@@ -77,8 +77,8 @@ func (recordedPoll) notesHeld(ctx context.Context, box sandbox.Sandbox, _ Sessio
 // digest.
 type textPoll struct{ unconfirmedPoll }
 
-func (textPoll) notesHeld(ctx context.Context, box sandbox.Sandbox, _ Session, takes []ServedTake) ([]string,
-	error) {
+func (textPoll) notesHeld(ctx context.Context, box sandbox.Sandbox, _ Session, takes []ServedTake,
+	_ *summaryRead) ([]string, error) {
 	lines, err := recordLines(ctx, box)
 	if err != nil {
 		return nil, err
@@ -95,6 +95,12 @@ func (textPoll) notesHeld(ctx context.Context, box sandbox.Sandbox, _ Session, t
 	}
 	return held, nil
 }
+
+// recordSummary is false: a test poll's record holds no summary, and its
+// harness reads none.
+func (recordedPoll) recordSummary(sandbox.MainThreadAsk) bool { return false }
+
+func (textPoll) recordSummary(sandbox.MainThreadAsk) bool { return false }
 
 // recordFile is where a test poll's record lies in a box.
 const recordFile = "/notes.record"
@@ -172,7 +178,8 @@ func TestATakeIsConfirmedByItsItemsDigestOffARecordOfText(t *testing.T) {
 // holds every one of them.
 type servedOrder struct{ handed *[]ServedTake }
 
-func (s servedOrder) notesHeld(_ context.Context, _ sandbox.Sandbox, _ Session, takes []ServedTake) ([]string, error) {
+func (s servedOrder) notesHeld(_ context.Context, _ sandbox.Sandbox, _ Session, takes []ServedTake,
+	_ *summaryRead) ([]string, error) {
 	*s.handed = takes
 	held := make([]string, 0, len(takes))
 	for _, take := range takes {
@@ -180,6 +187,8 @@ func (s servedOrder) notesHeld(_ context.Context, _ sandbox.Sandbox, _ Session, 
 	}
 	return held, nil
 }
+
+func (servedOrder) recordSummary(sandbox.MainThreadAsk) bool { return false }
 
 // A RECORD IS MATCHED AGAINST EVERY SERVE AND ANSWERS THE TAKES ASKED ALONE:
 // the record confirmer is handed the job's serves in order, its read notes'
@@ -194,7 +203,8 @@ func TestARecordIsMatchedAgainstEveryServeAndAnswersTheAskedAlone(t *testing.T) 
 	asked := sandbox.AskedTake{Take: "msg_asked", Digest: "d-1"}
 	var handed []ServedTake
 	got := recordReceipts(t.Context(), servedOrder{&handed}, sandbox.NewFakeSandbox("b"),
-		sandbox.MainThreadAsk{Session: "s-1", Takes: []sandbox.AskedTake{asked}, Served: []sandbox.AskedTake{read, asked}})
+		sandbox.MainThreadAsk{Session: "s-1", Takes: []sandbox.AskedTake{asked}, Served: []sandbox.AskedTake{read, asked}},
+		nil)
 	if want := []ServedTake{{"msg_read", "d-1"}, {"msg_asked", "d-1"}}; !slices.Equal(handed, want) {
 		t.Errorf("the confirmer was handed %+v, want %+v", handed, want)
 	}
@@ -202,7 +212,7 @@ func TestARecordIsMatchedAgainstEveryServeAndAnswersTheAskedAlone(t *testing.T) 
 		t.Errorf("the receipts hold %+v, want the asked take alone", got.Held)
 	}
 	recordReceipts(t.Context(), servedOrder{&handed}, sandbox.NewFakeSandbox("b"),
-		sandbox.MainThreadAsk{Session: "s-1", Takes: []sandbox.AskedTake{asked}})
+		sandbox.MainThreadAsk{Session: "s-1", Takes: []sandbox.AskedTake{asked}}, nil)
 	if want := []ServedTake{{"msg_asked", "d-1"}}; !slices.Equal(handed, want) {
 		t.Errorf("an ask naming no served order handed %+v, want %+v", handed, want)
 	}

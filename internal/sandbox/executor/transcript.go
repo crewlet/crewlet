@@ -104,11 +104,11 @@ func (k EntryKind) Valid() bool { return slices.Contains(EntryKinds, k) }
 // upgrade) is read again from the start.
 //
 // RAISED BY ANY CHANGE THAT MOVES AN ORDINAL: a kind added, a record read that
-// was not, one read as more entries or fewer, one no longer read. 9 says a Qwen
-// Code or Gemini CLI line past the bound or no object, as the line walk says
-// them, and reads an object with blanks before it; what each earlier one moved
-// is its commit's.
-const TranscriptVersion = 9
+// was not, one read as more entries or fewer, one no longer read. 10 reads a
+// Codex or Hermes person's words past the value bound as one entry (R1), and a
+// Hermes row by its keys' exact names, as the line walk reads them; what each
+// earlier one moved is its commit's.
+const TranscriptVersion = 10
 
 // TranscriptEntry is one entry of a session's transcript, as a read surface
 // sends it.
@@ -142,6 +142,11 @@ type TranscriptEntry struct {
 	// rather than presenting an opening as the whole.
 	Bytes int  `json:"bytes"`
 	Cut   bool `json:"cut,omitempty"`
+
+	// Tail says the text cut is the entry's END, marked at its start, never its
+	// opening: a kept summary's, whose last part says what to do next
+	// ([SummaryTranscript]).
+	Tail bool `json:"tail,omitempty"` //wiregate:absent-is-false a mark a reader draws only when set
 }
 
 // TranscriptCut is why one read's entries end before the transcript does.

@@ -57,7 +57,9 @@ import (
 // `kept_note` ([executordomain.Session.WentOnNote], quoting what refused a
 // capture, declared so). An ended row whose runs did not continue a session
 // says so in `not_continued_note` ([executordomain.Session.NotContinuedNote],
-// the engine's sentence of each verdict). The screen words none of them.
+// the engine's sentence of each verdict), and one whose session was trimmed in
+// `trimmed_note` ([executordomain.Session.TrimmedNote]). The screen words none
+// of them.
 
 // Each row says which launch would continue its session (`continued_by`: a
 // relaunch while the turn is live; its conversation's next turn once it has
@@ -131,9 +133,11 @@ type ExecutorSessions interface {
 
 // SessionObjects opens a session's sealed object, streaming, its associated
 // data binding it to the seat, the turn and the object's key
-// (executordomain.SessionStore): what the transcript is read from.
+// (executordomain.SessionStore): what the transcript is read from; and the
+// summary its row keeps apart, read where the session is not kept.
 type SessionObjects interface {
 	Open(ctx context.Context, session executordomain.Session) (io.ReadCloser, error)
+	OpenSummary(ctx context.Context, session executordomain.Session) (io.ReadCloser, error)
 }
 
 // SessionRuns is the turns' run records in the fleet's coordination store, as
@@ -198,6 +202,13 @@ type SessionRow struct {
 	ObjectBytes int64 `json:"object_bytes"`
 	MediaBytes  int64 `json:"media_bytes"`
 
+	// SummaryKept says the row keeps its session's newest compaction summary
+	// apart from the session (executordomain.Session.Summary), SummaryBytes
+	// the bytes kept of it: the transcript a row keeping no session reads as
+	// ([executorread.TranscriptSummary]).
+	SummaryKept  bool  `json:"summary_kept"`
+	SummaryBytes int64 `json:"summary_bytes"`
+
 	// InProgress says the row names the session of a turn that has not
 	// ended: the newest its runs have kept, which its run may have gone on
 	// past (executordomain.Session.InProgress), and InProgressNote says so in
@@ -219,6 +230,12 @@ type SessionRow struct {
 	// was lost, of which turn, and what the run continued instead. The
 	// engine's words alone, absent where they lost nothing.
 	NotContinuedNote string `json:"not_continued_note,omitempty"`
+
+	// TrimmedNote says the session kept was cut to what its harness's resume
+	// loads, so its transcript begins at its newest compaction, in the domain's
+	// one sentence of it (executordomain.Session.TrimmedNote): the engine's
+	// words alone, absent on any other row.
+	TrimmedNote string `json:"trimmed_note,omitempty"`
 
 	// BaseTurn is the ended turn whose session the turn's first launch was
 	// handed to continue — its conversation's head as the turn's dispatch
@@ -277,7 +294,8 @@ type SessionAnswer struct {
 	Why   string                       `json:"why,omitempty" untrusted:"fence"`
 
 	// Entries are the transcript's entries from From on, in the order the
-	// harness recorded them; empty wherever State is not `read`.
+	// harness recorded them: the newest summary alone where State is
+	// `summary`, and empty wherever it is neither that nor `read`.
 	Entries []executor.TranscriptEntry `json:"entries"`
 	From    int                        `json:"from"`
 
@@ -662,10 +680,13 @@ func sessionRowOf(s executordomain.Session) SessionRow {
 		CapturedAt: sessionInstant(s.CapturedAt), EndedAt: sessionInstant(s.EndedAt),
 		AskExcerpt: s.AskExcerpt, Kept: s.HasObject(), BaseTurn: s.BaseTurn, Ending: s.Ending,
 		InProgress: s.InProgress(), InProgressNote: s.InProgressNote(), KeptNote: s.WentOnNote(),
-		NotContinuedNote: s.NotContinuedNote(),
+		NotContinuedNote: s.NotContinuedNote(), TrimmedNote: s.TrimmedNote(),
 	}
 	if row.Kept {
 		row.ObjectBytes, row.MediaBytes = s.Object.Size, s.MediaBytes()
+	}
+	if s.Summary != nil {
+		row.SummaryKept, row.SummaryBytes = true, s.Summary.Kept
 	}
 	return row
 }

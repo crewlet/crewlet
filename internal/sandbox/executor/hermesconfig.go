@@ -118,20 +118,18 @@ func hermesOverlay(servers map[string]sandbox.MCPServer, webDenied bool) ([]byte
 }
 
 // hermesOwnLeaves are the leaves a Hermes run states on each of Crewlet's own
-// servers, so the box's entry of that name cannot switch it off: Hermes 0.23.3
-// merges the overlay per leaf, and a null over a scalar or a list clears it
-// (_deep_merge), so a home's or /etc's `enabled: false` or legacy `disabled`,
-// `tools.include` or `tools.exclude`, `transport: sse`, `auth`, a `command`
-// with `args` beside the url (skipped as suspicious) and a malformed
-// `tool_costs`, `spend_limit` or `cost_unit` scalar, an `ssl_verify` CA path
-// or a `client_cert` or `client_key` (each left the bridge unreached and the
-// run hung) give way (measured). A null cannot clear a mapping, so an `env` or
-// a `tool_costs` table stays, for the guard to judge ([hermesGuard]); the
-// `headers` mapping is replaced whole by an empty list where the run sends
-// none, which every reader of 0.23.3 takes as no headers (`or {}`).
+// servers, so the box's entry of that name cannot cut it off: Hermes 0.23.3
+// merges the overlay per leaf, a null clearing a scalar or a list
+// (_deep_merge). A box's `transport: sse`, `auth`, a `command` with `args`
+// (skipped as suspicious), a malformed `tool_costs`, `spend_limit` or
+// `cost_unit` scalar, an `ssl_verify` CA path or a `client_cert` or
+// `client_key` (each left the bridge unreached) give way (measured). Its own
+// `enabled: false`, `disabled` or `tools` lists the overlay never states back
+// but the guard refuses, as it does an `env` or a `tool_costs` table, which a
+// null cannot clear ([hermesGuard]); `headers` is replaced whole by an empty list where the run
+// sends none, which every reader of 0.23.3 takes as no headers (`or {}`).
 func hermesOwnLeaves() map[string]any {
-	return map[string]any{"enabled": true, "disabled": false, "tools": map[string]any{"include": nil, "exclude": []string{}},
-		"transport": nil, "auth": nil, "connect_timeout": hermesConnectSeconds, "command": nil, "args": nil,
+	return map[string]any{"transport": nil, "auth": nil, "connect_timeout": hermesConnectSeconds, "command": nil, "args": nil,
 		"tool_costs": nil, "spend_limit": nil, "cost_unit": nil, "ssl_verify": true, "client_cert": nil, "client_key": nil}
 }
 
@@ -294,6 +292,11 @@ func hermesInstall(req sandbox.RunRequest, paths Paths) string {
 	line(`mkdir -p %s %s && rm -rf %s && cp -R %s %s || { echo 'crewlet: the runner'"'"'s Hermes plugin could not be installed, so the run does not start' >&2; exit 1; }`,
 		q(paths.HermesHome()+"/plugins"), q(paths.HermesSkills()), q(paths.HermesPlugin()), q(stage+"/plugin"),
 		q(paths.HermesPlugin()))
+	// NOT OVER A PERSON'S DISABLE: `plugins enable` takes the plugin out of a
+	// box file's `plugins.disabled` (measured on 0.23.3), so a box that
+	// disables it before its first run is refused rather than switched back on.
+	line(`[ -e %s ] || { po=$(hcarry plugoff %s); case "$po" in 'crewlet-carry refused '*) printf 'crewlet: Hermes Agent would not load the run'"'"'s own plugin: %%s, which the run never switches back on (remove it). The run was refused before Hermes Agent started.\n' "${po#crewlet-carry refused }" >&2; exit 1;; esac; }`,
+		q(paths.HermesEnabled()), hermesPluginName)
 	line(`[ -e %s ] || { hermes plugins enable %s < /dev/null > /dev/null 2>&1 && : > %s; } || { echo 'crewlet: hermes plugins enable %s failed, so the run does not start' >&2; exit 1; }`,
 		q(paths.HermesEnabled()), hermesPluginName, q(paths.HermesEnabled()), hermesPluginName)
 	line(`if [ -s %[1]s ]; then while IFS= read -r s; do case "$s" in ''|*/*|.*) ;; *) rm -rf %[2]s/"$s";; esac; done < %[1]s; fi`,

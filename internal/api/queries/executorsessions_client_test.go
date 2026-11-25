@@ -28,9 +28,9 @@ import (
 // `contract/sessions.ts` types the Sessions view; every member it declares is
 // a key some row sends (a required one on every row) and every key sent is
 // declared. Fixtures cover a page with a page after it, every ending and
-// optional entry key, a cut and an unreadable transcript, and each launch
-// kind the screen words beside a row in progress. The closed sets and the
-// words the screen says as the engine does are the engine's.
+// optional entry key, a cut and an unreadable transcript, a trimmed session,
+// and each launch kind the screen words beside a row in progress. The closed
+// sets and the words the screen says as the engine does are the engine's.
 //
 // Mutation: rename a JSON key on either answer, add one, add a state or a kind
 // on one side only, drop the schedule's row or the row in progress, or respell
@@ -74,6 +74,8 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	fired := sealedSession(t, store, "ana", gzipText(t, openCodeExport("check the services")))
 	fired.ConversationKey = notify.ScheduleConversation(types.ScheduleScopeRole, "a-1", "health-check")
 	fired.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 4}
+	// ITS SESSION TRIMMED past the bound, which alone sends the trim's note.
+	fired.Trimmed = true
 	live := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), Harness: "custom"}
 	// A LIVE TURN A RELAUNCH WOULD CONTINUE, which alone sends where it would
 	// and is in progress, on the conversation whose head its first launch was
@@ -147,7 +149,10 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	// A SUBAGENT'S ENTRY, which only a Claude Code archive holds: the entry
 	// type as the answer encodes it.
 	entries = append(entries, asMap(t, executor.TranscriptEntry{Kind: executor.EntryModel,
-		Thread: "agent-a1", Tool: "Task", Failed: true, Text: "found it", Bytes: 8}))
+		Thread: "agent-a1", Tool: "Task", Failed: true, Text: "found it", Bytes: 8}),
+		// AND A KEPT SUMMARY'S END, which alone sends `tail`.
+		asMap(t, executor.TranscriptEntry{Kind: executor.EntrySummary, Text: "…the next move", Bytes: 64 << 10,
+			Cut: true, Tail: true}))
 	holdShape(t, "ExecutorSessionAnswer", answers, false)
 	holdShape(t, "TranscriptEntry", entries, false)
 	bounds, ok := answers[0]["bounds"].(map[string]any)

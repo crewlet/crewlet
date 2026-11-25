@@ -143,6 +143,8 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	stampSince(e.mcpShared, outcomes, e.now())
 	e.mcpShared = outcomes
 	e.mcpMu.Unlock()
+	e.recallMCPDown(ctx)
+	e.mcpDown.keepOnly(uuid.Nil, outcomes)
 }
 
 // signInHeld is the sign-in a pass held server back for, nil where it did not.

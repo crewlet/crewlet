@@ -576,8 +576,8 @@ func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testi
 // not read every record, is answered whole; and the pages' own measure of a
 // row leaves no room for one more.
 //
-// Mutation: raise listedSessionsMax to eleven, or show a listed row's note
-// uncut, and the page is refused for its size; lower it to nine, and the page
+// Mutation: raise listedSessionsMax to ten, or show a listed row's note
+// uncut, and the page is refused for its size; lower it to eight, and the page
 // has room for another row.
 func TestAPageOfSessionsAtItsWorstFitsOneAnswer(t *testing.T) {
 	t.Parallel()
@@ -597,9 +597,14 @@ func TestAPageOfSessionsAtItsWorstFitsOneAnswer(t *testing.T) {
 			ConversationKey: key, Harness: letters(executorkeep.HarnessMaxBytes),
 			Object: objstore.Object{Key: objstore.KeyAt(at), Hash: objstore.Hash(strings.Repeat("a", 64)),
 				Size: executorkeep.SealedMaxBytes},
-			LaunchSeq: 1, CaptureSeq: 1, CapturedAt: at, EndedAt: at.Add(time.Minute),
+			// ITS MEDIA AT THEIR BOUND, so its kept size is all a capture keeps.
+			Media: []executorkeep.MediaObject{{Digest: strings.Repeat("b", 64),
+				Object: objstore.Object{Key: objstore.KeyAt(at), Hash: objstore.Hash(strings.Repeat("b", 64)),
+					Size: executorkeep.KeptSealedMaxBytes - executorkeep.SealedMaxBytes}}},
+			LaunchSeq: 1, CaptureSeq: 1, CapturedAt: at, EndedAt: at.Add(time.Minute), Trimmed: true,
 			BaseTurn:   letters(executorkeep.TurnIDMaxBytes),
 			AskExcerpt: letters(executordomain.AskExcerptMaxBytes),
+			Summary:    &executorkeep.Summary{Bytes: math.MaxInt64, Kept: executorkeep.SummaryMaxBytes},
 			Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted,
 				Decision: letters(executorkeep.WordMaxBytes), DeliveredTo: letters(executorkeep.WordMaxBytes),
 				Answer: letters(executorkeep.WordMaxBytes), DeliveryUnknown: true,
@@ -794,9 +799,88 @@ func TestASessionNoLongerKeptIsSaidAsSuch(t *testing.T) {
 	}
 }
 
+// A SESSION NOT KEPT IS READ BY ITS SUMMARY: a row naming no session that
+// keeps its newest summary answers `summary`, the summary its one entry,
+// fenced as the seat's session's words, beside why the session is not kept and
+// the row saying it keeps one and the bytes kept of it. A summary past an
+// entry's bound is handed out from its END, where what to do next is, saying
+// where its part begins; and the page says "all there is" only of a summary
+// shown whole and kept whole.
+//
+// Mutation: answer such a row `none` with no entry, leave its entry unfenced,
+// say the summary's whole size, hand out a long summary's opening, or say "all
+// there is" of a cut one, and a case goes red.
+func TestASessionNotKeptIsReadByItsSummary(t *testing.T) {
+	t.Parallel()
+	const end = "## Next Move\n\nRerun the cache test."
+	long := "THE OPENING. " + strings.Repeat("a middle word. ", executor.ReadBySeat.Bounds().EntryBytes/15+1) + end
+	for name, c := range map[string]struct {
+		text     string
+		cut      bool
+		says     string
+		textFrom bool
+	}{
+		"kept whole":          {text: end, says: "all there is"},
+		"past an entry":       {text: long, says: "its last", textFrom: true},
+		"kept as its own end": {text: end, cut: true, says: "itself the last"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			k := newKeptSessions(t)
+			released := k.keep(t, "agent-cto", "chat:a", "released")
+			put, err := k.store.PutSummary(t.Context(), "agent-cto", released.Turn, strings.NewReader(c.text))
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := released
+			row.Object = objstore.Object{}
+			row.Summary = &executorkeep.Summary{Object: put.Object, ContentKey: put.ContentKey,
+				At: time.Date(2026, 10, 30, 12, 1, 0, 0, time.UTC), Bytes: int64(len(c.text)),
+				Kept: int64(len(c.text)), Harness: row.Harness, Session: "s-1"}
+			if c.cut {
+				row.Summary.Bytes, row.Summary.Cut = 4*row.Summary.Kept, true
+			}
+			k.replace("agent-cto", released.Turn, &row)
+			turn, _ := readerTurn(t)
+			read := registered(t, builtin.Deps{Sessions: k.deps()}, builtin.ReadSessionTool)
+			answer := sessionAnswer(t, callFor(t, read, turn, map[string]any{"turn_id": released.Turn}))
+			entries, _ := answer["entries"].([]any)
+			session, _ := answer["session"].(map[string]any)
+			note, _ := answer["note"].(string)
+			if answer["state"] != "summary" || len(entries) != 1 || session["summary_kept"] != true ||
+				!strings.Contains(note, "not kept") {
+				t.Fatalf("answered state %v with %d entries, row %v, note %q; want the summary alone, the "+
+					"row keeping it", answer["state"], len(entries), session, note)
+			}
+			if session["summary_bytes"] != float64(row.Summary.Kept) {
+				t.Errorf("the row says summary_bytes %v, want the %d bytes kept", session["summary_bytes"],
+					row.Summary.Kept)
+			}
+			entry, _ := entries[0].(map[string]any)
+			text, _ := entry["text"].(string)
+			if entry["kind"] != "summary" || !strings.Contains(text, "Rerun the cache test") ||
+				!strings.Contains(text, "[untrusted:") {
+				t.Fatalf("the entry is %v, want the summary's end, fenced as the session's words", entry)
+			}
+			if _, from := entry["text_from"]; from != c.textFrom || strings.Contains(text, "THE OPENING") {
+				t.Errorf("the entry says text_from %v (%v), want it where its end alone is handed out",
+					entry["text_from"], c.textFrom)
+			}
+			if !strings.Contains(note, c.says) || (c.says != "all there is" && strings.Contains(note, "all there is")) {
+				t.Errorf("the note says %q, want %q and never all there is of a cut summary", note, c.says)
+			}
+		})
+	}
+}
+
 // blockedObjects opens no object until the read's caller leaves: an object
 // store that never answers.
 type blockedObjects struct{}
+
+func (blockedObjects) OpenSummary(ctx context.Context, _ executordomain.Session) (io.ReadCloser, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
 
 func (blockedObjects) Open(ctx context.Context, _ executordomain.Session) (io.ReadCloser, error) {
 	<-ctx.Done()
@@ -1114,6 +1198,10 @@ func (r *rereadFails) Session(ctx context.Context, handle, turn string,
 type refusingObjects struct{}
 
 func (refusingObjects) Open(context.Context, executordomain.Session) (io.ReadCloser, error) {
+	return nil, errors.New("the store refused the read")
+}
+
+func (refusingObjects) OpenSummary(context.Context, executordomain.Session) (io.ReadCloser, error) {
 	return nil, errors.New("the store refused the read")
 }
 

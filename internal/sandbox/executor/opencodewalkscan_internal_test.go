@@ -230,7 +230,7 @@ func meterReadOf(t *testing.T, doc string) (oracle, whole, pieces string) {
 	figure, err := walkExport(t.Context(), bytes.NewReader(gzipOf(t, doc)), &c)
 	oracle = read(figure, c, err)
 	c = openCodeCountReading{}
-	figure, err = countExport(t.Context(), bytes.NewReader(gzipOf(t, doc)), &c)
+	figure, err = countExport(t.Context(), bytes.NewReader(gzipOf(t, doc)), &c, nil)
 	whole = read(figure, c, err)
 	c = openCodeCountReading{}
 	m := &exportMeter{count: &c}
@@ -297,7 +297,9 @@ func benchExportMeter(b *testing.B) {
 			for _, walk := range []struct {
 				name string
 				read func(context.Context, io.Reader, *openCodeCountReading) (int64, error)
-			}{{"walk", countExport}, {"oracle", walkExport}} {
+			}{{"walk", func(ctx context.Context, r io.Reader, c *openCodeCountReading) (int64, error) {
+				return countExport(ctx, r, c, nil)
+			}}, {"oracle", walkExport}} {
 				b.Run(walk.name, func(b *testing.B) {
 					fmt.Fprintf(os.Stderr, "export-meter-bench %s/%s: the read starts\n", bc.name, walk.name)
 					for b.Loop() {
