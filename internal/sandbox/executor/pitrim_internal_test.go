@@ -192,13 +192,10 @@ func piPackRun(t *testing.T, record []byte, release string, at trimPoints) (memb
 var piMeasuredCuts = map[string]int{"compacted-twice.session.jsonl": 23535, "compacted-custom.session.jsonl": 31745}
 
 // A TRIMMED PI PACK KEEPS WHAT ITS RESUME LOADS: past the point, the packed
-// file is its header, before the newest compaction's firstKept line only the
-// lines a 1.6.0 resume reads off the branch there, each re-linked onto the one
-// kept before it, the firstKept line re-linked onto the last of them, and
-// every line after it as written, as the measured resume reads them; on the
-// recorded sessions it is the measured cut, byte for byte, and the pack says
-// what it kept beside the archive. A payload spelling a line's own members
-// (an id, a parentId, a firstKeptEntryId) moves nothing.
+// file is what the measured resume reads of it ([piResumeLoads]), on the
+// recorded sessions the measured cut byte for byte, and the pack says what it
+// kept beside the archive. A payload spelling a line's own members (an id, a
+// parentId, a firstKeptEntryId) moves nothing.
 //
 // Mutation: keep a line of another kind or drop one read off the branch, leave
 // a kept line's link or the firstKept line's as it was, cut at the oldest
