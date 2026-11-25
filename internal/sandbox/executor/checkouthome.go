@@ -74,13 +74,21 @@ type checkoutSlot struct {
 }
 
 // checkoutTree is a tree slot: the directory below a checkout's root, the
-// suffix of a handed file's name, and the frontmatter scope that leaves a
-// file out, nil for none.
+// suffix of a handed file's name, the harness whose walk and frontmatter
+// reading the helper follows, and the frontmatter scope that leaves a file
+// out, nil for none.
 type checkoutTree struct {
 	Tree   string         `json:"tree"`
 	Suffix string         `json:"suffix"`
+	Form   checkoutForm   `json:"form"`
 	Scoped *checkoutScope `json:"scoped,omitempty"`
 }
+
+// checkoutForm is a harness whose tree walk the helper knows (its treeForm).
+type checkoutForm string
+
+// checkoutFormClaude is Claude Code's walk of .claude/rules.
+const checkoutFormClaude checkoutForm = "claude"
 
 // checkoutScope is the frontmatter keys that scope a file to paths, the first
 // present deciding, and the patterns that match every path.

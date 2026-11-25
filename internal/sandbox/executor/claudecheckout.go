@@ -12,14 +12,18 @@ import (
 
 // claudeCheckouts is what Claude Code 2.1.310 reads from a repository's root
 // started there and hands it as it starts (measured): its CLAUDE.md,
-// .claude/CLAUDE.md and CLAUDE.local.md, imported by absolute path so Claude
-// Code reads each whole and resolves its own imports against the checkout (a
-// copy's resolved against the home; by import one level of its depth is
-// spent: D1..D3 where a root session reaches D4), and the skills of its
-// .claude/skills; a checkout cloned during the run is handed its skills alone
-// (claude-nested), Claude Code loading its CLAUDE.md files itself.
+// .claude/CLAUDE.md, CLAUDE.local.md and the rules of .claude/rules it loads
+// at start, those whose frontmatter `paths` is absent or matches every path,
+// imported by absolute path so Claude Code reads each whole and resolves its
+// own imports against the checkout (a copy's resolved against the home; by
+// import one level of its depth is spent: D1..D3 where a root session reaches
+// D4), and the skills of its .claude/skills; a checkout cloned during the run
+// is handed its skills alone (claude-nested), Claude Code loading its
+// CLAUDE.md files and rules itself.
 var claudeCheckouts = checkoutSpec{Instructions: []checkoutSlot{{Names: []string{"CLAUDE.md"}},
-	{Names: []string{".claude/CLAUDE.md"}}, {Names: []string{"CLAUDE.local.md"}}},
+	{Names: []string{".claude/CLAUDE.md"}}, {Names: []string{"CLAUDE.local.md"}},
+	{Tree: &checkoutTree{Tree: ".claude/rules", Suffix: ".md", Form: checkoutFormClaude,
+		Scoped: &checkoutScope{Keys: []string{"paths"}, Whole: []string{"**"}}}}},
 	Limit: checkoutUnlimited, SkillDirs: []string{".claude/skills"}, NestedSkillsOnly: true, ImportInstructions: true}
 
 // claudeCheckoutHome is where a Claude Code run keeps its checkouts'

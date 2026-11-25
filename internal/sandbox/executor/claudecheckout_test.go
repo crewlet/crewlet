@@ -44,16 +44,15 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
 
 // WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A CLAUDE CODE RUN: on a real
 // box, a checkout at ./repo with every layer a repository brings. Its
-// CLAUDE.md, .claude/CLAUDE.md and CLAUDE.local.md are imported after the
-// home's own CLAUDE.md, under its root, which the run puts back; its skills come
-// as `repo:<skill>`; its settings, hooks, plugins, agents, MCP servers and
-// AGENTS.md reach neither the command line nor the home. The checkouts' hook
-// runs on settings that switch no hook, hands a later clone its listing once,
-// reading no CLAUDE.md, and claims nothing in a subagent's firing.
-//
-// Mutation: drop the gate, copy the text, hand AGENTS.md, skip the restore,
-// claim in a subagent's firing, give the hook instructions to read, or leave
-// hooks as the repository sets them.
+// CLAUDE.md files and the rules Claude Code loads at start (not one scoped to
+// paths) are imported after the home's CLAUDE.md, under its root, which the
+// run puts back; its skills come as `repo:<skill>`; its settings, hooks,
+// plugins, agents, MCP servers and AGENTS.md reach neither the command line
+// nor the home. The checkouts' hook runs on settings that switch no hook,
+// hands a later clone its listing once, reading no CLAUDE.md, and claims
+// nothing in a subagent's firing. Mutation: drop the gate, copy the text,
+// hand AGENTS.md or the scoped rule, skip the restore, claim in a subagent's
+// firing, give the hook instructions to read, or keep the repository's hooks.
 func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 	t.Parallel()
 	runner, box := realBox(t)
@@ -69,6 +68,8 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 		"workspace/repo/CLAUDE.local.md":               "REPO-LOCAL\n",
 		"workspace/repo/.claude/CLAUDE.local.md":       "NOT-READ-LOCAL\n",
 		"workspace/repo/AGENTS.md":                     "REPO-AGENTS\n",
+		"workspace/repo/.claude/rules/style.md":        "---\ndescription: Style.\n---\nREPO-RULE\n",
+		"workspace/repo/.claude/rules/ts.md":           "---\npaths: [\"src/**/*.ts\"]\n---\nTS-RULE\n",
 		"workspace/repo/.claude/skills/check/SKILL.md": "---\nname: check\ndescription: Checks.\n---\nCheck.\n",
 		"workspace/repo/.agents/skills/lint/SKILL.md":  "---\nname: lint\ndescription: Lints.\n---\nLint.\n",
 		"workspace/repo/.claude/agents/helper.md":      "---\nname: helper\ndescription: REPO-AGENT\n---\n",
@@ -92,7 +93,7 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 	// then resolve a file's own `@AGENTS.md` against the checkout, as a session
 	// started there does (measured, rows ref-agents and agents).
 	want := "HOME-OWN\n\n\nfor `repo` with root " + work + "/repo\n\n@" + work + "/repo/CLAUDE.md\n@" + work +
-		"/repo/.claude/CLAUDE.md\n@" + work + "/repo/CLAUDE.local.md"
+		"/repo/.claude/CLAUDE.md\n@" + work + "/repo/CLAUDE.local.md\n@" + work + "/repo/.claude/rules/style.md"
 	if got := seen("CLAUDE.md"); got != want {
 		t.Errorf("instructions: Claude Code started on a home CLAUDE.md of\n%q\nwant\n%q", got, want)
 	}
