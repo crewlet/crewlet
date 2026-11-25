@@ -73,8 +73,8 @@ USER crewlet
 `2.1.263` is pinned exactly. Claude Code constraints:
 
 - The hooks a seat's executor takes a person's notes through need 2.1.163 or
-  later (an older release runs without them); they were measured on 2.1.263 and
-  2.1.310.
+  later (a run on an older release is refused); they were measured on 2.1.263
+  and 2.1.310.
 - The `claude-code` profile's flags, output paths and limit sentences were
   measured on 2.1.303 and 2.1.310.
 - Take a newer release when `crewlet llm doctor` passes against it.
