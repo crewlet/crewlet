@@ -1217,3 +1217,29 @@ test("with no model, anybody else reads why in the panel, with no way to choose 
   expect(screen.queryByRole("button", { name: "Model settings" })).toBeNull();
   expect(screen.queryByRole("combobox")).toBeNull();
 });
+
+// A CARD'S OPEN HERE IS ACKNOWLEDGED ON THE CARD: the drawer records which card
+// was pressed, so once its page shows the card reads Opened rather than
+// offering the same press again. Mutation: drop the card id between the card
+// and the conversation and the card says the page was already open.
+test("Open here on a card leaves that card reading Opened once its page shows", async () => {
+  engine();
+  window.location.hash = "#/inbox";
+  const off = onBus("assistant.navigation.open", ({ path }) => {
+    window.location.hash = `#/${path.join("/")}`;
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  mount();
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  fireEvent.change(box, { target: { value: "Which task is next?" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  const press = await screen.findByRole("button", { name: "Open here" });
+  await act(async () => {
+    fireEvent.click(press);
+  });
+  expect(await screen.findByText("Opened beside this conversation.")).toBeDefined();
+  expect(screen.queryByText("Already open beside this conversation.")).toBeNull();
+  off();
+});

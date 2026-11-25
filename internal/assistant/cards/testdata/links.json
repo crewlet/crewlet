@@ -85,6 +85,11 @@
     "href": "#/inbox"
   },
   {
+    "label": "Open Google Cloud setup",
+    "screen": "integration",
+    "href": "#/company/integrations/google_cloud"
+  },
+  {
     "label": "Integrations",
     "screen": "integrations",
     "href": "#/company/integrations"
