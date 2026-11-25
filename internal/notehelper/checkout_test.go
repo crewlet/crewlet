@@ -638,7 +638,7 @@ func TestANestedAdapterThatHandsSkillsAloneIsGivenNoInstructionToRead(t *testing
 			t.Fatal(err)
 		}
 		var errs bytes.Buffer
-		if err := checkoutLaunch(config, r.work, &errs); err != nil {
+		if err := checkoutLaunch(config, r.work, strings.NewReader(""), &errs); err != nil {
 			t.Fatalf("the launch: %v\n%s", err, errs.String())
 		}
 		c, err := readNested(filepath.Join(r.state, "nested.json"))
