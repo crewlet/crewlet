@@ -127,7 +127,9 @@
 //     answers 503, err_code 10008 (its group, or the metadata group, knows it
 //     has no leader) is asked again until an election ends it
 //     ([jsprovision.ThroughElection]). A read whose deadline ends first fails
-//     saying the stream had no leader.
+//     saying the stream had no leader. A read's consumer create a member
+//     drops without a word is asked again, as every create is
+//     ([jsprovision.Timing.Ask]).
 //   - A GET IS A CONSUMER OF THE OBJECT'S OWN MESSAGES, read one message at
 //     a time under [objstore.Stall] and ended by its context: on a member's
 //     own client an ordered consumer the client pulls, and across a link one
@@ -1232,10 +1234,25 @@ func (r *reading) create(ctx context.Context) (jetstream.Consumer, error) {
 	return jsprovision.ThroughElection(ctx, Stream, r.createOnce)
 }
 
-// createOnce is one of [reading.create]'s asks.
+// createOnce is one of [reading.create]'s asks. A read's own create is asked
+// as every create is ([jsprovision.Timing.Ask]): a member that is not the
+// metadata leader drops it without a word while that group elects, so one
+// unanswered in its term is abandoned and asked again, and one the broker made
+// after all is reaped once idle five minutes. Never hedged, many out at once:
+// each is a proposal to the metadata group that is electing. A listing's is
+// asked once, bounded by its begin, past which the listing fails as its
+// collection expects.
 func (r *reading) createOnce(ctx context.Context) (jetstream.Consumer, error) {
 	if r.begin <= 0 {
-		return r.made(ctx)
+		var cons jetstream.Consumer
+		err := r.b.timing.Ask(ctx, func(ctx context.Context) error {
+			made, err := r.made(ctx)
+			if err == nil {
+				cons = made
+			}
+			return err
+		}, nil)
+		return cons, err
 	}
 	begin, cancel := context.WithTimeout(ctx, r.begin)
 	defer cancel()
