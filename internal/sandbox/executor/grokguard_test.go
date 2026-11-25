@@ -3,6 +3,7 @@ package executor_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -12,15 +13,14 @@ import (
 // A HOME CANNOT SWITCH GROK BUILD'S HOOKS OFF UNSEEN THROUGH ITS
 // DISABLED-HOOKS FILE. Grok Build 1.0.92 skips a hook whose id that file holds
 // on a line (blanks and a carriage return trimmed), and every hook where it
-// cannot be read, with no word (measured). So a hooked run (every run in a box
-// with a note helper build, whose nested hook hands a clone) is refused before
-// Grok starts, naming the file and the line, or saying it cannot be read; it
-// starts where the file names the box's own hook, before which the run's come,
-// another place, scope or spelling, a hook the run lacks, or where it is empty
-// or a broken link (no file: measured).
-// Mutations, each red: drop the check; match untrimmed; match blind to case;
-// skip the unreadable file; name the run's hooks at place 0; leave the nested
-// hook's id out.
+// cannot be read, with no word (measured). So a run with note hooks is refused
+// before Grok starts, naming the file and the line, or saying it cannot be
+// read; it starts where the file names the box's own hook, another place, a
+// hook the run lacks, or is empty or a broken link (no file: measured). The
+// nested hook switched off refuses nothing: the run starts, its log saying so
+// once. Mutations, each red: drop the check; match untrimmed or blind to case;
+// skip the unreadable file; name the hooks at place 0; count the nested hook
+// as a note hook, or say nothing of it.
 func TestGrokBuildsHooksCannotBeSwitchedOffByItsDisabledHooksUnseen(t *testing.T) {
 	t.Parallel()
 	const file = ".grok/disabled-hooks"
@@ -30,6 +30,7 @@ func TestGrokBuildsHooksCannotBeSwitchedOffByItsDisabledHooksUnseen(t *testing.T
 	for name, tc := range map[string]struct {
 		req    sandbox.RunRequest
 		broken bool
+		skip   string // the setting the run's log names, once, switching the nested hook off
 		switchOffCase
 	}{
 		"nothing switches them off": {req: notes},
@@ -59,15 +60,14 @@ func TestGrokBuildsHooksCannotBeSwitchedOffByItsDisabledHooksUnseen(t *testing.T
 			plant: map[string]string{file + "/x": "user:stop[0].hooks[0]\n"},
 			fails: []string{"Grok Build would run none of the run's hooks", "/.grok/disabled-hooks cannot be read",
 				"skips every hook outside managed policy"}}},
-		"it cannot be read, on a run whose one hook is the nested one": {req: sandbox.RunRequest{Brief: "go",
-			MCPServers: loadsBridge}, switchOffCase: switchOffCase{plant: map[string]string{file + "/x": "user:stop[0].hooks[0]\n"},
-			fails: []string{"Grok Build would run none of the run's hooks", "a repository cloned during it"}}},
+		"it cannot be read, on a run taking no notes": {req: sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge},
+			skip: "/.grok/disabled-hooks cannot be read", switchOffCase: switchOffCase{
+				plant: map[string]string{file + "/x": "user:stop[0].hooks[0]\n"}}},
 		"it names the nested hook of a run taking no notes": {req: sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge},
-			switchOffCase: switchOffCase{plant: map[string]string{file: "user:post_tool_use[0].hooks[0]\n"},
-				fails: []string{"skip the run's hook user:post_tool_use[0].hooks[0]"}}},
-		"it names the nested hook after the notes' one": {req: notes, switchOffCase: switchOffCase{
-			plant: map[string]string{file: "user:post_tool_use[1].hooks[0]\n"},
-			fails: []string{"skip the run's hook user:post_tool_use[1].hooks[0]"}}},
+			skip: "/.grok/disabled-hooks names it", switchOffCase: switchOffCase{
+				plant: map[string]string{file: "user:post_tool_use[0].hooks[0]\n"}}},
+		"it names the nested hook alone, after the notes' one": {req: notes, skip: "/.grok/disabled-hooks names it",
+			switchOffCase: switchOffCase{plant: map[string]string{file: "user:post_tool_use[1].hooks[0]\n"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -88,6 +88,30 @@ func TestGrokBuildsHooksCannotBeSwitchedOffByItsDisabledHooksUnseen(t *testing.T
 			if (started == nil) != (len(tc.fails) == 0) {
 				t.Errorf("grok started %t, want %t", started == nil, len(tc.fails) == 0)
 			}
+			checkNestedOff(t, box, tc.skip)
 		})
+	}
+}
+
+// grokNestedOffLine opens the run's one line saying its nested hook is off.
+const grokNestedOffLine = "crewlet: a repository cloned during this run is not handed its instructions and skills: "
+
+// checkNestedOff checks the run's error stream says once that its nested hook
+// is switched off, naming setting (a path under the home where it opens with
+// a slash), or, setting "", says nothing of it.
+func checkNestedOff(t *testing.T, box sandbox.Sandbox, setting string) {
+	t.Helper()
+	errs := boxFile(t, box, executor.PathsFor(box).Err())
+	if setting == "" {
+		if strings.Contains(errs, grokNestedOffLine) {
+			t.Errorf("the run says its nested hook is off, want nothing of it:\n%s", errs)
+		}
+		return
+	}
+	if strings.HasPrefix(setting, "/") {
+		setting = box.Home() + setting
+	}
+	if n := strings.Count(errs, grokNestedOffLine+setting); n != 1 {
+		t.Errorf("the run says %d times that its nested hook is off by %q, want once:\n%s", n, setting, errs)
 	}
 }
