@@ -531,13 +531,12 @@ func TestTheResumeHandsTheChainFromItsLeafRootFirst(t *testing.T) {
 // THE LEAF IS THE LAST ROW'S NEAREST TURN RECORD: with no checkpoint moving
 // it, the resume walks from the nearest user or assistant record up from the
 // last row, so a stop hook's summary or an attachment written last is handed
-// after the leaf, a tail (THE TAILS). A leaf of no time, or a thread of no
-// record, finds no conversation and hands nothing, in every variant.
+// after the leaf, a tail (THE TAILS). A thread of no record finds no
+// conversation and hands nothing, in every variant.
 //
 // Mutation: start at the last row itself, and the summary and attachment read
-// as walked; take an untimed turn record for the leaf, and its thread hands
-// its records; or hand no order of a thread of no record, and its readers
-// cannot tell that every variant hands nothing.
+// as walked; or hand no order of a thread of no record, and its readers cannot
+// tell that every variant hands nothing.
 func TestTheLeafIsTheLastRowsNearestTurnRecord(t *testing.T) {
 	t.Parallel()
 	for name, last := range map[string]string{
@@ -555,14 +554,40 @@ func TestTheLeafIsTheLastRowsNearestTurnRecord(t *testing.T) {
 		rcOrder{[]int{1, 2, 3}, allVariants})
 	read.expectLeaf(t, "a reply last", 3)
 
-	untimed := rcChain(t, "", rcPrompt(0, 1, 0), ctReplace(t, rcReply(1, 2, "msg_a", 1000, rcSaid("done")),
-		`"timestamp":"`+rcAt(1000)+`",`, ""))
-	untimed.expect(t, "a leaf of no time", map[int]rcAnswer{1: no(whyNoConversation), 2: no(whyNoConversation)},
-		rcOrder{[]int{}, allVariants})
-	untimed.expectLeaf(t, "a leaf of no time", 0)
 	empty := rcChain(t, "", ctEnqueue, ctDequeue)
 	empty.expect(t, "a thread of no record", map[int]rcAnswer{}, rcOrder{[]int{}, allVariants})
 	empty.expectLeaf(t, "a thread of no record", 0)
+}
+
+// A LEAF AMONG RECORDS OF NO TIME IS CANNOT TELL, the whole thread: where the
+// records the leaf is chosen among (the single path's turn record, a leaf
+// set, an empty one's fallback, a subagent's own leaves) hold none with a
+// time, 2.1.330 walks from the last of them (lK's `g===-1/0`) and 2.1.310 and
+// 2.1.322 find no conversation, so the relaunch box's release decides what is
+// handed.
+//
+// Mutation: take no leaf there, as the older releases do, and every case
+// reads as no conversation.
+func TestALeafAmongRecordsOfNoTimeIsCannotTell(t *testing.T) {
+	t.Parallel()
+	untimed := func(line string, ms int) string { return ctReplace(t, line, `,"timestamp":"`+rcAt(ms)+`"`, "") }
+	own := func(line string) string { return rcOwn(t, line) }
+	for name, tc := range map[string]struct {
+		agent string
+		lines []string
+	}{
+		"the single path's turn record": {"", []string{rcPrompt(0, 1, 0),
+			untimed(rcReply(1, 2, "msg_a", 1000, rcSaid("done")), 1000)}},
+		"a leaf set's members": {"", []string{untimed(rcPrompt(0, 1, 0), 0),
+			untimed(rcReply(1, 2, "msg_a", 1000, rcSaid("a")), 1000), rcSystem(0, 3, 2000, "informational", ""),
+			rcAttach(3, 4, 3000, rcNote)}},
+		"an empty leaf set's fallback": {"", []string{untimed(rcSystem(0, 1, 0, "informational", ""), 0),
+			untimed(rcAttach(1, 2, 1000, rcNote), 1000)}},
+		"a subagent's own leaves": {ctAgent, []string{own(rcPrompt(0, 1, 0)),
+			untimed(own(rcReply(1, 2, "msg_a", 1000, rcSaid("done"))), 1000)}},
+	} {
+		rcChain(t, tc.agent, tc.lines...).expectCannotTell(t, name, whyLeafTime)
+	}
 }
 
 // A CHECKPOINT THE LAST ROW DESCENDS FROM LEAVES IT THE LAST ROW'S LEAF: a
@@ -763,6 +788,71 @@ func TestALeafOnlyAnUnseenFlagMovesIsCannotTell(t *testing.T) {
 		2: cannot(whyLeafFlag), 3: cannot(whyLeafFlag), 5: cannot(whyLeafFlag)},
 		rcOrder{[]int{1, 2, 3}, allVariants &^ variantsMetcalfe}, rcOrder{[]int{1, 5}, variantsMetcalfe})
 	second.expectLeaf(t, "q1t's shape at a reply's second record", 0)
+}
+
+// 2.1.330'S q1t STOPS AT A SYSTEM RECORD'S PARENTS TOO: where the record above
+// the checkpoint's run is a system record, 2.1.330 with sorted_metcalfe on
+// stops its walk up from the last row at that record or any record it hangs
+// from through system records alone, where 2.1.322 stops at that record
+// alone. So a last row that descends from the system record's parent and not
+// from it moves 2.1.330's leaf alone: what that leaf hands and the others not
+// is cannot tell (whyLeafFlag), each order handed with its variants.
+//
+// Mutation: read 2.1.330's q1t as 2.1.322's, and the case hands one order;
+// read 2.1.322's as 2.1.330's, and the metcalfe variants hand one.
+func TestQ1tOn330StopsAtASystemRecordsParentsToo(t *testing.T) {
+	t.Parallel()
+	read := rcChain(t, "", rcPrompt(0, 1, 0), rcSystem(1, 2, 500, "informational", ""),
+		rcReply(2, 3, "msg_a", 1000, rcCalls("x1")), rcCheckpoint(3), rcReply(1, 5, "msg_b", 3000, rcSaid("later")))
+	read.expect(t, "a checkpoint under a system record", map[int]rcAnswer{1: yes(whyChain),
+		2: cannot(whyLeafFlag), 3: cannot(whyLeafFlag), 5: cannot(whyLeafFlag)},
+		rcOrder{[]int{1, 2, 3}, allVariants &^ variantsMetcalfe330}, rcOrder{[]int{1, 5}, variantsMetcalfe330})
+	read.expectLeaf(t, "a checkpoint under a system record", 0)
+}
+
+// A LEAF RULE 2.1.330 HOLDS AND THE CHAIN DOES NOT IS CANNOT TELL, the whole
+// thread (whyLeafRule): where the last row does not descend through the
+// checkpoint, a checkpoint that, up through system records, is a reply saying
+// nothing and making no call (rsn, behind tengu_spicy_oboe), or a reply of an
+// id making no call whose run up holds an attachment below a record of its
+// own reply (asn, behind foamy_spring), may move the leaf to the last row. A
+// checkpoint reply that says something with nothing between is neither.
+//
+// Mutation: drop either rule's test, and its case hands an order.
+func TestALeafRuleOnly330HoldsIsCannotTell(t *testing.T) {
+	t.Parallel()
+	silent := `[{"type":"thinking","thinking":"hm"}]`
+	for name, lines := range map[string][]string{
+		"a checkpoint that says nothing": {rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, silent), rcCheckpoint(2),
+			rcReply(1, 4, "msg_b", 3000, rcSaid("later"))},
+		"a checkpoint saying nothing under a system record": {rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, silent), rcSystem(2, 3, 1100, "informational", ""), rcCheckpoint(3),
+			rcReply(1, 5, "msg_b", 3000, rcSaid("later"))},
+		"a checkpoint whose reply an attachment splits": {rcPrompt(0, 1, 0),
+			rcReply(1, 2, "msg_a", 1000, rcSaid("first")), rcAttach(2, 3, 1100, rcNote),
+			rcReply(3, 4, "msg_a", 1200, rcSaid("second")), rcCheckpoint(4), rcReply(1, 6, "msg_b", 3000, rcSaid("later"))},
+	} {
+		rcChain(t, "", lines...).expectCannotTell(t, name, whyLeafRule)
+	}
+	plain := rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("first")),
+		rcReply(2, 3, "msg_a", 1200, rcSaid("second")), rcCheckpoint(3), rcReply(1, 5, "msg_b", 3000, rcSaid("later")))
+	plain.expect(t, "a checkpoint that says something, nothing between", map[int]rcAnswer{1: yes(whyChain),
+		2: yes(whyChain), 3: yes(whyChain), 5: no(whyOffConversation)}, rcOrder{[]int{1, 2, 3}, allVariants})
+}
+
+// A ROW PUT BACK IS CANNOT TELL, the whole thread (whyPutBack): a user record
+// carrying `rowsAheadOfPutBack`, whatever it holds, names rows 2.1.330's walk
+// moves ahead of it under foamy_spring, a move the chain does not hold.
+//
+// Mutation: read the key as nothing, and the thread hands its order.
+func TestARowPutBackIsCannotTell(t *testing.T) {
+	t.Parallel()
+	for name, value := range map[string]string{"a list": `["` + rcUUID(2) + `"]`, "null": "null"} {
+		put := ctReplace(t, rcPrompt(2, 3, 2000), `"isSidechain":false,`,
+			`"isSidechain":false,"rowsAheadOfPutBack":`+value+`,`)
+		rcChain(t, "", rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")), put).expectCannotTell(t,
+			"rows put back, "+name, whyPutBack)
+	}
 }
 
 // A NEWER ROW UNDER THE LAST ROW LEADS WHERE NO CHECKPOINT NAMES A LEAF: where
@@ -1508,6 +1598,11 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 			rcResults(2, 4, 1200, "x2"), rcPrompt(3, 5, 1300), rcReply(4, 6, "msg_b", 1400, rcSaid("done"))}, 5,
 			`"content":"a prompt`, rcHanding(whyChain, []int{1, 2, 4, 6}, map[int]rcAnswer{
 				3: yes(whyRecoveredResult), 5: no(whyOffConversation)}), []int{1, 2, 3, 4, 6}, 6},
+		"a virtual reply making a call, which 2.1.330's prune reads as a run's link": {[]string{
+			rcPrompt(0, 1, 0), ctReplace(t, rcReply(1, 2, "msg_a", 1000, rcCalls("x1")), `"isSidechain":false,`,
+				`"isSidechain":false,"isVirtual":true,`), rcResults(2, 3, 1100, "x1"),
+			rcReply(3, 4, "msg_b", 1200, rcSaid("done"))}, 1, `"content":"a prompt`,
+			rcHanding(whyChain, []int{1, 2, 3, 4}), []int{1, 2, 3, 4}, 4},
 		"a compaction's boundary": {[]string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")),
 			rcSystem(2, 3, 2000, subtypeCompactBoundary, `"compactMetadata":{"trigger":"manual"},`),
 			rcPrompt(3, 4, 3000)}, 4, `"content":"a prompt`, rcHanding(whyChain, []int{1, 2, 3, 4}),
@@ -1902,7 +1997,7 @@ func TestAReplacedKeptListLeavesTheChainWithItsCount(t *testing.T) {
 }
 
 // EACH DISTINCT ORDER IS HANDED ONCE, with the variants that hand it, which
-// part the eight among them: one order where nothing parts the variants; two
+// part the thirteen among them: one order where nothing parts the variants; two
 // where a retraction does, or q1t's leaf; and two where q1t's leaf hands the
 // same records in another order, or the tails' order does, warm_mochi's walk
 // by depth from the walk by breadth sorted by time, every record handed in
@@ -1910,7 +2005,7 @@ func TestAReplacedKeptListLeavesTheChainWithItsCount(t *testing.T) {
 //
 // Mutation: fold orders that hand the same records, whatever their order, and
 // the last two cases hand one; or leave a variant out of an order's, and the
-// variants no longer part the eight.
+// variants no longer part the thirteen.
 func TestEachDistinctOrderIsHandedOnce(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -1935,7 +2030,7 @@ func TestEachDistinctOrderIsHandedOnce(t *testing.T) {
 		var all chainVariants
 		read.c.EachOrder(func(o chainOrder) bool {
 			if o.Variants() == 0 || all&o.Variants() != 0 {
-				t.Errorf("%s: an order of the variants %08b shares one with another, or has none", name,
+				t.Errorf("%s: an order of the variants %013b shares one with another, or has none", name,
 					o.Variants())
 			}
 			all |= o.Variants()
@@ -1947,7 +2042,7 @@ func TestEachDistinctOrderIsHandedOnce(t *testing.T) {
 			return true
 		})
 		if all != allVariants || !slices.EqualFunc(got, tc.orders, slices.Equal) {
-			t.Errorf("%s: the variants %08b hand %v; want all eight to hand %v", name, all, got, tc.orders)
+			t.Errorf("%s: the variants %013b hand %v; want all thirteen to hand %v", name, all, got, tc.orders)
 		}
 	}
 }
@@ -2309,19 +2404,14 @@ func TestTheLeafSetIsCjtsOnTheRelinkedParents(t *testing.T) {
 
 // AN EMPTY LEAF SET FALLS BACK TO THE NEWEST RECORD: where no walk up finds a
 // turn record none names, the resume walks from the latest-timed record of
-// any kind the relink left (2.1.322's Ozt, 2.1.310's p0), the first in the
-// file on a tie; where the set's records have no time, it finds no
-// conversation and hands nothing.
+// any kind the relink left (2.1.330's uan, 2.1.322's Ozt, 2.1.310's p0), the
+// first in the file on a tie.
 //
-// Mutation: take the later on a tie, fall back to turn records alone, fall
-// back despite untimed members, or take a deleted record, and the case naming
-// it leads from another.
+// Mutation: take the later on a tie, fall back to turn records alone, or take
+// a deleted record, and the case naming it leads from another.
 func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
 	t.Parallel()
 	system := rcSystem(0, 1, 0, "informational", "")
-	untimed := func(record string, ms int) string {
-		return ctReplace(t, record, `,"timestamp":"`+rcAt(ms)+`"`, "")
-	}
 	for name, tc := range map[string]rcCase{
 		"no turn record: the newest, an attachment": {[]string{system, rcAttach(1, 2, 1000, rcNote)},
 			rcHanding(whyChain, []int{1, 2}), []int{1, 2}, 2},
@@ -2338,11 +2428,6 @@ func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
 			rcBoundary(2, 1000, rcKeeping(3, 1)), rcSummary(2, 3, 1100), rcBoundary(4, 2000, `{"trigger":"manual"}`),
 			rcAttach(4, 5, 3000, rcNote)},
 			rcHanding(whyChain, []int{4, 5}, rcAll(no(whyRelinkDeleted), 1, 2, 3)), []int{4, 5}, 5},
-		"a set of untimed records: no conversation": {[]string{untimed(rcPrompt(0, 1, 0), 0),
-			untimed(rcReply(1, 2, "msg_a", 1000, rcSaid("a")), 1000), rcSystem(0, 3, 2000, "informational", ""),
-			rcAttach(3, 4, 3000, rcNote)},
-			map[int]rcAnswer{1: no(whyNoConversation), 2: no(whyNoConversation), 3: no(whyNoConversation),
-				4: no(whyNoConversation)}, []int{}, 0},
 	} {
 		tc.check(t, name)
 	}
@@ -2363,7 +2448,6 @@ func TestAnEmptyLeafSetFallsBackToTheNewestRecord(t *testing.T) {
 func TestASubagentsConversationIsTheOneItsOwnLoadHands(t *testing.T) {
 	t.Parallel()
 	own := func(line string) string { return rcOwn(t, line) }
-	untimed := func(line string, ms int) string { return ctReplace(t, line, `,"timestamp":"`+rcAt(ms)+`"`, "") }
 	// branches is V2's thread: off the prompt, a finished reply (2) at first,
 	// and a call (3), its result (4) and a finished reply (5) at then.
 	branches := func(first, then int) []string {
@@ -2416,9 +2500,6 @@ func TestASubagentsConversationIsTheOneItsOwnLoadHands(t *testing.T) {
 		"no record of its own: no conversation": {rcCase{[]string{rcIn(t, rcPrompt(0, 1, 0), ctAgent, false),
 			rcIn(t, rcReply(1, 2, "msg_a", 1000, rcSaid("done")), ctAgent, false)},
 			rcAll(no(whyNoConversation), 1, 2), []int{}, 0}, nil},
-		"an own leaf of no time: no conversation": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
-			untimed(own(rcReply(1, 2, "msg_a", 1000, rcSaid("done"))), 1000)},
-			rcAll(no(whyNoConversation), 1, 2), []int{}, 0}, []int{2}},
 		"a compaction's boundary, which leads nothing": {rcCase{[]string{own(rcPrompt(0, 1, 0)),
 			own(rcReply(1, 2, "msg_a", 1000, rcSaid("done"))), own(rcBoundary(3, 2000, `{"trigger":"manual"}`))},
 			rcHanding(whyChain, []int{1, 2}, map[int]rcAnswer{3: no(whyOffConversation)}), []int{1, 2}, 2}, []int{2}},
@@ -2572,7 +2653,8 @@ func TestTheLeafsTailsAreHandedLastInEitherOrder(t *testing.T) {
 		rcAttach(2, 4, 2000, rcNote), rcAttach(4, 5, 5000, rcNote)}
 	// mochi is the variants warm_mochi is on in, stated as THE VARIANTS has
 	// them rather than read off the chain's own constant.
-	mochi := variant310SpringMochi | variant322SpringMochi | variant322SpringMochiMetcalfe
+	mochi := variant310SpringMochi | variant322SpringMochi | variant322SpringMochiMetcalfe | variant330SpringMochi |
+		variant330SpringMochiMetcalfe
 	for name, agent := range map[string]string{"in the main thread": "", "in a subagent's thread": ctAgent} {
 		lines := slices.Clone(deep)
 		if agent != "" {
