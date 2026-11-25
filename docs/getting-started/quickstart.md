@@ -504,9 +504,9 @@ client at `/operator/mcp` with your API token:
 ```
 
 It gets the same tracker, knowledge-base and chat tools a seat holds (nineteen
-over the tracker, five over the pages and nine in the chat) and thirty-one
+over the tracker, five over the pages and nine in the chat) and thirty-two
 more that no seat is given: the saved views, the catalogue write, a person's own
-queue, inbox, pins and Home board, the trash, the board drag, the chat's furniture (making
+queue, inbox, pins, Home board and Ask Crewlet instructions, the trash, the board drag, the chat's furniture (making
 a room, opening a conversation, a room's settings and membership, editing and
 taking back a message, how far you have read), and the gestures a person
 makes about the company rather than its work: pausing and resuming a seat,

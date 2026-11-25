@@ -29,6 +29,27 @@ import (
 // runs in: this process's one [toolsession.Host], the seats' own (ADR-0049).
 func AssistantToolSessions(e *Engine) *toolsession.Host { return e.sessions }
 
+// AssistantInstructions reads a person's own Ask Crewlet instructions from the
+// coordination store, under the seat `save_assistant_instructions` keeps them
+// under; nil on a node with no coordination store, which keeps none.
+func AssistantInstructions(e *Engine) assistant.Instructions {
+	if e == nil || e.backends == nil || e.backends.Fleet == nil {
+		return nil
+	}
+	fleet := e.backends.Fleet
+	return func(ctx context.Context, p iam.Principal) (config.AssistantInstructions, error) {
+		actor := iam.ActorFor(p)
+		if actor.Kind != iam.ActorHuman {
+			return config.AssistantInstructions{}, nil
+		}
+		held, _, found, err := fleet.SeatInstructions(ctx, actor.Name)
+		if err != nil || !found {
+			return config.AssistantInstructions{}, err
+		}
+		return config.ReadAssistantInstructions(held.Instructions), nil
+	}
+}
+
 // AssistantModels is the assistant's model off the company this node runs
 // NOW, per turn.
 func AssistantModels(e *Engine) assistant.Models { return assistantModels{e: e} }

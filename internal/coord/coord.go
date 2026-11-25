@@ -217,17 +217,17 @@
 //
 // # A person's own record here is their SEAT's
 //
-// Two records in this store are a PERSON'S rather than the company's or a
-// node's: their chat read state ([ChatReads]) and their Home board
-// ([HomeBoards]). Each is keyed by the name iam.RecordOwner gives a
-// principal's own record, which for everybody they admit is the human seat
-// they act as, so each follows the rule every personal record follows
-// (ADR-0032): it belongs to the SEAT, and the seat's next holder inherits it
-// (the person themselves once reinstated, or a successor once they are moved to
-// another seat or removed), exactly as the seat's tracker inbox, pins and
-// personal views pass. Each ends when the seat leaves the company, never when
-// its holder does; see chatread.go for why neither a person id nor an agent id
-// is the key.
+// Three records here are a PERSON'S, not the company's or a node's: their
+// chat read state ([ChatReads]), Home board ([HomeBoards]) and Ask Crewlet
+// instructions ([AssistantInstructions]). Each is keyed by the name
+// iam.RecordOwner gives a principal's own record, which for everybody they
+// admit is the human seat they act as, so each follows the rule every personal
+// record follows (ADR-0032): it belongs to the SEAT, and the seat's next holder
+// inherits it (the person themselves once reinstated, or a successor once they
+// are moved to another seat or removed), exactly as the seat's tracker inbox,
+// pins and personal views pass. Each ends when the seat leaves the company,
+// never when its holder does; see chatread.go for why neither a person id nor
+// an agent id is the key.
 //
 // # A seat's save ledger lives in the uploads bucket
 //

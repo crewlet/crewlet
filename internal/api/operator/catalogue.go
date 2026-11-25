@@ -241,6 +241,11 @@ type Halves struct {
 	// call.
 	HomeBoard builtin.HomeBoardDeps
 
+	// Instructions is the half a person saves their own Ask Crewlet
+	// instructions through, or the zero value on a node with no coordination
+	// store. Who saves is set per call.
+	Instructions builtin.InstructionsDeps
+
 	// ScheduleRuns is the half a person runs one schedule now through, or
 	// the zero value on a node that wakes no seats. Who asks and the chart
 	// the schedule is named in are set per call.
@@ -458,6 +463,8 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	atlasRefresh.Actor = workActor
 	homeBoard := halves.HomeBoard
 	homeBoard.Actor = workActor
+	instructions := halves.Instructions
+	instructions.Actor = workActor
 	scheduleRuns := halves.ScheduleRuns
 	scheduleRuns.Actor, scheduleRuns.Org = workActor, s.org
 	runs, pauses, steer, answer := s.runs, s.pauses, s.steer, s.answer
@@ -467,7 +474,8 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 		Work: work, Pages: kb, Chat: talk, Knowledge: halves.Knowledge,
 		Artifacts: arts, ArtifactData: halves.ArtifactData, Code: repos,
 		Readers: halves.Readers, Health: health, Atlas: halves.Atlas, AtlasWrite: atlasWrite,
-		AtlasRefresh: atlasRefresh, HomeBoard: homeBoard, ScheduleRuns: scheduleRuns, Org: s.org,
+		AtlasRefresh: atlasRefresh, HomeBoard: homeBoard, Instructions: instructions,
+		ScheduleRuns: scheduleRuns, Org: s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})

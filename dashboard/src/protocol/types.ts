@@ -151,6 +151,7 @@ import type {
 } from "../contract/artifactsworkspace.ts";
 import { PRESENCE_ACTIVITIES, PRESENCE_ROOMS } from "../contract/presence.ts";
 import type { InformSurface, WorkViewShape } from "../contract/work.ts";
+import type { AssistantInstructions } from "../contract/instructions.ts";
 import type {
   RetentionGenerationState,
   RetentionIdentityCause,
@@ -3693,6 +3694,21 @@ export interface HomeBoardAnswer {
   /** The board as last saved, untrusted until validated; null when none is stored. */
   board: unknown;
   /** The stored record's revision, which a save names as `if_match`; 0 when none. */
+  revision: number;
+}
+
+/**
+ * How Ask Crewlet writes to the reader, the company's instructions beside their
+ * own (`internal/api/queries`, `assistant_instructions`).
+ */
+export interface AssistantInstructionsAnswer {
+  /** The seat their own are kept under, or "" for a sign-in that holds none. */
+  seat: string;
+  /** The company's layer, which every member reads and an administrator sets. */
+  company: AssistantInstructions;
+  /** The reader's own layer, which wins over the company's where they differ. */
+  mine: AssistantInstructions;
+  /** Their layer's stored revision, which a save names as `if_match`; 0 when none. */
   revision: number;
 }
 
@@ -8576,6 +8592,8 @@ export interface QueryMap {
   decisions: DecisionsAnswer;
   /** The reader's Home board as the engine keeps it under their seat. */
   home_board: HomeBoardAnswer;
+  /** How Ask Crewlet writes to the reader: the company's layer and their own. */
+  assistant_instructions: AssistantInstructionsAnswer;
   /** The agents' growth acts, newest first (`internal/accessdomain`), an administrator's read. */
   growth_changes: GrowthChangesAnswer;
   answered_decisions: AnsweredDecisionsAnswer;
