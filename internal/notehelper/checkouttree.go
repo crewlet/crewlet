@@ -48,26 +48,33 @@ const (
 	formCopilot treeForm = "copilot"
 	// formClaude is Claude Code 2.1.310's walk and YAML reader.
 	formClaude treeForm = "claude"
+	// formQwen is Qwen Code 0.28.4's walk of .qwen/rules and YAML reader.
+	formQwen treeForm = "qwen"
 )
 
 // Valid reports whether f is a form the helper walks.
-func (f treeForm) Valid() bool { return f == formCopilot || f == formClaude }
+func (f treeForm) Valid() bool { return f == formCopilot || f == formClaude || f == formQwen }
 
 // treeRules is how a form walks a tree and reads a file's scope (measured):
 // whether the suffix matches in its own case only, dot entries are walked, a
-// directory link is followed while it stays in the checkout, and an empty
-// file is left out.
+// file link and a directory link are followed while they stay in the
+// checkout, and an empty file is left out.
 type treeRules struct {
-	caseExact, dots, dirLinks, skipEmpty bool
-	scopedAway                           func(raw []byte, s treeScope) bool
+	caseExact, dots, fileLinks, dirLinks, skipEmpty bool
+	scopedAway                                      func(raw []byte, s treeScope) bool
 }
 
-// rules is f's [treeRules].
+// rules is f's [treeRules]: Qwen Code follows no link at all (B2b's rules
+// rows), where Claude Code follows both and Copilot a file link alone.
 func (f treeForm) rules() treeRules {
-	if f == formClaude {
-		return treeRules{caseExact: true, dots: true, dirLinks: true, skipEmpty: true, scopedAway: claudeScopedAway}
+	switch f {
+	case formClaude:
+		return treeRules{caseExact: true, dots: true, fileLinks: true, dirLinks: true, skipEmpty: true,
+			scopedAway: yamlScopedAway}
+	case formQwen:
+		return treeRules{caseExact: true, dots: true, skipEmpty: true, scopedAway: yamlScopedAway}
 	}
-	return treeRules{scopedAway: copilotScopedAway}
+	return treeRules{fileLinks: true, scopedAway: copilotScopedAway}
 }
 
 // treeScope is the frontmatter keys that scope a file to paths, the first
@@ -102,7 +109,7 @@ func (s *instructionSlot) UnmarshalJSON(raw []byte) error {
 		return fmt.Errorf("the tree slot's tree %q is no directory below a checkout's root", tree.Tree)
 	}
 	if !tree.Form.Valid() {
-		return fmt.Errorf("the tree slot's form %q is neither %q nor %q", tree.Form, formCopilot, formClaude)
+		return fmt.Errorf("the tree slot's form %q is none of %q, %q and %q", tree.Form, formCopilot, formClaude, formQwen)
 	}
 	s.Tree = &tree
 	return nil
@@ -210,7 +217,7 @@ func (w *treeWalk) walk(dir string, depth int) error {
 			}
 			continue
 		}
-		if !w.named(name) {
+		if !w.named(name) || (!w.rules.fileLinks && e.Type()&fs.ModeSymlink != 0) {
 			continue
 		}
 		real, err := filepath.EvalSymlinks(path)
@@ -321,12 +328,13 @@ func copilotScopedAway(raw []byte, s treeScope) bool {
 	return false
 }
 
-// claudeScopedAway reports whether raw is a file Claude Code 2.1.310 does not
-// load at a session's start (measured, B2a's C4 rows): its frontmatter is not
-// valid YAML, which it never loads, or the first of s's keys present in it
-// (case-exact) holds patterns ([claudePatterns]) with an entry outside
-// s.Whole, which it loads only on a path that entry matches.
-func claudeScopedAway(raw []byte, s treeScope) bool {
+// yamlScopedAway reports whether raw is a file Claude Code 2.1.310 or Qwen
+// Code 0.28.4 does not load at a session's start (measured, B2a's C4 and
+// B2b's rules rows): its frontmatter is not valid YAML, which neither loads,
+// or the first of s's keys present in it (case-exact) holds patterns
+// ([claudePatterns]) with an entry outside s.Whole (Claude Code's `**`, none
+// of Qwen Code's), which it loads only on a matching path or never.
+func yamlScopedAway(raw []byte, s treeScope) bool {
 	front, ok := frontmatter(raw)
 	if !ok {
 		return false

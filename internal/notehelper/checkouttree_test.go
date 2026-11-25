@@ -18,6 +18,13 @@ func copilotRules() instructionSlot {
 		Scoped: &treeScope{Keys: []string{"applyTo", "paths"}, Whole: []string{"**", "**/*", "*"}}}}
 }
 
+// qwenRules is the tree slot of Qwen Code 0.28.4's .qwen/rules, scoped as it
+// reads a rule's frontmatter, as internal/sandbox/executor writes it.
+func qwenRules() instructionSlot {
+	return instructionSlot{Tree: &instructionTree{Tree: ".qwen/rules", Suffix: ".md", Form: formQwen,
+		Scoped: &treeScope{Keys: []string{"paths"}}}}
+}
+
 // claudeRules is the tree slot of Claude Code 2.1.310's .claude/rules, scoped
 // as it reads a rule's frontmatter, as internal/sandbox/executor writes it.
 func claudeRules() instructionSlot {
@@ -298,12 +305,12 @@ func TestAScopedRuleIsLeftOutAsClaudeCodeReadsItsFrontmatter(t *testing.T) {
 		"---\npaths: [unclosed\n---\nX\n", "---\npaths: [\"src/**\", 5]\n---\nMIXED\n"}
 	scope := *claudeRules().Tree.Scoped
 	for _, file := range handed {
-		if claudeScopedAway([]byte(file), scope) {
+		if yamlScopedAway([]byte(file), scope) {
 			t.Errorf("%q is left out, want it handed: Claude Code loads it at a session's start", file)
 		}
 	}
 	for _, file := range left {
-		if !claudeScopedAway([]byte(file), scope) {
+		if !yamlScopedAway([]byte(file), scope) {
 			t.Errorf("%q is handed, want it left out: Claude Code loads it only on a matching path, or never", file)
 		}
 	}
@@ -355,5 +362,74 @@ func TestALinkedRulesDirectoryIsWalkedAsClaudeCodeWalksIt(t *testing.T) {
 				t.Errorf("the linked tree imports %q, want %q (saying %q)", got, want, said.String())
 			}
 		})
+	}
+}
+
+// A TREE HANDS ITS FILES IN QWEN CODE'S WALK, each a measured row of 0.28.4's
+// start in a checkout (B2b's rules rows): `.md` in its own case (`UP.MD`,
+// `a.txt` not), dot files and dot directories walked, nested directories
+// walked, a file link and a directory link never followed, whatever they lead
+// to, a scoped rule left out, the rest whole, apart by a blank line.
+//
+// Mutation: match the suffix in any case, skip dot entries, follow a file or
+// a directory link, or drop the scope, and the text goes red.
+func TestATreeHandsItsFilesInQwenCodesWalk(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"QWEN.md":                   "ROOT\n",
+		".qwen/rules/plain.md":      "PLAIN\n",
+		".qwen/rules/UP.MD":         "UPPER\n",
+		".qwen/rules/a.txt":         "TXT\n",
+		".qwen/rules/.dot.md":       "DOTFILE\n",
+		".qwen/rules/.hid/in.md":    "DOTDIR\n",
+		".qwen/rules/sub/nested.md": "NESTED\n",
+		".qwen/rules/paths.md":      "---\npaths: [\"src/**/*.ts\"]\n---\nSCOPED\n",
+		".qwen/rules/desc.md":       "---\ndescription: d\n---\nDESC\n",
+		"elsewhere/l.md":            "FILELINK\n",
+		"elsewhere/dir/v.md":        "DIRLINK\n",
+	})
+	for link, target := range map[string]string{".qwen/rules/fl.md": "elsewhere/l.md", ".qwen/rules/dl": "elsewhere/dir"} {
+		if err := os.Symlink(filepath.Join(root, target), filepath.Join(root, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var said bytes.Buffer
+	text, _ := rootText(root, 1<<20, append(names([]string{"QWEN.md"}), qwenRules()), &skips{stderr: &said})
+	want := strings.Join([]string{"ROOT\n", "DOTFILE\n", "DOTDIR\n", "---\ndescription: d\n---\nDESC\n", "PLAIN\n",
+		"NESTED\n"}, "\n\n")
+	if text != want || said.Len() > 0 {
+		t.Errorf("the slots hand\n%q\nwant\n%q\nsaying %q", text, want, said.String())
+	}
+}
+
+// A SCOPED RULE IS LEFT OUT AS QWEN CODE READS ITS FRONTMATTER, each case a
+// measured row of 0.28.4 (B2b's rules rows): handed where it loads at a
+// session's start (no frontmatter, an unclosed one, no `paths`, `Paths`, an
+// empty or non-pattern `paths`), left out where `paths` names anything, `**`
+// included, or the frontmatter is invalid YAML, read past a BOM or with CRLF.
+//
+// Mutation: count `**` as matching every path, read `Paths` as paths, take an
+// empty list or a number as a pattern, hand invalid YAML, or read no BOM or
+// CRLF frontmatter, and a row goes red.
+func TestAScopedRuleIsLeftOutAsQwenCodeReadsItsFrontmatter(t *testing.T) {
+	t.Parallel()
+	handed := []string{"X\n", "---\ndescription: d\n---\nX\n", "---\nglobs: [\"src/**\"]\n---\nX\n",
+		"---\napplyTo: \"src/**\"\n---\nX\n", "---\nPaths: [\"src/**\"]\n---\nX\n", "---\npaths: []\n---\nX\n",
+		"---\npaths: \"\"\n---\nX\n", "---\npaths:\n---\nX\n", "---\npaths: 5\n---\nX\n",
+		"---\npaths: [\"src/**\"]\nX\n"}
+	left := []string{"---\npaths: [\"src/**/*.ts\"]\n---\nX\n", "---\npaths: \"**\"\n---\nX\n",
+		"---\npaths: [bad\n---\nX\n", "\uFEFF---\npaths: [\"src/**\"]\n---\nX\n",
+		"---\r\npaths: [\"src/**\"]\r\n---\r\nX\r\n"}
+	scope := *qwenRules().Tree.Scoped
+	for _, file := range handed {
+		if yamlScopedAway([]byte(file), scope) {
+			t.Errorf("%q is left out, want it handed: Qwen Code loads it at a session's start", file)
+		}
+	}
+	for _, file := range left {
+		if !yamlScopedAway([]byte(file), scope) {
+			t.Errorf("%q is handed, want it left out: Qwen Code does not load it at a session's start", file)
+		}
 	}
 }
