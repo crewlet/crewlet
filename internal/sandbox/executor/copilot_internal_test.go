@@ -1335,7 +1335,7 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 		t.Helper()
 		m := regexp.MustCompile(`const config = \{"url":"http://engine/mcp/tok/steer","cap":7,"state":"` +
 			regexp.QuoteMeta(paths.CopilotNotesState()) + `","run":"([^"]+)","helper":"","nested":"","attempt":"` +
-			regexp.QuoteMeta(paths.CopilotAttempt()) + `"\}`).FindStringSubmatch(ext)
+			regexp.QuoteMeta(paths.CopilotAttempt()) + `","kept":"","sessions":""\}`).FindStringSubmatch(ext)
 		if m == nil || strings.Contains(ext, copilotExtensionConfig) {
 			t.Fatalf("the extension's settings are not its own:\n%s", firstLine(ext[strings.Index(ext, "const config"):], 200))
 		}

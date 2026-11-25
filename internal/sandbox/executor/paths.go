@@ -1208,12 +1208,12 @@
 //
 // # Copilot's internal client
 //
-// A launch Copilot refuses past its static budget keeps its session, which a
-// relaunch would resume and session_store_sql reads. The extension SDK has no
-// delete, so the run's extension calls sessions.bulkDelete through a second
-// client on the undocumented `_internalConnection` (copilot_steer.js). A
-// Copilot release moved to re-measures that client, the refusal's
-// warningType, the store's tables (copilot_storecheck.mjs) and the time.
+// A refused launch keeps its session, which a relaunch would resume and
+// session_store_sql reads. The extension SDK has no delete, so the run's
+// extension calls sessions.bulkDelete through a second client on the
+// undocumented `_internalConnection` (copilot_steer.js): a refusal costs about
+// 4.4 s on 1.0.114, 65 s on 1.0.115. A release moved to re-measures that
+// client, the refusal's warningType and the store's tables.
 //
 // # A box's release is pinned
 //
