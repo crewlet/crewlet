@@ -203,6 +203,7 @@ func grokScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`trap grokput EXIT; trap 'grokquit 143' TERM; trap 'grokquit 130' INT; trap 'grokquit 129' HUP`)
 	line(`mkdir -p %s || exit 1`, q(paths.GrokHome()))
 	b.WriteString(home.gate())
+	b.WriteString(grokNestedOff())
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	line(`grokput; trap - EXIT TERM INT HUP`)
 	b.WriteString(grokMainRecord(paths))
@@ -1039,14 +1040,26 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err = box.WriteFile(ctx, paths.GrokCheckoutLaunch(), launch); err != nil {
 		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
-	own, err := grokConfig(req.MCPServers, nonce, grokHooks(paths, notes, loads, req.Skills)+grokNestedHook(paths, nested))
+	contract := grokHooks(paths, notes, loads, req.Skills)
+	own, err := grokConfig(req.MCPServers, nonce, contract+grokNestedHook(paths, nested))
 	if err != nil {
 		return "", err
 	}
-	config, ids, err := grokMergeConfig(boxOwn, own)
+	config, all, err := grokMergeConfig(boxOwn, own)
 	if err != nil {
 		return "", err
 	}
+	// THE CONTRACT HOOKS' IDS APART FROM THE NESTED HOOK'S: only the former's
+	// loss refuses a run ([grokGuard]).
+	ownContract, err := grokConfig(req.MCPServers, nonce, contract)
+	if err != nil {
+		return "", err
+	}
+	_, ids, err := grokMergeConfig(boxOwn, ownContract)
+	if err != nil {
+		return "", err
+	}
+	nestedIDs := slices.DeleteFunc(slices.Clone(all), func(id string) bool { return slices.Contains(ids, id) })
 	if err = box.WriteFile(ctx, paths.GrokConfig(), config); err != nil {
 		return "", fmt.Errorf("executor: writing Grok Build's settings: %w", err)
 	}
@@ -1062,8 +1075,11 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			return "", fmt.Errorf("executor: writing the note helper's config: %w", err)
 		}
 	}
-	if len(ids) > 0 {
-		if err = box.WriteFile(ctx, paths.GrokHookIDs(), []byte(strings.Join(ids, "\n")+"\n")); err != nil {
+	for file, list := range map[string][]string{paths.GrokHookIDs(): ids, paths.GrokNestedHookID(): nestedIDs} {
+		if len(list) == 0 {
+			continue
+		}
+		if err = box.WriteFile(ctx, file, []byte(strings.Join(list, "\n")+"\n")); err != nil {
 			return "", fmt.Errorf("executor: recording the ids of the Grok Build run's hooks: %w", err)
 		}
 	}
@@ -1162,8 +1178,8 @@ func writeGrokSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.
 // copy kept of them while a run runs, nor its sessions and login.
 func (Grok) artifactFiles(p Paths) []string {
 	return []string{p.GrokAgent(), p.GrokAgentFresh(), p.GrokRules(), p.GrokConfigFresh(), p.GrokTakeConfig(),
-		p.GrokTakeConfigFresh(), p.GrokThread(), p.GrokNoteHelper(), p.GrokHookIDs(), p.GrokCheckoutLaunch(),
-		p.GrokCheckoutSections()}
+		p.GrokTakeConfigFresh(), p.GrokThread(), p.GrokNoteHelper(), p.GrokHookIDs(), p.GrokNestedHookID(),
+		p.GrokCheckoutLaunch(), p.GrokCheckoutSections()}
 }
 
 // grokChargeBytes is the fewest bytes a Grok Build session's brief is counted

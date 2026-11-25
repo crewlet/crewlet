@@ -192,7 +192,10 @@
 // the same with each file in Pi's `<project_instructions path=...>`, on
 // stdout for the run's extension to add to the tool's result (Pi lists no
 // skill it did not start with and loads instructions only as it starts,
-// measured on 1.6.0). A harness taking checkouts adds a
+// measured on 1.6.0). A nested hook only adds to what the launch hands, so
+// a runner whose box's settings switch it off starts all the same, its skip
+// log saying so once; only the loss of a hook Crewlet's own contract runs on
+// (notes, skill loads) refuses a run. A harness taking checkouts adds a
 // nested adapter, never a second core; its runner holds the home file and the
 // copies (internal/sandbox/executor's checkoutHome). What a nested firing
 // leaves out (a skill whose name the home's skills hold, one that leads out
