@@ -23,7 +23,7 @@ func TestASessionIsIssuedTokensOnlyForWhatTheEngineHolds(t *testing.T) {
 	g := newSeatGoogle(t)
 	e := googleCloudEngine(t, googleCloudCompany(t), g, time.Now().Add(-time.Hour))
 	tokens := seatTokens{engine: e, hc: g.client}
-	if _, _, err := tokens.SeatToken(t.Context(), integration.KindGooglePlay, "builder",
+	if _, err := tokens.SeatToken(t.Context(), integration.KindGooglePlay, "builder",
 		[]string{analyticsReadonly}); !errors.Is(err, seataccess.ErrNotIssued) {
 		t.Fatalf("a seat with no identity: %v", err)
 	}
@@ -32,12 +32,13 @@ func TestASessionIsIssuedTokensOnlyForWhatTheEngineHolds(t *testing.T) {
 	if _, _, err := e.backends.Fleet.CreateGoogleIdentity(t.Context(), rec); err != nil {
 		t.Fatal(err)
 	}
-	token, email, err := tokens.SeatToken(t.Context(), integration.KindGooglePlay, "builder",
+	seat, err := tokens.SeatToken(t.Context(), integration.KindGooglePlay, "builder",
 		[]string{analyticsReadonly})
-	if err != nil || !strings.Contains(token, rec.UniqueID) || email != rec.Email {
-		t.Fatalf("a usable identity: %q %q %v", token, email, err)
+	if err != nil || !strings.Contains(seat.Token, rec.UniqueID) || seat.Account != rec.Email ||
+		!seat.Made.Equal(rec.CreatedAt) {
+		t.Fatalf("a usable identity: %+v %v", seat, err)
 	}
-	if _, _, err := tokens.SeatToken(t.Context(), integration.KindSlack, "builder",
+	if _, err := tokens.SeatToken(t.Context(), integration.KindSlack, "builder",
 		[]string{analyticsReadonly}); !errors.Is(err, seataccess.ErrNotIssued) {
 		t.Errorf("a kind with no growth identity: %v", err)
 	}

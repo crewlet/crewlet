@@ -46,7 +46,7 @@ Google calls ten methods limited access (marked in the table below): they answer
 1. In a Google Cloud project you control, turn on the AdMob API and make the company's OAuth client ([how](google-cloud.md#the-companys-own-oauth-client)): a **Web application** client whose one authorized redirect URI is `<api.public.external_url>/webhooks/mcp-oauth`, exactly as the form shows it, with no JavaScript origins, and an Internal audience or an External one published or listing whoever signs in as a test user. The engine needs a public address a browser reaches, since Google sends the person back to it.
 2. Paste the client's ID and secret on the AdMob page. The secret is sealed and shown back as `__redacted__`. AdSense may sign in as the same client and name the same secret.
 3. Sign in with Google there, as a person who manages the AdMob account. While every agent reads, the sign-in asks for `admob.readonly` and `admob.report`; once an agent is raised to `operate`, sign in again to add `admob.monetization`, which every change needs.
-4. Turn agents on from the Agents tab, each with its publisher accounts.
+4. Turn agents on from the Agents tab, each with its publisher accounts: the picker lists the publisher accounts the sign-in reaches, and takes a typed publisher ID (`pub-` and 16 digits) for one it does not.
 
 ## Give an agent its own identity
 

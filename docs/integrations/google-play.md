@@ -32,7 +32,7 @@ Building and uploading releases stays with [Expo](expo.md) or your pipeline: Cre
 
 ## Give an agent its own identity
 
-An agent's identity at Google Play is its own Google growth identity, which Crewlet made; what is left is adding it in Play Console. Its row on the Agents tab reads **Needs you** until the identity reaches each of its apps, and **Set up identity** in its box shows the steps, with the email ready to copy:
+An agent's identity at Google Play is its own Google growth identity, which Crewlet made; what is left is adding it in Play Console. The agent's **Apps** list what the company reader sees, by name, and take a typed package name for one it cannot see yet. A new identity reads **Getting ready** for up to about two minutes, until Google lets a person add it. Then its row reads **Needs you** until the identity reaches each of its apps, and **Set up identity** in its box shows the steps, with the email ready to copy:
 
 1. In Play Console, open **Users and permissions** and press **Invite new users**.
 2. Paste the agent's email.
@@ -40,7 +40,7 @@ An agent's identity at Google Play is its own Google growth identity, which Crew
 
 **Add it for me.** With the company's own OAuth client (`oauth`, made as [Google Cloud's page describes](google-cloud.md#the-companys-own-oauth-client), which Google Analytics may share) and a Play Console admin's sign-in on the Settings tab, **Add it for me** takes those steps through Play's users and grants API, in the developer account `developer_accounts` names that holds each app, with exactly the level's permissions and keeping any the identity holds already. Turning the agent off takes the identity out of those accounts. The sign-in only adds, reads and removes agents' identities; no agent's call is made with it.
 
-**The check, on every pass:** Crewlet signs in as the identity and reads one review of each app; an app Play refuses is not added yet. With the admin sign-in it also reads the identity's permissions on each app: fewer than the level needs is the wrong role, naming what is missing, and Admin below `administer` is a warning. Play can take up to two days to apply new permissions; while the admin sign-in shows the identity added and Play does not let it in yet, the box says so. The agent is ready once every app passes, and reads Needs you again if somebody removes it there; calls Google refuses meanwhile name what is missing.
+**The check, on every pass:** Crewlet signs in as the identity and reads one review of each app; an app Play refuses is not added yet. With the admin sign-in it also reads the identity's permissions on each app: fewer than the level needs is the wrong role, naming what is missing, and Admin below `administer` is a warning; without the admin sign-in the row reads **Role not checked**, never In sync, and says which permissions to tick. Play can take up to two days to apply new permissions; while the admin sign-in shows the identity added and Play does not let it in yet, the box says so. The agent is ready once every app passes, and reads Needs you again if somebody removes it there; calls Google refuses meanwhile name what is missing.
 
 ## The agents' tools
 

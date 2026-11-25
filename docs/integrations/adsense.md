@@ -41,7 +41,7 @@ Google answers five Management API writes (creating and changing ad units, and c
 1. In a Google Cloud project you control, turn on the AdSense Management API and make the company's OAuth client ([how](google-cloud.md#the-companys-own-oauth-client)): a **Web application** client whose one authorized redirect URI is `<api.public.external_url>/webhooks/mcp-oauth`, exactly as the form shows it, with no JavaScript origins, and an Internal audience or an External one published or listing whoever signs in as a test user. The engine needs a public address a browser reaches, since Google sends the person back to it.
 2. Paste the client's ID and secret on the AdSense page. The secret is sealed and shown back as `__redacted__`. AdMob may sign in as the same client and name the same secret.
 3. Sign in with Google there, as an Administrator or Standard user of the AdSense account. While every agent reads, the sign-in asks for `adsense.readonly`; once an agent is raised to `operate`, sign in again to add `adsense`, which every change needs.
-4. Turn agents on from the Agents tab, each with its publisher accounts.
+4. Turn agents on from the Agents tab, each with its publisher accounts: the picker lists the publisher accounts the sign-in reaches, and takes a typed publisher ID (`pub-` and 16 digits) for one it does not.
 
 ## Give an agent its own identity
 

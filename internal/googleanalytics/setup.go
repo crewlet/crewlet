@@ -10,9 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
-// accessManagementURL is Google Analytics' admin, where a person adds an
-// identity to a property.
-const accessManagementURL = "https://analytics.google.com/analytics/web/"
+// adminHome is Google Analytics' web app, whose Admin adds an identity to an
+// account or a property.
+const adminHome = "https://analytics.google.com/analytics/web/"
 
 // Requirements says what the company still needs for Google Analytics: the
 // integration turned on, and the company's reader added to each property at
@@ -29,8 +29,11 @@ func Requirements(c *config.Company, resolve func(string) (string, bool)) []setu
 	}
 	out := append([]setup.Requirement{googlegrowth.Enabled(string(Kind), "Google Analytics", enabled)},
 		googlegrowth.Reader(c, setup.IdentityRole{ID: roleViewer, Name: "Viewer"},
-			vendortext.Of(vendortext.UI("Admin", "Property access management", "Add users").At(accessManagementURL)),
-			vendortext.Plain("enough to read every report; it changes nothing."))...)
+			vendortext.Of(vendortext.UI("Admin", "Account access management", "Add users").At(adminHome)),
+			vendortext.Of(vendortext.W("enough to list and read every property of the account; it changes "+
+				"nothing. Untick "), vendortext.UI("Notify new users by email"), vendortext.W(". To share only "+
+				"some properties, add it under "), vendortext.UI("Property access management"),
+				vendortext.W(" of each instead.")))...)
 	return append(out, googlegrowth.AdminSignIn(string(Kind), "Google Analytics",
 		"a Google Analytics Administrator", client, resolve)...)
 }
