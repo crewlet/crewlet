@@ -75,15 +75,20 @@ export interface SetupRequirement {
   default?: string;
   /** What a non-credential `${VAR}` here reads as, for the links built from it. */
   resolved_value?: string;
-  /** The app can check a typed value without storing it, so the form offers Test. */
+  /** The app can check a typed value, a key or not, without storing it, so the form offers Test. */
   checkable?: boolean;
   /** When the app proves a credential no Test can check ahead. */
   check_note?: string;
   /** The other fields one check of this credential is made with. */
   check_with?: string[];
   mintable?: boolean;
-  /** The engine's rendering of a minted value's public half, to copy to the app. */
-  public?: { text: string; language: string };
+  /**
+   * The engine's rendering of a minted value's public half, to copy to the app,
+   * and the fields whose saved answers it is drawn from.
+   */
+  public?: { text: string; language: string; drawn_from?: string[] };
+  /** The field whose block, run at the app, prints this value: needed to finish, never to save. */
+  printed_by?: string;
   /** An `add_identity` step: the email to add at the vendor, at which role and where. */
   identity?: SetupIdentityStep;
   /** A `redirect` step: the address to register at the vendor. */

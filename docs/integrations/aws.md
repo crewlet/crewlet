@@ -34,9 +34,9 @@ Company › Integrations › AWS asks, in order:
 **Save** mints the **sign-in certificate**: a certificate authority whose key Crewlet seals as `AWS_CERTIFICATE_AUTHORITY` and never shows. The form then shows the **CloudShell block**, which carries only the authority's certificate.
 
 5. In the AWS account agents will work in, open CloudShell in the home Region and paste the block. It writes the template, deploys it with `aws cloudformation deploy` (you need permission to create IAM roles and policies), and prints the stack's one output last.
-6. Paste that last line into **Stack output** and choose **Test**.
+6. Paste that last line into **Stack output**, choose **Test connection**, then **Save**.
 
-Running the block again updates the stack in place; that is how new Crewlet policies, a change of Regions, or the atlas's role reach your account. Paste the last line again whenever the block changed what the stack holds.
+Running the block again updates the stack in place; that is how new Crewlet policies, a change of Regions, or the atlas's role reach your account. Paste the last line again whenever the block changed what the stack holds. The short name, home Region and atlas choice save on their own while **Stack output** is empty; the form keeps the block drawn from what is saved and says when a change means running it again.
 
 ### What the stack creates
 
@@ -56,7 +56,7 @@ Each certificate can become only its own role: the atlas's only the atlas role, 
 
 ### Testing before you save
 
-**Test** signs in as the provisioner and reads, changing nothing:
+**Test connection** signs in as the provisioner and reads, changing nothing; a failure lists each part Passed up to the one that Failed:
 
 | Check | What a failure means |
 |---|---|

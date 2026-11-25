@@ -59,7 +59,7 @@ func DefaultSlug(company string) string {
 // ONE PASS, IN ORDER: the slug and the home Region are entered and saved,
 // which mints the certificate authority; the CloudShell block creates the
 // stack holding its certificate and prints the stack output; the output is
-// pasted and tested. So the output is required only once the CA is held.
+// pasted and tested. So the output is printed by the authority's row.
 func Requirements(in *config.AWS, company string, resolve func(string) (string, bool)) []setup.Requirement {
 	var prov config.AWSProvisioning
 	var enabled bool
@@ -110,7 +110,8 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 		},
 		{
 			Field: "connection", Label: "Stack output", Kind: setup.KindID,
-			ConfigPath: "integrations.aws.provisioning.connection", Required: caHeld, Connect: true,
+			ConfigPath: "integrations.aws.provisioning.connection", Required: true, Connect: true,
+			PrintedBy: "certificate_authority",
 			Checkable: true, CheckWith: []string{"slug", "home_region", "certificate_authority", "atlas_read"},
 			Format: "five ARNs joined by commas, or seven with the Atlas reader",
 			Hint:   vendortext.Plain("The last line the CloudShell block prints."),
@@ -202,6 +203,7 @@ func cloudShellView(prov config.AWSProvisioning, bundle string) *setup.PublicVie
 	if err != nil {
 		return nil
 	}
+	view.DrawnFrom = []string{"slug", "home_region", "atlas_read"}
 	return view
 }
 

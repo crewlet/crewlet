@@ -38,7 +38,9 @@ Open **Company › Integrations › Google Cloud**.
    - creates the workload identity pool and provider holding Crewlet's public key (inline, nothing uploaded), or updates the provider's key if it exists;
    - lets Crewlet's subject act as the provisioner (Workload Identity User);
    - prints the provider's full name as its last line.
-3. **Paste that last line** into **Workload identity provider**, press **Save**, then **Test**.
+3. **Paste that last line** into **Workload identity provider**, press **Test connection**, then **Save**.
+
+The provisioner saves on its own while the provider is empty: the block is drawn from what is saved, so the form keeps the block on screen after each save and puts it away while the provisioner (or **See more in Atlas**) holds an unsaved change. Changing either after the block ran means running it again and pasting its new last line; the form says so.
 
 The block pins the provider to this company's subject (`crewlet:<company>`), so no other identity can use it. A provider holds at most 8 keys; when Crewlet's key changes, the block updates the provider with `update-oidc`.
 
@@ -131,7 +133,7 @@ fi
 
 ### Testing the connection
 
-**Test** checks with reads only. Each failure says what to change:
+**Test connection** checks with reads only, in this order, and a failure lists each part Passed up to the one that Failed, with what to change:
 - Google's Security Token Service accepts Crewlet's federation token;
 - Crewlet can act as the provisioner;
 - the identity project's APIs are on;
@@ -319,7 +321,7 @@ roles:
 |---|---|---|
 | `enabled` | yes | Turn the integration on. |
 | `provisioning.provisioner` | yes | The provisioner's email, `<id>@<identity project>.iam.gserviceaccount.com`. The identity project is read from it. |
-| `provisioning.provider` | once the key is made | The provider's full resource name, as the Cloud Shell block prints it. |
+| `provisioning.provider` | to finish | The provider's full resource name, as the Cloud Shell block prints it. Never needed to save the provisioner. |
 | `provisioning.federation_key` | yes | Crewlet's ES256 key, made by the dashboard and sealed as `GOOGLE_CLOUD_FEDERATION_KEY`. Keep it a `${VAR}` reference. |
 | `provisioning.atlas_read` | no | Let the atlas search what each project runs, as the account `crewlet-atlas` ([see more in Atlas](#see-more-in-atlas-what-each-project-runs)). Off by default. |
 | `roles[].integrations.google_cloud.enabled` | yes | Whether the agent has its own account. Off disables it and removes its roles. |
