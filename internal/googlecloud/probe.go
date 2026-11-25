@@ -123,7 +123,7 @@ func probeCheck(
 	}
 	held, err := client.TestProjectPermissions(ctx, identity, accountAdmin)
 	if err != nil {
-		return readRefusal(ctx, err, atGrants, "its own permissions on "+identity, ""), nil
+		return readRefusal(ctx, err, atGrants, "its own permissions on "+identity, adminFix(identity)), nil
 	}
 	if missing := absent(accountAdmin, set(held)); len(missing) > 0 {
 		return setup.Refused("The provisioner cannot manage service accounts in "+identity+".",
@@ -134,7 +134,7 @@ func probeCheck(
 	}
 	accounts, err := client.ServiceAccounts(ctx)
 	if err != nil {
-		return readRefusal(ctx, err, atAccounts, "the accounts of "+identity, ""), nil
+		return readRefusal(ctx, err, atAccounts, "the accounts of "+identity, adminFix(identity)), nil
 	}
 	found, err := discover(ctx, client)
 	if err != nil {
@@ -142,6 +142,11 @@ func probeCheck(
 			"Grant the provisioner its three Project IAM Admin conditions on each project agents may use"), nil
 	}
 	return works(client, accounts, found), nil
+}
+
+// adminFix is the fix for a read Service Account Admin on identity allows.
+func adminFix(identity string) string {
+	return "Grant the provisioner Service Account Admin on " + identity + " (the Cloud Shell block does)"
 }
 
 // reachRefusal is the verdict for a provisioner Crewlet cannot reach, and

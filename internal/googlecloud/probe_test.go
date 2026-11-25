@@ -108,7 +108,7 @@ func TestEachRefusedHalfIsNamedWithItsFix(t *testing.T) {
 		}, "Identity project's APIs", []string{"Service Usage Viewer"}},
 		{"no Service Account Admin", func(f *fakeGoogle) {
 			f.refuse["POST /v1/projects/"+identity+":testIamPermissions"] = http.StatusForbidden
-		}, "Provisioner's grants", []string{"its own permissions on " + identity}},
+		}, "Provisioner's grants", []string{"its own permissions on " + identity, "Service Account Admin", "Cloud Shell block"}},
 	} {
 		w := newProbeWorld(t)
 		w.f.edit(tc.breakIt)
