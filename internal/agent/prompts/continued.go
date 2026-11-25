@@ -885,7 +885,8 @@ const (
 const calledBeforeHeader = "## Calls the runs before you made on this task" +
 	"\nThe runs before you on this task made these calls through your tools, in the order they made them." +
 	" They happened, and their outcomes stand: a call marked `→ success` ALREADY RAN, so do NOT issue a" +
-	" write among them again; one marked `→ error` did not take effect."
+	" write among them again; one marked `→ error` did not take effect. A write's line ends with what it" +
+	" returned (the key of what it created, a message's id), rewritten where longer than a line."
 
 // lateBeforeHeader is [lateCallsHeader] for a run that starts a session of its
 // own: no session above shows anything of the calls, so the words say nothing
@@ -1074,36 +1075,6 @@ func boxPaths(home string) string {
 	}
 	return "Absolute paths in the session above were that box's: `pwd` and `$HOME` say where" +
 		" this box keeps its checkout and its home."
-}
-
-// keptSessionHeader titles what a fresh brief says of a kept session its run
-// does not continue.
-const keptSessionHeader = "## A kept session this run does not continue"
-
-// KeyKeptSession keys the section [KeptSession] is appended to a brief as.
-const KeyKeptSession = "kept_session"
-
-// KeptSession is what a run that starts a session of its own is told of a kept
-// session it does not continue, which its model cannot otherwise know is there
-// to read: this turn's earlier launches' (thisTurn), or the session its
-// conversation's last turn left; `read_session` reads it under turn's id (the
-// engine's record, defused by the caller). THIS TURN'S IS KEPT ONLY UNTIL THIS
-// RUN FIRST SAVES ITS OWN, so the run is told to read it before then; no time
-// is given, which pacing or a failed save would make false. A SCHEDULE'S FIRE
-// IS TOLD IN ITS WORDS (fire), as [BuildNextTurn] does. ONE SENTENCE, ONLY
-// HERE: a standing sentence would ride every request of every run. NEVER WHY IT
-// IS NOT CONTINUED: the log's words quote what said no (a store's error, a
-// box's output) and told in the engine's voice would put them outside any
-// fence; what the run can do is the same whatever the reason.
-func KeptSession(turn string, thisTurn, fire bool) string {
-	said := nextTurnWordsFor(NextTurn{Fire: fire})
-	whose, read := "This "+said.whole+"'s last "+said.turn, ". Read what it did"
-	if thisTurn {
-		whose = "This " + said.turn + "'s earlier launches"
-		read = ", kept until this run first saves its own. Until then, read what they did"
-	}
-	return keptSessionHeader + "\n" + whose + " worked in a session this run does not continue" + read +
-		" with `" + toolname.ReadSession + "`, turn_id `" + turn + "`; `match` finds a word in it."
 }
 
 // NextTurn is where the session a conversation's last turn left ends and the

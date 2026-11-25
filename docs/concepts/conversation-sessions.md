@@ -210,22 +210,42 @@ own box holds, which went on past every capture of it.
   A reply the seat posts on another surface (Slack, Mattermost, an issue) is the
   seat's own words, to which the engine adds nothing; the turn's page and its
   Sessions say it there;
-- `crewlet.executor.session.not_continued{reason, instead}` counts each collected
-  launch's loss once ([Metrics](../reference/metrics.md)), and every collected
-  launch that had a session to continue is an event of the `session_carry`
-  [objective](../reference/service-objectives.md), bad for a fault alone.
+- `crewlet.executor.session.not_continued{reason, instead, summary}` counts each
+  collected launch's loss once, with what the brief its run read handed of the
+  lost session's summary ([Metrics](../reference/metrics.md)), and every
+  collected launch that had a session to continue is an event of the
+  `session_carry` [objective](../reference/service-objectives.md), bad for a
+  fault alone.
 
-Where the turn read a head (every case but the first three), the brief also names
-it under `## A kept session this run does not continue`: that the conversation's
-last turn (on a schedule, its last fire) worked in a session this run does not
-continue, and that `read_session` reads it under that turn's id
-([A seat reads its own](code-sandbox.md#a-seat-reads-its-own)), never why. Only
-where the seat is offered `read_session`, and never in the continuation a session
-reads. A relaunch that cannot take up the turn's own kept session names that one
-the same way (a round lost a second time included) and says it is kept only until
-the run first saves its own, which takes its place on the turn's row; a relaunch
-of a turn that has kept nothing names the head its first launch froze only where
-the turn's row was read holding it.
+### What the run is handed
+
+The brief tells the run the session it does not continue, in one section placed
+before the round's calls ([What a harness is told](code-sandbox.md#what-a-harness-is-told)):
+
+- **the verdict's sentence**, as every surface words it, never the detail;
+- **that session's newest summary**, which its harness wrote as it compacted and a
+  box read kept apart from the session
+  ([kept apart](code-sandbox.md#a-sessions-newest-summary-kept-apart)), fenced as
+  the seat's own past session: the session's own account to carry the work on
+  from, checked against the repository and the calls told after it. A summary
+  past the brief's room is handed by its end, marked as cut; one that could not
+  be read is said to be kept and unread. A run that continues an older session in
+  the lost one's place is handed the newer one's summary only where it is newer
+  than what it continues;
+- **where `read_session` reads the kept session** the probe read, where the seat
+  is offered that tool ([A seat reads its own](code-sandbox.md#a-seat-reads-its-own)).
+  A relaunch's own turn's is kept only until the run first saves its own, which
+  takes its place on the turn's row; a relaunch of a turn that has kept nothing
+  names the head its first launch froze only where the turn's row was read
+  holding it.
+
+A run starting a session of its own is also told what each of its round's
+successful writes returned (the key of what it created, a message's id), up to a
+line each ([Prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds)).
+What its box had not committed and pushed went with that box, and a new box's
+checkout is at its branch's head, so what was pushed is already there. Cursor
+Agent's sessions are handed no summary: no summary read of its chat store is
+measured ([Cursor Agent](code-sandbox.md#cursor-agent)).
 
 ---
 

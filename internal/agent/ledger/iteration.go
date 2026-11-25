@@ -121,6 +121,12 @@ type FormatOptions struct {
 	// A piece missing from it renders whole.
 	Fitted Fitted
 
+	// Answers ends a successful write's line with what it returned, fitted
+	// past ValueLimit as an error is ([PieceAnswer]): the lists a run that
+	// starts a session of its own is told its round made, which it remembers
+	// none of. A read's answer is never shown, since a read can be run again.
+	Answers bool
+
 	// OneLine draws every line break in a tool's name or its error as a
 	// space ([CallLine]): a brief's lists and an item's call, where a line a
 	// tool's text starts could read as an entry of its own. Off, they are
@@ -305,6 +311,16 @@ func renderCalls(calls []Call, at []int, notes []string, opts FormatOptions) str
 // transcript.go). The arguments are JSON, which escapes its line breaks.
 func CallLine(call Call, opts FormatOptions) (called, outcome string) {
 	outcome = "success"
+	if answers(call, opts) {
+		// FITTED as an error is: the first ValueLimit characters, a rewrite
+		// past them, so the identifier a write returned (a created item's
+		// key, a message's id) reaches a run that remembers none of it.
+		text := call.Result
+		if over(text, opts.ValueLimit) {
+			text = opts.Fitted.text(Piece{Kind: PieceAnswer, Text: text, Limit: opts.ValueLimit})
+		}
+		outcome = "success: " + oneLine(text, opts)
+	}
 	if call.Failed {
 		// FITTED, like the arguments beside it. Call.Result is the
 		// tool's own output, which is a PAYLOAD by this package's
@@ -337,6 +353,13 @@ func CallLine(call Call, opts FormatOptions) (called, outcome string) {
 		args = unkeptArgs
 	}
 	return oneLine(call.Name, opts) + "(" + args + ")", outcome
+}
+
+// answers reports whether call's line under opts ends with what it returned
+// ([FormatOptions.Answers]): a write that succeeded and returned something.
+func answers(call Call, opts FormatOptions) bool {
+	return opts.Answers && !call.Failed && strings.TrimSpace(call.Result) != "" &&
+		!slices.Contains(opts.Reads, call.Name)
 }
 
 // oneLine is text with every line break drawn as a space where opts draws a
