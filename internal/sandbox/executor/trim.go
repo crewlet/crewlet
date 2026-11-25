@@ -16,12 +16,13 @@ import (
 // what its harness's resume loads: everything from its newest compaction on,
 // and before it what that release reads there (Codex its first line, Copilot
 // all but the turns the summary replaced, Muse Code nothing, Gemini CLI and
-// Qwen Code their first line and every line from their run's start:
-// chattrim.go). It cuts the pack's copy, never the live record, so it runs on
-// every pack, a save's and a stop's as the end's, and costs no model call.
-// Only the release a rule was measured on is trimmed ([trimmer]); every other
-// harness and release packs whole, and a pack still past the bound once
-// trimmed is refused as one never trimmed is.
+// Qwen Code their first line and every line from their run's start
+// (chattrim.go), Hermes every row but the messages the compaction replaced,
+// its settled admissions' results slimmed). It cuts the pack's copy, never the
+// live record, so it runs on every pack, a save's and a stop's as the end's,
+// and costs no model call. Only the release a rule was measured on is trimmed
+// ([trimmer]); every other harness and release packs whole, and a pack still
+// past the bound once trimmed is refused as one never trimmed is.
 
 // NO TRIM, BY HARNESS: Claude Code's own trim rewrites its transcript, and its
 // subagent threads stay whole, since 2.1.310 continues one spawned before the
