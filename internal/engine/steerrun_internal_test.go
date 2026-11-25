@@ -1191,6 +1191,27 @@ func servedHooks(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids 
 	return launch
 }
 
+// A SETTLE WINDOW COUNTS FROM THE INSTANT THE TEARDOWN BEGAN, which its
+// signal's cause names, never from when the callback arming it ran: on a
+// loaded node that callback runs late, and the settles would hold the stop
+// that much past their window. Here the teardown began a whole window ago, so
+// the window is over the moment it is armed.
+//
+// Mutation: arm the window's timer for d from when the callback runs.
+func TestASettleWindowCountsFromTheTeardownsStart(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		begun, begin := context.WithCancelCause(context.Background())
+		window := windowFrom(begun, steerSettleStopBudget)
+		begin(teardownBegan{at: time.Now().Add(-steerSettleStopBudget)})
+		synctest.Wait()
+		if window.Err() == nil {
+			t.Fatalf("a settle window whose teardown began %v ago is still open: it counted its %v "+
+				"from when its callback ran", steerSettleStopBudget, steerSettleStopBudget)
+		}
+	})
+}
+
 // A SETTLE ASKS UNTIL ITS STORE ANSWERS, AND NO LONGER THAN ITS NODE. A settle a
 // clock gave up on would leave the record saying the run read notes its reader
 // was never handed, so it asks until the store answers, a minute's outage
