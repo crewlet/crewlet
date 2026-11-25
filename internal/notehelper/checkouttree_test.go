@@ -73,7 +73,7 @@ func TestATreeHandsItsFilesInCopilotsWalkOrder(t *testing.T) {
 	}
 	var said bytes.Buffer
 	slots := append(names([]string{"AGENTS.md"}), copilotRules())
-	text, n := rootInstructions(root, 1<<20, slots, &skips{stderr: &said})
+	text, n := rootText(root, 1<<20, slots, &skips{stderr: &said})
 	want := "ROOT\n\n\nUPPER\n\n\nAZ\n\n\nA\n\n\nB\n\n\nLINKED\n\n\nC\n\n\n---\napplyTo: \"**\"\n---\nWHOLE\n"
 	if text != want || said.Len() > 0 {
 		t.Errorf("the slots hand\n%q\nwant\n%q\nsaying %q", text, want, said.String())
@@ -82,7 +82,7 @@ func TestATreeHandsItsFilesInCopilotsWalkOrder(t *testing.T) {
 		t.Errorf("the slots took %d bytes, want each handed file's", n)
 	}
 	// The limit cuts the tree as it cuts a slot's file: the cut file spends it.
-	if text, n = rootInstructions(root, 12, slots, &skips{stderr: io.Discard}); text != "ROOT\n\n\nUPPER\n\n\nA" || n != 12 {
+	if text, n = rootText(root, 12, slots, &skips{stderr: io.Discard}); text != "ROOT\n\n\nUPPER\n\n\nA" || n != 12 {
 		t.Errorf("within 12 bytes the slots hand %q for %d, want AZ cut and nothing after it", text, n)
 	}
 }
@@ -118,7 +118,7 @@ func TestATreePastABoundIsLeftOutWhole(t *testing.T) {
 			writeTree(t, root, c.files)
 			writeTree(t, root, map[string]string{"AGENTS.md": "ROOT\n"})
 			var said bytes.Buffer
-			text, _ := rootInstructions(root, 1<<30, append(names([]string{"AGENTS.md"}), copilotRules()), &skips{stderr: &said})
+			text, _ := rootText(root, 1<<30, append(names([]string{"AGENTS.md"}), copilotRules()), &skips{stderr: &said})
 			if text != c.want {
 				t.Errorf("the slots hand %q, want %q", text, c.want)
 			}

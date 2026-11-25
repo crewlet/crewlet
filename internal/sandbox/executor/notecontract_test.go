@@ -45,8 +45,8 @@ var noteFixtures = map[string]noteFixture{
 		},
 		confirms: executor.ClaudeConfirmsATake,
 		reaches:  realBoxsHooksReachTheBridgeTool,
-		// A resume hands back a firing's context (2.1.263 to 2.1.322, the
-		// hook receipts' measurement).
+		// A resume hands back a firing's context (2.1.263 to 2.1.330, the
+		// hook receipts' measurement; 2.1.330's t1 for a run stopped after it).
 		trailing: trailingNote{handsBack: true, held: executor.ClaudeTrailingNoteHeld},
 	},
 	executor.OpenCodeName: {

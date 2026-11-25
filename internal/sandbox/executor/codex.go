@@ -2,6 +2,9 @@ package executor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -217,6 +220,10 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	line(`  sleep 0.1`)
 	line(`done`)
 
+	if len(crewletServers(req.MCPServers)) > 0 {
+		b.WriteString(codexBridgeCheck(req, paths))
+	}
+
 	line(`( while kill -0 $$ 2> /dev/null; do thread && exit 0; sleep 0.1; done ) &`)
 	line(`tpid=$!`)
 
@@ -345,6 +352,51 @@ hpid=$!
 ( while kill -0 $$ 2> /dev/null && kill -0 "$hpid" 2> /dev/null; do sleep %[4]s; done; kill -0 $$ 2> /dev/null || exit 0; : > %[5]s; %[2]s -interrupt-once < /dev/null > /dev/null || end "$apid" again ) &
 gpid=$!
 `, env, base, flags, codexGuardPoll, q(paths.CodexHelperLost()))
+}
+
+// codexBridgeCheck is the part of a Codex run's script that starts nothing
+// unless the note helper's codex-bridge, asking the app-server before the
+// thread starts, finds Codex would hand the model each bridge's tools under
+// their own names (internal/notehelper, "The Codex bridge check"): run in the
+// background, so an end request is taken while it waits, and its refusal,
+// naming the server, on the run's error stream. Each bridge goes as the
+// SHA-256 of every address the run wrote for it, both wirings' where it has two.
+func codexBridgeCheck(req sandbox.RunRequest, paths Paths) string {
+	type bridge struct {
+		Name    string   `json:"name"`
+		Digests []string `json:"url_sha256"`
+	}
+	var bridges []bridge
+	for _, name := range crewletServers(req.MCPServers) {
+		b := bridge{Name: name, Digests: []string{sha256Hex(req.MCPServers[name].URL)}}
+		if f := req.FreshWiring; f != nil {
+			if s, ok := f.MCPServers[name]; ok {
+				b.Digests = append(b.Digests, sha256Hex(s.URL))
+			}
+		}
+		bridges = append(bridges, b)
+	}
+	config, _ := json.Marshal(map[string]any{"socket": paths.CodexSocket(),
+		"wait_seconds": waitSeconds(codexBridgeCheckWait), "bridges": bridges}) // strings and ints cannot fail to encode
+	q := shellword.Quote
+	return fmt.Sprintf(`printf '%%s\n' %s > "$rr/bridge.json" || exit 1
+"$rh" -adapter codex-bridge -config "$rr/bridge.json" < /dev/null &
+cpid=$!
+while kill -0 "$cpid" 2> /dev/null; do [ -z "$endasked" ] || { end "$cpid"; endbefore; }; sleep 0.1; done
+wait "$cpid" || { echo 'crewlet: the run does not start: Codex would not hand its model the engine'"'"'s own tools under their own names, or that could not be checked (above)' >&2; exit 1; }
+`, q(string(config)))
+}
+
+// codexBridgeCheckWait bounds each answer the bridge check waits for: the
+// listing starts every MCP server, the bridge under its own startup bound
+// ([codexMCPStartupWait]), past which the run would fail anyway, so that and
+// the helper's own thirty-second bound on an answer.
+const codexBridgeCheckWait = codexMCPStartupWait + 30*time.Second
+
+// sha256Hex is the SHA-256 of s in hex.
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 // codexGuardPoll is how often the guard looks for the helper: half a second,

@@ -71,6 +71,10 @@ func (p Paths) GrokSkills() string { return p.GrokHome() + "/skills" }
 // system prompt: the run's standing instructions ([grokAgentFile]).
 func (p Paths) GrokAgent() string { return p.WorkDir() + "/grok-agent.md" }
 
+// GrokAgentFresh is [Paths.GrokAgent] for a session a continuing run's script
+// starts of its own, naming that session's servers ([grokSessionGate]).
+func (p Paths) GrokAgentFresh() string { return p.WorkDir() + "/grok-agent-fresh.md" }
+
 // GrokRules is the run's standing instructions as a JSON string's content, which
 // a continuing run's script writes into its session's first line
 // ([grokRenewRules]).
