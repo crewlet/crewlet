@@ -18,8 +18,9 @@ import (
 // files whose names end in a suffix, each handed in walk order unless its
 // frontmatter scopes it to the paths its harness loads it for itself
 // (Copilot 1.0.114's and Claude Code 2.1.310's .claude/rules, Qwen Code
-// 0.28.4's .qwen/rules), walked and read as the slot's form, its harness, does. The package doc's "Checkouts below
-// the working directory" has each form's rules and the measurements they match.
+// 0.28.4's .qwen/rules), walked and read as the slot's form, its harness,
+// does. The package doc's "Checkouts below the working directory" has each
+// form's rules and the measurements they match.
 
 // instructionSlot is one slot of [checkoutSpec.Instructions]: Names, of which
 // it hands the first regular file, or Tree, walked for its files. On the wire
@@ -150,8 +151,9 @@ type treeWalk struct {
 
 // treeTexts is the files of root's tree t to hand, in walk order, each read
 // once: [treeWalk.walk]'s, as its form hands them ([treeRules]), less those
-// t's scope leaves out as the form reads it. A tree past the walk's bounds is left out whole, and
-// a file that is no longer the file walked is left out, each said.
+// t's scope leaves out as the form reads it. A tree past the walk's bounds is
+// left out whole, and a file that is no longer the file walked is left out,
+// each said.
 func treeTexts(root string, t instructionTree, said *skips) []treeText {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {

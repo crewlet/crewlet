@@ -69,7 +69,7 @@ func qwenScopedAway(front string, s treeScope) bool {
 					named = named || (kept && text != "")
 				}
 				return named
-			case v.Kind == yaml.ScalarNode && (v.Tag == "!!str" || v.Tag == "!!timestamp"):
+			case v.Kind == yaml.ScalarNode && qwenScalar(v) == coreString:
 				return v.Value != ""
 			}
 			return false
@@ -86,7 +86,7 @@ func qwenEntry(n *yaml.Node) (text string, kept, mapping bool) {
 	n = deref(n)
 	switch n.Kind {
 	case yaml.ScalarNode:
-		return n.Value, n.Tag != "!!null", false
+		return n.Value, qwenScalar(n) != coreNull, false
 	case yaml.SequenceNode:
 		var parts []string
 		for _, c := range n.Content {
@@ -101,6 +101,49 @@ func qwenEntry(n *yaml.Node) (text string, kept, mapping bool) {
 		return strings.Join(parts, ","), true, false
 	}
 	return "", true, true
+}
+
+// coreKind is what a scalar reads as under the YAML core schema.
+type coreKind int
+
+const (
+	coreString coreKind = iota
+	coreNull
+	coreOther // a bool or a number
+)
+
+// The YAML 1.2 core schema's plain null, bool and number forms, as Qwen Code's
+// parser (`yaml`, schema core) resolves them.
+var (
+	coreNullForm   = regexp.MustCompile(`^(?:~|[Nn]ull|NULL)?$`)
+	coreOtherForms = regexp.MustCompile(`^(?:[Tt]rue|TRUE|[Ff]alse|FALSE|[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+|` +
+		`[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$`)
+)
+
+// qwenScalar is n as Qwen Code 0.28.4 reads it: a tagged scalar by its tag, a
+// quoted or block one a string, a plain one by the core schema's forms, else
+// a string. Not yaml.v3's tag, which reads `1_000` and `0b1` as ints where
+// Qwen Code's core schema keeps strings (B2b's rules6 row), and a date as a
+// timestamp, a tag Qwen Code's parser drops.
+func qwenScalar(n *yaml.Node) coreKind {
+	if n.Style&yaml.TaggedStyle != 0 {
+		switch n.Tag {
+		case "!!str":
+			return coreString
+		case "!!null":
+			return coreNull
+		}
+		return coreOther
+	}
+	switch {
+	case n.Style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle|yaml.LiteralStyle|yaml.FoldedStyle) != 0:
+		return coreString
+	case coreNullForm.MatchString(n.Value):
+		return coreNull
+	case coreOtherForms.MatchString(n.Value):
+		return coreOther
+	}
+	return coreString
 }
 
 // deref is n, or the node an alias n names.
