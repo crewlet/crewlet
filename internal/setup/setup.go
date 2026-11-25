@@ -133,11 +133,41 @@ const (
 	// sign-in (`POST /setup/integrations/{kind}/consent`, ADR-0178), and the
 	// engine keeps the grant. Nothing is submitted for it.
 	KindConsent Kind = "consent"
+
+	// KindRedirect is an address a person registers at the vendor, never a
+	// value the document holds: where the vendor sends the person back from
+	// the engine's sign-in ([Requirement.Redirect]). Nothing is submitted for it.
+	KindRedirect Kind = "redirect"
 )
 
 // Kinds is every kind, in no significant order.
 var Kinds = []Kind{
 	KindSecret, KindURL, KindID, KindChoice, KindText, KindHandle, KindEmail, KindToggle, KindAddIdentity, KindConsent,
+	KindRedirect,
+}
+
+// AtVendor reports whether k is a step a person takes at the vendor (an
+// identity added, a sign-in, an address registered): the document holds no
+// value for it, so nothing is submitted for it and no save waits on it.
+func (k Kind) AtVendor() bool { return k == KindAddIdentity || k == KindConsent || k == KindRedirect }
+
+// RedirectStep is a [KindRedirect] requirement's address: URL, "" where the
+// engine has no public address, and Key, the Tier A setting URL is built on,
+// so a changed address is known to need registering again.
+type RedirectStep struct {
+	URL string `json:"url"`
+	Key string `json:"key"`
+}
+
+// FillRedirects gives every [KindRedirect] requirement in reqs the engine's
+// sign-in callback url and the setting key it is built on: the running
+// engine's address, which no vendor's requirements can read off the document.
+func FillRedirects(reqs []Requirement, url, key string) {
+	for i := range reqs {
+		if reqs[i].Kind == KindRedirect {
+			reqs[i].Redirect = &RedirectStep{URL: url, Key: key}
+		}
+	}
 }
 
 // IdentityStep is a [KindAddIdentity] requirement's step: the email a person
@@ -286,6 +316,10 @@ type Requirement struct {
 	// Identity is a [KindAddIdentity] requirement's step, nil for any other
 	// kind.
 	Identity *IdentityStep `json:"identity,omitempty"`
+
+	// Redirect is a [KindRedirect] requirement's address, nil for any other
+	// kind and until [FillRedirects] runs.
+	Redirect *RedirectStep `json:"redirect,omitempty"`
 
 	// Checkable reports that this credential can be checked at the vendor
 	// before it is stored, with a read-only call, so a form offers a Test
@@ -542,7 +576,11 @@ type Gate struct {
 //
 // A gate naming a field not in the list is CLOSED: reading a typo as "always
 // required" would turn a vendor's mistake into every company's blocked connect.
+// A step at the vendor ([Kind.AtVendor]) never is: the pass reports whether it was taken.
 func (r Requirement) Needed(among []Requirement) bool {
+	if r.Kind.AtVendor() {
+		return false
+	}
 	if r.RequiredWhen == nil {
 		return r.Required
 	}
@@ -672,9 +710,13 @@ func (r Requirement) Noun() string {
 // ([secrets.StrayProblem]), and its shape, where it has one, holds it to the
 // vendor's alphabet.
 func (r Requirement) ValueProblem(value string) string {
-	if r.Kind == KindConsent {
+	switch r.Kind {
+	case KindConsent:
 		return fmt.Sprintf("The %s is a sign-in at the vendor, not a value: press its Sign in button, "+
 			"and the engine keeps what the vendor grants.", r.Noun())
+	case KindRedirect:
+		return fmt.Sprintf("The %s is an address you register at the vendor, not a value: the engine "+
+			"answers it from its public address.", r.Noun())
 	}
 	if _, isRef := envref.Whole(value); isRef {
 		return ""

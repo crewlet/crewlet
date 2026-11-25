@@ -113,13 +113,13 @@ func TestAGuardedRunIsHandedTheGuardOnEveryRelease(t *testing.T) {
 	t.Parallel()
 	p := Paths{Home: "/home/box"}
 	gate := func(guarded bool) string {
-		return claudePinGate(p, true, true, guarded)
+		return claudePinGate(p, true, guarded)
 	}
 	for _, tc := range []struct {
 		release, chosen, want string
 	}{
 		{"2.1.330", p.ClaudeSettings(), p.ClaudeSettingsGuarded()},
-		{"2.1.331", p.ClaudeSkillsSettings(), p.ClaudeSettingsGuarded()},
+		{"2.1.300", p.ClaudeSettings(), p.ClaudeSettingsGuarded()},
 		{"2.1.330", p.ClaudeNotesSettings(), p.ClaudeNotesSettingsGuarded()},
 		{"2.1.300", p.ClaudeNotesSettings(), p.ClaudeNotesSettingsGuarded()},
 	} {
@@ -138,14 +138,14 @@ func TestAGuardedRunIsHandedTheGuardOnEveryRelease(t *testing.T) {
 	}
 }
 
-// A RUN WITH A BRIDGE HAS GUARDED SETTINGS: hooks on (a repository's
-// `disableAllHooks` cannot switch the guard off), the pin, and a PreToolUse
-// command hook on every name inside the bridge's running the guard's script;
-// the notes' copy keeps the notes' hooks beside it. A run with no bridge has
-// neither file nor script.
+// A RUN WITH A BRIDGE HAS GUARDED SETTINGS: the pin and a PreToolUse command
+// hook on every name inside the bridge's running the guard's script, hooks
+// left as the box sets them (a box that switches them off refuses the run,
+// [claudeHooksOff]); the notes' copy keeps the notes' hooks beside it. A run
+// with no bridge has neither file nor script.
 //
-// Mutations, each red: leave hooks unswitched; match every tool; drop the
-// notes' hooks from their guarded copy.
+// Mutations, each red: switch hooks on; match every tool; drop the notes'
+// hooks from their guarded copy.
 func TestARunWithABridgeHasGuardedSettings(t *testing.T) {
 	t.Parallel()
 	box := sandbox.NewFakeSandbox("box-1")
@@ -176,8 +176,9 @@ func TestARunWithABridgeHasGuardedSettings(t *testing.T) {
 		if string(guard) != want {
 			t.Errorf("%s's PreToolUse is %s, want %s", file, guard, want)
 		}
-		if off, set := doc["disableAllHooks"]; !set || off != false {
-			t.Errorf("%s leaves hooks to the repository (disableAllHooks %v)", file, off)
+		if off, set := doc["disableAllHooks"]; set {
+			t.Errorf("%s sets disableAllHooks to %v, which would run the home's and the repository's hooks "+
+				"where a person's session runs none", file, off)
 		}
 		if doc["env"] == nil {
 			t.Errorf("%s holds no pin", file)

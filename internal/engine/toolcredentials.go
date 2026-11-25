@@ -286,6 +286,12 @@ func resolveServer(
 		gap.pin(env.Missing(server.OAuth.ClientSecret))
 	}
 	where := "mcp_servers." + server.Name + ".optional_keys"
+	// The integration's own values ride the seat's block but are no seat's
+	// credential, so its provision command seals none of them.
+	org := map[string]bool{}
+	for _, k := range server.OrgBindings() {
+		org[server.ValueKey(k.Key)] = true
+	}
 	for _, id := range slices.Sorted(maps.Keys(merged)) {
 		l := merged[id]
 		missing := env.Missing(l.value)
@@ -300,7 +306,7 @@ func resolveServer(
 		if l.seat {
 			offer = ""
 		}
-		gap.hold(l.key, missing, server.OptionalKey(l.key), offer, l.seat)
+		gap.hold(l.key, missing, server.OptionalKey(l.key), offer, l.seat && !org[id])
 	}
 	m := gap.missing(seat, "the server")
 	if m == nil {

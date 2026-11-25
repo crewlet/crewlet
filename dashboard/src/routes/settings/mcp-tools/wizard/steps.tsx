@@ -53,13 +53,22 @@ import { Testing, TestResult } from "../flows/TestDialog.tsx";
 import { CLIENT_SECRET } from "../api.ts";
 import { GrantPicker } from "../GrantPicker.tsx";
 import { AutoAcceptSwitch, BaselineSelect, LevelSelect, RiskChips, ServerMark } from "../parts.tsx";
-import { BASELINE, LEVEL, OAUTH_CLIENT, SIGN_IN, type SignInChoice } from "../words.ts";
+import {
+  BASELINE,
+  failureWords,
+  LEVEL,
+  OAUTH_CLIENT,
+  SIGN_IN,
+  type SignInChoice,
+} from "../words.ts";
 import {
   argsOf,
+  catalogueRows,
   fixedValues,
   newRow,
   problemAt,
   rowsOf,
+  sendsRows,
   signsInWithOAuth,
   valuesOf,
   type Draft,
@@ -111,7 +120,7 @@ export function missingIn(d: Draft, step: string): Missing {
     }
   }
   const rowsStep = d.transport === "stdio" ? "connection" : "signin";
-  if (step === rowsStep && (d.transport === "stdio" || d.signIn === "headers")) {
+  if (step === rowsStep && sendsRows(d)) {
     const row: Record<string, string> = {};
     for (const r of rowsOf(d)) {
       const word = d.transport === "http" ? "header" : "variable";
@@ -469,6 +478,7 @@ function IntegrationNote({ draft }: { draft: Draft }) {
   const keys = [...entry.headers, ...entry.env]
     .filter((i) => i.from_integration)
     .map((i) => i.name);
+  const typed = draft.transport === "http" && rowsOf(draft).length > 0;
   return (
     <Callout
       variant="info"
@@ -483,8 +493,8 @@ function IntegrationNote({ draft }: { draft: Draft }) {
       }
     >
       Each agent turned on at the {entry.title} integration gets its own instance, signed in as
-      itself{keys.length > 0 ? ` with the ${listed(keys)} the integration keeps for it` : ""}.
-      Nothing is stored here.
+      itself{keys.length > 0 ? ` with the ${listed(keys)} the integration sends` : ""}.
+      {typed ? " What it does not send is below." : " Nothing is stored here."}
     </Callout>
   );
 }
@@ -624,9 +634,13 @@ export function SignInStep({
         : editing
           ? {}
           : { shared: m !== "integration" }),
-      ...(m === "headers" && draft.headers.length === 0
-        ? { headers: [newRow("Authorization", { required: true })] }
-        : {}),
+      // THE ROWS THE SIGN-IN TAKES: a catalogue entry's keys for it, else
+      // a header sign-in's Authorization.
+      ...(entry
+        ? { headers: catalogueRows(entry, m, draft.headers) }
+        : m === "headers" && draft.headers.length === 0
+          ? { headers: [newRow("Authorization", { required: true })] }
+          : {}),
     });
   // HOW THE ENGINE REGISTERS, as the vendor's metadata or the catalogue
   // says: a published identity only where it reads one, a registration
@@ -730,6 +744,13 @@ export function SignInStep({
   ];
   const detected = detectedWords(draft);
   const header = entry?.headers.find((h) => !h.from_integration && h.format);
+  // A REQUIRED HEADER THE ENGINE FOUND NOTHING SENDING, on a key with no row
+  // here: an integration that does not hold its value.
+  const rowKeys = new Set(draft.headers.map((r) => r.key.trim()));
+  const unrowed = problems
+    .filter((p) => p.segments?.[0] === "mcp_servers" && p.segments[2] === "headers")
+    .filter((p) => !rowKeys.has(String(p.segments?.[3] ?? "")))
+    .map((p) => p.said || p.message)[0];
   return (
     <>
       {detected ? (
@@ -747,7 +768,13 @@ export function SignInStep({
         options={methods}
       />
       {draft.signIn === "integration" ? <IntegrationNote draft={draft} /> : null}
-      {draft.signIn === "headers" ? (
+      {draft.signIn === "integration" && unrowed ? (
+        <Callout variant="danger" title="A header nothing sends">
+          {unrowed}
+        </Callout>
+      ) : null}
+      {draft.signIn === "headers" ||
+      (draft.signIn === "integration" && draft.headers.length > 0) ? (
         <ValueRows draft={draft} set={set} problems={problems} missing={missing} />
       ) : null}
       <Disclosure title="How this works" size="compact" headingLevel="none" flush>
@@ -817,6 +844,20 @@ export type TestState =
   | { kind: "running"; for: string }
   | { kind: "done"; for: string; answer: McpCheckAnswer }
   | { kind: "refused"; for: string; message: string };
+
+/** What the latest test failed with, in words; null where it passed, did not run or is running. */
+export function testFailure(test: TestState): string | null {
+  if (test.kind !== "done" || test.answer.ok) return null;
+  const failures = test.answer.nodes.flatMap((n) => (n.answered && n.failure ? [n.failure] : []));
+  const first = failures.find((f) => f.class !== "empty_tools") ?? failures[0];
+  if (!first) {
+    const reason = test.answer.nodes.map((n) => n.reason).find(Boolean);
+    return reason ? reason.replace(/\.$/, "") : "No node answered the test";
+  }
+  if (first.class !== "") return failureWords(first.class, first.said).title;
+  const said = first.said.replace(/\.$/, "");
+  return said.length > 160 ? `${said.slice(0, 159)}…` : said || failureWords("").title;
+}
 
 export function TestStep({
   draft,

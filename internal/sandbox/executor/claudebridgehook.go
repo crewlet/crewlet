@@ -113,10 +113,11 @@ func claudeGuardHooks(bridges []string, paths Paths) []claudeGuardMatcher {
 }
 
 // claudeGuardedSettings is a settings file's guarded copy: its pinned copy's
-// settings with hooks on, and its hooks beside the guard's, handed in its place
-// on every release ([claudePinGate]).
+// settings, and its hooks beside the guard's, handed in its place on every
+// release ([claudePinGate]). Hooks are never switched on: where the box's
+// settings switch them off the run is refused ([claudeHooksOffGate]).
 type claudeGuardedSettings struct {
-	claudeHooksOnSettings
+	claudeSettings
 
 	// Hooks maps an event to its entries: the guard's under PreToolUse, and
 	// the notes' where the file is the notes'.
@@ -124,8 +125,8 @@ type claudeGuardedSettings struct {
 }
 
 // writeClaudeGuard writes, for a run handed a bridge, the guard's script and
-// the guarded copies of its settings: every run's, which a run handed skills
-// is handed too (it holds hooks on), and the notes' where it reads notes.
+// the guarded copies of its settings: every run's, and the notes' where it
+// reads notes.
 func writeClaudeGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths,
 	pin map[string]string) error {
 	bridges := crewletServers(req.MCPServers)
@@ -141,7 +142,7 @@ func writeClaudeGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunR
 	}
 	guard := claudeGuardHooks(bridges, paths)
 	err = writeClaudeSettings(ctx, box, paths.ClaudeSettingsGuarded(), claudeGuardedSettings{
-		claudeHooksOnSettings: newClaudeHooksOnSettings(pin), Hooks: map[string]any{claudeEventToolCall: guard}})
+		claudeSettings: newClaudeSettings(pin), Hooks: map[string]any{claudeEventToolCall: guard}})
 	if err != nil || !req.Steer.Set() {
 		return err
 	}
@@ -151,7 +152,7 @@ func writeClaudeGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunR
 		hooks[event] = matchers
 	}
 	return writeClaudeSettings(ctx, box, paths.ClaudeNotesSettingsGuarded(),
-		claudeGuardedSettings{claudeHooksOnSettings: notes.claudeHooksOnSettings, Hooks: hooks})
+		claudeGuardedSettings{claudeSettings: notes.claudeSettings, Hooks: hooks})
 }
 
 // claudeEventToolCall is the hook event that fires before a tool runs, in a
