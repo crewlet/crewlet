@@ -3,6 +3,7 @@ package accessmigrate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -249,8 +250,7 @@ func Read(ctx context.Context, root map[string]any,
 		}
 		cancel()
 		if err != nil {
-			facts.Unavailable[kind] = fmt.Errorf("%s did not answer when its agents' accounts "+
-				"were read: %w", vendorName(kind), err)
+			facts.Unavailable[kind] = unread(kind, err)
 		}
 	}
 	facts.Levels = func(lane seataccess.Lane, name string) (string, bool, error) {
@@ -477,6 +477,37 @@ func migrationSummary(m Migration) string {
 
 // vendorName is a kind as its vendor names itself ([seataccess.KindName]).
 func vendorName(kind integration.Kind) string { return seataccess.KindName(kind) }
+
+// unanswered is an integration whose agents' accounts could not be read:
+// said is the migration's own sentence for a person, and err the cause, kept
+// for the log and errors.Is and never said to a person ([Said]).
+type unanswered struct {
+	said string
+	err  error
+}
+
+func (u *unanswered) Error() string { return u.said + ": " + u.err.Error() }
+func (u *unanswered) Unwrap() error { return u.err }
+
+// unread is why kind's accounts could not be read: its own setup not finished
+// (a connection whose values are unset), or the vendor not answering.
+func unread(kind integration.Kind, err error) error {
+	said := vendorName(kind) + " did not answer when its agents' accounts were read"
+	if errors.Is(err, integration.ErrNotConfigured) {
+		said = vendorName(kind) + "'s own setup is not finished, so its agents' accounts " +
+			"could not be read"
+	}
+	return &unanswered{said: said, err: err}
+}
+
+// Said is what a person reads of why an integration is left to migrate: the
+// migration's own sentence, never the error a vendor or a connection gave.
+func Said(err error) string {
+	if u, ok := errors.AsType[*unanswered](err); ok {
+		return u.said
+	}
+	return err.Error()
+}
 
 // companyOf decodes a stored document tree into this build's company.
 func companyOf(root map[string]any) (*config.Company, error) {
