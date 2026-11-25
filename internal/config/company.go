@@ -317,8 +317,9 @@ func (c *Company) ValidateRunnable() error {
 // [Code.validateAdmission] holds Gitlet's policy bounds ([CodeMaxRepos],
 // [CodeMaxDeletedRetentionDays], [CodeMaxRemoteCredentials],
 // [CodeMaxRemoteCredentialHosts]), [Company.validateFileRules] the
-// WHOLE-DOCUMENT rules, and [Company.validateAssistant] the `assistant:` block,
-// whose chain is held again wherever it is handed out.
+// WHOLE-DOCUMENT rules, [Company.validateAssistant] the `assistant:` block,
+// whose chain is held again wherever it is handed out, and
+// [Company.validateBrowserSeats] where a seat's browser may run.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -331,6 +332,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateSetupStepNames(), c.validateHumanSeatCode(), c.validateHumanSeatGrants(),
 		c.validateAvatars(),
 		c.validateLLMKeys(), c.validateLLMFleets(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
+		c.validateBrowserSeats(),
 		c.validateRunOptionalKeys(), c.validateReservedSandboxEnv(), c.validateUnitRooms(),
 		c.validateFileRules(), c.validateMCPNames(), c.validateAssistant(), c.validateAdvisor(), c.validateSeatAccess(),
 		c.validateMCPRegistry(), c.validateMCPAccess(o), c.validateMCPRequiredKeys(o), c.validateBoxToolLevels(),

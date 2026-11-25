@@ -215,6 +215,22 @@ func routeNames(vars []routeVar) []string {
 	return names
 }
 
+// mcpDeferrer is a harness that hides every MCP server's tools behind a
+// search of its own once a run's servers list some number of them in all.
+type mcpDeferrer interface{ defersMCPAt() int }
+
+var _ sandbox.MCPDeferrer = (*Runner)(nil)
+
+// DefersMCPAt is how many tools, across a run's MCP servers, make the
+// runner's harness hide every one of them ([sandbox.MCPDeferrer]), 0 for a
+// harness that hides none by their count.
+func (r *Runner) DefersMCPAt() int {
+	if h, ok := r.harness.(mcpDeferrer); ok {
+		return h.defersMCPAt()
+	}
+	return 0
+}
+
 // harnessNamed is the harness named name, nil for one this build does not
 // drive.
 func harnessNamed(name string) Harness {

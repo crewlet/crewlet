@@ -533,3 +533,32 @@ func TestASkillLoadIsReportedAndTheSkillRouteNeverPrinted(t *testing.T) {
 // on the box's files instead, and this ends it with exit 0, which the case's
 // exit-status assertion fails, rather than the package's timeout.
 const refusalBound = 10 * time.Second
+
+// THE CAP IS THE RUN'S, NOT A TURN'S: with -step-cap 1 the first turn's
+// response interrupts it, and a turn a note opens after that is interrupted
+// as it starts, before any response of its own, its marker naming it.
+//
+// Mutation: report no turn's start to the cap, or count each turn from one,
+// and the second turn runs on uninterrupted.
+func TestTheStepCapInterruptsATurnOpenedPastTheRunsCap(t *testing.T) {
+	t.Parallel()
+	bridge := newFakeBridge(t, testToken)
+	app := newFakeAppServer(t, "turn-1", 0)
+	marker := filepath.Join(t.TempDir(), "capped")
+	app.set("", marker)
+	threadFile := filepath.Join(t.TempDir(), "thread.id")
+	writeThread(t, threadFile, "thread-A")
+	h := startHelperWith(t, bridge, app, threadFile, "-step-cap", "1", "-cap-marker", marker)
+	app.joinedTurn()
+	tokens(t, app, "thread-A", "turn-1", 100)
+	app.interrupts.await(func(c []interruptCall) bool { return len(c) == 1 })
+	app.completeTurn(t, "thread-A", "turn-1")
+	app.startTurn(t, "thread-A", "turn-2")
+	calls := app.interrupts.await(func(c []interruptCall) bool { return len(c) == 2 })
+	if c := calls[1]; c.ThreadID != "thread-A" || c.TurnID != "turn-2" || !c.marked {
+		t.Errorf("interrupt %+v: want turn-2 of thread-A as it started, the marker written first", c)
+	}
+	if code := h.stop(); code != exitDone {
+		t.Errorf("exit status %d, want %d; stderr:\n%s", code, exitDone, h.stderr.String())
+	}
+}

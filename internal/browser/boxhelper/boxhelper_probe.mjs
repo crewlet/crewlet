@@ -23,6 +23,11 @@
 //                                          loaded
 //   {"op":"identify","pid":P}              what the kernel says of P as the
 //                                          reap reads it: alive, and its start
+//   {"op":"proc","pid":P,"stat":S,"cmdline":C}
+//                                          what running makes of P on Linux
+//                                          where the kernel's stat line for it
+//                                          reads S and its command line C:
+//                                          alive, argv or command, and start
 //   {"op":"signal","pid":P,"sig":S,"group":G}
 //                                          send S, a signal's number or name,
 //                                          to P, or to its group with G:
@@ -100,17 +105,18 @@
 //                                          under launch.json L's config, no
 //                                          edit between
 // A fault X is {method, errno, after, times, kill, uid, kill_holder,
-// kill_reading, hold}: every call of the file system's method after the first
-// `after`, or with times only that many, throws the error Node gives for
-// errno, a name; with kill the first such call kills the probe, as SIGKILL
-// would a box's helper part way; with uid it answers its stat with that uid;
-// with kill_holder it reads the link, kills the group of the Chromium it
-// names on its profile, and answers once that browser is gone and Playwright
-// has said so, as a browser that dies while its launch is read; with
-// kill_reading a read of a browser's command line does that to the browser,
-// and answers what it read less --no-sandbox, as a sandboxed browser that
-// dies as its command line is read; with hold it waits for the release op,
-// then runs as itself.
+// kill_reading, blank_reading, hold}: every call of the file system's method
+// after the first `after`, or with times only that many, throws the error
+// Node gives for errno, a name; with kill the first such call kills the
+// probe, as SIGKILL would a box's helper part way; with uid it answers its
+// stat with that uid; with kill_holder it reads the link, kills the group of
+// the Chromium it names on its profile, and answers once that browser is gone
+// and Playwright has said so, as a browser that dies while its launch is
+// read; with kill_reading a read of a browser's command line does that to the
+// browser, and answers what it read less --no-sandbox, as a sandboxed browser
+// that dies as its command line is read; with blank_reading such a read
+// answers nothing, as the kernel does once a browser's main thread exits;
+// with hold it waits for the release op, then runs as itself.
 // A supervisor's answers carry its state and every event it logged.
 // A command that throws anything else answers {"op":"error","message":M}.
 
@@ -158,7 +164,8 @@ const held = new Promise((resolve) => {
 function faulty(fail) {
   if (fail == null) return fsp
   const after = fail.after ?? 0
-  const throws = !fail.kill && fail.uid === undefined && !fail.kill_holder && !fail.kill_reading && !fail.hold
+  const throws =
+    !fail.kill && fail.uid === undefined && !fail.kill_holder && !fail.kill_reading && !fail.blank_reading && !fail.hold
   if (throws) errorOf(fail.errno, fail.method)
   let calls = 0
   return new Proxy(fsp, {
@@ -179,6 +186,7 @@ function faulty(fail) {
         }
         if (fail.kill_holder) return killHolder(await real.apply(target, args), args[0])
         if (fail.kill_reading) return killReading(String(args[0]), await real.apply(target, args))
+        if (fail.blank_reading) return blankReading(String(args[0]), await real.apply(target, args))
         throw errorOf(fail.errno, method)
       }
     },
@@ -230,6 +238,14 @@ async function killReading(file, body) {
   if (m === null || !String(body).includes("--user-data-dir=")) return body
   await killBrowser(Number(m[1]))
   return String(body).replace(/[\0 ]--no-sandbox(?=[\0 ]|$)/g, "")
+}
+
+// blankReading answers nothing for the command line of a process on a
+// profile it read at file, body, as the kernel answers once that browser's
+// main thread exits; anything else it read it answers as it is.
+function blankReading(file, body) {
+  const browser = /^\/proc\/[0-9]+\/cmdline$/.test(file) && String(body).includes("--user-data-dir=")
+  return browser ? "" : body
 }
 
 // clock is the probe's own: time moves only when a case advances it, and
@@ -413,6 +429,15 @@ const commands = {
   async identify({ pid }) {
     const { alive, start } = await running(pid)
     return { alive, start }
+  },
+  async proc({ pid, stat, cmdline }) {
+    const texts = { [`/proc/${pid}/stat`]: stat, [`/proc/${pid}/cmdline`]: cmdline }
+    const readFile = async (file) => {
+      if (typeof texts[file] !== "string") throw errorOf("ENOENT", file)
+      return texts[file]
+    }
+    const { alive, argv, command, start } = await running(pid, { readFile })
+    return { alive, argv, command, start }
   },
   signal({ pid, sig, group }) {
     return { sent: signal(pid, sig, group) }

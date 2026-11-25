@@ -7,20 +7,21 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A HOME OR A TRUSTED REPOSITORY CANNOT SWITCH CODEX'S NESTED HOOK OFF UNSEEN.
-// Codex 0.171.0 runs no hook where the configuration it settles on holds the
-// hooks feature false by either name, and not the run's where a layer other
-// than a project's sets that hook's state `enabled = false` (measured), so a
-// launch whose `config/read` (as 0.171.0 gave it) says so is refused before
-// Codex starts, naming the file and the key, the guard's own home named as
-// the box home's file. A feature true, set only in an untrusted project, or
-// the state of another hook or in a project starts it. Mutations, each red:
-// skip the hook check; read the layers but not the settled configuration;
-// read one name of the feature; let a project's state count; name the guard's
-// own home.
-func TestCodexsNestedHookCannotBeSwitchedOffUnseen(t *testing.T) {
+// A HOME OR A TRUSTED REPOSITORY THAT SWITCHES CODEX'S NESTED HOOK OFF STARTS
+// THE RUN WITHOUT IT, SAYING SO (D709): the hook carries checkout handing
+// alone. Codex 0.171.0 runs no hook where the configuration it settles on
+// holds the hooks feature false by either name, and not the run's where a
+// layer other than a project's sets its state `enabled = false` (measured), so
+// a launch whose `config/read` (as 0.171.0 gave it) says so starts Codex with
+// no nested hook, its skip log naming the file and key once, the guard's home
+// named as the box home's file. Otherwise the hook starts and nothing is said.
+// Mutations, each red: refuse the run; declare the hook anyway; say nothing;
+// read the layers, not the settled configuration; read one name of the
+// feature; let a project's state count; name the guard's own home.
+func TestCodexsNestedHookSwitchedOffStartsTheRunWithoutIt(t *testing.T) {
 	t.Parallel()
 	const key = `"/<session-flags>/config.toml:post_tool_use:0:0"`
 	answer := func(settled string, layers ...string) string {
@@ -40,10 +41,10 @@ func TestCodexsNestedHookCannotBeSwitchedOffUnseen(t *testing.T) {
 		project = `{"type":"project","dotCodexFolder":"WORK/.codex"}`
 		system  = `{"type":"system","file":"/etc/codex/config.toml"}`
 	)
-	const refusal = "Codex would run without the run's hook that hands a checkout cloned during it its instructions"
+	const said = "crewlet: checkouts cloned during the run are not handed their instructions and skills: "
 	for name, tc := range map[string]struct {
 		answer string
-		fails  []string
+		off    []string
 	}{
 		"nothing switches it off": {answer: answer(`{"features":{"memories":false}}`, layer(flags, `{}`, ""),
 			layer(user, `{"features":{"codex_hooks":true}}`, ""))},
@@ -54,16 +55,16 @@ func TestCodexsNestedHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			layer(project, `{"hooks":{"state":{`+key+`:{"enabled":false}}}}`, ""))},
 		"the home switches hooks off": {answer: answer(`{"features":{"codex_hooks":false}}`, layer(flags, `{}`, ""),
 			layer(user, `{"features":{"codex_hooks":false}}`, "")),
-			fails: []string{refusal, "HOME/.codex/config.toml sets features.codex_hooks = false", "remove that key"}},
+			off: []string{"HOME/.codex/config.toml sets features.codex_hooks = false"}},
 		"a trusted repository switches hooks off by the other name": {answer: answer(`{"features":{"hooks":false}}`,
 			layer(flags, `{}`, ""), layer(project, `{"features":{"hooks":false}}`, ""), layer(user, `{}`, "")),
-			fails: []string{refusal, "WORK/.codex/config.toml sets features.hooks = false"}},
+			off: []string{"WORK/.codex/config.toml sets features.hooks = false"}},
 		"the home switches the run's hook off": {answer: answer(`{"features":{}}`, layer(flags, `{}`, ""),
 			layer(user, `{"hooks":{"state":{`+key+`:{"enabled":false}}}}`, "")),
-			fails: []string{refusal, `HOME/.codex/config.toml sets hooks.state."/<session-flags>/config.toml:post_tool_use:0:0".enabled = false`}},
+			off: []string{`HOME/.codex/config.toml sets hooks.state."/<session-flags>/config.toml:post_tool_use:0:0".enabled = false`}},
 		"the system switches the run's hook off": {answer: answer(`{"features":{}}`, layer(flags, `{}`, ""),
 			layer(system, `{"hooks":{"state":{`+key+`:{"enabled":false}}}}`, "")),
-			fails: []string{refusal, `/etc/codex/config.toml sets hooks.state.`}},
+			off: []string{`/etc/codex/config.toml sets hooks.state.`}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -75,26 +76,24 @@ func TestCodexsNestedHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			at := strings.NewReplacer("WORK", work, "HOME", box.Home())
 			plantFile(t, filepath.Join(record, "config-read"), at.Replace(tc.answer))
 			req := sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge}
-			if len(tc.fails) == 0 {
-				if _, res := runToEnd(t, runner, box, req); !res.Success {
-					t.Fatalf("a run nothing switched the hook off of failed: %s", res.Error)
+			if _, res := runToEnd(t, runner, box, req); !res.Success {
+				t.Fatalf("the run failed: %s", res.Error)
+			}
+			server := strings.Join(recorded(t, record, "server-argv"), "\n")
+			if hooked := strings.Contains(server, "hooks.PostToolUse"); hooked != (len(tc.off) == 0) {
+				t.Errorf("Codex started with the nested hook: %v, want %v:\n%s", hooked, len(tc.off) == 0, server)
+			}
+			stderr := boxFile(t, box, executor.PathsFor(box).Err())
+			if n := strings.Count(stderr, said); n != min(len(tc.off), 1) {
+				t.Errorf("the skip log said the hook is off %d times, want %d:\n%s", n, min(len(tc.off), 1), stderr)
+			}
+			for _, want := range tc.off {
+				if want = at.Replace(want); !strings.Contains(stderr, said+want) {
+					t.Errorf("the skip log does not name %q:\n%s", want, stderr)
 				}
-				return
 			}
-			_, err = runner.Start(t.Context(), box, req)
-			if err == nil {
-				t.Fatal("a run whose nested hook the box switched off started")
-			}
-			for _, want := range tc.fails {
-				if want = at.Replace(want); !strings.Contains(err.Error(), want) {
-					t.Errorf("the refusal does not say %q:\n%v", want, err)
-				}
-			}
-			if strings.Contains(err.Error(), "/tmp/guard-home") {
-				t.Errorf("the refusal names the guard's own home, not the box's:\n%v", err)
-			}
-			if _, err := os.Stat(filepath.Join(record, "server-argv")); !os.IsNotExist(err) {
-				t.Errorf("Codex started for a refused run (%v)", err)
+			if strings.Contains(stderr, "/tmp/guard-home") {
+				t.Errorf("the skip log names the guard's own home, not the box's:\n%s", stderr)
 			}
 		})
 	}

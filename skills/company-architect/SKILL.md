@@ -215,7 +215,14 @@ live-editable, so the first version does not need to be the last.
    autonomous agent, the entry that needs the host itself, or a first run on
    their own machine while its seats take work from them alone, and say that
    the runs move into `container` before a seat takes work from anyone else.
-   See
+   A seat that browses the web (`role.sandbox.browser: true`) needs every
+   entry it launches on to name `run_in: container`, with an image carrying
+   Node 22, npm 10 and Chromium, off the host's network, on a Linux engine
+   host whose Docker Engine or Podman runs the box on its own kernel: never
+   Docker Desktop, Podman's machine, or any runtime on macOS or Windows. Put
+   it on another harness than `muse-code`: Muse Code hides every MCP tool
+   behind its search once a run has 100, the seat's own included, which a
+   browser's tools bring a seat to, so its launch withholds the browser. See
    [Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
 
    Whichever it is, the harness must be installed on the machine running
@@ -479,8 +486,8 @@ harness's own run (`claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`
 from `providers.sandbox`, which the company must configure once it has an
 agent seat and a model; reading and reviewing code on a code host is MCP.
 `role.sandbox` adds what one seat's box reads: `setup` steps, `env` (its
-code-host token), `optional_keys`, `mcp`, `pause_ttl_seconds` and
-`max_turns`. See
+code-host token), `optional_keys`, `mcp`, `pause_ttl_seconds`,
+`max_turns`, `max_concurrent_runs` and `browser`. See
 [Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
 Where the company hosts its code on Gitlet, the engine's own git host (`code.backend: gitlet`),
 a seat's executors clone and push the company's repositories themselves:
