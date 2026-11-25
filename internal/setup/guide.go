@@ -11,7 +11,7 @@ type Guide struct {
 	// Summary is one sentence on what connecting the tool does.
 	Summary string `json:"summary,omitempty"`
 
-	// Prepare is what to do at the vendor, in order.
+	// Prepare is the steps to connect the tool, at the vendor and in Crewlet, in order.
 	Prepare []Step `json:"prepare,omitempty"`
 
 	// Caution is the credential's one risk, nil where it has none worth a

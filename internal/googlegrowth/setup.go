@@ -89,7 +89,7 @@ func AgentsOn(name, scope string) setup.Step {
 // right after Crewlet made it, which Google does not know yet.
 func LateAccount(said string) setup.Trouble {
 	return setup.Trouble{
-		Sign: vendortext.Plain("It says " + said + "."),
+		Sign: vendortext.Plain("It says `" + said + "`."),
 		Fix:  vendortext.Plain("Google is still making the account. Wait a minute or two and add it again."),
 	}
 }
