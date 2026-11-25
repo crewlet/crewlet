@@ -117,6 +117,7 @@ import {
   decline,
   deleteConversation,
   deleteRefusal,
+  markOpened,
   newConversation,
   openConversation,
   pageMoved,
@@ -128,6 +129,7 @@ import {
   stop,
   undoAction,
   useConversation,
+  useOpenedCards,
 } from "./session.ts";
 import { AskComposer, useDraftBox, type DraftBox } from "./AskComposer.tsx";
 import { ATTACH_ACCEPT, ATTACH_HINT, useAttachments } from "./attachments.ts";
@@ -256,7 +258,7 @@ export function AskProvider({ place, children }: { place: AskPlace; children: Re
   const [deleting, setDeleting] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const [deleteFailed, setDeleteFailed] = useState<string | null>(null);
-  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
+  const opened = useOpenedCards();
   const running = openTurn(view);
   // THE SHELL'S ONE CLOCK, as every relative time on screen reads it: an
   // answer that ended between two ticks of a clock of its own read "in 1s".
@@ -443,7 +445,7 @@ export function AskProvider({ place, children }: { place: AskPlace; children: Re
   };
 
   const openHere = (target: InAppTarget, cardId?: string) => {
-    if (cardId) setOpened((s) => new Set(s).add(cardId));
+    if (cardId) markOpened(cardId);
     emit("assistant.navigation.open", { path: target.path, query: target.query, mode: "here" });
   };
 
