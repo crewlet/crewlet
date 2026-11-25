@@ -309,19 +309,19 @@ func TestTheBoxSaysWhoTheVendorSees(t *testing.T) {
 	v := &identityVendor{}
 	seat := seataccess.SeatRef{Handle: "growth", Name: "Growth Marketer"}
 	on := seataccess.Desired{Enabled: true}
-	company := seataccess.IdentityOf(v, nil, seat, identityLane, on, seataccess.Observed{}, nil)
+	company := seataccess.IdentityOf(v, nil, seat, identityLane, on, seataccess.Observed{}, nil, time.Now())
 	if !company.Offered || company.Status != seataccess.IdentityCompanys || !company.SetUp || company.Replace {
 		t.Fatalf("on the company's: %+v", company)
 	}
 	own := on
 	own.Identity = seataccess.IdentityOwn
 	ready := seataccess.IdentityOf(v, nil, seat, identityLane, own, seataccess.Observed{}, &seataccess.IdentityRecord{ID: "K",
-		Name: "crewlet-growth", Check: &seataccess.IdentityCheck{Status: seataccess.IdentityReady}})
+		Name: "crewlet-growth", Check: &seataccess.IdentityCheck{Status: seataccess.IdentityReady}}, time.Now())
 	if ready.Holds != seataccess.HoldsOwn || !ready.Replace || ready.SetUp || ready.StatusLabel != "Ready" {
 		t.Fatalf("ready: %+v", ready)
 	}
 	refused := seataccess.IdentityOf(v, nil, seat, identityLane, own, seataccess.Observed{}, &seataccess.IdentityRecord{ID: "K",
-		Check: &seataccess.IdentityCheck{Status: seataccess.IdentityRefused, Said: "Apple answers 401."}})
+		Check: &seataccess.IdentityCheck{Status: seataccess.IdentityRefused, Said: "Apple answers 401."}}, time.Now())
 	if refused.Holds != seataccess.HoldsNone || !refused.SetUp || !refused.UseCompany || refused.Problem == nil {
 		t.Fatalf("refused: %+v", refused)
 	}
@@ -364,7 +364,7 @@ func TestAnAccountLanesIdentityIsItsAccount(t *testing.T) {
 		{"its token gone", seataccess.Observed{Exists: true, Enabled: true, Credential: sealed,
 			CredentialGone: true}, seataccess.IdentityRefused, seataccess.StatusRefused},
 	} {
-		id := seataccess.IdentityOf(v, nil, seat, lane, on, c.have, nil)
+		id := seataccess.IdentityOf(v, nil, seat, lane, on, c.have, nil, time.Now())
 		if id == nil || id.Status != c.want || id.Holds == seataccess.HoldsCompany || id.UseCompany {
 			t.Errorf("%s: %+v, want %s and never the company's", c.name, id, c.want)
 			continue
@@ -396,7 +396,7 @@ func TestACompanyOnlyLaneIsInSyncOnTheCompanys(t *testing.T) {
 	seat := seataccess.SeatRef{Handle: "growth"}
 	on := seataccess.Desired{Enabled: true, Identity: seataccess.IdentityOwn}
 	v := companyOnlyVendor{seataccesstest.NewVendor(integration.KindAppleAds)}
-	id := seataccess.IdentityOf(v, nil, seat, seataccess.LaneAppleAds, on, seataccess.Observed{}, nil)
+	id := seataccess.IdentityOf(v, nil, seat, seataccess.LaneAppleAds, on, seataccess.Observed{}, nil, time.Now())
 	if id == nil || id.Offered || id.Status != seataccess.IdentityCompanys || id.SetUp || id.Replace || id.UseCompany {
 		t.Fatalf("company-only: %+v", id)
 	}
@@ -405,7 +405,7 @@ func TestACompanyOnlyLaneIsInSyncOnTheCompanys(t *testing.T) {
 		t.Fatalf("company-only row reads %s, want in_sync", got)
 	}
 	plain := seataccesstest.NewVendor(integration.KindAppleAds)
-	if got := seataccess.IdentityOf(plain, nil, seat, seataccess.LaneAppleAds, on, seataccess.Observed{}, nil); got != nil {
+	if got := seataccess.IdentityOf(plain, nil, seat, seataccess.LaneAppleAds, on, seataccess.Observed{}, nil, time.Now()); got != nil {
 		t.Fatalf("a lane that declares nothing answers %+v", got)
 	}
 }

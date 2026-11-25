@@ -3,14 +3,18 @@
 //
 // Several suites re-execute their own test binary as a stand-in server, harness or
 // launcher, then assert that the engine's teardown reached every process in
-// the tree. Two things about that are easy to get wrong in a way that makes the
-// assertion pass without testing anything, and both are platform-dependent, so
-// they are written once here:
+// the tree. Three things about that are easy to get wrong in a way that makes
+// the assertion pass without testing anything, and all are platform-dependent,
+// so they are written once here:
 //
 //   - A stand-in that is meant to stay up must actually stay up ([Hold]).
 //   - "The process is gone" must not be read off kill(pid, 0), which reports a
 //     zombie as alive, nor off /proc alone, which a darwin run does not have
 //     ([AwaitGone]).
+//   - Nor off one thread's state, which is all a Linux stat line or ps's STAT
+//     carries: a main thread reads Z while another thread of its process runs
+//     on. [StartExitedMainThread] stands such a process up, on Linux, for a
+//     reading to be held to.
 //
 // A third is not a correctness trap but a cost every such suite paid without
 // seeing it: a stand-in that is MEANT to end must end when it is done, rather

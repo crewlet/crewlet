@@ -144,7 +144,7 @@ export function ConnectionTab({
                 <ButtonLink
                   size="small"
                   variant="secondary"
-                  href={href(["company", "integrations", binding.vendor], { open: "agents" })}
+                  href={href(["company", "integrations", binding.vendor], { tab: "agents" })}
                 >
                   Open {server.title}'s Agents tab
                 </ButtonLink>

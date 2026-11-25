@@ -178,3 +178,48 @@ func TestALockWhoseContextEndedTakesNothing(t *testing.T) {
 	}
 	release()
 }
+
+// failingLocks fails every lease with err.
+type failingLocks struct{ err error }
+
+func (l failingLocks) Hold(context.Context, string) (func(), error) { return nil, l.err }
+
+// EVERY FAILURE BEFORE APPLY IS NOT APPLIED, and apply's own is not: a lease
+// the store could not take and a read again that failed both say the change
+// was never sent, so a product tells its caller nothing was changed; an
+// apply that failed may have changed something, and says nothing of it.
+//
+// Mutation: drop ErrNotApplied from the lease's failure or the recheck's, or
+// wrap apply's error in it, and this fails.
+func TestOnlyAFailureBeforeApplyIsNotApplied(t *testing.T) {
+	t.Parallel()
+	v := &twin{daily: map[string]int64{"a": 0}, trace: &[]string{}}
+	perChange, daily := int64(10), int64(100)
+	acct := spendguard.Account{ID: "a", Currency: "EUR", Serving: true}
+	read := func(context.Context) (spendguard.Account, spendguard.Caps, error) {
+		return acct, spendguard.Caps{Currency: "EUR", PerChangeMicros: &perChange, DailyMicros: &daily}, nil
+	}
+	applied := false
+	apply := func(context.Context) error { applied = true; return nil }
+	unavailable := errors.New("the store did not answer")
+	_, err := spendguard.New("twin", v, failingLocks{unavailable}).Apply(t.Context(), "a", raise{delta: 5}, read,
+		apply)
+	if !errors.Is(err, spendguard.ErrNotApplied) || !errors.Is(err, unavailable) || applied {
+		t.Errorf("a lease the store could not take = %v (applied %v), want not applied, naming the store", err,
+			applied)
+	}
+	unread := errors.New("the vendor did not answer the read")
+	_, err = spendguard.New("twin", v, recordingLocks{&[]string{}}).Apply(t.Context(), "a", raise{delta: 5},
+		func(context.Context) (spendguard.Account, spendguard.Caps, error) {
+			return spendguard.Account{}, spendguard.Caps{}, unread
+		}, apply)
+	if !errors.Is(err, spendguard.ErrNotApplied) || !errors.Is(err, unread) || applied {
+		t.Errorf("a read again that failed = %v (applied %v), want not applied, naming the read", err, applied)
+	}
+	sent := errors.New("the vendor's answer was cut off")
+	_, err = spendguard.New("twin", v, recordingLocks{&[]string{}}).Apply(t.Context(), "a", raise{delta: 5}, read,
+		func(context.Context) error { return sent })
+	if !errors.Is(err, sent) || errors.Is(err, spendguard.ErrNotApplied) {
+		t.Errorf("an apply that failed = %v, want its own error, never not applied", err)
+	}
+}

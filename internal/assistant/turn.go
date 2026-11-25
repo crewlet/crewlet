@@ -107,6 +107,11 @@ type turn struct {
 	// subjects are the records the person asked about: the page's selection and
 	// resources, and the task keys their question names (ADR-0151).
 	subjects []string
+	// question is the person's own question for this turn, the only words
+	// that may ask for a place to open by itself ([askedToOpen]); opened is
+	// whether a card already did.
+	question string
+	opened   bool
 	model    string
 	provider string
 	// fleet is the LLM fleet's decision record of provider, where one

@@ -1,6 +1,6 @@
 /**
- * A limit, and the two ways to stop waiting for it: Retry now, which asks the
- * vendor once and keeps the model out if the limit still holds; or Clear
+ * A limit, and the two ways to stop waiting for it: Retry now, which reads the
+ * plan (or asks the vendor once) and keeps the model out if the limit holds; or Clear
  * sit-out, for when the plan was raised and the next call should try it.
  *
  * FOR EVERY MODEL ON THE PLAN. A sit-out belongs to the sign-in, and models
@@ -154,7 +154,8 @@ export function RetryDialog({
         <dl className="models-choices">
           <dt>Retry now</dt>
           <dd>
-            Asks the vendor once. If the limit still holds, the model keeps sitting out and nothing
+            Reads the plan&apos;s status with no model call where the harness can, otherwise asks
+            the vendor once. If the limit still holds, the model keeps sitting out and nothing
             changes.
           </dd>
           <dt>Clear sit-out</dt>
@@ -192,7 +193,7 @@ function OutcomeCallout({ outcome }: { outcome: Outcome }) {
     case "failed":
       return (
         <Callout variant="danger" title="Nothing was cleared" live="polite">
-          The test call to {outcome.key} failed for a reason other than a limit: {outcome.failed}
+          The check of {outcome.key} failed for a reason other than a limit: {outcome.failed}
         </Callout>
       );
     case "not_sitting_out":

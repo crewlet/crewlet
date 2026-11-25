@@ -189,6 +189,10 @@ type Metrics interface {
 // read per turn so an apply is the next turn's.
 type Company func() (*config.Company, *org.Organization)
 
+// Instructions are a person's own instructions on how Ask Crewlet writes to
+// them, read per turn so a save is the next question's. None is the zero value.
+type Instructions func(ctx context.Context, p iam.Principal) (config.AssistantInstructions, error)
+
 // FrameWriter is one live stream as the service writes to it: a frame, or a
 // keepalive comment when the stream is quiet.
 type FrameWriter interface {

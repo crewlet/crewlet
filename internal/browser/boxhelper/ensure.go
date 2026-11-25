@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"path"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/browser"
@@ -32,8 +32,12 @@ const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 // PATH, and node_too_old for a node whose version is not the line's grammar
 // (three numbers, a prerelease's tag at most, 64 bytes in all) or whose major
 // is below MinNodeMajor, compared as a number. NODE_OPTIONS goes first: it
-// loads code into every node before its first line.
-var prelude = `unset NODE_OPTIONS
+// loads code into every node before its first line. Built at first use, as
+// the line's grammars are, so a binary that links this package pays for none
+// of them at init: every start of crewlet, a push's hook's included, runs
+// every linked package's init (TestTheHookPaysLittleForTheEnginesInit).
+var prelude = sync.OnceValue(func() string {
+	return `unset NODE_OPTIONS
 crewlet_withheld() { printf '%s withheld reason=%s cause=%s%s\n' '` + linePrefix + `' "$1" "$2" "$3"; exit 0; }
 command -v node >/dev/null 2>&1 || crewlet_withheld ` + pair(browser.ReasonNodeMissing, browser.CauseNotOnPath) + ` ''
 crewlet_node=$(node -p process.versions.node 2>/dev/null) || crewlet_node=
@@ -55,6 +59,7 @@ else
 	crewlet_withheld ` + pair(browser.ReasonNodeTooOld, browser.CauseBelowFloor) + ` ''
 fi
 `
+})
 
 // pair is a reason and its cause as the prelude hands them to
 // crewlet_withheld: two words, internal/browser's own values.
@@ -65,7 +70,7 @@ func pair(r browser.EnsureReason, c browser.EnsureCause) string {
 // EnsureScript is ensure as a POSIX sh script for the box whose home is home:
 // the prelude, then the helper's ensure, every path quoted.
 func EnsureScript(home string) string {
-	return prelude + "exec node " + shellword.Quote(path.Join(Folder(home), "helper.mjs")) + " ensure\n"
+	return prelude() + "exec node " + shellword.Quote(path.Join(Folder(home), "helper.mjs")) + " ensure\n"
 }
 
 // EnsureCommand is the command the engine runs ensure with in the box whose
@@ -129,17 +134,19 @@ const prerelease = `(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?`
 // fieldGrammar is what each key's value must be; a key it does not name is a
 // later build's, and ignored. A closed value is held to its type's Valid, so
 // the line's grammar is never a second copy of internal/browser's sets.
-var fieldGrammar = map[string]func(string) bool{
-	"helper":     regexp.MustCompile(`^[0-9a-f]{16}$`).MatchString,
-	"pin":        versionGrammar(`^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}` + prerelease + `$`),
-	"node":       versionGrammar(`^[0-9]{1,3}\.[0-9]{1,4}\.[0-9]{1,6}` + prerelease + `$`),
-	"chromium":   regexp.MustCompile(`^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}\.[0-9]{1,6}$`).MatchString,
-	"build":      func(v string) bool { return browser.ChromiumBuild(v).Valid() },
-	"sandbox":    func(v string) bool { return browser.ChromiumSandbox(v).Valid() },
-	"supervisor": func(v string) bool { return browser.SupervisorStart(v).Valid() },
-	"reason":     regexp.MustCompile(`^[a-z_]{1,64}$`).MatchString,
-	"cause":      regexp.MustCompile(`^[a-z_]{1,64}$`).MatchString,
-}
+var fieldGrammar = sync.OnceValue(func() map[string]func(string) bool {
+	return map[string]func(string) bool{
+		"helper":     regexp.MustCompile(`^[0-9a-f]{16}$`).MatchString,
+		"pin":        versionGrammar(`^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}` + prerelease + `$`),
+		"node":       versionGrammar(`^[0-9]{1,3}\.[0-9]{1,4}\.[0-9]{1,6}` + prerelease + `$`),
+		"chromium":   regexp.MustCompile(`^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}\.[0-9]{1,6}$`).MatchString,
+		"build":      func(v string) bool { return browser.ChromiumBuild(v).Valid() },
+		"sandbox":    func(v string) bool { return browser.ChromiumSandbox(v).Valid() },
+		"supervisor": func(v string) bool { return browser.SupervisorStart(v).Valid() },
+		"reason":     regexp.MustCompile(`^[a-z_]{1,64}$`).MatchString,
+		"cause":      regexp.MustCompile(`^[a-z_]{1,64}$`).MatchString,
+	}
+})
 
 // versionGrammar is a version's grammar, re, within versionMax.
 func versionGrammar(re string) func(string) bool {
@@ -148,8 +155,8 @@ func versionGrammar(re string) func(string) bool {
 }
 
 var (
-	keyGrammar   = regexp.MustCompile(`^[a-z_]{1,16}$`)
-	valueGrammar = regexp.MustCompile(`^[\x21-\x7e]{1,128}$`)
+	keyGrammar   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z_]{1,16}$`) })
+	valueGrammar = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[\x21-\x7e]{1,128}$`) })
 )
 
 // ParseEnsure reads ensure's answer from its stdout: the last non-empty line
@@ -187,10 +194,10 @@ func ParseEnsure(stdout string) (Ensure, error) {
 	fields := map[string]string{}
 	for _, w := range words[2:] {
 		key, value, ok := strings.Cut(w, "=")
-		if !ok || !keyGrammar.MatchString(key) || !valueGrammar.MatchString(value) {
+		if !ok || !keyGrammar().MatchString(key) || !valueGrammar().MatchString(value) {
 			return bad("%q is no field", w)
 		}
-		valid, known := fieldGrammar[key]
+		valid, known := fieldGrammar()[key]
 		if !known {
 			continue
 		}
@@ -225,7 +232,7 @@ func ParseEnsure(stdout string) (Ensure, error) {
 		if !e.Reason.Printed() {
 			return bad("%q is no reason a box gives", e.Reason)
 		}
-		if !slices.Contains(e.Reason.Causes(), e.Cause) {
+		if !e.Reason.Takes(e.Cause) {
 			return bad("%q is no cause of %s", e.Cause, e.Reason)
 		}
 	}

@@ -347,6 +347,7 @@ func Run(t *testing.T, newBackend func(t *testing.T) coord.Backend) {
 	}{
 		{"lease", leaseCases},
 		{"lease_meta", leaseMetaCases},
+		{"lease_names", leaseNameCases},
 		{"read", readCases},
 		{"protocol", protocolCases},
 		{"tristate", tristateCases},

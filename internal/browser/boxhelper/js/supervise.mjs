@@ -385,10 +385,11 @@ export class Supervisor {
 // profile's lock's, or undefined where that carries no --no-sandbox: a
 // launcher on PATH may add it (Debian's /usr/bin/chromium takes flags from
 // /etc/chromium.d), and that browser is withheld as the launcher's, never run
-// as required. One whose command line cannot be read is held to nothing, so
-// it is withheld too.
+// as required. One whose command line cannot be read, gone or not (the kernel
+// holds none once its main thread exits), is held to nothing, so it is
+// withheld too.
 function unsandboxedBy(pid, proc) {
-  if (!proc.alive) {
+  if (proc.argv === undefined && proc.command === undefined) {
     return new Withheld("chromium_sandbox_unavailable", "unknown", `no command line to read for the browser, pid ${pid}`)
   }
   if (!carries(proc, "--no-sandbox")) return undefined

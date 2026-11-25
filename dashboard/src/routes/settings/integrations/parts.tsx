@@ -322,6 +322,8 @@ function FieldValue({ r }: { r: SetupRequirement }) {
  */
 function SettingValue({ r, value }: { r: SetupRequirement; value: string }) {
   const choice = r.choices?.find((c) => c.value === value);
+  // A TOGGLE READS AS ITS SWITCH DOES, never as the word the document stores.
+  if (!choice && r.kind === "toggle") return <span>{value === "true" ? "On" : "Off"}</span>;
   if (choice || r.kind === "choice" || r.kind === "toggle") {
     return <span>{choice?.label ?? value}</span>;
   }

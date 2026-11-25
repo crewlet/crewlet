@@ -51,9 +51,13 @@ type RoleAppStoreConnect struct {
 	TeamResources bool `yaml:"team_resources,omitempty" json:"team_resources,omitempty" desc:"Optional. Let this agent reach the team's resources no app owns (users, devices, certificates, profiles, sandbox testers, reports across apps), within its level."`
 }
 
+// AppStoreConnectAppPattern is an app's Apple ID, its digits; the seat
+// picker offers a typed app by it too.
+const AppStoreConnectAppPattern = `^[0-9]{1,20}$`
+
 // AppStoreConnect's own shapes.
 var (
-	ascDigits = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[0-9]{1,20}$`) })
+	ascDigits = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(AppStoreConnectAppPattern) })
 	ascUUID   = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	})

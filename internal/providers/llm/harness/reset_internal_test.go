@@ -124,6 +124,14 @@ func TestAClockResetIsTheNextOccurrenceInItsZone(t *testing.T) {
 			said: "resets Jan 2nd, 9am (America/Vancouver)", now: tuesday,
 			want: time.Date(2027, time.January, 2, 9, 0, 0, 0, vancouver),
 		},
+		"a date and a time joined by at, as Claude Code writes a weekly reset": {
+			said: "You've hit your weekly limit · resets Nov 30 at 7am (UTC)", now: tuesday,
+			want: time.Date(2026, time.November, 30, 7, 0, 0, 0, time.UTC),
+		},
+		"a date and a time as the usage screen writes one": {
+			said: "Current week (all models): 72% used · resets Nov 28, 10:59am (UTC)", now: tuesday,
+			want: time.Date(2026, time.November, 28, 10, 59, 0, 0, time.UTC),
+		},
 		"a date that does not exist": {said: "resets Feb 30th, 2027 9am (America/Vancouver)", now: tuesday},
 		"a date in the past":         {said: "resets Oct 1st, 2026 9am (America/Vancouver)", now: tuesday},
 		"a zone the database does not know": {

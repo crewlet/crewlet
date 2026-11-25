@@ -35,16 +35,24 @@ func Guide() setup.Guide {
 	return setup.Guide{
 		Summary: "Agents use your Google Ads accounts as their own Google identity, at the level you give it, " +
 			"spend held to your caps. No token reaches an agent's box.",
-		Prepare: []setup.Step{
-			googlegrowth.CloudFirst("the Google Ads API"),
-			{Text: vendortext.Of(vendortext.W("Apply for "), vendortext.UI("Explorer"), vendortext.W(" or "),
-				vendortext.UI("Basic"), vendortext.W(" access to the Google Ads API on the identity project's API page."))},
-			{Text: vendortext.Of(vendortext.W("Add the company reader below to each account at "),
-				vendortext.UI("Read-only"), vendortext.W(", and set each account's spending caps before any agent may ask to spend."))},
-			{Text: vendortext.Plain("Turn agents on from the Agents tab, then set up each one's identity there: add " +
-				"its email to its accounts, or once to their manager, at the access level its level needs. Crewlet " +
-				"checks each agent's access on every pass.")},
-		},
+		Prepare: append(googlegrowth.CloudSteps("Google Ads", "the Google Ads API"),
+			setup.Step{
+				Title: "Apply for API access", Where: "Google Cloud console",
+				Text: vendortext.Of(vendortext.W("Apply for "), vendortext.UI("Explorer"), vendortext.W(" or "),
+					vendortext.UI("Basic"), vendortext.W(" access to the Google Ads API on the identity project's API page.")),
+			},
+			setup.Step{
+				Title: "Add the company reader", Where: "Google Ads",
+				Text: vendortext.Of(vendortext.W("Add the company reader below to each account at "),
+					vendortext.UI("Read-only"), vendortext.W(", and set each account's spending caps before any agent may ask to spend.")),
+			},
+			googlegrowth.AgentsOn("Google Ads", "Accounts"),
+			setup.Step{
+				Title: "Add each agent's account", Where: "Google Ads",
+				Text: vendortext.Plain("Add the account on the agent's row to its accounts, or once to their " +
+					"manager, at the access level its level needs. Crewlet checks each agent's access on every pass."),
+			},
+		),
 	}
 }
 
