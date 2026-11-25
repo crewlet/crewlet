@@ -66,9 +66,9 @@ var instructionsCases = []fleetCase{
 
 	{name: "instructions are forgotten only once their seat is absent long enough, keeping the stamp across saves", fn: func(h *fleetHarness) {
 		at := h.now().Add(-time.Hour)
-		first, _, err := h.f.SaveSeatInstructions(h.ctx, "pm", json.RawMessage(someInstructions), h.now(), 0)
-		if err != nil {
-			h.t.Fatal(err)
+		first, _, saveErr := h.f.SaveSeatInstructions(h.ctx, "pm", json.RawMessage(someInstructions), h.now(), 0)
+		if saveErr != nil {
+			h.t.Fatal(saveErr)
 		}
 		if gone, err := h.f.ForgetSeatInstructions(h.ctx, "pm", h.now()); err != nil || gone {
 			h.t.Fatalf("unstamped instructions forgotten (%v, %v)", gone, err)
@@ -83,9 +83,9 @@ var instructionsCases = []fleetCase{
 		if _, ok, err := h.f.SaveSeatInstructions(h.ctx, "pm", json.RawMessage(`{}`), h.now(), stamped); err != nil || !ok {
 			h.t.Fatalf("a save at the stamped revision = (%v, %v)", ok, err)
 		}
-		owners, err := h.f.SeatInstructionsOwners(h.ctx)
-		if want := []coord.SeatInstructionsOwner{{Handle: "pm", AbsentSince: at}}; err != nil || !slices.Equal(owners, want) {
-			h.t.Fatalf("owners read %v (%v), want %v", owners, err, want)
+		owners, listErr := h.f.SeatInstructionsOwners(h.ctx)
+		if want := []coord.SeatInstructionsOwner{{Handle: "pm", AbsentSince: at}}; listErr != nil || !slices.Equal(owners, want) {
+			h.t.Fatalf("owners read %v (%v), want %v", owners, listErr, want)
 		}
 		if gone, err := h.f.ForgetSeatInstructions(h.ctx, "pm", at.Add(-time.Second)); err != nil || gone {
 			h.t.Fatalf("instructions absent since after the bound forgotten (%v, %v)", gone, err)
