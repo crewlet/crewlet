@@ -12,13 +12,15 @@ import (
 // A HOME CANNOT SWITCH GROK BUILD'S HOOKS OFF UNSEEN THROUGH ITS
 // DISABLED-HOOKS FILE. Grok Build 1.0.92 skips a hook whose id that file holds
 // on a line (blanks and a carriage return trimmed), and every hook where it
-// cannot be read, with no word (measured). So a hooked run is refused before
+// cannot be read, with no word (measured). So a hooked run (every run in a box
+// with a note helper build, whose nested hook hands a clone) is refused before
 // Grok starts, naming the file and the line, or saying it cannot be read; it
-// starts where the file names the box's own hook, before which the run's
-// come, another place, scope or spelling, a hook the run lacks, where it is
-// empty or a broken link (no file: measured), or the run has no hooks.
+// starts where the file names the box's own hook, before which the run's come,
+// another place, scope or spelling, a hook the run lacks, or where it is empty
+// or a broken link (no file: measured).
 // Mutations, each red: drop the check; match untrimmed; match blind to case;
-// skip the unreadable file; name the run's hooks at place 0.
+// skip the unreadable file; name the run's hooks at place 0; leave the nested
+// hook's id out.
 func TestGrokBuildsHooksCannotBeSwitchedOffByItsDisabledHooksUnseen(t *testing.T) {
 	t.Parallel()
 	const file = ".grok/disabled-hooks"
@@ -49,7 +51,7 @@ func TestGrokBuildsHooksCannotBeSwitchedOffByItsDisabledHooksUnseen(t *testing.T
 			plant: map[string]string{".grok/config.toml": boxHook, file: "user:post_tool_use[1].hooks[0]\n"},
 			fails: []string{"skip the run's hook user:post_tool_use[1].hooks[0]"}}},
 		"it names other places, scopes and spellings": {req: notes, switchOffCase: switchOffCase{
-			plant: map[string]string{file: "user:post_tool_use[1].hooks[0]\nproject:stop[0].hooks[0]\n" +
+			plant: map[string]string{file: "user:post_tool_use[2].hooks[0]\nproject:stop[0].hooks[0]\n" +
 				"USER:STOP[0].HOOKS[0]\nuser:Stop[0].hooks[0]\n# user:stop[0].hooks[0]\nuser:stop[0].hooks[0]x\n"}}},
 		"it is empty":         {req: notes, switchOffCase: switchOffCase{plant: map[string]string{file: ""}}},
 		"it is a broken link": {req: notes, broken: true},
@@ -57,8 +59,15 @@ func TestGrokBuildsHooksCannotBeSwitchedOffByItsDisabledHooksUnseen(t *testing.T
 			plant: map[string]string{file + "/x": "user:stop[0].hooks[0]\n"},
 			fails: []string{"Grok Build would run none of the run's hooks", "/.grok/disabled-hooks cannot be read",
 				"skips every hook outside managed policy"}}},
-		"it cannot be read, on a run with no hooks": {req: sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge},
-			switchOffCase: switchOffCase{plant: map[string]string{file + "/x": "user:stop[0].hooks[0]\n"}}},
+		"it cannot be read, on a run whose one hook is the nested one": {req: sandbox.RunRequest{Brief: "go",
+			MCPServers: loadsBridge}, switchOffCase: switchOffCase{plant: map[string]string{file + "/x": "user:stop[0].hooks[0]\n"},
+			fails: []string{"Grok Build would run none of the run's hooks", "a repository cloned during it"}}},
+		"it names the nested hook of a run taking no notes": {req: sandbox.RunRequest{Brief: "go", MCPServers: loadsBridge},
+			switchOffCase: switchOffCase{plant: map[string]string{file: "user:post_tool_use[0].hooks[0]\n"},
+				fails: []string{"skip the run's hook user:post_tool_use[0].hooks[0]"}}},
+		"it names the nested hook after the notes' one": {req: notes, switchOffCase: switchOffCase{
+			plant: map[string]string{file: "user:post_tool_use[1].hooks[0]\n"},
+			fails: []string{"skip the run's hook user:post_tool_use[1].hooks[0]"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
