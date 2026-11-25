@@ -29,7 +29,8 @@ import (
 // open and the kernel closes as it exits ([serverPipe]), never its pid, which
 // kill -0 finds until reaped (#1164); `up` reads the pid's state as
 // internal/procgroup does, since sh cannot ask a pipe without blocking. Pages
-// print byte for byte, as the budget cases measure them.
+// print byte for byte, as the budget cases measure them; config.get, one
+// document declaring both bridge names.
 // FAKE_RUN_SLEEP alone `exec`s the sleep: dash holds a SIGINT landing as it
 // forks a foreground command, so a shell in front could miss a group SIGINT.
 // Exports are slowed by a sleep, not a packer stand-in busybox would bypass.
@@ -96,7 +97,6 @@ serve)
 api)
   if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; hangs "$1"; fi
   case "$1" in
-  config.get) cat "$d/config-get.json" 2> /dev/null || echo '[]' ;;
   credential.list)
     [ -e "$d/creds" ] || for id in ${FAKE_CREDS-}; do echo "$id"; done > "$d/creds"
     printf '{"data":[' ; sep=
@@ -105,6 +105,10 @@ api)
   credential.remove)
     id=${3#credentialID=}; echo "$id" >> "$d/removed"
     [ "$id" = "${FAKE_STUCK_CRED-}" ] || { grep -vxF "$id" "$d/creds" > "$d/creds.next"; mv "$d/creds.next" "$d/creds"; } ;;
+  config.get)
+    docs=${FAKE_DOCUMENTS-}
+    [ -n "$docs" ] || docs='[{"type":"document","info":{"mcp":{"servers":{"crewlet":{"type":"remote"},"crewlet-bridge":{"type":"remote"}}}}}]'
+    printf '%s\n' "$docs" ;;
   mcp.list)
     n=$(cat "$d/polls" 2> /dev/null || echo 0); n=$((n+1)); echo "$n" > "$d/polls"
     if [ -n "${FAKE_MCP_LIST:-}" ]; then printf '%s\n' "$FAKE_MCP_LIST"; exit 0; fi
@@ -1163,6 +1167,30 @@ func TestOpenCodeServersThatShadowTheEnginesToolsAreRefused(t *testing.T) {
 			})
 		})
 	}
+}
+
+// AN OPENCODE RUN WHOSE BRIDGE /etc/opencode REPLACES IS REFUSED BEFORE ITS
+// BRIEF: config.get lists the run's own document and /etc's, each declaring
+// `crewlet` (measured on 2.3.2, where /etc's took the bridge's place with
+// mcp.list as ever), so the script ends before `opencode run`, under every sh.
+//
+// Mutation: leave the check over config.get out of the script.
+func TestAnOpenCodeRunWhoseBridgeEtcReplacesIsRefusedBeforeItsBrief(t *testing.T) {
+	t.Parallel()
+	engine := sandbox.MCPServer{Name: "crewlet", Command: "false", AlwaysLoaded: true}
+	docs := `[{"type":"document","info":{"mcp":{"servers":{"crewlet":{"type":"remote"}}}}},` +
+		`{"type":"document","path":"/etc/opencode/opencode.json","info":{"mcp":{"servers":{"crewlet":{"type":"local"}}}}}]`
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		run := runScript(t, scriptOpts{shell: sh, req: sandbox.RunRequest{MCPServers: map[string]sandbox.MCPServer{"crewlet": engine}},
+			env:   []string{`FAKE_MCP_LIST={"data":[{"name":"crewlet","status":{"status":"connected"}}]}`, "FAKE_DOCUMENTS=" + docs},
+			times: &executor.OpenCodeTimes{MCP: 3 * time.Second, Sync: time.Hour}})
+		if run.code == 0 || run.callIndex("run ") >= 0 {
+			t.Fatalf("the run started (exit %d):\n%s", run.code, strings.Join(run.calls, "\n"))
+		}
+		if !strings.Contains(run.stderr, "declare the MCP server 'crewlet' 2 times") {
+			t.Errorf("the refusal does not say the bridge is declared twice:\n%s", run.stderr)
+		}
+	})
 }
 
 // JSON.stringify's spelling, to the byte: `"`, `\` and the control characters

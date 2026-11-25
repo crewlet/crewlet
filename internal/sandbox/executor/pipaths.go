@@ -57,7 +57,8 @@ func (p Paths) PiCheckoutSections() string { return p.PiRun() + "/checkout-secti
 func (p Paths) PiCheckoutSkills() string { return p.PiRun() + "/checkout-skills" }
 
 // PiCheckoutSkillsCopied lists, a name a line, the skills a run copied into
-// [Paths.PiCheckoutSkills], so the next run's gate removes them.
+// [Paths.PiCheckoutSkills], so the run's end removes them, or the next run's
+// gate where the run was killed first.
 func (p Paths) PiCheckoutSkillsCopied() string { return p.PiRun() + "/checkout-skills-copied" }
 
 // PiHomeInstructions is the agent directory's own instruction file, held

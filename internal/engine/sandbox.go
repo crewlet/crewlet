@@ -2790,8 +2790,11 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// AND IS SERVED AGAIN wherever the run is taken over while its box
 		// works: this node after a restart, or the seat's next holder —
 		// see [sandbox.CoordinatorOptions.Recovered].
-		Recovered:   e.reopenAgentRun,
-		Unresumable: e.parkedRunRecovered,
+		Recovered: e.reopenAgentRun,
+		// AND A JOB'S BRIDGE CONNECTION THIS NODE HOLDS is settled before its
+		// row is read for collection (connectmarks.go).
+		ConnectSettled: e.connectMarks.settle,
+		Unresumable:    e.parkedRunRecovered,
 		// AND EVERY NOTE A PERSON SENT THE TURN THAT NO STEP REPORTED
 		// READING is recorded by the ending, as the run's record knows it
 		// (delivered where a later launch told it again, unconfirmed, missed
@@ -4008,6 +4011,9 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// still running and runs on here, so the seat's lease is given back
 	// without waiting out a call.
 	e.bridge.ReleaseSeat(seat.ID)
+	// AND ITS RUNS' CONNECTIONS NOT YET ON THEIR ROWS, before the lease goes:
+	// the next holder collects them ([connectMarks.release]).
+	e.connectMarks.release(ctx, handle, log)
 
 	// AND THE SEAT'S WORKING INDICATORS: on a chat surface a left state is a
 	// live re-assertion. A turn suspended into a detached executor leaves its

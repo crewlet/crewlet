@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -26,6 +27,7 @@ var (
 	_ saver       = Hermes{}
 	_ resumer     = Hermes{}
 	_ inPlaceGate = Hermes{}
+	_ trimmer     = Hermes{}
 )
 
 //go:embed hermes_carry.py
@@ -138,23 +140,33 @@ func hermesOnDemand(paths Paths, session, staged, dest string) string {
 
 // hermesFinish defines the script's `finish`, run once Hermes and its gateway
 // have stopped, on the run's own end and a teardown's alike: the session
-// packed over [Paths.SessionCapture] ([hermesPack]). Nothing to pack is said
-// nowhere; a failed pack is said on the error stream, and the run's status is
-// never the pack's.
+// packed over [Paths.SessionCapture] ([hermesPack]), trimmed by the box's
+// release, n ([trimRelVar]). Nothing to pack is said nowhere; a failed pack is
+// said on the error stream, and the run's status is never the pack's.
 func hermesFinish(paths Paths) string {
-	return "finish() {\npacked=\n" + hermesPack(paths, paths.SessionStaging(), paths.SessionCapture(), ":") + "}\n"
+	return "finish() {\npacked= " + trimRelVar + "=$n\n" +
+		hermesPack(paths, paths.SessionStaging(), paths.SessionCapture(), ":") + "}\n"
 }
 
 // hermesPack is ONE PACK, the run's script's, a pack on demand and a save
-// alike: the session titled sid dumped by the carry script ([hermesCarryRun])
-// under [hermesArchiveMember] with the launch it was created under, tarred and
-// gzipped in staged, its digest recorded ([packDigest]) and moved over dest;
-// packed=1 where it was. nothing is the shell run where the store holds no
-// session of that title.
+// alike, at the bounds a take keeps ([trimAt]): [hermesPackAt].
 func hermesPack(paths Paths, staged, dest, nothing string) string {
+	return hermesPackAt(paths, staged, dest, nothing, trimAt)
+}
+
+// hermesPackAt is a pack trimmed past at: the session titled sid dumped by
+// the carry script ([hermesCarryRun]) under [hermesArchiveMember] with the
+// launch it was created under, trimmed ([trimStaged], [trimPacked]), tarred
+// and gzipped in staged, its digest recorded ([packDigest]) and moved over
+// dest, its trim said beside it ([trimMarked]); packed=1 where it was. nothing
+// is the shell run where the store holds no session of that title.
+func hermesPackAt(paths Paths, staged, dest, nothing string, at trimPoints) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
+	in, member := q(staged+"/in"), q(staged+"/in/"+hermesArchiveMember)
+	capture, errs := q(staged+"/capture"), q(staged+"/error")
+	repack := fmt.Sprintf(`tar -czf %s -C %s %s < /dev/null > /dev/null 2>> %s`, capture, in, hermesArchiveMember, errs)
 	line(`pe=0`)
 	line(`case "$sid" in ''|*[!A-Za-z0-9_-]*) pe=3;; esac`)
 	line(`if [ "$pe" = 0 ] && ! [ -s %s ]; then pe=3; fi`, q(paths.HermesStateDB()))
@@ -164,11 +176,11 @@ func hermesPack(paths Paths, staged, dest, nothing string) string {
 	line(`    [ "$pe" != 0 ] || case "$(hcarry dump %[1]s "$sid" %[2]s-"$sid" %[3]s/%[4]s)" in "crewlet-carry ok") ;; "crewlet-carry none") pe=3;; *) pe=1; cp %[5]s %[6]s 2> /dev/null;; esac`,
 		q(paths.HermesStateDB()), q(paths.WorkDir()+"/hermes-policy"), q(staged+"/in"), hermesArchiveMember,
 		q(paths.HermesCarryErrors()), q(staged+"/error"))
-	line(`    if [ "$pe" = 0 ]; then if tar -czf %[1]s -C %[2]s %[3]s < /dev/null > /dev/null 2>> %[4]s && %[5]s && mv -f %[1]s %[6]s; then packed=1; else pe=1; fi; fi`,
-		q(staged+"/capture"), q(staged+"/in"), hermesArchiveMember, q(staged+"/error"),
-		packDigest(paths, "sid", staged), q(dest))
+	line(`    if [ "$pe" = 0 ]; then if %[1]s && %[2]s && %[3]s && %[4]s && %[5]s && mv -f %[6]s %[7]s; then packed=1; %[8]s; else pe=1; fi; fi`,
+		trimStaged(Hermes{}, at, member), repack, trimPacked(Hermes{}, at, member, capture, repack),
+		packDigest(paths, "sid", staged), trimUnmark(dest), capture, q(dest), trimMarked(dest))
 	line(`    [ "$pe" = 0 ] || [ "$pe" = 3 ] || echo "crewlet: the session $sid was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2`,
-		q(staged+"/error"))
+		errs)
 	line(`    rm -rf %s`, q(staged))
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)
@@ -176,6 +188,21 @@ func hermesPack(paths Paths, staged, dest, nothing string) string {
 	line(`fi`)
 	line(`if [ "$pe" = 3 ]; then %s; fi`, nothing)
 	return b.String()
+}
+
+// trimRelease is the release Hermes's trim was measured on ([trimmer]): the
+// one whose sessions it continues ([hermesFloor]).
+func (Hermes) trimRelease() string { return hermesFloor() }
+
+// trimRecord is the carry script's trim of the dump at src into dst
+// ([hermesCarryScript]): every line but a session's inactive message rows
+// below its newest active compaction summary, which 0.23.3's resume never
+// loads, each settled admission's stored result slimmed of its copies of the
+// turn's transcript as Hermes's own retirement slims one (measured: a resume
+// of the trimmed dump sent the requests a resume of the whole one did;
+// docs/concepts/code-sandbox.md). True only where it left a row out.
+func (Hermes) trimRecord(src, dst string) string {
+	return fmt.Sprintf(`[ "$(hcarry trim %s %s)" = 'crewlet-carry ok' ]`, src, dst)
 }
 
 // hermesSessionGate is the part of a run's script that names the session its
@@ -198,7 +225,7 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 	if !session.Continues {
 		line(`sid=%s k=no w=`, q(session.ID))
 		line(`%s`, keep)
-		b.WriteString(hermesInstallOverlay(paths, paths.HermesOverlayStaged(), directHosts(req)))
+		b.WriteString(hermesInstallOverlay(paths, paths.HermesOverlayStaged(), directHosts(req), hermesGuarded(req)))
 		return b.String()
 	}
 	carried := q(paths.SessionCarried())
@@ -242,7 +269,7 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 	if rewired {
 		line(`  rm -f %s`, q(paths.HermesOverlayFresh()))
 	}
-	b.WriteString(codexIndented(hermesInstallOverlay(paths, paths.HermesOverlayStaged(), directHosts(req))))
+	b.WriteString(codexIndented(hermesInstallOverlay(paths, paths.HermesOverlayStaged(), directHosts(req), hermesGuarded(req))))
 	line(`else`)
 	line(`  sid=%s k=no`, q(session.Fresh))
 	line(`  %s`, keep)
@@ -255,7 +282,7 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 		overlay = paths.HermesOverlayFresh()
 		b.WriteString(codexIndented(hermesFreshRoutes(req, paths)))
 	}
-	b.WriteString(codexIndented(hermesInstallOverlay(paths, overlay, directHosts(req))))
+	b.WriteString(codexIndented(hermesInstallOverlay(paths, overlay, directHosts(req), hermesGuarded(req))))
 	line(`fi`)
 	return b.String()
 }
@@ -280,17 +307,21 @@ func hermesFreshRoutes(req sandbox.RunRequest, paths Paths) string {
 }
 
 // hermesInstallOverlay writes the run's managed scope from overlay: the box's
-// own (`/etc/hermes`, which the run's HERMES_MANAGED_DIR hides) with overlay's
-// keys over it, through Hermes's own loader (the carry script's `overlay`),
-// and its .env stating NO_PROXY and no_proxy with hosts ([directHosts]) after
-// the process's, the home's and the box's entries, since Hermes loads that
-// .env last. It ends the run before Hermes starts where it cannot: a run on no
-// overlay reaches none of the seat's tools, and one on another session's is
-// one the bridge cannot tell apart.
-func hermesInstallOverlay(paths Paths, overlay string, hosts []string) string {
+// own (`/etc/hermes`, which HERMES_MANAGED_DIR hides) with overlay's keys over
+// it, through Hermes's own loader, and its .env stating NO_PROXY and no_proxy
+// with hosts ([directHosts]), which Hermes loads last. The run ends before
+// Hermes starts where the overlay cannot be installed, or where the box runs
+// one of its servers otherwise than written (the carry script's `servers`),
+// naming what declares it. On guarded, Crewlet's own servers, a switch off, a
+// tool filter or a header is left to [hermesGuard]. An answer the check cannot
+// read refuses nothing. Why: code-sandbox.md, "The box's Hermes must run the
+// run's servers as the overlay writes them".
+func hermesInstallOverlay(paths Paths, overlay string, hosts, guarded []string) string {
 	q := shellword.Quote
-	return fmt.Sprintf("if [ \"$(hcarry overlay %s %s %s)\" = 'crewlet-carry ok' ]; then rm -f %s; else echo 'crewlet: the Hermes overlay of the run could not be installed, so the run does not start' >&2; exit 1; fi\n",
-		q(overlay), q(paths.HermesManaged()), q(strings.Join(hosts, ",")), q(overlay))
+	names, _ := json.Marshal(guarded) // names always marshal
+	return fmt.Sprintf("if [ \"$(hcarry overlay %[1]s %[2]s %[3]s)\" != 'crewlet-carry ok' ]; then echo 'crewlet: the Hermes overlay of the run could not be installed, so the run does not start' >&2; exit 1; fi\n"+
+		"hs=$(hcarry servers %[1]s %[4]s); case \"$hs\" in 'crewlet-carry taken '?*) printf 'crewlet: %%s, so the run does not start\\n' \"${hs#crewlet-carry taken }\" >&2; exit 1;; esac\n"+
+		"rm -f %[1]s\n", q(overlay), q(paths.HermesManaged()), q(strings.Join(hosts, ",")), q(string(names)))
 }
 
 // hermesRestore is the restore of a carried archive of session sid: unpacked in

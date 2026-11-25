@@ -17,8 +17,8 @@ const CopilotSteerInstruction = steerInstructionHead +
 	"result of the tool that was running when it came, or, when it came as you " +
 	"finished, as a new message you answer before the run ends. " + steerInstructionTail
 
-// copilotNotesExtension is the extension that hands a Copilot run its notes and
-// holds it to its turn cap (copilot_steer.js). Embedded, so it matches this
+// copilotNotesExtension is the extension that hands a Copilot run its notes,
+// holds it to its turn cap and guards the bridge's names (copilot_steer.js). Embedded, so it matches this
 // build's bridge and decoder.
 //
 //go:embed copilot_steer.js
@@ -74,13 +74,29 @@ func CopilotClientTurnID(inbox string) string { return copilotTurnPrefix + inbox
 // notes route, "" for a run wired to none, and its turn cap, 0 for none; the
 // file it keeps its count, cursor and sent notes in across a restart
 // ([Paths.CopilotNotesState]), and the launch that state belongs to, a key
-// minted for each launch: a state another launch left counts nothing.
+// minted for each launch: a state another launch left counts nothing; and the
+// bridge's servers it guards the names of ([crewletServers]), none for none.
 type copilotExtensionSettings struct {
-	URL   string `json:"url"`
-	Cap   int    `json:"cap"`
-	State string `json:"state"`
-	Run   string `json:"run"`
+	URL     string   `json:"url"`
+	Cap     int      `json:"cap"`
+	State   string   `json:"state"`
+	Run     string   `json:"run"`
+	Bridges []string `json:"bridges,omitempty"`
 }
+
+// copilotUnbridgedMessage opens the error copilot_steer.js logs as it stops a
+// run where an agent connected a server of its own under a bridge's name (its
+// unbridgedMessage), which fails the run in its words ([copilotEvents]).
+const copilotUnbridgedMessage = "crewlet: " + copilotShadowed
+
+// copilotShadowed is the sentence such a run fails with.
+const copilotShadowed = "a repository's or home's MCP server may not take a name inside Crewlet's own " +
+	"server's tool names, or its place"
+
+// copilotBridgeGuardMark is the type of the line a run handed a bridge prints before
+// its harness starts, by which the decoder fails the run whose extension, which
+// guards the bridge's names, never ran.
+const copilotBridgeGuardMark = "crewlet.guard"
 
 // copilotExtension is the extension's file as a run's box is written it: the
 // embedded source with settings in its placeholder's place. JSON is a

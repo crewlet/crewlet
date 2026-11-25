@@ -17,8 +17,8 @@
 // package must never grow its own idea of whether a tool is granted, whether a skill
 // guard allows it, what a failure looks like or what is recorded: a second copy would
 // drift, on the security half. The session a job's box started is read off its token (started.go).
-// That includes the argument check ([tools.Invoke],
-// ADR-0059), so a box and a tool loop are refused alike.
+// That includes the argument check ([tools.Invoke], ADR-0059), so a box and a tool
+// loop are refused alike.
 //
 // The dispatcher adds what a surface cannot know, being about the RUN:
 //
@@ -77,8 +77,7 @@
 // DONE WITH NOTHING RECORDED: the plugin would never confirm those notes again and
 // the record would keep them served and unread. It is turned away when the run's
 // tools are closed (a seat leaving closes the fence first, its box going on with the
-// next holder) and when the inbox serves no
-// job, which [ErrNoteUntaken] says. The inbox decides under its own lock.
+// next holder) and when the inbox serves no job, which [ErrNoteUntaken] says. The inbox decides under its own lock.
 //
 // # A run's own skills, and what loading one unlocks
 //
@@ -199,20 +198,18 @@
 // bound is sized for a call whose tool returned just before the end, whose answer
 // follows its record: the entry's update and retries (internal/engine's
 // appendRetryWaits, 1.75 s) and, after an activation, the box's re-list hold
-// (internal/toolsession's relistWait, two seconds). FIVE as the write ahead of a call is
-// (internal/engine's beginBudget): a store silent for five is in an outage this wait would not see
-// the end of. NOTHING HOLDS THE SUM TO THE BOUND: both waits live in other packages, one
-// the engine's, which this one cannot import, so moving either is reading this again. A
-// hook's take is bounded by [steerTakeBudget], the same five seconds.
+// (internal/toolsession's relistWait, two seconds). FIVE, as internal/engine's
+// beginBudget. NOTHING HOLDS THE SUM TO THE BOUND: both waits live in other packages, so
+// moving either is reading this again. A hook's take is bounded by [steerTakeBudget],
+// the same five.
 //
 // # A hook's answer, held for the end
 //
 // A HOOK'S CALL NEVER REACHES [binding.Call], which holds every answer it gives: the
 // opening's own server answers it in middleware ([binding.steerMiddleware],
-// [binding.skillMiddleware]). Unheld, an answer coming after the end began to close the
-// sessions was refused by the SDK, and a take whose write had landed on the record,
-// answered into that close, left its notes recorded handed to a step that never had
-// them, since a box sends no cancel for an answer it never got. So [binding.holdHook]
+// [binding.skillMiddleware]). Unheld, an answer after the end began closing the sessions
+// was refused by the SDK, and a take already recorded left its notes handed to a step
+// that never had them (a box sends no cancel for an answer it never got). So [binding.holdHook]
 // holds the answer as a refused call's is held and reads the note inbox under the same
 // lock, the hold first: an end either came before, and the hook takes nothing, or finds
 // the hold and waits for the answer ([binding.answersOut]) before closing the sessions.
@@ -232,9 +229,8 @@
 // A REQUEST THAT OPENS A SESSION ONCE ITS OPENING HAS ENDED is TURNED AWAY TO ASK AGAIN
 // ([Bridge.serveMCP]), a 503 with a Retry-After, as a notes call is, never the SDK's 400
 // "no server available", which Claude Code never retries at startup, leaving the box
-// without tools. A call that meets a 503 ([Bridge.forward],
-// [Bridge.heldOnly]) is not retried: the model's call fails, and a hook's is a hook error
-// the run goes on past, and the bridge never routes the request again itself. A server
+// without tools. A call that meets a 503 ([Bridge.forward], [Bridge.heldOnly]) fails,
+// the model's or a hook's, and the bridge never routes it again itself. A server
 // the opening does not serve keeps the 400. THE MCP HANDLER IS HANDED
 // THE OPENING THE ROUTING FOUND ([servedOpening]) and never reads the token again: read
 // again, it named no opening where the opening ended between routing and handler, or the
@@ -251,8 +247,7 @@
 // on each node's own clock, refusing the run's calls before its cap on a node
 // running ahead, and with a bare 401, which a harness reads as a refused
 // credential, between the cap and the collection. Without a cap a run works,
-// or waits on a person, as long as its turn needs, on the one endpoint its
-// launch wrote into its harness's configuration, which nothing renews.
+// or waits on a person, as long as its turn needs, its token renewed by nothing.
 //
 // # A run outlives the process that opened its session
 //
@@ -269,11 +264,9 @@
 // any node that serves the route, a load balancer in front of several included. The node
 // a call lands on finds the run's holder by the seat's lease and the holder answers,
 // relayed over the broker where it is another node ([Bridge.Join], internal/httprelay).
-// ADR-0056 records the decision, and why neither a proxy to the holder's address nor an
-// MCP session on the node a call lands on would hold it. A box sharing its launching
-// node's loopback (the `direct` cell) dials that node's listener there instead
-// ([Options.HostURL], [FromLoopback]; api.port, to loopback alone, where it has no
-// ingress role).
+// ADR-0056 records why. A box sharing its launching node's loopback (the `direct`
+// cell) dials that node's listener there instead ([Options.HostURL], [FromLoopback];
+// api.port, to loopback alone, where it has no ingress role).
 //
 // # The session is the seat holder's, and only the token is the fleet's
 //
@@ -305,15 +298,25 @@
 //
 // # A hook's cancel is heard before the SDK
 //
-// A harness that gives a hook's call up sends `notifications/cancelled`; the note
-// inbox must hear it, to serve the note again at the job's next step. The steer
-// middleware cannot: the SDK keeps a call's JSON-RPC id under an unexported key, answers a
-// cancel for a session it never held 404 before any middleware, and a cancel can overtake
-// its own call. So the bridge's front reads every POST first ([Bridge.steerFront]) and
-// hands the inbox each cancel
-// ([SteerInbox.Cancelled], [binding.cancelInbox]), setting [steerCallHeader] on a
-// steer_take call to its id and dropping one a box sent ([binding.noteCall]); it peeks
-// at most [steerPeekBytes] and hands the SDK the body whole.
+// A harness that gives a hook's call up sends `notifications/cancelled`, and the note
+// inbox must hear it to serve the note again at the job's next step. The steer
+// middleware cannot: the SDK keeps a call's id under an unexported key, answers a
+// cancel for a session it never held 404 before any middleware, and a cancel can
+// overtake its call. So the bridge's front reads every POST first ([Bridge.steerFront]).
+//
+// # A harness that never connected its bridge ran without it
+//
+// Box config can switch `crewlet` off or shadow it, and a harness not reaching the
+// bridge at startup goes on without its seat's tools. So the harness LISTING THE
+// ENGINE'S OWN SERVER'S TOOLS, never `initialize`, which probes send too, tells the
+// session ([Session.Connected]); the engine fails a job ended without it. Every in-box
+// harness lists before its first model request (docs/concepts/code-sandbox.md).
+//
+// # A name `crewlet` cannot list
+//
+// An unserved server's tool whose name fails [harnessprofile.BridgeToolName] is LISTED
+// UNDER AN ALIAS ([aliased]), never dropped: config cannot refuse a name only its
+// server lists. An alias hangs on its name alone, so it stays that tool's.
 package mcpbridge
 
 import (
@@ -467,6 +470,12 @@ type Session struct {
 	// so no call of the run is admitted against the guard of a session it is
 	// not in (see started.go). Nil tells nobody, which a test's session has.
 	Started func(ctx context.Context, fellBack bool)
+
+	// Connected is told once per opening that the box's harness connected its
+	// bridge: it listed the engine's own server's tools (connected.go), under the
+	// run's context, as that list is answered. Nil tells nobody, which a
+	// test's session has.
+	Connected func(ctx context.Context)
 
 	mu sync.Mutex
 	// live is the session's current opening; nil until opened.
@@ -1473,6 +1482,10 @@ type binding struct {
 	startMu      sync.Mutex
 	started      bool
 	startedFresh bool
+
+	// listed tells the session once, per opening, that the harness listed the
+	// engine's own server's tools ([binding.listMiddleware]).
+	listed sync.Once
 }
 
 var _ toolsession.Dispatcher = (*binding)(nil)
@@ -1520,6 +1533,9 @@ func newBinding(ctx context.Context, s *Session, where route, calls *bridgedCall
 	own.MCP().AddReceivingMiddleware(opened.steerMiddleware)
 	// skill_loaded, ANSWERED THE SAME WAY: a hook's report, never listed (skills.go).
 	own.MCP().AddReceivingMiddleware(opened.skillMiddleware)
+	// AND THE HARNESS'S LIST OF THESE TOOLS, its word that it connected its bridge
+	// (connected.go): on the engine's own server alone.
+	own.MCP().AddReceivingMiddleware(opened.listMiddleware)
 	// THE ANSWER TO AN ACTIVATION WAITS FOR THE BOX'S RE-LIST
 	// ([toolsession.Server.HoldAnswersForRelist]): Claude Code and OpenCode
 	// re-read their tool list when told it changed, and answered at once one asks

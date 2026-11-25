@@ -18,8 +18,9 @@ import (
 // 2.1.310 (2.1.330 too) runs no hook at all where the settings it merges leave
 // `disableAllHooks` true, a later file's value winning, and only managed hooks
 // where a managed file sets `allowManagedHooksOnly`, and no `--settings` hook,
-// the notes' ride, where it sets `strictPluginOnlyCustomization` locking them;
-// the run's notes and skill loads then go unread with no error (measured). A
+// the notes' and the bridge guard's ride, where it sets
+// `strictPluginOnlyCustomization` locking them; the run's notes and skill
+// loads then go unread, and its bridge guard unrun, with no error (measured). A
 // `false` in the run's own settings would run the home's and the repository's
 // hooks too, where a person's session runs none. So a run that starts a hook
 // of its own is refused before the harness starts, naming the file and the key
@@ -42,15 +43,37 @@ func claudeHooksOffFiles(paths Paths, start string) []string {
 
 // claudeHooksOffVerdict is why Claude Code would run none of the run's hooks
 // given files: any file holding `disableAllHooks` true, any managed one
-// holding `allowManagedHooksOnly` true, and, for a run whose notes ride the
-// `--settings` hooks, a managed `strictPluginOnlyCustomization` locking hooks
-// ([claudeStrictLocksHooks]); "" where none says so. FAIL CLOSED: Claude
+// holding `allowManagedHooksOnly` true, and, for a run whose notes or bridge
+// guard ride the `--settings` hooks (ridden), a managed
+// `strictPluginOnlyCustomization` locking hooks ([claudeStrictLocksHooks]); "" where none says so. FAIL CLOSED: Claude
 // drops a whole file over any invalid value and offers no way to print the
 // settings it kept (2.1.310: no such command; its debug log names files, not
 // values), so a later file's false never clears an earlier true, which may be
 // the one it keeps. A file that is no JSON object, or holds the key as
 // anything but a boolean, it ignores whole (measured), so it decides nothing.
-func claudeHooksOffVerdict(files []boxFileRead, notes bool, skills []sandbox.Skill) string {
+func claudeHooksOffVerdict(files []boxFileRead, ridden bool, skills []sandbox.Skill) string {
+	said := claudeHooksSwitchedOff(files, ridden)
+	var parts []string
+	if len(said) > 0 {
+		parts = append(parts, fmt.Sprintf("Claude Code would run none of the run's hooks, which its notes, "+
+			"skill loads and bridge guard go through: %s, and no setting of the run's may switch hooks back on, "+
+			"since that would also run the home's and the repository's hooks where a person's session runs none",
+			strings.Join(said, "; ")))
+	}
+	if off := claudeSkillsOff(files, skills); len(off) > 0 {
+		parts = append(parts, fmt.Sprintf("Claude Code would go without the run's own skills: %s, and the run "+
+			"never switches back on what a person's settings switch off", strings.Join(off, "; ")))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, ". ") + ". Remove that key or entry from that file"
+}
+
+// claudeHooksSwitchedOff is each file and key of files that has Claude Code
+// run none of the run's hooks ([claudeHooksOffVerdict]), a strict lock of
+// the settings' hooks counted only where they are ridden.
+func claudeHooksSwitchedOff(files []boxFileRead, ridden bool) []string {
 	var off, strict []string
 	for _, f := range files {
 		var settings map[string]json.RawMessage
@@ -72,26 +95,12 @@ func claudeHooksOffVerdict(files []boxFileRead, notes bool, skills []sandbox.Ski
 			off = append(off, f.path+" sets allowManagedHooksOnly to true, which runs the machine's managed "+
 				"hooks alone")
 		}
-		if raw, ok := settings["strictPluginOnlyCustomization"]; ok && notes && claudeStrictLocksHooks(raw) {
+		if raw, ok := settings["strictPluginOnlyCustomization"]; ok && ridden && claudeStrictLocksHooks(raw) {
 			strict = append(strict, f.path+" sets strictPluginOnlyCustomization to "+codexShown(raw)+
-				", which locks the settings' hooks the run's notes ride")
+				", which locks the settings' hooks the run's notes and bridge guard ride")
 		}
 	}
-	said := slices.Concat(off, strict)
-	var parts []string
-	if len(said) > 0 {
-		parts = append(parts, fmt.Sprintf("Claude Code would run none of the run's hooks, which its notes and "+
-			"skill loads go through: %s, and no setting of the run's may switch hooks back on, since that would "+
-			"also run the home's and the repository's hooks where a person's session runs none", strings.Join(said, "; ")))
-	}
-	if off := claudeSkillsOff(files, skills); len(off) > 0 {
-		parts = append(parts, fmt.Sprintf("Claude Code would go without the run's own skills: %s, and the run "+
-			"never switches back on what a person's settings switch off", strings.Join(off, "; ")))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.Join(parts, ". ") + ". Remove that key or entry from that file, or run without notes and skills"
+	return slices.Concat(off, strict)
 }
 
 // claudeSkillsPluginKey is how Claude Code 2.1.310 names the run's skills'
@@ -188,11 +197,13 @@ func claudeManagedFile(file string) bool {
 }
 
 // claudeHooksOff is why Claude Code in box would run none of a run's hooks
-// ([claudeHooksOffVerdict]), notes saying whether they include the notes',
-// read from the box as its user reads them (managed files outside the box
-// home too, which ReadFile does not reach); "" where nothing switches them off.
-func claudeHooksOff(ctx context.Context, box sandbox.Sandbox, paths Paths, notes bool,
-	skills []sandbox.Skill) (string, error) {
+// ([claudeHooksOffVerdict]), ridden saying whether they include the notes' or
+// the bridge guard's, read from the box as its user reads them (managed files
+// outside the box home too, which ReadFile does not reach), "" where nothing
+// switches them off; and the files and keys that switch a plugin's hook off
+// ([claudeHooksSwitchedOff], the checkouts' hook's, for [claudeCheckoutsGate]).
+func claudeHooksOff(ctx context.Context, box sandbox.Sandbox, paths Paths, ridden bool,
+	skills []sandbox.Skill) (string, []string, error) {
 	start := path.Join(box.Home(), sandbox.WorkspaceSubdir)
 	res, err := box.Exec(ctx, boxFilesCommand(claudeHooksOffFiles(paths, start)),
 		sandbox.ExecOptions{TimeoutSec: claudeHooksOffWait.Seconds()})
@@ -200,9 +211,10 @@ func claudeHooksOff(ctx context.Context, box sandbox.Sandbox, paths Paths, notes
 		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
 	}
 	if err != nil {
-		return "", fmt.Errorf("executor: reading the Claude Code settings that can switch the run's hooks off: %w", err)
+		return "", nil, fmt.Errorf("executor: reading the Claude Code settings that can switch the run's hooks off: %w", err)
 	}
-	return claudeHooksOffVerdict(boxFilesParse(res.Stdout), notes, skills), nil
+	files := boxFilesParse(res.Stdout)
+	return claudeHooksOffVerdict(files, ridden, skills), claudeHooksSwitchedOff(files, false), nil
 }
 
 // claudeHooksOffGate is the part of a run's script that, once its gates have

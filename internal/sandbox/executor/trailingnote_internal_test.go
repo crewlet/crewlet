@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -16,11 +17,16 @@ import (
 // TestATrailingNoteNoReplyFollowedIsHeldOnlyWhereAResumeHandsItBack, which
 // holds each answer to what its fixture states of its harness's resume.
 
-// ClaudeTrailingNoteHeld is whether a batch hook's pair, its token and its
-// context, holds its take with no reply after it.
+// ClaudeTrailingNoteHeld is whether the batch hook's pair, its token and its
+// context, that Claude Code 2.1.330 left when its run was stopped once the
+// note was handed over (testdata/claude/2.1.330/holdings/t1, measured: the
+// resume handed the note back), holds its take with no reply after it.
 func ClaudeTrailingNoteHeld(t *testing.T) bool {
-	got := rhRead(t, "2.1.322", true, rhChained(rhCall("x1"), rhPair(rhBatch, rhBatchFire, rhBatchTake)), rhAskBatch)
-	return slices.Contains(got.Held, rhBatchTake)
+	const take = "00000000-0000-4000-8000-0000000000a1"
+	got := rhRead(t, "2.1.330", false,
+		rhProbeWhole(t, "2.1.330/holdings/t1/projects/crewlet/5e55100a-0000-4000-8000-000000000161.jsonl"),
+		sandbox.AskedTake{Take: take, Boundary: types.SteerBoundaryToolBatch})
+	return slices.Contains(got.Held, take)
 }
 
 // CodexTrailingNoteHeld is whether a note the run's rollout records last, no

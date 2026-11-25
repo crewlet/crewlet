@@ -27,6 +27,16 @@ func hookContext(t *testing.T, text string) string {
 		`"content":[` + jsonText(t, text) + `]},"timestamp":"2026-10-30T12:00:03.000Z"}`
 }
 
+// hookSaid is the main thread's record of what the run's own hook said at
+// event, its answer's systemMessage, as Claude Code writes it just before the
+// firing's context (testdata/claude/2.1.330/holdings/n1, measured).
+func hookSaid(t *testing.T, event, systemMessage, at string) string {
+	t.Helper()
+	return `{"parentUuid":null,"isSidechain":false,"attachment":{"type":"hook_system_message","content":` +
+		jsonText(t, systemMessage) + `,"hookName":"` + event + `","toolUseID":"hook-1","hookEvent":"` + event +
+		`"},"type":"attachment","timestamp":"` + at + `"}`
+}
+
 // readClaudeRecords is the transcript a Claude Code session of these records
 // reads as.
 func readClaudeRecords(t *testing.T, record []string) []executor.TranscriptEntry {
@@ -108,8 +118,7 @@ func TestAHookLineNamingOnlyCallsIsALateCallEntry(t *testing.T) {
 	}
 	var record []string
 	for _, line := range lines {
-		record = append(record, `{"type":"system","subtype":"informational","content":`+
-			jsonText(t, "PostToolBatch says: crewlet: "+line+take)+`,"timestamp":"2026-10-30T12:00:03.100Z"}`)
+		record = append(record, hookSaid(t, "PostToolBatch", "crewlet: "+line+take, "2026-10-30T12:00:03.100Z"))
 	}
 	sameEntries(t, readClaudeRecords(t, record), []shown{
 		{kind: executor.EntryLateCall, text: lines[0]},
@@ -181,7 +190,8 @@ func TestAHookAnswerNamesWhatReachedTheRun(t *testing.T) {
 		if got := decodeClaude(line); got != "[steer] "+tc.said {
 			t.Errorf("%s: the live line reads %q, want %q", tc.name, got, "[steer] "+tc.said)
 		}
-		sameEntries(t, readClaudeRecords(t, []string{line}), []shown{{kind: tc.kind, text: tc.said}})
+		sameEntries(t, readClaudeRecords(t, []string{hookSaid(t, "PostToolBatch", out.SystemMessage,
+			"2026-10-30T12:00:03.100Z")}), []shown{{kind: tc.kind, text: tc.said}})
 	}
 }
 

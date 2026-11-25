@@ -20,16 +20,13 @@ import (
 // response's id, so the latest copy is the response, read once the next entry
 // begins.
 
-// geminiSnapshot opens the user entry a compression writes its summary in.
-// A COMPRESSION READS AS CLAUDE CODE'S COMPACTION DOES ([claudeReading]): every
-// entry before it stays where it was read, and its summary is [EntrySummary].
-// Gemini CLI 0.70.0 writes one in a single sync of its history
-// (updateMessagesFromHistory): the snapshot, its own "Got it" reply, copies of
-// the entries it kept under new ids, then one `$patch` (or `$rewindTo`) closing
-// the sync and naming the entries a resume drops, which stay on disk. Up to
-// that line it restates what was already read, never read again: the copies
+// A COMPRESSION READS AS CLAUDE CODE'S COMPACTION DOES ([claudeReading]):
+// every entry before it stays where it was read, and its summary, the user
+// entry its three lines name ([geminiCompressionWatch]), is [EntrySummary],
+// its first text a thought is not. The rest of the sync, up to the `$patch`
+// (or `$rewindTo`) closing it and naming the entries a resume drops, which
+// stay on disk, restates what was already read, never read again: its copies
 // would read the kept entries twice and confirm a note's one delivery as two.
-const geminiSnapshot = "<state_snapshot>"
 
 // geminiSessionContext opens the user entry Gemini CLI writes ahead of the
 // brief, its working directory and date: the harness's own words, never the
@@ -66,6 +63,7 @@ type geminiReading struct {
 	held        *geminiTurn
 	over, after *geminiTurn
 	user, sum   entryShape
+	compression geminiCompressionWatch
 }
 
 // geminiTurn is a response as shaped: its id and time, its words' entry (at
@@ -87,7 +85,8 @@ func (t *geminiTurn) reset(base int) {
 
 func (r *geminiReading) start() {
 	r.id, r.typ, r.stamp, r.patched = recordWord{}, "", "", false
-	r.firstSeen, r.snapshot = false, false
+	r.firstSeen = false
+	r.compression.next(r.lines)
 	over, after := r.b.seen, r.b.seen
 	if r.heldOn {
 		after = r.held.end
@@ -146,8 +145,10 @@ func (r *geminiReading) content(k jsonscan.Kind) error {
 	r.after.words.reset(r.after.words.base)
 	r.user.reset(r.user.base)
 	r.sum.reset(r.sum.base)
-	sinks := chatSinks{user: &r.user, own: geminiSessionContext, summary: &r.sum,
-		words: []*entryShape{&r.over.words, &r.after.words}}
+	sinks := chatSinks{user: &r.user, own: geminiSessionContext, words: []*entryShape{&r.over.words, &r.after.words}}
+	if r.compression.opens {
+		sinks.summary = &r.sum
+	}
 	return r.parts(k, &sinks)
 }
 
@@ -234,7 +235,7 @@ func (r *geminiReading) commit() error {
 		if err := r.flush(); err != nil {
 			return err
 		}
-		if r.snapshot {
+		if r.compression.summary(r.lines) {
 			// Whole: a heading inside a summary heads nothing.
 			r.restating = true
 			return r.b.commitThread(&r.sum, at)

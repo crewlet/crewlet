@@ -48,8 +48,8 @@ func (p Paths) CodexRepo() string { return p.WorkDir() + "/codex-repo" }
 func (p Paths) CodexRepoAgents() string { return p.WorkDir() + "/codex-repo-agents.md" }
 
 // CodexRepoSkills lists, a name a line, the repositories' skills a run copied
-// into [Paths.CodexSkills] ([codexCheckoutHome]), so the next run removes them and
-// none of the home's.
+// into [Paths.CodexSkills] ([codexCheckoutHome]), so the run's end removes them
+// and none of the home's, or the next run's gate where the run was killed first.
 func (p Paths) CodexRepoSkills() string { return p.WorkDir() + "/codex-repo-skills" }
 
 // CodexCapFired is the marker the note helper writes, before it interrupts the

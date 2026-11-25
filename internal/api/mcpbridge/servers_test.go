@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -135,14 +137,134 @@ func TestEachServerIsServedUnderItsOwnNameBeneathTheJob(t *testing.T) {
 	}
 }
 
+// THE ENGINE'S OWN SERVER LISTS NO NAME ANOTHER SERVER COULD SPELL. Qwen Code
+// 0.28.4 named a user server `crewlet_`'s tool `x` and a repository server
+// `crewlet__dup`'s tool `x` as the bridge's `_x` and `dup__x` (MEASURE-P3 N1,
+// N2), and a harness joining with `-` spells another server `crewlet-a`'s
+// tool `b` as a tool `a-b` of the bridge's. The job's endpoint lists none of
+// those, whoever registered them, but each under an alias of the grammar; a
+// seat's server lists its own as they are.
+//
+// Mutation: drop the job endpoint's aliasing, or apply it to every server.
+func TestTheEnginesOwnServerListsNoNameAnotherServerCouldSpell(t *testing.T) {
+	t.Parallel()
+	odd := []string{"_x", "dup__x", "a-b", "x_"}
+	reg := tools.NewRegistry()
+	for _, name := range append([]string{"read_page"}, odd...) {
+		if err := reg.Register(&stubTool{name: name}, tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register(%s): %v", name, err)
+		}
+	}
+	if err := reg.Register(&stubTool{name: "get-issue"}, tools.Origin("github")); err != nil {
+		t.Fatalf("Register(get-issue): %v", err)
+	}
+	f := openServers(t, tools.NewSurface("execute", reg.Snapshot(),
+		[]string{"read_page", "_x", "dup__x", "a-b", "x_", "get-issue"}).ForTurn(seatTurn()))
+	own, _ := listed(t, f.endpoint)
+	if len(own) != 1+len(odd) || !slices.Contains(own, "read_page") {
+		t.Errorf("the job's endpoint lists %v, want read_page and an alias of each of %v", own, odd)
+	}
+	for _, name := range own {
+		if !harnessprofile.BridgeToolName(name) || slices.Contains(odd, name) {
+			t.Errorf("the job's endpoint lists %q, a name another server could spell", name)
+		}
+	}
+	if github, _ := listed(t, mcpbridge.ServerURL(f.endpoint, "github")); !slices.Equal(github, []string{"get-issue"}) {
+		t.Errorf("github's endpoint lists %v, want its own tool as it is named", github)
+	}
+}
+
+// unseated is a surface that is not a seat's [*tools.Surface], whose opening
+// serves every tool as the engine's own ([mcpbridge.Servers]).
+type unseated struct{ *tools.Surface }
+
+// aliasSurface offers read_page and github's tools names, each tool's output
+// naming it, on a surface whose opening serves them all as the engine's own.
+func aliasSurface(t *testing.T, names ...string) mcpbridge.Surface {
+	t.Helper()
+	reg := tools.NewRegistry()
+	if err := reg.Register(&stubTool{name: "read_page"}, tools.OriginBuiltin); err != nil {
+		t.Fatalf("Register(read_page): %v", err)
+	}
+	for _, name := range names {
+		if err := reg.Register(&stubTool{name: name}, tools.Origin("github")); err != nil {
+			t.Fatalf("Register(%s): %v", name, err)
+		}
+	}
+	return unseated{tools.NewSurface("execute", reg.Snapshot(),
+		append([]string{"read_page"}, names...)).ForTurn(seatTurn())}
+}
+
+// openAliased opens a job over surface and answers the job's endpoint.
+func openAliased(t *testing.T, surface mcpbridge.Surface) string {
+	t.Helper()
+	return openServers(t, nil, func(s *mcpbridge.Session) { s.Surface = surface }).endpoint
+}
+
+// A TOOL THE ENGINE'S OWN SERVER CANNOT LIST UNDER ITS NAME IS OFFERED UNDER AN
+// ALIAS AND CALLABLE THROUGH IT, never dropped: a seat's MCP tool lands there
+// when the opening does not serve its server, and its name is known only once
+// that server lists, too late for config to refuse it. Two names that read
+// alike (`get-issue`, `get__issue`, beside a `get_issue`) take two aliases;
+// one too long is cut; a name the server can list is unchanged; and a tool's
+// alias is its name's alone, the same in an opening without the others.
+//
+// Mutation: drop a tool whose name fails the grammar, list it under its
+// sanitized name alone, or call the tool by its alias, and this goes red.
+func TestAToolTheEnginesServerCannotNameIsOfferedAndCalledUnderAnAlias(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("ab-", 20)
+	odd := []string{"get-issue", "get__issue", "a__b", long}
+	endpoint := openAliased(t, aliasSurface(t, append([]string{"get_issue"}, odd...)...))
+	own, _ := listed(t, endpoint)
+	if len(own) != 2+len(odd) || !slices.Contains(own, "read_page") || !slices.Contains(own, "get_issue") {
+		t.Fatalf("the job's endpoint lists %v, want read_page, get_issue and an alias of each of %v", own, odd)
+	}
+	sess := dial(t, endpoint)
+	reached := map[string]string{}
+	for _, name := range own {
+		if !harnessprofile.BridgeToolName(name) {
+			t.Errorf("the job's endpoint lists %q, outside the grammar", name)
+		}
+		res := callTool(t, sess, name, map[string]any{"id": 1})
+		tool, ok := strings.CutSuffix(text(res), " ok")
+		if res.IsError || !ok {
+			t.Errorf("a call on %q answered %q, want the tool's own answer", name, text(res))
+			continue
+		}
+		if prev, twice := reached[tool]; twice {
+			t.Errorf("%q and %q both reach %q", prev, name, tool)
+		}
+		reached[tool] = name
+	}
+	for _, tool := range append([]string{"read_page", "get_issue"}, odd...) {
+		alias, ok := reached[tool]
+		switch {
+		case !ok:
+			t.Errorf("no listed name reaches %q", tool)
+		case harnessprofile.BridgeToolName(tool) && alias != tool:
+			t.Errorf("%q is listed as %q, want its own name", tool, alias)
+		case strings.HasPrefix(tool, "get") && tool != "get_issue" && !strings.HasPrefix(alias, "get_issue_"):
+			t.Errorf("%q is listed as %q, want its words readable in front", tool, alias)
+		}
+	}
+	alone, _ := listed(t, openAliased(t, aliasSurface(t, "get-issue")))
+	if want := reached["get-issue"]; !slices.Contains(alone, want) {
+		t.Errorf("get-issue is listed as %q beside the others and among %v alone, want one alias for the name", want,
+			alone)
+	}
+}
+
 // A LAUNCH IS HANDED THE TOOLS THE ENGINE'S OWN SERVER LISTS, exactly as its
 // endpoint lists them as the run opens: a runner holds its harness's offer to
 // them, so a name the endpoint does not list would end a run nothing narrowed,
-// and one left out would let a setting take it away unseen. A harness loading
-// its skills itself is not listed the bridge's skill loader.
+// and one left out would let a setting take it away unseen; a tool it lists
+// under an alias is handed under the alias. A harness loading its skills
+// itself is not listed the bridge's skill loader.
 //
-// Mutation: hand every surface tool, the MCP servers' included, or keep the
-// skill loader for a harness loading its own, and this goes red.
+// Mutation: hand every surface tool, the MCP servers' included, hand a tool
+// under its own name where it is listed under an alias, or keep the skill
+// loader for a harness loading its own, and this goes red.
 func TestALaunchIsHandedTheToolsTheEnginesOwnServerLists(t *testing.T) {
 	t.Parallel()
 	for name, skills := range map[string]map[string]string{"skills of the bridge's": nil,
@@ -151,17 +273,19 @@ func TestALaunchIsHandedTheToolsTheEnginesOwnServerLists(t *testing.T) {
 			t.Parallel()
 			reg := tools.NewRegistry()
 			for tool, origin := range map[string]string{"read_page": tools.OriginBuiltin,
-				toolname.LoadToolSkill: tools.OriginBuiltin, "create_issue": tools.Origin("github")} {
+				toolname.LoadToolSkill: tools.OriginBuiltin, "create_issue": tools.Origin("github"),
+				"read-page": tools.OriginBuiltin} {
 				if err := reg.Register(&stubTool{name: tool}, origin); err != nil {
 					t.Fatalf("Register(%s): %v", tool, err)
 				}
 			}
 			surface := tools.NewSurface("execute", reg.Snapshot(),
-				[]string{"read_page", toolname.LoadToolSkill, "create_issue"}).ForTurn(seatTurn())
+				[]string{"read_page", toolname.LoadToolSkill, "create_issue", "read-page"}).ForTurn(seatTurn())
 			var session *mcpbridge.Session
 			f := openServers(t, surface, func(s *mcpbridge.Session) { s.Skills = skills; session = s })
 			own, _ := listed(t, f.endpoint)
-			if got := mcpbridge.Listed(session); !slices.Equal(got, own) || slices.Contains(got, "create_issue") {
+			if got := mcpbridge.Listed(session); !slices.Equal(got, own) || slices.Contains(got, "create_issue") ||
+				slices.Contains(got, "read-page") {
 				t.Errorf("Listed = %v, the engine's own endpoint lists %v", got, own)
 			}
 		})

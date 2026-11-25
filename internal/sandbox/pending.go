@@ -2825,6 +2825,13 @@ type PendingStore interface {
 	// [SessionStart.Valid] is an error.
 	MarkSessionStart(ctx context.Context, turnID, launch string, start SessionStart) (bool, error)
 
+	// MarkBridgeConnected records that the job named's harness connected its bridge
+	// ([LaunchRecord.BridgeConnected]), reporting whether this call recorded it. ONCE PER
+	// JOB; the next launch's job starts with nothing said. FALSE IS NOT AN ERROR: the
+	// record holds another job, says so already, or is gone. NO FENCE, like
+	// MarkSessionStart: a fact about the job.
+	MarkBridgeConnected(ctx context.Context, turnID, launch string) (bool, error)
+
 	// BindSession binds the session a minting harness's job reported to the job's record
 	// ([LaunchRecord.Minted]) and answers the record holding it. ONCE PER JOB: the same id
 	// again answers as bound; another, a job that continued its session reporting any id
@@ -3567,6 +3574,13 @@ type LaunchRecord struct {
 	// box ran ([PendingRun.SessionRan]).
 	SessionStart SessionStart `json:"session_start,omitempty"`
 
+	// BridgeConnected is whether the job's harness connected its bridge: listed the tools
+	// of the engine's own MCP server (internal/api/mcpbridge, connected.go), written once
+	// ([PendingStore.MarkBridgeConnected]) by whichever node served that list. ON THE ROW
+	// because the node collecting the job need not be the one its box dialled. Its
+	// collection fails a job that ended without it ([RunHandle.BridgeUnconnected]).
+	BridgeConnected bool `json:"bridge_connected,omitempty"`
+
 	// Minted is the session a minting harness's job reported and the coordinator bound to it
 	// ([PendingStore.BindSession]): once, a fresh id or the one its launch continued; the
 	// job's session wherever it is read ([PendingRun.SessionRan]). Empty until a report is
@@ -4022,5 +4036,6 @@ func (r PendingRun) Held(now time.Time) bool {
 // Handle is the job this row holds now, as every read of its box is handed it:
 // command and session.
 func (r PendingRun) Handle() RunHandle {
-	return RunHandle{CommandID: r.CommandID, SessionID: r.SessionID}
+	return RunHandle{CommandID: r.CommandID, SessionID: r.SessionID,
+		BridgeUnconnected: !r.Launch.BridgeConnected}
 }
