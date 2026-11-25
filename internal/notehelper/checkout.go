@@ -87,13 +87,13 @@ type launchConfig struct {
 
 // nestedConfig is what -config names for a nested adapter, written by
 // checkout-launch: the state directory, the working directory its checkouts
-// sit directly under, and the launch's spec; room, not on the wire, is the
+// sit directly under, and the launch's spec; firing, not on the wire, is the
 // firing's own bound where its adapter takes -room, in place of FiringLimit.
 type nestedConfig struct {
 	State   string `json:"state"`
 	Workdir string `json:"workdir"`
 	checkoutSpec
-	room *firingBound
+	firing *firingBound
 }
 
 // maxSkillDescription is the most characters of a skill's description a
@@ -311,7 +311,7 @@ const endedMarker = "ended"
 // what it left out, kept in [skippedLog] too.
 func handNested(c nestedConfig, stderr io.Writer) ([]handedCheckout, []string, error) {
 	said := &skips{stderr: stderr, keep: filepath.Join(c.State, skippedLog)}
-	firing := c.room
+	firing := c.firing
 	if firing == nil {
 		firing = &firingBound{left: math.MaxInt, count: byteCount}
 		if c.FiringLimit != nil {

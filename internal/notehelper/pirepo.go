@@ -24,7 +24,7 @@ func runPiNested(_ context.Context, f flags, _ io.Reader, stdout, stderr io.Writ
 	}
 	room := max(f.room, 0)
 	listings := min(maxListing, room)
-	c.room = &firingBound{left: room - listings, count: utf16Count}
+	c.firing = &firingBound{left: room - listings, count: utf16Count}
 	handed, skipped, err := handNested(c, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: handing a checkout's instructions: %v\n", err)
