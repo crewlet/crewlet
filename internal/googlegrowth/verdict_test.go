@@ -3,6 +3,9 @@ package googlegrowth_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/googlegrowth"
@@ -72,6 +75,36 @@ func TestADenialNamesItsPersonAndALapseNobody(t *testing.T) {
 	for i, s := range want {
 		if v.steps[i] != s || (s == growth.StepLapsed) != (v.answerers[i] == "") {
 			t.Errorf("answer %d recorded %s by %q", i, v.steps[i], v.answerers[i])
+		}
+	}
+}
+
+// A STEP THAT NEVER LEFT IS NEVER AN UNKNOWN OUTCOME: an answer lost before
+// the act's change was sent ([growth.ErrNotSent]) changed nothing, so it is
+// timed out where a deadline cut it (its context's, or a transport's own) and
+// the vendor's failing otherwise; the same loss once the change was sent may
+// have changed anything.
+//
+// Mutation: answer vendor_unavailable for every unsent loss, and a staged step
+// the apply bound cut reads as Google's failing.
+func TestAStepThatNeverLeftIsNeverAnUnknownOutcome(t *testing.T) {
+	t.Parallel()
+	lost := func(err error) error {
+		return &googlegrowth.CallError{Failure: growth.FailureUnknownOutcome, Err: fmt.Errorf("googleauth: %w", err)}
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want growth.Failure
+	}{
+		{"cut at its context's deadline", growth.NotSent(lost(context.DeadlineExceeded)), growth.FailureTimedOut},
+		{"cut at the transport's timeout", growth.NotSent(lost(&net.DNSError{Err: "i/o timeout", IsTimeout: true})),
+			growth.FailureTimedOut},
+		{"an answer that cannot be read", growth.NotSent(lost(io.ErrUnexpectedEOF)), growth.FailureVendorUnavailable},
+		{"sent, its answer cut at its deadline", lost(context.DeadlineExceeded), growth.FailureUnknownOutcome},
+	} {
+		if got := googlegrowth.StepFailure(tc.err); got != tc.want {
+			t.Errorf("a step %s is recorded %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }

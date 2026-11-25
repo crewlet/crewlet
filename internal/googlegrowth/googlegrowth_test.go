@@ -772,10 +772,12 @@ func TestAProductsLastCheckRunsUnderTheLease(t *testing.T) {
 // AN ACT IS NOT SENT UNTIL ITS REQUEST LEAVES, and sent once it has: a check
 // that failed before it, or a context that ended before the request was made,
 // answers the act not sent; a write Google took and whose answer was cut off
-// is not, since what it did is unknown.
+// is not, since what it did is unknown. A read again or a query's fill whose
+// answer was lost changed nothing, so it is never recorded as unknown.
 //
 // Mutation: drop failEarly's mark or the unsent mark on a context ended before
-// Do, or mark every failure, and this fails.
+// Do, mark every failure, or classify a failure before marking it, and this
+// fails.
 func TestAnActIsNotSentUntilItsRequestLeaves(t *testing.T) {
 	t.Parallel()
 	it := &item{name: "old", reads: make(chan struct{}, 8), release: make(chan struct{}), writing: make(chan struct{}, 1)}
@@ -801,6 +803,30 @@ func TestAnActIsNotSentUntilItsRequestLeaves(t *testing.T) {
 		Check: func(context.Context, googlegrowth.Held) error { end(); return nil }}, h.Binding)
 	if !errors.Is(err, growth.ErrNotSent) || !errors.Is(err, context.Canceled) {
 		t.Errorf("a context ended before the write's request = %v, want not sent", err)
+	}
+	// AN ANSWER LOST BEFORE THE WRITE (past the bound one call reads, or not
+	// decodable, as an AdMob target read fails) is the vendor failing to answer.
+	lost := &googlegrowth.CallError{Failure: growth.FailureUnknownOutcome,
+		Err: errors.New("decode the target: unexpected end of JSON input")}
+	filled := req
+	filled.Fill = func(context.Context, url.Values) (url.Values, error) { return nil, lost }
+	for i, tc := range []struct {
+		name  string
+		write googlegrowth.Write
+	}{
+		{"a read again", googlegrowth.Write{Req: req, Class: growth.ClassSpend,
+			Read: func(context.Context) ([]byte, error) { return nil, lost }}},
+		{"a query's fill", googlegrowth.Write{Req: filled, Class: growth.ClassSpend}},
+	} {
+		call.HeldCall = fmt.Sprintf("held-lost-%d", i)
+		_, err = w.client.Apply(t.Context(), call, tc.write, h.Binding)
+		w.audit.mu.Lock()
+		last := w.audit.recs[len(w.audit.recs)-1]
+		w.audit.mu.Unlock()
+		if !errors.Is(err, growth.ErrNotSent) || last.Failure != growth.FailureVendorUnavailable {
+			t.Errorf("%s whose answer was lost = %v, recorded %q, want not sent and vendor_unavailable", tc.name,
+				err, last.Failure)
+		}
 	}
 	it.mu.Lock()
 	writes := it.writes

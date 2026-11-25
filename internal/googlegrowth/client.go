@@ -139,7 +139,6 @@ func FailureOf(err error, write bool) growth.Failure {
 		}
 		return growth.FailureVendorRefused
 	}
-	var netErr net.Error
 	switch {
 	case Unsent(err) && errors.Is(err, context.DeadlineExceeded):
 		return growth.FailureTimedOut
@@ -147,12 +146,19 @@ func FailureOf(err error, write bool) growth.Failure {
 		return growth.FailureEngineError
 	case write:
 		return growth.FailureUnknownOutcome
-	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+	case timedOut(err):
 		return growth.FailureTimedOut
 	case errors.Is(err, googleauth.ErrTooLarge):
 		return growth.FailureUnknownOutcome
 	}
 	return growth.FailureVendorUnavailable
+}
+
+// timedOut reports a failure at a deadline: its context's, or a transport's
+// own timeout.
+func timedOut(err error) bool {
+	var netErr net.Error
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // Send makes req as handle's identity and answers Google's body. Its every
