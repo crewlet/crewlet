@@ -37,9 +37,9 @@ const readyLine = "crewlet-browser-ensure/1 ready helper=0123456789abcdef pin=0.
 // withheld one any reason the box prints with any of its causes; an unknown
 // key is ignored, and anything else is unreadable: bad_line, or no_line.
 //
-// Mutations, each red: accept a reason off the list; read the first line, not
-// the last; read past 4 KiB; let ready pass without build; a node grammar
-// with no prerelease's tag.
+// Mutations, each red: accept a reason off the list, or one only the engine
+// gives; read the first line, not the last; read past 4 KiB; let ready pass
+// without build; a node grammar with no prerelease's tag.
 func TestEnsureSpeaksOnlyItsClosedLines(t *testing.T) {
 	t.Parallel()
 	withheld := func(rest string) string { return "crewlet-browser-ensure/1 withheld " + rest }
@@ -83,8 +83,6 @@ func TestEnsureSpeaksOnlyItsClosedLines(t *testing.T) {
 		{name: "withheld without a cause", stdout: withheld("reason=chromium_missing"), unreadable: browser.CauseBadLine},
 		{name: "a reason off the list", stdout: withheld("reason=out_of_coffee cause=not_found"),
 			unreadable: browser.CauseBadLine},
-		{name: "a reason only the engine gives", stdout: withheld("reason=ensure_unreadable cause=no_line"),
-			unreadable: browser.CauseBadLine},
 		{name: "a cause of another reason", stdout: withheld("reason=chromium_missing cause=apparmor"),
 			unreadable: browser.CauseBadLine},
 		{name: "a cause no reason takes any more", stdout: withheld("reason=playwright_missing cause=not_placed"),
@@ -110,6 +108,19 @@ func TestEnsureSpeaksOnlyItsClosedLines(t *testing.T) {
 					stdout: withheld(fmt.Sprintf("reason=%s cause=%s", r, c)),
 					want:   boxhelper.Ensure{Verdict: browser.EnsureWithheld, Reason: r, Cause: c}})
 			}
+		}
+		// A REASON ONLY THE ENGINE GIVES, with each of its causes, or with a
+		// cause a box's reason takes where it takes none, as a line must carry.
+		if r.Printed() {
+			continue
+		}
+		causes := r.Causes()
+		if len(causes) == 0 {
+			causes = []browser.EnsureCause{browser.CauseNotFound}
+		}
+		for _, c := range causes {
+			rows = append(rows, row{name: fmt.Sprintf("the engine's %s %s", r, c),
+				stdout: withheld(fmt.Sprintf("reason=%s cause=%s", r, c)), unreadable: browser.CauseBadLine})
 		}
 	}
 	for _, tc := range rows {

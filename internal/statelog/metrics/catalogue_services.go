@@ -333,10 +333,10 @@ func serviceInstruments() []Instrument {
 			Shows: "Executor session captures kept trimmed, by the `harness` " +
 				"that wrote them: a pack past a kept session's bound (256 MiB " +
 				"of plaintext, or 48 MiB packed) kept only what the harness's " +
-				"resume loads, its record's first lines and everything from its " +
-				"newest compaction on, so Sessions and the seat's session reads no longer " +
-				"show the history before it. Counted once a capture lands; each " +
-				"take of one logs `executor_session_trimmed` with the record's " +
+				"resume loads, leaving out history from before its newest " +
+				"compaction that the resume does not read, so Sessions and the " +
+				"seat's session reads no longer show it. Counted once a capture " +
+				"lands; each take of one logs `executor_session_trimmed` with the " +
 				"bytes before the cut and kept. A trim is a keep, not a loss: a " +
 				"session still past the bound once trimmed is counted by " +
 				"`crewlet.executor.session.not_continued` as `too_large`. A " +
