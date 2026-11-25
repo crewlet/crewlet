@@ -332,6 +332,20 @@ providers:
       #                        image: "your-registry/harness:latest"
       #                        runtime: auto      # auto | docker | podman
       #                        run_args: ["--cpus", "2", "--memory", "4g"]
+      #
+      #                      It is also the one cell a seat's own browser
+      #                      runs in (role.sandbox.browser: true), on a Linux
+      #                      host whose Docker Engine or Podman shares its
+      #                      kernel with the boxes: every entry such a seat
+      #                      launches on names run_in: container, and the
+      #                      image carries Node 22 and Chromium
+      #                      (code-sandbox.md, recipe 3). Chromium keeps its
+      #                      own sandbox, which Docker's default seccomp
+      #                      profile refuses: give the box Playwright's
+      #                      profile, or else waive the sandbox:
+      #
+      #                        run_args: ["--security-opt", "seccomp=/etc/crewlet/playwright-seccomp.json"]
+      #                        chromium_sandbox: waived   # Chromium with --no-sandbox
       state_dir: "./nimbus-data/sandboxes"       # box directories; removed at teardown,
                                                  #   and one a crashed engine left is
                                                  #   reclaimed by its node
@@ -379,10 +393,12 @@ providers:
 # helper can run (claude-code or pi), here the seats' default.  It runs the
 # entry with the harness's own web tools off and no tool of its own, while
 # the seats keep theirs.  token_budget caps each person on top of the
-# company's own budget.  See docs/getting-started/configuration.md#ask-crewlet.
+# company's own budget; instructions shape how it writes for everybody.
+# See docs/getting-started/configuration.md#ask-crewlet.
 # assistant:
 #   model: default                  # or fleet:<key>, any member of a fleet
 #   token_budget: { day: 200000 }
+#   instructions: { length: brief }
 
 # Turn engine — executor/reviewer settings.  Includes the round-cap
 # extension judge for the first-turn onboarding pass: when the pass

@@ -142,6 +142,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	t.decidedBy(provider)
 	if history, historyErr := s.transcripts.Transcript(ctx, person.ID, r.Conversation); historyErr == nil {
 		t.seePerson(history.Messages, "", page)
+		t.question = questionOf(history.Messages, r.Turn)
 	}
 	t.derived = &Derivation{At: row.StartedAt, Name: "assistant_resume",
 		Identity: []string{r.Turn.String(), r.Proposal.String()}}

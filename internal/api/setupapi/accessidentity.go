@@ -288,7 +288,7 @@ func vendorFault(err error) bool {
 func IdentityVerdict(c seataccess.IdentityCheck, guide *seataccess.IdentityGuide) setup.Verdict {
 	v := setup.Verdict{Outcome: setup.VerifyRefused, Summary: c.Said}
 	switch c.Status {
-	case seataccess.IdentityReady, seataccess.IdentityReplacing, seataccess.IdentityCompanys:
+	case seataccess.IdentityReady, seataccess.IdentityUnchecked, seataccess.IdentityReplacing, seataccess.IdentityCompanys:
 		v.Outcome = setup.VerifyWorks
 	}
 	if guide != nil {
@@ -317,9 +317,9 @@ func IdentityVerdict(c seataccess.IdentityCheck, guide *seataccess.IdentityGuide
 		if guide != nil && checkID(read, guide.Checks) != "" {
 			continue
 		}
-		value := "Failed"
+		value := setup.PartFailed
 		if read.OK {
-			value = "Passed"
+			value = setup.PartPassed
 		}
 		if read.Said != "" {
 			value += ": " + strings.TrimSuffix(read.Said, ".")

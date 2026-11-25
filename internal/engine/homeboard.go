@@ -11,3 +11,12 @@ func HomeBoardToolDeps(e *Engine) builtin.HomeBoardDeps {
 	}
 	return builtin.HomeBoardDeps{Boards: e.backends.Fleet}
 }
+
+// InstructionsToolDeps is what a person saves their own Ask Crewlet
+// instructions through, beside their Home board ([HomeBoardToolDeps]).
+func InstructionsToolDeps(e *Engine) builtin.InstructionsDeps {
+	if e == nil || e.backends == nil || e.backends.Fleet == nil {
+		return builtin.InstructionsDeps{}
+	}
+	return builtin.InstructionsDeps{Store: e.backends.Fleet}
+}

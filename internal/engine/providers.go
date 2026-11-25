@@ -1,8 +1,7 @@
 // Package engine assembles one process's participation in a company: the
 // config, the org, the models, the tools, and the turn machinery between them.
-// It is the ENTANGLEMENT POINT: the hard passages are packages of their own
-// (internal/agent/inbox, the config plane), and what remains is the WIRING,
-// which concrete thing satisfies which seam.
+// It is the WIRING, which concrete thing satisfies which seam; the hard
+// passages are packages of their own (internal/agent/inbox, the config plane).
 //
 // Decided here because only this package holds their parts together: a turn's
 // charge to its item (worksubject.go, turnspend.go; ADR-0022); a person's note
@@ -266,18 +265,18 @@
 // # The model alarms' inputs
 //
 // Judged from the live nodes' status records, so every node answers alike; a
-// token's expiry from its snapshot ([Engine.storedAt]). A failed read carries
-// the last good one, and a live node's last record is kept while its presence
-// stands at that epoch ([coord.LiveNodeStatusesKept]), so a blip never clears
-// and re-raises an alarm; this node reads its own memory. The listing feeds
-// [mcpConditions].
+// token's expiry from its snapshot ([Engine.storedAt]). A failed read keeps
+// the last good one, and a live node its last record at its presence epoch
+// ([coord.LiveNodeStatusesKept]): a blip neither clears nor raises. This node
+// reads its own memory; the listing feeds [mcpConditions].
 //
-// # The runs waiting for an operator
+// # Whose alarm a status record carries
 //
 // A seat's node counts blocked resumes ([sandbox.Coordinator.ResumesBlocked])
-// into its status record, and every data node raises executor_resume_blocked
-// from the live records, since a satellite runs no alarm table; the model
-// alarms' keeping rules apply.
+// into its record; every data node raises executor_resume_blocked from the
+// live records, kept as above: the alarm is the run's. What a node measures
+// of itself ([statelog.LocalKinds]) it judges on its own table
+// ([Engine.startLocalAlarms]), a node without `data` included.
 //
 // # A note to a turn whose executor is out
 //

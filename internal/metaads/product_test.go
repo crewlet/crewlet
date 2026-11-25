@@ -19,6 +19,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/metaads"
@@ -222,16 +223,23 @@ func (f *meta) wrote() []string {
 type leases struct {
 	mu   sync.Mutex
 	held map[string]bool
+	// fail fails a lease under each prefix it names with its error.
+	fail map[string]error
 }
 
 func (l *leases) Hold(_ context.Context, resource string) (func(), error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	for prefix, err := range l.fail {
+		if strings.HasPrefix(resource, prefix) {
+			return nil, err
+		}
+	}
 	if l.held == nil {
 		l.held = map[string]bool{}
 	}
 	if l.held[resource] {
-		return nil, errors.New("held")
+		return nil, growth.ErrActHeld
 	}
 	l.held[resource] = true
 	return func() { l.mu.Lock(); delete(l.held, resource); l.mu.Unlock() }, nil
@@ -379,11 +387,12 @@ func resolver(values map[string]string) func(string) string {
 
 // fixture is a product over a fake Meta.
 type fixture struct {
-	f     *meta
-	p     *metaads.Product
-	audit *audit
-	ren   *renewals
-	doc   *config.Company
+	f      *meta
+	p      *metaads.Product
+	audit  *audit
+	ren    *renewals
+	doc    *config.Company
+	leases *leases
 }
 
 func newFixture(t *testing.T, level string, caps bool) *fixture {
@@ -391,11 +400,11 @@ func newFixture(t *testing.T, level string, caps bool) *fixture {
 	f := newMeta(t)
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	fx := &fixture{f: f, audit: &audit{t: t}, ren: &renewals{}, doc: company(level, caps)}
+	fx := &fixture{f: f, audit: &audit{t: t}, ren: &renewals{}, doc: company(level, caps), leases: &leases{}}
 	values := map[string]string{"${S}": appSecret, "${R}": readToken, "${O}": operateToken, "${A}": adminToken}
 	fx.p = metaads.New(metaads.Deps{Company: func() *config.Company { return fx.doc },
 		Resolve: resolver(values), HTTP: srv.Client(), Base: srv.URL, Audit: fx.audit,
-		Leases: &leases{}, Renewals: fx.ren, Now: func() time.Time { return now }})
+		Leases: fx.leases, Renewals: fx.ren, Now: func() time.Time { return now }})
 	return fx
 }
 
@@ -904,5 +913,42 @@ func TestThePassRaisesWhatAPersonMustFix(t *testing.T) {
 		!strings.Contains(kinds[integration.FindingGrantShort], "act_333") ||
 		!strings.Contains(kinds[integration.FindingGrantShort], "operate") {
 		t.Errorf("the pass raised %v", kinds)
+	}
+}
+
+// A META ADS ACT IS NOT SENT UNTIL ITS REQUEST LEAVES: an allowed raise whose
+// account's act lease, or whose spend guard's lease, the store could not take
+// sends nothing and says so beside the store's failure, never a refusal or an
+// unknown outcome.
+//
+// Mutation: drop failEarly's mark, or applySpend's for the spend guard, and
+// this fails.
+func TestAMetaAdsActIsNotSentUntilItsRequestLeaves(t *testing.T) {
+	t.Parallel()
+	unavailable := fmt.Errorf("engine: take the lease: %w", coord.ErrUnavailable)
+	for name, c := range map[string]struct{ prefix, held string }{
+		"the act's lease":         {"write/", "0190c4a2-0000-7000-8000-0000000000ab"},
+		"the spend guard's lease": {"spend/", "0190c4a2-0000-7000-8000-0000000000ac"},
+	} {
+		fx := newFixture(t, "operate", true)
+		raise := fx.call(metaads.ToolRaiseBudget, map[string]any{"level": "campaign", "id": "501",
+			"amount": "120.00", "reason": "scale"})
+		hold, err := fx.p.Prepare(context.Background(), raise)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fx.leases.mu.Lock()
+		fx.leases.fail = map[string]error{c.prefix: unavailable}
+		fx.leases.mu.Unlock()
+		raise.HeldCall, raise.Approver, raise.ID = c.held, "founder", ""
+		_, err = fx.p.Apply(context.Background(), raise, hold.Binding)
+		var r *growth.Refusal
+		if !errors.Is(err, growth.ErrNotSent) || !errors.Is(err, coord.ErrUnavailable) || errors.As(err, &r) ||
+			fx.f.objects["501"]["daily_budget"] == "12000" {
+			t.Errorf("%s the store could not take = %v, want not sent beside the store's failure", name, err)
+		}
+		if last := fx.audit.last(); last.step != growth.StepFailed {
+			t.Errorf("%s: the act's outcome is %+v, want failed", name, last)
+		}
 	}
 }

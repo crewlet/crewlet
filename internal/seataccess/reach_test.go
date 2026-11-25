@@ -39,8 +39,7 @@ func listingCompany() *config.Company {
 			Mattermost: &config.Mattermost{Provisioning: &config.MattermostProvisioning{Channels: []string{"ops"}}},
 			SSH: &config.SSH{Enabled: true, Hosts: []config.SSHHost{{ID: "api-1"}},
 				Provisioning: &config.SSHProvisioning{CertificateAuthority: "${SSH_CA}"}},
-			GoogleCloud: &config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{
-				Provisioner: "crewlet-provisioner@acme-identity.iam.gserviceaccount.com"}},
+			GoogleCloud:     &config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{IdentityProject: "acme-identity"}},
 			AppStoreConnect: &config.AppStoreConnect{Enabled: true},
 			AppleAds:        &config.AppleAds{Enabled: true, AdAccounts: []string{"4567"}},
 			MetaAds:         &config.MetaAds{Enabled: true, AdAccounts: []string{"act_1234"}},

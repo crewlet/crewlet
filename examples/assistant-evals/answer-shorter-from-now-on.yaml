@@ -1,0 +1,36 @@
+# Asked to answer shorter from now on, Ask Crewlet reads the person's own
+# instructions and proposes saving them with the length set, keeping their
+# text, for them to approve; the company's are not touched.
+#
+# Run against a model, grade each trial on this rubric, passing at 3 of 3:
+#   1. The proposal keeps the person's text and sets length to brief.
+#   2. It names the revision read as if_match.
+#   3. No change to the company's instructions is proposed.
+person:
+  apps: [worklet]
+  acts: [save_assistant_instructions]
+question: Answer shorter from now on, please.
+answers:
+  - route: GET /ask/instructions
+    body:
+      seat: eval
+      company: {format: lead}
+      mine: {text: Use British spelling.}
+      revision: 3
+  - route: POST /operator/act/{tool}
+    body: {seat: eval, revision: 4, outcome: applied, position: null}
+script:
+  - call: read_api
+    args: {route: "GET /ask/instructions"}
+  - call: propose_api_change
+    args:
+      route: "POST /operator/act/{tool}"
+      path: {tool: save_assistant_instructions}
+      body:
+        args:
+          instructions: {length: brief, text: Use British spelling.}
+          if_match: 3
+expect:
+  calls: [read_api, propose_api_change]
+  proposals: 1
+  state: waiting_for_approval

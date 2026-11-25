@@ -59,7 +59,7 @@ func TestAPersonalVerbWithNoHandleIsAboutTheCaller(t *testing.T) {
 	t.Parallel()
 	caller := iam.Principal{Kind: iam.KindSeat, Seat: "ana", Stage: iam.StageActive}
 	for _, name := range []string{"my_work", "mark_inbox", "set_pins", "mark_chat_read",
-		"save_home_board"} {
+		"save_home_board", "save_assistant_instructions"} {
 		got := subjectOf[name].objectFor(caller, nil)
 		if got.Owner != "ana" {
 			t.Errorf("%s with no argument is about %q, want the caller — a "+
@@ -164,6 +164,6 @@ func toolsWithArguments() []tools.Callable {
 		&listArtifactComments{}, &commentOnArtifact{}, &resolveArtifactComment{},
 		&editArtifactComment{}, &removeArtifactComment{},
 		&readArtifactData{}, &queryArtifactData{}, &writeArtifactData{}, &setArtifactSchema{},
-		&editMessage{}, &deleteMessage{}, &markChatRead{}, &saveHomeBoard{},
+		&editMessage{}, &deleteMessage{}, &markChatRead{}, &saveHomeBoard{}, &saveInstructions{},
 	}
 }

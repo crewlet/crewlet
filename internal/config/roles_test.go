@@ -145,6 +145,7 @@ roles:
       pause_ttl_seconds: 0
       env: {GITHUB_TOKEN: "${GH}"}
       mcp: {servers: [gitlab]}
+      browser: true
   - name: Junior
 `)
 	seat := cfg.Roles[0].Seat()
@@ -176,6 +177,10 @@ roles:
 	if got := seat.Sandbox.ConcurrentRuns(); got != 3 {
 		t.Fatalf("the seat's run cap = %d, want the 3 it names: the engine reads the runtime seat, "+
 			"so a cap the conversion drops is one no admission enforces", got)
+	}
+	if !seat.Sandbox.Browser {
+		t.Fatal("the seat's browser is gone: the engine reads the runtime seat, so a browser the " +
+			"conversion drops is one no launch readies")
 	}
 	if seat.MCPEnv["gitlab"]["GITLAB_TOKEN"] != "${GL_SWE}" {
 		t.Fatalf("mcp_env = %v", seat.MCPEnv)

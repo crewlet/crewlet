@@ -21,7 +21,7 @@ import (
 
 // A RUN WAITING FOR AN OPERATOR IS RAISED FROM THE STATUS RECORD OF THE NODE
 // HOLDING ITS SEAT, by every data node, whichever node holds it (the package
-// doc's "The runs waiting for an operator"). The reading sums the fleet's runs
+// doc's "Whose alarm a status record carries"). The reading sums the fleet's runs
 // and names the one waiting longest, by its seat, its holder, its condition
 // and how long. A live node whose record is not counted keeps its last word at
 // the same epoch, a failed listing stands on the last that answered, and a node

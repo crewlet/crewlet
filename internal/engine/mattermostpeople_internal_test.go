@@ -159,13 +159,13 @@ func TestTheMattermostPassReportsAPersonNobodyHolds(t *testing.T) {
 		in   setup.PassInput
 		// want is every kind the pass reports, in order: the return's own,
 		// the person's, then the access sync's (the company is not on
-		// per-seat access, so the sync reports leaving the accounts alone).
+		// per-seat access, so the sync reports leaving the accounts alone),
+		// which waits while the setup still needs its administrator token.
 		want []integration.FindingKind
 	}{{
 		name: "no administrator token",
 		want: []integration.FindingKind{
 			integration.FindingCredentialMissing, integration.FindingContactUnknown,
-			integration.FindingIdentityMissing,
 		},
 	}, {
 		// AN ADMINISTRATOR TOKEN AND A SINK, so the pass reaches the

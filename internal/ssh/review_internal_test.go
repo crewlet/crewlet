@@ -11,7 +11,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -132,28 +134,11 @@ func TestAScanStopsWhereNobodyAnswers(t *testing.T) {
 // of its own.
 func TestTheGateLogsOneLinePerCommand(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	logged := filepath.Join(dir, "logged")
-	logger := "#!/bin/sh\nfor a; do last=$a; done\nprintf '%s\\036' \"$last\" >> \"$LOGGED\"\n"
-	gate := filepath.Join(dir, "gate.sh")
-	for path, body := range map[string]string{filepath.Join(dir, "logger"): logger, gate: gateScript} {
-		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	run := func(env []string, args ...string) {
-		cmd := exec.CommandContext(t.Context(), "/bin/sh", append([]string{gate}, args...)...)
-		cmd.Env = append([]string{"PATH=" + dir + ":/usr/bin:/bin", "LOGGED=" + logged}, env...)
-		_ = cmd.Run()
-	}
+	g := newLoggedGate(t)
 	payload := base64.StdEncoding.EncodeToString([]byte("echo a\necho b"))
-	run(nil, "operate", payload)
-	run([]string{"SSH_ORIGINAL_COMMAND=uptime\nreboot"}, "read")
-	data, err := os.ReadFile(logged)
-	if err != nil {
-		t.Fatal(err)
-	}
-	records := strings.Split(strings.TrimSuffix(string(data), "\x1e"), "\x1e")
+	g.run(t, nil, 0, "operate", payload)
+	g.run(t, []string{"SSH_ORIGINAL_COMMAND=uptime\nreboot"}, GateRefused, "read")
+	records := g.records(t)
 	if len(records) != 2 || !strings.Contains(records[0], "cmd_b64="+payload) {
 		t.Fatalf("the gate logged %q", records)
 	}
@@ -161,6 +146,114 @@ func TestTheGateLogsOneLinePerCommand(t *testing.T) {
 		if strings.ContainsAny(r, "\r\n") {
 			t.Errorf("a log line carries a line break: %q", r)
 		}
+	}
+}
+
+// A PROGRAM A CASE WRITES RUNS THE MOMENT writeExecutable HANDS IT OVER, with
+// goroutines of this process forking beside it: a fork made while the file's
+// descriptor is open hands its child a copy, and Linux refuses to exec a file
+// held open for writing (ETXTBSY). The gate's say swallows that refusal from
+// its logger, so a gate case saw it only as a record missing.
+//
+// Mutation: take the fork lock out of writeExecutable and programs are refused.
+func TestAProgramACaseWritesRunsTheMomentItIsWritten(t *testing.T) {
+	t.Parallel()
+	stop := make(chan struct{})
+	var forkers sync.WaitGroup
+	for range 8 {
+		forkers.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = exec.Command("/bin/true").Run() //nolint:noctx // a fork, not a subject
+				}
+			}
+		})
+	}
+	t.Cleanup(func() { close(stop); forkers.Wait() })
+
+	var probes sync.WaitGroup
+	refused := make(chan error, 64)
+	for range 64 {
+		probes.Go(func() {
+			path := filepath.Join(t.TempDir(), "logger")
+			writeExecutable(t, path, "#!/bin/sh\nexit 0\n")
+			if err := exec.Command(path).Run(); err != nil { //nolint:noctx // the probe itself
+				refused <- err
+			}
+		})
+	}
+	probes.Wait()
+	close(refused)
+	if n := len(refused); n > 0 {
+		t.Fatalf("%d of 64 programs could not be run the moment they were written (%v); a "+
+			"gate case reads each as a command its gate never logged", n, <-refused)
+	}
+}
+
+// loggedGate is the gate in a directory of its own, with a logger on its PATH
+// that appends each record it is handed to a file, ended by a record separator.
+type loggedGate struct{ dir, gate, logged string }
+
+func newLoggedGate(t *testing.T) loggedGate {
+	t.Helper()
+	dir := t.TempDir()
+	g := loggedGate{dir: dir, gate: filepath.Join(dir, "gate.sh"), logged: filepath.Join(dir, "logged")}
+	if err := os.WriteFile(g.gate, []byte(gateScript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(dir, "logger"),
+		"#!/bin/sh\nfor a; do last=$a; done\nprintf '%s\\036' \"$last\" >> \"$LOGGED\"\n")
+	return g
+}
+
+// run runs the gate with args through /bin/sh, as sshd's forced command does,
+// and fails the case on any exit but want, naming what the gate said.
+func (g loggedGate) run(t *testing.T, env []string, want int, args ...string) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", append([]string{g.gate}, args...)...)
+	cmd.Env = append([]string{"PATH=" + g.dir + ":/usr/bin:/bin", "LOGGED=" + g.logged}, env...)
+	out, err := cmd.CombinedOutput()
+	code := 0
+	var exit *exec.ExitError
+	switch {
+	case errors.As(err, &exit):
+		code = exit.ExitCode()
+	case err != nil:
+		t.Fatalf("the gate %q could not run: %v", args, err)
+	}
+	if code != want {
+		t.Fatalf("the gate %q exited %d, want %d: %s", args, code, want, out)
+	}
+}
+
+// records is every record the gate's logger was handed, in order.
+func (g loggedGate) records(t *testing.T) []string {
+	t.Helper()
+	data, err := os.ReadFile(g.logged)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(data), "\x1e"), "\x1e")
+}
+
+// writeExecutable writes a program a case is about to exec, where no process
+// this one forks can still hold it open: a child forked while os.WriteFile's
+// descriptor is open inherits it until its own exec, and Linux refuses
+// (ETXTBSY) to exec a file held open for writing. A fork takes
+// syscall.ForkLock for writing, so holding it for reading keeps every fork out
+// of that window. Every program this package's cases exec goes through it.
+func writeExecutable(t *testing.T, path, script string) {
+	t.Helper()
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own program, to be run
+		t.Fatal(err)
 	}
 }
 
@@ -186,12 +279,12 @@ func TestTheGateTakesAProgramsBareNameAfterSudo(t *testing.T) {
 		t.Fatal("the gate's allowlist or exec line moved; this case no longer reads it")
 	}
 	script := filepath.Join(dir, "gate.sh")
-	logger := filepath.Join(dir, "logger")
-	for path, body := range map[string]string{allowlist: rules, script: gate, logger: "#!/bin/sh\nexit 0\n"} {
-		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+	for path, body := range map[string]string{allowlist: rules, script: gate} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
+	writeExecutable(t, filepath.Join(dir, "logger"), "#!/bin/sh\nexit 0\n")
 	read := func(line string) (string, int) {
 		cmd := exec.CommandContext(t.Context(), "/bin/sh", script, "read")
 		cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "SSH_ORIGINAL_COMMAND=" + line}

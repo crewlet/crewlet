@@ -1924,7 +1924,8 @@ func (w *Writer) decideAssigning(ctx context.Context, tx *sql.Tx, stamp statelog
 		return statelog.Decision{}, err
 	}
 	// A CREDENTIAL IS NOBODY'S INBOX: the record offers none as a recipient.
-	notify = notify.withoutCredentials()
+	// Then whether the owner made it, which only this writer knows.
+	notify = notify.withoutCredentials().ownership(w.Actor)
 	if err = notify.Validate(); err != nil {
 		return statelog.Decision{}, err
 	}

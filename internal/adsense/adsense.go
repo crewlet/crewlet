@@ -137,16 +137,12 @@ func init() {
 		Client: oauthClient})
 }
 
-// oauthClient is the company's own OAuth client as its block names it, false
-// where AdSense is off; on with no oauth block is a client with nothing set,
-// which the sign-in refuses by name.
+// oauthClient is the OAuth client AdSense signs in as (googleauth.SignInClient),
+// false where AdSense is off.
 func oauthClient(c *config.Company) (googleauth.ConsentClient, bool) {
 	b := c.Integrations.AdSense
 	if !b.GrowthEnabled() {
 		return googleauth.ConsentClient{}, false
 	}
-	if b.OAuth == nil {
-		return googleauth.ConsentClient{}, true
-	}
-	return googleauth.ConsentClient{ID: b.OAuth.ClientID, Secret: b.OAuth.ClientSecret}, true
+	return googleauth.SignInClient(c, b.OAuth), true
 }

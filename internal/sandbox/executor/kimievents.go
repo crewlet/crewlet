@@ -116,6 +116,8 @@ func decodeKimiFrame(line []byte) (kimiFrame, bool) {
 // steps; its window; and, after the script's mark ([kimiUsageMark]), the
 // run's own usage.
 type kimiEvents struct {
+	undecidedLines
+
 	sawLine, sawEvent bool
 
 	// answer is the text of the last step's assistant messages, step the
@@ -176,7 +178,20 @@ func (d *kimiEvents) Entries(end bool) []string {
 }
 
 // Skipped implements [Decoder].
-func (d *kimiEvents) Skipped(n int64, bound int) { d.transcript.skip(n, bound) }
+func (d *kimiEvents) Skipped(line LongLine) {
+	d.transcript.skip(line.Size, line.Bound)
+	switch lineType(line) {
+	case "turn.updated":
+		index, ok := windowInt(line.Head, "index", false)
+		if turn := windowField(line.Head, "turn_id", false); ok && turn != "" {
+			d.stepped(turn, kimiStep{Index: index})
+		} else {
+			d.undecided++
+		}
+	case "":
+		d.undecided++
+	}
+}
 
 // Line implements [Decoder].
 func (d *kimiEvents) Line(line []byte) {
@@ -383,6 +398,14 @@ func (d *kimiEvents) reportedWindow() int64 { return d.window }
 // Ended implements [Decoder]: a turn Kimi said ended, and the driver's
 // `crewlet.end`, printed once the session it drives went idle.
 func (d *kimiEvents) Ended() bool { return d.ended && d.turns > 0 }
+
+// Requests implements [Decoder]: the steps of every turn, one model request a
+// step ([kimiEvents.requests]).
+func (d *kimiEvents) Requests() int { return d.requests() }
+
+// InFlight implements [Decoder]: none, as Kimi Code's own step limit stops
+// before the next request (measured on 2.7.2: a cap of 3, 3 requests).
+func (d *kimiEvents) InFlight() int { return 0 }
 
 // Result implements [Decoder]: the answer, and how the run ended, off its last
 // turn and the driver's end.

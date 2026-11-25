@@ -36,28 +36,53 @@ import (
 // copies none), and Copied, the file listing each skill copied there;
 // Reserved, the tags no repository takes; ImportInstructions, for a harness
 // that reads its instruction files itself, each file named as an import in
-// place of its text ([rootImports]), Limit not applying.
+// place of its text ([rootImports]), Limit not applying; SkillSep, what joins
+// a copy's tag and skill ([skillName]); FiringLimit, the bound in bytes on
+// what one nested firing hands of all its checkouts' instructions, frames
+// counted, nil for none ([fitFiring]).
 type checkoutSpec struct {
 	Instructions       []instructionSlot `json:"instructions"`
 	Limit              *int              `json:"limit,omitempty"`
+	FiringLimit        *int              `json:"firingLimit,omitempty"`
 	SkillDirs          []skillDirSlot    `json:"skillDirs,omitempty"`
 	Skills             string            `json:"skills,omitempty"`
 	Copied             string            `json:"copied,omitempty"`
 	Reserved           []string          `json:"reserved,omitempty"`
 	ImportInstructions bool              `json:"importInstructions,omitempty"`
+	SkillSep           skillSep          `json:"skillSep,omitempty"`
+}
+
+// skillSep is what joins a copy's tag and skill: `:` (the zero value), or `-`
+// for a harness that lists `a:b` as `a-b` (Gemini CLI 0.70.0, measured), so a
+// home skill's name is compared as the harness lists it.
+type skillSep string
+
+// Valid reports whether s is a separator the helper names copies with.
+func (s skillSep) Valid() bool { return s == "" || s == ":" || s == "-" }
+
+// String is s as it joins a name.
+func (s skillSep) String() string {
+	if s == "" {
+		return ":"
+	}
+	return string(s)
 }
 
 // launchConfig is what -config names for checkout-launch: the run's checkout
 // state directory (the checkouts handed, the lock), the instruction file it
 // replaces with the launch's sections, the checkouts handed first, in order
-// (the repositories the run pushes to), the spec, and NestedSkillsOnly for a
+// (the repositories the run pushes to), the spec, NestedSkillsOnly for a
 // nested adapter that hands skills alone, whose spec then names no instruction
-// file to read. The working directory is the adapter's own.
+// file to read, and Roots, the file it lists each checkout handed's root in,
+// a line each, for a harness that reads their instructions itself where the
+// runner names them (Gemini CLI's --include-directories). The working
+// directory is the adapter's own.
 type launchConfig struct {
 	State            string   `json:"state"`
 	Agents           string   `json:"agents"`
 	First            []string `json:"first"`
 	NestedSkillsOnly bool     `json:"nestedSkillsOnly,omitempty"`
+	Roots            string   `json:"roots,omitempty"`
 	checkoutSpec
 }
 
@@ -120,8 +145,12 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = json.Unmarshal(raw, &c); err != nil {
 		return fmt.Errorf("the launch config: %w", err)
 	}
-	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) {
-		return errors.New("the launch config names no state, no instruction file, or a negative limit")
+	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) ||
+		(c.FiringLimit != nil && *c.FiringLimit < 0) {
+		return errors.New("the launch config names no state, no instruction file, or a negative limit or firingLimit")
+	}
+	if !c.SkillSep.Valid() {
+		return fmt.Errorf("the launch config's skillSep %q is neither %q nor %q", c.SkillSep, ":", "-")
 	}
 	work, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
@@ -133,14 +162,20 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = os.WriteFile(filepath.Join(c.State, "handed"), nil, 0o600); err != nil {
 		return err
 	}
-	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, &skips{stderr: stderr})
+	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, math.MaxInt, &skips{stderr: stderr})
 	if err != nil {
 		return err
 	}
-	var sections []string
+	var sections, roots []string
 	for _, h := range handed {
 		if h.text != "" {
 			sections = append(sections, "for `"+h.name+"` with root "+h.root+"\n\n"+h.text)
+		}
+		roots = append(roots, h.root+"\n")
+	}
+	if c.Roots != "" {
+		if err = os.WriteFile(c.Roots, []byte(strings.Join(roots, "")), 0o600); err != nil {
+			return err
 		}
 	}
 	if err = os.Remove(c.Agents); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -269,13 +304,42 @@ func endsCut(file *os.File, size int64) bool {
 // unlocked, and there a firing already past its check may still copy.
 const endedMarker = "ended"
 
-// handNested is a nested adapter's firing under c ([handCheckouts]): the
-// checkouts handed and what it left out, kept in [skippedLog] too.
+// handNested is a nested adapter's firing under c ([handCheckouts]), within
+// its spec's FiringLimit: the checkouts handed and what it left out, kept in
+// [skippedLog] too.
 func handNested(c nestedConfig, stderr io.Writer) ([]handedCheckout, []string, error) {
 	said := &skips{stderr: stderr, keep: filepath.Join(c.State, skippedLog)}
-	handed, err := handCheckouts(c.State, c.Workdir, nil, c.checkoutSpec, said)
+	firing := math.MaxInt
+	if c.FiringLimit != nil {
+		firing = *c.FiringLimit
+	}
+	handed, err := handCheckouts(c.State, c.Workdir, nil, c.checkoutSpec, firing, said)
 	return handed, said.lines, err
 }
+
+// fitFiring is parts within left, what is left of a firing's bound on its
+// instructions, each counted with its frame ([framedCost]): each part that
+// fits whole, in order, and the rest left out whole, each said by its path
+// for the model to read there, never cut, as a cut file reads as the whole.
+func fitFiring(parts []instructionPart, left *int, said *skips) []instructionPart {
+	var kept []instructionPart
+	for _, p := range parts {
+		if cost := framedCost(p); cost > *left {
+			said.say("the instruction file %s is left out: it passes what is left of the firing's bound on "+
+				"instructions; read it at that path", p.path)
+		} else {
+			*left -= cost
+			kept = append(kept, p)
+		}
+	}
+	return kept
+}
+
+// framedCost is what part p takes of a firing's bound: its text, its path
+// three times and 64 bytes, more than any adapter wraps a file in
+// (qwen-nested: the path twice and 47 bytes; a checkout's section header, its
+// root and 22 bytes, once per checkout), so the bound holds the answer whole.
+func framedCost(p instructionPart) int { return len(p.text) + 3*len(p.path) + 64 }
 
 // skippedListing is what a firing left out, as a nested adapter hands it to
 // the model, "" for nothing: a line each, so a model told of a repository's
@@ -354,10 +418,11 @@ func readNested(path string) (nestedConfig, error) {
 // takes a checkout whose skills alone pass it with those that fit, and one with
 // no skills is claimed whatever is left, in its order. The claims
 // are recorded in state before anything is handed: each one's instructions
-// within the harness's limit, as a session started in it reads them, and its
-// skills copied as `<tag>:<skill>` ([copyPlanned]). What it leaves out is
+// within the harness's limit, as a session started in it reads them, all of
+// theirs within firing ([fitFiring]), and its skills copied as
+// `<tag>:<skill>` ([copyPlanned]). What it leaves out is
 // said to said, and kept where said asks, under the lock.
-func handCheckouts(state, work string, first []string, spec checkoutSpec, said *skips) ([]handedCheckout, error) {
+func handCheckouts(state, work string, first []string, spec checkoutSpec, firing int, said *skips) ([]handedCheckout, error) {
 	lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -458,6 +523,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, said *
 			h.text = rootImports(root, spec.Instructions, said)
 		} else {
 			parts, _ := instructionParts(root, limit, spec.Instructions, said)
+			parts = fitFiring(parts, &firing, said)
 			h.text, h.parts = joinParts(parts), parts
 		}
 		for _, p := range plans[name] {

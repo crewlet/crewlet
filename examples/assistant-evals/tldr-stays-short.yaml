@@ -1,0 +1,50 @@
+# A question in three parts asked for a TL;DR is answered in a few lines, each
+# fact once, with no sections after it.
+#
+# Run against a model, grade each trial on this rubric, passing at 3 of 3:
+#   1. The answer is the TL;DR alone: no headings and nothing after it.
+#   2. It answers all three parts: what the task rests on, whether that still
+#      holds, and what finishing it changes.
+#   3. No fact is said twice.
+person:
+  apps: [worklet]
+page:
+  screen: item
+  title: ENG-41
+  params: {id: ENG-41}
+  query: {}
+  resources: [{kind: task, id: ENG-41}]
+  selection: {kind: task, id: ENG-41}
+  source_revision: url:9e4b2c11
+  accepts: []
+question: >-
+  What does ENG-41 rest on, does that still hold, and what would finishing it
+  change? Give me a TL;DR.
+answers:
+  - route: GET /worklet/{id}
+    body:
+      task:
+        id: 7d0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f
+        key: ENG-41
+        title: Serve versioned docs pages from the docs site
+        status: in_progress
+        description: >-
+          Route /(en|de)/docs/{version} to the docs site with an origin rule, on
+          the assumption that the zone is on the Pro plan, so the old Worker
+          route can be removed.
+      links:
+        - {kind: waiting_on, other: 5b7c9d1e-2f3a-4b5c-8d6e-7f8091a2b3c4, key: ENG-38, title: Upgrade the zone to Pro, status: done}
+        - {kind: linked, other: 6c8d0e2f-3a4b-4c5d-9e7f-8091a2b3c4d5, key: ENG-35, title: Worker route for docs, status: done}
+script:
+  - call: read_api
+    args: {route: "GET /worklet/{id}", path: {id: ENG-41}}
+  - say: >-
+      TL;DR: ENG-41 rests on the zone being on the Pro plan, which still holds
+      now that ENG-38 is done. Finishing it serves versioned docs through an
+      origin rule and lets the Worker route from ENG-35 be removed.
+expect:
+  calls: [read_api]
+  proposals: 0
+  state: completed
+  says: [ENG-38, Pro]
+  max_words: 60

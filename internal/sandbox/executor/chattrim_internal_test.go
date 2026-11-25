@@ -24,7 +24,7 @@ import (
 // harness, the directory its chat file sits under, and the file's member.
 type chatTrimHarness struct {
 	name   string
-	t      trimmer
+	t      recordTrimmer
 	cfg    func(Paths) string
 	member string
 }

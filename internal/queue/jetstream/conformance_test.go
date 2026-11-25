@@ -106,11 +106,10 @@ func testTimings(cfg Config) Config {
 	if cfg.FetchWait == 0 {
 		cfg.FetchWait = 25 * time.Millisecond
 	}
-	// 25 ms is what queuetest's return-order case stands on: a failure is
-	// returned with NakWithDelay and the consumer serves never-delivered mail
-	// meanwhile, so it comes back BEHIND it, while a hand-back is a plain Nak
-	// the broker redelivers before new mail. Held 100 of 100 each way, under
-	// CPU pressure too, at this value.
+	// 25 ms keeps the redelivery cases quick. queuetest's return-order cases
+	// do not stand on it: a failure or a pass goes back only once the loop
+	// holds the mail that waited ([attachment.sendSpaced]), whatever its
+	// backoff, and a hand-back is a plain Nak redelivered before new mail.
 	if cfg.NakDelay == 0 {
 		cfg.NakDelay = 25 * time.Millisecond
 	}

@@ -354,6 +354,7 @@ var subjectOf = map[string]subject{
 	// no handle. So is a Home board.
 	chatlet.MarkChatReadTool: {kind: authz.KindPerson},
 	SaveHomeBoardTool:        {kind: authz.KindPerson},
+	SaveInstructionsTool:     {kind: authz.KindPerson},
 }
 
 // ownBookkeeping are the tools whose every write is the CALLER'S OWN
@@ -370,6 +371,7 @@ var ownBookkeeping = map[string]bool{
 	ArtifactMarkInboxTool:    true,
 	chatlet.MarkChatReadTool: true,
 	SaveHomeBoardTool:        true,
+	SaveInstructionsTool:     true,
 }
 
 // OwnBookkeeping reports whether every write a tool makes is the caller's own

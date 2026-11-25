@@ -1,5 +1,6 @@
 /** The chunk of the Company and Settings screens, and their peeks. See `app/lazyScreen.ts`. */
 
+export { AskCrewletSettings } from "./AskCrewlet.tsx";
 export { Audit } from "./Audit.tsx";
 export { Backups } from "./Backups.tsx";
 export { DelegatedDecisions } from "./DelegatedDecisions.tsx";

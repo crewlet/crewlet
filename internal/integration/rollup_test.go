@@ -365,6 +365,30 @@ func TestTheDashboardGroupsSurfacesAsTheEngineDoes(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD NAMES EACH TOOL AS THE ENGINE DOES, so a place named off its own
+// page reads as its page does. Mutation: rename a tool on either side.
+func TestTheDashboardNamesEachToolAsTheEngineDoes(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "INTEGRATION_TOOL_NAMES")
+	if err != nil {
+		t.Fatalf("%v — this gate cannot run without the client's declaration", err)
+	}
+	keys, err := clientsource.Keys(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wantKeys, wantNames []string
+	for _, tool := range Tools {
+		wantKeys, wantNames = append(wantKeys, tool.Key), append(wantNames, tool.Name)
+	}
+	if !slices.Equal(keys, wantKeys) {
+		t.Errorf("INTEGRATION_TOOL_NAMES names the tools %v; the engine has %v", keys, wantKeys)
+	}
+	if got := clientsource.Strings(body); !slices.Equal(got, wantNames) {
+		t.Errorf("INTEGRATION_TOOL_NAMES calls them %v; the engine calls them %v", got, wantNames)
+	}
+}
+
 // THE DASHBOARD KNOWS EXACTLY THE STATES THE ROLL-UP SENDS. A state only the
 // dashboard knows is a branch that never runs; one only the engine sends is a
 // card drawn with no tone.

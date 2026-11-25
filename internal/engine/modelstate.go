@@ -69,7 +69,8 @@ func (e *Engine) modelStatus(ctx context.Context) []coord.ModelStatus {
 		row.HostLogin = e.hostLoginOf(key)
 		for _, l := range state.Limits {
 			row.Limits = append(row.Limits, coord.ModelLimit{Window: string(l.Window), Hours: l.Hours,
-				Model: l.Model, State: string(l.State), Used: l.Used, ResetsAt: l.ResetsAt, Seen: l.Seen})
+				Model: l.Model, State: string(l.State), Used: l.Used, ResetsAt: l.ResetsAt, Seen: l.Seen,
+				Read: l.Read})
 		}
 		rows = append(rows, row)
 	}

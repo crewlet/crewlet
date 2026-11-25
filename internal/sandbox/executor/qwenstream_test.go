@@ -216,8 +216,10 @@ func qwenBoxAt(t *testing.T, release, run string) (*executor.Runner, sandbox.San
 		t.Fatalf("Install: %v", err)
 	}
 	// The guard ([executor.QwenCode]'s script) finds nothing switched off:
-	// the stand-in plays the helper whole (guards_test.go runs the real one).
-	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\n[ \"$2\" = guard ] && exit 0\n"+run)
+	// the stand-in plays the helper whole (guards_test.go runs the real one),
+	// but for its `checkouts` mode, which the real node runs.
+	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\n[ \"$2\" = guard ] && exit 0\n"+
+		"[ \"$2\" = checkouts ] && exec "+shellword.Quote(geminiNode(t))+` "$@"`+"\n"+run)
 	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/qwen",
 		"#!/bin/sh\ncase \"$1\" in --version) echo "+shellword.Quote(release)+"; exit 0;; esac\nexit 2\n")
 	return runner, b
@@ -315,5 +317,30 @@ echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
 		if !strings.Contains(env, "\n"+kept) && !strings.HasPrefix(env, kept) {
 			t.Errorf("Qwen Code starts without %s, which the run was handed", strings.TrimSuffix(kept, "="))
 		}
+	}
+}
+
+// A QWEN SUBAGENT'S REQUEST IS THE RUN'S: its usage counts toward the run's
+// requests ([executor.Decoder.Requests]) as the main thread's does, while its
+// words stay out of the run's answer.
+//
+// Mutation: pass a subagent's update over before its usage is counted, and the
+// run counts one request of two.
+func TestAQwenSubagentsRequestIsTheRuns(t *testing.T) {
+	t.Parallel()
+	chunk := func(text, meta string) string {
+		return `{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk",` +
+			`"content":{"type":"text","text":"` + text + `"},"_meta":{` + meta + `"usage":{"inputTokens":10,"outputTokens":2}}}}}`
+	}
+	dec := executor.QwenCode{}.Events()
+	for _, l := range []string{
+		chunk("SUB WORDS", `"parentToolCallId":"call_1",`),
+		chunk("MAIN ANSWER", ``),
+		`{"type":"crewlet_qwen_end","stop_reason":"end_turn"}`,
+	} {
+		dec.Line([]byte(l))
+	}
+	if res := dec.Result(); dec.Requests() != 2 || res.Text != "MAIN ANSWER" {
+		t.Fatalf("requests %d, answer %q; want 2 and the main thread's words alone", dec.Requests(), res.Text)
 	}
 }

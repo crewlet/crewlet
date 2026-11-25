@@ -115,5 +115,5 @@ func shortenDuties(ctx context.Context, t *testing.T, js jetstream.JetStream, s 
 	if err != nil {
 		t.Fatalf("address the duty bucket's leader: %v", err)
 	}
-	s.duties = &lane{kv: settled(js, bucket, InProcess, undeclaredHolding), read: read, stream: facts.stream, maxTTL: coord.MaxDutyTTL}
+	s.duties = &lane{kv: settled(js, bucket, InProcess, leaseHolding), read: read, stream: facts.stream, maxTTL: coord.MaxDutyTTL}
 }

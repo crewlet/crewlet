@@ -66,3 +66,9 @@ func SetupProbes() map[integration.Kind]setup.Probe {
 		integration.KindAdSense:         adsense.Probe(nil),
 	}
 }
+
+// SetupDrawers is which integration redraws a live view from what its form
+// holds: what answers POST /setup/integrations/{kind}/draw.
+func SetupDrawers() map[integration.Kind]setup.Drawer {
+	return map[integration.Kind]setup.Drawer{integration.KindGoogleCloud: googlecloud.Draw}
+}

@@ -3,8 +3,10 @@ package admob
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
@@ -71,15 +73,23 @@ func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess
 	if in.Config == nil || !in.Config.Integrations.AdMob.GrowthEnabled() {
 		return nil, fmt.Errorf("admob: %w: integrations.admob is off", integration.ErrNotConfigured)
 	}
-	return &accessSession{company: in.Config}, nil
+	return &accessSession{company: in.Config, tokens: in.Tokens}, nil
 }
 
-type accessSession struct{ company *config.Company }
+// accessSession reads the company document, and lists the accounts the
+// company's sign-in reaches with the tokens the engine issues.
+type accessSession struct {
+	company *config.Company
+	tokens  seataccess.IssuedTokens
+}
 
-// Options are the three levels; the accounts are the document's
-// ([accessVendor.Reach]), which [seataccess.ReadOptions] applies.
-func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
-	return seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane)}, nil
+// Options are the three levels and the publisher accounts the company's
+// sign-in lists; the reach is the document's ([accessVendor.Reach]), which
+// [seataccess.ReadOptions] applies.
+func (s *accessSession) Options(ctx context.Context, lane seataccess.Lane) (seataccess.Options, error) {
+	return googlegrowth.GrantOptions(ctx, googlegrowth.Granted{Product: Kind, Lane: lane,
+		Levels: accessVendor{}.FixedLevels(lane), Name: "AdMob", Entries: "publisher accounts",
+		Typed: config.GooglePublisherPattern, List: listAccounts}, s.tokens), nil
 }
 
 // Observe is each seat's setting in the document, which there is nothing
@@ -105,4 +115,22 @@ func (s *accessSession) Observe(_ context.Context, in seataccess.ObserveInput) (
 func (*accessSession) Apply(_ context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	return seataccess.StepResult{}, fmt.Errorf("admob: no step %s exists for %s: access is the document alone",
 		in.Step.Op, in.Seat.Handle)
+}
+
+// listAccounts is every publisher account the token reaches. AdMob names
+// none, so each is offered by its publisher ID.
+func listAccounts(ctx context.Context, in googlegrowth.Lister) ([]googlegrowth.Listed, error) {
+	var page struct {
+		Account []struct {
+			PublisherID string `json:"publisherId"`
+		} `json:"account"`
+	}
+	if err := in.Send.Do(ctx, http.MethodGet, api+"/v1/accounts", in.Token, nil, &page); err != nil {
+		return nil, err
+	}
+	out := make([]googlegrowth.Listed, 0, len(page.Account))
+	for _, a := range page.Account {
+		out = append(out, googlegrowth.Listed{ID: a.PublisherID})
+	}
+	return out, nil
 }

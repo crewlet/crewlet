@@ -436,22 +436,22 @@ func TestAContinuedLaunchIsHeldToItsSessionsFloor(t *testing.T) {
 	for name, inPlace := range map[string]bool{"the turn's kept session": false, "its own in its box": true} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			// A DAY OF 100000 WITH 70000 SPENT: room for a fresh launch (the
-			// static floor, 25000, beside its short brief), and none for a
-			// session that sends 40000 first.
-			k := newKeptLaunch(t, 40000, 100000, 70000)
+			// A DAY OF 100000 WITH 30000 SPENT: room for a fresh launch (the
+			// static floor, 65000, beside its short brief), and none for a
+			// session that sends 80000 first.
+			k := newKeptLaunch(t, 80000, 100000, 30000)
 			basis := k.l.ProbeSession(k.ctx)
 			var continued *runner.Continuation
 			if inPlace {
-				basis = runner.SessionBasis{CopyContext: 40000}
-				continued = &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000}
+				basis = runner.SessionBasis{CopyContext: 80000}
+				continued = &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 80000}
 				k.claimed(t)
 			}
 			_, err := k.relaunch(t, basis, continued)
 			var refused *floorRefusal
 			if !errors.Is(err, toolloop.ErrBudgetExhausted) || !errors.As(err, &refused) ||
-				refused.floor.context != 40000 {
-				t.Fatalf("a launch continuing a 40000-token session with 30000 left = %v, want a budget "+
+				refused.floor.context != 80000 {
+				t.Fatalf("a launch continuing an 80000-token session with 70000 left = %v, want a budget "+
 					"refusal on the session's floor", err)
 			}
 			held := k.e.heldByBudget(k.ctx, k.l.company, k.l.seat.Handle(), err)
@@ -900,7 +900,7 @@ func TestARelaunchsProbeAsksEveryMemberOfTheChain(t *testing.T) {
 // a floor its run never needed.
 func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
 	t.Parallel()
-	k := newKeptLaunch(t, 40000, 100000, 70000)
+	k := newKeptLaunch(t, 80000, 100000, 30000)
 	basis := k.l.ProbeSession(k.ctx)
 	if !basis.Continues() || basis.Harness != "claude-code" {
 		t.Fatalf("the probe answered %+v, want the kept Claude Code session", basis)
@@ -922,13 +922,13 @@ func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
 
 	// AND THE JOB'S OWN SESSION IN ITS BOX, which a member whose run lands in
 	// another cell cannot continue there: a box lives in one cell's backend.
-	inBox := newKeptLaunch(t, 40000, 100000, 70000)
+	inBox := newKeptLaunch(t, 80000, 100000, 30000)
 	inBox.claimed(t)
 	member := inBox.l.company.Config.Providers.LLM["api"]
 	member.RunIn = config.Placement(sandbox.Container)
 	inBox.l.company.Config.Providers.LLM["api"] = member
 	decided, err = inBox.relaunch(t, runner.SessionBasis{
-		CopyContext: 40000}, &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
+		CopyContext: 80000}, &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 80000})
 	if err != nil {
 		t.Fatalf("a launch whose member cannot continue in the job's box: %v, want it launched on its fresh "+
 			"brief's floor", err)
@@ -950,10 +950,10 @@ func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
 // the relaunch is refused below a floor its run never needs.
 func TestABoxOnAnotherNodesHostAddsNothingToALaunchsFloor(t *testing.T) {
 	t.Parallel()
-	// A DAY OF 100000 WITH 70000 SPENT: room for a fresh launch (the static
-	// floor, 25000, beside its short brief), and none for the box's session,
-	// which sends 40000 first.
-	k := newKeptLaunch(t, 40000, 100000, 70000)
+	// A DAY OF 100000 WITH 30000 SPENT: room for a fresh launch (the static
+	// floor, 65000, beside its short brief), and none for the box's session,
+	// which sends 80000 first.
+	k := newKeptLaunch(t, 80000, 100000, 30000)
 	k.claimed(t)
 	// THE SEAT MOVED: this node is node-b, whose coordinator launches here,
 	// and the job's direct box is on the host of the node that launched it.
@@ -969,8 +969,8 @@ func TestABoxOnAnotherNodesHostAddsNothingToALaunchsFloor(t *testing.T) {
 	t.Cleanup(moved.Stop)
 	k.e.useSandbox(rt.pending, moved)
 	k.e.id = "node-b"
-	decided, err := k.relaunch(t, runner.SessionBasis{CopyContext: 40000},
-		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
+	decided, err := k.relaunch(t, runner.SessionBasis{CopyContext: 80000},
+		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 80000})
 	if err != nil {
 		t.Fatalf("a relaunch on another node than its job's box's: %v, want it launched on its fresh brief's "+
 			"floor", err)
@@ -1003,15 +1003,15 @@ func (unreadRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error)
 // and the launch goes out on its fresh brief's floor.
 func TestAJobsBoxWhoseRecordCannotBeReadHoldsTheLaunchToItsSession(t *testing.T) {
 	t.Parallel()
-	k := newKeptLaunch(t, 40000, 100000, 70000)
+	k := newKeptLaunch(t, 80000, 100000, 30000)
 	k.claimed(t)
 	rt := k.e.sandbox.Load()
 	k.e.useSandbox(unreadRuns{PendingStore: rt.pending}, rt.coordinator)
-	_, err := k.relaunch(t, runner.SessionBasis{CopyContext: 40000},
-		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
+	_, err := k.relaunch(t, runner.SessionBasis{CopyContext: 80000},
+		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 80000})
 	var refused *floorRefusal
 	if !errors.Is(err, toolloop.ErrBudgetExhausted) || !errors.As(err, &refused) ||
-		refused.floor.context != 40000 {
+		refused.floor.context != 80000 {
 		t.Fatalf("a relaunch whose job's record cannot be read = %v, want a budget refusal on the box "+
 			"session's floor", err)
 	}

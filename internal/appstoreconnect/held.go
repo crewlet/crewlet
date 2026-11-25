@@ -262,9 +262,9 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 	defer cancel()
 	b, err := p.beforeOf(act, m)
 	if err != nil {
-		rec.Failure = failureOf(err)
+		rec.Failure = earlyFailure(err)
 		p.note(ctx, growth.StepFailed, rec)
-		return nil, said(err)
+		return nil, growth.NotSent(said(err))
 	}
 	rec.Before = b.digest
 	if !growth.BindingHolds(approved, binding(m, b)) {
@@ -278,6 +278,9 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 	if err != nil {
 		rec.Failure = writeFailure(err)
 		p.note(ctx, growth.StepFailed, rec)
+		if errors.Is(err, errUnsent) {
+			return nil, growth.NotSent(said(err))
+		}
 		return nil, said(err)
 	}
 	rec.Changes = recordChanges(changesOf(m, b), m.class == growth.ClassPublic)
@@ -299,8 +302,11 @@ func (p *Product) hold(ctx context.Context, resource string) (func(), error) {
 		return nil, growth.Refuse(growth.RefusedUnavailable, "this node cannot hold an act's lease, so nothing was sent.")
 	}
 	release, err := p.deps.Leases.Hold(ctx, resource)
-	if err != nil {
+	switch {
+	case errors.Is(err, growth.ErrActHeld):
 		return nil, growth.Refuse(growth.RefusedUnavailable, "another act on the same app is being made; nothing was sent. Call again.")
+	case err != nil:
+		return nil, fmt.Errorf("appstoreconnect: hold the app's act lease: %w", err)
 	}
 	return release, nil
 }
@@ -349,17 +355,20 @@ func (p *Product) connectionOf(args map[string]any) string {
 }
 
 // failEarly records the failed outcome of an allowed held call that ended
-// before its request was sent, and answers err as the agent is told it.
+// before its request was sent, and answers err as the agent is told it,
+// marked so ([growth.NotSent]).
 func (p *Product) failEarly(ctx context.Context, held bool, rec growth.Record, err error) error {
 	if held {
 		rec.Failure = earlyFailure(err)
 		p.note(ctx, growth.StepFailed, rec)
 	}
-	return said(err)
+	return growth.NotSent(said(err))
 }
 
-// earlyFailure is why an allowed call ended before its request was sent: the
-// seat's access lowered, Apple's refusal of a read, or the engine's own.
+// earlyFailure is why an act ended before its write was sent: the seat's
+// access lowered, Apple's refusal of a read, its deadline, or the engine's
+// own. A read whose answer was lost sent no write, so it is never an unknown
+// outcome here.
 func earlyFailure(err error) growth.Failure {
 	var refused *growth.Refusal
 	var apiErr *APIError
