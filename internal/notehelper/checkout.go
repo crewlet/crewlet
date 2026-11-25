@@ -178,11 +178,13 @@ const maxSkippedLog = 64 << 10
 const skippedCut = "notehelper: more was left out than the run keeps; the rest is not listed\n"
 
 // skips is what a firing left out, a line each naming the checkout, the
-// skill or tree, and why: said on stderr as it is found, held for the
-// firing's answer ([skippedListing]), and, where keep names a file, appended
-// to it under state's lock ([handCheckouts]) for the run's end. A checkout
-// that waits for a later firing's room is said on stderr alone: it is handed
-// then, never left out.
+// skill or tree, and why: held for the firing's answer ([skippedListing]),
+// and, where keep names a file, appended to it under state's lock
+// ([handCheckouts]) for the run's end, else said on stderr as it is found.
+// One place each: a runner that prints the log and passes a firing's stderr
+// on (Pi's) says each line once, and the helper's own trouble stays on
+// stderr. A checkout that waits for a later firing's room is said on stderr
+// alone: it is handed then, never left out.
 type skips struct {
 	stderr io.Writer
 	keep   string
@@ -193,7 +195,9 @@ type skips struct {
 func (s *skips) say(format string, args ...any) {
 	line := fmt.Sprintf(format, args...)
 	s.lines = append(s.lines, line)
-	fmt.Fprintf(s.stderr, "notehelper: %s\n", line)
+	if s.keep == "" {
+		fmt.Fprintf(s.stderr, "notehelper: %s\n", line)
+	}
 }
 
 // sayAll says each of lines ([skips.say]).
@@ -254,9 +258,11 @@ func endsCut(file *os.File, size int64) bool {
 
 // endedMarker is the file under a run's checkout state its runner's restore
 // writes once the harness has stopped (internal/sandbox/executor's
-// checkoutHome.restore): a firing still running then, orphaned by the
-// harness's end, claims nothing, so nothing is copied after the restore
-// removed the run's copies.
+// checkoutHome.restore), under state's lock, which a firing holds for all
+// its work ([handCheckouts]): one that began finishes first, and one after,
+// orphaned by the harness's end, claims nothing, so nothing is copied after
+// the restore removed the run's copies. A box without flock(1) writes it
+// unlocked, and there a firing already past its check may still copy.
 const endedMarker = "ended"
 
 // handNested is a nested adapter's firing under c ([handCheckouts]): the

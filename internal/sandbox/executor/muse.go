@@ -3,9 +3,8 @@ package executor
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -47,6 +46,7 @@ var (
 	_ artifactDirHolder = Muse{}
 	_ inPlaceGate       = Muse{}
 	_ sessionJudge      = Muse{}
+	_ trimmer           = Muse{}
 )
 
 // NewMuse returns the runner.
@@ -161,7 +161,7 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	if req.Limits.MaxTurns > 0 {
 		line(`printf '%%s\n' %s`, q(fmt.Sprintf(`{"payload_type":%q,"turns":%d}`, museCapMark, req.Limits.MaxTurns)))
 	}
-	b.WriteString(museSessionGate(session, paths, req.FreshWiring != nil))
+	b.WriteString(museSessionGate(session, paths, freshSessionWiring(req, session) != nil))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
 	b.WriteString(museWiring(paths))
@@ -208,7 +208,7 @@ func museGuard(paths Paths, own []string) string {
 	settings := q(paths.MuseSettings())
 	var names []string
 	for _, name := range own {
-		if len(name)+len("-")+museNonceLen <= museServerNameShown {
+		if len(name)+len("-")+sessionNonceLen <= museServerNameShown {
 			names = append(names, q(name)+"-??????")
 		}
 	}
@@ -373,12 +373,12 @@ func museChildUsage(paths Paths) (before, after string) {
 // museArchiveFormat is the layout a Muse Code run packs its session in
 // ([musePack]) and the one it restores ([museSessionGate]): one gzipped tar
 // of members named from [Paths.MuseSessions] down,
-// `<YYYY>/<MM>/<DD>/<session>/`: its session.jsonl, its subagents' records
-// (subagent/) and its tool outputs (tool-outputs/), which a resume takes up
-// whole from any home's data directory (measured on 1.4.25). Never cron.db,
-// a binary SQLite file the archive's text scrub would corrupt, nor the cli
-// log: Muse writes both afresh on a resume (measured). A change is a new
-// format.
+// `<YYYY>/<MM>/<DD>/<session>/`: its session.jsonl (cut past the bound,
+// [Muse.trimRecord]), its subagents' records (subagent/) and its tool outputs
+// (tool-outputs/), which a resume takes up from any home's data directory
+// (measured on 1.4.25). Never cron.db, a binary SQLite file the archive's text
+// scrub would corrupt, nor the cli log: Muse writes both afresh on a resume
+// (measured). A change is a new format.
 const museArchiveFormat = 1
 
 // ArchiveFormat is the layout a Muse Code run packs its session in ([carrier]).
@@ -449,17 +449,27 @@ func (Muse) meter(context.Context, io.Reader, string, string, *passBudget) (mete
 }
 
 // museCapture is the part of a run's script that packs its session once its
-// harness has exited ([musePack]).
+// harness has exited ([musePack]), trimmed by the box's bare release
+// ([trimRelVar], read off v as [releaseOf] reads it).
 func museCapture(paths Paths) string {
-	return musePack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()})
+	return bareReleaseShell(trimRelVar) + musePack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()})
 }
 
-// musePack packs the session s names into at.staged and moves it over
-// at.dest, its digest kept ([packDigest]): the members [museArchiveFormat]
-// names, its record first. A pack beside a working harness is held to
-// [claudeHeldTar]'s rule, whose lists catch a file rewritten as tar reads it
-// and which reads the first member as the session's transcript.
-func musePack(paths Paths, at packAt) string {
+// musePack is ONE PACK, the run's end's, a pack on demand's and a save's, at
+// the bounds a take keeps ([trimAt]): [musePackAt].
+func musePack(paths Paths, at packAt) string { return musePackAt(paths, at, trimAt) }
+
+// musePackedRecord is a pack's record, the first of its members, named from
+// [Paths.MuseSessions] down: a shell word.
+const musePackedRecord = `"$e/session.jsonl"`
+
+// musePackAt packs the session s names into at.staged and moves it over
+// at.dest, its digest kept ([packDigest]) and its trim past trim said beside
+// it ([trimTar], [trimMarked]): the members [museArchiveFormat] names, its
+// record first and the only one a trim cuts. A pack beside a working harness
+// is held to [claudeHeldTar]'s rule, whose lists catch a file rewritten as tar
+// reads it and which reads the first member as the session's transcript.
+func musePackAt(paths Paths, at packAt, trim trimPoints) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
@@ -467,15 +477,17 @@ func musePack(paths Paths, at packAt) string {
 	b.WriteString(museFind(paths))
 	line(`if [ -n "$x" ]; then`)
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
-	line(`    set -- "$e/session.jsonl"; for y in subagent tool-outputs; do [ ! -d "$x/$y" ] || [ -L "$x/$y" ] || set -- "$@" "$e/$y"; done`)
+	line(`    set -- %s; for y in subagent tool-outputs; do [ ! -d "$x/$y" ] || [ -L "$x/$y" ] || set -- "$@" "$e/$y"; done`,
+		musePackedRecord)
 	tar := fmt.Sprintf(`{ tar -czf %s -C %s "$@" < /dev/null > /dev/null 2> %s; t=$?; [ "$t" = 0 ] || { [ "$t" = 1 ] && grep -q 'changed as we read it' %s; }; }`,
 		q(at.staged+"/capture"), q(sessions), q(at.staged+"/error"), q(at.staged+"/error"))
 	if at.working {
 		tar = claudeHeldTar(sessions, at.staged)
 	}
-	line(`    rm -rf %s; if mkdir -p %s && %s && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(at.staged), q(at.staged), tar, packDigest(paths, "s", at.staged), q(at.staged+"/capture"), q(at.dest),
-		q(at.staged+"/error"))
+	tar = trimTar(Muse{}, trim, q(sessions), musePackedRecord, at.staged, tar)
+	line(`    rm -rf %s; if mkdir -p %s && %s && %s && %s && mv -f %s %s; then packed=1; %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(at.staged), q(at.staged), tar, packDigest(paths, "s", at.staged), trimUnmark(at.dest),
+		q(at.staged+"/capture"), q(at.dest), trimMarked(at.dest), q(at.staged+"/error"))
 	line(`    rm -rf %s`, q(at.staged))
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)
@@ -804,25 +816,13 @@ func museMCP(s sandbox.MCPServer) museMCPServer {
 	return out
 }
 
-// museNonceLen is how many hex digits [museNonce] makes.
-const museNonceLen = 6
-
-// museNonce is a run's own suffix to its servers' names: six hex digits (24
-// bits) from the system's random source, new every run, so the run's servers
-// are under names no file of the repository's can declare beforehand (a
-// trusted run loads the repository's `.mcp.json` beside them), and a name of
-// up to 19 characters stays whole ([museServerNameShown]). A variable so a
-// case can name the files it reads.
-var museNonce = func() string {
-	var b [museNonceLen / 2]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
-}
-
 // writeMuseServers writes each of servers as dir/<name>-<nonce>.json, which
 // the run's script adds to its settings under that name ([museWiring]), the
-// model offered its tools as `mcp__<name>_<nonce>__<tool>`: refused for a
-// name that is not a file's, which `muse mcp add-json` would be handed whole.
+// model offered its tools as `mcp__<name>_<nonce>__<tool>`, nonce its
+// session's ([sessionNonce]), stable across the session's runs; a
+// repository's `.mcp.json` naming one refuses the run ([museServersHeld]), and
+// the home's makes the add refuse it: refused for a name that is not a
+// file's, which `muse mcp add-json` would be handed whole.
 func writeMuseServers(ctx context.Context, box sandbox.Sandbox, dir string, servers map[string]sandbox.MCPServer,
 	nonce string) error {
 
@@ -864,12 +864,15 @@ func museServerName(name string) bool {
 // instructions, told of notes where it reads them, into the home's settings
 // ([museMergeSystem]), refused past [museSystemMax]; its MCP servers
 // ([writeMuseServers]) with a fresh session's beside them
-// ([sandbox.RunRequest.FreshWiring]); its skills; its notes plugin, take
-// config and note helper where it is wired to its notes or its skills' loads;
-// and its brief, and the brief a new session is handed in a continued one's
-// place, which `--prompt-file` names.
-func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+// ([freshSessionWiring]), each named for its session; its skills; its notes
+// plugin, take config and note helper where it is wired to its notes or its
+// skills' loads; and its brief, and the brief a new session is handed in a
+// continued one's place, which `--prompt-file` names.
+func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
 	paths Paths) (string, error) {
+	if session.ID == "" || (session.Continues && session.Fresh == "") {
+		return "", errors.New("executor: a Muse Code run names no session to name its MCP servers for")
+	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, m.NoteInstruction())
@@ -888,8 +891,14 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			return "", err
 		}
 	}
-	nonce := museNonce()
-	if err := writeMuseServers(ctx, box, paths.MuseServers(), req.MCPServers, nonce); err != nil {
+	names := museServerNames(req.MCPServers, sessionNonce(session.ID))
+	if f := freshSessionWiring(req, session); f != nil {
+		names = append(names, museServerNames(f.MCPServers, sessionNonce(session.Fresh))...)
+	}
+	if err := museServersHeld(ctx, box, names); err != nil {
+		return "", err
+	}
+	if err := writeMuseServers(ctx, box, paths.MuseServers(), req.MCPServers, sessionNonce(session.ID)); err != nil {
 		return "", err
 	}
 	if err := writeMuseSkills(ctx, box, req.Skills, paths); err != nil {
@@ -900,8 +909,8 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			return "", err
 		}
 	}
-	if f := req.FreshWiring; f != nil {
-		if err := writeMuseServers(ctx, box, paths.MuseServersFresh(), f.MCPServers, nonce); err != nil {
+	if f := freshSessionWiring(req, session); f != nil {
+		if err := writeMuseServers(ctx, box, paths.MuseServersFresh(), f.MCPServers, sessionNonce(session.Fresh)); err != nil {
 			return "", err
 		}
 		if notes || loads {

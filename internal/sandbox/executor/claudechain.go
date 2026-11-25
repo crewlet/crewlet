@@ -12,8 +12,9 @@ import (
 )
 
 // claudeResumeRead reports whether release is one whose resume [threadChain]
-// models: 2.1.310 and 2.1.322, the two whose shipped code it was read from. A
-// SET, NEVER A RANGE: a model read off two releases says nothing of a third.
+// models: 2.1.310, 2.1.322 and 2.1.330, the three whose shipped code it was
+// read from, 2.1.330 the release the runner pins. A SET, NEVER A RANGE: a
+// model read off three releases says nothing of a fourth.
 // release is a `--version` reading as sandbox.ValidRelease holds one, compared
 // whole. Exact telling asks it of the release that wrote the session, the note
 // check of the job's own and the relaunch box's. Where it answers false,
@@ -23,7 +24,7 @@ import (
 // resumed; only then add it here.
 func claudeResumeRead(release string) bool {
 	switch release {
-	case "2.1.310", "2.1.322":
+	case "2.1.310", "2.1.322", "2.1.330":
 		return true
 	}
 	return false
@@ -117,8 +118,9 @@ const (
 	// whyLineGap is a line handed out of turn: the chain is not reading the
 	// file the resume reads.
 	whyLineGap chainWhy = "line_gap"
-	// whyProgress is a progress record (2.1.322's L_e @293638221, 2.1.310's
-	// YBe @247033685), which re-parents every later record naming it.
+	// whyProgress is a progress record (2.1.330's kPe @322056043, 2.1.322's
+	// L_e @293638221, 2.1.310's YBe @247033685), which re-parents every later
+	// record naming it.
 	whyProgress chainWhy = "progress"
 	// whyUUID is a record whose uuid is absent, no string, or no lowercase
 	// canonical uuid: the load keys its map by the string as written, and
@@ -126,11 +128,14 @@ const (
 	whyUUID          chainWhy = "uuid"
 	whyDuplicateUUID chainWhy = "duplicate_uuid" // a uuid two records carry
 	whySidechain     chainWhy = "sidechain"      // a sidechain's record in the main thread
-	// whyFileSnapshot is a file's snapshot, which 2.1.322 keeps out of the
-	// rows and the walk's fallback (ZI @293589374) and 2.1.310 out of neither.
+	// whyFileSnapshot is a file's snapshot, which 2.1.322 and 2.1.330 keep out
+	// of the rows and the walk's fallback (ZI @293589374, t0 @321997792) and
+	// 2.1.310 out of neither, and whose trailing run 2.1.330's leaf counts
+	// (va @322267791, `xs`).
 	whyFileSnapshot chainWhy = "file_snapshot"
-	// whyForkBriefing is a fork's briefing in the main thread (2.1.322's jWo
-	// @293848295, 2.1.310's Ypo @247219197), which is no row.
+	// whyForkBriefing is a fork's briefing in the main thread (2.1.330's dsn
+	// @322296717, 2.1.322's jWo @293848295, 2.1.310's Ypo @247219197), which
+	// is no row.
 	whyForkBriefing chainWhy = "fork_briefing"
 	// whyMarkedCheckpoint is a checkpoint a rewind, a withdrawal or a fork
 	// marked, which starts the resume where it names.
@@ -141,8 +146,8 @@ const (
 	// attachment the layer cannot say the malformed-attachment drop keeps.
 	whyAdmission chainWhy = "admission"
 	// whyReplyID is a reply id the layer cannot read as the resume does: no
-	// string, or holding U+FFFD ([threadLine.MessageID]); or, where 2.1.322's
-	// q1t reads it, one that may be absent or empty.
+	// string, or holding U+FFFD ([threadLine.MessageID]); or, where q1t reads
+	// it (2.1.322's, 2.1.330's), one that may be absent or empty.
 	whyReplyID chainWhy = "reply_id"
 	// whyCallID is a call id holding U+FFFD, which the layer may read
 	// otherwise than the resume ([threadChain.file]).
@@ -160,8 +165,19 @@ const (
 	// load fails at ([threadLine.ReplacementCount]).
 	whyReplacementShape chainWhy = "replacement_shape"
 	whySpread           chainWhy = "spread"         // a list past [threadChainMaxSpread] passed whole into one call
-	whyLargeFile        chainWhy = "large_file"     // past [claudeResumeLargeFile] and not path-free ([threadChain.AnySize])
+	whyLargeFile        chainWhy = "large_file"     // past [claudeResumeLargeFile] and read otherwise by a large-file reader ([threadChain.Alike])
 	whyResultByCall     chainWhy = "result_by_call" // tengu_foamy_spring may hang the result elsewhere ([threadChain.resultByCall])
+	// whyLeafRule is a checkpoint the last row does not descend through where
+	// a leaf rule of 2.1.330 the chain does not hold may move the leaf to the
+	// last row ([threadChain.leafRules]).
+	whyLeafRule chainWhy = "leaf_rule"
+	// whyPutBack is a user record naming rows to put back ahead of it, which
+	// 2.1.330's walk moves under foamy_spring ([threadLine.PutsBack]).
+	whyPutBack chainWhy = "put_back"
+	// whyLeafTime is a leaf chosen among records none of which has a time,
+	// which 2.1.330 walks from the last of and 2.1.310 and 2.1.322 not at all
+	// ([threadChain.leafOf]).
+	whyLeafTime chainWhy = "leaf_time"
 	// whyTailTime is a tails sort the resume's comparison cannot order, so its
 	// engine's sort algorithm does ([threadChain.byTime]).
 	whyTailTime chainWhy = "tail_time"
@@ -183,26 +199,28 @@ var chainWhys = [...]chainWhy{"", whyChain, whyRecoveredReply, whyRecoveredResul
 	whyNoRecord, whyLeafFlag, whyRelease, whyBound, whyLine, whyLineGap, whyProgress, whyUUID,
 	whyDuplicateUUID, whySidechain, whyFileSnapshot, whyForkBriefing, whyMarkedCheckpoint, whyCheckpointShape,
 	whyAdmission, whyReplyID, whyCallID, whyTimestamp, whyRetractionShape, whyPreservedShape, whyRelinkShape,
-	whyReplacementShape, whySpread, whyLargeFile, whyResultByCall, whyTailTime, whyForkContext, whyAgent,
-	whyUndecided}
+	whyReplacementShape, whySpread, whyLargeFile, whyResultByCall, whyLeafRule, whyPutBack, whyLeafTime, whyTailTime,
+	whyForkContext, whyAgent, whyUndecided}
 
 // Valid reports whether w is one of the reasons.
 func (w chainWhy) Valid() bool { return w != "" && slices.Contains(chainWhys[:], w) }
 
-// chainVariants is a set of the eight variants the reading cannot see, one
-// bit each. THE VARIANTS: the relaunch box's release, 2.1.310 or 2.1.322, and
-// three flags its servers may set, each at its default where none answers:
-// tengu_foamy_spring (2.1.322's hu(), 2.1.310's Ef(), on), tengu_warm_mochi
-// (ota() @287013832, Fri() @240966974, on, and off wherever foamy_spring is)
-// and, in 2.1.322 alone, tengu_sorted_metcalfe (@293811649, off). They part
-// in the leaf ([threadChain.q1t]), the retraction filter's names
+// chainVariants is a set of the thirteen variants the reading cannot see,
+// one bit each. THE VARIANTS: the relaunch box's release, 2.1.310, 2.1.322 or
+// 2.1.330, and three flags its servers may set, each at its default where none
+// answers: tengu_foamy_spring (2.1.330's Dc() @313873180, 2.1.322's hu(),
+// 2.1.310's Ef(), on), tengu_warm_mochi (2.1.330's Exl() @314474638, ota()
+// @287013832, Fri() @240966974, on, and off wherever foamy_spring is) and, in
+// 2.1.322 and 2.1.330, tengu_sorted_metcalfe (@293811649, @322254277, off).
+// They part in the leaf ([threadChain.q1t]), the retraction filter's names
 // ([threadChain.readsRetractions]) and the tails' order ([threadChain.tails]).
 // A record handed under some and not others is handedUnknown (whyLeafFlag,
 // whyRelease); foamy_spring's hanging of a result by its call is refused
-// (whyResultByCall).
-type chainVariants uint8
+// (whyResultByCall), as are 2.1.330's other leaf rules and rows put back.
+type chainVariants uint16
 
-// The variants; warm_mochi reads as off where foamy_spring is off.
+// The variants; warm_mochi and sorted_metcalfe read as off where foamy_spring
+// is off.
 const (
 	variant310Off chainVariants = 1 << iota
 	variant310Spring
@@ -212,21 +230,31 @@ const (
 	variant322SpringMochi
 	variant322SpringMetcalfe
 	variant322SpringMochiMetcalfe
+	variant330Off
+	variant330Spring
+	variant330SpringMochi
+	variant330SpringMetcalfe
+	variant330SpringMochiMetcalfe
 
 	allVariants = variant310Off | variant310Spring | variant310SpringMochi | variant322Off | variant322Spring |
-		variant322SpringMochi | variant322SpringMetcalfe | variant322SpringMochiMetcalfe
+		variant322SpringMochi | variant322SpringMetcalfe | variant322SpringMochiMetcalfe | variant330Off |
+		variant330Spring | variant330SpringMochi | variant330SpringMetcalfe | variant330SpringMochiMetcalfe
 	// variants310 is 2.1.310's, whose retraction filter reads a refusal's
 	// fallback alone.
 	variants310 = variant310Off | variant310Spring | variant310SpringMochi
-	// variantsMetcalfe is 2.1.322's with foamy_spring and sorted_metcalfe on,
-	// where q1t moves the leaf.
-	variantsMetcalfe = variant322SpringMetcalfe | variant322SpringMochiMetcalfe
+	// variantsMetcalfe322 and variantsMetcalfe330 are each release's with
+	// foamy_spring and sorted_metcalfe on, where q1t moves the leaf, each by
+	// its own reading of it.
+	variantsMetcalfe322 = variant322SpringMetcalfe | variant322SpringMochiMetcalfe
+	variantsMetcalfe330 = variant330SpringMetcalfe | variant330SpringMochiMetcalfe
+	variantsMetcalfe    = variantsMetcalfe322 | variantsMetcalfe330
 	// variantsMochi has warm_mochi on: tails are a walk by depth, else by
 	// breadth ([threadChain.tails]).
-	variantsMochi = variant310SpringMochi | variant322SpringMochi | variant322SpringMochiMetcalfe
-	// variantDefault is 2.1.322 as no flag server answers it, the variant a
-	// definite answer's reason is given for.
-	variantDefault = variant322SpringMochi
+	variantsMochi = variant310SpringMochi | variant322SpringMochi | variant322SpringMochiMetcalfe |
+		variant330SpringMochi | variant330SpringMochiMetcalfe
+	// variantDefault is 2.1.330, the release the runner pins, as no flag
+	// server answers it: the variant a definite answer's reason is given for.
+	variantDefault = variant330SpringMochi
 )
 
 // chainReplyID is a reply a threadChain interned, from 1; 0 is none.
@@ -257,14 +285,16 @@ const (
 	threadChainMaxCalls = 1 << 17
 	// threadChainMaxSpread is the longest list the resume passes whole into one
 	// call's arguments (whySpread): the load's spread of a content-replacement
-	// list (2.1.322 @293820306, 2.1.310 @247196171), the recovery's of the
-	// walk's stretches and a walked record's hung records (@293753056,
-	// @293753212; @247138003, @247138159), and the tails' walk by breadth
-	// (@293747616, @247132204). JavaScriptCore refuses a call of more than
-	// 65,536 arguments with the RangeError "Maximum call stack size exceeded."
-	// (2.1.322 @14459602, 2.1.310 @3746582). Half that keeps every modelled
-	// spread clear of it, and is the most either binary's helpers pass to
-	// String.fromCharCode.apply at once (2.1.322 @306148813, 2.1.310 @259142857).
+	// list (2.1.330 @322267061, 2.1.322 @293820306, 2.1.310 @247196171), the
+	// recovery's of the walk's stretches and a walked record's hung records
+	// (@322189426, @322189582; @293753056, @293753212; @247138003,
+	// @247138159), and the tails' walk by breadth (@322183011, @293747616,
+	// @247132204). JavaScriptCore refuses a call of more than 65,536 arguments
+	// with the RangeError "Maximum call stack size exceeded." (2.1.322
+	// @14459602, 2.1.310 @3746582). Half that keeps every modelled spread clear
+	// of it, and is the most each binary's helpers pass to
+	// String.fromCharCode.apply at once (2.1.330 @336105734, 2.1.322
+	// @306148813, 2.1.310 @259142857).
 	threadChainMaxSpread = 1 << 15
 )
 
@@ -274,18 +304,22 @@ const (
 const threadChainHeldBytes = 43 << 20
 
 // claudeResumeLargeFile is the most bytes of a thread Claude Code's load
-// reads with its small path (2.1.322's Jne @284268664 in oee @293824518,
-// 2.1.310's Use @238504623 in Cne @247199785). THE LARGE FILE: past it a
-// large-file reader chooses by their bytes the lines it hands the load: the
-// DISPATCH (2.1.322's ike @293792132, 2.1.310's HMt @247175414), or, where
+// reads with its small path (2.1.330's X_e @312227922 in qie @322272433,
+// 2.1.322's Jne @284268664 in oee @293824518, 2.1.310's Use @238504623 in Cne
+// @247199785). THE LARGE FILE: past it a large-file reader chooses by their
+// bytes the lines it hands the load: the DISPATCH (2.1.330's DPe @322233162,
+// 2.1.322's ike @293792132, 2.1.310's HMt @247175414), or, where
 // CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP is set (a settings file can set it
-// whatever the launcher unsets), the PRUNE (F1t @293788207, FPt @247171899).
-// The chain models both and answers a thread past it only where it is
-// path-free ([threadChain.AnySize]), else whyLargeFile.
+// whatever the launcher unsets), the PRUNE (jrn @322229157, F1t @293788207,
+// FPt @247171899). The chain models both and answers past it only a thread
+// path-free ([threadChain.AnySize]) or past its last boundary (Alike), else
+// whyLargeFile. 2.1.330's re-read of a file its read outran and the meta rows
+// its dispatch skips or defers (`never`) touch no record of a file at rest.
 const claudeResumeLargeFile = 5 << 20
 
 // The bytes the large-file readers read a line by ([claudeResumeLargeFile]),
-// as 2.1.322's ike and F1t and 2.1.310's HMt and FPt hold them.
+// as 2.1.330's DPe and jrn, 2.1.322's ike and F1t and 2.1.310's HMt and FPt
+// hold them.
 var (
 	// slotPrefix begins a line every reader takes for a SLOT, a record read by
 	// its bytes; slotParentKey is the key the dispatch takes one by where its
@@ -304,11 +338,12 @@ var (
 
 // claudeFallbackMS is the most milliseconds before a record whose parent the
 // walk cannot follow at which the walk takes another record in its place
-// (2.1.322's aUo @293589450, 2.1.310's vpo @247132972).
+// (2.1.330 @321997861, 2.1.322's aUo @293589450, 2.1.310's vpo @247132972).
 const claudeFallbackMS = 5000
 
 // chainPrefixBytes is how many bytes of a uuid the retraction filter compares
-// a record by: its first 24 characters (2.1.322's cE @298529717, 2.1.310's Gb
+// a record by: its first 24 characters (2.1.330 @327497941, 2.1.322's cE
+// @298529717, 2.1.310's Gb
 // @251726667), 20 hex digits and 4 hyphens of a canonical uuid.
 const chainPrefixBytes = 10
 
@@ -337,8 +372,9 @@ type threadChain struct {
 	// smallOnly is whether a line was met that a large-file reader may read
 	// otherwise than the small path, lastMarked whether the last record filed
 	// holds a sidechain's bytes (in the main thread they move where every reader
-	// starts); anySize is End's path-free ([threadChain.AnySize]).
-	smallOnly, lastMarked, anySize bool
+	// starts); anySize is End's path-free ([threadChain.AnySize]), alikePast
+	// End's path-free past the last boundary ([threadChain.Alike]).
+	smallOnly, lastMarked, anySize, alikePast bool
 	// why is the thread's own cannot tell, the first shape met; "" while the
 	// thread is modelled.
 	why chainWhy
@@ -547,7 +583,8 @@ func (c *threadChain) inTurn(n int) {
 // BYTES ARE THE RESUME'S: the lines must be the file the resume reads, every
 // whole line in turn; the chain checks only their numbers (whyLineGap). The
 // launcher leaves CLAUDE_CODE_REMOTE unset, so the hosted environment's gap
-// bridge (2.1.322's uWo @293747640, 2.1.310's wpo @247132270) never runs. See
+// bridge (2.1.330's O_r @322183061, 2.1.322's uWo @293747640, 2.1.310's wpo
+// @247132270) never runs, nor 2.1.330's rows put back (whyPutBack). See
 // panics after End.
 func (c *threadChain) See(line threadLine) (chainHandle, threadMessage, error) {
 	c.filing("See")
@@ -595,10 +632,11 @@ func (c *threadChain) another(line threadLine) {
 
 // Unread files a whole line [threadReader.Next] answered as no record, its N
 // and Size held as See holds a line's. THE LINES THAT ARE NO RECORD: the load
-// parses a chunk at a time (2.1.322's $1t @293791955, 2.1.310's $Pt
-// @247175237), keeping the values before a failure and resuming after the next
-// break, so a line failing before any whole value, a whole value no object
-// (iVe @293635513, oMt @247031904), and an object whose refused head is of a
+// parses a chunk at a time (2.1.330's Wrn @322232985, 2.1.322's $1t
+// @293791955, 2.1.310's $Pt @247175237), keeping the values before a failure
+// and resuming after the next break, so a line failing before any whole value,
+// a whole value no object (ftt @322052007, iVe @293635513, oMt @247031904),
+// and an object whose refused head is of a
 // type no resume reads yield it nothing and are skipped; any other refused
 // line may yield a value (whyLine). A skipped line still binds the thread to
 // the small path where a large-file reader may take it for a slot
@@ -637,8 +675,9 @@ func (c *threadChain) binds(b *threadBytes) bool {
 // ([threadBytes.Head]), says the line is a sidechain's right after its
 // parent: `{"parentUuid":`, null or a quoted lowercase canonical uuid, then
 // `,"isSidechain":true`. Every large-file reader marks such a line a
-// sidechain's: the dispatches within its first 256 bytes (kl @293794950,
-// @247178300), the prunes anywhere in it (@293788960, @247172642).
+// sidechain's: the dispatches within its first 256 bytes (gl @322236096, kl
+// @293794950, @247178300), the prunes anywhere in it (@322229906, @293788960,
+// @247172642).
 func sidechainHeaded(head []byte) bool {
 	rest, ok := bytes.CutPrefix(head, slotPrefix)
 	switch {
@@ -655,8 +694,8 @@ func sidechainHeaded(head []byte) bool {
 	return bytes.HasPrefix(rest[38:], slotSidechainHead)
 }
 
-// checkpointOf files what a last-prompt record says of the leaf (2.1.322's
-// Mr, 2.1.310's Oo): it names the leaf where its leafUuid says something, and
+// checkpointOf files what a last-prompt record says of the leaf (2.1.330's
+// Zin, 2.1.322's Mr, 2.1.310's Oo): it names the leaf where its leafUuid says something, and
 // any that carries the key, null among it, turns off the newest-row start
 // ([threadChain.singlePath], `leafUuid!==void 0`).
 func (c *threadChain) checkpointOf(line threadLine) {
@@ -690,16 +729,17 @@ func (c *threadChain) replacementsOf(line threadLine) {
 }
 
 // file files line, a record of the map, read as message m (mErr its error),
-// and answers its handle, or pastChainBound past a bound. THE LOAD (2.1.322's
-// Mr in Szt @293813830, 2.1.310's Oo in GMt @247190769) keeps every user,
-// assistant, attachment and system object in a map keyed by its uuid as
-// written, in the order first written: a handle is a place in that order. Its
-// admission (DWt @293626797, sPt @247023276) drops or rewrites a user or
-// assistant record whose message the layer refuses, or an assistant one of
-// string content, re-parenting its children, and turns a lone surrogate into
-// U+FFFD (tIe @282906774, hYe @237222449). The chain refuses each such record
-// and every shape a whole-thread reason names. A compaction's boundary (Kr
-// @291612448) forgets the checkpoint.
+// and answers its handle, or pastChainBound past a bound. THE LOAD (2.1.330's
+// Zin @322258725, 2.1.322's Mr in Szt @293813830, 2.1.310's Oo in GMt
+// @247190769) keeps every user, assistant, attachment and system object in a
+// map keyed by its uuid as written, in the order first written: a handle is a
+// place in that order. Its admission (Eon @322042571, DWt @293626797, sPt
+// @247023276) drops or rewrites a user or assistant record whose message the
+// layer refuses, or an assistant one of string content, re-parenting its
+// children, and turns a lone surrogate into U+FFFD (@310404933, tIe
+// @282906774, hYe @237222449). The chain refuses each such record and every
+// shape a whole-thread reason names. A compaction's boundary (On @314444996,
+// Kr @291612448) forgets the checkpoint.
 func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHandle {
 	head := line.Head
 	r := chainRecord{line: int32(line.N)}
@@ -768,6 +808,15 @@ func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHa
 	}
 	if len(calls) > 0 && head.Type == recordAssistant {
 		r.kind |= kindUse
+		// 2.1.330's prune reads a virtual reply that makes a call as a run's
+		// link, not a reply (jrn @322229157, its runLink test first), a
+		// reading the chain does not hold.
+		if virtual, err := line.IsVirtual(); virtual || err != nil {
+			c.smallOnly = true
+		}
+	}
+	if line.PutsBack() {
+		c.cannotTell(whyPutBack)
 	}
 	if _, says := m.Says(); says {
 		r.kind |= kindSays
@@ -835,7 +884,8 @@ func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHa
 	}
 	if named {
 		// The newest naming boundary replaces the one before it, whose list
-		// leaves the count (2.1.322's iWo reads the last alone, `r=Ce`).
+		// leaves the count (2.1.322's iWo and 2.1.330's C_r read the last
+		// alone, `r=Ce`).
 		c.filed += preserved.listed - c.kept.listed
 		preserved.boundary = h
 		c.kept = preserved
@@ -847,7 +897,8 @@ func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHa
 	c.recs = append(c.recs, r)
 	c.written = append(c.written, written)
 	// A ROW is every record but a sidechain's, a fork's briefing and a file's
-	// snapshot (2.1.322's Mr: `!ZI(Ho)`, `!Ho.isSidechain&&!jWo(Ho)`).
+	// snapshot (2.1.322's Mr: `!ZI(Ho)`, `!Ho.isSidechain&&!jWo(Ho)`; 2.1.330's
+	// Zin alike, t0 and dsn).
 	if r.kind&kindSideTrue == 0 && !briefing && !snapshot {
 		c.row(h, r)
 	}
@@ -865,20 +916,21 @@ func (c *threadChain) row(h chainHandle, r chainRecord) {
 
 // slotFacts files what the large-file readers make of line by its byte facts
 // ([threadBytes]), the record whose own uuid is id, parent written and kind
-// kind: a reader may read it otherwise than its decode where it is a
-// compaction's boundary (the dispatch forgets the slots before it), where it
-// does not begin `{"parentUuid":` and the parent its decode names ([slotHead]),
-// where the readers key it by another uuid ([threadBytes.KeyedBy]), and in a
-// subagent's thread where it does not say it is a sidechain's right after its
-// parent. In the main thread it files whether the record holds a sidechain's
-// bytes, which move every reader's start where it is the last record.
+// kind: a reader may read it otherwise than its decode where it does not
+// begin `{"parentUuid":` and the parent its decode names ([slotHead]), where
+// the readers key it by another uuid ([threadBytes.KeyedBy]), and in a
+// subagent's thread where it is a compaction's boundary or does not say it is
+// a sidechain's right after its parent. A main thread's boundary binds only
+// the records before it ([threadChain.Alike]). In the main thread it files
+// whether the record holds a sidechain's bytes, which move every reader's
+// start where it is the last record.
 func (c *threadChain) slotFacts(line threadLine, id string, written chainWritten, kind chainKind) {
 	head := line.Bytes.Head()
 	end := slotHead(head, line.Head.Parent, written.named)
 	switch {
-	case end < 0, kind&kindBoundary != 0, !line.Bytes.KeyedBy(id):
+	case end < 0, !line.Bytes.KeyedBy(id):
 		c.smallOnly = true
-	case c.agent != "" && !bytes.HasPrefix(head[end:], slotSidechainHead):
+	case c.agent != "" && (kind&kindBoundary != 0 || !bytes.HasPrefix(head[end:], slotSidechainHead)):
 		c.smallOnly = true
 	}
 	if c.agent == "" {
@@ -890,8 +942,8 @@ func (c *threadChain) slotFacts(line threadLine, id string, written chainWritten
 // large-file reader reads ends, where that is the parent its decode reads:
 // head begins `{"parentUuid":` and then parent as written, null or, named, a
 // lowercase canonical uuid quoted with no escape: the two forms every reader
-// reads alike (kl @293794950, Eo @247177994, F1t's and FPt's keying). -1
-// otherwise.
+// reads alike (gl @322236096, kl @293794950, Eo @247177994, jrn's, F1t's
+// and FPt's keying). -1 otherwise.
 func slotHead(head, parent []byte, named bool) int {
 	if !bytes.Equal(parent, jsonNull) && (!named || len(parent) != 36+2) {
 		return -1
@@ -1268,6 +1320,25 @@ func (c *threadChain) AnySize() bool {
 	return c.state == chainDecided && c.why == "" && c.anySize
 }
 
+// Alike reports whether every size path answers record h as the chain does:
+// a record of a path-free thread ([threadChain.AnySize]), or, of a main
+// thread path-free but for its compactions' boundaries, the last boundary or
+// a record filed after it. PAST THE LAST BOUNDARY THE READERS AGREE (measured
+// on 2.1.310, 2.1.322 and 2.1.330: c1's thread resumed small, by the dispatch
+// and by the prune handed the same records past it); before it the dispatch
+// forgets the slots, so past [claudeResumeLargeFile] those records answer
+// handedUnknown, whyLargeFile. False before End decided, after an End cut
+// short, and where the thread is cannot tell.
+func (c *threadChain) Alike(h chainHandle) bool {
+	switch {
+	case c.state != chainDecided || c.why != "" || h <= noChainRecord || int(h) > c.handles:
+		return false
+	case c.anySize:
+		return true
+	}
+	return c.alikePast && h >= c.lastBoundary
+}
+
 // record is h's filed record, where the chain holds it.
 func (c *threadChain) record(h chainHandle) (chainRecord, bool) {
 	if h <= 0 || int(h) > len(c.recs) {
@@ -1306,9 +1377,10 @@ func (c *threadChain) turn(h chainHandle) bool {
 	return c.recs[h-1].kind&(kindUser|kindAssistant) != 0
 }
 
-// uf reports whether record h hangs off the reply before it (2.1.322's UF
-// @293588888, 2.1.310's l0 @246995738): an attachment, a system record but a
-// compaction's boundary, or a meta user record holding no result.
+// uf reports whether record h hangs off the reply before it (2.1.330's zL
+// @321995433, 2.1.322's UF @293588888, 2.1.310's l0 @246995738): an
+// attachment, a system record but a compaction's boundary, or a meta user
+// record holding no result.
 func (c *threadChain) uf(h chainHandle) bool {
 	k := c.recs[h-1].kind
 	switch {
@@ -1322,8 +1394,9 @@ func (c *threadChain) uf(h chainHandle) bool {
 	return false
 }
 
-// partOf reports whether record h is part of reply id's run (2.1.322's X_e
-// @293748740, 2.1.310's Yce @247133691): a record of the reply, a meta user
+// partOf reports whether record h is part of reply id's run (2.1.330's xPe
+// @322185086, 2.1.322's X_e @293748740, 2.1.310's Yce @247133691): a record
+// of the reply, a meta user
 // record or one of results, any attachment, a system record but a
 // compaction's boundary.
 func (c *threadChain) partOf(h chainHandle, id chainReplyID) bool {
@@ -1342,8 +1415,8 @@ func (c *threadChain) partOf(h chainHandle, id chainReplyID) bool {
 }
 
 // readsRetractions reports whether the release of variants reads record h's
-// retraction list: 2.1.322's eGe a user, assistant or fallback record's,
-// 2.1.310's qGn a fallback's alone.
+// retraction list: 2.1.330's hPn @324043599 and 2.1.322's eGe a user,
+// assistant or fallback record's, 2.1.310's qGn a fallback's alone.
 func (c *threadChain) readsRetractions(h chainHandle, variants chainVariants) bool {
 	k := c.recs[h-1].kind
 	if k&kindFallback != 0 {
@@ -1407,7 +1480,8 @@ func (m *chainMarks) set(i int) { m.at[i] = m.gen }
 func (m *chainMarks) has(i int) bool { return m.at[i] == m.gen }
 
 // chainSide is the timed records of one isSidechain value, by time and then
-// the later in the file first, as 2.1.322's vjt orders them (`reverse()`, then
+// the later in the file first, as 2.1.322's vjt and 2.1.330's vtn order them
+// (`reverse()`, then
 // a stable sort by time); prev points to the next candidate down a walk has
 // not met, compressed as the walk goes.
 type chainSide struct {
@@ -1464,18 +1538,18 @@ func (c *threadChain) work() *chainWork {
 }
 
 // covered reports whether the dispatch from the last record alone reaches
-// every record of a main thread (ike @293792132, HMt @247175414, without the
-// checkpoint's walk), the least every large-file reader hands: the walk up by
+// every record of a main thread (DPe @322233162, ike @293792132, HMt
+// @247175414, no checkpoint's walk), the least every reader hands: the walk up by
 // parent, ended by a root, a parent naming no record or a record met; then,
 // in the file's order, each record whose parent was reached before it as one
 // that hands its children on, itself handing them on where X_e reads it as
 // part of that parent's group (a reply's own id, else the parent's), and not
-// where the parent is UF. Parents are as written: a path-free thread holds no
-// boundary, so no relink moves one. Only the dispatch's group is read: the
-// prune's is the dispatch's wherever that is a reply's. Beyond this the
-// readers differ only in lines no step reads (attribution snapshots, reaction
-// ledgers) and surrogate escapes.
-func (c *threadChain) covered(ctx context.Context, w *chainWork) (bool, error) {
+// where the parent is UF; from handle from on (what a boundary there leaves).
+// Parents are as written: past the last boundary no relink moves one. Only
+// the dispatch's group is read: the prune's is the dispatch's wherever that
+// is a reply's. Beyond this the readers differ only in lines no step reads
+// (attribution snapshots, reaction ledgers) and surrogate escapes.
+func (c *threadChain) covered(ctx context.Context, w *chainWork, from chainHandle) (bool, error) {
 	n := len(c.recs)
 	// w.a holds the walk.
 	w.a.clear()
@@ -1489,27 +1563,28 @@ func (c *threadChain) covered(ctx context.Context, w *chainWork) (bool, error) {
 	// one's group.
 	w.b.clear()
 	groups := make([]chainReplyID, n+1)
-	for i, r := range c.recs {
+	for i := int(from) - 1; i < n; i++ {
 		if err := w.tick(ctx); err != nil {
 			return false, err
 		}
+		r := c.recs[i]
 		h, p := chainHandle(i+1), r.parent
-		var from chainReplyID
+		var group chainReplyID
 		if p != noChainRecord && w.b.has(int(p)) {
-			from = groups[p]
+			group = groups[p]
 		}
 		switch {
 		case w.a.has(int(h)):
 		case p == noChainRecord || !w.b.has(int(p)):
 			return false, nil
-		case c.partOf(h, from):
+		case c.partOf(h, group):
 		case c.uf(p):
 			continue
 		default:
 			return false, nil
 		}
 		w.b.set(int(h))
-		groups[h] = from
+		groups[h] = group
 		if r.kind&kindAssistant != 0 {
 			groups[h] = r.reply
 		}
@@ -1531,8 +1606,8 @@ func (c *threadChain) setParent(h, p chainHandle) {
 	c.recs[h-1].kind &^= kindNowhere
 }
 
-// relink is THE RELINK (2.1.322's iWo @293743389 with aWo @293744710,
-// 2.1.310's ypo @247128053 with _po @247129357), in place on parents, and
+// relink is THE RELINK (2.1.330's C_r @322178624 with A_r, 2.1.322's iWo
+// @293743389 with aWo, 2.1.310's ypo @247128053 with _po), in place on parents, and
 // whether it chained kept records, which turns the leaf's pick from its single
 // path. Where no boundary names what it kept, nothing happens. The newest that
 // does keeps records only where it is the last (`w=s===h` @293743594;
@@ -1635,7 +1710,8 @@ func (c *threadChain) relink(ctx context.Context, w *chainWork) (bool, error) {
 // keptRecords is the records the newest boundary that names what it kept
 // keeps, where it is the last boundary: those its list names, in order, or
 // where it carries no list, its segment's, walked from its tail up by parent
-// to its head (2.1.322's aWo, 2.1.310's _po); and false where nothing happens:
+// to its head (2.1.330's A_r @322179943, 2.1.322's aWo, 2.1.310's _po); and
+// false where nothing happens:
 // a listed uuid naming no record of the thread, or a walk that meets a root, a
 // parent naming no record or a record it walked. The walk counts its steps
 // against ctx.
@@ -1725,28 +1801,36 @@ func (c *threadChain) decide(ctx context.Context) error {
 	if c.why != "" {
 		return nil
 	}
-	// Path-free ([threadChain.AnySize]); lastMarked is the main thread's
-	// alone.
+	// Path-free ([threadChain.AnySize]), or past the last boundary alone
+	// ([threadChain.Alike]); lastMarked is the main thread's alone, as are
+	// boundaries that bind only the records before them.
 	main := c.agent == ""
 	free := !c.smallOnly && !c.lastMarked
+	past := free && main && c.lastBoundary != noChainRecord
+	free = free && !past
 	var w *chainWork
 	if len(c.recs) > 0 {
 		w = c.work()
-		if free && main {
-			var err error
-			if free, err = c.covered(ctx, w); err != nil {
-				return err
-			}
+		var err error
+		switch {
+		case free && main:
+			free, err = c.covered(ctx, w, 1)
+		case past:
+			past, err = c.covered(ctx, w, c.lastBoundary)
+		}
+		if err != nil {
+			return err
 		}
 	}
-	if c.bytes > claudeResumeLargeFile && !free {
+	if c.bytes > claudeResumeLargeFile && !free && !past {
 		c.cannotTell(whyLargeFile)
 		return nil
 	}
-	c.anySize = free
+	c.anySize, c.alikePast = free, past
 	if len(c.recs) == 0 {
 		// No record: no conversation, nothing handed under every variant
-		// (2.1.322's Yya, `if(s.size===0)return null`; Rye, `no_agent_messages`).
+		// (2.1.322's Yya and 2.1.330's Lcr, `if(s.size===0)return null`; Rye
+		// and lPe, `no_agent_messages`).
 		c.orders = []chainOrder{{variants: allVariants}}
 		return nil
 	}
@@ -1765,30 +1849,26 @@ func (c *threadChain) decide(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	var leaf0, leaf1 chainHandle
+	var leaves chainLeaves
 	if main {
-		if leaf0, leaf1, err = c.pick(ctx, w, relinked); err != nil || c.why != "" {
+		if leaves, err = c.pick(ctx, w, relinked); err != nil || c.why != "" {
 			return err
 		}
 	} else {
-		leaf0 = c.ownLeaf(w)
-		leaf1 = leaf0
+		own := c.ownLeaf(w)
+		if c.why != "" {
+			return nil
+		}
+		leaves = chainLeaves{own, own, own}
 	}
-	// The variants part where q1t moves the leaf and on each release's
-	// retraction filter, both the main thread's alone ([chainVariants]).
-	groups := []chainGroup{{leaf: leaf0, variants: allVariants}}
-	if main {
-		groups = []chainGroup{{leaf: leaf0, variants: variants310}, {leaf: leaf0, variants: allVariants &^ variants310}}
-		if leaf1 != leaf0 {
-			groups[1].variants &^= variantsMetcalfe
-			groups = append(groups, chainGroup{leaf: leaf1, variants: variantsMetcalfe})
+	groups := chainGroups(main, leaves)
+	var walked []chainHandle
+	for _, g := range groups {
+		if !slices.Contains(walked, g.leaf) {
+			walked = append(walked, g.leaf)
 		}
 	}
-	leaves := []chainHandle{leaf0}
-	if leaf1 != leaf0 {
-		leaves = append(leaves, leaf1)
-	}
-	for _, leaf := range leaves {
+	for _, leaf := range walked {
 		list, listErr := c.listFrom(ctx, w, leaf)
 		if listErr != nil || c.why != "" {
 			return listErr
@@ -1805,10 +1885,51 @@ func (c *threadChain) decide(ctx context.Context) error {
 		}
 	}
 	c.merge(groups)
-	if leaf0 == leaf1 {
-		c.leaf = leaf0
+	if len(walked) == 1 {
+		c.leaf = walked[0]
+	}
+	if past && c.bytes > claudeResumeLargeFile {
+		c.beforeBoundaryUnknown()
 	}
 	return nil
+}
+
+// beforeBoundaryUnknown makes every record filed before the last boundary of
+// a thread past [claudeResumeLargeFile] handedUnknown, whyLargeFile, and drops
+// them from every order: the dispatch reads them otherwise than the small
+// path ([threadChain.Alike]).
+func (c *threadChain) beforeBoundaryUnknown() {
+	before := int(c.lastBoundary) - 1
+	for i := range before {
+		c.verdicts[i] = chainVerdict{handed: verdictUnknown, why: whyAt(whyLargeFile)}
+	}
+	orders := c.orders
+	c.orders = nil
+	for _, o := range orders {
+		kept := slices.DeleteFunc(slices.Clone(o.records), func(h chainHandle) bool { return int(h) <= before })
+		c.order(kept, o.variants)
+	}
+}
+
+// chainGroups is the groups of variants the thread's answers part into: the
+// variants part where a reading of q1t moves the leaf and on each release's
+// retraction filter, both the main thread's alone ([chainVariants]). Variants
+// that walk from one leaf under one filter share a group, the first holding
+// [variantDefault].
+func chainGroups(main bool, leaves chainLeaves) []chainGroup {
+	if !main {
+		return []chainGroup{{leaf: leaves[leafPlain], variants: allVariants}}
+	}
+	groups := []chainGroup{{leaf: leaves[leafPlain], variants: allVariants &^ variants310 &^ variantsMetcalfe}}
+	for _, r := range []chainLeafReading{leafQ1t322, leafQ1t330} {
+		at := slices.IndexFunc(groups, func(g chainGroup) bool { return g.leaf == leaves[r] })
+		if at < 0 {
+			groups = append(groups, chainGroup{leaf: leaves[r]})
+			at = len(groups) - 1
+		}
+		groups[at].variants |= r.variants()
+	}
+	return append(groups, chainGroup{leaf: leaves[leafPlain], variants: variants310})
 }
 
 // chainGroup is the variants that walk from one leaf under one release's
@@ -1831,7 +1952,7 @@ type chainGroup struct {
 func whyAt(w chainWhy) uint8 { return uint8(slices.Index(chainWhys[:], w)) }
 
 // resultByCall reports whether the thread holds a result foamy_spring may hang
-// elsewhere than under its parent (fWo @293749272, Rpo @247134223): one whose
+// elsewhere than under its parent (D_r @322185645, fWo, Rpo): one whose
 // call ids are not all of calls its parent made, where its
 // sourceToolAssistantUUID names another record, or another reply made one of
 // its calls. The second test widens fWo's (per call, the last reply holding
@@ -1926,118 +2047,171 @@ func (c *threadChain) holders() [][2]chainHandle {
 	return holders
 }
 
-// pick is THE LEAF of the main thread (2.1.322's Gr @293820883 and Yya
-// @293834568, 2.1.310's kr @247196754 and m_i @247206356), with q1t's
-// variants off (leaf0) and on (leaf1): noChainRecord where the resume finds
-// no conversation. Not relinked, the single path's turn record
-// ([threadChain.singlePath]); relinked, or where that finds none, the leaf set
-// ([threadChain.leafSet]), narrowed where it holds more than one; then
-// [threadChain.leafOf]. 2.1.322's hosted-environment clause (NWo behind WA())
-// never answers here. Where q1t cannot read a reply's id, the thread is
-// whyReplyID.
-func (c *threadChain) pick(ctx context.Context, w *chainWork, relinked bool) (leaf0, leaf1 chainHandle,
-	err error) {
-	last := c.lastRow
-	// set0 and set1 are each q1t setting's leaf source: the single path's turn
-	// record where found, else the leaf set.
-	var set0, set1 []chainHandle
-	if !relinked {
-		var turn0, turn1 chainHandle
-		if turn0, turn1, err = c.singlePath(ctx, w); err != nil || c.why != "" {
-			return noChainRecord, noChainRecord, err
-		}
-		if turn0 != noChainRecord {
-			set0 = []chainHandle{turn0}
-		}
-		if turn1 != noChainRecord {
-			set1 = []chainHandle{turn1}
-		}
+// chainLeafReading is a reading of THE LEAF the variants part on: q1t off,
+// and on as 2.1.322's metcalfe variants read it and as 2.1.330's
+// ([threadChain.q1t]).
+type chainLeafReading uint8
+
+const (
+	leafPlain chainLeafReading = iota
+	leafQ1t322
+	leafQ1t330
+	leafReadings
+)
+
+// variants is the variants that read the leaf as r does.
+func (r chainLeafReading) variants() chainVariants {
+	switch r {
+	case leafQ1t322:
+		return variantsMetcalfe322
+	case leafQ1t330:
+		return variantsMetcalfe330
 	}
-	if set0 == nil || set1 == nil {
-		hr, setErr := c.leafSet(ctx, w)
-		if setErr != nil {
-			return noChainRecord, noChainRecord, setErr
-		}
-		pick0, pick1 := hr, hr
-		if len(hr) > 1 {
-			// Narrowed to one: up from the checkpoint, where it is in the set and
-			// the last row descends through none of its batches (Y1t, never
-			// directly) nor, in the metcalfe variants, holds q1t; else up from
-			// the last row (2.1.322's Gr @293822608, 2.1.310's kr @247198349,
-			// `uo&&Hr.has(uo)&&...?uo:Eo`).
-			from0, from1 := last, last
-			if _, in := slices.BinarySearch(hr, w.cp); in && w.cp != last && !c.y1t(w, last, w.cp, false) {
-				from0, from1 = w.cp, w.cp
-				fires, read := c.q1t(w, last, w.cp)
-				if !read {
-					c.cannotTell(whyReplyID)
-					return noChainRecord, noChainRecord, nil
-				}
-				if fires {
-					from1 = last
-				}
-			}
-			if turn := c.nearestTurn(w, from0); turn != noChainRecord {
-				pick0 = []chainHandle{turn}
-			}
-			if turn := c.nearestTurn(w, from1); turn != noChainRecord {
-				pick1 = []chainHandle{turn}
-			}
-		}
-		if set0 == nil {
-			set0 = pick0
-		}
-		if set1 == nil {
-			set1 = pick1
-		}
-	}
-	return c.leafOf(set0), c.leafOf(set1), nil
+	return allVariants &^ variantsMetcalfe
 }
 
-// singlePath is the turn record the resume's single path walks from, with
-// q1t's variants off (turn0) and on (turn1): the start is the last row, or,
-// where no checkpoint carries leafUuid and the newest row is not the last,
-// [threadChain.newestUnder]; a checkpoint naming a record the relink left
-// other than the last row replaces it, or the last row does where it descends
-// from that record ([threadChain.y1t]) or, in the metcalfe variants, q1t
-// holds; then the nearest turn record up, none where the walk finds none.
-// Where q1t cannot read a reply's id, the thread is whyReplyID.
-func (c *threadChain) singlePath(ctx context.Context, w *chainWork) (turn0, turn1 chainHandle, err error) {
+// chainLeaves is a record per reading of the leaf, by [chainLeafReading].
+type chainLeaves [leafReadings]chainHandle
+
+// pick is THE LEAF of the main thread (2.1.330's va @322267791 and Lcr
+// @322283476, 2.1.322's Gr @293820883 and Yya @293834568, 2.1.310's kr
+// @247196754 and m_i @247206356), a leaf per reading: noChainRecord where the
+// resume finds no conversation. Not relinked, the single path's turn record
+// ([threadChain.singlePath]); relinked, or where that finds none, the leaf set
+// ([threadChain.leafSet]), narrowed where it holds more than one; then
+// [threadChain.leafOf]. The hosted-environment clauses (2.1.322's NWo behind
+// WA(), 2.1.330's Jrn @322253812 and the leaf set's behind cT()) never answer
+// here.
+func (c *threadChain) pick(ctx context.Context, w *chainWork, relinked bool) (chainLeaves, error) {
+	last := c.lastRow
+	// sets is each reading's leaf source: the single path's turn record where
+	// found, else the leaf set.
+	var sets [leafReadings][]chainHandle
+	if !relinked {
+		turns, err := c.singlePath(ctx, w)
+		if err != nil || c.why != "" {
+			return chainLeaves{}, err
+		}
+		for r, turn := range turns {
+			if turn != noChainRecord {
+				sets[r] = []chainHandle{turn}
+			}
+		}
+	}
+	if !slices.ContainsFunc(sets[:], func(set []chainHandle) bool { return set == nil }) {
+		return c.leavesOf(sets), nil
+	}
+	hr, err := c.leafSet(ctx, w)
+	if err != nil {
+		return chainLeaves{}, err
+	}
+	var picks [leafReadings][]chainHandle
+	for r := range picks {
+		picks[r] = hr
+	}
+	if len(hr) > 1 {
+		// Narrowed to one: up from the checkpoint, where it is in the set and
+		// the last row descends through none of its batches (Y1t, never
+		// directly) nor, in a reading of q1t, holds it; else up from the last
+		// row (2.1.330's va @322269880, 2.1.322's Gr @293822608, 2.1.310's kr
+		// @247198349, `uo&&Hr.has(uo)&&...?uo:Eo`).
+		from := chainLeaves{last, last, last}
+		if _, in := slices.BinarySearch(hr, w.cp); in && w.cp != last && !c.y1t(w, last, w.cp, false) {
+			var read bool
+			if from, read = c.fromCheckpoint(w, last); !read {
+				return chainLeaves{}, nil
+			}
+		}
+		for r := range picks {
+			if turn := c.nearestTurn(w, from[r]); turn != noChainRecord {
+				picks[r] = []chainHandle{turn}
+			}
+		}
+	}
+	for r := range sets {
+		if sets[r] == nil {
+			sets[r] = picks[r]
+		}
+	}
+	return c.leavesOf(sets), nil
+}
+
+// leavesOf is [threadChain.leafOf] of each reading's set.
+func (c *threadChain) leavesOf(sets [leafReadings][]chainHandle) chainLeaves {
+	var leaves chainLeaves
+	for r := range leaves {
+		leaves[r] = c.leafOf(sets[r])
+	}
+	return leaves
+}
+
+// fromCheckpoint is where each reading walks up from where the checkpoint
+// names a record the last row does not descend through: the checkpoint, or
+// the last row where the reading's q1t holds. read is false where the thread
+// is a cannot tell: a leaf rule of 2.1.330 the chain does not hold may fire
+// (whyLeafRule), or q1t cannot read a reply's id (whyReplyID).
+func (c *threadChain) fromCheckpoint(w *chainWork, last chainHandle) (from chainLeaves, read bool) {
+	cp := w.cp
+	from = chainLeaves{cp, cp, cp}
+	if last != noChainRecord && c.leafRules(w, cp) {
+		c.cannotTell(whyLeafRule)
+		return from, false
+	}
+	for _, r := range []chainLeafReading{leafQ1t322, leafQ1t330} {
+		fires, ok := c.q1t(w, last, cp, r == leafQ1t330)
+		if !ok {
+			c.cannotTell(whyReplyID)
+			return from, false
+		}
+		if fires {
+			from[r] = last
+		}
+	}
+	return from, true
+}
+
+// singlePath is the turn record the resume's single path walks from, per
+// reading: the start is the last row, or, where no checkpoint carries leafUuid
+// and the newest row is not the last, [threadChain.newestUnder]; a checkpoint
+// naming a record the relink left other than the last row replaces it, or the
+// last row does where it descends from that record ([threadChain.y1t]) or, in
+// a reading of q1t, q1t holds ([threadChain.fromCheckpoint]); then the nearest
+// turn record up, none where the walk finds none.
+func (c *threadChain) singlePath(ctx context.Context, w *chainWork) (turns chainLeaves, err error) {
 	last := c.lastRow
 	start := last
 	if !c.anyLeafKey && c.newest != noChainRecord && c.newest != last {
 		if start, err = c.newestUnder(ctx, w, last); err != nil {
-			return noChainRecord, noChainRecord, err
+			return chainLeaves{}, err
 		}
 	}
-	from0, from1 := w.cp, w.cp
+	from := chainLeaves{w.cp, w.cp, w.cp}
 	if w.cp != noChainRecord && w.cp != last {
 		if c.y1t(w, last, w.cp, true) {
-			from0, from1 = last, last
+			from = chainLeaves{last, last, last}
 		} else {
-			fires, read := c.q1t(w, last, w.cp)
-			if !read {
-				c.cannotTell(whyReplyID)
-				return noChainRecord, noChainRecord, nil
-			}
-			if fires {
-				from1 = last
+			var read bool
+			if from, read = c.fromCheckpoint(w, last); !read {
+				return chainLeaves{}, nil
 			}
 		}
 	}
-	if from0 == noChainRecord {
-		from0, from1 = start, start
+	if from[leafPlain] == noChainRecord {
+		from = chainLeaves{start, start, start}
 	}
-	turn0 = c.nearestTurn(w, from0)
-	turn1 = turn0
-	if from1 != from0 {
-		turn1 = c.nearestTurn(w, from1)
+	for r := range turns {
+		if r > 0 && from[r] == from[r-1] {
+			turns[r] = turns[r-1]
+			continue
+		}
+		turns[r] = c.nearestTurn(w, from[r])
 	}
-	return turn0, turn1, nil
+	return turns, nil
 }
 
-// leafSet is THE LEAF SET (2.1.322's Cjt @293590395, 2.1.310's loop in kr
-// @247197836), in the file's order: from each record the relink left that
+// leafSet is THE LEAF SET (2.1.330's Ctn @321998799, 2.1.322's Cjt
+// @293590395, 2.1.310's loop in kr @247197836), in the file's order: from
+// each record the relink left that
 // none names as its parent, the first user or assistant record up by parent
 // through records that are neither, where no user or assistant record names
 // that one as its parent. Each answer is kept once walked, as Cjt keeps it:
@@ -2105,44 +2279,51 @@ func (c *threadChain) leafSet(ctx context.Context, w *chainWork) ([]chainHandle,
 
 // leafOf is the leaf the resume walks from of set, its single path's turn
 // record or its leaf set, in the file's order: the member of the latest
-// Date.parse of its timestamp, the first in the file on a tie (2.1.322's cj
-// @293745290, 2.1.310's p0 @247129929, `y>s` from -Infinity), a record of no
-// time never taken; where set is empty, and only there, the record of the
-// latest time of every one the relink left, of any kind, the first on a tie
-// (2.1.322's Ozt @293848378, 2.1.310's p0 in m_i); and none, where the resume
-// finds no conversation: where set holds members but none has a time, or set
-// is empty and no record the relink left has one.
+// Date.parse of its timestamp, the first in the file on a tie (2.1.330's lK
+// @322180523, 2.1.322's cj @293745290, 2.1.310's p0 @247129929); where set is
+// empty, and only there, the record of the latest time of every one the relink
+// left, of any kind, the first on a tie (2.1.330's uan @322296800, 2.1.322's
+// Ozt @293848378, 2.1.310's p0 in m_i); and none where it has no member. Among
+// members none of which has a time, 2.1.330 takes the last (`g===-1/0`) and
+// the others none, a parting the chain refuses (whyLeafTime).
 func (c *threadChain) leafOf(set []chainHandle) chainHandle {
+	if len(set) == 0 {
+		for i, r := range c.recs {
+			if r.kind&kindDeleted == 0 {
+				set = append(set, chainHandle(i+1))
+			}
+		}
+	}
+	return c.latest(set)
+}
+
+// latest is the member of set of the latest time, the first in the file on a
+// tie; none where set is empty, and none, the thread whyLeafTime, where no
+// member has a time ([threadChain.leafOf]).
+func (c *threadChain) latest(set []chainHandle) chainHandle {
 	leaf := noChainRecord
-	later := func(h chainHandle) {
+	for _, h := range set {
 		if r := c.recs[h-1]; r.kind&kindTimed != 0 && (leaf == noChainRecord || r.ms > c.recs[leaf-1].ms) {
 			leaf = h
 		}
 	}
-	if len(set) > 0 {
-		for _, h := range set {
-			later(h)
-		}
-		return leaf
-	}
-	for i, r := range c.recs {
-		if r.kind&kindDeleted == 0 {
-			later(chainHandle(i + 1))
-		}
+	if leaf == noChainRecord && len(set) > 0 {
+		c.cannotTell(whyLeafTime)
 	}
 	return leaf
 }
 
-// ownLeaf is the leaf of A SUBAGENT'S OWN LOAD (2.1.322's Rye @293845538,
-// 2.1.310's FBe @247216758), which loads the file with the main thread's
-// loader, relink included, and reads none of its pick: of its OWN LEAVES, the
-// records of its own ([threadChain.own]) no record of its own names as parent,
-// a boundary aside, the one of the latest time, the first in the file on a tie
-// (cj, p0); none where none has a time (`no_leaf`) or it has no record
-// (`no_agent_messages`). From it the load walks, recovers and tails over every
-// record the relink left and hands on its agentId's alone
-// ([threadChain.judge]); a fork's reference prefixes the parent's conversation,
-// so the chain refuses any (whyForkContext). It files the own leaves in order.
+// ownLeaf is the leaf of A SUBAGENT'S OWN LOAD (2.1.330's lPe @322293883,
+// 2.1.322's Rye @293845538, 2.1.310's FBe @247216758), which loads the file
+// with the main thread's loader, relink included, and reads none of its pick:
+// of its OWN LEAVES, the records of its own ([threadChain.own]) no record of
+// its own names as parent, a boundary aside, the one of the latest time, the
+// first in the file on a tie ([threadChain.latest]); none where it has no
+// record (`no_agent_messages`). From it the load walks, recovers and tails
+// over every record the relink left and hands on its agentId's alone
+// ([threadChain.judge]); a fork's reference prefixes the parent's
+// conversation, so the chain refuses any (whyForkContext). It files the own
+// leaves in order.
 func (c *threadChain) ownLeaf(w *chainWork) chainHandle {
 	// w.a holds the records an own record names as parent.
 	w.a.clear()
@@ -2151,18 +2332,14 @@ func (c *threadChain) ownLeaf(w *chainWork) chainHandle {
 			w.a.set(int(r.parent))
 		}
 	}
-	leaf := noChainRecord
 	for i, r := range c.recs {
 		h := chainHandle(i + 1)
 		if r.kind&(kindDeleted|kindBoundary) != 0 || !c.own(h) || w.a.has(int(h)) {
 			continue
 		}
 		c.ownLeaves = append(c.ownLeaves, h)
-		if r.kind&kindTimed != 0 && (leaf == noChainRecord || r.ms > c.recs[leaf-1].ms) {
-			leaf = h
-		}
 	}
-	return leaf
+	return c.latest(c.ownLeaves)
 }
 
 // own reports whether record h is one of the subagent's own: of its agentId,
@@ -2171,7 +2348,7 @@ func (c *threadChain) own(h chainHandle) bool { return c.is(h, kindAgent|kindSid
 
 // nearestTurn is the nearest user or assistant record up from from by
 // parent, from itself; none where the walk meets a root, a parent naming no
-// record, or a record twice (2.1.322's Gr, 2.1.310's kr).
+// record, or a record twice (2.1.330's va, 2.1.322's Gr, 2.1.310's kr).
 func (c *threadChain) nearestTurn(w *chainWork, from chainHandle) chainHandle {
 	w.a.clear()
 	for at := from; at != noChainRecord; at = c.recs[at-1].parent {
@@ -2188,7 +2365,7 @@ func (c *threadChain) nearestTurn(w *chainWork, from chainHandle) chainHandle {
 
 // newestUnder is the record of the latest timestamp whose walk by parent
 // reaches last, the later in the file on a tie, not a sidechain's; last
-// where none is (2.1.322's Gr and 2.1.310's kr, `Ks`, compared as strings,
+// where none is (2.1.330's va, 2.1.322's Gr and 2.1.310's kr, compared as strings,
 // `>=`). One pass: last's descendants marked over the children index.
 func (c *threadChain) newestUnder(ctx context.Context, w *chainWork, last chainHandle) (chainHandle, error) {
 	w.a.clear()
@@ -2222,9 +2399,9 @@ func (c *threadChain) newestUnder(ctx context.Context, w *chainWork, last chainH
 }
 
 // y1t reports whether the last row stays the start though the checkpoint
-// names another record (2.1.322's Y1t @293812412 with X1t, 2.1.310's WPt
-// @247189354 with GPt; throughBatch always, since no marked checkpoint is
-// modelled): the last row descends through the checkpoint's batch, the descent
+// names another record (2.1.330's isn @322255959 with ltt, 2.1.322's Y1t
+// @293812412 with X1t, 2.1.310's WPt @247189354 with GPt; throughBatch
+// always, since no marked checkpoint is modelled): the last row descends through the checkpoint's batch, the descent
 // up from the checkpoint through UF records to a batch's results, or to the
 // call its hook's attachment names, met by the walk up from the last row
 // through another result or record of that batch's reply; or, where direct, as
@@ -2337,7 +2514,8 @@ func (c *threadChain) answersAnother(w *chainWork, below chainHandle, uses int, 
 }
 
 // x1t is the run up from from's parent of records part of reply id's
-// (2.1.322's X1t @293813630, 2.1.310's GPt @247190569), each met once.
+// (2.1.330's ltt @322258040, 2.1.322's X1t @293813630, 2.1.310's GPt
+// @247190569), each met once.
 func (c *threadChain) x1t(w *chainWork, from chainHandle, id chainReplyID) []chainHandle {
 	w.b.clear()
 	w.b.set(int(from))
@@ -2349,17 +2527,19 @@ func (c *threadChain) x1t(w *chainWork, from chainHandle, id chainReplyID) []cha
 	return run
 }
 
-// q1t reports whether 2.1.322's q1t (@293811681) holds of the last row and
-// the checkpoint, as the metcalfe variants read it: the checkpoint is a reply
-// that made a call; above its run (it and the records of its own id it hangs
-// from) lies a record; the walk up from the last row reaches that record, and
-// of the records it passes outside the run, the topmost (`K`) was written
-// later than the checkpoint, and one is a reply saying something or making a
-// call (LE @293601245, `H`); no record hangs off the checkpoint, and none off
-// the last row but one that hangs off a reply. read is false where the run
-// turns on a reply's id the layer reads as none, which may be absent (the run
-// stops) or empty (it goes on): `message?.id!==void 0`.
-func (c *threadChain) q1t(w *chainWork, last, cp chainHandle) (fires, read bool) {
+// q1t reports whether q1t holds of the last row and the checkpoint, as a
+// reading of the metcalfe variants reads it: 2.1.322's q1t (@293811681), or,
+// throughSystem, 2.1.330's (tsn @322254354, through Yin @322255016). The
+// checkpoint is a reply that made a call; above its run (it and the records of
+// its own id it hangs from) lies a record; the walk up from the last row
+// reaches that record, or, throughSystem, a system record it hangs from
+// through system records alone, and of the records it passes outside the run,
+// the topmost (`K`) was written later than the checkpoint, and one is a reply
+// saying something or making a call (LE @293601245, eC @322012881); no record
+// hangs off the checkpoint, and none off the last row but one that hangs off a
+// reply. read is false where the run turns on a reply's id the layer reads as
+// none, which may be absent (the run stops) or empty (it goes on).
+func (c *threadChain) q1t(w *chainWork, last, cp chainHandle, throughSystem bool) (fires, read bool) {
 	if !c.is(cp, kindAssistant|kindUse) {
 		return false, true
 	}
@@ -2380,11 +2560,22 @@ func (c *threadChain) q1t(w *chainWork, last, cp chainHandle) (fires, read bool)
 	if above == noChainRecord {
 		return false, true
 	}
+	// w.run holds where the walk stops: above, and, throughSystem, the records
+	// it hangs from through system records alone.
+	w.run.clear()
+	w.run.set(int(above))
+	for k := above; throughSystem && c.is(k, kindSystem) && c.recs[k-1].parent != noChainRecord; {
+		k = c.recs[k-1].parent
+		if w.run.has(int(k)) {
+			break
+		}
+		w.run.set(int(k))
+	}
 	w.b.clear()
 	var later chainHandle
 	speaks := false
 	at := last
-	for at != noChainRecord && at != above {
+	for at != noChainRecord && !w.run.has(int(at)) {
 		if w.b.has(int(at)) {
 			return false, true
 		}
@@ -2409,9 +2600,53 @@ func (c *threadChain) q1t(w *chainWork, last, cp chainHandle) (fires, read bool)
 	return true, true
 }
 
+// leafRules reports whether a leaf rule of 2.1.330 that the chain does not
+// hold may move the leaf from the checkpoint to the last row, where the last
+// row does not descend through it ([threadChain.y1t]): rsn (@322254537,
+// behind tengu_spicy_oboe, off), where the checkpoint, up through system
+// records, is a reply saying nothing and making no call; or asn (@322257185,
+// behind foamy_spring alone), where the checkpoint is a reply of an id,
+// making no call, whose run up ([threadChain.x1t]) holds an attachment or
+// system record below a record of its own reply, and no user record there.
+// Each is the wider reading of its rule's first conditions, so a thread either
+// may fire on is refused (whyLeafRule).
+func (c *threadChain) leafRules(w *chainWork, cp chainHandle) bool {
+	y := cp
+	for steps := 0; c.is(y, kindSystem) && c.recs[y-1].parent != noChainRecord && steps < len(c.recs); steps++ {
+		y = c.recs[y-1].parent
+	}
+	if c.is(y, kindAssistant) && !c.is(y, kindUse) && !c.is(y, kindSays) {
+		return true
+	}
+	id := c.recs[cp-1].reply
+	if !c.is(cp, kindAssistant) || c.is(cp, kindUse) || id == 0 {
+		return false
+	}
+	run := c.x1t(w, cp, id)
+	top := -1
+	for i, h := range run {
+		if c.is(h, kindUse) {
+			return false
+		}
+		if c.is(h, kindAssistant) {
+			top = i
+		}
+	}
+	between := false
+	for _, h := range run[:max(top, 0)] {
+		switch {
+		case c.is(h, kindUser):
+			return false
+		case !c.is(h, kindAssistant):
+			between = true
+		}
+	}
+	return between
+}
+
 // speaks reports whether record h is a reply its model wrote that makes a
-// call or says something, as 2.1.322's LE classes one assistant_calls or
-// assistant_text.
+// call or says something, as 2.1.322's LE and 2.1.330's eC class one
+// assistant_calls or assistant_text.
 func (c *threadChain) speaks(h chainHandle) bool {
 	k := c.recs[h-1].kind
 	return k&kindAssistant != 0 && k&kindSynthetic == 0 && k&(kindUse|kindSays) != 0
@@ -2474,7 +2709,7 @@ func (c *threadChain) listFrom(ctx context.Context, w *chainWork, leaf chainHand
 	return list, nil
 }
 
-// tails is THE TAILS (2.1.322's lWo @293747057, 2.1.310's kpo @247131650),
+// tails is THE TAILS (2.1.330's P_r @322182457, 2.1.322's lWo, 2.1.310's kpo),
 // run after the recovery with what it and the walk met in w.met: the records
 // under leaf that are neither user nor assistant records, a boundary among
 // them, through records that are neither, a met record ending its branch,
@@ -2552,7 +2787,8 @@ func (c *threadChain) tails(ctx context.Context, w *chainWork, leaf chainHandle)
 }
 
 // byTime sorts records as the tails' sorts do, stably by timestamp compared
-// as a string (`H.timestamp<K.timestamp` @293747102, @247131695), and reports
+// as a string (`H.timestamp<K.timestamp` @322182502, @293747102, @247131695),
+// and reports
 // whether that orders them at all: it reads a record of no time as equal to
 // every record, so beside two of different times such a record leaves their
 // order to the engine's sort algorithm, and beside records of one time leaves
@@ -2581,7 +2817,8 @@ func (c *threadChain) byTime(records []chainHandle) bool {
 	return true
 }
 
-// walk is THE WALK (2.1.322's A7t @293745408, 2.1.310's w$t @247130047): the
+// walk is THE WALK (2.1.330's DIn @322180717, 2.1.322's A7t @293745408,
+// 2.1.310's w$t @247130047): the
 // chain from leaf by parent to a root, taking [threadChain.fallback] where a
 // parent names no record or one walked and stopping where it finds none; root
 // first, its records met.
@@ -2619,8 +2856,8 @@ func (c *threadChain) walk(ctx context.Context, w *chainWork, leaf chainHandle) 
 }
 
 // fallback is the record the walk takes for at's parent where that names no
-// record or one walked already (2.1.322's vjt @293589456, 2.1.310's Epo
-// @247132981): of at's isSidechain as written, timed and not met, the latest
+// record or one walked already (2.1.330's vtn @321997874, 2.1.322's vjt
+// @293589456, 2.1.310's Epo @247132981): of at's isSidechain as written, timed and not met, the latest
 // at or before at's time and at most claudeFallbackMS before it, the first in
 // the file on a tie; none where at has no time.
 func (c *threadChain) fallback(w *chainWork, at chainHandle) chainHandle {
@@ -2709,13 +2946,13 @@ type chainAnchored struct {
 	record chainHandle
 }
 
-// recover is THE RECOVERY (2.1.322's fWo @293749272, 2.1.310's Rpo
-// @247134223): chain with what it reaches placed in it, how each was reached
+// recover is THE RECOVERY (2.1.330's D_r @322185645, 2.1.322's fWo, 2.1.310's
+// Rpo): chain with what it reaches placed in it, how each was reached
 // into how. For each reply on the walk, at its id's first meeting, every other
 // record of the id and every result under one, not met before, is recovered;
 // its window runs past the last record of its id on the walk and on over what
 // [threadChain.partOf] reads as part of it, and opens where it recovered or
-// [threadChain.hang] hung a record. Overlapping windows merge (@293752828),
+// [threadChain.hang] hung a record. Overlapping windows merge (@322189198),
 // one walked record's hung lists joining, the earlier window's first. A merged
 // window's recovered records are sorted by file place once: no two share one,
 // so that is the resume's order without its quadratic cost
@@ -2836,11 +3073,11 @@ func (c *threadChain) recover(ctx context.Context, w *chainWork, chain []chainHa
 }
 
 // hang is what the recovery hangs off reply id's window, chain[start:end],
-// where a record of the reply made a call (`co` in fWo and Rpo; bVe
-// @293748333): under each record of the reply, then each met result under one
+// where a record of the reply made a call (`co` in D_r, fWo and Rpo; CPe
+// @322184473, bVe @293748333): under each record of the reply, then each met result under one
 // of them, then each walked record of the window past its first that is UF,
 // what [threadChain.pye] hangs from each child in turn, each record hung met
-// at once (`r.add(Bo.uuid)` @293752104), so it blocks a later window, and
+// at once (`r.add(Bo.uuid)` @293752104, @322188474), so it blocks a later window, and
 // reached as whyHookChain. What hangs under a record of the reply or a result
 // joins recovered, placed by file order before the first walked record
 // written after it; what hangs under a walked record goes to anchored, right
@@ -2904,7 +3141,7 @@ func (c *threadChain) hang(ctx context.Context, w *chainWork, chain []chainHandl
 }
 
 // pye is what the recovery hangs under u from y, one of u's children,
-// appended to into (2.1.322's pye @293588633, 2.1.310's cce @246995483): y
+// appended to into (2.1.330's Cxe @321995019, 2.1.322's pye, 2.1.310's cce): y
 // and, after each record, its one child not met, while each is a UF record of
 // u's isSidechain as written and not met; none at all where one is not, or
 // where one has two or more children not met. A record has one parent, so the
@@ -2938,13 +3175,13 @@ func (c *threadChain) pye(ctx context.Context, w *chainWork, y, u chainHandle,
 
 // judge decides each record's answer under g's variants: deleted by the
 // relink, not handed; reached by the walk, the recovery or the tails, handed.
-// In the main thread, THE RETRACTION FILTER (2.1.322's eGe @295286851,
-// 2.1.310's qGn @248511058) then drops every non-system record whose uuid's
+// In the main thread, THE RETRACTION FILTER (2.1.330's hPn @324043599,
+// 2.1.322's eGe, 2.1.310's qGn) then drops every non-system record whose uuid's
 // first 24 characters a record of the list names
 // ([threadChain.readsRetractions], [chainPrefix]); THE MALFORMED-ATTACHMENT
-// DROP (Fce @295256716, dne @248487226, the same code) then drops each
-// attachment [threadChain.file] marked kindIllFormed, that record alone. Both
-// releases' deserializers rerun the two (e_n @295266070, TJt @248494866),
+// DROP (rDe @324006483, Fce, dne, the same code) then drops each attachment
+// [threadChain.file] marked kindIllFormed, that record alone. Each release's
+// deserializer reruns the two (F2n @324017533, e_n @295266070, TJt),
 // taking nothing more. In a subagent's thread neither runs, and another
 // agentId's records are whyAnotherAgent. Its orders are what it hands for
 // certain, per tails order.
@@ -3024,26 +3261,27 @@ func (c *threadChain) judge(ctx context.Context, w *chainWork, g *chainGroup) er
 // merge folds each group's answers into the thread's: handedYes where every
 // group hands a record, handedNo where none does, each with the default
 // variant's reason; and handedUnknown where the groups part, whyLeafFlag where
-// q1t's leaf parts them and else whyRelease. A group's answers are definite
+// a group walking from another leaf than the default's parts from it and else
+// whyRelease. A group's answers are definite
 // (judge answers handed or not handed alone), so cannot tell comes only from
 // that parting. Each distinct order is kept once, with the variants that hand
 // it, the default variant's first: a group's warm_mochi variants hand its
 // order, the rest its order with the tails sorted after a walk by breadth.
 func (c *threadChain) merge(groups []chainGroup) {
 	def := slices.IndexFunc(groups, func(g chainGroup) bool { return g.variants&variantDefault != 0 })
-	metcalfe := slices.IndexFunc(groups, func(g chainGroup) bool { return g.variants == variantsMetcalfe })
 	c.verdicts = make([]chainVerdict, len(c.recs))
 	for i := range c.verdicts {
-		var yes, no bool
+		var yes, no, leafFlag bool
 		for _, g := range groups {
 			if g.verdicts[i].handed == verdictYes {
 				yes = true
 			} else {
 				no = true
 			}
+			leafFlag = leafFlag || g.leaf != groups[def].leaf && g.verdicts[i].handed != groups[def].verdicts[i].handed
 		}
 		switch {
-		case yes && no && metcalfe >= 0 && groups[metcalfe].verdicts[i].handed != groups[def].verdicts[i].handed:
+		case yes && no && leafFlag:
 			c.verdicts[i] = chainVerdict{handed: verdictUnknown, why: whyAt(whyLeafFlag)}
 		case yes && no:
 			c.verdicts[i] = chainVerdict{handed: verdictUnknown, why: whyAt(whyRelease)}

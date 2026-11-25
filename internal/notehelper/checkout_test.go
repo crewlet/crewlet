@@ -904,10 +904,10 @@ func TestAFileSwappedAfterThePlanIsNeverReadThrough(t *testing.T) {
 }
 
 // A NESTED FIRING'S SKIPS ARE KEPT FOR THE RUN'S END AND HANDED TO THE MODEL:
-// what a firing leaves out (here a skill leading out of its checkout) is said
-// on its stderr, named in its answer, and appended to the state's skipped
-// file, a later firing's lines after the earlier's; the launch's own skips go
-// to its stderr alone, which is the run's.
+// what a firing leaves out (here a skill leading out of its checkout) is
+// named in its answer and appended to the state's skipped file, a later
+// firing's lines after the earlier's, never on its stderr, which a runner
+// may pass on; the launch's own skips go to its stderr alone, the run's.
 //
 // Mutation: keep the launch's lines, keep a firing's in place of the last,
 // or leave them out of the answer, and a check goes red.
@@ -949,8 +949,8 @@ func TestANestedFiringsSkipsAreKeptForTheRunsEnd(t *testing.T) {
 			strings.NewReader("{}"), &out, &errs, os.Getenv)
 		line := "the skill " + filepath.Join(r.workdir(t), late, ".codex/skills/out") +
 			" is left out: it leads out of its checkout, to " + filepath.Join(outside, "o")
-		if errs.String() != "notehelper: "+line+"\n" {
-			t.Errorf("the firing said %q, want %q", errs.String(), line)
+		if errs.String() != "" {
+			t.Errorf("the firing said %q on stderr, want the line in its log alone", errs.String())
 		}
 		if !strings.Contains(out.String(), `- `+line) {
 			t.Errorf("the firing answered %s, want it to name %q", out.String(), line)
@@ -1156,8 +1156,8 @@ func TestACheckoutThatWaitsSaysItsPlanOnceWhenItIsHanded(t *testing.T) {
 			strings.NewReader("{}"), &out, &errs, os.Getenv)
 		says = append(says, fmt.Sprintf("%d,%d", strings.Count(errs.String(), line), strings.Count(out.String(), line)))
 	}
-	if got := strings.Join(says, " "); got != "1,1 0,0" {
-		t.Errorf("the firings said and answered the line %s times (stderr,answer per firing), want 1,1 0,0", got)
+	if got := strings.Join(says, " "); got != "0,1 0,0" {
+		t.Errorf("the firings said and answered the line %s times (stderr,answer per firing), want 0,1 0,0", got)
 	}
 	if got := strings.Count(read(t, filepath.Join(r.state, skippedLog)), line); got != 1 {
 		t.Errorf("the run keeps the line %d times, want once", got)

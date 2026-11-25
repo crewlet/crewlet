@@ -28,6 +28,9 @@ type lineFacts struct {
 	// taskDelivery is whether the record carries `taskDelivery`, whatever it
 	// holds.
 	taskDelivery bool
+	// putBack is whether the record carries `rowsAheadOfPutBack`, whatever it
+	// holds.
+	putBack bool
 	// estimating is whether the line's reader asked for its estimate
 	// ([threadReader.Estimating]), which the estimate's accessors answer
 	// [errNotEstimated] without.

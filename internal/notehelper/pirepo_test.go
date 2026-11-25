@@ -131,8 +131,8 @@ func TestAPiFiringWithoutItsConfigPrintsNothing(t *testing.T) {
 
 // TWO SKILLS OF ONE NAME IN ONE WALK ARE SAID: a walk reaching web/deploy and
 // infra/deploy copies the first as `late:deploy` and leaves the second out,
-// saying so with both paths (on stderr, in the firing's answer after its
-// skills, and in the run's skip log), since no precedence of Pi's picks one;
+// saying so with both paths (in the firing's answer after its skills and in
+// the run's skip log, never on stderr), since no precedence of Pi's picks one;
 // a name .agents/skills loses to .pi/skills is Pi's own order, and silent.
 //
 // Mutation: say nothing, say the cross-directory clash, or leave the line
@@ -152,8 +152,8 @@ func TestTwoSkillsOfOneNameInOneWalkAreSaid(t *testing.T) {
 	}
 	line := "the skill " + root + "/.pi/skills/web/deploy is left out: " + root +
 		"/.pi/skills/infra/deploy, found first, takes its name late:deploy"
-	if said != "notehelper: "+line+"\n" {
-		t.Errorf("the firing said %q, want %q", said, line)
+	if said != "" {
+		t.Errorf("the firing said %q on stderr, want the line in its log alone", said)
 	}
 	if !strings.HasSuffix(out, "\n\n# Left out of the repositories below the working directory\n\n- "+line) {
 		t.Errorf("the firing printed %q, want its skills then the line", out)

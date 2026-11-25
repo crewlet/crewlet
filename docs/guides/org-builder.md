@@ -487,7 +487,9 @@ has none) and **Agents with problems**, which is named apart from the
 configuration check's pill in the toolbar ("Configuration OK", or "*N*
 configuration problems"), since one is about the agents and the other the
 document. Rows are pruned to the seats the chip keeps, a team kept while it
-holds one.
+holds one. A seat counts in **Paused or stopped** from the moment it is paused,
+while the turn it is on finishes or its executor asks too, so the state chips
+always add up to **All agents**; its Status still says what it is doing.
 
 **The status legend** on the chart, at the canvas's bottom right across from the
 zoom controls, has **Working**, **Needs you**, **Paused or stopped** and

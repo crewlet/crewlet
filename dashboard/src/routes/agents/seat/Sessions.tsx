@@ -131,6 +131,7 @@ export const STATE_TITLES: Record<Exclude<TranscriptState, "read">, string> = {
   unreadable: "The session does not open",
   malformed: "The session is not a readable archive",
   unsupported: "This build does not read this session",
+  summary: "No session was kept; its newest summary was",
 };
 
 /**
@@ -488,7 +489,14 @@ function Transcript({
                 </Button>
               </div>
             )}
-            {first.state !== "read" ? (
+            {first.state === "summary" && (
+              // A SESSION NOT KEPT WHOSE NEWEST SUMMARY WAS: why the session
+              // is not, and the summary below as the transcript's one entry.
+              <Callout variant="info">
+                <strong>{STATE_TITLES.summary}.</strong> {first.why}
+              </Callout>
+            )}
+            {first.state !== "read" && first.state !== "summary" ? (
               <Callout variant="warning">
                 <strong>{STATE_TITLES[first.state]}.</strong> {first.why}
               </Callout>
@@ -808,6 +816,7 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
         {row.ended_at ? ` · ended ${fmtDateTime(row.ended_at)}` : ""}
         {row.kept ? ` · ${fmtBytes(row.object_bytes + row.media_bytes)} kept` : ""}
         {row.kept && row.media_bytes > 0 ? `, ${fmtBytes(row.media_bytes)} of it media` : ""}
+        {row.summary_kept ? ` · ${fmtBytes(row.summary_bytes)} summary kept` : ""}
       </p>
       {row.trimmed_note && <p className="t-caption">{row.trimmed_note}</p>}
       {note && <p className="t-caption">{note}</p>}
@@ -870,8 +879,8 @@ function HandedSession({ turn }: { turn: string }) {
 
 /**
  * One entry of a transcript: who it is from, the subagent whose transcript
- * holds it, the tool, a failure marked, when — and its text, an opening marked
- * as one where the entry was cut to its bound.
+ * holds it, the tool, a failure marked, when — and its text, an opening (or a
+ * kept summary's end) marked as one where the entry was cut to its bound.
  *
  * A CALL'S INPUT AND A TOOL'S OUTPUT ARE BLOCKS, scrolling within the ceiling
  * every block in the shell's scroller takes, because their whitespace is the
@@ -892,6 +901,7 @@ export function TranscriptEntryView({ entry }: { entry: TranscriptEntry }) {
     );
   }
   const block = entry.kind === "tool_call" || entry.kind === "tool_result";
+  const part = entry.tail ? "The end alone" : "The opening alone";
   return (
     <div className="thread-entry">
       <div className="row gap-1 wrap">
@@ -918,7 +928,9 @@ export function TranscriptEntryView({ entry }: { entry: TranscriptEntry }) {
         <p className="prose">{entry.text}</p>
       )}
       {entry.cut && (
-        <p className="t-caption">The opening alone: the whole entry is {fmtBytes(entry.bytes)}.</p>
+        <p className="t-caption">
+          {part}: the whole entry is {fmtBytes(entry.bytes)}.
+        </p>
       )}
     </div>
   );
