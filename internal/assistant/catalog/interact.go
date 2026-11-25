@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
@@ -206,13 +207,16 @@ func interactionTools() []Tool {
 		},
 	}
 
+	// NO LABEL: the link's text is the engine's, from what it opens
+	// ([cards.Link], [OpenedTitle]), so it never names another place.
 	params := map[string]*schema{
 		"screen": oneOf("The screen to open.", cards.Screens()...),
-		"label":  text("The link's text, a few words.", 80),
 	}
 	for _, name := range []string{"key", "id"} {
 		params[name] = text("The screen's "+name+", where it takes one.", nameBytes)
 	}
+	params["kind"] = text("The integration's key, for an integration's page: "+
+		"google_cloud, github, slack and so on.", nameBytes)
 	params["handle"] = text("The seat's handle or name, for a seat's screen.", nameBytes)
 	params["unit"] = text("The unit's key or name, for a unit's screen.", nameBytes)
 	params["direction"] = oneOf("For the atlas map lit along a trace, which way it walks.",
@@ -258,6 +262,33 @@ var probes = map[string]struct {
 	"atlas-trace-on-map": {atlasEntryRoute, "id", "id"},
 }
 
+// OpenedTitle is the name of the record screen's probe answered with body: its
+// title as the person's own read returned it, "" where the screen names no
+// record or the answer holds no title.
+func OpenedTitle(screen string, body []byte) string {
+	p, ok := probes[screen]
+	if !ok {
+		return ""
+	}
+	known := readRecord(p.route)
+	if known == nil || known.Title == "" {
+		return ""
+	}
+	doc, err := cards.Decode(body)
+	if err != nil {
+		return ""
+	}
+	at := known.Title
+	if known.Root != "" {
+		at = known.Root + "." + known.Title
+	}
+	title := oneLineValue(strings.TrimSpace(cards.Text(cards.Lookup(doc, at))))
+	if title == "" {
+		return ""
+	}
+	return known.TitlePrefix + title
+}
+
 // ProbeRoutes are every route open_in_app may send.
 func ProbeRoutes() []string {
 	var out []string
@@ -274,16 +305,23 @@ func ProbeRoutes() []string {
 // alone ([cards.MayOpen]), with no record to ask about.
 var ErrNoProbe = fmt.Errorf("catalog: the screen names no record to ask about")
 
+// LinkParams are the link parameters a call of open_in_app names, as its
+// screen takes them.
+func LinkParams(a Args) map[string]string {
+	params := map[string]string{}
+	for _, name := range cards.ScreenParams(a.String("screen")) {
+		params[name] = a.String(name)
+	}
+	return params
+}
+
 // Open is open_in_app's link and, for a screen that names a record, the read
 // that decides whether the person may open it. A screen with no record is
 // decided by [cards.MayOpen] on the person's grants.
 func Open(a Args) (wire.Link, *exec.Request, error) {
 	screen := a.String("screen")
-	params := map[string]string{}
-	for _, name := range cards.ScreenParams(screen) {
-		params[name] = a.String(name)
-	}
-	link, err := cards.Link(screen, params, a.String("label"))
+	params := LinkParams(a)
+	link, err := cards.Link(screen, params, "")
 	if err != nil {
 		return wire.Link{}, nil, fmt.Errorf("%w: %w", ErrInvalidArguments, err)
 	}

@@ -272,6 +272,11 @@ type Sources struct {
 	// with OAuth as one nobody has signed in to, and no addresses.
 	MCPGrants MCPGrantReader
 
+	// OAuthClients reads the OAuth clients a person registered at their
+	// vendors and this node's sign-in callback, which the redirect notice is
+	// read off ([notice.FromRedirects]). Nil raises no such notice.
+	OAuthClients OAuthClientReader
+
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
 
@@ -525,6 +530,11 @@ type Sources struct {
 	// HomeBoards is where each person's Home board is kept, in coordination.
 	// Nil leaves `home_board` unregistered: this node keeps none.
 	HomeBoards HomeBoards
+
+	// Instructions is where each person's own Ask Crewlet instructions are
+	// kept, beside their Home board. Nil leaves `assistant_instructions`
+	// unregistered.
+	Instructions InstructionsStore
 
 	// WebhookBase is where a THIRD-PARTY APP reaches this deployment
 	// (`config.API.WebhookBase`: `api.public.external_url` where `api.public`
@@ -845,6 +855,10 @@ func Register(r *Registry, s Sources) {
 	// this node reaches the store that keeps it.
 	if s.HomeBoards != nil {
 		r.Register("home_board", Everybody(), s.homeBoard)
+	}
+	// AND THE ASKER'S ASK CREWLET INSTRUCTIONS, with the company's beside them.
+	if s.Instructions != nil {
+		r.Register("assistant_instructions", Everybody(), s.assistantInstructions)
 	}
 	if s.Catalogue != nil {
 		r.Register("llm_models", Requires(iam.GrantAdmin), s.llmModels)

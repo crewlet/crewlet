@@ -36,7 +36,7 @@ data: {"v":3,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":
 
 id: 3db96f52-a891-5953-9735-0ae522cf6347.10
 event: card
-data: {"v":3,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":10,"at":"2026-10-24T09:41:01Z","kind":"card","card":{"card_id":"6826e75d-5d1b-5758-a7b6-c34a3f3e0911","message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","card":{"type":"open_in_app","open_in_app":{"link":{"label":"ENG-133","screen":"item","href":"#/worklet/ENG-133"},"permitted":true}}}}
+data: {"v":3,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":10,"at":"2026-10-24T09:41:01Z","kind":"card","card":{"card_id":"6826e75d-5d1b-5758-a7b6-c34a3f3e0911","message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","card":{"type":"open_in_app","open_in_app":{"link":{"label":"ENG-133","screen":"item","href":"#/worklet/ENG-133"},"permitted":true,"asked":false}}}}
 
 id: 3db96f52-a891-5953-9735-0ae522cf6347.11
 event: card

@@ -192,7 +192,8 @@ export type AssistantTaintSource =
   | "delegated_request"
   | "atlas"
   | "web_page"
-  | "browser_page";
+  | "browser_page"
+  | "assistant_instructions";
 
 /** One row of a proposal's change list, in the before and after grammar. */
 type AssistantChangeKind = "fact" | "changed" | "added" | "removed" | "text";
@@ -576,6 +577,8 @@ export interface AssistantProposalCard {
   technical?: AssistantTechnicalRequest;
   /** Who will see the result where visibility changes, one phrase each. */
   audience?: AssistantPhrase[];
+  /** A change to the person's own record, which reaches nobody else. */
+  own?: boolean;
   /** The surface of the outside text the turn read before proposing; absent for none. */
   taint?: AssistantTaintSource;
   /** Approving asks the person to confirm it is them first. */
@@ -661,6 +664,8 @@ export interface AssistantOpenInAppCard {
   link: AssistantLink;
   permitted: boolean;
   reason?: AssistantOpenReason;
+  /** The person's own question asked to go there: the tab that sent it opens it once. */
+  asked: boolean;
 }
 
 /** A refusal or a failure in the engine's own words. */

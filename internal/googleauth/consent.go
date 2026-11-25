@@ -99,6 +99,15 @@ func ConsentOf(kind integration.Kind) (Consent, bool) {
 	return Consent{}, false
 }
 
+// Consents is every registered consent product, ordered by kind.
+func Consents() []Consent {
+	consents.Lock()
+	defer consents.Unlock()
+	return slices.SortedFunc(slices.Values(consents.products), func(a, b Consent) int {
+		return strings.Compare(string(a.Kind), string(b.Kind))
+	})
+}
+
 // ErrScopeNotGranted is a sign-in whose grant is not exactly the scopes asked
 // for: a person unticked one on Google's granular consent screen, or Google
 // added another.
@@ -145,6 +154,25 @@ func ProjectNumber(clientID string) (string, bool) {
 	return number, true
 }
 
+// ShortClientID is clientID as a person finds it in Google Cloud's list of
+// credentials: the project number and the ID's first characters, or the ID
+// whole where it is short or of another shape.
+func ShortClientID(clientID string) string {
+	const shown = 8
+	number, ok := ProjectNumber(clientID)
+	if !ok {
+		if runes := []rune(clientID); len(runes) > 2*shown+4 {
+			return string(runes[:2*shown]) + "…"
+		}
+		return clientID
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(clientID, number+"-"), ".apps.googleusercontent.com")
+	if len(id) > shown {
+		id = id[:shown] + "…"
+	}
+	return number + "-" + id
+}
+
 // The window in which a refused renewal is read as an app left in Testing:
 // Google expires the refresh tokens of an external app in Testing after seven
 // days (https://developers.google.com/identity/protocols/oauth2), so a refusal
@@ -163,4 +191,18 @@ const TestingModeHint = "This often means the Google OAuth app is in Testing. Pu
 func LooksLikeTestingMode(signedIn, failed time.Time) bool {
 	age := failed.Sub(signedIn)
 	return age >= testingFrom && age <= testingTo
+}
+
+// SignInClient is the OAuth client a consent product signs in as under c: own,
+// its block's oauth, else the company's sign_in_client; nothing set is a
+// client with no ID, which the sign-in refuses by name.
+func SignInClient(c *config.Company, own *config.GoogleOAuthClient) ConsentClient {
+	var cl *config.GoogleOAuthClient
+	if c != nil {
+		cl = c.Integrations.GoogleSignInClient(own)
+	}
+	if cl == nil {
+		return ConsentClient{}
+	}
+	return ConsentClient{ID: cl.ClientID, Secret: cl.ClientSecret}
 }

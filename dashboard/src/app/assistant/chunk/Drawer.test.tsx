@@ -37,7 +37,7 @@ import {
   type AttachClosed,
 } from "../availability.ts";
 import { Drawer } from "./Drawer.tsx";
-import { conversation, resetSessionForTest } from "./session.ts";
+import { conversation, reconnect, resetSessionForTest } from "./session.ts";
 
 /*
  * THE THREAD, COUNTED. A keystroke must render the composer alone: the case
@@ -84,7 +84,7 @@ const json = (body: unknown, status = 200) =>
  * The engine, as the drawer meets it: each request recorded and answered.
  * `refusal`, where given, is how it answers the question itself.
  */
-function engine(refusal?: () => Response | Promise<Response>) {
+function engine(refusal?: () => Response | Promise<Response>, frames = FIRST, turn = TURN) {
   const sent: { url: string; init: RequestInit }[] = [];
   vi.stubGlobal(
     "fetch",
@@ -109,7 +109,7 @@ function engine(refusal?: () => Response | Promise<Response>) {
         if (refusal) return refusal();
         return json(
           {
-            turn_id: TURN,
+            turn_id: turn,
             stream_url: `/assistant/conversations/403212ed-5a4a-586d-8af6-c62411a17c2f/stream?turn=${TURN}`,
             after_seq: 0,
           },
@@ -117,7 +117,7 @@ function engine(refusal?: () => Response | Promise<Response>) {
         );
       }
       if (path.endsWith("/stream")) {
-        return new Response(FIRST, {
+        return new Response(frames, {
           status: 200,
           headers: { "Content-Type": "text/event-stream" },
         });
@@ -1216,4 +1216,84 @@ test("with no model, anybody else reads why in the panel, with no way to choose 
   expect(screen.getByText("An admin has not chosen the model Ask Crewlet runs on.")).toBeDefined();
   expect(screen.queryByRole("button", { name: "Model settings" })).toBeNull();
   expect(screen.queryByRole("combobox")).toBeNull();
+});
+
+// A CARD'S OPEN HERE IS ACKNOWLEDGED ON THE CARD: the drawer records which card
+// was pressed, so once its page shows the card reads Opened rather than
+// offering the same press again. Mutation: drop the card id between the card
+// and the conversation and the card says the page was already open.
+test("Open here on a card leaves that card reading Opened once its page shows", async () => {
+  engine();
+  window.location.hash = "#/inbox";
+  const off = onBus("assistant.navigation.open", ({ path }) => {
+    window.location.hash = `#/${path.join("/")}`;
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  mount();
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  fireEvent.change(box, { target: { value: "Which task is next?" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  const press = await screen.findByRole("button", { name: "Open here" });
+  await act(async () => {
+    fireEvent.click(press);
+  });
+  expect(await screen.findByText("Opened beside this conversation.")).toBeDefined();
+  expect(screen.queryByText("Already open beside this conversation.")).toBeNull();
+  off();
+});
+
+/** The golden turn, its open in app card marked as the person's question asked for. */
+const ASKED = FIRST.replace('"permitted":true,"asked":false', '"permitted":true,"asked":true');
+
+// A PLACE THE PERSON'S QUESTION ASKED FOR OPENS AT ONCE, ONCE: the card the
+// engine marked asked moves the page with no press and reads Opened; the same
+// frames read again open nothing more. Mutation: drop the once check and the
+// page moves twice.
+test("a card the person's question asked for opens its page once, with no press", async () => {
+  expect(ASKED).toContain('"asked":true');
+  engine(undefined, ASKED);
+  window.location.hash = "#/inbox";
+  const moves: string[][] = [];
+  const off = onBus("assistant.navigation.open", ({ path }) => {
+    moves.push([...path]);
+    window.location.hash = `#/${path.join("/")}`;
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  mount();
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  fireEvent.change(box, { target: { value: "Open ENG-133 for me" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  expect(await screen.findByText("Opened beside this conversation.")).toBeDefined();
+  expect(moves).toEqual([["worklet", "ENG-133"]]);
+  await act(async () => {
+    reconnect();
+  });
+  await afterMicrotasks();
+  expect(moves).toHaveLength(1);
+  off();
+});
+
+// A CARD OF A TURN THIS TAB DID NOT ASK WAITS FOR A PRESS, asked or not: what
+// another tab asked never moves this page. Mutation: drop the turn check and
+// the page moves.
+test("an asked card of a turn this tab did not ask never opens by itself", async () => {
+  const sent = engine(undefined, ASKED, "00000000-0000-4000-8000-000000000001");
+  const moves: unknown[] = [];
+  const off = onBus("assistant.navigation.open", (target) => moves.push(target));
+  mount();
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  fireEvent.change(box, { target: { value: "Open ENG-133 for me" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  await waitFor(() =>
+    expect(sent.some((r) => new URL(r.url).pathname.endsWith("/stream"))).toBe(true),
+  );
+  await afterMicrotasks();
+  expect(moves).toEqual([]);
+  off();
 });

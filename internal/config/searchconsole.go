@@ -49,8 +49,16 @@ const searchConsoleMaxSites = 1000
 // searchConsoleDomain is a Domain property's host: a lowercase DNS name with
 // a dot, punycode for an international one, as Search Console writes it.
 var searchConsoleDomain = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	return regexp.MustCompile(`^` + searchConsoleDomainPattern + `$`)
 })
+
+const searchConsoleDomainPattern = `([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?`
+
+// SearchConsoleSitePattern is the shape [SearchConsoleSite] holds a site to,
+// which the seat picker checks a typed site against before offering it; the
+// document's own check then refuses what the shape alone lets by.
+const SearchConsoleSitePattern = `^(sc-domain:` + searchConsoleDomainPattern + `|https?://` +
+	searchConsoleDomainPattern + `(:[0-9]{1,5})?/[^?#\s]*)$`
 
 // SearchConsoleSite reports whether s is a Search Console property as Google
 // writes it: `sc-domain:` and a domain, or an http or https URL prefix with

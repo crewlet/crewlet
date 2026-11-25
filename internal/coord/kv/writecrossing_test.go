@@ -512,6 +512,8 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 				deciding(coord.MaxSeatAccessBytes), raw(coord.MaxSeatAccessBytes)},
 			{coord.HomeBoardKey("founder"), coord.HomeBoardFilter(),
 				deciding(coord.MaxHomeBoardRecordBytes), raw(coord.MaxHomeBoardRecordBytes)},
+			{coord.AssistantInstructionsKey("founder"), coord.AssistantInstructionsFilter(),
+				deciding(coord.MaxAssistantInstructionsRecordBytes), raw(coord.MaxAssistantInstructionsRecordBytes)},
 			{coord.AtlasWakeKey("sre", "entry"), coord.AtlasWakeFilter(), jsprovision.ReadTerm, passIdle},
 			{coord.DeviceSignInKey("codex"), coord.DocumentFilter(coord.DeviceSignInClass),
 				jsprovision.ReadTerm, passIdle},

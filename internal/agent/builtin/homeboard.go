@@ -168,20 +168,21 @@ func (t *saveHomeBoard) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"elsewhere after you read it. Call %s again and decide from the board it shows now.",
 			name, ifMatch, HomeBoardQuestion)), nil
 	}
-	return jsonResult(homeBoardAnswer{Seat: actor.Handle, Revision: revision,
+	return jsonResult(ownRecordAnswer{Seat: actor.Handle, Revision: revision,
 		Outcome: statelog.OutcomeApplied})
 }
 
-// homeBoardAnswer is what a save that landed answers.
-type homeBoardAnswer struct {
-	// Seat is the handle the board is kept under.
+// ownRecordAnswer is what a save of one's own record (a board, Ask Crewlet
+// instructions) that landed answers.
+type ownRecordAnswer struct {
+	// Seat is the handle the record is kept under.
 	Seat string `json:"seat"`
 
-	// Revision is the stored board's new revision: the `if_match` of the next
-	// save, so a screen saves again without reading.
+	// Revision is the stored record's new revision: the `if_match` of the
+	// next save, so a screen saves again without reading.
 	Revision uint64 `json:"revision"`
 
-	// Outcome is always applied, and Position always null: a board is a
+	// Outcome is always applied, and Position always null: a save is a
 	// compare-and-set in the coordination store, on no log, landed when it
 	// answers ([markChatReadAnswer]).
 	Outcome  statelog.Outcome `json:"outcome"`

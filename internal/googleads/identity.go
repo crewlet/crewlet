@@ -1,6 +1,7 @@
 package googleads
 
 import (
+	"cmp"
 	"context"
 	"net/http"
 	"net/url"
@@ -180,4 +181,70 @@ func level(ctx context.Context, in googlegrowth.Probe, id, manager string) ([]st
 		return nil, false, nil
 	}
 	return []string{strings.ToLower(users.Results[0].CustomerUserAccess.AccessRole)}, true, nil
+}
+
+// maxListedHolders bounds the accounts a listing reads the clients of: one
+// search each, and a company reaching more is an agency, which connects each
+// client's company.
+const maxListedHolders = 50
+
+// listAccounts is every account the token reaches: each it is added to, and
+// each client of a manager among them, under that manager.
+func listAccounts(ctx context.Context, in googlegrowth.Lister) ([]googlegrowth.Listed, error) {
+	var accessible struct {
+		ResourceNames []string `json:"resourceNames"`
+	}
+	if err := in.Send.Do(ctx, http.MethodGet, adsAPI+"/"+apiVersion+"/customers:listAccessibleCustomers", in.Token,
+		nil, &accessible); err != nil {
+		return nil, err
+	}
+	var out []googlegrowth.Listed
+	seen := map[string]bool{}
+	probe := googlegrowth.Probe{Company: in.Company, Token: in.Token, Send: in.Send}
+	for i, name := range accessible.ResourceNames {
+		holder := strings.TrimPrefix(name, "customers/")
+		if i >= maxListedHolders {
+			break
+		}
+		var clients struct {
+			Results []struct {
+				CustomerClient struct {
+					ID              string `json:"id"`
+					DescriptiveName string `json:"descriptiveName"`
+					Level           string `json:"level"`
+				} `json:"customerClient"`
+			} `json:"results"`
+		}
+		err := search(ctx, probe, holder, holder, "SELECT customer_client.id, customer_client.descriptive_name, "+
+			"customer_client.level FROM customer_client WHERE customer_client.level <= 1", &clients)
+		if s := googleauth.Status(err); s == http.StatusForbidden || s == http.StatusNotFound {
+			// LISTED BUT NOT READABLE (a cancelled account): offered by its ID.
+			if !seen[holder] {
+				seen[holder] = true
+				out = append(out, googlegrowth.Listed{ID: holder})
+			}
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		var holderName string
+		for _, r := range clients.Results {
+			if r.CustomerClient.Level == "0" {
+				holderName = r.CustomerClient.DescriptiveName
+			}
+		}
+		for _, r := range clients.Results {
+			c := r.CustomerClient
+			if c.ID == "" || seen[c.ID] {
+				continue
+			}
+			seen[c.ID] = true
+			l := googlegrowth.Listed{ID: c.ID, Name: c.DescriptiveName}
+			if c.Level != "0" {
+				l.Parent, l.ParentName = holder, cmp.Or(holderName, holder)
+			}
+			out = append(out, l)
+		}
+	}
+	return out, nil
 }

@@ -703,6 +703,8 @@ func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
 		halves.AtlasRefresh = engine.AtlasRefreshToolDeps(e)
 		// AND A PERSON'S HOME BOARD, on the coordination store too.
 		halves.HomeBoard = engine.HomeBoardToolDeps(e)
+		// AND THEIR OWN ASK CREWLET INSTRUCTIONS, beside it.
+		halves.Instructions = engine.InstructionsToolDeps(e)
 		// AND A SCHEDULE RUN NOW, claimed on the fleet and sent from here.
 		halves.ScheduleRuns = engine.ScheduleRunToolDeps(e)
 		if c := e.Company(); c != nil && c.Config != nil {

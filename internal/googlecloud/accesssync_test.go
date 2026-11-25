@@ -60,7 +60,7 @@ func newSyncWorld(t *testing.T, level string, projects ...string) *syncWorld {
 	on := true
 	company := &config.Company{Name: testCompany}
 	company.Integrations.GoogleCloud = &config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{
-		Provisioner: provisioner, Provider: "${GCP_PROVIDER}", FederationKey: "${" + googlecloud.FederationKeySecret + "}",
+		IdentityProject: identity, Provider: "${GCP_PROVIDER}", FederationKey: "${" + googlecloud.FederationKeySecret + "}",
 	}}
 	company.Roles = []config.Role{{
 		Name: "SRE", Handle: "sre",

@@ -1689,6 +1689,7 @@ type Fleet interface {
 	Follows
 	ChatReads
 	HomeBoards
+	AssistantInstructions
 	Fires
 	Rebases
 	SandboxRuns

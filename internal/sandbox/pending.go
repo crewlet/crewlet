@@ -3970,11 +3970,15 @@ const (
 	// provider refused the request the job before it made in a session it continued.
 	// ONCE: refused again, it is collected and its round ends the turn.
 	FollowUpRequestRefused FollowUpReason = "request_refused"
+	// FollowUpLimitedBeforeWork is a job relaunched on the next executor member
+	// because the job before it met its model's usage limit before any work.
+	// ONCE: limited again, it is collected.
+	FollowUpLimitedBeforeWork FollowUpReason = "limited_before_work"
 )
 
 // Valid reports whether the reason is one this build names.
 func (r FollowUpReason) Valid() bool {
-	return r == FollowUpSignInReplaced || r == FollowUpRequestRefused
+	return r == FollowUpSignInReplaced || r == FollowUpRequestRefused || r == FollowUpLimitedBeforeWork
 }
 
 // AuxTokens is what calls to a seat's AUXILIARY model cost, split as every engine

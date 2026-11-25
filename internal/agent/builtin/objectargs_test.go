@@ -76,6 +76,8 @@ func TestEveryWriteNamesTheObjectItWrites(t *testing.T) {
 			"an object, so it is not declared",
 		builtin.SaveHomeBoardTool: "saves the caller's own Home board in the coordination " +
 			"store: no record of any domain's, and the caller is its only object",
+		builtin.SaveInstructionsTool: "saves the caller's own Ask Crewlet instructions in the " +
+			"coordination store: no record of any domain's, and the caller is its only object",
 		builtin.AtlasRefreshTool: "asks the collect duty to read one source, named by its " +
 			"`integration`: the ask is a record in the coordination store, and a source " +
 			"is no object of a native domain",
@@ -162,6 +164,8 @@ func operatorArguments(t *testing.T) map[string]map[string]any {
 		AtlasRefresh: builtin.AtlasRefreshDeps{Sources: stillSources{}, Actor: builtin.PrincipalActor},
 		// AND A HOME BOARD, which names none.
 		HomeBoard: builtin.HomeBoardDeps{Boards: coordmem.NewFleet(), Actor: builtin.PrincipalActor},
+		// AND ONE'S OWN ASK CREWLET INSTRUCTIONS, which name none either.
+		Instructions: builtin.InstructionsDeps{Store: coordmem.NewFleet(), Actor: builtin.PrincipalActor},
 		// AND A SCHEDULE RUN NOW, which names a schedule, no native object.
 		ScheduleRuns: builtin.ScheduleRunDeps{Runner: stillRunner{}, Actor: builtin.PrincipalActor,
 			Org: func() *org.Organization { return company }},
