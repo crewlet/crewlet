@@ -200,7 +200,13 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	// ([codexCheckoutHome]), and the nested hook that hands a later checkout's
 	// where the box holds the helper it runs ([codexNestedHookFlags]).
 	line(`[ ! -s %[1]s ] || cat %[1]s >&2`, q(paths.CodexGuardSaid()))
-	b.WriteString(codexCheckoutHome(paths).gate())
+	h := codexCheckoutHome(paths)
+	b.WriteString(h.gate())
+	// A BOX THAT SWITCHES HOOKS OFF starts Codex without the nested hook, the
+	// skip log saying so once Codex has stopped (D709, [Paths.CodexHooksOffBy]).
+	line(`if [ -n "$hk" ] && [ -s %[1]s ]; then hk=; printf 'crewlet: checkouts cloned during the run are not `+
+		`handed their instructions and skills: %%s, so Codex runs no hook of this run\n' "$(cat %[1]s)" >> %[2]s; fi`,
+		q(paths.CodexHooksOffBy()), q(h.skipped()))
 	hook, state := codexNestedHookFlags(paths)
 	line(`hp=%s; hs=%s`, q(hook), q(state))
 	// The config.toml it loads is the home's with the run's over it
@@ -476,5 +482,6 @@ func (Codex) artifactFiles(p Paths) []string {
 	return []string{p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
 		p.CodexCapFired(), p.CodexHelperLost(), p.CodexSkillsURL(), p.CodexSkillsURLFresh(),
 		p.CodexThread(), p.CodexThread() + ".next", p.CodexNoteHelper(), p.CodexNotesURL(),
-		p.CodexNotesURLFresh(), p.CodexRenew(), p.CodexRepoAgents(), p.WorkDir() + "/codex-server.log"}
+		p.CodexNotesURLFresh(), p.CodexRenew(), p.CodexRepoAgents(), p.CodexHooksOffBy(),
+		p.WorkDir() + "/codex-server.log"}
 }
