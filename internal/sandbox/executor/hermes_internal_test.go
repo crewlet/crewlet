@@ -2016,12 +2016,14 @@ def parse_frontmatter(content):
     return front, content[end + 4:]
 `
 
-// A HERMES GATE THAT DOES NOT ANSWER REFUSES THE RUN, NEVER HANGS IT: past its
-// wait the gate's Hermes is killed and the script ends 1, saying the release
-// and the wait, before any checkout is claimed.
+// A HERMES GATE THAT DOES NOT ANSWER HANDS NO CHECKOUT, NEVER HANGS THE RUN:
+// past its wait the gate's Hermes is killed and the script goes on with an
+// empty gate and the nested hand off, the skip log naming the release and the
+// wait.
 //
-// Mutation: drop the wait loop or its kill, or go on past it, and this goes red.
-func TestAHermesGateThatDoesNotAnswerRefusesTheRun(t *testing.T) {
+// Mutation: drop the wait loop or its kill, refuse the run, or leave the
+// nested hand on, and this goes red.
+func TestAHermesGateThatDoesNotAnswerHandsNoCheckout(t *testing.T) {
 	t.Parallel()
 	sh := prereqtest.OnPath(t, "sh", "the case runs the gate's shell", "install a POSIX shell")
 	home := t.TempDir()
@@ -2043,12 +2045,14 @@ func TestAHermesGateThatDoesNotAnswerRefusesTheRun(t *testing.T) {
 		hermesGateCommand(paths, "", time.Second) + "\necho GATE-PASSED\n"
 	cmd := exec.Command(sh, "-c", script)
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	out, err := cmd.CombinedOutput()
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 1 || strings.Contains(string(out), "GATE-PASSED") {
-		t.Fatalf("the gate ended %v, saying %q; want exit 1 before anything past it", err, out)
+	if out, err := cmd.CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "GATE-PASSED" {
+		t.Fatalf("the gate ended %v, saying %q; want it to go on, saying nothing", err, out)
 	}
-	if want := "crewlet: Hermes Agent 0.23.3 did not say within 1 seconds what the run's repositories bring"; !strings.Contains(string(out), want) {
-		t.Errorf("the gate said %q, want %q", out, want)
+	for file, want := range map[string]string{"skipped": "crewlet: no repository below the working directory is handed " +
+		"its instructions and skills: Hermes Agent 0.23.3 did not say within 1 seconds what they bring\n",
+		"gate.json": "{}\n", hermesNestedOff: ""} {
+		if got, err := os.ReadFile(filepath.Join(state, file)); err != nil || string(got) != want {
+			t.Errorf("%s holds %q (%v), want %q", file, got, err, want)
+		}
 	}
 }

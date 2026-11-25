@@ -287,13 +287,15 @@ func TestAHermesRunWithAShortHookBoundStartsWithoutTheNestedHand(t *testing.T) {
 	}
 }
 
-// A HERMES WHOSE OWN CODE MOVED IS REFUSED BY NAME: where a function the
-// runner reads to hand the checkouts is gone (here, the context discovery),
-// the run is refused before Hermes starts, naming the release and the
-// function, never handing what it cannot have Hermes render.
+// A HERMES WHOSE OWN CODE MOVED STARTS WITHOUT ITS CHECKOUTS, SAYING WHY
+// ONCE: only checkout handing reads that code, so where a function the runner
+// reads is gone (here, the context discovery) the run starts, hands no
+// checkout at launch or during the run, and its error stream names the
+// release and the function once.
 //
-// Mutation: skip the check, or start without the checkouts, and this goes red.
-func TestAHermesWhoseReadCodeMovedIsRefusedByName(t *testing.T) {
+// Mutation: skip the check, refuse the run, or leave the nested hand on, and
+// this goes red.
+func TestAHermesWhoseReadCodeMovedStartsWithoutItsCheckouts(t *testing.T) {
 	t.Parallel()
 	runner, box, bin := hermesCheckoutBox(t)
 	p := executor.PathsFor(box)
@@ -305,15 +307,29 @@ func TestAHermesWhoseReadCodeMovedIsRefusedByName(t *testing.T) {
 	if err = os.WriteFile(moved, []byte(strings.Replace(string(src), "def discover_context_files(", "def found_context_files(", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"}); res.Success {
-		t.Fatal("the run started on a Hermes whose context discovery moved")
+	plant(t, box, piCheckout("workspace/repo", map[string]string{"AGENTS.md": "REPO-AGENTS\n"}))
+	late := t.TempDir()
+	for rel, body := range piCheckout("late", map[string]string{"AGENTS.md": "LATE-INSTRUCTIONS\n"}) {
+		plantFile(t, filepath.Join(late, rel), body)
 	}
-	want := "crewlet: Hermes Agent 0.23.3 moved what the runner reads of its code to hand the run its repositories " +
-		"(agent.prompt_builder.discover_context_files is gone); the run was refused before Hermes Agent started"
-	if errs := boxFile(t, box, p.Err()); !strings.Contains(errs, want) {
-		t.Errorf("the run's error stream does not say %q:\n%s", want, errs)
+	plant(t, box, map[string]string{"clone-src": filepath.Join(late, "late"),
+		"clone-dst": filepath.Join(box.Home(), "workspace", "late")})
+	if _, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"}); !res.Success {
+		t.Fatalf("the run failed: %s\n%s", res.Error, boxFile(t, box, p.Err()))
 	}
-	if _, err := os.Stat(filepath.Join(box.Home(), "seen", "prompt")); err == nil {
-		t.Error("hermes chat ran")
+	var prompt string
+	seenBy(t, box, "prompt", &prompt)
+	if strings.Contains(prompt, "REPO-AGENTS") {
+		t.Errorf("the launch handed a checkout Hermes could not render: %q", prompt)
+	}
+	var nested map[string]*string
+	seenBy(t, box, "nested", &nested)
+	if nested["main-1"] != nil {
+		t.Errorf("the clone was handed: %q", *nested["main-1"])
+	}
+	line := "crewlet: no repository below the working directory is handed its instructions and skills: Hermes Agent " +
+		"0.23.3 moved what the runner reads of its code (agent.prompt_builder.discover_context_files is gone)"
+	if errs := boxFile(t, box, p.Err()); strings.Count(errs, line) != 1 {
+		t.Errorf("the run's error stream says %q %d times, want once:\n%s", line, strings.Count(errs, line), errs)
 	}
 }

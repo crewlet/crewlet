@@ -24,7 +24,7 @@
 #   hermes_carry.py gate PEEK OUT MODEL BOUND       what Hermes makes of each checkout PEEK's roots name at the
 #                                                   window it resolves for MODEL, the note helper's gate, written
 #                                                   to OUT (checkout_gate); `off <why>` where Hermes's hook bound is
-#                                                   under BOUND s, `refused <why>` where an INTERNALS entry moved
+#                                                   under BOUND s, `moved <why>` where an INTERNALS entry moved
 #
 # Run under Hermes's own interpreter through its launcher (`hermes --run-module cProfile -o /dev/null`),
 # which keeps no exit status, so every command ends on one line of its own on stdout: `crewlet-carry ok`
@@ -533,8 +533,8 @@ def plugoff(plugin):
 
 
 # WHAT THE RUN READS OF HERMES'S OWN CODE to hand it its checkouts, each by module, name and the parameters it is
-# called with (None: a constant): checked at every launch (gate), a release that moved one refused by name before
-# it starts, since a wrong render or verdict would hand a model what Hermes itself would not. A Hermes release bump
+# called with (None: a constant): checked at every launch (gate), a release that moved one handing no checkout, said
+# by name, since a wrong render or verdict would hand a model what Hermes itself would not. A Hermes release bump
 # re-checks this list against the new release's source (0.23.3's, read).
 INTERNALS = (
     ("agent.prompt_builder", "build_context_files_prompt", ("cwd", "skip_soul", "context_length")),
@@ -701,13 +701,14 @@ def skill_names():
 def gate(peek_path, out_path, model, bound):
     """checkout_gate for the roots the note helper's hermes-peek wrote at peek_path, at the window Hermes resolves
     for model (launch_window; asked only where there are roots), written to out_path, under the box's .env as
-    Hermes reads it: refused where an INTERNALS entry moved, off (the run goes on without its nested hand, said)
-    where plugins.hook_callback_timeout leaves the hand less than bound seconds."""
+    Hermes reads it: moved where an INTERNALS entry moved (the run starts without its checkouts, said), off (the run
+    goes on without its nested hand, said) where plugins.hook_callback_timeout leaves the hand less than bound
+    seconds."""
     from hermes_cli.env_loader import load_hermes_dotenv
     load_hermes_dotenv(hermes_home=os.environ.get("HERMES_HOME", ""), load_external_secrets=False)
     moved = internals()
     if moved:
-        return "refused " + "; ".join(moved)
+        return "moved " + "; ".join(moved)
     with open(peek_path, encoding="utf-8") as f:
         roots = json.load(f).get("roots") or []
     answer = checkout_gate(roots, launch_window(model)) if roots else {}

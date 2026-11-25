@@ -60,12 +60,12 @@ const hermesNestedOff = "nested-off"
 // hermesGateCommand is the shell asking Hermes what the checkouts bring
 // before checkout-launch claims them: hermes-peek names them, the carry
 // script's `gate` checks every part of Hermes's own code it reads (its
-// INTERNALS) and renders each at the window Hermes resolves for model, all
-// within [hermesGateWait]. A release that moved one, a gate past its wait and
-// one that fails refuse the run, saying which (wait, [hermesGateWait] but in
-// a case about it); a hook bound under
-// [hermesNestedTimeout] only turns the nested hand off, said once in the
-// skip log, since nothing but checkout handing needs it.
+// INTERNALS) and renders each at the window Hermes resolves for model, within
+// wait ([hermesGateWait] but in a case about it). Only checkout handing needs
+// any of it, so nothing here refuses the run: a release that moved a part, a
+// gate past its wait or one that fails hands no checkout and turns the nested
+// hand off, and a hook bound under [hermesNestedTimeout] turns the nested
+// hand off alone, each said once in the skip log, naming the cause.
 func hermesGateCommand(paths Paths, model string, wait time.Duration) string {
 	q := shellword.Quote
 	state := paths.HermesCheckouts()
@@ -73,23 +73,25 @@ func hermesGateCommand(paths Paths, model string, wait time.Duration) string {
 	errs := q(paths.HermesCarryErrors())
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	line(`"$rh" -adapter hermes-peek -config %s < /dev/null > %s || { echo 'crewlet: the run could not name its repositories for Hermes Agent, so it does not start' >&2; exit 1; }`,
+	line(`hskip() { printf 'crewlet: %%s\n' "$1" >> "$rr/skipped" && : > "$rr/%s" || exit 1; }`, hermesNestedOff)
+	line(`  hnone() { hskip "no repository below the working directory is handed its instructions and skills: $1" && echo '{}' > %s || exit 1; }`,
+		gate)
+	line(`  if ! "$rh" -adapter hermes-peek -config %s < /dev/null > %s; then hnone 'the note helper could not name them'; else`,
 		q(paths.HermesCheckoutLaunch()), peek)
 	line(`  hermes --run-module cProfile -o /dev/null %s gate %s %s %s %d < /dev/null > %s 2> %s & hw=$!`,
 		q(paths.HermesCarry()), peek, gate, q(model), hermesNestedTimeout, answer, errs)
 	line(`  i=0; while kill -0 "$hw" 2> /dev/null && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); done`,
 		int(wait/(100*time.Millisecond)))
-	line(`  if kill -0 "$hw" 2> /dev/null; then kill -s KILL "$hw" 2> /dev/null; wait "$hw" 2> /dev/null; echo "crewlet: Hermes Agent $n did not say within %d seconds what the run's repositories bring, so the run does not start" >&2; exit 1; fi`,
-		int(wait/time.Second))
-	line(`  wait "$hw"; hg=$(tail -n 1 %s)`, answer)
+	line(`  if kill -0 "$hw" 2> /dev/null; then kill -s KILL "$hw" 2> /dev/null; wait "$hw" 2> /dev/null; hg=late; else wait "$hw"; hg=$(tail -n 1 %s); fi`,
+		answer)
 	line(`  case "$hg" in`)
 	line(`  'crewlet-carry ok') ;;`)
-	line(`  'crewlet-carry off '*) printf 'crewlet: a repository cloned during the run is not handed its instructions and skills: %%s\n' "${hg#crewlet-carry off }" >> "$rr/skipped" && : > "$rr/%s" || exit 1;;`,
-		hermesNestedOff)
-	line(`  'crewlet-carry refused '*) printf 'crewlet: Hermes Agent %%s moved what the runner reads of its code to hand the run its repositories (%%s); the run was refused before Hermes Agent started\n' "$n" "${hg#crewlet-carry refused }" >&2; exit 1;;`)
-	line(`  *) echo "crewlet: Hermes Agent $n could not say what the run's repositories bring (its error stream is in %s), so the run does not start" >&2; exit 1;;`,
-		strings.Trim(errs, "'"))
-	b.WriteString(`  esac`)
+	line(`  'crewlet-carry off '*) hskip "a repository cloned during the run is not handed its instructions and skills: ${hg#crewlet-carry off }";;`)
+	line(`  'crewlet-carry moved '*) hnone "Hermes Agent $n moved what the runner reads of its code (${hg#crewlet-carry moved })";;`)
+	line(`  late) hnone "Hermes Agent $n did not say within %d seconds what they bring";;`, int(wait/time.Second))
+	line(`  *) hnone "Hermes Agent $n could not say what they bring (its error stream is in %s)";;`, strings.Trim(errs, "'"))
+	line(`  esac`)
+	b.WriteString(`  fi`)
 	return b.String()
 }
 
