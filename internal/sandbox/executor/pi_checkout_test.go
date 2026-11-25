@@ -23,8 +23,10 @@ import (
 // first turn, then, where $HOME/clone-src names a directory, copies it to
 // $HOME/clone-dst as a clone during a tool call would and plays that tool's
 // result to the extension twice, recording what each answer made of it
-// (nested-1, nested-2), and prints a finished answer.
-const piCheckoutStandIn = `import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs"
+// (nested-1, nested-2); where $HOME/break-home is, it makes the agent
+// directory's AGENTS.override.md a directory no put-back can write; and it
+// prints a finished answer.
+const piCheckoutStandIn = `import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 const args = process.argv.slice(2)
@@ -74,6 +76,10 @@ if (existsSync(join(home, "clone-src"))) {
     record("nested-" + i, await fire("tool_result", { toolName: "bash", toolCallId: "call-" + i,
       input: { command: "git clone" }, content: [{ type: "text", text: "cloned" }], isError: false }))
   }
+}
+if (existsSync(join(home, "break-home"))) {
+  rmSync(join(agent, "AGENTS.override.md"), { force: true })
+  mkdirSync(join(agent, "AGENTS.override.md"))
 }
 out({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop" } })
 await fire("session_shutdown", {})
@@ -376,5 +382,60 @@ func TestAPiRunPutsTheHomesInstructionFileBackHoweverItEnds(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// WHAT A FIRING LEFT OUT REACHES THE RUN'S ERROR STREAM ONCE, AFTER PI, AND
+// EVERY STEP OF THE END RUNS: a checkout cloned during the run whose walk
+// finds two skills of one name is handed with the line in the tool's result,
+// and the script prints the line once pi has stopped, once, the helper's own
+// error stream passed on nowhere; where the home file will not go back, the
+// put-back says so, and the line is printed and the copies removed all the
+// same.
+//
+// Mutation: drop the print, pass the helper's stderr on, or chain the end's
+// steps so a failed put-back stops the rest, and a row goes red.
+func TestAPiRunsLeftOutLinesReachItsErrorStreamOnce(t *testing.T) {
+	t.Parallel()
+	for _, broken := range []bool{false, true} {
+		t.Run(fmt.Sprintf("put-back fails %v", broken), func(t *testing.T) {
+			t.Parallel()
+			runner, box := piCheckoutBox(t)
+			p := executor.PathsFor(box)
+			plant(t, box, piCheckout("workspace/repo", map[string]string{"AGENTS.md": "REPO\n"}))
+			late := t.TempDir()
+			skill := "---\nname: deploy\ndescription: Deploys.\n---\n"
+			for rel, body := range piCheckout("late", map[string]string{".pi/skills/infra/deploy/SKILL.md": skill,
+				".pi/skills/web/deploy/SKILL.md": skill}) {
+				plantFile(t, filepath.Join(late, rel), body)
+			}
+			plant(t, box, map[string]string{"clone-src": filepath.Join(late, "late"),
+				"clone-dst": filepath.Join(box.Home(), "workspace", "late")})
+			if broken {
+				plant(t, box, map[string]string{"break-home": ""})
+			}
+			runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"})
+			work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), "workspace"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			line := "the skill " + work + "/late/.pi/skills/web/deploy is left out: " + work +
+				"/late/.pi/skills/infra/deploy, found first, takes its name late:deploy"
+			var nested map[string]any
+			seenBy(t, box, "nested-1", &nested)
+			if raw, _ := json.Marshal(nested); !strings.Contains(string(raw), "- "+line) {
+				t.Errorf("the tool's result after the clone was %s, want the line in it", raw)
+			}
+			errs := boxFile(t, box, p.Err())
+			if n := strings.Count(errs, line); n != 1 {
+				t.Errorf("the run's error stream says the line %d times, want once:\n%s", n, errs)
+			}
+			if raw, err := os.ReadDir(p.PiCheckoutSkills()); err != nil || len(raw) != 0 {
+				t.Errorf("the checkouts' skills directory holds %v after the run (%v), want the copies removed", raw, err)
+			}
+			if failed := strings.Contains(errs, "was not put back"); failed != broken {
+				t.Errorf("the run's error stream says a put-back failed: %v, want %v:\n%s", failed, broken, errs)
+			}
+		})
 	}
 }
