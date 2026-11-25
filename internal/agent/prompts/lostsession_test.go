@@ -106,12 +106,14 @@ func TestTheLostSessionSectionHandsTheSummaryFenced(t *testing.T) {
 	}
 }
 
-// A SUMMARY THAT WRITES A FENCE OF ITS OWN STAYS INSIDE THE ONE IT IS HANDED
-// IN: its model wrote it from tool output and people's words, so a line in it
-// that closes a fence or claims the engine's voice is defused under the turn's
-// boundary, never read as the brief's own.
+// A SUMMARY IS READ AS A PAST RUN'S RECORD, NEVER AS INSTRUCTIONS: its model
+// wrote it from tool output and people's words, so it is fenced as the seat's
+// kept session at the least trust (provenance.ExecutorSession), and a line in
+// it that closes a fence or claims the engine's voice is defused under the
+// turn's boundary, never read as the brief's own.
 //
-// Mutation: hand the summary's text as it is, and the planted close survives.
+// Mutation: hand the summary's text as it is, or under a trust a writer
+// earns, and a check goes red.
 func TestASummarysOwnFenceIsDefused(t *testing.T) {
 	t.Parallel()
 	b := provenance.NewBoundary()
@@ -120,5 +122,9 @@ func TestASummarysOwnFenceIsDefused(t *testing.T) {
 		Summary: &HandedSummary{Text: planted, Seat: "swe", Turn: "t-1", Bytes: int64(len(planted))}}, b)
 	if strings.Contains(got, planted) {
 		t.Fatalf("the summary's planted fence close reached the brief as it was written:\n%s", got)
+	}
+	if want := "source=" + string(provenance.SourceExecutorSession) + " trust=" +
+		string(provenance.TrustExternal); !strings.Contains(got, want) {
+		t.Errorf("the summary is not fenced as a kept session at the least trust (%s):\n%s", want, got)
 	}
 }
