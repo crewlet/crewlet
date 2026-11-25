@@ -383,7 +383,7 @@ func hermesNotesHeldWhole(r io.Reader, takes []ServedTake, from int64) ([]string
 			}
 		}
 		return nil
-	}, func(int64) error {
+	}, func(int64, []byte, []byte) error {
 		pending = pending[:0]
 		return nil
 	})
