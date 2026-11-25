@@ -320,6 +320,11 @@ func TestAMuseAnswerFillsMusesCeilingToTheByte(t *testing.T) {
 		t.Errorf("an answer of the ceiling is %d bytes, opening %q; want %d, whole and escaped", len(whole),
 			museContext(t, whole)[:80], museAnswerBytes)
 	}
+	// A LISTING ALONE IS CHARGED NO GAP BEFORE IT, a second one the blank line.
+	listing := "# Skills of /r\n- a"
+	if b := (&escapedBudget{left: museEscapedBytes(listing)}); b.take(listing) != listing || b.take("x") != "" {
+		t.Error("a first block that fits the bound exactly was cut, or a second was taken past it")
+	}
 	named, _ := museNestedAnswer(handed(n+1), nil)
 	if want := "for `x` with root /r: read /r/AGENTS.md for its instructions, which pass what this answer holds"; museContext(t, named) != want {
 		t.Errorf("an answer a byte past the ceiling hands %q, want it named", museContext(t, named)[:min(80, len(museContext(t, named)))])
