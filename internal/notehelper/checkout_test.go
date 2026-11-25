@@ -27,7 +27,7 @@ type repoRun struct {
 // (internal/sandbox/executor's codexCheckouts), its skills in skills.
 func codexSpec(skills string) checkoutSpec {
 	return checkoutSpec{Instructions: names([]string{"AGENTS.override.md", "AGENTS.md"}), Limit: limited(32 << 10),
-		SkillDirs: []string{".codex/skills", ".agents/skills"}, Skills: skills,
+		SkillDirs: []skillDirSlot{{Dir: ".codex/skills"}, {Dir: ".agents/skills"}}, Skills: skills,
 		Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
 }
 
@@ -121,6 +121,13 @@ func names(slots ...[]string) []instructionSlot {
 		out[i] = instructionSlot{Names: slot}
 	}
 	return out
+}
+
+// rootText is root's instructions as one text ([instructionParts],
+// [joinParts]) and how many bytes they took.
+func rootText(root string, limit int, slots []instructionSlot, said *skips) (string, int) {
+	parts, n := instructionParts(root, limit, slots, said)
+	return joinParts(parts), n
 }
 
 // limited is a limit of n bytes.
@@ -425,12 +432,12 @@ func TestEachInstructionSlotHandsItsFirstFile(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "THREE.md"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	text, n := rootInstructions(root, 100, names([]string{"ONE.md"}, []string{"TWO.md", "TWO-ALT.md"},
+	text, n := rootText(root, 100, names([]string{"ONE.md"}, []string{"TWO.md", "TWO-ALT.md"},
 		[]string{"THREE.md", "THREE-ALT.md"}, []string{"NONE.md"}), &skips{stderr: io.Discard})
 	if text != "ONE\n\n\nTHREE\n" || n != 10 {
 		t.Errorf("the slots hand %q for %d bytes, want ONE and THREE for 10", text, n)
 	}
-	if text, n = rootInstructions(root, 7, names([]string{"ONE.md"}, []string{"THREE-ALT.md"}), &skips{stderr: io.Discard}); text != "ONE\n\n\nTHR" || n != 7 {
+	if text, n = rootText(root, 7, names([]string{"ONE.md"}, []string{"THREE-ALT.md"}), &skips{stderr: io.Discard}); text != "ONE\n\n\nTHR" || n != 7 {
 		t.Errorf("the slots within 7 bytes hand %q for %d, want THREE cut to what ONE left", text, n)
 	}
 }
@@ -821,7 +828,7 @@ func TestACutSpendsTheLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if text, n := rootInstructions(root, 4, names([]string{"A.md"}, []string{"B.md"}), &skips{stderr: io.Discard}); text != "abc" || n != 4 {
+	if text, n := rootText(root, 4, names([]string{"A.md"}, []string{"B.md"}), &skips{stderr: io.Discard}); text != "abc" || n != 4 {
 		t.Errorf("the slots hand %q for %d bytes, want abc and the whole limit spent", text, n)
 	}
 }
@@ -1013,10 +1020,10 @@ func TestAFileSwappedAfterThePlanIsNeverReadThrough(t *testing.T) {
 }
 
 // A NESTED FIRING'S SKIPS ARE KEPT FOR THE RUN'S END AND HANDED TO THE MODEL:
-// what a firing leaves out (here a skill leading out of its checkout) is said
-// on its stderr, named in its answer, and appended to the state's skipped
-// file, a later firing's lines after the earlier's; the launch's own skips go
-// to its stderr alone, which is the run's.
+// what a firing leaves out (here a skill leading out of its checkout) is
+// named in its answer and appended to the state's skipped file, a later
+// firing's lines after the earlier's, never on its stderr, which a runner
+// may pass on; the launch's own skips go to its stderr alone, the run's.
 //
 // Mutation: keep the launch's lines, keep a firing's in place of the last,
 // or leave them out of the answer, and a check goes red.
@@ -1058,8 +1065,8 @@ func TestANestedFiringsSkipsAreKeptForTheRunsEnd(t *testing.T) {
 			strings.NewReader("{}"), &out, &errs, os.Getenv)
 		line := "the skill " + filepath.Join(r.workdir(t), late, ".codex/skills/out") +
 			" is left out: it leads out of its checkout, to " + filepath.Join(outside, "o")
-		if errs.String() != "notehelper: "+line+"\n" {
-			t.Errorf("the firing said %q, want %q", errs.String(), line)
+		if errs.String() != "" {
+			t.Errorf("the firing said %q on stderr, want the line in its log alone", errs.String())
 		}
 		if !strings.Contains(out.String(), `- `+line) {
 			t.Errorf("the firing answered %s, want it to name %q", out.String(), line)
@@ -1265,8 +1272,8 @@ func TestACheckoutThatWaitsSaysItsPlanOnceWhenItIsHanded(t *testing.T) {
 			strings.NewReader("{}"), &out, &errs, os.Getenv)
 		says = append(says, fmt.Sprintf("%d,%d", strings.Count(errs.String(), line), strings.Count(out.String(), line)))
 	}
-	if got := strings.Join(says, " "); got != "1,1 0,0" {
-		t.Errorf("the firings said and answered the line %s times (stderr,answer per firing), want 1,1 0,0", got)
+	if got := strings.Join(says, " "); got != "0,1 0,0" {
+		t.Errorf("the firings said and answered the line %s times (stderr,answer per firing), want 0,1 0,0", got)
 	}
 	if got := strings.Count(read(t, filepath.Join(r.state, skippedLog)), line); got != 1 {
 		t.Errorf("the run keeps the line %d times, want once", got)

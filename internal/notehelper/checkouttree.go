@@ -115,6 +115,12 @@ type treeFile struct {
 	info       os.FileInfo
 }
 
+// treeText is a tree file to hand: the file the walk found, and its bytes.
+type treeText struct {
+	treeFile
+	raw []byte
+}
+
 // treeWalk is a tree walk's bounds left: the entries it may still see and the
 // bytes its files may still hold; and the real directories it has walked, so
 // each is walked once however many links lead to it.
@@ -129,27 +135,10 @@ type treeWalk struct {
 }
 
 // treeTexts is the files of root's tree t to hand, in walk order, each read
-// whole: [treeWalk.walk]'s, less those t's scope leaves out as its form
+// once, whole: [treeWalk.walk]'s, less those t's scope leaves out as its form
 // reads it ([treeRules]). A tree past the walk's bounds is left out whole, and
 // a file that is no longer the file walked is left out, each said.
-func treeTexts(root string, t instructionTree, said *skips) [][]byte {
-	var texts [][]byte
-	for _, f := range treeKept(root, t, said) {
-		texts = append(texts, f.raw)
-	}
-	return texts
-}
-
-// keptFile is a file a tree slot keeps, and its text.
-type keptFile struct {
-	treeFile
-	raw []byte
-}
-
-// treeKept is the files a tree slot hands, in walk order, each read once:
-// those under t's directory the walk finds, but one its scope leaves out; a
-// walk past its bounds or a file that will not read is left out, said.
-func treeKept(root string, t instructionTree, said *skips) []keptFile {
+func treeTexts(root string, t instructionTree, said *skips) []treeText {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil
@@ -165,7 +154,7 @@ func treeKept(root string, t instructionTree, said *skips) []keptFile {
 		said.say("the instructions under %s are left out: %v", filepath.Join(root, t.Tree), err)
 		return nil
 	}
-	var kept []keptFile
+	var texts []treeText
 	for _, f := range w.files {
 		raw, err := readWalked(f)
 		if err != nil {
@@ -173,10 +162,10 @@ func treeKept(root string, t instructionTree, said *skips) []keptFile {
 			continue
 		}
 		if t.Scoped == nil || !w.rules.scopedAway(raw, *t.Scoped) {
-			kept = append(kept, keptFile{treeFile: f, raw: raw})
+			texts = append(texts, treeText{treeFile: f, raw: raw})
 		}
 	}
-	return kept
+	return texts
 }
 
 // walk finds the files below dir, depth directories below the tree, as its

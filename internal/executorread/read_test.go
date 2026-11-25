@@ -138,6 +138,10 @@ func storedObject(t *testing.T, backend *memobj.Backend, name string) []byte {
 // silentObjects is an object store that does not answer.
 type silentObjects struct{}
 
+func (silentObjects) OpenSummary(context.Context, executordomain.Session) (io.ReadCloser, error) {
+	return nil, errors.New("objstore: the bucket did not answer within its budget")
+}
+
 func (silentObjects) Open(context.Context, executordomain.Session) (io.ReadCloser, error) {
 	return nil, errors.New("objstore: the bucket did not answer within its budget")
 }
@@ -255,6 +259,11 @@ func TestEveryReaderOfASessionSaysItsStateInOneSetOfWords(t *testing.T) {
 // answers.
 type waitingObjects struct{}
 
+func (waitingObjects) OpenSummary(ctx context.Context, _ executordomain.Session) (io.ReadCloser, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 func (waitingObjects) Open(ctx context.Context, _ executordomain.Session) (io.ReadCloser, error) {
 	<-ctx.Done()
 	return nil, ctx.Err()
@@ -264,6 +273,10 @@ func (waitingObjects) Open(ctx context.Context, _ executordomain.Session) (io.Re
 type failingObjects struct{}
 
 func (failingObjects) Open(context.Context, executordomain.Session) (io.ReadCloser, error) {
+	return nil, errors.New("the store refused the read")
+}
+
+func (failingObjects) OpenSummary(context.Context, executordomain.Session) (io.ReadCloser, error) {
 	return nil, errors.New("the store refused the read")
 }
 

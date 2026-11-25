@@ -24,7 +24,7 @@ var claudeCheckouts = checkoutSpec{Instructions: []checkoutSlot{{Names: []string
 	{Names: []string{".claude/CLAUDE.md"}}, {Names: []string{"CLAUDE.local.md"}},
 	{Tree: &checkoutTree{Tree: ".claude/rules", Suffix: ".md", Form: checkoutFormClaude,
 		Scoped: &checkoutScope{Keys: []string{"paths"}, Whole: []string{"**"}}}}},
-	Limit: checkoutUnlimited, SkillDirs: []string{".claude/skills"}, NestedSkillsOnly: true, ImportInstructions: true}
+	Limit: checkoutUnlimited, SkillDirs: []checkoutSkillDir{{Dir: ".claude/skills"}}, NestedSkillsOnly: true, ImportInstructions: true}
 
 // claudeCheckoutHome is where a Claude Code run keeps its checkouts'
 // instructions and skills ([checkoutHome]): the home's `.claude/CLAUDE.md`,
@@ -33,7 +33,7 @@ var claudeCheckouts = checkoutSpec{Instructions: []checkoutSlot{{Names: []string
 // and loads under that name (measured).
 func claudeCheckoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.ClaudeRepo(), helper: paths.ClaudeNoteHelper(), launch: paths.ClaudeCheckoutLaunch(),
-		agents: paths.ClaudeConfigDir() + "/CLAUDE.md", held: paths.ClaudeHomeInstructions(),
+		agents: []string{paths.ClaudeConfigDir() + "/CLAUDE.md"}, held: paths.ClaudeHomeInstructions(),
 		sections: paths.ClaudeRepoInstructions(), skills: paths.ClaudeConfigDir() + "/skills",
 		copied: paths.ClaudeRepoSkills()}
 }
@@ -57,13 +57,6 @@ const claudeCheckoutsFloor = "2.1.310"
 // claudeCheckoutsPluginName is the checkouts' plugin's name: one of the run's
 // own, as the skills' plugin is ([sandbox.SkillNamespace]).
 const claudeCheckoutsPluginName = sandbox.SkillNamespace + "-checkouts"
-
-// claudeCommandHook is a command hook of a plugin's `hooks/hooks.json`.
-type claudeCommandHook struct {
-	Type    string `json:"type"`
-	Command string `json:"command"`
-	Timeout int    `json:"timeout"`
-}
 
 // writeClaudeCheckouts writes what a Claude Code run hands its checkouts with:
 // the note helper's build for the box (a box with none starts without them,

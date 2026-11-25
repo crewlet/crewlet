@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -291,6 +292,30 @@ func (k executorKeep) Upload(ctx context.Context, spool executorkeep.SealedSpool
 		return executorkeep.SealedObject{}, err
 	}
 	return store.Upload(ctx, spool, sealed)
+}
+
+// PutSummary seals a session's newest summary into an object of its own and
+// uploads it ([sandbox.SessionKeep.PutSummary]).
+func (k executorKeep) PutSummary(ctx context.Context, handle, turn string,
+	text io.Reader) (executorkeep.SealedObject, error) {
+
+	store, err := k.engine.executorSessionStore()
+	if err != nil {
+		return executorkeep.SealedObject{}, err
+	}
+	return store.PutSummary(ctx, handle, turn, text)
+}
+
+// CopySummary copies a session's summary under a fresh key
+// ([sandbox.SessionKeep.CopySummary]).
+func (k executorKeep) CopySummary(ctx context.Context, handle, turn string,
+	object objstore.Object) (executorkeep.SealedObject, error) {
+
+	store, err := k.engine.executorSessionStore()
+	if err != nil {
+		return executorkeep.SealedObject{}, err
+	}
+	return store.CopySummary(ctx, handle, turn, object)
 }
 
 // executorSessionStore is the store a session's sealed bytes stream into and

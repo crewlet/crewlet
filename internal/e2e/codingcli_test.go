@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -592,7 +593,7 @@ func runHarness(endpoint string) int {
 			return fail("the run was to ask a person, and its standing instructions "+
 				"never say how (%s): %v", builtin.AskAndWaitTool, err)
 		}
-		if err := codingCutAsk(context.Background(), parsed, thread, stream); err != nil {
+		if err := codingCutAsk(context.Background(), parsed, hooks, thread, stream); err != nil {
 			return fail("%v", err)
 		}
 		// NO RESULT LINE AND A FAILING EXIT, as a harness killed mid-stream
@@ -608,6 +609,16 @@ func runHarness(endpoint string) int {
 		return fail("%v", err)
 	}
 	return 0
+}
+
+// listBridge lists the bridge's tools as a real harness does at its startup,
+// before anything else: the word a run's collection reads that its harness
+// connected its bridge, without which the run is no success.
+func listBridge(ctx context.Context, session *mcp.ClientSession) error {
+	if _, err := session.ListTools(ctx, nil); err != nil {
+		return fmt.Errorf("listing the bridge's tools: %w", err)
+	}
+	return nil
 }
 
 // codingWork is a [codingModeWork] run: the rounds the scripted model answers,
@@ -691,7 +702,11 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, hooks cod
 			id := claudeID("toolu_")
 			input := orEmptyArgs(call.Args)
 			stream.toolUse(id, call.Name, input)
-			out, failed := callOverBridge(ctx, session, id, call.Name, input)
+			out, failed, err := callOverBridge(ctx, hooks, thread, session, config.ToolServerName, id,
+				call.Name, input)
+			if err != nil {
+				return err
+			}
 			stream.toolResult(id, out, failed)
 			ex.Results = append(ex.Results, callResult{Name: call.Name, Content: out, Failed: failed})
 			if call.Name == builtin.CodeCheckoutTool && os.Getenv(codingModeEnv) == codingModePush {
@@ -818,6 +833,7 @@ func pushThrough(ctx context.Context, answer string, stderr io.Writer) error {
 
 // The hook events the stand-in plays, as Claude Code names them.
 const (
+	codingEventToolCall  = "PreToolUse"
 	codingEventToolBatch = "PostToolBatch"
 	codingEventFinish    = "Stop"
 )
@@ -826,12 +842,17 @@ const (
 // `--settings` names — none for a file that holds none.
 type codingHooks map[string][]codingHook
 
-// codingHook is one hook of the settings file.
+// codingHook is one hook of the settings file: a call of a bridge tool, or,
+// before a call ([codingEventToolCall]), a command (the bridge's guard).
 type codingHook struct {
-	Type   string            `json:"type"`
-	Server string            `json:"server"`
-	Tool   string            `json:"tool"`
-	Input  map[string]string `json:"input"`
+	Type    string            `json:"type"`
+	Server  string            `json:"server"`
+	Tool    string            `json:"tool"`
+	Input   map[string]string `json:"input"`
+	Command string            `json:"command"`
+	Timeout int               `json:"timeout"`
+	// matcher is its entry's, which picks the calls a command hook runs on.
+	matcher string
 }
 
 // readCodingHooks reads the hooks of the settings file at path, refusing a run
@@ -855,7 +876,8 @@ func readCodingHooks(path string) (codingHooks, error) {
 		CleanupPeriodDays *int  `json:"cleanupPeriodDays"`
 		DisableAllHooks   *bool `json:"disableAllHooks"`
 		Hooks             map[string][]struct {
-			Hooks []codingHook `json:"hooks"`
+			Matcher string       `json:"matcher"`
+			Hooks   []codingHook `json:"hooks"`
 		} `json:"hooks"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
@@ -876,7 +898,16 @@ func readCodingHooks(path string) (codingHooks, error) {
 	for event, matchers := range doc.Hooks {
 		for _, matcher := range matchers {
 			for _, hook := range matcher.Hooks {
-				if hook.Type != "mcp_tool" || hook.Server != config.ToolServerName {
+				if event == codingEventToolCall {
+					if hook.Type != "command" || hook.Command == "" || hook.Timeout <= 0 {
+						return nil, fmt.Errorf("a %s hook of type %s, and the stand-in plays only "+
+							"a command with a timeout there: %s", event, hook.Type, raw)
+					}
+					if _, err := regexp.Compile(matcher.Matcher); err != nil {
+						return nil, fmt.Errorf("a %s matcher that is no expression: %w", event, err)
+					}
+					hook.matcher = matcher.Matcher
+				} else if hook.Type != "mcp_tool" || hook.Server != config.ToolServerName {
 					return nil, fmt.Errorf("a %s hook calls %s on server %q, and the run's only "+
 						"server is the bridge, %q", event, hook.Type, hook.Server, config.ToolServerName)
 				}
@@ -885,6 +916,86 @@ func readCodingHooks(path string) (codingHooks, error) {
 		}
 	}
 	return out, nil
+}
+
+// codingToolCallInput is a [codingEventToolCall] hook's input as Claude Code
+// 2.1.330 writes it (executor's guardHookInput, measured): compact, these
+// keys in this order, `mcp_server` last, on the main thread. The newest
+// release's alone: the stand-in plays no older one's.
+type codingToolCallInput struct {
+	SessionID      string          `json:"session_id"`
+	TranscriptPath string          `json:"transcript_path"`
+	Cwd            string          `json:"cwd"`
+	PermissionMode string          `json:"permission_mode"`
+	HookEventName  string          `json:"hook_event_name"`
+	ToolName       string          `json:"tool_name"`
+	ToolInput      map[string]any  `json:"tool_input"`
+	ToolUseID      string          `json:"tool_use_id"`
+	MCPServer      codingMCPServer `json:"mcp_server"`
+}
+
+// codingMCPServer is the server that serves a call, as a hook is told it: the
+// run's own `--mcp-config` server is source `dynamic`.
+type codingMCPServer struct {
+	Name   string `json:"name"`
+	Source string `json:"source"`
+}
+
+// allow plays the run's [codingEventToolCall] hooks before a call of tool on
+// server, as Claude Code does: each whose matcher takes `mcp__<server>__<tool>`
+// runs under sh, its input on stdin, within its timeout. A hook that denies
+// the call or stops the loop, or fails, is the run's failure in its words,
+// the call never made, so a guard that refused the bridge's own server fails
+// the case rather than passing unplayed.
+func (h codingHooks) allow(ctx context.Context, thread *codingSessionThread, server, id, tool string,
+	args map[string]any) error {
+	name := "mcp__" + server + "__" + tool
+	for _, hook := range h[codingEventToolCall] {
+		if !regexp.MustCompile(hook.matcher).MatchString(name) {
+			continue
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		in, err := json.Marshal(codingToolCallInput{SessionID: thread.session, TranscriptPath: thread.path,
+			Cwd: cwd, PermissionMode: "bypassPermissions", HookEventName: codingEventToolCall,
+			ToolName: name, ToolInput: args, ToolUseID: id,
+			MCPServer: codingMCPServer{Name: server, Source: "dynamic"}})
+		if err != nil {
+			return err
+		}
+		hookCtx, cancel := context.WithTimeout(ctx, time.Duration(hook.Timeout)*time.Second)
+		cmd := exec.CommandContext(hookCtx, "sh", "-c", hook.Command)
+		cmd.Stdin = bytes.NewReader(in)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		cancel()
+		if err != nil {
+			return fmt.Errorf("the %s hook on %s failed: %w: %s", codingEventToolCall, name, err, stderr.String())
+		}
+		if len(bytes.TrimSpace(out)) == 0 {
+			continue
+		}
+		var decision struct {
+			Continue           *bool  `json:"continue"`
+			StopReason         string `json:"stopReason"`
+			HookSpecificOutput struct {
+				PermissionDecision       string `json:"permissionDecision"`
+				PermissionDecisionReason string `json:"permissionDecisionReason"`
+			} `json:"hookSpecificOutput"`
+		}
+		if err := json.Unmarshal(out, &decision); err != nil {
+			return fmt.Errorf("the %s hook on %s answered no hook's JSON: %w: %s", codingEventToolCall, name, err, out)
+		}
+		if decision.HookSpecificOutput.PermissionDecision == "deny" ||
+			(decision.Continue != nil && !*decision.Continue) {
+			return fmt.Errorf("the %s hook refused %s: %s", codingEventToolCall, name,
+				cmp.Or(decision.HookSpecificOutput.PermissionDecisionReason, decision.StopReason))
+		}
+	}
+	return nil
 }
 
 // play plays every hook at event as Claude Code does on the main agent's own
@@ -1101,7 +1212,8 @@ func (th *codingSessionThread) append(record map[string]any, flag int) error {
 // for words of its own ([codingCutQuery]), of which only the first
 // [codingCutKept] are filed in thread, then its structured question
 // ([codingQuestionInput]), not filed either.
-func codingCutAsk(ctx context.Context, args codingArgs, thread *codingSessionThread, stream codingStream) error {
+func codingCutAsk(ctx context.Context, args codingArgs, hooks codingHooks, thread *codingSessionThread,
+	stream codingStream) error {
 	bridge, err := bridgeURL(args.mcpConfig)
 	if err != nil {
 		return err
@@ -1112,12 +1224,19 @@ func codingCutAsk(ctx context.Context, args codingArgs, thread *codingSessionThr
 		return fmt.Errorf("connecting to the bridge at %s to work and ask: %w", bridge, err)
 	}
 	defer func() { _ = session.Close() }()
+	if err := listBridge(ctx, session); err != nil {
+		return err
+	}
 	stream.init([]string{builtin.ListSessionsTool, builtin.AskAndWaitTool})
 	for i := 1; i <= codingCutCalls; i++ {
 		id := claudeID("toolu_")
 		input := map[string]any{"query": codingCutQuery(i)}
 		stream.toolUse(id, builtin.ListSessionsTool, input)
-		out, failed := callOverBridge(ctx, session, id, builtin.ListSessionsTool, input)
+		out, failed, err := callOverBridge(ctx, hooks, thread, session, config.ToolServerName, id,
+			builtin.ListSessionsTool, input)
+		if err != nil {
+			return err
+		}
 		stream.toolResult(id, out, failed)
 		if i > codingCutKept {
 			continue
@@ -1132,7 +1251,11 @@ func codingCutAsk(ctx context.Context, args codingArgs, thread *codingSessionThr
 	id := claudeID("toolu_")
 	input := codingQuestionInput()
 	stream.toolUse(id, builtin.AskAndWaitTool, input)
-	out, failed := callOverBridge(ctx, session, id, builtin.AskAndWaitTool, input)
+	out, failed, err := callOverBridge(ctx, hooks, thread, session, config.ToolServerName, id,
+		builtin.AskAndWaitTool, input)
+	if err != nil {
+		return err
+	}
 	stream.toolResult(id, out, failed)
 	if failed {
 		return fmt.Errorf("asking over the bridge: %s", out)
@@ -1172,11 +1295,18 @@ func codingAsk(ctx context.Context, args codingArgs, hooks codingHooks, thread *
 		return fmt.Errorf("connecting to the bridge at %s to ask: %w", bridge, err)
 	}
 	defer func() { _ = session.Close() }()
+	if err := listBridge(ctx, session); err != nil {
+		return err
+	}
 	stream.init([]string{builtin.AskAndWaitTool, runner.SubmitWorkTool})
 	id := claudeID("toolu_")
 	input := codingQuestionInput()
 	stream.toolUse(id, builtin.AskAndWaitTool, input)
-	out, failed := callOverBridge(ctx, session, id, builtin.AskAndWaitTool, input)
+	out, failed, err := callOverBridge(ctx, hooks, thread, session, config.ToolServerName, id,
+		builtin.AskAndWaitTool, input)
+	if err != nil {
+		return err
+	}
 	stream.toolResult(id, out, failed)
 	if failed {
 		return fmt.Errorf("asking over the bridge: %s", out)
@@ -1187,7 +1317,10 @@ func codingAsk(ctx context.Context, args codingArgs, hooks codingHooks, thread *
 	id = claudeID("toolu_")
 	submission := map[string]any{"outcome": "delivered", "summary": "Done before the answer."}
 	stream.toolUse(id, runner.SubmitWorkTool, submission)
-	out, failed = callOverBridge(ctx, session, id, runner.SubmitWorkTool, submission)
+	if out, failed, err = callOverBridge(ctx, hooks, thread, session, config.ToolServerName, id,
+		runner.SubmitWorkTool, submission); err != nil {
+		return err
+	}
 	stream.toolResult(id, out, failed)
 	if !failed || !strings.Contains(out, "parked on their answer") {
 		return fmt.Errorf("a submission after the question answered %q (failed %v), "+
@@ -1227,6 +1360,9 @@ func codingHeldSubmit(ctx context.Context, args codingArgs, hooks codingHooks, t
 		return fmt.Errorf("connecting to the bridge at %s after the release: %w", bridge, err)
 	}
 	defer func() { _ = session.Close() }()
+	if err := listBridge(ctx, session); err != nil {
+		return err
+	}
 	stream.init([]string{runner.SubmitWorkTool})
 	id := claudeID("toolu_")
 	input := map[string]any{
@@ -1234,7 +1370,11 @@ func codingHeldSubmit(ctx context.Context, args codingArgs, hooks codingHooks, t
 		"evidence": "the run was held across its engine's restart and released after it",
 	}
 	stream.toolUse(id, runner.SubmitWorkTool, input)
-	out, failed := callOverBridge(ctx, session, id, runner.SubmitWorkTool, input)
+	out, failed, err := callOverBridge(ctx, hooks, thread, session, config.ToolServerName, id,
+		runner.SubmitWorkTool, input)
+	if err != nil {
+		return err
+	}
 	stream.toolResult(id, out, failed)
 	if failed {
 		return fmt.Errorf("submitting over the bridge after the release: %s", out)
@@ -1350,19 +1490,28 @@ func askModel(endpoint string, req modelRequest) (modelReply, error) {
 	return reply, nil
 }
 
-// callOverBridge makes one call over the run's bridge session, under the
+// callOverBridge makes one call over the run's session on server once its
+// [codingEventToolCall] hooks allow it ([codingHooks.allow]), under the
 // tool-use id Claude Code names it by in `_meta` — which the bridge records as
 // the call's id — and answers what the model reads back: the tool's text, and
-// whether it failed.
-func callOverBridge(ctx context.Context, session *mcp.ClientSession, id, name string,
-	args map[string]any) (string, bool) {
+// whether it failed. A refusal is the error.
+func callOverBridge(ctx context.Context, hooks codingHooks, thread *codingSessionThread,
+	session *mcp.ClientSession, server, id, name string, args map[string]any) (string, bool, error) {
+	if err := hooks.allow(ctx, thread, server, id, name, args); err != nil {
+		return "", false, err
+	}
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args,
 		Meta: mcp.Meta{claudeCodeToolUseMeta: id}})
 	if err != nil {
-		return err.Error(), true
+		return failedCall(err)
 	}
-	return callText(res), res.IsError
+	return callText(res), res.IsError, nil
 }
+
+// failedCall is what Claude Code hands its model for a call the MCP
+// transport failed: the error's words, as a failed tool's result, never the
+// run's end; the model reads it and the run goes on.
+func failedCall(err error) (string, bool, error) { return err.Error(), true, nil }
 
 // codingSkills is what Claude Code lists to its model of the skills in plugins:
 // each skill of each plugin as `<plugin>:<name> — <description>`, read as Claude
