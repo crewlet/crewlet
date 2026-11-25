@@ -48,8 +48,8 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
 // home's own CLAUDE.md, under its root, which the run puts back; its skills come
 // as `repo:<skill>`; its settings, hooks, plugins, agents, MCP servers and
 // AGENTS.md reach neither the command line nor the home. The checkouts' hook
-// runs with hooks on, hands a later clone its skills' listing once, reading no
-// CLAUDE.md, and claims nothing in a subagent's firing.
+// runs on settings that switch no hook, hands a later clone its listing once,
+// reading no CLAUDE.md, and claims nothing in a subagent's firing.
 //
 // Mutation: drop the gate, copy the text, hand AGENTS.md, skip the restore,
 // claim in a subagent's firing, give the hook instructions to read, or leave
@@ -118,8 +118,8 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 	if _, err := os.Stat(p.ClaudeConfigDir() + "/agents"); !os.IsNotExist(err) {
 		t.Errorf("the checkout's agents reached the home (%v)", err)
 	}
-	if !strings.Contains(argv, "--plugin-dir\n"+p.ClaudeCheckoutsPlugin()+"\n") || !strings.Contains(settings, `"disableAllHooks": false`) {
-		t.Errorf("hooks: the checkouts' plugin did not start with hooks on:\n%s\n%s", argv, settings)
+	if !strings.Contains(argv, "--plugin-dir\n"+p.ClaudeCheckoutsPlugin()+"\n") || strings.Contains(settings, "disableAllHooks") {
+		t.Errorf("hooks: the checkouts' plugin did not start, or the run's settings switch hooks:\n%s\n%s", argv, settings)
 	}
 	// A checkout cloned during the run.
 	listing := "# Skills of " + work + "/late\n\nEach is a set of local instructions to follow, stored in its `SKILL.md` " +
@@ -159,14 +159,14 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAClaudeCodeRun(t *testing.T) {
 
 // A CLAUDE CODE RUN STARTS ITS CHECKOUTS' HOOK BY ITS RELEASE AND ITS BOX: on
 // 2.1.310 or later, or a version the script cannot read, with the note helper
-// in the box, the run starts the checkouts' plugin and hands the harness the
-// settings with hooks on, as their pinned copy; without the helper it starts
-// neither and says the box has none; an older release is handed every run's
-// settings, below the pin's floor too, and its error stream says why. Under
-// every sh a box may have.
+// in the box, the run starts the checkouts' plugin; without the helper it does
+// not and says the box has none; an older release does not and its error
+// stream says why. Every row is handed every run's settings, which switch no
+// hook, as their pinned copy from the pin's floor. Under every sh a box may
+// have.
 //
 // Mutation: start the plugin without the helper or on an older release, or
-// leave the settings as every run's, and a row goes red.
+// hand other settings, and a row goes red.
 func TestAClaudeCodeRunStartsItsCheckoutsHookByItsRelease(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -195,9 +195,6 @@ func TestAClaudeCodeRunStartsItsCheckoutsHookByItsRelease(t *testing.T) {
 				args, stderr := scriptArgv(t, sh, scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, p, "")), tc.version)
 				argv := strings.Join(args, "\n")
 				settings := p.ClaudeSettings()
-				if tc.hooks {
-					settings = p.ClaudeHooksSettings()
-				}
 				if tc.pinned {
 					settings = pinnedOf(p, settings)
 				}
@@ -238,7 +235,7 @@ exec sleep 30
 			early func(t *testing.T, p executor.Paths)
 		}{
 			{"an exit before the harness", 1, func(t *testing.T, p executor.Paths) {
-				settings := pinnedOf(p, p.ClaudeHooksSettings())
+				settings := pinnedOf(p, p.ClaudeSettings())
 				if err := os.WriteFile(settings, []byte(`{"env":{"NO_PROXY":"`+executor.ClaudeNoProxyHolder+`"}}`), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -343,6 +340,57 @@ func TestAClaudeCodeRunSaysWhatItsHookLeftOutOnceItStops(t *testing.T) {
 				}
 				if got := strings.Count(said, "the skill late/.claude/skills/x is left out"); got != map[bool]int{true: 1}[tc.says] {
 					t.Errorf("the run said its hook's left-out line %d times, want %d:\n%s", got, map[bool]int{true: 1}[tc.says], said)
+				}
+			})
+		}
+	})
+}
+
+// A RUN WHOSE CHECKOUTS' HOOK STARTS IS REFUSED WHERE THE BOX SWITCHES HOOKS
+// OFF, AND ITS GATE KEEPS AN EARLIER GATE'S HOOK: with the launch's finding
+// written ([executor.Paths.ClaudeHooksOff]), a run that starts the checkouts'
+// hook (2.1.310 or later, the helper in the box) is refused before Claude Code
+// starts, naming why; one that starts no hook of the engine's starts; and a
+// run whose notes' hooks started is refused whether or not the checkouts'
+// gate started its own. Under every sh a box may have.
+//
+// Mutation: leave the checkouts' hook unmarked, or let its gate forget the
+// notes' mark, and a row goes red.
+func TestARunWhoseCheckoutsHookStartsIsRefusedWhereHooksAreOff(t *testing.T) {
+	t.Parallel()
+	const off = "/home/box/.claude/settings.json sets disableAllHooks to true"
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		for _, tc := range []struct {
+			name, version   string
+			helper, refused bool
+			steer           sandbox.SteerWiring
+		}{
+			{"its checkouts' hook", "2.1.310 (Claude Code)", true, true, sandbox.SteerWiring{}},
+			{"no helper", "2.1.310 (Claude Code)", false, false, sandbox.SteerWiring{}},
+			{"below the checkouts' floor", "2.1.309 (Claude Code)", true, false, sandbox.SteerWiring{}},
+			{"its notes' hooks, no helper", "2.1.310 (Claude Code)", false, true, steerWiring},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				p := executor.Paths{Home: t.TempDir()}
+				for _, dir := range []string{p.WorkDir(), filepath.Dir(p.ClaudeNoteHelper())} {
+					if err := os.MkdirAll(dir, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.WriteFile(p.ClaudeHooksOff(), []byte(off), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if tc.helper {
+					writeStandIn(t, p.ClaudeNoteHelper(), "#!/bin/sh\nexit 0\n")
+				}
+				script := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x", Steer: tc.steer}, p, ""))
+				args, stderr, err := claudeScriptRun(t, sh, script, tc.version)
+				if refused := err != nil && args == nil; refused != tc.refused {
+					t.Fatalf("the run was refused: %v, want %v (script error %v, argv %q)\n%s", refused, tc.refused,
+						err, args, stderr)
+				}
+				if tc.refused && !strings.Contains(stderr, off) {
+					t.Errorf("the refusal does not say why:\n%s", stderr)
 				}
 			})
 		}

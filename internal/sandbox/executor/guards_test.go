@@ -2,6 +2,8 @@ package executor_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +20,7 @@ import (
 type switchOffCase struct {
 	plant map[string]string
 	fails []string
+	says  []string // in the run's stderr
 }
 
 // claudeInitThenWait is a stand-in `claude` that prints the init event Claude
@@ -128,6 +131,14 @@ func TestClaudeCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 // place of a leading `/` of a planted file's.
 func checkSwitchOff(t *testing.T, box sandbox.Sandbox, res sandbox.Result, c switchOffCase) {
 	t.Helper()
+	if len(c.says) > 0 {
+		stderr := boxFile(t, box, executor.PathsFor(box).Err())
+		for _, want := range c.says {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("the run's stderr does not say %q:\n%s", want, stderr)
+			}
+		}
+	}
 	if len(c.fails) == 0 {
 		if !res.Success {
 			t.Fatalf("a run nothing switched off failed: %s", res.Error)
@@ -149,15 +160,16 @@ func checkSwitchOff(t *testing.T, box sandbox.Sandbox, res sandbox.Result, c swi
 
 // A HOME OR A REPOSITORY CANNOT SWITCH GEMINI CLI'S BRIDGE, HOOK, SIGN-IN OR
 // ROUND CAP OFF UNSEEN (0.70.0 ranks the working directory's settings above
-// the run's and adds every file's lists up). A run is refused, naming file, key
-// and entry, where a list or an active home extension's excludeTools names the
-// bridge, its hook or a tool of its (by either name, or DiscoveredMCPTool), or
-// the working directory replaces the bridge, switches hooks off, names another
-// sign-in or a cap above the run's or none; it starts on other entries, a
-// lower cap, the home's own values, a disabled extension, unkept system files.
-// Mutations, each red: drop the guard; match a server by case; skip the
-// working directory; drop an override check, the bare name, the class or the
-// extensions; read a disabled extension; refuse a lower cap.
+// the home's, which hold the run's, and adds every file's lists up). A run is
+// refused, naming file, key and entry, where a list or an active extension's
+// excludeTools names the bridge, its hook or a tool, the working directory
+// replaces the bridge or names another sign-in or cap, or the highest file
+// reads hooks as off (false, 0, "FALSE"); it starts on other entries, values
+// read as on, a higher true, a disabled extension, unkept system files.
+// Mutations, each red: drop the guard; fold a server's case; skip the working
+// directory; drop the bare name, the class or the extensions; refuse a lower
+// cap; write hooksConfig.enabled true back; read only false; let the lowest
+// file decide.
 func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const reason = "Gemini CLI would start without what the run's notes, tools, sign-in or round cap rest on"
@@ -210,7 +222,19 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			fails: []string{reason, repo + "its mcpServers.crewlet replaces the run's server crewlet"}},
 		"the repository switches hooks off": {
 			plant: map[string]string{"workspace/.gemini/settings.json": `{"hooksConfig":{"enabled":false}}`},
-			fails: []string{reason, repo + "its hooksConfig.enabled is false, which switches the hook crewlet off"}},
+			fails: []string{reason, repo + "its hooksConfig.enabled is false, which switches every hook off, the run's crewlet"}},
+		"the home switches hooks off": {
+			plant: map[string]string{".gemini/settings.json": `{"hooksConfig":{"enabled":false}}`},
+			fails: []string{reason, "/.gemini/settings.json: its hooksConfig.enabled is false, which switches every hook off"}},
+		"the repository switches hooks off with a string over the home's true": {plant: map[string]string{
+			".gemini/settings.json":           `{"hooksConfig":{"enabled":true}}`,
+			"workspace/.gemini/settings.json": `{"hooksConfig":{"enabled":"FALSE"}}`},
+			fails: []string{reason, repo + `its hooksConfig.enabled is "FALSE"`}},
+		"the repository switches hooks off with a zero": {
+			plant: map[string]string{"workspace/.gemini/settings.json": `{"hooksConfig":{"enabled":0}}`},
+			fails: []string{reason, repo + "its hooksConfig.enabled is 0"}},
+		"values Gemini CLI reads as on": {plant: map[string]string{".gemini/settings.json": `{"hooksConfig":{"enabled":"no"}}`,
+			"workspace/.gemini/settings.json": `{"hooksConfig":{"enabled":null}}`}},
 		"the repository names another sign-in": {
 			plant: map[string]string{"workspace/.gemini/settings.json": `{"security":{"auth":{"selectedType":"oauth-personal"}}}`},
 			fails: []string{reason, repo + `its security.auth.selectedType is "oauth-personal", not the run's gemini-api-key`}},
@@ -259,8 +283,8 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			if err := json.Unmarshal([]byte(boxFile(t, box, box.Home()+"/observed.settings.json")), &settings); err != nil {
 				t.Fatalf("the home's settings as Gemini CLI started do not decode: %v", err)
 			}
-			if hooks, _ := settings["hooksConfig"].(map[string]any); hooks["enabled"] != true {
-				t.Errorf("the run's settings do not switch hooks on: %v", settings["hooksConfig"])
+			if hooks, _ := settings["hooksConfig"].(map[string]any); hooks["enabled"] == true {
+				t.Errorf("the run's settings switch hooks on over the home's own: %v", settings["hooksConfig"])
 			}
 			raw, _ := json.Marshal(settings)
 			for _, want := range []string{`"httpUrl":"` + codexBridgeURL + `"`, `"selectedType":"gemini-api-key"`,
@@ -273,44 +297,91 @@ func TestGeminiCLIsBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 	}
 }
 
-// A HOME OR A REPOSITORY CANNOT SWITCH QWEN CODE'S BRIDGE OFF UNSEEN. Qwen
-// Code 0.28.4 adds `mcp.excluded`, `mcp.allowed`, `permissions.deny`,
-// `tools.exclude` and `tools.disabled` up across its settings files, so a run
-// whose home's or working directory's settings take the bridge or its tools
-// away that way is refused before Qwen Code starts, naming the file, the key
+// A HOME OR A REPOSITORY CANNOT SWITCH QWEN CODE'S BRIDGE OR HOOK OFF UNSEEN.
+// Qwen Code 0.28.4 adds its server and tool lists up across its settings
+// files, and `disableAllHooks` or safe mode switch every hook off (measured),
+// so such a run is refused before Qwen Code starts, naming the file, the key
 // and the entry; an entry naming something else, a case or a specifier Qwen
-// Code does not match, an `mcp.allowed` another file's list completes, or
-// `disableAllHooks: true` (which the run's settings overrule) starts it.
-// Mutations, each red: drop the guard from the script; match a server's case
-// folded; skip the working directory's file; read each `mcp.allowed` alone;
-// drop `disableAllHooks: false`.
-func TestQwenCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
+// Code does not match, an `mcp.allowed` another file's list completes, a
+// higher file's false, a `.env` that turns safe mode off, or a switch on a run
+// with no hook starts it, and the run's settings never set the key; so do a
+// seat skill's switches (measured). Mutations, each red: drop the guard; fold
+// a server's case; skip the working directory; read each `mcp.allowed` alone;
+// drop the hook or the skills' check; let the lowest file decide; read
+// "false" as false; let a settings env beat the `.env`.
+func TestQwenCodesBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
-	const reason = "Qwen Code would start without what the run's tools go through"
-	for name, tc := range map[string]switchOffCase{
+	const reason = "Qwen Code would start without what the run's tools or skill loads go through"
+	for name, tc := range map[string]struct {
+		env      map[string]string
+		noSkills bool
+		switchOffCase
+	}{
 		"nothing switches it off": {},
-		"entries naming other things, comments, and hooks switched off whole": {plant: map[string]string{
-			".qwen/settings.json": "// the home's own\n{\"mcp\": {\"excluded\": [\"other\", \"Crewlet\"], " +
-				"\"allowed\": [\"other\"]}, /* kept */ \"permissions\": {\"deny\": [\"mcp__other\", " +
-				"\"mcp__crewlet__x(y)\"]}, \"tools\": {\"exclude\": [\"submit_work\"], \"disabled\": " +
-				"[\"mcp__crewlet__*\"]}, \"disableAllHooks\": true}",
-			"workspace/.qwen/settings.json": `{"mcp": {"allowed": ["crew*"]}}`}},
-		"the home excludes the bridge by a glob": {plant: map[string]string{".qwen/settings.json": `{"mcp":{"excluded":["crew*"]}}`},
-			fails: []string{reason, `/.qwen/settings.json: its mcp.excluded entry "crew*" takes the server crewlet away`}},
-		"the repository excludes it in the older shape": {
+		"entries naming other things, comments, and switches a higher one undoes": {switchOffCase: switchOffCase{
+			plant: map[string]string{
+				".qwen/settings.json": "// the home's own\n{\"mcp\": {\"excluded\": [\"other\", \"Crewlet\"], " +
+					"\"allowed\": [\"other\"]}, /* kept */ \"permissions\": {\"deny\": [\"mcp__other\", " +
+					"\"mcp__crewlet__x(y)\"]}, \"tools\": {\"exclude\": [\"submit_work\"], \"disabled\": " +
+					"[\"mcp__crewlet__*\"]}, \"disableAllHooks\": true, \"env\": {\"QWEN_CODE_SAFE_MODE\": \"1\"}}",
+				"workspace/.qwen/settings.json": `{"mcp": {"allowed": ["crew*"]}, "disableAllHooks": 0}`,
+				"workspace/.env":                "QWEN_CODE_SAFE_MODE=2\n"}}},
+		"hooks switched off on a run with no hook": {noSkills: true, switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": true}`}}},
+		"the home excludes the bridge by a glob": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"mcp":{"excluded":["crew*"]}}`},
+			fails: []string{reason, `/.qwen/settings.json: its mcp.excluded entry "crew*" takes the server crewlet away`}}},
+		"the repository excludes it in the older shape": {switchOffCase: switchOffCase{
 			plant: map[string]string{"workspace/.qwen/settings.json": `{"excludeMCPServers":["crewlet"]}`},
-			fails: []string{reason, `/workspace/.qwen/settings.json: its mcp.excluded entry "crewlet"`}},
-		"the home allows only another server": {plant: map[string]string{".qwen/settings.json": `{"mcp":{"allowed":["other"]}}`},
-			fails: []string{reason, `/.qwen/settings.json: its mcp.allowed ["other"] leaves the server crewlet out`}},
-		"the home denies the bridge's tools": {
+			fails: []string{reason, `/workspace/.qwen/settings.json: its mcp.excluded entry "crewlet"`}}},
+		"the home allows only another server": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"mcp":{"allowed":["other"]}}`},
+			fails: []string{reason, `/.qwen/settings.json: its mcp.allowed ["other"] leaves the server crewlet out`}}},
+		"the home denies the bridge's tools": {switchOffCase: switchOffCase{
 			plant: map[string]string{".qwen/settings.json": `{"permissions":{"deny":["mcp__crewlet"]}}`},
-			fails: []string{reason, `its permissions.deny entry "mcp__crewlet" denies the tools of the server crewlet`}},
-		"the repository excludes every server's tools": {
+			fails: []string{reason, `its permissions.deny entry "mcp__crewlet" denies the tools of the server crewlet`}}},
+		"the repository excludes every server's tools": {switchOffCase: switchOffCase{
 			plant: map[string]string{"workspace/.qwen/settings.json": `{"tools":{"exclude":["mcp__*"]}}`},
-			fails: []string{reason, `/workspace/.qwen/settings.json: its tools.exclude entry "mcp__*"`}},
-		"the repository hides a tool of the bridge's": {
+			fails: []string{reason, `/workspace/.qwen/settings.json: its tools.exclude entry "mcp__*"`}}},
+		"the repository hides a tool of the bridge's": {switchOffCase: switchOffCase{
 			plant: map[string]string{"workspace/.qwen/settings.json": `{"tools":{"disabled":["mcp__crewlet__submit_work"]}}`},
-			fails: []string{reason, `its tools.disabled entry "mcp__crewlet__submit_work" hides a tool of the server crewlet`}},
+			fails: []string{reason, `its tools.disabled entry "mcp__crewlet__submit_work" hides a tool of the server crewlet`}}},
+		"the home switches hooks off with a string": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": "false"}`},
+			fails: []string{reason, `/.qwen/settings.json: its disableAllHooks is "false", which switches every hook off`,
+				"PostToolUse(skill)"}}},
+		"the repository switches hooks off over the home's false": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": false}`,
+				"workspace/.qwen/settings.json": `{"disableAllHooks": true}`},
+			fails: []string{reason, `/workspace/.qwen/settings.json: its disableAllHooks is true`}}},
+		"the repository's .env turns safe mode on over a settings env": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"env": {"QWEN_CODE_SAFE_MODE": "0"}}`,
+				"workspace/.env": "QWEN_CODE_SAFE_MODE=On\n"},
+			fails: []string{reason, `/workspace/.env's QWEN_CODE_SAFE_MODE is "On": safe mode switches every hook off`}}},
+		"the home's settings env turns safe mode on": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"env": {"QWEN_CODE_SAFE_MODE": "yes"}}`},
+			fails: []string{reason, `/.qwen/settings.json's env.QWEN_CODE_SAFE_MODE is "yes"`}}},
+		"the home disables a seat skill in another case": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"skills": {"disabled": ["CREWLET-DEPLOY"]}}`},
+			fails: []string{reason, `/.qwen/settings.json: its skills.disabled names the run's skill crewlet-deploy`}}},
+		"the repository disables skills by default": {switchOffCase: switchOffCase{
+			plant: map[string]string{"workspace/.qwen/settings.json": `{"skills": {"defaultDisabled": ["Crewlet-Deploy"]}}`},
+			fails: []string{reason, `its skills.defaultDisabled names the run's skill crewlet-deploy`}}},
+		"a working directory's null over the home's true": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": true}`,
+				"workspace/.qwen/settings.json": `{"disableAllHooks": null}`}}},
+		"a settings env's safe mode as no string": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"env": {"QWEN_CODE_SAFE_MODE": true}}`,
+				"workspace/.qwen/settings.json": `{"env": {"QWEN_CODE_SAFE_MODE": 1}}`}}},
+		"the home disables the user level": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"skills": {"disabledLevels": ["project", "user"]}}`},
+			fails: []string{reason, `its skills.disabledLevels holds "user"`}}},
+		"another skill and the project level": {switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"skills": {"disabled": ["deploy"], "disabledLevels": ["project"]}}`}}},
+		"the run's environment's safe mode, which the wrapper unsets": {env: map[string]string{"QWEN_CODE_SAFE_MODE": "1"}},
+		"a .env's safe mode, the run's environment's unset": {env: map[string]string{"QWEN_CODE_SAFE_MODE": "0"},
+			switchOffCase: switchOffCase{plant: map[string]string{".qwen/.env": "QWEN_CODE_SAFE_MODE=true\n"},
+				fails: []string{reason, `/.qwen/.env's QWEN_CODE_SAFE_MODE is "true"`}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -320,10 +391,15 @@ func TestQwenCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/node", "#!/bin/sh\nif [ \"$2\" = guard ]; then exec "+
 				shellword.Quote(nodeForQwen(t))+" \"$@\"; fi\n"+finished)
 			plant(t, box, tc.plant)
-			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "qwen3-coder-plus",
-				MCPServers: loadsBridge, Skills: loadsSkills, SkillLoads: loadsSkillLoads,
-				Env: map[string]string{"OPENAI_API_KEY": "key-placeholder"}})
-			checkSwitchOff(t, box, res, tc)
+			env := map[string]string{"OPENAI_API_KEY": "key-placeholder"}
+			maps.Copy(env, tc.env)
+			req := sandbox.RunRequest{Brief: "go", Model: "qwen3-coder-plus", MCPServers: loadsBridge,
+				Skills: loadsSkills, SkillLoads: loadsSkillLoads, Env: env}
+			if tc.noSkills {
+				req.Skills, req.SkillLoads = nil, sandbox.SkillWiring{}
+			}
+			_, res := runToEnd(t, runner, box, req)
+			checkSwitchOff(t, box, res, tc.switchOffCase)
 			argv, err := os.ReadFile(filepath.Join(box.Home(), "observed.argv"))
 			if len(tc.fails) > 0 {
 				if err == nil {
@@ -335,8 +411,11 @@ func TestQwenCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 				t.Errorf("the helper did not run Qwen Code:\n%s", argv)
 			}
 			settings := systemTier(t, box, "QWEN_CODE_SYSTEM_SETTINGS_PATH", executor.PathsFor(box).QwenSettings())
-			if settings["disableAllHooks"] != false {
-				t.Errorf("the run's settings do not keep hooks on: disableAllHooks %v", settings["disableAllHooks"])
+			if v, set := settings["disableAllHooks"]; set {
+				t.Errorf("the run's settings set disableAllHooks %v over the box's own", v)
+			}
+			if env := boxFile(t, box, box.Home()+"/observed.env"); strings.Contains(env, "QWEN_CODE_SAFE_MODE=") {
+				t.Errorf("Qwen Code started with QWEN_CODE_SAFE_MODE set, which switches every hook off")
 			}
 		})
 	}
@@ -706,5 +785,146 @@ func TestMuseCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 			_, res := runToEnd(t, runner, box, req)
 			checkSwitchOff(t, box, res, c.switchOffCase)
 		})
+	}
+}
+
+// A HOME OR A REPOSITORY CANNOT SWITCH A GEMINI RUN'S SKILLS OFF UNSEEN. Gemini
+// CLI 0.70.0 lists none of a skill `skills.disabled` names by its listed name
+// in any case, nor any where `skills.enabled` reads as false ("false", 0) in
+// the highest file setting it, a null setting it on (measured), so such a run
+// is refused before Gemini CLI starts, naming the file and the entry; the raw
+// `crewlet:<name>`, another skill and a higher true or null start it.
+// Mutations, each red: drop the skills' check; match case-sensitively; let the
+// lowest file decide; read only a boolean false; skip a null.
+func TestGeminiCLIsSeatSkillsCannotBeSwitchedOffUnseen(t *testing.T) {
+	t.Parallel()
+	const reason = "Gemini CLI would start without what the run's notes, tools, sign-in or round cap rest on"
+	for name, tc := range map[string]switchOffCase{
+		"nothing switches them off": {plant: map[string]string{".gemini/settings.json": `{"skills": {"disabled": ` +
+			`["crewlet:mcp-github", "home-skill"], "enabled": false}}`,
+			"workspace/.gemini/settings.json": `{"skills": {"enabled": true}}`}},
+		"the home disables a seat skill": {plant: map[string]string{".gemini/settings.json": `{"skills": {"disabled": ["CREWLET-MCP-GITHUB"]}}`},
+			fails: []string{reason, "/.gemini/settings.json: its skills.disabled names the run's skill crewlet-mcp-github"}},
+		"the home switches skills off with a string": {plant: map[string]string{".gemini/settings.json": `{"skills": {"enabled": "false"}}`},
+			fails: []string{reason, `/.gemini/settings.json: its skills.enabled is "false"`}},
+		"a repository's null over the home's false": {plant: map[string]string{".gemini/settings.json": `{"skills": {"enabled": false}}`,
+			"workspace/.gemini/settings.json": `{"skills": {"enabled": null}}`}},
+		"the repository switches skills off": {plant: map[string]string{"workspace/.gemini/settings.json": `{"skills": {"enabled": false}}`},
+			fails: []string{reason, "/workspace/.gemini/settings.json: its skills.enabled is false"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := geminiBox(t, observedRun)
+			plant(t, box, tc.plant)
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "gemini-2.5-pro",
+				Skills: handedSkills(), SkillLoads: skillWiring(),
+				Env: map[string]string{"GEMINI_API_KEY": "key-placeholder",
+					"GEMINI_CLI_SYSTEM_SETTINGS_PATH": box.Home() + "/system/settings.json",
+					"GEMINI_CLI_SYSTEM_DEFAULTS_PATH": box.Home() + "/system/defaults.json"}})
+			checkSwitchOff(t, box, res, tc)
+		})
+	}
+}
+
+// A HOME'S POLICY CANNOT DENY GEMINI CLI'S BRIDGE UNSEEN. Gemini CLI 0.70.0's
+// matching policy rule of the highest priority decides a yolo run's call, and
+// a deny of one of the bridge's tools leaves it "not found" without a word
+// (measured), which the run's admin-tier allow would override; so the run is
+// refused before Gemini CLI starts, naming the file and the rule. A
+// higher-priority allow, another mode's rule, another server's, an ask the
+// admin allow answers and the run's own crewlet.toml start it. A rule it
+// cannot read whole refuses it where it could reach the bridge, and is left
+// out, saying so, where what it reads rules the bridge out. Mutations, each
+// red: drop the check; let the lowest priority decide; ignore modes; skip
+// mcpName rules; pass a line it cannot read; refuse every such rule; refuse a
+// trailing comma; end an array's line at its comment.
+func TestAGeminiHomesPolicyCannotDenyTheBridgeUnseen(t *testing.T) {
+	t.Parallel()
+	const reason = "Gemini CLI would start without what the run's notes, tools, sign-in or round cap rest on"
+	const person = ".gemini/policies/person.toml"
+	rule := func(body, decision string, priority int) string {
+		return fmt.Sprintf("[[rule]]\n%s\ndecision = %q\npriority = %d\n", body, decision, priority)
+	}
+	bridge := map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL,
+		AlwaysLoaded: true, Tools: []string{"ask_and_wait", "submit_work"}}}
+	for name, tc := range map[string]switchOffCase{
+		"rules the run starts under": {plant: map[string]string{person: "# the person's own\n" +
+			rule("mcpName = \"crewlet\"\ntoolName = \"*\"", "deny", 100) + rule("mcpName = \"crewlet\"\ntoolName = \"*\"", "allow", 200) +
+			rule("toolName = \"*\"\nmodes = [\"plan\"]", "deny", 900) + rule("mcpName = \"other\"\ntoolName = \"*\"", "deny", 900) +
+			rule("toolName = \"mcp_crewlet_submit_work\"", "ask_user", 950)}},
+		"the home denies the bridge's server": {plant: map[string]string{person: rule("mcpName = \"crewlet\"\ntoolName = \"*\"", "deny", 100)},
+			fails: []string{reason, "/" + person + ": its rule", "denies the tool mcp_crewlet_submit_work (priority 100)"}},
+		"the home denies one tool by its own name": {plant: map[string]string{person: rule("mcpName = \"crewlet\"\ntoolName = \"ask_and_wait\"", "deny", 5)},
+			fails: []string{"denies the tool mcp_crewlet_ask_and_wait"}},
+		"the home denies every tool over an allow": {plant: map[string]string{person: rule("toolName = \"mcp_crewlet_submit_work\"", "allow", 10) +
+			rule("toolName = \"*\"", "deny", 20)},
+			fails: []string{"denies the tool mcp_crewlet_submit_work (priority 20)"}},
+		"a deny wins an allow of the same priority": {plant: map[string]string{person: rule("mcpName = \"crewlet\"\ntoolName = \"*\"", "allow", 50) +
+			rule("mcpName = \"crewlet\"\ntoolName = \"*\"", "deny", 50)},
+			fails: []string{"denies the tool mcp_crewlet_submit_work (priority 50)"}},
+		"TOML read exactly: spaced header, comments, literal strings, a multi-line array": {plant: map[string]string{person: "[[ rule ]]\n" +
+			"# the person's own\nmcpName = 'other' # a comment\ntoolName = [\n  \"a # not a comment\",\n  \"b\"\n]\ndecision = \"deny\"\npriority = 5\n"}},
+		"a bridge rule over lines, with comments and a trailing comma": {plant: map[string]string{person: "[[rule]]\n" +
+			"mcpName = \"crewlet\"\ntoolName = [\n  \"submit_work\",  # the bridge's\n  # its question too\n  \"ask_and_wait\",\n]\n" +
+			"decision = \"deny\"\npriority = 7\n"},
+			fails: []string{reason, "denies the tool mcp_crewlet_submit_work (priority 7)", "denies the tool mcp_crewlet_ask_and_wait"}},
+		"other tools' rules with a trailing comma and a comment in an array": {plant: map[string]string{person: "[[rule]]\n" +
+			"mcpName = \"other\"\ntoolName = [\"a\", \"b\",]\ndecision = \"deny\"\n[[rule]]\ntoolName = [\n  \"run_shell_command\",  # shell\n" +
+			"  \"write_file\",\n]\ndecision = \"deny\"\n"}},
+		"a bridge rule with no decision": {plant: map[string]string{person: "[[rule]]\nmcpName = \"crewlet\"\n"},
+			fails: []string{reason, "a policy rule the guard cannot read exactly", "/" + person + ":line 1: a rule with no decision"}},
+		"a bridge deny of an underscored priority": {plant: map[string]string{person: "[[rule]]\nmcpName = \"crewlet\"\n" +
+			"toolName = \"*\"\ndecision = \"deny\"\npriority = 1_000\n"},
+			fails: []string{"/" + person + ":line 5"}},
+		"a bridge tool's deny whose mcpName the guard cannot read": {plant: map[string]string{person: "[[rule]]\n" +
+			"mcpName = \"\"\"crewlet\"\"\"\ntoolName = \"submit_work\"\ndecision = \"deny\"\n"},
+			fails: []string{"/" + person + ":line 2"}},
+		"a quoted key in a rule naming no server": {plant: map[string]string{person: "[[rule]]\n\"toolName\" = \"*\"\ndecision = \"deny\"\n"},
+			fails: []string{"/" + person + ":line 2"}},
+		"another server's rules it cannot read whole": {plant: map[string]string{person: "[[rule]]\nmcpName = \"other\"\n" +
+			"decision = \"deny\"\npriority = 1_000\n[[rule]]\nmcpName = \"other\"\n\"toolName\" = \"x\"\ndecision = \"deny\"\n" +
+			"[[rule]]\nmcpName = \"crewlet\"\ntoolName = \"*\"\ndecision = \"allow\"\nargsPattern = { x = 1 }\n[[rule]]\nmcpName = \"other\"\n"},
+			says: []string{"policy rules the guard cannot read whole were left out of its check", "/" + person + ":line 4",
+				"/" + person + ":line 7", "/" + person + ":line 13", "/" + person + ":line 14: a rule with no decision"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := geminiBox(t, observedRun)
+			plant(t, box, tc.plant)
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "gemini-2.5-pro",
+				MCPServers: bridge, Env: map[string]string{"GEMINI_API_KEY": "key-placeholder"}})
+			checkSwitchOff(t, box, res, tc)
+		})
+	}
+}
+
+// GEMINI CLI'S ADMIN ALLOW COVERS THE BRIDGE ALONE. The run's admin-tier
+// policy turns a person's `ask_user` on a bridge tool, which a headless run
+// would deny, into an allow, and outranks every rule of theirs it matches; so
+// each of its rules names one of Crewlet's own servers (`mcpName`), and a
+// person's deny or ask of any other tool, another server's included, stands
+// (measured on 0.70.0: an ask on the bridge ran under it; a deny of
+// run_shell_command still denied). Mutation: a rule without mcpName, or one
+// for every server, and this goes red.
+func TestGeminisAdminAllowCoversTheBridgeAlone(t *testing.T) {
+	t.Parallel()
+	_, box := geminiBox(t, observedRun)
+	p := executor.PathsFor(box)
+	servers := map[string]sandbox.MCPServer{
+		"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, AlwaysLoaded: true},
+		"linear":  {Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:9/linear"}}
+	if _, err := (executor.GeminiCLI{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "go",
+		MCPServers: servers, Env: map[string]string{"GEMINI_API_KEY": "key-placeholder"}}, executor.Session{}, p); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	policy := boxFile(t, box, p.GeminiAdminPolicy()+"/crewlet.toml")
+	rules := strings.Split(policy, "[[rule]]")[1:]
+	if len(rules) != 1 {
+		t.Fatalf("the admin policy holds %d rules, want one for the bridge alone:\n%s", len(rules), policy)
+	}
+	for _, rule := range rules {
+		if !strings.Contains(rule, `mcpName = "crewlet"`) || !strings.Contains(rule, `decision = "allow"`) {
+			t.Errorf("an admin rule reaches beyond the bridge's tools:\n%s", rule)
+		}
 	}
 }

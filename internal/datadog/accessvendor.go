@@ -35,8 +35,8 @@ func (accessVendor) Kind() integration.Kind { return integration.KindDatadog }
 
 // Catalog is Datadog's per-seat offer. The seat's key reaches its tool through
 // the MCP catalogue's recognition (internal/mcp/catalogue): Datadog's MCP server
-// reads it as DD_APPLICATION_KEY, beside the organization's API key in the
-// server's own headers.
+// reads it as DD_APPLICATION_KEY, beside the organization's API key, which the
+// same recognition hands it as DD_API_KEY from the provisioning block.
 func (accessVendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{
 		Kind:        integration.KindDatadog,

@@ -25,7 +25,7 @@ export const ASSISTANT_PROTOCOL_VERSION = 3;
 /** The longest question a turn takes, in characters (Unicode code points). */
 export const ASSISTANT_INPUT_MAX_RUNES = 4000;
 /** The most a turn's page context may encode to, in bytes. */
-export const ASSISTANT_PAGE_CONTEXT_MAX_BYTES = 16384;
+export const ASSISTANT_PAGE_CONTEXT_MAX_BYTES = 24576;
 /** The most resources a page context names. */
 export const ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES = 50;
 /** The most page actions a page context offers. */
@@ -65,6 +65,14 @@ export const ASSISTANT_PAGE_DRAFT_FILE_NAME_MAX_BYTES = 200;
  */
 export const ASSISTANT_PAGE_DRAFT_SECRET_PATH =
   "(^|[._])(password|passphrase|secret|secrets|token|tokens|credential|credentials|(api|private|signing|access|secret)[._]?key)([._]|$)";
+/** The most a page context's outline of the screen encodes to, in bytes. */
+export const ASSISTANT_PAGE_VIEW_MAX_BYTES = 8192;
+/** The most entries the outline lists; past it the outline says `trimmed`. */
+export const ASSISTANT_PAGE_VIEW_MAX_NODES = 200;
+/** The longest name an outline entry carries, in characters. */
+export const ASSISTANT_PAGE_VIEW_NAME_MAX_RUNES = 300;
+/** The longest error an outline field carries, in characters. */
+export const ASSISTANT_PAGE_VIEW_ERROR_MAX_RUNES = 200;
 /**
  * The most one page action's arguments (its `action_args` schema) encode to,
  * in bytes, as the engine encodes them: a page context declaring more is
@@ -268,7 +276,7 @@ export type AssistantViewerReason =
   "no_model" | "model_problem" | "not_a_person" | "no_permission" | "model_not_ready";
 
 /** Whether a page action asks for the person's approval. */
-type AssistantActionConfirm = "approve" | "none";
+type AssistantActionConfirm = "approve" | "none" | "read";
 
 /** What the page reports about a page action it was sent. */
 type AssistantActionState = "applying" | "applied" | "stale" | "blocked" | "invalid" | "no_handler";
@@ -702,6 +710,45 @@ export interface AssistantPageContext {
   /** Each accepted action's own revision: what it depends on, so it goes stale only when that moves. */
   action_revisions?: Record<string, string>;
   draft?: AssistantPageDraft;
+  /** An outline of what the screen shows, never a field's value (`view.ts`). */
+  view?: AssistantPageView;
+}
+
+/** What the screen shows, read from its accessibility tree: an open dialog first, then the main pane. */
+export interface AssistantPageView {
+  nodes: AssistantViewNode[];
+  /** Entries past the outline's bounds were left out. */
+  trimmed?: boolean;
+}
+
+/** What an outline entry is. */
+type AssistantViewRole =
+  | "heading"
+  | "section"
+  | "dialog"
+  | "field"
+  | "button"
+  | "link"
+  | "tab"
+  | "step"
+  | "alert"
+  | "notice";
+
+/** A field's shape in the outline. */
+export type AssistantViewFieldKind = "text" | "secret" | "choice" | "check" | "file";
+
+/** One outline entry: its role and accessible name, and a field's state, never its value. */
+export interface AssistantViewNode {
+  role: AssistantViewRole;
+  name: string;
+  depth?: number;
+  level?: number;
+  field?: AssistantViewFieldKind;
+  filled?: boolean;
+  required?: boolean;
+  disabled?: boolean;
+  current?: boolean;
+  error?: string;
 }
 
 /** A JSON type an action's argument takes. */
@@ -1017,6 +1064,7 @@ export const ASSISTANT_PAGE_ACTIONS = {
   "draft.set": { confirm: "approve" },
   "org.draft.apply_ops": { confirm: "approve" },
   "budgets.ceiling.prefill": { confirm: "approve" },
+  "page.read": { confirm: "read" },
 } as const satisfies Record<string, { confirm: AssistantActionConfirm }>;
 
 /** What a person may attach: images, sniffed from their bytes by the engine. */

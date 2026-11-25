@@ -16,12 +16,16 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// fakeConsents signs in the kind "adsense" alone, recording who asked.
+// fakeConsents signs in the kind "adsense" alone, recording who asked, and
+// comes back to callback.
 type fakeConsents struct {
-	mu sync.Mutex
-	by []iam.Actor
-	id uuid.UUID
+	mu       sync.Mutex
+	by       []iam.Actor
+	id       uuid.UUID
+	callback string
 }
+
+func (f *fakeConsents) SignInCallback() string { return f.callback }
 
 func (f *fakeConsents) StartConsent(_ context.Context, kind integration.Kind, by iam.Actor) (setupapi.ConsentSignIn, error) {
 	f.mu.Lock()

@@ -333,7 +333,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateLLMKeys(), c.validateLLMFleets(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
 		c.validateRunOptionalKeys(), c.validateReservedSandboxEnv(), c.validateUnitRooms(),
 		c.validateFileRules(), c.validateMCPNames(), c.validateAssistant(), c.validateAdvisor(), c.validateSeatAccess(),
-		c.validateMCPRegistry(), c.validateMCPAccess(o), c.validateBoxToolLevels(),
+		c.validateMCPRegistry(), c.validateMCPAccess(o), c.validateMCPRequiredKeys(o), c.validateBoxToolLevels(),
 		c.validateMCPLimits(o), c.Code.validateAdmission(field("code")), c.validateSSHApprovers(),
 		c.validateDelegatedDecisions(o), c.validateGrowth())
 }

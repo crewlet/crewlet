@@ -43,9 +43,9 @@ func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 // A minimal call stays minimal: an unset cap must not become a flag, nor an
 // unset wiring the settings that hold the notes' hooks. The settings every run
 // has are named even here, since no field of the request sets them
-// ([TestEveryClaudeCodeRunIsStartedWithItsBoxsSweepHeldOff]), and so are the
-// ones with hooks on, which the checkouts' hook starts with
-// ([TestAClaudeCodeRunStartsItsCheckoutsHookByItsRelease]).
+// ([TestEveryClaudeCodeRunIsStartedWithItsBoxsSweepHeldOff]), and so is the
+// check of what switches hooks off, the checkouts' hook starting on any run
+// ([TestARunWhoseCheckoutsHookStartsIsRefusedWhereHooksAreOff]).
 func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{}

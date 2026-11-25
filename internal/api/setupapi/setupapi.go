@@ -1111,6 +1111,15 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 	// What a reference currently reads as, for the links a form draws.
 	// Credentials are skipped ([setup.FillEffective]).
 	setup.FillEffective(reqs, s.resolve)
+	// The engine's own addresses and the state of what a step connects first,
+	// which no vendor's requirements can read off the document.
+	setup.FillRedirects(reqs, s.signInCallback(), s.webhookBaseKey)
+	for i, step := range guide.Prepare {
+		if step.Needs != "" {
+			connected := s.connected(company, roster, step.Needs)
+			guide.Prepare[i].Connected = &connected
+		}
+	}
 
 	satisfied := len(setup.Outstanding(reqs)) == 0
 	// Whether this dialog has a box left to fill, the one question Continue
@@ -1176,6 +1185,22 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		state.PublicURL = base + state.InboundPath
 	}
 	return state, true
+}
+
+// signInCallback is the redirect URI a consent product's client registers, ""
+// where this surface signs nothing in or the engine has no public address.
+func (s *Service) signInCallback() string {
+	if s.consents == nil {
+		return ""
+	}
+	return s.consents.SignInCallback()
+}
+
+// connected reports whether kind is connected as a step needing it reads it:
+// on, with nothing it requires outstanding.
+func (s *Service) connected(company *config.Company, roster *org.Organization, kind integration.Kind) bool {
+	state, ok := s.state(company, roster, kind)
+	return ok && state.Enabled && state.Satisfied
 }
 
 // credentialSeats is the roster of agents for an app whose seats each hold
