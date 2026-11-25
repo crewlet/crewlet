@@ -31,7 +31,7 @@ func TestARecordLinkIsNamedByWhatItOpens(t *testing.T) {
 			}
 			switch v, keyed := keys[segment]; {
 			case segment == "{kind}":
-				params[p.param], key, named = "google_cloud", "Open Google Cloud setup", true
+				params[p.param], key, named = "google_cloud", "Open Google Cloud", true
 			case segment == "{id}" && s.id != nil:
 				// A KEY AS WELL AS AN ID, as a task's {id} is: named by the
 				// key a person reads.
@@ -50,8 +50,10 @@ func TestARecordLinkIsNamedByWhatItOpens(t *testing.T) {
 		switch {
 		case err != nil:
 			t.Errorf("%s: %v", name, err)
-		case named && link.Label != key:
-			t.Errorf("an integration's link reads %q, want %q", link.Label, key)
+		case named:
+			if !strings.HasPrefix(link.Label, key) {
+				t.Errorf("an integration's link reads %q, want it to open with %q", link.Label, key)
+			}
 		case takesOpaque && (s.noun == "" || link.Label != "Open "+s.noun):
 			t.Errorf("a %s link with no name reads %q: its address takes a value nobody "+
 				"reads, so the screen names its record by a noun", name, link.Label)

@@ -1079,10 +1079,10 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7483.2 KiB,
-	// with Ask Crewlet's open in app card reading Opened on the page it opened.
-	// A raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 2364<<10
+	// kit releases account for its growth, and the last measure was 7484.8 KiB,
+	// with Ask Crewlet opening the place a person's own question asks for. A
+	// raise names the measured size and its cause in its commit.
+	treeBudget = 5<<20 + 2365<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

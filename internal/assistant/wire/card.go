@@ -316,6 +316,9 @@ type OpenInAppCard struct {
 	Link      Link       `json:"link"`
 	Permitted bool       `json:"permitted"`
 	Reason    OpenReason `json:"reason,omitempty"`
+	// Asked marks a place the person's own question asked to be taken to:
+	// the drawer that sent the question opens it once, with no press.
+	Asked bool `json:"asked"`
 }
 
 // ErrorCard is a refusal or a failure in the engine's own words. Phrase is the
@@ -418,6 +421,9 @@ func (c Card) Validate() error {
 		if c.OpenInApp.Permitted != (c.OpenInApp.Reason == "") {
 			return fmt.Errorf("%w: an open in app card is permitted exactly when it names "+
 				"no reason", ErrInvalid)
+		}
+		if c.OpenInApp.Asked && !c.OpenInApp.Permitted {
+			return fmt.Errorf("%w: only a permitted open in app card opens by itself", ErrInvalid)
 		}
 	case CardBrief:
 		return c.Brief.Validate()

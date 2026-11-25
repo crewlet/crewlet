@@ -35,6 +35,29 @@ type Step struct {
 	// answers from that integration's own setup state.
 	Needs     integration.Kind `json:"needs,omitempty"`
 	Connected *bool            `json:"connected,omitempty"`
+
+	// Done is whether the company is past this step, which setupapi answers
+	// from its setup state ([MarkDone]).
+	Done bool `json:"done"`
+}
+
+// MarkDone marks each of steps done from reqs, the state they are answered
+// with: a step that yields a field once that field holds a value that
+// resolves, one that connects an integration first once it is connected, and
+// any step once a step after it is done, since the steps run in order. The
+// step a person is on is the first not done.
+func MarkDone(steps []Step, reqs []Requirement) {
+	held := map[string]bool{}
+	for _, r := range reqs {
+		held[r.Field] = r.Present && (r.Resolved == nil || *r.Resolved)
+	}
+	later := false
+	for i := len(steps) - 1; i >= 0; i-- {
+		s := &steps[i]
+		s.Done = later || (s.Yields != "" && held[s.Yields]) ||
+			(s.Needs != "" && s.Connected != nil && *s.Connected)
+		later = s.Done
+	}
 }
 
 // Caution is a credential's one risk, said once per form.

@@ -654,7 +654,12 @@ test("a brief's open whose address is not this dashboard's draws no press", () =
 });
 
 /** Draws Google Cloud's open in app card on the page `at`, pressed or not. */
-function drawOpen(at: string, opened: boolean, handlers: CardHandlers = on) {
+function drawOpen(
+  at: string,
+  opened: boolean,
+  handlers: CardHandlers = on,
+  href = "#/company/integrations/google_cloud",
+) {
   window.location.hash = at;
   return render(
     <Router>
@@ -668,9 +673,10 @@ function drawOpen(at: string, opened: boolean, handlers: CardHandlers = on) {
               link: {
                 label: "Open Google Cloud setup",
                 screen: "integration",
-                href: "#/company/integrations/google_cloud",
+                href,
               },
               permitted: true,
+              asked: false,
             },
           },
         }}
@@ -714,4 +720,16 @@ test("a pressed card reads Opened on its page and is ready again elsewhere", asy
     window.dispatchEvent(new HashChangeEvent("hashchange"));
   });
   expect(await screen.findByRole("button", { name: "Open here" })).toBeDefined();
+});
+
+// A PAGE THAT TAKES ITS ARRIVAL OFF THE ADDRESS IS STILL THE ONE OPENED: the
+// setup link's `edit=settings` is gone once its form is saved or cancelled, and the pressed card
+// still reads Opened; unpressed, the address without it is another place.
+test("a pressed card stays Opened once its page takes the arrival off the address", () => {
+  const setup = "#/company/integrations/google_cloud?edit=settings";
+  drawOpen("#/company/integrations/google_cloud", true, on, setup);
+  expect(screen.getByText("Opened beside this conversation.")).toBeDefined();
+  cleanup();
+  drawOpen("#/company/integrations/google_cloud", false, on, setup);
+  expect(screen.getByRole("button", { name: "Open here" })).toBeDefined();
 });
