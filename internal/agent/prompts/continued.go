@@ -885,7 +885,8 @@ const (
 const calledBeforeHeader = "## Calls the runs before you made on this task" +
 	"\nThe runs before you on this task made these calls through your tools, in the order they made them." +
 	" They happened, and their outcomes stand: a call marked `→ success` ALREADY RAN, so do NOT issue a" +
-	" write among them again; one marked `→ error` did not take effect."
+	" write among them again; one marked `→ error` did not take effect. A write's line ends with what it" +
+	" returned (the key of what it created, a message's id), rewritten where longer than a line."
 
 // lateBeforeHeader is [lateCallsHeader] for a run that starts a session of its
 // own: no session above shows anything of the calls, so the words say nothing
