@@ -97,6 +97,11 @@ type codexEvents struct {
 	capped      int
 	interrupted bool
 	helperLost  bool
+	// responses is the model responses the run's rollout lines record
+	// ([codexEvents.Requests]), counted as each line is fed, whatever the
+	// rollout's bound kept of it.
+	responses int
+	undecidedLines
 	// rollout is the rollout lines the script appended, each with its line
 	// break, held to [codexEvents.bound]; rolloutDropped counts what was not.
 	rollout        bytes.Buffer
@@ -308,6 +313,9 @@ func (d *codexEvents) keepRollout(line json.RawMessage) {
 		aborted.Payload.Type == "turn_aborted" && aborted.Payload.Reason == "interrupted" {
 		d.interrupted = true
 	}
+	if codexResponseLine(line) {
+		d.responses++
+	}
 	if d.rolloutDropped > 0 || d.rollout.Len()+len(line)+1 > d.bound() {
 		d.rolloutDropped += len(line) + 1
 		return
@@ -317,9 +325,22 @@ func (d *codexEvents) keepRollout(line json.RawMessage) {
 }
 
 // Skipped implements [Decoder].
-func (d *codexEvents) Skipped(n int64, bound int) {
+func (d *codexEvents) Skipped(line LongLine) {
 	d.sawLine = true
-	d.transcript.skip(n, bound)
+	d.transcript.skip(line.Size, line.Bound)
+	// A ROLLOUT LINE NAMES ITS KIND AT ITS HEAD; a response's token_count is
+	// numbers alone, so its usage is in one window or the other.
+	switch lineType(line) {
+	case codexRolloutEvent:
+		switch {
+		case !inEither(line, `"token_count"`) && !bytes.Contains(line.Head, []byte(`"payload"`)):
+			d.undecided++
+		case inEither(line, `"token_count"`) && inEither(line, `"last_token_usage":{`):
+			d.responses++
+		}
+	case "":
+		d.undecided++
+	}
 }
 
 // figures is what the run's appended rollout lines say, and false where the
@@ -413,6 +434,38 @@ func codexLimitsLine(limits codexLimits) string {
 // Ended implements [Decoder]: the turn's end, `turn.completed` or
 // `turn.failed`.
 func (d *codexEvents) Ended() bool { return d.completed || d.failure != "" }
+
+// Requests implements [Decoder]: the model responses the rollout lines the
+// script appends after Codex exits record ([codexResponseLine]). exec --json's
+// own stdout marks no response, so a stream cut before those lines counts none,
+// and a run with no rollout lines never ended as a success anyway.
+func (d *codexEvents) Requests() int { return d.responses }
+
+// InFlight implements [Decoder]: one. The note helper interrupts the turn
+// once it hears the cap-th response, and Codex may have run that response's
+// call and made the next request by then: measured on 0.171.0 with the per-run
+// helper, a cap of 3 stopped after 3 requests in 14 runs of 20 and after 4 in 6.
+func (d *codexEvents) InFlight() int { return 1 }
+
+// codexResponseLine reports whether line, a rollout line, records one model
+// response: a token_count stating the response's own usage
+// (`info.last_token_usage`), which Codex writes once each response completes; a
+// token_count carrying only rate limits states none. Measured on 0.171.0
+// against a stand-in: 31 lines for 31 responses, and none for a 429 or a 500
+// it retried.
+func codexResponseLine(line []byte) bool {
+	var ev struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Type string `json:"type"`
+			Info *struct {
+				Last json.RawMessage `json:"last_token_usage"`
+			} `json:"info"`
+		} `json:"payload"`
+	}
+	return json.Unmarshal(line, &ev) == nil && ev.Type == "event_msg" && ev.Payload.Type == "token_count" &&
+		ev.Payload.Info != nil && wireObject(ev.Payload.Info.Last)
+}
 
 // Result implements [Decoder].
 func (d *codexEvents) Result() sandbox.Result {

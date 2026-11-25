@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -213,32 +212,33 @@ const clLineAllocates = 256 << 10
 // A CHAT FILE'S READING HOLDS NO LINE: a 64 MiB line passes through within
 // [clLineAllocates], whatever its length.
 //
-// Not parallel: it reads the process's allocation count.
+// Not parallel: it reads the process's allocation count, the fewest bytes of
+// three reads ([allocationsOf]).
 //
 // Mutation: buffer a line whole, and this goes red.
 func TestAChatFilesReadingHoldsNoLine(t *testing.T) {
-	file := func() io.Reader {
-		return io.MultiReader(&repeating{lines: []byte("v"), left: 64 << 20}, strings.NewReader("\n"))
-	}
-	read := func() (int64, int, error) {
-		var total int64
+	// A piece a Read: a byte a Read, one read of the line takes the race
+	// detector some 50 s on a two-core host.
+	vs := bytes.Repeat([]byte("v"), textDigestBytes)
+	var (
+		total int64
+		n     int
+		err   error
+	)
+	_, allocated := allocationsOf(func() {
+		total = 0
 		piece := make([]byte, textDigestBytes)
-		n, err := chatLines(t.Context(), file(), func(_ int, body io.Reader) error {
+		file := io.MultiReader(&repeating{lines: vs, left: 64 << 20}, strings.NewReader("\n"))
+		n, err = chatLines(t.Context(), file, func(_ int, body io.Reader) error {
 			m, err := io.CopyBuffer(io.Discard, struct{ io.Reader }{body}, piece)
 			total += m
 			return err
 		})
-		return total, n, err
-	}
-	if total, n, err := read(); err != nil || n != 1 || total != 64<<20 {
+	})
+	if err != nil || n != 1 || total != 64<<20 {
 		t.Fatalf("read %d lines of %d bytes, %v; want one of %d", n, total, err, 64<<20)
 	}
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	_, _, _ = read()
-	runtime.ReadMemStats(&after)
-	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > clLineAllocates {
+	if allocated > clLineAllocates {
 		t.Errorf("a 64 MiB line allocated %d bytes; want at most %d", allocated, clLineAllocates)
 	}
 }
