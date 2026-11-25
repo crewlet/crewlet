@@ -111,16 +111,6 @@ func (s *summaryText) joined(t *summaryText) {
 	_, _ = s.Write(t.buf)
 }
 
-// heldFrom makes s the words t holds, a text a transcript's read held whole
-// within its bound; past it, or past [summaryReadMaxBytes], none.
-func (s *summaryText) heldFrom(t *valueText) {
-	s.reset()
-	s.set = true
-	if s.past = t.past || len(t.held) > summaryReadMaxBytes; !s.past {
-		s.buf = append(s.buf, t.held...)
-	}
-}
-
 // read reads the value k begins off w into s, which a value but a string
 // leaves unset, and reports whether a string field takes it.
 func (s *summaryText) read(w *lineWalk, k jsonscan.Kind) (bool, error) {
