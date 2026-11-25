@@ -22,10 +22,6 @@ type chatSummaryLines struct {
 	raw bytes.Reader
 	// err is what ended the reading, after which it reads no line.
 	err error
-	// pastBase reports whether the reading keeps more than a read at its
-	// base may hold ([baseTierReadBytes]); nil for one that keeps nothing
-	// whatever the file.
-	pastBase func() bool
 	// next, where not nil, is told each line before it is read, as the
 	// count's walk took it (its white space trimmed), a blank or a torn last
 	// one never ([chatSummaryLines.follow]).
@@ -54,16 +50,8 @@ func (c *chatSummaryLines) take(ctx context.Context, raw []byte) {
 
 // follow reads r, the chat file as the count's walk hands it on
 // ([chatFileFollowed]), to its end or the reading's: its last line, one with
-// no break, unread, as the walk passes a torn one over. ONCE IT KEEPS MORE
-// THAN ITS BASE it holds large's slot to its end, as the count does
-// ([chatFileLines]), a wait its ctx ends ending the reading.
-func (c *chatSummaryLines) follow(ctx context.Context, r io.Reader, large *passBudget) {
-	held := false
-	defer func() {
-		if held {
-			large.drop()
-		}
-	}()
+// no break, unread, as the walk passes a torn one over.
+func (c *chatSummaryLines) follow(ctx context.Context, r io.Reader) {
 	c.lines.Reset(r)
 	c.tornUnread = true
 	for c.err == nil {
@@ -73,10 +61,6 @@ func (c *chatSummaryLines) follow(ctx context.Context, r io.Reader, large *passB
 		var ended bool
 		if ended, c.err = c.line(ctx); ended {
 			return
-		}
-		if !held && c.err == nil && c.pastBase != nil && c.pastBase() {
-			c.err = large.hold(ctx)
-			held = c.err == nil
 		}
 	}
 }
@@ -186,9 +170,6 @@ func newGeminiSummaryReading(g *geminiSummaries) *geminiSummaryReading {
 	r := &geminiSummaryReading{g: g}
 	r.setup(r)
 	r.next = r.forms
-	// Its records' places, one a record to [geminiCountIDs], past the count's
-	// base as many ([geminiCopyLargeHeldBytes]).
-	r.pastBase = func() bool { return len(g.place) > geminiCountBaseIDs }
 	return r
 }
 

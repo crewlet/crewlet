@@ -64,15 +64,6 @@ const geminiCountBaseIDs = 1 << 11
 // it past the meter's base ([takeLargeHeldBytes]); its meter reads no summary.
 const geminiCountLargeHeldBytes = 25 << 20
 
-// geminiCopyLargeHeldBytes is what a collection's read of a Gemini CLI copy
-// holds past its base under the large slot: its count beside its summary's
-// reading ([chatFileFollowed]), whose records' places a reading keeps to
-// [geminiCountIDs], 44.62 MiB live at most over eight runs at the word bound
-// (summary_ids_long; the count alone 25.54, the summary alone 20.71), rounded
-// up with a margin for that spread. Counted among the slot's holders
-// ([largeReadHeldBytes]).
-const geminiCopyLargeHeldBytes = 46 << 20
-
 // geminiSyntheticAnswerBytes is the JSON of the answer a resume hands a call
 // with none (213 bytes, 0.70.0). The turn it closes a history ending on a
 // person's record with is the request's alone, never the estimate's (measured).
