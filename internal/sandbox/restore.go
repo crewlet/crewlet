@@ -879,6 +879,13 @@ type ContinuedSession struct {
 	// the read did not find held. What a run that starts a session of its own
 	// is told it may read (internal/agent/runner's SessionBasis.KeptTurn).
 	KeptTurn string
+
+	// Summary is the newest summary the turn's record names
+	// ([PendingRun.Summary]), as the turn's end would name it: what a run that
+	// does not continue the turn's own newest session is handed, at its place
+	// among the turn's captures. Nil where the record names none, or one no end
+	// could carry.
+	Summary *executorkeep.Summary
 }
 
 // relaunchAskWait bounds a relaunch's asks, on the frame that relaunches, where
@@ -956,7 +963,8 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		return lostWith(ContinuedSession{}, executorkeep.LossRestoreFailed, "the turn's run record was gone "+
 			"before the capture of the job the relaunch follows settled")
 	}
-	answer := ContinuedSession{CopyContext: copyContext(run), CopyNextRequest: copyNextRequest(run)}
+	answer := ContinuedSession{CopyContext: copyContext(run), CopyNextRequest: copyNextRequest(run),
+		Summary: run.namedSummary()}
 	if err != nil {
 		// NO ANSWER IS NO KEPT CAPTURE: a relaunch never continues one it has
 		// not seen kept.
@@ -1272,6 +1280,10 @@ type SessionContinuation struct {
 	// the same for both ([BriefTold]): recorded on the job the launch opens.
 	Told BriefTold
 
+	// Handover is what every telling of it hands of the summary of a newer
+	// session the run does not continue ([SummaryHandover]).
+	Handover SummaryHandover
+
 	// Exact is the briefs told by a reading of what the kept capture holds
 	// ([HoldingsAsk]), beside Brief and Replaced, which tell by the save point;
 	// nil where no reading was read or its telling is not to be handed. Only for
@@ -1414,6 +1426,9 @@ type continuedLaunch struct {
 	// notContinued is the launch's final verdict on the session it did not
 	// continue, nil where it lost none ([Coordinator.notContinued]).
 	notContinued *executorkeep.NotContinued
+	// handover is what brief hands of the lost session's summary, and
+	// freshHandover what fresh does ([SummaryHandover]).
+	handover, freshHandover SummaryHandover
 
 	brief, fresh, session string
 	carried               *CarriedSession
@@ -1539,7 +1554,7 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			refused = []refusal{{executorkeep.LossHarnessChanged, "the run's harness continues no earlier session"}}
 		}
 		launch.notContinued = c.notContinued(ctx, req, opened, refused, startsItsOwn)
-		return launch
+		return launch.toldFresh(req, opened)
 	}
 	if want := req.Session; want != nil {
 		var (
@@ -1573,8 +1588,8 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			}
 			// THE CALLER'S VERDICT STANDS: the session it chose is continued,
 			// an older one where it says so.
-			launch.notContinued = req.NotContinued
-			return launch
+			launch.notContinued, launch.handover = req.NotContinued, want.Handover
+			return launch.toldFresh(req, opened)
 		}
 		refused = append(refused, refusal{loss, why})
 	}
@@ -1617,7 +1632,23 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 	if readPassedOver && outcome == continuesBoxCopy {
 		c.exactUnused(ctx, req, copyWentPastUnused)
 	}
-	return launch
+	return launch.toldFresh(req, opened)
+}
+
+// toldFresh is l with its fresh brief told under the verdict a run reading it
+// would have ([toldFresh]): l's own where it continues no session, so the brief
+// names the loss the launch decided after it was built; restore_failed's of
+// the session it continues where its box falls back from it ([fellBack]), the
+// one loss that fallback stamps.
+func (l continuedLaunch) toldFresh(req LaunchRequest, opened PendingRun) continuedLaunch {
+	if !l.kind.Continues() {
+		told := toldFresh(req, l.notContinued)
+		l.brief, l.handover = told.Text, told.Handover
+		return l
+	}
+	told := toldFresh(req, fellBack(l.kind, opened.Base, ""))
+	l.fresh, l.freshHandover = told.Text, told.Handover
+	return l
 }
 
 // refusal is why a launch did not continue a session it was offered, and the
