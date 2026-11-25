@@ -418,14 +418,14 @@ print(json.dumps({"results": out, "rendering": sorted(m._renders)}))
 
 // HERMES'S RENDER OF A LATER CHECKOUT IS BOUNDED, NEVER STARTED TWICE, AND
 // SAID ONCE IT KEEPS FAILING: every firing that finds a render running waits
-// on it until the claim reserve is left of Hermes's hook bound less the
+// on it until the render's reserve is left of Hermes's hook bound less the
 // margin, a parallel batch's firings included, and a late render's result
 // serves a later firing unless what it read changed since (then it is
 // rendered again); a render fails once for each such bound it outlives, by its
 // age, and once where it raised, late or not, and at three failures the
 // checkout is claimed as left out, said with the last error, else as late.
 // The claim takes the home's names as they are then. Neither a render nor a
-// claim starts without the reserve, nor a claim with less than half of it.
+// claim starts without the render's reserve, nor a claim without its own.
 //
 // Mutation: wait unbounded, start a render per firing, count a failure per
 // firing that finds a render running or a late raise twice, never give up,
@@ -468,7 +468,7 @@ func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 			render: "if len(open(STARTS).read()) < 3:\n        raise RuntimeError('boom')\n    time.sleep(60)",
 			want:   []string{"", "", "cloned\n\nHANDED"}, starts: 3, said: failed},
 		{name: "no render or claim without the reserve", render: "pass", pauses: "[0]", reserve: 5, want: []string{""}},
-		{name: "no claim with less than half the reserve", render: "pass", pauses: "[0]", reserve: 1,
+		{name: "no claim without the claim's reserve", render: "pass", pauses: "[0]", reserve: 1,
 			names: "time.sleep(2.6)", want: []string{""}, starts: 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -492,7 +492,7 @@ func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 				"\n    return {\"checkouts\": {roots[0]: {\"text\": \"T\"}}, \"taken\": taken}\n"
 			settings, _ := json.Marshal(map[string]any{"checkouts": map[string]any{"helper": filepath.Join(dir, "helper"),
 				"config": filepath.Join(dir, "nested.json"), "carry": filepath.Join(dir, "carry.py"), "margin": 1,
-				"reserve": c.reserve}})
+				"render_reserve": c.reserve, "claim_reserve": c.reserve / 2}})
 			for name, body := range map[string]string{"helper": helper, "carry.py": carry, "settings.json": string(settings)} {
 				if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil {
 					t.Fatal(err)

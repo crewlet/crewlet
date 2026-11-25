@@ -389,14 +389,15 @@ def _gate(hand, roots, window, started, until):
 def _hand_checkouts(hand, tool, args, result, window, calls):
     """What a nested firing adds to result, "" for nothing, within Hermes's own hook bound less hand["margin"]: the
     checkouts the note helper may claim (hermes-peek), Hermes's own answer for each ([_gate], waited on until
-    hand["reserve"] is left), then the helper's claim and answer within the result's room (hermes-nested, bounded
-    by the hand's end), started only while half the reserve is left; nothing where the reserve was gone before a
-    render could start, or where the launch turned the hand off (its gate's nested-off)."""
+    hand["render_reserve"] is left), then the helper's claim and answer within the result's room (hermes-nested,
+    bounded by the hand's end), started only while hand["claim_reserve"] is left; nothing where the render's
+    reserve was gone before a render could start, or where the launch turned the hand off (its gate's
+    nested-off). The runner's hermesrepo.go sizes the two reserves."""
     if os.path.exists(os.path.join(os.path.dirname(hand["config"]), "nested-off")):
         return ""
     started = time.monotonic()
     end = started + _hook_bound() - hand["margin"]
-    until = end - hand["reserve"]
+    until = end - hand["render_reserve"]
 
     def helper(*args, stdin=None):
         done = subprocess.run([hand["helper"], *args, "-config", hand["config"]], input=stdin, capture_output=True,
@@ -413,10 +414,9 @@ def _hand_checkouts(hand, tool, args, result, window, calls):
         if not gate["checkouts"]:
             return ""
         room = _room(tool, args, result, window, calls)
-        # HALF THE RESERVE: a wait ends with the whole reserve left; a box that held the firing past its bound by
-        # more than half of it (1.5 s of the runner's 3, some 12 times the claim's measured 0.12 s) leaves the
-        # claim to a later firing.
-        if end - time.monotonic() < hand["reserve"] / 2:
+        # A wait ends with the render's reserve left, twice the claim's: a box that held the firing past its bound
+        # by more than the difference leaves the claim to a later firing.
+        if end - time.monotonic() < hand["claim_reserve"]:
             return ""
         return helper("-adapter", "hermes-nested", "-room", str(room),
                       stdin=json.dumps(gate).encode("utf-8")).decode("utf-8", "replace")

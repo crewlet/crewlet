@@ -251,7 +251,7 @@ func deref(s *string) string {
 // a plugins.hook_callback_timeout under 10 s refuses nothing; the launch still
 // hands its checkouts, a clone during the run is not handed, and the run's
 // error stream names the setting once, after the run. At 10 s, the hand's
-// margin, claim reserve and render floor together, the clone is handed.
+// margin, render reserve and render floor together, the clone is handed.
 //
 // Mutation: refuse the run, hand the clone anyway, say it twice, or turn the
 // hand off at the bound itself, and a row goes red.

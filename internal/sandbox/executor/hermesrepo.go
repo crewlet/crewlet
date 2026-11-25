@@ -11,18 +11,20 @@ import (
 // A nested firing runs within Hermes's own hook bound (its
 // plugins.hook_callback_timeout, 30 s by default; past it Hermes drops the
 // answer and skips the hook 60 s, measured) less hermesHandMargin, its own
-// work after the helper and the callback's thread; Hermes's render of the
-// checkouts takes what is before hermesClaimReserve, at least
+// work after the helper and the callback's thread. Hermes's render of the
+// checkouts takes what is before hermesRenderReserve, at least
 // hermesRenderFloor, some 12 times its slowest (0.40 s for three checkouts,
-// measured); the claim, copies and answer (0.12 s at the full copy bound,
-// measured) start only while half the reserve is left and stop at the hand's
-// end. A box whose hook bound is under hermesNestedTimeout, their sum, has no
-// nested hand.
+// measured), and starts only while that reserve is left. The claim, copies
+// and answer start only while hermesClaimReserve is left, some 12 times their
+// 0.12 s at the full copy bound (measured), and stop at the hand's end; the
+// render's reserve is twice it, so a firing that waited out a render still
+// claims. A box whose hook bound is under hermesNestedTimeout has no hand.
 const (
 	hermesHandMargin    = 2 * time.Second
-	hermesClaimReserve  = 3 * time.Second
+	hermesRenderReserve = 3 * time.Second
+	hermesClaimReserve  = 1500 * time.Millisecond
 	hermesRenderFloor   = 5 * time.Second
-	hermesNestedTimeout = int((hermesHandMargin + hermesClaimReserve + hermesRenderFloor) / time.Second)
+	hermesNestedTimeout = int((hermesHandMargin + hermesRenderReserve + hermesRenderFloor) / time.Second)
 )
 
 // hermesGateWait is the most the launch waits for Hermes to render the
@@ -137,18 +139,21 @@ func (Hermes) homeRestore(p Paths) string {
 // hermesNestedHand is the plugin's settings for a nested firing: the note
 // helper, the config checkout-launch wrote (beside which the gate may mark the
 // hand off, [hermesNestedOff]), the carry script it renders checkouts with,
-// and the seconds it leaves of Hermes's hook bound and reserves for a claim
-// ([hermesHandMargin], [hermesClaimReserve]).
+// and the seconds it leaves of Hermes's hook bound and holds back from a
+// render and for a claim ([hermesHandMargin], [hermesRenderReserve],
+// [hermesClaimReserve]).
 type hermesNestedHand struct {
-	Helper  string  `json:"helper"`
-	Config  string  `json:"config"`
-	Carry   string  `json:"carry"`
-	Margin  float64 `json:"margin"`
-	Reserve float64 `json:"reserve"`
+	Helper        string  `json:"helper"`
+	Config        string  `json:"config"`
+	Carry         string  `json:"carry"`
+	Margin        float64 `json:"margin"`
+	RenderReserve float64 `json:"render_reserve"`
+	ClaimReserve  float64 `json:"claim_reserve"`
 }
 
 // hermesNested is the plugin's [hermesNestedHand] for a run in paths.
 func hermesNested(paths Paths) *hermesNestedHand {
 	return &hermesNestedHand{Helper: paths.HermesNoteHelper(), Config: paths.HermesCheckouts() + "/nested.json",
-		Carry: paths.HermesCarry(), Margin: hermesHandMargin.Seconds(), Reserve: hermesClaimReserve.Seconds()}
+		Carry: paths.HermesCarry(), Margin: hermesHandMargin.Seconds(), RenderReserve: hermesRenderReserve.Seconds(),
+		ClaimReserve: hermesClaimReserve.Seconds()}
 }
