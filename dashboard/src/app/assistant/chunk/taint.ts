@@ -39,6 +39,7 @@ export const TAINT_SOURCE_WORDS: Readonly<Record<AssistantTaintSource, string>> 
   atlas: "the Atlas",
   web_page: "a web page",
   browser_page: "a page in an agent's browser",
+  assistant_instructions: "Ask Crewlet's instructions",
 };
 
 /** The sentence a proposal prepared after reading outside text leads with. */

@@ -72,6 +72,7 @@ import {
   RefusalStrip,
   SendButton,
   Skeleton,
+  Link,
   Tag,
   Text,
   announce,
@@ -97,6 +98,9 @@ import { questionFits } from "~/protocol/assistantWire.ts";
 import { fmtWait } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { rereadViewer, useViewer } from "~/lib/viewer.ts";
+import { layersInUse } from "~/lib/instructions.ts";
+import { useQuery } from "~/lib/useQuery.ts";
+import { href } from "../../router.tsx";
 import { keyRow, matchesRow, pressText } from "../../keymap.ts";
 import { useKeyHints } from "../../layout.ts";
 import { on as onBus, emit } from "../bus.ts";
@@ -817,7 +821,39 @@ export function AskFoot() {
       <Text as="p" variant="caption" tone="tertiary" className="assistant-disclaimer">
         Ask Crewlet can be wrong. Check before you approve.
       </Text>
+      <InstructionsInUse />
     </>
+  );
+}
+
+/** Where answers follow instructions, a quiet link to where they are set; nothing otherwise. */
+function InstructionsInUse() {
+  const { data } = useQuery("assistant_instructions");
+  const inUse = layersInUse(data);
+  if (!inUse.company && !inUse.mine) return null;
+  const whose =
+    inUse.company && inUse.mine
+      ? "the company's instructions and your own"
+      : inUse.mine
+        ? "your instructions"
+        : "the company's instructions";
+  const path = ["settings", "ask-crewlet"];
+  return (
+    <Text as="p" variant="caption" tone="tertiary" className="assistant-disclaimer">
+      <Link
+        variant="subtle"
+        size="inherit"
+        href={href(path)}
+        title={`Answers follow ${whose}. Change them in Settings, Ask Crewlet.`}
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+          e.preventDefault();
+          emit("assistant.navigation.open", { path, query: {}, mode: "here" });
+        }}
+      >
+        Instructions in use
+      </Link>
+    </Text>
   );
 }
 

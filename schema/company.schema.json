@@ -449,6 +449,10 @@
     "Assistant": {
       "additionalProperties": false,
       "properties": {
+        "instructions": {
+          "$ref": "#/$defs/AssistantInstructions",
+          "description": "How Ask Crewlet writes for everybody in the company: answer length, layout and free text on tone and style. Each person may add their own, which win where the two differ. Instructions never change what Ask Crewlet may read, propose or do."
+        },
         "model": {
           "description": "The providers.llm key Ask Crewlet runs on: any entry on a harness the engine can run with no tool of its own (Claude Code or pi), which turns the harness's own web tools off for Ask Crewlet whatever the entry says. Absent: Ask Crewlet is off.",
           "type": [
@@ -461,6 +465,45 @@
         "token_budget": {
           "$ref": "#/$defs/TokenBudget",
           "description": "Each person's Ask Crewlet token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AssistantInstructions": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "description": "How answers are laid out: lead (the answer first, in plain sentences), lists (bullets and tables where they help) or tldr (a one-line TL;DR first). Absent: the answer first, with lists and tables only where they carry structure.",
+          "enum": [
+            "lead",
+            "lists",
+            "tldr",
+            "",
+            null
+          ]
+        },
+        "length": {
+          "description": "How long answers run: brief (a few sentences), balanced (a short paragraph or list) or detailed (the reasons and relevant detail too). Absent: as short as each question allows.",
+          "enum": [
+            "brief",
+            "balanced",
+            "detailed",
+            "",
+            null
+          ]
+        },
+        "text": {
+          "description": "Anything else about how Ask Crewlet writes, in your own words: tone, terms to use or avoid, structure. At most 1000 characters. A credential is refused: the text reaches every answer's prompt.",
+          "maxLength": 1000,
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
       "type": [

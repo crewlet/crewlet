@@ -463,6 +463,7 @@ export type FramedScreen =
   /** A kind's own create page, or, with no kind, the address that redirects to one. */
   | { screen: "new-artifact"; kind: MakeKind | null }
   | { screen: "general" }
+  | { screen: "ask-crewlet" }
   | { screen: "models"; id?: string }
   | { screen: "mcp-tools"; server?: string; tool?: string }
   | { screen: "secrets"; name?: string }
@@ -977,6 +978,7 @@ function settings(rest: string[], screen: Make, under: Under): Route {
   // own somewhere else, or none.
   const bare: Partial<Record<string, FramedScreen>> = {
     general: { screen: "general" },
+    "ask-crewlet": { screen: "ask-crewlet" },
     limits: { screen: "limits" },
     people: { screen: "people" },
     "service-accounts": { screen: "service-accounts" },
