@@ -133,9 +133,11 @@ type Plan struct {
 	// refused sign-in, or a harness that could not be started
 	// ([Provider.remember]). A limit is the sit-out's, not this.
 	lastFailure *Failure
-	// limits are the vendor's windows as the sign-in's calls last reported
-	// them, by [llm.LimitReading.Key] ([Plan.Observe]).
+	// limits are the vendor's windows as the sign-in's calls and plan reads
+	// last reported them, by [llm.LimitReading.Key] ([Plan.Observe]).
 	limits map[string]Limit
+	// readWanted is when a call last opened a window ([Plan.ReadWanted]).
+	readWanted time.Time
 }
 
 func newPlan() *Plan { return &Plan{scoped: map[string]*bench{}, limits: map[string]Limit{}} }
@@ -147,18 +149,22 @@ type Limit struct {
 	Seen time.Time
 }
 
-// Observe keeps what a run read at `at` reported of the sign-in's windows: a
-// window's reading replaces an older one, never a newer, so a run collected
-// late does not undo what a later call heard.
+// Observe keeps what a run or a plan read at `at` reported of the sign-in's
+// windows, and decides the plan-wide window by it ([Plan.reckon]): a window's
+// reading replaces an older one, never a newer, so a run collected late does
+// not undo what a later call heard.
 func (pl *Plan) Observe(readings []llm.LimitReading, at time.Time) {
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
+	var newer []llm.LimitReading
 	for _, r := range readings {
-		if held, ok := pl.limits[r.Key()]; ok && held.Seen.After(at) {
+		if held, ok := pl.limits[r.Key()]; ok && !at.After(held.Seen) {
 			continue
 		}
 		pl.limits[r.Key()] = Limit{LimitReading: r, Seen: at.UTC()}
+		newer = append(newer, r)
 	}
+	pl.reckon(newer, onTheWall(at))
 }
 
 // MaxSaid bounds the vendor's sentence a [Failure] or a [SitOut] carries. The
