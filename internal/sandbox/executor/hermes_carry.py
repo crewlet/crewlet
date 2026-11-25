@@ -608,7 +608,10 @@ def launch_window(model):
     """The window Hermes's agent resolves for the run's model as a session starts (agent/agent_init.py, its
     context compressor's get_model_context_length): the launch's route (-m's words, then resolve_runtime_provider, as
     route reads it), model.context_length where it describes that runtime, else a custom provider's, then Hermes's
-    own resolution, which falls back to its DEFAULT_FALLBACK_CONTEXT where it cannot place the model."""
+    own resolution, which falls back to its DEFAULT_FALLBACK_CONTEXT where it cannot place the model. Measured on
+    0.23.3 offline under the run's own configuration: a model Hermes's table knows (anthropic/claude-sonnet-4.5 on
+    openrouter: 200,000) and one it cannot place (256,000, after its failed metadata fetch) each gave the cut a
+    session started in the checkout makes (48,000 and 61,440 characters); online it is the session's figure too."""
     from types import SimpleNamespace
     from agent.agent_init import _scope_context_length_to_default_runtime
     from agent.model_metadata import get_model_context_length
