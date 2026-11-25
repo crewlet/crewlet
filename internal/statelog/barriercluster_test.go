@@ -2,6 +2,7 @@ package statelog_test
 
 import (
 	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -126,6 +128,78 @@ func TestLinearizableKeepsWorkingOnTheSurvivingMajority(t *testing.T) {
 	t.Fatalf("the surviving majority never served a read index: %v — two of "+
 		"three replicas is a quorum, so a cluster that cannot commit a barrier "+
 		"here has lost more than the member that was cut", last)
+}
+
+// A BARRIER IS SERVED ACROSS AN ELECTION OF ITS LOG'S LEADER, on a real
+// cluster: the leader's member is cut off (a member shut down hands its
+// leadership over at once), and the two left elect one on the broker's own
+// timers, four to nine seconds after the last heartbeat. Meanwhile they swallow
+// a barrier's append, so a read whose deadline is shorter than the election
+// fails at that deadline, and one with time to wait commits a barrier sent again
+// once the new leader leads, in one read inside the barrier's budget
+// (crewlet/crewlet#2096). A read told the log has no leader: election_test.go.
+//
+// Mutant: no barrier is sent again while nobody answers — the read runs out its
+// budget on the append the survivors swallowed.
+func TestABarrierIsServedAcrossAnElectionOfItsLogsLeader(t *testing.T) {
+	t.Parallel()
+	c := jetstreamtest.StartPartitionableCluster(t, 3, js.Config{})
+	spec := specOf(probeDomain{})
+	queues := make([]*js.Queue, 3)
+	for i := range queues {
+		queues[i] = c.Client(t, i)
+	}
+	if err := queues[0].EnsureDomainStream(t.Context(), js.DomainStream{
+		Name:       spec.Name,
+		Subjects:   spec.Subjects,
+		MaxBytes:   spec.MaxBytes,
+		Duplicates: spec.Duplicates,
+	}); err != nil {
+		t.Fatalf("provision the log: %v", err)
+	}
+	info, err := jsprovision.LookupStream(t.Context(), queues[0].JetStream(), spec.Name)
+	if err != nil {
+		t.Fatalf("read who leads the log: %v", err)
+	}
+	leader := -1
+	for i, cfg := range c.Configs {
+		if cfg.ServerName == info.Cluster.Leader {
+			leader = i
+		}
+	}
+	if leader < 0 {
+		t.Fatalf("the log is led by %q, no member of the cluster", info.Cluster.Leader)
+	}
+	reader := (leader + 1) % len(queues)
+	log, err := queues[reader].DomainLog(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("open the log on member %d: %v", reader, err)
+	}
+	idx, err := statelog.NewReadIndex(probeDomain{}, spec, log, log.Members,
+		testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
+	if err != nil {
+		t.Fatalf("NewReadIndex: %v", err)
+	}
+	if _, err := idx.Read(t.Context()); err != nil {
+		t.Fatalf("the premise: a barrier before the election: %v", err)
+	}
+
+	c.Partition(t, leader)
+
+	short, cancel := context.WithTimeout(t.Context(), time.Second)
+	_, err = idx.Read(short)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a barrier whose deadline ended a second into the election answered %v, want "+
+			"its deadline's end", err)
+	}
+	at, err := idx.Read(t.Context())
+	if err != nil {
+		t.Fatalf("a barrier across the election of the log's leader: %v", err)
+	}
+	if at.Seq == 0 {
+		t.Fatalf("the new leader answered sequence 0")
+	}
 }
 
 // THE STREAM'S OWN INFO IS NOT ON THE READ PATH, held by a static walk because
