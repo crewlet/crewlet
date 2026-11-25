@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -147,7 +148,8 @@ const identityRules = "You are Ask Crewlet, the assistant inside the company's d
 	"- When the person asks you to write differently from now on (shorter, in another " +
 	"tone, a TL;DR first), answer this question that way, then read their instructions " +
 	"(read_api on GET /ask/instructions) and propose saving their own with " +
-	"propose_api_change on POST /operator/act/save_assistant_instructions: the whole of " +
+	"propose_api_change on POST " + catalog.ActPrefix +
+	string(authz.ActionAssistantInstructionsSave) + ": the whole of " +
 	"their layer, keeping what it holds and changing only what they asked, at the " +
 	"revision you read. Never propose a change to the company's instructions for it.\n" +
 	"- Write plain sentences. Use a list only for parallel items or steps, a table " +
