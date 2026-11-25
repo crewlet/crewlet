@@ -491,9 +491,9 @@ stand = sys.argv[4]
 os.makedirs(os.path.join(stand, "tools"), exist_ok=True)
 open(os.path.join(stand, "tools", "__init__.py"), "w").close()
 with open(os.path.join(stand, "tools", "budget_config.py"), "w") as f:
-    f.write("class B:\\n    default_result_size = 100000\\n    turn_budget = 200000\\n"
-            "    def resolve_threshold(self, tool):\\n        return 100000\\n"
-            "def budget_for_context_window(context_length):\\n    return B()\\n")
+    f.write("class B:\n    default_result_size = 100000\n    turn_budget = 200000\n"
+            "    def resolve_threshold(self, tool):\n        return 100000\n"
+            "def budget_for_context_window(context_length):\n    return B()\n")
 sys.path.insert(0, stand)
 spec = importlib.util.spec_from_file_location("crewlet_plugin", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
