@@ -1295,13 +1295,14 @@ func TestTheCachesRowReadIsOneReadAttempt(t *testing.T) {
 	}
 }
 
-// GITPROC'S READ BOUNDS FIT INSIDE ONE PRODUCTION READ ATTEMPT: a local git
-// read (gitproc.ReadDeadline) is bounded like any read, and a run that waited
-// for a slot (gitproc.SlotWait) is refused busy while a router asking for it
-// still listens, so the retry goes elsewhere. Not equal: the attempt also holds
-// a barrier's election, which no local git waits on. gitproc imports no engine
-// package, so the bound is held here.
-func TestGitprocsReadBoundsFitInsideOneReadAttempt(t *testing.T) {
+// A GIT READ FITS INSIDE ONE READ ATTEMPT: a local git read
+// (gitproc.ReadDeadline) and a run's wait for a slot (gitproc.SlotWait) end
+// while a router asking for them still listens, so a busy node is answered and
+// the retry goes elsewhere. Inside, not equal: the attempt also holds the
+// election a replicated log's barrier waits out, and local git waits out none,
+// so raising its bounds with the attempt would be a knob with no reason.
+// gitproc imports no engine package, so the bound is held here.
+func TestAGitReadFitsInsideOneReadAttempt(t *testing.T) {
 	t.Parallel()
 	read := Production().ReadAttempt
 	if gitproc.ReadDeadline > read {
