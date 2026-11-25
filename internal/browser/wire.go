@@ -71,9 +71,10 @@ const (
 // fit before the frame header, and a box can make the check read no more.
 const JPEGHeaderBytes = 64 << 10
 
-// wireVersion is the shape of every message this build reads: a later one is
-// refused, never read short of what it says.
-const wireVersion = 1
+// WireVersion is the shape of every message on the wire this build reads and
+// writes: a later one is refused, never read short of what it says, and a
+// poll's answer carries it.
+const WireVersion = 1
 
 // Why is why the wire refuses what a box sent, as the bridge answers it.
 type Why string
@@ -171,8 +172,8 @@ func ParseFrameMeta(header string, body int) (FrameMeta, error) {
 		return FrameMeta{}, refuse(WhyMetadata, "the metadata is no JSON object of its fields")
 	}
 	switch {
-	case m.V < 1 || m.V > wireVersion:
-		return FrameMeta{}, refuse(WhyMetadata, "v is %d, and this build reads %d", m.V, wireVersion)
+	case m.V < 1 || m.V > WireVersion:
+		return FrameMeta{}, refuse(WhyMetadata, "v is %d, and this build reads %d", m.V, WireVersion)
 	case !lowerHex(m.Boot, 16):
 		return FrameMeta{}, refuse(WhyMetadata, "boot is not 16 lower-case hex digits")
 	case m.Seq < 1:
@@ -280,8 +281,8 @@ func ParseState(body []byte) (State, error) {
 		return State{}, refuse(WhyState, "the state is no JSON object of its fields")
 	}
 	switch {
-	case s.V < 1 || s.V > wireVersion:
-		return State{}, refuse(WhyState, "v is %d, and this build reads %d", s.V, wireVersion)
+	case s.V < 1 || s.V > WireVersion:
+		return State{}, refuse(WhyState, "v is %d, and this build reads %d", s.V, WireVersion)
 	case !lowerHex(s.Boot, 16):
 		return State{}, refuse(WhyState, "boot is not 16 lower-case hex digits")
 	case s.Rev < 1:
@@ -408,8 +409,8 @@ func ParseCheckin(body []byte, job string) (Checkin, error) {
 		return Checkin{}, refuse(WhyCheckin, "the check-in is no JSON object of its fields")
 	}
 	switch {
-	case c.V < 1 || c.V > wireVersion:
-		return Checkin{}, refuse(WhyCheckin, "v is %d, and this build reads %d", c.V, wireVersion)
+	case c.V < 1 || c.V > WireVersion:
+		return Checkin{}, refuse(WhyCheckin, "v is %d, and this build reads %d", c.V, WireVersion)
 	case job == "" || c.Job != job:
 		return Checkin{}, refuse(WhyCheckin, "the check-in is not this job's")
 	case c.SinceMS < 0:

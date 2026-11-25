@@ -249,6 +249,7 @@
 | `browser/boxhelper/live` | The box helper's live view of a seat's browser: its tabs, its screen while somebody watches, the check-in, and the relay, one per job, that carries them over `relay.sock` to the run's bridge. Decisions are in the package doc. |
 | `browser/chromiumtest` | Test support: the two pinned Chromiums a case drives (`Newest`, `Floor`, `Each`), how one is launched, and what its protocol describes (`Protocol`), never the machine's Chrome. |
 | `browser/hostreach` | The launch's check that a browser seat's box is off its host's network: the box on the engine's own kernel (`EngineKernel`), and no route of it reaching a listener on the engine's loopback (`Check`), with the box's half (`reach.js`). |
+| `browser/screen` | A seat's browser screen on the seat's holder: the per-job hub that bounds what a box's relay posts and tells it, on its one held poll, whether anybody watches. Decisions are in the package doc. |
 | `sigv4` | AWS request signing on the standard library alone: Signature Version 4 with an access key, and the IAM Roles Anywhere form that signs the same canonical request with an X.509 key. |
 | `modelcatalog` | What a model step suggests: each coding harness vendor's models, read from models.dev's public keyless catalogue and cached in memory on this node, never through a model vendor's API. |
 | `api/httpjson` | How every JSON surface answers: the refusal envelope, 503/429 with `Retry-After`, immutable answers, strict body reading, the engine header. |
