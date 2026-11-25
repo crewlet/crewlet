@@ -409,20 +409,17 @@ func TestATreeHandsItsFilesInQwenCodesWalk(t *testing.T) {
 }
 
 // A SCOPED RULE IS LEFT OUT AS QWEN CODE READS ITS FRONTMATTER, each case a
-// measured row of 0.28.4 (B2b's rules rows): handed where it loads at a
-// session's start (no frontmatter, an unclosed one, no `paths`, `Paths`, a
-// `paths` naming nothing: empty, a number, null, a list of empty strings,
-// nulls or empty lists, or a list holding a mapping, on which Qwen Code's
-// reading throws; frontmatter its YAML parser refuses read by its line reader
-// to no `paths` or a null one), left out where `paths` names anything, a
-// string of spaces, `**`, a number or `true` in a list included, or its line
-// reader finds a string or a list item, read past a BOM or with CRLF.
+// measured row of 0.28.4 (B2b's rules rows): handed where it loads at start
+// (no frontmatter or an unclosed one, no `paths`, `Paths`, a `paths` naming
+// nothing: empty, a number, null, a list of empties, nulls or empty lists, or
+// one holding a mapping; refused YAML whose line reading holds none), left out
+// where `paths` names anything (spaces, `**`, a listed number or `true`, a
+// line-read string or item), past a BOM or with CRLF.
 //
-// Mutation: count `**` as matching every path, read `Paths` as paths, trim a
-// pattern, take an empty list, a null or a number as a pattern, drop a list's
-// number, scope a list holding a mapping, refuse what the YAML parser
-// refuses instead of reading its lines, or read no BOM or CRLF frontmatter,
-// and a row goes red.
+// Mutation: count `**` as every path, read `Paths`, trim a pattern, take an
+// empty list, null or number as a pattern, drop a listed number, scope a list
+// holding a mapping, refuse what the YAML parser refuses, or read no BOM or
+// CRLF frontmatter, and a row goes red.
 func TestAScopedRuleIsLeftOutAsQwenCodeReadsItsFrontmatter(t *testing.T) {
 	t.Parallel()
 	handed := []string{"X\n", "---\ndescription: d\n---\nX\n", "---\nglobs: [\"src/**\"]\n---\nX\n",
