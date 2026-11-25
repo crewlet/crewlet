@@ -263,9 +263,10 @@ d.close()`, db) //nolint:gosec // the suite's own script
 // A NEW SESSION STORES ITS KEPT SETS AS IT STARTS: on sessionStart with source
 // "new" the extension writes the launch sets its attempt kept into the
 // session's directory, so a pack taken while Copilot runs carries them; a
-// resumed session's stored sets stay as they are.
+// resumed session's stored sets stay as they are. Every session it starts in
+// leaves the run's mark that it ran.
 //
-// Mutation: write on resume, or store nothing until the run ends.
+// Mutation: write on resume, store nothing until the run ends, or leave no mark.
 func TestANewCopilotSessionStoresItsKeptSetsAsItStarts(t *testing.T) {
 	dir := t.TempDir()
 	kept, sessions := filepath.Join(dir, "kept"), filepath.Join(dir, "session-state")
@@ -273,13 +274,20 @@ func TestANewCopilotSessionStoresItsKeptSetsAsItStarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored := filepath.Join(sessions, copilotProbeSession, copilotKeptSets)
+	armed := filepath.Join(dir, "armed")
 	for _, source := range []string{"resume", "new"} {
+		if err := os.Remove(armed); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
 		p := startCopilotProbe(t, copilotExtensionSettings{Helper: "/no/helper", Nested: "/no/nested.json",
-			Kept: kept, Sessions: sessions})
+			Kept: kept, Sessions: sessions, Armed: armed})
 		p.expect("joined")
 		p.expectArmed()
 		p.hook("onSessionStart", map[string]any{"source": source})
 		p.expect("hooked")
+		if _, err := os.Stat(armed); err != nil {
+			t.Fatalf("a %s session left no mark that the extension ran: %v", source, err)
+		}
 		got, err := os.ReadFile(stored) //nolint:gosec // the case's own file
 		switch {
 		case source == "resume" && !errors.Is(err, os.ErrNotExist):

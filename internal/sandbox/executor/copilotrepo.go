@@ -147,7 +147,7 @@ func copilotAttempts(paths Paths, harness string) string {
 	line(`while :; do`)
 	line(`at=$((at + 1))`)
 	b.WriteString(copilotLaunchCompose(paths, `"$kf" "$kv"`))
-	line(`printf '%%s\n' "$at" > %s || exit 1`, q(paths.CopilotAttempt()))
+	line(`printf '%%s\n' "$at" > %s && rm -f %s || exit 1`, q(paths.CopilotAttempt()), q(paths.CopilotArmed()))
 	line(`[ "$at" = 1 ] || exec < "$bf"`)
 	line(`so=$(wc -c < %s 2> /dev/null) || so=0`, res)
 	b.WriteString(launchHarness(harness, paths))
@@ -155,11 +155,29 @@ func copilotAttempts(paths Paths, harness string) string {
 	line(`if [ "$k" = yes ]; then %s; break; fi`, refused("resume"))
 	line(`left=$((n)); [ "$kv" = -1 ] || left=$kv`)
 	line(`if [ "$left" -le 0 ]; then %s; break; fi`, refused("alone"))
-	line(`if [ -f %s ]; then %s; break; fi`, q(paths.CopilotExtensionOff()), refused("extension"))
+	// NO RELAUNCH WITHOUT THE EXTENSION'S DELETE: switched off as the guard saw
+	// it, or not run at all, as its missing mark says (it writes one as the
+	// session starts, before Copilot refuses it).
+	line(`if [ -f %s ] || [ ! -f %s ]; then %s; break; fi`, q(paths.CopilotExtensionOff()), q(paths.CopilotArmed()),
+		refused("extension"))
 	line(`sqlite || break`)
 	line(`gone || break`)
 	line(`kv=$((left - 1))`)
 	line(`printf '{"type":"%s","data":{"kept":%%d,"sets":%%d}}\n' "$kv" "$((n))"`, copilotRelaunchMark)
 	line(`done`)
+	// A CHECKOUT EXTENSION THAT NEVER RAN, said once: written, not switched off
+	// as the guard saw it, and its session's mark missing.
+	line(`if [ -n "$hk" ] && [ -d "$rr" ] && [ ! -f %s ] && [ -f %s ] && [ "$endedas" != before ] && [ ! -f %s ]; then `+
+		`printf '%%s\n' %s >> "$rr/skipped"; fi`, q(paths.CopilotExtensionOff()), q(paths.CopilotExtension()+"/extension.mjs"),
+		q(paths.CopilotArmed()), q(copilotExtensionNotRun))
 	return b.String()
 }
+
+// copilotExtensionNotRun is the line a run says once where the extension it
+// wrote to hand its checkouts never ran: Copilot loaded no extension, which
+// the guard did not see (it asks Copilot only for a run with Crewlet's
+// servers, notes or a cap).
+const copilotExtensionNotRun = "crewlet: a repository cloned during the run was not handed, since the run's " +
+	"extension did not run: Copilot loads none where the home's settings set extensions.mode to \"disabled\" or " +
+	"list user:crewlet-notes in extensions.disabledExtensions, or a policy's strictPluginOnlyCustomization locks " +
+	"extensions; Copilot's own log names an extension it failed to load"

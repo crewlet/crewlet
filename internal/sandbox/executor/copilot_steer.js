@@ -159,7 +159,7 @@ if (config !== null && typeof config === "object") {
   await arm(config)
 }
 
-async function arm({ url, cap, bridges, state, run, helper, nested, attempt, kept: keptFile, sessions }) {
+async function arm({ url, cap, bridges, state, run, helper, nested, attempt, kept: keptFile, sessions, armed }) {
   // kept is what an earlier process of this launch left (A RESTART RESUMES THE
   // RUN, above): the requests counted, the cursor, and the inbox ids sent; or
   // broken, a file this process cannot read, which sends no note. The launch
@@ -414,6 +414,13 @@ async function arm({ url, cap, bridges, state, run, helper, nested, attempt, kep
     hooks: {
       onSessionStart: async (input) => {
         source = input?.source ?? null
+        // THE RUN'S MARK that this extension ran in the session, which the
+        // script reads at a refusal and as the run ends (copilotrepo.go).
+        if (typeof armed === "string" && armed !== "") {
+          try {
+            writeFileSync(armed, "")
+          } catch {}
+        }
         if (source === "new" && handing) storeKept()
       },
       onPreToolUse: async (input) => {
