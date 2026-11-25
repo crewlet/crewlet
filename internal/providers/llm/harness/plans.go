@@ -147,13 +147,19 @@ type Limit struct {
 	llm.LimitReading
 	// Seen is when the run that reported it was read.
 	Seen time.Time
+	// Read is a reading from a plan read ([Provider.ReadPlan]), dated when it
+	// was made: the only kind that may end a sit-out ([Plan.reckon]).
+	Read bool
 }
 
 // Observe keeps what a run or a plan read at `at` reported of the sign-in's
 // windows, and decides the plan-wide window by it ([Plan.reckon]): a window's
 // reading replaces an older one, never a newer, so a run collected late does
 // not undo what a later call heard.
-func (pl *Plan) Observe(readings []llm.LimitReading, at time.Time) {
+func (pl *Plan) Observe(readings []llm.LimitReading, at time.Time) { pl.observe(readings, at, false) }
+
+// observe is [Plan.Observe], read marking a plan read's readings.
+func (pl *Plan) observe(readings []llm.LimitReading, at time.Time, read bool) {
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
 	var newer []llm.LimitReading
@@ -161,10 +167,10 @@ func (pl *Plan) Observe(readings []llm.LimitReading, at time.Time) {
 		if held, ok := pl.limits[r.Key()]; ok && !at.After(held.Seen) {
 			continue
 		}
-		pl.limits[r.Key()] = Limit{LimitReading: r, Seen: at.UTC()}
+		pl.limits[r.Key()] = Limit{LimitReading: r, Seen: at.UTC(), Read: read}
 		newer = append(newer, r)
 	}
-	pl.reckon(newer, onTheWall(at))
+	pl.reckon(newer, onTheWall(at), read)
 }
 
 // MaxSaid bounds the vendor's sentence a [Failure] or a [SitOut] carries. The

@@ -18,8 +18,8 @@ import (
 // engine reads it on a schedule of its own and every reading, from a read or a
 // run alike, decides the plan-wide window ([Plan.reckon]): a session or weekly
 // window used up sits the sign-in out until it turns over, and a reading below
-// the headroom line ([llm.LimitWarnAt]) ends a session or weekly sit-out opened
-// before it. A read that fails decides nothing.
+// the headroom line ([llm.LimitWarnAt]) from a plan read ends a session or
+// weekly sit-out opened before it. A read that fails decides nothing.
 
 // ErrNoPlanRead is an entry whose plan its harness cannot read without a call:
 // its profile has no plan read, or it signs in with a token or a key.
@@ -70,7 +70,7 @@ func (p *Provider) ReadPlan(ctx context.Context) ([]llm.LimitReading, error) {
 	if err != nil {
 		return nil, err
 	}
-	p.Plan().Observe(readings, at)
+	p.Plan().observe(readings, at, true)
 	return readings, nil
 }
 
@@ -140,8 +140,10 @@ func usedPercent(line, suffix string) (float64, bool) {
 }
 
 // reckon decides the plan-wide window from readings heard at `at`; under
-// pl.mu. See the file's doc for the rule.
-func (pl *Plan) reckon(readings []llm.LimitReading, at time.Time) {
+// pl.mu. See the file's doc for the rule. Only a plan read (read) may end a
+// sit-out: a run's reading is dated when the run is collected, which can be
+// long after the vendor said it.
+func (pl *Plan) reckon(readings []llm.LimitReading, at time.Time, read bool) {
 	var spent *llm.LimitReading
 	for i, r := range readings {
 		if (r.Window != llm.LimitSession && r.Window != llm.LimitWeekly) || !r.ResetsAt.After(at) {
@@ -159,7 +161,7 @@ func (pl *Plan) reckon(readings []llm.LimitReading, at time.Time) {
 		return
 	}
 	b := &pl.wide
-	if !at.Before(b.until) || !b.since.Before(at) ||
+	if !read || !at.Before(b.until) || !b.since.Before(at) ||
 		(b.window != llm.LimitSession && b.window != llm.LimitWeekly) {
 		return
 	}
@@ -182,7 +184,7 @@ func (pl *Plan) reckon(readings []llm.LimitReading, at time.Time) {
 // instant it was seen, as if read here: a vendor's word is the account's.
 func (pl *Plan) Heard(limits []Limit) {
 	for _, l := range limits {
-		pl.Observe([]llm.LimitReading{l.LimitReading}, l.Seen)
+		pl.observe([]llm.LimitReading{l.LimitReading}, l.Seen, l.Read)
 	}
 }
 
