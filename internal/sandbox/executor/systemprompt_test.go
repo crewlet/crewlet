@@ -3,6 +3,7 @@ package executor_test
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -106,9 +107,10 @@ func TestTheStandingInstructionsReachOpenCodeAsAnInstructionFile(t *testing.T) {
 }
 
 // A harness GIVEN NO SYSTEM TEXT WRITES NOTHING AND PASSES NOTHING: no file in
-// the box, no flag on the command line, no instruction in the config. The
-// runner always gives some (the report instruction), so this holds the
-// harness's own contract apart from the runner's.
+// the box, no flag on the command line, no instruction in the config but
+// OpenCode's checkouts' sections file, which every run names. The runner
+// always gives some (the report instruction), so this holds the harness's own
+// contract apart from the runner's.
 func TestAHarnessGivenNoSystemTextWritesAndPassesNothing(t *testing.T) {
 	t.Parallel()
 	for _, cli := range []executor.Harness{executor.ClaudeCode{}, executor.OpenCode{}, executor.GeminiCLI{}} {
@@ -129,8 +131,11 @@ func TestAHarnessGivenNoSystemTextWritesAndPassesNothing(t *testing.T) {
 				t.Errorf("a run with no system text passes one:\n%s", cmd)
 			}
 			if config != "" {
-				if blob, _ := b.ReadFile(t.Context(), config); strings.Contains(string(blob), `"instructions"`) {
-					t.Errorf("a run with no system text names an instruction file:\n%s", blob)
+				var cfg struct{ Instructions []string }
+				blob, _ := b.ReadFile(t.Context(), config)
+				if err := json.Unmarshal(blob, &cfg); err != nil || slices.Contains(cfg.Instructions, p.System()) ||
+					(len(cfg.Instructions) > 0 && !slices.Equal(cfg.Instructions, []string{p.OpenCodeCheckoutSections()})) {
+					t.Errorf("a run with no system text names an instruction file of it (%v):\n%s", err, blob)
 				}
 			}
 		})
