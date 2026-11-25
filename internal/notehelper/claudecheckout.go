@@ -6,20 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // runClaudeNested is one firing of a Claude Code run's PostToolUse hook
 // (internal/sandbox/executor's claudeCheckoutsPlugin): it claims each checkout
-// cloned since the last firing, once ([handCheckouts]), and hands the listing
-// of its skills ([skillsListing]) as the hook's additional context. Claude Code
-// 2.1.310 loads a checkout's CLAUDE.md files and rules itself on the first read
-// under it, but lists none of the skills copied during a session, nor a
+// cloned since the last firing, once ([handNested]), and hands what it copied
+// and left out ([claudeNestedContext]) as the hook's additional context.
+// Claude Code 2.1.310 loads a checkout's CLAUDE.md files and rules itself on
+// the first read under it, but lists no skill copied during a session, nor a
 // checkout's own where a read marked their directory before they existed
 // (measured), so only skills are handed, its config naming no instruction
 // file to read (launchConfig.NestedSkillsOnly). A subagent's firing (its input
-// names an agent_id) claims nothing: its context reaches that subagent alone,
-// and so does a firing whose input does not read within [maxHookInput]. Exit 0
-// whatever happened, its trouble on stderr.
+// names an agent_id), or one whose input does not read within [maxHookInput],
+// claims nothing. Exit 0 whatever happened, its trouble on stderr.
 func runClaudeNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr io.Writer,
 	_ func(string) string) int {
 	agent, err := hookAgent(stdin)
@@ -35,19 +35,11 @@ func runClaudeNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr
 		fmt.Fprintf(stderr, "notehelper: the nested config: %v\n", err)
 		return exitDone
 	}
-	handed, err := handCheckouts(c.State, c.Workdir, nil, c.checkoutSpec, &skips{stderr: stderr})
+	handed, skipped, err := handNested(c, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: handing a checkout's skills: %v\n", err)
 	}
-	var answer string
-	for _, h := range handed {
-		if listing := skillsListing(h); listing != "" {
-			if answer != "" {
-				answer += "\n\n"
-			}
-			answer += listing
-		}
-	}
+	answer := claudeNestedContext(handed, skipped)
 	if answer == "" {
 		return exitDone
 	}
@@ -55,6 +47,23 @@ func runClaudeNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr
 		"hookEventName": "PostToolUse", "additionalContext": answer}})
 	_, _ = stdout.Write(append(out, '\n'))
 	return exitDone
+}
+
+// claudeNestedContext is the checkouts handed as a Claude Code firing hands
+// them: each one's skills listed ([skillsListing]), then what the firing left
+// out ([skippedListing]), within one listing's bound ([listingBudget]).
+func claudeNestedContext(handed []handedCheckout, skipped []string) string {
+	var blocks []string
+	budget := newListingBudget()
+	for _, h := range handed {
+		if listing := budget.take(skillsListing(h)); listing != "" {
+			blocks = append(blocks, listing)
+		}
+	}
+	if listing := budget.take(skippedListing(skipped)); listing != "" {
+		blocks = append(blocks, listing)
+	}
+	return strings.Join(blocks, "\n\n")
 }
 
 // hookAgent is the agent_id a Claude Code hook's input names, "" for the main

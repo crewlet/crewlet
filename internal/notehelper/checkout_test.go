@@ -1370,3 +1370,36 @@ func TestACopyForSkillsOnAnotherFilesystemIsBuiltBesideThem(t *testing.T) {
 		t.Errorf("the staging beside the skills is left (%v)", err)
 	}
 }
+
+// A CLAUDE CODE FIRING NAMES WHAT IT LEFT OUT: a clone's skill whose name the
+// home's skills hold is listed in the firing's answer under what it left out,
+// and kept in the state for the run's end, a line each.
+//
+// Mutation: drop the left-out listing from claude-nested's answer, or keep
+// nothing, and a check goes red.
+func TestAClaudeCodeFiringNamesWhatItLeftOut(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.launch(t, nil)
+	writeTree(t, r.skills, map[string]string{"late:fix/SKILL.md": "HOME\n"})
+	r.add(t, map[string]string{"late/.git/": "", "late/.codex/skills/fix/SKILL.md": "---\nname: fix\ndescription: Fixes.\n---\n"})
+	var out, errs bytes.Buffer
+	if code := runClaudeNested(context.Background(), flags{config: filepath.Join(r.state, "nested.json")},
+		strings.NewReader(`{"hook_event_name":"PostToolUse","tool_name":"Bash"}`), &out, &errs, os.Getenv); code != exitDone {
+		t.Fatalf("the firing exited %d", code)
+	}
+	line := "the skill " + filepath.Join(r.workdir(t), "late", ".codex", "skills", "fix") +
+		" is left out: the home's skills hold late:fix already"
+	var answer struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &answer); err != nil ||
+		!strings.Contains(answer.HookSpecificOutput.AdditionalContext, "# Left out of the repositories below the working directory\n\n- "+line) {
+		t.Errorf("the firing answered %q (%v), want the left-out line\n%s", out.String(), err, line)
+	}
+	if got := read(t, filepath.Join(r.state, skippedLog)); !strings.Contains(got, line) {
+		t.Errorf("the state keeps %q for the run's end, want the line", got)
+	}
+}

@@ -293,3 +293,58 @@ exec sleep 30
 		}
 	})
 }
+
+// A CLAUDE CODE RUN SAYS WHAT ITS HOOK LEFT OUT ONCE IT STOPS, AND ONLY ITS
+// OWN: a line a firing kept in the checkout state during the run reaches the
+// run's error stream once the harness has stopped, once; a line an earlier
+// run killed before printing left there is said by neither this run nor one
+// below the checkouts' floor, whose gate never ran. Under every sh a box may
+// have.
+//
+// Mutation: say the log before the gate, or never, and a row goes red.
+func TestAClaudeCodeRunSaysWhatItsHookLeftOutOnceItStops(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		for _, tc := range []struct {
+			version string
+			says    bool
+		}{{"2.1.310 (Claude Code)", true}, {"2.1.309 (Claude Code)", false}} {
+			t.Run(tc.version, func(t *testing.T) {
+				p := executor.Paths{Home: t.TempDir()}
+				for _, dir := range []string{p.ClaudeRepo(), filepath.Dir(p.ClaudeNoteHelper())} {
+					if err := os.MkdirAll(dir, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.WriteFile(p.ClaudeRepo()+"/skipped", []byte("STALE-LINE\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				writeStandIn(t, p.ClaudeNoteHelper(), "#!/bin/sh\nexit 0\n")
+				dir := t.TempDir()
+				writeStandIn(t, filepath.Join(dir, "claude"), "#!/bin/sh\n"+
+					`case "$1" in --version) echo '`+tc.version+`'; exit 0;; esac`+"\n"+
+					`[ -d `+shellword.Quote(p.ClaudeRepo())+` ] && echo 'the skill late/.claude/skills/x is left out' >> `+
+					shellword.Quote(p.ClaudeRepo()+"/skipped")+"\nexit 0\n")
+				argv := sh.argv
+				if len(argv) == 0 {
+					argv = []string{"sh"}
+				}
+				script := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, p, ""))
+				cmd := exec.Command(argv[0], append(append([]string{}, argv[1:]...), "-c", sh.prelude+script)...) //nolint:gosec // the script under test
+				cmd.Env = []string{"PATH=" + dir + ":" + os.Getenv("PATH"), "HOME=" + p.Home}
+				var stderr strings.Builder
+				cmd.Stdin, cmd.Stderr = strings.NewReader("x"), &stderr
+				if err := cmd.Run(); err != nil {
+					t.Fatalf("the script: %v\n%s", err, stderr.String())
+				}
+				said := stderr.String()
+				if strings.Contains(said, "STALE-LINE") {
+					t.Errorf("the run said an earlier run's left-out line:\n%s", said)
+				}
+				if got := strings.Count(said, "the skill late/.claude/skills/x is left out"); got != map[bool]int{true: 1}[tc.says] {
+					t.Errorf("the run said its hook's left-out line %d times, want %d:\n%s", got, map[bool]int{true: 1}[tc.says], said)
+				}
+			})
+		}
+	})
+}

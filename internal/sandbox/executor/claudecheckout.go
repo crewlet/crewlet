@@ -106,10 +106,15 @@ func writeClaudeCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbox.
 // the checkouts' plugin with hooks switched on: the every-run settings give
 // way to [Paths.ClaudeHooksSettings], the skills' or the notes' settings
 // switching them on already. After the skills' and notes' gates, before the
-// pin's ([claudePinGate]).
+// pin's ([claudePinGate]). Once the gate has removed an earlier run's state,
+// the script's end says what the nested hook left out before it puts the home
+// back ([checkoutHome.saySkipped]): never before, or a killed run's lines would
+// read as this one's.
 func claudeCheckoutsGate(paths Paths) string {
 	q := shellword.Quote
-	return "if at " + floorArgs(claudeCheckoutsFloor) + "; then\n" + claudeCheckoutHome(paths).gate() +
+	h := claudeCheckoutHome(paths)
+	return "if at " + floorArgs(claudeCheckoutsFloor) + "; then\n" + h.gate() +
+		"chome() { " + h.saySkipped() + "; " + h.restore() + "; }\n" +
 		`if [ -n "$hk" ]; then set -- "$@" --plugin-dir ` + q(paths.ClaudeCheckoutsPlugin()) + "; case $cs in " +
 		q(paths.ClaudeSettings()) + ") cs=" + q(paths.ClaudeHooksSettings()) + " ;; esac; fi\n" +
 		`else echo "crewlet: this box runs Claude Code $n, older than ` + claudeCheckoutsFloor + `, the oldest ` +
