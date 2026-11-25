@@ -2235,8 +2235,7 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	// RUNNING NOW, and counted from now where its turn caps it, not from the
 	// waiter's next pass ([sandbox.Waiter.Watch]).
 	if w := e.sandboxWaiter.Load(); w != nil {
-		//nolint:contextcheck // the watch runs on the waiter's lifetime, never the turn's, which ends as it parks
-		w.Watch(turnID)
+		w.Watch(ctx, turnID)
 	}
 	return true, nil
 }
