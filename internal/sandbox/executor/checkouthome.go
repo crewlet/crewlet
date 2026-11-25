@@ -59,13 +59,15 @@ func (h checkoutHome) removeSiblingStaging() string {
 // harness lists before the run's skills directory, whose names a copy may
 // not take; Budget, the helper's form of a bound the sections share with what
 // the harness loads beside them ("" for none; internal/notehelper's
-// "Checkouts below the working directory").
+// "Checkouts below the working directory"); Skipped, lines the launch keeps in
+// the run's skip log.
 type checkoutSpec struct {
 	Instructions []checkoutSlot
 	Limit        *int
 	SkillDirs    []checkoutSkillDir
 	HomeSkills   []checkoutSkillDir
 	Budget       string
+	Skipped      []string
 }
 
 // checkoutSkillDir is a checkout's skill directory as the helper reads it:
@@ -136,6 +138,9 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	}
 	if spec.Budget != "" {
 		config["budget"] = map[string]string{"form": spec.Budget, "own": h.ownText()}
+	}
+	if len(spec.Skipped) > 0 {
+		config["skipped"] = spec.Skipped
 	}
 	launch, _ := json.Marshal(config)
 	return launch // strings, lists and an int cannot fail to encode

@@ -17,9 +17,12 @@ import (
 
 // museLoadsStandIn records every `muse` call's words in $HOME/muse-calls and,
 // for the run's `muse exec`, its argv, every file under the home and the
-// home's settings as the harness starts; the release check is answered.
+// home's settings as the harness starts; the release check is answered, and
+// `plugins remove` drops the plugin's capability records from the settings,
+// as 1.4.25's does (measured, row swprobe).
 const museLoadsStandIn = `#!/bin/sh
 printf '%s\n' "$*" >> "$HOME/muse-calls"
+case "$1 $2" in "plugins remove") [ ! -f "$HOME/.config/muse/settings.json" ] || sed -i 's/"plugin:crewlet-notes:/"dropped:/g' "$HOME/.config/muse/settings.json";; esac
 case "$1" in --version) echo 'Muse Code 1.4.25 (1.4.25-R9361.1)'; exit 0;; exec) ;; *) exit 0;; esac
 printf '%s\n' "$@" > "$HOME/observed.argv"
 (cd "$HOME" && find . -type f) > "$HOME/observed.files"

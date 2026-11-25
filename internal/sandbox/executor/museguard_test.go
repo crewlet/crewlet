@@ -100,15 +100,17 @@ func TestAMuseRunsPluginAndSkillsCannotBeSwitchedOffUnseen(t *testing.T) {
 	}
 }
 
-// A MUSE RUN WITHOUT NOTES IS STILL REFUSED WHERE ITS NESTED HOOK IS
-// SWITCHED OFF: the plugin carries the hook that hands a checkout cloned
-// during the run wherever the box holds the note helper, so a disable, a
-// reject (of a note hook or of the nested hook alone) or a store Muse cannot
-// read refuses the run as Codex's runner refuses its nested hook off, naming
-// the hook and the record, the records left as they were; a plugin nobody
-// switched off is still refreshed. Mutations, each red: refuse only runs with
-// notes; leave the nested hook's id out of the reject scan.
-func TestAMuseRunWithoutNotesIsRefusedWhereItsNestedHookIsSwitchedOff(t *testing.T) {
+// THE NESTED HOOK ALONE NEVER REFUSES A MUSE RUN (D709): where the home's
+// switch-off would keep it from running (the plugin disabled, a hook of it
+// rejected, the store unreadable, or the nested hook alone rejected), a run
+// that needs the plugin for nothing else starts with its launch's handing,
+// leaving the plugin and its records alone; a run with notes whose nested hook
+// alone is rejected starts with the plugin reinstalled without it, and the
+// home's settings, the reject among them, back after; each says once, in its
+// skip log, that a repository cloned during it is not handed, naming the
+// record. Mutations, each red: refuse; install the nested hook anyway; say
+// nothing; drop the hold that puts the reject back.
+func TestAMuseRunsNestedHookOffNeverRefusesItAlone(t *testing.T) {
 	t.Parallel()
 	const rejected = `{"schema_version":1,"runtime_capabilities":{"plugin:crewlet-notes:hook:stop":` +
 		`{"enabled":false,"trusted_definition_hash":"sha256:00"}}}`
@@ -118,14 +120,30 @@ func TestAMuseRunWithoutNotesIsRefusedWhereItsNestedHookIsSwitchedOff(t *testing
 	const stale = `{"version":1,"plugins":{"crewlet-notes":{"enabled":true,"package_sha256":"0ld"}}}`
 	plain := sandbox.RunRequest{Brief: "x",
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: steerWiring.URL}}}
+	notes := plain
+	notes.Steer = steerWiring
+	loads := plain
+	loads.SkillLoads = skillWiring()
+	const line = "a repository cloned during the run is not handed its instructions and skills"
 	for name, tc := range map[string]struct {
-		settings, installed, fails string
+		req                 sandbox.RunRequest
+		settings, installed string
+		record              string
+		reinstalled         bool
 	}{
-		"disabled in the plugin store":   {settings: `{"schema_version":1}`, installed: disabled, fails: "muse plugins disable"},
-		"a note hook of it rejected":     {settings: rejected, installed: stale, fails: "hook:stop"},
-		"the nested hook alone rejected": {settings: nestedRejected, installed: stale, fails: "hook:posttooluse-checkouts"},
-		"the store does not read":        {settings: `{"schema_version":1}`, installed: `{"version":1,`, fails: "does not read"},
-		"a copy nobody switched off":     {settings: `{"schema_version":1}`, installed: stale},
+		"no notes, disabled in the plugin store": {req: plain, settings: `{"schema_version":1}`, installed: disabled,
+			record: "muse plugins disable"},
+		"no notes, a note hook rejected": {req: plain, settings: rejected, installed: stale, record: "hook:stop"},
+		"no notes, the nested hook alone rejected": {req: plain, settings: nestedRejected, installed: stale,
+			record: "hook:posttooluse-checkouts"},
+		"no notes, the store does not read": {req: plain, settings: `{"schema_version":1}`, installed: `{"version":1,`,
+			record: "does not read"},
+		"notes, the nested hook alone rejected": {req: notes, settings: nestedRejected, installed: stale,
+			record: "hook:posttooluse-checkouts", reinstalled: true},
+		"skill loads alone, the nested hook alone rejected": {req: loads, settings: nestedRejected, installed: stale,
+			record: "hook:posttooluse-checkouts", reinstalled: true},
+		"no notes, nothing switched off": {req: plain, settings: `{"schema_version":1}`, installed: stale,
+			reinstalled: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -133,23 +151,32 @@ func TestAMuseRunWithoutNotesIsRefusedWhereItsNestedHookIsSwitchedOff(t *testing
 			p := executor.PathsFor(box)
 			plantFile(t, p.MuseSettings(), tc.settings)
 			plantFile(t, p.MuseInstalled(), tc.installed)
-			if tc.fails == "" {
-				runObserved(t, runner, box, plain)
-				if calls := boxFile(t, box, box.Home()+"/muse-calls"); !strings.Contains(calls, "plugins remove crewlet-notes") {
-					t.Errorf("a plugin nobody switched off was not refreshed:\n%s", calls)
+			runObserved(t, runner, box, tc.req)
+			calls := boxFile(t, box, box.Home()+"/muse-calls")
+			if got := strings.Contains(calls, "plugins remove crewlet-notes"); got != tc.reinstalled {
+				t.Errorf("the run reinstalled the plugin: %v, want %v:\n%s", got, tc.reinstalled, calls)
+			}
+			errs := boxFile(t, box, p.Err())
+			if tc.record == "" {
+				if strings.Contains(errs, line) {
+					t.Errorf("a run whose nested hook is on says it is off:\n%s", errs)
 				}
 				return
 			}
-			_, err := runner.Start(t.Context(), box, plain)
-			if err == nil || !strings.Contains(err.Error(), tc.fails) ||
-				!strings.Contains(err.Error(), "the hook that hands a checkout cloned during it") {
-				t.Fatalf("the run was not refused naming %q and the nested hook: %v", tc.fails, err)
+			if n := strings.Count(errs, line); n != 1 || !strings.Contains(errs, tc.record) {
+				t.Errorf("the run's error stream says the nested hook is off %d times, want once naming %q:\n%s", n,
+					tc.record, errs)
 			}
-			if calls, _ := os.ReadFile(filepath.Join(box.Home(), "muse-calls")); strings.Contains(string(calls), "plugins") {
-				t.Errorf("a refused run touched the plugin's records:\n%s", calls)
+			if manifest := boxFile(t, box, p.MuseNotesPlugin()+"/.muse-plugin/plugin.json"); strings.Contains(manifest, "muse-nested") {
+				t.Error("the run's plugin carries the nested hook the home switched off")
 			}
-			if got := boxFile(t, box, p.MuseInstalled()); got != tc.installed {
-				t.Errorf("a refused run changed the plugin store to %s", got)
+			if got := boxFile(t, box, p.MuseSettings()); got != tc.settings {
+				t.Errorf("the home's settings are %s after the run, want its own, the reject among them", got)
+			}
+			if !tc.reinstalled {
+				if got := boxFile(t, box, p.MuseInstalled()); got != tc.installed {
+					t.Errorf("the run changed the plugin store to %s", got)
+				}
 			}
 		})
 	}

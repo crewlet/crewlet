@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -733,35 +732,26 @@ func TestAMuseServerNameStaysWholeUpTo19Characters(t *testing.T) {
 	}
 }
 
-// A BOX WITH NO NOTE HELPER BUILD HAS NO NESTED HOOK TO REFUSE FOR: a run with
-// neither notes nor skill loads whose plugin the home disabled starts there,
-// its script leaving the plugin alone ([Paths.MusePluginOff]), while a box
-// that holds the helper refuses it, naming the hook a cloned checkout needs.
+// A KILLED MUSE RUN'S PLUGIN RECORDS COME BACK AS THE HOME HELD THEM: the
+// script's remove and install drop a person's reject of the nested hook, which
+// the run left out (D709); the clear puts the home's own
+// `plugin:crewlet-notes:*` capabilities back from the held settings, the run's
+// approvals gone, and leaves every other capability as the file holds it.
 //
-// Mutation: refuse whatever the box holds, or never for the nested hook.
-func TestAMuseRunIsRefusedForItsNestedHookOnlyWhereTheBoxHoldsIt(t *testing.T) {
-	t.Parallel()
-	const disabled = `{"version":1,"plugins":{"crewlet-notes":{"enabled":false}}}`
-	for _, nested := range []bool{false, true} {
-		box := sandbox.NewFakeSandbox("b")
-		var marked bool
-		p := PathsFor(box)
-		box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
-			if strings.Contains(cmd, ": > "+shellword.Quote(p.MusePluginOff())) {
-				marked = true
-			}
-			if strings.Contains(cmd, "installed.json") {
-				return sandbox.ExecResult{Stdout: "read\n" + disabled}, nil
-			}
-			return sandbox.ExecResult{}, nil
-		}
-		err := museSwitchedOff(t.Context(), box, sandbox.RunRequest{Brief: "x"}, p, nested)
-		if refused := err != nil && strings.Contains(err.Error(), "a checkout cloned during it"); refused != nested {
-			t.Errorf("nested hook %v: refused %v (%v)", nested, refused, err)
-		}
-		if !marked {
-			t.Errorf("nested hook %v: the plugin was not marked off for the script to leave alone", nested)
-		}
+// Mutation: skip the capabilities at the clear, or replace them all.
+func TestAKilledMuseRunsPluginRecordsComeBack(t *testing.T) {
+	home := []byte(`{"runtime_capabilities":{"plugin:crewlet-notes:hook:posttooluse-checkouts":{"enabled":false},` +
+		`"plugin:other:hook:x":{"enabled":false}}}`)
+	settings := map[string]json.RawMessage{"runtime_capabilities": json.RawMessage(
+		`{"plugin:crewlet-notes:hook:stop":{"enabled":true},"plugin:other:hook:y":{"enabled":true}}`)}
+	if err := museCapabilitiesBack(settings, home, "/h/settings.json"); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	_ = json.Unmarshal(settings["runtime_capabilities"], &got)
+	if want := []string{"plugin:crewlet-notes:hook:posttooluse-checkouts", "plugin:other:hook:y"}; !slices.Equal(
+		slices.Sorted(maps.Keys(got)), want) {
+		t.Errorf("the capabilities after the clear are %v, want %v", slices.Sorted(maps.Keys(got)), want)
 	}
 }
 
