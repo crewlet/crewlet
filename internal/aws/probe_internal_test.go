@@ -63,9 +63,10 @@ func TestTheProbeSaysWhatToDo(t *testing.T) {
 	}
 }
 
-// A STACK'S VERDICT SAYS WHO IT SIGNS IN AS AS FACTS, AND WHAT TO DO AS ACTIONS.
-// Mutation: drop the quota warning's action, or write the drift as warnings,
-// and the lists differ.
+// A STACK'S VERDICT SAYS WHO IT SIGNS IN AS AS FACTS, AND WHAT TO DO AS ACTIONS;
+// a refusal first lists the parts that passed and the one that failed.
+// Mutation: drop the quota warning's action, write the drift as warnings, or
+// leave the parts out of a refusal, and the lists differ.
 func TestAStacksVerdictSortsItsFactsFromItsActions(t *testing.T) {
 	t.Parallel()
 	conn, err := NewConnection(testProvisioning(t))
@@ -92,7 +93,10 @@ func TestAStacksVerdictSortsItsFactsFromItsActions(t *testing.T) {
 	drifted := matches
 	drifted.Drift = []string{"The policy a is missing.", "The policy b is not the one this engine expects (x)."}
 	got = verdictOf(conn, drifted)
-	if want := []setup.Fact{{Label: "Differs", Value: "The policy a is missing"}, {Label: "Differs", Value: "The policy b is not the one this engine expects (x)"}}; !slices.Equal(got.Facts, want) {
+	want := setup.Refused("", setup.Parts(probeParts, partPolicies)...).Facts
+	want = append(want, setup.Fact{Label: "Differs", Value: "The policy a is missing"},
+		setup.Fact{Label: "Differs", Value: "The policy b is not the one this engine expects (x)"})
+	if !slices.Equal(got.Facts, want) {
 		t.Errorf("a drifted stack's facts = %+v, want %+v", got.Facts, want)
 	}
 	if !slices.Equal(got.Warnings, []setup.Warning{{Action: rerun}}) {
