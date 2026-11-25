@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"testing/synctest"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 )
@@ -83,25 +82,23 @@ func TestTheWatchReadsOnlyCappedRunsItsNodeDrives(t *testing.T) {
 }
 
 // A RUN ITS LAUNCHING NODE JUST OPENED TO ITS POLL IS WATCHED AT ONCE
-// ([Waiter.Watch]), not from the waiter's next pass, an interval away.
+// ([Waiter.Watch]), not from the waiter's next pass, an interval away; and a
+// pass's listing that began before it was watched does not drop it.
 //
-// Mutation: make Watch read nothing, or watch the run only once a pass has
-// listed it, and the tick reads no count.
+// Mutation: make Watch read nothing, watch the run only once a pass has listed
+// it, or let an older listing drop it, and the tick reads no count.
 func TestARunJustOpenedToItsPollIsWatchedAtOnce(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		rig := newWaiterRig(t)
-		rig.launchCapped("t1", 3)
-		rig.waiter.Start(t.Context())
-		defer rig.waiter.Stop()
-		rig.waiter.Watch("t1")
-		synctest.Wait()
-		rig.runner.Show(RequestCount{Requests: 4})
-		if fired := rig.waiter.WatchTick(t.Context()); fired != 1 || len(rig.runner.Counted()) != 1 {
-			t.Fatalf("the watch read %d counts and ended %d runs; want the run just opened ended",
-				len(rig.runner.Counted()), fired)
-		}
-	})
+	rig := newWaiterRig(t)
+	rig.launchCapped("t1", 3)
+	older := rig.waiter.listing()
+	rig.waiter.Watch(t.Context(), "t1")
+	rig.waiter.track(nil, rig.now, older)
+	rig.runner.Show(RequestCount{Requests: 4})
+	if fired := rig.waiter.WatchTick(t.Context()); fired != 1 || len(rig.runner.Counted()) != 1 {
+		t.Fatalf("the watch read %d counts and ended %d runs; want the run just opened ended",
+			len(rig.runner.Counted()), fired)
+	}
 }
 
 // A RUN WHOSE RECORD SAYS ITS WATCH ENDED IT IS ANNOUNCED BY THE POLL, as one

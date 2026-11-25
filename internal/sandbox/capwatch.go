@@ -137,34 +137,22 @@ func (w *Waiter) watchLocked(run PendingRun, listed time.Time) {
 
 // Watch tells this waiter that this node has just opened turnID's run to its
 // poll, so a run with a turn cap is counted from the watch's next tick rather
-// than from its next pass's listing, up to an interval later. It reads the
-// run's row, and returns at once: what it starts runs on the waiter's own
-// lifetime. Before [Waiter.Start] or after [Waiter.Stop] it is nothing.
-func (w *Waiter) Watch(turnID string) {
-	w.mu.Lock()
-	life := w.life
-	if life == nil || w.closed || life.Err() != nil {
-		w.mu.Unlock()
+// than from its next pass's listing, up to an interval later: one read of the
+// run's row, made before it returns, so the run is watched once it has. A row
+// the store did not answer for is left to the next pass's listing.
+func (w *Waiter) Watch(ctx context.Context, turnID string) {
+	listed := w.now()
+	run, found, err := w.pending.Get(ctx, turnID)
+	if err != nil {
+		log.DebugContext(ctx, "sandbox_cap_watch_unread", "turn_id", turnID, "error", err.Error())
 		return
 	}
-	w.tasks.Add(1)
-	w.mu.Unlock()
-	go func() {
-		defer w.tasks.Done()
-		listed := w.now()
-		run, found, err := w.pending.Get(life, turnID)
-		if err != nil {
-			// The next pass's listing finds it.
-			log.DebugContext(life, "sandbox_cap_watch_unread", "turn_id", turnID, "error", err.Error())
-			return
-		}
-		if !found || !w.watchable(run, w.now()) {
-			return
-		}
-		w.mu.Lock()
-		defer w.mu.Unlock()
-		w.watchLocked(run, listed)
-	}()
+	if !found || !w.watchable(run, w.now()) {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.watchLocked(run, listed)
 }
 
 // watchLoop reads every watched run's count each [capWatchTick] until ctx ends.
