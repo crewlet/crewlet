@@ -218,8 +218,8 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	line(`chome() { %s; }; trap chome EXIT`, claudeCheckoutHome(paths).restore())
 	line(`trap 'end "$harness"; chome; trap - EXIT; exit 143' TERM; trap 'end "$harness"; chome; trap - EXIT; exit 130' INT; trap 'end "$harness"; chome; trap - EXIT; exit 129' HUP`)
 	// THE CHECKOUTS' INSTRUCTIONS AND SKILLS, and the hook that hands a later
-	// checkout's skills ([claudeCheckoutsGate]), its hook marked as one of the
-	// engine's (hk).
+	// checkout's skills ([claudeCheckoutsGate]), started only where hooks run
+	// or another hook of the engine's has the run refused.
 	b.WriteString(claudeCheckoutsGate(paths))
 	// NO HOOK OF THE ENGINE'S STARTED SWITCHED OFF: refused, naming the file
 	// and key, where the box's settings would run none ([claudeHooksOffGate]).
@@ -860,17 +860,24 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		return "", err
 	}
 	guarded := len(crewletServers(req.MCPServers)) > 0
-	if len(req.Skills) > 0 || req.Steer.Set() || guarded || helped {
+	// The hooks a run is refused for ([claudeHooksOffGate]); the checkouts' is
+	// started or not on the files and keys alone ([claudeCheckoutsGate]).
+	refusing := len(req.Skills) > 0 || req.Steer.Set() || guarded
+	if refusing || helped {
 		var off string
 		var by []string
 		if off, by, err = claudeHooksOff(ctx, box, paths, req.Steer.Set() || guarded, req.Skills); err != nil {
 			return "", err
 		}
-		if err = box.WriteFile(ctx, paths.ClaudeHooksOff(), []byte(off)); err != nil {
-			return "", fmt.Errorf("executor: writing why the box's settings switch the run's hooks off: %w", err)
+		if refusing {
+			if err = box.WriteFile(ctx, paths.ClaudeHooksOff(), []byte(off)); err != nil {
+				return "", fmt.Errorf("executor: writing why the box's settings switch the run's hooks off: %w", err)
+			}
 		}
-		if err = box.WriteFile(ctx, paths.ClaudeHooksOffBy(), []byte(strings.Join(by, "; "))); err != nil {
-			return "", fmt.Errorf("executor: writing which settings switch the run's hooks off: %w", err)
+		if helped {
+			if err = box.WriteFile(ctx, paths.ClaudeHooksOffBy(), []byte(strings.Join(by, "; "))); err != nil {
+				return "", fmt.Errorf("executor: writing which settings switch the run's hooks off: %w", err)
+			}
 		}
 	}
 	if req.Steer.Set() {
