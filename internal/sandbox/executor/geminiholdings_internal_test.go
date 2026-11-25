@@ -431,15 +431,19 @@ func TestAGeminiFileShorterThanItsStartIsNotRead(t *testing.T) {
 // A GEMINI CLI PART BEFORE THE NEWEST COMPACTION NEVER COUNTS: a summary
 // between the rounds leaves round 2's parts alone, compacted; a run whose two
 // compressions each straddle a call counts none, and a run after them none;
-// of two summaries, a padded one included, only the newer restarts.
+// of two summaries, found by their lines whatever they open with, only the
+// newer restarts.
 //
-// Mutation: ignore the summary, or restart at the oldest, and a case goes red.
+// Mutation: ignore the summary, find it by its words, or restart at the
+// oldest, and a case goes red.
 func TestAGeminiPartBeforeTheNewestCompactionNeverCounts(t *testing.T) {
 	t.Parallel()
 	ghReadCases(t, "round.snapshot", "compressed.run1", "compressed.run2")
 	first, second := ohCall(1, "echo", `{"t":1}`, "one"), ohCall(2, "echo", `{"t":2}`, "two")
 	snapshot := func(id string) string {
-		return `{"id":"` + id + `","type":"user","content":[{"text":"  <state_snapshot>a summary"}]}`
+		return `{"$set":{"sessionId":"` + ghSession + `"}}` + "\n" + `{"id":"` + id + `","timestamp":"t",` +
+			`"type":"user","content":[{"text":"  <scratchpad>a preamble</scratchpad><state_snapshot>a summary"}]}` +
+			"\n" + `{"id":"` + id + `-ack","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}`
 	}
 	h, err := ghRead(t, ghFile(snapshot("s1"), ghReply("r1", ghCallOf("c1", "echo", `{"t":1}`)),
 		ghAnswers("u1", ghAnswerOf("c1", "echo", "one")), snapshot("s2"),
