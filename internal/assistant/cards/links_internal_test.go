@@ -22,10 +22,10 @@ func TestARecordLinkIsNamedByWhatItOpens(t *testing.T) {
 	opaque := map[string]string{"{id}": uuid, "{turn_id}": uuid, "{handle}": "pm"}
 	keys := map[string]string{"{KEY}": "FAIR", "{CONTAINER}": "HOME"}
 	walked := 0
-	for name, s := range links {
+	for name, s := range links() {
 		params, key, takesOpaque, named := map[string]string{}, "", false, false
 		for _, segment := range strings.Split(s.address, "/") {
-			p, ok := placeholders[segment]
+			p, ok := placeholders()[segment]
 			if !ok {
 				continue
 			}
