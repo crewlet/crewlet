@@ -73,6 +73,12 @@ The integration's **Last check** (`list_integrations`, and the Integrations head
 
 A change to the open screen (a filter, a range, a draft in an open editor) is applied by the page itself and saves nothing. Each screen tells Ask Crewlet what each of its changes takes (the keys a filter writes, the seats and windows Budgets draws, the org builder's operations); a change that does not match is refused before any card, so the person never approves what the screen cannot apply. Such a change goes stale only when what it depends on moves, not when a row's details or another editor opens.
 
+### What it sees of the screen
+
+Each question carries an outline of what the screen shows, read from the page's accessibility tree so every screen has one: an open dialog first, then headings and named sections, each field's label and kind and whether it is required, filled or empty, disabled or showing an error, the buttons and links, the tabs and steps with the current one, and the notices. It never carries what a field holds, the text of a password or key field, or anything inside an element marked `data-assistant-private`, and it stops at 8 KiB, saying `trimmed`. It reaches the model with the rest of the page context, as data about the screen and never as instructions, and removing the page chip sends neither.
+
+Ask Crewlet names controls as the screen labels them (a setup form's button reads **Connect** until the integration is connected and **Save** after), takes the screen's word over the documentation's, and on an integration's setup screen reads that integration's setup for its steps, saying which happen in Crewlet and which in the vendor's console. When you act on the screen during an answer, it reads the screen again: the page answers at once with a fresh outline, and nothing changes or needs approving.
+
 ## Turning it on
 
 Set `assistant.model` to a `providers.llm` key the company already has, or to `fleet:<key>` to run each turn on whichever member of a [fleet](../concepts/llm-fleets.md) has room (every member is held to the rule below), and apply the revision (`crewlet config import`, a `PATCH /config` of `{"assistant": {"model": "<key>"}}`, or the dashboard, where an administrator picks it from the company's models). The next page load lights **Ask** for every person. Nothing else is set: a turn's bounds are fixed ([Budgets and limits](#budgets-and-limits)).

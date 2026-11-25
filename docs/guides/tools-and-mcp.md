@@ -2332,6 +2332,15 @@ An entry that declares nothing is bound by what the engine recognises it as, by 
 | `mcp-atlassian` | the package or image name | `JIRA_API_TOKEN`, `JIRA_USERNAME`, `CONFLUENCE_API_TOKEN`, `CONFLUENCE_USERNAME` |
 | `scw mcp server serve` | the `scw` command with `mcp` | `SCW_SECRET_KEY`, `SCW_ACCESS_KEY` |
 
+A recognised server that also reads one of its integration's own values, the same for every seat, is handed that too, from the integration's block, beside each seat's credential:
+
+| Server | Reads | From |
+|---|---|---|
+| Datadog's remote server | `DD_API_KEY` | `integrations.datadog.provisioning.api_key` |
+| The Mattermost server | `MATTERMOST_URL` | `integrations.mattermost.url` |
+
+A value the entry writes for one of these keys (`headers`, `env`), or a seat's own block writes, is sent instead. A remote server the engine recognises is refused when a header its catalogue entry requires is sent by nothing: not its entry, not its integration, and not any agent seat it reaches (a seat without it is reported on its own instance). Datadog answers every request without `DD_API_KEY` with 401, so a shared `datadog` entry signed in with headers names both keys. An OAuth sign-in replaces the headers, and a local server is not judged, since it may read its host's own sign-in.
+
 A declaration replaces the recognised keys rather than adding to them. A per-seat server named after one of these integrations that neither declares nor is recognised is reported on the integration as **tool declared but no credential binding**: it would start for every agent and act as nobody. The integration's Agents tab reports each seat's tool as live, waiting for its credential, or missing because no per-seat server reads it.
 
 ### Per-Unit Config

@@ -182,8 +182,8 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done","ter
 		} `json:"hooks"`
 	}
 	readJSON(t, filepath.Join(record, "settings.json"), &settings)
-	if settings.DisableAllHooks == nil || *settings.DisableAllHooks {
-		t.Errorf("the settings do not switch hooks on explicitly: %v", settings.DisableAllHooks)
+	if settings.DisableAllHooks != nil {
+		t.Errorf("the settings switch hooks on over the box's own: disableAllHooks %v", *settings.DisableAllHooks)
 	}
 	var servers struct {
 		Servers map[string]struct{ URL string } `json:"mcpServers"`

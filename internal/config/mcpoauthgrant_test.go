@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -130,12 +131,14 @@ func TestAClientsSecretIsStoredAtItsOwnKeyAndOnlyWhereThereIsOne(t *testing.T) {
 	if _, err := cfg.MCPValueSlot("linear", "eng", MCPValueClientSecret); !errors.Is(err, ErrMCPValueSeatOnShared) {
 		t.Errorf("a seat's client secret: %v", err)
 	}
-	for _, lines := range []string{"    oauth:\n      client: cimd\n", ""} {
+	for _, lines := range []string{"    oauth:\n      client: cimd\n",
+		"    headers:\n      Authorization: Bearer ${LINEAR_TOKEN}\n"} {
 		c := mustCompany(t, oauthDoc(lines))
 		if _, err := c.MCPValueSlot("linear", "", MCPValueClientSecret); !errors.Is(err, ErrMCPValueNoSecret) {
 			t.Errorf("%q: a client secret slot answered %v", lines, err)
 		}
-		if keys, _ := c.MCPValueKeys("linear", ""); len(keys) != 0 {
+		keys, _ := c.MCPValueKeys("linear", "")
+		if slices.ContainsFunc(keys, func(k MCPValueKey) bool { return k.Key == MCPValueClientSecret }) {
 			t.Errorf("%q: values %+v", lines, keys)
 		}
 	}

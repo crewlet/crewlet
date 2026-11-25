@@ -27,11 +27,12 @@
 //     directory's realpath, the one field a resume checks (measured on
 //     0.28.4), and removes every other key's copy of it.
 //
-//   node qwen-helper.mjs guard [--server <name>]...
+//   node qwen-helper.mjs guard [--server <name>]... [--hook <name>]
 //     Exits 3, naming the file, the key and the entry, where a settings file
 //     the run's system tier cannot overrule takes one of Crewlet's own servers
-//     or its tools away (qwenguard.go). A file that does not read is passed
-//     over, as Qwen Code reads it as empty.
+//     or its tools away, or, for a run with a hook, where the settings or safe
+//     mode switch every hook off (qwenguard.go). A file that does not read is
+//     passed over, as Qwen Code reads it as empty.
 //
 // NOTES (the runner note contract's poll channel). While the turn runs, the
 // helper polls the notes route and keeps what it fetched. Qwen Code asks for
@@ -781,13 +782,134 @@ function sleep(ms, signal) {
 // else 3, said on stderr.
 function guard(args) {
   const servers = []
-  for (let i = 0; i + 1 < args.length; i += 2) if (args[i] === "--server") servers.push(args[i + 1])
+  const hooks = []
+  const skills = []
+  for (let i = 0; i + 1 < args.length; i += 2) {
+    if (args[i] === "--server") servers.push(args[i + 1])
+    if (args[i] === "--hook") hooks.push(args[i + 1])
+    if (args[i] === "--skill") skills.push(args[i + 1])
+  }
   const found = switchedOff(servers)
+  if (hooks.length > 0) found.push(...hooksOff(hooks))
+  if (skills.length > 0) found.push(...skillsOff(skills))
   if (found.length === 0) return 0
-  process.stderr.write("crewlet: Qwen Code would start without what the run's tools go through: " +
-    found.join("; ") + ". Qwen Code adds each such list up across its settings files, so no setting of " +
-    "the run's undoes it; remove the entry. The run was not started.\n")
+  process.stderr.write("crewlet: Qwen Code would start without what the run's tools or skill loads go through: " +
+    found.join("; ") + ". No setting of the run's undoes it, as Qwen Code adds each such list up across its " +
+    "settings files and the run never switches on hooks the box switched off; remove the entry. The run was " +
+    "not started.\n")
   return 3
+}
+
+// hooksOff is why 0.28.4 would run none of hooks, a sentence a cause, each
+// measured: `disableAllHooks` truthy as JavaScript reads it ("false" too) in
+// the highest of the system defaults, the home's and the working directory's
+// settings that set it, a null setting it off (a working directory's null
+// over a home's true ran the hooks); and QWEN_CODE_SAFE_MODE as a string (a
+// boolean or a number left safe mode off) 1, true, yes or on in any case,
+// from the first `.env` it finds ([envFile]), else the settings' `env`, the
+// working directory's over the home's. The run's environment never holds it:
+// the wrapper unsets it, as it does Claude Code's (qwen.go, QwenCode.Output).
+function hooksOff(hooks) {
+  const run = `the run's hook ${hooks.join(", ")}`
+  const found = []
+  let all = null
+  let safe = null
+  for (const file of settingsFiles().reverse()) {
+    const s = readSettings(file)
+    if (s === null) continue
+    if (all === null && s.disableAllHooks !== undefined) all = { file, value: s.disableAllHooks }
+    const value = s.env?.QWEN_CODE_SAFE_MODE
+    if (safe === null && typeof value === "string") safe = { where: `${file}'s env.QWEN_CODE_SAFE_MODE`, value }
+  }
+  if (all !== null && all.value) {
+    found.push(`${all.file}: its disableAllHooks is ${JSON.stringify(all.value)}, which switches every hook off, ` +
+      `${run} among them`)
+  }
+  const env = envFile()
+  if (env !== null) {
+    const value = envValue(env, "QWEN_CODE_SAFE_MODE")
+    if (value !== null) safe = { where: `${env}'s QWEN_CODE_SAFE_MODE`, value }
+  }
+  if (safe !== null && /^(1|true|yes|on)$/i.test(safe.value)) {
+    found.push(`${safe.where} is ${JSON.stringify(safe.value)}: safe mode switches every hook off, ${run} among them`)
+  }
+  return found
+}
+
+// skillsOff is what of the settings files below the run's switches one of
+// skills off, a sentence an entry, each measured on 0.28.4: `skills.disabled`
+// or `skills.defaultDisabled` naming it by its listed name in any case, or
+// `skills.disabledLevels` holding "user", the level the run's skills directory
+// is read at; any file's entry counts.
+function skillsOff(skills) {
+  const fold = (name) => String(name).toLowerCase().trim()
+  const list = (value) => (Array.isArray(value) ? value : [])
+  const found = []
+  for (const file of settingsFiles()) {
+    const s = readSettings(file)
+    if (s === null) continue
+    for (const key of ["disabled", "defaultDisabled"]) {
+      for (const name of skills) {
+        if (list(s.skills?.[key]).some((entry) => fold(entry) === fold(name))) {
+          found.push(`${file}: its skills.${key} names the run's skill ${name}`)
+        }
+      }
+    }
+    if (list(s.skills?.disabledLevels).includes("user")) {
+      found.push(`${file}: its skills.disabledLevels holds "user", the level of the run's skills ${skills.join(", ")}`)
+    }
+  }
+  return found
+}
+
+// settingsFiles is the settings files below the run's system tier, lowest
+// first: the system defaults, the home's, and the working directory's unless
+// it is the home (measured on 0.28.4: a higher one's value wins).
+function settingsFiles() {
+  const home = os.homedir()
+  const files = [process.env.QWEN_CODE_SYSTEM_DEFAULTS_PATH || path.join(path.dirname(
+    process.env.QWEN_CODE_SYSTEM_SETTINGS_PATH || "/etc/qwen-code/settings.json"), "system-defaults.json"),
+  path.join(home, ".qwen", "settings.json")]
+  if (realpath(process.cwd()) !== realpath(home)) files.push(path.join(process.cwd(), ".qwen", "settings.json"))
+  return files
+}
+
+// envFile is the one `.env` 0.28.4 loads: the first of the working
+// directory's `.qwen/.env` and `.env`, then the home's (measured: each loads,
+// the working directory's first; `.gemini/.env` and a `.env` above the home
+// never), or null.
+function envFile() {
+  const home = os.homedir()
+  const dirs = realpath(process.cwd()) === realpath(home) ? [home] : [process.cwd(), home]
+  for (const dir of dirs) {
+    for (const file of [path.join(dir, ".qwen", ".env"), path.join(dir, ".env")]) {
+      try {
+        if (fs.statSync(file).isFile()) return file
+      } catch {
+        // not there: the next one
+      }
+    }
+  }
+  return null
+}
+
+// envValue is name's value in the `.env` file, its last assignment, quotes
+// stripped; null where it sets none or cannot be read.
+function envValue(file, name) {
+  let text
+  try {
+    text = fs.readFileSync(file, "utf8")
+  } catch {
+    return null
+  }
+  let value = null
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/)
+    if (m === null || m[1] !== name) continue
+    const q = m[2].match(/^(["'`])(.*)\1$/)
+    value = q !== null ? q[2] : m[2].replace(/\s+#.*$/, "")
+  }
+  return value
 }
 
 // switchedOff is what the settings files below the run's take away of

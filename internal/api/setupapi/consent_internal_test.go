@@ -16,6 +16,8 @@ import (
 // askedConsents counts what reached the engine.
 type askedConsents struct{ asked int }
 
+func (a *askedConsents) SignInCallback() string { return "" }
+
 func (a *askedConsents) StartConsent(context.Context, integration.Kind, iam.Actor) (ConsentSignIn, error) {
 	a.asked++
 	return ConsentSignIn{}, nil

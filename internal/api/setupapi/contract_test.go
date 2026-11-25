@@ -44,6 +44,7 @@ func TestTheSetupFormReadsWhatTheSetupWireSends(t *testing.T) {
 		{"SetupVerdictStep", reflect.TypeFor[setup.StepNote](), nil},
 		{"SetupConsentSignIn", reflect.TypeFor[setupapi.ConsentSignIn](), nil},
 		{"SetupConsentRevocation", reflect.TypeFor[configapi.ConsentRevocation](), nil},
+		{"SetupRedirectStep", reflect.TypeFor[setup.RedirectStep](), nil},
 	} {
 		members, err := clientsource.Interface(tree, tc.iface)
 		if err != nil {

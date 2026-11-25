@@ -275,14 +275,15 @@ func TestAGrokRunsSettingsAreItsOwnWhole(t *testing.T) {
 
 // A GROK RUN'S SETTINGS ARE THE BOX'S WITH ITS OWN LAID IN: every key the box
 // set stays, its servers, compatibility cells, tool settings and hooks among
-// them; the run's servers join the box's; the run's hook is first in its event,
-// the box's after it under any spelling of that event, so the receipts' places
-// hold; the box's own marketplace value stands; and settings that do not read
-// as TOML refuse the run, naming the file.
+// them; the run's servers join the box's; the run's hook comes after the box's
+// own in its event, under any spelling of that event, so an id the box's
+// disabled-hooks names keeps naming the box's hook, and the run's ids are
+// their real places; the box's own marketplace value stands; and settings that
+// do not read as TOML refuse the run, naming the file.
 //
-// Mutations, each red: write the run's tables alone; append the run's hooks
-// after the box's; keep a second spelling of an event apart; set the
-// marketplace key over the box's.
+// Mutations, each red: write the run's tables alone; put the run's hooks
+// before the box's; keep a second spelling of an event apart; set the
+// marketplace key over the box's; name the run's hooks at place 0.
 func TestAGrokRunsSettingsAreTheBoxsWithItsOwnLaidIn(t *testing.T) {
 	t.Parallel()
 	const boxOwn = `model = "grok-4.6"
@@ -314,9 +315,13 @@ hooks = [{ type = "command", command = "box-start" }]
 	if err != nil {
 		t.Fatal(err)
 	}
-	merged, err := grokMergeConfig([]byte(boxOwn), own)
+	merged, ids, err := grokMergeConfig([]byte(boxOwn), own)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if want := []string{"user:post_tool_use[2].hooks[0]", "user:post_tool_use_failure[0].hooks[0]",
+		"user:stop[0].hooks[0]"}; !slices.Equal(ids, want) {
+		t.Errorf("the run's hooks are named %q, want %q", ids, want)
 	}
 	var read struct {
 		Model   string
@@ -343,12 +348,12 @@ hooks = [{ type = "command", command = "box-start" }]
 		}
 	}
 	post := commands["PostToolUse"]
-	if len(post) != 3 || !strings.Contains(post[0], "grok-hook") || !slices.Contains(post, "box-snake") ||
+	if len(post) != 3 || !strings.Contains(post[2], "grok-hook") || !slices.Contains(post, "box-snake") ||
 		!slices.Contains(post, "box-pascal") || len(commands["post_tool_use"]) != 0 ||
 		!slices.Equal(commands["SessionStart"], []string{"box-start"}) || len(commands["Stop"]) != 1 {
-		t.Errorf("the hooks are %v, want the run's first in PostToolUse, the box's after it and its own kept", commands)
+		t.Errorf("the hooks are %v, want the box's first in PostToolUse, the run's after them and its own kept", commands)
 	}
-	if _, err := grokMergeConfig([]byte("[mcp_servers\n"), own); err == nil ||
+	if _, _, err := grokMergeConfig([]byte("[mcp_servers\n"), own); err == nil ||
 		!strings.Contains(err.Error(), "~/.grok/config.toml") {
 		t.Errorf("settings that are no TOML were merged: %v", err)
 	}
