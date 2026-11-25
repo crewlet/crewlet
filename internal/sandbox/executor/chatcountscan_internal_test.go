@@ -207,9 +207,22 @@ func geminiCountVariants() []string {
 		out = append(out, rec("r4", "gemini", `,"content":"","toolCalls":`+calls))
 	}
 	for _, id := range []string{`"` + at + `"`, `"` + past + `"`, `"` + long + `"`, `""`, `5`, `null`} {
-		out = append(out, `{"id":`+id+`,"type":"user","content":[{"text":"<state_snapshot>s"}]}`,
-			`{"id":`+id+`,"type":"user","content":"plain"}`)
+		out = append(out, geminiCompressionOf(id), `{"id":`+id+`,"type":"user","content":"plain"}`)
 	}
+	// A COMPRESSION IS ITS THREE LINES' FORMS ([geminiCompressionLines]): each
+	// line but in its form, apart, or with white space about it.
+	set, ack := `{"$set":{"sessionId":"s"}}`, `{"id":"a","timestamp":"t","type":"gemini","content":[{"text":"`+geminiAck+`"}]}`
+	user := `{"id":"c","timestamp":"t","type":"user","content":[{"text":"<state_snapshot>s"}]}`
+	out = append(out, set+"\n"+user, user+"\n"+ack, set+"\n"+user+"\n"+set+"\n"+ack,
+		set+"\n"+`{"id":"c","type":"user","timestamp":"t","content":[{"text":"s"}]}`+"\n"+ack,
+		set+"\n"+`{"id":"c","timestamp":"t","type":"user","content":"s"}`+"\n"+ack,
+		`{"$set":{"sessionId":"s","x":1}}`+"\n"+user+"\n"+ack,
+		set+"\n"+user+"\n"+`{"id":"a","timestamp":"t","type":"gemini","content":[{"text":"Got it."}]}`,
+		set+"\n"+user+"\n"+strings.TrimSuffix(ack, "}")+`,"x":1}`,
+		" "+set+" \n "+user+"\n"+ack+" ",
+		set+"\n"+`{"id":"c","timestamp":"t","type":"user","content":[{"text":"`+strings.Repeat("w", 3*lineFormMaxBytes)+
+			`"}]}`+"\n"+ack,
+		set+"\n"+user+"\n"+ack+"\n"+set+"\n"+user+"\n"+ack)
 	out = append(out, `{"type":"user","content":"no id"}`, rec("r5", "info", `,"content":"x"`),
 		`{"id":"r6","content":"no type"}`, `{"id":"r7","type":null}`, `{"id":"r8","type":5}`,
 		`{"content":[{"text":"type last"}],"id":"r9","type":"gemini"}`,
@@ -245,6 +258,14 @@ func geminiCountVariants() []string {
 			strings.Repeat("b", 40_000)+`é"}`)
 	}
 	return out
+}
+
+// geminiCompressionOf is a Gemini CLI compression's three lines, its summary's
+// record of the id, as JSON, given ([geminiCompressionLines]).
+func geminiCompressionOf(id string) string {
+	return `{"$set":{"sessionId":"s"}}` + "\n" + `{"id":` + id +
+		`,"timestamp":"t","type":"user","content":[{"text":"<state_snapshot>s"}]}` + "\n" +
+		`{"id":"a","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}`
 }
 
 // geminiCountTwices is a line of every member Gemini CLI's count reads written
@@ -442,7 +463,7 @@ func TestAChatCountsRestartNoCountCarriesLeavesItUnread(t *testing.T) {
 		}{
 			{hs[0], `{"uuid":"` + id + `","type":"system","subtype":"chat_compression","systemPayload":` +
 				`{"info":{"newTokenCount":500},"compressedHistory":[]}}` + "\n"},
-			{hs[1], hs[1].base + "\n" + `{"id":"` + id + `","type":"user","content":[{"text":"<state_snapshot>s"}]}` + "\n"},
+			{hs[1], hs[1].base + "\n" + geminiCompressionOf(`"`+id+`"`) + "\n"},
 		} {
 			walk := c.h.walk()
 			if err := chatFileLines(t.Context(), strings.NewReader(c.record), walk, new(passBudget), nil); err != nil {

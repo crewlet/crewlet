@@ -2,6 +2,7 @@ package executor
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -12,18 +13,29 @@ import (
 )
 
 // chatSummaryHarness is how a test reads a harness's newest summary: a
-// reading to hand lines to, and what it read.
-type chatSummaryHarness func() (lines *chatSummaryLines, reading func() sandbox.ThreadSummary)
+// reading to follow a walk; take, which hands it one whole line as #2075's
+// walk did, a Gemini CLI line judged by its compression's forms first; and
+// what it read once the file ended.
+type chatSummaryHarness func() (lines *chatSummaryLines, take func(raw []byte), reading func() sandbox.ThreadSummary)
 
-func chatSummaryHarnesses() map[string]chatSummaryHarness {
+func chatSummaryHarnesses(ctx context.Context) map[string]chatSummaryHarness {
 	return map[string]chatSummaryHarness{
-		"qwen": func() (*chatSummaryLines, func() sandbox.ThreadSummary) {
+		"qwen": func() (*chatSummaryLines, func([]byte), func() sandbox.ThreadSummary) {
 			read := &summaryRead{}
-			return &newQwenSummaryReading(read).chatSummaryLines, read.reading
+			q := newQwenSummaryReading(read)
+			return &q.chatSummaryLines, func(raw []byte) { q.take(ctx, raw) }, read.reading
 		},
-		"gemini": func() (*chatSummaryLines, func() sandbox.ThreadSummary) {
+		"gemini": func() (*chatSummaryLines, func([]byte), func() sandbox.ThreadSummary) {
 			g := newGeminiSummaries()
-			return &newGeminiSummaryReading(g).chatSummaryLines, g.reading
+			r := newGeminiSummaryReading(g)
+			take := func(raw []byte) {
+				r.forms(raw)
+				r.take(ctx, raw)
+			}
+			return &r.chatSummaryLines, take, func() sandbox.ThreadSummary {
+				r.end(false)
+				return g.reading()
+			}
 		},
 	}
 }
@@ -37,18 +49,18 @@ func chatSummaryHarnesses() map[string]chatSummaryHarness {
 // Mutation: hand no line's break on, or read a torn last line: a case fails.
 func TestASummaryFollowingTheCountsWalkIsItsWholeLineRead(t *testing.T) {
 	t.Parallel()
-	summaries := chatSummaryHarnesses()
+	summaries := chatSummaryHarnesses(t.Context())
 	for _, h := range chatCountHarnesses(t) {
 		eachChatCountRecord(h, func(name, record string) {
-			whole, wholeRead := summaries[h.name]()
+			whole, take, wholeRead := summaries[h.name]()
 			_, wholeErr := codexLines(strings.NewReader(record), func(_ int, body []byte) error {
-				whole.take(t.Context(), body)
+				take(body)
 				return nil
 			}, func(n int) error { return fmt.Errorf("%w: line %d", errChatLine, n) })
 			want := wholeRead()
 			wantFailed := cmp.Or(wholeErr, whole.err) != nil
 			for _, counter := range []chatCounter{h.walk(), nil} {
-				walked, walkedRead := summaries[h.name]()
+				walked, _, walkedRead := summaries[h.name]()
 				err := chatFileFollowed(t.Context(), strings.NewReader(record), counter, walked)
 				got := walkedRead()
 				if !reflect.DeepEqual(got, want) || (cmp.Or(err, walked.err) != nil) != wantFailed ||
@@ -69,14 +81,14 @@ func TestASummaryFollowingTheCountsWalkIsItsWholeLineRead(t *testing.T) {
 // Mutation: leave the pipe open once the reading ends: the walk never ends.
 func TestASummarysReadingThatEndsEarlyLetsTheWalkEnd(t *testing.T) {
 	t.Parallel()
-	summaries := chatSummaryHarnesses()
+	summaries := chatSummaryHarnesses(t.Context())
 	for _, h := range chatCountHarnesses(t) {
 		record := h.base + "\n" + strings.Repeat("x", 4*lineChunkBytes) + "\n" + h.base + "\n"
 		alone := h.walk()
 		wantMarks, wantErr := countChat(h.release, h.release, func() error {
 			return chatFileFollowed(t.Context(), strings.NewReader(record), alone, nil)
 		})
-		walked, _ := summaries[h.name]()
+		walked, _, _ := summaries[h.name]()
 		walked.err = errors.New("the reading ended")
 		counter := h.walk()
 		marks, err := countChat(h.release, h.release, func() error {

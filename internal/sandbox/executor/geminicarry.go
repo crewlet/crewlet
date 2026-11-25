@@ -72,14 +72,14 @@ func (GeminiCLI) continuesInPlace(box string) (bool, string) {
 // working says so.
 func (GeminiCLI) Pack(paths Paths, session, staged, dest string, working bool) string {
 	return chatOnDemand(paths, session, packAt{staged: staged, dest: dest, working: working},
-		paths.GeminiSlugDir(), geminiLocate(paths))
+		paths.GeminiSlugDir(), geminiLocate(paths), GeminiCLI{})
 }
 
 // PackSave packs a save of rec's session beside a harness that may still be
 // working ([saver]). The record refuses no Gemini CLI save, so it never errs.
 func (GeminiCLI) PackSave(paths Paths, rec sessionRecord, staged, dest string) (string, error) {
 	return chatOnDemand(paths, rec.id, packAt{staged: staged, dest: dest, working: true},
-		paths.GeminiSlugDir(), geminiLocate(paths)), nil
+		paths.GeminiSlugDir(), geminiLocate(paths), GeminiCLI{}), nil
 }
 
 // startsByLines says a Gemini CLI run records where it began in its chat file as
