@@ -380,3 +380,18 @@ func TestATrimmedCodexTakeIsSaidSoAndStillBounded(t *testing.T) {
 		t.Errorf("the take describes its archive's trim as %+v, want %+v", taken.Archive.Trim, want)
 	}
 }
+
+// THE HARNESSES NO CUT FITS ARE NO TRIMMERS: Claude Code (its own trim, and
+// subagent threads a resume continues), Kimi Code (a replay that folds every
+// record before its compaction) and Cursor Agent (no compacted chat carried)
+// pack whole past the bound; a trim for one needs its own measurement first.
+//
+// Mutation: make one of them a trimmer, and the case goes red.
+func TestTheHarnessesNoCutFitsAreNoTrimmers(t *testing.T) {
+	t.Parallel()
+	for _, h := range []Harness{ClaudeCode{}, Kimi{}, CursorAgent{}} {
+		if _, ok := h.(trimmer); ok {
+			t.Errorf("%s trims, though no cut of its record leaves out only what its resume skips", h.Name())
+		}
+	}
+}

@@ -30,7 +30,7 @@ import { plural } from "~/lib/format.ts";
 import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 import { companyZone } from "~/lib/companyDay.ts";
 import { companyMidnight } from "~/lib/range.ts";
-import { shownStateOf } from "~/lib/seats.ts";
+import { countedStateOf, stateGroupOf } from "~/lib/seats.ts";
 
 /** The three windows the screen reads over, and what each is called. */
 export const HOME_RANGES = [
@@ -139,13 +139,13 @@ export function deltaWords(
   return `${diff > 0 ? "+" : diff < 0 ? "−" : "±"}${Math.abs(diff).toLocaleString()}`;
 }
 
-/** The seats in each state the engine names, for the first tile. */
+/** The seats in each state group ([stateGroupOf]), for the first tile. */
 export interface Crew {
   working: number;
   needs: number;
-  /** Every seat the engine calls stopped, the paused ones among them. */
+  /** Every paused or stopped seat. */
   stopped: number;
-  /** The stopped seats a person paused (`shownStateOf` reads "paused"). */
+  /** The paused seats among them, one still finishing its turn included ([countedStateOf]). */
   paused: number;
   idle: number;
   total: number;
@@ -154,12 +154,10 @@ export interface Crew {
 export function crewOf(agents: readonly AgentRow[]): Crew {
   const crew: Crew = { working: 0, needs: 0, stopped: 0, paused: 0, idle: 0, total: agents.length };
   for (const a of agents) {
-    if (a.activity === "working") crew.working++;
-    else if (a.activity === "needs") crew.needs++;
-    else if (a.activity === "stopped") {
-      crew.stopped++;
-      if (shownStateOf(a) === "paused") crew.paused++;
-    } else if (a.activity === "idle") crew.idle++;
+    const state = countedStateOf(a);
+    const group = stateGroupOf(state);
+    if (group !== "offline") crew[group]++;
+    if (state === "paused") crew.paused++;
   }
   return crew;
 }
