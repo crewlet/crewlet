@@ -157,9 +157,17 @@ export function AppPane({
     nav.replace(route.path, back);
   };
   const landed = useRef<(() => void) | null>(null);
+  // WHAT THE DOCUMENT HOLDS, which every save that lands changes.
+  const standing = JSON.stringify(
+    tool.sections.map((s) => [
+      s.tool.configured,
+      s.tool.satisfied,
+      s.tool.requirements.map((r) => [r.present, r.value ?? ""]),
+    ]),
+  );
   useEffect(() => {
     if (tool.configured) landed.current?.();
-  }, [tool.configured]);
+  }, [tool.configured, standing]);
   useEffect(() => () => landed.current?.(), []);
   // A PERSON'S CHOICE OF OPEN OR PUT AWAY for the form's Setup steps, held
   // here so it lasts the page view rather than one opening of the form.
@@ -256,7 +264,9 @@ export function AppPane({
   function afterWrite(): Promise<void> | undefined {
     saved.current = true;
     model.watch();
-    if (tool.configured) return undefined;
+    // AN UNFINISHED CONNECTION WAITS FOR ITS SAVE TO BE READ, since where the
+    // page lands after it (the form again, or Agents) is decided from that.
+    if (tool.configured && !unfinished) return undefined;
     return new Promise<void>((resolve) => {
       const timer = setTimeout(done, WATCH_MS);
       function done() {

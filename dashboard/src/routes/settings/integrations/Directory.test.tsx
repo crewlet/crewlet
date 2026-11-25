@@ -616,6 +616,33 @@ const unfinished = {
   ),
 } as unknown as SetupListing;
 
+// A SAVE THAT FINISHES THE SETUP LANDS ON AGENTS, decided from the reading that
+// shows the save, never from the one before it, which would open the form again.
+// Mutation: close the form at once on an unfinished connection and the page
+// lands back on the form.
+test("saving the last answer of an unfinished connection lands on Agents", async () => {
+  location.hash = "#/company/integrations/gitlab";
+  // THE READ AFTER THE SAVE STILL PREDATES IT, as an engine's may; the next has it.
+  let after = -1;
+  const setup = {
+    status: 200,
+    get body(): unknown {
+      if (after < 0) return unfinished;
+      return after++ === 0 ? unfinished : listing;
+    },
+  };
+  mount(ADMIN, ROUTED, BUILT_IN, setup);
+  const form = await screen.findByRole("form", { name: "GitLab settings" });
+  fireEvent.change(within(form).getByLabelText(/Admin token/), { target: { value: "glpat-new" } });
+  after = 0;
+  fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(location.hash).toBe("#/company/integrations/gitlab"), {
+    timeout: 5000,
+  });
+  expect(await screen.findByRole("tab", { name: /Agents/, selected: true })).toBeTruthy();
+  expect(screen.queryByRole("form", { name: "GitLab settings" })).toBeNull();
+});
+
 // AN UNFINISHED CONNECTION LEADS WITH ITS SETUP: the bare address opens the
 // form (written into the address), and its Agents tab says what is next
 // rather than offering agents it cannot give access to yet.
