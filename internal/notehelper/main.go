@@ -110,24 +110,34 @@
 //     the limit cuts spending all of it. A list of file names relative to a
 //     checkout's root hands its first regular file (Codex:
 //     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>,
-//     "suffix": <s>, "scoped": {"keys": [...], "whole": [...]}}, hands each
-//     file below dir whose name ends in s in any case, whole, apart by a blank
-//     line, walked as Copilot 1.0.114 walks .claude/rules (measured): depth
-//     first, a directory's entries by name in byte order, dot entries
-//     skipped, a file link followed while it stays in the checkout, a
-//     directory link never. `scoped` leaves out a file Copilot loads only
-//     lazily, on a path its frontmatter names, read as its line reader reads
-//     it: line 1, after an optional BOM, is `---`, a `---` line closes it,
-//     and between them the first of keys with a case-exact `<key>:` line,
-//     indentation trimmed, has a value that, split on `,` or read as
-//     `[a, b]`, quotes trimmed, holds an entry outside whole. A tree past 8
-//     directories deep, 1,024 entries or 32 MiB is left out whole, said:
-//     Copilot walks 9 levels (measured), so a deeper tree is the gap. For
-//     Grok Build 1.0.92 (measured): a tree's "flat" reads no directory below
-//     it and "dots" takes a dot file too (.grok/rules); a list of names as
-//     {"names": [...], "inside": true} follows a link only while it stays in
-//     the checkout; and "once" on either hands no file an earlier slot
-//     handed, by real path;
+//     "suffix": <s>, "form": <harness>, "scoped": {"keys": [...], "whole":
+//     [...]}}, hands each file below dir whose name ends in s, whole, apart by
+//     a blank line, walked depth first, a directory's entries by name in byte
+//     order, a file link followed while it stays in the checkout, and
+//     `scoped` leaving out a file its harness loads only lazily, on a path
+//     its frontmatter names: frontmatter is a line `---` first, after an
+//     optional BOM, to the next `---` line, and the first of keys present in
+//     it holds an entry outside whole. Each form is its harness's walk of
+//     .claude/rules (measured). `copilot` (1.0.114): s in any case, dot
+//     entries skipped, a directory link never followed; keys read as its line
+//     reader reads them, a case-exact `<key>:` line, indentation trimmed,
+//     whose value, split on `,` or read as `[a, b]`, quotes trimmed, is the
+//     entries. `claude` (2.1.310): s in its own case, dot entries walked, a
+//     directory link, dir itself included, followed while it stays in the
+//     checkout, each directory once, an empty file skipped; frontmatter read
+//     as YAML, a file whose frontmatter is not valid YAML left out (it never
+//     loads), a key's value a string or a list's strings, split on `,`,
+//     trimmed, its other entries and another kind holding none. A tree past 8 directories deep, 1,024 entries or 32 MiB is
+//     left out whole, said: Copilot walks 9 levels and Claude Code 10 at least
+//     (measured), so a deeper tree is the gap. `grok` (Grok Build 1.0.92,
+//     measured): the files directly in dir alone, dot files too, s in any
+//     case, every one, so it takes no scope. For Grok, too, a list of names
+//     as {"names": [...], "inside": true} follows a link only while it stays
+//     in the checkout, and "once" on either kind hands no file an earlier
+//     slot handed, by real path;
+//     `importInstructions` for a harness that reads them itself (Claude Code),
+//     each file then named as one `@<absolute path>` import in place of its
+//     text, no limit applying (checkoutimport.go);
 //   - `skillDirs`: the checkout's skill directories, an earlier one winning a
 //     name (Codex: [".codex/skills",".agents/skills"]), each skill a
 //     directory directly in one. {"dir": <d>, "recursive": true} walks d as
@@ -180,20 +190,22 @@
 // it replaces with a section per checkout, "for `<name>` with root <path>"
 // and its instructions, which the runner places where its harness reads them)
 // and `first` (the repositories the run pushes to, handed first; the rest by
-// name). It writes state/nested.json, the -config of the harness's nested
+// name), and `nestedSkillsOnly` for a nested adapter that hands no
+// instructions, whose spec then names none to read. It writes state/nested.json, the -config of the harness's nested
 // adapter, which the run's post-tool hook runs after each of the main loop's
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
 // (name, description, the copy's SKILL.md) as its hook's context;
-// grok-nested the same, each file as Grok's `## From: <path>`, within the
-// 10,000 characters Grok hands of one hook's answer, a checkout's whole
-// while they fit and every other named by its files to read; pi-nested
-// the same with each file in Pi's `<project_instructions path=...>`, on
+// claude-nested the listing alone, and nothing for a subagent's call;
+// grok-nested each file as Grok's `## From: <path>`, within the 10,000
+// characters Grok hands of one hook's answer, a checkout's whole while they
+// fit and every other named by its files to read; pi-nested the same as
+// codex-nested with each file in Pi's `<project_instructions path=...>`, on
 // stdout for the run's extension to add to the tool's result (Pi lists no
 // skill it did not start with and loads instructions only as it starts,
-// measured on 1.6.0). A nested hook only adds to what the launch hands, so
-// a runner whose box's settings switch it off starts all the same, its skip
+// measured on 1.6.0). A nested hook only adds to what the launch hands, so a
+// runner whose box's settings switch it off starts all the same, its skip
 // log saying so once; only the loss of a hook Crewlet's own contract runs on
 // (notes, skill loads) refuses a run. A harness taking checkouts adds a
 // nested adapter, never a second core; its runner holds the home file and the
@@ -297,8 +309,10 @@
 // standard library and two modules beyond it, each kept because dropping it
 // means hand-rolling a protocol, which #1818's ruling forbids:
 // golang.org/x/net/websocket (RFC 6455) and github.com/klauspost/compress/zstd
-// (RFC 8878, which std does not decode). Their versions are in the build's
-// module info, so a bump of either changes the builds, and
+// (RFC 8878, which std does not decode); and gopkg.in/yaml.v3, the engine's
+// own YAML module, as Claude Code reads a rule's frontmatter as YAML. Their
+// versions are in the build's module info, so a bump of any changes the
+// builds, and
 // .github/workflows/dependabot-notehelper.yml rebuilds them on Dependabot's
 // pull request.
 package main
