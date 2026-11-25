@@ -1,0 +1,172 @@
+{
+  "info": {
+    "id": "ses_e242dccb724a45651270165cd499097d",
+    "projectID": "6af72c5db6ed8f112517b1577cf77c9e1d825649",
+    "model": {
+      "id": "m",
+      "providerID": "stub",
+      "variant": "default"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 110,
+      "output": 55,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1795563533065,
+      "updated": 1795563537657,
+      "busy": 1795563537624,
+      "idle": 1795563537660
+    },
+    "title": "crewlet",
+    "location": {
+      "directory": "/tmp/work"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_20fed40e2001U5iVXsSu1Tk3Po",
+      "time": {
+        "created": 1795563536625
+      },
+      "text": "PLAIN: turn five\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20fed40f9001FlsdoSYi50Pn13",
+      "time": {
+        "created": 1795563536639,
+        "firstToken": 1795563536651,
+        "streamed": 1795563536656,
+        "completed": 1795563536657
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "reply to PLAIN: turn five"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed4114001Lk5EmOy13aK09D",
+      "time": {
+        "created": 1795563536660
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "type": "compaction",
+      "id": "msg_20fed432f001RFRM8zfAnou83K",
+      "metadata": {
+        "keepID": "msg_20fed40e2001U5iVXsSu1Tk3Po"
+      },
+      "time": {
+        "created": 1795563537208
+      },
+      "status": "completed",
+      "reason": "manual",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "summary": "## Objective\n- Stub summary 10.\n\n## Next Move\n1. (none)",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed4357001aesI2yeMPfvt5b",
+      "time": {
+        "created": 1795563537239
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_20fed44d10010d9chfD2PnzxFq",
+      "time": {
+        "created": 1795563537628
+      },
+      "text": "PLAIN: turn six\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20fed44e2001ehNzNK4fCUsF4a",
+      "time": {
+        "created": 1795563537640,
+        "firstToken": 1795563537650,
+        "streamed": 1795563537656,
+        "completed": 1795563537657
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "reply to PLAIN: turn six"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed44fc001xLgtm4IPJ8j7Fc",
+      "time": {
+        "created": 1795563537660
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}

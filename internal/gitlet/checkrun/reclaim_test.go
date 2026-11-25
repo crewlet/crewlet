@@ -53,6 +53,22 @@ func (f *fleet) killed(box *sandbox.FakeSandbox) bool {
 	return slices.Contains(f.container.KilledIDs(), box.ID())
 }
 
+// reclaimedOnce nudges r until box is killed and its reclaim logged, awaiting
+// the line itself, since Runner.kill records a kill before it writes the line;
+// then until a walk begun after it has ended (walks.walked), so the reclaim
+// that wrote it, and the next, are over. Then one line must name a reclaim.
+func (f *fleet) reclaimedOnce(r *checkrun.Runner, w *walks, logged *lines, box *sandbox.FakeSandbox) {
+	f.t.Helper()
+	eventually(f.t, "box "+box.ID()+" reclaimed and its reclaim logged", func() bool {
+		r.Nudge()
+		return f.killed(box) && logged.count("code_check_box_reclaimed") >= 1
+	})
+	w.walked(f.t, r, 1)
+	if n := logged.count("code_check_box_reclaimed"); n != 1 {
+		f.t.Errorf("one reclaim was logged %d times, want once", n)
+	}
+}
+
 // judging is a data node's code domain, counting the reads a runner's reclaim
 // judges a box by — an attempt's row at linearizable — by attempt.
 type judging struct {
@@ -160,6 +176,8 @@ func TestABoxOfALiveAttemptIsLeftAloneUntilItsAttemptEnds(t *testing.T) {
 	o.Estate = reads
 	o.Timing.Backstop = time.Hour
 	logged := logging(&o)
+	var w walks
+	w.counting(&o)
 	r := f.runner(o)
 	// JUDGED AND KEPT TWICE, each a poll apart: at the start and on a walk.
 	eventually(t, "both boxes judged twice", func() bool {
@@ -171,15 +189,9 @@ func TestABoxOfALiveAttemptIsLeftAloneUntilItsAttemptEnds(t *testing.T) {
 	}
 
 	f.lose(live)
-	eventually(t, "the ended attempt's box reclaimed on a walk", func() bool {
-		r.Nudge()
-		return f.killed(liveBox)
-	})
+	f.reclaimedOnce(r, &w, logged, liveBox)
 	if f.killed(makingBox) {
 		t.Error("a walk reclaimed the box of an attempt still running, which names no box yet")
-	}
-	if n := logged.count("code_check_box_reclaimed"); n != 1 {
-		t.Errorf("one reclaim was logged %d times, want once", n)
 	}
 }
 
@@ -304,29 +316,30 @@ func TestAKillTheRuntimeRefusesIsNoReclaimAndIsTriedAgain(t *testing.T) {
 	o := f.options("git-a", 1, &order{nodes: []string{"git-a"}})
 	o.Timing.Backstop = time.Hour
 	logged := logging(&o)
+	var w walks
+	w.counting(&o)
 	r := f.runner(o)
 	eventually(t, "the refused kill tried again on a walk", func() bool {
 		r.Nudge()
 		return refused.Load() >= 2
 	})
+	// The first refusal's lines are all written: the second is tried only once
+	// Runner.kill has returned from the first.
 	if n := logged.count("code_check_box_reclaimed"); n != 0 {
 		t.Fatalf("a box whose kill was refused was logged reclaimed %d times", n)
 	}
-	if n := logged.count("code_check_box_reclaim_failed"); n < 2 {
-		t.Errorf("%d refused kills were logged as failed reclaims, want each", n)
-	}
+	// KillFunc counts a refusal before the runner logs it, so the lines are
+	// awaited, never read at once.
+	tried := int(refused.Load())
+	eventually(t, "each refused kill logged as a failed reclaim", func() bool {
+		return logged.count("code_check_box_reclaim_failed") >= tried
+	})
 	if !f.listed(box) {
 		t.Fatal("a box whose kill was refused is no longer listed, so no walk would judge it again")
 	}
 
 	refusing.Store(false)
-	eventually(t, "the box reclaimed once its kill lands", func() bool {
-		r.Nudge()
-		return f.killed(box)
-	})
-	if n := logged.count("code_check_box_reclaimed"); n != 1 {
-		t.Errorf("one reclaim was logged %d times, want once", n)
-	}
+	f.reclaimedOnce(r, &w, logged, box)
 }
 
 // A BOX ITS RUN COULD NOT CLOSE IS RECLAIMED ONCE ITS ATTEMPT HAS ENDED: a
@@ -342,6 +355,8 @@ func TestABoxItsRunCouldNotCloseIsReclaimedOnceItsAttemptHasEnded(t *testing.T) 
 	f.container.closeErr = errors.New("cannot remove container: could not kill: device or resource busy")
 	o := f.options("git-a", 1, &order{nodes: []string{"git-a"}})
 	logged := logging(&o)
+	var w walks
+	w.counting(&o)
 	r := f.runner(o)
 	key := f.queue(oidOf("1"), def("unit", time.Minute))
 	box := f.container.box(t)
@@ -352,11 +367,5 @@ func TestABoxItsRunCouldNotCloseIsReclaimedOnceItsAttemptHasEnded(t *testing.T) 
 		t.Fatal("the premise: a box whose close was refused reads as closed")
 	}
 
-	eventually(t, "the box its run could not close reclaimed", func() bool {
-		r.Nudge()
-		return f.killed(box)
-	})
-	if n := logged.count("code_check_box_reclaimed"); n != 1 {
-		t.Errorf("one reclaim was logged %d times, want once", n)
-	}
+	f.reclaimedOnce(r, &w, logged, box)
 }

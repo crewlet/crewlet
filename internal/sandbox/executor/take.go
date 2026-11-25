@@ -851,8 +851,8 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox, bound string,
 		return sessionRecord{}, false, err
 	}
 	// THE RELEASE THAT WROTE THE SESSION, off the record the engine read, which
-	// a pack trims by alone ([trimRelVar]), and its run's start, which a chat
-	// file is never cut past ([trimStartVar]).
+	// a pack trims by alone ([trimRelVar]), and its run's start, which no trim
+	// cuts past ([trimStartVar]).
 	script := "PATH=" + shellword.Quote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" +
 		trimRelVar + "=" + shellword.Quote(releaseOf(rec.release)) + "\n" + trimStartVar + "=" +
 		trimStartOf(rec, r.harness) + "\n" + packs
