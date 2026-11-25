@@ -23,8 +23,8 @@ const codexProjectDocMaxBytes = 32 << 10
 // project_doc_max_bytes, and the skills of its .codex/skills and
 // .agents/skills.
 func codexCheckouts(limit int) checkoutSpec {
-	return checkoutSpec{Instructions: [][]string{{"AGENTS.override.md", "AGENTS.md"}}, Limit: &limit,
-		SkillDirs: []string{".codex/skills", ".agents/skills"}}
+	return checkoutSpec{Instructions: []checkoutSlot{{Names: []string{"AGENTS.override.md", "AGENTS.md"}}}, Limit: &limit,
+		SkillDirs: []checkoutSkillDir{{Dir: ".codex/skills"}, {Dir: ".agents/skills"}}}
 }
 
 // codexCheckoutHome is where a Codex run keeps its checkouts' instructions
@@ -33,8 +33,8 @@ func codexCheckouts(limit int) checkoutSpec {
 // `<repository>:<skill>`.
 func codexCheckoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.CodexRepo(), helper: paths.CodexNoteHelper(), launch: paths.CodexCheckoutLaunch(),
-		agents: paths.CodexHome() + "/AGENTS.md", held: paths.CodexHomeInstructions(), sections: paths.CodexRepoAgents(),
-		skills: paths.CodexSkills(), staging: checkoutStaging(paths.CodexSkills()), copied: paths.CodexRepoSkills()}
+		agents: []string{paths.CodexHome() + "/AGENTS.md"}, held: paths.CodexHomeInstructions(), sections: paths.CodexRepoAgents(),
+		skills: paths.CodexSkills(), copied: paths.CodexRepoSkills()}
 }
 
 // CodexCheckoutLaunch is the run's checkout-launch config, which its launch

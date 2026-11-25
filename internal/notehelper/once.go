@@ -25,13 +25,24 @@ import (
 // harness's hook input and writes the answer in its harness's shape.
 
 // oneShots is every adapter the helper runs once per firing, by -adapter.
-var oneShots = map[string]func(ctx context.Context, f flags, stdin io.Reader, stdout, stderr io.Writer,
-	getenv func(string) string) int{
-	"muse-hook":       runMuseHook,
-	"grok-hook":       runGrokHook,
-	"checkout-launch": runCheckoutLaunch,
-	"codex-nested":    runCodexNested,
-	"codex-renew":     runCodexRenew,
+var oneShots = map[string]oneShot{
+	"muse-hook":         {run: runMuseHook, config: true},
+	"grok-hook":         {run: runGrokHook, config: true},
+	"checkout-launch":   {run: runCheckoutLaunch, config: true},
+	"codex-nested":      {run: runCodexNested, config: true},
+	"claude-nested":     {run: runClaudeNested, config: true},
+	"codex-bridge":      {run: runCodexBridge, config: true},
+	"pi-nested":         {run: runPiNested, config: true},
+	"codex-renew":       {run: runCodexRenew, config: true},
+	"codex-materialize": {run: runCodexMaterialize},
+}
+
+// oneShot is one adapter run once: its run, and whether it reads -config,
+// which it then requires; one that reads none refuses it.
+type oneShot struct {
+	run func(ctx context.Context, f flags, stdin io.Reader, stdout, stderr io.Writer,
+		getenv func(string) string) int
+	config bool
 }
 
 // runOnce runs args as a one-shot adapter's firing, and is its exit status
@@ -52,6 +63,8 @@ func runOnce(ctx context.Context, args []string, getenv func(string) string, std
 	f.digests = digestFlag{}
 	set.Var(f.digests, "skill-digest", "")
 	set.StringVar(&f.rollout, "rollout", "", "")
+	set.StringVar(&f.sessions, "sessions", "", "")
+	set.StringVar(&f.thread, "thread", "", "")
 	if set.Parse(args) != nil {
 		return 0, false
 	}
@@ -59,12 +72,16 @@ func runOnce(ctx context.Context, args []string, getenv func(string) string, std
 	if !ok {
 		return 0, false
 	}
-	if set.NArg() > 0 || f.config == "" {
-		fmt.Fprintln(stderr, "notehelper: a one-shot adapter takes -config, the take config's file, and no "+
-			"other arguments")
+	switch {
+	case set.NArg() > 0 || (once.config && f.config == ""):
+		fmt.Fprintf(stderr, "notehelper: %s takes -config, the take config's file, and no other arguments\n",
+			f.adapter)
+		return exitUsage, true
+	case !once.config && f.config != "":
+		fmt.Fprintf(stderr, "notehelper: %s reads no -config\n", f.adapter)
 		return exitUsage, true
 	}
-	return once(ctx, f, stdin, stdout, stderr, getenv), true
+	return once.run(ctx, f, stdin, stdout, stderr, getenv), true
 }
 
 // takeConfig is what a one-shot run reads from the file -config names: the

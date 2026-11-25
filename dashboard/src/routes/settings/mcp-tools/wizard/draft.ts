@@ -223,17 +223,39 @@ function firstSignIn(entry: McpCatalogueEntry): McpAuthMethod {
 }
 
 /**
+ * A catalogue entry's rows for a sign-in, keeping what `current` holds: none the
+ * integration sends in its own sign-in unless the entry stores a value, which wins.
+ */
+export function catalogueRows(
+  entry: McpCatalogueEntry,
+  signIn: SignInChoice,
+  current: readonly ValueRow[],
+): ValueRow[] {
+  const inputs = (entry.transport === "http" ? entry.headers : entry.env).filter(
+    (i) => i.value === "",
+  );
+  const sent = new Set(
+    signIn === "integration" ? inputs.filter((i) => i.from_integration).map((i) => i.name) : [],
+  );
+  const held = new Map(current.map((r) => [r.key.trim(), r]));
+  const rows = inputs
+    .filter((i) => !sent.has(i.name) || held.get(i.name)?.stored)
+    .map((i) => ({
+      ...(held.get(i.name) ?? newRow(i.name)),
+      required: i.required,
+      format: i.format,
+    }));
+  const named = new Set(inputs.map((i) => i.name));
+  return [...rows, ...current.filter((r) => !named.has(r.key.trim()))];
+}
+
+/**
  * A draft from a catalogue entry: its launch, its sign-in and the keys a
- * person fills. A key the integration fills for each agent, or one the entry
- * sets to a fixed value, is not a row: the first is nobody's to type, the
- * second is written as the entry says (`fixedValues`).
+ * person fills for it ([catalogueRows]).
  */
 export function fromCatalogue(entry: McpCatalogueEntry, base: Draft): Draft {
-  const rows = (inputs: McpCatalogueEntry["headers"]) =>
-    inputs
-      .filter((i) => !i.from_integration && i.value === "")
-      .map((i) => newRow(i.name, { required: i.required, format: i.format }));
   const signIn = firstSignIn(entry);
+  const rows = catalogueRows(entry, signIn, []);
   return {
     ...base,
     catalogue: entry,
@@ -246,8 +268,8 @@ export function fromCatalogue(entry: McpCatalogueEntry, base: Draft): Draft {
     toolPrefix: entry.tool_prefix,
     signIn,
     oauthClient: entry.oauth_client || "cimd",
-    headers: rows(entry.headers),
-    env: rows(entry.env),
+    headers: entry.transport === "http" ? rows : [],
+    env: entry.transport === "http" ? [] : rows,
     shared: !entry.integration,
     detected: { auth: signIn, from: "catalogue", title: entry.title, client: entry.oauth_client },
     supported: entry.auth,
@@ -344,9 +366,13 @@ export function rowsOf(d: Draft): ValueRow[] {
   return d.transport === "http" ? d.headers : d.env;
 }
 
-/** Whether the draft's rows are sent at all: an integration's server takes none typed here for a remote one. */
-function sendsRows(d: Draft): boolean {
-  return d.transport === "stdio" || d.signIn === "headers";
+/**
+ * Whether the draft's rows are sent: a local server's always, a remote one's
+ * with a header sign-in, or with an integration's, whose rows are the keys
+ * it does not send. An OAuth server's headers are no rows.
+ */
+export function sendsRows(d: Draft): boolean {
+  return d.transport === "stdio" || d.signIn === "headers" || d.signIn === "integration";
 }
 
 /** Whether the draft signs in with OAuth, as a person or as a service identity. */

@@ -67,6 +67,9 @@ function session(over: Partial<ExecutorSessionRow> = {}): ExecutorSessionRow {
     ask_excerpt: "## Task\n\nFix the **flaky** cache test.",
     kept: true,
     object_bytes: 41234,
+    media_bytes: 0,
+    summary_kept: false,
+    summary_bytes: 0,
     in_progress: false,
     continued_by: "next_turn",
     continuable: true,
@@ -220,6 +223,7 @@ test("a session no longer kept states no size kept", () => {
     </Router>,
   );
   expect(screen.getByText(/40 KiB kept/)).toBeTruthy();
+  expect(screen.queryByText(/of it media/)).toBeNull();
   unmount();
 
   render(
@@ -240,6 +244,44 @@ test("a session no longer kept states no size kept", () => {
   // A SIZE KEPT, never the word: the sentence saying whether a launch
   // continues the session may say the session is not kept.
   expect(screen.queryByText(/B kept/)).toBeNull();
+});
+
+// A ROW KEEPING ITS SESSION'S NEWEST SUMMARY SAYS SO, with the summary's size,
+// whether or not it keeps the session: a summary is what a row keeping no
+// session reads as, so a reader picks that row knowing it has words to read.
+//
+// Mutation: draw the summary's size only beside a kept session, and the second
+// render draws none.
+test("a row keeping its session's newest summary says so beside its size", () => {
+  const { unmount } = render(
+    <Router>
+      <SessionAccount row={session({ summary_kept: true, summary_bytes: 61440 })} />
+    </Router>,
+  );
+  expect(screen.getByText(/40 KiB kept · 60 KiB summary kept/)).toBeTruthy();
+  unmount();
+
+  render(
+    <Router>
+      <SessionAccount
+        row={session({ kept: false, object_bytes: 0, summary_kept: true, summary_bytes: 61440 })}
+      />
+    </Router>,
+  );
+  expect(screen.getByText(/60 KiB summary kept/)).toBeTruthy();
+  expect(screen.queryByText(/B kept ·/)).toBeNull();
+});
+
+// A SESSION KEEPING ITS MEDIA APART STATES THEM IN ITS SIZE: the seat's budget
+// counts the session's text and its media, so the size kept is both, and how
+// much of it is media.
+test("a session keeping its media apart states them in its size kept", () => {
+  render(
+    <Router>
+      <SessionAccount row={session({ object_bytes: 2 << 20, media_bytes: 40 << 20 })} />
+    </Router>,
+  );
+  expect(screen.getByText(/42 MiB kept, 40 MiB of it media/)).toBeTruthy();
 });
 
 /** Why a parked turn's kept capture is continued in no other box. */
@@ -519,6 +561,23 @@ test("a turn whose runs did not continue a session says so in the engine's words
   render(
     <Router>
       <SessionAccount row={session({ not_continued_note: said })} />
+    </Router>,
+  );
+  expect(screen.getByText(said)).toBeTruthy();
+});
+
+// A TRIMMED SESSION SAYS SO IN THE ENGINE'S WORDS, drawn as sent: its
+// transcript begins at its newest compaction, and nothing else on the row says
+// the history before it is gone.
+//
+// Mutation: drop the note's line, or reword it, and the sentence is not found.
+test("a session kept trimmed says the history before its compaction is gone", () => {
+  const said =
+    "The history before this session's newest compaction was trimmed to keep it within the bound " +
+    "a kept session is held to: its transcript begins there.";
+  render(
+    <Router>
+      <SessionAccount row={session({ trimmed_note: said })} />
     </Router>,
   );
   expect(screen.getByText(said)).toBeTruthy();

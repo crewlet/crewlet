@@ -220,6 +220,7 @@ const (
 	ExecutorSpoolWait      = "crewlet.executor.spool.wait"
 
 	ExecutorSessionNotContinued = "crewlet.executor.session.not_continued"
+	ExecutorSessionTrimmed      = "crewlet.executor.session.trimmed"
 )
 
 // THE NODE'S ANSWER BUDGET'S INSTRUMENTS, which internal/queue measures and

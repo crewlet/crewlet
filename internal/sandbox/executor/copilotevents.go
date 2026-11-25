@@ -158,6 +158,9 @@ type copilotEvents struct {
 	// run ([copilotCapMessage]): the three together are a capped run.
 	aborted, idleAborted bool
 	capped               string
+	// unkept is the extension's line saying it stopped a capped run whose
+	// count it could not keep or read back ([copilotUnkeptMessage]).
+	unkept string
 
 	// capTurns is the turn cap the script said the run had, 0 for none, and
 	// armed whether the extension that enforces it said it ran.
@@ -166,6 +169,12 @@ type copilotEvents struct {
 
 	// denied is the first seat tool call a hook refused: the tool and why.
 	denied string
+
+	// guarded is whether the script said the run had a bridge to guard
+	// ([copilotBridgeGuardMark]); unbridged the extension's words where it stopped
+	// the run for an agent's server under a bridge's name.
+	guarded   bool
+	unbridged string
 
 	// calls is each running call's place in the transcript and whether it is
 	// a seat tool's (one the run's own MCP configuration declared).
@@ -263,6 +272,9 @@ func (d *copilotEvents) Line(line []byte) {
 	case "tool.execution_complete":
 		d.completed(data)
 	case "session.error":
+		if d.unbridged == "" && strings.HasPrefix(data.Message, copilotUnbridgedMessage) {
+			d.unbridged = strings.TrimPrefix(data.Message, "crewlet: ")
+		}
 		d.failure, d.failureType = firstNonBlank(data.Message, data.ErrorType, "the session failed"), data.ErrorType
 		d.failureLine = boundedEvent(line)
 		if data.ErrorType == copilotRateLimit || data.ErrorType == copilotQuota {
@@ -279,9 +291,13 @@ func (d *copilotEvents) Line(line []byte) {
 			d.capped = strings.TrimPrefix(data.Message, "crewlet: ")
 		case data.Message == copilotArmedMessage:
 			d.armed = true
+		case data.Message == copilotUnkeptMessage:
+			d.unkept = strings.TrimPrefix(data.Message, "crewlet: ")
 		}
 	case copilotCapMark:
 		d.capTurns = data.Turns
+	case copilotBridgeGuardMark:
+		d.guarded = true
 	case copilotUsageMark:
 		d.marked = true
 	case "session.compaction_start":
@@ -442,6 +458,13 @@ func (d *copilotEvents) Result() sandbox.Result {
 	case d.unheld() != "":
 		// FAILED CLOSED: the run went on with nothing holding it to its cap.
 		res.Error = d.unheld()
+	case d.unbridged != "":
+		res.Error, res.Unbridged = d.unbridged, true
+	case d.guarded && !d.armed:
+		// FAILED CLOSED, as for the cap: nothing held another server off the
+		// bridge's names.
+		res.Error, res.Unbridged = "this run had Crewlet's own MCP server, and the extension that refuses another "+
+			"server under its names never ran, so nothing held them: "+(Copilot{}).notesOffWhy(), true
 	case d.denied != "":
 		res.Error = d.denied
 	case d.failure != "":
@@ -452,6 +475,10 @@ func (d *copilotEvents) Result() sandbox.Result {
 	case capped:
 		res.Error = d.capped
 		res.RoundCapped = true
+	case d.unkept != "":
+		// A FAILURE THAT SAYS WHY, never a cap: the extension stopped the run
+		// because no restart of it could have held the cap.
+		res.Error = d.unkept
 	case !d.result:
 		res.Error = "the harness stopped before it reported how its run ended"
 	case d.aborted:

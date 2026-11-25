@@ -30,8 +30,8 @@ func (p Paths) CopilotHeldInstructions() string { return p.WorkDir() + "/copilot
 func (p Paths) CopilotHeldSettings() string { return p.WorkDir() + "/copilot-home-settings.json" }
 
 // CopilotExtension is the directory of the run's notes extension
-// (copilot_steer.js), written as extension.mjs where the run reads notes or has
-// a turn cap, and removed where it has neither.
+// (copilot_steer.js), written as extension.mjs where the run reads notes, has
+// a turn cap or a bridge to guard, and removed where it has none of them.
 func (p Paths) CopilotExtension() string { return p.CopilotHome() + "/extensions/crewlet-notes" }
 
 // CopilotSessionDir is session's directory under the run's home: its
@@ -48,6 +48,12 @@ func (p Paths) CopilotSessionDir(session string) string {
 // where it continues ([copilotSessionGate]). Beside the run's other artefacts,
 // never in the extension's directory, which Copilot reads.
 func (p Paths) CopilotExtensionFresh() string { return p.WorkDir() + "/copilot-extension-fresh.mjs" }
+
+// CopilotNotesState is the file the run's notes extension keeps its requests
+// counted, its cursor and the notes it sent in (copilot_steer.js), so that one
+// Copilot restarts in the session (extensions_reload) resumes them. Beside the
+// run's other artefacts, cleared before every run ([Copilot.artifactFiles]).
+func (p Paths) CopilotNotesState() string { return p.WorkDir() + "/copilot-notes-state.json" }
 
 // CopilotGuardSettings is where the launch writes the settings the guard asks
 // the box's Copilot about ([copilotGuard]), which the guard's shell moves into

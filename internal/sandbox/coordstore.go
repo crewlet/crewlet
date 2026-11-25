@@ -839,18 +839,43 @@ func (s *CoordStore) stampCapture(ctx context.Context, turnID string, capture Se
 	// SET ON EVERY ASK OF decide, which reruns on a lost race: the last is the
 	// row the answer is about, if the last attempt found one
 	// ([CoordStore.writeFound]).
-	var held bool
-	_, won, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
-		held = holdsStamp(*run, capture)
+	var held, stamped bool
+	_, _, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		held, stamped = holdsStamp(*run, capture), false
+		named := nameSummary(run, capture)
 		if over != nil && !over(*run, capture) {
-			return false
+			return named
 		}
-		return stampOnto(run, capture)
+		stamped = stampOnto(run, capture)
+		return stamped || named
 	})
 	if err != nil {
 		return false, err
 	}
-	return won || (found && held), nil
+	return found && (stamped || held), nil
+}
+
+// nameSummary names capture's summary, the newest its take's read kept, on
+// run's row where it is newer than the one the row names
+// ([SummaryStamp.newerThan]), reporting whether it did. PLACED AT THE CAPTURE,
+// or where the row's names the same summary, at that one's place: a summary
+// found again (copied past its key's age, [SummaryStamp.names]) stays where it
+// was first found, so a capture between the two places is not told it lacks
+// what it holds.
+func nameSummary(run *PendingRun, capture SessionCapture) bool {
+	if capture.Summary == nil {
+		return false
+	}
+	named := *capture.Summary
+	named.LaunchSeq, named.CaptureSeq = capture.LaunchSeq, capture.CaptureSeq
+	if run.Summary != nil && run.Summary.Digest == named.Digest {
+		named.LaunchSeq, named.CaptureSeq = run.Summary.LaunchSeq, run.Summary.CaptureSeq
+	}
+	if named.Bounded() != nil || (run.Summary != nil && !named.newerThan(*run.Summary)) {
+		return false
+	}
+	run.Summary = &named
+	return true
 }
 
 // RetireSessions records the sessions a job of the turn spent, and how. See the
@@ -2832,6 +2857,22 @@ func (s *CoordStore) MarkSessionStart(ctx context.Context, turnID, launch string
 			return false
 		}
 		run.Launch.SessionStart = start
+		return true
+	})
+	return marked, err
+}
+
+// MarkBridgeConnected records that a job's harness connected its bridge. See
+// the contract on [PendingStore].
+func (s *CoordStore) MarkBridgeConnected(ctx context.Context, turnID, launch string) (bool, error) {
+	if launch == "" {
+		return false, nil
+	}
+	_, marked, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.Launch.BridgeConnected {
+			return false
+		}
+		run.Launch.BridgeConnected = true
 		return true
 	})
 	return marked, err

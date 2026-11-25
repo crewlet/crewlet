@@ -221,6 +221,7 @@ export function pagePath(path: readonly string[]): string[] {
 export const INBOX_ITEM_KINDS = [
   "ask",
   "run",
+  "fold_in",
   "seat",
   "condition",
   "notice",
@@ -229,6 +230,14 @@ export const INBOX_ITEM_KINDS = [
 ] as const;
 
 export type InboxItemKind = (typeof INBOX_ITEM_KINDS)[number];
+
+/** An Inbox row's key, `<kind>:<id>`: typed so a row of a kind with no address fails the typecheck. */
+export type InboxRowKey = `${InboxItemKind}:${string}`;
+
+/** The row key of an Inbox item of `kind`, the one way a row key is built. */
+export function inboxRowKey(kind: InboxItemKind, id: string): InboxRowKey {
+  return `${kind}:${id}`;
+}
 
 /**
  * An Inbox item's address from its row key (`<kind>:<id>`): `#/inbox/<kind>/<id>`, a `/` in an id

@@ -44,7 +44,7 @@ type exportReading struct {
 func (OpenCode) meter(ctx context.Context, r io.Reader, _, release string,
 	_ *passBudget) (meterReading, error) {
 
-	export, err := meterExport(ctx, r, release)
+	export, err := meterExport(ctx, r, release, nil)
 	return meterReading{tokens: export.figure, count: export.count, provider: export.provider,
 		next: export.next}, err
 }
@@ -52,9 +52,10 @@ func (OpenCode) meter(ctx context.Context, r io.Reader, _, release string,
 // meterExport reads r, an OpenCode export gzipped, once, within ctx: the
 // floor's figure and OpenCode's count of the session ([openCodeCountReading]),
 // the count read by the rules of release, the box's word on the release that
-// wrote it ([openCodeCountRead]). An export that does not read to its end has
-// no figure and an unread count; err is what ended the read.
-func meterExport(ctx context.Context, r io.Reader, release string) (exportReading, error) {
+// wrote it ([openCodeCountRead]); and, into summary where it is not nil, the
+// newest summary. An export that does not read to its end has no figure and
+// an unread count; err is what ended the read.
+func meterExport(ctx context.Context, r io.Reader, release string, summary *summaryRead) (exportReading, error) {
 	var (
 		count   openCodeCountReading
 		callers countMarks
@@ -62,7 +63,7 @@ func meterExport(ctx context.Context, r io.Reader, release string) (exportReadin
 	if !openCodeCountRead(release) {
 		callers = callers.with(sandbox.CountRelease)
 	}
-	figure, err := countExport(ctx, r, &count)
+	figure, err := countExport(ctx, r, &count, summary)
 	if err != nil {
 		return exportReading{count: count.count(callers.with(sandbox.CountUnread))}, err
 	}
@@ -261,16 +262,20 @@ var errorPastBound = json.RawMessage("true")
 
 // countExport reads r, an OpenCode export gzipped, once on the export walk
 // ([scanExport]), within ctx: each message to count in order, and the floor's
-// figure, its last message that measured a prompt ([measuredPrompt]). An
+// figure, its last message that measured a prompt ([measuredPrompt]); and the
+// newest summary into summary where it is not nil ([exportMeter.summary]). An
 // error where the export is no export, or does not read to its end.
-func countExport(ctx context.Context, r io.Reader, count *openCodeCountReading) (int64, error) {
+func countExport(ctx context.Context, r io.Reader, count *openCodeCountReading, summary *summaryRead) (int64, error) {
 	zr, err := gzip.NewReader(r)
 	if err != nil {
 		return 0, err
 	}
-	m := &exportMeter{count: count}
+	m := &exportMeter{count: count, summary: summary}
 	if err = scanExport(ctx, zr, m); err != nil {
 		return 0, err
+	}
+	if summary != nil && m.lists > 1 {
+		summary.unshaped("the export gives its message list twice, so which one is the session's is the reader's")
 	}
 	return m.last, nil
 }
@@ -287,6 +292,14 @@ var meterAsks = exportAsksOf(map[exportFrame]map[int]exportMeans{
 	frameFile:       {fileType: meansWord, fileMime: meansWord},
 }, false)
 
+// meterSummaryAsks is [meterAsks] with a message's summary streamed
+// ([exportMeter.sink]), for a read that asks the newest summary.
+var meterSummaryAsks = func() *exportAsks {
+	asks := *meterAsks
+	asks.means[frameMessage][msgSummary] = meansStream
+	return &asks
+}()
+
 // exportMeter is the meter as the export walk's visitor: each message's small
 // values by their exact names, captured at [exportValueMaxBytes] and decoded
 // by [openCodeMeasuredWire]'s one rule; of each tool call the spans of its
@@ -298,6 +311,11 @@ var meterAsks = exportAsksOf(map[exportFrame]map[int]exportMeans{
 // cannot read, rather than hold whatever a box wrote there.
 type exportMeter struct {
 	count *openCodeCountReading
+	// summary, where it is not nil, is the newest summary read: a completed
+	// compaction's `summary`, as the transcript reads it
+	// ([openCodeReading.messageEnd]), streamed into words.
+	summary *summaryRead
+	words   summaryText
 	// last is the floor's figure; lists how many `messages` lists were met.
 	last  int64
 	lists int
@@ -316,11 +334,28 @@ type exportMeter struct {
 	partText, partPDF     bool
 }
 
-func (*exportMeter) asks() *exportAsks { return meterAsks }
+func (e *exportMeter) asks() *exportAsks {
+	if e.summary != nil {
+		return meterSummaryAsks
+	}
+	return meterAsks
+}
 
 func (*exportMeter) digest() *textDigest { return nil }
 
-func (*exportMeter) sink(exportFrame, int, jsonscan.Kind) io.Writer { return nil }
+// sink is where a message's summary is streamed: a key written twice holds
+// the last, and one that is no string none.
+func (e *exportMeter) sink(f exportFrame, i int, k jsonscan.Kind) io.Writer {
+	if e.summary == nil || f != frameMessage || i != msgSummary {
+		return nil
+	}
+	e.words.reset()
+	if k != jsonscan.String {
+		return nil
+	}
+	e.words.set = true
+	return &e.words
+}
 
 // open starts what a frame's members fold into.
 func (e *exportMeter) open(f exportFrame) error {
@@ -332,6 +367,7 @@ func (e *exportMeter) open(f exportFrame) error {
 			e.count.unread = true
 		}
 	case frameMessage:
+		e.words.reset()
 		// A MESSAGE THAT CAPTURED NOTHING LEAVES NOTHING TO CLEAR, so a list of
 		// empty messages costs no clearing of one.
 		if e.captured {
@@ -404,6 +440,9 @@ func (e *exportMeter) message(i int, v exportValue) error {
 			e.m.files = e.m.files.with(sandbox.CountMedia)
 		}
 		return nil
+	case msgSummary:
+		// Streamed into words ([exportMeter.sink]), and no capture.
+		return nil
 	case msgID:
 		to = &e.m.id
 	case msgType:
@@ -473,6 +512,9 @@ func (e *exportMeter) close(f exportFrame, v exportValue) error {
 			e.last = n
 		}
 		e.count.message(e.m, msg.Type)
+		if e.summary != nil && msg.Type == openCodeCompaction && looseString(e.m.status) == openCodeCompleted {
+			e.summary.taken(&e.words)
+		}
 	case frameItem:
 		if e.tool {
 			e.m.results += e.results
@@ -517,40 +559,55 @@ var _ mainThreadHarness = OpenCode{}
 // job's script left as the job ended ([openCodeCapture], [Paths.SessionCapture]),
 // which is the copy the box holds once its harness ended its own run (the
 // collection asks nothing of a job whose harness did not), walked ONCE for the
-// count and the estimate ([meterExport]). In this order, cheapest first: a
-// release outside the set the count's rules were read in is
-// [sandbox.CountRelease] with no read ([openCodeCountRead]); an export the
+// count, the estimate and the newest summary ([meterExport]). In this order,
+// cheapest first: a release outside the set the count's rules were read in is
+// [sandbox.CountRelease], and one its summary was not read on
+// [summaryReleaseWhy], with no read ([openCodeCountRead]); an export the
 // script left none of, or one that does not open, is [sandbox.CountUnread];
-// and only then is the export streamed and walked. A
-// count marked before the walk leaves the estimate none, as a Claude Code
-// thread's does.
+// and only then is the export streamed and walked. A count marked before the
+// walk leaves the estimate none, as a Claude Code thread's does.
 func (OpenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
-	if !ask.Count && !ask.Next {
-		return sandbox.MainThreadReading{}
+	var reading sandbox.MainThreadReading
+	counts := (ask.Count || ask.Next) && openCodeCountRead(ask.Release)
+	if ask.Count && !openCodeCountRead(ask.Release) {
+		reading.Count = &sandbox.ResumedCount{Mark: sandbox.CountRelease}
 	}
-	marked := func(mark sandbox.CountMark) sandbox.MainThreadReading {
-		if !ask.Count {
-			return sandbox.MainThreadReading{}
+	var summary *summaryRead
+	if ask.Summary {
+		if why := summaryReleaseWhy(ask.Release, openCodeRelease); why != "" {
+			reading.Summary = summaryUnread(why)
+		} else {
+			summary = &summaryRead{}
 		}
-		return sandbox.MainThreadReading{Count: &sandbox.ResumedCount{Mark: mark}}
 	}
-	if !openCodeCountRead(ask.Release) {
-		return marked(sandbox.CountRelease)
+	if !counts && summary == nil {
+		return reading
 	}
 	body, err := box.OpenFile(ctx, paths.SessionCapture())
 	if err != nil {
-		return marked(sandbox.CountUnread)
+		if ask.Count && counts {
+			reading.Count = &sandbox.ResumedCount{Mark: sandbox.CountUnread}
+		}
+		if summary != nil {
+			reading.Summary = summaryUnread("the session's export did not open: " + err.Error())
+		}
+		return reading
 	}
 	defer func() { _ = body.Close() }()
-	read, _ := meterExport(ctx, body, ask.Release)
-	var reading sandbox.MainThreadReading
-	if ask.Count {
+	read, err := meterExport(ctx, body, ask.Release, summary)
+	if ask.Count && counts {
 		reading.Count, reading.Provider = read.count, read.provider
 	}
-	if ask.Next {
+	if ask.Next && counts {
 		reading.Next = read.next
+	}
+	if summary != nil {
+		if err != nil {
+			summary.fail("the session's export did not read to its end: " + err.Error())
+		}
+		reading.Summary = summary.reading()
 	}
 	return reading
 }

@@ -41,6 +41,16 @@ var crossedAt = time.Unix(1_700_000_000, 0).UTC()
 // random past its instant, and answers naming two keys could not be compared.
 var sessionKey = objstore.KeyAt(crossedAt)
 
+// mediaKey is the object every case's media names, minted once for
+// [sessionKey]'s reason.
+var mediaKey = objstore.KeyAt(crossedAt)
+
+// mediaOf is one media object a session keeps apart, with every field set.
+func mediaOf() executorkeep.MediaObject {
+	return executorkeep.MediaObject{Digest: strings.Repeat("ab", executorkeep.MediaDigestBytes),
+		Object: objstore.Object{Key: mediaKey, Hash: objstore.HashOf([]byte("media")), Size: 4 << 20}, ContentKey: "k1"}
+}
+
 // atLog is a position on the executor log.
 func atLog(seq uint64) statelog.Position {
 	return statelog.Position{Stream: executorStream, Generation: 1, Seq: seq}
@@ -52,6 +62,13 @@ func engineCall(opID string) executordomain.Call {
 		By:   iam.Actor{Name: "executor", Kind: iam.ActorSystem, OperatorID: "node-1"},
 		OpID: opID,
 	}
+}
+
+// fullSummary is a kept summary with every field set.
+func fullSummary() *executorkeep.Summary {
+	return &executorkeep.Summary{Object: objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte("summary")),
+		Size: 512}, ContentKey: "k1", At: crossedAt, Bytes: 4096, Kept: 400, Cut: true, Harness: "claude-code",
+		Session: "sess-1", Place: executorkeep.CapturePlace{LaunchSeq: 2, CaptureSeq: 3}}
 }
 
 // fullEnding is an ending with every field set.
@@ -67,7 +84,8 @@ func fullEnding() executorkeep.Ending {
 			Loss: executorkeep.LossContextExhausted}},
 		NotContinued: []executorkeep.NotContinued{{Loss: executorkeep.LossCaptureLate,
 			Instead: executorkeep.InsteadOlder,
-			Older:   &executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 2}, Detail: "a newer capture was being kept"}}}
+			Older:   &executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 2}, Detail: "a newer capture was being kept"}},
+		Summary: fullSummary()}
 }
 
 // sessionOf is one turn's row with every field set, so a field the wire
@@ -78,13 +96,14 @@ func sessionOf(handle, turn, conversationKey string) executordomain.Session {
 		Handle: handle, Turn: turn, ConversationKey: conversationKey, WorkKey: "wk-1",
 		Harness: "claude-code", HarnessVersion: "2.1.0", Entry: "0123456789abcdef0123456789abcdef",
 		SessionID: "sess-1", Object: objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
-		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 2, CaptureSeq: 3,
-		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true,
+		ContentKey: "k1", ArchiveFormat: 1, Media: []executorkeep.MediaObject{mediaOf()}, LaunchSeq: 2, CaptureSeq: 3,
+		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true, Trimmed: true,
 		CapturedAt: crossedAt, ReadThrough: atLog(4), Absorbs: []string{endedTurn},
 		BaseTurn: endedTurn, RetiredBy: endedTurn, RetiredLoss: executorkeep.LossRequestRefused,
 		EndedAt: crossedAt, EndedAtPosition: atLog(5),
 		Ending:     &ending,
 		AskExcerpt: "what " + handle + " was asked",
+		Summary:    fullSummary(),
 	}
 }
 
@@ -95,7 +114,8 @@ func captureOf(turn string) executordomain.NewCapture {
 		Harness: "claude-code", HarnessVersion: "2.1.0", Entry: "0123456789abcdef0123456789abcdef",
 		SessionID: "sess-1", Object: objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 1, CaptureSeq: 2,
-		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true,
+		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true, Trimmed: true,
+		Media:       []executordomain.NewMedia{{MediaObject: mediaOf(), Carried: true}},
 		ReadThrough: atLog(4), Absorbs: []string{endedTurn},
 		SeatBudget: 64 << 20,
 	}
@@ -378,6 +398,9 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 	}
 	whole(t, "a session's read", row)
 	whole(t, "a session", row.Session)
+	if len(row.Session.Media) == 1 {
+		whole(t, "a session's media", row.Session.Media[0])
+	}
 	hereRow, err := here.Session(ctx, "swe", liveTurn, sessionLevel)
 	sameHere(t, "session", row, hereRow, err)
 	if _, err := reads.Session(ctx, "swe", endedTurn, sessionLevel); !errors.Is(err,
@@ -478,6 +501,8 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 	call := engineCall("op-capture")
 	capture := captureOf(liveTurn)
 	whole(t, "the case's capture", capture)
+	whole(t, "the case's media", capture.Media[0])
+	whole(t, "the case's media object", capture.Media[0].MediaObject)
 	captured, err := writes.Capture(ctx, call, capture)
 	if err != nil || !captured.Recorded || captured.Outcome != statelog.OutcomeApplied ||
 		captured.OpID != call.OpID || captured.Position != atLog(10) {

@@ -4,17 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"golang.org/x/net/websocket"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -117,6 +121,13 @@ func answerCodexStandIn(ws *websocket.Conn, record string) {
 			result = map[string]any{"thread": map[string]any{"turns": turns}}
 		case "thread/turns/list":
 			result = map[string]any{"data": turns}
+		case "config/read":
+			servers, file := standInServers()
+			result = map[string]any{"config": map[string]any{"mcp_servers": servers},
+				"layers": []any{map[string]any{"name": map[string]string{"type": "user", "file": file},
+					"config": map[string]any{"mcp_servers": servers}}}}
+		case "mcpServerStatus/list":
+			result = map[string]any{"data": standInStatuses(record), "nextCursor": nil}
 		case "turn/steer":
 			result = map[string]string{"turnId": codexStandInTurn}
 			standInNote(record, "steers", call.Params)
@@ -163,15 +174,62 @@ func answerCodexStandIn(ws *websocket.Conn, record string) {
 	}
 }
 
+// standInServers is the MCP servers the run's configuration in CODEX_HOME
+// declares, each with its url or command, as config/read answers them, and
+// that file, read as Codex reads it (TOML).
+func standInServers() (map[string]map[string]string, string) {
+	file := filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")
+	var config struct {
+		Servers map[string]map[string]any `toml:"mcp_servers"`
+	}
+	_, _ = toml.DecodeFile(file, &config)
+	servers := map[string]map[string]string{}
+	for name, entry := range config.Servers {
+		servers[name] = map[string]string{}
+		for _, key := range []string{"url", "command"} {
+			if v, ok := entry[key].(string); ok {
+				servers[name][key] = v
+			}
+		}
+	}
+	return servers, file
+}
+
+// standInStatuses is mcpServerStatus/list's servers: each one the
+// configuration declares, listing record/tools/<server>'s lines, else, for
+// `crewlet`, the bridge's submit_work and ask_and_wait.
+func standInStatuses(record string) []map[string]any {
+	servers, _ := standInServers()
+	var out []map[string]any
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
+		var listed []string
+		raw, err := os.ReadFile(filepath.Join(record, "tools", url.PathEscape(name))) //nolint:gosec // the case's own file
+		switch {
+		case err == nil:
+			listed = strings.Fields(string(raw))
+		case name == "crewlet":
+			listed = []string{"submit_work", "ask_and_wait"}
+		}
+		tools := map[string]any{}
+		for _, tool := range listed {
+			tools[tool] = map[string]any{"name": tool, "inputSchema": map[string]string{"type": "object"}}
+		}
+		out = append(out, map[string]any{"name": name, "tools": tools})
+	}
+	return out
+}
+
 // codexStandInClone is the stand-in `exec`'s clone during its turn: where
 // record/clone-src names a directory it is copied to record/clone-dst, and
 // the PostToolUse hook the server was declared runs twice, as Codex runs it
-// after a tool call, its answers in record/nested-1 and nested-2.
+// after a tool call, its answers in record/nested-1 and nested-2; then the
+// run's skills as the turn sees them are kept in record/skills.
 const codexStandInClone = `  if [ -e "$rec/clone-src" ]; then
     cp -R "$(cat "$rec/clone-src")" "$(cat "$rec/clone-dst")"
     hc=$(sed -n 's/^hooks\.PostToolUse=.*command="\([^"]*\)".*/\1/p' "$rec/server-argv")
     for i in 1 2; do printf '%s\n' '{"hook_event_name":"PostToolUse","tool_name":"exec_command"}' | sh -c "$hc" > "$rec/nested-$i" 2> "$rec/nested-$i.err"; done
-  fi`
+  fi
+  cp -R "${CODEX_HOME:-$HOME/.codex}/skills" "$rec/skills" 2> /dev/null || :`
 
 // codexStandInThread is the thread the stand-in `codex exec` reports for a
 // session it starts.

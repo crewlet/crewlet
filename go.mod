@@ -11,9 +11,9 @@ ignore node_modules
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/aws/aws-sdk-go-v2 v1.48.0
-	github.com/aws/aws-sdk-go-v2/config v1.33.20
+	github.com/aws/aws-sdk-go-v2/config v1.33.21
 	github.com/aws/aws-sdk-go-v2/credentials v1.21.3
-	github.com/aws/aws-sdk-go-v2/service/iam v1.67.0
+	github.com/aws/aws-sdk-go-v2/service/iam v1.68.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.116.0
 	github.com/aws/aws-sdk-go-v2/service/sts v1.53.0
 	github.com/aws/smithy-go v1.28.9
@@ -26,7 +26,7 @@ require (
 	github.com/nats-io/nats.go v1.56.0
 	github.com/nats-io/nkeys v0.4.17
 	github.com/nats-io/nuid v1.0.1
-	github.com/openai/openai-go/v3 v3.103.0
+	github.com/openai/openai-go/v3 v3.105.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/tursodatabase/turso-go-platform-libs v0.8.4
 	github.com/yuin/goldmark v1.8.7

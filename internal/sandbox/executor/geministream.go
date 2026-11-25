@@ -22,6 +22,11 @@ import (
 // billed as input ([geminiEvents.runSpend]).
 const geminiUsageEvent = "crewlet_gemini_usage"
 
+// geminiUnbridgedEvent is the type of the line the run's script appends where
+// the bridge's BeforeTool hook stopped a call another server served under a
+// name of the bridge's ([geminiBridgedHook]): its message fails the run.
+const geminiUnbridgedEvent = "crewlet_gemini_unbridged"
+
 // geminiBlockedPrefix opens the warning Gemini CLI prints where an AfterAgent
 // hook blocked the run's finish: the block's reason, the note the take script
 // handed it (measured on 0.70.0).
@@ -132,15 +137,18 @@ type geminiEvents struct {
 	calls map[string]int
 	seq   int
 
-	session  string
-	result   []byte
-	status   string
-	errText  string
-	errType  string
-	usage    *geminiTokens
-	stats    *geminiStats
-	requests int
-	sawLine  bool
+	session string
+	result  []byte
+	status  string
+	errText string
+	errType string
+	// unbridged is why the bridge's hook stopped a call, "" for none
+	// ([geminiUnbridgedEvent]).
+	unbridged string
+	usage     *geminiTokens
+	stats     *geminiStats
+	requests  int
+	sawLine   bool
 
 	// following is a decoder read through Entries, which keeps nothing a
 	// Result would need.
@@ -240,6 +248,10 @@ func (d *geminiEvents) Line(line []byte) {
 		if d.status != "success" {
 			d.transcript.add(activityline.Words(activityline.TagError,
 				"the run ended: "+firstLine(firstNonBlank(d.errText, d.status, "with no status"), transcriptDetailLimit)))
+		}
+	case geminiUnbridgedEvent:
+		if d.unbridged == "" {
+			d.unbridged = firstNonBlank(looseString(ev.Message), "a call named inside the bridge's names was not the bridge's")
 		}
 	case geminiUsageEvent:
 		var tokens geminiTokens
@@ -344,7 +356,7 @@ func (d *geminiEvents) Result() sandbox.Result {
 		text = withNote(strings.TrimSpace(kept), fmt.Sprintf("(%s more of the answer not kept: past the %s "+
 			"a run's answer is read to)", humanSize(int64(d.dropped+held)), humanSize(sandbox.MaxFileBytes)))
 	}
-	success := d.status == "success"
+	success := d.status == "success" && d.unbridged == ""
 	if !success {
 		// A FAILED RUN'S WORDS ARE ITS ERROR'S: a limit or a refused sign-in is
 		// read off the answer before the error, and the model's own reply can
@@ -361,6 +373,8 @@ func (d *geminiEvents) Result() sandbox.Result {
 		return res
 	}
 	switch {
+	case d.unbridged != "":
+		res.Error, res.Unbridged = d.unbridged, true
 	case d.result == nil:
 		res.Error = "the harness stopped before it reported how its run ended: its stream has no result event"
 	default:

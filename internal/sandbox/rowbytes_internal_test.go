@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -700,9 +701,9 @@ func worstRow(t *testing.T) PendingRun {
 		SessionID: plain(128), ArchiveFormat: 99, ArchiveSize: executorkeep.SessionMaxBytes,
 		RunAfter: plain(MaxMessageIDBytes), Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64,
 		ContentKey: plain(256), Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
-		SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes), TakerEpoch: math.MaxInt64,
-		StandbyTaker: plain(maxIncarnationBytes), StandbyTakerEpoch: math.MaxInt64, StandbyAt: worstAt,
-		ResumedCount: worstCount(), CountProvider: plain(MaxCountProviderBytes)}
+		Trimmed: true, SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes),
+		TakerEpoch: math.MaxInt64, StandbyTaker: plain(maxIncarnationBytes), StandbyTakerEpoch: math.MaxInt64,
+		StandbyAt: worstAt, ResumedCount: worstCount(), CountProvider: plain(MaxCountProviderBytes)}
 	for i := range capture.BridgeOpen {
 		capture.BridgeOpen[i] = math.MaxInt
 	}
@@ -836,7 +837,8 @@ func worstRow(t *testing.T) PendingRun {
 		SignInID: uuid.NewString(), Entry: plain(executorkeep.EntryMaxBytes), FollowUp: FollowUpReason(plain(32)),
 		TurnCap: math.MaxInt, Brief: BriefKind(plain(32)), NotContinued: worstVerdict(),
 		BriefOmitted: omitted, FreshOmitted: omitted, BriefLateOmitted: lateOmitted, FreshLateOmitted: lateOmitted,
-		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), Minted: plain(128),
+		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), BridgeConnected: true,
+		Minted:      plain(128),
 		ResumeCarry: ResumeCarry(plain(32)), Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt,
 		CollectFailingSince: worstAt,
 		ResumeFailures:      math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,
@@ -1013,6 +1015,7 @@ func worstRow(t *testing.T) PendingRun {
 		SpentSessions: slices.Repeat([]executorkeep.SpentSession{{Session: plain(executorkeep.SessionIDMaxBytes),
 			Loss: executorkeep.Loss(plain(executorkeep.WordMaxBytes))}}, executorkeep.SpentMaxSessions),
 		NotContinued: slices.Repeat([]executorkeep.NotContinued{*worstVerdict()}, executorkeep.NotContinuedMaxEntries),
+		Summary:      worstSummary(t),
 		OwedEnd:      end, EndRecorded: true,
 		Launch: launch, Owner: plain(maxIncarnationBytes), OwnerEpoch: math.MaxInt64,
 		TaskDescription: keptTitle(markup(1 << 20)), Label: keptTitle(markup(1 << 20)),
@@ -1129,6 +1132,24 @@ func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 		t.Errorf("a run's value may weigh %d bytes, past the %d one key of the store holds: every "+
 			"write of a value between the two is refused", RowBytes, coord.MaxValueBytes)
 	}
+}
+
+// worstSummary is the summary stamp at its bounds ([SummaryStamp.Bounded]):
+// every free string at its longest in its most-escaping bytes, every number
+// at its widest.
+func worstSummary(t *testing.T) *SummaryStamp {
+	t.Helper()
+	markup := func(n int) string { return strings.Repeat("<", n) }
+	stamp := &SummaryStamp{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64,
+		Object: objstore.KeyAt(worstAt).String(), ObjectHash: strings.Repeat("f", 64),
+		ObjectSize: executorkeep.SummarySealedMaxBytes,
+		ContentKey: markup(secrets.MaxStreamKeyIDBytes), At: worstAt, Bytes: math.MaxInt64,
+		Kept: executorkeep.SummaryMaxBytes, Cut: true, Harness: markup(executorkeep.HarnessMaxBytes),
+		Session: markup(executorkeep.SessionIDMaxBytes), Digest: markup(64)}
+	if err := stamp.Bounded(); err != nil {
+		t.Fatalf("the worst summary is past what the row carries: %v", err)
+	}
+	return stamp
 }
 
 // THE WHOLE ROW FITS ITS BUDGET: rowbytes.go's arithmetic, held to the row's
