@@ -46,7 +46,7 @@
 // Nothing else a box prints reaches a prompt.
 //
 // Its checks, in order: the folder, the box user's, held at 0700 and its files
-// at 0600 before any is read, short enough for its socket's path; ensure.lock,
+// at 0600 before any is read, short enough for its sockets' paths; ensure.lock,
 // made exclusively, so two launches never start two supervisors (a younger
 // holder is waited for, at each change in the folder and every second, which
 // alone wakes it where the kernel refuses a watch; one that is no ensure or
@@ -142,6 +142,13 @@
 // ensure's source; supervisor.log, 1 MiB with one rotation, logs refusals by
 // kind and errors by message, never a page's words. Every timer runs on the
 // clock it is handed.
+//
+// Attachments, its caller's, add what else it serves: each is attached once
+// browser.sock listens and before ready; told each browser launched, each
+// state, the model connection's job, and each browser_tabs new, select or
+// close answered without error; and closed first on a stop, waited for by
+// nothing. One that fails is logged and the supervisor serves on.
+// supervisor.json's boot, drawn once, outlives every relaunch.
 //
 // # The launch
 //

@@ -1,11 +1,11 @@
 // common.mjs: what the box helper's modules share. config.json, the document
-// the engine writes beside them; the modes the helper writes at; what the
-// helper prints, the answer a failed check gives and the line that says it;
-// the longest line the shim and the supervisor pass; the cause a failed write
-// stands for; the clock every timer runs on, and a version asked on it;
-// canonical JSON; and what the kernel says of a process, and which pid may be
-// signalled. Node's built-ins alone, in the oldest Node the helper supports.
-// internal/browser/boxhelper's package doc carries the argument.
+// the engine writes beside them; the modes the helper writes at; its sockets'
+// names; what the helper prints, the answer a failed check gives and the line
+// that says it; the longest line the shim and the supervisor pass; the cause a
+// failed write stands for; the clock every timer runs on, and a version asked
+// on it; canonical JSON; and what the kernel says of a process, and which pid
+// may be signalled. Node's built-ins alone, in the oldest Node the helper
+// supports. internal/browser/boxhelper's package doc carries the argument.
 
 import { execFile, spawn } from "node:child_process"
 import { createHash } from "node:crypto"
@@ -20,6 +20,12 @@ export const CONFIG_VERSION = 1
 // FILE_MODE and DIR_MODE are what the helper writes at: the box's user alone.
 export const FILE_MODE = 0o600
 export const DIR_MODE = 0o700
+
+// BROWSER_SOCKET and RELAY_SOCKET are the sockets the supervisor listens on
+// in the helper's folder: the model's way to the browser, and the way a job's
+// relay reaches what attaches to the supervisor.
+export const BROWSER_SOCKET = "browser.sock"
+export const RELAY_SOCKET = "relay.sock"
 
 // LINE_PREFIX starts ensure's one line, the engine's to parse.
 export const LINE_PREFIX = "crewlet-browser-ensure/1"

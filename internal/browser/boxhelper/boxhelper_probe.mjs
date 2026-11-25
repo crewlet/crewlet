@@ -63,16 +63,24 @@
 //   {"op":"launch_failure","message":M,"name":N,"sandbox":S,"uid":U,"files":F}
 //                                          the reason and cause of a launch
 //                                          that failed with that error
-//   {"op":"supervise","launch":L,"reject_first":R,"fail":X,"umask":U}
+//   {"op":"supervise","launch":L,"reject_first":R,"fail":X,"umask":U,"live":A}
 //                                          the supervisor of launch.json L in
 //                                          this process, on the probe's own
 //                                          clock, its profile's lock read
 //                                          through X's file system, once it is
 //                                          ready or failed; with R an
 //                                          unhandled rejection is raised just
-//                                          before it starts, and with U the
+//                                          before it starts, with U the
 //                                          probe's umask is U as it starts, as
-//                                          a looser starter's would be
+//                                          a looser starter's would be, and A
+//                                          names its attachments, in order:
+//                                          "record", a stand-in recording each
+//                                          call it is told; "fail", one whose
+//                                          attach throws; and "fail_hooks",
+//                                          one whose every hook throws or
+//                                          rejects
+//   {"op":"attached","until":U}            answer once "record" has recorded
+//                                          a call whose fields hold U's values
 //   {"op":"advance","ms":N}                move the clock N ms, every timer due
 //                                          run
 //   {"op":"kill_chromium","until":S}       kill the supervised Chromium's group,
@@ -117,9 +125,11 @@
 // that dies as its command line is read; with blank_reading such a read
 // answers nothing, as the kernel does once a browser's main thread exits;
 // with hold it waits for the release op, then runs as itself.
-// A supervisor's answers carry its state and every event it logged.
+// A supervisor's answers carry its state, every event it logged, and every
+// call "record" recorded.
 // A command that throws anything else answers {"op":"error","message":M}.
 
+import fs from "node:fs"
 import fsp from "node:fs/promises"
 import { constants } from "node:os"
 import path from "node:path"
@@ -290,6 +300,55 @@ let edits
 const events = []
 const reports = []
 const logged = new Set() // each called with every event as it is logged
+const attached = [] // each call "record" was told, as it recorded it
+const recorded = new Set() // each called with every call as it is recorded
+
+// record is a call "record" was told.
+function record(call) {
+  attached.push(call)
+  for (const listener of recorded) listener(call)
+}
+
+// texts is an answer's text items, joined by newlines.
+const texts = (answer) =>
+  (Array.isArray(answer?.content) ? answer.content : []).map((item) => item?.text ?? "").join("\n")
+
+// closed records a close of an attachment to s, as s shows then.
+const closed = (s) => () =>
+  record({ hook: "close", state: s.state, socket: fs.existsSync(s.launch.sockets.browser) })
+
+// attachments are the stand-ins the supervise op attaches, by name; each
+// hook a recording one is told is recorded, with what the supervisor showed
+// then.
+const attachments = {
+  record: {
+    attach(s) {
+      record({ hook: "attach", state: s.state, socket: fs.existsSync(s.launch.sockets.browser), boot: s.boot })
+      return {
+        onLaunched: (context) =>
+          record({ hook: "launched", current: context === s.current?.context, pages: context.pages().length }),
+        onState: (state) => record({ hook: "state", state }),
+        onModel: (job) => record({ hook: "model", job: job ?? null }),
+        onTabs: (job, action, answer) => record({ hook: "tabs", job, action, text: texts(answer) }),
+        close: closed(s),
+      }
+    },
+  },
+  fail: {
+    attach() {
+      throw new Error("an attachment that fails to attach")
+    },
+  },
+  fail_hooks: {
+    attach() {
+      const throws = () => {
+        throw new Error("a hook that throws")
+      }
+      const rejects = () => Promise.reject(new Error("a hook that rejects"))
+      return { onLaunched: throws, onState: rejects, onModel: throws, onTabs: rejects, close: throws }
+    },
+  },
+}
 
 // listed is a server's answer to tools/list under config, over a transport of
 // the probe's own, with nothing between them: no browser, which tools/list
@@ -327,8 +386,9 @@ function settled(states) {
   })
 }
 
-// supervised is a supervisor's state and every event it logged.
-const supervised = () => ({ state: supervisor.state, events, reports })
+// supervised is a supervisor's state, every event it logged and every call
+// "record" recorded.
+const supervised = () => ({ state: supervisor.state, events, reports, attached })
 
 // gate is a promise and the function that settles it.
 function gate() {
@@ -504,7 +564,7 @@ const commands = {
     const failed = await chromium.launchFailure(err, sandbox, () => chromium.sandboxCause({ uid, read: files(texts) }))
     return { reason: failed.reason, cause: failed.cause }
   },
-  async supervise({ launch, reject_first: rejectFirst, fail, umask }) {
+  async supervise({ launch, reject_first: rejectFirst, fail, umask, live }) {
     const io = {
       clock,
       fs: faulty(fail),
@@ -519,7 +579,24 @@ const commands = {
     if (fail?.kill_holder || fail?.kill_reading) await watchLaunches(launch)
     if (umask !== undefined) process.umask(umask)
     if (rejectFirst) Promise.reject(new Error("a rejection raised as the supervisor starts"))
-    supervisor = await supervise(launch, io)
+    const names = live ?? []
+    const unknown = names.find((name) => !Object.hasOwn(attachments, name))
+    if (unknown !== undefined) throw new Error(`no attachment is named ${unknown}`)
+    supervisor = await supervise(launch, io, names.map((name) => attachments[name]))
+    return supervised()
+  },
+  async attached({ until = {} }) {
+    const matches = (call) => Object.entries(until).every(([key, value]) => (call[key] ?? null) === value)
+    if (!attached.some(matches)) {
+      await new Promise((resolve) => {
+        const listener = (call) => {
+          if (!matches(call)) return
+          recorded.delete(listener)
+          resolve()
+        }
+        recorded.add(listener)
+      })
+    }
     return supervised()
   },
   advance({ ms }) {

@@ -14,8 +14,10 @@ import os from "node:os"
 import path from "node:path"
 
 import {
+  BROWSER_SOCKET,
   DIR_MODE,
   FILE_MODE,
+  RELAY_SOCKET,
   Withheld,
   digest16,
   ensureLine,
@@ -233,7 +235,7 @@ class Run {
       profile: f("profile"),
       output: f("output"),
       artifacts: f("artifacts"),
-      sockets: { browser: f("browser.sock") },
+      sockets: { browser: f(BROWSER_SOCKET) },
       log: f("supervisor.log"),
       launch_timeout_ms: this.config.launch_timeout_ms,
       relaunch: this.config.relaunch,
@@ -548,8 +550,10 @@ export async function holdFolder(folder, io = fsp) {
   } catch (err) {
     throw unusable("mode", err.message)
   }
-  const socket = path.join(folder, "browser.sock")
-  if (Buffer.byteLength(socket) > SOCKET_PATH_MAX) {
-    throw unusable("path_too_long", `${socket} is ${Buffer.byteLength(socket)} bytes, past ${SOCKET_PATH_MAX}`)
+  for (const name of [BROWSER_SOCKET, RELAY_SOCKET]) {
+    const socket = path.join(folder, name)
+    if (Buffer.byteLength(socket) > SOCKET_PATH_MAX) {
+      throw unusable("path_too_long", `${socket} is ${Buffer.byteLength(socket)} bytes, past ${SOCKET_PATH_MAX}`)
+    }
   }
 }
