@@ -343,20 +343,15 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 	if hooked {
 		files[paths.GeminiTake()] = geminiTakeScript
 	}
-	helped, err := writeGeminiCheckouts(ctx, box, req, paths)
-	if err != nil {
-		return "", err
-	}
-	if err = geminiWired(files, req, paths, paths.GeminiSettings(), paths.GeminiTakeConfig(),
-		paths.GeminiTakes(session.ID), hooked, helped); err != nil {
-		return "", err
-	}
-	// AND THE SAME FILES UNDER THE JOB'S OTHER BRIDGE TOKEN, for a session the
-	// script starts in place of the continued one, beside the first
-	// ([sandbox.RunRequest.FreshWiring], [chatSessionGate]): the take
-	// configuration naming that session's record of takes. A wiring that
-	// changes what the run is hooked for would need another settings file
-	// than the one the script chose, so it is refused.
+	// THE RUN'S WIRING, AND THE SAME FILES UNDER THE JOB'S OTHER BRIDGE TOKEN,
+	// for a session the script starts in place of the continued one, beside
+	// the first ([sandbox.RunRequest.FreshWiring], [chatSessionGate]): the take
+	// configuration naming that session's record of takes. One that changes
+	// what the run is hooked for would need another settings file than the
+	// one the script chose, so it is refused. Each refusal comes before the
+	// box is touched: the note helper's write below is the first command.
+	wirings := []geminiWiring{{req: req, settings: paths.GeminiSettings(), take: paths.GeminiTakeConfig(),
+		takes: paths.GeminiTakes(session.ID)}}
 	if f := req.FreshWiring; f != nil {
 		if f.Steer.Set() != req.Steer.Set() || f.SkillLoads.Set() != req.SkillLoads.Set() {
 			return "", errors.New("executor: the run's two wirings, for the session it continues and for " +
@@ -365,9 +360,16 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 		}
 		rewired := req
 		rewired.MCPServers, rewired.Steer, rewired.SkillLoads = f.MCPServers, f.Steer, f.SkillLoads
-		if err = geminiWired(files, rewired, paths, paths.GeminiSettings()+".fresh",
-			paths.GeminiTakeConfig()+".fresh", paths.GeminiTakes(session.Fresh), hooked, helped); err != nil {
-			return "", err
+		wirings = append(wirings, geminiWiring{req: rewired, settings: paths.GeminiSettings() + ".fresh",
+			take: paths.GeminiTakeConfig() + ".fresh", takes: paths.GeminiTakes(session.Fresh)})
+	}
+	for _, w := range wirings {
+		if hooked {
+			take, takeErr := geminiTakeConfig(w.req, w.takes)
+			if takeErr != nil {
+				return "", takeErr
+			}
+			files[w.take] = take
 		}
 	}
 	for _, s := range req.Skills {
@@ -376,6 +378,17 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 			return "", fileErr
 		}
 		files[paths.GeminiSkills()+"/"+geminiSkillName(s)+"/SKILL.md"] = file
+	}
+	helped, err := writeGeminiCheckouts(ctx, box, req, paths)
+	if err != nil {
+		return "", err
+	}
+	for _, w := range wirings {
+		settings, renderErr := json.MarshalIndent(geminiSettings(w.req, paths, hooked, helped), "", "  ")
+		if renderErr != nil {
+			return "", fmt.Errorf("executor: rendering Gemini CLI's settings: %w", renderErr)
+		}
+		files[w.settings] = settings
 	}
 	// THE LAST RUN'S SKILLS GO FIRST, and only those: the home's skills
 	// directory is the person's and the image's too, so the run's are named
@@ -396,25 +409,12 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 	return "", nil
 }
 
-// geminiWired puts into files the two files of req's wiring: its settings, at
-// settingsPath, and where the run is hooked, its take script's configuration,
-// at takePath, naming takes as the session's record of takes.
-func geminiWired(files map[string][]byte, req sandbox.RunRequest, paths Paths, settingsPath, takePath,
-	takes string, hooked, helped bool) error {
-
-	if hooked {
-		take, err := geminiTakeConfig(req, takes)
-		if err != nil {
-			return err
-		}
-		files[takePath] = take
-	}
-	settings, err := json.MarshalIndent(geminiSettings(req, paths, hooked, helped), "", "  ")
-	if err != nil {
-		return fmt.Errorf("executor: rendering Gemini CLI's settings: %w", err)
-	}
-	files[settingsPath] = settings
-	return nil
+// geminiWiring is one of a run's wirings ([GeminiCLI.WriteConfig]): its
+// request, the paths of its settings and its take script's configuration,
+// and the session's record of takes that configuration names.
+type geminiWiring struct {
+	req                   sandbox.RunRequest
+	settings, take, takes string
 }
 
 // geminiSkillName is the name a run's skill is written and listed under:
