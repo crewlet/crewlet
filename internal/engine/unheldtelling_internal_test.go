@@ -118,7 +118,7 @@ func TestTheUnheldBriefsReachTheSandboxBesideTheOtherTwo(t *testing.T) {
 // where only their floor fails, drop them unmarked or on the caller's session,
 // and a case goes red.
 func TestTheUnheldBriefsTheFloorCannotCarryAreDroppedAlone(t *testing.T) {
-	// ABOUT 70,000 TOKENS OF BRIEF, beside a 40,000-token session: 110,000,
+	// ABOUT 70,000 TOKENS OF BRIEF, beside a 70,000-token session: 140,000,
 	// past a 100,000-token day, where the session's own briefs are not.
 	long := strings.Repeat("x", 4*70000)
 	member := harnessProvider(t, chainMember{key: "head", agent: executor.ClaudeCodeName, model: "claude-opus-5-5"})
@@ -128,10 +128,10 @@ func TestTheUnheldBriefsTheFloorCannotCarryAreDroppedAlone(t *testing.T) {
 		offered, kept bool
 		floor         int
 	}{
-		"the unheld briefs past the room, the session's own within it": {ceiling: 100000, context: 40000,
-			offered: true, floor: 40000 + 6},
+		"the unheld briefs past the room, the session's own within it": {ceiling: 100000, context: 70000,
+			offered: true, floor: 70000 + 6},
 		"both past the room": {ceiling: 100000, context: 150000},
-		"no window capped":   {context: 40000, offered: true, kept: true, floor: 40000 + 70000},
+		"no window capped":   {context: 70000, offered: true, kept: true, floor: 70000 + 70000},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ceilings := org.TokenCeilings(nil)

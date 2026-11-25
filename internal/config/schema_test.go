@@ -14,6 +14,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -155,6 +156,9 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"RoleAvatar", "character", strs(AvatarCharacters)},
 		{"RoleAvatar", "color", strs(AvatarColors)},
 		{"LocalSandbox", "runtime", strs(ContainerRuntimes)},
+		// Chromium's sandbox in a browser seat's container box, whose closed
+		// set internal/browser holds and the admission rule reads.
+		{"LocalSandbox", "chromium_sandbox", strs(browser.ChromiumSandboxes())},
 		{"MCPServer", "transport", strs(MCPTransports)},
 		{"Chat", "backend", strs(ChatBackends)},
 		// THE SAME CLOSED SET ON ALL THREE CHAT SURFACES, which is why it
@@ -1124,6 +1128,20 @@ units:
 		{
 			name: "unknown placement", tier: TierCompany, editorCatches: true,
 			yaml: "name: Acme\nproviders:\n  sandbox: {local: {image: x}, default_run_in: chroot}\n",
+		},
+		// A SEAT'S BROWSER in the one cell that runs it, and Chromium's
+		// sandbox there in a word the closed set does not hold.
+		{
+			name: "a browser seat in a container box", tier: TierCompany,
+			yaml: "name: Acme\nproviders:\n  sandbox: {local: {image: x, chromium_sandbox: waived}, " +
+				"default_run_in: container}\n  llm:\n    main: {model: sonnet}\n" +
+				"roles:\n  - {name: SWE, sandbox: {browser: true}}\n",
+		},
+		{
+			name: "a chromium sandbox off its list", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nproviders:\n  sandbox: {local: {image: x, chromium_sandbox: \"off\"}, " +
+				"default_run_in: container}\n  llm:\n    main: {model: sonnet}\n" +
+				"roles:\n  - {name: SWE, sandbox: {browser: true}}\n",
 		},
 		{
 			name: "malformed handle", tier: TierCompany, editorCatches: true,

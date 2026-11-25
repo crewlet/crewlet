@@ -679,11 +679,12 @@ var (
 //
 // It gathers [Company.peoplelessWarnings], [Company.executorWarnings],
 // [Company.budgetWarnings], [Company.codeWarnings],
-// [Company.delegatedAdvisories], [Company.channelAdvisories] and the setup
-// advisor's three ([AdvisoryClass]): [Company.healthWarnings],
-// [Company.auxiliaryWarnings], [Company.scheduleWarnings]. A unit with no id is
-// an ADMISSION rule, a warning only on a STORED revision
-// ([Company.AdmissionWarnings]). EMPTY, NEVER NIL, as [Company.ReferenceWarnings].
+// [Company.delegatedAdvisories], [Company.playwrightWarnings],
+// [Company.channelAdvisories] and the setup advisor's three
+// ([AdvisoryClass]): [Company.healthWarnings], [Company.auxiliaryWarnings],
+// [Company.scheduleWarnings]. A unit with no id is an ADMISSION rule, a
+// warning only on a STORED revision ([Company.AdmissionWarnings]). EMPTY,
+// NEVER NIL, as [Company.ReferenceWarnings].
 func (c *Company) AdvisoryWarnings() []Warning {
 	out := []Warning{}
 	if local := c.Providers.Sandbox.localBlock(); local != nil {
@@ -710,6 +711,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	out = append(out, c.sshAdvisories()...)
 	out = append(out, c.delegatedAdvisories()...)
 	out = append(out, c.accessAdvisories()...)
+	out = append(out, c.playwrightWarnings()...)
 	out = append(out, c.healthWarnings()...)
 	out = append(out, c.auxiliaryWarnings()...)
 	out = append(out, c.scheduleWarnings()...)
