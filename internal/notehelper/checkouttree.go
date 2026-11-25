@@ -19,19 +19,34 @@ import (
 
 // instructionSlot is one slot of [checkoutSpec.Instructions]: Names, of which
 // it hands the first regular file, or Tree, walked for its files. On the wire
-// a slot of names is a list of strings and a tree slot an object.
+// a slot of names is a list of strings, or {"names": [...]} with its options
+// ([slotOptions]), and a tree slot an object.
 type instructionSlot struct {
 	Names []string
 	Tree  *instructionTree
+	slotOptions
+}
+
+// slotOptions is how a slot reads past what Codex and Copilot do (both false
+// for them): Inside, a name's file followed through a link only while it
+// stays in the checkout, as a tree's is; Once, a file an earlier slot handed,
+// by its real path, not handed again (Grok Build 1.0.92 for both, measured).
+type slotOptions struct {
+	Inside bool `json:"inside,omitempty"`
+	Once   bool `json:"once,omitempty"`
 }
 
 // instructionTree is a tree slot: Tree, the directory below the checkout's
 // root; Suffix, the end of a handed file's name, in any case; Scoped, the
-// frontmatter that leaves a file out, nil where none does.
+// frontmatter that leaves a file out, nil where none does; Flat, the files
+// directly in it alone, no directory entered; Dots, a dot file handed too.
 type instructionTree struct {
 	Tree   string     `json:"tree"`
 	Suffix string     `json:"suffix"`
 	Scoped *treeScope `json:"scoped,omitempty"`
+	Flat   bool       `json:"flat,omitempty"`
+	Dots   bool       `json:"dots,omitempty"`
+	Once   bool       `json:"once,omitempty"`
 }
 
 // treeScope is the frontmatter keys that scope a file to paths, the first
@@ -44,18 +59,36 @@ type treeScope struct {
 // MarshalJSON writes a slot as the helper reads it: its names as a list, a
 // tree as an object.
 func (s instructionSlot) MarshalJSON() ([]byte, error) {
-	if s.Tree != nil {
+	switch {
+	case s.Tree != nil:
 		return json.Marshal(s.Tree)
+	case s.Inside || s.Once:
+		return json.Marshal(struct {
+			Names []string `json:"names"`
+			slotOptions
+		}{s.Names, s.slotOptions})
 	}
 	return json.Marshal(s.Names)
 }
 
-// UnmarshalJSON reads a slot: an object is a tree, refused where it names no
+// UnmarshalJSON reads a slot: an object naming "names" is a slot of names
+// with its options; any other object a tree, refused where it names no
 // directory below the checkout's root; anything else a list of names.
 func (s *instructionSlot) UnmarshalJSON(raw []byte) error {
 	*s = instructionSlot{}
 	if trimmed := bytes.TrimLeft(raw, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
 		return json.Unmarshal(raw, &s.Names)
+	}
+	var names struct {
+		Names *[]string `json:"names"`
+		slotOptions
+	}
+	if err := json.Unmarshal(raw, &names); err != nil {
+		return err
+	}
+	if names.Names != nil {
+		s.Names, s.slotOptions = *names.Names, names.slotOptions
+		return nil
 	}
 	var tree instructionTree
 	if err := json.Unmarshal(raw, &tree); err != nil {
@@ -75,20 +108,22 @@ type treeFile struct {
 	info       os.FileInfo
 }
 
-// treeText is a tree file to hand: its path and its bytes.
+// treeText is a tree file to hand: its path, its real path and its bytes.
 type treeText struct {
-	path string
-	raw  []byte
+	path, real string
+	raw        []byte
 }
 
 // treeWalk is a tree walk's bounds left: the entries it may still see and the
-// bytes its files may still hold.
+// bytes its files may still hold; and whether it stays flat and takes dot
+// files ([instructionTree]).
 type treeWalk struct {
-	realRoot string
-	suffix   string
-	entries  int
-	bytes    int64
-	files    []treeFile
+	realRoot   string
+	suffix     string
+	entries    int
+	bytes      int64
+	files      []treeFile
+	flat, dots bool
 }
 
 // treeTexts is the files of root's tree t to hand, in walk order, each its
@@ -105,7 +140,8 @@ func treeTexts(root string, t instructionTree, said *skips) []treeText {
 	if err != nil || !info.IsDir() {
 		return nil
 	}
-	w := treeWalk{realRoot: realRoot, suffix: strings.ToLower(t.Suffix), entries: maxCopyFiles, bytes: maxCopyBytes}
+	w := treeWalk{realRoot: realRoot, suffix: strings.ToLower(t.Suffix), entries: maxCopyFiles, bytes: maxCopyBytes,
+		flat: t.Flat, dots: t.Dots}
 	if err = w.walk(dir, 0); err != nil {
 		said.say("the instructions under %s are left out: %v", filepath.Join(root, t.Tree), err)
 		return nil
@@ -118,7 +154,7 @@ func treeTexts(root string, t instructionTree, said *skips) []treeText {
 			continue
 		}
 		if t.Scoped == nil || !scopedAway(raw, *t.Scoped) {
-			texts = append(texts, treeText{path: f.path, raw: raw})
+			texts = append(texts, treeText{path: f.path, real: f.real, raw: raw})
 		}
 	}
 	return texts
@@ -128,9 +164,10 @@ func treeTexts(root string, t instructionTree, said *skips) []treeText {
 // Copilot 1.0.114 walks one (measured): depth first, a directory's entries by
 // name in byte order, dot entries skipped, a name ending in the suffix in any
 // case, a file link followed while it stays in the checkout and a directory
-// link never. Past [maxCopyDepth] directories deep, [maxCopyFiles] entries in
-// a directory or in all, or [maxCopyBytes] in its files, it is refused, the
-// bound named.
+// link never. Flat, it enters no directory, and with dots it takes a dot
+// file, as Grok Build 1.0.92 reads .grok/rules (measured). Past
+// [maxCopyDepth] directories deep, [maxCopyFiles] entries in a directory or
+// in all, or [maxCopyBytes] in its files, it is refused, the bound named.
 func (w *treeWalk) walk(dir string, depth int) error {
 	if depth > maxCopyDepth {
 		return fmt.Errorf("its directory %s runs past the bound of %d directories deep", dir, maxCopyDepth)
@@ -144,7 +181,7 @@ func (w *treeWalk) walk(dir string, depth int) error {
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if strings.HasPrefix(name, ".") {
+		if strings.HasPrefix(name, ".") && (!w.dots || e.IsDir()) {
 			continue
 		}
 		if w.entries--; w.entries < 0 {
@@ -152,6 +189,9 @@ func (w *treeWalk) walk(dir string, depth int) error {
 		}
 		path := filepath.Join(dir, name)
 		if e.IsDir() {
+			if w.flat {
+				continue
+			}
 			if err := w.walk(path, depth+1); err != nil {
 				return err
 			}
