@@ -661,6 +661,8 @@ export interface AssistantOpenInAppCard {
   link: AssistantLink;
   permitted: boolean;
   reason?: AssistantOpenReason;
+  /** The person's own question asked to go there: the tab that sent it opens it once. */
+  asked?: boolean;
 }
 
 /** A refusal or a failure in the engine's own words. */
