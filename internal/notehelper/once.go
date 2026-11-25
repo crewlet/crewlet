@@ -34,6 +34,7 @@ var oneShots = map[string]oneShot{
 	"gemini-nested":     {run: runGeminiNested, config: true},
 	"qwen-nested":       {run: runQwenNested, config: true},
 	"codex-bridge":      {run: runCodexBridge, config: true},
+	"grok-nested":       {run: runGrokNested, config: true},
 	"pi-nested":         {run: runPiNested, config: true},
 	"codex-renew":       {run: runCodexRenew, config: true},
 	"codex-materialize": {run: runCodexMaterialize},

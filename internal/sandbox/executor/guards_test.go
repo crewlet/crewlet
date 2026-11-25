@@ -634,9 +634,10 @@ func grokInspect(perms string, servers ...[2]string) string {
 // reports its own server disabled, or, hooked, that pin engaged, is refused
 // before Grok starts, naming the file, the key and the policy's entries, and
 // the box's settings are put back; a policy blocking another server, a pin on
-// a run with no hooks, or an inspection that fails, start it.
-// Mutations, each red: drop the guard from the script; read another server's
-// reason as the run's; check the pin on a run with no hooks; name no entries.
+// a run taking no notes (its nested hook off, said once), or an inspection
+// that fails, start it. Mutations, each red: drop the guard from the script;
+// read another server's reason as the run's; check the pin on a run with no
+// note hooks, or say nothing of its nested hook; name no entries.
 func TestGrokBuildsBridgeAndHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const policy = "HOMEDIR/.grok/requirements.toml"
@@ -648,13 +649,15 @@ func TestGrokBuildsBridgeAndHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 	for name, tc := range map[string]struct {
 		inspect string
 		hooked  bool
+		skip    string // the setting the run's log names, once, switching the nested hook off
 		switchOffCase
 	}{
 		"nothing switches it off": {inspect: grokInspect("", [2]string{"NAME", ""}), hooked: true},
 		"the inspection fails":    {hooked: true},
 		"the policy denies another server": {hooked: true, inspect: grokInspect(allowlist("deny:https://other.example.com/*"),
 			[2]string{"NAME", ""}, [2]string{"other", "matches deniedMcpServers (" + policy + ")"})},
-		"a hooks pin on a run with no hooks": {inspect: grokInspect(pin, [2]string{"NAME", ""})},
+		"a hooks pin on a run taking no notes": {inspect: grokInspect(pin, [2]string{"NAME", ""}),
+			skip: "/.grok/requirements.toml sets allow_managed_hooks_only"},
 		"the home's policy denies the bridge's URL": {hooked: true,
 			inspect: grokInspect(allowlist("deny:http://127.0.0.1:9/*"), [2]string{"NAME", "matches deniedMcpServers (" + policy + ")"}),
 			switchOffCase: switchOffCase{fails: []string{"Grok Build would start without Crewlet's MCP server crewlet_",
@@ -684,6 +687,7 @@ func TestGrokBuildsBridgeAndHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 			if (started == nil) != (len(tc.fails) == 0) {
 				t.Errorf("grok started %t, want %t", started == nil, len(tc.fails) == 0)
 			}
+			checkNestedOff(t, box, tc.skip)
 			p := executor.PathsFor(box)
 			for _, left := range []string{p.GrokConfig(), p.GrokConfigBox(), p.GrokConfigOurs()} {
 				if got := boxFile(t, box, left); got != "" {
