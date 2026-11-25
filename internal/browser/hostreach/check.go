@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/browser"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Request is what [Check] is handed of one launch's box.
@@ -289,7 +288,7 @@ func decide(o outcome) Verdict {
 			"the check: "+o.undrained.Error())
 	case o.timedOut:
 		return withheld(browser.CauseUnchecked, fmt.Sprintf("the check of the box's network answered nothing "+
-			"within %s: give the box more CPU and memory", statelog.Spoken(CheckTimeout)))
+			"within %s: give the box more CPU and memory", CheckTimeout))
 	case o.runErr != nil && o.stdout == "":
 		return withheld(browser.CauseUnchecked, "the check of the box's network could not run: "+o.runErr.Error())
 	case state == lineNone && o.exit != 0:
@@ -307,7 +306,7 @@ func decide(o outcome) Verdict {
 	case wordNoNode:
 		return Verdict{Reason: browser.ReasonNodeMissing, Cause: browser.CauseNotOnPath, Detail: remedyNoNode}
 	case wordHeld:
-		return withheld(browser.CauseUnchecked, fmt.Sprintf(remedyHeld, statelog.Spoken(AnswerBound)))
+		return withheld(browser.CauseUnchecked, fmt.Sprintf(remedyHeld, AnswerBound))
 	case wordTooMany:
 		return withheld(browser.CauseUnchecked, fmt.Sprintf(remedyTooMany, maxAddresses, maxProxyAddresses))
 	case wordForwarded:
