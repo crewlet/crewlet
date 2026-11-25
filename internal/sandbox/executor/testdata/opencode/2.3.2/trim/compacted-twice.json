@@ -1,0 +1,618 @@
+{
+  "info": {
+    "id": "ses_e242dccb724a45651270165cd499097d",
+    "projectID": "6af72c5db6ed8f112517b1577cf77c9e1d825649",
+    "model": {
+      "id": "m",
+      "providerID": "stub",
+      "variant": "default"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 110,
+      "output": 55,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1795563533065,
+      "updated": 1795563537657,
+      "busy": 1795563537624,
+      "idle": 1795563537660
+    },
+    "title": "crewlet",
+    "location": {
+      "directory": "/tmp/work"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_20fed3659001w3XYGcFz8EMdjc",
+      "time": {
+        "created": 1795563534433
+      },
+      "text": "CALLTOOL: turn one\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20fed386e001oBC9Xi6tLqDmVZ",
+      "time": {
+        "created": 1795563534460,
+        "firstToken": 1795563534519,
+        "streamed": 1795563534532,
+        "completed": 1795563534656
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_1",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "seq 1 200"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n"
+              }
+            ],
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "time": {
+            "created": 1795563534522,
+            "ran": 1795563534530,
+            "completed": 1795563534648
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed395b001PorN3r5W0YoXZE",
+      "time": {
+        "created": 1795563534693,
+        "firstToken": 1795563534705,
+        "streamed": 1795563534716,
+        "completed": 1795563534718
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "after-tool reply"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed3984001va0VsoQ9QnnYBJ",
+      "time": {
+        "created": 1795563534724
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_20fed3a30001cA30htxRpOvo2j",
+      "time": {
+        "created": 1795563534896
+      },
+      "type": "model-switched",
+      "model": {
+        "id": "m2",
+        "providerID": "stub"
+      },
+      "previous": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      }
+    },
+    {
+      "id": "msg_20fed3a2d001Wrw4CU2Cg7iUZu",
+      "time": {
+        "created": 1795563534910
+      },
+      "text": "CALLTOOL: turn two\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20fed3a45001jYZrp2Au9U8z4C",
+      "time": {
+        "created": 1795563534923,
+        "firstToken": 1795563534936,
+        "streamed": 1795563534945,
+        "completed": 1795563534966
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m2",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_3",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "seq 1 200"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n"
+              }
+            ],
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "time": {
+            "created": 1795563534938,
+            "ran": 1795563534942,
+            "completed": 1795563534963
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed3a88001bdvM92p4PMu8Ad",
+      "time": {
+        "created": 1795563534993,
+        "firstToken": 1795563535005,
+        "streamed": 1795563535013,
+        "completed": 1795563535016
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m2",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "after-tool reply"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed3aad001cLkrwrkU4tFhax",
+      "time": {
+        "created": 1795563535021
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "type": "compaction",
+      "id": "msg_20fed3cd10012vQh1w1XplYG5l",
+      "metadata": {
+        "keepID": "msg_20fed3a2d001Wrw4CU2Cg7iUZu"
+      },
+      "time": {
+        "created": 1795563535575
+      },
+      "status": "completed",
+      "reason": "manual",
+      "model": {
+        "id": "m2",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "summary": "## Objective\n- Stub summary 5.\n\n## Next Move\n1. (none)",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed3cfd001zmDESOSCF6tdSo",
+      "time": {
+        "created": 1795563535613
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_20fed3eeb001WyuAKBhHmc3wgp",
+      "time": {
+        "created": 1795563536122
+      },
+      "text": "PLAIN: turn three\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20fed3f010010ODckEbNhVbol9",
+      "time": {
+        "created": 1795563536136,
+        "firstToken": 1795563536148,
+        "streamed": 1795563536155,
+        "completed": 1795563536158
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m2",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "reply to PLAIN: turn three"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed3f2200168knUVgeYIzJFM",
+      "time": {
+        "created": 1795563536162
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_20fed3fcd0012AkSooVw1pYnnn",
+      "time": {
+        "created": 1795563536333
+      },
+      "type": "model-switched",
+      "model": {
+        "id": "m",
+        "providerID": "stub"
+      },
+      "previous": {
+        "id": "m2",
+        "providerID": "stub",
+        "variant": "default"
+      }
+    },
+    {
+      "id": "msg_20fed3fcb001h8vIqzCnJ9AsZa",
+      "time": {
+        "created": 1795563536346
+      },
+      "text": "CALLTOOL: turn four\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20fed3fe40015PXgxK7fMJNlCb",
+      "time": {
+        "created": 1795563536365,
+        "firstToken": 1795563536380,
+        "streamed": 1795563536391,
+        "completed": 1795563536409
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "call_7",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "seq 1 200"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n"
+              }
+            ],
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "time": {
+            "created": 1795563536382,
+            "ran": 1795563536388,
+            "completed": 1795563536406
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed4025001JpfG8XkgM4FY4O",
+      "time": {
+        "created": 1795563536428,
+        "firstToken": 1795563536441,
+        "streamed": 1795563536451,
+        "completed": 1795563536454
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "after-tool reply"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed404d001EymIFhGSD8r8iH",
+      "time": {
+        "created": 1795563536461
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_20fed40e2001U5iVXsSu1Tk3Po",
+      "time": {
+        "created": 1795563536625
+      },
+      "text": "PLAIN: turn five\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20fed40f9001FlsdoSYi50Pn13",
+      "time": {
+        "created": 1795563536639,
+        "firstToken": 1795563536651,
+        "streamed": 1795563536656,
+        "completed": 1795563536657
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "reply to PLAIN: turn five"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed4114001Lk5EmOy13aK09D",
+      "time": {
+        "created": 1795563536660
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "type": "compaction",
+      "id": "msg_20fed432f001RFRM8zfAnou83K",
+      "metadata": {
+        "keepID": "msg_20fed40e2001U5iVXsSu1Tk3Po"
+      },
+      "time": {
+        "created": 1795563537208
+      },
+      "status": "completed",
+      "reason": "manual",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "summary": "## Objective\n- Stub summary 10.\n\n## Next Move\n1. (none)",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed4357001aesI2yeMPfvt5b",
+      "time": {
+        "created": 1795563537239
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_20fed44d10010d9chfD2PnzxFq",
+      "time": {
+        "created": 1795563537628
+      },
+      "text": "PLAIN: turn six\n",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_20fed44e2001ehNzNK4fCUsF4a",
+      "time": {
+        "created": 1795563537640,
+        "firstToken": 1795563537650,
+        "streamed": 1795563537656,
+        "completed": 1795563537657
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "m",
+        "providerID": "stub",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "reply to PLAIN: turn six"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_20fed44fc001xLgtm4IPJ8j7Fc",
+      "time": {
+        "created": 1795563537660
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}

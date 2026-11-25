@@ -69,6 +69,22 @@ export async function ensure(folder, { clock = realClock, env = process.env, hom
   }
 }
 
+// stop ends the supervisor this folder's launch.json runs, and its browser,
+// as ensure stops one it replaces, under the box's one lock: the engine's
+// step for a box whose browser a launch withheld for its network.
+export async function stop(folder, { clock = realClock } = {}) {
+  const run = new Run(folder, clock, process.env, os.homedir())
+  try {
+    run.config = await readConfig(folder)
+    await takeLock(folder, run.config, { clock })
+    run.locked = true
+    const live = await run.live(path.join(folder, "launch.json"))
+    if (live !== undefined) await run.stop(live.pid)
+  } finally {
+    await run.release()
+  }
+}
+
 // Run is one ensure: what it has learnt, for its line, the step it is on, and
 // what it holds, to give back however it ends.
 class Run {
@@ -394,9 +410,9 @@ async function settled(promise, ms) {
 
 function noop() {}
 
-// takeLock takes folder's ensure.lock, so one ensure at a time reads and
-// starts what the box runs: created exclusively, naming its holder. A holder
-// that is no ensure of this helper, or one past lock_takeover_ms (killed
+// takeLock takes folder's ensure.lock, so one ensure or stop at a time reads
+// and starts what the box runs: created exclusively, naming its holder. A
+// holder that is neither of this helper, or one past lock_takeover_ms (killed
 // first), is taken over, one ensure at a time (takeOver); a younger one is
 // waited for, at each change in the folder that watch announces and every
 // LOCK_RECHECK_MS besides, which alone wakes the wait where the kernel
@@ -406,7 +422,10 @@ function noop() {}
 export async function takeLock(folder, config, { clock = realClock, io = fsp, watch = fs.watch, live } = {}) {
   const file = path.join(folder, "ensure.lock")
   const helper = path.join(folder, "helper.mjs")
-  live ??= async (holder) => runs(await running(holder.pid), [helper, "ensure"])
+  live ??= async (holder) => {
+    const proc = await running(holder.pid)
+    return runs(proc, [helper, "ensure"]) || runs(proc, [helper, "stop"])
+  }
   const me = JSON.stringify({ pid: process.pid, started_ms: clock.now() })
   const unusable = (err) => new Withheld("folder_unusable", writeCause(err), `taking ${file}: ${err.message}`)
   let wake
