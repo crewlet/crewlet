@@ -417,20 +417,16 @@ print(json.dumps({"results": out, "rendering": sorted(m._renders)}))
 `
 
 // HERMES'S RENDER OF A LATER CHECKOUT IS BOUNDED, NEVER STARTED TWICE, AND
-// SAID ONCE IT KEEPS FAILING: every firing that finds a render running waits
-// on it until the render's reserve is left of Hermes's hook bound less the
-// margin, a parallel batch's firings included, and a late render's result
-// serves a later firing unless what it read changed since (then it is
-// rendered again); a render fails once for each such bound it outlives, by its
-// age, and once where it raised, late or not, and at three failures the
-// checkout is claimed as left out, said with the last error, else as late.
-// The claim takes the home's names as they are then. Neither a render nor a
-// claim starts without the render's reserve, nor a claim without its own.
+// SAID ONCE IT KEEPS FAILING: every firing finding a render running (a
+// parallel batch's too) waits on it within its bound; a late result serves a
+// later firing unless what it read changed (then rendered again), its claim
+// taking the home's names of then; a render fails once per bound it outlives,
+// and once where it raised; at three the checkout is claimed as left out,
+// said with the last error, else as late; no render starts without the
+// render's reserve, no claim without its own (plugin's _gate).
 //
-// Mutation: wait unbounded, start a render per firing, count a failure per
-// firing that finds a render running or a late raise twice, never give up,
-// forget an error, keep a changed checkout's render or its old names, or
-// render or claim without the reserve, and a row goes red.
+// Mutation: undo any of these (a failure per firing finding a render running,
+// a late raise counted twice, an error forgotten), and a row goes red.
 func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 	t.Parallel()
 	python := prereqtest.OnPath(t, "python3", "the case runs Hermes's plugin", "install python3")

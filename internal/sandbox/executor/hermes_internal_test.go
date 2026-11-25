@@ -1893,13 +1893,11 @@ func TestAFailedHermesTurnSettlesNoNote(t *testing.T) {
 // non-empty file (.hermes.md or HERMES.md, the first that exists; the AGENTS
 // names and the CLAUDE names, each the first non-empty; .cursorrules with
 // .cursor/rules/*.mdc), each file stripped, one holding IGNORE-ALL-PREVIOUS
-// blocked as its injection scan blocks one, a .hermes.md's frontmatter
-// dropped, each kind cut to 70% head and 20% tail of 6% of the window at four
-// characters a token (20,000 to 500,000) with its notice; the tool result
-// budget of a large window; the subdirectory hint tracker, from TERMINAL_CWD
-// (a hint for each directory a call's path argument names below it that holds
-// an AGENTS.md); and the window resolver, which places the stand-in's default
-// model at 300,000 tokens and falls back to 256,000.
+// blocked as its scan blocks one, a .hermes.md's frontmatter dropped, each
+// kind cut to 70% head and 20% tail of 6% of the window at four characters a
+// token (20,000 to 500,000) with its notice; a large window's result budget;
+// the hint tracker (an AGENTS.md below TERMINAL_CWD a path argument names);
+// and a window resolver: the default model 300,000 tokens, else 256,000.
 var hermesCheckoutStandIn = map[string]string{
 	"agent/model_metadata.py": `def get_model_context_length(model, base_url="", api_key="", config_context_length=None, provider="",
                              custom_providers=None):
