@@ -5,12 +5,16 @@ import (
 	"maps"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // specCompany parses a company document into the epoch a seat's specs are
@@ -488,5 +492,92 @@ roles:
 	want := map[string]string{"X-Workspace": "acme", "Authorization": "Bearer docs-ceo"}
 	if !maps.Equal(docs.Headers, want) {
 		t.Errorf("the box's docs server sends %v, want %v", docs.Headers, want)
+	}
+}
+
+// A BOX'S OWN SERVER CARRIES WHAT THE COMPANY SAYS IT IS FOR, which the run's
+// environment brief lists beside its name: the box reaches it past the bridge,
+// whose endpoint says a bridged server's description as its MCP instructions,
+// so nothing else tells the model which of the box's servers to look in. One
+// whose entry says nothing carries nothing.
+//
+// Mutation: leave Description out of sandboxMCP's server, and this goes red.
+func TestABoxsOwnServerCarriesWhatTheCompanySaysItIsFor(t *testing.T) {
+	t.Parallel()
+	company := specCompany(t, `
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    zulu:
+      model: claude-sonnet-5
+mcp_servers:
+  - name: handbook
+    description: Searches the engineering handbook and the runbooks
+    tools: {default: allow}
+    command: "handbook-server"
+  - name: tracker
+    tools: {default: allow}
+    transport: http
+    url: "https://tracker.example.com/mcp"
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+`)
+	seat := company.Org.AgentSeatByHandle("ceo")
+	gate := &org.RoleSandbox{MCP: org.RoleSandboxMCP{Servers: []string{"handbook", "tracker"}}}
+
+	got, withheld := sandboxMCP(config.NewResolver(nil), company, seat, gate, nil)
+	if len(withheld) != 0 || len(got) != 2 {
+		t.Fatalf("the box was given %+v and %+v withheld: want both servers, neither reading a value",
+			got, withheld)
+	}
+	if said := got["handbook"].Description; said != "Searches the engineering handbook and the runbooks" {
+		t.Errorf("the box's handbook server says it is for %q, want its entry's description", said)
+	}
+	if said := got["tracker"].Description; said != "" {
+		t.Errorf("the box's tracker server says it is for %q, and its entry says nothing", said)
+	}
+}
+
+// A SERVER THE BRIDGE SERVES CARRIES NO WORDS FOR THE RUN'S BRIEF, though the
+// company says what it is for: the bridge's endpoint for it says that as the
+// server's MCP instructions, which the harness hands its model, so a
+// description on its entry would have the brief say it a second time.
+//
+// Mutation: give each of bridgeServers' servers what its tools carry of it
+// (their ServerDescription, which its endpoint says) as its description, and
+// this goes red.
+func TestAServerTheBridgeServesCarriesNoWordsForTheBrief(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	if err := reg.Register(waitedTool{name: "create_issue"}, tools.Origin("github")); err != nil {
+		t.Fatalf("Register(create_issue): %v", err)
+	}
+	reg.DescribeServers(map[string]string{"github": "The company's code host."})
+	seat := &org.Role{Name: "Engineer", DeclaredHandle: "swe"}
+	surface := tools.NewSurface("execute", reg.Snapshot(), []string{"create_issue"}).
+		ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat})
+	described := false
+	for _, entry := range surface.Universe().Entries() {
+		if server, fromMCP := entry.FromMCP(); fromMCP && server == "github" && entry.ServerDescription != "" {
+			described = true
+		}
+	}
+	if !described {
+		t.Fatal("github's tools carry nothing of what it is for, so the case holds nothing")
+	}
+
+	servers := bridgeServers("https://engine.example.com/mcp/job-token", &mcpbridge.Session{Surface: surface},
+		time.Minute)
+	if _, served := servers["github"]; !served {
+		t.Fatal("the bridge does not serve github under its own name, so the case holds nothing")
+	}
+	for name, server := range servers {
+		if server.Description != "" {
+			t.Errorf("the bridge's %s server carries %q for the run's brief, which its endpoint "+
+				"says already", name, server.Description)
+		}
 	}
 }

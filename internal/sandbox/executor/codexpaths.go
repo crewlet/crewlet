@@ -22,6 +22,12 @@ func (p Paths) CodexRunStart() string { return p.WorkDir() + "/codex-run-start" 
 // runs beside its harness (internal/notehelper), written at every launch.
 func (p Paths) CodexNoteHelper() string { return p.WorkDir() + "/notehelper" }
 
+// CodexHooksOffBy is each file and key that has Codex run no hook of the
+// run's, `; `-separated, empty where none ([codexHooksSwitchedOff]): written by
+// the launch where the box holds the helper, read by the script, which then
+// starts Codex without its nested hook ([codexScript]).
+func (p Paths) CodexHooksOffBy() string { return p.WorkDir() + "/codex-hooks-off-by" }
+
 // CodexNotesURL is the file holding the job's notes route for the note
 // helper, read into the helper's environment alone: the route carries the
 // job's token, so it never reaches argv or the harness's environment.
@@ -48,8 +54,8 @@ func (p Paths) CodexRepo() string { return p.WorkDir() + "/codex-repo" }
 func (p Paths) CodexRepoAgents() string { return p.WorkDir() + "/codex-repo-agents.md" }
 
 // CodexRepoSkills lists, a name a line, the repositories' skills a run copied
-// into [Paths.CodexSkills] ([codexCheckoutHome]), so the next run removes them and
-// none of the home's.
+// into [Paths.CodexSkills] ([codexCheckoutHome]), so the run's end removes them
+// and none of the home's, or the next run's gate where the run was killed first.
 func (p Paths) CodexRepoSkills() string { return p.WorkDir() + "/codex-repo-skills" }
 
 // CodexCapFired is the marker the note helper writes, before it interrupts the

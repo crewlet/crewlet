@@ -1017,10 +1017,8 @@ func TestABoxWithoutTarPacksNothingAndSaysSo(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// The box's PATH holds the harness and what it runs, and no tar or gzip.
-	if path, err := exec.LookPath("mkdir"); err != nil || os.Symlink(path, filepath.Join(bin, "mkdir")) != nil {
-		t.Fatalf("mkdir for the box: %v", err)
-	}
+	// The box's PATH holds the harness and what a box has, but tar and gzip.
+	boxPathWithout(t, bin, "tar", "gzip")
 	writeStandIn(t, filepath.Join(bin, "claude"), `#!/bin/sh
 if [ "$1" = --version ]; then echo '2.1.310 (Claude Code)'; exit 0; fi
 s= prev=; for a; do case "$prev" in --session-id|--resume) s=$a;; esac; prev=$a; done
@@ -1075,12 +1073,8 @@ func TestABoxWithoutFindResumesItsSessionAndSaysItCutNoThread(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// THE BOX'S PATH holds the harness and the transcript cut's tools, and no find.
-	for _, tool := range []string{"mkdir", "rm", "mv", "tail", "wc", "head"} {
-		if path, err := exec.LookPath(tool); err != nil || os.Symlink(path, filepath.Join(bin, tool)) != nil {
-			t.Fatalf("%s for the box: %v", tool, err)
-		}
-	}
+	// THE BOX'S PATH holds the harness and what a box has, but find.
+	boxPathWithout(t, bin, "find")
 	argv := filepath.Join(dir, "argv")
 	writeStandIn(t, filepath.Join(bin, "claude"), `#!/bin/sh
 if [ "$1" = --version ]; then echo '2.1.310 (Claude Code)'; exit 0; fi

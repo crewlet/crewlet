@@ -53,7 +53,7 @@ var (
 	_ recordConfirmer   = Copilot{}
 	_ threadHarness     = Copilot{}
 	_ mainThreadHarness = Copilot{}
-	_ trimmer           = Copilot{}
+	_ recordTrimmer     = Copilot{}
 )
 
 // NewCopilot returns the runner.
