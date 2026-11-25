@@ -92,7 +92,7 @@ func hermesSummaryWhole(r io.Reader) (sandbox.ThreadSummary, bool) {
 			s.take(m.text())
 		}
 		return nil
-	}, func(int64) error {
+	}, func(int64, []byte, []byte) error {
 		s.unshaped(fmt.Sprintf("a row of the session runs past the %d bytes one row is read to", hermesRowMaxBytes))
 		return nil
 	})
