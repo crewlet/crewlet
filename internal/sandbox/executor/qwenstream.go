@@ -353,6 +353,10 @@ func (d *qwenEvents) Ended() bool { return d.endSaid }
 // a 429 and a 500 it retried wrote none of their own.
 func (d *qwenEvents) Requests() int { return d.requests }
 
+// InFlight implements [Decoder]: none, as Qwen Code's own maxSessionTurns
+// stops before the next request (measured on 0.28.4: a cap of 3, 3 requests).
+func (d *qwenEvents) InFlight() int { return 0 }
+
 func (d *qwenEvents) Result() sandbox.Result {
 	d.flushSaid()
 	if !d.sawLine {

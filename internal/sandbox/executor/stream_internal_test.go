@@ -392,6 +392,7 @@ func (r *recorder) Skipped(n int64, bound int) { r.skip(n, bound) }
 func (r *recorder) Result() sandbox.Result     { return sandbox.Result{} }
 func (r *recorder) Ended() bool                { return false }
 func (r *recorder) Requests() int              { return 0 }
+func (r *recorder) InFlight() int              { return 0 }
 func (r *recorder) Entries(bool) []string      { return nil }
 
 // AN ENTRY WITH NO WORDS IS NONE: added, it says nothing, and a run of skipped

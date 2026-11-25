@@ -428,6 +428,10 @@ func (d *piEvents) Ended() bool { return d.settled }
 // the retries after it counted once, as the one request they are.
 func (d *piEvents) Requests() int { return d.requests }
 
+// InFlight implements [Decoder]: none, as the extension aborts the turn
+// before its request (measured on 1.6.0: a cap of 3, 3 requests).
+func (d *piEvents) InFlight() int { return 0 }
+
 // counted counts the request one assistant message ended. PI WRITES EVERY
 // FAILED ATTEMPT AS A MESSAGE OF ITS OWN (`stopReason: "error"`), then retries
 // it: measured on 1.6.0, a 429 and a 500 each retried once wrote 8 messages

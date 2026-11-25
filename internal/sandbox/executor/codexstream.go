@@ -427,6 +427,12 @@ func (d *codexEvents) Ended() bool { return d.completed || d.failure != "" }
 // and a run with no rollout lines never ended as a success anyway.
 func (d *codexEvents) Requests() int { return d.responses }
 
+// InFlight implements [Decoder]: one. The note helper interrupts the turn
+// once it hears the cap-th response, and Codex may have run that response's
+// call and made the next request by then: measured on 0.171.0 with the per-run
+// helper, a cap of 3 stopped after 3 requests in 14 runs of 20 and after 4 in 6.
+func (d *codexEvents) InFlight() int { return 1 }
+
 // codexResponseLine reports whether line, a rollout line, records one model
 // response: a token_count stating the response's own usage
 // (`info.last_token_usage`), which Codex writes once each response completes; a

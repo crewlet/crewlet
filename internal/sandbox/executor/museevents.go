@@ -305,6 +305,10 @@ func (d *museEvents) Ended() bool { return d.completed || d.failure != "" }
 // states.
 func (d *museEvents) Requests() int { return d.requests }
 
+// InFlight implements [Decoder]: none, as Muse's own --max-model-steps is
+// held to stop before the next request (unmeasured: Muse runs in no rig yet).
+func (d *museEvents) InFlight() int { return 0 }
+
 // Result implements [Decoder]: the answer, and how the run ended.
 func (d *museEvents) Result() sandbox.Result {
 	if !d.sawLine {
