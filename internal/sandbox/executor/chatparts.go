@@ -350,7 +350,8 @@ func (c chatAnswerText) Write(p []byte) (int, error) {
 // partEnd shapes what the part just read makes into each reading: in the
 // model's, its call or else its words; in a user record's, its response or
 // else its words; as a summary, its text where it is the content's first a
-// thought is not; and as a response's words, the content's one string (str).
+// thought is not and holds words; and as a response's words, the content's
+// one string (str).
 func (r *chatReading) partEnd(sk *chatSinks, str bool) {
 	b, p := r.b, &r.part
 	words := p.text && !p.thought && !r.text.blank
@@ -382,7 +383,7 @@ func (r *chatReading) partEnd(sk *chatSinks, str bool) {
 	}
 	if (sk.summary != nil || sk.snap != nil) && p.text && !p.thought && !r.firstSeen {
 		r.firstSeen = true
-		if s := sk.summary; s != nil {
+		if s := sk.summary; s != nil && !r.text.blank {
 			s.add(b, r.textAs(s, EntrySummary), time.Time{})
 		}
 		if sk.snap != nil {
