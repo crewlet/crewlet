@@ -87,9 +87,14 @@ type SessionArchive struct {
 }
 
 // ArchiveTrim is what a pack's trim cut of a session's record, as its box
-// counted it: the record's bytes before the cut and those kept. The zero
+// counted it: the record's bytes before the cut and those kept, and where the
+// cut left out lines a chat file's run began after, that start restated over
+// the cut copy ([SessionArchive.Prefix], which a take checks it as). The zero
 // value is no trim.
-type ArchiveTrim struct{ RecordBytes, KeptBytes int64 }
+type ArchiveTrim struct {
+	RecordBytes, KeptBytes int64
+	Prefix                 LinePrefix
+}
 
 // Trimmed reports whether t says the pack kept less of the record than it held.
 func (t ArchiveTrim) Trimmed() bool { return t.KeptBytes > 0 && t.RecordBytes > t.KeptBytes }
