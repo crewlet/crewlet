@@ -394,7 +394,7 @@ test("Settings says the reader once per product and opens the sign-in client's o
   expect(await screen.findByRole("heading", { name: "Company reader" })).toBeTruthy();
   // THE EMAIL ONCE, and each product's role under it.
   expect(screen.getAllByText(READER)).toHaveLength(1);
-  expect(screen.getAllByText("at Viewer")).toHaveLength(2);
+  expect(screen.getAllByText("At Viewer")).toHaveLength(2);
   fireEvent.click(screen.getByRole("button", { name: "Add client" }));
   await waitFor(() => expect(location.hash).toBe("#/company/integrations/google?edit=client"));
   expect(await screen.findByLabelText(/OAuth client ID/)).toBeTruthy();
