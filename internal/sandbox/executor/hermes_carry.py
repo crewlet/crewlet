@@ -690,6 +690,25 @@ def checkout_gate(roots, window):
     return {"checkouts": checkouts, "taken": skill_names()}
 
 
+def checkout_stamp(root):
+    """What a render of root reads, as Hermes finds it, a [path, mtime_ns, size] each: every context file its
+    discovery finds there and every SKILL.md below its project skill directories. The run's plugin renders a
+    checkout again where a kept render's stamp no longer matches."""
+    from agent import prompt_builder as pb, skill_utils as su
+    path = Path(root)
+    files = [p for _kind, _label, p, _content in pb.discover_context_files(path)]
+    files += [md for d in su._candidate_project_skills_dirs(path.resolve())
+              for md in su.iter_skill_index_files(d, "SKILL.md")]
+    stamp = []
+    for p in files:
+        try:
+            st = os.stat(p)
+            stamp.append([str(p), st.st_mtime_ns, st.st_size])
+        except OSError:
+            stamp.append([str(p), None, None])
+    return stamp
+
+
 def skill_frontmatter(md):
     """md's frontmatter as Hermes parses it, {} where it cannot be read."""
     from agent.skill_utils import parse_frontmatter

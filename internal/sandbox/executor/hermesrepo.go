@@ -11,13 +11,13 @@ import (
 // A nested firing runs within Hermes's own hook bound (its
 // plugins.hook_callback_timeout, 30 s by default; past it Hermes drops the
 // answer and skips the hook 60 s, measured) less hermesHandMargin, its own
-// work after the helper and the callback's thread; it claims only while
-// hermesClaimReserve is left, the helper's claim, copies and answer (0.12 s at
-// its full copy bound, measured), so no claim outlives its answer; Hermes's
-// render of the checkouts takes what is before that, at least
+// work after the helper and the callback's thread; Hermes's render of the
+// checkouts takes what is before hermesClaimReserve, at least
 // hermesRenderFloor, some 12 times its slowest (0.40 s for three checkouts,
-// measured). A box whose
-// hook bound is under hermesNestedTimeout, their sum, has no nested hand.
+// measured); the claim, copies and answer (0.12 s at the full copy bound,
+// measured) start only while half the reserve is left and stop at the hand's
+// end. A box whose hook bound is under hermesNestedTimeout, their sum, has no
+// nested hand.
 const (
 	hermesHandMargin    = 2 * time.Second
 	hermesClaimReserve  = 3 * time.Second

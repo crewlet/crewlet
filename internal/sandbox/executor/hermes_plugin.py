@@ -243,16 +243,18 @@ def register(ctx):
 
 
 _carry = {}
+_carry_lock = threading.Lock()
 
 
 def _carry_module(path):
     """The run's carry script as a module, loaded once: its checkout_gate is what the launch renders with."""
-    if path not in _carry:
-        spec = importlib.util.spec_from_file_location("crewlet_carry", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        _carry[path] = module
-    return _carry[path]
+    with _carry_lock:
+        if path not in _carry:
+            spec = importlib.util.spec_from_file_location("crewlet_carry", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _carry[path] = module
+        return _carry[path]
 
 
 def _room(tool, result, window, calls):
@@ -274,17 +276,21 @@ def _room(tool, result, window, calls):
     return int(room) - len(result)
 
 
-# A checkout whose render failed this many times (raised, or missed its firing's bound, or was still running when a
-# later firing came) is claimed as left out, said once: one render took 0.21 to 0.40 s for three checkouts (measured
-# on 0.23.3) against a share of seconds, so a busy moment gets two more firings and a render that hangs or fails for a
-# cause a retry does not change is said by the third, never retried at every call.
+# A checkout whose renders failed this many times is claimed as left out, said once: a render fails once for each
+# hand's bound it outlives, by its age, whichever firings wait on it (0.23.3 fires every call of a parallel batch at
+# once, so counting each firing that found it running would give up a render on time), and once where it raised.
+# One render took 0.21 to 0.40 s for three checkouts (measured on 0.23.3) against a bound of seconds, so a busy
+# moment gets two more bounds and a render that hangs or fails for a cause a retry does not change is said by the
+# third, never retried at every call.
 _RENDER_TRIES = 3
 
 # Hermes 0.23.3's own hook bound where plugins.hook_callback_timeout sets none (hermes_cli/plugins.py's default), which
 # the hand holds itself to where the box has Hermes wait on a hook for good.
 _HOOK_DEFAULT_SECONDS = 30.0
 
-_renders = {}  # root -> {"worker", "answer", "taken", "error", "failures"}, under _lock
+# root -> {"worker", "started", "span", "answer", "stamp", "error", "failures"}, under _lock: "worker" is the
+# running render (None once it finished), "failures" what finished renders counted, "error" the last one raised.
+_renders = {}
 
 
 def _hook_bound():
@@ -298,68 +304,91 @@ def _hook_bound():
     return bound if bound > 0 else _HOOK_DEFAULT_SECONDS
 
 
-def _start_render(hand, root, window):
-    """A worker rendering root (the carry script's checkout_gate), its outcome kept in _renders for whichever
-    firing comes after it: never two for one root."""
-    record = _renders.setdefault(root, {"failures": 0})
+def _failures(record, now):
+    """What record's renders have failed by now: the finished ones' count, and each bound the running one has
+    outlived since the firing that started it."""
+    if record["worker"] is None:
+        return record["failures"]
+    return record["failures"] + int((now - record["started"]) // record["span"])
+
+
+def _start_render(hand, root, window, started, span, record):
+    """A worker rendering root (the carry script's checkout_gate) for a firing that started at `started` and gives
+    it `span` seconds, its outcome kept in record for whichever firing comes after it, with the stamp of what it
+    read (checkout_stamp, taken first, so a change during the render shows). Called under _lock."""
 
     def work():
         try:
-            gate = _carry_module(hand["carry"]).checkout_gate([root], int(window) if window else None)
-            with _lock:
-                record.update(answer=gate["checkouts"][root], taken=gate.get("taken") or {}, error=None)
+            carry = _carry_module(hand["carry"])
+            stamp = carry.checkout_stamp(root)
+            answer, error = carry.checkout_gate([root], int(window) if window else None)["checkouts"][root], None
         except Exception as err:  # said as the render's error once it has failed enough
-            with _lock:
-                record.update(answer=None, error="%s: %s" % (type(err).__name__, str(err)[:200]))
-                record["failures"] += 1
+            answer, stamp, error = None, None, "%s: %s" % (type(err).__name__, str(err)[:200])
+        late = int((time.monotonic() - started) // span)
+        with _lock:
+            if error is None:
+                record.update(answer=answer, stamp=stamp)
+            else:
+                record["error"], late = error, max(late, 1)
+            record["failures"] += late
+            record["worker"] = None
 
     worker = threading.Thread(target=work, name="crewlet-checkouts", daemon=True)
-    record.update(worker=worker, answer=None, error=None)
+    record.update(worker=worker, started=started, span=span, answer=None)
     worker.start()
-    return worker
 
 
-def _gate(hand, roots, window, until):
-    """The gate for this firing: each root's kept answer, a render started for one with none (never while one runs),
-    waited on until `until`; a root whose renders failed _RENDER_TRIES times claimed as left out, said; the rest
-    left out of the gate, so they wait unclaimed."""
-    started = []
+def _gate(hand, roots, window, started, until):
+    """The gate for a firing that started at `started`: each root's kept answer, unless what it read changed since
+    (then rendered again); a render started for a root with none (never while one runs); every running render
+    waited on until `until`; a root whose renders failed _RENDER_TRIES times claimed as left out, said with the last
+    error, else as late; the rest left out of the gate, so they wait unclaimed. The home's taken names are read now,
+    for the claim: a person may have added a skill since a kept answer was rendered."""
+    carry = _carry_module(hand["carry"])
+    with _lock:
+        kept = [root for root in roots if (_renders.get(root) or {}).get("answer") is not None]
+    stamps = {root: carry.checkout_stamp(root) for root in kept}
+    waits = []
     with _lock:
         for root in roots:
-            record = _renders.get(root)
-            if record and record.get("worker") and record["worker"].is_alive():
-                record["failures"] += 1  # still running at a later firing
-            elif not record or (record.get("answer") is None and record["failures"] < _RENDER_TRIES):
-                started.append(_start_render(hand, root, window))
-    for worker in started:
+            record = _renders.setdefault(root, {"worker": None, "answer": None, "stamp": None, "error": None,
+                                                "failures": 0})
+            if root in stamps and record["answer"] is not None and record["stamp"] != stamps[root]:
+                record["answer"] = None
+            if record["worker"] is None and record["answer"] is None and record["failures"] < _RENDER_TRIES:
+                _start_render(hand, root, window, started, until - started, record)
+            if record["worker"] is not None:
+                waits.append(record["worker"])
+    for worker in waits:
         worker.join(max(0.0, until - time.monotonic()))
+    now = max(time.monotonic(), until) if waits else time.monotonic()  # a render still running outlived this bound
     gate = {"checkouts": {}, "taken": {}}
     with _lock:
         for root in roots:
             record = _renders[root]
-            if record.get("answer") is not None:
+            if record["answer"] is not None:
                 gate["checkouts"][root] = record["answer"]
-                gate["taken"].update(record.get("taken") or {})
-                continue
-            if record["worker"] in started and record["worker"].is_alive():
-                record["failures"] += 1  # late at its own firing
-            if record["failures"] >= _RENDER_TRIES:
-                why = ("its render failed: %s" % record["error"]) if record.get("error") else \
-                    "Hermes did not render it within the hand's bound at %d firings" % _RENDER_TRIES
+            elif _failures(record, now) >= _RENDER_TRIES:
+                why = ("its render failed: %s" % record["error"]) if record["error"] else \
+                    "Hermes did not render it within the hand's bound %d times" % _RENDER_TRIES
                 gate["checkouts"][root] = {"text": "", "files": [], "skills": [],
                                            "said": ["the instructions and skills of %s are left out: %s" % (root, why)]}
+    if gate["checkouts"]:
+        gate["taken"] = carry.skill_names()
     return gate
 
 
 def _hand_checkouts(hand, tool, result, window, calls):
     """What a nested firing adds to result, "" for nothing, within Hermes's own hook bound less hand["margin"]: the
-    checkouts the note helper may claim (hermes-peek), Hermes's own answer for each ([_gate], until hand["reserve"]
-    is left), then the helper's claim and answer within the result's room (hermes-nested, given the rest), started
-    only where the reserve is left, else every checkout waits, unclaimed; nothing where the launch turned the hand off
-    (its gate's nested-off)."""
+    checkouts the note helper may claim (hermes-peek), Hermes's own answer for each ([_gate], waited on until
+    hand["reserve"] is left), then the helper's claim and answer within the result's room (hermes-nested, bounded
+    by the hand's end), started only while half the reserve is left; nothing where the reserve was gone before a
+    render could start, or where the launch turned the hand off (its gate's nested-off)."""
     if os.path.exists(os.path.join(os.path.dirname(hand["config"]), "nested-off")):
         return ""
-    end = time.monotonic() + _hook_bound() - hand["margin"]
+    started = time.monotonic()
+    end = started + _hook_bound() - hand["margin"]
+    until = end - hand["reserve"]
 
     def helper(*args, stdin=None):
         done = subprocess.run([hand["helper"], *args, "-config", hand["config"]], input=stdin, capture_output=True,
@@ -370,12 +399,17 @@ def _hand_checkouts(hand, tool, result, window, calls):
 
     try:
         roots = (json.loads(helper("-adapter", "hermes-peek") or b"{}").get("roots") or [])
-        if not roots or end - time.monotonic() <= hand["reserve"]:
+        if not roots or time.monotonic() >= until:
             return ""  # no room left for a render and a claim: every checkout waits
-        gate = _gate(hand, roots, window, end - hand["reserve"])
-        if not gate["checkouts"] or end - time.monotonic() < hand["reserve"]:
+        gate = _gate(hand, roots, window, started, until)
+        if not gate["checkouts"]:
             return ""
         room = _room(tool, result, window, calls)
+        # HALF THE RESERVE: a wait ends with the whole reserve left; a box that held the firing past its bound by
+        # more than half of it (1.5 s of the runner's 3, some 12 times the claim's measured 0.12 s) leaves the
+        # claim to a later firing.
+        if end - time.monotonic() < hand["reserve"] / 2:
+            return ""
         return helper("-adapter", "hermes-nested", "-room", str(room),
                       stdin=json.dumps(gate).encode("utf-8")).decode("utf-8", "replace")
     except Exception as err:  # the run goes on; a checkout claimed is in the run's log, a later one waits

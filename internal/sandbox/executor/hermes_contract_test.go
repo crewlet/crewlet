@@ -379,10 +379,12 @@ func TestAHermesRunsNotesFollowItsSessionIntoACompactionsChild(t *testing.T) {
 
 // hermesNestedProbe registers the plugin with a stand-in of Hermes's plugin
 // context and hook bound (argv[3] seconds), settings argv[2], and fires its
-// transform_tool_result for the run's own session after its turn starts, once
-// for each pause in argv[4] (seconds to wait first), printing the results and
-// the roots it started a render of (a render's own write may come after exit).
-const hermesNestedProbe = `import importlib.util, json, os, sys, time
+// transform_tool_result for the run's own session after its turn starts:
+// for each pause in argv[4] (seconds to wait first), argv[5] firings at once,
+// each on its own thread as a parallel batch's are. It prints the results in
+// firing order and the roots it started a render of (a render's own write may
+// come after the probe exits).
+const hermesNestedProbe = `import importlib.util, json, os, sys, threading, time
 os.environ["CREWLET_HERMES_PLUGIN"] = sys.argv[2]
 stand = os.path.join(os.path.dirname(sys.argv[2]), "py")
 os.makedirs(os.path.join(stand, "hermes_cli"), exist_ok=True)
@@ -402,45 +404,72 @@ hooks["pre_llm_call"](session_id="main")
 out = []
 for pause in json.loads(sys.argv[4]):
     time.sleep(pause)
-    out.append(hooks["transform_tool_result"](session_id="main", tool_name="terminal", result="cloned"))
+    wave = [None] * int(sys.argv[5])
+    def fire(i):
+        wave[i] = hooks["transform_tool_result"](session_id="main", tool_name="terminal", result="cloned")
+    threads = [threading.Thread(target=fire, args=(i,)) for i in range(len(wave))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    out += wave
 print(json.dumps({"results": out, "rendering": sorted(m._renders)}))
 `
 
 // HERMES'S RENDER OF A LATER CHECKOUT IS BOUNDED, NEVER STARTED TWICE, AND
-// SAID ONCE IT KEEPS FAILING: a firing waits on a render only until the claim
-// reserve is left of Hermes's hook bound less the margin; a late render is
-// never started again while it runs and its result serves a later firing; a
-// render late or failing at three firings is claimed as left out, said with
-// its cause (an error named as one); and neither a render nor a claim starts
-// without the reserve, so a claim the third late render brings waits a firing.
+// SAID ONCE IT KEEPS FAILING: every firing that finds a render running waits
+// on it until the claim reserve is left of Hermes's hook bound less the
+// margin, a parallel batch's firings included, and a late render's result
+// serves a later firing unless what it read changed since (then it is
+// rendered again); a render fails once for each such bound it outlives, by its
+// age, and once where it raised, late or not, and at three failures the
+// checkout is claimed as left out, said with the last error, else as late.
+// The claim takes the home's names as they are then. Neither a render nor a
+// claim starts without the reserve, nor a claim with less than half of it.
 //
-// Mutation: wait unbounded, start a render per firing, never give up, say a
-// raise as late, or render or claim without the reserve, and a row goes red.
+// Mutation: wait unbounded, start a render per firing, count a failure per
+// firing that finds a render running or a late raise twice, never give up,
+// forget an error, keep a changed checkout's render or its old names, or
+// render or claim without the reserve, and a row goes red.
 func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 	t.Parallel()
 	python := prereqtest.OnPath(t, "python3", "the case runs Hermes's plugin", "install python3")
 	plugin, _ := hermesPluginOf(t, sandbox.RunRequest{})
+	late := "the instructions and skills of /r are left out: Hermes did not render it within the hand's bound 3 times"
+	failed := "the instructions and skills of /r are left out: its render failed: RuntimeError: boom"
 	for _, c := range []struct {
-		name, render, pauses string
-		reserve              float64
-		want                 []string // each firing's result, "" for none
-		starts               int
-		said                 string // in the gate the last claim read
+		name, render, pauses, names string
+		width                       int // firings at once at each pause
+		reserve                     float64
+		want                        []string // each firing's result, "" for none
+		starts                      int
+		said, unsaid                string // in the gate the last claim read
 	}{
 		{name: "in time", render: "pass", pauses: "[0]", reserve: 1, want: []string{"cloned\n\nHANDED"}, starts: 1},
-		{name: "late, then kept for the next firing", render: "time.sleep(2.5)", pauses: "[0, 2]", reserve: 1,
-			want: []string{"", "cloned\n\nHANDED"}, starts: 1},
+		{name: "a parallel batch waits on one render", render: "time.sleep(0.5)", pauses: "[0]", width: 4, reserve: 1,
+			want: slices.Repeat([]string{"cloned\n\nHANDED"}, 4), starts: 1, unsaid: "left out"},
+		{name: "a parallel batch counts a late render once", render: "time.sleep(2.5)", pauses: "[0, 2]", width: 4,
+			reserve: 1, want: append(slices.Repeat([]string{""}, 4), slices.Repeat([]string{"cloned\n\nHANDED"}, 4)...),
+			starts: 1, unsaid: "left out"},
+		{name: "late, then kept for the next firing with the names of then", pauses: "[0, 2]", reserve: 1,
+			render: "time.sleep(2.5)\n    open(TAKEN, 'w').write('added')",
+			want:   []string{"", "cloned\n\nHANDED"}, starts: 1, said: `"home": "added"`},
+		{name: "kept, then changed, rendered again", pauses: "[0, 2]", reserve: 1,
+			render: "if len(open(STARTS).read()) == 1:\n        time.sleep(2.5)\n        open(STAMP, 'w').write('changed')",
+			want:   []string{"", "cloned\n\nHANDED"}, starts: 2},
 		{name: "late at three firings", render: "time.sleep(60)", pauses: "[0, 0, 0]", reserve: 1,
-			want: []string{"", "", "cloned\n\nHANDED"}, starts: 1,
-			said: "the instructions and skills of /r are left out: Hermes did not render it within the hand's bound at 3 firings"},
+			want: []string{"", "", "cloned\n\nHANDED"}, starts: 1, said: late},
 		{name: "failing at three firings", render: "raise RuntimeError('boom')", pauses: "[0, 0, 0]", reserve: 1,
-			want: []string{"", "", "cloned\n\nHANDED"}, starts: 3,
-			said: "the instructions and skills of /r are left out: its render failed: RuntimeError: boom"},
-		{name: "no render or claim without the reserve", render: "pass", pauses: "[0]", reserve: 5, want: []string{""}},
-		{name: "a claim late at the third render waits a firing", pauses: "[0, 0, 0, 0]", reserve: 1,
+			want: []string{"", "", "cloned\n\nHANDED"}, starts: 3, said: failed},
+		{name: "late, then raising, fails once", pauses: "[0, 1.5, 0]", reserve: 1,
+			render: "if len(open(STARTS).read()) == 1:\n        time.sleep(2.5)\n    raise RuntimeError('boom')",
+			want:   []string{"", "", "cloned\n\nHANDED"}, starts: 3, said: failed},
+		{name: "raising, then late, said as the error", pauses: "[0, 0, 0]", reserve: 1,
 			render: "if len(open(STARTS).read()) < 3:\n        raise RuntimeError('boom')\n    time.sleep(60)",
-			want:   []string{"", "", "", "cloned\n\nHANDED"}, starts: 3,
-			said: "the instructions and skills of /r are left out: Hermes did not render it within the hand's bound at 3 firings"},
+			want:   []string{"", "", "cloned\n\nHANDED"}, starts: 3, said: failed},
+		{name: "no render or claim without the reserve", render: "pass", pauses: "[0]", reserve: 5, want: []string{""}},
+		{name: "no claim with less than half the reserve", render: "pass", pauses: "[0]", reserve: 1,
+			names: "time.sleep(2.6)", want: []string{""}, starts: 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -448,9 +477,19 @@ func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 			q := shellword.Quote
 			helper := "#!/bin/sh\nif [ \"$2\" = hermes-peek ]; then echo '{\"roots\":[\"/r\"]}'; exit 0; fi\n" +
 				"cat > " + q(filepath.Join(dir, "gate.json")) + "\nprintf HANDED\n"
-			carry := "import time\nSTARTS = " + strconv.Quote(filepath.Join(dir, "starts")) +
-				"\ndef checkout_gate(roots, window):\n    open(STARTS, \"a\").write(\"s\")\n    " + c.render +
-				"\n    return {\"checkouts\": {roots[0]: {\"text\": \"T\"}}, \"taken\": {}}\n"
+			names := c.names
+			if names == "" {
+				names = "pass"
+			}
+			carry := "import time\n" +
+				"STARTS, TAKEN, STAMP = " + strconv.Quote(filepath.Join(dir, "starts")) + ", " +
+				strconv.Quote(filepath.Join(dir, "taken")) + ", " + strconv.Quote(filepath.Join(dir, "stamp")) + "\n" +
+				"def _read(path):\n    try:\n        return open(path).read()\n    except OSError:\n        return \"\"\n" +
+				"def skill_names():\n    " + names + "\n    return {\"home\": _read(TAKEN)}\n" +
+				"def checkout_stamp(root):\n    return _read(STAMP)\n" +
+				"def checkout_gate(roots, window):\n    taken = {\"home\": _read(TAKEN)}\n" +
+				"    open(STARTS, \"a\").write(\"s\")\n    " + c.render +
+				"\n    return {\"checkouts\": {roots[0]: {\"text\": \"T\"}}, \"taken\": taken}\n"
 			settings, _ := json.Marshal(map[string]any{"checkouts": map[string]any{"helper": filepath.Join(dir, "helper"),
 				"config": filepath.Join(dir, "nested.json"), "carry": filepath.Join(dir, "carry.py"), "margin": 1,
 				"reserve": c.reserve}})
@@ -459,8 +498,9 @@ func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			width := max(c.width, 1)
 			out, err := exec.Command(python, "-I", "-c", hermesNestedProbe, plugin, filepath.Join(dir, "settings.json"),
-				"4", c.pauses).Output()
+				"4", c.pauses, strconv.Itoa(width)).Output()
 			if err != nil {
 				t.Fatalf("the plugin's hook: %v", err)
 			}
@@ -483,8 +523,12 @@ func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 			if len(starts) != c.starts {
 				t.Errorf("Hermes was asked to render %d times, want %d", len(starts), c.starts)
 			}
-			if gate, _ := os.ReadFile(filepath.Join(dir, "gate.json")); c.said != "" && !strings.Contains(string(gate), c.said) {
+			gate, _ := os.ReadFile(filepath.Join(dir, "gate.json"))
+			if c.said != "" && !strings.Contains(string(gate), c.said) {
 				t.Errorf("the last claim's gate %s says nothing of %q", gate, c.said)
+			}
+			if c.unsaid != "" && strings.Contains(string(gate), c.unsaid) {
+				t.Errorf("the last claim's gate %s says %q", gate, c.unsaid)
 			}
 		})
 	}
