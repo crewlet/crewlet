@@ -272,6 +272,11 @@ type Sources struct {
 	// with OAuth as one nobody has signed in to, and no addresses.
 	MCPGrants MCPGrantReader
 
+	// OAuthClients reads the OAuth clients a person registered at their
+	// vendors and this node's sign-in callback, which the redirect notice is
+	// read off ([notice.FromRedirects]). Nil raises no such notice.
+	OAuthClients OAuthClientReader
+
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
 

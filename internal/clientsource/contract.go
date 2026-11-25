@@ -111,6 +111,8 @@ var contract = []Entry{
 	{"ACCESS_OPTION_PREFIX", ReadScalar, "internal/advisor.TestTheDashboardKnowsAGrantOptionByTheEnginesPrefix"},
 	{"PAUSED_SEAT_CLASSES", ReadLiteral, "internal/advisor.TestTheDashboardKnowsEveryClassAPausedSeatRaises"},
 	{"ADVISOR_PAGES", ReadLiteral, "internal/advisor.TestTheDashboardTakesEveryPageAFixOpens"},
+	{"OAUTH_REDIRECT_MOVED", ReadScalar, "internal/notice.TestTheDashboardKnowsTheRedirectNoticeAndItsVendors"},
+	{"OAUTH_CLIENT_VENDORS", ReadLiteral, "internal/notice.TestTheDashboardKnowsTheRedirectNoticeAndItsVendors"},
 	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"PROJECT_FILE_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},

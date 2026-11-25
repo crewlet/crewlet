@@ -81,7 +81,7 @@ one deciding none its arrival (the reply at the floor in brackets):
 | `seat_access` | `coord.MaxSeatAccessBytes`, 256 KiB | deciding (10.0 s) |
 | `home_board` | `coord.MaxHomeBoardRecordBytes`, the board and 256 bytes | deciding (20.1 s) |
 | `llm_check` | `coord.MaxModelCheckBytes`, its answer and 4 KiB | deciding (2.7 s) |
-| `mcp_oauth`, `integration_grant` | `coord.MaxOAuthGrantBytes`, 200 KiB | deciding (7.9 s) |
+| `mcp_oauth`, `integration_grant` | `coord.MaxOAuthGrantBytes`, 208 KiB | deciding (8.2 s) |
 | `mcp_sign_in`, `integration_sign_in` | `coord.MaxOAuthSignInBytes`, its sealed half and 8 KiB | deciding (2.2 s) |
 | `atlas_wake`, `llm_device_sign_in`, `grant_request` and every other family | `coord.SmallValueBytes` | the term |
 
