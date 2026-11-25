@@ -262,8 +262,8 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]pla
 			}
 			continue
 		}
-		if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil {
-			said.say("the skill %s is left out: the home's skills hold %s already", d.src, name)
+		if why := homeHolds(spec, name); why != "" {
+			said.say("the skill %s is left out: %s", d.src, why)
 			continue
 		}
 		plan, cost, err := planSkill(d.src, realRoot, name)
@@ -284,6 +284,25 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]pla
 		plans = append(plans, plan)
 	}
 	return plans, false
+}
+
+// homeHolds is why a copy named name may not be made, "" where it may: the
+// run's skills hold an entry of that name, which the copy would not replace,
+// or one of the home's other skill directories (spec.HomeSkills) does, whose
+// skill the harness lists under the name in the copy's place, as Muse Code
+// 1.4.25 lists one of ~/.config/muse/skills or of the start directory's
+// before ~/.agents/skills' (measured). The person's skill keeps its name and
+// the copy is left out, said.
+func homeHolds(spec checkoutSpec, name string) string {
+	if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil {
+		return "the home's skills hold " + name + " already"
+	}
+	for _, slot := range spec.HomeSkills {
+		if _, err := os.Lstat(filepath.Join(slot.Dir, name)); err == nil {
+			return "the home's " + filepath.Join(slot.Dir, name) + " takes the name " + name + " in its place"
+		}
+	}
+	return ""
 }
 
 // errNoFrontmatter is a SKILL.md that opens with no frontmatter.

@@ -32,6 +32,7 @@ var oneShots = map[string]oneShot{
 	"codex-nested":      {run: runCodexNested, config: true},
 	"codex-bridge":      {run: runCodexBridge, config: true},
 	"pi-nested":         {run: runPiNested, config: true},
+	"muse-nested":       {run: runMuseNested, config: true},
 	"codex-renew":       {run: runCodexRenew, config: true},
 	"codex-materialize": {run: runCodexMaterialize},
 }

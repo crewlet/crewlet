@@ -33,7 +33,9 @@ import (
 // where it has none); SkillDirs, the skill directories ([skillDirSlot]), an
 // earlier one's skill winning a name; Skills, the run's skills directory (""
 // copies none), and Copied, the file listing each skill copied there;
-// Reserved, the tags no repository takes.
+// Reserved, the tags no repository takes; HomeSkills, the other skill
+// directories (absolute paths) the harness lists beside Skills, a skill of
+// which takes its name from a copy ([homeHolds]).
 type checkoutSpec struct {
 	Instructions []instructionSlot `json:"instructions"`
 	Limit        *int              `json:"limit,omitempty"`
@@ -41,17 +43,20 @@ type checkoutSpec struct {
 	Skills       string            `json:"skills,omitempty"`
 	Copied       string            `json:"copied,omitempty"`
 	Reserved     []string          `json:"reserved,omitempty"`
+	HomeSkills   []skillDirSlot    `json:"homeSkills,omitempty"`
 }
 
 // launchConfig is what -config names for checkout-launch: the run's checkout
 // state directory (the checkouts handed, the lock), the instruction file it
 // replaces with the launch's sections, the checkouts handed first, in order
-// (the repositories the run pushes to), and the spec. The working directory
-// is the adapter's own.
+// (the repositories the run pushes to), the bound the sections share with
+// what the harness loads beside them (nil for none), and the spec. The
+// working directory is the adapter's own.
 type launchConfig struct {
-	State  string   `json:"state"`
-	Agents string   `json:"agents"`
-	First  []string `json:"first"`
+	State  string        `json:"state"`
+	Agents string        `json:"agents"`
+	First  []string      `json:"first"`
+	Budget *launchBudget `json:"budget,omitempty"`
 	checkoutSpec
 }
 
@@ -117,6 +122,9 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) {
 		return errors.New("the launch config names no state, no instruction file, or a negative limit")
 	}
+	if c.Budget != nil && c.Budget.Form != budgetMuse {
+		return fmt.Errorf("the launch config's budget form %q is none the helper knows", c.Budget.Form)
+	}
 	work, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return err
@@ -132,9 +140,13 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 		return err
 	}
 	var sections []string
-	for _, h := range handed {
-		if h.text != "" {
-			sections = append(sections, "for `"+h.name+"` with root "+h.root+"\n\n"+h.text)
+	if c.Budget != nil {
+		sections = museSections(*c.Budget, work, c.Instructions, handed, &skips{stderr: stderr})
+	} else {
+		for _, h := range handed {
+			if h.text != "" {
+				sections = append(sections, "for `"+h.name+"` with root "+h.root+"\n\n"+h.text)
+			}
 		}
 	}
 	if err = os.Remove(c.Agents); err != nil && !errors.Is(err, fs.ErrNotExist) {

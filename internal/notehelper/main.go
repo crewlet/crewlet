@@ -143,19 +143,34 @@
 //     in before it is written, for the runner's next launch to remove
 //     (checkoutcopy.go); `reserved`: the tags no checkout
 //     takes (the seats' namespace). A tag is the checkout's name lower-cased,
-//     a byte outside [a-z0-9] a hyphen, `-2`, `-3`... where taken.
+//     a byte outside [a-z0-9] a hyphen, `-2`, `-3`... where taken;
+//   - `homeSkills`: the home's other skill directories (absolute) its harness
+//     lists before `skills` (Muse: ~/.config/muse/skills and the start
+//     directory's), a skill there of a copy's name leaving the copy out, said.
 //
 // checkout-launch runs once, in W, before the harness: its -config is the spec
 // with `state` (the run's checkout state, remade per run), `agents` (the file
 // it replaces with a section per checkout, "for `<name>` with root <path>"
 // and its instructions, which the runner places where its harness reads them)
 // and `first` (the repositories the run pushes to, handed first; the rest by
-// name). It writes state/nested.json, the -config of the harness's nested
+// name). Its `budget`, {"form": "muse", "own": <file>}, is a bound the
+// sections share with what the harness loads beside them: Muse Code 1.4.25
+// renders the home's rules file (the own file's text, then the sections) and
+// W's own (the first of the slots' names there) into one reminder of at most
+// 65,536 bytes, cutting what passes it (measured), so each checkout is first
+// named ("read <file> for its instructions"), then handed whole, in order,
+// where the reminder still fits, by Muse's exact rendering (checkoutmuse.go);
+// the home's and W's own text are never cut for them. It writes state/nested.json, the -config of the harness's nested
 // adapter, which the run's post-tool hook runs after each of the main loop's
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
-// (name, description, the copy's SKILL.md) as its hook's context; pi-nested
+// (name, description, the copy's SKILL.md) as its hook's context;
+// muse-nested the same, each file wrapped as Muse wraps a rules file, within
+// the 16,384 bytes Muse reads of a hook's stdout (past them it delivers
+// nothing), a checkout's whole while they fit and every other named by its
+// files to read, after a main-loop call alone (its input's session_id is
+// MUSE_SESSION_ID); pi-nested
 // the same with each file in Pi's `<project_instructions path=...>`, on
 // stdout for the run's extension to add to the tool's result (Pi lists no
 // skill it did not start with and loads instructions only as it starts,
