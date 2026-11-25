@@ -361,7 +361,9 @@ func (d *qwenEvents) Ended() bool { return d.endSaid }
 
 // Requests implements [Decoder]: the usage the driver writes for each request,
 // a subagent's included. Measured on 0.28.4 against a stand-in: 31 for 31, and
-// a 429 and a 500 it retried wrote none of their own.
+// a 429 and a 500 it retried wrote none of their own. NOT COUNTED: a side
+// request of its compression, whose usage the driver does not write: a run
+// compressing at the usage reported counted 1 of its 2 side requests.
 func (d *qwenEvents) Requests() int { return d.requests }
 
 // InFlight implements [Decoder]: none, as Qwen Code's own maxSessionTurns

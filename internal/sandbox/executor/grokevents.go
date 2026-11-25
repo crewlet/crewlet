@@ -319,7 +319,9 @@ func (d *grokEvents) Ended() bool { return d.ended || d.capped || d.failure != "
 // agent's, a subagent's included. NOT COUNTED: the session title's request,
 // which writes no usage line. Measured on 1.0.92 against a stand-in: one
 // title request a run beside the loop's, whose 12 of 12 and 3 under a cap of
-// 3 were counted, and 6 with a 429 and a 500 retried.
+// 3 were counted, and 6 with a 429 and a 500 retried. NOR a compaction's
+// summary requests, which write no usage line either: a run that compacted 8
+// times (auto_compact_started) made 40 of them, none counted.
 func (d *grokEvents) Requests() int { return d.requests }
 
 // InFlight implements [Decoder]: none, as Grok's own --max-turns stops before
