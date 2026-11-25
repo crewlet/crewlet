@@ -100,10 +100,9 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 			if release == "" {
 				release = "2.1.330"
 			}
-			runner, real := realBox(t)
-			var box sandbox.Sandbox = real
+			runner, box := realBox(t)
 			if tc.machine != "" {
-				box = machineBox{Sandbox: real, machine: tc.machine}
+				box = machineBox{Sandbox: box, machine: tc.machine}
 			}
 			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/claude", "#!/bin/sh\n"+
 				`case "$1" in --version) echo '`+release+` (Claude Code)'; exit 0;; esac`+"\ncat > /dev/null\n"+
