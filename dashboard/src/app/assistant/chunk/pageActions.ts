@@ -47,6 +47,7 @@ import { newActOpID } from "~/protocol/act.ts";
 import { RestError } from "~/protocol/rest.ts";
 import { emit, on, type AssistantBusEvents } from "../bus.ts";
 import { actionRevision, settledPageContext } from "../context.ts";
+import { withView } from "../view.ts";
 
 /** What became of a page action in this tab, as its receipt says it. */
 export type ActionLocalState =
@@ -254,7 +255,13 @@ export async function takeAction(
   // THE SCREEN AS THE ACTION LEFT IT travels with the report, so the turn it
   // resumes reads the draft the change made and offers the actions the
   // screen accepts now, not the ones it had when the question was asked.
-  const screen = await (deps.screen ?? settledPageContext)();
+  const screen = await (
+    deps.screen ??
+    (async () => {
+      const settled = await settledPageContext();
+      return settled === null ? null : withView(settled);
+    })
+  )();
   // THE OUTCOME IS THE PAGE'S OWN STATEMENT and already drawn here; a report
   // the engine never heard leaves the turn waiting on it, which the engine's
   // own expiry settles, and is not a reason to say the change did not apply.

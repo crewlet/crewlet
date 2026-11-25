@@ -36,8 +36,19 @@ type SeatKey struct {
 	Sign bool
 }
 
+// OrgKey is one of the integration's own values, the same for every seat, that
+// a recognised per-seat server reads beside each seat's credential (Datadog's
+// organization API key); internal/config reads Field off the company's block.
+type OrgKey struct {
+	Field  string
+	Env    string
+	Header string
+	Prefix string
+}
+
 // Binding is a recognised server's declaration of the seat credential it
-// reads: which integration's, under which keys (D15).
+// reads: which integration's, under which keys (D15), and the integration's
+// own values it reads beside it.
 type Binding struct {
 	// Vendor is the integration whose seat credential it reads.
 	Vendor string
@@ -45,14 +56,16 @@ type Binding struct {
 	// the curated entry's suggested name.
 	Server string
 	Keys   []SeatKey
+	Org    []OrgKey
 }
 
-// recognition is one way a configured server is recognised as an entry, and
-// the seat credential a server recognised that way reads (none for a server
-// that acts as no seat).
+// recognition is one way a configured server is recognised as an entry, the
+// seat credential a server recognised that way reads (none for a server that
+// acts as no seat), and the integration's own values it reads beside it.
 type recognition struct {
 	match func(Launch) bool
 	keys  []SeatKey
+	org   []OrgKey
 }
 
 // Recognise is the curated entry a configured server is, by its address or
@@ -78,6 +91,16 @@ func SeatKeysFor(l Launch) (string, []SeatKey, bool) {
 	return e.Integration, slices.Clone(r.keys), true
 }
 
+// OrgKeysFor is the integration's own values a recognised per-seat server
+// reads beside each seat's credential, or false where it reads none.
+func OrgKeysFor(l Launch) (string, []OrgKey, bool) {
+	e, r, ok := recognise(l)
+	if !ok || len(r.org) == 0 {
+		return "", nil, false
+	}
+	return e.Integration, slices.Clone(r.org), true
+}
+
 // BindingFor is the conventional recognised server for an integration: the
 // first recognition in table order that binds its seat credential, or false
 // where this build recognises none for it. A company binds any other server
@@ -89,7 +112,8 @@ func BindingFor(integration string) (Binding, bool) {
 		}
 		for _, r := range e.recognise {
 			if len(r.keys) > 0 {
-				return Binding{Vendor: e.Integration, Server: e.Name, Keys: slices.Clone(r.keys)}, true
+				return Binding{Vendor: e.Integration, Server: e.Name, Keys: slices.Clone(r.keys),
+					Org: slices.Clone(r.org)}, true
 			}
 		}
 	}
@@ -103,7 +127,8 @@ func Bindings() []Binding {
 	for _, e := range curated() {
 		for _, r := range e.recognise {
 			if len(r.keys) > 0 {
-				out = append(out, Binding{Vendor: e.Integration, Server: e.Name, Keys: slices.Clone(r.keys)})
+				out = append(out, Binding{Vendor: e.Integration, Server: e.Name, Keys: slices.Clone(r.keys),
+					Org: slices.Clone(r.org)})
 			}
 		}
 	}

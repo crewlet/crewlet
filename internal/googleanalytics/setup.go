@@ -41,8 +41,7 @@ func Guide() setup.Guide {
 		Summary: "Agents use your Google Analytics properties as their own Google identity, at the role you " +
 			"give it on each property. No token reaches an agent's box.",
 		Prepare: []setup.Step{
-			{Text: vendortext.Plain("Connect Google Cloud first; no project needs preparing. Its Cloud Shell block, " +
-				"run again, turns on the Analytics Data and Admin APIs and makes the company reader.")},
+			googlegrowth.CloudFirst("the Analytics Data and Admin APIs"),
 			{Text: vendortext.Of(vendortext.W("Add the company reader below to each property at "),
 				vendortext.UI("Viewer"), vendortext.W("."))},
 			{Text: vendortext.Plain("Turn agents on from the Agents tab, then set up each one's identity there: add " +

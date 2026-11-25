@@ -23,6 +23,9 @@ var (
 	githubKeys = []SeatKey{{Field: "APP_TOKEN", Env: "GITHUB_PERSONAL_ACCESS_TOKEN",
 		Header: "Authorization", Prefix: "Bearer "}}
 	datadogKeys = []SeatKey{{Field: "APP_KEY", Env: "DD_APPLICATION_KEY", Header: "DD_APPLICATION_KEY"}}
+	// Datadog's server reads the organization's API key beside each agent's
+	// application key, and refuses either alone.
+	datadogOrgKeys = []OrgKey{{Field: "API_KEY", Env: "DD_API_KEY", Header: "DD_API_KEY"}}
 	// Cloudflare's remote server reads an account API token as a bearer
 	// header, and has no local counterpart this build binds.
 	cloudflareKeys = []SeatKey{{Field: "API_TOKEN", Header: "Authorization", Prefix: "Bearer "}}
@@ -38,6 +41,8 @@ var (
 	gitlabServerKeys = []SeatKey{{Field: "TOKEN", Env: "GITLAB_PERSONAL_ACCESS_TOKEN", Header: "Private-Token"}}
 	slackKeys        = []SeatKey{{Field: "BOT_TOKEN", Env: "SLACK_MCP_XOXB_TOKEN", Header: "Authorization", Prefix: "Bearer "}}
 	mattermostKeys   = []SeatKey{{Field: "BOT_TOKEN", Env: "MATTERMOST_TOKEN"}}
+	// Mattermost's server reads the instance's address beside each bot token.
+	mattermostOrgKeys = []OrgKey{{Field: "URL", Env: "MATTERMOST_URL"}}
 	// The scw CLI's own server reads the agent's API key as the CLI does:
 	// the secret, and the access key that names it.
 	scalewayKeys      = []SeatKey{{Field: "SECRET_KEY", Env: "SCW_SECRET_KEY"}, {Field: "ACCESS_KEY", Env: "SCW_ACCESS_KEY"}}
@@ -110,8 +115,9 @@ var curated = sync.OnceValue(func() []Entry {
 			Description: "Logs, metrics, monitors, incidents and traces.",
 			Transport:   TransportHTTP, URL: "https://mcp.datadoghq.com/v1/mcp",
 			Headers: []Input{
-				{Name: "DD_API_KEY", Required: true, Secret: true, Format: "<API key>",
-					Description: "The organization's API key, the same for every agent."},
+				{Name: "DD_API_KEY", Required: true, Secret: true, FromIntegration: true, Format: "<API key>",
+					Description: "The organization's API key, the same for every agent: the Datadog " +
+						"integration's own where it is on."},
 				{Name: "DD_APPLICATION_KEY", Required: true, Secret: true, FromIntegration: true,
 					Format:      "<application key>",
 					Description: "An application key: each agent's own where the Datadog integration is on."},
@@ -126,7 +132,8 @@ var curated = sync.OnceValue(func() []Entry {
 			// datadoghq.com covers every commercial site but EU1's; the
 			// suite holds every site datadog.Sites names to this.
 			recognise: []recognition{
-				{match: hostUnder("datadoghq.com", "datadoghq.eu", "ddog-gov.com"), keys: datadogKeys},
+				{match: hostUnder("datadoghq.com", "datadoghq.eu", "ddog-gov.com"), keys: datadogKeys,
+					org: datadogOrgKeys},
 			},
 		},
 		{
@@ -361,8 +368,8 @@ var curated = sync.OnceValue(func() []Entry {
 			Description: "Channels, posts and threads, as each agent's own Mattermost bot.",
 			Transport:   TransportStdio, Command: "uvx", Args: []string{"mcp-server-mattermost==0.6.1"},
 			Env: []Input{
-				{Name: "MATTERMOST_URL", Required: true, Format: "https://chat.example.com",
-					Description: "The Mattermost server's address."},
+				{Name: "MATTERMOST_URL", Required: true, FromIntegration: true, Format: "https://chat.example.com",
+					Description: "The Mattermost server's address: the Mattermost integration's own where it is on."},
 				{Name: "MATTERMOST_TOKEN", Required: true, Secret: true, FromIntegration: true,
 					Description: "Each agent's own bot token, which the Mattermost integration hands it."},
 			},
@@ -374,9 +381,10 @@ var curated = sync.OnceValue(func() []Entry {
 			// Read at this release: the tool names the bundled skills trigger
 			// on, the variables its page names, and the two tools that reach
 			// the engine host's disk.
-			Release:   "0.6.1",
-			Package:   "mcp-server-mattermost",
-			recognise: []recognition{{match: launches("mcp-server-mattermost"), keys: mattermostKeys}},
+			Release: "0.6.1",
+			Package: "mcp-server-mattermost",
+			recognise: []recognition{{match: launches("mcp-server-mattermost"), keys: mattermostKeys,
+				org: mattermostOrgKeys}},
 		},
 		{
 			ID: "atlassian", Name: "atlassian", Title: "Jira and Confluence", Vendor: "atlassian",

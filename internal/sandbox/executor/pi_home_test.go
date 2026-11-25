@@ -144,8 +144,8 @@ func piLoads(t *testing.T) {
 				extensions = append(extensions, argv[i+1])
 			}
 		}
-		if !slices.Equal(extensions, []string{"builtin:mcp", p.PiExtension()}) {
-			t.Errorf("pi loads %q by name, want its MCP support and the run's extension", extensions)
+		if !slices.Equal(extensions, []string{p.PiExtension()}) {
+			t.Errorf("pi loads %q by name, want the run's extension alone, its MCP support its own", extensions)
 		}
 		if at := slices.Index(argv, "--skill"); at < 0 || argv[at+1] != p.PiSkills() ||
 			!present(files, p.PiSkills()+"/crewlet:deploy/SKILL.md") {

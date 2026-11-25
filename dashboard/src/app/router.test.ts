@@ -59,8 +59,10 @@ import {
   ITEM_KEY_SHAPE,
   KEY_SHAPE,
   artifactStandalonePath,
+  INBOX_ITEM_KINDS,
   inboxItemKey,
   inboxItemPath,
+  inboxRowKey,
   pagePath,
   resolve,
   resolves,
@@ -618,6 +620,7 @@ describe("the resolver", () => {
       [`ask:${uuid}`, ["inbox", "ask", uuid]],
       ["run:turn-7", ["inbox", "run", "turn-7"]],
       ["run:turn-7:q1", ["inbox", "run", "turn-7", "q1"]],
+      ["fold_in:fold-1", ["inbox", "fold_in", "fold-1"]],
       ["seat:pm", ["inbox", "seat", "pm"]],
       ["condition:seat-state-pm", ["inbox", "condition", "seat-state-pm"]],
       [`notice:${uuid}`, ["inbox", "notice", uuid]],
@@ -636,6 +639,17 @@ describe("the resolver", () => {
     expect(resolve(["inbox", "task", "ENG-1"]).resolved).toBe(false);
     expect(resolve(["inbox", "ask"]).resolved).toBe(false);
     expect(inboxItemPath("r-1")).toEqual(["inbox"]);
+  });
+
+  // EVERY KIND A ROW KEY IS BUILT FROM reads back from its address. Mutation: list a kind in
+  // INBOX_ITEM_KINDS that inboxItemPath or inboxItemKey treats apart, and this goes red.
+  test("every Inbox row kind's key round-trips through its address", () => {
+    for (const kind of INBOX_ITEM_KINDS) {
+      const key = inboxRowKey(kind, "x-1");
+      const path = inboxItemPath(key);
+      expect(path, key).toEqual(["inbox", kind, "x-1"]);
+      expect(inboxItemKey(path.slice(1)), key).toBe(key);
+    }
   });
 
   // ASK CREWLET IS A PAGE OF ITS OWN, everybody's, on one conversation by id
