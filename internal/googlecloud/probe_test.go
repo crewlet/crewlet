@@ -157,23 +157,24 @@ func TestAnIncompleteFormIsNotChecked(t *testing.T) {
 	}
 }
 
-// A VALUE NO CALL COULD USE IS NAMED IN A PERSON'S WORDS: the field to change,
-// with no package's name in front of it, wherever the check that refused it
-// lives.
+// A VALUE NO CALL COULD USE IS NAMED IN A PERSON'S WORDS: the field to change
+// as the form labels it, with no package's name and no config path, wherever
+// the check that refused it lives.
 //
-// Mutation: hand the error's own text to the verdict, and the person reads
-// `googleauth: integrations.google_cloud...`.
+// Mutation: hand the error's own text to the verdict, or name the field by its
+// config path, and this fails.
 func TestAnUnusableValueIsNamedWithoutAPackagesName(t *testing.T) {
 	t.Parallel()
 	w := newProbeWorld(t)
-	for field, value := range map[string]string{
-		"provisioner": "ops@acme.example",
-		"provider":    "projects/123456789012/locations/global/workloadIdentityPools/crewlet",
+	for field, c := range map[string]struct{ value, label string }{
+		"provisioner": {"ops@acme.example", "Provisioner service account"},
+		"provider": {"projects/123456789012/locations/global/workloadIdentityPools/crewlet",
+			"Workload identity provider"},
 	} {
-		_, err := w.check(t, map[string]string{field: value})
+		_, err := w.check(t, map[string]string{field: c.value})
 		if err == nil || strings.Contains(err.Error(), "googleauth") || strings.Contains(err.Error(), "googlecloud") ||
-			!strings.Contains(err.Error(), "integrations.google_cloud.provisioning."+field) {
-			t.Errorf("an unusable %s answered %v, want the field named in plain words", field, err)
+			strings.Contains(err.Error(), "integrations.") || !strings.Contains(err.Error(), c.label) {
+			t.Errorf("an unusable %s answered %v, want the field named as the form names it", field, err)
 		}
 	}
 }

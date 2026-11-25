@@ -88,25 +88,24 @@ func New(opts Options) (*Connection, error) {
 	email := strings.TrimSpace(opts.Provisioner)
 	identity, ok := config.GoogleCloudServiceAccount(email)
 	if !ok {
-		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.provisioner is not a service account's email"}
+		return nil, &ConfigError{Sentence: "the Provisioner service account is not a service account's email"}
 	}
 	provider := strings.TrimSpace(opts.Provider)
 	if !config.GoogleCloudProvider(provider) {
-		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.provider is not a workload identity " +
-			"provider's full resource name"}
+		return nil, &ConfigError{Sentence: "the Workload identity provider is not a provider's full resource name"}
 	}
 	if org.Slugify(opts.Company) == "" {
 		return nil, &ConfigError{Sentence: "the company's name has no letter or digit to sign its federation token as"}
 	}
 	key, problem := parseFederationKey(opts.FederationKey)
 	if problem != "" {
-		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.federation_key: " + problem}
+		return nil, &ConfigError{Sentence: problem}
 	}
 	// THE KID IS THE ONE THE CLOUD SHELL BLOCK UPLOADS ([setup.ES256KeyID]),
 	// so Google matches every signed token to that key.
 	kid, err := setup.ES256KeyID(opts.FederationKey)
 	if err != nil {
-		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.federation_key: " + err.Error()}
+		return nil, &ConfigError{Sentence: "the Federation key is not one Crewlet can sign with"}
 	}
 	return &Connection{
 		provisioner: email, identity: identity, provider: provider,
@@ -115,6 +114,11 @@ func New(opts Options) (*Connection, error) {
 	}, nil
 }
 
+// fieldLabels are the setup form's names for the connection's fields, which a
+// sentence names a field by (googlecloud.Requirements).
+var fieldLabels = map[string]string{"provisioner": "Provisioner service account",
+	"provider": "Workload identity provider", "federation_key": "Federation key"}
+
 // For is the connection of company's Google identity, from its document as
 // env resolves it. An error wrapping [integration.ErrNotConfigured] is a
 // company without the identity (Google Cloud off or no provisioning block),
@@ -122,11 +126,11 @@ func New(opts Options) (*Connection, error) {
 func For(c *config.Company, env *config.Resolver, hc *http.Client) (*Connection, error) {
 	if c == nil || c.Integrations.GoogleCloud == nil || !c.Integrations.GoogleCloud.Enabled ||
 		c.Integrations.GoogleCloud.Provisioning == nil {
-		return nil, &ConfigError{Sentence: "integrations.google_cloud is off or has no provisioning block",
+		return nil, &ConfigError{Sentence: "Google Cloud is not set up in Crewlet",
 			Err: integration.ErrNotConfigured}
 	}
 	if env == nil {
-		return nil, &ConfigError{Sentence: "nothing resolves the federation key", Err: integration.ErrNotConfigured}
+		return nil, &ConfigError{Sentence: "the Federation key could not be read", Err: integration.ErrNotConfigured}
 	}
 	prov := c.Integrations.GoogleCloud.Provisioning
 	values := map[string]string{
@@ -136,8 +140,8 @@ func For(c *config.Company, env *config.Resolver, hc *http.Client) (*Connection,
 	}
 	for _, field := range []string{"provisioner", "provider", "federation_key"} {
 		if values[field] == "" {
-			return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning." + field +
-				" is not set or did not resolve", Err: integration.ErrNotConfigured}
+			return nil, &ConfigError{Sentence: "the " + fieldLabels[field] + " is not set yet",
+				Err: integration.ErrNotConfigured}
 		}
 	}
 	return New(Options{
