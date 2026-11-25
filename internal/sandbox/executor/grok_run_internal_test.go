@@ -612,9 +612,11 @@ func TestAGrokRunPutsTheBoxsOwnSettingsBackOnceGrokExits(t *testing.T) {
 	}
 	script := grokScript(sandbox.RunRequest{Brief: "x"}, Session{ID: "s"}, Paths{Home: "/home/box"}, time.Second)
 	put := strings.Index(script, "grokput() {")
-	held := strings.Index(script, strings.TrimSuffix(grokRestoreConfig(Paths{Home: "/home/box"}), "\n"))
+	line := script[max(put, 0):]
+	line = line[:strings.Index(line, "\n")]
+	held := strings.Index(line, strings.TrimSuffix(grokRestoreConfig(Paths{Home: "/home/box"}), "\n"))
 	restore := strings.Index(script, "\ngrokput; ")
-	inPut := put >= 0 && held > put && held < put+strings.Index(script[put:], "\n")
+	inPut := put >= 0 && held > 0
 	if !inPut || restore < strings.Index(script, `wait "$harness"`) || restore > strings.Index(script, grokRecordMark) {
 		t.Errorf("the script puts the settings back (grokput at %d, its restore at %d, called at %d), want them in "+
 			"grokput, called after the harness and before the record:\n%s", put, held, restore, script)
