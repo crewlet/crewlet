@@ -31,7 +31,7 @@ func newProbeWorld(t *testing.T) *probeWorld {
 
 func (w *probeWorld) check(t *testing.T, values map[string]string) (setup.Verdict, error) {
 	t.Helper()
-	form := map[string]string{"provisioner": provisioner, "provider": testProvider, "federation_key": w.key}
+	form := map[string]string{"identity_project": identity, "provider": testProvider, "federation_key": w.key}
 	for k, v := range values {
 		form[k] = v
 	}
@@ -81,31 +81,34 @@ func TestAWholeConnectionWorksAndSaysWhatItReaches(t *testing.T) {
 	w.f.onlyGoogle(t)
 }
 
-// EACH HALF THAT REFUSES IS NAMED WITH ITS FIX, and nothing the probe signed or
-// minted reaches the sentence.
+// EACH HALF THAT REFUSES IS NAMED WITH ITS FIX, after the parts that passed
+// and the one that failed, and nothing the probe signed or minted reaches the
+// sentence. Mutation: drop the parts from a refusal, or fail the wrong one,
+// and this fails.
 func TestEachRefusedHalfIsNamedWithItsFix(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		breakIt func(*fakeGoogle)
+		failed  string
 		says    []string
 	}{
 		{"an untrusted key", func(f *fakeGoogle) {
 			other, _ := fakeKey(t)
 			f.pub = &other.PublicKey
-		}, []string{"Security Token Service", "crewlet:acme", "Cloud Shell block"}},
+		}, "Federation", []string{"Security Token Service", "crewlet:acme", "Cloud Shell block"}},
 		{"no Workload Identity User", func(f *fakeGoogle) {
 			f.refuse["POST /v1/projects/-/serviceAccounts/"+provisioner+":generateAccessToken"] = http.StatusForbidden
-		}, []string{"Federation works", "Workload Identity User", "principal://iam.googleapis.com/"}},
+		}, "Acting as the provisioner", []string{"Federation works", "Workload Identity User", "principal://iam.googleapis.com/"}},
 		{"an API not enabled", func(f *fakeGoogle) {
 			delete(f.projects[identity].Services, "iamcredentials.googleapis.com")
-		}, []string{"iamcredentials.googleapis.com", identity}},
+		}, "Identity project's APIs", []string{"iamcredentials.googleapis.com", identity, "Cloud Shell block"}},
 		{"no Service Usage Viewer", func(f *fakeGoogle) {
 			f.refuse["GET /v1/projects/"+identity+"/services"] = http.StatusForbidden
-		}, []string{"Service Usage Viewer"}},
+		}, "Identity project's APIs", []string{"Service Usage Viewer"}},
 		{"no Service Account Admin", func(f *fakeGoogle) {
 			f.refuse["POST /v1/projects/"+identity+":testIamPermissions"] = http.StatusForbidden
-		}, []string{"its own permissions on " + identity}},
+		}, "Provisioner's grants", []string{"its own permissions on " + identity, "Service Account Admin", "Cloud Shell block"}},
 	} {
 		w := newProbeWorld(t)
 		w.f.edit(tc.breakIt)
@@ -113,6 +116,11 @@ func TestEachRefusedHalfIsNamedWithItsFix(t *testing.T) {
 		if err != nil || verdict.Outcome != setup.VerifyRefused {
 			t.Errorf("%s: %+v, %v; want refused", tc.name, verdict, err)
 			continue
+		}
+		at := slices.Index(googlecloud.ProbeParts, tc.failed)
+		want := setup.Refused("", setup.Parts(googlecloud.ProbeParts, at)...).Facts
+		if at < 0 || len(verdict.Facts) < len(want) || !slices.Equal(verdict.Facts[:len(want)], want) {
+			t.Errorf("%s: facts %+v, want them to open with %+v", tc.name, verdict.Facts, want)
 		}
 		for _, want := range tc.says {
 			if !strings.Contains(said(verdict), want) {
@@ -143,7 +151,7 @@ func TestAForeignAccountInTheIdentityProjectIsNamed(t *testing.T) {
 func TestAnIncompleteFormIsNotChecked(t *testing.T) {
 	t.Parallel()
 	w := newProbeWorld(t)
-	for _, field := range []string{"provisioner", "provider", "federation_key"} {
+	for _, field := range []string{"identity_project", "provider", "federation_key"} {
 		if _, err := w.check(t, map[string]string{field: ""}); !errors.Is(err, setup.ErrUnusableInput) {
 			t.Errorf("no %s: %v, want unusable input", field, err)
 		}
@@ -152,28 +160,29 @@ func TestAnIncompleteFormIsNotChecked(t *testing.T) {
 		t.Errorf("a malformed provider: %v, want unusable input", err)
 	}
 	probe := googlecloud.Probe(w.hc)
-	if _, err := probe(context.Background(), setup.Check{Field: "provisioner"}); !errors.Is(err, setup.ErrNotCheckable) {
-		t.Errorf("checking the provisioner on its own: %v, want not checkable", err)
+	if _, err := probe(context.Background(), setup.Check{Field: "identity_project"}); !errors.Is(err, setup.ErrNotCheckable) {
+		t.Errorf("checking the identity project on its own: %v, want not checkable", err)
 	}
 }
 
-// A VALUE NO CALL COULD USE IS NAMED IN A PERSON'S WORDS: the field to change,
-// with no package's name in front of it, wherever the check that refused it
-// lives.
+// A VALUE NO CALL COULD USE IS NAMED IN A PERSON'S WORDS: the field to change
+// as the form labels it, with no package's name and no config path, wherever
+// the check that refused it lives.
 //
-// Mutation: hand the error's own text to the verdict, and the person reads
-// `googleauth: integrations.google_cloud...`.
+// Mutation: hand the error's own text to the verdict, or name the field by its
+// config path, and this fails.
 func TestAnUnusableValueIsNamedWithoutAPackagesName(t *testing.T) {
 	t.Parallel()
 	w := newProbeWorld(t)
-	for field, value := range map[string]string{
-		"provisioner": "ops@acme.example",
-		"provider":    "projects/123456789012/locations/global/workloadIdentityPools/crewlet",
+	for field, c := range map[string]struct{ value, label string }{
+		"identity_project": {"Acme Crewlet", "Identity project ID"},
+		"provider": {"projects/123456789012/locations/global/workloadIdentityPools/crewlet",
+			"Workload identity provider"},
 	} {
-		_, err := w.check(t, map[string]string{field: value})
+		_, err := w.check(t, map[string]string{field: c.value})
 		if err == nil || strings.Contains(err.Error(), "googleauth") || strings.Contains(err.Error(), "googlecloud") ||
-			!strings.Contains(err.Error(), "integrations.google_cloud.provisioning."+field) {
-			t.Errorf("an unusable %s answered %v, want the field named in plain words", field, err)
+			strings.Contains(err.Error(), "integrations.") || !strings.Contains(err.Error(), c.label) {
+			t.Errorf("an unusable %s answered %v, want the field named as the form names it", field, err)
 		}
 	}
 }

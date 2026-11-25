@@ -2,7 +2,32 @@
 
 - **Status:** accepted
 - **Authority:** `internal/gitlet/cache`
-- **Enforced-by:** `internal/gitlet/cache.TestEveryDerivedFileIsDeclared`, `internal/gitlet/cache.TestValidateRefusesAnUnsaidDeclaration`, `internal/gitlet/cache.TestTheSweepKeepsExactlyTheDeclaredImage`, `internal/gitlet/cache.TestADerivedFileFollowsItsDeclarationOnEveryEvent`, `internal/gitlet/cache.TestTheCodeReadsTheDeclarations`, `internal/gitlet/cache.TestEveryPackAddedReadsItsDeclaration`, `internal/gitlet/cache.TestEveryHoldOfADerivedFileReadsItsDeclarationsCheck`, `internal/gitlet/cache.TestADropStopsARunWritingWhatItDrops`, `internal/gitlet/cache.TestAReportADeclarationKeepsItsFilesOnRecordsNoDrop`, `internal/gitlet/cache.TestARequestsDamageNoDropRepairsIsRepairedAsAPacks`, `internal/gitlet/cache.TestTheMaintainersStepsAreTheDeclaredWrites`, `internal/gitlet/cache.TestNothingButSyncWritesACache` (its declared-writers half, held able to fail by its control), `internal/gitlet/cache.TestTheConceptPageNamesEveryDerivedFile`, `internal/gitlet/cache.TestTheStateIsWhatTheNextBootKnows`, `internal/gitlet/cache.TestADerivedFileGoneFromUnderItsStateIsForgotten`, `internal/gitlet/cache.TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite`, `internal/gitlet/cache.TestAMaintenanceRunKeepsTheProvenanceState`, `internal/gitlet/cache.TestAFileUnderCrewletIsCountedInTheBudget`, `internal/gitlet/cache.TestARebuildLinksTheIndex`, `internal/gitlet/cache.TestARewoundLogDropsTheIndex`, `internal/gitlet/cache.TestValidateHoldsAPartToWhoReadsTheFiles`, `internal/gitlet/cache.TestAReportOnAChainedCopyMakesItsScrubDue`, `internal/gitlet/cache.TestTheTipIsWrittenOverTheTailAlone`, `internal/gitlet/cache.TestARetirementKeepsTheTipAndEveryOtherChangeTakesIt`, `internal/gitlet/cache.TestAFailingTipIsDroppedAndWrittenAgain`, `internal/gitlet/cache.TestAPackLeavingInPlaceTakesTheTip`
+- **Enforced-by:**
+  - `internal/gitlet/cache.TestEveryDerivedFileIsDeclared`
+  - `internal/gitlet/cache.TestValidateRefusesAnUnsaidDeclaration`
+  - `internal/gitlet/cache.TestTheSweepKeepsExactlyTheDeclaredImage`
+  - `internal/gitlet/cache.TestADerivedFileFollowsItsDeclarationOnEveryEvent`
+  - `internal/gitlet/cache.TestTheCodeReadsTheDeclarations`
+  - `internal/gitlet/cache.TestEveryPackAddedReadsItsDeclaration`
+  - `internal/gitlet/cache.TestEveryHoldOfADerivedFileReadsItsDeclarationsCheck`
+  - `internal/gitlet/cache.TestADropStopsARunWritingWhatItDrops`
+  - `internal/gitlet/cache.TestAReportADeclarationKeepsItsFilesOnRecordsNoDrop`
+  - `internal/gitlet/cache.TestARequestsDamageNoDropRepairsIsRepairedAsAPacks`
+  - `internal/gitlet/cache.TestTheMaintainersStepsAreTheDeclaredWrites`
+  - `internal/gitlet/cache.TestNothingButSyncWritesACache` (its declared-writers half, held able to fail by its control), `internal/gitlet/cache.TestTheConceptPageNamesEveryDerivedFile`
+  - `internal/gitlet/cache.TestTheStateIsWhatTheNextBootKnows`
+  - `internal/gitlet/cache.TestADerivedFileGoneFromUnderItsStateIsForgotten`
+  - `internal/gitlet/cache.TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite`
+  - `internal/gitlet/cache.TestAMaintenanceRunKeepsTheProvenanceState`
+  - `internal/gitlet/cache.TestAFileUnderCrewletIsCountedInTheBudget`
+  - `internal/gitlet/cache.TestARebuildLinksTheIndex`
+  - `internal/gitlet/cache.TestARewoundLogDropsTheIndex`
+  - `internal/gitlet/cache.TestValidateHoldsAPartToWhoReadsTheFiles`
+  - `internal/gitlet/cache.TestAReportOnAChainedCopyMakesItsScrubDue`
+  - `internal/gitlet/cache.TestTheTipIsWrittenOverTheTailAlone`
+  - `internal/gitlet/cache.TestARetirementKeepsTheTipAndEveryOtherChangeTakesIt`
+  - `internal/gitlet/cache.TestAFailingTipIsDroppedAndWrittenAgain`
+  - `internal/gitlet/cache.TestAPackLeavingInPlaceTakesTheTip`
 - **Measured:** at 1152ca322 the two derived files a cache writes — the multi-pack-index (a full round's without a bitmap, the maintainer's with its bitmap or without one) and the commit-graph — were spelled in eighteen of the cache's non-test files (`multi-pack-index`, `commit-graph` or `tmp_bitmap` 122 times): their file names in the sweep, Verify, the check, the scrub and the size measure; their argument lists, charges, lanes and deadlines beside each writer; what a removed pack, rewritten refs and a damage report do to them in the install, the refs' write, the sync and the reports; and the state's own struct. They agreed only because nothing had changed them apart, and M3 adds more kinds.
 - **Cost-when-tried:** the sweep's image grammar and Verify's listing were made one predicate a directory because two copies of the grammar had disagreed about what a cache is, and the derived files were the part still spelled beside it — a file a writer leaves that the grammar does not admit is trashed under a running reader, and a file the grammar admits that no writer makes is a hole anyone may fill. And each directory's grammar admitted a file of the root, and one in `objects/info`, as anything but a directory: a symbolic link named `commit-graph`, or named `config` over a file holding the configuration the pool requires, was kept by the sweep and admitted by Verify, and git read the file it pointed at, outside the incarnation, its budget and what a rebuild replaces — the link at `config` passing the pool's shape check too, which reads through it.
 - **Tag-status:** unreleased

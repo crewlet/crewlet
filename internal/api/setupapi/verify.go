@@ -16,10 +16,11 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// verify serves POST /setup/integrations/{kind}/verify: a typed credential
-// checked at its vendor, and nothing stored (no value, pointer, revision or
-// finding: one from a value nobody saved would describe a company that does
-// not exist).
+// verify serves POST /setup/integrations/{kind}/verify: a typed value checked
+// at its vendor, through the integration's own probe, and nothing stored (no
+// value, pointer, revision or finding: one from a value nobody saved would
+// describe a company that does not exist). The value is any field its
+// requirement declares Checkable, a credential or a connection a block printed.
 //
 // The verb is `setup.connect`, not `secrets.write`: it spends a credential at
 // a vendor on a person's hand and seals nothing.
@@ -213,9 +214,16 @@ func checkedField(kind integration.Kind, seat, field, value string,
 	if !ok {
 		return setup.Requirement{}, field + " is not a field of " + where + "."
 	}
-	if target.Kind != setup.KindSecret {
-		return setup.Requirement{}, field + " is not a credential, and only a " +
-			"credential can be checked."
+	// CHECKABLE IS THE ONE QUESTION, never the kind: a connection a block
+	// printed is checked as a key is. A field with neither a check nor a
+	// note on when it is proved has nothing a check could say.
+	if !target.Checkable && strings.TrimSpace(target.CheckNote) == "" {
+		for _, r := range against {
+			if r.Checkable && slices.Contains(r.CheckWith, field) {
+				return setup.Requirement{}, field + " is checked together with " + r.Field + "; check that field."
+			}
+		}
+		return setup.Requirement{}, field + " is not something a check can be made of."
 	}
 	if strings.TrimSpace(value) == "" {
 		return setup.Requirement{}, "Enter the value to check."

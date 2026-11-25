@@ -52,6 +52,14 @@ import {
   type SignInScreen,
 } from "./routes.ts";
 import { ALL_PROJECTS, LENS_LABELS, type ScopeAt } from "./scope.ts";
+import { INTEGRATION_TOOL_NAMES } from "~/contract/integrations.ts";
+
+/** An integration's name off its own page, the segment where it names no tool. */
+function toolName(kind: string): string {
+  return Object.hasOwn(INTEGRATION_TOOL_NAMES, kind)
+    ? INTEGRATION_TOOL_NAMES[kind as keyof typeof INTEGRATION_TOOL_NAMES]
+    : kind;
+}
 
 export type Labels = Record<string, string>;
 
@@ -535,7 +543,7 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
       ];
     case "integrations":
       return where.kind
-        ? [root(row, true), { label: labels[where.kind] ?? where.kind }]
+        ? [root(row, true), { label: labels[where.kind] ?? toolName(where.kind) }]
         : [root(row, false)];
     case "atlas":
       return [root(row, false)];
@@ -550,6 +558,7 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
       // "Entry", never the uuid the address bar already carries.
       return [root(row, true), { label: labels[where.id] || "Entry" }];
     case "general":
+    case "ask-crewlet":
     case "spend":
     case "spend-tasks":
     case "limits":

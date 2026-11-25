@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -335,6 +336,31 @@ func (c *Client) EnabledServices(ctx context.Context, project string) (map[strin
 		out[name] = true
 	}
 	return out, nil
+}
+
+// enableBatch is the most services one batchEnable call names.
+const enableBatch = 20
+
+// EnableServices turns on each of names on project, enableBatch at a time.
+// Google answers an operation; a caller reads the services back rather than
+// polling it, since a read-back is what the next step waits on anyway.
+func (c *Client) EnableServices(ctx context.Context, project string, names []string) error {
+	for batch := range slices.Chunk(names, enableBatch) {
+		var op struct {
+			Done  bool `json:"done"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := c.call(ctx, http.MethodPost, serviceUsageAPI+"/projects/"+url.PathEscape(project)+"/services:batchEnable",
+			map[string]any{"serviceIds": batch}, &op); err != nil {
+			return err
+		}
+		if op.Done && op.Error != nil {
+			return fmt.Errorf("googlecloud: turn on %s: %s", strings.Join(batch, ", "), op.Error.Message)
+		}
+	}
+	return nil
 }
 
 // Asset is one resource Cloud Asset Inventory lists, as the atlas keeps it:

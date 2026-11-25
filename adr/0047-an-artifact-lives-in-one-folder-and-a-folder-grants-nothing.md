@@ -2,7 +2,19 @@
 
 - **Status:** accepted
 - **Authority:** `internal/artifactsdomain`
-- **Enforced-by:** `internal/artifactsdomain.TestAFolderGrantsNothingToItsContents`, `internal/artifactsdomain.TestFilingNeverMovesTheAccessEpoch`, `internal/artifactsdomain.TestAFolderCountHoldsOnlyWhatTheReaderMaySee`, `internal/artifactsdomain.TestABreadcrumbNeverNamesAHiddenAncestor`, `internal/artifactsdomain.TestTheTotalEqualsTheRowsTheViewerMaySee`, `internal/artifactsdomain.TestAMoveRowNamesNoFolder`, `internal/artifactsdomain.TestDeletingAFolderReparentsWhatItHolds`, `internal/artifactsdomain.TestAFolderCycleIsRefusedWhereItIsApplied`, `internal/artifactsdomain.TestAnAgentNeverSharesAFolderWithTheCompany`, `internal/api/artifactsapi.TestAnInvisibleFolderIsNotFoundLikeAnUnknownOne`, `internal/api/artifactsapi.TestFilingAsksTheFolderAndTheArtifact`, `internal/api/artifactsapi.TestTheAdminPathListsNoPrivateFolder`
+- **Enforced-by:**
+  - `internal/artifactsdomain.TestAFolderGrantsNothingToItsContents`
+  - `internal/artifactsdomain.TestFilingNeverMovesTheAccessEpoch`
+  - `internal/artifactsdomain.TestAFolderCountHoldsOnlyWhatTheReaderMaySee`
+  - `internal/artifactsdomain.TestABreadcrumbNeverNamesAHiddenAncestor`
+  - `internal/artifactsdomain.TestTheTotalEqualsTheRowsTheViewerMaySee`
+  - `internal/artifactsdomain.TestAMoveRowNamesNoFolder`
+  - `internal/artifactsdomain.TestDeletingAFolderReparentsWhatItHolds`
+  - `internal/artifactsdomain.TestAFolderCycleIsRefusedWhereItIsApplied`
+  - `internal/artifactsdomain.TestAnAgentNeverSharesAFolderWithTheCompany`
+  - `internal/api/artifactsapi.TestAnInvisibleFolderIsNotFoundLikeAnUnknownOne`
+  - `internal/api/artifactsapi.TestFilingAsksTheFolderAndTheArtifact`
+  - `internal/api/artifactsapi.TestTheAdminPathListsNoPrivateFolder`
 - **Tag-status:** unreleased
 
 ## The decision

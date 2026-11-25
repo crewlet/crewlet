@@ -2,7 +2,19 @@
 
 - **Status:** accepted
 - **Authority:** `internal/gitlab`
-- **Enforced-by:** `internal/gitlab.TestTheAtlasReadsProjectsPipelinesAndEnvironments`, `internal/gitlab.TestTheReadCredentialIsUsedBeforeTheProvisioningToken`, `internal/gitlab.TestAFailingGitLabDeploymentIsTheHealthOfWhatItDeploys`, `internal/gitlab.TestAProjectGitletMirrorsIsOneEntry`, `internal/gitlab.TestAPartGitLabRefusesIsAFindingAndRetiresNothing`, `internal/gitlab.TestAGroupOrANamedProjectTheCredentialCannotSeeCarriesWhatWasRead`, `internal/gitlab.TestAnEnvironmentThatIsStoppedRetiresNothingItServed`, `internal/gitlab.TestNoCredentialShapeReachesTheAtlasFromGitLab`, `internal/gitlab.TestAListingThatFailsOrIsRateLimitedFailsTheGitLabRead`, `internal/gitlab.TestTheGitLabListingsAreWalkedToTheirBounds`, `internal/atlas/derive.TestANamedRepositoryIsKeyedByItsForgesAddress`, `internal/atlas.TestARepositoryIsKnownByOneKeyWhereverItIsNamed`
+- **Enforced-by:**
+  - `internal/gitlab.TestTheAtlasReadsProjectsPipelinesAndEnvironments`
+  - `internal/gitlab.TestTheReadCredentialIsUsedBeforeTheProvisioningToken`
+  - `internal/gitlab.TestAFailingGitLabDeploymentIsTheHealthOfWhatItDeploys`
+  - `internal/gitlab.TestAProjectGitletMirrorsIsOneEntry`
+  - `internal/gitlab.TestAPartGitLabRefusesIsAFindingAndRetiresNothing`
+  - `internal/gitlab.TestAGroupOrANamedProjectTheCredentialCannotSeeCarriesWhatWasRead`
+  - `internal/gitlab.TestAnEnvironmentThatIsStoppedRetiresNothingItServed`
+  - `internal/gitlab.TestNoCredentialShapeReachesTheAtlasFromGitLab`
+  - `internal/gitlab.TestAListingThatFailsOrIsRateLimitedFailsTheGitLabRead`
+  - `internal/gitlab.TestTheGitLabListingsAreWalkedToTheirBounds`
+  - `internal/atlas/derive.TestANamedRepositoryIsKeyedByItsForgesAddress`
+  - `internal/atlas.TestARepositoryIsKnownByOneKeyWhereverItIsNamed`
 - **Cost-when-tried:** not tried. GitHub (ADR-0131) is read through an app per agent because the engine holds no company credential there that can read. GitLab is the first forge where it holds two, one made for reading and one that owns the group, so "which credential" has an answer to choose.
 - **Tag-status:** unreleased
 

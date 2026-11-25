@@ -60,10 +60,11 @@
 //
 // # The step cap
 //
-// -step-cap N ends a turn at its Nth model response, counted per turn, the
-// unit of Claude Code's --max-turns, which a context compaction's request is
-// not: the adapter counts the responses ([events]), and at N the helper
-// writes -cap-marker, by a rename, and then interrupts the turn ([stepCap]).
+// -step-cap N ends the run at its Nth model response, counted over all its
+// turns, a note's included, which a context compaction's request is not: the
+// adapter counts the responses ([events]), and at N the helper writes
+// -cap-marker, by a rename, and then interrupts the turn ([stepCap]); a turn
+// started after that is interrupted as it starts.
 // The marker says the cap fired, never that a turn was cut short: a turn
 // whose Nth response was its final answer completes, and the run reads its
 // cap only where its record of the turn says the interrupt aborted it. An
@@ -107,8 +108,11 @@
 //   - `instructions`: slots, in order, within `limit`, the harness's own
 //     bound in bytes on what a session started in the checkout reads of them
 //     (Codex: project_doc_max_bytes), omitted for a harness with none, a file
-//     the limit cuts spending all of it. A list of file names relative to a
-//     checkout's root hands its first regular file (Codex:
+//     the limit cuts spending all of it; `firingLimit`, a nested firing's
+//     bound on all its checkouts' files, each counted with its frame, each
+//     that fits handed whole, the rest left out whole and named for the model
+//     to read. A list of file names relative to a checkout's root hands its
+//     first regular file (Codex:
 //     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>,
 //     "suffix": <s>, "form": <harness>, "scoped": {"keys": [...], "whole":
 //     [...]}}, hands each file below dir whose name ends in s, whole, apart by
@@ -127,9 +131,17 @@
 //     checkout, each directory once, an empty file skipped; frontmatter read
 //     as YAML, a file whose frontmatter is not valid YAML left out (it never
 //     loads), a key's value a string or a list's strings, split on `,`,
-//     trimmed, its other entries and another kind holding none. A tree past 8 directories deep, 1,024 entries or 32 MiB is
-//     left out whole, said: Copilot walks 9 levels and Claude Code 10 at least
-//     (measured), so a deeper tree is the gap;
+//     trimmed, its other entries and another kind holding none. `qwen`
+//     (0.28.4, .qwen/rules): as `claude`, but no link followed at all, each
+//     file handed as Qwen Code loads it, its body without frontmatter or HTML
+//     comments, none where that is empty, and `paths` read as it reads it
+//     (qwenrule.go): a non-empty string, `**` included, or a list entry
+//     JavaScript's String makes non-empty names a path, a list holding a
+//     mapping none, and frontmatter its YAML parser refuses is read by its
+//     line reader. A tree past 8
+//     directories deep, 1,024 entries or 32 MiB is left out whole, said:
+//     Copilot walks 9 levels and Claude Code 10 at least (measured), so a
+//     deeper tree is the gap;
 //     `importInstructions` for a harness that reads them itself (Claude Code),
 //     each file then named as one `@<absolute path>` import in place of its
 //     text, no limit applying (checkoutimport.go);
@@ -145,7 +157,8 @@
 //     .gitignore, .ignore and .fdignore; the walk does none of these;
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
-//     bound, as `<tag>:<skill>` (at most 64 characters) with its
+//     bound, as `<tag>:<skill>` (`skillSep` `-` joining them for Gemini CLI,
+//     which lists `a:b` as `a-b`; at most 64 characters) with its
 //     frontmatter's name rewritten to that, never over one already there,
 //     built in state/staging (or, where the state is on another filesystem
 //     than the skills, beside the skills directory's real path), outside
@@ -160,14 +173,18 @@
 // it replaces with a section per checkout, "for `<name>` with root <path>"
 // and its instructions, which the runner places where its harness reads them)
 // and `first` (the repositories the run pushes to, handed first; the rest by
-// name), and `nestedSkillsOnly` for a nested adapter that hands no
-// instructions, whose spec then names none to read. It writes state/nested.json, the -config of the harness's nested
+// name), `nestedSkillsOnly` for a nested adapter that hands no instructions,
+// whose spec then names none to read, and `roots`, a file it lists each
+// checkout's root in, a line each, for a harness the runner points at them
+// (Gemini CLI's --include-directories). It writes state/nested.json, the -config of the harness's nested
 // adapter, which the run's post-tool hook runs after each of the main loop's
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
 // (name, description, the copy's SKILL.md) as its hook's context;
-// claude-nested the listing alone, and nothing for a subagent's call;
+// claude-nested the listing alone, and nothing for a subagent's call, as
+// gemini-nested does under AfterTool; qwen-nested each instruction file and
+// rule framed as Qwen Code frames a context file, then the listing;
 // pi-nested the same as codex-nested with each file in Pi's
 // `<project_instructions path=...>`, on stdout for the run's extension to add
 // to the tool's result (Pi lists no skill it did not start with and loads
@@ -355,7 +372,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	set.StringVar(&f.socket, "socket", "", "the harness's unix socket")
 	set.StringVar(&f.threadFile, "thread-file", "", "the file the run's script writes the harness's thread id to")
 	set.StringVar(&f.notesEnv, "notes-env", "", "the environment variable holding the bridge's notes route")
-	set.IntVar(&f.stepCap, "step-cap", 0, "end a turn at this many model responses (0: no cap)")
+	set.IntVar(&f.stepCap, "step-cap", 0, "end the run at this many model responses, over all its turns (0: no cap)")
 	set.StringVar(&f.capMarker, "cap-marker", "", "the file written, before the interrupt, when the step cap ends a turn")
 	set.BoolVar(&f.interruptOnce, "interrupt-once", false, "interrupt the turn in flight, if any, and exit")
 	set.StringVar(&f.skillsEnv, "skills-env", "", "the environment variable holding the bridge's skill route")
@@ -420,7 +437,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	var capped *stepCap
 	if f.stepCap > 0 {
 		capped = newStepCap(f.stepCap, f.capMarker)
-		ev.step = capped.step
+		ev.begin, ev.step = capped.begin, capped.step
 	}
 	if skills != nil {
 		ev.skill = skills.loaded

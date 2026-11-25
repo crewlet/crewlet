@@ -1191,6 +1191,27 @@ func servedHooks(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids 
 	return launch
 }
 
+// A SETTLE WINDOW COUNTS FROM THE INSTANT THE TEARDOWN BEGAN, which its
+// signal's cause names, never from when the callback arming it ran: on a
+// loaded node that callback runs late, and the settles would hold the stop
+// that much past their window. Here the teardown began a whole window ago, so
+// the window is over the moment it is armed.
+//
+// Mutation: arm the window's timer for d from when the callback runs.
+func TestASettleWindowCountsFromTheTeardownsStart(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		begun, begin := context.WithCancelCause(context.Background())
+		window := windowFrom(begun, steerSettleStopBudget)
+		begin(teardownBegan{at: time.Now().Add(-steerSettleStopBudget)})
+		synctest.Wait()
+		if window.Err() == nil {
+			t.Fatalf("a settle window whose teardown began %v ago is still open: it counted its %v "+
+				"from when its callback ran", steerSettleStopBudget, steerSettleStopBudget)
+		}
+	})
+}
+
 // A SETTLE ASKS UNTIL ITS STORE ANSWERS, AND NO LONGER THAN ITS NODE. A settle a
 // clock gave up on would leave the record saying the run read notes its reader
 // was never handed, so it asks until the store answers, a minute's outage
@@ -1239,7 +1260,7 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 				time.Sleep(20 * time.Second)
 				synctest.Wait()
 				before, _ := settles.counts()
-				e.tearingDown()
+				e.tearingDown(t.Context())
 				runs.waitSettles()
 				if asked, _ := settles.counts(); asked != before+1 {
 					t.Errorf("the settle was asked %d times as its node stopped, want once more", asked-before)
@@ -1282,7 +1303,7 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 					// THE STORE IS BACK WHILE THE LOOP SLEEPS BETWEEN ROUNDS,
 					// and the node stops before the loop's next round.
 					back.Store(true)
-					e.tearingDown()
+					e.tearingDown(t.Context())
 					synctest.Wait()
 					for _, id := range []string{"n-1", "n-2"} {
 						if !kind.settled(t, store, id) {
@@ -1302,7 +1323,7 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 				e := &Engine{}
 				runs.stopWith(e)
 				launch := kind.lose(t, store, runs, "n-1")
-				e.tearingDown()
+				e.tearingDown(t.Context())
 				kind.settle(t.Context(), runs, launch, "n-1")
 				runs.waitSettles()
 				if asked, _ := settles.counts(); asked != 1 {
@@ -1322,7 +1343,7 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 				e := &Engine{}
 				runs.stopWith(e)
 				launch := kind.lose(t, store, runs, "n-1")
-				e.tearingDown()
+				e.tearingDown(t.Context())
 				runs.waitSettles()
 				kind.settle(t.Context(), runs, launch, "n-1")
 				synctest.Wait()
@@ -1361,7 +1382,7 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 			runs.settleUnanswered(t.Context(), "run-2", "take-x")
 			synctest.Wait()
 			begun := time.Now()
-			e.tearingDown()
+			e.tearingDown(t.Context())
 			runs.settleUnanswered(t.Context(), "run-1", "take-joined")
 			runs.waitSettles()
 			if took := time.Since(begun); took > steerSettleStopBudget {

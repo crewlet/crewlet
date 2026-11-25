@@ -471,6 +471,10 @@ type Resume struct {
 	// ([Refused]), unless its calls already hold the submission.
 	Refused *Refused
 
+	// Limited is set when the job met its model's usage limit before any work:
+	// the turn carries the round on once, fresh, on the next member ([Limited]).
+	Limited *Limited
+
 	// RequestRefused is the provider's message where the job this resume COLLECTS
 	// ended on a request refused in a session it started or after the round was
 	// carried on once: the round ends the turn with it

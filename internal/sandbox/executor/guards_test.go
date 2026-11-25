@@ -326,8 +326,11 @@ func TestQwenCodesBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 					"[\"mcp__crewlet__*\"]}, \"disableAllHooks\": true, \"env\": {\"QWEN_CODE_SAFE_MODE\": \"1\"}}",
 				"workspace/.qwen/settings.json": `{"mcp": {"allowed": ["crew*"]}, "disableAllHooks": 0}`,
 				"workspace/.env":                "QWEN_CODE_SAFE_MODE=2\n"}}},
-		"hooks switched off on a run with no hook": {noSkills: true, switchOffCase: switchOffCase{
-			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": true}`}}},
+		"hooks switched off on a run with no hook but its checkouts'": {noSkills: true, switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": true}`},
+			says: []string{"crewlet: checkouts cloned during the run are not handed their instructions and skills: ",
+				"/.qwen/settings.json: its disableAllHooks is true, which switches every hook off, the run's hook " +
+					"PostToolUse(checkouts) among them"}}},
 		"the home excludes the bridge by a glob": {switchOffCase: switchOffCase{
 			plant: map[string]string{".qwen/settings.json": `{"mcp":{"excluded":["crew*"]}}`},
 			fails: []string{reason, `/.qwen/settings.json: its mcp.excluded entry "crew*" takes the server crewlet away`}}},
@@ -387,9 +390,9 @@ func TestQwenCodesBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			t.Parallel()
 			finished := observedRun + `echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'` + "\n"
 			runner, box := qwenBox(t, finished)
-			// THE REAL HELPER FOR ITS GUARD; the stand-in plays the rest.
-			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/node", "#!/bin/sh\nif [ \"$2\" = guard ]; then exec "+
-				shellword.Quote(nodeForQwen(t))+" \"$@\"; fi\n"+finished)
+			// THE REAL HELPER FOR ITS GUARD AND ITS CONTEXT FILES; the stand-in plays the rest.
+			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/node", "#!/bin/sh\ncase \"$2\" in guard|checkouts) exec "+
+				shellword.Quote(nodeForQwen(t))+" \"$@\";; esac\n"+finished)
 			plant(t, box, tc.plant)
 			env := map[string]string{"OPENAI_API_KEY": "key-placeholder"}
 			maps.Copy(env, tc.env)

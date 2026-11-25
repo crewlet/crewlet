@@ -41,7 +41,7 @@ func TestTheCapacityAlarmsFireOnWhatThisNodesDiskIsDoing(t *testing.T) {
 
 	r := &retention{db: db}
 	var reading statelog.Reading
-	r.space(&reading, time.Now())
+	r.measures().space(&reading, time.Now())
 
 	if reading.StoreBytes <= 0 {
 		t.Error("an open store measured zero bytes, so `volume_low` compares " +
@@ -102,7 +102,7 @@ func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 		return dir, free[dir], nil
 	}}
 	var reading statelog.Reading
-	r.space(&reading, time.Now())
+	r.measures().space(&reading, time.Now())
 	if reading.FreeBytes != 1<<10 || reading.StoreBytes != replicatedSize ||
 		reading.StoreVolume != replicatedDir {
 		t.Fatalf("the reading is %d free against %d stored on %q, want the replicated "+
@@ -125,7 +125,7 @@ func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 		return dir, 1 << 40, nil
 	}
 	reading = statelog.Reading{}
-	r.space(&reading, time.Now())
+	r.measures().space(&reading, time.Now())
 	if reading.StoreVolume != nodeDir || !strings.Contains(reading.StoreVolumeUnmeasured, replicatedDir) {
 		t.Fatalf("the reading is of %q with %q unmeasured, want the node volume read and the "+
 			"replicated one named", reading.StoreVolume, reading.StoreVolumeUnmeasured)
@@ -139,7 +139,7 @@ func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 	// ONE VOLUME UNDER BOTH is one volume's bytes, summed.
 	r.volumes = func(string) (string, int64, error) { return "one", 1 << 40, nil }
 	reading = statelog.Reading{}
-	r.space(&reading, time.Now())
+	r.measures().space(&reading, time.Now())
 	if reading.StoreBytes != nodeSize+replicatedSize {
 		t.Errorf("one volume holding both files is %d stored, want %d", reading.StoreBytes,
 			nodeSize+replicatedSize)
@@ -187,7 +187,7 @@ func TestTheReadingNamesACopyHoldingTheLogAndCountsWhatItHoldsBack(t *testing.T)
 		}
 		nodeLog = mustFileBytes(t, db.Path()+walSuffix)
 		estateLog = mustFileBytes(t, replicated.Path()+walSuffix)
-		r.space(&during, time.Now())
+		r.measures().space(&during, time.Now())
 	})
 	if estateLog <= nodeLog {
 		t.Fatalf("the estate's log is %d bytes beside the node file's %d after the writes "+
@@ -213,7 +213,7 @@ func TestTheReadingNamesACopyHoldingTheLogAndCountsWhatItHoldsBack(t *testing.T)
 	}
 
 	var after statelog.Reading
-	r.space(&after, time.Now())
+	r.measures().space(&after, time.Now())
 	if after.WALCopy != "" {
 		t.Errorf("a copy that ended is still named holding the log: %q", after.WALCopy)
 	}
@@ -228,7 +228,7 @@ func TestTheReadingNamesACopyHoldingTheLogAndCountsWhatItHoldsBack(t *testing.T)
 	free := map[string]int64{nodeDir: 1 << 40, replicatedDir: room}
 	r.volumes = func(dir string) (string, int64, error) { return dir, free[dir], nil }
 	var tight statelog.Reading
-	r.space(&tight, time.Now())
+	r.measures().space(&tight, time.Now())
 	if tight.StoreVolume != replicatedDir || tight.CopyHeldBytes != held {
 		t.Fatalf("the reading is of %q counting %d held back, want the estate's volume %q "+
 			"counting the %d its copy holds back", tight.StoreVolume, tight.CopyHeldBytes,
@@ -242,7 +242,7 @@ func TestTheReadingNamesACopyHoldingTheLogAndCountsWhatItHoldsBack(t *testing.T)
 	// And room for both is room.
 	free[replicatedDir] = room + held
 	var roomy statelog.Reading
-	r.space(&roomy, time.Now())
+	r.measures().space(&roomy, time.Now())
 	if _, fired := alarmOf(statelog.Report{Alarms: statelog.Evaluate(roomy)}, statelog.KindVolumeLow); fired {
 		t.Errorf("a volume with room for a second copy and the log it holds back raised "+
 			"volume_low: %+v", roomy)
@@ -394,7 +394,9 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	r := &retention{metrics: recorder, state: censusLogs(trackerLog),
 		seats: func() int { return 100 }}
 	var reading statelog.Reading
-	r.observed(&reading)
+	window := r.measures().window()
+	r.measures().read(&reading, time.Now(), window)
+	r.observed(&reading, window)
 
 	if reading.PoolWaitP95 <= 0 {
 		t.Error("a recorded connection wait left the p95 at zero, so " +
@@ -446,7 +448,7 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	var empty statelog.Reading
 	silent := &retention{metrics: quiet, state: censusLogs(trackerLog),
 		seats: func() int { return 100 }}
-	silent.observed(&empty)
+	silent.observed(&empty, silent.measures().window())
 	alarms := statelog.Evaluate(empty)
 	for _, c := range silent.census(silent.state.running()) {
 		expected, _ := c.expectedAt(0, true, 0)

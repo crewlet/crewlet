@@ -65,7 +65,9 @@ type Signals interface {
 	Deprecated(product, version string, retires time.Time)
 }
 
-// Leaser holds one lease on a resource at a time, fleet-wide.
+// Leaser holds one lease on a resource at a time, fleet-wide. Hold's error
+// wraps [growth.ErrActHeld] where another holder has the lease; any other is
+// the lease store's failure or ctx's end, and nothing was taken.
 type Leaser interface {
 	Hold(ctx context.Context, resource string) (release func(), err error)
 }

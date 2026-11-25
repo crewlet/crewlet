@@ -1234,7 +1234,7 @@ func TestTheSearchAlarmsReadWhatTheAnswersActuallyCovered(t *testing.T) {
 
 	r := &retention{metrics: recorder}
 	var reading statelog.Reading
-	r.observed(&reading)
+	r.observed(&reading, r.measures().window())
 
 	if got := reading.SearchScopedFraction; got != 0.25 {
 		t.Errorf("one of four answers was over part of the corpus and the "+
@@ -1298,7 +1298,8 @@ func TestASlowTurnStartAndASlowSearchAreTwoAlarms(t *testing.T) {
 				e.reportSearch(search.FanQuery{}, answer, tc.deliberate)
 			}
 			var reading statelog.Reading
-			(&retention{metrics: recorder}).observed(&reading)
+			r := &retention{metrics: recorder}
+			r.observed(&reading, r.measures().window())
 			if reading.PrefetchP95 < tc.prefetch/2 || reading.SearchP95 < tc.deliberate/2 ||
 				reading.PrefetchP95 > 2*tc.prefetch || reading.SearchP95 > 2*tc.deliberate {
 				t.Fatalf("prefetch p95 %v and search p95 %v, want about %v and %v: each read off its "+
@@ -1359,7 +1360,10 @@ func TestAPercentileInsideItsBudgetFiresNothing(t *testing.T) {
 					tc.record(e, recorder, arm.took)
 				}
 				var reading statelog.Reading
-				(&retention{metrics: recorder}).observed(&reading)
+				r := &retention{metrics: recorder}
+				window := r.measures().window()
+				r.measures().read(&reading, time.Now(), window)
+				r.observed(&reading, window)
 				if fired := firedKind(statelog.Evaluate(reading), tc.kind); fired != arm.fires {
 					t.Errorf("every observation at %v against a %v budget: %s fired = %v, want %v — the "+
 						"percentiles read as barrier %v, prefetch %v, search %v, pool wait %v", arm.took,
@@ -1423,7 +1427,8 @@ func TestASearchWithNoSemanticHalfAskedForIsNotDegraded(t *testing.T) {
 		e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64}, time.Millisecond)
 	}
 	var reading statelog.Reading
-	(&retention{metrics: recorder}).observed(&reading)
+	r := &retention{metrics: recorder}
+	r.observed(&reading, r.measures().window())
 	if reading.SearchDegradedFraction != 0 {
 		t.Fatalf("a company running lexical search by choice reports %.2f of "+
 			"its answers degraded", reading.SearchDegradedFraction)
@@ -1548,7 +1553,7 @@ func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
 	}
 
 	var lit statelog.Reading
-	r.observed(&lit)
+	r.observed(&lit, r.measures().window())
 	if lit.SearchDegradedFraction <= 0 {
 		t.Fatal("a degraded search left the fraction at zero, so this case " +
 			"proves nothing about clearing")
@@ -1560,7 +1565,7 @@ func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
 	// A DAY LATER WITH NOTHING SINCE. The hour that held it has rolled out.
 	at = at.Add(metrics.Buckets*time.Hour + time.Hour)
 	var cleared statelog.Reading
-	r.observed(&cleared)
+	r.observed(&cleared, r.measures().window())
 	if cleared.SearchDegradedFraction != 0 {
 		t.Errorf("SearchDegradedFraction = %.3f a day after the last degraded "+
 			"search, so the alarm is reading a cumulative counter and can "+

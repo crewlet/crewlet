@@ -205,7 +205,8 @@ export function HealthOneLine({ model }: { model: ModelView }) {
   let full: string = words.label;
   if (entry.health === "sitting_out" && entry.sitting_out) {
     const back = formatRelative(entry.sitting_out.until, now);
-    if (back) full = `${words.label}, back ${back}`;
+    const why = WINDOW[entry.sitting_out.window];
+    full = back ? `${words.label}: ${why}, back ${back}` : `${words.label}: ${why}`;
   } else if (entry.health === "rejected" && model.admin?.last_failure) {
     const at = formatRelative(model.admin.last_failure.at, now);
     if (at) full = `${words.label}, ${at}`;

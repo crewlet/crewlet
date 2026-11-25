@@ -2,7 +2,29 @@
 
 - **Status:** accepted
 - **Authority:** `internal/sandbox`
-- **Enforced-by:** `internal/sandbox.TestAReplyPastWhatTheRowCarriesIsRecordedAsItsQuestionsRefusal`, `internal/sandbox.TestAMessageAfterARefusedReplyIsNotTheRunsAnswer`, `internal/sandbox.TestARefusalLetGoOfSendsTheReplyBackAsItCame`, `internal/sandbox.TestARefusalLetGoOfLeavesItsQuestionToTheNextReply`, `internal/sandbox.TestARefusalTheInlineAttemptLetGoOfIsTheOrdinaryMessageAtOnce`, `internal/sandbox.TestARefusalsResumeIsRaisedWhereTheReplyWasPosted`, `internal/sandbox.TestARefusalATurnGaveBackKeepsItsReply`, `internal/sandbox.TestARefusedReplyOfferedAgainIsOneRecord`, `internal/sandbox.TestARefusalOpensOnlyAsTheRefusalItsRowRecords`, `internal/sandbox.TestARefusalTheInlineAttemptsTurnKeptIsSpentWhateverTheLedgerSays`, `internal/sandbox.TestARefusedReplyWhoseRoundWasCarriedOnFromItsRefusalIsSpent`, `internal/sandbox.TestARefusalATurnTookAndDiedHoldingIsSpentByTheReap`, `internal/sandbox.TestARefusalWhoseSealDoesNotOpenIsLetGoOfAndSaidOnce`, `internal/sandbox.TestPendingStoreContract`, `internal/engine.TestARefusedReplyIsKeptAtTheHeadAndRunsNoTurn`, `internal/engine.TestAResumedRecordCarriesItsRoundsRefusedReplies`, `internal/agent/runner.TestARunToldItsReplyWasTooLargeIsGivenNoneOfIt`, `internal/agent/runner.TestACollectedRoundCarriesItsRefusedRepliesToItsReview`, `internal/agent/runner.TestAReviewerIsHandedTheRoundsRefusedReplies`, `internal/agent/prompts.TestAReviewerIsToldOfARepliedQuestionsRefusal`, `internal/agent/builtin.TestAnAnswerAfterARefusedReplyIsToldTheReplyWasNotTaken`, `internal/events/types.TestSummaries`
+- **Enforced-by:**
+  - `internal/sandbox.TestAReplyPastWhatTheRowCarriesIsRecordedAsItsQuestionsRefusal`
+  - `internal/sandbox.TestAMessageAfterARefusedReplyIsNotTheRunsAnswer`
+  - `internal/sandbox.TestARefusalLetGoOfSendsTheReplyBackAsItCame`
+  - `internal/sandbox.TestARefusalLetGoOfLeavesItsQuestionToTheNextReply`
+  - `internal/sandbox.TestARefusalTheInlineAttemptLetGoOfIsTheOrdinaryMessageAtOnce`
+  - `internal/sandbox.TestARefusalsResumeIsRaisedWhereTheReplyWasPosted`
+  - `internal/sandbox.TestARefusalATurnGaveBackKeepsItsReply`
+  - `internal/sandbox.TestARefusedReplyOfferedAgainIsOneRecord`
+  - `internal/sandbox.TestARefusalOpensOnlyAsTheRefusalItsRowRecords`
+  - `internal/sandbox.TestARefusalTheInlineAttemptsTurnKeptIsSpentWhateverTheLedgerSays`
+  - `internal/sandbox.TestARefusedReplyWhoseRoundWasCarriedOnFromItsRefusalIsSpent`
+  - `internal/sandbox.TestARefusalATurnTookAndDiedHoldingIsSpentByTheReap`
+  - `internal/sandbox.TestARefusalWhoseSealDoesNotOpenIsLetGoOfAndSaidOnce`
+  - `internal/sandbox.TestPendingStoreContract`
+  - `internal/engine.TestARefusedReplyIsKeptAtTheHeadAndRunsNoTurn`
+  - `internal/engine.TestAResumedRecordCarriesItsRoundsRefusedReplies`
+  - `internal/agent/runner.TestARunToldItsReplyWasTooLargeIsGivenNoneOfIt`
+  - `internal/agent/runner.TestACollectedRoundCarriesItsRefusedRepliesToItsReview`
+  - `internal/agent/runner.TestAReviewerIsHandedTheRoundsRefusedReplies`
+  - `internal/agent/prompts.TestAReviewerIsToldOfARepliedQuestionsRefusal`
+  - `internal/agent/builtin.TestAnAnswerAfterARefusedReplyIsToldTheReplyWasNotTaken`
+  - `internal/events/types.TestSummaries`
 - **Measured:** the run's record holds a reply at about 3.4 times its words in plain text and up to about 20 times in markup (each `<`, `>` and `&` six bytes, in the event and again in the answer's seal), so its 512 KiB share takes a pasted log of a hundred KiB and refuses five 32 KiB Chatlet messages delivered together, one Slack message of 40,000 characters of emoji, or one GitLab note of a megabyte. A refusal weighs a few hundred bytes on the row: the delivery ids, two figures, where the reply was posted (ids, under a KiB on every shipped surface, held to 4 KiB), and a seal with no words.
 - **Cost-when-tried:** a reply past that share was not recorded and was handed to the seat as the ordinary message it looked like: the seat answered the person as if the message were new, the run went on waiting, and the person's next short message there ("any luck?") was taken for its answer. A second attempt had the seat's turn told of the refused reply so it would ask the person for a shorter one, and review found the same defect inside it: from the refusal to the seat's post the run still waited on its question, so a "thanks" or "any luck?" written in that window was taken as the answer. Review of this decision found its first draft deciding the delivery in hand off the completion ledger, which fails open: with the ledger unreadable, a reply whose run the inline attempt had just told it never reached it went to the seat as a new message.
 - **Tag-status:** unreleased

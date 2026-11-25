@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -622,21 +623,122 @@ func (r *Runner) baseSession(basis SessionBasis, fresh string, told sandbox.Brie
 	return &SessionContinuation{Basis: basis, Replaced: lead + "\n\n" + strings.TrimSpace(fresh), Told: told}
 }
 
-// namingKeptSession is a run's fresh brief naming the kept session the probe
-// read (KeptTurn) that the run does not continue ([prompts.KeptSession]), only
-// where the surface carries the tool that reads it (a sentence sending a run to
-// a missing tool cannot be followed); else brief itself. The turn is the
-// engine's record, defused under the launching segment's token; why the launch
-// continues none is the log's, never the brief's.
-func (r *Runner) namingKeptSession(brief prompts.Prompt, basis SessionBasis,
-	surface *tools.Surface) prompts.Prompt {
+// lostSection is what a brief tells of the session its run does not continue
+// under verdict ([prompts.LostSessionSection]), and what it hands of the
+// summary: a fresh run's (continued false) its verdict, the summary, and
+// where `read_session` reads the kept session the probe read (KeptTurn), only
+// where the surface carries that tool, since a sentence sending a run to a
+// missing tool cannot be followed; a continuation's the newer session's, and
+// its summary only where newer than what it continues ([LostSummary.Newer]).
+// The turns are the engine's record, defused under the launching segment's
+// token, and the detail is never told.
+func (r *Runner) lostSection(basis SessionBasis, verdict *executorkeep.NotContinued, surface *tools.Surface,
+	continued bool) (string, sandbox.SummaryHandover) {
 
-	if basis.KeptTurn == "" || !slices.Contains(surface.Universe().Names(), toolname.ReadSession) {
-		return brief
+	if continued && (verdict == nil || verdict.Instead != executorkeep.InsteadOlder) {
+		return "", sandbox.HandoverNone
 	}
 	b := r.cfg.Turn.Context.FenceBoundary()
-	return brief.Then(prompts.KeyKeptSession, prompts.KeptSession(provenance.Neutralise(b, basis.KeptTurn),
-		basis.KeptTurn == r.cfg.Turn.RunID, notify.Scheduled(r.cfg.Turn.ConversationKey)))
+	reads := slices.Contains(surface.Universe().Names(), toolname.ReadSession)
+	lost := prompts.LostSession{Fire: notify.Scheduled(r.cfg.Turn.ConversationKey)}
+	if verdict != nil {
+		said := *verdict
+		said.LostTurn, said.OlderTurn = provenance.Neutralise(b, said.LostTurn), provenance.Neutralise(b,
+			said.OlderTurn)
+		lost.Sentence, lost.Newer = said.Sentence(), continued
+	}
+	if !continued && reads && basis.KeptTurn != "" {
+		lost.Read, lost.ThisTurn = provenance.Neutralise(b, basis.KeptTurn), basis.KeptTurn == r.cfg.Turn.RunID
+	}
+	handover := sandbox.HandoverNone
+	switch s := basis.Summary; {
+	case verdict == nil:
+	case s != nil && (!continued || s.Newer):
+		handed := &prompts.HandedSummary{Text: s.Text, Seat: r.cfg.Turn.Context.Handle(),
+			Turn: provenance.Neutralise(b, s.Turn), ThisTurn: s.Turn == r.cfg.Turn.RunID, At: s.At,
+			Bytes: s.Bytes, Cut: s.Cut, KeptCut: s.KeptCut}
+		if s.Readable && reads {
+			handed.Rest = handed.Turn
+		}
+		lost.Summary, handover = handed, sandbox.HandoverHanded
+	case basis.SummaryUnread:
+		lost.Unread, handover = true, sandbox.HandoverUnread
+	}
+	return prompts.LostSessionSection(lost, b), handover
+}
+
+// asFresh is verdict as a run that starts a session of its own in its place has
+// it: a fresh session, naming no older one (internal/sandbox's notContinued).
+func asFresh(verdict *executorkeep.NotContinued) *executorkeep.NotContinued {
+	if verdict == nil {
+		return nil
+	}
+	fresh := *verdict
+	fresh.Instead, fresh.OlderTurn, fresh.Older = executorkeep.InsteadFresh, "", nil
+	return &fresh
+}
+
+// restoreFailed is the verdict a run whose box falls back from the session it
+// was handed to one of its own has (internal/sandbox's fellBack): what the
+// fresh brief beside a continuation is told under until its launch decides.
+func restoreFailed(basis SessionBasis) *executorkeep.NotContinued {
+	verdict := executorkeep.Lost(executorkeep.LossRestoreFailed, executorkeep.InsteadFresh, "")
+	if basis.ContinuesBase() {
+		verdict.LostTurn = basis.Base.Turn
+	}
+	return verdict
+}
+
+// withLost is lead followed by section where it says something: what a kept
+// continuation is led by, so the section comes before the calls it tells.
+func withLost(lead, section string) string {
+	if section == "" {
+		return lead
+	}
+	return strings.TrimSpace(lead) + "\n\n" + section
+}
+
+// toldFresh is the fresh brief a launch hands as it last told it
+// ([AgentRunRequest.FreshFor]): what the runner publishes as the prompt of a run
+// that starts a session of its own, its first telling's where the launch told
+// none again. The launch tells it on its own goroutine and the box's word
+// arrives on another, so it is held under a lock.
+type toldFresh struct {
+	mu      sync.Mutex
+	first   prompts.Prompt
+	last    prompts.Prompt
+	retold  bool
+	tell    func(section string) prompts.Prompt
+	section func(*executorkeep.NotContinued) (string, sandbox.SummaryHandover)
+}
+
+// newToldFresh is the fresh brief built by tell around the section section
+// renders, first told under verdict.
+func newToldFresh(tell func(string) prompts.Prompt,
+	section func(*executorkeep.NotContinued) (string, sandbox.SummaryHandover),
+	verdict *executorkeep.NotContinued) (*toldFresh, sandbox.FreshBrief) {
+
+	t := &toldFresh{tell: tell, section: section}
+	first := t.under(verdict)
+	t.first, t.retold = t.last, false
+	return t, first
+}
+
+// under is the brief told under verdict, kept as the one told last.
+func (t *toldFresh) under(verdict *executorkeep.NotContinued) sandbox.FreshBrief {
+	text, handover := t.section(verdict)
+	p := t.tell(text)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.last, t.retold = p, p.Text != t.first.Text
+	return sandbox.FreshBrief{Text: p.Text, Handover: handover}
+}
+
+// now is the brief told last, and whether it differs from the first.
+func (t *toldFresh) now() (prompts.Prompt, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.last, t.retold
 }
 
 // checkoutName is the tool the executor's surface offers to check a Gitlet
@@ -908,6 +1010,9 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	}
 	if len(late)+underCalls+len(after)+len(owe) > 0 {
 		opts := ledger.Format(r.cfg.SkipNames, surface.Universe().KnownReads())
+		// A RUN OF ITS OWN IS TOLD WHAT ITS ROUND'S WRITES RETURNED, which it
+		// remembers none of: the key of what one created, the id of a message.
+		opts.Answers = as.fresh
 		// The order the one cap is spent in: late, each subagent's, after the
 		// point, owed, listed again. toldGroups are the first of them.
 		toldGroups := [][]BridgedCall{late}
@@ -1787,9 +1892,10 @@ func (r *Runner) sendBackLead(notes string) prompts.Prompt {
 // launchBriefs is what a relaunch's run is handed, and holds, for each way its
 // launch may decide it takes up a session ([SessionDecision]).
 type launchBriefs struct {
-	// fresh is the brief a session of the run's own is handed, and
-	// freshReported whether the phase's record already carries it.
-	fresh         prompts.Prompt
+	// fresh is the brief a session of the run's own is handed, as last told,
+	// and freshReported whether the phase's record already carries its first
+	// telling.
+	fresh         *toldFresh
 	freshReported bool
 
 	// kept is the turn's kept session the launch may continue
@@ -1863,7 +1969,8 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 	surface *tools.Surface, caps roundCaps, b launchBriefs, decided *launchDecided) func(SessionDecision) {
 
 	return func(d SessionDecision) {
-		handed, publish := b.fresh, true
+		handed, retold := b.fresh.now()
+		publish := true
 		var (
 			loaded []string
 			calls  []ledger.Call
@@ -1914,7 +2021,9 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 			}
 			handed = prompts.Prompt{Text: brief}
 		default:
-			publish = !b.freshReported
+			// THE FRESH BRIEF AS THE LAUNCH LAST TOLD IT, which the record
+			// carries already only where that is its first telling.
+			publish = !b.freshReported || retold
 		}
 		r.armSession(surface, loaded, calls)
 		decided.set(d, r.loadedSkills())
@@ -1998,7 +2107,8 @@ func (r *Runner) sessionStarted(ctx context.Context, emit emitter, round int, sy
 		r.sent.Go(func() {
 			ctx, cancel := context.WithTimeout(base, startedFrameBudget)
 			defer cancel()
-			emit.prompted(ctx, phase.Execute, round, system, b.fresh, caps)
+			handed, _ := b.fresh.now()
+			emit.prompted(ctx, phase.Execute, round, system, handed, caps)
 		})
 	}
 }

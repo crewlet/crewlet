@@ -249,6 +249,36 @@ export const INTEGRATION_TOOLS = {
 } as const;
 
 /**
+ * How a person names each tool, from `integration.Tools`, held by
+ * `internal/integration.TestTheDashboardNamesEachToolAsTheEngineDoes`: a
+ * place named off its own page (an Ask Crewlet card) reads its name, not its key.
+ */
+export const INTEGRATION_TOOL_NAMES: Record<keyof typeof INTEGRATION_TOOLS, string> = {
+  slack: "Slack",
+  mattermost: "Mattermost",
+  atlassian: "Atlassian",
+  github: "GitHub",
+  gitlab: "GitLab",
+  datadog: "Datadog",
+  cloudflare: "Cloudflare",
+  expo: "Expo",
+  digitalocean: "DigitalOcean",
+  scaleway: "Scaleway",
+  aws: "AWS",
+  google_cloud: "Google Cloud",
+  ssh: "SSH",
+  meta_ads: "Meta Ads Manager",
+  app_store_connect: "App Store Connect",
+  apple_ads: "Apple Ads",
+  google_analytics: "Google Analytics",
+  admob: "AdMob",
+  adsense: "AdSense",
+  google_ads: "Google Ads",
+  search_console: "Search Console",
+  google_play: "Google Play",
+};
+
+/**
  * A tool's standing, from `integration.ToolStates`, held by
  * `internal/integration.TestTheDashboardKnowsExactlyTheRollupStates`.
  *

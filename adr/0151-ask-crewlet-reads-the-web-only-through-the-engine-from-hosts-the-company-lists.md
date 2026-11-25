@@ -3,7 +3,15 @@
 - **Status:** superseded
 - **Superseded-by:** ADR-0163
 - **Authority:** `internal/assistant`
-- **Enforced-by:** `internal/config.TestAHelperRunsOnAnOrdinaryEntry`, `internal/engine.TestAHelpersRunHasNoWebToolWhateverItsEntrySays`, `internal/research.TestAPageIsReadAsItsText`, `internal/assistant.TestATurnReadsAFewPagesFencedAsTheSites`, `internal/assistant.TestAProposalAfterOutsideTextIsTainted`, `internal/assistant.TestAWebTaintedTurnProposesOnlyOnItsSubject`, `internal/api/queries.TestASearchAnswersOrSaysWhyNot`, `internal/assistant.TestATurnSearchesAFewTimesFencedAsTheSites`
+- **Enforced-by:**
+  - `internal/config.TestAHelperRunsOnAnOrdinaryEntry`
+  - `internal/engine.TestAHelpersRunHasNoWebToolWhateverItsEntrySays`
+  - `internal/research.TestAPageIsReadAsItsText`
+  - `internal/assistant.TestATurnReadsAFewPagesFencedAsTheSites`
+  - `internal/assistant.TestAProposalAfterOutsideTextIsTainted`
+  - `internal/assistant.TestAWebTaintedTurnProposesOnlyOnItsSubject`
+  - `internal/api/queries.TestASearchAnswersOrSaysWhyNot`
+  - `internal/assistant.TestATurnSearchesAFewTimesFencedAsTheSites`
 - **Tag-status:** unreleased
 
 ## The decision

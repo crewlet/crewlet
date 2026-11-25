@@ -2,7 +2,12 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestAWakeACompletedTurnReadPastIsAbsorbed`, `internal/agent/ledger/ledgerstore.TestASeenThroughMarkMovesForwardOnly`, `internal/coord/kv.TestFleetContract`, `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`, `internal/store.TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns`
+- **Enforced-by:**
+  - `internal/engine.TestAWakeACompletedTurnReadPastIsAbsorbed`
+  - `internal/agent/ledger/ledgerstore.TestASeenThroughMarkMovesForwardOnly`
+  - `internal/coord/kv.TestFleetContract`
+  - `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`
+  - `internal/store.TestTheTurnLedgerIsReadOffTheRecordsThatEndTurns`
 - **Cost-when-tried:** not tried here. Before this record a wake was dropped only when a turn had been woken for that very event, or (in a chat thread) when a later turn's thread block showed the same writer's message waiting. A tracker notice that came round after a newer turn on the same item had run, a redelivery or a slow drain, started a turn of its own over a change the item's newer turn had already read, and the turn ledger counted it as started work.
 - **Tag-status:** unreleased
 

@@ -3,6 +3,7 @@ package expo_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -39,7 +40,7 @@ func TestAnExpoRobotIsTheAgentsOwnIdentity(t *testing.T) {
 		t.Errorf("the guide is not of the one form: %v", err)
 	}
 	id := seataccess.IdentityOf(v, c, seataccess.SeatRef{Handle: "qa"}, seataccess.LaneExpo,
-		seataccess.Desired{Enabled: true}, seataccess.Observed{}, nil)
+		seataccess.Desired{Enabled: true}, seataccess.Observed{}, nil, time.Now())
 	if id == nil || id.Status != seataccess.IdentityNone || !id.SetUp || id.UseCompany || id.Guide == nil {
 		t.Fatalf("a robot not yet handed in: %+v", id)
 	}

@@ -2,7 +2,15 @@
 
 - **Status:** accepted
 - **Authority:** `internal/pickup`
-- **Enforced-by:** `internal/engine.TestAWaitOnAPullRequestNothingMovesIsHandedBackOncePerHead`, `internal/engine.TestAWaitSomebodyMovesIsLeftAlone`, `internal/engine.TestAnItemSomebodyMovesIsNotHandedBack`, `internal/engine.TestAWaitTheEngineCannotReadWakesNobody`, `internal/worklet.TestADeadWaitIsRecordedOnItsTaskAndMakesItReady`, `internal/worklet.TestADeadWaitIsReadyOnlyWhereNothingElseMovesTheItem`, `internal/pickup.TestADeadWaitIsKeyedOnItsHeadsAlone`, `internal/github.TestEveryMoverOfAPullRequestIsSeen`
+- **Enforced-by:**
+  - `internal/engine.TestAWaitOnAPullRequestNothingMovesIsHandedBackOncePerHead`
+  - `internal/engine.TestAWaitSomebodyMovesIsLeftAlone`
+  - `internal/engine.TestAnItemSomebodyMovesIsNotHandedBack`
+  - `internal/engine.TestAWaitTheEngineCannotReadWakesNobody`
+  - `internal/worklet.TestADeadWaitIsRecordedOnItsTaskAndMakesItReady`
+  - `internal/worklet.TestADeadWaitIsReadyOnlyWhereNothingElseMovesTheItem`
+  - `internal/pickup.TestADeadWaitIsKeyedOnItsHeadsAlone`
+  - `internal/github.TestEveryMoverOfAPullRequestIsSeen`
 - **Measured:** on a company running this engine, an agent opened a pull request for its own work item and answered the item's pickup with `waiting_on` that pull request. The wait was typed, so it was accepted, and the item left every wake: no reviewer was requested, nobody reviewed it, no merge was asked, and three hours later nothing had moved. The agent's own note said it waited on a merge decision that nobody had been asked for.
 - **Cost-when-tried:** not tried here. ADR-0121 made the wait typed and ADR-0122 made a typed wait an answer to a pickup, and neither asked whether the thing waited on could ever happen; the only backstop was a person reading the board.
 - **Tag-status:** unreleased

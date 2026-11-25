@@ -17,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -29,6 +28,27 @@ import (
 // AssistantToolSessions is where a turn serves its tools to the harness its model
 // runs in: this process's one [toolsession.Host], the seats' own (ADR-0049).
 func AssistantToolSessions(e *Engine) *toolsession.Host { return e.sessions }
+
+// AssistantInstructions reads a person's own Ask Crewlet instructions from the
+// coordination store, under the seat `save_assistant_instructions` keeps them
+// under; nil on a node with no coordination store, which keeps none.
+func AssistantInstructions(e *Engine) assistant.Instructions {
+	if e == nil || e.backends == nil || e.backends.Fleet == nil {
+		return nil
+	}
+	fleet := e.backends.Fleet
+	return func(ctx context.Context, p iam.Principal) (config.AssistantInstructions, error) {
+		actor := iam.ActorFor(p)
+		if actor.Kind != iam.ActorHuman {
+			return config.AssistantInstructions{}, nil
+		}
+		held, _, found, err := fleet.SeatInstructions(ctx, actor.Name)
+		if err != nil || !found {
+			return config.AssistantInstructions{}, err
+		}
+		return config.ReadAssistantInstructions(held.Instructions), nil
+	}
+}
 
 // AssistantModels is the assistant's model off the company this node runs
 // NOW, per turn.
@@ -52,30 +72,34 @@ func (m assistantModels) Model(_ context.Context, person iam.Principal,
 	if err != nil {
 		return nil, "", err
 	}
-	key, provider := picked.key, picked.provider
 	seat := auxspend.Seat{Person: person.Seat}
 	if c.Org != nil {
 		if role := c.Org.SeatByHandle(person.Seat); role != nil {
 			seat.PersonRole = role.Name
 		}
 	}
-	return recordedProvider{inner: provider, key: key, use: use, seat: seat,
-		ledger: m.e.auxSpend, zone: basisOf(c, nil).zone, now: m.e.now, fleet: picked.fleet,
-		begin: picked.inFlight(m.e.ledger)}, key, nil
+	provider, err := picked.called(func(key string, inner llm.Provider) llm.Provider {
+		return recordedProvider{inner: inner, key: key, use: use, seat: seat,
+			ledger: m.e.auxSpend, zone: basisOf(c, nil).zone, now: m.e.now, fleet: picked.fleet,
+			begin: picked.inFlight(m.e.ledger, key)}
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return provider, picked.key, nil
 }
 
 // Unready is the failure the assistant's model would meet as far as it knows
-// without a call ([chain.Unready] over the helper's run this node built), or
-// nil when it may answer or the model does not resolve.
+// without a call ([chain.Unready] over every member a call may reach), or nil
+// when any may answer or the model does not resolve ([helperRun.unready]).
 func (m assistantModels) Unready(ctx context.Context) error {
 	_, picked, err := m.entry(false)
-	provider := picked.provider
 	if err != nil {
 		// An unresolved model is the turn's own refusal
 		// ([assistantModels.Model]) and `/viewer`'s reason, not a model's state.
 		return nil //nolint:nilerr // see above: not a model's state
 	}
-	return chain.Unready(ctx, []llm.Provider{provider})
+	return picked.unready(ctx)
 }
 
 // ReadsImages is whether the helper's run of `assistant.model` takes images

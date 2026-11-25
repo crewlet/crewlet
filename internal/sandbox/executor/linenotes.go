@@ -106,6 +106,17 @@ func recordWordOf(s string) recordWord {
 	return recordWord{long: true, sum: sha256.Sum256([]byte(s))}
 }
 
+// key is the word as a map key: its text, or for a longer word its digest
+// after a run of zero bytes, a key longer than any word's text, so no text is
+// another word's key.
+func (r recordWord) key() string {
+	if !r.long {
+		return r.text
+	}
+	key := make([]byte, transcriptNameMaxBytes+1-sha256.Size, transcriptNameMaxBytes+1)
+	return string(append(key, r.sum[:]...))
+}
+
 // empty reports whether the word is "".
 func (r recordWord) empty() bool { return r.is("") }
 

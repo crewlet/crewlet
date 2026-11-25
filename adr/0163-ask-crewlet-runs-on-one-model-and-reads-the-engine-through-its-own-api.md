@@ -2,7 +2,36 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant`
-- **Enforced-by:** `internal/api.TestPermissionParityAcrossFivePrincipals`, `internal/assistant/catalog.TestAGenericCallNamesARouteOfTheTable`, `internal/api.TestNoWriteWithoutApproval`, `internal/api.TestInjectedTextNeverBecomesAWrite`, `internal/assistant.TestAProposalAfterOutsideTextIsTainted`, `internal/assistant.TestAWebTaintedTurnProposesOnlyOnItsSubject`, `internal/research.TestAPageIsReadAsItsText`, `internal/assistantdomain.TestAConversationPastItsRetentionIsReaped`, `internal/assistantdomain.TestAnotherPersonsConversationIsNotFound`, `internal/assistantdomain.TestAPersonsConversationsAreListedNewestFirstAndSearchedByTitle`, `internal/assistantdomain.TestAPersonSetTitleIsNeverOverwritten`, `internal/api/assistantapi.TestAConversationIsRenamedAndSearchedByItsOwner`, `internal/config.TestAskCrewletIsConfiguredByOneModel`, `internal/config.TestAHelperRunsOnAnOrdinaryEntry`, `internal/engine.TestAHelpersRunHasNoWebToolWhateverItsEntrySays`, `internal/api/queries.TestEveryModelEntrySaysWhetherAHelperCanRunOnIt`, `internal/assistant.TestATurnRunsUnderTheFixedBounds`, `internal/assistant.TestABigTaskBecomesATaskForAnAgentSeat`, `internal/assistant.TestAQuestionsImagesAreHandedToItsModel`, `internal/api.TestEveryScreenReadIsAnAssistantRead`, `internal/api.TestAGenericReadIsTaggedWithTheAppsItDrewOn`, `internal/assistant/catalog.TestDescribeAPIListsOnlyWhatThePersonMayRead`, `internal/assistant/catalog.TestAReadSelectsOnlyTheFieldsAsked`, `internal/research.TestAnyPublicHttpsPageIsRead`, `internal/research.TestAPrivateAddressIsNeverReached`, `internal/assistant.TestAURLTheModelComposedIsNeverFetched`, `internal/providers/llm/harness.TestASearchResultsURLIsTakenFromTheToolResultNotTheProse`, `internal/providers/llm/harness.TestTheSearchRunHasNoToolButTheVendorsSearch`, `internal/config.TestAnEntryCannotTakeTheSearchStance`
+- **Enforced-by:**
+  - `internal/api.TestPermissionParityAcrossFivePrincipals`
+  - `internal/assistant/catalog.TestAGenericCallNamesARouteOfTheTable`
+  - `internal/api.TestNoWriteWithoutApproval`
+  - `internal/api.TestInjectedTextNeverBecomesAWrite`
+  - `internal/assistant.TestAProposalAfterOutsideTextIsTainted`
+  - `internal/assistant.TestAWebTaintedTurnProposesOnlyOnItsSubject`
+  - `internal/research.TestAPageIsReadAsItsText`
+  - `internal/assistantdomain.TestAConversationPastItsRetentionIsReaped`
+  - `internal/assistantdomain.TestAnotherPersonsConversationIsNotFound`
+  - `internal/assistantdomain.TestAPersonsConversationsAreListedNewestFirstAndSearchedByTitle`
+  - `internal/assistantdomain.TestAPersonSetTitleIsNeverOverwritten`
+  - `internal/api/assistantapi.TestAConversationIsRenamedAndSearchedByItsOwner`
+  - `internal/config.TestAskCrewletIsConfiguredByOneModel`
+  - `internal/config.TestAHelperRunsOnAnOrdinaryEntry`
+  - `internal/engine.TestAHelpersRunHasNoWebToolWhateverItsEntrySays`
+  - `internal/api/queries.TestEveryModelEntrySaysWhetherAHelperCanRunOnIt`
+  - `internal/assistant.TestATurnRunsUnderTheFixedBounds`
+  - `internal/assistant.TestABigTaskBecomesATaskForAnAgentSeat`
+  - `internal/assistant.TestAQuestionsImagesAreHandedToItsModel`
+  - `internal/api.TestEveryScreenReadIsAnAssistantRead`
+  - `internal/api.TestAGenericReadIsTaggedWithTheAppsItDrewOn`
+  - `internal/assistant/catalog.TestDescribeAPIListsOnlyWhatThePersonMayRead`
+  - `internal/assistant/catalog.TestAReadSelectsOnlyTheFieldsAsked`
+  - `internal/research.TestAnyPublicHttpsPageIsRead`
+  - `internal/research.TestAPrivateAddressIsNeverReached`
+  - `internal/assistant.TestAURLTheModelComposedIsNeverFetched`
+  - `internal/providers/llm/harness.TestASearchResultsURLIsTakenFromTheToolResultNotTheProse`
+  - `internal/providers/llm/harness.TestTheSearchRunHasNoToolButTheVendorsSearch`
+  - `internal/config.TestAnEntryCannotTakeTheSearchStance`
 - **Measured:** the catalogue offered 45 curated read tools, each wrapping one or two GET routes that the generic read (`api_request`) already reached under the same grant and the same 16 KiB answer to the model; a turn's own bounds were 30 rounds and 900 seconds against a read grant that lives at most 1200 seconds.
 - **Cost-when-tried:** Settings › Ask Crewlet carried eleven settings on six cards (a model chain, a stronger chain and its briefs switch, four turn bounds, eight tool families to turn off, a host list, a deep-work model and its three bounds), and no ordinary model entry could be chosen until somebody made one with its web tools denied. A page from a vendor's documentation the list did not name was unreadable, and the search needed a second vendor's server and key.
 - **Tag-status:** unreleased

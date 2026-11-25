@@ -37,6 +37,25 @@ func TestAClientsProjectIsItsIDsNumericPrefix(t *testing.T) {
 	}
 }
 
+// A CLIENT IS FOUND BY ITS PROJECT AND ITS ID'S FIRST CHARACTERS, as Google
+// Cloud's list of credentials shows it; an ID of another shape is cut only
+// where it is long.
+//
+// Mutation: drop the project number, or cut a short ID, and a case goes red.
+func TestAClientIsShortenedToItsProjectAndItsFirstCharacters(t *testing.T) {
+	t.Parallel()
+	for id, want := range map[string]string{
+		"123456789012-abc123def456ghi.apps.googleusercontent.com": "123456789012-abc123de…",
+		"42-x.apps.googleusercontent.com":                         "42-x",
+		"own-client":                                              "own-client",
+		"an-id-of-another-shape-past-twenty-runes":                "an-id-of-another…",
+	} {
+		if got := googleauth.ShortClientID(id); got != want {
+			t.Errorf("ShortClientID(%q) = %q, want %q", id, got, want)
+		}
+	}
+}
+
 // A GRANT IS KEPT ONLY AS EXACTLY THE SCOPES ASKED, in any order: a scope
 // unticked on Google's granular consent, one added, or silence is refused,
 // and so is a sign-in that asked for none.

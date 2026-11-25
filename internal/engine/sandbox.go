@@ -155,6 +155,7 @@ func fakeRunners(play fakePlayer) map[string]sandbox.Runner {
 		runner.Thread = sandbox.ThreadTraitsOf(real[name])
 		if r, ok := real[name].(*executor.Runner); ok {
 			runner.Pin, runner.NotesOff, runner.Fresh = r.PinnedWindow, r.NotesOffWhy(), r.StartsFresh()
+			runner.DeferAt = r.DefersMCPAt()
 		}
 		runners[name] = runner
 	}
@@ -1109,6 +1110,11 @@ type resumeInput struct {
 	// the request it made in a session it continued, so the turn carries its
 	// round on once in a fresh session ([Engine.requestRefused]).
 	Refused *runner.Refused
+
+	// Limited is set by the resume too: the run met its model's limit before
+	// any work, so the turn carries its round on once, fresh, on the next
+	// member ([limitedBeforeWork]).
+	Limited *runner.Limited
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -1185,9 +1191,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// BEFORE ANYTHING THIS SEGMENT LAUNCHES: a run that ended on its
 	// vendor's spent plan sits its entry out here, on the node whose launch
 	// the turn's next run is — see [Engine.noteRunEnded].
-	e.noteRunEnded(ctx, company, in.Run, in.Ended)
+	spent := e.noteRunEnded(ctx, company, in.Run, in.Ended)
 	in.Rotated = e.signInReplaced(ctx, company, in)
 	in.Refused = requestRefused(ctx, in)
+	in.Limited = limitedBeforeWork(ctx, in, spent)
 	// A COMPLETION'S MODELS ARE ASKED HERE, its job collected and charged and
 	// its box asleep, and before anything of its turn runs: a limit its
 	// review's chain already knows refuses it, which the coordinator holds on
@@ -1714,6 +1721,9 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal,
 		// [requestRefused].
 		Refused:        in.Refused,
 		RequestRefused: refusedSaid(in),
+		// A LIMIT MET BEFORE ANY WORK CARRIES THE ROUND ON, once, on the next
+		// member. See [limitedBeforeWork].
+		Limited: in.Limited,
 		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
 		// written on: the briefs', the run's own and earlier reviews'.
 		Steered: steered,
@@ -1960,18 +1970,18 @@ func runnerLost(lost *sandbox.LostRun) *runner.Lost {
 // one: recorded on the entry, a refusal on a revoked token became the NEW
 // sign-in's failure (a false `llm_sign_in_refused`). Such an ending records
 // nothing ([Engine.signInReplaced] carries the run on).
-func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.PendingRun, ended sandbox.RunEnding) {
+func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.PendingRun, ended sandbox.RunEnding) bool {
 	if c == nil || c.Models == nil || run.Launch.ProviderKey == "" ||
 		(ended.Text == "" && ended.Error == "" && ended.Event == "" && ended.Limits == "") {
-		return
+		return false
 	}
 	provider, ok := c.Models.Provider(run.Launch.ProviderKey)
 	if !ok {
-		return
+		return false
 	}
 	agent, isHarness := provider.(*harness.Provider)
 	if !isHarness {
-		return
+		return false
 	}
 	if launched := run.Launch.SignInID; launched != "" && launched != string(agent.SignInID()) {
 		log.InfoContext(ctx, "executor_run_ended_on_a_replaced_sign_in",
@@ -1979,17 +1989,38 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 			"provider_key", run.Launch.ProviderKey,
 			"detail", "the run ran on a sign-in its entry no longer uses; how it ended is "+
 				"recorded on none the entry signs in with now")
-		return
+		return false
 	}
-	if agent.RunEnded(ctx, harness.RunEnd{Answer: ended.Text, Error: ended.Error,
+	if !agent.RunEnded(ctx, harness.RunEnd{Answer: ended.Text, Error: ended.Error,
 		Failed: !ended.Success, Event: ended.Event, Limits: ended.Limits, NoLimit: ended.NoLimitExit,
 		At: ended.At}) {
-		log.InfoContext(ctx, "executor_run_spent_its_entry",
-			"turn_id", run.TurnID, "seat", run.AgentHandle,
-			"provider_key", run.Launch.ProviderKey,
-			"detail", "the run ended on its vendor's limit report; the entry sits out on "+
-				"this node, so the turn's next launch takes the next member that can run")
+		return false
 	}
+	log.InfoContext(ctx, "executor_run_spent_its_entry",
+		"turn_id", run.TurnID, "seat", run.AgentHandle,
+		"provider_key", run.Launch.ProviderKey,
+		"detail", "the run ended on its vendor's limit report; the entry sits out on "+
+			"this node, so the turn's next launch takes the next member that can run")
+	return true
+}
+
+// limitedBeforeWork decides whether a collected run is carried on because it
+// met its model's limit before any work: its ending sat its entry out (spent),
+// it made no tool call and wrote no output, and it is not itself such a
+// relaunch (once per round). The relaunch takes the next member not sitting
+// out; every member sitting out parks the seat.
+func limitedBeforeWork(ctx context.Context, in resumeInput, spent bool) *runner.Limited {
+	run := in.Run
+	if !spent || in.Asked != nil || in.Lost != nil || in.Rotated != nil || in.Refused != nil ||
+		run.Launch.FollowUp == sandbox.FollowUpLimitedBeforeWork ||
+		len(in.Bridged.Calls) > 0 || in.OutputTokens > 0 {
+		return nil
+	}
+	log.InfoContext(ctx, "run_relaunched_after_limit", "turn_id", run.TurnID, "seat", run.AgentHandle,
+		"provider_key", run.Launch.ProviderKey, "launch_id", run.LaunchID,
+		"detail", "the run met its model's limit before any work; the round is carried on once, "+
+			"fresh, on the next member that is not sitting out")
+	return &runner.Limited{BoxKept: run.SandboxID != ""}
 }
 
 // recordResume owes a finished resumed turn's end on its run's record, for the
@@ -2509,6 +2540,9 @@ func sandboxMCP(
 		box := sandbox.MCPServer{
 			Name: server.Name, Transport: sandbox.Transport(server.Kind()),
 			Command: server.Command, Args: server.Args, URL: values.url,
+			// For the run's brief to say: the box reaches this server past the
+			// bridge, whose endpoint would say it as the server's instructions.
+			Description: server.Description,
 		}
 		if server.Kind() == config.TransportHTTP {
 			box.Headers = values.values

@@ -75,6 +75,8 @@ type RigOptions struct {
 	// Files is the assistant's file store: attachments and the files a
 	// draft change names; nil keeps none.
 	Files assistant.Files
+	// Instructions are the person's own instructions; nil keeps none.
+	Instructions assistant.Instructions
 	// Images is whether the rig's own model takes images.
 	Images bool
 	// Search is a model whose harness has a search-only run, so search_web
@@ -134,8 +136,9 @@ func Assemble(o RigOptions) (*Rig, error) {
 	svc, err := assistant.New(assistant.Deps{
 		Sessions: sessions,
 		Node:     node, Company: o.Company, Remote: o.Remote, Rate: o.Rate, Files: files,
-		Acts:   func(context.Context, iam.Principal) ([]string, error) { return o.Acts, nil },
-		Models: models, Budget: o.Budget, Catalogue: offered,
+		Instructions: o.Instructions,
+		Acts:         func(context.Context, iam.Principal) ([]string, error) { return o.Acts, nil },
+		Models:       models, Budget: o.Budget, Catalogue: offered,
 		Transcripts: r.Store, Records: r.Store, Dispatcher: dispatcher, Revoker: revoker,
 		Audit: r.Audit, Metrics: Metrics{}, Now: clock.Now,
 	})

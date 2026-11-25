@@ -26,6 +26,8 @@ import { expect, test } from "vitest";
 import { resolve } from "./routes.ts";
 import { parseRef } from "./frame/objects.ts";
 import { isTraceChoice, TRACE_KEY } from "~/routes/atlas/filters.ts";
+import { INTEGRATION_TABS } from "./routes.ts";
+import { INTEGRATION_FORMS } from "~/routes/settings/integrations/address.ts";
 
 interface EngineLink {
   label: string;
@@ -64,11 +66,52 @@ test("every link the engine renders opens the screen it names", () => {
 /**
  * The router's screen a link-table screen opens: the table names the map
  * opened on an entry, and lit along a trace, as screens of their own, and
- * both are the atlas to the router, told apart by their query.
+ * both are the atlas to the router, told apart by their query; one
+ * integration's page is the integrations screen with its kind, and the
+ * Google page is an Integrations page.
  */
 function routeScreenOf(screen: string): string {
+  if (screen.startsWith("integration-") || screen === "integration" || screen === "google") {
+    return "integrations";
+  }
   return screen === "atlas-entry-on-map" || screen === "atlas-trace-on-map" ? "atlas" : screen;
 }
+
+// AN INTEGRATION'S LINKS OPEN THAT INTEGRATION, never the list, each at a key
+// its page reads: the form at an `edit=` it opens, a tab at a `tab=` it has.
+// Mutation: rename a tab or the form's key on the page and this fails.
+test("an integration's links open that integration, at a tab or form its page has", () => {
+  const links = JSON.parse(readFileSync(FIXTURE, "utf8")) as EngineLink[];
+  const ours = links.filter((link) => routeScreenOf(link.screen) === "integrations");
+  expect(ours.map((link) => link.screen).sort()).toEqual([
+    "google",
+    "integration",
+    "integration-activity",
+    "integration-agents",
+    "integration-settings",
+    "integration-setup",
+    "integrations",
+  ]);
+  const google = resolve(
+    ours
+      .find((l) => l.screen === "google")!
+      .href.replace(/^#\//, "")
+      .split("/"),
+  );
+  expect(google.resolved && google.screen === "integrations" && google.kind).toBe("google");
+  for (const link of ours.filter((l) => l.screen !== "integrations" && l.screen !== "google")) {
+    const [path = "", query = ""] = link.href.replace(/^#\//, "").split("?");
+    const route = resolve(path.split("/"));
+    expect(route.resolved && route.screen === "integrations" && route.kind).toBe("google_cloud");
+    expect(link.label.startsWith("Open Google Cloud")).toBe(true);
+    const asked = new URLSearchParams(query);
+    const tab = asked.get("tab");
+    const edit = asked.get("edit");
+    if (tab !== null) expect(INTEGRATION_TABS).toContain(tab);
+    if (edit !== null) expect(INTEGRATION_FORMS).toContain(edit);
+  }
+  expect(ours.find((l) => l.screen === "integration-setup")!.label).toBe("Open Google Cloud setup");
+});
 
 test("a map link's query is what the atlas screen reads on arrival", () => {
   const links = JSON.parse(readFileSync(FIXTURE, "utf8")) as EngineLink[];

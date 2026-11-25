@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/browser/hostreach"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
@@ -617,6 +618,11 @@ func (b *containerBox) Home() string { return DefaultHome }
 // EngineHost is the name the engine host answers to inside this container:
 // its loopback is the container's own ([EngineAddress]).
 func (b *containerBox) EngineHost() string { return b.cli.hostAlias() }
+
+// EngineKernel is the kernel this box's runtime runs on, as the launch's
+// check of the box's network holds it ([onEngineHost]): the engine host's own,
+// since the runtime's CLI runs there, and the box shows whether it runs on it.
+func (b *containerBox) EngineKernel() (hostreach.Kernel, error) { return hostreach.EngineKernel() }
 
 func (b *containerBox) workdir() string { return DefaultHome + "/" + WorkspaceSubdir }
 

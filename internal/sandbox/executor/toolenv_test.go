@@ -293,12 +293,15 @@ func TestEveryOpenCodeRunNamesTheToolEnvironmentPluginLast(t *testing.T) {
 			t.Parallel()
 			_, raw, b := writeOpenCodeConfigIn(t, req)
 			var cfg struct {
-				Plugins []toolEnvPlugin `json:"plugins"`
+				Plugins []json.RawMessage `json:"plugins"`
 			}
 			if err := json.Unmarshal([]byte(raw), &cfg); err != nil || len(cfg.Plugins) == 0 {
 				t.Fatalf("the configuration names no plugin (%v):\n%s", err, raw)
 			}
-			last := cfg.Plugins[len(cfg.Plugins)-1]
+			var last toolEnvPlugin
+			if err := json.Unmarshal(cfg.Plugins[len(cfg.Plugins)-1], &last); err != nil {
+				t.Fatalf("the last plugin entry is no plugin (%v):\n%s", err, raw)
+			}
 			if p := executor.PathsFor(b); last.Package != p.OpenCodeToolEnvPlugin() {
 				t.Fatalf("the last plugin is %q, want %q:\n%s", last.Package, p.OpenCodeToolEnvPlugin(), raw)
 			}
@@ -380,11 +383,12 @@ func TestTheToolEnvironmentPluginTakesEachNameFromACommandAndNoneFromTheServer(t
 // wiring for a session of its own (FreshWiring) is not wired as the one it
 // continues is refused by Gemini CLI's, Qwen Code's and Codex's WriteConfig:
 // its notes wired on the request alone, or its skill loads (with a skill to
-// load, for Codex). The refusal comes before the home's prune and every
-// write, so the box ran no command and holds no file of the refused launch.
+// load, for Codex); and a Gemini CLI run whose notes name a server it is not
+// handed. The refusal comes before the note helper's write, the home's prune
+// and every write, so the box ran no command and holds no file of it.
 //
-// Mutation: prune the home, or write a file, before any one refusal (as Qwen
-// Code's prune and Codex's prune and configuration once came), and a row goes red.
+// Mutation: write the note helper, prune the home, or write a file, before
+// any one refusal, and a row goes red.
 func TestALaunchRefusedForItsWiringLeavesTheBoxAsItFoundIt(t *testing.T) {
 	t.Parallel()
 	const endpoint = "http://127.0.0.1:8000/mcp/tok"
@@ -392,15 +396,18 @@ func TestALaunchRefusedForItsWiringLeavesTheBoxAsItFoundIt(t *testing.T) {
 	loads := sandbox.SkillWiring{Server: "crewlet", Tool: "skill_loaded", URL: endpoint + "/skills"}
 	skills := []sandbox.Skill{{Name: "deploy", Description: "How to deploy.", Body: "Run make deploy."}}
 	for name, tc := range map[string]struct {
-		h   executor.Harness
-		req sandbox.RunRequest
+		h       executor.Harness
+		req     sandbox.RunRequest
+		refusal string
 	}{
-		"gemini, notes":     {executor.GeminiCLI{}, sandbox.RunRequest{Steer: steer, FreshWiring: &sandbox.Wiring{}}},
-		"gemini, skills":    {executor.GeminiCLI{}, sandbox.RunRequest{SkillLoads: loads, FreshWiring: &sandbox.Wiring{}}},
-		"qwen code, notes":  {executor.QwenCode{}, sandbox.RunRequest{Steer: steer, FreshWiring: &sandbox.Wiring{}}},
-		"qwen code, skills": {executor.QwenCode{}, sandbox.RunRequest{SkillLoads: loads, Skills: skills, FreshWiring: &sandbox.Wiring{}}},
-		"codex, notes":      {executor.Codex{}, sandbox.RunRequest{Steer: steer, FreshWiring: &sandbox.Wiring{}}},
-		"codex, skills":     {executor.Codex{}, sandbox.RunRequest{SkillLoads: loads, Skills: skills, FreshWiring: &sandbox.Wiring{}}},
+		"gemini, notes to no server": {executor.GeminiCLI{}, sandbox.RunRequest{Steer: sandbox.SteerWiring{
+			Server: "elsewhere", Tool: "steer", URL: endpoint + "/notes"}}, "which the run is not handed over HTTP"},
+		"gemini, notes":     {executor.GeminiCLI{}, sandbox.RunRequest{Steer: steer, FreshWiring: &sandbox.Wiring{}}, ""},
+		"gemini, skills":    {executor.GeminiCLI{}, sandbox.RunRequest{SkillLoads: loads, FreshWiring: &sandbox.Wiring{}}, ""},
+		"qwen code, notes":  {executor.QwenCode{}, sandbox.RunRequest{Steer: steer, FreshWiring: &sandbox.Wiring{}}, ""},
+		"qwen code, skills": {executor.QwenCode{}, sandbox.RunRequest{SkillLoads: loads, Skills: skills, FreshWiring: &sandbox.Wiring{}}, ""},
+		"codex, notes":      {executor.Codex{}, sandbox.RunRequest{Steer: steer, FreshWiring: &sandbox.Wiring{}}, ""},
+		"codex, skills":     {executor.Codex{}, sandbox.RunRequest{SkillLoads: loads, Skills: skills, FreshWiring: &sandbox.Wiring{}}, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -410,8 +417,11 @@ func TestALaunchRefusedForItsWiringLeavesTheBoxAsItFoundIt(t *testing.T) {
 				"crewlet": {Name: "crewlet", Transport: sandbox.TransportHTTP, URL: endpoint}}
 			_, err := tc.h.WriteConfig(t.Context(), b, tc.req, executor.Session{ID: "s-1", Fresh: "s-2"},
 				executor.PathsFor(b))
-			if err == nil || !strings.Contains(err.Error(), "two wirings") {
-				t.Fatalf("WriteConfig = %v, want the mismatched wirings refused", err)
+			if tc.refusal == "" {
+				tc.refusal = "two wirings"
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.refusal) {
+				t.Fatalf("WriteConfig = %v, want the run refused saying %q", err, tc.refusal)
 			}
 			if execs := b.Execs(); len(execs) != 0 || len(b.written) != 0 {
 				t.Errorf("the refused launch ran %v and wrote %q in the box, want nothing", execs, b.written)

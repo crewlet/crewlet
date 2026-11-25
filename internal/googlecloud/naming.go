@@ -16,6 +16,18 @@ const (
 	descriptionMax = 256
 )
 
+// crewletsOwn reports whether email is an account Crewlet keeps in the identity
+// project: every one, the provisioner included, is named with accountPrefix.
+// The Cloud Shell block's preflight applies the same rule ([preflightLines]).
+func crewletsOwn(email string) bool { return strings.HasPrefix(email, accountPrefix) }
+
+// SuggestedProject is the identity project ID the connect form offers:
+// `crewlet-`, the company's slug cut to fit and 4 hex characters of it, so the
+// block can create it without the person visiting the console.
+func SuggestedProject(company string) string {
+	return googleauth.ServiceAccountID(accountPrefix, org.Slugify(company), "company", "identity/"+org.Slugify(company))
+}
+
 // AccountID is the ID one seat's Google Cloud service account is created
 // under: `crewlet-`, a 17-character handle slug, a dash and 4 hex characters
 // of the company and handle ([googleauth.ServiceAccountID]).

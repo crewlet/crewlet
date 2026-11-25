@@ -2,7 +2,24 @@
 
 - **Status:** accepted
 - **Authority:** `internal/sandbox/executor`
-- **Enforced-by:** table tests over the executor's registered runners (`Registered()`), each runner supplying its own fixture, one failing a runner that reads notes and cannot confirm: `internal/sandbox/executor.TestEveryRunnerThatTakesNotesSaysSoAndMeetsTheContract`, `internal/sandbox/executor.TestANoteServedIsConfirmedOffItsJobsOwnRecord`, `internal/sandbox/executor.TestARealBoxsNotesReachTheBridgesRoute`, `internal/sandbox/executor.TestAWakeHandedToARunReadsBackAsAWake`, `internal/sandbox/executor.TestEveryHarnessThatReadsNotesCanConfirmATake`, `internal/sandbox/executor.TestATakeIsConfirmedOffTheSessionRecordThroughTheReceipts`, `internal/sandbox/executor.TestATakeIsConfirmedByItsItemsDigestOffARecordOfText`, `internal/sandbox/executor.TestATrailingNoteNoReplyFollowedIsHeldOnlyWhereAResumeHandsItBack`, `internal/sandbox.TestAPollServeASessionRecordHoldsIsConfirmedThroughTheReceipts`, `internal/sandbox.TestAWakeServedOnceSettlesAtTheRunsEndOffItsRecord`, `internal/sandbox/executor.TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes`, `internal/sandbox/executor.TestTheStandingInstructionQuotesTheHeadingANoteOpensWith`, `internal/sandbox/executor.TestTheStandingInstructionQuotesTheHeadingAWakeOpensWith`, `internal/sandbox/executor.TestAWakeIsAnEntryOfItsOwnAndAHeadingInsideItsFenceHeadsNothing`, `internal/sandbox/executor.TestAHookLineNamingWakesIsAWakeEntry`, `internal/sandbox/executor.TestARunWiredToNotesOnAClaudeCodeOlderThanItsFloorIsRefused`, `internal/engine.TestEveryRunnersCeilingHoldsTheLargestItem`
+- **Enforced-by:**
+  - table tests over the executor's registered runners (`Registered()`), each runner supplying its own fixture, one failing a runner that reads notes and cannot confirm: `internal/sandbox/executor.TestEveryRunnerThatTakesNotesSaysSoAndMeetsTheContract`
+  - `internal/sandbox/executor.TestANoteServedIsConfirmedOffItsJobsOwnRecord`
+  - `internal/sandbox/executor.TestARealBoxsNotesReachTheBridgesRoute`
+  - `internal/sandbox/executor.TestAWakeHandedToARunReadsBackAsAWake`
+  - `internal/sandbox/executor.TestEveryHarnessThatReadsNotesCanConfirmATake`
+  - `internal/sandbox/executor.TestATakeIsConfirmedOffTheSessionRecordThroughTheReceipts`
+  - `internal/sandbox/executor.TestATakeIsConfirmedByItsItemsDigestOffARecordOfText`
+  - `internal/sandbox/executor.TestATrailingNoteNoReplyFollowedIsHeldOnlyWhereAResumeHandsItBack`
+  - `internal/sandbox.TestAPollServeASessionRecordHoldsIsConfirmedThroughTheReceipts`
+  - `internal/sandbox.TestAWakeServedOnceSettlesAtTheRunsEndOffItsRecord`
+  - `internal/sandbox/executor.TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes`
+  - `internal/sandbox/executor.TestTheStandingInstructionQuotesTheHeadingANoteOpensWith`
+  - `internal/sandbox/executor.TestTheStandingInstructionQuotesTheHeadingAWakeOpensWith`
+  - `internal/sandbox/executor.TestAWakeIsAnEntryOfItsOwnAndAHeadingInsideItsFenceHeadsNothing`
+  - `internal/sandbox/executor.TestAHookLineNamingWakesIsAWakeEntry`
+  - `internal/sandbox/executor.TestARunWiredToNotesOnAClaudeCodeOlderThanItsFloorIsRefused`
+  - `internal/engine.TestEveryRunnersCeilingHoldsTheLargestItem`
 - **Measured:** Claude Code 2.1.263 to 2.1.330 and OpenCode 2 (2.3.2 for the confirm and the poll ceiling) against a stub model API: an error answer made Claude Code re-initialise the whole bridge, a 503 was gone past, a late answer is discarded at the hook's timeout, and where a note lands differs by model (docs/concepts/code-sandbox.md, "Claude Code's hooks", "OpenCode's notes plugin"). A widest note renders at 4,493 UTF-16 units, the item bound beside it 4,505.
 - **Cost-when-tried:** Claude Code before 2.1.163 ran both hooks and dropped the Stop answer (measured on 2.1.150): a note recorded read and published delivered that no request carried (`claudeNotesFloor`). A hook take that recorded its notes read as it answered left notes no session held recorded read (ADR-0067, "a hook's note is read only once its session shows it").
 - **Tag-status:** unreleased
