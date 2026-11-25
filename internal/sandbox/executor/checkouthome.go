@@ -65,10 +65,9 @@ func (h checkoutHome) removeSiblingStaging() string {
 // ImportInstructions where the harness reads them itself, each named as an
 // `@<absolute path>` import in place of its text, Limit not applying (Claude
 // Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code need their
-// own measurement of absolute imports before they set it); Gated, whether the
-// harness's own code answers for each checkout instead (internal/notehelper's
-// checkoutGate); Budget, the bound the sections share with the run's own
-// text, nil for none.
+// own measurement of absolute imports first); Gated where the harness's own
+// code answers for each checkout (internal/notehelper's checkoutGate); Budget,
+// the bound the sections share with the run's own text, nil for none.
 type checkoutSpec struct {
 	Instructions       []checkoutSlot
 	Limit              *int
