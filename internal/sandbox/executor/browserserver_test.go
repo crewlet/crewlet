@@ -63,20 +63,18 @@ var browserReads = map[string]browserRead{
 		_, env := entry["environment"]
 		return handedServer{command: command[0], args: command[1:], env: env}
 	},
-	executor.CopilotName: func(t *testing.T, h executor.Harness, req sandbox.RunRequest, box *sandbox.FakeSandbox,
-		p executor.Paths, config string) handedServer {
+	executor.CursorAgentName: func(t *testing.T, _ executor.Harness, _ sandbox.RunRequest, box *sandbox.FakeSandbox,
+		_ executor.Paths, config string) handedServer {
+		return cursorServer(t, box, config)
+	},
+	executor.CopilotName: func(t *testing.T, _ executor.Harness, _ sandbox.RunRequest, box *sandbox.FakeSandbox,
+		_ executor.Paths, config string) handedServer {
 		entry := jsonAt(t, box, config, "mcpServers", browser.ServerName)
 		if typ := jsonString(t, entry, "type"); typ != "local" {
 			t.Errorf("Copilot is handed the browser as %q, want local", typ)
 		}
 		if tools := jsonStrings(t, entry, "tools"); !slices.Equal(tools, []string{"*"}) {
 			t.Errorf("Copilot is offered the browser's tools %q, want every one", tools)
-		}
-		// THE COMMAND LINE AS ITS SHELL READS IT: the job's script quotes it once
-		// more, as a whole.
-		command := strings.ReplaceAll(h.Command(req, h.Session(req), p, config), `'\''`, `'`)
-		if !strings.Contains(command, "--enable-mcp-server '"+browser.ServerName+"'") {
-			t.Errorf("Copilot's command line does not enable the browser:\n%s", command)
 		}
 		return stdioServer(t, entry)
 	},
@@ -98,9 +96,10 @@ var browserReads = map[string]browserRead{
 		if len(profiles) != 1 {
 			t.Fatalf("Kimi's agents hold %q, want the run's one profile", profiles)
 		}
-		if profile := readFile(t, box, profiles[0]); !strings.Contains(profile,
-			`"mcp__`+browser.ServerName+`__*"`) {
-			t.Errorf("Kimi's profile does not list the browser's tools:\n%s", profile)
+		// EVERY SERVER'S TOOLS, the browser's among them: Kimi names a server's
+		// tool mcp__<server>__<tool>.
+		if profile := readFile(t, box, profiles[0]); !strings.Contains(profile, `"mcp__*"`) {
+			t.Errorf("Kimi's profile does not admit the browser's tools:\n%s", profile)
 		}
 		return jsonServer(t, box, p.KimiMCPConfig(), "mcpServers", browser.ServerName)
 	},
@@ -140,13 +139,13 @@ var browserReads = map[string]browserRead{
 // its arguments (the helper and the workspace absolute), and no environment,
 // in its own vocabulary: Claude Code's --mcp-config file, Codex's
 // configuration, Gemini CLI's and Qwen Code's settings, OpenCode's as a local
-// command, Copilot's --additional-mcp-config file as a local command offering
-// every tool and enabled by name, Muse Code's server file as stdio, Kimi's
-// mcp.json beside its profile listing the tools, Grok Build's settings under
-// the run's nonce, Hermes's overlay and Pi's extension. A runner added later
-// fails until it has a reading. Mutations, each red: give the server an
-// environment; make the shim's path relative; leave the browser off Copilot's
-// --enable-mcp-server.
+// command, Cursor Agent's servers under the run's suffix, Copilot's
+// --additional-mcp-config file as a local command offering every tool, Muse
+// Code's server file as stdio, Kimi's mcp.json beside its profile admitting
+// every server's tools, Grok Build's settings under the run's nonce, Hermes's
+// overlay and Pi's extension. A runner added later fails until it has a
+// reading. Mutations, each red: give the server an environment; make the
+// shim's path relative; offer Copilot fewer of its tools than all.
 func TestABrowserServerIsHandedToEachHarnessAsAPlainCommand(t *testing.T) {
 	t.Parallel()
 	server := readyBrowserServer(t)
@@ -299,6 +298,24 @@ func grokServer(t *testing.T, box *sandbox.FakeSandbox, file string) handedServe
 	if len(found) != 1 {
 		t.Fatalf("Grok Build's settings name %d browser servers among %v, want one", len(found),
 			slices.Sorted(maps.Keys(settings.Servers)))
+	}
+	return found[0]
+}
+
+// cursorServer is the browser's entry in a Cursor Agent run's servers, which
+// names each server with the run's suffix after it: the one entry under the
+// browser's name.
+func cursorServer(t *testing.T, box *sandbox.FakeSandbox, file string) handedServer {
+	t.Helper()
+	var found []handedServer
+	for name, entry := range jsonAt(t, box, file, "mcpServers") {
+		server, ok := entry.(map[string]any)
+		if ok && strings.HasPrefix(name, browser.ServerName+"-") {
+			found = append(found, stdioServer(t, server))
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("Cursor Agent's servers name %d browser servers, want one", len(found))
 	}
 	return found[0]
 }
