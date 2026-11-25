@@ -193,10 +193,10 @@ var standingRoutes = map[string]standingProbe{
 		if err := json.Unmarshal([]byte(standingFile(t, box, p.OpenCodeConfig())), &cfg); err != nil {
 			t.Fatal(err)
 		}
-		if len(cfg.Instructions) != 1 || cfg.Instructions[0] != p.System() ||
-			standingFile(t, box, p.System()) != req.System {
-			t.Errorf("a continued run lists instructions %q, want this launch's text at %s alone",
-				cfg.Instructions, p.System())
+		if len(cfg.Instructions) != 2 || cfg.Instructions[0] != p.System() ||
+			cfg.Instructions[1] != p.OpenCodeCheckoutSections() || standingFile(t, box, p.System()) != req.System {
+			t.Errorf("a continued run lists instructions %q, want this launch's text at %s, then the checkouts' "+
+				"sections file alone", cfg.Instructions, p.System())
 		}
 		if !strings.Contains(openCodeSessionGate(session, p, false), openCodeRenew(session, p)) {
 			t.Error("a continued session the box holds is resumed without being re-imported")
