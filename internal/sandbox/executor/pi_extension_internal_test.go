@@ -554,19 +554,16 @@ func piTestHand(helper string, timeoutMs int64) *piNestedHand {
 
 // THE EXTENSION HANDS THE HELPER THE ROOM PI LEAVES: -room is what
 // ctx.getContextUsage leaves below the window less pi's compaction reserve
-// twice (the model's override, else the setting, else 16,384), less the
-// batch's results (an image 4,800 characters), four characters a token;
-// at most the most room. A batch's calls run in parallel and join the
-// session together, so its checkouts are handed at its last result, its
-// other results each counted as pi counts a message, ceil(characters/4)
-// (one ended unrun among them, a nested one never); a sequential call is a
-// batch alone, and a batch a turn ended open is dropped. Where pi gives no
-// tokens, the fallback, at most half what the window it names leaves an
-// empty context, said once; no firing under the least room, one at it.
+// twice (override, setting, 16,384), less the batch's results (an image
+// 4,800), four characters a token, within the most room. A parallel batch
+// hands at its last result, each other result (one ended unrun too, a nested
+// one never) ceil(characters/4); a sequential call is a batch alone, and
+// turn_end drops one left open. With no tokens, the fallback, within half
+// what the window leaves an empty context, said once; under the floor, none.
 //
-// Mutation: take the reserve once, skip the override, the image, the cap,
-// the floor's edge, a sibling or its rounding, the window's fallback cap,
-// or the turn's reset, or say the fallback each time, and a case goes red.
+// Mutation: take the reserve once, skip the override, image, cap, floor
+// edge, a sibling or its rounding, the fallback's cap or the turn's reset,
+// or say the fallback each time, and a case goes red.
 func TestThePiExtensionHandsTheHelperTheRoomPiLeaves(t *testing.T) {
 	t.Parallel()
 	usage := func(tokens any, window int) map[string]any {
