@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
@@ -364,12 +363,11 @@ func (w *lineWalk) sizedValue(k jsonscan.Kind, read func() error) (int64, error)
 // holding none past its first [transcriptNameMaxBytes] bytes: its UTF-8
 // bytes, its length as JSON.stringify writes it, quotes included
 // ([lineWalk.jsValue]), Gemini CLI's units and quarters of it and whether it
-// holds [redact.Marker] ([chatText.estimate]), whether past its leading white
-// space it opens with a compression's summary ([geminiStateSnapshot]), and
-// the word it is ([recordWord]), digested where longer only if asked.
+// holds [redact.Marker] ([chatText.estimate]), and the word it is
+// ([recordWord]), digested where longer only if asked.
 type chatText struct {
 	bytes, js, units, quarters int64
-	marked, snapshot           bool
+	marked                     bool
 	word                       recordWord
 }
 
@@ -408,10 +406,6 @@ func (w *lineWalk) chatText(word bool) (chatText, error) {
 	var tail [len(redact.Marker) - 1]byte
 	var edge [2 * len(tail)]byte
 	tailN := 0
-	// lead is how far past its leading white space the summary's opening is
-	// matched: -1 while still in the white space, past its length on a
-	// mismatch.
-	lead := -1
 	var h hash.Hash
 	for {
 		n, err := w.scan.Read(w.piece)
@@ -442,7 +436,7 @@ func (w *lineWalk) chatText(word bool) (chatText, error) {
 				tailN = copy(tail[:], e[max(0, len(e)-len(tail)):])
 			}
 		}
-		lead = t.take(p, lead)
+		t.take(p)
 		switch {
 		case errors.Is(err, io.EOF):
 			t.word = recordWord{text: string(head)}
@@ -452,7 +446,6 @@ func (w *lineWalk) chatText(word bool) (chatText, error) {
 					h.Sum(t.word.sum[:0])
 				}
 			}
-			t.snapshot = lead == len(geminiStateSnapshot)
 			return t, nil
 		case err != nil:
 			return chatText{}, err
@@ -460,37 +453,22 @@ func (w *lineWalk) chatText(word bool) (chatText, error) {
 	}
 }
 
-// take counts p, whole characters of the text, and matches the summary's
-// opening past lead ([lineWalk.chatText]).
-func (t *chatText) take(p []byte, lead int) int {
+// take counts p, whole characters of the text ([lineWalk.chatText]).
+func (t *chatText) take(p []byte) {
 	for len(p) > 0 {
-		if lead >= len(geminiStateSnapshot) {
-			// A RUN OF PRINTABLE ASCII but a quote and a backslash costs a
-			// byte, a unit, a quarter and a JSON byte each.
-			n := 0
-			for n < len(p) && p[n] >= 0x20 && p[n] < 0x7f && p[n] != '"' && p[n] != '\\' {
-				n++
-			}
-			t.bytes, t.units, t.quarters, t.js = t.bytes+int64(n), t.units+int64(n), t.quarters+int64(n), t.js+int64(n)
-			if p = p[n:]; len(p) == 0 {
-				break
-			}
+		// A RUN OF PRINTABLE ASCII but a quote and a backslash costs a byte,
+		// a unit, a quarter and a JSON byte each.
+		n := 0
+		for n < len(p) && p[n] >= 0x20 && p[n] < 0x7f && p[n] != '"' && p[n] != '\\' {
+			n++
+		}
+		t.bytes, t.units, t.quarters, t.js = t.bytes+int64(n), t.units+int64(n), t.quarters+int64(n), t.js+int64(n)
+		if p = p[n:]; len(p) == 0 {
+			break
 		}
 		r, size := rune(p[0]), 1
 		if r >= utf8.RuneSelf {
 			r, size = utf8.DecodeRune(p)
-		}
-		if lead < 0 && !unicode.IsSpace(r) {
-			lead = 0
-		}
-		for i := range size {
-			if lead >= 0 && lead < len(geminiStateSnapshot) {
-				if p[i] == geminiStateSnapshot[lead] {
-					lead++
-				} else {
-					lead = len(geminiStateSnapshot) + 1
-				}
-			}
 		}
 		t.bytes += int64(size)
 		switch {
@@ -511,7 +489,6 @@ func (t *chatText) take(p []byte, lead int) int {
 		}
 		p = p[size:]
 	}
-	return lead
 }
 
 // jsValue walks the value k begins and is the length of JSON.stringify of it,

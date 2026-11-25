@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
 )
@@ -25,6 +26,10 @@ type chatSummaryLines struct {
 	// base may hold ([baseTierReadBytes]); nil for one that keeps nothing
 	// whatever the file.
 	pastBase func() bool
+	// next, where not nil, is told each line before it is read, as the
+	// count's walk took it (its white space trimmed), a blank or a torn last
+	// one never ([chatSummaryLines.follow]).
+	next func(line []byte)
 }
 
 // errChatSummaryLines is a chat file past the lines and elements a read reads.
@@ -62,6 +67,9 @@ func (c *chatSummaryLines) follow(ctx context.Context, r io.Reader, large *passB
 	c.lines.Reset(r)
 	c.tornUnread = true
 	for c.err == nil {
+		if line, ok := nextWholeLine(c.lines); ok && c.next != nil {
+			c.next(line)
+		}
 		var ended bool
 		if ended, c.err = c.line(ctx); ended {
 			return
@@ -71,6 +79,22 @@ func (c *chatSummaryLines) follow(ctx context.Context, r io.Reader, large *passB
 			held = c.err == nil
 		}
 	}
+}
+
+// nextWholeLine is the line lines reads next as a whole-line walk hands it
+// on ([codexLines]), without reading it: within [lineFormMaxBytes] trimmed of
+// its white space, past it its first [lineFormMaxBytes] and one more, which
+// no whole form holds; none for a blank line, or a last one with no break.
+func nextWholeLine(lines *bufio.Reader) ([]byte, bool) {
+	ahead, _ := lines.Peek(lineFormMaxBytes + 1)
+	var line []byte
+	switch i := bytes.IndexByte(ahead, '\n'); {
+	case i >= 0:
+		line = bytes.TrimSpace(ahead[:i])
+	case len(ahead) > lineFormMaxBytes:
+		line = bytes.TrimLeftFunc(ahead, unicode.IsSpace)
+	}
+	return line, len(line) > 0
 }
 
 func (*chatSummaryLines) own(*valueText) error { return nil }
@@ -130,9 +154,11 @@ func (q *qwenSummaryReading) commit() error {
 }
 
 // geminiSummaryReading reads a Gemini CLI chat file's lines for the replay of
-// its newest summary ([geminiSummaries]): a record's id and type and, where its
-// content opens a snapshot, its words, as the transcript's reading takes them
-// ([chatReading.parts]); a `$patch`'s updates and removals; a `$rewindTo`.
+// its newest summary ([geminiSummaries]): a record's id and type and, where it
+// opens as a compression's summary ([geminiCompressionSet]), its words, as the
+// transcript's reading takes them ([chatReading.parts]); a `$patch`'s updates
+// and removals; a `$rewindTo`. A summary is known a line late, by the reply
+// after it, so the record that opens as one is held until that line.
 type geminiSummaryReading struct {
 	chatSummaryLines
 	g       *geminiSummaries
@@ -143,6 +169,11 @@ type geminiSummaryReading struct {
 	// patched and rewound say the line is a patch or a rewind; lost that it
 	// is one this replay cannot follow.
 	patched, rewound, lost bool
+	// set says the line before opens a compression's sync, opens that this
+	// one opens as its summary, and held that prior, the record of the line
+	// before, waits on this one's word.
+	set, opens, held bool
+	prior            geminiSnapRecord
 }
 
 // geminiSnapRecord is one copy of a record: its id, type and snapshot's words.
@@ -154,10 +185,29 @@ type geminiSnapRecord struct {
 func newGeminiSummaryReading(g *geminiSummaries) *geminiSummaryReading {
 	r := &geminiSummaryReading{g: g}
 	r.setup(r)
+	r.next = r.forms
 	// Its records' places, one a record to [geminiCountIDs], past the count's
 	// base as many ([geminiCopyLargeHeldBytes]).
 	r.pastBase = func() bool { return len(g.place) > geminiCountBaseIDs }
 	return r
+}
+
+// forms judges line, the file's next, by a compression's forms before it is
+// read: the record held before it replayed, a summary where line is its
+// reply; whether line opens as a summary, after its sync's `$set`.
+func (r *geminiSummaryReading) forms(line []byte) {
+	r.end(geminiCompressionAck.holds(line))
+	r.opens = r.set && geminiCompressionUser.holds(line)
+	r.set = geminiCompressionSet.holds(line)
+}
+
+// end replays the record held, a summary where summary says so: the file's
+// last line is none.
+func (r *geminiSummaryReading) end(summary bool) {
+	if r.held {
+		r.held = false
+		r.g.record(&r.prior, summary)
+	}
 }
 
 func (r *geminiSummaryReading) start() {
@@ -193,7 +243,11 @@ func (r *geminiSummaryReading) recordMember(rec *geminiSnapRecord, name string, 
 		rec.typ, err = r.wordValue(k)
 	case "content":
 		rec.snap.reset()
-		err = r.parts(k, &chatSinks{snap: &rec.snap})
+		sinks := chatSinks{snap: &rec.snap}
+		if rec == &r.rec && !r.opens {
+			sinks.snap = nil
+		}
+		err = r.parts(k, &sinks)
 	default:
 		err = r.scan.Skip()
 	}
@@ -250,15 +304,17 @@ func (r *geminiSummaryReading) commit() error {
 		g.lost("a patch of the chat file is of no shape this read follows")
 	case r.patched:
 		for i := range r.updates {
-			g.record(&r.updates[i])
+			g.record(&r.updates[i], g.summary[r.updates[i].id])
 		}
 		for _, id := range r.removes {
 			g.remove(id)
 		}
 	case r.rewound:
 		g.rewindTo(r.rewind)
+	case r.opens:
+		r.rec, r.prior, r.held = r.prior, r.rec, true
 	default:
-		g.record(&r.rec)
+		g.record(&r.rec, false)
 	}
 	if len(g.place) > geminiCountIDs {
 		return errors.New("the chat file holds more records than a read holds")

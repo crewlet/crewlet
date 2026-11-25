@@ -65,13 +65,16 @@ func (g GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, path
 		if ask.Count {
 			counter = newGeminiCounting()
 		}
-		var lines *chatSummaryLines
+		var lines *geminiSummaryReading
+		var follow *chatSummaryLines
 		if summaries != nil {
-			lines = &newGeminiSummaryReading(summaries).chatSummaryLines
+			lines = newGeminiSummaryReading(summaries)
+			follow = &lines.chatSummaryLines
 		}
-		count, err := chatCopyCount(ctx, box, file, counter, ask.Release, geminiRelease, lines)
+		count, err := chatCopyCount(ctx, box, file, counter, ask.Release, geminiRelease, follow)
 		reading.Count = count
 		if summaries != nil {
+			lines.end(false)
 			if err = cmp.Or(err, lines.err); err != nil {
 				summaries.read.fail("the session's chat file was not read to its end: " + err.Error())
 			}
@@ -85,7 +88,8 @@ func (g GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, path
 }
 
 // geminiSummaries is one walk's replay of a Gemini CLI chat file for its newest
-// summary, each record as the transcript reads it ([geminiSummaryReading]):
+// summary, each record as the transcript reads it ([geminiSummaryReading]), a
+// summary by its compression's lines and a patch's copy of one still one:
 // each record by its id, in the order first written; a `$patch`'s updates as
 // copies of their records and its removals gone; a `$rewindTo`'s record and
 // every later one gone. The newest is the latest snapshot standing at the
@@ -94,9 +98,11 @@ func (g GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, path
 // cannot follow (unknown) leaves every snapshot before it unsaid.
 type geminiSummaries struct {
 	place map[string]int
-	next  int
-	snaps []geminiSnap
-	held  int
+	// summary is every record written as a compression's summary, by its id.
+	summary map[string]bool
+	next    int
+	snaps   []geminiSnap
+	held    int
 	// first is the place of the first snapshot read, unknown where the
 	// replay could not follow the file and why, -1 for neither.
 	first, unknown int
@@ -114,15 +120,15 @@ type geminiSnap struct {
 }
 
 func newGeminiSummaries() *geminiSummaries {
-	return &geminiSummaries{place: map[string]int{}, first: -1, unknown: -1}
+	return &geminiSummaries{place: map[string]int{}, summary: map[string]bool{}, first: -1, unknown: -1}
 }
 
 // lost says the replay cannot follow the file from here.
 func (g *geminiSummaries) lost(why string) { g.unknown, g.why = g.next, why }
 
-// record reads one copy of a record ([geminiSummaryReading]): its latest copy
-// is the record.
-func (g *geminiSummaries) record(rec *geminiSnapRecord) {
+// record reads one copy of a record ([geminiSummaryReading]), a compression's
+// summary where summary says so: its latest copy is the record.
+func (g *geminiSummaries) record(rec *geminiSnapRecord, summary bool) {
 	if rec.id == "" {
 		return
 	}
@@ -133,7 +139,11 @@ func (g *geminiSummaries) record(rec *geminiSnapRecord) {
 		g.next++
 	}
 	g.drop(func(s geminiSnap) bool { return s.id == rec.id })
-	if rec.typ != "user" || !rec.snap.set {
+	if rec.typ != "user" || !summary {
+		return
+	}
+	g.summary[rec.id] = true
+	if !rec.snap.set {
 		return
 	}
 	if g.first < 0 {

@@ -351,6 +351,7 @@ type geminiCountingWhole struct {
 	removed         map[string]bool
 	order           []string
 	snapshot        map[string]bool
+	compressions    geminiCompressionLines[string]
 	marks           countMarks
 }
 
@@ -377,17 +378,29 @@ type geminiCountLineWhole struct {
 // over-counts what it rewinds) are passed over; a `$patch` adds its updates
 // as copies of their records and removes what it names, and one that orders
 // the records (`orderIds`, whose effect on the history was not measured) is
-// unread; an entry is a copy of its record. Anything else is unread.
+// unread; an entry is a copy of its record. Anything else is unread. A user
+// entry is a compression's summary by its lines ([geminiCompressionLines]),
+// known a line late.
 func (c *geminiCountingWhole) line(raw []byte) {
+	user := c.read(raw)
+	if summary, ok := c.compressions.line(raw, user, user != ""); ok {
+		c.snapshot[summary] = true
+	}
+}
+
+// read reads one line ([geminiCountingWhole.line]) and is the id of the user
+// entry it holds, "" for none.
+func (c *geminiCountingWhole) read(raw []byte) string {
 	if lineSeparatorsWhole(raw) {
 		c.marks = c.marks.with(sandbox.CountUnread)
-		return
+		return ""
 	}
 	var w geminiCountLineWhole
 	if !wireObject(raw) || wireAlias(raw, &w) != nil {
 		c.marks = c.marks.with(sandbox.CountUnread)
-		return
+		return ""
 	}
+	user := ""
 	switch {
 	case !absent(w.Patch):
 		var patch struct {
@@ -397,7 +410,7 @@ func (c *geminiCountingWhole) line(raw []byte) {
 		}
 		if wireDecode(w.Patch, &patch) != nil || !absent(patch.OrderIDs) {
 			c.marks = c.marks.with(sandbox.CountUnread)
-			return
+			return ""
 		}
 		// THE WALK HOLDS A PATCH'S PARTS, each update with its answers and
 		// calls and each removal, to [geminiCountBaseIDs] until its line ends.
@@ -411,7 +424,7 @@ func (c *geminiCountingWhole) line(raw []byte) {
 			var update geminiCountLineWhole
 			if wireAlias(u, &update) != nil {
 				c.marks = c.marks.with(sandbox.CountUnread)
-				return
+				return ""
 			}
 			c.entries = 0
 			c.record(update)
@@ -425,21 +438,24 @@ func (c *geminiCountingWhole) line(raw []byte) {
 		var kind string
 		if wireDecode(w.Type, &kind) != nil || (kind != "user" && kind != "gemini") {
 			c.marks = c.marks.with(sandbox.CountUnread)
-			return
+			return ""
 		}
-		c.record(w)
+		if id := c.record(w); kind == "user" {
+			user = id
+		}
 	}
 	if len(c.quarters)+len(c.answers)+len(c.calls)+len(c.removed) > geminiCountIDs {
 		c.marks = c.marks.with(sandbox.CountUnread)
 	}
+	return user
 }
 
-// record reads one copy of a record.
-func (c *geminiCountingWhole) record(w geminiCountLineWhole) {
+// record reads one copy of a record, and is its id, "" where it has none.
+func (c *geminiCountingWhole) record(w geminiCountLineWhole) string {
 	var id string
 	if wireDecode(w.ID, &id) != nil || id == "" {
 		c.marks = c.marks.with(sandbox.CountUnread)
-		return
+		return ""
 	}
 	if _, seen := c.quarters[id]; !seen {
 		c.order = append(c.order, id)
@@ -450,33 +466,29 @@ func (c *geminiCountingWhole) record(w geminiCountLineWhole) {
 			c.marks = c.marks.with(sandbox.CountUnread)
 		}
 	}()
-	q, text, snapshot := c.content(id, w.Content)
+	q, text := c.content(id, w.Content)
 	thoughtQ, thoughtText := c.thoughts(w.Thoughts)
 	q += thoughtQ + c.toolCalls(id, w.ToolCalls)
-	if snapshot {
-		c.snapshot[id] = true
-	}
 	c.quarters[id] = max(c.quarters[id], q)
 	c.bytes[id] = max(c.bytes[id], text+thoughtText)
+	return id
 }
 
 // content is the quarter tokens of a record's content, a text or its parts,
-// its answers kept apart and its calls kept, its texts' UTF-8 bytes, and
-// whether it opens with a compression's summary.
-func (c *geminiCountingWhole) content(id string, raw json.RawMessage) (int64, int64, bool) {
+// its answers kept apart and its calls kept, and its texts' UTF-8 bytes.
+func (c *geminiCountingWhole) content(id string, raw json.RawMessage) (int64, int64) {
 	if absent(raw) {
-		return 0, 0, false
+		return 0, 0
 	}
 	var text string
 	if wireDecode(raw, &text) == nil {
-		return geminiTextQuartersWhole(text), int64(len(text)), false
+		return geminiTextQuartersWhole(text), int64(len(text))
 	}
 	var parts []json.RawMessage
 	if wireDecode(raw, &parts) != nil {
 		parts = []json.RawMessage{raw}
 	}
 	var q, bytes int64
-	snapshot := false
 	for i, part := range parts {
 		var p struct {
 			Text     json.RawMessage `json:"text"`
@@ -495,9 +507,6 @@ func (c *geminiCountingWhole) content(id string, raw json.RawMessage) (int64, in
 			if wireDecode(p.Text, &s) != nil {
 				c.marks = c.marks.with(sandbox.CountUnread)
 				continue
-			}
-			if i == 0 && strings.HasPrefix(strings.TrimSpace(s), geminiStateSnapshot) {
-				snapshot = true
 			}
 			q += geminiTextQuartersWhole(s)
 			bytes += int64(len(s))
@@ -523,7 +532,7 @@ func (c *geminiCountingWhole) content(id string, raw json.RawMessage) (int64, in
 			q += n
 		}
 	}
-	return q, bytes, snapshot
+	return q, bytes
 }
 
 // thoughts is the quarter tokens of a reply's thoughts, each counted as the
