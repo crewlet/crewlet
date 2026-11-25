@@ -15,8 +15,8 @@
 // those majors exactly, with the floor's Chromium, the worst pairing the
 // floors admit. A case that drives no browser runs on each Node alone
 // ([EachNode]), and one whose doc says why the floor adds nothing on the
-// newest pair alone ([Newest]). boxhelper's package doc says why the floor is
-// pinned.
+// newest pair alone ([Newest]). CONTRIBUTING.md says why the floor is pinned
+// ("Which node").
 //
 // Test support (the name ends in `test`), so internal/fixedwait reads it as
 // test code: no wait in it decides a claim, every bound in it only ends a

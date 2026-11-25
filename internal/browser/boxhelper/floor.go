@@ -8,8 +8,8 @@ package boxhelper
 // holds. Named as internal/browser's MinChromiumMajor is, never a "node
 // floor", which here is git's floor for a Gitlet node. The floor's pinned
 // release (scripts/node-pin.env) moves with it, which boxhelpertest's
-// TestTheFloorNodeIsTheMajorItStandsFor holds; the package doc says why that
-// one Node version is pinned.
+// TestTheFloorNodeIsTheMajorItStandsFor holds; CONTRIBUTING.md says why that
+// one Node version is pinned ("Which node").
 const MinNodeMajor = 22
 
 // MinNPMMajor is the oldest npm major the box helper supports: 10, the npm

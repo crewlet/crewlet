@@ -565,10 +565,10 @@ CHROMIUM_ENV = chromium_newest="$$(scripts/chromium.sh newest)" || exit 1; \
 # change to how the recipe lays a build out, is a new build beside the old).
 # boxhelpertest hands it, node and npm, to a case of the helper beside the
 # machine's own, so what the case asserts holds on the oldest Node and npm a
-# box may carry (boxhelper's package doc). About 31 MB of download and 136 MB
-# kept, once; after that node.sh finds the build and answers at once. Named
-# for what it fetches, as `git` and `chromium` are, never `node-floor`, which
-# names git's floor for a Gitlet node (GIT_PINS).
+# box may carry (CONTRIBUTING.md, "The floor Node"). About 31 MB of download
+# and 136 MB kept, once; after that node.sh finds the build and answers at
+# once. Named for what it fetches, as `git` and `chromium` are, never
+# `node-floor`, which names git's floor for a Gitlet node (GIT_PINS).
 node: ## fetch the pinned floor Node with its npm, the oldest the box helper supports (scripts/node-pin.env; needs curl and xz)
 	@scripts/node.sh floor >/dev/null
 
@@ -592,8 +592,9 @@ NODE_FLOOR_ENV = floor_node="$$(scripts/node.sh floor)" || exit 1; \
 # bump of the lock, or a change to how the recipe lays a tree out, is a new
 # tree beside the old). boxhelper's cases read the Chromium build it expects
 # from it, and install it again from its npm cache with each Node's own npm,
-# offline (boxhelper's package doc). About 4 MB of download and 23 MB kept,
-# once; after that playwright-tree.sh finds the tree and answers at once.
+# offline (CONTRIBUTING.md, "The Playwright tree"). About 4 MB of download and
+# 23 MB kept, once; after that playwright-tree.sh finds the tree and answers at
+# once.
 playwright-tree: require-npm ## install the Playwright tree internal/browser/boxhelper/tree locks, for the suite (needs npm)
 	@scripts/playwright-tree.sh >/dev/null
 

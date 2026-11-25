@@ -6,7 +6,10 @@
 // life and serving it to the model through Playwright MCP, embedded in it,
 // behind the shim, the harness's stdio browser server ([ShimArgs]). The
 // helper runs under the box's Node, of [MinNodeMajor] or newer with an npm of
-// [MinNPMMajor] or newer; the engine links none of Playwright's code.
+// [MinNPMMajor] or newer, and its suite runs it at both ends, the floor's
+// pinned release beside the machine's own (boxhelpertest; CONTRIBUTING.md,
+// "The floor Node" and "Which node"); the engine links none of Playwright's
+// code.
 //
 // # The helper's files
 //
@@ -271,15 +274,10 @@
 // TestTheInstalledDigestNamesTheFilesTheLockInstalls computes it again, in
 // Go, from the suite's tree.
 //
-// Dependabot proposes each release (.github/dependabot.yml), and its pull
-// request stays red until a person reads the release, checks the registry's
-// signatures on what it installs (`npm audit signatures`) and moves the
-// constants and the digest, from a branch of their own (CONTRIBUTING.md, "A
-// Playwright MCP bump is read before it lands"). Nor does it merge itself:
-// .github/workflows/dependabot-merge.yml, which queues every other bump to
-// merge once green, starts no run on one that changes only tree/. The
-// signature check fetches the registry's keys when it runs rather than reading
-// a pinned one, the price of a check npm maintains.
+// A bump lands as CONTRIBUTING.md says ("A Playwright MCP bump is read before
+// it lands"). Its signature check (`npm audit signatures`) fetches the
+// registry's keys when it runs rather than reading a pinned one, the price of
+// a check npm maintains.
 //
 // # Why Playwright MCP is embedded, not run
 //
@@ -293,26 +291,6 @@
 // drive the browser around the helper. Embedded, every connection passes the
 // helper, and nothing raw listens. The cost: createConnection's context
 // getter is undocumented, so every bump reads it again.
-//
-// # The floor Node
-//
-// A box brings its own Node and npm, and the helper supports Node
-// [MinNodeMajor] or newer with the npm that major bundles, [MinNPMMajor] or
-// newer. So boxhelpertest hands a case of the helper two Nodes, each with its
-// own npm: the machine's, at or above both, and the floor's newest release,
-// of both majors exactly, which scripts/node-pin.env pins by version and
-// per-platform SHA-256 and `make node` (scripts/node.sh) fetches, keeping its
-// node and its npm. Without the floor's run the suite would prove the newest
-// Node alone, and a floor that only CI ran would let a developer's `make
-// check` pass on code the floor rejects: the git and Chromium floors take the
-// same posture. TestTheLockInstallsWithEachNodesOwnNpm installs the lock with
-// each, offline, from the npm cache of the suite's tree.
-//
-// It is the one Node version the tree names (CONTRIBUTING.md, "Which node"),
-// because a weekly check moves it: .github/workflows/pins.yml's leg
-// (scripts/node-pin-check.sh) holds the pin to the newest patch of its major,
-// verified against the Node releasers' keys, and fails from 60 days before
-// the major's end of life, naming the release to raise it to.
 //
 // # The suite
 //
