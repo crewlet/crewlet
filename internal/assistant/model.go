@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
 
 // WHAT A PERSON IS TOLD WHEN THE MODEL CANNOT ANSWER, in one place. A turn
@@ -19,7 +20,8 @@ import (
 //
 // THE HINT FOLLOWS WHO IS ASKING: an administrator is told where to fix it,
 // and anybody else whom to ask, since only an administrator can sign a model
-// in or change the chain.
+// in or change the chain. A limit on an LLM fleet is every member's, since a
+// call hands off to any member with room ([chain.Error]).
 
 // modelProblem is a model failure as a person reads it.
 type modelProblem struct {
@@ -59,12 +61,21 @@ func modelProblemOf(err error, admin bool) (modelProblem, bool) {
 			Message: wire.ErrorModelSignedOut.Sentence(), Hint: hint}, true
 	case failure.Kind == llm.KindRateLimit:
 		hint := "It is tried again once the limit resets."
-		if admin {
+		var walked *chain.Error
+		switch onFleet := errors.As(err, &walked) && walked.Fleet != ""; {
+		case admin && onFleet:
+			hint += " Every model in its fleet is at its limit: to keep Ask Crewlet answering, " +
+				"add a model on another sign-in to the fleet."
+		case admin:
 			hint += " To keep Ask Crewlet answering through a limit, assign it another model."
+		}
+		retryAt := failure.RetryAt
+		if limit, ok := chain.Limited(err); ok {
+			retryAt = limit.RetryAt
 		}
 		return modelProblem{Code: wire.ErrorModelBusy,
 			Message: wire.ErrorModelBusy.Sentence(), Hint: hint,
-			Retryable: true, RetryAt: failure.RetryAt}, true
+			Retryable: true, RetryAt: retryAt}, true
 	case failure.Kind == llm.KindTimeout:
 		hint := "Ask again, or ask a narrower question."
 		if admin && key != "" {
