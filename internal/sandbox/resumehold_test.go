@@ -18,7 +18,7 @@ import (
 func budgetHeld(until time.Time) error {
 	return &HeldError{
 		Refusal: Refusal{Condition: "budget", Reason: "budget: day window full", Until: until},
-		Err:     errors.New("an executor run needs at least 25000 tokens"),
+		Err:     errors.New("an executor run needs at least 65000 tokens"),
 	}
 }
 

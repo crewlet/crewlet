@@ -919,8 +919,9 @@ func (s *runSteers) stopWith(e *Engine) {
 }
 
 // windowFrom is a context that ends d after begun does, and not before: the
-// window of d that opens as begun ends. Nothing waits for that moment: the
-// window is armed by begun itself, so its timer starts then.
+// window of d that opens as begun ends, counted from the instant its cause
+// names ([teardownAt]), never from when the callback arming it ran, which a
+// loaded node runs late.
 //
 // MADE FROM BEGUN AND NOTHING ELSE. It carries begun's values and none of its
 // ending, which would close the window the moment it opens; and none of a
@@ -928,7 +929,10 @@ func (s *runSteers) stopWith(e *Engine) {
 // that may end as the stop begins, and the window would end with it.
 func windowFrom(begun context.Context, d time.Duration) context.Context {
 	window, end := context.WithCancel(context.WithoutCancel(begun))
-	context.AfterFunc(begun, func() { time.AfterFunc(d, end) })
+	context.AfterFunc(begun, func() {
+		at, _ := teardownAt(begun)
+		time.AfterFunc(time.Until(at.Add(d)), end)
+	})
 	return window
 }
 

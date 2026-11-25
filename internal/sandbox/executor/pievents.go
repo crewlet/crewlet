@@ -17,8 +17,6 @@ type piLine struct {
 	Type string `json:"type"`
 	// ID is the session's, on the stream's `session` header line.
 	ID string `json:"id"`
-	// Cap is the turn cap the script's mark names.
-	Cap int `json:"cap"`
 	// Message is a message_start/message_end's message.
 	Message *piMessage `json:"message"`
 	// A tool call's start and end.
@@ -183,6 +181,8 @@ func piAnswered(stop string) bool { return stop == "stop" || stop == "toolUse" |
 // own spend, every assistant message's usage and every compaction's (the stream
 // carries this process's messages alone, a resumed run's included).
 type piEvents struct {
+	undecidedLines
+
 	sawLine, sawEvent bool
 	sessionID         string
 
@@ -192,19 +192,22 @@ type piEvents struct {
 	// prose beside them.
 	answer, stop, failure string
 
-	// marked is the script's mark ([piExtensionMark]), capTurns the cap it
-	// names; armed the extension's word that it ran; capped the cap it says
+	// marked is the script's mark ([piExtensionMark]); armed the extension's
+	// word that it ran; capped the cap it says
 	// stopped the run; missing the servers it says offered no tool,
 	// redefined those an mcp.json entry stood in for; hidden why pi leaves
 	// their tools out of its requests; settled and aborted agent_settled's.
 	marked, armed    bool
-	capTurns, capped int
+	capped           int
 	missing          []string
 	redefined        []string
 	hidden           string
 	settled, aborted bool
 	overflowFailed   string
 	requests         int
+	// retrying is whether the last request ended in a failed attempt, which
+	// the next assistant message retries ([piEvents.counted]).
+	retrying bool
 
 	spent  piUsage
 	last   int64
@@ -231,7 +234,23 @@ func (d *piEvents) Entries(end bool) []string {
 }
 
 // Skipped implements [Decoder].
-func (d *piEvents) Skipped(n int64, bound int) { d.transcript.skip(n, bound) }
+func (d *piEvents) Skipped(line LongLine) {
+	d.transcript.skip(line.Size, line.Bound)
+	// AN ASSISTANT MESSAGE'S STOP FOLLOWS ITS CONTENT, so the tail reads it.
+	switch lineType(line) {
+	case "message_end":
+		role := windowField(line.Head, "role", false)
+		stop := windowField(line.Tail, "stopReason", true)
+		switch {
+		case role == "assistant" && stop != "":
+			d.counted(stop)
+		case role == "" || role == "assistant":
+			d.undecided++
+		}
+	case "":
+		d.undecided++
+	}
+}
 
 // Line implements [Decoder].
 func (d *piEvents) Line(line []byte) {
@@ -248,7 +267,7 @@ func (d *piEvents) Line(line []byte) {
 	case "session":
 		d.sessionID = firstNonBlank(ev.ID, d.sessionID)
 	case piExtensionMark:
-		d.marked, d.capTurns = true, ev.Cap
+		d.marked = true
 	case "message_end":
 		if ev.Message != nil && ev.Message.Role == "assistant" {
 			d.assistant(*ev.Message)
@@ -274,9 +293,7 @@ func (d *piEvents) Line(line []byte) {
 // assistant reads one assistant message: its answer, its stop, its failure and
 // its usage.
 func (d *piEvents) assistant(m piMessage) {
-	if m.StopReason != "aborted" {
-		d.requests++
-	}
+	d.counted(m.StopReason)
 	if m.Usage != nil {
 		u := *m.Usage
 		d.spent.Input += u.Input
@@ -424,6 +441,46 @@ func (d *piEvents) reportedWindow() int64 { return d.window }
 // ends, aborted or not.
 func (d *piEvents) Ended() bool { return d.settled }
 
+// Requests implements [Decoder]: the assistant messages the stream holds, one
+// a request, but for one aborted before it was made, and a failed attempt and
+// the retries after it counted once, as the one request they are.
+func (d *piEvents) Requests() int { return d.requests }
+
+// InFlight implements [Decoder]: none, as the extension aborts the turn
+// before its request (measured on 1.6.0: a cap of 3, 3 requests).
+func (d *piEvents) InFlight() int { return 0 }
+
+// counted counts the request one assistant message ended. PI WRITES EVERY
+// FAILED ATTEMPT AS A MESSAGE OF ITS OWN (`stopReason: "error"`), then retries
+// it: measured on 1.6.0, a 429 and a 500 each retried once wrote 8 messages
+// for 6 requests, and a 429 retried until pi gave up wrote 4 for none answered.
+// An attempt the vendor refused bills nothing, so the attempts and the answer
+// that ends them are one request, counted at the first.
+func (d *piEvents) counted(stop string) {
+	switch {
+	case stop == "aborted":
+	case stop == "error":
+		if !d.retrying {
+			d.requests++
+		}
+		d.retrying = true
+	case d.retrying:
+		d.retrying = false
+	default:
+		d.requests++
+	}
+}
+
+// unheld implements [enforcerReporter]: a run its script marked as loading the
+// extension, whose extension never said it ran.
+func (d *piEvents) unheld() string {
+	if !d.marked || d.armed {
+		return ""
+	}
+	return "the run's extension never ran, so the seat's tools, its notes and its turn cap were not there: " +
+		(Pi{}).notesOffWhy()
+}
+
 // Result implements [Decoder]: the answer, and how the run ended.
 //
 // A RUN WHOSE EXTENSION NEVER RAN fails whatever it answered: its script printed
@@ -446,12 +503,8 @@ func (d *piEvents) Result() sandbox.Result {
 		res = spent.on(res)
 	}
 	switch {
-	case d.marked && !d.armed:
-		res.Error = "the run's extension never ran, so the seat's tools, its notes and its turn cap were not " +
-			"there: " + (Pi{}).notesOffWhy()
-	case d.capTurns > 0 && d.requests > d.capTurns:
-		res.Error = fmt.Sprintf("the turn cap of %d was not enforced: the run made %d model requests",
-			d.capTurns, d.requests)
+	case d.unheld() != "":
+		res.Error = d.unheld()
 	case len(d.redefined) > 0:
 		res.Error = fmt.Sprintf("the seat's tools never reached this run: %s, which pi uses in place of the "+
 			"server the run registers under that name; rename that entry", strings.Join(d.redefined, "; "))
