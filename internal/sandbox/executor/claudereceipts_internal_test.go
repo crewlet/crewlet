@@ -334,6 +334,24 @@ func TestNoTakeIsHeldForAReleaseTheResumeWasNotReadIn(t *testing.T) {
 	}
 }
 
+// A RUN ON THE PINNED RELEASE CONFIRMS ITS HOOK TAKES: the session Claude
+// Code 2.1.330, the release the runner pins, wrote for a run that handed one note at a batch and one at Stop, each
+// answered, and which 2.1.330 resumed with both notes in its first request
+// (testdata/claude/2.1.330/holdings/n1, measured), holds both takes once its
+// job's harness ended, so its notes are confirmed read.
+//
+// Mutation: leave 2.1.330 out of the releases whose resume was read, and both
+// takes go undecided.
+func TestAPinnedReleaseRunConfirmsItsHookTakes(t *testing.T) {
+	t.Parallel()
+	const batch, stop = "00000000-0000-4000-8000-0000000000a1", "00000000-0000-4000-8000-0000000000b2"
+	got := rhRead(t, "2.1.330", true,
+		rhProbeWhole(t, "2.1.330/holdings/n1/projects/crewlet/5e55100a-0000-4000-8000-000000000160.jsonl"),
+		sandbox.AskedTake{Take: batch, Boundary: types.SteerBoundaryToolBatch},
+		sandbox.AskedTake{Take: stop, Boundary: types.SteerBoundaryFinish})
+	rhWant(t, "2.1.330's n1", got, []string{batch, stop}, nil, nil)
+}
+
 // A READ ASKED MORE TAKES THAN A HOOK RECORD NAMES ANSWERS, AND COUNTS: past
 // the 64 a record's masks hold, every take is undecided with why, and the
 // count is read as the count alone reads it, never a panic that answers
