@@ -3108,6 +3108,22 @@ func (s *CoordStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch str
 	return marked, err
 }
 
+// MarkEndedAtTurnCap records that the launching node's watch saw a running job's
+// stream past its turn cap. See the contract on [PendingStore].
+func (s *CoordStore) MarkEndedAtTurnCap(ctx context.Context, turnID, launch string) (bool, error) {
+	if launch == "" {
+		return false, nil
+	}
+	_, marked, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.Status != StatusRunning || run.Ending != nil || run.Launch.EndedAtTurnCap {
+			return false
+		}
+		run.Launch.EndedAtTurnCap = true
+		return true
+	})
+	return marked, err
+}
+
 // MarkHarnessEnd records how a job's harness ended and what its newest request
 // carried, as a read that collected the job found them. See the contract on
 // [PendingStore].

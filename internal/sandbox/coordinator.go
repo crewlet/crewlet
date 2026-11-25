@@ -2111,13 +2111,14 @@ func parkedEngineSpend(run PendingRun) EngineSpend {
 // collect reconnects, reads the result, and pauses the box rather than tearing
 // it down: a relaunch continues in it, a parked run waits in it, a retried
 // resume reads it again; the pause reaper bounds it ([PendingRun.HeldSince]).
-// ended reports a run its turn's wall-clock cap ended ([PendingRun.Deadline]):
-// the read ends the job first, its bridge session closed before
-// ([CoordinatorOptions.Ended]), and the result says it was cut off. The claim is
+// ended reports a run its turn's wall-clock cap ended ([PendingRun.Deadline]), or
+// its turn cap's watch ([LaunchRecord.EndedAtTurnCap]): the read ends the job
+// first, its bridge session closed before ([CoordinatorOptions.Ended]), and the
+// result says which cap cut it off. The claim is
 // marked the moment the box answered ([PendingRun.BoxAnswered]). See the
 // package doc, "Collecting a box".
 func (c *Coordinator) collect(ctx context.Context, run PendingRun) (PendingRun, Result, bool, error) {
-	if c.ended != nil && run.PastDeadline(c.now()) {
+	if c.ended != nil && (run.PastDeadline(c.now()) || run.Launch.EndedAtTurnCap) {
 		c.ended(run.TurnID)
 	}
 	// THE BOX IS READ WHERE IT IS ([Coordinator.boxResult]); the rest is this
@@ -2133,7 +2134,10 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (PendingRun, 
 	// it reads no row for what the host's store says (renew.go).
 	run.BoxAnswered, run.BoxHarnessEnd = true, result.HarnessEnd
 	readTheBox(ctx)
-	if ended {
+	switch {
+	case ended && run.Launch.EndedAtTurnCap:
+		result = endedAtTurnCap(result, run.Launch.TurnCap, run.Question)
+	case ended:
 		result = endedAtDeadline(result, run.Deadline, run.Question)
 	}
 	c.warnNotesUnasked(ctx, run, result)
@@ -2195,7 +2199,8 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 // its script packs the session as its own exit does, so it is final, and PAUSES
 // NOTHING (the ending reclaims the box). So does a cap-passed job's collection:
 // packed beside a writing harness the session was never final. That the cap ended
-// the job is recorded before it is asked or killed ([LaunchRecord.EndedAtDeadline]).
+// the job is recorded before it is asked or killed ([LaunchRecord.EndedAtDeadline],
+// or by the turn cap's watch, [LaunchRecord.EndedAtTurnCap]).
 func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
 	return c.readBoxFor(ctx, run, read, false)
 }
@@ -2219,8 +2224,11 @@ func (c *Coordinator) readBoxFor(ctx context.Context, run PendingRun, read BoxRe
 	// RECORDED when seen, before it is asked or killed, since the kill can take the
 	// script before it records the request. A silent poll shows nothing, and never
 	// read it off whether the job is over after its end (a stopped job is over too).
-	capped := read == BoxReadCollect && (run.Launch.EndedAtDeadline || run.PastDeadline(c.now()))
-	ended, over := capped && run.Launch.EndedAtDeadline, true
+	// A JOB ITS TURN CAP'S WATCH ENDED ([LaunchRecord.EndedAtTurnCap]) is ended so
+	// too, recorded before it was announced.
+	recorded := run.Launch.EndedAtDeadline || run.Launch.EndedAtTurnCap
+	capped := read == BoxReadCollect && (recorded || run.PastDeadline(c.now()))
+	ended, over := capped && recorded, true
 	sawWorking := func() {
 		if !ended {
 			ended = true
@@ -2250,7 +2258,7 @@ func (c *Coordinator) readBoxFor(ctx context.Context, run PendingRun, read BoxRe
 		return Result{}, false, err
 	}
 	// THE JOB'S OWN RECORD THAT A REQUEST ENDED IT ([Result.JobEnd]) is the same
-	// sight where the job's record did not take this read's: only the cap asks a
+	// sight where the job's record did not take this read's: only a cap asks a
 	// collected job to end (stops and losses are endings no completion collects),
 	// so the script that heard it was still working. It covers a request whose
 	// answer was lost and a repeat after a record that did not land; otherwise
@@ -2484,6 +2492,25 @@ func endedAtDeadline(result Result, deadline time.Time, asked string) Result {
 		why += ". It had asked: " + asked
 	}
 	result.Success = false
+	if result.Error != "" {
+		why += ". It had reported: " + result.Error
+	}
+	result.Error = why
+	return result
+}
+
+// endedAtTurnCap is what a run its turn cap's watch ended reports
+// ([LaunchRecord.EndedAtTurnCap]): what it said up to then, failed as past its
+// cap (`turn_cap_exceeded`), whatever its box said by the time it was read, and
+// parked on no question, its question said as [endedAtDeadline] says it. Never
+// worded as the wall-clock cap: the two endings are told apart.
+func endedAtTurnCap(result Result, turnCap int, asked string) Result {
+	why := fmt.Sprintf("the engine ended the run at its turn cap of %d model requests: its stream showed "+
+		"it past the cap while it worked; what it had done by then is collected", turnCap)
+	if asked != "" {
+		why += ". It had asked: " + asked
+	}
+	result.Success, result.TurnCapExceeded, result.RoundCapped = false, true, false
 	if result.Error != "" {
 		why += ". It had reported: " + result.Error
 	}

@@ -381,3 +381,23 @@ const (
 // EachLine is [eachLine], for the cases of a line past a bound the suite
 // lowers.
 func EachLine(r io.Reader, dec Decoder, bound int) error { return eachLine(r, dec, bound) }
+
+// CollectedCount is what [Runner.Collect] counts of stream, read whole through
+// its own reading of an event stream.
+func CollectedCount(r *Runner, stream []byte) (sandbox.RequestCount, error) {
+	read, _, err := r.decodeLines(bytes.NewReader(stream), false)
+	return sandbox.RequestCount{Requests: read.requests, InFlight: read.inFlight, Undecided: read.undecided}, err
+}
+
+// CountReadBytes is the most one read of a live count takes.
+const CountReadBytes = countReadBytes
+
+// CountingBy is r's live count of a job, each read taking at most readBytes.
+func CountingBy(r *Runner, readBytes int64) sandbox.Counter {
+	c, ok := r.Count(sandbox.RunHandle{}).(*counter)
+	if !ok {
+		return nil
+	}
+	c.readBytes = readBytes
+	return c
+}

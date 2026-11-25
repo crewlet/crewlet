@@ -2856,6 +2856,14 @@ type PendingStore interface {
 	// the box's host makes it as it reads the box, and it is a fact about the job.
 	MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error)
 
+	// MarkEndedAtTurnCap records that the launching node's watch saw the stream of
+	// the job named past its turn cap while it ran ([LaunchRecord.EndedAtTurnCap]),
+	// reporting whether this call recorded it. Only on a running row whose end
+	// nothing decided yet, ONCE PER JOB; the next launch's job starts with nothing
+	// said. FALSE IS NOT AN ERROR: another job, already said, no longer running, or
+	// gone. NO FENCE: the box's host makes it, and it is a fact about the job.
+	MarkEndedAtTurnCap(ctx context.Context, turnID, launch string) (bool, error)
+
 	// MarkHarnessEnd records how the job's harness ended and what the newest request of the
 	// session its box ran carried, as a read collecting the job found them
 	// ([LaunchRecord.HarnessEnd], [LaunchRecord.Context]), in ONE WRITE, reporting whether
@@ -3683,6 +3691,15 @@ type LaunchRecord struct {
 	// ([Result.JobEnd]), so a collection made again found a job its cap stopped with no
 	// reason, read it as ended by itself, and parked it on its dying question.
 	EndedAtDeadline bool `json:"ended_at_deadline,omitempty"`
+
+	// EndedAtTurnCap says the launching node's watch SAW THIS JOB'S STREAM PAST
+	// ITS TURN CAP ([LaunchRecord.TurnCap]) while the job ran, past what its collection could
+	// judge within it ([RequestCount.PastCap]), and is ending it: written before
+	// its completion is announced ([PendingStore.MarkEndedAtTurnCap]), so its
+	// collection ends the job before it reads it and fails the run at its cap
+	// ([endedAtTurnCap]) whatever the box says by then. An older build carries
+	// it through [LaunchRecord.Extra] and reads nothing of it.
+	EndedAtTurnCap bool `json:"ended_at_turn_cap,omitempty"`
 
 	// HostStoreSilentSince, where set, says the host of this job's box last answered a
 	// collection that its own store did not answer its read of the row

@@ -263,6 +263,16 @@ type Waiter struct {
 	// sweeping is whether a sweep of this host's boxes is running: one at
 	// a time ([Waiter.sweep]).
 	sweeping bool
+	// watched is every capped running run the turn cap's watch counts, by
+	// turn (capwatch.go); listings numbers the passes' listings of the runs,
+	// and watchSlots is [capWatchReads]. The watch's loop and reads are
+	// waited for apart from tasks (watchEnded, watchReads), which a nudge's
+	// caller waits on while the loop runs on.
+	watched    map[string]*capWatch
+	listings   uint64
+	watchSlots chan struct{}
+	watchEnded chan struct{}
+	watchReads sync.WaitGroup
 	// life is the context Start ran the loop under, which a nudge's
 	// schedule runs under and every save is offered under
 	// ([WaiterOptions.Save]); nil before Start. closed is set as the loop
@@ -311,7 +321,11 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 		announced: map[string]announced{},
 		following: map[string]bool{},
 		absent:    map[string]time.Time{},
+		watched:   map[string]*capWatch{},
 		stopped:   make(chan struct{}),
+
+		watchSlots: make(chan struct{}, capWatchReads),
+		watchEnded: make(chan struct{}),
 	}
 	if w.interval <= 0 {
 		w.interval = DefaultPollInterval
@@ -334,6 +348,7 @@ func (w *Waiter) Start(ctx context.Context) {
 		w.mu.Lock()
 		w.life = ctx
 		w.mu.Unlock()
+		go w.watchLoop(ctx)
 		go w.loop(ctx)
 		log.InfoContext(ctx, "sandbox_waiter_started", "node", w.node,
 			"watches_launch_nodes", w.claimDuty != nil, "poll_seconds", w.interval.Seconds())
@@ -362,6 +377,11 @@ func (w *Waiter) loop(ctx context.Context) {
 	// AND NO NUDGE STARTS ONE AFTER: a task is counted under the same lock
 	// this closes, so it is counted before the wait or never started.
 	defer w.closeTasks()
+	// The turn cap's watch ends with the same cancellation, its reads with it.
+	defer func() {
+		<-w.watchEnded
+		w.watchReads.Wait()
+	}()
 	// Jittered, so a fleet's waiters do not all wake on the same second and
 	// contend for the launch-node watch in lockstep.
 	timer := time.NewTimer(w.jittered())
@@ -452,11 +472,13 @@ func (w *Waiter) pass(ctx context.Context) (*round, error) {
 	// from it says ([rowAskedField]): that store answered this waiter after
 	// it, whatever a box's poll took before the announcement is made.
 	listed := w.now()
+	gen := w.listing()
 	runs, err := w.pending.ListActive(ctx)
 	if err != nil {
 		return nil, err
 	}
 	w.forget(runs)
+	w.track(runs, listed, gen)
 	work := w.order(runs, listed)
 
 	// ONE CHILD OF ctx PER WALK, made once: ctx is the loop's, which lives
@@ -668,30 +690,37 @@ func (w *Waiter) pollBounded(ctx, taskCtx context.Context, manager *Manager, run
 		// UNREACHED FOR THE GIVE-UP WINDOW, the completion goes out anyway,
 		// so the coordinator frees the seat and settles the run (its
 		// collection fails to reach the box too) instead of it hanging.
-		first, due := w.announcing(run)
-		if !due {
-			return false
-		}
-		if err := w.publishCompletion(ctx, run, first, read); err != nil {
-			w.unannounce(run.TurnID)
-			log.WarnContext(ctx, "sandbox_completion_publish_failed",
-				"turn_id", run.TurnID, "error", err.Error())
-			return false
-		}
-		if !first {
-			// QUIETLY: a job its node has not resumed yet (held for a
-			// condition, refused by its gate, handed back for a retry)
-			// is announced again on the schedule, and its first
-			// announcement said so already.
-			log.DebugContext(ctx, "sandbox_waiter_reannounced", "turn_id", run.TurnID,
-				"launch_id", run.LaunchID, "sandbox_id", run.SandboxID)
-			return true
-		}
-		log.InfoContext(ctx, "sandbox_waiter_fired", "turn_id", run.TurnID,
+		return w.announce(ctx, run, read)
+	}
+	return false
+}
+
+// announce announces run's job's completion where its schedule makes one due
+// ([Waiter.announcing]), reporting whether it did; read is when the store was
+// asked for the row run was read from ([rowAskedField]).
+func (w *Waiter) announce(ctx context.Context, run PendingRun, read time.Time) bool {
+	first, due := w.announcing(run)
+	if !due {
+		return false
+	}
+	if err := w.publishCompletion(ctx, run, first, read); err != nil {
+		w.unannounce(run.TurnID)
+		log.WarnContext(ctx, "sandbox_completion_publish_failed",
+			"turn_id", run.TurnID, "error", err.Error())
+		return false
+	}
+	if !first {
+		// QUIETLY: a job its node has not resumed yet (held for a
+		// condition, refused by its gate, handed back for a retry)
+		// is announced again on the schedule, and its first
+		// announcement said so already.
+		log.DebugContext(ctx, "sandbox_waiter_reannounced", "turn_id", run.TurnID,
 			"launch_id", run.LaunchID, "sandbox_id", run.SandboxID)
 		return true
 	}
-	return false
+	log.InfoContext(ctx, "sandbox_waiter_fired", "turn_id", run.TurnID,
+		"launch_id", run.LaunchID, "sandbox_id", run.SandboxID)
+	return true
 }
 
 // isBusy reports whether a task is working on the turn's box right now.
@@ -935,6 +964,9 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 					"polled; the run is ended and its turn resumed with what it did")
 			return pollDone
 		}
+		if run.Launch.EndedAtTurnCap {
+			return pollDone
+		}
 		return pollRunning
 	}
 	switch state {
@@ -944,6 +976,12 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 		// KILLED WITH ITS ENGINE, not ended: see [JobState]. What it left
 		// is not its result, and its round is carried on ([JobLoss]).
 		return pollLostJob
+	}
+	if run.Launch.EndedAtTurnCap {
+		// ITS TURN CAP'S WATCH ENDED IT (capwatch.go), as a passed deadline
+		// does below, and said so when it did: announced again until a
+		// collection claims it, which ends the job.
+		return pollDone
 	}
 	if run.PastDeadline(w.now()) {
 		// THE TURN'S CAP HAS PASSED, and the run is ended as if it had
