@@ -125,6 +125,14 @@
 // unanswered, and only the person's approval, made from their own browser,
 // sends it, once (ADR-0051).
 //
+// # A place opens by itself only when the person asked
+//
+// An open in app card is marked asked ([askedToOpen]) only when the turn's own
+// question, the person's words, both asks to go somewhere ("open", "go to",
+// and for a setup page "connect") and names the place the link opens; the
+// page context, a read's answer and the model's call never count. One card
+// per answer at most, and the drawer opens it only in the tab that asked.
+//
 // # One model, and no tool of its own
 //
 // A turn runs on the one model the company assigns (`assistant.model`), as a

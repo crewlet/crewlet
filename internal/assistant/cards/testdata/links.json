@@ -85,9 +85,29 @@
     "href": "#/inbox"
   },
   {
-    "label": "Open Google Cloud setup",
+    "label": "Open Google Cloud",
     "screen": "integration",
     "href": "#/company/integrations/google_cloud"
+  },
+  {
+    "label": "Open Google Cloud's activity",
+    "screen": "integration-activity",
+    "href": "#/company/integrations/google_cloud?tab=activity"
+  },
+  {
+    "label": "Open Google Cloud's agents",
+    "screen": "integration-agents",
+    "href": "#/company/integrations/google_cloud?tab=agents"
+  },
+  {
+    "label": "Open Google Cloud's settings",
+    "screen": "integration-settings",
+    "href": "#/company/integrations/google_cloud?tab=settings"
+  },
+  {
+    "label": "Open Google Cloud setup",
+    "screen": "integration-setup",
+    "href": "#/company/integrations/google_cloud?edit=settings"
   },
   {
     "label": "Integrations",
