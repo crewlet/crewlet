@@ -1,7 +1,6 @@
 package executor_test
 
 import (
-	"bytes"
 	"maps"
 	"os"
 	"os/exec"
@@ -14,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/words"
@@ -61,17 +61,18 @@ func hungCalls(t *testing.T, dir string) (kinds []string, pids []int) {
 	return kinds, pids
 }
 
-// runs reports whether pid is a process that runs, read from /proc: a zombie
-// runs nothing, and is no leftover. False where there is no /proc to read, as
-// on darwin, where the group's own check ([scriptJob.assertGroupGone]) stands.
-func runs(pid int) bool {
-	stat, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat")) //nolint:gosec // /proc
+// runs reports whether pid is a process that runs, read as internal/procgroup
+// reads one on both release platforms: a zombie runs nothing, and is no
+// leftover, but one whose main thread alone has exited runs on. A record the
+// kernel will not give fails the case, since that a call has ended must not
+// pass on "unknown" ([procgrouptest.AwaitGone]).
+func runs(t *testing.T, pid int) bool {
+	t.Helper()
+	running, err := procgrouptest.Running(pid)
 	if err != nil {
-		return false
+		t.Fatalf("reading the kernel's record of pid %d: %v", pid, err)
 	}
-	end := bytes.LastIndexByte(stat, ')')
-	fields := strings.Fields(string(stat[end+1:]))
-	return len(fields) > 0 && fields[0] != "Z"
+	return running
 }
 
 // assertHungEnded fails the case unless the server took a call of kind and
@@ -86,7 +87,7 @@ func assertHungEnded(t *testing.T, dir, kind string) {
 			readIn(t, dir, "hung"))
 	}
 	for i, pid := range pids {
-		if runs(pid) {
+		if runs(t, pid) {
 			t.Errorf("the %s call the server never answered (pid %d) still runs after the script ended", kinds[i], pid)
 		}
 	}
@@ -396,7 +397,7 @@ func TestALoginExportInFlightAsTheLoopStopsIsEnded(t *testing.T) {
 		j.await("the last export to be taken too", func() bool {
 			return strings.Count(readIn(t, j.dir, "hung"), "auth.export ") >= 2
 		})
-		if _, pids := hungCalls(t, j.dir); runs(pids[0]) {
+		if _, pids := hungCalls(t, j.dir); runs(t, pids[0]) {
 			t.Errorf("the loop's export (pid %d) still runs after the loop was stopped", pids[0])
 		}
 		// The last export waits out its own minute unless a teardown, which

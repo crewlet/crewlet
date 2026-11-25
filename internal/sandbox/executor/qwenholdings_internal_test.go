@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -1099,7 +1098,8 @@ const qhReadingAllocates = 558 << 10
 // log, is read and its call held, and a 64 MiB compaction's history is read
 // past, each within [qhReadingAllocates] whatever the line's length.
 //
-// Not parallel: it reads the process's allocation count.
+// Not parallel: it reads the process's allocation count, the fewest bytes of
+// three reads ([allocationsOf]).
 //
 // Mutation: hold a line or a digested text whole, and a case goes red.
 func TestQwenReadingHoldsNoLine(t *testing.T) {
@@ -1119,19 +1119,16 @@ func TestQwenReadingHoldsNoLine(t *testing.T) {
 	} {
 		archive := qhTar(t, qhSession, tc.file)
 		ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{tc.call}, Resumer: "0.28.4"}
-		read := func() (sandbox.SessionHoldings, error) {
-			return readQwenHoldings(t.Context(), bytes.NewReader(archive), qhSession, ohBegan, ask)
-		}
-		h, err := read()
+		var (
+			h   sandbox.SessionHoldings
+			err error
+		)
+		_, allocated := allocationsOf(func() {
+			h, err = readQwenHoldings(t.Context(), bytes.NewReader(archive), qhSession, ohBegan, ask)
+		})
 		if got := ohHeld(t, h, err, tc.call); !slices.Equal(got, []int{1}) {
 			t.Errorf("%s: held %v; want its call", name, got)
 		}
-		runtime.GC()
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		_, _ = read()
-		runtime.ReadMemStats(&after)
-		allocated := after.TotalAlloc - before.TotalAlloc
 		t.Logf("%s: allocated %d bytes", name, allocated)
 		if allocated > qhReadingAllocates {
 			t.Errorf("%s: allocated %d bytes; want at most %d", name, allocated, qhReadingAllocates)

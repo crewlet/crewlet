@@ -264,6 +264,65 @@ func TestTheHarnessIsToldItsTaskAndItsEnvironment(t *testing.T) {
 	}
 }
 
+// A RUN IS TOLD WHAT EACH SERVER ITS BOX RUNS IS FOR, in the company's words,
+// on a line of its own after the one naming every server it is handed: the box
+// reaches its own servers past the bridge, so its standing instructions are the
+// only place their descriptions reach the model. A server the bridge serves
+// gets no such line: its endpoint says its words as its MCP instructions, so a
+// line would say them twice.
+//
+// Mutation: drop the description line in EnvironmentBrief, give it before the
+// line naming every server, or list a server whose description is blank, and
+// this goes red.
+func TestARunIsToldWhatEachServerInItsBoxIsFor(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.MCPServers = map[string]MCPServer{
+		"jira": {Name: "jira", Transport: TransportStdio, Command: "jira-mcp",
+			Description: "Tracks the team's issues and sprints"},
+		"linear": {Name: "linear", Transport: TransportStdio, Command: "linear-mcp", Description: "  "},
+	}
+	// THE BRIDGE'S SERVERS AS THE ENGINE NAMES THEM: no description of their
+	// own, since each says it on its endpoint.
+	req.Opened = func(job OpenedJob) (Opening, error) {
+		endpoint := "https://engine.example.com/mcp/" + job.LaunchID
+		return Opening{Servers: map[string]MCPServer{
+			"crewlet":  {Name: "crewlet", Transport: TransportHTTP, URL: endpoint, AlwaysLoaded: true},
+			"handbook": {Name: "handbook", Transport: TransportHTTP, URL: endpoint + "/server/handbook"},
+		}}, nil
+	}
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	started := rig.runner.Started()
+	if len(started) != 1 {
+		t.Fatalf("started %d runs, want 1", len(started))
+	}
+	system := started[0].System
+	lines := strings.Split(system, "\n")
+	named := slices.Index(lines, "You also have these MCP tool servers connected: crewlet, handbook, jira, linear.")
+	said := slices.Index(lines, "`jira`: Tracks the team's issues and sprints")
+	switch {
+	case named < 0:
+		t.Errorf("the standing instructions have no line naming every server the box is handed, "+
+			"sorted:\n%s", system)
+	case said < 0:
+		t.Errorf("the standing instructions have no line saying what jira is for:\n%s", system)
+	case said < named:
+		t.Errorf("the standing instructions say what jira is for before the line naming every "+
+			"server:\n%s", system)
+	}
+	for _, line := range lines {
+		for _, name := range []string{"crewlet", "handbook", "linear"} {
+			if strings.HasPrefix(line, "`"+name+"`") {
+				t.Errorf("the standing instructions give %s a line of its own, which only a server "+
+					"the box runs with the company's words for it gets: %q", name, line)
+			}
+		}
+	}
+}
+
 // A RUN'S STANDING INSTRUCTIONS LEAD WITH THE SEAT'S SYSTEM PROMPT: whole,
 // ahead of the environment and the ask, opened by the note that it is the role
 // rather than the coding tool's own prompt, and none of it in the brief, which
@@ -485,6 +544,32 @@ func TestAJobRecordsTheSignInItWasHandedAndWhyItFollows(t *testing.T) {
 	}
 	if got := rig.get("t1").Launch; got.SignInID != "" || got.FollowUp != "" {
 		t.Errorf("a plain launch after the follow-up kept %+v, want neither the sign-in nor the reason", got)
+	}
+}
+
+// THE ROUND CAP A JOB WAS HANDED IS ITS RECORD'S, the engine's word its
+// collection holds the job's requests to: it survives the store's launch
+// write, which rebuilds the record, reaches the handle the collection is
+// given, and a later launch replaces it.
+//
+// Mutation: drop it from the store's rebuilt record or the handle, or let a
+// launch keep the previous job's, and this fails.
+func TestAJobRecordsTheRoundCapItWasHanded(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.Spec.MaxTurns = 7
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if got := rig.get("t1"); got.Launch.TurnCap != 7 || got.Handle().TurnCap != 7 {
+		t.Fatalf("the job's record = %+v, handle %+v; want the cap of 7 it was handed", got.Launch, got.Handle())
+	}
+	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	if got := rig.get("t1"); got.Launch.TurnCap != 0 || got.Handle().TurnCap != 0 {
+		t.Errorf("an uncapped relaunch kept %+v, want no cap", got.Launch)
 	}
 }
 

@@ -196,10 +196,12 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 
 // EnvironmentBrief is the "## Your environment" block for the harness: a
 // generic sandbox intro, each step's brief (where a config-authored git-auth
-// step names the token to use), then the connected MCP servers. The steps make
-// the environment work however the agent reasons; the brief saves it rounds
+// step names the token to use), then the connected MCP servers by name, and a
+// line for each that says what it is for ([MCPServer.Description]), then a
+// browser seat's browserBrief ([BrowserOutcome.Brief]). The steps make the
+// environment work however the agent reasons; the brief saves it rounds
 // rediscovering, or failing against, what is already provided.
-func EnvironmentBrief(steps []SetupStep, mcpServers []string) string {
+func EnvironmentBrief(steps []SetupStep, servers map[string]MCPServer, browserBrief string) string {
 	lines := []string{
 		"\n## Your environment",
 		"You are running autonomously inside an isolated sandbox with your " +
@@ -212,11 +214,18 @@ func EnvironmentBrief(steps []SetupStep, mcpServers []string) string {
 			lines = append(lines, step.Brief)
 		}
 	}
-	if len(mcpServers) > 0 {
-		names := slices.Clone(mcpServers)
-		slices.Sort(names)
+	if len(servers) > 0 {
+		names := slices.Sorted(maps.Keys(servers))
 		lines = append(lines, "You also have these MCP tool servers connected: "+
 			strings.Join(names, ", ")+".")
+		for _, name := range names {
+			if description := strings.TrimSpace(servers[name].Description); description != "" {
+				lines = append(lines, "`"+name+"`: "+description)
+			}
+		}
+	}
+	if b := strings.TrimSpace(browserBrief); b != "" {
+		lines = append(lines, b)
 	}
 	return strings.Join(lines, "\n")
 }

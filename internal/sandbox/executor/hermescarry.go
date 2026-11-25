@@ -23,11 +23,11 @@ import (
 
 // The capabilities the carry gives [Hermes], held at compile time.
 var (
-	_ carrier     = Hermes{}
-	_ saver       = Hermes{}
-	_ resumer     = Hermes{}
-	_ inPlaceGate = Hermes{}
-	_ trimmer     = Hermes{}
+	_ carrier       = Hermes{}
+	_ saver         = Hermes{}
+	_ resumer       = Hermes{}
+	_ inPlaceGate   = Hermes{}
+	_ recordTrimmer = Hermes{}
 )
 
 //go:embed hermes_carry.py

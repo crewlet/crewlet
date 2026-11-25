@@ -775,7 +775,7 @@ func (c *movingCell) Create(ctx context.Context, spec sandbox.Spec) (sandbox.San
 func TestALaunchBelowTheExecutorFloorIsABudgetRefusal(t *testing.T) {
 	t.Parallel()
 	c, seat := executorCompany(t)
-	seat.TokenBudget = org.TokenCeilings{period.Day: 30000}
+	seat.TokenBudget = org.TokenCeilings{period.Day: 70000}
 	fleet := coordmemory.NewFleet()
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
@@ -790,7 +790,7 @@ func TestALaunchBelowTheExecutorFloorIsABudgetRefusal(t *testing.T) {
 	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
 	if !errors.Is(err, toolloop.ErrBudgetExhausted) ||
 		!strings.Contains(err.Error(), "executor_min_budget_tokens") {
-		t.Fatalf("a launch with 20000 tokens left under a 25000 floor = %v, want a budget "+
+		t.Fatalf("a launch with 60000 tokens left under a 65000 floor = %v, want a budget "+
 			"refusal naming the floor", err)
 	}
 	refusedCleanly(t, e, "t1", jobs)
@@ -811,7 +811,7 @@ func TestALaunchTheFloorRefusesAnnouncesNoHandOff(t *testing.T) {
 		chainMember{key: "plan", agent: "claude-code", model: "opus", spent: true},
 		chainMember{key: "spare", agent: "claude-code", model: "haiku"},
 	)
-	seat.TokenBudget = org.TokenCeilings{period.Day: 30000}
+	seat.TokenBudget = org.TokenCeilings{period.Day: 70000}
 	fleet := coordmemory.NewFleet()
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
@@ -826,7 +826,7 @@ func TestALaunchTheFloorRefusesAnnouncesNoHandOff(t *testing.T) {
 	var handoffs []chain.Fallback
 	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, &handoffs)); !errors.Is(err,
 		toolloop.ErrBudgetExhausted) {
-		t.Fatalf("a launch with 20000 tokens left under a 25000 floor = %v, want a budget refusal", err)
+		t.Fatalf("a launch with 60000 tokens left under a 65000 floor = %v, want a budget refusal", err)
 	}
 	if len(handoffs) != 0 {
 		t.Errorf("a launch the floor refused announced hand-offs %+v, want none", handoffs)
@@ -838,20 +838,20 @@ func TestALaunchTheFloorRefusesAnnouncesNoHandOff(t *testing.T) {
 func TestTheExecutorFloorIsThreeValued(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	if err := executorHeadroom(ctx, nil, launchFloor{static: 25000}); err != nil {
+	if err := executorHeadroom(ctx, nil, launchFloor{static: 65000}); err != nil {
 		t.Errorf("an uncapped seat was refused: %v", err)
 	}
 	if err := executorHeadroom(ctx, staticRemaining{left: 1}, launchFloor{}); err != nil {
 		t.Errorf("a company with the floor off refused a launch: %v", err)
 	}
-	if err := executorHeadroom(ctx, staticRemaining{left: 25000}, launchFloor{static: 25000}); err != nil {
+	if err := executorHeadroom(ctx, staticRemaining{left: 65000}, launchFloor{static: 65000}); err != nil {
 		t.Errorf("a seat exactly at the floor was refused: %v", err)
 	}
-	if err := executorHeadroom(ctx, staticRemaining{left: 24999}, launchFloor{static: 25000}); !errors.Is(err, toolloop.ErrBudgetExhausted) {
+	if err := executorHeadroom(ctx, staticRemaining{left: 64999}, launchFloor{static: 65000}); !errors.Is(err, toolloop.ErrBudgetExhausted) {
 		t.Errorf("a seat one token below the floor = %v, want a budget refusal", err)
 	}
 	down := errors.New("store down")
-	err := executorHeadroom(ctx, staticRemaining{err: down}, launchFloor{static: 25000})
+	err := executorHeadroom(ctx, staticRemaining{err: down}, launchFloor{static: 65000})
 	if err == nil || errors.Is(err, toolloop.ErrBudgetExhausted) {
 		t.Errorf("an unreadable budget = %v, want refused, and not as an exhausted one", err)
 	}

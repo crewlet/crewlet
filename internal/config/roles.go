@@ -151,7 +151,7 @@ type Role struct {
 
 	// Sandbox is what this seat's executor box reads beyond the engine-wide
 	// catalogue. See [RoleSandbox].
-	Sandbox *RoleSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns, max_concurrent_runs. Absent = the engine-wide settings only."`
+	Sandbox *RoleSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns, max_concurrent_runs, browser. Absent = the engine-wide settings only."`
 
 	// Placement constrains which nodes may run this seat; absent is
 	// anywhere, which is what a single-process deployment always means.
@@ -315,8 +315,8 @@ func (p *RolePlacement) validate(path Path) error {
 // that entry's own harness — so neither the cell nor the runner is a seat's to
 // say. What is left is what differs from one seat's work to another's: its
 // own provisioning and environment, the tool servers its box is given, how
-// long a box blocked on a person stays paused, and how many rounds one run
-// may take.
+// long a box blocked on a person stays paused, how many rounds one run may
+// take, how many of its runs hold it at once and whether it has a browser.
 type RoleSandbox struct {
 	// PauseTTLSeconds bounds how long this seat's box, blocked on a person's
 	// answer, stays paused. UNSET inherits the provider default; an explicit 0
@@ -389,6 +389,14 @@ type RoleSandbox struct {
 	// Setup is this seat's own provisioning, applied after the
 	// engine-wide steps.
 	Setup []SandboxSetupStep `yaml:"setup,omitempty" json:"setup,omitempty" desc:"Per-seat provisioning steps, applied after the engine-wide ones."`
+
+	// Browser gives the seat's executor a headless Chromium in its box, which
+	// its harness drives through the box's own MCP server
+	// ([browser.ServerName]). A plain bool: no browser, its zero, is the
+	// default. Refused unless every run of the seat lands in a container box
+	// off its host's network, on an entry that keeps the web
+	// ([Company.validateBrowserSeats]).
+	Browser bool `yaml:"browser,omitempty" json:"browser,omitempty" desc:"Give this seat's executor a browser in its box: a headless Chromium its harness drives through the browser MCP server. Refused unless every run of the seat lands in a container box off the host's network, on a providers.llm entry that keeps its web tools."`
 }
 
 // RoleSandboxMCP is the server-level scope for a seat's executor box.
@@ -918,6 +926,7 @@ func (r *Role) Seat() *org.Role {
 			MCP:               org.RoleSandboxMCP{Servers: append([]string(nil), s.MCP.Servers...)},
 			Env:               env,
 			OptionalKeys:      slices.Clone(s.OptionalKeys),
+			Browser:           s.Browser,
 		}
 	}
 	return seat
