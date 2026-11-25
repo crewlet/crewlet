@@ -87,6 +87,9 @@ func TestClaudeCodesBridgeCannotBeSwitchedOffUnseen(t *testing.T) {
 				plant: map[string]string{"workspace/.claude/settings.local.json": `{"permissions":{"deny":["mcp__*"]}}`},
 				fails: []string{"connected, and none of its tools", "permissions.deny",
 					"/workspace/.claude/settings.local.json (mcp__*)"}}},
+		"no setting takes them away": {tools: otherTools, servers: entry("connected"),
+			switchOffCase: switchOffCase{fails: []string{"connected, and none of its tools",
+				"one tool whose input schema Claude Code refuses drops the server's whole list", "permissions.deny"}}},
 		"the repository denies the bridge's tools": {tools: otherTools, servers: entry("connected"),
 			switchOffCase: switchOffCase{
 				plant: map[string]string{"workspace/.claude/settings.json": `{"permissions":{"deny":["mcp__crewlet"]}}`},
