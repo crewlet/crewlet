@@ -1371,7 +1371,13 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	if wired.servers != nil {
 		cfg["mcp"] = map[string]any{"servers": wired.servers}
 	}
-	var plugins []any
+	// OPENCODE DESKTOP'S BROWSER PLUGIN OUT OF EVERY RUN, first: a headless run
+	// has no Desktop to attach, so its tools are denied anyway, and it names
+	// its namespace `browser`, under whose description 2.3.2 listed a seat's
+	// browser server's tools in Code Mode's catalogue. Out, that line names
+	// the server and its count alone, and nothing else in a request changes,
+	// with a browser server or without (measured on 2.3.2).
+	plugins := []any{"-opencode.browser"}
 	if req.Steer.Set() {
 		if err := box.WriteFile(ctx, paths.OpenCodeSteerPlugin()+"/"+openCodeSteerEntry, openCodeSteerPlugin); err != nil {
 			return "", fmt.Errorf("executor: writing OpenCode's notes plugin: %w", err)
