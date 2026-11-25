@@ -1260,7 +1260,7 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 				time.Sleep(20 * time.Second)
 				synctest.Wait()
 				before, _ := settles.counts()
-				e.tearingDown()
+				e.tearingDown(t.Context())
 				runs.waitSettles()
 				if asked, _ := settles.counts(); asked != before+1 {
 					t.Errorf("the settle was asked %d times as its node stopped, want once more", asked-before)
@@ -1303,7 +1303,7 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 					// THE STORE IS BACK WHILE THE LOOP SLEEPS BETWEEN ROUNDS,
 					// and the node stops before the loop's next round.
 					back.Store(true)
-					e.tearingDown()
+					e.tearingDown(t.Context())
 					synctest.Wait()
 					for _, id := range []string{"n-1", "n-2"} {
 						if !kind.settled(t, store, id) {
@@ -1323,7 +1323,7 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 				e := &Engine{}
 				runs.stopWith(e)
 				launch := kind.lose(t, store, runs, "n-1")
-				e.tearingDown()
+				e.tearingDown(t.Context())
 				kind.settle(t.Context(), runs, launch, "n-1")
 				runs.waitSettles()
 				if asked, _ := settles.counts(); asked != 1 {
@@ -1343,7 +1343,7 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 				e := &Engine{}
 				runs.stopWith(e)
 				launch := kind.lose(t, store, runs, "n-1")
-				e.tearingDown()
+				e.tearingDown(t.Context())
 				runs.waitSettles()
 				kind.settle(t.Context(), runs, launch, "n-1")
 				synctest.Wait()
@@ -1382,7 +1382,7 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 			runs.settleUnanswered(t.Context(), "run-2", "take-x")
 			synctest.Wait()
 			begun := time.Now()
-			e.tearingDown()
+			e.tearingDown(t.Context())
 			runs.settleUnanswered(t.Context(), "run-1", "take-joined")
 			runs.waitSettles()
 			if took := time.Since(begun); took > steerSettleStopBudget {

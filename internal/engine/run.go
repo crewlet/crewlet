@@ -2768,10 +2768,10 @@ func (e *Engine) stopping() *seat.StopBudget {
 // pass finishing during that wait is ordinary, its time its own, not the
 // seats' the drain gives back at the end. A failed boot reaches the teardown
 // too and begins it the same way.
-func (e *Engine) tearingDown() *seat.StopBudget {
+func (e *Engine) tearingDown(ctx context.Context) *seat.StopBudget {
 	b := e.stopping()
 	at := time.Now()
-	e.giveBacks.begin(b)
+	e.giveBacks.begin(ctx, b)
 	e.teardownSignal()
 	e.beginTeardown(teardownBegan{at: at})
 	return b
@@ -2816,7 +2816,7 @@ func teardownAt(begun context.Context) (time.Time, bool) {
 // drain's wait spent nothing the stop is owed.
 func (e *Engine) stepOnceTornDown(ctx context.Context) (context.Context, func()) {
 	ctx, cancel := context.WithCancelCause(ctx)
-	g := e.giveBacks.add(cancel, e.stopping)
+	g := e.giveBacks.add(ctx, cancel)
 	return ctx, func() {
 		e.giveBacks.end(g)
 		cancel(nil)
@@ -2850,14 +2850,14 @@ func (s *stopAllowanceSpent) Error() string {
 	return "engine: the stop's allowance ran out at " + s.deadline.UTC().Format(time.RFC3339Nano)
 }
 
-// add holds a give-back cut by cancel, a step of the stop at once where the
-// teardown has begun.
-func (t *tornDownGiveBacks) add(cancel context.CancelCauseFunc, stopping func() *seat.StopBudget) *tornDownGiveBack {
+// add holds a give-back made on ctx and cut by cancel, a step of the stop at
+// once where the teardown has begun.
+func (t *tornDownGiveBacks) add(ctx context.Context, cancel context.CancelCauseFunc) *tornDownGiveBack {
 	g := &tornDownGiveBack{cancel: cancel}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.begun != nil {
-		g.arm(t.begun)
+		g.arm(ctx, t.begun)
 		return g
 	}
 	if t.inFlight == nil {
@@ -2867,8 +2867,9 @@ func (t *tornDownGiveBacks) add(cancel context.CancelCauseFunc, stopping func() 
 	return g
 }
 
-// begin makes every give-back in flight a step of b, from now.
-func (t *tornDownGiveBacks) begin(b *seat.StopBudget) {
+// begin makes every give-back in flight a step of b, from now, on the
+// teardown's ctx.
+func (t *tornDownGiveBacks) begin(ctx context.Context, b *seat.StopBudget) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.begun != nil {
@@ -2876,7 +2877,7 @@ func (t *tornDownGiveBacks) begin(b *seat.StopBudget) {
 	}
 	t.begun = b
 	for g := range t.inFlight {
-		g.arm(b)
+		g.arm(ctx, b)
 	}
 }
 
@@ -2894,10 +2895,11 @@ func (t *tornDownGiveBacks) end(g *tornDownGiveBack) {
 	}
 }
 
-// arm makes g a step of b from now, cut when the allowance runs out. The
-// caller holds the set's lock.
-func (g *tornDownGiveBack) arm(b *seat.StopBudget) {
-	step, end := seat.StopStep(seat.WithStopBudget(context.Background(), b))
+// arm makes g a step of b from now, cut when the allowance runs out. The step
+// keeps ctx's values and none of its ending: it is the allowance's to end, and
+// a teardown's caller has often given up already. The caller holds the lock.
+func (g *tornDownGiveBack) arm(ctx context.Context, b *seat.StopBudget) {
+	step, end := seat.StopStep(seat.WithStopBudget(context.WithoutCancel(ctx), b))
 	deadline, _ := step.Deadline()
 	g.end = end
 	g.stop = context.AfterFunc(step, func() { g.cancel(&stopAllowanceSpent{deadline: deadline}) })
@@ -2925,7 +2927,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// The stop's one allowance, the drain's if there was one
 	// ([Engine.stopping]), and from here the one a hold given back by a loop
 	// stopped below is charged to ([Engine.tearingDown]).
-	ctx = seat.WithStopBudget(ctx, e.tearingDown())
+	ctx = seat.WithStopBudget(ctx, e.tearingDown(ctx))
 	// First, the claim gate's watch, which reads the logs, router and fleet view
 	// everything below takes down, and whose one gesture (asking the host for a
 	// pass) has nothing left to claim for.
