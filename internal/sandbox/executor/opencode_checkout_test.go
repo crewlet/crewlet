@@ -95,16 +95,15 @@ func openCodeRecorded(t *testing.T, dir, name string, v any) {
 
 // WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS AN OPENCODE RUN: of
 // ./repo, which holds every file OpenCode 2.3.2 reads where it starts and
-// more, its AGENTS.md (over its CLAUDE.md) is handed under its root in the
-// sections file the configuration names after the standing instructions;
-// the skills a walk of its four directories reaches no deeper than 6 come as
-// `repo:<skill>` in the directory the configuration names; nothing else of it
-// reaches the server. A clone during the run is handed at the next tool
-// result of the run's own session, framed as OpenCode frames an instruction
-// file, once, within 192 KiB; a subagent's claims nothing; no copy outlives it.
+// more, its AGENTS.md (over CLAUDE.md) is handed in the sections file the
+// configuration names; the skills its four directories hold to 6 deep come as
+// `repo:<skill>`, but one a home skill's name takes, said; nothing else of it
+// reaches the server. A clone is handed at the next tool result of the run's
+// own session, framed as OpenCode frames an instruction file, once, within
+// 192 KiB; a subagent's claims nothing; no copy outlives the run.
 //
 // Mutation: drop the gate, an entry, the plugin, its session check, the
-// end's restore or the bound, walk past 6, or hand twice: red.
+// end's restore, the bound or the listed names, walk past 6, or hand twice.
 func TestWhatACheckoutBelowTheStartDirectoryBringsAnOpenCodeRun(t *testing.T) {
 	t.Parallel()
 	runner, box, dir := openCodeCheckoutBox(t, "")
@@ -125,6 +124,7 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAnOpenCodeRun(t *testing.T) {
 		".agents/skills/ag/SKILL.md":                  skill("ag", "Agents'"),
 		".codex/skills/x/SKILL.md":                    skill("x", "REPO-CODEX"),
 	}))
+	plant(t, box, map[string]string{".config/opencode/skills/mine/SKILL.md": skill("repo:cl", "HOME-CL")})
 	late := t.TempDir()
 	for rel, body := range piCheckout("late", map[string]string{"AGENTS.md": "LATE-INSTRUCTIONS\n",
 		".agents/skills/fix/SKILL.md": skill("fix", "Fixes")}) {
@@ -158,7 +158,7 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAnOpenCodeRun(t *testing.T) {
 	var skills map[string]map[string]string
 	openCodeRecorded(t, dir, "skills", &skills)
 	gotSkills := slices.Sorted(maps.Keys(skills[p.OpenCodeCheckoutSkills()]))
-	want := []string{"repo:ag/SKILL.md", "repo:check/SKILL.md", "repo:cl/SKILL.md", "repo:one/SKILL.md", "repo:six/SKILL.md"}
+	want := []string{"repo:ag/SKILL.md", "repo:check/SKILL.md", "repo:one/SKILL.md", "repo:six/SKILL.md"}
 	if len(skills) != 1 || !slices.Equal(gotSkills, want) {
 		t.Errorf("skills: the server found %q in %q, want %q in the checkouts' directory alone", gotSkills,
 			slices.Collect(maps.Keys(skills)), want)
@@ -198,6 +198,14 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAnOpenCodeRun(t *testing.T) {
 	}
 	if left, err := os.ReadDir(p.OpenCodeCheckoutSkills()); err != nil || len(left) != 0 {
 		t.Errorf("the checkouts' skills directory holds %v after the run (%v), want the copies removed", left, err)
+	}
+	homeReal, err := filepath.EvalSymlinks(box.Home())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := boxFile(t, box, p.Err()); !strings.Contains(errs, "the skill "+work+"/repo/.claude/skills/cl is left out: "+
+		homeReal+"/.config/opencode/skills/mine, which the harness lists too") {
+		t.Errorf("skills: the run does not say its copy repo:cl is left out for the home's skill of that name:\n%s", errs)
 	}
 	if nested := boxFile(t, box, p.OpenCodeCheckoutState()+"/nested.json"); !strings.Contains(nested, `"firingLimit":196608`) {
 		t.Errorf("the plugin's nested config holds no firingLimit of 192 KiB:\n%s", nested)
