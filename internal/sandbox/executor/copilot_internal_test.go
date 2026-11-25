@@ -148,7 +148,7 @@ func TestALaunchedCopilotRunReadsAsItsAnswerSpendAndNote(t *testing.T) {
 		t.Errorf("the transcript does not show the note:\n%s", res.Transcript)
 	}
 	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(copilotFixture(t, "launched.events.jsonl")),
-		served("msg_inbox1"))
+		served("msg_inbox1"), nil)
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 		t.Fatalf("held = %v (%v), want the note", held, err)
 	}
@@ -522,7 +522,7 @@ func TestACopilotNoteIsHeldOnlyOnceARequestCarriedIt(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.fixture, func(t *testing.T) {
 			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(copilotFixture(t, c.fixture)),
-				served("msg_inbox1", "msg_never"))
+				served("msg_inbox1", "msg_never"), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -589,7 +589,7 @@ func TestACopilotNoteIsHeldOnlyByTheMainAgentsRequest(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"))
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"), nil)
 			if err != nil || slices.Contains(held, "msg_inbox1") != c.held {
 				t.Fatalf("held = %v (%v), want the note held %v", held, err, c.held)
 			}
@@ -639,7 +639,7 @@ func TestACopilotNoteIsHeldOnlyByARequestBegunAfterIt(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"))
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"), nil)
 			if err != nil || slices.Contains(held, "msg_inbox1") != c.held {
 				t.Fatalf("held = %v (%v), want the note held %v", held, err, c.held)
 			}
@@ -661,7 +661,7 @@ func TestACopilotRecordAnswersItsTakesInServeOrderOnce(t *testing.T) {
 		events = append(events, l...)
 	}
 	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(events),
-		served("msg_never", "msg_inbox1", "msg_inbox0", "msg_inbox1"))
+		served("msg_never", "msg_inbox1", "msg_inbox0", "msg_inbox1"), nil)
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1", "msg_inbox0"}) {
 		t.Fatalf("held = %v (%v), want msg_inbox1 then msg_inbox0, once each", held, err)
 	}
@@ -677,7 +677,7 @@ func TestACopilotQueuedNoteIsHeldOnceARequestCarriedIt(t *testing.T) {
 	if !bytes.Contains(events, []byte(`"delivery":"queued"`)) {
 		t.Fatal("the fixture holds no queued note")
 	}
-	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(events), served("msg_inbox1"))
+	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(events), served("msg_inbox1"), nil)
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 		t.Fatalf("held = %v (%v), want the queued note", held, err)
 	}
@@ -711,7 +711,7 @@ func TestACopilotNoteTheCompactionCarriedOverIsHeld(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), c.served)
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), c.served, nil)
 			if err != nil || !slices.Equal(held, c.want) {
 				t.Fatalf("held = %v (%v), want %v", held, err, c.want)
 			}
@@ -761,7 +761,7 @@ func TestACopilotNoteAnAnswerFollowedIsNotCarriedOver(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"))
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"), nil)
 			if err != nil || slices.Contains(held, "msg_inbox1") != c.held {
 				t.Fatalf("held = %v (%v), want the note held %v", held, err, c.held)
 			}
@@ -850,11 +850,11 @@ func TestACopilotNoteAMessageFollowedIsNotCarriedOver(t *testing.T) {
 				want = []string{"msg_inbox1", "msg_inbox2", "msg_inbox3"}
 			}
 			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(between),
-				served("msg_inbox1", "msg_inbox2", "msg_inbox3"))
+				served("msg_inbox1", "msg_inbox2", "msg_inbox3"), nil)
 			if err != nil || !slices.Equal(held, want) {
 				t.Fatalf("held = %v (%v), want %v", held, err, want)
 			}
-			held, err = copilotNotesHeld(t.Context(), bytes.NewReader(served2), served("msg_inbox1"))
+			held, err = copilotNotesHeld(t.Context(), bytes.NewReader(served2), served("msg_inbox1"), nil)
 			if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 				t.Fatalf("served again: held = %v (%v), want note 1", held, err)
 			}
@@ -950,7 +950,7 @@ func TestOnlyAFailedCopilotCompactionKeepsTheNoteBeforeIt(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(copilotCompactedUnretained(t, c.edit)),
-				served("msg_inbox1"))
+				served("msg_inbox1"), nil)
 			if err != nil || slices.Contains(held, "msg_inbox1") != c.held {
 				t.Fatalf("held = %v (%v), want note 1 held %v", held, err, c.held)
 			}
@@ -974,14 +974,14 @@ func TestACopilotNoteIsNotHeldByATornLastLine(t *testing.T) {
 			break
 		}
 	}
-	if held, _ := copilotNotesHeld(t.Context(), bytes.NewReader(through), served("msg_inbox1")); len(held) != 1 {
+	if held, _ := copilotNotesHeld(t.Context(), bytes.NewReader(through), served("msg_inbox1"), nil); len(held) != 1 {
 		t.Fatalf("the record through the note's usage record holds %v, want the note", held)
 	}
 	for name, torn := range map[string][]byte{
 		"cut mid-line":    through[:len(through)-40],
 		"with no newline": through[:len(through)-1],
 	} {
-		held, err := copilotNotesHeld(t.Context(), bytes.NewReader(torn), served("msg_inbox1"))
+		held, err := copilotNotesHeld(t.Context(), bytes.NewReader(torn), served("msg_inbox1"), nil)
 		if err != nil || len(held) != 0 {
 			t.Errorf("%s: held = %v (%v), want none", name, held, err)
 		}
@@ -999,7 +999,7 @@ func TestACopilotNoteHeldBeforeATornLineStaysHeld(t *testing.T) {
 	lines := bytes.SplitAfter(bytes.TrimSuffix(events, []byte("\n")), []byte("\n"))
 	last := lines[len(lines)-1]
 	torn := append(append([]byte{}, events...), last[:len(last)/2]...)
-	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(torn), served("msg_inbox1"))
+	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(torn), served("msg_inbox1"), nil)
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 		t.Fatalf("held = %v (%v), want the note its whole record held", held, err)
 	}
@@ -1443,12 +1443,12 @@ func TestACopilotNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	const session = "55555555-5555-4555-8555-555555555555"
 	box.Put(PathsFor(box).CopilotSessionDir(session)+"/events.jsonl", string(copilotFixture(t, "steered.events.jsonl")))
-	held, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1"))
+	held, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1"), nil)
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 		t.Fatalf("held = %v (%v), want the steered note", held, err)
 	}
 	box.ReadErr = func(string) error { return io.ErrUnexpectedEOF }
-	if _, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1")); err == nil {
+	if _, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1"), nil); err == nil {
 		t.Fatal("an unreadable record answered as a reading")
 	}
 }
@@ -1504,14 +1504,16 @@ func TestACopilotSessionContinuesOnlyOnTheReleaseSupported(t *testing.T) {
 	}
 }
 
-// A pack carries the conversation alone: never session.db or its journal, a
-// binary file the archive's text scrub would corrupt, nor the login, the
-// checkout's snapshots or the file a journal rotation left, the session here
-// being one whose journal rotated (1.0.114), whose head a resume reads whole.
-// A restore in another home continues it.
+// A pack carries the conversation and what a resume lists of its checkpoints:
+// events.jsonl, workspace.yaml and checkpoints/, never session.db or its
+// journal, a binary file the archive's text scrub would corrupt, nor the login,
+// the checkout's snapshots or the file a journal rotation left, the session
+// here being one whose journal rotated (1.0.114), whose head a resume reads
+// whole. A restore in another home puts each back where the resume reads it.
 //
-// Mutation: pack session.db, or the whole session directory — the members
-// differ; drop the restore's move — the second home holds nothing.
+// Mutation: pack session.db, the whole session directory, or the journal
+// alone, and the members differ; drop a restore's move, and the second home
+// lacks that file.
 func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 	for _, tool := range []string{"tar", "gzip", "cksum"} {
 		prereqtest.OnPath(t, tool, "the case runs the box's pack and restore", "install "+tool)
@@ -1525,7 +1527,9 @@ func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 		dir + "/events.1.jsonl":             string(copilotFixture(t, "rotated-end.events.1.jsonl")),
 		dir + "/session.db":                 "SQLite format 3\x00",
 		dir + "/session.db-journal":         "journal",
-		dir + "/workspace.yaml":             "cwd: /box/repo\n",
+		dir + "/workspace.yaml":             "cwd: /box/repo\nsummary_count: 1\n",
+		dir + "/checkpoints/index.md":       "| # | Title | File |\n",
+		dir + "/checkpoints/001-session.md": "the summary\n",
 		dir + "/rewind-file-snapshots/a":    "checkout bytes",
 		from.CopilotHome() + "/config.json": `{"copilotTokens":{}}`,
 		from.WorkDir() + "/.keep":           "",
@@ -1562,7 +1566,10 @@ func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 		}
 		members = append(members, h.Name)
 	}
-	want := []string{"session-state/" + id + "/events.jsonl"}
+	slices.Sort(members)
+	held := "session-state/" + id + "/"
+	want := []string{held + "checkpoints/", held + "checkpoints/001-session.md", held + "checkpoints/index.md",
+		held + "events.jsonl", held + "workspace.yaml"}
 	if !slices.Equal(members, want) {
 		t.Fatalf("members = %v, want %v", members, want)
 	}
@@ -1583,8 +1590,10 @@ func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 	if got := string(out); got != id+"\nyes\n\n--session-id\n"+id+"\n" {
 		t.Fatalf("the gate said %q, want the carried session continued", got)
 	}
-	if _, err := os.Stat(to.CopilotSessionDir(id) + "/events.jsonl"); err != nil {
-		t.Fatalf("the restored session is not in the second home: %v", err)
+	for _, name := range []string{"events.jsonl", "workspace.yaml", "checkpoints/index.md", "checkpoints/001-session.md"} {
+		if _, err := os.Stat(to.CopilotSessionDir(id) + "/" + name); err != nil {
+			t.Errorf("the restored session's %s is not in the second home: %v", name, err)
+		}
 	}
 }
 

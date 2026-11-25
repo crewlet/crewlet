@@ -1454,13 +1454,23 @@ export function stateWord(state: ShownState): string {
 }
 
 /**
- * The heading over a GROUP of seats in one engine state: a roster group, a
- * chart legend's entry, a Home tile.
- *
- * A group is keyed on the engine's `activity`, and `stopped` holds the seats a
- * person paused as well as the ones a fault stopped, so its heading says both
- * ("Paused or stopped") and its count stays true. Each seat inside it still
- * names its own state in [stateWord]'s word.
+ * The state a seat COUNTS in, for every chip, legend, tile and group: a paused
+ * seat is paused from the moment it is paused, while its running turn finishes
+ * or its executor asks too. Its row still says what it is doing ([shownStateOf]).
+ */
+export function countedStateOf(row: AgentRow | null | undefined): ShownState {
+  return row?.paused ? "paused" : shownStateOf(row);
+}
+
+/** The group a counted state is in: a pause shares the stops' group ([stateGroupWord]). */
+export function stateGroupOf(state: ShownState): SeatState {
+  return state === "paused" ? "stopped" : state;
+}
+
+/**
+ * The heading over a GROUP of seats ([stateGroupOf]): a roster group, a chart
+ * legend's entry, a Home tile. `stopped` holds the paused seats as well as the
+ * ones a fault stopped, so its heading says both.
  */
 export function stateGroupWord(state: SeatState): string {
   return state === "stopped" ? "Paused or stopped" : stateWord(state);

@@ -839,18 +839,32 @@ func (s *CoordStore) stampCapture(ctx context.Context, turnID string, capture Se
 	// SET ON EVERY ASK OF decide, which reruns on a lost race: the last is the
 	// row the answer is about, if the last attempt found one
 	// ([CoordStore.writeFound]).
-	var held bool
-	_, won, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
-		held = holdsStamp(*run, capture)
+	var held, stamped bool
+	_, _, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		held, stamped = holdsStamp(*run, capture), false
+		named := nameSummary(run, capture.Summary)
 		if over != nil && !over(*run, capture) {
-			return false
+			return named
 		}
-		return stampOnto(run, capture)
+		stamped = stampOnto(run, capture)
+		return stamped || named
 	})
 	if err != nil {
 		return false, err
 	}
-	return won || (found && held), nil
+	return found && (stamped || held), nil
+}
+
+// nameSummary names summary, the newest a take's read kept, on run's row where
+// it is newer than the one the row names ([SummaryStamp.newerThan]), reporting
+// whether it did.
+func nameSummary(run *PendingRun, summary *SummaryStamp) bool {
+	if summary == nil || summary.Bounded() != nil || (run.Summary != nil && !summary.newerThan(*run.Summary)) {
+		return false
+	}
+	named := *summary
+	run.Summary = &named
+	return true
 }
 
 // RetireSessions records the sessions a job of the turn spent, and how. See the
@@ -2832,6 +2846,22 @@ func (s *CoordStore) MarkSessionStart(ctx context.Context, turnID, launch string
 			return false
 		}
 		run.Launch.SessionStart = start
+		return true
+	})
+	return marked, err
+}
+
+// MarkBridgeConnected records that a job's harness connected its bridge. See
+// the contract on [PendingStore].
+func (s *CoordStore) MarkBridgeConnected(ctx context.Context, turnID, launch string) (bool, error) {
+	if launch == "" {
+		return false, nil
+	}
+	_, marked, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.Launch.BridgeConnected {
+			return false
+		}
+		run.Launch.BridgeConnected = true
 		return true
 	})
 	return marked, err

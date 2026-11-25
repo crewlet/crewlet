@@ -24,7 +24,8 @@ import (
 // $HOME/clone-dst as a clone during a tool call would and plays that tool's
 // result to the extension twice, recording what each answer made of it
 // (nested-1, nested-2) and the --skill directories after them
-// (skills-late); where $HOME/break-home is, it makes the agent
+// (skills-late), its nested config removed first where $HOME/break-nested
+// is; where $HOME/break-home is, it makes the agent
 // directory's AGENTS.override.md a directory no put-back can write; and it
 // prints a finished answer.
 const piCheckoutStandIn = `import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
@@ -73,6 +74,7 @@ await fire("agent_start", {})
 await fire("turn_start", {})
 if (existsSync(join(home, "clone-src"))) {
   cpSync(readFileSync(join(home, "clone-src"), "utf8"), readFileSync(join(home, "clone-dst"), "utf8"), { recursive: true })
+  if (existsSync(join(home, "break-nested"))) rmSync(join(home, ".pi/crewlet/checkouts/nested.json"), { force: true })
   for (const i of [1, 2]) {
     record("nested-" + i, await fire("tool_result", { toolName: "bash", toolCallId: "call-" + i,
       input: { command: "git clone" }, content: [{ type: "text", text: "cloned" }], isError: false }))
@@ -139,17 +141,17 @@ func piInstructionFiles(files map[string]string) map[string]string {
 	return out
 }
 
-// WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A PI RUN: of a checkout at
-// ./repo holding every file pi 1.6.0 reads where it starts, and more, the first
-// of its five instruction names is handed under its root in the agent
-// directory's file pi loads (the home's own override or only CLAUDE.md, the
-// section after its text, else one the run makes), the home's own again after;
-// the skills a walk of .pi/skills and .agents/skills reaches come as
-// `repo:<skill>` in a `--skill` directory of the run's own; nothing else of it
-// reaches what pi starts on. A clone during the run is handed at the next tool
-// result in pi's own wrapping, its skill copied and listed, once; no copy
-// outlives the run. Mutation: drop the gate, the `--skill` or the extension's hand, read another
-// name first, walk a skill directory flat, or hand twice: a check goes red.
+// WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A PI RUN: of ./repo, which
+// holds every file pi 1.6.0 reads where it starts and more, the first of its
+// five instruction names is handed under its root in the agent directory's
+// file pi loads (the home's own, the section after its text, else one the run
+// makes), the home's own again after; its skills a walk of .pi/skills and
+// .agents/skills reaches come as `repo:<skill>` in a `--skill` directory of
+// the run's own; nothing else of it reaches pi. A clone during the run is
+// handed at the next tool result in pi's wrapping, once; no copy outlives it.
+//
+// Mutation: drop the gate, the `--skill`, the extension's hand or restore's
+// removeCopies, read another name first, walk flat, or hand twice: red.
 func TestWhatACheckoutBelowTheStartDirectoryBringsAPiRun(t *testing.T) {
 	t.Parallel()
 	repo := piCheckout("workspace/repo", map[string]string{
@@ -396,12 +398,12 @@ func TestAPiRunPutsTheHomesInstructionFileBackHoweverItEnds(t *testing.T) {
 // EVERY STEP OF THE END RUNS: a checkout cloned during the run whose walk
 // finds two skills of one name is handed with the line in the tool's result,
 // and the script prints the line once pi has stopped, once, the helper's own
-// error stream passed on nowhere; where the home file will not go back, the
-// put-back says so, and the line is printed and the copies removed all the
-// same.
+// error stream passed on nowhere; where the file the run made will not go,
+// the put-back says so and keeps the none marker for the next try, and the
+// line is printed and the copies removed all the same.
 //
-// Mutation: drop the print, pass the helper's stderr on, or chain the end's
-// steps so a failed put-back stops the rest, and a row goes red.
+// Mutation: drop the print, pass the helper's stderr on, chain the end's
+// steps, or drop the marker whatever the rm did, and a row goes red.
 func TestAPiRunsLeftOutLinesReachItsErrorStreamOnce(t *testing.T) {
 	t.Parallel()
 	for _, broken := range []bool{false, true} {
@@ -440,9 +442,59 @@ func TestAPiRunsLeftOutLinesReachItsErrorStreamOnce(t *testing.T) {
 			if raw, err := os.ReadDir(p.PiCheckoutSkills()); err != nil || len(raw) != 0 {
 				t.Errorf("the checkouts' skills directory holds %v after the run (%v), want the copies removed", raw, err)
 			}
-			if failed := strings.Contains(errs, p.PiAgentDir()+"/AGENTS.override.md"); failed != broken {
+			if failed := strings.Contains(errs, "was not put back"); failed != broken {
 				t.Errorf("the run's error stream says a put-back failed: %v, want %v:\n%s", failed, broken, errs)
 			}
+			if _, err := os.Lstat(p.PiHomeInstructions() + ".none"); (err == nil) != broken {
+				t.Errorf("the home's none marker is held after the run: %v, want %v (the next try needs it)", err == nil, broken)
+			}
 		})
+	}
+}
+
+// THE NOTE HELPER'S OWN TROUBLE REACHES THE RUN'S ERROR STREAM: a firing that
+// cannot read its config (here removed mid-run) hands nothing and says why,
+// and the extension passes that on, as it passes on all the helper's stderr
+// but what it left out, which the run's skip log carries.
+//
+// Mutation: pass the helper's stderr on nowhere, and this goes red.
+func TestAPiNoteHelpersOwnTroubleReachesTheRunsErrorStream(t *testing.T) {
+	t.Parallel()
+	runner, box := piCheckoutBox(t)
+	late := t.TempDir()
+	for rel, body := range piCheckout("late", map[string]string{"AGENTS.md": "LATE\n"}) {
+		plantFile(t, filepath.Join(late, rel), body)
+	}
+	plant(t, box, map[string]string{"clone-src": filepath.Join(late, "late"),
+		"clone-dst": filepath.Join(box.Home(), "workspace", "late"), "break-nested": ""})
+	runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"})
+	if errs := boxFile(t, box, executor.PathsFor(box).Err()); strings.Count(errs, "notehelper: the nested config: ") != 2 {
+		t.Errorf("the run's error stream does not say each firing's trouble with its config:\n%s", errs)
+	}
+}
+
+// THE CLEAR DROPS A SKIP LOG NO SCRIPT PRINTED: a run killed before its
+// script printed what its firings left out leaves the log in its checkout
+// state, and the clear before the next run, whichever harness it drives,
+// removes Codex's and Pi's alike, so a script ended before its gate prints
+// no line of another run's as its own.
+//
+// Mutation: drop Codex's removal from its restore, and a row goes red (Pi's
+// state is also under the directory the clear removes whole).
+func TestTheClearDropsASkipLogNoScriptPrinted(t *testing.T) {
+	t.Parallel()
+	_, box := standInBox(t, executor.NewPi(), nil)
+	p := executor.PathsFor(box)
+	logs := map[string]string{"codex": p.CodexRepo() + "/skipped", "pi": p.PiCheckouts() + "/skipped"}
+	for _, log := range logs {
+		plantFile(t, log, "notehelper: a killed run's line\n")
+	}
+	if err := executor.NewClaudeCode().ClearArtifacts(t.Context(), box); err != nil {
+		t.Fatalf("the clear: %v", err)
+	}
+	for name, log := range logs {
+		if _, err := os.Lstat(log); err == nil {
+			t.Errorf("%s: the clear left the killed run's skip log %s", name, log)
+		}
 	}
 }
