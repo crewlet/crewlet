@@ -439,10 +439,6 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 			events["AfterAgent"] = hook()
 		}
 		settings["hooks"] = events
-		// HOOKS ON, over the home's `hooksConfig.enabled: false`; a working
-		// directory's or the machine's false outranks it, so is refused
-		// ([geminiGuard]).
-		settings["hooksConfig"] = map[string]any{"enabled": true}
 	}
 	return settings
 }
