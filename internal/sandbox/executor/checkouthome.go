@@ -40,6 +40,11 @@ func (h checkoutHome) holdsHome() bool { return len(h.agents) > 0 || h.agentsFro
 // or removes the one the run made, whichever the next run would choose.
 const heldLive = ".live"
 
+// heldMade names the topmost directory the gate made for the home file
+// (held+heldMade), written before it makes it, so the put-back, this run's or
+// a killed run's next, removes what it made and nothing the home had.
+const heldMade = ".made"
+
 // staging is where the helper builds a checkout's skill before one rename
 // moves it into the skills directory (internal/notehelper's stagingDir):
 // under the run's state, outside every skills directory, which Grok Build
@@ -176,8 +181,8 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 // listed and the state with its staging removed, checkout-launch run, and the
 // checkouts' sections written after the home's own through a link as the home
 // keeps the file, its directory made where there is none (a fresh home, or a
-// Qwen Code context.fileName naming a path below it; the put-back leaves the
-// directory), the file left untouched where they hand nothing.
+// Qwen Code context.fileName naming a path below it; [heldMade]), the file
+// left untouched where they hand nothing or the harness reads none.
 func (h checkoutHome) gate() string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -206,7 +211,10 @@ func (h checkoutHome) gate() string {
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
 	line(`fi`)
 	if h.holdsHome() {
-		line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && mkdir -p "$(dirname "$ra")" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
+		line(`if [ -s "$rq" ] && [ -n "$ra" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && `+
+			`{ rmd=$(dirname "$ra"); rmt=; while [ ! -e "$rmd" ]; do rmt=$rmd; rmd=$(dirname "$rmd"); done; `+
+			`[ -z "$rmt" ] || { printf '%%s\n' "$rmt" > "$rha%s" && mkdir -p "$(dirname "$ra")"; }; } && `+
+			`cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`, heldMade)
 	}
 	return b.String()
 }
@@ -217,9 +225,11 @@ func (h checkoutHome) holdHome(line func(string, ...any)) {
 	q := shellword.Quote
 	line(`%s || exit 1`, h.putBack())
 	if h.agentsFrom != "" {
+		// NO CANDIDATE where the setting names no file: the harness reads no
+		// home file, so none is held or written.
 		line(`ra= rf=; while IFS= read -r rc; do [ -n "$rf" ] || rf=$rc; if [ -e "$rc" ]; then ra=$rc; break; fi; done < %s; [ -n "$ra" ] || ra=$rf`,
 			q(h.agentsFrom))
-		line(`printf '%%s\n' "$ra" > "$rha%s" || exit 1`, heldLive)
+		line(`[ -z "$ra" ] || printf '%%s\n' "$ra" > "$rha%s" || exit 1`, heldLive)
 	} else if len(h.agents) > 1 {
 		// THE FILE THE HARNESS READS, named before it is held, so a run killed
 		// past here is put back by the next ([checkoutHome.putBack]).
@@ -231,7 +241,7 @@ func (h checkoutHome) holdHome(line func(string, ...any)) {
 			strings.Join(words, " "), q(h.agents[0]))
 		line(`printf '%%s\n' "$ra" > "$rha%s" || exit 1`, heldLive)
 	}
-	line(`if [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
+	line(`if [ -z "$ra" ]; then :; elif [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
 		`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
 }
 
@@ -300,9 +310,20 @@ func (h checkoutHome) putBack() string {
 		return ":"
 	}
 	if len(h.agents) == 1 {
-		return putBackHome(h.agents[0], h.held)
+		live := shellword.Quote(h.agents[0])
+		return "{ " + putBackHomeAt(live, h.held) + " && " + h.removeMade(live) + "; }"
 	}
 	at := shellword.Quote(h.held + heldLive)
-	return fmt.Sprintf(`{ if [ -f %[1]s ]; then rhl=$(cat %[1]s) && %[2]s && rm -f %[1]s; fi; }`, at,
-		putBackHomeAt(`"$rhl"`, h.held))
+	return fmt.Sprintf(`{ if [ -f %[1]s ]; then rhl=$(cat %[1]s) && %[2]s && %[3]s && rm -f %[1]s; fi; }`, at,
+		putBackHomeAt(`"$rhl"`, h.held), h.removeMade(`"$rhl"`))
+}
+
+// removeMade is the shell removing, once the home file at the shell word live
+// is put back, each directory the gate made for it ([heldMade]), deepest
+// first, while it is empty, up to the one recorded; one the home had, or a
+// record naming no directory above live, is left alone.
+func (h checkoutHome) removeMade(live string) string {
+	m := shellword.Quote(h.held + heldMade)
+	return fmt.Sprintf(`if [ -f %[1]s ]; then rmt=$(cat %[1]s) && rmd=$(dirname %[2]s) && case $rmd in "$rmt"|"$rmt"/*) `+
+		`while rmdir "$rmd" 2> /dev/null && [ "$rmd" != "$rmt" ]; do rmd=$(dirname "$rmd"); done;; esac; rm -f %[1]s; fi`, m, live)
 }

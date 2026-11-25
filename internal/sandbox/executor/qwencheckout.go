@@ -89,13 +89,16 @@ func qwenCheckoutsEntry(paths Paths) map[string]any {
 // sets hk where the helper ran), the home's own put back however the script
 // ends, a teardown's signal included, after what the hook left out is said.
 // The run's helper first names the context files context.fileName settles
-// on, in the launch config and the home's list (qwen_helper.mjs `checkouts`).
+// on, in the launch config and the home's list (qwen_helper.mjs `checkouts`),
+// its line where they are none going into the skip log once the gate has
+// made the state afresh.
 func qwenCheckoutsGate(paths Paths) string {
 	h := qwenCheckoutHome(paths)
 	q := shellword.Quote
 	return "qrestore() { " + h.saySkipped() + "; " + QwenCode{}.homeRestore(paths) + "; }; trap qrestore EXIT\n" +
 		`trap 'end "$harness"; qrestore; trap - EXIT; exit 143' TERM; trap 'end "$harness"; qrestore; trap - EXIT; exit 130' INT; ` +
 		`trap 'end "$harness"; qrestore; trap - EXIT; exit 129' HUP` + "\n" +
-		"node " + q(paths.QwenHelper()) + " checkouts " + q(paths.QwenContextHomes()) + " " + q(paths.QwenCheckoutLaunch()) +
-		" < /dev/null || exit 1\n" + h.gate()
+		"qn=$(node " + q(paths.QwenHelper()) + " checkouts " + q(paths.QwenContextHomes()) + " " +
+		q(paths.QwenCheckoutLaunch()) + " < /dev/null) || exit 1\n" + h.gate() +
+		`[ -z "$qn" ] || printf '%s\n' "$qn" >> ` + q(h.skipped()) + " || exit 1\n"
 }
