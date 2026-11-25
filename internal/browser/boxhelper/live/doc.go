@@ -1,7 +1,8 @@
 // Package live is the box helper's live view of a seat's browser: what its
 // supervisor serves a job's relay over relay.sock, beside the model's
-// browser on browser.sock (internal/browser/boxhelper). It reads the browser
-// and acts on no page: every page of every context, each a tab of the box's
+// browser on browser.sock (internal/browser/boxhelper), and the relay, one
+// per job, that carries it to the run's bridge. It reads the browser and
+// acts on no page: every page of every context, each a tab of the box's
 // boot; the page in view; that page's screen while somebody watches; the
 // state of the tabs; and whether the relay's own job's shim holds the
 // browser, the check-in. Its modules, js/*.mjs ([Modules]), are written into
@@ -131,11 +132,64 @@
 // rate the settings do not name, or any other malformed record ends the
 // connection, logged, and the supervisor serves on.
 //
+// # The relay
+//
+// One per job, `helper.mjs relay --wiring <file>`, started by the job's script
+// beside its harness and ended with it (boxhelper.RelayScript: node exec'd
+// under the supervisor's environment alone, none of the job's own variables,
+// NODE_OPTIONS and NODE_DEBUG among them, so the script's $! is the relay's
+// own). The wiring file, internal/browser's RelayWiring, names the job and the
+// route the run's bridge serves its browser on, which holds the run's token. A
+// wiring of another version, a job that is no launch id, or a route that is no
+// absolute http or https address ending /browser exits 64, with one line naming
+// the file and never its content. The route stays in memory: no command line
+// carries it, and the log names a request by its verb and an error by its code,
+// never by a message that could hold it. The log is stderr, which the script
+// appends to browser-relay.log, at most relay.log_bytes, past which one line
+// says it stops.
+//
+// It says its job's hello on relay.sock. Refused as another helper's, it
+// exits 69, which no retry in its job changes; on any other refusal, or a
+// socket absent or closed, it connects again at the retry's pace, and
+// meanwhile posts a check-in of its own saying no supervisor answers. After
+// each hello it restates its watch.
+//
+// It reaches the bridge directly, through HTTP agents of its own that no proxy
+// variable reaches, as the harness does. A request ends at the first of its
+// whole answer, a refusal or reset of its connection, its bound, and an answer
+// past relay.body_bytes, even one under way; one that fails is retried as a 503
+// is, but a poll given up at its bound is asked again at once. One poll is held
+// at a time: the next names each 200's hub and level, so it is held rather than
+// answered at once; the answer's watch is told the supervisor where its rate is
+// one the settings name; and a new hub has the newest state and check-in posted
+// again. A frame is posted with its header less its type and acknowledged once
+// answered, or given up at relay.frame_give_up_ms; one refused as too fast is
+// acknowledged once its Retry-After has passed, and never posted again. States
+// and check-ins are posted newest only, one at a time, relay.post_gap_ms apart
+// under the hub's rate, again until taken or superseded; the backoff is each
+// verb's, so one refused holds back the next of its kind, newer or not, and
+// only one taken or dropped resets it. Of each answer, a 2xx is done; a 401, or
+// a 404 the hub says not_found, ends the relay; a 400, 405, 413 or 415 is
+// dropped, logged by verb, a poll so refused asked again at the retry's pace;
+// and anything else, a 404 of a route another build lacks among it, is retried,
+// doubling from relay.retry_base_ms to relay.retry_ceiling_ms, spread by
+// relay.retry_jitter, never under a Retry-After.
+//
+// It leaves, bye to the supervisor and exit 0, on TERM, INT or HUP, on the
+// ends above, and once its parent's pid, read every relay.parent_ms, differs
+// from its start's: its script is gone, by its end, a trap of its own or a
+// kill. It abandons its requests in flight and exits once they settle, or at
+// relay.term_ms, under the job's stop grace. An unhandled rejection is
+// logged, and an uncaught exception exits 70.
+//
 // # The suite
 //
 // Real-browser cases run at each end of what a box may bring
 // (boxhelpertest.Each), speak relay.sock as a relay would
 // (boxhelpertest.Box.DialRelay) and drive the model through the shim; the
-// screen's pacing, the table, the state's fitting and the ids run on the
-// probe's clock. No Go text names a DevTools method (internal/browser).
+// relay's run as its job's script starts it against a stand-in bridge and
+// supervisor (boxhelpertest.FakeBridge, Box.Relay, Box.StandIn). The screen's
+// pacing, the table, the state's fitting, the ids and the relay's retries,
+// gaps, TERM and parent check run on the probe's clock. No Go text names a
+// DevTools method (internal/browser).
 package live

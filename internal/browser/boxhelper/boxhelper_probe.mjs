@@ -157,6 +157,46 @@
 //   {"op":"page_closed"}                   no page is in view
 //   {"op":"watch","on":O,"fps":F}          the relay's watch moves
 //   {"op":"relay_gone"}                    the relay's connection closes
+//   {"op":"relay_retry","verb":V,"answers":A}
+//                                          a relay on the probe's clock whose
+//                                          requests of V (state, poll, or
+//                                          frame, one the supervisor sends)
+//                                          are answered A in turn, each
+//                                          {status, retry_after}, and the
+//                                          rest never: each request's clock
+//                                          reading and status, and what the
+//                                          relay told its supervisor when
+//   {"op":"dial","url":U}                  one POST of the relay's dialer to
+//                                          U, in the probe's environment: its
+//                                          status, or the code it failed with
+//   {"op":"relay_slot","answers":A,"puts":P,"until":U}
+//                                          a relay on the probe's clock told
+//                                          a state at each of P's times, each
+//                                          {at, rev}, its posts of them
+//                                          answered A in turn, each {status,
+//                                          retry_after, code, after}, after
+//                                          that many ms, the last answering
+//                                          every later post, until U ms on:
+//                                          each post's time, rev and status
+//   {"op":"relay_burst","states":N}        a relay on the probe's clock told N
+//                                          states at once, every post answered
+//                                          at once: each post's clock reading
+//                                          and rev
+//   {"op":"relay_term","settle":E}         a relay on the probe's clock whose
+//                                          poll and state post never answer,
+//                                          or with E end as they are
+//                                          abandoned, TERMed: what it told a
+//                                          stand-in supervisor, and when it
+//                                          exited, if it had one ms before
+//                                          term_ms
+//   {"op":"relay_parent"}                  a relay on the probe's clock whose
+//                                          parent's pid changes on a read of
+//                                          it: when it changed, and when the
+//                                          relay said bye
+//   {"op":"relay_polls","answers":N}       a relay on the probe's clock whose
+//                                          polls are answered in turn, N of
+//                                          them: how many it asked, and the
+//                                          most in flight at once
 // Each screen op answers what the screen did so far, in order, each by the
 // probe's own word for it, so a case spells no DevTools method: the session
 // told metrics, captured (a capture), started {params} (the screencast),
@@ -179,6 +219,7 @@
 // call "record" recorded.
 // A command that throws anything else answers {"op":"error","message":M}.
 
+import { EventEmitter } from "node:events"
 import fs from "node:fs"
 import fsp from "node:fs/promises"
 import { constants } from "node:os"
@@ -202,6 +243,9 @@ const { States } = await module("state.mjs")
 const { Pages, tabsListed } = await module("pages.mjs")
 const { Screen } = await module("screen.mjs")
 const { attachment: liveView } = await module("live.mjs")
+const { Relay } = await module("relay.mjs")
+const { dialer } = await module("dial.mjs")
+const { record: recordOf } = await module("frames.mjs")
 
 const answer = (fields) => process.stdout.write(JSON.stringify(fields) + "\n")
 
@@ -330,6 +374,10 @@ const clock = (() => {
     clearTimeout: (t) => {
       const i = timers.indexOf(t)
       if (i >= 0) timers.splice(i, 1)
+    },
+    // nextAt is when the earliest timer is due, or undefined with none.
+    nextAt() {
+      return timers.length === 0 ? undefined : Math.min(...timers.map((t) => t.at))
     },
     advance(ms) {
       const to = now + ms
@@ -582,12 +630,86 @@ let stage
 // settled answers once the screen's promises of the moment have run.
 const settledScreen = () => new Promise((resolve) => setImmediate(resolve))
 
+// settledRelay answers once a relay's chains of promises have run, however
+// many turns they take.
+const settledRelay = async () => {
+  for (let i = 0; i < 20; i++) await settledScreen()
+}
+
+// untilDone runs a relay on the probe's clock until done says it is, each
+// timer at exactly its time once every promise before it has settled.
+async function untilDone(done) {
+  for (let step = 0; step < 400; step++) {
+    await settledRelay()
+    if (done()) return
+    const next = clock.nextAt()
+    if (next === undefined) return
+    clock.advance(next - clock.now())
+  }
+}
+
 // screenAnswer is what the screen did so far.
 const screenAnswer = async () => {
   await settledScreen()
   return { screen: screened, unhandled }
 }
 
+// relayAt is a relay on the probe's clock: its supervisor a stand-in that
+// answers its hello and keeps what it writes in told, each {t, at}; request
+// answers its requests, by verb.
+async function relayAt({ told, request, ppid = () => 4242, exit = () => {}, frame = false }) {
+  const config = await readConfig(folder)
+  const link = () => {
+    const sock = new EventEmitter()
+    sock.destroyed = false
+    sock.write = (bytes) => {
+      const n = bytes.readUInt32BE(0)
+      told.push({ t: JSON.parse(bytes.subarray(4, 4 + n).toString("utf8")).t, at: clock.now() })
+      return true
+    }
+    const closed = () => {
+      if (sock.destroyed) return
+      sock.destroyed = true
+      sock.emit("close")
+    }
+    sock.end = (done) => {
+      closed()
+      done?.()
+    }
+    sock.destroy = closed
+    queueMicrotask(() => {
+      sock.emit("connect")
+      sock.emit("data", recordOf({ t: "hello", v: 1, helper: config.helper, boot: "0123456789abcdef", chromium: {} }))
+      if (frame) sock.emit("data", recordOf(aFrame, Buffer.from([0xff, 0xd8, 0xff, 0xd9])))
+    })
+    return sock
+  }
+  const relay = new Relay({
+    config,
+    wiring: { url: "http://127.0.0.1:1/mcp/crewlet_rt1.probe/browser", job: "0a1b2c3d-0000-4000-8000-00000000000a" },
+    socket: path.join(folder, "relay.sock"),
+    io: {
+      clock,
+      log: () => {},
+      exit,
+      ppid,
+      connect: link,
+      request: (url, o) => request(new URL(url).pathname.split("/").pop(), o),
+      random: Math.random,
+    },
+  })
+  relay.start()
+  await settledRelay()
+  return { relay, config }
+}
+
+// never is a request that never answers, whatever asks it to stop.
+const never = () => new Promise(() => {})
+
+// aState is a state the probe's relay posts, and aFrame a frame's header.
+const aState = { v: 1, boot: "0123456789abcdef", rev: 1, running: "running", tabs: [] }
+const aFrame = { t: "frame", v: 1, boot: "0123456789abcdef", seq: 1, tab: "t1", capture: "screencast", at_ms: 1,
+  width: 1, height: 1, device_width: 1, device_height: 1, offset_top: 0, page_scale: 1 }
 const commands = {
   async config_read() {
     try {
@@ -687,6 +809,140 @@ const commands = {
   relay_gone() {
     screen.watched(undefined)
     return screenAnswer()
+  },
+  async relay_retry({ verb: asked = "state", answers }) {
+    const attempts = []
+    const told = []
+    let next = 0
+    const { relay } = await relayAt({
+      told,
+      frame: asked === "frame",
+      request: (verb) => {
+        if (verb !== asked) return never()
+        const a = answers[Math.min(next, answers.length - 1)]
+        next += 1
+        attempts.push({ at: clock.now(), status: a.status })
+        const retryAfter = a.retry_after === undefined ? undefined : a.retry_after * 1000
+        return Promise.resolve({ status: a.status, retryAfter, body: Buffer.from(JSON.stringify({ error: a.code ?? "" })) })
+      },
+    })
+    const start = clock.now()
+    if (asked === "state") relay.state.put(aState)
+    await untilDone(() => attempts.length >= answers.length && (asked !== "frame" || told.some((m) => m.t === "frame_ack")))
+    return { start, attempts, told }
+  },
+  async dial({ url }) {
+    const config = await readConfig(folder)
+    const d = dialer({ clock: realClock, bodyBytes: config.relay.body_bytes })
+    try {
+      return { status: (await d.request(url, { method: "POST", bound: 10_000 })).status }
+    } catch (err) {
+      return { failed: String(err?.code ?? err) }
+    } finally {
+      d.close()
+    }
+  },
+  async relay_slot({ answers, puts, until }) {
+    const posts = []
+    let next = 0
+    const { relay } = await relayAt({
+      told: [],
+      request: (verb, o) => {
+        if (verb !== "state") return never()
+        const a = answers[Math.min(next, answers.length - 1)]
+        next += 1
+        posts.push({ at: clock.now(), rev: JSON.parse(o.body.toString("utf8")).rev, status: a.status })
+        const answer = {
+          status: a.status,
+          retryAfter: a.retry_after === undefined ? undefined : a.retry_after * 1000,
+          body: Buffer.from(JSON.stringify({ error: a.code ?? "" })),
+        }
+        return new Promise((resolve) => clock.setTimeout(() => resolve(answer), a.after ?? 0))
+      },
+    })
+    const start = clock.now()
+    for (const { at, rev } of puts) clock.setTimeout(() => relay.state.put({ ...aState, rev }), at)
+    await untilDone(() => clock.now() >= start + until)
+    return { posts: posts.map((p) => ({ ...p, at: p.at - start })) }
+  },
+  async relay_burst({ states }) {
+    const posts = []
+    const { relay } = await relayAt({
+      told: [],
+      request: (verb, o) => {
+        if (verb !== "state") return never()
+        posts.push({ at: clock.now(), rev: JSON.parse(o.body.toString("utf8")).rev })
+        return Promise.resolve({ status: 204, body: Buffer.alloc(0) })
+      },
+    })
+    for (let rev = 1; rev <= states; rev++) relay.state.put({ ...aState, rev })
+    await untilDone(() => posts.at(-1)?.rev === states)
+    return { posts }
+  },
+  async relay_term({ settle }) {
+    const told = []
+    let exited
+    const abandoned = (verb, o) =>
+      new Promise((resolve, reject) => o.signal.addEventListener("abort", () => reject(new Error("abandoned"))))
+    const { relay, config } = await relayAt({
+      told,
+      request: settle ? abandoned : never,
+      exit: (code) => {
+        exited ??= { code, at: clock.now() }
+      },
+    })
+    relay.state.put(aState)
+    await settledRelay()
+    const term = clock.now()
+    relay.leave("SIGTERM")
+    await settledRelay()
+    clock.advance(config.relay.term_ms - 1)
+    await settledRelay()
+    const early = exited ?? null
+    clock.advance(1)
+    await settledRelay()
+    return { term, early, exited: exited ?? null, told }
+  },
+  async relay_polls({ answers }) {
+    let asked = 0
+    let inFlight = 0
+    let most = 0
+    const held = []
+    await relayAt({
+      told: [],
+      request: (verb) => {
+        if (verb !== "poll") return never()
+        asked += 1
+        inFlight += 1
+        most = Math.max(most, inFlight)
+        const level = asked
+        return new Promise((resolve) =>
+          held.push(() => {
+            inFlight -= 1
+            const body = { v: 1, hub: "probe", level, watch: { on: false, fps: 2 } }
+            resolve({ status: 200, body: Buffer.from(JSON.stringify(body)) })
+          }),
+        )
+      },
+    })
+    for (let i = 0; i < answers; i++) {
+      held.shift()?.()
+      await settledRelay()
+    }
+    return { asked, most }
+  },
+  async relay_parent() {
+    const told = []
+    let parent = 4242
+    const { config } = await relayAt({ told, request: never, ppid: () => parent })
+    clock.advance(3 * config.relay.parent_ms)
+    await settledRelay()
+    const stayed = told.some((m) => m.t === "bye")
+    parent = 1
+    const gone = clock.now()
+    clock.advance(2 * config.relay.parent_ms)
+    await settledRelay()
+    return { stayed, gone, bye: told.find((m) => m.t === "bye")?.at ?? null }
   },
   async install({ folder, fail, abort }) {
     const pids = []

@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/browser/boxhelper"
 	"github.com/crewlet/crewlet/internal/browser/boxhelper/boxhelpertest"
 	"github.com/crewlet/crewlet/internal/browser/boxhelper/live"
+	"github.com/crewlet/crewlet/internal/seat"
 )
 
 // recorder is a box that keeps every file written into it, in order, and
@@ -45,17 +46,17 @@ func (r *recorder) WriteFile(_ context.Context, path string, content []byte) err
 }
 
 // THE BOX IS WRITTEN THE EMBEDDED HELPER, THEN A CONFIG NAMING IT: Files in
-// order into .crewlet/browser-box, the committed manifest and lock as
-// tree-package.json and tree-package-lock.json, then config.json naming the
-// Version, release, digests, floors, sandbox and the live view's blocks, each
-// its constant's, and bounds that nest: npm's fetches in the install's, a
-// launch in the supervisor's wait, both in ensure's deadline, under
-// EnsureTimeout and a takeover; a quiet capture no sooner than a watch slot;
-// a state within a relay.sock header; the oversize capture smaller.
+// order, the committed manifest and lock as tree-package.json and
+// tree-package-lock.json, then config.json: Version, release, digests,
+// floors, sandbox, the live view's blocks from their constants, and bounds
+// that nest: npm's fetches in the install's, a launch in the supervisor's
+// wait, both in ensure's deadline, under EnsureTimeout and a takeover; a
+// quiet capture no sooner than a watch slot; a state in a relay.sock header;
+// a smaller oversize capture; a relay's frame given up before a post, a post
+// before a poll, a poll past two seat leases and a post.
 //
-// Mutations, each red: config.json first; the digest over the lock alone; the
-// lock as tree-package.json; npm_floor from MinNodeMajor; a 30 s fetch
-// timeout; ensure's deadline EnsureTimeout; quiet_ms a literal 50.
+// Mutations, each red: config.json first; the digest over the lock alone; a
+// 30 s fetch timeout; quiet_ms a literal 50; a poll given up at 60 s.
 func TestTheBoxIsWrittenTheEmbeddedHelperThenAConfigNamingIt(t *testing.T) {
 	t.Parallel()
 	const home = "/home/user"
@@ -158,7 +159,12 @@ func TestTheBoxIsWrittenTheEmbeddedHelperThenAConfigNamingIt(t *testing.T) {
 			"oversize_quality": live.OversizeQuality, "oversize_scale": live.OversizeScale},
 		"state": {"max_bytes": browser.MaxStateBytes, "max_tabs": browser.MaxTabs,
 			"title_chars": browser.MaxTitleChars, "url_bytes": browser.MaxURLBytes, "title_ms": live.TitleMS},
-		"relay": {"header_bytes": live.MaxHeaderBytes},
+		"relay": {"wiring_v": browser.RelayWiringVersion, "header_bytes": live.MaxHeaderBytes,
+			"retry_base_ms": live.RetryBaseMS, "retry_ceiling_ms": live.RetryCeilingMS, "retry_jitter": live.RetryJitter,
+			"frame_give_up_ms": live.FrameGiveUpMS, "post_give_up_ms": live.PostGiveUpMS,
+			"poll_give_up_ms": live.PollGiveUpMS, "post_gap_ms": 1000 / browser.ReportRate, "term_ms": live.TermMS,
+			"parent_ms": live.ParentMS, "log_bytes": live.LogBytes, "body_bytes": browser.MaxPollAnswerBytes,
+			"checkin_bytes": browser.MaxCheckinBytes},
 	} {
 		got, _ := config[block].(map[string]any)
 		for key, v := range want {
@@ -181,6 +187,19 @@ func TestTheBoxIsWrittenTheEmbeddedHelperThenAConfigNamingIt(t *testing.T) {
 	if count(frames, "oversize_quality") >= count(frames, "quality") || toFloat(frames["oversize_scale"]) >= 1 {
 		t.Errorf("the oversize capture is at quality %v and scale %v: a frame past its bound is replaced by a "+
 			"smaller one", frames["oversize_quality"], frames["oversize_scale"])
+	}
+	frameGiveUp, post, poll := count(relay, "frame_give_up_ms"), count(relay, "post_give_up_ms"),
+		count(relay, "poll_give_up_ms")
+	leases := int(2 * seat.SeatLeaseTTL / time.Millisecond)
+	if frameGiveUp >= post || post >= poll || poll <= leases+post {
+		t.Errorf("the relay gives up a frame at %d ms, a post at %d and a poll at %d: each past the last, and a poll "+
+			"past two seat leases of holder wait, %d ms, and the hold a post is bounded by", frameGiveUp, post, poll,
+			leases)
+	}
+	if count(relay, "body_bytes") < browser.MaxPollAnswerBytes || count(relay, "retry_ceiling_ms") < count(relay,
+		"retry_base_ms") {
+		t.Errorf("the relay reads %d bytes of an answer, under a poll's answer's bound, or retries from %d ms to %d",
+			count(relay, "body_bytes"), count(relay, "retry_base_ms"), count(relay, "retry_ceiling_ms"))
 	}
 }
 
@@ -262,6 +281,11 @@ func TestAConfigOfAnotherLiveShapeIsRefusedWhole(t *testing.T) {
 		{"frames", "oversize_quality", nil}, {"frames", "oversize_scale", 1.5}, {"frames", "oversize_scale", 0},
 		{"state", "max_bytes", 0}, {"state", "max_tabs", 1001}, {"state", "title_chars", -1},
 		{"state", "url_bytes", nil}, {"state", "title_ms", 0}, {"relay", "header_bytes", 1},
+		{"relay", "wiring_v", 0}, {"relay", "retry_base_ms", nil}, {"relay", "retry_ceiling_ms", 50},
+		{"relay", "retry_jitter", 1}, {"relay", "retry_jitter", -0.1}, {"relay", "frame_give_up_ms", 0},
+		{"relay", "post_give_up_ms", nil}, {"relay", "poll_give_up_ms", 0}, {"relay", "post_gap_ms", 0},
+		{"relay", "term_ms", nil}, {"relay", "parent_ms", 0}, {"relay", "log_bytes", 0}, {"relay", "body_bytes", nil},
+		{"relay", "checkin_bytes", 0},
 	}
 	boxhelpertest.EachNode(t, func(t *testing.T, env boxhelpertest.Env) {
 		box := boxhelpertest.Start(t, env, boxhelpertest.Options{})

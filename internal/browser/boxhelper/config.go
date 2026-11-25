@@ -254,9 +254,24 @@ type configState struct {
 	TitleMS    int `json:"title_ms"`
 }
 
-// configRelay is relay.sock's bound on one record's header.
+// configRelay is a job's relay's bounds: relay.sock's on one record's
+// header, its wiring's version, its retries, give-ups and posts, its exits,
+// and what it reads and logs.
 type configRelay struct {
-	HeaderBytes int `json:"header_bytes"`
+	WiringV        int     `json:"wiring_v"`
+	HeaderBytes    int     `json:"header_bytes"`
+	RetryBaseMS    int     `json:"retry_base_ms"`
+	RetryCeilingMS int     `json:"retry_ceiling_ms"`
+	RetryJitter    float64 `json:"retry_jitter"`
+	FrameGiveUpMS  int     `json:"frame_give_up_ms"`
+	PostGiveUpMS   int     `json:"post_give_up_ms"`
+	PollGiveUpMS   int     `json:"poll_give_up_ms"`
+	PostGapMS      int     `json:"post_gap_ms"`
+	TermMS         int     `json:"term_ms"`
+	ParentMS       int     `json:"parent_ms"`
+	LogBytes       int     `json:"log_bytes"`
+	BodyBytes      int     `json:"body_bytes"`
+	CheckinBytes   int     `json:"checkin_bytes"`
 }
 
 // configChromium is the Chromium a box looks for: where, and the build the
@@ -303,7 +318,11 @@ func configJSON(s Settings) ([]byte, error) {
 		QuietMS: live.QuietMS, OversizeQuality: live.OversizeQuality, OversizeScale: live.OversizeScale}
 	c.State = configState{MaxBytes: browser.MaxStateBytes, MaxTabs: browser.MaxTabs, TitleChars: browser.MaxTitleChars,
 		URLBytes: browser.MaxURLBytes, TitleMS: live.TitleMS}
-	c.Relay = configRelay{HeaderBytes: live.MaxHeaderBytes}
+	c.Relay = configRelay{WiringV: browser.RelayWiringVersion, HeaderBytes: live.MaxHeaderBytes,
+		RetryBaseMS: live.RetryBaseMS, RetryCeilingMS: live.RetryCeilingMS, RetryJitter: live.RetryJitter,
+		FrameGiveUpMS: live.FrameGiveUpMS, PostGiveUpMS: live.PostGiveUpMS, PollGiveUpMS: live.PollGiveUpMS,
+		PostGapMS: 1000 / browser.ReportRate, TermMS: live.TermMS, ParentMS: live.ParentMS, LogBytes: live.LogBytes,
+		BodyBytes: browser.MaxPollAnswerBytes, CheckinBytes: browser.MaxCheckinBytes}
 	body, err := json.Marshal(c)
 	if err != nil {
 		return nil, err

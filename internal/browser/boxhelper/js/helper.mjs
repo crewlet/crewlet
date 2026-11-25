@@ -2,9 +2,9 @@
 // from the helper's folder in a box. ensure prints its one line; supervise
 // runs the box's supervisor from the launch ensure wrote, the live view
 // (live.mjs) attached to it; stop ends that supervisor and its browser; mcp
-// is the shim, a job's browser server on stdio. An unknown subcommand or flag
-// exits 64 with one line on stderr. internal/browser/boxhelper's package doc
-// carries the argument.
+// is the shim, a job's browser server on stdio; relay is a job's relay
+// (relay.mjs). An unknown subcommand or flag exits 64 with one line on
+// stderr. internal/browser/boxhelper's package doc carries the argument.
 
 import path from "node:path"
 
@@ -71,6 +71,11 @@ switch (subcommand) {
     await shim(folder, job, root)
     break
   }
+  case "relay": {
+    const { main } = await import("./relay.mjs")
+    await main(folder, flags)
+    break
+  }
   default:
-    usage(`unknown subcommand ${JSON.stringify(subcommand)}: ensure, supervise, stop or mcp`)
+    usage(`unknown subcommand ${JSON.stringify(subcommand)}: ensure, supervise, stop, mcp or relay`)
 }

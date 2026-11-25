@@ -16,6 +16,7 @@ var js embed.FS
 // writes them, after its own common.mjs: each after every module it imports.
 var modules = []string{
 	"cdp.mjs", "jpeg.mjs", "frames.mjs", "state.mjs", "pages.mjs", "screen.mjs", "relaysock.mjs", "live.mjs",
+	"dial.mjs", "relay.mjs",
 }
 
 // Modules is the live view's modules by name, in the order they are written.
@@ -59,4 +60,39 @@ const (
 	// 2026-11-25), so a tab's title lags a script's by at most a second, for
 	// one browser-process call a second that touches no page.
 	TitleMS = 1000
+)
+
+// The relay's own knobs, which config.json carries as the relay block beside
+// internal/browser's bounds on what it posts.
+const (
+	// RetryBaseMS, RetryCeilingMS and RetryJitter are the pace a relay's
+	// retries keep: doubling from a tenth of a second to two, each spread a
+	// fifth either way, the bridge's own pace for the seat's holder, whose
+	// 503s name two seconds, so the relays of a fleet never wake in step.
+	RetryBaseMS    = 100
+	RetryCeilingMS = 2000
+	RetryJitter    = 0.2
+	// FrameGiveUpMS is how long a frame is posted for: a picture five
+	// seconds old is worth nothing, and the next is coming.
+	FrameGiveUpMS = 5000
+	// PostGiveUpMS bounds one post of a state or a check-in: the poll's own
+	// hold, the slowest answer the bridge gives a relay on purpose.
+	PostGiveUpMS = 10_000
+	// PollGiveUpMS bounds one poll: two seat leases of holder wait (90 s at
+	// the 45 s lease) and the 10 s hold, with a margin; a poll given up is
+	// asked again at once.
+	PollGiveUpMS = 120_000
+	// LogBytes bounds the relay's log, one line saying it stopped past it:
+	// a job's relay logs refusals and failures, a few hundred lines a job.
+	LogBytes = 256 << 10
+	// TermMS is how long a relay TERMed has to say bye and go: under the
+	// job's stop grace (internal/sandbox's JobStopGrace, five seconds), so
+	// a relay ended as its job is ends inside the harness's own grace, and
+	// a post abandoned costs nothing, since frames are not sent again and
+	// states supersede.
+	TermMS = 2000
+	// ParentMS is how often a relay reads its parent's pid, leaving once it
+	// changes: one read a second costs nothing, and a relay outlives its
+	// script by at most this and TermMS.
+	ParentMS = 1000
 )

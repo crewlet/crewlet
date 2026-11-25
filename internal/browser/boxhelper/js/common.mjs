@@ -378,8 +378,25 @@ function liveBounds(config, file) {
   })
   if (state !== "") refuseAt("state", state)
   if (!isObject(config.relay)) refuseAt("relay")
-  const relay = outside(config.relay, { header_bytes: [2, SIZE_MAX] })
+  const relay = outside(config.relay, {
+    wiring_v: [1, PROTOCOL_MAX],
+    header_bytes: [2, SIZE_MAX],
+    retry_base_ms: [1, BOUND_MAX],
+    retry_ceiling_ms: [1, BOUND_MAX],
+    frame_give_up_ms: [1, BOUND_MAX],
+    post_give_up_ms: [1, BOUND_MAX],
+    poll_give_up_ms: [1, BOUND_MAX],
+    post_gap_ms: [1, BOUND_MAX],
+    term_ms: [1, BOUND_MAX],
+    parent_ms: [1, BOUND_MAX],
+    log_bytes: [1, SIZE_MAX],
+    body_bytes: [1, SIZE_MAX],
+    checkin_bytes: [1, SIZE_MAX],
+  })
   if (relay !== "") refuseAt("relay", relay)
+  if (config.relay.retry_ceiling_ms < config.relay.retry_base_ms) refuseAt("relay", "retry_ceiling_ms")
+  const jitter = config.relay.retry_jitter
+  if (typeof jitter !== "number" || !(jitter >= 0 && jitter < 1)) refuseAt("relay", "retry_jitter")
 }
 
 // bootID is the boot the kernel's tick counts belong to, read once: ticks

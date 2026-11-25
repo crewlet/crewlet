@@ -68,6 +68,12 @@ func (b *Box) DialRelay(t testing.TB) *RelaySock {
 	if err != nil {
 		t.Fatalf("dialling the box's relay.sock: %v", err)
 	}
+	return serveConn(t, conn)
+}
+
+// serveConn reads conn's records as [RelaySock] keeps them, either end of
+// relay.sock; t's end closes it.
+func serveConn(t testing.TB, conn net.Conn) *RelaySock {
 	r := &RelaySock{t: t, conn: conn, read: map[string]int{}, arrived: make(chan struct{}, 1), ended: make(chan struct{})}
 	t.Cleanup(func() {
 		_ = conn.Close()
@@ -75,6 +81,11 @@ func (b *Box) DialRelay(t testing.TB) *RelaySock {
 	})
 	go r.readAll()
 	return r
+}
+
+// lengthOf is a record's header length, as relay.sock frames it.
+func lengthOf(header []byte) []byte {
+	return binary.BigEndian.AppendUint32(nil, uint32(len(header)))
 }
 
 // readAll reads the supervisor's records until the connection ends, holding
@@ -184,7 +195,7 @@ func (r *RelaySock) write(header map[string]any) error {
 	}
 	r.wmu.Lock()
 	defer r.wmu.Unlock()
-	_, err = r.conn.Write(append(binary.BigEndian.AppendUint32(nil, uint32(len(body))), body...))
+	_, err = r.conn.Write(append(lengthOf(body), body...))
 	return err
 }
 

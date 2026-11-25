@@ -20,7 +20,8 @@
 //
 // Test support (the name ends in `test`), so internal/fixedwait reads it as
 // test code: no wait in it decides a claim, every bound in it only ends a
-// wait, and its one poll, on what a supervisor records, is paced as liveness.
+// wait, and its polls, on what a supervisor records and a relay logs, are
+// paced as liveness.
 //
 // # Where each comes from
 //
@@ -128,6 +129,18 @@
 // the relay's records and reads the supervisor's, each kept in the order it
 // came and held to the socket's bounds, and acknowledges each frame as it
 // comes where it plays a relay whose posts are answered at once.
+//
+// # The bridge's side
+//
+// A case of the relay plays its run's bridge with [FakeBridge]: the browser
+// routes under one token, every request recorded, each poll held until the
+// case answers it ([FakeBridge.Watch], [FakeBridge.NewHub]) or the request
+// ends, never on a timer, and a verb refused, held, answered past what a
+// relay reads or cut off as the case says. It is no hub: the engine's suite
+// proves the real one. [Box.Relay] writes the job's wiring 0600 and starts
+// the relay as the job's script does (boxhelper.RelayScript), under a parent
+// sh that waits for it, its pid and its parent's in hand to TERM the one or
+// kill the other; [Box.StandIn] plays the supervisor's side of relay.sock.
 //
 // # What a dead test binary leaves
 //
