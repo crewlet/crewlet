@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -28,8 +29,8 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 	bridged := sandbox.RunRequest{Brief: "go", MCPServers: map[string]sandbox.MCPServer{
 		"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:7/mcp/tok", AlwaysLoaded: true}}}
 	for name, tc := range map[string]struct {
-		release string
-		req     sandbox.RunRequest
+		release, machine string
+		req              sandbox.RunRequest
 		switchOffCase
 	}{
 		"nothing switches them off": {req: skills},
@@ -43,6 +44,10 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 		"the home's settings switch them off for the bridge's guard": {req: bridged, switchOffCase: switchOffCase{
 			plant: map[string]string{".claude/settings.json": off},
 			fails: []string{said, "bridge guard", "/.claude/settings.json sets disableAllHooks to true"}}},
+		// No note helper build, so no checkouts' hook: the guard alone asks.
+		"the home's settings switch them off for the bridge's guard, the helper unbuilt": {machine: "riscv64",
+			req: bridged, switchOffCase: switchOffCase{plant: map[string]string{".claude/settings.json": off},
+				fails: []string{said, "bridge guard", "/.claude/settings.json sets disableAllHooks to true"}}},
 		"the repository's local settings switch them off": {req: skills, switchOffCase: switchOffCase{
 			plant: map[string]string{"workspace/.claude/settings.local.json": off},
 			fails: []string{said, "/workspace/.claude/settings.local.json sets disableAllHooks"}}},
@@ -95,7 +100,11 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 			if release == "" {
 				release = "2.1.330"
 			}
-			runner, box := realBox(t)
+			runner, real := realBox(t)
+			var box sandbox.Sandbox = real
+			if tc.machine != "" {
+				box = machineBox{Sandbox: real, machine: tc.machine}
+			}
 			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/claude", "#!/bin/sh\n"+
 				`case "$1" in --version) echo '`+release+` (Claude Code)'; exit 0;; esac`+"\ncat > /dev/null\n"+
 				`echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'`+"\n")
@@ -104,4 +113,19 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 			checkSwitchOff(t, box, res, tc.switchOffCase)
 		})
 	}
+}
+
+// machineBox is a box whose `uname -m` answers machine, so a launch takes it
+// for a machine the note helper has no build for.
+type machineBox struct {
+	sandbox.Sandbox
+	machine string
+}
+
+// Exec answers `uname -m` with b's machine and runs the rest in the box.
+func (b machineBox) Exec(ctx context.Context, cmd string, opts sandbox.ExecOptions) (sandbox.ExecResult, error) {
+	if cmd == "uname -m" {
+		return sandbox.ExecResult{Stdout: b.machine + "\n"}, nil
+	}
+	return b.Sandbox.Exec(ctx, cmd, opts)
 }
