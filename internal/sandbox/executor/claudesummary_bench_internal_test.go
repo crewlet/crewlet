@@ -11,8 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// BenchmarkAClaudeSummaryLineAtItsBound measures the read of a Claude Code
-// summary's line ([claudeSummaryLine]) at its bounds, off a real direct box's
+// BenchmarkAClaudeSummaryLineAtItsBound measures the walk's read of a Claude
+// Code summary's line ([claudeSummaryReading]) at its bounds, off a real direct box's
 // file: a line of claudeSummaryLineMaxBytes whose content is line breaks
 // written escaped, its text just within summaryReadMaxBytes (escaped, the
 // worst), and a line of plain words at summaryReadMaxBytes (plain). Each case
@@ -39,18 +39,25 @@ func BenchmarkAClaudeSummaryLineAtItsBound(b *testing.B) {
 			}
 			b.Cleanup(func() { _ = box.Close(b.Context()) })
 			file := box.Home() + "/thread.jsonl"
-			at, size, want := summaryBenchWrite(b, box, file, bc.content)
+			want := summaryBenchWrite(b, box, file, bc.content)
 			runtime.GC()
 			fmt.Fprintf(os.Stderr, "summary-line-bench %s: the read starts\n", bc.name)
 			b.ResetTimer()
 			for range b.N {
 				start := time.Now()
-				text, err := claudeSummaryLine(b.Context(), box, file, at, size)
+				body, err := box.OpenFile(b.Context(), file)
+				if err != nil {
+					b.Fatal(err)
+				}
+				r := &claudeSummaryReading{}
+				walkThread(b.Context(), body, threadPlainMax, new(passBudget), r)
+				_ = body.Close()
+				got := r.reading()
 				elapsed := time.Since(start) //fixedwait:measure the read's time is what the case reports
 				fmt.Fprintf(os.Stderr, "summary-line-bench %s: the read ends in %s, %d bytes of text\n", bc.name,
-					elapsed, len(text))
-				if err != nil || len(text) != want {
-					b.Fatalf("the read answered %d bytes (%v), want %d", len(text), err, want)
+					elapsed, len(r.text.buf))
+				if got.Unread != "" || len(r.text.buf) != want {
+					b.Fatalf("the read held %d bytes (%s), want %d", len(r.text.buf), got.Unread, want)
 				}
 			}
 			b.StopTimer()
@@ -60,10 +67,8 @@ func BenchmarkAClaudeSummaryLineAtItsBound(b *testing.B) {
 
 // summaryBenchWrite writes file, a boundary and a summary's line whose content
 // is what content makes of the room claudeSummaryLineMaxBytes leaves it, and
-// is where the line lies and its text's length; the line is let go of on
-// return, before the read.
-func summaryBenchWrite(b *testing.B, box sandbox.Sandbox, file string, content func(room int) string) (at, size int64,
-	text int) {
+// is its text's length; the line is let go of on return, before the read.
+func summaryBenchWrite(b *testing.B, box sandbox.Sandbox, file string, content func(room int) string) int {
 	b.Helper()
 	boundary := `{"type":"system","subtype":"compact_boundary"}` + "\n"
 	room := claudeSummaryLineMaxBytes - len(summaryLineOf(`{"content":""}`)) - 1
@@ -75,5 +80,5 @@ func summaryBenchWrite(b *testing.B, box sandbox.Sandbox, file string, content f
 	if err := box.WriteFile(b.Context(), file, []byte(boundary+line)); err != nil {
 		b.Fatal(err)
 	}
-	return int64(len(boundary)), int64(len(line)), len(words)
+	return len(words)
 }

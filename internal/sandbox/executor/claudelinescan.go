@@ -155,10 +155,10 @@ func (t *threadReader) Reset(r io.Reader, maxBytes int64, maxLines int) {
 // Summarizing makes every line t reads from here on read its message's
 // content, where it is one string, into s, whole to [summaryReadMaxBytes] and
 // past it none ([summaryText]): set only where the line's last message's last
-// content is a string the pass read. The one reader of a summary's line asks
-// it ([claudeSummaryLine]); every other pass stops reading a content once its
-// automata decide. Called before the first [threadReader.Next];
-// [threadReader.Reset] clears it.
+// content is a string the pass read. A walk reading a summary asks it from a
+// compaction's boundary to its summary ([claudeSummaryReading]); every other
+// pass stops reading a content once its automata decide. Nil stops it from
+// the next line; [threadReader.Reset] clears it.
 func (t *threadReader) Summarizing(s *summaryText) { t.summary = s }
 
 // Estimating makes every line t reads from here on read Claude Code's estimate
