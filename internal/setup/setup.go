@@ -159,6 +159,10 @@ type RedirectStep struct {
 	Key string `json:"key"`
 }
 
+// GroupSignIn is [Requirement.Group] for the Google sign-in client, asked on
+// the Google page apart from the connection.
+const GroupSignIn = "sign_in"
+
 // FillRedirects gives every [KindRedirect] requirement in reqs the engine's
 // sign-in callback url and the setting key it is built on: the running
 // engine's address, which no vendor's requirements can read off the document.
@@ -274,6 +278,10 @@ type Requirement struct {
 	// NOT "has the same field name": Jira's and Confluence's `url` are
 	// different addresses, which is why this is declared, not inferred.
 	Shared bool `json:"shared,omitempty"`
+
+	// Group is the form a field is asked in where an integration has more
+	// than one: "" its connection, [GroupSignIn] the Google sign-in client.
+	Group string `json:"group,omitempty"`
 
 	// Hidden marks a value the form writes without asking for it.
 	//

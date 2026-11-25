@@ -21,20 +21,17 @@ const usersURL = "https://play.google.com/console/developers/users-and-permissio
 // admin's sign-in, with which Crewlet adds each agent's identity itself. Each
 // agent's own identity is the Agents tab's: its box shows the email to
 // invite, the permissions its level needs, and its check.
-func Requirements(c *config.Company, resolve func(string) (string, bool)) []setup.Requirement {
+func Requirements(c *config.Company) []setup.Requirement {
 	var enabled bool
-	var client *config.GoogleOAuthClient
 	if c != nil && c.Integrations.GooglePlay != nil {
 		enabled = c.Integrations.GooglePlay.Enabled
-		client = c.Integrations.GooglePlay.OAuth
 	}
 	out := append([]setup.Requirement{googlegrowth.Enabled(string(Kind), "Google Play", enabled)},
 		googlegrowth.Reader(c, setup.IdentityRole{ID: permView + "_GLOBAL",
 			Name: "View app information and download bulk reports (read-only)"},
 			vendortext.Of(vendortext.UI("Users and permissions", "Invite new users", "Account permissions").At(usersURL)),
 			vendortext.Plain("enough to read every app, vitals and the monthly reports bucket; it changes nothing."))...)
-	return append(out, googlegrowth.AdminSignIn(string(Kind), "Play Console", "a Play Console admin", client,
-		resolve)...)
+	return append(out, googlegrowth.AdminSignIn(string(Kind), "a Play Console admin")...)
 }
 
 // Guide is what the connect form says around its fields.

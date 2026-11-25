@@ -20,19 +20,16 @@ const accessManagementURL = "https://analytics.google.com/analytics/web/"
 // Administrator's sign-in, with which Crewlet adds each agent's identity
 // itself. Each agent's own identity is the Agents tab's: its box shows the
 // email to add, the role its level needs, and its check.
-func Requirements(c *config.Company, resolve func(string) (string, bool)) []setup.Requirement {
+func Requirements(c *config.Company) []setup.Requirement {
 	var enabled bool
-	var client *config.GoogleOAuthClient
 	if c != nil && c.Integrations.GoogleAnalytics != nil {
 		enabled = c.Integrations.GoogleAnalytics.Enabled
-		client = c.Integrations.GoogleAnalytics.OAuth
 	}
 	out := append([]setup.Requirement{googlegrowth.Enabled(string(Kind), "Google Analytics", enabled)},
 		googlegrowth.Reader(c, setup.IdentityRole{ID: roleViewer, Name: "Viewer"},
 			vendortext.Of(vendortext.UI("Admin", "Property access management", "Add users").At(accessManagementURL)),
 			vendortext.Plain("enough to read every report; it changes nothing."))...)
-	return append(out, googlegrowth.AdminSignIn(string(Kind), "Google Analytics",
-		"a Google Analytics Administrator", client, resolve)...)
+	return append(out, googlegrowth.AdminSignIn(string(Kind), "a Google Analytics Administrator")...)
 }
 
 // Guide is what the connect form says around its fields.

@@ -107,7 +107,7 @@ func adminUnavailable(c *config.Company) string {
 	}
 	switch {
 	case block.OAuth == nil:
-		return "A Play Console admin signs in on the Settings tab first."
+		return "A Play Console admin signs in on the Google page first."
 	case len(block.DeveloperAccounts) == 0:
 		return "Name the Play developer account on the Settings tab first, so Crewlet knows where to add it."
 	}
@@ -369,18 +369,14 @@ func remove(ctx context.Context, in googlegrowth.AdminCall) error {
 	return nil
 }
 
-// adminClient is the company's own OAuth client an admin signs in as, false
-// where Google Play is off; on with no oauth block is a client with nothing set,
-// which the sign-in refuses by name.
+// adminClient is the OAuth client an admin signs in as (googleauth.SignInClient),
+// false where Google Play is off.
 func adminClient(c *config.Company) (googleauth.ConsentClient, bool) {
 	b := c.Integrations.GooglePlay
 	if b == nil || !b.Enabled {
 		return googleauth.ConsentClient{}, false
 	}
-	if b.OAuth == nil {
-		return googleauth.ConsentClient{}, true
-	}
-	return googleauth.ConsentClient{ID: b.OAuth.ClientID, Secret: b.OAuth.ClientSecret}, true
+	return googleauth.SignInClient(c, b.OAuth), true
 }
 
 // adminScopes are what the admin sign-in asks for: managing users, and

@@ -25,7 +25,7 @@ type GoogleAnalytics struct {
 
 	// OAuth is the client an Administrator signs in as, so Crewlet adds each
 	// agent's identity itself.
-	OAuth *GoogleOAuthClient `yaml:"oauth,omitempty" json:"oauth,omitempty" desc:"The company's own OAuth client (a Web application, in a Google Cloud project it controls), which a Google Analytics Administrator signs in as so Crewlet adds each agent's identity to its properties itself; other Google products may share it. Optional: without it a person adds each agent's identity in Google Analytics."`
+	OAuth *GoogleOAuthClient `yaml:"oauth,omitempty" json:"oauth,omitempty" desc:"The OAuth client Google Analytics' admin sign-in alone is made as, in place of integrations.google_cloud.sign_in_client. Optional."`
 
 	// Approvers route an agent's held acts: who is asked first.
 	Approvers []string `yaml:"approvers,omitempty" json:"approvers,omitempty" desc:"Handles of human seats an agent's admin acts are routed to first. Only an administrator answers one, at a fresh step-up; without approvers every administrator is asked. Optional."`

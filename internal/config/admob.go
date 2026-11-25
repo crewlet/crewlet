@@ -17,9 +17,9 @@ import (
 // own OAuth client, and the engine seals and renews the grant. Every agent's
 // call goes as that grant, held to the seat's level and accounts by the engine.
 type AdMob struct {
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Turn the integration on. Needs oauth, the company's own OAuth client, and a person's Google sign-in on the integration's page."`
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Turn the integration on. Needs the company's own OAuth client (integrations.google_cloud.sign_in_client, or oauth here) and a person's Google sign-in, made on the Google page."`
 
-	OAuth *GoogleOAuthClient `yaml:"oauth,omitempty" json:"oauth,omitempty" desc:"The company's own OAuth client (a Web application, in a Google Cloud project it controls), which the sign-in is made as. Required when enabled."`
+	OAuth *GoogleOAuthClient `yaml:"oauth,omitempty" json:"oauth,omitempty" desc:"The OAuth client AdMob alone signs in as, in place of integrations.google_cloud.sign_in_client. Optional."`
 
 	// Accounts narrows what agents may be given; absent is every account the
 	// signing person reaches.
@@ -117,11 +117,11 @@ func (r *RoleAdMob) LevelOrDefault() growth.Level {
 
 // validate holds the block to its shape: an enabled block names its OAuth
 // client, which the sign-in is made as.
-func (a *AdMob) validate(path Path) error {
+func (a *AdMob) validate(i *Integrations, path Path) error {
 	var p problems
-	if a.Enabled && a.OAuth == nil {
-		p.add(at(path, "oauth"), ErrMissing, "AdMob signs in as the company's own OAuth client: give "+
-			"oauth.client_id and oauth.client_secret")
+	if a.Enabled && i.GoogleSignInClient(a.OAuth) == nil {
+		p.add(at(path, "oauth"), ErrMissing, "AdMob signs in as the company's own OAuth client: set "+
+			"integrations.google_cloud.sign_in_client, or oauth here")
 	}
 	a.OAuth.validate(&p, at(path, "oauth"), a.Enabled)
 	if n := len(a.Accounts); n > adMobMaxAccounts {

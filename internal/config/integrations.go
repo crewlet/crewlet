@@ -180,10 +180,10 @@ func (i *Integrations) validate(path Path) error {
 		p.wrap(i.MetaAds.validate(at(path, "meta_ads")))
 	}
 	if i.AdMob != nil {
-		p.wrap(i.AdMob.validate(at(path, "admob")))
+		p.wrap(i.AdMob.validate(i, at(path, "admob")))
 	}
 	if i.AdSense != nil {
-		p.wrap(i.AdSense.validate(at(path, "adsense")))
+		p.wrap(i.AdSense.validate(i, at(path, "adsense")))
 	}
 	if i.AppStoreConnect != nil {
 		p.wrap(i.AppStoreConnect.validate(at(path, "app_store_connect")))
