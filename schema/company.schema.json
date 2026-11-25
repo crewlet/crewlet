@@ -2659,8 +2659,8 @@
           ],
           "x-crewlet-secret": true
         },
-        "provider": {
-          "description": "Full resource name of the Workload Identity Federation provider holding the engine's public key: projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>. Until it is set, no agent's account can be made.",
+        "identity_project": {
+          "description": "ID of the Google Cloud project kept for Crewlet's own service accounts: the provisioner crewlet-provisioner@<identity_project>.iam.gserviceaccount.com and every agent's account are made in it. A new, empty project; the Cloud Shell block creates it if it does not exist.",
           "type": [
             "string",
             "number",
@@ -2668,8 +2668,8 @@
             "null"
           ]
         },
-        "provisioner": {
-          "description": "Email of the provisioner service account, <id>@<identity project>.iam.gserviceaccount.com. The agents' service accounts are created in its project.",
+        "provider": {
+          "description": "Full resource name of the Workload Identity Federation provider holding the engine's public key: projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>. Until it is set, no agent's account can be made.",
           "type": [
             "string",
             "number",
