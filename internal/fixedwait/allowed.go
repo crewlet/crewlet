@@ -969,7 +969,7 @@ var allowed = []Entry{
 	{File: "internal/providers/llm/harness/auxiliary_test.go", Func: "TestADeadlineDuringTheImportIsATimeout", ElapsedBound: 1, Piece: 10},
 	{File: "internal/providers/llm/harness/bench_internal_test.go", Func: "TestAHostThatSleptThroughAWindowWakesWithTheEntryTriedAgain", ExemptElapsed: 2, Piece: 10},
 	{File: "internal/providers/llm/harness/bench_internal_test.go", Func: "TestALaterBenchNeverShortensAnEarlierOne", ExemptElapsed: 1, Piece: 10},
-	{File: "internal/providers/llm/harness/bench_internal_test.go", Func: "TestASitOutIsTheFirstBackoffStepWithoutAResetAndNeverPastAnHour", ExemptElapsed: 1, Piece: 10},
+	{File: "internal/providers/llm/harness/bench_internal_test.go", Func: "TestASitOutRunsToTheNamedResetAndIsTheFirstBackoffStepWithoutOne", ExemptElapsed: 1, Piece: 10},
 	{File: "internal/providers/llm/harness/bench_internal_test.go", Func: "TestASpentPlanSitsTheEntryOutUntilItsReset", ExemptElapsed: 1, Piece: 10},
 	{File: "internal/providers/llm/harness/bench_internal_test.go", Func: "TestAnUnnamedResetBacksOffAndStartsAgainOnceAnswered", ExemptElapsed: 3, Piece: 10},
 	{File: "internal/providers/llm/harness/credentialstore_test.go", Func: "fakeStore", ExemptWait: 1, ExemptElapsed: 1, Piece: 10},
