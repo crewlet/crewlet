@@ -3100,11 +3100,12 @@ test("a tool's caution is a warning above the first field, said once", () => {
 });
 
 /** A tool whose form carries Setup steps: three of them, a link and two grants. */
-function stepsTool(configured: boolean): SetupToolState {
+function stepsTool(configured: boolean, finished = configured): SetupToolState {
   return {
     ...tool,
     key: "scaleway",
     configured,
+    form_complete: finished,
     prepare: [
       {
         text: [
@@ -3131,10 +3132,14 @@ function stepsTool(configured: boolean): SetupToolState {
   };
 }
 
-function stepsForm(configured: boolean, extra: Partial<Parameters<typeof SetupForm>[0]> = {}) {
+function stepsForm(
+  configured: boolean,
+  extra: Partial<Parameters<typeof SetupForm>[0]> = {},
+  finished = configured,
+) {
   return (
     <SetupForm
-      sections={[{ name: "Scaleway", tool: stepsTool(configured) }]}
+      sections={[{ name: "Scaleway", tool: stepsTool(configured, finished) }]}
       title="Scaleway"
       onClose={() => {}}
       onDone={() => {}}
@@ -3173,9 +3178,17 @@ test("the Setup steps stand open beside a form that is connecting", () => {
   expect(screen.queryByRole("button", { name: "Setup steps" })).toBeNull();
 });
 
-// PUT AWAY ONCE CONNECTED, one press from open, focus going into the box.
+// STILL OPEN HALF SET UP: saved, with a box the steps fill still empty, the
+// person is mid-way through them. Mutation: open them only while connecting.
+test("the Setup steps stand open beside a form saved but not finished", () => {
+  render(stepsForm(true, {}, false));
+  const aside = screen.getByRole("complementary", { name: "Setup steps" });
+  expect(stepTexts(aside)).toEqual(STEP_TEXTS);
+});
+
+// PUT AWAY ONCE FINISHED, one press from open, focus going into the box.
 // Mutation: open it whatever the state.
-test("the Setup steps are put away on a connected form, one press from open", async () => {
+test("the Setup steps are put away on a finished form, one press from open", async () => {
   render(stepsForm(true));
   const aside = screen.getByRole("complementary", { name: "Setup steps" });
   expect(within(aside).queryAllByRole("listitem")).toHaveLength(0);
@@ -3340,9 +3353,10 @@ test("on a narrow pane the Setup steps open from the title row in a sheet", asyn
 });
 
 // THE NUMBERS HANG IN THE BOX'S ICON COLUMN, so the steps start where its title
-// does, beside the form and in the sheet. The title row exists only to hold the
-// close button. Mutation: drop the hanging markers, or draw the row in the sheet.
-test("the Setup steps hang their numbers, and draw a title row only around a close button", async () => {
+// does. The title row exists only to hold the close button, and the sheet's own
+// title names the steps once, so the sheet draws no box title and keeps its
+// numbers in a gutter of their own. Mutation: draw the box in the sheet.
+test("the Setup steps hang their numbers, and are named once beside the form and in the sheet", async () => {
   const view = render(stepsForm(false));
   const aside = screen.getByRole("complementary", { name: "Setup steps" });
   const list = within(aside).getByRole("list");
@@ -3358,9 +3372,10 @@ test("the Setup steps hang their numbers, and draw a title row only around a clo
     render(stepsForm(false));
     fireEvent.click(screen.getByRole("button", { name: "Setup steps" }));
     const sheet = await screen.findByRole("dialog", { name: "Setup steps" });
-    expect(within(sheet).getByRole("list").className).toContain("crewlet-list--hanging");
+    expect(within(sheet).getByRole("list").className).not.toContain("crewlet-list--hanging");
     expect(sheet.querySelector(".int-steps-title")).toBeNull();
-    expect(sheet.querySelector(".crewlet-callout__title")?.textContent).toBe("Setup steps");
+    expect(sheet.querySelector(".crewlet-callout__title")).toBeNull();
+    expect(within(sheet).getAllByText("Setup steps")).toHaveLength(1);
   } finally {
     width.mockRestore();
   }
