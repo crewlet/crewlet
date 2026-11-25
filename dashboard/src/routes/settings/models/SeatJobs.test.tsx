@@ -719,3 +719,26 @@ test("work the records could not name is counted, never drawn as nobody or as a 
   // AN UNLISTED SEAT IS NOT WAITING: no alarm names it.
   expect(screen.queryByText("Every member of Claude Opus is at its limit")).toBeNull();
 });
+
+// THE COMPANY'S FALLBACK IS NAMED: a part that pins nothing (`""`) said
+// " has work or homes its status records could not name" and "Waiting:  is at
+// its limit", with no subject; and a pinned model's work never waits on a home.
+test("a part the company's fallback runs names it in its not-known and waiting words", () => {
+  const assignments: FleetAssignment[] = ASSIGNMENTS.map((a) =>
+    a.subject === "backend-engineer"
+      ? { ...a, target: { pinned: "" }, now: null, now_kind: "unlisted" as const }
+      : a.subject === "pm"
+        ? { ...a, target: { pinned: "" }, now: null, waiting_until: null }
+        : a,
+  );
+  mount(company({ assignments }));
+  expect(
+    screen.getByLabelText(
+      "The company's fallback model has work its status records could not name, so where " +
+        "this runs now is not known",
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.getByLabelText("Waiting: the company's fallback model is at its limit"),
+  ).toBeTruthy();
+});
