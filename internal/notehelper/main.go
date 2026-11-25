@@ -124,7 +124,15 @@
 //     directories deep, 1,024 entries or 32 MiB is left out whole, said:
 //     Copilot walks 9 levels (measured), so a deeper tree is the gap;
 //   - `skillDirs`: the checkout's skill directories, an earlier one winning a
-//     name (Codex: [".codex/skills",".agents/skills"]);
+//     name (Codex: [".codex/skills",".agents/skills"]), each skill a
+//     directory directly in one. {"dir": <d>, "recursive": true} walks d as
+//     Pi 1.6.0 does (measured): a directory holding SKILL.md is a skill and
+//     ends the descent, dot directories and node_modules are skipped, and a
+//     skill reached twice, by real path, is copied once, and of two of one
+//     name, the first, the other left out, said; past 8 directories
+//     deep or 1,024 entries it is left out whole, said. Pi also follows a
+//     link out of the checkout, lists a loose root `.md` skill, and honours
+//     .gitignore, .ignore and .fdignore; the walk does none of these;
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (at most 64 characters) with its
@@ -147,7 +155,11 @@
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
-// (name, description, the copy's SKILL.md). A harness taking checkouts adds a
+// (name, description, the copy's SKILL.md) as its hook's context; pi-nested
+// the same with each file in Pi's `<project_instructions path=...>`, on
+// stdout for the run's extension to add to the tool's result (Pi lists no
+// skill it did not start with and loads instructions only as it starts,
+// measured on 1.6.0). A harness taking checkouts adds a
 // nested adapter, never a second core; its runner holds the home file and the
 // copies (internal/sandbox/executor's checkoutHome). What a nested firing
 // leaves out (a skill whose name the home's skills hold, one that leads out
