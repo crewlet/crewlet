@@ -11,15 +11,15 @@ import (
 // A HOME OR A REPOSITORY CANNOT SWITCH A CLAUDE CODE RUN'S HOOKS OR SKILLS OFF
 // UNSEEN. 2.1.310 runs none of the run's hooks (notes, skills, checkouts,
 // bridge guard) where the merged settings leave `disableAllHooks` true, and
-// drops its skills where `enabledPlugins` holds their plugin false or a
-// `Skill` deny names them (measured); the run overrules neither. So a run
-// starting a hook of the engine's is refused before it starts, naming file
-// and key, a later set-back-on clearing nothing; it starts where the key is no
-// boolean, the file no JSON, in the home's settings.local.json, nested,
-// allowManagedHooksOnly outside a managed file, other plugins' and skills'
-// switches, and where it starts no hook of the engine's (measured). Red: drop
-// the gate; let a later value clear an off; read a string as true; name no
-// file; skip the skills' or checkouts' check; leave the bridge guard ungated.
+// drops its skills where `enabledPlugins` or a `Skill` deny says so
+// (measured); the run overrules neither. So a run starting a hook of the
+// engine's is refused before it starts, naming file and key, a later
+// set-back-on clearing nothing, but one whose only hook would be its
+// checkouts' starts without it, saying so; it starts where the key is no
+// boolean, the file no JSON, in the home's settings.local.json, nested, or
+// allowManagedHooksOnly outside a managed file (measured). Red: drop the gate;
+// let a later value clear an off; read a string as true; name no file; skip
+// the skills' check; refuse the checkouts' alone; leave the guard ungated.
 func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const off = `{"disableAllHooks": true}`
@@ -86,9 +86,9 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 		"switches of other plugins and skills": {req: skills, switchOffCase: switchOffCase{
 			plant: map[string]string{".claude/settings.json": `{"enabledPlugins": {"crewlet": false, "x@y": false}, ` +
 				`"permissions": {"deny": ["Skill(other)", "Bash", "Read(crewlet:getting-unstuck)"]}}`}}},
-		"a run whose only hook is its checkouts'": {req: sandbox.RunRequest{Brief: "go"}, switchOffCase: switchOffCase{
-			plant: map[string]string{".claude/settings.json": off},
-			fails: []string{said, "/.claude/settings.json sets disableAllHooks to true"}}},
+		"a run whose only hook would be its checkouts' starts without it": {req: sandbox.RunRequest{Brief: "go"},
+			switchOffCase: switchOffCase{plant: map[string]string{".claude/settings.json": off},
+				says: []string{"/.claude/settings.json sets disableAllHooks to true", "such a repository is not handed"}}},
 		"a run with no hook of the engine's, below the checkouts' floor": {release: "2.1.309",
 			req: sandbox.RunRequest{Brief: "go"}, switchOffCase: switchOffCase{plant: map[string]string{".claude/settings.json": off}}},
 		"a release older than every hook's floor": {release: "2.1.117", req: skills, switchOffCase: switchOffCase{

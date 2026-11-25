@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -347,29 +348,33 @@ func TestAClaudeCodeRunSaysWhatItsHookLeftOutOnceItStops(t *testing.T) {
 	})
 }
 
-// A RUN WHOSE CHECKOUTS' HOOK STARTS IS REFUSED WHERE THE BOX SWITCHES HOOKS
-// OFF, AND ITS GATE KEEPS AN EARLIER GATE'S HOOK: with the launch's finding
-// written ([executor.Paths.ClaudeHooksOff]), a run that starts the checkouts'
-// hook (2.1.310 or later, the helper in the box) is refused before Claude Code
-// starts, naming why; one that starts no hook of the engine's starts; and a
-// run whose notes' hooks started is refused whether or not the checkouts'
-// gate started its own. Under every sh a box may have.
+// A RUN WHOSE CHECKOUTS' HOOK WOULD BE ITS ONLY HOOK STARTS WITHOUT IT WHERE
+// THE BOX SWITCHES HOOKS OFF, AND ONE WITH ANOTHER HOOK IS REFUSED: with the
+// launch's finding written ([executor.Paths.ClaudeHooksOff]), a run on 2.1.310
+// with the helper and no other hook of the engine's starts without the
+// checkouts' plugin, saying a later clone is not handed its skills; with its
+// notes' hooks it is refused, naming why, with or without the helper; with
+// hooks on it starts the plugin. Under every sh a box may have.
 //
-// Mutation: leave the checkouts' hook unmarked, or let its gate forget the
-// notes' mark, and a row goes red.
-func TestARunWhoseCheckoutsHookStartsIsRefusedWhereHooksAreOff(t *testing.T) {
+// Mutation: refuse the checkouts' hook alone, start it anyway, say nothing,
+// or let its gate forget the notes' mark, and a row goes red.
+func TestARunWhoseOnlyHookIsItsCheckoutsStartsWithoutItWhereHooksAreOff(t *testing.T) {
 	t.Parallel()
 	const off = "/home/box/.claude/settings.json sets disableAllHooks to true"
 	forEachShell(t, func(t *testing.T, sh boxShell) {
 		for _, tc := range []struct {
-			name, version   string
-			helper, refused bool
-			steer           sandbox.SteerWiring
+			name, version            string
+			hooksOff, helper         bool
+			refused, plugin, notSaid bool
+			steer                    sandbox.SteerWiring
 		}{
-			{"its checkouts' hook", "2.1.310 (Claude Code)", true, true, sandbox.SteerWiring{}},
-			{"no helper", "2.1.310 (Claude Code)", false, false, sandbox.SteerWiring{}},
-			{"below the checkouts' floor", "2.1.309 (Claude Code)", true, false, sandbox.SteerWiring{}},
-			{"its notes' hooks, no helper", "2.1.310 (Claude Code)", false, true, steerWiring},
+			{"its checkouts' hook alone", "2.1.310 (Claude Code)", true, true, false, false, false, sandbox.SteerWiring{}},
+			{"its checkouts' hook alone, hooks on", "2.1.310 (Claude Code)", false, true, false, true, true,
+				sandbox.SteerWiring{}},
+			{"no helper", "2.1.310 (Claude Code)", true, false, false, false, true, sandbox.SteerWiring{}},
+			{"below the checkouts' floor", "2.1.309 (Claude Code)", true, true, false, false, true, sandbox.SteerWiring{}},
+			{"its notes' hooks beside the checkouts'", "2.1.310 (Claude Code)", true, true, true, false, true, steerWiring},
+			{"its notes' hooks, no helper", "2.1.310 (Claude Code)", true, false, true, false, true, steerWiring},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				p := executor.Paths{Home: t.TempDir()}
@@ -378,8 +383,10 @@ func TestARunWhoseCheckoutsHookStartsIsRefusedWhereHooksAreOff(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if err := os.WriteFile(p.ClaudeHooksOff(), []byte(off), 0o600); err != nil {
-					t.Fatal(err)
+				if tc.hooksOff {
+					if err := os.WriteFile(p.ClaudeHooksOff(), []byte(off), 0o600); err != nil {
+						t.Fatal(err)
+					}
 				}
 				if tc.helper {
 					writeStandIn(t, p.ClaudeNoteHelper(), "#!/bin/sh\nexit 0\n")
@@ -390,8 +397,17 @@ func TestARunWhoseCheckoutsHookStartsIsRefusedWhereHooksAreOff(t *testing.T) {
 					t.Fatalf("the run was refused: %v, want %v (script error %v, argv %q)\n%s", refused, tc.refused,
 						err, args, stderr)
 				}
-				if tc.refused && !strings.Contains(stderr, off) {
+				if tc.refused && !strings.Contains(stderr, off+". The run was refused") {
 					t.Errorf("the refusal does not say why:\n%s", stderr)
+				}
+				if plugin := slices.Contains(args, p.ClaudeCheckoutsPlugin()); !tc.refused && plugin != tc.plugin {
+					t.Errorf("the checkouts' plugin started: %v, want %v (argv %q)", plugin, tc.plugin, args)
+				}
+				said := strings.Contains(stderr, off+". So the run starts without the hook that hands a repository "+
+					"cloned during the run its skills")
+				if said == tc.notSaid {
+					t.Errorf("the run said it starts without the checkouts' hook: %v, want %v:\n%s", said, !tc.notSaid,
+						stderr)
 				}
 			})
 		}
