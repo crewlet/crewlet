@@ -1923,6 +1923,7 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 			// The brief and what it and the fresh one omitted from the carried
 			// round ([LaunchRecord.Brief], [LaunchRecord.BriefOmitted]).
 			run.Launch.Brief, run.Launch.NotContinued = box.Brief, box.NotContinued
+			run.Launch.Handover, run.Launch.FreshHandover = box.Handover, box.FreshHandover
 			run.Launch.BriefOmitted = slices.Clone(box.BriefOmitted)
 			run.Launch.FreshOmitted = slices.Clone(box.FreshOmitted)
 			run.Launch.BriefLateOmitted = slices.Clone(box.BriefLateOmitted)
