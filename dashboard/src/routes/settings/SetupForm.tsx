@@ -1704,7 +1704,7 @@ export function SetupForm({
             help={help}
           />
         ) : r.kind === "redirect" ? (
-          <RedirectStep r={r} />
+          <RedirectStep r={r} integration={section.tool.key} />
         ) : shown ? (
           // WHAT THE ENGINE RENDERED, copied whole: a block a person pastes
           // into the app's own shell, which this form keeps no text of.

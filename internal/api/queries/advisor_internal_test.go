@@ -153,7 +153,7 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 	if known {
 		t.Error("node-c has not evaluated its alarms, and the fleet's read as known")
 	}
-	got := notice.Read(nil, fleet, nil, nil, since.Add(notice.AlarmAfter))
+	got := notice.Read(nil, fleet, nil, nil, nil, since.Add(notice.AlarmAfter))
 	title, person, _ := statelog.PersonWords(statelog.KindApplyLag)
 	want := []notice.Notice{{Class: notice.ClassAlarm, Subject: advisor.Subject{Kind: notice.SubjectAlarm, Name: "apply_lag"},
 		Since: since, Nodes: []string{"node-a", "node-b"}, Title: title, Person: person}}
@@ -487,5 +487,55 @@ func TestTheAdvisorsNoticesReadEachLiveNodesGrowthRow(t *testing.T) {
 			slices.Equal(n.Nodes, []string{"node-a"})
 	}) {
 		t.Errorf("the notices are %+v, want node-a's clock skew at apple_search_ads", got)
+	}
+}
+
+// registeredClients is the OAuth clients a person registered, as the engine
+// reads them, or the read's failure.
+type registeredClients struct {
+	clients  []notice.RegisteredClient
+	callback string
+	err      error
+}
+
+func (r registeredClients) RegisteredClients(context.Context) ([]notice.RegisteredClient, error) {
+	return r.clients, r.err
+}
+func (r registeredClients) CallbackURL() string { return r.callback }
+
+// THE NOTICES NAME THE CLIENTS A MOVED ADDRESS LEFT BEHIND, read off the grants
+// at each answer against this node's callback; grants that cannot be read are
+// named `oauth_grants`, never answered as nothing stale.
+//
+// Mutation: drop the redirect notices from the answer, or swallow the read's
+// error, and the case goes red.
+func TestTheAdvisorNoticesNameTheClientsAMovedAddressLeftBehind(t *testing.T) {
+	t.Parallel()
+	const now = "https://crewlet.example.com/webhooks/mcp-oauth"
+	stale := notice.RegisteredClient{Vendor: notice.VendorMCP, ID: "search-client", Label: "search",
+		Uses:     []notice.ClientUse{{Name: "search", Title: "search"}},
+		Redirect: "https://old-tunnel.example.com/webhooks/mcp-oauth", At: time.Now()}
+	answer := func(r registeredClients) AdvisorNotices {
+		t.Helper()
+		got, err := Sources{Advisor: noticeLog{}, OAuthClients: r}.advisorNotices(t.Context(), Params{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.(AdvisorNotices)
+	}
+	moved := func(a AdvisorNotices) []notice.Notice {
+		return slices.DeleteFunc(slices.Clone(a.Notices), func(n notice.Notice) bool {
+			return n.Class != notice.ClassOAuthRedirectMoved
+		})
+	}
+	got := answer(registeredClients{clients: []notice.RegisteredClient{stale}, callback: now})
+	if m := moved(got); len(m) != 1 || m[0].Redirect == nil || m[0].Redirect.URI != now ||
+		len(m[0].Redirect.Clients) != 1 || slices.Contains(got.Unread, UnreadOAuthGrants) {
+		t.Errorf("the notices are %+v (unread %v), want the redirect notice naming search", m, got.Unread)
+	}
+	got = answer(registeredClients{err: errors.New("the store blinked"), callback: now})
+	if m := moved(got); len(m) != 0 || !slices.Contains(got.Unread, UnreadOAuthGrants) {
+		t.Errorf("with the grants unread the notices are %+v (unread %v), want none and %q named",
+			m, got.Unread, UnreadOAuthGrants)
 	}
 }
