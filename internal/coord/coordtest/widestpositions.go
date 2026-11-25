@@ -480,7 +480,7 @@ func widestGrant() coord.OAuthGrant {
 		Grant: uuid.MustParse("01938a6e-7a3e-7cd1-9b2a-0f1e2d3c4b5b"), Client: plain(16),
 		ClientID: escaped(coord.MaxGrantAddressBytes), Issuer: escaped(coord.MaxGrantAddressBytes),
 		Resource: escaped(coord.MaxGrantAddressBytes), Redirect: escaped(coord.MaxGrantAddressBytes),
-		By: plain(coord.MaxActorBytes),
+		By:     plain(coord.MaxActorBytes),
 		ByKind: iam.ActorOperator, OperatorID: plain(coord.MaxActorBytes), At: widestAt,
 		Expiry: &widestAt, Failure: escaped(coord.MaxGrantWords), FailedAt: &widestAt}
 	for range coord.MaxGrantScopes {
