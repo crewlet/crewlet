@@ -50,13 +50,15 @@ type checkoutSpec struct {
 // state directory (the checkouts handed, the lock), the instruction file it
 // replaces with the launch's sections, the checkouts handed first, in order
 // (the repositories the run pushes to), the bound the sections share with
-// what the harness loads beside them (nil for none), and the spec. The
-// working directory is the adapter's own.
+// what the harness loads beside them (nil for none), lines the runner has
+// for the run's skip log ([skippedLog]), and the spec. The working directory
+// is the adapter's own.
 type launchConfig struct {
-	State  string        `json:"state"`
-	Agents string        `json:"agents"`
-	First  []string      `json:"first"`
-	Budget *launchBudget `json:"budget,omitempty"`
+	State   string        `json:"state"`
+	Agents  string        `json:"agents"`
+	First   []string      `json:"first"`
+	Budget  *launchBudget `json:"budget,omitempty"`
+	Skipped []string      `json:"skipped,omitempty"`
 	checkoutSpec
 }
 
@@ -135,6 +137,7 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = os.WriteFile(filepath.Join(c.State, "handed"), nil, 0o600); err != nil {
 		return err
 	}
+	keepSkipped(c.State, c.Skipped, stderr)
 	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, &skips{stderr: stderr})
 	if err != nil {
 		return err

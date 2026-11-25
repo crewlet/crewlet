@@ -147,7 +147,9 @@
 //   - `homeSkills`: the home's skill directories (absolute) its harness lists
 //     beside `skills`, a skill there listed under a copy's name (its
 //     frontmatter's, else its directory's) leaving the copy out, said: Muse
-//     lists no two skills of one name (measured).
+//     lists no two skills of one name (measured), and where the copy would
+//     win (over ~/.claude/skills and ~/.codex/skills, rows so1-so3) the
+//     person's skill keeps its name all the same.
 //
 // checkout-launch runs once, in W, before the harness: its -config is the spec
 // with `state` (the run's checkout state, remade per run), `agents` (the file
@@ -162,7 +164,9 @@
 // 65,536 bytes, cutting what passes it (measured), so each checkout is first
 // named ("read <file> for its instructions"), then handed whole, in order,
 // where the reminder still fits, by Muse's exact rendering (checkoutmuse.go);
-// the home's and W's own text are never cut for them. It writes state/nested.json, the -config of the harness's nested
+// the home's and W's own text are never cut for them. Its `skipped`, the
+// runner's lines for the run's skip log (Muse's nested hook switched off,
+// D709), it keeps there under the lock. It writes state/nested.json, the -config of the harness's nested
 // adapter, which the run's post-tool hook runs after each of the main loop's
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
