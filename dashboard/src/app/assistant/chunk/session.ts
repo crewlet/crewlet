@@ -62,6 +62,7 @@ import { withView } from "../view.ts";
 import { takeAction } from "./pageActions.ts";
 import { emit } from "../bus.ts";
 import { openInApp } from "./openInApp.ts";
+import { createDraftBox, type DraftBox } from "./AskComposer.tsx";
 import {
   EMPTY,
   activityOf,
@@ -92,13 +93,25 @@ function closeStreams(): void {
   for (const aside of asides) aside.close();
   asides.clear();
 }
+/** The drawer's unsent question, kept across a close for the conversation it resumes. */
+export const drawerDraft: DraftBox = createDraftBox();
+
 /** Bumped by every gesture that replaces the conversation, so a late answer for the last one is dropped. */
 let generation = 0;
 const listeners = new Set<() => void>();
 
+/** The busy flag last kept in the tab, so it is written only as it changes. */
+let keptBusy: boolean | null = null;
+
 function dispatch(event: TurnEvent): void {
   view = reduce(view, event);
-  setAssistantActivity(activityOf(view));
+  const activity = activityOf(view);
+  setAssistantActivity(activity);
+  const busy = activity !== "idle";
+  if (busy !== keptBusy) {
+    keptBusy = busy;
+    writeTab({ busy });
+  }
   for (const listener of listeners) listener();
 }
 
@@ -941,5 +954,7 @@ export function resetSessionForTest(): void {
   declines.clear();
   closeStreams();
   view = EMPTY;
+  keptBusy = null;
+  drawerDraft.write("");
   setAssistantActivity("idle");
 }
