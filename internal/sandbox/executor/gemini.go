@@ -119,7 +119,9 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 	lines := []string{
 		// THE HOME'S OWN SETTINGS BACK however the script exits; a run killed
 		// first leaves them to the next run's clear ([homeKeeper]).
-		"restore() { " + GeminiCLI{}.homeRestore(paths) + "; }; trap restore EXIT",
+		// What the checkouts' hook left out said first ([checkoutHome.saySkipped]).
+		"restore() { " + geminiCheckoutHome(paths).saySkipped() + "; " + GeminiCLI{}.homeRestore(paths) +
+			"; }; trap restore EXIT",
 		// THE RELEASE, read once for the gate, the record and the session's,
 		// before anything else: an older one never runs ([releaseGate]).
 		releaseRead(GeminiCLI{}.VersionCommand()),
@@ -138,9 +140,14 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		// once the gate has chosen the wiring.
 		"node " + q(paths.GeminiHelper()) + " settings " + q(paths.GeminiSettings()) + " " +
 			q(paths.GeminiHomeSettings()) + " " + q(paths.GeminiHeldSettings()) + " || exit 1",
+		// THE CHECKOUTS' SKILLS, and hk where the helper ran ([geminiCheckoutsGate]).
+		strings.TrimSuffix(geminiCheckoutsGate(paths), "\n"),
 		// NOTHING OF CREWLET'S OWN SWITCHED OFF OR REPLACED where no tier of the
-		// run's undoes it ([geminiGuard]), checked before Gemini CLI first starts.
-		"node " + q(paths.GeminiHelper()) + " guard" + geminiGuard(req) + " || exit 1",
+		// run's undoes it ([geminiGuard]), checked before Gemini CLI first starts;
+		// the checkouts' hook switched off only said in the skip log (D709).
+		"gk=" + q(geminiCheckoutsHook) + "; gs=" + q(geminiCheckoutHome(paths).skipped()),
+		"node " + q(paths.GeminiHelper()) + " guard" + geminiGuard(req) +
+			` ${hk:+--checkouts "$gk" --skipped "$gs"} || exit 1`,
 		// WHETHER NO OTHER SERVER CAN SPELL THE BRIDGE'S TOOLS, read before the
 		// harness reads its settings ([geminiShadowGuard]).
 		geminiShadowGuard(paths),
@@ -192,6 +199,7 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		`rm -f `+before+`; if [ "$k" = yes ]; then node `+q(paths.GeminiHelper())+` ids `+q(paths.GeminiChats())+
 			` "$s" > `+before+`.part 2> /dev/null && mv -f `+before+`.part `+before+`; else : > `+before+`; fi`,
 		`if [ "$k" = yes ]; then set -- --resume "$s"; else set -- --session-id "$s"; fi`,
+		geminiIncludeRoots(paths),
 		run,
 		"node "+q(paths.GeminiHelper())+" usage "+q(paths.GeminiChats())+` "$s" `+before,
 		geminiLocate(paths),
@@ -330,8 +338,12 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 	if hooked {
 		files[paths.GeminiTake()] = geminiTakeScript
 	}
-	if err := geminiWired(files, req, paths, paths.GeminiSettings(), paths.GeminiTakeConfig(),
-		paths.GeminiTakes(session.ID), hooked); err != nil {
+	helped, err := writeGeminiCheckouts(ctx, box, req, paths)
+	if err != nil {
+		return "", err
+	}
+	if err = geminiWired(files, req, paths, paths.GeminiSettings(), paths.GeminiTakeConfig(),
+		paths.GeminiTakes(session.ID), hooked, helped); err != nil {
 		return "", err
 	}
 	// AND THE SAME FILES UNDER THE JOB'S OTHER BRIDGE TOKEN, for a session the
@@ -348,8 +360,8 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 		}
 		rewired := req
 		rewired.MCPServers, rewired.Steer, rewired.SkillLoads = f.MCPServers, f.Steer, f.SkillLoads
-		if err := geminiWired(files, rewired, paths, paths.GeminiSettings()+".fresh",
-			paths.GeminiTakeConfig()+".fresh", paths.GeminiTakes(session.Fresh), hooked); err != nil {
+		if err = geminiWired(files, rewired, paths, paths.GeminiSettings()+".fresh",
+			paths.GeminiTakeConfig()+".fresh", paths.GeminiTakes(session.Fresh), hooked, helped); err != nil {
 			return "", err
 		}
 	}
@@ -372,7 +384,7 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 		return "", fmt.Errorf("executor: clearing the last run's skills for Gemini CLI: %w", err)
 	}
 	for path, content := range files {
-		if err := box.WriteFile(ctx, path, content); err != nil {
+		if err = box.WriteFile(ctx, path, content); err != nil {
 			return "", fmt.Errorf("executor: writing %s for Gemini CLI: %w", path, err)
 		}
 	}
@@ -383,7 +395,7 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 // settingsPath, and where the run is hooked, its take script's configuration,
 // at takePath, naming takes as the session's record of takes.
 func geminiWired(files map[string][]byte, req sandbox.RunRequest, paths Paths, settingsPath, takePath,
-	takes string, hooked bool) error {
+	takes string, hooked, helped bool) error {
 
 	if hooked {
 		take, err := geminiTakeConfig(req, takes)
@@ -392,7 +404,7 @@ func geminiWired(files map[string][]byte, req sandbox.RunRequest, paths Paths, s
 		}
 		files[takePath] = take
 	}
-	settings, err := json.MarshalIndent(geminiSettings(req, paths, hooked), "", "  ")
+	settings, err := json.MarshalIndent(geminiSettings(req, paths, hooked, helped), "", "  ")
 	if err != nil {
 		return fmt.Errorf("executor: rendering Gemini CLI's settings: %w", err)
 	}
@@ -415,7 +427,7 @@ func geminiSkillName(s sandbox.Skill) string { return sandbox.SkillNamespace + "
 // in delegated work; the bridge's BeforeTool hook ([geminiBridgedHook]); and
 // the take script's hooks where wired: AfterTool for
 // skill loads, AfterAgent for notes ([GeminiCLISteerInstruction]).
-func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string]any {
+func geminiSettings(req sandbox.RunRequest, paths Paths, hooked, helped bool) map[string]any {
 	settings := map[string]any{
 		"privacy":      map[string]any{"usageStatisticsEnabled": false},
 		"general":      map[string]any{"enableAutoUpdate": false, "enableAutoUpdateNotification": false},
@@ -458,6 +470,10 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 		if req.Steer.Set() {
 			events["AfterAgent"] = hook()
 		}
+	}
+	if helped {
+		after, _ := events["AfterTool"].([]any)
+		events["AfterTool"] = append(after, geminiCheckoutsEntry(paths))
 	}
 	if len(events) > 0 {
 		settings["hooks"] = events
@@ -529,10 +545,12 @@ var _ homeKeeper = GeminiCLI{}
 // CLI has stopped, by the script's end or the next run's clear: the held copy
 // written over the run's, through a link as the home keeps it, or neither
 // where the home had none; nothing where none is held, so it runs any number
-// of times.
+// of times; and the checkouts' copies removed and a skip log no script
+// printed dropped ([checkoutHome.restore], [checkoutHome.dropSkipped]).
 func (GeminiCLI) homeRestore(paths Paths) string {
-	return fmt.Sprintf(`if [ -e %[1]s ]; then if [ -s %[1]s ]; then cat %[1]s > %[2]s && rm -f %[1]s; else rm -f %[1]s %[2]s; fi; fi`,
-		shellword.Quote(paths.GeminiHeldSettings()), shellword.Quote(paths.GeminiHomeSettings()))
+	h := geminiCheckoutHome(paths)
+	return everyStep(fmt.Sprintf(`if [ -e %[1]s ]; then if [ -s %[1]s ]; then cat %[1]s > %[2]s && rm -f %[1]s; else rm -f %[1]s %[2]s; fi; fi`,
+		shellword.Quote(paths.GeminiHeldSettings()), shellword.Quote(paths.GeminiHomeSettings())), h.restore(), h.dropSkipped())
 }
 
 // geminiHookName is the name of the run's hook, which a home's or a
@@ -603,5 +621,6 @@ func (GeminiCLI) artifactFiles(p Paths) []string {
 	return []string{p.GeminiHelper(), p.GeminiTake(), p.GeminiTakeConfig(), p.GeminiTakeConfig() + ".fresh",
 		p.GeminiAdminPolicy() + "/crewlet.toml",
 		p.GeminiSettings(), p.GeminiSettings() + ".fresh", p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem(),
-		p.GeminiUsageBefore(), p.GeminiUsageBefore() + ".part"}
+		p.GeminiUsageBefore(), p.GeminiUsageBefore() + ".part", p.GeminiNoteHelper(), p.GeminiCheckoutLaunch(),
+		p.GeminiCheckoutSections(), p.GeminiCheckoutRoots()}
 }
