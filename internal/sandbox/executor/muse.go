@@ -47,7 +47,7 @@ var (
 	_ inPlaceGate       = Muse{}
 	_ sessionJudge      = Muse{}
 	_ mcpDeferrer       = Muse{}
-	_ trimmer           = Muse{}
+	_ recordTrimmer     = Muse{}
 )
 
 // NewMuse returns the runner.
