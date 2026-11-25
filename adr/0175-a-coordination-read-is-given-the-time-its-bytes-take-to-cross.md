@@ -365,9 +365,11 @@ every put as the broker carries it and fail a key falling to the rest of a
 bucket of several classes, a value past its class's bound, or a declared
 class nothing wrote. A reading of the package's source fails a class
 constant, a key function built on one, or an entryClass's filter that no
-holding of the bucket its declaration touches declares, so a write no case
-reaches is held too. No boot window moves: every class a boot reads is a
-small value at the term.
+holding of the bucket its declaration touches declares, and every key a
+bucket of several classes is handed that it cannot trace back to one of
+them, such as a prefix and an id, unless it names the place and why. So a
+write no case reaches is held too. No boot window moves: every class a boot
+reads is a small value at the term.
 
 ## Why the obvious alternatives are wrong
 

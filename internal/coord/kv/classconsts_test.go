@@ -23,25 +23,26 @@ import (
 )
 
 // EVERY KEY CLASS THE PACKAGE WRITES WITH IS DECLARED BY THE BUCKET ITS KEY
-// REACHES, read off the source: each key a coord function or method builds is
-// followed through helpers, variables, lists, maps, views and returns to where
-// it ends ([classGate.reach]); every bucket it reaches must declare its class,
-// a segment this reading cannot read declared only by a wildcard. A way on it
+// REACHES, read off the source both ways: each key a coord function builds is
+// followed to every bucket it reaches ([classGate.reach]), which must declare
+// its class; each key a bucket of classes is handed is traced back to such a
+// key ([classGate.checkWrites]), so one built on no class fails. A way either
 // cannot follow fails unless [gateUnread] names the place and why.
 //
-// Mutation: drop ConversationHoldClass from positionsHolding, SaveLedgerClass
-// from uploadsHolding or the integration status from integrationsHolding; put
-// a session claim's or a node status row's key into the atlas sources through
-// a helper, a channel, a record, a list's index, a map's key, a Sprintf or a
-// builder value; or give the SSH tests' entryClass another filter or key: red.
+// Mutation: drop the body class, ConversationHoldClass or SaveLedgerClass
+// from its holding; put a session claim's key into the atlas sources through
+// a helper, a map's key, a Sprintf or a builder value; write "fam."+id or a
+// prefix constant's key to positions; or give the SSH tests' entryClass
+// another filter or key: red.
 func TestEveryKeyClassThePackageWritesWithIsDeclaredForItsBucket(t *testing.T) {
 	t.Parallel()
 	g := newClassGate(t, ".")
 	g.check(t)
 }
 
-// gateUnread is every place a key goes on that this reading cannot follow, by
-// file and enclosing function, with why it is no key of a bucket there.
+// gateUnread is every place this reading cannot follow a key on from, or
+// trace one back to, by file and enclosing function, with why it is no key
+// of a bucket there.
 var gateUnread = map[string]string{
 	"casline.go report": "the test seam's observer, set only by tests, which counts a batch by its key",
 }
@@ -58,6 +59,10 @@ type classGate struct {
 	excused  map[string]bool // gateUnread's entries this reading used
 	calls    map[*ast.FuncDecl][]called
 	fields   map[string]string // each struct field's type, by "Type.field"
+	globals  map[string]bool   // every package variable's name
+	refs     map[ast.Node]bool // every key built on a class ([classGate.refsIn])
+	// unlistedOf is each function's [classGate.unlisted], once read.
+	unlistedOf map[*ast.FuncDecl]string
 }
 
 // classRef is one key a declaration builds on a class, and where.
@@ -73,7 +78,8 @@ func newClassGate(t *testing.T, dir string) *classGate {
 	t.Helper()
 	g := &classGate{fset: token.NewFileSet(), coord: coordClassValues(t), local: map[string]string{},
 		holdings: fleetHoldingsByField(t), funcs: map[string][]*ast.FuncDecl{}, vars: map[string]string{},
-		excused: map[string]bool{}, fields: map[string]string{}}
+		excused: map[string]bool{}, fields: map[string]string{}, globals: map[string]bool{},
+		refs: map[ast.Node]bool{}, unlistedOf: map[*ast.FuncDecl]string{}}
 	for _, file := range parsePackage(t, g.fset, dir) {
 		for _, decl := range file.Decls {
 			g.decls = append(g.decls, decl)
@@ -99,6 +105,7 @@ func newClassGate(t *testing.T, dir string) *classGate {
 				for _, spec := range gen.Specs {
 					vs := spec.(*ast.ValueSpec)
 					for i, name := range vs.Names {
+						g.globals[name.Name] = true
 						switch {
 						case vs.Type != nil:
 							g.vars[name.Name] = baseType(vs.Type)
@@ -158,6 +165,7 @@ func (g *classGate) check(t *testing.T) {
 	entries, keys := 0, 0
 	for _, decl := range g.decls {
 		for _, r := range g.refsIn(t, decl) {
+			g.refs[r.node] = true
 			var f flow
 			switch {
 			case r.fn == nil:
@@ -187,17 +195,20 @@ func (g *classGate) check(t *testing.T) {
 			}
 		}
 	}
+	sites := g.checkWrites(t)
 	for key := range gateUnread {
 		if !g.excused[key] {
 			t.Errorf("gateUnread names %q, which this reading never met: drop it", key)
 		}
 	}
-	t.Logf("%d entryClass filters and %d keys followed to a bucket", entries, keys)
-	if entries < 10 || keys < 60 || !reached["coord.ConversationHoldKey"] || !reached["coord.SaveLedgerKey"] ||
-		!reached["coord.NodeStatusRowKey.Key"] {
+	t.Logf("%d entryClass filters and %d keys followed to a bucket; %d verbs on a bucket of classes traced "+
+		"back", entries, keys, sites)
+	if entries < 10 || keys < 60 || sites < 50 || !reached["coord.ConversationHoldKey"] ||
+		!reached["coord.SaveLedgerKey"] || !reached["coord.NodeStatusRowKey.Key"] {
 		t.Fatalf("premise: %d entryClass filters and %d keys followed to a bucket (conversation holds %v, "+
-			"save ledgers %v, node status rows %v), want every one in the package", entries, keys,
-			reached["coord.ConversationHoldKey"], reached["coord.SaveLedgerKey"], reached["coord.NodeStatusRowKey.Key"])
+			"save ledgers %v, node status rows %v) and %d verbs traced back, want every one in the package",
+			entries, keys, reached["coord.ConversationHoldKey"], reached["coord.SaveLedgerKey"],
+			reached["coord.NodeStatusRowKey.Key"], sites)
 	}
 }
 
@@ -1146,6 +1157,601 @@ func (g *classGate) reachVar(f frame, id *ast.Ident, depth int, seen map[string]
 	return out
 }
 
+// checkWrites fails t for every key a verb of a bucket declaring classes is
+// handed ([classGate.verbKey]) that this reading cannot trace back to a key
+// built on a class ([classGate.source]), but where gateUnread names the place
+// the trace is lost, and answers how many such verbs it traced. So a key the
+// forward reading never starts from, "fam."+id or a prefix constant's, fails.
+func (g *classGate) checkWrites(t *testing.T) int {
+	t.Helper()
+	sites := 0
+	for _, decl := range g.decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			buckets, key := g.verbKey(fn, call)
+			if key == nil || !slices.ContainsFunc(buckets, func(b string) bool { return len(g.holdings[b].classes) > 0 }) {
+				return true
+			}
+			sites++
+			for _, where := range g.source(trace{fn: fn}, key, false, 0, map[string]bool{}) {
+				t.Errorf("%s hands %v the key %s, traced back to %s: build it on a class (a coord builder, or "+
+					"coord.DocumentKey of a class constant), or name the place in gateUnread with why",
+					g.fset.Position(call.Pos()), buckets, exprString(key), where)
+			}
+			return true
+		})
+	}
+	return sites
+}
+
+// verbKey is the buckets call is a verb of ([bucketKeyArg]), called on a
+// bucket or through a variable holding a bucket's method, and the key it
+// hands them; no key for any other call.
+func (g *classGate) verbKey(fn *ast.FuncDecl, call *ast.CallExpr) ([]string, ast.Expr) {
+	var buckets []string
+	at := -1
+	verb := func(fun ast.Expr) {
+		sel, ok := fun.(*ast.SelectorExpr)
+		if !ok {
+			return
+		}
+		i, known := bucketKeyArg[sel.Sel.Name]
+		if b := g.bucketsOf(frame{fn: fn}, sel.X); known && len(b) > 0 {
+			buckets, at = union(buckets, b), i
+		}
+	}
+	verb(call.Fun)
+	if id, ok := call.Fun.(*ast.Ident); ok && id.Obj != nil && id.Obj.Kind == ast.Var && paramOf(fn, id) < 0 {
+		for _, v := range values(fn, id) {
+			verb(v)
+		}
+	}
+	if at < 0 || at >= len(call.Args) {
+		return nil, nil
+	}
+	return buckets, call.Args[at]
+}
+
+// trace is a function a key is traced back through, and the call it was
+// entered by where the trace went into it for a result; nil where its
+// parameters hold whatever every call of it hands them.
+type trace struct {
+	fn   *ast.FuncDecl
+	from *entered
+}
+
+// entered is a call a trace went into a function by, in the trace it is in.
+type entered struct {
+	call *ast.CallExpr
+	in   trace
+}
+
+// chain names the calls tr was entered by, for a trace's seen set.
+func (tr trace) chain() string {
+	if tr.from == nil {
+		return ""
+	}
+	return fmt.Sprintf("%p<%s", tr.from.call, tr.from.in.chain())
+}
+
+// bind is tr with the unbound trace of fn it ends in entered by e.
+func (tr trace) bind(fn *ast.FuncDecl, e *entered) trace {
+	if tr.from == nil {
+		if tr.fn == fn {
+			return trace{fn: fn, from: e}
+		}
+		return tr
+	}
+	return trace{fn: tr.fn, from: &entered{call: tr.from.call, in: tr.from.in.bind(fn, e)}}
+}
+
+// source is every place the value e in tr's function may come from that is
+// no key built on a class, nil where there is none: a key traced through
+// variables, parameters, function literals' parameters, lists ranged over,
+// helpers' results and an entryClass's key; one read back off an entry
+// (entry) to the key or the filter of the read that delivered it. Any other
+// shape, a concatenation or a literal among them, is lost.
+func (g *classGate) source(tr trace, e ast.Expr, entry bool, depth int, seen map[string]bool) []string {
+	if !entry && g.refs[e] {
+		return nil
+	}
+	if depth > 24 {
+		return g.lost(tr, e, "too deep to trace")
+	}
+	at := fmt.Sprintf("%p/%p/%v/%s", tr.fn, e, entry, tr.chain())
+	if seen[at] {
+		return nil
+	}
+	seen[at] = true
+	switch e := e.(type) {
+	case *ast.ParenExpr:
+		return g.source(tr, e.X, entry, depth+1, seen)
+	case *ast.CompositeLit: // a literal list ranged over
+		var out []string
+		for _, el := range e.Elts {
+			out = append(out, g.source(tr, el, entry, depth+1, seen)...)
+		}
+		return out
+	case *ast.Ident:
+		return g.sourceIdent(tr, e, entry, depth, seen)
+	case *ast.CallExpr:
+		return g.sourceCall(tr, e, entry, depth, seen)
+	case *ast.BinaryExpr:
+		return g.lost(tr, e, "a concatenation, whose class this reading cannot read")
+	case *ast.SelectorExpr:
+		return g.lost(tr, e, "a field or another package's name, of no class this reading reads")
+	case *ast.BasicLit:
+		return g.lost(tr, e, "a literal, of no class")
+	}
+	return g.lost(tr, e, fmt.Sprintf("a %T", e))
+}
+
+// lost is the place n in tr's function, where a trace ends on no class, but
+// where gateUnread names it.
+func (g *classGate) lost(tr trace, n ast.Node, what string) []string {
+	if g.excuse(tr.fn, n) {
+		return nil
+	}
+	return []string{g.fset.Position(n.Pos()).String() + " (" + what + ")"}
+}
+
+// sourceIdent is source's of a name: a parameter, a function literal's
+// parameter, or a local variable, by every value it is given.
+func (g *classGate) sourceIdent(tr trace, id *ast.Ident, entry bool, depth int, seen map[string]bool) []string {
+	fn := tr.fn
+	if _, ok := g.local[id.Name]; ok && (id.Obj == nil || id.Obj.Kind == ast.Con) {
+		return g.lost(tr, id, "the constant "+id.Name+", which names no class: a class's constant is "+
+			"named …Class, a single key's …Key")
+	}
+	if p := paramOf(fn, id); p >= 0 {
+		calls, why := g.entering(tr)
+		if why != "" {
+			return g.lost(tr, id, why)
+		}
+		var out []string
+		for _, e := range calls {
+			if p >= len(e.call.Args) || variadic(fn, p) {
+				out = append(out, g.lost(e.in, e.call, "a call filling "+id.Name+" this reading cannot read")...)
+				continue
+			}
+			out = append(out, g.source(e.in, e.call.Args[p], entry, depth+1, seen)...)
+		}
+		return out
+	}
+	if id.Obj == nil || id.Obj.Kind != ast.Var || !declaredIn(fn, id) {
+		return g.lost(tr, id, "a name of the package's, of no class")
+	}
+	if lit, p := funcLitParam(fn, id); lit != nil {
+		return g.sourceLitParam(tr, lit, p, entry, depth, seen)
+	}
+	defs, ranges, unread := assigned(fn, id)
+	if len(defs)+len(ranges)+len(unread) == 0 {
+		return g.lost(tr, id, "a variable given no value this reading can see")
+	}
+	var out []string
+	for _, n := range unread {
+		out = append(out, g.lost(tr, n, "a value this reading cannot tell")...)
+	}
+	for _, d := range defs {
+		out = append(out, g.source(tr, d, entry, depth+1, seen)...)
+	}
+	for _, r := range ranges {
+		x, isLocal := r.X.(*ast.Ident)
+		switch {
+		case r.Key != nil && sameVar(r.Key, id):
+			out = append(out, g.lost(tr, r, "a map's key, or a list's index")...)
+		case isLocal && x.Obj != nil && x.Obj.Kind == ast.Var && paramOf(fn, x) < 0 && declaredIn(fn, x):
+			out = append(out, g.sourceList(tr, x, entry, depth, seen)...)
+		default:
+			out = append(out, g.source(tr, r.X, entry, depth+1, seen)...) // a literal list, else lost
+		}
+	}
+	return out
+}
+
+// declaredIn reports whether id is declared in fn's body or signature, not
+// at the package's level.
+func declaredIn(fn *ast.FuncDecl, id *ast.Ident) bool {
+	decl, ok := id.Obj.Decl.(ast.Node)
+	return ok && decl.Pos() >= fn.Pos() && decl.End() <= fn.End()
+}
+
+// entering is every call that fills tr's function's parameters: the one it
+// was entered by, else every call of it; why where this reading cannot list
+// them.
+func (g *classGate) entering(tr trace) ([]entered, string) {
+	if tr.from != nil {
+		return []entered{*tr.from}, ""
+	}
+	if why := g.unlisted(tr.fn); why != "" {
+		return nil, why
+	}
+	var out []entered
+	for _, c := range g.callers(tr.fn) {
+		out = append(out, entered{call: c.call, in: trace{fn: c.fn}})
+	}
+	if len(out) == 0 {
+		return nil, "a parameter of " + tr.fn.Name.Name + ", which no call in this package fills"
+	}
+	return out, ""
+}
+
+// sameVar reports whether e names the variable id does.
+func sameVar(e ast.Expr, id *ast.Ident) bool {
+	v, ok := e.(*ast.Ident)
+	return ok && v.Name == id.Name && v.Obj == id.Obj
+}
+
+// sourceList is source's of the elements of the local list c: those of the
+// literal it is made of and of every append onto it. Any other value given
+// it, an element set by index, or c handed to a call that may fill it, is
+// lost.
+func (g *classGate) sourceList(tr trace, c *ast.Ident, entry bool, depth int, seen map[string]bool) []string {
+	fn := tr.fn
+	var out []string
+	defs, ranges, unread := assigned(fn, c)
+	for _, r := range ranges {
+		unread = append(unread, r)
+	}
+	for _, n := range unread {
+		out = append(out, g.lost(tr, n, "a list given values this reading cannot tell")...)
+	}
+	for _, d := range defs {
+		call, _ := d.(*ast.CallExpr)
+		switch {
+		case call == nil:
+			out = append(out, g.source(tr, d, entry, depth+1, seen)...) // a literal list, else lost
+		case isIdent(call.Fun, "make"):
+		case isIdent(call.Fun, "append") && len(call.Args) > 0 && sameVar(call.Args[0], c) &&
+			!call.Ellipsis.IsValid():
+			for _, a := range call.Args[1:] {
+				out = append(out, g.source(tr, a, entry, depth+1, seen)...)
+			}
+		default:
+			out = append(out, g.lost(tr, d, "a list made by a call this reading cannot trace")...)
+		}
+	}
+	for _, use := range uses(fn, c) {
+		path := pathTo(fn.Body, use)
+		switch p := path[len(path)-2].(type) {
+		case *ast.IndexExpr:
+			if p.X == use && isAssignedTo(path[len(path)-3], p) {
+				out = append(out, g.lost(tr, p, "an element set by index")...)
+			}
+		case *ast.CallExpr:
+			if !isIdent(p.Fun, "append") && !isIdent(p.Fun, "len") {
+				out = append(out, g.lost(tr, p, "a list handed to a call, which may fill it")...)
+			}
+		}
+	}
+	return out
+}
+
+// assigned is every value fn gives the local variable id: each value its
+// :=, = or var gives it (the first of a comma-ok or of a call's results),
+// each range giving it one, and each place it is given one this reading
+// cannot tell.
+func assigned(fn *ast.FuncDecl, id *ast.Ident) (defs []ast.Expr, ranges []*ast.RangeStmt, unread []ast.Node) {
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			for i, l := range n.Lhs {
+				switch {
+				case !sameVar(l, id):
+				case n.Tok != token.ASSIGN && n.Tok != token.DEFINE:
+					unread = append(unread, n)
+				case len(n.Lhs) == len(n.Rhs):
+					defs = append(defs, n.Rhs[i])
+				case len(n.Rhs) == 1 && i == 0:
+					defs = append(defs, n.Rhs[0])
+				default:
+					unread = append(unread, n)
+				}
+			}
+		case *ast.RangeStmt:
+			if (n.Key != nil && sameVar(n.Key, id)) || (n.Value != nil && sameVar(n.Value, id)) {
+				ranges = append(ranges, n)
+			}
+		case *ast.ValueSpec:
+			for i, name := range n.Names {
+				switch {
+				case name.Obj != id.Obj || len(n.Values) == 0:
+				case len(n.Names) == len(n.Values):
+					defs = append(defs, n.Values[i])
+				default:
+					unread = append(unread, n)
+				}
+			}
+		case *ast.UnaryExpr:
+			if n.Op == token.AND && sameVar(n.X, id) {
+				unread = append(unread, n) // handed by its address, to be set where this reading cannot see
+			}
+		}
+		return true
+	})
+	return defs, ranges, unread
+}
+
+// funcLitParam is the function literal in fn whose parameter id is, and its
+// index; nil for none.
+func funcLitParam(fn *ast.FuncDecl, id *ast.Ident) (*ast.FuncLit, int) {
+	var lit *ast.FuncLit
+	at := -1
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		l, ok := n.(*ast.FuncLit)
+		if !ok || lit != nil {
+			return lit == nil
+		}
+		i := 0
+		for _, f := range l.Type.Params.List {
+			for _, name := range f.Names {
+				if name.Obj == id.Obj && name.Name == id.Name {
+					lit, at = l, i
+				}
+				i++
+			}
+			if len(f.Names) == 0 {
+				i++
+			}
+		}
+		return true
+	})
+	return lit, at
+}
+
+// sourceLitParam is source's of a function literal's parameter at p: what
+// every call of the variable holding the literal hands it, or, for an entry,
+// what the read the literal is handed to delivers, under its key or filter.
+func (g *classGate) sourceLitParam(tr trace, lit *ast.FuncLit, p int, entry bool, depth int,
+	seen map[string]bool) []string {
+	fn := tr.fn
+	path := pathTo(fn.Body, lit)
+	var holder *ast.Ident
+	switch parent := path[len(path)-2].(type) {
+	case *ast.AssignStmt:
+		if j := slices.Index(parent.Rhs, ast.Expr(lit)); j >= 0 && len(parent.Lhs) == len(parent.Rhs) {
+			holder, _ = parent.Lhs[j].(*ast.Ident)
+		}
+	case *ast.CallExpr:
+		if key := g.readKeyArg(fn, parent); entry && key != nil {
+			return g.source(tr, key, false, depth+1, seen)
+		}
+	}
+	if holder == nil {
+		return g.lost(tr, lit, "a parameter of a function literal handed where this reading cannot list its calls")
+	}
+	var out []string
+	for _, use := range uses(fn, holder) {
+		path := pathTo(fn.Body, use)
+		switch parent := path[len(path)-2].(type) {
+		case *ast.CallExpr:
+			if parent.Fun == use && p < len(parent.Args) {
+				out = append(out, g.source(tr, parent.Args[p], entry, depth+1, seen)...)
+				continue
+			}
+		case *ast.AssignStmt:
+			if slices.Contains(parent.Lhs, use.(ast.Expr)) {
+				continue
+			}
+		}
+		out = append(out, g.lost(tr, use, "a function literal handed on, whose calls this reading cannot list")...)
+	}
+	return out
+}
+
+// readKeyArg is the argument of call right after a bucket: the key a read
+// reads, or the filter a listing lists; nil for none.
+func (g *classGate) readKeyArg(fn *ast.FuncDecl, call *ast.CallExpr) ast.Expr {
+	for i, a := range call.Args[:max(len(call.Args)-1, 0)] {
+		if len(g.bucketsOf(frame{fn: fn}, a)) > 0 {
+			return call.Args[i+1]
+		}
+	}
+	return nil
+}
+
+// sourceCall is source's of a call's result: an entryClass's key of an
+// entry, a key read back off an entry, the key or filter a read is handed
+// (entry), or a helper's results.
+func (g *classGate) sourceCall(tr trace, call *ast.CallExpr, entry bool, depth int, seen map[string]bool) []string {
+	fn := tr.fn
+	if entry {
+		if key := g.readKeyArg(fn, call); key != nil {
+			return g.source(tr, key, false, depth+1, seen)
+		}
+	}
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok && !entry {
+		switch {
+		case sel.Sel.Name == "key" && len(call.Args) == 1 && g.entryClassValue(fn, sel.X):
+			return g.sourceEntryKey(tr, sel.X, tr, call.Args[0], depth, seen)
+		case sel.Sel.Name == "Key" && len(call.Args) == 0:
+			return g.source(tr, sel.X, true, depth+1, seen) // read back off an entry
+		}
+	}
+	callees := g.callees(fn, call.Fun)
+	if len(callees) == 0 {
+		return g.lost(tr, call, "a call this reading cannot trace")
+	}
+	var out []string
+	for _, callee := range callees {
+		if callee.Body == nil || callee.Type.Results == nil {
+			out = append(out, g.lost(tr, call, "a call answering nothing this reading can read")...)
+			continue
+		}
+		results := callee.Type.Results.NumFields()
+		into := trace{fn: callee, from: &entered{call: call, in: tr}}
+		ast.Inspect(callee.Body, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.FuncLit:
+				return false
+			case *ast.ReturnStmt:
+				if len(n.Results) != results {
+					out = append(out, g.lost(into, n, "a return this reading cannot read")...)
+					return false
+				}
+				out = append(out, g.source(into, n.Results[0], entry, depth+1, seen)...)
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// sourceEntryKey is source's of an entryClass's key of the entry x (in xt):
+// the entryClass c (in ct) is, by each call of the method it is the receiver
+// of, a package variable, a literal or a helper's result; none where
+// entryRef read the literal and its key is a builder, x's where it is x.
+func (g *classGate) sourceEntryKey(ct trace, c ast.Expr, xt trace, x ast.Expr, depth int,
+	seen map[string]bool) []string {
+	if depth > 24 {
+		return g.lost(ct, c, "too deep to trace")
+	}
+	var lit *ast.CompositeLit
+	switch c := c.(type) {
+	case *ast.Ident:
+		if receiverName(ct.fn) == c.Name {
+			calls, why := g.entering(ct)
+			if why != "" {
+				return g.lost(ct, c, why)
+			}
+			var out []string
+			for _, e := range calls {
+				sel, ok := e.call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					out = append(out, g.lost(e.in, e.call, "an entryClass this reading cannot tell")...)
+					continue
+				}
+				out = append(out, g.sourceEntryKey(e.in, sel.X, xt.bind(ct.fn, &e), x, depth+1, seen)...)
+			}
+			return out
+		}
+		if c.Obj == nil || !declaredIn(ct.fn, c) {
+			lit = g.packageLit(c.Name)
+		}
+	case *ast.CompositeLit:
+		lit = c
+	case *ast.CallExpr:
+		var out []string
+		callees := g.callees(ct.fn, c.Fun)
+		for _, callee := range callees {
+			ast.Inspect(callee.Body, func(n ast.Node) bool {
+				if ret, ok := n.(*ast.ReturnStmt); ok && len(ret.Results) == 1 {
+					out = append(out, g.sourceEntryKey(trace{fn: callee, from: &entered{call: c, in: ct}},
+						ret.Results[0], xt, x, depth+1, seen)...)
+				}
+				_, inner := n.(*ast.FuncLit)
+				return !inner
+			})
+		}
+		if len(callees) > 0 {
+			return out
+		}
+	}
+	if lit == nil || !g.refs[lit] {
+		return g.lost(ct, c, "an entryClass this reading cannot tell")
+	}
+	for _, el := range lit.Elts {
+		if kv, ok := el.(*ast.KeyValueExpr); ok && isIdent(kv.Key, "key") {
+			if _, whole := kv.Value.(*ast.FuncLit); whole {
+				return g.source(xt, x, false, depth+1, seen) // the entry is its key (entryRef)
+			}
+		}
+	}
+	return nil
+}
+
+// packageLit is the composite literal the package variable name is
+// declared as, nil for none.
+func (g *classGate) packageLit(name string) *ast.CompositeLit {
+	for _, decl := range g.decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs := spec.(*ast.ValueSpec)
+			for i, n := range vs.Names {
+				if n.Name == name && i < len(vs.Values) {
+					lit, _ := vs.Values[i].(*ast.CompositeLit)
+					return lit
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// unlisted is why this reading cannot list every call of fn, "" where it
+// can: fn named as a value, or a method of its name called on a value whose
+// type this reading cannot tell.
+func (g *classGate) unlisted(fn *ast.FuncDecl) string {
+	if why, ok := g.unlistedOf[fn]; ok {
+		return why
+	}
+	name, recv, why := fn.Name.Name, "", ""
+	if fn.Recv != nil {
+		recv = baseType(fn.Recv.List[0].Type)
+	}
+	for _, decl := range g.decls {
+		in, _ := decl.(*ast.FuncDecl)
+		skip := map[ast.Node]bool{}
+		ast.Inspect(decl, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.CallExpr:
+				skip[n.Fun] = true
+			case *ast.FuncDecl:
+				skip[n.Name] = true
+			case *ast.KeyValueExpr:
+				skip[n.Key] = true
+			case *ast.SelectorExpr:
+				skip[n.Sel] = true
+				if recv == "" || n.Sel.Name != name || why != "" || g.qualifier(n.X) {
+					return true
+				}
+				switch typ := g.typeOfIn(in, n.X); {
+				case typ == "":
+					why = fmt.Sprintf("%s called at %s on a value this reading cannot type", name,
+						g.fset.Position(n.Pos()))
+				case typ == recv && !skip[n]:
+					why = fmt.Sprintf("%s named as a value at %s", name, g.fset.Position(n.Pos()))
+				}
+			case *ast.Ident:
+				if recv == "" && n.Name == name && !skip[n] && (n.Obj == nil || n.Obj.Kind == ast.Fun) && why == "" {
+					why = fmt.Sprintf("%s named as a value at %s", name, g.fset.Position(n.Pos()))
+				}
+			}
+			return true
+		})
+	}
+	g.unlistedOf[fn] = why
+	return why
+}
+
+// typeOfIn is typeOf's in fn, "" outside a function.
+func (g *classGate) typeOfIn(fn *ast.FuncDecl, x ast.Expr) string {
+	if fn == nil {
+		return ""
+	}
+	return g.typeOf(fn, x)
+}
+
+// qualifier reports whether x names an imported package.
+func (g *classGate) qualifier(x ast.Expr) bool {
+	id, ok := x.(*ast.Ident)
+	if !ok || id.Obj != nil || g.globals[id.Name] || len(g.funcs[id.Name]) > 0 {
+		return false
+	}
+	_, local := g.local[id.Name]
+	return !local
+}
+
 // ends reports whether fun is a function a key handed to ends in: one
 // [endsIn] names, the package's logger, a coord function answering anything
 // but one text, a builtin that measures it or deletes it from a map, or an
@@ -1266,6 +1872,8 @@ func (g *classGate) typeIn(fn *ast.FuncDecl, x ast.Expr, seen map[ast.Expr]bool)
 		return baseType(x.Type)
 	case *ast.UnaryExpr:
 		return g.typeIn(fn, x.X, seen)
+	case *ast.TypeAssertExpr:
+		return baseType(x.Type)
 	case *ast.CallExpr:
 		for _, c := range g.calleesIn(fn, x.Fun, seen) {
 			if c.Type.Results != nil && len(c.Type.Results.List) > 0 {
