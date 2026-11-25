@@ -224,7 +224,7 @@ describe("what draft.set declares it takes", () => {
       editable(20, 120, 200),
     ]) {
       const context = sent(past);
-      expect(context.accepts).toEqual(["draft.set"]);
+      expect(context.accepts).toEqual(["draft.set", "page.read"]);
       expect(context.action_args?.["draft.set"]).toBeUndefined();
       expect(pageContextFits(context)).toBe(true);
     }
@@ -276,7 +276,7 @@ describe("what draft.set declares it takes", () => {
       params: {},
       query: {},
     };
-    const draft = editable(11, 100, 150, "y".repeat(ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES));
+    const draft = editable(18, 100, 150, "y".repeat(ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES));
     const args = draftSetArgs(draft);
     const action = { ...draftSetAction(() => null), args } as PageActionSpec<unknown>;
     const declared = buildPageContext(page, { draft });
@@ -287,9 +287,9 @@ describe("what draft.set declares it takes", () => {
     );
     const context = buildPageContext(page, { draft, actions: { "draft.set": action } });
     expect(pageContextFits(context)).toBe(true);
-    expect(context.accepts).toEqual(["draft.set"]);
+    expect(context.accepts).toEqual(["draft.set", "page.read"]);
     expect(context.action_args?.["draft.set"]).toBeUndefined();
-    expect(context.draft?.fields).toHaveLength(11);
+    expect(context.draft?.fields).toHaveLength(18);
     expect(context.draft?.more).toBe(0);
   });
 });

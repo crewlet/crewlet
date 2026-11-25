@@ -78,7 +78,8 @@ import { useAssistantDraft, useDraftState, writeVia } from "~/app/assistant/draf
 import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
 import { linkSegment } from "~/lib/segment.ts";
 import { VendorWords } from "~/ui/VendorWords.tsx";
-import { SetupStepsAside, SetupStepsSheet } from "./SetupSteps.tsx";
+import { NeedsFirst, SetupStepsAside, SetupStepsSheet } from "./SetupSteps.tsx";
+import { RedirectStep } from "./RedirectStep.tsx";
 import { AddIdentity } from "~/components/growth/SetupSteps.tsx";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { SERVICE_NAMES } from "~/lib/services.ts";
@@ -255,8 +256,11 @@ export function FieldHelp({
 }
 
 /** The kit's input for a requirement's kind: a toggle is a two-way choice. A
- * `consent` requirement is a sign-in, never a value ([ConsentSignIn]). */
-export function valueKind(kind: Exclude<SetupRequirementKind, "consent">): ValueFieldKind {
+ * `consent` requirement is a sign-in and a `redirect` one an address to
+ * register, never a value ([ConsentSignIn], [RedirectStep]). */
+export function valueKind(
+  kind: Exclude<SetupRequirementKind, "consent" | "redirect">,
+): ValueFieldKind {
   if (kind === "add_identity") return "text";
   return kind === "toggle" ? "choice" : kind;
 }
@@ -269,7 +273,7 @@ export function valueKind(kind: Exclude<SetupRequirementKind, "consent">): Value
  */
 export function fieldKind(r: SetupRequirement): ValueFieldKind {
   if (r.kind === "secret" && r.multiline) return "secret-multiline";
-  return valueKind(r.kind as Exclude<SetupRequirementKind, "consent">);
+  return valueKind(r.kind as Exclude<SetupRequirementKind, "consent" | "redirect">);
 }
 
 /** The root font size in px, which the layout's rem split is read in. */
@@ -343,10 +347,15 @@ export function gateOpen(r: SetupRequirement, answered: Answered): boolean {
   return answered(r.required_when.field) === r.required_when.equals;
 }
 
+/** Whether a kind is a step at the vendor, holding no value (`setup.Kind.AtVendor`). */
+export function atVendor(kind: SetupRequirementKind): boolean {
+  return kind === "add_identity" || kind === "consent" || kind === "redirect";
+}
+
 /** Whether a requirement must be answered, given what the form now holds. */
 export function neededField(r: SetupRequirement, answered: Answered): boolean {
-  // A SIGN-IN IS NO ANSWER a save waits for: it is made at the vendor.
-  if (r.kind === "consent") return false;
+  // A STEP AT THE VENDOR IS NO ANSWER a save waits for: a sign-in, an address.
+  if (atVendor(r.kind)) return false;
   if (!r.required_when) return r.required;
   return gateOpen(r, answered);
 }
@@ -876,8 +885,8 @@ export function SetupForm({
   const editable = useCallback(
     (section: SetupSection, r: SetupRequirement) => {
       const own = shownBy.get(sectionKey(section)) ?? [];
-      // AN IDENTITY STEP IS DONE AT THE VENDOR: the form shows it and holds no value for it.
-      if (r.kind === "add_identity") return false;
+      // A STEP AT THE VENDOR: the form shows it and holds no value for it.
+      if (atVendor(r.kind)) return false;
       return publicView(r) === undefined && shownField(r, answeredIn(section, own));
     },
     [shownBy, answeredIn],
@@ -1003,7 +1012,7 @@ export function SetupForm({
     const send: Record<string, string> = {};
     const generate: string[] = [];
     for (const r of reqs) {
-      if (r.kind === "add_identity" || r.kind === "consent") continue;
+      if (atVendor(r.kind)) continue;
       if (r.kind === "secret" && r.mintable) {
         // ONLY WHERE THERE IS NOTHING YET. A mintable credential this
         // company already holds is left alone: regenerating one is a
@@ -1247,6 +1256,7 @@ export function SetupForm({
                 {intro}
               </p>
             ))}
+            <NeedsFirst steps={steps} />
             {cautions.map((caution) => (
               <Callout key={caution.title} variant="warning" title={caution.title}>
                 {caution.body}
@@ -1550,7 +1560,15 @@ export function SetupForm({
         {r.kind === "add_identity" && r.identity ? (
           <AddIdentity step={r.identity} product={section.name} why={r.hint} />
         ) : r.kind === "consent" ? (
-          <ConsentSignIn kind={section.tool.key} label={r.label} signedIn={r.present} help={help} />
+          <ConsentSignIn
+            kind={section.tool.key}
+            label={r.label}
+            optional={!r.required}
+            signedIn={r.present}
+            help={help}
+          />
+        ) : r.kind === "redirect" ? (
+          <RedirectStep r={r} />
         ) : shown ? (
           // WHAT THE ENGINE RENDERED, copied whole: a block a person pastes
           // into the app's own shell, which this form keeps no text of.
@@ -1795,11 +1813,14 @@ function KeyCheck({
 function ConsentSignIn({
   kind,
   label,
+  optional,
   signedIn,
   help,
 }: {
   kind: string;
   label: string;
+  /** Marked as the kit marks an optional field, never in the label's words. */
+  optional: boolean;
   signedIn: boolean;
   help: ReactNode;
 }) {
@@ -1820,7 +1841,7 @@ function ConsentSignIn({
     }
   }
   return (
-    <FormField as="fieldset" label={label} helper={help}>
+    <FormField as="fieldset" label={label} optional={optional} helper={help}>
       <div className="row gap-2">
         <Button onClick={() => void start()} disabled={busy}>
           {signedIn ? "Sign in again" : "Sign in"}

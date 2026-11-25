@@ -131,10 +131,10 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 		// skills, prompts and system-prompt files load beside the agent
 		// directory's. Pi only creates the directory a sessionDir setting
 		// names: the run's session is its own file.
-		"--approve",
-		// PI'S MCP SUPPORT NAMED, which the run's servers ride on: a path the
-		// launch names is loaded whatever a settings file enables (1.6.0).
-		"-e", "builtin:mcp"}
+		// PI'S MCP SUPPORT IS ITS OWN, on unless a settings file takes it away,
+		// which the extension refuses rather than the launch loading it back
+		// (mcpRemovedBy in pi_extension.mjs; 1.6.0).
+		"--approve"}
 	// VERBATIM, as the pi entry names it in pi's own terms (provider/id).
 	if req.Model != "" {
 		parts = append(parts, "--model", q(req.Model))

@@ -267,7 +267,7 @@ describe("the Agents tab's draft, as Ask Crewlet reads it", () => {
       actions: { "draft.set": action as PageActionSpec<unknown> },
     });
     expect(pageContextFits(context)).toBe(true);
-    expect(context.accepts).toEqual(["draft.set"]);
+    expect(context.accepts).toEqual(["draft.set", "page.read"]);
     expect(context.action_args?.["draft.set"]).toBeUndefined();
     expect(context.draft?.fields.slice(0, 6).map((f) => f.path)).toEqual(drafted);
   });
