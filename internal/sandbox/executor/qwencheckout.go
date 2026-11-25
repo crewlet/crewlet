@@ -14,18 +14,25 @@ import (
 // started there and never from a checkout below where it starts, not even on
 // a read (measured, B2b): its context files, QWEN.md and AGENTS.md unless
 // context.fileName names others (the script's helper sets them,
-// [qwenCheckoutsGate]), then the always-on rules of .qwen/rules, each whole
-// (no bound measured), and the skills of
-// .qwen/skills and .agents/skills (.qwen winning a name, no recursion), copied
+// [qwenCheckoutsGate]), then the always-on rules of .qwen/rules, each as it
+// loads one (its body, no bound measured; the helper's qwen form), and the
+// skills of .qwen/skills and .agents/skills (.qwen winning a name, no recursion), copied
 // as `<repository>-<skill>` beside the run's own `crewlet-<skill>`. Qwen Code
 // imports no file from the home's QWEN.md by an absolute or relative path, so
 // the text is copied; a checkout's own relative imports then resolve against
 // the home.
 var qwenCheckouts = checkoutSpec{Instructions: []checkoutSlot{{Names: []string{"QWEN.md"}},
 	{Names: []string{"AGENTS.md"}}, {Tree: &checkoutTree{Tree: ".qwen/rules", Suffix: ".md", Form: checkoutFormQwen,
-		Scoped: &checkoutScope{Keys: []string{"paths"}, Whole: []string{}}}}},
-	Limit: checkoutUnlimited, SkillDirs: []checkoutSkillDir{{Dir: ".qwen/skills"}, {Dir: ".agents/skills"}},
-	SkillSep: checkoutSkillSepHyphen}
+		Scoped: &checkoutScope{Keys: []string{"paths"}}}}},
+	Limit: checkoutUnlimited, FiringLimit: &qwenFiringLimit,
+	SkillDirs: []checkoutSkillDir{{Dir: ".qwen/skills"}, {Dir: ".agents/skills"}}, SkillSep: checkoutSkillSepHyphen}
+
+// qwenFiringLimit bounds the files one qwen-nested firing hands: the most
+// measured to reach Qwen Code 0.28.4's next request whole through a hook's
+// additionalContext is 300,000 bytes (B2b's hookbig row), and 192 KiB of
+// files beside the listings' 64 KiB leaves some 37 KB of that for the
+// frames. A file past what is left is named in the skip listing, to be read.
+var qwenFiringLimit = 192 << 10
 
 // qwenCheckoutHome is where a Qwen Code run keeps its checkouts' instructions
 // and skills ([checkoutHome]): the first of the home's own context files that

@@ -107,7 +107,9 @@
 //   - `instructions`: slots, in order, within `limit`, the harness's own
 //     bound in bytes on what a session started in the checkout reads of them
 //     (Codex: project_doc_max_bytes), omitted for a harness with none, a file
-//     the limit cuts spending all of it. A list of file names relative to a
+//     the limit cuts spending all of it; `firingLimit`, a nested firing's bound
+//     on all its checkouts' files, each that fits handed whole, the rest left
+//     out whole and named for the model to read. A list of file names relative to a
 //     checkout's root hands its first regular file (Codex:
 //     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>,
 //     "suffix": <s>, "form": <harness>, "scoped": {"keys": [...], "whole":
@@ -128,9 +130,13 @@
 //     as YAML, a file whose frontmatter is not valid YAML left out (it never
 //     loads), a key's value a string or a list's strings, split on `,`,
 //     trimmed, its other entries and another kind holding none. `qwen`
-//     (0.28.4, .qwen/rules): as `claude`, but no link followed at all, whole
-//     empty, so a `paths` naming `**` is scoped too, and a list's entry that
-//     is no string an entry of its own. A tree past 8
+//     (0.28.4, .qwen/rules): as `claude`, but no link followed at all, each
+//     file handed as Qwen Code loads it, its body without frontmatter or HTML
+//     comments, none where that is empty, and `paths` read as it reads it
+//     (qwenrule.go): a non-empty string, `**` included, or a list entry
+//     JavaScript's String makes non-empty names a path, a list holding a
+//     mapping none, and frontmatter its YAML parser refuses is read by its
+//     line reader. A tree past 8
 //     directories deep, 1,024 entries or 32 MiB is left out whole, said:
 //     Copilot walks 9 levels and Claude Code 10 at least (measured), so a
 //     deeper tree is the gap;

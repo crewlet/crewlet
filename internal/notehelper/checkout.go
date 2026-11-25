@@ -36,10 +36,13 @@ import (
 // Reserved, the tags no repository takes; ImportInstructions, for a harness
 // that reads its instruction files itself, each file named as an import in
 // place of its text ([rootImports]), Limit not applying; SkillSep, what joins
-// a copy's tag and skill ([skillName]).
+// a copy's tag and skill ([skillName]); FiringLimit, the bound in bytes on
+// what one nested firing hands of all its checkouts' instructions, nil for
+// none ([fitFiring]).
 type checkoutSpec struct {
 	Instructions       []instructionSlot `json:"instructions"`
 	Limit              *int              `json:"limit,omitempty"`
+	FiringLimit        *int              `json:"firingLimit,omitempty"`
 	SkillDirs          []skillDirSlot    `json:"skillDirs,omitempty"`
 	Skills             string            `json:"skills,omitempty"`
 	Copied             string            `json:"copied,omitempty"`
@@ -141,7 +144,7 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = json.Unmarshal(raw, &c); err != nil {
 		return fmt.Errorf("the launch config: %w", err)
 	}
-	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) {
+	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) || (c.FiringLimit != nil && *c.FiringLimit < 0) {
 		return errors.New("the launch config names no state, no instruction file, or a negative limit")
 	}
 	if !c.SkillSep.Valid() {
@@ -157,7 +160,7 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = os.WriteFile(filepath.Join(c.State, "handed"), nil, 0o600); err != nil {
 		return err
 	}
-	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, &skips{stderr: stderr})
+	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, math.MaxInt, &skips{stderr: stderr})
 	if err != nil {
 		return err
 	}
@@ -299,12 +302,35 @@ func endsCut(file *os.File, size int64) bool {
 // unlocked, and there a firing already past its check may still copy.
 const endedMarker = "ended"
 
-// handNested is a nested adapter's firing under c ([handCheckouts]): the
-// checkouts handed and what it left out, kept in [skippedLog] too.
+// handNested is a nested adapter's firing under c ([handCheckouts]), within
+// its spec's FiringLimit: the checkouts handed and what it left out, kept in
+// [skippedLog] too.
 func handNested(c nestedConfig, stderr io.Writer) ([]handedCheckout, []string, error) {
 	said := &skips{stderr: stderr, keep: filepath.Join(c.State, skippedLog)}
-	handed, err := handCheckouts(c.State, c.Workdir, nil, c.checkoutSpec, said)
+	firing := math.MaxInt
+	if c.FiringLimit != nil {
+		firing = *c.FiringLimit
+	}
+	handed, err := handCheckouts(c.State, c.Workdir, nil, c.checkoutSpec, firing, said)
 	return handed, said.lines, err
+}
+
+// fitFiring is parts within left, what is left of a firing's bound on its
+// instructions: each part that fits whole, in order, and the rest left out
+// whole, each said by its path for the model to read there, never cut, as a
+// cut file reads as the whole of it.
+func fitFiring(parts []instructionPart, left *int, said *skips) []instructionPart {
+	var kept []instructionPart
+	for _, p := range parts {
+		if len(p.text) > *left {
+			said.say("the instruction file %s is left out: it passes what is left of the firing's bound on "+
+				"instructions; read it at that path", p.path)
+			continue
+		}
+		*left -= len(p.text)
+		kept = append(kept, p)
+	}
+	return kept
 }
 
 // skippedListing is what a firing left out, as a nested adapter hands it to
@@ -384,10 +410,11 @@ func readNested(path string) (nestedConfig, error) {
 // takes a checkout whose skills alone pass it with those that fit, and one with
 // no skills is claimed whatever is left, in its order. The claims
 // are recorded in state before anything is handed: each one's instructions
-// within the harness's limit, as a session started in it reads them, and its
-// skills copied as `<tag>:<skill>` ([copyPlanned]). What it leaves out is
+// within the harness's limit, as a session started in it reads them, all of
+// theirs within firing ([fitFiring]), and its skills copied as
+// `<tag>:<skill>` ([copyPlanned]). What it leaves out is
 // said to said, and kept where said asks, under the lock.
-func handCheckouts(state, work string, first []string, spec checkoutSpec, said *skips) ([]handedCheckout, error) {
+func handCheckouts(state, work string, first []string, spec checkoutSpec, firing int, said *skips) ([]handedCheckout, error) {
 	lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -488,6 +515,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, said *
 			h.text = rootImports(root, spec.Instructions, said)
 		} else {
 			parts, _ := instructionParts(root, limit, spec.Instructions, said)
+			parts = fitFiring(parts, &firing, said)
 			h.text, h.parts = joinParts(parts), parts
 		}
 		for _, p := range plans[name] {
