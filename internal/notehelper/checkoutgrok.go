@@ -77,7 +77,8 @@ func entryFile(d skillDir) string {
 // own name (its directory's, a command's file's) rewrites to that name, and a
 // command (ranked by place, as the .grok command named like a .claude skill
 // was), takes it first, in order; then each other takes it where free, else
-// its own name rewritten where free, else is not listed.
+// its own name rewritten where free, else is not listed. Each kept is given
+// the name it lists under (listed), which its copy is named after.
 func grokSessionSkills(dirs []skillDir) []skillDir {
 	type entry struct {
 		listed, own string
@@ -91,10 +92,10 @@ func grokSessionSkills(dirs []skillDir) []skillDir {
 		entries[i] = entry{listed: listed, own: own, owns: ok && (d.command || own == listed), ok: ok}
 	}
 	taken := map[string]bool{}
-	keep := make([]bool, len(dirs))
+	as := make([]string, len(dirs))
 	for i, e := range entries {
 		if e.owns && !taken[e.listed] {
-			taken[e.listed], keep[i] = true, true
+			taken[e.listed], as[i] = true, e.listed
 		}
 	}
 	for i, e := range entries {
@@ -103,14 +104,15 @@ func grokSessionSkills(dirs []skillDir) []skillDir {
 		}
 		for _, name := range []string{e.listed, e.own} {
 			if name != "" && len(name) <= skillname.GrokMax && !taken[name] {
-				taken[name], keep[i] = true, true
+				taken[name], as[i] = true, name
 				break
 			}
 		}
 	}
 	var out []skillDir
 	for i, d := range dirs {
-		if keep[i] {
+		if as[i] != "" {
+			d.listed = as[i]
 			out = append(out, d)
 		}
 	}
@@ -118,14 +120,12 @@ func grokSessionSkills(dirs []skillDir) []skillDir {
 }
 
 // homeHolds is why a copy named name may not be made, "" where it may: the
-// run's skills hold an entry of that name; or, listed as Grok Build lists,
-// a skill or command of the run's skills or of the home's other skill
-// directories its harness lists beside them (spec.HomeSkills) has a listed
-// name or own name that rewrites as the copy's does, a link followed
-// wherever it leads, as Grok follows a home's. Grok 1.0.92 drops the copy
-// behind such a home skill, whichever was written first, or keeps the name
-// and lists the person's skill by another (measured, section 11's rule), so
-// the person's skill keeps its name and the copy is left out, said.
+// run's skills hold an entry of that name; or, listed as Grok Build lists
+// ([homeNames]), a skill or command of the home has a listed name or own name
+// that rewrites as the copy's does. Grok 1.0.92 drops the copy behind such a
+// home skill, whichever was written first, or keeps the name and lists the
+// person's skill by another (measured, section 11's rule), so the person's
+// skill keeps its name and the copy is left out, said.
 func homeHolds(spec checkoutSpec, name string) string {
 	if spec.ListedAs != listedGrok {
 		if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil {
@@ -133,7 +133,46 @@ func homeHolds(spec checkoutSpec, name string) string {
 		}
 		return ""
 	}
-	want := skillname.Grok(name)
+	held := spec.held
+	if held == nil {
+		held = &homeNames{}
+	}
+	return held.holds(spec, skillname.Grok(name))
+}
+
+// homeNames is the names the home's skills take as Grok Build lists them,
+// read once a firing ([homeNames.read]), each with what takes it, and the
+// names of the copies the firing made since, added as each lands.
+type homeNames struct {
+	read   bool
+	unread string
+	taken  map[string]string
+}
+
+// holds is why the name want is taken, "" where it is free.
+func (h *homeNames) holds(spec checkoutSpec, want string) string {
+	if !h.read {
+		h.read, h.taken = true, map[string]string{}
+		h.unread = h.readHome(spec)
+	}
+	if h.unread != "" { // unread, the home may hold the name: the copy waits on no guess
+		return h.unread
+	}
+	return h.taken[want]
+}
+
+// add records a copy the firing made, at path, listed as listed.
+func (h *homeNames) add(listed, path string) {
+	if h.taken != nil {
+		h.taken[listed] = "the run's copy " + path + " takes the name " + listed + " already"
+	}
+}
+
+// readHome walks the run's skills and the home's other skill directories its
+// harness lists beside them (spec.HomeSkills), a link followed wherever it
+// leads, as Grok follows a home's, and records each one's listed name and
+// own name rewritten; or is why it could not.
+func (h *homeNames) readHome(spec checkoutSpec) string {
 	dirs := append([]skillDirSlot{{Dir: spec.Skills, Recursive: true, skillWalkOptions: grokHomeWalk}}, spec.HomeSkills...)
 	for _, slot := range dirs {
 		var found []skillDir
@@ -143,15 +182,17 @@ func homeHolds(spec checkoutSpec, name string) string {
 		} else {
 			found, err = walkSkills("", slot.Dir, map[string]bool{}, slot.skillWalkOptions)
 		}
-		if err != nil { // unread, the home may hold the name: the copy waits on no guess
+		if err != nil {
 			return "the home's skills under " + slot.Dir + " could not be read for the names they take: " + err.Error()
 		}
 		for _, d := range found {
 			n, named := frontName(entryFile(d))
 			listed, _ := skillname.GrokListed(n, named, d.name)
-			if listed == want || skillname.Grok(d.name) == want {
-				return "the home's " + d.src + ", which Grok Build lists as " + listed + ", takes the name " + want +
-					" it would list the copy under"
+			for _, key := range []string{listed, skillname.Grok(d.name)} {
+				if _, ok := h.taken[key]; key != "" && !ok {
+					h.taken[key] = "the home's " + d.src + ", which Grok Build lists as " + listed + ", takes the name " +
+						key + " it would list the copy under"
+				}
 			}
 		}
 	}

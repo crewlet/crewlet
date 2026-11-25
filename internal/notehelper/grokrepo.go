@@ -6,14 +6,14 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // grokNestedChars is the most characters of a hook's answer Grok Build 1.0.92
 // hands its model: past 10,000 it hands the first 10,000 and "… [+N chars]",
 // each hook's answer its own reminder cut on its own (measured, rows k and
-// g4k2). Counted in UTF-16 units, at least one a character, so an answer
-// within it is never cut.
+// g4k2), counting code points (row g4k3: 8,003 code points of 12,003 UTF-16
+// units and 24,003 bytes reached the model whole).
 const grokNestedChars = 10000
 
 // grokListingCut ends a grok-nested answer's listings cut at
@@ -119,16 +119,10 @@ func grokNestedContext(handed []handedCheckout, skipped []string) string {
 	return strings.Join(blocks, "\n\n")
 }
 
-// units is s's length in UTF-16 units.
-func units(s string) int {
-	n := 0
-	for _, r := range s {
-		n += max(utf16.RuneLen(r), 1)
-	}
-	return n
-}
+// units is s's length as Grok counts it: code points.
+func units(s string) int { return utf8.RuneCountInString(s) }
 
-// unitBudget is what is left of an answer's bound in UTF-16 units, and
+// unitBudget is what is left of an answer's bound in code points, and
 // whether a block was cut.
 type unitBudget struct {
 	left int

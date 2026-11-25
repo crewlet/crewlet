@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -236,15 +238,16 @@ func TestAGrokCloneIsHandedToTheMainLoopOnce(t *testing.T) {
 // A GROK ANSWER HOLDS WHOLE CHECKOUTS WITHIN GROK'S 10,000-CHARACTER HOOK CUT
 // (rows k, g4k2), and names every other: of three clones, the one too big for
 // the cut is named by its files' paths to read, the two around it whole; the
-// answer stays within the cut, counted in UTF-16 units.
+// answer stays within the cut, counted as Grok counts it, in code points (row
+// g4k3).
 //
 // Mutation: cut a checkout's text, drop the naming, stop at the first that
-// does not fit, or count bytes, and this goes red.
+// does not fit, or count bytes or UTF-16 units, and this goes red.
 func TestAGrokAnswerHoldsWholeCheckoutsWithinGroksCut(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, nil)
 	r.grokLaunch(t)
-	c := strings.Repeat("é", 5500) // 11,000 bytes: fits only counted as Grok counts
+	c := strings.Repeat("\U0001F600", 5000) // 10,000 UTF-16 units, 20,000 bytes: fits only as code points
 	r.add(t, map[string]string{"a/.git/": "", "a/AGENTS.md": "A-SMALL\n", "b/.git/": "",
 		"b/AGENTS.md": strings.Repeat("b", 9700), "b/CLAUDE.local.md": "B-LOCAL\n", "c/.git/": "", "c/AGENTS.md": c})
 	got := r.grokFire(t, grokMainCall)
@@ -295,7 +298,7 @@ func TestAGrokCopyAPersonsSkillWouldHideIsLeftOutSaid(t *testing.T) {
 		"late/.grok/skills/bar is left out: the home's " + r.skills + "/late-bar-x, which Grok Build lists as late-bar",
 		"late/.grok/skills/baz is left out: the home's " + r.grokHome() + "/.claude/skills/group/late-baz",
 		"late/.grok/skills/cmd is left out: the home's " + r.grokHome() + "/.cursor/commands/late-cmd.md",
-		"a-b/.grok/skills/c is left out: the home's " + r.skills + "/a:b-c, which Grok Build lists as a-b-c"} {
+		"a-b/.grok/skills/c is left out: the run's copy " + r.skills + "/a:b-c takes the name a-b-c already"} {
 		if !strings.Contains(said, want) {
 			t.Errorf("the launch did not say %q; it said\n%s", want, said)
 		}
@@ -347,5 +350,80 @@ func TestGroksFormsKeepTheirShapeOnTheWire(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(`[{"dir":"x","depth":-1}]`), &dirs); err == nil {
 		t.Error("a negative depth was read, want it refused")
+	}
+}
+
+// manyFiles is n files under dir, by path relative to it.
+func manyFiles(dir string, n int) map[string]string {
+	out := map[string]string{}
+	for i := range n {
+		out[filepath.Join(dir, "f"+strconv.Itoa(i)+".js")] = "x\n"
+	}
+	return out
+}
+
+// A SKILL WALK COUNTS DIRECTORIES AND SKILLS, NEVER THE FILES BESIDE THEM:
+// a Grok skill holding 1,100 files (a package's node_modules) and a Pi tree
+// with a directory of 1,100 files are walked whole, their skills found, as
+// Grok and Pi list them; a tree past 4,096 directories is left out whole,
+// said, its bound named.
+//
+// Mutation: count every entry again, or drop the directory bound, and a row
+// goes red.
+func TestASkillWalkCountsDirectoriesNotFiles(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	sk := "---\nname: s\ndescription: S.\n---\n"
+	files := map[string]string{".grok/skills/big/SKILL.md": sk, ".grok/skills/small/SKILL.md": sk,
+		".pi/skills/assets/readme.md": "x\n", ".pi/skills/kept/SKILL.md": sk}
+	maps.Copy(files, manyFiles(".grok/skills/big/node_modules/pkg", 1100))
+	maps.Copy(files, manyFiles(".pi/skills/assets", 1100))
+	writeTree(t, root, files)
+	grok := []skillDirSlot{{Dir: ".grok/skills", Recursive: true, skillWalkOptions: grokHomeWalk}}
+	dirs, over := checkoutSkillDirs(root, checkoutSpec{SkillDirs: grok})
+	if got := skillNames(t, root, dirs); !slices.Equal(got, []string{"big=.grok/skills/big", "small=.grok/skills/small"}) ||
+		len(over) > 0 {
+		t.Errorf("Grok's walk found %q (said %q), want big and small", got, over)
+	}
+	dirs, over = checkoutSkillDirs(root, checkoutSpec{SkillDirs: piSkillDirs})
+	if got := skillNames(t, root, dirs); !slices.Equal(got, []string{"kept=.pi/skills/kept"}) || len(over) > 0 {
+		t.Errorf("Pi's walk found %q (said %q), want kept", got, over)
+	}
+	wide := t.TempDir()
+	for i := range maxWalkDirs + 1 {
+		if err := os.MkdirAll(filepath.Join(wide, ".pi/skills/d"+strconv.Itoa(i/64), strconv.Itoa(i%64)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeTree(t, wide, map[string]string{".pi/skills/a/SKILL.md": sk})
+	dirs, over = checkoutSkillDirs(wide, checkoutSpec{SkillDirs: piSkillDirs})
+	if len(dirs) != 0 || len(over) != 1 || !strings.Contains(over[0], "passes the bound of 4096 directories read") {
+		t.Errorf("a walk past the directory bound found %d skills and said %q, want it left out whole", len(dirs), over)
+	}
+}
+
+// A GROK COPY IS NAMED AFTER THE NAME GROK LISTS ITS SKILL UNDER, so two
+// skills of one directory name in a walked tree (a/setup listed a-setup,
+// b/setup listed b-setup) are both copied; and a home whose skill holds 1,100
+// files (node_modules) still takes copies: its files are no names.
+//
+// Mutation: name a copy after its directory, or count the home's files, and
+// this goes red.
+func TestAGrokCopyIsNamedAsGrokListsIt(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	home := map[string]string{".claude/skills/js/SKILL.md": "---\nname: js\ndescription: J.\n---\n"}
+	maps.Copy(home, manyFiles(".claude/skills/js/node_modules/pkg", 1100))
+	writeTree(t, r.grokHome(), home)
+	r.add(t, map[string]string{"late/.git/": "",
+		"late/.grok/skills/a/setup/SKILL.md": "---\nname: a-setup\ndescription: A.\n---\n",
+		"late/.grok/skills/b/setup/SKILL.md": "---\nname: b-setup\ndescription: B.\n---\n"})
+	if said := r.grokLaunch(t); said != "" {
+		t.Errorf("the launch said %q", said)
+	}
+	for _, copied := range []string{"late:a-setup", "late:b-setup"} {
+		if _, err := os.Stat(filepath.Join(r.skills, copied, "SKILL.md")); err != nil {
+			t.Errorf("the copy %s is missing: %v", copied, err)
+		}
 	}
 }

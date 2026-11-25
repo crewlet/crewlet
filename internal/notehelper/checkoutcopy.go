@@ -176,12 +176,12 @@ type plannedSkill struct {
 
 // skillDir is a directory under one of a checkout's skill directories that
 // holds a SKILL.md, or a command file ([commandSkills]): its path, its name,
-// which of the spec's skill directories it is under, and whether it is a
-// command.
+// which of the spec's skill directories it is under, whether it is a
+// command, and, listed as Grok lists ([grokSessionSkills]), its listed name.
 type skillDir struct {
-	src, name string
-	slot      int
-	command   bool
+	src, name, listed string
+	slot              int
+	command           bool
 }
 
 // checkoutSkillDirs is the skill directories under root's skill directories,
@@ -271,7 +271,8 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]pla
 	for _, d := range dirs {
 		name := skillName(tag, d.name)
 		key := name
-		if grok {
+		if grok { // NAMED AS GROK LISTS IT: two skills of one directory name, apart in the walk, both kept
+			name = skillName(tag, d.listed)
 			key = skillname.Grok(name)
 		}
 		if first, ok := planned[key]; ok {
@@ -397,6 +398,9 @@ func copyPlanned(p plannedSkill, spec checkoutSpec, staging string, said *skips)
 		return handedSkill{}, err
 	}
 	_ = os.Remove(staging) // emptied; never one holding another firing's copy
+	if spec.held != nil {
+		spec.held.add(listed, final)
+	}
 	for _, note := range p.notes {
 		said.say("the skill %s is copied without %s", p.src, note)
 	}
