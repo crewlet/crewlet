@@ -1079,10 +1079,10 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7483.3 KiB,
-	// with each integration tab and its settings form given an address. A
+	// kit releases account for its growth, and the last measure was 7505.1 KiB,
+	// with the Google page that holds every Google product's shared setup. A
 	// raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 2364<<10
+	treeBudget = 5<<20 + 2386<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

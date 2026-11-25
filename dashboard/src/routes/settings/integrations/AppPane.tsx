@@ -30,7 +30,9 @@ import { SetupForm, heldReason } from "../SetupForm.tsx";
 import { asSentence, listed } from "~/lib/format.ts";
 import { href, useNavigator, useRoute } from "~/app/router.tsx";
 import type { IntegrationTab } from "~/app/routes.ts";
-import { formOf, tabOf, type IntegrationForm } from "./address.ts";
+import { GOOGLE, formOf, isGoogleProduct, tabOf, type IntegrationForm } from "./address.ts";
+import { googlePlace, sharedGoogleIssue } from "./google.ts";
+import { GoogleAction, GoogleRelated, GoogleStepCallout } from "./GoogleProduct.tsx";
 import { WATCH_MS } from "../recheck.ts";
 import {
   SetupPasses,
@@ -128,14 +130,33 @@ export function AppPane({
   const nav = useNavigator();
   const askedTab = tabOf(route.query.get("tab"));
   const askedForm = formOf(route.query.get("edit"));
-  const unfinished = connectionUnfinished(tool);
+  // A GOOGLE PRODUCT'S SHARED SETUP IS THE GOOGLE PAGE'S: its connection,
+  // reader and sign-in are made there, so it opens no form of its own.
+  const place = useMemo(
+    () => (isGoogleProduct(tool.entry.key) ? googlePlace(model) : null),
+    [tool.entry.key, model],
+  );
+  const googleRow = place?.products.find((p) => p.kind === tool.entry.key);
+  useEffect(() => {
+    if (googleRow && askedForm)
+      nav.replace(["company", "integrations", GOOGLE], {
+        ...(googleRow.switchable ? {} : { edit: "settings" }),
+        product: googleRow.kind,
+      });
+  }, [googleRow, askedForm, nav]);
+  const unfinished = connectionUnfinished(tool) && !googleRow;
   // ONLY WHERE THE FORM CAN OPEN: one a document holds (a block, a managed
   // document but for Replace key) lands on the page, which says why.
   const holds = (form: IntegrationForm) =>
     tool.blocked ?? (form === "key" ? undefined : (model.managed ?? undefined));
   const defaultForm = !askedTab && !askedForm && unfinished && !holds("settings");
-  const open: IntegrationForm | null =
-    askedForm && !holds(askedForm) ? askedForm : defaultForm ? "settings" : null;
+  const open: IntegrationForm | null = googleRow
+    ? null
+    : askedForm && !holds(askedForm)
+      ? askedForm
+      : defaultForm
+        ? "settings"
+        : null;
   const tab: IntegrationTab = open ? "settings" : (askedTab ?? "agents");
   // THE DEFAULT IS WRITTEN INTO THE ADDRESS, so the form stays while the
   // reading moves under it, and a reload lands on it.
@@ -221,27 +242,45 @@ export function AppPane({
     return { on, of: data.seats.length, waiting };
   }, [data]);
 
+  // A GOOGLE PRODUCT THAT IS OFF reads as one never connected: its landing, and Turn on.
+  const off = googleRow ? !googleRow.enabled : !tool.configured;
   const facts = useMemo<Fact[] | undefined>(() => {
-    if (!tool.configured) return undefined;
+    if (off) return undefined;
     return [
       ...(counts ? [{ label: "Agents on it", value: `${counts.on} of ${counts.of}` }] : []),
       ...integrationFacts(tool.entry, model.rows, {
         known: model.trafficKnown,
         since: model.trafficSince,
       }),
+      ...(googleRow
+        ? [
+            {
+              label: "Connection",
+              value: "Google",
+              path: ["company", "integrations", GOOGLE],
+              query: { product: googleRow.kind },
+            },
+          ]
+        : []),
     ];
-  }, [tool, model, counts]);
+  }, [off, tool, model, counts, googleRow]);
 
   const header = (
     <ObjectHeader
       {...appHeading(tool.entry, 36)}
-      status={<BucketTag tool={tool} />}
+      status={off ? undefined : <BucketTag tool={tool} />}
       description={tool.entry.description}
       facts={facts}
       actions={
         <>
-          {!open && <PrimaryAction tool={tool} model={model} onOpen={setOpen} />}
-          {tool.configured && (
+          {googleRow && place ? (
+            <GoogleAction row={googleRow} place={place} model={model} />
+          ) : (
+            !open && <PrimaryAction tool={tool} model={model} onOpen={setOpen} />
+          )}
+          {/* A GOOGLE PRODUCT IS TURNED OFF ON THE GOOGLE PAGE, and Google Cloud
+              disconnects with Google itself. */}
+          {tool.configured && !googleRow && (
             <Button
               size="small"
               variant="danger"
@@ -291,12 +330,13 @@ export function AppPane({
     />
   );
 
-  if (!tool.configured) {
+  if (off) {
     return (
       <>
         {header}
         {form ||
           (tool.held.length > 0 ? <HeldNotice tool={tool} /> : <BeforeYouStart tool={tool} />)}
+        {googleRow && <GoogleRelated row={googleRow} />}
         {!form && <DocsLink tool={tool} />}
       </>
     );
@@ -312,9 +352,14 @@ export function AppPane({
   // rather than again as the loop's finding. AND AN AGENT'S OWN WAIT IS SAID
   // ON ITS ROW, with the step's own control, so the list above the agents
   // holds what is wrong with the integration itself.
+  // AND A GOOGLE STEP IS SAID ONCE, by the callout that links to Google.
   const issues = tool.issues.filter(
-    (i) => !i.seat && !(data?.notice && i.kind === "credential_shared"),
+    (i) =>
+      !i.seat &&
+      !(data?.notice && i.kind === "credential_shared") &&
+      !(googleRow?.next && sharedGoogleIssue(i, googleRow)),
   );
+  const waitsOnGoogle = googleRow?.state === "waits";
   // ONLY WHERE A PASS RUNS: a tool whose accounts are made by hand has no
   // loop to ask, so the control would only ever be refused.
   const provisioned = tool.sections.some((s) => s.tool.can_provision);
@@ -396,6 +441,7 @@ export function AppPane({
                   Agents get access here once {tool.entry.name} is connected.
                 </Callout>
               )}
+              {googleRow && place && <GoogleStepCallout row={googleRow} place={place} />}
               {issues.length > 0 && (
                 <div className="int-issues">
                   {issues.map((issue) => (
@@ -403,7 +449,7 @@ export function AppPane({
                   ))}
                 </div>
               )}
-              {!unfinished && (
+              {!unfinished && !waitsOnGoogle && (
                 <QueryState
                   error={access.code}
                   refusal={access.refusal}
@@ -449,18 +495,25 @@ export function AppPane({
             <div className="int-tab">
               {form || (
                 <>
-                  <SettingsSummary tool={tool} />
-                  {/* EDIT SETTINGS EDITS THE SUMMARY ABOVE IT, so it sits under
-                    it and never under a section it does not edit (SSH's
-                    servers, a growth product's connections). */}
-                  <Button
-                    size="small"
-                    variant="secondary"
-                    disabledReason={tool.blocked}
-                    onClick={() => !tool.blocked && setOpen("settings")}
-                  >
-                    Edit settings
-                  </Button>
+                  {/* A GOOGLE PRODUCT'S SHARED SETTINGS ARE GOOGLE'S, one row away. */}
+                  {googleRow ? (
+                    <GoogleRelated row={googleRow} />
+                  ) : (
+                    <>
+                      <SettingsSummary tool={tool} />
+                      {/* EDIT SETTINGS EDITS THE SUMMARY ABOVE IT, so it sits under
+                        it and never under a section it does not edit (SSH's
+                        servers, a growth product's connections). */}
+                      <Button
+                        size="small"
+                        variant="secondary"
+                        disabledReason={tool.blocked}
+                        onClick={() => !tool.blocked && setOpen("settings")}
+                      >
+                        Edit settings
+                      </Button>
+                    </>
+                  )}
                   {/* THE SERVERS, and each one's Atlas inventory: SSH's own answer. */}
                   {tool.entry.key === "ssh" && <SshServers managed={model.managed} />}
                   {/* A GROWTH PRODUCT'S connections, the vendor's roles, and a spending product's caps. */}

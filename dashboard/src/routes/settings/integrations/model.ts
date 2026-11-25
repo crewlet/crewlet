@@ -253,7 +253,7 @@ export const STORIES: Record<string, ToolStory> = {
       "Crewlet makes a Google Cloud service account for each agent, in a project that holds only Crewlet's accounts.",
     byHand: [
       {
-        text: "Create an empty project for Crewlet's accounts and run the setup block the form gives you. Then, on each project agents may use, run the project block from the docs, which creates Crewlet's Operator role and its limited grants.",
+        text: "Connect Google once, on the Google page: one block in Cloud Shell, run once. Then, on each project agents may use, run the project block from the docs, which creates Crewlet's Operator role and its limited grants.",
       },
     ],
   },
@@ -281,7 +281,7 @@ export const STORIES: Record<string, ToolStory> = {
       "Each agent has its own Google identity in your Google identity project; you add it to the property at the role it may act with. Its tokens never leave Crewlet.",
     byHand: [
       {
-        text: "Connect Google Cloud first and run its setup block again, which turns on the Analytics APIs, then add each agent's email in ",
+        text: "Turn it on in Google, where Crewlet turns on its APIs and makes the company reader, then add the reader and each agent's email in ",
       },
       { ui: ["Admin", "Property access management"] },
       { text: "." },
@@ -296,10 +296,8 @@ export const STORIES: Record<string, ToolStory> = {
     identity:
       "A person who manages your AdMob account signs in with Google once, as your own OAuth client; every agent reaches AdMob through that sign-in, which never leaves Crewlet.",
     byHand: [
-      { text: "Make an OAuth client (" },
-      { ui: ["Web application"] },
       {
-        text: ") in a Google Cloud project you control, turn on the AdMob API there, register the redirect URI and audience the form gives, then sign in with Google here.",
+        text: "Set the company's Google sign-in client once on the Google page, turn on the AdMob API in its project, then turn it on and sign in with Google there.",
       },
     ],
   },
@@ -312,10 +310,8 @@ export const STORIES: Record<string, ToolStory> = {
     identity:
       "A person who manages your AdSense account signs in with Google once, as your own OAuth client; every agent reaches AdSense through that sign-in, which never leaves Crewlet.",
     byHand: [
-      { text: "Make an OAuth client (" },
-      { ui: ["Web application"] },
       {
-        text: ") in a Google Cloud project you control, turn on the AdSense Management API there, register the redirect URI and audience the form gives, then sign in with Google here.",
+        text: "Set the company's Google sign-in client once on the Google page, turn on the AdSense Management API in its project, then turn it on and sign in with Google there.",
       },
     ],
   },
@@ -329,7 +325,7 @@ export const STORIES: Record<string, ToolStory> = {
       "Each agent has its own Google identity in your Google identity project; you add it to the account at the access level it may act with. Its tokens never leave Crewlet.",
     byHand: [
       {
-        text: "Connect Google Cloud first and run its setup block again, which turns on the Google Ads API, then add each agent's email in ",
+        text: "Turn it on in Google and apply once for Explorer access to the Google Ads API in the identity project, then add the reader and each agent's email in ",
       },
       { ui: ["Admin", "Access and security"] },
       { text: ", and set each account's spending caps." },
@@ -345,7 +341,7 @@ export const STORIES: Record<string, ToolStory> = {
       "Each agent has its own Google identity in your Google identity project; you add it to each property at the permission it may act with. Its tokens never leave Crewlet.",
     byHand: [
       {
-        text: "Connect Google Cloud first and run its setup block again, which turns on the Search Console APIs, then add each agent's email in ",
+        text: "Turn it on in Google, where Crewlet turns on its APIs and makes the company reader, then add the reader and each agent's email in ",
       },
       { ui: ["Settings", "Users and permissions"] },
       { text: "." },
@@ -361,7 +357,7 @@ export const STORIES: Record<string, ToolStory> = {
       "Each agent has its own Google identity in your Google identity project; you invite it in Play Console with the app permissions it may act with. Its tokens never leave Crewlet.",
     byHand: [
       {
-        text: "Connect Google Cloud first and run its setup block again, which turns on the Play APIs, then invite each agent's email in Play Console, ",
+        text: "Turn it on in Google, where Crewlet turns on its APIs and makes the company reader, then invite the reader and each agent's email in Play Console, ",
       },
       { ui: ["Users and permissions"] },
       { text: "." },

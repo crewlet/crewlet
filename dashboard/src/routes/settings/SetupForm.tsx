@@ -1810,7 +1810,7 @@ function KeyCheck({
  * address the engine answers. The engine keeps what the vendor grants, so the
  * form holds no value for it.
  */
-function ConsentSignIn({
+export function ConsentSignIn({
   kind,
   label,
   optional,
