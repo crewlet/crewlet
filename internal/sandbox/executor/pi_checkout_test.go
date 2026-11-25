@@ -396,12 +396,12 @@ func TestAPiRunPutsTheHomesInstructionFileBackHoweverItEnds(t *testing.T) {
 // EVERY STEP OF THE END RUNS: a checkout cloned during the run whose walk
 // finds two skills of one name is handed with the line in the tool's result,
 // and the script prints the line once pi has stopped, once, the helper's own
-// error stream passed on nowhere; where the home file will not go back, the
-// put-back says so, and the line is printed and the copies removed all the
-// same.
+// error stream passed on nowhere; where the file the run made will not go,
+// the put-back says so and keeps the none marker for the next try, and the
+// line is printed and the copies removed all the same.
 //
-// Mutation: drop the print, pass the helper's stderr on, or chain the end's
-// steps so a failed put-back stops the rest, and a row goes red.
+// Mutation: drop the print, pass the helper's stderr on, chain the end's
+// steps, or drop the marker whatever the rm did, and a row goes red.
 func TestAPiRunsLeftOutLinesReachItsErrorStreamOnce(t *testing.T) {
 	t.Parallel()
 	for _, broken := range []bool{false, true} {
@@ -440,8 +440,11 @@ func TestAPiRunsLeftOutLinesReachItsErrorStreamOnce(t *testing.T) {
 			if raw, err := os.ReadDir(p.PiCheckoutSkills()); err != nil || len(raw) != 0 {
 				t.Errorf("the checkouts' skills directory holds %v after the run (%v), want the copies removed", raw, err)
 			}
-			if failed := strings.Contains(errs, p.PiAgentDir()+"/AGENTS.override.md"); failed != broken {
+			if failed := strings.Contains(errs, "was not put back"); failed != broken {
 				t.Errorf("the run's error stream says a put-back failed: %v, want %v:\n%s", failed, broken, errs)
+			}
+			if _, err := os.Lstat(p.PiHomeInstructions() + ".none"); (err == nil) != broken {
+				t.Errorf("the home's none marker is held after the run: %v, want %v (the next try needs it)", err == nil, broken)
 			}
 		})
 	}
