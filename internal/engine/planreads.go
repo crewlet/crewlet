@@ -141,6 +141,7 @@ func (e *Engine) readPlans(ctx context.Context) {
 			return
 		}
 		agent := entries[id]
+		_, wasOut := agent.SitOut()
 		rank := heardFromPeers(agent, id, nodes, self)
 		r.mu.Lock()
 		row := r.rows[id]
@@ -155,6 +156,20 @@ func (e *Engine) readPlans(ctx context.Context) {
 		r.mu.Unlock()
 		if due {
 			e.readPlan(ctx, id, agent)
+		}
+		if _, isOut := agent.SitOut(); wasOut && !isOut {
+			e.rearmProbesOn(ctx, id)
+		}
+	}
+}
+
+// rearmProbesOn fires every provider-park probe whose chain names an entry on
+// sign-in id, as a person's Clear does: a reading ended its sit-out, so seats
+// parked on it are tried again now rather than at the reset they waited for.
+func (e *Engine) rearmProbesOn(ctx context.Context, id harness.SignInID) {
+	for key, agent := range e.loginEntries() {
+		if agent.SignInID() == id {
+			e.rearmLimitProbesNaming(ctx, key)
 		}
 	}
 }

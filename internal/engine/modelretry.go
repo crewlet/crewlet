@@ -183,11 +183,10 @@ func (e *Engine) harnessEntry(key string) (*harness.Provider, bool) {
 // RetryModel stops every node sitting an entry out. [coord.RetryClear] writes
 // the record at once. [coord.RetryProbe] needs a live node sitting it out
 // ([ErrNotSittingOut]) and asks the vendor: by the plan read where the entry has
-// one ([Engine.checkPlan], no model call), else by ONE call within
-// [ModelRetryProbeBudget], charged as a provider probe; only room or an answer
-// writes the record, and every node, this one included, clears through it. A
-// limit still in force answers the window ([RetryResult.Still]), held on this
-// node's plan; any other failure is [RetryResult.Failed].
+// one ([Engine.checkPlan]), else by ONE call within [ModelRetryProbeBudget],
+// charged as a provider probe; only room or an answer writes the record, which
+// every node clears through. A limit still in force answers the window
+// ([RetryResult.Still]); any other failure is [RetryResult.Failed].
 //
 // The probe goes through [Engine.probeSibling], never the entry, so a failure
 // leaves the window as it was: clearing first left this node alone, with no

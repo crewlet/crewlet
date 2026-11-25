@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -210,5 +212,32 @@ func TestAWeeklyLimitSitsOutToItsResetOnTheRow(t *testing.T) {
 	if len(state.SittingOut) != 1 || !state.SittingOut[0].Until.Equal(reset) ||
 		!state.SittingOut[0].Since.Equal(at) {
 		t.Errorf("two hours on, the entry sits out %+v; want one window from %v to %v", state.SittingOut, at, reset)
+	}
+}
+
+// stoppedAlarm is an alarm that records nothing and stops at once.
+type stoppedAlarm struct{}
+
+func (stoppedAlarm) Stop() bool { return true }
+
+// A READING THAT ENDS A SIT-OUT TRIES PARKED SEATS AGAIN NOW: a seat parked on a
+// chain naming an entry on the sign-in waits for a probe armed at the reset it
+// was told, so the probe is re-armed at once, as a person's Clear does.
+//
+// Mutation: drop the re-arm from the reader, and the probe still waits days.
+func TestAReadingThatEndsASitOutTriesParkedSeatsNow(t *testing.T) {
+	t.Parallel()
+	e, c := planNode(t, coordmemory.NewFleet(), 3)
+	var waits []time.Duration
+	e.providerParks.after = func(d time.Duration, _ func()) alarm {
+		waits = append(waits, d)
+		return stoppedAlarm{}
+	}
+	basis := providerBasis{keys: []string{"plan"}}
+	e.limitProbes.probes = map[probeKey]*limitProbe{probeKeyOf(basis): {basis: basis,
+		until: time.Now().Add(6 * 24 * time.Hour), seats: map[uuid.UUID]string{uuid.New(): "lead"}}}
+	e.rearmProbesOn(t.Context(), planOf(t, c).SignInID())
+	if len(waits) != 1 || waits[0] != 0 {
+		t.Errorf("the parked chain's probe was armed for %v, want once, now", waits)
 	}
 }
