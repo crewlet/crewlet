@@ -128,8 +128,9 @@
 //     as YAML, a file whose frontmatter is not valid YAML left out (it never
 //     loads), a key's value a string or a list's strings, split on `,`,
 //     trimmed, its other entries and another kind holding none. `qwen`
-//     (0.28.4, .qwen/rules): as `claude`, but no link followed at all, and
-//     whole empty, so a `paths` naming `**` is scoped too. A tree past 8
+//     (0.28.4, .qwen/rules): as `claude`, but no link followed at all, whole
+//     empty, so a `paths` naming `**` is scoped too, and a list's entry that
+//     is no string an entry of its own. A tree past 8
 //     directories deep, 1,024 entries or 32 MiB is left out whole, said:
 //     Copilot walks 9 levels and Claude Code 10 at least (measured), so a
 //     deeper tree is the gap;

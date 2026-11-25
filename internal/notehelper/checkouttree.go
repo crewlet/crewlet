@@ -70,9 +70,9 @@ func (f treeForm) rules() treeRules {
 	switch f {
 	case formClaude:
 		return treeRules{caseExact: true, dots: true, fileLinks: true, dirLinks: true, skipEmpty: true,
-			scopedAway: yamlScopedAway}
+			scopedAway: claudeScopedAway}
 	case formQwen:
-		return treeRules{caseExact: true, dots: true, skipEmpty: true, scopedAway: yamlScopedAway}
+		return treeRules{caseExact: true, dots: true, skipEmpty: true, scopedAway: qwenScopedAway}
 	}
 	return treeRules{fileLinks: true, scopedAway: copilotScopedAway}
 }
@@ -328,13 +328,23 @@ func copilotScopedAway(raw []byte, s treeScope) bool {
 	return false
 }
 
-// yamlScopedAway reports whether raw is a file Claude Code 2.1.310 or Qwen
-// Code 0.28.4 does not load at a session's start (measured, B2a's C4 and
-// B2b's rules rows): its frontmatter is not valid YAML, which neither loads,
-// or the first of s's keys present in it (case-exact) holds patterns
-// ([claudePatterns]) with an entry outside s.Whole (Claude Code's `**`, none
-// of Qwen Code's), which it loads only on a matching path or never.
-func yamlScopedAway(raw []byte, s treeScope) bool {
+// claudeScopedAway reports whether raw is a file Claude Code 2.1.310 does not
+// load at a session's start ([yamlScopedAway]), a list's entries that are no
+// string dropped (measured: `["src/**", 5]` scopes it to src/**, B2a).
+func claudeScopedAway(raw []byte, s treeScope) bool { return yamlScopedAway(raw, s, false) }
+
+// qwenScopedAway reports whether raw is a file Qwen Code 0.28.4 does not load
+// at a session's start ([yamlScopedAway]), a list's entry that is no string
+// scoping it (measured: `[5]` is never loaded where `5` and `[""]` are, B2b).
+func qwenScopedAway(raw []byte, s treeScope) bool { return yamlScopedAway(raw, s, true) }
+
+// yamlScopedAway reports whether raw's frontmatter keeps it from a session's
+// start (measured, B2a's C4 and B2b's rules rows): frontmatter that is not
+// valid YAML, which never loads, or the first of s's keys present in it
+// (case-exact) holding patterns ([yamlPatterns]) with an entry outside
+// s.Whole (Claude Code's `**`, none of Qwen Code's), which it loads only on a
+// matching path or never.
+func yamlScopedAway(raw []byte, s treeScope, others bool) bool {
 	front, ok := frontmatter(raw)
 	if !ok {
 		return false
@@ -350,7 +360,7 @@ func yamlScopedAway(raw []byte, s treeScope) bool {
 	for _, key := range s.Keys {
 		for i := 0; i+1 < len(fields); i += 2 {
 			if fields[i].Value == key {
-				return slices.ContainsFunc(claudePatterns(fields[i+1]),
+				return slices.ContainsFunc(yamlPatterns(fields[i+1], others),
 					func(p string) bool { return !slices.Contains(s.Whole, p) })
 			}
 		}
@@ -358,11 +368,11 @@ func yamlScopedAway(raw []byte, s treeScope) bool {
 	return false
 }
 
-// claudePatterns is a frontmatter value as Claude Code's patterns: a
-// string's, or each string's of a list, `,`-separated parts, trimmed, the
-// empty ones dropped; a list's other entries are dropped (measured: `["src/**",
-// 5]` scopes the rule to src/**), and a value of another kind holds none.
-func claudePatterns(v *yaml.Node) []string {
+// yamlPatterns is a frontmatter value as patterns: a string's, or each
+// string's of a list, `,`-separated parts, trimmed, the empty ones dropped; a
+// list's other entries dropped, or each one entry of its own where others; a
+// value of another kind none.
+func yamlPatterns(v *yaml.Node, others bool) []string {
 	strs := []*yaml.Node{v}
 	if v.Kind == yaml.SequenceNode {
 		strs = v.Content
@@ -370,6 +380,9 @@ func claudePatterns(v *yaml.Node) []string {
 	var patterns []string
 	for _, n := range strs {
 		if n.Kind != yaml.ScalarNode || n.Tag != "!!str" {
+			if others && v.Kind == yaml.SequenceNode {
+				patterns = append(patterns, n.Value)
+			}
 			continue
 		}
 		for _, part := range strings.Split(n.Value, ",") {
