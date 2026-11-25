@@ -83,6 +83,8 @@ var hsFixtures = map[string]string{
 		"its first request: the main thread before the resume",
 	"2.1.330/t1": "row t1: a note handed at a batch, the next request never answered and the harness stopped, " +
 		"then resumed with the note in its first request: the main thread before the resume",
+	"2.1.330/c1": "row c1: a note at a batch, answered, an auto-compaction, then a note at a batch, answered: the " +
+		"main thread, its boundary at line 38",
 }
 
 // hsFixture is the fixture of release and name ([hsFixtures]) as its archive

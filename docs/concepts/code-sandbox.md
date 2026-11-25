@@ -2661,20 +2661,24 @@ in an `env` block. The file holds two hooks, nothing else:
     serve to the job not yet settled; a lost job's box is read for it whatever the
     company keeps of its sessions.
   - A serve is **held** where the line naming its token and the context of the
-    same firing are both on the conversation Claude Code's resume hands over, the
-    thread reads alike by every path its resume may take, its release is one whose
-    resume the engine has read (2.1.310, 2.1.322 and 2.1.330), and no restart of the thread
-    comes after: the note is recorded read at its first serve's place among the
-    turn's reads.
+    same firing are both on the conversation Claude Code's resume hands over and
+    read alike by every path its resume may take, its release is one whose resume
+    the engine has read (2.1.310, 2.1.322 and 2.1.330), and no restart of the
+    thread comes after: the note is recorded read at its first serve's place among
+    the turn's reads. Past a compaction's last boundary every path hands the same
+    records (measured on all three, resumed small, past 5 MiB and pruned), so a
+    note taken after a compaction is held.
   - One a restart follows, or for a batch's note a reply saying the server cleared
     tool results, is read **restarted**: taken, and told again to a session
-    continued from that restart on.
+    continued from that restart on. So is one before a compaction's last boundary
+    that a reply of the model followed before it, its note then delivered; one no
+    reply followed reached the model only in the summary, and decides nothing.
   - One the thread proves never taken is lost, which needs a harness that ended
     its own run, a thread read whole and never restarted, and another note of the
     same hook event held in it.
   - Anything else decides nothing, and the note stays served: a thread that
-    compacted or rooted again, one past the read's 27 seconds, or another
-    release. A read that decides nothing logs
+    rooted again, one past the read's 27 seconds, or another release. A read that
+    decides nothing logs
     [`steer_receipt_unread`](#failure-modes).
 - **Ten seconds**, where the vendor's default is six hundred: the harness holds
   its next model request until the hook answers, at every batch, and the bridge

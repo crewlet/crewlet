@@ -165,7 +165,7 @@ const (
 	// load fails at ([threadLine.ReplacementCount]).
 	whyReplacementShape chainWhy = "replacement_shape"
 	whySpread           chainWhy = "spread"         // a list past [threadChainMaxSpread] passed whole into one call
-	whyLargeFile        chainWhy = "large_file"     // past [claudeResumeLargeFile] and not path-free ([threadChain.AnySize])
+	whyLargeFile        chainWhy = "large_file"     // past [claudeResumeLargeFile] and read otherwise by a large-file reader ([threadChain.Alike])
 	whyResultByCall     chainWhy = "result_by_call" // tengu_foamy_spring may hang the result elsewhere ([threadChain.resultByCall])
 	// whyLeafRule is a checkpoint the last row does not descend through where
 	// a leaf rule of 2.1.330 the chain does not hold may move the leaf to the
@@ -311,10 +311,10 @@ const threadChainHeldBytes = 43 << 20
 // 2.1.322's ike @293792132, 2.1.310's HMt @247175414), or, where
 // CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP is set (a settings file can set it
 // whatever the launcher unsets), the PRUNE (jrn @322229157, F1t @293788207,
-// FPt @247171899). The chain models both and answers a thread past it only
-// where it is path-free ([threadChain.AnySize]), else whyLargeFile. 2.1.330's
-// re-read of a file its read outran and the meta rows its dispatch skips or
-// defers (`never`) touch no record of a file at rest.
+// FPt @247171899). The chain models both and answers past it only a thread
+// path-free ([threadChain.AnySize]) or past its last boundary (Alike), else
+// whyLargeFile. 2.1.330's re-read of a file its read outran and the meta rows
+// its dispatch skips or defers (`never`) touch no record of a file at rest.
 const claudeResumeLargeFile = 5 << 20
 
 // The bytes the large-file readers read a line by ([claudeResumeLargeFile]),
@@ -372,8 +372,9 @@ type threadChain struct {
 	// smallOnly is whether a line was met that a large-file reader may read
 	// otherwise than the small path, lastMarked whether the last record filed
 	// holds a sidechain's bytes (in the main thread they move where every reader
-	// starts); anySize is End's path-free ([threadChain.AnySize]).
-	smallOnly, lastMarked, anySize bool
+	// starts); anySize is End's path-free ([threadChain.AnySize]), alikePast
+	// End's path-free past the last boundary ([threadChain.Alike]).
+	smallOnly, lastMarked, anySize, alikePast bool
 	// why is the thread's own cannot tell, the first shape met; "" while the
 	// thread is modelled.
 	why chainWhy
@@ -915,20 +916,21 @@ func (c *threadChain) row(h chainHandle, r chainRecord) {
 
 // slotFacts files what the large-file readers make of line by its byte facts
 // ([threadBytes]), the record whose own uuid is id, parent written and kind
-// kind: a reader may read it otherwise than its decode where it is a
-// compaction's boundary (the dispatch forgets the slots before it), where it
-// does not begin `{"parentUuid":` and the parent its decode names ([slotHead]),
-// where the readers key it by another uuid ([threadBytes.KeyedBy]), and in a
-// subagent's thread where it does not say it is a sidechain's right after its
-// parent. In the main thread it files whether the record holds a sidechain's
-// bytes, which move every reader's start where it is the last record.
+// kind: a reader may read it otherwise than its decode where it does not
+// begin `{"parentUuid":` and the parent its decode names ([slotHead]), where
+// the readers key it by another uuid ([threadBytes.KeyedBy]), and in a
+// subagent's thread where it is a compaction's boundary or does not say it is
+// a sidechain's right after its parent. A main thread's boundary binds only
+// the records before it ([threadChain.Alike]). In the main thread it files
+// whether the record holds a sidechain's bytes, which move every reader's
+// start where it is the last record.
 func (c *threadChain) slotFacts(line threadLine, id string, written chainWritten, kind chainKind) {
 	head := line.Bytes.Head()
 	end := slotHead(head, line.Head.Parent, written.named)
 	switch {
-	case end < 0, kind&kindBoundary != 0, !line.Bytes.KeyedBy(id):
+	case end < 0, !line.Bytes.KeyedBy(id):
 		c.smallOnly = true
-	case c.agent != "" && !bytes.HasPrefix(head[end:], slotSidechainHead):
+	case c.agent != "" && (kind&kindBoundary != 0 || !bytes.HasPrefix(head[end:], slotSidechainHead)):
 		c.smallOnly = true
 	}
 	if c.agent == "" {
@@ -1318,6 +1320,25 @@ func (c *threadChain) AnySize() bool {
 	return c.state == chainDecided && c.why == "" && c.anySize
 }
 
+// Alike reports whether every size path answers record h as the chain does:
+// a record of a path-free thread ([threadChain.AnySize]), or, of a main
+// thread path-free but for its compactions' boundaries, the last boundary or
+// a record filed after it. PAST THE LAST BOUNDARY THE READERS AGREE (measured
+// on 2.1.310, 2.1.322 and 2.1.330: c1's thread resumed small, by the dispatch
+// and by the prune handed the same records past it); before it the dispatch
+// forgets the slots, so past [claudeResumeLargeFile] those records answer
+// handedUnknown, whyLargeFile. False before End decided, after an End cut
+// short, and where the thread is cannot tell.
+func (c *threadChain) Alike(h chainHandle) bool {
+	switch {
+	case c.state != chainDecided || c.why != "" || h <= noChainRecord || int(h) > c.handles:
+		return false
+	case c.anySize:
+		return true
+	}
+	return c.alikePast && h >= c.lastBoundary
+}
+
 // record is h's filed record, where the chain holds it.
 func (c *threadChain) record(h chainHandle) (chainRecord, bool) {
 	if h <= 0 || int(h) > len(c.recs) {
@@ -1523,12 +1544,12 @@ func (c *threadChain) work() *chainWork {
 // in the file's order, each record whose parent was reached before it as one
 // that hands its children on, itself handing them on where X_e reads it as
 // part of that parent's group (a reply's own id, else the parent's), and not
-// where the parent is UF. Parents are as written: a path-free thread holds no
-// boundary, so no relink moves one. Only the dispatch's group is read: the
-// prune's is the dispatch's wherever that is a reply's. Beyond this the
-// readers differ only in lines no step reads (attribution snapshots, reaction
-// ledgers) and surrogate escapes.
-func (c *threadChain) covered(ctx context.Context, w *chainWork) (bool, error) {
+// where the parent is UF; from handle from on (what a boundary there leaves).
+// Parents are as written: past the last boundary no relink moves one. Only
+// the dispatch's group is read: the prune's is the dispatch's wherever that
+// is a reply's. Beyond this the readers differ only in lines no step reads
+// (attribution snapshots, reaction ledgers) and surrogate escapes.
+func (c *threadChain) covered(ctx context.Context, w *chainWork, from chainHandle) (bool, error) {
 	n := len(c.recs)
 	// w.a holds the walk.
 	w.a.clear()
@@ -1542,27 +1563,28 @@ func (c *threadChain) covered(ctx context.Context, w *chainWork) (bool, error) {
 	// one's group.
 	w.b.clear()
 	groups := make([]chainReplyID, n+1)
-	for i, r := range c.recs {
+	for i := int(from) - 1; i < n; i++ {
 		if err := w.tick(ctx); err != nil {
 			return false, err
 		}
+		r := c.recs[i]
 		h, p := chainHandle(i+1), r.parent
-		var from chainReplyID
+		var group chainReplyID
 		if p != noChainRecord && w.b.has(int(p)) {
-			from = groups[p]
+			group = groups[p]
 		}
 		switch {
 		case w.a.has(int(h)):
 		case p == noChainRecord || !w.b.has(int(p)):
 			return false, nil
-		case c.partOf(h, from):
+		case c.partOf(h, group):
 		case c.uf(p):
 			continue
 		default:
 			return false, nil
 		}
 		w.b.set(int(h))
-		groups[h] = from
+		groups[h] = group
 		if r.kind&kindAssistant != 0 {
 			groups[h] = r.reply
 		}
@@ -1779,25 +1801,32 @@ func (c *threadChain) decide(ctx context.Context) error {
 	if c.why != "" {
 		return nil
 	}
-	// Path-free ([threadChain.AnySize]); lastMarked is the main thread's
-	// alone.
+	// Path-free ([threadChain.AnySize]), or past the last boundary alone
+	// ([threadChain.Alike]); lastMarked is the main thread's alone, as are
+	// boundaries that bind only the records before them.
 	main := c.agent == ""
 	free := !c.smallOnly && !c.lastMarked
+	past := free && main && c.lastBoundary != noChainRecord
+	free = free && !past
 	var w *chainWork
 	if len(c.recs) > 0 {
 		w = c.work()
-		if free && main {
-			var err error
-			if free, err = c.covered(ctx, w); err != nil {
-				return err
-			}
+		var err error
+		switch {
+		case free && main:
+			free, err = c.covered(ctx, w, 1)
+		case past:
+			past, err = c.covered(ctx, w, c.lastBoundary)
+		}
+		if err != nil {
+			return err
 		}
 	}
-	if c.bytes > claudeResumeLargeFile && !free {
+	if c.bytes > claudeResumeLargeFile && !free && !past {
 		c.cannotTell(whyLargeFile)
 		return nil
 	}
-	c.anySize = free
+	c.anySize, c.alikePast = free, past
 	if len(c.recs) == 0 {
 		// No record: no conversation, nothing handed under every variant
 		// (2.1.322's Yya and 2.1.330's Lcr, `if(s.size===0)return null`; Rye
@@ -1859,7 +1888,27 @@ func (c *threadChain) decide(ctx context.Context) error {
 	if len(walked) == 1 {
 		c.leaf = walked[0]
 	}
+	if past && c.bytes > claudeResumeLargeFile {
+		c.beforeBoundaryUnknown()
+	}
 	return nil
+}
+
+// beforeBoundaryUnknown makes every record filed before the last boundary of
+// a thread past [claudeResumeLargeFile] handedUnknown, whyLargeFile, and drops
+// them from every order: the dispatch reads them otherwise than the small
+// path ([threadChain.Alike]).
+func (c *threadChain) beforeBoundaryUnknown() {
+	before := int(c.lastBoundary) - 1
+	for i := range before {
+		c.verdicts[i] = chainVerdict{handed: verdictUnknown, why: whyAt(whyLargeFile)}
+	}
+	orders := c.orders
+	c.orders = nil
+	for _, o := range orders {
+		kept := slices.DeleteFunc(slices.Clone(o.records), func(h chainHandle) bool { return int(h) <= before })
+		c.order(kept, o.variants)
+	}
 }
 
 // chainGroups is the groups of variants the thread's answers part into: the

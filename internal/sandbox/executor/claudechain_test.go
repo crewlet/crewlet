@@ -1603,10 +1603,6 @@ func TestAThreadPastFiveMebibytesIsReadAsBothItsLargeFileReadersReadIt(t *testin
 				`"isSidechain":false,"isVirtual":true,`), rcResults(2, 3, 1100, "x1"),
 			rcReply(3, 4, "msg_b", 1200, rcSaid("done"))}, 1, `"content":"a prompt`,
 			rcHanding(whyChain, []int{1, 2, 3, 4}), []int{1, 2, 3, 4}, 4},
-		"a compaction's boundary": {[]string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")),
-			rcSystem(2, 3, 2000, subtypeCompactBoundary, `"compactMetadata":{"trigger":"manual"},`),
-			rcPrompt(3, 4, 3000)}, 4, `"content":"a prompt`, rcHanding(whyChain, []int{1, 2, 3, 4}),
-			[]int{1, 2, 3, 4}, 4},
 		"a refused line a reader may take for its start": {append(slices.Clone(turns),
 			rcPrompt(2, 9, 1300)[:70]+rcPrompt(2, 8, 1400)), 1, `"content":"a prompt`, turnsAnswers,
 			[]int{1, 2, 3, 4}, 4},
@@ -2928,4 +2924,40 @@ func TestTheChainModelsTheResumeOfTheReleasesItWasReadFromAlone(t *testing.T) {
 			t.Errorf("%q is modelled %t; want %t", release, got, want)
 		}
 	}
+}
+
+// A MAIN THREAD PAST FIVE MEBIBYTES IS ANSWERED PAST ITS LAST BOUNDARY (#1532):
+// every size path of each release's resume hands the same records past a
+// compaction's last boundary (measured: c1, small, by the dispatch and by the
+// prune), so a boundary binds only what lies before it. Under the bound every
+// record answers as the small path hands it, Alike past the boundary alone,
+// AnySize false; past it the boundary and the records after it answer so, the
+// records before it are cannot tell (whyLargeFile), and the order holds the
+// rest. A record after the boundary no walk from the last reaches (a later
+// root) binds the whole thread again.
+//
+// Mutation: bind the thread at its boundary again, answer the records before
+// it past the bound, or skip the walk past the boundary, and a case goes red.
+func TestAMainThreadPastFiveMebibytesIsAnsweredPastItsLastBoundary(t *testing.T) {
+	t.Parallel()
+	lines := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_a", 1000, rcSaid("a")),
+		rcSystem(2, 3, 2000, subtypeCompactBoundary, `"compactMetadata":{"trigger":"manual"},`),
+		rcPrompt(3, 4, 3000)}
+	small := rcChain(t, "", lines...)
+	small.expect(t, "a compaction's boundary", rcHanding(whyChain, []int{1, 2, 3, 4}),
+		rcOrder{[]int{1, 2, 3, 4}, allVariants})
+	if small.c.AnySize() {
+		t.Error("a thread holding a boundary is path-free whole")
+	}
+	for line, want := range map[int]bool{1: false, 2: false, 3: true, 4: true} {
+		if got := small.c.Alike(small.handles[line]); got != want {
+			t.Errorf("line %d is read alike by every size path %t; want %t", line, got, want)
+		}
+	}
+	past := rcChain(t, "", rcSized(t, claudeResumeLargeFile+1, 4, `"content":"a prompt`, lines...)...)
+	past.expect(t, "a compaction's boundary, past the bound", map[int]rcAnswer{1: cannot(whyLargeFile),
+		2: cannot(whyLargeFile), 3: yes(whyChain), 4: yes(whyChain)}, rcOrder{[]int{3, 4}, allVariants})
+	rooted := append(slices.Clone(lines), rcPrompt(0, 5, 4000))
+	rcChain(t, "", rcSized(t, claudeResumeLargeFile+1, 4, `"content":"a prompt`, rooted...)...).
+		expectCannotTell(t, "a later root after the boundary, past the bound", whyLargeFile)
 }
