@@ -68,8 +68,8 @@ func runGrokNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr i
 // checkouts first in order, and every other named by its files' paths to
 // read; then each one's skills listed by path ([skillsListing]), since Grok
 // lists a copy only some 2 s after it lands (measured, rows w and w2); then
-// what the firing left out ([skippedListing]), the listings cut where the
-// bound falls. "" where it hands nothing.
+// what the firing left out ([skippedListing]), taken first, the skills'
+// listings cut where the bound falls. "" where it hands nothing.
 func grokNestedContext(handed []handedCheckout, skipped []string) string {
 	var whole, named []string
 	for _, h := range handed {
@@ -108,15 +108,11 @@ func grokNestedContext(handed []handedCheckout, skipped []string) string {
 			}
 		}
 	}
+	left := room.take(skippedListing(skipped)) // first, as [listingBudget.listings] takes it
 	for _, h := range handed {
-		if b := room.take(skillsListing(h)); b != "" {
-			blocks = append(blocks, b)
-		}
+		blocks = appendNonEmpty(blocks, room.take(skillsListing(h)))
 	}
-	if b := room.take(skippedListing(skipped)); b != "" {
-		blocks = append(blocks, b)
-	}
-	return strings.Join(blocks, "\n\n")
+	return strings.Join(appendNonEmpty(blocks, left), "\n\n")
 }
 
 // units is s's length as Grok counts it: code points.

@@ -264,6 +264,27 @@ func TestAGrokAnswerHoldsWholeCheckoutsWithinGroksCut(t *testing.T) {
 	}
 }
 
+// A GROK ANSWER KEEPS WHAT IT LEFT OUT BEFORE ITS SKILLS: where the skills'
+// listing and the left-out lines pass the hook's cut, the left-out lines
+// come whole, last, and the skills' listing before them is cut.
+//
+// Mutation: take the skills first, and this goes red.
+func TestAGrokAnswerKeepsWhatItLeftOutBeforeItsSkills(t *testing.T) {
+	t.Parallel()
+	h := handedCheckout{name: "late", root: "/w/late"}
+	for i := range 40 {
+		h.skills = append(h.skills, handedSkill{name: "late-s" + strconv.Itoa(i), description: strings.Repeat("d", 300),
+			path: "/h/skills/late-s" + strconv.Itoa(i) + "/SKILL.md"})
+	}
+	skipped := []string{"the skill /w/late/.grok/skills/x is left out: its name is taken"}
+	answer := grokNestedContext([]handedCheckout{h}, skipped)
+	skills, ok := strings.CutSuffix(answer, "\n\n"+skippedListing(skipped))
+	if !ok || !strings.HasSuffix(skills, "\n"+grokListingCut) || units(answer) > grokNestedChars {
+		t.Errorf("the answer (%d code points) is not the skills cut, then what was left out whole:\n%.300s...%s",
+			units(answer), answer, answer[max(len(answer)-300, 0):])
+	}
+}
+
 // A COPY THAT A PERSON'S SKILL WOULD HIDE, OR RENAME, IS LEFT OUT, SAID
 // (rows x1-x7): Grok lists a copy `late:foo` as late-foo, so a home skill
 // whose name or directory rewrites to it (late-foo; late-bar-x named
