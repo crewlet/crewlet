@@ -171,7 +171,11 @@
 // pi-nested the same as codex-nested with each file in Pi's
 // `<project_instructions path=...>`, on stdout for the run's extension to add
 // to the tool's result (Pi lists no skill it did not start with and loads
-// instructions only as it starts, measured on 1.6.0). A harness taking
+// instructions only as it starts, measured on 1.6.0); opencode-nested the same
+// with each file after OpenCode's `Instructions from: <path>`, for the run's
+// plugin (OpenCode 2.3.2 likewise). A recursive skill directory may carry a
+// `depth`, past which the walk lists nothing, as OpenCode lists no skill more
+// than 6 directories down. A harness taking
 // checkouts adds a nested adapter, never a second core; its runner holds the
 // home file and the copies (internal/sandbox/executor's checkoutHome). What a nested firing
 // leaves out (a skill whose name the home's skills hold, one that leads out

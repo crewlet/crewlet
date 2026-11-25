@@ -192,7 +192,7 @@ func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []
 	for i, slot := range spec.SkillDirs {
 		dir := filepath.Join(root, slot.Dir)
 		if slot.Recursive {
-			found, err := walkSkills(realRoot, dir, reached)
+			found, err := walkSkills(realRoot, dir, slot.Depth, reached)
 			if err != nil {
 				over = append(over, fmt.Sprintf("the skills of %s are left out: %v", dir, err))
 				continue

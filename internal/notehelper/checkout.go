@@ -22,7 +22,8 @@ import (
 // there does not load as a session started in the checkout would. It names no
 // harness: a [checkoutSpec] says what one reads from a checkout's root and
 // where the run's copies go, checkout-launch runs it once before the harness
-// starts, and a harness's nested adapter (codex-nested, pi-nested) runs it
+// starts, and a harness's nested adapter (codex-nested, pi-nested,
+// opencode-nested) runs it
 // after each of the main loop's tool calls and writes what it claimed in its
 // harness's shape.
 // The package doc's "Checkouts below the working directory" has the contract.
