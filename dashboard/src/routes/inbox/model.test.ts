@@ -4,7 +4,8 @@
  * read" sends, the snooze presets and the quiet sentences.
  */
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, expectTypeOf, test } from "vitest";
+import type { InboxRowKey } from "~/app/routes.ts";
 
 import {
   answerWords,
@@ -850,7 +851,7 @@ describe("who a notice is from", () => {
   );
   const row = (extra: Partial<WorkInboxNotice>): InboxRow => ({
     kind: "notice",
-    key: "r-1",
+    key: "notice:r-1",
     at: "2026-09-27T10:00:00Z",
     notice: notice("r-1", extra),
   });
@@ -879,7 +880,7 @@ describe("who a notice is from", () => {
 test("a notice whose key another task claimed is addressed by its task's id", () => {
   const r: InboxRow = {
     kind: "notice",
-    key: "r-1",
+    key: "notice:r-1",
     at: "2026-09-27T10:00:00Z",
     notice: notice("r-1", { task: "t-dup", subject_key: "ENG-7", subject_key_collision: true }),
   };
@@ -1351,4 +1352,9 @@ test("a notice that an item is not moving names its seat, not its handle", () =>
     index,
   );
   expect(said).toBe("Its start passed and Riley Ops has not picked it up since.");
+});
+
+// EVERY ROW'S KEY IS AN ADDRESSABLE ONE: a row kind keyed by a plain string fails the typecheck.
+test("every Inbox row is keyed by an addressable row key", () => {
+  expectTypeOf<InboxRow["key"]>().toEqualTypeOf<InboxRowKey>();
 });

@@ -135,6 +135,7 @@
 | `hostbox` | The primitives for running somebody else's process on the engine host: one environment allowlist, safe file placement, and journaled shared-login writes, shared by the harness backend, local sandbox and MCP stdio children. |
 | `hostbox/hostboxtest` | The kill matrix every writer of a shared login passes: it SIGKILLs the re-executed writer at each named step of its journaled writes and judges what the kill left. |
 | `shellword` | The one quoting of a value as a word of a POSIX shell, for every command the engine writes for a shell to read. |
+| `skillname` | The one rewrite of a skill's name as a harness lists it (Grok Build's), for the engine and the note helper alike. |
 | `flock` | The one exclusive cross-process file lock (`store`, `queue/jetstream`, `hostbox`, `gitlet/cache`), plus a pin: a lock on a file description a child inherits, held while any process holds it. |
 | `sockcount` | What a TCP socket's kernel holds unacknowledged and has had acknowledged, read from the connection's own descriptor (Linux and darwin). |
 | `procgroup` | Signals a child process tree as one process group, tells whether a recorded group is still the same one, and sums a group's CPU |

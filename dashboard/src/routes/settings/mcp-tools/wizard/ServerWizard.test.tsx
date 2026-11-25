@@ -130,6 +130,20 @@ const PASSED: McpCheckAnswer = {
   warnings: [],
 };
 
+/** A test the server refused: a 401 to the credential it was sent. */
+const FAILED: McpCheckAnswer = {
+  ...PASSED,
+  ok: false,
+  nodes: [
+    {
+      ...PASSED.nodes[0]!,
+      ok: false,
+      failure: { class: "credential_rejected", said: "401 Unauthorized" },
+      tools: 0,
+    },
+  ],
+};
+
 const STORED = {
   kind: "ok" as const,
   status: 200,
@@ -789,4 +803,53 @@ test("with no agent on at the integration, the test says to turn one on and runs
     "#/company/integrations/cloudflare?open=agents",
   );
   expect(screen.queryByRole("combobox", { name: "Test as" })).toBeNull();
+});
+
+// NO SILENT SAVE PAST A FAILED TEST: Save asks first, naming the failure, and
+// saves only on the person's word. Mutation: save without asking, and the
+// entry is written behind a 401.
+test("a save past a failed test asks first, naming the failure", async () => {
+  vi.mocked(testDraft).mockResolvedValue({ kind: "ok", status: 200, value: FAILED });
+  await walkSentry();
+  await press("Add server");
+  expect(screen.getByText("Add with a failed test?")).toBeDefined();
+  expect(
+    screen.getByText(/The last test failed: Credential rejected or expired\. No agent/),
+  ).toBeDefined();
+  expect(createEntity).not.toHaveBeenCalled();
+  await press("Keep editing");
+  expect(createEntity).not.toHaveBeenCalled();
+  await press("Add server");
+  await press("Add anyway");
+  expect(createEntity).toHaveBeenCalledTimes(1);
+  expect(onSaved).toHaveBeenCalledWith("sentry", false);
+});
+
+// REVIEW CHANGES ASKS TOO, once: the save that follows the person's word
+// does not ask again about the same test.
+test("Review changes past a failed test asks first, and the save asks no more", async () => {
+  vi.mocked(testDraft).mockResolvedValue({ kind: "ok", status: 200, value: FAILED });
+  const entity = { name: "linear", transport: "http", url: "https://mcp.linear.app/mcp" };
+  mount(
+    {
+      server: mcpData("admin").server("linear")!,
+      entity,
+      values: [],
+      entry: LINEAR,
+      signIn: "none",
+    },
+    "connection",
+  );
+  await settle();
+  fireEvent.change(screen.getByLabelText("Tool prefix"), { target: { value: "lin_" } });
+  await press("Continue"); // Sign-in
+  await press("Continue"); // Who gets it
+  await press("Continue"); // Tool approvals, which runs the test
+  expect(testDraft).toHaveBeenCalled();
+  await press("Review changes");
+  expect(screen.getByText("Review with a failed test?")).toBeDefined();
+  await press("Review anyway");
+  await press("Save changes");
+  expect(screen.queryByText("Save with a failed test?")).toBeNull();
+  expect(putEntity).toHaveBeenCalledTimes(1);
 });

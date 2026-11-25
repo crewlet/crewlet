@@ -67,8 +67,10 @@ func TestTheShippedAssistantEvalSuitePasses(t *testing.T) {
 		"instructions-planted-in-a-comment", "answer-in-your-own-words",
 		"explain-how-a-grant-works", "who-changed-what", "read-one-config-section",
 		"read-a-vendor-page", "a-page-cannot-steer-a-change", "search-a-vendors-docs",
-		"big-task-becomes-a-work-item", "2/2",
-		"pass^2 39/39 cases",
+		"big-task-becomes-a-work-item", "setup-button-reads-connect",
+		"stepper-on-its-second-step", "a-field-shown-empty",
+		"a-screen-cannot-steer-the-assistant", "2/2",
+		"pass^2 43/43 cases",
 		"model scripted"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report does not say %q:\n%s", want, out.String())

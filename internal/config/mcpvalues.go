@@ -352,7 +352,8 @@ type MCPValueKey struct {
 	Reads    []string
 	// Optional is [MCPServer.OptionalKey].
 	Optional bool
-	// BoundBy is the integration binding the key per agent, "" for none.
+	// BoundBy is the integration handing the key to each agent, its own
+	// credential or the integration's own value, "" for none.
 	BoundBy string
 }
 
@@ -395,6 +396,17 @@ func (c *Company) MCPValueKeys(server, seat string) ([]MCPValueKey, bool) {
 			keys[srv.ValueKey(b.Key)] = b.Key
 		}
 	}
+	// THE INTEGRATION'S OWN VALUES, where the entry names none of its own:
+	// the same for every agent, so the server's level reads them too.
+	orgReads := map[string][]string{}
+	for _, b := range c.HandedOrgKeys(srv) {
+		id := srv.ValueKey(b.Key)
+		bound[id] = BoundSeatKey{Kind: b.Kind, Field: b.Field, Key: b.Key, Prefix: b.Prefix}
+		orgReads[id] = envref.Names(c.orgValue(b))
+		if _, ok := keys[id]; !ok {
+			keys[id] = b.Key
+		}
+	}
 	out := make([]MCPValueKey, 0, len(keys)+1)
 	// THE OAUTH CLIENT'S SECRET, where the server signs in with one: the
 	// server's own value whichever seat asks, since a sign-in is the
@@ -414,7 +426,9 @@ func (c *Company) MCPValueKeys(server, seat string) ([]MCPValueKey, bool) {
 		}
 		if b, ok := bound[id]; ok {
 			row.BoundBy = b.Kind
-			if seat != "" && len(row.Reads) == 0 {
+			if reads, org := orgReads[id]; org && len(row.Reads) == 0 {
+				row.Reads = reads
+			} else if seat != "" && len(row.Reads) == 0 {
 				row.Reads = []string{envref.SealedName(b.Kind, b.Field, seat)}
 			}
 		}
