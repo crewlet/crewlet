@@ -59,10 +59,8 @@ func (h checkoutHome) removeSiblingStaging() string {
 // ImportInstructions where the harness reads them itself, each named as an
 // `@<absolute path>` import in place of its text, Limit not applying (Claude
 // Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code need their
-// own measurement of absolute imports before they set it); ListedAs, the
-// harness whose rule names a listed skill ("grok", or "" for the name as
-// written), and HomeSkills, the home's skill directories it lists beside the
-// run's skills, whose names a copy may not take.
+// own measurement of absolute imports before they set it); ListedAs and
+// HomeSkills as the helper's ("grok", Grok Build's listing rule).
 type checkoutSpec struct {
 	Instructions       []checkoutSlot
 	Limit              *int
