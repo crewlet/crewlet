@@ -1220,7 +1220,7 @@ func TestANodeThatLagsItsReadsBarrierIsHeardSayingSo(t *testing.T) {
 // margin. Raising any budget without the attempt fails here, not in a fleet.
 func TestProductionsReadAttemptHoldsALinearizableReadsWaits(t *testing.T) {
 	t.Parallel()
-	waits := 2*statelog.ReadBudget + statelog.DefaultBarrierBudget + gitlet.ReplyMargin
+	waits := 2*statelog.ReadBudget + statelog.ElectionBarrierBudget + gitlet.ReplyMargin
 	if read := Production().ReadAttempt; read < waits {
 		t.Errorf("production's read attempt is %v, under the %v a linearizable read's waits "+
 			"take at their whole budgets with the reply's margin", read, waits)

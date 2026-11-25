@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -62,11 +64,6 @@ type ReadIndex struct {
 	// room kept for an eviction.
 	admission Admission
 
-	// budget bounds the append apart from any caller's context: the append
-	// is shared, and a reader that walks away must not cancel it for the
-	// readers behind it.
-	budget time.Duration
-
 	mu sync.Mutex
 	// inflight is the append running, if any; Read says who may join it.
 	inflight *barrierRun
@@ -79,18 +76,38 @@ type barrierRun struct {
 	seq     uint64
 	gen     uint32
 	err     error
+	// leaderless is the last answer that the log had no leader while the
+	// run waits an election out, nil once anything else answered: what a
+	// reader that leaves mid-run is told ([ReadIndex.Read]).
+	leaderless atomic.Pointer[error]
 }
 
-// DefaultBarrierBudget bounds one barrier append.
+// SoloBarrierBudget bounds a barrier on a log ONE member stores, where no
+// election is involved.
 //
-// Five seconds is two orders of magnitude past a healthy barrier's p99 (3.6 ms
-// on one member, 42–62 ms on three; package doc, "What a write costs,
-// measured"), so a barrier still uncommitted is a broker that cannot commit:
-// `no_quorum` on several members, `broker_stalled` on one
-// ([ReadIndex.unconfirmed]). Not lengthened for a stalling disk: a budget
-// that outlasts one holds every linearizable read on the node as long, where
-// a refusal naming the stall is one its caller can act on.
-const DefaultBarrierBudget = 5 * time.Second
+// Five seconds is two orders of magnitude past a healthy barrier's p99 (3.6 ms;
+// package doc, "What a write costs, measured"), so a barrier still uncommitted
+// is the member's own stalled write, `broker_stalled` ([ReadIndex.unconfirmed]).
+// Not lengthened for a stalling disk: a budget that outlasts one holds every
+// linearizable read on the node as long, where a refusal naming the stall is
+// one its caller can act on.
+const SoloBarrierBudget = 5 * time.Second
+
+// ElectionBarrierBudget bounds a barrier on a log SEVERAL members store: one
+// election of the log's leader at the pinned broker's raft settings
+// ([jsprovision.Election]: the 9 s longest election timeout, server/raft.go:329,
+// and the new leader's first 1 s heartbeat, raft.go:331), waited out inside it,
+// against 42–62 ms for a healthy barrier there. A barrier uncommitted past it
+// is `no_quorum`.
+const ElectionBarrierBudget = jsprovision.Election
+
+// barrierBudget is the budget of a barrier on a log members store.
+func barrierBudget(members int) time.Duration {
+	if members > 1 {
+		return ElectionBarrierBudget
+	}
+	return SoloBarrierBudget
+}
 
 // NewReadIndex builds the read index of the log spec names, appending to its
 // own barrier subject. One per log, single-flighted per log: a barrier proves
@@ -144,7 +161,6 @@ func NewReadIndex(d Domain, spec StreamSpec, log Appender, members func() int, s
 		metrics:   rec,
 		members:   members,
 		admission: admission,
-		budget:    DefaultBarrierBudget,
 	}, nil
 }
 
@@ -187,6 +203,9 @@ func (r *ReadIndex) Read(ctx context.Context) (Position, error) {
 		}
 		select {
 		case <-ctx.Done():
+			if answer := run.leaderless.Load(); answer != nil {
+				return Position{}, &jsprovision.NoLeader{Group: r.stream, Answer: *answer, Err: ctx.Err()}
+			}
 			return Position{}, ctx.Err()
 		case <-run.done:
 		}
@@ -220,9 +239,10 @@ func (r *ReadIndex) claim() (*barrierRun, bool) {
 // run performs the append and releases everybody waiting on it.
 func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 	// Detached from this caller's cancellation and bounded by its own
-	// budget (ReadIndex.budget); the values travel, so the append keeps
-	// its trace.
-	appendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.budget)
+	// budget ([barrierBudget]): the append is shared, and a reader that walks
+	// away must not cancel it for the readers behind it. The values travel,
+	// so the append keeps its trace.
+	appendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), barrierBudget(r.members()))
 	go func() {
 		defer cancel()
 		defer func() {
@@ -252,19 +272,21 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		}
 		// NO OP ID: a repeated id inside the dedupe window is answered
 		// from the window with no raft round trip, a PubAck nothing
-		// confirmed, so a duplicate here is refused below.
-		// Held out of the reserve, and refused `log_full` at the ordinary
-		// ceiling like any ordinary append.
-		release := func() {}
-		if r.admission != nil {
-			if release, err = r.admission.Admit(appendCtx, appendBytes(body)); err != nil {
-				run.err = err
-				return
-			}
-		}
-		seq, duplicate, err := r.log.Append(appendCtx, r.subject, "", nil, body)
-		release()
-		if err != nil {
+		// confirmed, so a duplicate here is refused below. A log with no
+		// leader is waited out, admission and append alike, appended
+		// again until one is heard ([ReadIndex.appendThroughElection]).
+		ack, err := r.appendThroughElection(appendCtx, run, body)
+		var none *jsprovision.NoLeader
+		switch {
+		case errors.As(err, &none):
+			log.Warn("statelog_barrier_unconfirmed", "subject", r.subject,
+				"stage", "election", "error", err.Error())
+			run.err = err
+			return
+		case err != nil && ack.unadmitted != nil:
+			run.err = err
+			return
+		case err != nil:
 			run.err = frameworkAppendError(BarrierKind, r.subject, err)
 			if refused := (*Unavailable)(nil); !errors.As(run.err, &refused) {
 				// Logged here, once per append, for
@@ -274,7 +296,7 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 			}
 			return
 		}
-		if duplicate {
+		if ack.duplicate {
 			run.err = &Unavailable{
 				Reason: ReasonSkew,
 				Detail: fmt.Sprintf("the broker served the barrier on %s out of "+
@@ -284,7 +306,7 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 			}
 			return
 		}
-		run.seq = seq
+		run.seq = ack.seq
 		if r.metrics != nil {
 			r.metrics.Observe(metrics.StatelogBarrierDuration, time.Since(started),
 				metrics.Attrs{"domain": r.domain})
@@ -292,6 +314,64 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 				metrics.Attrs{"domain": r.domain})
 		}
 	}()
+}
+
+// barrierAck is one barrier's append as the broker answered it, or unadmitted,
+// its admission's refusal: nothing was appended.
+type barrierAck struct {
+	seq        uint64
+	duplicate  bool
+	unadmitted error
+}
+
+// appendThroughElection admits and appends one barrier inside ctx, again
+// while the log answers it has no leader ([jsprovision.ThroughElection]), each
+// such answer noted on run for a reader that leaves before it ends. Held out
+// of the reserve, and refused `log_full` at the ordinary ceiling like any
+// ordinary append. On a log several members store an append nobody answers is
+// SENT AGAIN, every earlier one still out and the first answer taken
+// ([jsprovision.ReadBounded]): a member that has not yet seen its leader go
+// swallows it, and only one sent once a new leader leads lands. A second
+// barrier is harmless, writing no row; one member holds no election to wait.
+func (r *ReadIndex) appendThroughElection(ctx context.Context, run *barrierRun,
+	body []byte) (barrierAck, error) {
+
+	once := func(ctx context.Context) (barrierAck, error) {
+		release := func() {}
+		if r.admission != nil {
+			var err error
+			if release, err = r.admission.Admit(ctx, appendBytes(body)); err != nil {
+				// AN ANSWER, never the hedge's silence, though its
+				// cause may be a reading nobody answered: the
+				// admission decided, and asking it again is its own.
+				return barrierAck{unadmitted: err}, nil
+			}
+		}
+		defer release()
+		seq, duplicate, err := r.log.Append(ctx, r.subject, "", nil, body)
+		return barrierAck{seq: seq, duplicate: duplicate}, err
+	}
+	replicated := r.members() > 1
+	return jsprovision.ThroughElection(ctx, r.stream, func(ctx context.Context) (barrierAck, error) {
+		var (
+			got barrierAck
+			err error
+		)
+		if replicated {
+			got, err = jsprovision.ReadBounded(ctx, ElectionBarrierBudget, once, nil)
+		} else {
+			got, err = once(ctx)
+		}
+		if got.unadmitted != nil {
+			err = got.unadmitted
+		}
+		if jsprovision.Leaderless(err) {
+			run.leaderless.Store(&err)
+		} else {
+			run.leaderless.Store(nil)
+		}
+		return got, err
+	})
 }
 
 // frameworkAppendError is what an append of a framework record the broker

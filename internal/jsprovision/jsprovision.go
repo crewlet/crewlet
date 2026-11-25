@@ -94,6 +94,24 @@
 // [Settle] owns its read-back window and takes the context that bounds the
 // BOOT: a read-back often exists because the create's deadline expired, so one
 // gated on that deadline would be dead code on the path it was written for.
+//
+// # A group with no leader is waited out, not answered
+//
+// Silence is not the only sign of an election. A member that KNOWS its stream's
+// group, or the metadata group, has no leader answers 503, err_code 10008
+// (server/jetstream_api.go, isGroupLeaderless and isLeaderless), and a publish
+// to a stream nobody leads is heard by nobody, since only the leader subscribes
+// its subjects (server/stream.go, setLeader). Both say an election is under
+// way, not what the caller asked about, so [ThroughElection] asks again inside
+// the caller's deadline with no count of its own ([Leaderless] is the one
+// classification). A caller with no deadline is held to one [Election], the
+// longest the pinned server's raft defaults leave a group without a leader it
+// can be heard from. It ASKS AGAIN at [ReAsk] rather than waking on a signal:
+// a stream's LEADER_ELECTED advisory is published in its account, but the
+// metadata group's, which a consumer's create waits on, only in the system
+// account (server/jetstream_cluster.go, sendDomainLeaderElectAdvisory), where
+// no client of the engine listens; and the answer comes back in a round trip.
+// A wait that ends is [*NoLeader], naming the stream.
 package jsprovision
 
 import (
