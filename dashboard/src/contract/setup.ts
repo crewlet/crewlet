@@ -16,7 +16,8 @@ export type SetupRequirementKind =
   | "email"
   | "toggle"
   | "add_identity"
-  | "consent";
+  | "consent"
+  | "redirect";
 
 /** One step at the app, its vendor UI names marked and its page linked. */
 export interface SetupStep {
@@ -25,6 +26,10 @@ export interface SetupStep {
   grants?: string[];
   /** The field the step produces a value for. */
   yields?: string;
+  /** The integration this step connects first. */
+  needs?: string;
+  /** Whether `needs` is connected: on, with nothing it requires outstanding. */
+  connected?: boolean;
 }
 
 /** The one risk an app's credential carries, said once per form. */
@@ -42,6 +47,12 @@ interface SetupIdentityStep {
   seat?: string;
   /** Whether the engine saw the identity hold the role. */
   state: "present" | "missing" | "unknown";
+}
+
+/** A `redirect` step's address: the engine's sign-in callback, "" with no public address, and the setting it is built on. */
+interface SetupRedirectStep {
+  url: string;
+  key: string;
 }
 
 /** One input an integration needs; every word the form draws comes from here. */
@@ -73,6 +84,8 @@ export interface SetupRequirement {
   public?: { text: string; language: string };
   /** An `add_identity` step: the email to add at the vendor, at which role and where. */
   identity?: SetupIdentityStep;
+  /** A `redirect` step: the address to register at the vendor. */
+  redirect?: SetupRedirectStep;
   /** Written from its default without being asked. */
   hidden?: boolean;
   /** The one line under the field, under fifteen words; a link waits for each `{field}` in its address. */

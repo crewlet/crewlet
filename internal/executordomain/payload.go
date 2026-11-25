@@ -84,6 +84,12 @@ type Capture struct {
 	ContextTokens int64 `json:"context_tokens,omitempty"`
 	Interrupted   bool  `json:"interrupted,omitempty"`
 
+	// Trimmed says the session's pack cut it, past the bound, to what its
+	// harness's resume loads: the history before its newest compaction is not
+	// in the object, which every reader of the row says. Stamped
+	// [trimmedVersion].
+	Trimmed bool `json:"trimmed,omitempty"`
+
 	// ReadThrough is the packed log position the turn's first launch read
 	// its conversation's head at (zero where none), and Absorbs the turns
 	// that read handed out ([Head.Absorbs]): exactly what the turn's `end`

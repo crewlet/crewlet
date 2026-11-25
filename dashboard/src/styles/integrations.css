@@ -324,6 +324,13 @@ a.int-feed-what:hover {
   flex-wrap: wrap;
   gap: var(--spacing-1);
 }
+/* What a step connects first: its state, and a link while it is not connected. */
+.int-step-needs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
 .int-setup-actions {
   display: flex;
   flex-wrap: wrap;

@@ -434,9 +434,11 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifact
 # commit), an empty build id, and gzipbuild's compress/gzip in place of the
 # gzip program, whose output is its version's. x/net/websocket and
 # klauspost/compress/zstd are its modules beyond std, as only they save
-# hand-rolling RFC 6455 and RFC 8878, which #1818's ruling forbids; their
-# versions are in the build info, so their bumps rebuild
-# (.github/workflows/dependabot-notehelper.yml). `go doc ./internal/notehelper`.
+# hand-rolling RFC 6455 and RFC 8878, which #1818's ruling forbids, and
+# yaml.v3, the engine's own YAML module, as Claude Code reads a rule's
+# frontmatter as YAML; their versions are in the build info, so their bumps
+# rebuild (.github/workflows/dependabot-notehelper.yml). `go doc
+# ./internal/notehelper`.
 NOTEHELPER_OUT := internal/sandbox/executor/notehelper
 NOTEHELPER_GO := go$(shell sed -n 's/^go //p' go.mod)
 

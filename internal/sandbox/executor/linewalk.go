@@ -79,8 +79,12 @@ type lineWalk struct {
 	// passes reports a line of one JSON value of kind k, no object, that the
 	// reader's whole-line decode passes over unsaid: no entry, where a line of
 	// a value it does not pass is said as no record (nil: none is passed).
-	passes  func(k jsonscan.Kind) bool
-	wordBuf []byte
+	passes func(k jsonscan.Kind) bool
+	// quiet passes over a line that is no record unsaid, as a harness that
+	// skips a fragment it left does (Codex, Hermes's dump); tornUnread
+	// leaves a last line with no break unread, neither said nor counted.
+	quiet, tornUnread bool
+	wordBuf           []byte
 	// idSum digests a word past the bound a walk for notes tells apart
 	// ([recordWord]).
 	idSum hash.Hash
@@ -179,6 +183,9 @@ func (w *lineWalk) line(ctx context.Context) (bool, error) {
 	if cause := w.src.cause; cause != nil && !errors.Is(cause, io.EOF) {
 		return false, cause
 	}
+	if w.tornUnread && ended && !w.src.broke {
+		return ended, nil
+	}
 	if w.bound > 0 {
 		if w.src.past {
 			return ended, w.say(w.pastBound)
@@ -192,6 +199,8 @@ func (w *lineWalk) line(ctx context.Context) (bool, error) {
 	}
 	switch {
 	case scanned && fault.Fault == jsonscan.FaultNoValue:
+		return ended, nil
+	case (!object && !passed || scanned || err != nil && !errors.Is(err, io.EOF)) && w.quiet:
 		return ended, nil
 	case !object && !passed, scanned, err != nil && !errors.Is(err, io.EOF):
 		return ended, w.say(w.refused)

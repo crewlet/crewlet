@@ -14,7 +14,9 @@ import (
 // settings, the agent directory's settings.json merged under the working
 // directory's .pi/settings.json, a file that is not JSON read as none; the
 // active tools, pi's defaults with `defaultTools`' plain names or `+`/`-`
-// entries applied, and a `direct` tool of each registered server. It plays the
+// entries applied, and a `direct` tool of each registered server unless a
+// file's `extensions` holds "-builtin:mcp" and no `-e builtin:mcp` loads it
+// back (measured either way). It plays the
 // first turn and prints pi's JSON stream: the extension's entries, then a
 // finished answer or, once the extension aborts, an aborted end.
 const piSettingsStandIn = `import { readFileSync } from "node:fs"
@@ -29,7 +31,10 @@ const merge = (a, b) => {
   for (const [k, v] of Object.entries(b)) o[k] = isObject(v) && isObject(o[k]) ? merge(o[k], v) : v
   return o
 }
-const settings = merge(read(process.env.PI_CODING_AGENT_DIR + "/settings.json"), read(".pi/settings.json"))
+const files = [read(process.env.PI_CODING_AGENT_DIR + "/settings.json"), read(".pi/settings.json")]
+const settings = merge(files[0], files[1])
+const mcp = !files.some((f) => Array.isArray(f.extensions) && f.extensions.includes("-builtin:mcp")) ||
+  args.some((a, i) => args[i - 1] === "-e" && a === "builtin:mcp")
 const listed = Array.isArray(settings.defaultTools) ? settings.defaultTools : []
 const plain = listed.filter((n) => !/^[+-]/.test(n))
 let active = plain.length > 0 ? plain : ["read", "bash", "edit", "write"]
@@ -40,7 +45,7 @@ for (const n of listed) {
 const handlers = new Map()
 const pi = {
   on: (name, h) => handlers.set(name, [...(handlers.get(name) ?? []), h]),
-  registerMcpServer: (name) => active.push("mcp__" + name.replace(/-/g, "_") + "__submit_work"),
+  registerMcpServer: (name) => { if (mcp) active.push("mcp__" + name.replace(/-/g, "_") + "__submit_work") },
   appendEntry: (customType, data) => out({ type: "entry_appended", entry: { type: "custom", customType, data } }),
   getAllTools: () => active.map((name) => ({ name })),
   getActiveTools: () => [...active],
@@ -71,9 +76,11 @@ process.exit(0)
 // and no layer of the launch undoes it. So the run is stopped before its
 // request, naming the file that set the mode, the key and the entry; it runs
 // where codemode is inactive, where the winning mode is another, where
-// codemode only lists no tool inline, and where the run has no server.
-// Mutations, each red: drop the check; drop the codemode-active condition;
-// name the first file setting the mode rather than the last; name no file.
+// codemode only lists no tool inline, and where the run has no server. So is a
+// file's `extensions` taking pi's MCP support away, which the launch never
+// loads back. Mutations, each red: drop either check; drop the codemode-active
+// condition; name the first file setting the mode; name no file; load the
+// MCP support back with `-e builtin:mcp`.
 func TestPisBridgeToolsCannotBeHiddenFromTheModelUnseen(t *testing.T) {
 	t.Parallel()
 	node := prereqtest.OnPath(t, "node", "the Pi stand-in loads the run's extension under it",
@@ -106,7 +113,15 @@ func TestPisBridgeToolsCannotBeHiddenFromTheModelUnseen(t *testing.T) {
 		"codemode lists no tool inline in its own mode": {switchOffCase: switchOffCase{
 			plant: map[string]string{repo: `{"defaultTools":["+codemode"],"codemode":{"inlineBudget":0}}`}}},
 		"a run without servers": {noServer: true, switchOffCase: switchOffCase{
-			plant: map[string]string{home: only}}},
+			plant: map[string]string{home: only, repo: `{"extensions":["-builtin:mcp"]}`}}},
+		"the home takes pi's MCP support away": {switchOffCase: switchOffCase{
+			plant: map[string]string{home: `{"extensions":["-builtin:mcp"]}`},
+			fails: []string{"the seat's tools never reached this run: /", `/.pi/agent/settings.json's extensions holds "-builtin:mcp"`}}},
+		"the repository takes pi's MCP support away": {switchOffCase: switchOffCase{
+			plant: map[string]string{repo: `{"extensions":["-builtin:mcp","-other"]}`},
+			fails: []string{`/workspace/.pi/settings.json's extensions holds "-builtin:mcp"`}}},
+		"another extension taken away": {switchOffCase: switchOffCase{
+			plant: map[string]string{home: `{"extensions":["-builtin:other"]}`}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

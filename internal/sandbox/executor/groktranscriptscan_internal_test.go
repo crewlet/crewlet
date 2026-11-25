@@ -198,6 +198,8 @@ func TestACollectionsReadOfAGrokSessionIsItsWholeLineRead(t *testing.T) {
 		grokHookLine(head[:len(head)-1], "", grokToken("9"), tail, "system_reminder"),
 		grokHookLine(head[:len(head)-1]+"x", "", grokToken("9"), tail, "system_reminder"),
 		grokHookLine("", "", "", head[:30], "system_reminder"),
+		grokHookLine(fmt.Sprintf(grokHookAnswers[1].head, 37), "", grokToken("3"), tail, "system_reminder"),
+		grokHookLine(fmt.Sprintf(grokHookAnswers[0].head, 12345), "", grokToken("4"), tail, "system_reminder"),
 		`{"type":"user","content":[{"text":`+q(head+grokToken("2")+tail)+`},5],"synthetic_reason":"system_reminder"}`,
 		`{"type":"user","content":`+q(head+grokToken("2")+tail)+`,"synthetic_reason":"system_reminder",`+
 			`"tool_calls":[{"id":5}]}`, `{"type":"assistant","content":"x","prompt_index":"1"}`, `true`)
@@ -210,11 +212,11 @@ func TestACollectionsReadOfAGrokSessionIsItsWholeLineRead(t *testing.T) {
 	records["every line"] = note + "\n" + strings.Join(lines, "\n") + "\n" + answer + "\n"
 	for name, record := range records {
 		want, wantErr := grokHeldWhole(strings.NewReader(record))
-		got, err := grokHeld(t.Context(), strings.NewReader(record))
+		got, err := grokHeld(t.Context(), strings.NewReader(record), nil)
 		if !maps.Equal(got, want) || fmt.Sprint(err) != fmt.Sprint(wantErr) {
 			t.Errorf("%s: held %v (%v), want %v (%v)", name, got, err, want, wantErr)
 		}
-		got, err = grokHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17})
+		got, err = grokHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, nil)
 		if !maps.Equal(got, want) || fmt.Sprint(err) != fmt.Sprint(wantErr) {
 			t.Errorf("%s in pieces: held %v (%v), want %v (%v)", name, got, err, want, wantErr)
 		}

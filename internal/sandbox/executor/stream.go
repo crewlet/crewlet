@@ -35,9 +35,16 @@ type Decoder interface {
 	// unknown event types.
 	Line(line []byte)
 
-	// Skipped is a line of n bytes past bound, not read. The decoder says so
-	// where it was, naming the bound, so a gap never reads as continuity.
-	Skipped(n int64, bound int)
+	// Skipped is a line past bound, not read whole. The decoder says so
+	// where it was, naming the bound, so a gap never reads as continuity, and
+	// reads its ends for a model request ([LongLine]), so a skipped line
+	// never hides one.
+	Skipped(line LongLine)
+
+	// Undecided is how many skipped lines may hold a model request whose
+	// ends showed none the decoder could count: a run with a turn cap and any
+	// such line is never judged within it ([Runner.Collect]).
+	Undecided() int
 
 	// Result is what the stream said: for a harness whose result is its stream,
 	// the whole of it; for one whose result is read apart, its transcript.
@@ -48,6 +55,21 @@ type Decoder interface {
 	// A run whose harness exited without one never collects as a success,
 	// whatever it wrote, its findings included ([Runner.Collect]).
 	Ended() bool
+
+	// Requests is how many model requests the lines fed show, counted by the
+	// engine off the stream in the unit its runner's cap is held to: what a
+	// run's collection holds to the cap its launch handed it ([Runner.Collect],
+	// [sandbox.Result.TurnCapExceeded]). Each decoder says at its count what
+	// it counts and where that was measured.
+	Requests() int
+
+	// InFlight is the requests the runner's own enforcer cannot stop once it
+	// has fired, as measured on the harness's release: a run past its cap by
+	// no more than these, whose stream shows that enforcer's stop, collects
+	// as stopped at its cap rather than past it ([capVerdict]). It and the stop
+	// only choose which failure a run past its cap collects as, never a
+	// success.
+	InFlight() int
 
 	// Entries hands over the entries decoded since it was last asked, in
 	// order, and FORGETS them, or an hours-long live reading would hold the
@@ -76,16 +98,47 @@ const maxLineBytes = sandbox.MaxFileBytes
 // The last line need not end in a line break: it is handed on, and a running
 // stream's partial last line is the decoder's to recognise.
 func eachLine(r io.Reader, dec Decoder, bound int) error {
-	return readLines(bufio.NewReaderSize(r, lineChunkBytes), bound,
+	l := streamLines{bound: bound, ends: true}
+	return l.read(bufio.NewReaderSize(r, lineChunkBytes), true,
 		func(line []byte) error {
 			dec.Line(line)
 			return nil
 		},
-		func(n int64) error {
-			dec.Skipped(n, bound)
+		func(n int64, head, tail []byte) error {
+			dec.Skipped(LongLine{Size: n, Bound: bound, Head: head, Tail: tail})
 			return nil
 		})
 }
+
+// LongLine is a line of the stream past its bound ([Decoder.Skipped]): its
+// size, the bound, and its first and last bytes ([skipHeadBytes],
+// [skipTailBytes]), the line's break left out. Head and Tail are reused once
+// Skipped returns.
+type LongLine struct {
+	Size       int64
+	Bound      int
+	Head, Tail []byte
+}
+
+// skipHeadBytes and skipTailBytes are the ends of a skipped line handed to its
+// decoder, which reads its request marker in one or the other. SIZED FROM
+// MEASUREMENT against each runner's pinned release: a marker-first runner's
+// lies within 196 bytes of the start (OpenCode's messageID; Claude Code's id
+// at 31), and a marker-last runner's within 136 bytes of the end, whatever the
+// payload before it (Pi's stopReason 135 on a 300 KB line, Qwen Code's usage
+// 123, Cursor's model_call_id 136 on a 900 KB one). Each window holds many
+// times that, so a field a later release adds beside the marker still fits.
+const (
+	skipHeadBytes = 4 << 10
+	skipTailBytes = 16 << 10
+)
+
+// undecidedLines is a decoder's count of skipped lines that may hold a model
+// request it could not read ([Decoder.Undecided]).
+type undecidedLines struct{ undecided int }
+
+// Undecided implements [Decoder].
+func (u *undecidedLines) Undecided() int { return u.undecided }
 
 // lineChunkBytes is the read buffer; a longer line is gathered across chunks,
 // so it bounds how many reads a line takes, not how long one may be.
@@ -103,7 +156,7 @@ const lineChunkBytes = 64 << 10
 // [streamLines] used for one whole read.
 func readLines(br *bufio.Reader, bound int, line func([]byte) error, skipped func(int64) error) error {
 	l := streamLines{bound: bound}
-	return l.read(br, true, line, skipped)
+	return l.read(br, true, line, func(n int64, _, _ []byte) error { return skipped(n) })
 }
 
 // streamLines is [readLines] with its place kept between reads that may end
@@ -114,6 +167,11 @@ type streamLines struct {
 	// of one already past it.
 	held []byte
 	over int64
+	// head and tail are the first and last bytes of a line past bound
+	// ([skipHeadBytes], [skipTailBytes]), all it keeps of one, and only for a
+	// decoder ([eachLine], ends): a record's other readers hold none.
+	head, tail []byte
+	ends       bool
 	// taken is how many bytes of the stream the reads consumed: handed on,
 	// held or counted.
 	taken int64
@@ -126,15 +184,26 @@ type streamLines struct {
 // At br's end with end set (the stream is whole), an unfinished last line is
 // handed on; without it, the line waits for the next read. br's own failure
 // returns with the place kept, and hands on nothing it cut short.
-func (l *streamLines) read(br *bufio.Reader, end bool, line func([]byte) error, skipped func(int64) error) error {
+func (l *streamLines) read(br *bufio.Reader, end bool, line func([]byte) error,
+	skipped func(n int64, head, tail []byte) error) error {
 	for {
 		chunk, err := br.ReadSlice('\n')
 		l.taken += int64(len(chunk))
 		switch {
 		case l.over > 0:
 			l.over += int64(len(chunk))
+			if l.ends {
+				l.keepTail(chunk)
+			}
 		case len(l.held)+len(chunk) > l.bound:
 			l.over = int64(len(l.held) + len(chunk))
+			if l.ends {
+				l.head = append(l.head[:0], l.held[:min(len(l.held), skipHeadBytes)]...)
+				l.head = append(l.head, chunk[:min(len(chunk), skipHeadBytes-len(l.head))]...)
+				l.tail = l.tail[:0]
+				l.keepTail(l.held)
+				l.keepTail(chunk)
+			}
 			// RELEASED, not truncated: the buffer has grown to the bound,
 			// and keeping it would hold that much for the rest of the read.
 			l.held = nil
@@ -156,7 +225,7 @@ func (l *streamLines) read(br *bufio.Reader, end bool, line func([]byte) error, 
 		var stop error
 		if l.over > 0 {
 			l.broken = !eof
-			stop = skipped(l.over)
+			stop = skipped(l.over, l.head, bytes.TrimRight(l.tail, "\r\n"))
 			l.over = 0
 		} else if len(l.held) > 0 {
 			l.broken = !eof
@@ -176,6 +245,18 @@ func (l *streamLines) read(br *bufio.Reader, end bool, line func([]byte) error, 
 			return nil
 		}
 	}
+}
+
+// keepTail keeps the last [skipTailBytes] of the line past bound, b appended.
+func (l *streamLines) keepTail(b []byte) {
+	if len(b) >= skipTailBytes {
+		l.tail = append(l.tail[:0], b[len(b)-skipTailBytes:]...)
+		return
+	}
+	if cut := len(l.tail) + len(b) - skipTailBytes; cut > 0 {
+		l.tail = append(l.tail[:0], l.tail[cut:]...)
+	}
+	l.tail = append(l.tail, b...)
 }
 
 // decodeAll runs a whole text through a decoder: a harness's Parse for a

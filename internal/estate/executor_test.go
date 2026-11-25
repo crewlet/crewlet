@@ -64,6 +64,13 @@ func engineCall(opID string) executordomain.Call {
 	}
 }
 
+// fullSummary is a kept summary with every field set.
+func fullSummary() *executorkeep.Summary {
+	return &executorkeep.Summary{Object: objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte("summary")),
+		Size: 512}, ContentKey: "k1", At: crossedAt, Bytes: 4096, Kept: 400, Cut: true, Harness: "claude-code",
+		Session: "sess-1", Place: executorkeep.CapturePlace{LaunchSeq: 2, CaptureSeq: 3}}
+}
+
 // fullEnding is an ending with every field set.
 func fullEnding() executorkeep.Ending {
 	return executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, Decision: "done",
@@ -77,7 +84,8 @@ func fullEnding() executorkeep.Ending {
 			Loss: executorkeep.LossContextExhausted}},
 		NotContinued: []executorkeep.NotContinued{{Loss: executorkeep.LossCaptureLate,
 			Instead: executorkeep.InsteadOlder,
-			Older:   &executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 2}, Detail: "a newer capture was being kept"}}}
+			Older:   &executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 2}, Detail: "a newer capture was being kept"}},
+		Summary: fullSummary()}
 }
 
 // sessionOf is one turn's row with every field set, so a field the wire
@@ -89,12 +97,13 @@ func sessionOf(handle, turn, conversationKey string) executordomain.Session {
 		Harness: "claude-code", HarnessVersion: "2.1.0", Entry: "0123456789abcdef0123456789abcdef",
 		SessionID: "sess-1", Object: objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
 		ContentKey: "k1", ArchiveFormat: 1, Media: []executorkeep.MediaObject{mediaOf()}, LaunchSeq: 2, CaptureSeq: 3,
-		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true,
+		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true, Trimmed: true,
 		CapturedAt: crossedAt, ReadThrough: atLog(4), Absorbs: []string{endedTurn},
 		BaseTurn: endedTurn, RetiredBy: endedTurn, RetiredLoss: executorkeep.LossRequestRefused,
 		EndedAt: crossedAt, EndedAtPosition: atLog(5),
 		Ending:     &ending,
 		AskExcerpt: "what " + handle + " was asked",
+		Summary:    fullSummary(),
 	}
 }
 
@@ -105,7 +114,7 @@ func captureOf(turn string) executordomain.NewCapture {
 		Harness: "claude-code", HarnessVersion: "2.1.0", Entry: "0123456789abcdef0123456789abcdef",
 		SessionID: "sess-1", Object: objstore.Object{Key: sessionKey, Hash: objstore.HashOf([]byte(turn)), Size: 42},
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 1, CaptureSeq: 2,
-		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true,
+		Home: "/home/agent", Workspace: "/work", ContextTokens: 61_000, Interrupted: true, Trimmed: true,
 		Media:       []executordomain.NewMedia{{MediaObject: mediaOf(), Carried: true}},
 		ReadThrough: atLog(4), Absorbs: []string{endedTurn},
 		SeatBudget: 64 << 20,

@@ -86,6 +86,7 @@ import {
   SignInStep,
   TestStep,
   testersOf,
+  testFailure,
   type ReviewCheck,
   type TestState,
 } from "./steps.tsx";
@@ -180,6 +181,10 @@ export function ServerWizard({
   const [attempted, setAttempted] = useState<ReadonlySet<Step>>(new Set());
   const [problems, setProblems] = useState<ConfigProblem[]>([]);
   const [test, setTest] = useState<TestState>({ kind: "idle" });
+  /** Save or Review changes waiting on a person's word about a failed test. */
+  const [confirming, setConfirming] = useState<"save" | "review" | null>(null);
+  /** The failed test a person chose to go on past, so it is asked about once. */
+  const [overruled, setOverruled] = useState("");
   const [check, setCheck] = useState<ReviewCheck>({ kind: "idle" });
   const [saving, setSaving] = useState(false);
   const [discarding, setDiscarding] = useState(false);
@@ -412,6 +417,20 @@ export function ServerWizard({
     }
   }
 
+  // NO SILENT SAVE PAST A FAILED TEST of this draft: Save and Review changes
+  // ask first where the save writes what no test gates (the entry, or a value
+  // stored untested); a value the values route tests is refused there.
+  const failure = test.kind === "done" && test.for === signature ? testFailure(test) : null;
+  const failedTest = test.kind === "done" ? `${test.for}\n${test.answer.at}` : "";
+  const ungated =
+    (written?.entity !== canonical(entity) && !unchanged) ||
+    Object.entries(values).some(([k, v]) => storedFor[k] !== v && !testsValue(draft, k));
+  const asks = (then: "save" | "review") => {
+    if (failure === null || !ungated || overruled === failedTest) return false;
+    setConfirming(then);
+    return true;
+  };
+
   const go = (id: Step) => {
     // REVIEW LISTS EVERYTHING, so reaching it is acting on every step.
     if (id === "review") {
@@ -448,8 +467,9 @@ export function ServerWizard({
   /** On to the next step when this one has what it needs; otherwise say what, and focus it. */
   function advance() {
     if (step === "review") {
-      if (check.kind === "accepted") void save();
-      else if (check.kind === "idle") void runCheck();
+      if (check.kind === "accepted") {
+        if (!asks("save")) void save();
+      } else if (check.kind === "idle") void runCheck();
       return;
     }
     if (sourceGap) {
@@ -571,7 +591,12 @@ export function ServerWizard({
               </Button>
             ) : null}
             {saved && !reviewing ? (
-              <Button variant="secondary" onClick={() => go("review")}>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  if (!asks("review")) go("review");
+                }}
+              >
                 Review changes
               </Button>
             ) : null}
@@ -643,6 +668,29 @@ export function ServerWizard({
           ) : null}
         </div>
       </SetupWizard>
+      <ConfirmModal
+        open={confirming !== null}
+        onClose={() => setConfirming(null)}
+        onConfirm={() => {
+          const then = confirming;
+          setConfirming(null);
+          setOverruled(failedTest);
+          if (then === "save") void save();
+          else go("review");
+        }}
+        title={
+          confirming === "review"
+            ? "Review with a failed test?"
+            : saved
+              ? "Save with a failed test?"
+              : "Add with a failed test?"
+        }
+        message={`The last test failed: ${failure ?? ""}. No agent can use this server until it is fixed.`}
+        confirmLabel={
+          confirming === "save" ? (saved ? "Save anyway" : "Add anyway") : "Review anyway"
+        }
+        cancelLabel="Keep editing"
+      />
       <ConfirmModal
         open={discarding}
         onClose={() => setDiscarding(false)}

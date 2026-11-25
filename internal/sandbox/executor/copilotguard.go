@@ -23,9 +23,9 @@ import (
 // before anything is written, the launch asks the box's Copilot which user
 // settings it loads and whether it rejects the home's MCP file, reads the
 // policy file, and refuses the run naming the file, the key and the entry
-// ([copilotGuard]). A `disabledMcpServers` entry, the home's or a repository's,
-// the run's `--enable-mcp-server` undoes, and a server of the bridge's name in
-// any MCP file its `--additional-mcp-config` replaces (measured).
+// ([copilotGuard]), a `disabledMcpServers` entry naming the bridge, the home's
+// or a repository's, among them; a server of the bridge's name in any MCP file
+// the run's `--additional-mcp-config` replaces (measured).
 
 // copilotPolicyFile is where Copilot 1.0.114 reads a Linux machine's managed
 // policy; no variable names another, its test override included (measured).
@@ -100,7 +100,8 @@ func copilotGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReque
 // copilotGuardCommand is the shell printing, each after its mark, what the
 // box's Copilot says of the user settings ([Paths.CopilotGuardSettings], moved
 // into a home of its own) with `config --list`; where mcp, the errors of `mcp
-// list` in the run's home; and the policy file's kind, owner and content.
+// list` in the run's home and the repository's settings (`--repo`, `--local`);
+// and the policy file's kind, owner and content.
 func copilotGuardCommand(paths Paths, policy string, mcp bool) string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -116,6 +117,10 @@ func copilotGuardCommand(paths Paths, policy string, mcp bool) string {
 	if mcp {
 		line(`  echo %s`, q(copilotGuardMark+"mcp"))
 		line(`  COPILOT_HOME=%s copilot mcp list < /dev/null 2>&1 > /dev/null`, q(paths.CopilotHome()))
+		line(`  echo %s`, q(copilotGuardMark+"repo"))
+		line(`  COPILOT_HOME="$gt" copilot config --list --repo < /dev/null 2>&1`)
+		line(`  echo %s`, q(copilotGuardMark+"local"))
+		line(`  COPILOT_HOME="$gt" copilot config --list --local < /dev/null 2>&1`)
 	}
 	line(`fi`)
 	line(`echo %s`, q(copilotGuardMark+"policy"))
@@ -128,8 +133,9 @@ func copilotGuardCommand(paths Paths, policy string, mcp bool) string {
 	return b.String()
 }
 
-// copilotGuardSections is the guard's answer by section: "settings", "mcp" and
-// "policy", each present only where the answer holds its mark.
+// copilotGuardSections is the guard's answer by section: "settings", "mcp",
+// "repo", "local" and "policy", each present only where the answer holds its
+// mark.
 func copilotGuardSections(out string) map[string]string {
 	sections := map[string]string{}
 	name := ""
@@ -142,7 +148,7 @@ func copilotGuardSections(out string) map[string]string {
 	}
 	for l := range strings.Lines(out) {
 		if mark, ok := strings.CutPrefix(strings.TrimSuffix(l, "\n"), copilotGuardMark); ok &&
-			(mark == "settings" || mark == "mcp" || mark == "policy") && name != "policy" {
+			slices.Contains([]string{"settings", "mcp", "repo", "local", "policy"}, mark) && name != "policy" {
 			flush()
 			name = mark
 			continue
@@ -180,6 +186,19 @@ func copilotGuardVerdict(out string, req sandbox.RunRequest, paths Paths, policy
 			said = append(said, fmt.Sprintf("%s sets permissions.disableBypassPermissionsMode to %q, which turns "+
 				"--yolo off, so every call of the run's tools and its notes extension are refused", settings,
 				strings.TrimPrefix(l, "permissions.disableBypassPermissionsMode=")))
+		}
+	}
+	// A DISABLED SERVER OF THE RUN'S OWN, in the home's settings or the
+	// repository's (`config --list`, `--repo`, `--local`, one line an item),
+	// which the run never enables back (measured on 1.0.114: the bridge off).
+	for section, file := range map[string]string{"settings": settings,
+		"repo": ".github/copilot/settings.json", "local": ".github/copilot/settings.local.json"} {
+		for l := range strings.Lines(sections[section]) {
+			name, ok := strings.CutPrefix(strings.TrimSuffix(l, "\n"), "disabledMcpServers=")
+			if ok && slices.Contains(servers, name) {
+				said = append(said, fmt.Sprintf("%s lists %s, Crewlet's own MCP server, in disabledMcpServers, which "+
+					"the run never switches back on", file, name))
+			}
 		}
 	}
 	mcp := "Error: Invalid MCP config at " + paths.CopilotHome() + "/mcp-config.json: "

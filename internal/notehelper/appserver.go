@@ -174,6 +174,27 @@ type wire struct {
 // joinAppServer runs the WebSocket handshake over conn and joins thread,
 // reporting ev of it.
 func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing, ev events, skills skillSet) (*appServer, error) {
+	a, err := openAppSession(ctx, conn, thread, p, ev, skills)
+	if err != nil {
+		return nil, err
+	}
+	if err = a.rejoin(ctx, p); err != nil {
+		a.close()
+		return nil, fmt.Errorf("joining the run's thread %s: %w", thread, err)
+	}
+	// THE LIST IS TAKEN IN THE READER'S ORDER ([appServer.callApplied]): a
+	// notice Codex sends after its answer (a response of the listed turn) is
+	// read after the turn it names is in flight, never dropped before it is.
+	if _, err = a.callApplied(ctx, "thread/turns/list", map[string]any{"threadId": thread}, a.listed); err != nil {
+		a.close()
+		return nil, fmt.Errorf("listing the turns of the run's thread %s: %w", thread, err)
+	}
+	return a, nil
+}
+
+// openAppSession runs the WebSocket handshake over conn and initializes a
+// session with the app-server, following thread ("" for none).
+func openAppSession(ctx context.Context, conn net.Conn, thread string, p pacing, ev events, skills skillSet) (*appServer, error) {
 	// THE HANDSHAKE IS BOUNDED as a call is: x/net's NewClient takes no context.
 	_ = conn.SetDeadline(time.Now().Add(p.callBound))
 	cfg, err := websocket.NewConfig("ws://localhost/", "http://localhost/")
@@ -199,17 +220,6 @@ func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing, 
 	if err = a.send(map[string]any{"jsonrpc": "2.0", "method": "initialized"}); err != nil {
 		a.close()
 		return nil, fmt.Errorf("initializing with the app-server: %w", err)
-	}
-	if err = a.rejoin(ctx, p); err != nil {
-		a.close()
-		return nil, fmt.Errorf("joining the run's thread %s: %w", thread, err)
-	}
-	// THE LIST IS TAKEN IN THE READER'S ORDER ([appServer.callApplied]): a
-	// notice Codex sends after its answer (a response of the listed turn) is
-	// read after the turn it names is in flight, never dropped before it is.
-	if _, err = a.callApplied(ctx, "thread/turns/list", map[string]any{"threadId": thread}, a.listed); err != nil {
-		a.close()
-		return nil, fmt.Errorf("listing the turns of the run's thread %s: %w", thread, err)
 	}
 	return a, nil
 }
@@ -311,7 +321,7 @@ func (a *appServer) notice(method string, params json.RawMessage) {
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
-	if json.Unmarshal(params, &p) != nil || p.ThreadID != a.thread {
+	if a.thread == "" || json.Unmarshal(params, &p) != nil || p.ThreadID != a.thread {
 		return
 	}
 	switch method {
@@ -478,10 +488,14 @@ func (a *appServer) begin(turn string) {
 	a.start(turn)
 }
 
-// start is begin with a.mu held.
+// start is begin with a.mu held. A turn put in flight is reported to the cap
+// ([events]), which ends one the run's spent cap allows none of.
 func (a *appServer) start(turn string) {
 	if turn != "" && !a.finished[turn] && a.active != turn {
 		a.set(turn)
+		if a.ev.begin != nil {
+			a.ev.begin(turn)
+		}
 	}
 }
 

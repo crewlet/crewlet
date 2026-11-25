@@ -31,9 +31,9 @@ func piFixture(t *testing.T, name string) []byte {
 
 // piStream is a fixture's stream as a run's script leaves it: the mark the
 // script prints before its harness ([piMarkLine]), then pi's own lines.
-func piStream(t *testing.T, name string, cap int) []byte {
+func piStream(t *testing.T, name string) []byte {
 	t.Helper()
-	return append([]byte(piMarkLine(cap)+"\n"), piFixture(t, name+".stream.jsonl")...)
+	return append([]byte(piMarkLine()+"\n"), piFixture(t, name+".stream.jsonl")...)
 }
 
 // A PI RUN IS HEADLESS AND TRUSTS ITS WORKING DIRECTORY: `--approve`, as a
@@ -54,9 +54,9 @@ func TestAPiRunIsHeadlessAndTrustsItsWorkingDirectory(t *testing.T) {
 		Brief: "BRIEF TEXT", Skills: []sandbox.Skill{{Name: "deploy", Description: "d", Body: "b"}}}
 	script := piScript(req, Session{ID: "s-1"}, paths, paths.PiExtension(), time.Second)
 	for _, want := range []string{
-		`pi --mode json -p --approve -e builtin:mcp --model 'anthropic/claude-sonnet-4-5' --thinking 'high' -e '/home/user/.pi/crewlet/extension.mjs' --skill '/home/user/.pi/crewlet/skills' "$@"`,
+		`pi --mode json -p --approve --model 'anthropic/claude-sonnet-4-5' --thinking 'high' -e '/home/user/.pi/crewlet/extension.mjs' --skill '/home/user/.pi/crewlet/skills' --skill '/home/user/.pi/crewlet/checkout-skills' "$@"`,
 		`set -- "$@" --session "$f"`, `f='/home/user/.pi/sessions/s-1.jsonl'`,
-		`printf '%s\n' '{"type":"crewlet.extension","cap":0}'`,
+		`printf '%s\n' '{"type":"crewlet.extension"}'`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the script lacks %q:\n%s", want, script)
@@ -286,9 +286,9 @@ func TestAPiSessionOpensInTheBoxsWorkingDirectory(t *testing.T) {
 // did: this goes red.
 func TestAPiRunsStreamSaysHowItEnded(t *testing.T) {
 	t.Parallel()
-	unarmed := bytes.ReplaceAll(piStream(t, "steered", 0), []byte(`"customType":"crewlet-armed"`),
+	unarmed := bytes.ReplaceAll(piStream(t, "steered"), []byte(`"customType":"crewlet-armed"`),
 		[]byte(`"customType":"another"`))
-	redefined := bytes.ReplaceAll(piStream(t, "deadbridge", 0), []byte(`{"missing":["crewlet"]}`),
+	redefined := bytes.ReplaceAll(piStream(t, "deadbridge"), []byte(`{"missing":["crewlet"]}`),
 		[]byte(`{"redefined":["\"crewlet\" is defined again in /home/u/.pi/agent/mcp.json"]}`))
 	for _, tc := range []struct {
 		name                string
@@ -298,26 +298,24 @@ func TestAPiRunsStreamSaysHowItEnded(t *testing.T) {
 		input, output, turn int
 		window              int64
 	}{
-		{name: "tools", stream: piStream(t, "tool", 0), success: true, text: "Finished the tool tour.",
+		{name: "tools", stream: piStream(t, "tool"), success: true, text: "Finished the tool tour.",
 			input: 848, output: 96, turn: 8, window: 200000},
-		{name: "a note answered", stream: piStream(t, "steered", 0), success: true, text: "Final answer of notes1.",
+		{name: "a note answered", stream: piStream(t, "steered"), success: true, text: "Final answer of notes1.",
 			input: 318, output: 36, turn: 3, window: 200000},
-		{name: "compacted", stream: piStream(t, "compacted", 0), success: true, text: "Final after compaction.",
+		{name: "compacted", stream: piStream(t, "compacted"), success: true, text: "Final after compaction.",
 			input: 7512, output: 64, turn: 3, window: 8000},
-		{name: "resumed", stream: piStream(t, "resumed", 0), success: true,
+		{name: "resumed", stream: piStream(t, "resumed"), success: true,
 			text: "Hello from the stub, plain answer.", input: 106, output: 12, turn: 1, window: 200000},
-		{name: "capped", stream: piStream(t, "capped", 1), capped: true, says: "turn cap of 1",
+		{name: "capped", stream: piStream(t, "capped"), capped: true, says: "turn cap of 1",
 			input: 106, output: 12, turn: 1, window: 200000},
-		{name: "a dead bridge", stream: piStream(t, "deadbridge", 0), says: "no tool of crewlet was offered",
+		{name: "a dead bridge", stream: piStream(t, "deadbridge"), says: "no tool of crewlet was offered",
 			window: 200000},
 		{name: "a redefined bridge", stream: redefined,
 			says: `"crewlet" is defined again in /home/u/.pi/agent/mcp.json, which pi uses in place`, window: 200000},
-		{name: "a rate limit", stream: piStream(t, "ratelimit", 0), says: `429 {"type":"error","error":{"type":"rate_limit_error"`,
-			turn: 4, window: 200000},
+		{name: "a rate limit", stream: piStream(t, "ratelimit"), says: `429 {"type":"error","error":{"type":"rate_limit_error"`,
+			turn: 1, window: 200000},
 		{name: "an extension that never ran", stream: unarmed, says: "extension never ran", text: "Final answer of notes1.",
 			input: 318, output: 36, turn: 3, window: 200000},
-		{name: "a cap not held", stream: piStream(t, "tool", 2), says: "turn cap of 2 was not enforced",
-			text: "Finished the tool tour.", input: 848, output: 96, turn: 8, window: 200000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -445,7 +443,7 @@ func TestAPiNoteIsHeldOnlyByAnAnswerOnItsBranch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := piNotesHeld(t.Context(), bytes.NewReader(tc.record),
-				[]ServedTake{{InboxID: tc.inbox}, {InboxID: "never-served"}})
+				[]ServedTake{{InboxID: tc.inbox}, {InboxID: "never-served"}}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -679,6 +677,41 @@ func TestAReusedPiBoxKeepsTheHomesAgentDirectoryLessItsBin(t *testing.T) {
 	for _, path := range gone {
 		if got, err := b.ReadFile(t.Context(), path); err == nil && len(got) > 0 {
 			t.Errorf("%s survived into the next run", path)
+		}
+	}
+}
+
+// A PI REQUEST'S FAILED ATTEMPTS AND THEIR RETRY ARE ONE REQUEST: pi writes
+// each failed attempt as an assistant message of its own (`stopReason:
+// "error"`) before it retries, and a refused attempt bills nothing, so a 429
+// retried into an answer counts once, as does one pi gave up on; an answer
+// after it is a request of its own.
+//
+// Mutation: count every assistant message but an aborted one, or count none of
+// a failed request's attempts, and the counts differ.
+func TestAPiRequestsFailedAttemptsCountOnce(t *testing.T) {
+	t.Parallel()
+	msg := func(stop string) string {
+		return `{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"` + stop + `"}}`
+	}
+	for name, c := range map[string]struct {
+		stops []string
+		want  int
+	}{
+		"retried into an answer":     {[]string{"error", "toolUse", "stop"}, 2},
+		"retried twice":              {[]string{"toolUse", "error", "error", "stop"}, 2},
+		"given up on":                {[]string{"error", "error", "error", "error"}, 1},
+		"an answer after a failure":  {[]string{"error", "stop", "error", "stop"}, 2},
+		"aborted before its request": {[]string{"toolUse", "aborted"}, 1},
+	} {
+		lines := []string{`{"type":"session","version":3,"id":"33333333-3333-4333-8333-333333333333"}`}
+		for _, s := range c.stops {
+			lines = append(lines, msg(s))
+		}
+		dec := &piEvents{}
+		_ = eachLine(strings.NewReader(strings.Join(lines, "\n")), dec, maxLineBytes)
+		if dec.Requests() != c.want {
+			t.Errorf("%s: %d requests, want %d", name, dec.Requests(), c.want)
 		}
 	}
 }

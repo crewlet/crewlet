@@ -315,9 +315,10 @@ var sentinels = []sentinel{
 	{"advisordomain.ErrInvalid", advisordomain.ErrInvalid},
 	{"advisordomain.ErrNotFound", advisordomain.ErrNotFound},
 	{"advisordomain.ErrStaleVersion", advisordomain.ErrStaleVersion},
-	// The session bound the executor log refuses a capture past lives in
-	// executorkeep, since the sandbox that takes a session stops at it too.
+	// The session bounds the executor log refuses a capture past live in
+	// executorkeep, since the sandbox that takes a session stops at them too.
 	{"executorkeep.ErrSessionTooLarge", executorkeep.ErrSessionTooLarge},
+	{"executorkeep.ErrSessionPlainTooLarge", executorkeep.ErrSessionPlainTooLarge},
 
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
 	{"estate.ErrNoGitletNode", ErrNoGitletNode},

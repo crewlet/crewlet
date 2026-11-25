@@ -511,6 +511,65 @@ func TestAQwenRunWhoseBridgeNeverConnectsIsNotStarted(t *testing.T) {
 	}
 }
 
+// A QWEN RUN WHOSE BRIDGE ANOTHER SERVER SERVES IS NOT STARTED. Qwen Code
+// merges servers by name, a system or repository settings file's over the
+// home's, so a repository's own `crewlet` connects in the bridge's place
+// (measured on 0.28.4, MEASURE-P3 N8's shape); its status answer names the
+// connected server's configuration and origin, and the helper ends the run
+// before the prompt unless that is the bridge's address with no command. The
+// bridge's own entry starts the run.
+//
+// Mutations, each red: drop the check; match the name alone; pass a server
+// with a command beside the address.
+func TestAQwenRunWhoseBridgeAnotherServerServesIsNotStarted(t *testing.T) {
+	t.Parallel()
+	captured, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.4", "acp-wsmcp.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const bridgeURL = "http://127.0.0.1:7/mcp/run-token-placeholder"
+	const stdio = `"configOrigin":"user_settings","source":"user","removable":true,"config":{"command":"node","args":["/probe/mcp.mjs"]}`
+	if !bytes.Contains(captured, []byte(stdio)) {
+		t.Fatal("the capture no longer holds the probe's configuration this test rewrites")
+	}
+	served := func(entry string) string {
+		path := filepath.Join(t.TempDir(), "acp-wsmcp.jsonl")
+		if err := os.WriteFile(path, bytes.ReplaceAll(captured, []byte(stdio), []byte(entry)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return "QWEN_FAKE_START=" + path
+	}
+	for _, tc := range []struct {
+		name, entry string
+		started     bool
+	}{
+		{"the bridge's own", `"configOrigin":"user_settings","config":{"httpUrl":"` + bridgeURL + `"}`, true},
+		{"a repository's of the same name", `"configOrigin":"workspace_settings","config":{"command":"node","args":["/repo/mcp.mjs"]}`, false},
+		{"a system file's at another address", `"configOrigin":"system_settings","config":{"httpUrl":"http://127.0.0.1:8/other"}`, false},
+		{"one with a command beside the address", `"configOrigin":"workspace_settings","config":{"command":"node","httpUrl":"` + bridgeURL + `"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			bridge := newQwenBridge(t)
+			run := startQwenHelper(t, bridge.steer(), "acp-note.jsonl", map[string]any{"bridgeURL": bridgeURL},
+				served(tc.entry))
+			lines, code := run.finish(t)
+			prompted := slices.ContainsFunc(run.standinSaw(t), func(e map[string]any) bool { return e["method"] == "session/prompt" })
+			if prompted != tc.started {
+				t.Errorf("the prompt went in: %v, want %v", prompted, tc.started)
+			}
+			if tc.started {
+				return
+			}
+			end := typed(lines, "crewlet_qwen_end")
+			if code != 1 || len(end) != 1 || !strings.Contains(string(mustJSON(t, end[0])),
+				"serves the run's tool bridge (probe) as another MCP server of the same name") {
+				t.Errorf("the run exited %d and ended %v, want the bridge named as served by another server", code, end)
+			}
+		})
+	}
+}
+
 func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()
 	raw, err := json.Marshal(v)

@@ -24,7 +24,7 @@ The roles Google Analytics gives, least first: **Viewer** (sees settings and dat
 
 ## Connecting Crewlet
 
-1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing. Turn Google Analytics on, then run the Google Cloud connection's Cloud Shell block again: it turns on the Analytics Data and Admin APIs in the identity project and makes the company reader ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
+1. Connect [Google Cloud](google-cloud.md) first; no project needs preparing, and the form says whether it is connected. Turn Google Analytics on, then run the Google Cloud connection's Cloud Shell block again: it turns on the Analytics Data and Admin APIs in the identity project and makes the company reader ([Google's growth products sign in through this identity](google-cloud.md#googles-growth-products-sign-in-through-this-identity)).
 2. Add the company reader's email, shown on the form, to each property at **Viewer**: Google Analytics, Admin, Property access management, Add users. Crewlet reads the company's figures for boards and the atlas as this identity.
 3. Turn agents on from the Agents tab, each with its properties, and give each its identity ([below](#give-an-agent-its-own-identity)).
 
@@ -38,7 +38,7 @@ An agent's identity at Google Analytics is its own Google growth identity, which
 2. Press **+**, then **Add users**, and paste the agent's email.
 3. Pick the role its level needs, **Viewer** at `read` and **Editor** at `operate` and `administer`, and press **Add**. Access changes an `administer` agent asks for need **Administrator**.
 
-**Add it for me.** With the company's own OAuth client (`oauth`, which Google Play may share) and an Administrator's sign-in on the Settings tab, **Add it for me** binds the identity to each property at the level's role through the Admin API's access bindings, where it holds no role at or above it on the property or its account, keeping any No Cost Metrics or No Revenue Metrics restriction. Turning the agent off removes those bindings. The sign-in only adds, reads and removes agents' identities; no agent's call is made with it.
+**Add it for me.** With the company's own OAuth client (`oauth`, made as [Google Cloud's page describes](google-cloud.md#the-companys-own-oauth-client), which Google Play may share) and an Administrator's sign-in on the Settings tab, **Add it for me** binds the identity to each property at the level's role through the Admin API's access bindings, where it holds no role at or above it on the property or its account, keeping any No Cost Metrics or No Revenue Metrics restriction. Turning the agent off removes those bindings. The sign-in only adds, reads and removes agents' identities; no agent's call is made with it.
 
 **The check, on every pass:** Crewlet signs in as the identity and lists the properties it reaches; one not listed is not added yet. With the admin sign-in it also reads the identity's role on each property and its account, which every property inherits: one below the level's is the wrong role, and Administrator below `administer` is a warning. The agent is ready once every property passes, and reads Needs you again if somebody removes it there; calls Google refuses meanwhile name what is missing.
 

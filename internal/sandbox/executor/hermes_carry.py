@@ -3,6 +3,9 @@
 #
 #   hermes_carry.py dump DB TITLE POLICY OUT        the session titled TITLE, with its compaction lineage,
 #                                                   written to OUT
+#   hermes_carry.py trim SRC DST                    the dump at SRC as a resume of it loads it, written to DST:
+#                                                   a session's inactive messages below its newest compaction
+#                                                   left out, its settled admissions' results slimmed
 #   hermes_carry.py renew DB TITLE SYSTEM           SYSTEM's text as the standing instructions of the session
 #                                                   titled TITLE, in place of the ones Hermes froze with it
 #   hermes_carry.py restore MEMBER DB POLICY TITLE  a new session store at DB from MEMBER, the launch kept at
@@ -13,6 +16,8 @@
 #                                                   launch's own rows begin
 #   hermes_carry.py route DB TITLE MODEL            whether the box's model route (provider, base URL, model)
 #                                                   is the one Hermes froze with the session titled TITLE
+#   hermes_carry.py servers STAGED                  whether the box's Hermes runs each MCP server of STAGED as
+#                                                   STAGED writes it
 #   hermes_carry.py guard PLUGIN SERVERS            whether the box's Hermes would start with the run's plugin
 #                                                   and its servers (JSON: each name's own header names) as the
 #                                                   run wrote them
@@ -21,16 +26,17 @@
 # which keeps no exit status, so every command ends on one line of its own on stdout: `crewlet-carry ok`
 # (with the restored session's stored id after a restore, the id after top), or `crewlet-carry none` where
 # the store holds no session of that title (or, for renew, no launch Hermes froze with it; for route, no
-# route), and route answers `crewlet-carry moved` for another route, guard `crewlet-carry refused <why>`
-# where the box would switch the run's own plugin or servers off. Anything else is a failure, its traceback
-# on stderr.
+# route; for trim, no row to leave out), route answers `crewlet-carry moved` for another route, servers
+# `crewlet-carry taken` and why, and guard `crewlet-carry refused <why>` where the box would switch the run's
+# own plugin or servers off. Anything else is a failure, its traceback on stderr.
 #
 # A dump is JSON lines: the store's schema ({"ddl", "kind"}, never the full-text index's own tables, which
 # its triggers fill again), the store's own bookkeeping rows whole, then the session's rows ({"t", "r"}),
 # and the launch Hermes froze with it ({"crewlet_policy"}). Text, so the engine's scrub can rewrite it.
-# Standard library only, but for overlay, route and guard, which read the box's configuration through
+# Standard library only, but for overlay, route, servers and guard, which read the box's configuration through
 # Hermes's own modules.
 import base64
+import fnmatch
 import copy
 import json
 import os
@@ -168,6 +174,81 @@ def restore(member, db_path, policy_path, title):
     if not stored:
         return "none"
     return "ok " + stored
+
+
+# What 0.23.3's own retirement drops of a settled admission's stored result, its copies of the turn's
+# transcript (persistence/sqlite/conversation/_store/retirement.py, _compact_result), leaving `messages` empty.
+RESULT_TRANSCRIPT = ("messages", "last_reasoning", "tools", "_turn_user_row")
+
+
+def stored_result(value):
+    """An admission's stored result as 0.23.3's terminal.load_result reads it, without the envelope a row
+    stores its closing reply once by ({"_stored": {"v": 1, "reply_ref": i}}, i a message of the result's,
+    whose words final_response holds); None where it does not read so."""
+    try:
+        v = json.loads(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+    if not isinstance(v, dict) or not isinstance(v.get("result"), dict):
+        return None
+    env, messages = v.pop("_stored", None), v["result"].get("messages")
+    if env is None:
+        return v
+    if not isinstance(env, dict) or set(env) != {"v", "reply_ref"} or env["v"] != 1 or not isinstance(messages, list):
+        return None
+    ref = env["reply_ref"]
+    if type(ref) is not int or not 0 <= ref < len(messages) or not isinstance(messages[ref], dict):
+        return None
+    return v
+
+
+def slimmed(line, row):
+    """line, a settled admission's stored result, slimmed as 0.23.3's retirement slims it and written back as
+    the measured trim wrote it; line itself where its value does not read as a result, or the slim cannot be
+    written as text (a lone surrogate the value escaped)."""
+    v = stored_result(row["r"]["value"])
+    if v is None:
+        return line
+    v["result"] = dict({k: x for k, x in v["result"].items() if k not in RESULT_TRANSCRIPT}, messages=[])
+    row["r"]["value"] = json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    out = json.dumps(row, ensure_ascii=False) + "\n"
+    try:
+        out.encode("utf-8")
+    except UnicodeEncodeError:
+        return line
+    return out
+
+
+def trim(src, dst):
+    """The dump at src as a resume of it loads it, into dst (measured on 0.23.3: a resume of the trimmed dump
+    sent the requests a resume of the whole one did). Left out: each session's inactive message rows below its
+    newest active compaction summary, the compaction's archive and the originals of the tail it wrote again,
+    which a resume never loads; an inactive row above it, one an undo left, stays, so the restored ids go on
+    where they did. Each settled admission's stored result is slimmed as Hermes's own retirement slims one;
+    every other line is kept as it is. "none", dst unwritten, where no row is left out. Read a line at a time,
+    twice, the summaries first, so the dump is never held whole."""
+    newest, settled, inactive = {}, set(), []
+    with open(src, encoding="utf-8", newline="") as f:
+        for line in f:
+            o = json.loads(line)
+            r = o.get("r") or {}
+            if o.get("t") == "messages":
+                if r["active"] == 1 and r["_compressed_summary"] == 1:
+                    newest[r["session_id"]] = max(newest.get(r["session_id"], 0), r["id"])
+                elif r["active"] == 0:
+                    inactive.append((r["session_id"], r["id"]))
+            elif o.get("t") == "session_admissions" and r["status"] == "terminal":
+                settled.add(ADMISSION_KEY % r["admission_id"])
+    if not any(i < newest.get(sid, 0) for sid, i in inactive):
+        return "none"
+    with open(src, encoding="utf-8", newline="") as f, open(dst, "w", encoding="utf-8", newline="") as out:
+        for line in f:
+            o = json.loads(line)
+            r = o.get("r") or {}
+            if o.get("t") == "messages" and r["active"] == 0 and r["id"] < newest.get(r["session_id"], 0):
+                continue
+            out.write(slimmed(line, o) if o.get("t") == "state_meta" and r["key"] in settled else line)
+    return "ok"
 
 
 SYSTEM_ENV = "HERMES_EPHEMERAL_SYSTEM_PROMPT"
@@ -337,6 +418,60 @@ def overlay(staged_path, managed_dir, hosts):
     return "ok"
 
 
+# The leaves of Crewlet's own servers the guard judges (a switch off, a tool filter, a header beside the run's own),
+# which `servers` therefore passes over on those servers.
+GUARDED_LEAVES = ("enabled", "disabled", "tools", "headers")
+
+
+def servers(staged_path, guarded):
+    """Whether the box's Hermes runs each MCP server of the run's overlay at STAGED as the overlay writes it, read
+    through Hermes's own MCP loader as the gateway reads it (its home's config.yaml, the run's managed scope, then
+    every enabled plugin package's mcp.json): `ok`, else `taken` and a sentence naming the server and what
+    declares it. A box's same-named entry is merged under the run's per leaf, so any key of its own changes the
+    server; on GUARDED (a JSON list of Crewlet's own servers) the leaves the guard judges, GUARDED_LEAVES, are
+    its to refuse. A plugin's same-named server loses to the run's entry, but a live endpoint it declares for that
+    name replaces the entry's URL (measured on 0.23.3: the run's `crewlet` then connected to the plugin's server,
+    never the bridge), so a plugin's server under one of the run's names is refused whatever it declares. Hermes
+    names a tool `mcp__<server>__<tool>`, its server's name with each character outside [A-Za-z0-9_] made `_`, so
+    only a server named exactly as the run's can name a tool of the bridge's (code-sandbox.md, "The tool
+    bridge")."""
+    with open(staged_path, encoding="utf-8") as f:
+        run = json.load(f).get("mcp_servers") or {}
+    own = set(json.loads(guarded) or [])
+
+    def judged(name, entry):
+        if name not in own or not isinstance(entry, dict):
+            return entry
+        return {k: v for k, v in entry.items() if k not in GUARDED_LEAVES}
+
+    from hermes_cli import managed_scope
+    from hermes_cli.config import get_config_path, read_user_config_raw
+    from hermes_cli.plugins import get_plugin_manager
+    from tools.mcp_tool_config import _load_mcp_config
+    resolved = _load_mcp_config()
+    owners = get_plugin_manager().get_portable_mcp_server_plugins()
+    home = read_user_config_raw().get("mcp_servers") or {}
+    os.environ.pop("HERMES_MANAGED_DIR", None)
+    managed_scope.invalidate_managed_cache()
+    system = managed_scope.load_managed_config().get("mcp_servers") or {}
+    system_dir = managed_scope.get_managed_dir()
+    for name in sorted(run):
+        if name not in owners and judged(name, resolved.get(name)) == judged(name, run[name]):
+            continue
+        why = []
+        if isinstance(home, dict) and name in home:
+            why.append("%s declares it" % get_config_path())
+        if isinstance(system, dict) and name in system and system_dir is not None:
+            why.append("%s declares it" % (system_dir / "config.yaml"))
+        if name in owners:
+            why.append("the plugin %s declares it" % json.dumps(owners[name]))
+        if name not in resolved:
+            why.append("Hermes runs no server of that name")
+        return "taken the box's Hermes Agent does not run the run's MCP server %s as the run's settings write it " \
+               "(%s); remove that from the box image" % (json.dumps(name), "; ".join(why) or "its configuration changes it")
+    return "ok"
+
+
 MISSING = object()
 
 # What each of Hermes's launch switches costs the run (0.23.3's gateway_chat._ENV_LAUNCH_FLAGS; measured).
@@ -344,28 +479,73 @@ LAUNCH_SWITCHES = {"safe_mode": "without its MCP servers and plugins",
                    "ignore_user_config": "without the run's settings and plugins"}
 
 
-def guard(plugin, servers):
-    """Why the box's Hermes would start without the run's plugin or one of servers' tools, by what Hermes itself
-    reads (load_config() under the run's managed scope, its own gates), each reason naming the file, key and
-    entry: a sticky profile (main._apply_profile_override's read), a launch switch in an environment or .env, a
-    disabled toolset naming the server, a cli toolset list leaving it out, a header beside the server's own, an
-    entry Hermes skips (suspicious or a malformed cost table: leaves the run's overlay cannot clear), or the plugin
-    gated off. The run's overlay
-    states every leaf of its own servers it can (hermesconfig.go), so those are not read here."""
-    names = json.loads(servers)
-    os.environ.pop("CREWLET_HERMES_PLUGIN", None)  # a plugin Hermes loads while answering registers nothing
-    run_scope = os.environ.get("HERMES_MANAGED_DIR", "")
-    home_dir = os.environ.get("HERMES_HOME", "")
+def unreadable(path):
+    """Why the box's configuration file at path cannot be read whole, or None: there but no regular file, not
+    readable, or not YAML (where Hermes's yaml is at hand), which Hermes would load as empty, without a word."""
+    if not os.path.lexists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except (OSError, UnicodeDecodeError) as e:
+        return "%s is there but cannot be read (%s), so Hermes would run without it (fix or remove it)" % (path, e)
+    try:
+        import yaml
+    except ImportError:
+        return None
+    try:
+        yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        return "%s does not read as YAML (%s), so Hermes would run without it (fix it)" % (path, str(e).replace("\n", " "))
+    return None
+
+
+def box_layers():
+    """The box's own configuration files, the home's and the machine's managed one, each with its raw
+    content, read as Hermes reads them, without the run's managed scope; and the managed directory."""
     from hermes_cli import managed_scope
-    from hermes_cli.config import get_config_path, load_config, read_raw_config
-    config = load_config()
+    from hermes_cli.config import get_config_path, read_raw_config
+    run_scope = os.environ.get("HERMES_MANAGED_DIR", "")
     layers = [(str(get_config_path()), read_raw_config())]
     os.environ.pop("HERMES_MANAGED_DIR", None)
     box_dir = managed_scope.get_managed_dir()
     if box_dir is not None:
         layers.append((str(box_dir / "config.yaml"), managed_scope.load_managed_config()))
     os.environ["HERMES_MANAGED_DIR"] = run_scope
-    found = []
+    return layers, box_dir
+
+
+def plugoff(plugin):
+    """Whether a file of the box's own disables plugin before the run first enables it, which Hermes's
+    `plugins enable` would undo (measured on 0.23.3): each such file and key, or ok. A `plugins.enabled` list
+    without it is no switch-off: it is Hermes's opt-in list, which every plugin joins as it is enabled."""
+    held = []
+    for file, doc in box_layers()[0]:
+        disabled = (doc.get("plugins") or {}).get("disabled") if isinstance(doc.get("plugins"), dict) else None
+        if isinstance(disabled, list) and plugin in disabled:
+            held.append("%s: its plugins.disabled names %s" % (file, plugin))
+    return "ok" if not held else "refused " + " and ".join(held)
+
+
+def guard(plugin, servers, skills):
+    """Why the box's Hermes would start without the run's plugin or one of servers' tools, by what Hermes itself
+    reads (load_config() under the run's managed scope, its own gates), each reason naming the file, key and
+    entry: a sticky profile (main._apply_profile_override's read), a launch switch in an environment or .env, a
+    disabled toolset naming the server, a cli toolset list leaving it out, a header beside the server's own, an
+    entry Hermes skips (suspicious or a malformed cost table: leaves the run's overlay cannot clear), or the plugin
+    gated off, or one of skills (the run's seat skills' names) disabled for the cli, by Hermes's own
+    get_disabled_skills, which Hermes leaves unlisted (read in its code). A box file's own switch of one of
+    servers (enabled false, disabled true, a tools list leaving out or hiding its tools, servers giving
+    each one's tools) refuses it too, though the run's overlay would state it back (measured on 0.23.3)."""
+    names = json.loads(servers)
+    os.environ.pop("CREWLET_HERMES_PLUGIN", None)  # a plugin Hermes loads while answering registers nothing
+    home_dir = os.environ.get("HERMES_HOME", "")
+    from hermes_cli.config import get_config_path, load_config
+    found = [why for why in (unreadable(str(get_config_path())),) if why]
+    if found:
+        return "refused " + " | ".join(found)
+    config = load_config()
+    layers, box_dir = box_layers()
 
     def where(path, holds, names_only=False):
         """Each file whose own value at path holds, as `file: its path is value`, joined; a mapping that may
@@ -419,7 +599,19 @@ def guard(plugin, servers):
     entries = config.get("mcp_servers") if isinstance(config.get("mcp_servers"), dict) else {}
     denied = toolsets((config.get("agent") or {}).get("disabled_toolsets"))
     cli = _get_platform_tools(config, "cli")
-    for name, sent in names.items():
+    for name, own_entry in names.items():
+        sent, tools = own_entry.get("headers") or [], own_entry.get("tools") or []
+        for path, holds, what in (
+                (("mcp_servers", name, "enabled"), lambda v: v is False, "switches it off"),
+                (("mcp_servers", name, "disabled"), lambda v: v is True, "switches it off"),
+                (("mcp_servers", name, "tools", "include"), lambda v, t=tools: isinstance(v, list) and (
+                    not v or not t or any(not any(fnmatch.fnmatch(n, str(p)) for p in v) for n in t)),
+                 "leaves its tools out"),
+                (("mcp_servers", name, "tools", "exclude"), lambda v, t=tools: isinstance(v, list) and bool(v) and (
+                    not t or any(fnmatch.fnmatch(n, str(p)) for p in v for n in t)), "hides its tools")):
+            said = where(path, holds)
+            if not said.startswith("Hermes's own"):
+                found.append("%s, which %s: the server %s the run's tools go through (remove it)" % (said, what, name))
         entry = entries.get(name)
         if not isinstance(entry, dict):
             continue
@@ -445,6 +637,15 @@ def guard(plugin, servers):
             found.append("%s, so Hermes skips the server %s: %s" % (
                 where(("mcp_servers", name, "tool_costs"), lambda v: True), name, bad))
 
+    from hermes_cli.skills_config import get_disabled_skills
+    off = get_disabled_skills(config, "cli")
+    for skill in json.loads(skills):
+        if skill in off:
+            said = [where(path, lambda v, s=skill: s in toolsets(v)) for path in (("skills", "disabled"),
+                                                                                   ("skills", "platform_disabled", "cli"))]
+            found.append("%s, which leaves the run's skill %s unlisted (remove it)" % (
+                " and ".join(w for w in said if not w.startswith("Hermes's own")) or said[0], skill))
+
     from hermes_cli.plugins_discovery import (_get_disabled_plugins, _get_enabled_plugins, collect_directory_manifests,
                                               gate_manifest)
     from hermes_cli.plugins_manifest import manifest_key
@@ -461,14 +662,14 @@ def guard(plugin, servers):
     return "ok" if not found else "refused " + " | ".join(found).replace("\n", " ")
 
 
-COMMANDS = {"dump": (dump, 4), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 3), "top": (top, 1),
-            "route": (route, 3), "guard": (guard, 2)}
+COMMANDS = {"dump": (dump, 4), "trim": (trim, 2), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 3),
+            "top": (top, 1), "route": (route, 3), "servers": (servers, 2), "guard": (guard, 3), "plugoff": (plugoff, 1)}
 
 if __name__ == "__main__":
     command = COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if command is None or len(sys.argv) != command[1] + 2:
-        sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | renew DB TITLE SYSTEM | "
+        sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | trim SRC DST | renew DB TITLE SYSTEM | "
                          "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED HOSTS | top DB | route DB TITLE MODEL | "
-                         "guard PLUGIN SERVERS\n")
+                         "servers STAGED GUARDED | guard PLUGIN SERVERS SKILLS | plugoff PLUGIN\n")
         sys.exit(2)
     sys.stdout.write("crewlet-carry %s\n" % command[0](*sys.argv[2:]))

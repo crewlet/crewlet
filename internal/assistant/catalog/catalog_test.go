@@ -228,16 +228,30 @@ func TestAPageActionIsOnlyOneTheScreenAccepts(t *testing.T) {
 	want := []string{"home.range.set", "home.feed.set", "work.filter.apply",
 		"work.filters.clear", "work.arrange.set", "project.lens.set", "item.activity.set",
 		"spend.range.set", "spend.group.set", "live.filter.apply", "turns.filter.apply",
-		"knowledge.search.set", "draft.set", "org.draft.apply_ops", "budgets.ceiling.prefill"}
+		"knowledge.search.set", "draft.set", "org.draft.apply_ops", "budgets.ceiling.prefill",
+		catalog.ReadScreen}
 	if !slices.Equal(got, want) {
 		t.Errorf("the page actions are %v, want %v", got, want)
 	}
+	// READ_SCREEN NAMES ITS OWN ACTION, held to the screen's accepts as any other.
+	readScreen := mustTool(t, catalog.ReadScreenTool)
+	if _, err := catalog.PageActionFor(readScreen, catalog.Args{}, &wire.PageContext{
+		Accepts: []string{"spend.range.set"}}); !errors.Is(err, catalog.ErrNotAccepted) {
+		t.Errorf("a screen read the page did not offer = %v, want ErrNotAccepted", err)
+	}
+	if a, err := catalog.PageActionFor(readScreen, catalog.Args{}, &wire.PageContext{
+		Accepts: []string{catalog.ReadScreen},
+		ActionArgs: map[string]*wire.ActionArgs{catalog.ReadScreen: {
+			Type: wire.ArgTypes{wire.ArgObject}, AdditionalProperties: new(false)}},
+	}); err != nil || a.Confirm != wire.ConfirmRead {
+		t.Errorf("an offered screen read = %+v, %v; want confirm read", a, err)
+	}
 	args := catalog.Args{"action": "work.filter.apply", "args": map[string]any{"status": "todo"}}
-	if _, err := catalog.PageActionFor(args, &wire.PageContext{
+	if _, err := catalog.PageActionFor(catalog.Tool{}, args, &wire.PageContext{
 		Accepts: []string{"spend.range.set"}}); !errors.Is(err, catalog.ErrNotAccepted) {
 		t.Errorf("an action the screen did not mount = %v, want ErrNotAccepted", err)
 	}
-	if _, err := catalog.PageActionFor(args, &wire.PageContext{
+	if _, err := catalog.PageActionFor(catalog.Tool{}, args, &wire.PageContext{
 		Accepts:    []string{"work.filter.apply"},
 		ActionArgs: map[string]*wire.ActionArgs{"work.filter.apply": {Type: wire.ArgTypes{wire.ArgObject}}},
 	}); err != nil {
