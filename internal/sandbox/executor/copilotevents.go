@@ -377,6 +377,10 @@ func (d *copilotEvents) Ended() bool { return d.result }
 // events the script appends, one a model request, a subagent's included.
 func (d *copilotEvents) Requests() int { return d.requests }
 
+// InFlight implements [Decoder]: none, as the extension aborts before the
+// next request (measured on 1.0.114: a cap of 3, 3 requests).
+func (d *copilotEvents) InFlight() int { return 0 }
+
 // unheld implements [enforcerReporter]: a run its script named a cap for,
 // whose extension never said it ran.
 func (d *copilotEvents) unheld() string {

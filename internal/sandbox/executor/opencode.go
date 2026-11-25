@@ -2026,6 +2026,10 @@ func (d *openCodeEvents) Ended() bool { return d.ended }
 // `opencode run` does not print, so its requests are not counted here.
 func (d *openCodeEvents) Requests() int { return len(d.steps) }
 
+// InFlight implements [Decoder]: none, as OpenCode's own steps stops before
+// the next request (measured on 2.3.2: a cap of 3, 3 requests).
+func (d *openCodeEvents) InFlight() int { return 0 }
+
 // step records the message one step event names.
 func (d *openCodeEvents) step(message string) {
 	if message == "" {

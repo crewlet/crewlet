@@ -311,6 +311,10 @@ func (d *geminiEvents) Ended() bool { return d.result != nil }
 // ([geminiUsageEvent]); its stdout marks no request of its own.
 func (d *geminiEvents) Requests() int { return d.requests }
 
+// InFlight implements [Decoder]: none, as Gemini CLI's own maxSessionTurns
+// stops before the next request (measured on 0.70.0: a cap of 3, 3 requests).
+func (d *geminiEvents) InFlight() int { return 0 }
+
 func (d *geminiEvents) Result() sandbox.Result {
 	d.flushSaid()
 	if !d.sawLine {

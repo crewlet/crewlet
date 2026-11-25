@@ -254,6 +254,12 @@ func (d *cursorEvents) Requests() int {
 	return d.responses
 }
 
+// InFlight implements [Decoder]: one. The follower interrupts Cursor once it
+// reads the cap-th response that calls a tool off the stream, and by then the
+// call has run and the next request is made: measured on [cursorSupported],
+// a cap of 3 stopped after 4 requests.
+func (d *cursorEvents) InFlight() int { return 1 }
+
 // responded counts the response a call that starts under modelCall made, once:
 // a response's calls all start before the next request is made, which needs
 // their results, so a model call other than the last one started is a new

@@ -243,3 +243,69 @@ func TestARunWhoseCapsEnforcerNeverRanFailsBesideItsReport(t *testing.T) {
 		})
 	}
 }
+
+// capStops is, for each runner, the requests its own enforcer cannot stop once
+// it has fired ([executor.Decoder.InFlight]), as measured, and, where there
+// are any, the stream of a run that enforcer stopped having made n requests.
+var capStops = map[string]struct {
+	inFlight int
+	stopped  func(n int) string
+}{
+	executor.ClaudeCodeName: {}, executor.CopilotName: {}, executor.GeminiCLIName: {}, executor.GrokName: {},
+	executor.KimiName: {}, executor.MuseName: {}, executor.OpenCodeName: {}, executor.HermesName: {},
+	executor.PiName: {}, executor.QwenCodeName: {},
+	executor.CodexName: {inFlight: 1, stopped: func(n int) string {
+		return streamOf(`{"type":"thread.started","thread_id":"01a20286-faf2-7490-a21d-7f1215273287"}`,
+			each(n, `{"type":"crewlet.rollout","line":{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":%d,"output_tokens":1,"total_tokens":3}}}}}`),
+			`{"type":"crewlet.rollout","line":{"type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}}`,
+			`{"type":"crewlet.round_cap","rounds":1}`)
+	}},
+	executor.CursorAgentName: {inFlight: 1, stopped: func(n int) string {
+		return streamOf(`{"type":"system","subtype":"init","session_id":"0b5e0000-0000-4000-8000-000000000001","model":"gpt-5"}`,
+			each(n, `{"type":"tool_call","subtype":"started","call_id":"call_%[1]d","model_call_id":"model-%[1]d","tool_call":{}}`),
+			`{"type":"crewlet.cursor.cap","cap":1}`)
+	}},
+}
+
+// A RUN ITS OWN ENFORCER STOPPED PAST ITS CAP BY NO MORE THAN WHAT WAS ALREADY
+// IN FLIGHT COLLECTS AS STOPPED AT ITS CAP, never as a success: the measured
+// in-flight requests and the enforcer's stop choose only which failure it is.
+// Past them, or with no stop in its stream, it collects as past its cap. A
+// runner with no row fails the table, so none ships without its allowance.
+//
+// Mutation: let the allowance make the run a success, ignore the stop, or
+// change a runner's declared allowance, and a row fails.
+func TestARunStoppedWithARequestInFlightCollectsAsStoppedNeverASuccess(t *testing.T) {
+	t.Parallel()
+	for _, h := range executor.Registered() {
+		row, ok := capStops[h.Name()]
+		if !ok {
+			t.Errorf("%s has no in-flight row: measure what its enforcer cannot stop once fired", h.Name())
+			continue
+		}
+		t.Run(h.Name(), func(t *testing.T) {
+			t.Parallel()
+			if got := h.Events().InFlight(); got != row.inFlight {
+				t.Fatalf("declares %d requests in flight, the table measured %d", got, row.inFlight)
+			}
+			const made = 4
+			// WITH NO STOP, the allowance is nothing: past the cap is past it.
+			if res := collectCapped(t, h, requestStreams[h.Name()](made), made-1); res.Success || !res.TurnCapExceeded {
+				t.Fatalf("one past the cap with no stop: success %v, exceeded %v", res.Success, res.TurnCapExceeded)
+			}
+			if row.stopped == nil {
+				return
+			}
+			res := collectCapped(t, h, row.stopped(made), made-row.inFlight)
+			if res.Success || res.TurnCapExceeded || !res.RoundCapped {
+				t.Fatalf("stopped within its in-flight requests: success %v, exceeded %v, capped %v, error %q",
+					res.Success, res.TurnCapExceeded, res.RoundCapped, res.Error)
+			}
+			res = collectCapped(t, h, row.stopped(made), made-row.inFlight-1)
+			if res.Success || !res.TurnCapExceeded || res.RoundCapped {
+				t.Fatalf("stopped past its in-flight requests: success %v, exceeded %v, capped %v", res.Success,
+					res.TurnCapExceeded, res.RoundCapped)
+			}
+		})
+	}
+}

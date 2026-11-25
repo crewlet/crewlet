@@ -56,6 +56,14 @@ type Decoder interface {
 	// it counts and where that was measured.
 	Requests() int
 
+	// InFlight is the requests the runner's own enforcer cannot stop once it
+	// has fired, as measured on the harness's release: a run past its cap by
+	// no more than these, whose stream shows that enforcer's stop, collects
+	// as stopped at its cap rather than past it ([capVerdict]). It and the stop
+	// only choose which failure a run past its cap collects as, never a
+	// success.
+	InFlight() int
+
 	// Entries hands over the entries decoded since it was last asked, in
 	// order, and FORGETS them, or an hours-long live reading would hold the
 	// whole transcript. A decoder read this way stops keeping what Result

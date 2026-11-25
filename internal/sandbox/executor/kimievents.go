@@ -388,6 +388,10 @@ func (d *kimiEvents) Ended() bool { return d.ended && d.turns > 0 }
 // step ([kimiEvents.requests]).
 func (d *kimiEvents) Requests() int { return d.requests() }
 
+// InFlight implements [Decoder]: none, as Kimi Code's own step limit stops
+// before the next request (measured on 2.7.2: a cap of 3, 3 requests).
+func (d *kimiEvents) InFlight() int { return 0 }
+
 // Result implements [Decoder]: the answer, and how the run ended, off its last
 // turn and the driver's end.
 func (d *kimiEvents) Result() sandbox.Result {

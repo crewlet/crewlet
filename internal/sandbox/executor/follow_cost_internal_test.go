@@ -19,6 +19,7 @@ func (d *presetEntries) Skipped(int64, int)     {}
 func (d *presetEntries) Result() sandbox.Result { return sandbox.Result{} }
 func (d *presetEntries) Ended() bool            { return false }
 func (d *presetEntries) Requests() int          { return 0 }
+func (d *presetEntries) InFlight() int          { return 0 }
 func (d *presetEntries) Entries(bool) []string {
 	out := d.entries[d.given:d.seen]
 	d.given = d.seen

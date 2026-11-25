@@ -533,6 +533,10 @@ func (d *claudeEvents) Ended() bool { return d.ended }
 // 3, where it said 4), and a 429 or 500 retried names no id of its own.
 func (d *claudeEvents) Requests() int { return len(d.requests) }
 
+// InFlight implements [Decoder]: none, as Claude Code's own --max-turns
+// stops before the next request (measured on 2.1.330: a cap of 3, 3 requests).
+func (d *claudeEvents) InFlight() int { return 0 }
+
 // requested records one assistant message's id.
 func (d *claudeEvents) requested(id string) {
 	if id == "" {

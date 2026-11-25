@@ -310,6 +310,10 @@ func (d *grokEvents) Ended() bool { return d.ended || d.capped || d.failure != "
 // agent's, a subagent's included.
 func (d *grokEvents) Requests() int { return d.requests }
 
+// InFlight implements [Decoder]: none, as Grok's own --max-turns stops before
+// the next request (measured on 1.0.92: a cap of 3, 3 requests of its loop).
+func (d *grokEvents) InFlight() int { return 0 }
+
 // Result implements [Decoder]: the answer, and how the run ended.
 func (d *grokEvents) Result() sandbox.Result {
 	if !d.sawLine {

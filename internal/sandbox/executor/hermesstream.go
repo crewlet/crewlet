@@ -233,6 +233,10 @@ func (d *hermesEvents) Ended() bool { return d.done }
 // stdout marks no request.
 func (d *hermesEvents) Requests() int { return len(d.requests) }
 
+// InFlight implements [Decoder]: none, as Hermes's own --max-turns is held
+// to stop before the next request (unmeasured: Hermes runs in no rig yet).
+func (d *hermesEvents) InFlight() int { return 0 }
+
 // Result implements [Decoder].
 func (d *hermesEvents) Result() sandbox.Result {
 	if !d.sawLine {

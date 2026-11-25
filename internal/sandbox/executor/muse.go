@@ -141,7 +141,7 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	// terminal state within N step(s)" ([museEvents.Result]). Each of the
 	// exec's runs is capped apart: one exec runs another of its own once a
 	// subagent's result arrives after its first ended (measured on 1.4.25), so
-	// the collection holds the exec's whole count to the cap ([capExceeded]).
+	// the collection holds the exec's whole count to the cap ([capVerdict]).
 	if req.Limits.MaxTurns > 0 {
 		parts = append(parts, "--max-model-steps", strconv.Itoa(req.Limits.MaxTurns))
 	}
