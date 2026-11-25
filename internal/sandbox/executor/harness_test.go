@@ -45,7 +45,7 @@ func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 // has are named even here, since no field of the request sets them
 // ([TestEveryClaudeCodeRunIsStartedWithItsBoxsSweepHeldOff]), and so is the
 // check of what switches hooks off, the checkouts' hook starting on any run
-// ([TestARunWhoseCheckoutsHookStartsIsRefusedWhereHooksAreOff]).
+// ([TestARunWhoseOnlyHookIsItsCheckoutsStartsWithoutItWhereHooksAreOff]).
 func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{}

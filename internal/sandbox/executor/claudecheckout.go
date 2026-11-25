@@ -103,18 +103,24 @@ func writeClaudeCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbox.
 // claudeCheckoutsGate is the part of a run's script that, on a release at or
 // after [claudeCheckoutsFloor], hands the harness its checkouts' instructions
 // and skills ([checkoutHome.gate]) and, where the box holds the helper, starts
-// the checkouts' plugin, its hook one of the engine's: hk, which the gate
-// sets for the helper, says after it whether any gate started one, for the
-// refusal that follows ([claudeHooksOffGate]). After the skills' and notes'
-// gates, before the pin's ([claudePinGate]). Once the gate has removed an earlier run's state,
-// the script's end says what the nested hook left out before it puts the home
-// back ([checkoutHome.saySkipped]): never before, or a killed run's lines would
-// read as this one's.
+// the checkouts' plugin, its hook one of the engine's (hk, for the refusal
+// that follows, [claudeHooksOffGate]). Where it would be the run's only hook
+// of the engine's (no earlier gate set hk) and the box's settings switch
+// hooks off, it is not started and the run is not refused for it: the launch
+// still hands what is there, and the error stream says a repository cloned
+// later is not handed its skills. After the skills', notes' and guard's gates,
+// before the pin's ([claudePinGate]). Once the gate has removed an earlier
+// run's state, the script's end says what the nested hook left out before it
+// puts the home back ([checkoutHome.saySkipped]), never before.
 func claudeCheckoutsGate(paths Paths) string {
 	q := shellword.Quote
 	h := claudeCheckoutHome(paths)
+	off := q(paths.ClaudeHooksOff())
 	return "if at " + floorArgs(claudeCheckoutsFloor) + "; then\nho=$hk\n" + h.gate() +
 		"chome() { " + h.saySkipped() + "; " + h.restore() + "; }\n" +
+		`if [ -n "$hk" ] && [ -z "$ho" ] && [ -s ` + off + ` ]; then hk=; printf 'crewlet: %s. So the run ` +
+		`starts without the hook that hands a repository cloned during the run its skills, and such a ` +
+		`repository is not handed them\n' "$(cat ` + off + `)" >&2; fi` + "\n" +
 		`if [ -n "$hk" ]; then set -- "$@" --plugin-dir ` + q(paths.ClaudeCheckoutsPlugin()) + "; else hk=$ho; fi\n" +
 		`else echo "crewlet: this box runs Claude Code $n, older than ` + claudeCheckoutsFloor + `, the oldest ` +
 		`that is handed the instructions and skills of its repositories; the run starts without them" >&2; fi` + "\n"
