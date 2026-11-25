@@ -1161,6 +1161,8 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 		out.Reason = sandbox.FollowUpSignInReplaced
 	case c.RequestRefused:
 		out.Reason = sandbox.FollowUpRequestRefused
+	case c.LimitedBeforeWork:
+		out.Reason = sandbox.FollowUpLimitedBeforeWork
 	}
 	return out
 }
@@ -1174,7 +1176,8 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 // a call's fallback ([chain.Pick]) through onFallback; all sitting out is a
 // [*chain.Error], a chain at its limit ([chain.Limited]): the dispatcher parks
 // the seat and a resume waits ([Dispatcher.Provider], [resumeRefusal];
-// ADR-0064). A run that meets its limit midway is not relaunched elsewhere.
+// ADR-0064). A run that meets its limit midway is not relaunched elsewhere;
+// one that met it before any work is, once ([limitedBeforeWork]).
 func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
 	onFallback func(chain.Fallback)) (_ chain.Member, _ *harness.Provider, _ *fleet.Pick, err error) {
 	defer origin.Stamp(&err)
