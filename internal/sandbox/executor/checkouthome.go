@@ -14,14 +14,13 @@ import (
 // checkout core (internal/notehelper's "Checkouts below the working
 // directory") keeps them: the helper and its state, the launch config
 // ([checkoutSpec]), the home instruction file the harness reads (agents: the
-// first of its candidates that exists, else the first; none for a harness
-// whose home file is never held: one handed no instruction text, or one
-// reading the sections file itself, as its run's configuration names it),
-// the home's own copy held beside the run (held), the file the helper writes
-// the checkouts' sections into (sections), the skills directory they are
-// copied into with the list of copies the run's end removes, and the file
-// listing their roots for a harness the script points at them (roots, "" for
-// none). A copy is built in state/staging ([checkoutHome.staging]).
+// first of its candidates that exists, else the first; none where no home
+// file is held: no instruction text, or a sections file the run's config
+// names), the home's own copy held beside the run (held), the file the helper
+// writes the sections into (sections), the skills directory they are copied
+// into with the list of copies the run's end removes, and the file listing
+// their roots for a harness the script points at them (roots, "" for none).
+// A copy is built in state/staging ([checkoutHome.staging]).
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
