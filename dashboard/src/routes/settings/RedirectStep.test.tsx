@@ -96,7 +96,7 @@ function mount(integration: string, notices: unknown = MOVED, viewer: unknown = 
     <ClientContext.Provider value={{ store, socket }}>
       <FrameReadings>
         <Router>
-          <RedirectStep r={STEP} integration={integration} />
+          <RedirectStep r={STEP} integrations={[integration]} />
         </Router>
       </FrameReadings>
     </ClientContext.Provider>,

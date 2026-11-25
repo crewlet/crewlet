@@ -8,8 +8,14 @@ import { RedirectStale } from "~/components/RedirectMoved.tsx";
 import type { SetupRequirement } from "~/protocol/index.ts";
 import { VendorWords } from "~/ui/VendorWords.tsx";
 
-/** `integration` is the form's kind, whose client's stale redirect is said under the address. */
-export function RedirectStep({ r, integration }: { r: SetupRequirement; integration: string }) {
+/** `integrations` are the kinds signing in as this address's client, whose stale redirect is said under it. */
+export function RedirectStep({
+  r,
+  integrations,
+}: {
+  r: SetupRequirement;
+  integrations: readonly string[];
+}) {
   const url = r.redirect?.url ?? "";
   const key = r.redirect?.key ?? "";
   return (
@@ -45,7 +51,7 @@ export function RedirectStep({ r, integration }: { r: SetupRequirement; integrat
             truncate={false}
             ariaLabel={`Copy ${r.label}`}
           />
-          <RedirectStale vendor="google" name={integration} />
+          <RedirectStale vendor="google" names={integrations} />
         </Stack>
       ) : (
         <Callout variant="warning">

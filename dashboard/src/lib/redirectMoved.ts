@@ -5,9 +5,10 @@
  */
 
 import { OAUTH_REDIRECT_MOVED } from "~/contract/advisor.ts";
+import { GOOGLE_PRODUCTS } from "~/app/routes.ts";
 import type { AdvisorNotice, AdvisorRegisteredClient } from "~/protocol/advisor.ts";
 
-/** Where a client is signed in again: a Google product's settings form, an MCP server's Connection tab. */
+/** Where a client is signed in again: the Google page's sign-ins, an MCP server's Connection tab. */
 export function signInPlace(client: AdvisorRegisteredClient): {
   path: string[];
   query: Record<string, string>;
@@ -22,10 +23,11 @@ export function signInPlace(client: AdvisorRegisteredClient): {
       label: `Open ${server}`,
     };
   }
+  const product = GOOGLE_PRODUCTS.find((p) => p === first?.name);
   return {
-    path: ["company", "integrations", first?.name ?? ""],
-    query: { open: "settings" },
-    label: `Open ${first?.title ?? "the integration"}`,
+    path: ["company", "integrations", "google"],
+    query: product ? { tab: "settings", product } : { tab: "settings" },
+    label: "Open Google sign-in",
   };
 }
 
@@ -38,12 +40,14 @@ export function hostOf(address: string): string {
   }
 }
 
-/** The redirect notice's client that `name` (an integration kind or an MCP server) signs in as, where it is stale. */
+/** The redirect notice's client any of `names` (integration kinds or an MCP server) signs in as, where it is stale. */
 export function staleClientOf(
   notices: readonly AdvisorNotice[] | undefined,
   vendor: AdvisorRegisteredClient["vendor"],
-  name: string,
+  names: readonly string[],
 ): AdvisorRegisteredClient | undefined {
   const moved = notices?.find((n) => n.class === OAUTH_REDIRECT_MOVED)?.redirect;
-  return moved?.clients.find((c) => c.vendor === vendor && c.uses.some((u) => u.name === name));
+  return moved?.clients.find(
+    (c) => c.vendor === vendor && c.uses.some((u) => names.includes(u.name)),
+  );
 }

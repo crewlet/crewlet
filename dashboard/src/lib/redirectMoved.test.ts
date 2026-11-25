@@ -37,11 +37,11 @@ const notices: AdvisorNotice[] = [
   },
 ];
 
-test("a Google client is signed in again on its first product's settings, a server on its Connection tab", () => {
+test("a Google client is signed in again on the Google page's sign-ins, a server on its Connection tab", () => {
   expect(signInPlace(google)).toEqual({
-    path: ["company", "integrations", "adsense"],
-    query: { open: "settings" },
-    label: "Open AdSense",
+    path: ["company", "integrations", "google"],
+    query: { tab: "settings", product: "adsense" },
+    label: "Open Google sign-in",
   });
   expect(signInPlace(server)).toEqual({
     path: ["settings", "mcp-tools", "servers", "search"],
@@ -51,12 +51,13 @@ test("a Google client is signed in again on its first product's settings, a serv
 });
 
 test("a page finds its client by any product sharing it, and nothing while none is stale", () => {
-  expect(staleClientOf(notices, "google", "admob")).toBe(google);
-  expect(staleClientOf(notices, "mcp", "search")).toBe(server);
-  expect(staleClientOf(notices, "google", "google_play")).toBeUndefined();
-  expect(staleClientOf(notices, "google", "search")).toBeUndefined();
-  expect(staleClientOf(notices.slice(0, 1), "google", "adsense")).toBeUndefined();
-  expect(staleClientOf(undefined, "google", "adsense")).toBeUndefined();
+  expect(staleClientOf(notices, "google", ["admob"])).toBe(google);
+  expect(staleClientOf(notices, "google", ["google_play", "admob"])).toBe(google);
+  expect(staleClientOf(notices, "mcp", ["search"])).toBe(server);
+  expect(staleClientOf(notices, "google", ["google_play"])).toBeUndefined();
+  expect(staleClientOf(notices, "google", ["search"])).toBeUndefined();
+  expect(staleClientOf(notices.slice(0, 1), "google", ["adsense"])).toBeUndefined();
+  expect(staleClientOf(undefined, "google", ["adsense"])).toBeUndefined();
 });
 
 test("an address is said by its host", () => {
