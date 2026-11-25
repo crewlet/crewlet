@@ -33,6 +33,9 @@ type ConsentSignIns interface {
 	StartConsent(ctx context.Context, kind integration.Kind, by iam.Actor) (ConsentSignIn, error)
 	ConsentSignIn(ctx context.Context, id uuid.UUID) (ConsentSignIn, error)
 	SignOutConsent(ctx context.Context, kind integration.Kind, by iam.Actor) (ConsentSignOut, error)
+	// SignInCallback is where the vendor sends the person back, the redirect
+	// URI a consent product's client registers; "" with no public address.
+	SignInCallback() string
 }
 
 // ConsentSignIn is a sign-in as the routes answer it: never its sealed half.

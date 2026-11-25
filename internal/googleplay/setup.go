@@ -43,8 +43,7 @@ func Guide() setup.Guide {
 		Summary: "Agents use Google Play apps as their own Google identity, with the permissions you give " +
 			"it; what customers see is asked first. No token reaches an agent's box.",
 		Prepare: []setup.Step{
-			{Text: vendortext.Plain("Connect Google Cloud first; no project needs preparing. Its Cloud Shell block, run " +
-				"again, turns on the Google Play Android Developer and Developer Reporting APIs and makes the company reader.")},
+			googlegrowth.CloudFirst("the Google Play Android Developer and Developer Reporting APIs"),
 			{Text: vendortext.Of(vendortext.W("Invite the company reader below in "),
 				vendortext.UI("Play Console", "Users and permissions").At(usersURL), vendortext.W(" with "),
 				vendortext.UI("View app information"), vendortext.W(" for all apps, and name each account's monthly "+
