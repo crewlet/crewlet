@@ -244,7 +244,10 @@ if [ "$m" = new ]; then
   sed -e "s/` + qwenCapturedSession + `/$s/" -e "1s|\"cwd\":\"/work/proj\"|\"cwd\":\"$w\"|" ` + shellword.Quote(chat) + ` > "$c/$s.jsonl"
 else
   head -n 1 "$c/$s.jsonl" 2> /dev/null | grep -qF "\"cwd\":\"$w\"" || { echo "no session $s recorded here" >&2; exit 1; }
-  tail -n 1 "$c/$s.jsonl" >> "$c/$s.jsonl"
+  # NEVER read and append one file in one command (as claim, never mkdir):
+  # uutils tail (Ubuntu 26.04's) through 0.12.0 copies past a 4 KiB file's
+  # end, to an EOF its own appends keep moving, and never exits.
+  l=$(tail -n 1 "$c/$s.jsonl") && printf '%s\n' "$l" >> "$c/$s.jsonl"
 fi
 printf '{"type":"crewlet_qwen_session","session_id":"%s"}\n' "$s"
 echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'

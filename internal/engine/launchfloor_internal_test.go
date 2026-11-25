@@ -384,9 +384,9 @@ func TestAnUnmeasuredContinuationIsHeldToItsBrief(t *testing.T) {
 	})
 	t.Run("past the smallest ceiling, not continued", func(t *testing.T) {
 		t.Parallel()
-		// A DAY OF 30000: room for the static floor and the fresh brief beside
+		// A DAY OF 70000: room for the static floor and the fresh brief beside
 		// it, and none for the copy's long brief beside it.
-		k := newKeptLaunch(t, 40000, 30000, 0)
+		k := newKeptLaunch(t, 40000, 70000, 0)
 		k.claimed(t)
 		decided, err := k.relaunch(t, notKept, inPlace())
 		if err != nil {
@@ -402,7 +402,7 @@ func TestAnUnmeasuredContinuationIsHeldToItsBrief(t *testing.T) {
 	t.Run("the line says what the floor is made of", func(t *testing.T) {
 		t.Parallel()
 		why := launchFloor{static: static}.continuing(0, brief).fits(
-			budgetBasis{seat: coord.Caps{period.Day: 30000}}.room(nil))
+			budgetBasis{seat: coord.Caps{period.Day: 70000}}.room(nil))
 		if !strings.Contains(why, "nothing measured its context") || strings.Contains(why, "last request") ||
 			!strings.Contains(why, fmt.Sprintf("about %d", brief)) {
 			t.Errorf("an unmeasured session past the smallest ceiling is not continued because %q, want it "+
@@ -435,8 +435,8 @@ func TestALaunchIsHeldToTheLargestFloorOfItsBriefs(t *testing.T) {
 	}{
 		"the fresh brief's is the largest": {fresh: longBrief, context: 1000,
 			want: static.continuing(0, harness.EstimateTokens(longBrief))},
-		"a session's is the largest": {fresh: "the fresh brief", context: 60000,
-			want: static.continuing(60000, harness.EstimateTokens(replaced))},
+		"a session's is the largest": {fresh: "the fresh brief", context: 90000,
+			want: static.continuing(90000, harness.EstimateTokens(replaced))},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -475,10 +475,10 @@ func TestAFreshFloorPastTheRoomIsHeldAtTheStaticFloorOrTheRoomBelowIt(t *testing
 	t.Parallel()
 	brief := harness.EstimateTokens(longBrief)
 	static := new(config.TurnEngine).ExecutorFloor()
-	// A COMPANY DAY OF 30000, THE SMALLEST CEILING: at the static floor or
+	// A COMPANY DAY OF 70000, THE SMALLEST CEILING: at the static floor or
 	// above it, as config holds every ceiling, and below the static floor with
 	// the brief beside it.
-	const ceiling = 30_000
+	const ceiling = 70_000
 	if static > ceiling || static+brief <= ceiling {
 		t.Fatalf("the static floor %d with a brief of %d beside it is not past the %d ceiling, or the static "+
 			"floor alone is: the case is not the one it means", static, brief, ceiling)
@@ -620,7 +620,7 @@ func TestAHeldLaunchSaysItIsHeld(t *testing.T) {
 
 	brief := harness.EstimateTokens(longBrief)
 	static := new(config.TurnEngine).ExecutorFloor()
-	const ceiling = 30_000
+	const ceiling = 70_000
 	_, l, jobs := floorRig(t, ceiling, 0, nil)
 	l.turn.RunID = "held-launch-says-so"
 	req := launchRequest(l, nil)
@@ -656,7 +656,7 @@ func TestAHeldLaunchSaysItIsHeld(t *testing.T) {
 	// A KEPT SESSION WHOSE OWN FLOOR FITS THE ROOM, above the static floor the
 	// fresh one is held at: the launch is held to the session's floor, and the
 	// line names that one.
-	const sessionContext = 27_000
+	const sessionContext = 67_000
 	sessionFloor := sessionContext + harness.EstimateTokens("carry on")
 	if sessionFloor <= static || sessionFloor > ceiling {
 		t.Fatalf("a session floor of %d is not between the static floor %d and the %d ceiling: the case is not "+
@@ -730,9 +730,9 @@ roles:
 // Mutation: hold at the ceiling or room, wait unbounded, or record a round's.
 func TestATurnsOwnSpendNeverHoldsItsLaunchForEver(t *testing.T) {
 	t.Parallel()
-	// A DAY OF 30000 UNDER A FLOOR OF 25000, and a thousand tokens of context
+	// A DAY OF 70000 UNDER A FLOOR OF 65000, and a thousand tokens of context
 	// assembly every turn charges before its launch.
-	const ceiling, static, assembly = 30_000, 25_000, 1_000
+	const ceiling, static, assembly = 70_000, 65_000, 1_000
 	for name, tc := range map[string]struct {
 		// brief is the fresh brief's estimate, and before what else the
 		// seat's window holds when the delivery first arrives.
@@ -776,8 +776,8 @@ func TestATurnsOwnSpendNeverHoldsItsLaunchForEver(t *testing.T) {
 		"held past every window, in a busy company's other seats spend in first": {brief: 10_000,
 			others: 1_000, turns: 1},
 		"within the ceiling, past what its own turn leaves": {brief: 4_500, turns: 1},
-		// THE BAND, in a busy company: the busy window leaves 28000 at the
-		// launch's read, and the room is 29000.
+		// THE BAND, in a busy company: the busy window leaves 68000 at the
+		// launch's read, and the room is 69000.
 		"a floor the busy window leaves room for": {brief: 3_000, others: 1_000, turns: 1},
 		"a floor a token past what the busy window leaves, within the room": {brief: 3_001, others: 1_000,
 			turns: 2},
@@ -785,12 +785,12 @@ func TestATurnsOwnSpendNeverHoldsItsLaunchForEver(t *testing.T) {
 			later: true},
 		"a floor a token past the room": {brief: 4_001, others: 1_000, turns: 1},
 		"a measured session's floor within the room, past what the busy window leaves": {brief: 100,
-			session: 28_500, others: 1_000, turns: 2},
+			session: 68_500, others: 1_000, turns: 2},
 		"a seat that leaves the node between the two windows": {brief: 4_000, others: 1_000, moves: true,
 			turns: 3},
 		// ONLY A LAUNCH'S REFUSAL IS RECORDED: the first window refused a
 		// round, or its gate parked the seat before any turn ran (6000 spent
-		// leaves it 24000, short of the static floor), and the next window's
+		// leaves it 64000, short of the static floor), and the next window's
 		// launch never waited for its floor.
 		"a round refused in the first window, then a floor within the room": {brief: 4_000, others: 1_000,
 			round: true, turns: 3},
@@ -997,14 +997,14 @@ func TestATurnsOwnSpendNeverHoldsItsLaunchForEver(t *testing.T) {
 // events, or drop nothing or everything once a delivery is gone; a case reds.
 func TestAWaitedLaunchsTurnoverIsItsOwnDeliverys(t *testing.T) {
 	t.Parallel()
-	// THE BUSY COMPANY: a day of 30000, the smallest ceiling, every turn's
+	// THE BUSY COMPANY: a day of 70000, the smallest ceiling, every turn's
 	// context assembly 1000 and the other seats' spend 1000 before every
-	// launch reads the window, which leaves the launch 28000 of a room of
-	// 29000.
-	const ceiling, static, assembly, others = 30_000, 25_000, 1_000, 1_000
+	// launch reads the window, which leaves the launch 68000 of a room of
+	// 69000.
+	const ceiling, static, assembly, others = 70_000, 65_000, 1_000, 1_000
 	// THE BAND: the waited delivery's brief takes its floor to the room,
-	// 29000, past the 28000 the busy window leaves; the person's is short,
-	// its floor 25100, which every window here leaves room for.
+	// 69000, past the 68000 the busy window leaves; the person's is short,
+	// its floor 65100, which every window here leaves room for.
 	const waitedBrief, personBrief = 4_000, 100
 	for name, lane := range map[string]bool{
 		"a person's message on the seat's priority lane, run first":             true,
@@ -1143,7 +1143,7 @@ func TestAWaitedLaunchsTurnoverIsItsOwnDeliverys(t *testing.T) {
 func TestAWaitOutlastsEveryRefusalButItsFloors(t *testing.T) {
 	t.Parallel()
 	static := new(config.TurnEngine).ExecutorFloor()
-	const ceiling, others, brief = 30_000, 2_000, 4_000
+	const ceiling, others, brief = 70_000, 2_000, 4_000
 	band := strings.Repeat("a", 4*brief)
 	if need := static + brief; need <= ceiling-others || need > ceiling {
 		t.Fatalf("a floor of %d is not past the %d the window leaves and within its %d ceiling: the case is "+
@@ -1212,7 +1212,7 @@ func TestAWaitOutlastsEveryRefusalButItsFloors(t *testing.T) {
 func TestADeliveryAnyOfWhoseEventsWaitedIsHeld(t *testing.T) {
 	t.Parallel()
 	static := new(config.TurnEngine).ExecutorFloor()
-	const ceiling, brief = 30_000, 4_000
+	const ceiling, brief = 70_000, 4_000
 	e, l, _ := busyFloorRig(t, ceiling)
 	id, ok := l.company.Org.AgentIDFor(l.seat)
 	if !ok {
@@ -1241,14 +1241,14 @@ func TestADeliveryAnyOfWhoseEventsWaitedIsHeld(t *testing.T) {
 // leave room for, even at exactly its floor, is continued. In the window it was
 // refused in it is held to its floor; a record naming no window reads as never
 // refused; a failed read drops no session. Only a launch's refusal below its
-// floor names its window, never a round's. Here a busy day of 30000 leaves
-// 28000, so 4000 beside the static floor (29000) is within the room, past what
+// floor names its window, never a round's. Here a busy day of 70000 leaves
+// 68000, so 4000 beside the static floor (69000) is within the room, past what
 // the window leaves. Mutation: leave the wait unbounded, ignore the record, or
 // drop or keep a session wrongly, exactly its floor included.
 func TestALaunchRefusedBelowItsFloorWaitsOneTurnoverAtMost(t *testing.T) {
 	t.Parallel()
 	static := new(config.TurnEngine).ExecutorFloor()
-	const ceiling, others, brief = 30_000, 2_000, 4_000
+	const ceiling, others, brief = 70_000, 2_000, 4_000
 	left := ceiling - others
 	band := strings.Repeat("a", 4*brief)
 	if need := static + brief; need <= left || need > ceiling {
@@ -1319,8 +1319,8 @@ func TestALaunchRefusedBelowItsFloorWaitsOneTurnoverAtMost(t *testing.T) {
 			floor  int
 		}{
 			"a measured session its window leaves room for is continued": {record: before,
-				req: runner.AgentRunRequest{Brief: "the fresh brief", Session: kept(27_000)}, keeps: true,
-				floor: 27_000 + carry},
+				req: runner.AgentRunRequest{Brief: "the fresh brief", Session: kept(67_000)}, keeps: true,
+				floor: 67_000 + carry},
 			// AT EXACTLY ITS FLOOR, as its launch goes out at exactly its
 			// floor ([executorHeadroom]): continued, never started fresh for
 			// nothing.
@@ -1328,13 +1328,13 @@ func TestALaunchRefusedBelowItsFloorWaitsOneTurnoverAtMost(t *testing.T) {
 				req: runner.AgentRunRequest{Brief: "the fresh brief", Session: kept(int64(left - carry))}, keeps: true,
 				floor: left},
 			"a measured session its window is still short of is dropped": {record: before,
-				req: runner.AgentRunRequest{Brief: "the fresh brief", Session: kept(28_500)}, floor: static},
+				req: runner.AgentRunRequest{Brief: "the fresh brief", Session: kept(68_500)}, floor: static},
 			"a copy nothing measured, its window still short of it, is dropped": {record: before,
 				req: runner.AgentRunRequest{Brief: "the fresh brief",
 					Continue: &runner.Continuation{SessionID: "s-1", Brief: band}}, floor: static},
 			"in the day it was refused in, a session is held to as before": {record: today,
-				req: runner.AgentRunRequest{Brief: "the fresh brief", Session: kept(28_500)}, keeps: true,
-				floor: 28_500 + carry},
+				req: runner.AgentRunRequest{Brief: "the fresh brief", Session: kept(68_500)}, keeps: true,
+				floor: 68_500 + carry},
 		} {
 			record := tc.record
 			l.relaunchRefusedIn = &record
@@ -1358,10 +1358,10 @@ func TestALaunchRefusedBelowItsFloorWaitsOneTurnoverAtMost(t *testing.T) {
 		e.backends.Fleet = unreachableFleet{fleetBase: e.backends.Fleet}
 		l.relaunchRefusedIn = &before
 		got, floor := l.continuedFloor(t.Context(), runner.AgentRunRequest{Brief: "the fresh brief",
-			Session: kept(28_500)}, member, true)
-		if got.Session == nil || floor.tokens() != 28_500+carry {
+			Session: kept(68_500)}, member, true)
+		if got.Session == nil || floor.tokens() != 68_500+carry {
 			t.Errorf("a relaunch that waited, its windows unreadable, offers the session: %v, held to %d; want "+
-				"it offered and held to its floor, %d", got.Session != nil, floor.tokens(), 28_500+carry)
+				"it offered and held to its floor, %d", got.Session != nil, floor.tokens(), 68_500+carry)
 		}
 	})
 	t.Run("a relaunch that waited and is short of the static floor says why it is held", func(t *testing.T) {
@@ -1391,7 +1391,7 @@ func TestALaunchRefusedBelowItsFloorWaitsOneTurnoverAtMost(t *testing.T) {
 		refusedCleanly(t, e, "t1", jobs)
 		// AND A SESSION IT DROPS SAYS WHAT ITS WINDOWS LEAVE, AND AFTER WHICH
 		// WINDOW.
-		short := staticFloor(l.company).continuing(28_500, 2).stillShort(left, before)
+		short := staticFloor(l.company).continuing(68_500, 2).stillShort(left, before)
 		for _, says := range []string{fmt.Sprintf("its windows leave %d", left), "day window " + before.Label} {
 			if !strings.Contains(short, says) {
 				t.Errorf("a dropped session's line says %q, want it to say %q", short, says)

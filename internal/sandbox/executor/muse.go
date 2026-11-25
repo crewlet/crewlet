@@ -46,7 +46,8 @@ var (
 	_ artifactDirHolder = Muse{}
 	_ inPlaceGate       = Muse{}
 	_ sessionJudge      = Muse{}
-	_ trimmer           = Muse{}
+	_ mcpDeferrer       = Muse{}
+	_ recordTrimmer     = Muse{}
 )
 
 // NewMuse returns the runner.
@@ -75,6 +76,22 @@ var museSupported = sync.OnceValue(func() string {
 	p, _ := harnessprofile.Builtin(MuseName)
 	return harnessprofile.Release(p.WrittenFor)
 })
+
+// museDeferral is how many tools, across a run's MCP servers, make Muse Code
+// send none of them and offer each only through its tool_search, the bridge's
+// included, and the release that was measured on. On 1.4.25 a run listing 96
+// to 99 sent them all, and 77 with one of 200 KB among them; one listing 100
+// deferred them all, one-word tools as much as the browser's, and with four of
+// Muse's own tools fewer too: only MCP tools count, never their size. No
+// setting moves the count or keeps a server loaded. A pin moves only once it
+// is measured again (TestMuseDefersAtACountMeasuredOnTheReleaseItRuns).
+var museDeferral = struct {
+	at      int
+	release string
+}{at: 100, release: "1.4.25"}
+
+// defersMCPAt is [museDeferral]'s count ([mcpDeferrer]).
+func (Muse) defersMCPAt() int { return museDeferral.at }
 
 // museSystemMax is the most bytes of standing instructions Muse Code takes in
 // `run.system_prompt_append`: past it, 1.4.25 refuses the run before its model

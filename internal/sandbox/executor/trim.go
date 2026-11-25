@@ -12,17 +12,17 @@ import (
 )
 
 // TRIMMED BEFORE THE BOUND (ADR-0073, "A kept session is what its harness's
-// resume loads"): a pack whose session the take would refuse whole keeps what
-// its harness's resume loads, everything from its newest compaction on and,
-// before it, what that release reads there (Codex its first line, Copilot all
-// but the turns the summary replaced, Muse Code nothing, Gemini CLI and Qwen
-// Code their first line, Hermes every row but the messages the compaction
-// replaced, its settled admissions' results slimmed, OpenCode its `info` and
-// kept turns), never past a run's start that it records ([trimStartVar]). It
-// cuts the pack's copy, never the live record, on every pack, and costs no
-// model call. Only the release a rule was measured on is trimmed ([trimmer]);
-// every other harness and release packs whole, and a pack still past the bound
-// once trimmed is refused as one never trimmed is.
+// resume loads"): a pack the take would refuse whole keeps only what its
+// harness's resume loads: its record's lines from its newest compaction on
+// and, before it, what that release reads there ([recordTrimmer]: Codex its
+// first line, Copilot all but the turns the summary replaced, Muse Code
+// nothing, Gemini CLI and Qwen Code their first line, Hermes every row but the
+// messages the compaction replaced, its settled admissions' results slimmed,
+// OpenCode its `info` and kept turns), never past a run's start it records
+// ([trimStartVar]); or its session's files but those no resume reads (Grok
+// Build, [grokTrimTar]). It cuts the pack's copy, never the live session, and
+// costs no model call. Only a measured release is trimmed ([trimmer]); a pack
+// still past the bound once trimmed is refused as one never trimmed is.
 
 // NO TRIM, BY HARNESS: Claude Code's own trim rewrites its transcript, and its
 // subagent threads stay whole, since 2.1.310 continues one spawned before the
@@ -54,14 +54,21 @@ type trimPoints struct{ plain, packed int64 }
 // trimAt is every pack's: the bounds a take holds an archive to.
 var trimAt = trimPoints{plain: trimPlainPoint, packed: trimPackedPoint}
 
-// trimmer is a [carrier] whose pack trims its session's record past the bound
-// ([trimStaged] and [trimPacked] where the pack stages its record, [trimTar]
-// where it tars it in place): to what a harness's resume loads of it, as
-// measured on one release.
+// trimmer is a [carrier] whose pack trims its session past the bound, to what
+// its harness's resume loads as measured on one release, and leaves its word
+// beside the archive ([trimMarked]), which [Runner.trimOf] reads for that
+// release alone.
 type trimmer interface {
 	// trimRelease is the release the rule was measured on: a session any other
 	// release wrote is packed whole.
 	trimRelease() string
+}
+
+// recordTrimmer is a [trimmer] whose trim cuts its record's lines ([trimStaged]
+// and [trimPacked] where the pack stages its record, [trimTar] where it tars it
+// in place).
+type recordTrimmer interface {
+	trimmer
 
 	// trimRecord is the shell that writes into dst what of the record at src
 	// the release's resume loads, true where it wrote a copy that leaves lines
@@ -105,7 +112,7 @@ func trimStartOf(rec sessionRecord, h Harness) string {
 // <bytes kept>`, and after them the run's start restated over the cut copy
 // where the cut set trp ([chatTrimRecord]). Its status is never the pack's: a
 // record it cannot cut is packed whole, for the take to refuse.
-func trimCut(t trimmer, member string) string {
+func trimCut(t recordTrimmer, member string) string {
 	cut := member + ".trim"
 	return fmt.Sprintf(`trp= && trz=$(wc -c < %[1]s | tr -d ' ') && { %[3]s; } && trk=$(wc -c < %[2]s | tr -d ' ') && mv -f %[2]s %[1]s && trw="$trz $trk${trp:+ $trp}"; rm -f %[2]s`,
 		member, cut, t.trimRecord(member, cut))
@@ -115,7 +122,7 @@ func trimCut(t trimmer, member string) string {
 // shell word member and before it tars it: where the release in [trimRelVar]
 // is t's and the member is past at.plain bytes, the member is cut
 // ([trimCut]). It sets trw, "" where nothing was cut, and is always true.
-func trimStaged(t trimmer, at trimPoints, member string) string {
+func trimStaged(t recordTrimmer, at trimPoints, member string) string {
 	return fmt.Sprintf(`{ trw=; if [ "$%s" = %s ] && [ "$(wc -c < %s | tr -d ' ')" -gt %d ] 2> /dev/null; then %s; fi; }`,
 		trimRelVar, shellword.Quote(t.trimRelease()), member, at.plain, trimCut(t, member))
 }
@@ -124,7 +131,7 @@ func trimStaged(t trimmer, at trimPoints, member string) string {
 // shell word archive: where the record is not cut yet, the release is t's and
 // the archive is past at.packed bytes, the member is cut and repack run again.
 // True unless that repack fails.
-func trimPacked(t trimmer, at trimPoints, member, archive, repack string) string {
+func trimPacked(t recordTrimmer, at trimPoints, member, archive, repack string) string {
 	return fmt.Sprintf(`{ [ -n "$trw" ] || [ "$%s" != %s ] || [ "$(wc -c < %s | tr -d ' ')" -le %d ] 2> /dev/null || { %s; [ -z "$trw" ] || %s; }; }`,
 		trimRelVar, shellword.Quote(t.trimRelease()), archive, at.packed, trimCut(t, member), repack)
 }
@@ -138,7 +145,7 @@ func trimPacked(t trimmer, at trimPoints, member, archive, repack string) string
 // members. ONLY PAST A POINT, so every other pack is the one it was; the copy is
 // whole lines of a record its harness only appends to. A copy or a tar that
 // fails is packed as tar packs it, untrimmed. True where an archive was made.
-func trimTar(t trimmer, at trimPoints, root, rel, staged, tar string) string {
+func trimTar(t recordTrimmer, at trimPoints, root, rel, staged, tar string) string {
 	q := shellword.Quote
 	record, member, capture := root+"/"+rel, q(staged+"/in")+"/"+rel, q(staged+"/capture")
 	stage := fmt.Sprintf(`trn=$(wc -l < %[1]s | tr -d ' ') && [ "$trn" -gt 0 ] && mkdir -p "$(dirname %[2]s)" && head -n "$trn" %[1]s > %[2]s`,
@@ -164,9 +171,11 @@ func trimUnmark(dest string) string {
 }
 
 // trimMarked is the shell a pack runs once its archive is at dest: where it
-// was trimmed (trw), the word `<archive bytes> <record bytes> <kept bytes>`
-// beside it, a chat file's restated run start after them ([trimCut]). Best effort: an archive with no word is kept as one that was not
-// trimmed, which loses only the saying so.
+// was trimmed (trw), the word `<archive bytes> <bytes before> <bytes kept>`
+// beside it, of its record or, for a pack that leaves files out, of its
+// members, and a chat file's restated run start after them ([trimCut]). Best
+// effort: an archive with no word is kept as one that was not trimmed, which
+// loses only the saying so.
 func trimMarked(dest string) string {
 	q := shellword.Quote
 	return fmt.Sprintf(`{ [ -z "$trw" ] || printf '%%s %%s\n' "$(wc -c < %s | tr -d ' ')" "$trw" > %s 2> /dev/null || :; }`,
@@ -203,8 +212,8 @@ func (r *Runner) trimOf(ctx context.Context, box sandbox.Sandbox, archive sandbo
 
 // parseTrimMark reads a pack's word on its trim ([trimMarked]): three
 // decimals and a line break, the first the size of the archive it describes,
-// which must be size, the record's bytes before the cut above its bytes kept,
-// and those above zero; or those three and a run start restated, read as
+// which must be size, the bytes before the cut above those kept, and those
+// above zero; or those three and a run start restated, read as
 // [chatRunStartOf] reads a `from`, within the bytes kept. Anything else is no
 // trim.
 func parseTrimMark(mark string, size int64) sandbox.ArchiveTrim {
@@ -246,8 +255,8 @@ func trimmedPrefix(trim sandbox.ArchiveTrim, recorded sandbox.LinePrefix) sandbo
 }
 
 // logTrim says what a take's archive was trimmed of, where it was
-// (executor_session_trimmed): the record's bytes before the cut and kept, as
-// the box counted them.
+// (executor_session_trimmed): the bytes before the cut and kept, as the box
+// counted them ([trimMarked]).
 func logTrim(ctx context.Context, harness string, archive sandbox.SessionArchive) {
 	if !archive.Trim.Trimmed() {
 		return

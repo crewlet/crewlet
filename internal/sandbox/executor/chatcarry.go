@@ -143,14 +143,14 @@ const tornCut = `torn() { if [ -s "$1" ] && [ "$(tail -c 1 "$1" | wc -l)" -eq 0 
 // harness has exited ([chatPack]), trimmed by the box's bare release
 // ([trimRelVar], read off v as [releaseOf] reads it) and its run's start
 // ([chatRunStartFrom]).
-func chatCapture(paths Paths, cfg string, t trimmer) string {
+func chatCapture(paths Paths, cfg string, t recordTrimmer) string {
 	return bareReleaseShell(trimRelVar) + chatPack(paths, packAt{staged: paths.SessionStaging(),
 		dest: paths.SessionCapture()}, cfg, t)
 }
 
 // chatPack is ONE PACK of t's chat file, the run's end's, a pack on demand's
 // and a save's, at the bounds a take keeps ([trimAt]): [chatPackAt].
-func chatPack(paths Paths, at packAt, cfg string, t trimmer) string {
+func chatPack(paths Paths, at packAt, cfg string, t recordTrimmer) string {
 	return chatPackAt(paths, at, cfg, t, trimAt)
 }
 
@@ -163,7 +163,7 @@ func chatPack(paths Paths, at packAt, cfg string, t trimmer) string {
 // harness is gone takes GNU tar's "file changed as we read it" as whole, the
 // one writer left having outlived the harness. Nothing to pack is said
 // nowhere; a failed pack is said on the error stream, never the run's status.
-func chatPackAt(paths Paths, at packAt, cfg string, t trimmer, trim trimPoints) string {
+func chatPackAt(paths Paths, at packAt, cfg string, t recordTrimmer, trim trimPoints) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
@@ -191,7 +191,7 @@ func chatPackAt(paths Paths, at packAt, cfg string, t trimmer, trim trimPoints) 
 // script, at at, its chat file found by locate (which sets cm) and trimmed as
 // t's ([chatPack]): [packNothing] where the box holds no chat file of it,
 // [packFailed] where no archive was made.
-func chatOnDemand(paths Paths, session string, at packAt, cfg, locate string, t trimmer) string {
+func chatOnDemand(paths Paths, session string, at packAt, cfg, locate string, t recordTrimmer) string {
 	return "s=" + shellword.Quote(session) + " packed=\n" + locate + "\n" +
 		fmt.Sprintf("[ -n \"$cm\" ] || exit %d\n", packNothing) +
 		chatPack(paths, at, cfg, t) +

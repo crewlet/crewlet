@@ -44,6 +44,16 @@ type MCPServer struct {
 	// scrub ([HandedSecrets]) beside env and headers, credentials whole.
 	Secrets []string
 
+	// Description is what the company says the server is for
+	// (`mcp_servers[].description`), which the run's environment brief lists
+	// beside its name ([EnvironmentBrief]). Read by the brief alone: no runner
+	// renders it into a harness's configuration.
+	//
+	// Set on THE BOX'S OWN SERVERS ALONE: the bridge's endpoint for a server
+	// says its description as the server's MCP instructions, which the harness
+	// hands its model already, so a line in the brief would say it twice.
+	Description string
+
 	// AlwaysLoaded asks the harness to offer this server's tools on every
 	// request rather than defer them: Claude Code's `alwaysLoad` (exempt from
 	// its tool search), OpenCode's `codemode: false` (not behind Code Mode's
