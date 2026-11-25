@@ -2,8 +2,8 @@
  * What the Agents workspace offers for Home: one seat's card, the roster by
  * state, and the schedules that fire next.
  *
- * THE ROSTER'S OWN READING. A seat's state is `activityOf` over the agents
- * push, bucketed as the roster buckets it, and a schedule is the row the
+ * THE ROSTER'S OWN READING. A seat is bucketed in its state group
+ * (`stateGroupOf`), as the roster buckets it, and a schedule is the row the
  * Schedules screen asks for, so Home and Agents can never disagree about who
  * is working or what runs next.
  */
@@ -17,7 +17,15 @@ import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, inTime, tsKey } from "~/lib/format.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { activityOf, indexOrg, nameOfIn, seatLookup, stateGroupWord, toneOf } from "~/lib/seats.ts";
+import {
+  countedStateOf,
+  indexOrg,
+  nameOfIn,
+  seatLookup,
+  stateGroupOf,
+  stateGroupWord,
+  toneOf,
+} from "~/lib/seats.ts";
 import type { ScheduleRow } from "~/protocol/index.ts";
 import { scopeLabel } from "~/routes/agents/Schedules.tsx";
 import {
@@ -94,7 +102,7 @@ function RosterStatus() {
     const out = new Map<string, string[]>();
     for (const seat of indexOrg(org).seats) {
       if (seat.kind !== "agent") continue;
-      const state = activityOf(byHandle.get(seat.handle));
+      const state = stateGroupOf(countedStateOf(byHandle.get(seat.handle)));
       out.set(state, [...(out.get(state) ?? []), seat.name]);
     }
     return out;
