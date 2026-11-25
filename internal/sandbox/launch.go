@@ -851,7 +851,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// The model and the entry the launch's own record is filed under;
 		// the store keys the rest of that record on the launch it mints.
 		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey,
-			SignInID: req.SignInID, Entry: req.Entry, FollowUp: followUpOf(req.Continue)},
+			SignInID: req.SignInID, Entry: req.Entry, FollowUp: followUpOf(req.Continue),
+			TurnCap: req.Spec.MaxTurns},
 		// THE TURN'S NOTES: the seat anchor, the brief's notes and the ones it
 		// tells again, read by the job this write opens, and the box's,
 		// waiting after them. See [PendingStore.BeginLaunch].

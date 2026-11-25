@@ -772,7 +772,8 @@ executor_collected         # one LAUNCH of an executor's run, as its
                            # transcript, harness, box, model and entry, and how
                            # it ended (`notes`, or `failed` with `error` and
                            # error_kind launch_failed, context_exhausted,
-                           # request_refused or out_of_memory), and the
+                           # request_refused, out_of_memory, max_turns or
+                           # turn_cap_exceeded), and the
                            # kills the kernel made
                            # for memory in its job's domain.
                            # NO PHASE: the

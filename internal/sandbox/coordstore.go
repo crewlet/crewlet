@@ -133,11 +133,11 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	run.LaunchSeq = 1
 	run.UpdatedAt = now
 	// The job's own record starts here; a previous job's is not this one's.
-	// Only the model, entry (its key and its identity), sign-in and follow-up
-	// reason are the caller's.
+	// Only the model, entry (its key and its identity), sign-in, follow-up
+	// reason and round cap are the caller's.
 	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model,
 		ProviderKey: run.Launch.ProviderKey, SignInID: run.Launch.SignInID, Entry: run.Launch.Entry,
-		FollowUp: run.Launch.FollowUp}
+		FollowUp: run.Launch.FollowUp, TurnCap: max(run.Launch.TurnCap, 0)}
 	// THE TURN'S NOTES START HERE: the sealed seat anchor, the brief's notes
 	// (read by this job), then the notes the box still held, waiting — see
 	// [PendingStore.BeginLaunch]. Nothing else of the caller's.
