@@ -27,12 +27,13 @@
 //     directory's realpath, the one field a resume checks (measured on
 //     0.28.4), and removes every other key's copy of it.
 //
-//   node qwen-helper.mjs guard [--server <name>]... [--hook <name>]
+//   node qwen-helper.mjs guard [--server <name>]... [--hook <name>] [--checkouts <name> --skipped <file>]
 //     Exits 3, naming the file, the key and the entry, where a settings file
 //     the run's system tier cannot overrule takes one of Crewlet's own servers
 //     or its tools away, or, for a run with a hook, where the settings or safe
 //     mode switch every hook off (qwenguard.go). A file that does not read is
-//     passed over, as Qwen Code reads it as empty.
+//     passed over, as Qwen Code reads it as empty. Where only the checkouts'
+//     hook is off, the run goes on and the skip log says so (D709).
 //
 // NOTES (the runner note contract's poll channel). While the turn runs, the
 // helper polls the notes route and keeps what it fetched. Qwen Code asks for
@@ -802,15 +803,28 @@ function guard(args) {
   const servers = []
   const hooks = []
   const skills = []
+  const checkouts = []
+  let skipped = ""
   for (let i = 0; i + 1 < args.length; i += 2) {
     if (args[i] === "--server") servers.push(args[i + 1])
     if (args[i] === "--hook") hooks.push(args[i + 1])
     if (args[i] === "--skill") skills.push(args[i + 1])
+    if (args[i] === "--checkouts") checkouts.push(args[i + 1])
+    if (args[i] === "--skipped") skipped = args[i + 1]
   }
   const found = switchedOff(servers)
   if (hooks.length > 0) found.push(...hooksOff(hooks))
   if (skills.length > 0) found.push(...skillsOff(skills))
-  if (found.length === 0) return 0
+  if (found.length === 0) {
+    // THE CHECKOUTS' HOOK CARRIES NOTHING ELSE, so where it is off the run
+    // goes on, its skip log saying so once Qwen Code stops.
+    const off = checkouts.length > 0 ? hooksOff(checkouts) : []
+    if (off.length > 0 && skipped !== "") {
+      fs.appendFileSync(skipped, "crewlet: checkouts cloned during the run are not handed their instructions " +
+        "and skills: " + off.join("; ") + "\n")
+    }
+    return 0
+  }
   process.stderr.write("crewlet: Qwen Code would start without what the run's tools or skill loads go through: " +
     found.join("; ") + ". No setting of the run's undoes it, as Qwen Code adds each such list up across its " +
     "settings files and the run never switches on hooks the box switched off; remove the entry. The run was " +

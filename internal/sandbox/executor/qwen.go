@@ -101,11 +101,15 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	// older one never runs ([releaseGate]).
 	line(releaseRead(QwenCode{}.VersionCommand()))
 	line(releaseGate("Qwen Code", qwenRelease))
+	// THE CHECKOUTS' INSTRUCTIONS AND SKILLS, and hk where the helper ran
+	// ([qwenCheckoutsGate]).
+	b.WriteString(qwenCheckoutsGate(paths))
 	// NOTHING OF CREWLET'S OWN SWITCHED OFF by a list no tier undoes
-	// ([qwenGuard]), checked before Qwen Code starts.
-	if guard := qwenGuard(req); guard != "" {
-		line("node " + q(paths.QwenHelper()) + " guard" + guard + " < /dev/null || exit 1")
-	}
+	// ([qwenGuard]), checked before Qwen Code starts; the checkouts' hook
+	// switched off only said in the skip log (D709).
+	line("qk=" + q(qwenCheckoutsHook) + "; qs=" + q(qwenCheckoutHome(paths).skipped()))
+	line("node " + q(paths.QwenHelper()) + " guard" + qwenGuard(req) +
+		` ${hk:+--checkouts "$qk" --skipped "$qs"} < /dev/null || exit 1`)
 	b.WriteString(chatSessionGate(session, paths, qwenGate(paths, fresh)))
 	// WHERE THE RUN BEGINS IN ITS SESSION, its lines and their digest
 	// ([chatRunStartFrom]), which its notes are confirmed past too: a continued
@@ -194,7 +198,8 @@ var (
 // began in its session.
 func (QwenCode) artifactFiles(p Paths) []string {
 	return []string{p.QwenSettings(), p.QwenSettings() + ".fresh", p.QwenHelper(), p.QwenHelperConfig(),
-		p.QwenHelperConfig() + ".fresh", p.QwenRunStart()}
+		p.QwenHelperConfig() + ".fresh", p.QwenRunStart(), p.QwenNoteHelper(), p.QwenCheckoutLaunch(),
+		p.QwenCheckoutSections()}
 }
 
 // artifactDirs is the directory a Qwen Code run leaves of its own
@@ -216,7 +221,11 @@ func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		paths.System():     []byte(system),
 		paths.QwenHelper(): qwenHelperScript,
 	}
-	if err := qwenWired(files, req, paths, paths.QwenSettings(), paths.QwenHelperConfig()); err != nil {
+	helped, err := writeQwenCheckouts(ctx, box, req, paths)
+	if err != nil {
+		return "", err
+	}
+	if err = qwenWired(files, req, paths, paths.QwenSettings(), paths.QwenHelperConfig(), helped); err != nil {
 		return "", err
 	}
 	// AND THE SAME FILES UNDER THE JOB'S OTHER BRIDGE TOKEN, for a session the
@@ -232,8 +241,8 @@ func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		}
 		rewired := req
 		rewired.MCPServers, rewired.Steer, rewired.SkillLoads = f.MCPServers, f.Steer, f.SkillLoads
-		if err := qwenWired(files, rewired, paths, paths.QwenSettings()+".fresh",
-			paths.QwenHelperConfig()+".fresh"); err != nil {
+		if err = qwenWired(files, rewired, paths, paths.QwenSettings()+".fresh",
+			paths.QwenHelperConfig()+".fresh", helped); err != nil {
 			return "", err
 		}
 	}
@@ -245,7 +254,7 @@ func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		files[paths.QwenSkills()+"/"+qwenSkillName(s)+"/SKILL.md"] = file
 	}
 	for _, path := range slices.Sorted(maps.Keys(files)) {
-		if err := box.WriteFile(ctx, path, files[path]); err != nil {
+		if err = box.WriteFile(ctx, path, files[path]); err != nil {
 			return "", fmt.Errorf("executor: writing %s for Qwen Code: %w", path, err)
 		}
 	}
@@ -254,12 +263,13 @@ func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 
 // qwenWired puts into files the two files of req's wiring: its settings, at
 // settingsPath, and its helper's configuration, at helperPath.
-func qwenWired(files map[string][]byte, req sandbox.RunRequest, paths Paths, settingsPath, helperPath string) error {
+func qwenWired(files map[string][]byte, req sandbox.RunRequest, paths Paths, settingsPath, helperPath string,
+	helped bool) error {
 	helper, err := json.Marshal(qwenHelperConfigOf(req, paths))
 	if err != nil {
 		return fmt.Errorf("executor: rendering the Qwen Code helper's configuration: %w", err)
 	}
-	settings, err := json.MarshalIndent(qwenSettings(req, paths), "", "  ")
+	settings, err := json.MarshalIndent(qwenSettings(req, paths, helped), "", "  ")
 	if err != nil {
 		return fmt.Errorf("executor: rendering Qwen Code's settings: %w", err)
 	}
@@ -292,7 +302,7 @@ var qwenDenied = []string{"agent", "ask_user_question", "enter_plan_mode", "exit
 //   - the tools denied ([qwenDenied]); the round cap, as model.maxSessionTurns;
 //   - the run's skills beside every other level's, with the hook reporting
 //     each load.
-func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
+func qwenSettings(req sandbox.RunRequest, paths Paths, helped bool) map[string]any {
 	settings := map[string]any{
 		"general": map[string]any{
 			"gitCoAuthor":      map[string]any{"commit": false, "pr": false},
@@ -332,16 +342,23 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 	}
 	// THE RUN'S SKILLS BESIDE EVERY OTHER LEVEL'S: Qwen Code unions skill
 	// directories across its tiers, so the home's own stay listed.
+	var used []any
 	if len(req.Skills) > 0 {
 		settings["skills"] = map[string]any{"directories": []string{paths.QwenSkills()}}
-		settings["hooks"] = map[string]any{"PostToolUse": []any{map[string]any{
+		used = append(used, map[string]any{
 			"matcher": "skill",
 			"hooks": []any{map[string]any{
 				"type": "command", "timeout": int(qwenHookTimeout / time.Second),
 				"command": "node " + shellword.Quote(paths.QwenHelper()) + " skill " +
 					shellword.Quote(paths.QwenHelperConfig()),
 			}},
-		}}}
+		})
+	}
+	if helped {
+		used = append(used, qwenCheckoutsEntry(paths))
+	}
+	if len(used) > 0 {
+		settings["hooks"] = map[string]any{"PostToolUse": used}
 	}
 	return settings
 }

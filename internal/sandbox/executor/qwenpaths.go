@@ -30,3 +30,30 @@ func (p Paths) QwenHelperConfig() string { return p.WorkDir() + "/qwen-helper.js
 // id and the count of its chat file's lines as the run started
 // ([qwenScript]), which the run's notes are confirmed past ([qwenNotesHeld]).
 func (p Paths) QwenRunStart() string { return p.WorkDir() + "/qwen-run-start" }
+
+// QwenNoteHelper is where a Qwen Code run's launch writes the note helper its
+// checkout gate and checkouts' hook run ([qwenCheckoutHome]).
+func (p Paths) QwenNoteHelper() string { return p.WorkDir() + "/qwen-notehelper" }
+
+// QwenCheckouts is the run's checkout state ([qwenCheckoutHome]): the
+// checkouts handed, the lock, the skip log and the hook's config, remade by
+// every run.
+func (p Paths) QwenCheckouts() string { return p.WorkDir() + "/qwen-checkouts" }
+
+// QwenCheckoutLaunch is the run's checkout-launch config, which its launch
+// writes ([qwenCheckouts]) and its script hands the note helper.
+func (p Paths) QwenCheckoutLaunch() string { return p.WorkDir() + "/qwen-checkout-launch.json" }
+
+// QwenCheckoutSections is where checkout-launch writes the checkouts'
+// instructions, which the gate writes after the home's own into ~/.qwen/QWEN.md.
+func (p Paths) QwenCheckoutSections() string { return p.WorkDir() + "/qwen-checkout-sections.md" }
+
+// QwenHomeInstructions is the home's own ~/.qwen/QWEN.md, held in the work
+// directory while the run's, the home's with its checkouts' after it, stands
+// in its place ([qwenCheckoutHome], [QwenCode.homeRestore]).
+func (p Paths) QwenHomeInstructions() string { return p.WorkDir() + "/qwen-home-QWEN.md" }
+
+// QwenCheckoutSkills lists, a name a line, the checkouts' skills a run copied
+// into the home's ~/.qwen/skills, so the run's end removes them and none of
+// the home's, or the next run's gate where the run was killed first.
+func (p Paths) QwenCheckoutSkills() string { return p.WorkDir() + "/qwen-checkout-skills" }
