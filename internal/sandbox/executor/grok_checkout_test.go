@@ -246,7 +246,7 @@ exec /bin/mkdir "$@"
 // ENDS: put back once grok has stopped, succeeded or failed, where the gate
 // fails after holding, and on each teardown signal (TERM, INT, HUP), ending
 // grok first; a run killed outright is put back by the next run's clear,
-// whichever harness it drives. Nothing held is left.
+// whichever harness it drives, its skip log dropped. Nothing held is left.
 //
 // Mutation: drop the put-back after grok, the EXIT trap or a signal's, or
 // Grok's homeKeeper, and a row goes red.
@@ -285,8 +285,12 @@ func TestAGrokRunPutsTheHomesInstructionsBackHoweverItEnds(t *testing.T) {
 					}
 				}
 				if mode == "kill" {
+					plantFile(t, p.GrokCheckouts()+"/skipped", "notehelper: a line no script printed\n")
 					if err := executor.NewClaudeCode().ClearArtifacts(t.Context(), box); err != nil {
 						t.Fatalf("the next run's clear: %v", err)
+					}
+					if _, err := os.Lstat(p.GrokCheckouts() + "/skipped"); err == nil {
+						t.Error("the killed run's skip log outlived the next run's clear")
 					}
 				}
 				if got := readHomeFile(t, box, ".grok/AGENTS.md"); got != own {

@@ -66,9 +66,13 @@ func grokCheckoutHome(paths Paths) checkoutHome {
 var _ homeKeeper = Grok{}
 
 // homeRestore puts ~/.grok/AGENTS.md back and removes the copies where a
-// killed Grok Build run left them ([checkoutHome.restore]), run by the clear
-// before every run, whichever harness it runs.
-func (Grok) homeRestore(p Paths) string { return grokCheckoutHome(p).restore() }
+// killed Grok Build run left them ([checkoutHome.restore]) and drops the skip
+// log it left ([checkoutHome.dropSkipped]), run by the clear before every
+// run, whichever harness it runs.
+func (Grok) homeRestore(p Paths) string {
+	h := grokCheckoutHome(p)
+	return everyStep(h.restore(), h.dropSkipped())
+}
 
 // grokNestedCommand is the nested hook's command: the run's note helper as the
 // one-shot `grok-nested` adapter, reading the state checkout-launch wrote.
