@@ -514,10 +514,14 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		r.executors(ctx, now, &out)
 	}
 	r.refsReading(&out)
-	r.space(&out, now)
+	// WHAT THIS NODE MEASURES OF ITSELF ALONE, read by the one implementation a
+	// node without a state log reads too ([nodeMeasures]), over one window of
+	// the recorder that [retention.observed] reads as well.
+	measures := r.measures()
+	window := measures.window()
+	measures.read(&out, now, window)
 	oldestWindow(now, windows, &out)
-	r.observed(&out)
-	r.burning(&out)
+	r.observed(&out, window)
 	// HOW FAR THIS NODE'S CLOCK, AND THE BROKER MEMBER'S, STAND FROM THE
 	// FLEET'S, as the position heartbeat last measured them — read back,
 	// since the heartbeat is the loop that holds the register's instants and
@@ -526,14 +530,9 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	return out
 }
 
-// burning fills the service objectives this node is spending the error budget
-// of too fast.
-//
-// THE OBJECTIVES' OWN JUDGEMENT, read whole: the meter owns the targets, the
-// window pairs and their factors, and the alarm restates none of them
-// (ADR-0015). A nil meter judges nothing burning.
-func (r *retention) burning(out *statelog.Reading) {
-	out.ObjectiveBurns = r.objectives.Burning()
+// measures is this node's own measures as [nodeMeasures] reads them.
+func (r *retention) measures() nodeMeasures {
+	return nodeMeasures{db: r.db, metrics: r.metrics, objectives: r.objectives, volumes: r.volumes}
 }
 
 // domainHealth is one domain's readiness as the report read it, or why it
@@ -591,13 +590,15 @@ func applyLagOf(health statelog.Health, running *runningLog) time.Duration {
 	return lagDurationOf(*health.Lag, 0, running.runner.Drain())
 }
 
-// observed fills the fields that come from this process's own recorder.
+// observed fills the fields that come from this process's own recorder, read
+// from window ([nodeMeasures.window]), but the pool's waits, which
+// [nodeMeasures.read] fills.
 //
 // GUARDED ON THE RECORDER because a nil one is a legal deployment: an embedded
 // engine and every test run without one, and every condition here reads a zero
-// as "nothing to report".
-func (r *retention) observed(out *statelog.Reading) {
-	if r.metrics == nil {
+// as "nothing to report". A nil window is a node with no recorder.
+func (r *retention) observed(out *statelog.Reading, window []metrics.Snapshot) {
+	if window == nil {
 		return
 	}
 	// EVERY READING HERE IS WINDOWED, and none may come from
@@ -612,13 +613,12 @@ func (r *retention) observed(out *statelog.Reading) {
 	// these, so a cron watching it then fires for ever too. That is what
 	// [metrics.Window] was written for, and reading Read() here is what
 	// left it with no caller at all.
-	reading := r.metrics.ReadWindow()
 
 	// THE ANSWER COUNTERS FIRST, because two alarms are FRACTIONS of them
 	// and a fraction needs its denominator before either numerator means
 	// anything.
 	var answers, scoped, degraded uint64
-	for _, snapshot := range reading {
+	for _, snapshot := range window {
 		if snapshot.Name != metrics.TrackerSearchAnswers {
 			continue
 		}
@@ -639,7 +639,7 @@ func (r *retention) observed(out *statelog.Reading) {
 	// counter: every question counts, because a partial turn and a partial
 	// event page are the same missing node.
 	var reads, partial uint64
-	for _, snapshot := range reading {
+	for _, snapshot := range window {
 		if snapshot.Name != metrics.HistoryAnswers {
 			continue
 		}
@@ -658,7 +658,7 @@ func (r *retention) observed(out *statelog.Reading) {
 	// the day somebody re-tuned the fan-out.
 	out.HistoryReadBudget = eventfan.FleetReadBudget
 
-	for _, snapshot := range reading {
+	for _, snapshot := range window {
 		switch snapshot.Name {
 		case metrics.StatelogBarrierDuration:
 			out.BarrierP95 = max(out.BarrierP95, p95Duration(snapshot))
@@ -675,11 +675,6 @@ func (r *retention) observed(out *statelog.Reading) {
 			case scanInteractive:
 				out.SearchP95 = max(out.SearchP95, p95Duration(snapshot))
 			}
-		case metrics.StorePoolWait:
-			// THE WORST FILE, not the sum of them. A caller queues on
-			// ONE pool, and two estates each half-starved is not the
-			// same node as one estate fully starved.
-			out.PoolWaitP95 = max(out.PoolWaitP95, p95Duration(snapshot))
 		case metrics.StatelogRecordsGated:
 			out.RecordsGated += int(snapshot.Total)
 		case metrics.TrackerFeedUnreadable:
