@@ -173,6 +173,9 @@ type fakeGoogle struct {
 	assetPage int
 	searched  []url.Values
 
+	// oldBlock is a provisioner the block did not grant crewletApiEnabler.
+	oldBlock bool
+
 	writes   []string
 	versions []int
 	exchange int
@@ -403,6 +406,8 @@ func (f *fakeGoogle) serve(w http.ResponseWriter, r *http.Request) {
 		f.role(w, strings.TrimPrefix(path, "/v1/"))
 	case strings.HasSuffix(path, "/services"):
 		f.services(w, strings.TrimSuffix(strings.TrimPrefix(path, "/v1/projects/"), "/services"))
+	case strings.HasSuffix(path, "/services:batchEnable") && r.Method == http.MethodPost:
+		f.enable(w, r, strings.TrimSuffix(strings.TrimPrefix(path, "/v1/projects/"), "/services:batchEnable"))
 	case strings.HasPrefix(path, "/v1/projects/") && strings.Contains(path, ":"):
 		project, method, _ := strings.Cut(strings.TrimPrefix(path, "/v1/projects/"), ":")
 		f.projectRoute(w, r, project, method)
@@ -787,6 +792,25 @@ func (f *fakeGoogle) services(w http.ResponseWriter, project string) {
 	f.answer(w, map[string]any{"services": out})
 }
 
+// enable turns services on in the identity project, as the provisioner may
+// only where the block granted it crewletApiEnabler.
+func (f *fakeGoogle) enable(w http.ResponseWriter, r *http.Request, project string) {
+	p, ok := f.projects[project]
+	if !ok || project != identity || f.oldBlock {
+		f.fail(w, http.StatusForbidden, "PERMISSION_DENIED", "Permission denied to enable service")
+		return
+	}
+	var body struct {
+		ServiceIDs []string `json:"serviceIds"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	for _, id := range body.ServiceIDs {
+		p.Services[id] = true
+	}
+	f.writes = append(f.writes, "enable "+strings.Join(body.ServiceIDs, " "))
+	f.answer(w, map[string]any{"name": "operations/acf.1", "done": true})
+}
+
 // projectRoute serves a project's policy and permission checks.
 func (f *fakeGoogle) projectRoute(w http.ResponseWriter, r *http.Request, project, method string) {
 	p, ok := f.projects[project]
@@ -811,7 +835,8 @@ func (f *fakeGoogle) projectRoute(w http.ResponseWriter, r *http.Request, projec
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		var held []string
 		for _, perm := range body.Permissions {
-			if strings.HasPrefix(perm, "iam.serviceAccounts.") && project == identity {
+			if (strings.HasPrefix(perm, "iam.serviceAccounts.") ||
+				perm == googlecloud.EnablerPermission && !f.oldBlock) && project == identity {
 				held = append(held, perm)
 			}
 		}

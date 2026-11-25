@@ -1,6 +1,7 @@
 package googlecloud_test
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -10,26 +11,29 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// THE CONNECT FORM IS ONE PASS: the provisioner first, the federation key the
-// engine mints on that save, then the provider the key's block prints, required
-// to finish and never holding a save, which is the one field the Test checks,
-// with the other two.
+// THE CONNECT FORM IS ONE PASS: the identity project first, offered as a
+// suggestion, the federation key the engine mints when the form opens, then
+// the provider the key's block prints, required to finish and never holding a
+// save, which is the one field the Test checks, with the other two.
 func TestTheConnectFormIsOnePassInOrder(t *testing.T) {
 	t.Parallel()
-	reqs := googlecloud.Requirements(testCompany, nil, nil, nil)
+	reqs := googlecloud.Requirements(testCompany, nil, nil)
 	var fields []string
 	for _, r := range reqs {
 		fields = append(fields, r.Field)
 	}
-	if !slices.Equal(fields, []string{"provisioner", "federation_key", "provider", "atlas_read", "enabled"}) {
+	if !slices.Equal(fields, []string{"identity_project", "federation_key", "provider", "atlas_read", "enabled"}) {
 		t.Fatalf("fields %v", fields)
 	}
-	key, provider := reqs[1], reqs[2]
-	if !key.Mintable || key.Kind != setup.KindSecret || key.SecretName != googlecloud.FederationKeySecret {
-		t.Errorf("the federation key is %+v, want a sealed value the engine mints", key)
+	project, key, provider := reqs[0], reqs[1], reqs[2]
+	if project.Default != googlecloud.SuggestedProject(testCompany) || project.ValueProblem(project.Default) != "" {
+		t.Errorf("the identity project offers %q, want a valid suggestion", project.Default)
+	}
+	if !key.Mintable || !key.MintFirst || key.Kind != setup.KindSecret || key.SecretName != googlecloud.FederationKeySecret {
+		t.Errorf("the federation key is %+v, want a sealed value the engine mints when the form opens", key)
 	}
 	if !provider.Required || provider.PrintedBy != "federation_key" || !provider.Checkable ||
-		!slices.Equal(provider.CheckWith, []string{"provisioner", "federation_key"}) {
+		!slices.Equal(provider.CheckWith, []string{"identity_project", "federation_key"}) {
 		t.Errorf("the provider is %+v, want it required, printed by the key's block and checked with the other two",
 			provider)
 	}
@@ -37,10 +41,10 @@ func TestTheConnectFormIsOnePassInOrder(t *testing.T) {
 		t.Errorf("enabled is %+v, want hidden and on", reqs[4])
 	}
 	block := &config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{
-		Provisioner: provisioner, FederationKey: "${" + googlecloud.FederationKeySecret + "}",
+		IdentityProject: identity, FederationKey: "${" + googlecloud.FederationKeySecret + "}",
 	}}
 	held := func(name string) (string, bool) { return "a key", name == googlecloud.FederationKeySecret }
-	if got := googlecloud.Requirements(testCompany, block, nil, held)[2]; !got.Required || got.PrintedBy == "" {
+	if got := googlecloud.Requirements(testCompany, block, held)[2]; !got.Required || got.PrintedBy == "" {
 		t.Errorf("once the key is held, the provider is %+v", got)
 	}
 	if summary := googlecloud.Guide().Summary; !strings.Contains(summary, "No service account key is made") {
@@ -48,21 +52,23 @@ func TestTheConnectFormIsOnePassInOrder(t *testing.T) {
 	}
 }
 
-// A PASTE IS HELD TO GOOGLE'S SHAPE before it is stored: the provisioner is a
-// service account's email, the provider a provider's full name, and a
-// reference is a pointer, never judged.
+// A PASTE IS HELD TO GOOGLE'S SHAPE before it is stored: the identity project
+// is a project ID a service account can name, the provider a provider's full
+// name, and a reference is a pointer, never judged.
 func TestAPasteIsHeldToGooglesShape(t *testing.T) {
 	t.Parallel()
-	reqs := googlecloud.Requirements(testCompany, nil, nil, nil)
-	prov, provider := reqs[0], reqs[2]
+	reqs := googlecloud.Requirements(testCompany, nil, nil)
+	project, provider := reqs[0], reqs[2]
 	for _, tc := range []struct {
 		req   setup.Requirement
 		value string
 		ok    bool
 	}{
-		{prov, provisioner, true},
-		{prov, "ops@acme.example", false},
-		{prov, "${GCP_PROVISIONER}", true},
+		{project, identity, true},
+		{project, "Acme Crewlet", false},
+		{project, provisioner, false},
+		{project, "example.com:acme-crewlet", false},
+		{project, "${GCP_IDENTITY}", true},
 		{provider, testProvider, true},
 		{provider, "crewlet-engine", false},
 	} {
@@ -76,12 +82,12 @@ func TestAPasteIsHeldToGooglesShape(t *testing.T) {
 func TestTheFormReadsWhatTheDocumentHolds(t *testing.T) {
 	t.Parallel()
 	block := &config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{
-		Provisioner: provisioner, Provider: testProvider, FederationKey: "${" + googlecloud.FederationKeySecret + "}",
+		IdentityProject: identity, Provider: testProvider, FederationKey: "${" + googlecloud.FederationKeySecret + "}",
 		AtlasRead: true,
 	}}
-	for _, r := range googlecloud.Requirements(testCompany, block, nil, nil) {
+	for _, r := range googlecloud.Requirements(testCompany, block, nil) {
 		want := map[string]string{
-			"provisioner": provisioner, "provider": testProvider,
+			"identity_project": identity, "provider": testProvider,
 			"federation_key": "${" + googlecloud.FederationKeySecret + "}", "atlas_read": "true", "enabled": "true",
 		}[r.Field]
 		if !r.Present || r.Stored != want {
@@ -93,18 +99,18 @@ func TestTheFormReadsWhatTheDocumentHolds(t *testing.T) {
 	}
 }
 
-// THE BLOCK SAYS WHICH SAVED ANSWERS IT IS DRAWN FROM, and exactly those: a
-// form hides it while one of them has an unsaved change. Mutation: leave
-// atlas_read out of drawn_from, or add a field the block ignores, and this fails.
+// THE BLOCK SAYS WHICH ANSWERS IT IS DRAWN FROM, and exactly those: a form
+// redraws it when one of them changes. Mutation: leave atlas_read out of
+// drawn_from, or add a field the block ignores, and this fails.
 func TestTheBlockIsDrawnFromExactlyTheFieldsItNames(t *testing.T) {
 	t.Parallel()
 	_, pemText := fakeKey(t)
 	base := config.GoogleCloudProvisioning{
-		Provisioner: provisioner, FederationKey: "${" + googlecloud.FederationKeySecret + "}", Provider: testProvider,
+		IdentityProject: identity, FederationKey: "${" + googlecloud.FederationKeySecret + "}", Provider: testProvider,
 	}
 	resolve := func(name string) (string, bool) { return pemText, name == googlecloud.FederationKeySecret }
 	block := func(p config.GoogleCloudProvisioning) setup.Requirement {
-		for _, r := range googlecloud.Requirements(testCompany, &config.GoogleCloud{Enabled: true, Provisioning: &p}, nil, resolve) {
+		for _, r := range googlecloud.Requirements(testCompany, &config.GoogleCloud{Enabled: true, Provisioning: &p}, resolve) {
 			if r.Public != nil {
 				return r
 			}
@@ -115,8 +121,8 @@ func TestTheBlockIsDrawnFromExactlyTheFieldsItNames(t *testing.T) {
 	plain := block(base)
 	changed := map[string]config.GoogleCloudProvisioning{}
 	other := base
-	other.Provisioner = "crewlet-provisioner@acme-other-id.iam.gserviceaccount.com"
-	changed["provisioner"] = other
+	other.IdentityProject = "acme-other-id"
+	changed["identity_project"] = other
 	other = base
 	other.AtlasRead = true
 	changed["atlas_read"] = other
@@ -124,13 +130,38 @@ func TestTheBlockIsDrawnFromExactlyTheFieldsItNames(t *testing.T) {
 	other.Provider = "projects/999/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine"
 	changed["provider"] = other
 	var drawn []string
-	for _, field := range []string{"provisioner", "provider", "atlas_read"} {
+	for _, field := range []string{"identity_project", "provider", "atlas_read"} {
 		if block(changed[field]).Public.Text != plain.Public.Text {
 			drawn = append(drawn, field)
 		}
 	}
-	if !slices.Equal(drawn, []string{"provisioner", "atlas_read"}) ||
-		!slices.Equal(plain.Public.DrawnFrom, []string{"provisioner", "atlas_read"}) {
+	if !slices.Equal(drawn, []string{"identity_project", "atlas_read"}) ||
+		!slices.Equal(plain.Public.DrawnFrom, []string{"identity_project", "atlas_read"}) {
 		t.Errorf("the block changes with %v and names %v", drawn, plain.Public.DrawnFrom)
+	}
+}
+
+// THE BLOCK FOLLOWS WHAT IS TYPED: drawn for the typed project and Atlas with
+// the key Crewlet holds, live, and nothing for a project that is no ID, which
+// says what to type instead.
+func TestTheBlockIsDrawnFromWhatIsTyped(t *testing.T) {
+	t.Parallel()
+	_, pemText := fakeKey(t)
+	form := map[string]string{"identity_project": "acme-ids-2", "atlas_read": "true", "federation_key": pemText}
+	draw := func(field string) (*setup.PublicView, error) {
+		return googlecloud.Draw(setup.Draw{Field: field, Company: testCompany, Value: func(f string) string { return form[f] }})
+	}
+	view, err := draw("federation_key")
+	if err != nil || !view.Live || !strings.Contains(view.Text, "IDENTITY=acme-ids-2\n") ||
+		!strings.Contains(view.Text, googlecloud.AtlasAccountID) ||
+		!slices.Equal(view.DrawnFrom, []string{"identity_project", "atlas_read"}) {
+		t.Fatalf("drawn %+v, %v", view, err)
+	}
+	form["identity_project"] = "Acme IDs"
+	if _, err := draw("federation_key"); !errors.Is(err, setup.ErrUnusableInput) {
+		t.Errorf("a name for an ID: %v, want what to type", err)
+	}
+	if _, err := draw("provider"); !errors.Is(err, setup.ErrNotDrawable) {
+		t.Errorf("the provider: %v, want nothing drawn", err)
 	}
 }

@@ -1079,11 +1079,11 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7484.3 KiB,
-	// on kit 0.189.0, with the setup form's rules for a field a block prints
-	// and its Test connection. A raise names the measured size and its cause in
+	// kit releases account for its growth, and the last measure was 7486.6 KiB,
+	// on kit 0.189.0, with a setup block drawn from what is typed and its key
+	// made as the form opens. A raise names the measured size and its cause in
 	// its commit.
-	treeBudget = 5<<20 + 2365<<10
+	treeBudget = 5<<20 + 2367<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

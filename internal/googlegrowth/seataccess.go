@@ -81,10 +81,10 @@ func (v SeatAccess) IdentityGuide(c *config.Company, seat seataccess.SeatRef, _ 
 // for c's seat handle, "" where the Google Cloud connection names no identity
 // project.
 func IdentityEmail(c *config.Company, handle string) string {
-	if c == nil || c.Integrations.GoogleCloud == nil || c.Integrations.GoogleCloud.Provisioning == nil {
+	if c == nil {
 		return ""
 	}
-	project, ok := config.GoogleCloudServiceAccount(c.Integrations.GoogleCloud.Provisioning.Provisioner)
+	project, ok := c.Integrations.GoogleCloud.Identity()
 	if !ok {
 		return ""
 	}

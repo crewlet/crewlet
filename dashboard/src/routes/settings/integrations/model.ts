@@ -281,7 +281,7 @@ export const STORIES: Record<string, ToolStory> = {
       "Each agent has its own Google identity in your Google identity project; you add it to the property at the role it may act with. Its tokens never leave Crewlet.",
     byHand: [
       {
-        text: "Connect Google Cloud first and run its setup block again, which turns on the Analytics APIs, then add each agent's email in ",
+        text: "Connect Google Cloud first, and Crewlet turns on the Analytics APIs itself. Then add each agent's email in ",
       },
       { ui: ["Admin", "Property access management"] },
       { text: "." },
@@ -329,7 +329,7 @@ export const STORIES: Record<string, ToolStory> = {
       "Each agent has its own Google identity in your Google identity project; you add it to the account at the access level it may act with. Its tokens never leave Crewlet.",
     byHand: [
       {
-        text: "Connect Google Cloud first and run its setup block again, which turns on the Google Ads API, then add each agent's email in ",
+        text: "Connect Google Cloud first, and Crewlet turns on the Google Ads API itself. Then add each agent's email in ",
       },
       { ui: ["Admin", "Access and security"] },
       { text: ", and set each account's spending caps." },
@@ -345,7 +345,7 @@ export const STORIES: Record<string, ToolStory> = {
       "Each agent has its own Google identity in your Google identity project; you add it to each property at the permission it may act with. Its tokens never leave Crewlet.",
     byHand: [
       {
-        text: "Connect Google Cloud first and run its setup block again, which turns on the Search Console APIs, then add each agent's email in ",
+        text: "Connect Google Cloud first, and Crewlet turns on the Search Console APIs itself. Then add each agent's email in ",
       },
       { ui: ["Settings", "Users and permissions"] },
       { text: "." },
@@ -361,7 +361,7 @@ export const STORIES: Record<string, ToolStory> = {
       "Each agent has its own Google identity in your Google identity project; you invite it in Play Console with the app permissions it may act with. Its tokens never leave Crewlet.",
     byHand: [
       {
-        text: "Connect Google Cloud first and run its setup block again, which turns on the Play APIs, then invite each agent's email in Play Console, ",
+        text: "Connect Google Cloud first, and Crewlet turns on the Play APIs itself. Then invite each agent's email in Play Console, ",
       },
       { ui: ["Users and permissions"] },
       { text: "." },

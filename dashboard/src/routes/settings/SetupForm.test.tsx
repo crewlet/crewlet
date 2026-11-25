@@ -4020,3 +4020,101 @@ test("answering a marked field clears its error and the banner counts what is le
   fireEvent.change(screen.getByLabelText(/^Region/), { target: { value: "eu1" } });
   expect(baseElement.textContent).not.toContain("not filled in yet");
 });
+
+/** Google Cloud before anything is saved: a key Crewlet makes first, and a live block. */
+const googleCloud: SetupToolState = {
+  key: "google_cloud",
+  configured: false,
+  enabled: false,
+  satisfied: false,
+  form_complete: false,
+  inbound_path: "",
+  requirements: [
+    req({
+      field: "identity_project",
+      label: "Identity project ID",
+      kind: "id",
+      config_path: "integrations.google_cloud.provisioning.identity_project",
+      default: "crewlet-nimbus-cda2",
+      connect: true,
+    }),
+    req({
+      field: "federation_key",
+      label: "Federation key",
+      kind: "secret",
+      mintable: true,
+      mint_first: true,
+      config_path: "integrations.google_cloud.provisioning.federation_key",
+      connect: true,
+    }),
+  ],
+};
+
+test("Google Cloud's key is made as the form opens, and its block follows the typed project", async () => {
+  const held: SetupToolState = {
+    ...googleCloud,
+    requirements: googleCloud.requirements.map((r) =>
+      r.field === "federation_key"
+        ? {
+            ...r,
+            present: true,
+            public: {
+              text: "IDENTITY=crewlet-nimbus-cda2",
+              language: "sh",
+              live: true,
+              drawn_from: ["identity_project"],
+            },
+          }
+        : r,
+    ),
+  };
+  const spy = stubFetch((path, init) => {
+    if (path.endsWith("/inputs")) return new Response("{}", { status: 201 });
+    if (path.endsWith("/draw")) {
+      const { values } = JSON.parse(String(init?.body)) as { values: Record<string, string> };
+      if (values.identity_project === "Nimbus-IDs")
+        return new Response(
+          JSON.stringify({
+            code: "invalid_input",
+            detail: "This is not a Google Cloud project ID.",
+            field: "identity_project",
+          }),
+          { status: 400 },
+        );
+      return new Response(
+        JSON.stringify({
+          public: { text: `IDENTITY=${values.identity_project}`, language: "sh", live: true },
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify({ secrets: [] }), { status: 200 });
+  });
+  function Page() {
+    const [tool, setTool] = useState(googleCloud);
+    return (
+      <SetupForm
+        sections={[{ name: "Google Cloud", tool }]}
+        title="Google Cloud"
+        onClose={() => {}}
+        onDone={() => setTool(held)}
+      />
+    );
+  }
+  render(<Page />);
+  await eventually(() => expect(screen.getByText("IDENTITY=crewlet-nimbus-cda2")).toBeTruthy());
+  const mints = spy.mock.calls.filter(([input]) => String(input).endsWith("/inputs"));
+  expect(mints).toHaveLength(1);
+  expect(JSON.parse(String(mints[0]?.[1]?.body))).toMatchObject({ generate: ["federation_key"] });
+  fireEvent.change(screen.getByLabelText("Identity project ID"), {
+    target: { value: "nimbus-ids" },
+  });
+  await eventually(() => expect(screen.getByText("IDENTITY=nimbus-ids")).toBeTruthy());
+  fireEvent.change(screen.getByLabelText("Identity project ID"), {
+    target: { value: "Nimbus-IDs" },
+  });
+  await eventually(() =>
+    expect(screen.getByText("This is not a Google Cloud project ID.")).toBeTruthy(),
+  );
+  expect(screen.queryByText(/IDENTITY=/)).toBeNull();
+});

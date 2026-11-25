@@ -16,7 +16,8 @@
 // revoke only the level table, one list per write, and once more where the
 // owner adds a grants list of roles a seat may be granted on request
 // (grants.go). In the identity project it holds Service Account Admin, which
-// reaches only Crewlet's own accounts. A project is offered to agents only when
+// reaches only Crewlet's own accounts, and may turn an API on and nothing more
+// (chores.go), so turning a Google product on never needs a person's block. A project is offered to agents only when
 // all three conditions and the owner's crewletOperator role are exactly this
 // package's and no role its grants list names could mint, act as another
 // identity or grant access ([discover]).
