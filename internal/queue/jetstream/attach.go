@@ -865,26 +865,31 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 // message it held is this round's delivery, and the topic is read only when
 // the lane had nothing. A cycle the broker answered with nothing sends what the
 // loop owes ([attachment.sendSpaced]), which a delivery taken sends first
-// (dispatchOne); one whose fetch failed or was never sent keeps it owed.
+// (dispatchOne); one whose fetch failed or was never sent keeps it owed. Each
+// take is a literal handed straight to its fetch, the shape
+// TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery follows.
 func (a *attachment) takeOne(ctx context.Context, h queue.Handler) {
 	took := false
-	take := func(readmitted bool) func(jetstream.Msg) {
-		return func(msg jetstream.Msg) {
-			took = true
-			a.dispatchOne(ctx, msg, readmitted, h)
-		}
-	}
-	if a.readmittedOne(take(true)); took {
+	if a.readmittedOne(func(msg jetstream.Msg) {
+		took = true
+		a.dispatchOne(ctx, msg, true, h)
+	}); took {
 		return
 	}
-	if err := a.fetchLane(1, take(false)); err != nil {
+	if err := a.fetchLane(1, func(msg jetstream.Msg) {
+		took = true
+		a.dispatchOne(ctx, msg, false, h)
+	}); err != nil {
 		a.logLaneFetchErr(ctx, err)
 	}
 	if took {
 		return
 	}
 	//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
-	answered, err := a.fetch(1, a.q.fetchWait(), take(false))
+	answered, err := a.fetch(1, a.q.fetchWait(), func(msg jetstream.Msg) {
+		took = true
+		a.dispatchOne(ctx, msg, false, h)
+	})
 	if answered && !took {
 		a.sendSpaced()
 	}
