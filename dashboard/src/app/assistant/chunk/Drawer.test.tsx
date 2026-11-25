@@ -25,11 +25,11 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { ASSISTANT_PROTOCOL_VERSION } from "~/contract/assistant.ts";
-import { resetPageContextForTest, setFramePage } from "../context.ts";
+import { pageIdentityAt, resetPageContextForTest, setFramePage } from "../context.ts";
 import { assistantActivity } from "../status.ts";
 import { on as onBus } from "../bus.ts";
-import { queueAbout, queueQuestion, takeQueuedQuestion } from "../control.ts";
-import { readTab, writeTab } from "../tab.ts";
+import { markReopened, queueAbout, queueQuestion, takeQueuedQuestion } from "../control.ts";
+import { carryConversation, readTab, writeTab } from "../tab.ts";
 import {
   attachClosedFor,
   type AssistantModelProblem,
@@ -359,7 +359,7 @@ const SAVED = "403212ed-5a4a-586d-8af6-0000000000aa";
  * a conversation of its own, and every turn is recorded under the one its
  * address names.
  */
-function engineOfMany() {
+function engineOfMany(stream = () => new Response(FIRST, { status: 200, headers: SSE })) {
   const created: string[] = [];
   const turns: { conversation: string; body: Record<string, unknown> }[] = [];
   vi.stubGlobal(
@@ -426,17 +426,14 @@ function engineOfMany() {
           202,
         );
       }
-      if (path.endsWith("/stream")) {
-        return new Response(FIRST, {
-          status: 200,
-          headers: { "Content-Type": "text/event-stream" },
-        });
-      }
+      if (path.endsWith("/stream")) return stream();
       return json({ error: "not_found" }, 404);
     }),
   );
   return { created, turns };
 }
+
+const SSE = { "Content-Type": "text/event-stream" };
 
 const TASKS = {
   screen: "worklet-tasks",
@@ -586,6 +583,141 @@ test("the panel opened again resumes the conversation it held", async () => {
   expect(screen.getByRole("article", { name: "You said" }).textContent).toContain(
     "Fix the flaky sign-in test",
   );
+});
+
+// REOPENED BY THE PERSON, the drawer resumes the conversation it last showed
+// on this page and starts fresh on another (`tab.ts`'s `reopenChoice`).
+const GITHUB = {
+  screen: "integrations",
+  title: "Integrations › GitHub",
+  path: ["company", "integrations", "github"],
+  params: { kind: "github" },
+  query: { tab: "agents" },
+};
+
+/** The person opens the closed drawer, as every door of the frame does. */
+function reopen() {
+  act(() => markReopened());
+  return mount();
+}
+
+/** The drawer on `page`, back on the conversation the tab kept, as after a reload. */
+async function onSaved(page: typeof GITHUB) {
+  setFramePage(page);
+  writeTab({ conversation: SAVED });
+  const drawer = mount();
+  await screen.findByText("An earlier question");
+  return drawer;
+}
+
+const box = () => screen.getByRole("textbox", { name: "Ask Crewlet" }) as HTMLTextAreaElement;
+
+test("reopened on the same page with another tab, it resumes the conversation and its draft", async () => {
+  engineOfMany();
+  const first = await onSaved(GITHUB);
+  fireEvent.change(box(), { target: { value: "and the webhook" } });
+  first.unmount();
+  act(() => setFramePage({ ...GITHUB, query: { tab: "settings" } }));
+  reopen();
+  await afterMicrotasks();
+  expect(conversation().id).toBe(SAVED);
+  expect(screen.getByText("An earlier question")).toBeDefined();
+  expect(box().value).toBe("and the webhook");
+});
+
+test("reopened on another page, it starts fresh, creates nothing, and does so once", async () => {
+  const { created } = engineOfMany();
+  const first = await onSaved(GITHUB);
+  fireEvent.change(box(), { target: { value: "and the webhook" } });
+  first.unmount();
+  act(() => setFramePage(TASKS));
+  const second = reopen();
+  await afterMicrotasks();
+  expect(conversation().id).toBeNull();
+  expect(screen.queryByText("An earlier question")).toBeNull();
+  expect(box().value).toBe("");
+  expect(readTab().conversation).toBeNull();
+  // The fresh one is this page's: reopened here again it is the same one.
+  fireEvent.change(box(), { target: { value: "which tasks are blocked" } });
+  second.unmount();
+  reopen();
+  await afterMicrotasks();
+  expect(box().value).toBe("which tasks are blocked");
+  expect(created).toEqual([]);
+});
+
+test("pages visited while open keep the conversation, and it belongs to the last one", async () => {
+  engineOfMany();
+  const first = await onSaved(GITHUB);
+  act(() => setFramePage(TASKS));
+  expect(conversation().id).toBe(SAVED);
+  first.unmount();
+  reopen();
+  await afterMicrotasks();
+  expect(conversation().id).toBe(SAVED);
+});
+
+test("a page Ask Crewlet opened itself resumes its conversation there", async () => {
+  engineOfMany();
+  const first = await onSaved(GITHUB);
+  first.unmount();
+  // What the frame does as it follows an Open in app card.
+  carryConversation(pageIdentityAt(TASKS.path));
+  act(() => setFramePage(TASKS));
+  reopen();
+  await afterMicrotasks();
+  expect(conversation().id).toBe(SAVED);
+});
+
+test("a conversation with a turn running is shown wherever the drawer reopens", async () => {
+  const { created, turns } = engineOfMany(
+    () => new Response(new ReadableStream({ start() {} }), { status: 200, headers: SSE }),
+  );
+  setFramePage(GITHUB);
+  const first = mount();
+  await askInBox("Why did the sync fail?", () => turns.length);
+  expect(assistantActivity()).toBe("working");
+  first.unmount();
+  act(() => setFramePage(TASKS));
+  reopen();
+  await afterMicrotasks();
+  expect(conversation().id).toBe(created[0]);
+});
+
+test("a change waiting on approval is shown wherever the drawer reopens, after a reload too", async () => {
+  const { created, turns } = engineOfMany();
+  setFramePage(GITHUB);
+  const first = mount();
+  await askInBox("Fix the flaky sign-in test", () => turns.length);
+  await waitFor(() => expect(assistantActivity()).toBe("waiting"));
+  first.unmount();
+  act(() => setFramePage(TASKS));
+  const second = reopen();
+  await afterMicrotasks();
+  expect(conversation().id).toBe(created[0]);
+  expect(readTab().busy).toBe(true);
+  // A reload empties the store; the tab still knows the change waits.
+  second.unmount();
+  resetSessionForTest();
+  act(() => setFramePage({ ...TASKS, path: ["worklet", "board"], screen: "worklet-board" }));
+  reopen();
+  await waitFor(() => expect(conversation().opening?.id ?? conversation().id).toBe(created[0]));
+});
+
+test("after a reload the rule holds: the same page resumes, another starts fresh", async () => {
+  engineOfMany();
+  const first = await onSaved(GITHUB);
+  first.unmount();
+  resetSessionForTest();
+  const second = reopen();
+  await screen.findByText("An earlier question");
+  second.unmount();
+  resetSessionForTest();
+  act(() => setFramePage(TASKS));
+  reopen();
+  await afterMicrotasks();
+  expect(conversation().id).toBeNull();
+  expect(conversation().opening).toBeNull();
 });
 
 // THE BODY IS FLUSH ONLY FOR THE THREAD, which scrolls itself. The offline

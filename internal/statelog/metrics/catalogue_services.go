@@ -310,7 +310,7 @@ func serviceInstruments() []Instrument {
 		},
 		{
 			Name: ExecutorSessionNotContinued, Kind: KindCounter, Unit: UnitCount,
-			Attributes: []string{"reason", "instead"},
+			Attributes: []string{"reason", "instead", "summary"},
 			Shows: "Collected executor launches that did not continue the " +
 				"newest session their turn or conversation left, counted " +
 				"once per launch where its record is published, by " +
@@ -319,8 +319,12 @@ func serviceInstruments() []Instrument {
 				"`capture_late`, `release_floor`, `box_refused`, " +
 				"`restore_failed`, `box_lost`, and the deliberate " +
 				"`context_exhausted`, `request_refused`, `harness_changed`, " +
-				"`budget_floor`, `entry_changed`) and `instead` (`fresh`, a session of its " +
-				"own; `older`, an older one). Every launch that had a session " +
+				"`budget_floor`, `entry_changed`), `instead` (`fresh`, a session of its " +
+				"own; `older`, an older one) and `summary`, what the brief the run read " +
+				"handed of the lost session's newest compaction summary (`handed`; " +
+				"`none`, none kept, or none newer than the older session it continues; " +
+				"`unread`, kept and not read, which the launch's " +
+				"`executor_session_summary_unhanded` line says why of). Every launch that had a session " +
 				"to continue is also an event of the `session_carry` " +
 				"objective, bad for every reason but the deliberate five. A " +
 				"rising fault is read beside the launch's " +

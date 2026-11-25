@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // outlined is one prompt of the corpus, with the keys its outline must carry
@@ -113,16 +114,18 @@ func outlineCorpus() []outlined {
 		{name: "user message, nothing", prompt: BuildPhaseUserMessage(UserMessage{}), keys: []string{"task"}},
 		{
 			// A section appended by [Prompt.Then] tiles as a last section.
-			name: "user message, then a kept session it does not continue",
-			prompt: BuildPhaseUserMessage(richUserMessage()).Then(KeyKeptSession,
-				KeptSession("t-0 🧰", false, false)),
-			keys: []string{"conversation_endings", KeyCapabilityChanges, "task", "prior_work", KeyKeptSession},
+			name: "user message, then a session it does not continue",
+			prompt: BuildPhaseUserMessage(richUserMessage()).Then(KeyLostSession,
+				LostSessionSection(LostSession{Sentence: "The run did not continue its session 🧰.",
+					Summary: &HandedSummary{Text: "## Next\n- post the fix 🧵", Turn: "t-0", Bytes: 24}, Read: "t-0"},
+					provenance.NewBoundary())),
+			keys: []string{"conversation_endings", KeyCapabilityChanges, "task", "prior_work", KeyLostSession},
 		},
 		{
 			name: "user message, nothing, then a kept session",
-			prompt: BuildPhaseUserMessage(UserMessage{}).Then(KeyKeptSession,
-				KeptSession("t-1", true, true)),
-			keys: []string{"task", KeyKeptSession},
+			prompt: BuildPhaseUserMessage(UserMessage{}).Then(KeyLostSession,
+				LostSessionSection(LostSession{Read: "t-1", ThisTurn: true, Fire: true}, provenance.NewBoundary())),
+			keys: []string{"task", KeyLostSession},
 		},
 		{
 			name: "a send-back, continued",
