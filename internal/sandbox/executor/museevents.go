@@ -50,9 +50,26 @@ type musePayload struct {
 		ToolName string `json:"tool_name"`
 	} `json:"correlation_facts"`
 
-	// Calls and Models are the run's usage, once per run.
-	Calls  int         `json:"calls"`
-	Models []museUsage `json:"models"`
+	// Calls and Models are the run's usage, once per run; Completed and
+	// Cancelled the calls that were answered or cut off, a failed attempt being
+	// neither ([museEvents.calls]).
+	Calls     int         `json:"calls"`
+	Completed *int        `json:"completed_calls"`
+	Cancelled int         `json:"cancelled_calls"`
+	Models    []museUsage `json:"models"`
+}
+
+// calls is the requests a `run.usage` counts: those answered and those cut off,
+// never an attempt that failed. MUSE RETRIES A FAILED ATTEMPT AND STATES IT
+// APART (`failed_calls`): measured on 1.4.25 against a stand-in, a 429 and a
+// 500 each retried once stated 8 calls, 6 completed and 2 failed, for 6
+// requests. An attempt that failed bills nothing. A usage that states no
+// completed calls is read by its calls.
+func (p musePayload) calls() int {
+	if p.Completed == nil {
+		return p.Calls
+	}
+	return *p.Completed + p.Cancelled
 }
 
 // museUsage is one model's usage on `run.usage` (`models[]`), or one request's
@@ -199,7 +216,7 @@ func (d *museEvents) Line(line []byte) {
 	case "run.usage":
 		// ONCE PER RUN, the main thread's: whole prompts, cache inside.
 		d.stated = true
-		d.requests += p.Calls
+		d.requests += p.calls()
 		for _, m := range p.Models {
 			d.spend(m)
 		}
@@ -301,12 +318,12 @@ func (d *museEvents) limitReport() string { return d.limit }
 // `run.terminal.failed`.
 func (d *museEvents) Ended() bool { return d.completed || d.failure != "" }
 
-// Requests implements [Decoder]: the calls each exec run's `run.usage`
-// states.
+// Requests implements [Decoder]: the calls each exec run's `run.usage` states,
+// but for the failed attempts it states apart ([musePayload.calls]).
 func (d *museEvents) Requests() int { return d.requests }
 
-// InFlight implements [Decoder]: none, as Muse's own --max-model-steps is
-// held to stop before the next request (unmeasured: Muse runs in no rig yet).
+// InFlight implements [Decoder]: none, as Muse's own --max-model-steps stops
+// before the next request (measured on 1.4.25: a cap of 3, 3 requests).
 func (d *museEvents) InFlight() int { return 0 }
 
 // Result implements [Decoder]: the answer, and how the run ended.
