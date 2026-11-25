@@ -47,7 +47,7 @@ func (p *googleCloudPass) run(ctx context.Context, _ setup.PassInput) ([]integra
 		// here anyway is reported as the finding it is.
 		return []integration.Finding{{
 			Kind: integration.FindingCredentialMissing, Subject: subject,
-			Detail: subject + " is unset, so no agent's service account can be made",
+			Detail: "Google Cloud's setup is not filled in, so no agent's service account can be made",
 		}}, nil
 	}
 	env := p.engine.resolver()

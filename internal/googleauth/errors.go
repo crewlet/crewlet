@@ -66,8 +66,8 @@ func Status(err error) int {
 }
 
 // ConfigError is a connection input that would fail every call with a
-// misleading refusal. Sentence names the document's field to change, in words
-// a person reads as they are, with no package's name.
+// misleading refusal. Sentence names the field to change as the setup form
+// labels it, in words a person reads as they are: no config path, no package.
 type ConfigError struct {
 	Sentence string
 	// Err is what the input's fault is an instance of, such as
