@@ -38,9 +38,7 @@ import (
 // place of its text ([rootImports]), Limit not applying; SkillSep, what joins
 // a copy's tag and skill ([skillName]); FiringLimit, the bound in bytes on
 // what one nested firing hands of all its checkouts' instructions, frames
-// counted, nil for none ([fitFiring]); ListedAs and HomeSkills, the harness
-// whose rule names a listed skill and the home's skill directories whose
-// names a copy may not take ([homeHolds]).
+// counted, nil for none ([fitFiring]).
 type checkoutSpec struct {
 	Instructions       []instructionSlot `json:"instructions"`
 	Limit              *int              `json:"limit,omitempty"`
@@ -51,8 +49,11 @@ type checkoutSpec struct {
 	Reserved           []string          `json:"reserved,omitempty"`
 	ImportInstructions bool              `json:"importInstructions,omitempty"`
 	SkillSep           skillSep          `json:"skillSep,omitempty"`
-	ListedAs           string            `json:"listedAs,omitempty"`
-	HomeSkills         []skillDirSlot    `json:"homeSkills,omitempty"`
+	// ListedAs and HomeSkills are the harness whose rule names a listed skill
+	// and the home's skill directories whose names a copy may not take
+	// ([homeHolds]).
+	ListedAs   string         `json:"listedAs,omitempty"`
+	HomeSkills []skillDirSlot `json:"homeSkills,omitempty"`
 	// held is the names the home takes, read once a firing ([homeNames]).
 	held *homeNames
 }
