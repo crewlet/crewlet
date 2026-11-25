@@ -22,8 +22,12 @@ const identityEmail = "crewlet-growth-lead-0a1b2c@acme-crewlet-id.iam.gserviceac
 // issued is the engine's tokens; Search Console takes no admin sign-in.
 type issued struct{}
 
-func (issued) SeatToken(context.Context, integration.Kind, string, []string) (string, string, error) {
-	return "ya29.seat", identityEmail, nil
+func (issued) SeatToken(context.Context, integration.Kind, string, []string) (seataccess.IssuedSeat, error) {
+	return seataccess.IssuedSeat{Token: "ya29.seat", Account: identityEmail}, nil
+}
+
+func (issued) ReaderToken(context.Context, integration.Kind) (string, error) {
+	return "", seataccess.ErrNotIssued
 }
 
 func (issued) AdminToken(context.Context, integration.Kind) (string, error) {
@@ -66,7 +70,7 @@ integrations:
   google_cloud:
     enabled: true
     provisioning:
-      provisioner: crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com
+      identity_project: acme-crewlet-id
       provider: projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine
       federation_key: "${GOOGLE_CLOUD_FEDERATION_KEY}"
   search_console:
@@ -146,11 +150,15 @@ func TestTheSearchConsoleGuideIsAnOwnersStepsOnly(t *testing.T) {
 	if err := g.Check(); err != nil {
 		t.Errorf("the guide is not of the one form: %v", err)
 	}
-	for _, want := range []string{"sc-domain:acme.example", "Settings > Users and permissions", "Add user",
-		"Permission: Full user"} {
+	for _, want := range []string{"Settings > Users and permissions", "Add user", "Permission: Full user"} {
 		if !strings.Contains(all, want) {
 			t.Errorf("steps %q do not say %q", all, want)
 		}
+	}
+	// EACH PROPERTY IS LISTED WITH ITS OWN USERS PAGE.
+	if len(g.Entries) == 0 || g.Entries[0].ID != "sc-domain:acme.example" ||
+		g.Entries[0].AddURL != "https://search.google.com/search-console/users?resource_id=sc-domain%3Aacme.example" {
+		t.Errorf("entries %+v", g.Entries)
 	}
 	if g.Make != nil || !strings.Contains(g.Note.String(), "Indexing API needs Owner") {
 		t.Errorf("guide %+v", g)

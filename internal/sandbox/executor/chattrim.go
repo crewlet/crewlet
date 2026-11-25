@@ -18,7 +18,7 @@ import (
 // is never cut, and the lines the take checks as the run's start are
 // restated over the cut copy ([trimCut]).
 
-// chatTrimRecord is the cut of a chat file at src into dst ([trimmer]):
+// chatTrimRecord is the cut of a chat file at src into dst ([recordTrimmer]):
 // boundary, an awk program printing the line its newest compaction opens on
 // (failing where there is none), finds B; the cut leaves out lines 2 to
 // C = min(B-1, [trimStartVar]) and keeps the rest, where C is 2 or more, so a
@@ -107,6 +107,6 @@ func (QwenCode) trimRecord(src, dst string) string {
 }
 
 var (
-	_ trimmer = GeminiCLI{}
-	_ trimmer = QwenCode{}
+	_ recordTrimmer = GeminiCLI{}
+	_ recordTrimmer = QwenCode{}
 )

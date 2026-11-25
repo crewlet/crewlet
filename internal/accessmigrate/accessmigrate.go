@@ -470,8 +470,7 @@ func (c *companyAccess) datadogRole() (string, error) {
 		return c.datadogID, nil
 	}
 	if c.resolve == nil {
-		return "", fmt.Errorf("accessmigrate: no way to look up the Datadog role %q",
-			c.datadogName)
+		return "", fmt.Errorf("the Datadog role %q could not be looked up", c.datadogName)
 	}
 	id, ok, err := c.resolve(seataccess.LaneDatadog, c.datadogName)
 	switch {

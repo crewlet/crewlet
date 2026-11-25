@@ -23,8 +23,12 @@ const seatEmail = "crewlet-ads-lead-0a1b2c@acme-crewlet-id.iam.gserviceaccount.c
 // issued is the engine's tokens; Google Ads takes no admin sign-in.
 type issued struct{}
 
-func (issued) SeatToken(context.Context, integration.Kind, string, []string) (string, string, error) {
-	return "ya29.seat", seatEmail, nil
+func (issued) SeatToken(context.Context, integration.Kind, string, []string) (seataccess.IssuedSeat, error) {
+	return seataccess.IssuedSeat{Token: "ya29.seat", Account: seatEmail}, nil
+}
+
+func (issued) ReaderToken(context.Context, integration.Kind) (string, error) {
+	return "", seataccess.ErrNotIssued
 }
 
 func (issued) AdminToken(context.Context, integration.Kind) (string, error) {
@@ -85,7 +89,7 @@ integrations:
   google_cloud:
     enabled: true
     provisioning:
-      provisioner: crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com
+      identity_project: acme-crewlet-id
       provider: projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine
       federation_key: "${GOOGLE_CLOUD_FEDERATION_KEY}"
   google_ads:
@@ -122,7 +126,7 @@ roles:
 // AN ADS ACCOUNT IS REACHED THROUGH ITS MANAGER, and the identity's level is
 // read as a user of the manager it was added to: Read-only on an operate seat
 // is the wrong role, Standard is ready, and a manager that lets it list no
-// users leaves the level for the first refusal to name.
+// users leaves the level unchecked, never ready.
 //
 // Mutation: query the account's users rather than the manager's, and the
 // level is never read.
@@ -144,8 +148,8 @@ func TestAnAdsSeatsLevelIsReadOnTheManagerItWasAddedTo(t *testing.T) {
 		!strings.Contains(check.Said, "Ads lead reaches") {
 		t.Errorf("Standard: %+v", check)
 	}
-	if check, _, _, _ = adsCheck(t, &ads{role: "STANDARD"}); check.Status != seataccess.IdentityReady ||
-		check.Role != "" || !strings.Contains(check.Said, "a call it refuses names the role") {
+	if check, _, _, _ = adsCheck(t, &ads{role: "STANDARD"}); check.Status != seataccess.IdentityUnchecked ||
+		check.Role != "" || !strings.Contains(check.Remedy, "Make sure it holds Standard") {
 		t.Errorf("level unread: %+v", check)
 	}
 }

@@ -49,7 +49,7 @@ roles:
   - name: CEO
     handle: ceo
     llm: p
-token_budget: {month: 40000}
+token_budget: {month: 400000}
 assistant:
   token_budget: {day: 1000, week: 5000}
 `)
@@ -63,7 +63,7 @@ roles:
   - name: CEO
     handle: ceo
     llm: p
-token_budget: {month: 40000}
+token_budget: {month: 400000}
 `)
 	person := iam.Principal{ID: uuid.New(), Login: "grace.hopper", Kind: iam.KindPerson,
 		Seat: "grace", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}

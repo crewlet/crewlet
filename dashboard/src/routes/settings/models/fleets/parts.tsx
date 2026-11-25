@@ -42,12 +42,27 @@ const HELPERS: Record<string, { name: string; mark: string }> = {
   advisor: { name: "Advisor", mark: advisorMark },
 };
 
-/** Who a fleet or member serves now: four faces and "+N", the names on hover; "Nobody" when none. */
-export function ServingFaces({ handles, data }: { handles: readonly string[]; data: ModelsData }) {
+/** Work in flight the nodes' records counted but could not name, in words. */
+const unnamed = (n: number) => `${n} more ${n === 1 ? "call" : "calls"} not named`;
+
+/**
+ * Who a fleet or member serves now: four faces and "+N", the names on hover;
+ * "Nobody" when none. Work the nodes' records could not name is counted after
+ * them, never drawn as nobody.
+ */
+export function ServingFaces({
+  handles,
+  unlisted = 0,
+  data,
+}: {
+  handles: readonly string[];
+  unlisted?: number;
+  data: ModelsData;
+}) {
   if (handles.length === 0)
     return (
       <Text as="span" variant="caption" tone="tertiary">
-        Nobody
+        {unlisted > 0 ? unnamed(unlisted) : "Nobody"}
       </Text>
     );
   const members: AvatarStackMember[] = handles.map((h) => {
@@ -57,9 +72,10 @@ export function ServingFaces({ handles, data }: { handles: readonly string[]; da
     return s ? { id: h, ...seatBadge(s.name || h, s.kind, s.avatar) } : { id: h, name: h };
   });
   const names = listed(members.map((m) => m.name));
+  const said = unlisted > 0 ? `${names}, and ${unnamed(unlisted)}` : names;
   return (
-    <Tooltip content={names} placement="top">
-      <span tabIndex={0} aria-label={`Serving ${names}`}>
+    <Tooltip content={said} placement="top">
+      <span tabIndex={0} aria-label={`Serving ${said}`}>
         <AvatarStack members={members} size="xs" max={4} decorative />
       </span>
     </Tooltip>
@@ -124,7 +140,13 @@ const full = (f: Fleet) => f.members.length > 0 && f.members.every((m) => m.stat
 /** Who waits on a fleet: a seat or helper with a job on it that runs on nothing now. */
 function waitingOn(assignments: readonly FleetAssignment[], key: string): FleetAssignment[] {
   return assignments.filter((a) =>
-    (a.jobs ?? [a]).some((j) => "fleet" in j.target && j.target.fleet === key && j.now === null),
+    (a.jobs ?? [a]).some(
+      (j) =>
+        "fleet" in j.target &&
+        j.target.fleet === key &&
+        j.now === null &&
+        j.now_kind !== "unlisted",
+    ),
   );
 }
 
@@ -212,7 +234,9 @@ export function RemoveMemberConfirm({
       ? `${verbFor(moving, "moves", "move")} to the other members at ${
           moving.length === 1 ? "its" : "their"
         } next turn; a running turn finishes first.`
-      : "Nobody on this fleet runs on it now, so no seat moves.";
+      : member.unlisted_serving > 0
+        ? "Work its status records could not name runs on it; it moves to the other members at its next turn, and a running turn finishes first."
+        : "Nobody on this fleet runs on it now, so no seat moves.";
   return (
     <ConfirmModal
       open

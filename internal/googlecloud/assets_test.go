@@ -298,11 +298,11 @@ func TestNoCredentialShapeReachesTheAtlasFromASearch(t *testing.T) {
 func TestTheBlockMakesTheAtlasAccountOnlyWhenAsked(t *testing.T) {
 	t.Parallel()
 	_, pemText := fakeKey(t)
-	off, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText, false, nil)
+	off, err := googlecloud.CloudShellBlock(testCompany, identity, pemText, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	on, err := googlecloud.CloudShellBlock(testCompany, provisioner, pemText, true, nil)
+	on, err := googlecloud.CloudShellBlock(testCompany, identity, pemText, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,8 @@ func TestTheBlockMakesTheAtlasAccountOnlyWhenAsked(t *testing.T) {
 	if strings.Contains(on, "roles/cloudasset.viewer") || strings.Contains(on, "roles/cloudasset.owner") {
 		t.Error("the block grants a predefined Cloud Asset role, which lists and exports whole assets")
 	}
-	if strings.Count(on, "--permissions=") != 2 || strings.Count(on, "--permissions="+googlecloud.AtlasPermission) != 2 {
+	if strings.Count(on, "--permissions="+googlecloud.AtlasPermission) != 2 ||
+		strings.Count(on, "--permissions=") != 2+strings.Count(on, "--permissions="+googlecloud.EnablerPermission+" ") {
 		t.Error("the atlas's role holds a permission beside searchAllResources")
 	}
 	trusted := func(text string) []string {
@@ -354,11 +355,11 @@ func TestTheConnectFormOffersTheAtlasReader(t *testing.T) {
 	_, pemText := fakeKey(t)
 	resolve := func(ref string) (string, bool) { return pemText, ref != "" }
 	for _, on := range []bool{false, true} {
-		in := &config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{Provisioner: provisioner,
+		in := &config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{IdentityProject: identity,
 			FederationKey: "${" + googlecloud.FederationKeySecret + "}", AtlasRead: on}}
 		var block string
 		found := false
-		for _, req := range googlecloud.Requirements(testCompany, in, nil, resolve) {
+		for _, req := range googlecloud.Requirements(testCompany, in, resolve) {
 			switch req.Field {
 			case "atlas_read":
 				found = true

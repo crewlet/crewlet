@@ -42,7 +42,7 @@ func AcmeCompany() *config.Company {
 	in.Scaleway = &config.Scaleway{Enabled: true,
 		Provisioning: &config.ScalewayProvisioning{OrganizationID: "A1B2C3D4-0000-4000-8000-000000000001"}}
 	in.GoogleCloud = &config.GoogleCloud{Enabled: true,
-		Provisioning: &config.GoogleCloudProvisioning{Provisioner: "crewlet-provisioner@acme-prod.iam.gserviceaccount.com"}}
+		Provisioning: &config.GoogleCloudProvisioning{IdentityProject: "acme-prod"}}
 	in.Atlassian = &config.Atlassian{OrgID: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"}
 	in.AWS = &config.AWS{Enabled: true, Provisioning: &config.AWSProvisioning{Slug: "acme", HomeRegion: "us-east-2",
 		Regions: []string{"us-east-2", "eu-west-1"}, Connection: awsConnection}}

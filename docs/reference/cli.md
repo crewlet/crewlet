@@ -2805,6 +2805,7 @@ expect:
   state: completed                # how the turn ends
   says: [ada]                     # text the answer contains, ignoring case
   never_says: ["http"]            # text it must not contain, ignoring case
+  max_words: 60                   # the most words the answer may run to (a TL;DR's ceiling)
   shows: [Spend by agent]         # text the turn's cards carry, ignoring case
   never_shows: [Budgets]          # text no card of the turn carries, ignoring case
   brief:                          # a brief turn's card (mode: brief only)

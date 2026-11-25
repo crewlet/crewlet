@@ -284,6 +284,7 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   events: "live",
   event: "live",
   general: "settings",
+  "ask-crewlet": "settings",
   models: "settings",
   "mcp-tools": "settings",
   secrets: "settings",

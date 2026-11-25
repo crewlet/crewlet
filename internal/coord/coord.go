@@ -111,8 +111,8 @@
 // # A read is given the time its bytes take to cross
 //
 // A read across a leaf's link is given the time its key class's bound
-// ([HoldValue]) takes to cross at the slowest pace allowed (a bucket
-// declaring no class yet, until #1814, is read at the term). A reader that
+// ([HoldValue]) takes to cross at the slowest pace allowed, every key's
+// class declared by its bucket (ADR-0175). A reader that
 // cannot wait (a probe, a boot) reads a small record naming large bytes by
 // size and digest; only the reader that needs them pays their crossing
 // (ADR-0175). So the pointer names its body ([BodyRef]).
@@ -217,17 +217,17 @@
 //
 // # A person's own record here is their SEAT's
 //
-// Two records in this store are a PERSON'S rather than the company's or a
-// node's: their chat read state ([ChatReads]) and their Home board
-// ([HomeBoards]). Each is keyed by the name iam.RecordOwner gives a
-// principal's own record, which for everybody they admit is the human seat
-// they act as, so each follows the rule every personal record follows
-// (ADR-0032): it belongs to the SEAT, and the seat's next holder inherits it
-// (the person themselves once reinstated, or a successor once they are moved to
-// another seat or removed), exactly as the seat's tracker inbox, pins and
-// personal views pass. Each ends when the seat leaves the company, never when
-// its holder does; see chatread.go for why neither a person id nor an agent id
-// is the key.
+// Three records here are a PERSON'S, not the company's or a node's: their
+// chat read state ([ChatReads]), Home board ([HomeBoards]) and Ask Crewlet
+// instructions ([AssistantInstructions]). Each is keyed by the name
+// iam.RecordOwner gives a principal's own record, which for everybody they
+// admit is the human seat they act as, so each follows the rule every personal
+// record follows (ADR-0032): it belongs to the SEAT, and the seat's next holder
+// inherits it (the person themselves once reinstated, or a successor once they
+// are moved to another seat or removed), exactly as the seat's tracker inbox,
+// pins and personal views pass. Each ends when the seat leaves the company,
+// never when its holder does; see chatread.go for why neither a person id nor
+// an agent id is the key.
 //
 // # A seat's save ledger lives in the uploads bucket
 //
@@ -845,12 +845,15 @@ func (c Class) Name(resource string) (string, bool) {
 
 // CheckResource refuses a resource name that cannot address a key: an empty
 // segment is a value lost on the way here, whose key [DocumentSegments]
-// refuses. Checked at the surface, not the encoder, because a lease under an
-// undecodable key is one no listing returns, so its seat looks free to every
-// node and is handed out twice.
+// refuses, and one past [MaxLeaseNameBytes]. Checked at the surface, not the
+// encoder, because a lease under an undecodable key is one no listing returns,
+// so its seat looks free to every node and is handed out twice.
 func CheckResource(resource string) error {
 	if resource == "" {
 		return fmt.Errorf("coord: a resource name is required")
+	}
+	if err := HoldLeaseName("resource", resource); err != nil {
+		return err
 	}
 	for i, seg := range ResourceSegments(resource) {
 		if seg == "" {

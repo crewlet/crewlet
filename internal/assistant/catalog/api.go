@@ -171,6 +171,11 @@ func NewRouteTable(routes []Route) (*RouteTable, error) {
 		case t.byPattern[r.Pattern].Pattern != "":
 			return nil, fmt.Errorf("catalog: route %q is given twice", r.Pattern)
 		}
+		if r.Pattern == ActRoute {
+			// THE ACT ROUTE CALLS THE TOOL ITS PATH NAMES, in every table: it is
+			// mounted outside a router, so no policy says so.
+			r.Effect = authz.EffectCalls
+		}
 		if r.Action != "" {
 			class, known := authz.AssistOf(r.Action)
 			if !known {
