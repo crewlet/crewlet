@@ -294,16 +294,24 @@ func TestEveryCodexPackTrimsAtTheTakesBounds(t *testing.T) {
 
 // A TAKE READS ITS PACK'S TRIM ONLY BESIDE ITS OWN ARCHIVE: the word is the
 // trim where it names the archive's size and a record cut to fewer bytes, on
-// the trimming harness's release; a word naming another archive, malformed or
-// past its bound, on another release or harness, or not there, is no trim.
+// the trimming harness's release, and a chat file's run start restated where
+// it reads as a `from` within the bytes kept; a word naming another archive,
+// malformed or past its bound, on another release or harness, or not there,
+// is no trim, and nor is one whose restated start is malformed.
 //
 // Mutation: drop the size's check, read the word for any release or harness,
-// or read a word past its bound, and a case goes red.
+// read a word past its bound, or read a restated start loosely, and a case
+// goes red.
 func TestATakeReadsItsPacksTrimOnlyBesideItsOwnArchive(t *testing.T) {
 	t.Parallel()
 	const size = 4096
 	trimmed := sandbox.ArchiveTrim{RecordBytes: 300 << 20, KeptBytes: 40 << 20}
 	word := fmt.Sprintf("%d %d %d\n", size, trimmed.RecordBytes, trimmed.KeptBytes)
+	restated := trimmed
+	restated.Prefix = sandbox.LinePrefix{Lines: 19, CRC: 123, Bytes: 4567}
+	chat := func(start string) string {
+		return fmt.Sprintf("%d %d %d %s\n", size, trimmed.RecordBytes, trimmed.KeptBytes, start)
+	}
 	for name, c := range map[string]struct {
 		runner  *Runner
 		release string
@@ -319,8 +327,18 @@ func TestATakeReadsItsPacksTrimOnlyBesideItsOwnArchive(t *testing.T) {
 		"past its bound":             {NewCodex(), codexCarryRelease, strings.Repeat(" ", trimMarkMaxBytes) + word, sandbox.ArchiveTrim{}},
 		"another release":            {NewCodex(), "0.172.0", word, sandbox.ArchiveTrim{}},
 		"a harness that never trims": {NewClaudeCode(), codexCarryRelease, word, sandbox.ArchiveTrim{}},
-		"hermes on its release":      {NewHermes(), hermesFloor(), word, trimmed},
-		"hermes on another release":  {NewHermes(), "0.23.4", word, sandbox.ArchiveTrim{}},
+		"a chat file's start":        {NewGeminiCLI(), geminiRelease, chat("19 123 4567"), restated},
+		"a chat file's start alone":  {NewQwenCode(), qwenRelease, word, trimmed},
+		"a start of two fields":      {NewGeminiCLI(), geminiRelease, chat("19 123"), sandbox.ArchiveTrim{}},
+		"a start of four fields":     {NewGeminiCLI(), geminiRelease, chat("19 123 4567 8"), sandbox.ArchiveTrim{}},
+		"a start of no lines":        {NewGeminiCLI(), geminiRelease, chat("0 123 4567"), sandbox.ArchiveTrim{}},
+		"a padded start":             {NewGeminiCLI(), geminiRelease, chat("019 123 4567"), sandbox.ArchiveTrim{}},
+		"a start of fewer bytes":     {NewGeminiCLI(), geminiRelease, chat("19 123 18"), sandbox.ArchiveTrim{}},
+		"a start past what was kept": {NewGeminiCLI(), geminiRelease, chat(fmt.Sprintf("19 123 %d", 40<<20+1)),
+			sandbox.ArchiveTrim{}},
+		"a start past the CRC":      {NewGeminiCLI(), geminiRelease, chat("19 4294967296 4567"), sandbox.ArchiveTrim{}},
+		"hermes on its release":     {NewHermes(), hermesFloor(), word, trimmed},
+		"hermes on another release": {NewHermes(), "0.23.4", word, sandbox.ArchiveTrim{}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
