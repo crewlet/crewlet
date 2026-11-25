@@ -337,7 +337,9 @@ func fitFiring(parts []instructionPart, left *int, said *skips) []instructionPar
 // framedCost is what part p takes of a firing's bound: its text, its path
 // three times and 64 bytes, more than any adapter wraps a file in
 // (qwen-nested: the path twice and 47 bytes; a checkout's section header, its
-// root and 22 bytes, once per checkout), so the bound holds the answer whole.
+// root and 22 bytes, once per checkout; pi-nested: the path and 54 bytes, and
+// once per checkout a label of its name, its root and 21 bytes, a file's path
+// its root's and 10 bytes more), so the bound holds the answer whole.
 func framedCost(p instructionPart) int { return len(p.text) + 3*len(p.path) + 64 }
 
 // skippedListing is what a firing left out, as a nested adapter hands it to

@@ -10,11 +10,23 @@ var piInstructionNames = []string{"AGENTS.override.md", "AGENTS.md", "AGENTS.MD"
 // piCheckouts is what Pi 1.6.0 reads from a repository's root started there
 // (measured): one instruction file ([piInstructionNames]), whole, since Pi
 // bounds none (a 200,000-byte file reached the model whole), and the skills a
-// walk of its .pi/skills and .agents/skills reaches, the first winning a name.
+// walk of its .pi/skills and .agents/skills reaches, the first winning a name;
+// a firing's files within [piFiringLimit].
 func piCheckouts() checkoutSpec {
 	return checkoutSpec{Instructions: []checkoutSlot{{Names: piInstructionNames}}, Limit: checkoutUnlimited,
-		SkillDirs: []checkoutSkillDir{{Dir: ".pi/skills", Recursive: true}, {Dir: ".agents/skills", Recursive: true}}}
+		FiringLimit: &piFiringLimit,
+		SkillDirs:   []checkoutSkillDir{{Dir: ".pi/skills", Recursive: true}, {Dir: ".agents/skills", Recursive: true}}}
 }
+
+// piFiringLimit bounds the files one pi-nested firing hands, each counted
+// with its frame. Pi 1.6.0 cuts no tool result (64 MiB reached the next
+// request whole) but first compacts the run's history once its estimate, a
+// token per four UTF-16 units, passes the window less 16,384 tokens (measured
+// between 734,400 and 734,440 bytes in a 200,000-token window), and a model
+// its config gives no window takes 128,000. An answer within half that room,
+// these files and the listings' 64 KiB, leaves the run the other half; a byte
+// bounds a unit, so the bytes bound the estimate. A file past it is named.
+var piFiringLimit = (128_000-16_384)*4/2 - 64<<10
 
 // piCheckoutHome is where a Pi run keeps its checkouts' instructions and
 // skills ([checkoutHome]): the agent directory's instruction file, the one of

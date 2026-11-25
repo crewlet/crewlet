@@ -11,11 +11,13 @@ import (
 )
 
 // piSpec is the spec a Pi run's launch gives the core
-// (internal/sandbox/executor's piCheckouts), its skills in skills.
+// (internal/sandbox/executor's piCheckouts and piFiringLimit), its skills in
+// skills.
 func piSpec(skills string) checkoutSpec {
 	return checkoutSpec{Instructions: names([]string{"AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"}),
-		SkillDirs: []skillDirSlot{{Dir: ".pi/skills", Recursive: true}, {Dir: ".agents/skills", Recursive: true}},
-		Skills:    skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
+		FiringLimit: limited(157_696),
+		SkillDirs:   []skillDirSlot{{Dir: ".pi/skills", Recursive: true}, {Dir: ".agents/skills", Recursive: true}},
+		Skills:      skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
 }
 
 // piLaunch runs checkout-launch in r's working directory under Pi's spec.
@@ -76,6 +78,52 @@ func TestACheckoutClonedDuringAPiRunIsHandedInPisOwnShapeOnce(t *testing.T) {
 	}
 	if out, said := r.piFire(t); out != "" || said != "" {
 		t.Errorf("a later firing printed %q, said %q", out, said)
+	}
+}
+
+// A PI FIRING HANDS ITS CLONES' FILES WITHIN ITS BOUND, FRAMES COUNTED: of
+// three clones in one firing, each file whose text, its path three times and
+// 64 bytes fit what is left of the FiringLimit is handed whole in Pi's
+// wrapping, in order, and one past it is left out whole, never cut, named in
+// the answer and once in the skip log for the model to read there, though its
+// text alone would fit; the wrapped files and their labels take no more than
+// the bound. A later firing hands nothing.
+//
+// Mutation: hand past the bound, count the text alone, cut the file, or say
+// nothing of it, and this goes red.
+func TestAPiFiringHandsItsClonesFilesWithinItsBound(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	work := r.workdir(t)
+	cost := func(clone, file, text string) int { return len(text) + 3*len(filepath.Join(work, clone, file)) + 64 }
+	a, b, c := strings.Repeat("A", 300), strings.Repeat("B", 200), strings.Repeat("C", 100)
+	spec := piSpec(r.skills)
+	spec.FiringLimit = limited(cost("a", "AGENTS.md", a) + cost("c", "CLAUDE.md", c))
+	if len(b) > cost("c", "CLAUDE.md", c) || cost("b", "AGENTS.md", b) <= cost("c", "CLAUDE.md", c) {
+		t.Fatal("b's text must fit the room c takes and its frame must not")
+	}
+	r.launchWith(t, spec, false, "")
+	r.add(t, map[string]string{"a/.git/": "", "a/AGENTS.md": a, "b/.git/": "", "b/AGENTS.md": b, "c/.git/": "",
+		"c/CLAUDE.md": c})
+	framed := func(clone, file, text string) string {
+		root := filepath.Join(work, clone)
+		return "for `" + clone + "` with root " + root + "\n\n<project_instructions path=\"" + root + "/" + file + "\">\n" +
+			text + "\n</project_instructions>"
+	}
+	files := framed("a", "AGENTS.md", a) + "\n\n" + framed("c", "CLAUDE.md", c)
+	line := "the instruction file " + filepath.Join(work, "b", "AGENTS.md") + " is left out: it passes what is " +
+		"left of the firing's bound on instructions; read it at that path"
+	if out, said := r.piFire(t); out != files+"\n\n"+skippedListing([]string{line}) || said != "" {
+		t.Errorf("the firing printed\n%q\nwant\n%q\n(said %q)", out, files+"\n\n"+skippedListing([]string{line}), said)
+	}
+	if len(files) > *spec.FiringLimit {
+		t.Errorf("the wrapped files take %d bytes, past the firing's bound of %d", len(files), *spec.FiringLimit)
+	}
+	if out, said := r.piFire(t); out != "" || said != "" {
+		t.Errorf("a later firing printed %q, said %q", out, said)
+	}
+	if log := read(t, filepath.Join(r.state, skippedLog)); strings.Count(log, line) != 1 {
+		t.Errorf("the skip log reads %q, want the file left out named once", log)
 	}
 }
 

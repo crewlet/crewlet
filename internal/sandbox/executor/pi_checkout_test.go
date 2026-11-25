@@ -292,6 +292,9 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAPiRun(t *testing.T) {
 			if errs := boxFile(t, box, p.Err()); strings.Contains(errs, "no note helper") || strings.Contains(errs, "crewlet: the note helper") {
 				t.Errorf("the run said its checkouts were not handed:\n%s", errs)
 			}
+			if nested := boxFile(t, box, p.PiCheckouts()+"/nested.json"); !strings.Contains(nested, `"firingLimit":157696`) {
+				t.Errorf("clone: the helper's config holds no firingLimit of 154 KiB:\n%s", nested)
+			}
 		})
 	}
 }
