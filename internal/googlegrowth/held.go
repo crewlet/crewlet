@@ -211,13 +211,13 @@ func (c *Client) Apply(ctx context.Context, call growth.Call, w Write, binding s
 		}
 	}
 	out, err := c.SendAndRead(act, call.Handle, h.Req, w.Cut)
+	if Unsent(err) {
+		err = growth.NotSent(err)
+	}
 	switch {
 	case err != nil:
 		r.Failure = failureOfStep(err)
 		c.note(ctx, growth.StepFailed, r)
-		if Unsent(err) {
-			return nil, growth.NotSent(err)
-		}
 		return nil, err
 	case held:
 		c.note(ctx, growth.StepApplied, r)
@@ -257,13 +257,15 @@ func (c *Client) hold(ctx context.Context, resource string) (func(), error) {
 	return release, nil
 }
 
-// failEarly records the failed outcome of an allowed held call that ended
-// before its write was sent, and answers err marked so ([growth.NotSent]); an
-// operate call that sent nothing is no act.
+// failEarly answers err, a call's failure before its write was sent, marked
+// so ([growth.NotSent]), and records it as an allowed held call's outcome; an
+// operate call that sent nothing is no act. The mark comes first, since the
+// reason recorded reads it ([failureOfStep]).
 func (c *Client) failEarly(ctx context.Context, held bool, r growth.Record, err error) error {
+	err = growth.NotSent(err)
 	if held {
 		r.Failure = failureOfStep(err)
 		c.note(ctx, growth.StepFailed, r)
 	}
-	return growth.NotSent(err)
+	return err
 }

@@ -211,8 +211,12 @@ func (c *Client) Denied(ctx context.Context, call growth.Call, req Request, clas
 func failureOfStep(err error) growth.Failure {
 	if ce, ok := errors.AsType[*CallError](err); ok {
 		if ce.Failure == growth.FailureUnknownOutcome && errors.Is(err, growth.ErrNotSent) {
-			// A STAGED STEP CUT OFF before its edit's commit left changed
-			// nothing: the vendor's answer was lost, not the outcome.
+			// AN ANSWER LOST BEFORE THE CHANGE LEFT (a read again, an edit's
+			// opening, a step staged before its commit) changed nothing: the
+			// engine's deadline cut it, or the vendor failed to answer.
+			if timedOut(err) {
+				return growth.FailureTimedOut
+			}
 			return growth.FailureVendorUnavailable
 		}
 		return ce.Failure
