@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
+
 	"github.com/crewlet/crewlet/internal/jsapi/jsapitest"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
@@ -99,6 +101,34 @@ func TestAReadWhoseDeadlineEndsWhileItsStreamHasNoLeaderSaysSo(t *testing.T) {
 	}
 	if held.Count() < 2 {
 		t.Errorf("the stat asked %d times, want it asked again while it waited", held.Count())
+	}
+}
+
+// ONLY A GROUP WITH NO LEADER IS WAITED OUT: a stream the broker answers is
+// not there is that answer, at once, since no election brings it back.
+//
+// Mutant: every 503 waited out, the stream's absence among them — the stat
+// asks again until its deadline.
+func TestAReadOfAStreamThatIsNotThereFailsAtOnce(t *testing.T) {
+	t.Parallel()
+	srv, b, name := accountBucket(t)
+	held := jsapitest.Hold(t, srv, jsapitest.MsgGet(natsobj.Stream))
+	ctx := deadline(t)
+	done := make(chan error, 1)
+	go func() { done <- stat(ctx, b, name) }()
+	first, err := held.Next(ctx)
+	if err != nil {
+		t.Fatalf("the stat never asked: %v", err)
+	}
+	if err := first.Refuse(server.NewJSStreamNotFoundError()); err != nil {
+		t.Fatalf("answer the stat not found: %v", err)
+	}
+	err = <-done
+	if err == nil || strings.Contains(err.Error(), "had no leader") {
+		t.Fatalf("a stat answered that its stream is not there = %v, want that answer", err)
+	}
+	if n := held.Count(); n != 1 {
+		t.Errorf("the stat asked %d times, want once: no wait brings a stream back", n)
 	}
 }
 

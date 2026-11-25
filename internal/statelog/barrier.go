@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -316,6 +318,24 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 	}()
 }
 
+// unheard is what an append nobody heard means, err its answer: a log with no
+// leader, waited out ([jsprovision.Unheard]), unless the broker holds no such
+// stream, which no wait clears and which is refused at once. Found by asking
+// for the barrier subject's last record, which a stream that is there answers
+// once it has a leader.
+func (r *ReadIndex) unheard(ctx context.Context, err error) error {
+	if _, _, probe := r.log.LastSeq(ctx, r.subject); jsprovision.StreamAbsent(probe) {
+		return &Unavailable{
+			Reason: ReasonBrokerRefused,
+			Detail: fmt.Sprintf("the %s stream is absent: the barrier's append on %s was "+
+				"heard by nobody and the broker holds no such stream, so no wait clears it",
+				r.stream, r.subject),
+			Cause: err,
+		}
+	}
+	return jsprovision.Unheard(err)
+}
+
 // barrierAck is one barrier's append as the broker answered it, or unadmitted,
 // its admission's refusal: nothing was appended.
 type barrierAck struct {
@@ -349,6 +369,9 @@ func (r *ReadIndex) appendThroughElection(ctx context.Context, run *barrierRun,
 		}
 		defer release()
 		seq, duplicate, err := r.log.Append(ctx, r.subject, "", nil, body)
+		if errors.Is(err, jetstream.ErrNoStreamResponse) {
+			err = r.unheard(ctx, err)
+		}
 		return barrierAck{seq: seq, duplicate: duplicate}, err
 	}
 	replicated := r.members() > 1
