@@ -832,6 +832,15 @@ type FakeRunner struct {
 	// before it answers — a box that takes a while to read.
 	LiveGate chan struct{}
 
+	// Uncounted makes [FakeRunner.Count] answer no count: the harness this fake
+	// stands in for shows its requests only once it exits. Set it before the
+	// first count. shown is what every job's stand-in stream shows of its
+	// requests ([FakeRunner.Show]), and counted each handle a live count read a
+	// box for.
+	Uncounted bool
+	shown     RequestCount
+	counted   []RunHandle
+
 	// EndFunc, when set, answers every request to end a job
 	// ([FakeRunner.AskEnd]) in place of the default (a script that hears it
 	// and ends its job), called without the runner's lock. Unheard makes
@@ -1234,6 +1243,46 @@ func (r *FakeRunner) Follow(handle RunHandle) LiveReading {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return &fakeReading{runner: r}
+}
+
+// Count begins a live count of what the job's stand-in stream shows
+// ([FakeRunner.Show]), or none where the fake is [FakeRunner.Uncounted].
+func (r *FakeRunner) Count(handle RunHandle) Counter {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.Uncounted {
+		return nil
+	}
+	return fakeCounter{runner: r, handle: handle}
+}
+
+// Show is every job's stand-in stream showing count of its model requests so
+// far, which each read of a live count answers.
+func (r *FakeRunner) Show(count RequestCount) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.shown = count
+}
+
+// Counted is each handle a live count read a job's box for, in order.
+func (r *FakeRunner) Counted() []RunHandle {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.counted)
+}
+
+// fakeCounter is one live count of a job's stand-in stream.
+type fakeCounter struct {
+	runner *FakeRunner
+	handle RunHandle
+}
+
+// Read implements [Counter].
+func (c fakeCounter) Read(context.Context, Sandbox) (RequestCount, error) {
+	c.runner.mu.Lock()
+	defer c.runner.mu.Unlock()
+	c.runner.counted = append(c.runner.counted, c.handle)
+	return c.runner.shown, nil
 }
 
 // Say is the job writing more of its account, from source, under the current
