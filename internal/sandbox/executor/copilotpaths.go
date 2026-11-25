@@ -92,3 +92,12 @@ func (p Paths) CopilotRepoSkills() string { return p.WorkDir() + "/copilot-repo-
 // CopilotRunInstructions is the run's standing instructions, which its script
 // writes first into [Paths.CopilotInstructions], the home's own after them.
 func (p Paths) CopilotRunInstructions() string { return p.WorkDir() + "/copilot-run-instructions.md" }
+
+// CopilotAttempt is the file a run's script writes each launch attempt's
+// number to before it starts Copilot, which the extension keys its state by
+// ([copilotExtensionSettings]).
+func (p Paths) CopilotAttempt() string { return p.WorkDir() + "/copilot-attempt" }
+
+// CopilotStoreCheck is the run's copy of copilot_storecheck.mjs, which its
+// script runs after a refused launch attempt ([copilotAttempts]).
+func (p Paths) CopilotStoreCheck() string { return p.WorkDir() + "/copilot-storecheck.mjs" }

@@ -4,19 +4,21 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // copilotRepoStandIn is the `copilot` the checkout rows run: it answers the
-// release check, records the home's instruction file, the instruction
+// release check and the guard's asks, records the home's instruction file, the instruction
 // directories and the home's skills as the harness starts, and ends the run
 // with an answer.
 const copilotRepoStandIn = `#!/bin/sh
-case "$1" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; esac
+case "$1" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; config|mcp) exit 0;; esac
 s="$HOME/seen"; mkdir -p "$s"
 cat "$COPILOT_HOME/copilot-instructions.md" > "$s/instructions" 2> /dev/null
 printf '%s' "${COPILOT_CUSTOM_INSTRUCTIONS_DIRS-unset}" > "$s/dirs"
@@ -24,6 +26,14 @@ printf '%s' "${COPILOT_CUSTOM_INSTRUCTIONS_DIRS-unset}" > "$s/dirs"
 (cd "$COPILOT_HOME" && find . -type f -print) | sort > "$s/files"
 printf '%s\n' '{"type":"assistant.message","data":{"content":"done"}}' '{"type":"result","exitCode":0}'
 `
+
+// withBoxNode puts the suite's node on box's PATH, as a box running Copilot
+// from npm has one: a run with a checkout's launch set checks it first.
+func withBoxNode(t *testing.T, box sandbox.Sandbox) {
+	t.Helper()
+	node := prereqtest.OnPath(t, "node", "a run with a checkout's launch set checks the box's node", "install node")
+	writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/node", "#!/bin/sh\nexec "+node+" \"$@\"\n")
+}
 
 // plantTree writes files, by path relative to root.
 func plantTree(t *testing.T, root string, files map[string]string) {
@@ -53,6 +63,7 @@ func copilotClone(name string) map[string]string {
 func TestWhatACheckoutBelowTheStartDirectoryBringsACopilotRun(t *testing.T) {
 	t.Parallel()
 	runner, box := standInBox(t, executor.NewCopilot(), map[string]string{"copilot": copilotRepoStandIn})
+	withBoxNode(t, box)
 	p := executor.PathsFor(box)
 	home := box.Home()
 	long := strings.Repeat("l", 60)
@@ -154,6 +165,230 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACopilotRun(t *testing.T) {
 					t.Errorf("%s reached the run's home: %.200s", mark, h)
 				}
 			}
+		}
+	})
+}
+
+// copilotBudgetStandIn is the `copilot` the budget rows run: Copilot 1.0.114's
+// static budget as a byte bound ($HOME/limit) on the home's
+// copilot-instructions.md. Past it the launch is refused as 1.0.114 refuses it,
+// before any request (section 13's stream, exit 1), its session written and,
+// for a new one, deleted as the run's extension deletes it (row R19w) unless
+// $HOME/leave says the delete failed. Within it the run answers, or with
+// $HOME/late is stopped after its first answer (row R15h). Each attempt's
+// home file, brief, instruction directories and attempt number are recorded.
+const copilotBudgetStandIn = `#!/bin/sh
+case "$1" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; config|mcp) exit 0;; esac
+id=; prev=; for a in "$@"; do [ "$prev" = --session-id ] && id=$a; prev=$a; done
+d="$COPILOT_HOME/session-state/$id"; s="$HOME/seen"; mkdir -p "$s"
+n=$(($(cat "$s/attempts" 2> /dev/null | wc -l) + 1))
+cp "$COPILOT_HOME/copilot-instructions.md" "$s/instructions-$n" 2> /dev/null
+cat > "$s/brief-$n"
+printf '%s\n' "$id" > "$s/id"
+printf '%s|%s\n' "${COPILOT_CUSTOM_INSTRUCTIONS_DIRS-unset}" "$(cat "$HOME/.crewlet/copilot-attempt")" >> "$s/attempts"
+size=$(wc -c < "$COPILOT_HOME/copilot-instructions.md" 2> /dev/null) || size=0
+src=new; [ ! -f "$d/events.jsonl" ] || src=resume
+mkdir -p "$d"; printf '{"type":"user.message","data":{"content":"brief"}}\n' >> "$d/events.jsonl"
+if [ "$size" -gt "$(cat "$HOME/limit")" ]; then
+  [ "$src" = resume ] || [ -e "$HOME/leave" ] || rm -rf "$d"
+  printf '%s\n' '{"type":"session.warning","data":{"warningType":"compaction_static_context_blocked","message":"Static system messages and tool definitions exceed the budget."}}' \
+    '{"type":"assistant.turn_end","data":{}}' \
+    '{"type":"session.error","data":{"errorType":"query","message":"No response was returned because static system messages and tool definitions exceed this model context budget."}}' \
+    '{"type":"assistant.idle","data":{}}' '{"type":"result","exitCode":1}'
+  exit 1
+fi
+printf '%s\n' '{"type":"assistant.message","data":{"content":"done"}}'
+if [ -e "$HOME/late" ]; then
+  printf '%s\n' '{"type":"session.warning","data":{"warningType":"compaction_static_context_blocked","message":"Static system messages exceed the budget."}}' \
+    '{"type":"session.error","data":{"errorType":"query","message":"No response was returned."}}' '{"type":"result","exitCode":1}'
+  exit 1
+fi
+printf '%s\n' '{"type":"result","exitCode":0}'
+`
+
+// copilotBudgetBox is a real box running [copilotBudgetStandIn] with limit,
+// its working directory holding the checkouts alpha (a small AGENTS.md) and
+// beta (a 4,000-byte AGENTS.md and a .github/instructions), those of names.
+func copilotBudgetBox(t *testing.T, limit int, names ...string) (*executor.Runner, sandbox.Sandbox) {
+	t.Helper()
+	runner, box := standInBox(t, executor.NewCopilot(), map[string]string{"copilot": copilotBudgetStandIn})
+	withBoxNode(t, box)
+	files := map[string]string{"limit": strconv.Itoa(limit)}
+	for _, name := range names {
+		for rel, body := range copilotClone("workspace/" + name) {
+			files[rel] = body
+		}
+	}
+	if slices.Contains(names, "alpha") {
+		files["workspace/alpha/AGENTS.md"] = "ALPHA\n"
+	}
+	if slices.Contains(names, "beta") {
+		files["workspace/beta/AGENTS.md"] = strings.Repeat("B", 4000) + "\n"
+		files["workspace/beta/.github/instructions/b.instructions.md"] = "B\n"
+	}
+	plantTree(t, box.Home(), files)
+	return runner, box
+}
+
+// copilotAttemptsSeen is each attempt's instruction directories and attempt
+// number as the stand-in recorded them.
+func copilotAttemptsSeen(t *testing.T, box sandbox.Sandbox) []string {
+	t.Helper()
+	return strings.Fields(boxFile(t, box, box.Home()+"/seen/attempts"))
+}
+
+// A COPILOT LAUNCH PAST ITS STATIC BUDGET IS STARTED AGAIN WITHOUT ITS LAST
+// CHECKOUT'S LAUNCH SET, at most once more than the checkouts with one, on
+// the same session, its brief again, each attempt numbered for the
+// extension's state: (a) every set that fits is handed in one attempt; (b) the
+// last set is dropped, named by a line in the home file and out of the
+// instruction directories, and the run answers; (c) a checkout too big alone
+// ends pointed at; (d) a run refused with no set left fails, typed, after
+// checkouts+1 attempts; (e) never more.
+//
+// Mutation: drop the first set, relaunch onto a refusal with none left, keep
+// the dropped directory, skip the brief, or number every attempt alike.
+func TestACopilotLaunchPastItsBudgetDropsItsLastCheckoutsSet(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		limit    int
+		names    []string
+		attempts int
+		kept     string
+		fails    string
+	}{
+		"every set fits":       {limit: 1 << 20, names: []string{"alpha", "beta"}, attempts: 1, kept: "alpha beta"},
+		"the last set dropped": {limit: 3000, names: []string{"alpha", "beta"}, attempts: 2, kept: "alpha"},
+		"one too big alone":    {limit: 3000, names: []string{"beta"}, attempts: 2},
+		"none left still over": {limit: 10, names: []string{"alpha", "beta"}, attempts: 3, fails: "with no repository's instructions handed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := copilotBudgetBox(t, tc.limit, tc.names...)
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "the brief", System: "Work well."})
+			attempts := copilotAttemptsSeen(t, box)
+			if len(attempts) != tc.attempts || len(attempts) > len(tc.names)+1 {
+				t.Fatalf("the run made %d attempts %q, want %d", len(attempts), attempts, tc.attempts)
+			}
+			for i, a := range attempts {
+				if !strings.HasSuffix(a, "|"+strconv.Itoa(i+1)) {
+					t.Errorf("attempt %d was numbered %q", i+1, a)
+				}
+				if brief := boxFile(t, box, box.Home()+"/seen/brief-"+strconv.Itoa(i+1)); brief != "the brief" {
+					t.Errorf("attempt %d read the brief %q", i+1, brief)
+				}
+			}
+			last := boxFile(t, box, box.Home()+"/seen/instructions-"+strconv.Itoa(len(attempts)))
+			if tc.fails != "" {
+				if res.Success || !strings.Contains(res.Error, tc.fails) {
+					t.Fatalf("the run ended %v %q, want it refused %q", res.Success, res.Error, tc.fails)
+				}
+				return
+			}
+			if !res.Success {
+				t.Fatalf("the run failed: %s\n%s", res.Error, boxFile(t, box, executor.PathsFor(box).Err()))
+			}
+			dirs := strings.Split(attempts[len(attempts)-1], "|")[0]
+			for _, name := range tc.names {
+				handed := strings.Contains(last, "for `"+name+"` with root ") && !strings.Contains(last, "/"+name+": its instructions arrive")
+				if want := strings.Contains(tc.kept, name); handed != want {
+					t.Errorf("%s handed %v in the accepted attempt, want %v:\n%.400s", name, handed, want, last)
+				}
+				if !handed && !strings.Contains(last, "/"+name+": its instructions arrive when you first view a file in it") {
+					t.Errorf("the dropped %s is not named in the home file:\n%.400s", name, last)
+				}
+			}
+			if strings.Contains(dirs, "beta") != strings.Contains(tc.kept, "beta") {
+				t.Errorf("the accepted attempt's instruction directories are %q", dirs)
+			}
+		})
+	}
+}
+
+// A REFUSED ATTEMPT THAT LEFT ANYTHING IS NEVER LAUNCHED ONTO: where the
+// refused session's directory is still there the run fails, typed, naming it,
+// with no second attempt (g); a box whose node cannot load node:sqlite, which
+// the check needs, refuses the run before any attempt, naming its node (h).
+//
+// Mutation: relaunch without the check, or start without the node's.
+func TestACopilotRunIsNeverLaunchedOntoALeftover(t *testing.T) {
+	t.Parallel()
+	t.Run("the session left", func(t *testing.T) {
+		t.Parallel()
+		runner, box := copilotBudgetBox(t, 3000, "alpha", "beta")
+		plantFile(t, box.Home()+"/leave", "")
+		_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"})
+		id := strings.TrimSpace(boxFile(t, box, box.Home()+"/seen/id"))
+		if attempts := copilotAttemptsSeen(t, box); len(attempts) != 1 || res.Success ||
+			!strings.Contains(res.Error, "its session "+id+" was not removed") {
+			t.Fatalf("the run made %q and ended %q, want one attempt and a failure naming %s", attempts, res.Error, id)
+		}
+	})
+	t.Run("a node without node:sqlite", func(t *testing.T) {
+		t.Parallel()
+		runner, box := copilotBudgetBox(t, 3000, "alpha", "beta")
+		writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/node",
+			"#!/bin/sh\ncase \"$1\" in --version) echo v20.10.0;; *) exit 1;; esac\n")
+		_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"})
+		if seen := boxFile(t, box, box.Home()+"/seen/attempts"); seen != "" || res.Success ||
+			!strings.Contains(res.Error, "this box's node is v20.10.0") {
+			t.Fatalf("the run made %q and ended %q, want no attempt and a refusal naming v20.10.0", seen, res.Error)
+		}
+	})
+}
+
+// A RESUME LAUNCHES WITH THE SETS ITS SESSION STORED, NEVER SEARCHING: a run
+// whose launch dropped beta's set stores alpha with its session, and the run
+// that resumes it hands alpha alone though beta would fit now; a resume
+// Copilot refuses fails, typed, and deletes nothing (i). A run stopped past
+// its first answer is never relaunched and never said to have done nothing (k).
+//
+// Mutation: search again on resume, delete on a refused resume, or relaunch a
+// run blocked after it answered.
+func TestACopilotResumeLaunchesTheSetsItsSessionStored(t *testing.T) {
+	t.Parallel()
+	runner, box := copilotBudgetBox(t, 3000, "alpha", "beta")
+	if _, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"}); !res.Success {
+		t.Fatalf("the first run failed: %s", res.Error)
+	}
+	id := strings.TrimSpace(boxFile(t, box, box.Home()+"/seen/id"))
+	p := executor.PathsFor(box)
+	if got := boxFile(t, box, p.CopilotSessionDir(id)+"/crewlet-checkouts"); got != "alpha\n" {
+		t.Fatalf("the session stored the sets %q, want alpha's", got)
+	}
+	resume := func(limit int) sandbox.Result {
+		t.Helper()
+		plantFile(t, box.Home()+"/limit", strconv.Itoa(limit))
+		if err := os.RemoveAll(box.Home() + "/seen"); err != nil {
+			t.Fatal(err)
+		}
+		_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "again", Resume: id})
+		return res
+	}
+	if res := resume(1 << 20); !res.Success || len(copilotAttemptsSeen(t, box)) != 1 {
+		t.Fatalf("the resume ended %q after %q, want one accepted attempt", res.Error, copilotAttemptsSeen(t, box))
+	}
+	if got := boxFile(t, box, box.Home()+"/seen/instructions-1"); !strings.Contains(got, "for `alpha` with root") ||
+		strings.Contains(got, "BBBB") || !strings.Contains(got, "/beta: its instructions arrive") {
+		t.Errorf("the resume was handed\n%.400s\nwant alpha's set alone, beta pointed at", got)
+	}
+	if res := resume(10); res.Success || !strings.Contains(res.Error, "refused to resume the session") ||
+		len(copilotAttemptsSeen(t, box)) != 1 {
+		t.Fatalf("the refused resume ended %q after %q, want one attempt and a typed failure", res.Error,
+			copilotAttemptsSeen(t, box))
+	}
+	if _, err := os.Stat(p.CopilotSessionDir(id) + "/events.jsonl"); err != nil {
+		t.Errorf("the refused resume removed its session: %v", err)
+	}
+
+	t.Run("blocked after its first answer", func(t *testing.T) {
+		runner, box := copilotBudgetBox(t, 1<<20, "alpha")
+		plantFile(t, box.Home()+"/late", "")
+		_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"})
+		if res.Success || !strings.Contains(res.Error, "a tool the run called may have run") ||
+			len(copilotAttemptsSeen(t, box)) != 1 {
+			t.Fatalf("the run ended %q after %q, want one attempt and the mid-run failure", res.Error,
+				copilotAttemptsSeen(t, box))
 		}
 	})
 }

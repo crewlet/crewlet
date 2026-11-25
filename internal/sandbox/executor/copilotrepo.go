@@ -1,6 +1,7 @@
 package executor
 
 import (
+	_ "embed"
 	"fmt"
 	"strings"
 
@@ -63,5 +64,84 @@ func copilotLaunchCompose(paths Paths, args string) string {
 		q(h.helper), q(h.launch), args)
 	b.WriteString(h.compose())
 	b.WriteString(copilotInstructionDirs(h.state) + "\n")
+	return b.String()
+}
+
+// copilotStoreCheck is copilot_storecheck.mjs, which a run's script runs on
+// the box's node after a refused launch attempt ([copilotAttempts]).
+//
+//go:embed copilot_storecheck.mjs
+var copilotStoreCheck string
+
+// copilotKeptSets is the file in a Copilot session's directory naming the
+// checkouts whose launch sets its accepted launch kept, a name a line, packed
+// with the session ([copilotPack]): a resume launches with exactly them, never
+// searching again ([copilotAttempts]). Copilot 1.0.114 resumes a session
+// holding it and leaves it there (measured).
+const copilotKeptSets = "crewlet-checkouts"
+
+// The stream lines a Copilot run's script prints of its launch attempts
+// ([copilotAttempts]): a relaunch, after which the stream is the next
+// attempt's, and a run it ended for a cause the stream does not name.
+const (
+	copilotRelaunchMark = "crewlet.relaunch"
+	copilotRefusedMark  = "crewlet.refused"
+)
+
+// copilotStaticBlocked is the warningType of Copilot 1.0.114's refusal of a
+// launch, or of a request, whose static context passes the model's budget
+// (measured, section 13).
+const copilotStaticBlocked = "compaction_static_context_blocked"
+
+// copilotAttempts is the part of a Copilot run's script that launches harness,
+// with every handed checkout's launch set first, and again without the last
+// set kept each time Copilot refuses a NEW session before any request for its
+// static budget, which no run can know before launch (a hosted model's limits
+// come from a catalogue at run time): at most one attempt more than the
+// checkouts with a set, each refused one costing about one start of Copilot,
+// some 2 s (measured, row R15a). Before a relaunch the refused attempt must
+// be gone, its directory and its store rows (copilot_storecheck.mjs, on the
+// box's node, whose node:sqlite the first attempt checks), else the run fails
+// naming what was found. A resume launches with the sets its session stored
+// and is never relaunched; neither is a run past its first answered request.
+func copilotAttempts(paths Paths, harness string) string {
+	q := shellword.Quote
+	res := q(paths.Result())
+	sessions := q(paths.CopilotHome() + "/" + copilotSessionState)
+	refused := func(reason string) string {
+		return `printf '%s\n' '{"type":"` + copilotRefusedMark + `","data":{"reason":"` + reason + `"}}'`
+	}
+	var b strings.Builder
+	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	line(`ks=%s/"$s"/%s; kf=-keep kv=-1 n=0 at=0`, sessions, copilotKeptSets)
+	line(`[ "$k" = no ] || { kf=-kept; kv=$ks; }`)
+	line(`refused() { tail -c +"$((so + 1))" %[1]s 2> /dev/null | grep -qF '"warningType":"%[2]s"' && `+
+		`! tail -c +"$((so + 1))" %[1]s 2> /dev/null | grep -qF '"type":"assistant.message"'; }`, res, copilotStaticBlocked)
+	line(`gone() { if [ -e %s/"$s" ]; then printf '{"type":"%s","data":{"reason":"state","session":"%%s"}}\n' "$s"; return 1; fi; `+
+		`node %s %s "$s"; }`, sessions, copilotRefusedMark, q(paths.CopilotStoreCheck()),
+		q(paths.CopilotHome()+"/session-store.db"))
+	line(`while :; do`)
+	line(`at=$((at + 1))`)
+	b.WriteString(copilotLaunchCompose(paths, `"$kf" "$kv"`))
+	// THE STORE CHECK'S NODE, before an attempt that may be refused: node:sqlite
+	// loads without a flag from Node 22.13 and 23.4; Copilot names no floor.
+	line(`if [ "$at" = 1 ] && [ "$k" = no ] && [ "$((n))" -gt 0 ] && ! node -e 'require("node:sqlite")' > /dev/null 2>&1; then `+
+		`nv=$(node --version 2> /dev/null) || nv=; case $nv in v[0-9]*) case $nv in *[!v0-9.]*) nv=unreadable;; esac;; *) nv=none;; esac; `+
+		`printf '{"type":"%s","data":{"reason":"node","node":"%%s"}}\n' "$nv"; exit 1; fi`, copilotRefusedMark)
+	line(`printf '%%s\n' "$at" > %s || exit 1`, q(paths.CopilotAttempt()))
+	line(`[ "$at" = 1 ] || exec < "$bf"`)
+	line(`so=$(wc -c < %s 2> /dev/null) || so=0`, res)
+	b.WriteString(launchHarness(harness, paths))
+	line(`{ [ -z "$endedas" ] && [ "$code" != 0 ] && refused; } || break`)
+	line(`if [ "$k" = yes ]; then %s; break; fi`, refused("resume"))
+	line(`left=$((n)); [ "$kv" = -1 ] || left=$kv`)
+	line(`if [ "$left" -le 0 ]; then %s; break; fi`, refused("alone"))
+	line(`gone || break`)
+	line(`kv=$((left - 1))`)
+	line(`printf '{"type":"%s","data":{"kept":%%d,"sets":%%d}}\n' "$kv" "$((n))"`, copilotRelaunchMark)
+	line(`done`)
+	line(`if [ "$k" = no ] && [ -d %s/"$s" ]; then { [ ! -f %s ] || cat %[2]s; } > "$ks" || `+
+		`echo 'crewlet: the session could not keep the repositories it was started with, so a resume hands none' >&2; fi`,
+		sessions, q(paths.CopilotRepo()+"/kept"))
 	return b.String()
 }
