@@ -35,7 +35,9 @@ type Audit interface {
 }
 
 // Leaser holds one lease on a resource at a time, fleet-wide (the engine's
-// growth act lease).
+// growth act lease). Hold's error wraps [growth.ErrActHeld] where another
+// holder has the lease; any other is the lease store's failure or ctx's end,
+// and nothing was taken.
 type Leaser interface {
 	Hold(ctx context.Context, resource string) (release func(), err error)
 }
