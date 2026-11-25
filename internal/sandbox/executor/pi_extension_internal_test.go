@@ -537,7 +537,7 @@ func TestThePiExtensionAddsWhatTheNoteHelperHandsToTheToolsResult(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	firing := fmt.Sprintf("-adapter|pi-nested|-config|/run/nested.json|-room|%d|\n", piNestedFallbackRoom)
+	firing := fmt.Sprintf("-adapter|pi-nested|-config|/run/nested.json|-room|%d|\n", piNestedFallbackRoom-len("OWN"))
 	if want := strings.Repeat(firing, 4) + "killed\n"; string(raw) != want {
 		t.Errorf("the helper was run as\n%s\nwant four firings, none for the nested call and none fed any input, "+
 			"the last stopped at its bound:\n%s", raw, want)
@@ -555,77 +555,118 @@ func piTestHand(helper string, timeoutMs int64) *piNestedHand {
 // THE EXTENSION HANDS THE HELPER THE ROOM PI LEAVES: -room is what
 // ctx.getContextUsage leaves below the window less pi's compaction reserve
 // twice (the model's override, else the setting, else 16,384), less the
-// result's own text (an image 4,800), four characters a token; at most the
-// most room, the fallback where pi gives no usage, said once on the error
-// stream, and no firing at all under the least room.
+// batch's results (an image 4,800 characters), four characters a token;
+// at most the most room. A batch's calls run in parallel and join the
+// session together, so its checkouts are handed at its last result, its
+// other results each counted as pi counts a message, ceil(characters/4)
+// (one ended unrun among them, a nested one never); a sequential call is a
+// batch alone, and a batch a turn ended open is dropped. Where pi gives no
+// tokens, the fallback, at most half what the window it names leaves an
+// empty context, said once; no firing under the least room, one at it.
 //
-// Mutation: take the reserve once, skip the override or the image, drop the
-// cap, the floor or the fallback, or say it each time, and a case goes red.
+// Mutation: take the reserve once, skip the override, the image, the cap,
+// the floor's edge, a sibling or its rounding, the window's fallback cap,
+// or the turn's reset, or say the fallback each time, and a case goes red.
 func TestThePiExtensionHandsTheHelperTheRoomPiLeaves(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	helper, calls := filepath.Join(dir, "notehelper"), filepath.Join(dir, "calls")
-	script := "#!/bin/sh\nprintf '%s ' \"$@\" >> " + shellword.Quote(calls) + "; echo >> " + shellword.Quote(calls) +
-		"\necho HANDED\n"
-	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own helper
-		t.Fatal(err)
-	}
-	p := startPiProbe(t, piExtensionSettings{Checkouts: piTestHand(helper, 60_000)})
-	p.expect("loaded")
 	usage := func(tokens any, window int) map[string]any {
 		return map[string]any{"tokens": tokens, "contextWindow": window}
 	}
 	reserves := map[string]any{"compaction": map[string]any{"reserveTokens": 20_000,
 		"modelOverrides": map[string]any{"p/m": map[string]any{"reserveTokens": 30_000}}}}
-	text := []map[string]any{{"type": "text", "text": "OWN"}}
+	texts := func(s string) []map[string]any { return []map[string]any{{"type": "text", "text": s}} }
 	image := []map[string]any{{"type": "text", "text": "OWN"}, {"type": "image", "data": "", "mimeType": "image/png"}}
-	fired := 0
+	big := strings.Repeat("R", 39_500)
+	type step struct {
+		name  string
+		event map[string]any
+		room  int // a tool_result's -room, 0 for no firing
+	}
+	start := func(id string) step { return step{"tool_execution_start", map[string]any{"toolCallId": id}, 0} }
+	result := func(id string, content []map[string]any, room int) step {
+		return step{"tool_result", map[string]any{"toolCallId": id, "toolName": "bash", "content": content}, room}
+	}
+	free := 200_000 - 2*16_384 - 1_000 // tokens below pi's reserve twice, 1,000 used
 	for _, c := range []struct {
 		name     string
 		usage    map[string]any
 		settings map[string]any
 		model    map[string]any
-		content  []map[string]any
-		room     int // 0: no firing
+		steps    []step
 	}{
-		{"pi's own reserve", usage(1_000, 200_000), nil, nil, text, 4*(200_000-2*16_384-1_000) - 3},
-		{"the model's override", usage(1_000, 200_000), reserves, map[string]any{"provider": "p", "id": "m"}, text,
-			4*(200_000-2*30_000-1_000) - 3},
-		{"the setting", usage(1_000, 200_000), reserves, map[string]any{"provider": "p", "id": "x"}, text,
-			4*(200_000-2*20_000-1_000) - 3},
-		{"an image", usage(1_000, 200_000), nil, nil, image, 4*(200_000-2*16_384-1_000) - 3 - 4_800},
-		{"a window past the cap", usage(0, 20_000_000), nil, nil, text, piNestedMaxRoom},
-		{"under the least room", usage(6_500, 40_000), nil, nil, text, 0},
-		{"no tokens known", usage(nil, 200_000), nil, nil, text, piNestedFallbackRoom},
-		{"no usage", nil, nil, nil, text, piNestedFallbackRoom},
+		{"pi's own reserve", usage(1_000, 200_000), nil, nil, []step{result("a", texts("OWN"), 4*free-3)}},
+		{"the model's override", usage(1_000, 200_000), reserves, map[string]any{"provider": "p", "id": "m"},
+			[]step{result("a", texts("OWN"), 4*(200_000-2*30_000-1_000)-3)}},
+		{"the setting", usage(1_000, 200_000), reserves, map[string]any{"provider": "p", "id": "x"},
+			[]step{result("a", texts("OWN"), 4*(200_000-2*20_000-1_000)-3)}},
+		{"an image", usage(1_000, 200_000), nil, nil, []step{result("a", image, 4*free-3-4_800)}},
+		{"a window past the cap", usage(0, 20_000_000), nil, nil, []step{result("a", texts("OWN"), piNestedMaxRoom)}},
+		{"at the least room", usage(6_208, 40_000), nil, nil, []step{result("a", texts(""), piNestedMinRoom)}},
+		{"a character under it", usage(6_208, 40_000), nil, nil, []step{result("a", texts("O"), 0)}},
+		{"a parallel batch", usage(1_000, 200_000), nil, nil, []step{start("a"), start("b"), start("c"),
+			result("c", texts("echo"), 0), result("a", texts(big), 0),
+			result("b", texts(big), 4*(free-1-9_875)-39_500)}},
+		{"a call ended unrun", usage(1_000, 200_000), nil, nil, []step{start("a"),
+			{"tool_execution_end", map[string]any{"toolCallId": "a", "result": map[string]any{"content": texts("refused")}}, 0},
+			start("b"), start("c"), result("b", texts("OWN"), 0), result("c", texts("OWN"), 4*(free-2-1)-3)}},
+		{"a nested call", usage(1_000, 200_000), nil, nil, []step{start("a"),
+			{"tool_execution_start", map[string]any{"toolCallId": "n", "parentToolCallId": "a"}, 0},
+			result("a", texts("OWN"), 4*free-3)}},
+		{"sequential calls", usage(1_000, 200_000), nil, nil, []step{start("a"), result("a", texts("OWN"), 4*free-3),
+			start("b"), result("b", texts("OWN"), 4*free-3)}},
+		{"a turn ended open", usage(1_000, 200_000), nil, nil, []step{start("a"),
+			{"turn_end", map[string]any{"entries": []any{}}, 0}, start("b"), result("b", texts("OWN"), 4*free-3)}},
+		{"no tokens known", usage(nil, 200_000), nil, nil, []step{result("a", texts("OWN"), piNestedFallbackRoom-3)}},
+		{"no tokens in a small window", usage(nil, 60_000), nil, nil,
+			[]step{result("a", texts("OWN"), 2*(60_000-2*16_384)-3)}},
+		{"no tokens in a window under the least room", usage(nil, 34_000), nil, nil, []step{result("a", texts("OWN"), 0)}},
+		{"no usage, twice", nil, nil, nil, []step{result("a", texts("OWN"), piNestedFallbackRoom-3),
+			result("b", texts("OWN"), piNestedFallbackRoom-3)}},
 	} {
+		dir := t.TempDir()
+		helper, calls := filepath.Join(dir, "notehelper"), filepath.Join(dir, "calls")
+		script := "#!/bin/sh\nprintf '%s ' \"$@\" >> " + shellword.Quote(calls) + "; echo >> " + shellword.Quote(calls) +
+			"\necho HANDED\n"
+		if err := os.WriteFile(helper, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own helper
+			t.Fatal(err)
+		}
+		p := startPiProbe(t, piExtensionSettings{Checkouts: piTestHand(helper, 60_000)})
+		p.expect("loaded")
 		p.send(map[string]any{"op": "usage", "usage": c.usage})
 		p.send(map[string]any{"op": "settings", "settings": c.settings})
 		p.send(map[string]any{"op": "model", "model": c.model})
-		got := string(p.handled("tool_result", map[string]any{"toolName": "bash", "content": c.content}).Result)
+		var want []string
+		for _, s := range c.steps {
+			got := string(p.handled(s.name, s.event).Result)
+			if s.name != "tool_result" {
+				continue
+			}
+			if s.room > 0 {
+				want = append(want, fmt.Sprintf("-adapter pi-nested -config /run/nested.json -room %d ", s.room))
+			}
+			if handed := strings.Contains(got, "HANDED"); handed != (s.room > 0) {
+				t.Errorf("%s: %s's result handed %v (%s), want %v", c.name, s.event["toolCallId"], handed, got, s.room > 0)
+			}
+		}
 		raw, err := os.ReadFile(calls) //nolint:gosec // the case's own file
 		if err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
-		lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
-		if c.room == 0 {
-			if got != "null" || len(raw) > 0 && len(lines) != fired {
-				t.Errorf("%s: the helper ran (%q) or the result changed: %s", c.name, raw, got)
-			}
-			continue
+		var wantRaw strings.Builder
+		for _, w := range want {
+			wantRaw.WriteString(w + "\n")
 		}
-		fired++
-		want := fmt.Sprintf("-adapter pi-nested -config /run/nested.json -room %d ", c.room)
-		if len(lines) != fired || lines[fired-1] != want || !strings.Contains(got, "HANDED") {
-			t.Errorf("%s: the helper ran as %q (result %s), want %q", c.name, lines, got, want)
+		if string(raw) != wantRaw.String() {
+			t.Errorf("%s: the helper ran as\n%s\nwant\n%s", c.name, raw, wantRaw.String())
 		}
-	}
-	errs, err := os.ReadFile(p.stderr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n := strings.Count(string(errs), "pi gave no context usage"); n != 1 {
-		t.Errorf("the fallback was said %d times, want once:\n%s", n, errs)
+		errs, err := os.ReadFile(p.stderr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fallback := c.usage == nil || c.usage["tokens"] == nil
+		if n := strings.Count(string(errs), "pi gave no context usage"); n != map[bool]int{true: 1, false: 0}[fallback] {
+			t.Errorf("%s: the fallback was said %d times:\n%s", c.name, n, errs)
+		}
 	}
 }
 

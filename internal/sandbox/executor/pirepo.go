@@ -62,10 +62,11 @@ const piNestedMaxOutput = 64 << 20
 // window past that is held below its room.
 const piNestedMaxRoom = piNestedMaxOutput / 3
 
-// piNestedFallbackRoom is the room where Pi gives the extension no usage (its
-// code gives none after a compaction until the model answers):
-// half what an empty context leaves in the 128,000-token window Pi gives a
-// model whose config names none, with both reserves ([piNestedHand]) held.
+// piNestedFallbackRoom is the most room where Pi gives the extension no
+// tokens (its code gives none after a compaction until a model answer that
+// reports usage): half what an empty context leaves in the 128,000-token
+// window Pi gives a model whose config names none, with both reserves
+// ([piNestedHand]) held; the same half of the window Pi names, where smaller.
 const piNestedFallbackRoom = (128_000 - 2*16_384) * 4 / 2
 
 // piNestedMinRoom is the least room a firing runs in: below it the checkouts
@@ -75,12 +76,13 @@ const piNestedMinRoom = 4 << 10
 
 // piNestedHand is the extension's settings for a pi-nested firing: the note
 // helper, its config (written by checkout-launch), its bounds, and the rooms
-// above. Each firing's -room is what Pi's own estimate (ctx.getContextUsage,
-// the figure its compaction checks, measured equal) leaves below the window
-// less Pi's compaction reserve taken twice, once Pi's for the reply and once
-// for what the next turn adds, less the tool result's own text, four
-// characters a token as Pi counts (measured: at that room no compaction, a
-// character more compacts).
+// above. A firing runs at a batch's last result (Pi runs a message's calls in
+// parallel and adds their results together, measured), its -room what Pi's
+// own estimate (ctx.getContextUsage, measured equal to the figure its
+// compaction checks) leaves below the window less Pi's compaction reserve
+// taken twice, once Pi's for the reply and once for what the next turn adds,
+// less every result of the batch, as Pi counts a message, ceil(characters/4)
+// (measured: at that room no compaction, a character more compacts).
 type piNestedHand struct {
 	Helper       string `json:"helper"`
 	Config       string `json:"config"`

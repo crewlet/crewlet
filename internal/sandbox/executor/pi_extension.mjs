@@ -72,6 +72,7 @@ export default function (pi) {
 }
 
 function arm(pi, { servers, required, system, notes, cap, skills, skillURL, listed, mcpFiles, settingsFiles, checkouts }) {
+  let batch = null // the tool calls in flight, as the tool_result handler says
   for (const s of Array.isArray(servers) ? servers : []) pi.registerMcpServer(s.name, s.config)
   const polling = typeof notes === "string" && notes !== ""
   const capped = Number.isSafeInteger(cap) && cap > 0
@@ -227,6 +228,7 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, list
   })
 
   pi.on("turn_end", (event, ctx) => {
+    batch = null // a batch never spans turns; one an abort left open ends here
     const entries = [...event.entries]
     const usage = ctx.getContextUsage()
     if (usage && Number.isFinite(usage.contextWindow) && usage.contextWindow > 0) {
@@ -253,38 +255,81 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, list
     if (answer.refused) skillsRefused = true
   }
 
+  // batch is the main loop's calls started and not yet answered, and the
+  // tokens pi's estimate will add for those answered, ceil(characters/4)
+  // each: pi 1.6.0 runs one message's calls in parallel and adds their
+  // results to the session only once all are done (measured), so the
+  // checkouts are handed at the batch's last result, within what all leave.
+  // A call pi answers without running it (refused, unknown) ends at once,
+  // with no tool_result, and still counts; a sequential batch holds one call
+  // at a time. Its last result or turn_end ends it.
+  pi.on("tool_execution_start", (event) => {
+    if (event.parentToolCallId) return
+    batch ??= { open: new Set(), tokens: 0 }
+    batch.open.add(event.toolCallId)
+  })
+  pi.on("tool_execution_end", (event) => {
+    if (event.parentToolCallId || !batch?.open.delete(event.toolCallId)) return
+    batch.tokens += Math.ceil(piChars(event.result?.content) / 4)
+  })
+
   pi.on("tool_result", async (event, ctx) => {
     // A CALL A CODEMODE SCRIPT NESTS answers the script, not the model: the
     // checkout waits for the outer call's result.
-    const handed = event.parentToolCallId ? "" : await handCheckouts(checkouts, firingRoom(pi, ctx, checkouts, event))
+    let handed = ""
+    if (!event.parentToolCallId) {
+      const own = piChars(event.content)
+      const tracked = batch?.open.delete(event.toolCallId) === true
+      if (tracked && batch.open.size > 0) {
+        batch.tokens += Math.ceil(own / 4)
+      } else {
+        const siblings = tracked ? batch.tokens : 0
+        if (tracked) batch = null
+        handed = await handCheckouts(checkouts, firingRoom(pi, ctx, checkouts, own, siblings))
+      }
+    }
     await reportLoad(event, ctx)
     if (handed.trim() === "") return
     return { content: [...(Array.isArray(event.content) ? event.content : []), { type: "text", text: handed }] }
   })
 }
 
-// firingRoom is the characters a pi-nested answer may add to this tool's
-// result (pirepo.go, piNestedHand): what pi's estimate leaves below the
-// window less its compaction reserve twice, less the result's own text,
-// counted as pi counts (an image 4,800), within hand.maxRoom; hand.fallbackRoom
-// where pi gives no usage, said once; null under hand.minRoom.
+// firingRoom is the characters a pi-nested answer may add to a batch's last
+// result (pirepo.go, piNestedHand), own its characters and siblings the
+// tokens the batch's other results add: what pi's estimate leaves below the
+// window less its compaction reserve twice, less those, four characters a
+// token, within hand.maxRoom. Where pi gives no tokens, hand.fallbackRoom, at
+// most half what the window it names leaves an empty context, less the batch,
+// said once. null under hand.minRoom: the checkouts wait.
 let fellBack = false
-function firingRoom(pi, ctx, hand, event) {
+function firingRoom(pi, ctx, hand, own, siblings) {
   if (hand === null || typeof hand !== "object") return null
   const usage = typeof ctx?.getContextUsage === "function" ? ctx.getContextUsage() : undefined
-  if (!Number.isFinite(usage?.tokens) || !(usage.contextWindow > 0)) {
-    if (!fellBack) process.stderr.write("crewlet: pi gave no context usage at a tool result, so a checkout " +
-      "cloned during the run is handed within " + hand.fallbackRoom + " characters there\n")
+  const reserve = compactionReserve(pi, ctx)
+  let room
+  if (Number.isFinite(usage?.tokens) && usage.contextWindow > 0) {
+    room = 4 * (usage.contextWindow - 2 * reserve - usage.tokens - siblings) - own
+  } else {
+    if (!fellBack) process.stderr.write("crewlet: pi gave no context usage at a tool result, so the checkouts " +
+      "cloned during the run are handed there within half what its window leaves an empty context, at most " +
+      hand.fallbackRoom + " characters\n")
     fellBack = true
-    return hand.fallbackRoom
+    room = hand.fallbackRoom
+    if (usage?.contextWindow > 0) room = Math.min(room, 2 * (usage.contextWindow - 2 * reserve))
+    room -= 4 * siblings + own
   }
-  let own = 0
-  for (const block of Array.isArray(event.content) ? event.content : []) {
-    if (block?.type === "text" && typeof block.text === "string") own += block.text.length
-    else if (block?.type === "image") own += 4800
-  }
-  const room = 4 * (usage.contextWindow - 2 * compactionReserve(pi, ctx) - usage.tokens) - own
   return room < hand.minRoom ? null : Math.min(room, hand.maxRoom)
+}
+
+// piChars is a result's content as pi's estimate counts it: each text's
+// characters (UTF-16 units), 4,800 an image.
+function piChars(content) {
+  let chars = 0
+  for (const block of Array.isArray(content) ? content : []) {
+    if (block?.type === "text" && typeof block.text === "string") chars += block.text.length
+    else if (block?.type === "image") chars += 4800
+  }
+  return chars
 }
 
 // compactionReserve is the tokens pi keeps below the window before it
