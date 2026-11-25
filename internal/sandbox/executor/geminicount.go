@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -116,26 +117,87 @@ func newGeminiCounting() *geminiCounting {
 		snapshot: map[string]bool{}}
 }
 
-// lineFormHead is a line's first [lineFormMaxBytes] bytes and one more, as
-// the walk takes them, for its forms ([lineForm.holds]): no more, whatever
-// the line's length.
-type lineFormHead []byte
-
-func (h *lineFormHead) Write(p []byte) (int, error) {
-	if room := lineFormMaxBytes + 1 - len(*h); room > 0 {
-		*h = append(*h, p[:min(len(p), room)]...)
-	}
-	return len(p), nil
+// lineFormHead is a line as its forms judge it ([lineForm.holds]), taken a
+// piece at a time as the walk reads it: from its first character that is no
+// white space, as bytes.TrimSpace reads one, to its first [lineFormMaxBytes]
+// bytes and one more (a character split there whole), which no whole form
+// holds; past says a character that is no white space follows that, and
+// carry is a character split across two pieces. So the walk judges a line as
+// the whole-line count did, the line trimmed whole, white space about it of
+// any length (codexLines), and holds no more of it.
+type lineFormHead struct {
+	held        []byte
+	begun, past bool
+	carry       [utf8.UTFMax]byte
+	carried     int
 }
 
-// form is the head as the whole-line count matched a form on the line, its
-// white space trimmed ([codexLines]): from its start alone where the line ran
-// past it, which no whole form holds.
-func (h lineFormHead) form() []byte {
-	if len(h) > lineFormMaxBytes {
-		return bytes.TrimLeftFunc(h, unicode.IsSpace)
+// reset starts the next line, keeping the head's room.
+func (h *lineFormHead) reset() { h.held, h.begun, h.past, h.carried = h.held[:0], false, false, 0 }
+
+func (h *lineFormHead) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 && !h.past {
+		if room := lineFormMaxBytes + 1 - len(h.held); h.begun && h.carried == 0 && (room > 0 || h.split()) {
+			k := max(room, 1)
+			h.held, p = append(h.held, p[:min(len(p), k)]...), p[min(len(p), k):]
+			continue
+		}
+		// A CHARACTER WHOLE, before the line's first that is no white space or
+		// after its head: one split across two pieces is held until it ends.
+		var char [utf8.UTFMax]byte
+		var c []byte
+		switch {
+		case h.carried == 0 && utf8.FullRune(p):
+			_, size := utf8.DecodeRune(p)
+			c, p = p[:size], p[size:]
+		default:
+			k := copy(h.carry[h.carried:], p)
+			if !utf8.FullRune(h.carry[:h.carried+k]) {
+				h.carried += k
+				return n, nil
+			}
+			// A split character may prove no character, ending before p.
+			_, size := utf8.DecodeRune(h.carry[:h.carried+k])
+			c = char[:copy(char[:], h.carry[:size])]
+			if size < h.carried {
+				h.carried = copy(h.carry[:], h.carry[size:h.carried])
+			} else {
+				p, h.carried = p[size-h.carried:], 0
+			}
+		}
+		switch r, _ := utf8.DecodeRune(c); {
+		case h.begun && len(h.held) <= lineFormMaxBytes, !h.begun && !unicode.IsSpace(r):
+			h.begun, h.held = true, append(h.held, c...)
+		case h.begun && !unicode.IsSpace(r):
+			h.past = true
+		}
 	}
-	return bytes.TrimSpace(h)
+	return n, nil
+}
+
+// split reports whether the head ends inside a character, which it takes
+// whole.
+func (h *lineFormHead) split() bool {
+	i := len(h.held) - 1
+	for i > 0 && len(h.held)-i < utf8.UTFMax && !utf8.RuneStart(h.held[i]) {
+		i--
+	}
+	return i >= 0 && !utf8.FullRune(h.held[i:])
+}
+
+// form is the line as the whole-line count judged a form on it ([codexLines]),
+// so far as the walk has read it: trimmed at both ends, and past
+// [lineFormMaxBytes] its first bytes alone, which no whole form holds. A
+// character the line ends inside is none of its white space.
+func (h *lineFormHead) form() []byte {
+	switch {
+	case h.past, h.carried > 0 && h.begun:
+		return h.held
+	case h.carried > 0:
+		return h.carry[:h.carried]
+	}
+	return bytes.TrimRightFunc(h.held, unicode.IsSpace)
 }
 
 // geminiCountLine is what the count reads of one line on the walk: whether
@@ -240,7 +302,7 @@ func (c *geminiCounting) start() {
 	c.l = geminiCountLine{record: record, updates: updates, removes: removes}
 	c.l.record.reset()
 	c.seps.reset()
-	c.head = c.head[:0]
+	c.head.reset()
 	if c.sum != nil {
 		c.sum.start(len(c.order))
 	}
