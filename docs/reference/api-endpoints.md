@@ -2042,10 +2042,11 @@ same words; `reading` says which was asked.
     "threshold_points": 5, "spread": 8,
     "members": [
       {"entry": "claude-max", "kind": "plan", "state": "available", "until": null, "why": "",
-       "share": 30, "overflow": false, "last_served_at": "2026-11-24T08:50:00Z", "serving": ["engineer"]},
+       "share": 30, "overflow": false, "last_served_at": "2026-11-24T08:50:00Z", "serving": ["engineer"],
+       "unlisted_serving": 0, "unlisted_homes": 0},
       {"entry": "claude-api", "kind": "api", "state": "limit", "until": "2026-11-24T09:40:00Z",
        "why": "Throttled by the key's rate limit", "share": 0, "overflow": true,
-       "last_served_at": null, "serving": []}
+       "last_served_at": null, "serving": [], "unlisted_serving": 0, "unlisted_homes": 0}
     ]
   }],
   "assignments": [{
@@ -2075,13 +2076,22 @@ same words; `reading` says which was asked.
 - `serving` is the subjects with work in flight on the member now: the calls
   the nodes' status records carry as running and the executor runs launching
   or running on it. It is never a prediction, so it is empty while nothing runs.
+- `unlisted_serving` is the work in flight on the member that the nodes'
+  status records counted but could not name beside the rest of their row, and
+  `unlisted_homes` the seat jobs' homes on it likewise; both are `0` where the
+  records name every one. Past them, `serving` lacks those subjects and a pick
+  may miss a home.
 - `now` is the member the job's work in flight runs on (`now_kind`
   `running`), else the one its next piece of work would go to (`next`), from
   the home the node holding the seat publishes; the next picks of every
   subject take their member in turn, as the engine's picks do, so equal or
   unknown shares spread them. `now` is null while no member can take it, with
   `waiting_until` the earliest instant one has room (null for a fleet with no
-  members), and `now_kind` is then absent.
+  members), and `now_kind` is then absent. `now_kind` `unlisted`, with `now`
+  and `waiting_until` null, is a job with no work in flight named on a member
+  it may run on that has `unlisted_serving`, or a fleet's job with no home
+  named where a member has `unlisted_homes`: its work may run there, or its
+  home steer its pick, so neither is guessed.
 - `target` is `{"fleet": key}` or `{"pinned": entry}`, `""` where nothing is
   set and the company's fallback runs it. A seat always carries `jobs`, by the
   engine's job names (`executor`, `review`, `subagent`, `auxiliary`, `judge`,
@@ -8966,7 +8976,7 @@ which describes the old store and is never shown as the new one's) or
 | `node` | The data node holding the collector's duty when it ran the passes below |
 | `collect` | The last **collection**: when it ended (`at`), whether it listed the whole store and judged every object past the day's grace (`completed`), and counts: `listed` (objects under the engine's namespace), `aged` (past the grace by both the store's clock and the key's, so judged), `deleted` (no row named them), `referenced` (a row, live, retired or derived, still did), `abandoned` (uploads begun over a day ago and never finished, which no listing shows). `skipped` says why it stopped judging (an estate this node could not fully read; the counts are what it did before); `sweep_error` what kept it from abandoning unfinished uploads, which does not fail the collection (on S3, an identity without `s3:ListBucketMultipartUploads` or `s3:AbortMultipartUpload`); `error` what stopped it. Absent before the first one ends |
 | `audit` | The last **audit attempt**, which asks the store about every object a live row names, never one a [retired or derived](../concepts/object-store.md#live-retired-and-derived-references) row keeps: `at`, `referenced`, `missing` (answered twice as not held), `damaged` (held at another size, or under another digest where it keeps one, or as no readable object), `unanswered` (failed to answer about twice while it answered for the rest), `completed` (false over an incomplete estate, when the counts are floors) and `error` (an estate it could not read, or a store failing rather than refusing particular objects). Absent before the first one ends |
-| `audit.found` | What the last audit to **run to its end** found (the attempt above, or the one before when that failed, so a failed attempt never hides it): `at`, `completed`, `referenced`, `missing`, `damaged`, `unanswered` and `missing_files`, the first hundred files by `named_by` that cannot be read, each `{"object", "named_by", "finding"}`: the object's key, the file as `PROJECT/path`, and `missing`, `damaged` or `unanswered` (absent when none). A non-zero `missing`, `damaged` or `unanswered` here raises [`objects_missing`](alarms.md). Absent before any audit has run to its end |
+| `audit.found` | What the last audit to **run to its end** found (the attempt above, or the one before when that failed, so a failed attempt never hides it): `at`, `completed`, `referenced`, `missing`, `damaged`, `unanswered` and `missing_files`, the first hundred files by `named_by` that cannot be read, or as many of them as the fleet's record of the pass holds (the counts stay whole), each `{"object", "named_by", "finding"}`: the object's key, the file as `PROJECT/path` (cut past 512 bytes), and `missing`, `damaged` or `unanswered` (absent when none). A non-zero `missing`, `damaged` or `unanswered` here raises [`objects_missing`](alarms.md). Absent before any audit has run to its end |
 
 A collection runs hourly and an audit daily, on one data node at a time; a pass
 that fails is tried again ten minutes later.

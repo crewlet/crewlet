@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -32,8 +34,19 @@ import (
 
 // growthActClass is the lease class an applied growth act holds: one resource
 // per ad account, app or team, so two allowed acts never apply on the same
-// stale state.
+// stale state ([growthActResource]).
 const growthActClass coord.Class = "growth_act"
+
+// growthActResource is the lease an act on resource holds, a product's kind
+// and account: the SHA-256 of resource, of one width whatever the account.
+// An account is what its integration's configuration accepts (a Search
+// Console site has no bound), and nothing reads the lease back by name (its
+// release and its log line name resource itself), so no configuration's
+// grammar is tied to what a lease's record holds (coord.MaxLeaseNameBytes).
+func growthActResource(resource string) string {
+	sum := sha256.Sum256([]byte(resource))
+	return growthActClass.Resource(hex.EncodeToString(sum[:]))
+}
 
 const (
 	// growthActLeaseTTL outlives everything an apply does under the lease,
@@ -171,7 +184,7 @@ type growthLeases struct{ engine *Engine }
 // node's apply, and answers its release.
 func (l growthLeases) Hold(ctx context.Context, resource string) (func(), error) {
 	e := l.engine
-	full := growthActClass.Resource(resource)
+	full := growthActResource(resource)
 	owner := e.selfNode() + "/" + uuid.NewString()
 	deadline := e.now().Add(growthActWait)
 	for {
@@ -191,7 +204,7 @@ func (l growthLeases) Hold(ctx context.Context, resource string) (func(), error)
 			}, nil
 		}
 		if !e.now().Before(deadline) {
-			return nil, fmt.Errorf("engine: another act on %s is being applied", resource)
+			return nil, fmt.Errorf("%w: engine: another act on %s is being applied", growth.ErrActHeld, resource)
 		}
 		select {
 		case <-ctx.Done():

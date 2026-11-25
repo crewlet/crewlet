@@ -464,10 +464,8 @@ The activation pointer that names the body is held to 8 KiB
 because every probe on every node reads it: at its bound its read crosses the
 slowest link allowed in a third of a second. The body is read only by a node
 that lacks the revision, given the time its recorded size takes to cross.
-The positions register, the uploads, chat reads and secrets buckets, the
-three atlas buckets, the integrations bucket and the node status bucket
-declare the classes of their records, each held to the bound its writer keeps it within and read in the
-time that bound takes to cross:
+Every bucket declares the classes of its records, each held to the bound its
+writer keeps it within and read in the time that bound takes to cross:
 
 | Records | Bound | A read waits |
 |---|---|---|
@@ -493,6 +491,9 @@ time that bound takes to cross:
 | an integration's status | 16 KiB, its fault and sentence cut to fit | the read term |
 | an integration's findings | 64 KiB, cut and counted to fit | its arrival: 2.6 s |
 | a node's status rows, each its own key | 16 KiB, every text held to its bound as stored | the read term |
+| a lease's record, a resource's fencing epoch | 16 KiB, its resource, owner and preferred node each at most 256 bytes beside an 8 KiB Meta | the read term |
+| a minted session's claim, beside the runs | 16 KiB, each part at most 128 bytes | the read term |
+| every record of the other buckets: a completion and a seen-through mark, an apply status, a token counter and a rate window, a delivery, fire or custody claim, a rebase, a channel, a follow, a mailbox record, the agreed object store, the object collector's and the trash reaper's reports | 16 KiB, every field bounded where it is written, a report's lists and errors cut to fit | the read term |
 
 A read deciding a write somebody waits on is given its reply's crossing; one
 deciding none, its arrival too. An upload's record is that large only at its
@@ -511,10 +512,15 @@ bounded where its record is validated: an engine-written sentence is cut to
 what it takes as stored, a value a person or the configuration gives is
 refused naming its field, and a capacity window names at most 16 participants
 ([Retention](../guides/retention.md#who-has-to-acknowledge)).
-Every record of a bucket that declares no class yet is kept far below what
-one key holds by its own fields, and held to what one key holds and read at
-the term until
-[#1814](https://github.com/crewlet/crewlet/issues/1814) declares the rest. A
+Every other record is held to its class the same way: an identifier or a
+word the engine chose (a completion's detail, a follow's reason, an apply
+status's revisions, a lease's names) is refused past its bound before
+anything is sent; the object store's endpoint, bucket and prefix are refused
+past 2,048, 255 and 1,024 characters, naming the field; and the object
+collector's report keeps as many of its unreadable files as fit, every count
+whole. Every key the store writes is of a class its bucket declares: a bucket
+of several classes writes none outside them, which the contract suites check
+of every write as the broker carries it. A
 class declared to be read within the read term alone, as the pointer is, is at
 most 16 KiB (`coord.SmallValueBytes`): its read crosses the slowest link in two
 thirds of a second.
@@ -810,7 +816,7 @@ No legal configuration reaches it; `node.labels` is held to its limits when the 
 What a node says of its MCP servers, models, runners, what it runs on, its seats' runs waiting for an operator and its growth signals is a record of its own in the `node status` bucket, filed as rows, each a key naming the node so a node can describe only itself: its own row, `node_status.<node>` (its epoch, instant, `runners`, `infra` and `resumes_blocked`), one `mcp_status.<node>.<server>` per MCP server, one `model_status.<node>.<entry>` per model entry, and `growth_status.<node>`. Each row is at most 16 KiB, read in the read term ([What one key holds](#what-one-key-holds)), every text held to its bound as stored; a reader lists the own rows and only the classes it needs:
 
 - **`mcp`** — one row per configured [MCP server](../guides/tools-and-mcp.md) (not per child; a per-role template has a child per seat): whether it is shared, how many instances are serving and how many not, how many tools one serves, one failure's reason (clipped to 512 bytes, with the seat it belonged to), and the server's `tool_annotations` keys no instance lists a tool for, each whole, as many as the row holds and counted past it. No rows means the node started none. Counts are the servers' state **as of the record**, not what their starts concluded: a child that died after starting counts as failed, with what took it down, until the engine has [brought it back](../guides/tools-and-mcp.md#a-server-that-dies-or-will-not-start), and a shared server whose start failed counts as started once a retry succeeds. What each server's instances *list* is a separate record (tens of kilobytes), written when it changes ([What every server lists](../guides/tools-and-mcp.md#what-every-server-lists)).
-- **`models`** — one row per model entry of the node's active revision: how it signs in and whether that resolves here, the window it [sits out](llm-backends.md) on this node, its last answer and last failure, the seats this node holds parked on it (the eight longest-waiting, and how many), and its harness login on this node's disk. Each node's own: its process meets a vendor's limit and its memory keeps the window, so a peer about to retry reads it here.
+- **`models`** — one row per model entry of the node's active revision: how it signs in and whether that resolves here, the window it [sits out](llm-backends.md) on this node, its last answer and last failure, the seats this node holds parked on it (the eight longest-waiting, and how many), its harness login on this node's disk, and the [fleet](llm-backends.md) work in flight on it and the homes it holds, each list as many as the row holds beside the rest and counted past it. Each node's own: its process meets a vendor's limit and its memory keeps the window, so a peer about to retry reads it here.
 - **`runners`** — whether each [executor cell](code-sandbox.md#whether-a-cell-is-ready) can start a box on this node, as its probe last found it.
 - **`infra`** — what the node runs on, read once from its file: the host its peers reach it at, an external broker's servers, the embedded cluster's name and where the company's files are kept. Hosts and names only; the [atlas](atlas.md) draws the fleet from it.
 - **`growth`** — what the node's growth products met at their vendors that an administrator must act on (a clock a vendor disagrees with, an API version it deprecates), at most 32 of each, read by the Advisor's notices. A row of its own: the two lists at their widest take most of a row.

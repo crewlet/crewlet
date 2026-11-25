@@ -8,6 +8,8 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -19,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googleplay"
 	"github.com/crewlet/crewlet/internal/growth"
@@ -109,6 +112,67 @@ func TestAGooglePlayReplyRunsOnceOnAPersonsAnswer(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
+	c := heldPlayReply(t, srv, playLeases{})
+	if len(posted) != 0 {
+		t.Fatalf("the store got %v before anybody answered", posted)
+	}
+	for range 2 {
+		_, _ = c.reply.CallForTurn(c.approved, c.turn, c.args)
+	}
+	if !slices.Equal(posted, []string{"Fixed in 4.2: please update."}) {
+		t.Fatalf("the store got %v", posted)
+	}
+	if len(c.asks.records()) != 1 || !slices.Equal(c.log.steps, []growth.Step{growth.StepAllowed, growth.StepApplied}) {
+		t.Fatalf("the access log holds asks %d, steps %v", len(c.asks.records()), c.log.steps)
+	}
+}
+
+// playReply is a Google Play reply held for an administrator and approved,
+// ready to run: the tool, the approval it runs under, its turn and arguments,
+// and the access log and asks it records on.
+type playReply struct {
+	reply    tools.SeatCallable
+	approved context.Context
+	turn     *turnctx.Turn
+	args     map[string]any
+	log      *playLog
+	asks     *growthAudit
+}
+
+// heldPlayReply registers Google Play over srv with leases, holds a reply for
+// an administrator through the real tool session, and approves it.
+func heldPlayReply(t *testing.T, srv *httptest.Server, leases googleplay.Leases) playReply {
+	t.Helper()
+	reg, log, asks := playRegistry(t, srv, leases)
+	entry, ok := reg.Lookup("google_play_reply_to_reviews")
+	if !ok || !entry.ApprovalFixed {
+		t.Fatalf("the reply tool is registered %v, asked before every call %v", ok, entry.ApprovalFixed)
+	}
+	args := map[string]any{"app": "com.acme.app", "reason": "a one-star review",
+		"replies": []any{map[string]any{"review": "r1", "text": "Fixed in 4.2: please update."}}}
+	desk := &askDesk{outcome: sandbox.AskRecorded}
+	ctx := turnctx.WithJob(asSeat("sre"), "launch-1")
+	turn := growthTurn(t, "sre")
+	got, held := builtin.NewCallHold(desk, callSeal(t), nil, nil).Hold(ctx, turn, tools.HeldCall{
+		Name: "google_play_reply_to_reviews", Entry: entry, Args: args})
+	if !held || got.Failed || len(desk.recorded) != 1 {
+		t.Fatalf("the reply was not held: %q", got.Output)
+	}
+	h := desk.recorded[0].Held
+	if h.Approvers != sandbox.HeldApproversAdmin || h.Act != "public_post" ||
+		!strings.Contains(desk.recorded[0].Context, "Fixed in 4.2: please update.") {
+		t.Fatalf("the reply is held as %+v, asked %q", h, desk.recorded[0].Context)
+	}
+	return playReply{reply: asSeatCallable(t, tools.Innermost(entry.Tool)),
+		approved: tools.WithApproval(asSeat("sre"), tools.Approval{By: "founder", HeldID: h.ID, Binding: h.Binding}),
+		turn:     turn, args: args, log: log, asks: asks}
+}
+
+// playRegistry registers Google Play over srv with leases, for seat sre on
+// com.acme.app.
+func playRegistry(t *testing.T, srv *httptest.Server, leases googleplay.Leases) (*tools.Registry, *playLog,
+	*growthAudit) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +206,7 @@ roles:
 	})
 	log := &playLog{}
 	product := googleplay.New(googleplay.Deps{Company: func() *config.Company { return company },
-		Env: func() *config.Resolver { return env }, Tokens: playTokens{}, Audit: log, Leases: playLeases{},
+		Env: func() *config.Resolver { return env }, Tokens: playTokens{}, Audit: log, Leases: leases,
 		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, srv)}})
 	_, _, chart := sshFixture(t)
 	reg := tools.NewRegistry()
@@ -152,37 +216,86 @@ roles:
 		Audit: asks}}); err != nil {
 		t.Fatal(err)
 	}
-	entry, ok := reg.Lookup("google_play_reply_to_reviews")
-	if !ok || !entry.ApprovalFixed {
-		t.Fatalf("the reply tool is registered %v, asked before every call %v", ok, entry.ApprovalFixed)
+	return reg, log, asks
+}
+
+// failingPlayLeases answers every hold with err.
+type failingPlayLeases struct{ err error }
+
+func (l failingPlayLeases) Hold(context.Context, string) (func(), error) { return nil, l.err }
+
+// AN ACT WHOSE LEASE COULD NOT BE TAKEN IS TOLD AS NOTHING SENT, never as an
+// outcome unknown: a coordination store that did not answer is a wait the
+// agent may retry, any other failure of the lease a fault, and each says that
+// nothing was changed at the vendor.
+//
+// Mutation: drop growthFailure's growth.ErrNotSent branch, and both are told
+// that what the act did is unknown.
+func TestAnActWhoseLeaseCouldNotBeTakenIsToldAsNothingSent(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"reviewId": "r1", "authorName": "Pat",
+			"comments": []any{map[string]any{"userComment": map[string]any{"text": "Crashes", "starRating": 1}}}})
+	}))
+	t.Cleanup(srv.Close)
+	for name, c := range map[string]struct {
+		err     error
+		refusal tools.Refusal
+		said    string
+	}{
+		"a store that did not answer": {fmt.Errorf("engine: take x's lease: %w", coord.ErrUnavailable),
+			tools.RefusalUnavailable, "the coordination store did not answer"},
+		"another failure": {errors.New("engine: take x's lease: refused"), tools.RefusalInternalError,
+			"a fault in this node"},
+	} {
+		play := heldPlayReply(t, srv, failingPlayLeases{err: c.err})
+		got, _ := play.reply.CallForTurn(play.approved, play.turn, play.args)
+		if !got.Failed || tools.RefusalOf(got) != c.refusal || !strings.Contains(got.Output, c.said) ||
+			!strings.Contains(got.Output, "Nothing was changed at the vendor.") ||
+			strings.Contains(got.Output, "unknown") {
+			t.Errorf("%s: the agent is told %q (%s), want %s saying nothing was sent", name, got.Output,
+				tools.RefusalOf(got), c.refusal)
+		}
+	}
+}
+
+// A READ THAT FAILED CHANGED NOTHING, and says so: a reply whose reviews
+// Google would not serve while it was prepared, and a read of the reviews
+// that failed, are each told that nothing was changed at the vendor, never
+// that what they did is unknown.
+//
+// Mutation: tell a read's or a preparation's failure as an act's, and both
+// read as unknown.
+func TestAReadThatFailedIsToldItChangedNothing(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	reg, _, _ := playRegistry(t, srv, failingPlayLeases{})
+	turn := growthTurn(t, "sre")
+	ctx := turnctx.WithJob(asSeat("sre"), "launch-1")
+	reply, ok := reg.Lookup("google_play_reply_to_reviews")
+	if !ok {
+		t.Fatal("no reply tool")
 	}
 	args := map[string]any{"app": "com.acme.app", "reason": "a one-star review",
 		"replies": []any{map[string]any{"review": "r1", "text": "Fixed in 4.2: please update."}}}
-	desk := &askDesk{outcome: sandbox.AskRecorded}
-	ctx := turnctx.WithJob(asSeat("sre"), "launch-1")
-	turn := growthTurn(t, "sre")
-	got, held := builtin.NewCallHold(desk, callSeal(t), nil, nil).Hold(ctx, turn, tools.HeldCall{
-		Name: "google_play_reply_to_reviews", Entry: entry, Args: args})
-	if !held || got.Failed || len(desk.recorded) != 1 {
-		t.Fatalf("the reply was not held: %q", got.Output)
+	got, _ := builtin.NewCallHold(&askDesk{outcome: sandbox.AskRecorded}, callSeal(t), nil, nil).Hold(ctx, turn,
+		tools.HeldCall{Name: "google_play_reply_to_reviews", Entry: reply, Args: args})
+	if !got.Failed || !strings.Contains(got.Output, "Nothing was changed at the vendor.") ||
+		strings.Contains(got.Output, "unknown") {
+		t.Errorf("a reply whose reviews could not be read is told %q, want nothing changed", got.Output)
 	}
-	h := desk.recorded[0].Held
-	if h.Approvers != sandbox.HeldApproversAdmin || h.Act != "public_post" ||
-		!strings.Contains(desk.recorded[0].Context, "Fixed in 4.2: please update.") {
-		t.Fatalf("the reply is held as %+v, asked %q", h, desk.recorded[0].Context)
+	list, ok := reg.Lookup("google_play_list_reviews")
+	if !ok {
+		t.Fatal("no reviews read")
 	}
-	if len(posted) != 0 {
-		t.Fatalf("the store got %v before anybody answered", posted)
-	}
-	reply := asSeatCallable(t, tools.Innermost(entry.Tool))
-	approved := tools.WithApproval(asSeat("sre"), tools.Approval{By: "founder", HeldID: h.ID, Binding: h.Binding})
-	for range 2 {
-		_, _ = reply.CallForTurn(approved, turn, args)
-	}
-	if !slices.Equal(posted, []string{"Fixed in 4.2: please update."}) {
-		t.Fatalf("the store got %v", posted)
-	}
-	if len(asks.records()) != 1 || !slices.Equal(log.steps, []growth.Step{growth.StepAllowed, growth.StepApplied}) {
-		t.Fatalf("the access log holds asks %d, steps %v", len(asks.records()), log.steps)
+	read, err := asSeatCallable(t, tools.Innermost(list.Tool)).CallForTurn(ctx, turn,
+		map[string]any{"app": "com.acme.app"})
+	if err != nil || !read.Failed || !strings.Contains(read.Output, "Nothing was changed at the vendor.") ||
+		strings.Contains(read.Output, "unknown") {
+		t.Errorf("a read of the reviews that failed is told %q (%v), want nothing changed", read.Output, err)
 	}
 }

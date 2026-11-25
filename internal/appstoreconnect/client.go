@@ -147,6 +147,12 @@ var ErrRole = errors.New("appstoreconnect: the agent's key's role may not make t
 // errNoSlot is a client asked to sign as a key it does not hold.
 var errNoSlot = errors.New("appstoreconnect: the client holds no such key")
 
+// errUnsent marks a request that failed before it left for Apple: a key the
+// client does not hold, held at the reserve, its body unencoded or its token
+// unsigned, its request unbuilt or its context ended first. Nothing reached
+// Apple.
+var errUnsent = errors.New("appstoreconnect: the request was not sent to Apple")
+
 // detailBytes bounds Apple's words in an error.
 const detailBytes = 600
 
@@ -154,22 +160,22 @@ const detailBytes = 600
 func (c *Client) Do(ctx context.Context, slot string, req Request) (Response, error) {
 	key, ok := c.keys[slot]
 	if !ok {
-		return Response{}, fmt.Errorf("%w: %s", errNoSlot, slot)
+		return Response{}, fmt.Errorf("%w: %w: %s", errUnsent, errNoSlot, slot)
 	}
 	if req.Read && !req.Reserved && c.atReserve(slot) {
-		return Response{}, ErrReserve
+		return Response{}, fmt.Errorf("%w: %w", errUnsent, ErrReserve)
 	}
 	var body []byte
 	if req.Body != nil {
 		b, err := json.Marshal(req.Body)
 		if err != nil {
-			return Response{}, fmt.Errorf("appstoreconnect: encode the request body: %w", err)
+			return Response{}, fmt.Errorf("appstoreconnect: encode the request body: %w: %w", errUnsent, err)
 		}
 		body = b
 	}
 	token, err := c.token(slot, key, req.Method, req.Path, req.Query)
 	if err != nil {
-		return Response{}, err
+		return Response{}, fmt.Errorf("%w: %w", errUnsent, err)
 	}
 	for attempt := 0; ; attempt++ {
 		resp, err := c.send(ctx, token, req, body)
@@ -210,7 +216,7 @@ func (c *Client) send(ctx context.Context, token string, req Request, body []byt
 	}
 	hreq, err := http.NewRequestWithContext(ctx, method, u, r)
 	if err != nil {
-		return Response{}, fmt.Errorf("appstoreconnect: build the request: %w", err)
+		return Response{}, fmt.Errorf("appstoreconnect: build the request: %w: %w", errUnsent, err)
 	}
 	hreq.Header.Set("Authorization", "Bearer "+token)
 	accept := req.Accept
@@ -220,6 +226,11 @@ func (c *Client) send(ctx context.Context, token string, req Request, body []byt
 	hreq.Header.Set("Accept", accept)
 	if body != nil {
 		hreq.Header.Set("Content-Type", "application/json")
+	}
+	// A CONTEXT ENDED BEFORE THE SEND sent nothing; one that ends during it
+	// may have, so only this side of Do is unsent.
+	if ended := ctx.Err(); ended != nil {
+		return Response{}, fmt.Errorf("appstoreconnect: %s %s: %w: %w", method, path, errUnsent, ended)
 	}
 	hresp, err := c.http.Do(hreq)
 	if err != nil {

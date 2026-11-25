@@ -55,7 +55,11 @@
 // where the digest moved or the product's last check refuses it (a spend's
 // caps), recording the outcome: applied, void, or failed with a closed
 // reason. A write that went unanswered may have reached Google, so its
-// outcome is unknown, never "unavailable" ([FailureOf]).
+// outcome is unknown, never "unavailable" ([FailureOf]). A failure before the
+// change left (the lease, the read again, the last check, its context's end)
+// changed nothing: it answers [growth.ErrNotSent], and an answer lost there
+// is recorded timed out at a deadline and unavailable otherwise, never
+// unknown.
 //
 // A call that says a change to its target rather than the whole of it (an
 // owner added to a list Google takes whole) is made from the before-state the
