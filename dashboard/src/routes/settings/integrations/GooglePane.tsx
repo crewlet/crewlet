@@ -61,6 +61,15 @@ const ROW_WORDS = {
   on: { label: "On", tone: "success" },
 } as const;
 
+/** Google Ads' API page in the identity project, where its access level is applied for. */
+function adsApiPage(project: string): string {
+  const url = new URL(
+    "https://console.cloud.google.com/apis/api/googleads.googleapis.com/overview",
+  );
+  url.searchParams.set("project", project);
+  return url.href;
+}
+
 /** The connection's word in the header and the directory. */
 export function googleWords(place: GooglePlace | null) {
   switch (place?.state) {
@@ -520,12 +529,7 @@ function NextStep({
   const adsAccess = row.kind === "google_ads" && row.enabled && place.project && (
     <p className="t-caption">
       Google grants Google Ads API access to the identity project: apply once for Explorer access on{" "}
-      <a
-        className="t-link"
-        href={`https://console.cloud.google.com/apis/api/googleads.googleapis.com/overview?project=${encodeURIComponent(place.project)}`}
-        target="_blank"
-        rel="noreferrer"
-      >
+      <a className="prose-link" href={adsApiPage(place.project)} target="_blank" rel="noreferrer">
         its Google Ads API page
       </a>
       . Until Google grants it, agents reach only test accounts.
@@ -713,7 +717,9 @@ function ReaderRow({ row }: { row: GoogleProductRow }) {
   const state = READER_STATE[step.state] ?? READER_STATE.unknown!;
   return (
     <div className="int-google-reader">
-      <StatusLine label={state.label} tone={state.tone} notes={[`at ${step.role.name}`]} />
+      <StatusLine label={state.label} tone={state.tone} />
+      {/* THE ROLE ON ITS OWN LINE: a long one wrapped as a note led its line with a dot. */}
+      <span>At {step.role.name}</span>
       <span className="t-caption">
         <VendorWords text={step.where} />
       </span>
