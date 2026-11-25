@@ -19,26 +19,27 @@ import (
 
 // A CHECKOUT SPEC REACHES THE HELPER IN THE SHAPE IT READS: Codex's slot of
 // names and its skill directories are the lists they always were, byte for
-// byte, a tree slot and a recursive skill directory the objects
-// internal/notehelper's instructionSlot and skillDirSlot read.
+// byte; Claude Code's rules a tree slot after its names, naming its form, and
+// a recursive skill directory, the objects internal/notehelper's
+// instructionSlot and skillDirSlot read.
 //
 // Mutation: write a slot of names or a plain skill directory as an object, or
-// drop the tree's scope or recursive, and a case goes red.
+// drop the tree's form or scope or the directory's recursive, and a case goes
+// red.
 func TestACheckoutSpecReachesTheHelperInTheShapeItReads(t *testing.T) {
 	t.Parallel()
-	rules := checkoutSlot{Tree: &checkoutTree{Tree: ".claude/rules", Suffix: ".md",
-		Scoped: &checkoutScope{Keys: []string{"applyTo", "paths"}, Whole: []string{"**", "**/*", "*"}}}}
 	cases := []struct {
 		name             string
 		spec             checkoutSpec
 		instructions, sd string
 	}{
 		{"codex", codexCheckouts(1), `[["AGENTS.override.md","AGENTS.md"]]`, `[".codex/skills",".agents/skills"]`},
-		{"a tree after names, a recursive directory", checkoutSpec{
-			Instructions: []checkoutSlot{{Names: []string{"AGENTS.md"}}, rules},
-			SkillDirs:    []checkoutSkillDir{{Dir: ".pi/skills", Recursive: true}, {Dir: ".agents/skills"}}},
-			`[["AGENTS.md"],{"tree":".claude/rules","suffix":".md","scoped":{"keys":["applyTo","paths"],"whole":["**","**/*","*"]}}]`,
-			`[{"dir":".pi/skills","recursive":true},".agents/skills"]`},
+		{"claude", claudeCheckouts, `[["CLAUDE.md"],[".claude/CLAUDE.md"],["CLAUDE.local.md"],` +
+			`{"tree":".claude/rules","suffix":".md","form":"claude","scoped":{"keys":["paths"],"whole":["**"]}}]`,
+			`[".claude/skills"]`},
+		{"a recursive directory", checkoutSpec{Instructions: []checkoutSlot{{Names: []string{"AGENTS.md"}}},
+			SkillDirs: []checkoutSkillDir{{Dir: ".pi/skills", Recursive: true}, {Dir: ".agents/skills"}}},
+			`[["AGENTS.md"]]`, `[{"dir":".pi/skills","recursive":true},".agents/skills"]`},
 	}
 	for _, c := range cases {
 		var launch struct {
