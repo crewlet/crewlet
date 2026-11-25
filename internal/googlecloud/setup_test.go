@@ -11,8 +11,9 @@ import (
 )
 
 // THE CONNECT FORM IS ONE PASS: the provisioner first, the federation key the
-// engine mints on that save, then the provider, required only once the key is
-// held, which is the one field the Test button checks, with the other two.
+// engine mints on that save, then the provider the key's block prints, required
+// to finish and never holding a save, which is the one field the Test checks,
+// with the other two.
 func TestTheConnectFormIsOnePassInOrder(t *testing.T) {
 	t.Parallel()
 	reqs := googlecloud.Requirements(testCompany, nil, nil, nil)
@@ -27,8 +28,10 @@ func TestTheConnectFormIsOnePassInOrder(t *testing.T) {
 	if !key.Mintable || key.Kind != setup.KindSecret || key.SecretName != googlecloud.FederationKeySecret {
 		t.Errorf("the federation key is %+v, want a sealed value the engine mints", key)
 	}
-	if provider.Required || !provider.Checkable || !slices.Equal(provider.CheckWith, []string{"provisioner", "federation_key"}) {
-		t.Errorf("before the key, the provider is %+v, want it optional and checked with the other two", provider)
+	if !provider.Required || provider.PrintedBy != "federation_key" || !provider.Checkable ||
+		!slices.Equal(provider.CheckWith, []string{"provisioner", "federation_key"}) {
+		t.Errorf("the provider is %+v, want it required, printed by the key's block and checked with the other two",
+			provider)
 	}
 	if !reqs[4].Hidden || reqs[4].Default != "true" {
 		t.Errorf("enabled is %+v, want hidden and on", reqs[4])
@@ -37,12 +40,8 @@ func TestTheConnectFormIsOnePassInOrder(t *testing.T) {
 		Provisioner: provisioner, FederationKey: "${" + googlecloud.FederationKeySecret + "}",
 	}}
 	held := func(name string) (string, bool) { return "a key", name == googlecloud.FederationKeySecret }
-	if got := googlecloud.Requirements(testCompany, block, nil, held)[2]; !got.Required {
-		t.Error("once the key is held, the provider is not required")
-	}
-	unheld := func(string) (string, bool) { return "", false }
-	if got := googlecloud.Requirements(testCompany, block, nil, unheld)[2]; got.Required {
-		t.Error("a key reference that resolves to nothing made the provider required")
+	if got := googlecloud.Requirements(testCompany, block, nil, held)[2]; !got.Required || got.PrintedBy == "" {
+		t.Errorf("once the key is held, the provider is %+v", got)
 	}
 	if summary := googlecloud.Guide().Summary; !strings.Contains(summary, "No service account key is made") {
 		t.Errorf("the summary %q does not say no key is made", summary)
@@ -91,5 +90,47 @@ func TestTheFormReadsWhatTheDocumentHolds(t *testing.T) {
 		if !strings.HasPrefix(r.ConfigPath, "integrations.google_cloud.") {
 			t.Errorf("%s writes %s", r.Field, r.ConfigPath)
 		}
+	}
+}
+
+// THE BLOCK SAYS WHICH SAVED ANSWERS IT IS DRAWN FROM, and exactly those: a
+// form hides it while one of them has an unsaved change. Mutation: leave
+// atlas_read out of drawn_from, or add a field the block ignores, and this fails.
+func TestTheBlockIsDrawnFromExactlyTheFieldsItNames(t *testing.T) {
+	t.Parallel()
+	_, pemText := fakeKey(t)
+	base := config.GoogleCloudProvisioning{
+		Provisioner: provisioner, FederationKey: "${" + googlecloud.FederationKeySecret + "}", Provider: testProvider,
+	}
+	resolve := func(name string) (string, bool) { return pemText, name == googlecloud.FederationKeySecret }
+	block := func(p config.GoogleCloudProvisioning) setup.Requirement {
+		for _, r := range googlecloud.Requirements(testCompany, &config.GoogleCloud{Enabled: true, Provisioning: &p}, nil, resolve) {
+			if r.Public != nil {
+				return r
+			}
+		}
+		t.Fatal("no row carries the block")
+		return setup.Requirement{}
+	}
+	plain := block(base)
+	changed := map[string]config.GoogleCloudProvisioning{}
+	other := base
+	other.Provisioner = "crewlet-provisioner@acme-other-id.iam.gserviceaccount.com"
+	changed["provisioner"] = other
+	other = base
+	other.AtlasRead = true
+	changed["atlas_read"] = other
+	other = base
+	other.Provider = "projects/999/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine"
+	changed["provider"] = other
+	var drawn []string
+	for _, field := range []string{"provisioner", "provider", "atlas_read"} {
+		if block(changed[field]).Public.Text != plain.Public.Text {
+			drawn = append(drawn, field)
+		}
+	}
+	if !slices.Equal(drawn, []string{"provisioner", "atlas_read"}) ||
+		!slices.Equal(plain.Public.DrawnFrom, []string{"provisioner", "atlas_read"}) {
+		t.Errorf("the block changes with %v and names %v", drawn, plain.Public.DrawnFrom)
 	}
 }
