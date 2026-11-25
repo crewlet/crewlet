@@ -24,9 +24,16 @@ import (
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
+	agentsFrom            string
 	held, sections        string
 	skills, copied, roots string
 }
+
+// holdsHome reports whether h writes a home instruction file: from its
+// candidates, or from the file the script lists them in at run time
+// (agentsFrom, a path a line, for a harness whose file names a setting
+// decides: Qwen Code's context.fileName).
+func (h checkoutHome) holdsHome() bool { return len(h.agents) > 0 || h.agentsFrom != "" }
 
 // heldLive marks which of several home instruction files a run holds
 // (held+heldLive names it), so the put-back restores the one that existed,
@@ -176,7 +183,7 @@ func (h checkoutHome) gate() string {
 	}
 	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; rq=%s; hk=`, q(h.state), q(h.helper), q(h.skills), ra,
 		q(h.held), q(h.copied), q(h.sections))
-	if len(h.agents) > 0 {
+	if h.holdsHome() {
 		h.holdHome(line)
 	}
 	line(`%s || exit 1`, h.removeCopies())
@@ -193,7 +200,7 @@ func (h checkoutHome) gate() string {
 	line(`else`)
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
 	line(`fi`)
-	if len(h.agents) > 0 {
+	if h.holdsHome() {
 		line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
 	}
 	return b.String()
@@ -204,7 +211,11 @@ func (h checkoutHome) gate() string {
 func (h checkoutHome) holdHome(line func(string, ...any)) {
 	q := shellword.Quote
 	line(`%s || exit 1`, h.putBack())
-	if len(h.agents) > 1 {
+	if h.agentsFrom != "" {
+		line(`ra= rf=; while IFS= read -r rc; do [ -n "$rf" ] || rf=$rc; if [ -e "$rc" ]; then ra=$rc; break; fi; done < %s; [ -n "$ra" ] || ra=$rf`,
+			q(h.agentsFrom))
+		line(`printf '%%s\n' "$ra" > "$rha%s" || exit 1`, heldLive)
+	} else if len(h.agents) > 1 {
 		// THE FILE THE HARNESS READS, named before it is held, so a run killed
 		// past here is put back by the next ([checkoutHome.putBack]).
 		words := make([]string, len(h.agents))
@@ -280,7 +291,7 @@ func (h checkoutHome) skipped() string { return h.state + "/skipped" }
 // held+[heldLive], which goes last, so it runs any number of times. One
 // candidate is the only file the run can hold, so nothing names it.
 func (h checkoutHome) putBack() string {
-	if len(h.agents) == 0 {
+	if !h.holdsHome() {
 		return ":"
 	}
 	if len(h.agents) == 1 {

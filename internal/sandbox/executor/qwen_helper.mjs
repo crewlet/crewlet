@@ -795,6 +795,43 @@ function sleep(ms, signal) {
   })
 }
 
+// ---- the checkouts' context files ----------------------------------------
+
+// checkoutNames writes to homes the home's own context files 0.28.4 reads
+// ([contextNames]), a path a line, and, where the launch config is there,
+// makes its instruction files those names, in that order, before its rules
+// (qwencheckout.go): 0 done, else 1, said on stderr.
+function checkoutNames(homes, launch) {
+  try {
+    const names = contextNames()
+    fs.writeFileSync(homes, names.map((name) => path.join(os.homedir(), ".qwen", name) + "\n").join(""))
+    if (!fs.existsSync(launch)) return 0
+    const config = JSON.parse(fs.readFileSync(launch, "utf8"))
+    const trees = (config.instructions ?? []).filter((slot) => !Array.isArray(slot))
+    config.instructions = [...names.map((name) => [name]), ...trees]
+    fs.writeFileSync(launch, JSON.stringify(config))
+    return 0
+  } catch (err) {
+    process.stderr.write(`crewlet: settling which context files Qwen Code reads: ${err.message}\n`)
+    return 1
+  }
+}
+
+// contextNames is context.fileName as 0.28.4 settles it: the highest of the
+// system defaults, the home's and the working directory's settings that sets
+// it (measured: the working directory's over the home's), a name or a list of
+// names, each a file in a directory (one holding a slash is dropped); else
+// QWEN.md then AGENTS.md.
+function contextNames() {
+  const plain = (name) => typeof name === "string" && name !== "" && !name.includes("/") && name !== "." && name !== ".."
+  for (const file of settingsFiles().reverse()) {
+    const value = readSettings(file)?.context?.fileName
+    const names = (Array.isArray(value) ? value : [value]).filter(plain)
+    if (value !== undefined && names.length > 0) return names
+  }
+  return ["QWEN.md", "AGENTS.md"]
+}
+
 // ---- the guard -------------------------------------------------------------
 
 // guard is the mode above: 0 where nothing switches the servers args name off,
@@ -1068,6 +1105,8 @@ if (mode === "skill") {
   process.exitCode = restore()
 } else if (mode === "guard") {
   process.exitCode = guard(process.argv.slice(3))
+} else if (mode === "checkouts") {
+  process.exitCode = checkoutNames(process.argv[3], process.argv[4])
 } else {
   process.stderr.write(`crewlet: qwen-helper.mjs has no mode ${JSON.stringify(mode)}\n`)
   process.exitCode = 2

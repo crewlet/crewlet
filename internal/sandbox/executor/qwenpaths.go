@@ -57,3 +57,9 @@ func (p Paths) QwenHomeInstructions() string { return p.WorkDir() + "/qwen-home-
 // into the home's ~/.qwen/skills, so the run's end removes them and none of
 // the home's, or the next run's gate where the run was killed first.
 func (p Paths) QwenCheckoutSkills() string { return p.WorkDir() + "/qwen-checkout-skills" }
+
+// QwenContextHomes lists the home's own context files Qwen Code reads, a path
+// a line, as the run's helper resolves context.fileName before the checkout
+// gate ([qwenCheckoutsGate]), the first that is there taking the checkouts'
+// sections.
+func (p Paths) QwenContextHomes() string { return p.WorkDir() + "/qwen-context-homes" }

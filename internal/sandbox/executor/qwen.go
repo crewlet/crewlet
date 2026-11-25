@@ -199,7 +199,7 @@ var (
 func (QwenCode) artifactFiles(p Paths) []string {
 	return []string{p.QwenSettings(), p.QwenSettings() + ".fresh", p.QwenHelper(), p.QwenHelperConfig(),
 		p.QwenHelperConfig() + ".fresh", p.QwenRunStart(), p.QwenNoteHelper(), p.QwenCheckoutLaunch(),
-		p.QwenCheckoutSections()}
+		p.QwenCheckoutSections(), p.QwenContextHomes()}
 }
 
 // artifactDirs is the directory a Qwen Code run leaves of its own
