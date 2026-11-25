@@ -873,11 +873,13 @@ var _ homeKeeper = Copilot{}
 
 // homeRestore puts the home's own settings.json back over the run's
 // ([putBackHome]) and its checkout home as it was ([checkoutHome.restore]:
-// copilot-instructions.md, the copied skills), each whatever came of the other
-// ([everyStep]), run by the script as it exits and by the clear before every
-// run whichever harness it runs.
+// copilot-instructions.md, the copied skills), and drops the skip log no
+// script printed ([checkoutHome.dropSkipped]), each whatever came of the
+// others ([everyStep]), run by the script as it exits, after it printed that
+// log, and by the clear before every run whichever harness it runs.
 func (Copilot) homeRestore(p Paths) string {
-	return everyStep(putBackHome(p.CopilotSettings(), p.CopilotHeldSettings()), copilotCheckoutHome(p).restore())
+	h := copilotCheckoutHome(p)
+	return everyStep(putBackHome(p.CopilotSettings(), p.CopilotHeldSettings()), h.restore(), h.dropSkipped())
 }
 
 // artifactDirs is the run's own notes extension ([Paths.CopilotExtension]),
