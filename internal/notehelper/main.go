@@ -110,19 +110,26 @@
 //     the limit cuts spending all of it. A list of file names relative to a
 //     checkout's root hands its first regular file (Codex:
 //     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>,
-//     "suffix": <s>, "scoped": {"keys": [...], "whole": [...]}}, hands each
-//     file below dir whose name ends in s in any case, whole, apart by a blank
-//     line, walked as Copilot 1.0.114 walks .claude/rules (measured): depth
-//     first, a directory's entries by name in byte order, dot entries
-//     skipped, a file link followed while it stays in the checkout, a
-//     directory link never. `scoped` leaves out a file Copilot loads only
-//     lazily, on a path its frontmatter names, read as its line reader reads
-//     it: line 1, after an optional BOM, is `---`, a `---` line closes it,
-//     and between them the first of keys with a case-exact `<key>:` line,
-//     indentation trimmed, has a value that, split on `,` or read as
-//     `[a, b]`, quotes trimmed, holds an entry outside whole. A tree past 8
-//     directories deep, 1,024 entries or 32 MiB is left out whole, said:
-//     Copilot walks 9 levels (measured), so a deeper tree is the gap;
+//     "suffix": <s>, "form": <harness>, "scoped": {"keys": [...], "whole":
+//     [...]}}, hands each file below dir whose name ends in s, whole, apart by
+//     a blank line, walked depth first, a directory's entries by name in byte
+//     order, a file link followed while it stays in the checkout, and
+//     `scoped` leaving out a file its harness loads only lazily, on a path
+//     its frontmatter names: frontmatter is a line `---` first, after an
+//     optional BOM, to the next `---` line, and the first of keys present in
+//     it holds an entry outside whole. Each form is its harness's walk of
+//     .claude/rules (measured). `copilot` (1.0.114): s in any case, dot
+//     entries skipped, a directory link never followed; keys read as its line
+//     reader reads them, a case-exact `<key>:` line, indentation trimmed,
+//     whose value, split on `,` or read as `[a, b]`, quotes trimmed, is the
+//     entries. `claude` (2.1.310): s in its own case, dot entries walked, a
+//     directory link followed while it stays in the checkout, each directory
+//     once, an empty file skipped; frontmatter read as YAML, a file whose
+//     frontmatter is not valid YAML left out (it never loads), a key's value a
+//     string or a list of strings split on `,`, trimmed, another kind holding
+//     no entry. A tree past 8 directories deep, 1,024 entries or 32 MiB is
+//     left out whole, said: Copilot walks 9 levels and Claude Code 10 at least
+//     (measured), so a deeper tree is the gap;
 //     `importInstructions` for a harness that reads them itself (Claude Code),
 //     each file then named as one `@<absolute path>` import in place of its
 //     text, no limit applying (checkoutimport.go);
@@ -225,8 +232,10 @@
 // standard library and two modules beyond it, each kept because dropping it
 // means hand-rolling a protocol, which #1818's ruling forbids:
 // golang.org/x/net/websocket (RFC 6455) and github.com/klauspost/compress/zstd
-// (RFC 8878, which std does not decode). Their versions are in the build's
-// module info, so a bump of either changes the builds, and
+// (RFC 8878, which std does not decode); and gopkg.in/yaml.v3, the engine's
+// own YAML module, as Claude Code reads a rule's frontmatter as YAML. Their
+// versions are in the build's module info, so a bump of any changes the
+// builds, and
 // .github/workflows/dependabot-notehelper.yml rebuilds them on Dependabot's
 // pull request.
 package main

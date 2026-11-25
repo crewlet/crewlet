@@ -6,23 +6,22 @@ import (
 )
 
 // A CHECKOUT SPEC REACHES THE HELPER IN THE SHAPE IT READS: Codex's slot of
-// names is the list it always was, byte for byte, and a tree slot the object
-// internal/notehelper's instructionSlot reads.
+// names is the list it always was, byte for byte, and Claude Code's rules a
+// tree slot after its names, the object internal/notehelper's
+// instructionSlot reads, naming its form.
 //
-// Mutation: write a slot of names as an object, or drop the tree's scope, and
-// a case goes red.
+// Mutation: write a slot of names as an object, or drop the tree's form or
+// scope, and a case goes red.
 func TestACheckoutSpecReachesTheHelperInTheShapeItReads(t *testing.T) {
 	t.Parallel()
-	rules := checkoutSlot{Tree: &checkoutTree{Tree: ".claude/rules", Suffix: ".md",
-		Scoped: &checkoutScope{Keys: []string{"applyTo", "paths"}, Whole: []string{"**", "**/*", "*"}}}}
 	cases := []struct {
 		name string
 		spec checkoutSpec
 		want string
 	}{
 		{"codex", codexCheckouts(1), `[["AGENTS.override.md","AGENTS.md"]]`},
-		{"a tree after names", checkoutSpec{Instructions: []checkoutSlot{{Names: []string{"AGENTS.md"}}, rules}},
-			`[["AGENTS.md"],{"tree":".claude/rules","suffix":".md","scoped":{"keys":["applyTo","paths"],"whole":["**","**/*","*"]}}]`},
+		{"claude", claudeCheckouts, `[["CLAUDE.md"],[".claude/CLAUDE.md"],["CLAUDE.local.md"],` +
+			`{"tree":".claude/rules","suffix":".md","form":"claude","scoped":{"keys":["paths"],"whole":["**"]}}]`},
 	}
 	for _, c := range cases {
 		var launch struct {

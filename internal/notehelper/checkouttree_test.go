@@ -14,8 +14,15 @@ import (
 // copilotRules is the tree slot of Copilot 1.0.114's .claude/rules, scoped as
 // its line reader scopes a file.
 func copilotRules() instructionSlot {
-	return instructionSlot{Tree: &instructionTree{Tree: ".claude/rules", Suffix: ".md",
+	return instructionSlot{Tree: &instructionTree{Tree: ".claude/rules", Suffix: ".md", Form: formCopilot,
 		Scoped: &treeScope{Keys: []string{"applyTo", "paths"}, Whole: []string{"**", "**/*", "*"}}}}
+}
+
+// claudeRules is the tree slot of Claude Code 2.1.310's .claude/rules, scoped
+// as it reads a rule's frontmatter, as internal/sandbox/executor writes it.
+func claudeRules() instructionSlot {
+	return instructionSlot{Tree: &instructionTree{Tree: ".claude/rules", Suffix: ".md", Form: formClaude,
+		Scoped: &treeScope{Keys: []string{"paths"}, Whole: []string{"**"}}}}
 }
 
 // writeTree writes files under root, by path relative to it.
@@ -171,7 +178,7 @@ func TestAScopedFileIsLeftOutAsCopilotReadsItsFrontmatter(t *testing.T) {
 	)
 	scope := *copilotRules().Tree.Scoped
 	for _, r := range rows {
-		if got := scopedAway([]byte(r.file), scope); got != r.out {
+		if got := copilotScopedAway([]byte(r.file), scope); got != r.out {
 			t.Errorf("%s: %q left out %v, want %v", r.name, r.file, got, r.out)
 		}
 	}
@@ -179,14 +186,16 @@ func TestAScopedFileIsLeftOutAsCopilotReadsItsFrontmatter(t *testing.T) {
 
 // A SLOT KEEPS ITS SHAPE ON THE WIRE: a slot of names is the list it always
 // was, byte for byte, and a tree slot the object the runner wrote; a tree
-// naming no directory below the checkout's root is refused.
+// naming no directory below the checkout's root, or no form the helper walks,
+// is refused.
 //
-// Mutation: write a slot of names as an object, or take `..` as a tree, and a
-// check goes red.
+// Mutation: write a slot of names as an object, take `..` as a tree, or read
+// a tree with no form or an unknown one, and a check goes red.
 func TestASlotKeepsItsShapeOnTheWire(t *testing.T) {
 	t.Parallel()
-	wire := `[["AGENTS.override.md","AGENTS.md"],{"tree":".claude/rules","suffix":".md",` +
-		`"scoped":{"keys":["applyTo","paths"],"whole":["**","**/*","*"]}}]`
+	wire := `[["AGENTS.override.md","AGENTS.md"],{"tree":".claude/rules","suffix":".md","form":"copilot",` +
+		`"scoped":{"keys":["applyTo","paths"],"whole":["**","**/*","*"]}},` +
+		`{"tree":".claude/rules","suffix":".md","form":"claude","scoped":{"keys":["paths"],"whole":["**"]}}]`
 	var slots []instructionSlot
 	if err := json.Unmarshal([]byte(wire), &slots); err != nil {
 		t.Fatal(err)
@@ -194,10 +203,108 @@ func TestASlotKeepsItsShapeOnTheWire(t *testing.T) {
 	if again, err := json.Marshal(slots); err != nil || string(again) != wire {
 		t.Errorf("the slots read back as %s (%v), want %s", again, err, wire)
 	}
-	for _, bad := range []string{`[{"tree":"../up","suffix":".md"}]`, `[{"tree":"","suffix":".md"}]`,
-		`[{"tree":"/abs","suffix":".md"}]`} {
+	for _, bad := range []string{`[{"tree":"../up","suffix":".md","form":"claude"}]`,
+		`[{"tree":"","suffix":".md","form":"claude"}]`, `[{"tree":"/abs","suffix":".md","form":"claude"}]`,
+		`[{"tree":"r","suffix":".md"}]`, `[{"tree":"r","suffix":".md","form":"Claude"}]`} {
 		if err := json.Unmarshal([]byte(bad), &slots); err == nil {
 			t.Errorf("the slots %s were read, want them refused", bad)
+		}
+	}
+}
+
+// A TREE IMPORTS ITS FILES IN CLAUDE CODE'S WALK, each a measured row of
+// 2.1.310's start in a checkout (B2a's walk rows): `.md` in its own case
+// (`UP.MD`, `mixed.Md` not), dot files and dot directories walked, a file or
+// directory link followed while it stays in the checkout and not out of it
+// (not even to a link back in), an empty file skipped, a scoped rule left
+// out; a link back to a directory the walk is in ends there, and a link to a
+// sibling imports its files once.
+//
+// Mutation: match the suffix in any case, skip dot entries, follow no
+// directory link or one out of the checkout, import the empty file, or walk a
+// directory twice, and the imports go red.
+func TestATreeHandsItsFilesInClaudeCodesWalk(t *testing.T) {
+	t.Parallel()
+	root, outside := t.TempDir(), t.TempDir()
+	writeTree(t, root, map[string]string{
+		"CLAUDE.md":                     "ROOT\n",
+		".claude/rules/plain.md":        "PLAIN\n",
+		".claude/rules/UP.MD":           "UPPER\n",
+		".claude/rules/mixed.Md":        "MIXED\n",
+		".claude/rules/.dot.md":         "DOTFILE\n",
+		".claude/rules/.hidden/in.md":   "DOTDIR\n",
+		".claude/rules/notes.txt":       "TXT\n",
+		".claude/rules/empty.md":        "",
+		".claude/rules/a/b/c/deep.md":   "DEEP\n",
+		".claude/rules/scoped.md":       "---\npaths: [\"src/**/*.ts\"]\n---\nSCOPED\n",
+		".claude/rules/whole.md":        "---\npaths: \"**\"\n---\nWHOLE\n",
+		"elsewhere/linked.md":           "FILELINK\n",
+		"elsewhere/dir/viadir.md":       "DIRLINK\n",
+		".claude/rules/zsib/sibling.md": "SIBLING\n",
+	})
+	writeTree(t, outside, map[string]string{"out.md": "FILE-OUT\n", "dir/outdir.md": "DIR-OUT\n"})
+	if err := os.Symlink(filepath.Join(root, "elsewhere/linked.md"), filepath.Join(outside, "dir/back.md")); err != nil {
+		t.Fatal(err)
+	}
+	for link, target := range map[string]string{
+		".claude/rules/filelink.md": filepath.Join(root, "elsewhere/linked.md"),
+		".claude/rules/dirlink":     filepath.Join(root, "elsewhere/dir"),
+		".claude/rules/outlink.md":  filepath.Join(outside, "out.md"),
+		".claude/rules/outdir":      filepath.Join(outside, "dir"),
+		".claude/rules/a/b/loop":    filepath.Join(root, ".claude/rules/a"),
+		".claude/rules/sib":         filepath.Join(root, ".claude/rules/zsib"),
+	} {
+		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var said bytes.Buffer
+	got := rootImports(root, append(names([]string{"CLAUDE.md"}), claudeRules()), &skips{stderr: &said})
+	var want []string
+	for _, rel := range []string{"CLAUDE.md", ".claude/rules/.dot.md", ".claude/rules/.hidden/in.md",
+		".claude/rules/a/b/c/deep.md", "elsewhere/dir/viadir.md", "elsewhere/linked.md", ".claude/rules/plain.md",
+		".claude/rules/zsib/sibling.md", ".claude/rules/whole.md"} {
+		want = append(want, "@"+filepath.Join(real, rel))
+	}
+	if got != strings.Join(want, "\n") || said.Len() > 0 {
+		t.Errorf("the slots import\n%s\nwant\n%s\nsaying %q", got, strings.Join(want, "\n"), said.String())
+	}
+}
+
+// A SCOPED RULE IS LEFT OUT AS CLAUDE CODE READS ITS FRONTMATTER, each case a
+// measured row of 2.1.310 and 2.1.330 (B2a's C4 rows): handed where it loads
+// at a session's start, left out where it loads only on a matching path or
+// never (frontmatter that is not valid YAML).
+//
+// Mutation: read the frontmatter line by line, take `Paths` for paths, read a
+// number, a bool or a map as a pattern, count `**/*` as matching every path,
+// skip the `,` split or the trim, or hand a file whose YAML is invalid, and a
+// row goes red.
+func TestAScopedRuleIsLeftOutAsClaudeCodeReadsItsFrontmatter(t *testing.T) {
+	t.Parallel()
+	handed := []string{"X\n", "---\ndescription: only\n---\nX\n", "---\nglobs: src/**\n---\n",
+		"---\napplyTo: \"src/**\"\n---\n", "---\nPaths: [\"src/**\"]\n---\n", "---\npaths: []\n---\n",
+		"---\npaths:\n---\n", "---\npaths: \"\"\n---\n", "---\npaths: [\"\"]\n---\n", "---\npaths: 5\n---\n",
+		"---\npaths: true\n---\n", "---\npaths: {a: 1}\n---\n", "---\npaths: [\"**\"]\n---\n",
+		"---\npaths: \"**\"\n---\n", "---\npaths: [\"src/**\"]\nX\n"}
+	left := []string{"---\npaths: [\"src/**/*.ts\"]\n---\n", "---\npaths:\n  - \"src/**/*.ts\"\n---\n",
+		"---\npaths: \"src/**/*.ts\"\n---\n", "---\npaths: [\"**/*\"]\n---\n", "---\npaths: [\"*\"]\n---\n",
+		"---\npaths: [\"**/\"]\n---\n", "---\npaths: [\"**\", \"docs/**\"]\n---\n",
+		"---\npaths: \" src/**/*.ts \"\n---\n", "---\npaths: \"src/**/*.ts, docs/**\"\n---\n",
+		"---\npaths: [unclosed\n---\nX\n"}
+	scope := *claudeRules().Tree.Scoped
+	for _, file := range handed {
+		if claudeScopedAway([]byte(file), scope) {
+			t.Errorf("%q is left out, want it handed: Claude Code loads it at a session's start", file)
+		}
+	}
+	for _, file := range left {
+		if !claudeScopedAway([]byte(file), scope) {
+			t.Errorf("%q is handed, want it left out: Claude Code loads it only on a matching path, or never", file)
 		}
 	}
 }
