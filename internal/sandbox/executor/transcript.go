@@ -146,7 +146,7 @@ type TranscriptEntry struct {
 	// Tail says the text cut is the entry's END, marked at its start, never its
 	// opening: a kept summary's, whose last part says what to do next
 	// ([SummaryTranscript]).
-	Tail bool `json:"tail,omitempty"`
+	Tail bool `json:"tail,omitempty"` //wiregate:absent-is-false a mark a reader draws only when set
 }
 
 // TranscriptCut is why one read's entries end before the transcript does.

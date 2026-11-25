@@ -58,7 +58,7 @@ type Summary struct {
 	// kept of it, and Cut says those are its last part ([SummaryTail]).
 	Bytes int64 `json:"bytes"`
 	Kept  int64 `json:"kept"`
-	Cut   bool  `json:"cut,omitempty"`
+	Cut   bool  `json:"cut,omitempty"` //wiregate:absent-is-false a mark a reader draws only when set
 
 	// Harness wrote it, and Session is the harness's session it summarises.
 	Harness string `json:"harness"`
