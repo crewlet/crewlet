@@ -221,6 +221,22 @@ func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		paths.System():     []byte(system),
 		paths.QwenHelper(): qwenHelperScript,
 	}
+	// A FRESH WIRING THAT CHANGES WHAT THE RUN IS WIRED FOR would need settings
+	// the script did not choose, so it is refused, before anything touches the
+	// box.
+	if f := req.FreshWiring; f != nil && (f.Steer.Set() != req.Steer.Set() || f.SkillLoads.Set() != req.SkillLoads.Set()) {
+		return "", errors.New("executor: the run's two wirings, for the session it continues and for " +
+			"one of its own, are not wired alike, so the run cannot be wired to whichever session its " +
+			"box starts")
+	}
+	for _, s := range req.Skills {
+		file, fileErr := skillFile(qwenSkillName(s), s.Description, s.Body)
+		if fileErr != nil {
+			return "", fileErr
+		}
+		files[paths.QwenSkills()+"/"+qwenSkillName(s)+"/SKILL.md"] = file
+	}
+	// THE NOTE HELPER'S WRITE IS THE FIRST COMMAND, after every refusal above.
 	helped, err := writeQwenCheckouts(ctx, box, req, paths)
 	if err != nil {
 		return "", err
@@ -230,28 +246,14 @@ func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	}
 	// AND THE SAME FILES UNDER THE JOB'S OTHER BRIDGE TOKEN, for a session the
 	// script starts in place of the continued one, beside the first
-	// ([sandbox.RunRequest.FreshWiring], [chatSessionGate]). A wiring that
-	// changes what the run is wired for would need settings the script did not
-	// choose, so it is refused.
+	// ([sandbox.RunRequest.FreshWiring], [chatSessionGate]).
 	if f := req.FreshWiring; f != nil {
-		if f.Steer.Set() != req.Steer.Set() || f.SkillLoads.Set() != req.SkillLoads.Set() {
-			return "", errors.New("executor: the run's two wirings, for the session it continues and for " +
-				"one of its own, are not wired alike, so the run cannot be wired to whichever session its " +
-				"box starts")
-		}
 		rewired := req
 		rewired.MCPServers, rewired.Steer, rewired.SkillLoads = f.MCPServers, f.Steer, f.SkillLoads
 		if err = qwenWired(files, rewired, paths, paths.QwenSettings()+".fresh",
 			paths.QwenHelperConfig()+".fresh", helped); err != nil {
 			return "", err
 		}
-	}
-	for _, s := range req.Skills {
-		file, fileErr := skillFile(qwenSkillName(s), s.Description, s.Body)
-		if fileErr != nil {
-			return "", fileErr
-		}
-		files[paths.QwenSkills()+"/"+qwenSkillName(s)+"/SKILL.md"] = file
 	}
 	for _, path := range slices.Sorted(maps.Keys(files)) {
 		if err = box.WriteFile(ctx, path, files[path]); err != nil {
