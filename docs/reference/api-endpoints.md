@@ -2623,7 +2623,7 @@ Connecting an integration puts a credential into the fleet's sealed secret store
 | Field | What it is |
 |---|---|
 | `summary` | One sentence on what connecting the tool does, which the form opens with |
-| `prepare` | The steps to take at the third-party app, in order: `text` (imperative, one sentence, as [vendor text](#vendor-text)), `grants` (the permissions, roles or scopes to grant, in the app's own words) and `yields` (the field the step produces a value for) |
+| `prepare` | The steps to take at the third-party app, in order: `text` (imperative, one sentence, as [vendor text](#vendor-text)), `grants` (the permissions, roles or scopes to grant, in the app's own words), `yields` (the field the step produces a value for) and `done` (the company is past it: the field it yields holds a value that resolves, the integration it connects first is connected, or a later step is done; the first step not done is the one the company is on) |
 | `caution` | `{"title", "body"}`: the one risk the tool's credential carries, absent where none is worth a warning |
 | `hint` | A requirement's one line, under fifteen words, as [vendor text](#vendor-text): what the value is and where it is found |
 | `more` | What a person may want once about the field, behind a disclosure, as vendor text: where else it is shown, what a check covers |
