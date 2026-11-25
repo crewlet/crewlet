@@ -19,8 +19,11 @@ import (
 // capWatchTick is how often the watch reads each capped running run's count:
 // livefeed's cadence and callsDrainTick's. MEASURED against an instant stand-in
 // model, the fastest pinned harness made about 31 requests in 2 s (Cursor Agent
-// about 10 a second), so a run whose cap nothing in its box held runs on by at
-// most about one tick's requests after the one that decided it.
+// about 10 a second), and no runner's in-flight allowance is above 1, so a run
+// whose cap nothing in its box held runs past cap+InFlight by about one tick's
+// requests at most. A TIMER, because no box (direct, container, e2b) offers a
+// signal that its stream grew, and a read of a stream that did not grow costs
+// one open that hands over nothing ([Counter]).
 const capWatchTick = 2 * time.Second
 
 // capWatchReads is how many runs' counts are read at once, [MaxConcurrentPolls]
