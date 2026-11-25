@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -33,6 +34,9 @@ type screen struct {
 	// is how the address spells it, and "pm" or a UUID on a button names
 	// nothing a person knows.
 	noun string
+	// title, where set, is the link's text from its parameters when nothing
+	// names it: an integration's page by the integration's name.
+	title func(params map[string]string) string
 	// id, where set, is the grammar this screen's `{id}` is held to in place
 	// of a uuid: a task is named by its key as well as its id.
 	id func() *regexp.Regexp
@@ -49,7 +53,7 @@ type screen struct {
 // moved there fails here.
 //
 // The placeholders are the router fixture's own (`{KEY}`, `{id}`, `{handle}`,
-// `{CONTAINER}`, `{turn_id}`), so one table fills them on both sides.
+// `{CONTAINER}`, `{turn_id}`, `{kind}`), so one table fills them on both sides.
 var links = map[string]screen{
 	"home":             {address: "#/home", label: "Home"},
 	"inbox":            {address: "#/inbox", app: iam.GrantWorklet, label: "Inbox"},
@@ -66,6 +70,8 @@ var links = map[string]screen{
 	"budgets":          {address: "#/company/budgets", label: "Budgets"},
 	"schedules":        {address: "#/company/schedules", label: "Schedules"},
 	"integrations":     {address: "#/company/integrations", app: iam.GrantAdmin, label: "Integrations"},
+	"integration": {address: "#/company/integrations/{kind}", app: iam.GrantAdmin,
+		title: func(p map[string]string) string { return "Open " + integrationName(p["kind"]) + " setup" }},
 	"live":             {address: "#/live", label: "Now running"},
 	"turns":            {address: "#/live/turns", label: "Turns"},
 	"turn":             {address: "#/live/turns/{id}", noun: "turn"},
@@ -101,20 +107,58 @@ var links = map[string]screen{
 // key passed where a project key goes would resolve to the task.
 type placeholder struct {
 	param string
-	// value compiles its grammar at first use ([lazyGrammar]).
-	value func() *regexp.Regexp
+	// value is the grammar, a pattern compiled at first use ([lazyGrammar])
+	// or a set the engine owns ([integrationKeys]).
+	value func() paramGrammar
+}
+
+// paramGrammar is what a parameter's value is held to; a *regexp.Regexp is one.
+type paramGrammar interface {
+	MatchString(string) bool
+	String() string
+}
+
+// pattern is a placeholder's pattern as its grammar.
+func pattern(compiled func() *regexp.Regexp) func() paramGrammar {
+	return func() paramGrammar { return compiled() }
+}
+
+// integrationKeys holds `{kind}` to the integrations this build serves, by the
+// key their page is addressed by (integration.Tools), so a link never opens a
+// page saying no such integration exists.
+type integrationKeys struct{}
+
+func (integrationKeys) MatchString(v string) bool { return integrationName(v) != "" }
+
+func (integrationKeys) String() string {
+	keys := make([]string, 0, len(integration.Tools))
+	for _, t := range integration.Tools {
+		keys = append(keys, t.Key)
+	}
+	return "one of " + words.Or(keys)
+}
+
+// integrationName is the name of the integration whose page key is key, ""
+// for none.
+func integrationName(key string) string {
+	i := slices.IndexFunc(integration.Tools, func(t integration.Tool) bool { return t.Key == key })
+	if i < 0 {
+		return ""
+	}
+	return integration.Tools[i].Name
 }
 
 // placeholders are every placeholder the link table writes.
 var placeholders = map[string]placeholder{
-	"{KEY}":       {"key", lazyGrammar(`^[A-Z][A-Z0-9]{0,15}$`)},
-	"{CONTAINER}": {"key", lazyGrammar(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)},
-	"{id}":        {"id", uuidName},
-	"{turn_id}":   {"id", uuidName},
-	"{handle}":    {"handle", lazyGrammar(`^[a-z0-9][a-z0-9_-]{0,63}$`)},
+	"{KEY}":       {"key", pattern(lazyGrammar(`^[A-Z][A-Z0-9]{0,15}$`))},
+	"{CONTAINER}": {"key", pattern(lazyGrammar(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`))},
+	"{id}":        {"id", pattern(uuidName)},
+	"{turn_id}":   {"id", pattern(uuidName)},
+	"{handle}":    {"handle", pattern(lazyGrammar(`^[a-z0-9][a-z0-9_-]{0,63}$`))},
 	// A TRACE'S DIRECTION, as the atlas walks one: up to what depends on an
 	// entry, down to what it depends on.
-	"{direction}": {"direction", lazyGrammar(`^(?:up|down)$`)},
+	"{direction}": {"direction", pattern(lazyGrammar(`^(?:up|down)$`))},
+	"{kind}":      {"kind", func() paramGrammar { return integrationKeys{} }},
 }
 
 // queryPair is one pair of a screen's query template: its key, and its value
@@ -197,8 +241,9 @@ func ScreenParams(name string) []string {
 var ErrNoLink = errors.New("cards: no such link")
 
 // Link is the link to screen with params, at the address the dashboard's
-// router resolves, labelled label (the screen's own name, or the first
-// parameter's value, where empty).
+// router resolves, labelled label: a record's own name as the engine read it,
+// or, where empty, the screen's own words. Never text a model wrote, so a
+// card cannot name a place its link does not open.
 func Link(name string, params map[string]string, label string) (wire.Link, error) {
 	s, ok := links[name]
 	if !ok {
@@ -213,13 +258,13 @@ func Link(name string, params map[string]string, label string) (wire.Link, error
 		if !ok {
 			continue
 		}
-		v, grammar := params[p.param], p.value()
+		v, held := params[p.param], p.value()
 		if segment == "{id}" && s.id != nil {
-			grammar = s.id()
+			held = s.id()
 		}
-		if !grammar.MatchString(v) {
+		if !held.MatchString(v) {
 			return wire.Link{}, fmt.Errorf("%w: %s takes %s as %s, and %q is not one",
-				ErrNoLink, name, p.param, grammar, v)
+				ErrNoLink, name, p.param, held, v)
 		}
 		segments[i] = url.PathEscape(v)
 		used[p.param] = true
@@ -245,6 +290,8 @@ func Link(name string, params map[string]string, label string) (wire.Link, error
 	}
 	switch {
 	case label != "":
+	case s.title != nil:
+		label = s.title(params)
 	case s.noun != "":
 		label = "Open " + s.noun
 	case s.label != "":
@@ -293,11 +340,11 @@ func ScreenOf(address string) (string, map[string]string, bool) {
 				continue
 			}
 			value, err := url.PathUnescape(segments[i])
-			grammar := p.value()
+			held := p.value()
 			if part == "{id}" && links[name].id != nil {
-				grammar = links[name].id()
+				held = links[name].id()
 			}
-			if err != nil || !grammar.MatchString(value) {
+			if err != nil || !held.MatchString(value) {
 				matched = false
 				break
 			}

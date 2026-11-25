@@ -562,6 +562,9 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 	}
 	step := s.t.stepStart(tool, args, s.cardOptions(ctx), request, pattern)
 	permitted, status, size := cards.MayOpen(link.Screen, s.t.person), 0, 0
+	// THE MODEL READS THE TABLE'S OWN WORDS for the link; the card may be
+	// named by the record, which is somebody's words and stays off the model.
+	said := link.Label
 	if probe != nil {
 		resp, err := s.t.svc.dispatcher.Do(ctx, s.t.read, *probe)
 		switch {
@@ -575,6 +578,9 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 			return toolloop.ToolResult{}, errGrantEnded
 		default:
 			permitted, status, size = cards.Permitted(resp.Status), resp.Status, len(resp.Body)
+			if title := catalog.OpenedTitle(link.Screen, resp.Body); permitted && title != "" {
+				link.Label = title
+			}
 		}
 	}
 	summary := "Ready to open"
@@ -590,7 +596,7 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 	// A LINK IS NOT AN ANSWER: the model is told so where it reads that the
 	// link was shown, since "I've added a link above" was once a whole reply
 	// to a question the turn had read the facts for.
-	return toolloop.ToolResult{Output: "A link to " + link.Label + " is shown to the " +
+	return toolloop.ToolResult{Output: "A link to " + said + " is shown to the " +
 		"person. It does not answer their question: still state in your reply the facts " +
 		"they asked for."}, nil
 }
