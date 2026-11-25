@@ -13,11 +13,13 @@ import (
 
 // TRIMMED BEFORE THE BOUND (ADR-0073, "A kept session is what its harness's
 // resume loads"): a pack whose session the take would refuse whole keeps only
-// what its harness's resume loads, its record's first lines and everything from
-// its newest compaction on. It cuts the pack's copy, never the live record, so
-// it runs on every pack, a save's and a stop's as the end's, and costs no model
-// call. Only the release a rule was measured on is trimmed ([trimmer]); every
-// other harness and release packs whole, and a pack still past the bound once
+// what its harness's resume loads: everything from its newest compaction on,
+// and before it what that release reads there (Codex its first line, Hermes
+// every row but the messages the compaction replaced, its settled admissions'
+// results slimmed). It cuts the pack's copy, never the live record, so it runs
+// on every pack, a save's and a stop's as the end's, and costs no model call.
+// Only the release a rule was measured on is trimmed ([trimmer]); every other
+// harness and release packs whole, and a pack still past the bound once
 // trimmed is refused as one never trimmed is.
 
 // NO TRIM, BY HARNESS: Claude Code's own trim rewrites its transcript, and its
@@ -51,8 +53,8 @@ type trimPoints struct{ plain, packed int64 }
 var trimAt = trimPoints{plain: trimPlainPoint, packed: trimPackedPoint}
 
 // trimmer is a [carrier] whose pack trims its session's record past the bound
-// ([trimStaged], [trimPacked]): the record a harness's resume loads from its
-// newest compaction on, as measured on one release.
+// ([trimStaged], [trimPacked]): to what a harness's resume loads of it, as
+// measured on one release.
 type trimmer interface {
 	// trimRelease is the release the rule was measured on: a session any other
 	// release wrote is packed whole.
@@ -60,8 +62,8 @@ type trimmer interface {
 
 	// trimRecord is the shell that writes into dst what of the record at src
 	// the release's resume loads, true where it wrote a copy that leaves lines
-	// out; false where src holds no boundary past its first lines to cut at.
-	// Both are shell words.
+	// out; false where src holds no compaction it reads past, or nothing
+	// before it to leave out. Both are shell words.
 	trimRecord(src, dst string) string
 }
 

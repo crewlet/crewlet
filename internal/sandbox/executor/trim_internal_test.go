@@ -319,6 +319,8 @@ func TestATakeReadsItsPacksTrimOnlyBesideItsOwnArchive(t *testing.T) {
 		"past its bound":             {NewCodex(), codexCarryRelease, strings.Repeat(" ", trimMarkMaxBytes) + word, sandbox.ArchiveTrim{}},
 		"another release":            {NewCodex(), "0.172.0", word, sandbox.ArchiveTrim{}},
 		"a harness that never trims": {NewClaudeCode(), codexCarryRelease, word, sandbox.ArchiveTrim{}},
+		"hermes on its release":      {NewHermes(), hermesFloor(), word, trimmed},
+		"hermes on another release":  {NewHermes(), "0.23.4", word, sandbox.ArchiveTrim{}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
