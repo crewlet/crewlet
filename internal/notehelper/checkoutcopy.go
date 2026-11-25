@@ -288,21 +288,72 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]pla
 
 // homeHolds is why a copy named name may not be made, "" where it may: the
 // run's skills hold an entry of that name, which the copy would not replace,
-// or one of the home's other skill directories (spec.HomeSkills) does, whose
-// skill the harness lists under the name in the copy's place, as Muse Code
-// 1.4.25 lists one of ~/.config/muse/skills or of the start directory's
-// before ~/.agents/skills' (measured). The person's skill keeps its name and
-// the copy is left out, said.
+// or a skill directory of one of the home's other skill directories
+// (spec.HomeSkills) is listed under it, by its frontmatter's name, else its
+// directory's. Muse Code 1.4.25 lists a skill by its frontmatter's name, and
+// of two of one name lists the higher place's alone, or, both in one
+// directory, neither (measured, rows fn1-fn4, so1-so6): either way the copy
+// and the person's skill are not both listed, so the person's keeps its name
+// and the copy is left out, said. A directory past the entry bound may hold
+// the name, so it leaves the copy out too.
 func homeHolds(spec checkoutSpec, name string) string {
 	if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil {
 		return "the home's skills hold " + name + " already"
 	}
 	for _, slot := range spec.HomeSkills {
-		if _, err := os.Lstat(filepath.Join(slot.Dir, name)); err == nil {
-			return "the home's " + filepath.Join(slot.Dir, name) + " takes the name " + name + " in its place"
+		entries, past, err := readDirBounded(slot.Dir)
+		if past {
+			return "the home's " + slot.Dir + " holds more than the entries its names are read in, and may list " + name
+		}
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			dir := filepath.Join(slot.Dir, e.Name())
+			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+				continue
+			}
+			listed := e.Name()
+			if raw, err := readBounded(filepath.Join(dir, "SKILL.md"), maxSkillFrontmatter); err == nil {
+				if n, ok := skillFrontName(raw); ok {
+					listed = n
+				}
+			}
+			if listed == name {
+				return "the home's " + dir + " is listed as " + name + " too, and Muse Code would not list both"
+			}
 		}
 	}
 	return ""
+}
+
+// maxSkillFrontmatter bounds what is read of a home skill's SKILL.md for its
+// name: a frontmatter is a few lines, and past 64 KiB is no skill's.
+const maxSkillFrontmatter = 64 << 10
+
+// skillFrontName is the name a SKILL.md's frontmatter gives, quotes trimmed,
+// and whether it gives one: a file opening with `---` and a `name:` line
+// before the `---` that closes it.
+func skillFrontName(raw []byte) (string, bool) {
+	lines := strings.Split(string(raw), "\n")
+	if strings.TrimSuffix(lines[0], "\r") != "---" {
+		return "", false
+	}
+	for _, line := range lines[1:] {
+		l := strings.TrimSuffix(line, "\r")
+		if l == "---" {
+			return "", false
+		}
+		if key, ok := frontKey(l); ok && key == "name" {
+			_, value, _ := strings.Cut(l, ":")
+			value = strings.TrimSpace(value)
+			if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
+				value = value[1 : len(value)-1]
+			}
+			return value, true
+		}
+	}
+	return "", false
 }
 
 // errNoFrontmatter is a SKILL.md that opens with no frontmatter.

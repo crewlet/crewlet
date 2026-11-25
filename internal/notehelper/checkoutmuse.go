@@ -61,21 +61,43 @@ func museBodyBytes(text string) int {
 	return museTextBytes(text) + 1
 }
 
-// museTextBytes is the most bytes text takes in the reminder: each byte that
-// is no UTF-8 counted as the three of U+FFFD, which a decoder may put in its
-// place. It adds up over pieces joined, an upper bound where a join mends a
-// split character.
+// museTextBytes is the most bytes text takes in the reminder: `<`, `>`, `&`,
+// `"` and `'` as the entities Muse writes for them (measured, row esc1), and
+// each byte that is no UTF-8 as the three of U+FFFD, which a decoder may put
+// in its place. It adds up over pieces joined, an upper bound where a join
+// mends a split character.
 func museTextBytes(text string) int {
 	n := 0
 	for i := 0; i < len(text); {
 		r, size := utf8.DecodeRuneInString(text[i:])
-		if r == utf8.RuneError && size <= 1 {
-			n, i = n+len("\uFFFD"), i+1
-			continue
+		switch {
+		case r == utf8.RuneError && size <= 1:
+			n += len("\uFFFD")
+		case r < utf8.RuneSelf && museEntity[byte(r)] != "":
+			n += len(museEntity[byte(r)])
+		default:
+			n += size
 		}
-		n, i = n+size, i+size
+		i += size
 	}
 	return n
+}
+
+// museEntity is what Muse Code 1.4.25 writes in a rules file's body for each
+// character it escapes (measured, row esc1); every other byte goes in as it is.
+var museEntity = [utf8.RuneSelf]string{'<': "&lt;", '>': "&gt;", '&': "&amp;", '"': "&quot;", '\'': "&apos;"}
+
+// museEscape is text as Muse Code puts it in a rules file's body ([museEntity]).
+func museEscape(text string) string {
+	var b strings.Builder
+	for i := 0; i < len(text); i++ {
+		if c := text[i]; c < utf8.RuneSelf && museEntity[c] != "" {
+			b.WriteString(museEntity[c])
+			continue
+		}
+		b.WriteByte(text[i])
+	}
+	return b.String()
 }
 
 // museSectionsApart is what the run's script writes between the home file's
@@ -149,22 +171,26 @@ func museSections(b launchBudget, work string, slots []instructionSlot, handed [
 	return blocks
 }
 
-// museStartFile is the start directory's own rules file as Muse Code reads
+// museStartFile is the start directory's own rules file as Muse Code renders
 // it, the first regular file of slots' names in work, its path relative to
-// work and its text (read to just past the bound, which is all the count
-// needs); false for none.
+// work as Muse prints it (measured, rows tp1-tp3) and its text (read to just
+// past the bound, which is all the count needs); false for none, and for a
+// first file of whitespace alone, which Muse renders nothing of and falls
+// through nowhere from (measured, rows em5 and em6).
 func museStartFile(work string, slots []instructionSlot) (string, string, bool) {
 	for _, slot := range slots {
 		for _, name := range slot.Names {
 			path := filepath.Join(work, name)
-			if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+			info, err := os.Stat(path)
+			if err != nil || !info.Mode().IsRegular() {
 				continue
 			}
 			raw, err := readBounded(path, museRulesCap+1)
 			if err != nil {
 				continue
 			}
-			return name, string(raw), true
+			whole := info.Size() <= int64(len(raw))
+			return name, string(raw), !whole || strings.TrimSpace(string(raw)) != ""
 		}
 	}
 	return "", "", false

@@ -262,6 +262,29 @@ func endsCut(file *os.File, size int64) bool {
 	return err == nil && string(tail) == skippedCut
 }
 
+// keepSkipped appends lines, what a nested adapter's answer left out past
+// its harness's bound, to the run's [skippedLog] under state's lock, as a
+// firing keeps its own; its trouble on stderr.
+func keepSkipped(state string, lines []string, stderr io.Writer) {
+	if len(lines) == 0 {
+		return
+	}
+	err := func() error {
+		lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = lock.Close() }()
+		if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+			return err
+		}
+		return appendSkipped(filepath.Join(state, skippedLog), lines)
+	}()
+	if err != nil {
+		fmt.Fprintf(stderr, "notehelper: keeping what the answer left out for the run's end: %v\n", err)
+	}
+}
+
 // endedMarker is the file under a run's checkout state its runner's restore
 // writes once the harness has stopped (internal/sandbox/executor's
 // checkoutHome.restore), under state's lock, which a firing holds for all

@@ -144,9 +144,10 @@
 //     (checkoutcopy.go); `reserved`: the tags no checkout
 //     takes (the seats' namespace). A tag is the checkout's name lower-cased,
 //     a byte outside [a-z0-9] a hyphen, `-2`, `-3`... where taken;
-//   - `homeSkills`: the home's other skill directories (absolute) its harness
-//     lists before `skills` (Muse: ~/.config/muse/skills and the start
-//     directory's), a skill there of a copy's name leaving the copy out, said.
+//   - `homeSkills`: the home's skill directories (absolute) its harness lists
+//     beside `skills`, a skill there listed under a copy's name (its
+//     frontmatter's, else its directory's) leaving the copy out, said: Muse
+//     lists no two skills of one name (measured).
 //
 // checkout-launch runs once, in W, before the harness: its -config is the spec
 // with `state` (the run's checkout state, remade per run), `agents` (the file
@@ -156,7 +157,8 @@
 // name). Its `budget`, {"form": "muse", "own": <file>}, is a bound the
 // sections share with what the harness loads beside them: Muse Code 1.4.25
 // renders the home's rules file (the own file's text, then the sections) and
-// W's own (the first of the slots' names there) into one reminder of at most
+// W's own (the first of the slots' names there, none where it is whitespace),
+// markup escaped, into one reminder of at most
 // 65,536 bytes, cutting what passes it (measured), so each checkout is first
 // named ("read <file> for its instructions"), then handed whole, in order,
 // where the reminder still fits, by Muse's exact rendering (checkoutmuse.go);
