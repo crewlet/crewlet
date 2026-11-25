@@ -104,9 +104,11 @@ func TestAMuseRunsPluginAndSkillsCannotBeSwitchedOffUnseen(t *testing.T) {
 // plugin's records are read on every run: where installed.json records it
 // disabled, the settings record a hook of it rejected, or the store cannot be
 // read, a run with no use for the plugin starts, but its script neither
-// removes, installs nor approves it, so the person's record stays; a plugin
-// nobody switched off is still cleared. Mutations, each red: read the records
-// only for a run with notes; remove the plugin whatever they say.
+// removes, installs nor approves it, so the person's record stays, and says
+// the hook that hands a repository cloned during the run is off with it; a
+// plugin nobody switched off is still cleared. Mutations, each red: read the
+// records only for a run with notes; remove the plugin whatever they say;
+// say nothing of the nested hook.
 func TestAMuseRunWithoutNotesLeavesASwitchedOffPluginAlone(t *testing.T) {
 	t.Parallel()
 	const rejected = `{"schema_version":1,"runtime_capabilities":{"plugin:crewlet-notes:hook:stop":` +
@@ -139,6 +141,10 @@ func TestAMuseRunWithoutNotesLeavesASwitchedOffPluginAlone(t *testing.T) {
 				if got := boxFile(t, box, p.MuseInstalled()); got != tc.installed {
 					t.Errorf("the run changed the plugin store to %s", got)
 				}
+			}
+			said := strings.Contains(boxFile(t, box, p.Err()), "a repository cloned during the run is not handed")
+			if said == tc.touched {
+				t.Errorf("the run says its nested hook is off: %v, want %v", said, !tc.touched)
 			}
 		})
 	}

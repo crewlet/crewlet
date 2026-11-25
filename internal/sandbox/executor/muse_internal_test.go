@@ -660,13 +660,14 @@ func TestAMuseRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	p := Paths{Home: "/h"}
 	files, dirs := (Muse{}).artifactFiles(p), (Muse{}).artifactDirs(p)
 	if !slices.Equal(files, []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
-		p.MuseNotesInstall()}) ||
+		p.MuseNotesInstall(), p.MuseCheckoutLaunch(), p.MuseCheckoutSections(), p.MuseForeignRules(),
+		p.MuseHomeRulesOwn()}) ||
 		!slices.Equal(dirs, []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}) {
 		t.Fatalf("artifacts = %v %v", files, dirs)
 	}
 	for _, kept := range []string{p.MuseSettings(), p.MuseConfig() + "/auth.json", p.MuseSessions(),
 		p.MuseConfig() + "/AGENTS.md", p.MuseSkills() + "/home", p.MuseConfig() + "/skills/home",
-		p.Home + "/.local/share/muse/plugins/installed.json", p.MuseServersAdded()} {
+		p.Home + "/.local/share/muse/plugins/installed.json", p.MuseServersAdded(), p.MuseHomeRules()} {
 		if slices.ContainsFunc(append(files, dirs...), func(gone string) bool {
 			return kept == gone || strings.HasPrefix(kept, gone+"/")
 		}) {

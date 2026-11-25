@@ -9,22 +9,23 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// checkoutHome is where a runner that hands the checkouts below its run's
-// working directory their instructions and skills through the note helper's
-// checkout core (internal/notehelper's "Checkouts below the working
-// directory") keeps them: the helper and its state, the launch config
-// ([checkoutSpec]), the home instruction file the harness reads (agents: the
-// first of its candidates that exists, else the first, as a harness reading
-// one file of several names finds it), the home's own copy of it held beside
-// the run while it runs (held), the file the helper writes the checkouts'
-// sections into (sections), and the skills directory they are copied into,
-// with the list of copies the next run removes. A copy is built in
-// state/staging ([checkoutHome.staging]).
+// checkoutHome is where a runner handing the checkouts below its working
+// directory their instructions and skills through the note helper's core
+// (internal/notehelper's "Checkouts below the working directory") keeps them:
+// the helper, its state and launch config ([checkoutSpec]); the home file the
+// harness reads (agents: the first candidate that exists, else the first),
+// held beside the run (held); the file the sections are written to; the skills
+// directory with the list of copies the next run removes, each built in
+// state/staging ([checkoutHome.staging]). fallback lists, a path a line, the
+// files a harness loads where the home file is not there (Muse Code's foreign
+// personal rules), the first opening the file the run makes; own is where the
+// gate keeps the text the file opens with; both "" for other harnesses.
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
 	held, sections        string
 	skills, copied        string
+	fallback, own         string
 }
 
 // heldLive marks which of several home instruction files a run holds
@@ -54,11 +55,17 @@ func (h checkoutHome) removeSiblingStaging() string {
 // [checkoutHome.launchConfig]: Instructions, the slots ([checkoutSlot]);
 // Limit, the harness's own bound in bytes on a checkout's instructions, nil
 // for a harness with none; SkillDirs, the checkout's skill directories
-// ([checkoutSkillDir]).
+// ([checkoutSkillDir]); HomeSkills, the home's other skill directories the
+// harness lists before the run's skills directory, whose names a copy may
+// not take; Budget, the helper's form of a bound the sections share with what
+// the harness loads beside them ("" for none; internal/notehelper's
+// "Checkouts below the working directory").
 type checkoutSpec struct {
 	Instructions []checkoutSlot
 	Limit        *int
 	SkillDirs    []checkoutSkillDir
+	HomeSkills   []checkoutSkillDir
+	Budget       string
 }
 
 // checkoutSkillDir is a checkout's skill directory as the helper reads it:
@@ -118,12 +125,29 @@ var checkoutUnlimited *int
 
 // launchConfig is the helper's checkout-launch config: spec, h's places, the
 // repositories the run pushes to first, and the seats' namespace reserved, so
-// no repository's skills are listed under it.
+// no repository's skills are listed under it; a budget counts the text the
+// gate opens the home file with ([checkoutHome.ownText]).
 func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
-	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.sections, "first": repos,
+	config := map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "skillDirs": spec.SkillDirs,
-		"skills": h.skills, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace}})
+		"skills": h.skills, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace}}
+	if len(spec.HomeSkills) > 0 {
+		config["homeSkills"] = spec.HomeSkills
+	}
+	if spec.Budget != "" {
+		config["budget"] = map[string]string{"form": spec.Budget, "own": h.ownText()}
+	}
+	launch, _ := json.Marshal(config)
 	return launch // strings, lists and an int cannot fail to encode
+}
+
+// ownText is the file holding the text the run's home file opens with before
+// the sections: own where the harness has a fallback, else the held copy.
+func (h checkoutHome) ownText() string {
+	if h.fallback != "" {
+		return h.own
+	}
+	return h.held
 }
 
 // gate is the part of a run's script that hands the harness its checkouts'
@@ -132,8 +156,9 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 // ([putBackHome]) and the home's own held afresh, whole ([heldPart]; a link
 // leading nowhere set aside whole, [heldLink]), the copies an earlier run
 // listed and the state with its staging removed, checkout-launch run, and the
-// checkouts' sections written after the home's own through a link as the home
-// keeps the file, which is left untouched where they hand nothing.
+// checkouts' sections written after the home's own (where the home has none,
+// after the first fallback file there, [checkoutHome]) through a link as the
+// home keeps the file, which is left untouched where they hand nothing.
 func (h checkoutHome) gate() string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -158,6 +183,13 @@ func (h checkoutHome) gate() string {
 	}
 	line(`if [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
 		`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
+	if h.fallback != "" {
+		// THE TEXT THE HARNESS WOULD LOAD IN THE HOME FILE'S PLACE opens the
+		// one the run makes, so the person keeps it ([checkoutHome]).
+		line(`ro=%s; rm -f "$ro" && if [ -e "$rha" ]; then cp "$rha" "$ro"; elif [ -f %s ]; then while IFS= read -r rn; do `+
+			`if [ -f "$rn" ]; then cp "$rn" "$ro" || exit 1; break; fi; done < %s; fi || exit 1`,
+			q(h.own), q(h.fallback), q(h.fallback))
+	}
 	line(`%s || exit 1`, h.removeCopies())
 	line(`%s`, h.removeSiblingStaging())
 	line(`: > "$rw" && rm -rf "$rr" "$rq" && mkdir -p "$rr" || exit 1`)
@@ -169,7 +201,12 @@ func (h checkoutHome) gate() string {
 	line(`else`)
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
 	line(`fi`)
-	line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
+	own := `"$rha"`
+	if h.fallback != "" {
+		own = `"$ro"`
+	}
+	line(`if [ -s "$rq" ]; then { if [ -s %[1]s ]; then cat %[1]s; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`,
+		own)
 	return b.String()
 }
 
