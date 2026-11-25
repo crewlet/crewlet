@@ -563,7 +563,7 @@ func TestAPassCutShortRecordsNothing(t *testing.T) {
 
 // A REAPER IS REFUSED where it could not run honestly: no trash to empty, two
 // sources under one name, a name an operation id cannot carry, a term nobody
-// could restore within, nowhere to report and no node to name.
+// could restore within, nowhere to report and no node a report can name.
 func TestAReaperIsRefusedWhatItCouldNotRunHonestly(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()
@@ -593,7 +593,8 @@ func TestAReaperIsRefusedWhatItCouldNotRunHonestly(t *testing.T) {
 		"a long name": func(d *trashreap.Deps) {
 			d.Sources = []trashreap.Source{newTrash(strings.Repeat("p", trashreap.MaxSourceNameBytes+1))}
 		},
-		"a long node": func(d *trashreap.Deps) { d.Node = strings.Repeat("n", coord.MaxNodeIDBytes+1) },
+		"a long node":     func(d *trashreap.Deps) { d.Node = strings.Repeat("n", coord.MaxNodeIDBytes+1) },
+		"an escaped node": func(d *trashreap.Deps) { d.Node = "node<a>" },
 	} {
 		d := ok
 		d.Sources = slices.Clone(ok.Sources)
