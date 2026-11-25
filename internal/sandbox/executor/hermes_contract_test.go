@@ -410,10 +410,11 @@ print(json.dumps(out))
 // reserve is left of Hermes's hook bound less the margin; a late render is
 // never started again while it runs and its result serves a later firing; a
 // render late or failing at three firings is claimed as left out, said with
-// its cause (an error named as one); and no claim starts without the reserve.
+// its cause (an error named as one); and neither a render nor a claim starts
+// without the reserve, so a claim the third late render brings waits a firing.
 //
 // Mutation: wait unbounded, start a render per firing, never give up, say a
-// raise as late, or claim without the reserve, and a row goes red.
+// raise as late, or render or claim without the reserve, and a row goes red.
 func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 	t.Parallel()
 	python := prereqtest.OnPath(t, "python3", "the case runs Hermes's plugin", "install python3")
@@ -434,7 +435,11 @@ func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 		{name: "failing at three firings", render: "raise RuntimeError('boom')", pauses: "[0, 0, 0]", reserve: 1,
 			want: []string{"", "", "cloned\n\nHANDED"}, starts: 3,
 			said: "the instructions and skills of /r are left out: its render failed: RuntimeError: boom"},
-		{name: "no claim without the reserve", render: "pass", pauses: "[0]", reserve: 5, want: []string{""}, starts: 1},
+		{name: "no render or claim without the reserve", render: "pass", pauses: "[0]", reserve: 5, want: []string{""}},
+		{name: "a claim late at the third render waits a firing", pauses: "[0, 0, 0, 0]", reserve: 1,
+			render: "if len(open(STARTS).read()) < 3:\n        raise RuntimeError('boom')\n    time.sleep(60)",
+			want:   []string{"", "", "", "cloned\n\nHANDED"}, starts: 3,
+			said: "the instructions and skills of /r are left out: Hermes did not render it within the hand's bound at 3 firings"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -442,8 +447,9 @@ func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 			q := shellword.Quote
 			helper := "#!/bin/sh\nif [ \"$2\" = hermes-peek ]; then echo '{\"roots\":[\"/r\"]}'; exit 0; fi\n" +
 				"cat > " + q(filepath.Join(dir, "gate.json")) + "\nprintf HANDED\n"
-			carry := "import time\ndef checkout_gate(roots, window):\n    open(" + strconv.Quote(filepath.Join(dir, "starts")) +
-				", \"a\").write(\"s\")\n    " + c.render + "\n    return {\"checkouts\": {roots[0]: {\"text\": \"T\"}}, \"taken\": {}}\n"
+			carry := "import time\nSTARTS = " + strconv.Quote(filepath.Join(dir, "starts")) +
+				"\ndef checkout_gate(roots, window):\n    open(STARTS, \"a\").write(\"s\")\n    " + c.render +
+				"\n    return {\"checkouts\": {roots[0]: {\"text\": \"T\"}}, \"taken\": {}}\n"
 			settings, _ := json.Marshal(map[string]any{"checkouts": map[string]any{"helper": filepath.Join(dir, "helper"),
 				"config": filepath.Join(dir, "nested.json"), "carry": filepath.Join(dir, "carry.py"), "margin": 1,
 				"reserve": c.reserve}})

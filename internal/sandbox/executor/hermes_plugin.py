@@ -370,8 +370,8 @@ def _hand_checkouts(hand, tool, result, window, calls):
 
     try:
         roots = (json.loads(helper("-adapter", "hermes-peek") or b"{}").get("roots") or [])
-        if not roots:
-            return ""
+        if not roots or end - time.monotonic() <= hand["reserve"]:
+            return ""  # no room left for a render and a claim: every checkout waits
         gate = _gate(hand, roots, window, end - hand["reserve"])
         if not gate["checkouts"] or end - time.monotonic() < hand["reserve"]:
             return ""
