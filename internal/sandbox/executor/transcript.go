@@ -399,7 +399,7 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // whichever socket or REST caller asks for them ([ReadTranscript]).
 //
 // TWO, BY WHAT A READ COSTS AT ITS BOUNDS, measured: at most
-// [TranscriptReadHeldBytes] live, so two hold 58 MiB (87 MiB with the heap's
+// [TranscriptReadHeldBytes] live, so two hold 64 MiB (96 MiB with the heap's
 // room under the engine's memory limit, [MemoryPools]), each one core's work for
 // up to [PersonTranscriptReadWorst] (a seat's for words 58 s); one slot would
 // queue every reader behind the longest archive, and more would take more of a
@@ -408,13 +408,14 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 const TranscriptReadsAtOnce = 2
 
 // TranscriptReadHeldBytes is the most one read holds at its bounds, measured
-// (BenchmarkAPersonsReadAtItsBounds, one case a process on two cores of the
-// build machine, three runs): 29 MiB live at GOGC=10, an OpenCode value of
-// every credential shape streamed, a value of `pwd=x` lines held just within
-// [TranscriptValueMaxBytes], or a result's texts held beside the buffers the
-// results before it grew (Claude Code's at most 28); its heap peaking at 58 MiB
-// at the default GOGC, every credential shape streamed to the read budget.
-const TranscriptReadHeldBytes = 29 << 20
+// (BenchmarkAPersonsReadAtItsBounds, every harness's every case, one a process
+// on two cores of the build machine, four runs): 32 MiB live at GOGC=10, a
+// Claude Code value of a key's armour and 200-byte tokens streamed to the read
+// budget; OpenCode's at most 31, every credential shape streamed to it; every
+// other harness's at most 29, Cursor Agent's (two runs) a dense value
+// streamed to the read budget; its heap peaking at 58 MiB at the default GOGC,
+// every credential shape streamed to the read budget.
+const TranscriptReadHeldBytes = 32 << 20
 
 // PersonTranscriptReadWorst is the longest a person's read takes at its
 // bounds, of what harnesses and ordinary tools write, measured likewise: one

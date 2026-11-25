@@ -2,7 +2,28 @@
 
 - **Status:** accepted
 - **Authority:** `internal/browser`
-- **Enforced-by:** `internal/config.TestABrowserSeatIsRefusedWhereAnyRunOfItLandsOutsideAContainer`, `internal/config.TestABrowserSeatIsRefusedInAContainerOnItsHostsNetwork`, `internal/config.TestABrowserSeatIsRefusedOnAnEntryThatDeniesTheWeb`, `internal/sandbox.TestALaunchOutsideAContainerBoxNeverRunsAnythingInIt`, `internal/sandbox.TestARunDeniedTheWebWithholdsItsBrowser`, `internal/sandbox.TestABoxThatMayReachItsHostsLoopbackNeverRunsEnsure`, `internal/browser/hostreach.TestOnlyATokenThatArrivesFindsARoute`, `internal/browser/hostreach.TestTheVerdictTakesTheKernelThenTheRoutesThenTheLine`, `internal/browser/hostreach.TestAConnectionQueuedBeforeTheCheckEndedIsReadBeforeTheVerdict`, `internal/browser/hostreach.TestAnythingElseOnTheCheckPortWithholdsAsUnchecked`, `internal/browser/hostreach.TestTheEngineListensOnItsLoopbackAloneOnOnePort`, `internal/browser/hostreach.TestTheBoxsHalfFindsEveryRouteAndProxyItHas`, `internal/browser/hostreach.TestAMadeConnectionIsHeldUntilItIsAnsweredOrClosed`, `internal/browser/hostreach.TestASocketBoundOnTheBoxsLoopbackFromOutsideItIsFound`, `internal/browser/hostreach.TestAProxyOfThisHostThatRefusesEveryLoopbackAskIsAskedElsewhere`, `internal/sandbox.TestABoxsRunningBrowserIsStoppedWhereItMayReachItsHostsLoopback`, `internal/sandbox.TestTheBrowserServerReachesOnlyABoxWhoseEnsureAnsweredReady`, `internal/sandbox.TestOnlyTheLaunchMakesABrowserServer`, `internal/sandbox.TestNothingABoxPrintsReachesTheBrief`, `internal/e2e.TestABrowserSeatsBoxRunsItsBrowserInAContainer`, `internal/e2e.TestABrowserIsWithheldWhereItsBoxReachesItsHostsLoopback`
+- **Enforced-by:**
+  - `internal/config.TestABrowserSeatIsRefusedWhereAnyRunOfItLandsOutsideAContainer`
+  - `internal/config.TestABrowserSeatIsRefusedInAContainerOnItsHostsNetwork`
+  - `internal/config.TestABrowserSeatIsRefusedOnAnEntryThatDeniesTheWeb`
+  - `internal/sandbox.TestALaunchOutsideAContainerBoxNeverRunsAnythingInIt`
+  - `internal/sandbox.TestARunDeniedTheWebWithholdsItsBrowser`
+  - `internal/sandbox.TestABoxThatMayReachItsHostsLoopbackNeverRunsEnsure`
+  - `internal/browser/hostreach.TestOnlyATokenThatArrivesFindsARoute`
+  - `internal/browser/hostreach.TestTheVerdictTakesTheKernelThenTheRoutesThenTheLine`
+  - `internal/browser/hostreach.TestAConnectionQueuedBeforeTheCheckEndedIsReadBeforeTheVerdict`
+  - `internal/browser/hostreach.TestAnythingElseOnTheCheckPortWithholdsAsUnchecked`
+  - `internal/browser/hostreach.TestTheEngineListensOnItsLoopbackAloneOnOnePort`
+  - `internal/browser/hostreach.TestTheBoxsHalfFindsEveryRouteAndProxyItHas`
+  - `internal/browser/hostreach.TestAMadeConnectionIsHeldUntilItIsAnsweredOrClosed`
+  - `internal/browser/hostreach.TestASocketBoundOnTheBoxsLoopbackFromOutsideItIsFound`
+  - `internal/browser/hostreach.TestAProxyOfThisHostThatRefusesEveryLoopbackAskIsAskedElsewhere`
+  - `internal/sandbox.TestABoxsRunningBrowserIsStoppedWhereItMayReachItsHostsLoopback`
+  - `internal/sandbox.TestTheBrowserServerReachesOnlyABoxWhoseEnsureAnsweredReady`
+  - `internal/sandbox.TestOnlyTheLaunchMakesABrowserServer`
+  - `internal/sandbox.TestNothingABoxPrintsReachesTheBrief`
+  - `internal/e2e.TestABrowserSeatsBoxRunsItsBrowserInAContainer`
+  - `internal/e2e.TestABrowserIsWithheldWhereItsBoxReachesItsHostsLoopback`
 - **Measured:** on 2026-11-23, with Docker 29.10 on a 12-core Linux host and an image built by code-sandbox.md's recipe 3 on Debian 12 (Node 22.23.5, the expected Chromium 159.0.8154.6, its sandbox waived): ensure took 2.04 to 2.11 s on a fresh container box from the image's npm cache with no network, 2.14 to 2.32 s from the registry with 4 MB fetched, and 0.37 to 0.42 s on a kept box whose browser it found running; on 2026-11-24, built on Debian 13, the recipe's base since, the launch's step took 2.18 to 2.31 s on a fresh box from the npm cache with no network and 0.54 to 0.65 s on a kept one, its check of the box's network included, and the box held 204 MiB with the browser on no page, 304 MiB on one and 523 MiB on five, at a peak of 599 MiB; and in the suite's browser box image on the same Node, the launch's check of the box's network took 0.19 to 0.23 s on a box with no network, 1.70 to 1.76 s on the default bridge, where the host's ufw drops a box's packets to it, and 1.70 to 1.73 s withholding a box on the host's network as `loopback`
 - **Cost-when-tried:** the engine-side seat browser of #804 never landed, and the engine's DevTools client had grown 103 commands and events for it, 68 of which nothing else used and which went with it (ADR-0165)
 - **Tag-status:** unreleased

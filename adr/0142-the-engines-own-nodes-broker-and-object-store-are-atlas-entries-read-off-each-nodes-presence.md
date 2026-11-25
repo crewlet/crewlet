@@ -2,7 +2,20 @@
 
 - **Status:** accepted
 - **Authority:** `internal/atlas/derive`
-- **Enforced-by:** `internal/atlas/derive.TestTheFleetDrawsItsNodesItsBrokerAndItsObjectStore`, `internal/atlas/derive.TestANodesAddressIsAlwaysMarkedInternal`, `internal/atlas/derive.TestAnExternalBrokerAndAnS3BucketAreDrawnAsTheNodesNameThem`, `internal/atlas/derive.TestAFleetNobodyListedDrawsNothingAndASilentNodeIsStillDrawn`, `internal/atlas.TestANodesAddressIsShownToAnAdministratorAlone`, `internal/atlas.TestAFleetAddressNotMarkedPrivateIsRefused`, `internal/api/queries.TestANodesAddressIsAnsweredToAnAdministratorAlone`, `internal/engine.TestANodesSummaryOfItselfHoldsNoCredential`, `internal/engine.TestANodesAddressIsWhatItsFileNames`, `internal/coord.TestANodesInfraSummaryRoundTripsThroughItsStatusRecord`, and for the amendment below `internal/coord/coordtest`'s `a_node_status_record_is_counted_only_while_its_node_holds_presence_at_its_epoch` (run by `internal/coord/kv.TestNodeStatusRecordContract` and `internal/coord/memory.TestNodeStatusRecordContract`), `internal/coord/kv.TestANodesStatusRecordAgesOutAtTheStatusFreshness` and `internal/engine.TestANodesStatusRowsLeaveItsPresenceLease`, `internal/coord.TestANodesInfraSummaryIsBounded`, `internal/queue/jetstream.TestAServerListsHostsCarryNoCredential`, `internal/advisor.TestTheEnginesOwnServiceIsNotAskedForAnOwner`
+- **Enforced-by:**
+  - `internal/atlas/derive.TestTheFleetDrawsItsNodesItsBrokerAndItsObjectStore`
+  - `internal/atlas/derive.TestANodesAddressIsAlwaysMarkedInternal`
+  - `internal/atlas/derive.TestAnExternalBrokerAndAnS3BucketAreDrawnAsTheNodesNameThem`
+  - `internal/atlas/derive.TestAFleetNobodyListedDrawsNothingAndASilentNodeIsStillDrawn`
+  - `internal/atlas.TestANodesAddressIsShownToAnAdministratorAlone`
+  - `internal/atlas.TestAFleetAddressNotMarkedPrivateIsRefused`
+  - `internal/api/queries.TestANodesAddressIsAnsweredToAnAdministratorAlone`
+  - `internal/engine.TestANodesSummaryOfItselfHoldsNoCredential`
+  - `internal/engine.TestANodesAddressIsWhatItsFileNames`
+  - `internal/coord.TestANodesInfraSummaryRoundTripsThroughItsStatusRecord`, and for the amendment below `internal/coord/coordtest`'s `a_node_status_record_is_counted_only_while_its_node_holds_presence_at_its_epoch` (run by `internal/coord/kv.TestNodeStatusRecordContract` and `internal/coord/memory.TestNodeStatusRecordContract`), `internal/coord/kv.TestANodesStatusRecordAgesOutAtTheStatusFreshness` and `internal/engine.TestANodesStatusRowsLeaveItsPresenceLease`
+  - `internal/coord.TestANodesInfraSummaryIsBounded`
+  - `internal/queue/jetstream.TestAServerListsHostsCarryNoCredential`
+  - `internal/advisor.TestTheEnginesOwnServiceIsNotAskedForAnOwner`
 - **Cost-when-tried:** not tried. The atlas drew everything the company runs on except the thing drawing it: a company on three nodes, an external NATS cluster and an S3 bucket saw none of them on its map.
 - **Tag-status:** unreleased
 

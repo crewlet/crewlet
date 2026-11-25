@@ -2,7 +2,14 @@
 
 - **Status:** accepted
 - **Authority:** `internal/atlas/collect`
-- **Enforced-by:** `internal/atlas/collect.TestAnOptionalPartNothingWasReadFromIsNoFinding`, `internal/cloudflare.TestTheAtlasReadsWorkersPagesBucketsAndTunnelsWhereTheTokenMay`, `internal/cloudflare.TestATokenWithoutTheOptionalPermissionsIsWholeAndSuggested`, `internal/cloudflare.TestAnOptionalPermissionTakenAwayKeepsWhatWasReadAndSaysSo`, `internal/cloudflare.TestAnOptionalListingIsReadWholeOrNotAtAll`, `internal/cloudflare.TestNoCredentialShapeReachesTheAtlasFromCloudflare`, `internal/cloudflare.TestTheProvisionerStepsListTheBuildersNames`
+- **Enforced-by:**
+  - `internal/atlas/collect.TestAnOptionalPartNothingWasReadFromIsNoFinding`
+  - `internal/cloudflare.TestTheAtlasReadsWorkersPagesBucketsAndTunnelsWhereTheTokenMay`
+  - `internal/cloudflare.TestATokenWithoutTheOptionalPermissionsIsWholeAndSuggested`
+  - `internal/cloudflare.TestAnOptionalPermissionTakenAwayKeepsWhatWasReadAndSaysSo`
+  - `internal/cloudflare.TestAnOptionalListingIsReadWholeOrNotAtAll`
+  - `internal/cloudflare.TestNoCredentialShapeReachesTheAtlasFromCloudflare`
+  - `internal/cloudflare.TestTheProvisionerStepsListTheBuildersNames`
 - **Cost-when-tried:** not tried here, and seen next door. Cloudflare's connect check refuses a token that lacks any group in its provisioner list, so adding a group the atlas would like to that list would have refused, on the next check, every token that manages its agents correctly. ADR-0130's refused part is the other half: it marks a source partly read, which for a permission no company was ever asked for would mark every company's Cloudflare source so, from the first read.
 - **Tag-status:** unreleased
 

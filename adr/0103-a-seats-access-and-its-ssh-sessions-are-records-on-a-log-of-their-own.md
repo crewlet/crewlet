@@ -2,7 +2,15 @@
 
 - **Status:** accepted
 - **Authority:** `internal/accessdomain`
-- **Enforced-by:** `internal/accessdomain.TestEveryAccessRecordIsSigned`, `internal/accessdomain.TestAnAccessRecordAppliesOnceOnEveryNode`, `internal/accessdomain.TestACommandIsSealedAtRest`, `internal/accessdomain.TestACommandsFailureIsAClosedWord`, `internal/accessdomain.TestAToldRecordReadBeforeANewerOneIsNotTheBaseline`, `internal/accessdomain.TestAccessRecordsAreKeptForTheirRetention`, `internal/accessdomain.TestTheAccessDomainIsACertifiedDomain`, `internal/estate.TestACommandCrossesTheRouterSealed`
+- **Enforced-by:**
+  - `internal/accessdomain.TestEveryAccessRecordIsSigned`
+  - `internal/accessdomain.TestAnAccessRecordAppliesOnceOnEveryNode`
+  - `internal/accessdomain.TestACommandIsSealedAtRest`
+  - `internal/accessdomain.TestACommandsFailureIsAClosedWord`
+  - `internal/accessdomain.TestAToldRecordReadBeforeANewerOneIsNotTheBaseline`
+  - `internal/accessdomain.TestAccessRecordsAreKeptForTheirRetention`
+  - `internal/accessdomain.TestTheAccessDomainIsACertifiedDomain`
+  - `internal/estate.TestACommandCrossesTheRouterSealed`
 - **Measured:** about 2 MB a day at the reference company's 100 seats, ten of them at SSH: thirty dispatch barriers a seat a day of about 140 bytes each, a told record of about 8 KiB whenever a seat's access changes, and about one certificate and three commands of about a kibibyte each a turn at SSH. The log's 128 MiB default holds about two months of a completely blocked trim.
 - **Tag-status:** unreleased
 

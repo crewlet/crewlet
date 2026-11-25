@@ -250,14 +250,24 @@ export function useAskGestures(): Pick<
 }
 
 /** Holds one conversation's state for the parts drawn under it. */
-export function AskProvider({ place, children }: { place: AskPlace; children: ReactNode }) {
+export function AskProvider({
+  place,
+  box,
+  children,
+}: {
+  place: AskPlace;
+  /** A draft that outlives this provider (the drawer's, kept across a close); its own where absent. */
+  box?: DraftBox;
+  children: ReactNode;
+}) {
   const view = useConversation();
   const screen = usePageSnapshot();
   const page = place.withPage ? screen : null;
   const composer = useRef<HTMLTextAreaElement>(null);
   // THE DRAFT IS NOT THIS COMPONENT'S STATE: a keystroke renders the composer
   // alone, never the thread under it (`AskComposer.tsx` says why).
-  const draft = useDraftBox();
+  const own = useDraftBox();
+  const draft = box ?? own;
   const [removed, setRemoved] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);

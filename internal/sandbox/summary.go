@@ -321,6 +321,19 @@ func (c *Coordinator) summaryOf(ctx context.Context, run PendingRun) *executorke
 	return &kept
 }
 
+// namedSummary is the summary r's row names as the turn's end would name it
+// ([SummaryStamp.Named]), nil where it names none or one no end could carry.
+func (r PendingRun) namedSummary() *executorkeep.Summary {
+	if r.Summary == nil {
+		return nil
+	}
+	named, err := r.Summary.Named()
+	if err != nil {
+		return nil
+	}
+	return &named
+}
+
 // summaryCopyRoom bounds a summary's copy under a fresh key: its read back
 // (objstore.ReadBudget) and its upload, each at the object store's pace for a
 // summary at its bound, beside a record's reason.

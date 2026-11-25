@@ -49,6 +49,9 @@ import { emptyDay } from "~/test/myWork.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { settled } from "~/test/settle.ts";
+import { emit as emitAssistant } from "./assistant/bus.ts";
+import { pageIdentityAt } from "./assistant/context.ts";
+import { readTab, writeTab } from "./assistant/tab.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -1289,6 +1292,27 @@ describe("the page header", () => {
 // OTHER way the route moves while it is open: Back, Forward, a phone's back
 // gesture, a restored history entry.
 describe("what the frame holds open", () => {
+  test("a page Ask Crewlet opens takes its conversation along; its own page does not", async () => {
+    frame(<Bare />);
+    const id = "403212ed-5a4a-586d-8af6-c62411a17c2f";
+    writeTab({ conversation: id, shown: { conversation: id, page: "home:" } });
+    await act(async () => {
+      emitAssistant("assistant.navigation.open", {
+        path: ["worklet", "tasks"],
+        query: {},
+        mode: "here",
+      });
+    });
+    expect(readTab().shown).toEqual({
+      conversation: id,
+      page: pageIdentityAt(["worklet", "tasks"]),
+    });
+    await act(async () => {
+      emitAssistant("assistant.navigation.open", { path: ["ask", id], query: {}, mode: "here" });
+    });
+    expect(readTab().shown?.page).toBe(pageIdentityAt(["worklet", "tasks"]));
+  });
+
   test("a route change closes the palette, the way the kit closes the drawer", async () => {
     frame(<Bare />);
     await act(async () => {
