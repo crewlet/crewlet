@@ -98,15 +98,15 @@ const (
 	// TestTheGitStopRetryIsTheDrainRetry, since this package imports no api.
 	StoppingRetryAfter = 30 * time.Second
 
-	// BusyRetryAfter is gitproc.SlotWait: a node whose slots stayed busy for
-	// a whole read attempt is one a balancer should send the retry elsewhere
-	// from, and so is a node a fetch waited its whole turn at for room to
-	// spool.
+	// BusyRetryAfter is gitproc.SlotWait: a node whose slots stayed busy that
+	// long is one a balancer should send the retry elsewhere from, and so is a
+	// node a fetch waited its whole turn at for room to spool.
 	BusyRetryAfter = gitproc.SlotWait
 
 	// UnavailableRetryAfter is what a request the code log or the object
-	// store could not answer is told to wait: one read attempt, the same
-	// figure, since what it waits out is an election or a store's blip.
+	// store could not answer is told to wait: the same ten seconds, also the
+	// longest a broker election leaves a log leaderless (jsprovision.Election),
+	// which with a store's blip is what it waits out.
 	UnavailableRetryAfter = gitproc.SlotWait
 
 	// maxSentence bounds one refusal sentence on the wire: a diagnostic, and

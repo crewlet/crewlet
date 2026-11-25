@@ -23,7 +23,7 @@ import (
 // (estate.Production().ReadAttempt): ten seconds, what that attempt holds for
 // a log one member stores (2 + 5 + 2 + 1), since no local git waits out the
 // election a replicated log's barrier may. This package imports no engine
-// package, so estate's TestGitprocsReadBoundsFitInsideOneReadAttempt holds the
+// package, so estate's TestAGitReadFitsInsideOneReadAttempt holds the
 // bound, and [SlotWait]'s beside it.
 const ReadDeadline = 10 * time.Second
 
