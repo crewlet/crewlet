@@ -326,8 +326,11 @@ func TestQwenCodesBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 					"[\"mcp__crewlet__*\"]}, \"disableAllHooks\": true, \"env\": {\"QWEN_CODE_SAFE_MODE\": \"1\"}}",
 				"workspace/.qwen/settings.json": `{"mcp": {"allowed": ["crew*"]}, "disableAllHooks": 0}`,
 				"workspace/.env":                "QWEN_CODE_SAFE_MODE=2\n"}}},
-		"hooks switched off on a run with no hook": {noSkills: true, switchOffCase: switchOffCase{
-			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": true}`}}},
+		"hooks switched off on a run with no hook but its checkouts'": {noSkills: true, switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": true}`},
+			says: []string{"crewlet: checkouts cloned during the run are not handed their instructions and skills: ",
+				"/.qwen/settings.json: its disableAllHooks is true, which switches every hook off, the run's hook " +
+					"PostToolUse(checkouts) among them"}}},
 		"the home excludes the bridge by a glob": {switchOffCase: switchOffCase{
 			plant: map[string]string{".qwen/settings.json": `{"mcp":{"excluded":["crew*"]}}`},
 			fails: []string{reason, `/.qwen/settings.json: its mcp.excluded entry "crew*" takes the server crewlet away`}}},
