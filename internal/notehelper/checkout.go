@@ -35,7 +35,8 @@ import (
 // copies none), and Copied, the file listing each skill copied there;
 // Reserved, the tags no repository takes; ImportInstructions, for a harness
 // that reads its instruction files itself, each file named as an import in
-// place of its text ([rootImports]), Limit not applying.
+// place of its text ([rootImports]), Limit not applying; SkillSep, what joins
+// a copy's tag and skill ([skillName]).
 type checkoutSpec struct {
 	Instructions       []instructionSlot `json:"instructions"`
 	Limit              *int              `json:"limit,omitempty"`
@@ -44,19 +45,40 @@ type checkoutSpec struct {
 	Copied             string            `json:"copied,omitempty"`
 	Reserved           []string          `json:"reserved,omitempty"`
 	ImportInstructions bool              `json:"importInstructions,omitempty"`
+	SkillSep           skillSep          `json:"skillSep,omitempty"`
+}
+
+// skillSep is what joins a copy's tag and skill: `:` (the zero value), or `-`
+// for a harness that lists `a:b` as `a-b` (Gemini CLI 0.70.0, measured), so a
+// home skill's name is compared as the harness lists it.
+type skillSep string
+
+// Valid reports whether s is a separator the helper names copies with.
+func (s skillSep) Valid() bool { return s == "" || s == ":" || s == "-" }
+
+// String is s as it joins a name.
+func (s skillSep) String() string {
+	if s == "" {
+		return ":"
+	}
+	return string(s)
 }
 
 // launchConfig is what -config names for checkout-launch: the run's checkout
 // state directory (the checkouts handed, the lock), the instruction file it
 // replaces with the launch's sections, the checkouts handed first, in order
-// (the repositories the run pushes to), the spec, and NestedSkillsOnly for a
+// (the repositories the run pushes to), the spec, NestedSkillsOnly for a
 // nested adapter that hands skills alone, whose spec then names no instruction
-// file to read. The working directory is the adapter's own.
+// file to read, and Roots, the file it lists each checkout handed's root in,
+// a line each, for a harness that reads their instructions itself where the
+// runner names them (Gemini CLI's --include-directories). The working
+// directory is the adapter's own.
 type launchConfig struct {
 	State            string   `json:"state"`
 	Agents           string   `json:"agents"`
 	First            []string `json:"first"`
 	NestedSkillsOnly bool     `json:"nestedSkillsOnly,omitempty"`
+	Roots            string   `json:"roots,omitempty"`
 	checkoutSpec
 }
 
@@ -122,6 +144,9 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if c.State == "" || c.Agents == "" || (c.Limit != nil && *c.Limit < 0) {
 		return errors.New("the launch config names no state, no instruction file, or a negative limit")
 	}
+	if !c.SkillSep.Valid() {
+		return fmt.Errorf("the launch config's skillSep %q is neither %q nor %q", c.SkillSep, ":", "-")
+	}
 	work, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return err
@@ -136,10 +161,16 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var sections []string
+	var sections, roots []string
 	for _, h := range handed {
 		if h.text != "" {
 			sections = append(sections, "for `"+h.name+"` with root "+h.root+"\n\n"+h.text)
+		}
+		roots = append(roots, h.root+"\n")
+	}
+	if c.Roots != "" {
+		if err = os.WriteFile(c.Roots, []byte(strings.Join(roots, "")), 0o600); err != nil {
+			return err
 		}
 	}
 	if err = os.Remove(c.Agents); err != nil && !errors.Is(err, fs.ErrNotExist) {
