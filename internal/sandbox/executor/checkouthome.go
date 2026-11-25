@@ -238,8 +238,12 @@ func (h checkoutHome) dropSkipped() string {
 // run's output (measured: Codex 0.171.0, and 0.172.0, keep it nowhere; Claude
 // Code 2.1.330 only in its session transcript).
 func (h checkoutHome) saySkipped() string {
-	return fmt.Sprintf(`if [ -s %[1]s ]; then cat %[1]s >&2; rm -f %[1]s; fi`, shellword.Quote(h.state+"/skipped"))
+	return fmt.Sprintf(`if [ -s %[1]s ]; then cat %[1]s >&2; rm -f %[1]s; fi`, shellword.Quote(h.skipped()))
 }
+
+// skipped is the run's skip log (internal/notehelper's skippedLog), which
+// [checkoutHome.saySkipped] prints once the harness has stopped.
+func (h checkoutHome) skipped() string { return h.state + "/skipped" }
 
 // putBack is the shell putting the home's own instruction file back
 // ([putBackHome]): of several candidates, the one the run held, named at

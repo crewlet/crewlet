@@ -40,6 +40,7 @@ if [ -d "$HOME/clone-src" ]; then
 	for i in 1 2; do printf '%s\n' '{"hook_event_name":"PostToolUse","tool_name":"Bash"}' | sh -c "$hc" > "$rec/nested-$i" 2>> "$rec/nested.err"; done
 	cat "$cfg/skills/late:fix/SKILL.md" > "$rec/late-fix" 2> /dev/null
 fi
+echo 'harness: done' >&2
 echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
 `
 
@@ -348,16 +349,63 @@ func TestAClaudeCodeRunSaysWhatItsHookLeftOutOnceItStops(t *testing.T) {
 	})
 }
 
-// A RUN WHOSE CHECKOUTS' HOOK WOULD BE ITS ONLY HOOK STARTS WITHOUT IT WHERE
-// THE BOX SWITCHES HOOKS OFF, AND ONE WITH ANOTHER HOOK IS REFUSED: with the
-// launch's finding written ([executor.Paths.ClaudeHooksOff]), a run on 2.1.310
-// with the helper and no other hook of the engine's starts without the
-// checkouts' plugin, saying a later clone is not handed its skills; with its
-// notes' hooks it is refused, naming why, with or without the helper; with
-// hooks on it starts the plugin. Under every sh a box may have.
+// A BARE RUN WHOSE BOX SWITCHES HOOKS OFF IS STILL HANDED ITS CHECKOUTS AT
+// LAUNCH (D685): on a real box whose home sets disableAllHooks, a run with no
+// bridge, notes or skills starts, its checkout's CLAUDE.md imported, without
+// the checkouts' plugin, and its skip log says once, after the harness ran,
+// that a checkout cloned during the run is not handed its skills, naming the
+// file and key. A run with another hook of the engine's is refused
+// ([TestClaudeCodesHooksCannotBeSwitchedOffUnseen]).
 //
-// Mutation: refuse the checkouts' hook alone, start it anyway, say nothing,
-// or let its gate forget the notes' mark, and a row goes red.
+// Mutation: refuse it, start the plugin, skip the launch's handing, or say it
+// on stderr at the gate rather than in the skip log, and the case goes red.
+func TestABareRunWhoseBoxSwitchesHooksOffIsHandedItsCheckoutsAtLaunch(t *testing.T) {
+	t.Parallel()
+	runner, box := realBox(t)
+	p := executor.PathsFor(box)
+	writeBoxStandIn(t, box, p.BinDir()+"/claude", claudeCheckoutView)
+	plant(t, box, map[string]string{
+		".claude/settings.json":               `{"disableAllHooks": true}`,
+		"workspace/repo/.git/HEAD":            "ref: refs/heads/main\n",
+		"workspace/repo/.git/index":           "DIRC",
+		"workspace/repo/.git/refs/heads/main": strings.Repeat("0", 40) + "\n",
+		"workspace/repo/CLAUDE.md":            "REPO-CLAUDE\n",
+	})
+	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "x"})
+	if !res.Success {
+		t.Fatalf("the run did not succeed: %+v\n%s", res, boxFile(t, box, p.Err()))
+	}
+	work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), sandbox.WorkspaceSubdir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := func(name string) string { return boxFile(t, box, box.Home()+"/observed/"+name) }
+	if got := seen("CLAUDE.md"); !strings.Contains(got, "@"+work+"/repo/CLAUDE.md") {
+		t.Errorf("the launch handed no checkout: Claude Code started on a home CLAUDE.md of\n%s", got)
+	}
+	if argv := seen("argv"); strings.Contains(argv, p.ClaudeCheckoutsPlugin()) {
+		t.Errorf("the checkouts' plugin started where hooks are off:\n%s", argv)
+	}
+	stderr := boxFile(t, box, p.Err())
+	const line = "crewlet: checkouts cloned during the run are not handed their skills: "
+	why := "/.claude/settings.json sets disableAllHooks to true, so Claude Code runs no hook of this run\n"
+	if n, ran := strings.Count(stderr, line), strings.Index(stderr, "harness: done"); n != 1 || ran < 0 ||
+		strings.Index(stderr, line) < ran || !strings.Contains(stderr, why) {
+		t.Errorf("the skip log said it %d times, want once after the harness ran:\n%s", n, stderr)
+	}
+}
+
+// A RUN WHOSE CHECKOUTS' HOOK WOULD BE ITS ONLY HOOK STARTS WITHOUT IT WHERE
+// THE BOX SWITCHES HOOKS OFF, AND ONE WITH ANOTHER HOOK IS REFUSED (D685):
+// with the launch's findings written ([executor.Paths.ClaudeHooksOff],
+// [executor.Paths.ClaudeHooksOffBy]), a run on 2.1.310 with the helper and no
+// other hook of the engine's starts without the checkouts' plugin, its skip
+// log saying once that a later clone is not handed its skills; with its
+// notes' hooks it is refused, naming why, saying no such line; with hooks on
+// it starts the plugin. Under every sh a box may have.
+//
+// Mutation: refuse the checkouts' hook alone, start it anyway, log nothing, or
+// let its gate forget the notes' mark, and a row goes red.
 func TestARunWhoseOnlyHookIsItsCheckoutsStartsWithoutItWhereHooksAreOff(t *testing.T) {
 	t.Parallel()
 	const off = "/home/box/.claude/settings.json sets disableAllHooks to true"
@@ -384,8 +432,10 @@ func TestARunWhoseOnlyHookIsItsCheckoutsStartsWithoutItWhereHooksAreOff(t *testi
 					}
 				}
 				if tc.hooksOff {
-					if err := os.WriteFile(p.ClaudeHooksOff(), []byte(off), 0o600); err != nil {
-						t.Fatal(err)
+					for _, f := range []string{p.ClaudeHooksOff(), p.ClaudeHooksOffBy()} {
+						if err := os.WriteFile(f, []byte(off), 0o600); err != nil {
+							t.Fatal(err)
+						}
 					}
 				}
 				if tc.helper {
@@ -403,10 +453,10 @@ func TestARunWhoseOnlyHookIsItsCheckoutsStartsWithoutItWhereHooksAreOff(t *testi
 				if plugin := slices.Contains(args, p.ClaudeCheckoutsPlugin()); !tc.refused && plugin != tc.plugin {
 					t.Errorf("the checkouts' plugin started: %v, want %v (argv %q)", plugin, tc.plugin, args)
 				}
-				said := strings.Contains(stderr, off+". So the run starts without the hook that hands a repository "+
-					"cloned during the run its skills")
-				if said == tc.notSaid {
-					t.Errorf("the run said it starts without the checkouts' hook: %v, want %v:\n%s", said, !tc.notSaid,
+				said := strings.Count(stderr, "crewlet: checkouts cloned during the run are not handed their skills: "+
+					off+", so Claude Code runs no hook of this run\n")
+				if want := map[bool]int{false: 1, true: 0}[tc.notSaid]; said != want {
+					t.Errorf("the skip log said the checkouts' hook is not started %d times, want %d:\n%s", said, want,
 						stderr)
 				}
 			})

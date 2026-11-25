@@ -49,7 +49,8 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(),
 		p.MCPConfig(), p.Findings(), p.BinDir(),
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
-		p.ClaudeHooksOff(), p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSettingsGuarded(),
+		p.ClaudeHooksOff(), p.ClaudeHooksOffBy(), p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(),
+		p.ClaudeSettingsGuarded(),
 		p.ClaudeNotesSettingsGuarded(), p.ClaudeBridgeGuard(), p.ClaudeUnbridged(), p.CommitAttribution(),
 		p.AttributionHook(), p.GitHooks(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.SessionStaging(), p.SessionDigests(),
@@ -209,7 +210,8 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 		// The previous run's instructions, which are not this run's — its
 		// hooks name a bridge session its end closed.
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
-		p.ClaudeHooksOff(), p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSettingsGuarded(),
+		p.ClaudeHooksOff(), p.ClaudeHooksOffBy(), p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(),
+		p.ClaudeSettingsGuarded(),
 		p.ClaudeNotesSettingsGuarded(), p.ClaudeBridgeGuard(), p.ClaudeUnbridged(), p.OpenCodeConfig(),
 		// And its MCP configuration under either token, which names a bridge
 		// session that is over, and which this run's start writes as a new file.
