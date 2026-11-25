@@ -15,7 +15,7 @@ import (
 func copilotSpec(skills string) checkoutSpec {
 	return checkoutSpec{Instructions: append(names([]string{".github/copilot-instructions.md"}, []string{"AGENTS.md"},
 		[]string{"CLAUDE.md"}, []string{"GEMINI.md"}), instructionSlot{Tree: &instructionTree{Tree: ".claude/rules",
-		Suffix: ".md", Scoped: &treeScope{Keys: []string{"applyTo", "paths"}, Whole: []string{"**", "**/*", "*"}}}}),
+		Suffix: ".md", Form: formCopilot, Scoped: &treeScope{Keys: []string{"applyTo", "paths"}, Whole: []string{"**", "**/*", "*"}}}}),
 		SkillDirs: []skillDirSlot{{Dir: ".github/skills"}, {Dir: ".agents/skills"}, {Dir: ".claude/skills"}}, Skills: skills,
 		Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
 }

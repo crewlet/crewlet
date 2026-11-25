@@ -16,13 +16,16 @@ import (
 // Copilot's line reader reads it, row F1), with no bound of its own (Copilot
 // never cuts; it refuses a launch past its static budget, which the run's
 // relaunch answers); and the skills of .github/skills, .agents/skills and
-// .claude/skills, .github's winning a name (row c1).
+// .claude/skills, .github's winning a name (row c1). Its nested firings hand
+// skills alone: Copilot loads a cloned checkout's instructions itself.
 func copilotCheckouts() checkoutSpec {
 	return checkoutSpec{Instructions: []checkoutSlot{{Names: []string{".github/copilot-instructions.md"}},
 		{Names: []string{"AGENTS.md"}}, {Names: []string{"CLAUDE.md"}}, {Names: []string{"GEMINI.md"}},
-		{Tree: &checkoutTree{Tree: ".claude/rules", Suffix: ".md", Scoped: &checkoutScope{
+		{Tree: &checkoutTree{Tree: ".claude/rules", Suffix: ".md", Form: checkoutFormCopilot, Scoped: &checkoutScope{
 			Keys: []string{"applyTo", "paths"}, Whole: []string{"**", "**/*", "*"}}}}},
-		Limit: checkoutUnlimited, SkillDirs: []checkoutSkillDir{{Dir: ".github/skills"}, {Dir: ".agents/skills"}, {Dir: ".claude/skills"}}}
+		Limit:            checkoutUnlimited,
+		SkillDirs:        []checkoutSkillDir{{Dir: ".github/skills"}, {Dir: ".agents/skills"}, {Dir: ".claude/skills"}},
+		NestedSkillsOnly: true}
 }
 
 // copilotCheckoutHome is where a Copilot run keeps its checkouts'

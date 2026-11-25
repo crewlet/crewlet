@@ -321,3 +321,25 @@ func TestACopilotPackTakenMidRunHoldsItsKeptSets(t *testing.T) {
 		t.Errorf("the save holds the kept sets %q, want them beside the journal", got)
 	}
 }
+
+// A COPILOT LAUNCH WALKS .claude/rules AS COPILOT DOES: the spec's tree slot
+// names Copilot's form, which the helper refuses a slot without, so a
+// checkout holding rules is launched with its unscoped rule handed and its
+// scoped one left to Copilot's lazy load, and the nested firings read no
+// instruction file (their spec names none).
+//
+// Mutation: leave the slot's form empty, and the launch is refused.
+func TestACopilotLaunchWalksClaudeRulesAsCopilotDoes(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"repo/.git/": "", "repo/.claude/rules/r.md": "RULE\n",
+		"repo/.claude/rules/py.md": "---\napplyTo: \"**/*.py\"\n---\nPY\n"}
+	p, _ := copilotRepoLaunched(t, files)
+	sections, err := os.ReadFile(p.CopilotRepoInstructions())
+	if err != nil || !strings.Contains(string(sections), "RULE\n") || strings.Contains(string(sections), "PY") {
+		t.Errorf("the launch handed %q (%v), want the unscoped rule alone", sections, err)
+	}
+	nested, err := os.ReadFile(p.CopilotRepo() + "/nested.json")
+	if err != nil || strings.Contains(string(nested), ".claude/rules") {
+		t.Errorf("the nested firings' spec is %s (%v), want it to name no instruction to read", nested, err)
+	}
+}
