@@ -223,7 +223,7 @@ type ProposalCard struct {
 	Audience []Phrase `json:"audience,omitempty"`
 	// Own is a change to the person's own record, which reaches nobody else:
 	// the card says so in place of the company.
-	Own bool `json:"own,omitempty"`
+	Own bool `json:"own,omitempty"` //wiregate:absent-is-false a card that says nothing is the company's
 	// Taint is the surface (one of provenance.Sources) whose outside text the
 	// turn read before proposing (D25); absent for none.
 	Taint provenance.Source `json:"taint,omitempty"`
