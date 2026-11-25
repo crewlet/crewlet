@@ -153,34 +153,90 @@ func TestALinearizableReadWhoseAskerStopsListeningMidElectionSaysTheLogHadNoLead
 }
 
 // A BARRIER WHOSE CALLER'S DEADLINE ENDS MID-ELECTION FAILS SAYING THE LOG HAD
-// NO LEADER, with the deadline's own error beneath it.
+// NO LEADER, with the deadline's own error beneath it: an election longer than
+// its caller's deadline, a short one's or a git read's whole ten seconds
+// (gitproc.ReadDeadline, which no election lengthens), is still bounded by it.
 //
 // Mutant: the reader leaves with its context's bare error — no stream named.
 func TestABarrierWhoseCallerRunsOutMidElectionSaysTheLogHadNoLeader(t *testing.T) {
 	t.Parallel()
+	for _, deadline := range []time.Duration{2 * time.Second, 10 * time.Second} {
+		t.Run(deadline.String(), func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				var index *statelog.ReadIndex
+				log := electing(untilTheCaseEnds(t, func() *statelog.ReadIndex { return index }))
+				index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), log,
+					members(3), testSigner(t, probeDomain{}), noCeiling(t), probeEncode,
+					func() uint32 { return 1 }, nil)
+				if err != nil {
+					t.Fatalf("NewReadIndex: %v", err)
+				}
+				ctx, cancel := context.WithTimeout(t.Context(), deadline)
+				defer cancel()
+				_, err = index.Read(ctx)
+				if want := "the " + probeStream + " stream had no leader"; err == nil ||
+					!strings.Contains(err.Error(), want) {
+					t.Fatalf("a barrier whose caller ran out mid-election answered %v, want an "+
+						"error saying %q", err, want)
+				}
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("the error %v is not its caller's deadline", err)
+				}
+				if n := log.asked.Load(); n < 2 {
+					t.Errorf("the barrier was appended %d times, want it appended again while "+
+						"it waited", n)
+				}
+			})
+		})
+	}
+}
+
+// A BARRIER WHOSE APPEND NOBODY HEARD, ON A STREAM THE BROKER DOES NOT HOLD, IS
+// REFUSED AT ONCE SAYING THE STREAM IS ABSENT: "no responders" is a leaderless
+// log only where the stream is there, and no election brings one back.
+//
+// Mutant: every append nobody heard waited out — refused at its budget's end,
+// naming an election.
+func TestABarrierOnAStreamThatIsNotThereIsRefusedAtOnce(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		var index *statelog.ReadIndex
-		log := electing(untilTheCaseEnds(t, func() *statelog.ReadIndex { return index }))
+		log := absentLog{asked: &atomic.Int32{}}
 		index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), log, members(3),
 			testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
 		if err != nil {
 			t.Fatalf("NewReadIndex: %v", err)
 		}
-		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-		defer cancel()
-		_, err = index.Read(ctx)
-		if want := "the " + probeStream + " stream had no leader"; err == nil ||
-			!strings.Contains(err.Error(), want) {
-			t.Fatalf("a barrier whose caller ran out mid-election answered %v, want an error "+
-				"saying %q", err, want)
+		asked := time.Now()
+		_, err = index.Read(t.Context())
+		var refusal *statelog.Unavailable
+		if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonBrokerRefused {
+			t.Fatalf("a barrier on a stream that is not there answered %v, want refused %q", err,
+				statelog.ReasonBrokerRefused)
 		}
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Errorf("the error %v is not its caller's deadline", err)
+		if want := "the " + probeStream + " stream is absent"; !strings.Contains(refusal.Detail, want) {
+			t.Errorf("the refusal reads %q, which does not say %q", refusal.Detail, want)
 		}
-		if n := log.asked.Load(); n < 2 {
-			t.Errorf("the barrier was appended %d times, want it appended again while it waited", n)
+		if !time.Now().Equal(asked) {
+			t.Errorf("refused after waiting, want at once: no wait brings a stream back")
+		}
+		if n := log.asked.Load(); n != 1 {
+			t.Errorf("the barrier was appended %d times, want once", n)
 		}
 	})
+}
+
+// absentLog is a broker that holds no log stream: an append is heard by
+// nobody, and a read of it answers that the stream is not there.
+type absentLog struct{ asked *atomic.Int32 }
+
+func (a absentLog) Append(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
+	a.asked.Add(1)
+	return 0, false, jetstream.ErrNoStreamResponse
+}
+
+func (absentLog) LastSeq(context.Context, string) (uint64, bool, error) {
+	return 0, false, jetstream.ErrStreamNotFound
 }
 
 // A BARRIER WHOSE LOG HAD NO LEADER FOR ITS WHOLE BUDGET, ITS ADMISSION'S USAGE

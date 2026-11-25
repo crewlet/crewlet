@@ -140,13 +140,17 @@ func (r *Read) Answer() error {
 }
 
 // Leaderless answers the read as a member does that knows its stream's group,
-// or the metadata group, has no leader: 503, err_code 10008, JetStream's own
-// error (server.NewJSClusterNotAvailError) on the reply subject the reader
-// listens on. Any time, held or released: it goes to the reader, not on.
-func (r *Read) Leaderless() error {
-	body, err := json.Marshal(server.ApiResponse{Error: server.NewJSClusterNotAvailError()})
+// or the metadata group, has no leader: 503, err_code 10008
+// (server.NewJSClusterNotAvailError).
+func (r *Read) Leaderless() error { return r.Refuse(server.NewJSClusterNotAvailError()) }
+
+// Refuse answers the read with JetStream's own error apiErr, on the reply
+// subject the reader listens on. Any time, held or released: it goes to the
+// reader, not on.
+func (r *Read) Refuse(apiErr *server.ApiError) error {
+	body, err := json.Marshal(server.ApiResponse{Error: apiErr})
 	if err != nil {
-		return fmt.Errorf("jsapitest: encode a leaderless answer: %w", err)
+		return fmt.Errorf("jsapitest: encode the answer %v: %w", apiErr, err)
 	}
 	return r.h.nc.Publish(r.msg.Reply, body)
 }

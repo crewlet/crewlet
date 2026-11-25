@@ -101,10 +101,11 @@
 // group, or the metadata group, has no leader answers 503, err_code 10008
 // (server/jetstream_api.go, isGroupLeaderless and isLeaderless), and a publish
 // to a stream nobody leads is heard by nobody, since only the leader subscribes
-// its subjects (server/stream.go, setLeader). Both say an election is under
-// way, not what the caller asked about, so [ThroughElection] asks again inside
-// the caller's deadline with no count of its own ([Leaderless] is the one
-// classification). A caller with no deadline is held to one [Election], the
+// its subjects (server/stream.go, setLeader); the same answer to a stream that
+// is not there is that absence, so a caller first finds the stream ([Unheard]).
+// Both say an election is under way, not what the caller asked about, so
+// [ThroughElection] asks again inside the caller's deadline with no count of
+// its own ([Leaderless] is the one classification). A caller with no deadline is held to one [Election], the
 // longest the pinned server's raft defaults leave a group without a leader it
 // can be heard from. It ASKS AGAIN at [ReAsk] rather than waking on a signal:
 // a stream's LEADER_ELECTED advisory is published in its account, but the

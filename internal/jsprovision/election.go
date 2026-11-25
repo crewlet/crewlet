@@ -22,18 +22,47 @@ const Election = 9*time.Second + time.Second
 // Leaderless reports a broker ANSWERING that the group a request needs has no
 // leader: 503, err_code 10008, as the client decodes it (*jetstream.APIError)
 // or a raw read does (*server.ApiError, internal/jsapi's leader reads), or a
-// publish to an existing stream nobody heard ([jetstream.ErrNoStreamResponse]).
-// Not silence ([Unanswered]), which says nothing about who leads.
+// publish nobody heard to a stream its caller found there ([Unheard]). Not
+// silence ([Unanswered]), which says nothing about who leads, and never a
+// stream that is not there ([StreamAbsent]).
 func Leaderless(err error) bool {
+	if errors.As(err, new(*unheard)) {
+		return true
+	}
 	var client *jetstream.APIError
 	if errors.As(err, &client) {
 		return client.ErrorCode == errCodeNoLeader
 	}
 	var raw *server.ApiError
-	if errors.As(err, &raw) {
-		return raw.ErrCode == uint16(server.JSClusterNotAvailErr)
+	return errors.As(err, &raw) && raw.ErrCode == uint16(server.JSClusterNotAvailErr)
+}
+
+// Unheard is err, a publish's [jetstream.ErrNoStreamResponse], once its caller
+// has found the stream there: [Leaderless] then, since only a stream's leader
+// subscribes its subjects (server/stream.go, setLeader). Without that finding
+// the same answer is a stream or a subject nobody binds, which no wait clears.
+func Unheard(err error) error { return &unheard{err} }
+
+type unheard struct{ err error }
+
+func (u *unheard) Error() string {
+	return fmt.Sprintf("%v: the stream is there, so it has no leader", u.err)
+}
+
+func (u *unheard) Unwrap() error { return u.err }
+
+// StreamAbsent reports a broker answering that the stream asked about is not
+// there (err_code 10059), as the client decodes it or a raw read does.
+func StreamAbsent(err error) bool {
+	if errors.Is(err, jetstream.ErrStreamNotFound) {
+		return true
 	}
-	return errors.Is(err, jetstream.ErrNoStreamResponse)
+	var client *jetstream.APIError
+	if errors.As(err, &client) {
+		return client.ErrorCode == jetstream.JSErrCodeStreamNotFound
+	}
+	var raw *server.ApiError
+	return errors.As(err, &raw) && raw.ErrCode == uint16(server.JSStreamNotFoundErr)
 }
 
 // errCodeNoLeader is the client's spelling of JSClusterNotAvailErr, which the
@@ -53,12 +82,16 @@ func ThroughElection[T any](ctx context.Context, group string, one func(context.
 			return v, err
 		}
 		if wait == ctx {
+			// A CALLER WITH NO DEADLINE WAITS ONE [Election] AT MOST,
+			// counted from this first leaderless answer.
 			if _, set := ctx.Deadline(); !set {
 				var cancel context.CancelFunc
 				wait, cancel = context.WithTimeout(ctx, Election)
 				defer cancel()
 			}
 		}
+		// [pause], the package's one wait between asks: ended by wait
+		// and by its deadline passing, whether or not wait says so yet.
 		if !pause(wait, ReAsk) {
 			var zero T
 			return zero, &NoLeader{Group: group, Answer: err, Err: wait.Err()}
