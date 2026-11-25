@@ -8,23 +8,25 @@ import (
 )
 
 // A HOME OR A REPOSITORY CANNOT SWITCH A CLAUDE CODE RUN'S HOOKS OR SKILLS OFF
-// UNSEEN. 2.1.310 runs none of the run's hooks where the merged settings leave
-// `disableAllHooks` true, and drops its skills where `enabledPlugins` holds
-// their plugin false or a `Skill` deny names them (measured); the run never
-// overrules either. So a run starting a hook of the engine's is refused before
-// the harness starts, naming the file and the key, a later file's set-back-on
-// clearing nothing (fail closed); it starts where the key is no boolean or the
-// file no JSON (ignored whole), in the home's settings.local.json (never read),
-// nested, allowManagedHooksOnly outside a managed file, other plugins' and
-// skills' switches, and where it starts no hook of the engine's (measured).
-// Mutations, each red: drop the gate; let a later false or true clear an off;
-// read a string as true; name no file; skip the skills' check.
+// UNSEEN. 2.1.310 runs none of the run's hooks (notes, skills, bridge guard)
+// where the merged settings leave `disableAllHooks` true, and drops its skills
+// where `enabledPlugins` holds their plugin false or a `Skill` deny names them
+// (measured); the run overrules neither. So a run starting a hook of the
+// engine's is refused before the harness starts, naming the file and the key,
+// a later set-back-on clearing nothing; it starts where the key is no boolean,
+// the file no JSON, in the home's settings.local.json, nested,
+// allowManagedHooksOnly outside a managed file, other plugins' and skills'
+// switches, and where it starts no hook of the engine's (measured). Mutations,
+// each red: drop the gate; let a later value clear an off; read a string as
+// true; name no file; skip the skills' check; leave the bridge guard ungated.
 func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const off = `{"disableAllHooks": true}`
 	const said = "Claude Code would run none of the run's hooks"
 	skills := sandbox.RunRequest{Brief: "go", Skills: handedSkills()[1:], SkillLoads: skillWiring()}
 	notes := sandbox.RunRequest{Brief: "go", Steer: steerWiring}
+	bridged := sandbox.RunRequest{Brief: "go", MCPServers: map[string]sandbox.MCPServer{
+		"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:7/mcp/tok", AlwaysLoaded: true}}}
 	for name, tc := range map[string]struct {
 		release string
 		req     sandbox.RunRequest
@@ -38,6 +40,9 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 			plant: map[string]string{".claude/settings.json": `{"disableAllHooks": false}`,
 				"workspace/.claude/settings.json": "{\n  \"disableAllHooks\"\n  :\n  true\n}"},
 			fails: []string{said, "/workspace/.claude/settings.json sets disableAllHooks to true"}}},
+		"the home's settings switch them off for the bridge's guard": {req: bridged, switchOffCase: switchOffCase{
+			plant: map[string]string{".claude/settings.json": off},
+			fails: []string{said, "bridge guard", "/.claude/settings.json sets disableAllHooks to true"}}},
 		"the repository's local settings switch them off": {req: skills, switchOffCase: switchOffCase{
 			plant: map[string]string{"workspace/.claude/settings.local.json": off},
 			fails: []string{said, "/workspace/.claude/settings.local.json sets disableAllHooks"}}},

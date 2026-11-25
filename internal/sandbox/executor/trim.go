@@ -14,13 +14,14 @@ import (
 // TRIMMED BEFORE THE BOUND (ADR-0073, "A kept session is what its harness's
 // resume loads"): a pack whose session the take would refuse whole keeps only
 // what its harness's resume loads: everything from its newest compaction on,
-// and before it what that release reads there (Codex its first line, Hermes
-// every row but the messages the compaction replaced, its settled admissions'
-// results slimmed). It cuts the pack's copy, never the live record, so it runs
-// on every pack, a save's and a stop's as the end's, and costs no model call.
-// Only the release a rule was measured on is trimmed ([trimmer]); every other
-// harness and release packs whole, and a pack still past the bound once
-// trimmed is refused as one never trimmed is.
+// and before it what that release reads there (Codex its first line, Copilot
+// all but the turns the summary replaced, Hermes every row but the messages
+// the compaction replaced, its settled admissions' results slimmed). It cuts
+// the pack's copy, never the live record, so it runs on every pack, a save's
+// and a stop's as the end's, and costs no model call. Only the release a rule
+// was measured on is trimmed ([trimmer]); every other harness and release
+// packs whole, and a pack still past the bound once trimmed is refused as one
+// never trimmed is.
 
 // NO TRIM, BY HARNESS: Claude Code's own trim rewrites its transcript, and its
 // subagent threads stay whole, since 2.1.310 continues one spawned before the
@@ -53,7 +54,8 @@ type trimPoints struct{ plain, packed int64 }
 var trimAt = trimPoints{plain: trimPlainPoint, packed: trimPackedPoint}
 
 // trimmer is a [carrier] whose pack trims its session's record past the bound
-// ([trimStaged], [trimPacked]): to what a harness's resume loads of it, as
+// ([trimStaged] and [trimPacked] where the pack stages its record, [trimTar]
+// where it tars it in place): to what a harness's resume loads of it, as
 // measured on one release.
 type trimmer interface {
 	// trimRelease is the release the rule was measured on: a session any other
@@ -98,6 +100,27 @@ func trimStaged(t trimmer, at trimPoints, member string) string {
 func trimPacked(t trimmer, at trimPoints, member, archive, repack string) string {
 	return fmt.Sprintf(`{ [ -n "$trw" ] || [ "$%s" != %s ] || [ "$(wc -c < %s | tr -d ' ')" -le %d ] 2> /dev/null || { %s; [ -z "$trw" ] || %s; }; }`,
 		trimRelVar, shellword.Quote(t.trimRelease()), archive, at.packed, trimCut(t, member), repack)
+}
+
+// trimTar is the tar of a pack that tars its members in place under root
+// (a shell word) into staged/capture, its positional parameters the members,
+// the first its record, rel: tar, the pack's own, unless the release in
+// [trimRelVar] is t's and the record is past at.plain bytes. Then, and where
+// tar's archive is past at.packed, the record's whole lines are copied under
+// staged/in, cut ([trimCut]) and tarred under the same name beside the other
+// members. ONLY PAST A POINT, so every other pack is the one it was; the copy is
+// whole lines of a record its harness only appends to. A copy or a tar that
+// fails is packed as tar packs it, untrimmed. True where an archive was made.
+func trimTar(t trimmer, at trimPoints, root, rel, staged, tar string) string {
+	q := shellword.Quote
+	record, member, capture := root+"/"+rel, q(staged+"/in")+"/"+rel, q(staged+"/capture")
+	stage := fmt.Sprintf(`trn=$(wc -l < %[1]s | tr -d ' ') && [ "$trn" -gt 0 ] && mkdir -p "$(dirname %[2]s)" && head -n "$trn" %[1]s > %[2]s`,
+		record, member)
+	retar := fmt.Sprintf(`( shift; tar -czf %[1]s -C %[2]s %[3]s ${1+-C} ${1+%[4]s} "$@" < /dev/null > /dev/null 2>> %[5]s ) || { trw=; %[6]s; }`,
+		capture, q(staged+"/in"), rel, root, q(staged+"/error"), tar)
+	ours := fmt.Sprintf(`[ "$%s" = %s ]`, trimRelVar, q(t.trimRelease()))
+	return fmt.Sprintf(`{ trw=; if %[1]s && [ "$(wc -c < %[2]s | tr -d ' ')" -gt %[3]d ] 2> /dev/null && { %[4]s; } 2> /dev/null; then %[5]s; %[6]s; else %[7]s; fi; } && { [ -n "$trw" ] || ! %[1]s || [ "$(wc -c < %[8]s | tr -d ' ')" -le %[9]d ] 2> /dev/null || { { %[4]s; } 2> /dev/null && %[5]s; [ -z "$trw" ] || { %[6]s; }; }; }`,
+		ours, record, at.plain, stage, trimCut(t, member), retar, tar, capture, at.packed)
 }
 
 // trimMarkOf is where a pack leaves its word that the archive at archive was
