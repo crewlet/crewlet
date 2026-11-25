@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -52,6 +51,8 @@ var (
 	_ notesOffExplainer = Copilot{}
 	_ sessionJudge      = Copilot{}
 	_ recordConfirmer   = Copilot{}
+	_ threadHarness     = Copilot{}
+	_ mainThreadHarness = Copilot{}
 	_ trimmer           = Copilot{}
 )
 
@@ -153,13 +154,10 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 		"--sync-session=off",
 	}
 	if configPath != "" {
+		// No `--enable-mcp-server`: a server is on unless a person's
+		// `disabledMcpServers` switches it off, which [copilotGuard] refuses for
+		// the bridge rather than undoing (measured on 1.0.114).
 		parts = append(parts, "--additional-mcp-config", q("@"+configPath))
-		// EVERY ENGINE SERVER ENABLED BY NAME, over a trusted repository's
-		// `disabledMcpServers`, which otherwise switches the bridge off
-		// (measured on 1.0.114).
-		for _, name := range slices.Sorted(maps.Keys(req.MCPServers)) {
-			parts = append(parts, "--enable-mcp-server", q(name))
-		}
 	}
 	// VERBATIM, as the copilot entry names it in Copilot's own terms.
 	if req.Model != "" {
@@ -841,11 +839,12 @@ func (Copilot) artifactFiles(p Paths) []string {
 var _ homeKeeper = Copilot{}
 
 // homeRestore puts the home's own settings.json and copilot-instructions.md
-// back over the run's ([putBackHome]), run by the script as it exits and by
-// the clear before every run whichever harness it runs.
+// back over the run's ([putBackHome]), each whatever came of the other
+// ([everyStep]), run by the script as it exits and by the clear before every
+// run whichever harness it runs.
 func (Copilot) homeRestore(p Paths) string {
-	return putBackHome(p.CopilotSettings(), p.CopilotHeldSettings()) + " && " +
-		putBackHome(p.CopilotInstructions(), p.CopilotHeldInstructions())
+	return everyStep(putBackHome(p.CopilotSettings(), p.CopilotHeldSettings()),
+		putBackHome(p.CopilotInstructions(), p.CopilotHeldInstructions()))
 }
 
 // artifactDirs is the run's own notes extension ([Paths.CopilotExtension]),

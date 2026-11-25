@@ -19,7 +19,7 @@
  * — and each kind's own `pathOf` is what turns it back into a route.
  */
 
-import { inboxItemPath } from "~/app/routes.ts";
+import { inboxItemPath, inboxRowKey } from "~/app/routes.ts";
 
 export type ObjectKind =
   | "item"
@@ -144,7 +144,7 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
   // A NOTICE HAS NO PAGE OF ITS OWN, AND NO PEEK EITHER: its "page" is its
   // item in the inbox, by its Worklet record id, where it is read and marked,
   // so `peeks.tsx` registers no body for it and `peekable` answers false.
-  notice: { label: "Notice", pathOf: (id) => inboxItemPath(`notice:${id}`) },
+  notice: { label: "Notice", pathOf: (id) => inboxItemPath(inboxRowKey("notice", id)) },
 };
 
 /**

@@ -1845,6 +1845,24 @@ func (r *FakeRunner) PinnedWindow(model string) int {
 	return pin(model)
 }
 
+var _ summaryKeeper = (*FakeRunner)(nil)
+
+// KeepSummary keeps found as a runner does: scrubbed of scrub, by value alone
+// (the fake redacts nothing by shape), and held to its bound by its end.
+func (r *FakeRunner) KeepSummary(found ThreadSummary, scrub []string) ThreadSummary {
+	if found.Unread != "" || found.Text == "" {
+		return found
+	}
+	text := found.Text
+	for _, value := range scrub {
+		if value != "" {
+			text = strings.ReplaceAll(text, value, "[scrubbed]")
+		}
+	}
+	kept, cut := executorkeep.SummaryTail(text)
+	return ThreadSummary{Text: kept, Bytes: int64(len(text)), Cut: cut}
+}
+
 // ReadMainThread answers a collection's read of a job's main thread with what
 // [FakeRunner.MainThread] says, and no reading where it is unset.
 func (r *FakeRunner) ReadMainThread(ctx context.Context, box Sandbox, ask MainThreadAsk) MainThreadReading {

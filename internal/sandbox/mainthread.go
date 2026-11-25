@@ -15,11 +15,11 @@ import (
 // bounds its count: Claude Code's, Codex's, OpenCode's, Gemini CLI's, Qwen
 // Code's. It is read ONCE, on the box's host, before the take, every reading
 // sharing the read ([Coordinator.readMainThread], [MainThreadAsk]): the count
-// and next request, written after the take in the collection's one write of
-// the job's end ([EndRead]), and a hook's serves' receipts ([TakeReceipts]):
-// Claude Code's, Gemini CLI's, Grok Build's, Muse Code's. A stop's and a
-// loss's read ask receipts and no count: no relaunch carries their round on in
-// place. A job not over is counted unread, its receipts read.
+// and next request, written in the collection's one write of the job's end
+// ([EndRead]); a serve's receipts ([TakeReceipts]), off the thread for Claude
+// Code's, Gemini CLI's, Grok Build's and Muse Code's hooks, else off the
+// session record; every runner's newest summary ([ThreadSummary]). A stop's
+// and a loss's read ask no count. A job not over is counted unread.
 
 // MainThreadReadWait bounds the read of a job's main thread at its collection
 // ([Coordinator.readMainThread]): one wait every reading of the read shares.
@@ -74,6 +74,10 @@ type MainThreadAsk struct {
 	// Ended says the job's harness ended its own run ([capturePoint.cutOff]):
 	// only a thread so ended can prove a take absent.
 	Ended bool
+	// Summary asks for the newest compaction summary on the job's main
+	// thread as its harness wrote it ([ThreadSummary]), which the read keeps
+	// scrubbed ([summaryKeeper]) or not at all.
+	Summary bool
 }
 
 // AskedTake is one hook's serve whose receipt is asked: its take
@@ -124,6 +128,35 @@ type MainThreadReading struct {
 	Next NextRequest
 	// Receipts is what the session shows of the takes asked.
 	Receipts TakeReceipts
+	// Summary is the thread's newest compaction summary where it was asked.
+	Summary ThreadSummary
+}
+
+// ThreadSummary is the newest compaction summary on a job's main thread: as
+// its harness wrote it where a read found it, which nothing keeps, logs or
+// sends as it is, and as a box read keeps it once its runner kept it
+// ([summaryKeeper]): scrubbed, redacted, and held to
+// executorkeep.SummaryMaxBytes by its end (executorkeep.SummaryTail). The
+// zero value is a thread holding none, or a read that asked none.
+type ThreadSummary struct {
+	// Text is the summary, "" where there is none: the harness's model wrote
+	// it from what others wrote.
+	Text string `untrusted:"fence"`
+	// Bytes is the whole summary's size, as kept before the bound where it
+	// was kept; Cut says Text is its last part.
+	Bytes int64
+	Cut   bool
+	// Unread is why the read could not say whether the thread holds one,
+	// "" where it could.
+	Unread string
+}
+
+// summaryKeeper is a [Runner] that keeps the summary its main-thread read
+// found ([ThreadSummary]): scrubbed of scrub, the values the job's capture is
+// scrubbed of, by value and by shape as its capture's text is, and held to
+// executorkeep.SummaryMaxBytes by its end. A runner that is none keeps none.
+type summaryKeeper interface {
+	KeepSummary(found ThreadSummary, scrub []string) ThreadSummary
 }
 
 // askedTakes is every hook's serve on run's copy whose receipt only its job's
@@ -185,11 +218,12 @@ func askedBoundary(boundary string) bool {
 // ([askedTakes]). A job not over, and one whose harness did not end its own
 // run where the runner counts no cut-off copy ([ThreadTraits.CountsCutOff]),
 // are counted [CountUnread] with no count read. The count carries the least window the run
-// reported ([Result.ReportedWindow]). Held within [Coordinator.mainThreadWait],
+// reported ([Result.ReportedWindow]). Every read asks the newest summary where
+// summary says to ([Coordinator.asksSummary]). Held within [Coordinator.mainThreadWait],
 // armed here: past it the read ends where it is, the count is [CountUnread]
 // and no receipt is decided; a marked count is logged.
 func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sandbox, runner Runner,
-	read BoxRead, at capturePoint, result Result) MainThreadReading {
+	read BoxRead, at capturePoint, result Result, summary bool) MainThreadReading {
 
 	traits := ThreadTraitsOf(runner)
 	if !asksMainThread(run, read, traits) {
@@ -198,13 +232,13 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 	counts, uncounted := read == BoxReadCollect && traits.Reads, !traits.CountsCutOff
 	counted := counts && at.final && (!uncounted || !at.cutOff)
 	ask := MainThreadAsk{Session: run.SessionRan(), Release: result.HarnessVersion, Count: counted,
-		Next: counted, Ended: !at.cutOff}
+		Next: counted, Ended: !at.cutOff, Summary: summary}
 	if asksTakeReceipts(run, traits) {
 		ask.Takes, ask.Served = askedTakes(run), servedTakes(run)
 	}
 	var reading MainThreadReading
 	reader, reads := runner.(mainThreadReader)
-	if reads && (ask.Count || len(ask.Takes) > 0) {
+	if reads && (ask.Count || len(ask.Takes) > 0 || ask.Summary) {
 		readCtx, cancel := context.WithTimeout(ctx, c.mainThreadWait)
 		reading = reader.ReadMainThread(readCtx, box, ask)
 		cancel()
@@ -271,12 +305,13 @@ func unboundedBecause(mark CountMark) string {
 
 // asksMainThread reports whether read of run's box asks the job's main thread
 // anything, its runner's read settling traits: the collection of a job whose
-// runner reads its thread, and any read of a box whose copy holds a serve its
-// thread settles ([asksTakeReceipts]). [BoxReadBudget] holds the read's wait
+// runner reads its thread, any read of a box whose copy holds a serve its
+// thread settles ([asksTakeReceipts]), and any read of a job whose runner reads
+// summaries ([ThreadTraits.Summaries]). [BoxReadBudget] holds the read's wait
 // for exactly these.
 func asksMainThread(run PendingRun, read BoxRead, traits ThreadTraits) bool {
 	collects := read == BoxReadCollect && traits.Reads
-	return collects || asksTakeReceipts(run, traits)
+	return collects || traits.Summaries || asksTakeReceipts(run, traits)
 }
 
 // asksTakeReceipts reports whether the read of run's box asks its job's

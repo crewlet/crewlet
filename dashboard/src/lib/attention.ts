@@ -43,6 +43,7 @@ import { fmtAt, possessive } from "./format.ts";
 import { callsOf, turnById } from "./seatturn.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 import { andList } from "./words.ts";
+import { inboxRowKey, type InboxRowKey } from "~/app/routes.ts";
 import type { AdvisorNotice } from "~/protocol/advisor.ts";
 import type { AdvisorNoticesAnswer } from "~/protocol/advisorFindings.ts";
 import { alarmHome, alarmTitle, alarmsLink, drawnOnBackups } from "./alarms.ts";
@@ -167,8 +168,8 @@ export function conditionsToDecide(queue: readonly Attention[]): Attention[] {
 }
 
 /** A condition's row in the Inbox, as `row=` names it. */
-export function conditionKey(id: string): string {
-  return `condition:${id}`;
+export function conditionKey(id: string): InboxRowKey {
+  return inboxRowKey("condition", id);
 }
 
 /** Where a condition is answered, and what the button that opens it says. */

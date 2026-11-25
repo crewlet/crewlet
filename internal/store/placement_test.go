@@ -192,6 +192,12 @@ var nodeEstatePlacements = []placement{
 			"every standing alarm again. Each node evaluates its own alarms.",
 	},
 	{
+		Table: "mcp_instance_down",
+		Why: "When each tool server instance this node holds stopped serving, " +
+			"read back so an outage keeps its start across a restart. Each " +
+			"node runs and dates its own instances.",
+	},
+	{
 		Table: "llm_sign_in_window",
 		Why: "The newest reading of each sign-in's limit windows this node's " +
 			"calls heard, read back at an apply so an LLM fleet balances on what " +
