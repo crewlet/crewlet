@@ -123,11 +123,11 @@
 //     reader reads them, a case-exact `<key>:` line, indentation trimmed,
 //     whose value, split on `,` or read as `[a, b]`, quotes trimmed, is the
 //     entries. `claude` (2.1.310): s in its own case, dot entries walked, a
-//     directory link followed while it stays in the checkout, each directory
-//     once, an empty file skipped; frontmatter read as YAML, a file whose
-//     frontmatter is not valid YAML left out (it never loads), a key's value a
-//     string or a list of strings split on `,`, trimmed, another kind holding
-//     no entry. A tree past 8 directories deep, 1,024 entries or 32 MiB is
+//     directory link, dir itself included, followed while it stays in the
+//     checkout, each directory once, an empty file skipped; frontmatter read
+//     as YAML, a file whose frontmatter is not valid YAML left out (it never
+//     loads), a key's value a string or a list's strings, split on `,`,
+//     trimmed, its other entries and another kind holding none. A tree past 8 directories deep, 1,024 entries or 32 MiB is
 //     left out whole, said: Copilot walks 9 levels and Claude Code 10 at least
 //     (measured), so a deeper tree is the gap;
 //     `importInstructions` for a harness that reads them itself (Claude Code),

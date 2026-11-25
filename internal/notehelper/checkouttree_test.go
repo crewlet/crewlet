@@ -276,14 +276,14 @@ func TestATreeHandsItsFilesInClaudeCodesWalk(t *testing.T) {
 }
 
 // A SCOPED RULE IS LEFT OUT AS CLAUDE CODE READS ITS FRONTMATTER, each case a
-// measured row of 2.1.310 and 2.1.330 (B2a's C4 rows): handed where it loads
-// at a session's start, left out where it loads only on a matching path or
-// never (frontmatter that is not valid YAML).
+// measured row of 2.1.310 and 2.1.330 (B2a's C4 rows; the mixed list, review
+// P2-B, on 2.1.310): handed where it loads at a session's start, left out
+// where it loads only on a matching path or never (invalid YAML).
 //
 // Mutation: read the frontmatter line by line, take `Paths` for paths, read a
-// number, a bool or a map as a pattern, count `**/*` as matching every path,
-// skip the `,` split or the trim, or hand a file whose YAML is invalid, and a
-// row goes red.
+// number, a bool or a map as a pattern, drop a list's strings beside another
+// entry, count `**/*` as matching every path, skip the `,` split or the trim,
+// or hand a file whose YAML is invalid, and a row goes red.
 func TestAScopedRuleIsLeftOutAsClaudeCodeReadsItsFrontmatter(t *testing.T) {
 	t.Parallel()
 	handed := []string{"X\n", "---\ndescription: only\n---\nX\n", "---\nglobs: src/**\n---\n",
@@ -295,7 +295,7 @@ func TestAScopedRuleIsLeftOutAsClaudeCodeReadsItsFrontmatter(t *testing.T) {
 		"---\npaths: \"src/**/*.ts\"\n---\n", "---\npaths: [\"**/*\"]\n---\n", "---\npaths: [\"*\"]\n---\n",
 		"---\npaths: [\"**/\"]\n---\n", "---\npaths: [\"**\", \"docs/**\"]\n---\n",
 		"---\npaths: \" src/**/*.ts \"\n---\n", "---\npaths: \"src/**/*.ts, docs/**\"\n---\n",
-		"---\npaths: [unclosed\n---\nX\n"}
+		"---\npaths: [unclosed\n---\nX\n", "---\npaths: [\"src/**\", 5]\n---\nMIXED\n"}
 	scope := *claudeRules().Tree.Scoped
 	for _, file := range handed {
 		if claudeScopedAway([]byte(file), scope) {
@@ -306,5 +306,48 @@ func TestAScopedRuleIsLeftOutAsClaudeCodeReadsItsFrontmatter(t *testing.T) {
 		if !claudeScopedAway([]byte(file), scope) {
 			t.Errorf("%q is handed, want it left out: Claude Code loads it only on a matching path, or never", file)
 		}
+	}
+}
+
+// A LINKED RULES DIRECTORY IS WALKED AS CLAUDE CODE WALKS IT: a .claude/rules
+// that is a link to a directory inside the checkout is the tree (2.1.310 loads
+// its rules, measured, row linkroot of review P2-B); one leading out of the
+// checkout hands nothing.
+//
+// Mutation: check the tree's root without following the link, or follow it
+// out of the checkout, and a row goes red.
+func TestALinkedRulesDirectoryIsWalkedAsClaudeCodeWalksIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		inside bool
+	}{{"inside the checkout", true}, {"out of the checkout", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			root, outside := t.TempDir(), t.TempDir()
+			target := outside
+			if tc.inside {
+				target = filepath.Join(root, "shared-rules")
+			}
+			writeTree(t, target, map[string]string{"root.md": "ROOTLINK\n"})
+			if err := os.MkdirAll(filepath.Join(root, ".claude"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, filepath.Join(root, ".claude/rules")); err != nil {
+				t.Fatal(err)
+			}
+			real, err := filepath.EvalSymlinks(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ""
+			if tc.inside {
+				want = "@" + filepath.Join(real, "root.md")
+			}
+			var said bytes.Buffer
+			if got := rootImports(root, []instructionSlot{claudeRules()}, &skips{stderr: &said}); got != want {
+				t.Errorf("the linked tree imports %q, want %q (saying %q)", got, want, said.String())
+			}
+		})
 	}
 }

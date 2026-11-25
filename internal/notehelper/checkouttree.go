@@ -144,12 +144,11 @@ func treeTexts(root string, t instructionTree, said *skips) []treeText {
 		return nil
 	}
 	dir := filepath.Join(realRoot, t.Tree)
-	info, err := os.Lstat(dir)
-	if err != nil || !info.IsDir() {
-		return nil
-	}
 	w := treeWalk{realRoot: realRoot, suffix: t.Suffix, rules: t.Form.rules(), entries: maxCopyFiles,
 		bytes: maxCopyBytes, walked: map[string]bool{}}
+	if !w.rootDir(dir) {
+		return nil
+	}
 	if err = w.walk(dir, 0); err != nil {
 		said.say("the instructions under %s are left out: %v", filepath.Join(root, t.Tree), err)
 		return nil
@@ -230,6 +229,23 @@ func (w *treeWalk) walk(dir string, depth int) error {
 	return nil
 }
 
+// rootDir reports whether dir, the tree's own directory, is one the walk
+// takes: a directory, or, for a form that follows directory links, a link to
+// a directory inside the checkout, as Claude Code 2.1.310 follows a linked
+// .claude/rules (measured).
+func (w *treeWalk) rootDir(dir string) bool {
+	if !w.rules.dirLinks {
+		info, err := os.Lstat(dir)
+		return err == nil && info.IsDir()
+	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil || !within(w.realRoot, real) {
+		return false
+	}
+	info, err := os.Stat(real)
+	return err == nil && info.IsDir()
+}
+
 // named reports whether a file's name ends in the walk's suffix, in its own
 // case where the form's rules say so, else in any.
 func (w *treeWalk) named(name string) bool {
@@ -308,10 +324,8 @@ func copilotScopedAway(raw []byte, s treeScope) bool {
 // claudeScopedAway reports whether raw is a file Claude Code 2.1.310 does not
 // load at a session's start (measured, B2a's C4 rows): its frontmatter is not
 // valid YAML, which it never loads, or the first of s's keys present in it
-// (case-exact) holds a string or a list of strings whose `,`-separated parts,
-// trimmed, the empty ones dropped, hold an entry outside s.Whole, which it
-// loads only on a path that entry matches. A value of any other kind scopes
-// nothing.
+// (case-exact) holds patterns ([claudePatterns]) with an entry outside
+// s.Whole, which it loads only on a path that entry matches.
 func claudeScopedAway(raw []byte, s treeScope) bool {
 	front, ok := frontmatter(raw)
 	if !ok {
@@ -336,9 +350,10 @@ func claudeScopedAway(raw []byte, s treeScope) bool {
 	return false
 }
 
-// claudePatterns is a frontmatter value as Claude Code's patterns: a string's,
-// or each string's of a list of strings, `,`-separated parts, trimmed, the
-// empty ones dropped; none for a value of another kind.
+// claudePatterns is a frontmatter value as Claude Code's patterns: a
+// string's, or each string's of a list, `,`-separated parts, trimmed, the
+// empty ones dropped; a list's other entries are dropped (measured: `["src/**",
+// 5]` scopes the rule to src/**), and a value of another kind holds none.
 func claudePatterns(v *yaml.Node) []string {
 	strs := []*yaml.Node{v}
 	if v.Kind == yaml.SequenceNode {
@@ -347,7 +362,7 @@ func claudePatterns(v *yaml.Node) []string {
 	var patterns []string
 	for _, n := range strs {
 		if n.Kind != yaml.ScalarNode || n.Tag != "!!str" {
-			return nil
+			continue
 		}
 		for _, part := range strings.Split(n.Value, ",") {
 			if p := strings.TrimSpace(part); p != "" {
