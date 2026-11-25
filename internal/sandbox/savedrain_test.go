@@ -17,7 +17,7 @@ import (
 func everyCell(t *testing.T, rig *coordRig) {
 	t.Helper()
 	every, err := NewManager(ManagerOptions{
-		Providers:        map[Placement]Provider{Direct: rig.provider, Container: rig.provider, E2B: rig.provider},
+		Providers:        map[Placement]Provider{Direct: rig.provider, Container: rig.provider},
 		Runners:          map[string]Runner{"claude-code": rig.runner},
 		DefaultPlacement: Direct,
 	})
@@ -41,8 +41,8 @@ func reshape(t *testing.T, rig *coordRig, turnID string, edit func(*PendingRun))
 // A DRAIN SAVES EVERY MOVED DIRECT JOB ON ITS HOST, MOST STALE FIRST: of the
 // running jobs, a draining node packs the Direct ones it launched whose
 // sessions moved, the one never saved before the one saved an interval ago,
-// and each lands. An unmoved one is not packed; a container's, an E2B one and
-// another node's are not touched; and a save of a turn already under way is
+// and each lands. An unmoved one is not packed; a container's and another
+// node's are not touched; and a save of a turn already under way is
 // waited for, never doubled.
 //
 // Mutation: take a container's job too, sort the other way, start a second
@@ -53,12 +53,11 @@ func TestADrainSavesEveryMovedDirectJobOnItsHostMostStaleFirst(t *testing.T) {
 		rig, _, _ := savingRig(t, memory.NewFleet(), newTakerStore())
 		everyCell(t, rig)
 		boxes, turnOf := map[string]string{}, map[string]string{}
-		for _, turn := range []string{"never", "long-ago", "unmoved", "busy", "container", "e2b", "elsewhere"} {
+		for _, turn := range []string{"never", "long-ago", "unmoved", "busy", "container", "elsewhere"} {
 			box := rig.launchKept(t, turn).SandboxID
 			boxes[turn], turnOf[box] = box, turn
 		}
 		reshape(t, rig, "container", func(row *PendingRun) { row.Placement = string(Container) })
-		reshape(t, rig, "e2b", func(row *PendingRun) { row.Placement = string(E2B) })
 		reshape(t, rig, "elsewhere", func(row *PendingRun) { row.LaunchNode = "node-b" })
 		rig.now = rig.now.Add(rigSaveInterval)
 		for _, turn := range []string{"long-ago", "unmoved"} {
@@ -139,18 +138,18 @@ func TestADrainAdmitsNoPeriodicSave(t *testing.T) {
 	inBubble(t, func(t *testing.T) {
 		rig, _, _ := savingRig(t, memory.NewFleet(), newTakerStore())
 		everyCell(t, rig)
-		// E2B JOBS, which a drain leaves to the peer that takes their duty
-		// up, so the drain itself saves neither.
+		// CONTAINER JOBS, which outlive the drain in their containers, so
+		// the drain itself saves neither.
 		for _, turn := range []string{"before", "after"} {
 			rig.launchKept(t, turn)
-			reshape(t, rig, turn, func(row *PendingRun) { row.Placement = string(E2B) })
+			reshape(t, rig, turn, func(row *PendingRun) { row.Placement = string(Container) })
 		}
 		rig.now = rig.now.Add(rigSaveInterval)
 		if !offerOf(t, rig, "before") {
-			t.Fatal("the premise: an E2B job due for a save was offered none")
+			t.Fatal("the premise: a container job due for a save was offered none")
 		}
 		if picked := rig.coordinator.saveHosted(t.Context()); len(picked) != 0 {
-			t.Fatalf("the premise: the drain saved %d jobs, and an E2B job is none of its", len(picked))
+			t.Fatalf("the premise: the drain saved %d jobs, and a container job is none of its", len(picked))
 		}
 		if running := rig.coordinator.offerSave(t.Context(), rig.get("after"), rig.runner); running != nil {
 			<-running.ended

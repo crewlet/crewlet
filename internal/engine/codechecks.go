@@ -27,12 +27,10 @@ import (
 // buildChecks builds this node's check runner and registers the home's sweep
 // with its home loop: over the router's code seam and git orders, the sandbox
 // catalogue and epoch read at every walk and attempt, Gitlet's check tokens,
-// container cells of gitlet.max_checks of this machine's cores, remote cells
-// held to the company's caps on the coordination store (code.checks.remote),
-// nudged by a watch on this node's code log. BUILT here, STARTED beside the
-// home's loop ([Engine.startNativeDuties]), stopped FIRST in Gitlet's bounded
-// stop, before that loop and the host its boxes clone from
-// ([native.stopGitletHost]).
+// gitlet.max_checks containers of this machine's cores, nudged by a watch on
+// this node's code log. BUILT here, STARTED beside the home's loop
+// ([Engine.startNativeDuties]), stopped FIRST in Gitlet's bounded stop, before
+// that loop and the host its boxes clone from ([native.stopGitletHost]).
 //
 // A NODE WITHOUT CREWLET_BOX_GIT_URL RUNS NO CHECK, its boxes' only way to
 // Gitlet; the sweep needs no box. An error fails Gitlet's build.
@@ -41,7 +39,7 @@ func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *gitlet
 
 	seam := e.router.Code()
 	sweeper, err := checkrun.NewSweeper(checkrun.SweeperOptions{Estate: seam, Order: e.router,
-		Boxes: e.checkBoxes, Poll: checkrun.CheckPoll})
+		Poll: checkrun.CheckPoll})
 	if err != nil {
 		return nil, err
 	}
@@ -58,9 +56,6 @@ func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *gitlet
 		NodeID: nodeID, Estate: seam, Order: e.router, Boxes: e.checkBoxes, Company: e.checkCompany,
 		Tokens: checkTokens{tokens: e.checkTokens}, GitBase: e.boxGitURL, CodeBase: checkCodeBase(e.boxGitURL),
 		Slots: boot.Gitlet.MaxChecksFor(runtime.GOMAXPROCS(0)), Timing: checkrun.Production(),
-		// THE COMPANY'S REMOTE CAPS are the coordination store's: a slot
-		// leased for each remote box, its minutes on the fleet's counter.
-		Leases: e.backends.Coord, Minutes: e.backends.Fleet,
 		Nudges: checkNudges{nudges: codeNudges{log: codeLog.log, runner: codeLog.runner}}, Metrics: e.metrics,
 		Unread: unreadAnywhere,
 	}

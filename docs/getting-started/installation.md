@@ -36,12 +36,12 @@ host, executable by the engine's user and on its `PATH` (or named by path with
 | Open models on any provider, a local server included | `opencode` | `opencode` | **OpenCode 2.3.2**: `@opencode/cli` on npm, the one release supported. Not 1.x's `opencode-ai`, which cannot run the engine's profile |
 
 [Supported harnesses](../concepts/llm-backends.md#supported-harnesses) lists the rest.
-Only `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `grok`, `muse-code`, `kimi-code`, `hermes` and `pi` can run a seat's **executor** (its harness's
+Only `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `cursor-agent`, `copilot`, `grok`, `muse-code`, `kimi-code`, `hermes` and `pi` can run a seat's **executor** (its harness's
 own run in a [code sandbox](../concepts/code-sandbox.md) box), so every agent
 seat needs one of them in its `llm` chain; the others serve the reviewer,
 workers and side passes. The executor's harness runs in the box, not as the
 engine's child: on the engine host for a `direct` cell, inside the image of a
-`container` cell or the template of an `e2b` one, which must carry it too.
+`container` cell, which must carry it too.
 
 In a fleet, install it on every node whose `node.roles` include `seats` (run
 the turns) or `workers` (run the learning passes on each seat's auxiliary
@@ -73,8 +73,8 @@ USER crewlet
 `2.1.263` is pinned exactly. Claude Code constraints:
 
 - The hooks a seat's executor takes a person's notes through need 2.1.163 or
-  later (an older release runs without them); they were measured on 2.1.263 and
-  2.1.310.
+  later (a run on an older release is refused); they were measured on 2.1.263
+  and 2.1.310.
 - The `claude-code` profile's flags, output paths and limit sentences were
   measured on 2.1.303 and 2.1.310.
 - Take a newer release when `crewlet llm doctor` passes against it.
@@ -94,7 +94,7 @@ A box packs and restores a session with `tar`, `gzip` and a POSIX userland:
 `find`, `ls`, `wc`, `sed`, `grep`, `head`, `tail`, `cksum` and `touch` among its
 tools, and a `sleep` that takes a tenth of a second. The published image
 (`debian:trixie-slim`) carries all of them for a `direct` cell; a `container`
-image or an `e2b` template must too
+image must too
 ([Bring your own image](../concepts/code-sandbox.md#bring-your-own-image)).
 Give the container a volume for the state directory
 (`CREWLET_LLM_HARNESS_HOME=/var/lib/crewlet/llm-harness`, say) so a login

@@ -122,7 +122,7 @@ rounds are the CLI's own cap.
 How a phase's tools reach its CLI ([ADR-0049](0049-a-phases-tools-reach-its-cli-as-one-mcp-server.md),
 amended by this record), how a box reaches its run's tools through any node
 ([ADR-0056](0056-a-box-reaches-its-run-through-any-node.md)), and which node
-drives a box in a local cell
+drives a box
 ([ADR-0065](0065-a-local-box-is-driven-by-the-node-that-launched-it.md)).
 Where each cell runs and how a box is provisioned are `internal/sandbox`'s.
 

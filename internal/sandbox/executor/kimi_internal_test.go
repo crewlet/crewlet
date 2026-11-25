@@ -96,7 +96,7 @@ func TestALaunchedKimiRunReadsAsItsAnswerSpendAndNote(t *testing.T) {
 			t.Errorf("%s: the transcript does not show the note:\n%s", release, res.Transcript)
 		}
 		held, err := kimiNotesHeld(t.Context(), bytes.NewReader(kimiFixture(t, release, "launched.wire.jsonl")),
-			kimiServed(kimiSteeredInbox))
+			kimiServed(kimiSteeredInbox), nil)
 		if err != nil || !slices.Equal(held, []string{kimiSteeredInbox}) {
 			t.Fatalf("%s: held = %v (%v), want the note", release, held, err)
 		}
@@ -262,7 +262,7 @@ func TestAKimiNoteIsConfirmedOnlyOnceARequestCarriedItPlain(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			held, err := kimiNotesHeld(t.Context(), bytes.NewReader(raw), kimiServed(tc.inbox, "never"))
+			held, err := kimiNotesHeld(t.Context(), bytes.NewReader(raw), kimiServed(tc.inbox, "never"), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -288,12 +288,12 @@ func TestAKimiRecordAnswersInServeOrderAndNotOffATornLine(t *testing.T) {
 	}
 	usage := `{"type":"usage.record","agentId":"main","usage":{"inputOther":1},"usageScope":"turn"}`
 	wire := note("one") + note("two") + usage + "\n"
-	held, err := kimiNotesHeld(t.Context(), strings.NewReader(wire), kimiServed("two", "one", "two"))
+	held, err := kimiNotesHeld(t.Context(), strings.NewReader(wire), kimiServed("two", "one", "two"), nil)
 	if err != nil || !slices.Equal(held, []string{"two", "one"}) {
 		t.Fatalf("held = %v (%v), want two then one, once each", held, err)
 	}
 	torn := note("one") + usage
-	if held, err := kimiNotesHeld(t.Context(), strings.NewReader(torn), kimiServed("one")); err != nil || len(held) != 0 {
+	if held, err := kimiNotesHeld(t.Context(), strings.NewReader(torn), kimiServed("one"), nil); err != nil || len(held) != 0 {
 		t.Fatalf("held = %v (%v) off a record whose last line was cut off", held, err)
 	}
 }
@@ -314,7 +314,7 @@ func TestAKimiLineReadOnlyInPartCountsByItsType(t *testing.T) {
 		if name == "a compaction" {
 			wire += usage
 		}
-		held, err := kimiNotesHeld(t.Context(), strings.NewReader(wire), kimiServed("one"))
+		held, err := kimiNotesHeld(t.Context(), strings.NewReader(wire), kimiServed("one"), nil)
 		if err != nil || len(held) != 0 {
 			t.Errorf("%s that does not decode whole: held = %v (%v), want none", name, held, err)
 		}
@@ -339,17 +339,17 @@ func TestAKimiNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 		}
 		return sandbox.ExecResult{Stdout: found}, nil
 	}
-	held, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: session}, kimiServed(kimiSteeredInbox))
+	held, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: session}, kimiServed(kimiSteeredInbox), nil)
 	if err != nil || !slices.Equal(held, []string{kimiSteeredInbox}) {
 		t.Fatalf("held = %v (%v), want the note", held, err)
 	}
 	for _, out := range []string{"", record + "\n" + record + "2"} {
 		found = out
-		if _, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: session}, kimiServed(kimiSteeredInbox)); err == nil {
+		if _, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: session}, kimiServed(kimiSteeredInbox), nil); err == nil {
 			t.Errorf("records %q decided the take", out)
 		}
 	}
-	if _, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: "../x"}, nil); err == nil {
+	if _, err := (Kimi{}).notesHeld(t.Context(), box, Session{ID: "../x"}, nil, nil); err == nil {
 		t.Error("a session id no Kimi run names was looked for")
 	}
 }
@@ -432,13 +432,13 @@ func TestKimisScriptAddsTheReportedSessionsRecords(t *testing.T) {
 }
 
 // A KIMI RUN IS PINNED TO ITS HOME AND POSTURE, AND KEEPS ONLY ITS ENTRY'S
-// ROUTE: home, no update, no telemetry, three attempts a request, the cap a
-// turn's steps; a key-signed run's model as its env model's name; and every
-// routing variable the entry did not set unset, never a pinned one; the box's
-// telemetry export variables removed, as Kimi exports none.
+// ROUTE: home, its workspace trusted, no update, no telemetry, three attempts
+// a request, the cap a turn's steps; a key-signed run's model as its env model's name; and every
+// routing variable the entry did not set unset, never a pinned one. (The
+// telemetry's variables: TestEveryRunnersShellHoldsWhatItsHarnessIsHanded.)
 //
-// Mutation: drop the cap's pin, pin the model without a key, unset the entry's
-// own base URL, or keep the telemetry export variables — the case fails.
+// Mutation: drop the cap's or the trust's pin, pin the model without a key, or
+// unset the entry's own base URL: the case fails.
 func TestAKimiRunIsPinnedToItsHomeAndItsEntrysRoute(t *testing.T) {
 	paths := PathsFor(sandbox.NewFakeSandbox("b"))
 	keyed := sandbox.RunRequest{Model: "kimi-k3", Limits: sandbox.Limits{MaxTurns: 7},
@@ -447,9 +447,9 @@ func TestAKimiRunIsPinnedToItsHomeAndItsEntrysRoute(t *testing.T) {
 	for _, p := range (Kimi{}).Pins(t.Context(), keyed, paths) {
 		pins[p.Name] = p.Value
 	}
-	want := map[string]string{"KIMI_CODE_HOME": paths.KimiHome(), "KIMI_CODE_NO_AUTO_UPDATE": "1",
-		"KIMI_DISABLE_TELEMETRY": "1", "KIMI_LOOP_MAX_ATTEMPTS_PER_STEP": "3", "KIMI_LOOP_MAX_STEPS_PER_TURN": "7",
-		kimiModelEnv: "kimi-k3"}
+	want := map[string]string{"KIMI_CODE_HOME": paths.KimiHome(), "KIMI_CODE_TRUST_WORKSPACE": "1",
+		"KIMI_CODE_NO_AUTO_UPDATE": "1", "KIMI_DISABLE_TELEMETRY": "1", "KIMI_LOOP_MAX_ATTEMPTS_PER_STEP": "3",
+		"KIMI_LOOP_MAX_STEPS_PER_TURN": "7", kimiModelEnv: "kimi-k3"}
 	for name, value := range want {
 		if pins[name] != value {
 			t.Errorf("%s pinned %q, want %q", name, pins[name], value)
@@ -474,12 +474,8 @@ func TestAKimiRunIsPinnedToItsHomeAndItsEntrysRoute(t *testing.T) {
 	if !slices.Contains(kimiRoutingOff(login), kimiModelEnv) {
 		t.Error("a login's run keeps an env model the image set")
 	}
-	for _, name := range []string{"KIMI_CODE_TRUST_WORKSPACE", "KIMI_LOOP_MAX_STEPS_PER_TURN",
-		sandbox.OtelUpstreamEndpointVar, sandbox.OtelUpstreamHeadersVar, "OTEL_EXPORTER_OTLP_PROTOCOL",
-		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_HEADERS", "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"} {
-		if !slices.Contains((Kimi{}).Output(paths).Unset, name) {
-			t.Errorf("%s is not removed whatever set it", name)
-		}
+	if !slices.Contains((Kimi{}).Output(paths).Unset, "KIMI_LOOP_MAX_STEPS_PER_TURN") {
+		t.Error("KIMI_LOOP_MAX_STEPS_PER_TURN is not removed whatever set it")
 	}
 }
 
@@ -524,14 +520,17 @@ func TestAWebDeniedKimiRunHasNoWebToolOrService(t *testing.T) {
 }
 
 // KIMI'S CONFIG IS ITS RUN'S OWN: a profile of a name no other run has, its
-// allowlist every default tool but the two that ask a person and every engine
+// allowlist every default tool but the two that ask a person and every MCP
 // server's tools, Kimi's prompt first and the run's text after it, told of
-// notes only where it reads them; the home's MCP servers with their bearer, the
-// engine's wait and no deferral; the driver as embedded; and settings naming
-// the profile, the login's model, the notes route and the report.
+// notes only where it reads them; the run's MCP servers in the home's file
+// with their bearer, the engine's wait, their own start bound (which a home's
+// `[mcp] startup_timeout_ms` would otherwise cut) and no deferral; the driver as
+// embedded; and settings naming the profile, the login's model, the notes
+// route, the report and the servers the guard holds to that file.
 //
 // Mutation: put the text before ${base_prompt}, list AskUserQuestion, defer
-// the bridge, or name a key-signed run's model in the session — the case fails.
+// the bridge, drop its start bound, name a key-signed run's model in the
+// session, or leave the guard's servers out: the case fails.
 func TestKimiWriteConfigWritesTheRunsOwnProfileServersAndDriver(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
@@ -548,7 +547,8 @@ func TestKimiWriteConfigWritesTheRunsOwnProfileServersAndDriver(t *testing.T) {
 	readJSON(t, box, paths.KimiSettings(), &settings)
 	if !strings.HasPrefix(settings.Profile, "crewlet-") || settings.Model != req.Model || settings.Thinking != "high" ||
 		settings.Notes != req.Steer.URL || settings.Report != paths.SessionReport() ||
-		settings.Staging != paths.sessionReportStaging() {
+		settings.Staging != paths.sessionReportStaging() || !slices.Equal(settings.Servers, []string{"crewlet"}) ||
+		settings.MCPConfig != paths.KimiMCPConfig() {
 		t.Errorf("settings = %+v", settings)
 	}
 	profile, err := box.ReadFile(t.Context(), paths.KimiAgents()+"/"+kimiProfileDir+"/"+settings.Profile+".md")
@@ -556,7 +556,7 @@ func TestKimiWriteConfigWritesTheRunsOwnProfileServersAndDriver(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(profile)
-	if !strings.Contains(text, "name: "+settings.Profile+"\n") || !strings.Contains(text, `  - "mcp__crewlet__*"`) ||
+	if !strings.Contains(text, "name: "+settings.Profile+"\n") || !strings.Contains(text, `  - "mcp__*"`) ||
 		strings.Contains(text, "AskUserQuestion") || strings.Contains(text, "ExitPlanMode") ||
 		!strings.Contains(text, "  - Bash\n") {
 		t.Errorf("profile:\n%s", text)
@@ -571,6 +571,7 @@ func TestKimiWriteConfigWritesTheRunsOwnProfileServersAndDriver(t *testing.T) {
 	readJSON(t, box, paths.KimiMCPConfig(), &mcp)
 	bridge := mcp.Servers["crewlet"]
 	if bridge["url"] != "http://engine:1/mcp" || bridge["deferred"] != false || bridge["toolTimeoutMs"] != float64(600000) ||
+		bridge["startupTimeoutMs"] != float64(kimiServerStartMs) || settings.ServerStartMs != kimiServerStartMs ||
 		bridge["headers"].(map[string]any)["Authorization"] != "Bearer t" {
 		t.Errorf("the bridge reads %v", bridge)
 	}
@@ -605,31 +606,25 @@ func readJSON(t *testing.T, box sandbox.Sandbox, file string, v any) {
 	}
 }
 
-// A KIMI RUN'S ARTEFACTS ARE ITS OWN and the home's skills, personal
-// instructions, plugins and saved trust: its profile directory, so no earlier
+// A KIMI RUN'S ARTEFACTS ARE ITS OWN: its profile directory, so no earlier
 // run's profile is a later run's subagent, and its driver files, which hold
-// the notes route's token; never the home's sessions or login.
+// the notes route's token; never the home's skills, instructions, plugins,
+// MCP servers, sessions or login, or the home's own MCP file it holds and
+// the record of the run's servers, which a run cut off leaves for the next.
 //
-// Mutation: leave the profile directory or any of the home's places, or clear
-// the home, its sessions or its login.
+// Mutation: leave the profile directory, or clear the home or any of its own
+// places: the case fails.
 func TestAKimiRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	paths := PathsFor(sandbox.NewFakeSandbox("b"))
 	files, dirs := (Kimi{}).artifactFiles(paths), (Kimi{}).artifactDirs(paths)
-	if !slices.Equal(dirs, []string{paths.KimiAgents() + "/crewlet", paths.KimiSkills(), paths.KimiUserSkills(),
-		paths.KimiPlugins(), paths.KimiTrust()}) ||
-		!slices.Contains(files, paths.KimiSettings()) || !slices.Contains(files, paths.KimiDriver()) ||
-		!slices.Contains(files, paths.KimiInstructions()) {
+	if !slices.Equal(dirs, []string{paths.KimiAgents() + "/crewlet"}) ||
+		!slices.Contains(files, paths.KimiSettings()) || !slices.Contains(files, paths.KimiDriver()) {
 		t.Fatalf("artifacts = %v %v", files, dirs)
 	}
-	for _, name := range paths.KimiUserInstructions() {
-		if !slices.Contains(files, name) {
-			t.Errorf("the clear leaves %s", name)
-		}
-	}
 	for _, f := range append(files, dirs...) {
-		if f == paths.KimiHome() || f == paths.KimiSessions() || f == paths.KimiHome()+"/credentials" ||
-			f == paths.KimiConfig() || strings.HasPrefix(paths.KimiHome()+"/credentials/kimi-code.json", f+"/") {
-			t.Errorf("the clear removes %s", f)
+		if !strings.HasPrefix(f, paths.WorkDir()+"/") && f != paths.KimiAgents()+"/crewlet" ||
+			f == paths.KimiHomeMCPConfig() || f == paths.KimiMCPOurs() {
+			t.Errorf("the clear removes %s, which is not the run's own", f)
 		}
 	}
 }

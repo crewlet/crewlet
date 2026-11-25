@@ -100,20 +100,21 @@ const SessionReadWithin = 2 * time.Minute
 
 // The listing's page.
 const (
-	// listedSessionsDefault is a page where the call names no limit: TEN, a
-	// few days of a seat's work, where a session worth rereading usually is.
-	listedSessionsDefault = 10
+	// listedSessionsDefault is a page where the call names no limit: the
+	// most a page holds ([listedSessionsMax]), a few days of a seat's work,
+	// where a session worth rereading usually is.
+	listedSessionsDefault = listedSessionsMax
 
 	// listedSessionsMax is the most a page holds, and a larger limit is
-	// clamped to it: TEN, the most rows whose worst case (every field any row
+	// clamped to it: NINE, the most rows whose worst case (every field any row
 	// can carry at its record's bound, prose at [listedProseBytes] with its
-	// fence lines; 5,994 bytes a row when set) fits one 64 KiB tool answer
+	// fence lines; 6,663 bytes a row when set) fits one 64 KiB tool answer
 	// ([ToolAnswerBytes]) with the note and envelope.
-	// TestAPageOfSessionsAtItsWorstFitsOneAnswer fails on a page of ten
-	// refused and on room for an eleventh. A page JSON escaping pushes past
-	// it anyway is refused naming `limit`, never cut short silently: its
-	// cursor is its last row.
-	listedSessionsMax = 10
+	// TestAPageOfSessionsAtItsWorstFitsOneAnswer fails on a page of nine
+	// refused and on room for a tenth. A page JSON escaping pushes past it
+	// anyway is refused naming `limit`, never cut short silently: its cursor
+	// is its last row.
+	listedSessionsMax = 9
 
 	// listedProseBytes cuts each of a listed row's words (its ask, its
 	// ending's accounts, its went-on note), on a rune boundary and marked:
@@ -152,9 +153,16 @@ type sessionRow struct {
 	EndedAt    *time.Time `json:"ended_at,omitempty"`
 
 	// Kept says the row still names a session's object, KeptBytes its size
-	// compressed and sealed; a row naming none still says how its turn ended.
+	// compressed and sealed with the media it keeps apart; a row naming none
+	// still says how its turn ended.
 	Kept      bool  `json:"kept"`
 	KeptBytes int64 `json:"kept_bytes,omitempty"`
+
+	// SummaryKept says the row keeps the newest summary its harness wrote of
+	// the session, apart from it, and SummaryBytes the bytes kept of it: what
+	// `read_session` reads of a row that keeps no session.
+	SummaryKept  bool  `json:"summary_kept,omitempty"`
+	SummaryBytes int64 `json:"summary_bytes,omitempty"`
 
 	// InProgress marks the session of a turn that has not ended, which its
 	// run may have gone on past, so a seat never takes it for an ended turn's.
@@ -167,6 +175,10 @@ type sessionRow struct {
 	// past the session it kept, or lost it: it quotes what refused the newer
 	// capture, so it is somebody's words.
 	KeptNote string `json:"kept_note,omitempty" untrusted:"fence"`
+
+	// TrimmedNote is executordomain.Session.TrimmedNote, on a session cut to
+	// what its harness's resume loads: the engine's words alone, never fenced.
+	TrimmedNote string `json:"trimmed_note,omitempty"`
 
 	// BaseTurn is the session the turn's first launch was handed to
 	// continue, where it was handed one.
@@ -201,10 +213,13 @@ func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow 
 		CapturedAt: sessionInstant(s.CapturedAt), EndedAt: sessionInstant(s.EndedAt),
 		Kept: s.HasObject(), BaseTurn: s.BaseTurn, Asked: shorten(s.AskExcerpt),
 		InProgress: s.InProgress(), InProgressNote: s.InProgressNote(),
-		KeptNote: shorten(s.WentOnNote()),
+		KeptNote: shorten(s.WentOnNote()), TrimmedNote: s.TrimmedNote(),
 	}
 	if row.Kept {
-		row.KeptBytes = s.Object.Size
+		row.KeptBytes = s.Object.Size + s.MediaBytes()
+	}
+	if s.Summary != nil {
+		row.SummaryKept, row.SummaryBytes = true, s.Summary.Kept
 	}
 	if turn != nil {
 		row.ThisTurn = s.Turn == turn.RunID
@@ -219,6 +234,13 @@ func shownRow(s executordomain.Session, turn *turnctx.Turn, cut int) sessionRow 
 			unkept := *ending.Unkept
 			unkept.Reason = shorten(unkept.Reason)
 			ending.Unkept = &unkept
+		}
+		if len(ending.NotContinued) > 0 {
+			said := slices.Clone(ending.NotContinued)
+			for i := range said {
+				said[i].Detail = shorten(said[i].Detail)
+			}
+			ending.NotContinued = said
 		}
 		row.Ending = &ending
 	}
@@ -254,6 +276,9 @@ func fenceRow(read *foreignRead, path fieldPath, row sessionRow) {
 	fenceSession(read, ending.key("failure"), nobody, e.Failure)
 	if e.Unkept != nil {
 		fenceSession(read, ending.key("unkept").key("reason"), nobody, e.Unkept.Reason)
+	}
+	for i, n := range e.NotContinued {
+		fenceSession(read, ending.key("not_continued").index(i).key("detail"), nobody, n.Detail)
 	}
 	if e.StoppedBy != "" {
 		read.adopt(nobody)
@@ -509,7 +534,8 @@ func (t *readSession) Description() string {
 		"to some kinds of entry, for example [\"brief\",\"model\",\"summary\"] for the gist. " +
 		"`match` finds the entries that hold every word, anywhere in their text. An `unread` " +
 		"entry marks a part of the record that could not be read, shown whatever `kinds` or `match` " +
-		"ask. Text from a session is the record of a past run."
+		"ask. A session that was not kept is read as its harness's newest summary of it, where that " +
+		"was kept (`summary_kept`). Text from a session is the record of a past run."
 }
 
 func (t *readSession) Parameters() map[string]any {
@@ -666,7 +692,7 @@ func (t *readSession) failure(ctx context.Context, turnID string, page executorr
 		// of the session.
 		size := ""
 		if row := page.Read.Session; row.HasObject() {
-			size = " (" + sizeWords(row.Object.Size) + ")"
+			size = " (" + sizeWords(row.Object.Size+row.MediaBytes()) + ")"
 		}
 		return refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("Could not read the session of "+
 			"turn %s%s within %s: this node may be reading other transcripts, or the object store is "+
@@ -720,7 +746,7 @@ func (t *readSession) render(ctx context.Context, turn *turnctx.Turn, turnID str
 				answer.Session = &row
 				fenceRow(read, fieldPath{}.key("session"), row)
 			}
-			if page.State == executorread.TranscriptNone {
+			if page.State == executorread.TranscriptNone || page.State == executorread.TranscriptSummary {
 				// THE REASON QUOTES what refused a capture, a box's or a
 				// store's error (executordomain's NotKept).
 				fenceSession(read, fieldPath{}.key("why"), sessionLabel(""), answer.Why)
@@ -753,10 +779,12 @@ func sessionEntries(page executorread.Page, filter executor.TranscriptFilter) []
 	for i, e := range t.Entries {
 		place := t.Places[i]
 		entry := sessionEntry{Ordinal: place.Ordinal, TranscriptEntry: e}
-		if len(filter.Terms) > 0 {
+		if len(filter.Terms) > 0 || e.Tail {
 			from := place.TextFrom
 			entry.TextFrom = &from
-			entry.Cursor = executorread.Cursor(page.Read.Session.Object.Key, place.Ordinal)
+			if page.State == executorread.TranscriptRead {
+				entry.Cursor = executorread.Cursor(page.Read.Session.Object.Key, place.Ordinal)
+			}
 		}
 		out = append(out, entry)
 	}
@@ -775,6 +803,14 @@ func pageEnd(page executorread.Page, filter executor.TranscriptFilter, entries [
 	t := page.Transcript
 	filtered := len(filter.Kinds) > 0 || len(filter.Terms) > 0
 	switch {
+	case page.State == executorread.TranscriptSummary && len(entries) == 0:
+		return "", "Its session is not kept, and the newest summary its harness wrote of it, kept apart, is " +
+			"all there is to read: it is not what `kinds` and `match` ask for."
+	case page.State == executorread.TranscriptSummary && kept == 0:
+		return "", "Its session is not kept, and the newest summary its harness wrote of it, kept apart, " +
+			"did not fit this answer beside its row."
+	case page.State == executorread.TranscriptSummary:
+		return "", summaryNote(page, entries[0])
 	case page.State != executorread.TranscriptRead:
 		return "", ""
 	case kept < len(entries):
@@ -818,6 +854,29 @@ func pageEnd(page executorread.Page, filter executor.TranscriptFilter, entries [
 	return "", fmt.Sprintf("Beside the `unread` entries — parts of the record this read could not read, "+
 		"so it cannot say what they held — these are every entry from entry %d to the end of the "+
 		"transcript that %s.", t.From, wantedOf(filter))
+}
+
+// summaryNote is what a page reading a session not kept as its newest summary
+// says of the entry it shows: whole, the entry's end alone, a window around a
+// match, and that the summary kept is itself the end of a longer one where it
+// is; "all there is" only of a summary shown whole and kept whole.
+func summaryNote(page executorread.Page, shown sessionEntry) string {
+	note := "Its session is not kept: this is the newest summary its harness wrote of it, kept apart"
+	switch {
+	case shown.Tail:
+		note += fmt.Sprintf(", its last %s of %s; the rest of it is not shown here", sizeWords(int64(len(shown.Text))),
+			sizeWords(int64(shown.Bytes)))
+	case shown.Cut:
+		note += fmt.Sprintf(", the window of %s around the words matched", sizeWords(int64(shown.Bytes)))
+	}
+	if kept := page.Read.Session.Summary; kept != nil && kept.Cut {
+		return note + fmt.Sprintf(". The summary kept is itself the last %s of one of %s.", sizeWords(kept.Kept),
+			sizeWords(kept.Bytes))
+	}
+	if shown.Cut {
+		return note + "."
+	}
+	return note + ", whole, and all there is to read."
 }
 
 // wantedOf is what an entry a filter keeps is, as a page's note says it.

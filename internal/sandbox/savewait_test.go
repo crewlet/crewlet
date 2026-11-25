@@ -344,7 +344,7 @@ func TestAnUnresolvedSaveIsAskedAgainBeforeARelaunchOrAnEndDecides(t *testing.T)
 	}
 }
 
-// A RELAUNCH WAITS BRIEFLY FOR A SAVE OF THE JOB IT FOLLOWS, as for its newest
+// A RELAUNCH WAITS FOR A SAVE OF THE JOB IT FOLLOWS, as for its newest
 // capture: beside a refused final take the save is the job's newest session
 // anybody may keep. Landed, the relaunch continues it and names the turn's own
 // session to its run; still being kept when the wait runs out, it is named by
@@ -352,14 +352,14 @@ func TestAnUnresolvedSaveIsAskedAgainBeforeARelaunchOrAnEndDecides(t *testing.T)
 //
 // Mutation: leave the save out of the relaunch's wait, and the relaunch decides
 // at once and names the refused final take.
-func TestARelaunchWaitsBrieflyForASaveOfTheJobItFollows(t *testing.T) {
+func TestARelaunchWaitsForASaveOfTheJobItFollows(t *testing.T) {
 	t.Parallel()
 	t.Run("kept while it waits", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
 			rig, _, _ := keepingRig(t)
 			rig.runner.Carries = true
-			rig.coordinator.relaunchWait = 10 * time.Second
+			rig.relaunchWithin(10 * time.Second)
 			run := rig.launchKept(t, "t1")
 			save, _ := overtakenSave(t, rig, "t1", "", 0, CaptureRefused)
 			// THE LOG TAKES THE SAVE'S RECORD as its keep lands.
@@ -394,7 +394,7 @@ func TestARelaunchWaitsBrieflyForASaveOfTheJobItFollows(t *testing.T) {
 		inBubble(t, func(t *testing.T) {
 			rig, _, _ := keepingRig(t)
 			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
-			rig.coordinator.relaunchWait = 50 * time.Millisecond
+			rig.relaunchWithin(50 * time.Millisecond)
 			run := rig.launchKept(t, "t1")
 			save, _ := overtakenSave(t, rig, "t1", "", 0, CaptureRefused)
 			lostWithItsBox(t, rig, run)
@@ -444,7 +444,7 @@ func TestARelaunchWaitsOnlyForACaptureItsDecisionDependsOn(t *testing.T) {
 			inBubble(t, func(t *testing.T) {
 				rig, _, _ := keepingRig(t)
 				rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
-				rig.coordinator.relaunchWait = 10 * time.Second
+				rig.relaunchWithin(10 * time.Second)
 				stamp := keeping(t, rig)
 				// THE JOB AFTER IT, which left no capture: the relaunch follows that one.
 				if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{TurnID: "t1", AgentHandle: "swe",
@@ -475,7 +475,7 @@ func TestARelaunchWaitsOnlyForACaptureItsDecisionDependsOn(t *testing.T) {
 			t.Parallel()
 			inBubble(t, func(t *testing.T) {
 				rig, logbook, _ := conversingRig(t)
-				rig.coordinator.relaunchWait = 10 * time.Second
+				rig.relaunchWithin(10 * time.Second)
 				read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
 				ctx := t.Context()
 				if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
@@ -521,7 +521,7 @@ func TestARelaunchWaitsOnlyForACaptureItsDecisionDependsOn(t *testing.T) {
 		inBubble(t, func(t *testing.T) {
 			rig, _, _ := keepingRig(t)
 			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
-			rig.coordinator.relaunchWait = 50 * time.Millisecond
+			rig.relaunchWithin(50 * time.Millisecond)
 			rig.launchKept(t, "t1")
 			save, _ := overtakenSave(t, rig, "t1", "", 0, CaptureRefused)
 			if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{TurnID: "t1", AgentHandle: "swe",

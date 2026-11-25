@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // RoleKind is who holds a seat in the org chart.
@@ -1020,6 +1021,14 @@ func (r *Role) Validate() error {
 			"role %q: %w: the name yields the handle %q, which is %d bytes "+
 				"and the limit is %d — set a shorter handle explicitly",
 			name, ErrInvalidHandle, r.Handle(), len(r.Handle()), iam.MaxLogin))
+	case iam.IsEngineName(r.DeclaredHandle):
+		add([]any{"handle"}, fmt.Errorf("role %q: %w: %q is %s; set another handle",
+			name, ErrReservedHandle, r.DeclaredHandle, words.Or(iam.EngineNames())))
+	case name != "" && r.DeclaredHandle == "" && iam.IsEngineName(r.Handle()):
+		// Reported at the name, which is what the author typed.
+		add([]any{"name"}, fmt.Errorf("role %q: %w: the name yields the handle %q, "+
+			"which is %s; set another handle explicitly",
+			name, ErrReservedHandle, r.Handle(), words.Or(iam.EngineNames())))
 	}
 
 	errs = append(errs, r.fieldFaults(name)...)

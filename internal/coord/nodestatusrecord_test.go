@@ -3,6 +3,7 @@ package coord_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,51 +15,110 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// recorded writes r through its wire form and reads it back under its node,
-// as a store that keeps bytes does: an int comes back a float64, a typed slice
-// an []any and an instant a string, so a field the decoder knows in only one
+// recorded writes r through its rows and reads it back under its node, as a
+// store that keeps bytes does: an int comes back a float64, a typed slice an
+// []any and an instant a string, so a field the decoder knows in only one
 // shape is lost here as it would be on a real store.
 func recorded(t *testing.T, r coord.NodeStatusRecord) coord.NodeStatusRecord {
 	t.Helper()
-	raw, err := r.Encode()
+	rows, err := r.Rows()
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	got, err := coord.DecodeNodeStatusRecord(r.Node, raw)
-	if err != nil {
-		t.Fatalf("decode: %v", err)
+	got := coord.AssembleNodeStatusRecords(rows, nil)
+	if len(got) != 1 {
+		t.Fatalf("the rows of %s assembled as %+v, want its record", r.Node, got)
 	}
-	return got
+	return got[0]
 }
 
-// wireOf is r as a peer's decoder first meets it: the JSON object it is stored
-// as.
+// wireOf is r as a peer's decoder first meets it: its own row's JSON object,
+// with every other row's object beside it as a part of its own, "mcp" and
+// "models" each a list of their rows (their name under "server" and "key", as
+// their key files it), and "growth".
 func wireOf(t *testing.T, r coord.NodeStatusRecord) map[string]any {
 	t.Helper()
-	raw, err := r.Encode()
+	rows, err := r.Rows()
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("the record is not a JSON object: %v", err)
+	var mcp, models []any
+	for _, row := range rows {
+		var obj map[string]any
+		if err := json.Unmarshal(row.Value, &obj); err != nil {
+			t.Fatalf("the row %s is not a JSON object: %v", row.Key.Key(), err)
+		}
+		switch row.Key.Class {
+		case coord.NodeStatusOwn:
+			out = obj
+		case coord.NodeStatusMCP:
+			obj["server"] = row.Key.Name
+			mcp = append(mcp, obj)
+		case coord.NodeStatusModel:
+			obj["key"] = row.Key.Name
+			models = append(models, obj)
+		case coord.NodeStatusGrowth:
+			delete(obj, "epoch")
+			out["growth"] = obj
+		}
+	}
+	if mcp != nil {
+		out["mcp"] = mcp
+	}
+	if models != nil {
+		out["models"] = models
 	}
 	return out
 }
 
-// decoded reads a record written by hand, as a peer of another build might
-// write one, filed under n1.
+// decoded reads rows written by hand, as a peer of another build might write
+// them, filed under n1: wire is [wireOf]'s shape, each MCP and model row
+// filed under its "server" or "key" (a row naming none is filed nowhere, as
+// no key can name it), and every row at wire's epoch.
 func decoded(t *testing.T, wire map[string]any) coord.NodeStatusRecord {
 	t.Helper()
-	raw, err := json.Marshal(wire)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+	own := map[string]any{}
+	var rows []coord.NodeStatusRow
+	row := func(class coord.NodeStatusClass, name string, body map[string]any) {
+		if _, ok := body["epoch"]; !ok {
+			body["epoch"] = wire["epoch"]
+		}
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		rows = append(rows, coord.NodeStatusRow{Key: coord.NodeStatusRowKey{Class: class, Node: "n1", Name: name},
+			Value: raw})
 	}
-	got, err := coord.DecodeNodeStatusRecord("n1", raw)
-	if err != nil {
-		t.Fatalf("decode: %v", err)
+	for key, value := range wire {
+		switch key {
+		case "mcp", "models":
+			class, name := coord.NodeStatusMCP, "server"
+			if key == "models" {
+				class, name = coord.NodeStatusModel, "key"
+			}
+			for _, item := range value.([]any) {
+				body := item.(map[string]any)
+				if named, _ := body[name].(string); named != "" {
+					delete(body, name)
+					row(class, named, body)
+				}
+			}
+		case "growth":
+			if body, ok := value.(map[string]any); ok {
+				row(coord.NodeStatusGrowth, "", body)
+			}
+		default:
+			own[key] = value
+		}
 	}
-	return got
+	row(coord.NodeStatusOwn, "", own)
+	got := coord.AssembleNodeStatusRecords(rows, nil)
+	if len(got) != 1 {
+		t.Fatalf("the rows assembled as %+v, want n1's record", got)
+	}
+	return got[0]
 }
 
 // A NODE'S STATUS RECORD TRAVELS WHOLE: its epoch, its instant to the
@@ -78,15 +138,23 @@ func TestANodesStatusRecordRoundTripsWhole(t *testing.T) {
 	if got := recorded(t, want); !reflect.DeepEqual(got, want) {
 		t.Errorf("read back %+v, want %+v", got, want)
 	}
-	wire := wireOf(t, want)
-	for _, key := range []string{"node", "Node"} {
-		if _, sent := wire[key]; sent {
-			t.Errorf("the body carries %q: the node is the key a store files the record under", key)
-		}
+	rows, err := want.Rows()
+	if err != nil {
+		t.Fatal(err)
 	}
-	got, err := coord.DecodeNodeStatusRecord("node-9", mustEncode(t, want))
-	if err != nil || got.Node != "node-9" {
-		t.Errorf("a record filed under node-9 read back as %q (%v)", got.Node, err)
+	for i, row := range rows {
+		// THE NAMES ARE THE KEY'S: a body naming its node, server or entry
+		// could describe another.
+		for _, key := range []string{`"node"`, `"Node"`, `"server"`, `"key"`} {
+			if strings.Contains(string(row.Value), key+":") {
+				t.Errorf("the row %s carries %s: a name is the key a store files it under", row.Key.Key(), key)
+			}
+		}
+		rows[i].Key.Node = "node-9"
+	}
+	if got := coord.AssembleNodeStatusRecords(rows, nil); len(got) != 1 || got[0].Node != "node-9" ||
+		len(got[0].MCP) != 2 || len(got[0].Models) != len(want.Models) {
+		t.Errorf("rows filed under node-9 read back as %+v", got)
 	}
 }
 
@@ -166,8 +234,10 @@ func TestAStatusRecordFromANewerBuildDecodesHarmlessly(t *testing.T) {
 		t.Errorf("read back %+v, want %+v", got, want)
 	}
 	for _, body := range []string{`[]`, `"x"`, `null`, `{`} {
-		if _, err := coord.DecodeNodeStatusRecord("n1", []byte(body)); err == nil {
-			t.Errorf("the body %s decoded as a record", body)
+		rows := []coord.NodeStatusRow{{Key: coord.NodeStatusRowKey{Class: coord.NodeStatusOwn, Node: "n1"},
+			Value: []byte(body)}}
+		if got := coord.AssembleNodeStatusRecords(rows, nil); len(got) != 0 {
+			t.Errorf("the body %s decoded as a record: %+v", body, got)
 		}
 	}
 }
@@ -213,15 +283,6 @@ func TestLiveNodeStatusesCountsARecordOnlyAtItsNodesPresenceEpoch(t *testing.T) 
 	if len(got) != 1 || got["live"].Epoch != 5 {
 		t.Errorf("counted %v, want the live node's record alone", got)
 	}
-}
-
-func mustEncode(t *testing.T, r coord.NodeStatusRecord) []byte {
-	t.Helper()
-	raw, err := r.Encode()
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	return raw
 }
 
 // A SERVER'S FAILURE TEXT IS BOUNDED ON THE WIRE: a child's stderr can be any
@@ -317,7 +378,7 @@ func modelRecord() coord.NodeStatusRecord {
 				{Window: "model", Hours: 168, Model: "opus", State: "warning", Seen: at.Add(-time.Minute)},
 			},
 		}, {
-			Key: "codex-review", SignIn: "credentials",
+			Key: "review", SignIn: "credentials",
 			LastFailure: &coord.ModelFailure{Kind: "auth", At: at, Said: "Not logged in. Run codex login."},
 			HostLogin: &coord.HostLogin{State: coord.HostSignedIn, Method: "chatgpt",
 				Account: "someone@example.com", CheckedAt: at},
@@ -325,7 +386,6 @@ func modelRecord() coord.NodeStatusRecord {
 		Runners: &coord.RunnerStatus{
 			Direct:    coord.RunnerCell{State: coord.RunnerReady, Detail: "Landlock confinement; box root writable", CheckedAt: at},
 			Container: coord.RunnerCell{State: coord.RunnerNotReady, Detail: "docker: not found", Fix: "Install Docker on node-2 and restart the engine", CheckedAt: at},
-			E2B:       coord.RunnerCell{State: coord.RunnerUnconfigured, CheckedAt: at},
 		},
 	}
 }
@@ -442,6 +502,41 @@ func TestAModelRowsParkedSeatsAreBounded(t *testing.T) {
 	}
 }
 
+// A MODEL ROW'S FLEET HOMES TRAVEL WHOLE, the most recently taken first and
+// at most [coord.MaxModelFleetHomes] of them, so a row does not grow with the
+// company; a peer's home naming no fleet or subject is dropped, as it steers
+// no pick. Mutation: publish every home, or the oldest, and this fails.
+func TestAModelRowsFleetHomesAreTheNewestAndBounded(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	var homes []coord.FleetHome
+	for i := range 3 * coord.MaxModelFleetHomes {
+		homes = append(homes, coord.FleetHome{Fleet: "opus", Subject: fmt.Sprintf("seat-%d", i),
+			Job: "execute", At: at.Add(-time.Duration(i) * time.Minute)})
+	}
+	got := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1,
+		Models: []coord.ModelStatus{{Key: "max", SignIn: "token", Homes: homes}}})
+	row := got.Models[0]
+	if len(row.Homes) != coord.MaxModelFleetHomes {
+		t.Fatalf("the row carried %d home(s), want %d", len(row.Homes), coord.MaxModelFleetHomes)
+	}
+	if h := row.Homes[0]; h != homes[0] {
+		t.Errorf("first home = %+v, want the newest whole: %+v", h, homes[0])
+	}
+	if last := row.Homes[len(row.Homes)-1]; last.Subject != fmt.Sprintf("seat-%d", coord.MaxModelFleetHomes-1) {
+		t.Errorf("last home = %+v, want the %dth newest", last, coord.MaxModelFleetHomes)
+	}
+	wire := map[string]any{"node": "n1", "epoch": 1, "at": at.Format(time.RFC3339Nano),
+		"models": []any{map[string]any{"key": "max", "homes": []any{
+			map[string]any{"subject": "engineer"}, map[string]any{"fleet": "opus"}, "nonsense",
+			map[string]any{"fleet": "opus", "subject": "engineer", "job": "execute", "at": at.Format(time.RFC3339Nano)},
+		}}}}
+	if read := decoded(t, wire).Models[0].Homes; len(read) != 1 || read[0].Subject != "engineer" ||
+		!read[0].At.Equal(at) {
+		t.Errorf("a peer's homes read %+v, want the one naming its fleet and subject", read)
+	}
+}
+
 // A MODEL ROW'S LIMIT WINDOWS ARE BOUNDED on the wire, and one naming no window
 // or state is dropped, since no reader can draw it.
 func TestAModelRowsLimitWindowsAreBounded(t *testing.T) {
@@ -484,7 +579,7 @@ func TestAnMCPRowCarriesItsOutageClassAndRestartsAcrossTheStore(t *testing.T) {
 	status := coord.NodeStatusRecord{Node: "n1", Epoch: 1, MCP: []coord.MCPServerStatus{
 		{Server: "tracker", Failed: 1, Error: "would not start", ErrorClass: "dns", DownSince: down, Restarts: 3,
 			Waiting: 1, Wait: "waits for ${GITHUB_TOKEN}", WaitingSince: held},
-		{Server: "search", Shared: true, Started: 1, Tools: 2},
+		{Server: "web-search", Shared: true, Started: 1, Tools: 2},
 	}}
 	got := recorded(t, status)
 	if len(got.MCP) != 2 {
@@ -552,5 +647,38 @@ func TestAStatusRecordCarriesItsGrowthSignals(t *testing.T) {
 	}})
 	if got.Growth != nil {
 		t.Errorf("rows naming nothing read as %+v, want no signal", got.Growth)
+	}
+}
+
+// A MODEL ROW'S WORK IN FLIGHT TRAVELS WHOLE, at most
+// [coord.MaxModelFleetRunning] of it, pinned work naming no fleet; a peer's
+// work naming no subject serves nobody and is dropped. Mutation: drop the
+// running list from the row, and this fails.
+func TestAModelRowsWorkInFlightTravelsBounded(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	var running []coord.FleetRunning
+	for i := range 2 * coord.MaxModelFleetRunning {
+		running = append(running, coord.FleetRunning{Fleet: "opus", Subject: fmt.Sprintf("seat-%d", i),
+			Job: "review", Since: since.Add(time.Duration(i) * time.Second)})
+	}
+	running[1].Fleet = ""
+	got := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1,
+		Models: []coord.ModelStatus{{Key: "max", SignIn: "token", Running: running}}})
+	row := got.Models[0]
+	if len(row.Running) != coord.MaxModelFleetRunning {
+		t.Fatalf("the row carried %d running, want %d", len(row.Running), coord.MaxModelFleetRunning)
+	}
+	if row.Running[0] != running[0] || row.Running[1] != running[1] {
+		t.Errorf("running = %+v, want the first whole, pinned work with no fleet", row.Running[:2])
+	}
+	wire := map[string]any{"node": "n1", "epoch": 1, "at": since.Format(time.RFC3339Nano),
+		"models": []any{map[string]any{"key": "max", "running": []any{
+			map[string]any{"fleet": "opus"}, "nonsense",
+			map[string]any{"subject": "engineer", "job": "review", "since": since.Format(time.RFC3339Nano)},
+		}}}}
+	if read := decoded(t, wire).Models[0].Running; len(read) != 1 || read[0].Subject != "engineer" ||
+		read[0].Fleet != "" || !read[0].Since.Equal(since) {
+		t.Errorf("decoded running = %+v, want engineer's pinned review alone", read)
 	}
 }

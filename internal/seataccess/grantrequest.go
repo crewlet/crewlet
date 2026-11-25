@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -104,8 +105,22 @@ func (r GrantRequest) Validate() error {
 			MinGrantHours, MaxGrantHours)
 	case r.Target != "" && !config.SeatGrantTarget(r.Target):
 		return fmt.Errorf("seataccess: request %s names a target that is not one resource's name", r.ID)
+	case r.StoredBytes() > coord.MaxGrantRequestBytes:
+		return fmt.Errorf("seataccess: request %s is %d bytes as stored, past the %d one request holds: "+
+			"name fewer scopes, or say why in fewer words", r.ID, r.StoredBytes(), coord.MaxGrantRequestBytes)
 	}
 	return nil
+}
+
+// StoredBytes is how many bytes the request is stored as, the one bound on its
+// size ([coord.MaxGrantRequestBytes]): its fields are an agent's words and a
+// catalogue's names, held together rather than each.
+func (r GrantRequest) StoredBytes() int {
+	raw, err := json.Marshal(r)
+	if err != nil {
+		return math.MaxInt32
+	}
+	return len(raw)
 }
 
 // Grant is the grant a person's choice of option makes from the request at

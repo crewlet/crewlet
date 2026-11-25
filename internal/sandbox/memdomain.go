@@ -7,8 +7,8 @@ import (
 
 // A JOB'S MEMORY DOMAIN is the memory accounting the kernel holds its
 // processes to: the cgroup the calling process is in (v2, then v1), else the
-// machine, where a VM is a box of its own. One shell function reads it, for a
-// box's read and around every job, so both name the same domain.
+// whole machine. One shell function reads it, for a box's read and around
+// every job, so both name the same domain.
 
 // MemoryDomainScript defines the shell function crewlet_memory, which prints
 // the caller's memory domain as `key=value` lines: oom_kill (the kernel's count

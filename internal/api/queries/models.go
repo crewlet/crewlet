@@ -1,4 +1,4 @@
-// What each configured model is doing, as Settings › Models reads it.
+// What each configured model is doing, as Settings › Models & Fleets reads it.
 
 package queries
 
@@ -225,8 +225,8 @@ type ModelLimit struct {
 	Window string `json:"window"`
 	Hours  int    `json:"hours"`
 	Model  string `json:"model,omitempty"`
-	// State is ok, warning or reached (llm.LimitState): the vendor's, raised
-	// to warning from [LimitWarnAt] used, and ok once the window has turned over.
+	// State is ok, warning or reached (llm.LimitState), read at now
+	// ([llm.LimitReading.At]).
 	State string `json:"state"`
 	// Used is the fraction used, null where the vendor did not say or the
 	// window has turned over since.
@@ -235,19 +235,10 @@ type ModelLimit struct {
 	// Until is when the entry is tried again, where it sits this window out.
 	Until *time.Time `json:"until"`
 	// Seen is when a call last heard it, and Stale whether that is past
-	// [LimitStaleAfter].
+	// [llm.LimitStaleAfter].
 	Seen  time.Time `json:"seen"`
 	Stale bool      `json:"stale"`
 }
-
-// LimitWarnAt is the fraction of a window from which it reads as a warning
-// whatever the vendor's status says: a fifth of a window is what is left to
-// move seats to another model before it refuses them.
-const LimitWarnAt = 0.8
-
-// LimitStaleAfter is how old a window's reading may be before it is said to be
-// out of date: a tenth of the shortest window a vendor names (five hours).
-const LimitStaleAfter = 30 * time.Minute
 
 // ModelLastFailure is the latest failure across live nodes.
 type ModelLastFailure struct {
@@ -293,6 +284,9 @@ type ModelUse struct {
 	// assistant, whose fields are always written.
 	Written *bool  `json:"written,omitempty"`
 	Source  string `json:"source,omitempty"`
+	// Fleet is the LLM fleet the use goes through, the entry one of its
+	// members; absent for a pinned use.
+	Fleet string `json:"fleet,omitempty"`
 }
 
 // ModelDevice is a device sign-in, as the routes and the query answer it.
@@ -428,7 +422,7 @@ type nodeModels struct {
 // table and the status records are the answer, so an unreadable one is an
 // error rather than a fleet with no nodes.
 func (s Sources) modelReports(ctx context.Context) ([]nodeModels, error) {
-	leases, records, err := s.liveStatuses(ctx)
+	leases, records, err := s.liveStatuses(ctx, coord.NodeStatusRead{Models: true})
 	if err != nil {
 		return nil, err
 	}
@@ -722,21 +716,14 @@ func modelLimits(key, model string, reports []nodeModels, sitting *ModelSittingO
 	return out
 }
 
-// limitOf is one window's newest report as read at now.
+// limitOf is one window's newest report as read at now ([llm.LimitReading.At]).
 func limitOf(l coord.ModelLimit, now time.Time) ModelLimit {
-	out := ModelLimit{Window: l.Window, Hours: l.Hours, Model: l.Model, State: l.State, Used: l.Used,
-		Seen: l.Seen, Stale: now.Sub(l.Seen) > LimitStaleAfter}
+	read := llm.LimitReading{State: llm.LimitState(l.State), Used: l.Used, ResetsAt: l.ResetsAt}.At(now)
+	out := ModelLimit{Window: l.Window, Hours: l.Hours, Model: l.Model, State: string(read.State),
+		Used: read.Used, Seen: l.Seen, Stale: now.Sub(l.Seen) > llm.LimitStaleAfter}
 	if !l.ResetsAt.IsZero() {
 		resets := l.ResetsAt
 		out.ResetsAt = &resets
-		if !resets.After(now) {
-			// TURNED OVER since it was heard: what was used is no longer.
-			out.State, out.Used = string(llm.LimitOK), nil
-			return out
-		}
-	}
-	if out.State == string(llm.LimitOK) && out.Used != nil && *out.Used >= LimitWarnAt {
-		out.State = string(llm.LimitWarning)
 	}
 	return out
 }
@@ -789,33 +776,50 @@ var usedByPhases = []struct {
 }
 
 // usedBy is every job the entry key runs, or is a fallback in the chain of:
-// each agent seat's phase, resolved by [phase.ResolveWithSource] (the one
-// resolution the engine's chains use), and the assistant's two fields.
+// each agent seat's phase, resolved by [phase.Resolve] (the one resolution
+// the engine's chains use), and the two helpers' fields. A use through a
+// fleet names it, at the entry's place in the fleet's list.
 func usedBy(company *config.Company, key string) []ModelUse {
 	out := []ModelUse{}
-	order := company.Providers.ProviderOrder()
+	models := company.Providers.PhaseModels()
 	for role := range company.EachRole() {
 		if role.Kind == org.KindHuman {
 			continue
 		}
 		for _, pj := range usedByPhases {
-			chain, source := phase.ResolveWithSource(role.Seat(), pj.phase, order)
-			position := slices.Index(chain, key)
+			res := phase.Resolve(role.Seat(), pj.phase, models)
+			position := slices.Index(res.Keys, key)
 			if position < 0 {
 				continue
 			}
-			written := source == phase.SourceSeat
+			written := res.Source == phase.SourceSeat
 			out = append(out, ModelUse{Seat: role.IdentityKey(), Job: string(pj.job),
-				Position: position, Written: &written, Source: string(source)})
+				Position: position, Written: &written, Source: string(res.Source), Fleet: res.Fleet})
 		}
 	}
-	if company.Assistant.Model == key {
-		out = append(out, ModelUse{Assistant: "chat", Position: 0})
+	if use, ok := helperUse(models, company.Assistant.Model, key); ok {
+		use.Assistant = "chat"
+		out = append(out, use)
 	}
-	if company.Advisor.Model == key {
-		out = append(out, ModelUse{Advisor: "findings", Position: 0})
+	if use, ok := helperUse(models, company.Advisor.Model, key); ok {
+		use.Advisor = "findings"
+		out = append(out, use)
 	}
 	return out
+}
+
+// helperUse is a helper's use of the entry key through its field ref: the
+// entry itself, or a fleet listing it.
+func helperUse(models phase.Models, ref, key string) (ModelUse, bool) {
+	if ref == key {
+		return ModelUse{}, true
+	}
+	name, ok := config.FleetOf(ref)
+	if !ok {
+		return ModelUse{}, false
+	}
+	position := slices.Index(models.Fleets[name].Members, key)
+	return ModelUse{Position: position, Fleet: name}, position >= 0
 }
 
 // helperProblem is why no helper can run on the entry key, in a person's
@@ -839,28 +843,28 @@ func optional(s string) *string {
 }
 
 // RunnersAnswer is `llm_runners`: whether each executor cell can start a box,
-// on each live node.
+// on each live node. Declared is whether `providers.sandbox` configures boxes
+// at all, which declares both cells or neither.
 type RunnersAnswer struct {
 	DefaultRunIn string                `json:"default_run_in"`
+	Declared     bool                  `json:"declared"`
 	Cells        map[string]RunnerCell `json:"cells"`
 	Nodes        []RunnerNode          `json:"nodes"`
 }
 
-// RunnerCell is one cell across the fleet: whether `providers.sandbox`
-// declares it, and the nodes where it is ready and where it is not.
+// RunnerCell is one cell across the fleet: the nodes where it is ready and
+// where it is not.
 type RunnerCell struct {
-	Declared   bool     `json:"declared"`
 	ReadyOn    []string `json:"ready_on"`
 	NotReadyOn []string `json:"not_ready_on"`
 }
 
-// RunnerNode is one live node's three cells.
+// RunnerNode is one live node's two cells.
 type RunnerNode struct {
 	ID        string          `json:"id"`
 	Reported  bool            `json:"reported"`
 	Direct    *RunnerNodeCell `json:"direct"`
 	Container *RunnerNodeCell `json:"container"`
-	E2B       *RunnerNodeCell `json:"e2b"`
 }
 
 // RunnerNodeCell is one cell's probe on one node.
@@ -874,19 +878,18 @@ type RunnerNodeCell struct {
 // llmRunners answers whether each executor cell can start a box on each node,
 // from the runner probe every node publishes on its status record.
 func (s Sources) llmRunners(ctx context.Context, _ Params) (any, error) {
-	leases, records, err := s.liveStatuses(ctx)
+	leases, records, err := s.liveStatuses(ctx, coord.NodeStatusRead{})
 	if err != nil {
 		return nil, err
 	}
 	out := RunnersAnswer{Cells: map[string]RunnerCell{}, Nodes: []RunnerNode{}}
-	var sandbox *config.SandboxProvider
 	if company, _ := s.Company(); company != nil {
-		sandbox = company.Providers.Sandbox
+		sandbox := company.Providers.Sandbox
 		out.DefaultRunIn = string(sandbox.RunIn())
+		out.Declared = sandbox.Enabled()
 	}
 	for _, p := range config.Placements {
-		out.Cells[string(p)] = RunnerCell{Declared: sandbox.Configured(p), ReadyOn: []string{},
-			NotReadyOn: []string{}}
+		out.Cells[string(p)] = RunnerCell{ReadyOn: []string{}, NotReadyOn: []string{}}
 	}
 	for _, lease := range leases {
 		node := RunnerNode{ID: nameIn(coord.ClassNode, lease.Resource)}
@@ -894,20 +897,16 @@ func (s Sources) llmRunners(ctx context.Context, _ Params) (any, error) {
 			node.Reported = true
 			for p, cell := range map[config.Placement]coord.RunnerCell{
 				config.PlacementDirect: record.Runners.Direct, config.PlacementContainer: record.Runners.Container,
-				config.PlacementE2B: record.Runners.E2B,
 			} {
 				view := &RunnerNodeCell{State: string(cell.State), Detail: cell.Detail, Fix: optional(cell.Fix)}
 				if !cell.CheckedAt.IsZero() {
 					at := cell.CheckedAt
 					view.CheckedAt = &at
 				}
-				switch p {
-				case config.PlacementDirect:
+				if p == config.PlacementDirect {
 					node.Direct = view
-				case config.PlacementContainer:
+				} else {
 					node.Container = view
-				default:
-					node.E2B = view
 				}
 				summary := out.Cells[string(p)]
 				switch cell.State {

@@ -2,7 +2,6 @@ package mcpbridge_test
 
 import (
 	"context"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -136,45 +135,36 @@ func TestEachServerIsServedUnderItsOwnNameBeneathTheJob(t *testing.T) {
 	}
 }
 
-// A LAUNCH IS HANDED WHAT EACH BRIDGED SERVER SAYS IT IS FOR, as its endpoint
-// says it: OpenCode lists a session's MCP servers' instructions among the
-// context it hands over before a continued run's first request, so the launch
-// charges them. A server the company described as nothing says nothing.
+// A LAUNCH IS HANDED THE TOOLS THE ENGINE'S OWN SERVER LISTS, exactly as its
+// endpoint lists them as the run opens: a runner holds its harness's offer to
+// them, so a name the endpoint does not list would end a run nothing narrowed,
+// and one left out would let a setting take it away unseen. A harness loading
+// its skills itself is not listed the bridge's skill loader.
 //
-// Mutation: hand the launch every server whatever it says, or none, and this
-// goes red.
-func TestALaunchIsHandedWhatEachBridgedServerSaysItIsFor(t *testing.T) {
+// Mutation: hand every surface tool, the MCP servers' included, or keep the
+// skill loader for a harness loading its own, and this goes red.
+func TestALaunchIsHandedTheToolsTheEnginesOwnServerLists(t *testing.T) {
 	t.Parallel()
-	want := map[string]string{"github": "The company's code host: its repositories, issues and pull requests."}
-	if got := mcpbridge.Guidance(serversSurface(t)); !maps.Equal(got, want) {
-		t.Errorf("Guidance = %q, want %q", got, want)
-	}
-}
-
-// A LAUNCH IS HANDED THE TOOLS EACH BRIDGED SERVER OFFERS, by server, as the
-// surface offers them: OpenCode lists a server new to a session with a Code
-// Mode catalog of its tools, so the launch charges them. The engine's own
-// tools are no server's.
-//
-// Mutation: list the engine's tools under a server, drop a tool, or hand the
-// launch none, and this goes red.
-func TestALaunchIsHandedTheToolsEachBridgedServerOffers(t *testing.T) {
-	t.Parallel()
-	got := mcpbridge.Catalogs(serversSurface(t))
-	names := map[string][]string{}
-	for server, tools := range got {
-		for _, tool := range tools {
-			if tool.Description != tool.Name+" does a thing" || len(tool.Schema) == 0 {
-				t.Errorf("%s's %s is listed as %+v, want its description and schema", server, tool.Name, tool)
+	for name, skills := range map[string]map[string]string{"skills of the bridge's": nil,
+		"skills of its own": {"crewlet:deploy": "deploy"}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			reg := tools.NewRegistry()
+			for tool, origin := range map[string]string{"read_page": tools.OriginBuiltin,
+				toolname.LoadToolSkill: tools.OriginBuiltin, "create_issue": tools.Origin("github")} {
+				if err := reg.Register(&stubTool{name: tool}, origin); err != nil {
+					t.Fatalf("Register(%s): %v", tool, err)
+				}
 			}
-			names[server] = append(names[server], tool.Name)
-		}
-		slices.Sort(names[server])
-	}
-	want := map[string][]string{"github": {"create_issue", "search_issues"}, "jira": {"create_ticket"}}
-	if len(names) != len(want) || !slices.Equal(names["github"], want["github"]) ||
-		!slices.Equal(names["jira"], want["jira"]) {
-		t.Errorf("Catalogs lists %q, want %q", names, want)
+			surface := tools.NewSurface("execute", reg.Snapshot(),
+				[]string{"read_page", toolname.LoadToolSkill, "create_issue"}).ForTurn(seatTurn())
+			var session *mcpbridge.Session
+			f := openServers(t, surface, func(s *mcpbridge.Session) { s.Skills = skills; session = s })
+			own, _ := listed(t, f.endpoint)
+			if got := mcpbridge.Listed(session); !slices.Equal(got, own) || slices.Contains(got, "create_issue") {
+				t.Errorf("Listed = %v, the engine's own endpoint lists %v", got, own)
+			}
+		})
 	}
 }
 

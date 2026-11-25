@@ -9,40 +9,30 @@ package executor
 // reads each from.
 func (p Paths) CopilotHome() string { return p.Home + "/.copilot" }
 
-// CopilotSettings is the run's own user-level settings file, written whole by
-// every run ([copilotSettings]).
+// CopilotSettings is the home's user-level settings file, which every run
+// sets its own keys in, keeping the rest ([copilotSettings]), and puts back
+// as the home had it once it ends ([Copilot.homeRestore]).
 func (p Paths) CopilotSettings() string { return p.CopilotHome() + "/settings.json" }
 
-// CopilotToolEnv is the file BASH_ENV names for a Copilot run handed sign-in
-// variables ([copilotToolEnv]). Under WorkDir, as Claude Code's is
-// ([Paths.ClaudeToolEnv]).
-func (p Paths) CopilotToolEnv() string { return p.WorkDir() + "/copilot-tool-env.sh" }
-
 // CopilotInstructions is where a Copilot run's standing instructions are
-// written: Copilot appends this file to its own system prompt after its tool
-// list and before the repository's instructions, and renders it afresh on
-// every resume (measured on 1.0.114), so a continued run is told by its own
-// launch. Removed where a run has none, so no earlier run's text stays.
+// written, the home's own after them: Copilot appends this file to its own
+// system prompt after its tool list and before the repository's instructions,
+// and renders it afresh on every resume (measured on 1.0.114), so a continued
+// run is told by its own launch. The home's file is held and put back.
 func (p Paths) CopilotInstructions() string { return p.CopilotHome() + "/copilot-instructions.md" }
+
+// CopilotHeldInstructions is the home's own [Paths.CopilotInstructions], held
+// while the run's stand in their place ([holdHome], [Copilot.homeRestore]).
+func (p Paths) CopilotHeldInstructions() string { return p.WorkDir() + "/copilot-home-instructions.md" }
+
+// CopilotHeldSettings is the home's own [Paths.CopilotSettings], held while
+// the run's keys stand in it ([holdHome], [Copilot.homeRestore]).
+func (p Paths) CopilotHeldSettings() string { return p.WorkDir() + "/copilot-home-settings.json" }
 
 // CopilotExtension is the directory of the run's notes extension
 // (copilot_steer.js), written as extension.mjs where the run reads notes or has
 // a turn cap, and removed where it has neither.
 func (p Paths) CopilotExtension() string { return p.CopilotHome() + "/extensions/crewlet-notes" }
-
-// CopilotLoaded is every place in the box home Copilot loads configuration
-// from that a run's launch does not write, measured on 1.0.114 to load in
-// prompt mode: user extensions (the whole directory, the run's own written
-// after), hooks, MCP servers, installed plugins, skills (Copilot's and the
-// home's `.agents/skills`), custom agents and instruction files; and the
-// language servers and saved model providers its help names. The login
-// (`config.json`) and the session store are not among them.
-func (p Paths) CopilotLoaded() (files, dirs []string) {
-	h := p.CopilotHome()
-	return []string{h + "/mcp-config.json", h + "/lsp-config.json", h + "/providers.json"},
-		[]string{h + "/extensions", h + "/hooks", h + "/installed-plugins", h + "/installed-plugins.lock",
-			h + "/skills", p.Home + "/.agents/skills", h + "/agents", h + "/instructions"}
-}
 
 // CopilotSessionDir is session's directory under the run's home: its
 // `events.jsonl`, the conversation, and `session.db`, the sql tool's tables,
@@ -58,3 +48,14 @@ func (p Paths) CopilotSessionDir(session string) string {
 // where it continues ([copilotSessionGate]). Beside the run's other artefacts,
 // never in the extension's directory, which Copilot reads.
 func (p Paths) CopilotExtensionFresh() string { return p.WorkDir() + "/copilot-extension-fresh.mjs" }
+
+// CopilotNotesState is the file the run's notes extension keeps its requests
+// counted, its cursor and the notes it sent in (copilot_steer.js), so that one
+// Copilot restarts in the session (extensions_reload) resumes them. Beside the
+// run's other artefacts, cleared before every run ([Copilot.artifactFiles]).
+func (p Paths) CopilotNotesState() string { return p.WorkDir() + "/copilot-notes-state.json" }
+
+// CopilotGuardSettings is where the launch writes the settings the guard asks
+// the box's Copilot about ([copilotGuard]), which the guard's shell moves into
+// a home of its own. Beside the run's other artefacts, never in the home.
+func (p Paths) CopilotGuardSettings() string { return p.WorkDir() + "/copilot-guard-settings.json" }

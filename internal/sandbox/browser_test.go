@@ -672,7 +672,7 @@ func TestEnsureRunsWithTheRunsEnvironmentInTheBoxsHome(t *testing.T) {
 	}
 	req := browserReq("t1", Container)
 	req.Spec.Env = map[string]string{"NPM_CONFIG_REGISTRY": "https://registry.example.com/", "NPM_TOKEN": "npm-..."}
-	req.RunEnv = func(string) (LaunchEnv, error) {
+	req.RunEnv = func(string, EngineHost) (LaunchEnv, error) {
 		return LaunchEnv{Env: map[string]string{"CREWLET_JOB": "job-env"}}, nil
 	}
 	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
@@ -699,11 +699,11 @@ func TestEnsureRunsWithTheRunsEnvironmentInTheBoxsHome(t *testing.T) {
 // run is handed `browser`, the shim's plain command line for its job rooted at
 // the box's workspace with no environment, headers, secrets, description or
 // call bound, in its own wiring and in the wiring a session of its own starts
-// on; it replaces a server of that name naming the job bridged, which the
-// run's sources then count as the box's own. Every withheld answer hands none.
+// on; it replaces a server of that name naming the job bridged. Every withheld
+// answer hands none.
 //
 // Mutations, each red: hand the server on any answer; root it at the home;
-// leave a bridged browser among what the bridge serves.
+// leave the bridged browser in place of the box's.
 func TestTheBrowserServerReachesOnlyABoxWhoseEnsureAnsweredReady(t *testing.T) {
 	t.Parallel()
 	t.Run("ready", func(t *testing.T) {
@@ -743,11 +743,6 @@ func TestTheBrowserServerReachesOnlyABoxWhoseEnsureAnsweredReady(t *testing.T) {
 			if _, ok := servers["crewlet"]; !ok {
 				t.Errorf("the run's %s wiring lost the bridge's own server", wiring)
 			}
-		}
-		asks := rig.runner.PointAsks()
-		if len(asks) == 0 || asks[len(asks)-1].Sources == nil ||
-			!slices.Contains(asks[len(asks)-1].Sources.Unsized, browser.ServerName) {
-			t.Errorf("the run's sources were read as %+v, want the browser among the box's own", asks)
 		}
 	})
 	type withheldCase struct {

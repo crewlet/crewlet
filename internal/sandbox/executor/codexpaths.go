@@ -37,10 +37,20 @@ func (p Paths) CodexNotesURLFresh() string { return p.WorkDir() + "/codex-notes-
 // ([sandbox.Skill.Listed]).
 func (p Paths) CodexSkills() string { return p.CodexHome() + "/skills" }
 
-// CodexRepo is the run's directory of its repositories' state ([codexRepoGate]):
-// the checkouts handed, the budget left and the nested hook's config, remade
+// CodexRepo is the run's directory of its repositories' state ([codexCheckoutHome]):
+// the checkouts handed, the lock and the nested hook's config, remade
 // by every run.
 func (p Paths) CodexRepo() string { return p.WorkDir() + "/codex-repo" }
+
+// CodexRepoAgents is where checkout-launch writes the instructions of a run's
+// repositories ([codexCheckoutHome]), which the gate then writes after the
+// home's own into CODEX_HOME/AGENTS.md through a link as the home keeps it.
+func (p Paths) CodexRepoAgents() string { return p.WorkDir() + "/codex-repo-agents.md" }
+
+// CodexRepoSkills lists, a name a line, the repositories' skills a run copied
+// into [Paths.CodexSkills] ([codexCheckoutHome]), so the next run removes them and
+// none of the home's.
+func (p Paths) CodexRepoSkills() string { return p.WorkDir() + "/codex-repo-skills" }
 
 // CodexCapFired is the marker the note helper writes, before it interrupts the
 // turn, where the run's round cap ended it (internal/notehelper's -cap-marker).
@@ -57,6 +67,11 @@ func (p Paths) CodexSkillsURL() string { return p.WorkDir() + "/codex-skills-url
 // CodexSkillsURLFresh is [Paths.CodexSkillsURL] under the job's other bridge
 // token, for a session the run's script starts of its own.
 func (p Paths) CodexSkillsURLFresh() string { return p.WorkDir() + "/codex-skills-url-fresh" }
+
+// CodexRenew is the config of the note helper's codex-renew, written for a run
+// that continues a session: the standing instructions its rollout is renewed
+// to before the resume ([codexSessionGate]), as config.toml hands them.
+func (p Paths) CodexRenew() string { return p.WorkDir() + "/codex-renew.json" }
 
 // maxCodexSocketPath is the longest [Paths.CodexSocket] a box can listen on:
 // a Linux sockaddr_un holds 108 bytes, its terminating NUL among them.

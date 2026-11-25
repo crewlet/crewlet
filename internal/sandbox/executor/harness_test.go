@@ -41,8 +41,8 @@ func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 }
 
 // A minimal call stays minimal: an unset cap must not become a flag, nor an
-// unset wiring the settings that hold the notes' hooks, nor no skills the
-// settings that keep theirs on. The settings every run has are named even
+// unset wiring the settings that hold the notes' hooks, nor a run with no hook
+// of the engine's the check of what switches hooks off. The settings every run has are named even
 // here, since no field of the request sets them
 // ([TestEveryClaudeCodeRunIsStartedWithItsBoxsSweepHeldOff]).
 func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
@@ -50,7 +50,7 @@ func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
 	p := executor.Paths{}
 	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, p, ""))
 	for _, absent := range []string{"--max-turns", "--model", "--mcp-config", p.ClaudeNotesSettings(),
-		p.ClaudeSkillsSettings()} {
+		p.ClaudeHooksOff()} {
 		if strings.Contains(cmd, absent) {
 			t.Fatalf("%q was added for an unset value:\n%s", absent, cmd)
 		}
@@ -602,8 +602,8 @@ func derefOr[T any](p *T, absent string) any {
 // THE RUN'S TURN CAP REACHES OPENCODE, on the agent the run runs as. It is the
 // one bound on an executor's work — Claude Code carries it as --max-turns — so
 // a run on this harness that dropped it ran uncapped while the setting read as
-// wired. Zero is uncapped, and states no cap at all: OpenCode refuses a step
-// count below one.
+// wired. Zero is uncapped, and states no step count on any agent: OpenCode
+// refuses one below one.
 func TestTheOpenCodeConfigCarriesTheRunsTurnCap(t *testing.T) {
 	t.Parallel()
 	type capped struct {
@@ -629,8 +629,10 @@ func TestTheOpenCodeConfigCarriesTheRunsTurnCap(t *testing.T) {
 	}
 
 	_, body = writeOpenCodeConfig(t, sandbox.RunRequest{})
-	if got := read(body); len(got.Agents) != 0 {
-		t.Errorf("an uncapped run stated a step count:\n%s", body)
+	for name, agent := range read(body).Agents {
+		if agent.Steps != nil {
+			t.Errorf("an uncapped run stated a step count on agent %q:\n%s", name, body)
+		}
 	}
 }
 

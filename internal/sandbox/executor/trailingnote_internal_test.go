@@ -60,7 +60,7 @@ func QwenTrailingNoteHeld(t *testing.T) bool {
 		t.Fatal(err)
 	}
 	record := `{"type":"assistant","message":{"parts":[{"text":"On it."}]}}` + "\n" + string(mid) + "\n"
-	held, err := qwenNotesHeld(bytes.NewReader([]byte(record)), qwenTakes(note), 0, qwenTestBound)
+	held, err := qwenNotesHeld(t.Context(), bytes.NewReader([]byte(record)), qwenTakes(note), 0, qwenTestBound, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func QwenTrailingNoteHeld(t *testing.T) bool {
 // process was killed, before its request answered (killed-in-gap), is held.
 func CopilotTrailingNoteHeld(t *testing.T) bool {
 	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(copilotFixture(t, "killed-in-gap.events.jsonl")),
-		served("msg_inbox1"))
+		served("msg_inbox1"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func CopilotTrailingNoteHeld(t *testing.T) bool {
 // killed, before its request (killed-in-gap), is held.
 func KimiTrailingNoteHeld(t *testing.T) bool {
 	held, err := kimiNotesHeld(t.Context(), bytes.NewReader(kimiFixture(t, "2.7.2", "killed-in-gap.wire.jsonl")),
-		kimiServed(kimiKilledInbox))
+		kimiServed(kimiKilledInbox), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func GrokTrailingNoteHeld(t *testing.T) bool {
 	if stop < 0 {
 		t.Fatal("the notes fixture holds no stop block to cut after")
 	}
-	held, err := grokHeld(bytes.NewReader(bytes.Join(lines[:stop+1], nil)))
+	held, err := grokHeld(t.Context(), bytes.NewReader(bytes.Join(lines[:stop+1], nil)), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func PiTrailingNoteHeld(t *testing.T) bool {
 	steered := piSessionLines(t, "steered.session.jsonl")
 	at := piNoteAt(t, steered, "inbox-steer-1")
 	held, err := piNotesHeld(t.Context(), bytes.NewReader(piJoin(t, steered[:at+1])),
-		[]ServedTake{{InboxID: "inbox-steer-1"}})
+		[]ServedTake{{InboxID: "inbox-steer-1"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func HermesTrailingNoteHeld(t *testing.T) bool {
 			r["id"] = 6
 		}
 	})
-	held, err := hermesNotesHeld(bytes.NewReader(dump), []ServedTake{{InboxID: "n-1", Digest: ItemDigest(hermesSteeredNote)}}, 0)
+	held, err := hermesNotesHeld(t.Context(), bytes.NewReader(dump), []ServedTake{{InboxID: "n-1", Digest: ItemDigest(hermesSteeredNote)}}, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

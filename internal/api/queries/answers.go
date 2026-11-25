@@ -365,8 +365,8 @@ type Sources struct {
 	HeldCalls *sandbox.CallSeal
 
 	// ExecutorTail is a running executor's live output, ANSWERED BY THE
-	// NODE THAT OWNS THE RUN (internal/sandbox/livetail.go): the box is
-	// reachable only through the node driving it, and what it has said so
+	// NODE THAT HOSTS ITS BOX (internal/sandbox/livetail.go): the box is
+	// reachable only through the node that launched it, and what it has said so
 	// far is on no record anywhere until the run is collected. Nil leaves
 	// the question unregistered.
 	ExecutorTail ExecutorTails
@@ -809,6 +809,9 @@ func Register(r *Registry, s Sources) {
 			r.Register("llm_entries", Everybody(), s.llmEntries)
 			r.Register("llm_runners", Requires(iam.GrantAdmin), s.llmRunners)
 		}
+		// WHICH MEMBER OF EACH LLM FLEET TAKES WHOSE WORK, from the same
+		// records: everybody's, in two readings that carry the same words.
+		r.Register("llm_fleets", Everybody(), s.llmFleets)
 	}
 	if s.IssueReports != nil {
 		// THE COMPANY'S CHOICE, and an administrator's as the setting is.

@@ -14,11 +14,22 @@ import (
 )
 
 // The invariants the built-in cursor-agent profile keeps, measured against
-// Cursor Agent 2026.10.22 and read from the 2026.09.10 bundle (see the
-// profile's comments): a call runs in a directory it has never seen without
+// Cursor Agent 2026.11.22-e9042b2 (see the profile's comments): a call runs in a directory it has never seen without
 // stopping for trust, asks the service to leave workspace context out, keeps
 // the engine's text in the transcript, and leaves nothing in the seat's home
 // that outlives the calls that share it.
+
+// A LOGOUT REVOKES THE LOGIN AT CURSOR: its CLI has `logout` ("Sign out and
+// clear stored authentication", its --help), so `crewlet llm logout` runs it
+// rather than only removing the local files.
+//
+// Mutation: drop the cursor-agent profile's logout_args, and this fails.
+func TestCursorAgentLogsOutWithItsOwnCommand(t *testing.T) {
+	t.Parallel()
+	if got := cursorAgent(t).LogoutArgs; !slices.Equal(got, []string{"logout"}) {
+		t.Errorf("logout_args = %q, want [logout]", got)
+	}
+}
 
 // cursorAgent is the shipped profile, which every case here reads.
 func cursorAgent(t *testing.T) harnessprofile.Profile {
@@ -52,10 +63,32 @@ func TestCursorAgentRunsUnpromptedWithoutWorkspaceContext(t *testing.T) {
 	}
 }
 
+// NO CALL UPDATES THE ENGINE HOST'S CURSOR: a print call checks for a newer
+// build two seconds in, installs it and relinks cursor-agent unless started
+// with --disable-auto-update (the 2026.11.22-e9042b2 bundle), so every later
+// call and the doctor's probe would run a release the profile was not
+// written for. Both of the profile's print calls, with tools and without,
+// carry the flag.
+//
+// Mutation: drop the flag from either complete_args, and this goes red.
+func TestNoCursorAgentCallUpdatesTheHostsCursor(t *testing.T) {
+	t.Parallel()
+	p := cursorAgent(t)
+	if p.MCP == nil {
+		t.Fatal("the cursor-agent profile runs no call with tools")
+	}
+	for name, argv := range map[string][]string{"complete_args": p.CompleteArgs,
+		"mcp.complete_args": p.MCP.CompleteArgs} {
+		if !slices.Contains(argv, "--disable-auto-update") {
+			t.Errorf("%s = %q, want --disable-auto-update", name, argv)
+		}
+	}
+}
+
 // A CURSOR AGENT RUN IS CHARGED THE COUNTS ITS RESULT EVENT CARRIES, under the
 // names it gives them: `usage` in camelCase, the input with the cached parts
-// taken out, as the 2026.10.22 bundle writes it (not measured: no call through
-// a stand-in gets an answer).
+// taken out (measured on 2026.11.22-e9042b2: 100 sent, 40 of them cached,
+// reported 60 and 40).
 //
 // Mutation: read the counts under snake_case names, as the profile once did,
 // and the run is estimated; read the input as the whole prompt, and its cached
@@ -124,8 +157,9 @@ func TestCursorAgentCarriesTheSystemPromptInTheTranscript(t *testing.T) {
 
 // NOTHING A CALL LEAVES IN THE SEAT'S HOME OUTLIVES ITS GENERATION. --trust
 // writes its marker per call directory under .cursor/projects, beside that
-// call's transcript and a worker log, and a chat directory per call — one more
-// entry for every call the seat makes, all measured on 2026.10.22.
+// call's transcript and its servers' approvals, a chat directory per call,
+// and a cache of the sandbox's walk under .cursor/sandbox-policies — one more
+// entry for every call the seat makes, measured on 2026.11.22-e9042b2.
 func TestCursorAgentPrunesWhatACallLeaves(t *testing.T) {
 	t.Parallel()
 	p := cursorAgent(t)
@@ -140,6 +174,8 @@ func TestCursorAgentPrunesWhatACallLeaves(t *testing.T) {
 	left := []string{
 		project + "/.workspace-trusted",
 		project + "/worker.log",
+		project + "/mcp-approvals.json",
+		".cursor/sandbox-policies/walk-cache/2dd8b872885de1acaa56777ff4385a3a3f9e15ce34ded1e6b6e251f929310f65.walk",
 		project + "/agent-transcripts/893411a1-6f96-49e0-811b-89d238f575a7/893411a1-6f96-49e0-811b-89d238f575a7.jsonl",
 		".cursor/chats/258ab4dea5f1/893411a1-6f96-49e0-811b-89d238f575a7/meta.json",
 	}
@@ -172,5 +208,101 @@ func TestCursorAgentNamesALoginItCannotUse(t *testing.T) {
 	hit, ok := classifyMarkers(cursorAgent(t), harnessOutput{stderr: stderr, failed: true})
 	if !ok || hit.Kind != llm.KindAuth {
 		t.Errorf("classified %+v (matched %v), want the login named for:\n%s", hit, ok, stderr)
+	}
+}
+
+// A CURSOR AGENT CALL WITH INSTRUCTIONS ABOVE IT IS NEVER RUN: Cursor reads
+// every AGENTS.md, CLAUDE.md, CLAUDE.local.md and .cursor/rules from its
+// call's directory up to the root into the model's request, and nothing in the
+// call's directory stops that walk (measured on 2026.11.22-e9042b2). So a seat
+// whose state directory has one of them above it is refused its call, naming
+// the file, and one with none runs.
+//
+// Mutation: drop the profile's ancestor_files, or stop the walk below the
+// root: a row goes red.
+func TestACursorAgentCallWithInstructionsAboveItIsNeverRun(t *testing.T) {
+	t.Parallel()
+	p := cursorAgent(t)
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", ".cursor/rules"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			above := t.TempDir()
+			planted := filepath.Join(above, name)
+			if err := os.MkdirAll(filepath.Dir(planted), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if name == ".cursor/rules" {
+				if err := os.Mkdir(planted, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(planted, []byte("INSTRUCTIONS FROM ABOVE\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			state := filepath.Join(above, "deep", "state")
+			t.Cleanup(func() { forgetWorkspace(state) })
+			ws, err := Shared(state, "cursor-agent", p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ws.Acquire(t.Context(), "agent-pm", "call-1", nil); err == nil ||
+				!strings.Contains(err.Error(), planted) {
+				t.Fatalf("a call with %s above it ran (%v), want it refused naming the file", planted, err)
+			}
+		})
+	}
+	state := filepath.Join(t.TempDir(), "state")
+	t.Cleanup(func() { forgetWorkspace(state) })
+	ws, err := Shared(state, "cursor-agent", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := ws.Acquire(t.Context(), "agent-pm", "call-1", nil)
+	if err != nil {
+		t.Fatalf("a call with nothing above it was refused: %v", err)
+	}
+	if err := c.Release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// THE DOCTOR REPORTS INSTRUCTIONS ABOVE A CURSOR ENTRY'S STATE DIRECTORY, with
+// or without its smoke test, in the words each refused call uses, naming the
+// file, as a configuration problem; an entry with none above it raises none.
+//
+// Mutation: skip the doctor's check, or report it only when the smoke test
+// runs: a row goes red.
+func TestTheDoctorReportsInstructionsAboveACursorEntry(t *testing.T) {
+	t.Parallel()
+	for _, smoke := range []bool{false, true} {
+		above := t.TempDir()
+		planted := filepath.Join(above, "CLAUDE.md")
+		if err := os.WriteFile(planted, []byte("INSTRUCTIONS FROM ABOVE\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		state := filepath.Join(above, "state")
+		t.Cleanup(func() { forgetWorkspace(state) })
+		p, err := New(Config{Key: "cursor", Harness: "cursor-agent", Model: "gpt-5", StateDir: state,
+			Timeout: time.Second, MaxConcurrent: 1,
+			Overrides: map[string]any{"binary": filepath.Join(t.TempDir(), "no-cursor-here")}})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: smoke})
+		check, _ := d.Check(CheckSmoke)
+		if check.OK || check.Kind != CheckKindConfig || !strings.Contains(check.Remedy, planted) {
+			t.Errorf("smoke %v: the doctor's smoke line is %+v, want a configuration problem naming %s",
+				smoke, check, planted)
+		}
+	}
+	state := filepath.Join(t.TempDir(), "state")
+	t.Cleanup(func() { forgetWorkspace(state) })
+	p, err := New(Config{Key: "cursor", Harness: "cursor-agent", Model: "gpt-5", StateDir: state,
+		Timeout: time.Second, MaxConcurrent: 1,
+		Overrides: map[string]any{"binary": filepath.Join(t.TempDir(), "no-cursor-here")}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := p.AncestorRefusal(); err != nil {
+		t.Errorf("an entry with nothing above it was refused: %v", err)
 	}
 }

@@ -76,6 +76,14 @@ type MCPServer struct {
 	// per their bundles). An in-box server is the harness's to
 	// time.
 	CallTimeout time.Duration
+
+	// Tools are the tools the server lists as the run starts, by name, where
+	// the engine knows them: the bridge's own server's
+	// (internal/api/mcpbridge's Listed). A runner whose harness reports what
+	// it offers its model holds it to them, so a home's or a repository's
+	// setting that takes one away fails the run rather than leaving it to
+	// work without. Nil for a server whose list is its own to give.
+	Tools []string
 }
 
 // Transport is how the in-box agent reaches one server.

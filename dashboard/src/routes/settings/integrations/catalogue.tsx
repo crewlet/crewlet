@@ -193,6 +193,11 @@ const SURFACE_NAMES: Record<string, string> = {
   google_play: "Google Play",
 };
 
+/** The tool an engine surface belongs to (`google_cloud` is Google Cloud's). */
+export function entryOfSurface(key: string): Entry | undefined {
+  return CATALOG.find((e) => e.surfaces.some((s) => s.key === key));
+}
+
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
 function surfacesOf(tool: keyof typeof INTEGRATION_TOOLS): Surface[] {
   return INTEGRATION_TOOLS[tool].map((key) => ({ key, name: SURFACE_NAMES[key] ?? key }));

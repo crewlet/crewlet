@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -29,14 +30,23 @@ func museInstallAnswer(digest string) string {
 }
 
 // museHeldOf is the tokens record shows held of the plugin package digest
-// names, the case failing on a read error.
+// names, every token it names asked, the case failing on a read error.
 func museHeldOf(t *testing.T, record []byte, digest string) map[string]bool {
 	t.Helper()
-	held, err := museHeld(bytes.NewReader(record), digest)
+	held, err := museHeld(t.Context(), bytes.NewReader(record), digest, museTokensIn(record), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return held
+}
+
+// museTokensIn is every take token record names.
+func museTokensIn(record []byte) map[string]bool {
+	tokens := map[string]bool{}
+	for _, token := range regexp.MustCompile(`\[crewlet take [^\]\\"\n]{36}\]`).FindAll(record, -1) {
+		tokens[string(token)] = true
+	}
+	return tokens
 }
 
 // museLines is the fixture's lines, each with its break.
@@ -280,16 +290,13 @@ func TestALaunchedMuseRunsNotesAreEachHeld(t *testing.T) {
 	}
 }
 
-// museShellSecrets are the names the model's shell never runs with: the
-// entry's key and the OTLP exporter's.
-var museShellSecrets = []string{"META_API_KEY", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS"}
-
-// THE MODEL'S SHELL RUNS WITH ONLY WHAT IT NEEDS: the run's own shell, in the
-// launched run, saw none of the entry's key and the OTLP exporter's variables,
-// which the box was started with.
+// THE MODEL'S SHELL HOLDS NO CREWLET_ VARIABLE: the run's own shell, in the
+// launched run, saw no CREWLET_ name; the bridge's token is in the box home's
+// settings file, never a variable. (Its sign-in and an operator's exporter,
+// present: TestEveryRunnersShellHoldsWhatItsHarnessIsHanded.)
 //
-// Mutation: drop the unset of the key or of OTEL_EXPORTER_OTLP_*.
-func TestTheMuseShellRunsWithOnlyWhatItNeeds(t *testing.T) {
+// Mutation: re-capture with a CREWLET_ variable handed to Muse.
+func TestTheMuseShellHoldsNoCrewletVariable(t *testing.T) {
 	found := false
 	for l := range bytes.Lines(museFixture(t, "launched-notes.result.jsonl")) {
 		env, ok := decodeMuseEnvelope(l)
@@ -304,37 +311,12 @@ func TestTheMuseShellRunsWithOnlyWhatItNeeds(t *testing.T) {
 			continue
 		}
 		found = true
-		for _, name := range append(museShellSecrets, "CREWLET_") {
-			if strings.Contains(p.Text, name) {
-				t.Errorf("the run's shell ran with %s", name)
-			}
+		if strings.Contains(p.Text, "CREWLET_") {
+			t.Errorf("the run's shell ran with a CREWLET_ variable:\n%s", p.Text)
 		}
 	}
 	if !found {
 		t.Fatal("the fixture holds no shell's environment")
-	}
-}
-
-// THE SCRIPT HANDS THE KEY ON STDIN AND KEEPS IT, THE RUN'S OTHER SIGN-IN
-// VARIABLES AND THE EXPORTER'S OUT OF THE ENVIRONMENT IT LAUNCHES WITH: what
-// follows its part runs without any of them, reads the key on stdin, and no
-// file keeps it.
-//
-// Mutation: export the key, leave its file behind, or keep a sign-in name.
-func TestTheMuseScriptHandsTheKeyOnStdinAlone(t *testing.T) {
-	p := museScriptHome(t, nil)
-	script := "export META_API_KEY=sk-test-key OTEL_EXPORTER_OTLP_ENDPOINT=http://o OTEL_EXPORTER_OTLP_HEADERS=a=b " +
-		"MUSE_TEAM_TOKEN=t\n" + museShellEnvironment(p, []string{"META_API_KEY", "MUSE_TEAM_TOKEN"}) +
-		`env; echo "---$kf"; cat; echo; ls ` + p.WorkDir()
-	out := string(runSh(t, script))
-	env, rest, _ := strings.Cut(out, "---")
-	for _, name := range append(museShellSecrets, "MUSE_TEAM_TOKEN") {
-		if strings.Contains(env, name+"=") {
-			t.Errorf("the environment after the script's part holds %s", name)
-		}
-	}
-	if !strings.HasPrefix(rest, "--api-key-stdin\nsk-test-key\n") || strings.Contains(rest, "muse-key") {
-		t.Errorf("after the environment: %q, want the flag, the key on stdin and no key file", rest)
 	}
 }
 
@@ -372,15 +354,17 @@ func TestARepositoryCannotDisplaceOrImpersonateTheMuseChannels(t *testing.T) {
 	}
 }
 
-// THE SCRIPT INSTALLS AND APPROVES ITS NOTES PLUGIN BEFORE IT ADDS THE
-// SERVERS, since the approval rewrites the settings: the servers keep
-// `required` and their wait. (An earlier plugin of that name is gone with
-// every installed plugin, which the clear removes: [Paths.MusePlugins].)
+// THE SCRIPT REMOVES A PLUGIN OF THE NOTES PLUGIN'S NAME BEFORE IT INSTALLS AND
+// APPROVES ITS OWN, and adds the servers after the approval, which rewrites
+// the settings: an earlier plugin of that name never runs as the run's, and
+// the servers keep `required` and their wait. (The last run's servers go at
+// the clear before: TestAKilledRunsEntriesLeaveTheHomeAtAnotherHarnesssStart.)
 //
-// Mutation: add the servers first.
+// Mutation: install before removing, or add the servers first.
 func TestTheMuseScriptWiresItsPluginBeforeItsServers(t *testing.T) {
 	script := museWiring(Paths{Home: "/h"})
-	order := []string{"muse plugins install ", "muse plugins approve " + museNotesPlugin, "muse mcp add-json "}
+	order := []string{"muse plugins remove " + museNotesPlugin, "muse plugins install ",
+		"muse plugins approve " + museNotesPlugin, "muse mcp add-json "}
 	last := -1
 	for _, step := range order {
 		at := strings.Index(script, step)
@@ -388,19 +372,6 @@ func TestTheMuseScriptWiresItsPluginBeforeItsServers(t *testing.T) {
 			t.Fatalf("%q is not after the step before it in:\n%s", step, script)
 		}
 		last = at
-	}
-}
-
-// A SIGN-IN NAME NO SHELL CAN UNSET IS REFUSED before anything is written: the
-// script could not keep it out of the model's shell.
-//
-// Mutation: write the config without checking the names.
-func TestAMuseRunWithASignInNameNoShellCanUnsetIsRefused(t *testing.T) {
-	box := sandbox.NewFakeSandbox("b")
-	_, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "x",
-		SignInEnv: []string{"META_API_KEY", "BAD-NAME"}}, Session{}, PathsFor(box))
-	if err == nil || !strings.Contains(err.Error(), "BAD-NAME") {
-		t.Fatalf("err = %v, want the name refused", err)
 	}
 }
 
@@ -420,7 +391,8 @@ func TestAnUnreadableMuseRecordConfirmsNothing(t *testing.T) {
 		"event no object": []byte(`{"payload_type":"runtime.session","payload":{"event":"compacted"}}` + "\n"),
 	} {
 		record := insertAfter(t, museLines(t, "hooks.session.jsonl"), "plugin:crewlet-notes:posttooluse-1", bad)
-		if held, err := museHeld(bytes.NewReader(record), museHooksDigest); err == nil || len(held) != 0 {
+		if held, err := museHeld(t.Context(), bytes.NewReader(record), museHooksDigest,
+			museTokensIn(record), nil); err == nil || len(held) != 0 {
 			t.Errorf("%s: held %v, err %v; want none held and the line named", name, held, err)
 		}
 		box := sandbox.NewFakeSandbox("b")

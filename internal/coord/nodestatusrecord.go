@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -22,27 +22,28 @@ import (
 //
 // Not on the presence lease, which is rewritten every beat and held to
 // [MaxLeaseMetaBytes]; these rows grow with the configuration. A loop of its
-// own writes them on change and at least every [ReconcileInterval].
-//
-// The bucket's age is [StatusFreshness], four reconciles, so a dead node's
-// record ages out with no sweep (ADR-0142). It counts only while its writer
-// holds its presence at the record's epoch ([LiveNodeStatuses], like
+// own writes them, each a key of its own (nodestatusrows.go), on change and
+// at least every [ReconcileInterval]. The bucket's age is [StatusFreshness],
+// so a dead node's rows age out with no sweep (ADR-0142). A record counts
+// only at its writer's presence epoch ([LiveNodeStatuses], like
 // [LiveMCPListings]), so an earlier incarnation is never drawn.
 
 // NodeStatusRecord is one node's status record: the rows it reports of itself
 // beside its presence, under the presence epoch it wrote them at.
 //
-// It carries no struct tags: the wire shape is [NodeStatusRecord.Encode] and
-// [DecodeNodeStatusRecord], written by hand over the row encoders, so a key this
-// build does not know is ignored rather than refused, for the reason
-// [StatusFromMeta] gives.
+// It carries no struct tags: the wire shape is [NodeStatusRecord.Rows] and
+// [AssembleNodeStatusRecords], written by hand over the row encoders, so a key
+// this build does not know is ignored rather than refused, for the reason
+// [StatusFromMeta] gives. A listing fills only the parts its reader asked for
+// ([NodeStatusRead]): MCP, Models and Growth are nil where not read.
 type NodeStatusRecord struct {
-	// Node is the node the record describes. A store files the record under
+	// Node is the node the record describes. A store files every row under
 	// it and stamps it from the key, so a node can describe only itself.
 	Node string
 
-	// Epoch is the presence epoch the node held when it wrote the record,
-	// which a reader counts it at ([LiveNodeStatuses]).
+	// Epoch is the presence epoch the node held when it wrote its own row,
+	// which a reader counts it at ([LiveNodeStatuses]) and every other row
+	// only at ([AssembleNodeStatusRecords]).
 	Epoch int64
 
 	// At is when the node wrote it, on its own clock.
@@ -113,7 +114,9 @@ type GrowthDeprecation struct {
 }
 
 // MaxGrowthSignals bounds each list of [GrowthSignals] on the wire, and
-// MaxGrowthSignalBytes each name in it: internal/growth's own bounds.
+// MaxGrowthSignalBytes each name in it: internal/growth's own bounds. Two
+// full lists store 15,230 bytes at their widest, inside the growth row's
+// [MaxNodeStatusRowBytes]; 35 of each would not fit.
 const (
 	MaxGrowthSignals     = 32
 	MaxGrowthSignalBytes = 64
@@ -142,29 +145,41 @@ type ResumesBlocked struct {
 // that adds one travels whole and a value nothing names cannot grow the record.
 const MaxResumeBlockedKindBytes = 64
 
-// NodeStatusRecords is the fleet's status records, one per node.
+// NodeStatusRecords is the fleet's status records, each node's filed as rows
+// (nodestatusrows.go).
 type NodeStatusRecords interface {
-	// PutNodeStatus writes this node's record, replacing it, and refreshes
-	// its age. Unconditional: the only writer of a node's key is the node.
-	PutNodeStatus(ctx context.Context, r NodeStatusRecord) error
+	// PutNodeStatusRow writes one row, replacing it, and refreshes its age,
+	// UNLESS the key holds a row at a later epoch, which stands and is no
+	// error: a node's keys are written by its incarnations, and an earlier
+	// one's write still in flight never lands over a later one's. A row past
+	// [MaxNodeStatusRowBytes] is refused as [ErrValueTooLarge].
+	PutNodeStatusRow(ctx context.Context, row NodeStatusRow) error
 
-	// NodeStatusRecords is every record the store still holds, ordered by
-	// node, in one certified pass: an unreadable store is an error, never
-	// a fleet that reports nothing. Readers count them through
+	// RemoveNodeStatusRow removes one row where it was written at an epoch
+	// no later than through, for [NodeStatusRecords.DeleteNodeStatus]'s
+	// reason: a server or entry no longer configured, or growth signals
+	// gone. A row that is not there is no error.
+	RemoveNodeStatusRow(ctx context.Context, key NodeStatusRowKey, through int64) error
+
+	// NodeStatusRecords is every node's record the store still holds,
+	// ordered by node, each counted whole or not at all
+	// ([AssembleNodeStatusRecords]), from its own row and the classes read
+	// names, one certified pass each: an unreadable store is an error,
+	// never a fleet that reports nothing. Readers count them through
 	// [LiveNodeStatuses].
-	NodeStatusRecords(ctx context.Context) ([]NodeStatusRecord, error)
+	NodeStatusRecords(ctx context.Context, read NodeStatusRead) ([]NodeStatusRecord, error)
 
-	// DeleteNodeStatus removes a node's record where it was written at an
-	// epoch no later than through: a node that stops cleanly says so rather
-	// than leaving its rows for the age to remove. A record that is not there
-	// is no error, and neither is one written at a LATER epoch, which is left
-	// as it stands.
+	// DeleteNodeStatus removes every row of a node written at an epoch no
+	// later than through, its own row first: a node that stops cleanly says
+	// so rather than leaving its rows for the age to remove. A row that is
+	// not there is no error, and neither is one written at a LATER epoch,
+	// which is left as it stands.
 	//
 	// UP TO AN EPOCH, never whatever the key holds: presence epochs only
-	// grow, so a record past through is a later incarnation's of the same
+	// grow, so a row past through is a later incarnation's of the same
 	// node id — one started before this one finished stopping — and removing
 	// it would read that live node as not saying until its writer next
-	// wrote. Through rather than at, so a stopping node also removes a record
+	// wrote. Through rather than at, so a stopping node also removes a row
 	// whose write it saw fail that landed after all.
 	DeleteNodeStatus(ctx context.Context, node string, through int64) error
 }
@@ -181,115 +196,23 @@ func (r NodeStatusRecord) Check() error {
 	return nil
 }
 
-// Encode is the record on the wire: a JSON object of its epoch, its instant
-// and each part it carries, every part OMITTED when it says nothing, so a node
-// that runs nothing writes a record of its epoch and its instant. The node is
-// the key it is filed under, never a field.
-func (r NodeStatusRecord) Encode() ([]byte, error) {
-	out := map[string]any{"epoch": r.Epoch, "at": stamp(r.At)}
-	if len(r.MCP) > 0 {
-		rows := make([]map[string]any, len(r.MCP))
-		for i, m := range r.MCP {
-			rows[i] = m.meta()
-		}
-		out["mcp"] = rows
-	}
-	if len(r.Models) > 0 {
-		rows := make([]map[string]any, len(r.Models))
-		for i, m := range r.Models {
-			rows[i] = m.meta()
-		}
-		out["models"] = rows
-	}
-	if r.Runners != nil {
-		out["runners"] = map[string]any{
-			"direct":    r.Runners.Direct.meta(),
-			"container": r.Runners.Container.meta(),
-			"e2b":       r.Runners.E2B.meta(),
-		}
-	}
-	if infra := r.Infra.Meta(); infra != nil {
-		out["infra"] = infra
-	}
-	if b := r.ResumesBlocked; b != nil && b.Runs > 0 {
-		// OMITTED WHERE NOTHING WAITS, which is every record of a node whose
-		// seats wait for no operator: absent reads as none.
-		out["resumes_blocked"] = map[string]any{
-			"runs":  b.Runs,
-			"seat":  textcut.Within(b.Seat, iam.MaxLogin),
-			"kind":  textcut.Within(b.Kind, MaxResumeBlockedKindBytes),
-			"since": stamp(b.Since),
-		}
-	}
-	if g := r.Growth.meta(); g != nil {
-		out["growth"] = g
-	}
-	raw, err := json.Marshal(out)
-	if err != nil {
-		return nil, fmt.Errorf("coord: encode %s's status record: %w", r.Node, err)
-	}
-	return raw, nil
-}
-
-// DecodeNodeStatusRecord reads a record [NodeStatusRecord.Encode] wrote, filed
-// under node. A body that is not a JSON object is an error; a key this build
-// does not know is IGNORED rather than refused, and a row this build cannot
-// attribute (one naming no server or no entry) is dropped, for the reasons
-// [StatusFromMeta] gives.
-func DecodeNodeStatusRecord(node string, raw []byte) (NodeStatusRecord, error) {
-	var meta map[string]any
-	if err := json.Unmarshal(raw, &meta); err != nil {
-		return NodeStatusRecord{}, fmt.Errorf("coord: %s's status record is not an object: %w", node, err)
-	}
-	if meta == nil {
-		return NodeStatusRecord{}, fmt.Errorf("coord: %s's status record is null, not an object", node)
-	}
-	r := NodeStatusRecord{Node: node, Epoch: int64(intFromMeta(meta["epoch"])), At: instant(meta["at"])}
-	for _, item := range listFromMeta(meta["mcp"]) {
-		if row, ok := item.(map[string]any); ok {
-			if m, ok := mcpFromMeta(row); ok {
-				r.MCP = append(r.MCP, m)
-			}
-		}
-	}
-	for _, item := range listFromMeta(meta["models"]) {
-		if row, ok := item.(map[string]any); ok {
-			if m, ok := modelFromMeta(row); ok {
-				r.Models = append(r.Models, m)
-			}
-		}
-	}
-	if runners, ok := meta["runners"].(map[string]any); ok {
-		r.Runners = &RunnerStatus{
-			Direct:    cellFromMeta(runners["direct"]),
-			Container: cellFromMeta(runners["container"]),
-			E2B:       cellFromMeta(runners["e2b"]),
-		}
-	}
-	if infra, ok := meta["infra"].(map[string]any); ok {
-		r.Infra = infraFromMeta(infra)
-	}
-	r.ResumesBlocked = resumesBlockedFromMeta(meta["resumes_blocked"])
-	r.Growth = growthFromMeta(meta["growth"])
-	return r, nil
-}
-
-// meta is the signals as the record carries them, each list bounded, nil
-// where they say nothing: absent reads as none.
+// meta is the signals' row, each list bounded and each name fitted to
+// [MaxGrowthSignalBytes] as stored, nil where they say nothing: absent reads
+// as none.
 func (g *GrowthSignals) meta() map[string]any {
 	if g == nil || (len(g.ClockSkews) == 0 && len(g.Deprecations) == 0) {
 		return nil
 	}
 	skews := make([]map[string]any, 0, min(len(g.ClockSkews), MaxGrowthSignals))
 	for _, c := range g.ClockSkews[:min(len(g.ClockSkews), MaxGrowthSignals)] {
-		skews = append(skews, map[string]any{"product": textcut.Within(c.Product, MaxGrowthSignalBytes),
-			"vendor": textcut.Within(c.Vendor, MaxGrowthSignalBytes), "offset_seconds": c.OffsetSeconds,
+		skews = append(skews, map[string]any{"product": fitWithin(c.Product, MaxGrowthSignalBytes),
+			"vendor": fitWithin(c.Vendor, MaxGrowthSignalBytes), "offset_seconds": c.OffsetSeconds,
 			"since": stamp(c.Since)})
 	}
 	deprecations := make([]map[string]any, 0, min(len(g.Deprecations), MaxGrowthSignals))
 	for _, d := range g.Deprecations[:min(len(g.Deprecations), MaxGrowthSignals)] {
-		row := map[string]any{"product": textcut.Within(d.Product, MaxGrowthSignalBytes),
-			"version": textcut.Within(d.Version, MaxGrowthSignalBytes), "since": stamp(d.Since)}
+		row := map[string]any{"product": fitWithin(d.Product, MaxGrowthSignalBytes),
+			"version": fitWithin(d.Version, MaxGrowthSignalBytes), "since": stamp(d.Since)}
 		if !d.Retires.IsZero() {
 			row["retires"] = stamp(d.Retires)
 		}
@@ -298,14 +221,10 @@ func (g *GrowthSignals) meta() map[string]any {
 	return map[string]any{"clock_skews": skews, "deprecations": deprecations}
 }
 
-// growthFromMeta reads a record's growth signals, nil where it carries none: a
-// row naming no product, or a deprecation naming no version, is dropped, and
-// each list is read to its bound.
-func growthFromMeta(v any) *GrowthSignals {
-	row, ok := v.(map[string]any)
-	if !ok {
-		return nil
-	}
+// growthFromMeta reads a node's growth row, nil where it carries none: a
+// signal naming no product, or a deprecation naming no version, is dropped,
+// and each list is read to its bound.
+func growthFromMeta(row map[string]any) *GrowthSignals {
 	g := &GrowthSignals{}
 	for _, item := range listFromMeta(row["clock_skews"]) {
 		m, ok := item.(map[string]any)
@@ -461,7 +380,45 @@ type ModelStatus struct {
 	// Limits are the windows of the entry's sign-in as this node's calls last
 	// heard the vendor report them, at most [MaxModelLimits].
 	Limits []ModelLimit
+
+	// Homes are the seat jobs whose last piece of work on an LLM fleet this
+	// node gave the entry, the [MaxModelFleetHomes] most recent.
+	Homes []FleetHome
+
+	// Running are the seat jobs and helpers with work in flight on the entry
+	// on this node now, the [MaxModelFleetRunning] longest running: what it
+	// serves. Fleet is empty for pinned work.
+	Running []FleetRunning
 }
+
+// FleetRunning is one job's work in flight on an entry: the fleet that gave
+// it the work (none when pinned), the seat's handle or the helper, the job,
+// and since when.
+type FleetRunning struct {
+	Fleet, Subject, Job string
+	Since               time.Time
+}
+
+// MaxModelFleetRunning bounds the work in flight a model row names: 64, past
+// what one entry's processes serve at once on a node.
+const MaxModelFleetRunning = 64
+
+// FleetHome is one seat job's home on an LLM fleet: the fleet, the seat's
+// handle (or a helper's name), the job, and when the entry took its work.
+type FleetHome struct {
+	Fleet, Subject, Job string
+	At                  time.Time
+}
+
+// MaxModelFleetHomes bounds the homes a model row names: 32, the most recently
+// taken first. A home only keeps a seat job on its member within the fleet's
+// threshold, so one left off reads as none, and the row does not grow with
+// the company.
+const MaxModelFleetHomes = 32
+
+// MaxFleetHomeNameBytes bounds a home's fleet, subject and job on the wire:
+// 64, past a fleet key (63) and a seat's handle.
+const MaxFleetHomeNameBytes = 64
 
 // ModelLimit is one of a sign-in's limit windows on the wire, in harness's
 // words (llm.LimitReading), with when a call last heard it.
@@ -573,7 +530,7 @@ func (s RunnerState) Valid() bool {
 
 // RunnerStatus is each executor cell's readiness on one node.
 type RunnerStatus struct {
-	Direct, Container, E2B RunnerCell
+	Direct, Container RunnerCell
 }
 
 // RunnerCell is one cell's probe result: its state, what the probe found, and
@@ -704,11 +661,12 @@ type MCPServerStatus struct {
 	// reach, and a key one seat's child lacks may be exactly right for the
 	// next one's. Across nodes the same intersection is the status answer's.
 	//
-	// Whole keys and every one of them, unlike Error: the list is bounded by
-	// the entry's own configuration, as the row count is, rather than by
-	// anything a seat count multiplies — and a key cut short would name a
-	// tool nobody wrote.
-	Unlisted []string
+	// Whole keys: one cut short would name a tool nobody wrote. All of them
+	// but past what the row holds ([MaxNodeStatusRowBytes]), then the first
+	// by sort, UnlistedCount saying how many in all (zero where whole), so
+	// an intersection across nodes under-reports, never names one listed.
+	Unlisted      []string
+	UnlistedCount int
 
 	// Refused are tools an instance on this node lists that are not offered
 	// for their name: one no model can be handed (characters, length) or one
@@ -769,18 +727,18 @@ const MaxMCPToolNameBytes = 128
 // node's log (`mcp_server_failed`, `mcp_server_credential_missing`).
 const MaxMCPErrorBytes = 512
 
-// meta is one MCP row on the wire. Every optional part is OMITTED when
-// unset, so a healthy server's row is its name and its counts.
+// meta is one MCP row on the wire, filed under its server's name. Every
+// optional part is OMITTED when unset, so a healthy server's row is its
+// counts.
 func (m MCPServerStatus) meta() map[string]any {
 	row := map[string]any{
-		"server":  m.Server,
 		"shared":  m.Shared,
 		"started": m.Started,
 		"failed":  m.Failed,
 		"tools":   m.Tools,
 	}
 	if m.Error != "" {
-		row["error"] = textcut.Within(m.Error, MaxMCPErrorBytes)
+		row["error"] = fitWithin(m.Error, MaxMCPErrorBytes)
 	}
 	if m.ErrorSeat != uuid.Nil {
 		row["error_seat"] = m.ErrorSeat.String()
@@ -788,7 +746,7 @@ func (m MCPServerStatus) meta() map[string]any {
 	// OMITTED WHEN UNSET, which is every healthy row: absent reads
 	// as no class, no outage and no restart.
 	if m.ErrorClass != "" {
-		row["error_class"] = textcut.Within(m.ErrorClass, MaxMCPToolNameBytes)
+		row["error_class"] = fitWithin(m.ErrorClass, MaxMCPToolNameBytes)
 	}
 	if !m.DownSince.IsZero() {
 		row["down_since"] = m.DownSince.UTC().Format(time.RFC3339)
@@ -802,7 +760,7 @@ func (m MCPServerStatus) meta() map[string]any {
 		row["waiting"] = m.Waiting
 	}
 	if m.Wait != "" {
-		row["wait"] = textcut.Within(m.Wait, MaxMCPErrorBytes)
+		row["wait"] = fitWithin(m.Wait, MaxMCPErrorBytes)
 	}
 	if m.WaitSeat != uuid.Nil {
 		row["wait_seat"] = m.WaitSeat.String()
@@ -810,16 +768,14 @@ func (m MCPServerStatus) meta() map[string]any {
 	if !m.WaitingSince.IsZero() {
 		row["waiting_since"] = m.WaitingSince.UTC().Format(time.RFC3339)
 	}
-	if len(m.Unlisted) > 0 {
-		row["unlisted"] = m.Unlisted
-	}
 	// OMITTED WHEN NOTHING IS REFUSED OR SHADOWED, which is every
 	// row of a company whose names are in order.
 	if m.RefusedCount > 0 {
 		notes := make([]map[string]any, 0, min(len(m.Refused), MaxMCPToolNotes))
 		for _, r := range m.Refused[:min(len(m.Refused), MaxMCPToolNotes)] {
 			notes = append(notes, map[string]any{
-				"tool": textcut.Within(r.Tool, MaxMCPToolNameBytes), "reason": r.Reason,
+				"tool":   fitWithin(r.Tool, MaxMCPToolNameBytes),
+				"reason": fitWithin(r.Reason, MaxMCPToolNameBytes),
 			})
 		}
 		row["refused"], row["refused_count"] = notes, m.RefusedCount
@@ -828,27 +784,60 @@ func (m MCPServerStatus) meta() map[string]any {
 		notes := make([]map[string]any, 0, min(len(m.Shadowed), MaxMCPToolNotes))
 		for _, s := range m.Shadowed[:min(len(m.Shadowed), MaxMCPToolNotes)] {
 			notes = append(notes, map[string]any{
-				"tool": textcut.Within(s.Tool, MaxMCPToolNameBytes), "by": s.By,
+				"tool": fitWithin(s.Tool, MaxMCPToolNameBytes),
+				"by":   fitWithin(s.By, MaxMCPToolNameBytes),
 			})
 		}
 		row["shadowed"], row["shadowed_count"] = notes, m.ShadowedCount
 	}
+	if len(m.Unlisted) > 0 {
+		fitUnlisted(row, m.Unlisted)
+	}
 	return row
 }
 
-// meta is one model row on the wire. Every optional part is OMITTED when
-// unset, so a healthy entry's row is its key, its plan and its route.
+// fitUnlisted sets a row's unlisted keys LAST, after every other part: each
+// whole, sorted, as many as fit [MaxNodeStatusRowBytes] beside the rest with
+// the epoch at its widest, and their count where not all do.
+func fitUnlisted(row map[string]any, keys []string) {
+	keys = slices.Sorted(slices.Values(keys))
+	row["epoch"], row["unlisted"], row["unlisted_count"] = int64(math.MaxInt64), []string{}, len(keys)
+	size, kept := len(mustMarshal(row)), 0
+	for _, key := range keys {
+		grows := jsonTextBytes(key) + len(`""`) + min(kept, 1)
+		if size+grows > MaxNodeStatusRowBytes {
+			break
+		}
+		size, kept = size+grows, kept+1
+	}
+	delete(row, "epoch")
+	row["unlisted"] = keys[:kept]
+	if kept == len(keys) {
+		delete(row, "unlisted_count")
+	}
+}
+
+// mustMarshal is a row's JSON, which a map of strings, numbers and lists
+// always has.
+func mustMarshal(row map[string]any) []byte {
+	raw, _ := json.Marshal(row)
+	return raw
+}
+
+// meta is one model row on the wire, filed under its entry's key. Every
+// optional part is OMITTED when unset, so a healthy entry's row is its plan
+// and its route.
 func (m ModelStatus) meta() map[string]any {
-	row := map[string]any{"key": m.Key, "sign_in": m.SignIn, "resolves": m.Resolves}
+	row := map[string]any{"sign_in": fitWithin(m.SignIn, MaxModelWordBytes), "resolves": m.Resolves}
 	if m.Plan != "" {
-		row["plan"] = textcut.Bytes(m.Plan, ModelPlanChars)
+		row["plan"] = fitBytes(m.Plan, ModelPlanChars)
 	}
 	if o := m.SittingOut; o != nil {
 		sit := map[string]any{
 			"until":  stamp(o.Until),
 			"since":  stamp(o.Since),
-			"window": o.Window,
-			"said":   textcut.Within(o.Said, MaxModelSaidBytes),
+			"window": fitWithin(o.Window, MaxModelWordBytes),
+			"said":   fitWithin(o.Said, MaxModelSaidBytes),
 		}
 		if !o.ResetsAt.IsZero() {
 			sit["resets_at"] = stamp(o.ResetsAt)
@@ -860,8 +849,8 @@ func (m ModelStatus) meta() map[string]any {
 	}
 	if f := m.LastFailure; f != nil {
 		row["last_failure"] = map[string]any{
-			"kind": f.Kind, "at": stamp(f.At),
-			"said": textcut.Within(f.Said, MaxModelSaidBytes),
+			"kind": fitWithin(f.Kind, MaxModelWordBytes), "at": stamp(f.At),
+			"said": fitWithin(f.Said, MaxModelSaidBytes),
 		}
 	}
 	if len(m.Parked) > 0 {
@@ -886,15 +875,16 @@ func (m ModelStatus) meta() map[string]any {
 		row["parked_since"] = stamp(since)
 	}
 	if h := m.HostLogin; h != nil {
-		login := map[string]any{"state": string(h.State), "checked_at": stamp(h.CheckedAt)}
+		login := map[string]any{"state": fitWithin(string(h.State), MaxModelWordBytes),
+			"checked_at": stamp(h.CheckedAt)}
 		if h.Method != "" {
-			login["method"] = textcut.Within(h.Method, MaxModelSaidBytes)
+			login["method"] = fitWithin(h.Method, MaxModelSaidBytes)
 		}
 		if h.Account != "" {
-			login["account"] = textcut.Within(h.Account, MaxModelAccountBytes)
+			login["account"] = fitWithin(h.Account, MaxModelAccountBytes)
 		}
 		if h.Detail != "" {
-			login["detail"] = textcut.Within(h.Detail, MaxModelSaidBytes)
+			login["detail"] = fitWithin(h.Detail, MaxModelSaidBytes)
 		}
 		row["host_login"] = login
 	}
@@ -905,17 +895,44 @@ func (m ModelStatus) meta() map[string]any {
 		}
 		row["limits"] = limits
 	}
+	if len(m.Homes) > 0 {
+		named := slices.Clone(m.Homes)
+		slices.SortStableFunc(named, func(a, b FleetHome) int { return b.At.Compare(a.At) })
+		homes := make([]map[string]any, 0, min(len(named), MaxModelFleetHomes))
+		for _, h := range named[:min(len(named), MaxModelFleetHomes)] {
+			homes = append(homes, map[string]any{
+				"fleet":   textcut.Bytes(h.Fleet, MaxFleetHomeNameBytes),
+				"subject": textcut.Bytes(h.Subject, MaxFleetHomeNameBytes),
+				"job":     textcut.Bytes(h.Job, MaxFleetHomeNameBytes),
+				"at":      stamp(h.At),
+			})
+		}
+		row["homes"] = homes
+	}
+	if len(m.Running) > 0 {
+		running := make([]map[string]any, 0, min(len(m.Running), MaxModelFleetRunning))
+		for _, r := range m.Running[:min(len(m.Running), MaxModelFleetRunning)] {
+			running = append(running, map[string]any{
+				"fleet":   textcut.Bytes(r.Fleet, MaxFleetHomeNameBytes),
+				"subject": textcut.Bytes(r.Subject, MaxFleetHomeNameBytes),
+				"job":     textcut.Bytes(r.Job, MaxFleetHomeNameBytes),
+				"since":   stamp(r.Since),
+			})
+		}
+		row["running"] = running
+	}
 	return row
 }
 
 // meta is one limit window on the wire, its unsaid parts omitted.
 func (l ModelLimit) meta() map[string]any {
-	out := map[string]any{"window": l.Window, "state": l.State, "seen": stamp(l.Seen)}
+	out := map[string]any{"window": fitWithin(l.Window, MaxModelWordBytes),
+		"state": fitWithin(l.State, MaxModelWordBytes), "seen": stamp(l.Seen)}
 	if l.Hours > 0 {
 		out["hours"] = l.Hours
 	}
 	if l.Model != "" {
-		out["model"] = textcut.Bytes(l.Model, MaxModelLimitModelBytes)
+		out["model"] = fitBytes(l.Model, MaxModelLimitModelBytes)
 	}
 	if l.Used != nil {
 		out["used"] = *l.Used
@@ -928,12 +945,13 @@ func (l ModelLimit) meta() map[string]any {
 
 // meta is one runner cell on the wire.
 func (c RunnerCell) meta() map[string]any {
-	cell := map[string]any{"state": string(c.State), "checked_at": stamp(c.CheckedAt)}
+	cell := map[string]any{"state": fitWithin(string(c.State), MaxModelWordBytes),
+		"checked_at": stamp(c.CheckedAt)}
 	if c.Detail != "" {
-		cell["detail"] = textcut.Within(c.Detail, MaxModelSaidBytes)
+		cell["detail"] = fitWithin(c.Detail, MaxModelSaidBytes)
 	}
 	if c.Fix != "" {
-		cell["fix"] = textcut.Within(c.Fix, MaxModelSaidBytes)
+		cell["fix"] = fitWithin(c.Fix, MaxModelSaidBytes)
 	}
 	return cell
 }
@@ -952,15 +970,8 @@ func instant(v any) time.Time {
 	return at.UTC()
 }
 
-// mcpFromMeta reads one MCP row, reporting false for a row naming no server:
-// a row a reader cannot attribute is dropped rather than drawn unnamed.
-func mcpFromMeta(row map[string]any) (MCPServerStatus, bool) {
-	server := stringFromMeta(row["server"])
-	if server == "" {
-		// A row naming no server describes nothing a reader could
-		// attribute, so it is dropped rather than drawn unnamed.
-		return MCPServerStatus{}, false
-	}
+// mcpFromMeta reads one MCP row filed under server.
+func mcpFromMeta(server string, row map[string]any) MCPServerStatus {
 	m := MCPServerStatus{
 		Server:       server,
 		Started:      intFromMeta(row["started"]),
@@ -995,17 +1006,14 @@ func mcpFromMeta(row map[string]any) (MCPServerStatus, bool) {
 	// A COUNT IS AT LEAST WHAT IT LISTS, whatever a peer wrote.
 	m.RefusedCount = max(intFromMeta(row["refused_count"]), len(m.Refused))
 	m.ShadowedCount = max(intFromMeta(row["shadowed_count"]), len(m.Shadowed))
-	return m, true
+	if count := intFromMeta(row["unlisted_count"]); count > len(m.Unlisted) {
+		m.UnlistedCount = count
+	}
+	return m
 }
 
-// modelFromMeta reads one model row, reporting false for a row naming no
-// entry: a row a reader cannot attribute is dropped rather than drawn
-// unnamed, as an MCP row is.
-func modelFromMeta(row map[string]any) (ModelStatus, bool) {
-	key := stringFromMeta(row["key"])
-	if key == "" {
-		return ModelStatus{}, false
-	}
+// modelFromMeta reads one model row filed under key.
+func modelFromMeta(key string, row map[string]any) ModelStatus {
 	m := ModelStatus{
 		Key:        key,
 		Plan:       stringFromMeta(row["plan"]),
@@ -1056,7 +1064,31 @@ func modelFromMeta(row map[string]any) (ModelStatus, bool) {
 			m.Limits = append(m.Limits, l)
 		}
 	}
-	return m, true
+	for _, v := range listFromMeta(row["homes"]) {
+		h, ok := v.(map[string]any)
+		if !ok || len(m.Homes) == MaxModelFleetHomes {
+			continue
+		}
+		// A home naming no fleet or subject steers no pick, and is dropped.
+		home := FleetHome{Fleet: stringFromMeta(h["fleet"]), Subject: stringFromMeta(h["subject"]),
+			Job: stringFromMeta(h["job"]), At: instant(h["at"])}
+		if home.Fleet != "" && home.Subject != "" {
+			m.Homes = append(m.Homes, home)
+		}
+	}
+	for _, v := range listFromMeta(row["running"]) {
+		r, ok := v.(map[string]any)
+		if !ok || len(m.Running) == MaxModelFleetRunning {
+			continue
+		}
+		// Work naming no subject serves nobody, and is dropped.
+		running := FleetRunning{Fleet: stringFromMeta(r["fleet"]), Subject: stringFromMeta(r["subject"]),
+			Job: stringFromMeta(r["job"]), Since: instant(r["since"])}
+		if running.Subject != "" {
+			m.Running = append(m.Running, running)
+		}
+	}
+	return m
 }
 
 // limitFromMeta reads one limit window, false for one naming no window or
@@ -1072,7 +1104,7 @@ func limitFromMeta(v any) (ModelLimit, bool) {
 	if l.Window == "" || l.State == "" {
 		return ModelLimit{}, false
 	}
-	if used, ok := row["used"].(float64); ok {
+	if used, ok := floatFromMeta(row["used"]); ok {
 		l.Used = &used
 	}
 	return l, true

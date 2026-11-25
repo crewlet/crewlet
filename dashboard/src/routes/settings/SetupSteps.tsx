@@ -4,11 +4,13 @@
  */
 
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Button, Callout, IconButton, List, VendorUI } from "@crewlethq/ui";
+import { Button, Callout, IconButton, Link, List, Tag, VendorUI } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { ListOrderedGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import type { SetupStep } from "~/protocol/index.ts";
 import { VendorWords } from "~/ui/VendorWords.tsx";
+import { href } from "~/app/router.tsx";
+import { entryOfSurface } from "./integrations/catalogue.tsx";
 
 /** The steps, and the address a step's vendor link opens with the form's values filled in. */
 export interface StepsProps {
@@ -16,7 +18,48 @@ export interface StepsProps {
   resolveUrl: (url: string) => string;
 }
 
-/** One step's words, then the permissions it grants, each a vendor UI name. */
+/** The integration a step connects first, by name and page. */
+function needed(kind: string): { name: string; page: string } {
+  const entry = entryOfSurface(kind);
+  return { name: entry?.name ?? kind, page: href(["company", "integrations", entry?.key ?? kind]) };
+}
+
+/** Whether the integration a step needs is connected, and a link to it while it is not. */
+function NeedsState({ kind, connected }: { kind: string; connected: boolean }) {
+  const { name, page } = needed(kind);
+  return (
+    <span className="int-step-needs">
+      <Tag size="sm" variant={connected ? "success" : "warning"}>
+        {connected ? `${name} connected` : `${name} not connected`}
+      </Tag>
+      {!connected && <Link href={page}>Open {name}</Link>}
+    </span>
+  );
+}
+
+/**
+ * Above the form, each integration a step connects first that is not
+ * connected yet, so fields that cannot work until then do not look ready.
+ */
+export function NeedsFirst({ steps }: { steps: SetupStep[] }) {
+  return steps
+    .filter((step) => step.needs && step.connected === false)
+    .map((step) => {
+      const { name, page } = needed(step.needs!);
+      return (
+        <Callout
+          key={step.needs}
+          variant="warning"
+          title={`Connect ${name} first`}
+          action={<Link href={page}>Open {name}</Link>}
+        >
+          <span>{name} is not connected yet.</span>
+        </Callout>
+      );
+    });
+}
+
+/** One step's words, the permissions it grants, and the state of what it connects first. */
 function stepWords(step: SetupStep, resolveUrl: StepsProps["resolveUrl"]): ReactNode {
   return (
     <span className="int-step">
@@ -30,6 +73,7 @@ function stepWords(step: SetupStep, resolveUrl: StepsProps["resolveUrl"]): React
           ))}
         </span>
       )}
+      {step.needs && <NeedsState kind={step.needs} connected={step.connected === true} />}
     </span>
   );
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 )
 
@@ -55,6 +56,13 @@ func TestASignInNamesWhatItsRegistrationNeeds(t *testing.T) {
 			"mcp_servers[0].oauth.scopes[0]", ErrUnknownValue},
 		{"a scope twice", "    oauth:\n      client: cimd\n      scopes: [read, read]\n",
 			"mcp_servers[0].oauth.scopes[1]", ErrConflict},
+		// A GRANT'S RECORD names each scope and the client id at a bound
+		// (coord.MaxGrantScopeBytes, coord.MaxGrantAddressBytes), refused
+		// here, naming the field, rather than at a sign-in's end.
+		{"a scope past what a grant keeps", "    oauth:\n      client: cimd\n      scopes: [" +
+			strings.Repeat("s", coord.MaxGrantScopeBytes+1) + "]\n", "mcp_servers[0].oauth.scopes[0]", ErrOutOfRange},
+		{"a client id past what a grant keeps", "    oauth:\n      client: own\n      client_id: " +
+			strings.Repeat("c", coord.MaxGrantAddressBytes+1) + "\n", "mcp_servers[0].oauth.client_id", ErrOutOfRange},
 	} {
 		err := rejects(t, oauthDoc(tc.lines), tc.path)
 		if !errors.Is(err, tc.want) {
@@ -120,5 +128,6 @@ roles:
 	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "bridge") {
 		t.Fatalf("a box listing a signed-in server: %v", err)
 	}
-	mustCompany(t, strings.Replace(doc, "    oauth:\n      client: cimd\n", "", 1))
+	mustCompany(t, strings.Replace(doc, "    oauth:\n      client: cimd\n",
+		"    headers:\n      Authorization: Bearer ${LINEAR_TOKEN}\n", 1))
 }

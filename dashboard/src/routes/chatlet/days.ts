@@ -19,6 +19,7 @@ import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 import type { ChatMessageView } from "~/protocol/index.ts";
 
 import { packPosition } from "./cursor.ts";
+import { saidBy, sameSpeaker } from "./speaker.ts";
 
 const DAY_MS = 86_400_000;
 
@@ -59,7 +60,7 @@ export function continues(previous: ChatMessageView | undefined, view: ChatMessa
     !previous.message.event &&
     !view.message.event &&
     !previous.message.deleted_at &&
-    previous.message.author === view.message.author &&
+    sameSpeaker(previous.message, view.message) &&
     Date.parse(view.message.created_at) - Date.parse(previous.message.created_at) < RUN_MS
   );
 }
@@ -114,7 +115,7 @@ export function dayLabel(key: string, today: string): string {
 export function isUnread(view: ChatMessageView, since: number | null, viewer: string): boolean {
   if (since === null) return false;
   const at = packPosition(view.position);
-  return at !== null && at > since && view.message.author !== viewer && !view.message.deleted_at;
+  return at !== null && at > since && !saidBy(view.message, viewer) && !view.message.deleted_at;
 }
 
 /** One row of a day, with how it is drawn. */

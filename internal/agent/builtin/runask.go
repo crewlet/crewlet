@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -170,10 +171,19 @@ func (t *AskAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	outcome, err := t.deps.Desk.RecordAsk(ctx, runID, launch, ask)
+	onCall := ""
+	if err == nil && outcome == sandbox.AskAlreadyAsked {
+		onCall = t.parkedOnCall(ctx, runID, launch)
+	}
 	switch {
 	case err != nil:
 		return nodeFailure(ctx, AskAndWaitTool, err, AskAndWaitTool+" could not record "+
 			"your question", "Nothing was asked: call it again."), nil
+	case onCall != "":
+		// PARKED ON ITS OWN CALLS, which it never asked about: said as that.
+		return refused(tools.RefusalNotRunning, onCall+" still running, so this run is parked on it and "+
+			"asks nothing now. END YOUR TURN NOW: you will be resumed with its result, and can ask then if "+
+			"you still need to."), nil
 	case outcome == sandbox.AskAlreadyAsked:
 		// NOT RUNNING, not a conflict: a conflict clears on a retry, and this
 		// never does, since the job stays parked on the question it asked.
@@ -189,6 +199,30 @@ func (t *AskAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"answer arrives as your next prompt in this session, on this machine or, if it is " +
 		"gone by then, on a fresh one from your branch; only where this session cannot be " +
 		"continued does a fresh run start from your branch with your question and their answer."}, nil
+}
+
+// parkedOnCall names the calls job of run runID is parked on alone
+// (internal/sandbox's CallWait), "Your call to X is" ([callsParked]), "" where
+// it asked anything else or its row cannot be read.
+func (t *AskAndWait) parkedOnCall(ctx context.Context, runID, job string) string {
+	run, found, err := t.deps.Desk.Get(ctx, runID)
+	if err != nil || !found || !run.AskedBy(job) || !run.WaitsOnOwnCalls() {
+		return ""
+	}
+	return callsParked(run)
+}
+
+// callsParked names the calls run's job parked on, as the subject of a
+// sentence: "Your call to X is", or "Your calls to X and Y are".
+func callsParked(run sandbox.PendingRun) string {
+	called := make([]words.Said, len(run.ParkedCalls))
+	for i, c := range run.ParkedCalls {
+		called[i] = words.Said("`" + c.Tool + "`")
+	}
+	if len(called) == 1 {
+		return "Your call to " + string(called[0]) + " is"
+	}
+	return "Your calls to " + words.And(called) + " are"
 }
 
 // readAsk reads and checks the arguments into the ask to record, or returns
@@ -299,6 +333,12 @@ func (g *submitGate) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 					"takes no submission. END YOUR TURN NOW: their answer, and what the call "+
 					"returned, arrive as your next prompt, and you submit your work once you "+
 					"have finished it."), nil
+			case found && run.AskedBy(launch) && run.WaitsOnOwnCalls():
+				// A CALL ANSWERED STILL RUNNING before its harness gave it up
+				// parks the job on it (internal/sandbox's CallWait).
+				return refused(tools.RefusalNotRunning, callsParked(run)+" still running, so this run is "+
+					"parked on it and takes no submission. END YOUR TURN NOW: you will be resumed with its "+
+					"result, and you submit your work once you have finished it."), nil
 			case found && run.AskedBy(launch) && run.WaitsFor != nil:
 				// A WAIT ON ANOTHER RUN parks the job as a question does
 				// (ADR-0176), and is said as the wait it is.

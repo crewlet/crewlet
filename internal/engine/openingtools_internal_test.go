@@ -81,10 +81,10 @@ func TestALaunchCountsTheToolsOfTheServersItsBoxIsHanded(t *testing.T) {
 	box := map[string]sandbox.MCPServer{"github": {Name: "github", Transport: sandbox.TransportStdio,
 		Command: "github-mcp"}}
 	req := runner.AgentRunRequest{Surface: surface}
-	if got := withRunsOwn(req, sandbox.LaunchRequest{MCPServers: box}).MCPTools; got != 3 {
+	if got := withRunsOwn(req, nil, sandbox.LaunchRequest{MCPServers: box}).MCPTools; got != 3 {
 		t.Errorf("a launch handing its box github says its servers list %d tools, want github's 3", got)
 	}
-	if got := withRunsOwn(req, sandbox.LaunchRequest{}).MCPTools; got != 0 {
+	if got := withRunsOwn(req, nil, sandbox.LaunchRequest{}).MCPTools; got != 0 {
 		t.Errorf("a launch handing its box no server says its servers list %d tools, want none", got)
 	}
 }

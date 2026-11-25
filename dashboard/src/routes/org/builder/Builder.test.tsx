@@ -719,7 +719,7 @@ describe("checking the draft", () => {
             from: "",
             to: "",
             message:
-              "a `direct` box runs as the engine's own user; run it in `container` or `e2b` to hold it to them",
+              "a `direct` box runs as the engine's own user; run it in `container` to hold it to them",
           },
         ],
       });
@@ -787,7 +787,7 @@ describe("checking the draft", () => {
             unit: "",
             from: "",
             to: "",
-            message: "a `direct` box runs as the engine's own user; run it in `container` or `e2b`",
+            message: "a `direct` box runs as the engine's own user; run it in `container`",
             class: "sandbox.direct_box",
             person: "Agents run their work directly on the engine's own server.",
           },
@@ -931,7 +931,7 @@ test("a company with no model provider is told so, and one with a provider is no
     ".crewlet-callout",
   ) as HTMLElement;
   expect(caution.textContent).toContain("Agents can’t work until one is added");
-  // It sends the reader to Settings › Models to add one, signed in and tested.
+  // It sends the reader to Settings › Models & Fleets to add one, signed in and tested.
   expect(within(caution).getByRole("link", { name: "Add a model" }).getAttribute("href")).toBe(
     "#/settings/models?flow=add",
   );

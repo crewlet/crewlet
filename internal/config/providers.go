@@ -47,6 +47,11 @@ type Providers struct {
 	// can pin it. With neither, sorted keys; see ProviderOrder.
 	LLMOrder []string `yaml:"llm_order,omitempty" json:"llm_order,omitempty" desc:"Provider precedence; normally derived from the order they are written in."`
 
+	// LLMFleets is the named sets of LLM entries a seat job or helper runs
+	// on as `fleet:<key>` ([LLMFleet]). Read through [Providers.Fleets], which
+	// synthesises default-fleet; omitted when empty, so a read never serves it.
+	LLMFleets map[string]LLMFleet `yaml:"llm_fleets,omitempty" json:"llm_fleets,omitempty" desc:"Named sets of providers.llm entries of one model class; a seat job or helper set to fleet:<key> runs on whichever member has room. default-fleet always exists, empty until written."`
+
 	// Embeddings powers every vector this engine computes: the semantic half
 	// of a Doclet knowledge search and the similarity halves of diary and
 	// episode recall. Nil disables them — a search is keyword only, and
@@ -226,16 +231,15 @@ type LLMProvider struct {
 	// RunIn is WHERE a run launched on this entry happens, naming a cell of
 	// providers.sandbox. Empty takes the catalogue's default.
 	//
-	// On the entry, not the seat: it is a property of this RUNTIME. The
-	// subscription login lives on the engine host, so `direct` and `container`
-	// reach it and a remote cell needs the headless token; an operator wanting
-	// both makes two entries.
+	// On the entry, not the seat: it is a property of this RUNTIME. The entry
+	// whose harness needs the host's reach runs `direct`, the rest run in a
+	// `container`; an operator wanting both for one harness makes two entries.
 	//
 	// READ WHENEVER AN EXECUTOR LAUNCHES ON THIS ENTRY: a launch takes the
 	// chain's first member that can run and is not sitting out, so a fallback
 	// is placed by its own run_in. REFUSED ON A HARNESS THAT CANNOT LAUNCH ONE
 	// ([ExecutorHarnesses]): nothing would read the field.
-	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a seat's executor run on this entry happens. Empty = providers.sandbox.default_run_in."`
+	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container" desc:"Where a seat's executor run on this entry happens. Empty = providers.sandbox.default_run_in."`
 
 	// StateDir is where this provider keeps its credential directory and
 	// per-seat homes, under a subdirectory named for its harness

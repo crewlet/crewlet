@@ -136,8 +136,8 @@ func TestWithinIsStrictAndNotAPrefixTest(t *testing.T) {
 	}
 }
 
-// WHERE A PATH LANDS IN A LOCAL BOX is one table, because both local cells and
-// config validation read it: a case that moved here moves all three at once.
+// WHERE A PATH LANDS IN A LOCAL BOX is one table, because both cells and config
+// validation read it: a case that moved here moves all three at once.
 func TestInHomeIsWhereALocalBoxPutsAFile(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -165,9 +165,9 @@ func TestInHomeIsWhereALocalBoxPutsAFile(t *testing.T) {
 		{"a minted home and an absolute path", "", "/home/user/.npmrc", ""},
 		{"a minted home and a relative path", "", ".npmrc", ".npmrc"},
 		{"a minted home and a relative climb out", "", "../x", ""},
-		// A leading tilde is the home, in every cell, as a remote box's
-		// own agent reads one; another account's home is refused there and
-		// so here.
+		// A leading tilde is the home, in every cell, as a shell reads one;
+		// another account's home is refused, as is a backslash after it, a
+		// character of a file name to a POSIX host and never a separator.
 		{"a tilde path", ContainerHome, "~/.npmrc", ".npmrc"},
 		{"a tilde path in a minted home", "", "~/.local/bin/tool", ".local/bin/tool"},
 		{"the tilde alone, which is the home itself", "", "~", ""},
@@ -175,6 +175,9 @@ func TestInHomeIsWhereALocalBoxPutsAFile(t *testing.T) {
 		{"a climb out from the tilde", "", "~/../x", ""},
 		{"another account's home", ContainerHome, "~bob/.npmrc", ""},
 		{"a name that only starts with a tilde", "", "~x", ""},
+		{"a tilde and a backslash", ContainerHome, `~\.npmrc`, ""},
+		{"a tilde and a backslash in a minted home", "", `~\.local\bin\tool`, ""},
+		{"a backslash in a tilde path, which is part of a name", "", `~/a\b`, `a\b`},
 		{"a tilde that is not the first character", "", "a/~/x", "a/~/x"},
 		// The direct box itself holds its home, and so can name it.
 		{"a held host home", "/var/lib/crewlet/boxes/ab12/home", "/var/lib/crewlet/boxes/ab12/home/x", "x"},

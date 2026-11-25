@@ -759,21 +759,6 @@
     "CodeChecks": {
       "additionalProperties": false,
       "properties": {
-        "allow_run_in": {
-          "description": "The cells a repository's checks file may name in a check's run_in, each once: container or e2b. Unset is the one run_in resolves to; set, it holds that one.",
-          "items": {
-            "enum": [
-              "container",
-              "e2b",
-              "",
-              null
-            ]
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
         "env": {
           "additionalProperties": {
             "type": [
@@ -791,48 +776,9 @@
           ]
         },
         "max_timeout_seconds": {
-          "description": "How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3000 — an e2b box on the smallest plan's one-hour session, with ten minutes of it for the box's setup.",
+          "description": "How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3600 — an hour, GitLab CI's and Azure Pipelines' default job timeout, and the longest a hung check holds one of its Gitlet node's check slots.",
           "maximum": 21600,
           "minimum": 60,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "remote": {
-          "$ref": "#/$defs/CodeChecksRemote"
-        },
-        "run_in": {
-          "description": "The cell a check whose checks file names none runs in: container — a container on a Gitlet node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct is refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host.",
-          "enum": [
-            "container",
-            "e2b",
-            "",
-            null
-          ]
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "CodeChecksRemote": {
-      "additionalProperties": false,
-      "properties": {
-        "box_hours_per_day": {
-          "description": "How many hours of remote (e2b) box time the company spends on checks in a UTC day, each box charged a minute at a time while it runs: 0..100000; 0 starts none. Once the day's hours are spent, a new remote check waits queued until the next UTC midnight; a box already running runs to its own end. Unset is 192 (provisional): one merge queue saturated all day at ten-minute checks.",
-          "maximum": 100000,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "max_running": {
-          "description": "How many remote (e2b) check boxes the company runs at once, whichever Gitlet node starts them: 0..1024; 0 starts none. A check past it waits queued until a box ends. Unset is 16 (provisional): a merge queue's full round of four candidates with two checks each, doubled for the head checks beside it, inside E2B's 20-sandbox Hobby limit.",
-          "maximum": 1024,
-          "minimum": 0,
           "type": [
             "integer",
             "null"
@@ -2051,43 +1997,6 @@
       "properties": {
         "team": {
           "description": "The DigitalOcean team the agents' tokens act in, by its name as the control panel's team menu shows it. The first agent's token proves it.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "E2BSandbox": {
-      "additionalProperties": false,
-      "properties": {
-        "api_key": {
-          "description": "Remote sandbox API key; required. ${VAR} supported.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ],
-          "x-crewlet-secret": true
-        },
-        "domain": {
-          "description": "Self-hosted sandbox cluster domain; empty = vendor cloud.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
-        "template": {
-          "description": "Box template, which sizes the box: its vCPU, RAM and disk are set when the template is built.",
           "type": [
             "string",
             "number",
@@ -3383,6 +3292,61 @@
         "null"
       ]
     },
+    "LLMFleet": {
+      "additionalProperties": false,
+      "properties": {
+        "members": {
+          "description": "providers.llm keys of one model class on one harness, each once; the order is the sequential order. Empty is valid: a seat on the fleet waits until one joins.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "What the fleet is called: 1 to 60 characters, unique across fleets ignoring case. default-fleet's name is its key.",
+          "maxLength": 60,
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "strategy": {
+          "description": "How new work is spread across the members: balanced (default) keeps every member at a similar share of its limits, plans first; sequential fills the first member until it nears its limit, then the next.",
+          "enum": [
+            "balanced",
+            "sequential",
+            "",
+            null
+          ]
+        },
+        "threshold_points": {
+          "description": "Balanced only: how many points of usage above the least-used member a seat job may stay on the member it last ran on, for its cache: 1 to 50. Absent: 5.",
+          "maximum": 50,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "LLMProvider": {
       "additionalProperties": false,
       "properties": {
@@ -3464,7 +3428,6 @@
           "enum": [
             "direct",
             "container",
-            "e2b",
             "",
             null
           ]
@@ -3559,7 +3522,7 @@
           ]
         },
         "image": {
-          "description": "Container image: with the harness installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run or a check runs in a container.",
+          "description": "Container image: with the harness installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run is placed in a container; on a company hosting code (code.backend: gitlet), setting it runs the repositories' checks in containers made from it, and leaving it out runs none.",
           "type": [
             "string",
             "number",
@@ -3577,7 +3540,7 @@
           ]
         },
         "run_args": {
-          "description": "Extra container run arguments. This is where a local box is sized.",
+          "description": "Extra container run arguments. This is where a container box is sized.",
           "items": {
             "type": [
               "string",
@@ -3618,7 +3581,7 @@
           ]
         },
         "state_dir": {
-          "description": "Parent directory for box directories; used by both local placements.",
+          "description": "Parent directory for box directories; used by both placements.",
           "type": [
             "string",
             "number",
@@ -4381,6 +4344,16 @@
             "null"
           ]
         },
+        "llm_fleets": {
+          "additionalProperties": {
+            "$ref": "#/$defs/LLMFleet"
+          },
+          "description": "Named sets of providers.llm entries of one model class; a seat job or helper set to fleet:<key> runs on whichever member has room. default-fleet always exists, empty until written.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "llm_order": {
           "description": "Provider precedence; normally derived from the order they are written in.",
           "items": {
@@ -4517,7 +4490,7 @@
               "const": ""
             }
           ],
-          "description": "Canonical slug, and how lead and manages name this seat. Immutable: it derives the seat's durable id, so changing it removes the seat and creates another.",
+          "description": "Canonical slug, and how lead and manages name this seat. Never auto-join, org-chart or sessions, the names the engine writes its own lines in a room under. Immutable: it derives the seat's durable id, so changing it removes the seat and creates another.",
           "type": [
             "string",
             "number",
@@ -6686,26 +6659,13 @@
           ]
         },
         "default_run_in": {
-          "description": "Where a run launched on a providers.llm entry with no run_in happens. Required unless the catalogue names exactly one cell, or every entry a seat's executor can launch on names its own.",
+          "description": "Where a run launched on a providers.llm entry with no run_in happens. Required unless fake is true, or every entry a seat's executor can launch on names its own.",
           "enum": [
             "direct",
             "container",
-            "e2b",
             "",
             null
           ]
-        },
-        "default_timeout_seconds": {
-          "description": "Box TTL/keepalive. Not a run cap: the orphan-reclaim grace.",
-          "minimum": 0,
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "e2b": {
-          "$ref": "#/$defs/E2BSandbox",
-          "description": "The remote backend. Absent = run_in: e2b is refused."
         },
         "fake": {
           "description": "Use the in-process double for every placement. Demonstrations only.",
@@ -6716,9 +6676,17 @@
             "null"
           ]
         },
+        "host_grace_seconds": {
+          "description": "How long a node that launched boxes may be absent or silent before its runs are recorded lost or released; also the orphan reaper's cutoff on its box root. Not a run cap. Unset = 900s.",
+          "minimum": 0,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "local": {
           "$ref": "#/$defs/LocalSandbox",
-          "description": "The engine host as a backend. Absent = run_in: direct|container is refused."
+          "description": "The engine host's boxes, for run_in direct and container. Required unless fake is true."
         },
         "setup": {
           "description": "Provisioning steps applied to every box before per-seat extras.",

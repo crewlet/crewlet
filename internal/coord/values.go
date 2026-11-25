@@ -26,7 +26,7 @@ const MaxValueBytes = 6_290_346
 // a read-decide-write ([SandboxRuns.MutateSandboxRun]), takes to cross a node's
 // connection to the store at the slowest link pace the engine allows
 // (internal/objstore's MiBPace, both ways): the read, an 8 MiB reply
-// (internal/jsapi's ReplyBytes), 240 s; the write, 6,290,731 bytes under a
+// (internal/jsapi's ReplyBytes), 240 s ([MaxValueReadCrossing]); the write, 6,290,731 bytes under a
 // 43-byte key (a part's, a run's longest) behind a kibibyte protocol line,
 // 180.008554458 s a send for up to three (internal/jsapi's Sending and
 // WriteSends). internal/coord/kv derives and holds it. A budget waiting on
@@ -35,6 +35,16 @@ const MaxValueBytes = 6_290_346
 // own reason PLUS this, since a reason alone cuts the change while its bytes
 // still cross, and counting only the write leaves the read's four minutes out.
 const MaxValueCrossing = 780_025_663_374 * time.Nanosecond
+
+// MaxValueReadCrossing is the longest a READ of a run's value at
+// [MaxValueBytes] takes to cross a node's connection to the store at the
+// slowest link pace the engine allows: the leader's reply alone, 8 MiB
+// (internal/jsapi's ReplyBytes) at internal/objstore's MiBPace, 240 s, the read
+// [MaxValueCrossing] counts beside its write's sends. internal/coord/kv derives
+// and holds it. A budget waiting on another node's read of a run's value counts
+// this, never a change's crossing, since a read sends nothing; one on its own
+// node's, [SandboxRuns.ValueReadCrossing]. A budget is its reason PLUS this.
+const MaxValueReadCrossing = 240 * time.Second
 
 // ErrValueTooLarge is a write refused because what it carries is past the
 // store's bound on it: a key's value past [MaxValueBytes] ([HoldValue]), or a

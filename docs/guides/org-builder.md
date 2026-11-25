@@ -176,7 +176,7 @@ chat and trackers in Company › Integrations, and adding a model provider. The
 engine applies the company without one, but until the provider is added no agent
 seat takes a turn: what is sent to a seat waits in its inbox and runs once the
 provider exists. **Add a model** opens
-[Settings › Models](../concepts/llm-backends.md#managing-models-from-the-dashboard)
+[Settings › Models & Fleets](../concepts/llm-backends.md#managing-models-from-the-dashboard)
 on its wizard, which adds the model, signs it in and tests it; the panel also
 gives the terminal steps, folded, which [Giving the company a
 model](#giving-the-company-a-model) explains. On a company another system
@@ -188,7 +188,7 @@ before it is made.
 ### Giving the company a model
 
 Every model is a [harness](../concepts/llm-backends.md) the engine drives.
-[Settings › Models](../concepts/llm-backends.md#managing-models-from-the-dashboard)
+[Settings › Models & Fleets](../concepts/llm-backends.md#managing-models-from-the-dashboard)
 adds one from the dashboard. To add it at the node's host instead, in a terminal
 beside the node's `crewlet.yaml`: the company the builder created is in the
 store and in no file, so the steps start by writing it to one. The builder's
@@ -254,7 +254,7 @@ crewlet run
 - **The sandbox is this machine.** A `direct` box runs the harness as your user
   on the node's own host and calls the seat's tools back through the node's own
   listener on loopback, so only the node's `api.port` is needed, whatever its
-  roles. A `container` or `e2b` cell, or a seats node started with
+  roles. A `container` cell, or a seats node started with
   `api.port: 0`, instead needs `CREWLET_MCP_BRIDGE_URL`, the fleet's address as
   that box reaches it (see [Code
   Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
@@ -487,7 +487,9 @@ has none) and **Agents with problems**, which is named apart from the
 configuration check's pill in the toolbar ("Configuration OK", or "*N*
 configuration problems"), since one is about the agents and the other the
 document. Rows are pruned to the seats the chip keeps, a team kept while it
-holds one.
+holds one. A seat counts in **Paused or stopped** from the moment it is paused,
+while the turn it is on finishes or its executor asks too, so the state chips
+always add up to **All agents**; its Status still says what it is doing.
 
 **The status legend** on the chart, at the canvas's bottom right across from the
 zoom controls, has **Working**, **Needs you**, **Paused or stopped** and
@@ -578,7 +580,7 @@ The toolbar's check status says what the engine made of the current draft. It is
 
 A change is checked about a third of a second after it is made, so a burst of changes (a held key, several undos) is checked once.
 
-When the company has no model provider, a caution says so. The engine applies such a company and places its seats, but no agent seat takes a turn until a provider exists: work sent to a seat waits in its inbox and runs once one is added ([A Company With No Model Provider](../concepts/configuration.md#a-company-with-no-model-provider)). The builder does not write providers. The caution sends the reader to [Settings › Models](../concepts/llm-backends.md#managing-models-from-the-dashboard), where a model is added, signed in and tested, and folds away the terminal steps that add one at the node's host, starting from the company the store holds ([Giving the company a model](#giving-the-company-a-model)).
+When the company has no model provider, a caution says so. The engine applies such a company and places its seats, but no agent seat takes a turn until a provider exists: work sent to a seat waits in its inbox and runs once one is added ([A Company With No Model Provider](../concepts/configuration.md#a-company-with-no-model-provider)). The builder does not write providers. The caution sends the reader to [Settings › Models & Fleets](../concepts/llm-backends.md#managing-models-from-the-dashboard), where a model is added, signed in and tested, and folds away the terminal steps that add one at the node's host, starting from the company the store holds ([Giving the company a model](#giving-the-company-a-model)).
 
 On a company another system [manages](../concepts/configuration.md#managed-configuration) it gives no steps and says the model is added there, by whoever reads it, a writer the document names included. The steps end in an offline `crewlet config import`, which a managed document refuses, and the managing system replaces any revision written around it at its next reconcile. The model is added at the company's source like any other change: the repository a pipeline applies, or the resources an operator renders it from.
 

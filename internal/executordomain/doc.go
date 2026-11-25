@@ -17,19 +17,17 @@
 // object per capture under a key the store mints, and a row names it; the
 // collector keeps every object a row names and deletes one no row names at its
 // first pass once both the object's upload and its key's minting are more than
-// a day old (ADR-0027). NOT a day after the row stops naming it, as the
-// domain's first migration says: an object a day old that the last row stops
-// naming is gone within the hour, which is why a session a live turn still
-// means to continue is held by a row rather than trusted to linger (see "A
-// turn's first read holds its base"). The rows are a REQUIRED reference
+// a day old (ADR-0027). So an object the last row stops naming may go within
+// the hour, which is why a session a live turn still means to continue is held
+// by a row rather than trusted to linger (see "A turn's first read holds its
+// base"). The rows are a REQUIRED reference
 // ([SessionObjectReferences]): the collector's audit reports a session whose
 // object is gone, and every backup carries the sessions the rows name, reading
 // this log past its store copy through the applier's own decoder for the
-// captures a restore replays. Not a volume per node (a box on another node, or
-// on e2b, could not reach it, and the collector, the audit and the backup could
-// not see it), not the memory changelog (a compacted subject per seat cannot
-// carry a conversation's ordering rules), and not the coordination store (a
-// value of mebibytes in a bucket every lease shares).
+// captures a restore replays. Not a volume per node (a box elsewhere could not
+// reach it, nor the collector, the audit or the backup see it), not the memory
+// changelog (a seat's compacted subject cannot carry a conversation's order),
+// not the coordination store (mebibytes in a bucket every lease shares).
 //
 // # Who writes the rows and who reads them
 //
@@ -83,7 +81,7 @@
 //     live one, keeping their endings, and a capture that cannot fit even
 //     then is refused. Because a release may reach any conversation of the
 //     seat, a capture's scope is the SEAT. From version 6 it names the entry
-//     its session ran under ([Capture.Entry]).
+//     its session ran under ([Capture.Entry]), and from 9 its media.
 //   - `end` stamps the turn ended with the engine's account of how it ended
 //     ([executorkeep.Ending]) and tombstones it. With no row (nothing was captured) it
 //     writes an ended row naming no object, so the next turn is still told how
@@ -146,21 +144,15 @@
 // every turn that read ([Head]). Never simply the newest end: every turn's
 // first launch continues the head its read named, so a conversation's sessions
 // are a LINE, each continuing the one before, and a turn that read early and
-// ended late — parked on a person's question while later turns ran, as a
-// schedule's fires do, none of them ever its answer — continued none of the
-// sessions those later turns left.
+// ended late — parked on a person's question while later turns ran —
+// continued none of the sessions those later turns left.
 //
-// THE SEAT BUDGET STILL RELEASES THE OLDEST END FIRST ([seatPlan]), so under
-// budget pressure it can release a conversation's head before a STALE SIBLING,
-// a turn that read the conversation earlier and ended later, and the next turn
-// then continues, of the sessions the conversation still keeps, the one that
-// read it last, and is told the released head's ending as it is told every
-// other. The release does not follow the head's order because the applier
-// decides it: in a rolling upgrade, a node releasing by end beside one
-// releasing by read would release different sessions for one capture, and
-// their copies of the estate would diverge. The head is a read's alone — two
-// builds answering two heads hand two turns two bases, each recorded on the
-// log as that turn's read — so its order moved with nothing to diverge.
+// THE SEAT BUDGET STILL RELEASES THE OLDEST END FIRST ([seatPlan]), so it can
+// release a conversation's head before a STALE SIBLING (one that read earlier
+// and ended later); the next turn then continues the kept session that read
+// last, and is told the released head's ending. The release keeps the end's
+// order because the applier decides it, and every node must release alike; the
+// head is a read's alone.
 //
 // # A turn's first read holds its base
 //
@@ -224,9 +216,10 @@
 // # A session that ran out of context is retired
 //
 // Another launch of it fails the same way, so an end naming it takes it off every
-// ended row of the conversation that names it, its own and held rows included, and
-// [Session.RetiredBy] says so. An end whose own row loses its session absorbs
-// nothing, so what it read is told again. ADR-0073's amendment has the reasoning.
+// ended row of the conversation naming it, its own and held rows included, saying
+// which turn spent it and how ([Session.RetiredBy], [Session.RetiredLoss]). An
+// end whose own row loses its session absorbs nothing: what it read is told again
+// (ADR-0073's amendment).
 //
 // # A removed seat stays removed
 //
@@ -257,11 +250,23 @@
 // is provisional until it reads to the end ([SessionStore.Open]). An object
 // that is missing, corrupt or sealed under a key the keyring no longer holds
 // is [ErrUnreadable], which a restorer reads as no session. Every bound is
-// this package's, but for the ones the sandbox that takes a session stops at
-// too — a session's archive and its sealed object, and an ending's fields —
-// which are internal/executorkeep's, the leaf both read because the sandbox
-// links no state log; and the largest record they admit is held under the
-// domain's declaration ([MaxRecordBytes]).
+// this package's but those the sandbox stops at too (a session's archive and
+// objects, an ending's fields), which are internal/executorkeep's, the leaf
+// both read; the largest record they admit is held under [MaxRecordBytes].
+//
+// # A session's large media is kept apart
+//
+// A capture names its session's media ([Capture.Media]): each payload a gzip
+// member of its own, held once in an object sealed to the seat and its key
+// ([MediaAAD]), which the text object's frames name by digest and
+// [SessionStore.Open] splices back, byte for byte. A turn's media rows go
+// wherever its object goes off its row ([dropMedia]); a capture may carry one
+// its turn's row or held base names, live ([carryGone]); the budget counts each
+// object once ([seatPlan]). ADR-0073's and ADR-0027's amendments have why.
+//
+// An end names its turn's newest summary ([executorkeep.Ending.Summary]),
+// sealed apart ([SummaryAAD]), kept with the row until it goes; the budget
+// counts none. The decide drops one past objstore.RecordWithin.
 //
 // # How long a row lives
 //
@@ -277,8 +282,7 @@
 // its begin named against every release but a retirement, until the retention
 // duty ends it as lost, a day after its last record — its newest capture, or
 // its begin — with no run of it live (internal/engine's executor source). A
-// person's removal does not reach these rows in this release, as it did not
-// reach the conversation ledger they replace (ADR-0073).
+// person's removal does not reach these rows (ADR-0073).
 //
 // # What a reader is told of the session a row keeps
 //

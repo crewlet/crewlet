@@ -36,8 +36,11 @@ type TurnRow struct {
 	LaunchSeq  int64
 	CaptureSeq int64
 
-	// Object is the sealed session, its Key zero on a row that names none.
+	// Object is the sealed session, its Key zero on a row that names none,
+	// and Media the media objects its frames splice in ([MediaObject]), none
+	// for a session kept whole.
 	Object objstore.Object
+	Media  []MediaObject
 
 	// Ended is a turn whose end applied: no relaunch of it continues its
 	// session, and only its conversation's next turn may, where the row is

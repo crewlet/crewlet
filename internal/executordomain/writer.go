@@ -212,6 +212,10 @@ type NewCapture struct {
 	ContentKey    string
 	ArchiveFormat int
 
+	// Media is every media object the session's frames name ([Capture.Media]):
+	// none for a session kept whole.
+	Media []NewMedia
+
 	LaunchSeq  int64
 	CaptureSeq int64
 
@@ -225,6 +229,10 @@ type NewCapture struct {
 	ContextTokens int64
 	Interrupted   bool
 
+	// Trimmed says the session was cut to what its harness's resume loads
+	// ([Capture.Trimmed]).
+	Trimmed bool
+
 	// ReadThrough is the position the turn's first launch read the
 	// conversation's head at, zero where it read none, and Absorbs the
 	// turns that read handed out in full ([Head.Absorbs]): both from the one
@@ -235,6 +243,13 @@ type NewCapture struct {
 	// SeatBudget is the company's `max_bytes_per_seat` as the fleet's
 	// revision states it.
 	SeatBudget int64
+}
+
+// NewMedia is one media object a capture names ([CaptureMedia]): uploaded for
+// it, or Carried, named already by the turn's row or the base that row holds.
+type NewMedia struct {
+	executorkeep.MediaObject
+	Carried bool
 }
 
 // validate refuses a capture the record could not carry, naming the field.
@@ -296,7 +311,63 @@ func (n NewCapture) validate() error {
 		return invalid("the capture's object is %d bytes and a sealed session is at "+
 			"most %d", n.Object.Size, executorkeep.SealedMaxBytes)
 	}
+	return checkMedia(n.Object, n.Media)
+}
+
+// checkMedia refuses a capture's media set the record could not carry: past
+// [executorkeep.MediaMaxCount], a digest or an object named twice (one object
+// per distinct member, and never the session's own), one no reader parses, or
+// the session and its media together past [executorkeep.KeptSealedMaxBytes].
+func checkMedia(session objstore.Object, media []NewMedia) error {
+	if len(media) > executorkeep.MediaMaxCount {
+		return invalid("the capture names %d media objects and the maximum is %d",
+			len(media), executorkeep.MediaMaxCount)
+	}
+	total := session.Size
+	digests := make(map[string]bool, len(media))
+	keys := map[objstore.Key]bool{session.Key: true}
+	for _, m := range media {
+		switch {
+		case !executorkeep.ValidMediaDigest(m.Digest):
+			return invalid("the media digest %q is not a SHA-256 in lowercase hex", m.Digest)
+		case digests[m.Digest]:
+			return invalid("the capture names media %s twice, and a member is stored once", m.Digest)
+		case keys[m.Object.Key]:
+			return invalid("the capture names object %s twice, and each member has its own", m.Object.Key)
+		case m.ContentKey == "":
+			return invalid("media %s names no content key: a rotation could not count it", m.Digest)
+		case m.Object.Size <= 0 || m.Object.Size > executorkeep.KeptSealedMaxBytes:
+			return invalid("media %s is %d bytes, and a sealed member is at least one and at most %d",
+				m.Digest, m.Object.Size, executorkeep.KeptSealedMaxBytes)
+		}
+		if err := checkText("a media object's content key", m.ContentKey, ContentKeyMaxBytes); err != nil {
+			return err
+		}
+		if err := m.Object.Validate(); err != nil {
+			return fmt.Errorf("%w: media %s's object: %w", ErrInvalid, m.Digest, err)
+		}
+		digests[m.Digest], keys[m.Object.Key] = true, true
+		total += m.Object.Size
+	}
+	if total > executorkeep.KeptSealedMaxBytes {
+		return invalid("the capture's session and media are %d bytes and a capture keeps at most %d",
+			total, executorkeep.KeptSealedMaxBytes)
+	}
 	return nil
+}
+
+// captureMedia is a capture's media set as its record carries it.
+func captureMedia(media []NewMedia) []CaptureMedia {
+	out := make([]CaptureMedia, 0, len(media))
+	for _, m := range media {
+		out = append(out, CaptureMedia{Digest: m.Digest, Object: m.Object.Key.String(),
+			ObjectHash: string(m.Object.Hash), ObjectSize: m.Object.Size, ContentKey: m.ContentKey,
+			Carried: m.Carried})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // ContentKeyMaxBytes is the longest content key a capture names: a keyring
@@ -343,14 +414,15 @@ const captureReadBackStatement = `
 
 // Capture records a new object for a live turn's session.
 //
-// Refused at the decide: an object minted longer than objstore.RecordWithin
-// ago by this node's clock ([ErrUploadStale]), a turn that has ended or been
-// removed ([ErrTurnEnded]), ordinals not newer than the row's
-// ([ErrStaleCapture]), another conversation or unit of work than the turn's
-// ([ErrInvalid]), and a capture the seat's budget cannot hold with every ended
-// session no other live turn holds as its base released ([ErrOverBudget]). The
-// apply repeats every guard but the age, and an applied capture is read back
-// ([CaptureResult.Recorded]).
+// Refused at the decide: an object or fresh media minted longer than
+// objstore.RecordWithin ago by this node's clock ([ErrUploadStale]), a turn
+// that has ended or been removed ([ErrTurnEnded]), ordinals not newer than the
+// row's ([ErrStaleCapture]), another conversation or unit of work than the
+// turn's ([ErrInvalid]), a carried media object no longer named
+// ([ErrCarryGone]), and a capture the seat's budget cannot hold with every
+// ended session no other live turn holds as its base released
+// ([ErrOverBudget]). The apply repeats every guard but the age, and an applied
+// capture is read back ([CaptureResult.Recorded]).
 func (w *Writer) Capture(ctx context.Context, c Call, n NewCapture) (CaptureResult, error) {
 	if err := c.validate(); err != nil {
 		return CaptureResult{}, err
@@ -364,9 +436,10 @@ func (w *Writer) Capture(ctx context.Context, c Call, n NewCapture) (CaptureResu
 		Harness: n.Harness, HarnessVersion: n.HarnessVersion, Entry: n.Entry, SessionID: n.SessionID,
 		Object: n.Object.Key.String(), ObjectHash: string(n.Object.Hash),
 		ObjectSize: n.Object.Size, ContentKey: n.ContentKey, ArchiveFormat: n.ArchiveFormat,
+		Media:     captureMedia(n.Media),
 		LaunchSeq: n.LaunchSeq, CaptureSeq: n.CaptureSeq,
 		Home: n.Home, Workspace: n.Workspace, SeatBudget: n.SeatBudget,
-		ContextTokens: n.ContextTokens, Interrupted: n.Interrupted,
+		ContextTokens: n.ContextTokens, Interrupted: n.Interrupted, Trimmed: n.Trimmed,
 		Absorbs: n.Absorbs,
 	}
 	if n.ReadThrough.Seq > 0 {
@@ -436,10 +509,18 @@ func turnEnded(ctx context.Context, tx *sql.Tx, handle, turn string) error {
 // NOTHING IS REFUSED FOR BEING MINTED IN THE FUTURE: a key a fast clock minted
 // protects itself, since the collector deletes nothing minted inside its grace.
 func decideCapture(ctx context.Context, tx *sql.Tx, n NewCapture, at time.Time) (int64, error) {
-	if age := at.Sub(n.Object.Key.Minted()); age > objstore.RecordWithin {
-		return 0, fmt.Errorf("%w: object %s was minted %s ago and a capture names an "+
-			"upload at most %s after it", ErrUploadStale, n.Object.Key,
-			age.Truncate(time.Second), objstore.RecordWithin)
+	uploaded := []objstore.Key{n.Object.Key}
+	for _, m := range n.Media {
+		if !m.Carried {
+			uploaded = append(uploaded, m.Object.Key)
+		}
+	}
+	for _, key := range uploaded {
+		if age := at.Sub(key.Minted()); age > objstore.RecordWithin {
+			return 0, fmt.Errorf("%w: object %s was minted %s ago and a capture names an "+
+				"upload at most %s after it", ErrUploadStale, key,
+				age.Truncate(time.Second), objstore.RecordWithin)
+		}
 	}
 	removal, err := readRemoval(ctx, tx, n.Handle)
 	if err != nil {
@@ -465,14 +546,22 @@ func decideCapture(ctx context.Context, tx *sql.Tx, n NewCapture, at time.Time) 
 				ErrStaleCapture, n.Turn, row.launchSeq, row.captureSeq, n.LaunchSeq, n.CaptureSeq)
 		}
 	}
-	_, fits, err := seatPlan(ctx, tx, n.Handle, n.Turn, n.Object.Size, n.SeatBudget)
+	media := captureMedia(n.Media)
+	gone, err := carryGone(ctx, tx, n.Handle, n.Turn, row, found, media)
+	if err != nil {
+		return 0, err
+	}
+	if gone != "" {
+		return 0, fmt.Errorf("%w: media %s of %s's turn %s", ErrCarryGone, gone, n.Handle, n.Turn)
+	}
+	_, fits, err := seatPlan(ctx, tx, n.Handle, n.Turn, n.Object.Size, media, n.SeatBudget)
 	if err != nil {
 		return 0, err
 	}
 	if !fits {
 		return 0, fmt.Errorf("%w: %s's live turns, and the bases their first reads hold, take more "+
-			"than %d bytes beside this %d-byte capture", ErrOverBudget, n.Handle, n.SeatBudget,
-			n.Object.Size)
+			"than %d bytes beside this %d-byte capture and its media", ErrOverBudget, n.Handle,
+			n.SeatBudget, n.Object.Size)
 	}
 	return removal, nil
 }
@@ -741,10 +830,25 @@ func (w *Writer) End(ctx context.Context, c Call, n NewEnd) (statelog.Result, er
 			if decideErr != nil {
 				return statelog.Decision{}, decideErr
 			}
+			at := w.now()
 			decided := p
 			decided.SeenRemoval = removal
-			return decision(stamp, c.By, subject, OpEnd, scope, c.OpID, decided, w.now())
+			decided.Ending.Summary = nameableSummary(p.Ending.Summary, at)
+			return decision(stamp, c.By, subject, OpEnd, scope, c.OpID, decided, at)
 		}))
+}
+
+// nameableSummary is summary where an end decided at at may name it, and nil
+// where its object was minted longer than objstore.RecordWithin ago by the
+// decide's own clock, as a capture's is refused ([decideCapture]): the
+// collector may have deleted what no row named for so long. THE END LANDS
+// WITHOUT IT rather than being refused, since a turn's end is never lost for
+// what only names a summary.
+func nameableSummary(summary *executorkeep.Summary, at time.Time) *executorkeep.Summary {
+	if summary == nil || at.Sub(summary.Object.Key.Minted()) > objstore.RecordWithin {
+		return nil
+	}
+	return summary
 }
 
 // decideEnd is the end's decide over one snapshot of the turn: a turn already

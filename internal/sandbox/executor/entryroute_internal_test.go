@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -27,7 +28,7 @@ func TestACarriedSessionContinuesOnlyUnderTheEntryItRanUnder(t *testing.T) {
 	release := map[string]string{
 		ClaudeCodeName: "2.1.310", CodexName: "0.171.0", GeminiCLIName: "0.70.0", QwenCodeName: "0.28.4",
 		OpenCodeName: "2.3.2", CopilotName: "1.0.114", MuseName: "1.4.25", KimiName: "2.7.2", PiName: "1.6.0",
-		GrokName: "1.0.92", HermesName: "0.23.3",
+		GrokName: "1.0.92", HermesName: "0.23.3", CursorAgentName: cursorReleaseName,
 	}
 	measured := map[string]bool{
 		ClaudeCodeName: true, CodexName: true, GeminiCLIName: true, QwenCodeName: true, OpenCodeName: true,
@@ -53,13 +54,19 @@ func TestACarriedSessionContinuesOnlyUnderTheEntryItRanUnder(t *testing.T) {
 			runner := New(h)
 			archive := sandbox.SessionArchive{Harness: h.Name(), SessionID: "s-1", Entry: ran,
 				Format: carries.ArchiveFormat(), Version: version}
-			if ok, why := runner.RestoresUnder(archive, ran); !ok {
-				t.Fatalf("a session continued under the entry it ran under is refused: %s", why)
+			if same := runner.RestoresUnder(archive, ran); !same.Continues {
+				t.Fatalf("a session continued under the entry it ran under is refused: %s", same.Why)
 			}
-			moved, why := runner.RestoresUnder(archive, other)
+			movedTo := runner.RestoresUnder(archive, other)
+			moved, why := movedTo.Continues, movedTo.Why
 			unrecorded := archive
 			unrecorded.Entry = ""
-			blank, blankWhy := runner.RestoresUnder(unrecorded, "")
+			blankTo := runner.RestoresUnder(unrecorded, "")
+			blank, blankWhy := blankTo.Continues, blankTo.Why
+			if !moved && movedTo.Loss != executorkeep.LossEntryChanged {
+				t.Errorf("a session refused under another entry is %s, want %s", movedTo.Loss,
+					executorkeep.LossEntryChanged)
+			}
 			switch {
 			case measured[h.Name()] && (!moved || !blank):
 				t.Errorf("a launch-routed harness refused a session under another entry: %q %q", why, blankWhy)

@@ -43,8 +43,9 @@ func doctorEntry(t *testing.T, agent string) *Provider {
 }
 
 // AN EXECUTOR NEEDS A BRIDGE THE BOX CAN DIAL, AND THE FAILURE HAS NO EARLIER
-// SYMPTOM. A box that is not on the node's host dials the variable alone, so
-// without it every launch there is refused, and a harness with none of
+// SYMPTOM. A container box has a network of its own and does not share the
+// node's loopback, so it dials the variable alone: without it every launch
+// there is refused, and a harness with none of
 // the seat's tools could not answer anybody or submit its work even if one
 // started. `doctor` is what a deploy script gates on, so it is the last place
 // to catch it before an agent is waiting.
@@ -55,10 +56,10 @@ func TestDoctorFaultsAnExecutorEntryWithNoBridge(t *testing.T) {
 	p := doctorEntry(t, "claude-code")
 	d := p.Diagnose(t.Context(), DiagnoseOptions{
 		ExecutorSeats: []string{"swe"}, ExecutorHarnesses: []string{"claude-code"},
-		Cell: "e2b",
+		Cell: "container",
 	})
 	joined := strings.Join(d.Problems, "\n")
-	if !strings.Contains(joined, bridgeURLVar) || !strings.Contains(joined, "e2b") {
+	if !strings.Contains(joined, bridgeURLVar) || !strings.Contains(joined, "container") {
 		t.Fatalf("the report does not name the variable and the cell:\n%s", joined)
 	}
 	if !strings.Contains(joined, "providers.llm.sub") {
@@ -144,7 +145,7 @@ func TestTheDoctorReportsARefusedBridgeURL(t *testing.T) {
 		// What a caller that read the raw variable would have passed.
 		raw = "engine.example.com:8000"
 	)
-	for _, cell := range []string{"direct", "e2b"} {
+	for _, cell := range []string{"direct", "container"} {
 		t.Run(cell, func(t *testing.T) {
 			t.Parallel()
 			p := doctorEntry(t, "claude-code")
@@ -237,10 +238,12 @@ func TestTheReportShowsTheExecutorSection(t *testing.T) {
 
 // A CLAUDE CODE EXECUTOR A ROOT ENGINE RUNS AS ROOT NEVER LAUNCHES, and the
 // smoke run cannot show it (it uses the deny-local-tools profile, not the
-// executor's bypassPermissions mode), so `doctor` is where it is caught. Only
-// the cells whose box runs as the engine's user are faulted.
+// executor's bypassPermissions mode), so `doctor` is where it is caught. Every
+// cell runs the harness as the engine's user, so every cell is faulted; an
+// entry placed in no cell (no providers.sandbox) runs no box and is not.
 //
-// Mutation: drop the RunsAsRoot case, and `problems: none` comes back.
+// Mutations: drop the RunsAsRoot case, and `problems: none` comes back; drop
+// the cell condition, and the entry in no cell is faulted.
 func TestDoctorFaultsAClaudeCodeExecutorThatRunsAsRoot(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -252,7 +255,7 @@ func TestDoctorFaultsAClaudeCodeExecutorThatRunsAsRoot(t *testing.T) {
 		{"direct", true, "claude-code", true},
 		{"container", true, "claude-code", true},
 		{"direct", false, "claude-code", false},
-		{"e2b", true, "claude-code", false},
+		{"", true, "claude-code", false},
 	} {
 		t.Run(tc.cell+"/"+tc.harness, func(t *testing.T) {
 			t.Parallel()

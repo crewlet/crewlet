@@ -44,7 +44,6 @@ const (
 	CodeChecksDuration               = "crewlet.code.checks.duration"
 	CodeChecksFinished               = "crewlet.code.checks.finished"
 	CodeChecksQueued                 = "crewlet.code.checks.queued"
-	CodeChecksRemoteCapped           = "crewlet.code.checks.remote.capped"
 	CodeChecksRunning                = "crewlet.code.checks.running"
 	CodeCommitBatchSize              = "crewlet.code.commit.batch.size"
 	CodeCommitBusy                   = "crewlet.code.commit.busy"
@@ -219,6 +218,9 @@ const (
 const (
 	ExecutorSpoolHeldBytes = "crewlet.executor.spool.held_bytes"
 	ExecutorSpoolWait      = "crewlet.executor.spool.wait"
+
+	ExecutorSessionNotContinued = "crewlet.executor.session.not_continued"
+	ExecutorSessionTrimmed      = "crewlet.executor.session.trimmed"
 )
 
 // THE NODE'S ANSWER BUDGET'S INSTRUMENTS, which internal/queue measures and

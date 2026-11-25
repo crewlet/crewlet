@@ -12,48 +12,22 @@ func (p Paths) KimiHome() string { return p.Home + "/.kimi-code" }
 // profile is written under a name of its own ([kimiProfileName]).
 func (p Paths) KimiAgents() string { return p.KimiHome() + "/agents" }
 
-// KimiMCPConfig is the home's MCP servers file, written whole by every run with
-// its seat's servers: the first of the layers Kimi merges, and the only one an
-// untrusted workspace reads ([kimiSwitchesOff]).
+// KimiMCPConfig is the home's MCP servers file, the first of the layers Kimi
+// merges: while a run's servers stand in it beside the home's own
+// ([kimiMCPOver]), the home's own file is held at [Paths.KimiHomeMCPConfig].
 func (p Paths) KimiMCPConfig() string { return p.KimiHome() + "/mcp.json" }
 
-// KimiSkills and KimiInstructions are the home's skills directory and personal
-// AGENTS.md, and KimiUserSkills and KimiUserInstructions the ones Kimi reads
-// beside them under `~/.agents`: 2.7.2 hands its model every skill and both
-// AGENTS.md files there (measured). No run writes them; the clear removes them
-// ([Kimi.artifacts]).
-func (p Paths) KimiSkills() string { return p.KimiHome() + "/skills" }
+// KimiHomeMCPConfig is the home's own `mcp.json`, held in the run's work
+// directory while the run's servers stand in its place, and put back once
+// Kimi has stopped ([kimiRestoreMCP]): empty where the home had none.
+func (p Paths) KimiHomeMCPConfig() string { return p.WorkDir() + "/kimi-home-mcp.json" }
 
-// KimiInstructions is the home's personal AGENTS.md ([Paths.KimiSkills]).
-func (p Paths) KimiInstructions() string { return p.KimiHome() + "/AGENTS.md" }
-
-// KimiUserSkills is `~/.agents/skills` ([Paths.KimiSkills]).
-func (p Paths) KimiUserSkills() string { return p.Home + "/.agents/skills" }
-
-// KimiUserInstructions is every AGENTS.md name Kimi reads under `~/.agents`
-// ([Paths.KimiSkills]).
-func (p Paths) KimiUserInstructions() []string {
-	return []string{p.Home + "/.agents/AGENTS.md", p.Home + "/.agents/agents.md"}
-}
-
-// KimiConfig is the home's config.toml: where a local box is seeded with the
-// entry's login, and where Kimi also reads hooks, plugins, permission rules
-// and tool settings, so every run rewrites it to its login's tables first
-// ([writeKimiLoginConfig]).
-func (p Paths) KimiConfig() string { return p.KimiHome() + "/config.toml" }
-
-// KimiPlugins is where Kimi keeps the plugins installed in the home: their
-// record (`installed.json`) and packages. 2.7.2 runs an installed plugin's
-// hooks and adds its system prompt with no step of a run's (measured), so the
-// clear removes it whole ([Kimi.artifacts]); no run installs one.
-func (p Paths) KimiPlugins() string { return p.KimiHome() + "/plugins" }
-
-// KimiTrust is where Kimi keeps the workspaces trusted in the home. A run's
-// workspace is never trusted ([kimiSwitchesOff]), but a trust saved through
-// Kimi's own API from inside a run would hold for the next run in the box and
-// load the repository's MCP servers (measured on 2.7.2), so the clear removes
-// it ([Kimi.artifacts]).
-func (p Paths) KimiTrust() string { return p.KimiHome() + "/workspace-trust" }
+// KimiMCPOurs is the names the run's servers stand under in the home's
+// `mcp.json`, recorded before they are written there and removed once the
+// home's own file is back: a run cut off between the two left them, and the
+// next run's start takes them out of the file as it then stands
+// ([kimiMCPLeftOut]).
+func (p Paths) KimiMCPOurs() string { return p.WorkDir() + "/kimi-mcp-ours.json" }
 
 // KimiSessions is the directory Kimi files each session's directory under,
 // `wd_<cwd>_<hash>/session_<uuid>/`.

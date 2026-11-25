@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
@@ -31,11 +32,12 @@ func (l leaseTable) Get(context.Context, string) (*coord.Lease, error) { return 
 // onlyClaude restores every session Claude Code wrote, and none another wrote.
 type onlyClaude struct{}
 
-func (onlyClaude) Restores(archive sandbox.SessionArchive) (bool, string) {
+func (onlyClaude) Restores(archive sandbox.SessionArchive) sandbox.SessionContinuity {
 	if archive.Harness != "claude-code" {
-		return false, "the session was written by " + archive.Harness + ", and this runner drives claude-code"
+		return sandbox.SessionContinuity{Loss: executorkeep.LossHarnessChanged,
+			Why: "the session was written by " + archive.Harness + ", and this runner drives claude-code"}
 	}
-	return true, ""
+	return sandbox.SessionContinuity{Continues: true}
 }
 
 // THE NODE HOLDING THE SEAT IS ASKED WHAT A RELAUNCH OF ITS TURNS IS LAUNCHED
@@ -102,11 +104,11 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 		held.Entry != "entry-held" || !held.LaunchRouted {
 		t.Fatalf("a reader on another node was answered %+v, want the holder's pick", held)
 	}
-	if ok, why := got[0].Restores(claude); !ok || why != "" {
-		t.Errorf("the holder's runner restores the Claude Code session %v (%q), want it restored", ok, why)
+	if r := got[0].Restores(claude); !r.Continues || r.Why != "" {
+		t.Errorf("the holder's runner restores the Claude Code session %v (%q), want it restored", r.Continues, r.Why)
 	}
-	if ok, why := got[1].Restores(other); ok || !strings.Contains(why, "drives claude-code") {
-		t.Errorf("the holder's runner restores the OpenCode session %v (%q), want its refusal", ok, why)
+	if r := got[1].Restores(other); r.Continues || !strings.Contains(r.Why, "drives claude-code") {
+		t.Errorf("the holder's runner restores the OpenCode session %v (%q), want its refusal", r.Continues, r.Why)
 	}
 	// THE HOLDER'S OWN UNKNOWN CROSSES AS ONE, with its reason, and a row
 	// decided on it is undecided: read as decided, every member sitting out
@@ -117,8 +119,8 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 	if none := got[3]; none.Undecided || none.Why != picks["t-no-member"].Why {
 		t.Errorf("a holder with no member was read as %+v, want decided, saying why", none)
 	}
-	if ok, why := got[3].Restores(claude); ok || why != picks["t-no-member"].Why {
-		t.Errorf("a holder with no member restores the session %v (%q), want its reason", ok, why)
+	if r := got[3].Restores(claude); r.Continues || r.Why != picks["t-no-member"].Why {
+		t.Errorf("a holder with no member restores the session %v (%q), want its reason", r.Continues, r.Why)
 	}
 	row, run := parkedSession()
 	if decided := sandbox.ReadContinuityOf(row.Kept(), "", &run, got[2], sandbox.ContinuedByNextTurn,

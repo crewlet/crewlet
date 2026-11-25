@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -73,6 +74,14 @@ const (
 	// servesLineIdx is the turns a conversation reads as served, in the
 	// order their ends applied: its served head and endings.
 	servesLineIdx = "executor_session_serves_line_idx"
+
+	// mediaKey is the index executor_session_media's primary key
+	// (agent_handle, turn_id, digest) builds: one turn's media, one of them by
+	// its digest, and a seat's by the key's first column.
+	mediaKey = "sqlite_autoindex_executor_session_media_1"
+	// summaryKey is the index executor_session_summaries' primary key
+	// (agent_handle, turn_id) builds: one turn's summary.
+	summaryKey = "sqlite_autoindex_executor_session_summaries_1"
 )
 
 // Tombstone reasons: why a turn takes no further record.
@@ -139,6 +148,26 @@ const (
 		SELECT 1 FROM executor_session_serves INDEXED BY ` + servesKey + `
 		WHERE agent_handle = ? AND turn_id = ? AND conversation_key = ?`
 
+	// mediaNamedStatement is one media object a turn's row names, by its
+	// digest: what a carry is held to.
+	mediaNamedStatement = `
+		SELECT object, object_hash, object_size, content_key
+		FROM executor_session_media INDEXED BY ` + mediaKey + `
+		WHERE agent_handle = ? AND turn_id = ? AND digest = ?`
+
+	// seatMediaStatement is every media object a seat's turns other than one
+	// name, each row with its turn: the budget's census of them.
+	seatMediaStatement = `
+		SELECT turn_id, object, object_size FROM executor_session_media INDEXED BY ` + mediaKey + `
+		WHERE agent_handle = ? AND turn_id <> ?`
+
+	// retiringStatement is the turns [retireStatement] takes a session off,
+	// read first so each one's media go with it.
+	retiringStatement = `
+		SELECT turn_id FROM executor_sessions INDEXED BY ` + conversationIdx + `
+		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
+		  AND session_id = ? AND object IS NOT NULL`
+
 	// servedSessionStatement is the turns a conversation reads as served whose
 	// rows still name one session, which an end retiring that session drops.
 	servedSessionStatement = `
@@ -159,11 +188,11 @@ const (
 			object_size = 0, content_key = '', version = ?
 		WHERE agent_handle = ? AND turn_id = ?`
 
-	// retireStatement takes a session that ran out of context off every ended row
-	// of one conversation that names it, saying which turn it ran out in.
+	// retireStatement takes a spent session off every ended row of one
+	// conversation that names it, saying which turn spent it and how.
 	retireStatement = `
 		UPDATE executor_sessions INDEXED BY ` + conversationIdx + ` SET object = NULL, object_hash = '',
-			object_size = 0, content_key = '', retired_by = ?, version = ?
+			object_size = 0, content_key = '', retired_by = ?, retired_loss = ?, version = ?
 		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
 		  AND session_id = ? AND object IS NOT NULL`
 
@@ -173,9 +202,9 @@ const (
 		INSERT INTO executor_sessions (
 			agent_handle, turn_id, conversation_key, work_key, harness, harness_version,
 			entry, session_id, object, object_hash, object_size, content_key, archive_format,
-			launch_seq, capture_seq, home, workspace, context_tokens, interrupted,
+			launch_seq, capture_seq, home, workspace, context_tokens, interrupted, trimmed,
 			captured_at, read_through, absorbs, last_at, first_seq, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (agent_handle, turn_id) DO NOTHING`
 
 	// updateCaptureStatement is a later capture of a live turn, or its first
@@ -186,7 +215,7 @@ const (
 		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET work_key = ?, harness = ?, harness_version = ?,
 			entry = ?, session_id = ?, object = ?, object_hash = ?, object_size = ?,
 			content_key = ?, archive_format = ?, launch_seq = ?, capture_seq = ?,
-			home = ?, workspace = ?, context_tokens = ?, interrupted = ?, captured_at = ?,
+			home = ?, workspace = ?, context_tokens = ?, interrupted = ?, trimmed = ?, captured_at = ?,
 			read_through = ?, absorbs = ?, last_at = ?, version = ?
 		WHERE agent_handle = ? AND turn_id = ? AND end_seq IS NULL AND version < ?`
 
@@ -273,6 +302,31 @@ const (
 		DELETE FROM executor_session_serves INDEXED BY ` + servesKey + `
 		WHERE agent_handle = ? AND turn_id = ?`
 	seatServedStatement = `DELETE FROM executor_session_serves WHERE agent_handle = ?`
+
+	// insertMediaStatement names one media object on a turn's row;
+	// turnMediaStatement takes every one off it, with its object or its row;
+	// seatMediaDeleteStatement every one a removed seat's rows name.
+	insertMediaStatement = `
+		INSERT INTO executor_session_media (agent_handle, turn_id, digest, object, object_hash,
+			object_size, content_key, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	turnMediaStatement = `
+		DELETE FROM executor_session_media INDEXED BY ` + mediaKey + `
+		WHERE agent_handle = ? AND turn_id = ?`
+	seatMediaDeleteStatement = `DELETE FROM executor_session_media WHERE agent_handle = ?`
+	// insertSummaryStatement names the summary an end named on its turn's
+	// row ([executorkeep.Ending.Summary]); releaseSummaryStatement takes one
+	// turn's off with its row's session or its row, and seatSummariesStatement
+	// every one a removed seat's rows keep.
+	insertSummaryStatement = `
+		INSERT INTO executor_session_summaries (agent_handle, turn_id, object, object_hash, object_size,
+			content_key, harness, session_id, kept_at, bytes, kept_bytes, cut, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (agent_handle, turn_id) DO NOTHING`
+	releaseSummaryStatement = `
+		DELETE FROM executor_session_summaries INDEXED BY ` + summaryKey + `
+		WHERE agent_handle = ? AND turn_id = ?`
+	seatSummariesStatement = `DELETE FROM executor_session_summaries WHERE agent_handle = ?`
 
 	// tombStatement writes a turn's tombstone, keeping the first one a turn
 	// was given.
@@ -485,8 +539,9 @@ func splitAbsorbs(column string) []string {
 	return strings.Split(column, ",")
 }
 
-// seatPlan is which ended turns' sessions a capture of size bytes on turn must
-// release for the seat to hold budget, and whether it fits at all.
+// seatPlan is which ended turns' sessions a capture of size bytes and media on
+// turn must release for the seat to hold budget, and whether it fits at all. A
+// media object counts once however many rows, the capture's included, name it.
 //
 // THE OLDEST ENDINGS GO FIRST, never a live turn's session (its next launch
 // continues it), this turn's own (being replaced) or a base another live turn
@@ -494,16 +549,22 @@ func splitAbsorbs(column string) []string {
 // turn's first landed one and lifts the hold, its own session now holding all
 // the base did, which is what lets a seat at its budget's floor take a
 // continued turn's first capture at all. An end's position is unique, so every
-// node releases the same sessions. When even every releasable session would not
-// make room, nothing is chosen and the capture is refused whole.
-func seatPlan(ctx context.Context, tx *sql.Tx, handle, turn string, size, budget int64) (
-	[]string, bool, error) {
+// node releases the same sessions; none fitting, the capture is refused whole.
+func seatPlan(ctx context.Context, tx *sql.Tx, handle, turn string, size int64, media []CaptureMedia,
+	budget int64) ([]string, bool, error) {
 
 	var occupied int64
 	if err := tx.QueryRowContext(ctx, seatBytesStatement, handle, turn).Scan(&occupied); err != nil {
 		return nil, false, fmt.Errorf("executordomain: read %s's session bytes: %w", handle, err)
 	}
-	need := occupied + size
+	named, err := seatMediaOf(ctx, tx, handle, turn)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, m := range media {
+		named.name(turn, m.Object, m.ObjectSize)
+	}
+	need := occupied + size + named.bytes()
 	if need <= budget {
 		return nil, true, nil
 	}
@@ -532,11 +593,168 @@ func seatPlan(ctx context.Context, tx *sql.Tx, handle, turn string, size, budget
 			continue
 		}
 		release = append(release, ended)
-		if need -= bytes; need <= budget {
+		if need -= bytes + named.release(ended); need <= budget {
 			return release, true, rows.Err()
 		}
 	}
 	return nil, false, rows.Err()
+}
+
+// seatMedia is the media objects a seat's rows name, each counted once: the
+// turns naming it and its size.
+type seatMedia struct {
+	namers map[string]map[string]bool
+	sizes  map[string]int64
+	byTurn map[string][]string
+}
+
+// seatMediaOf is every media object the seat's turns other than turn name,
+// read whole and closed before the budget's release walk opens its rows.
+func seatMediaOf(ctx context.Context, tx *sql.Tx, handle, turn string) (*seatMedia, error) {
+	out := &seatMedia{namers: map[string]map[string]bool{}, sizes: map[string]int64{},
+		byTurn: map[string][]string{}}
+	rows, err := tx.QueryContext(ctx, seatMediaStatement, handle, turn)
+	if err != nil {
+		return nil, fmt.Errorf("executordomain: read the media %s's sessions name: %w", handle, err)
+	}
+	for rows.Next() {
+		var (
+			namer, object string
+			size          int64
+		)
+		if scanErr := rows.Scan(&namer, &object, &size); scanErr != nil {
+			_ = rows.Close()
+			return nil, scanErr
+		}
+		out.name(namer, object, size)
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+// name counts object as named by turn.
+func (m *seatMedia) name(turn, object string, size int64) {
+	if m.namers[object] == nil {
+		m.namers[object], m.sizes[object] = map[string]bool{}, size
+	}
+	m.namers[object][turn] = true
+	m.byTurn[turn] = append(m.byTurn[turn], object)
+}
+
+// bytes is every named object's size, each once.
+func (m *seatMedia) bytes() int64 {
+	var total int64
+	for object := range m.namers {
+		total += m.sizes[object]
+	}
+	return total
+}
+
+// release takes turn's rows off, answering the bytes of each object no row
+// names any more.
+func (m *seatMedia) release(turn string) int64 {
+	var freed int64
+	for _, object := range m.byTurn[turn] {
+		delete(m.namers[object], turn)
+		if len(m.namers[object]) == 0 {
+			delete(m.namers, object)
+			freed += m.sizes[object]
+		}
+	}
+	delete(m.byTurn, turn)
+	return freed
+}
+
+// carryGone is the digest of the first media a capture carries that neither the
+// turn's own row nor the base that row holds names, live and as the capture
+// names it, or "" where every carry is found (ADR-0027's amendment "a session's
+// media, carried"). A row naming media names its object, so a found carry is
+// live. The writer refuses by it ([ErrCarryGone]) and the apply repeats it.
+func carryGone(ctx context.Context, tx *sql.Tx, handle, turn string, row sessionRow, found bool,
+	media []CaptureMedia) (string, error) {
+
+	var base string
+	if found && !row.ended && row.launchSeq == 0 {
+		base = row.baseTurn
+	}
+	for _, m := range media {
+		if !m.Carried {
+			continue
+		}
+		named, err := mediaNamed(ctx, tx, handle, turn, m)
+		if err == nil && !named && base != "" {
+			named, err = mediaNamed(ctx, tx, handle, base, m)
+		}
+		if err != nil || !named {
+			return m.Digest, err
+		}
+	}
+	return "", nil
+}
+
+// mediaNamed reports whether turn's row names m: its digest, on the very object.
+func mediaNamed(ctx context.Context, tx *sql.Tx, handle, turn string, m CaptureMedia) (bool, error) {
+	var (
+		object, hash, contentKey string
+		size                     int64
+	)
+	err := tx.QueryRowContext(ctx, mediaNamedStatement, handle, turn, m.Digest).Scan(
+		&object, &hash, &size, &contentKey)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("executordomain: read %s's media %s of turn %s: %w", handle, m.Digest,
+			turn, err)
+	}
+	return object == m.Object && hash == m.ObjectHash && size == m.ObjectSize && contentKey == m.ContentKey, nil
+}
+
+// mediaWellFormed reports whether a capture's media set is one every reader of
+// its rows parses ([checkMedia]'s shape): within the cap, each digest and
+// object once, never the session's own object.
+func mediaWellFormed(p Capture) bool {
+	if len(p.Media) > executorkeep.MediaMaxCount {
+		return false
+	}
+	digests := make(map[string]bool, len(p.Media))
+	objects := map[string]bool{p.Object: true}
+	for _, m := range p.Media {
+		if !executorkeep.ValidMediaDigest(m.Digest) || digests[m.Digest] || objects[m.Object] ||
+			m.ObjectSize <= 0 || !nameable(m.Object, m.ObjectHash) {
+			return false
+		}
+		digests[m.Digest], objects[m.Object] = true, true
+	}
+	return true
+}
+
+// nameMedia replaces the media a turn's row names with its capture's whole set.
+func nameMedia(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (int, error) {
+	written, err := dropMedia(ctx, tx, c, p.Handle, p.Turn)
+	if err != nil {
+		return written, err
+	}
+	for _, m := range p.Media {
+		res, insertErr := tx.ExecContext(ctx, insertMediaStatement, p.Handle, p.Turn, m.Digest, m.Object,
+			m.ObjectHash, m.ObjectSize, m.ContentKey, c.packed)
+		if insertErr != nil {
+			return written, fmt.Errorf("executordomain: name %s's media %s of turn %s at %s: %w",
+				p.Handle, m.Digest, p.Turn, c.position, insertErr)
+		}
+		written += affected(res)
+	}
+	return written, nil
+}
+
+// dropMedia takes every media object off one turn's row: what goes with its
+// object, wherever a record takes the object off the row or deletes the row.
+func dropMedia(ctx context.Context, tx *sql.Tx, c applyContext, handle, turn string) (int, error) {
+	res, err := tx.ExecContext(ctx, turnMediaStatement, handle, turn)
+	if err != nil {
+		return 0, fmt.Errorf("executordomain: drop %s's media of turn %s at %s: %w",
+			handle, turn, c.position, err)
+	}
+	return affected(res), nil
 }
 
 // held reports whether a live turn of handle's seat other than except holds
@@ -712,7 +930,7 @@ func (c applyContext) on(subject Subject) bool { return c.record.Subject == subj
 func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (int, error) {
 	absorbs, wellFormed := absorbsOf(p.Absorbs, p.Turn, p.ReadThrough)
 	if !present(p.Handle) || !present(p.Turn) || p.ObjectSize <= 0 || p.SeatBudget <= 0 ||
-		p.ContextTokens < 0 || !nameable(p.Object, p.ObjectHash) || !wellFormed {
+		p.ContextTokens < 0 || !nameable(p.Object, p.ObjectHash) || !wellFormed || !mediaWellFormed(p) {
 		return 0, nil
 	}
 	// THE SEAT'S REMOVAL FIRST: a capture decided before a removal it did
@@ -737,7 +955,11 @@ func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (i
 		!newer(p.LaunchSeq, p.CaptureSeq, row.launchSeq, row.captureSeq)) {
 		return 0, nil
 	}
-	release, fits, err := seatPlan(ctx, tx, p.Handle, p.Turn, p.ObjectSize, p.SeatBudget)
+	// A CARRY IS FOUND BEFORE ANY RELEASE, which may take the base it names.
+	if gone, goneErr := carryGone(ctx, tx, p.Handle, p.Turn, row, found, p.Media); goneErr != nil || gone != "" {
+		return 0, goneErr
+	}
+	release, fits, err := seatPlan(ctx, tx, p.Handle, p.Turn, p.ObjectSize, p.Media, p.SeatBudget)
 	if err != nil || !fits {
 		return 0, err
 	}
@@ -751,6 +973,11 @@ func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (i
 				"at %s: %w", p.Handle, turn, c.position, releaseErr)
 		}
 		written += affected(res)
+		n, mediaErr := dropMedia(ctx, tx, c, p.Handle, turn)
+		if mediaErr != nil {
+			return written, mediaErr
+		}
+		written += n
 	}
 	// THE TURN'S FIRST READ AND ITS WORK KEY STAND, decided here from the
 	// row: a relaunch reads the turn's own row, not the head, and the work key
@@ -767,20 +994,24 @@ func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (i
 		res, err = tx.ExecContext(ctx, updateCaptureStatement,
 			work, p.Harness, p.HarnessVersion, p.Entry, p.SessionID, p.Object, p.ObjectHash, p.ObjectSize,
 			p.ContentKey, p.ArchiveFormat, p.LaunchSeq, p.CaptureSeq, p.Home, p.Workspace,
-			p.ContextTokens, flag(p.Interrupted), c.at(), readThrough, absorbed, c.at(), c.packed,
-			p.Handle, p.Turn, c.packed)
+			p.ContextTokens, flag(p.Interrupted), flag(p.Trimmed), c.at(), readThrough, absorbed, c.at(),
+			c.packed, p.Handle, p.Turn, c.packed)
 	} else {
 		res, err = tx.ExecContext(ctx, insertCaptureStatement,
 			p.Handle, p.Turn, p.ConversationKey, work, p.Harness, p.HarnessVersion, p.Entry,
 			p.SessionID, p.Object, p.ObjectHash, p.ObjectSize, p.ContentKey, p.ArchiveFormat,
 			p.LaunchSeq, p.CaptureSeq, p.Home, p.Workspace, p.ContextTokens, flag(p.Interrupted),
-			c.at(), readThrough, absorbed, c.at(), c.packed, c.packed)
+			flag(p.Trimmed), c.at(), readThrough, absorbed, c.at(), c.packed, c.packed)
 	}
 	if err != nil {
 		return written, fmt.Errorf("executordomain: record %s's capture of turn %s at %s: %w",
 			p.Handle, p.Turn, c.position, err)
 	}
-	return written + affected(res), nil
+	if affected(res) == 0 {
+		return written, nil
+	}
+	n, err := nameMedia(ctx, tx, c, p)
+	return written + affected(res) + n, err
 }
 
 // applyBegin records a turn's first read of its conversation and the base that
@@ -935,7 +1166,10 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 	}
 	// ONLY A TURN WHOSE ROW KEEPS A SESSION ABSORBS AND DEDUPES: no other holds what
 	// its read handed out, so those turns are told again rather than lost with it.
-	keepsSession := found && row.hasObject && !stale && !slices.Contains(p.Ending.Exhausted, row.sessionID)
+	keepsSession := found && row.hasObject && !stale &&
+		!slices.ContainsFunc(p.Ending.SpentSessions, func(s executorkeep.SpentSession) bool {
+			return s.Session == row.sessionID
+		})
 	if keepsSession && p.ConversationKey != "" {
 		absorbed, merged, absorbErr := absorb(ctx, tx, c, p, work, row)
 		if absorbErr != nil {
@@ -963,7 +1197,12 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 			p.Handle, p.Turn, c.position, err)
 	}
 	written += affected(res)
-	retired, err := retireExhausted(ctx, tx, c, p)
+	named, err := nameSummary(ctx, tx, c, p)
+	if err != nil {
+		return written, err
+	}
+	written += named
+	retired, err := retireSpent(ctx, tx, c, p)
 	if err != nil {
 		return written, err
 	}
@@ -984,29 +1223,77 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 				p.Handle, p.Turn, c.position, err)
 		}
 		written += affected(res)
+		n, mediaErr := dropMedia(ctx, tx, c, p.Handle, p.Turn)
+		if mediaErr != nil {
+			return written, mediaErr
+		}
+		written += n
 	}
 	n, err := tomb(ctx, tx, c, p.Handle, p.Turn, p.ConversationKey, tombEnded)
 	return written + n, err
 }
 
-// retireExhausted takes each session the turn ran out of context in off every ended
-// row of its conversation, its own included. Held rows too: a hold keeps a session
-// for a relaunch to continue, which would only meet the same end. A row the
-// conversation reads as served is another conversation's too, so the
-// conversation stops reading it instead, and the row keeps its session for the
-// conversations that still read it.
-func retireExhausted(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
+// nameSummary names on the ending turn's row the newest summary its end names
+// ([executorkeep.Ending.Summary]), where it names one every reader can parse.
+// A SPENT, STALE OR BUDGET-RELEASED SESSION KEEPS IT: a summary is what a run
+// that cannot continue the session starts from, and the seat's budget counts
+// none, so only what deletes the row releases it ([releaseSummary]).
+func nameSummary(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
+	summary := p.Ending.Summary
+	if summary == nil || !summary.Within() {
+		return 0, nil
+	}
+	res, err := tx.ExecContext(ctx, insertSummaryStatement, p.Handle, p.Turn, summary.Object.Key.String(),
+		string(summary.Object.Hash), summary.Object.Size, summary.ContentKey, summary.Harness, summary.Session,
+		store.EncodeTime(summary.At), summary.Bytes, summary.Kept, flag(summary.Cut), c.packed)
+	if err != nil {
+		return 0, fmt.Errorf("executordomain: name %s's summary of turn %s at %s: %w",
+			p.Handle, p.Turn, c.position, err)
+	}
+	return affected(res), nil
+}
+
+// releaseSummary takes one turn's summary off with its row.
+func releaseSummary(ctx context.Context, tx *sql.Tx, c applyContext, handle, turn string) (int, error) {
+	res, err := tx.ExecContext(ctx, releaseSummaryStatement, handle, turn)
+	if err != nil {
+		return 0, fmt.Errorf("executordomain: release %s's summary of turn %s at %s: %w",
+			handle, turn, c.position, err)
+	}
+	return affected(res), nil
+}
+
+// retireSpent takes each session a launch of the turn spent off every ended row
+// of its conversation, its own included, keeping how it was spent on each
+// ([Session.RetiredLoss]). Held rows too: a hold keeps a session for a relaunch
+// to continue, which would only meet the same end. A row the conversation reads
+// as served is another conversation's too, so the conversation stops reading it
+// instead, and the row keeps its session for the conversations that still read it.
+func retireSpent(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
 	if p.ConversationKey == "" {
 		return 0, nil
 	}
 	written := 0
-	for _, session := range p.Ending.Exhausted {
-		res, err := tx.ExecContext(ctx, retireStatement, p.Turn, c.packed, p.Handle, p.ConversationKey, session)
+	for _, spent := range p.Ending.SpentSessions {
+		session := spent.Session
+		retiring, listErr := turnsNaming(ctx, tx, retiringStatement, p.Handle, p.ConversationKey, session)
+		if listErr != nil {
+			return written, listErr
+		}
+		res, err := tx.ExecContext(ctx, retireStatement, p.Turn, string(spent.Loss), c.packed, p.Handle,
+			p.ConversationKey, session)
 		if err != nil {
 			return written, fmt.Errorf("executordomain: retire %s's session %s at %s: %w",
 				p.Handle, session, c.position, err)
 		}
 		written += affected(res)
+		for _, turn := range retiring {
+			n, mediaErr := dropMedia(ctx, tx, c, p.Handle, turn)
+			if mediaErr != nil {
+				return written, mediaErr
+			}
+			written += n
+		}
 		turns, listErr := servedNaming(ctx, tx, p.Handle, p.ConversationKey, session)
 		if listErr != nil {
 			return written, listErr
@@ -1025,10 +1312,16 @@ func retireExhausted(ctx context.Context, tx *sql.Tx, c applyContext, p End) (in
 // servedNaming is the turns conversationKey reads as served whose rows name
 // session, read whole and closed before any is dropped.
 func servedNaming(ctx context.Context, tx *sql.Tx, handle, conversationKey, session string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, servedSessionStatement, handle, conversationKey, session)
+	return turnsNaming(ctx, tx, servedSessionStatement, handle, conversationKey, session)
+}
+
+// turnsNaming is the turn ids statement lists for handle, conversationKey and
+// session, read whole and closed before any is written.
+func turnsNaming(ctx context.Context, tx *sql.Tx, statement, handle, conversationKey, session string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, statement, handle, conversationKey, session)
 	if err != nil {
-		return nil, fmt.Errorf("executordomain: read the turns %s's conversation reads as served: %w",
-			handle, err)
+		return nil, fmt.Errorf("executordomain: read the turns of %s's conversation naming session %s: %w",
+			handle, session, err)
 	}
 	var out []string
 	for rows.Next() {
@@ -1146,7 +1439,17 @@ func dropUnheld(ctx context.Context, tx *sql.Tx, c applyContext, statement, hand
 		return 0, fmt.Errorf("executordomain: delete %s's turn %s at %s: %w",
 			handle, turn, c.position, err)
 	}
-	return affected(res), nil
+	deleted := affected(res)
+	if deleted == 0 {
+		return 0, nil
+	}
+	n, err := dropMedia(ctx, tx, c, handle, turn)
+	if err != nil {
+		return deleted + n, err
+	}
+	m, err := releaseSummary(ctx, tx, c, handle, turn)
+	n += m
+	return deleted + n, err
 }
 
 // tomb writes a turn's tombstone, keeping the first one a turn was given.
@@ -1177,7 +1480,7 @@ func applyDelete(ctx context.Context, tx *sql.Tx, c applyContext, p Delete) (int
 	return removeTurn(ctx, tx, c, p.Handle, p.Turn)
 }
 
-// removeTurn deletes one turn's row and its tombstone.
+// removeTurn deletes one turn's row, its tombstone, its media and its summary.
 //
 // THE TOMBSTONE GOES TOO, unlike any other delete's: it refuses a record
 // decided before the row went, and past the retention none can land. The term
@@ -1187,7 +1490,8 @@ func applyDelete(ctx context.Context, tx *sql.Tx, c applyContext, p Delete) (int
 // turn; a kept tombstone would only be one more row to take a term later.
 func removeTurn(ctx context.Context, tx *sql.Tx, c applyContext, handle, turn string) (int, error) {
 	written := 0
-	for _, statement := range []string{deleteSessionStatement, deleteTombStatement, turnServedStatement} {
+	for _, statement := range []string{deleteSessionStatement, deleteTombStatement, turnServedStatement,
+		turnMediaStatement, releaseSummaryStatement} {
 		res, err := tx.ExecContext(ctx, statement, handle, turn)
 		if err != nil {
 			return written, fmt.Errorf("executordomain: delete %s's turn %s at %s: %w",
@@ -1264,6 +1568,8 @@ func removeSeat(ctx context.Context, tx *sql.Tx, c applyContext, handle string) 
 	}{
 		{seatRowsStatement, []any{handle}},
 		{seatServedStatement, []any{handle}},
+		{seatMediaDeleteStatement, []any{handle}},
+		{seatSummariesStatement, []any{handle}},
 		{removeSeatStatement, []any{handle, c.packed, c.at()}},
 	} {
 		res, execErr := tx.ExecContext(ctx, statement.sql, statement.args...)

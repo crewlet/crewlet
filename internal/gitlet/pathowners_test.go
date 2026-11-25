@@ -320,7 +320,7 @@ func everyReadAsked(id string) map[gitlet.ReadKind]gitlet.ReadQuery {
 		gitlet.ReadChecksDue:   {ChecksDue: &gitlet.ChecksDueQuery{RefreshBefore: t1}},
 		gitlet.ReadCheckBox: {CheckBox: &gitlet.CheckKey{RepoID: id, OID: strings.Repeat("6", 40), Target: mainRef, Name: "unit",
 			Attempt: 1}},
-		gitlet.ReadChecksQueued:  {ChecksQueued: &gitlet.ChecksQueuedQuery{}},
+		gitlet.ReadChecksQueued:  {},
 		gitlet.ReadChecksRunning: {ChecksRunning: &gitlet.ChecksRunningQuery{RepoID: id}},
 		gitlet.ReadQueue:         {Asker: asker, Repo: "web"},
 		gitlet.ReadLandings:      {Asker: asker, Repo: "web", Target: "refs/heads/main"},

@@ -356,10 +356,12 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 	},
 	// One `grok` process is the run, and its shell inherits its environment
 	// whole; its stand-in answers the release check every run's script asks
-	// first, then runs the scenario.
+	// first and fails the guard's `inspect`, which starts the run, then runs
+	// the scenario.
 	executor.GrokName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 		return standInBox(t, executor.NewGrok(), map[string]string{"grok": "#!/bin/sh\n" +
-			"case \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;; esac\n" + scenarioRun})
+			"case \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;; inspect) exit 1;; esac\n" +
+			scenarioRun})
 	},
 	// One `muse exec` is the run, and its shell inherits its environment whole;
 	// the script's other calls (the release, `muse mcp` and `muse plugins`
@@ -394,6 +396,11 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 	executor.PiName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 		return standInBox(t, executor.NewPi(), map[string]string{"pi": "#!/bin/sh\n" +
 			"case \"$1\" in --version) echo 1.6.0; exit 0;; esac\n" + scenarioRun})
+	},
+	// One `cursor-agent` process is the run, its shell's commands under its
+	// environment; the stand-in runs the scenario and ends on a result.
+	executor.CursorAgentName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewCursorAgent(), cursorStandIns(t, scenarioRun))
 	},
 }
 

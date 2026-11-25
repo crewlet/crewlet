@@ -32,7 +32,7 @@ func (r *recordingTails) Tail(_ context.Context, q sandbox.TailQuery) (sandbox.T
 func TestAnExecutorTailNeedsTheTurnAndTheJob(t *testing.T) {
 	t.Parallel()
 	tails := &recordingTails{answer: sandbox.TailAnswer{
-		Outcome: sandbox.TailOwnerSilent, TurnID: "t1", LaunchID: "l1", Node: "n2",
+		Outcome: sandbox.TailHostSilent, TurnID: "t1", LaunchID: "l1", Node: "n2",
 	}}
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{ExecutorTail: tails})
@@ -49,8 +49,8 @@ func TestAnExecutorTailNeedsTheTurnAndTheJob(t *testing.T) {
 		t.Fatalf("executor_tail: %v", err)
 	}
 	answer, ok := got.(sandbox.TailAnswer)
-	if !ok || answer.Outcome != sandbox.TailOwnerSilent || answer.Node != "n2" {
-		t.Errorf("answer = %#v; want the reader's own, the silent owner named", got)
+	if !ok || answer.Outcome != sandbox.TailHostSilent || answer.Node != "n2" {
+		t.Errorf("answer = %#v; want the reader's own, the silent host named", got)
 	}
 	if len(tails.asked) != 1 || tails.asked[0].TurnID != "t1" || tails.asked[0].LaunchID != "l1" {
 		t.Errorf("the reader was asked %v; want exactly (t1, l1)", tails.asked)

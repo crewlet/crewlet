@@ -1035,10 +1035,11 @@ type Profile struct {
 	// a JSON object or a `.toml` file's tables) that are its login, for a MIXED
 	// file the harness also reads its own settings from: Copilot CLI's
 	// config.json, Cursor Agent's cli-config.json, Kimi Code's config.toml. A
-	// home is seeded with only these fields, and a refresh carries back only
-	// these ([FileRule]); holding none of them the file is not a login
-	// ([Profile.HoldsLogin]). Every field the harness signs in from: one not
-	// named is never seeded. A file not named here is a login file, whole.
+	// seat home on the engine host is seeded with only these fields, a box
+	// with the file whole, and a refresh carries back only these ([FileRule]);
+	// holding none of them the file is not a login ([Profile.HoldsLogin]).
+	// Every field the harness signs in from: one not named is never seeded on
+	// the host. A file not named here is a login file, whole.
 	LoginKeys map[string][]string `yaml:"login_keys,omitempty"`
 
 	// CommentLines names the JSON credential files the harness writes lines
@@ -1070,6 +1071,14 @@ type Profile struct {
 	// harness memory would make turns non-reproducible and carry one task's
 	// context into the next.
 	VolatilePaths []string `yaml:"volatile_paths,omitempty"`
+
+	// AncestorFiles are the files and directories, by name, a harness reads
+	// into its requests from every directory above its call's working
+	// directory, whatever its flags say and past every marker the call's
+	// directory holds: a call whose directory has one of them above it is
+	// refused, naming it, rather than run under instructions nobody wrote for
+	// the seat (internal/providers/llm/harness's Workspace, at each call).
+	AncestorFiles []string `yaml:"ancestor_files,omitempty"`
 
 	// HomeDaemon is the background process the harness keeps for a home's
 	// calls, or nil for a harness whose calls end with their process group
@@ -2328,6 +2337,12 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 	for i, rel := range p.VolatilePaths {
 		if !staysInside(rel) {
 			add("volatile_paths[%d] %q must be relative and stay inside the seat home", i, rel)
+		}
+	}
+	for i, rel := range p.AncestorFiles {
+		if !staysInside(rel) {
+			add("ancestor_files[%d] %q must be a relative name that stays inside the directory it is "+
+				"looked for in", i, rel)
 		}
 	}
 	if d := p.HomeDaemon; d != nil {

@@ -163,22 +163,34 @@ func answerCodexStandIn(ws *websocket.Conn, record string) {
 	}
 }
 
+// codexStandInClone is the stand-in `exec`'s clone during its turn: where
+// record/clone-src names a directory it is copied to record/clone-dst, and
+// the PostToolUse hook the server was declared runs twice, as Codex runs it
+// after a tool call, its answers in record/nested-1 and nested-2; then the
+// run's skills as the turn sees them are kept in record/skills.
+const codexStandInClone = `  if [ -e "$rec/clone-src" ]; then
+    cp -R "$(cat "$rec/clone-src")" "$(cat "$rec/clone-dst")"
+    hc=$(sed -n 's/^hooks\.PostToolUse=.*command="\([^"]*\)".*/\1/p' "$rec/server-argv")
+    for i in 1 2; do printf '%s\n' '{"hook_event_name":"PostToolUse","tool_name":"exec_command"}' | sh -c "$hc" > "$rec/nested-$i" 2> "$rec/nested-$i.err"; done
+  fi
+  cp -R "${CODEX_HOME:-$HOME/.codex}/skills" "$rec/skills" 2> /dev/null || :`
+
 // codexStandInThread is the thread the stand-in `codex exec` reports for a
 // session it starts.
 const codexStandInThread = "019a1f62-fbda-7aa2-af57-6c0abeb8e50b"
 
 // codexStandIn is a box's stand-in `codex`: `--version` prints release;
-// `app-server` records its argv and runs this binary as the app-server; `exec`
-// records its argv, stdin and environment, prints a turn answering `done` on
-// its thread (or [codexStandInThread]) and appends one turn's rollout lines
-// (300 in, 200 cached, 40 out, a 258400 window, two plan windows). Before its
-// answer it waits for a steer (record/wait-steer) or a refused interrupt
-// (record/final); with record/block it then works until interrupted (exit 1,
-// turn_aborted written), its server stops (exit 1) or SIGTERM (`exec` in
-// record/order). With record/own-group it first moves to a group of its own
-// (setsid, pid kept), so only the script's own `end` reaches it: a shell runs a
-// trap once for two SIGTERMs arriving during one command, so counting them
-// cannot tell the group's from the script's.
+// `app-server` over stdio (the launch's guard) records its argv, directory,
+// home and requests and prints record/config-read, else the run's own layers;
+// `app-server --listen` records its argv and runs this binary as the server;
+// `exec` records argv, stdin and environment, clones ([codexStandInClone]),
+// prints a turn answering `done` on its thread (or [codexStandInThread]) and
+// appends one turn's rollout lines (300 in, 200 cached, 40 out, a 258400
+// window, two plan windows), waiting first for a steer (record/wait-steer) or
+// a refused interrupt (record/final); record/block works until interrupted
+// (exit 1, turn_aborted), its server stops (exit 1) or SIGTERM (record/order);
+// record/own-group gives it a group of its own, only the script's `end`
+// reaching it, since a shell traps two SIGTERMs in one command once.
 func codexStandIn(t *testing.T, box sandbox.Sandbox, release, record string) {
 	t.Helper()
 	bin, err := os.Executable()
@@ -193,21 +205,30 @@ func codexStandIn(t *testing.T, box sandbox.Sandbox, release, record string) {
 	}, "\n")
 	script := fmt.Sprintf(`#!/bin/sh
 rec=%[1]s
+if [ "$1" = app-server ] && [ "$2" != --listen ]; then
+  printf '%%s\n' "$@" > "$rec/guard-argv"; pwd -P > "$rec/guard-cwd"; printf '%%s\n' "$CODEX_HOME" > "$rec/guard-home"
+  cp "$CODEX_HOME/config.toml" "$rec/guard-config.toml" 2> /dev/null
+  i=0; while [ "$i" -lt 3 ] && IFS= read -r l; do printf '%%s\n' "$l" >> "$rec/guard-stdin"; i=$((i+1)); done
+  if [ -e "$rec/config-read" ]; then cat "$rec/config-read"; else printf '%%s\n' '{"id":2,"result":{"config":{},"layers":[{"name":{"type":"sessionFlags"},"config":{}},{"name":{"type":"user","file":"/h/config.toml"},"config":{}}]}}'; fi; exit 0
+fi
 case "$1" in
 --version) echo 'codex-cli %[2]s'; exit 0;;
 app-server)
   printf '%%s\n' "$@" > "$rec/server-argv"; pwd > "$rec/server-cwd"
+  cp "$CODEX_HOME/config.toml" "$rec/config.toml" 2> /dev/null; cp "$CODEX_HOME/AGENTS.md" "$rec/AGENTS.md" 2> /dev/null; stat -c %%a "$CODEX_HOME/config.toml" > "$rec/config-mode" 2> /dev/null
   for a; do case "$a" in unix://*) s=${a#unix://};; esac; done
   %[3]s="$s" %[4]s="$rec" exec %[5]s;;
 exec)
   if [ -e "$rec/own-group" ] && [ -z "$CREWLET_TEST_OWN_GROUP" ]; then CREWLET_TEST_OWN_GROUP=1 exec setsid "$0" "$@"; fi
   printf '%%s\n' "$@" > "$rec/exec-argv"; pwd > "$rec/exec-cwd"; env > "$rec/env"; cat > "$rec/stdin"
+%[9]s
   tid=%[6]s; [ "$5" != resume ] || tid=$6
   printf '{"type":"thread.started","thread_id":"%%s"}\n{"type":"turn.started"}\n' "$tid"
   if [ -e "$rec/wait-steer" ]; then i=0; until [ -s "$rec/steers" ] || [ "$i" -ge 200 ]; do sleep 0.05; i=$((i+1)); done; fi
   if [ -e "$rec/final" ]; then i=0; until [ -s "$rec/interrupt-refused" ] || [ "$i" -ge 400 ]; do sleep 0.05; i=$((i+1)); done; fi
   f=$(find "$CODEX_HOME/sessions" -name "rollout-*-$tid.jsonl" | head -n 1)
-  [ -n "$f" ] || { mkdir -p "$CODEX_HOME/sessions/2026/11/22"; f="$CODEX_HOME/sessions/2026/11/22/rollout-2026-11-22T09-00-00-$tid.jsonl"; }
+  [ -z "$f" ] || cp "$f" "$rec/rollout-resumed"
+  [ -n "$f" ] || { mkdir -p "$CODEX_HOME/sessions/2026/11/22"; f="$CODEX_HOME/sessions/2026/11/22/rollout-2026-11-22T09-00-00-$tid.jsonl"; printf '%%s\n' %[8]s > "$f"; }
   cat >> "$f" <<'EOF'
 %[7]s
 EOF
@@ -216,8 +237,25 @@ EOF
   exit 0;;
 esac
 exit 2
-`, shellword.Quote(record), release, codexStandInSocket, codexStandInRecord, shellword.Quote(bin), codexStandInThread, rollout)
+`, shellword.Quote(record), release, codexStandInSocket, codexStandInRecord, shellword.Quote(bin), codexStandInThread, rollout,
+		shellword.Quote(codexInstructionsLine("the stand-in's first launch")), codexStandInClone)
 	writeBoxStandIn(t, box, p.BinDir()+"/codex", script)
+}
+
+// codexInstructionsLine is a rollout line as Codex 0.171.0 records a turn's
+// standing instructions, text, beside its permissions (measured: the
+// developer message a first turn's context opens with).
+func codexInstructionsLine(text string) string {
+	line, _ := json.Marshal(map[string]any{"timestamp": "2026-11-22T09:00:00.000Z", "ordinal": 2, "type": "response_item",
+		"payload": map[string]any{"type": "message", "id": "msg_dev", "role": "developer",
+			"content": []map[string]string{{"type": "input_text", "text": text},
+				{"type": "input_text", "text": "<permissions instructions>\n[trimmed]\n</permissions instructions>"}},
+			"internal_chat_message_metadata_passthrough": map[string]any{
+				"content_item_kinds": []string{"generic.developer_instructions", "permissions.instructions"},
+				"content_item_metadata": []any{
+					map[string]any{"provenance": map[string]any{"type": "developer_instructions", "from_additional_requirements": false}},
+					map[string]any{"provenance": map[string]any{"type": "harness", "hook": false}}}}}})
+	return string(line)
 }
 
 // codexBox is a real `direct` box with the Codex runner installed, and the

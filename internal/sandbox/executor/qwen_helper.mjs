@@ -7,7 +7,7 @@
 //
 //   node qwen-helper.mjs run <config> <session id> <new|load>
 //     Reads the brief on stdin and runs it as one ACP turn of
-//     `qwen --acp --approval-mode yolo --extensions none`: initialize;
+//     `qwen --acp --approval-mode yolo`: initialize;
 //     session/new under the run's minted id, or session/load of the session
 //     the run continues; the bridge connected (qwen/status/workspace/mcp);
 //     session/prompt. Every session/update Qwen Code sends from then on is
@@ -26,6 +26,13 @@
 //     working directory's key, its first line's cwd rewritten to the
 //     directory's realpath, the one field a resume checks (measured on
 //     0.28.4), and removes every other key's copy of it.
+//
+//   node qwen-helper.mjs guard [--server <name>]... [--hook <name>]
+//     Exits 3, naming the file, the key and the entry, where a settings file
+//     the run's system tier cannot overrule takes one of Crewlet's own servers
+//     or its tools away, or, for a run with a hook, where the settings or safe
+//     mode switch every hook off (qwenguard.go). A file that does not read is
+//     passed over, as Qwen Code reads it as empty.
 //
 // NOTES (the runner note contract's poll channel). While the turn runs, the
 // helper polls the notes route and keeps what it fetched. Qwen Code asks for
@@ -48,6 +55,7 @@
 // with it: nothing of it is left in Qwen Code's session.
 import { spawn } from "node:child_process"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 // framing is what Qwen Code puts before a drained message, in the request and
@@ -165,9 +173,7 @@ class Host {
   }
 
   async run(brief) {
-    // No extension is loaded: one in the home adds its context file, hooks
-    // and MCP servers (measured on 0.28.4).
-    const args = ["--acp", "--auth-type", this.config.authType, "--approval-mode", "yolo", "--extensions", "none"]
+    const args = ["--acp", "--auth-type", this.config.authType, "--approval-mode", "yolo"]
     // ITS OWN PROCESS GROUP, so a signal meant for the job's processes
     // reaches the helper, which stops the turn with session/cancel, and never
     // Qwen Code itself; a helper killed outright closes Qwen Code's stdin,
@@ -770,6 +776,256 @@ function sleep(ms, signal) {
   })
 }
 
+// ---- the guard -------------------------------------------------------------
+
+// guard is the mode above: 0 where nothing switches the servers args name off,
+// else 3, said on stderr.
+function guard(args) {
+  const servers = []
+  const hooks = []
+  const skills = []
+  for (let i = 0; i + 1 < args.length; i += 2) {
+    if (args[i] === "--server") servers.push(args[i + 1])
+    if (args[i] === "--hook") hooks.push(args[i + 1])
+    if (args[i] === "--skill") skills.push(args[i + 1])
+  }
+  const found = switchedOff(servers)
+  if (hooks.length > 0) found.push(...hooksOff(hooks))
+  if (skills.length > 0) found.push(...skillsOff(skills))
+  if (found.length === 0) return 0
+  process.stderr.write("crewlet: Qwen Code would start without what the run's tools or skill loads go through: " +
+    found.join("; ") + ". No setting of the run's undoes it, as Qwen Code adds each such list up across its " +
+    "settings files and the run never switches on hooks the box switched off; remove the entry. The run was " +
+    "not started.\n")
+  return 3
+}
+
+// hooksOff is why 0.28.4 would run none of hooks, a sentence a cause, each
+// measured: `disableAllHooks` truthy as JavaScript reads it ("false" too) in
+// the highest of the system defaults, the home's and the working directory's
+// settings that set it, a null setting it off (a working directory's null
+// over a home's true ran the hooks); and QWEN_CODE_SAFE_MODE as a string (a
+// boolean or a number left safe mode off) 1, true, yes or on in any case,
+// from the first `.env` it finds ([envFile]), else the settings' `env`, the
+// working directory's over the home's. The run's environment never holds it:
+// the wrapper unsets it, as it does Claude Code's (qwen.go, QwenCode.Output).
+function hooksOff(hooks) {
+  const run = `the run's hook ${hooks.join(", ")}`
+  const found = []
+  let all = null
+  let safe = null
+  for (const file of settingsFiles().reverse()) {
+    const s = readSettings(file)
+    if (s === null) continue
+    if (all === null && s.disableAllHooks !== undefined) all = { file, value: s.disableAllHooks }
+    const value = s.env?.QWEN_CODE_SAFE_MODE
+    if (safe === null && typeof value === "string") safe = { where: `${file}'s env.QWEN_CODE_SAFE_MODE`, value }
+  }
+  if (all !== null && all.value) {
+    found.push(`${all.file}: its disableAllHooks is ${JSON.stringify(all.value)}, which switches every hook off, ` +
+      `${run} among them`)
+  }
+  const env = envFile()
+  if (env !== null) {
+    const value = envValue(env, "QWEN_CODE_SAFE_MODE")
+    if (value !== null) safe = { where: `${env}'s QWEN_CODE_SAFE_MODE`, value }
+  }
+  if (safe !== null && /^(1|true|yes|on)$/i.test(safe.value)) {
+    found.push(`${safe.where} is ${JSON.stringify(safe.value)}: safe mode switches every hook off, ${run} among them`)
+  }
+  return found
+}
+
+// skillsOff is what of the settings files below the run's switches one of
+// skills off, a sentence an entry, each measured on 0.28.4: `skills.disabled`
+// or `skills.defaultDisabled` naming it by its listed name in any case, or
+// `skills.disabledLevels` holding "user", the level the run's skills directory
+// is read at; any file's entry counts.
+function skillsOff(skills) {
+  const fold = (name) => String(name).toLowerCase().trim()
+  const list = (value) => (Array.isArray(value) ? value : [])
+  const found = []
+  for (const file of settingsFiles()) {
+    const s = readSettings(file)
+    if (s === null) continue
+    for (const key of ["disabled", "defaultDisabled"]) {
+      for (const name of skills) {
+        if (list(s.skills?.[key]).some((entry) => fold(entry) === fold(name))) {
+          found.push(`${file}: its skills.${key} names the run's skill ${name}`)
+        }
+      }
+    }
+    if (list(s.skills?.disabledLevels).includes("user")) {
+      found.push(`${file}: its skills.disabledLevels holds "user", the level of the run's skills ${skills.join(", ")}`)
+    }
+  }
+  return found
+}
+
+// settingsFiles is the settings files below the run's system tier, lowest
+// first: the system defaults, the home's, and the working directory's unless
+// it is the home (measured on 0.28.4: a higher one's value wins).
+function settingsFiles() {
+  const home = os.homedir()
+  const files = [process.env.QWEN_CODE_SYSTEM_DEFAULTS_PATH || path.join(path.dirname(
+    process.env.QWEN_CODE_SYSTEM_SETTINGS_PATH || "/etc/qwen-code/settings.json"), "system-defaults.json"),
+  path.join(home, ".qwen", "settings.json")]
+  if (realpath(process.cwd()) !== realpath(home)) files.push(path.join(process.cwd(), ".qwen", "settings.json"))
+  return files
+}
+
+// envFile is the one `.env` 0.28.4 loads: the first of the working
+// directory's `.qwen/.env` and `.env`, then the home's (measured: each loads,
+// the working directory's first; `.gemini/.env` and a `.env` above the home
+// never), or null.
+function envFile() {
+  const home = os.homedir()
+  const dirs = realpath(process.cwd()) === realpath(home) ? [home] : [process.cwd(), home]
+  for (const dir of dirs) {
+    for (const file of [path.join(dir, ".qwen", ".env"), path.join(dir, ".env")]) {
+      try {
+        if (fs.statSync(file).isFile()) return file
+      } catch {
+        // not there: the next one
+      }
+    }
+  }
+  return null
+}
+
+// envValue is name's value in the `.env` file, its last assignment, quotes
+// stripped; null where it sets none or cannot be read.
+function envValue(file, name) {
+  let text
+  try {
+    text = fs.readFileSync(file, "utf8")
+  } catch {
+    return null
+  }
+  let value = null
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/)
+    if (m === null || m[1] !== name) continue
+    const q = m[2].match(/^(["'`])(.*)\1$/)
+    value = q !== null ? q[2] : m[2].replace(/\s+#.*$/, "")
+  }
+  return value
+}
+
+// switchedOff is what the settings files below the run's take away of
+// servers, a sentence each: the home's, the working directory's unless it is
+// the home, and the system defaults, read as 0.28.4 reads them (its settings
+// of an older shape, `excludeMCPServers`, `allowMCPServers` and
+// `excludeTools`, included). `mcp.excluded` names a server by its name or a
+// glob of `*` and `?`, case kept; `permissions.deny` and `tools.exclude` deny
+// a server's tools by `mcp__<server>`, a tool's qualified name or a trailing
+// `*`, a rule with a specifier never; `tools.disabled` hides a tool by its
+// qualified name alone; and the `mcp.allowed` lists, joined across the files,
+// must name the server where any file holds one (each measured on 0.28.4).
+function switchedOff(servers) {
+  const home = os.homedir()
+  const files = [path.join(home, ".qwen", "settings.json")]
+  if (realpath(process.cwd()) !== realpath(home)) files.push(path.join(process.cwd(), ".qwen", "settings.json"))
+  files.push(process.env.QWEN_CODE_SYSTEM_DEFAULTS_PATH || path.join(path.dirname(
+    process.env.QWEN_CODE_SYSTEM_SETTINGS_PATH || "/etc/qwen-code/settings.json"), "system-defaults.json"))
+  const list = (...values) =>
+    values.flatMap((v) => (Array.isArray(v) ? v : [])).filter((e) => typeof e === "string" && e !== "")
+  const found = []
+  const allowed = []
+  for (const file of files) {
+    const s = readSettings(file)
+    if (s === null) continue
+    const why = []
+    for (const name of servers) {
+      const qualified = `mcp__${name}__`
+      for (const entry of list(s.mcp?.excluded, s.excludeMCPServers)) {
+        if (globMatch(name, entry)) why.push(`its mcp.excluded entry "${entry}" takes the server ${name} away`)
+      }
+      for (const [key, entries] of [["permissions.deny", list(s.permissions?.deny)],
+        ["tools.exclude", list(s.tools?.exclude, s.excludeTools)]]) {
+        for (const entry of entries) {
+          if (entry.includes("(")) continue
+          const prefix = entry.endsWith("*") ? entry.slice(0, -1) : null
+          const hits = prefix === null
+            ? entry === `mcp__${name}` || entry.startsWith(qualified)
+            : qualified.startsWith(prefix) || prefix.startsWith(qualified)
+          if (hits) why.push(`its ${key} entry "${entry}" denies the tools of the server ${name}`)
+        }
+      }
+      for (const entry of list(s.tools?.disabled)) {
+        if (entry.startsWith(qualified) && !entry.includes("*")) {
+          why.push(`its tools.disabled entry "${entry}" hides a tool of the server ${name}`)
+        }
+      }
+    }
+    if (Array.isArray(s.mcp?.allowed) || Array.isArray(s.allowMCPServers)) {
+      allowed.push({ file, entries: list(s.mcp?.allowed, s.allowMCPServers) })
+    }
+    if (why.length > 0) found.push(`${file}: ${why.join(", ")}`)
+  }
+  for (const name of servers) {
+    if (allowed.length === 0 || allowed.some(({ entries }) => entries.some((e) => globMatch(name, e)))) continue
+    for (const { file, entries } of allowed) {
+      found.push(`${file}: its mcp.allowed ${JSON.stringify(entries)} leaves the server ${name} out`)
+    }
+  }
+  return found
+}
+
+// globMatch is Qwen Code's own match of a server name against an
+// `mcp.excluded` or `mcp.allowed` entry: equal, or a glob of `*` and `?`.
+function globMatch(name, pattern) {
+  if (!pattern.includes("*") && !pattern.includes("?")) return name === pattern
+  const re = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")
+  return new RegExp("^" + re + "$", "s").test(name)
+}
+
+// readSettings is the settings object file holds, its comments and a leading
+// byte-order mark stripped as Qwen Code strips them; null for none, or one
+// that does not read as one.
+function readSettings(file) {
+  try {
+    const text = fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "")
+    const settings = JSON.parse(withoutComments(text))
+    return settings !== null && typeof settings === "object" && !Array.isArray(settings) ? settings : null
+  } catch {
+    return null
+  }
+}
+
+// withoutComments is text less its `//` and `/* */` comments outside strings.
+function withoutComments(text) {
+  let out = ""
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (c === '"') {
+      let j = i + 1
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1
+      out += text.slice(i, j + 1)
+      i = j
+    } else if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++
+      out += "\n"
+    } else if (c === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2)
+      i = end < 0 ? text.length : end + 1
+    } else {
+      out += c
+    }
+  }
+  return out
+}
+
+// realpath is dir resolved through its links, as given where it does not
+// resolve.
+function realpath(dir) {
+  try {
+    return fs.realpathSync(dir)
+  } catch {
+    return path.resolve(dir)
+  }
+}
+
 // LAST, once every class above is defined: a class is not hoisted, and the
 // run's Host would not yet exist where the mode is read.
 if (mode === "skill") {
@@ -778,6 +1034,8 @@ if (mode === "skill") {
   process.exitCode = await run()
 } else if (mode === "restore") {
   process.exitCode = restore()
+} else if (mode === "guard") {
+  process.exitCode = guard(process.argv.slice(3))
 } else {
   process.stderr.write(`crewlet: qwen-helper.mjs has no mode ${JSON.stringify(mode)}\n`)
   process.exitCode = 2

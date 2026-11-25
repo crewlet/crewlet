@@ -125,7 +125,7 @@ func floorReadOf(fleet *FleetStore, shape string) func(context.Context) error {
 	default:
 		return func(ctx context.Context) error {
 			n := 0
-			err := fleet.eachPositionKey(ctx, "floor", "the trim floors",
+			err := fleet.eachPositionKey(ctx, coord.FloorClass, "the trim floors",
 				func(string, []byte, time.Time) error { n++; return nil })
 			if err == nil && n != len(floorDomains) {
 				err = fmt.Errorf("the listing named %d floors, want %d", n, len(floorDomains))

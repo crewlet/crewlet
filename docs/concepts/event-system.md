@@ -169,7 +169,7 @@ A keep names an identity its keeper derives from what it keeps, which travels as
   - A handler says a failure is its node's own with `NakNode`: returned as any failure is, spaced and behind the waiting mail with the consumer taking mail on, its line (`handler_failed`) naming `fault=node` where a message's own says `fault=message`, and never counted against the message.
   - A seat's mailbox and its executor's control topic answer by one rule, whether the failure met a requeue, a park, the turn itself or the resumed turn a completion runs. The node's own failures are:
     - every failure the queue tells as the node's (`queue.NodeFault`: a broker that did not answer, a queue no longer live, a delivery whose context the node's stop or drain ended);
-    - every failure its record names as a condition of the infrastructure: a coordination store, state log, store, data node, file store or disk that failed; fleet nodes holding different keys or builds; a coding sandbox that failed for no mail's doing (provider not answering, at the account's limit, wanting the account paid for or refusing the company's credentials (`sandbox_provider_refused`), a setup download failing on the far side); a configuration the deployment cannot start;
+    - every failure its record names as a condition of the infrastructure: a coordination store, state log, store, data node, file store or disk that failed; fleet nodes holding different keys or builds; a coding sandbox that failed for no mail's doing (its runtime not answering (`sandbox_provider_unavailable`), a setup download failing on the far side); a configuration the deployment cannot start;
     - every hand-back the coordination store's silence made;
     - on the control topic, a resume another node or build can make (a parked state or reply kind a newer build wrote, a seat or company that is not the node's) and a claim the seat's recovery gate refused while the node's pass over the seat's runs is under way, which comes back once the pass is done;
     - `state_log_unavailable` (the log's own refusals).
@@ -964,6 +964,16 @@ seat_provider_released     # a provider park lifted: the probe was answered
                            # (or failed for a reason that is not a limit),
                            # the seat's chain changed, or the node gave the
                            # seat up
+llm_fleet_moved            # a seat job's work on an LLM fleet went to a
+                           # member other than its home: between turns,
+                           # mid-turn after a limit, or to nobody (`to`
+                           # null). A fleet's hand-off publishes this
+                           # instead of provider_fallback
+llm_fleet_full             # no member of a fleet can take work: who waits,
+                           # and the first room (`first_room_at`,
+                           # `first_room_member`)
+llm_fleet_room             # a member of a full fleet answered its probe,
+                           # and the seats it releases
 subagent_batched, phase.tool_skill_blocked, skill_telemetry_write_failed
 prompt.size                # one phase's OPENING prompt, measured in BYTES
                            # plus a token approximation: the system and user
@@ -1062,7 +1072,9 @@ it did is `reflection_completed`), the two A2A inbox wakes `a2a_request` and `a2
 already rows as `a2a_channel_opened` and `a2a_message_sent`),
 `executor_answer_given` (the command an answer by turn puts on the seat's control topic:
 what the answer became is `executor_answered`, and that a person gave it is
-their `operator_acted` row) and `tool_skill_page_changed` (a nudge between
+their `operator_acted` row), `executor_wait_over` (the wake the engine puts on
+the seat's control topic once a parked run's wait is over: the run carrying on
+is its own `executor_launched` row) and `tool_skill_page_changed` (a nudge between
 nodes about an edit the webhook receiver already recorded). The cause is a
 value rather than a sentence, because the admission rule below is checked by a
 walk and no walk can read intent out of prose. See the exclusions table in the
@@ -1461,7 +1473,7 @@ Private 1:1 conversations between agents for tight-loop or mechanical sync that 
 
 An agent opens one with the `a2a_ask` tool and ends its turn. The brief travels **on the wake event** in the target's inbox, so it reaches whichever node owns that seat. The answering agent's turn **ends with the reply**, which the engine delivers on the same channel, waking the asker. There is no `send_a2a_message` tool and no channel lifecycle for a model to manage: replying is ending the turn.
 
-The turn parks on its executor's run when it launches one; the reply comes from whatever ends the turn: the resumed segment that settles the run's review, a person's stop of the run, or the ending of a run lost under the turn (box gone, tail abandoned by a dead node), which tells the asker the run was lost and why. The last two run on whichever node holds the seat, off the ask written on the run's record, since none sees the wake. A turn that ends without parking (delegation depth cap, or broken or stopped at or before launch) answers from its dispatch, saying it could not answer ([Turn Engine](turn-engine.md#who-is-waiting-and-how-they-get-an-answer)).
+The turn parks on its executor's run when it launches one; the reply comes from whatever ends the turn: the resumed segment that settles the run's review, a person's stop of the run, or the ending of a run lost under the turn (box gone, tail abandoned by a dead node), which tells the asker the run was lost and why. The last two run on whichever node holds the seat, off the ask written on the run's record, since none sees the wake. A turn that ends without parking (delegation depth cap, or broken or stopped at or before launch) answers from its dispatch, saying it could not answer ([Turn Engine](turn-engine.md#who-is-waiting-and-how-they-get-an-answer)). Where the answering turn's run did not continue its session, the `a2a_message` says so in its own `session_not_continued` (the engine's verdict, its detail left out), which the asker reads after the answer and outside the colleague's fence ([When a run does not continue its session](conversation-sessions.md#when-a-run-does-not-continue-its-session)).
 
 ```mermaid
 sequenceDiagram

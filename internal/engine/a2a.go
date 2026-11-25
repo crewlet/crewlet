@@ -83,9 +83,14 @@ type answeringTurn struct {
 	workKey string
 	// depth is the turn's delegation depth, which the reply carries unchanged.
 	depth int
+	// notContinued is what the turn's runs' sessions lost, said in the answer
+	// ([sandbox.PendingRun.ConversationNotice]); nil for a turn that ran no job
+	// or lost nothing.
+	notContinued *executorkeep.NotContinued
 }
 
-// answeringOf is the turn a dispatch runs, as a reply names it.
+// answeringOf is the turn a dispatch runs, as a reply names it: one that ends
+// in its dispatch ran no job, so it says no session lost.
 func answeringOf(req Request) answeringTurn {
 	return answeringTurn{handle: req.Handle, runID: req.RunID, workKey: req.WorkKey, depth: req.Depth}
 }
@@ -93,7 +98,7 @@ func answeringOf(req Request) answeringTurn {
 // answeringRun is the turn a run's record belongs to, as a reply names it.
 func answeringRun(run sandbox.PendingRun) answeringTurn {
 	return answeringTurn{handle: run.AgentHandle, runID: run.TurnID, workKey: run.WorkKey,
-		depth: run.DelegationDepth}
+		depth: run.DelegationDepth, notContinued: run.ConversationNotice()}
 }
 
 // colleagueAnswer is what the engine answered a colleague's ask with, for the
@@ -162,6 +167,10 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, by answeringTu
 	sent := colleagueAnswer{owed: true, kind: kind, sent: content}
 	answer := a2a.Answer{
 		ChannelID: ask.ChannelID, Sender: by.handle, Content: content,
+		// AND WHAT THE RUN'S SESSION LOST, beside the answer and never in the
+		// colleague's words: an agent asking is told what a person in the
+		// thread is (conversationnotice.go), its detail left out.
+		NotContinued: withoutDetail(by.notContinued),
 		// Raw, back to the model that asked it ([sandbox.ColleagueAsk.RawQuestion]).
 		Question: ask.RawQuestion(),
 		AskTrace: events.TraceContext{
@@ -294,6 +303,17 @@ func lostRunOf(err error) (*runLostError, bool) {
 		return lost, true
 	}
 	return nil, false
+}
+
+// withoutDetail is verdict as a conversation is told it: the engine's sentence
+// says it, and the detail stays on the turn's page; nil for none.
+func withoutDetail(verdict *executorkeep.NotContinued) *executorkeep.NotContinued {
+	if verdict == nil {
+		return nil
+	}
+	told := *verdict
+	told.Detail = ""
+	return &told
 }
 
 // answerContent is what the asker is told, and its kind in one word for the

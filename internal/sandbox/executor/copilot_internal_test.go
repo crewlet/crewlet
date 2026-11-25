@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -16,8 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/prereqtest"
-	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -52,6 +54,33 @@ func copilotScriptUsage(t *testing.T, events []byte, before int) []byte {
 		t.Fatalf("the usage part of the script failed: %v", err)
 	}
 	return out
+}
+
+// copilotScriptUsageOver is [copilotScriptUsage] over a session directory that
+// held launch, files by name, when the run started ([copilotJournalAtLaunch]),
+// and holds after once its harness exited.
+func copilotScriptUsageOver(t *testing.T, launch, after map[string][]byte) []byte {
+	t.Helper()
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	run := func(files map[string][]byte, script string) []byte {
+		dir := t.TempDir()
+		for name, body := range files {
+			if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := exec.Command(sh, "-c", "ev="+shellword.Quote(filepath.Join(dir, "events.jsonl"))+"\n"+
+			script).Output()
+		if err != nil {
+			t.Fatalf("the script failed: %v", err)
+		}
+		return out
+	}
+	kept := strings.Fields(string(run(launch, copilotJournalAtLaunch()+`echo "$el" "$en"`)))
+	if len(kept) != 2 {
+		t.Fatalf("the launch kept %q, want a line count and a file number", kept)
+	}
+	return run(after, "el="+kept[0]+" en="+kept[1]+"\n"+copilotUsage())
 }
 
 // copilotCollected is what a run whose harness wrote stream and whose session
@@ -119,7 +148,7 @@ func TestALaunchedCopilotRunReadsAsItsAnswerSpendAndNote(t *testing.T) {
 		t.Errorf("the transcript does not show the note:\n%s", res.Transcript)
 	}
 	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(copilotFixture(t, "launched.events.jsonl")),
-		served("msg_inbox1"))
+		served("msg_inbox1"), nil)
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 		t.Fatalf("held = %v (%v), want the note", held, err)
 	}
@@ -146,11 +175,10 @@ func TestACopilotUsageRecordBeforeTheMarkIsNotCharged(t *testing.T) {
 	}
 }
 
-// A continued session's usage is the run's own: the records after the start
-// this process wrote, never the session's earlier processes'.
+// A continued session's usage is the run's own: the records this process
+// wrote, never the session's earlier processes'.
 //
-// Mutation: take every record of the file, or the records after the first
-// start — the case fails.
+// Mutation: take every record of the file, and the case fails.
 func TestACopilotContinuedRunIsChargedItsOwnRequestsAlone(t *testing.T) {
 	events := copilotFixture(t, "resumed.events.jsonl")
 	// The first process wrote 16 lines (its two requests); the resume one.
@@ -168,6 +196,93 @@ func TestACopilotContinuedRunIsChargedItsOwnRequestsAlone(t *testing.T) {
 	_ = eachLine(bytes.NewReader(none), dec, maxLineBytes)
 	if spent, stated := dec.runSpend(); !stated || spent != (runSpend{}) {
 		t.Fatalf("a run that wrote no start was charged %+v (stated %v), want nothing, stated", spent, stated)
+	}
+}
+
+// A run whose journal Copilot rotated (COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES
+// at 8192, 1.0.114) is charged every request it made: those the rotation moved
+// to a numbered file, past what the file held at launch, and those after it in
+// the new head, whose copies hold no usage record and may number fewer lines
+// than the launch's head did. A file numbered no higher than the last at launch
+// is an earlier run's and is not read again.
+//
+// Mutation: read events.jsonl alone, read the files numbered at launch too,
+// keep no highest file at launch, skip the launch's line count in every file,
+// or in the first file holding a line: a case fails.
+func TestARotatedCopilotRunIsChargedEveryRequestItMade(t *testing.T) {
+	fx := func(name string) []byte { return copilotFixture(t, name) }
+	// The lines a file held when the run began: an archive opens with the
+	// head it moved, byte for byte (measured).
+	first := func(b []byte, n int) []byte {
+		rest := b
+		for range n {
+			_, rest, _ = bytes.Cut(rest, []byte("\n"))
+		}
+		return b[:len(b)-len(rest)]
+	}
+	// A resume that compacted, which rotated the journal, then made 6
+	// requests: the 88 lines the head held at launch open events.1.jsonl, and
+	// the new head holds 2 of the 6 within its first 88 lines.
+	compacted, compactedHead := fx("compacted-resume-rotated.events.1.jsonl"), fx("compacted-resume-rotated.events.jsonl")
+	for _, tc := range []struct {
+		name                string
+		launch, after       map[string][]byte
+		requests, in, cache int
+		write, out          int
+	}{
+		// A new session rotated as its harness exited: all 9 requests are in
+		// events.1.jsonl.
+		{"rotated at its end", nil, map[string][]byte{"events.1.jsonl": fx("rotated-end.events.1.jsonl"),
+			"events.jsonl": fx("rotated-end.events.jsonl")}, 9, 9045, 4500, 63, 135},
+		// Rotated after a compaction, before its last request: 13 + 1.
+		{"rotated mid-run", nil, map[string][]byte{"events.1.jsonl": fx("rotated-mid.events.1.jsonl"),
+			"events.jsonl": fx("rotated-mid.events.jsonl")}, 14, 14106, 7000, 98, 246},
+		// A resume of a rotated session, whose events.1.jsonl is the first run's.
+		{"resumed after a rotation", map[string][]byte{"events.1.jsonl": fx("rotated-end.events.1.jsonl"),
+			"events.jsonl": fx("rotated-end.events.jsonl")}, map[string][]byte{
+			"events.1.jsonl": fx("rotated-end.events.1.jsonl"),
+			"events.jsonl":   fx("rotated-end.resumed.events.jsonl")}, 9, 9126, 4500, 63, 216},
+		// A resume rotated as it exited: the 58 lines its head held at launch,
+		// the first run's, open events.1.jsonl, and its 9 requests follow.
+		{"a resume rotated at its end", map[string][]byte{"events.jsonl": first(fx("resumed-rotated.events.1.jsonl"), 58)},
+			map[string][]byte{"events.1.jsonl": fx("resumed-rotated.events.1.jsonl"),
+				"events.jsonl": fx("resumed-rotated.events.jsonl")}, 9, 9126, 4500, 63, 216},
+		{"a resume rotated after a compaction", map[string][]byte{"events.jsonl": first(compacted, 88)},
+			map[string][]byte{"events.1.jsonl": compacted, "events.jsonl": compactedHead}, 6, 6111, 3000, 42, 171},
+		// BUILT FROM THOSE LINES, as no 1.0.114 run rotated twice in one box
+		// (the second was always deferred): the same resume in a box whose
+		// events.1.jsonl an earlier rotation left, so its archive is
+		// events.2.jsonl and the head links to it.
+		{"a second rotation", map[string][]byte{"events.1.jsonl": fx("rotated-end.events.1.jsonl"),
+			"events.jsonl": first(compacted, 88)}, map[string][]byte{
+			"events.1.jsonl": fx("rotated-end.events.1.jsonl"), "events.2.jsonl": compacted,
+			"events.jsonl": bytes.Replace(compactedHead, []byte(`"previousFile":"events.1.jsonl"`),
+				[]byte(`"previousFile":"events.2.jsonl"`), 1)}, 6, 6111, 3000, 42, 171},
+		// BUILT: the archive of the launch's head empty, the head read whole.
+		{"an empty archive", map[string][]byte{"events.jsonl": first(compacted, 88)},
+			map[string][]byte{"events.1.jsonl": nil, "events.jsonl": compactedHead}, 6, 6111, 3000, 42, 171},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			copilotCharged(t, copilotScriptUsageOver(t, tc.launch, tc.after),
+				tc.requests, tc.in, tc.cache, tc.write, tc.out)
+		})
+	}
+}
+
+// copilotCharged fails t unless usage, a run's script's usage part, charges requests
+// requests: in prompt tokens, cache read and written, and out.
+func copilotCharged(t *testing.T, usage []byte, requests, in, cache, write, out int) {
+	t.Helper()
+	dec := &copilotEvents{}
+	if err := eachLine(bytes.NewReader(usage), dec, maxLineBytes); err != nil {
+		t.Fatal(err)
+	}
+	spent, stated := dec.runSpend()
+	got := spent.on(sandbox.Result{})
+	if !stated || dec.requests != requests || got.InputTokens != in || got.CacheReadTokens != cache ||
+		got.CacheWriteTokens != write || got.OutputTokens != out {
+		t.Fatalf("charged %+v over %d requests (stated %v), want %d requests: %d in, cache %d/%d, %d out",
+			got, dec.requests, stated, requests, in, cache, write, out)
 	}
 }
 
@@ -219,6 +334,25 @@ func TestACopilotRunStoppedAtItsCapReadsAsCapped(t *testing.T) {
 	}
 }
 
+// A run the extension stopped because it could not keep its count fails
+// saying so: its line, the abort, the aborted idle and exit 1 give that line's
+// words, never a cap and never a bare abort.
+//
+// Mutation: drop the line's arm, and the run reads as aborted with no reason.
+func TestACopilotRunStoppedForAnUnkeptCountSaysWhy(t *testing.T) {
+	stream := bytes.Replace(copilotFixture(t, "capped.result.jsonl"),
+		[]byte(copilotCapMessage+"3 model turns and was stopped"), []byte(copilotUnkeptMessage), 1)
+	if !bytes.Contains(stream, []byte(copilotUnkeptMessage)) {
+		t.Fatal("the capped run's result holds no cap line to stand the unkept line in for")
+	}
+	dec := &copilotEvents{}
+	_ = eachLine(bytes.NewReader(stream), dec, maxLineBytes)
+	res := dec.Result()
+	if res.Success || res.RoundCapped || res.Error != strings.TrimPrefix(copilotUnkeptMessage, "crewlet: ") {
+		t.Fatalf("result = %+v, want a failure saying the count could not be kept", res)
+	}
+}
+
 // The cap's line alone labels nothing: a run that logged it and answered is
 // an answer (forged-cap: an extension that only logged the line).
 //
@@ -246,8 +380,8 @@ func copilotArmedLine(t *testing.T) string {
 	return ""
 }
 
-// A run with a turn cap whose extension never ran (a managed policy that
-// allows only managed hooks, a failed load) FAILS, saying so, whatever it
+// A run with a turn cap whose extension never ran (a policy GitHub serves the
+// account, a failed load) FAILS, saying so, whatever it
 // answered: nothing held it to its cap. The same run with the extension's line
 // is the answer it gave.
 //
@@ -259,7 +393,7 @@ func TestACopilotRunWithACapItsExtensionNeverRanFails(t *testing.T) {
 	dec := &copilotEvents{}
 	_ = eachLine(bytes.NewReader(append([]byte(capped), stream...)), dec, maxLineBytes)
 	if res := dec.Result(); res.Success || !strings.Contains(res.Error, "turn cap of 3") ||
-		!strings.Contains(res.Error, "allowManagedHooksOnly") {
+		!strings.Contains(res.Error, "strictPluginOnlyCustomization") {
 		t.Fatalf("result = %+v, want a failure saying the cap of 3 was not enforced", res)
 	}
 	dec = &copilotEvents{}
@@ -388,7 +522,7 @@ func TestACopilotNoteIsHeldOnlyOnceARequestCarriedIt(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.fixture, func(t *testing.T) {
 			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(copilotFixture(t, c.fixture)),
-				served("msg_inbox1", "msg_never"))
+				served("msg_inbox1", "msg_never"), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -455,7 +589,7 @@ func TestACopilotNoteIsHeldOnlyByTheMainAgentsRequest(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"))
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"), nil)
 			if err != nil || slices.Contains(held, "msg_inbox1") != c.held {
 				t.Fatalf("held = %v (%v), want the note held %v", held, err, c.held)
 			}
@@ -505,7 +639,7 @@ func TestACopilotNoteIsHeldOnlyByARequestBegunAfterIt(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"))
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"), nil)
 			if err != nil || slices.Contains(held, "msg_inbox1") != c.held {
 				t.Fatalf("held = %v (%v), want the note held %v", held, err, c.held)
 			}
@@ -527,7 +661,7 @@ func TestACopilotRecordAnswersItsTakesInServeOrderOnce(t *testing.T) {
 		events = append(events, l...)
 	}
 	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(events),
-		served("msg_never", "msg_inbox1", "msg_inbox0", "msg_inbox1"))
+		served("msg_never", "msg_inbox1", "msg_inbox0", "msg_inbox1"), nil)
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1", "msg_inbox0"}) {
 		t.Fatalf("held = %v (%v), want msg_inbox1 then msg_inbox0, once each", held, err)
 	}
@@ -543,7 +677,7 @@ func TestACopilotQueuedNoteIsHeldOnceARequestCarriedIt(t *testing.T) {
 	if !bytes.Contains(events, []byte(`"delivery":"queued"`)) {
 		t.Fatal("the fixture holds no queued note")
 	}
-	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(events), served("msg_inbox1"))
+	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(events), served("msg_inbox1"), nil)
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 		t.Fatalf("held = %v (%v), want the queued note", held, err)
 	}
@@ -577,7 +711,7 @@ func TestACopilotNoteTheCompactionCarriedOverIsHeld(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), c.served)
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), c.served, nil)
 			if err != nil || !slices.Equal(held, c.want) {
 				t.Fatalf("held = %v (%v), want %v", held, err, c.want)
 			}
@@ -627,7 +761,7 @@ func TestACopilotNoteAnAnswerFollowedIsNotCarriedOver(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"))
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"), nil)
 			if err != nil || slices.Contains(held, "msg_inbox1") != c.held {
 				t.Fatalf("held = %v (%v), want the note held %v", held, err, c.held)
 			}
@@ -716,11 +850,11 @@ func TestACopilotNoteAMessageFollowedIsNotCarriedOver(t *testing.T) {
 				want = []string{"msg_inbox1", "msg_inbox2", "msg_inbox3"}
 			}
 			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(between),
-				served("msg_inbox1", "msg_inbox2", "msg_inbox3"))
+				served("msg_inbox1", "msg_inbox2", "msg_inbox3"), nil)
 			if err != nil || !slices.Equal(held, want) {
 				t.Fatalf("held = %v (%v), want %v", held, err, want)
 			}
-			held, err = copilotNotesHeld(t.Context(), bytes.NewReader(served2), served("msg_inbox1"))
+			held, err = copilotNotesHeld(t.Context(), bytes.NewReader(served2), served("msg_inbox1"), nil)
 			if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 				t.Fatalf("served again: held = %v (%v), want note 1", held, err)
 			}
@@ -816,7 +950,7 @@ func TestOnlyAFailedCopilotCompactionKeepsTheNoteBeforeIt(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(copilotCompactedUnretained(t, c.edit)),
-				served("msg_inbox1"))
+				served("msg_inbox1"), nil)
 			if err != nil || slices.Contains(held, "msg_inbox1") != c.held {
 				t.Fatalf("held = %v (%v), want note 1 held %v", held, err, c.held)
 			}
@@ -840,14 +974,14 @@ func TestACopilotNoteIsNotHeldByATornLastLine(t *testing.T) {
 			break
 		}
 	}
-	if held, _ := copilotNotesHeld(t.Context(), bytes.NewReader(through), served("msg_inbox1")); len(held) != 1 {
+	if held, _ := copilotNotesHeld(t.Context(), bytes.NewReader(through), served("msg_inbox1"), nil); len(held) != 1 {
 		t.Fatalf("the record through the note's usage record holds %v, want the note", held)
 	}
 	for name, torn := range map[string][]byte{
 		"cut mid-line":    through[:len(through)-40],
 		"with no newline": through[:len(through)-1],
 	} {
-		held, err := copilotNotesHeld(t.Context(), bytes.NewReader(torn), served("msg_inbox1"))
+		held, err := copilotNotesHeld(t.Context(), bytes.NewReader(torn), served("msg_inbox1"), nil)
 		if err != nil || len(held) != 0 {
 			t.Errorf("%s: held = %v (%v), want none", name, held, err)
 		}
@@ -865,7 +999,7 @@ func TestACopilotNoteHeldBeforeATornLineStaysHeld(t *testing.T) {
 	lines := bytes.SplitAfter(bytes.TrimSuffix(events, []byte("\n")), []byte("\n"))
 	last := lines[len(lines)-1]
 	torn := append(append([]byte{}, events...), last[:len(last)/2]...)
-	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(torn), served("msg_inbox1"))
+	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(torn), served("msg_inbox1"), nil)
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 		t.Fatalf("held = %v (%v), want the note its whole record held", held, err)
 	}
@@ -926,11 +1060,12 @@ func TestACopilotTranscriptFilesTheNoteUnderItsHeading(t *testing.T) {
 	}
 }
 
-// A run is started on Copilot's own posture: the brief on stdin, every engine
-// server enabled by name over a trusted repository's settings, the session by
-// `--session-id`, never `--trust-folder` (refused beside it) nor `-p`.
+// A run is started on Copilot's own posture: the brief on stdin, the engine's
+// servers added, never enabled over a person's `disabledMcpServers` (the guard
+// refuses that for the bridge), the session by `--session-id`, never
+// `--trust-folder` (refused beside it) nor `-p`.
 //
-// Mutation: drop `--enable-mcp-server`, or add `--trust-folder` — the case fails.
+// Mutation: add `--enable-mcp-server` or `--trust-folder` — the case fails.
 func TestACopilotRunIsStartedOnItsPosture(t *testing.T) {
 	paths := Paths{Home: "/box"}
 	req := sandbox.RunRequest{Model: "gpt-5.2", Effort: "high", Limits: sandbox.Limits{MaxTurns: 3},
@@ -939,7 +1074,7 @@ func TestACopilotRunIsStartedOnItsPosture(t *testing.T) {
 	for _, want := range []string{"copilot --output-format json --yolo --no-ask-user --no-auto-update",
 		"--disable-client-telemetry", "--disable-builtin-mcps", "--sync-session=off",
 		"--additional-mcp-config '@/box/.crewlet/mcp.json'",
-		"--enable-mcp-server 'crewlet' --enable-mcp-server 'linear'", "--model 'gpt-5.2'",
+		"--model 'gpt-5.2'",
 		"--reasoning-effort 'high'", `set -- "$@" --session-id 's-1'`,
 		`printf '%s\n' '{"type":"crewlet.cap","data":{"turns":3}}'`,
 		"older than 1.0.114"} {
@@ -953,7 +1088,8 @@ func TestACopilotRunIsStartedOnItsPosture(t *testing.T) {
 			invocation = l
 		}
 	}
-	for _, refused := range []string{"--trust-folder", " -p ", "--prompt", "--resume", "--experimental"} {
+	for _, refused := range []string{"--trust-folder", " -p ", "--prompt", "--resume", "--experimental",
+		"--enable-mcp-server"} {
 		if strings.Contains(invocation, refused) {
 			t.Errorf("the invocation holds %q: %s", refused, invocation)
 		}
@@ -971,13 +1107,14 @@ func TestACopilotRunKeepsOnlyItsEntrysProvider(t *testing.T) {
 	}
 }
 
-// Copilot is started with its GitHub sign-in under COPILOT_GITHUB_TOKEN alone,
-// the token its own order takes, every other sign-in name and its own names for
-// the token it holds unset. The rest of the run's environment is kept, its
-// export's endpoint among them, which Copilot's own export reads.
+// Copilot is started with its GitHub sign-in under COPILOT_GITHUB_TOKEN, the
+// token its own order takes, and its own names for the token it holds unset.
+// The rest of the run's environment is kept, GH_TOKEN and GITHUB_TOKEN as set
+// (the model's shell holds them as a person's does) and its export's endpoint,
+// which Copilot's own export reads.
 //
-// Mutation: leave GITHUB_TOKEN set, take GITHUB_TOKEN over GH_TOKEN, or unset
-// the endpoint: the case fails.
+// Mutation: unset GITHUB_TOKEN, take GITHUB_TOKEN over GH_TOKEN, leave a held
+// token set, or unset the endpoint: the case fails.
 func TestACopilotRunHandsItsSignInUnderOneName(t *testing.T) {
 	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
 	for _, tc := range []struct {
@@ -1012,9 +1149,14 @@ func TestACopilotRunHandsItsSignInUnderOneName(t *testing.T) {
 			if v, set := got["COPILOT_GITHUB_TOKEN"]; v != tc.want || set != (tc.want != "") {
 				t.Errorf("COPILOT_GITHUB_TOKEN = %q (set %v), want %q", v, set, tc.want)
 			}
-			for _, name := range slices.Concat(copilotSignInNames[1:], copilotHeldToken) {
+			for _, name := range copilotHeldToken {
 				if v, set := got[name]; set {
 					t.Errorf("%s is still set, to %q", name, v)
+				}
+			}
+			for _, name := range copilotSignInNames[1:] {
+				if v := tc.env[name]; got[name] != v {
+					t.Errorf("%s = %q, want the run's %q", name, got[name], v)
 				}
 			}
 			if got["RUN_OWN"] != "kept" || got["OTEL_EXPORTER_OTLP_ENDPOINT"] != "http://engine.example.com/otlp/t-1" {
@@ -1026,132 +1168,6 @@ func TestACopilotRunHandsItsSignInUnderOneName(t *testing.T) {
 	signIn, launch := strings.Index(script, copilotSignIn()), strings.Index(script, "copilot --output-format")
 	if signIn < 0 || launch < signIn {
 		t.Errorf("the sign-in part does not come before the launch:\n%s", script)
-	}
-	if strings.Count(script, "--secret-env-vars") != 1 {
-		t.Errorf("the invocation names --secret-env-vars other than once:\n%s", script)
-	}
-}
-
-// THE TELEMETRY EXPORT IS KEPT FROM THE RUN'S TOOLS AND MCP SERVERS, AND NO
-// SIGN-IN IS MASKED: `--secret-env-vars` lists exactly the six OTLP export
-// variables, covering every endpoint and headers variable the engine hands a
-// box (whose endpoint carries the run's token), which Copilot otherwise hands
-// an MCP server (measured on 1.0.114). No sign-in name: the flag masks each
-// value in the stream, and a short one breaks it ([copilotToolEnv]).
-//
-// Mutation: drop the OTLP names from the flag, or add a sign-in name to it.
-func TestACopilotRunKeepsItsTelemetryExportFromItsServers(t *testing.T) {
-	script := copilotScript(sandbox.RunRequest{SignInEnv: []string{"GH_TOKEN", "MYSVC_API_KEY"}}, Session{ID: "s-1"},
-		Paths{Home: "/box"}, "", time.Second)
-	m := regexp.MustCompile(`--secret-env-vars=(\S+)`).FindStringSubmatch(script)
-	if m == nil {
-		t.Fatalf("the invocation names no --secret-env-vars:\n%s", script)
-	}
-	listed := strings.Split(m[1], ",")
-	want := []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS",
-		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
-		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"}
-	if got := slices.Sorted(slices.Values(listed)); !slices.Equal(got, want) {
-		t.Errorf("--secret-env-vars lists %q, want exactly %q", got, want)
-	}
-	tokens, err := sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain,
-		Material: runtoken.OneKey("k1", "material")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{BaseURL: "https://engine.example.com",
-		Tokens: tokens})
-	if err != nil {
-		t.Fatal(err)
-	}
-	env, err := receiver.RunEnv("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331", "t-1", "h", false, time.Hour)
-	if err != nil || len(env) == 0 {
-		t.Fatalf("RunEnv = %v, %v", env, err)
-	}
-	for name := range env {
-		exported := strings.HasPrefix(name, "OTEL_EXPORTER_OTLP_") &&
-			(strings.HasSuffix(name, "_ENDPOINT") || strings.HasSuffix(name, "_HEADERS"))
-		if exported && !slices.Contains(listed, name) {
-			t.Errorf("the engine hands a box %s, which --secret-env-vars does not keep from its MCP servers", name)
-		}
-	}
-}
-
-// A COPILOT RUN'S SHELL STARTS WITHOUT ITS SIGN-IN: every sign-in variable
-// Copilot does not hide itself is unset by the file BASH_ENV names, which the
-// run's own settings switch on (bashEnv); the ones it hides (COPILOT_GITHUB_TOKEN,
-// COPILOT_PROVIDER_API_KEY and _BEARER_TOKEN) are left to it. A run with none
-// to unset writes no file, sets no BASH_ENV and leaves bashEnv off, and a name
-// no shell can unset is refused.
-//
-// Mutation: leave bashEnv off, or drop a name from the unset, and this fails.
-func TestACopilotRunKeepsItsSignInOutOfItsShell(t *testing.T) {
-	sh := prereqtest.OnPath(t, "sh", "the case runs the run's tool environment file", "install a POSIX shell")
-	write := func(signIn ...string) (*sandbox.FakeSandbox, Paths, error) {
-		box := sandbox.NewFakeSandbox("b")
-		paths := PathsFor(box)
-		_, err := (Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{SignInEnv: signIn}, Session{}, paths)
-		return box, paths, err
-	}
-	bashEnv := func(box *sandbox.FakeSandbox, paths Paths) bool {
-		raw, _ := box.ReadFile(t.Context(), paths.CopilotSettings())
-		var s struct {
-			BashEnv bool `json:"bashEnv"`
-		}
-		if err := json.Unmarshal(raw, &s); err != nil {
-			t.Fatalf("the run's settings: %v\n%s", err, raw)
-		}
-		return s.BashEnv
-	}
-	box, paths, err := write("MYSVC_API_KEY", "COPILOT_PROVIDER_API_KEY", "COPILOT_GITHUB_TOKEN", "GH_TOKEN")
-	if err != nil {
-		t.Fatalf("WriteConfig: %v", err)
-	}
-	if !bashEnv(box, paths) {
-		t.Error("the run's settings leave bashEnv off, so its shell never reads the file BASH_ENV names")
-	}
-	file, err := box.ReadFile(t.Context(), paths.CopilotToolEnv())
-	if err != nil || file == nil {
-		t.Fatalf("no tool environment file (%v)", err)
-	}
-	local := filepath.Join(t.TempDir(), "tool-env.sh")
-	if err := os.WriteFile(local, file, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(sh, "-c", `. "$1"; env`, "sh", local)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "MYSVC_API_KEY=k", "GH_TOKEN=g", "RUN_OWN=kept"}
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("running the file: %v", err)
-	}
-	for _, name := range []string{"MYSVC_API_KEY", "GH_TOKEN"} {
-		if strings.Contains(string(out), name+"=") {
-			t.Errorf("%s is still set after the file:\n%s", name, out)
-		}
-	}
-	if !strings.Contains(string(out), "RUN_OWN=kept") || strings.Contains(string(file), "COPILOT_") {
-		t.Errorf("the file unsets more than the names Copilot does not hide: %q", file)
-	}
-	script := copilotScript(sandbox.RunRequest{SignInEnv: []string{"GH_TOKEN"}}, Session{ID: "s-1"}, paths, "", time.Second)
-	at, launch := strings.Index(script, "BASH_ENV="+shellword.Quote(paths.CopilotToolEnv())+"; export BASH_ENV"),
-		strings.Index(script, "copilot --output-format")
-	if at < 0 || launch < at {
-		t.Errorf("the script does not name the file in BASH_ENV before the launch:\n%s", script)
-	}
-
-	box, paths, err = write("COPILOT_GITHUB_TOKEN", "COPILOT_PROVIDER_API_KEY")
-	if err != nil {
-		t.Fatalf("WriteConfig: %v", err)
-	}
-	if left, _ := box.ReadFile(t.Context(), paths.CopilotToolEnv()); left != nil || bashEnv(box, paths) {
-		t.Errorf("a run with nothing to unset wrote the file (%q) or switched bashEnv on", left)
-	}
-	if script := copilotScript(sandbox.RunRequest{SignInEnv: []string{"COPILOT_GITHUB_TOKEN"}}, Session{ID: "s-1"},
-		paths, "", time.Second); strings.Contains(script, "BASH_ENV") {
-		t.Errorf("a run with nothing to unset sets BASH_ENV:\n%s", script)
-	}
-	if _, _, err := write("NOT A NAME"); err == nil {
-		t.Error("a sign-in name no shell can unset was accepted")
 	}
 }
 
@@ -1189,10 +1205,14 @@ func TestAWebDeniedCopilotRunHasNoWebTool(t *testing.T) {
 }
 
 // The run is pinned to its own home and trusted by COPILOT_ALLOW_ALL=true
-// (route (a), measured to widen nothing beyond --yolo); the switches that open
-// what a repository loads in prompt mode are unset.
+// (route (a), measured to widen nothing beyond --yolo), with the prompt-mode
+// switches on, so a repository's hooks, MCP servers and extensions load as in
+// an interactive session. The variables that add instruction and skill
+// directories are left as set; the ones that change how the run reaches its
+// model or waits are unset.
 //
-// Mutation: leave COPILOT_ALLOW_ALL out of the pins — the case fails.
+// Mutations, each red: leave COPILOT_ALLOW_ALL or a prompt-mode switch out of
+// the pins; unset COPILOT_SKILLS_DIRS again.
 func TestACopilotRunIsPinnedToItsHomeAndTrust(t *testing.T) {
 	paths := Paths{Home: "/box"}
 	pins := map[string]string{}
@@ -1200,26 +1220,83 @@ func TestACopilotRunIsPinnedToItsHomeAndTrust(t *testing.T) {
 		pins[p.Name] = p.Value
 	}
 	want := map[string]string{"COPILOT_HOME": "/box/.copilot", "COPILOT_AUTO_UPDATE": "false",
-		"COPILOT_TELEMETRY_DISABLED": "true", "COPILOT_MCP_TOOL_CACHE": "false", "COPILOT_ALLOW_ALL": "true"}
+		"COPILOT_TELEMETRY_DISABLED": "true", "COPILOT_MCP_TOOL_CACHE": "false", "COPILOT_ALLOW_ALL": "true",
+		"GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS": "true", "GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP": "true",
+		"GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS": "true"}
 	for k, v := range want {
 		if pins[k] != v {
 			t.Errorf("%s = %q, want %q", k, pins[k], v)
 		}
 	}
 	unset := (Copilot{}).Output(paths).Unset
-	for _, name := range []string{"GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS", "COPILOT_SKILLS_DIRS",
-		"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_VERSION"} {
+	for _, name := range []string{"COPILOT_TASK_WAIT_TIMEOUT_SECONDS", "COPILOT_CLI_DIST_DIR", "COPILOT_OFFLINE"} {
 		if !slices.Contains(unset, name) {
 			t.Errorf("%s is not unset", name)
+		}
+	}
+	for _, name := range []string{"COPILOT_CUSTOM_INSTRUCTIONS_DIRS", "COPILOT_SKILLS_DIRS"} {
+		if slices.Contains(unset, name) {
+			t.Errorf("%s is unset, so the directories it adds do not load", name)
+		}
+	}
+}
+
+// A RUN SETS ITS OWN KEYS IN THE HOME'S SETTINGS AND KEEPS THE REST: Copilot
+// reads user settings from one file, so the run's `experimental` is merged
+// into whatever a person or the image wrote there, over their own value. A
+// file holding no JSON object is refused by name, not
+// replaced.
+//
+// Mutation: write the run's keys whole again, or replace an unreadable file.
+func TestACopilotRunSetsItsKeysInTheHomesSettings(t *testing.T) {
+	for name, tc := range map[string]struct {
+		home string
+		want map[string]any
+	}{
+		"no settings": {want: map[string]any{"experimental": true}},
+		"a person's settings": {home: `{"model":"gpt-x","experimental":false,"hooks":{"sessionStart":[]}}`,
+			want: map[string]any{"model": "gpt-x", "experimental": true,
+				"hooks": map[string]any{"sessionStart": []any{}}}},
+		"an empty file": {home: "\n", want: map[string]any{"experimental": true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			box := sandbox.NewFakeSandbox("b")
+			paths := PathsFor(box)
+			if tc.home != "" {
+				box.Put(paths.CopilotSettings(), tc.home)
+			}
+			if _, err := (Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, Session{}, paths); err != nil {
+				t.Fatalf("WriteConfig: %v", err)
+			}
+			raw, _ := box.ReadFile(t.Context(), paths.CopilotSettings())
+			var got map[string]any
+			if err := json.Unmarshal(raw, &got); err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("settings = %s (%v), want %v", raw, err, tc.want)
+			}
+		})
+	}
+	for _, bad := range []string{"not json", "[1]", "null"} {
+		box := sandbox.NewFakeSandbox("b")
+		paths := PathsFor(box)
+		box.Put(paths.CopilotSettings(), bad)
+		_, err := (Copilot{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, Session{}, paths)
+		if err == nil || !strings.Contains(err.Error(), paths.CopilotSettings()) {
+			t.Errorf("settings %q: err = %v, want a refusal naming the file", bad, err)
+		}
+		if raw, _ := box.ReadFile(t.Context(), paths.CopilotSettings()); string(raw) != bad {
+			t.Errorf("settings %q were replaced by %q", bad, raw)
 		}
 	}
 }
 
 // WriteConfig writes the run's settings, instructions told of notes, its
-// extension wired to its route and cap, and its MCP servers — and never the
-// login's config.json, whose tokens and mode a local cell's seeded login keeps.
+// extension wired to its route, its cap and its state under a key minted for
+// this launch, and its MCP servers; never the login's config.json, whose
+// tokens and mode the box's seeded login keeps. Two launches of one session
+// get two keys, so the second counts nothing the first left.
 //
-// Mutation: write config.json, or drop `experimental` — the case fails.
+// Mutation: write config.json, drop `experimental`, wire the extension to no
+// state, or key it on the session; the case fails.
 func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
@@ -1230,7 +1307,7 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP,
 			URL: "http://engine/mcp/tok", Headers: map[string]string{"Authorization": "Bearer t"},
 			CallTimeout: 90 * time.Second}}}
-	cfg, err := (Copilot{}).WriteConfig(t.Context(), box, req, Session{}, paths)
+	cfg, err := (Copilot{}).WriteConfig(t.Context(), box, req, Session{ID: "s-1", Continues: true}, paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1254,9 +1331,30 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 		t.Errorf("instructions = %q, want the system text then the notes instruction", got)
 	}
 	ext := read(paths.CopilotExtension() + "/extension.mjs")
-	if !strings.Contains(ext, `const config = {"url":"http://engine/mcp/tok/steer","cap":7}`) ||
-		strings.Contains(ext, copilotExtensionConfig) {
-		t.Errorf("the extension's settings are not its own:\n%s", firstLine(ext[strings.Index(ext, "const config"):], 200))
+	launchKey := func(ext string) string {
+		t.Helper()
+		m := regexp.MustCompile(`const config = \{"url":"http://engine/mcp/tok/steer","cap":7,"state":"` +
+			regexp.QuoteMeta(paths.CopilotNotesState()) + `","run":"([^"]+)"\}`).FindStringSubmatch(ext)
+		if m == nil || strings.Contains(ext, copilotExtensionConfig) {
+			t.Fatalf("the extension's settings are not its own:\n%s", firstLine(ext[strings.Index(ext, "const config"):], 200))
+		}
+		if _, err := uuid.Parse(m[1]); err != nil {
+			t.Fatalf("the extension's key %q is no key minted for the launch", m[1])
+		}
+		return m[1]
+	}
+	first := launchKey(ext)
+	again := sandbox.NewFakeSandbox("b")
+	if _, err := (Copilot{}).WriteConfig(t.Context(), again, req, Session{ID: "s-1", Continues: true},
+		PathsFor(again)); err != nil {
+		t.Fatal(err)
+	}
+	ext2, err := again.ReadFile(t.Context(), PathsFor(again).CopilotExtension()+"/extension.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second := launchKey(string(ext2)); second == first {
+		t.Errorf("two launches of one session share the key %q, so the second resumes the first's count", first)
 	}
 	if cfg != paths.MCPConfig() {
 		t.Fatalf("config path %q", cfg)
@@ -1273,13 +1371,12 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 }
 
 // A run with neither notes nor a cap is written no extension, and what an
-// earlier run wrote in the home is the clear's to remove: the instructions,
-// a fresh session's copy, the tool environment file and every place Copilot
-// loads configuration from that the launch does not write, the extensions
-// directory among them ([Paths.CopilotLoaded]).
+// earlier run wrote is the clear's to remove: the instructions, a fresh
+// session's copy, the guard's copy of the settings and the run's own notes
+// extension, and nothing else of the home's.
 //
-// Mutation: drop the loaded places from the artifacts, or write the extension
-// for every run, and the case fails.
+// Mutation: clear the whole extensions directory, or write the extension for
+// every run, and the case fails.
 func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	paths := PathsFor(box)
@@ -1290,10 +1387,9 @@ func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 		t.Error("an extension was written for a run with no notes and no cap")
 	}
 	files, dirs := (Copilot{}).artifactFiles(paths), (Copilot{}).artifactDirs(paths)
-	loadedFiles, loadedDirs := paths.CopilotLoaded()
-	if !slices.Equal(files, append([]string{paths.CopilotInstructions(), paths.CopilotExtensionFresh(),
-		paths.CopilotToolEnv()}, loadedFiles...)) ||
-		!slices.Equal(dirs, loadedDirs) || !slices.Contains(dirs, paths.CopilotHome()+"/extensions") {
+	if !slices.Equal(files, []string{paths.CopilotExtensionFresh(), paths.CopilotNotesState(),
+		paths.CopilotNotesState() + ".tmp", paths.CopilotGuardSettings()}) ||
+		!slices.Equal(dirs, []string{paths.CopilotExtension()}) {
 		t.Fatalf("artifacts = %v, %v", files, dirs)
 	}
 }
@@ -1347,12 +1443,12 @@ func TestACopilotNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	const session = "55555555-5555-4555-8555-555555555555"
 	box.Put(PathsFor(box).CopilotSessionDir(session)+"/events.jsonl", string(copilotFixture(t, "steered.events.jsonl")))
-	held, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1"))
+	held, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1"), nil)
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 		t.Fatalf("held = %v (%v), want the steered note", held, err)
 	}
 	box.ReadErr = func(string) error { return io.ErrUnexpectedEOF }
-	if _, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1")); err == nil {
+	if _, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1"), nil); err == nil {
 		t.Fatal("an unreadable record answered as a reading")
 	}
 }
@@ -1361,8 +1457,25 @@ func TestACopilotNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 //
 // Mutation: a second placeholder in copilot_steer.js — rendering refuses.
 func TestTheCopilotExtensionHoldsItsPlaceholderOnce(t *testing.T) {
-	if _, err := copilotExtension(copilotExtensionSettings{Cap: 1}); err != nil {
+	if _, err := copilotExtension(copilotExtensionSettings{Cap: 1, State: "/box/.crewlet/s.json",
+		Run: "launch-1"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// AN EXTENSION WIRED TO NOTES OR A CAP IS NEVER WRITTEN WITHOUT ITS STATE: it
+// would send no note and stop a capped run at its first request, so the run
+// is refused before it starts, saying so.
+//
+// Mutation: render whatever the settings hold, and a row renders.
+func TestACopilotExtensionWithoutItsStateIsRefused(t *testing.T) {
+	for name, settings := range map[string]copilotExtensionSettings{
+		"notes, no state":  {URL: "http://engine/mcp/tok/steer", Run: "launch-1"},
+		"a cap, no launch": {Cap: 3, State: "/box/.crewlet/s.json"},
+	} {
+		if _, err := copilotExtension(settings); err == nil {
+			t.Errorf("%s: rendered an extension that keeps no state", name)
+		}
 	}
 }
 
@@ -1392,8 +1505,10 @@ func TestACopilotSessionContinuesOnlyOnTheReleaseSupported(t *testing.T) {
 }
 
 // A pack carries the conversation alone: never session.db or its journal, a
-// binary file the archive's text scrub would corrupt, nor the login or the
-// checkout's snapshots. A restore in another home continues it.
+// binary file the archive's text scrub would corrupt, nor the login, the
+// checkout's snapshots or the file a journal rotation left, the session here
+// being one whose journal rotated (1.0.114), whose head a resume reads whole.
+// A restore in another home continues it.
 //
 // Mutation: pack session.db, or the whole session directory — the members
 // differ; drop the restore's move — the second home holds nothing.
@@ -1406,7 +1521,8 @@ func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 	from := Paths{Home: t.TempDir()}
 	dir := from.CopilotSessionDir(id)
 	for name, body := range map[string]string{
-		dir + "/events.jsonl":               string(copilotFixture(t, "steered.events.jsonl")),
+		dir + "/events.jsonl":               string(copilotFixture(t, "rotated-end.events.jsonl")),
+		dir + "/events.1.jsonl":             string(copilotFixture(t, "rotated-end.events.1.jsonl")),
 		dir + "/session.db":                 "SQLite format 3\x00",
 		dir + "/session.db-journal":         "journal",
 		dir + "/workspace.yaml":             "cwd: /box/repo\n",

@@ -1,5 +1,5 @@
 /**
- * Settings › Models is open to every member and writable by an admin alone.
+ * Settings › Models & Fleets is open to every member and writable by an admin alone.
  *
  * The invariant: no write control reaches a reader without admin, however the
  * page is reached. The list, the alarms and the seats' grid each hide their own
@@ -103,6 +103,8 @@ const ADDRESSES: { hash: string; id?: string }[] = [
   { hash: "#/settings/models/haiku?flow=edit&step=signin&focus=credential", id: "haiku" },
   { hash: "#/settings/models/haiku?flow=test", id: "haiku" },
   { hash: "#/settings/models/haiku?flow=remove", id: "haiku" },
+  { hash: "#/settings/models?fleet=new" },
+  { hash: "#/settings/models?fleet=default-fleet&step=members" },
 ];
 
 /** What only a writer may meet: a flow's surface, or a control that opens one. */
@@ -114,14 +116,22 @@ function writeControls(): string[] {
   for (const button of screen.queryAllByRole("button")) {
     const name = button.getAttribute("aria-label") ?? button.textContent ?? "";
     if (
-      /^(Add model|Use a different model for these seats|Retry now|Test now|Remove|Edit)$/.test(
+      /^(Add model|Create fleet|Use a different model for these seats|Retry now|Test now|Remove|Edit)$/.test(
         name,
       ) ||
-      name.startsWith("Actions for")
+      name.startsWith("Actions for") ||
+      name.startsWith("Add members to") ||
+      /^Remove .+ from /.test(name)
     )
       found.push(`button "${name}"`);
   }
-  if (screen.queryAllByRole("combobox").length > 0) found.push("a model picker");
+  // A PICKER A READER CANNOT OPEN is a value, as Who runs draws it for a member.
+  const open = screen
+    .queryAllByRole("combobox")
+    .filter((c) => c.getAttribute("aria-disabled") !== "true" && !c.hasAttribute("disabled"));
+  if (open.length > 0) found.push("a model picker");
+  if (document.querySelector(".crewlet-setup-wizard")?.textContent?.includes("fleet"))
+    found.push("the fleet flow");
   return found;
 }
 
@@ -143,9 +153,10 @@ async function mountAt(address: { hash: string; id?: string }) {
   });
 }
 
-// THE WIZARD IS A CHUNK OF ITS OWN, in memory before a case draws it, as the idle prefetch leaves it.
+// THE WIZARDS ARE CHUNKS OF THEIR OWN, in memory before a case draws one, as the idle prefetch leaves them.
 beforeAll(async () => {
   await loadChunk("model-wizard");
+  await loadChunk("fleet-wizard");
 });
 
 beforeEach(() => {
@@ -234,18 +245,18 @@ test("a model just added reads as being added until the reading holds it", async
 
 // ONE PAGE, NO LENSES: under the table of models, Ask Crewlet and the
 // Advisor, then the seats, in that order.
-test("the page has no lens tabs, and under the models come the helpers, then the seats", async () => {
+test("the page has no lens tabs, and under the models come the fleets, then who runs", async () => {
   current = company(true);
   await mountAt({ hash: "#/settings/models" });
   expect(screen.queryByRole("tablist", { name: "Lens" })).toBeNull();
   expect(screen.queryByRole("tab", { name: "By job" })).toBeNull();
-  const models = screen.getByRole("columnheader", { name: /Usage limits/ });
-  const helpers = screen.getByRole("region", { name: "Helpers" });
-  const seats = screen.getByRole("region", { name: "Seats" });
+  const models = screen.getByRole("table");
+  const fleets = screen.getByRole("treegrid", { name: "Fleets and their members" });
+  const who = screen.getByRole("treegrid", { name: "Consumers and what each runs on" });
   const follows = (a: Node, b: Node) =>
     (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-  expect(follows(models, helpers)).toBe(true);
-  expect(follows(helpers, seats)).toBe(true);
+  expect(follows(models, fleets)).toBe(true);
+  expect(follows(fleets, who)).toBe(true);
 });
 
 // THE OLD LENS ADDRESS still works: it opens the one page, whose grid it asked for.
@@ -253,6 +264,6 @@ test("an address for the old By job lens opens the one page", async () => {
   current = company(true);
   await mountAt({ hash: "#/settings/models?view=jobs" });
   expect(location.hash).not.toContain("view=");
-  expect(screen.getByRole("region", { name: "Seats" })).toBeTruthy();
-  expect(screen.getByRole("columnheader", { name: /Usage limits/ })).toBeTruthy();
+  expect(screen.getByRole("treegrid", { name: "Consumers and what each runs on" })).toBeTruthy();
+  expect(screen.getByRole("table")).toBeTruthy();
 });

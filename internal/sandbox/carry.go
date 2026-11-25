@@ -71,7 +71,28 @@ type SessionArchive struct {
 	// Prefix is where a Gemini CLI or Qwen Code run began in its chat file, as
 	// its script counted and digested it; zero where it recorded none.
 	Prefix LinePrefix
+
+	// Unshadowed is the box's word that, as its run started, no MCP server its
+	// harness could load named a tool as the harness names the engine's
+	// (Gemini CLI's guard, internal/sandbox/executor's geminiShadowGuard), kept
+	// by the take ([SessionCapture.RunUnshadowed]). False is "not checked":
+	// a harness with no guard, a box that failed it, an older build's word.
+	Unshadowed bool
+
+	// Trim is the box's word that its pack cut the session's record to what
+	// its harness's resume loads (internal/sandbox/executor's trim.go), read by
+	// a take alone and kept as [SessionCapture.Trimmed]; zero where it was not
+	// cut or the box said nothing this build reads.
+	Trim ArchiveTrim
 }
+
+// ArchiveTrim is what a pack's trim cut of a session's record, as its box
+// counted it: the record's bytes before the cut and those kept. The zero
+// value is no trim.
+type ArchiveTrim struct{ RecordBytes, KeptBytes int64 }
+
+// Trimmed reports whether t says the pack kept less of the record than it held.
+func (t ArchiveTrim) Trimmed() bool { return t.KeptBytes > 0 && t.RecordBytes > t.KeptBytes }
 
 // RunStart is where the run that packed a session's archive began in that
 // session: the whole session its own (Began); every message after the one
@@ -170,8 +191,20 @@ type CarryCheck struct {
 	// Continues says the session can be continued here.
 	Continues bool
 
-	// Why says, in a person's words, why it cannot; "" where it can.
-	Why string
+	// Why says, in a person's words, why it cannot; "" where it can. Loss is
+	// that why in the one vocabulary where it is not the box's own refusal
+	// ([CarryCheck.refusal]): the archive's harness, release or format.
+	Why  string
+	Loss executorkeep.Loss
+}
+
+// refusal is the loss a box that will not carry the session stands for: the
+// check's own where it names one, else the box's refusal.
+func (c CarryCheck) refusal() executorkeep.Loss {
+	if c.Loss != "" {
+		return c.Loss
+	}
+	return executorkeep.LossBoxRefused
 }
 
 // ValidSessionID reports whether id has the shape every session id a harness
@@ -270,8 +303,9 @@ type archiveJudge interface {
 	// written by its harness, in the one archive format it packs, by a
 	// release whose sessions another box continues, under an entry
 	// [EntryContinues] lets it continue under — and, where it does not, why:
-	// what can be known before any box is asked, the box's own release aside.
-	RestoresUnder(archive SessionArchive, entry string) (bool, string)
+	// what can be known before any box is asked, the box's own release aside,
+	// with the loss it is.
+	RestoresUnder(archive SessionArchive, entry string) SessionContinuity
 }
 
 // RestorerUnder is runner as a launch under entry asks it ([ArchiveRestorer]):
@@ -291,7 +325,7 @@ type entryRestorer struct {
 	entry  string
 }
 
-func (r entryRestorer) Restores(archive SessionArchive) (bool, string) {
+func (r entryRestorer) Restores(archive SessionArchive) SessionContinuity {
 	return r.runner.RestoresUnder(archive, r.entry)
 }
 
@@ -303,19 +337,22 @@ func (r entryRestorer) Restores(archive SessionArchive) (bool, string) {
 // was measured, on its newest release, to send a resumed session's calls on
 // the route its launch hands it. An unrecorded entry is no match. ADR-0073's
 // amendment "a carried session continues only under the entry it ran under".
-func EntryContinues(ran, launch, harness string, launchRouted bool) (bool, string) {
+//
+// A refusal is [executorkeep.LossEntryChanged]: the engine's own choice.
+func EntryContinues(ran, launch, harness string, launchRouted bool) SessionContinuity {
 	const rule = " was not measured to send a resumed session's calls on its launch's route, and a carried " +
 		"session continues only under the entry it ran under"
 	switch {
 	case launchRouted:
-		return true, ""
+		return continues
 	case ran == "":
-		return false, "the session's record names no providers.llm entry it ran under, and " + harness + rule
+		return refusedFor(executorkeep.LossEntryChanged, "the session's record names no providers.llm entry it "+
+			"ran under, and "+harness+rule)
 	case ran != launch:
-		return false, "the session ran under another providers.llm entry, or under this one with another " +
-			"auth mode or route, and " + harness + rule
+		return refusedFor(executorkeep.LossEntryChanged, "the session ran under another providers.llm entry, or "+
+			"under this one with another auth mode or route, and "+harness+rule)
 	}
-	return true, ""
+	return continues
 }
 
 // SessionTaker is a [Runner] whose harness's session a capture takes out of a
@@ -326,12 +363,28 @@ func EntryContinues(ran, launch, harness string, launchRouted bool) (bool, strin
 //
 // THREE ANSWERS: the session, taken; the zero [TakenSession], where the box
 // holds none; and an error, where it holds one that could not be taken (a
-// failed pack, an archive past its bound), which the capture stamps refused
-// so a later launch knows the session was not kept rather than reading an
-// older capture as the latest. OPTIONAL, as [noteReader] is: a runner that
-// carries no session keeps nothing.
+// failed pack, an archive past its bound, an [UnrestorableError]), which the
+// capture stamps refused so a later launch knows the session was not kept
+// rather than reading an older capture as the latest. OPTIONAL, as
+// [noteReader] is: a runner that carries no session keeps nothing.
 type SessionTaker interface {
 	TakeSession(ctx context.Context, box Sandbox, take SessionTake) (TakenSession, error)
+}
+
+// UnrestorableError is a take or a save refused because no box of this build
+// would continue the session it found: its runner's restore floor
+// ([ArchiveRestorer], under any entry) refuses the release that wrote it or its
+// format, read off the run's record before a byte of it is packed or read.
+// Kept, it would only spend an upload and its seat's budget on a session every
+// launch refuses (ADR-0073's "a session no box of this build continues is not
+// kept"). Loss and Why are that floor's refusal, which the capture stamps.
+type UnrestorableError struct {
+	Loss executorkeep.Loss
+	Why  string
+}
+
+func (e *UnrestorableError) Error() string {
+	return "sandbox: no box of this build continues the session: " + e.Why
 }
 
 // SessionTake is what a capture asks of a box ([SessionTaker]).
