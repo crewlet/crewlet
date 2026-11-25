@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -188,9 +189,21 @@ func grokScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`cd %s || { echo 'crewlet: the box home could not be entered' >&2; exit 1; }`, q(paths.Home))
 	// THE GUARD, in the run's directory and environment, before Grok starts: a
 	// refused run puts the box's settings back as an ended one does.
-	b.WriteString(grokGuard(paths, req.Steer.Set() || req.SkillLoads.Set()))
+	b.WriteString(grokGuard(paths))
 	b.WriteString(`grokguard || { ` + strings.TrimSuffix(grokRestoreConfig(paths), "\n") + "; exit 1; }\n")
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([grokCheckoutHome]), and once
+	// grok has stopped, on a failure before and on a teardown's signal,
+	// ~/.grok/AGENTS.md back, the copies gone and what a firing left out
+	// said, each whatever came of the other ([everyStep]); a run killed
+	// outright leaves the put-back to the next run's clear ([homeKeeper]).
+	home := grokCheckoutHome(paths)
+	line(`grokput() { %s; }`, everyStep(home.restore(), home.saySkipped()))
+	line(`grokquit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; grokput; exit "$1"; }`)
+	line(`trap grokput EXIT; trap 'grokquit 143' TERM; trap 'grokquit 130' INT; trap 'grokquit 129' HUP`)
+	line(`mkdir -p %s || exit 1`, q(paths.GrokHome()))
+	b.WriteString(home.gate())
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
+	line(`grokput; trap - EXIT TERM INT HUP`)
 	b.WriteString(grokRestoreConfig(paths))
 	b.WriteString(grokMainRecord(paths))
 	b.WriteString(grokCapture(paths))
@@ -963,8 +976,8 @@ func grokRulesJSON(system string) ([]byte, error) {
 // the run's tables laid in ([grokMergeConfig]), with a fresh session's beside
 // them ([sandbox.RunRequest.FreshWiring]); its agent
 // file and the renewal a continued session is handed; its skills; its take
-// config and note helper where it is wired to its notes or its skills' loads;
-// its brief, and the brief a new session is handed in a continued one's place,
+// config where it is wired to its notes or its skills' loads; the note helper
+// and its checkouts' launch config ([grokCheckoutHome]); its brief, and the brief a new session is handed in a continued one's place,
 // each as words ([briefNotACommand]).
 func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
@@ -1015,7 +1028,21 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err = box.WriteFile(ctx, paths.GrokConfigOurs(), []byte(record.String())); err != nil {
 		return "", fmt.Errorf("executor: recording the Grok Build run's own MCP servers: %w", err)
 	}
-	own, err := grokConfig(req.MCPServers, nonce, grokHooks(paths, notes, loads, req.Skills))
+	// THE NOTE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR, which hands
+	// the checkouts below the start directory theirs ([grokCheckoutHome]),
+	// with the nested hook; a box with none starts without them, its gate
+	// saying so, unless notes or loads need it.
+	nested := true
+	if err = writeNoteHelper(ctx, box, paths.GrokNoteHelper()); errors.Is(err, errNoHelperBuild) && !notes && !loads {
+		nested = false
+	} else if err != nil {
+		return "", err
+	}
+	launch := grokCheckoutHome(paths).launchConfig(grokCheckouts(paths), req.ReportedRepos)
+	if err = box.WriteFile(ctx, paths.GrokCheckoutLaunch(), launch); err != nil {
+		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
+	}
+	own, err := grokConfig(req.MCPServers, nonce, grokHooks(paths, notes, loads, req.Skills)+grokNestedHook(paths, nested))
 	if err != nil {
 		return "", err
 	}
@@ -1037,15 +1064,15 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		if err = box.WriteFile(ctx, paths.GrokTakeConfig(), take); err != nil {
 			return "", fmt.Errorf("executor: writing the note helper's config: %w", err)
 		}
-		if err = writeNoteHelper(ctx, box, paths.GrokNoteHelper()); err != nil {
-			return "", err
-		}
+	}
+	if len(ids) > 0 {
 		if err = box.WriteFile(ctx, paths.GrokHookIDs(), []byte(strings.Join(ids, "\n")+"\n")); err != nil {
 			return "", fmt.Errorf("executor: recording the ids of the Grok Build run's hooks: %w", err)
 		}
 	}
 	if f := req.FreshWiring; f != nil {
-		freshOwn, ferr := grokConfig(f.MCPServers, nonce, grokHooks(paths, notes, loads, req.Skills))
+		freshOwn, ferr := grokConfig(f.MCPServers, nonce,
+			grokHooks(paths, notes, loads, req.Skills)+grokNestedHook(paths, nested))
 		if ferr != nil {
 			return "", ferr
 		}
@@ -1110,12 +1137,13 @@ func writeGrokSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.
 // artifactFiles is the files a Grok Build run leaves in its box of its own
 // beside its sessions, which a later run must not find ([artifactHolder]): its
 // agent file, renewal, a fresh session's settings, the note helper, its configs,
-// its hooks' ids and the session it names. Never ~/.grok/config.toml, the box's own settings,
+// its hooks' ids, the session it names, and its checkouts' launch config and
+// sections ([grokCheckoutHome]). Never ~/.grok/config.toml, the box's own settings,
 // which the run puts back ([grokRestoreConfig]), nor the copy kept of them
 // while a run runs, nor its sessions and login.
 func (Grok) artifactFiles(p Paths) []string {
 	return []string{p.GrokAgent(), p.GrokRules(), p.GrokConfigFresh(), p.GrokTakeConfig(), p.GrokTakeConfigFresh(),
-		p.GrokThread(), p.GrokNoteHelper(), p.GrokHookIDs()}
+		p.GrokThread(), p.GrokNoteHelper(), p.GrokHookIDs(), p.GrokCheckoutLaunch(), p.GrokCheckoutSections()}
 }
 
 // grokChargeBytes is the fewest bytes a Grok Build session's brief is counted

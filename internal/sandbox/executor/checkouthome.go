@@ -54,28 +54,46 @@ func (h checkoutHome) removeSiblingStaging() string {
 // [checkoutHome.launchConfig]: Instructions, the slots ([checkoutSlot]);
 // Limit, the harness's own bound in bytes on a checkout's instructions, nil
 // for a harness with none; SkillDirs, the checkout's skill directories
-// ([checkoutSkillDir]).
+// ([checkoutSkillDir]); ListedAs, the harness whose rule names a listed skill
+// ("grok", or "" for the name as written), and HomeSkills, the home's skill
+// directories it lists beside the run's skills, whose names a copy may not
+// take (internal/notehelper's "Checkouts below the working directory").
 type checkoutSpec struct {
 	Instructions []checkoutSlot
 	Limit        *int
 	SkillDirs    []checkoutSkillDir
+	ListedAs     string
+	HomeSkills   []checkoutSkillDir
 }
 
 // checkoutSkillDir is a checkout's skill directory as the helper reads it:
 // Dir, below the checkout's root, whose skills are the directories directly
 // in it, written as a string; or, Recursive, every one a walk of it reaches,
-// written as {"dir": ..., "recursive": true}.
+// or a walk's options set, written as an object.
 type checkoutSkillDir struct {
-	Dir       string
-	Recursive bool
+	Dir       string `json:"dir"`
+	Recursive bool   `json:"recursive,omitempty"`
+	checkoutWalk
+}
+
+// checkoutWalk is how the helper walks a skill directory past Pi's walk, as
+// Grok Build 1.0.92 does: on below a skill (Through), dot directories and
+// node_modules too (Every), to Depth directories below it, or its command
+// files as skills (Commands).
+type checkoutWalk struct {
+	Through  bool `json:"through,omitempty"`
+	Every    bool `json:"every,omitempty"`
+	Depth    int  `json:"depth,omitempty"`
+	Commands bool `json:"commands,omitempty"`
 }
 
 // MarshalJSON writes d in the helper's shape.
 func (d checkoutSkillDir) MarshalJSON() ([]byte, error) {
-	if !d.Recursive {
+	if !d.Recursive && d.checkoutWalk == (checkoutWalk{}) {
 		return json.Marshal(d.Dir)
 	}
-	return json.Marshal(map[string]any{"dir": d.Dir, "recursive": true})
+	type wire checkoutSkillDir
+	return json.Marshal(wire(d))
 }
 
 // checkoutSlot is one instruction slot as the helper reads it: Names, the
@@ -85,15 +103,23 @@ func (d checkoutSkillDir) MarshalJSON() ([]byte, error) {
 type checkoutSlot struct {
 	Names []string
 	Tree  *checkoutTree
+	// Inside follows a name's link only within the checkout; Once hands no
+	// file an earlier slot handed.
+	Inside bool `json:"inside,omitempty"`
+	Once   bool `json:"once,omitempty"`
 }
 
 // checkoutTree is a tree slot: the directory below a checkout's root, the
 // suffix of a handed file's name, and the frontmatter scope that leaves a
-// file out, nil for none.
+// file out, nil for none; Flat, no directory below it read; Dots, a dot file
+// handed too; Once, as [checkoutSlot]'s.
 type checkoutTree struct {
 	Tree   string         `json:"tree"`
 	Suffix string         `json:"suffix"`
 	Scoped *checkoutScope `json:"scoped,omitempty"`
+	Flat   bool           `json:"flat,omitempty"`
+	Dots   bool           `json:"dots,omitempty"`
+	Once   bool           `json:"once,omitempty"`
 }
 
 // checkoutScope is the frontmatter keys that scope a file to paths, the first
@@ -106,8 +132,15 @@ type checkoutScope struct {
 // MarshalJSON writes s in the helper's shape: a tree as an object, names as a
 // list.
 func (s checkoutSlot) MarshalJSON() ([]byte, error) {
-	if s.Tree != nil {
+	switch {
+	case s.Tree != nil:
 		return json.Marshal(s.Tree)
+	case s.Inside || s.Once:
+		return json.Marshal(struct {
+			Names  []string `json:"names"`
+			Inside bool     `json:"inside,omitempty"`
+			Once   bool     `json:"once,omitempty"`
+		}{s.Names, s.Inside, s.Once})
 	}
 	return json.Marshal(s.Names)
 }
@@ -120,10 +153,14 @@ var checkoutUnlimited *int
 // repositories the run pushes to first, and the seats' namespace reserved, so
 // no repository's skills are listed under it.
 func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
-	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.sections, "first": repos,
+	config := map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "skillDirs": spec.SkillDirs,
-		"skills": h.skills, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace}})
-	return launch // strings, lists and an int cannot fail to encode
+		"skills": h.skills, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace}}
+	if spec.ListedAs != "" {
+		config["listedAs"], config["homeSkills"] = spec.ListedAs, spec.HomeSkills
+	}
+	launch, _ := json.Marshal(config)
+	return launch // strings, lists, booleans and ints cannot fail to encode
 }
 
 // gate is the part of a run's script that hands the harness its checkouts'
