@@ -1391,7 +1391,7 @@ func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 	if !slices.Equal(files, []string{paths.CopilotExtensionFresh(), paths.CopilotNotesState(),
 		paths.CopilotNotesState() + ".tmp", paths.CopilotGuardSettings(), paths.CopilotRunInstructions(),
 		paths.CopilotNoteHelper(), paths.CopilotCheckoutLaunch(), paths.CopilotRepoInstructions(),
-		paths.CopilotAttempt(), paths.CopilotStoreCheck()}) ||
+		paths.CopilotAttempt(), paths.CopilotStoreCheck(), paths.CopilotExtensionOff()}) ||
 		!slices.Equal(dirs, []string{paths.CopilotExtension()}) {
 		t.Fatalf("artifacts = %v, %v", files, dirs)
 	}

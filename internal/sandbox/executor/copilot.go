@@ -697,10 +697,15 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 		return "", helperErr
 	}
 	// THE GUARD BEFORE ANY WRITE: a refused run leaves the home as it found it.
-	handing := helperErr == nil
-	if err = copilotGuard(ctx, box, req, paths, c.policy, settings, handing); err != nil {
+	off, err := copilotGuard(ctx, box, req, paths, c.policy, settings)
+	if err != nil {
 		return "", err
 	}
+	// THE EXTENSION'S CHECKOUT WORK ONLY WHERE IT LOADS: switched off for a run
+	// that needs it for nothing else, the run goes on and says so
+	// ([copilotExtensionOff]).
+	handing := helperErr == nil
+	extended := handing && len(off) == 0
 	if err = holdHome(ctx, box, paths.CopilotSettings(), paths.CopilotHeldSettings()); err != nil {
 		return "", err
 	}
@@ -734,13 +739,18 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 	if err = box.WriteFile(ctx, paths.CopilotCheckoutLaunch(), launch); err != nil {
 		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
+	if handing && !extended {
+		if err = box.WriteFile(ctx, paths.CopilotExtensionOff(), []byte(copilotExtensionOff(off))); err != nil {
+			return "", fmt.Errorf("executor: writing why the run's extension hands no checkout: %w", err)
+		}
+	}
 	bridges := crewletServers(req.MCPServers)
-	if req.Steer.Set() || req.Limits.MaxTurns > 0 || len(bridges) > 0 || handing {
+	if req.Steer.Set() || req.Limits.MaxTurns > 0 || len(bridges) > 0 || extended {
 		// THIS LAUNCH'S OWN KEY, never the session's: a continued session keeps
 		// its id across runs, and a state an earlier run left must count nothing.
 		settings := copilotExtensionSettings{Cap: req.Limits.MaxTurns, Bridges: bridges,
 			State: paths.CopilotNotesState(), Run: uuid.NewString(), Attempt: paths.CopilotAttempt()}
-		if handing {
+		if extended {
 			settings.Helper, settings.Nested = paths.CopilotNoteHelper(), paths.CopilotRepo()+"/nested.json"
 			settings.Kept = paths.CopilotRepo() + "/kept"
 			settings.Sessions = paths.CopilotHome() + "/" + copilotSessionState
@@ -868,7 +878,7 @@ func (Copilot) exportsTelemetry() bool { return true }
 func (Copilot) artifactFiles(p Paths) []string {
 	return []string{p.CopilotExtensionFresh(), p.CopilotNotesState(), p.CopilotNotesState() + ".tmp",
 		p.CopilotGuardSettings(), p.CopilotRunInstructions(), p.CopilotNoteHelper(), p.CopilotCheckoutLaunch(),
-		p.CopilotRepoInstructions(), p.CopilotAttempt(), p.CopilotStoreCheck()}
+		p.CopilotRepoInstructions(), p.CopilotAttempt(), p.CopilotStoreCheck(), p.CopilotExtensionOff()}
 }
 
 var _ homeKeeper = Copilot{}
