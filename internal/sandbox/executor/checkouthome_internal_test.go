@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"encoding/json"
 	"maps"
 	"os"
@@ -8,7 +9,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -237,4 +240,80 @@ func TestAHoldCutShortNeverReplacesTheHomesFile(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A RUN IS MARKED ENDED ONLY ONCE ITS FIRINGS LET GO: a firing holds the
+// state's lock for all its work, and the end's restore waits on that lock
+// before it writes the marker, so what a firing still running at the end
+// keeps for the run's end (here a line it appends) is printed by the end's
+// next step, never left behind it.
+//
+// Mutation: write the marker without the lock, and the late line goes
+// unprinted.
+func TestARunIsMarkedEndedOnlyOnceItsFiringsLetGo(t *testing.T) {
+	t.Parallel()
+	prereqtest.OnPath(t, "flock", "the run's end waits on the firings' lock with it", "install util-linux")
+	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
+	h, _, work := candidateHome(t, []string{"AGENTS.md"})
+	if err := os.MkdirAll(h.state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(filepath.Join(h.state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Close() }()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	var said bytes.Buffer
+	cmd := exec.Command(sh, "-c", "cd "+shellword.Quote(work)+" || exit 1\n"+everyStep(h.restore(), h.saySkipped()))
+	cmd.Stderr = &said
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	ended := false
+	giveUp := time.After(10 * time.Second) //fixedwait:liveness
+	for !ended && !waitingOnLock(t, h.state) {
+		select {
+		case err = <-done:
+			ended = true
+		case <-giveUp:
+			t.Fatal("the end neither waited on the firings' lock nor finished within 10s")
+		case <-time.After(20 * time.Millisecond): //fixedwait:liveness
+		}
+	}
+	f, err := os.OpenFile(filepath.Join(h.state, "skipped"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.WriteString("notehelper: LATE\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	if !ended {
+		err = <-done
+	}
+	if err != nil || !strings.Contains(said.String(), "notehelper: LATE") {
+		t.Errorf("the end (%v) printed %q, want the line the running firing kept", err, said.String())
+	}
+}
+
+// waitingOnLock reports whether a flock(1) on state's lock is running.
+func waitingOnLock(t *testing.T, state string) bool {
+	t.Helper()
+	procs, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range procs {
+		raw, err := os.ReadFile(filepath.Join("/proc", p.Name(), "cmdline")) //nolint:gosec // the box's own process table
+		if err == nil && bytes.Contains(raw, []byte("flock\x00")) && bytes.Contains(raw, []byte(state+"/lock")) {
+			return true
+		}
+	}
+	return false
 }

@@ -252,9 +252,11 @@ func endsCut(file *os.File, size int64) bool {
 
 // endedMarker is the file under a run's checkout state its runner's restore
 // writes once the harness has stopped (internal/sandbox/executor's
-// checkoutHome.restore): a firing still running then, orphaned by the
-// harness's end, claims nothing, so nothing is copied after the restore
-// removed the run's copies.
+// checkoutHome.restore), under state's lock, which a firing holds for all
+// its work ([handCheckouts]): one that began finishes first, and one after,
+// orphaned by the harness's end, claims nothing, so nothing is copied after
+// the restore removed the run's copies. A box without flock(1) writes it
+// unlocked, and there a firing already past its check may still copy.
 const endedMarker = "ended"
 
 // handNested is a nested adapter's firing under c ([handCheckouts]): the
