@@ -192,3 +192,21 @@ export function useQueuedConversation(): string | null {
     () => null,
   );
 }
+
+/**
+ * The person opened the closed drawer (any of its doors), as against the drawer
+ * drawn again by a reload or a resize: only that open applies `reopenChoice`.
+ */
+let reopened = false;
+
+/** Note that the person is opening the closed drawer. */
+export function markReopened(): void {
+  reopened = true;
+}
+
+/** Whether the drawer now mounting was opened by the person; asked once. */
+export function takeReopened(): boolean {
+  const was = reopened;
+  reopened = false;
+  return was;
+}
