@@ -22,17 +22,23 @@ var plantedToken = "ghp_" + strings.Repeat("Qx7Rb2", 6)
 // redacts the ask, the ending's four prose fields and the unkept capture's
 // reason, and hands out every other field (identifiers such as the
 // conversation and work keys; the unkept capture and went_on, on a row older
-// than what its end names) as the row holds it; the receiver keeps its words
-// and shares its ending with no copy. The fixture is checked to set every
-// field, so a field added to the row must be set here too.
+// than what its end names; the row's summary, an object and no words) as the
+// row holds it, save the ending's summary, which a release outlives; the
+// receiver keeps its words and shares its ending with no copy. The fixture is
+// checked to set every field, so a field added to the row must be set here too.
 //
-// Mutation: leave the unkept capture's reason as stored, or redact the
-// conversation key too, and a check goes red.
+// Mutation: leave the unkept capture's reason as stored, redact the
+// conversation key too, or hand out the ending's summary, and a check goes red.
 func TestASessionsRowIsShownRedacted(t *testing.T) {
 	t.Parallel()
 	said := "the deploy used " + plantedToken
 	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	stream := executordomain.Domain{}.Stream().Name
+	summary := func() *executorkeep.Summary {
+		return &executorkeep.Summary{Object: objstore.Object{Key: objstore.KeyAt(at),
+			Hash: objstore.Hash(strings.Repeat("b", 64)), Size: 512}, ContentKey: "k1", At: at, Bytes: 4096,
+			Kept: 400, Cut: true, Harness: "claude-code", Session: plantedToken}
+	}
 	row := executordomain.Session{
 		Handle: "ana", Turn: "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f3",
 		ConversationKey: "chat:" + plantedToken, WorkKey: plantedToken,
@@ -58,14 +64,20 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 			SpentSessions: []executorkeep.SpentSession{{Session: plantedToken,
 				Loss: executorkeep.LossContextExhausted}},
 			NotContinued: []executorkeep.NotContinued{{Loss: executorkeep.LossTooLarge,
-				Instead: executorkeep.InsteadFresh, Detail: said}}},
+				Instead: executorkeep.InsteadFresh, Detail: said}},
+			Summary: summary()},
 		AskExcerpt: "fix the deploy with " + plantedToken,
+		Summary:    summary(),
 	}
 	everyFieldSet(t, "the row", reflect.ValueOf(row))
 
 	got := row.Redacted()
 	if got.Ending == nil || got.Ending.Unkept == nil {
 		t.Fatalf("the redacted row carries no ending or no unkept capture: %+v", got)
+	}
+	if got.Ending.Summary != nil || row.Ending.Summary == nil || !reflect.DeepEqual(got.Summary, row.Summary) {
+		t.Errorf("the redacted row's ending names the summary %+v and the row %+v, want the row's own alone",
+			got.Ending.Summary, got.Summary)
 	}
 	for field, text := range map[string]string{
 		"ask_excerpt": got.AskExcerpt, "completed_work": got.Ending.CompletedWork,
@@ -87,9 +99,10 @@ func TestASessionsRowIsShownRedacted(t *testing.T) {
 		t.Error("redacting the row changed the row it was called on")
 	}
 
-	// NOTHING ELSE CHANGED: with the six fields put back as the row holds
-	// them, the copy is the row.
+	// NOTHING ELSE CHANGED: with the six fields and the ending's summary put
+	// back as the row holds them, the copy is the row.
 	ending, unkept := *got.Ending, *got.Ending.Unkept
+	ending.Summary = row.Ending.Summary
 	ending.CompletedWork, ending.BlockedOn = row.Ending.CompletedWork, row.Ending.BlockedOn
 	ending.StopReason, ending.Failure = row.Ending.StopReason, row.Ending.Failure
 	unkept.Reason = row.Ending.Unkept.Reason

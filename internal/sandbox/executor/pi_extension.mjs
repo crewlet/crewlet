@@ -1,7 +1,8 @@
 // crewlet: the extension every Pi run loads with `-e`, written into the run's
 // box with the run's own settings in place of the `config` placeholder below
 // (pi.go, Pi.WriteConfig; pisteer.go, piExtension). It imports Node's own
-// `node:path` and `node:fs` alone, runs in the pi process, and writes no file.
+// `node:path`, `node:fs`, `node:util` and `node:child_process` alone, runs
+// in the pi process, and writes no file.
 //
 // WHAT IT DOES, each from the settings it is written with:
 //   - registers the seat's MCP servers (the tool bridge's), declared to the
@@ -23,7 +24,10 @@
 //     no read;
 //   - reports each load of one of the run's own skills (a `read` of its
 //     SKILL.md) to the skill route, awaited before the model sees the file;
-//   - records the context pi reports at each turn's end.
+//   - records the context pi reports at each turn's end;
+//   - hands a checkout cloned during the run its instructions and skills:
+//     after each tool call it runs the note helper's pi-nested adapter and
+//     adds what it prints to that tool's result (pirepo.go).
 // What it records for the runner is a `custom` session entry (pi.appendEntry),
 // which pi prints on its JSON stream and never sends to the model.
 //
@@ -32,8 +36,12 @@
 // followed sooner than a second after its poll began, and a 401 or 404 ends
 // that route's requests for the rest of the run.
 
+import { execFile } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
+import { promisify } from "node:util"
+
+const execFileAsync = promisify(execFile)
 
 // config is the run's, written over the placeholder by the runner; null in
 // the file as embedded, where the extension does nothing.
@@ -63,7 +71,7 @@ export default function (pi) {
   arm(pi, config)
 }
 
-function arm(pi, { servers, required, system, notes, cap, skills, skillURL, listed, mcpFiles, settingsFiles }) {
+function arm(pi, { servers, required, system, notes, cap, skills, skillURL, listed, mcpFiles, settingsFiles, checkouts }) {
   for (const s of Array.isArray(servers) ? servers : []) pi.registerMcpServer(s.name, s.config)
   const polling = typeof notes === "string" && notes !== ""
   const capped = Number.isSafeInteger(cap) && cap > 0
@@ -234,7 +242,8 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, list
     return { entries: [...event.entries, ...handOver()], continue: true }
   })
 
-  pi.on("tool_result", async (event, ctx) => {
+  // reportLoad posts a read of one of the run's own skills to the skill route.
+  const reportLoad = async (event, ctx) => {
     if (!reporting || skillsRefused || event.toolName !== "read" || event.isError) return
     const path = event.input?.path
     if (typeof path !== "string" || path === "") return
@@ -242,7 +251,46 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, list
     if (typeof listed !== "string") return
     const answer = await call("POST", skillURL, JSON.stringify({ skill: listed }), reportAbortMs, life.signal)
     if (answer.refused) skillsRefused = true
+  }
+
+  pi.on("tool_result", async (event, ctx) => {
+    // A CALL A CODEMODE SCRIPT NESTS answers the script, not the model: the
+    // checkout waits for the outer call's result.
+    const handed = event.parentToolCallId ? "" : await handCheckouts(checkouts)
+    await reportLoad(event, ctx)
+    if (handed.trim() === "") return
+    return { content: [...(Array.isArray(event.content) ? event.content : []), { type: "text", text: handed }] }
   })
+}
+
+// handCheckouts runs the note helper's pi-nested adapter once (pirepo.go):
+// each checkout cloned since its last run, in pi's own shape, "" for none or
+// on a failure, which the run's error stream says, with the helper's own
+// stderr: its trouble, never what it left out, which is in its answer and in
+// the run's skip log the script prints once pi has stopped (checkouthome.go,
+// saySkipped). Asynchronously: the tool's result waits on it, and pi bounds
+// that wait not at all (measured on 1.6.0), so the call carries its own
+// timeout and output bound (pirepo.go, piNestedTimeout), and the rest of the
+// process (the notes poll, MCP, pi's own signal handlers) runs on meanwhile.
+// Its input is closed at once.
+async function handCheckouts(hand) {
+  if (hand === null || typeof hand !== "object" || typeof hand.helper !== "string" || hand.helper === "") return ""
+  const run = execFileAsync(hand.helper, ["-adapter", "pi-nested", "-config", hand.config],
+    { encoding: "utf8", timeout: hand.timeoutMs, maxBuffer: hand.maxOutput })
+  run.child.stdin?.end()
+  try {
+    const { stdout, stderr } = await run
+    if (stderr !== "") process.stderr.write(stderr)
+    return stdout
+  } catch (error) {
+    if (typeof error?.stderr === "string" && error.stderr !== "") process.stderr.write(error.stderr)
+    let why = String(error?.message ?? error)
+    if (error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") why = "it printed past " + hand.maxOutput + " bytes"
+    else if (error?.killed) why = "it ran past its bound of " + hand.timeoutMs + " ms and was stopped"
+    process.stderr.write("crewlet: the note helper handing a checkout cloned during the run its instructions " +
+      "and skills failed, so what it took is not handed: " + why + "\n")
+    return ""
+  }
 }
 
 // redefinitions is every entry of files (read now, as pi reads them at the

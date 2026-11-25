@@ -221,12 +221,12 @@ func TestACollectionsReadOfAHermesSessionIsItsWholeLineRead(t *testing.T) {
 		for _, from := range []int64{0, 5} {
 			for _, asked := range [][]ServedTake{takes, takes[2:], takes[:1]} {
 				want, wantErr := hermesNotesHeldWhole(strings.NewReader(record), asked, from)
-				got, err := hermesNotesHeld(t.Context(), strings.NewReader(record), asked, from)
+				got, err := hermesNotesHeld(t.Context(), strings.NewReader(record), asked, from, nil)
 				if !slices.Equal(got, want) || fmt.Sprint(err) != fmt.Sprint(wantErr) {
 					t.Errorf("%s from %d of %d: held %v (%v), want %v (%v)", name, from, len(asked), got, err, want,
 						wantErr)
 				}
-				got, err = hermesNotesHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, asked, from)
+				got, err = hermesNotesHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, asked, from, nil)
 				if !slices.Equal(got, want) || fmt.Sprint(err) != fmt.Sprint(wantErr) {
 					t.Errorf("%s from %d of %d in pieces: held %v (%v), want %v (%v)", name, from, len(asked), got,
 						err, want, wantErr)
@@ -250,7 +250,7 @@ func TestAHermesReceiptReadPastItsUIDsBoundIsRefused(t *testing.T) {
 			boundedQuoted(hermesNoteOpen+"one"+hermesNoteClose) + `, "display_kind": "steer", "message_uid": "n"}}` +
 			"\n" + record + `{"t": "messages", "r": {"id": 7, "role": "assistant", "content": "ok", ` +
 			`"finish_reason": "stop", "message_uid": "r"}}` + "\n"
-		got, err := hermesNotesHeld(t.Context(), strings.NewReader(record), takes, 0)
+		got, err := hermesNotesHeld(t.Context(), strings.NewReader(record), takes, 0, nil)
 		switch {
 		case extra == 0 && (err != nil || !slices.Equal(got, []string{"one"})):
 			t.Errorf("a record at the bound holds %v (%v), want its note", got, err)
