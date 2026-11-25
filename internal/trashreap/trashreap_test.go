@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -734,37 +735,72 @@ func TestAnUnknownTermPurgesNothingOfItsSource(t *testing.T) {
 	}
 }
 
-// THE WIDEST REPORT FITS ITS RECORD, a small value: as many sources as a
-// reaper takes, each named at its bound and each failing with an error far
-// past what the report keeps, every byte one JSON writes as six, is recorded,
-// each error cut to its bound as stored.
+// THE WIDEST REPORT FITS ITS RECORD, a small value, and is the size MaxSources'
+// doc gives: as many sources as a reaper takes, each named at its bound and
+// reaped at a term of its own, each stopped at MaxPerPass with more due and its
+// three counts three digits each, its first failure far past what the report
+// keeps, some of it bytes JSON writes as six, every instant the pass records to
+// the nanosecond and the node named at its bound.
 //
 // Mutation: record each source's error whole in Pass, and the pass is not
-// recorded.
+// recorded; drop a source's own cutoff from its report, and the size is short.
 func TestTheWidestReportFitsItsRecord(t *testing.T) {
 	t.Parallel()
+	const widest = 11_406
+	// A term a nanosecond past a whole one puts each cutoff on an instant at
+	// its widest, nine digits of a second, as the clock's puts the pass's.
+	ownTerm := 7*24*time.Hour + time.Nanosecond
+	long := errors.New(strings.Repeat("<", 64) + strings.Repeat("x", 10_000))
+	third := trashreap.MaxPerPass / 3
 	var sources []trashreap.Source
 	for i := range trashreap.MaxSources {
-		src := newTrash(fmt.Sprintf("%0*d", trashreap.MaxSourceNameBytes, i))
-		src.listErr = errors.New(strings.Repeat("<", 10_000))
+		src := termed{trash: newTrash(fmt.Sprintf("%0*d", trashreap.MaxSourceNameBytes, i)), term: ownTerm}
+		cutoff := slotOf(noon).Add(-ownTerm)
+		// Oldest first, one past the cap: a third and one fail, the first
+		// at length, a third are no longer eligible and the rest are purged.
+		for n := range trashreap.MaxPerPass + 1 {
+			id := fmt.Sprintf("item-%04d", n)
+			src.put(id, cutoff.Add(-time.Duration(trashreap.MaxPerPass+1-n)*time.Second))
+			switch {
+			case n == 0:
+				src.failing[id] = long
+			case n <= third:
+				src.failing[id] = errors.New("the log is at its ceiling")
+			case n <= 2*third:
+				src.failing[id] = fmt.Errorf("%w: restored since it was listed", trashreap.ErrNotEligible)
+			}
+		}
 		sources = append(sources, src)
 	}
 	fleet := memory.NewFleet()
-	r := newRig(t, strings.Repeat("n", coord.MaxNodeIDBytes), fleet, &clock{at: noon}, sources...)
-	report, _ := r.reaper.Pass(t.Context())
+	at := &clock{at: noon.Add(123_456_789 * time.Nanosecond)}
+	r, err := trashreap.New(trashreap.Deps{
+		Sources: sources, Term: term + time.Nanosecond, Reports: fleet,
+		Node: strings.Repeat("n", coord.MaxNodeIDBytes), Now: at.now,
+		Logger: slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatalf("build the reaper: %v", err)
+	}
+	report, _ := r.Pass(t.Context())
 	raw, found, err := fleet.TrashReap(t.Context())
 	if err != nil || !found {
 		t.Fatalf("the widest pass was not recorded (%v, %v), its report %d sources", found, err,
 			len(report.Sources))
 	}
-	if len(raw) > coord.SmallValueBytes || len(report.Sources) != trashreap.MaxSources {
-		t.Errorf("the widest report is %d bytes naming %d sources, want within %d naming %d", len(raw),
-			len(report.Sources), coord.SmallValueBytes, trashreap.MaxSources)
-	}
 	for _, s := range report.Sources {
-		if coord.TextBytes(s.Error) > trashreap.MaxSourceErrorBytes {
-			t.Errorf("%s's error is kept in %d bytes as stored, past %d", s.Source, coord.TextBytes(s.Error),
+		if min(s.Purged, s.Skipped, s.Failed) < 100 || !s.More || s.Cutoff.Nanosecond() == 0 {
+			t.Errorf("%s is not at its widest: purged %d, skipped %d, failed %d, more %t, cutoff %s",
+				s.Source, s.Purged, s.Skipped, s.Failed, s.More, s.Cutoff)
+		}
+		if got := coord.TextBytes(s.Error); got != trashreap.MaxSourceErrorBytes {
+			t.Errorf("%s's error is kept in %d bytes as stored, want its bound, %d", s.Source, got,
 				trashreap.MaxSourceErrorBytes)
 		}
+	}
+	if len(raw) != widest || len(raw) > coord.SmallValueBytes || len(report.Sources) != trashreap.MaxSources {
+		t.Errorf("the widest report is %d bytes naming %d sources, want the %d MaxSources' doc gives, "+
+			"within %d, naming %d", len(raw), len(report.Sources), widest, coord.SmallValueBytes,
+			trashreap.MaxSources)
 	}
 }
