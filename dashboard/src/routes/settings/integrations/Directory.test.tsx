@@ -636,9 +636,7 @@ test("saving the last answer of an unfinished connection lands on Agents", async
   fireEvent.change(within(form).getByLabelText(/Admin token/), { target: { value: "glpat-new" } });
   after = 0;
   fireEvent.click(within(form).getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(location.hash).toBe("#/company/integrations/gitlab"), {
-    timeout: 5000,
-  });
+  await waitFor(() => expect(location.hash).toBe("#/company/integrations/gitlab"));
   expect(await screen.findByRole("tab", { name: /Agents/, selected: true })).toBeTruthy();
   expect(screen.queryByRole("form", { name: "GitLab settings" })).toBeNull();
 });
