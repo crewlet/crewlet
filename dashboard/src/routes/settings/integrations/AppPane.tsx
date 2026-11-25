@@ -1,14 +1,16 @@
 /**
  * One third-party app's detail: its header with the engine's word for its
  * state and four facts, then Agents, Activity and Settings, with "Check now"
- * at the row's far end on every tab. Its settings form opens in place of the
- * tabs, so connecting, finishing setup and replacing a key happen in the pane
- * with the directory still beside it.
+ * at the row's far end on every tab. Its settings form opens in place inside
+ * the Settings tab, under the same header and tabs; each tab and the form has
+ * its own address (`address.ts`).
  *
- * AGENTS FIRST. What an integration is for is which agents work in it and with
- * what access, so the Agents tab opens by default and carries what used to be
- * an overview of its own: the issues that need a person above the agents, and
- * the notes the loop left below them. Its label counts the agents that are on.
+ * WHAT THE BARE ADDRESS SHOWS is decided by the setup: the form while the
+ * connection is unfinished, Agents once it works, and before anything is set
+ * the app's landing with Connect. What an integration is for is which agents
+ * work in it, so the Agents tab carries the issues that need a person above
+ * the agents and the loop's notes below them; while the connection is
+ * unfinished it leads with the setup's next step instead.
  *
  * A SYNC THAT ENDS HAS BEEN CHECKED. The engine follows every access sync (a
  * save, an action at the vendor, a keep) with the same read-only pass Check
@@ -26,7 +28,9 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { SetupForm, heldReason } from "../SetupForm.tsx";
 import { asSentence, listed } from "~/lib/format.ts";
-import { href } from "~/app/router.tsx";
+import { href, useNavigator, useRoute } from "~/app/router.tsx";
+import type { IntegrationTab } from "~/app/routes.ts";
+import { formOf, tabOf, type IntegrationForm } from "./address.ts";
 import { WATCH_MS } from "../recheck.ts";
 import {
   SetupPasses,
@@ -35,7 +39,7 @@ import {
   integrationFacts,
   seatStepFor,
 } from "./catalogue.tsx";
-import type { Intent, Model, Tool } from "./model.ts";
+import { connectionUnfinished, type Intent, type Model, type Tool } from "./model.ts";
 import {
   actionName,
   BeforeYouStart,
@@ -115,20 +119,43 @@ export function AppPane({
   tool,
   model,
   onDisconnect,
-  arrive,
 }: {
   tool: Tool;
   model: Model;
   onDisconnect: () => void;
-  /** Open the settings form on arrival, or the Agents tab: the landing and the home send a reader here. */
-  arrive?: Intent | undefined;
 }) {
-  // ONLY WHERE THE INTENT CAN BE TAKEN: an arrival asking to connect a tool
-  // whose form cannot open lands on the page, which says why.
-  const [open, setOpen] = useState<Intent | null>(
-    arrive && arrive !== "agents" && !tool.blocked ? arrive : null,
-  );
-  const [tab, setTab] = useState("agents");
+  const route = useRoute();
+  const nav = useNavigator();
+  const askedTab = tabOf(route.query.get("tab"));
+  const askedForm = formOf(route.query.get("edit"));
+  const unfinished = connectionUnfinished(tool);
+  // ONLY WHERE THE FORM CAN OPEN: one a document holds (a block, a managed
+  // document but for Replace key) lands on the page, which says why.
+  const holds = (form: IntegrationForm) =>
+    tool.blocked ?? (form === "key" ? undefined : (model.managed ?? undefined));
+  const defaultForm = !askedTab && !askedForm && unfinished && !holds("settings");
+  const open: IntegrationForm | null =
+    askedForm && !holds(askedForm) ? askedForm : defaultForm ? "settings" : null;
+  const tab: IntegrationTab = open ? "settings" : (askedTab ?? "agents");
+  // THE DEFAULT IS WRITTEN INTO THE ADDRESS, so the form stays while the
+  // reading moves under it, and a reload lands on it.
+  useEffect(() => {
+    if (defaultForm) nav.replace(route.path, { edit: "settings" });
+  }, [defaultForm, nav, route.path]);
+  const setTab = (next: string) => nav.to(route.path, { tab: next });
+  const setOpen = (intent: Intent) =>
+    intent === "agents"
+      ? setTab("agents")
+      : nav.replace(route.path, { edit: intent === "rotate" ? "key" : "settings" });
+  // A SAVE LANDS WHERE THE SETUP NOW STANDS (the bare address's default);
+  // Cancel on the Settings tab's read view, or the landing before a connect.
+  const saved = useRef(false);
+  const closeForm = () => {
+    const back: Record<string, string> =
+      saved.current || !tool.configured ? {} : { tab: "settings" };
+    saved.current = false;
+    nav.replace(route.path, back);
+  };
   const landed = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (tool.configured) landed.current?.();
@@ -144,7 +171,7 @@ export function AppPane({
   // render drew every row again on each re-read of an unchanged reading.
   const accessReload = access.reload;
   const reloadAccess = useCallback(() => void accessReload({ quiet: true }), [accessReload]);
-  const replaceKey = useCallback(() => setOpen("rotate"), []);
+  const replaceKey = useCallback(() => nav.replace(route.path, { edit: "key" }), [nav, route.path]);
   const { guarded, managed } = model;
   const stepFor = useMemo(() => seatStepFor(tool, { guarded, managed }), [tool, guarded, managed]);
   const data = access.data;
@@ -202,25 +229,23 @@ export function AppPane({
       {...appHeading(tool.entry, 36)}
       status={<BucketTag tool={tool} />}
       description={tool.entry.description}
-      facts={open ? undefined : facts}
+      facts={facts}
       actions={
-        open ? undefined : (
-          <>
-            <PrimaryAction tool={tool} model={model} onOpen={setOpen} />
-            {tool.configured && (
-              <Button
-                size="small"
-                variant="danger"
-                disabledReason={model.managed ?? undefined}
-                onClick={() => {
-                  if (!model.managed) onDisconnect();
-                }}
-              >
-                Disconnect
-              </Button>
-            )}
-          </>
-        )
+        <>
+          {!open && <PrimaryAction tool={tool} model={model} onOpen={setOpen} />}
+          {tool.configured && (
+            <Button
+              size="small"
+              variant="danger"
+              disabledReason={model.managed ?? undefined}
+              onClick={() => {
+                if (!model.managed) onDisconnect();
+              }}
+            >
+              Disconnect
+            </Button>
+          )}
+        </>
       }
     />
   );
@@ -229,6 +254,7 @@ export function AppPane({
   // the page never redraws its "not connected" view from a reading older than
   // the write; a save over a connected tool changes nothing the page draws from.
   function afterWrite(): Promise<void> | undefined {
+    saved.current = true;
     model.watch();
     if (tool.configured) return undefined;
     return new Promise<void>((resolve) => {
@@ -242,30 +268,26 @@ export function AppPane({
     });
   }
 
-  if (open) {
-    const rotateIssue = tool.issues.find((i) => i.fix?.intent === "rotate");
-    // THE HEADER IN THE FORM'S COLUMN, so the Setup steps beside the form
-    // start level with it.
-    return (
-      <SetupForm
-        sections={tool.sections}
-        title={tool.entry.name}
-        head={header}
-        stepsOpen={stepsOpen}
-        onStepsOpen={setStepsOpen}
-        rotate={open === "rotate" ? (rotateIssue?.problem ?? "") : undefined}
-        onClose={() => setOpen(null)}
-        onDone={afterWrite}
-      />
-    );
-  }
+  const rotateIssue = tool.issues.find((i) => i.fix?.intent === "rotate");
+  const form = open && (
+    <SetupForm
+      sections={tool.sections}
+      title={tool.entry.name}
+      stepsOpen={stepsOpen}
+      onStepsOpen={setStepsOpen}
+      rotate={open === "key" ? (rotateIssue?.problem ?? "") : undefined}
+      onClose={closeForm}
+      onDone={afterWrite}
+    />
+  );
 
   if (!tool.configured) {
     return (
       <>
         {header}
-        {tool.held.length > 0 ? <HeldNotice tool={tool} /> : <BeforeYouStart tool={tool} />}
-        <DocsLink tool={tool} />
+        {form ||
+          (tool.held.length > 0 ? <HeldNotice tool={tool} /> : <BeforeYouStart tool={tool} />)}
+        {!form && <DocsLink tool={tool} />}
       </>
     );
   }
@@ -344,6 +366,26 @@ export function AppPane({
         <HeadingLevelProvider level={3}>
           {tab === "agents" && (
             <div className="int-tab">
+              {/* AN UNFINISHED CONNECTION LEADS WITH ITS NEXT STEP: no agent
+                can be given access through it yet. */}
+              {unfinished && (
+                <Callout
+                  variant="warning"
+                  title={`Finish setting up ${tool.entry.name}`}
+                  action={
+                    <Button
+                      size="small"
+                      variant="primary"
+                      disabledReason={holds("settings")}
+                      onClick={() => !holds("settings") && setOpen("continue")}
+                    >
+                      Finish setup
+                    </Button>
+                  }
+                >
+                  Agents get access here once {tool.entry.name} is connected.
+                </Callout>
+              )}
               {issues.length > 0 && (
                 <div className="int-issues">
                   {issues.map((issue) => (
@@ -351,27 +393,29 @@ export function AppPane({
                   ))}
                 </div>
               )}
-              <QueryState
-                error={access.code}
-                refusal={access.refusal}
-                loading={access.loading && !data}
-              >
-                {data && (
-                  <AgentsAccess
-                    kind={tool.entry.key}
-                    name={tool.entry.name}
-                    data={data}
-                    reload={reloadAccess}
-                    held={held}
-                    readOnly={readOnly}
-                    avatarOf={model.avatarOf}
-                    onAnswer={access.adopt}
-                    onReplaceKey={replaceKey}
-                    stepFor={stepFor}
-                    scopeNote={scopeNote}
-                  />
-                )}
-              </QueryState>
+              {!unfinished && (
+                <QueryState
+                  error={access.code}
+                  refusal={access.refusal}
+                  loading={access.loading && !data}
+                >
+                  {data && (
+                    <AgentsAccess
+                      kind={tool.entry.key}
+                      name={tool.entry.name}
+                      data={data}
+                      reload={reloadAccess}
+                      held={held}
+                      readOnly={readOnly}
+                      avatarOf={model.avatarOf}
+                      onAnswer={access.adopt}
+                      onReplaceKey={replaceKey}
+                      stepFor={stepFor}
+                      scopeNote={scopeNote}
+                    />
+                  )}
+                </QueryState>
+              )}
               {/* ADVISORIES ARE SAID, never raised, and under the agents: the
               tool works, and what the loop noticed is worth reading once. */}
               <Notes notes={tool.notes} />
@@ -393,29 +437,33 @@ export function AppPane({
           )}
           {tab === "settings" && (
             <div className="int-tab">
-              <SettingsSummary tool={tool} />
-              {/* EDIT SETTINGS EDITS THE SUMMARY ABOVE IT, so it sits under it and
-                never under a section it does not edit (SSH's servers, a growth
-                product's connections). */}
-              <Button
-                size="small"
-                variant="secondary"
-                disabledReason={tool.blocked}
-                onClick={() => !tool.blocked && setOpen("settings")}
-              >
-                Edit settings
-              </Button>
-              {/* THE SERVERS, and each one's Atlas inventory: SSH's own answer. */}
-              {tool.entry.key === "ssh" && <SshServers managed={model.managed} />}
-              {/* A GROWTH PRODUCT'S connections, the vendor's roles, and a spending product's caps. */}
-              {GROWTH_PRODUCTS.has(tool.entry.key) && (
-                <GrowthProductSection
-                  kind={tool.entry.key}
-                  product={tool.entry.name}
-                  row={model.rows.get(tool.entry.key)}
-                />
+              {form || (
+                <>
+                  <SettingsSummary tool={tool} />
+                  {/* EDIT SETTINGS EDITS THE SUMMARY ABOVE IT, so it sits under
+                    it and never under a section it does not edit (SSH's
+                    servers, a growth product's connections). */}
+                  <Button
+                    size="small"
+                    variant="secondary"
+                    disabledReason={tool.blocked}
+                    onClick={() => !tool.blocked && setOpen("settings")}
+                  >
+                    Edit settings
+                  </Button>
+                  {/* THE SERVERS, and each one's Atlas inventory: SSH's own answer. */}
+                  {tool.entry.key === "ssh" && <SshServers managed={model.managed} />}
+                  {/* A GROWTH PRODUCT'S connections, the vendor's roles, and a spending product's caps. */}
+                  {GROWTH_PRODUCTS.has(tool.entry.key) && (
+                    <GrowthProductSection
+                      kind={tool.entry.key}
+                      product={tool.entry.name}
+                      row={model.rows.get(tool.entry.key)}
+                    />
+                  )}
+                  <DocsLink tool={tool} />
+                </>
               )}
-              <DocsLink tool={tool} />
             </div>
           )}
         </HeadingLevelProvider>

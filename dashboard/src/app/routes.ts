@@ -334,6 +334,13 @@ export const PRINCIPLES_PATH: readonly string[] = ["company", "principles"];
 export const MODELS_PATH: readonly string[] = ["settings", "models"];
 
 /**
+ * An integration's page's tabs, its `tab=` (an object tab): every one a read
+ * view, so a written link may carry one ([SHAREABLE_TABS], `lib/appRoute.ts`).
+ */
+export const INTEGRATION_TABS = ["agents", "activity", "settings"] as const;
+export type IntegrationTab = (typeof INTEGRATION_TABS)[number];
+
+/**
  * Where a new artifact of a kind is made: each kind has its own page
  * (`routes/artifacts/new/`), because writing a doc, laying out a deck and
  * asking an agent for a dashboard are three different gestures. Here for the

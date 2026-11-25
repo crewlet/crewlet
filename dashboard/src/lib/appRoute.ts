@@ -22,11 +22,21 @@
  * address on a configured host is rebuilt with none (`checked` in
  * `lib/inlineTokens.ts`). A record's page is its path; a query is a filter, a
  * pane or a prefilled field, which is what an injected instruction would
- * reach for.
+ * reach for. The one exception is a page's tab where [SHAREABLE_TABS] lists
+ * it: a read view, held to the page's own tab names, never a form.
  */
 
 import { href, parseHash } from "~/app/router.tsx";
-import { resolve } from "~/app/routes.ts";
+import { INTEGRATION_TABS, resolve, type ScreenName } from "~/app/routes.ts";
+
+/**
+ * The `tab=` values a written link may keep, by the screen it opens: tabs
+ * that only show (never one holding a form, as an artifact's old `tab=` is
+ * a panel with settings to edit). Any other key or value is dropped.
+ */
+export const SHAREABLE_TABS: Partial<Record<ScreenName, readonly string[]>> = {
+  integrations: INTEGRATION_TABS,
+};
 
 /** The longest address followed: an engine-built route is a few segments and filters. */
 export const MAX_APP_ADDRESS = 2048;
@@ -50,9 +60,11 @@ export function appRoute(address: string): AppTarget | null {
   const route = parseHash(hash);
   const where = resolve(route.path);
   if (route.path.length === 0 || !where.resolved || where.workspace === "") return null;
+  const tab = route.query.get("tab") ?? "";
+  const keeps = (SHAREABLE_TABS[where.screen] ?? []).includes(tab);
   return {
     hash,
-    canonical: href(route.path),
+    canonical: href(route.path, keeps ? { tab } : undefined),
     path: route.path,
     query: Object.fromEntries(route.query),
   };

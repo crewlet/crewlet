@@ -449,6 +449,15 @@ function agentsOf(subjects: readonly string[], seatOf: SeatOf): IssueAgent[] {
   });
 }
 
+/**
+ * Whether the company's own connection to the tool is set but not finished:
+ * a block written with something it requires still unanswered (a step at the
+ * vendor, a value to paste). Its agents cannot be given access through it yet.
+ */
+export function connectionUnfinished(tool: Tool): boolean {
+  return tool.sections.some((s) => !s.seat && s.tool.configured && !s.tool.satisfied);
+}
+
 export interface Tool {
   entry: Entry;
   story: ToolStory;
