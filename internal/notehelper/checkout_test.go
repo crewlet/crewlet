@@ -539,6 +539,122 @@ func TestASkillIsCopiedWithoutWhatLeadsOutOfItsCheckout(t *testing.T) {
 	}
 }
 
+// A CLAUDE CODE FIRING HANDS A CLONE'S SKILLS' LISTING ALONE, AND ONLY THE MAIN
+// AGENT'S: a subagent's firing (its input names an agent_id) and one whose
+// input does not read claim nothing, so the main agent's next firing still
+// hands the clone; that firing hands the listing in Claude Code's hook shape,
+// never the clone's instructions, which Claude Code loads itself on a read.
+//
+// Mutation: claim in a subagent's firing, claim on unreadable input, or hand
+// the instructions, and a check goes red.
+func TestAClaudeCodeFiringHandsAClonesSkillsToTheMainAgentAlone(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.launch(t, nil)
+	r.add(t, map[string]string{"late/.git/": "", "late/CLAUDE.md": "LATE-INSTRUCTIONS\n",
+		"late/.codex/skills/fix/SKILL.md": "---\nname: fix\ndescription: Fixes.\n---\n"})
+	fire := func(input string) (string, string) {
+		var out, errs bytes.Buffer
+		if code := runClaudeNested(context.Background(), flags{config: filepath.Join(r.state, "nested.json")},
+			strings.NewReader(input), &out, &errs, os.Getenv); code != exitDone {
+			t.Fatalf("the firing exited %d", code)
+		}
+		return out.String(), errs.String()
+	}
+	if out, _ := fire(`{"hook_event_name":"PostToolUse","agent_id":"a1"}`); out != "" {
+		t.Errorf("a subagent's firing handed %q", out)
+	}
+	if out, errs := fire(`not json`); out != "" || !strings.Contains(errs, "the hook's input") {
+		t.Errorf("an unreadable input's firing handed %q and said %q", out, errs)
+	}
+	out, _ := fire(`{"hook_event_name":"PostToolUse","tool_name":"Bash"}`)
+	var answer struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	want := "# Skills of " + filepath.Join(r.workdir(t), "late") + "\n\nEach is a set of local instructions to follow, " +
+		"stored in its `SKILL.md` file; to use one, read that file.\n- late:fix: Fixes. (file: " + r.skills + "/late:fix/SKILL.md)"
+	if err := json.Unmarshal([]byte(out), &answer); err != nil || answer.HookSpecificOutput.HookEventName != "PostToolUse" ||
+		answer.HookSpecificOutput.AdditionalContext != want {
+		t.Errorf("the main agent's firing handed %q (%v), want the listing\n%q", out, err, want)
+	}
+	if out, _ := fire(`{"hook_event_name":"PostToolUse"}`); out != "" {
+		t.Errorf("a later firing handed %q again", out)
+	}
+}
+
+// A CLAUDE CODE FIRING READS AT MOST ITS INPUT'S BOUND: an input past
+// maxHookInput (a long tool_response) is not read whole, so it claims nothing
+// and says why, as an unreadable one does, and the next firing hands the
+// clone; an agent_id ahead of such a response ends the read at once, a
+// subagent's firing claiming nothing.
+//
+// Mutation: read the input without the bound, and the long main firing claims.
+func TestAClaudeCodeFiringReadsAtMostItsInputsBound(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.launch(t, nil)
+	r.add(t, map[string]string{"late/.git/": "", "late/.codex/skills/fix/SKILL.md": "---\nname: fix\ndescription: Fixes.\n---\n"})
+	long := strings.Repeat("x", maxHookInput)
+	fire := func(input string) (string, string) {
+		var out, errs bytes.Buffer
+		if code := runClaudeNested(context.Background(), flags{config: filepath.Join(r.state, "nested.json")},
+			strings.NewReader(input), &out, &errs, os.Getenv); code != exitDone {
+			t.Fatalf("the firing exited %d", code)
+		}
+		return out.String(), errs.String()
+	}
+	if out, errs := fire(`{"agent_id":"a1","tool_response":"` + long + `"}`); out != "" || errs != "" {
+		t.Errorf("a subagent's firing past the bound handed %q and said %q", out, errs)
+	}
+	if out, errs := fire(`{"hook_event_name":"PostToolUse","tool_response":"` + long + `"}`); out != "" ||
+		!strings.Contains(errs, "the hook's input") {
+		t.Errorf("a main firing past the bound handed %q and said %q, want nothing claimed, said", out, errs)
+	}
+	if out, _ := fire(`{"hook_event_name":"PostToolUse","tool_name":"Bash"}`); !strings.Contains(out, "late:fix") {
+		t.Errorf("the next main firing handed %q, want the clone's listing", out)
+	}
+}
+
+// A NESTED ADAPTER THAT HANDS SKILLS ALONE IS GIVEN NO INSTRUCTION TO READ: a
+// launch whose config says nestedSkillsOnly writes the nested config without
+// instruction slots or limit, so a claude-nested firing reads no CLAUDE.md
+// only to drop it; one that does not keeps them, as codex-nested needs.
+//
+// Mutation: carry the launch's slots into every nested config, and a check
+// goes red.
+func TestANestedAdapterThatHandsSkillsAloneIsGivenNoInstructionToRead(t *testing.T) {
+	t.Parallel()
+	for _, only := range []bool{true, false} {
+		r := newRepoRun(t, nil)
+		limit := 100
+		spec := codexSpec(r.skills)
+		spec.Limit = &limit
+		raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, NestedSkillsOnly: only, checkoutSpec: spec})
+		config := filepath.Join(t.TempDir(), "launch.json")
+		if err := os.WriteFile(config, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var errs bytes.Buffer
+		if err := checkoutLaunch(config, r.work, &errs); err != nil {
+			t.Fatalf("the launch: %v\n%s", err, errs.String())
+		}
+		c, err := readNested(filepath.Join(r.state, "nested.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if read := len(c.Instructions) > 0 || c.Limit != nil; read == only {
+			t.Errorf("nestedSkillsOnly %v: the nested config names instructions %v and limit %v", only,
+				c.Instructions, c.Limit)
+		}
+		if len(c.SkillDirs) == 0 || c.Skills == "" {
+			t.Errorf("nestedSkillsOnly %v: the nested config lost its skills: %+v", only, c.checkoutSpec)
+		}
+	}
+}
+
 // ONE FIRING'S COPIES ARE BOUND: a skill of more entries than the bound, or
 // deeper than it, is left out whole, said with the entry and the bound it
 // passed; a checkout's skills are planned only until they pass a fresh room's
@@ -1259,5 +1375,38 @@ func TestACopyForSkillsOnAnotherFilesystemIsBuiltBesideThem(t *testing.T) {
 	}
 	if _, err := os.Lstat(beside); !os.IsNotExist(err) {
 		t.Errorf("the staging beside the skills is left (%v)", err)
+	}
+}
+
+// A CLAUDE CODE FIRING NAMES WHAT IT LEFT OUT: a clone's skill whose name the
+// home's skills hold is listed in the firing's answer under what it left out,
+// and kept in the state for the run's end, a line each.
+//
+// Mutation: drop the left-out listing from claude-nested's answer, or keep
+// nothing, and a check goes red.
+func TestAClaudeCodeFiringNamesWhatItLeftOut(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.launch(t, nil)
+	writeTree(t, r.skills, map[string]string{"late:fix/SKILL.md": "HOME\n"})
+	r.add(t, map[string]string{"late/.git/": "", "late/.codex/skills/fix/SKILL.md": "---\nname: fix\ndescription: Fixes.\n---\n"})
+	var out, errs bytes.Buffer
+	if code := runClaudeNested(context.Background(), flags{config: filepath.Join(r.state, "nested.json")},
+		strings.NewReader(`{"hook_event_name":"PostToolUse","tool_name":"Bash"}`), &out, &errs, os.Getenv); code != exitDone {
+		t.Fatalf("the firing exited %d", code)
+	}
+	line := "the skill " + filepath.Join(r.workdir(t), "late", ".codex", "skills", "fix") +
+		" is left out: the home's skills hold late:fix already"
+	var answer struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &answer); err != nil ||
+		!strings.Contains(answer.HookSpecificOutput.AdditionalContext, "# Left out of the repositories below the working directory\n\n- "+line) {
+		t.Errorf("the firing answered %q (%v), want the left-out line\n%s", out.String(), err, line)
+	}
+	if got := read(t, filepath.Join(r.state, skippedLog)); !strings.Contains(got, line) {
+		t.Errorf("the state keeps %q for the run's end, want the line", got)
 	}
 }

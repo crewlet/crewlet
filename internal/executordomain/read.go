@@ -791,7 +791,8 @@ func oneSession(ctx context.Context, tx *sql.Tx, query string, args ...any) (*Se
 
 // summaryStatement is one turn's summary, by its key.
 const summaryStatement = `
-	SELECT object, object_hash, object_size, content_key, harness, session_id, kept_at, bytes, kept_bytes, cut
+	SELECT object, object_hash, object_size, content_key, harness, session_id, kept_at, bytes, kept_bytes, cut,
+		launch_seq, capture_seq
 	FROM executor_session_summaries INDEXED BY ` + summaryKey + ` WHERE agent_handle = ? AND turn_id = ?`
 
 // summaryOf is the summary handle's turn's row keeps, nil where it keeps none.
@@ -805,7 +806,8 @@ func summaryOf(ctx context.Context, tx *sql.Tx, handle, turn string) (*executork
 		summary      executorkeep.Summary
 	)
 	err := tx.QueryRowContext(ctx, summaryStatement, handle, turn).Scan(&object, &hash, &summary.Object.Size,
-		&summary.ContentKey, &summary.Harness, &summary.Session, &keptAt, &summary.Bytes, &summary.Kept, &cut)
+		&summary.ContentKey, &summary.Harness, &summary.Session, &keptAt, &summary.Bytes, &summary.Kept, &cut,
+		&summary.Place.LaunchSeq, &summary.Place.CaptureSeq)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil

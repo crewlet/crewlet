@@ -1280,7 +1280,8 @@ func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 
 	// A THOUSAND MEMBERS, ONE READER: the fewest bytes of five walks, so what
 	// another goroutine allocates meanwhile counts against no claim, held
-	// below an eighth of what a fresh reader's buffers take.
+	// below an eighth of what a fresh reader's buffers take, the fewest of
+	// three makings.
 	member := ctThread(brief)
 	r := newThreadReader(strings.NewReader(""), 0)
 	const members = 1000
@@ -1303,11 +1304,15 @@ func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 		runtime.ReadMemStats(&after)
 		each = min(each, (after.TotalAlloc-before.TotalAlloc)/members)
 	}
-	runtime.ReadMemStats(&before)
-	fresh := newThreadReader(strings.NewReader(member), threadPlainMax)
-	runtime.ReadMemStats(&after)
-	runtime.KeepAlive(fresh)
-	if buffers := after.TotalAlloc - before.TotalAlloc; buffers < 2*lineChunkBytes || each >= buffers/8 {
+	buffers := uint64(math.MaxUint64)
+	for range 3 {
+		runtime.ReadMemStats(&before)
+		fresh := newThreadReader(strings.NewReader(member), threadPlainMax)
+		runtime.ReadMemStats(&after)
+		runtime.KeepAlive(fresh)
+		buffers = min(buffers, after.TotalAlloc-before.TotalAlloc)
+	}
+	if buffers < 2*lineChunkBytes || each >= buffers/8 {
 		t.Errorf("one reader reading a member after another allocates %d bytes a member, where a fresh reader's "+
 			"buffers take %d; want those at least %d, and a member under an eighth of them", each, buffers,
 			2*lineChunkBytes)
