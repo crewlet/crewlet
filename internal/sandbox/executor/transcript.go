@@ -407,10 +407,9 @@ const TranscriptReadsAtOnce = 2
 // on two cores of the build machine, four runs): 32 MiB live at GOGC=10, a
 // Claude Code value of a key's armour and 200-byte tokens streamed to the read
 // budget; OpenCode's at most 31, every credential shape streamed to it; every
-// other streaming reader's at most 29; its heap peaking at 58 MiB at the
-// default GOGC, every credential shape streamed to the read budget. Cursor
-// Agent's alone reads past it, a line held whole (cursortranscript.go), up to
-// 166 MiB: #2024 streams it.
+// other harness's at most 29, Cursor Agent's (two runs) a dense value
+// streamed to the read budget; its heap peaking at 58 MiB at the default GOGC,
+// every credential shape streamed to the read budget.
 const TranscriptReadHeldBytes = 32 << 20
 
 // PersonTranscriptReadWorst is the longest a person's read takes at its

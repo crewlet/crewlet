@@ -7858,8 +7858,7 @@ not kept — each only of a turn that ended — and an ended turn is never captu
 again.
 
 **Two transcripts at a time on each node.** One read holds at most 32 MiB
-measured (Cursor Agent's apart: its reader still holds each line whole, up to
-166 MiB), and of what
+measured, and of what
 harnesses and ordinary tools write takes up to about 49 seconds for a person (58
 for a seat's words): one value of `password:` lines streamed through its
 redaction to `bounds.read_bytes`, beside a second read. So a node decodes at
