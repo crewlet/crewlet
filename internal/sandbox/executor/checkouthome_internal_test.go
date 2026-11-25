@@ -274,11 +274,11 @@ func TestARunIsMarkedEndedOnlyOnceItsFiringsLetGo(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	ended := false
+	ended, waited := false, error(nil)
 	giveUp := time.After(10 * time.Second) //fixedwait:liveness
 	for !ended && !waitingOnLock(t, h.state) {
 		select {
-		case err = <-done:
+		case waited = <-done:
 			ended = true
 		case <-giveUp:
 			t.Fatal("the end neither waited on the firings' lock nor finished within 10s")
@@ -295,10 +295,10 @@ func TestARunIsMarkedEndedOnlyOnceItsFiringsLetGo(t *testing.T) {
 	_ = f.Close()
 	_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	if !ended {
-		err = <-done
+		waited = <-done
 	}
-	if err != nil || !strings.Contains(said.String(), "notehelper: LATE") {
-		t.Errorf("the end (%v) printed %q, want the line the running firing kept", err, said.String())
+	if waited != nil || !strings.Contains(said.String(), "notehelper: LATE") {
+		t.Errorf("the end (%v) printed %q, want the line the running firing kept", waited, said.String())
 	}
 }
 
