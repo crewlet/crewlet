@@ -1224,7 +1224,7 @@ func TestTheBriefTellsAReadyBrowserAndAWithheldOneInTheEnginesWords(t *testing.T
 
 // EVERY WITHHELD REASON HAS THE ENGINE'S WORDS FOR THE MODEL, its figures read
 // from the constants they name: the Node floor from boxhelper.MinNodeMajor,
-// the seconds from boxhelper.EnsureTimeout, and no number written into the
+// the bound from boxhelper.EnsureTimeout, and no number written into the
 // words themselves.
 //
 // Mutations, each red: drop a reason's words; write the Node floor as 22.
@@ -1240,7 +1240,7 @@ func TestEveryWithheldReasonHasTheEnginesWordsForTheModel(t *testing.T) {
 		t.Errorf("node_too_old reads %q, which does not name the floor %d", got, boxhelper.MinNodeMajor)
 	}
 	if got := browserWithheldWords(browser.ReasonEnsureTimeout); !strings.Contains(got,
-		strconv.Itoa(int(boxhelper.EnsureTimeout.Seconds()))+" seconds") {
+		boxhelper.EnsureTimeout.String()) {
 		t.Errorf("ensure_timeout reads %q, which does not name the bound", got)
 	}
 	file, err := parser.ParseFile(token.NewFileSet(), "browser.go", nil, 0)
