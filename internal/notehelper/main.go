@@ -122,7 +122,12 @@
 //     indentation trimmed, has a value that, split on `,` or read as
 //     `[a, b]`, quotes trimmed, holds an entry outside whole. A tree past 8
 //     directories deep, 1,024 entries or 32 MiB is left out whole, said:
-//     Copilot walks 9 levels (measured), so a deeper tree is the gap;
+//     Copilot walks 9 levels (measured), so a deeper tree is the gap. For
+//     Grok Build 1.0.92 (measured): a tree's "flat" reads no directory below
+//     it and "dots" takes a dot file too (.grok/rules); a list of names as
+//     {"names": [...], "inside": true} follows a link only while it stays in
+//     the checkout; and "once" on either hands no file an earlier slot
+//     handed, by real path;
 //   - `skillDirs`: the checkout's skill directories, an earlier one winning a
 //     name (Codex: [".codex/skills",".agents/skills"]), each skill a
 //     directory directly in one. {"dir": <d>, "recursive": true} walks d as
@@ -132,7 +137,26 @@
 //     name, the first, the other left out, said; past 8 directories
 //     deep or 1,024 entries it is left out whole, said. Pi also follows a
 //     link out of the checkout, lists a loose root `.md` skill, and honours
-//     .gitignore, .ignore and .fdignore; the walk does none of these;
+//     .gitignore, .ignore and .fdignore; the walk does none of these. As
+//     Grok Build 1.0.92 walks (measured): "through" goes on below a skill,
+//     "every" walks dot directories and node_modules, and "depth" N reads no
+//     directory past N below d (Grok lists to 6), refusing nothing.
+//     {"dir": <d>, "commands": true} takes each `*.md` file directly in d, a
+//     dot file too, as a skill named by its file less `.md` (Grok's
+//     commands), copied as its SKILL.md. Grok, too, follows a link out of
+//     the checkout; the walks do not;
+//   - `listedAs`: "grok" where the harness lists a skill by Grok Build
+//     1.0.92's rule (internal/skillname): a checkout's skills are those a
+//     session started in it lists, two that rewrite alike settled as Grok
+//     settles them (a skill whose own name rewrites to the name, or a
+//     command, takes it first, in order; another falls back to its own
+//     rewritten name, else is not listed: rows x1-x7, g4x), a SKILL.md or
+//     command with no frontmatter listed under its own name, and a copy is
+//     named, kept apart from the others and listed by its rewritten name; a
+//     copy whose rewritten name a skill or command of `skills` or of
+//     `homeSkills` (the home's other skill directories, as slots) lists
+//     under, or rewrites its own name to, is left out, said: the person's
+//     skill keeps its name;
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (at most 64 characters) with its
@@ -155,7 +179,10 @@
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
-// (name, description, the copy's SKILL.md) as its hook's context; pi-nested
+// (name, description, the copy's SKILL.md) as its hook's context;
+// grok-nested the same, each file as Grok's `## From: <path>`, within the
+// 10,000 characters Grok hands of one hook's answer, a checkout's whole
+// while they fit and every other named by its files to read; pi-nested
 // the same with each file in Pi's `<project_instructions path=...>`, on
 // stdout for the run's extension to add to the tool's result (Pi lists no
 // skill it did not start with and loads instructions only as it starts,
