@@ -51,9 +51,15 @@ func mountBridge(mux httpjson.Router, bridge *mcpbridge.Bridge) {
 	// AND ITS SKILL ROUTE, the same way: a harness's plugin reports each of
 	// the run's own skills it loads there (internal/api/mcpbridge, skills.go).
 	mux.Handle(mcpbridge.SkillPattern, bridge.SkillHandler())
+	// AND ITS BROWSER ROUTES, the same way: the relay in a box whose browser
+	// is ready posts its screen there and polls for whether anybody watches
+	// (internal/api/mcpbridge, browser.go). A session with no browser answers
+	// every verb 404, so on the probe surface, whose direct boxes never run a
+	// browser, they are routes nothing calls.
+	mux.Handle(mcpbridge.BrowserPattern, bridge.BrowserHandler())
 	log.Info("mcp_bridge_mounted", "path", mcpbridge.PathPrefix+"{token}",
 		"servers", mcpbridge.ServerPattern, "notes", mcpbridge.SteerPattern,
-		"skills", mcpbridge.SkillPattern)
+		"skills", mcpbridge.SkillPattern, "browser", mcpbridge.BrowserPattern)
 }
 
 // mountOperator registers the operator surface's two transports — MCP for an

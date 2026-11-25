@@ -616,9 +616,9 @@ func TestAReadItsOpeningsEndOvertookIsTurnedAwayToAskAgain(t *testing.T) {
 					got.res.StatusCode, got.refusal)
 			}
 			wantTurnedAway(t, got, "unavailable")
-			if after := got.res.Header.Get("Retry-After"); after != strconv.Itoa(int(mcpbridge.SteerPollRetry/time.Second)) {
+			if after := got.res.Header.Get("Retry-After"); after != strconv.Itoa(int(mcpbridge.AskAgainRetry/time.Second)) {
 				t.Errorf("the read is told to ask again after %q, want %s, as a call its opening's end "+
-					"overtook is", after, mcpbridge.SteerPollRetry)
+					"overtook is", after, mcpbridge.AskAgainRetry)
 			}
 			if reads := f.inbox.readIDs(); len(reads) != 0 {
 				t.Errorf("the ended opening's inbox recorded the reads %q", reads)
@@ -673,8 +673,8 @@ func (p *parkedFence) fence() error {
 // first and the poller asks again.
 func TestAHeldPollEndsAtItsHold(t *testing.T) {
 	t.Parallel()
-	if mcpbridge.SteerHold >= 15*time.Second {
-		t.Errorf("a poll is held %s, past the 15 s an Envoy route allows by default", mcpbridge.SteerHold)
+	if mcpbridge.PollHold >= 15*time.Second {
+		t.Errorf("a poll is held %s, past the 15 s an Envoy route allows by default", mcpbridge.PollHold)
 	}
 	const hold = 300 * time.Millisecond
 	f := newSteerFixture(t, hold)

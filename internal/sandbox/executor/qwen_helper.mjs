@@ -86,7 +86,7 @@ const stoppedExit = 143
 const mcpPollMs = 250
 
 // pollAbortMs bounds one poll of the notes route: the engine holds an empty
-// poll ten seconds (internal/api/mcpbridge, steerHold), so twenty is that
+// poll ten seconds (internal/api/mcpbridge, pollHold), so twenty is that
 // hold and as much again for a relay and a slow network.
 const pollAbortMs = 20_000
 

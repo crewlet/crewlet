@@ -108,9 +108,9 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 // pattern so the token reaches it as a path value, never the route's
 // handler, which would relay a relayed call again: at the job's endpoint, and
 // at each of the seat's MCP servers beneath it ([ServerPattern]); and the
-// notes and skill routes' own, never their routing. EVERY ROUTE IS SERVED ON
-// THE OPENING HELD HERE ([Bridge.heldOnly]), behind the step that holds it to
-// the session the box started ([Bridge.serveBegun]), and through
+// notes, skill and browser routes' own, never their routing. EVERY ROUTE IS
+// SERVED ON THE OPENING HELD HERE ([Bridge.heldOnly]), behind the step that
+// holds it to the session the box started ([Bridge.serveBegun]), and through
 // [Bridge.serveMCP] as this node's own route is: a relayed request is as much
 // the run's first, and the MCP handler alone would serve it before that.
 func (b *Bridge) relayed() http.Handler {
@@ -120,6 +120,7 @@ func (b *Bridge) relayed() http.Handler {
 	mux.Handle(ServerPattern, streamable)
 	mux.Handle(SteerPattern, b.heldOnly(b.serveSteer))
 	mux.Handle(SkillPattern, b.heldOnly(b.serveSkill))
+	mux.Handle(BrowserPattern, b.heldOnly(b.serveBrowser))
 	return mux
 }
 
@@ -128,7 +129,7 @@ func (b *Bridge) relayed() http.Handler {
 func (b *Bridge) admitRelayed(r *http.Request) httprelay.Verdict {
 	// THE TOKEN IS THE FIRST SEGMENT after the prefix, whatever route under
 	// it the call is for: the MCP endpoint, one of the seat's MCP servers
-	// beneath it, or the notes route.
+	// beneath it, or the notes, skill or browser routes.
 	token, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, PathPrefix), "/")
 	sub, ok := b.parse(token)
 	if !ok {
