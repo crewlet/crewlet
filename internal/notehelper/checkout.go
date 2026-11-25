@@ -49,6 +49,13 @@ type checkoutSpec struct {
 	Reserved           []string          `json:"reserved,omitempty"`
 	ImportInstructions bool              `json:"importInstructions,omitempty"`
 	SkillSep           skillSep          `json:"skillSep,omitempty"`
+	// ListedAs and HomeSkills are the harness whose rule names a listed skill
+	// and the home's skill directories whose names a copy may not take
+	// ([homeHolds]).
+	ListedAs   string         `json:"listedAs,omitempty"`
+	HomeSkills []skillDirSlot `json:"homeSkills,omitempty"`
+	// held is the names the home takes, read once a firing ([homeNames]).
+	held *homeNames
 }
 
 // skillSep is what joins a copy's tag and skill: `:` (the zero value), or `-`
@@ -422,6 +429,7 @@ func readNested(path string) (nestedConfig, error) {
 // `<tag>:<skill>` ([copyPlanned]). What it leaves out is
 // said to said, and kept where said asks, under the lock.
 func handCheckouts(state, work string, first []string, spec checkoutSpec, firing int, said *skips) ([]handedCheckout, error) {
+	spec.held = &homeNames{}
 	lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -581,8 +589,9 @@ func checkoutName(work, name string) bool {
 }
 
 // instructionParts is root's instructions, file by file, each slot's in order
-// (a slot of names its first regular file, links followed; a tree's files,
-// [treeTexts]): each file's path and its text, cut to what is left of limit
+// (a slot of names its first regular file, links followed, within the
+// checkout alone where Inside; a tree's files, [treeTexts]; where Once, none
+// an earlier slot handed, [slotOptions]): each file's path and its text, cut to what is left of limit
 // on a rune boundary, invalid UTF-8 replaced, and how many bytes they took
 // ([joinParts] hands them as one text). A file the limit cut spends all of
 // it, as a harness charging what it read hands nothing after it, never the
@@ -591,9 +600,13 @@ func checkoutName(work, name string) bool {
 func instructionParts(root string, limit int, slots []instructionSlot, said *skips) ([]instructionPart, int) {
 	var texts []instructionPart
 	spent := 0
+	handed := handedFiles{}
 	for _, slot := range slots {
 		if slot.Tree != nil {
 			for _, file := range treeTexts(root, *slot.Tree, said) {
+				if !handed.first(file.real, slot.Tree.Once) {
+					continue
+				}
 				text, n, cut := fitInstructions(file.raw, limit-spent)
 				if n > 0 {
 					texts, spent = append(texts, instructionPart{path: file.path, text: text}), spent+n
@@ -610,6 +623,9 @@ func instructionParts(root string, limit int, slots []instructionSlot, said *ski
 			if err != nil || !info.Mode().IsRegular() {
 				continue
 			}
+			if real, ok := slotFile(root, path, slot.slotOptions); !ok || !handed.first(real, slot.Once) {
+				continue
+			}
 			text, n, cut := readInstructions(path, info.Size(), limit-spent)
 			if n > 0 {
 				texts, spent = append(texts, instructionPart{path: path, text: text}), spent+n
@@ -621,6 +637,34 @@ func instructionParts(root string, limit int, slots []instructionSlot, said *ski
 		}
 	}
 	return texts, spent
+}
+
+// handedFiles is the real paths of the files a checkout's slots handed.
+type handedFiles map[string]bool
+
+// first records real as handed and reports whether it may be handed: always,
+// unless once and an earlier slot handed it.
+func (h handedFiles) first(real string, once bool) bool {
+	if once && h[real] {
+		return false
+	}
+	h[real] = true
+	return true
+}
+
+// slotFile is the real path of a slot's file at path, of the checkout at
+// root, and whether the slot hands it: not where it is Inside and the file
+// leads out of the checkout.
+func slotFile(root, path string, o slotOptions) (string, bool) {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path, !o.Inside
+	}
+	if !o.Inside {
+		return real, true
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	return real, err == nil && within(realRoot, real)
 }
 
 // joinParts is parts' texts as one, apart by a blank line.
