@@ -1120,6 +1120,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 			guide.Prepare[i].Connected = &connected
 		}
 	}
+	setup.MarkDone(guide.Prepare, reqs)
 
 	satisfied := len(setup.Outstanding(reqs)) == 0
 	// Whether this dialog has a box left to fill, the one question Continue

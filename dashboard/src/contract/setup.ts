@@ -30,6 +30,8 @@ export interface SetupStep {
   needs?: string;
   /** Whether `needs` is connected: on, with nothing it requires outstanding. */
   connected?: boolean;
+  /** Whether the company is past this step; the first step not done is the one it is on. */
+  done: boolean;
 }
 
 /** The one risk an app's credential carries, said once per form. */

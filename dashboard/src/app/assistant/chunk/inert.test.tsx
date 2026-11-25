@@ -155,6 +155,7 @@ function cards(): AssistantCard[] {
       open_in_app: {
         link: { label: line(18), screen: "item", href: "#/worklet/ENG-7" },
         permitted: true,
+        asked: false,
       },
     },
   ] as unknown as AssistantCard[];

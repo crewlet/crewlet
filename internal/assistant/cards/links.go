@@ -22,9 +22,9 @@ import (
 type screen struct {
 	address string
 	// query is the address's query, each pair's value a placeholder with the
-	// literal around it ("peek=atlas:{id}&trace={direction}"), "" for a
-	// screen its path alone opens. Kept apart from address, which the
-	// printed-address suite resolves as a path.
+	// literal around it ("peek=atlas:{id}&trace={direction}") or a literal
+	// alone ("tab=agents"), "" for a screen its path alone opens. Kept
+	// apart from address, which the printed-address suite resolves as a path.
 	query string
 	app   iam.Grant
 	// label is the link's text when nothing names it.
@@ -37,6 +37,9 @@ type screen struct {
 	// title, where set, is the link's text from its parameters when nothing
 	// names it: an integration's page by the integration's name.
 	title func(params map[string]string) string
+	// setup marks a place where what it names is connected or set up, which
+	// a request to connect it asks to be taken to.
+	setup bool
 	// id, where set, is the grammar this screen's `{id}` is held to in place
 	// of a uuid: a task is named by its key as well as its id.
 	id func() *regexp.Regexp
@@ -71,8 +74,18 @@ var links = sync.OnceValue(func() map[string]screen {
 		"budgets":          {address: "#/company/budgets", label: "Budgets"},
 		"schedules":        {address: "#/company/schedules", label: "Schedules"},
 		"integrations":     {address: "#/company/integrations", app: iam.GrantAdmin, label: "Integrations"},
+		// AN INTEGRATION'S PAGE, its setup form and each tab, by the page's own
+		// keys (routes/settings/integrations/address.ts).
 		"integration": {address: "#/company/integrations/{kind}", app: iam.GrantAdmin,
-			title: func(p map[string]string) string { return "Open " + integrationName(p["kind"]) + " setup" }},
+			title: integrationTitle("")},
+		"integration-setup": {address: "#/company/integrations/{kind}", query: "edit=settings",
+			app: iam.GrantAdmin, setup: true, title: integrationTitle(" setup")},
+		"integration-agents": {address: "#/company/integrations/{kind}", query: "tab=agents",
+			app: iam.GrantAdmin, title: integrationTitle("'s agents")},
+		"integration-activity": {address: "#/company/integrations/{kind}", query: "tab=activity",
+			app: iam.GrantAdmin, title: integrationTitle("'s activity")},
+		"integration-settings": {address: "#/company/integrations/{kind}", query: "tab=settings",
+			app: iam.GrantAdmin, title: integrationTitle("'s settings")},
 		"live":             {address: "#/live", label: "Now running"},
 		"turns":            {address: "#/live/turns", label: "Turns"},
 		"turn":             {address: "#/live/turns/{id}", noun: "turn"},
@@ -140,6 +153,12 @@ func (integrationKeys) String() string {
 	return "one of " + words.Or(keys)
 }
 
+// integrationTitle names an integration's link by its name and what of it the
+// link opens ("Open Google Cloud setup").
+func integrationTitle(what string) func(map[string]string) string {
+	return func(p map[string]string) string { return "Open " + integrationName(p["kind"]) + what }
+}
+
 // integrationName is the name of the integration whose page key is key, ""
 // for none.
 func integrationName(key string) string {
@@ -166,16 +185,17 @@ var placeholders = sync.OnceValue(func() map[string]placeholder {
 })
 
 // queryPair is one pair of a screen's query template: its key, and its value
-// as the literal before and after one placeholder.
+// as the literal before and after one placeholder, or before alone for a
+// literal pair (no placeholder).
 type queryPair struct {
 	key, before, after string
 	placeholder        string
 }
 
 // queryPairs are screen's query template, pair by pair, in its order; a
-// template every pair of which holds one placeholder of the table. The
-// table is this package's own literals, so one written wrong is a panic at
-// first use rather than a link that silently drops a key.
+// template every pair of which holds one placeholder of the table or none.
+// The table is this package's own literals, so one written wrong is a panic
+// at first use rather than a link that silently drops a key.
 func queryPairs(template string) []queryPair {
 	if template == "" {
 		return nil
@@ -184,6 +204,10 @@ func queryPairs(template string) []queryPair {
 	for _, pair := range strings.Split(template, "&") {
 		key, value, _ := strings.Cut(pair, "=")
 		open, close := strings.Index(value, "{"), strings.Index(value, "}")
+		if key != "" && value != "" && open < 0 && close < 0 {
+			out = append(out, queryPair{key: key, before: value})
+			continue
+		}
 		if key == "" || open < 0 || close < open {
 			panic(fmt.Sprintf("cards: the query template %q holds no placeholder in %q", template, pair))
 		}
@@ -235,9 +259,31 @@ func ScreenParams(name string) []string {
 		}
 	}
 	for _, pair := range queryPairs(links()[name].query) {
-		out = append(out, placeholders()[pair.placeholder].param)
+		if pair.placeholder != "" {
+			out = append(out, placeholders()[pair.placeholder].param)
+		}
 	}
 	return out
+}
+
+// Names are the words a person calls the place screen opens with params by:
+// the screen's own name, each value its address takes (a key, a handle) and an
+// integration's name; and whether it is where that is set up.
+func Names(name string, params map[string]string) (names []string, setup bool) {
+	s, ok := links()[name]
+	if !ok {
+		return nil, false
+	}
+	if s.label != "" {
+		names = append(names, s.label)
+	}
+	for _, p := range slices.Sorted(maps.Keys(params)) {
+		names = append(names, params[p])
+		if n := integrationName(params[p]); p == "kind" && n != "" {
+			names = append(names, n)
+		}
+	}
+	return names, s.setup
 }
 
 // ErrNoLink is a link the table cannot build: a screen it does not hold, a
@@ -278,6 +324,10 @@ func Link(name string, params map[string]string, label string) (wire.Link, error
 	}
 	query := url.Values{}
 	for _, pair := range queryPairs(s.query) {
+		if pair.placeholder == "" {
+			query.Set(pair.key, pair.before)
+			continue
+		}
 		p := placeholders()[pair.placeholder]
 		v := params[p.param]
 		if !p.value().MatchString(v) {
@@ -380,6 +430,12 @@ func queryParams(template, rawQuery string) (map[string]string, bool) {
 		v, ok := values[pair.key]
 		if !ok || len(v) != 1 {
 			return nil, false
+		}
+		if pair.placeholder == "" {
+			if v[0] != pair.before {
+				return nil, false
+			}
+			continue
 		}
 		inner, cut := strings.CutPrefix(v[0], pair.before)
 		if !cut {

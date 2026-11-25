@@ -304,9 +304,9 @@ func TestAnOpenInAppCardNamesOnlyWhatItOpens(t *testing.T) {
 	if link.Label != "Integrations" {
 		t.Errorf("the list's link reads %q, want the screen's own name", link.Label)
 	}
-	link, probe, err := catalog.Open(catalog.Args{"screen": "integration", "kind": "google_cloud"})
+	link, probe, err := catalog.Open(catalog.Args{"screen": "integration-setup", "kind": "google_cloud"})
 	if err != nil || probe != nil || link.Label != "Open Google Cloud setup" ||
-		link.Href != "#/company/integrations/google_cloud" {
+		link.Href != "#/company/integrations/google_cloud?edit=settings" {
 		t.Errorf("an integration's link = %+v, probe %+v, %v", link, probe, err)
 	}
 	if _, _, err := catalog.Open(catalog.Args{"screen": "integration", "kind": "gcp"}); !errors.Is(err,

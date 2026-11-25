@@ -803,7 +803,9 @@ function OpenTarget({
   opened: boolean;
   onOpenHere: () => void;
 }) {
-  const showing = useIsShowing(target.path, target.query);
+  // A PAGE THAT TAKES ITS ARRIVAL OFF THE ADDRESS (a form's `open=`) is still
+  // the one opened, so an opened card asks for its path alone.
+  const showing = useIsShowing(target.path, opened ? {} : target.query);
   return (
     <OpenInAppCard
       icon={<LayoutDashboardGlyph size="md" />}

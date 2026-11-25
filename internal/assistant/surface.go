@@ -588,10 +588,20 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 		summary = "Not permitted"
 	}
 	s.t.stepEnd(ctx, step, wire.StepDone, summary, nil, status, size)
-	s.t.emitCard(ctx, cards.OpenInApp(link, permitted), nil)
+	card := cards.OpenInApp(link, permitted)
+	names, setup := cards.Names(link.Screen, catalog.LinkParams(args))
+	if permitted && s.t.openedAsked(append(names, link.Label), setup) {
+		card.OpenInApp.Asked = true
+	}
+	s.t.emitCard(ctx, card, nil)
 	if !permitted {
 		return toolloop.ToolResult{Output: "The person may not open that, or it does not " +
 			"exist. Say you cannot open it for them."}, nil
+	}
+	if card.OpenInApp.Asked {
+		return toolloop.ToolResult{Output: "The person asked for " + said + ", so their " +
+			"dashboard opens it now; say it is open. It does not answer their question: " +
+			"still state in your reply the facts they asked for."}, nil
 	}
 	// A LINK IS NOT AN ANSWER: the model is told so where it reads that the
 	// link was shown, since "I've added a link above" was once a whole reply
