@@ -185,6 +185,9 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 		if mediaErr := withMedia(ctx, tx, sessions); mediaErr != nil {
 			return mediaErr
 		}
+		if summaryErr := withSummaries(ctx, tx, sessions); summaryErr != nil {
+			return summaryErr
+		}
 		held := statelog.RowsOf(ctx)
 		for i, f := range found {
 			f.hit.Session = sessions[i]
@@ -211,7 +214,7 @@ func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 }
 
 // pendingHit is a hit a search found, held to the read's bytes once its
-// rows are closed and its media read: how many rows it examined before it,
+// rows are closed and its media and summary read: how many rows it examined before it,
 // and where the row before it began.
 type pendingHit struct {
 	hit     SearchHit

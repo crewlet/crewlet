@@ -32,25 +32,48 @@ import (
 // notesHeld is the inbox ids of takes the session's chat file holds, matched
 // in serve order ([recordConfirmer]). No chat file holds none.
 func (QwenCode) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
-	takes []ServedTake) ([]string, error) {
+	takes []ServedTake, summary *summaryRead) ([]string, error) {
 
 	if !sandbox.ValidSessionID(session.ID) {
-		return nil, fmt.Errorf("%q is no session id Qwen Code is created under", session.ID)
+		return nil, summary.failedBy(fmt.Errorf("%q is no session id Qwen Code is created under", session.ID))
 	}
 	file, err := qwenChatFile(ctx, box, session.ID)
-	if err != nil || file == "" {
-		return nil, err
-	}
-	from, err := qwenRunFrom(ctx, box, session.ID)
 	if err != nil {
-		return nil, err
+		return nil, summary.failedBy(err)
+	}
+	if file == "" {
+		_ = summary.failedBy(errChatFile)
+		return nil, nil
+	}
+	// A RUN'S START THAT DOES NOT READ decides no take, and the walk reads the
+	// summary alone: it needs no start.
+	from, fromErr := qwenRunFrom(ctx, box, session.ID)
+	if fromErr != nil && summary == nil {
+		return nil, fromErr
+	}
+	if fromErr != nil {
+		takes = nil
 	}
 	r, err := box.OpenFile(ctx, file)
 	if err != nil {
-		return nil, fmt.Errorf("opening %s: %w", file, err)
+		return nil, summary.failedBy(fmt.Errorf("opening %s: %w", file, err))
 	}
 	defer r.Close()
-	return qwenNotesHeld(ctx, r, takes, from, maxLineBytes)
+	held, err := qwenNotesHeld(ctx, r, takes, from, maxLineBytes, summary)
+	switch {
+	case err != nil:
+		return nil, summary.failedBy(err)
+	case fromErr != nil:
+		return nil, fromErr
+	}
+	return held, nil
+}
+
+// recordSummary reports whether the receipts' walk of the chat file reads
+// ask's summary: on the release its summary was read on, where no count is
+// asked, whose walk of the same file reads it instead.
+func (QwenCode) recordSummary(ask sandbox.MainThreadAsk) bool {
+	return summaryReleaseWhy(ask.Release, qwenRelease) == "" && !ask.Count
 }
 
 // qwenRunFrom is the first line of session's chat file the box's last run
@@ -107,8 +130,10 @@ func qwenChatFile(ctx context.Context, box sandbox.Sandbox, session string) (str
 // the history Qwen Code goes on with (ADR-0177). A match no reply follows is
 // not held, so the note is served again. A line past bound, or one that does
 // not decode, drops every pending match: it may have been a compaction that
-// summarized them. The record is walked for notes ([lineWalk.noteLine]).
-func qwenNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from, bound int) ([]string, error) {
+// summarized them. The record is walked for notes ([lineWalk.noteLine]), and
+// every line for the newest summary where summary is not nil ([qwenSummaries]).
+func qwenNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from, bound int,
+	summary *summaryRead) ([]string, error) {
 	type match struct{ id, digest string }
 	var settled []string
 	var pending []match
@@ -116,7 +141,13 @@ func qwenNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from, b
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), bound)
 	var l qwenNoteLine
+	var sums *qwenSummaries
 	skip := func() error { return w.scan.Skip() }
+	if summary != nil {
+		sums = newQwenSummaries(summary)
+		l.payload = &sums.payload
+		skip = func() error { return l.readKind(&w) }
+	}
 	for {
 		l.kept.want = map[string]int{}
 		for _, m := range pending {
@@ -132,6 +163,9 @@ func qwenNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from, b
 		}
 		if line.none {
 			break
+		}
+		if sums != nil {
+			sums.line(ctx, line, &l)
 		}
 		at++
 		switch {
@@ -172,6 +206,9 @@ func qwenNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from, b
 			break
 		}
 	}
+	if sums != nil && sums.lines.err != nil {
+		return nil, sums.lines.err
+	}
 	return settled, nil
 }
 
@@ -184,6 +221,8 @@ type qwenNoteLine struct {
 	whole, handedSet bool
 	handed           framedDigest
 	kept             qwenPreserved
+	// payload, where a read asks the summary, is the system payload as written.
+	payload *qwenPayload
 }
 
 // read reads one record's members. A KEY MATCHES ITS NAME EXACTLY, AND ONE
@@ -193,6 +232,7 @@ type qwenNoteLine struct {
 func (l *qwenNoteLine) read(w *lineWalk) error {
 	l.typ, l.subtype, l.whole, l.handedSet = "", "", true, false
 	l.kept.reset()
+	l.payload.reset()
 	return w.members(func(name string, k jsonscan.Kind) error {
 		var ok bool
 		var err error
@@ -202,6 +242,9 @@ func (l *qwenNoteLine) read(w *lineWalk) error {
 		case "subtype":
 			l.subtype, ok, err = w.wordField(k)
 		case "systemPayload":
+			if err = l.payload.tee(w); err != nil {
+				return err
+			}
 			ok, err = true, l.kept.read(w, k)
 		case "message":
 			l.handedSet = false
@@ -241,6 +284,29 @@ func (l *qwenNoteLine) read(w *lineWalk) error {
 			return w.scan.Skip()
 		}
 		l.whole = l.whole && ok
+		return err
+	})
+}
+
+// readKind reads a line before the run's start for what its newest summary
+// reads alone: its type, subtype and system payload.
+func (l *qwenNoteLine) readKind(w *lineWalk) error {
+	l.typ, l.subtype = "", ""
+	l.payload.reset()
+	return w.members(func(name string, k jsonscan.Kind) error {
+		var err error
+		switch name {
+		case "type":
+			l.typ, _, err = w.wordField(k)
+		case "subtype":
+			l.subtype, _, err = w.wordField(k)
+		case "systemPayload":
+			if err = l.payload.tee(w); err == nil {
+				err = w.scan.Skip()
+			}
+		default:
+			err = w.scan.Skip()
+		}
 		return err
 	})
 }

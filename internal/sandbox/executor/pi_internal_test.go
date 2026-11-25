@@ -445,7 +445,7 @@ func TestAPiNoteIsHeldOnlyByAnAnswerOnItsBranch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := piNotesHeld(t.Context(), bytes.NewReader(tc.record),
-				[]ServedTake{{InboxID: tc.inbox}, {InboxID: "never-served"}})
+				[]ServedTake{{InboxID: tc.inbox}, {InboxID: "never-served"}}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
