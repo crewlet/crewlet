@@ -227,3 +227,34 @@ func TestLatestIsTheLatestEvaluation(t *testing.T) {
 		t.Fatalf("Latest after a clear = %v, want none", got)
 	}
 }
+
+// A SPENT WINDOW RAISES ITS ALARM ONCE: a plan sat out until a reset six days
+// away stays one `llm_limit` through every evaluation of the window, with no
+// hourly clear and raise, and clears once at the reset.
+//
+// Mutation: end the sit-out the alarm reads at an hour (the cap the bench had),
+// and this sees a clear and a second raise.
+func TestASpentWindowRaisesItsAlarmOnce(t *testing.T) {
+	t.Parallel()
+	clock := modelsAt
+	tracker := statelog.NewTracker(nil, func() time.Time { return clock })
+	var logs bytes.Buffer
+	statelog.LogTrackerTo(tracker, slog.New(slog.NewJSONHandler(&logs, nil)))
+	reset := modelsAt.Add(6 * modelDay)
+	sit := &coord.ModelSitOut{Until: reset, ResetsAt: reset, Since: modelsAt, Window: "weekly"}
+	count := func(event string) int { return strings.Count(logs.String(), `"msg":"`+event+`"`) }
+	for _, after := range []time.Duration{0, time.Hour + time.Minute, 2 * time.Hour, 5 * modelDay} {
+		clock = modelsAt.Add(after)
+		tracker.Observe(t.Context(), statelog.Evaluate(statelog.Reading{ModelsAt: clock,
+			Models: []statelog.ModelCondition{{Key: "spent", SittingOut: sit}}}))
+	}
+	if raised, cleared := count("alarm_raised"), count("alarm_cleared"); raised != 1 || cleared != 0 {
+		t.Fatalf("over six days of one window: %d raise(s), %d clear(s); want one raise, no clear", raised, cleared)
+	}
+	clock = reset.Add(time.Second)
+	tracker.Observe(t.Context(), statelog.Evaluate(statelog.Reading{ModelsAt: clock,
+		Models: []statelog.ModelCondition{{Key: "spent", SittingOut: sit}}}))
+	if cleared := count("alarm_cleared"); cleared != 1 {
+		t.Errorf("at the reset: %d clear(s), want one", cleared)
+	}
+}
