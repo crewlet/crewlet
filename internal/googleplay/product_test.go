@@ -396,7 +396,7 @@ func (w *world) answer(t *testing.T, tool string, args map[string]any, allow boo
 	return w.answerOn(t.Context(), t, tool, args, allow, between)
 }
 
-// answerOn is [world.answer] applying the call on ctx.
+// answerOn is [world.answer] making every step of the call on ctx.
 func (w *world) answerOn(ctx context.Context, t *testing.T, tool string, args map[string]any, allow bool,
 	between func()) (any, error) {
 	t.Helper()
@@ -406,9 +406,9 @@ func (w *world) answerOn(ctx context.Context, t *testing.T, tool string, args ma
 		t.Fatalf("no tool %s", tool)
 	}
 	if def.Class == growth.ClassRead {
-		return w.p.Run(t.Context(), call)
+		return w.p.Run(ctx, call)
 	}
-	hold, err := w.p.Prepare(t.Context(), call)
+	hold, err := w.p.Prepare(ctx, call)
 	if err != nil {
 		return nil, err
 	}
@@ -425,7 +425,7 @@ func (w *world) answerOn(ctx context.Context, t *testing.T, tool string, args ma
 		w.held++
 		call.HeldCall, call.Approver = fmt.Sprintf("held-%d", w.held), "founder"
 		if !allow {
-			return nil, w.p.Denied(t.Context(), call)
+			return nil, w.p.Denied(ctx, call)
 		}
 	}
 	return w.p.Apply(ctx, call, hold.Binding)
