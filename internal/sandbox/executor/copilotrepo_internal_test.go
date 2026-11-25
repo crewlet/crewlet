@@ -259,3 +259,65 @@ d.close()`, db) //nolint:gosec // the suite's own script
 		t.Error("the decoder does not name the store's leftover")
 	}
 }
+
+// A NEW SESSION STORES ITS KEPT SETS AS IT STARTS: on sessionStart with source
+// "new" the extension writes the launch sets its attempt kept into the
+// session's directory, so a pack taken while Copilot runs carries them; a
+// resumed session's stored sets stay as they are.
+//
+// Mutation: write on resume, or store nothing until the run ends.
+func TestANewCopilotSessionStoresItsKeptSetsAsItStarts(t *testing.T) {
+	dir := t.TempDir()
+	kept, sessions := filepath.Join(dir, "kept"), filepath.Join(dir, "session-state")
+	if err := os.WriteFile(kept, []byte("alpha\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stored := filepath.Join(sessions, copilotProbeSession, copilotKeptSets)
+	for _, source := range []string{"resume", "new"} {
+		p := startCopilotProbe(t, copilotExtensionSettings{Helper: "/no/helper", Nested: "/no/nested.json",
+			Kept: kept, Sessions: sessions})
+		p.expect("joined")
+		p.expectArmed()
+		p.hook("onSessionStart", map[string]any{"source": source})
+		p.expect("hooked")
+		got, err := os.ReadFile(stored) //nolint:gosec // the case's own file
+		switch {
+		case source == "resume" && !errors.Is(err, os.ErrNotExist):
+			t.Fatalf("a resumed session's sets were written (%q, %v), want the stored ones left alone", got, err)
+		case source == "new" && string(got) != "alpha\n":
+			t.Fatalf("a new session stored %q (%v), want its attempt's kept sets", got, err)
+		}
+		p.end()
+	}
+}
+
+// A COPILOT PACK TAKEN WHILE THE RUN WORKS HOLDS ITS KEPT SETS: a save beside
+// a working harness ([Copilot.PackSave]) packs the session's crewlet-checkouts
+// with its events.jsonl, so the session continued from it launches with them.
+//
+// Mutation: leave the kept sets out of the pack.
+func TestACopilotPackTakenMidRunHoldsItsKeptSets(t *testing.T) {
+	t.Parallel()
+	p := Paths{Home: t.TempDir()}
+	dir := p.CopilotSessionDir("s-1")
+	for name, body := range map[string]string{"events.jsonl": `{"type":"session.start","data":{}}` + "\n",
+		copilotKeptSets: "alpha\n"} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staged, dest := p.SessionPackStaging("save"), p.SessionPackHeld("save")
+	script, err := (Copilot{}).PackSave(p, sessionRecord{id: "s-1"}, staged, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, errText, code := codexShell(t, p.Home, script); code != 0 {
+		t.Fatalf("the save exited %d: %s", code, errText)
+	}
+	if got := codexMembers(t, codexFile(t, dest))[copilotSessionState+"/s-1/"+copilotKeptSets]; got != "alpha\n" {
+		t.Errorf("the save holds the kept sets %q, want them beside the journal", got)
+	}
+}

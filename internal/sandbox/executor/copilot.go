@@ -742,6 +742,8 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 			State: paths.CopilotNotesState(), Run: uuid.NewString(), Attempt: paths.CopilotAttempt()}
 		if handing {
 			settings.Helper, settings.Nested = paths.CopilotNoteHelper(), paths.CopilotRepo()+"/nested.json"
+			settings.Kept = paths.CopilotRepo() + "/kept"
+			settings.Sessions = paths.CopilotHome() + "/" + copilotSessionState
 		}
 		if err := writeCopilotExtension(ctx, box, paths.CopilotExtension()+"/extension.mjs", req.Steer,
 			settings); err != nil {

@@ -78,17 +78,20 @@ func CopilotClientTurnID(inbox string) string { return copilotTurnPrefix + inbox
 // bridge's servers it guards the names of ([crewletServers]), none for none;
 // the note helper and its nested config, which hand a checkout cloned during
 // the run its skills ([copilotCheckoutHome]), "" for a box without the helper;
-// and the file the script names each launch attempt in, which keys the state
-// per attempt ([Paths.CopilotAttempt]).
+// the file the script names each launch attempt in, which keys the state per
+// attempt ([Paths.CopilotAttempt]); and the attempt's kept launch sets and the
+// session-state directory its new session stores them in ([copilotKeptSets]).
 type copilotExtensionSettings struct {
-	URL     string   `json:"url"`
-	Cap     int      `json:"cap"`
-	State   string   `json:"state"`
-	Run     string   `json:"run"`
-	Bridges []string `json:"bridges,omitempty"`
-	Helper  string   `json:"helper"`
-	Nested  string   `json:"nested"`
-	Attempt string   `json:"attempt"`
+	URL      string   `json:"url"`
+	Cap      int      `json:"cap"`
+	State    string   `json:"state"`
+	Run      string   `json:"run"`
+	Bridges  []string `json:"bridges,omitempty"`
+	Helper   string   `json:"helper"`
+	Nested   string   `json:"nested"`
+	Attempt  string   `json:"attempt"`
+	Kept     string   `json:"kept"`
+	Sessions string   `json:"sessions"`
 }
 
 // copilotUnbridgedMessage opens the error copilot_steer.js logs as it stops a

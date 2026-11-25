@@ -364,9 +364,10 @@ func copilotRefusal(data copilotData) string {
 		return fmt.Sprintf("Copilot refused a launch attempt, and its session %s was not removed from Copilot's "+
 			"session store, so the run is not started again onto it: %s", data.Session, data.Message)
 	case "node":
-		return fmt.Sprintf("the run's checkouts may make Copilot refuse its launch, after which the run checks "+
-			"Copilot's session store with the box's node, which must load node:sqlite without a flag (Node 22.13, "+
-			"23.4 or later), and this box's node is %s: install one in the box image", data.Node)
+		return fmt.Sprintf("Copilot refused the launch for its static budget, and before starting it again with "+
+			"fewer repositories' instructions the run checks Copilot's session store with the box's node, which must "+
+			"load node:sqlite without a flag (Node 22.13, 23.4 or later); this box's node is %s: install one in the "+
+			"box image", data.Node)
 	}
 	return "the run's launch was refused: " + firstNonBlank(data.Message, data.Reason, "for a reason it did not name")
 }

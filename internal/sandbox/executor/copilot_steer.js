@@ -79,7 +79,7 @@
 // and sent notes count nothing, and a note it sent is sent again.
 
 import { execFileSync } from "node:child_process"
-import { readFileSync, renameSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { joinSession } from "@microsoft/copilot-sdk/extension"
 
 // config is the run's: {url, cap, state, run}, written over the placeholder by
@@ -137,6 +137,10 @@ const nestedFailedMessage =
 // request, past its static budget (measured on 1.0.114).
 const blockedWarning = "compaction_static_context_blocked"
 
+// keptFailedMessage opens the log line written where the launch sets an
+// attempt kept could not be stored in its session: a resume then hands none.
+const keptFailedMessage = "crewlet: the session could not keep the repositories it was started with: "
+
 // removeFailedMessage opens the log line written where a refused attempt
 // could not be deleted; the script finds it left and fails the run.
 const removeFailedMessage = "crewlet: the refused launch's session could not be removed: "
@@ -155,7 +159,7 @@ if (config !== null && typeof config === "object") {
   await arm(config)
 }
 
-async function arm({ url, cap, bridges, state, run, helper, nested, attempt }) {
+async function arm({ url, cap, bridges, state, run, helper, nested, attempt, kept: keptFile, sessions }) {
   // kept is what an earlier process of this launch left (A RESTART RESUMES THE
   // RUN, above): the requests counted, the cursor, and the inbox ids sent; or
   // broken, a file this process cannot read, which sends no note. The launch
@@ -336,15 +340,39 @@ async function arm({ url, cap, bridges, state, run, helper, nested, attempt }) {
   let answered = false
   let removing = false
 
+  // storeKept writes the launch sets this attempt kept into its new session's
+  // directory as the session starts, so a pack taken while it runs carries
+  // them and a resume launches with exactly them (copilotrepo.go,
+  // copilotKeptSets); a refused attempt's goes with its session.
+  const storeKept = () => {
+    const id = process.env.SESSION_ID
+    if (typeof keptFile !== "string" || keptFile === "" || typeof sessions !== "string" || sessions === "") return
+    try {
+      if (typeof id !== "string" || id === "" || id.includes("/")) throw new Error("Copilot named no session")
+      let names = ""
+      try {
+        names = readFileSync(keptFile, "utf8")
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error
+      }
+      const dir = sessions + "/" + id
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(dir + "/crewlet-checkouts.tmp", names)
+      renameSync(dir + "/crewlet-checkouts.tmp", dir + "/crewlet-checkouts")
+    } catch (error) {
+      quietly(session.log(keptFailedMessage + String(error?.message ?? error).split("\n")[0], { level: "warning" }))
+    }
+  }
+
   // removeRefused deletes this attempt's own session, Copilot's process being
   // the one it is joined to: the extension SDK offers no delete, so a second
   // client on the internal parent-process connection asks Copilot's own
-  // sessions.bulkDelete for exactly its id (measured on 1.0.114: the session's
-  // directory and its store rows gone, the launch exiting in about 4.4 s as
-  // without it; 1.0.115 holds it 60 s more, a release this runner does not
-  // run). It stops nothing else; the script checks it is gone before the next
-  // attempt (copilot_storecheck.mjs). executor's package doc, "Copilot's
-  // internal client", has why and what breaks without it.
+  // sessions.bulkDelete for exactly its id (measured: the session's directory
+  // and its store rows gone; the refused launch exits in about 4.4 s on the
+  // pinned 1.0.114, as without it, and in about 65 s on 1.0.115, which waits
+  // 60 s after the delete). It stops nothing else; the script checks it is gone
+  // before the next attempt (copilot_storecheck.mjs). executor's package doc,
+  // "Copilot's internal client", has why and what breaks without it.
   const removeRefused = async () => {
     if (removing) return
     removing = true
@@ -386,6 +414,7 @@ async function arm({ url, cap, bridges, state, run, helper, nested, attempt }) {
     hooks: {
       onSessionStart: async (input) => {
         source = input?.source ?? null
+        if (source === "new" && handing) storeKept()
       },
       onPreToolUse: async (input) => {
         if (typeof input?.agentId !== "string" || !taken.has(input.agentId)) return

@@ -169,14 +169,14 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsACopilotRun(t *testing.T) {
 	})
 }
 
-// copilotBudgetStandIn is the `copilot` the budget rows run: Copilot 1.0.114's
-// static budget as a byte bound ($HOME/limit) on the home's
-// copilot-instructions.md. Past it the launch is refused as 1.0.114 refuses it,
-// before any request (section 13's stream, exit 1), its session written and,
-// for a new one, deleted as the run's extension deletes it (row R19w) unless
-// $HOME/leave says the delete failed. Within it the run answers, or with
-// $HOME/late is stopped after its first answer (row R15h). Each attempt's
-// home file, brief, instruction directories and attempt number are recorded.
+// copilotBudgetStandIn is the `copilot` the budget rows run, its extension's
+// part played by the script (copilot_steer.js): Copilot 1.0.114's static
+// budget as a byte bound ($HOME/limit) on the home's copilot-instructions.md.
+// A new session stores its attempt's kept sets. Past the bound the launch is
+// refused before any request (section 13's stream, exit 1) and a new session
+// deleted (row R19w) unless $HOME/leave says the delete failed. Within it the
+// run answers, or with $HOME/late is stopped after its first answer (row
+// R15h). Each attempt's home file, brief, directories and number are recorded.
 const copilotBudgetStandIn = `#!/bin/sh
 case "$1" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; config|mcp) exit 0;; esac
 id=; prev=; for a in "$@"; do [ "$prev" = --session-id ] && id=$a; prev=$a; done
@@ -189,6 +189,7 @@ printf '%s|%s\n' "${COPILOT_CUSTOM_INSTRUCTIONS_DIRS-unset}" "$(cat "$HOME/.crew
 size=$(wc -c < "$COPILOT_HOME/copilot-instructions.md" 2> /dev/null) || size=0
 src=new; [ ! -f "$d/events.jsonl" ] || src=resume
 mkdir -p "$d"; printf '{"type":"user.message","data":{"content":"brief"}}\n' >> "$d/events.jsonl"
+[ "$src" = resume ] || { kf="$HOME/.crewlet/copilot-repo/kept"; if [ -f "$kf" ]; then cp "$kf" "$d/crewlet-checkouts"; else : > "$d/crewlet-checkouts"; fi; }
 if [ "$size" -gt "$(cat "$HOME/limit")" ]; then
   [ "$src" = resume ] || [ -e "$HOME/leave" ] || rm -rf "$d"
   printf '%s\n' '{"type":"session.warning","data":{"warningType":"compaction_static_context_blocked","message":"Static system messages and tool definitions exceed the budget."}}' \
@@ -308,9 +309,10 @@ func TestACopilotLaunchPastItsBudgetDropsItsLastCheckoutsSet(t *testing.T) {
 // A REFUSED ATTEMPT THAT LEFT ANYTHING IS NEVER LAUNCHED ONTO: where the
 // refused session's directory is still there the run fails, typed, naming it,
 // with no second attempt (g); a box whose node cannot load node:sqlite, which
-// the check needs, refuses the run before any attempt, naming its node (h).
+// the check needs, fails a run whose relaunch is due, naming its node, and
+// runs one whose launch fits (h).
 //
-// Mutation: relaunch without the check, or start without the node's.
+// Mutation: relaunch without the check, skip the node's, or ask it up front.
 func TestACopilotRunIsNeverLaunchedOntoALeftover(t *testing.T) {
 	t.Parallel()
 	t.Run("the session left", func(t *testing.T) {
@@ -324,17 +326,29 @@ func TestACopilotRunIsNeverLaunchedOntoALeftover(t *testing.T) {
 			t.Fatalf("the run made %q and ended %q, want one attempt and a failure naming %s", attempts, res.Error, id)
 		}
 	})
-	t.Run("a node without node:sqlite", func(t *testing.T) {
-		t.Parallel()
-		runner, box := copilotBudgetBox(t, 3000, "alpha", "beta")
-		writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/node",
-			"#!/bin/sh\ncase \"$1\" in --version) echo v20.10.0;; *) exit 1;; esac\n")
-		_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"})
-		if seen := boxFile(t, box, box.Home()+"/seen/attempts"); seen != "" || res.Success ||
-			!strings.Contains(res.Error, "this box's node is v20.10.0") {
-			t.Fatalf("the run made %q and ended %q, want no attempt and a refusal naming v20.10.0", seen, res.Error)
-		}
-	})
+	// THE NODE IS ASKED ONLY ONCE A RELAUNCH IS DUE: a launch that fits runs on
+	// a box whose node cannot load node:sqlite (or has no node at all).
+	for name, limit := range map[string]int{"a node without node:sqlite, refused": 3000,
+		"a node without node:sqlite, fitting": 1 << 20} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := copilotBudgetBox(t, limit, "alpha", "beta")
+			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/node",
+				"#!/bin/sh\ncase \"$1\" in --version) echo v20.10.0;; *) exit 1;; esac\n")
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"})
+			attempts := copilotAttemptsSeen(t, box)
+			if limit > 3000 {
+				if !res.Success || len(attempts) != 1 {
+					t.Fatalf("a launch that fits made %q and ended %q, want it run", attempts, res.Error)
+				}
+				return
+			}
+			if len(attempts) != 1 || res.Success || !strings.Contains(res.Error, "this box's node is v20.10.0") {
+				t.Fatalf("the run made %q and ended %q, want one refused attempt and a refusal naming v20.10.0",
+					attempts, res.Error)
+			}
+		})
+	}
 }
 
 // A RESUME LAUNCHES WITH THE SETS ITS SESSION STORED, NEVER SEARCHING: a run
