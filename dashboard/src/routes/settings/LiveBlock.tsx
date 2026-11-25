@@ -117,12 +117,5 @@ export function LiveBlock({
       </Callout>
     );
   }
-  return (
-    <CodeBlock
-      code={drawn.view.text}
-      language={drawn.view.language}
-      wrap={false}
-      maxHeight="24rem"
-    />
-  );
+  return <CodeBlock code={drawn.view.text} language={drawn.view.language} wrap={false} />;
 }
