@@ -92,12 +92,12 @@ var (
 	sizedEntry = regexp.MustCompile(`"text":"((?:[^"\\]|\\.)*)","bytes":([0-9]+)`)
 )
 
-// A DATA URL IS TOLD BY ITS HEAD: an image's media type, printable ASCII
-// parameters and `;base64` before the comma that opens its data; a string
-// that could still be one is undecided, one that cannot be is none, and one
-// whose head runs past [dataURLHeadMax] is none.
+// A DATA URL IS TOLD BY ITS HEAD, OF ANY MEDIA: a media type holding a slash,
+// printable ASCII parameters and `;base64` before the comma that opens its
+// data; a string that could still be one is undecided, one that cannot be is
+// none, and one whose head runs past [dataURLHeadMax] is none.
 //
-// Mutation: take a data URL of any media type, or one with no `;base64`, and a
+// Mutation: take a data URL of no media type, or one with no `;base64`, and a
 // row fails.
 func TestADataURLIsToldByItsHead(t *testing.T) {
 	t.Parallel()
@@ -105,10 +105,12 @@ func TestADataURLIsToldByItsHead(t *testing.T) {
 		head string
 		want headVerdict
 	}{
-		{"", headUndecided}, {"data:im", headUndecided}, {"data:image/png", headUndecided},
-		{"data:image/png;base64,", headImage}, {"data:image/png;base64,AAAA", headImage},
-		{"data:image/svg+xml;charset=utf-8;base64,PHN2", headImage},
-		{"data:image/png,AAAA", headNot}, {"data:text/plain;base64,AAAA", headNot},
+		{"", headUndecided}, {"dat", headUndecided}, {"data:im", headUndecided}, {"data:image/png", headUndecided},
+		{"data:image/png;base64,", headMedia}, {"data:image/png;base64,AAAA", headMedia},
+		{"data:image/svg+xml;charset=utf-8;base64,PHN2", headMedia},
+		{"data:application/pdf;base64,JVBE", headMedia}, {"data:text/plain;base64,AAAA", headMedia},
+		{"data:image/png,AAAA", headNot}, {"data:;base64,AAAA", headNot}, {"data:png;base64,AAAA", headNot},
+		{"data:/png;base64,AAAA", headNot},
 		{"data:image/png;base64x,", headNot}, {"Data:image/png;base64,", headNot},
 		{"data:image/p ng;base64,", headNot}, {`data:image/png\;base64,`, headNot},
 		{"look at data:image/png;base64,", headNot},
