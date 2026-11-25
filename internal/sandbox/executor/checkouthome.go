@@ -198,6 +198,14 @@ func (h checkoutHome) removeCopies() string {
 		`esac; done < %[1]s; fi && rm -f %[1]s; }`, q(h.copied), q(h.skills))
 }
 
+// dropSkipped is the shell removing a skip log no script printed
+// ([checkoutHome.saySkipped]), a killed run's: run by the clear before every
+// run, so the next run's script, ended before its gate remakes the state,
+// prints no line of another run's as its own.
+func (h checkoutHome) dropSkipped() string {
+	return "rm -f " + shellword.Quote(h.state+"/skipped")
+}
+
 // saySkipped is the shell printing what the run's nested hook left out
 // (internal/notehelper's skippedLog) to the run's error stream once the
 // harness has stopped, and removing it, so a second run of it, or of the
