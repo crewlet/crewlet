@@ -110,8 +110,12 @@ type checkoutTree struct {
 // checkoutForm is a harness whose tree walk the helper knows (its treeForm).
 type checkoutForm string
 
-// checkoutFormClaude is Claude Code's walk of .claude/rules.
-const checkoutFormClaude checkoutForm = "claude"
+// checkoutFormClaude is Claude Code's walk of .claude/rules, and
+// checkoutFormCopilot Copilot 1.0.114's.
+const (
+	checkoutFormClaude  checkoutForm = "claude"
+	checkoutFormCopilot checkoutForm = "copilot"
+)
 
 // checkoutScope is the frontmatter keys that scope a file to paths, the first
 // present deciding, and the patterns that match every path.
