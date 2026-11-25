@@ -60,7 +60,8 @@
 // `objective_burn` alarm.
 //
 // PER NODE, like every alarm this engine raises: each node judges what it
-// measured. A self-hosted install gets the same constants as reference
+// measured, a node without `data` on its own table of the alarms it measures
+// of itself (internal/engine's localalarms.go). A self-hosted install gets the same constants as reference
 // objectives, with the counter an exporter aggregates across the fleet.
 //
 // # The browser-reported ready time
