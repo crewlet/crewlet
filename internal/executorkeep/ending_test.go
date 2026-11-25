@@ -239,3 +239,29 @@ func TestAnExcerptIsTheWholeRedactedThenCut(t *testing.T) {
 			got[max(0, len(got)-80):])
 	}
 }
+
+// A LATER PLACE IS A LATER LAUNCH'S, OR A LATER CAPTURE OF THE SAME LAUNCH,
+// and a place is never after itself: what tells a summary found by a later box
+// read from one the capture it is compared with already holds ([Summary.Place]).
+//
+// Mutation: compare the capture before the launch, or take an equal place as
+// later, and a case goes red.
+func TestALaterPlaceIsALaterLaunchsOrALaterCaptureOfIt(t *testing.T) {
+	t.Parallel()
+	at := func(launch, capture int64) CapturePlace { return CapturePlace{LaunchSeq: launch, CaptureSeq: capture} }
+	for name, c := range map[string]struct {
+		p, o  CapturePlace
+		after bool
+	}{
+		"a later launch, an earlier capture": {p: at(3, 1), o: at(2, 9), after: true},
+		"a later capture of the launch":      {p: at(2, 4), o: at(2, 3), after: true},
+		"the same place":                     {p: at(2, 3), o: at(2, 3)},
+		"an earlier capture of the launch":   {p: at(2, 3), o: at(2, 4)},
+		"an earlier launch, a later capture": {p: at(1, 9), o: at(2, 1)},
+	} {
+		if got := c.p.After(c.o); got != c.after {
+			t.Errorf("%s: (%d, %d) after (%d, %d) is %v, want %v", name, c.p.LaunchSeq, c.p.CaptureSeq,
+				c.o.LaunchSeq, c.o.CaptureSeq, got, c.after)
+		}
+	}
+}

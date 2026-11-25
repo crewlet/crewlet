@@ -426,3 +426,56 @@ func TestASummaryStampCarriesTheKeysALaterBuildAdds(t *testing.T) {
 		t.Fatalf("the stamp wrote back %s, want the later build's key kept", back)
 	}
 }
+
+// A SUMMARY IS PLACED AT THE CAPTURE WHOSE STAMP FIRST NAMED IT: a take's
+// summary is named on the row at its capture's place, a newer one at a later
+// place replaces it, the same one found again (copied under a fresh key) keeps
+// the place it was first found at, and one named at an earlier place than the
+// row's is not named however late it was kept. The place is what tells a
+// summary newer than a capture it is compared with (executorkeep.Summary.Place).
+//
+// Mutation: name the summary at its launch alone, place the one found again at
+// its new capture, or compare by the instant before the place, and a case goes
+// red.
+func TestASummaryIsPlacedAtTheCaptureThatFirstNamedIt(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 25, 9, 0, 0, 0, time.UTC)
+	stamp := func(text string, kept time.Time) *SummaryStamp {
+		return &SummaryStamp{LaunchSeq: 2, Object: objstore.KeyAt(kept).String(),
+			ObjectHash: string(objstore.HashOf([]byte(text))), ObjectSize: 512, ContentKey: "k1", At: kept,
+			Bytes: 400, Kept: 400, Harness: "claude-code", Session: "s-1", Digest: summaryDigest(text)}
+	}
+	capture := func(launch, seq int64, s *SummaryStamp) SessionCapture {
+		return SessionCapture{LaunchSeq: launch, CaptureSeq: seq, Summary: s}
+	}
+	place := func(launch, seq int64) executorkeep.CapturePlace {
+		return executorkeep.CapturePlace{LaunchSeq: launch, CaptureSeq: seq}
+	}
+	var run PendingRun
+	for _, step := range []struct {
+		name    string
+		capture SessionCapture
+		named   bool
+		digest  string
+		place   executorkeep.CapturePlace
+	}{
+		{name: "a take's summary", capture: capture(2, 3, stamp("a", at)), named: true,
+			digest: summaryDigest("a"), place: place(2, 3)},
+		{name: "a newer one at a later capture", capture: capture(2, 4, stamp("b", at.Add(time.Minute))),
+			named: true, digest: summaryDigest("b"), place: place(2, 4)},
+		{name: "the same one found again", capture: capture(3, 1, stamp("b", at.Add(time.Hour))), named: true,
+			digest: summaryDigest("b"), place: place(2, 4)},
+		{name: "one named at an earlier capture", capture: capture(2, 2, stamp("c", at.Add(2*time.Hour))),
+			digest: summaryDigest("b"), place: place(2, 4)},
+	} {
+		named := nameSummary(&run, step.capture)
+		if named != step.named || run.Summary == nil || run.Summary.Digest != step.digest ||
+			run.Summary.place() != step.place {
+			t.Fatalf("%s: named %v, the row names %+v; want named %v, the summary %s at %+v", step.name, named,
+				run.Summary, step.named, step.digest, step.place)
+		}
+		if got, err := run.Summary.Named(); err != nil || got.Place != step.place {
+			t.Fatalf("%s: the end names it at %+v (%v), want %+v", step.name, got.Place, err, step.place)
+		}
+	}
+}
