@@ -18,11 +18,11 @@ import (
 // first line, Copilot all but the turns the summary replaced, Muse Code
 // nothing, Gemini CLI and Qwen Code their first line, Hermes every row but the
 // messages the compaction replaced, its settled admissions' results slimmed,
-// OpenCode its `info` and kept turns), never past a run's start it records
-// ([trimStartVar]); or its session's files but those no resume reads (Grok
-// Build, [grokTrimTar]). It cuts the pack's copy, never the live session, and
-// costs no model call. Only a measured release is trimmed ([trimmer]); a pack
-// still past the bound once trimmed is refused as one never trimmed is.
+// OpenCode its `info` and kept turns, Pi its kept turns, settings and system
+// messages, re-linked), never past a run's start it records ([trimStartVar]);
+// or its files but those no resume reads (Grok Build, [grokTrimTar]). It cuts
+// the pack's copy and costs no model call. Only a measured release is trimmed
+// ([trimmer]); a pack still past the bound once trimmed is refused.
 
 // NO TRIM, BY HARNESS: Claude Code's own trim rewrites its transcript, and its
 // subagent threads stay whole, since 2.1.310 continues one spawned before the

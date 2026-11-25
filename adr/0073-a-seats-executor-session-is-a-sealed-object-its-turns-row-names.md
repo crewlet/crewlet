@@ -1074,6 +1074,10 @@
   - `internal/sandbox/executor.TestACopilotPackWithNothingToTrimAtIsPackedWhole`
   - `internal/sandbox/executor.TestOnlyTheMeasuredCopilotReleaseIsTrimmed`
   - `internal/sandbox/executor.TestEveryCopilotPackTrimsAtTheTakesBounds`
+  - `internal/sandbox/executor.TestATrimmedPiPackKeepsWhatItsResumeLoads`
+  - `internal/sandbox/executor.TestAPiPackWithNothingToTrimAtIsPackedWhole`
+  - `internal/sandbox/executor.TestOnlyTheMeasuredPiReleaseIsTrimmed`
+  - `internal/sandbox/executor.TestEveryPiPackTrimsAtTheTakesBounds`
   - `internal/sandbox/executor.TestATrimmedGrokPackLeavesOutOnlyWhatNoResumeReads`
   - `internal/sandbox/executor.TestAGrokPackBelowThePointsOrOnAnotherReleaseIsWhole`
   - `internal/sandbox/executor.TestEveryGrokPackTrimsAtTheTakesBounds`
@@ -6622,6 +6626,13 @@ cuts no line: it leaves out each session's `compaction_requests/` and
 and keeps `updates.jsonl`, which both read, and the segments the summary points
 the model at (measured: every request of the next three launches the same, byte
 for byte).
+Pi 1.6.0 keeps its header, everything from its newest compaction's first kept
+entry on and, before it, its model, thinking level and system-message lines and
+a router model's state, each re-linked onto the one kept before it: its resume
+walks the session back by `parentId`, rebuilds its tools from every system
+message on that walk and reads its thinking level off it (measured: the cut
+sent the request the whole did, byte for byte, where one without those lines
+declared no tools or another reasoning effort).
 
 **Said, never a loss.** The pack leaves its word beside the archive (the
 archive's bytes, the bytes it trimmed before and kept, and for a chat file the

@@ -3,6 +3,7 @@ package executor
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -27,8 +28,10 @@ var copilotTrimmedKinds = []string{"assistant.message", "assistant.turn_start", 
 // counts), the second keeps every line from it on and every line before it
 // but those of [copilotTrimmedKinds]. It fails where there is no such
 // compaction or nothing to leave out. Each line is matched by how 1.0.114
-// starts it, so no payload naming a kind matches.
-var copilotTrimAwk = `BEGIN { n = split("` + strings.Join(copilotTrimmedKinds, " ") + `", k, " ")
+// starts it, so no payload naming a kind matches. Built at first use: what a
+// package builds at init, every push's hook pays for (cmd/crewlet's bound).
+var copilotTrimAwk = sync.OnceValue(func() string {
+	return `BEGIN { n = split("` + strings.Join(copilotTrimmedKinds, " ") + `", k, " ")
   for (i = 1; i <= n; i++) d["{\"type\":\"" k[i] "\""] = 1
   ps = "{\"type\":\"session.compaction_start\",\"data\":{\"compactionAttemptId\":\""
   pc = "{\"type\":\"session.compaction_complete\",\"data\":{\"success\":true,\"outcome\":\"applied\",\"compactionAttemptId\":\"" }
@@ -38,6 +41,7 @@ NR == FNR { if (index($0, ps) == 1) { id = substr($0, length(ps) + 1); sub(/".*/
 b > 1 && FNR < b && (substr($0, 1, index($0, ",") - 1) in d) { cut++; next }
 { print }
 END { exit !(b > 1 && cut > 0) }`
+})
 
 // trimRecord cuts a journal to what 1.0.114's resume loads ([copilotTrimAwk]):
 // a resume of the cut journal sent the request a resume of the whole one did,
@@ -46,5 +50,5 @@ END { exit !(b > 1 && cut > 0) }`
 // and was not measured ([copilotLastRotated]).
 func (Copilot) trimRecord(src, dst string) string {
 	return fmt.Sprintf(`head -n 1 %[1]s | grep -q '^{"type":"session[.]start","data":{' && awk %[3]s %[1]s %[1]s > %[2]s`,
-		src, dst, shellword.Quote(copilotTrimAwk))
+		src, dst, shellword.Quote(copilotTrimAwk()))
 }
