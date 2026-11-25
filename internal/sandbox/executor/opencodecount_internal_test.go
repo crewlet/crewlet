@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -360,6 +359,9 @@ func TestTheOpenCodeSetIsTheReleasesProbed(t *testing.T) {
 // their spans within 4 MiB of allocation, the scanner's buffer and its capture
 // bound among it, never held.
 //
+// Not parallel: it reads the process's allocation count, the fewest bytes of
+// three reads ([allocationsOf]).
+//
 // Mutation: capture a message's values at a bound past the error's size, and
 // this goes red.
 func TestTheOpenCodeCountHoldsNoStringOfAnExport(t *testing.T) {
@@ -368,18 +370,20 @@ func TestTheOpenCodeCountHoldsNoStringOfAnExport(t *testing.T) {
 	failed := `{"id":"msg_f","time":{"created":5,"completed":6},"type":"assistant","model":{"providerID":"stub"},` +
 		`"content":[],"error":{"type":"aborted","message":"` + big + `"}}`
 	doc := ocDoc(t, ocReply("msg_a", `"stub"`, `[`+ocTool(answer)+`]`, 1000, 0, 0, 30, 0), failed)
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	read, err := meterExport(t.Context(), bytes.NewReader(doc), "2.3.2", nil)
-	runtime.ReadMemStats(&after)
+	var (
+		read exportReading
+		err  error
+	)
+	_, allocated := allocationsOf(func() {
+		read, err = meterExport(t.Context(), bytes.NewReader(doc), "2.3.2", nil)
+	})
 	if err != nil {
 		t.Fatalf("the export does not read: %v", err)
 	}
 	if _, ok := read.count.Bound(); !ok {
 		t.Fatalf("the count is %+v, want a bound", read.count)
 	}
-	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 4<<20 {
+	if allocated > 4<<20 {
 		t.Errorf("counting the export allocated %d bytes, 24 MiB strings among them", allocated)
 	}
 }
