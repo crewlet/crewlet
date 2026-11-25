@@ -3772,9 +3772,7 @@ less its 8 MiB base, beside the most a meter holds past its own base (a Gemini
 CLI count of 65,536 ids, 21 MiB; a Claude Code meter's line, 10 MiB), 145 MiB,
 since one read holds the slot at a time. A Gemini CLI count keeping more than
 2,048 ids, a take's meter or a collection's, holds the slot to its read's end,
-as does a collection's reading of the newest summary keeping more than 2,048
-records: at most 25 MiB for a take's meter, which reads no summary, and 46 MiB
-for a collection's count and summary together. The wait is spent inside the read's own: a collection whose read runs
+at most 25 MiB. The wait is spent inside the read's own: a collection whose read runs
 past its 27 seconds counts the session unread and decides none of its hooks'
 notes, and a take past its budget is refused, its session not kept, the safe
 side each time; `executor_large_read_waited` says the slot was contended.
