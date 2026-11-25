@@ -141,17 +141,17 @@ func piInstructionFiles(files map[string]string) map[string]string {
 	return out
 }
 
-// WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A PI RUN: of a checkout at
-// ./repo holding every file pi 1.6.0 reads where it starts, and more, the first
-// of its five instruction names is handed under its root in the agent
-// directory's file pi loads (the home's own override or only CLAUDE.md, the
-// section after its text, else one the run makes), the home's own again after;
-// the skills a walk of .pi/skills and .agents/skills reaches come as
-// `repo:<skill>` in a `--skill` directory of the run's own; nothing else of it
-// reaches what pi starts on. A clone during the run is handed at the next tool
-// result in pi's own wrapping, its skill copied and listed, once; no copy
-// outlives the run. Mutation: drop the gate, the `--skill` or the extension's hand, read another
-// name first, walk a skill directory flat, or hand twice: a check goes red.
+// WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A PI RUN: of ./repo, which
+// holds every file pi 1.6.0 reads where it starts and more, the first of its
+// five instruction names is handed under its root in the agent directory's
+// file pi loads (the home's own, the section after its text, else one the run
+// makes), the home's own again after; its skills a walk of .pi/skills and
+// .agents/skills reaches come as `repo:<skill>` in a `--skill` directory of
+// the run's own; nothing else of it reaches pi. A clone during the run is
+// handed at the next tool result in pi's wrapping, once; no copy outlives it.
+//
+// Mutation: drop the gate, the `--skill`, the extension's hand or restore's
+// removeCopies, read another name first, walk flat, or hand twice: red.
 func TestWhatACheckoutBelowTheStartDirectoryBringsAPiRun(t *testing.T) {
 	t.Parallel()
 	repo := piCheckout("workspace/repo", map[string]string{
