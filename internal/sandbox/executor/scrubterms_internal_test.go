@@ -9,7 +9,6 @@ import (
 	"io"
 	"math/rand/v2"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 	"unsafe"
@@ -157,26 +156,26 @@ var _ = holdsScrubTerm("rewrites", "TestAJSONRewriteHoldsItsScannerItsBufferAndA
 // nested to jsonscan.MaxDepth, the scanner's allocations as it reads it, the
 // buffer a text's pieces are read into and the frames of the containers open.
 // The "rewrites" term counts that for each of a reading's two rewrites. Not
-// in parallel: the scanner is read off the bytes the process allocates.
+// in parallel: the scanner is read off the bytes the process allocates, the
+// fewest of three reads ([allocationsOf]).
 //
 // Mutation: count the term without its frames, and the rewrite holds past it.
 func TestAJSONRewriteHoldsItsScannerItsBufferAndAFrameADepth(t *testing.T) {
 	figure := termFigure(t, "rewrites", 0, 0) / 2
 	depth := jsonscan.MaxDepth/2 - 1
 	doc := strings.Repeat(`{"a":[`, depth) + `1` + strings.Repeat(`]}`, depth)
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	sc := jsonscan.New(strings.NewReader(doc))
-	for {
-		if _, err := sc.Next(); err != nil {
-			if !errors.Is(err, io.EOF) {
-				t.Fatal(err)
+	_, scanned := allocationsOf(func() {
+		sc := jsonscan.New(strings.NewReader(doc))
+		for {
+			if _, err := sc.Next(); err != nil {
+				if !errors.Is(err, io.EOF) {
+					t.Fatal(err)
+				}
+				break
 			}
-			break
 		}
-	}
-	runtime.ReadMemStats(&after)
-	scanner := int64(after.TotalAlloc - before.TotalAlloc)
+	})
+	scanner := int64(scanned)
 	j := newJSONRewrite(newScrubber([]string{longValue}))
 	var out rewriteOut
 	out.reset(bufio.NewWriter(io.Discard), false)
@@ -197,41 +196,40 @@ var _ = holdsScrubTerm("archive", "TestAnArchivesReadersAndWritersHoldItsTerm")
 // member as the first reading reads the box's, and one written through the
 // kept archive's compressor, allocate together no more than the "archive"
 // term, so they hold no more. Not in parallel: it is read off the bytes the
-// process allocates.
+// process allocates, the fewest of three rounds ([allocationsOf]).
 //
 // Mutation: count the term at half, and the compressor alone passes it.
 func TestAnArchivesReadersAndWritersHoldItsTerm(t *testing.T) {
 	figure := termFigure(t, "archive", 0, 0)
 	body := []byte(randomBase64(1173, 4<<20))
 	archive := tarOf(t, map[string]string{"projects/p/s.jsonl": string(body)})
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	if err := eachMember(bytes.NewReader(archive), testBounds, func(_ *tar.Header, r io.Reader) error {
-		_, err := io.Copy(io.Discard, r)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	zw, err := newKeptGzip(io.Discard)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tw := tar.NewWriter(zw)
-	if err = tw.WriteHeader(&tar.Header{Name: "s.jsonl", Mode: 0o600, Size: int64(len(body)),
-		Typeflag: tar.TypeReg}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = tw.Write(body); err != nil {
-		t.Fatal(err)
-	}
-	if err = tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err = zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	runtime.ReadMemStats(&after)
-	if held := int64(after.TotalAlloc - before.TotalAlloc); held > figure {
+	_, allocated := allocationsOf(func() {
+		if err := eachMember(bytes.NewReader(archive), testBounds, func(_ *tar.Header, r io.Reader) error {
+			_, err := io.Copy(io.Discard, r)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		zw, err := newKeptGzip(io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tw := tar.NewWriter(zw)
+		if err = tw.WriteHeader(&tar.Header{Name: "s.jsonl", Mode: 0o600, Size: int64(len(body)),
+			Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tw.Write(body); err != nil {
+			t.Fatal(err)
+		}
+		if err = tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err = zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if held := int64(allocated); held > figure {
 		t.Errorf("an archive's readers and writers allocated %d bytes, past the %d its term counts", held, figure)
 	}
 }
