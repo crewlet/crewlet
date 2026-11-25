@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/browser/boxhelper"
 	"github.com/crewlet/crewlet/internal/browser/hostreach"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
@@ -141,8 +142,8 @@ func EnsureBrowser(ctx context.Context, box Sandbox, step BrowserStep) (BrowserO
 	switch {
 	case errors.Is(ectx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
 		return withheldBrowser(browser.ReasonEnsureTimeout, "", fmt.Sprintf("ensure answered nothing within "+
-			"%d s: give the box's image the npm cache, or the box more CPU and memory",
-			int(boxhelper.EnsureTimeout.Seconds()))), nil
+			"%s: give the box's image the npm cache, or the box more CPU and memory",
+			statelog.Spoken(boxhelper.EnsureTimeout))), nil
 	case ctx.Err() != nil:
 		return BrowserOutcome{}, ctx.Err()
 	case err != nil && res.Stdout == "":
@@ -215,7 +216,7 @@ func stopBrowser(ctx context.Context, box Sandbox, env map[string]string) error 
 		ExecOptions{Env: env, Cwd: home, TimeoutSec: boxhelper.StopTimeout.Seconds()})
 	switch {
 	case errors.Is(sctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
-		return fmt.Errorf("stop answered nothing within %d s", int(boxhelper.StopTimeout.Seconds()))
+		return fmt.Errorf("stop answered nothing within %s", statelog.Spoken(boxhelper.StopTimeout))
 	case err != nil:
 		return err
 	case res.ExitCode != 0:
@@ -354,7 +355,7 @@ func browserWithheldWords(reason browser.EnsureReason) string {
 	case browser.ReasonHelperUnwritten:
 		return "the browser's helper could not be written into the box"
 	case browser.ReasonEnsureTimeout:
-		return fmt.Sprintf("the browser did not start within %d seconds", int(boxhelper.EnsureTimeout.Seconds()))
+		return "the browser did not start within " + statelog.Spoken(boxhelper.EnsureTimeout)
 	case browser.ReasonEnsureUnreadable:
 		return "the box did not say whether its browser started"
 	}
