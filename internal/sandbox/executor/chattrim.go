@@ -3,6 +3,7 @@ package executor
 import (
 	"fmt"
 	"strconv"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -58,14 +59,17 @@ func chatTrimRecord(boundary, src, dst string) string {
 // ([geminiCompressionSet]), whose sync closed with the `$patch` naming what a
 // resume drops before the next `$set` of its time. A sync a pack met unclosed
 // would resume holding its old entries beside the new, and is no boundary.
-var geminiBoundaryAwk = lineFormsAwk(namedForm{"set", geminiCompressionSet},
-	namedForm{"user", geminiCompressionUser}, namedForm{"ack", geminiCompressionAck},
-	namedForm{"closed", geminiSyncClosed}, namedForm{"touched", geminiSyncTouched}) +
-	`{ if (s2 && u1 && holds($0, "ack")) pend = NR - 2
+// Built at first use, as every awk here is: no pack pays for it at init.
+var geminiBoundaryAwk = sync.OnceValue(func() string {
+	return lineFormsAwk(namedForm{"set", geminiCompressionSet},
+		namedForm{"user", geminiCompressionUser}, namedForm{"ack", geminiCompressionAck},
+		namedForm{"closed", geminiSyncClosed}, namedForm{"touched", geminiSyncTouched}) +
+		`{ if (s2 && u1 && holds($0, "ack")) pend = NR - 2
   else if (pend && holds($0, "closed")) { b = pend; pend = 0 }
   else if (pend && holds($0, "touched")) pend = 0
   s2 = s1; s1 = holds($0, "set"); u1 = holds($0, "user") }
 END { if (b) print b; exit !b }`
+})
 
 // The lines that close a compression's sync and that follow one, as 0.70.0
 // writes them ([geminiBoundaryAwk]).
@@ -78,7 +82,7 @@ var (
 // record: its top-level fields in the order createBaseRecord writes them,
 // its parent null or an id, its git branch where the run had one, through
 // to its payload's brace, so no payload names one (measured).
-var qwenCompressions = func() []namedForm {
+var qwenCompressions = sync.OnceValue(func() []namedForm {
 	var forms []namedForm
 	for _, parent := range [][]string{{`","parentUuid":null,"sessionId":"`}, {`","parentUuid":"`, `","sessionId":"`}} {
 		for _, branch := range [][]string{nil, {`","gitBranch":"`}} {
@@ -91,14 +95,16 @@ var qwenCompressions = func() []namedForm {
 		}
 	}
 	return forms
-}()
+})
 
 // qwenBoundaryAwk prints the line Qwen Code 0.28.4's newest compaction opens
 // on: its newest `chat_compression` record, each of which carries the whole
 // history a resume rebuilds from (measured).
-var qwenBoundaryAwk = lineFormsAwk(qwenCompressions...) +
-	`holds($0, "0") || holds($0, "1") || holds($0, "2") || holds($0, "3") { b = NR }
+var qwenBoundaryAwk = sync.OnceValue(func() string {
+	return lineFormsAwk(qwenCompressions()...) +
+		`holds($0, "0") || holds($0, "1") || holds($0, "2") || holds($0, "3") { b = NR }
 END { if (b) print b; exit !b }`
+})
 
 // trimRelease is the release Gemini CLI's trim was measured on ([trimmer]):
 // the one release a session continues on.
@@ -107,7 +113,7 @@ func (GeminiCLI) trimRelease() string { return geminiRelease }
 // trimRecord cuts a chat file before its newest compression
 // ([chatTrimRecord], [geminiBoundaryAwk]).
 func (GeminiCLI) trimRecord(src, dst string) string {
-	return chatTrimRecord(geminiBoundaryAwk, src, dst)
+	return chatTrimRecord(geminiBoundaryAwk(), src, dst)
 }
 
 // trimRelease is the release Qwen Code's trim was measured on ([trimmer]):
@@ -116,7 +122,9 @@ func (QwenCode) trimRelease() string { return qwenRelease }
 
 // trimRecord cuts a chat file before its newest compaction
 // ([chatTrimRecord], [qwenBoundaryAwk]).
-func (QwenCode) trimRecord(src, dst string) string { return chatTrimRecord(qwenBoundaryAwk, src, dst) }
+func (QwenCode) trimRecord(src, dst string) string {
+	return chatTrimRecord(qwenBoundaryAwk(), src, dst)
+}
 
 var (
 	_ trimmer = GeminiCLI{}
