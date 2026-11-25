@@ -447,3 +447,23 @@ func TestARunsLastLimitReportRidesItsResult(t *testing.T) {
 		t.Errorf("success %v, limits %q; want the run's last report %q", res.Success, res.Limits, last)
 	}
 }
+
+// A CLAUDE CODE COMPACTION IS A REQUEST OF THE RUN'S: its summary request
+// names no assistant message, so the run's count takes each compaction the
+// stream recorded beside the messages it named.
+//
+// Mutation: count the messages alone, and the run counts two of three.
+func TestAClaudeCompactionIsARequestOfTheRuns(t *testing.T) {
+	t.Parallel()
+	dec := executor.ClaudeCode{}.Events()
+	for _, l := range []string{
+		`{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		`{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto"}}`,
+		`{"type":"assistant","message":{"id":"msg_2","role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+	} {
+		dec.Line([]byte(l))
+	}
+	if dec.Requests() != 3 {
+		t.Fatalf("requests %d, want the 2 messages and the compaction's", dec.Requests())
+	}
+}

@@ -3498,6 +3498,13 @@ type LaunchRecord struct {
 	// round, where the collection acts on it ([FollowUpReason]); empty otherwise.
 	FollowUp FollowUpReason `json:"follow_up,omitempty"`
 
+	// TurnCap is the round cap the job's harness was handed ([Limits.MaxTurns]),
+	// 0 for none. THE ENGINE'S WORD, never the box's: its collection holds the
+	// requests the job's stream shows to it ([RunHandle.TurnCap]), so a cap the
+	// box could rewrite would bound nothing. Absent on a row an older build wrote,
+	// whose job is judged by its harness's cap alone.
+	TurnCap int `json:"turn_cap,omitempty"`
+
 	// Brief is which of three briefs the launch handed the job's run: continuing the
 	// turn's session in the box last worked in, continuing it in a replacement box, or
 	// for a session of its own (restore.go). Written by the attach naming the command
@@ -4024,6 +4031,6 @@ func (r PendingRun) Held(now time.Time) bool {
 // Handle is the job this row holds now, as every read of its box is handed it:
 // command and session.
 func (r PendingRun) Handle() RunHandle {
-	return RunHandle{CommandID: r.CommandID, SessionID: r.SessionID,
+	return RunHandle{CommandID: r.CommandID, SessionID: r.SessionID, TurnCap: r.Launch.TurnCap,
 		BridgeUnconnected: !r.Launch.BridgeConnected}
 }
