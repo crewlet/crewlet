@@ -262,8 +262,10 @@ type claudeEvents struct {
 
 	// requests is each assistant message id the stream named: one model
 	// request each, its lines repeating the id as the message grows
-	// ([claudeEvents.Requests]).
-	requests map[string]struct{}
+	// ([claudeEvents.Requests]); compactions the compactions it recorded, each
+	// one summary request no assistant message names.
+	requests    map[string]struct{}
+	compactions int
 
 	// own is the run's own spend, its results' per-model figures summed
 	// ([claudeResult.sinceLastResult]); stated whether any result carried
@@ -414,6 +416,9 @@ func (d *claudeEvents) Line(line []byte) {
 	case claudeLimitEvent:
 		d.limits = string(line)
 	case "system":
+		if looseString(ev.Subtype) == subtypeCompactBoundary {
+			d.compactions++
+		}
 		if line, ok := claudeSteerLine(looseString(ev.Subtype), ev.Content); ok {
 			d.transcript.add(line)
 		}
@@ -526,12 +531,16 @@ func (d *claudeEvents) Entries(end bool) []string { return d.transcript.take(end
 func (d *claudeEvents) Ended() bool { return d.ended }
 
 // Requests implements [Decoder]: the assistant messages the stream named, by
-// id, every thread's, a subagent's included. Never the result's `num_turns`,
-// which is the harness's own word on its count and absent where it was cut off.
-// Measured on 2.1.330 against a stand-in: ids equal the requests answered (31
-// of 31; 7 of 7 with a subagent's 3, where num_turns said 1; 3 under a cap of
-// 3, where it said 4), and a 429 or 500 retried names no id of its own.
-func (d *claudeEvents) Requests() int { return len(d.requests) }
+// id, every thread's, a subagent's included, and a summary request for each
+// compaction it recorded ([subtypeCompactBoundary]), whose request no message
+// names. Never the result's `num_turns`, which is the harness's own word on
+// its count and absent where it was cut off. Measured on 2.1.330 against a
+// stand-in: ids equal the requests answered (31 of 31; 7 of 7 with a
+// subagent's 3, where num_turns said 1; 3 under a cap of 3, where it said 4),
+// and a 429 or 500 retried names no id of its own; a run that compacted once
+// wrote one boundary and no message for its summary, and a summary request it
+// made again, after the stand-in's unusable answer, wrote nothing to count.
+func (d *claudeEvents) Requests() int { return len(d.requests) + d.compactions }
 
 // InFlight implements [Decoder]: none, as Claude Code's own --max-turns
 // stops before the next request (measured on 2.1.330: a cap of 3, 3 requests).
