@@ -62,6 +62,7 @@ func runOnce(ctx context.Context, args []string, getenv func(string) string, std
 	set.BoolVar(&f.loadsOnly, "loads-only", false, "")
 	set.IntVar(&f.slot, "slot", 0, "")
 	set.IntVar(&f.room, "room", 0, "")
+	set.BoolVar(&f.lines, "lines", false, "")
 	set.StringVar(&f.threadFile, "thread-file", "", "")
 	f.digests = digestFlag{}
 	set.Var(f.digests, "skill-digest", "")

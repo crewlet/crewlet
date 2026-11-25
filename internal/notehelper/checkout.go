@@ -339,8 +339,14 @@ type listingBudget struct {
 	cut  bool
 }
 
-func newListingBudget() *listingBudget {
-	return &listingBudget{left: maxListing - len(listingCut) - 1}
+func newListingBudget() *listingBudget { return newListingBudgetWithin(maxListing) }
+
+// newListingBudgetWithin is a budget whose listings, with the blank line
+// before each, never pass bound bytes: the cut line and the separator before
+// the block it ends are reserved, since a cut keeps at most what is left (its
+// last newline standing in for the cut line's own).
+func newListingBudgetWithin(bound int) *listingBudget {
+	return &listingBudget{left: bound - len(listingCut) - len("\n\n")}
 }
 
 // take is block within what is left of b, block apart from the one before by

@@ -124,11 +124,11 @@ func hermesAnswer(handed []handedCheckout, skipped []string, r *hermesRoom) stri
 			blocks = append(blocks, r.hermesNamed(h))
 		}
 	}
-	if r.left < len(listingCut)+len("\n\n")+1 {
+	if r.left < len(listingCut)+len("\n\n") {
 		return strings.Join(blocks, "\n\n") // no room even to say a listing is cut
 	}
 	// IN BYTES, which no character count passes, from what the blocks left.
-	budget := &listingBudget{left: min(maxListing, r.left) - len(listingCut) - 1}
+	budget := newListingBudgetWithin(min(maxListing, r.left))
 	for _, h := range handed {
 		if listing := budget.take(skillsListing(h)); listing != "" {
 			blocks = append(blocks, listing)
@@ -149,14 +149,22 @@ type peekConfig struct {
 	First   []string `json:"first"`
 }
 
-// runHermesPeek prints, as {"roots": [...]}, the root of each checkout a
-// firing could claim now: finished ([cloneFinished]), not handed, in
-// [checkoutNames]' order, none once the run is ended. It claims nothing, so
-// the gate the run's Hermes then answers for them is read before any claim.
-// Exit 1 where it cannot say.
+// runHermesPeek prints, as {"roots": [...]} (with -lines, a root a line),
+// the root of each checkout a firing could claim now: finished
+// ([cloneFinished]), not handed, in [checkoutNames]' order, none once the run
+// is ended. It claims nothing, so the gate the run's Hermes then answers for
+// them is read before any claim. Exit 1 where it cannot say.
 func runHermesPeek(_ context.Context, f flags, _ io.Reader, stdout, stderr io.Writer, _ func(string) string) int {
 	roots, err := hermesPeek(f.config)
-	if err == nil {
+	switch {
+	case err != nil:
+	case f.lines:
+		for _, root := range roots {
+			if _, err = fmt.Fprintln(stdout, root); err != nil {
+				break
+			}
+		}
+	default:
 		err = json.NewEncoder(stdout).Encode(map[string][]string{"roots": roots})
 	}
 	if err != nil {

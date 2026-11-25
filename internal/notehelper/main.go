@@ -353,8 +353,10 @@ type flags struct {
 	config                string
 	skillLoads, loadsOnly bool
 	slot                  int
-	// hermes-nested's: the characters the tool's result has left.
-	room int
+	// hermes-nested's: the characters the tool's result has left; hermes-peek's:
+	// a root a line, for a shell.
+	room  int
+	lines bool
 	// codex-renew's: the rollout of the session the run continues.
 	rollout string
 	// codex-materialize's: Codex's sessions directory, and the thread whose

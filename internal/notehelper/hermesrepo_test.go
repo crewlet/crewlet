@@ -248,3 +248,48 @@ func TestAHermesAnswerStaysWithinItsRoom(t *testing.T) {
 		})
 	}
 }
+
+// EVERY FIRING'S LISTINGS STAY WITHIN THEIR BOUND, A CUT ONE INCLUDED: a
+// listing cut where the byte before the bound is a newline, after another
+// listing, charges the blank line before it, so Codex's, Pi's and Claude
+// Code's answers never pass 64 KiB and Hermes's never its room, whatever
+// line the cut lands on (each shift moves it by a byte).
+//
+// Mutation: leave the cut block's separator uncharged, and a row goes red.
+func TestEveryFiringsListingStaysWithinItsBound(t *testing.T) {
+	t.Parallel()
+	handedWith := func(shift, total int) []handedCheckout {
+		line := func(i int) handedSkill {
+			return handedSkill{name: "big:s" + strconv.Itoa(i), description: strings.Repeat("d", 40+shift),
+				path: "/home/u/skills/big:s" + strconv.Itoa(i) + "/SKILL.md"}
+		}
+		big := handedCheckout{name: "big", root: "/w/big"}
+		for i := 0; i*(100+shift) < total+2000; i++ {
+			big.skills = append(big.skills, line(i))
+		}
+		small := handedCheckout{name: "small", root: "/w/small", skills: []handedSkill{line(0)}}
+		return []handedCheckout{small, big}
+	}
+	for _, c := range []struct {
+		name   string
+		bound  int
+		answer func([]handedCheckout) string
+	}{
+		{"codex", maxListing, func(h []handedCheckout) string { return codexNestedContext(h, nil) }},
+		{"pi", maxListing, func(h []handedCheckout) string { return piNestedText(h, nil) }},
+		{"claude", maxListing, func(h []handedCheckout) string { return claudeNestedContext(h, nil) }},
+		{"hermes", 3000, func(h []handedCheckout) string {
+			return "\n\n" + hermesAnswer(h, nil, newNestedRoom(3000)) // the blank line after the tool's result
+		}},
+	} {
+		for shift := range 160 {
+			got := c.answer(handedWith(shift, c.bound))
+			if !strings.Contains(got, listingCut) {
+				t.Fatalf("%s, shift %d: the listing was not cut", c.name, shift)
+			}
+			if len(got) > c.bound {
+				t.Errorf("%s, shift %d: %d bytes past a bound of %d", c.name, shift, len(got), c.bound)
+			}
+		}
+	}
+}
