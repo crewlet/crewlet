@@ -321,9 +321,25 @@ export function framePageOf(
   };
 }
 
+/**
+ * The page's identity: its screen and route path, never its query, so a tab
+ * or filter (`?tab=agents`) is the same page and another record is another.
+ */
+export function pageIdentity(page: Pick<FramePage, "screen" | "path">): string {
+  return `${page.screen}:${page.path.join("/")}`;
+}
+
+/** The identity of the page at `path`, or null for an address with no framed page. */
+export function pageIdentityAt(path: readonly string[]): string | null {
+  const where = resolve([...path]);
+  return where.resolved && where.workspace !== ""
+    ? pageIdentity({ screen: where.screen, path })
+    : null;
+}
+
 /** The context as the drawer reads it: the chip, and the wire value it stands for. */
 export interface PageSnapshot {
-  /** The page's identity for the chip: a new one is "another page". */
+  /** The page's identity ([pageIdentity]): a new one is "another page". */
   key: string;
   /** What the chip says. */
   title: string;
@@ -539,7 +555,7 @@ function publish(reason: AssistantInvalidateReason | null): void {
   const beforeActions = JSON.stringify(snapshot?.context.action_revisions ?? {});
   snapshot = frame
     ? {
-        key: `${frame.screen}:${frame.path.join("/")}`,
+        key: pageIdentity(frame),
         title: frame.title,
         context: buildPageContext(frame, registration),
       }

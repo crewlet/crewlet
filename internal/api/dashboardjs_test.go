@@ -1080,10 +1080,10 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7535.9 KiB,
-	// on kit 0.190.0, with the Google page for every Google product's shared
-	// setup. A raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 2416<<10
+	// kit releases account for its growth, and the last measure was 7536.9 KiB,
+	// on kit 0.190.0, with the Ask Crewlet panel's per-page reopen rule. A raise
+	// names the measured size and its cause in its commit.
+	treeBudget = 5<<20 + 2417<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
