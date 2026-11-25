@@ -1574,6 +1574,28 @@ func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
 // a file. Beside mcp.json for the reason mcp.json is where it is.
 func (p Paths) MCPConfigFresh() string { return p.WorkDir() + "/mcp-fresh.json" }
 
+// BrowserRelay is where a run of one session has its browser relay's wiring:
+// browser.RelayWiring as JSON, the route its relay posts the box's screen to
+// under the run's bridge token and the job's launch, written 0600 by the run's
+// start and read by the relay its script starts beside the harness
+// ([relayStep]). Never written for a run whose browser relays no screen.
+func (p Paths) BrowserRelay() string { return p.WorkDir() + "/browser-relay.json" }
+
+// BrowserRelayContinued is a continuing run's [Paths.BrowserRelay] under the
+// continued session's token: its script keeps it where it continues that
+// session and removes it where it starts one of its own, before its harness
+// starts, so the box holds one token when its model can first read a file.
+func (p Paths) BrowserRelayContinued() string { return p.WorkDir() + "/browser-relay-continued.json" }
+
+// BrowserRelayFresh is a continuing run's [Paths.BrowserRelay] under the job's
+// other token ([sandbox.RunRequest.FreshWiring]): its script keeps it where it
+// starts a session of its own and removes it where it continues the one.
+func (p Paths) BrowserRelayFresh() string { return p.WorkDir() + "/browser-relay-fresh.json" }
+
+// BrowserRelayLog is where a run's script appends its browser relay's output,
+// which the relay bounds by its own count (internal/browser/boxhelper/live).
+func (p Paths) BrowserRelayLog() string { return p.WorkDir() + "/browser-relay.log" }
+
 // CommitAttribution is the DIRECTORY holding a run's commit attribution
 // (attribution.go): the hook ([Paths.AttributionHook]) and the directory the
 // run's core.hooksPath names ([Paths.GitHooks]). Under WorkDir, never in the

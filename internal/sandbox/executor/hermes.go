@@ -77,9 +77,20 @@ func hermesFloor() string {
 // (19 runs), 2.4 to 3.1 s with that box's cores both busy (5), and 5.4 and 5.5 s,
 // the worst seen, with three busy processes a core. Ten leaves 4.5 s past the
 // worst. One cut short by SIGKILL leaves its turn unsettled, which the next
-// resume discards first ([hermesDiscard]). The end path stays inside
-// [sandbox.JobEndWait]: the gateway's wait, the client's grace and the pack.
+// resume discards first ([hermesDiscard]). The end path it opens stays inside
+// [sandbox.JobEndWait] ([hermesEndPath]).
 const hermesGatewayStop = 10 * time.Second
+
+// hermesEndPath is the most a Hermes run's script spends after an end request
+// reaches it while its client runs: the gateway's wait ([hermesGatewayStop]),
+// the client's grace, and the pack ([sandbox.SessionPackWait]). The job's
+// browser relay, TERMed before the gateway ([endHarness]), goes within its own
+// bound while these run, under the grace, so it adds nothing. The engine waits
+// [sandbox.JobEndWait] for an ended job before it kills it, so the path is held
+// under it (TestAnEndedHermesRunsPathFitsTheEnginesWait).
+func hermesEndPath(times hermesTimes) time.Duration {
+	return times.gateway + times.stop + sandbox.SessionPackWait
+}
 
 // hermesTimes is the waits a run's script runs at: a value, so a case about a
 // wait runs it at a length it can tell apart ([openCodeTimes]).
