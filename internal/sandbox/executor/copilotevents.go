@@ -170,6 +170,12 @@ type copilotEvents struct {
 	// denied is the first seat tool call a hook refused: the tool and why.
 	denied string
 
+	// guarded is whether the script said the run had a bridge to guard
+	// ([copilotBridgeGuardMark]); unbridged the extension's words where it stopped
+	// the run for an agent's server under a bridge's name.
+	guarded   bool
+	unbridged string
+
 	// calls is each running call's place in the transcript and whether it is
 	// a seat tool's (one the run's own MCP configuration declared).
 	calls map[string]copilotCall
@@ -251,6 +257,9 @@ func (d *copilotEvents) Line(line []byte) {
 	case "tool.execution_complete":
 		d.completed(data)
 	case "session.error":
+		if d.unbridged == "" && strings.HasPrefix(data.Message, copilotUnbridgedMessage) {
+			d.unbridged = strings.TrimPrefix(data.Message, "crewlet: ")
+		}
 		d.failure, d.failureType = firstNonBlank(data.Message, data.ErrorType, "the session failed"), data.ErrorType
 		d.failureLine = boundedEvent(line)
 		if data.ErrorType == copilotRateLimit || data.ErrorType == copilotQuota {
@@ -272,6 +281,8 @@ func (d *copilotEvents) Line(line []byte) {
 		}
 	case copilotCapMark:
 		d.capTurns = data.Turns
+	case copilotBridgeGuardMark:
+		d.guarded = true
 	case copilotUsageMark:
 		d.marked = true
 	case "session.usage_record":
@@ -417,6 +428,13 @@ func (d *copilotEvents) Result() sandbox.Result {
 		// FAILED CLOSED: the run went on with nothing holding it to its cap.
 		res.Error = fmt.Sprintf("this run had a turn cap of %d model turns, and the extension that enforces "+
 			"it never ran, so the cap was not enforced: %s", d.capTurns, (Copilot{}).notesOffWhy())
+	case d.unbridged != "":
+		res.Error, res.Unbridged = d.unbridged, true
+	case d.guarded && !d.armed:
+		// FAILED CLOSED, as for the cap: nothing held another server off the
+		// bridge's names.
+		res.Error, res.Unbridged = "this run had Crewlet's own MCP server, and the extension that refuses another "+
+			"server under its names never ran, so nothing held them: "+(Copilot{}).notesOffWhy(), true
 	case d.denied != "":
 		res.Error = d.denied
 	case d.failure != "":

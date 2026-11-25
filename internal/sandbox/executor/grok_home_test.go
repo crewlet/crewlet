@@ -38,7 +38,7 @@ func grokLoads(t *testing.T) {
 			".bashrc", "workspace/checkout/AGENTS.md"},
 	}
 	runner, box := standInBox(t, executor.NewGrok(), map[string]string{"grok": "#!/bin/sh\n" +
-		"case \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;; esac\n" +
+		"case \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;; inspect) exit 1;; esac\n" +
 		"cp \"$HOME/.grok/config.toml\" \"$HOME/observed.config.toml\"\n" + observedRun})
 	above := fillHome(t, box, c)
 	const settings = "[compat.claude]\nmcps = false\n\n[mcp_servers.docs]\nurl = \"https://docs.example.com/mcp\"\n"
@@ -117,7 +117,7 @@ func grokLoads(t *testing.T) {
 func TestAGrokRunsRequestsGoWhereAPersonsWould(t *testing.T) {
 	t.Parallel()
 	runner, box := standInBox(t, executor.NewGrok(), map[string]string{"grok": "#!/bin/sh\n" +
-		"case \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;; esac\n" + observedRun})
+		"case \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;; inspect) exit 1;; esac\n" + observedRun})
 	const entry, image = "https://gateway.example.com/v1", "http://image.example.com"
 	// THE MEASURED LIST, kept here, and the runner's declaration held to it.
 	routing := []string{"GROK_XAI_API_BASE_URL", "GROK_MODELS_BASE_URL", "GROK_CODE_XAI_API_KEY",

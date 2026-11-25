@@ -3,10 +3,14 @@ package executor
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -121,6 +125,11 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		releaseRead(GeminiCLI{}.VersionCommand()),
 		releaseGate("Gemini CLI", geminiRelease),
 		"node " + q(paths.GeminiHelper()) + " pin " + q(paths.GeminiProjects()) + " " + GeminiProjectSlug + " || exit 1",
+		// NO SERVER OF A FILE'S TAKES THE BRIDGE'S NAMES OR ITS PLACE, said
+		// before Gemini CLI starts ([geminiShadowCheck]); the BeforeTool hook
+		// checks each call at run time ([geminiBridgedHook]).
+		geminiShadowCheck(req, paths),
+		"rm -f " + q(paths.GeminiUnbridged()),
 		strings.TrimSuffix(chatSessionGate(session, paths, geminiGate(paths, fresh)), "\n"),
 		// WHERE THE RUN BEGINS IN ITS SESSION, once the gate cut it back: its
 		// lines and their digest ([chatRunStartFrom]).
@@ -152,7 +161,11 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		lines = append(lines, `mkdir -p `+q(paths.GeminiTakesDir())+
 			` && printf '{"from":%s}\n' "$n" >> `+q(paths.GeminiTakesDir())+`/"$s".jsonl || exit 1`)
 	}
-	run := `gemini ` + flags + ` "$@"; code=$?`
+	// A CALL THE HOOK STOPPED FAILS THE RUN: Gemini CLI ends the turn as a
+	// success, exit 0 (measured on 0.70.0), so the hook's line joins the
+	// stream ([geminiUnbridgedEvent]).
+	run := `gemini ` + flags + ` "$@"; code=$?; [ ! -s ` + q(paths.GeminiUnbridged()) + ` ] || cat ` +
+		q(paths.GeminiUnbridged())
 	// A RUN WITH NO STANDING INSTRUCTIONS keeps Gemini CLI's own prompt as it
 	// is, so nothing is exported or named.
 	if geminiSystemText(GeminiCLI{}, req) != "" {
@@ -399,7 +412,8 @@ func geminiSkillName(s sandbox.Skill) string { return sandbox.SkillNamespace + "
 // statistics and the update check off (two
 // connections to the vendor a run otherwise); subagents off, since the hooks
 // fire inside a subagent's loop as in the main agent's, so a note would land
-// in delegated work; and the take script's hooks where wired: AfterTool for
+// in delegated work; the bridge's BeforeTool hook ([geminiBridgedHook]); and
+// the take script's hooks where wired: AfterTool for
 // skill loads, AfterAgent for notes ([GeminiCLISteerInstruction]).
 func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string]any {
 	settings := map[string]any{
@@ -423,6 +437,14 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 		}
 		settings["mcpServers"] = servers
 	}
+	events := map[string]any{}
+	var guards []any
+	for _, name := range crewletServers(req.MCPServers) {
+		guards = append(guards, geminiBridgedHook(name, req.MCPServers[name].URL, paths))
+	}
+	if len(guards) > 0 {
+		events["BeforeTool"] = guards
+	}
 	if hooked {
 		hook := func() []any {
 			return []any{map[string]any{"matcher": "", "hooks": []any{map[string]any{
@@ -430,16 +452,60 @@ func geminiSettings(req sandbox.RunRequest, paths Paths, hooked bool) map[string
 				"command": "node " + shellword.Quote(paths.GeminiTake()) + " " + shellword.Quote(paths.GeminiTakeConfig()),
 			}}}}
 		}
-		events := map[string]any{}
 		if len(req.Skills) > 0 {
 			events["AfterTool"] = hook()
 		}
 		if req.Steer.Set() {
 			events["AfterAgent"] = hook()
 		}
+	}
+	if len(events) > 0 {
 		settings["hooks"] = events
 	}
 	return settings
+}
+
+// geminiBridgedHook is the BeforeTool hook on every tool named inside bridge's
+// names (`mcp_<bridge>_`): the helper stops the run before the call unless
+// Gemini CLI says bridge serves it at url under its own name for it
+// (gemini_helper.mjs, `bridged`). GEMINI CLI NAMES A TOOL `mcp_<server>_<tool>`
+// and the bridge's names hold `_`, so a server `crewlet_x`, one `mcp` listing
+// `crewlet_x`, or another `crewlet` can take a name of the bridge's, from a
+// file or a login's admin settings no file shows (MEASURED on 0.70.0). Only the
+// call says which server serves it. The address goes as its digest.
+func geminiBridgedHook(bridge, url string, paths Paths) map[string]any {
+	digest := sha256.Sum256([]byte(url))
+	return map[string]any{"matcher": "^mcp_" + bridge + "_", "hooks": []any{map[string]any{
+		"type": "command", "name": "crewlet", "timeout": geminiHookTimeout.Milliseconds(),
+		"command": "node " + shellword.Quote(paths.GeminiHelper()) + " bridged " + shellword.Quote(bridge) + " " +
+			hex.EncodeToString(digest[:]) + " " + shellword.Quote(paths.GeminiUnbridged()),
+	}}}
+}
+
+// geminiShadowCheck is the script's line refusing, before Gemini CLI starts, a
+// run whose settings files or extensions declare a server that would take the
+// bridge's place or a name inside its names, naming the file and the server
+// (gemini_helper.mjs, `shadows`); "" for a run with no bridge. The run's own
+// servers replace the home settings' entries of their names
+// ([Paths.GeminiHomeSettings]), so those are passed over.
+func geminiShadowCheck(req sandbox.RunRequest, paths Paths) string {
+	bridges := crewletServers(req.MCPServers)
+	if len(bridges) == 0 {
+		return ":"
+	}
+	var named []string
+	for _, name := range slices.Sorted(maps.Keys(req.MCPServers)) {
+		named = append(named, "--own", shellword.Quote(name))
+	}
+	var b strings.Builder
+	for i, bridge := range bridges {
+		if i > 0 {
+			b.WriteString(" && ")
+		}
+		b.WriteString("node " + shellword.Quote(paths.GeminiHelper()) + " shadows " + shellword.Quote(bridge) + " " +
+			strings.Join(named, " "))
+	}
+	return b.String() + " || exit 1"
 }
 
 // geminiAuth is the sign-in a run of req selects: the key's for a run handed
