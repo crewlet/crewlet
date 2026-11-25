@@ -91,8 +91,8 @@ export const STORAGE_KEYS = {
   /** The width the reader dragged the assistant to (`app/assistant/AssistantFrame.tsx`). */
   assistantWidth: "crewlet.assistant.width",
   /**
-   * Whether the assistant is open in THIS TAB and which conversation it
-   * shows, in `sessionStorage` (`app/assistant/tab.ts`): a reload comes back
+   * Whether the assistant is open in THIS TAB, which conversation it shows
+   * and on which page, in `sessionStorage` (`app/assistant/tab.ts`): a reload comes back
    * to it, and the hand-over that empties the tab's storage when somebody
    * else signs in (`lib/session.ts`) takes it with everything else, so a
    * shared browser never shows one person's conversation to the next.

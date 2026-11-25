@@ -191,7 +191,7 @@ func (c *Client) Do(ctx context.Context, token string, req Request) (Response, e
 	c.hold(token)
 	if !req.Reserved {
 		if err := c.heldBack(req); err != nil {
-			return Response{}, err
+			return Response{}, fmt.Errorf("%w: %w", errUnsent, err)
 		}
 	}
 	params := url.Values{}
@@ -226,6 +226,11 @@ func (c *Client) Do(ctx context.Context, token string, req Request) (Response, e
 		return resp, apiErr
 	}
 }
+
+// errUnsent marks a request that failed before it left for Meta: held back
+// at the reserve or while Meta asks for time, its request unbuilt or its
+// context ended first. Nothing reached Meta.
+var errUnsent = errors.New("metaads: the request was not sent to Meta")
 
 // heldBack refuses a read held back at the reserve, and any call while Meta
 // asks for time to regain access.
@@ -269,11 +274,16 @@ func (c *Client) send(ctx context.Context, token string, req Request, params url
 	}
 	hreq, err := http.NewRequestWithContext(ctx, req.Method, u, body)
 	if err != nil {
-		return Response{}, fmt.Errorf("metaads: build %s %s: %w", req.Method, req.Path, unwrapURL(err))
+		return Response{}, fmt.Errorf("metaads: build %s %s: %w: %w", req.Method, req.Path, errUnsent, unwrapURL(err))
 	}
 	hreq.Header.Set("Authorization", "Bearer "+token)
 	if body != nil {
 		hreq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	// A CONTEXT ENDED BEFORE THE SEND sent nothing; one that ends during it
+	// may have, so only this side of Do is unsent.
+	if ended := ctx.Err(); ended != nil {
+		return Response{}, fmt.Errorf("metaads: %s %s: %w: %w", req.Method, req.Path, errUnsent, ended)
 	}
 	hresp, err := c.http.Do(hreq)
 	if err != nil {

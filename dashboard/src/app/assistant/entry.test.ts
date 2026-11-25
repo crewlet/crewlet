@@ -11,8 +11,14 @@
 
 import { afterEach, describe, expect, test } from "vitest";
 import { emit, on } from "./bus.ts";
-import { askVerbs, takeQueuedQuestion, type PanelHold } from "./control.ts";
-import { readTab, writeTab } from "./tab.ts";
+import {
+  askVerbs,
+  markReopened,
+  takeQueuedQuestion,
+  takeReopened,
+  type PanelHold,
+} from "./control.ts";
+import { carryConversation, readTab, reopenChoice, writeTab, type AssistantTab } from "./tab.ts";
 import { assistantModelFor, assistantUnavailableFor } from "./availability.ts";
 import { assistantModelNotice, assistantUnavailable } from "~/protocol/assistantWire.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
@@ -65,17 +71,30 @@ describe("the bus", () => {
   });
 });
 
+const ID = "403212ed-5a4a-586d-8af6-c62411a17c2f";
+const EMPTY_TAB: AssistantTab = { open: false, conversation: null, shown: null, busy: false };
+
 describe("the tab's record", () => {
   test("keeps the open flag and a conversation id, and nothing it cannot read back", () => {
     writeTab({ open: true, conversation: "403212ed-5a4a-586d-8af6-c62411a17c2f" });
-    expect(readTab()).toEqual({ open: true, conversation: "403212ed-5a4a-586d-8af6-c62411a17c2f" });
+    expect(readTab()).toEqual({ ...EMPTY_TAB, open: true, conversation: ID });
+    writeTab({ shown: { conversation: ID, page: "item:worklet/ENG-1" }, busy: true });
+    expect(readTab()).toMatchObject({
+      shown: { conversation: ID, page: "item:worklet/ENG-1" },
+      busy: true,
+    });
     sessionStorage.setItem(
       STORAGE_KEYS.assistantTab,
-      JSON.stringify({ open: "yes", conversation: "../x" }),
+      JSON.stringify({
+        open: "yes",
+        conversation: "../x",
+        shown: { conversation: 3, page: 4 },
+        busy: 1,
+      }),
     );
-    expect(readTab()).toEqual({ open: false, conversation: null });
+    expect(readTab()).toEqual({ ...EMPTY_TAB, shown: { conversation: null, page: null } });
     sessionStorage.setItem(STORAGE_KEYS.assistantTab, "{not json");
-    expect(readTab()).toEqual({ open: false, conversation: null });
+    expect(readTab()).toEqual(EMPTY_TAB);
   });
 
   test("lives in the tab's storage, which the hand-over empties", () => {
@@ -83,7 +102,52 @@ describe("the tab's record", () => {
     expect(localStorage.getItem(STORAGE_KEYS.assistantTab)).toBeNull();
     // `lib/session.ts` hands a tab to somebody else by emptying its storage.
     sessionStorage.clear();
-    expect(readTab()).toEqual({ open: false, conversation: null });
+    expect(readTab()).toEqual(EMPTY_TAB);
+  });
+});
+
+describe("which conversation the drawer opens on", () => {
+  const OTHER = "6a1d3c0e-2b4f-4c8e-9d7a-1f2e3d4c5b6a";
+  const tab = (change: Partial<AssistantTab>): AssistantTab => ({
+    ...EMPTY_TAB,
+    conversation: ID,
+    shown: { conversation: ID, page: "item:worklet/ENG-1" },
+    ...change,
+  });
+
+  test("the page it last showed resumes it; any other page starts fresh", () => {
+    expect(reopenChoice(tab({}), "item:worklet/ENG-1")).toBe("resume");
+    expect(reopenChoice(tab({}), "item:worklet/ENG-2")).toBe("fresh");
+    expect(reopenChoice(tab({}), null)).toBe("fresh");
+    expect(reopenChoice(EMPTY_TAB, "item:worklet/ENG-1")).toBe("fresh");
+  });
+
+  test("an empty conversation started on a page is that page's, so a second reopen makes no other", () => {
+    const fresh = tab({ conversation: null, shown: { conversation: null, page: "home:" } });
+    expect(reopenChoice(fresh, "home:")).toBe("resume");
+  });
+
+  test("a conversation switched elsewhere (Ask Crewlet's page) is not the one shown on this page", () => {
+    expect(reopenChoice(tab({ conversation: OTHER }), "item:worklet/ENG-1")).toBe("fresh");
+  });
+
+  test("work in flight is shown on every page", () => {
+    expect(reopenChoice(tab({ busy: true }), "item:worklet/ENG-2")).toBe("resume");
+  });
+
+  test("Ask Crewlet's own navigation carries the conversation to the page it opens", () => {
+    writeTab({ conversation: ID, shown: { conversation: ID, page: "home:" } });
+    carryConversation("item:worklet/ENG-2");
+    expect(reopenChoice(readTab(), "item:worklet/ENG-2")).toBe("resume");
+    carryConversation(null);
+    expect(readTab().shown?.page).toBe("item:worklet/ENG-2");
+  });
+
+  test("only the person's open is a reopen, and it is taken once", () => {
+    expect(takeReopened()).toBe(false);
+    markReopened();
+    expect(takeReopened()).toBe(true);
+    expect(takeReopened()).toBe(false);
   });
 });
 

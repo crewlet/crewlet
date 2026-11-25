@@ -23,7 +23,8 @@ func AlarmReference() string {
 	// diffs the page against this function still green, because the page
 	// would be regenerated from the same stale words.
 	fmt.Fprintf(&b, alarmHeader,
-		spoken(AlarmInterval), spoken(TrimInterval), spoken(StallGrace), spoken(RelapseWindow))
+		spoken(AlarmInterval), spoken(TrimInterval), spoken(StallGrace), saidKinds(LocalKinds()),
+		spoken(AlarmInterval), spoken(RelapseWindow))
 	// HEADINGS, so a reader of this long page, and an editor that opens it
 	// part by part, can find a section without reading the whole table.
 	b.WriteString("\n## Alarms about a log, a model or a server\n")
@@ -381,12 +382,17 @@ it was down, and a model or MCP server alarm whose source a stopping or booting
 node has not read, such as the live tool listings, stands until it is read),
 every agent seat whose role carries ` + "`health_tools`" + ` is notified once and pointed at ` + "`" + toolname.FleetHealth + "`" + ` for
 what is firing now (see [Alarm wakes](../concepts/event-system.md#alarm-wakes)).
-Nothing has to be polled for any of them: every node running a state log,
-which is every data node, evaluates the whole table on its own position
-heartbeat, every %s, and again the moment
+Nothing has to be polled for any of them: every data node evaluates the whole
+table on its own position heartbeat, every %s, and again the moment
 the measurements it takes every %s (each log's daily intake, the vector
 coverage, the store's connection-pool waits) land, so an alarm whose
 threshold is %s is raised within a beat of passing it.
+
+A node without ` + "`data`" + ` (a satellite, or an operator's seat pod) runs no
+state log, so it evaluates the alarms it measures of itself alone, %s,
+on a loop of its own every %s, and they reach every surface above from that
+node. The data nodes judge every other alarm, and the model, MCP server and
+` + "`executor_resume_blocked`" + ` alarms for every node of the fleet.
 
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table

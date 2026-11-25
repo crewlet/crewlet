@@ -905,6 +905,8 @@ func New(opts Options) (*App, error) {
 	// And each server's OAuth grant, which every node reads from the
 	// coordination store, with the addresses a vendor is given.
 	sources.MCPGrants = opts.Runtime.MCPGrants()
+	// And the OAuth clients a person registered, for the redirect notice.
+	sources.OAuthClients = opts.Runtime.OAuthClients()
 	// And the store a server's values are sealed in, whose rows (never a
 	// value) its detail reads them against: the one the routes write.
 	sources.Secrets = opts.Runtime.MCPValues()

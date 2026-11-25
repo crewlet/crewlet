@@ -156,7 +156,7 @@ func withFaults(in Invocation, res Result, faults []ArgFault) Result {
 			attrs = append(attrs, "turn", in.Turn.RunID)
 		}
 		contractLog.Info("tool_args_outside_schema", attrs...)
-		argsOutsideSchema.add(in.Counter, in.Name)
+		argsOutsideSchema().add(in.Counter, in.Name)
 	}
 	return res
 }

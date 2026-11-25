@@ -942,7 +942,6 @@
   - `internal/sandbox.TestADrainAdmitsNoPeriodicSave`
   - `internal/sandbox.TestADrainSaveEndsWithinItsWait`
   - `internal/sandbox.TestTheSaveLedgerHoldOutlastsTheCollectorAndFitsTheUploadsBucket`
-  - `internal/agent/prompts.TestAFreshBriefSaysItsTurnsEarlierSessionIsKeptUntilItsRunSaves`
   - `internal/engine.TestTheWaiterTheEngineBuildsOffersItsBoxesForASave`
   - `internal/engine.TestASavesIntervalIsReadOffThisNodesRevision`
   - `internal/engine.TestTheDrainSavesBesideItsWaitForTurns`
@@ -1061,6 +1060,13 @@
   - `internal/sandbox/executor.TestEveryCodexPackTrimsAtTheTakesBounds`
   - `internal/sandbox/executor.TestATakeReadsItsPacksTrimOnlyBesideItsOwnArchive`
   - `internal/sandbox/executor.TestATrimmedCodexTakeIsSaidSoAndStillBounded`
+  - `internal/sandbox/executor.TestATrimmedOpenCodePackKeepsWhatItsResumeLoads`
+  - `internal/sandbox/executor.TestAnOpenCodePackWithNothingToTrimIsPackedWhole`
+  - `internal/sandbox/executor.TestOnlyTheMeasuredOpenCodeReleaseIsTrimmed`
+  - `internal/sandbox/executor.TestAnOpenCodeTrimKeepsTheRunsStart`
+  - `internal/sandbox/executor.TestATrimmedOpenCodeExportReadsAsTheWholeOne`
+  - `internal/sandbox/executor.TestAnOpenCodePackPastThePackedPointIsTrimmed`
+  - `internal/sandbox/executor.TestEveryOpenCodePackTrimsAtTheTakesBounds`
   - `internal/sandbox/executor.TestTheHarnessesNoCutFitsAreNoTrimmers`
   - `internal/sandbox/executor.TestATarInPlaceCutsOnlyPastAPointAndOnlyItsOwnRelease`
   - `internal/sandbox/executor.TestATarInPlaceThatCannotCopyItsRecordPacksItAsItsOwnTarDoes`
@@ -1068,6 +1074,9 @@
   - `internal/sandbox/executor.TestACopilotPackWithNothingToTrimAtIsPackedWhole`
   - `internal/sandbox/executor.TestOnlyTheMeasuredCopilotReleaseIsTrimmed`
   - `internal/sandbox/executor.TestEveryCopilotPackTrimsAtTheTakesBounds`
+  - `internal/sandbox/executor.TestATrimmedGrokPackLeavesOutOnlyWhatNoResumeReads`
+  - `internal/sandbox/executor.TestAGrokPackBelowThePointsOrOnAnotherReleaseIsWhole`
+  - `internal/sandbox/executor.TestEveryGrokPackTrimsAtTheTakesBounds`
   - `internal/sandbox/executor.TestATrimmedHermesDumpKeepsWhatItsResumeLoads`
   - `internal/sandbox/executor.TestAHermesTrimLeavesOutOnlyInactiveRowsBelowTheNewestSummary`
   - `internal/sandbox/executor.TestAHermesTrimSlimsOnlySettledResultsItReads`
@@ -1109,6 +1118,12 @@
   - `internal/sandbox/executor.TestTheNewestSummaryIsTheMainThreadsLast`
   - `internal/sandbox.TestASummaryIsPlacedAtTheCaptureThatFirstNamedIt`
   - `internal/executorkeep.TestALaterPlaceIsALaterLaunchsOrALaterCaptureOfIt`
+  - `internal/agent/runner.TestAReseedTellsTheSessionItDoesNotContinueBeforeItsCalls`
+  - `internal/engine.TestARunIsHandedTheLostSessionsSummaryByItsEnd`
+  - `internal/engine.TestAHandOverIsHeldToHalfTheRoomBelowTheWindow`
+  - `internal/agent/prompts.TestTheLostSessionSectionHandsTheSummaryFenced`
+  - `internal/agent/runner.TestABriefTellsTheSessionItDoesNotContinue`
+  - `internal/sandbox.TestTheFreshBriefARunMayReadNamesItsOwnLoss`
 - **Measured:** a harness's session of a day's work compresses to one or two mebibytes, and one that read a whole 20 MiB PDF, Claude Code's limit, to 40.1 MiB as kept; bounded here at 48 MiB, so a session holding more media than that is not kept (crewlet/crewlet#1626); at the reference company's 3 000 turns a day the log that names the sessions grows about 32 MB a day, about a kibibyte of it each turn's first read of its conversation (its `begin`), while the sessions themselves would be gigabytes; crewlet-operator's smallest data volumes leave 448 MiB (12Gi with the objects in S3, and 16Gi beside the nats bucket) above the other logs at their floors, and this log, scaled to its 64 MiB floor there, still fits both — the minimum classes do not move, but the least a fresh node boots in rises by 64 MiB of logs (12348030975 bytes of broker on nats, up 85.3 MiB with the bucket's quarter beside it, and 64 MiB on S3), which is what the operator's own floors follow. At that floor the log holds about two days at the reference company's rate, under the seven-day `min_age` a healthy trim keeps, so a company above about thirty seats on those volumes sets `stream.executor_log_max_bytes` or a larger volume, and `log_ceiling_short` says so; a continued session's first request: Claude Code 2.1.310 and 2.1.322 compact before it at 167,000 tokens under a 200,000-token window (a count of 165,922 sent whole, one of 167,834 compacted, the harness's own count of it replicated to the token on both), and a resume adds at most 2,597 bytes of records beside its brief and its turn's attachments at most 2,232; the count's rule matched the harness's recorded count to 73 tokens at 186 real compactions, each just before its boundary, and the bound read at or above that replica at 376,937 cut points of real sessions; the take's meter walks a 118 MiB thread in 1.61 to 1.75 s beside its scrub's 10.7 to 10.8 s, and the collection's read of a main thread at its 256 MiB bound of ordinary lines takes 1.96 to 2.00 s (`BenchmarkTheMeterAtItsBounds`, `BenchmarkTheMainThreadReadAtItsBound`, on two dedicated cores), within the 15 s wait at twice its figure; a continued Claude Code session hands its model what a reading of its kept archive counts on, as probe T measured 2.1.310 and 2.1.322 continue one: 14 continuations a release, 25 whole-line results after the last restart among them and 4 of those off the chain parallel calls leave, every one carried once with its call, and a result the harness wrote itself only for a call its file held none of; five continuations each carrying a seat server's call and its result whatever its server's state; a task notification carried verbatim; every path behind a flag Anthropic's servers set read in both releases' shipped code, not run; the chain a resume hands its model, its leaf and what it recovers off it read in both releases' shipped code, and the rule the reading builds on it reading every one of the 402 of the probes' 432 main sessions that hold a call (no reading for none) and leaving not whole three of the 80 subagent threads it reads there: P2(d)'s torn thread in its two copies, whose line 25 is no record, and its box's copy cut back whole, a record of its own on a branch its own load does not hand (the strict rule); and a reading holds what its readers read of a line, never the line: a whole PDF's Read, 55,924,056 bytes on one line, is read in 26 to 35 ms holding 146.5 to 151.5 KiB (`BenchmarkAReaderAtALineOfAnyLength`), 255 MiB of ordinary lines, the plaintext's bound, in 3.1 to 3.2 s, four prompts of about 64 MiB to it in 1.09 to 1.11 s, the slowest archive measured, a subagent's lines of blocks to the plaintext's and the lines' bounds (2^20 lines, past which a reading fails closed), in 21.4 to 22.6 s, inside the reading's 30 s wait, a thread at both bounds of the model of the resume in 2.3 to 2.5 s, holding 43 MiB, a reading's worst, and an ordinary session in 72 to 88 ms (`BenchmarkAReadingAtItsBounds`, on a dedicated two-core build slot); a seat's saves of its running sessions hold at most its session budget again in the object store while they wait for the collector; a Codex 0.171.0 rollout cut to its first line and everything from its newest `compacted` line (17 lines, 36,975 bytes of 514,791) resumed from a fresh `CODEX_HOME` with the same request as the whole one, 8 input items and 38,769 bytes each with the same instructions and tools, only the new message's minted id differing; a Hermes Agent 0.23.3 dump cut to all but its inactive messages below its newest compaction summary, each settled admission's stored result slimmed (125,568 bytes of 900,353), resumed in a fresh home with the same requests as the whole one, over 13 request pairs in three cases, one that compacted again included, only a UTC time Hermes writes into a file's name differing; a Claude Code transcript gzips 10.4 to one, past the 5.33 of the plaintext and archive bounds, so text meets the plaintext bound first
 - **Tag-status:** unreleased
 
@@ -6549,14 +6564,15 @@ lines from its newest compaction on.
 
 **A pack past the bound trims its copy.** Every pack (the run's end, a stop's,
 one made on demand, a save, a drain's save) measures what its take is held to:
-the record's bytes before it tars, against what the scrub reads less a mebibyte
-for the tar's own bytes (`trimPlainPoint`), and the archive after, against what
-a take keeps (`trimPackedPoint`). Past either it keeps what its harness's resume
-loads: everything from the record's newest compaction on and, before it, what
-that release reads there, cut from the pack's copy and never the live record,
-so it is safe beside a working harness. A record with nothing
-to cut at is packed whole, and one still past the bound once trimmed is refused
-as before.
+the record's bytes before it tars (Grok Build's, every file's it packs), against
+what the scrub reads less a mebibyte for the tar's own bytes (`trimPlainPoint`),
+and the archive after, against what a take keeps (`trimPackedPoint`). Past
+either it keeps what its harness's resume loads: everything from the record's
+newest compaction on and, before it, what that release reads there, or, for
+Grok Build, every file but those no resume reads, cut from the pack's copy and
+never the live session, so it is safe beside a working harness. A session with
+nothing to cut is packed whole, and one still past the bound once trimmed is
+refused as before.
 
 **At the bound, not below it.** Every pack trims, so no growth between a trim
 and its take needs room, and a trim only where the whole would be refused keeps
@@ -6565,8 +6581,9 @@ it costs a model call, takes the model's detail before its own compaction would,
 can run mid-turn on no harness, and on every harness but Claude Code appends
 rather than shrinks.
 
-**Per harness, on its measured release alone** (`trimmer`). A session any other
-release wrote is packed whole, and so is every harness with no measured rule.
+**Per harness, on its measured release alone** (`trimmer`; a line cut is a
+`recordTrimmer`). A session any other release wrote is packed whole, and so is
+every harness with no measured rule.
 Codex 0.171.0 keeps the rollout's `session_meta` line and everything from its
 newest `compacted` line, whose replacement history its resume replays in place
 of every line before it (Measured, above). Copilot 1.0.114 keeps everything
@@ -6591,14 +6608,28 @@ messages below its newest active compaction summary, which its resume never
 loads, and slims each settled admission's stored result, which holds its turn's
 messages again, of its copies of the transcript, as Hermes's own retirement
 does; nothing Crewlet reads takes them (Measured, above).
+OpenCode 2.3.2 keeps the export's `info` and every message from the keep point
+(`metadata.keepID`) of its newest completed compaction that is no provider's
+own, the turns its resume renders beside the summary, or from the message its
+run began after where that is older, since a reading of the run's calls
+(`readOpenCodeHoldings`) needs it; a continued run whose start is not known
+cuts nothing, and one that began its session is cut at the keep point, since
+that reading counts no call before the newest compaction (measured: either cut
+sent the request the whole did, byte for byte).
+Grok Build 1.0.92 rewrites its record at each compaction itself, so its pack
+cuts no line: it leaves out each session's `compaction_requests/` and
+`compaction_checkpoints/`, which neither a resume nor a later compaction reads,
+and keeps `updates.jsonl`, which both read, and the segments the summary points
+the model at (measured: every request of the next three launches the same, byte
+for byte).
 
 **Said, never a loss.** The pack leaves its word beside the archive (the
-archive's bytes, the record's before and kept, and for a chat file the lines
-its run began after, restated over the cut copy as the run's script states
-them), which a take reads only for a trimming harness's release and only where
-it names the archive the take describes (`Runner.trimOf`). The take checks the
-restated start against the archive in place of the record's, which names
-lines the cut left out (`trimmedPrefix`). The capture stamps it (`trimmed`), the log carries
+archive's bytes, the bytes it trimmed before and kept, and for a chat file the
+lines its run began after, restated over the cut copy as the run's script
+states them), which a take reads only for a trimming harness's release and only
+where it names the archive the take describes (`Runner.trimOf`). The take
+checks the restated start against the archive in place of the record's, which
+names lines the cut left out (`trimmedPrefix`). The capture stamps it (`trimmed`), the log carries
 it from the record version `trimmedVersion` names and the row keeps it
 (`executor_sessions.trimmed`), and
 Sessions and `read_session` say the history before the newest compaction was
@@ -6673,6 +6704,17 @@ of the row's session take the session and keep the summary, which is what a run
 that cannot continue the session starts from: the summary is not counted against
 the seat's budget, one a row, bounded by `SummaryMaxBytes`, and gone with the
 row. An absorption, a dedupe, the retention and a seat's removal take it.
+
+**Handed to the run that does not continue the session.** A launch's probe
+reads the summary of the session its verdict loses (the turn's record's for the
+turn's own, else the lost turn's row's) and the run's brief hands it fenced as
+the seat's own past session, beside the verdict's sentence, never its detail.
+A summary kept up to `SummaryMaxBytes` has no room in a brief, so it is handed
+by its end within half of what the seat's least window leaves below its
+compaction point beside the executor floor, marked as cut. A run that continues
+an older session is handed it only where its place is later than what it
+continues. What each brief handed is on the job's record and counted beside the
+verdict (`crewlet.executor.session.not_continued`'s `summary`).
 
 **Read where the session is not.** A row keeping no session reads as its
 summary (`executorread.TranscriptSummary`), on the Sessions screen and through

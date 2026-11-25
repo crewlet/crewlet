@@ -157,6 +157,13 @@ func (f *listingsHeld) HomeBoardOwners(ctx context.Context) ([]coord.HomeBoardOw
 	return f.wrappedFleet.HomeBoardOwners(ctx)
 }
 
+func (f *listingsHeld) SeatInstructionsOwners(ctx context.Context) ([]coord.SeatInstructionsOwner, error) {
+	if err := f.hold(ctx); err != nil {
+		return nil, err
+	}
+	return f.wrappedFleet.SeatInstructionsOwners(ctx)
+}
+
 func (f *listingsHeld) AtlasWakes(ctx context.Context) (map[string]coord.AtlasWake, error) {
 	if err := f.hold(ctx); err != nil {
 		return nil, err

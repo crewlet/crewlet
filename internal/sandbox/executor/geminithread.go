@@ -65,13 +65,13 @@ func (g GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, path
 		if ask.Count {
 			counter = newGeminiCounting()
 		}
-		var also func([]byte)
 		var lines *geminiSummaryReading
+		var follow *chatSummaryLines
 		if summaries != nil {
 			lines = newGeminiSummaryReading(summaries)
-			also = func(raw []byte) { lines.take(ctx, raw) }
+			follow = &lines.chatSummaryLines
 		}
-		count, err := chatCopyCount(ctx, box, file, counter, ask.Release, geminiRelease, also)
+		count, err := chatCopyCount(ctx, box, file, counter, ask.Release, geminiRelease, follow)
 		reading.Count = count
 		if summaries != nil {
 			lines.end(false)

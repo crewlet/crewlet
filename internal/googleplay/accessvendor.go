@@ -13,7 +13,7 @@ import (
 func init() {
 	seataccess.Register(googlegrowth.SeatAccess{
 		Product: Kind, Lane: seataccess.LaneGooglePlay, Name: "Google Play", Levels: levels,
-		Identity: identity, Adds: true,
+		Identity: identity, Adds: true, List: list, Typed: config.GooglePlayPackagePattern,
 		Scope: func(c *config.Company) []string {
 			if c.Integrations.GooglePlay == nil {
 				return nil

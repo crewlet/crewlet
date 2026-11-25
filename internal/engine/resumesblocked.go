@@ -17,12 +17,12 @@ import (
 // Each node says its own in its status record
 // ([coord.NodeStatusRecord.ResumesBlocked], from
 // [sandbox.Coordinator.ResumesBlocked]) and every data node raises it from the
-// live records, this node's own runs read from its memory: a satellite runs no
-// state log, and read from each node's memory alone the alarm is never raised
-// for a seat it held. A live node whose record is not counted keeps its last
-// word at the same epoch ([coord.LiveNodeStatusesKept]), and a failed listing
-// stands on the last that answered. The package doc's "The runs waiting for an
-// operator" says why.
+// live records, this node's own runs read from its memory: a satellite judges
+// only what it measures of itself, so read from each node's memory alone the
+// alarm is never raised for a seat it held. A live node whose record is not
+// counted keeps its last word at the same epoch ([coord.LiveNodeStatusesKept]),
+// and a failed listing stands on the last that answered. The package doc's
+// "Whose alarm a status record carries" says why.
 
 // blockedSaid is what [Engine.executorReading] last read of each live node's
 // status record, a live node whose record is not counted keeping the one it

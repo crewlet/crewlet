@@ -101,7 +101,7 @@ var _ sandbox.HoldingsReader = (*Runner)(nil)
 // OpenCode's at most 2 MiB, Qwen Code's 10 measured and 12 by its bounds,
 // Gemini CLI's 2 whatever a line's length and 4 at its 2^14 ids), so one adds
 // that to the two transcript reads' [TranscriptReadHeldBytes] each
-// ([TranscriptReadsAtOnce]): 101 MiB live, 152 MiB with the heap's room. A
+// ([TranscriptReadsAtOnce]): 107 MiB live, 160.5 MiB with the heap's room. A
 // second waits behind the first (the slowest 21.4 to 22.6 s) inside its
 // caller's wait, or is no reading, which tells. No seat's read queues ahead
 // of a reading (internal/sandbox's holdingsReadWait).

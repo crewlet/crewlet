@@ -312,3 +312,33 @@ func TestOnlyAConnectedIntegrationReportsTheUnfinishedMigration(t *testing.T) {
 		t.Errorf("a moved integration still waits on %q", got)
 	}
 }
+
+// A CONNECTION STILL WAITING ON ITS SETUP REPORTS ITS NEXT STEP, NOT A
+// MIGRATION: Atlassian, connected and unmigrated, whose own pass says a key is
+// missing, reports that finding alone; once its pass asks nothing of a person,
+// the unfinished migration is reported again. Mutation: drop the gate, or gate
+// on every finding, and a case fails.
+func TestASetupStillWaitingReportsItsStepAndNoMigration(t *testing.T) {
+	t.Parallel()
+	e, c := sealingEngine(t, "https://jira.example.com")
+	e.epoch.current.Store(c)
+	pass := func(found ...integration.Finding) []integration.Finding {
+		got, err := e.withSeatAccess(t.Context(), integration.KindAtlassian, setup.PassInput{},
+			func(context.Context, setup.PassInput) ([]integration.Finding, error) { return found, nil })
+		if err != nil {
+			t.Fatalf("withSeatAccess = %v", err)
+		}
+		return got
+	}
+	step := integration.Finding{Kind: integration.FindingCredentialMissing, Detail: "Add the key"}
+	if got := pass(step); len(got) != 1 || got[0].Detail != "Add the key" {
+		t.Errorf("a setup waiting on a key reported %+v, want its step alone", got)
+	}
+	agent := integration.Finding{Kind: integration.FindingApprovalRequired, Seat: true, Detail: "Accept"}
+	got := pass(agent)
+	if !slices.ContainsFunc(got, func(f integration.Finding) bool {
+		return strings.Contains(f.Detail, "access migration has not finished")
+	}) {
+		t.Errorf("an agent's own wait hid the unfinished migration: %+v", got)
+	}
+}

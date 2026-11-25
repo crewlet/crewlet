@@ -641,6 +641,20 @@ type Options struct {
 	// quietly under its name; nil where it gives none.
 	ScopeDetails map[string]string `json:"scope_details,omitempty"`
 
+	// ScopeGroups is what holds each Scope entry where the vendor nests them
+	// (an Analytics property's account), by entry, for a picker's headings;
+	// nil where entries stand alone.
+	ScopeGroups map[string]string `json:"scope_groups,omitempty"`
+
+	// ScopeTyped is the shape an entry a person types must have (a property's
+	// digits), a regular expression Go and the dashboard both read; "" where
+	// any text may be one. The company document holds entries to the same rule.
+	ScopeTyped string `json:"scope_typed,omitempty"`
+
+	// ScopeUnlisted is why the entries a seat may be given could not be
+	// listed, in a person's words; "" where they were.
+	ScopeUnlisted string `json:"scope_unlisted,omitempty"`
+
 	// ScopeLive is whether Scope and ScopeOpen were answered by the vendor's
 	// session just now; false where it could not be read, so an empty Scope
 	// then says nothing about the company's reach.

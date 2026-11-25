@@ -475,6 +475,9 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 	if err != nil {
 		rec.Failure = writeFailure(err)
 		p.note(ctx, growth.StepFailed, rec)
+		if errors.Is(err, growth.ErrNotSent) {
+			return nil, growth.NotSent(said(refusedBy(err)))
+		}
 		return nil, said(refusedBy(err))
 	}
 	step := growth.StepMade
@@ -489,13 +492,14 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 type moneyFigures = *growth.CardMoney
 
 // failEarly records the failed outcome of an allowed held call that ended
-// before its request was sent, and answers err as the agent is told it.
+// before its request was sent, and answers err as the agent is told it,
+// marked so ([growth.NotSent]).
 func (p *Product) failEarly(ctx context.Context, held bool, rec growth.Record, err error) error {
 	if held {
 		rec.Failure = failureOf(err)
 		p.note(ctx, growth.StepFailed, rec)
 	}
-	return said(err)
+	return growth.NotSent(said(err))
 }
 
 // applySpend makes send inside the spend guard's apply, for the act's ad
@@ -504,6 +508,10 @@ func (p *Product) applySpend(ctx context.Context, act spendAct, send func(contex
 	f, err := p.guard().Apply(ctx, act.m.account, act, func(ctx context.Context) (spendguard.Account, spendguard.Caps, error) {
 		return p.guardRead(ctx, act.m.conn, act.m.account)
 	}, send)
+	if errors.Is(err, spendguard.ErrNotApplied) {
+		// THE SPEND GUARD STOPPED IT before send: its lease or its read again.
+		err = growth.NotSent(err)
+	}
 	if f.Currency == "" {
 		return nil, err
 	}
@@ -519,10 +527,25 @@ func (p *Product) send(ctx context.Context, pr prepared, held bool) (Applied, st
 	answer := Applied{Account: m.account}
 	var ids []string
 	var via []string
+	changed := false
+	// stopped is the act's failure at target i: not sent while no change has
+	// been (only reads, or nothing, went before) and this one is a read or
+	// never left; part of the write once a change was made.
+	stopped := func(i int, err error, unsent bool) error {
+		t := m.targets[i]
+		switch {
+		case changed:
+			return fmt.Errorf("%w: %d of %d requests were made before %s %s failed: %w", errSent,
+				len(answer.Results), len(m.targets), t.row.op.Method, t.path, err)
+		case unsent || pr.classes[i] == growth.ClassRead:
+			return growth.NotSent(err)
+		}
+		return err
+	}
 	for i, t := range m.targets {
 		tok, err := p.tokenFor(ctx, m.conn, m.own, pr.classes[i], t.row.op.Permissions)
 		if err != nil {
-			return answer, strings.Join(via, "_"), err
+			return answer, strings.Join(via, "_"), stopped(i, err, true)
 		}
 		if slot, _ := tok.signed(); slot != "" && !slices.Contains(via, slot) {
 			via = append(via, slot)
@@ -533,7 +556,8 @@ func (p *Product) send(ctx context.Context, pr prepared, held bool) (Applied, st
 		}
 		for k, from := range t.chain {
 			if from >= len(ids) || ids[from] == "" {
-				return answer, strings.Join(via, "_"), fmt.Errorf("metaads: request %d answered no ID for %s", from, k)
+				return answer, strings.Join(via, "_"), stopped(i, fmt.Errorf("metaads: request %d answered no ID "+
+					"for %s", from, k), true)
 			}
 			if k == "creative" {
 				params.Set(k, `{"creative_id":"`+ids[from]+`"}`)
@@ -544,12 +568,9 @@ func (p *Product) send(ctx context.Context, pr prepared, held bool) (Applied, st
 		resp, err := m.conn.client.Do(ctx, tok.valueNow(), Request{Method: t.row.op.Method, Path: t.path, Params: params,
 			Object: objectOf(m.account), Read: pr.classes[i] == growth.ClassRead, Reserved: held})
 		if err != nil {
-			if len(answer.Results) > 0 {
-				return answer, strings.Join(via, "_"), fmt.Errorf("%w: %d of %d requests were made before %s %s failed: %w",
-					errSent, len(answer.Results), len(m.targets), t.row.op.Method, t.path, err)
-			}
-			return answer, strings.Join(via, "_"), err
+			return answer, strings.Join(via, "_"), stopped(i, err, errors.Is(err, errUnsent))
 		}
+		changed = changed || pr.classes[i] != growth.ClassRead
 		var created struct {
 			ID string `json:"id"`
 		}
@@ -570,9 +591,12 @@ func (p *Product) hold(ctx context.Context, resource string) (func(), error) {
 		return nil, growth.Refuse(growth.RefusedUnavailable, "this node cannot hold an act's lease, so nothing was sent.")
 	}
 	release, err := p.deps.Leases.Hold(ctx, resource)
-	if err != nil {
+	switch {
+	case errors.Is(err, growth.ErrActHeld):
 		return nil, growth.Refuse(growth.RefusedUnavailable, "another act on the same ad account is being made; "+
 			"nothing was sent. Call again.")
+	case err != nil:
+		return nil, fmt.Errorf("metaads: hold the ad account's act lease: %w", err)
 	}
 	return release, nil
 }

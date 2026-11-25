@@ -418,20 +418,22 @@ export function turnTokens(
 /**
  * What a seat sets for the box its executor runs in, in a reader's words:
  * "The catalogue's defaults", or what its own `sandbox` block adds — "2 setup
- * steps · 3 variables · up to 40 turns".
+ * steps · 3 variables · a browser · up to 40 turns".
  *
  * NOT WHERE THE BOX IS, and never "not offered": every agent seat's executor
  * is its harness's own run in a box, placed by the `run_in` of whichever
  * model entry launches it, which the seat's own block does not say — so this
- * says only what the block does. Every value on the setup card starts the line
- * it stands on, so each is written with its capital, as "No provider
- * configured" beside it is.
+ * says only what the block does, and "a browser" is the block asking for one,
+ * which a launch whose box cannot run it withholds. Every value on the setup
+ * card starts the line it stands on, so each is written with its capital, as
+ * "No provider configured" beside it is.
  */
 export function sandboxWords(role: ConfigRole): string {
   const box = (role.sandbox ?? {}) as {
     setup?: unknown[];
     env?: Record<string, unknown>;
     mcp?: { servers?: unknown[] };
+    browser?: boolean;
     max_turns?: number;
     max_concurrent_runs?: number;
   };
@@ -443,6 +445,7 @@ export function sandboxWords(role: ConfigRole): string {
   if (vars > 0) parts.push(count(vars, "variable", "variables"));
   const servers = Array.isArray(box.mcp?.servers) ? box.mcp.servers.length : 0;
   if (servers > 0) parts.push(count(servers, "tool server", "tool servers"));
+  if (box.browser === true) parts.push("a browser");
   if (typeof box.max_turns === "number") {
     parts.push(box.max_turns === 0 ? "no turn cap" : `up to ${box.max_turns} turns`);
   }

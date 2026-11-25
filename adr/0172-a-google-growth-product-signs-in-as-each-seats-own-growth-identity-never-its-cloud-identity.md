@@ -7,12 +7,14 @@
   - `internal/googleauth.TestAnIssuedTokenIsKeyedByItsScopeSet`
   - `internal/googleauth.TestEveryIdentityIDFitsGooglesRuleAndNeverCollides`
   - `internal/googlecloud.TestASeatsGrowthIdentityIsItsOwnAccountRecordedByUniqueID`
+  - `internal/googlecloud.TestCrewletTurnsOnAProductsAPIsAndMakesTheReader`
+  - `internal/googlecloud.TestAReaderCrewletDidNotMakeIsNeverAdopted`
   - `internal/googlecloud.TestAGrowthIdentityFollowsTheOROfTheSeatsLanes`
   - `internal/googlecloud.TestAGrowthIdentityIsNeverAdoptedNorReenabledUnasked`
   - `internal/googlecloud.TestARecordedGrowthIdentityIsNotAnOrphan`
   - `internal/googlecloud.TestAnAccountMadeByAPassCutShortIsRecordedNeverOrphaned`
   - `internal/googlecloud.TestATurnOffCutShortIsFinishedNotReportedAsAPersons`
-  - `internal/googlecloud.TestTheCloudShellBlockMakesTheCompanysOwnReaderForItsGrowthProducts`
+  - `internal/googlecloud.TestTheCloudShellBlockNeverCarriesAGrowthProduct`
   - `internal/engine.TestAGrowthTokenIsMintedOnlyForAUsableRecordedIdentityWithItsScopes`
   - `internal/engine.TestGoogleCloudsLaneNeverCountsTowardTheGrowthIdentity`
 - **Cost-when-tried:** not tried. Google's growth products (Analytics, Search Console, Ads, Play) accept a service account added as a user, but the account a seat holds for Google Cloud puts its `cloud-platform` token in the agent's box (ADR-0102).
@@ -26,7 +28,7 @@
 
 **The identity's owner is the core, not a lane.** Its record is a coordination class of its own (`google_identity`, keyed by handle), holding Google's unique ID, because the seat access ledger is keyed by one integration and a lane's sync would disable an account another lane still uses. Only the Google identity pass writes it, with Google Cloud's company pass, before every Google growth lane's pass: on while any growth lane of the seat is on, disabled when the last turns off or the seat is removed, and kept, so its roles in the products survive should the seat return. The record is written before each step at Google it names (the intent to make an account by its email, then its unique ID; a disable before Google is asked), so a pass cut short leaves an account Crewlet knows is its own. It is never adopted by name; one a person turned off at Google is never turned back on unasked. The Google Cloud lane counts for nothing toward it, so turning Google Cloud off for a seat leaves its growth identity working.
 
-**The company reads its figures as its own reader, one per company.** `crewlet-gr-<company>-<hash>`, hashed over `reader/<company>`, made by the Cloud Shell block when a growth product is on, which lets only this company's federated subject act as it. Two companies may share an identity project, so a reader with a fixed name would let one company read the other's spend and earnings. The engine impersonates it with the federated token directly.
+**The company reads its figures as its own reader, one per company.** `crewlet-gr-<company>-<hash>`, hashed over `reader/<company>`, made by Google Cloud's company pass, as the provisioner, when a growth product is on, with that product's APIs, which the provisioner may turn on in the identity project and nothing more (`crewletApiEnabler`); it lets only this company's federated subject act as it. An account by its name that does not say Crewlet made it is never adopted. Two companies may share an identity project, so a reader with a fixed name would let one company read the other's spend and earnings. The engine impersonates it with the federated token directly.
 
 ## Why the obvious alternatives are wrong
 

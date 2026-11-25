@@ -283,13 +283,13 @@ func npmIn(t *testing.T, b *Box, dir string, extra []string, args ...string) str
 // bin/npm to the case's npm, which runs under the box's own node (the floor's
 // npm-cli.js too, its `env node` finding the box's bin alone); copies the
 // suite tree's npm cache to the box's ~/.npm; and writes an empty global
-// npmrc, which Environ names beside a registry nothing answers at. So the
-// box's npm reads that npmrc and never the machine's, and installs the lock
-// with no request.
+// npmrc under the global prefix Environ names beside a registry nothing
+// answers at. So the box's npm reads that npmrc and never the machine's, and
+// installs the lock with no request.
 //
 // Mutations, each red: Start skipping the cache's copy (the install meets
-// the refused registry); Environ naming no NPM_CONFIG_GLOBALCONFIG (the
-// box's npmrc unread).
+// the refused registry); Environ naming no NPM_CONFIG_PREFIX (the box's
+// npmrc unread).
 func TestABoxRunsItsNodesOwnNPMOverTheSuitesCache(t *testing.T) {
 	t.Parallel()
 	EachNode(t, func(t *testing.T, env Env) {

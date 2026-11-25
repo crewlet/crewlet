@@ -161,10 +161,10 @@ func TestAnEndingReadAgainIsTheSameReport(t *testing.T) {
 				Error: `{"type":"provider.quota","message":"You have exhausted your quota"}`},
 			collected: time.Date(2026, time.October, 27, 23, 16, 0, 0, time.UTC),
 			window:    limitBackoff[0], next: limitBackoff[1], step: 1},
-		{name: "a reset beyond the hour", agent: "claude-code", model: "sonnet",
+		{name: "a reset hours away", agent: "claude-code", model: "sonnet",
 			end:       RunEnd{Event: spentLine, Failed: true},
 			collected: time.Date(2026, time.October, 27, 21, 16, 0, 0, time.UTC), // 2:16pm in Vancouver
-			window:    maxLimitBench, next: maxLimitBench},
+			window:    2*time.Hour + 14*time.Minute, next: limitBackoff[0]},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

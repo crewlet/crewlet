@@ -27,12 +27,17 @@ func (f *fakeInterrupter) interrupt(_ context.Context, turn string) error {
 	return nil
 }
 
-// THE CAP FIRES AT EXACTLY ITS NTH RESPONSE, ONCE A TURN: N-1 responses fire
-// nothing, the Nth fires its turn, later ones of the same turn fire nothing
-// more, and a new turn counts from one.
-func TestTheCapFiresAtExactlyItsNthResponse(t *testing.T) {
+// THE CAP FIRES AT EXACTLY THE RUN'S NTH RESPONSE, ONCE A TURN: N-1 responses
+// fire nothing, the Nth fires its turn, later ones of the same turn fire
+// nothing more, and the count goes on across turns, so a turn a note opens
+// after the cap is spent fires as it starts, before any response of its own.
+//
+// Mutation: count each turn from one, or fire a turn only at a response, and
+// turn-2 is not fired as it starts.
+func TestTheCapFiresAtExactlyTheRunsNthResponse(t *testing.T) {
 	t.Parallel()
 	c := newStepCap(3, "")
+	c.begin("turn-1")
 	c.step("turn-1")
 	c.step("turn-1")
 	if len(c.fire) != 0 {
@@ -46,14 +51,33 @@ func TestTheCapFiresAtExactlyItsNthResponse(t *testing.T) {
 	if len(c.fire) != 0 {
 		t.Error("the cap fired turn-1 again at its fourth response")
 	}
-	c.step("turn-2")
+	c.begin("turn-2")
+	if len(c.fire) != 1 || <-c.fire != "turn-2" {
+		t.Fatal("turn-2, started past the run's cap, did not fire as it started")
+	}
 	c.step("turn-2")
 	if len(c.fire) != 0 {
-		t.Error("turn-2 fired at its second response: a new turn counts from one")
+		t.Error("turn-2 fired again at its first response")
+	}
+}
+
+// A TURN BEFORE THE CAP IS SPENT RUNS ON: a note's turn started under the cap
+// fires at the run's Nth response, wherever that falls.
+//
+// Mutation: fire every turn as it starts, and turn-2 fires at its start.
+func TestATurnStartedUnderTheCapRunsToTheRunsNthResponse(t *testing.T) {
+	t.Parallel()
+	c := newStepCap(3, "")
+	c.begin("turn-1")
+	c.step("turn-1")
+	c.begin("turn-2")
+	c.step("turn-2")
+	if len(c.fire) != 0 {
+		t.Fatal("the cap of 3 fired before the run's third response")
 	}
 	c.step("turn-2")
 	if len(c.fire) != 1 || <-c.fire != "turn-2" {
-		t.Error("turn-2 did not fire at its own third response")
+		t.Error("the cap of 3 did not fire turn-2 at the run's third response")
 	}
 }
 

@@ -3,6 +3,7 @@ package seataccess
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -44,6 +45,19 @@ type IdentityGuide struct {
 	// marked and each page linked on the first step that names it.
 	Steps []GuideStep `json:"steps"`
 
+	// Entries are the seat's scope entries to add the identity to, each with
+	// the vendor's page that adds it there and, once checked, where it stands;
+	// nil where the vendor has no entries.
+	Entries []IdentityEntry `json:"entries,omitempty"`
+
+	// Wider is adding the identity once to what holds the entries (an
+	// Analytics account) instead; nil where the vendor has no such place.
+	Wider *GuideWider `json:"wider,omitempty"`
+
+	// ReadyAt is when the vendor can find the identity, while it is
+	// [IdentityPreparing]; zero once it can.
+	ReadyAt time.Time `json:"ready_at,omitzero"`
+
 	// Link is the vendor's page as a button under the steps, only where no
 	// step names it; nil where one does.
 	Link *GuideLink `json:"link,omitempty"`
@@ -60,6 +74,15 @@ type IdentityGuide struct {
 
 	// Checks are the reads the check makes, in order.
 	Checks []GuideCheck `json:"checks"`
+}
+
+// GuideWider is the alternative to adding an identity entry by entry: once
+// on what holds them, which reaches every current and future entry there.
+type GuideWider struct {
+	Label string          `json:"label"`
+	Does  vendortext.Text `json:"does"`
+	// Links are the vendor's page for each holder of the seat's entries.
+	Links []GuideLink `json:"links,omitempty"`
 }
 
 // GuideStep is one numbered step at the vendor; Copy the value it asks for,
@@ -205,7 +228,7 @@ type IdentityProblem struct {
 // account of its own (an Expo robot), the identity is that account, kept once
 // its credential is sealed ([AccountIdentity]); have is what the vendor showed.
 func IdentityOf(v Vendor, c *config.Company, seat SeatRef, lane Lane, want Desired, have Observed,
-	rec *IdentityRecord) *IdentityAnswer {
+	rec *IdentityRecord, now time.Time) *IdentityAnswer {
 
 	spec, ok := v.Catalog().Lane(lane)
 	if !ok || !spec.Identity.Declared() {
@@ -243,7 +266,7 @@ func IdentityOf(v Vendor, c *config.Company, seat SeatRef, lane Lane, want Desir
 		out.Said = "Needs you: set up " + agent + "'s own " + noun + " so " + vendor + " records " +
 			firstNonEmpty(g.Records, "its actions") + ". Until then " + vendor + " sees " + company + "."
 	default:
-		identityOwn(out, is, rec, agent, vendor, noun, company)
+		identityOwn(out, is, rec, agent, vendor, noun, company, now)
 	}
 	if out.Blocked != "" {
 		out.SetUp = false
@@ -254,9 +277,17 @@ func IdentityOf(v Vendor, c *config.Company, seat SeatRef, lane Lane, want Desir
 
 // identityOwn words a seat set to its own identity.
 func identityOwn(out *IdentityAnswer, is IdentitySpec, rec *IdentityRecord, agent, vendor, noun,
-	company string) {
+	company string, now time.Time) {
 
 	status := rec.Status()
+	if last := lastCheck(rec); status == IdentityPreparing && last != nil && !last.ReadyAt.IsZero() &&
+		!now.Before(last.ReadyAt) {
+		// SETTLED SINCE THE CHECK: the vendor can find it now, so it is the person's to add.
+		status = IdentityNone
+		if out.Guide != nil {
+			out.Guide.ReadyAt = time.Time{}
+		}
+	}
 	out.Status = status
 	if rec != nil {
 		out.Retiring = rec.Retiring
@@ -285,6 +316,9 @@ func identityOwn(out *IdentityAnswer, is IdentitySpec, rec *IdentityRecord, agen
 		if status == IdentityReplacing && len(out.Retiring) > 0 {
 			out.Problem = retiringProblem(out.Retiring, vendor, noun)
 		}
+		if check := lastCheck(rec); status == IdentityUnchecked && check != nil {
+			out.Said = strings.TrimSpace(check.Said + " " + check.Remedy)
+		}
 	case rec.Kept():
 		// THE KEPT IDENTITY STOPPED WORKING: calls stop, never the company's.
 		out.Holds, out.SetUp = HoldsNone, true
@@ -308,7 +342,11 @@ func identityOwn(out *IdentityAnswer, is IdentitySpec, rec *IdentityRecord, agen
 		if is.Standing {
 			out.Said = standingSaid(status, agent, vendor, noun)
 		}
-		if rec != nil && rec.Attempt != nil && (status != IdentityNone || rec.Attempt.Said != "") {
+		switch {
+		case status == IdentityPreparing && rec.Attempt != nil && rec.Attempt.Said != "":
+			// THE VENDOR'S WAIT, NOT A PROBLEM: the check says how long.
+			out.Said = "Getting ready: " + rec.Attempt.Said
+		case rec != nil && rec.Attempt != nil && (status != IdentityNone || rec.Attempt.Said != ""):
 			out.Problem = problemOf(rec.Attempt, vendor)
 		}
 		if out.Blocked != "" {
@@ -356,6 +394,9 @@ func AccountIdentity(have Observed) *IdentityRecord {
 // it exists already, so what a person does depends on what the check found.
 func standingSaid(status IdentityStatus, agent, vendor, noun string) string {
 	switch status {
+	case IdentityPreparing:
+		return "Getting ready: Crewlet is making " + agent + "'s own " + noun + ". " + vendor +
+			" can find it in about a minute, then add it there."
 	case IdentityWrongRole:
 		return "Needs you: " + agent + "'s own " + noun + " holds the wrong role in " + vendor +
 			", which refuses the calls it needs more for."
@@ -367,9 +408,9 @@ func standingSaid(status IdentityStatus, agent, vendor, noun string) string {
 		" refuses its calls."
 }
 
-// standingGuide names, in g, the standing identity rec holds where the
-// vendor knows it by another name than the rule gives now (one made before
-// the company was renamed): the name to add is the one that exists.
+// standingGuide is g as a standing identity's record tells it: the identity
+// the last check named (a rename keeps the made one), and that check's
+// reading of each entry and when a preparing one can be added.
 func standingGuide(g *IdentityGuide, rec *IdentityRecord) {
 	var name string
 	switch {
@@ -378,17 +419,74 @@ func standingGuide(g *IdentityGuide, rec *IdentityRecord) {
 	case rec != nil && rec.Attempt != nil:
 		name = firstNonEmpty(rec.Attempt.Name, rec.Attempt.ID)
 	}
-	if name == "" || name == g.Name {
+	if name != "" && name != g.Name {
+		for i := range g.Steps {
+			if c := g.Steps[i].Copy; c != nil && c.Value == g.Name {
+				copied := *c
+				copied.Value = name
+				g.Steps[i].Copy = &copied
+			}
+		}
+		g.Name = name
+	}
+	last := lastCheck(rec)
+	if last == nil {
 		return
 	}
-	for i := range g.Steps {
-		if c := g.Steps[i].Copy; c != nil && c.Value == g.Name {
-			copied := *c
-			copied.Value = name
-			g.Steps[i].Copy = &copied
-		}
+	g.Entries = overlaid(g.Entries, last.Entries)
+	if last.Status == IdentityPreparing {
+		g.ReadyAt = last.ReadyAt
 	}
-	g.Name = name
+	if g.Wider != nil {
+		g.Wider.Links = widerLinks(g.Entries)
+	}
+}
+
+// lastCheck is the check the record's status reads ([IdentityRecord.Status]).
+func lastCheck(rec *IdentityRecord) *IdentityCheck {
+	switch {
+	case rec.Kept() && rec.Check != nil:
+		return rec.Check
+	case rec != nil:
+		return rec.Attempt
+	}
+	return nil
+}
+
+// overlaid is the guide's entries with what a check read of each laid over
+// them, in the guide's order: an entry the check did not read keeps the
+// guide's own words.
+func overlaid(entries, checked []IdentityEntry) []IdentityEntry {
+	read := map[string]IdentityEntry{}
+	for _, e := range checked {
+		read[e.ID] = e
+	}
+	out := make([]IdentityEntry, len(entries))
+	for i, e := range entries {
+		c, ok := read[e.ID]
+		if !ok {
+			out[i] = e
+			continue
+		}
+		c.AddURL = firstNonEmpty(c.AddURL, e.AddURL)
+		out[i] = c
+	}
+	return out
+}
+
+// widerLinks are the vendor's page for each holder of an entry the identity
+// is not added to yet, once each, in the entries' order.
+func widerLinks(entries []IdentityEntry) []GuideLink {
+	var out []GuideLink
+	seen := map[string]bool{}
+	for _, e := range entries {
+		if e.GroupURL == "" || seen[e.GroupURL] || e.State == EntryAdded || e.State == EntryUnchecked {
+			continue
+		}
+		seen[e.GroupURL] = true
+		out = append(out, GuideLink{Label: firstNonEmpty(e.Group, e.GroupURL), URL: e.GroupURL})
+	}
+	return out
 }
 
 // problemOf is a failed check as the box's callout.
@@ -415,6 +513,10 @@ func identityRowStatus(la LaneAnswer) LaneStatus {
 	switch {
 	case id.Status == IdentityRefused || id.Holds == HoldsNone:
 		return StatusRefused
+	case id.Status == IdentityPreparing:
+		return StatusPreparing
+	case id.Status == IdentityUnchecked:
+		return StatusRoleUnchecked
 	case !id.Status.works():
 		return StatusNeedsYou
 	}

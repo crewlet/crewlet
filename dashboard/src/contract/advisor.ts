@@ -25,3 +25,14 @@ export const PAUSED_SEAT_CLASSES = [
 /** Pages an `open_page` fix opens on its `target`: `backups` (Take a backup), `item`, `seat`.
  *  Held both ways to the engine's `advisor.Pages`, so no finding's row lacks its step. */
 export const ADVISOR_PAGES = ["backups", "item", "seat"] as const;
+
+/**
+ * The class of the notice naming the OAuth clients a person registered whose
+ * last sign-in came back to an earlier engine address. Held to the engine's
+ * `notice.ClassOAuthRedirectMoved`.
+ */
+export const OAUTH_REDIRECT_MOVED = "oauth_redirect_moved";
+
+/** Where such a client is registered: `google` (Google Cloud) or `mcp` (an MCP
+ *  server's vendor). Held both ways to the engine's `notice.Vendors`. */
+export const OAUTH_CLIENT_VENDORS = ["google", "mcp"] as const;
