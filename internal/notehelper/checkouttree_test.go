@@ -429,7 +429,8 @@ func TestAScopedRuleIsLeftOutAsQwenCodeReadsItsFrontmatter(t *testing.T) {
 		"---\npaths: [~]\n---\nX\n", "---\npaths: [[]]\n---\nX\n", "---\npaths: [{}]\n---\nX\n",
 		"---\npaths: [\"src/**\", {}]\n---\nX\n", "---\ndescription: [x\n---\nX\n",
 		"---\ndescription: [x\npaths: null\n---\nX\n", "---\npaths: 0o7\n---\nX\n", "---\npaths: 0x1F\n---\nX\n",
-		"---\npaths: True\n---\nX\n", "---\npaths: {a: b}\n---\nX\n", "---\npaths: .inf\n---\nX\n"}
+		"---\npaths: True\n---\nX\n", "---\npaths: {a: b}\n---\nX\n", "---\npaths: .inf\n---\nX\n",
+		"---\npaths: !!int 5\n---\nX\n"}
 	left := []string{"---\npaths: [\"src/**/*.ts\"]\n---\nX\n", "---\npaths: \"**\"\n---\nX\n",
 		"---\npaths: [5]\n---\nX\n", "---\npaths: [\"src/**\", 5]\n---\nX\n", "---\npaths: [true]\n---\nX\n",
 		"---\npaths: \"  \"\n---\nX\n", "---\npaths: [bad\n---\nX\n",
@@ -437,7 +438,8 @@ func TestAScopedRuleIsLeftOutAsQwenCodeReadsItsFrontmatter(t *testing.T) {
 		"---\r\npaths: [\"src/**\"]\r\n---\r\nX\r\n", "---\npaths: 1_000\n---\nX\n", "---\npaths: 0b1\n---\nX\n",
 		"---\npaths: 2024-01-01\n---\nX\n", "---\npaths: []\npaths: [\"src/**\"]\n---\nX\n",
 		"---\nx: &a [\"src/**\"]\npaths: *a\n---\nX\n", "---\ndescription: [x\npaths: ''\n---\nX\n",
-		"---\ndescription: [x\npaths:\n  - ''\n---\nX\n"}
+		"---\ndescription: [x\npaths:\n  - ''\n---\nX\n", "---\npaths: !!timestamp 2020-01-01\n---\nX\n",
+		"---\npaths: !x a\n---\nX\n", "---\npaths: !!binary aGk=\n---\nX\n"}
 	scope := qwenRules().Tree.Scoped
 	for _, file := range handed {
 		if _, ok := qwenRule([]byte(file), scope); !ok {
@@ -460,9 +462,8 @@ func TestAScopedRuleIsLeftOutAsQwenCodeReadsItsFrontmatter(t *testing.T) {
 // object do not.
 //
 // Mutation: read a number, `true` or `""` as a string, an empty single-quoted
-// one as empty,
-// `Infinity` or `1_0` as a number, an object as a string, or a `null` item as
-// a path, and a row goes red.
+// one as empty, `Infinity` or `1_0` as a number, an object as a string, or a
+// `null` item as a path, and a row goes red.
 func TestQwenCodesLineReaderDecidesAsItReads(t *testing.T) {
 	t.Parallel()
 	for value, want := range map[string]bool{
