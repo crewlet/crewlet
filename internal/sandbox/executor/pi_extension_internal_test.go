@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -93,8 +94,9 @@ type piProbe struct {
 	t       *testing.T
 	stdin   io.WriteCloser
 	reports chan piProbeReport
-	// dir is the probe's working directory, its ctx.cwd.
-	dir string
+	// dir is the probe's working directory, its ctx.cwd; stderr, the file
+	// its error stream goes to.
+	dir, stderr string
 }
 
 // startPiProbe renders the extension with settings and runs it.
@@ -115,9 +117,15 @@ func startPiProbe(t *testing.T, settings piExtensionSettings) *piProbe {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &piProbe{t: t, reports: make(chan piProbeReport, 256), dir: dir}
+	p := &piProbe{t: t, reports: make(chan piProbeReport, 256), dir: dir, stderr: filepath.Join(dir, "stderr")}
+	errs, err := os.Create(p.stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = errs.Close() })
 	cmd := exec.Command(node, probe, ext) //nolint:gosec // the suite's own probe
 	cmd.Dir = dir
+	cmd.Stderr = errs
 	cmd.Env = append(os.Environ(), "NODE_NO_WARNINGS=1")
 	if p.stdin, err = cmd.StdinPipe(); err != nil {
 		t.Fatal(err)
@@ -495,8 +503,7 @@ func TestThePiExtensionAddsWhatTheNoteHelperHandsToTheToolsResult(t *testing.T) 
 	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own helper
 		t.Fatal(err)
 	}
-	p := startPiProbe(t, piExtensionSettings{Checkouts: &piNestedHand{Helper: helper, Config: "/run/nested.json",
-		TimeoutMs: 500, MaxOutput: piNestedMaxOutput}})
+	p := startPiProbe(t, piExtensionSettings{Checkouts: piTestHand(helper, 500)})
 	p.expect("loaded")
 	result := func(saying string, event map[string]any) string {
 		t.Helper()
@@ -530,22 +537,112 @@ func TestThePiExtensionAddsWhatTheNoteHelperHandsToTheToolsResult(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := strings.Repeat("-adapter|pi-nested|-config|/run/nested.json|\n", 4) + "killed\n"; string(raw) != want {
+	firing := fmt.Sprintf("-adapter|pi-nested|-config|/run/nested.json|-room|%d|\n", piNestedFallbackRoom)
+	if want := strings.Repeat(firing, 4) + "killed\n"; string(raw) != want {
 		t.Errorf("the helper was run as\n%s\nwant four firings, none for the nested call and none fed any input, "+
 			"the last stopped at its bound:\n%s", raw, want)
 	}
 }
 
-// THE EXTENSION'S OUTPUT BOUND HOLDS A WHOLE ANSWER: a pi-nested firing
-// prints at most its files within piFiringLimit and the listings' 64 KiB, and
-// the extension hands nothing of an answer past its bound (measured), so the
-// bound must hold the largest.
+// piTestHand is a run's hand for the helper at helper, its timeout timeoutMs
+// and the run's own bounds.
+func piTestHand(helper string, timeoutMs int64) *piNestedHand {
+	return &piNestedHand{Helper: helper, Config: "/run/nested.json", TimeoutMs: timeoutMs,
+		MaxOutput: piNestedMaxOutput, MaxRoom: piNestedMaxRoom, FallbackRoom: piNestedFallbackRoom,
+		MinRoom: piNestedMinRoom}
+}
+
+// THE EXTENSION HANDS THE HELPER THE ROOM PI LEAVES: -room is what
+// ctx.getContextUsage leaves below the window less pi's compaction reserve
+// twice (the model's override, else the setting, else 16,384), less the
+// result's own text (an image 4,800), four characters a token; at most the
+// most room, the fallback where pi gives no usage, said once on the error
+// stream, and no firing at all under the least room.
 //
-// Mutation: raise the firing's bound past the output bound, and this goes red.
+// Mutation: take the reserve once, skip the override or the image, drop the
+// cap, the floor or the fallback, or say it each time, and a case goes red.
+func TestThePiExtensionHandsTheHelperTheRoomPiLeaves(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	helper, calls := filepath.Join(dir, "notehelper"), filepath.Join(dir, "calls")
+	script := "#!/bin/sh\nprintf '%s ' \"$@\" >> " + shellword.Quote(calls) + "; echo >> " + shellword.Quote(calls) +
+		"\necho HANDED\n"
+	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own helper
+		t.Fatal(err)
+	}
+	p := startPiProbe(t, piExtensionSettings{Checkouts: piTestHand(helper, 60_000)})
+	p.expect("loaded")
+	usage := func(tokens any, window int) map[string]any {
+		return map[string]any{"tokens": tokens, "contextWindow": window}
+	}
+	reserves := map[string]any{"compaction": map[string]any{"reserveTokens": 20_000,
+		"modelOverrides": map[string]any{"p/m": map[string]any{"reserveTokens": 30_000}}}}
+	text := []map[string]any{{"type": "text", "text": "OWN"}}
+	image := []map[string]any{{"type": "text", "text": "OWN"}, {"type": "image", "data": "", "mimeType": "image/png"}}
+	fired := 0
+	for _, c := range []struct {
+		name     string
+		usage    map[string]any
+		settings map[string]any
+		model    map[string]any
+		content  []map[string]any
+		room     int // 0: no firing
+	}{
+		{"pi's own reserve", usage(1_000, 200_000), nil, nil, text, 4*(200_000-2*16_384-1_000) - 3},
+		{"the model's override", usage(1_000, 200_000), reserves, map[string]any{"provider": "p", "id": "m"}, text,
+			4*(200_000-2*30_000-1_000) - 3},
+		{"the setting", usage(1_000, 200_000), reserves, map[string]any{"provider": "p", "id": "x"}, text,
+			4*(200_000-2*20_000-1_000) - 3},
+		{"an image", usage(1_000, 200_000), nil, nil, image, 4*(200_000-2*16_384-1_000) - 3 - 4_800},
+		{"a window past the cap", usage(0, 20_000_000), nil, nil, text, piNestedMaxRoom},
+		{"under the least room", usage(6_500, 40_000), nil, nil, text, 0},
+		{"no tokens known", usage(nil, 200_000), nil, nil, text, piNestedFallbackRoom},
+		{"no usage", nil, nil, nil, text, piNestedFallbackRoom},
+	} {
+		p.send(map[string]any{"op": "usage", "usage": c.usage})
+		p.send(map[string]any{"op": "settings", "settings": c.settings})
+		p.send(map[string]any{"op": "model", "model": c.model})
+		got := string(p.handled("tool_result", map[string]any{"toolName": "bash", "content": c.content}).Result)
+		raw, err := os.ReadFile(calls) //nolint:gosec // the case's own file
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+		if c.room == 0 {
+			if got != "null" || len(raw) > 0 && len(lines) != fired {
+				t.Errorf("%s: the helper ran (%q) or the result changed: %s", c.name, raw, got)
+			}
+			continue
+		}
+		fired++
+		want := fmt.Sprintf("-adapter pi-nested -config /run/nested.json -room %d ", c.room)
+		if len(lines) != fired || lines[fired-1] != want || !strings.Contains(got, "HANDED") {
+			t.Errorf("%s: the helper ran as %q (result %s), want %q", c.name, lines, got, want)
+		}
+	}
+	errs, err := os.ReadFile(p.stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(errs), "pi gave no context usage"); n != 1 {
+		t.Errorf("the fallback was said %d times, want once:\n%s", n, errs)
+	}
+}
+
+// THE EXTENSION'S OUTPUT BOUND HOLDS A WHOLE ANSWER: a pi-nested answer
+// within the most room a firing is handed prints at most three bytes a
+// UTF-16 unit, and the extension hands nothing of an answer past its output
+// bound (measured), so the bound must hold the largest; the fallback and
+// least rooms lie within it.
+//
+// Mutation: raise the room past a third of the output bound, and this goes red.
 func TestThePiExtensionsOutputBoundHoldsAWholeAnswer(t *testing.T) {
 	t.Parallel()
-	if answer := piFiringLimit + 64<<10; answer > piNestedMaxOutput {
+	if answer := 3 * piNestedMaxRoom; answer > piNestedMaxOutput {
 		t.Errorf("a firing may print %d bytes, past the extension's bound of %d", answer, piNestedMaxOutput)
+	}
+	if piNestedMinRoom > piNestedFallbackRoom || piNestedFallbackRoom > piNestedMaxRoom {
+		t.Errorf("the rooms %d <= %d <= %d do not hold", piNestedMinRoom, piNestedFallbackRoom, piNestedMaxRoom)
 	}
 }
 
@@ -563,8 +660,7 @@ func TestThePiExtensionKeepsPollingWhileTheNoteHelperRuns(t *testing.T) {
 	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own helper
 		t.Fatal(err)
 	}
-	p := startPiProbe(t, piExtensionSettings{Notes: route.url, Checkouts: &piNestedHand{Helper: helper,
-		Config: "/run/nested.json", TimeoutMs: 60_000, MaxOutput: piNestedMaxOutput}})
+	p := startPiProbe(t, piExtensionSettings{Notes: route.url, Checkouts: piTestHand(helper, 60_000)})
 	p.expect("loaded")
 	p.event("agent_start", map[string]any{})
 	p.expect("handled")

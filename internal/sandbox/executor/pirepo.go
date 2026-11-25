@@ -10,23 +10,13 @@ var piInstructionNames = []string{"AGENTS.override.md", "AGENTS.md", "AGENTS.MD"
 // piCheckouts is what Pi 1.6.0 reads from a repository's root started there
 // (measured): one instruction file ([piInstructionNames]), whole, since Pi
 // bounds none (a 200,000-byte file reached the model whole), and the skills a
-// walk of its .pi/skills and .agents/skills reaches, the first winning a name;
-// a firing's files within [piFiringLimit].
+// walk of its .pi/skills and .agents/skills reaches, the first winning a name.
+// A firing's answer is bounded by the room the extension finds at its tool
+// result ([piNestedHand]), not by the spec.
 func piCheckouts() checkoutSpec {
 	return checkoutSpec{Instructions: []checkoutSlot{{Names: piInstructionNames}}, Limit: checkoutUnlimited,
-		FiringLimit: &piFiringLimit,
-		SkillDirs:   []checkoutSkillDir{{Dir: ".pi/skills", Recursive: true}, {Dir: ".agents/skills", Recursive: true}}}
+		SkillDirs: []checkoutSkillDir{{Dir: ".pi/skills", Recursive: true}, {Dir: ".agents/skills", Recursive: true}}}
 }
-
-// piFiringLimit bounds the files one pi-nested firing hands, each counted
-// with its frame. Pi 1.6.0 cuts no tool result (64 MiB reached the next
-// request whole) but first compacts the run's history once its estimate, a
-// token per four UTF-16 units, passes the window less 16,384 tokens (measured
-// between 734,400 and 734,440 bytes in a 200,000-token window), and a model
-// its config gives no window takes 128,000. An answer within half that room,
-// these files and the listings' 64 KiB, leaves the run the other half; a byte
-// bounds a unit, so the bytes bound the estimate. A file past it is named.
-var piFiringLimit = (128_000-16_384)*4/2 - 64<<10
 
 // piCheckoutHome is where a Pi run keeps its checkouts' instructions and
 // skills ([checkoutHome]): the agent directory's instruction file, the one of
@@ -61,23 +51,49 @@ func (Pi) homeRestore(p Paths) string {
 // the build VM.
 const piNestedTimeout = codexNestedTimeout * time.Second
 
-// piNestedMaxOutput is the most a pi-nested firing may print, past which the
-// extension hands nothing of it (measured): its answer is at most
-// [piFiringLimit] and the listings' 64 KiB, 218 KiB, so Node's default of
-// 1 MiB holds it whole, and only a helper gone wrong prints past it.
-const piNestedMaxOutput = 1 << 20
+// piNestedMaxOutput is the most a pi-nested firing may print: 64 MiB, the
+// most measured to reach Pi 1.6.0's next request whole through the
+// extension; one byte past it, the extension hands nothing of the answer.
+const piNestedMaxOutput = 64 << 20
+
+// piNestedMaxRoom is the most room a firing is handed, in UTF-16 units: an
+// answer within it prints at most three bytes a unit, so within
+// [piNestedMaxOutput]. Some 5.6 million tokens of Pi's estimate, so only a
+// window past that is held below its room.
+const piNestedMaxRoom = piNestedMaxOutput / 3
+
+// piNestedFallbackRoom is the room where Pi gives the extension no usage (its
+// code gives none after a compaction until the model answers):
+// half what an empty context leaves in the 128,000-token window Pi gives a
+// model whose config names none, with both reserves ([piNestedHand]) held.
+const piNestedFallbackRoom = (128_000 - 2*16_384) * 4 / 2
+
+// piNestedMinRoom is the least room a firing runs in: below it the checkouts
+// wait for a tool result with more, as after the compaction a full context
+// brings, since some 1,000 tokens names a few files left out and no more.
+const piNestedMinRoom = 4 << 10
 
 // piNestedHand is the extension's settings for a pi-nested firing: the note
-// helper, its config (written by checkout-launch), and the bounds above.
+// helper, its config (written by checkout-launch), its bounds, and the rooms
+// above. Each firing's -room is what Pi's own estimate (ctx.getContextUsage,
+// the figure its compaction checks, measured equal) leaves below the window
+// less Pi's compaction reserve taken twice, once Pi's for the reply and once
+// for what the next turn adds, less the tool result's own text, four
+// characters a token as Pi counts (measured: at that room no compaction, a
+// character more compacts).
 type piNestedHand struct {
-	Helper    string `json:"helper"`
-	Config    string `json:"config"`
-	TimeoutMs int64  `json:"timeoutMs"`
-	MaxOutput int    `json:"maxOutput"`
+	Helper       string `json:"helper"`
+	Config       string `json:"config"`
+	TimeoutMs    int64  `json:"timeoutMs"`
+	MaxOutput    int    `json:"maxOutput"`
+	MaxRoom      int    `json:"maxRoom"`
+	FallbackRoom int    `json:"fallbackRoom"`
+	MinRoom      int    `json:"minRoom"`
 }
 
 // piNested is the extension's piNestedHand for a run in paths.
 func piNested(paths Paths) *piNestedHand {
 	return &piNestedHand{Helper: paths.PiNoteHelper(), Config: paths.PiCheckouts() + "/nested.json",
-		TimeoutMs: piNestedTimeout.Milliseconds(), MaxOutput: piNestedMaxOutput}
+		TimeoutMs: piNestedTimeout.Milliseconds(), MaxOutput: piNestedMaxOutput, MaxRoom: piNestedMaxRoom,
+		FallbackRoom: piNestedFallbackRoom, MinRoom: piNestedMinRoom}
 }

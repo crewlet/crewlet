@@ -256,14 +256,55 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, list
   pi.on("tool_result", async (event, ctx) => {
     // A CALL A CODEMODE SCRIPT NESTS answers the script, not the model: the
     // checkout waits for the outer call's result.
-    const handed = event.parentToolCallId ? "" : await handCheckouts(checkouts)
+    const handed = event.parentToolCallId ? "" : await handCheckouts(checkouts, firingRoom(pi, ctx, checkouts, event))
     await reportLoad(event, ctx)
     if (handed.trim() === "") return
     return { content: [...(Array.isArray(event.content) ? event.content : []), { type: "text", text: handed }] }
   })
 }
 
-// handCheckouts runs the note helper's pi-nested adapter once (pirepo.go):
+// firingRoom is the characters a pi-nested answer may add to this tool's
+// result (pirepo.go, piNestedHand): what pi's estimate leaves below the
+// window less its compaction reserve twice, less the result's own text,
+// counted as pi counts (an image 4,800), within hand.maxRoom; hand.fallbackRoom
+// where pi gives no usage, said once; null under hand.minRoom.
+let fellBack = false
+function firingRoom(pi, ctx, hand, event) {
+  if (hand === null || typeof hand !== "object") return null
+  const usage = typeof ctx?.getContextUsage === "function" ? ctx.getContextUsage() : undefined
+  if (!Number.isFinite(usage?.tokens) || !(usage.contextWindow > 0)) {
+    if (!fellBack) process.stderr.write("crewlet: pi gave no context usage at a tool result, so a checkout " +
+      "cloned during the run is handed within " + hand.fallbackRoom + " characters there\n")
+    fellBack = true
+    return hand.fallbackRoom
+  }
+  let own = 0
+  for (const block of Array.isArray(event.content) ? event.content : []) {
+    if (block?.type === "text" && typeof block.text === "string") own += block.text.length
+    else if (block?.type === "image") own += 4800
+  }
+  const room = 4 * (usage.contextWindow - 2 * compactionReserve(pi, ctx) - usage.tokens) - own
+  return room < hand.minRoom ? null : Math.min(room, hand.maxRoom)
+}
+
+// compactionReserve is the tokens pi keeps below the window before it
+// compacts, resolved as pi resolves it: the model's override, the setting,
+// else its default of 16,384 (measured: an override wins over the setting).
+function compactionReserve(pi, ctx) {
+  let compaction
+  try {
+    compaction = pi.getSettings?.()?.compaction
+  } catch {}
+  const model = ctx?.model ? ctx.model.provider + "/" + ctx.model.id : undefined
+  const valid = (n) => Number.isSafeInteger(n) && n >= 0
+  for (const n of [model && compaction?.modelOverrides?.[model]?.reserveTokens, compaction?.reserveTokens]) {
+    if (valid(n)) return n
+  }
+  return 16384
+}
+
+// handCheckouts runs the note helper's pi-nested adapter once (pirepo.go),
+// within room characters ([firingRoom]; none for null, the checkouts waiting):
 // each checkout cloned since its last run, in pi's own shape, "" for none or
 // on a failure, which the run's error stream says, with the helper's own
 // stderr: its trouble, never what it left out, which is in its answer and in
@@ -273,9 +314,10 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, list
 // timeout and output bound (pirepo.go, piNestedTimeout), and the rest of the
 // process (the notes poll, MCP, pi's own signal handlers) runs on meanwhile.
 // Its input is closed at once.
-async function handCheckouts(hand) {
+async function handCheckouts(hand, room) {
   if (hand === null || typeof hand !== "object" || typeof hand.helper !== "string" || hand.helper === "") return ""
-  const run = execFileAsync(hand.helper, ["-adapter", "pi-nested", "-config", hand.config],
+  if (room === null) return ""
+  const run = execFileAsync(hand.helper, ["-adapter", "pi-nested", "-config", hand.config, "-room", String(room)],
     { encoding: "utf8", timeout: hand.timeoutMs, maxBuffer: hand.maxOutput })
   run.child.stdin?.end()
   try {
