@@ -139,12 +139,12 @@ roles:
 // executor is bridged may weigh ([bridgedBytes]): the least every agent seat's
 // first request carries where its harness sends them up front.
 //
-// 138 500 is the 134 962 last measured (76 tools) and most of the slack the
-// launch floor leaves: its default, 65000, is 858 tokens over the largest
-// first request a minimal seat was measured sending (Muse Code's, its bridged
-// tools at 4.3 bytes a token), about 3 700 bytes of this list. Past it, that
-// request may pass the floor: measure the floor again (ADR-0066) and raise
-// both together.
+// 138 500 is the 134 962 (76 tools) the launch floor was measured over and
+// most of the slack the floor leaves: its default, 65000, is 858 tokens over
+// the largest first request a minimal seat was measured sending (Muse Code's,
+// its bridged tools at 4.3 bytes a token), about 3 700 bytes of this list.
+// Past it, that request may pass the floor: measure the floor again
+// (ADR-0066) and raise both together.
 const minimalSeatToolsBudget = 138_500
 
 // A MINIMAL SEAT'S BRIDGED TOOLS STAY UNDER THEIR BUDGET: each listed tool's
