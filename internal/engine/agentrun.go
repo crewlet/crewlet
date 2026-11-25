@@ -651,6 +651,7 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 			sayNotContinued(ctx, l.seat.Handle(), l.turn.RunID, *dropped,
 				"outcome", "the run starts a session of its own")
 			req.Session = nil
+			req = toldAgain(req, inBox)
 		}
 	}
 	static := staticFloor(l.company)
@@ -767,6 +768,7 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 	}
 	if keptWhy != "" || (inPlaceWhy != "" && req.Session == nil) {
 		sayNotContinued(ctx, l.seat.Handle(), l.turn.RunID, *req.NotContinued, "outcome", outcome)
+		req = toldAgain(req, inBox)
 	}
 	// THE HOLD, SAID ONCE THE LAUNCH'S FLOOR IS DECIDED, and naming that
 	// floor. A held fresh floor is the static floor or the room below it, so a
@@ -797,6 +799,19 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 			"outcome", heldOutcome)
 	}
 	return req, floor
+}
+
+// toldAgain is req with its fresh brief told under the verdict the launch's
+// floor decided ([runner.AgentRunRequest.FreshFor]) where it offers its run no
+// session any more, so the brief that run reads names its own loss; req as it
+// is while it offers one, whose box tells it at its decision.
+func toldAgain(req runner.AgentRunRequest, inBox bool) runner.AgentRunRequest {
+	if req.FreshFor == nil || req.Session != nil || (req.Continue != nil && req.Continue.SessionID != "" && inBox) {
+		return req
+	}
+	told := req.FreshFor(req.NotContinued)
+	req.Brief, req.Handover = told.Text, told.Handover
+	return req
 }
 
 // droppedAlone is s less each telling beside its own briefs whose floor, beside
@@ -1136,6 +1151,9 @@ func withRunsOwn(req runner.AgentRunRequest, pick *fleet.Pick, out sandbox.Launc
 	}
 	out.FreshOwn = req.FreshOwn
 	out.BriefRead = req.BriefRead
+	// AND HOW ITS FRESH BRIEF IS TOLD AGAIN under a verdict the launch decides
+	// in its box, with what the one handed hands of the lost session's summary.
+	out.FreshFor, out.Handover = req.FreshFor, req.Handover
 	return out
 }
 

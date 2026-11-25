@@ -3273,9 +3273,12 @@ type BoxRef struct {
 
 	// Brief is which brief the launch handed the job's run ([LaunchRecord.Brief]),
 	// written with the command as Handed is, and NotContinued its verdict on the
-	// session it did not continue ([LaunchRecord.NotContinued]).
-	Brief        BriefKind
-	NotContinued *executorkeep.NotContinued
+	// session it did not continue ([LaunchRecord.NotContinued]); Handover and
+	// FreshHandover what that brief and the fresh one hand of its summary
+	// ([LaunchRecord.Handover]).
+	Brief                   BriefKind
+	NotContinued            *executorkeep.NotContinued
+	Handover, FreshHandover SummaryHandover
 
 	// BriefOmitted is what that brief left out of the round the launch carries on,
 	// FreshOmitted what the fresh brief the box falls back to left out, beside a
@@ -3507,6 +3510,15 @@ type LaunchRecord struct {
 	// [executorkeep.LossRestoreFailed] ([finalNotContinued]). Nil where it lost
 	// none. Fitted ([executorkeep.NotContinued.Fit]) before the row carries it.
 	NotContinued *executorkeep.NotContinued `json:"not_continued,omitempty"`
+
+	// Handover is what the brief the launch handed says of the newest summary
+	// of the session its run does not continue, and FreshHandover what the
+	// fresh brief its box falls back to says, beside a brief that continues
+	// one ([SummaryHandover]): counted with the verdict at collection, by the
+	// brief the run read ([Coordinator.meterCarry]). Written by the same attach
+	// as Brief; "" where it said nothing of one.
+	Handover      SummaryHandover `json:"summary_handover,omitempty"`
+	FreshHandover SummaryHandover `json:"fresh_summary_handover,omitempty"`
 
 	// BriefOmitted is the reads of the carried-on round that the job's brief counted
 	// without listing, and FreshOmitted those the fresh brief the box falls back to
