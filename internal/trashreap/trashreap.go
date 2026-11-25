@@ -224,9 +224,9 @@ func New(deps Deps) (*Reaper, error) {
 		return nil, errors.New("trashreap: a reaper needs the id of the node running it, " +
 			"which every report names")
 	}
-	if len(deps.Node) > coord.MaxNodeIDBytes {
-		return nil, fmt.Errorf("trashreap: node id %q is past the %d bytes a node id holds",
-			deps.Node, coord.MaxNodeIDBytes)
+	if len(deps.Node) > coord.MaxNodeIDBytes || coord.TextBytes(deps.Node) != len(deps.Node) {
+		return nil, fmt.Errorf("trashreap: node id %q is no node id a report holds: at most "+
+			"%d bytes, each one JSON writes as itself", deps.Node, coord.MaxNodeIDBytes)
 	}
 	now := deps.Now
 	if now == nil {
