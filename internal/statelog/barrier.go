@@ -278,6 +278,9 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		// leader is waited out, admission and append alike, appended
 		// again until one is heard ([ReadIndex.appendThroughElection]).
 		ack, err := r.appendThroughElection(appendCtx, run, body)
+		if err != nil && appendCtx.Err() != nil && ack.unadmitted == nil && r.members() > 1 {
+			err = r.unansweredThrough(ctx, err)
+		}
 		var none *jsprovision.NoLeader
 		switch {
 		case errors.As(err, &none):
@@ -334,6 +337,24 @@ func (r *ReadIndex) unheard(ctx context.Context, err error) error {
 		}
 	}
 	return jsprovision.Unheard(err)
+}
+
+// unansweredThrough is err, a barrier's append nobody answered for its whole
+// budget on a log several members store, as [jsprovision.NoLeader] where a read
+// only the log's leader answers goes unanswered too, asked once for one
+// [jsprovision.ReadTerm]: members that have not yet seen their leader go
+// swallow the append and answer nothing leaderless. Else err: a leader
+// answers, and the log did not commit the barrier.
+func (r *ReadIndex) unansweredThrough(ctx context.Context, err error) error {
+	detached := context.WithoutCancel(ctx)
+	probe, cancel := context.WithTimeout(detached, jsprovision.ReadTerm)
+	defer cancel()
+	_, _, perr := r.log.LastSeq(probe, r.subject)
+	if perr == nil || (!jsprovision.Unanswered(detached, perr) && !jsprovision.Leaderless(perr)) {
+		return err
+	}
+	return &jsprovision.NoLeader{Group: r.stream, Err: err,
+		Answer: fmt.Errorf("nobody answered its append, nor a read only its leader answers: %w", perr)}
 }
 
 // barrierAck is one barrier's append as the broker answered it, or unadmitted,
