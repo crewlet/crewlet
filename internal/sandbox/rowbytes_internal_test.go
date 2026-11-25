@@ -1140,8 +1140,9 @@ func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 func worstSummary(t *testing.T) *SummaryStamp {
 	t.Helper()
 	markup := func(n int) string { return strings.Repeat("<", n) }
-	stamp := &SummaryStamp{LaunchSeq: math.MaxInt64, Object: objstore.KeyAt(worstAt).String(),
-		ObjectHash: strings.Repeat("f", 64), ObjectSize: executorkeep.SummarySealedMaxBytes,
+	stamp := &SummaryStamp{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64,
+		Object: objstore.KeyAt(worstAt).String(), ObjectHash: strings.Repeat("f", 64),
+		ObjectSize: executorkeep.SummarySealedMaxBytes,
 		ContentKey: markup(secrets.MaxStreamKeyIDBytes), At: worstAt, Bytes: math.MaxInt64,
 		Kept: executorkeep.SummaryMaxBytes, Cut: true, Harness: markup(executorkeep.HarnessMaxBytes),
 		Session: markup(executorkeep.SessionIDMaxBytes), Digest: markup(64)}
