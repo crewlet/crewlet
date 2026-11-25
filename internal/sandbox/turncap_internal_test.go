@@ -15,8 +15,9 @@ import (
 // wire key of the record's own, `turn_cap`, which that build's rewrite writes
 // back and this build's collection still holds the job to.
 //
-// Mutation: write the cap under no wire key (`json:"-"`), and the record
-// carries no cap for an older build to keep.
+// Mutation: drop a key the reader does not know instead of keeping it in Extra
+// (wirekeys.go), or write the cap under no wire key (`json:"-"`), and the
+// rewritten row carries no cap.
 func TestAJobsRoundCapSurvivesABuildThatDoesNotKnowIt(t *testing.T) {
 	t.Parallel()
 	run := PendingRun{TurnID: "t1", CommandID: "cmd-1",
