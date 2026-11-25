@@ -120,20 +120,22 @@ var (
 		`[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$`)
 )
 
-// qwenScalar is n as Qwen Code 0.28.4 reads it: a tagged scalar by its tag, a
-// quoted or block one a string, a plain one by the core schema's forms, else
-// a string. Not yaml.v3's tag, which reads `1_000` and `0b1` as ints where
+// qwenScalar is n as Qwen Code 0.28.4 reads it: a tagged scalar by its tag,
+// the core schema's null, int, float and bool as such and any other (`!!str`,
+// `!!timestamp` and `!!binary`, which it drops, a custom one) a string
+// (measured, rules7); a quoted or block one a string; a plain one by the core
+// schema's forms, else a string. Not yaml.v3's tag, which reads `1_000` and `0b1` as ints where
 // Qwen Code's core schema keeps strings (B2b's rules6 row), and a date as a
 // timestamp, a tag Qwen Code's parser drops.
 func qwenScalar(n *yaml.Node) coreKind {
 	if n.Style&yaml.TaggedStyle != 0 {
 		switch n.Tag {
-		case "!!str":
-			return coreString
 		case "!!null":
 			return coreNull
+		case "!!int", "!!float", "!!bool":
+			return coreOther
 		}
-		return coreOther
+		return coreString
 	}
 	switch {
 	case n.Style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle|yaml.LiteralStyle|yaml.FoldedStyle) != 0:
