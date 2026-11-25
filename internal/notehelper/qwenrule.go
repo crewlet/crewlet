@@ -116,7 +116,7 @@ const (
 // parser (`yaml`, schema core) resolves them.
 var (
 	coreNullForm   = regexp.MustCompile(`^(?:~|[Nn]ull|NULL)?$`)
-	coreOtherForms = regexp.MustCompile(`^(?:[Tt]rue|TRUE|[Ff]alse|FALSE|[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+|` +
+	coreOtherForms = regexp.MustCompile(`^(?:[Tt]rue|TRUE|[Ff]alse|FALSE|[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+|` + //nolint:misspell // [Ff]alse is a pattern
 		`[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$`)
 )
 

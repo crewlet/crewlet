@@ -415,7 +415,7 @@ func TestATreeHandsItsFilesInQwenCodesWalk(t *testing.T) {
 // nulls, or one holding a mapping; refused YAML whose line reading holds
 // none), left out where `paths` names anything (spaces, `**`, `1_000`, `0b1`,
 // a date, a listed number, an alias's list, a key given twice, a line-read
-// `''`), past a BOM or with CRLF.
+// empty single-quoted string), past a BOM or with CRLF.
 //
 // Mutation: count `**` as every path, read `Paths`, trim, take yaml.v3's tags,
 // read a null or number as a path, scope a list with a mapping, skip
@@ -453,12 +453,14 @@ func TestAScopedRuleIsLeftOutAsQwenCodeReadsItsFrontmatter(t *testing.T) {
 
 // QWEN CODE'S LINE READER IS READ AS IT READS: where its YAML parser refuses a
 // rule's frontmatter, a `paths` value's text decides as its parseValue reads
-// it (0.28.4's source, PR-B2B-m16.log; the list, `[bad` and `''` rows
+// it (0.28.4's source; the list, `[bad` and empty single-quoted rows
 // measured): a string or a list item other than `null`, empty or `""` names a
-// path, a single-quoted `''` included, and `true`, `null`, `""`, a number as
-// JavaScript's Number reads one (0x, 0o and 0b included) or an object do not.
+// path, an empty single-quoted one included, and `true`, `null`, `""`, a
+// number as JavaScript's Number reads one (0x, 0o and 0b included) or an
+// object do not.
 //
-// Mutation: read a number, `true` or `""` as a string, `''` as empty,
+// Mutation: read a number, `true` or `""` as a string, an empty single-quoted
+// one as empty,
 // `Infinity` or `1_0` as a number, an object as a string, or a `null` item as
 // a path, and a row goes red.
 func TestQwenCodesLineReaderDecidesAsItReads(t *testing.T) {
