@@ -1006,6 +1006,13 @@ type rule struct {
 	// unread reports a server row whose condition this rule cannot judge from
 	// this reading: its instance is neither raised nor cleared ([Unjudged]).
 	unread func(s MCPServerCondition) bool
+
+	// local marks a node-wide condition judged from what a node measures of
+	// itself alone (its own store, recorder and objective meter), which a
+	// node running no state log judges on its own table too ([LocalKinds],
+	// [EvaluateLocal]): the node it describes is the node that measured it,
+	// so no other node can raise it for that node.
+	local bool
 }
 
 // perEntry reports whether the rule is about one configured entry
@@ -1554,6 +1561,7 @@ var table = []rule{
 	},
 	{
 		kind:  KindVolumeLow,
+		local: true,
 		title: "A disk is low on space",
 		person: "A disk holding company data may be too full for backups and restores, " +
 			"which then fail partway. " +
@@ -1570,6 +1578,7 @@ var table = []rule{
 	},
 	{
 		kind:  KindWALLarge,
+		local: true,
 		title: "A database file has grown large",
 		person: "A database file has grown large because a backup or reader holds it open, " +
 			"and could fill the disk. " +
@@ -1596,6 +1605,7 @@ var table = []rule{
 	},
 	{
 		kind:  KindPoolStarved,
+		local: true,
 		title: "A server's database is overloaded",
 		person: "Requests on a server wait for a database connection, so everything there is slower. " +
 			"Allow more connections, or find what holds them.",
@@ -1702,6 +1712,7 @@ var table = []rule{
 		// is one cause (this node failing what it promised) whichever objective
 		// shows it first.
 		kind:  KindObjectiveBurn,
+		local: true,
 		title: "Service quality is slipping",
 		person: "A service target is failing fast enough to use up its monthly error allowance early. " +
 			"Find what is failing now.",
@@ -2651,15 +2662,45 @@ func Evaluate(r Reading) []Alarm {
 			}
 			continue
 		}
-		judge := rule.fires
-		if rule.stays != nil && slices.Contains(r.Up, rule.kind) {
-			judge = rule.stays
-		}
-		if detail, firing := judge(r); firing {
-			out = append(out, rule.alarm(detail))
+		if a, firing := rule.judge(r); firing {
+			out = append(out, a)
 		}
 	}
 	return out
+}
+
+// EvaluateLocal reports every [LocalKinds] alarm currently true, in the
+// table's own order: the table as a node running no state log evaluates it,
+// over a reading holding only what that node measures of itself.
+//
+// ONLY THOSE RULES, never the whole table over a partial reading: a node
+// without a state log cannot say anything of a log, and a rule whose inputs
+// it leaves at zero is a rule it has not judged, not one it judged quiet.
+func EvaluateLocal(r Reading) []Alarm {
+	var out []Alarm
+	for _, rule := range table {
+		if !rule.local {
+			continue
+		}
+		if a, firing := rule.judge(r); firing {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// judge is a node-wide rule over r: its stays condition while it is up
+// ([Reading.Up]), else its fires condition.
+func (rule rule) judge(r Reading) (Alarm, bool) {
+	judge := rule.fires
+	if rule.stays != nil && slices.Contains(r.Up, rule.kind) {
+		judge = rule.stays
+	}
+	detail, firing := judge(r)
+	if !firing {
+		return Alarm{}, false
+	}
+	return rule.alarm(detail), true
 }
 
 // evaluateEntries is a per-entry rule over every row it judges, model entries
@@ -2757,6 +2798,13 @@ func PerLogKinds() []Kind {
 		}
 	}
 	return out
+}
+
+// LocalKinds is every alarm a node judges from its own measures alone, in
+// table order: the kinds a node running no state log evaluates on its own
+// table ([EvaluateLocal]), and every data node beside the rest.
+func LocalKinds() []Kind {
+	return kindsWhere(func(r rule) bool { return r.local })
 }
 
 // PerEntryKinds is the kinds evaluated once per configured entry, a model
