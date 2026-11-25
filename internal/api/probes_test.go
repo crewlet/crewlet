@@ -198,6 +198,38 @@ func TestAProbeNodesHealthIsTheNodesHalfOfTheEnvelope(t *testing.T) {
 	}
 }
 
+// A SEAT POD'S PROBES STAY 200 WITH ALARMS STANDING: a node without `data`
+// raises its own alarms (a burning objective, a low volume), and an
+// orchestrator restarting or unreadying a node for one would take its seats
+// away for a condition no restart clears. /health carries the count, and
+// /ready judges the node's work alone.
+//
+// Mutation: answer /health or /ready 503 while an alarm stands, and a check
+// fails.
+func TestASeatPodsHealthStaysReadyWithAlarmsStanding(t *testing.T) {
+	t.Parallel()
+	nodes := 3
+	h := probeHandler(t, &fakeProbeRuntime{
+		fakeRuntime: fakeRuntime{
+			state: api.RuntimeState{Posture: "serve"},
+			fleet: api.FleetState{LiveNodes: &nodes,
+				Alarms: []statelog.Kind{statelog.KindObjectiveBurn, statelog.KindVolumeLow}},
+		},
+		configured: true, work: doingItsWork(),
+	})
+	status, body := askProbe(t, h, http.MethodGet, "/health")
+	if status != http.StatusOK {
+		t.Errorf("/health = %d with two alarms standing, want 200", status)
+	}
+	if alarms, _ := body["alarms"].(map[string]any); alarms["count"] != float64(2) ||
+		alarms["worst"] != string(statelog.KindObjectiveBurn) {
+		t.Errorf("/health alarms = %v, want the two counted, objective_burn the worst", body["alarms"])
+	}
+	if status, body := askProbe(t, h, http.MethodGet, "/ready"); status != http.StatusOK || body["ready"] != true {
+		t.Errorf("/ready = %d %v with two alarms standing, want 200 and ready", status, body)
+	}
+}
+
 // THE PROBE SURFACE SERVES THE PROBES AND NOTHING ELSE. A satellite is placed
 // on a private host so that it terminates no traffic: every route the full
 // surface serves is refused here, by the router or by the guard in front of
