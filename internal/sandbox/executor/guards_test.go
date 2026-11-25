@@ -390,9 +390,9 @@ func TestQwenCodesBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			t.Parallel()
 			finished := observedRun + `echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'` + "\n"
 			runner, box := qwenBox(t, finished)
-			// THE REAL HELPER FOR ITS GUARD; the stand-in plays the rest.
-			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/node", "#!/bin/sh\nif [ \"$2\" = guard ]; then exec "+
-				shellword.Quote(nodeForQwen(t))+" \"$@\"; fi\n"+finished)
+			// THE REAL HELPER FOR ITS GUARD AND ITS CONTEXT FILES; the stand-in plays the rest.
+			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/node", "#!/bin/sh\ncase \"$2\" in guard|checkouts) exec "+
+				shellword.Quote(nodeForQwen(t))+" \"$@\";; esac\n"+finished)
 			plant(t, box, tc.plant)
 			env := map[string]string{"OPENAI_API_KEY": "key-placeholder"}
 			maps.Copy(env, tc.env)

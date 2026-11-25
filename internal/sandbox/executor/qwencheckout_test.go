@@ -64,3 +64,44 @@ echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
 		t.Errorf("the checkout's skill stayed in the home after the run:\n%s", left)
 	}
 }
+
+// A QWEN CODE RUN HANDS A CHECKOUT THE CONTEXT FILES ITS SETTINGS NAME:
+// context.fileName as Qwen Code 0.28.4 settles it, the working directory's
+// over the home's, comments allowed (measured), names the checkout's files in
+// its order, here CTX.md then QWEN.md and no AGENTS.md, and the checkouts'
+// sections go into the first of the home's own of those that is there.
+//
+// Mutation: hand QWEN.md and AGENTS.md whatever the settings say, let the
+// home's setting win, or write the sections to a home file the settings do
+// not name, and the check goes red.
+func TestAQwenRunHandsACheckoutTheContextFilesItsSettingsName(t *testing.T) {
+	t.Parallel()
+	runner, box := qwenBox(t, `o=$HOME/observed; mkdir -p "$o"; cat "$HOME/.qwen/QWEN.md" > "$o/qwen-md"
+echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
+`)
+	plant(t, box, map[string]string{
+		".qwen/QWEN.md":                       "HOME-OWN\n",
+		".qwen/settings.json":                 `{"context":{"fileName":["AGENTS.md"]}}`,
+		"workspace/.qwen/settings.json":       "// the working directory's\n{\"context\":{\"fileName\":[\"CTX.md\",\"QWEN.md\"]}}\n",
+		"workspace/repo/.git/HEAD":            "ref: refs/heads/main\n",
+		"workspace/repo/.git/index":           "DIRC",
+		"workspace/repo/.git/refs/heads/main": strings.Repeat("0", 40) + "\n",
+		"workspace/repo/CTX.md":               "REPO-CTX\n",
+		"workspace/repo/QWEN.md":              "REPO-QWEN\n",
+		"workspace/repo/AGENTS.md":            "REPO-AGENTS\n",
+	})
+	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Model: "qwen3-coder-plus",
+		Env: map[string]string{"OPENAI_API_KEY": "key-placeholder"}})
+	p := executor.PathsFor(box)
+	if !res.Success {
+		t.Fatalf("the run failed: %s\n%s", res.Error, boxFile(t, box, p.Err()))
+	}
+	work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), sandbox.WorkspaceSubdir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "HOME-OWN\n\n\nfor `repo` with root " + work + "/repo\n\nREPO-CTX\n\n\nREPO-QWEN\n"
+	if got := boxFile(t, box, box.Home()+"/observed/qwen-md"); got != want {
+		t.Errorf("Qwen Code started on a home QWEN.md of\n%q\nwant\n%q", got, want)
+	}
+}
