@@ -131,9 +131,9 @@ func TestACopilotLaunchKeepsTheFirstSetsAndPointsAtTheRest(t *testing.T) {
 
 // A ROOT HOLDING A COMMA KEEPS ITS INSTRUCTION DIRECTORY OUT OF COPILOT'S
 // LIST, said: COPILOT_CUSTOM_INSTRUCTIONS_DIRS splits on `,`, so naming it
-// would name two directories that are not there.
+// would name two directories that are not there. It is said once a run.
 //
-// Mutation: name the directory anyway, or say nothing.
+// Mutation: name the directory anyway, say nothing, or say it at every attempt.
 func TestARootHoldingACommaKeepsItsDirectoryOutOfCopilotsList(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, map[string]string{
@@ -150,5 +150,40 @@ func TestARootHoldingACommaKeepsItsDirectoryOutOfCopilotsList(t *testing.T) {
 		strings.TrimSpace(out.String()) != "0" {
 		t.Errorf("a root holding a comma handed %q with %q sets and said %q, want nothing handed, said", dirs,
 			out.String(), errs.String())
+	}
+	// SAID ONCE A RUN: a relaunch, which keeps fewer sets, says it again nowhere.
+	errs.Reset()
+	if code, _ := runOnce(context.Background(), []string{"-adapter", "copilot-launch", "-config", config, "-keep", "0"},
+		os.Getenv, strings.NewReader(""), &out, &errs); code != exitDone || errs.Len() > 0 {
+		t.Errorf("a relaunch exited %d and said %q, want the comma said once, by the first attempt", code, errs.String())
+	}
+}
+
+// AN INSTRUCTION DIRECTORY IS HANDED BY ITS REAL PATH, AND ONLY INSIDE ITS
+// CHECKOUT: Copilot walks the directory it is named, so a `.github` that links
+// out of the checkout (here to a tree holding instructions/) hands nothing,
+// while one linking to a directory inside it is handed by the path the link
+// leads to.
+//
+// Mutation: check the last element alone (os.Lstat), or hand the link's own
+// path.
+func TestAnInstructionDirectoryIsHandedOnlyInsideItsCheckout(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, map[string]string{
+		"out/.git/": "",
+		"in/.git/":  "",
+		"in/shared/instructions/i.instructions.md": "I\n",
+		"elsewhere/instructions/x.instructions.md": "X\n",
+	})
+	work := r.workdir(t)
+	for link, target := range map[string]string{"out/.github": work + "/elsewhere", "in/.github": work + "/in/shared"} {
+		if err := os.Symlink(target, filepath.Join(work, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, _, _, dirs, kept := r.compose(t, copilotLaunchRun(t, r))
+	if want := work + "/in/shared/instructions"; n != "1" || dirs != want || kept != "in\n" {
+		t.Errorf("copilot-launch handed %q sets, dirs %q, kept %q; want in's directory alone, by its real path %q",
+			n, dirs, kept, want)
 	}
 }

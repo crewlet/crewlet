@@ -79,7 +79,9 @@ func copilotLaunch(config string, keep int, keptFrom string, stderr io.Writer) (
 	if err != nil {
 		return 0, err
 	}
-	sets := copilotSets(handed, stderr)
+	// SAID ONCE A RUN: by its first attempt, which keeps every set, or its
+	// resume; a relaunch says nothing again.
+	sets := copilotSets(handed, keep < 0, stderr)
 	kept, err := copilotKept(sets, keep, keptFrom)
 	if err != nil {
 		return 0, err
@@ -118,23 +120,22 @@ func copilotLaunch(config string, keep int, keptFrom string, stderr io.Writer) (
 }
 
 // copilotSets is each handed checkout's launch set, in the launch's order,
-// those with neither instructions nor an instruction directory left out. A
-// root holding `,` cannot be named in Copilot's list of directories, so its
-// directory is left to Copilot's lazy load, said on stderr.
-func copilotSets(handed []launched, stderr io.Writer) []copilotSet {
+// those with neither instructions nor an instruction directory left out. The
+// directory is handed by its real path, and only while that stays in the
+// checkout: Copilot walks what it is named, so a link out would hand another
+// tree. A real path holding `,` cannot be named in Copilot's list of
+// directories, so it is left to Copilot's lazy load, said on stderr where say.
+func copilotSets(handed []launched, say bool, stderr io.Writer) []copilotSet {
 	var sets []copilotSet
 	for _, h := range handed {
 		s := copilotSet{name: h.Name, root: h.Root, section: h.Text}
-		dir := filepath.Join(h.Root, copilotInstructionsDir)
-		// A REAL DIRECTORY ONLY: Copilot walks what it is named, so a link
-		// would point it outside the checkout.
-		if info, err := os.Lstat(dir); err == nil && info.IsDir() {
-			if strings.ContainsRune(dir, ',') {
+		if dir, ok := checkoutDir(h.Root, copilotInstructionsDir); ok {
+			if !strings.ContainsRune(dir, ',') {
+				s.dir = dir
+			} else if say {
 				fmt.Fprintf(stderr, "notehelper: %s is not handed at launch, since its path holds a comma, which "+
 					"Copilot's list of instruction directories cannot carry; Copilot loads it on the first view of a file in %s\n",
 					dir, h.Root)
-			} else {
-				s.dir = dir
 			}
 		}
 		if s.section != "" || s.dir != "" {
@@ -142,6 +143,25 @@ func copilotSets(handed []launched, stderr io.Writer) []copilotSet {
 		}
 	}
 	return sets
+}
+
+// checkoutDir is rel below root as its real path, true where that is a
+// directory inside root's own real path.
+func checkoutDir(root, rel string) (string, bool) {
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", false
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Join(root, rel))
+	if err != nil {
+		return "", false
+	}
+	inside, err := filepath.Rel(real, dir)
+	if err != nil || !filepath.IsLocal(inside) {
+		return "", false
+	}
+	info, err := os.Stat(dir)
+	return dir, err == nil && info.IsDir()
 }
 
 // copilotKept is the names of sets kept: those keptFrom names (none where the
