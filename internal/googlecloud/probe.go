@@ -53,6 +53,10 @@ const (
 	atProjects
 )
 
+// offeredLabel names the projects a working connection offers agents, as the
+// Test result and the setup steps say it.
+const offeredLabel = "Agents may use"
+
 // defaultAccountQuota is Google's default Service Account Count per project,
 // which the Test button reports the identity project's accounts against.
 const defaultAccountQuota = 100
@@ -228,7 +232,7 @@ func works(c *Client, accounts []ServiceAccount, found discovery) setup.Verdict 
 		for _, id := range offered {
 			listed = append(listed, words.Said(cmpName(names[id], id)))
 		}
-		details = append(details, setup.Fact{Label: "Agents may use", Value: words.And(listed)})
+		details = append(details, setup.Fact{Label: offeredLabel, Value: words.And(listed)})
 	}
 	for _, p := range found {
 		for _, problem := range p.Problems {
