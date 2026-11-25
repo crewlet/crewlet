@@ -87,7 +87,7 @@ func (c class) sized() int {
 }
 
 // keyClass is one class and the keys it holds: a filter in the key's
-// vocabulary ("body.*"), never the bucket's subject.
+// vocabulary ("body.>"), never the bucket's subject.
 type keyClass struct {
 	keys  string
 	class class
@@ -163,7 +163,7 @@ var (
 	// names. No key the store writes falls to the rest.
 	configHolding = holding{classes: []keyClass{
 		{keys: activationKey, class: pointerClass},
-		{keys: bodyPrefix + "*", class: bodyClass},
+		{keys: coord.DocumentFilter(coord.BodyClass), class: bodyClass},
 	}, rest: smallValue}
 
 	// THE SMALL BUCKETS (ADR-0175, "Every other bucket holds small values"):

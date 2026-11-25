@@ -324,7 +324,7 @@ const (
 	uploadsSuffix      = "_uploads"
 	nodeStatusSuffix   = "_node_status"
 	// activationKey holds the pointer, which names the current revision's
-	// sealed body under [bodyPrefix] — see [coord.ActivationRecord].
+	// sealed body under [coord.BodyClass] — see [coord.ActivationRecord].
 	activationKey = "activation"
 )
 
@@ -1444,12 +1444,10 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 // node and the broker that stamps the body.
 const flipBy = coord.BodyRetention / 2
 
-// bodyPrefix is the key class of the activation's bodies in the config bucket,
-// beside [activationKey]: `body.<sha256>`, one key one set of bytes.
-const bodyPrefix = "body."
-
-// bodyKey is the key body is stored under.
-func bodyKey(body coord.BodyRef) string { return bodyPrefix + body.SHA256 }
+// bodyKey is the key body is stored under in the config bucket, beside
+// [activationKey]: `body.<sha256>` ([coord.BodyClass]), one key one set of
+// bytes.
+func bodyKey(body coord.BodyRef) string { return coord.DocumentKey(coord.BodyClass, body.SHA256) }
 
 // pointerBytes is the pointer's stored form for req ([coord.ActivationValue])
 // at the instant at, which is decided against the pointer the write replaces

@@ -357,6 +357,11 @@ type BodyRef struct {
 	SHA256 string `json:"sha256"`
 }
 
+// BodyClass is the key class a body is filed under beside the activation
+// pointer: [DocumentKey](BodyClass, digest), which spells a [BodyRef.Check]ed
+// digest, lowercase hex, as itself.
+const BodyClass = "body"
+
 // BodyOf is the reference to payload, a body in [CanonicalPayload]'s form.
 func BodyOf(payload json.RawMessage) BodyRef {
 	sum := sha256.Sum256(payload)
