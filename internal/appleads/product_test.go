@@ -48,6 +48,10 @@ type apple struct {
 	nextID    int
 	// cut closes the connection on every write, its answer never read.
 	cut bool
+	// stale turns away the token the first write carries, which makes
+	// nothing, and loses the token endpoint from then on (tokenLost), so no
+	// token is had to send the write again.
+	stale, tokenLost bool
 }
 
 func newApple() *apple {
@@ -87,6 +91,11 @@ func (a *apple) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer a.mu.Unlock()
 	body, _ := io.ReadAll(r.Body)
 	if r.URL.Path == "/token" {
+		if a.tokenLost {
+			conn, _, _ := http.NewResponseController(w).Hijack()
+			_ = conn.Close()
+			return
+		}
 		form, _ := parseForm(string(body))
 		a.secrets = append(a.secrets, form["client_secret"])
 		if a.refuse || form["grant_type"] != "client_credentials" || form["scope"] != "searchadsorg" {
@@ -96,6 +105,11 @@ func (a *apple) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.tokens++
 		write(w, http.StatusOK, map[string]any{"access_token": "tok-" + strconv.Itoa(a.tokens), "expires_in": 3600,
 			"token_type": "Bearer"})
+		return
+	}
+	if a.stale && r.Method == http.MethodPut {
+		a.stale, a.tokenLost = false, true
+		write(w, http.StatusUnauthorized, map[string]any{"error": map[string]any{"code": "UNAUTHORIZED"}})
 		return
 	}
 	if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer tok-") {
@@ -775,28 +789,33 @@ func TestThePassFindsWhatAPersonMustFix(t *testing.T) {
 // AN ACT IS NOT SENT UNTIL ITS REQUEST LEAVES: an allowed raise whose account's
 // act lease, or whose spend guard's lease, the store could not take sends
 // nothing and says so beside the store's failure, never a refusal or an
-// unknown outcome; one whose write Apple took and whose answer was cut off is
-// not marked, since what it did is unknown.
+// unknown outcome; so does one whose write Apple turned away with no token to
+// be had to send it again. One whose write Apple took and whose answer was cut
+// off is not marked, since what it did is unknown.
 //
-// Mutation: drop failEarly's mark, applySpend's for the spend guard, or mark a
-// write whose request left, and this fails.
+// Mutation: drop failEarly's mark, applySpend's for the spend guard, send's for
+// a first request that never left, or mark a write whose request left, and
+// this fails.
 func TestAnAppleAdsActIsNotSentUntilItsRequestLeaves(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	unavailable := fmt.Errorf("engine: take the lease: %w", coord.ErrUnavailable)
-	for name, c := range map[string]struct{ prefix, held string }{"the act's lease": {"write/", "h-act"},
-		"the spend guard's lease": {"spend/", "h-spend"}} {
-		prefix := c.prefix
-		a := newApple()
-		p, au := leasedProduct(t, a, company("operate", true), &leases{fail: map[string]error{prefix: unavailable}})
-		raise := call("", appleads.ToolSetBudget, map[string]any{"campaign": "501", "daily_budget": "140.00",
+	raise := func(a *apple, l *leases, held string) (*audit, error) {
+		p, au := leasedProduct(t, a, company("operate", true), l)
+		c := call("", appleads.ToolSetBudget, map[string]any{"campaign": "501", "daily_budget": "140.00",
 			"reason": "it converts"})
-		hold, err := p.Prepare(ctx, raise)
+		hold, err := p.Prepare(ctx, c)
 		if err != nil {
 			t.Fatal(err)
 		}
-		raise.HeldCall, raise.Approver = c.held, "founder"
-		_, err = p.Apply(ctx, raise, hold.Binding)
+		c.HeldCall, c.Approver = held, "founder"
+		_, err = p.Apply(ctx, c, hold.Binding)
+		return au, err
+	}
+	unavailable := fmt.Errorf("engine: take the lease: %w", coord.ErrUnavailable)
+	for name, c := range map[string]struct{ prefix, held string }{"the act's lease": {"write/", "h-act"},
+		"the spend guard's lease": {"spend/", "h-spend"}} {
+		a := newApple()
+		au, err := raise(a, &leases{fail: map[string]error{c.prefix: unavailable}}, c.held)
 		if !errors.Is(err, growth.ErrNotSent) || !errors.Is(err, coord.ErrUnavailable) || refusal(err) != "" ||
 			len(a.wrote()) != 0 {
 			t.Errorf("%s the store could not take = %v (wrote %v), want not sent beside the store's failure", name,
@@ -806,17 +825,23 @@ func TestAnAppleAdsActIsNotSentUntilItsRequestLeaves(t *testing.T) {
 			t.Errorf("%s: the act's outcome is %+v, want failed", name, last)
 		}
 	}
-	a := newApple()
-	a.cut = true
-	p, au := product(t, a, company("operate", true))
-	raise := call("", appleads.ToolSetBudget, map[string]any{"campaign": "501", "daily_budget": "140.00",
-		"reason": "it converts"})
-	hold, err := p.Prepare(ctx, raise)
-	if err != nil {
-		t.Fatal(err)
+	stale := newApple()
+	stale.stale = true
+	au, err := raise(stale, &leases{}, "h-token")
+	stale.mu.Lock()
+	turnedAway := stale.tokenLost
+	stale.mu.Unlock()
+	if !turnedAway || !errors.Is(err, growth.ErrNotSent) || refusal(err) != "" || len(stale.wrote()) != 0 {
+		t.Errorf("a write turned away with no token to send it again = %v (turned away %t, wrote %v), want not "+
+			"sent", err, turnedAway, stale.wrote())
 	}
-	raise.HeldCall, raise.Approver = "h-cut", "founder"
-	if _, err = p.Apply(ctx, raise, hold.Binding); err == nil || errors.Is(err, growth.ErrNotSent) {
+	if last := au.last(); last.step != growth.StepFailed || last.rec.Failure == growth.FailureUnknownOutcome {
+		t.Errorf("the unsent write's outcome is %+v, want failed with nothing done", last)
+	}
+	cut := newApple()
+	cut.cut = true
+	au, err = raise(cut, &leases{}, "h-cut")
+	if err == nil || errors.Is(err, growth.ErrNotSent) {
 		t.Errorf("a write whose answer was cut off = %v, want a failure never told as not sent", err)
 	}
 	if last := au.last(); last.step != growth.StepFailed || last.rec.Failure != growth.FailureUnknownOutcome {
