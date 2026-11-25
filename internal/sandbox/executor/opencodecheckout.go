@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -25,18 +26,50 @@ var openCodeCheckoutsPlugin []byte
 const openCodeSkillDepth = 6
 
 // openCodeCheckouts is what OpenCode 2.3.2 reads from a repository's root
-// started there (measured): its AGENTS.md, else its CLAUDE.md, whole (a
-// 300,000-byte file reached the model whole), and the skills a walk of
-// .opencode/skills, .opencode/skill, .claude/skills and .agents/skills reaches
-// no deeper than [openCodeSkillDepth]. OpenCode follows a link out of the
-// checkout; the walk does not (code-sandbox.md's OpenCode section).
-func openCodeCheckouts() checkoutSpec {
-	walked := func(dir string) checkoutSkillDir {
-		return checkoutSkillDir{Dir: dir, Recursive: true, Depth: openCodeSkillDepth}
+// started there, under env, the run's environment (measured): its AGENTS.md,
+// else its CLAUDE.md, whole (a 300,000-byte file reached the model whole),
+// and the skills a walk of .opencode/skills, .opencode/skill, .claude/skills
+// and .agents/skills reaches no deeper than [openCodeSkillDepth], less the
+// Claude Code files env switches off ([openCodeClaudeOff]). OpenCode follows a
+// link out of the checkout; the walk does not (code-sandbox.md's OpenCode
+// section). Listed is every other skill directory it lists for the run.
+func openCodeCheckouts(paths Paths, env map[string]string) checkoutSpec {
+	prompt, skills := openCodeClaudeOff(env)
+	names := []string{"AGENTS.md", "CLAUDE.md"}
+	if prompt {
+		names = names[:1]
 	}
-	return checkoutSpec{Instructions: []checkoutSlot{{Names: []string{"AGENTS.md", "CLAUDE.md"}}},
-		Limit: checkoutUnlimited, FiringLimit: &openCodeFiringLimit, SkillDirs: []checkoutSkillDir{walked(".opencode/skills"), walked(".opencode/skill"),
-			walked(".claude/skills"), walked(".agents/skills")}}
+	dirs := []string{".opencode/skills", ".opencode/skill", ".claude/skills", ".agents/skills"}
+	home := []string{paths.Home + "/.config/opencode/skills", paths.Home + "/.config/opencode/skill",
+		paths.Home + "/.claude/skills", paths.Home + "/.agents/skills"}
+	if skills {
+		dirs = slices.DeleteFunc(dirs, func(d string) bool { return d == ".claude/skills" })
+		home = slices.DeleteFunc(home, func(d string) bool { return strings.HasSuffix(d, "/.claude/skills") })
+	}
+	walked := func(dirs []string) []checkoutSkillDir {
+		out := make([]checkoutSkillDir, len(dirs))
+		for i, dir := range dirs {
+			out[i] = checkoutSkillDir{Dir: dir, Recursive: true, Depth: openCodeSkillDepth}
+		}
+		return out
+	}
+	return checkoutSpec{
+		Instructions: []checkoutSlot{{Names: names}},
+		Limit:        checkoutUnlimited,
+		FiringLimit:  &openCodeFiringLimit,
+		SkillDirs:    walked(dirs),
+		Listed:       walked(append(home, dirs...)),
+	}
+}
+
+// openCodeClaudeOff is which of a checkout's Claude Code files OpenCode 2.3.2
+// reads none of under env (measured, B2b's cc rows; its flag reads a value of
+// "1", or "true" in any case, as set): OPENCODE_DISABLE_CLAUDE_CODE both, its
+// _PROMPT the CLAUDE.md, its _SKILLS the .claude/skills.
+func openCodeClaudeOff(env map[string]string) (prompt, skills bool) {
+	set := func(key string) bool { v := env[key]; return v == "1" || strings.EqualFold(v, "true") }
+	all := set("OPENCODE_DISABLE_CLAUDE_CODE")
+	return all || set("OPENCODE_DISABLE_CLAUDE_CODE_PROMPT"), all || set("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS")
 }
 
 // openCodeFiringLimit bounds the files one opencode-nested firing hands, each
@@ -95,7 +128,7 @@ func writeOpenCodeCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbo
 		return nil, err
 	}
 	home := openCodeCheckoutHome(paths)
-	if err := box.WriteFile(ctx, paths.OpenCodeCheckoutLaunch(), home.launchConfig(openCodeCheckouts(), req.ReportedRepos)); err != nil {
+	if err := box.WriteFile(ctx, paths.OpenCodeCheckoutLaunch(), home.launchConfig(openCodeCheckouts(paths, req.Env), req.ReportedRepos)); err != nil {
 		return nil, fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
 	if len(off) > 0 {

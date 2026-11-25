@@ -65,21 +65,21 @@ func (h checkoutHome) removeSiblingStaging() string {
 
 // checkoutSpec is what a runner's harness reads from a checkout's root, for
 // [checkoutHome.launchConfig]: Instructions, the slots ([checkoutSlot]);
-// Limit, the harness's own bound in bytes on a checkout's instructions, nil
-// for a harness with none; SkillDirs, the checkout's skill directories
-// ([checkoutSkillDir]); NestedSkillsOnly where the harness's nested adapter
-// hands skills alone, so its firings read no instruction file;
-// ImportInstructions where the harness reads them itself, each named as an
-// `@<absolute path>` import in place of its text, Limit not applying (Claude
-// Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code import no
-// absolute path from a home file, measured on 0.70.0 and 0.28.4); SkillSep,
-// what joins a copy's repository and skill, "" for `:`; and FiringLimit, a
-// nested firing's bound in bytes on all its checkouts' files, nil for none.
+// Limit, the harness's bound in bytes on a checkout's instructions, nil for
+// none; SkillDirs, the checkout's skill directories ([checkoutSkillDir]);
+// Listed, the harness's other skill directories, absolute or under the
+// working directory, whose skills' names no copy takes; NestedSkillsOnly where
+// its nested adapter hands skills alone; ImportInstructions where it reads
+// them itself, each named as an `@<absolute path>` import, Limit not applying
+// (Claude Code; Gemini CLI and Qwen Code import no absolute path from a home
+// file, measured); SkillSep, what joins a copy's repository and skill, "" for
+// `:`; and FiringLimit, a nested firing's bound on its files, nil for none.
 type checkoutSpec struct {
 	Instructions       []checkoutSlot
 	Limit              *int
 	FiringLimit        *int
 	SkillDirs          []checkoutSkillDir
+	Listed             []checkoutSkillDir
 	NestedSkillsOnly   bool
 	ImportInstructions bool
 	SkillSep           checkoutSkillSep
@@ -171,7 +171,7 @@ var checkoutUnlimited *int
 func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "firingLimit": spec.FiringLimit,
-		"skillDirs": spec.SkillDirs, "skills": h.skills, "copied": h.copied,
+		"skillDirs": spec.SkillDirs, "listed": spec.Listed, "skills": h.skills, "copied": h.copied,
 		"reserved":         []string{sandbox.SkillNamespace},
 		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions,
 		"skillSep": spec.SkillSep, "roots": h.roots})
