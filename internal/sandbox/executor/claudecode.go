@@ -862,11 +862,15 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 	guarded := len(crewletServers(req.MCPServers)) > 0
 	if len(req.Skills) > 0 || req.Steer.Set() || guarded || helped {
 		var off string
-		if off, err = claudeHooksOff(ctx, box, paths, req.Steer.Set() || guarded, req.Skills); err != nil {
+		var by []string
+		if off, by, err = claudeHooksOff(ctx, box, paths, req.Steer.Set() || guarded, req.Skills); err != nil {
 			return "", err
 		}
 		if err = box.WriteFile(ctx, paths.ClaudeHooksOff(), []byte(off)); err != nil {
 			return "", fmt.Errorf("executor: writing why the box's settings switch the run's hooks off: %w", err)
+		}
+		if err = box.WriteFile(ctx, paths.ClaudeHooksOffBy(), []byte(strings.Join(by, "; "))); err != nil {
+			return "", fmt.Errorf("executor: writing which settings switch the run's hooks off: %w", err)
 		}
 	}
 	if req.Steer.Set() {
@@ -1872,6 +1876,7 @@ func (ClaudeCode) resumeRead(release string) bool { return claudeResumeRead(rele
 // artifactFiles is the files a Claude Code run leaves in its box of its own.
 func (ClaudeCode) artifactFiles(p Paths) []string {
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeHooksOff(),
+		p.ClaudeHooksOffBy(),
 		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeNoProxy(),
 		p.ClaudeSettingsGuarded(), p.ClaudeNotesSettingsGuarded(), p.ClaudeBridgeGuard(), p.ClaudeUnbridged(),
 		// Each one's copy with the NO_PROXY list written in ([claudeNoProxyMerge]).

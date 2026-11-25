@@ -88,7 +88,7 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 				`"permissions": {"deny": ["Skill(other)", "Bash", "Read(crewlet:getting-unstuck)"]}}`}}},
 		"a run whose only hook would be its checkouts' starts without it": {req: sandbox.RunRequest{Brief: "go"},
 			switchOffCase: switchOffCase{plant: map[string]string{".claude/settings.json": off},
-				says: []string{"/.claude/settings.json sets disableAllHooks to true", "such a repository is not handed"}}},
+				says: []string{"not handed their skills: ", "/.claude/settings.json sets disableAllHooks to true, so"}}},
 		"a run with no hook of the engine's, below the checkouts' floor": {release: "2.1.309",
 			req: sandbox.RunRequest{Brief: "go"}, switchOffCase: switchOffCase{plant: map[string]string{".claude/settings.json": off}}},
 		"a release older than every hook's floor": {release: "2.1.117", req: skills, switchOffCase: switchOffCase{

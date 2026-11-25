@@ -54,6 +54,12 @@ func (p Paths) ClaudeNotesSettings() string { return p.WorkDir() + "/claude-sett
 // gates have started one ([claudeHooksOffGate]).
 func (p Paths) ClaudeHooksOff() string { return p.WorkDir() + "/claude-hooks-off" }
 
+// ClaudeHooksOffBy is each file and key that has Claude Code run no hook of a
+// plugin's, `; `-separated, empty where none: written beside
+// [Paths.ClaudeHooksOff], read where the checkouts' hook would be the run's
+// only one ([claudeCheckoutsGate]).
+func (p Paths) ClaudeHooksOffBy() string { return p.WorkDir() + "/claude-hooks-off-by" }
+
 // ClaudeSettingsPinned is [Paths.ClaudeSettings]'s pinned copy: the same
 // settings with the compaction point and a resume's load pinned besides
 // ([claudeSettingsPin]), which the run's script names in that file's place on
