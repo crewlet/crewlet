@@ -84,27 +84,33 @@ function statusOf(part: Part, fleets: FleetsAnswer, now: number): Status {
       detail: `${fleet.name} has no members yet: add one to it, or pin this to a model`,
       rank: 2,
     };
+  // WHAT IT RUNS ON, in the sentence: a fleet by its name, a pinned model by
+  // its key, and the company's fallback where it pins none (`""`), which the
+  // answer does not name.
+  const fleetName = fleet?.name ?? ("fleet" in part.target ? part.target.fleet : null);
+  const pinned = "pinned" in part.target ? part.target.pinned : "";
+  const model = (lead: boolean) => pinned || `${lead ? "The" : "the"} company's fallback model`;
   if (part.now_kind === "unlisted")
     return {
       tone: "neutral",
       short: "Not known",
+      // A PINNED MODEL'S WORK NEVER WAITS ON A HOME, so only a fleet's names one.
       detail: `${
-        fleet
-          ? `A member of ${fleet.name}`
-          : "pinned" in part.target
-            ? part.target.pinned
-            : "Its model"
-      } has work or homes its status records could not name, so where this runs now is not known`,
+        fleetName !== null
+          ? `A member of ${fleetName} has work or homes`
+          : `${model(true)} has work`
+      } its status records could not name, so where this runs now is not known`,
       rank: 4,
     };
   if (!part.now) {
     const back = part.waiting_until ? formatRelative(part.waiting_until, now) : null;
-    const pinned = "pinned" in part.target ? part.target.pinned : "";
     return {
       tone: "danger",
       short: back ? `Waiting, back ${back}` : "Waiting",
       detail: `Waiting: ${
-        fleet ? `every member of ${fleet.name} is at its limit` : `${pinned} is at its limit`
+        fleetName !== null
+          ? `every member of ${fleetName} is at its limit`
+          : `${model(false)} is at its limit`
       }${back ? `, back ${back}` : ""}`,
       rank: 0,
     };
