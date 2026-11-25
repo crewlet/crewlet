@@ -66,13 +66,15 @@ func TestARequestInALinePastTheBoundIsCounted(t *testing.T) {
 	}
 }
 
-// A CAPPED RUN WHOSE SKIPPED LINE MAY HIDE A REQUEST IS NEVER A SUCCESS: an
-// assistant message past the bound whose stop is in neither end of its line
-// is undecided, and the run's cap cannot be judged on its count, whatever its
-// report said. The same run uncapped is the success it reported.
+// A CAPPED RUN WHOSE SKIPPED LINE MAY HIDE A REQUEST PAST ITS CAP IS NEVER A
+// SUCCESS: an assistant message past the bound whose stop is in neither end
+// of its line is undecided, one request at most. With it the run's one
+// counted request could pass a cap of 1, which cannot be judged, whatever its
+// report said; within a cap of 2 even counted it is judged within, and
+// uncapped it is the success it reported.
 //
-// Mutation: treat an undecided line as no request, and the capped run
-// succeeds.
+// Mutation: treat an undecided line as no request, or ignore the sum and fail
+// any capped run with one, and a row differs.
 func TestACappedRunWhoseSkippedLineMayHideARequestIsNeverASuccess(t *testing.T) {
 	t.Parallel()
 	pad := strings.Repeat("x", skipPayload)
@@ -94,10 +96,12 @@ func TestACappedRunWhoseSkippedLineMayHideARequestIsNeverASuccess(t *testing.T) 
 		}
 		return res
 	}
-	if res := collect(5); res.Success || !strings.Contains(res.Error, "could not be judged") {
-		t.Fatalf("a capped run with an undecided line: success %v, error %q", res.Success, res.Error)
+	if res := collect(1); res.Success || !strings.Contains(res.Error, "could not be judged") {
+		t.Fatalf("an undecided line that could pass the cap: success %v, error %q", res.Success, res.Error)
 	}
-	if res := collect(0); !res.Success {
-		t.Fatalf("the same run uncapped failed: %q", res.Error)
+	for _, turnCap := range []int{2, 0} {
+		if res := collect(turnCap); !res.Success {
+			t.Fatalf("under a cap of %d, which the undecided line cannot pass: %q", turnCap, res.Error)
+		}
 	}
 }

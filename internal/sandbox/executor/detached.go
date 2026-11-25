@@ -1367,9 +1367,11 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		result.RoundCapped = !verdict.exceeded
 		sentences = append(sentences, verdict.sentence)
 	}
-	// AND A CAPPED RUN WHOSE STREAM MAY HIDE A REQUEST in a line past the
-	// bound ([Decoder.Undecided]): its count is not one its cap can be judged by.
-	if handle.TurnCap > 0 && undecided > 0 {
+	// AND A CAPPED RUN WHOSE STREAM MAY HIDE REQUESTS in lines past the bound
+	// ([Decoder.Undecided]) that could take it past its cap: each such line
+	// hides one request at most, so a run within its cap with all of them
+	// counted is judged within it.
+	if handle.TurnCap > 0 && undecided > 0 && requests+undecided > handle.TurnCap {
 		result.Success = false
 		sentences = append(sentences, fmt.Sprintf("the run's turn cap of %d could not be judged: %d line(s) of its "+
 			"stream, past the %s a line is read within, may hold a model request whose marker neither end of the "+
