@@ -931,6 +931,43 @@ describe("selecting agents", () => {
     expect(live.index.seats.length).toBeGreaterThan(3);
   });
 
+  /*
+   * A PAUSED SEAT IS COUNTED AND KEPT BY PAUSED OR STOPPED while its turn
+   * finishes, and its row still says it is working and pausing. Mutation:
+   * count the seat's `state` in `countsOf`, and the chip reads 0 and keeps no row.
+   */
+  test("a seat paused mid-turn is counted and kept by Paused or stopped", () => {
+    const pause = { by: "ana", by_kind: "human", at: "2026-01-01T00:00:00Z", stop_running: false };
+    const live = running({ dev: { activity: "working", paused: pause } });
+    render(
+      <BuilderHarness
+        initial={checkedEdit(fixtureCompany())}
+        spies={builderSpies()}
+        probe={harnessProbe()}
+      >
+        <StructureLiveProvider value={live}>
+          <TableView />
+        </StructureLiveProvider>
+      </BuilderHarness>,
+    );
+    const chips = screen.getByRole("radiogroup", { name: "Show agents" });
+    const count = (label: string) =>
+      Number(
+        within(chips)
+          .getByRole("radio", { name: new RegExp(`^${label}`) })
+          .textContent!.slice(label.length),
+      );
+    const states = ["Working", "Needs you", "Paused or stopped", "Idle"].map(count);
+    expect(states.slice(0, 3)).toEqual([0, 0, 1]);
+    expect(states.reduce((a, b) => a + b)).toBe(count("All agents"));
+    fireEvent.click(within(chips).getByRole("radio", { name: /^Paused or stopped/ }));
+    const agents = screen
+      .getAllByRole("row")
+      .filter((r) => r.querySelector(".btable-name") && /@/.test(r.textContent ?? ""));
+    expect(agents).toEqual([row("Dev")]);
+    expect(row("Dev").textContent).toMatch(/Working.*pausing/);
+  });
+
   /** The Table over `live`, at a table width of `width` (none: the full width). */
   function drawAt(live: LiveOrg, width?: number) {
     const restore = width ? layTracks(width) : LayoutObserver.install();
@@ -1126,8 +1163,9 @@ describe("selecting agents", () => {
       ];
       expect(tags.map((t) => t.textContent)).toEqual([expect.any(String), expect.any(String)]);
       expect(tags[1]?.getAttribute("title")).toContain("fallback");
-      const waits = within(cell("Engineering")).getByText(/1.paused/);
-      const rest = within(cell("Engineering")).getByText(/1.working/);
+      // Dev, paused while its turn finishes, counts as paused beside SRE.
+      const waits = within(cell("Engineering")).getByText(/^2.paused$/);
+      const rest = within(cell("Engineering")).getByText(/^2.idle$/);
       expect(waits.contains(rest) || rest.contains(waits)).toBe(false);
       expect(waits.compareDocumentPosition(rest) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     } finally {
