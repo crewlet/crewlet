@@ -133,9 +133,9 @@
 //     ([threadMessage.Notification]), which its one reader matches only
 //     against legs whose call it read.
 //
-// What these rules were measured on is Claude Code 2.1.310 and 2.1.322, driven
-// as the engine drives a box's executor, and 2.1.118 beside 2.1.310 for a hook
-// that follows one call (a skill's). The take's context meter (measure.go)
+// These rules were measured on Claude Code 2.1.310, 2.1.322 and 2.1.330,
+// driven as the engine drives a box's executor, and 2.1.118 beside 2.1.310
+// for a hook that follows one call (a skill's). The take's context meter (measure.go)
 // reads the main thread through the layer in one walk of its lines
 // ([walkThread]): it decides what a continuation of the capture is told, by
 // what Claude Code counts the session at ([resumedReading]), and reads the
@@ -901,16 +901,16 @@
 // decoded and written again from a map, which writes its keys sorted, the
 // attachment (a subagent's agentId before it) first and its list inside it.
 // Claude Code reads a session file past 5 MiB by the bytes of its lines, and
-// finds a record by where its keys sit, in two readings (read in 2.1.310 and
-// 2.1.322):
+// finds a record by where its keys sit, in two readings (read in 2.1.310,
+// 2.1.322 and 2.1.330):
 //
 //   - 2.1.310, reading such a file as it does by default, takes a record for
 //     a subagent's only where `"isSidechain":true` sits in its line's first
 //     256 bytes, and walks the thread back from the last record it takes for
 //     the main thread's. A subagent's record written sorted, its list before
 //     that key, is taken for the main thread's, and the records the subagent
-//     wrote after it are left out of the thread a relaunch resumes. 2.1.322
-//     looks for the key past those bytes as well.
+//     wrote after it are left out of the thread a relaunch resumes. The
+//     others look past those bytes too.
 //   - Under CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP (a switch a managed settings
 //     file can set whatever a launch unsets), both prune such a file, taking a
 //     line for a record only where it begins `{"parentUuid":` and walking the
