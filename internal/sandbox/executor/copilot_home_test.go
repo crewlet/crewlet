@@ -125,9 +125,8 @@ func copilotLoads(t *testing.T) {
 			t.Errorf("the run's own MCP file is %s, want Crewlet's server alone beside the home's", raw)
 		}
 		argv := strings.Split(boxFile(t, box, home+"/seen/argv"), "\n")
-		if at := slices.Index(argv, "--enable-mcp-server"); at < 0 || argv[at+1] != "crewlet" ||
-			!slices.Contains(argv, "--additional-mcp-config") {
-			t.Errorf("Crewlet's server is not added and enabled by name: %q", argv)
+		if !slices.Contains(argv, "--additional-mcp-config") || slices.Contains(argv, "--enable-mcp-server") {
+			t.Errorf("Crewlet's server is not added, or a person's disabling of a server is undone: %q", argv)
 		}
 	})
 	t.Run("the switches a person's session loads by", func(t *testing.T) {

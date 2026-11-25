@@ -286,12 +286,13 @@ func TestACompactedHermesSessionReadsEachMessageOnceItsSummaryAsTheSummary(t *te
 // THE OVERLAY CARRIES THE RUN'S SERVERS, ITS WEB DENIAL AND ITS ALWAYS-LOADED
 // TOOLS, and only those: each server as written, the web, browser and x_search
 // toolsets disabled on a web-denied run alone, tool search off where a server
-// is always loaded alone (Hermes exempts no server from it), and a value
-// Hermes would expand refused.
+// is always loaded alone (Hermes exempts no server from it), no switch or
+// tools list a person's entry could set stated back, and a value Hermes would
+// expand refused.
 //
 // Mutation: drop a server's header, disable the web on an allowed run, leave
-// tool search on beside an always-loaded server or turn it off with none, or
-// let a `${` through, and a row goes red.
+// tool search on beside an always-loaded server or turn it off with none,
+// state `enabled`, `disabled` or `tools`, or let a `${` through: red.
 func TestTheHermesOverlayCarriesTheServersAndTheWebDenial(t *testing.T) {
 	t.Parallel()
 	servers := map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://bridge.example.com/mcp",
@@ -318,6 +319,17 @@ func TestTheHermesOverlayCarriesTheServersAndTheWebDenial(t *testing.T) {
 	}
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
+	}
+	var entries struct {
+		Servers map[string]map[string]json.RawMessage `json:"mcp_servers"`
+	}
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"enabled", "disabled", "tools"} {
+		if v, ok := entries.Servers["crewlet"][key]; ok {
+			t.Errorf("the overlay states %s %s over a person's entry, which the guard refuses instead", key, v)
+		}
 	}
 	s := got.Servers["crewlet"]
 	if s.URL != "http://bridge.example.com/mcp" || s.Headers["Authorization"] != "Bearer t" || s.Timeout != 600 {
@@ -520,6 +532,18 @@ def get_default_hermes_root(*, home=None):
             out[k.strip()] = v.strip()
     return out
 `,
+	"hermes_cli/skills_config.py": `def get_disabled_skills(config, platform=None):
+    def names(values):
+        values = [values] if isinstance(values, str) else values or []
+        return {str(v).strip() for v in values if str(v).strip()}
+    cfg = config.get("skills") or {}
+    if not isinstance(cfg, dict):
+        return set()
+    off = names(cfg.get("disabled"))
+    if platform is not None and isinstance(cfg.get("platform_disabled"), dict):
+        off |= names(cfg["platform_disabled"].get(platform))
+    return off
+`,
 	"agent/skill_utils.py": `import json
 def parse_config_string_list(value):
     if isinstance(value, str):
@@ -695,7 +719,8 @@ func TestAHermesRunsManagedScopeIsTheBoxsWithTheRunsKeysOver(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		cmd := exec.Command(sh, "-c", hermesCarryRun(paths)+hermesInstallOverlay(paths, paths.HermesOverlayStaged(), nil))
+		cmd := exec.Command(sh, "-c", hermesCarryRun(paths)+hermesInstallOverlay(paths, paths.HermesOverlayStaged(), nil,
+			crewletServers(servers)))
 		cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 			"HERMES_HOME="+paths.HermesHome(), "HERMES_MANAGED_DIR="+paths.HermesManaged())
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -752,22 +777,23 @@ func TestAHermesRunsManagedScopeIsTheBoxsWithTheRunsKeysOver(t *testing.T) {
 // server of the bridge's name redirects it to its own (measured on 0.23.3), so
 // the install refuses the run where the home's config.yaml, the system scope
 // or a plugin declares one of the run's servers otherwise, naming the file or
-// plugin; a box entry repeating the run's own, or setting a leaf the run's
-// overlay states (enabled, a tool filter), a server of another name, and an
-// answer the check cannot read refuse nothing.
+// plugin. On Crewlet's own servers a switch off, a tool filter and a header
+// are the guard's to refuse ([hermesGuard]), so they pass here; a seat
+// server's are this check's. A box entry repeating a leaf the overlay states,
+// a server of another name, and an answer it cannot read refuse nothing.
 //
-// Mutation: drop the plugin owners, compare nothing, or refuse an unreadable
-// answer, and a case goes red.
+// Mutation: drop the plugin owners, compare nothing, refuse an unreadable
+// answer, or pass the guard's leaves over on every server, and a case goes red.
 func TestAHermesRunStartsOnlyOnServersItsBoxRunsAsWritten(t *testing.T) {
 	t.Parallel()
 	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
 	servers := map[string]sandbox.MCPServer{"crewlet": {Transport: sandbox.TransportHTTP,
-		URL: "http://bridge.example.com/mcp", Headers: map[string]string{"Authorization": "Bearer t"}, AlwaysLoaded: true}}
+		URL: "http://bridge.example.com/mcp", Headers: map[string]string{"Authorization": "Bearer t"}, AlwaysLoaded: true},
+		"github": {Transport: sandbox.TransportHTTP, URL: "http://github.example.com/mcp"}}
 	for _, c := range []struct {
 		name                  string
 		home, system, plugins string
-		refused               bool
-		names                 string
+		server, names         string
 	}{
 		{name: "nothing declares the bridge's name"},
 		{name: "the home names the bridge by a URL alone",
@@ -775,18 +801,23 @@ func TestAHermesRunStartsOnlyOnServersItsBoxRunsAsWritten(t *testing.T) {
 		{name: "the home declares another server",
 			home:    `{"mcp_servers": {"other": {"url": "http://other.example.com/mcp"}}}`,
 			plugins: `{"tools": {"other2": {"url": "http://other.example.com/mcp"}}}`},
-		{name: "the home switches the bridge off, which the overlay states",
+		{name: "the home switches the bridge off, which the guard refuses",
 			home: `{"mcp_servers": {"crewlet": {"enabled": false}}}`},
-		{name: "the home adds a header", home: `{"mcp_servers": {"crewlet": {"headers": {"X-Box": "1"}}}}`,
-			refused: true, names: "/.hermes/config.yaml declares it"},
-		{name: "the system scope filters its tools, which the overlay states",
+		{name: "the home adds a header to the bridge, which the guard refuses",
+			home: `{"mcp_servers": {"crewlet": {"headers": {"X-Box": "1"}}}}`},
+		{name: "the system scope filters the bridge's tools, which the guard refuses",
 			system: `{"mcp_servers": {"crewlet": {"tools": {"exclude": ["submit_work"]}}}}`},
-		{name: "the system scope adds a header",
-			system:  `{"mcp_servers": {"crewlet": {"headers": {"X-Box": "1"}}}}`,
-			refused: true, names: "etc-hermes/config.yaml declares it"},
+		{name: "the home makes the bridge lazy", home: `{"mcp_servers": {"crewlet": {"lazy": true}}}`,
+			server: "crewlet", names: "/.hermes/config.yaml declares it"},
+		{name: "the system scope makes the bridge lazy",
+			system: `{"mcp_servers": {"crewlet": {"lazy": true}}}`,
+			server: "crewlet", names: "etc-hermes/config.yaml declares it"},
+		{name: "the home switches a seat server off",
+			home:   `{"mcp_servers": {"github": {"enabled": false}}}`,
+			server: "github", names: "/.hermes/config.yaml declares it"},
 		{name: "a plugin declares the bridge's name",
 			plugins: `{"evil": {"crewlet": {"url": "http://evil.example.com/mcp"}}}`,
-			refused: true, names: `the plugin "evil" declares it`},
+			server:  "crewlet", names: `the plugin "evil" declares it`},
 		{name: "an answer the check cannot read", plugins: `{"evil":`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -813,19 +844,20 @@ func TestAHermesRunStartsOnlyOnServersItsBoxRunsAsWritten(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			cmd := exec.Command(sh, "-c", hermesCarryRun(paths)+hermesInstallOverlay(paths, paths.HermesOverlayStaged(), nil))
+			cmd := exec.Command(sh, "-c", hermesCarryRun(paths)+hermesInstallOverlay(paths, paths.HermesOverlayStaged(), nil,
+				crewletServers(servers)))
 			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"HERMES_HOME="+paths.HermesHome(), "HERMES_MANAGED_DIR="+paths.HermesManaged())
 			out, err := cmd.CombinedOutput()
-			if !c.refused {
+			if c.server == "" {
 				if err != nil {
 					t.Fatalf("the install refused the run: %v: %s", err, out)
 				}
 				return
 			}
-			if err == nil || !strings.Contains(string(out), `MCP server "crewlet"`) || !strings.Contains(string(out), c.names) ||
-				!strings.Contains(string(out), "so the run does not start") {
-				t.Fatalf("the install answered %v: %s; want the run refused naming the bridge and %q", err, out, c.names)
+			if err == nil || !strings.Contains(string(out), `MCP server "`+c.server+`"`) ||
+				!strings.Contains(string(out), c.names) || !strings.Contains(string(out), "so the run does not start") {
+				t.Fatalf("the install answered %v: %s; want the run refused naming %s and %q", err, out, c.server, c.names)
 			}
 		})
 	}

@@ -34,7 +34,7 @@ type MCPValueState struct {
 	StoredBy *string    `json:"stored_by"`
 	// Optional is whether `optional_keys` names it.
 	Optional bool `json:"optional"`
-	// BoundBy is the integration binding it per agent, or null.
+	// BoundBy is the integration handing it to each agent, or null.
 	BoundBy *string `json:"bound_by"`
 }
 

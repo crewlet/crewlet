@@ -24,17 +24,18 @@ import (
 // come from one small company ([assistanttest.World]); anything else goes to the
 // App's dispatcher with the act route mounted and auditing, so a write sent
 // would leave an `operator_acted` record. Every call must leave instead: a proposal card, one
-// stored proposal, NO request that is not a read, NO `operator_acted`. The
-// exception is a VIEW CHANGE a screen declares `confirm: none` (contract 6.7,
-// D11): it writes nothing to the company, so it is applied at once. A control
-// approves one write as the approve route does, so the empty audit is the
-// sink's own answer.
+// stored proposal, NO request that is not a read, NO `operator_acted`. Neither
+// exception writes to the company: a VIEW CHANGE declared `confirm: none`
+// (contract 6.7, D11) is applied at once; a SCREEN READ (`confirm: read`) goes
+// to the page and the turn parks for its answer. A control approves one write
+// as the approve route does, so the empty audit is the sink's own answer.
 // Mutation: send a write on the turn's grant, or grow a write ProposalArgs lacks.
 func TestNoWriteWithoutApproval(t *testing.T) {
 	t.Parallel()
 	fx, audit := actingAssistApp(t)
 	var proposing []catalog.Tool
 	var rounds []evals.Round
+	confirms := map[string]wire.ActionConfirm{}
 	for _, tool := range catalog.Tools() {
 		if tool.Kind != catalog.KindWrite && tool.Kind != catalog.KindPageAction {
 			continue
@@ -47,9 +48,15 @@ func TestNoWriteWithoutApproval(t *testing.T) {
 		proposing = append(proposing, tool)
 		rounds = append(rounds, evals.Call("c-"+tool.Name, tool.Name, args))
 		if tool.Kind == catalog.KindPageAction {
-			// The walk's page action is a view change, applied at once,
-			// so its turn goes on to an answer.
-			rounds = append(rounds, evals.Say("Done."))
+			action, err := catalog.PageActionFor(tool, args, assistanttest.FilterPage())
+			if err != nil {
+				t.Fatalf("%s on the task list: %v", tool.Name, err)
+			}
+			confirms[tool.Name] = action.Confirm
+			if action.Confirm == wire.ConfirmNone {
+				// A view change's turn goes on to an answer; a screen read's parks.
+				rounds = append(rounds, evals.Say("Done."))
+			}
 		}
 	}
 	if len(proposing) < 15 {
@@ -61,9 +68,9 @@ func TestNoWriteWithoutApproval(t *testing.T) {
 	appliedAtOnce := map[string]bool{}
 	for _, tool := range proposing {
 		frames := askOne(t, rig, fx, tool.Name, assistanttest.FilterPage())
-		if tool.Kind == catalog.KindPageAction {
+		if confirm, ok := confirms[tool.Name]; ok {
 			appliedAtOnce[tool.Name] = true
-			requireAppliedAtOnce(t, frames, tool.Name)
+			requireAppliedAtOnce(t, frames, tool.Name, confirm)
 			continue
 		}
 		card := proposalCard(t, frames, tool.Name)
@@ -299,22 +306,26 @@ func operatorActed(audit *recordedAudit) int {
 	return n
 }
 
-// requireAppliedAtOnce holds a view change's turn to its contract: an action
-// frame that applies with no confirmation, no proposal card, and a turn that
-// completes rather than waiting on the person.
-func requireAppliedAtOnce(t *testing.T, frames []wire.Frame, tool string) {
+// requireAppliedAtOnce holds a page action the turn approves itself to its
+// contract: an action frame carrying confirm and no proposal card. A view
+// change's turn completes; a screen read's parks for the page's answer.
+func requireAppliedAtOnce(t *testing.T, frames []wire.Frame, tool string, confirm wire.ActionConfirm) {
 	t.Helper()
 	action := evals.Last(frames, wire.EventAction)
-	if action == nil || action.Action.Confirm != wire.ConfirmNone {
-		t.Errorf("%s's turn sent no action applied at once: %+v", tool, action)
+	if action == nil || action.Action.Confirm != confirm {
+		t.Errorf("%s's turn sent no action applied at once with confirm %s: %+v", tool, confirm, action)
 	}
 	for _, f := range frames {
 		if f.Kind == wire.EventCard && f.Card.Card.Proposal != nil {
-			t.Errorf("%s's view change drew a proposal card, which asks for an approval it does not need", tool)
+			t.Errorf("%s's page action drew a proposal card, which asks for an approval it does not need", tool)
 		}
 	}
-	if done := evals.Last(frames, wire.EventDone); done == nil || done.Done.State != wire.TurnCompleted {
-		t.Errorf("%s's turn did not go on to its answer: %+v", tool, done)
+	want := wire.TurnCompleted
+	if confirm == wire.ConfirmRead {
+		want = wire.TurnWaitingForApproval
+	}
+	if done := evals.Last(frames, wire.EventDone); done == nil || done.Done.State != want {
+		t.Errorf("%s's turn ended %+v, want %s", tool, done, want)
 	}
 }
 

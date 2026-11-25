@@ -161,7 +161,45 @@ func holdInputs(t *testing.T, e catalogue.Entry) {
 		if in.FromIntegration && e.Integration == "" {
 			t.Errorf("%s says an integration hands %s over, and names none", e.ID, in.Name)
 		}
+		// WHAT THE ENTRY SAYS THE INTEGRATION HANDS OVER IS WHAT ITS
+		// RECOGNITION BINDS, so the add flow never leaves a key to an
+		// integration that does not send it.
+		if bound := boundKeys(e); in.FromIntegration != bound[in.Name] {
+			t.Errorf("%s says its integration hands %s over %v, and its recognition binds it %v",
+				e.ID, in.Name, in.FromIntegration, bound[in.Name])
+		}
+		// A SERVER ITS INTEGRATION SIGNS IN starts with every key it needs.
+		if slices.Contains(e.Auth, catalogue.AuthIntegration) && in.Required && in.Value == "" &&
+			!in.FromIntegration {
+			t.Errorf("%s needs %s, which its integration sign-in leaves to nobody", e.ID, in.Name)
+		}
 	}
+}
+
+// boundKeys is every key an entry's own launch is handed by its integration
+// on its transport: each seat's credential and the integration's own values.
+func boundKeys(e catalogue.Entry) map[string]bool {
+	out := map[string]bool{}
+	pick := func(env, header string) {
+		key := env
+		if e.Transport == catalogue.TransportHTTP {
+			key = header
+		}
+		if key != "" {
+			out[key] = true
+		}
+	}
+	if _, keys, ok := catalogue.SeatKeysFor(launchOf(e)); ok {
+		for _, k := range keys {
+			pick(k.Env, k.Header)
+		}
+	}
+	if _, keys, ok := catalogue.OrgKeysFor(launchOf(e)); ok {
+		for _, k := range keys {
+			pick(k.Env, k.Header)
+		}
+	}
+	return out
 }
 
 func launchOf(e catalogue.Entry) catalogue.Launch {
@@ -370,6 +408,26 @@ func TestEveryDatadogSitesServerIsRecognised(t *testing.T) {
 		if !ok || vendor != "datadog" {
 			t.Errorf("Datadog's server on %s is not recognised as Datadog's", site)
 		}
+	}
+}
+
+// DATADOG'S SERVER IS HANDED THE ORGANIZATION'S API KEY by its integration on
+// every site, beside each agent's application key, and a lookalike host is
+// handed neither.
+func TestDatadogsServerReadsTheOrganizationsKeyFromItsIntegration(t *testing.T) {
+	t.Parallel()
+	for _, site := range datadog.Sites() {
+		vendor, keys, ok := catalogue.OrgKeysFor(remote("https://mcp." + site + "/v1/mcp"))
+		if !ok || vendor != "datadog" || len(keys) != 1 || keys[0].Header != "DD_API_KEY" || keys[0].Field != "API_KEY" {
+			t.Errorf("Datadog's server on %s reads %v from %q (%v), want DD_API_KEY from the integration's API_KEY",
+				site, keys, vendor, ok)
+		}
+	}
+	if _, keys, ok := catalogue.OrgKeysFor(remote("https://mcp.datadoghq.com.example.net/v1/mcp")); ok {
+		t.Errorf("a lookalike of Datadog's server is handed %v", keys)
+	}
+	if _, keys, ok := catalogue.OrgKeysFor(remote("https://api.githubcopilot.com/mcp/")); ok {
+		t.Errorf("GitHub's server, which reads only each agent's token, is handed %v", keys)
 	}
 }
 

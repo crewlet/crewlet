@@ -45,6 +45,8 @@ func (c consentSignIns) SignOutConsent(ctx context.Context, kind integration.Kin
 	return setupapi.ConsentSignOut{Kind: string(kind), Revocation: string(out.Revocation), Said: out.Sentence()}, nil
 }
 
+func (c consentSignIns) SignInCallback() string { return c.e.CallbackURL() }
+
 // consentAnswer is a sign-in's record as the routes answer it: never its
 // sealed half.
 func consentAnswer(s coord.OAuthSignIn) setupapi.ConsentSignIn {

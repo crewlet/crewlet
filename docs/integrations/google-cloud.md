@@ -281,11 +281,19 @@ Google's growth products (Google Analytics, Search Console, Google Ads and Googl
 ### Products that refuse service accounts sign in with a person's consent
 
 AdSense and AdMob accept no service account, so the company reaches them through one person's consent, which Crewlet keeps ([ADR-0178](../../adr/0178-an-integrations-consent-grant-is-a-named-grant-of-the-same-machinery.md)). [AdSense](adsense.md) and [AdMob](admob.md) connect this way. A product's sign-in covers reading alone until an agent may change settings; then a person signs in again for both. For each:
-- **Your own OAuth client.** Create an OAuth client (Web application) in a Google Cloud project you control, add Crewlet's callback address (`<api.external_url>/webhooks/mcp-oauth`) as a redirect URI, and put its ID and secret in the product's `oauth.client_id` and `oauth.client_secret`, the secret as a `${VAR}`. Several products may share one client and one variable.
-- **Publish its consent screen** ("In production"), or use an Internal (Workspace) app. Google expires the sign-in of an external app left in Testing after seven days; a refusal about then says so.
-- **An administrator signs in** with Google from the product's page, at a fresh step-up. Crewlet asks for exactly the scopes the product's agents need, keeps the grant only if Google granted exactly those, seals the refresh token where no operator view reaches, and renews it on every node. Crewlet needs `api.external_url` for this: Google sends the browser back to it, and offers no device sign-in for these products.
+- **Your own OAuth client**, made as [below](#the-companys-own-oauth-client).
+- **An administrator signs in** with Google from the product's page, at a fresh step-up. Crewlet asks for exactly the scopes the product's agents need, keeps the grant only if Google granted exactly those, seals the refresh token where no operator view reaches, and renews it on every node. Crewlet needs a public address for this: Google sends the browser back to it, and offers no device sign-in for these products.
 - **Signing in again** replaces the grant and revokes nothing at Google. If Google refuses to renew the sign-in, the product reports `credential_rejected` and Crewlet stops asking Google until somebody signs in again.
 - **Signing out or disconnecting** deletes Crewlet's copy, and revokes the access at Google only when no other product's sign-in uses a client in the same Cloud project, since Google's revocation would end that one too. When it does not revoke, the answer says how to remove Crewlet at myaccount.google.com. Separate projects per product make every sign-out a revocation.
+
+### The company's own OAuth client
+
+AdSense and AdMob sign in as it, and Google Analytics and Google Play use it, optionally, for **Add it for me**. Each product's connect form shows the values below; one client and one secret variable may serve every product.
+
+1. In a Google Cloud project you control, open **Google Cloud › Credentials** and create an OAuth client ID of type **Web application**, after turning on the APIs the product's page names.
+2. Under **Authorized redirect URIs**, add `<api.public.external_url>/webhooks/mcp-oauth` (`<api.external_url>/webhooks/mcp-oauth` without a public listener), exactly as the form shows it: Google refuses any address not registered exactly. Leave **Authorized JavaScript origins** empty, since the engine exchanges the code itself. When the address changes, as a temporary tunnel's can on restart, update the URI before the next sign-in. With no public address the form says so, and a sign-in is refused.
+3. In **Google Auth Platform › Audience**, choose **Internal** if whoever signs in is in the project's Google Cloud organization. Otherwise choose **External** and press **Publish app** (Google's unverified-app warning is fine for the few people who sign in), or keep it in **Testing** and add each person who signs in as a test user: Google ends a test user's sign-in seven days after consent, and a refusal about then says so ([Manage App Audience](https://support.google.com/cloud/answer/15549945)).
+4. Put the client's ID and secret in the product's `oauth.client_id` and `oauth.client_secret`, the secret as a `${VAR}`, or paste them on its page.
 
 ## Configuration
 

@@ -1060,11 +1060,12 @@ func TestACopilotTranscriptFilesTheNoteUnderItsHeading(t *testing.T) {
 	}
 }
 
-// A run is started on Copilot's own posture: the brief on stdin, every engine
-// server enabled by name over a trusted repository's settings, the session by
-// `--session-id`, never `--trust-folder` (refused beside it) nor `-p`.
+// A run is started on Copilot's own posture: the brief on stdin, the engine's
+// servers added, never enabled over a person's `disabledMcpServers` (the guard
+// refuses that for the bridge), the session by `--session-id`, never
+// `--trust-folder` (refused beside it) nor `-p`.
 //
-// Mutation: drop `--enable-mcp-server`, or add `--trust-folder` — the case fails.
+// Mutation: add `--enable-mcp-server` or `--trust-folder` — the case fails.
 func TestACopilotRunIsStartedOnItsPosture(t *testing.T) {
 	paths := Paths{Home: "/box"}
 	req := sandbox.RunRequest{Model: "gpt-5.2", Effort: "high", Limits: sandbox.Limits{MaxTurns: 3},
@@ -1073,7 +1074,7 @@ func TestACopilotRunIsStartedOnItsPosture(t *testing.T) {
 	for _, want := range []string{"copilot --output-format json --yolo --no-ask-user --no-auto-update",
 		"--disable-client-telemetry", "--disable-builtin-mcps", "--sync-session=off",
 		"--additional-mcp-config '@/box/.crewlet/mcp.json'",
-		"--enable-mcp-server 'crewlet' --enable-mcp-server 'linear'", "--model 'gpt-5.2'",
+		"--model 'gpt-5.2'",
 		"--reasoning-effort 'high'", `set -- "$@" --session-id 's-1'`,
 		`printf '%s\n' '{"type":"crewlet.cap","data":{"turns":3}}'`,
 		"older than 1.0.114"} {
@@ -1087,7 +1088,8 @@ func TestACopilotRunIsStartedOnItsPosture(t *testing.T) {
 			invocation = l
 		}
 	}
-	for _, refused := range []string{"--trust-folder", " -p ", "--prompt", "--resume", "--experimental"} {
+	for _, refused := range []string{"--trust-folder", " -p ", "--prompt", "--resume", "--experimental",
+		"--enable-mcp-server"} {
 		if strings.Contains(invocation, refused) {
 			t.Errorf("the invocation holds %q: %s", refused, invocation)
 		}

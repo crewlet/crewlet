@@ -129,12 +129,15 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 // the turn ended ([qwenEndEvent]). The brief goes on stdin, which the helper
 // reads and sends as the turn's prompt. Unset is what would move what the
 // run depends on: another home (QWEN_HOME, QWEN_RUNTIME_DIR) would hide the
-// settings and the session from the helper, and QWEN_CODE_UNATTENDED_RETRY
-// retries a refused request for up to six hours.
+// settings and the session from the helper, QWEN_CODE_UNATTENDED_RETRY
+// retries a refused request for up to six hours, and QWEN_CODE_SAFE_MODE
+// switches every hook off (measured on 0.28.4), as Claude Code's own safe mode
+// does ([claudeSwitchesOff]); a `.env` or a settings `env` setting it is
+// refused instead ([qwenGuard]).
 // The prompt's variables are pinned ([QwenCode.Pins]).
 func (QwenCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true,
-		Unset: []string{"QWEN_HOME", "QWEN_RUNTIME_DIR", "QWEN_CODE_UNATTENDED_RETRY"}}
+		Unset: []string{"QWEN_HOME", "QWEN_RUNTIME_DIR", "QWEN_CODE_UNATTENDED_RETRY", "QWEN_CODE_SAFE_MODE"}}
 }
 
 // qwenDashScope is the endpoint Qwen Code's OpenAI-compatible sign-in sends a
@@ -331,9 +334,6 @@ func qwenSettings(req sandbox.RunRequest, paths Paths) map[string]any {
 	// directories across its tiers, so the home's own stay listed.
 	if len(req.Skills) > 0 {
 		settings["skills"] = map[string]any{"directories": []string{paths.QwenSkills()}}
-		// A home's or a repository's `disableAllHooks: true` gives way to
-		// this tier's false (measured on 0.28.4), so the hook stays on.
-		settings["disableAllHooks"] = false
 		settings["hooks"] = map[string]any{"PostToolUse": []any{map[string]any{
 			"matcher": "skill",
 			"hooks": []any{map[string]any{

@@ -130,7 +130,7 @@ if (mode === "pin") {
     process.exit(3)
   }
 } else if (mode === "guard") {
-  const named = { server: [], hook: [], tool: [], auth: [], turns: [] }
+  const named = { server: [], hook: [], tool: [], auth: [], turns: [], skill: [] }
   for (let i = 0; i + 1 < args.length; i += 2) named[args[i].replace(/^--/, "")]?.push(args[i + 1])
   const found = switchedOff(named)
   if (found.length > 0) {
@@ -282,29 +282,51 @@ function deep(base, value) {
   return out
 }
 
+// hooksOff reports whether 0.70.0 reads value of `hooksConfig.enabled` as
+// false: false, 0, "" and "false" in any case (measured: "true", "no" and a
+// missing or null value leave hooks on).
+function hooksOff(value) {
+  return value === false || value === 0 || value === "" || (typeof value === "string" && value.toLowerCase() === "false")
+}
+
 // switchedOff is what the settings files switch off or replace of named's
 // servers, hook, sign-in and round cap, a sentence a file: the home's settings,
 // which hold the run's, the working directory's unless it is the home (Gemini
 // CLI reads it as no workspace there), and the system defaults and settings
-// where Gemini CLI reads them ([rootKept]).
-// Matched as 0.70.0 matches: a server in a list by its name lower-cased and
-// trimmed, in mcpServers by its key, a hook exactly, a tool as [excludes] reads.
-function switchedOff({ server, hook, tool, auth, turns }) {
+// where Gemini CLI reads them ([rootKept]). `hooksConfig.enabled` is the one
+// the highest tier setting it holds: system defaults, home, working
+// directory, system settings (measured: a working directory's true over the
+// home's false keeps hooks on; the run's settings no longer set it).
+// Matched as 0.70.0 matches: a server or a skill in a list by its name (a
+// skill's as listed) lower-cased and trimmed, in mcpServers by its key, a hook
+// exactly, a tool as [excludes] reads; `skills.enabled` false lists no skill.
+function switchedOff({ server, hook, tool, auth, turns, skill = [] }) {
   const home = os.homedir()
-  const files = [{ file: path.join(home, ".gemini", "settings.json") }]
+  const files = [{ file: path.join(home, ".gemini", "settings.json"), tier: 1 }]
   if (realpath(process.cwd()) !== realpath(home)) {
-    files.push({ file: path.join(process.cwd(), ".gemini", "settings.json"), above: true })
+    files.push({ file: path.join(process.cwd(), ".gemini", "settings.json"), above: true, tier: 2 })
   }
   const defaults = process.env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH || "/etc/gemini-cli/system-defaults.json"
   const system = process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH || "/etc/gemini-cli/settings.json"
-  if (rootKept(defaults)) files.push({ file: defaults })
-  if (rootKept(system)) files.push({ file: system, above: true })
+  if (rootKept(defaults)) files.push({ file: defaults, tier: 0 })
+  if (rootKept(system)) files.push({ file: system, above: true, tier: 3 })
   const fold = (name) => String(name).toLowerCase().trim()
   const list = (value) => (Array.isArray(value) ? value : [])
   const found = []
-  for (const { file, above } of files) {
+  let enabled = null
+  let skills = null
+  for (const { file, above, tier } of files) {
     const settings = readSettings(file)
     if (settings === null) continue
+    const value = settings.hooksConfig?.enabled
+    if (value !== undefined && value !== null && (enabled === null || tier >= enabled.tier)) {
+      enabled = { file, tier, value }
+    }
+    const on = settings.skills?.enabled
+    // A null sets it too, and so does a value it reads as false ("false", 0;
+    // measured on 0.70.0: a working directory's null over a home's false listed
+    // the skills, a home's "false" or 0 listed none).
+    if (on !== undefined && (skills === null || tier >= skills.tier)) skills = { file, tier, value: on }
     const why = []
     for (const name of server) {
       if (list(settings.mcp?.excluded).some((entry) => fold(entry) === fold(name))) {
@@ -320,11 +342,13 @@ function switchedOff({ server, hook, tool, auth, turns }) {
     for (const entry of list(settings.tools?.exclude)) {
       if (excludes(entry, server, tool)) why.push(`its tools.exclude names the tool ${entry}`)
     }
+    for (const name of skill) {
+      if (list(settings.skills?.disabled).some((entry) => fold(entry) === fold(name))) {
+        why.push(`its skills.disabled names the run's skill ${name}`)
+      }
+    }
     for (const name of hook) {
       if (list(settings.hooksConfig?.disabled).includes(name)) why.push(`its hooksConfig.disabled names the hook ${name}`)
-      if (above && settings.hooksConfig?.enabled === false) {
-        why.push(`its hooksConfig.enabled is false, which switches the hook ${name} off`)
-      }
     }
     const selected = settings.security?.auth?.selectedType
     for (const type of auth) {
@@ -342,11 +366,279 @@ function switchedOff({ server, hook, tool, auth, turns }) {
     }
     if (why.length > 0) found.push(`${file}: ${why.join(", ")}`)
   }
+  if (skill.length > 0 && skills !== null && hooksOff(skills.value)) {
+    found.push(`${skills.file}: its skills.enabled is ${JSON.stringify(skills.value)}, which lists none of the ` +
+      `run's skills ${skill.join(", ")}`)
+  }
+  if (hook.length > 0 && enabled !== null && hooksOff(enabled.value)) {
+    found.push(`${enabled.file}: its hooksConfig.enabled is ${JSON.stringify(enabled.value)}, which switches every ` +
+      `hook off, the run's ${hook.join(", ")} among them`)
+  }
   for (const { file, excludeTools } of activeExtensions(home)) {
     const why = list(excludeTools).filter((entry) => excludes(entry, server, tool))
     if (why.length > 0) found.push(`${file}: its excludeTools names the tool ${why.join(", ")}`)
   }
+  found.push(...policyDenies(home, server, tool))
   return found
+}
+
+// policyDenies is each tool of the run's servers a policy file of the home's
+// (~/.gemini/policies, the run's own crewlet.toml aside) or the machine's
+// (/etc/gemini-cli/policies, where root keeps it) denies, a sentence a tool:
+// the matching rule of the highest priority, in a yolo run's mode, decides,
+// and a deny leaves the call "not found" without a word (measured on 0.70.0:
+// `toolName` "*", the qualified name, or `mcpName` with "*" or the tool's own
+// name; a higher-priority allow after it, a rule for another mode or another
+// server let it run). The run's admin-tier allow would override it, so the
+// run is refused instead; an `ask_user` it does override, as a headless run
+// cannot ask (measured: denied under yolo without it). Reimplemented, only as
+// measured: 0.70.0 ships its policy engine in hashed bundle chunks alone. A
+// rule it cannot read whole refuses only where it could reach a run's tool.
+function policyDenies(home, server, tool) {
+  const dirs = [path.join(home, ".gemini", "policies"), "/etc/gemini-cli/policies"]
+  const rules = []
+  const unread = []
+  const skipped = []
+  const each = (fn) => server.some((s) => tool.some((t) => fn(s, t, `mcp_${s}_${t}`)))
+  for (const dir of dirs) {
+    let names = []
+    try {
+      names = fs.readdirSync(dir).filter((n) => n.endsWith(".toml")).sort()
+    } catch {}
+    for (const name of names) {
+      const file = path.join(dir, name)
+      if (dir === dirs[0] && name === "crewlet.toml") continue
+      if (dir === dirs[1] && !rootKept(file)) continue
+      let text = ""
+      try {
+        text = fs.readFileSync(file, "utf8")
+      } catch {
+        continue
+      }
+      for (const rule of tomlRules(text)) {
+        if (rule.unread.length === 0) {
+          rules.push({ ...rule, file, tier: dir === dirs[0] ? 2 : 3 })
+          continue
+        }
+        const why = rule.unread.map((w) => `${file}:${w}`).join("; ")
+        if (each((s, t, qualified) => mayHit(rule, s, t, qualified))) unread.push(why)
+        else skipped.push(why)
+      }
+    }
+  }
+  if (skipped.length > 0) {
+    process.stderr.write("crewlet: Gemini CLI policy rules the guard cannot read whole were left out of its " +
+      `check, as what it reads of each rules out every tool of the run's servers: ${skipped.join("; ")}\n`)
+  }
+  const found = []
+  if (unread.length > 0) {
+    found.push(`a policy rule the guard cannot read exactly, which Gemini CLI may read as a deny of the run's ` +
+      `tools: ${unread.join("; ")}`)
+  }
+  for (const s of server) {
+    for (const t of tool) {
+      const qualified = `mcp_${s}_${t}`
+      let best = null
+      for (const r of rules) {
+        if (Array.isArray(r.modes) && !r.modes.includes("yolo")) continue
+        if (!hits(r.mcpName, r.toolName, s, t, qualified)) continue
+        // RANKED BY TIER, THEN PRIORITY, as 0.70.0's transformPriority does
+        // (tier + priority / 1000: the home's policies the user tier, 2, the
+        // machine's the admin tier, 3; read from its bundle).
+        const priority = Number.isFinite(r.priority) ? r.priority : 0
+        const rank = r.tier + priority / 1000
+        if (best === null || rank > best.rank || (rank === best.rank && r.decision === "deny")) {
+          best = { ...r, priority, rank }
+        }
+      }
+      if (best !== null && best.decision === "deny") {
+        found.push(`${best.file}: its rule ${JSON.stringify({ toolName: best.toolName, mcpName: best.mcpName })} ` +
+          `denies the tool ${qualified} (priority ${best.priority}), which the run never allows back over it`)
+      }
+    }
+  }
+  return found
+}
+
+// hits is whether a rule's mcpName and toolName (either undefined where the
+// rule has none) match the tool t of the server s, qualified mcp_<s>_<t>.
+function hits(mcpName, toolName, s, t, qualified) {
+  const names = Array.isArray(toolName) ? toolName : [toolName]
+  return mcpName !== undefined
+    ? mcpName === s && names.some((n) => n === undefined || n === "*" || n === t || n === qualified)
+    : names.some((n) => n === "*" || n === qualified || (typeof n === "string" && n.endsWith("*") &&
+      qualified.startsWith(n.slice(0, -1))))
+}
+
+// mayHit is whether a rule read only in part could still deny the tool t of
+// the server s in a yolo run. A key it read stands (TOML takes a key once):
+// a decision other than deny, modes without yolo, or a mcpName or toolName
+// naming other tools rules the tool out. A key whose value it could not
+// read, or any key where a line's key is unreadable (lost), may hold any
+// value; a rule with neither name may match every tool.
+function mayHit(rule, s, t, qualified) {
+  const unknown = (k) => rule.lost || rule.unknown.includes(k)
+  if (rule.decision !== undefined && rule.decision !== "deny") return false
+  if (rule.modes !== undefined && !(Array.isArray(rule.modes) && rule.modes.includes("yolo"))) return false
+  if (rule.toolName === undefined && rule.mcpName === undefined && !unknown("toolName") && !unknown("mcpName")) {
+    return true
+  }
+  const mcp = rule.mcpName !== undefined ? [rule.mcpName] : unknown("mcpName") ? [undefined, s] : [undefined]
+  const toolName = rule.toolName !== undefined ? rule.toolName : unknown("toolName") ? "*" : undefined
+  return mcp.some((m) => hits(m, toolName, s, t, qualified))
+}
+
+// tomlRules is each `[[rule]]` table of a policy file, as far as a rule
+// needs: bare keys, basic and literal strings, integers, booleans and arrays
+// of those, one line or several, with comments and a trailing comma. A line
+// in a rule it cannot read exactly (a quoted key, `1_000`, a multi-line
+// string, an inline table), or a rule with no decision or no toolName and no
+// mcpName, is a reason in the rule's unread ("line N: ..."); its key goes in
+// unknown, or lost is set where the key is unreadable too.
+function tomlRules(text) {
+  const rules = []
+  let rule = null
+  let pending = null
+  const lines = text.split(/\r?\n/)
+  const close = () => {
+    if (rule === null) return
+    if (rule.decision === undefined || (rule.toolName === undefined && rule.mcpName === undefined)) {
+      rule.unread.push(`line ${rule.line}: a rule with no decision, or no toolName and no mcpName`)
+    }
+  }
+  for (const [i, raw] of lines.entries()) {
+    const line = pending === null ? raw.trim() : pending.text + "\n" + raw.trim()
+    if (pending === null && (line === "" || line.startsWith("#"))) continue
+    if (pending === null && /^\[\[\s*rule\s*\]\]\s*(#.*)?$/.test(line)) {
+      close()
+      rule = { line: i + 1, unread: [], unknown: [], lost: false }
+      rules.push(rule)
+      continue
+    }
+    if (pending === null && line.startsWith("[")) {
+      close()
+      rule = null
+      continue
+    }
+    if (rule === null) continue
+    const m = /^([A-Za-z0-9_-]+)[ \t]*=[ \t]*([\s\S]*)$/.exec(line)
+    if (m === null) {
+      rule.unread.push(`line ${i + 1}: ${JSON.stringify(raw.trim().slice(0, 80))}`)
+      rule.lost = true
+      pending = null
+      continue
+    }
+    const value = tomlValue(m[2])
+    if (value === undefined) {
+      if (arrayOpen(m[2]) && i + 1 < lines.length) {
+        pending = { text: line, line: pending?.line ?? i + 1 }
+        continue
+      }
+      const at = pending?.line ?? i + 1
+      rule.unknown.push(m[1])
+      rule.unread.push(arrayOpen(m[2]) ? `line ${at}: an array never closed`
+        : `line ${at}: ${JSON.stringify(line.slice(0, 80))}`)
+      pending = null
+      continue
+    }
+    pending = null
+    rule[m[1]] = value
+  }
+  close()
+  return rules
+}
+
+// arrayOpen is whether text opens an array it does not close, its strings
+// and comments aside: the value goes on to the next line.
+function arrayOpen(text) {
+  let depth = 0
+  for (let at = 0; at < text.length; at++) {
+    const c = text[at]
+    if (c === "#") {
+      const end = text.indexOf("\n", at)
+      if (end < 0) break
+      at = end
+    } else if (c === '"' || c === "'") {
+      at++
+      while (at < text.length && text[at] !== c && text[at] !== "\n") at += c === '"' && text[at] === "\\" ? 2 : 1
+    } else if (c === "[") {
+      depth++
+    } else if (c === "]") {
+      depth--
+    }
+  }
+  return depth > 0
+}
+
+// tomlValue is text, a TOML value with an optional comment after it, as a
+// basic or literal string, an integer, a boolean or an array of those (over
+// lines, with comments and a trailing comma); undefined where it is anything
+// else.
+function tomlValue(text) {
+  let at = 0
+  const space = (lines) => {
+    for (;;) {
+      while (at < text.length && (text[at] === " " || text[at] === "\t" || (lines && text[at] === "\n"))) at++
+      if (!lines || text[at] !== "#") return
+      const end = text.indexOf("\n", at)
+      at = end < 0 ? text.length : end
+    }
+  }
+  const one = () => {
+    space(true)
+    if (text[at] === '"') {
+      let end = at + 1
+      while (end < text.length && text[end] !== '"' && text[end] !== "\n") end += text[end] === "\\" ? 2 : 1
+      if (end >= text.length || text[end] !== '"' || text.startsWith('"""', at)) return undefined
+      try {
+        const v = JSON.parse(text.slice(at, end + 1))
+        at = end + 1
+        return v
+      } catch {
+        return undefined
+      }
+    }
+    if (text[at] === "'") {
+      const end = text.indexOf("'", at + 1)
+      if (end < 0 || text.slice(at, end).includes("\n") || text.startsWith("\'\'\'", at)) return undefined
+      const v = text.slice(at + 1, end)
+      at = end + 1
+      return v
+    }
+    const m = /^(-?[0-9]+|true|false)(?=[\s,\]#]|$)/.exec(text.slice(at))
+    if (m === null) return undefined
+    at += m[1].length
+    return m[1] === "true" ? true : m[1] === "false" ? false : Number(m[1])
+  }
+  let value
+  space(false)
+  if (text[at] === "[") {
+    at++
+    value = []
+    for (;;) {
+      space(true)
+      if (text[at] === "]") {
+        at++
+        break
+      }
+      const v = one()
+      if (v === undefined) return undefined
+      value.push(v)
+      space(true)
+      if (text[at] === ",") {
+        at++
+        continue
+      }
+      if (text[at] !== "]") return undefined
+      at++
+      break
+    }
+  } else {
+    value = one()
+    if (value === undefined) return undefined
+  }
+  space(false)
+  return at === text.length || text[at] === "#" ? value : undefined
 }
 
 // excludes reports whether entry, a tools.exclude or an extension's

@@ -299,7 +299,7 @@ export const STORIES: Record<string, ToolStory> = {
       { text: "Make an OAuth client (" },
       { ui: ["Web application"] },
       {
-        text: ") in a Google Cloud project you control, turn on the AdMob API there, add Crewlet's callback address and publish its consent screen, then sign in with Google here.",
+        text: ") in a Google Cloud project you control, turn on the AdMob API there, register the redirect URI and audience the form gives, then sign in with Google here.",
       },
     ],
   },
@@ -315,7 +315,7 @@ export const STORIES: Record<string, ToolStory> = {
       { text: "Make an OAuth client (" },
       { ui: ["Web application"] },
       {
-        text: ") in a Google Cloud project you control, turn on the AdSense Management API there, add Crewlet's callback address and publish its consent screen, then sign in with Google here.",
+        text: ") in a Google Cloud project you control, turn on the AdSense Management API there, register the redirect URI and audience the form gives, then sign in with Google here.",
       },
     ],
   },
