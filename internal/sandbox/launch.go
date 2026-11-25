@@ -159,8 +159,16 @@ type LaunchRequest struct {
 	System string
 
 	// Brief is the task: the turn's ask, as the executor's prompt renders
-	// it, and the whole of what the harness is prompted with.
-	Brief string
+	// it, and the whole of what the harness is prompted with. Handover is
+	// what it hands of the summary of the session it does not continue.
+	Brief    string
+	Handover SummaryHandover
+
+	// FreshFor is Brief told under verdict, the launch's own where it decides
+	// one after Brief was built: a session refused before the run starts, and
+	// the restore its box may fall back from ([fellBack]), so the fresh brief
+	// a run reads names its own loss. Nil hands Brief as it is.
+	FreshFor func(verdict *executorkeep.NotContinued) FreshBrief
 
 	// Task is what the launching turn's work is read by, in a person's
 	// words, redacted (what it was asked, or the line a feed shows its
@@ -1200,6 +1208,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// publishes beside whether its run did continue the session, with the
 		// launch's verdict on the session it did not.
 		Brief: continued.kind, NotContinued: continued.notContinued,
+		// AND WHAT EACH OF ITS BRIEFS HANDS OF THE LOST SESSION'S SUMMARY, counted
+		// by the one its run reads.
+		Handover: continued.handover, FreshHandover: continued.freshHandover,
 		// AND WHAT THAT BRIEF, AND THE FRESH ONE ITS BOX FALLS BACK TO, LEFT
 		// OUT OF THE ROUND IT CARRIES ON, for every later reader of what the
 		// job's session holds ([BriefTold]).
