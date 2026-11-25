@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -45,6 +46,16 @@ func chatCountHarnesses(t *testing.T) []chatCountHarness {
 			variants: geminiCountVariants(), twices: geminiCountTwices(), member: geminiChatMember,
 			memberName: geminiMember.Name, release: geminiRelease},
 	}
+}
+
+// chatCountHarnessOf is the harness of [chatCountHarnesses] named name.
+func chatCountHarnessOf(t *testing.T, name string) chatCountHarness {
+	t.Helper()
+	i := slices.IndexFunc(chatCountHarnesses(t), func(h chatCountHarness) bool { return h.name == name })
+	if i < 0 {
+		t.Fatalf("no count harness %q", name)
+	}
+	return chatCountHarnesses(t)[i]
 }
 
 // qwenCountBase is a Qwen Code reply that anchors a count.
