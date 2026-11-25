@@ -103,8 +103,8 @@
 // the list a box serves (boxhelper.Tools), never a figure of its own, and the
 // box's own servers' from the seat's tools, each whole, as a box reaches a
 // server. Servers at the number on their own are hidden either way, so their
-// run keeps its browser; a repository's own servers are not counted, since
-// the launch does not know them.
+// run keeps its browser; servers the harness loads of its own, its box home's
+// and a repository's, are not counted, since the launch does not know them.
 // It reads only the launch's own counts, so it is decided after web_denied
 // and before host_network, whose check reads the engine's host and runs in
 // the box: no verdict of that check could hand such a run its browser, so it
