@@ -532,12 +532,13 @@ def plugoff(plugin):
     return "ok" if not held else "refused " + " and ".join(held)
 
 
-# WHAT CHECKOUT HANDING ALONE READS OF HERMES'S OWN CODE, each by module, name and the parameters it is called with
-# (None: a constant): checked at every launch (gate). A release that moved one starts the run without its checkouts
-# and the mid-run hand, said once by name, since a wrong render or verdict would hand a model what Hermes itself would
-# not, and nothing but checkout handing needs them. When another plugin rewrites the same tool result, Hermes keeps
-# the first answer, so that clone's instructions are not handed during the run; the plugin never orders itself
-# ahead of another. A Hermes release bump re-checks this list and CONTRACT_INTERNALS against its source (0.23.3's).
+# WHAT CHECKOUT HANDING ALONE READS OF HERMES'S OWN CODE, each by module, name (dotted for a class's method) and the
+# parameters it is called with (None: a constant): checked at every launch (gate). A release that moved one starts the
+# run without its checkouts and the mid-run hand, said once by name, since a wrong render or verdict would hand a
+# model what Hermes itself would not, and nothing but checkout handing needs them. When another plugin rewrites the
+# same tool result, Hermes keeps the first answer, so that clone's instructions are not handed during the run; the
+# plugin never orders itself ahead of another. A Hermes release bump re-checks this list and CONTRACT_INTERNALS
+# against its source (0.23.3's).
 CHECKOUT_INTERNALS = (
     ("agent.prompt_builder", "build_context_files_prompt", ("cwd", "skip_soul", "context_length")),
     ("agent.prompt_builder", "discover_context_files", ("cwd_path",)),
@@ -563,6 +564,9 @@ CHECKOUT_INTERNALS = (
     ("hermes_cli.gateway_chat", "env_launch_flags", ()),
     ("hermes_cli.plugins", "_resolve_hook_callback_timeout", ()),
     ("tools.budget_config", "budget_for_context_window", ("context_length",)),
+    ("agent.subdirectory_hints", "SubdirectoryHintTracker", ("working_dir",)),
+    ("agent.subdirectory_hints", "SubdirectoryHintTracker.check_tool_call", ("tool_name", "tool_args")),
+    ("agent.runtime_cwd", "scope_terminal_cwd", ()),
 )
 
 # WHAT THE RUN'S CONTRACT READS OF HERMES'S OWN CODE, before and apart from checkout handing (the overlay, the guard,
@@ -587,7 +591,9 @@ def internals():
     moved = []
     for module, name, params in CHECKOUT_INTERNALS:
         try:
-            found = getattr(importlib.import_module(module), name)
+            found = importlib.import_module(module)
+            for part in name.split("."):
+                found = getattr(found, part)
         except (ImportError, AttributeError):
             moved.append("%s.%s is gone" % (module, name))
             continue

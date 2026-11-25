@@ -1896,8 +1896,10 @@ func TestAFailedHermesTurnSettlesNoNote(t *testing.T) {
 // blocked as its injection scan blocks one, a .hermes.md's frontmatter
 // dropped, each kind cut to 70% head and 20% tail of 6% of the window at four
 // characters a token (20,000 to 500,000) with its notice; the tool result
-// budget of a large window; and the window resolver, which places the
-// stand-in's default model at 300,000 tokens and falls back to 256,000.
+// budget of a large window; the subdirectory hint tracker, from TERMINAL_CWD
+// (a hint for each directory a call's path argument names below it that holds
+// an AGENTS.md); and the window resolver, which places the stand-in's default
+// model at 300,000 tokens and falls back to 256,000.
 var hermesCheckoutStandIn = map[string]string{
 	"agent/model_metadata.py": `def get_model_context_length(model, base_url="", api_key="", config_context_length=None, provider="",
                              custom_providers=None):
@@ -1908,6 +1910,24 @@ var hermesCheckoutStandIn = map[string]string{
 	"agent/agent_init.py": `def _scope_context_length_to_default_runtime(agent, _agent_cfg, _model_cfg, _custom_providers,
                                             _config_context_length, base_url):
     return _config_context_length
+`,
+	"agent/runtime_cwd.py": `import os
+def scope_terminal_cwd():
+    return os.environ.get("TERMINAL_CWD", "")
+`,
+	"agent/subdirectory_hints.py": `import os
+from pathlib import Path
+class SubdirectoryHintTracker:
+    def __init__(self, working_dir=None, *, enabled=True):
+        self.working_dir = Path(working_dir or os.getcwd()).resolve()
+    def check_tool_call(self, tool_name, tool_args):
+        hints = []
+        for key in ("path", "file_path", "workdir"):
+            d = Path(str(tool_args.get(key) or "/")).resolve()
+            if d != self.working_dir and d.is_relative_to(self.working_dir) and (d / "AGENTS.md").is_file():
+                hints.append("[Subdirectory context discovered: %s]\n" % d.relative_to(self.working_dir) +
+                             (d / "AGENTS.md").read_text().strip())
+        return "\n\n" + "\n\n".join(hints) if hints else None
 `,
 	"agent/prompt_builder.py": `from pathlib import Path
 def _cap(window):
@@ -1966,6 +1986,7 @@ def build_context_files_prompt(cwd=None, skip_soul=False, context_length=None, a
 `,
 	"tools/budget_config.py": `class BudgetConfig:
     default_result_size = 100_000
+    turn_budget = 200_000
     def resolve_threshold(self, tool_name):
         return float("inf") if tool_name == "read_file" else 100_000
 def budget_for_context_window(context_length):

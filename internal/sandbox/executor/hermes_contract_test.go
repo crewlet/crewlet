@@ -535,43 +535,61 @@ func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 }
 
 // hermesRoomProbe loads the plugin beside a stand-in of Hermes 0.23.3's
-// result budget for a large window and prints the room a result of argv[2]
-// characters has in a batch of argv[3] calls.
+// result budget for a large window and of its subdirectory hint tracker, which
+// answers a call naming {"hint": n} with n characters of hints from the run's
+// working directory (TERMINAL_CWD), and prints the room a result of argv[2]
+// characters has in a batch of argv[3] calls, the call naming argv[5].
 const hermesRoomProbe = `import importlib.util, os, sys
 stand = sys.argv[4]
-os.makedirs(os.path.join(stand, "tools"), exist_ok=True)
-open(os.path.join(stand, "tools", "__init__.py"), "w").close()
+for package in ("tools", "agent"):
+    os.makedirs(os.path.join(stand, package), exist_ok=True)
+    open(os.path.join(stand, package, "__init__.py"), "w").close()
 with open(os.path.join(stand, "tools", "budget_config.py"), "w") as f:
     f.write("class B:\n    default_result_size = 100000\n    turn_budget = 200000\n"
             "    def resolve_threshold(self, tool):\n        return 100000\n"
             "def budget_for_context_window(context_length):\n    return B()\n")
+with open(os.path.join(stand, "agent", "runtime_cwd.py"), "w") as f:
+    f.write("import os\ndef scope_terminal_cwd():\n    return os.environ.get('TERMINAL_CWD', '')\n")
+with open(os.path.join(stand, "agent", "subdirectory_hints.py"), "w") as f:
+    f.write("class SubdirectoryHintTracker:\n"
+            "    def __init__(self, working_dir=None, *, enabled=True):\n        self.working_dir = working_dir\n"
+            "    def check_tool_call(self, tool_name, tool_args):\n"
+            "        n = tool_args.get('hint', 0) if self.working_dir == '/work' else 0\n"
+            "        return 'h' * n if n else None\n")
+os.environ["TERMINAL_CWD"] = "/work"
 sys.path.insert(0, stand)
 spec = importlib.util.spec_from_file_location("crewlet_plugin", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
-print(m._room("terminal", "x" * int(sys.argv[2]), 262144, int(sys.argv[3])))
+print(m._room("terminal", {"hint": int(sys.argv[5])}, "x" * int(sys.argv[2]), 262144, int(sys.argv[3])))
 `
 
-// A HERMES HAND IN A BATCH OF CALLS KEEPS TO ITS SHARE OF THE TURN BUDGET:
-// alone, a result has Hermes's per-result threshold; in a batch of five, its
-// share of the 200,000-character turn budget less room for Hermes's own hint,
-// since past that budget Hermes spills the batch's largest result first
-// (measured on 0.23.3: our 86,283-character clone result was spilled).
+// A HERMES HAND KEEPS TO ITS SHARE OF THE TURN BUDGET LESS THE HINTS HERMES
+// ADDS: a result has Hermes's per-result threshold, and at most its share of
+// the 200,000-character turn budget among the response's calls (all of it
+// for one call) less the subdirectory hints Hermes's own tracker, from the
+// run's working directory, answers for the call, since Hermes adds them
+// after the hand and past that budget spills the batch's largest result
+// first (measured on 0.23.3: our 86,283-character clone result was spilled).
 //
-// Mutation: ignore the batch, or leave no room for the hint, and a row goes red.
-func TestAHermesHandInABatchKeepsToItsShareOfTheTurnBudget(t *testing.T) {
+// Mutation: ignore the batch, leave no room for the hints, count one hint
+// whatever the call names, or spare a single call the turn budget, and a row
+// goes red.
+func TestAHermesHandKeepsToItsShareOfTheTurnBudgetLessHermessHints(t *testing.T) {
 	t.Parallel()
 	python := prereqtest.OnPath(t, "python3", "the case runs Hermes's plugin", "install python3")
 	plugin, _ := hermesPluginOf(t, sandbox.RunRequest{})
-	for _, c := range []struct{ result, calls, want string }{
-		{"6", "1", "99994"}, {"6", "5", "7594"}, {"1000", "2", "66600"},
+	for _, c := range []struct{ result, calls, hint, want string }{
+		{"6", "1", "0", "99994"}, {"6", "5", "0", "39994"}, {"6", "5", "32400", "7594"},
+		{"1000", "2", "64800", "34200"}, {"6", "1", "129600", "70394"},
 	} {
-		out, err := exec.Command(python, "-I", "-c", hermesRoomProbe, plugin, c.result, c.calls, t.TempDir()).Output()
+		out, err := exec.Command(python, "-I", "-c", hermesRoomProbe, plugin, c.result, c.calls, t.TempDir(), c.hint).Output()
 		if err != nil {
 			t.Fatalf("the probe: %v", err)
 		}
 		if got := strings.TrimSpace(string(out)); got != c.want {
-			t.Errorf("a %s-character result in a batch of %s has room %s, want %s", c.result, c.calls, got, c.want)
+			t.Errorf("a %s-character result in a batch of %s with %s characters of hints has room %s, want %s",
+				c.result, c.calls, c.hint, got, c.want)
 		}
 	}
 }

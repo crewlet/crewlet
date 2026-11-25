@@ -18,9 +18,10 @@ Loaded in the run's gateway, it does three things for the run its settings file 
   rewrites the same one (security guidance on a risky write), that clone's instructions are not handed during
   the run; the plugin never orders itself ahead of another, which would drop that plugin's words.
 
-What it reads of Hermes's own code beyond its hooks (the carry script's checkout_gate and Hermes's result
-budget) is in the carry script's CHECKOUT_INTERNALS, checked at every launch: a Hermes release bump re-checks that
-list, and a launch on a release that moved a part hands no checkout and marks the hand off (nested-off).
+What it reads of Hermes's own code beyond its hooks (the carry script's checkout_gate, Hermes's result
+budget and its subdirectory hint tracker) is in the carry script's CHECKOUT_INTERNALS, checked at every
+launch: a Hermes release bump re-checks that list, and a launch on a release that moved a part hands no
+checkout and marks the hand off (nested-off).
 
 The routes carry the job's token, so each is read from its file at each use and never logged.
 """
@@ -51,10 +52,6 @@ _REACH_SECONDS = 5.0
 # outcome is unknown and the session's record decides (a note that landed late is held; one that did not is
 # served again), so waiting longer buys nothing but a later note's delay; 10 s is some 180 times the worst.
 _STEER_SECONDS = 10.0
-
-# The most a subdirectory hint Hermes adds to a result after the plugin's answer holds (agent/subdirectory_hints.py's
-# _MAX_HINT_CHARS, 32,000, and its header and cut notice), which the batch's share of the turn budget keeps room for.
-_HINT_CHARS = 32_400
 
 # The smallest result Hermes 0.23.3 keeps whole on any model (tools/budget_config.py's _MIN_RESULT_SIZE_CHARS):
 # a nested hand's room where Hermes's own budget cannot be read, so its answer never makes a result spill.
@@ -229,7 +226,7 @@ def register(ctx):
             pinned, window, calls = _turn["session"], _turn["window"], _turn["calls"]
         if not isinstance(result, str) or not session or not pinned or not ours(session):
             return None
-        added = _hand_checkouts(hand, kw.get("tool_name") or "", result, window, calls)
+        added = _hand_checkouts(hand, kw.get("tool_name") or "", kw.get("args"), result, window, calls)
         return result + "\n\n" + added if added else None
 
     ctx.register_hook("pre_llm_call", turn_started)
@@ -257,23 +254,34 @@ def _carry_module(path):
         return _carry[path]
 
 
-def _room(tool, result, window, calls):
+def _room(tool, args, result, window, calls):
     """The characters result has left before Hermes would spill it to a file, as 0.23.3's tool executor
     judges it: the per-result threshold of its budget for the run's window (budget_for_context_window,
-    resolve_threshold), a tool it never spills held to the default result size; and, in a batch of calls (the
-    response's tool calls), the result's share of the turn budget (turn_budget), less a subdirectory hint
-    Hermes may add after us, since past that budget Hermes spills the batch's largest results first (measured on
-    0.23.3: a clone handed 86,283 characters beside four 45,687-character reads was spilled). Within its share it
-    is never the batch's largest while the batch passes its budget."""
+    resolve_threshold), a tool it never spills held to the default result size; and the result's share of the
+    turn budget among the response's calls (turn_budget, all of it for one call), less the subdirectory hints
+    Hermes adds to this result after us ([_hints]), since past that budget Hermes spills the batch's largest
+    results first (measured on 0.23.3: a clone handed 86,283 characters beside four 45,687-character reads was
+    spilled). Within its share it is never the batch's largest while the batch passes its budget."""
     try:
         from tools.budget_config import budget_for_context_window
         budget = budget_for_context_window(int(window) if window else None)
-        room = min(budget.resolve_threshold(tool), budget.default_result_size)
-        if calls > 1:
-            room = min(room, budget.turn_budget // calls - _HINT_CHARS)
-    except Exception:  # a release whose budget moved: the floor every budget keeps
+        room = min(budget.resolve_threshold(tool), budget.default_result_size,
+                   budget.turn_budget // max(calls, 1) - _hints(tool, args))
+    except Exception:  # a release whose budget or hints moved: the floor every budget keeps
         room = _FLOOR_RESULT_CHARS
     return int(room) - len(result)
+
+
+def _hints(tool, args):
+    """The characters of the subdirectory hints Hermes 0.23.3 adds to this call's result after the plugin's answer
+    (agent/tool_executor.py, check_tool_call: one for each directory the call's paths newly reach, ancestors
+    included, subdirectory_hints.py's _add_path_candidate), as a tracker of Hermes's own answers for the call
+    from the run's working directory (where agent_init.py starts the session's). It has loaded nothing the
+    session's tracker has, so it answers for every directory that one would, never fewer."""
+    from agent.runtime_cwd import scope_terminal_cwd
+    from agent.subdirectory_hints import SubdirectoryHintTracker
+    tracker = SubdirectoryHintTracker(working_dir=scope_terminal_cwd() or None)
+    return len(tracker.check_tool_call(tool, args if isinstance(args, dict) else {}) or "")
 
 
 # A checkout whose renders failed this many times is claimed as left out, said once: a render fails once for each
@@ -378,7 +386,7 @@ def _gate(hand, roots, window, started, until):
     return gate
 
 
-def _hand_checkouts(hand, tool, result, window, calls):
+def _hand_checkouts(hand, tool, args, result, window, calls):
     """What a nested firing adds to result, "" for nothing, within Hermes's own hook bound less hand["margin"]: the
     checkouts the note helper may claim (hermes-peek), Hermes's own answer for each ([_gate], waited on until
     hand["reserve"] is left), then the helper's claim and answer within the result's room (hermes-nested, bounded
@@ -404,7 +412,7 @@ def _hand_checkouts(hand, tool, result, window, calls):
         gate = _gate(hand, roots, window, started, until)
         if not gate["checkouts"]:
             return ""
-        room = _room(tool, result, window, calls)
+        room = _room(tool, args, result, window, calls)
         # HALF THE RESERVE: a wait ends with the whole reserve left; a box that held the firing past its bound by
         # more than half of it (1.5 s of the runner's 3, some 12 times the claim's measured 0.12 s) leaves the
         # claim to a later firing.
