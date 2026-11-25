@@ -1,4 +1,4 @@
-# ADR-0180: A seat's browser runs only in a container box off its host's network
+# ADR-0181: A seat's browser runs only in a container box off its host's network
 
 - **Status:** accepted
 - **Authority:** `internal/browser`
