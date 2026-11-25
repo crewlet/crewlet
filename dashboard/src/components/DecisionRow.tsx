@@ -47,6 +47,7 @@ import { FoldInButtons } from "./FoldInButtons.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { href } from "~/app/router.tsx";
+import { inboxRowKey, type InboxRowKey } from "~/app/routes.ts";
 import { RaiseBudgetButton } from "./budgetWrite.tsx";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { AnswerAsk, AnswerRunButton, AssignButton, type AskAnswer } from "./writes.tsx";
@@ -82,16 +83,20 @@ export function decisionsHref(): string {
 }
 
 /** A stable key for one subject, whichever list draws it. */
-export function subjectKey(s: DecisionSubject): string {
+export function subjectKey(s: DecisionSubject): InboxRowKey {
+  return inboxRowKey(s.kind, subjectId(s));
+}
+
+function subjectId(s: DecisionSubject): string {
   switch (s.kind) {
     case "ask":
-      return `ask:${s.ask.comment}`;
+      return s.ask.comment;
     case "run":
-      return `run:${s.run.turn_id}`;
+      return s.run.turn_id;
     case "fold_in":
-      return `fold_in:${s.foldIn.id}`;
+      return s.foldIn.id;
     case "seat":
-      return `seat:${s.seat.row.id}`;
+      return s.seat.row.id;
   }
 }
 

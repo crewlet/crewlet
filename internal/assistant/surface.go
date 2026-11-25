@@ -359,10 +359,10 @@ func (s *surface) unsent(ctx context.Context, step stepClock, tool catalog.Tool,
 func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[string]any) (toolloop.ToolResult, error) {
 	scope := wire.ScopeServer
 	pageRevision := ""
-	immediate := false
+	immediate, reads := false, false
 	if tool.Kind == catalog.KindPageAction {
 		scope = wire.ScopePage
-		action, err := catalog.PageActionFor(args, s.t.page)
+		action, err := catalog.PageActionFor(tool, args, s.t.page)
 		if err == nil {
 			pageRevision = s.t.page.RevisionFor(action.ID)
 		}
@@ -373,6 +373,7 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 			return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
 		}
 		immediate = action.Confirm == wire.ConfirmNone
+		reads = action.Confirm == wire.ConfirmRead
 	}
 	prepared, err := s.names.Prepare(ctx, tool, args)
 	if err != nil {
@@ -404,8 +405,8 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 		err = s.t.svc.records.CreateProposal(ctx,
 			s.t.write().Step("proposal", strconv.Itoa(step.Index)), drafted)
 	}
-	if err == nil && immediate {
-		return s.applyAtOnce(ctx, step, drafted)
+	if err == nil && (immediate || reads) {
+		return s.applyAtOnce(ctx, step, drafted, reads)
 	}
 	if err == nil {
 		s.t.stepEnd(ctx, step, wire.StepWaiting, "Waiting for approval", nil, 0, 0)
@@ -482,8 +483,12 @@ func refusalSentence(r wire.Refusal) string {
 // applies it and shows its Undo receipt; its report settles the proposal and
 // resumes nothing (approval's immediate). No proposal card is shown: the
 // receipt is the page's.
+//
+// A `confirm: read` action ([catalog.ReadScreen]) is sent the same way and
+// PARKS: the page's report carries the screen as it is now, which the
+// resumed turn reads.
 func (s *surface) applyAtOnce(ctx context.Context, step stepClock,
-	drafted assistantdomain.NewProposal) (toolloop.ToolResult, error) {
+	drafted assistantdomain.NewProposal, reads bool) (toolloop.ToolResult, error) {
 
 	if err := s.t.svc.records.ApproveProposal(ctx,
 		s.t.write().Step("proposal", strconv.Itoa(step.Index), "approve"),
@@ -494,8 +499,20 @@ func (s *surface) applyAtOnce(ctx context.Context, step stepClock,
 		return failed(mcp.Classify(mcp.RefusalInternalError, err), "The change to the "+
 			"screen could not be applied. Tell the person it failed."), nil
 	}
+	confirm := wire.ConfirmNone
+	if reads {
+		confirm = wire.ConfirmRead
+	}
 	action := proposal.PageAction(drafted.Proposal, drafted.Path, drafted.SourceRevision,
-		drafted.Body, wire.ConfirmNone)
+		drafted.Body, confirm)
+	if reads {
+		s.t.mu.Lock()
+		s.t.afterPark = append(s.t.afterPark, wire.Frame{Kind: wire.EventAction, Action: &action})
+		s.t.mu.Unlock()
+		s.t.stepEnd(ctx, step, wire.StepWaiting, "Reading your screen", nil, 0, 0)
+		return toolloop.ToolResult{Output: "Asked the person's screen for what it shows now.",
+			Suspend: true}, nil
+	}
 	s.t.emit(wire.Frame{Kind: wire.EventAction, Action: &action})
 	s.t.stepEnd(ctx, step, wire.StepDone, "Applied on your screen", nil, 0, 0)
 	return toolloop.ToolResult{Output: "Applied on the person's screen at once; they can " +

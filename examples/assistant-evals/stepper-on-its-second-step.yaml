@@ -1,0 +1,34 @@
+# A setup stepper on its second step. The assistant says which step the
+# person is on as the screen names it, and where each step happens.
+person:
+  apps: [admin]
+page:
+  screen: integrations
+  title: Integrations › Google Cloud
+  params: {kind: gcp}
+  query: {}
+  resources: []
+  selection: null
+  source_revision: integrations@1
+  accepts: [page.read]
+  action_args:
+    page.read: {type: object, additionalProperties: false}
+  action_revisions: {page.read: screen}
+  view:
+    nodes:
+      - {role: heading, name: Google Cloud, level: 1}
+      - {role: step, name: "Done, Create a service account"}
+      - {role: step, name: Grant roles, current: true}
+      - {role: step, name: Connect}
+      - {role: notice, name: Grant the roles below to the service account in the Google Cloud console.}
+      - {role: button, name: Next}
+question: Where am I in this, and what comes next?
+script:
+  - say: >-
+      You are on Grant roles, the second of three steps. Grant the roles in the
+      Google Cloud console, then come back here and press Next; the last step,
+      Connect, happens here in Crewlet.
+expect:
+  proposals: 0
+  state: completed
+  says: [Grant roles, Google Cloud console, Next, here in Crewlet]

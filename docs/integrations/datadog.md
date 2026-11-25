@@ -89,7 +89,7 @@ The application key is sealed under one name the engine derives, `DATADOG_APP_KE
 
 ### The agent's Datadog tool
 
-The account is half of an agent's access; the other half is the tool it reads Datadog through. Declare Datadog's MCP server once, as a per-seat server named `datadog`, carrying the organization's API key:
+The account is half of an agent's access; the other half is the tool it reads Datadog through. Declare Datadog's MCP server once, as a per-seat server named `datadog`:
 
 ```yaml
 mcp_servers:
@@ -97,11 +97,9 @@ mcp_servers:
     transport: http
     shared: false                       # one instance per agent seat that is on
     url: https://mcp.datadoghq.com/v1/mcp
-    headers:
-      DD_API_KEY: ${DATADOG_API_KEY}    # the organization's API key, the same for every seat
 ```
 
-The engine adds each seat's own key to its instance under `DD_APPLICATION_KEY`, the header Datadog's server reads; no seat block names it. The Agents tab reports per seat whether the tool is live, waiting for its key, missing (the company declares no `datadog` server), or not running (the server is turned off, `enabled: false`). An admin also has to turn on **MCP Access** in Datadog's organization settings, and the seat's role needs `mcp_read` (and `mcp_write` for write tools).
+Datadog's server needs two headers together and answers 401 to either alone. The engine hands each seat's instance both: `DD_API_KEY`, the organization's API key from `provisioning.api_key`, and `DD_APPLICATION_KEY`, the seat's own key; no seat block names either. A `DD_API_KEY` header the entry writes itself is sent in place of the integration's. The Agents tab reports per seat whether the tool is live, waiting for its key, missing (the company declares no `datadog` server), or not running (the server is turned off, `enabled: false`). An admin also has to turn on **MCP Access** in Datadog's organization settings, and the seat's role needs `mcp_read` (and `mcp_write` for write tools).
 
 ### Every pass reads each account back
 

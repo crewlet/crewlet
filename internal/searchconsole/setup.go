@@ -37,8 +37,7 @@ func Guide() setup.Guide {
 		Summary: "Agents use your Search Console properties as their own Google identity, at the permission " +
 			"you give it on each property. No token reaches an agent's box.",
 		Prepare: []setup.Step{
-			{Text: vendortext.Plain("Connect Google Cloud first; no project needs preparing. Its Cloud Shell block, " +
-				"run again, turns on the Search Console, Site Verification and Indexing APIs and makes the company reader.")},
+			googlegrowth.CloudFirst("the Search Console, Site Verification and Indexing APIs"),
 			{Text: vendortext.Of(vendortext.W("Add the company reader below to each property as a "),
 				vendortext.UI("Restricted user"), vendortext.W("."))},
 			{Text: vendortext.Plain("Turn agents on from the Agents tab, then set up each one's identity there: add " +
