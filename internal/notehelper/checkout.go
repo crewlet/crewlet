@@ -35,11 +35,9 @@ import (
 // copies none), and Copied, the file listing each skill copied there;
 // Reserved, the tags no repository takes; ImportInstructions, for a harness
 // that reads its instruction files itself, each file named as an import in
-// place of its text ([rootImports]), Limit not applying; ListedAs, the
-// harness whose rule names a listed skill where it is not the skill's name as
-// written ("grok": [grokSessionSkills], [homeHolds]), and HomeSkills, the
-// home's skill directories its harness lists beside Skills, whose names a
-// copy may not take (absolute paths).
+// place of its text ([rootImports]), Limit not applying; ListedAs and
+// HomeSkills, the harness whose rule names a listed skill and the home's
+// skill directories whose names a copy may not take ([homeHolds]).
 type checkoutSpec struct {
 	Instructions       []instructionSlot `json:"instructions"`
 	Limit              *int              `json:"limit,omitempty"`
