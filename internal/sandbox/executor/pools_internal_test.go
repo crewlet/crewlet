@@ -44,31 +44,32 @@ func TestANodeKeepsThePoolsItRunsWithTheLimitsRoom(t *testing.T) {
 	}
 }
 
-// THE LARGE SLOT IS COUNTED AT THE LARGER OF ITS TWO HOLDERS, never their sum:
-// one pass holds it at a time, a collection's with its chain or a take's, its
-// scrub at the plaintext's bound and the longest value it can hold beside the
-// most its meter holds, a Claude Code meter's line or a Gemini CLI count at its
-// ids' bound, all past the base the take's own slot already counts, each
-// figure from its own definition. A take's outweighs a chain's, and a Gemini
-// CLI count a Claude Code meter's line.
+// THE LARGE SLOT IS COUNTED AT THE LARGEST OF ITS HOLDERS, never their sum: one
+// pass holds it at a time, a collection's with its chain or its Gemini CLI copy
+// and summary, or a take's, its scrub at the plaintext's bound and the longest
+// value it can hold beside the most its meter holds, a Claude Code meter's line
+// or a Gemini CLI count at its ids' bound, past the base its slot counts, each
+// figure from its own definition. A take's outweighs a collection's.
 //
-// Mutations, each red: count the slot at a chain alone, or at the chain and
-// the take summed; leave the meter out of the take, count a Claude Code
-// meter's line alone, or count a meter's base again; count the scrub's base
-// again; size the scrub with no value, or at a reading of nothing.
-func TestTheLargeSlotIsCountedAtTheLargerOfItsTwoHolders(t *testing.T) {
+// Mutations, each red: count the slot at a chain alone, at a Gemini CLI copy
+// alone, or at the holders summed; leave the meter out of the take, count a
+// Claude Code meter's line alone, or a meter's base again; count the scrub's
+// base again; size the scrub with no value, or at a reading of nothing.
+func TestTheLargeSlotIsCountedAtTheLargestOfItsHolders(t *testing.T) {
 	t.Parallel()
 	chain := int64(threadChainHeldBytes)
 	line := int64(threadLineMax-collectionBaseLineCharge) * 5 / 4
 	count := int64(geminiCountLargeHeldBytes - meterBaseHeldBytes)
 	take := scrubHeldBytes(scrubPlainMax, scrubLongestMax) - scrubBaseHeldBytes + max(line, count)
-	if take <= chain || count <= line {
+	copied := int64(geminiCopyLargeHeldBytes)
+	if take <= max(chain, copied) || count <= line || copied <= chain {
 		t.Fatalf("the premise: a take past its base holds %d bytes, no more than a chain's %d, or a Gemini CLI "+
-			"count past its base %d, no more than a Claude Code meter's line %d", take, chain, count, line)
+			"count past its base %d, no more than a Claude Code meter's line %d, or a Gemini CLI copy's %d no "+
+			"more than a chain's", take, chain, count, line, copied)
 	}
-	if got := largeReadHeldBytes(); got != max(chain, take) {
-		t.Errorf("the large slot is counted at %d bytes, want the larger of a chain's %d and a take's %d", got,
-			chain, take)
+	if got := largeReadHeldBytes(); got != max(chain, copied, take) {
+		t.Errorf("the large slot is counted at %d bytes, want the largest of a chain's %d, a Gemini CLI copy's %d "+
+			"and a take's %d", got, chain, copied, take)
 	}
 }
 

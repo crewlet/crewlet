@@ -42,10 +42,10 @@ func (w NodeWork) MemoryPools(memory int64) int64 {
 // one holds it at a time; only a collection's builds a chain, and a take's is
 // its scrub and its meter at once, counted past its base ([takeLargeHeldBytes]).
 // The chain's is whole, its base's 2.7 MiB in it, which the max never reads; a
-// collection's Gemini CLI count past its base holds less than a chain
-// ([geminiCountLargeHeldBytes]).
+// collection's read of a Gemini CLI copy holds its count and its summary's
+// records past their base ([geminiCopyLargeHeldBytes]), more than a chain.
 func largeReadHeldBytes() int64 {
-	return max(threadChainHeldBytes, takeLargeHeldBytes())
+	return max(threadChainHeldBytes, geminiCopyLargeHeldBytes, takeLargeHeldBytes())
 }
 
 // transcriptReads is how many transcripts w's node decodes at once: every
