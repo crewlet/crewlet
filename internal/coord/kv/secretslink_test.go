@@ -26,8 +26,9 @@ const secretsLinkRate = 48 << 10
 // (refused, the round's read finding it live) and by a delete's existence
 // read, each with one leader read, and the pass the boot's snapshot makes
 // delivers it, asking none. Requests are counted as they reach the member.
-// The pass cannot go red on an undeclared class: the raw record crosses this
-// link inside the pass's idle of 5 s, so its row holds the delivery alone.
+// The pass cannot go red on a class read at the term: the raw record crosses
+// this link inside the pass's idle of 5 s, so its row holds the delivery
+// alone.
 //
 // Mutation: read the class at the term (replyTerm), and the key's read, the
 // create and the delete ask again or fail.

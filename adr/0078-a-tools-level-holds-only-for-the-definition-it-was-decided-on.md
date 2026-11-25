@@ -2,7 +2,36 @@
 
 - **Status:** accepted
 - **Authority:** `internal/mcpreview`
-- **Enforced-by:** `internal/mcpreview.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/mcpreview.TestALoosenedHintIsFlagged`, `internal/mcpreview.TestARemovedToolKeepsItsRow`, `internal/engine.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`, `internal/engine.TestAServersFirstListingIsAcceptedOnceAndAnAdditionAfterItIsNot`, `internal/engine.TestANodeThatHasNotReadWhatWasAcceptedHoldsEveryTool`, `internal/engine.TestTheSweepKeepsTheDefinitionWhatWasAcceptedNames`, `internal/engine.TestABoxIsGivenNoServerAToolOfWhichChanged`, `internal/mcp.TestARunningServerIsListedAgainOnItsTTLHeldBetweenTheFloorAndTheCeiling`, `internal/mcp.TestAToolAServerChangesWhileItRunsIsRefiledWhenItsTTLRunsOut`, `internal/mcp.TestAListChangedNotificationListsAgainNoSoonerThanTheFloor`, `internal/mcp.TestTheProbeHandsTheSDKAListingThatIsNeverFresh`, `internal/api/mcpapi.TestAChangeIsAcceptedOrKeptBlockedByTheDefinitionReviewed`, `internal/api/mcpapi.TestAServerCannotMakeAChangeLookAccepted`, `internal/api/mcpapi.TestAlwaysAllowAcceptsTheDefinitionTheCallWasMadeUnder`, `internal/api/mcpapi.TestAlwaysAllowOnAToolPastThe256thAcceptsItsDefinition`, `internal/api/mcpapi.TestAnAlwaysAllowThatAcceptsNothingSaysWhy`, `internal/engine.TestAlwaysAllowOnTheThreeHundredThirtySixthToolSticks`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`, `internal/api/queries.TestADescriptionChangedPastTheListingsCutIsServedWhole`, `internal/api/queries.TestAPartNoRecordCanShowIsSaidUnshown`, `internal/mcpreview.TestAnAutoAcceptedChangeIsRecordedAsOne`, `internal/engine.TestAChangeToAServerSetToAutoAcceptIsAcceptedAndAuditedWithItsDiff`, `internal/engine.TestAutoAcceptIsOffUnlessTheEntrySetsIt`, `internal/engine.TestAToolListedUnderTwoDefinitionsIsLeftForAPerson`, `internal/engine.TestAToolOneNodeStillListsAsAcceptedIsLeftForAPerson`, `internal/mcpreview.TestAutoAcceptTakesNothingItCannotJudge`, `internal/api/mcpapi.TestAcceptingEveryChangeAtOnceRecordsEachAsItsOwnAcceptanceDoes`
+- **Enforced-by:**
+  - `internal/mcpreview.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`
+  - `internal/mcpreview.TestALoosenedHintIsFlagged`
+  - `internal/mcpreview.TestARemovedToolKeepsItsRow`
+  - `internal/engine.TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted`
+  - `internal/engine.TestAServersFirstListingIsAcceptedOnceAndAnAdditionAfterItIsNot`
+  - `internal/engine.TestANodeThatHasNotReadWhatWasAcceptedHoldsEveryTool`
+  - `internal/engine.TestTheSweepKeepsTheDefinitionWhatWasAcceptedNames`
+  - `internal/engine.TestABoxIsGivenNoServerAToolOfWhichChanged`
+  - `internal/mcp.TestARunningServerIsListedAgainOnItsTTLHeldBetweenTheFloorAndTheCeiling`
+  - `internal/mcp.TestAToolAServerChangesWhileItRunsIsRefiledWhenItsTTLRunsOut`
+  - `internal/mcp.TestAListChangedNotificationListsAgainNoSoonerThanTheFloor`
+  - `internal/mcp.TestTheProbeHandsTheSDKAListingThatIsNeverFresh`
+  - `internal/api/mcpapi.TestAChangeIsAcceptedOrKeptBlockedByTheDefinitionReviewed`
+  - `internal/api/mcpapi.TestAServerCannotMakeAChangeLookAccepted`
+  - `internal/api/mcpapi.TestAlwaysAllowAcceptsTheDefinitionTheCallWasMadeUnder`
+  - `internal/api/mcpapi.TestAlwaysAllowOnAToolPastThe256thAcceptsItsDefinition`
+  - `internal/api/mcpapi.TestAnAlwaysAllowThatAcceptsNothingSaysWhy`
+  - `internal/engine.TestAlwaysAllowOnTheThreeHundredThirtySixthToolSticks`
+  - `internal/coord/memory.TestFleetContract`
+  - `internal/coord/kv.TestFleetContract`
+  - `internal/api/queries.TestADescriptionChangedPastTheListingsCutIsServedWhole`
+  - `internal/api/queries.TestAPartNoRecordCanShowIsSaidUnshown`
+  - `internal/mcpreview.TestAnAutoAcceptedChangeIsRecordedAsOne`
+  - `internal/engine.TestAChangeToAServerSetToAutoAcceptIsAcceptedAndAuditedWithItsDiff`
+  - `internal/engine.TestAutoAcceptIsOffUnlessTheEntrySetsIt`
+  - `internal/engine.TestAToolListedUnderTwoDefinitionsIsLeftForAPerson`
+  - `internal/engine.TestAToolOneNodeStillListsAsAcceptedIsLeftForAPerson`
+  - `internal/mcpreview.TestAutoAcceptTakesNothingItCannotJudge`
+  - `internal/api/mcpapi.TestAcceptingEveryChangeAtOnceRecordsEachAsItsOwnAcceptanceDoes`
 - **Cost-when-tried:** a tool's level was read off its name alone, so a server could change what a tool its operator had set to Always allow does (a description that now says it deletes, a read-only hint dropped, a new tool behind a familiar prefix) and every agent went on calling it unasked; and the engine listed a running server only when it started it, so nothing would have seen the change anyway.
 - **Tag-status:** unreleased
 

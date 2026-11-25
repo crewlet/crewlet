@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -210,29 +211,86 @@ func (s *terminalScreen) waitFor(text string, d time.Duration) bool {
 }
 
 // stoppedIn names every process of session the kernel holds stopped, by pid
-// and command: what a prompt read from a background group leaves behind.
+// and command: what a prompt read from a background group leaves behind. Read
+// thread by thread ([heldStopped]), since a stat line holds its main thread's
+// state alone.
 func stoppedIn(session int) []string {
 	var stopped []string
 	stats, _ := filepath.Glob("/proc/[0-9]*/stat")
 	for _, path := range stats {
-		raw, err := os.ReadFile(path)
-		if err != nil {
+		// pid (comm) state ppid pgrp session …: the session is field 6.
+		raw, fields := statFields(path)
+		if len(fields) < 4 || fields[3] != strconv.Itoa(session) || !heldStopped(filepath.Dir(path)) {
 			continue
 		}
-		// pid (comm) state ppid pgrp session …, the command parenthesised
-		// and free to hold spaces.
-		end := bytes.LastIndexByte(raw, ')')
-		if end < 0 {
-			continue
-		}
-		fields := strings.Fields(string(raw[end+1:]))
-		if len(fields) < 4 || fields[3] != strconv.Itoa(session) {
-			continue
-		}
-		if fields[0] == "T" || fields[0] == "t" {
-			stopped = append(stopped, fmt.Sprintf("%s%s", strings.Fields(string(raw))[0], raw[bytes.IndexByte(raw,
-				'('):end+1]))
-		}
+		stopped = append(stopped, fmt.Sprintf("%s%s", strings.Fields(string(raw))[0],
+			raw[bytes.IndexByte(raw, '('):bytes.LastIndexByte(raw, ')')+1]))
 	}
 	return stopped
+}
+
+// heldStopped reports whether the process whose /proc entry is dir is held
+// stopped: a thread of it stopped (T, or t under a tracer) and each other
+// stopped too or exited (Z, X or x, as internal/procgroup reads a state). A
+// group stop reaches each thread separately, and a main thread can have exited
+// while the others stop.
+func heldStopped(dir string) bool {
+	tasks, _ := filepath.Glob(filepath.Join(dir, "task", "[0-9]*", "stat"))
+	held := false
+	for _, path := range tasks {
+		_, fields := statFields(path)
+		if len(fields) == 0 {
+			continue
+		}
+		switch fields[0] {
+		case "T", "t":
+			held = true
+		case "Z", "X", "x":
+			// Exited: it runs nothing.
+		default:
+			return false
+		}
+	}
+	return held
+}
+
+// statFields is the stat line at path and its fields after the command,
+// counted from its LAST closing parenthesis, since the command is the
+// process's own to name; none where it cannot be read.
+func statFields(path string) ([]byte, []string) {
+	raw, err := os.ReadFile(path) //nolint:gosec // the kernel's record of a process
+	if err != nil {
+		return nil, nil
+	}
+	end := bytes.LastIndexByte(raw, ')')
+	if end < 0 {
+		return nil, nil
+	}
+	return raw, strings.Fields(string(raw[end+1:]))
+}
+
+// THE TERMINAL CASE NAMES A PROCESS HELD STOPPED BY EACH THREAD OF IT, when it
+// says what its session left stopped: a process whose main thread alone has
+// exited, its stat line reading Z, is named once a stop reaches the threads
+// that run on.
+//
+// Mutation: read the process's own stat line, its main thread's state, and
+// the process is never named.
+func TestTheTerminalCaseNamesAProcessHeldStoppedByEachThread(t *testing.T) {
+	t.Parallel()
+	pid := procgrouptest.StartExitedMainThread(t, &syscall.SysProcAttr{Setsid: true})
+	if err := syscall.Kill(pid, syscall.SIGSTOP); err != nil {
+		t.Fatalf("stopping the process: %v", err)
+	}
+	named := func() bool {
+		return slices.ContainsFunc(stoppedIn(pid), func(s string) bool { return strings.HasPrefix(s, strconv.Itoa(pid)+"(") })
+	}
+	deadline := time.Now().Add(time.Minute)
+	for !named() {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: the case fails on it
+			t.Fatalf("a process whose main thread alone has exited, pid %d, stopped, is never named: %v", pid,
+				stoppedIn(pid))
+		}
+		time.Sleep(20 * time.Millisecond) //fixedwait:liveness
+	}
 }

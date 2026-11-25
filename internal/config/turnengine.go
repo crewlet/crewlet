@@ -86,7 +86,7 @@ type TurnEngine struct {
 	//
 	// A POINTER for onboarding_max_tool_rounds' reason: an explicit 0 must
 	// survive the store, which decodes a revision onto the defaults.
-	ExecutorMinBudgetTokens *int `yaml:"executor_min_budget_tokens,omitempty" json:"executor_min_budget_tokens,omitempty" js:"min=0" desc:"Fixed part of an executor launch's budget floor, counted beside the launch's brief: below the two, the launch is refused and the seat parked (default 25000; 0 = no floor for a launch whose session context is unknown)."`
+	ExecutorMinBudgetTokens *int `yaml:"executor_min_budget_tokens,omitempty" json:"executor_min_budget_tokens,omitempty" js:"min=0" desc:"Fixed part of an executor launch's budget floor, counted beside the launch's brief: below the two, the launch is refused and the seat parked (default 65000; 0 = no floor for a launch whose session context is unknown)."`
 
 	// ConversationSession is how a seat's executor sessions are kept and
 	// continued across a conversation's turns. It is nested here rather
@@ -99,18 +99,19 @@ type TurnEngine struct {
 // Turn-engine defaults the fields cannot carry themselves, because an unset
 // field and an explicit 0 mean different things there.
 const (
-	// defaultExecutorMinBudgetTokens is 25000 because the floor has to
+	// defaultExecutorMinBudgetTokens is 65000 because the floor has to
 	// cover the FIRST REQUEST of a run, which the launch cannot shrink: the
-	// harness's own prompt and tool definitions (about 15k input tokens
-	// for Claude Code), the seat's bridged tool array beside them, and the
-	// seat's system prompt. A floor below one such request refuses nothing
-	// it was meant to — the 2000 it replaced was sized for the brief the
-	// old `run_sandbox` tool handed a second agent, and passed every run
-	// that then died on its first round. It holds no brief: a brief's size
-	// is known only once the launch has it, and the launch counts it beside
-	// this (internal/engine's launchFloor), so no default here could be
-	// right for a one-line ask and a round's hundred calls alike.
-	defaultExecutorMinBudgetTokens = 25000
+	// harness's own prompt and tool definitions, the seat's bridged tools
+	// and its standing instructions. For a minimal seat that is 34-46k
+	// tokens on most runners, 48k on Claude Code (59k with its tool search
+	// off) and at most 64.1k, on Muse Code; a harness deferring every
+	// server's tools sends 11-16k (o200k; ADR-0066 has the measure).
+	// A floor below one such request refuses nothing it was meant to. It
+	// holds no brief: a brief's size is known only once the launch has it,
+	// and the launch counts it beside this (internal/engine's launchFloor),
+	// so no default here could be right for a one-line ask and a round's
+	// hundred calls alike.
+	defaultExecutorMinBudgetTokens = 65000
 
 	// defaultOnboardingRounds is the pass's own budget: activate the
 	// knowledge-base tools, read the team's onboarding pages, capture the

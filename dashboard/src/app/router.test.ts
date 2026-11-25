@@ -81,6 +81,7 @@ function settingsPaths(): string[][] {
       (s) =>
         s.group !== "Spend" &&
         s.key !== "general" &&
+        s.key !== "ask-crewlet" &&
         s.key !== "models" &&
         s.key !== "mcp-tools" &&
         s.key !== "delegated-decisions",
@@ -329,7 +330,7 @@ describe("the navigation grammar", () => {
     const groups: Record<string, string[]> = {};
     for (const s of workspaceRow("settings")!.sections) (groups[s.group ?? ""] ??= []).push(s.key);
     expect(groups).toEqual({
-      Company: ["general"],
+      Company: ["general", "ask-crewlet"],
       Runtime: ["models", "mcp-tools", "secrets", "limits"],
       Spend: ["spend", "spend-tasks"],
       Access: ["people", "service-accounts", "tokens", "sign-in", "delegated-decisions", "audit"],
@@ -661,7 +662,8 @@ describe("the resolver", () => {
     expect(resolve(["ask", id])).toMatchObject({ screen: "ask", conversation: id });
     expect(resolve(["ask", "payroll"]).resolved).toBe(false);
     expect(resolve(["ask", id, "x"]).resolved).toBe(false);
-    expect(resolve(["settings", "ask-crewlet"]).resolved).toBe(false);
+    // HOW IT WRITES IS SET UNDER SETTINGS, every member's.
+    expect(resolve(["settings", "ask-crewlet"])).toMatchObject({ screen: "ask-crewlet" });
   });
 
   // THE ADVISOR IS A PAGE OF ITS OWN with two tabs and a page per finding;
@@ -1310,7 +1312,7 @@ describe("the breadcrumb", () => {
       ),
     };
     const runs = { tracker: true, knowledge: true, chat: true, code: true };
-    expect(landingPath(gated, ["worklet"], runs)).toEqual(["settings", "models"]);
+    expect(landingPath(gated, ["worklet"], runs)).toEqual(["settings", "ask-crewlet"]);
     expect(landingPath(gated, ["admin"], runs)).toEqual(gated.path);
     // A reader not read yet: the workspace's own path, as the frame draws a lock only once it knows.
     expect(landingPath(gated, null, runs)).toEqual(gated.path);

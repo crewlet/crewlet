@@ -1988,6 +1988,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// Each person's Home board, the fleet's record, so it follows
 			// them to whichever node serves their browser.
 			HomeBoards: e.Backends().Fleet,
+			// And their own Ask Crewlet instructions, beside it.
+			Instructions: e.Backends().Fleet,
 			// The object collector's last report, from the store every node
 			// reads, for the fleet card: a report on the object store this node
 			// agreed with the fleet, through the reader the collector's duty

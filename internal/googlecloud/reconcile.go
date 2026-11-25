@@ -96,7 +96,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		case a.Email == c.Provisioner() || recorded[a.UniqueID] || intended[a.Email]:
 		case strings.HasPrefix(a.Email, accountPrefix) && strings.HasPrefix(a.DisplayName, ours):
 			res.orphaned = append(res.orphaned, a.Email)
-		case !strings.HasPrefix(a.Email, accountPrefix):
+		case !crewletsOwn(a.Email):
 			res.foreign = append(res.foreign, a.Email)
 		}
 	}
@@ -105,8 +105,9 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	return res, nil
 }
 
-// subjectProvisioner is the field that clears a finding about the provisioner.
-const subjectProvisioner = "integrations.google_cloud.provisioning.provisioner"
+// subjectIdentity is the field that clears a finding about the identity
+// project or the provisioner in it.
+const subjectIdentity = "integrations.google_cloud.provisioning.identity_project"
 
 // Findings is what the pass saw, in the shared vocabulary. Each agent's own
 // account is reported per seat by the access sync.
@@ -117,7 +118,7 @@ func (r *Result) Findings() []integration.Finding {
 	out := seataccess.GapFindings(r.gaps, r.inUse)
 	if len(r.foreign) > 0 {
 		out = append(out, integration.Finding{
-			Kind: integration.FindingGrantExcess, Subject: subjectProvisioner,
+			Kind: integration.FindingGrantExcess, Subject: subjectIdentity,
 			Title: "Accounts the provisioner can act as",
 			Detail: "The identity project " + r.identity + " holds " + integration.Count(len(r.foreign), "service account") +
 				" besides Crewlet's, and the provisioner's Service Account Admin there lets it grant itself any of them",

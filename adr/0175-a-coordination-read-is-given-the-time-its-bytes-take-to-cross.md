@@ -2,7 +2,155 @@
 
 - **Status:** accepted
 - **Authority:** `internal/coord`
-- **Enforced-by:** `internal/coord/kv.TestAPointerReadAcrossALeafsLinkCarriesNoBody`, `internal/coord/kv.TestABodyAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/coord/kv.TestABodysReadIsGivenTheArrivalOfItsRecordedSize`, `internal/coord/kv.TestAFlipLandsWithinHalfTheBodysRetentionOfItsWrite`, `internal/coord/kv.TestAFlipIsGivenTwiceTheBodysWriteAtItsBound`, `internal/coord/kv.TestABodysCrossingIsHeldToWhatAKeyHolds`, `internal/maintenance.TestTheBodySweepRunsUnderTheDutyAtItsOwnHorizon`, `internal/engine.TestAPostureAcrossASlowLinkIsReadNotAssumed`, `internal/engine.TestAReconcilerAcrossASlowLinkAppliesARevisionAtItsBound`, `internal/coord/kv.TestEveryReadIsGivenTheCrossingOfItsClassBound`, `internal/coord/kv.TestASmallClassCrossesTheFloorInsideTheReadTerm`, `internal/coord/kv.TestASettledWriteIsHeldToItsClassBound`, `internal/coord/kv.TestARunsListingAcrossALeafsLinkDeliversItsRecordsInItsPass`, `internal/coord/kv.TestAWatchAcrossASlowLinkDeliversARecordLongerThanTwoHeartbeatsToCross`, `internal/coord/kv.TestTheMarkerSweepAcrossALinkCarriesHeadersOnly`, `internal/coord/kv.TestNothingWatchesASettledBucketThroughTheClient`, `internal/coord/kv.TestEveryClientWatchOfASettledBucketIsRefused`, `internal/coord/kv.TestAPassOpensNoConsumerUntilItsKeyIndexAnswers`, `internal/coord/kv.TestARunsStandingCrossesALeafsLinkWithoutItsRecords`, `internal/coord/kv.TestAStandingLandsInTheMessageOfItsRecord`, `internal/coord/kv.TestTheWidestStandingIsCountedInKvHeaderBytes`, `internal/coord/kv.TestACoordinationValueIsHeldToWhatItsLeadersReadCarriesBackAcrossALink`, `internal/sandbox.TestEveryWriteOfARunStatesItsStanding`, `internal/sandbox.TestTheEpochFloorReadsNoStatedRecordWhole`, `internal/sandbox.TestASeatsListingReadsOnlyItsOwnRecordsWhole`, `internal/engine.TestALeafBootsBesideRunsAtTheirBound`, `internal/engine.TestAnMCPCheckOfEveryNodeAtItsWidestIsRecordedWithinItsBound`, `internal/engine.TestADeviceSignInsDetailIsCutToFitItsRecord`, `internal/seataccess.TestASeatWhoseAccessOutgrowsItsLedgerRecordIsNotSynced`, `internal/coord.TestEveryPositionsClassesWidestRecordFitsItsBound`, `internal/coord/kv.TestEveryPositionsClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/coord.TestEveryPositionsFamilysWidestRecordFitsItsClass`, `internal/coord.TestASentenceIsCutToWhatItTakesAsStored`, `internal/coord/kv.TestEveryPositionsFamilyIsDeclaredAtTheBoundItsWidestRecordFits`, `internal/coord/kv.TestFleetContract`, `internal/coord/kv.TestEveryPositionsClassPastASmallValueIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/statelog.TestAJournalDropsItsOldestResolvedRecordsAndNeverAnUnresolvedOne`, `internal/statelog.TestARetirementsEvidenceIsCutToItsRecordCeilingFirst`, `internal/engine.TestAWindowPastWhatItsRecordHoldsIsBlockedForAPersonAndSendsNothing`, `internal/engine.TestEveryLogThisBuildRunsFitsWhatAPositionsRecordNames`, `internal/seataccess.TestARequestPastWhatItsRecordKeepsIsRefusedNamingWhatToNarrow`, `internal/engine.TestAFleetScaledDownOpensItsWindowOnceItsGoneIDsAreRetired`, `internal/coord.TestARetirementStandsOnlyUntilItsNodeWritesAgain`, `internal/statelog.TestTheSealLiftsABlockThatHeldARequestBack`, `internal/engine.TestAGrantTheFleetCouldNotKeepIsRefusedBeforeAnybodyConsents`, `internal/coord.TestAnEmptyFieldIsRefusedAsMissingNotAsPastItsBound`, `internal/engine.TestTheMCPBeatReadsDefinitionsOnTheLoopsContext`, `internal/engine.TestTheAtlasReadsTheFleetsListingsFromTheWatchedCopy`, `internal/seataccess.TestALaneIsSizedInItsVendorsWords`, `internal/seataccess.TestAHeldLaneHoldsOnlyItself`, `internal/seataccess.TestAVendorsLongRefusalIsKeptAtItsHead`, `internal/seataccess.TestARecordPastItsClassFailsItsSeatNotThePass`, `internal/engine.TestOneSeatsAccessRecordIsReadByItsKey`, `internal/coord/kv.TestTheAccessReviewsRevisionsCrossALinkAsHeadersAlone`, `internal/coord/kv.TestEveryUploadsClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/artifactupload.TestTheWidestUploadRecordFitsItsBound`, `internal/artifactupload.TestTheWidestReservationLedgerFitsItsBound`, `internal/sandbox.TestASeatsWidestSaveLedgerFitsItsBound`, `internal/artifactupload.TestAnUploadRecordPastItsBoundIsRefusedByItsWriter`, `internal/artifactupload.TestARefusedPublishDropsTheGeneratedFilesItDeleted`, `internal/artifactupload.TestAVersionPastItsFileCountIsRefusedBeforeAByteMoves`, `internal/artifactupload.TestAPublishsWarningsAreCutToWhatItsRecordKeeps`, `internal/artifactupload.TestAnUploadRecordsTheTypeAFileIsServedAs`, `internal/artifactupload.TestALedgerChangeReadsABoundedNumberOfRecords`, `internal/artifactupload.TestTheWidestOutcomeFitsWhatARecordKeepsForIt`, `internal/artifactupload.TestAStagedRecordAtItsBoundClosesWithItsOutcome`, `internal/artifactupload.TestASizeRefusalUndoesNoEarlierAttemptsObjects`, `internal/artifactupload.TestARetryRefusedAsMovedLeavesWhatAnEarlierAttemptLanded`, `internal/artifactupload.TestAnAbandonedUploadIsReleasedBehindHoldsThatCannotBe`, `internal/artifactupload.TestARefusedReservationKeepsTheReleaseItMade`, `internal/artifactupload.TestARefusedReservationIsAnsweredHoweverItsReleasesWriteEnds`, `internal/artifactupload.TestAReleaseLeavesAHoldARetriedIntentTookUp`, `internal/artifactupload.TestARetriedIntentTakesUpTheHoldItsFirstAttemptLeft`, `internal/artifactupload.TestAnEarlierAttemptsBytesStayReservedThroughARetrysRefusal`, `internal/artifactupload.TestATakenUpHoldIsNeverWeakened`, `internal/artifactupload.TestAReleaseDropsAHoldAnotherNodeOnlyRechecked`, `internal/artifactupload.TestAReleaseDropsWhatAnotherReleaseLeftOfItsHold`, `internal/artifactupload.TestAHoldMadeForAReleasedUploadIsNeverTakenForTheReleasedOne`, `internal/coord.TestTheWidestChatReadRecordFitsItsBound`, `internal/coord.TestAChatReadRecordPastItsBoundIsRefusedWhereItIsEncoded`, `internal/coord.TestAFlushNamingAnIDChatletDidNotMintIsRefusedNamingItsField`, `internal/coord/kv.TestEveryChatReadAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/agent/builtin.TestAMarkNamingAnIDChatletDidNotMintIsRefusedNamingItsArgument`, `internal/coord/kv.TestEveryAtlasClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/atlas/collect.TestTheWidestAtlasStandingFitsItsBound`, `internal/atlas/collect.TestAStandingPastItsBoundIsCutDetailFirstKeepingEveryCount`, `internal/atlas/collect.TestTheWidestAtlasMissesFitTheirBound`, `internal/atlas/collect.TestOnlyAVisitReadsItsSourcesMissesByItsKey`, `internal/atlas/collect.TestAScopeWhoseIDIsNoHostsIsWithheld`, `internal/engine.TestAnAtlasSourceReportReadsNoSourcesMisses`, `internal/atlas/codescan.TestTheWidestCodeScanStandingFitsItsBound`, `internal/atlas/codescan.TestAForgesStampIsKeptAsItsDigest`, `internal/atlas/codescan.TestAPassReadsItsOwnStandingAndTheListingReadsThemOnce`, `internal/coord/kv.TestAnAtlasListingCarriesNoRecordOutsideItsFilterAcrossALink`, `internal/atlas/collect.TestAVisitWhoseMissesCannotBeReadReadsNothing`, `internal/atlas/collect.TestAVisitWhoseMissesCannotBeWrittenCountsOnlyThoseRecorded`, `internal/atlas/codescan.TestAForgesTipIsACommitIDOrNoRead`, `internal/coord/kv.TestEverySecretAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/fleetsecrets.TestTheWidestSecretRecordFitsItsBound`, `internal/fleetsecrets.TestAProvenanceNoRecordKeepsIsRefusedByEveryWrite`, `cmd/crewlet.TestAnAuthorNoRecordKeepsIsRefusedNamingItsVariable`, `internal/fleetsecrets.TestANamePastItsBoundIsRefusedByEveryWriteAndNamesNoRow`, `internal/secrets.TestANameIsHeldToTheLengthItsRecordKeeps`, `internal/api/secretsapi.TestANamePastItsBoundIsRefusedAsAnInvalidName`, `internal/api/secretsapi.TestAListingReadsTheBucketOnce`, `cmd/crewlet.TestAListingAndADryRunReadTheStoreOnce`, `internal/engine.TestTheAlarmBeatReadsNoSealedValueFromTheStore`, `internal/engine.TestLocalModelsDateTheValueTheAlarmJudges`, `internal/api/queries.TestAModelsExpiryIsTheValueThisNodeResolves`, `internal/coord/kv.TestEveryIntegrationsClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`, `internal/integration.TestTheWidestStatusFitsItsBound`, `internal/integration.TestAPassesFindingsAreCutToTheirRecordFirstFindingWhole`, `internal/integration.TestAStatusReadReadsNoFindings`, `internal/integration.TestFindingsTheirStatusDoesNotNameReadAsUnread`, `internal/integration.TestAFoldThatFoundNothingRemovesTheFindingsItsStatusNamed`, `internal/engine.TestTheMintJudgementReadsNoFindingsOnItsCallersPath`, `internal/engine.TestTheAtlasReadsTheIntegrationsStatusesAlone`, `internal/api/queries.TestTheAdvisorSignatureMovesWithTheFindingsDigest`, `internal/config.TestAnAddressAStatusKeepsExactIsBoundedWhereTheSchemaSaysSo`, `internal/integration.TestAPassThatFitsItsRecordIsKeptWhole`, `internal/integration.TestAFailedFindingsPassReadsTheFindingsUnread`, `internal/integration.TestWhatARowShortensIsLoggedWhole`, `internal/integration.TestTheRollupTable`, `internal/engine.TestAMintIsNeverJudgedFromFindingsARecordCutAway`, `internal/api/setupapi.TestASeatIsNeverSatisfiedOnFindingsNotInHand`, `internal/advisor.TestIntegrationFindingsNotInHandLeaveTheIntegrationsUnread`, `internal/advisor.TestACutSurfaceHoldsOnlyItsOwnFindingsOpen`, `internal/coord.TestEveryNodeStatusRowsWidestRecordFitsItsBound`, `internal/coord.TestAnMCPRowsUnlistedKeysAreKeptWholeAndCountedPastTheRow`, `internal/coord.TestARowsTextIsHeldToItsBoundAsStored`, `internal/coord/kv.TestAnUndecodableStatusRowIsSkippedNotRaised`, `internal/engine.TestTheStatusRecordFollowsChangesAndOutlivesNoReconcile`, `internal/coord.TestANodeReadAcrossPassesIsCountedWholeOrNotAtAll`, `internal/engine.TestARowWhoseWriteLostItsAnswerIsRemovedOnceDropped`, `internal/api/queries.TestACutListOfUnlistedKeysIsCountedPastWhatItNames`, `internal/api/queries.TestTheAdvisorsNoticesReadEachLiveNodesGrowthRow`
+- **Enforced-by:**
+  - `internal/coord/kv.TestAPointerReadAcrossALeafsLinkCarriesNoBody`
+  - `internal/coord/kv.TestABodyAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`
+  - `internal/coord/kv.TestABodysReadIsGivenTheArrivalOfItsRecordedSize`
+  - `internal/coord/kv.TestAFlipLandsWithinHalfTheBodysRetentionOfItsWrite`
+  - `internal/coord/kv.TestAFlipIsGivenTwiceTheBodysWriteAtItsBound`
+  - `internal/coord/kv.TestABodysCrossingIsHeldToWhatAKeyHolds`
+  - `internal/maintenance.TestTheBodySweepRunsUnderTheDutyAtItsOwnHorizon`
+  - `internal/engine.TestAPostureAcrossASlowLinkIsReadNotAssumed`
+  - `internal/engine.TestAReconcilerAcrossASlowLinkAppliesARevisionAtItsBound`
+  - `internal/coord/kv.TestEveryReadIsGivenTheCrossingOfItsClassBound`
+  - `internal/coord/kv.TestASmallClassCrossesTheFloorInsideTheReadTerm`
+  - `internal/coord/kv.TestASettledWriteIsHeldToItsClassBound`
+  - `internal/coord/kv.TestARunsListingAcrossALeafsLinkDeliversItsRecordsInItsPass`
+  - `internal/coord/kv.TestAWatchAcrossASlowLinkDeliversARecordLongerThanTwoHeartbeatsToCross`
+  - `internal/coord/kv.TestTheMarkerSweepAcrossALinkCarriesHeadersOnly`
+  - `internal/coord/kv.TestNothingWatchesASettledBucketThroughTheClient`
+  - `internal/coord/kv.TestEveryClientWatchOfASettledBucketIsRefused`
+  - `internal/coord/kv.TestAPassOpensNoConsumerUntilItsKeyIndexAnswers`
+  - `internal/coord/kv.TestARunsStandingCrossesALeafsLinkWithoutItsRecords`
+  - `internal/coord/kv.TestAStandingLandsInTheMessageOfItsRecord`
+  - `internal/coord/kv.TestTheWidestStandingIsCountedInKvHeaderBytes`
+  - `internal/coord/kv.TestACoordinationValueIsHeldToWhatItsLeadersReadCarriesBackAcrossALink`
+  - `internal/sandbox.TestEveryWriteOfARunStatesItsStanding`
+  - `internal/sandbox.TestTheEpochFloorReadsNoStatedRecordWhole`
+  - `internal/sandbox.TestASeatsListingReadsOnlyItsOwnRecordsWhole`
+  - `internal/engine.TestALeafBootsBesideRunsAtTheirBound`
+  - `internal/engine.TestAnMCPCheckOfEveryNodeAtItsWidestIsRecordedWithinItsBound`
+  - `internal/engine.TestADeviceSignInsDetailIsCutToFitItsRecord`
+  - `internal/seataccess.TestASeatWhoseAccessOutgrowsItsLedgerRecordIsNotSynced`
+  - `internal/coord.TestEveryPositionsClassesWidestRecordFitsItsBound`
+  - `internal/coord/kv.TestEveryPositionsClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`
+  - `internal/coord.TestEveryPositionsFamilysWidestRecordFitsItsClass`
+  - `internal/coord.TestASentenceIsCutToWhatItTakesAsStored`
+  - `internal/coord/kv.TestEveryPositionsFamilyIsDeclaredAtTheBoundItsWidestRecordFits`
+  - `internal/coord/kv.TestFleetContract`
+  - `internal/coord/kv.TestEveryPositionsClassPastASmallValueIsReadAcrossALeafsLinkAtItsFirstAsk`
+  - `internal/statelog.TestAJournalDropsItsOldestResolvedRecordsAndNeverAnUnresolvedOne`
+  - `internal/statelog.TestARetirementsEvidenceIsCutToItsRecordCeilingFirst`
+  - `internal/engine.TestAWindowPastWhatItsRecordHoldsIsBlockedForAPersonAndSendsNothing`
+  - `internal/engine.TestEveryLogThisBuildRunsFitsWhatAPositionsRecordNames`
+  - `internal/seataccess.TestARequestPastWhatItsRecordKeepsIsRefusedNamingWhatToNarrow`
+  - `internal/engine.TestAFleetScaledDownOpensItsWindowOnceItsGoneIDsAreRetired`
+  - `internal/coord.TestARetirementStandsOnlyUntilItsNodeWritesAgain`
+  - `internal/statelog.TestTheSealLiftsABlockThatHeldARequestBack`
+  - `internal/engine.TestAGrantTheFleetCouldNotKeepIsRefusedBeforeAnybodyConsents`
+  - `internal/coord.TestAnEmptyFieldIsRefusedAsMissingNotAsPastItsBound`
+  - `internal/engine.TestTheMCPBeatReadsDefinitionsOnTheLoopsContext`
+  - `internal/engine.TestTheAtlasReadsTheFleetsListingsFromTheWatchedCopy`
+  - `internal/seataccess.TestALaneIsSizedInItsVendorsWords`
+  - `internal/seataccess.TestAHeldLaneHoldsOnlyItself`
+  - `internal/seataccess.TestAVendorsLongRefusalIsKeptAtItsHead`
+  - `internal/seataccess.TestARecordPastItsClassFailsItsSeatNotThePass`
+  - `internal/engine.TestOneSeatsAccessRecordIsReadByItsKey`
+  - `internal/coord/kv.TestTheAccessReviewsRevisionsCrossALinkAsHeadersAlone`
+  - `internal/coord/kv.TestEveryUploadsClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`
+  - `internal/artifactupload.TestTheWidestUploadRecordFitsItsBound`
+  - `internal/artifactupload.TestTheWidestReservationLedgerFitsItsBound`
+  - `internal/sandbox.TestASeatsWidestSaveLedgerFitsItsBound`
+  - `internal/artifactupload.TestAnUploadRecordPastItsBoundIsRefusedByItsWriter`
+  - `internal/artifactupload.TestARefusedPublishDropsTheGeneratedFilesItDeleted`
+  - `internal/artifactupload.TestAVersionPastItsFileCountIsRefusedBeforeAByteMoves`
+  - `internal/artifactupload.TestAPublishsWarningsAreCutToWhatItsRecordKeeps`
+  - `internal/artifactupload.TestAnUploadRecordsTheTypeAFileIsServedAs`
+  - `internal/artifactupload.TestALedgerChangeReadsABoundedNumberOfRecords`
+  - `internal/artifactupload.TestTheWidestOutcomeFitsWhatARecordKeepsForIt`
+  - `internal/artifactupload.TestAStagedRecordAtItsBoundClosesWithItsOutcome`
+  - `internal/artifactupload.TestASizeRefusalUndoesNoEarlierAttemptsObjects`
+  - `internal/artifactupload.TestARetryRefusedAsMovedLeavesWhatAnEarlierAttemptLanded`
+  - `internal/artifactupload.TestAnAbandonedUploadIsReleasedBehindHoldsThatCannotBe`
+  - `internal/artifactupload.TestARefusedReservationKeepsTheReleaseItMade`
+  - `internal/artifactupload.TestARefusedReservationIsAnsweredHoweverItsReleasesWriteEnds`
+  - `internal/artifactupload.TestAReleaseLeavesAHoldARetriedIntentTookUp`
+  - `internal/artifactupload.TestARetriedIntentTakesUpTheHoldItsFirstAttemptLeft`
+  - `internal/artifactupload.TestAnEarlierAttemptsBytesStayReservedThroughARetrysRefusal`
+  - `internal/artifactupload.TestATakenUpHoldIsNeverWeakened`
+  - `internal/artifactupload.TestAReleaseDropsAHoldAnotherNodeOnlyRechecked`
+  - `internal/artifactupload.TestAReleaseDropsWhatAnotherReleaseLeftOfItsHold`
+  - `internal/artifactupload.TestAHoldMadeForAReleasedUploadIsNeverTakenForTheReleasedOne`
+  - `internal/coord.TestTheWidestChatReadRecordFitsItsBound`
+  - `internal/coord.TestAChatReadRecordPastItsBoundIsRefusedWhereItIsEncoded`
+  - `internal/coord.TestAFlushNamingAnIDChatletDidNotMintIsRefusedNamingItsField`
+  - `internal/coord/kv.TestEveryChatReadAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`
+  - `internal/agent/builtin.TestAMarkNamingAnIDChatletDidNotMintIsRefusedNamingItsArgument`
+  - `internal/coord/kv.TestEveryAtlasClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`
+  - `internal/atlas/collect.TestTheWidestAtlasStandingFitsItsBound`
+  - `internal/atlas/collect.TestAStandingPastItsBoundIsCutDetailFirstKeepingEveryCount`
+  - `internal/atlas/collect.TestTheWidestAtlasMissesFitTheirBound`
+  - `internal/atlas/collect.TestOnlyAVisitReadsItsSourcesMissesByItsKey`
+  - `internal/atlas/collect.TestAScopeWhoseIDIsNoHostsIsWithheld`
+  - `internal/engine.TestAnAtlasSourceReportReadsNoSourcesMisses`
+  - `internal/atlas/codescan.TestTheWidestCodeScanStandingFitsItsBound`
+  - `internal/atlas/codescan.TestAForgesStampIsKeptAsItsDigest`
+  - `internal/atlas/codescan.TestAPassReadsItsOwnStandingAndTheListingReadsThemOnce`
+  - `internal/coord/kv.TestAnAtlasListingCarriesNoRecordOutsideItsFilterAcrossALink`
+  - `internal/atlas/collect.TestAVisitWhoseMissesCannotBeReadReadsNothing`
+  - `internal/atlas/collect.TestAVisitWhoseMissesCannotBeWrittenCountsOnlyThoseRecorded`
+  - `internal/atlas/codescan.TestAForgesTipIsACommitIDOrNoRead`
+  - `internal/coord/kv.TestEverySecretAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`
+  - `internal/fleetsecrets.TestTheWidestSecretRecordFitsItsBound`
+  - `internal/fleetsecrets.TestAProvenanceNoRecordKeepsIsRefusedByEveryWrite`
+  - `cmd/crewlet.TestAnAuthorNoRecordKeepsIsRefusedNamingItsVariable`
+  - `internal/fleetsecrets.TestANamePastItsBoundIsRefusedByEveryWriteAndNamesNoRow`
+  - `internal/secrets.TestANameIsHeldToTheLengthItsRecordKeeps`
+  - `internal/api/secretsapi.TestANamePastItsBoundIsRefusedAsAnInvalidName`
+  - `internal/api/secretsapi.TestAListingReadsTheBucketOnce`
+  - `cmd/crewlet.TestAListingAndADryRunReadTheStoreOnce`
+  - `internal/engine.TestTheAlarmBeatReadsNoSealedValueFromTheStore`
+  - `internal/engine.TestLocalModelsDateTheValueTheAlarmJudges`
+  - `internal/api/queries.TestAModelsExpiryIsTheValueThisNodeResolves`
+  - `internal/coord/kv.TestEveryIntegrationsClassAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk`
+  - `internal/integration.TestTheWidestStatusFitsItsBound`
+  - `internal/integration.TestAPassesFindingsAreCutToTheirRecordFirstFindingWhole`
+  - `internal/integration.TestAStatusReadReadsNoFindings`
+  - `internal/integration.TestFindingsTheirStatusDoesNotNameReadAsUnread`
+  - `internal/integration.TestAFoldThatFoundNothingRemovesTheFindingsItsStatusNamed`
+  - `internal/engine.TestTheMintJudgementReadsNoFindingsOnItsCallersPath`
+  - `internal/engine.TestTheAtlasReadsTheIntegrationsStatusesAlone`
+  - `internal/api/queries.TestTheAdvisorSignatureMovesWithTheFindingsDigest`
+  - `internal/config.TestAnAddressAStatusKeepsExactIsBoundedWhereTheSchemaSaysSo`
+  - `internal/integration.TestAPassThatFitsItsRecordIsKeptWhole`
+  - `internal/integration.TestAFailedFindingsPassReadsTheFindingsUnread`
+  - `internal/integration.TestWhatARowShortensIsLoggedWhole`
+  - `internal/integration.TestTheRollupTable`
+  - `internal/engine.TestAMintIsNeverJudgedFromFindingsARecordCutAway`
+  - `internal/api/setupapi.TestASeatIsNeverSatisfiedOnFindingsNotInHand`
+  - `internal/advisor.TestIntegrationFindingsNotInHandLeaveTheIntegrationsUnread`
+  - `internal/advisor.TestACutSurfaceHoldsOnlyItsOwnFindingsOpen`
+  - `internal/coord.TestEveryNodeStatusRowsWidestRecordFitsItsBound`
+  - `internal/coord.TestAnMCPRowsUnlistedKeysAreKeptWholeAndCountedPastTheRow`
+  - `internal/coord.TestARowsTextIsHeldToItsBoundAsStored`
+  - `internal/coord/kv.TestAnUndecodableStatusRowIsSkippedNotRaised`
+  - `internal/engine.TestTheStatusRecordFollowsChangesAndOutlivesNoReconcile`
+  - `internal/coord.TestANodeReadAcrossPassesIsCountedWholeOrNotAtAll`
+  - `internal/engine.TestARowWhoseWriteLostItsAnswerIsRemovedOnceDropped`
+  - `internal/api/queries.TestACutListOfUnlistedKeysIsCountedPastWhatItNames`
+  - `internal/api/queries.TestTheAdvisorsNoticesReadEachLiveNodesGrowthRow`
+  - `internal/coord/kv.TestEveryFleetRecordsWidestFitsItsClass`
+  - `internal/coord/kv.TestEveryKeyClassThePackageWritesWithIsDeclaredForItsBucket`
+  - `internal/coord/kv.TestContract`
+  - `internal/coord/kv.TestNodeStatusRecordContract`
+  - `internal/config.TestAnObjectStoresIdentityFitsTheFleetsRecordOfIt`
+  - `internal/coord.TestASessionClaimHoldsEverySessionIDABoxMayName`
+  - `internal/notify.TestEveryFollowReasonFitsWhatAFollowHolds`
+  - `internal/engine.TestTheWidestCollectionReportIsCutToItsRecordKeepingEveryCount`
+  - `internal/trashreap.TestTheWidestReportFitsItsRecord`
+  - `internal/engine.TestEveryLeaseThisBuildTakesNamesItselfWithinItsRecord`
+  - `internal/worklet.TestAWalksClaimNamesItselfWithinALeasesRecord`
+  - `internal/engine.TestAGrowthActsLeaseIsNamedAtOneWidthWhateverItsAccount`
 - **Measured:** at the slowest link pace allowed (30 s a MiB), a leader read's reply is a third larger than the value, so no record above 47.1 KiB is read inside a probe's 1.875 s and above 127.1 KiB every read without a deadline fails at the five-second read term; a company at its bound made the activation pointer an 8 MiB reply, 240 s. The pointer at its 8 KiB bound is a 12,404-byte reply, 0.35 s; a typical one about 0.06 s. A class read at the term is at most 16 KiB (`coord.SmallValueBytes`): a 23,328-byte reply, 0.67 s. A run's standing is 196 bytes of header at its widest, so the most header a write carries is 342 bytes; listed beside its message's other headers it is about 1.3 KB a run across the link (counted, not measured), 37 ms at the slowest pace, so a boot's 300 s ceiling fits the floor of about 8,000 runs, where three records at their bound read whole take nine minutes (counted). A pass's quiet and a watch's heartbeat are 5 s plus the raw crossing of the largest value under the filter: 185.0 s for a run's value across a link, 5 s in process, and the same for the runs' standing, whose headers wait behind any record on the link; the marker sweep's headers-only consumer beats at 5 s. Measured 2026-11-22 under `-race` (Go 1.27.2, the build that added the bucket's watcher and the index-first pass): the client's KV watch, at its fixed 5 s heartbeat, never delivered a record taking 20 s or 25 s to cross (3.92 and 3.95 copies carried in four times its crossing); the bucket's own watcher delivered each once, at 20.5 s and 25.6 s.
 - **Cost-when-tried:** the company document inside the activation pointer (#1149): every probe, heartbeat and tick on every node read it whole, so on a leaf a large company failed `/ready`, every reconcile tick and the boot, and above about 50 KB the pointer reads alone filled a floor link.
 - **Tag-status:** unreleased
@@ -80,8 +228,9 @@ one deciding none its arrival (the reply at the floor in brackets):
 | `access_review` | `coord.MaxAccessReviewBytes`, 40 KiB | deciding (1.6 s) |
 | `seat_access` | `coord.MaxSeatAccessBytes`, 256 KiB | deciding (10.0 s) |
 | `home_board` | `coord.MaxHomeBoardRecordBytes`, the board and 256 bytes | deciding (20.1 s) |
+| `assistant_instructions` | `coord.MaxAssistantInstructionsRecordBytes`, the instructions and 256 bytes | deciding (0.3 s) |
 | `llm_check` | `coord.MaxModelCheckBytes`, its answer and 4 KiB | deciding (2.7 s) |
-| `mcp_oauth`, `integration_grant` | `coord.MaxOAuthGrantBytes`, 200 KiB | deciding (7.9 s) |
+| `mcp_oauth`, `integration_grant` | `coord.MaxOAuthGrantBytes`, 208 KiB | deciding (8.2 s) |
 | `mcp_sign_in`, `integration_sign_in` | `coord.MaxOAuthSignInBytes`, its sealed half and 8 KiB | deciding (2.2 s) |
 | `atlas_wake`, `llm_device_sign_in`, `grant_request` and every other family | `coord.SmallValueBytes` | the term |
 
@@ -309,7 +458,7 @@ is rows now, each a key of its own and each held to
 |---|---|---|
 | the node's own row: epoch, instant, runner cells, infra, runs waiting for an operator | `node_status.<node>` | 7,882 bytes |
 | one configured MCP server | `mcp_status.<node>.<server>` | 6,105 bytes, and its unlisted keys |
-| one model entry | `model_status.<node>.<entry>` | 4,725 bytes |
+| one model entry | `model_status.<node>.<entry>` | 16,308 bytes, its work in flight and homes as many as fit, each list counted where cut |
 | the node's growth signals | `growth_status.<node>` | 15,230 bytes |
 
 Growth is a row of its own: two lists of 32 signals take most of the bound
@@ -338,6 +487,39 @@ epoch's row; it removes the rows of a server or entry no longer configured
 up to its epoch, a row whose write's answer was lost among them, and a clean
 stop removes every row up to it, its own first.
 
+**Every other bucket holds small values, and no key falls to a rest.** A
+bucket of one class states it as its rest (a credential's record, a small
+value); one of several declares a class for every family it
+holds, and the store writes no key outside them, so its rest, a small value,
+holds none. Each record below is a small value read at the term, its widest
+its fields' widest as stored, every text bounded where it is written: an
+identifier or a word the engine chose refused past its bound before anything
+is sent (a cut would name nothing), a person's or the configuration's
+refused naming its field, a report's lists and errors cut to fit.
+
+| Bucket | Its records at their widest |
+|---|---|
+| leases, duties | a lease: resource, owner and preferred node each `coord.MaxLeaseNameBytes` (256 bytes) beside its 8 KiB Meta, 9,190 bytes; the widest a writer names is a person's control of a browser, 118 bytes, and a growth act's lease is its account's SHA-256, whatever the account |
+| epochs | a resource's epoch and preferred node, 571 bytes |
+| sandbox runs | a run's record and each of its three parts, each a class of its own at a run's value; a session's claim, each part `coord.MaxSessionClaimPartBytes` (128 bytes, a box's session id's own bound), 420 bytes |
+| config-apply status | three revisions and a status of `coord.MaxApplyNameBytes` (64 bytes) and an error cut to 2,000, 12,460 bytes |
+| ledger | a completion's detail of `coord.MaxLedgerDetailBytes` (128), or a seen-through mark of `coord.MaxSeenMarkBytes` (128) |
+| rate, counter and token windows | a count, or three slots each a label `period.At` cut, 356 bytes |
+| claims, fires, rebases, custody | one or two instants and a node id (`coord.MaxNodeIDBytes`) |
+| channels, follows, mailboxes | seat handles (`iam.MaxLogin`), a follow reason of `coord.MaxFollowReasonBytes` (64) |
+| objects | the agreed store, `store.objects.s3`'s endpoint, bucket and prefix held to 2,048, 255 and 1,024 characters, 13,292 bytes; the collector's report, naming its store by the identity's SHA-256, each sentence cut to 1 KiB and each file's name to 512 bytes as stored, its unreadable files the longest opening of their list that fits, every count whole; the trash reaper's, at most 16 sources each named in 64 bytes, each source's error cut to 512 |
+
+Two gates hold every key to a declared class. The contract suites record
+every put as the broker carries it and fail a key falling to the rest of a
+bucket of several classes, a value past its class's bound, or a declared
+class nothing wrote. A reading of the package's source fails a class
+constant, a key function built on one, or an entryClass's filter that no
+holding of the bucket its declaration touches declares, and every key a
+bucket of several classes is handed that it cannot trace back to one of
+them, such as a prefix and an id, unless it names the place and why. So a
+write no case reaches is held too. No boot window moves: every class a boot
+reads is a small value at the term.
+
 ## Why the obvious alternatives are wrong
 
 **A longer deadline for every read.** A probe's budget is the orchestrator's,
@@ -350,13 +532,3 @@ holds; the pointer is small only if the document is not in it.
 then meet on one key, and a flip can name a body the other overwrote, which is
 why the body once moved into the pointer. Content addressing gives each set of
 bytes its own key.
-
-## What this does not decide
-
-Every bucket but the runs, the config, the uploads, the chat reads, the
-integrations, the secrets, the three atlas buckets, the node status and the
-positions register declares no class yet: its values are held to
-`coord.MaxValueBytes` and read at the term, which only its records' own
-fields keep small. The rest of #1814 declares them: the other buckets, then
-a default class of `coord.SmallValueBytes`, with a gate holding every key of
-every bucket to a declared class, as the positions register's already is.

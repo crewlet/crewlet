@@ -60,7 +60,7 @@ func (w *lineWalk) noteLine(ctx context.Context, read func() error) (noteLine, e
 	case object:
 		err = read()
 	case err == nil:
-		err = w.scan.Skip()
+		err = w.skip(k)
 	}
 	if err == nil {
 		_, err = w.scan.Next()
@@ -77,7 +77,7 @@ func (w *lineWalk) noteLine(ctx context.Context, read func() error) (noteLine, e
 		return noteLine{}, cause
 	}
 	whole := errors.Is(err, io.EOF)
-	line := noteLine{ended: w.src.cause != nil, past: w.src.past, object: object && whole, null: null && whole,
+	line := noteLine{ended: w.src.cause != nil, past: w.src.over(), object: object && whole, null: null && whole,
 		blank: w.trim.blank(), torn: w.src.cause != nil && !w.src.broke, size: w.src.n}
 	if w.src.broke {
 		line.size++
@@ -106,6 +106,17 @@ func recordWordOf(s string) recordWord {
 	return recordWord{long: true, sum: sha256.Sum256([]byte(s))}
 }
 
+// key is the word as a map key: its text, or for a longer word its digest
+// after a run of zero bytes, a key longer than any word's text, so no text is
+// another word's key.
+func (r recordWord) key() string {
+	if !r.long {
+		return r.text
+	}
+	key := make([]byte, transcriptNameMaxBytes+1-sha256.Size, transcriptNameMaxBytes+1)
+	return string(append(key, r.sum[:]...))
+}
+
 // empty reports whether the word is "".
 func (r recordWord) empty() bool { return r.is("") }
 
@@ -118,7 +129,7 @@ func (w *lineWalk) idField(k jsonscan.Kind) (recordWord, bool, error) {
 		return recordWord{}, true, nil
 	case jsonscan.String:
 	default:
-		return recordWord{}, false, w.scan.Skip()
+		return recordWord{}, false, w.skip(k)
 	}
 	buf := w.wordBuf[:0]
 	for len(buf) <= transcriptNameMaxBytes {
@@ -156,7 +167,7 @@ func (w *lineWalk) idField(k jsonscan.Kind) (recordWord, bool, error) {
 // kind), passing the value over; valid until the scanner's next call.
 func (w *lineWalk) numberAsWritten(k jsonscan.Kind) ([]byte, error) {
 	if k != jsonscan.Number {
-		return nil, w.scan.Skip()
+		return nil, w.skip(k)
 	}
 	raw, whole, err := w.scan.Capture(transcriptNameMaxBytes)
 	if !whole {

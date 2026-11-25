@@ -149,17 +149,26 @@ func openCodeLoads(t *testing.T) {
 	if s, ok := handed.MCP.Servers["crewlet-bridge"]; !ok || s.Disabled == nil || *s.Disabled {
 		t.Errorf("the run's bridge is not declared on (disabled: false):\n%s", raw)
 	}
-	var plugins []string
+	var plugins, removed []string
 	for _, entry := range handed.Plugins {
 		var named openCodePlugin
 		if json.Unmarshal(entry, &named) != nil {
 			t.Errorf("the run's configuration names plugin %s, which is no plugin of its own", entry)
 			continue
 		}
+		if named.Removes != "" {
+			removed = append(removed, named.Removes)
+			continue
+		}
 		plugins = append(plugins, named.Package)
 	}
 	if want := []string{p.OpenCodeSteerPlugin(), p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin()}; !slices.Equal(plugins, want) {
 		t.Errorf("the run's configuration names plugins %v, want its own %v", plugins, want)
+	}
+	// ITS ONE REMOVAL, OpenCode Desktop's browser, which every run's
+	// configuration opens with (TestEveryOpenCodeRunTakesDesktopsBrowserPluginOut).
+	if !slices.Equal(removed, []string{"opencode.browser"}) {
+		t.Errorf("the run's configuration removes %v of OpenCode's own plugins, want Desktop's browser alone", removed)
 	}
 	if !slices.Equal(handed.Skills, []string{p.OpenCodeSkills()}) || !slices.Equal(handed.Instructions, []string{p.System()}) {
 		t.Errorf("the run's skills %v and instructions %v are not its own alone", handed.Skills, handed.Instructions)

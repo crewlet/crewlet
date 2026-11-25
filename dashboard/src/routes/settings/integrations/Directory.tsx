@@ -20,8 +20,9 @@
  *
  * `#/company/integrations/{kind}` selects a line: an app's key, a surface
  * (`jira`, `confluence`, the `forge` relay and `atlassian` select Jira's
- * line, on the Atlassian page), or a service (`worklet`, `doclet`, `chat`,
- * `gitlet`).
+ * line, on the Atlassian page), a service (`worklet`, `doclet`, `chat`,
+ * `gitlet`), or `google`, the connection every Google product shares; an
+ * app's tab and form are its query (`address.ts`).
  * The bare address shows what the company has active.
  *
  * # Who reads it
@@ -40,7 +41,7 @@
  * phone the two are one column and the page scrolls as any other.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
@@ -56,7 +57,7 @@ import {
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { VendorMark } from "@crewlethq/icons";
 import { ChevronLeftGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
-import { href, useParam } from "~/app/router.tsx";
+import { href } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -72,7 +73,6 @@ import {
   useIntegrations,
   toolFor,
   type BuiltInService,
-  type Intent,
   type Model,
 } from "./model.ts";
 import { AppPane } from "./AppPane.tsx";
@@ -80,6 +80,9 @@ import { SHOWN, entryOf, type Group, type Line } from "./categories.ts";
 import { Landing } from "./Landing.tsx";
 import { ServicePane } from "./ServicePane.tsx";
 import { ServiceDot, ServiceMark, useDisconnect } from "./parts.tsx";
+import { GOOGLE } from "./address.ts";
+import { googlePlace } from "./google.ts";
+import { GooglePane, googleWords } from "./GooglePane.tsx";
 
 /** Which line a route segment selects: Atlassian and its relay select Jira's. */
 function selects(line: Line, kind: string | undefined): boolean {
@@ -124,6 +127,17 @@ export function directoryGroups(
           status: <ServiceDot service={s} />,
         };
       }
+      if (line.kind === "google") {
+        const words = model ? googleWords(googlePlace(model)) : null;
+        return {
+          key: line.key,
+          href: itemHref,
+          selected,
+          mark: <VendorMark vendor="google" size="md" />,
+          label: "Google",
+          ...(words ? { status: <StatusDot tone={words.tone}>{words.label}</StatusDot> } : {}),
+        };
+      }
       const app = entryOf(line, catalog)!;
       const appTool = model?.byKey.get(app.key);
       // A PRODUCT'S STATE IS ITS OWN: Jira says nothing while only
@@ -146,9 +160,6 @@ export function directoryGroups(
     }),
   }));
 }
-
-/** The intents an arrival may ask an app's page to open its form for: the home's fixes. */
-const ARRIVALS: readonly Intent[] = ["connect", "continue", "rotate", "settings", "agents"];
 
 export function Integrations({ kind }: { kind?: string }) {
   const viewer = useViewer();
@@ -195,32 +206,10 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
     (l): l is Extract<Line, { kind: "product" }> => l.kind === "product" && l.key === kind,
   );
   // THE CRUMB NAMES WHAT THE PAGE IS ABOUT, not the segment.
-  const crumb = service?.name ?? product?.name ?? entry?.name;
+  const google = kind === GOOGLE;
+  const crumb = google ? "Google" : (service?.name ?? product?.name ?? entry?.name);
   usePageLabels(useMemo(() => (kind && crumb ? { [kind]: crumb } : {}), [kind, crumb]));
   const { disconnect, node } = useDisconnect(model);
-  // AN ARRIVAL'S INTENT BELONGS TO THE SELECTION IT ARRIVED WITH, and is
-  // taken out of the address once read, so a reload or a step back does not
-  // open the form again. The page is never keyed on the selection (App.tsx),
-  // so a fix followed from the home is a change of address under a mounted
-  // page: the intent is held per selection rather than read once at mount,
-  // and survives the address being cleared, because an app's pane reads it
-  // when it mounts, which may be after the address was cleared.
-  // Leaving for another selection drops it, so coming back through the list
-  // opens no form.
-  const [arrive, setArrive] = useParam("open", "");
-  const asked = ARRIVALS.find((i) => i === arrive);
-  const [arrival, setArrival] = useState<{ kind: string | undefined; intent: Intent } | null>(() =>
-    asked ? { kind, intent: asked } : null,
-  );
-  if (asked && (!arrival || arrival.kind !== kind || arrival.intent !== asked)) {
-    setArrival({ kind, intent: asked });
-  } else if (!asked && arrival && arrival.kind !== kind) {
-    setArrival(null);
-  }
-  const arrived = asked ?? (arrival && arrival.kind === kind ? arrival.intent : undefined);
-  useEffect(() => {
-    if (arrive !== "") setArrive("");
-  }, [arrive, setArrive]);
 
   // THE SCREEN'S WIDTH, the question the kit's one-pane rule answers.
   const onePane = useScreenBelow(PHONE_BREAKPOINT);
@@ -230,8 +219,13 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
   );
 
   let pane: ReactNode;
+  const cloud = model?.byKey.get("google_cloud");
   if (service) {
     pane = <ServicePane key={service.key} service={service} model={model} />;
+  } else if (google && model && cloud) {
+    pane = <GooglePane model={model} onDisconnect={() => disconnect(cloud)} />;
+  } else if (google && !model) {
+    pane = <GoogleHeld />;
   } else if (tool && model) {
     pane = (
       <AppPane
@@ -239,7 +233,6 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
         tool={tool}
         model={model}
         onDisconnect={() => disconnect(tool)}
-        arrive={arrived}
       />
     );
   } else if (entry) {
@@ -315,6 +308,22 @@ function HeldPane({ entry }: { entry: Entry }) {
   return (
     <>
       <ObjectHeader {...appHeading(entry, 36)} description={entry.description} />
+      <AdminNote />
+    </>
+  );
+}
+
+/** The Google page for a reader without Admin. */
+function GoogleHeld() {
+  return (
+    <>
+      <ObjectHeader
+        kind="Integration"
+        icon="plug"
+        mark={<VendorMark vendor="google" size={36} />}
+        title="Google"
+        description="One connection for every Google product your agents use."
+      />
       <AdminNote />
     </>
   );

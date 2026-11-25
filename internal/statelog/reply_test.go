@@ -188,7 +188,7 @@ func TestAServedReadSaysItIsBehindWhileItsAskerListens(t *testing.T) {
 
 // A LINEARIZABLE READ'S BARRIER ENDS WHERE ITS ASKER'S ATTEMPT DOES, less the
 // margin. The barrier's append is held (a broker that does not answer) and
-// statelog.DefaultBarrierBudget outlasts the asker; the read is refused
+// statelog.ElectionBarrierBudget outlasts the asker; the read is refused
 // `no_quorum` (the log is three members') a margin short of the deadline, saying
 // the asker's time is what ran out.
 //
@@ -196,9 +196,9 @@ func TestAServedReadSaysItIsBehindWhileItsAskerListens(t *testing.T) {
 // the answer to that instant ([answeredAt]).
 func TestAServedReadsBarrierEndsWhileItsAskerListens(t *testing.T) {
 	t.Parallel()
-	if replyMargin+askerSlack >= statelog.DefaultBarrierBudget {
+	if replyMargin+askerSlack >= statelog.ElectionBarrierBudget {
 		t.Fatalf("the premise: the asker's %v must end before the barrier's own %v would",
-			replyMargin+askerSlack, statelog.DefaultBarrierBudget)
+			replyMargin+askerSlack, statelog.ElectionBarrierBudget)
 	}
 	synctest.Test(t, func(t *testing.T) {
 		r := newReader(t, unreadStore{t}, healthy, &stubWaiter{at: healthy().Position},

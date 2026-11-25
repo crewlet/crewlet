@@ -36,6 +36,8 @@ const UNREAD_WORDS: Readonly<Record<string, string>> = {
     "The agents' waits on their models' usage limits couldn't be read, so capacity lost to a limit may be missing.",
   growth_signals:
     "What the nodes met at the growth vendors couldn't be read, so a clock off from a vendor's, or a vendor API a node was told is retiring, may be missing.",
+  oauth_grants:
+    "The company's OAuth sign-ins couldn't be read, so a client that still lists an earlier address of this engine may be missing.",
 };
 
 /** What each unread source is called in a sentence that names it. */
@@ -59,6 +61,7 @@ const UNREAD_NAMES: Readonly<Record<string, string>> = {
   staffing: "the agents' busy and stopped time",
   capacity: "the agents' waits on their models' usage limits",
   growth_signals: "what the nodes met at the growth vendors",
+  oauth_grants: "the company's OAuth sign-ins",
 };
 
 /**

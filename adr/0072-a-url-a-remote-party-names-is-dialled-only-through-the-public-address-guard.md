@@ -2,7 +2,22 @@
 
 - **Status:** accepted
 - **Authority:** `internal/httpx`
-- **Enforced-by:** `internal/httpx.TestAGuardedClientReachesNoAddressThatIsNotPublic`, `internal/httpx.TestTheGuardJudgesTheAddressItConnectsToNotTheName`, `internal/httpx.TestTheOperatorsProxyIsDialledAsItselfAndAnAddressItIsAskedForIsJudged`, `internal/httpx.TestAURLNamingTheProxysAddressDirectlyIsJudged`, `internal/httpx.TestAGuardedClientRefusesEverythingWhereTheGuardCannotBeInstalled`, `internal/httpx.TestOnlyAnAddressOnThePublicInternetIsPublic`, `internal/httpx.TestNoOtherPackageJudgesWhetherAnAddressIsPublic`, `internal/httpx.TestEveryReservedRangeIsNotPublic`, `internal/httpx.TestANAT64AddressIsJudgedByTheIPv4AddressItCarries`, `internal/httpx.TestAPrefixTheResolverNamesCountsOnlyWhereItCannotWidenTheRule`, `internal/httpx.TestANameIsPublicOnlyWhenEveryAddressItResolvesToIs`, `internal/httpx.TestTheGuardJudgesANAT64AddressByTheIPv4AddressItCarries`, `internal/httpx.TestTheGuardAsksForTheNetworksPrefixesOnlyWhereTheyCanChangeAVerdict`, `internal/httpx.TestTheGuardRacesTheAddressFamiliesOfAName`, `internal/github.TestADeliverableAddressIsOneGitHubReaches`
+- **Enforced-by:**
+  - `internal/httpx.TestAGuardedClientReachesNoAddressThatIsNotPublic`
+  - `internal/httpx.TestTheGuardJudgesTheAddressItConnectsToNotTheName`
+  - `internal/httpx.TestTheOperatorsProxyIsDialledAsItselfAndAnAddressItIsAskedForIsJudged`
+  - `internal/httpx.TestAURLNamingTheProxysAddressDirectlyIsJudged`
+  - `internal/httpx.TestAGuardedClientRefusesEverythingWhereTheGuardCannotBeInstalled`
+  - `internal/httpx.TestOnlyAnAddressOnThePublicInternetIsPublic`
+  - `internal/httpx.TestNoOtherPackageJudgesWhetherAnAddressIsPublic`
+  - `internal/httpx.TestEveryReservedRangeIsNotPublic`
+  - `internal/httpx.TestANAT64AddressIsJudgedByTheIPv4AddressItCarries`
+  - `internal/httpx.TestAPrefixTheResolverNamesCountsOnlyWhereItCannotWidenTheRule`
+  - `internal/httpx.TestANameIsPublicOnlyWhenEveryAddressItResolvesToIs`
+  - `internal/httpx.TestTheGuardJudgesANAT64AddressByTheIPv4AddressItCarries`
+  - `internal/httpx.TestTheGuardAsksForTheNetworksPrefixesOnlyWhereTheyCanChangeAVerdict`
+  - `internal/httpx.TestTheGuardRacesTheAddressFamiliesOfAName`
+  - `internal/github.TestADeliverableAddressIsOneGitHubReaches`
 - **Cost-when-tried:** the rule of which addresses the public internet routes was written twice, once in the artifact CDN fetch's dialer and once in GitHub's reachability check, and the two had already parted: the second admitted carrier-grade NAT, the documentation ranges and multicast, so it judged a webhook address on a tailnet's `100.x` range reachable by github.com, and an app would have been created pointing at an address no delivery can reach. Neither copy judged an IPv4 address behind the NAT64 prefix as the address it is, so `64:ff9b::a9fe:a9fe`, which a translator forwards to the metadata address, read as public to both, and a network-specific NAT64 prefix inside global unicast, which a DNS64 network's own resolver names, read as public whatever IPv4 address it carried.
 - **Tag-status:** unreleased
 

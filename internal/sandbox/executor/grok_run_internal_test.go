@@ -576,7 +576,8 @@ func TestAGrokSkillsDigestIsWhatGroksReadOfItReturns(t *testing.T) {
 // replaces the run's settings, bridge and hooks with them, and is removed, so
 // an edit to the box's settings between runs stands; an empty copy (the box
 // had none) leaves none; with no copy kept the settings are left as they are.
-// The script does this after the harness, before the record is read.
+// The script does this in grokput, after the harness, before the record is
+// read (and on a failure before it, or a teardown's signal).
 //
 // Mutations, each red: drop the restore from the script; keep the copy after
 // restoring; write an empty file where the box had none.
@@ -610,10 +611,14 @@ func TestAGrokRunPutsTheBoxsOwnSettingsBackOnceGrokExits(t *testing.T) {
 		}
 	}
 	script := grokScript(sandbox.RunRequest{Brief: "x"}, Session{ID: "s"}, Paths{Home: "/home/box"}, time.Second)
-	restore := strings.Index(script, grokRestoreConfig(Paths{Home: "/home/box"}))
-	if restore < 0 || restore < strings.Index(script, `wait "$harness"`) ||
-		restore > strings.Index(script, grokRecordMark) {
-		t.Errorf("the script puts the settings back at %d, want after the harness and before the record:\n%s",
-			restore, script)
+	put := strings.Index(script, "grokput() {")
+	line := script[max(put, 0):]
+	line = line[:strings.Index(line, "\n")]
+	held := strings.Index(line, strings.TrimSuffix(grokRestoreConfig(Paths{Home: "/home/box"}), "\n"))
+	restore := strings.Index(script, "\ngrokput; ")
+	inPut := put >= 0 && held > 0
+	if !inPut || restore < strings.Index(script, `wait "$harness"`) || restore > strings.Index(script, grokRecordMark) {
+		t.Errorf("the script puts the settings back (grokput at %d, its restore at %d, called at %d), want them in "+
+			"grokput, called after the harness and before the record:\n%s", put, held, restore, script)
 	}
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objectives"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -35,8 +36,9 @@ func TestSessionCarryBurnsOnlyOnFaults(t *testing.T) {
 			}
 			meter := sessionMeter{metrics: rec.WithClock(clock), objectives: objectives.NewMeter(nil, clock)}
 			for range 10 {
-				meter.SessionCarried(&executorkeep.NotContinued{Loss: c.loss, Instead: executorkeep.InsteadFresh})
-				meter.SessionCarried(nil)
+				meter.SessionCarried(&executorkeep.NotContinued{Loss: c.loss, Instead: executorkeep.InsteadFresh},
+					sandbox.HandoverHanded)
+				meter.SessionCarried(nil, "")
 			}
 			burning := false
 			for _, b := range meter.objectives.Burning() {
@@ -56,5 +58,33 @@ func TestSessionCarryBurnsOnlyOnFaults(t *testing.T) {
 				t.Errorf("counted %d losses for %s, want 10", counted, c.loss)
 			}
 		})
+	}
+}
+
+// A LOSS IS COUNTED BY WHAT ITS RUN WAS HANDED OF THE LOST SESSION'S SUMMARY:
+// `summary` is the brief's hand-over, and a brief that said nothing of one
+// handed none, so every loss carries one of the three values.
+//
+// Mutation: leave the attribute off, or count a silent brief under no value,
+// and a case goes red.
+func TestALossIsCountedByWhatItsRunWasHanded(t *testing.T) {
+	t.Parallel()
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	meter := sessionMeter{metrics: rec, objectives: objectives.NewMeter(nil, nil)}
+	lost := &executorkeep.NotContinued{Loss: executorkeep.LossTooLarge, Instead: executorkeep.InsteadFresh}
+	for _, h := range []sandbox.SummaryHandover{sandbox.HandoverHanded, sandbox.HandoverUnread, ""} {
+		meter.SessionCarried(lost, h)
+	}
+	counted := map[string]uint64{}
+	for _, s := range rec.Read() {
+		if s.Name == metrics.ExecutorSessionNotContinued {
+			counted[s.Attrs["summary"]] += s.Total
+		}
+	}
+	if len(counted) != 3 || counted["handed"] != 1 || counted["unread"] != 1 || counted["none"] != 1 {
+		t.Fatalf("counted %v by summary, want one each of handed, unread and none", counted)
 	}
 }

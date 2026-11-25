@@ -2,7 +2,31 @@
 
 - **Status:** accepted
 - **Authority:** `internal/sandbox`
-- **Enforced-by:** `internal/tools.TestACallToAToolAtNeedsApprovalNeverRunsUntilAPersonApprovesIt`, `internal/sandbox.TestAReplyAnswersOnlyARunWorkingForWhomItWasWrittenFor`, `internal/sandbox.TestAReplyWrittenForSomebodyElseLeavesTheRunParked`, `internal/engine.TestAReplyCarriesWhomItsAgentWroteItFor`, `internal/agent/builtin.TestAHeldCallIsRecordedAsADecisionWithItsArgumentsSealed`, `internal/agent/builtin.TestAHeldCallNamesTheDecisionItsTurnWasWokenFor`, `internal/worklet.TestAnAnswerGivesTheSeatADecisionOnlyWhereAPersonAnswered`, `internal/engine.TestTheAnswerThatWokeATurnIsStillItsAnswerWhenItResumes`, `internal/agent/builtin.TestAHeldCallIsNotAnsweredByAnswerExecutor`, `internal/sandbox.TestPendingStoreContract`, `internal/sandbox.TestAChatReplyNeverAnswersAHeldCall`, `internal/agent/runner.TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny`, `internal/agent/runner.TestAHeldCallIsMadeOnlyAsItWasApproved`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByItsSeatsLeadOrAnAdministrator`, `internal/api/mcpapi.TestAHeldCallIsAnsweredByNobodyElseAndOnce`, `internal/api/queries.TestAHeldCallIsListedForAnAdministratorAndNoMember`, `internal/mcp.TestAToolNothingSetsStartsAtTheLevelItsHintsGiveIt`, `internal/e2e.TestAHeldCallIsMadeOnceAfterItsApprovalAndTheRunCarriesOn`, `internal/engine.TestTheCallAPersonApprovedIsADeliveryOfItsTurn`, `internal/sandbox.TestOnlyWhoAQuestionWasPutToAnswersItInTheConversation`, `internal/sandbox.TestAReplyBySomebodyTheQuestionWasNotPutToLeavesTheRunParked`, `internal/sandbox.TestAQuestionsSeatAnswersOnlyWhileItsHolderMayAct`, `internal/engine.TestAReplysWriterIsTheSeatTheRegistryNames`, `internal/engine.TestASeatAnswersOnlyWhileItsHolderMayAct`
+- **Enforced-by:**
+  - `internal/tools.TestACallToAToolAtNeedsApprovalNeverRunsUntilAPersonApprovesIt`
+  - `internal/sandbox.TestAReplyAnswersOnlyARunWorkingForWhomItWasWrittenFor`
+  - `internal/sandbox.TestAReplyWrittenForSomebodyElseLeavesTheRunParked`
+  - `internal/engine.TestAReplyCarriesWhomItsAgentWroteItFor`
+  - `internal/agent/builtin.TestAHeldCallIsRecordedAsADecisionWithItsArgumentsSealed`
+  - `internal/agent/builtin.TestAHeldCallNamesTheDecisionItsTurnWasWokenFor`
+  - `internal/worklet.TestAnAnswerGivesTheSeatADecisionOnlyWhereAPersonAnswered`
+  - `internal/engine.TestTheAnswerThatWokeATurnIsStillItsAnswerWhenItResumes`
+  - `internal/agent/builtin.TestAHeldCallIsNotAnsweredByAnswerExecutor`
+  - `internal/sandbox.TestPendingStoreContract`
+  - `internal/sandbox.TestAChatReplyNeverAnswersAHeldCall`
+  - `internal/agent/runner.TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny`
+  - `internal/agent/runner.TestAHeldCallIsMadeOnlyAsItWasApproved`
+  - `internal/api/mcpapi.TestAHeldCallIsAnsweredByItsSeatsLeadOrAnAdministrator`
+  - `internal/api/mcpapi.TestAHeldCallIsAnsweredByNobodyElseAndOnce`
+  - `internal/api/queries.TestAHeldCallIsListedForAnAdministratorAndNoMember`
+  - `internal/mcp.TestAToolNothingSetsStartsAtTheLevelItsHintsGiveIt`
+  - `internal/e2e.TestAHeldCallIsMadeOnceAfterItsApprovalAndTheRunCarriesOn`
+  - `internal/engine.TestTheCallAPersonApprovedIsADeliveryOfItsTurn`
+  - `internal/sandbox.TestOnlyWhoAQuestionWasPutToAnswersItInTheConversation`
+  - `internal/sandbox.TestAReplyBySomebodyTheQuestionWasNotPutToLeavesTheRunParked`
+  - `internal/sandbox.TestAQuestionsSeatAnswersOnlyWhileItsHolderMayAct`
+  - `internal/engine.TestAReplysWriterIsTheSeatTheRegistryNames`
+  - `internal/engine.TestASeatAnswersOnlyWhileItsHolderMayAct`
 - **Cost-when-tried:** with only `allow` and `blocked`, an operator who wanted a person to look at each call to a destructive tool had one choice, blocking it, and the agent then could not do the work at all; and the executor's harness runs fully permissioned in its box, so its own permission prompts were never an option to fall back on.
 - **Tag-status:** unreleased
 

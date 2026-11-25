@@ -110,6 +110,22 @@ export function useIsCurrent(path: readonly string[]): boolean {
 }
 
 /**
+ * Whether an address is the page the reader is on now: its path, with every
+ * key of its query as given. A key the page holds beside them (a filter, a
+ * tab) does not make it another page.
+ */
+export function useIsShowing(
+  path: readonly string[],
+  query: Readonly<Record<string, string>>,
+): boolean {
+  const route = useContext(RouteContext);
+  return route
+    ? samePath(route.path, path) &&
+        Object.entries(query).every(([key, value]) => route.query.get(key) === value)
+    : false;
+}
+
+/**
  * The open state of a frame popover (Preferences, the engine panel): open only on
  * the route it was opened on, so going Back or to another screen closes it, as
  * the palette and the drawer already close. Outside a Router it never resets.

@@ -582,6 +582,21 @@ claude-code:
     - {contains: "weekly limit", window: weekly}
     - {contains: "Opus limit", window: model}
     - {contains: "Sonnet limit", window: model}
+  # The usage screen, which reads the plan with no model call (measured on
+  # 2.1.325: no turn, no API time, no cost). Only a login kept in files has one.
+  # A slash command it does not know goes to the model as a prompt, so the
+  # model's address is fenced to a closed local port with retries off.
+  plan_read:
+    args: ["-p", "/usage", "--output-format", "json"]
+    fence: {ANTHROPIC_BASE_URL: "http://127.0.0.1:9", CLAUDE_CODE_MAX_RETRIES: "0"}
+    text: ["result"]
+    turns: ["num_turns"]
+    windows:
+      - {opens: "Current session:", window: session, hours: 5}
+      - {opens: "Current week (all models):", window: weekly, hours: 168}
+    used_suffix: "% used"
+    reset_separator: "resets "
+    reset_unit: clock
   # A REFUSED SIGN-IN IS RECOGNISED BY ITS STATUS FIRST, as a spent plan is:
   # a refused key or token ends in a result event with `api_error_status:
   # 401`, and a refused token is first retried with a `system` `api_retry`

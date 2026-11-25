@@ -85,7 +85,8 @@ func putGrant(ctx context.Context, t *testing.T, member *kv.FleetStore) {
 	now := time.Now().UTC()
 	g := coord.OAuthGrant{Name: "search", Grant: uuid.New(), Client: "own",
 		ClientID: randomText(t, coord.MaxGrantAddressBytes), Issuer: randomText(t, coord.MaxGrantAddressBytes),
-		Resource: randomText(t, coord.MaxGrantAddressBytes), By: "jane-doe", ByKind: iam.ActorHuman, At: now,
+		Resource: randomText(t, coord.MaxGrantAddressBytes), Redirect: randomText(t, coord.MaxGrantAddressBytes),
+		By: "jane-doe", ByKind: iam.ActorHuman, At: now,
 		Failure: randomText(t, coord.MaxGrantWords), FailedAt: &now}
 	for range coord.MaxGrantScopes {
 		g.Scopes = append(g.Scopes, randomText(t, coord.MaxGrantScopeBytes))

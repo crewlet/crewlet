@@ -151,6 +151,21 @@ func grokHooks(paths Paths, notes, loads bool, skills []sandbox.Skill) string {
 	return b.String()
 }
 
+// grokNestedHook is the run's nested hook, where nested says the box holds the
+// note helper: a PostToolUse entry of its own running [grokNestedCommand],
+// not one more step of the notes' hook, since Grok Build 1.0.92 hands each
+// hook's answer as a reminder of its own cut at 10,000 characters on its own
+// (measured, row g4k2): the checkouts' text never takes the notes' room, nor
+// the notes' the checkouts'. Every call fires it; the adapter hands nothing
+// to a subagent's.
+func grokNestedHook(paths Paths, nested bool) string {
+	if !nested {
+		return ""
+	}
+	return fmt.Sprintf("[[hooks.PostToolUse]]\nhooks = [{ type = \"command\", command = %s, timeout = %d }]\n\n",
+		grokTOMLString(grokNestedCommand(paths)), grokHookTimeout)
+}
+
 // notesOffWhy is what switches a Grok Build run's reading of notes off once
 // its guard has passed ([grokGuard]): a note helper that could not reach the
 // run's notes route, which its hooks' errors name in the session.

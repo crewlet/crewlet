@@ -39,6 +39,7 @@ func TestAClosedRecordVersionGainsNoField(t *testing.T) {
 		19: {"Project.StuckAfterHours"},
 		20: {"Snapshot.Flow", "Subject.Kind flow"},
 		21: {"FlowRecord.Past"},
+		22: {"Snapshot.ByOwner", "Snapshot.DepartureLead", "Snapshot.LeftUnassigned"},
 	}
 	got := map[int][]string{}
 	for _, field := range worklet.VersionedFields() {

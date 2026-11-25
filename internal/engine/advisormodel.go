@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 // AdvisorModels is what the Advisor's model pass runs on (ADR-0164): the
@@ -40,13 +41,15 @@ func (m advisorModels) Deps(ctx context.Context, _ *config.Company) (modelpass.D
 	if err != nil {
 		return modelpass.Deps{}, err
 	}
-	key := picked.key
 	use := auxspend.Use{Stage: types.AuxStageBackground, Purpose: types.AuxAdvisorModel}
-	deps := modelpass.Deps{
-		Provider: recordedProvider{inner: picked.provider, key: key, use: use, ledger: m.e.auxSpend,
-			zone: basisOf(c, nil).zone, now: m.e.now, fleet: picked.fleet, begin: picked.inFlight(m.e.ledger)},
-		ProviderKey: key, Host: m.e.sessions, Now: m.e.now,
+	provider, err := picked.called(func(key string, inner llm.Provider) llm.Provider {
+		return recordedProvider{inner: inner, key: key, use: use, ledger: m.e.auxSpend,
+			zone: basisOf(c, nil).zone, now: m.e.now, fleet: picked.fleet, begin: picked.inFlight(m.e.ledger, key)}
+	})
+	if err != nil {
+		return modelpass.Deps{}, err
 	}
+	deps := modelpass.Deps{Provider: provider, ProviderKey: picked.key, Host: m.e.sessions, Now: m.e.now}
 	if b := m.e.backends; b != nil && b.Fleet != nil {
 		meter := &meter{budgets: m.e.budgets(), basis: basisOf(c, nil), now: m.e.now}
 		meter.observe(ctx)

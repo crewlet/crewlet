@@ -3,13 +3,13 @@ package searchconsole
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/vendortext"
-	"github.com/crewlet/crewlet/internal/words"
 )
 
 // identity is Search Console's half of a seat's own identity: a permission on
@@ -30,6 +30,7 @@ var identity = sync.OnceValue(func() *googlegrowth.Identity {
 			"history of who did what; the agent's own identity lets you remove it alone."),
 		Scopes: []string{scopeReadonly},
 		Reach:  reach,
+		AddURL: func(l googlegrowth.Listed) string { return usersURL + "?" + url.Values{"resource_id": {l.ID}}.Encode() },
 	}
 })
 
@@ -48,23 +49,14 @@ func needs(level growth.Level) googlegrowth.Need {
 // steps are an owner's steps in Search Console.
 func steps(g googlegrowth.Guided) []seataccess.GuideStep {
 	return []seataccess.GuideStep{
-		{Text: vendortext.Plain("Open Search Console and choose " + said(g.Entries) + ".")},
-		{Text: vendortext.Of(vendortext.W("Open "), vendortext.UI("Settings", "Users and permissions").At(usersURL),
-			vendortext.W("."))},
+		{Text: vendortext.Of(vendortext.W("Open each property below with its button, or go to "),
+			vendortext.UI("Search Console", "Settings", "Users and permissions").At(usersURL),
+			vendortext.W(" with the property chosen."))},
 		{Text: vendortext.Of(vendortext.W("Press "), vendortext.UI("Add user"), vendortext.W("."))},
 		g.Copy("Email address"),
 		{Text: vendortext.Of(append(append([]vendortext.Part{vendortext.UI("Permission"), vendortext.W(": ")},
 			vendortext.And(g.NeedNames...)...), vendortext.W(". "), vendortext.UI("Save"), vendortext.W("."))...)},
 	}
-}
-
-// said is IDs as one list a sentence says.
-func said(ids []string) string {
-	out := make([]words.Said, len(ids))
-	for i, id := range ids {
-		out[i] = words.Said(id)
-	}
-	return words.And(out)
 }
 
 // permission is each permission level sites.list answers, as the catalog
@@ -74,9 +66,9 @@ var permission = map[string]string{
 	"siteUnverifiedUser": roleUnverified,
 }
 
-// reach lists the identity's sites: each of the seat's properties is reached
-// where it is listed with a permission, which is its role.
-func reach(ctx context.Context, in googlegrowth.Probe) ([]googlegrowth.Reached, error) {
+// list is every site the token reaches, each with its permission, which is
+// its role there.
+func list(ctx context.Context, in googlegrowth.Lister) ([]googlegrowth.Listed, error) {
 	var page struct {
 		SiteEntry []struct {
 			SiteURL         string `json:"siteUrl"`
@@ -86,16 +78,38 @@ func reach(ctx context.Context, in googlegrowth.Probe) ([]googlegrowth.Reached, 
 	if err := in.Send.Do(ctx, http.MethodGet, searchAPI+"/webmasters/v3/sites", in.Token, nil, &page); err != nil {
 		return nil, err
 	}
-	levels := map[string]string{}
+	out := make([]googlegrowth.Listed, 0, len(page.SiteEntry))
 	for _, e := range page.SiteEntry {
-		levels[e.SiteURL] = permission[e.PermissionLevel]
+		l := googlegrowth.Listed{ID: e.SiteURL}
+		if role := permission[e.PermissionLevel]; role != "" {
+			l.Roles, l.Read = []string{role}, true
+		}
+		out = append(out, l)
+	}
+	return out, nil
+}
+
+// reach is the seat's sites as the identity's own listing finds them: each
+// reached where it is listed with a permission, which is its role.
+func reach(ctx context.Context, in googlegrowth.Probe) ([]googlegrowth.Reached, error) {
+	listed, err := list(ctx, googlegrowth.Lister{Company: in.Company, Token: in.Token, Send: in.Send})
+	if err != nil {
+		return nil, err
+	}
+	levels := map[string]string{}
+	listedAt := map[string]bool{}
+	for _, l := range listed {
+		listedAt[l.ID] = true
+		if len(l.Roles) > 0 {
+			levels[l.ID] = l.Roles[0]
+		}
 	}
 	out := make([]googlegrowth.Reached, 0, len(in.Scope))
 	for _, site := range in.Scope {
-		role, listed := levels[site]
+		role := levels[site]
 		r := googlegrowth.Reached{Entry: site}
 		switch {
-		case !listed:
+		case !listedAt[site]:
 			r.Said = "not among the properties it reaches"
 		case role == roleUnverified || role == "":
 			r.Said = "listed with no permission"

@@ -17,6 +17,7 @@ import type {
   AccessAnswer,
   AccessBox,
   AccessIdentity,
+  AccessIdentityEntry,
   AccessIdentityGuide,
   AccessIdentityMode,
   AccessIdentityStatus,
@@ -502,6 +503,7 @@ export function appStoreConnectAnswer(): AccessAnswer {
         scope: ["6763222842", "1234567890"],
         scope_names: { "6763222842": "Field Notes", "1234567890": "Trail Maps" },
         scope_details: { "6763222842": "com.example.notes", "1234567890": "com.example.maps" },
+        scope_typed: "^[0-9]{1,20}$",
       },
     ],
     seats: [
@@ -608,7 +610,9 @@ export const ASC_GUIDE: AccessIdentityGuide = {
 const IDENTITY_LABEL: Record<AccessIdentityStatus, string> = {
   company: "Company's",
   none: "Not set up",
+  preparing: "Getting ready",
   ready: "Ready",
+  unchecked: "Role not checked",
   wrong_role: "Wrong role",
   wrong_team: "Wrong team",
   refused: "Refused",
@@ -1675,4 +1679,201 @@ export function googleCloudAnswer(
       }),
     ],
   };
+}
+
+/** Google Analytics' property ID shape, as the engine sends it (config.GoogleAnalyticsPropertyPattern). */
+export const GA_PROPERTY_SHAPE = "^[0-9]{1,20}$";
+
+/** The properties Crewlet's company reader sees: two accounts, by name. */
+export const GA_PROPERTIES: Record<string, { name: string; account: string }> = {
+  "412345678": { name: "Field Notes web", account: "Example Apps" },
+  "412345679": { name: "Field Notes app", account: "Example Apps" },
+  "398765432": { name: "Trail Maps", account: "Trail Co" },
+};
+
+const GA_ADMIN = "https://analytics.google.com/analytics/web/";
+
+/** Google Analytics with the reader's listing, or none (`listed` empty), and Marketer's seat. */
+export function googleAnalyticsAnswer(
+  listed: string[] = Object.keys(GA_PROPERTIES),
+  unlisted?: string,
+): AccessAnswer {
+  const names: Record<string, string> = {};
+  const groups: Record<string, string> = {};
+  for (const id of listed) {
+    names[id] = GA_PROPERTIES[id]!.name;
+    groups[id] = GA_PROPERTIES[id]!.account;
+  }
+  return {
+    kind: "google_analytics",
+    revision: "rev-3",
+    syncing: false,
+    options: [
+      {
+        lane: "google_analytics",
+        live: false,
+        levels: [
+          { id: "read", name: "Read" },
+          { id: "operate:marketer", name: "Marketer", administers: true },
+          { id: "operate", name: "Operate", administers: true },
+          { id: "administer", name: "Administer", administers: true },
+        ],
+        scoped: true,
+        scope_required: true,
+        scope_live: unlisted === undefined,
+        scope_open: true,
+        scope_typed: GA_PROPERTY_SHAPE,
+        ...(listed.length > 0 ? { scope: listed, scope_names: names, scope_groups: groups } : {}),
+        ...(unlisted ? { scope_unlisted: unlisted } : {}),
+      },
+    ],
+    seats: [seat("marketer", "Digital Marketer", { google_analytics: offLane("read") })],
+  };
+}
+
+/** Google Analytics' sheet for Digital Marketer's identity, its entries as the last check found them. */
+export function gaGuide(entries: AccessIdentityEntry[], readyAt?: string): AccessIdentityGuide {
+  return {
+    vendor: "Google Analytics",
+    noun: "Google identity",
+    records: "its changes under its own email in the change history",
+    why: "Google Analytics lets Digital Marketer in as its own Google identity and records its changes under its own email in the change history.",
+    name: GA_IDENTITY,
+    name_rule: "Crewlet made it; it cannot be renamed.",
+    name_what: "Google identity",
+    role: "Editor",
+    steps: [
+      {
+        text: [
+          { text: "Open each property below with its button, or go to " },
+          { ui: ["Google Analytics", "Admin", "Property access management"], url: GA_ADMIN },
+          { text: " with the property chosen." },
+        ],
+      },
+      { text: [{ text: "Press " }, { ui: ["+", "Add users"] }, { text: "." }] },
+      {
+        text: [{ ui: ["Email address"] }, { text: ":" }],
+        copy: { label: "identity's email", value: GA_IDENTITY },
+      },
+      {
+        text: [
+          { text: "Untick " },
+          { ui: ["Notify new users by email"] },
+          { text: ": nobody reads the identity's mail." },
+        ],
+      },
+      {
+        text: [
+          { ui: ["Role"] },
+          { text: ": " },
+          { ui: ["Editor"] },
+          { text: ". Press " },
+          { ui: ["Add"] },
+          { text: "." },
+        ],
+      },
+    ],
+    entries,
+    wider: {
+      label: "Add it once to the account instead",
+      does: [
+        { text: "Under " },
+        { ui: ["Account access management"] },
+        {
+          text: ", one add covers every property of the account, now and later. That is broader access: the identity reaches every property there, though Crewlet still holds the agent to its own.",
+        },
+      ],
+      links: [
+        {
+          label: "Example Apps",
+          url: `${GA_ADMIN}#/a301p412345678/admin/suiteusermanagement/account`,
+        },
+      ],
+    },
+    ...(readyAt ? { ready_at: readyAt } : {}),
+    note: [{ text: "Only an " }, { ui: ["Administrator"] }, { text: " can add users." }],
+    back: {
+      kind: "nothing",
+      text: [{ text: "Nothing to bring back: Crewlet checks Google Analytics as the identity." }],
+    },
+    make: {
+      label: "Add it for me",
+      does: [{ text: "With a Google Analytics Administrator's sign-in, Crewlet adds it." }],
+      unavailable: "A Google Analytics Administrator signs in on the Settings tab first.",
+    },
+    checks: [
+      { id: "token", label: `Sign in as ${GA_IDENTITY}` },
+      { id: "reach", label: "Find each of the agent's properties" },
+      { id: "role", label: "Read its role on each property" },
+    ],
+  };
+}
+
+export const GA_IDENTITY = "crewlet-marketer-0a1b2c@example-crewlet-id.iam.gserviceaccount.com";
+
+/** One Analytics property row as the engine lists it in the sheet. */
+export function gaEntry(id: string, state: AccessIdentityEntry["state"]): AccessIdentityEntry {
+  const p = GA_PROPERTIES[id]!;
+  return {
+    id,
+    name: p.name,
+    group: p.account,
+    state,
+    add_url: `${GA_ADMIN}#/a301p${id}/admin/suiteusermanagement/property`,
+    group_url: `${GA_ADMIN}#/a301p${id}/admin/suiteusermanagement/account`,
+  };
+}
+
+/** Digital Marketer at operate on two properties, its identity in one state, its row folded in as the engine folds it. */
+export function googleAnalyticsIdentityAnswer(
+  status: "preparing" | "none" | "unchecked" | "ready",
+  entries: AccessIdentityEntry[] = [
+    gaEntry("412345678", "missing"),
+    gaEntry("412345679", "missing"),
+  ],
+): AccessAnswer {
+  const answer = googleAnalyticsAnswer();
+  const readyAt = status === "preparing" ? new Date(Date.now() + 70_000).toISOString() : undefined;
+  const said: Record<typeof status, string> = {
+    preparing:
+      "Getting ready: Crewlet made Digital Marketer's Google identity a moment ago; Google Analytics can find it in about a minute, then add it there.",
+    none: "Needs you: add Digital Marketer's own Google identity in Google Analytics. Until then Google Analytics refuses its calls.",
+    unchecked:
+      "Digital Marketer reaches every one of its properties, but its role on Field Notes web (412345678) and Field Notes app (412345679) is not checked: Google Analytics shows it only to a Google Analytics Administrator. Make sure it holds Editor there in Google Analytics. With a Google Analytics Administrator's sign-in on the Settings tab, Crewlet checks it on every pass.",
+    ready: `Google Analytics sees Digital Marketer's own Google identity, ${GA_IDENTITY}.`,
+  };
+  const row: Record<typeof status, [AccessSeatLane["status"], string]> = {
+    preparing: ["preparing", "Getting ready"],
+    none: ["needs_you", "Needs you"],
+    unchecked: ["role_unchecked", "Role not checked"],
+    ready: ["in_sync", "In sync"],
+  };
+  const works = status === "unchecked" || status === "ready";
+  answer.seats[0]!.lanes.google_analytics = {
+    ...onLane({ variable: "" }),
+    desired: { enabled: true, level: "operate", scope: ["412345678", "412345679"] },
+    observed: {
+      exists: true,
+      enabled: true,
+      account: GA_IDENTITY,
+      level: "operate",
+      scope: ["412345678", "412345679"],
+    },
+    status: row[status][0],
+    status_label: row[status][1],
+    identity: {
+      ...NO_ACTIONS,
+      offered: true,
+      mode: OWN_MODE,
+      holds: "own",
+      status,
+      status_label: IDENTITY_LABEL[status],
+      needs: "Editor",
+      said: said[status],
+      set_up: !works,
+      ...(works ? { name: GA_IDENTITY, id: GA_IDENTITY } : {}),
+      guide: gaGuide(entries, readyAt),
+    },
+  };
+  return answer;
 }

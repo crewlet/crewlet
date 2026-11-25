@@ -194,13 +194,16 @@ type copilotEvents struct {
 	seq   int
 
 	// marked is whether the script's usage mark was read; spent what the
-	// records after it state, requests how many, mainRequests how many of them
-	// name no subagent, and window the least prompt budget one stated.
-	marked       bool
-	spent        copilotUsageRecord
-	requests     int
-	mainRequests int
-	window       int64
+	// records after it state, requests how many, and window the least prompt
+	// budget one stated.
+	marked   bool
+	spent    copilotUsageRecord
+	requests int
+	window   int64
+	// compactions is the compactions the run's stream started, each one model
+	// request its usage records leave out ([copilotEvents.Requests]).
+	compactions int
+	undecidedLines
 
 	// blocked is a refusal of the static budget ([copilotStaticBlocked]),
 	// blockedLate one after a request of the attempt was answered (answered),
@@ -234,7 +237,19 @@ func (d *copilotEvents) Entries(end bool) []string {
 }
 
 // Skipped implements [Decoder].
-func (d *copilotEvents) Skipped(n int64, bound int) { d.transcript.skip(n, bound) }
+func (d *copilotEvents) Skipped(line LongLine) {
+	d.transcript.skip(line.Size, line.Bound)
+	switch lineType(line) {
+	case "session.usage_record":
+		if d.marked {
+			d.requests++
+		}
+	case "session.compaction_start":
+		d.compactions++
+	case "":
+		d.undecided++
+	}
+}
 
 // Line implements [Decoder].
 func (d *copilotEvents) Line(line []byte) {
@@ -314,6 +329,8 @@ func (d *copilotEvents) Line(line []byte) {
 		d.guarded = true
 	case copilotUsageMark:
 		d.marked = true
+	case "session.compaction_start":
+		d.compactions++
 	case "session.usage_record":
 		// ONLY AFTER THE MARK: the script adds the run's own records there,
 		// and a stream that printed one of its own would be counted twice.
@@ -324,9 +341,6 @@ func (d *copilotEvents) Line(line []byte) {
 			d.spent.CacheReadTokens += u.CacheReadTokens
 			d.spent.CacheWriteTokens += u.CacheWriteTokens
 			d.requests++
-			if ev.AgentID == "" {
-				d.mainRequests++
-			}
 			if u.MaxPromptTokens > 0 && (d.window == 0 || u.MaxPromptTokens < d.window) {
 				d.window = u.MaxPromptTokens
 			}
@@ -464,6 +478,28 @@ func (d *copilotEvents) reportedWindow() int64 { return d.window }
 // prints as its run ends, with its exit status.
 func (d *copilotEvents) Ended() bool { return d.result }
 
+// Requests implements [Decoder]: the usage records of the session's own
+// events the script appends, one a model request, a subagent's included, and
+// the compactions the stream started, whose summary request records no usage.
+// Measured on 1.0.114 against a stand-in: 31 records for 31 requests, none for
+// a 429 or a 500 it retried; a run compacting before each request made 1,665,
+// 833 recorded and 832 compactions.
+func (d *copilotEvents) Requests() int { return d.requests + d.compactions }
+
+// InFlight implements [Decoder]: none, as the extension aborts before the
+// next request (measured on 1.0.114: a cap of 3, 3 requests).
+func (d *copilotEvents) InFlight() int { return 0 }
+
+// unheld implements [enforcerReporter]: a run its script named a cap for,
+// whose extension never said it ran.
+func (d *copilotEvents) unheld() string {
+	if d.capTurns <= 0 || d.armed {
+		return ""
+	}
+	return fmt.Sprintf("this run had a turn cap of %d model turns, and the extension that enforces it never "+
+		"ran, so the cap was not enforced: %s", d.capTurns, (Copilot{}).notesOffWhy())
+}
+
 // Result implements [Decoder]: the answer, and how the run ended.
 //
 // A RUN WITH A CAP WHOSE EXTENSION NEVER RAN fails whatever it answered: its
@@ -483,7 +519,7 @@ func (d *copilotEvents) Result() sandbox.Result {
 		return sandbox.Result{Error: "the harness's output is not its event stream, so it never reported how its run ended"}
 	}
 	text := strings.TrimSpace(d.answer)
-	res := sandbox.Result{Text: text, SessionID: d.sessionID, DeliveredRefs: deliveredRefs(text), Turns: d.requests}
+	res := sandbox.Result{Text: text, SessionID: d.sessionID, DeliveredRefs: deliveredRefs(text), Turns: d.Requests()}
 	res.Transcript, res.TranscriptElidedLines, res.TranscriptElidedBytes = d.transcript.result()
 	if spent, stated := d.runSpend(); stated {
 		res = spent.on(res)
@@ -494,15 +530,9 @@ func (d *copilotEvents) Result() sandbox.Result {
 		res.Error = d.refused
 	case d.blocked && !d.blockedLate:
 		res.Error = copilotLaunchRefused
-	case d.capTurns > 0 && d.mainRequests > d.capTurns:
-		// THE RECORD'S OWN COUNT, whatever the extension said: a policy that
-		// let it run and stopped its hooks leaves its line and no cap.
-		res.Error = fmt.Sprintf("the turn cap of %d was not enforced: the run made %d model requests",
-			d.capTurns, d.mainRequests)
-	case d.capTurns > 0 && !d.armed:
+	case d.unheld() != "":
 		// FAILED CLOSED: the run went on with nothing holding it to its cap.
-		res.Error = fmt.Sprintf("this run had a turn cap of %d model turns, and the extension that enforces "+
-			"it never ran, so the cap was not enforced: %s", d.capTurns, (Copilot{}).notesOffWhy())
+		res.Error = d.unheld()
 	case d.unbridged != "":
 		res.Error, res.Unbridged = d.unbridged, true
 	case d.guarded && !d.armed:

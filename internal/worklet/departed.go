@@ -139,18 +139,16 @@ type departedItem struct {
 	question bool
 }
 
-// RehomeDeparted re-homes every open item d's seat still holds, by ADR-0162's
-// rule, one write per item. An item in progress with a live side effect goes
-// to its lead with its status kept, and any other back to `todo`, unassigned;
-// an item in review goes to its lead; an item to do is unassigned. The lead is
-// the project's, else the routing unit's; an item neither leads goes back to
-// `todo`, unassigned, and is logged.
+// RehomeDeparted re-homes every open item d's seat still holds, one write per
+// item, by ADR-0162's rule: an item in progress with a live side effect, or in
+// review, goes to its lead (the project's, else the routing unit's); any other
+// is unassigned, back in `todo`, and one neither leads is logged. An item left
+// unassigned names no lead to fall back on: each lead is told once, on its last
+// such item's record, which lists them all.
 //
-// ONLY THE ENGINE'S WRITER, because the write is the engine's and its history
-// row says so. Every item is written conditioned on the version it was read
-// at: one somebody changed since is left out of the answer and reported in the
-// error, which the retirement retries, and an item no longer the seat's by
-// then is not listed again.
+// ONLY THE ENGINE'S WRITER, as its history row says. Each item is written at the
+// version it was read at: one changed since is left out and reported in the
+// error, which the retirement retries.
 func (w *Writer) RehomeDeparted(ctx context.Context, d Departure) ([]Rehomed, error) {
 	switch {
 	case w.ActorKind != AuthorSystem:
@@ -166,13 +164,34 @@ func (w *Writer) RehomeDeparted(ctx context.Context, d Departure) ([]Rehomed, er
 	if err != nil {
 		return nil, err
 	}
+	plans := make([]rehomePlan, len(items))
+	carrier := map[string]int{}
+	for i, item := range items {
+		leads := w.leadsOf(item.task, d.Handle)
+		plans[i] = rehomePlan{item: item, moved: rehoming(item.task, item.effects(item.task, d.Runs), leads)}
+		if plans[i].moved.To == "" {
+			if plans[i].lead = cmp.Or(leads.project, leads.unit); plans[i].lead != "" {
+				carrier[plans[i].lead] = i
+			}
+		}
+	}
 	var out []Rehomed
 	var errs []error
-	for _, item := range items {
-		moved, err := w.rehomeOne(ctx, d, item, now)
+	told := map[string][]string{}
+	write := func(p rehomePlan, carries bool) {
+		var batch []string
+		if carries {
+			batch = append(slices.Clone(told[p.lead]), cmp.Or(p.item.task.Key, p.item.task.ID))
+		}
+		moved, err := w.rehomeOne(ctx, d, p, now, batch)
 		if err != nil {
+			if len(batch) > 1 {
+				log.WarnContext(ctx, "tracker_departed_work_untold", "handle", d.Handle,
+					"lead", p.lead, "items", batch, "detail", "the record that tells the lead of "+
+						"these unassigned items failed; the retry tells it of what it re-homes")
+			}
 			errs = append(errs, err)
-			continue
+			return
 		}
 		if moved.Leaderless {
 			log.WarnContext(ctx, "tracker_departed_work_unled", "handle", d.Handle,
@@ -180,9 +199,31 @@ func (w *Writer) RehomeDeparted(ctx context.Context, d Departure) ([]Rehomed, er
 				"detail", "a removed seat's item would have gone to its lead, and nobody "+
 					"leads its project or its routing unit; it is back in todo, unassigned")
 		}
+		if p.lead != "" {
+			told[p.lead] = append(told[p.lead], cmp.Or(moved.Key, moved.ID))
+		}
 		out = append(out, moved)
 	}
+	// Each lead's carrier last, so its list names what the others wrote.
+	for i, p := range plans {
+		if p.lead == "" || carrier[p.lead] != i {
+			write(p, false)
+		}
+	}
+	for i, p := range plans {
+		if p.lead != "" && carrier[p.lead] == i {
+			write(p, true)
+		}
+	}
 	return out, errors.Join(errs...)
+}
+
+// rehomePlan is one item of a departure, where [rehoming] sends it, and the
+// lead told of it when it is left unassigned.
+type rehomePlan struct {
+	item  departedItem
+	moved Rehomed
+	lead  string
 }
 
 // departedWork reads the open items handle holds, each with its side effects.
@@ -217,20 +258,26 @@ func (w *Writer) departedWork(ctx context.Context, handle string, now time.Time)
 	return out, nil
 }
 
-// rehomeOne writes one item where [rehoming] sends it.
-func (w *Writer) rehomeOne(ctx context.Context, d Departure, item departedItem,
-	now time.Time) (Rehomed, error) {
+// rehomeOne writes one item where its plan sends it. Its record names no lead to
+// fall back on; one that carries a batch tells its lead of every item listed.
+func (w *Writer) rehomeOne(ctx context.Context, d Departure, p rehomePlan,
+	now time.Time, batch []string) (Rehomed, error) {
 
-	task := item.task
-	moved := rehoming(task, item.effects(task, d.Runs), w.leadsOf(task, d.Handle))
+	task, moved := p.item.task, p.moved
 	after := task
 	after.Assignee, after.Status, after.StatusGroup = moved.To, moved.Status, moved.Status.Group()
 	patch := TaskPatch{Assignee: &moved.To}
 	if moved.Status != task.Status {
 		patch.Status = &moved.Status
 	}
-	notify := Wake{Kind: ChangeAssignee, Before: task, After: after,
-		Excerpt: departureNote(d.Handle, task, moved, now, w.zone())}.Notify(w.Leads)
+	note := departureNote(d.Handle, task, moved, now, w.zone())
+	if len(batch) > 1 {
+		note += " " + batchNote(d.Handle, batch)
+	}
+	notify := Wake{Kind: ChangeAssignee, Before: task, After: after, Excerpt: note}.Notify(nil)
+	if batch != nil {
+		notify.Snapshot.DepartureLead = p.lead
+	}
 	op := statelog.DeriveOpID(d.At, "rehome-"+task.ID, "crewlet.tracker.rehome",
 		d.Handle, task.ID, strconv.FormatUint(task.Version, 10))
 	result, err := w.UpdateTask(ctx, op, task.ID, task.Project, task.Version, patch,
@@ -339,6 +386,24 @@ func departureNote(handle string, task Task, moved Rehomed, now time.Time,
 	}
 	return left + " " + moved.To + " holds it now, still in progress, because " +
 		words.And(because) + "."
+}
+
+// batchNote lists the items a departure left without an owner in one lead's
+// charge, as many keys as fit the excerpt beside the item's own note.
+func batchNote(handle string, keys []string) string {
+	const room = MaxExcerpt / 2
+	shown, used := keys, 0
+	for i, key := range keys {
+		if used += len(key) + 2; used > room {
+			shown = append(slices.Clone(keys[:i]), fmt.Sprintf("%d more", len(keys)-i))
+			break
+		}
+	}
+	said := make([]words.Said, len(shown))
+	for i, key := range shown {
+		said[i] = words.Said(key)
+	}
+	return fmt.Sprintf("%d items %s held have no owner now: %s.", len(keys), handle, words.And(said))
 }
 
 // effectWords is how a history note says one side effect.

@@ -214,15 +214,16 @@ func TestEveryRefusalOfACaptureIsStampedWithItsLoss(t *testing.T) {
 
 // carrySpy is a [SessionMeter] that keeps what it was told.
 type carrySpy struct {
-	mu      sync.Mutex
-	told    []*executorkeep.NotContinued
-	trimmed []string
+	mu        sync.Mutex
+	told      []*executorkeep.NotContinued
+	handovers []SummaryHandover
+	trimmed   []string
 }
 
-func (s *carrySpy) SessionCarried(verdict *executorkeep.NotContinued) {
+func (s *carrySpy) SessionCarried(verdict *executorkeep.NotContinued, handover SummaryHandover) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.told = append(s.told, verdict)
+	s.told, s.handovers = append(s.told, verdict), append(s.handovers, handover)
 }
 
 func (s *carrySpy) SessionTrimmed(harness string) {
@@ -392,4 +393,22 @@ func (t *tellings) said() []told {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return slices.Clone(t.told)
+}
+
+// A LAUNCH'S HAND-OVER IS COUNTED BY THE BRIEF ITS RUN READ: the continuation's
+// where the box took the session up, the fresh one's where it fell back to a
+// session of its own, which its own telling names (restore_failed).
+//
+// Mutation: count the continuation's whatever the box did, and a case goes red.
+func TestAHandOverIsCountedByTheBriefItsRunRead(t *testing.T) {
+	t.Parallel()
+	spy := &carrySpy{}
+	c := &Coordinator{sessionMeter: spy}
+	facts := LaunchRecord{Brief: BriefContinuedNewBox, Handover: HandoverNone, FreshHandover: HandoverHanded}
+	verdict := executorkeep.Lost(executorkeep.LossCaptureLate, executorkeep.InsteadOlder, "")
+	c.meterCarry(facts, Result{}, verdict)
+	c.meterCarry(facts, Result{FellBack: "the import failed"}, verdict)
+	if got := spy.handovers; len(got) != 2 || got[0] != HandoverNone || got[1] != HandoverHanded {
+		t.Fatalf("counted the hand-overs %v, want the continuation's, then the fresh brief's", got)
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -207,7 +208,7 @@ const ElectionRetryHint = 4 * time.Second
 // barrier budget, the one thing measured about the stall. A reader sent back
 // sooner only waits out a budget of its own behind the same held write. Not
 // an election's four seconds: there is no election.
-const StalledRetryHint = DefaultBarrierBudget
+const StalledRetryHint = SoloBarrierBudget
 
 // Refused is a read that was not served.
 type Refused struct {
@@ -938,12 +939,22 @@ func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health,
 			case ctx.Err() != nil:
 				// A CALLER THAT GAVE UP IS NOT A MISSED QUORUM: as
 				// `no_quorum` it would be counted, handed an election's
-				// hint and graphed as a majority failing to agree.
+				// hint and graphed as a majority failing to agree. Told
+				// so where the log had no leader meanwhile.
+				var none *jsprovision.NoLeader
+				if errors.As(err, &none) {
+					return Position{}, Position{}, false, err
+				}
 				return Position{}, Position{}, false, ctx.Err()
 			case ranOut:
 				code := r.index.unconfirmed(true)
 				stalled := ""
-				if code != RefuseNoQuorum {
+				var none *jsprovision.NoLeader
+				switch {
+				case errors.As(err, &none):
+					stalled = " — the " + none.Group + " stream had no leader, a broker election " +
+						"outlasting the wait"
+				case code != RefuseNoQuorum:
 					stalled = " — the log's one member had not stored it, its write stalled"
 				}
 				return Position{}, Position{}, false, &Refused{
@@ -955,7 +966,10 @@ func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health,
 				}
 			}
 			timedOut := errors.Is(err, context.DeadlineExceeded)
-			unconfirmed := r.index.unconfirmed(timedOut)
+			// A BROKER THAT ANSWERED IT HAS NO LEADER did not stall, though
+			// the barrier spent its whole budget hearing so.
+			var none *jsprovision.NoLeader
+			unconfirmed := r.index.unconfirmed(timedOut && !errors.As(err, &none))
 			refusal := barrierRefusal(q.Level, r.index.subject, unconfirmed, err)
 			// Only a barrier that ran its own whole budget spares the next node
 			// appending behind it; one refused at once spent nothing.
@@ -1045,6 +1059,20 @@ func unreadHealth(err error) string {
 // reaches every holder of the question's grant, and the append logs the
 // error once ([frameworkAppendError]).
 func barrierRefusal(level ReadLevel, subject string, unconfirmed ReadRefusal, err error) *Refused {
+	var none *jsprovision.NoLeader
+	if errors.As(err, &none) {
+		what := "was not confirmed"
+		if unavailable := (*Unavailable)(nil); errors.As(none.Answer, &unavailable) &&
+			unavailable.Reason == ReasonUsageUnknown {
+			what = "was never appended, the log's usage unread to admit it"
+		}
+		return &Refused{
+			Code: unconfirmed, Level: level,
+			Detail: fmt.Sprintf("the barrier on %s %s, so no position could be established as "+
+				"the log's end: the %s stream had no leader for the whole of the barrier's "+
+				"budget, a broker election outlasting it", subject, what, none.Group),
+		}
+	}
 	var unavailable *Unavailable
 	if errors.As(err, &unavailable) {
 		switch unavailable.Reason {

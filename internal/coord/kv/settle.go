@@ -87,14 +87,16 @@ func (c class) sized() int {
 }
 
 // keyClass is one class and the keys it holds: a filter in the key's
-// vocabulary ("body.*"), never the bucket's subject.
+// vocabulary ("body.>"), never the bucket's subject.
 type keyClass struct {
 	keys  string
 	class class
 }
 
 // holding is a bucket's key classes, declared where it is opened: the first
-// whose keys match a key is its class, and rest is every other key's. It
+// whose keys match a key is its class, and rest is every other key's, the one
+// class of a bucket that declares no other, and in one that does a small
+// value no key the store writes reaches (TestFleetContract). It
 // bounds every write ([settledBucket.carriedBack]) and times every read
 // ([leaderReader.leaderFor]), pass and watch ([settledBucket.quiet]). Per
 // bucket, never per key name: one name means different things in different
@@ -136,11 +138,6 @@ func (h holding) most(keys string) class {
 }
 
 var (
-	// undeclared is a bucket's that declares no class yet: held to
-	// [coord.MaxValueBytes] and read at the term, as its records of a few
-	// KiB by their fields allow but nothing holds them to. #1814 declares
-	// each bucket's classes and then makes the default SmallValueBytes.
-	undeclared = class{bound: coord.MaxValueBytes, reply: replyTerm}
 	// runValue is a sandbox run's record or part, budgeted to
 	// [coord.MaxValueBytes] (internal/sandbox's RowBytes), whose reads decide
 	// the run's changes.
@@ -152,18 +149,58 @@ var (
 	// to [coord.MaxValueBytes]; no writer waits on its reads.
 	bodyClass = class{bound: coord.MaxValueBytes, reply: replyCarrying}
 
-	// runsHolding is the runs bucket's: every key a run's value.
-	runsHolding = holding{rest: runValue}
+	// runsHolding is the runs bucket's: a run's record and each of its parts,
+	// and a minted session's claim beside them, a session id, a turn and a
+	// job ([coord.MaxSessionClaimPartBytes]) read at the term, never timed as
+	// a run's value. Each part is a class of its own, so no key of another
+	// family under a turn's shape is taken for one. No key the store writes
+	// falls to the rest.
+	runsHolding = holding{classes: append([]keyClass{
+		{keys: coord.DocumentFilter(coord.SessionClaimClass), class: smallValue},
+		{keys: runRecordKeys, class: runValue},
+	}, runPartClasses()...), rest: smallValue}
 	// configHolding is the config bucket's: the pointer, and the bodies it
-	// names.
+	// names. No key the store writes falls to the rest.
 	configHolding = holding{classes: []keyClass{
 		{keys: activationKey, class: pointerClass},
-		{keys: bodyPrefix + "*", class: bodyClass},
-	}, rest: undeclared}
-	// undeclaredHolding is every bucket's but the runs, the config, the
-	// positions register, the uploads, the chat reads, the secrets, the three
-	// atlas buckets, the integrations and the node status.
-	undeclaredHolding = holding{rest: undeclared}
+		{keys: coord.DocumentFilter(coord.BodyClass), class: bodyClass},
+	}, rest: smallValue}
+
+	// THE SMALL BUCKETS (ADR-0175, "Every other bucket holds small values"):
+	// every key a record of a few fields, each bounded where it is written,
+	// read at the term. internal/coord/kv's widest-record test counts each.
+
+	// counterHolding is the rate windows', the counter windows' and the token
+	// counters' buckets: a window's count, or a counter's slot per period, a
+	// label period.At cuts, a count and an instant.
+	counterHolding = holding{rest: smallValue}
+	// claimHolding is the delivery claims', the scheduled fires', the
+	// operation-id rebases' and the event custody's buckets: a claim of one
+	// or two instants, and custody's keeper, a node's id.
+	claimHolding = holding{rest: smallValue}
+	// ledgerHolding is the completion ledger's: a completion's detail
+	// ([coord.MaxLedgerDetailBytes]) and instant, or a seen-through mark
+	// ([coord.MaxSeenMarkBytes]).
+	ledgerHolding = holding{rest: smallValue}
+	// applyStatusHolding is the config-apply status bucket's: a node's three
+	// revisions and status ([coord.MaxApplyNameBytes]) and its error, cut to
+	// [coord.MaxApplyErrorLength], 12 KB were every byte of it escaped.
+	applyStatusHolding = holding{rest: smallValue}
+	// chatterHolding is the agent channels', the thread follows' and the seat
+	// mailboxes' buckets: a seat handle or two ([iam.MaxLogin]), a reason
+	// word ([coord.MaxFollowReasonBytes]), a count and instants.
+	chatterHolding = holding{rest: smallValue}
+	// objectsHolding is the objects bucket's: the agreed store's identity,
+	// 13,292 bytes at most (internal/config's S3 bounds), and the
+	// collector's and the trash reaper's reports, each cut to fit.
+	objectsHolding = holding{rest: smallValue}
+	// leaseHolding is the seat and presence leases' bucket's and the duties':
+	// a lease's record, three names at [coord.MaxLeaseNameBytes], a claim's
+	// UUID and a Meta at [coord.MaxLeaseMetaBytes], 9,190 bytes at its widest.
+	leaseHolding = holding{rest: smallValue}
+	// epochsHolding is the epochs bucket's: a resource, its fencing epoch and
+	// its preferred node, two names at [coord.MaxLeaseNameBytes].
+	epochsHolding = holding{rest: smallValue}
 
 	// The positions register's classes, each at the bound its writer holds
 	// a record to (ADR-0175, "The positions register declares its classes"):
@@ -175,6 +212,7 @@ var (
 	accessReviewValue  = class{bound: coord.MaxAccessReviewBytes, reply: replyDeciding}
 	seatAccessValue    = class{bound: coord.MaxSeatAccessBytes, reply: replyDeciding}
 	homeBoardValue     = class{bound: coord.MaxHomeBoardRecordBytes, reply: replyDeciding}
+	instructionsValue  = class{bound: coord.MaxAssistantInstructionsRecordBytes, reply: replyDeciding}
 	modelCheckValue    = class{bound: coord.MaxModelCheckBytes, reply: replyDeciding}
 	oauthGrantValue    = class{bound: coord.MaxOAuthGrantBytes, reply: replyDeciding}
 	oauthSignInValue   = class{bound: coord.MaxOAuthSignInBytes, reply: replyDeciding}
@@ -185,7 +223,7 @@ var (
 	// family it holds, each record's widest within its bound. Every class a
 	// boot reads (a node's row, a floor, a capacity window, an admission) is
 	// small, read at the term, so no boot window moves. No key the store
-	// writes falls to the rest (TestFleetContract records them).
+	// writes falls to the rest.
 	positionsHolding = holding{classes: []keyClass{
 		{keys: coord.DocumentFilter(coord.MCPListingClass), class: mcpListingValue},
 		{keys: coord.DocumentFilter(coord.MCPDefinitionClass), class: mcpDefinitionValue},
@@ -193,6 +231,7 @@ var (
 		{keys: coord.DocumentFilter(coord.AccessReviewClass), class: accessReviewValue},
 		{keys: coord.DocumentFilter(coord.SeatAccessClass), class: seatAccessValue},
 		{keys: coord.DocumentFilter(coord.HomeBoardClass), class: homeBoardValue},
+		{keys: coord.DocumentFilter(coord.AssistantInstructionsClass), class: instructionsValue},
 		{keys: coord.DocumentFilter(coord.ModelCheckClass), class: modelCheckValue},
 		{keys: coord.DocumentFilter(coord.MCPGrantClass), class: oauthGrantValue},
 		{keys: coord.DocumentFilter(coord.IntegrationGrantClass), class: oauthGrantValue},
@@ -220,7 +259,7 @@ var (
 		{keys: coord.DocumentFilter(coord.IssueReportClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.InsightRecordClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.GoogleIdentityClass), class: smallValue},
-	}, rest: undeclared}
+	}, rest: smallValue}
 
 	// The uploads bucket's classes (ADR-0175, "The uploads bucket declares
 	// its classes"): every read of each decides a compare-and-set a caller
@@ -229,24 +268,24 @@ var (
 	uploadRecordValue = class{bound: coord.MaxUploadRecordBytes, reply: replyDeciding}
 	saveLedgerValue   = class{bound: coord.MaxSaveLedgerBytes, reply: replyDeciding}
 
-	// uploadsHolding is the uploads bucket's: the three classes, and the
-	// rest undeclared until #1814 makes the default small.
+	// uploadsHolding is the uploads bucket's: the three classes. No key the
+	// store writes falls to the rest.
 	uploadsHolding = holding{classes: []keyClass{
 		{keys: coord.UploadLedgerKey, class: uploadLedgerValue},
 		{keys: coord.DocumentFilter(coord.UploadRecordClass), class: uploadRecordValue},
 		{keys: coord.DocumentFilter(coord.SaveLedgerClass), class: saveLedgerValue},
-	}, rest: undeclared}
+	}, rest: smallValue}
 
 	// chatReadValue is a seat's chat read record (ADR-0175, "The chat reads
 	// bucket declares its class"), whose every read decides a flush a person
 	// waits on.
 	chatReadValue = class{bound: coord.MaxChatReadBytes, reply: replyDeciding}
 
-	// chatReadsHolding is the chat reads bucket's: the record, and the rest
-	// undeclared until #1814 makes the default small.
+	// chatReadsHolding is the chat reads bucket's: the record. No key the
+	// store writes falls to the rest.
 	chatReadsHolding = holding{classes: []keyClass{
 		{keys: coord.DocumentFilter(coord.ChatReadClass), class: chatReadValue},
-	}, rest: undeclared}
+	}, rest: smallValue}
 
 	// secretValue is a credential's record (ADR-0175, "The secrets bucket
 	// declares its class"), whose reads decide the writes of a put, a
@@ -264,12 +303,12 @@ var (
 	atlasStandingValue = class{bound: coord.MaxAtlasSourceStandingBytes, reply: replyDeciding}
 	atlasMissesValue   = class{bound: coord.MaxAtlasSourceMissesBytes, reply: replyCarrying}
 
-	// atlasSourcesHolding is the atlas sources bucket's: the two classes,
-	// and the rest undeclared until #1814 makes the default small.
+	// atlasSourcesHolding is the atlas sources bucket's: the two classes. No
+	// key the store writes falls to the rest.
 	atlasSourcesHolding = holding{classes: []keyClass{
 		{keys: coord.DocumentFilter(coord.AtlasSourceStandingClass), class: atlasStandingValue},
 		{keys: coord.DocumentFilter(coord.AtlasSourceMissesClass), class: atlasMissesValue},
-	}, rest: undeclared}
+	}, rest: smallValue}
 	// atlasSmallHolding is the refresh asks' bucket's and the code scans':
 	// every key an ask of about 800 bytes, or a standing of at most about
 	// 14 KB, each a few counts, instants and a cut error read at the term.
@@ -282,11 +321,11 @@ var (
 	integrationFindingsValue = class{bound: coord.MaxIntegrationFindingsBytes, reply: replyCarrying}
 
 	// integrationsHolding is the integrations bucket's: the status and the
-	// findings, and the rest undeclared until #1814 makes the default small.
+	// findings. No key the store writes falls to the rest.
 	integrationsHolding = holding{classes: []keyClass{
 		{keys: coord.DocumentFilter(coord.IntegrationStatusClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.IntegrationFindingsClass), class: integrationFindingsValue},
-	}, rest: undeclared}
+	}, rest: smallValue}
 
 	// nodeStatusRowValue is one row of a node's status (ADR-0175, "The node
 	// status bucket declares its classes"), read at the term by every alarm,

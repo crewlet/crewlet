@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/vendortext"
-	"github.com/crewlet/crewlet/internal/words"
 )
 
 // predefined is how the Admin API names a role ("predefinedRoles/viewer").
@@ -29,15 +28,29 @@ var identity = sync.OnceValue(func() *googlegrowth.Identity {
 		Entry:   "property", Entries: "properties",
 		Roles: ladder(),
 		Needs: needs,
+		RoleNeeds: func(string) googlegrowth.Need {
+			return googlegrowth.Need{Roles: []string{roleMarketer}, Broad: []string{roleEditor, roleAdministrator},
+				Manual: "Google Analytics' API cannot grant Marketer, so a person adds it in Google Analytics."}
+		},
 		Steps: steps,
 		Note: vendortext.Of(vendortext.W("Only an "), vendortext.UI("Administrator"),
-			vendortext.W(" can add users. Added under "), vendortext.UI("Account"), vendortext.W(" rather than "),
-			vendortext.UI("Property"), vendortext.W(", it reaches every property of the account; Crewlet still "+
-				"holds the agent to its own.")),
+			vendortext.W(" can add users.")),
 		Scopes: []string{scopeReadonly},
 		Reach:  reach,
 		Admin: &googlegrowth.Admin{Who: "a Google Analytics Administrator", Roles: adminRoles, Add: add,
 			Remove: remove, Unavailable: adminUnavailable},
+		AddURL: func(l googlegrowth.Listed) string { return adminPage(l, "property") },
+		Wider: &googlegrowth.Wider{Label: "Add it once to the account instead",
+			Does: vendortext.Of(vendortext.W("Under "), vendortext.UI("Account access management"),
+				vendortext.W(", one add covers every property of the account, now and later. That is broader "+
+					"access: the identity reaches every property there, though Crewlet still holds the agent to "+
+					"its own.")),
+			URL: func(l googlegrowth.Listed) string {
+				if accountOf(l) == "" {
+					return ""
+				}
+				return adminPage(l, "account")
+			}},
 	}
 })
 
@@ -50,8 +63,8 @@ func ladder() googlegrowth.Roles {
 }
 
 // needs is the role each level needs on each property. Operate's changes need
-// Editor, which access bindings can grant; the Marketer role Google Analytics
-// offers covers only some of them, and its API cannot grant it.
+// Editor, which access bindings can grant; operate as Marketer (RoleNeeds)
+// narrows its changes to Marketer's, which only a person can grant.
 func needs(level growth.Level) googlegrowth.Need {
 	switch level {
 	case growth.LevelOperate:
@@ -63,52 +76,59 @@ func needs(level growth.Level) googlegrowth.Need {
 	return googlegrowth.Need{Roles: []string{roleViewer}, Broad: []string{roleAdministrator}}
 }
 
-// steps are a person's steps in Google Analytics.
+// steps are a person's steps in Google Analytics, once for every property
+// the sheet lists, each of which links its own access page.
 func steps(g googlegrowth.Guided) []seataccess.GuideStep {
 	return []seataccess.GuideStep{
-		{Text: vendortext.Of(vendortext.W("Open "), vendortext.UI("Google Analytics", "Admin").At(accessManagementURL),
-			vendortext.W("."))},
-		{Text: vendortext.Of(vendortext.W("Under "), vendortext.UI("Property"),
-			vendortext.W(", choose "+said(propertyNames(g))+", then press "),
-			vendortext.UI("Property access management"), vendortext.W("."))},
+		{Text: vendortext.Of(vendortext.W("Open each property below with its button, or go to "),
+			vendortext.UI("Google Analytics", "Admin", "Property access management").At(adminHome),
+			vendortext.W(" with the property chosen."))},
 		{Text: vendortext.Of(vendortext.W("Press "), vendortext.UI("+", "Add users"), vendortext.W("."))},
 		g.Copy("Email address"),
+		{Text: vendortext.Of(vendortext.W("Untick "), vendortext.UI("Notify new users by email"),
+			vendortext.W(": nobody reads the identity's mail."))},
 		{Text: vendortext.Of(append(append([]vendortext.Part{vendortext.UI("Role"), vendortext.W(": ")},
 			vendortext.And(g.NeedNames...)...), vendortext.W(". Press "), vendortext.UI("Add"), vendortext.W("."))...)},
 	}
 }
 
-// propertyNames are the seat's properties as the steps name them.
-func propertyNames(g googlegrowth.Guided) []string {
-	out := make([]string, len(g.Entries))
-	for i, id := range g.Entries {
-		out[i] = "property " + id
+// adminPage is Google Analytics' access management for l's property, or for
+// its account where at is "account": the property's account is in the address
+// where known, which Google Analytics fills in where it is not.
+func adminPage(l googlegrowth.Listed, at string) string {
+	place := "p" + l.ID
+	if account := accountOf(l); account != "" {
+		place = "a" + account + place
 	}
-	return out
+	return adminHome + "#/" + place + "/admin/suiteusermanagement/" + at
 }
 
-// said is phrases as one list a sentence says.
-func said(phrases []string) string {
-	out := make([]words.Said, len(phrases))
-	for i, p := range phrases {
-		out[i] = words.Said(p)
+// accountOf is l's account's number, "" where the listing named none.
+func accountOf(l googlegrowth.Listed) string {
+	account, ok := strings.CutPrefix(l.Parent, "accounts/")
+	if !ok || !digits(account) {
+		return ""
 	}
-	return words.And(out)
+	return account
+}
+
+// digits reports a non-empty run of ASCII digits.
+func digits(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
 }
 
 // adminUnavailable is why Crewlet cannot add an identity for c.
 func adminUnavailable(c *config.Company) string {
 	if c == nil || c.Integrations.GoogleAnalytics == nil || c.Integrations.GoogleAnalytics.OAuth == nil {
-		return "A Google Analytics Administrator signs in on the Settings tab first."
+		return "A Google Analytics Administrator signs in on the Google page first."
 	}
 	return ""
 }
 
-// reach lists the account summaries the identity reaches: each of the seat's
-// properties is reached where it is listed, under its account.
-func reach(ctx context.Context, in googlegrowth.Probe) ([]googlegrowth.Reached, error) {
-	type found struct{ name, account string }
-	listed := map[string]found{}
+// list is every property the token reaches, under its account, as the
+// account summaries list them.
+func list(ctx context.Context, in googlegrowth.Lister) ([]googlegrowth.Listed, error) {
+	var out []googlegrowth.Listed
 	token := ""
 	for {
 		q := url.Values{"pageSize": {"200"}}
@@ -118,6 +138,7 @@ func reach(ctx context.Context, in googlegrowth.Probe) ([]googlegrowth.Reached, 
 		var page struct {
 			AccountSummaries []struct {
 				Account           string `json:"account"`
+				DisplayName       string `json:"displayName"`
 				PropertySummaries []struct {
 					Property    string `json:"property"`
 					DisplayName string `json:"displayName"`
@@ -131,18 +152,35 @@ func reach(ctx context.Context, in googlegrowth.Probe) ([]googlegrowth.Reached, 
 		}
 		for _, a := range page.AccountSummaries {
 			for _, p := range a.PropertySummaries {
-				listed[strings.TrimPrefix(p.Property, "properties/")] = found{name: p.DisplayName, account: a.Account}
+				out = append(out, googlegrowth.Listed{ID: strings.TrimPrefix(p.Property, "properties/"),
+					Name: p.DisplayName, Parent: a.Account, ParentName: a.DisplayName})
 			}
 		}
 		if token = page.NextPageToken; token == "" {
-			break
+			return out, nil
 		}
+	}
+}
+
+// reach is the seat's properties as the identity's own listing finds them:
+// a listed property is reached under its account, at Viewer at least, the
+// least role there is.
+func reach(ctx context.Context, in googlegrowth.Probe) ([]googlegrowth.Reached, error) {
+	listed, err := list(ctx, googlegrowth.Lister{Company: in.Company, Token: in.Token, Send: in.Send})
+	if err != nil {
+		return nil, err
+	}
+	found := map[string]googlegrowth.Listed{}
+	for _, l := range listed {
+		found[l.ID] = l
 	}
 	out := make([]googlegrowth.Reached, 0, len(in.Scope))
 	for _, id := range in.Scope {
-		f, ok := listed[id]
-		r := googlegrowth.Reached{Entry: id, Name: f.name, Parent: f.account, OK: ok}
-		if !ok {
+		l, ok := found[id]
+		r := googlegrowth.Reached{Entry: id, Name: l.Name, Parent: l.Parent, ParentName: l.ParentName, OK: ok}
+		if ok {
+			r.Roles, r.Read, r.AtLeast = []string{roleViewer}, true, true
+		} else {
 			r.Said = "not among the properties it reaches"
 		}
 		out = append(out, r)
@@ -316,18 +354,14 @@ func remove(ctx context.Context, in googlegrowth.AdminCall) error {
 	return nil
 }
 
-// adminClient is the company's own OAuth client an admin signs in as, false
-// where Google Analytics is off; on with no oauth block is a client with nothing set,
-// which the sign-in refuses by name.
+// adminClient is the OAuth client an admin signs in as (googleauth.SignInClient),
+// false where Google Analytics is off.
 func adminClient(c *config.Company) (googleauth.ConsentClient, bool) {
 	b := c.Integrations.GoogleAnalytics
 	if b == nil || !b.Enabled {
 		return googleauth.ConsentClient{}, false
 	}
-	if b.OAuth == nil {
-		return googleauth.ConsentClient{}, true
-	}
-	return googleauth.ConsentClient{ID: b.OAuth.ClientID, Secret: b.OAuth.ClientSecret}, true
+	return googleauth.SignInClient(c, b.OAuth), true
 }
 
 // adminScopes are what the admin sign-in asks for: managing users, and

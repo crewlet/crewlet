@@ -32,8 +32,9 @@ func (c *Client) Deny(ctx context.Context, call growth.Call, r growth.Record) {
 func (c *Client) Note(ctx context.Context, step growth.Step, r growth.Record) { c.note(ctx, step, r) }
 
 // StepFailure is why one step of an act ended without its result: Google's
-// reason (a write that got no answer of Google's own is unknown), the seat's
-// access lowered, or the engine's own.
+// reason (a write that got no answer of Google's own is unknown, unless
+// nothing was sent: then timed out or unavailable), the seat's access
+// lowered, or the engine's own.
 func StepFailure(err error) growth.Failure { return failureOfStep(err) }
 
 // SendBytes makes req as handle's identity with data as its body, such as a

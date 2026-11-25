@@ -2,7 +2,16 @@
 
 - **Status:** accepted
 - **Authority:** `internal/googlecloud`
-- **Enforced-by:** `internal/googlecloud.TestTheAtlasReadsWhatEachProjectRunsAsItsOwnAccount`, `internal/googlecloud.TestTheSearchAsksOnlyForNamesAndTypes`, `internal/googlecloud.TestARefusedSearchIsAFindingAndWithdrawsNothing`, `internal/googlecloud.TestTheAssetAPIOffIsOneFindingNamingTheBlock`, `internal/googlecloud.TestNoSearchIsMadeUntilTheCompanyAsks`, `internal/googlecloud.TestEverySearchPageIsRead`, `internal/googlecloud.TestNoCredentialShapeReachesTheAtlasFromASearch`, `internal/googlecloud.TestTheBlockMakesTheAtlasAccountOnlyWhenAsked`, `internal/googlecloud.TestTheConnectFormOffersTheAtlasReader`
+- **Enforced-by:**
+  - `internal/googlecloud.TestTheAtlasReadsWhatEachProjectRunsAsItsOwnAccount`
+  - `internal/googlecloud.TestTheSearchAsksOnlyForNamesAndTypes`
+  - `internal/googlecloud.TestARefusedSearchIsAFindingAndWithdrawsNothing`
+  - `internal/googlecloud.TestTheAssetAPIOffIsOneFindingNamingTheBlock`
+  - `internal/googlecloud.TestNoSearchIsMadeUntilTheCompanyAsks`
+  - `internal/googlecloud.TestEverySearchPageIsRead`
+  - `internal/googlecloud.TestNoCredentialShapeReachesTheAtlasFromASearch`
+  - `internal/googlecloud.TestTheBlockMakesTheAtlasAccountOnlyWhenAsked`
+  - `internal/googlecloud.TestTheConnectFormOffersTheAtlasReader`
 - **Cost-when-tried:** not tried. ADR-0137 reads each project as the provisioner and stops at its edge: reading inside a project takes an identity made for the atlas.
 - **Tag-status:** unreleased
 

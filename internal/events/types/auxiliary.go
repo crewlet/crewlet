@@ -138,7 +138,7 @@ const auxCondensePrefix = "condense_"
 // import that one; internal/compact's own suite holds the two lists equal in
 // both directions.
 var auxCondenseKinds = []string{
-	"thread", "argument", "tool_error", "produced",
+	"thread", "argument", "tool_error", "write_answer", "produced",
 	"source", "task", "answer", "outcome", "report",
 }
 

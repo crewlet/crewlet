@@ -326,8 +326,11 @@ func TestQwenCodesBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 					"[\"mcp__crewlet__*\"]}, \"disableAllHooks\": true, \"env\": {\"QWEN_CODE_SAFE_MODE\": \"1\"}}",
 				"workspace/.qwen/settings.json": `{"mcp": {"allowed": ["crew*"]}, "disableAllHooks": 0}`,
 				"workspace/.env":                "QWEN_CODE_SAFE_MODE=2\n"}}},
-		"hooks switched off on a run with no hook": {noSkills: true, switchOffCase: switchOffCase{
-			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": true}`}}},
+		"hooks switched off on a run with no hook but its checkouts'": {noSkills: true, switchOffCase: switchOffCase{
+			plant: map[string]string{".qwen/settings.json": `{"disableAllHooks": true}`},
+			says: []string{"crewlet: checkouts cloned during the run are not handed their instructions and skills: ",
+				"/.qwen/settings.json: its disableAllHooks is true, which switches every hook off, the run's hook " +
+					"PostToolUse(checkouts) among them"}}},
 		"the home excludes the bridge by a glob": {switchOffCase: switchOffCase{
 			plant: map[string]string{".qwen/settings.json": `{"mcp":{"excluded":["crew*"]}}`},
 			fails: []string{reason, `/.qwen/settings.json: its mcp.excluded entry "crew*" takes the server crewlet away`}}},
@@ -387,9 +390,9 @@ func TestQwenCodesBridgeAndHookCannotBeSwitchedOffUnseen(t *testing.T) {
 			t.Parallel()
 			finished := observedRun + `echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'` + "\n"
 			runner, box := qwenBox(t, finished)
-			// THE REAL HELPER FOR ITS GUARD; the stand-in plays the rest.
-			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/node", "#!/bin/sh\nif [ \"$2\" = guard ]; then exec "+
-				shellword.Quote(nodeForQwen(t))+" \"$@\"; fi\n"+finished)
+			// THE REAL HELPER FOR ITS GUARD AND ITS CONTEXT FILES; the stand-in plays the rest.
+			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/node", "#!/bin/sh\ncase \"$2\" in guard|checkouts) exec "+
+				shellword.Quote(nodeForQwen(t))+" \"$@\";; esac\n"+finished)
 			plant(t, box, tc.plant)
 			env := map[string]string{"OPENAI_API_KEY": "key-placeholder"}
 			maps.Copy(env, tc.env)
@@ -631,9 +634,10 @@ func grokInspect(perms string, servers ...[2]string) string {
 // reports its own server disabled, or, hooked, that pin engaged, is refused
 // before Grok starts, naming the file, the key and the policy's entries, and
 // the box's settings are put back; a policy blocking another server, a pin on
-// a run with no hooks, or an inspection that fails, start it.
-// Mutations, each red: drop the guard from the script; read another server's
-// reason as the run's; check the pin on a run with no hooks; name no entries.
+// a run taking no notes (its nested hook off, said once), or an inspection
+// that fails, start it. Mutations, each red: drop the guard from the script;
+// read another server's reason as the run's; check the pin on a run with no
+// note hooks, or say nothing of its nested hook; name no entries.
 func TestGrokBuildsBridgeAndHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const policy = "HOMEDIR/.grok/requirements.toml"
@@ -645,13 +649,15 @@ func TestGrokBuildsBridgeAndHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 	for name, tc := range map[string]struct {
 		inspect string
 		hooked  bool
+		skip    string // the setting the run's log names, once, switching the nested hook off
 		switchOffCase
 	}{
 		"nothing switches it off": {inspect: grokInspect("", [2]string{"NAME", ""}), hooked: true},
 		"the inspection fails":    {hooked: true},
 		"the policy denies another server": {hooked: true, inspect: grokInspect(allowlist("deny:https://other.example.com/*"),
 			[2]string{"NAME", ""}, [2]string{"other", "matches deniedMcpServers (" + policy + ")"})},
-		"a hooks pin on a run with no hooks": {inspect: grokInspect(pin, [2]string{"NAME", ""})},
+		"a hooks pin on a run taking no notes": {inspect: grokInspect(pin, [2]string{"NAME", ""}),
+			skip: "/.grok/requirements.toml sets allow_managed_hooks_only"},
 		"the home's policy denies the bridge's URL": {hooked: true,
 			inspect: grokInspect(allowlist("deny:http://127.0.0.1:9/*"), [2]string{"NAME", "matches deniedMcpServers (" + policy + ")"}),
 			switchOffCase: switchOffCase{fails: []string{"Grok Build would start without Crewlet's MCP server crewlet_",
@@ -681,6 +687,7 @@ func TestGrokBuildsBridgeAndHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 			if (started == nil) != (len(tc.fails) == 0) {
 				t.Errorf("grok started %t, want %t", started == nil, len(tc.fails) == 0)
 			}
+			checkNestedOff(t, box, tc.skip)
 			p := executor.PathsFor(box)
 			for _, left := range []string{p.GrokConfig(), p.GrokConfigBox(), p.GrokConfigOurs()} {
 				if got := boxFile(t, box, left); got != "" {

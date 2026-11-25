@@ -99,6 +99,9 @@ type threadReader struct {
 	// gate is the pass's large slot each line's facts hold before they charge
 	// past the base ([threadReader.Gate]); nil where no slot gates them.
 	gate *lineGate
+	// summary is where each line's message content is read whole
+	// ([threadReader.Summarizing]); nil where none is.
+	summary *summaryText
 }
 
 // lineGate is a reader's way to its pass's large slot ([threadReader.Gate]):
@@ -146,7 +149,17 @@ func (t *threadReader) Reset(r io.Reader, maxBytes int64, maxLines int) {
 	t.r.Reset(r)
 	t.maxBytes, t.left = maxBytes, maxBytes
 	t.n, t.maxLines, t.torn, t.end, t.asked, t.estimating = 0, max(maxLines, 0), false, nil, nil, false
+	t.summary = nil
 }
+
+// Summarizing makes every line t reads from here on read its message's
+// content, where it is one string, into s, whole to [summaryReadMaxBytes] and
+// past it none ([summaryText]): set only where the line's last message's last
+// content is a string the pass read. The one reader of a summary's line asks
+// it ([claudeSummaryLine]); every other pass stops reading a content once its
+// automata decide. Called before the first [threadReader.Next];
+// [threadReader.Reset] clears it.
+func (t *threadReader) Summarizing(s *summaryText) { t.summary = s }
 
 // Estimating makes every line t reads from here on read Claude Code's estimate
 // of its content ([threadLine.Estimate], [threadLine.AttachmentEstimate]),
@@ -210,7 +223,10 @@ func (t *threadReader) Next(ctx context.Context) (threadLine, error) {
 	facts := new(lineFacts)
 	t.scan.Reset(&t.src)
 	t.dec.reset(t.valueMax, t.meterMax)
-	t.dec.asked, t.dec.estimating = t.asked, t.estimating
+	t.dec.asked, t.dec.estimating, t.dec.summary = t.asked, t.estimating, t.summary
+	if t.summary != nil {
+		t.summary.reset()
+	}
 	if t.gate != nil && !t.gate.held {
 		t.dec.meter.gate = t.gate
 	}
@@ -396,13 +412,28 @@ type lineSource struct {
 	// and was then passed over to its end, handed to no one.
 	bound int64
 	past  bool
+	// skipped is the bytes of the line its reader passed over as images'
+	// ([lineWalk.pass]), which the bound does not count, and slack what it
+	// takes past the bound before it is past: the image bytes taken that the
+	// reader has yet to pass ([imageSlack]), 0 on a walk that passes none.
+	skipped, slack int64
 }
 
 // reset makes s the next line of the member r reads, which may take left
 // bytes of it, read under ctx.
 func (s *lineSource) reset(ctx context.Context, r *bufio.Reader, left int64) {
 	s.ctx, s.r, s.left = ctx, r, left
-	s.pending, s.n, s.broke, s.cause, s.past = nil, 0, false, nil, false
+	s.pending, s.n, s.broke, s.cause, s.past, s.skipped = nil, 0, false, nil, false, 0
+}
+
+// over reports whether the line, ended, ran past the bound: what of it was
+// not an image's, its break among it, longer than the bound.
+func (s *lineSource) over() bool {
+	n := s.n - s.skipped
+	if s.broke {
+		n++
+	}
+	return s.past || s.bound > 0 && n > s.bound
 }
 
 // Read reads the line's next bytes into p, up to its break: io.EOF once the
@@ -438,7 +469,8 @@ func (s *lineSource) drain() {
 // so a member past its bound in the same piece as its reader's failure ends
 // with the bound, and the bound holds even right after a break; then the
 // piece, but its break, counted and written to the tee, and handed on only
-// while the line, its break among it, is within its own bound.
+// while the line, its break among it and its images not, is within its own
+// bound and slack ([lineSource.over] judges it exactly once it ends).
 func (s *lineSource) take() {
 	if err := s.ctx.Err(); err != nil {
 		s.cause = err
@@ -449,7 +481,7 @@ func (s *lineSource) take() {
 		s.cause = errLineMember
 		return
 	}
-	if s.bound > 0 && s.n+int64(len(chunk)) > s.bound {
+	if s.bound > 0 && s.n+int64(len(chunk))-s.skipped > s.bound+s.slack {
 		s.past = true
 	}
 	if err == nil {
@@ -638,6 +670,9 @@ type lineDecoder struct {
 	estimating bool
 	images     int64
 	rendered   renderedCharge
+	// summary is where a message's content string is read whole, nil where
+	// the reader asks none ([threadReader.Summarizing]).
+	summary *summaryText
 }
 
 // uuidTextBytes is a canonical uuid's length as written ([uuidBytes]), and
@@ -997,6 +1032,9 @@ func (d *lineDecoder) sawType(kind valueKind, raw []byte) {
 // of the message's.
 func (d *lineDecoder) message(scan *jsonscan.Scanner, k jsonscan.Kind, m *messageFacts) error {
 	m.kind = scannedKind(k)
+	if d.summary != nil {
+		d.summary.reset()
+	}
 	if k != jsonscan.ObjectStart {
 		return scan.Skip()
 	}
@@ -1043,6 +1081,10 @@ func errContentKind(kind valueKind) error {
 func (d *lineDecoder) content(scan *jsonscan.Scanner, k jsonscan.Kind, m *messageFacts) error {
 	m.content, m.contentErr = threadMessage{}, nil
 	m.charge, m.emptyText = estimateCharge{}, false
+	if d.summary != nil {
+		d.summary.reset()
+		d.summary.set = k == jsonscan.String
+	}
 	if d.estimating {
 		scan.CountUnits(true)
 		defer scan.CountUnits(false)
@@ -1076,10 +1118,18 @@ func (d *lineDecoder) contentText(scan *jsonscan.Scanner, c *threadMessage) erro
 		d.says.write(p)
 		d.notice.write(p)
 		d.handback.write(p)
+		if d.summary != nil {
+			_, _ = d.summary.Write(p)
+		}
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
+			return err
+		}
+	}
+	if d.summary != nil {
+		if err := d.readRest(scan, d.summary); err != nil {
 			return err
 		}
 	}
@@ -1089,6 +1139,21 @@ func (d *lineDecoder) contentText(scan *jsonscan.Scanner, c *threadMessage) erro
 		c.notification = taskNotice{agent: agent, leg: leg, ok: ok}
 	}
 	return nil
+}
+
+// readRest reads what is left of the current string into w, a piece at a
+// time.
+func (d *lineDecoder) readRest(scan *jsonscan.Scanner, w io.Writer) error {
+	for {
+		n, err := scan.Read(d.text[:])
+		_, _ = w.Write(d.text[:n])
+		switch {
+		case errors.Is(err, io.EOF):
+			return nil
+		case err != nil:
+			return err
+		}
+	}
 }
 
 // blocks reads a message's content that is a list, its opening bracket the

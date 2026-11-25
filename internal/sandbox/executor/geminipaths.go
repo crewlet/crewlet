@@ -95,3 +95,29 @@ func (p Paths) GeminiTakesDir() string { return p.WorkDir() + "/gemini-takes" }
 // named inside the bridge's names, which the run's script reads once Gemini
 // CLI exits ([geminiBridgedHook]).
 func (p Paths) GeminiUnbridged() string { return p.WorkDir() + "/gemini-unbridged" }
+
+// GeminiNoteHelper is where a Gemini CLI run's launch writes the note helper
+// its checkout gate and checkouts' hook run ([geminiCheckoutHome]).
+func (p Paths) GeminiNoteHelper() string { return p.WorkDir() + "/gemini-notehelper" }
+
+// GeminiCheckouts is the run's checkout state ([geminiCheckoutHome]): the
+// checkouts handed, the lock, the skip log and the hook's config, remade by
+// every run.
+func (p Paths) GeminiCheckouts() string { return p.WorkDir() + "/gemini-checkouts" }
+
+// GeminiCheckoutLaunch is the run's checkout-launch config, which its launch
+// writes ([geminiCheckouts]) and its script hands the note helper.
+func (p Paths) GeminiCheckoutLaunch() string { return p.WorkDir() + "/gemini-checkout-launch.json" }
+
+// GeminiCheckoutSections is where checkout-launch would write the checkouts'
+// instructions: none for Gemini CLI, which reads them itself.
+func (p Paths) GeminiCheckoutSections() string { return p.WorkDir() + "/gemini-checkout-sections.md" }
+
+// GeminiCheckoutSkills lists, a name a line, the checkouts' skills a run
+// copied into [Paths.GeminiSkills], so the run's end removes them and none of
+// the home's, or the next run's gate where the run was killed first.
+func (p Paths) GeminiCheckoutSkills() string { return p.WorkDir() + "/gemini-checkout-skills" }
+
+// GeminiCheckoutRoots lists the root of each checkout the launch handed, a
+// line each, which the script names with --include-directories.
+func (p Paths) GeminiCheckoutRoots() string { return p.WorkDir() + "/gemini-checkout-roots" }

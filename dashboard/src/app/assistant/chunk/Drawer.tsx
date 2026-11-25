@@ -39,12 +39,19 @@ import { relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { matchesRow } from "../../keymap.ts";
 import { emit } from "../bus.ts";
-import type { AssistantFocus } from "../control.ts";
-import { readTab } from "../tab.ts";
+import { takeReopened, type AssistantFocus } from "../control.ts";
+import { usePageSnapshot, pageSnapshot } from "../context.ts";
+import { readTab, reopenChoice, writeTab } from "../tab.ts";
 import type { AssistantModelProblem, AssistantUnavailable, AttachClosed } from "../availability.ts";
 import { useToastInset } from "../../toastInset.tsx";
 import type { AssistantShape } from "../../layout.ts";
-import { conversation, newConversation, openConversation, recentConversations } from "./session.ts";
+import {
+  conversation,
+  drawerDraft,
+  newConversation,
+  openConversation,
+  recentConversations,
+} from "./session.ts";
 import {
   ASK_PAGE_PATH,
   AskDeleteConfirm,
@@ -96,6 +103,7 @@ export function Drawer(props: DrawerProps) {
   const modal = shape === "sheet";
   return (
     <AskProvider
+      box={drawerDraft}
       place={{
         unavailable,
         model,
@@ -138,18 +146,33 @@ function Panel({ unavailable, onClose, initialFocus, shape }: DrawerProps) {
   }, [shape, unavailable]);
   useToastInset("panel", shape === "sheet" && footHeight > 0 ? { block: footHeight } : null);
 
-  // THE CONVERSATION THIS TAB WAS ON comes back after a reload, read again
-  // from the engine under this session.
-  useEffect(() => {
-    const kept = readTab().conversation;
-    if (kept && conversation().id === null && conversation().turns.length === 0) {
-      void openConversation(kept).catch(() => {
+  // OPENED BY THE PERSON, the drawer resumes the conversation it last showed
+  // on this page (or one with work in flight) and starts fresh on any other
+  // (`reopenChoice`). Before the paint, so the last one never flashes.
+  useLayoutEffect(() => {
+    const tab = readTab();
+    if (takeReopened() && reopenChoice(tab, pageSnapshot()?.key ?? null) === "fresh") {
+      newConversation();
+      drawerDraft.write("");
+      return;
+    }
+    // THE CONVERSATION THIS TAB WAS ON comes back after a reload, read again
+    // from the engine under this session.
+    if (tab.conversation && conversation().id === null && conversation().turns.length === 0) {
+      void openConversation(tab.conversation).catch(() => {
         // A conversation that is gone (deleted in another tab, purged) is
         // simply not reopened: the drawer goes back to its home.
         if (conversation().opening?.state === "missing") newConversation();
       });
     }
   }, []);
+
+  // WHILE OPEN, the conversation goes with whatever page is under it.
+  const page = usePageSnapshot()?.key ?? null;
+  const shownId = view.id ?? view.opening?.id ?? null;
+  useEffect(() => {
+    writeTab({ shown: { conversation: shownId, page } });
+  }, [shownId, page]);
 
   // THE LISTED CONVERSATIONS ARE ONE CHOICE whose answer is the one open
   // now: each says whether it is, so the open one carries the menu's check

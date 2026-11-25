@@ -149,23 +149,30 @@ var ErrReserve = errors.New("appleads: the connection is down to the calls kept 
 // ErrQuota is a 429 whose wait is past what a read waits out.
 var ErrQuota = errors.New("appleads: Apple asked to slow down for longer than a read waits")
 
+// errUnsent marks a request that failed before it left for Apple: held at
+// the reserve, its body unencoded, no access token to send it with, its
+// request unbuilt or its context ended first. Nothing reached Apple.
+var errUnsent = errors.New("appleads: the request was not sent to Apple")
+
 // detailBytes bounds Apple's words in an error.
 const detailBytes = 600
 
 // Do makes req.
 func (c *Client) Do(ctx context.Context, req Request) (Response, error) {
 	if req.Read && !req.Reserved && c.atReserve() {
-		return Response{}, ErrReserve
+		return Response{}, fmt.Errorf("%w: %w", errUnsent, ErrReserve)
 	}
 	body, contentType, err := encode(req)
 	if err != nil {
-		return Response{}, err
+		return Response{}, fmt.Errorf("%w: %w", errUnsent, err)
 	}
 	fresh := false
 	for attempt := 0; ; attempt++ {
+		// A TOKEN THAT COULD NOT BE HAD sent nothing: the first round sent no
+		// request, and a later one follows a 401, which made nothing.
 		token, minted, err := c.accessToken(ctx)
 		if err != nil {
-			return Response{}, err
+			return Response{}, fmt.Errorf("%w: %w", errUnsent, err)
 		}
 		fresh = fresh || minted
 		resp, err := c.send(ctx, token, req, body, contentType)
@@ -242,7 +249,7 @@ func (c *Client) send(ctx context.Context, token string, req Request, body []byt
 	}
 	hreq, err := http.NewRequestWithContext(ctx, req.Method, u, r)
 	if err != nil {
-		return Response{}, fmt.Errorf("appleads: build the request: %w", err)
+		return Response{}, fmt.Errorf("appleads: build the request: %w: %w", errUnsent, err)
 	}
 	hreq.Header.Set("Authorization", "Bearer "+token)
 	hreq.Header.Set("Accept", "application/json")
@@ -251,6 +258,11 @@ func (c *Client) send(ctx context.Context, token string, req Request, body []byt
 	}
 	if contentType != "" {
 		hreq.Header.Set("Content-Type", contentType)
+	}
+	// A CONTEXT ENDED BEFORE THE SEND sent nothing; one that ends during it
+	// may have, so only this side of Do is unsent.
+	if ended := ctx.Err(); ended != nil {
+		return Response{}, fmt.Errorf("appleads: %s %s: %w: %w", req.Method, req.Path, errUnsent, ended)
 	}
 	hresp, err := c.http.Do(hreq)
 	if err != nil {

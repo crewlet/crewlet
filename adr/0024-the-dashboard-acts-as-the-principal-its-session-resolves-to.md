@@ -2,7 +2,13 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/operator`
-- **Enforced-by:** `internal/api/operator.TestAnActWriteIsMadeAsItsPrincipal`, `internal/api/operator.TestACallIsMadeAndAuditedAsThePrincipalItWasAdmittedAs`, `internal/api/operator.TestAnyResolvedPrincipalMayAct`, `internal/api/operator.TestARetriedActIsOneWrite`, `internal/api/auth.TestARequestMadeForAnotherReaderIsRefusedBeforeItRuns`, `internal/api/auth.TestASocketHandshakeIsRefusedForAnotherReaderNamedInItsURL`
+- **Enforced-by:**
+  - `internal/api/operator.TestAnActWriteIsMadeAsItsPrincipal`
+  - `internal/api/operator.TestACallIsMadeAndAuditedAsThePrincipalItWasAdmittedAs`
+  - `internal/api/operator.TestAnyResolvedPrincipalMayAct`
+  - `internal/api/operator.TestARetriedActIsOneWrite`
+  - `internal/api/auth.TestARequestMadeForAnotherReaderIsRefusedBeforeItRuns`
+  - `internal/api/auth.TestASocketHandshakeIsRefusedForAnotherReaderNamedInItsURL`
 - **Measured:** the largest legal page is 512 KiB of text, and a page of nothing but quotes, backslashes and newlines is 1 MiB once `JSON.stringify` has escaped it — so the act body is capped at twice the page plus 64 KiB for the envelope (`operator.MaxActBody`, 1 114 112 bytes), and a cap at the page's own size refused a page the store accepts.
 - **Cost-when-tried:** the dashboard wrote nothing, on the argument that a browser form would write as "the dashboard", an actor no audit can ask why. Every change was a pre-filled tool call a person copied into an assistant connected to `/operator/mcp` — a gesture of four steps for "mark this read", checked by a test that each call named a real tool and never by anybody pressing it; the Inbox, the priorities list and the board each showed state no control on screen could change.
 - **Tag-status:** unreleased
