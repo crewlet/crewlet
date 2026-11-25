@@ -1502,14 +1502,16 @@ func TestACopilotSessionContinuesOnlyOnTheReleaseSupported(t *testing.T) {
 	}
 }
 
-// A pack carries the conversation alone: never session.db or its journal, a
-// binary file the archive's text scrub would corrupt, nor the login, the
-// checkout's snapshots or the file a journal rotation left, the session here
-// being one whose journal rotated (1.0.114), whose head a resume reads whole.
-// A restore in another home continues it.
+// A pack carries the conversation and what a resume lists of its checkpoints:
+// events.jsonl, workspace.yaml and checkpoints/, never session.db or its
+// journal, a binary file the archive's text scrub would corrupt, nor the login,
+// the checkout's snapshots or the file a journal rotation left, the session
+// here being one whose journal rotated (1.0.114), whose head a resume reads
+// whole. A restore in another home puts each back where the resume reads it.
 //
-// Mutation: pack session.db, or the whole session directory — the members
-// differ; drop the restore's move — the second home holds nothing.
+// Mutation: pack session.db, the whole session directory, or the journal
+// alone, and the members differ; drop a restore's move, and the second home
+// lacks that file.
 func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 	for _, tool := range []string{"tar", "gzip", "cksum"} {
 		prereqtest.OnPath(t, tool, "the case runs the box's pack and restore", "install "+tool)
@@ -1523,7 +1525,9 @@ func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 		dir + "/events.1.jsonl":             string(copilotFixture(t, "rotated-end.events.1.jsonl")),
 		dir + "/session.db":                 "SQLite format 3\x00",
 		dir + "/session.db-journal":         "journal",
-		dir + "/workspace.yaml":             "cwd: /box/repo\n",
+		dir + "/workspace.yaml":             "cwd: /box/repo\nsummary_count: 1\n",
+		dir + "/checkpoints/index.md":       "| # | Title | File |\n",
+		dir + "/checkpoints/001-session.md": "the summary\n",
 		dir + "/rewind-file-snapshots/a":    "checkout bytes",
 		from.CopilotHome() + "/config.json": `{"copilotTokens":{}}`,
 		from.WorkDir() + "/.keep":           "",
@@ -1560,7 +1564,10 @@ func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 		}
 		members = append(members, h.Name)
 	}
-	want := []string{"session-state/" + id + "/events.jsonl"}
+	slices.Sort(members)
+	held := "session-state/" + id + "/"
+	want := []string{held + "checkpoints/", held + "checkpoints/001-session.md", held + "checkpoints/index.md",
+		held + "events.jsonl", held + "workspace.yaml"}
 	if !slices.Equal(members, want) {
 		t.Fatalf("members = %v, want %v", members, want)
 	}
@@ -1581,8 +1588,10 @@ func TestACopilotSessionPacksAndRestoresItsOwnFilesAlone(t *testing.T) {
 	if got := string(out); got != id+"\nyes\n\n--session-id\n"+id+"\n" {
 		t.Fatalf("the gate said %q, want the carried session continued", got)
 	}
-	if _, err := os.Stat(to.CopilotSessionDir(id) + "/events.jsonl"); err != nil {
-		t.Fatalf("the restored session is not in the second home: %v", err)
+	for _, name := range []string{"events.jsonl", "workspace.yaml", "checkpoints/index.md", "checkpoints/001-session.md"} {
+		if _, err := os.Stat(to.CopilotSessionDir(id) + "/" + name); err != nil {
+			t.Errorf("the restored session's %s is not in the second home: %v", name, err)
+		}
 	}
 }
 
