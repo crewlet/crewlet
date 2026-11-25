@@ -837,27 +837,35 @@ func TestACutSpendsTheLimit(t *testing.T) {
 // past 64 characters is cut to `<tag>:<skill>-<8 hex digits of its full
 // name's SHA-256>`, the skill part cut first and the tag to half what is left
 // only where the skill needs it, the same for the same skill and apart for
-// another; a name within it is as it was.
+// another; a name within it is as it was. A spec joining with `-` (Gemini
+// CLI's listing of `a:b`) names `<tag>-<skill>` and cuts alike.
 //
-// Mutation: cut without the digest, drop the colon, or cut the tag first, and
-// a check goes red.
+// Mutation: cut without the digest, drop the colon, ignore the separator, or
+// cut the tag first, and a check goes red.
 func TestASkillsNameFitsWhatCodexListsAndKeepsItsShape(t *testing.T) {
 	t.Parallel()
-	if got := skillName("repo", "Check"); got != "repo:check" {
+	if got := skillName("repo", "Check", ""); got != "repo:check" {
 		t.Errorf("a short name is %q", got)
 	}
 	tag, skill := strings.Repeat("t", 40), strings.Repeat("s", 40)
-	long, other := skillName(tag, skill), skillName(tag, strings.Repeat("s", 39)+"x")
+	long, other := skillName(tag, skill, ""), skillName(tag, strings.Repeat("s", 39)+"x", "")
 	if len(long) != maxSkillName || !strings.HasPrefix(long, strings.Repeat("t", 27)+":"+strings.Repeat("s", 27)+"-") ||
 		long == other || len(other) != maxSkillName {
 		t.Errorf("long names are %q and %q, want %d characters each, `<tag>:<skill>-<digest>`, apart", long, other, maxSkillName)
 	}
-	if again := skillName(tag, skill); again != long {
+	if again := skillName(tag, skill, ""); again != long {
 		t.Errorf("the same skill is %q, then %q", long, again)
 	}
-	if got := skillName(strings.Repeat("r", 60), "check"); len(got) != maxSkillName ||
+	if got := skillName(strings.Repeat("r", 60), "check", ""); len(got) != maxSkillName ||
 		!strings.HasPrefix(got, strings.Repeat("r", 49)+":check-") {
 		t.Errorf("a long tag's name is %q, want its tag cut and `:check-` kept", got)
+	}
+	if got := skillName("repo", "Check", "-"); got != "repo-check" {
+		t.Errorf("a short name joined by a hyphen is %q", got)
+	}
+	if got := skillName(strings.Repeat("r", 60), "check", "-"); len(got) != maxSkillName ||
+		!strings.HasPrefix(got, strings.Repeat("r", 49)+"-check-") {
+		t.Errorf("a long tag's name joined by a hyphen is %q, want its tag cut and `-check-` kept", got)
 	}
 }
 

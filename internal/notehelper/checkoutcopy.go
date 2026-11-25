@@ -141,24 +141,24 @@ func (r *copyRoom) take(p plannedSkill) bool {
 // spent reports whether nothing is left of r.
 func (r *copyRoom) spent() bool { return r.files <= 0 || r.bytes <= 0 }
 
-// skillName is the name a checkout's skill is listed under: `<tag>:<skill>`,
+// skillName is the name a checkout's skill is listed under: `<tag><sep><skill>`,
 // the skill's directory name lower-cased with every byte outside [a-z0-9_.] a
 // hyphen. Past [maxSkillName] it keeps that shape: the skill part cut (and the
 // tag, to half the room, where the skill leaves too little), then a hyphen and
 // the first 8 hex digits of the full name's SHA-256, so it fits, stays the
 // same for the same skill and differs from every other.
-func skillName(tag, dir string) string {
+func skillName(tag, dir string, sep skillSep) string {
 	skill := slug(dir, "_.")
-	name := tag + ":" + skill
+	name := tag + sep.String() + skill
 	if len(name) <= maxSkillName {
 		return name
 	}
 	sum := sha256.Sum256([]byte(name))
-	room := maxSkillName - len(":") - len("-") - 8
+	room := maxSkillName - len(sep.String()) - len("-") - 8
 	tagRoom := max(room/2, room-len(skill))
 	tag = tag[:min(len(tag), tagRoom)]
 	skill = skill[:min(len(skill), room-len(tag))]
-	return tag + ":" + skill + "-" + hex.EncodeToString(sum[:4])
+	return tag + sep.String() + skill + "-" + hex.EncodeToString(sum[:4])
 }
 
 // plannedSkill is a checkout's skill as planned: its directory, the name it is
@@ -255,7 +255,7 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]pla
 	planned := map[string]skillDir{}
 	files, bytes := 0, int64(0)
 	for _, d := range dirs {
-		name := skillName(tag, d.name)
+		name := skillName(tag, d.name, spec.SkillSep)
 		if first, ok := planned[name]; ok {
 			if first.slot == d.slot {
 				said.say("the skill %s is left out: %s, found first, takes its name %s", d.src, first.src, name)

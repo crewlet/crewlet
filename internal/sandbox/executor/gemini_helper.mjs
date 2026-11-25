@@ -55,7 +55,7 @@
 //     (exit 52, measured on 0.70.0).
 //
 //   node gemini-helper.mjs guard [--server <name>]... [--hook <name>] [--tool <name>]...
-//                                [--auth <type>] [--turns <n>]
+//                                [--auth <type>] [--turns <n>] [--checkouts <name> --skipped <file>]
 //     Exits 3, saying which file, key and entry, where a settings file or an
 //     active home extension switches off one of Crewlet's own servers, its
 //     hook or one of their tools (--tool, by its own name), or where a file Gemini CLI ranks above the home's (the
@@ -130,7 +130,7 @@ if (mode === "pin") {
     process.exit(3)
   }
 } else if (mode === "guard") {
-  const named = { server: [], hook: [], tool: [], auth: [], turns: [], skill: [] }
+  const named = { server: [], hook: [], tool: [], auth: [], turns: [], skill: [], checkouts: [], skipped: [] }
   for (let i = 0; i + 1 < args.length; i += 2) named[args[i].replace(/^--/, "")]?.push(args[i + 1])
   const found = switchedOff(named)
   if (found.length > 0) {
@@ -139,6 +139,13 @@ if (mode === "pin") {
       "files and ranks the working directory's and the machine's settings above the home's, which hold the " +
       "run's, so no setting of the run's undoes it; remove the entry. The run was not started.\n")
     process.exit(3)
+  }
+  // THE CHECKOUTS' HOOK CARRIES NOTHING ELSE, so where it is off the run goes
+  // on, its skip log saying so once Gemini CLI stops (D709).
+  const off = named.checkouts.length > 0 ? hooksSwitchedOff(named.checkouts) : []
+  if (off.length > 0 && named.skipped.length > 0) {
+    fs.appendFileSync(named.skipped[0], "crewlet: checkouts cloned during the run are not handed their skills: " +
+      off.join("; ") + ", so Gemini CLI does not run the hook that hands them\n")
   }
 } else if (mode === "shadows") {
   const [bridge, ...rest] = args
@@ -302,14 +309,7 @@ function hooksOff(value) {
 // exactly, a tool as [excludes] reads; `skills.enabled` false lists no skill.
 function switchedOff({ server, hook, tool, auth, turns, skill = [] }) {
   const home = os.homedir()
-  const files = [{ file: path.join(home, ".gemini", "settings.json"), tier: 1 }]
-  if (realpath(process.cwd()) !== realpath(home)) {
-    files.push({ file: path.join(process.cwd(), ".gemini", "settings.json"), above: true, tier: 2 })
-  }
-  const defaults = process.env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH || "/etc/gemini-cli/system-defaults.json"
-  const system = process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH || "/etc/gemini-cli/settings.json"
-  if (rootKept(defaults)) files.push({ file: defaults, tier: 0 })
-  if (rootKept(system)) files.push({ file: system, above: true, tier: 3 })
+  const files = settingsTiers()
   const fold = (name) => String(name).toLowerCase().trim()
   const list = (value) => (Array.isArray(value) ? value : [])
   const found = []
@@ -374,6 +374,57 @@ function switchedOff({ server, hook, tool, auth, turns, skill = [] }) {
     found.push(`${enabled.file}: its hooksConfig.enabled is ${JSON.stringify(enabled.value)}, which switches every ` +
       `hook off, the run's ${hook.join(", ")} among them`)
   }
+  return found.concat(extensionsAndPolicies(home, server, tool))
+}
+
+// settingsTiers is each settings file 0.70.0 reads, with its tier and whether
+// it ranks above the home's: the home's, the working directory's (unless it
+// is the home), and the machine's system defaults and settings where root
+// keeps them ([rootKept]).
+function settingsTiers() {
+  const home = os.homedir()
+  const files = [{ file: path.join(home, ".gemini", "settings.json"), tier: 1 }]
+  if (realpath(process.cwd()) !== realpath(home)) {
+    files.push({ file: path.join(process.cwd(), ".gemini", "settings.json"), above: true, tier: 2 })
+  }
+  const defaults = process.env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH || "/etc/gemini-cli/system-defaults.json"
+  const system = process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH || "/etc/gemini-cli/settings.json"
+  if (rootKept(defaults)) files.push({ file: defaults, tier: 0 })
+  if (rootKept(system)) files.push({ file: system, above: true, tier: 3 })
+  return files
+}
+
+// hooksSwitchedOff is each file and key by which 0.70.0 would run none of
+// hooks: `hooksConfig.enabled` read off in the highest tier setting it, or a
+// file's `hooksConfig.disabled` naming one of them, as [switchedOff] reads
+// both.
+function hooksSwitchedOff(hooks) {
+  const found = []
+  let enabled = null
+  for (const { file, tier } of settingsTiers()) {
+    const settings = readSettings(file)
+    if (settings === null) continue
+    const value = settings.hooksConfig?.enabled
+    if (value !== undefined && value !== null && (enabled === null || tier >= enabled.tier)) {
+      enabled = { file, tier, value }
+    }
+    const disabled = Array.isArray(settings.hooksConfig?.disabled) ? settings.hooksConfig.disabled : []
+    for (const name of hooks) {
+      if (disabled.includes(name)) found.push(`${file} names the hook ${name} in hooksConfig.disabled`)
+    }
+  }
+  if (enabled !== null && hooksOff(enabled.value)) {
+    found.unshift(`${enabled.file} sets hooksConfig.enabled to ${JSON.stringify(enabled.value)}`)
+  }
+  return found
+}
+
+// extensionsAndPolicies is what of the home's active extensions and of the
+// home's and the machine's policies switches off one of the run's servers'
+// tools ([switchedOff]).
+function extensionsAndPolicies(home, server, tool) {
+  const list = (value) => (Array.isArray(value) ? value : [])
+  const found = []
   for (const { file, excludeTools } of activeExtensions(home)) {
     const why = list(excludeTools).filter((entry) => excludes(entry, server, tool))
     if (why.length > 0) found.push(`${file}: its excludeTools names the tool ${why.join(", ")}`)
