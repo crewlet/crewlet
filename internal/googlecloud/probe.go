@@ -228,7 +228,7 @@ func works(c *Client, accounts []ServiceAccount, found discovery) setup.Verdict 
 	}
 	var foreign []string
 	for _, a := range accounts {
-		if a.Email != c.Provisioner() && !strings.HasPrefix(a.Email, accountPrefix) {
+		if !crewletsOwn(a.Email, c.Provisioner()) {
 			foreign = append(foreign, a.Email)
 		}
 	}
