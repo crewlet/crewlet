@@ -33,16 +33,20 @@ import (
 // where it has none); SkillDirs, the skill directories ([skillDirSlot]), an
 // earlier one's skill winning a name; Skills, the run's skills directory (""
 // copies none), and Copied, the file listing each skill copied there;
-// Reserved, the tags no repository takes; Gated, whether the harness's own
-// code answers for each checkout instead ([checkoutGate]), read on stdin.
+// Reserved, the tags no repository takes; ImportInstructions, for a harness
+// that reads its instruction files itself, each file named as an import in
+// place of its text ([rootImports]), Limit not applying; Gated, whether the
+// harness's own code answers for each checkout instead ([checkoutGate]), read
+// on stdin.
 type checkoutSpec struct {
-	Instructions []instructionSlot `json:"instructions"`
-	Limit        *int              `json:"limit,omitempty"`
-	SkillDirs    []skillDirSlot    `json:"skillDirs,omitempty"`
-	Skills       string            `json:"skills,omitempty"`
-	Copied       string            `json:"copied,omitempty"`
-	Reserved     []string          `json:"reserved,omitempty"`
-	Gated        bool              `json:"gated,omitempty"`
+	Instructions       []instructionSlot `json:"instructions"`
+	Limit              *int              `json:"limit,omitempty"`
+	SkillDirs          []skillDirSlot    `json:"skillDirs,omitempty"`
+	Skills             string            `json:"skills,omitempty"`
+	Copied             string            `json:"copied,omitempty"`
+	Reserved           []string          `json:"reserved,omitempty"`
+	ImportInstructions bool              `json:"importInstructions,omitempty"`
+	Gated              bool              `json:"gated,omitempty"`
 	// gate is the firing's [checkoutGate] where Gated, and room what its
 	// answer has left ([claimRoom]); neither is on the wire.
 	gate *checkoutGate
@@ -53,13 +57,16 @@ type checkoutSpec struct {
 // state directory (the checkouts handed, the lock), the instruction file it
 // replaces with the launch's sections, the checkouts handed first, in order
 // (the repositories the run pushes to), the bound the sections share with
-// the text the harness reads beside them (nil for none), and the spec. The
-// working directory is the adapter's own.
+// the text the harness reads beside them (nil for none), the spec, and
+// NestedSkillsOnly for a nested adapter that hands skills alone, whose spec
+// then names no instruction file to read. The working directory is the
+// adapter's own.
 type launchConfig struct {
-	State  string        `json:"state"`
-	Agents string        `json:"agents"`
-	First  []string      `json:"first"`
-	Budget *launchBudget `json:"budget,omitempty"`
+	State            string        `json:"state"`
+	Agents           string        `json:"agents"`
+	First            []string      `json:"first"`
+	Budget           *launchBudget `json:"budget,omitempty"`
+	NestedSkillsOnly bool          `json:"nestedSkillsOnly,omitempty"`
 	checkoutSpec
 }
 
@@ -178,7 +185,11 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 			return err
 		}
 	}
-	nested, err := json.Marshal(nestedConfig{State: c.State, Workdir: work, checkoutSpec: c.checkoutSpec})
+	spec := c.checkoutSpec
+	if c.NestedSkillsOnly {
+		spec.Instructions, spec.Limit = nil, nil
+	}
+	nested, err := json.Marshal(nestedConfig{State: c.State, Workdir: work, checkoutSpec: spec})
 	if err != nil {
 		return err
 	}
@@ -495,14 +506,17 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, said *
 	}
 	for _, name := range claimed {
 		root := filepath.Join(work, name)
-		var h handedCheckout
-		if spec.gate != nil {
+		h := handedCheckout{name: name, root: root}
+		switch {
+		case spec.gate != nil:
 			g := spec.gate.Checkouts[root]
-			h = handedCheckout{name: name, root: root, text: g.Text, files: g.Files}
+			h.text, h.files = g.Text, g.Files
 			said.sayAll(g.Said)
-		} else {
+		case spec.ImportInstructions:
+			h.text = rootImports(root, spec.Instructions, said)
+		default:
 			parts, _ := instructionParts(root, limit, spec.Instructions, said)
-			h = handedCheckout{name: name, root: root, text: joinParts(parts), parts: parts}
+			h.text, h.parts = joinParts(parts), parts
 		}
 		for _, p := range plans[name] {
 			skill, err := copyPlanned(p, spec, staging, said)
