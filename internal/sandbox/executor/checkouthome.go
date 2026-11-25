@@ -68,9 +68,8 @@ func (h checkoutHome) removeSiblingStaging() string {
 // `@<absolute path>` import in place of its text, Limit not applying (Claude
 // Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code import no
 // absolute path from a home file, measured on 0.70.0 and 0.28.4); SkillSep,
-// what joins a copy's repository and skill, "" for `:`; and FiringLimit, the
-// bound in bytes on what one nested firing hands of all its checkouts'
-// instructions, nil for none, a file past it named for the model to read.
+// what joins a copy's repository and skill, "" for `:`; and FiringLimit, a
+// nested firing's bound in bytes on all its checkouts' files, nil for none.
 type checkoutSpec struct {
 	Instructions       []checkoutSlot
 	Limit              *int

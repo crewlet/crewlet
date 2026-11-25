@@ -65,20 +65,17 @@ echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
 	}
 }
 
-// A QWEN CODE RUN HANDS A CHECKOUT THE CONTEXT FILES ITS SETTINGS NAME:
-// context.fileName as Qwen Code 0.28.4 settles it (measured, each row): the
-// highest settings file holding the key decides, the working directory's over
-// the home's, comments allowed, even where it is null, empty or an empty list,
-// which leave QWEN.md then AGENTS.md; names trimmed, a blank one dropped, one
-// with a slash a path from the root; the checkouts' sections go into the
-// first of the home's own of those files that is there. A value Qwen Code
-// stops on (no string), or one naming blanks alone, under which it loads no
-// context file, refuses the run, naming the file.
+// A QWEN CODE RUN HANDS A CHECKOUT THE CONTEXT FILES ITS SETTINGS NAME, as
+// Qwen Code 0.28.4 settles context.fileName (measured, each row): the highest
+// settings file holding the key decides, comments allowed, even null, empty
+// or an empty list, which leave QWEN.md then AGENTS.md; names trimmed, a blank
+// one dropped, one with a slash a path from the root; the sections go into
+// the first of the home's own files that is there. A value Qwen Code stops on
+// (no string), or blanks alone, refuses the run, naming the file.
 //
-// Mutation: hand QWEN.md and AGENTS.md whatever the settings say, let the
-// home's setting win, skip a null or empty one, keep a blank name, drop a
-// name with a slash, write the sections to a home file the settings do not
-// name, or start a run Qwen Code stops on, and a row goes red.
+// Mutation: ignore the settings, let the home's win, skip a null or empty
+// one, keep a blank name, drop a slashed one, write the sections elsewhere,
+// or start a run Qwen Code stops on, and a row goes red.
 func TestAQwenRunHandsACheckoutTheContextFilesItsSettingsName(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
