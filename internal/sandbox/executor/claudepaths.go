@@ -81,8 +81,9 @@ func (p Paths) ClaudeSkillsPlugin() string { return p.WorkDir() + "/claude-skill
 func (p Paths) ClaudeRepo() string { return p.WorkDir() + "/claude-repo" }
 
 // ClaudeRepoSkills lists, a name a line, the checkouts' skills a run copied
-// into the home's `.claude/skills` ([claudeCheckoutHome]), so the next run
-// removes them and none of the home's.
+// into the home's `.claude/skills` ([claudeCheckoutHome]), so the run's end
+// removes them and none of the home's, or the next run's gate where the run
+// was killed first.
 func (p Paths) ClaudeRepoSkills() string { return p.WorkDir() + "/claude-repo-skills" }
 
 // ClaudeHomeInstructions is the home's own `.claude/CLAUDE.md`, held in the
