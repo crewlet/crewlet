@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -1389,6 +1390,21 @@ var baseBasis = runner.SessionBasis{SessionID: "s-base", Harness: "claude-code",
 	Base: &runner.BaseBasis{Turn: "t-0", Home: "/boxes/old/home [untrusted:x]", Interrupted: true,
 		ContextTokens: 40000, EndedAt: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)}}
 
+// withoutLostSession is brief less the section telling the session its run
+// does not continue (prompts.LostSessionSection): what a continuation is handed
+// of the fresh brief, which beside it tells the restore its box may fall back
+// from, a loss the run continuing that session never has.
+func withoutLostSession(brief string) string {
+	at := strings.Index(brief, "\n\n"+lostHeader)
+	if at < 0 {
+		return brief
+	}
+	if next := strings.Index(brief[at+2:], "\n\n## "); next >= 0 {
+		return brief[:at] + brief[at+2+next:]
+	}
+	return brief[:at]
+}
+
 // A CONVERSATION'S NEXT TURN IS TOLD WHERE IT BEGINS. Its first launch asks
 // which session it continues (every launch does) and is answered the session
 // the conversation's last turn left. That session holds another turn, so the
@@ -1430,8 +1446,15 @@ func TestAConversationsNextTurnIsToldWhereItBegins(t *testing.T) {
 		}
 	}
 	if !strings.HasPrefix(s.Replaced, "## A new turn of this conversation begins here") ||
-		!strings.HasSuffix(s.Replaced, strings.TrimSpace(req.Brief)) {
+		!strings.HasSuffix(s.Replaced, strings.TrimSpace(withoutLostSession(req.Brief))) {
 		t.Errorf("the continuation is not the lead and then the turn's fresh brief whole:\n%s", s.Replaced)
+	}
+	// THE FRESH BRIEF BESIDE IT IS TOLD UNDER THE RESTORE ITS BOX MAY FALL BACK
+	// FROM, which the continuation, continuing that very session, never is.
+	if !strings.Contains(req.Brief, "The run did not continue turn t-0's session: "+
+		executorkeep.LossRestoreFailed.Words()) || strings.Contains(s.Replaced, lostHeader) {
+		t.Errorf("the fresh brief does not name the box's fallback, or the continuation does:\n%s\n%s",
+			req.Brief, s.Replaced)
 	}
 	if !strings.Contains(req.Brief, endings) || !strings.Contains(s.Replaced, endings) {
 		t.Errorf("the run is not told how the conversation's earlier turns ended:\n%s", s.Replaced)
@@ -1599,7 +1622,8 @@ func TestABaseContinuationArmsAnEmptyGuard(t *testing.T) {
 			req := tc.g.relaunch(t)
 			if s := req.Session; tc.told != "" && (s == nil || !s.Basis.ContinuesBase() ||
 				!strings.HasPrefix(s.Replaced, "## A new turn of this conversation begins here") ||
-				!strings.HasSuffix(s.Replaced, strings.TrimSpace(req.Brief)) || !strings.Contains(req.Brief, tc.told)) {
+				!strings.HasSuffix(s.Replaced, strings.TrimSpace(withoutLostSession(req.Brief))) ||
+				!strings.Contains(req.Brief, tc.told)) {
 				t.Fatalf("the carried round continues %+v, want the conversation's session, handed the lead and "+
 					"then the round's reseed, which says %q", s, tc.told)
 			}
