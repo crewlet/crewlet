@@ -583,7 +583,7 @@ export function AskThread({
             approve: (proposal) => void approve(proposal),
             decline: (proposal) => void decline(proposal),
             prepareAgain: (proposal) => a.ask(prepareAgainQuestion(proposal)),
-            openHere: (target) => a.openHere(target),
+            openHere: (target, cardId) => a.openHere(target, cardId),
             ask: (question) => a.ask(question),
             undo: undoAction,
           }}
