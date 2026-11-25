@@ -374,7 +374,7 @@ func modelRecord() coord.NodeStatusRecord {
 			ParkedCount: 1, ParkedSince: at.Add(time.Second),
 			Limits: []coord.ModelLimit{
 				{Window: "session", Hours: 5, State: "reached", Used: ptr(1.02), ResetsAt: at.Add(3 * time.Hour), Seen: at},
-				{Window: "weekly", Hours: 168, State: "ok", Used: ptr(0.0), Seen: at},
+				{Window: "weekly", Hours: 168, State: "ok", Used: ptr(0.0), Seen: at, Read: true},
 				{Window: "model", Hours: 168, Model: "opus", State: "warning", Seen: at.Add(-time.Minute)},
 			},
 		}, {

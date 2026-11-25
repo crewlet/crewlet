@@ -194,7 +194,7 @@ func limitsOf(in []coord.ModelLimit) []harness.Limit {
 		if !reading.Window.Valid() || !reading.State.Valid() || l.Seen.IsZero() {
 			continue
 		}
-		out = append(out, harness.Limit{LimitReading: reading, Seen: l.Seen})
+		out = append(out, harness.Limit{LimitReading: reading, Seen: l.Seen, Read: l.Read})
 	}
 	return out
 }

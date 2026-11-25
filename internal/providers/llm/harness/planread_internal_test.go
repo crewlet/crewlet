@@ -134,13 +134,14 @@ func TestAPlanReadThatFailsChangesNothing(t *testing.T) {
 }
 
 // A READING DECIDES THE PLAN-WIDE WINDOW, so no call is a probe. A week used up
-// sits the sign-in out until it turns over, days away, with no call made; a
-// reading below the headroom line ends a session or weekly sit-out opened
-// before it (the plan reset or was raised); one above it, or a sit-out whose
-// window nothing names, keeps it.
+// sits the sign-in out until it turns over, days away, with no call made; a plan
+// read below the headroom line ends a session or weekly sit-out opened before it
+// (the plan reset or was raised); one above it, a sit-out whose window nothing
+// names, or a run's reading (dated when the run is collected) keeps it.
 //
 // Mutation: drop the room rule, and the reset week stays out; read room from the
-// warning line's far side, and the 85% case comes back into a near-spent plan.
+// warning line's far side, and the 85% case comes back into a near-spent plan;
+// let any reading end it, and the late run's does.
 func TestAReadingSitsAPlanOutAndBringsItBack(t *testing.T) {
 	t.Parallel()
 	p, clock := planProvider(t, fmt.Sprintf(usageScreen, 100), "fenced")
@@ -158,11 +159,13 @@ func TestAReadingSitsAPlanOutAndBringsItBack(t *testing.T) {
 	for name, tc := range map[string]struct {
 		used   float64
 		window llm.LimitWindow
+		run    bool
 		back   bool
 	}{
-		"the week reset":                 {used: 0.03, window: llm.LimitWeekly, back: true},
-		"the week is still near its end": {used: 0.85, window: llm.LimitWeekly},
-		"a limit no window names":        {used: 0.03, window: llm.LimitUnknown},
+		"the week reset":                                  {used: 0.03, window: llm.LimitWeekly, back: true},
+		"the week is still near its end":                  {used: 0.85, window: llm.LimitWeekly},
+		"a limit no window names":                         {used: 0.03, window: llm.LimitUnknown},
+		"a run collected after the limit, reporting room": {used: 0.03, window: llm.LimitWeekly, run: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -171,8 +174,8 @@ func TestAReadingSitsAPlanOutAndBringsItBack(t *testing.T) {
 			plan.wide.record(limitReport{reset: at.Add(3 * 24 * time.Hour), said: "limit", at: at,
 				window: tc.window})
 			used := tc.used
-			plan.Observe([]llm.LimitReading{{Window: llm.LimitWeekly, Hours: 168, State: llm.LimitOK,
-				Used: &used, ResetsAt: at.Add(7 * 24 * time.Hour)}}, at.Add(time.Minute))
+			plan.observe([]llm.LimitReading{{Window: llm.LimitWeekly, Hours: 168, State: llm.LimitOK,
+				Used: &used, ResetsAt: at.Add(7 * 24 * time.Hour)}}, at.Add(time.Minute), !tc.run)
 			if _, out := plan.wide.sitOut(at.Add(2*time.Minute), ""); out == tc.back {
 				t.Errorf("sitting out after the reading = %v, want %v", out, !tc.back)
 			}
@@ -190,8 +193,8 @@ func TestAnOlderReadingDoesNotEndANewerSitOut(t *testing.T) {
 	at := time.Date(2026, time.November, 25, 6, 0, 0, 0, time.UTC)
 	plan.wide.record(limitReport{reset: at.Add(24 * time.Hour), said: "limit", at: at, window: llm.LimitWeekly})
 	used := 0.1
-	plan.Observe([]llm.LimitReading{{Window: llm.LimitWeekly, State: llm.LimitOK, Used: &used}},
-		at.Add(-time.Minute))
+	plan.observe([]llm.LimitReading{{Window: llm.LimitWeekly, State: llm.LimitOK, Used: &used}},
+		at.Add(-time.Minute), true)
 	if _, out := plan.wide.sitOut(at.Add(time.Minute), ""); !out {
 		t.Error("a reading made before the limit ended its sit-out")
 	}
