@@ -128,5 +128,6 @@ roles:
 	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "bridge") {
 		t.Fatalf("a box listing a signed-in server: %v", err)
 	}
-	mustCompany(t, strings.Replace(doc, "    oauth:\n      client: cimd\n", "", 1))
+	mustCompany(t, strings.Replace(doc, "    oauth:\n      client: cimd\n",
+		"    headers:\n      Authorization: Bearer ${LINEAR_TOKEN}\n", 1))
 }

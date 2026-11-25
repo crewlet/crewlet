@@ -58,6 +58,7 @@ up() {
   case "$st" in '' | [ZX]*) return 1 ;; esac
 }
 case "$1" in
+debug) cat "$d/agents.json" 2> /dev/null || echo '[]' ;;
 --version)
   [ -z "${FAKE_VERSION_FAIL:-}" ] || { echo "$FAKE_VERSION_FAIL" >&2; exit 3; }
   echo "${FAKE_VERSION:-opencode v2.3.2}" ;;
@@ -94,6 +95,7 @@ serve)
 api)
   if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; hangs "$1"; fi
   case "$1" in
+  config.get) cat "$d/config-get.json" 2> /dev/null || echo '[]' ;;
   credential.list)
     [ -e "$d/creds" ] || for id in ${FAKE_CREDS-}; do echo "$id"; done > "$d/creds"
     printf '{"data":[' ; sep=

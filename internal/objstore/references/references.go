@@ -127,8 +127,8 @@ import (
 // repository's published multi-pack-index layers, the logs its failed checks
 // kept, an artifact's version files and assets, the files of the company's
 // adopted brand, the files a person's assistant conversations keep, and the
-// sealed sessions a seat's executor runs continue from, with the media each
-// keeps apart.
+// sealed sessions a seat's executor runs continue from, with the media and
+// the newest summary each keeps apart.
 var All = []objstore.ReferenceTable{
 	worklet.FileObjectReferences,
 	gitlet.PackReferences,
@@ -141,6 +141,7 @@ var All = []objstore.ReferenceTable{
 	assistantdomain.FileObjectReferences,
 	executordomain.SessionObjectReferences,
 	executordomain.SessionMediaReferences,
+	executordomain.SummaryObjectReferences,
 }
 
 // ObjectColumn is the name every referencing table gives its key column, and

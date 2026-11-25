@@ -149,8 +149,8 @@ Thinking, effort and output limits are Claude Code's to decide; see
 [What an entry does not set](#what-an-entry-does-not-set).
 
 An executor run on a Claude Code entry takes a person's notes between its steps
-through hooks the run is started with; that needs Claude Code 2.1.163 or later (an
-older release starts without them and its notes wait for its review). Measured on
+through hooks the run is started with; that needs Claude Code 2.1.163 or later (a
+run on an older release is refused). Measured on
 2.1.263 and 2.1.310; see [The executor's run in a
 box](#the-executors-run-in-a-box).
 
@@ -1100,7 +1100,8 @@ setting every run holds that keeps the box's retention sweep off the session the
 engine carries. The wrapper first unsets `CLAUDE_CODE_SIMPLE` and
 `CLAUDE_CODE_SAFE_MODE`, either of which switches those hooks off. Measured on
 Claude Code 2.1.263 and 2.1.310; it needs 2.1.163 or later, and the run's script
-starts an older release without the hooks and without telling it of notes. See
+refuses an older release, as it refuses a run whose settings would switch the
+hooks off. See
 [Claude Code's hooks](code-sandbox.md#claude-codes-hooks) and [A Claude Code
 run's session](code-sandbox.md#a-claude-code-runs-session).
 

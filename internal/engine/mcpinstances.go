@@ -104,6 +104,8 @@ func (e *Engine) mcpReadings(ctx context.Context) []mcpReading {
 	// The surface each instance is filed into: the epoch's registry for a
 	// shared server, the seat's own for a seat's child.
 	epoch := e.epochTools()
+	e.recallMCPDown(ctx)
+	e.mcpDown.began()
 	e.mcpMu.Lock()
 	all := make([]filedOutcome, 0, len(e.mcpShared))
 	for _, o := range e.mcpShared {
@@ -153,7 +155,7 @@ func (e *Engine) mcpReadings(ctx context.Context) []mcpReading {
 			missing = missing.judged(states)
 			if missing.waiting() {
 				r.state, r.wait, r.last = coord.MCPInstanceWaiting, missing, nil
-				out = append(out, r)
+				out = append(out, r.dated(&e.mcpDown))
 				continue
 			}
 			failure = missing
@@ -161,9 +163,17 @@ func (e *Engine) mcpReadings(ctx context.Context) []mcpReading {
 		if failure != nil {
 			r.state, r.failure = coord.MCPInstanceFailed, failure
 		}
-		out = append(out, r)
+		out = append(out, r.dated(&e.mcpDown))
 	}
 	return out
+}
+
+// dated is r with its outage dated by what this node kept across a restart
+// ([mcpDown.date]): a waiting one's wait, a failed one's outage.
+func (r mcpReading) dated(d *mcpDown) mcpReading {
+	r.since = d.date(mcpInstanceKey{server: r.server, seat: r.seat}, r.state == coord.MCPInstanceRunning,
+		r.since, r.answered)
+	return r
 }
 
 // epochTools is the current epoch's registry, nil before one is published.

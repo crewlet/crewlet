@@ -1127,3 +1127,32 @@ func TestAConsentRequirementTakesNoValue(t *testing.T) {
 		}
 	}
 }
+
+// A STEP AT THE VENDOR TAKES NO VALUE AND HOLDS UP NOTHING: a redirect URI is
+// refused as a value like a sign-in, and a required sign-in or address is never
+// outstanding, since the pass, not the form, reports whether it was taken.
+//
+// Mutation: drop the AtVendor check from Needed, and a required sign-in blocks the pass.
+func TestAStepAtTheVendorTakesNoValueAndHoldsUpNothing(t *testing.T) {
+	t.Parallel()
+	redirect := setup.Requirement{Field: "redirect_uri", Label: "Authorized redirect URI", Kind: setup.KindRedirect,
+		Required: true}
+	if refused := redirect.Refusal("https://hooks.example.com/webhooks/mcp-oauth"); refused == nil ||
+		!strings.Contains(refused.Problem, "register at the vendor") {
+		t.Errorf("a redirect requirement took a value (%v)", refused)
+	}
+	reqs := []setup.Requirement{redirect,
+		{Field: "google_sign_in", Label: "Sign in with Google", Kind: setup.KindConsent, Required: true},
+		{Field: "reader", Label: "Company reader", Kind: setup.KindAddIdentity, Required: true}}
+	if out := setup.Outstanding(reqs); len(out) != 0 {
+		t.Errorf("steps at the vendor are outstanding: %+v", out)
+	}
+	setup.FillRedirects(reqs, "https://hooks.example.com/webhooks/mcp-oauth", "api.public.external_url")
+	if got := reqs[0].Redirect; got == nil || got.URL != "https://hooks.example.com/webhooks/mcp-oauth" ||
+		got.Key != "api.public.external_url" {
+		t.Errorf("the redirect = %+v", got)
+	}
+	if reqs[1].Redirect != nil {
+		t.Errorf("a sign-in was given a redirect: %+v", reqs[1].Redirect)
+	}
+}
