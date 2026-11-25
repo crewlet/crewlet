@@ -2,7 +2,10 @@
 
 - **Status:** accepted
 - **Authority:** `internal/worklet`
-- **Enforced-by:** `internal/worklet.TestAnArtifactLinkThisEngineHandedOutIsCitedAsTheArtifact`, `internal/agent/builtin.TestADecisionCitingAPublishedArtifactsURLCitesTheArtifact`, `internal/decision.TestADecisionIsValidatedField`
+- **Enforced-by:**
+  - `internal/worklet.TestAnArtifactLinkThisEngineHandedOutIsCitedAsTheArtifact`
+  - `internal/agent/builtin.TestADecisionCitingAPublishedArtifactsURLCitesTheArtifact`
+  - `internal/decision.TestADecisionIsValidatedField`
 - **Cost-when-tried:** on a deployment whose `api.external_url` is `http://`, a seat published an artifact, cited the `url` the publish answered in a decision to a person, and was refused because a `url` must be `https://`. It spent a further round of its whole context and left the person unasked.
 - **Tag-status:** unreleased
 

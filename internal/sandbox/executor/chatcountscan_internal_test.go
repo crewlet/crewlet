@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -45,6 +46,16 @@ func chatCountHarnesses(t *testing.T) []chatCountHarness {
 			variants: geminiCountVariants(), twices: geminiCountTwices(), member: geminiChatMember,
 			memberName: geminiMember.Name, release: geminiRelease},
 	}
+}
+
+// chatCountHarnessOf is the harness of [chatCountHarnesses] named name.
+func chatCountHarnessOf(t *testing.T, name string) chatCountHarness {
+	t.Helper()
+	i := slices.IndexFunc(chatCountHarnesses(t), func(h chatCountHarness) bool { return h.name == name })
+	if i < 0 {
+		t.Fatalf("no count harness %q", name)
+	}
+	return chatCountHarnesses(t)[i]
 }
 
 // qwenCountBase is a Qwen Code reply that anchors a count.
@@ -272,7 +283,8 @@ func geminiPieceEdgeLines() []string {
 // geminiFormHeadEdgeLines is a compression whose line meets the head a form
 // is read within ([lineFormMaxBytes]): the summary's opening form ending a
 // byte short of it, at it and a byte past it, and its reply, a whole form,
-// led by white space to a byte short of it and to it.
+// led or trailed by white space to each of them, the line judged trimmed
+// whole ([lineFormHead]); each torn as well (eachChatCountRecord).
 func geminiFormHeadEdgeLines() []string {
 	set := `{"$set":{"sessionId":"s"}}`
 	ack := `{"id":"a","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}`
@@ -281,10 +293,9 @@ func geminiFormHeadEdgeLines() []string {
 	var out []string
 	for _, n := range []int{lineFormMaxBytes - 1, lineFormMaxBytes, lineFormMaxBytes + 1} {
 		out = append(out, set+"\n"+`{"id":"c","timestamp":"`+strings.Repeat("t", n-opening)+
-			`","type":"user","content":[{"text":"<state_snapshot>s"}]}`+"\n"+ack)
-	}
-	for _, n := range []int{lineFormMaxBytes - 1, lineFormMaxBytes} {
-		out = append(out, set+"\n"+user+"\n"+strings.Repeat(" ", n-len(ack))+ack)
+			`","type":"user","content":[{"text":"<state_snapshot>s"}]}`+"\n"+ack,
+			set+"\n"+user+"\n"+strings.Repeat(" ", n-len(ack))+ack,
+			set+"\n"+user+"\n"+ack+strings.Repeat(" ", n-len(ack)))
 	}
 	return out
 }
@@ -493,6 +504,31 @@ func TestAChatCountPastItsCallsBoundIsUnread(t *testing.T) {
 		case !c.unread && (got.Mark == sandbox.CountUnread || !sameCount(got, want)):
 			t.Errorf("%s: counts %s, want %s", c.name, countString(got), countString(want))
 		}
+	}
+}
+
+// A GEMINI CLI COUNT PAST ITS IDS KEEPS NO MORE: once its ids pass
+// [geminiCountIDs] the count is unread, and no record, answer, call or
+// removal of a later line is held, so a session of any length holds the
+// bound and the one line that passed it.
+//
+// Mutation: keep taking records or removals once full: the count holds more.
+func TestAGeminiCountPastItsIDsKeepsNoMore(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	b.WriteString(geminiCountBase + "\n")
+	for i := range geminiCountIDs + 1000 {
+		fmt.Fprintf(&b, `{"id":"k%07d","type":"gemini","content":"x"}`+"\n", i)
+	}
+	b.WriteString(`{"$patch":{"removeIds":["k0000001","b0"]}}` + "\n")
+	c := newGeminiCounting()
+	if err := chatFileLines(t.Context(), strings.NewReader(b.String()), c, new(passBudget), nil); err != nil {
+		t.Fatal(err)
+	}
+	held := len(c.quarters) + len(c.answers) + len(c.calls) + len(c.removed)
+	if got := c.count(0, 0); got.Mark != sandbox.CountUnread || held > geminiCountIDs+1 {
+		t.Errorf("a count past its ids reads %s holding %d ids; want unread, holding at most %d", countString(got),
+			held, geminiCountIDs+1)
 	}
 }
 

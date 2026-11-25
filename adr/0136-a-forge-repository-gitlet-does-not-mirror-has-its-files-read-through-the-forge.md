@@ -2,7 +2,22 @@
 
 - **Status:** accepted
 - **Authority:** `internal/atlas/codescan`
-- **Enforced-by:** `internal/atlas/codescan.TestNothingOffTheClosedListIsEverAskedOfAForge`, `internal/atlas/codescan.TestAForgeRepositoryIsReadWhenItsDefaultBranchMovesAndOnlyWhatChanged`, `internal/atlas/codescan.TestAPassOverAForgeIsBoundedInFilesBytesAndTrees`, `internal/atlas/codescan.TestARepositoryGitletMirrorsIsNotReadThroughItsForge`, `internal/atlas/codescan.TestARepositoryTheListingDoesNotHoldIsReleasedOnlyWhereTheListingIsWhole`, `internal/atlas/codescan.TestWhatAForgeAnswersIsHeldToWhatItListed`, `internal/atlas/codescan.TestARefusedRepositoryIsLeftAsItWasAndAFailingForgeStopsThePass`, `internal/atlas/codescan.TestTheTwoScansKeepTheirStandingsApart`, `internal/atlas/codescan.TestAForgeRepositorysVoiceIsItsKey`, `internal/atlas/collect.TestAForgesRepositoriesAreReadAsAVisitOfTheirOwn`, `internal/github.TestTheFilesOfAGitHubRepositoryAreReadByTheClosedList`, `internal/github.TestWhatGitHubRefusesOrCutsShortIsNeverReadAsEmpty`, `internal/gitlab.TestTheFilesOfAGitLabProjectAreReadByTheClosedList`, `internal/gitlab.TestAGitLabTreeIsWalkedToItsEndOrNotAtAll`, `internal/gitlab.TestAGitLabProjectThatRefusesItsCodeIsLeftAsItWas`
+- **Enforced-by:**
+  - `internal/atlas/codescan.TestNothingOffTheClosedListIsEverAskedOfAForge`
+  - `internal/atlas/codescan.TestAForgeRepositoryIsReadWhenItsDefaultBranchMovesAndOnlyWhatChanged`
+  - `internal/atlas/codescan.TestAPassOverAForgeIsBoundedInFilesBytesAndTrees`
+  - `internal/atlas/codescan.TestARepositoryGitletMirrorsIsNotReadThroughItsForge`
+  - `internal/atlas/codescan.TestARepositoryTheListingDoesNotHoldIsReleasedOnlyWhereTheListingIsWhole`
+  - `internal/atlas/codescan.TestWhatAForgeAnswersIsHeldToWhatItListed`
+  - `internal/atlas/codescan.TestARefusedRepositoryIsLeftAsItWasAndAFailingForgeStopsThePass`
+  - `internal/atlas/codescan.TestTheTwoScansKeepTheirStandingsApart`
+  - `internal/atlas/codescan.TestAForgeRepositorysVoiceIsItsKey`
+  - `internal/atlas/collect.TestAForgesRepositoriesAreReadAsAVisitOfTheirOwn`
+  - `internal/github.TestTheFilesOfAGitHubRepositoryAreReadByTheClosedList`
+  - `internal/github.TestWhatGitHubRefusesOrCutsShortIsNeverReadAsEmpty`
+  - `internal/gitlab.TestTheFilesOfAGitLabProjectAreReadByTheClosedList`
+  - `internal/gitlab.TestAGitLabTreeIsWalkedToItsEndOrNotAtAll`
+  - `internal/gitlab.TestAGitLabProjectThatRefusesItsCodeIsLeftAsItWas`
 - **Cost-when-tried:** not tried. ADR-0133 reads a repository's files where Gitlet holds them, so a company whose code lives on GitHub or GitLab and is not mirrored had no file read at all.
 - **Tag-status:** unreleased
 

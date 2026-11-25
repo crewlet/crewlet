@@ -397,7 +397,11 @@ func (t chatText) name() string {
 
 // chatText reads the current string ([chatText]), its word digested past the
 // bound where word.
-func (w *lineWalk) chatText(word bool) (chatText, error) {
+func (w *lineWalk) chatText(word bool) (chatText, error) { return w.chatTextTo(word, nil) }
+
+// chatTextTo is [lineWalk.chatText] writing the text's bytes to tee too, nil
+// for nowhere.
+func (w *lineWalk) chatTextTo(word bool, tee io.Writer) (chatText, error) {
 	var t chatText
 	t.js = 2
 	head := w.wordBuf[:0]
@@ -435,6 +439,9 @@ func (w *lineWalk) chatText(word bool) (chatText, error) {
 			}
 		}
 		t.take(p)
+		if tee != nil {
+			_, _ = tee.Write(p)
+		}
 		switch {
 		case errors.Is(err, io.EOF):
 			t.word = recordWord{text: string(head)}

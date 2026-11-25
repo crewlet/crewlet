@@ -125,7 +125,7 @@ func namedStoredDamage(err error) bool {
 }
 
 // forceDeadline bounds one force check over a repository of objects live
-// objects: one read attempt, and a walk of the history.
+// objects: one local read (gitproc.ReadDeadline), and a walk of the history.
 func forceDeadline(objects int64) time.Duration {
 	return gitproc.ReadDeadline + gitproc.HistoryWalk(objects)
 }

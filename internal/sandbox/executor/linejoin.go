@@ -11,7 +11,8 @@ import (
 // texts of the parts of kind or also, of every part where anyKind says its
 // decode reads no `type`, or of every part but image's where every says so,
 // sep between them, a blank one dropped where dropBlank says so. A part of
-// the image kind joins as [claudeImagePlaceholder], whatever its own text.
+// the image kind joins as its place ([imagePlaceholder]), whatever its own
+// text.
 type joinRule struct {
 	kind, also, image, sep    string
 	anyKind, every, dropBlank bool
@@ -55,6 +56,8 @@ type textJoin struct {
 	partKinds, partTexts                         int
 	part                                         []byte
 	partPast, partKept, partStreaming, partBlank bool
+	// partImage is the image bytes the walk passed in the part.
+	partImage int64
 }
 
 // start starts a join by rule that makes e past the bound, streamed where
@@ -72,6 +75,7 @@ const joinOpeningBytes = max(len(grokUserInfoOpen), len(grokQueryOpen))
 func (j *textJoin) partStart() {
 	j.partKind, j.partKinds, j.partTexts, j.part = "", 0, 0, lineScratch(j.part)
 	j.partPast, j.partKept, j.partStreaming, j.partBlank = false, false, false, true
+	j.partImage = 0
 }
 
 // partType keeps the part's kind, "" for none.
@@ -156,7 +160,7 @@ func (j *textJoin) Write(p []byte) (int, error) {
 func (j *textJoin) partEnd() {
 	image := j.image() && !j.lost
 	if image {
-		j.part = append(j.part[:0], claudeImagePlaceholder...)
+		j.part = append(j.part[:0], imagePlaceholder(j.partImage)...)
 		j.partPast, j.partBlank = false, false
 	}
 	switch {

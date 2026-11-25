@@ -347,18 +347,18 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	}, nil
 }
 
-// ReadAttempt bounds one read's wait on one node: [Production]'s
-// [Timing.ReadAttempt], a ceiling under the caller's own deadline.
-//
-// TEN SECONDS: a linearizable read's waits at their whole budgets — the
-// asker's floor ([statelog.ReadBudget]), the barrier
-// ([statelog.DefaultBarrierBudget]) and its position (ReadBudget) — plus the
-// reply's margin (gitlet.ReplyMargin): 2 + 5 + 2 + 1, held by
-// TestProductionsReadAttemptHoldsALinearizableReadsWaits. A node silent that
-// long is gone rather than slow. Gitproc's ReadDeadline and SlotWait are one
-// read attempt each; TestGitprocsReadBoundsAreOneReadAttempt holds that from
-// here, since gitproc imports no engine package.
-const ReadAttempt = 10 * time.Second
+// ReadAttempt bounds one read's wait on one node ([Timing.ReadAttempt]), under
+// the caller's own deadline: FIFTEEN SECONDS, a linearizable read's waits at
+// their whole budgets (TestProductionsReadAttemptHoldsALinearizableReadsWaits).
+// The barrier on a log several members store, 10 s, waits out one election at
+// the pinned nats-server v2.15.3: 9 s maxElectionTimeoutDefault
+// (server/raft.go:329) and the new leader's first 1 s heartbeat (raft.go:331).
+// The read's own 5 s is argued, not measured: the floor's and the position's
+// [statelog.ReadBudget] (2 s each, the read's promise, refused rather than
+// grown) and gitlet.ReplyMargin (1 s, two orders over the answer's trip and
+// clock skew). A node silent that long is gone rather than slow; gitproc's
+// ReadDeadline and SlotWait fit inside one (TestAGitReadFitsInsideOneReadAttempt).
+const ReadAttempt = 15 * time.Second
 
 // writeAttempt bounds one write's wait on one node for a caller with no
 // deadline of its own: [Production]'s [Timing.WriteAttempt], read by nothing

@@ -65,7 +65,7 @@ const (
 	// last, up to the ceiling. The beat is the linger, so a retry inside it
 	// looks like an ordinary partial batch closing. The ceiling is five
 	// seconds, a broker election's scale and the write path's resolve budget
-	// ([DefaultBarrierBudget]): a broker silent that long cannot answer, and
+	// ([DefaultResolveBudget]): a broker silent that long cannot answer, and
 	// asking more often only loads it. Against [ApplyRetryBudget] it leaves a
 	// fault at least six attempts before it is reported, so one failed call
 	// never takes a copy out of service.

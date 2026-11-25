@@ -2,7 +2,11 @@
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`
-- **Enforced-by:** `internal/statelog.TestATrackerHandsOnEveryTransitionOnce`, `internal/engine.TestAnAlarmTransitionIsPublishedUntilTheBrokerTakesIt`, `internal/alarmwake.TestAnAlarmTransitionWakesEachGrantedSeatOnce`, `internal/statelog.TestARestartDoesNotReRaiseAStandingAlarm`
+- **Enforced-by:**
+  - `internal/statelog.TestATrackerHandsOnEveryTransitionOnce`
+  - `internal/engine.TestAnAlarmTransitionIsPublishedUntilTheBrokerTakesIt`
+  - `internal/alarmwake.TestAnAlarmTransitionWakesEachGrantedSeatOnce`
+  - `internal/statelog.TestARestartDoesNotReRaiseAStandingAlarm`
 - **Cost-when-tried:** not tried here: before this record no alarm woke anybody, and a seat learned the deployment's health only by asking. The cost the decision avoids is the one each alternative below names — a flap lost between two reads of a current value, a wake that never happens because the log it would be written on is the one the alarm says is full, and a wake lost to a broker blip with a logged line and no retry (ADR-0012's first failure mode).
 - **Tag-status:** unreleased
 

@@ -43,6 +43,12 @@ func (Codex) Name() string { return CodexName }
 // set to 1050, a 1040-second call was answered whole (measured on 0.171.0).
 func (Codex) MCPCallCeiling() time.Duration { return 0 }
 
+// CountedAtCollection implements [collectionCounted].
+func (Codex) CountedAtCollection() string {
+	return "exec --json's stdout marks no model response: " +
+		"the rollout lines its count reads are appended by the run's script once Codex exits"
+}
+
 // resumesOnLaunchRoute: measured on 0.171.0, the one release supported
 // ([launchRouted]): created on a config provider at stub A, resumed through
 // `app-server` and `exec --remote resume` with its base_url at stub B; the
@@ -434,19 +440,30 @@ func codexAborted(paths Paths) string {
 // session is the thread Codex reported, else the one it continued, as
 // collection reads it ([Runner.ReportedSession]); the rollout lines the run
 // appended of the kinds the result reads go to the stream
-// ([codexRolloutEvent]); and the session is packed ([codexCapture]).
+// ([codexRolloutEvent]), each told by the kind its line opens with, as
+// [codexRolloutKinds] matches it; and the session is packed ([codexCapture]).
 func codexFinish(paths Paths) string {
 	var b strings.Builder
 	b.WriteString("finish() {\n")
 	b.WriteString(`[ -z "$tid" ] || sid=$tid` + "\n")
 	fmt.Fprintf(&b, `r=; [ -z "$sid" ] || r=$(find %s -type f -name "rollout-*-$sid.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1)`+"\n",
 		shellword.Quote(paths.CodexSessions()))
-	fmt.Fprintf(&b, `[ -z "$r" ] || tail -n +$((before + 1)) "$r" | grep -E '"type": *"(turn_context|token_usage_record|token_count|turn_aborted)"' | sed 's/^/{"type":"%s","line":/; s/$/}/'`+"\n",
-		codexRolloutEvent)
+	fmt.Fprintf(&b, `[ -z "$r" ] || tail -n +$((before + 1)) "$r" | grep -E '%s' | sed 's/^/{"type":"%s","line":/; s/$/}/'`+"\n",
+		codexRolloutKinds, codexRolloutEvent)
 	b.WriteString(codexCapture(paths))
 	b.WriteString("}\n")
 	return b.String()
 }
+
+// codexRolloutKinds matches a rollout line of a kind a run's result reads, as
+// Codex 0.171.0 opens one (its envelope's time, ordinal and type, and an
+// event's own type first in its payload): a turn's context or spend, a token
+// count or an aborted turn. Matched at the line's head, never anywhere in it,
+// so no other line that quotes one in its text reaches the result's
+// whole-line read ([readCodexRollout]): an MCP call's end whose structured
+// content names one runs past its bound beside an image.
+const codexRolloutKinds = `^[{]"timestamp":"[^"]*","ordinal":[0-9][0-9]*,"type":"(turn_context|token_usage_record|` +
+	`event_msg","payload":[{]"type":"(token_count|turn_aborted))"`
 
 // Output is where a Codex run's stream lands, which is its result: its
 // stdout, `exec --json`, with the rollout lines its script adds after it

@@ -2,7 +2,42 @@
 
 - **Status:** accepted
 - **Authority:** `internal/recordseal`
-- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/recordseal.TestATamperedRecordIsRefusedPermanently`, `internal/recordseal.TestTheRecordSealLinksNothingOfTheEngine`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/engine.TestATamperedFrameIsStillAcknowledgedAndWakesNobody`, `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/engine.TestEverySignedChannelTheTreeBuildsIsClaimed`, `internal/sandbox.TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor`, `internal/sandbox.TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn`, `internal/sandbox.TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt`, `internal/sandbox.TestALeadSealOpensOnlyOnTheTurnAndPlaceItWasSealedFor`, `internal/sandbox.TestALeadUnderAKeyThisNodeLacksIsKeptForANodeThatHoldsIt`, `internal/sandbox.TestOnlyALeadOfANamedJobInItsKindsShapeIsSealedOrOpened`, `internal/sandbox.TestALeadOfAKindThisBuildDoesNotKnowIsUnreadHereNotUnopened`, `internal/engine.TestAResumeOpensTheLeadsItsJobsBriefTold`, `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket`, `internal/engine.TestARelayServerAnswersOnlyAnAskTheFleetSigned`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/httprelay.TestAnOpenTheFleetDidNotSignRunsNothing`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`, `internal/estate.TestADataNodeRunsNothingOfARequestItsBuildCannotReadWhole`, `internal/signedask.TestARequestIsTakenOnceUntilItsDeadlinePlusItsChannelsAllowance`
+- **Enforced-by:**
+  - `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`
+  - `internal/recordseal.TestATamperedRecordIsRefusedPermanently`
+  - `internal/recordseal.TestTheRecordSealLinksNothingOfTheEngine`
+  - `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`
+  - `internal/engine.TestATamperedFrameIsStillAcknowledgedAndWakesNobody`
+  - `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`
+  - `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`
+  - `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`
+  - `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`
+  - `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`
+  - `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`
+  - `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`
+  - `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`
+  - `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`
+  - `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`
+  - `internal/engine.TestEverySignedChannelTheTreeBuildsIsClaimed`
+  - `internal/sandbox.TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor`
+  - `internal/sandbox.TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn`
+  - `internal/sandbox.TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt`
+  - `internal/sandbox.TestALeadSealOpensOnlyOnTheTurnAndPlaceItWasSealedFor`
+  - `internal/sandbox.TestALeadUnderAKeyThisNodeLacksIsKeptForANodeThatHoldsIt`
+  - `internal/sandbox.TestOnlyALeadOfANamedJobInItsKindsShapeIsSealedOrOpened`
+  - `internal/sandbox.TestALeadOfAKindThisBuildDoesNotKnowIsUnreadHereNotUnopened`
+  - `internal/engine.TestAResumeOpensTheLeadsItsJobsBriefTold`
+  - `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`
+  - `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`
+  - `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`
+  - `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`
+  - `internal/engine.TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket`
+  - `internal/engine.TestARelayServerAnswersOnlyAnAskTheFleetSigned`
+  - `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`
+  - `internal/httprelay.TestAnOpenTheFleetDidNotSignRunsNothing`
+  - `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`
+  - `internal/estate.TestADataNodeRunsNothingOfARequestItsBuildCannotReadWhole`
+  - `internal/signedask.TestARequestIsTakenOnceUntilItsDeadlinePlusItsChannelsAllowance`
 - **Cost-when-tried:** both readers shipped handing the frame on, and neither failed as a signature bug. The applier put the framed bytes on `Record.Payload`, which every domain decodes, so every record came back `invalid character 'c' looking for beginning of value` from inside the apply transaction — the position never moved, health read the node as BEHIND rather than broken, and it shed its seats to a peer that would have done the same. The change feed read the same bytes and acknowledged each one under its own rule for a record it cannot decode, so every notification in the company stopped.
 - **Tag-status:** unreleased
 

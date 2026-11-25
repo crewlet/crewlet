@@ -2,7 +2,25 @@
 
 - **Status:** accepted
 - **Authority:** `internal/atlas/codescan`
-- **Enforced-by:** `internal/atlas/codescan.TestAnEnvironmentValueIsNeverRead`, `internal/atlas/codescan.TestNoParserDeclaresAFieldForAnEnvironmentValue`, `internal/atlas/codescan.TestTheFieldGateCatchesABrokenParser`, `internal/atlas/codescan.TestNoCredentialShapeReachesTheAtlasFromAFile`, `internal/atlas/codescan.TestEachFileDeclaresWhatItNames`, `internal/atlas/codescan.TestARepositoryIsReadWhenItsDefaultBranchMovesAndOnlyWhatChanged`, `internal/atlas/codescan.TestAFileOffTheClosedListIsNeverRead`, `internal/atlas/codescan.TestAPassReadsABoundedNumberOfFilesAndPublishesAWholeCommit`, `internal/atlas/codescan.TestWhatTheScanRefusesIsCountedOnTheStanding`, `internal/atlas/codescan.TestAUnitOnlyRepositoryIsNeverScannedAndAnUnscannedOneIsWithdrawn`, `internal/deployfiles.TestTheListAdmitsOnlyWhatItNames`, `internal/deployfiles.TestAFileThatHoldsSecretsIsNeverListed`, `internal/gitlet/query.TestACommitsDeployFilesAreListedByTheClosedListAndOnlyThoseAreRead`, `internal/gitlet.TestTheDefaultTipsListingNamesEveryActiveProjectRepositoryAndItsTip`, `internal/atlas.TestWhatCodeDeclaresIsLikelyUntilAPersonConfirmsIt`, `internal/atlas.TestAFileNeverContestsWhatAnIntegrationRead`, `internal/atlas.TestAFileNeverSetsMeaningOrDeniesAnything`, `internal/atlasdomain.TestARepositorysFilesAreReadInTheirOwnVoice`
+- **Enforced-by:**
+  - `internal/atlas/codescan.TestAnEnvironmentValueIsNeverRead`
+  - `internal/atlas/codescan.TestNoParserDeclaresAFieldForAnEnvironmentValue`
+  - `internal/atlas/codescan.TestTheFieldGateCatchesABrokenParser`
+  - `internal/atlas/codescan.TestNoCredentialShapeReachesTheAtlasFromAFile`
+  - `internal/atlas/codescan.TestEachFileDeclaresWhatItNames`
+  - `internal/atlas/codescan.TestARepositoryIsReadWhenItsDefaultBranchMovesAndOnlyWhatChanged`
+  - `internal/atlas/codescan.TestAFileOffTheClosedListIsNeverRead`
+  - `internal/atlas/codescan.TestAPassReadsABoundedNumberOfFilesAndPublishesAWholeCommit`
+  - `internal/atlas/codescan.TestWhatTheScanRefusesIsCountedOnTheStanding`
+  - `internal/atlas/codescan.TestAUnitOnlyRepositoryIsNeverScannedAndAnUnscannedOneIsWithdrawn`
+  - `internal/deployfiles.TestTheListAdmitsOnlyWhatItNames`
+  - `internal/deployfiles.TestAFileThatHoldsSecretsIsNeverListed`
+  - `internal/gitlet/query.TestACommitsDeployFilesAreListedByTheClosedListAndOnlyThoseAreRead`
+  - `internal/gitlet.TestTheDefaultTipsListingNamesEveryActiveProjectRepositoryAndItsTip`
+  - `internal/atlas.TestWhatCodeDeclaresIsLikelyUntilAPersonConfirmsIt`
+  - `internal/atlas.TestAFileNeverContestsWhatAnIntegrationRead`
+  - `internal/atlas.TestAFileNeverSetsMeaningOrDeniesAnything`
+  - `internal/atlasdomain.TestARepositorysFilesAreReadInTheirOwnVoice`
 - **Cost-when-tried:** not tried. No build read a company repository's file for the atlas; the nearest reads were the checks file, one fixed path, and an agent's own `code_read`, which is held to the agent's grant and recorded as its read.
 - **Tag-status:** unreleased
 
