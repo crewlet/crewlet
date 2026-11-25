@@ -255,18 +255,47 @@ func geminiCountVariants() []string {
 		`{"id":"r17","type":"user","content":"a   space"}`,
 		`{"id":"r18","type":"user","content":"`+"\xff"+` invalid"}`,
 		`{"ID":"r19","type":"user","content":"another key"}`)
-	// A SEPARATOR OR A MARKER ACROSS TWO PIECES, at every byte of the edge:
-	// a separator is judged on the line's pieces, the first its first
-	// [lineChunkBytes]; a marker on the text's, as long. A text past 100,000
-	// units holding a character not ASCII is charged otherwise for a marker.
+	out = append(out, geminiPieceEdgeLines()...)
+	return append(out, geminiFormHeadEdgeLines()...)
+}
+
+// geminiPieceEdgeLines puts a separator or a marker across the edge of a
+// line's first piece, at each byte it may split at: a separator is judged on
+// the line's pieces, the first its first [lineChunkBytes], so `\u2028` and a
+// raw U+2029 start [lineSeparatorMaxBytes] before it to one byte before; a
+// marker on the text's, as long, so [redact.Marker] starts its length before
+// the text's edge to one byte before. A text past 100,000 units holding a
+// character not ASCII is charged otherwise for a marker.
+func geminiPieceEdgeLines() []string {
+	var out []string
 	head := len(`{"id":"r20","type":"user","content":"`)
-	for off := lineChunkBytes - head - len(`\u2028`); off < lineChunkBytes-head; off++ {
+	for off := lineChunkBytes - head - lineSeparatorMaxBytes; off < lineChunkBytes-head; off++ {
 		out = append(out, `{"id":"r20","type":"user","content":"`+strings.Repeat("a", off)+`\u2028"}`,
 			`{"id":"r21","type":"user","content":"`+strings.Repeat("a", off)+"\u2029"+`"}`)
 	}
 	for off := lineChunkBytes - len(redact.Marker); off < lineChunkBytes; off++ {
 		out = append(out, `{"id":"r22","type":"user","content":"`+strings.Repeat("a", off)+redact.Marker+
 			strings.Repeat("b", 40_000)+`é"}`)
+	}
+	return out
+}
+
+// geminiFormHeadEdgeLines is a compression whose line meets the head a form
+// is read within ([lineFormMaxBytes]): the summary's opening form ending a
+// byte short of it, at it and a byte past it, and its reply, a whole form,
+// led by white space to a byte short of it and to it.
+func geminiFormHeadEdgeLines() []string {
+	set := `{"$set":{"sessionId":"s"}}`
+	ack := `{"id":"a","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}`
+	user := `{"id":"c","timestamp":"t","type":"user","content":[{"text":"<state_snapshot>s"}]}`
+	opening := len(`{"id":"c","timestamp":"` + `","type":"user","content":[`)
+	var out []string
+	for _, n := range []int{lineFormMaxBytes - 1, lineFormMaxBytes, lineFormMaxBytes + 1} {
+		out = append(out, set+"\n"+`{"id":"c","timestamp":"`+strings.Repeat("t", n-opening)+
+			`","type":"user","content":[{"text":"<state_snapshot>s"}]}`+"\n"+ack)
+	}
+	for _, n := range []int{lineFormMaxBytes - 1, lineFormMaxBytes} {
+		out = append(out, set+"\n"+user+"\n"+strings.Repeat(" ", n-len(ack))+ack)
 	}
 	return out
 }
@@ -304,24 +333,46 @@ func geminiCountTwices() []string {
 	}
 }
 
+// countReplayMaxBytes bounds the count recordings each variant is replayed
+// after, a record a variant. SAFE because a variant after a recording meets
+// only the state the count keeps of it, never its bytes: the ids it kept,
+// calls left open and patched or removed records, a compression open or a
+// restart named. The five Gemini CLI recordings past it (0.9 to 22.7 MB)
+// carry those same kinds, each also in a smaller one (g2hi's and m4a's
+// captures in g3as and c5hi; patches, removals and compressions in
+// compressed.run1 and run2), and every variant at once still follows each.
+// Replayed a variant at a time, they were nine tenths of the time.
+const countReplayMaxBytes = 512 << 10
+
 // eachChatCountRecord hands each every chat file the differential counts for
 // h, one at a time: each recording whole, each variant alone after the base,
-// torn, and after each count recording, every variant at once, and lines at
-// and past the bound.
+// torn, and after each count recording within [countReplayMaxBytes], every
+// variant at once after the base and after each larger count recording, and
+// lines at and past the bound.
 func eachChatCountRecord(h chatCountHarness, each func(name, record string)) {
+	var replayed, larger []chatFixture
 	for _, f := range h.fixtures {
 		each(f.name, strings.Join(f.lines, "\n")+"\n")
+		switch {
+		case !strings.Contains(f.name, "/count/"):
+		case len(strings.Join(f.lines, "\n")) <= countReplayMaxBytes:
+			replayed = append(replayed, f)
+		default:
+			larger = append(larger, f)
+		}
 	}
 	for i, v := range append(h.variants, boundedLines()...) {
 		each(fmt.Sprintf("line %d %.80q", i, v), h.base+"\n"+v+"\n"+h.base+"\n")
 		each(fmt.Sprintf("torn line %d", i), h.base+"\n"+v)
-		for _, f := range h.fixtures {
-			if strings.Contains(f.name, "/count/") {
-				each(fmt.Sprintf("line %d after %s", i, f.name), strings.Join(f.lines, "\n")+"\n"+v+"\n")
-			}
+		for _, f := range replayed {
+			each(fmt.Sprintf("line %d after %s", i, f.name), strings.Join(f.lines, "\n")+"\n"+v+"\n")
 		}
 	}
-	each("every line", h.base+"\n"+strings.Join(h.variants, "\n")+"\n")
+	every := strings.Join(h.variants, "\n") + "\n"
+	each("every line", h.base+"\n"+every)
+	for _, f := range larger {
+		each("every line after "+f.name, strings.Join(f.lines, "\n")+"\n"+every)
+	}
 	pad := func(n int) string {
 		line := h.base[strings.LastIndexByte(h.base, '\n')+1:]
 		return line[:len(line)-1] + `,"pad":"` + strings.Repeat("x", n-len(line)-len(`,"pad":""`)) + `"}`
@@ -334,8 +385,8 @@ func eachChatCountRecord(h chatCountHarness, each func(name, record string)) {
 // A CHAT COUNT ON THE WALK IS ITS WHOLE-LINE READ: Qwen Code's and Gemini
 // CLI's counts, read on the walk holding no line, are their whole-line reads'
 // (chatcountwhole_internal_test.go) over every recorded chat file and a line
-// of every shape each reads, alone, torn, after each recording and all at
-// once, at and past the line bound; with what a take's scrub took out and
+// of every shape each reads, alone, torn, after each count recording within
+// [countReplayMaxBytes] and all at once, at and past the line bound; with what a take's scrub took out and
 // without; and the meter reads the same in 17-byte pieces. A COUNT BELOW ITS
 // ORACLE'S would hand a call a held telling never owed: no case may differ.
 //
