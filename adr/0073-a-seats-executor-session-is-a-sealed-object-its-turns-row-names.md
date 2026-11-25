@@ -3660,7 +3660,7 @@ turn's end records over it. That holds only where the budget bounds the
 capture's life, from its stamped instant to the stamp of what came of it, at
 the slowest crossing, and some steps of that life were bounded by nothing the
 budget counts. Each is now decided as follows (internal/sandbox's
-`coordinator.go`, `session.go` and `restore.go`).
+`collect.go`, `collected.go`, `detach.go`, `session.go` and `restore.go`).
 
 **A collection's keep starts once its take is spooled.** The amendment that
 takes a session before its box goes and keeps it off the read (above) ran the

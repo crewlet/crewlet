@@ -15,7 +15,7 @@
 ### 1. The capability
 - `NoteInstruction() string` on the harness (`sandbox/executor/detached.go:noteReader`) makes `Runner.ReadsNotes()` true. Optional; the names stay. **A runner implements it only together with a confirm path** (section 3).
 - A harness with no channel between its steps, or no way to confirm, declares no noteReader: its notes reach its review, its wakes run as turns of their own, and the #1818 coordinator approves that before it merges.
-- Declared, `WriteConfig` appends the instruction last where `req.Steer.Set()` (`withNoteInstruction`), only in a box whose release can take notes (`claudecode.go:claudeNotesGate`). `warnNotesUnasked` (`sandbox/coordinator.go`) logs `steer_reader_never_ran` for a successful run that never asked, so the harness asks at least once in every successful run. With #1758 piece 7, only such a run receives `message_run` (`sandbox/runs.go:Coordinator.ReadsNotes`).
+- Declared, `WriteConfig` appends the instruction last where `req.Steer.Set()` (`withNoteInstruction`), only in a box whose release can take notes (`claudecode.go:claudeNotesGate`). `warnNotesUnasked` (`sandbox/collect.go`) logs `steer_reader_never_ran` for a successful run that never asked, so the harness asks at least once in every successful run. With #1758 piece 7, only such a run receives `message_run` (`sandbox/runs.go:Coordinator.ReadsNotes`).
 
 ### 2. The take
 One of two channels, each behind the run's own token (`api/mcpbridge/steer.go`):
