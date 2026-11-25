@@ -132,7 +132,7 @@ func TestARefusedCopilotLaunchIsDeletedOnlyWhereItIsANewSessionOfItsOwn(t *testi
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := startCopilotProbe(t, copilotExtensionSettings{Helper: "/no/helper", Nested: "/no/nested.json"})
-			if joined := p.expect("joined"); strings.Join(joined.Hooks, ",") != "onAgentStop,onPostToolUse,onPostToolUseFailure,onSessionStart" {
+			if joined := p.expect("joined"); strings.Join(joined.Hooks, ",") != "onAgentStop,onPostToolUse,onPostToolUseFailure,onPreToolUse,onSessionStart" {
 				t.Fatalf("hooks = %v", joined.Hooks)
 			}
 			p.expectArmed()

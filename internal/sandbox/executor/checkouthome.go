@@ -19,9 +19,8 @@ import (
 // the run while it runs (held), the file the helper writes the checkouts'
 // sections into (sections), and the skills directory they are copied into,
 // with the list of copies the next run removes. A copy is built in
-// state/staging ([checkoutHome.staging]). own, where set, is a file of the
-// run's own instructions written first, ahead of the home's (Copilot's
-// standing instructions share its one home file).
+// state/staging ([checkoutHome.staging]). own, where set, is the run's own
+// instructions, written ahead of the home's (Copilot's share its one file).
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
