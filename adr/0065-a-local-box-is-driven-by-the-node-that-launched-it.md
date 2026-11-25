@@ -2,7 +2,46 @@
 
 - **Status:** accepted
 - **Authority:** `internal/sandbox`
-- **Enforced-by:** `internal/sandbox.TestEachWaiterDrivesOnlyTheBoxesItCanReach`, `internal/sandbox.TestAPauseIsReapedOnlyOnItsBoxsHost`, `internal/sandbox.TestACollectionOfABoxOnAnotherHostIsAskedOfThatHost`, `internal/sandbox.TestAHostThatDoesNotAnswerHandsTheClaimBackUncounted`, `internal/sandbox.TestAnEndingOnAnotherNodeLeavesTheBoxToItsHost`, `internal/sandbox.TestARelaunchAwayFromTheBoxsHostStartsFresh`, `internal/sandbox.TestARelaunchOnTheBoxsHostContinuesInIt`, `internal/sandbox.TestAStopOfARelaunchBeforeItsBoxReadsNoJobAndLeavesTheBoxToItsHost`, `internal/sandbox.TestAStopOfARunWhoseBoxIsOnAnotherHostIsReadThere`, `internal/sandbox.TestAHostReclaimsTheBoxesNoRunNamesAnyMore`, `internal/sandbox.TestALaunchNodeGoneForTheHostGraceHasItsJobLost`, `internal/sandbox.TestALaunchNodeBackWithinTheHostGraceKeepsItsRuns`, `internal/sandbox.TestAJobKilledWithItsEngineIsLost`, `internal/sandbox.TestAJobFoundRunningAfterARestartIsWatchedByTheNewEngine`, `internal/sandbox.TestAJobItsEngineRestartKilledIsRecordedLostAndAnnounced`, `internal/sandbox.TestALostJobsRoundIsCarriedOnNotCollected`, `internal/sandbox.TestACompletionAfterTheHostWasFoundGoneCarriesTheRoundOn`, `internal/sandbox.TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs`, `internal/sandbox.TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed`, `internal/sandbox.TestEveryHandBackIsRenewedWhileTheClockOnItsHostRuns`, `internal/sandbox.TestAJobNoWaiterAnnouncesIsRenewedByItsRow`, `internal/sandbox.TestAnAcknowledgedRefusalOutlivesItsHolder`, `internal/sandbox.TestAClockOnAHostsStoreGoesWithTheCollectionItTimed`, `internal/agent/runner.TestALostJobsRoundIsCarriedOnInAFreshSession`, `internal/agent/runner.TestARoundLostTooOftenIsNotStartedAgain`, `internal/sandbox.TestALocalBoxsTailIsReadOnTheNodeThatLaunchedIt`, `internal/engine.TestABoxOnAnotherHostIsReadBackByThatHost`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/engine.TestTheWaiterKeepsARunsTokenFileCurrent`, `internal/engine.TestAHostBehindItsAskersClockReadsOnlyItsShareOfTheAskersWait`, `internal/engine.TestAHostAheadOfItsAskersClockStillReadsWithinTheAllowance`, `internal/engine.TestABoxReadAnotherBuildCannotReadWholeReadsNothing`, `internal/engine.TestAHostTakesEveryBoxReadAsItArrives`, `internal/engine.TestABoxReadWhoseShareIsSpentIsRefusedAndFreesItsSlot`, `internal/engine.TestAnAskThatNeverLeftThisNodeIsOneItCouldNotMake`, `internal/sandbox.TestAStopGivesASilentHostUpOnTheAskingNodesOwnClock`, `internal/sandbox.TestAStopsRetryOnANodeAheadOfItsDeciderStillAsksItsHost`, `internal/sandbox.TestAStopIsGivenUpByItsAbsoluteBoundWhereNoFrameCountsItsSilence`, `internal/sandbox.TestAnAskThatOutlivesItsSeatWritesNothingOffShortOfTheHostGrace`
+- **Enforced-by:**
+  - `internal/sandbox.TestEachWaiterDrivesOnlyTheBoxesItCanReach`
+  - `internal/sandbox.TestAPauseIsReapedOnlyOnItsBoxsHost`
+  - `internal/sandbox.TestACollectionOfABoxOnAnotherHostIsAskedOfThatHost`
+  - `internal/sandbox.TestAHostThatDoesNotAnswerHandsTheClaimBackUncounted`
+  - `internal/sandbox.TestAnEndingOnAnotherNodeLeavesTheBoxToItsHost`
+  - `internal/sandbox.TestARelaunchAwayFromTheBoxsHostStartsFresh`
+  - `internal/sandbox.TestARelaunchOnTheBoxsHostContinuesInIt`
+  - `internal/sandbox.TestAStopOfARelaunchBeforeItsBoxReadsNoJobAndLeavesTheBoxToItsHost`
+  - `internal/sandbox.TestAStopOfARunWhoseBoxIsOnAnotherHostIsReadThere`
+  - `internal/sandbox.TestAHostReclaimsTheBoxesNoRunNamesAnyMore`
+  - `internal/sandbox.TestALaunchNodeGoneForTheHostGraceHasItsJobLost`
+  - `internal/sandbox.TestALaunchNodeBackWithinTheHostGraceKeepsItsRuns`
+  - `internal/sandbox.TestAJobKilledWithItsEngineIsLost`
+  - `internal/sandbox.TestAJobFoundRunningAfterARestartIsWatchedByTheNewEngine`
+  - `internal/sandbox.TestAJobItsEngineRestartKilledIsRecordedLostAndAnnounced`
+  - `internal/sandbox.TestALostJobsRoundIsCarriedOnNotCollected`
+  - `internal/sandbox.TestACompletionAfterTheHostWasFoundGoneCarriesTheRoundOn`
+  - `internal/sandbox.TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs`
+  - `internal/sandbox.TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed`
+  - `internal/sandbox.TestEveryHandBackIsRenewedWhileTheClockOnItsHostRuns`
+  - `internal/sandbox.TestAJobNoWaiterAnnouncesIsRenewedByItsRow`
+  - `internal/sandbox.TestAnAcknowledgedRefusalOutlivesItsHolder`
+  - `internal/sandbox.TestAClockOnAHostsStoreGoesWithTheCollectionItTimed`
+  - `internal/agent/runner.TestALostJobsRoundIsCarriedOnInAFreshSession`
+  - `internal/agent/runner.TestARoundLostTooOftenIsNotStartedAgain`
+  - `internal/sandbox.TestALocalBoxsTailIsReadOnTheNodeThatLaunchedIt`
+  - `internal/engine.TestABoxOnAnotherHostIsReadBackByThatHost`
+  - `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`
+  - `internal/engine.TestTheWaiterKeepsARunsTokenFileCurrent`
+  - `internal/engine.TestAHostBehindItsAskersClockReadsOnlyItsShareOfTheAskersWait`
+  - `internal/engine.TestAHostAheadOfItsAskersClockStillReadsWithinTheAllowance`
+  - `internal/engine.TestABoxReadAnotherBuildCannotReadWholeReadsNothing`
+  - `internal/engine.TestAHostTakesEveryBoxReadAsItArrives`
+  - `internal/engine.TestABoxReadWhoseShareIsSpentIsRefusedAndFreesItsSlot`
+  - `internal/engine.TestAnAskThatNeverLeftThisNodeIsOneItCouldNotMake`
+  - `internal/sandbox.TestAStopGivesASilentHostUpOnTheAskingNodesOwnClock`
+  - `internal/sandbox.TestAStopsRetryOnANodeAheadOfItsDeciderStillAsksItsHost`
+  - `internal/sandbox.TestAStopIsGivenUpByItsAbsoluteBoundWhereNoFrameCountsItsSilence`
+  - `internal/sandbox.TestAnAskThatOutlivesItsSeatWritesNothingOffShortOfTheHostGrace`
 - **Cost-when-tried:** the fleet's one waiter polled every running job from whichever node held its duty. A box on another node's host is not there to reconnect to, so the duty's node failed every tick, gave the box up after `ConnectGiveUp` (60 s), and settled a job that was still working as lost; its keepalive never reached the box either. An ending or a relaunch on a node the seat had moved to reached for the box the same way, and found nothing.
 - **Tag-status:** unreleased
 

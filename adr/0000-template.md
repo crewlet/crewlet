@@ -2,7 +2,9 @@
 
 - **Status:** accepted
 - **Authority:** `internal/somepackage`
-- **Enforced-by:** `internal/somepackage.TestTheRuleHolds`
+- **Enforced-by:**
+  - `internal/somepackage.TestTheRuleHolds`
+  - `internal/otherpackage.TestItsOtherHalfHolds`
 - **Measured:** the numbers this was settled on, or omit the line
 - **Cost-when-tried:** what the obvious alternative cost *here*, or omit the line
 - **Tag-status:** unreleased
@@ -14,6 +16,11 @@ delete this comment.
 Before writing anything: is this decision inside ONE package? Then it belongs
 in that package's doc comment and not here. This directory is for a decision
 that binds several packages, which is the one thing a package doc cannot hold.
+
+List each gate on a line of its own beneath Enforced-by, as above, and add a
+new one at the end: two changes that each add a gate then merge, where two
+that each extend one line conflict. One gate, or `nothing`, may stay on the
+field's line.
 
 Add the record's id to the authority's own doc. The gate in internal/adr checks
 that anchor in both directions, so a record whose authority does not name it

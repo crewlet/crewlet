@@ -2,7 +2,19 @@
 
 - **Status:** accepted
 - **Authority:** `internal/worklet`
-- **Enforced-by:** `internal/worklet.TestATaskNamesAnAtlasEntryOnlyByItsID`, `internal/worklet.TestAHistoryRowCountsTheAtlasEntriesAndNamesNone`, `internal/worklet.TestADetailWithoutEntriesCountsThemAndKeepsEveryOtherEdge`, `internal/worklet.TestTheOpenWorkOnEachAtlasEntryIsCounted`, `internal/worklet.TestAnAtlasEntrysWorkIsItsOpenAndRecentlyFinishedTasks`, `internal/worklet.TestAClosedRecordVersionGainsNoField`, `internal/agent/builtin.TestATaskIsLinkedToTheAtlasEntriesItTouches`, `internal/agent/builtin.TestLinkingAndReadingATasksEntriesTakesTheAtlas`, `internal/api/queries.TestAWorkItemNamesItsAtlasEntriesOnlyToAnAtlasReader`, `internal/api/queries.TestTheWorkOnAnEntryIsReadOnlyForAWorkletReader`, `internal/api/queries.TestAMarkOnAnEntryTheAtlasDoesNotHoldMarksNothing`, `internal/agent/prefetch.TestTheSystemsBlockListsWhatTheWorkItemNamesFirst`
+- **Enforced-by:**
+  - `internal/worklet.TestATaskNamesAnAtlasEntryOnlyByItsID`
+  - `internal/worklet.TestAHistoryRowCountsTheAtlasEntriesAndNamesNone`
+  - `internal/worklet.TestADetailWithoutEntriesCountsThemAndKeepsEveryOtherEdge`
+  - `internal/worklet.TestTheOpenWorkOnEachAtlasEntryIsCounted`
+  - `internal/worklet.TestAnAtlasEntrysWorkIsItsOpenAndRecentlyFinishedTasks`
+  - `internal/worklet.TestAClosedRecordVersionGainsNoField`
+  - `internal/agent/builtin.TestATaskIsLinkedToTheAtlasEntriesItTouches`
+  - `internal/agent/builtin.TestLinkingAndReadingATasksEntriesTakesTheAtlas`
+  - `internal/api/queries.TestAWorkItemNamesItsAtlasEntriesOnlyToAnAtlasReader`
+  - `internal/api/queries.TestTheWorkOnAnEntryIsReadOnlyForAWorkletReader`
+  - `internal/api/queries.TestAMarkOnAnEntryTheAtlasDoesNotHoldMarksNothing`
+  - `internal/agent/prefetch.TestTheSystemsBlockListsWhatTheWorkItemNamesFirst`
 - **Cost-when-tried:** not tried. The nearest rule is a task's linked page: an edge on the task's own record whose other end is another domain's id, with no write to that domain.
 - **Tag-status:** unreleased
 

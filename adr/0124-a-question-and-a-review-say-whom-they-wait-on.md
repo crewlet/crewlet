@@ -2,7 +2,15 @@
 
 - **Status:** accepted
 - **Authority:** `internal/worklet`
-- **Enforced-by:** `internal/worklet.TestASeatsOwnOpenAsksToAPersonAreReadNewestFirst`, `internal/agent/prefetch.TestATurnWithAPersonListsTheSeatsOpenAsksToThem`, `internal/agent/builtin.TestAWithdrawalNamesWhatNowCoversTheQuestion`, `internal/worklet.TestAWithdrawnQuestionSaysWhyAndWhatCoversIt`, `internal/agent/builtin.TestAnAgentsReviewNamesItsReviewer`, `internal/worklet.TestAReviewIsReadyForTheSeatThatHoldsIt`, `internal/advisor.TestAnIdleReviewNamesWhoItWaitsOn`, `internal/worklet.TestHoldingUpCountsTheAgentWorkWaitingOnAPerson`
+- **Enforced-by:**
+  - `internal/worklet.TestASeatsOwnOpenAsksToAPersonAreReadNewestFirst`
+  - `internal/agent/prefetch.TestATurnWithAPersonListsTheSeatsOpenAsksToThem`
+  - `internal/agent/builtin.TestAWithdrawalNamesWhatNowCoversTheQuestion`
+  - `internal/worklet.TestAWithdrawnQuestionSaysWhyAndWhatCoversIt`
+  - `internal/agent/builtin.TestAnAgentsReviewNamesItsReviewer`
+  - `internal/worklet.TestAReviewIsReadyForTheSeatThatHoldsIt`
+  - `internal/advisor.TestAnIdleReviewNamesWhoItWaitsOn`
+  - `internal/worklet.TestHoldingUpCountsTheAgentWorkWaitingOnAPerson`
 - **Measured:** on a company running this engine, 32 of 64 open items waited on its one person while 2 reached that person's Inbox as asks. Two items an agent had moved into review itself waited 8 and 12 days on that person with only a mention, held by nobody. Three items assigned to the person in review sat 8 days with no question. Two date waits named a condition the agent's own later comments had replaced with a pull request, and the person's open question about the replaced step stayed open. Ten agent items waited, through typed `waiting_on` chains, behind three items the person held or was asked about, and the person's list of what they held up named one.
 - **Cost-when-tried:** the agents had `withdraw_ask` since ADR-0111, and a person told them in chat to consider anything they had open; no turn could see its own open questions, so none was withdrawn.
 - **Tag-status:** unreleased

@@ -2,7 +2,14 @@
 
 - **Status:** accepted
 - **Authority:** `internal/queue/jetstream`
-- **Enforced-by:** `internal/queue/jetstream.TestTheAuthenticatorAdmitsOnlyItsFourKinds`, `internal/queue/jetstream.TestAMembersClientListenerAdmitsOnlyTheOperatorKey`, `internal/queue/jetstream.TestALeafLinksOnlyWithAKeyItsMemberHolds`, `internal/queue/jetstream.TestAFleetListenerWithNoKeysIsRefused`, `internal/queue/jetstream/jetstreamtest.TestARouteWithoutTheFleetsKeyIsRefused`, `internal/queue/jetstream/jetstreamtest.TestGossipedRoutesAuthenticate`, `internal/queue/jetstream/jetstreamtest.TestAFleetStaysWholeThroughAKeyRotation`
+- **Enforced-by:**
+  - `internal/queue/jetstream.TestTheAuthenticatorAdmitsOnlyItsFourKinds`
+  - `internal/queue/jetstream.TestAMembersClientListenerAdmitsOnlyTheOperatorKey`
+  - `internal/queue/jetstream.TestALeafLinksOnlyWithAKeyItsMemberHolds`
+  - `internal/queue/jetstream.TestAFleetListenerWithNoKeysIsRefused`
+  - `internal/queue/jetstream/jetstreamtest.TestARouteWithoutTheFleetsKeyIsRefused`
+  - `internal/queue/jetstream/jetstreamtest.TestGossipedRoutesAuthenticate`
+  - `internal/queue/jetstream/jetstreamtest.TestAFleetStaysWholeThroughAKeyRotation`
 - **Measured:** on nats-server v2.15.0, p50 of the stated runs: an nkey connect costs +210–230 µs over TCP (355–365 → 574–581 µs) and +160–170 µs in process (121–127 → 280–298 µs), two in-process connects a boot; a three-member mesh forms in 80.4–80.9 ms against 79.8–80.1 ms anonymous, and a leaf links in 12.0 ms against 11.6 ms; a route check costs 28–48 ns and an nkey check 55–70 µs. An engine connection in process against one over a member's loopback port: a request and its reply 12 µs against 19 µs, an R3 synchronous publish 257 µs against 309 µs. Through the keyring's rotation, member by member, the mesh stayed whole and an R3 publish through every member succeeded after every restart.
 - **Cost-when-tried:** before it, a clustered member's client listener bound every interface with no authentication: an anonymous client created and published to an R3 stream, a server presenting nothing joined the routes, and a leaf presenting nothing linked and reached the fleet's JetStream — and the server's own user list could not refuse anonymity beside the system account, because with the system key in it an anonymous client still connected through the no-auth user nats-server adds to the global account.
 - **Tag-status:** unreleased

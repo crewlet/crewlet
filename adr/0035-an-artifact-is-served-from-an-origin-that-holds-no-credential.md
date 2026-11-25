@@ -2,7 +2,20 @@
 
 - **Status:** accepted
 - **Authority:** `internal/artifactserve`
-- **Enforced-by:** `internal/artifactserve.TestTheArtifactListenerServesOnlyTheServingRoutes`, `internal/artifactserve.TestTheArtifactListenerReadsNoCookie`, `internal/artifactserve.TestAnArtifactGetsAnOriginOnlyOnASiteOfItsOwn`, `internal/artifactserve.TestEveryServedDocumentCarriesAFreshNonce`, `internal/artifactserve.TestARevokedShareStopsTheNextDocumentRequest`, `internal/artifactserve.TestAStaleServingNodeAnswersUnavailableRatherThanServe`, `internal/api/artifactsapi.TestTheAPIOriginNeverRendersAnArtifact`, `internal/artifactserve.TestEveryBoardIsADocumentUnderItsOwnTicket`, `internal/artifactserve.TestADesignTicketOpensItsOwnBoardAndNoOther`, `internal/artifactserve.TestADesignFrameNamesAPageOfItsVersion`, `internal/artifactserve.TestEveryBoardFailsClosedOnItsNextDocument`, `internal/api/auth.TestARendersNameStandsForNobodyOnTheOrigin`, `internal/artifactrender.TestARenderReportsATokenTheKitDoesNotDefine`
+- **Enforced-by:**
+  - `internal/artifactserve.TestTheArtifactListenerServesOnlyTheServingRoutes`
+  - `internal/artifactserve.TestTheArtifactListenerReadsNoCookie`
+  - `internal/artifactserve.TestAnArtifactGetsAnOriginOnlyOnASiteOfItsOwn`
+  - `internal/artifactserve.TestEveryServedDocumentCarriesAFreshNonce`
+  - `internal/artifactserve.TestARevokedShareStopsTheNextDocumentRequest`
+  - `internal/artifactserve.TestAStaleServingNodeAnswersUnavailableRatherThanServe`
+  - `internal/api/artifactsapi.TestTheAPIOriginNeverRendersAnArtifact`
+  - `internal/artifactserve.TestEveryBoardIsADocumentUnderItsOwnTicket`
+  - `internal/artifactserve.TestADesignTicketOpensItsOwnBoardAndNoOther`
+  - `internal/artifactserve.TestADesignFrameNamesAPageOfItsVersion`
+  - `internal/artifactserve.TestEveryBoardFailsClosedOnItsNextDocument`
+  - `internal/api/auth.TestARendersNameStandsForNobodyOnTheOrigin`
+  - `internal/artifactrender.TestARenderReportsATokenTheKitDoesNotDefine`
 - **Tag-status:** unreleased
 
 ## The decision

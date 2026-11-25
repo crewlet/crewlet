@@ -2,7 +2,13 @@
 
 - **Status:** accepted
 - **Authority:** `internal/notice`
-- **Enforced-by:** `internal/notice.TestAnAlarmPastItsThresholdReachesTheAdministratorsOnce`, `internal/notice.TestAPlatformNoticeClearsWithItsCondition`, `internal/notice.TestAPlatformNoticeOffersNoAnswer`, `internal/notice.TestTheBackupAlarmIsTheAdvisorsFinding`, `internal/notice.TestOnlyAnOwnersBlockingFindingIsANotice`, `internal/api/queries.TestTheAdvisorNoticesTheFleetsAlarms`
+- **Enforced-by:**
+  - `internal/notice.TestAnAlarmPastItsThresholdReachesTheAdministratorsOnce`
+  - `internal/notice.TestAPlatformNoticeClearsWithItsCondition`
+  - `internal/notice.TestAPlatformNoticeOffersNoAnswer`
+  - `internal/notice.TestTheBackupAlarmIsTheAdvisorsFinding`
+  - `internal/notice.TestOnlyAnOwnersBlockingFindingIsANotice`
+  - `internal/api/queries.TestTheAdvisorNoticesTheFleetsAlarms`
 - **Cost-when-tried:** not tried here. Before this record an alarm reached a person only as a count in the dashboard's sidebar, and a seat only where its role carried `health_tools`; a live company ran a week with its backup alarm standing and nobody told, because no seat held that grant.
 - **Tag-status:** unreleased
 
