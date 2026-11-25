@@ -271,15 +271,18 @@ func TestAPairTheResumeDoesNotHandIsNotHeld(t *testing.T) {
 	rhWant(t, "a pair off the chain", rhRead(t, "2.1.322", true, off, rhAskBatch, rhAskStop), nil, nil, nil)
 }
 
-// A PAIR IS HELD ONLY ON A THREAD EVERY SIZE PATH READS ALIKE: a thread
-// a large-file reader of the resume may read otherwise holds no pair, since
-// the copy resumed may differ in size from the one read. A compaction's
-// boundary or a later root makes every thread such a one, wherever its pairs
-// lie and whatever its size, so a thread that compacted decides no take (the
-// package doc's "A hook's note").
+// A PAIR IS HELD ONLY WHERE EVERY SIZE PATH READS IT ALIKE: a thread a
+// large-file reader of the resume may read otherwise holds no pair, since the
+// copy resumed may differ in size from the one read; a record keyed otherwise
+// or a later root makes every thread such a one. A compaction's boundary binds
+// only what lies before it (#1532): a pair after the last boundary is held, a
+// pair before it restarted where a reply of the model followed it there, else
+// undecided, its note only in the summary.
 //
-// Mutation: hold a pair without asking AnySize, and this goes red.
-func TestAPairIsHeldOnlyOnAThreadEverySizePathReadsAlike(t *testing.T) {
+// Mutation: hold a pair without asking Alike, restart one before the boundary
+// that no reply followed, or bind a thread to the small path at a boundary
+// again, and a case goes red.
+func TestAPairIsHeldOnlyWhereEverySizePathReadsItAlike(t *testing.T) {
 	t.Parallel()
 	keyed := rhBase()
 	keyed[0] = ctReplace(t, keyed[0], `{"parentUuid":null,"isSidechain":false,`, `{"isSidechain":false,"parentUuid":null,`)
@@ -288,27 +291,101 @@ func TestAPairIsHeldOnlyOnAThreadEverySizePathReadsAlike(t *testing.T) {
 	root := []rhRecord{func(_, n, ms int) string { return rcPrompt(0, n, ms) }, rhReply(rcSaid("after"))}
 	compacted := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_kept", 100, rcSaid("kept")),
 		rcBoundary(3, 300, `{"trigger":"manual"}`), rcSummary(3, 4, 400)}
-	threads := map[string][]string{
-		"a record keyed otherwise":      keyed,
-		"a compaction after both pairs": rhOn(rhBase(), compaction),
-		"both pairs after a compaction": rhOn(compacted, rhCall("x1"), rhPair(rhBatch, rhBatchFire, rhBatchTake),
-			[]rhRecord{rhReply(rcSaid("done"))}, rhPair(rhStop, rhStopFire, rhStopTake)),
-		"a later root after both pairs": rhOn(rhBase(), root),
-	}
-	for name, lines := range threads {
-		got := rhRead(t, "2.1.322", true, lines, rhAskBatch, rhAskStop)
-		rhWant(t, name, got, nil, nil, nil)
-		if !strings.Contains(got.Why, "every size path") {
-			t.Errorf("%s: why %q; want the size paths named", name, got.Why)
+	for name, tc := range map[string]struct {
+		lines           []string
+		held, restarted []string
+		undecidedBySize bool
+	}{
+		"a record keyed otherwise":      {lines: keyed, undecidedBySize: true},
+		"a later root after both pairs": {lines: rhOn(rhBase(), root), undecidedBySize: true},
+		"a compaction after both pairs, a reply after the batch's alone": {lines: rhOn(rhBase(), compaction),
+			restarted: []string{rhBatchTake}},
+		"both pairs after a compaction": {lines: rhOn(compacted, rhCall("x1"), rhPair(rhBatch, rhBatchFire,
+			rhBatchTake), []rhRecord{rhReply(rcSaid("done"))}, rhPair(rhStop, rhStopFire, rhStopTake)),
+			held: []string{rhBatchTake, rhStopTake}},
+	} {
+		got := rhRead(t, "2.1.330", true, tc.lines, rhAskBatch, rhAskStop)
+		rhWant(t, name, got, tc.held, tc.restarted, nil)
+		if bySize := strings.Contains(got.Why, "every size path"); bySize != tc.undecidedBySize {
+			t.Errorf("%s: why %q; want the size paths named %t", name, got.Why, tc.undecidedBySize)
 		}
 	}
 	for _, thread := range ctProbeThreads {
 		got := rhRead(t, strings.Split(thread, "/")[0], true, rhProbeWhole(t, thread),
 			sandbox.AskedTake{Take: ctProbeBatchTake, Boundary: types.SteerBoundaryToolBatch}, sandbox.AskedTake{Take: ctProbeStopTake,
 				Boundary: types.SteerBoundaryFinish})
-		rhWant(t, thread+" whole", got, nil, nil, nil)
-		if !strings.Contains(got.Why, "every size path") {
-			t.Errorf("%s whole: why %q; want the size paths named", thread, got.Why)
+		rhWant(t, thread+" whole", got, nil, []string{ctProbeBatchTake, ctProbeStopTake}, nil)
+	}
+}
+
+// rhC1 is what readMainThread answers of row c1's main thread
+// (testdata/claude/2.1.330/holdings/c1, measured): note A at a batch, answered
+// by the next reply, an auto-compaction, then note B at a batch, its reply
+// after; padded past 5 MiB, as c1's dispatch and prune rows padded its brief,
+// where padded.
+func rhC1(t *testing.T, padded bool) sandbox.TakeReceipts {
+	t.Helper()
+	return rhRead(t, "2.1.330", true, rhC1Lines(t, padded), sandbox.AskedTake{Take: rhC1A,
+		Boundary: types.SteerBoundaryToolBatch}, sandbox.AskedTake{Take: rhC1B, Boundary: types.SteerBoundaryToolBatch})
+}
+
+// rhC1Lines is c1's main thread, its brief padded past 5 MiB where padded.
+func rhC1Lines(t *testing.T, padded bool) []string {
+	t.Helper()
+	lines := rhProbeWhole(t, "2.1.330/holdings/c1/projects/crewlet/5e55100a-0000-4000-8000-000000000162.jsonl")
+	if padded {
+		lines[2] = ctReplace(t, lines[2], `"content":"Do the task.`,
+			`"content":"Do the task. PAD`+strings.Repeat("p", 6_000_000))
+	}
+	return lines
+}
+
+// The takes of c1's notes A and B, and the line of its boundary.
+const (
+	rhC1A, rhC1B = "00000000-0000-4000-8000-0000000000a1", "00000000-0000-4000-8000-0000000000b2"
+	rhC1Boundary = 38
+)
+
+// A NOTE TAKEN AFTER A COMPACTION IS CONFIRMED ON THE SMALL PATH (#1532): c1's
+// thread, resumed small by 2.1.310, 2.1.322 and 2.1.330, handed the summary,
+// the kept segment and note B, never A (measured). B's pair, after the last
+// boundary, is held; A's, before it and answered, restarted.
+//
+// Mutation: bind the thread to the small path at a boundary again, and both
+// go undecided.
+func TestANoteTakenAfterACompactionIsConfirmedOnTheSmallPath(t *testing.T) {
+	t.Parallel()
+	rhWant(t, "c1, small", rhC1(t, false), []string{rhC1B}, []string{rhC1A}, nil)
+}
+
+// A NOTE TAKEN AFTER A COMPACTION IS CONFIRMED PAST FIVE MEBIBYTES BY THE
+// DISPATCH (#1532): c1's thread padded past 5 MiB, resumed by each release's
+// default large-file reader, handed what the small path does past the last
+// boundary (measured), so B is held, A restarted.
+//
+// Mutation: answer a thread past the bound only where it is path-free whole,
+// and both go undecided.
+func TestANoteTakenAfterACompactionIsConfirmedPastFiveMebibytesByTheDispatch(t *testing.T) {
+	t.Parallel()
+	rhWant(t, "c1, past 5 MiB", rhC1(t, true), []string{rhC1B}, []string{rhC1A}, nil)
+}
+
+// A NOTE TAKEN AFTER A COMPACTION IS CONFIRMED PAST FIVE MEBIBYTES BY THE
+// PRUNE (#1532): c1's padded thread, resumed under
+// CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP=1, handed what the dispatch did
+// (measured on each release): the chain answers both readers alike, so B is
+// held, A restarted, and the records before the boundary are no answer past
+// the bound.
+//
+// Mutation: hand a record before the last boundary of a thread past the
+// bound, and a line before it reads as handed.
+func TestANoteTakenAfterACompactionIsConfirmedPastFiveMebibytesByThePrune(t *testing.T) {
+	t.Parallel()
+	rhWant(t, "c1, pruned", rhC1(t, true), []string{rhC1B}, []string{rhC1A}, nil)
+	read := rcChain(t, "", rhC1Lines(t, true)...)
+	for n, h := range read.handles {
+		if n < rhC1Boundary && read.c.Handed(h) != handedUnknown {
+			t.Errorf("line %d, before the boundary, answers %s; want %s", n, read.c.Handed(h), handedUnknown)
 		}
 	}
 }
