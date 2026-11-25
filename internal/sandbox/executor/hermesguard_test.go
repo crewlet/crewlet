@@ -94,11 +94,10 @@ func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 // starts, naming the file, key and entry: a disabled toolset naming the bridge
 // (a web-denied run's too), a cli toolset list leaving it out, a launch switch,
 // a sticky profile, a header beside the run's own, an entry Hermes skips, the
-// plugin gated off, a seat skill disabled; others' pass. Mutations, each red:
-// drop the guard or any leaf of the run's own entry; match one toolset
-// spelling; skip the cli toolsets, headers, suspicious or cost check, plugin
-// gate, skills or sticky profile; read the launch switches from the process
-// alone; name no file, or show a header's or env's value.
+// plugin gated off, a seat skill disabled, a hook bound under the nested
+// hand's; others' pass. Mutations, each red: drop the guard or a leaf of the
+// run's entry; match one toolset spelling; skip any check; read the launch
+// switches from the process alone; name no file, or show a header's value.
 func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const reason = "Hermes Agent would not start with the run's own plugin and MCP servers as written: "
@@ -197,6 +196,13 @@ func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 		"the home disables the plugin once it is enabled": {enabled: true, switchOffCase: switchOffCase{
 			plant: map[string]string{".hermes/config.yaml": `{"plugins": {"enabled": ["crewlet-runner"], "disabled": ["crewlet-runner"]}}`},
 			fails: []string{reason, home + `plugins.disabled is ["crewlet-runner"], so Hermes would not load the run's plugin crewlet-runner`}}},
+		"the home gives the plugin's hooks less than the nested hand's bound": {switchOffCase: switchOffCase{
+			plant: map[string]string{".hermes/config.yaml": `{"plugins": {"hook_callback_timeout": 9.5}}`},
+			fails: []string{reason, home + "plugins.hook_callback_timeout is 9.5, under the 10 seconds the run's hook that " +
+				"hands a checkout cloned during it may take"}}},
+		"the home gives the plugin's hooks the nested hand's bound, or none": {switchOffCase: switchOffCase{
+			plant: map[string]string{".hermes/config.yaml": `{"plugins": {"hook_callback_timeout": 10}}`,
+				"system/config.yaml": `{"plugins": {"hook_callback_timeout": 0}}`}}},
 		"the home switches seat skills off": {skills: true, switchOffCase: switchOffCase{
 			plant: map[string]string{".hermes/config.yaml": `{"skills": {"disabled": ["crewlet:getting-unstuck"], ` +
 				`"platform_disabled": {"cli": ["crewlet:mcp-github"], "telegram": ["crewlet:getting-unstuck"]}}}`},

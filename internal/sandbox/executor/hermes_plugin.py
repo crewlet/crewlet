@@ -9,7 +9,12 @@ Loaded in the run's gateway, it does three things for the run its settings file 
   as the runner installed it, so a file the model rewrote never counts;
 - takes the run's notes: while a turn runs it polls the notes route and steers each note into that
   turn through Hermes's own gateway client (session.steer), on the endpoint Hermes's discovery names,
-  so it never starts a gateway. The engine confirms a note from the session's own record.
+  so it never starts a gateway. The engine confirms a note from the session's own record;
+- hands a checkout cloned below the run's start directory during a turn its instructions and skills,
+  in the result of the main loop's next tool call (transform_tool_result): the note helper names the
+  checkouts it may claim, Hermes's own code renders each (the carry script's checkout_gate), and the
+  helper claims and copies them, answering within what the result has room for before Hermes would
+  spill it to a file.
 
 The routes carry the job's token, so each is read from its file at each use and never logged.
 """
@@ -17,10 +22,12 @@ The routes carry the job's token, so each is read from its file at each use and 
 import asyncio
 import contextlib
 import hashlib
+import importlib.util
 import json
 import logging
 import os
 import sqlite3
+import subprocess
 import threading
 import time
 import urllib.error
@@ -39,8 +46,12 @@ _REACH_SECONDS = 5.0
 # served again), so waiting longer buys nothing but a later note's delay; 10 s is some 180 times the worst.
 _STEER_SECONDS = 10.0
 
+# The smallest result Hermes 0.23.3 keeps whole on any model (tools/budget_config.py's _MIN_RESULT_SIZE_CHARS):
+# a nested hand's room where Hermes's own budget cannot be read, so its answer never makes a result spill.
+_FLOOR_RESULT_CHARS = 8_000
+
 _lock = threading.Lock()
-_turn = {"running": False, "session": None}
+_turn = {"running": False, "session": None, "window": None}
 _wake = threading.Event()
 
 
@@ -147,6 +158,9 @@ def register(ctx):
             _turn["running"] = False
 
     def response(**kw):
+        if kw.get("session_id") and kw.get("context_length") and ours(kw["session_id"]):
+            with _lock:
+                _turn["window"] = kw["context_length"]
         if not record:
             return
         usage = kw.get("usage") or {}
@@ -193,12 +207,79 @@ def register(ctx):
             else:
                 logger.warning("crewlet: reporting skill %s failed (%s)", name, _status(err) or type(err).__name__)
 
+    hand = settings.get("checkouts")
+
+    def nested(**kw):
+        # THE MAIN LOOP'S CALLS ALONE: a delegated subagent's carry no marker but a session of their own
+        # (measured on 0.23.4), and a checkout handed into a subagent's result never reaches the run.
+        session, result = kw.get("session_id"), kw.get("result")
+        with _lock:
+            pinned, window = _turn["session"], _turn["window"]
+        if not isinstance(result, str) or not session or not pinned or not ours(session):
+            return None
+        added = _hand_checkouts(hand, kw.get("tool_name") or "", result, window)
+        return result + "\n\n" + added if added else None
+
     ctx.register_hook("pre_llm_call", turn_started)
     ctx.register_hook("post_llm_call", turn_ended)
     ctx.register_hook("post_api_request", response)
     ctx.register_hook("post_tool_call", tool_done)
+    if hand:
+        ctx.register_hook("transform_tool_result", nested)
     if notes_file:
         threading.Thread(target=_notes, args=(notes_file,), name="crewlet-notes", daemon=True).start()
+
+
+_carry = {}
+
+
+def _carry_module(path):
+    """The run's carry script as a module, loaded once: its checkout_gate is what the launch renders with."""
+    if path not in _carry:
+        spec = importlib.util.spec_from_file_location("crewlet_carry", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _carry[path] = module
+    return _carry[path]
+
+
+def _room(tool, result, window):
+    """The characters result has left before Hermes would spill it to a file, as 0.23.3's tool executor
+    judges it: the per-result threshold of its budget for the run's window (budget_for_context_window,
+    resolve_threshold), a tool it never spills held to the default result size."""
+    try:
+        from tools.budget_config import budget_for_context_window
+        budget = budget_for_context_window(int(window) if window else None)
+        threshold = min(budget.resolve_threshold(tool), budget.default_result_size)
+    except Exception:  # a release whose budget moved: the floor every budget keeps
+        threshold = _FLOOR_RESULT_CHARS
+    return int(threshold) - len(result)
+
+
+def _hand_checkouts(hand, tool, result, window):
+    """What a nested firing adds to result, "" for nothing: the checkouts the note helper may claim
+    (hermes-peek), Hermes's own answer for each (checkout_gate, at the run's window), then the helper's
+    claim and answer within the result's room (hermes-nested), all within the hand's bound."""
+    deadline = time.monotonic() + hand["timeout"]
+
+    def helper(*args, stdin=None):
+        done = subprocess.run([hand["helper"], *args, "-config", hand["config"]], input=stdin, capture_output=True,
+                              timeout=max(0.1, deadline - time.monotonic()), check=False)
+        if done.stderr:
+            logger.warning("crewlet: the note helper said: %s", done.stderr.decode("utf-8", "replace")[-2000:])
+        return done.stdout if done.returncode == 0 else b""
+
+    try:
+        roots = (json.loads(helper("-adapter", "hermes-peek") or b"{}").get("roots") or [])
+        if not roots:
+            return ""
+        gate = _carry_module(hand["carry"]).checkout_gate(roots, int(window or hand["window"]))
+        room = _room(tool, result, window)
+        return helper("-adapter", "hermes-nested", "-room", str(room),
+                      stdin=json.dumps(gate).encode("utf-8")).decode("utf-8", "replace")
+    except Exception as err:  # the run goes on; a checkout claimed is in the run's log, a later one waits
+        logger.warning("crewlet: handing a checkout cloned during the run failed (%s)", type(err).__name__)
+        return ""
 
 
 async def _steer_async(session, text, sent):

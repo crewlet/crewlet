@@ -105,15 +105,17 @@ func TestAHermesRunNamesItsSessionAndCreatesItOnlyWhereNew(t *testing.T) {
 
 // A HERMES RUN'S END STOPS THE GATEWAY: an end request stops the gateway
 // before the client (killing the client leaves the turn running in it,
-// measured on 0.23.3), and the script's exit stops it however the script ends.
+// measured on 0.23.3), and the script's exit stops it however the script ends,
+// then removes the checkouts' copies and says what their firings left out,
+// once the firings, which run in the gateway, are gone.
 //
-// Mutation: drop the gateway's stop from endharness or from the EXIT trap, and
-// this goes red.
+// Mutation: drop the gateway's stop from endharness or from the EXIT trap, or
+// hput from the trap, quit or the run's end, and this goes red.
 func TestAHermesRunsEndStopsItsGateway(t *testing.T) {
 	t.Parallel()
 	script := hermesScript(sandbox.RunRequest{}, Session{ID: "s"}, PathsFor(sandbox.NewFakeSandbox("b")), hermesRunTimes())
-	for _, want := range []string{`endedas=asked; endgw; end "$harness"`, `trap 'endgw' EXIT`,
-		`quit() { trap '' USR1; trap - EXIT TERM INT HUP; endgw;`} {
+	for _, want := range []string{`endedas=asked; endgw; end "$harness"`, `trap 'endgw; hput' EXIT`,
+		`quit() { trap '' USR1; trap - EXIT TERM INT HUP; endgw; end "$harness"; harness=; hput;`, "\nendgw; hput\n"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the script lacks %q", want)
 		}
@@ -449,6 +451,16 @@ class PluginManager:
         return {server: plugin for plugin, servers in declared().items() for server in servers}
 def get_plugin_manager():
     return PluginManager()
+def _resolve_hook_callback_timeout():
+    from hermes_cli.config import load_config
+    plugins = load_config().get("plugins")
+    if not isinstance(plugins, dict) or plugins.get("hook_callback_timeout") is None:
+        return 30.0
+    try:
+        timeout = float(plugins["hook_callback_timeout"])
+    except (TypeError, ValueError):
+        return 30.0
+    return 30.0 if timeout < 0 else min(timeout, 600.0)
 `,
 		"tools/__init__.py": "",
 		"hermes_cli/config.py": `import copy, json, os
@@ -486,6 +498,8 @@ def resolve_runtime_provider(*, requested=None, explicit_api_key=None, explicit_
 `,
 	}
 	maps.Copy(modules, hermesGuardStandIn)
+	maps.Copy(modules, hermesCheckoutStandIn)
+	modules["agent/skill_utils.py"] += hermesSkillUtilsStandIn
 	// THE MCP LOADER beside the guard's scans, one module as in 0.23.3.
 	modules["tools/mcp_tool_config.py"] += `from hermes_cli.config import load_config
 from hermes_cli.plugins import declared
@@ -897,7 +911,7 @@ func hermesGate(t *testing.T, home, release, config string, req sandbox.RunReque
 		t.Fatal(err)
 	}
 	script := "n=" + shellword.Quote(release) + "\n" + hermesStopGateway(paths, time.Second) + hermesCarryRun(paths) +
-		hermesSessionGate(req, session, paths, false) + `printf '%s|%s|%s' "$sid" "$k" "$w"`
+		hermesSystemWithCheckouts(paths) + hermesSessionGate(req, session, paths, false) + `printf '%s|%s|%s' "$sid" "$k" "$w"`
 	cmd := exec.Command(sh, "-c", script)
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "HERMES_HOME="+paths.HermesHome())
@@ -1867,3 +1881,121 @@ func TestAFailedHermesTurnSettlesNoNote(t *testing.T) {
 		}
 	}
 }
+
+// hermesCheckoutStandIn is what the carry script's checkout_gate and the
+// plugin's nested hand read of Hermes 0.23.3's own modules, as 0.23.3 reads a
+// checkout (read off its agent/prompt_builder.py): the first kind with a
+// non-empty file (.hermes.md or HERMES.md, the first that exists; the AGENTS
+// names and the CLAUDE names, each the first non-empty; .cursorrules with
+// .cursor/rules/*.mdc), each file stripped, one holding IGNORE-ALL-PREVIOUS
+// blocked as its injection scan blocks one, a .hermes.md's frontmatter
+// dropped, each kind cut to 70% head and 20% tail of 6% of the window at four
+// characters a token (20,000 to 500,000) with its notice; and the tool result
+// budget of a large window.
+var hermesCheckoutStandIn = map[string]string{
+	"agent/prompt_builder.py": `from pathlib import Path
+def _cap(window):
+    return max(20000, min(int(window * 4 * 0.06), 500000)) if window else 20000
+def _cut(content, filename, read_path, window):
+    cap = _cap(window)
+    if len(content) <= cap:
+        return content
+    head, tail = int(cap * 0.7), int(cap * 0.2)
+    return (content[:head] + "\n\n[...truncated %s: kept %d+%d of %d chars. The middle is omitted. If you need the "
+            "full instructions, read the complete file with the read_file tool: %s]\n\n" % (
+                filename, head, tail, len(content), read_path) + content[-tail:])
+def _read(path):
+    try:
+        return path.read_text(encoding="utf-8-sig").strip()
+    except (OSError, UnicodeDecodeError):
+        return ""
+def _scan(content, label):
+    if "IGNORE-ALL-PREVIOUS" in content:
+        return "[BLOCKED: %s contained potential prompt injection (ignore_previous). Content not loaded.]" % label
+    return content
+def discover_context_files(cwd):
+    cwd = Path(cwd)
+    out = []
+    found = next((cwd / n for n in (".hermes.md", "HERMES.md") if (cwd / n).is_file()), None)
+    if found is not None:
+        out.append(("hermes_md", found.name, found, _read(found)))
+    for kind, names in (("agents_md", ("AGENTS.override.md", "AGENTS.md", "agents.md")), ("claude_md", ("CLAUDE.md", "claude.md"))):
+        for name in names:
+            if (cwd / name).exists():
+                content = _read(cwd / name)
+                out.append((kind, name, cwd / name, content))
+                if content:
+                    break
+    rules = [(".cursorrules", cwd / ".cursorrules")]
+    if (cwd / ".cursor" / "rules").is_dir():
+        rules += [(".cursor/rules/" + f.name, f) for f in sorted((cwd / ".cursor" / "rules").glob("*.mdc"))]
+    out += [("cursorrules", label, path, _read(path)) for label, path in rules if path.exists()]
+    return out
+def build_context_files_prompt(cwd=None, skip_soul=False, context_length=None, allow_install_tree_fallback=False,
+                               home_override=None):
+    found = discover_context_files(cwd)
+    won = next((kind for kind, _l, _p, content in found if content), None)
+    if won is None:
+        return ""
+    rows = [(label, path, content) for kind, label, path, content in found if kind == won and content]
+    if won == "cursorrules":
+        body = "".join("## %s\n\n%s\n\n" % (label, _scan(content, label)) for label, _p, content in rows)
+        text = _cut(body, ".cursorrules", str(Path(cwd) / ".cursorrules"), context_length)
+    else:
+        label, path, content = rows[0]
+        if won == "hermes_md" and content.startswith("---"):
+            content = content[content.find("\n---", 3) + 4:].lstrip("\n")
+        text = _cut("## %s\n\n%s" % (label, _scan(content, label)), label, str(path), context_length)
+    return "# Project Context\n\nThe following project context files have been loaded and should be followed:\n\n" + text
+`,
+	"tools/budget_config.py": `class BudgetConfig:
+    default_result_size = 100_000
+    def resolve_threshold(self, tool_name):
+        return float("inf") if tool_name == "read_file" else 100_000
+def budget_for_context_window(context_length):
+    return BudgetConfig()
+`,
+}
+
+// hermesSkillUtilsStandIn is what checkout_gate and skill_names read of
+// 0.23.3's agent/skill_utils.py: the skills config, a project root trusted
+// where skills.trusted_project_dirs names it, its .hermes/skills and
+// .agents/skills, every SKILL.md below a directory, one holding QUARANTINE
+// quarantined, the home's skills as the one root searched, and a SKILL.md's
+// frontmatter.
+const hermesSkillUtilsStandIn = `import os
+from pathlib import Path
+TIER_PROJECT, TIER_LOCAL = 0, 1
+def _skills_cfg_get(key):
+    from hermes_cli.config import load_config
+    skills = load_config().get("skills") or {}
+    return skills.get(key) if isinstance(skills, dict) else None
+def get_disabled_skill_names(platform=None):
+    return set(_skills_cfg_get("disabled") or [])
+def is_project_root_trusted(root):
+    return Path(root).resolve() in {Path(p).resolve() for p in _skills_cfg_get("trusted_project_dirs") or []}
+def _candidate_project_skills_dirs(root):
+    return [(root / sub).resolve() for sub in (".hermes/skills", ".agents/skills") if (root / sub).is_dir()]
+def iter_skill_index_files(skills_dir, filename):
+    found = []
+    for top, _dirs, files in os.walk(str(skills_dir), followlinks=True):
+        if filename in files:
+            found.append(os.path.join(top, filename))
+    yield from map(Path, sorted(found))
+def is_quarantined_project_skill(skill_md):
+    return "QUARANTINE" in Path(skill_md).read_text(encoding="utf-8")
+def iter_project_skill_files(project_dir):
+    yield from (p for p in iter_skill_index_files(project_dir, "SKILL.md") if not is_quarantined_project_skill(p))
+def get_skill_search_roots(local=None, *, include_project=True):
+    return [(TIER_LOCAL, Path(os.environ["HERMES_HOME"]) / "skills")]
+def parse_frontmatter(content):
+    if not content.startswith("---"):
+        return {}, content
+    end = content.find("\n---", 3)
+    front = {}
+    for line in content[3:end].splitlines():
+        key, sep, value = line.partition(":")
+        if sep:
+            front[key.strip()] = value.strip().strip('"')
+    return front, content[end + 4:]
+`

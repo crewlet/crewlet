@@ -35,12 +35,13 @@ var hermesPluginSource []byte
 // registers ([hermesPluginSource]).
 const hermesPluginManifest = `name: crewlet-runner
 version: 1.0.0
-description: "Crewlet's runner: the run's notes, skill loads and request record"
+description: "Crewlet's runner: the run's notes, skill loads, request record and later checkouts"
 provides_hooks:
   - pre_llm_call
   - post_llm_call
   - post_api_request
   - post_tool_call
+  - transform_tool_result
 `
 
 // hermesWebToolsets is what a web-denied Hermes run disables
@@ -141,9 +142,14 @@ const hermesConnectSeconds = 60
 
 // hermesPluginSettings is the plugin's settings for req's run
 // ([Paths.HermesPluginConfig]): its record, the route files it reads at each
-// use, and each skill's digest as installed, keyed by its listed name.
-func hermesPluginSettings(req sandbox.RunRequest, paths Paths) ([]byte, error) {
+// use, each skill's digest as installed, keyed by its listed name, and how it
+// hands a checkout cloned during the run (nested, nil where the box has no
+// note helper).
+func hermesPluginSettings(req sandbox.RunRequest, paths Paths, nested *hermesNestedHand) ([]byte, error) {
 	settings := map[string]any{"record": paths.HermesRecord()}
+	if nested != nil {
+		settings["checkouts"] = nested
+	}
 	if req.Steer.Set() {
 		settings["notes_url_file"] = paths.HermesNotesURL()
 	}
@@ -205,7 +211,20 @@ func (h Hermes) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 			return "", err
 		}
 	}
-	settings, err := hermesPluginSettings(req, paths)
+	// THE NOTE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR, which hands
+	// the checkouts below the start directory theirs ([hermesCheckoutHome]);
+	// a box with none starts without them, its gate saying so.
+	var nested *hermesNestedHand
+	if err = writeNoteHelper(ctx, box, paths.HermesNoteHelper()); err == nil {
+		nested = hermesNested(paths)
+	} else if !errors.Is(err, errNoHelperBuild) {
+		return "", err
+	}
+	launch := hermesCheckoutHome(paths).launchConfig(hermesCheckouts(paths), req.ReportedRepos)
+	if err = box.WriteFile(ctx, paths.HermesCheckoutLaunch(), launch); err != nil {
+		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
+	}
+	settings, err := hermesPluginSettings(req, paths, nested)
 	if err != nil {
 		return "", err
 	}

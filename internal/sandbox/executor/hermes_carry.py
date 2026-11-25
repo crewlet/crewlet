@@ -18,9 +18,11 @@
 #                                                   is the one Hermes froze with the session titled TITLE
 #   hermes_carry.py servers STAGED                  whether the box's Hermes runs each MCP server of STAGED as
 #                                                   STAGED writes it
-#   hermes_carry.py guard PLUGIN SERVERS            whether the box's Hermes would start with the run's plugin
+#   hermes_carry.py guard PLUGIN SERVERS SKILLS BOUND  whether the box's Hermes would start with the run's plugin
 #                                                   and its servers (JSON: each name's own header names) as the
-#                                                   run wrote them
+#                                                   run wrote them, its skills listed, and its hook given BOUND s
+#   hermes_carry.py gate PEEK OUT WINDOW            what Hermes makes of each checkout PEEK's roots name, the
+#                                                   note helper's gate, written to OUT (checkout_gate)
 #
 # Run under Hermes's own interpreter through its launcher (`hermes --run-module cProfile -o /dev/null`),
 # which keeps no exit status, so every command ends on one line of its own on stdout: `crewlet-carry ok`
@@ -527,7 +529,94 @@ def plugoff(plugin):
     return "ok" if not held else "refused " + " and ".join(held)
 
 
-def guard(plugin, servers, skills):
+# What build_context_files_prompt opens its answer with, which the run's sections replace with their own label.
+CONTEXT_HEADER = "# Project Context\n\nThe following project context files have been loaded and should be followed:\n\n"
+
+
+def checkout_gate(roots, window):
+    """The note helper's gate for roots (internal/notehelper's checkoutGate): for each, its instructions as a
+    session started there loads them, Hermes's own build_context_files_prompt (one kind, the first with a
+    non-empty file; every file through the injection scan; Hermes's cut at window tokens, None for Hermes's
+    floor), the files of that kind, and the skill directories such a session loads (only for a root
+    skills.trusted_project_dirs names, each passing Hermes's quarantine scan and not disabled), what it leaves
+    out a line each; and every name the home's skills are found by. The run's plugin imports it too."""
+    from agent import prompt_builder as pb, skill_utils as su
+    from hermes_cli.gateway_chat import env_launch_flags
+    ignore = bool(env_launch_flags().get("ignore_rules"))
+    discovery = su._skills_cfg_get("project_discovery") is not False
+    disabled = su.get_disabled_skill_names("cli")
+    checkouts = {}
+    for root in roots:
+        path = Path(root)
+        entry = {"text": "", "files": [], "skills": [], "said": []}
+        found = pb.discover_context_files(path)
+        won = next((kind for kind, _label, _path, content in found if content), None)
+        if won is not None and ignore:
+            entry["said"].append("the instructions of %s are left out: HERMES_IGNORE_RULES has Hermes load no "
+                                 "project's" % root)
+        elif won is not None:
+            text = pb.build_context_files_prompt(cwd=str(path), skip_soul=True, context_length=window)
+            entry["text"] = text[len(CONTEXT_HEADER):] if text.startswith(CONTEXT_HEADER) else text
+            entry["files"] = [str(p) for kind, _label, p, content in found if kind == won and content]
+        skills = [md for d in su._candidate_project_skills_dirs(path.resolve())
+                  for md in su.iter_skill_index_files(d, "SKILL.md")]
+        if skills and not (discovery and su.is_project_root_trusted(path)):
+            entry["said"].append("the skills of %s are left out: Hermes loads a checkout's skills only where its "
+                                 "skills.trusted_project_dirs names the checkout's root" % root)
+            skills = []
+        for md in skills:
+            names = {md.parent.name, str(skill_frontmatter(md).get("name", md.parent.name))}
+            if su.is_quarantined_project_skill(md):
+                entry["said"].append("the skill %s is left out: Hermes's scan quarantines it" % md.parent)
+            elif names & disabled:
+                entry["said"].append("the skill %s is left out: skills.disabled names it" % md.parent)
+            else:
+                entry["skills"].append(str(md.parent))
+        checkouts[root] = entry
+    return {"checkouts": checkouts, "taken": skill_names()}
+
+
+def skill_frontmatter(md):
+    """md's frontmatter as Hermes parses it, {} where it cannot be read."""
+    from agent.skill_utils import parse_frontmatter
+    try:
+        front, _body = parse_frontmatter(md.read_text(encoding="utf-8"))
+    except Exception:  # an unreadable skill is no name, as Hermes's own catalog skips it
+        return {}
+    return front if isinstance(front, dict) else {}
+
+
+def skill_names():
+    """Every name a skill the box's Hermes finds is found by (its declared name, its directory's, its path
+    under its root: resolve_skill_catalog's aliases), each with that skill's directory, over every root it
+    searches, a trusted project's quarantined skills left out as Hermes leaves them."""
+    from agent import skill_utils as su
+    taken = {}
+    for tier, root in su.get_skill_search_roots():
+        files = su.iter_project_skill_files(root) if tier == su.TIER_PROJECT else su.iter_skill_index_files(root,
+                                                                                                          "SKILL.md")
+        for md in files:
+            aliases = {md.parent.name, str(skill_frontmatter(md).get("name", md.parent.name)),
+                       md.parent.relative_to(root).as_posix()}
+            for alias in aliases:
+                taken.setdefault(alias, str(md.parent))
+    return taken
+
+
+def gate(peek_path, out_path, window):
+    """checkout_gate for the roots the note helper's hermes-peek wrote at peek_path, written to out_path, under
+    the box's .env as Hermes reads it; window 0 for none."""
+    with open(peek_path, encoding="utf-8") as f:
+        roots = json.load(f).get("roots") or []
+    from hermes_cli.env_loader import load_hermes_dotenv
+    load_hermes_dotenv(hermes_home=os.environ.get("HERMES_HOME", ""), load_external_secrets=False)
+    answer = checkout_gate(roots, int(window) or None)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(answer, f)
+    return "ok"
+
+
+def guard(plugin, servers, skills, bound):
     """Why the box's Hermes would start without the run's plugin or one of servers' tools, by what Hermes itself
     reads (load_config() under the run's managed scope, its own gates), each reason naming the file, key and
     entry: a sticky profile (main._apply_profile_override's read), a launch switch in an environment or .env, a
@@ -536,7 +625,8 @@ def guard(plugin, servers, skills):
     gated off, or one of skills (the run's seat skills' names) disabled for the cli, by Hermes's own
     get_disabled_skills, which Hermes leaves unlisted (read in its code). A box file's own switch of one of
     servers (enabled false, disabled true, a tools list leaving out or hiding its tools, servers giving
-    each one's tools) refuses it too, though the run's overlay would state it back (measured on 0.23.3)."""
+    each one's tools) refuses it too, though the run's overlay would state it back (measured on 0.23.3); and a
+    plugins.hook_callback_timeout under bound, the seconds the run's nested hand may take."""
     names = json.loads(servers)
     os.environ.pop("CREWLET_HERMES_PLUGIN", None)  # a plugin Hermes loads while answering registers nothing
     home_dir = os.environ.get("HERMES_HOME", "")
@@ -659,17 +749,27 @@ def guard(plugin, servers, skills):
             held = (where(("plugins", "disabled"), lambda v: isinstance(v, list) and plugin in v) if plugin in disabled
                     else where(("plugins", "enabled"), lambda v: True))
             found.append("%s, so Hermes would not load the run's plugin %s: %s" % (held, plugin, verdict.error))
+
+    # THE HOOK THAT HANDS A LATER CHECKOUT is given its bound, or Hermes abandons it with the checkout claimed.
+    from hermes_cli.plugins import _resolve_hook_callback_timeout
+    hook = _resolve_hook_callback_timeout()
+    if 0 < hook < float(bound):
+        found.append("%s, under the %s seconds the run's hook that hands a checkout cloned during it may take, so "
+                     "Hermes would abandon it with that checkout's instructions (raise it to %s or remove it)" % (
+                         where(("plugins", "hook_callback_timeout"), lambda v: True), bound, bound))
     return "ok" if not found else "refused " + " | ".join(found).replace("\n", " ")
 
 
 COMMANDS = {"dump": (dump, 4), "trim": (trim, 2), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 3),
-            "top": (top, 1), "route": (route, 3), "servers": (servers, 2), "guard": (guard, 3), "plugoff": (plugoff, 1)}
+            "top": (top, 1), "route": (route, 3), "servers": (servers, 2), "guard": (guard, 4), "plugoff": (plugoff, 1),
+            "gate": (gate, 3)}
 
 if __name__ == "__main__":
     command = COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if command is None or len(sys.argv) != command[1] + 2:
         sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | trim SRC DST | renew DB TITLE SYSTEM | "
                          "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED HOSTS | top DB | route DB TITLE MODEL | "
-                         "servers STAGED GUARDED | guard PLUGIN SERVERS SKILLS | plugoff PLUGIN\n")
+                         "servers STAGED GUARDED | guard PLUGIN SERVERS SKILLS BOUND | plugoff PLUGIN | "
+                         "gate PEEK OUT WINDOW\n")
         sys.exit(2)
     sys.stdout.write("crewlet-carry %s\n" % command[0](*sys.argv[2:]))

@@ -3,29 +3,34 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// checkoutHome is where a runner that hands the checkouts below its run's
-// working directory their instructions and skills through the note helper's
-// checkout core (internal/notehelper's "Checkouts below the working
-// directory") keeps them: the helper and its state, the launch config
-// ([checkoutSpec]), the home instruction file the harness reads (agents: the
-// first of its candidates that exists, else the first, as a harness reading
-// one file of several names finds it), the home's own copy of it held beside
-// the run while it runs (held), the file the helper writes the checkouts'
-// sections into (sections), and the skills directory they are copied into,
-// with the list of copies the next run removes. A copy is built in
-// state/staging ([checkoutHome.staging]).
+// checkoutHome is where a runner handing the checkouts below its working
+// directory their instructions and skills through the note helper's core
+// (internal/notehelper's "Checkouts below the working directory") keeps them:
+// the helper, its state and launch config ([checkoutSpec]); the home
+// instruction file the harness reads (agents: the first candidate that
+// exists, else the first; none where the run hands the sections itself, as
+// Hermes's does in its system prompt), the home's own held beside the run
+// (held) and the helper's sections; the skills directory copies go into, the
+// list the next run removes, each built in state/staging; and, for a gated
+// spec ([checkoutSpec.Gated]), gateCmd, writing what checkout-launch reads.
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
 	held, sections        string
 	skills, copied        string
+	gateCmd               string
 }
+
+// gateFile is where [checkoutHome]'s gateCmd writes the gate
+// checkout-launch reads: in the state, remade by every run.
+func (h checkoutHome) gateFile() string { return h.state + "/gate.json" }
 
 // heldLive marks which of several home instruction files a run holds
 // (held+heldLive names it), so the put-back restores the one that existed,
@@ -54,11 +59,24 @@ func (h checkoutHome) removeSiblingStaging() string {
 // [checkoutHome.launchConfig]: Instructions, the slots ([checkoutSlot]);
 // Limit, the harness's own bound in bytes on a checkout's instructions, nil
 // for a harness with none; SkillDirs, the checkout's skill directories
-// ([checkoutSkillDir]).
+// ([checkoutSkillDir]); Gated, whether the harness's own code answers for each
+// checkout instead (internal/notehelper's checkoutGate); Budget, the bound
+// the sections share with the run's own text, nil for none.
 type checkoutSpec struct {
 	Instructions []checkoutSlot
 	Limit        *int
 	SkillDirs    []checkoutSkillDir
+	Gated        bool
+	Budget       *checkoutBudget
+}
+
+// checkoutBudget is the bound a launch's sections share with the text the
+// harness reads beside them (internal/notehelper's launchBudget): Form,
+// whose count applies; Own, the file of the run's own text; Bytes, the bound.
+type checkoutBudget struct {
+	Form  string `json:"form"`
+	Own   string `json:"own"`
+	Bytes int    `json:"bytes"`
 }
 
 // checkoutSkillDir is a checkout's skill directory as the helper reads it:
@@ -120,9 +138,16 @@ var checkoutUnlimited *int
 // repositories the run pushes to first, and the seats' namespace reserved, so
 // no repository's skills are listed under it.
 func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
-	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.sections, "first": repos,
+	config := map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "skillDirs": spec.SkillDirs,
-		"skills": h.skills, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace}})
+		"skills": h.skills, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace}}
+	if spec.Gated {
+		config["gated"] = true
+	}
+	if spec.Budget != nil {
+		config["budget"] = spec.Budget
+	}
+	launch, _ := json.Marshal(config)
 	return launch // strings, lists and an int cannot fail to encode
 }
 
@@ -144,7 +169,9 @@ func (h checkoutHome) gate() string {
 	}
 	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; rq=%s; hk=`, q(h.state), q(h.helper), q(h.skills), ra,
 		q(h.held), q(h.copied), q(h.sections))
-	line(`%s || exit 1`, h.putBack())
+	if len(h.agents) > 0 {
+		line(`%s || exit 1`, h.putBack())
+	}
 	if len(h.agents) > 1 {
 		// THE FILE THE HARNESS READS, named before it is held, so a run killed
 		// past here is put back by the next ([checkoutHome.putBack]).
@@ -156,20 +183,37 @@ func (h checkoutHome) gate() string {
 			strings.Join(words, " "), q(h.agents[0]))
 		line(`printf '%%s\n' "$ra" > "$rha%s" || exit 1`, heldLive)
 	}
-	line(`if [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
-		`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
+	if len(h.agents) > 0 {
+		line(`if [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
+			`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
+	}
 	line(`%s || exit 1`, h.removeCopies())
 	line(`%s`, h.removeSiblingStaging())
 	line(`: > "$rw" && rm -rf "$rr" "$rq" && mkdir -p "$rr" || exit 1`)
 	line(`if [ -f "$rh" ]; then`)
 	line(`  chmod 700 "$rh" || exit 1`)
-	line(`  "$rh" -adapter checkout-launch -config %s < /dev/null || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`,
+	launch := fmt.Sprintf(`"$rh" -adapter checkout-launch -config %s < %%s || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`,
 		q(h.launch))
-	line(`  hk=1`)
+	if h.gateCmd == "" {
+		line(`  %s`, fmt.Sprintf(launch, "/dev/null"))
+		line(`  hk=1`)
+	} else {
+		// A HARNESS WHOSE OWN CODE CANNOT ANSWER (a release whose modules
+		// moved) starts without the checkouts, saying so, as its guard
+		// starts where it cannot judge.
+		line(`  if %s; then`, h.gateCmd)
+		line(`    %s`, fmt.Sprintf(launch, q(h.gateFile())))
+		line(`    hk=1`)
+		line(`  else`)
+		line(`    echo 'crewlet: the harness could not say what its repositories bring, so the run starts without their instructions and skills' >&2`)
+		line(`  fi`)
+	}
 	line(`else`)
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
 	line(`fi`)
-	line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
+	if len(h.agents) > 0 {
+		line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
+	}
 	return b.String()
 }
 
@@ -188,8 +232,11 @@ func (h checkoutHome) restore() string {
 	q := shellword.Quote
 	ended := fmt.Sprintf(`[ ! -d %[1]s ] || flock -w %[2]d %[1]s/lock touch %[1]s/ended 2> /dev/null || : > %[1]s/ended`,
 		q(h.state), checkoutEndedWait)
-	return everyStep(ended, h.putBack(), h.removeCopies(), "rm -rf "+q(h.staging()),
-		h.removeSiblingStaging())
+	steps := []string{ended, h.putBack(), h.removeCopies(), "rm -rf " + q(h.staging()), h.removeSiblingStaging()}
+	if len(h.agents) == 0 {
+		steps = slices.Delete(steps, 1, 2) // no home file to put back
+	}
+	return everyStep(steps...)
 }
 
 // removeCopies is the shell removing from the skills directory every copy
