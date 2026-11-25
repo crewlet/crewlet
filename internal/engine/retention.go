@@ -427,7 +427,7 @@ func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {
 // Alarms is the kinds this node's latest evaluation found standing, one per
 // kind however many logs it stands on and the longest-standing first
 // ([statelog.Tracker.Standing]), and false where no evaluation has run: a node
-// mid-boot, or one running no state log, which has no alarm table to evaluate.
+// mid-boot. A node without `data` reads its own table's ([Engine.startLocalAlarms]).
 //
 // THE EVALUATION THE GAUGE AND THE LOG WERE FED, never a fresh report. The
 // health envelope reads this on every probe and every push tick, and a report

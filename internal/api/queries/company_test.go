@@ -3210,6 +3210,36 @@ func TestTheFleetSaysWhatIsFiringOnEachNode(t *testing.T) {
 	}
 }
 
+// A NODE WITHOUT DATA'S ALARMS ARE ON ITS ROW, as a data node's are: it
+// evaluates the kinds it measures on its own table, and this view, the
+// notices and an operator reading the fleet see them only here.
+//
+// Mutation: show alarms only for a node that holds data, and this goes red.
+func TestTheFleetViewShowsANodeWithoutDatasAlarms(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	since := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	status := coord.NodeStatus{AlarmsEvaluated: true, Alarms: []coord.AlarmMark{
+		{Kind: string(statelog.KindObjectiveBurn), Since: since}}}
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("sat-1"), coord.AcquireOptions{
+		Owner: "sat-1:1", TTL: time.Minute,
+		Meta: map[string]any{"roles": []string{"seats"}, coord.StatusKey: status.Meta()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := asMap(t, answer(t, queries.Sources{Coord: backend, NodeID: "sat-1"}, "fleet", nil))
+	var row map[string]any
+	for _, r := range rows(t, body["nodes"]) {
+		if r["id"] == "sat-1" {
+			row = r
+		}
+	}
+	marks, _ := row["alarms"].([]any)
+	if len(marks) != 1 || marks[0].(map[string]any)["kind"] != string(statelog.KindObjectiveBurn) {
+		t.Errorf("a seat-only node's row carries alarms %#v (row %v), want objective_burn", row["alarms"], row)
+	}
+}
+
 // THE PAGE SCREEN READS WHAT THESE ANSWERS SEND, in both directions — every
 // member `contract/pages.ts` declares is a key the engine sends, and every key
 // it sends is declared, down to the rows inside the lists. A field renamed

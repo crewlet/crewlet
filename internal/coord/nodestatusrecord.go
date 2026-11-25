@@ -78,8 +78,8 @@ type NodeStatusRecord struct {
 	// job finished and whose last resume here failed on a condition only an
 	// operator clears ([ResumesBlocked]). Nil is a node holding no such run,
 	// or one that does not say: one running no executor, or a build from
-	// before it. ON THE RECORD, since a satellite holding the seat evaluates
-	// no alarm; the count and the longest-waiting run, never how long it has
+	// before it. ON THE RECORD, since a satellite holding the seat judges
+	// only what it measures of itself; the count and the longest-waiting run, never how long it has
 	// waited (the package doc's "A node's runs waiting for an operator").
 	ResumesBlocked *ResumesBlocked
 
