@@ -927,34 +927,48 @@ type fleetList struct {
 // fitFleetWork sets a model row's fleet work LAST, after every other part:
 // its work in flight, then its homes, each in its order, as many of each as
 // fit [MaxNodeStatusRowBytes] beside the rest with the epoch at its widest, and
-// each list's whole count where it names fewer. The row's bytes are the only
-// bound: at their widest the lists take 25 KB, so a count cap could not hold
-// the row, and one below what fits would only drop work a reader could have
-// had, uncounted.
+// each list's whole count where it names fewer. Each list is fitted beside
+// the counts of the lists after it, the least a list with work takes (an
+// entry is longer than any count), so one that then names nothing still has
+// room for its count, and beside its own only where it is not kept whole.
+// The row's bytes are the only bound: at their widest the lists take 25 KB,
+// so a count cap could not hold the row, and one below what fits would only
+// drop work a reader could have had, uncounted.
 func fitFleetWork(row map[string]any, lists ...fleetList) {
 	row["epoch"] = int64(math.MaxInt64)
+	for _, list := range lists {
+		if list.whole > 0 {
+			row[list.key+"_count"] = list.whole
+		}
+	}
 	for _, list := range lists {
 		if list.whole == 0 {
 			continue
 		}
-		row[list.key], row[list.key+"_count"] = []map[string]any{}, list.whole
-		size, kept := len(mustMarshal(row)), 0
-		for _, item := range list.items {
-			grows := len(mustMarshal(item)) + min(kept, 1)
-			if size+grows > MaxNodeStatusRowBytes {
-				break
-			}
-			size, kept = size+grows, kept+1
+		row[list.key] = []map[string]any{}
+		delete(row, list.key+"_count")
+		kept := fitted(len(mustMarshal(row)), list.items)
+		if kept < list.whole {
+			row[list.key+"_count"] = list.whole
+			kept = fitted(len(mustMarshal(row)), list.items)
 		}
 		row[list.key] = list.items[:kept]
-		if kept == list.whole {
-			delete(row, list.key+"_count")
-		}
 		if kept == 0 {
 			delete(row, list.key)
 		}
 	}
 	delete(row, "epoch")
+}
+
+// fitted is how many of items, in order, a row of size bytes holding their
+// list empty takes within [MaxNodeStatusRowBytes].
+func fitted(size int, items []map[string]any) int {
+	for kept, item := range items {
+		if size += len(mustMarshal(item)) + min(kept, 1); size > MaxNodeStatusRowBytes {
+			return kept
+		}
+	}
+	return len(items)
 }
 
 // meta is one limit window on the wire, its unsaid parts omitted.
