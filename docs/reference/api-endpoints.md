@@ -3530,7 +3530,7 @@ Before anybody is in the company, the body says so. The remedy is the first pers
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: its last beat is older than the beat interval it keeps (a second at the shipped lease TTL). Value is the seconds since that beat, climbing toward the seat lease TTL, at which the watchdog ends the process. Absent on a node on its beat, so its presence is what to alert on. |
 | `identity` | Whether the company has its **first person**: `ready` once a person is enrolled; `unclaimed` while nobody is (a service account alone signs nobody in with a password, so it does not count), a fresh install waiting for [its first person](../concepts/identity-and-access.md#how-the-first-person-exists) to be invited into or created on a declared human seat under a Tier A token. A person an administrator creates makes it `ready` the moment the create lands, before they spend their first password link. `unknown` where this node cannot read its identity estate **or has not applied all of it** (a node just joined holds empty rows until its applier catches up, so "nobody" is proved against the identity log's end); never reported as `unclaimed`, which would tell an operator to put a first person into a company that may have started. Every node answers it, one with no company included, since the identity estate runs from boot. `/health` is the one surface an unclaimed company can reach (never guarded; no credential exists before the first person), hence its place here. It does **not** move `status`. |
 | `nodes` | How many nodes hold a presence lease: the fleet this node's fan-outs (search, fleet history) divide their work by. **Absent** when the presence read failed or did not finish inside the probe's coordination budget (an eighth of the 15-second reconcile interval, under two seconds; it runs beside the posture read, so a wedged broker slows `/health` by that budget instead of hanging it). Never `0`, since the answering node is one. A screen says "node count unavailable" for an absence. |
-| `alarms` | `{count, worst, worst_title}`: how many of this node's [alarms](alarms.md) are firing (one per kind however many logs it stands on); `worst`, the one firing **longest** (the table asserts no severity; the longest-unanswered condition is the one the dashboard's engine panel names first); and `worst_title`, its title in words for a company owner (both absent when `count` is 0). `worst` is a KIND, naming no log: an alarm that stands on logs (`log_headroom`, `log_ceiling_short`, `backup_age`, `trim_blocked`, `deferred_old`, `floor_unknown` and `census_drift`) lists them in its `domains`, each a measurement with its logs, on the operator-only [`/worklet/retention`](#get-workletretention-what-the-log-is-holding) answer. From the **same** evaluation come the `crewlet.alarm.active` gauge (one series per kind) and the `alarm_raised` / `alarm_cleared` log lines (a per-log condition writes them per log, so a second log joining an up alarm, and the first leaving it, are each said); it runs every ten seconds on every node running a state log. **Absent** before the first evaluation and on a node running none (no `data` role): `{count: 0}` would read as healthy. |
+| `alarms` | `{count, worst, worst_title}`: how many of this node's [alarms](alarms.md) are firing (one per kind however many logs it stands on); `worst`, the one firing **longest** (the table asserts no severity; the longest-unanswered condition is the one the dashboard's engine panel names first); and `worst_title`, its title in words for a company owner (both absent when `count` is 0). `worst` is a KIND, naming no log: an alarm that stands on logs (`log_headroom`, `log_ceiling_short`, `backup_age`, `trim_blocked`, `deferred_old`, `floor_unknown` and `census_drift`) lists them in its `domains`, each a measurement with its logs, on the operator-only [`/worklet/retention`](#get-workletretention-what-the-log-is-holding) answer. From the **same** evaluation come the `crewlet.alarm.active` gauge (one series per kind) and the `alarm_raised` / `alarm_cleared` log lines (a per-log condition writes them per log, so a second log joining an up alarm, and the first leaving it, are each said); it runs every ten seconds on every node, a node without the `data` role judging only the alarms it measures of itself ([the reference](alarms.md#how-an-alarm-reaches-you)). **Absent** before the first evaluation: `{count: 0}` would read as healthy. No alarm makes `/health` or `/ready` fail. |
 | `seeded_from` | Which nodes this node's live projection was seeded from at boot (the activity feed, each seat's last turn, and the live spend window behind the [`tokens` push](#pushes)), in the fleet [`coverage`](#reading-the-fleets-history-coverage) shape. Absent until a seed has landed. A failed or incomplete seed is retried ([Live-state projection](#live-state-projection-apistream--livestate)); this is the latest attempt's coverage, and `complete` turns `true` once one attempt was answered by every node. Until then those surfaces are short, and this keeps that visible after the log line scrolled away. |
 | `objects` | `{direct_upload}`: whether an upload may go straight to the object store's S3 bucket on a presigned put. `available`, or `unavailable (<reason>)`: always so on the default `nats` backend (only the fleet reaches its bucket), and on an `s3` bucket whose provider the boot probe could not prove refuses a body not matching its `x-amz-checksum-sha256` and a second put under `If-None-Match: *` (see [The boot probe](../concepts/object-store.md#the-boot-probe-and-direct-uploads)). Unavailable is no fault: uploads then stream through the engine. Absent on a node running no object store. |
 | `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to seconds stranded; present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it (hence absent from `seats`). Alert on the duration, not the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |
@@ -3562,7 +3562,8 @@ A node whose `node.roles` leave out `ingress` (a [satellite](../guides/satellite
   "applied_epoch": 41,
   "identity_duty_seconds": {},
   "seats": ["eu-support"],
-  "nodes": 4
+  "nodes": 4,
+  "alarms": {"count": 0}
 }
 ```
 
@@ -7894,12 +7895,13 @@ session budget released the object, or the turn's end did, its newest capture
 not kept — each only of a turn that ended — and an ended turn is never captured
 again.
 
-**Two transcripts at a time on each node.** One read holds at most 29 MiB
-measured, and of what
+**Two transcripts at a time on each node.** One read holds at most 32 MiB
+measured (Cursor Agent's apart: its reader still holds each line whole, up to
+166 MiB), and of what
 harnesses and ordinary tools write takes up to about 49 seconds for a person (58
 for a seat's words): one value of `password:` lines streamed through its
 redaction to `bounds.read_bytes`, beside a second read. So a node decodes at
-most two transcripts at once, 58 MiB live at their worst (87 MiB with the heap's
+most two transcripts at once, 64 MiB live at their worst (96 MiB with the heap's
 room under the engine's memory limit), whichever socket
 question or REST request asks for them. A request past them waits for a slot,
 its session's object not yet opened, for as long as its caller waits, and a
@@ -8084,7 +8086,7 @@ Each tool is listed once across the fleet, sorted, every one any node named. A n
 | `approve` | `mcp_approval_waiting` | The calls `fix.seat`'s run holds for approval on `fix.server`, each answered with [`POST /mcp-approvals/{id}`](#post-mcp-approvalsid) by its id in `approvals` |
 | `review` | `mcp_tools_changed` | The changes in `fix.server`'s [detail](#get-mcp-serversname) `changes`, each accepted or kept blocked with [`POST /mcp-servers/{name}/changes`](#post-mcp-serversnamechanges) |
 
-The list is always present, and empty on a node that runs no state log, which evaluates no alarm: ask a data node.
+The list is always present, and empty on a node that runs no state log, whose own table judges no MCP alarm: ask a data node.
 
 `oauth`, on each server row of an administrator's reading, is the server's [OAuth sign-in](../guides/tools-and-mcp.md#signing-in-with-oauth), `null` for a server not signed in to with OAuth. It is the grant's public half, never a token or the client's secret:
 

@@ -2633,7 +2633,7 @@ func (c *Coordinator) publishCollected(ctx context.Context, run PendingRun, resu
 		return run.Launch
 	}
 	// MEASURED WITH THE RECORD, under its guard: once per launch.
-	c.meterCarry(facts, rec.SessionNotContinued)
+	c.meterCarry(facts, result, rec.SessionNotContinued)
 	facts.Published = true
 	return facts
 }

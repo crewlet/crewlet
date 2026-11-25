@@ -965,13 +965,19 @@ type Engine struct {
 	// retention status`; cleared by the teardown.
 	retention atomic.Pointer[retention]
 
-	// alarms is the retention loop's alarm tracker, published for the API's
-	// health envelope ([Engine.Alarms]). Atomic and never cleared: read from
-	// every health request and push tick on goroutines this engine does not
-	// own while the writing loop starts and stops, so a plain field would
-	// race startRetention, and nil-ing on stop would turn a draining node's
-	// last reading into "no evaluation has ever run".
+	// alarms is this node's alarm tracker, the retention loop's on a data
+	// node and the local loop's on a node without `data` (localalarms.go),
+	// published for the API's health envelope ([Engine.Alarms]). Atomic and
+	// never cleared: read from every health request and push tick on
+	// goroutines this engine does not own while the writing loop starts and
+	// stops, so a plain field would race the loop's start, and nil-ing on
+	// stop would turn a draining node's last reading into "no evaluation has
+	// ever run".
 	alarms atomic.Pointer[statelog.Tracker]
+
+	// localAlarms is the alarm loop of a node without `data`, nil on a data
+	// node and once stopped ([Engine.startLocalAlarms]).
+	localAlarms atomic.Pointer[localAlarms]
 
 	// accessReviews is this node's debounce of its seats' access reviews
 	// (accessreview.go). Atomic: armed by Start while an apply may already
@@ -2278,6 +2284,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// What this node says of its servers, models, runners and host: its status
 	// record beside its presence.
 	e.startStatusRecords(ctx)
+	// What this node raises of itself where it runs no state log: the alarm
+	// table a data node evaluates on its retention heartbeat.
+	e.startLocalAlarms(ctx)
 	// How each server is, answered to a server's page on any node, and the
 	// restarts people asked for, applied as every node hears them.
 	e.startMCPInstances(ctx)
@@ -2998,6 +3007,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopKeeper(ctx)
 	e.stopUsage()
 	e.stopRetention()
+	e.stopLocalAlarms()
 	e.stopIdentityDuties()
 	e.stopBudgetReports()
 	e.stopInboxReports()
