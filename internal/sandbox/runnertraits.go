@@ -26,6 +26,10 @@ type ThreadTraits struct {
 	// PlacesWithResumeRead says a capture is placed at a save point only
 	// where its release's resume was read ([TakenSession.ResumeRead]).
 	PlacesWithResumeRead bool
+	// Summaries says the runner reads its main thread's newest compaction
+	// summary ([MainThreadAsk.Summary]) at every box read, whether or not it
+	// counts the thread (Reads).
+	Summaries bool
 }
 
 // ThreadTraitsOf is runner's [ThreadTraits], zero for a runner that states

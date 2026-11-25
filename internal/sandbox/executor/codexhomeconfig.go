@@ -103,8 +103,9 @@ func (Codex) homeRestore(p Paths) string { return codexRestoreHome(p) }
 // written over the run's through a link as the home keeps it, or the run's
 // removed where the home had none; nothing where none is held, so it runs any
 // number of times, and fails, naming the file, where a copy will not go back,
-// the other files put back all the same ([everyStep]).
+// the other files put back all the same ([everyStep]); and the skip log no
+// script printed dropped ([checkoutHome.dropSkipped]).
 func codexRestoreHome(paths Paths) string {
-	return everyStep(putBackHome(paths.CodexLiveConfig(), paths.CodexHomeConfig()),
-		codexCheckoutHome(paths).restore())
+	h := codexCheckoutHome(paths)
+	return everyStep(putBackHome(paths.CodexLiveConfig(), paths.CodexHomeConfig()), h.restore(), h.dropSkipped())
 }

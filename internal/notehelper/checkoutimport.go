@@ -10,7 +10,7 @@ import (
 
 // rootImports is root's instructions as imports, for a spec whose harness
 // reads its instruction files itself (checkoutSpec.ImportInstructions): each
-// slot's first regular file, and each file a tree slot keeps ([treeKept]), as
+// slot's first regular file, and each file a tree slot keeps ([treeTexts]), as
 // one `@<absolute path>` line, in slot order, its spaces written `\ `. Claude
 // Code 2.1.310 and 2.1.330 then load each file and resolve its own relative
 // imports against the checkout, as a session started there does (measured: a
@@ -33,7 +33,7 @@ func rootImports(root string, slots []instructionSlot, said *skips) string {
 	}
 	for _, slot := range slots {
 		if slot.Tree != nil {
-			for _, f := range treeKept(root, *slot.Tree, said) {
+			for _, f := range treeTexts(root, *slot.Tree, said) {
 				add(f.path, f.info)
 			}
 			continue

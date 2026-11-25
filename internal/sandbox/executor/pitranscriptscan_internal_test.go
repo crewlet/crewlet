@@ -158,11 +158,11 @@ func TestACollectionsReadOfAPiSessionIsItsWholeLineRead(t *testing.T) {
 	for name, record := range records {
 		takes := served(append(piInboxesIn(record), "one", "never")...)
 		want, wantErr := piNotesHeldWhole(t.Context(), strings.NewReader(record), takes)
-		got, err := piNotesHeld(t.Context(), strings.NewReader(record), takes)
+		got, err := piNotesHeld(t.Context(), strings.NewReader(record), takes, nil)
 		if !slices.Equal(got, want) || (err != nil) != (wantErr != nil) {
 			t.Errorf("%s: held %v (%v), want %v (%v)", name, got, err, want, wantErr)
 		}
-		got, err = piNotesHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, takes)
+		got, err = piNotesHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, takes, nil)
 		if !slices.Equal(got, want) || (err != nil) != (wantErr != nil) {
 			t.Errorf("%s in pieces: held %v (%v), want %v (%v)", name, got, err, want, wantErr)
 		}
