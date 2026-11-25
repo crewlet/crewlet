@@ -283,8 +283,8 @@ func TestATreeHandsItsFilesInClaudeCodesWalk(t *testing.T) {
 }
 
 // A SCOPED RULE IS LEFT OUT AS CLAUDE CODE READS ITS FRONTMATTER, each case a
-// measured row of 2.1.310 and 2.1.330 (B2a's C4 rows; the mixed list, review
-// P2-B, on 2.1.310): handed where it loads at a session's start, left out
+// measured row of 2.1.310 and 2.1.330 (B2a's C4 rows; the mixed list, `[5]`
+// and `[""]` on 2.1.310): handed where it loads at a session's start, left out
 // where it loads only on a matching path or never (invalid YAML).
 //
 // Mutation: read the frontmatter line by line, take `Paths` for paths, read a
@@ -297,7 +297,8 @@ func TestAScopedRuleIsLeftOutAsClaudeCodeReadsItsFrontmatter(t *testing.T) {
 		"---\napplyTo: \"src/**\"\n---\n", "---\nPaths: [\"src/**\"]\n---\n", "---\npaths: []\n---\n",
 		"---\npaths:\n---\n", "---\npaths: \"\"\n---\n", "---\npaths: [\"\"]\n---\n", "---\npaths: 5\n---\n",
 		"---\npaths: true\n---\n", "---\npaths: {a: 1}\n---\n", "---\npaths: [\"**\"]\n---\n",
-		"---\npaths: \"**\"\n---\n", "---\npaths: [\"src/**\"]\nX\n"}
+		"---\npaths: \"**\"\n---\n", "---\npaths: [\"src/**\"]\nX\n",
+		"---\npaths: [5]\n---\nX\n", "---\npaths: [\"\"]\n---\nX\n"}
 	left := []string{"---\npaths: [\"src/**/*.ts\"]\n---\n", "---\npaths:\n  - \"src/**/*.ts\"\n---\n",
 		"---\npaths: \"src/**/*.ts\"\n---\n", "---\npaths: [\"**/*\"]\n---\n", "---\npaths: [\"*\"]\n---\n",
 		"---\npaths: [\"**/\"]\n---\n", "---\npaths: [\"**\", \"docs/**\"]\n---\n",
