@@ -43,8 +43,7 @@ type screen struct {
 }
 
 // links is the link table: every screen the assistant may link to, by the
-// dashboard's own screen name (app/routes.ts), at the address its router
-// resolves.
+// dashboard's own screen name (app/routes.ts), at the address its router resolves.
 //
 // HELD AGAINST THE ROUTER, twice: the dashboard's printed-address suite
 // (app/links.test.ts) resolves every address below with its placeholders
