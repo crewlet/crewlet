@@ -20,12 +20,12 @@ import (
 
 // The capabilities the carry gives [Codex], held at compile time.
 var (
-	_ carrier      = Codex{}
-	_ saver        = Codex{}
-	_ resumer      = Codex{}
-	_ resumeReader = Codex{}
-	_ inPlaceGate  = Codex{}
-	_ trimmer      = Codex{}
+	_ carrier       = Codex{}
+	_ saver         = Codex{}
+	_ resumer       = Codex{}
+	_ resumeReader  = Codex{}
+	_ inPlaceGate   = Codex{}
+	_ recordTrimmer = Codex{}
 )
 
 // codexCarryRelease is the one Codex release a box continues a carried

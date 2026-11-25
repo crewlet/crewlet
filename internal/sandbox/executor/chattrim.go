@@ -2,7 +2,6 @@ package executor
 
 import (
 	"fmt"
-	"strconv"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -19,26 +18,7 @@ import (
 // is never cut, and the lines the take checks as the run's start are
 // restated over the cut copy ([trimCut]).
 
-// trimStartVar is the shell variable a chat pack reads its run's start from:
-// the lines its record held before the run began, 0 where the run began it,
-// unset where that is not known, which cuts nothing. The run's script sets it
-// ([chatRunStartFrom]), and [Runner.packNow] from the record.
-const trimStartVar = "trs"
-
-// trimStartOf is [trimStartVar]'s value for rec's run as h records it:
-// its start's lines, 0 where it began its session, "" where neither is known.
-func trimStartOf(rec sessionRecord, h Harness) string {
-	start, prefix := rec.runStart(h)
-	switch {
-	case start.Began:
-		return "0"
-	case prefix.Lines > 0:
-		return strconv.FormatInt(prefix.Lines, 10)
-	}
-	return ""
-}
-
-// chatTrimRecord is the cut of a chat file at src into dst ([trimmer]):
+// chatTrimRecord is the cut of a chat file at src into dst ([recordTrimmer]):
 // boundary, an awk program printing the line its newest compaction opens on
 // (failing where there is none), finds B; the cut leaves out lines 2 to
 // C = min(B-1, [trimStartVar]) and keeps the rest, where C is 2 or more, so a
@@ -127,6 +107,6 @@ func (QwenCode) trimRecord(src, dst string) string {
 }
 
 var (
-	_ trimmer = GeminiCLI{}
-	_ trimmer = QwenCode{}
+	_ recordTrimmer = GeminiCLI{}
+	_ recordTrimmer = QwenCode{}
 )

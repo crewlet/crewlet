@@ -540,7 +540,8 @@ task_assigned              # published to the seat's inbox by the scheduler
 work_pickup                # published to the seat's inbox by the work pickup
 delegated_review           # published to a delegate's inbox once a delegated request is parked
 executor_launched        # names the providers.llm entry the launch picked
-                           # and its model (provider_key, model)
+                           # and its model (provider_key, model), and a
+                           # browser seat's browser, ready or withheld (browser)
 executor_asked
 executor_finished
 executor_failed         # a run failed, once: published under an id and an
@@ -772,7 +773,8 @@ executor_collected         # one LAUNCH of an executor's run, as its
                            # transcript, harness, box, model and entry, and how
                            # it ended (`notes`, or `failed` with `error` and
                            # error_kind launch_failed, context_exhausted,
-                           # request_refused or out_of_memory), and the
+                           # request_refused, out_of_memory, max_turns or
+                           # turn_cap_exceeded), and the
                            # kills the kernel made
                            # for memory in its job's domain.
                            # NO PHASE: the

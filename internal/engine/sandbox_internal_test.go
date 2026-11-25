@@ -1563,13 +1563,14 @@ func (q *deliveredOnAttach) outcome() (queue.Result, bool) {
 
 // A FAKE RUN STATES WHAT ITS HARNESS'S RUNNER STATES: the double stands in for
 // the box, never for the harness, so its reading of the main thread, the
-// window it pins and what it says can switch its notes off are the real
-// runner's, and a fake run is collected and warned about as its harness's is.
+// window it pins, what it says can switch its notes off and how many MCP
+// tools make its harness hide them all are the real runner's, and a fake run
+// is collected, warned about and handed its browser as its harness's is.
 //
 // Mutation: drop any one copy in fakeRunners, and a harness goes red.
 func TestAFakeRunStatesWhatItsHarnesssRunnerStates(t *testing.T) {
 	t.Parallel()
-	real, stated := sandboxRunners(), false
+	real, stated, defers := sandboxRunners(), false, false
 	for name, runner := range fakeRunners(nil) {
 		fake, want := runner.(*sandbox.FakeRunner), real[name].(*executor.Runner)
 		if fake.Thread != sandbox.ThreadTraitsOf(want) {
@@ -1581,6 +1582,11 @@ func TestAFakeRunStatesWhatItsHarnesssRunnerStates(t *testing.T) {
 				want.NotesOffWhy())
 		}
 		stated = stated || want.NotesOffWhy() != ""
+		if fake.DefersMCPAt() != want.DefersMCPAt() {
+			t.Errorf("%s: the fake defers at %d MCP tools, its runner at %d", name, fake.DefersMCPAt(),
+				want.DefersMCPAt())
+		}
+		defers = defers || want.DefersMCPAt() != 0
 		for _, model := range []string{"sonnet", "opus", "anthropic/claude-sonnet-4-5"} {
 			if got, pinned := fake.PinnedWindow(model), want.PinnedWindow(model); got != pinned {
 				t.Errorf("%s: the fake pins %s to %d, its runner to %d", name, model, got, pinned)
@@ -1589,5 +1595,8 @@ func TestAFakeRunStatesWhatItsHarnesssRunnerStates(t *testing.T) {
 	}
 	if !stated {
 		t.Error("no harness's runner says what switches its notes off, so the copy above proves nothing")
+	}
+	if !defers {
+		t.Error("no harness's runner says how many MCP tools make it hide them all, so the copy above proves nothing")
 	}
 }
