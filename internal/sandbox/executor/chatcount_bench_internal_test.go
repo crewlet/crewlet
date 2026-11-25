@@ -167,7 +167,7 @@ func chatBenchRead(b *testing.B, h chatBenchHarness, how string, past bool, big 
 		c := h.counter()
 		var read error
 		var summary *chatSummaryLines
-		counted := chatCounter(c)
+		counted := c
 		switch how {
 		case "summary":
 			summary = h.summary()
