@@ -258,20 +258,20 @@ class Host {
   }
 
   // awaitServers waits for the run's MCP servers to connect, and is why the
-  // run cannot start: "" once the bridge is connected, or the wait is over
-  // with only other servers left (said on stderr; the run goes on without
-  // them, as Qwen Code would).
+  // run cannot start: "" once the bridge is connected from its own address
+  // ([unbridged]), or the wait is over with only other servers left (said on
+  // stderr; the run goes on without them, as Qwen Code would).
   async awaitServers(session) {
     const wanted = this.config.servers ?? []
     if (wanted.length === 0) return ""
     const deadline = Date.now() + this.config.mcpWaitMs
     let connected = new Set()
+    let servers = []
     for (;;) {
       const status = await this.call("qwen/status/workspace/mcp", { sessionId: session }, true)
-      connected = new Set(
-        (status?.result?.servers ?? []).filter((s) => s?.mcpStatus === "connected").map((s) => s.name),
-      )
-      if (wanted.every((name) => connected.has(name))) return ""
+      servers = status?.result?.servers ?? []
+      connected = new Set(servers.filter((s) => s?.mcpStatus === "connected").map((s) => s.name))
+      if (wanted.every((name) => connected.has(name))) return this.unbridged(servers)
       if (this.outputClosed || this.stopping) throw new Error("Qwen Code stopped before its MCP servers connected")
       if (Date.now() >= deadline) break
       await sleep(mcpPollMs)
@@ -282,8 +282,26 @@ class Host {
       return `Qwen Code did not connect the run's tool bridge (${bridge}) within ` +
         `${this.config.mcpWaitMs / 1000}s, so the run was not started`
     }
+    const unbridged = this.unbridged(servers)
+    if (unbridged !== "") return unbridged
     process.stderr.write(`crewlet: starting without the MCP servers that did not connect: ${left.join(", ")}\n`)
     return ""
+  }
+
+  // unbridged is why the server Qwen Code connected under the bridge's name
+  // is not the run's bridge, "" where it is: its configuration, as the status
+  // answer gives it, at the bridge's address with no command (qwen.go,
+  // qwenHelperConfig.BridgeURL).
+  unbridged(servers) {
+    const bridge = this.config.bridge
+    if (!bridge || !this.config.bridgeURL) return ""
+    const served = servers.find((s) => s?.name === bridge)
+    const config = served?.config ?? {}
+    if (config.command === undefined && (config.httpUrl ?? config.url) === this.config.bridgeURL) return ""
+    const from = typeof served?.configOrigin === "string" ? ` from its ${served.configOrigin}` : ""
+    return `Qwen Code serves the run's tool bridge (${bridge}) as another MCP server of the same name${from}: ` +
+      "a repository's or home's MCP server may not take Crewlet's own server's place. Rename or remove it. " +
+      "The run was not started"
   }
 
   // stop ends the turn as a signal asks: session/cancel, which Qwen Code

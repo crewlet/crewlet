@@ -1395,6 +1395,13 @@ func (s *refusingStore) MarkSessionStart(ctx context.Context, turnID, launch str
 	return s.inner.MarkSessionStart(ctx, turnID, launch, start)
 }
 
+func (s *refusingStore) MarkBridgeConnected(ctx context.Context, turnID, launch string) (bool, error) {
+	if s.called("MarkBridgeConnected") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkBridgeConnected(ctx, turnID, launch)
+}
+
 func (s *refusingStore) BindSession(ctx context.Context, turnID string, bind SessionBind) (PendingRun, error) {
 	if s.called("BindSession") {
 		return PendingRun{}, errRefusedCall

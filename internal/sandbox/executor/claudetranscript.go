@@ -129,10 +129,10 @@ func (r *claudeReading) own(t *valueText) error {
 	return nil
 }
 
-// record reads a record's members: its kind, subtype and time, whether the
-// harness wrote it for itself or as a compaction's summary, its message, and a
-// system record's content; every other member for its own words. A KEY WRITTEN
-// TWICE HOLDS THE LAST VALUE, as JSON.parse reads it.
+// record reads a record's members: its kind and time, whether the harness
+// wrote it for itself or as a compaction's summary, its message and its
+// attachment; every other member is passed over. A KEY WRITTEN TWICE HOLDS
+// THE LAST VALUE, as JSON.parse reads it.
 func (r *claudeReading) record() error {
 	rec := &r.rec
 	return r.members(func(name string, k jsonscan.Kind) error {
@@ -140,8 +140,6 @@ func (r *claudeReading) record() error {
 		switch name {
 		case "type":
 			rec.kind, err = r.wordValue(k)
-		case "subtype":
-			rec.subtype, err = r.wordValue(k)
 		case "timestamp":
 			var stamp string
 			stamp, err = r.wordValue(k)
@@ -154,8 +152,6 @@ func (r *claudeReading) record() error {
 			err = r.value(k)
 		case "message":
 			err = r.message(k)
-		case "content":
-			err = r.systemContent(k)
 		case "attachment":
 			err = r.attachment(k)
 		default:
@@ -173,7 +169,10 @@ func (r *claudeReading) record() error {
 // the request's `api-request-blob`, the `hook_success` stdout and, at Stop,
 // `stop_hook_summary`, each read as the note again (#1054); 2.1.163, 2.1.263
 // and 2.1.330 build the same attachment. One of another type hands none,
-// whatever order its members are written in.
+// whatever order its members are written in. THE HOOK'S OWN LINE is the main
+// thread's `hook_system_message` of the firing, its content as the run's hook
+// said it, less the take's token ([claudeHookSaid]), written just before the
+// context (measured on 2.1.310, 2.1.322 and 2.1.330).
 func (r *claudeReading) attachment(k jsonscan.Kind) error {
 	if k != jsonscan.ObjectStart {
 		return r.value(k)
@@ -181,6 +180,7 @@ func (r *claudeReading) attachment(k jsonscan.Kind) error {
 	// A KEY WRITTEN TWICE HOLDS THE LAST VALUE: an attachment or its content
 	// written again replaces what the first handed.
 	r.rec.handedOver()
+	r.rec.hook, r.rec.hookSet = pendingEntry{}, false
 	var kind string
 	err := r.members(func(name string, k jsonscan.Kind) error {
 		switch name {
@@ -190,15 +190,43 @@ func (r *claudeReading) attachment(k jsonscan.Kind) error {
 			return err
 		case "content":
 			r.rec.handedOver()
+			r.rec.hook, r.rec.hookSet = pendingEntry{}, false
 			r.handed = true
 			defer func() { r.handed = false }()
+			if k == jsonscan.String {
+				return r.hookLine()
+			}
 		}
 		return r.value(k)
 	})
 	if err == nil && kind != hookAdditionalContext {
 		r.rec.handedOver()
 	}
+	if kind != hookSystemMessage || r.b.thread != "" {
+		r.rec.hookSet = false
+	}
 	return err
+}
+
+// hookLine reads an attachment's content string: the line the run's own hook
+// said as it handed the model a note, a late call or a wake, where it says
+// one ([claudeHookSaid]); past the value bound it is no hook line (R4).
+func (r *claudeReading) hookLine() error {
+	rec := &r.rec
+	t := r.str.begin(r.b, TranscriptEntry{Kind: EntryNote}, false)
+	defer t.drop()
+	if err := r.read(t); err != nil {
+		return err
+	}
+	if !t.past {
+		if said, ok := claudeHookSaid(t.text()); ok {
+			line, _, _ := strings.Cut(strings.TrimSpace(said), "\n")
+			if line = strings.TrimSpace(line); line != "" {
+				rec.hook, rec.hookSet = r.b.held(r.entry(hookLineKind(line)), line, rec.notes.base), true
+			}
+		}
+	}
+	return r.own(t)
 }
 
 // handedOver drops the notes the record's readings hold: only an attachment's
@@ -277,33 +305,6 @@ func (r *claudeReading) content(k jsonscan.Kind) error {
 	}
 	r.unshaped()
 	return r.value(k)
-}
-
-// systemContent reads a record's own content, the one line the run's own hook
-// prints as it hands the model a note or a late call ([claudeSteerSaid]), the
-// first entry of a system record's reading where its subtype says so. Past the
-// value bound it is no hook line (R4).
-func (r *claudeReading) systemContent(k jsonscan.Kind) error {
-	rec := &r.rec
-	rec.hookSet = false
-	if k != jsonscan.String {
-		return r.value(k)
-	}
-	t := r.str.begin(r.b, TranscriptEntry{Kind: EntryNote}, false)
-	defer t.drop()
-	if err := r.read(t); err != nil {
-		return err
-	}
-	if !t.past {
-		if said, ok := claudeSteerContent(t.text()); ok {
-			hookLine, _, _ := strings.Cut(strings.TrimSpace(said), "\n")
-			if hookLine = strings.TrimSpace(hookLine); hookLine != "" {
-				e := r.entry(hookLineKind(hookLine))
-				rec.hook, rec.hookSet = r.b.held(e, hookLine, rec.notes.base), true
-			}
-		}
-	}
-	return r.own(t)
 }
 
 // entry is an entry of kind of the thread being read.
@@ -448,10 +449,10 @@ const (
 
 // claudeRecordRead is what a reading keeps of the record its line holds: its
 // kind and the facts that pick a reading, its time, and its readings, the
-// message's three ([claudeMessageKinds]) and its own two, the notes of every
-// string and name with and without the hook line before them.
+// message's three ([claudeMessageKinds]) and its own two, the notes its
+// attachment hands with and without the hook line before them.
 type claudeRecordRead struct {
-	kind, subtype string
+	kind          string
 	meta, compact bool
 	at            time.Time
 	msg           [3]entryShape
@@ -463,7 +464,7 @@ type claudeRecordRead struct {
 // reset starts the record a line holds, its entries from the ordinal b's next
 // takes.
 func (rec *claudeRecordRead) reset(b *transcriptBuilder) {
-	rec.kind, rec.subtype, rec.meta, rec.compact, rec.at = "", "", false, false, time.Time{}
+	rec.kind, rec.meta, rec.compact, rec.at = "", false, false, time.Time{}
 	rec.hook, rec.hookSet = pendingEntry{}, false
 	rec.resetMessage(b)
 	rec.notes.reset(b.seen)
@@ -491,9 +492,9 @@ func (rec *claudeRecordRead) shapesAny(b *transcriptBuilder, kinds ...EntryKind)
 
 // commit commits the reading the record's kind picks: the model's for an
 // assistant's; a person's brief, or a compaction's summary, for a user's the
-// harness did not write for itself; and for every other, the notes and late
-// calls its strings and names carry, behind the hook line where a system
-// record's subtype and content name one.
+// harness did not write for itself; and for every other, the hook line where
+// its attachment says one ([claudeReading.attachment]), else the notes and
+// late calls its attachment hands.
 func (r *claudeReading) commit() error {
 	rec, b := &r.rec, r.b
 	switch {
@@ -503,7 +504,7 @@ func (r *claudeReading) commit() error {
 		return b.commitShape(&rec.msg[readSummary], rec.at)
 	case rec.kind == "user" && !rec.meta:
 		return b.commitShape(&rec.msg[readBrief], rec.at)
-	case rec.kind == "system" && rec.subtype == "informational" && rec.hookSet:
+	case rec.kind == "attachment" && rec.hookSet:
 		hook := rec.hook
 		if hook.entry.Kind != EntryUnread {
 			hook.entry.At = rec.at
