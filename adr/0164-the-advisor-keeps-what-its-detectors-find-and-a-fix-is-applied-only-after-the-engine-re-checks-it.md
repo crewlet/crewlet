@@ -2,7 +2,32 @@
 
 - **Status:** accepted
 - **Authority:** `internal/advisor`
-- **Enforced-by:** `internal/advisor.TestNoDetectorCallsAModel`, `internal/advisor.TestEveryClassSaysOneThingAboutEverySubject`, `internal/advisor.TestEveryClassHasWordsAndAFix`, `internal/advisor/modelpass.TestTheModelPassListsOnlyWhatItsOwnReadsShow`, `internal/advisor.TestAReaderWithoutTheAtlasAppIsToldHowManyAndNeverWhich`, `internal/advisor.TestEveryFindingOfAnAnswerHasAKeyOfItsOwn`, `internal/advisor.TestOneOpenFindingPerClassAndSubject`, `internal/advisor.TestAFindingWhoseConditionEndedIsResolvedOnTheNextRun`, `internal/advisor.TestAFindingWhoseVerdictMovedIsRevised`, `internal/advisor.TestAFindingIsStaleAfterThreeMissedRunsAndExpiresAfterSevenDays`, `internal/advisor.TestAnAppliedFixIsCheckedForItsEffect`, `internal/advisor/duty.TestEachClassRunsOnItsCadence`, `internal/advisor/duty.TestAConfigActivationRunsTheSetupClassesNow`, `internal/advisor/duty.TestARunNowIsRunByTheHolderUnderItsId`, `internal/config.TestTheAdvisorIsConfiguredByOneModel`, `internal/api/queries.TestTheAdvisorNamesAnAtlasEntryOnlyToAHolderOfTheAtlasApp`, `internal/advisor.TestApplyRechecksAndAnswersHoldsChangedResolvedOrNotApplicable`, `internal/advisor.TestAnAppliedFixThatDidNotClearTheConditionIsNeverOfferedAgain`, `internal/api.TestTheSendIsBoundToTheRevisionTheRecheckRead`, `internal/api.TestAChangedFixIsShownBeforeItCanBeSent`, `internal/api.TestAResolvedFindingIsNeverApplied`, `internal/advisor/duty.TestTheWeeklyReportCountsWhatTheWeekOpenedResolvedAndApplied`, `internal/advisor.TestAnExplanationSaysOnlyItsFindingsOwnNumbersAndRecords`, `internal/advisor/modelpass.TestThePassExplainsAFindingOnlyInItsOwnNumbers`, `internal/advisor/duty.TestAnExplanationIsWrittenForTheVerdictThePassRead`
+- **Enforced-by:**
+  - `internal/advisor.TestNoDetectorCallsAModel`
+  - `internal/advisor.TestEveryClassSaysOneThingAboutEverySubject`
+  - `internal/advisor.TestEveryClassHasWordsAndAFix`
+  - `internal/advisor/modelpass.TestTheModelPassListsOnlyWhatItsOwnReadsShow`
+  - `internal/advisor.TestAReaderWithoutTheAtlasAppIsToldHowManyAndNeverWhich`
+  - `internal/advisor.TestEveryFindingOfAnAnswerHasAKeyOfItsOwn`
+  - `internal/advisor.TestOneOpenFindingPerClassAndSubject`
+  - `internal/advisor.TestAFindingWhoseConditionEndedIsResolvedOnTheNextRun`
+  - `internal/advisor.TestAFindingWhoseVerdictMovedIsRevised`
+  - `internal/advisor.TestAFindingIsStaleAfterThreeMissedRunsAndExpiresAfterSevenDays`
+  - `internal/advisor.TestAnAppliedFixIsCheckedForItsEffect`
+  - `internal/advisor/duty.TestEachClassRunsOnItsCadence`
+  - `internal/advisor/duty.TestAConfigActivationRunsTheSetupClassesNow`
+  - `internal/advisor/duty.TestARunNowIsRunByTheHolderUnderItsId`
+  - `internal/config.TestTheAdvisorIsConfiguredByOneModel`
+  - `internal/api/queries.TestTheAdvisorNamesAnAtlasEntryOnlyToAHolderOfTheAtlasApp`
+  - `internal/advisor.TestApplyRechecksAndAnswersHoldsChangedResolvedOrNotApplicable`
+  - `internal/advisor.TestAnAppliedFixThatDidNotClearTheConditionIsNeverOfferedAgain`
+  - `internal/api.TestTheSendIsBoundToTheRevisionTheRecheckRead`
+  - `internal/api.TestAChangedFixIsShownBeforeItCanBeSent`
+  - `internal/api.TestAResolvedFindingIsNeverApplied`
+  - `internal/advisor/duty.TestTheWeeklyReportCountsWhatTheWeekOpenedResolvedAndApplied`
+  - `internal/advisor.TestAnExplanationSaysOnlyItsFindingsOwnNumbersAndRecords`
+  - `internal/advisor/modelpass.TestThePassExplainsAFindingOnlyInItsOwnNumbers`
+  - `internal/advisor/duty.TestAnExplanationIsWrittenForTheVerdictThePassRead`
 - **Measured:** every read the model pass makes answers about 21,000 tokens for a twelve-agent company's busy week, and a pass reading in one round spends 60,000 to 80,000, under its 200,000 ceiling. On one company an agent seat's mailbox held more than 300 wakes for hours while other seats sat idle, and no finding named it: no record said how long work waited for a seat.
 - **Cost-when-tried:** findings were computed again on every read of `GET /advisor` and stored nowhere, so the change an administrator previewed was built from the finding as the page had loaded it, and nothing asked whether it still held before the change was sent: only the entity's tag guarded the write. Nothing could be dismissed or snoozed, nothing ran unless somebody opened the page, and pool waits, objective alarms and model limits reached people only as alarm notices.
 - **Tag-status:** unreleased

@@ -37,10 +37,10 @@ func TestARunWhoseEnvironmentSwitchesClaudeCodeOffHandsNoneOfIt(t *testing.T) {
 		has := func(dirs []checkoutSkillDir, dir string) bool {
 			return slices.ContainsFunc(dirs, func(d checkoutSkillDir) bool { return d.Dir == dir })
 		}
-		if has(spec.SkillDirs, ".claude/skills") != tc.dirs || has(spec.Listed, "/home/box/.claude/skills") != tc.dirs ||
-			!has(spec.SkillDirs, ".agents/skills") || !has(spec.Listed, "/home/box/.config/opencode/skills") {
+		if has(spec.SkillDirs, ".claude/skills") != tc.dirs || has(spec.HomeSkills, "/home/box/.claude/skills") != tc.dirs ||
+			!has(spec.SkillDirs, ".agents/skills") || !has(spec.HomeSkills, "/home/box/.config/opencode/skills") {
 			t.Errorf("%s: the skill directories are %v, listed %v, want .claude/skills %v", name, spec.SkillDirs,
-				spec.Listed, tc.dirs)
+				spec.HomeSkills, tc.dirs)
 		}
 	}
 }

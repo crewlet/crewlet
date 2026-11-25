@@ -49,6 +49,7 @@ var (
 	_ inPlaceGate       = Pi{}
 	_ sessionJudge      = Pi{}
 	_ skillHolder       = Pi{}
+	_ recordTrimmer     = Pi{}
 )
 
 // NewPi returns the runner.
@@ -334,9 +335,9 @@ func piSessionGate(session Session, paths Paths, rewired bool) string {
 
 // piArchiveFormat is the layout a Pi run packs its session in ([piPack]) and
 // the one it restores ([piSessionGate]): one gzipped tar of one member named
-// relative to the run's home, `.pi/sessions/<session>.jsonl`, the whole
-// session, which a resume takes up on its own (measured on 1.6.0). A change is
-// a new format.
+// relative to the run's home, `.pi/sessions/<session>.jsonl`, the session, which
+// a resume takes up on its own (measured on 1.6.0), whole or, past the bound,
+// cut to what that resume loads ([Pi.trimRecord]). A change is a new format.
 const piArchiveFormat = 1
 
 // ArchiveFormat is the layout a Pi run packs its session in ([carrier]).
@@ -404,15 +405,20 @@ func (Pi) meter(context.Context, io.Reader, string, string, *passBudget) (meterR
 }
 
 // piCapture is the part of a run's script that packs its session once its
-// harness has exited ([piPack]).
+// harness has exited ([piPack]), trimmed by the box's release, n ([trimRelVar]).
 func piCapture(paths Paths) string {
-	return piPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()})
+	return trimRelVar + "=$n\n" + piPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()})
 }
 
-// piPack packs the session s names into at.staged and moves it over at.dest,
-// its digest kept ([packDigest]): its file alone. A pack beside a working
-// harness is held to [claudeHeldTar]'s rule; the file is append-only.
-func piPack(paths Paths, at packAt) string {
+// piPack is ONE PACK, the run's end's, a pack on demand's and a save's, at the
+// bounds a take keeps ([trimAt]): [piPackAt].
+func piPack(paths Paths, at packAt) string { return piPackAt(paths, at, trimAt) }
+
+// piPackAt packs the session s names into at.staged and moves it over at.dest,
+// its digest kept ([packDigest]) and its trim past trim said beside it
+// ([trimTar], [trimMarked]): its file alone. A pack beside a working harness
+// is held to [claudeHeldTar]'s rule; the file is append-only.
+func piPackAt(paths Paths, at packAt, trim trimPoints) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
@@ -425,9 +431,10 @@ func piPack(paths Paths, at packAt) string {
 	if at.working {
 		tar = claudeHeldTar(home, at.staged)
 	}
-	line(`    rm -rf %s; if mkdir -p %s && %s && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(at.staged), q(at.staged), tar, packDigest(paths, "s", at.staged), q(at.staged+"/capture"), q(at.dest),
-		q(at.staged+"/error"))
+	tar = trimTar(Pi{}, trim, q(home), `.pi/sessions/"$s".jsonl`, at.staged, tar)
+	line(`    rm -rf %s; if mkdir -p %s && %s && %s && %s && mv -f %s %s; then packed=1; %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(at.staged), q(at.staged), tar, packDigest(paths, "s", at.staged), trimUnmark(at.dest),
+		q(at.staged+"/capture"), q(at.dest), trimMarked(at.dest), q(at.staged+"/error"))
 	line(`    rm -rf %s`, q(at.staged))
 	line(`  else`)
 	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)

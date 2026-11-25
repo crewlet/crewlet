@@ -235,6 +235,7 @@ func hermesNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from 
 	earlier := map[[16]byte]struct{}{}
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), hermesRowMaxBytes)
+	w.passImages()
 	var l hermesNoteRow
 	l.parse.setup(takes)
 	if summary != nil {
@@ -380,11 +381,11 @@ func (l *hermesNoteRow) read(w *lineWalk) error {
 			l.rowStart()
 			l.rowSet, l.rowAny = true, k == jsonscan.ObjectStart || k == jsonscan.Null
 			if k != jsonscan.ObjectStart || l.table != "" && l.table != "messages" {
-				return w.scan.Skip()
+				return w.skip(k)
 			}
 			return w.members(func(name string, k jsonscan.Kind) error { return l.member(w, name, k) })
 		}
-		return w.scan.Skip()
+		return w.skip(k)
 	})
 }
 
@@ -418,20 +419,21 @@ func (l *hermesNoteRow) member(w *lineWalk, name string, k jsonscan.Kind) error 
 	case "content":
 		ok, err = true, l.content(w, k)
 	case "tool_calls", "timestamp":
-		return w.scan.Skip()
+		return w.skip(k)
 	case "tool_call_id", "tool_name":
 		ok, err = w.typedField(k, fieldString)
 	default:
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	l.rowMistyped = l.rowMistyped || !ok
 	return err
 }
 
 // content reads a row's content into the steer's parse: a string's words, or
-// a list's `text` parts; a list its decode refuses is no words, and one with
-// a part whose string text is not written once after its one type is parsed
-// as none, which holds no note.
+// those of the content stored in it ([hermesNoteRow.storedContent]), or a
+// list's `text` parts; a list its decode refuses is no words, and one with a
+// part whose string text is not written once after its one type is parsed as
+// none, which holds no note.
 func (l *hermesNoteRow) content(w *lineWalk, k jsonscan.Kind) error {
 	p := &l.parse
 	p.reset(p.base)
@@ -441,7 +443,14 @@ func (l *hermesNoteRow) content(w *lineWalk, k jsonscan.Kind) error {
 	}
 	switch k {
 	case jsonscan.String:
-		if err := w.read(words.whole(p)); err != nil {
+		head, stored, ended, err := w.opening(hermesContentJSON)
+		switch {
+		case err != nil:
+			return err
+		case stored && !ended:
+			return l.storedContent(w)
+		}
+		if err := w.readFrom(words.whole(p), head, ended); err != nil {
 			return err
 		}
 		p.end()
@@ -451,12 +460,52 @@ func (l *hermesNoteRow) content(w *lineWalk, k jsonscan.Kind) error {
 	default:
 		p.none = true
 		words.unshaped(k)
-		return w.scan.Skip()
+		return w.skip(k)
 	}
+	took, err := l.parts(w)
+	p.none = !took
+	p.end()
+	return err
+}
+
+// storedContent reads the rest of a content string as the JSON Hermes stored
+// it as ([hermesContentJSON]): a string its words, a list or an envelope its
+// parts; anything else is no words, as a list its decode refuses is.
+func (l *hermesNoteRow) storedContent(w *lineWalk) error {
+	p, words := &l.parse, l.words
+	took, err := w.decoded(func(k jsonscan.Kind) (bool, error) {
+		switch k {
+		case jsonscan.String:
+			return true, w.read(words.whole(p))
+		case jsonscan.ArrayStart:
+			words.storedList()
+			return l.parts(w)
+		case jsonscan.ObjectStart:
+			return w.storedEnvelope(func(jsonscan.Kind) (bool, error) {
+				p.reset(p.base)
+				words.storedList()
+				return l.parts(w)
+			})
+		}
+		return false, w.skip(k)
+	})
+	if !took {
+		p.none = true
+		words.partOdd()
+	}
+	p.end()
+	return err
+}
+
+// parts reads a content list's parts into the steer's parse, the list's
+// opening bracket current, and reports whether its decode takes it.
+func (l *hermesNoteRow) parts(w *lineWalk) (bool, error) {
+	p, words := &l.parse, l.words
 	took := true
 	err := w.elements(func(k jsonscan.Kind) (bool, error) {
 		l.partKind, l.partKinds, l.partTexts, l.partFed = "", 0, 0, false
 		words.partStart()
+		imaged := w.src.skipped
 		ok, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
 			switch name {
 			case "type":
@@ -476,7 +525,7 @@ func (l *hermesNoteRow) content(w *lineWalk, k jsonscan.Kind) error {
 				default:
 					took = false
 					words.partOdd()
-					return w.scan.Skip()
+					return w.skip(k)
 				}
 				l.partFed = true
 				switch {
@@ -488,20 +537,18 @@ func (l *hermesNoteRow) content(w *lineWalk, k jsonscan.Kind) error {
 				if words != nil {
 					return w.read(words.part(io.Discard))
 				}
-				return w.scan.Skip()
+				return w.skip(k)
 			}
-			return w.scan.Skip()
+			return w.skip(k)
 		})
 		took = took && ok
-		words.partEnd(ok, l.partKind)
+		words.partEnd(ok, l.partKind, w.src.skipped-imaged)
 		if l.partFed && (l.partKinds != 1 || l.partTexts != 1) {
 			p.unsure = true
 		}
 		return true, err
 	})
-	p.none = !took
-	p.end()
-	return err
+	return took, err
 }
 
 // hermesNoteMaxBytes is the longest note a steered row's part can hold:
@@ -724,17 +771,29 @@ func (p *hermesSteerParse) notes() []int {
 // the notes walk reads the row, which may name the row a summary only after
 // its content ([hermesNoteRow.summarised]): a string whole, or each part's
 // `text` whose `type` is `text`, joined, each part's last of either
-// ([hermesParts]). odd says the content decodes as neither, a list one of
-// whose parts is of no shape included; text is held to [summaryReadMaxBytes].
+// ([hermesParts]), or a stored list's as [hermesStoredParts] joins them. odd
+// says the content decodes as neither, a list one of whose parts is of no
+// shape included; text is held to [summaryReadMaxBytes].
 type hermesSummaryWords struct {
 	text, partText summaryText
 	odd            bool
+	// stored says the list is a stored content's, joined how many parts.
+	stored bool
+	parts  int
 }
 
 // start starts the row's content.
 func (h *hermesSummaryWords) start() {
 	h.text.reset()
-	h.text.set, h.odd = true, false
+	h.text.set, h.odd, h.stored, h.parts = true, false, false, 0
+}
+
+// storedList starts a stored content's list.
+func (h *hermesSummaryWords) storedList() {
+	if h != nil {
+		h.start()
+		h.stored = true
+	}
 }
 
 // whole is where a string content's words are written, w beside them.
@@ -790,14 +849,30 @@ func (h *hermesSummaryWords) part(w io.Writer) io.Writer {
 	return h.partText.tee(w, true)
 }
 
-// partEnd ends a part, took whether its decode takes it and kind its type:
-// a `text` part's text joins the words.
-func (h *hermesSummaryWords) partEnd(took bool, kind string) {
+// partEnd ends a part, took whether its decode takes it, kind its type and
+// image the image bytes passed in it: a `text` part's text joins the words,
+// and in a stored list an image part's place ([hermesStoredParts]).
+func (h *hermesSummaryWords) partEnd(took bool, kind string, image int64) {
 	switch {
 	case h == nil:
 	case !took:
 		h.odd = true
+	case h.stored && kind == hermesStoredParts.image:
+		h.sep()
+		_, _ = h.text.Write([]byte(imagePlaceholder(image)))
+	case h.stored && kind == hermesStoredParts.kind:
+		h.sep()
+		h.text.joined(&h.partText)
 	case kind == "text" && h.partText.set:
 		h.text.joined(&h.partText)
 	}
+}
+
+// sep writes a stored list's separator before each part joined but its
+// first.
+func (h *hermesSummaryWords) sep() {
+	if h.parts > 0 {
+		_, _ = h.text.Write([]byte(hermesStoredParts.sep))
+	}
+	h.parts++
 }

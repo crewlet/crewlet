@@ -2,7 +2,17 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/secretsapi`
-- **Enforced-by:** `internal/api/secretsapi.TestAWriteOfAReadSecretReactivates`, `internal/api/secretsapi.TestABatchIsOneActivation`, `internal/api/secretsapi.TestAReloadFailureStillAnswers200WithTheSealedValue`, `internal/api/secretsapi.TestABatchIsRefusedWholeNamingEveryFault`, `internal/api/configapi.TestReadsAnswersThePathsReadingEachName`, `cmd/crewlet.TestSettingSeveralSecretsIsOneActivation`, `internal/api/secretsapi.TestADeferredBatchSealsAndReactivatesNothing`, `cmd/crewlet.TestAProvisioningRunThroughANodeReactivatesOnce`, `cmd/crewlet.TestARunThatDiesBeforeItsFlushLeavesItsValuesSealedAndInactive`, `cmd/crewlet.TestAFailedFlushRevokesNothing`
+- **Enforced-by:**
+  - `internal/api/secretsapi.TestAWriteOfAReadSecretReactivates`
+  - `internal/api/secretsapi.TestABatchIsOneActivation`
+  - `internal/api/secretsapi.TestAReloadFailureStillAnswers200WithTheSealedValue`
+  - `internal/api/secretsapi.TestABatchIsRefusedWholeNamingEveryFault`
+  - `internal/api/configapi.TestReadsAnswersThePathsReadingEachName`
+  - `cmd/crewlet.TestSettingSeveralSecretsIsOneActivation`
+  - `internal/api/secretsapi.TestADeferredBatchSealsAndReactivatesNothing`
+  - `cmd/crewlet.TestAProvisioningRunThroughANodeReactivatesOnce`
+  - `cmd/crewlet.TestARunThatDiesBeforeItsFlushLeavesItsValuesSealedAndInactive`
+  - `cmd/crewlet.TestAFailedFlushRevokesNothing`
 - **Cost-when-tried:** `PUT /secrets/{name}` sealed the value and stopped. A `${VAR}` is resolved when a provider or a transport is built, from a snapshot an apply takes, so every running model and integration went on signing in with the old credential until something re-activated the company, and nothing a person used did: the dashboard's secret dialog told the operator "Running seats pick it up after a re-activation or restart" and no screen ever re-activated. A rotation of four credentials one model reads, written one request each, would have moved the fleet through four epochs, three of them running a mix of the old and the new values.
 - **Tag-status:** unreleased
 

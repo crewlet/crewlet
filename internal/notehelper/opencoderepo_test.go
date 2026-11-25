@@ -13,7 +13,9 @@ import (
 // openCodeSpec is the spec an OpenCode run's launch gives the core
 // (internal/sandbox/executor's openCodeCheckouts), its skills in skills.
 func openCodeSpec(skills string) checkoutSpec {
-	walked := func(dir string) skillDirSlot { return skillDirSlot{Dir: dir, Recursive: true, Depth: 6} }
+	walked := func(dir string) skillDirSlot {
+		return skillDirSlot{Dir: dir, Recursive: true, skillWalkOptions: skillWalkOptions{Depth: 6}}
+	}
 	return checkoutSpec{Instructions: names([]string{"AGENTS.md", "CLAUDE.md"}),
 		SkillDirs: []skillDirSlot{walked(".opencode/skills"), walked(".opencode/skill"), walked(".claude/skills"),
 			walked(".agents/skills")},
@@ -104,8 +106,8 @@ func TestAnOpenCodeFiringHandsClaudeMDWithoutAgentsMD(t *testing.T) {
 
 // A COPY NEVER TAKES THE NAME OF A SKILL THE HARNESS LISTS ELSEWHERE: OpenCode
 // 2.3.2 lists two skills of one name and loads neither (measured), so a
-// clone's skill whose copy would be named as a skill of the listed
-// directories (absolute, or under the working directory) is left out, named
+// clone's skill whose copy would be named as a skill of the spec's
+// homeSkills (the home's and the working directory's) is left out, named
 // in the answer and the skip log, whether the listed skill's frontmatter or,
 // with none, its directory gives the name; the others are copied.
 //
@@ -121,8 +123,9 @@ func TestACopyNeverTakesTheNameOfASkillTheHarnessListsElsewhere(t *testing.T) {
 	})
 	writeTree(t, r.work, map[string]string{".opencode/skills/w/SKILL.md": "---\nname: late:other\ndescription: W.\n---\n"})
 	spec := openCodeSpec(r.skills)
-	spec.Listed = []skillDirSlot{{Dir: filepath.Join(home, "skills"), Recursive: true, Depth: 6},
-		{Dir: ".opencode/skills", Recursive: true, Depth: 6}}
+	deep := skillWalkOptions{Depth: 6}
+	spec.HomeSkills = []skillDirSlot{{Dir: filepath.Join(home, "skills"), Recursive: true, skillWalkOptions: deep},
+		{Dir: filepath.Join(r.work, ".opencode/skills"), Recursive: true, skillWalkOptions: deep}}
 	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents, checkoutSpec: spec})
 	config := filepath.Join(t.TempDir(), "launch.json")
 	if err := os.WriteFile(config, raw, 0o600); err != nil {

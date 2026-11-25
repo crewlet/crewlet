@@ -2,7 +2,19 @@
 
 - **Status:** accepted
 - **Authority:** `internal/aws`
-- **Enforced-by:** `internal/aws.TestTheAccountIsReadAsTheAtlasDrawsIt`, `internal/aws.TestTheReadAsksOnlyWhatTheRoleAllowsAndTheRoleAllowsOnlyThat`, `internal/aws.TestTheAtlasRoleNamesEveryActionAndNoneAnswersASecret`, `internal/aws.TestReadReadsNoFunctionConfiguration`, `internal/aws.TestNoUnmappedFieldReachesTheAtlasFromAWS`, `internal/aws.TestNoCredentialShapeReachesTheAtlasFromAWS`, `internal/aws.TestARefusedListingIsUnreadAndItsEarlierClaimsStand`, `internal/aws.TestAFaultOrARefusedSignInFailsTheReadWhole`, `internal/aws.TestTheReaderIsOffUntilAskedForAndSaysTheStepWhenTheStackLacksIt`, `internal/aws.TestTheStackHoldsTheAtlasRoleOnlyWhenAskedFor`, `internal/aws.TestTheCheckHoldsTheAtlasRoleApartFromTheAgents`, `internal/aws.TestTheConnectFormOffersTheAtlasReader`
+- **Enforced-by:**
+  - `internal/aws.TestTheAccountIsReadAsTheAtlasDrawsIt`
+  - `internal/aws.TestTheReadAsksOnlyWhatTheRoleAllowsAndTheRoleAllowsOnlyThat`
+  - `internal/aws.TestTheAtlasRoleNamesEveryActionAndNoneAnswersASecret`
+  - `internal/aws.TestReadReadsNoFunctionConfiguration`
+  - `internal/aws.TestNoUnmappedFieldReachesTheAtlasFromAWS`
+  - `internal/aws.TestNoCredentialShapeReachesTheAtlasFromAWS`
+  - `internal/aws.TestARefusedListingIsUnreadAndItsEarlierClaimsStand`
+  - `internal/aws.TestAFaultOrARefusedSignInFailsTheReadWhole`
+  - `internal/aws.TestTheReaderIsOffUntilAskedForAndSaysTheStepWhenTheStackLacksIt`
+  - `internal/aws.TestTheStackHoldsTheAtlasRoleOnlyWhenAskedFor`
+  - `internal/aws.TestTheCheckHoldsTheAtlasRoleApartFromTheAgents`
+  - `internal/aws.TestTheConnectFormOffersTheAtlasReader`
 - **Cost-when-tried:** not tried. The provisioner reads only IAM, and an agent's session is named for the agent in CloudTrail, so neither identity the stack held could read the account for the atlas honestly.
 - **Tag-status:** unreleased
 

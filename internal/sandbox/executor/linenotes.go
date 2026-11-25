@@ -60,7 +60,7 @@ func (w *lineWalk) noteLine(ctx context.Context, read func() error) (noteLine, e
 	case object:
 		err = read()
 	case err == nil:
-		err = w.scan.Skip()
+		err = w.skip(k)
 	}
 	if err == nil {
 		_, err = w.scan.Next()
@@ -77,7 +77,7 @@ func (w *lineWalk) noteLine(ctx context.Context, read func() error) (noteLine, e
 		return noteLine{}, cause
 	}
 	whole := errors.Is(err, io.EOF)
-	line := noteLine{ended: w.src.cause != nil, past: w.src.past, object: object && whole, null: null && whole,
+	line := noteLine{ended: w.src.cause != nil, past: w.src.over(), object: object && whole, null: null && whole,
 		blank: w.trim.blank(), torn: w.src.cause != nil && !w.src.broke, size: w.src.n}
 	if w.src.broke {
 		line.size++
@@ -129,7 +129,7 @@ func (w *lineWalk) idField(k jsonscan.Kind) (recordWord, bool, error) {
 		return recordWord{}, true, nil
 	case jsonscan.String:
 	default:
-		return recordWord{}, false, w.scan.Skip()
+		return recordWord{}, false, w.skip(k)
 	}
 	buf := w.wordBuf[:0]
 	for len(buf) <= transcriptNameMaxBytes {
@@ -167,7 +167,7 @@ func (w *lineWalk) idField(k jsonscan.Kind) (recordWord, bool, error) {
 // kind), passing the value over; valid until the scanner's next call.
 func (w *lineWalk) numberAsWritten(k jsonscan.Kind) ([]byte, error) {
 	if k != jsonscan.Number {
-		return nil, w.scan.Skip()
+		return nil, w.skip(k)
 	}
 	raw, whole, err := w.scan.Capture(transcriptNameMaxBytes)
 	if !whole {

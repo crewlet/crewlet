@@ -2,7 +2,31 @@
 
 - **Status:** accepted
 - **Authority:** `internal/pickup`
-- **Enforced-by:** `internal/agent/turn.TestACommentAloneDoesNotAnswerAPickup`, `internal/agent/turn.TestAPickupsItemRoundTripsThroughTheStoredReply`, `internal/agent/runner.TestAPickupsSubmissionIsRefusedOverWordsAlone`, `internal/agent/runner.TestAPickupsCollectedRoundCarriesItsTypedAnswer`, `internal/engine.TestAPickupIsAWakeOfItsOwnType`, `internal/engine.TestARunnerIsBuiltPerSeat`, `internal/worklet.TestASeatsTypedAnswerIsAChangeOnTheItemOrAnAsk`, `internal/worklet.TestAPickupIsMootOnceItsItemLeavesTheSeat`, `internal/agent/turn.TestAPickupWhoseItemLeftTheSeatEnds`, `internal/engine.TestALostPickupsRunIsHeldToItsItem`, `internal/events/types.TestAPickupAnsweredTypedMovedItsItem`, `internal/worklet.TestAnItemGoesQuietOnTheSeatsLastWord`, `internal/pickup.TestAQuietItemIsRecheckedOnceADay`, `internal/pickup.TestARecheckWaitsADayFromTheItemsLastPickup`, `internal/pickup.TestAnUntypedAnswerComesBackOnceADay`, `internal/pickup.TestARecheckSaysWhyItCameBack`, `internal/agent/builtin.TestAWaitOnAPersonIsAnAsk`, `internal/worklet.TestAPersonIsNamedByHandleOrNameNeverByACommonWord`, `internal/worklet.TestAnAgentsWaitOnAPersonItHasNotAskedIsReady`, `internal/pickup.TestAWaitOnAPersonIsHandedUnderAKeyOfItsOwn`, `internal/agent/builtin.TestAnAgentsRequestThatNamesAPersonIsAnAsk`, `internal/worklet.TestOnlyWordsThatAskAPersonWithoutAnAskAreARequest`, `internal/worklet.TestTheAdvisorCountsTheRequestsTheToolRefuses`, `internal/worklet.TestEveryEngineDetectorFiresOnItsOwnTimelineAlone`
+- **Enforced-by:**
+  - `internal/agent/turn.TestACommentAloneDoesNotAnswerAPickup`
+  - `internal/agent/turn.TestAPickupsItemRoundTripsThroughTheStoredReply`
+  - `internal/agent/runner.TestAPickupsSubmissionIsRefusedOverWordsAlone`
+  - `internal/agent/runner.TestAPickupsCollectedRoundCarriesItsTypedAnswer`
+  - `internal/engine.TestAPickupIsAWakeOfItsOwnType`
+  - `internal/engine.TestARunnerIsBuiltPerSeat`
+  - `internal/worklet.TestASeatsTypedAnswerIsAChangeOnTheItemOrAnAsk`
+  - `internal/worklet.TestAPickupIsMootOnceItsItemLeavesTheSeat`
+  - `internal/agent/turn.TestAPickupWhoseItemLeftTheSeatEnds`
+  - `internal/engine.TestALostPickupsRunIsHeldToItsItem`
+  - `internal/events/types.TestAPickupAnsweredTypedMovedItsItem`
+  - `internal/worklet.TestAnItemGoesQuietOnTheSeatsLastWord`
+  - `internal/pickup.TestAQuietItemIsRecheckedOnceADay`
+  - `internal/pickup.TestARecheckWaitsADayFromTheItemsLastPickup`
+  - `internal/pickup.TestAnUntypedAnswerComesBackOnceADay`
+  - `internal/pickup.TestARecheckSaysWhyItCameBack`
+  - `internal/agent/builtin.TestAWaitOnAPersonIsAnAsk`
+  - `internal/worklet.TestAPersonIsNamedByHandleOrNameNeverByACommonWord`
+  - `internal/worklet.TestAnAgentsWaitOnAPersonItHasNotAskedIsReady`
+  - `internal/pickup.TestAWaitOnAPersonIsHandedUnderAKeyOfItsOwn`
+  - `internal/agent/builtin.TestAnAgentsRequestThatNamesAPersonIsAnAsk`
+  - `internal/worklet.TestOnlyWordsThatAskAPersonWithoutAnAskAreARequest`
+  - `internal/worklet.TestTheAdvisorCountsTheRequestsTheToolRefuses`
+  - `internal/worklet.TestEveryEngineDetectorFiresOnItsOwnTimelineAlone`
 - **Measured:** on a company running this engine, every one of its six agent seats sat idle, unpaused and within budget for hours while it held 13 ready items, because each item's pickup had been handed once and answered with a comment saying it still waited; for 3 of them the condition the comment named (another item closing, a fix shipping) had been met one to two days earlier, and nothing told the holder. Of 9 waits by agents on the company's one person, 7 were a comment, an @-mention or a `wait_until` date rather than an ask, so they never reached that person's Inbox as a question.
 - **Cost-when-tried:** the brief alone. ADR-0112's first brief offered "say why with a comment" among the answers, and 10 of the 13 spent keys were spent under it in two days; its second brief named only typed answers, and the next two pickups were still answered in prose. A brief is advice, and the delivery check accepted any tool call, a comment included, so the advice was never held to.
 - **Tag-status:** unreleased

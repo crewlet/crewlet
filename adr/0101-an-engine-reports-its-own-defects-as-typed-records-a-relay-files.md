@@ -2,7 +2,30 @@
 
 - **Status:** accepted
 - **Authority:** `internal/issuereport`
-- **Enforced-by:** `internal/issuereport.TestEveryWiredSignalBuildsAReportTheExportAccepts`, `internal/issuereport.TestAPublishedClassShapeIsImmutable`, `internal/issuereport.TestEveryCatalogueSiteMapsToAFunctionInTheSource`, `internal/issuereport.TestAnIdentityIsSmallAndClosed`, `internal/issuereport.TestAReportHoldsNoPlainString`, `internal/issuereport.TestNoAdversarialValueReachesAReport`, `internal/issuereport.TestAFingerprintIsSentOncePerWindowAcrossTheFleet`, `internal/issuereport.TestTurningItOffStopsEverything`, `internal/issuereport.TestAnInertBuildSendsNothingWhateverTheSetting`, `internal/issuereport.TestAnExposedPanicSendsItsSiteAlone`, `internal/panics.TestTheSiteIsTheFunctionThatPanickedThroughARaise`, `internal/api.TestEveryUnauthenticatedRouteIsServedByAnExposedPackage`, `internal/api.TestTheAPIReportsAPanicByWhetherItsRouteIsGuarded`, `internal/issuereport.TestAnOnCopyArmsAndTheFirstRevisionDecides`, `internal/issuereport.TestOffMeansOffAcrossARestart`, `internal/issuereport.TestTheCrashThisToolchainWritesIsRead`, `internal/issuereport.TestACrashOnAnExposedPathIsHeld`, `internal/issuereport.TestEveryPackageThatDeclaresAToolExecutesToolCalls`, `internal/issuereport.TestAFailedMigrationIsReportedByTheNextStart`, `internal/store.TestAFailedMigrationSaysWhichAfterWhichAndHow`, `internal/issuereport.TestTheExportCarriesWhatTheRelayEnforces`, `internal/api/configapi.TestOnlyAnAdministratorMayTurnIssueReportsOn`, `cmd/crewlet.TestTheCheckedInIssueReportCatalogueIsWhatTheGeneratorEmits`
+- **Enforced-by:**
+  - `internal/issuereport.TestEveryWiredSignalBuildsAReportTheExportAccepts`
+  - `internal/issuereport.TestAPublishedClassShapeIsImmutable`
+  - `internal/issuereport.TestEveryCatalogueSiteMapsToAFunctionInTheSource`
+  - `internal/issuereport.TestAnIdentityIsSmallAndClosed`
+  - `internal/issuereport.TestAReportHoldsNoPlainString`
+  - `internal/issuereport.TestNoAdversarialValueReachesAReport`
+  - `internal/issuereport.TestAFingerprintIsSentOncePerWindowAcrossTheFleet`
+  - `internal/issuereport.TestTurningItOffStopsEverything`
+  - `internal/issuereport.TestAnInertBuildSendsNothingWhateverTheSetting`
+  - `internal/issuereport.TestAnExposedPanicSendsItsSiteAlone`
+  - `internal/panics.TestTheSiteIsTheFunctionThatPanickedThroughARaise`
+  - `internal/api.TestEveryUnauthenticatedRouteIsServedByAnExposedPackage`
+  - `internal/api.TestTheAPIReportsAPanicByWhetherItsRouteIsGuarded`
+  - `internal/issuereport.TestAnOnCopyArmsAndTheFirstRevisionDecides`
+  - `internal/issuereport.TestOffMeansOffAcrossARestart`
+  - `internal/issuereport.TestTheCrashThisToolchainWritesIsRead`
+  - `internal/issuereport.TestACrashOnAnExposedPathIsHeld`
+  - `internal/issuereport.TestEveryPackageThatDeclaresAToolExecutesToolCalls`
+  - `internal/issuereport.TestAFailedMigrationIsReportedByTheNextStart`
+  - `internal/store.TestAFailedMigrationSaysWhichAfterWhichAndHow`
+  - `internal/issuereport.TestTheExportCarriesWhatTheRelayEnforces`
+  - `internal/api/configapi.TestOnlyAnAdministratorMayTurnIssueReportsOn`
+  - `cmd/crewlet.TestTheCheckedInIssueReportCatalogueIsWhatTheGeneratorEmits`
 - **Tag-status:** unreleased
 
 ## The decision

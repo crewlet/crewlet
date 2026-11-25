@@ -16,7 +16,7 @@ import (
 
 // BenchmarkAChatCountAtItsBounds measures Qwen Code's and Gemini CLI's count:
 // the take's meter (meter) and a collection's of the box's copy, alone (copy),
-// followed by its summary's reading (summary) or that alone (summary_alone),
+// with its summary (summary) or Qwen Code's summary alone (summary_alone),
 // against [meterBaseHeldBytes] and [baseTierReadBytes]. A line just within the
 // bound passed over (skipped), in words, an answer or a call's arguments, past
 // it (past, failing the read), or none (plain); the most ids a count keeps, as
@@ -48,6 +48,9 @@ func BenchmarkAChatCountAtItsBounds(b *testing.B) {
 				continue
 			}
 			for _, how := range []string{"meter", "copy", "summary", "summary_alone"} {
+				if how == "summary_alone" && h.follow == nil {
+					continue
+				}
 				b.Run(h.name+"_"+how+"_"+c.name, func(b *testing.B) { chatBenchRead(b, h, how, c.name == "past", c.big) })
 			}
 		}
@@ -56,7 +59,8 @@ func BenchmarkAChatCountAtItsBounds(b *testing.B) {
 
 // chatBenchHarness is how the bench writes a harness's chat file: its counter,
 // the line that anchors its count, and each case's line around a quoted value,
-// or the most ids it keeps of length n.
+// or the most ids it keeps of length n; and how it reads the newest summary,
+// by a reading that follows the walk, or else on the count's own (summarize).
 type chatBenchHarness struct {
 	name                         string
 	counter                      func() chatCounter
@@ -67,7 +71,8 @@ type chatBenchHarness struct {
 	skipped, words, answer, call func(quoted string) string
 	ids                          func(n int) string
 	idsBase                      func() string
-	summary                      func() *chatSummaryLines
+	follow                       func() *chatSummaryLines
+	summarize                    func(c chatCounter)
 }
 
 // chatBenchID is the i'th id of n bytes.
@@ -97,7 +102,7 @@ func chatBenchHarnesses() []chatBenchHarness {
 				return `{"type":"assistant","message":{"role":"model","parts":[{"functionCall":{"id":"c1",` +
 					`"name":"run_shell_command","args":{"command":` + q + `}}}]}}`
 			},
-			summary: func() *chatSummaryLines { return &newQwenSummaryReading(&summaryRead{}).chatSummaryLines },
+			follow: func() *chatSummaryLines { return &newQwenSummaryReading(&summaryRead{}).chatSummaryLines },
 			ids: func(n int) string {
 				parts := make([]string, qwenCountIDs)
 				for i := range parts {
@@ -129,7 +134,7 @@ func chatBenchHarnesses() []chatBenchHarness {
 				}
 				return strings.Join(lines, "\n")
 			},
-			summary: func() *chatSummaryLines { return &newGeminiSummaryReading(newGeminiSummaries()).chatSummaryLines },
+			summarize: func(c chatCounter) { c.(*geminiCounting).summarize() },
 			idsBase: func() string {
 				lines := make([]string, geminiCountBaseIDs-1)
 				for i := range lines {
@@ -168,11 +173,13 @@ func chatBenchRead(b *testing.B, h chatBenchHarness, how string, past bool, big 
 		var read error
 		var summary *chatSummaryLines
 		counted := c
-		switch how {
-		case "summary":
-			summary = h.summary()
-		case "summary_alone":
-			summary, counted = h.summary(), nil
+		switch {
+		case how == "summary" && h.follow == nil:
+			h.summarize(c)
+		case how == "summary":
+			summary = h.follow()
+		case how == "summary_alone":
+			summary, counted = h.follow(), nil
 		}
 		if archive {
 			_, read = chatMeter(b.Context(), c, f, h.isMember, h.release, h.release, new(passBudget))

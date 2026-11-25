@@ -47,7 +47,7 @@ func (c *codexCompaction) payloadTook(took bool) {
 // line's is passed over.
 func (c *codexCompaction) messageField(w *lineWalk, k jsonscan.Kind, typ string) error {
 	if c == nil || typ != "" && typ != "compacted" {
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	_, err := c.message.read(w, k)
 	return err
@@ -70,20 +70,20 @@ func (c *codexCompaction) envelopeField(w *lineWalk, name string, k jsonscan.Kin
 	var err error
 	switch {
 	case c == nil:
-		return w.scan.Skip()
+		return w.skip(k)
 	case name == "timestamp":
 		ok, err = w.typedField(k, fieldString)
 	case name == "metadata":
 		ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
 			if name != "compaction_output" {
-				return w.scan.Skip()
+				return w.skip(k)
 			}
 			_, took, flagErr := w.flagField(k)
 			c.fragment = c.fragment || !took
 			return flagErr
 		})
 	default:
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	c.fragment = c.fragment || !ok
 	return err

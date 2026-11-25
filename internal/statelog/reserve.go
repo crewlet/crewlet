@@ -343,11 +343,14 @@ func (r *Reserve) claim() (*usageRun, bool) {
 
 // run takes one reading and releases everybody waiting on it.
 //
-// DETACHED FROM THE OWNER'S CANCELLATION and bounded by the barrier's own
-// budget, for the reason [ReadIndex.run] gives: the reading is shared work,
-// and a caller that gives up must not fail every admission waiting on it.
+// DETACHED FROM THE OWNER'S CANCELLATION and bounded by the longest barrier's
+// budget ([ElectionBarrierBudget]), for the reason [ReadIndex.run] gives: the
+// reading is shared work, and a caller that gives up must not fail every
+// admission waiting on it. Each caller still leaves on its own context, so the
+// bound holds nobody past their own deadline; a reading across an election of
+// the log's leader is asked again inside it rather than failed at five seconds.
 func (r *Reserve) run(ctx context.Context, run *usageRun) {
-	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), DefaultBarrierBudget)
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ElectionBarrierBudget)
 	go func() {
 		defer cancel()
 		defer func() {
