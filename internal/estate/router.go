@@ -350,15 +350,16 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 // ReadAttempt bounds one read's wait on one node: [Production]'s
 // [Timing.ReadAttempt], a ceiling under the caller's own deadline.
 //
-// TEN SECONDS: a linearizable read's waits at their whole budgets — the
-// asker's floor ([statelog.ReadBudget]), the barrier
-// ([statelog.DefaultBarrierBudget]) and its position (ReadBudget) — plus the
-// reply's margin (gitlet.ReplyMargin): 2 + 5 + 2 + 1, held by
+// FIFTEEN SECONDS: a linearizable read's waits at their whole budgets — the
+// asker's floor ([statelog.ReadBudget]), the barrier on a log several members
+// store, which waits out an election of its leader
+// ([statelog.ElectionBarrierBudget]), and its position (ReadBudget) — plus the
+// reply's margin (gitlet.ReplyMargin): 2 + 10 + 2 + 1, held by
 // TestProductionsReadAttemptHoldsALinearizableReadsWaits. A node silent that
-// long is gone rather than slow. Gitproc's ReadDeadline and SlotWait are one
-// read attempt each; TestGitprocsReadBoundsAreOneReadAttempt holds that from
+// long is gone rather than slow. Gitproc's ReadDeadline and SlotWait each fit
+// inside one; TestGitprocsReadBoundsFitInsideOneReadAttempt holds that from
 // here, since gitproc imports no engine package.
-const ReadAttempt = 10 * time.Second
+const ReadAttempt = 15 * time.Second
 
 // writeAttempt bounds one write's wait on one node for a caller with no
 // deadline of its own: [Production]'s [Timing.WriteAttempt], read by nothing

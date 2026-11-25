@@ -1281,20 +1281,22 @@ func TestAWedgedNodeCostsAReadTheRoutersOwnReadAttempt(t *testing.T) {
 	})
 }
 
-// GITPROC'S READ BOUNDS ARE ONE PRODUCTION READ ATTEMPT: a local git read
-// (gitproc.ReadDeadline) is bounded like any read, and a run that waited a
-// whole attempt for a slot (gitproc.SlotWait) should be retried elsewhere.
-// gitproc imports no engine package, so the equality is held here.
-func TestGitprocsReadBoundsAreOneReadAttempt(t *testing.T) {
+// GITPROC'S READ BOUNDS FIT INSIDE ONE PRODUCTION READ ATTEMPT: a local git
+// read (gitproc.ReadDeadline) is bounded like any read, and a run that waited
+// for a slot (gitproc.SlotWait) is refused busy while a router asking for it
+// still listens, so the retry goes elsewhere. Not equal: the attempt also holds
+// a barrier's election, which no local git waits on. gitproc imports no engine
+// package, so the bound is held here.
+func TestGitprocsReadBoundsFitInsideOneReadAttempt(t *testing.T) {
 	t.Parallel()
 	read := Production().ReadAttempt
-	if gitproc.ReadDeadline != read {
+	if gitproc.ReadDeadline > read {
 		t.Errorf("gitproc.ReadDeadline is %v, and a node's router gives a read %v — a local git "+
-			"read is one read attempt", gitproc.ReadDeadline, read)
+			"read must fit inside one read attempt", gitproc.ReadDeadline, read)
 	}
-	if gitproc.SlotWait != read {
-		t.Errorf("gitproc.SlotWait is %v, and a node's router gives a read %v — a run waits "+
-			"one read attempt for a slot", gitproc.SlotWait, read)
+	if gitproc.SlotWait > read {
+		t.Errorf("gitproc.SlotWait is %v, and a node's router gives a read %v — a run's wait "+
+			"for a slot must fit inside one read attempt", gitproc.SlotWait, read)
 	}
 }
 
