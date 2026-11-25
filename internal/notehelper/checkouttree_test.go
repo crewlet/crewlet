@@ -18,6 +18,13 @@ func copilotRules() instructionSlot {
 		Scoped: &treeScope{Keys: []string{"applyTo", "paths"}, Whole: []string{"**", "**/*", "*"}}}}
 }
 
+// qwenRules is the tree slot of Qwen Code 0.28.4's .qwen/rules, scoped as it
+// reads a rule's frontmatter, as internal/sandbox/executor writes it.
+func qwenRules() instructionSlot {
+	return instructionSlot{Tree: &instructionTree{Tree: ".qwen/rules", Suffix: ".md", Form: formQwen,
+		Scoped: &treeScope{Keys: []string{"paths"}}}}
+}
+
 // claudeRules is the tree slot of Claude Code 2.1.310's .claude/rules, scoped
 // as it reads a rule's frontmatter, as internal/sandbox/executor writes it.
 func claudeRules() instructionSlot {
@@ -276,8 +283,8 @@ func TestATreeHandsItsFilesInClaudeCodesWalk(t *testing.T) {
 }
 
 // A SCOPED RULE IS LEFT OUT AS CLAUDE CODE READS ITS FRONTMATTER, each case a
-// measured row of 2.1.310 and 2.1.330 (B2a's C4 rows; the mixed list, review
-// P2-B, on 2.1.310): handed where it loads at a session's start, left out
+// measured row of 2.1.310 and 2.1.330 (B2a's C4 rows; the mixed list, `[5]`
+// and `[""]` on 2.1.310): handed where it loads at a session's start, left out
 // where it loads only on a matching path or never (invalid YAML).
 //
 // Mutation: read the frontmatter line by line, take `Paths` for paths, read a
@@ -290,7 +297,8 @@ func TestAScopedRuleIsLeftOutAsClaudeCodeReadsItsFrontmatter(t *testing.T) {
 		"---\napplyTo: \"src/**\"\n---\n", "---\nPaths: [\"src/**\"]\n---\n", "---\npaths: []\n---\n",
 		"---\npaths:\n---\n", "---\npaths: \"\"\n---\n", "---\npaths: [\"\"]\n---\n", "---\npaths: 5\n---\n",
 		"---\npaths: true\n---\n", "---\npaths: {a: 1}\n---\n", "---\npaths: [\"**\"]\n---\n",
-		"---\npaths: \"**\"\n---\n", "---\npaths: [\"src/**\"]\nX\n"}
+		"---\npaths: \"**\"\n---\n", "---\npaths: [\"src/**\"]\nX\n",
+		"---\npaths: [5]\n---\nX\n", "---\npaths: [\"\"]\n---\nX\n"}
 	left := []string{"---\npaths: [\"src/**/*.ts\"]\n---\n", "---\npaths:\n  - \"src/**/*.ts\"\n---\n",
 		"---\npaths: \"src/**/*.ts\"\n---\n", "---\npaths: [\"**/*\"]\n---\n", "---\npaths: [\"*\"]\n---\n",
 		"---\npaths: [\"**/\"]\n---\n", "---\npaths: [\"**\", \"docs/**\"]\n---\n",
@@ -355,5 +363,118 @@ func TestALinkedRulesDirectoryIsWalkedAsClaudeCodeWalksIt(t *testing.T) {
 				t.Errorf("the linked tree imports %q, want %q (saying %q)", got, want, said.String())
 			}
 		})
+	}
+}
+
+// A TREE HANDS ITS FILES IN QWEN CODE'S WALK, each a measured row of 0.28.4's
+// start in a checkout (B2b's rules rows): `.md` in its own case (`UP.MD`,
+// `a.txt` not), dot files and dot directories walked, nested directories
+// walked, a file link and a directory link never followed, whatever they lead
+// to, a scoped rule left out, and each rule as Qwen Code loads it: its body,
+// the frontmatter and HTML comments dropped, trimmed, none where that is
+// empty; apart by a blank line.
+//
+// Mutation: match the suffix in any case, skip dot entries, follow a file or
+// a directory link, drop the scope, hand the frontmatter or a comment, or
+// hand a rule with no body, and the text goes red.
+func TestATreeHandsItsFilesInQwenCodesWalk(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"QWEN.md":                   "ROOT\n",
+		".qwen/rules/plain.md":      "PLAIN\n",
+		".qwen/rules/UP.MD":         "UPPER\n",
+		".qwen/rules/a.txt":         "TXT\n",
+		".qwen/rules/.dot.md":       "DOTFILE\n",
+		".qwen/rules/.hid/in.md":    "DOTDIR\n",
+		".qwen/rules/sub/nested.md": "NESTED <!-- note --> TEXT\n",
+		".qwen/rules/paths.md":      "---\npaths: [\"src/**/*.ts\"]\n---\nSCOPED\n",
+		".qwen/rules/desc.md":       "\uFEFF---\r\ndescription: FRONT\r\n---\r\n\r\nDESC\r\n",
+		".qwen/rules/note.md":       "---\ndescription: d\n---\n<!-- only a note -->\n",
+		".qwen/rules/blank.md":      "---\ndescription: d\n---\n   \n",
+		"elsewhere/l.md":            "FILELINK\n",
+		"elsewhere/dir/v.md":        "DIRLINK\n",
+	})
+	for link, target := range map[string]string{".qwen/rules/fl.md": "elsewhere/l.md", ".qwen/rules/dl": "elsewhere/dir"} {
+		if err := os.Symlink(filepath.Join(root, target), filepath.Join(root, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var said bytes.Buffer
+	text, _ := rootText(root, 1<<20, append(names([]string{"QWEN.md"}), qwenRules()), &skips{stderr: &said})
+	want := strings.Join([]string{"ROOT\n", "DOTFILE", "DOTDIR", "DESC", "PLAIN", "NESTED  TEXT"}, "\n\n")
+	if text != want || said.Len() > 0 {
+		t.Errorf("the slots hand\n%q\nwant\n%q\nsaying %q", text, want, said.String())
+	}
+}
+
+// A SCOPED RULE IS LEFT OUT AS QWEN CODE READS ITS FRONTMATTER, each case a
+// measured row of 0.28.4 (B2b's rules rows): handed where it loads at start
+// (no or unclosed frontmatter, no `paths`, `Paths`, a `paths` naming nothing:
+// empty, a core-schema number or bool, null, a mapping, a list of empties or
+// nulls, or one holding a mapping; refused YAML whose line reading holds
+// none), left out where `paths` names anything (spaces, `**`, `1_000`, `0b1`,
+// a date, a listed number, an alias's list, a key given twice, a line-read
+// empty single-quoted string), past a BOM or with CRLF.
+//
+// Mutation: count `**` as every path, read `Paths`, trim, take yaml.v3's tags,
+// read a null or number as a path, scope a list with a mapping, skip
+// duplicateKeys, deref or the line reader, or miss a BOM or CRLF: red.
+func TestAScopedRuleIsLeftOutAsQwenCodeReadsItsFrontmatter(t *testing.T) {
+	t.Parallel()
+	handed := []string{"X\n", "---\ndescription: d\n---\nX\n", "---\nglobs: [\"src/**\"]\n---\nX\n",
+		"---\napplyTo: \"src/**\"\n---\nX\n", "---\nPaths: [\"src/**\"]\n---\nX\n", "---\npaths: []\n---\nX\n",
+		"---\npaths: \"\"\n---\nX\n", "---\npaths:\n---\nX\n", "---\npaths: 5\n---\nX\n",
+		"---\npaths: [\"src/**\"]\nX\n", "---\npaths: [\"\"]\n---\nX\n", "---\npaths: [null]\n---\nX\n",
+		"---\npaths: [~]\n---\nX\n", "---\npaths: [[]]\n---\nX\n", "---\npaths: [{}]\n---\nX\n",
+		"---\npaths: [\"src/**\", {}]\n---\nX\n", "---\ndescription: [x\n---\nX\n",
+		"---\ndescription: [x\npaths: null\n---\nX\n", "---\npaths: 0o7\n---\nX\n", "---\npaths: 0x1F\n---\nX\n",
+		"---\npaths: True\n---\nX\n", "---\npaths: {a: b}\n---\nX\n", "---\npaths: .inf\n---\nX\n",
+		"---\npaths: !!int 5\n---\nX\n"}
+	left := []string{"---\npaths: [\"src/**/*.ts\"]\n---\nX\n", "---\npaths: \"**\"\n---\nX\n",
+		"---\npaths: [5]\n---\nX\n", "---\npaths: [\"src/**\", 5]\n---\nX\n", "---\npaths: [true]\n---\nX\n",
+		"---\npaths: \"  \"\n---\nX\n", "---\npaths: [bad\n---\nX\n",
+		"---\ndescription: [x\npaths:\n  - \"src/**\"\n---\nX\n", "\uFEFF---\npaths: [\"src/**\"]\n---\nX\n",
+		"---\r\npaths: [\"src/**\"]\r\n---\r\nX\r\n", "---\npaths: 1_000\n---\nX\n", "---\npaths: 0b1\n---\nX\n",
+		"---\npaths: 2024-01-01\n---\nX\n", "---\npaths: []\npaths: [\"src/**\"]\n---\nX\n",
+		"---\nx: &a [\"src/**\"]\npaths: *a\n---\nX\n", "---\ndescription: [x\npaths: ''\n---\nX\n",
+		"---\ndescription: [x\npaths:\n  - ''\n---\nX\n", "---\npaths: !!timestamp 2020-01-01\n---\nX\n",
+		"---\npaths: !x a\n---\nX\n", "---\npaths: !!binary aGk=\n---\nX\n"}
+	scope := qwenRules().Tree.Scoped
+	for _, file := range handed {
+		if _, ok := qwenRule([]byte(file), scope); !ok {
+			t.Errorf("%q is left out, want it handed: Qwen Code loads it at a session's start", file)
+		}
+	}
+	for _, file := range left {
+		if _, ok := qwenRule([]byte(file), scope); ok {
+			t.Errorf("%q is handed, want it left out: Qwen Code does not load it at a session's start", file)
+		}
+	}
+}
+
+// QWEN CODE'S LINE READER IS READ AS IT READS: where its YAML parser refuses a
+// rule's frontmatter, a `paths` value's text decides as its parseValue reads
+// it (0.28.4's source; the list, `[bad` and empty single-quoted rows
+// measured): a string or a list item other than `null`, empty or `""` names a
+// path, an empty single-quoted one included, and `true`, `null`, `""`, a
+// number as JavaScript's Number reads one (0x, 0o and 0b included) or an
+// object do not.
+//
+// Mutation: read a number, `true` or `""` as a string, an empty single-quoted
+// one as empty, `Infinity` or `1_0` as a number, an object as a string, or a
+// `null` item as a path, and a row goes red.
+func TestQwenCodesLineReaderDecidesAsItReads(t *testing.T) {
+	t.Parallel()
+	for value, want := range map[string]bool{
+		"paths: src/**": true, "paths: Infinity": true, "paths: 1_0": true, "paths: 0x1p3": true,
+		`paths: "x"`: true, "paths: 'x'": true, "paths:\n  - null\n  - a": true,
+		"paths: true": false, "paths: null": false, `paths: ""`: false, "paths: 5": false, "paths: -1.5e3": false,
+		"paths: 0x1F": false, "paths: 0o7": false, "paths: 0b1": false, "paths:\n  a: b": false,
+		"paths:\n  - null\n  - \"\"": false, "# c\npaths:": false, "paths: ''": true, "paths:\n  - ''": true,
+	} {
+		if got := qwenLineScoped(value, *qwenRules().Tree.Scoped); got != want {
+			t.Errorf("%q names a path: %v, want %v", value, got, want)
+		}
 	}
 }
