@@ -423,18 +423,30 @@ func codexSummaryBox(t *testing.T, edit func([][]byte) [][]byte) summaryBox {
 }
 
 // geminiSnapshotsNamed is the compressed session's lines, its two snapshots'
-// words told apart: the first OLDER, the second NEWEST.
+// words told apart: the first OLDER, the second NEWEST. Each is rewritten in
+// place, its keys in the order 0.70.0 writes them, by which its compression's
+// lines are found ([geminiCompressionUser]).
 func geminiSnapshotsNamed(t *testing.T, lines [][]byte) [][]byte {
 	t.Helper()
+	quoted := func(s string) []byte {
+		var b bytes.Buffer
+		e := json.NewEncoder(&b)
+		e.SetEscapeHTML(false)
+		if err := e.Encode(s); err != nil {
+			t.Fatal(err)
+		}
+		return bytes.TrimSuffix(b.Bytes(), []byte("\n"))
+	}
 	out := make([][]byte, 0, len(lines))
 	names := []string{"OLDER", "NEWEST"}
 	for _, l := range lines {
 		if bytes.Contains(l, []byte("<state_snapshot>")) && len(names) > 0 {
-			name := names[0]
-			l = edited(t, l, func(m map[string]any) {
-				valueAt(m, "content", 0).(map[string]any)["text"] = "<state_snapshot> " + name + " snapshot"
-			})
-			names = names[1:]
+			text := valueAt(objectOf(t, l), "content", 0, "text").(string)
+			named := bytes.Replace(l, quoted(text), quoted("<state_snapshot> "+names[0]+" snapshot"), 1)
+			if bytes.Equal(named, l) {
+				t.Fatalf("the snapshot's words %q are not written as quoted", text)
+			}
+			l, names = named, names[1:]
 		}
 		out = append(out, l)
 	}
