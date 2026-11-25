@@ -550,6 +550,7 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
       // "Entry", never the uuid the address bar already carries.
       return [root(row, true), { label: labels[where.id] || "Entry" }];
     case "general":
+    case "ask-crewlet":
     case "spend":
     case "spend-tasks":
     case "limits":
