@@ -21,20 +21,15 @@ func runQwenNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr i
 // ---` to `--- End of Context from: <path> ---` (measured on 0.28.4), its path
 // absolute; then each one's skills listed ([skillsListing]), then what the
 // firing left out ([skippedListing]), the listings within one bound
-// ([listingBudget]).
+// ([listingBudget.listings], the left out first).
 func qwenNestedContext(handed []handedCheckout, skipped []string) string {
 	var blocks []string
-	budget := newListingBudget()
-	for _, h := range handed {
+	skills, left := newListingBudget().listings(handed, skipped)
+	for i, h := range handed {
 		for _, p := range h.parts {
 			blocks = append(blocks, "--- Context from: "+p.path+" ---\n"+p.text+"\n--- End of Context from: "+p.path+" ---")
 		}
-		if listing := budget.take(skillsListing(h)); listing != "" {
-			blocks = append(blocks, listing)
-		}
+		blocks = appendNonEmpty(blocks, skills[i])
 	}
-	if listing := budget.take(skippedListing(skipped)); listing != "" {
-		blocks = append(blocks, listing)
-	}
-	return strings.Join(blocks, "\n\n")
+	return strings.Join(appendNonEmpty(blocks, left), "\n\n")
 }

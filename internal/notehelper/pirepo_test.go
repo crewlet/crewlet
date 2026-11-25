@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -201,6 +202,33 @@ func TestAPiFiringInASmallRoomNamesItsFiles(t *testing.T) {
 		if out, _ := r.piFireWithin(t, room); out != want || piUnits(out) > room {
 			t.Errorf("a room of %d printed\n%q\nwant\n%q", room, out, want)
 		}
+	}
+}
+
+// A PI FIRING IN A SMALL ROOM KEEPS WHAT IT LEFT OUT: where the room holds
+// neither the file nor the clone's whole skills' listing beside the line
+// naming the file, that line comes whole, and the listing is cut with a line
+// naming the room it passed, the answer within the room.
+//
+// Mutation: take the skills first, or name the 64 KiB bound, and this goes red.
+func TestAPiFiringInASmallRoomKeepsWhatItLeftOut(t *testing.T) {
+	t.Parallel()
+	const room = 6_000
+	r := newRepoRun(t, nil)
+	work := r.workdir(t)
+	r.launchWith(t, piSpec(r.skills), false, "")
+	files := map[string]string{"late/.git/": "", "late/AGENTS.md": strings.Repeat("L", 10_000)}
+	for i := range 30 {
+		files[fmt.Sprintf("late/.agents/skills/s%02d/SKILL.md", i)] = fmt.Sprintf("---\nname: s%02d\ndescription: %s\n---\n",
+			i, strings.Repeat("d", 300))
+	}
+	r.add(t, files)
+	out, _ := r.piFireWithin(t, room)
+	left := skippedListing([]string{piLeftOut(filepath.Join(work, "late", "AGENTS.md"))})
+	cut := fmt.Sprintf("\n(The rest of this listing passes the %d bytes this answer had room for and is not shown.)", room)
+	skills, ok := strings.CutSuffix(out, "\n\n"+left)
+	if !ok || !strings.HasPrefix(skills, "# Skills of ") || !strings.HasSuffix(skills, cut) || len(out) > room {
+		t.Errorf("a room of %d printed %d bytes:\n%s\nwant the skills cut with %q, then\n%s", room, len(out), out, cut, left)
 	}
 }
 

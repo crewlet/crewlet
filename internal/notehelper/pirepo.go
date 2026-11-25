@@ -40,14 +40,14 @@ func runPiNested(_ context.Context, f flags, _ io.Reader, stdout, stderr io.Writ
 // its skills listed by path ([skillsListing]), since Pi lists no skill added
 // after it started (measured); then what the firing left out
 // ([skippedListing]), the listings within listings bytes, which no count of
-// their characters passes ([listingBudget]), none where that cannot even say
-// they are cut. The files take what the room leaves the listings, so the
-// answer stays within the room. "" where they hand nothing.
+// their characters passes ([listingBudget.listings], the left out first),
+// none where that cannot even say they are cut. The files take what the room
+// leaves the listings, so the answer stays within the room. "" where they
+// hand nothing.
 func piNestedText(handed []handedCheckout, skipped []string, listings int) string {
 	var blocks []string
-	budget := newListingBudgetWithin(listings)
-	budget.cut = listings < len(listingCut)+len("\n\n")
-	for _, h := range handed {
+	skills, left := newListingBudgetWithin(listings).listings(handed, skipped)
+	for i, h := range handed {
 		files := make([]string, 0, len(h.parts))
 		for _, p := range h.parts {
 			files = append(files, "<project_instructions path=\""+p.path+"\">\n"+p.text+"\n</project_instructions>")
@@ -55,12 +55,7 @@ func piNestedText(handed []handedCheckout, skipped []string, listings int) strin
 		if len(files) > 0 {
 			blocks = append(blocks, "for `"+h.name+"` with root "+h.root+"\n\n"+strings.Join(files, "\n\n"))
 		}
-		if listing := budget.take(skillsListing(h)); listing != "" {
-			blocks = append(blocks, listing)
-		}
+		blocks = appendNonEmpty(blocks, skills[i])
 	}
-	if listing := budget.take(skippedListing(skipped)); listing != "" {
-		blocks = append(blocks, listing)
-	}
-	return strings.Join(blocks, "\n\n")
+	return strings.Join(appendNonEmpty(blocks, left), "\n\n")
 }

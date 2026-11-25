@@ -397,28 +397,38 @@ const maxListing = 64 << 10
 // listingCut ends a firing's listings cut at [maxListing].
 const listingCut = "(The rest of this listing passes its 64 KiB bound and is not shown.)"
 
-// listingBudget is what is left of one firing's [maxListing], and whether
-// its listings were cut.
+// listingBudget is what is left of one firing's bound on its listings, the
+// line a cut ends with, naming that bound, and whether they were cut.
 type listingBudget struct {
-	left int
-	cut  bool
+	left    int
+	cutLine string
+	cut     bool
 }
 
 func newListingBudget() *listingBudget {
-	return &listingBudget{left: maxListing - len(listingCut) - 1}
+	return &listingBudget{left: maxListing - len(listingCut) - 1, cutLine: listingCut}
 }
 
 // newListingBudgetWithin is a budget whose listings, with the blank line
 // before each, never pass bound bytes: the cut line and the separator before
 // the block it ends are reserved, since a cut keeps at most what is left (its
-// last newline standing in for the cut line's own).
+// last newline standing in for the cut line's own). A bound below
+// [maxListing] is the room the answer had, which its cut line names; one too
+// small to say a cut lists nothing.
 func newListingBudgetWithin(bound int) *listingBudget {
-	return &listingBudget{left: bound - len(listingCut) - len("\n\n")}
+	cutLine := listingCut
+	if bound < maxListing {
+		cutLine = fmt.Sprintf("(The rest of this listing passes the %d bytes this answer had room for and is not shown.)",
+			bound)
+	}
+	b := &listingBudget{left: bound - len(cutLine) - len("\n\n"), cutLine: cutLine}
+	b.cut = b.left < 0
+	return b
 }
 
 // take is block within what is left of b, block apart from the one before by
 // a blank line: whole where it fits, else cut after its last line that does,
-// with [listingCut], once; "" for an empty block and for every block after a
+// with b's cut line, once; "" for an empty block and for every block after a
 // cut.
 func (b *listingBudget) take(block string) string {
 	if block == "" || b.cut {
@@ -431,9 +441,33 @@ func (b *listingBudget) take(block string) string {
 	b.cut = true
 	kept := block[:max(b.left, 0)]
 	if i := strings.LastIndexByte(kept, '\n'); i >= 0 {
-		return kept[:i] + "\n" + listingCut
+		return kept[:i] + "\n" + b.cutLine
 	}
-	return listingCut
+	return b.cutLine
+}
+
+// appendNonEmpty is blocks with each of more that is not "".
+func appendNonEmpty(blocks []string, more ...string) []string {
+	for _, b := range more {
+		if b != "" {
+			blocks = append(blocks, b)
+		}
+	}
+	return blocks
+}
+
+// listings is each handed checkout's skills' listing ([skillsListing]) and
+// what the firing left out ([skippedListing]) within b, in the order they
+// are shown (each checkout's, then the left out), the left-out lines taken
+// first: a checkout is claimed for good, so a file or skill it was not
+// handed is the model's to find only by the line naming it.
+func (b *listingBudget) listings(handed []handedCheckout, skipped []string) (skills []string, left string) {
+	left = b.take(skippedListing(skipped))
+	skills = make([]string, len(handed))
+	for i, h := range handed {
+		skills[i] = b.take(skillsListing(h))
+	}
+	return skills, left
 }
 
 // readNested is a nested adapter's config, refused where it names no state or

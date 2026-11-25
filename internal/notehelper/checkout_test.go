@@ -1313,12 +1313,15 @@ func TestAFiringAfterTheRunEndedClaimsNothing(t *testing.T) {
 	}
 }
 
-// ONE FIRING'S LISTING IS BOUND: the skills a firing copied and the lines of
-// what it left out reach the model within maxListing, cut after a whole line
-// with one line saying so and nothing after it; a checkout's instructions go
-// whole beside them.
+// ONE FIRING'S LISTING IS BOUND, WHAT IT LEFT OUT FIRST: the skills a firing
+// copied and the lines of what it left out reach the model within
+// maxListing; the left-out lines, the model's one way to what its claimed
+// checkouts were not handed, are kept whole, and the skills' listing before
+// them is cut after a whole line with one line saying so; a checkout's
+// instructions go whole beside them.
 //
-// Mutation: drop the bound, or cut mid-line, and a check goes red.
+// Mutation: drop the bound, cut mid-line, or take the skills first, and a
+// check goes red.
 func TestOneFiringsListingIsBound(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("d", maxSkillDescription)
@@ -1328,7 +1331,7 @@ func TestOneFiringsListingIsBound(t *testing.T) {
 			path: fmt.Sprintf("/h/skills/repo:s%d/SKILL.md", i)})
 	}
 	var skipped []string
-	for i := range 100 {
+	for i := range 30 {
 		skipped = append(skipped, fmt.Sprintf("the skill /w/other/s%d is left out: %s", i, long))
 	}
 	answer := codexNestedContext([]handedCheckout{h}, skipped)
@@ -1337,16 +1340,20 @@ func TestOneFiringsListingIsBound(t *testing.T) {
 	if !ok {
 		t.Fatalf("the answer does not open with the instructions whole: %.200q", answer)
 	}
-	if len(listing) > maxListing || !strings.HasSuffix(listing, "\n"+listingCut) || strings.Count(listing, listingCut) != 1 {
-		t.Errorf("the listing holds %d bytes, ends in the cut %v (%d times); want at most %d, ending in one cut line",
-			len(listing), strings.HasSuffix(listing, listingCut), strings.Count(listing, listingCut), maxListing)
+	if len(listing) > maxListing || strings.Count(listing, listingCut) != 1 {
+		t.Errorf("the listing holds %d bytes and %d cut lines; want at most %d and one", len(listing),
+			strings.Count(listing, listingCut), maxListing)
 	}
-	before := strings.TrimSuffix(listing, "\n"+listingCut)
+	skills, ok := strings.CutSuffix(listing, "\n\n"+skippedListing(skipped))
+	if !ok {
+		t.Fatalf("the answer does not end with what the firing left out, whole: %.200q", listing[max(len(listing)-200, 0):])
+	}
+	before, ok := strings.CutSuffix(skills, "\n"+listingCut)
+	if !ok {
+		t.Fatalf("the skills' listing does not end in the cut line: %.200q", skills[max(len(skills)-200, 0):])
+	}
 	if last := before[strings.LastIndexByte(before, '\n')+1:]; !strings.HasSuffix(last, "SKILL.md)") {
 		t.Errorf("the listing is cut inside a line: it ends %q", last)
-	}
-	if strings.Contains(listing, "is left out") {
-		t.Errorf("lines past the cut reached the model")
 	}
 }
 
