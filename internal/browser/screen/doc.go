@@ -4,7 +4,8 @@
 // each, and answers the relay's one held poll with whether anybody watches.
 // internal/api/mcpbridge serves the routes the relay posts to and hands each
 // post to the hub of the opening its token reaches; the hub decides what it
-// takes.
+// takes. The path a box's screen takes to its seat's holder is recorded as
+// ADR-0182.
 //
 // # One hub a bridge opening, memory only
 //
