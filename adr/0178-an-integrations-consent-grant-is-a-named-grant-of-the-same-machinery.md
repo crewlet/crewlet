@@ -2,7 +2,22 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestAConsentSignInAsksForItsScopesOfflineAndSealsTheGrant`, `internal/engine.TestAConsentWithoutARefreshTokenOrWithAnotherScopeIsRefused`, `internal/engine.TestAConsentRenewsOnceOnA401AndKeepsAReturnedRefreshToken`, `internal/engine.TestAnInvalidGrantAsksGoogleNoMoreUntilASignIn`, `internal/engine.TestSigningInAgainRevokesNothingAndKeepsNoOldToken`, `internal/engine.TestADisconnectRevokesOnlyWhenNoOtherGrantSharesTheProject`, `internal/engine.TestAConsentNeedsAPublicAddressAndItsIntegrationOn`, `internal/engine.TestAConsentGrantGoesOnlyWithTheClientItWasMadeAs`, `internal/engine.TestAnUnreadGrantIsNotOneNobodyHolds`, `internal/api/setupapi.TestAConsentGestureIsRefusedACallerWithoutSecretsWrite`, `internal/fleetsecrets.TestAnOAuthGrantIsUnreachableFromTheOperatorsView`, `internal/googleauth.TestAClientsProjectIsItsIDsNumericPrefix`, `internal/googleauth.TestAGrantIsKeptOnlyAsExactlyTheScopesAsked`, `internal/googleauth.TestARefusalAboutAWeekAfterTheSignInReadsAsAnAppInTesting`, `internal/api/configapi.TestADisconnectGivesUpTheIntegrationsConsentGrant`
+- **Enforced-by:**
+  - `internal/engine.TestAConsentSignInAsksForItsScopesOfflineAndSealsTheGrant`
+  - `internal/engine.TestAConsentWithoutARefreshTokenOrWithAnotherScopeIsRefused`
+  - `internal/engine.TestAConsentRenewsOnceOnA401AndKeepsAReturnedRefreshToken`
+  - `internal/engine.TestAnInvalidGrantAsksGoogleNoMoreUntilASignIn`
+  - `internal/engine.TestSigningInAgainRevokesNothingAndKeepsNoOldToken`
+  - `internal/engine.TestADisconnectRevokesOnlyWhenNoOtherGrantSharesTheProject`
+  - `internal/engine.TestAConsentNeedsAPublicAddressAndItsIntegrationOn`
+  - `internal/engine.TestAConsentGrantGoesOnlyWithTheClientItWasMadeAs`
+  - `internal/engine.TestAnUnreadGrantIsNotOneNobodyHolds`
+  - `internal/api/setupapi.TestAConsentGestureIsRefusedACallerWithoutSecretsWrite`
+  - `internal/fleetsecrets.TestAnOAuthGrantIsUnreachableFromTheOperatorsView`
+  - `internal/googleauth.TestAClientsProjectIsItsIDsNumericPrefix`
+  - `internal/googleauth.TestAGrantIsKeptOnlyAsExactlyTheScopesAsked`
+  - `internal/googleauth.TestARefusalAboutAWeekAfterTheSignInReadsAsAnAppInTesting`
+  - `internal/api/configapi.TestADisconnectGivesUpTheIntegrationsConsentGrant`
 - **Cost-when-tried:** not tried. AdSense and AdMob refuse service accounts, so the company reaches them only through a person's consent; without an engine-held grant, a person's token would have to be pasted, unrenewed, or put in an agent's box.
 - **Tag-status:** unreleased
 

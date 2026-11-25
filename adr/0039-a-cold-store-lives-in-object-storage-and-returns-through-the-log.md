@@ -2,7 +2,9 @@
 
 - **Status:** accepted
 - **Authority:** `internal/artifactdata`
-- **Enforced-by:** `internal/artifactdata.TestTheStateDigestIsTheSumOfItsDocuments`, `internal/artifactdata.TestEveryHistoryRowCarriesTheDigestAfterIt`
+- **Enforced-by:**
+  - `internal/artifactdata.TestTheStateDigestIsTheSumOfItsDocuments`
+  - `internal/artifactdata.TestEveryHistoryRowCarriesTheDigestAfterIt`
 - **Tag-status:** unreleased
 
 ## The decision

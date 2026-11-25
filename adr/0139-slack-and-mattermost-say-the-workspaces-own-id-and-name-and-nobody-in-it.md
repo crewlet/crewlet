@@ -2,7 +2,17 @@
 
 - **Status:** accepted
 - **Authority:** `internal/slack`
-- **Enforced-by:** `internal/slack.TestTheAtlasReadsTheSlackWorkspacesIdentity`, `internal/slack.TestASlackWorkspaceNoAppCanAskOfIsAFinding`, `internal/slack.TestNoCredentialShapeReachesTheAtlasFromSlack`, `internal/slack.TestASlackCallThatFailsOrIsRateLimitedFailsTheRead`, `internal/slack.TestAnUnconnectedSlackIsNotConfigured`, `internal/mattermost.TestTheAtlasReadsTheMattermostTeamsIdentity`, `internal/mattermost.TestAMattermostTeamNoCredentialIsShownIsAFinding`, `internal/mattermost.TestNoCredentialShapeReachesTheAtlasFromMattermost`, `internal/mattermost.TestAMattermostCallThatFailsFailsTheRead`, `internal/mattermost.TestAnUnconnectedMattermostIsNotConfigured`
+- **Enforced-by:**
+  - `internal/slack.TestTheAtlasReadsTheSlackWorkspacesIdentity`
+  - `internal/slack.TestASlackWorkspaceNoAppCanAskOfIsAFinding`
+  - `internal/slack.TestNoCredentialShapeReachesTheAtlasFromSlack`
+  - `internal/slack.TestASlackCallThatFailsOrIsRateLimitedFailsTheRead`
+  - `internal/slack.TestAnUnconnectedSlackIsNotConfigured`
+  - `internal/mattermost.TestTheAtlasReadsTheMattermostTeamsIdentity`
+  - `internal/mattermost.TestAMattermostTeamNoCredentialIsShownIsAFinding`
+  - `internal/mattermost.TestNoCredentialShapeReachesTheAtlasFromMattermost`
+  - `internal/mattermost.TestAMattermostCallThatFailsFailsTheRead`
+  - `internal/mattermost.TestAnUnconnectedMattermostIsNotConfigured`
 - **Cost-when-tried:** not tried. Every other source reads a vendor under one company credential. A chat vendor is the first the engine holds no company read credential for: what it holds is one bot per agent.
 - **Tag-status:** unreleased
 

@@ -2,7 +2,28 @@
 
 - **Status:** accepted
 - **Authority:** `internal/advisor`
-- **Enforced-by:** `internal/agent/builtin.TestAPermissionRequestIsTheEnginesDecision`, `internal/agent/builtin.TestAPermissionIsAnsweredOnlyOnceItsAgentHoldsIt`, `internal/advisor.TestEveryGrantChangesOnlyWhatItNames`, `internal/advisor.TestAGrantThatCannotBeMadeIsRefused`, `internal/advisor.TestEveryAccessKeyIsAnOptionID`, `internal/advisor.TestTheDashboardKnowsAGrantOptionByTheEnginesPrefix`, `internal/agent/builtin.TestAnAccessRequestIsADecisionWhoseOptionIsTheGrant`, `internal/agent/builtin.TestAnAccessRequestNobodyCouldGrantIsRefused`, `internal/agent/builtin.TestNoAuthorsDecisionMayOfferAGrant`, `internal/agent/builtin.TestAGrantIsAnsweredOnlyOnceItsAskerHoldsIt`, `internal/advisor.TestTheAccessCatalogueIsWhatASeatCanHold`, `internal/advisor.TestAGrantHoldsAtItsLevelAndBringsWhatItNeeds`, `internal/github.TestEveryNeedIsAPermissionASeatCanHold`, `internal/agent/builtin.TestRequestAccessOffersWhatASeatCanHoldAndWhereItIsSet`, `internal/agent/builtin.TestChoosingARequestsGrantSavesItBeforeTheAnswer`, `internal/agent/builtin.TestARequestsGrantIsChosenOnlyAtTheAccessWritesProof`, `internal/api/setupapi.TestChoosingARequestsGrantSavesTheGrantItAsked`, `internal/api/setupapi.TestARequestsGrantThatCannotBeSavedWritesNothing`, `internal/engine.TestARequestsGrantIsSavedThroughTheInstalledSaver`, `internal/assistant/catalog.TestAGrantRequestsAnswerIsDrawnInTheEnginesWords`, `internal/api.TestAnAgentsWordsNeverApproveItsGrant`
+- **Enforced-by:**
+  - `internal/agent/builtin.TestAPermissionRequestIsTheEnginesDecision`
+  - `internal/agent/builtin.TestAPermissionIsAnsweredOnlyOnceItsAgentHoldsIt`
+  - `internal/advisor.TestEveryGrantChangesOnlyWhatItNames`
+  - `internal/advisor.TestAGrantThatCannotBeMadeIsRefused`
+  - `internal/advisor.TestEveryAccessKeyIsAnOptionID`
+  - `internal/advisor.TestTheDashboardKnowsAGrantOptionByTheEnginesPrefix`
+  - `internal/agent/builtin.TestAnAccessRequestIsADecisionWhoseOptionIsTheGrant`
+  - `internal/agent/builtin.TestAnAccessRequestNobodyCouldGrantIsRefused`
+  - `internal/agent/builtin.TestNoAuthorsDecisionMayOfferAGrant`
+  - `internal/agent/builtin.TestAGrantIsAnsweredOnlyOnceItsAskerHoldsIt`
+  - `internal/advisor.TestTheAccessCatalogueIsWhatASeatCanHold`
+  - `internal/advisor.TestAGrantHoldsAtItsLevelAndBringsWhatItNeeds`
+  - `internal/github.TestEveryNeedIsAPermissionASeatCanHold`
+  - `internal/agent/builtin.TestRequestAccessOffersWhatASeatCanHoldAndWhereItIsSet`
+  - `internal/agent/builtin.TestChoosingARequestsGrantSavesItBeforeTheAnswer`
+  - `internal/agent/builtin.TestARequestsGrantIsChosenOnlyAtTheAccessWritesProof`
+  - `internal/api/setupapi.TestChoosingARequestsGrantSavesTheGrantItAsked`
+  - `internal/api/setupapi.TestARequestsGrantThatCannotBeSavedWritesNothing`
+  - `internal/engine.TestARequestsGrantIsSavedThroughTheInstalledSaver`
+  - `internal/assistant/catalog.TestAGrantRequestsAnswerIsDrawnInTheEnginesWords`
+  - `internal/api.TestAnAgentsWordsNeverApproveItsGrant`
 - **Tag-status:** unreleased
 
 ## The decision
