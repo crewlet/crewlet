@@ -42,16 +42,22 @@ func Guide() setup.Guide {
 	return setup.Guide{
 		Summary: "Agents use Google Play apps as their own Google identity, with the permissions you give " +
 			"it; what customers see is asked first. No token reaches an agent's box.",
-		Prepare: []setup.Step{
-			googlegrowth.CloudFirst("the Google Play Android Developer and Developer Reporting APIs"),
-			{Text: vendortext.Of(vendortext.W("Invite the company reader below in "),
-				vendortext.UI("Play Console", "Users and permissions").At(usersURL), vendortext.W(" with "),
-				vendortext.UI("View app information"), vendortext.W(" for all apps, and name each account's monthly "+
-					"reports bucket ("), vendortext.UI("Download reports", "Copy Cloud Storage URI"), vendortext.W(")."))},
-			{Text: vendortext.Plain("Turn agents on from the Agents tab, then set up each one's identity there: invite " +
-				"its email in Play Console with the app permissions its level needs, or press Add it for me once a " +
-				"Play Console admin has signed in below. Crewlet checks each agent's access on every pass.")},
-		},
+		Prepare: append(googlegrowth.CloudSteps("Google Play", "the Google Play Android Developer and "+
+			"Developer Reporting APIs"),
+			setup.Step{
+				Title: "Invite the company reader", Where: "Play Console",
+				Text: vendortext.Of(vendortext.W("Invite the company reader below in "),
+					vendortext.UI("Play Console", "Users and permissions").At(usersURL), vendortext.W(" with "),
+					vendortext.UI("View app information"), vendortext.W(" for all apps, and name each account's monthly "+
+						"reports bucket ("), vendortext.UI("Download reports", "Copy Cloud Storage URI"), vendortext.W(")."))},
+			googlegrowth.AgentsOn("Google Play", "Apps"),
+			setup.Step{
+				Title: "Invite each agent's account", Where: "Play Console",
+				Text: vendortext.Plain("Invite the account on the agent's row in Play Console with the app " +
+					"permissions its level needs, or press Add it for me once a Play Console admin has signed in " +
+					"below. Crewlet checks each agent's access on every pass."),
+			},
+		),
 	}
 }
 

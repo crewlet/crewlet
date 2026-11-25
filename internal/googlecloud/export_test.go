@@ -92,3 +92,9 @@ func ProbeWith(
 ) (setup.Verdict, error) {
 	return probeCheck(ctx, company, value, hc, &googleauth.Clock{Now: now, Sleep: sleep})
 }
+
+// The guide's facts that the block and the docs page are held to.
+const (
+	ProjectNumber = projectNumber
+	DocsURL       = docsURL
+)

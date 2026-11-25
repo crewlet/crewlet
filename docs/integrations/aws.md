@@ -31,10 +31,13 @@ Company › Integrations › AWS asks, in order:
 3. **Let agents read IAM**: the option above, off by default.
 4. **See more in Atlas**: optional, off by default. Adds a read-only role for the atlas ([what the atlas reads](#what-the-atlas-reads)); no agent depends on it.
 
-**Save** mints the **sign-in certificate**: a certificate authority whose key Crewlet seals as `AWS_CERTIFICATE_AUTHORITY` and never shows. The form then shows the **CloudShell block**, which carries only the authority's certificate.
+**Connect** mints the **sign-in certificate**: a certificate authority whose key Crewlet seals as `AWS_CERTIFICATE_AUTHORITY` and never shows. The form then shows the **CloudShell block**, which carries only the authority's certificate, with a **Copy** button.
 
-5. In the AWS account agents will work in, open CloudShell in the home Region and paste the block. It writes the template, deploys it with `aws cloudformation deploy` (you need permission to create IAM roles and policies), and prints the stack's one output last.
-6. Paste that last line into **Stack output**, choose **Test connection**, then **Save**.
+5. Copy the block whole with its **Copy** button (a hand selection can drop a line). In the AWS account agents will work in, signed in as an administrator, open CloudShell in the home Region and paste it. It writes the template, deploys it with `aws cloudformation deploy` (you need permission to create IAM roles and policies), and prints the stack's one output last: five ARNs joined by commas, or seven with the Atlas reader.
+   - If it prints `Failed to create/update the stack`, the stack's **Events** tab in CloudFormation says why. Fix that and run the block again; delete a stack left in `ROLLBACK_COMPLETE` first.
+   - Ran it in the wrong account? Delete the `crewlet-<name>` stack there in CloudFormation, which removes everything it made.
+6. Paste that last line into **Stack output**, press **Test connection**, then **Save**. The form closes, and within about a minute the status goes to **Connected**.
+7. **Connected gives no agent access yet.** On the **Agents** tab, turn **On** each agent that should use AWS, choose its **Access** level, then press **Review changes** and **Save and sync** ([giving each agent its own role](#giving-each-agent-its-own-role)).
 
 Running the block again updates the stack in place; that is how new Crewlet policies, a change of Regions, or the atlas's role reach your account. Paste the last line again whenever the block changed what the stack holds. The short name, home Region and atlas choice save on their own while **Stack output** is empty; the form keeps the block drawn from what is saved and says when a change means running it again.
 

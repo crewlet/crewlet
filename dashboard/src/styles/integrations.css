@@ -311,11 +311,53 @@ a.int-feed-what:hover {
   flex-direction: column;
   gap: var(--spacing-1);
 }
-/* A setup step: its sentence, then its grants as a wrapping row of chips. */
+/* A setup step: its title and place, its sentence, its grants as a wrapping
+   row of chips, what shows it worked, and what people hit there. */
 .int-step {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
+}
+/* The title on the number's line, the place under it on every step alike. */
+.int-step-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+}
+.int-step-title {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.int-step-result {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+  color: var(--color-text-secondary);
+}
+/* The mark stands on the result's first line, however many it wraps to. */
+.int-step-result-mark {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 1lh;
+  color: var(--color-feedback-success-ink);
+}
+.int-step-trouble {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.int-step-trouble > li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-0-5, 2px);
+}
+.int-step-sign {
+  font-weight: var(--font-weight-medium);
 }
 .int-step-grants {
   display: flex;
