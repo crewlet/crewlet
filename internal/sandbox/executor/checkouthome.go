@@ -173,8 +173,10 @@ func (h checkoutHome) gate() string {
 	return b.String()
 }
 
-// restore is the shell marking the run ended, so a firing still running
-// claims nothing more (internal/notehelper's endedMarker), putting the home's
+// restore is the shell marking the run ended once no firing holds the
+// state's lock, so a firing that began claims and copies all it will before
+// the copies are removed, and one after claims nothing (internal/notehelper's
+// endedMarker; [checkoutEndedWait]), putting the home's
 // own instruction file back once the harness has stopped ([putBackHome]), and
 // removing the run's copies ([checkoutHome.removeCopies]) and what a firing
 // left in staging ([checkoutHome.staging], [checkoutHome.removeSiblingStaging]),
@@ -184,7 +186,8 @@ func (h checkoutHome) gate() string {
 // before it ran.
 func (h checkoutHome) restore() string {
 	q := shellword.Quote
-	ended := fmt.Sprintf(`[ ! -d %[1]s ] || : > %[1]s/ended`, q(h.state))
+	ended := fmt.Sprintf(`[ ! -d %[1]s ] || flock -w %[2]d %[1]s/lock touch %[1]s/ended 2> /dev/null || : > %[1]s/ended`,
+		q(h.state), checkoutEndedWait)
 	return everyStep(ended, h.putBack(), h.removeCopies(), "rm -rf "+q(h.staging()),
 		h.removeSiblingStaging())
 }
@@ -197,6 +200,12 @@ func (h checkoutHome) removeCopies() string {
 	return fmt.Sprintf(`{ if [ -f %[1]s ]; then while IFS= read -r rl; do case "$rl" in ""|*/*|.|..) ;; *) rm -rf %[2]s/"$rl";; `+
 		`esac; done < %[1]s; fi && rm -f %[1]s; }`, q(h.copied), q(h.skills))
 }
+
+// checkoutEndedWait is the most seconds restore waits for a firing to let go
+// of the state's lock before it marks the run ended all the same: a firing's
+// own bound (codexNestedTimeout, piNestedTimeout), past which its harness has
+// given up on it. A box without flock(1) marks it at once, as before.
+const checkoutEndedWait = codexNestedTimeout
 
 // dropSkipped is the shell removing a skip log no script printed
 // ([checkoutHome.saySkipped]), a killed run's: run by the clear before every
