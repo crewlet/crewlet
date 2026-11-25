@@ -527,12 +527,14 @@ func (d *claudeEvents) Result() sandbox.Result {
 
 // claudeSteerPrefix opens the `system/informational` line a hook of the run's
 // own prints as it hands the model a note or a late call ([ClaudeCode.hookAnswer]):
-// the event that fired it, then the line's own opening (measured on 2.1.263
-// and 2.1.310).
+// the event that fired it, before its system message (measured on 2.1.263,
+// 2.1.310 and 2.1.330).
 var claudeSteerPrefix = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` +
-		claudeEventFinish + `) says: crewlet: `)
+	return regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` + claudeEventFinish + `) says: `)
 })
+
+// claudeHookOpening opens every line the run's own hook says.
+const claudeHookOpening = "crewlet: "
 
 // claudeSteerLine is a [activityline.TagSteer] line: the first line of what the run's own hook
 // said ([claudeSteerSaid]), redacted and bounded as a live line is
@@ -551,11 +553,10 @@ func claudeSteerLine(subtype string, raw json.RawMessage) (string, bool) {
 }
 
 // claudeSteerSaid is what the run's own hook said as it handed the model a
-// note or a late call — the content after the event's opening, AS THE HARNESS
-// RECORDED IT, less the take's token, cut here alone ([withoutTakeToken]) — and
-// false for any other system message. ONE READING for the live transcript
-// ([claudeSteerLine]) and a captured session's ([ReadTranscript]). Neither
-// redaction nor a bound is here, because each applies its own: the live view
+// note or a late call, of the stream's `system/informational` line: after the
+// event's opening, its system message read as the session's record of it is
+// ([claudeHookSaid]); false for any other system message. Neither redaction
+// nor a bound is here, because each reader applies its own: the live view
 // redacts the whole and cuts a line; the session reader redacts and bounds an
 // entry only as it hands it out, so a record before its page is never redacted.
 func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
@@ -566,17 +567,25 @@ func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 	if wireDecode(raw, &content) != nil {
 		return "", false
 	}
-	return claudeSteerContent(content)
-}
-
-// claudeSteerContent is [claudeSteerSaid] of an informational record's content,
-// decoded.
-func claudeSteerContent(content string) (string, bool) {
 	loc := claudeSteerPrefix().FindStringIndex(content)
 	if loc == nil {
 		return "", false
 	}
-	return withoutTakeToken(content[loc[1]:]), true
+	return claudeHookSaid(content[loc[1]:])
+}
+
+// claudeHookSaid is what the run's own hook said, of its system message AS
+// THE HARNESS RECORDED IT (the session's `hook_system_message` content, with
+// no event before it): the words after the hook's opening, less the take's
+// token, cut here alone ([withoutTakeToken]); false where it opens otherwise.
+// ONE READING for the live transcript ([claudeSteerSaid]) and a captured
+// session's ([claudeReading.attachment]).
+func claudeHookSaid(content string) (string, bool) {
+	said, ok := strings.CutPrefix(content, claudeHookOpening)
+	if !ok {
+		return "", false
+	}
+	return withoutTakeToken(said), true
 }
 
 // claudeToolSubject is what one call works on, whole: its subject field

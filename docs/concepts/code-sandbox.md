@@ -2640,13 +2640,14 @@ in an `env` block. The file holds two hooks, nothing else:
   at the end of the batch's last tool result for `claude-sonnet-4-5`; at `Stop`,
   a system reminder in a user message for all three. Each is headed
   `PostToolBatch hook additional context:` or `Stop hook additional context:`.
-  The hook's transcript line reaches only the run's stream, shown in the run's
-  transcript as `[steer] a note from ada reached the run`, never a request.
+  The hook's line never reaches a request: the run's stream shows it live as
+  `[steer] a note from ada reached the run`.
 - **How a person's transcript shows it.** Each note, late call or message a hook
   handed the model reads once, off its firing's `hook_additional_context`
-  record. The copies 2.1.310, 2.1.322 and 2.1.330 write beside it (the record's rendered
-  form, the request's blob, the hook's stdout and, at `Stop`, its summary) read
-  as nothing.
+  record, behind the hook's line, read off the firing's `hook_system_message`
+  record in the main thread less its take's token. The copies 2.1.310, 2.1.322
+  and 2.1.330 write beside it (the record's rendered form, the request's blob,
+  the hook's stdout and, at `Stop`, its summary) read as nothing.
 - **How the session shows a note taken.** The hook's transcript line ends in its
   serve's own token, `[crewlet take <id>]`, which Claude Code records in the
   session's main thread and never sends the model; the live line leaves it out.
