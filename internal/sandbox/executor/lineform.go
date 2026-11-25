@@ -3,7 +3,9 @@ package executor
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
+	"strings"
 )
 
 // A LINE'S FORM ([lineForm]) is how a harness writes a line that its readers
@@ -92,4 +94,51 @@ func (h *lineHead) Read(p []byte) (int, error) {
 		h.head = append(h.head, p[:min(n, room)]...)
 	}
 	return n, err
+}
+
+// namedForm is a form a pack's awk names ([lineFormsAwk]).
+type namedForm struct {
+	name string
+	form lineForm
+}
+
+// lineFormsAwk is awk defining holds(s, f): whether the line s is of the form
+// forms name f, as [lineForm.holds] reads it, byte for byte where the awk
+// runs under LC_ALL=C. A string body is walked a character at a time, a
+// backslash escaping the next, as [jsonBodyEnd] walks it.
+func lineFormsAwk(forms ...namedForm) string {
+	var b strings.Builder
+	b.WriteString(`function hole(s, i, m,   c) {
+  for (; i <= m; i++) { c = substr(s, i, 1); if (c == "\\") i++; else if (c == "\"") return i }
+  return 0 }
+function holds(s, f,   m, i, k, p, at) {
+  m = length(s)
+  if (m > M) { if (W[f]) return 0; m = M }
+  p = P[f, 1]
+  if (length(p) > m || substr(s, 1, length(p)) != p) return 0
+  at = length(p) + 1
+  for (i = 2; i <= N[f]; i++) {
+    k = hole(s, at, m); p = P[f, i]
+    if (!k || k + length(p) - 1 > m || substr(s, k, length(p)) != p) return 0
+    at = k + length(p) }
+  return !W[f] || at == m + 1 }
+`)
+	fmt.Fprintf(&b, "BEGIN { M = %d\n", lineFormMaxBytes)
+	for _, nf := range forms {
+		whole := 0
+		if nf.form.whole {
+			whole = 1
+		}
+		fmt.Fprintf(&b, "  N[%[1]s] = %[2]d; W[%[1]s] = %[3]d\n", awkString(nf.name), len(nf.form.pieces), whole)
+		for i, p := range nf.form.pieces {
+			fmt.Fprintf(&b, "  P[%s, %d] = %s\n", awkString(nf.name), i+1, awkString(p))
+		}
+	}
+	b.WriteString("}\n")
+	return b.String()
+}
+
+// awkString is s as an awk string literal.
+func awkString(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
 }
