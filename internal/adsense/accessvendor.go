@@ -3,8 +3,12 @@ package adsense
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
@@ -71,15 +75,23 @@ func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess
 	if in.Config == nil || !in.Config.Integrations.AdSense.GrowthEnabled() {
 		return nil, fmt.Errorf("adsense: %w: integrations.adsense is off", integration.ErrNotConfigured)
 	}
-	return &accessSession{company: in.Config}, nil
+	return &accessSession{company: in.Config, tokens: in.Tokens}, nil
 }
 
-type accessSession struct{ company *config.Company }
+// accessSession reads the company document, and lists the accounts the
+// company's sign-in reaches with the tokens the engine issues.
+type accessSession struct {
+	company *config.Company
+	tokens  seataccess.IssuedTokens
+}
 
-// Options are the three levels; the accounts are the document's
-// ([accessVendor.Reach]), which [seataccess.ReadOptions] applies.
-func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
-	return seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane)}, nil
+// Options are the three levels and the publisher accounts the company's
+// sign-in lists; the reach is the document's ([accessVendor.Reach]), which
+// [seataccess.ReadOptions] applies.
+func (s *accessSession) Options(ctx context.Context, lane seataccess.Lane) (seataccess.Options, error) {
+	return googlegrowth.GrantOptions(ctx, googlegrowth.Granted{Product: Kind, Lane: lane,
+		Levels: accessVendor{}.FixedLevels(lane), Name: "AdSense", Entries: "publisher accounts",
+		Typed: config.GooglePublisherPattern, List: listAccounts}, s.tokens), nil
 }
 
 // Observe is each seat's setting in the document, which there is nothing
@@ -105,4 +117,38 @@ func (s *accessSession) Observe(_ context.Context, in seataccess.ObserveInput) (
 func (*accessSession) Apply(_ context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	return seataccess.StepResult{}, fmt.Errorf("adsense: no step %s exists for %s: access is the document alone",
 		in.Step.Op, in.Seat.Handle)
+}
+
+// maxAccountPages bounds the accounts listing a picker reads: a sign-in that
+// reaches more is an agency, which connects each client's company.
+const maxAccountPages = 10
+
+// listAccounts is every publisher account the token reaches, by its name.
+func listAccounts(ctx context.Context, in googlegrowth.Lister) ([]googlegrowth.Listed, error) {
+	var out []googlegrowth.Listed
+	token := ""
+	for range maxAccountPages {
+		q := url.Values{"pageSize": {"50"}}
+		if token != "" {
+			q.Set("pageToken", token)
+		}
+		var page struct {
+			Accounts []struct {
+				Name        string `json:"name"`
+				DisplayName string `json:"displayName"`
+			} `json:"accounts"`
+			Next string `json:"nextPageToken"`
+		}
+		if err := in.Send.Do(ctx, http.MethodGet, management+"/accounts?"+q.Encode(), in.Token, nil,
+			&page); err != nil {
+			return nil, err
+		}
+		for _, a := range page.Accounts {
+			out = append(out, googlegrowth.Listed{ID: strings.TrimPrefix(a.Name, "accounts/"), Name: a.DisplayName})
+		}
+		if token = page.Next; token == "" {
+			break
+		}
+	}
+	return out, nil
 }

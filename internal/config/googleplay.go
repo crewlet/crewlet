@@ -51,6 +51,11 @@ type RoleGooglePlay struct {
 // GooglePlayKind is the integration's kind, config key and lane.
 const GooglePlayKind = "google_play"
 
+// GooglePlayPackagePattern is an Android package name: two or more dotted
+// parts, each a letter then letters, digits or underscores (Play's limit is
+// 150); the seat picker offers a typed app by it too.
+const GooglePlayPackagePattern = `^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$`
+
 // Bounds of a block's lists: a company with more apps is a publisher that
 // connects each studio's company, and more developer accounts than this is an
 // agency.
@@ -60,11 +65,7 @@ const (
 )
 
 var (
-	// googlePlayPackage is an Android package name: two or more dotted parts,
-	// each a letter then letters, digits or underscores (Play's limit is 150).
-	googlePlayPackage = sync.OnceValue(func() *regexp.Regexp {
-		return regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$`)
-	})
+	googlePlayPackage = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(GooglePlayPackagePattern) })
 	// googlePlayDeveloper is a developer account's ID: digits.
 	googlePlayDeveloper = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[0-9]{1,25}$`) })
 	// googlePlayBucket is a monthly reports bucket, new or legacy.

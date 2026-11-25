@@ -396,7 +396,8 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 		if issued := seataccess.IssuedCredential(q.Kind, lane, ref.Handle, d, observed); issued != nil {
 			observed.Credential = issued
 		}
-		tool, reason := seataccess.ToolOf(q.Company, ref.Handle, lane, d, observed, lr.Settling, time.Now())
+		now := time.Now()
+		tool, reason := seataccess.ToolOf(q.Company, ref.Handle, lane, d, observed, lr.Settling, now)
 		sa.Lanes[lane] = seataccess.LaneAnswer{
 			Desired: d, Observed: observed, ObservedAt: lr.ObservedAt, Sync: lr.Sync,
 			Plan: nonNilSteps(steps[lane]),
@@ -404,7 +405,7 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 			Administers: seataccess.Administers(offers[lane], d),
 			Box:         seataccess.BoxOf(q.Company, q.Kind, lane, ref.Handle),
 			HandIn:      seataccess.HandInOf(vendor, q.Company, ref, lane, d),
-			Identity:    seataccess.IdentityOf(vendor, q.Company, ref, lane, d, observed, lr.Identity),
+			Identity:    seataccess.IdentityOf(vendor, q.Company, ref, lane, d, observed, lr.Identity, now),
 		}
 	}
 	return sa, nil
@@ -461,6 +462,12 @@ func liveOffer(base, live seataccess.Options) seataccess.Options {
 	return live
 }
 
+// offerInput opens the session an offer is read from, with the engine's
+// issued tokens: a growth lane offers what the company's reader lists.
+func (e *Engine) offerInput(company *config.Company, roster *org.Organization) seataccess.OpenInput {
+	return seataccess.OpenInput{Config: company, Org: roster, Env: e.resolver(), Tokens: seatTokens{engine: e}}
+}
+
 // seatOffers is what each of kind's lanes offers now on company, read live and
 // reused for [optionsTTL] per revision: the Agents tab's pickers and every
 // write's raise ([seataccess.AsksStepUp]) judge by it. A lane the engine does
@@ -491,7 +498,7 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 	var session seataccess.Session
 	openCtx, cancel := context.WithTimeout(ctx, optionsDeadline)
 	defer cancel()
-	open := seataccess.OpenInput{Config: company, Org: roster, Env: e.resolver()}
+	open := e.offerInput(company, roster)
 	if registered && provisioned {
 		open.Reads = e.seatReads(openCtx, kind)
 		var err error
