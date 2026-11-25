@@ -140,9 +140,10 @@ func qwenNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from, b
 	next, at := 0, -1
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), bound)
+	w.passImages()
 	var l qwenNoteLine
 	var sums *qwenSummaries
-	skip := func() error { return w.scan.Skip() }
+	skip := func() error { return w.skip(jsonscan.ObjectStart) }
 	if summary != nil {
 		sums = newQwenSummaries(summary)
 		l.payload = &sums.payload
@@ -250,19 +251,19 @@ func (l *qwenNoteLine) read(w *lineWalk) error {
 			l.handedSet = false
 			ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
 				if name != "parts" {
-					return w.scan.Skip()
+					return w.skip(k)
 				}
 				l.handedSet = false
 				first := true
 				listed, listErr := w.listField(k, func(k jsonscan.Kind) error {
 					took, partErr := w.objectField(k, func(name string, k jsonscan.Kind) error {
 						if name != "text" {
-							return w.scan.Skip()
+							return w.skipMember(name, k)
 						}
 						switch k {
 						case jsonscan.String:
 							if !first {
-								return w.scan.Skip()
+								return w.skip(k)
 							}
 							l.handedSet = true
 							return l.handed.scan(w)
@@ -271,7 +272,7 @@ func (l *qwenNoteLine) read(w *lineWalk) error {
 							return nil
 						}
 						l.whole = false
-						return w.scan.Skip()
+						return w.skip(k)
 					})
 					first = false
 					l.whole = l.whole && took
@@ -281,7 +282,7 @@ func (l *qwenNoteLine) read(w *lineWalk) error {
 				return listErr
 			})
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		l.whole = l.whole && ok
 		return err
@@ -302,10 +303,10 @@ func (l *qwenNoteLine) readKind(w *lineWalk) error {
 			l.subtype, _, err = w.wordField(k)
 		case "systemPayload":
 			if err = l.payload.tee(w); err == nil {
-				err = w.scan.Skip()
+				err = w.skip(k)
 			}
 		default:
-			err = w.scan.Skip()
+			err = w.skip(k)
 		}
 		return err
 	})
@@ -346,7 +347,7 @@ func (p *qwenPreserved) read(w *lineWalk, k jsonscan.Kind) error {
 	p.reset()
 	if p.object = k == jsonscan.ObjectStart; !p.object {
 		p.refused = k != jsonscan.Null
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	if p.last == nil {
 		p.last, p.counts = map[string][]int{}, map[string]int{}
@@ -367,7 +368,7 @@ func (p *qwenPreserved) read(w *lineWalk, k jsonscan.Kind) error {
 			clear(p.last)
 			ok, err = w.listField(k, func(k jsonscan.Kind) error { return p.entry(w, k) })
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		p.refused = p.refused || !ok
 		return err
@@ -389,7 +390,7 @@ func (p *qwenPreserved) entry(w *lineWalk, k jsonscan.Kind) error {
 			ok, err = w.listField(k, func(k jsonscan.Kind) error {
 				took, partErr := w.objectField(k, func(name string, k jsonscan.Kind) error {
 					if name != "text" {
-						return w.scan.Skip()
+						return w.skipMember(name, k)
 					}
 					switch k {
 					case jsonscan.String:
@@ -404,13 +405,13 @@ func (p *qwenPreserved) entry(w *lineWalk, k jsonscan.Kind) error {
 						return nil
 					}
 					p.refused = true
-					return w.scan.Skip()
+					return w.skip(k)
 				})
 				p.refused = p.refused || !took
 				return partErr
 			})
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		p.refused = p.refused || !ok
 		return err
