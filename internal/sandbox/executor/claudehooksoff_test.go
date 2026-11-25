@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -8,17 +9,17 @@ import (
 )
 
 // A HOME OR A REPOSITORY CANNOT SWITCH A CLAUDE CODE RUN'S HOOKS OR SKILLS OFF
-// UNSEEN. 2.1.310 runs none of the run's hooks (notes, skills, bridge guard)
-// where the merged settings leave `disableAllHooks` true, and drops its skills
-// where `enabledPlugins` holds their plugin false or a `Skill` deny names them
+// UNSEEN. 2.1.310 runs none of the run's hooks (notes, skills, checkouts,
+// bridge guard) where the merged settings leave `disableAllHooks` true, and
+// drops its skills where `enabledPlugins` or a `Skill` deny says so
 // (measured); the run overrules neither. So a run starting a hook of the
-// engine's is refused before the harness starts, naming the file and the key,
-// a later set-back-on clearing nothing; it starts where the key is no boolean,
-// the file no JSON, in the home's settings.local.json, nested,
-// allowManagedHooksOnly outside a managed file, other plugins' and skills'
-// switches, and where it starts no hook of the engine's (measured). Mutations,
-// each red: drop the gate; let a later value clear an off; read a string as
-// true; name no file; skip the skills' check; leave the bridge guard ungated.
+// engine's is refused before it starts, naming file and key, a later
+// set-back-on clearing nothing, but one whose only hook would be its
+// checkouts' starts without it, saying so; it starts where the key is no
+// boolean, the file no JSON, in the home's settings.local.json, nested, or
+// allowManagedHooksOnly outside a managed file (measured). Red: drop the gate;
+// let a later value clear an off; read a string as true; name no file; skip
+// the skills' check; refuse the checkouts' alone; leave the guard ungated.
 func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const off = `{"disableAllHooks": true}`
@@ -28,8 +29,8 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 	bridged := sandbox.RunRequest{Brief: "go", MCPServers: map[string]sandbox.MCPServer{
 		"crewlet": {Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:7/mcp/tok", AlwaysLoaded: true}}}
 	for name, tc := range map[string]struct {
-		release string
-		req     sandbox.RunRequest
+		release, machine string
+		req              sandbox.RunRequest
 		switchOffCase
 	}{
 		"nothing switches them off": {req: skills},
@@ -43,6 +44,10 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 		"the home's settings switch them off for the bridge's guard": {req: bridged, switchOffCase: switchOffCase{
 			plant: map[string]string{".claude/settings.json": off},
 			fails: []string{said, "bridge guard", "/.claude/settings.json sets disableAllHooks to true"}}},
+		// No note helper build, so no checkouts' hook: the guard alone asks.
+		"the home's settings switch them off for the bridge's guard, the helper unbuilt": {machine: "riscv64",
+			req: bridged, switchOffCase: switchOffCase{plant: map[string]string{".claude/settings.json": off},
+				fails: []string{said, "bridge guard", "/.claude/settings.json sets disableAllHooks to true"}}},
 		"the repository's local settings switch them off": {req: skills, switchOffCase: switchOffCase{
 			plant: map[string]string{"workspace/.claude/settings.local.json": off},
 			fails: []string{said, "/workspace/.claude/settings.local.json sets disableAllHooks"}}},
@@ -81,8 +86,11 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 		"switches of other plugins and skills": {req: skills, switchOffCase: switchOffCase{
 			plant: map[string]string{".claude/settings.json": `{"enabledPlugins": {"crewlet": false, "x@y": false}, ` +
 				`"permissions": {"deny": ["Skill(other)", "Bash", "Read(crewlet:getting-unstuck)"]}}`}}},
-		"a run with no hook of the engine's": {req: sandbox.RunRequest{Brief: "go"}, switchOffCase: switchOffCase{
-			plant: map[string]string{".claude/settings.json": off}}},
+		"a run whose only hook would be its checkouts' starts without it": {req: sandbox.RunRequest{Brief: "go"},
+			switchOffCase: switchOffCase{plant: map[string]string{".claude/settings.json": off},
+				says: []string{"not handed their skills: ", "/.claude/settings.json sets disableAllHooks to true, so"}}},
+		"a run with no hook of the engine's, below the checkouts' floor": {release: "2.1.309",
+			req: sandbox.RunRequest{Brief: "go"}, switchOffCase: switchOffCase{plant: map[string]string{".claude/settings.json": off}}},
 		"a release older than every hook's floor": {release: "2.1.117", req: skills, switchOffCase: switchOffCase{
 			plant: map[string]string{".claude/settings.json": off}}},
 	} {
@@ -93,6 +101,9 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 				release = "2.1.330"
 			}
 			runner, box := realBox(t)
+			if tc.machine != "" {
+				box = machineBox{Sandbox: box, machine: tc.machine}
+			}
 			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/claude", "#!/bin/sh\n"+
 				`case "$1" in --version) echo '`+release+` (Claude Code)'; exit 0;; esac`+"\ncat > /dev/null\n"+
 				`echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'`+"\n")
@@ -101,4 +112,19 @@ func TestClaudeCodesHooksCannotBeSwitchedOffUnseen(t *testing.T) {
 			checkSwitchOff(t, box, res, tc.switchOffCase)
 		})
 	}
+}
+
+// machineBox is a box whose `uname -m` answers machine, so a launch takes it
+// for a machine the note helper has no build for.
+type machineBox struct {
+	sandbox.Sandbox
+	machine string
+}
+
+// Exec answers `uname -m` with b's machine and runs the rest in the box.
+func (b machineBox) Exec(ctx context.Context, cmd string, opts sandbox.ExecOptions) (sandbox.ExecResult, error) {
+	if cmd == "uname -m" {
+		return sandbox.ExecResult{Stdout: b.machine + "\n"}, nil
+	}
+	return b.Sandbox.Exec(ctx, cmd, opts)
 }
