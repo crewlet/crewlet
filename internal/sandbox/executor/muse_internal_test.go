@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -728,6 +729,38 @@ func TestAMuseServerNameStaysWholeUpTo19Characters(t *testing.T) {
 	for _, name := range []string{readable, long} {
 		if _, err := box.ReadFile(t.Context(), "/s/"+name+"-"+nonce+".json"); err != nil {
 			t.Errorf("the server %s is not written under its name and the run's suffix: %v", name, err)
+		}
+	}
+}
+
+// A BOX WITH NO NOTE HELPER BUILD HAS NO NESTED HOOK TO REFUSE FOR: a run with
+// neither notes nor skill loads whose plugin the home disabled starts there,
+// its script leaving the plugin alone ([Paths.MusePluginOff]), while a box
+// that holds the helper refuses it, naming the hook a cloned checkout needs.
+//
+// Mutation: refuse whatever the box holds, or never for the nested hook.
+func TestAMuseRunIsRefusedForItsNestedHookOnlyWhereTheBoxHoldsIt(t *testing.T) {
+	t.Parallel()
+	const disabled = `{"version":1,"plugins":{"crewlet-notes":{"enabled":false}}}`
+	for _, nested := range []bool{false, true} {
+		box := sandbox.NewFakeSandbox("b")
+		var marked bool
+		p := PathsFor(box)
+		box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+			if strings.Contains(cmd, ": > "+shellword.Quote(p.MusePluginOff())) {
+				marked = true
+			}
+			if strings.Contains(cmd, "installed.json") {
+				return sandbox.ExecResult{Stdout: "read\n" + disabled}, nil
+			}
+			return sandbox.ExecResult{}, nil
+		}
+		err := museSwitchedOff(t.Context(), box, sandbox.RunRequest{Brief: "x"}, p, nested)
+		if refused := err != nil && strings.Contains(err.Error(), "a checkout cloned during it"); refused != nested {
+			t.Errorf("nested hook %v: refused %v (%v)", nested, refused, err)
+		}
+		if !marked {
+			t.Errorf("nested hook %v: the plugin was not marked off for the script to leave alone", nested)
 		}
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // museRulesNames is the rules file Muse Code 1.4.25 loads from a directory a
@@ -107,14 +106,6 @@ const museNestedHookID = "posttooluse-checkouts"
 // one-shot `muse-nested` adapter, reading the state checkout-launch wrote.
 func museNestedCommand(paths Paths) []string {
 	return []string{paths.MuseNoteHelper(), "-adapter", "muse-nested", "-config", paths.MuseCheckouts() + "/nested.json"}
-}
-
-// museNestedOff is the line the script says where the home switched the
-// notes plugin off and the run, needing it for nothing else, starts without
-// it: the hook that hands a repository cloned during the run is in it.
-func museNestedOff(paths Paths) string {
-	return fmt.Sprintf(`[ ! -e %s ] || [ ! -f %s ] || echo "crewlet: the box home switched the run's notes plugin off, so a repository cloned during the run is not handed its instructions and skills" >&2`,
-		shellword.Quote(paths.MusePluginOff()), shellword.Quote(paths.MuseNoteHelper()))
 }
 
 // MuseCheckouts is the run's checkout state ([museCheckoutHome]): the

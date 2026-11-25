@@ -175,7 +175,6 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	b.WriteString(museWiring(paths))
 	// THE CHECKOUTS BELOW THE START DIRECTORY ([museCheckoutHome]), once the
 	// plugin whose hook hands a later one is installed.
-	line(`%s`, museNestedOff(paths))
 	line(`mkdir -p %s %s || exit 1`, q(paths.MuseConfig()), q(paths.MuseSkills()))
 	b.WriteString(home.gate())
 	before, after := museChildUsage(paths)
@@ -637,17 +636,17 @@ func museMergeSystem(ctx context.Context, box sandbox.Sandbox, paths Paths, syst
 }
 
 // museSwitchedOff refuses a run where the box home switches off what the run
-// brings of its own, each with no word otherwise (measured on 1.4.25): its
-// notes plugin, where it has one, by the settings' `plugins.activation` "off",
-// a disable recorded in installed.json ([Paths.MuseInstalled]), a reject
-// recorded as a hook's runtime capability, or an installed.json Muse cannot
-// read (it then loads no plugin); a seat skill, by `skills.activation.user`
-// "off" on its file. The plugin's records are read on every run, before the
-// script's remove and install, which would reset them: a run with no use for
-// the plugin is not refused, but its script leaves the plugin alone
-// ([Paths.MusePluginOff]); nothing is switched back on. Settings that do not
-// read are Muse's to refuse, which it does loudly.
-func museSwitchedOff(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
+// brings of its own, each silently in 1.4.25 (measured): its plugin, by the
+// settings' `plugins.activation` "off", a disable in installed.json
+// ([Paths.MuseInstalled]), a hook's reject recorded as a runtime capability,
+// or an installed.json Muse cannot read (no plugin loads); a seat skill, by
+// `skills.activation.user` "off" on its file. The plugin carries the nested
+// hook wherever the box holds the helper (nested), refused off as Codex's is
+// (codexHooksRefusal). The records are read before the script's remove and
+// install, which would reset them; a run with no use for the plugin is not
+// refused, its script leaving it alone ([Paths.MusePluginOff]). Settings that
+// do not read are Muse's to refuse, loudly.
+func museSwitchedOff(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths, nested bool) error {
 	path := paths.MuseSettings()
 	raw, err := box.ReadFile(ctx, path)
 	if err != nil {
@@ -687,7 +686,7 @@ func museSwitchedOff(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRe
 		return err
 	}
 	var said []string
-	if req.Steer.Set() || req.SkillLoads.Set() {
+	if req.Steer.Set() || req.SkillLoads.Set() || nested {
 		said = off
 	}
 	for _, s := range req.Skills {
@@ -700,10 +699,11 @@ func museSwitchedOff(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRe
 	if len(said) == 0 {
 		return nil
 	}
-	return fmt.Errorf("executor: the box home switches off what the run brings of its own, which Muse Code "+
-		"would then go without unseen, and the run never switches back on what a person switched off: %s; "+
-		"undo that there (`muse plugins enable` or `approve`, `muse skills enable`), or run without notes, "+
-		"skill loads and skills", strings.Join(said, "; "))
+	return fmt.Errorf("executor: the box home switches off what the run brings of its own (its plugin carries "+
+		"its notes, its skill loads and the hook that hands a checkout cloned during it its instructions and "+
+		"skills), which Muse Code would then go without unseen, and the run never switches back on what a "+
+		"person switched off: %s; undo that there (`muse plugins enable` or `approve`, `muse skills enable`)",
+		strings.Join(said, "; "))
 }
 
 // museInstalledOff is what installed.json ([Paths.MuseInstalled]) says of the
@@ -896,7 +896,17 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			"at most %d (run.system_prompt_append): shorten the seat's system prompt, its policies or its "+
 			"memory", n, museSystemMax)
 	}
-	if err := museSwitchedOff(ctx, box, req, paths); err != nil {
+	// THE NOTE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR, whose nested
+	// hook hands a checkout cloned during the run ([museNestedCommand]); a box
+	// with none starts without it, unless notes or loads need the helper.
+	nested := true
+	if err := writeNoteHelper(ctx, box, paths.MuseNoteHelper()); errors.Is(err, errNoHelperBuild) &&
+		!req.Steer.Set() && !req.SkillLoads.Set() {
+		nested = false
+	} else if err != nil {
+		return "", err
+	}
+	if err := museSwitchedOff(ctx, box, req, paths, nested); err != nil {
 		return "", err
 	}
 	notes, loads := req.Steer.Set(), req.SkillLoads.Set()
@@ -918,7 +928,7 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err := writeMuseSkills(ctx, box, req.Skills, paths); err != nil {
 		return "", err
 	}
-	if err := writeMuseCheckouts(ctx, box, req, paths); err != nil {
+	if err := writeMuseCheckouts(ctx, box, req, paths, nested); err != nil {
 		return "", err
 	}
 	if f := freshSessionWiring(req, session); f != nil {
@@ -946,21 +956,19 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	return paths.MuseSettings(), nil
 }
 
-// writeMuseCheckouts writes what a run's plugin and its checkouts need: the
-// note helper's build for the box's machine ([writeNoteHelper]) where one
-// exists, which a run with notes or skill loads needs; the checkouts' launch
-// config and the foreign rules Muse would load in the home file's place
-// ([museCheckoutHome]); the take config where the run has notes or loads; and
-// the plugin ([musePluginManifest]) where it has any hook, the nested one
-// wherever the box holds the helper. A box with none starts without the
-// checkouts, its gate saying so.
-func writeMuseCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
+// writeMuseCheckouts writes what a run's plugin and its checkouts need, the
+// note helper written already: the checkouts' launch config and the foreign
+// rules Muse would load in the home file's place ([museCheckoutHome]); the
+// take config where the run has notes or loads; and the plugin
+// ([musePluginManifest]) where it has any hook, the nested one where the box
+// holds the helper (nested). A box with none starts without the checkouts,
+// its gate saying so.
+func writeMuseCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths,
+	hooked bool) error {
 	notes, loads := req.Steer.Set(), req.SkillLoads.Set()
 	var nested []string
-	if err := writeNoteHelper(ctx, box, paths.MuseNoteHelper()); err == nil {
+	if hooked {
 		nested = museNestedCommand(paths)
-	} else if !errors.Is(err, errNoHelperBuild) || notes || loads {
-		return err
 	}
 	launch := museCheckoutHome(paths).launchConfig(museCheckouts(paths), req.ReportedRepos)
 	if err := box.WriteFile(ctx, paths.MuseCheckoutLaunch(), launch); err != nil {
