@@ -380,7 +380,8 @@ func TestAHermesRunsNotesFollowItsSessionIntoACompactionsChild(t *testing.T) {
 // hermesNestedProbe registers the plugin with a stand-in of Hermes's plugin
 // context and hook bound (argv[3] seconds), settings argv[2], and fires its
 // transform_tool_result for the run's own session after its turn starts, once
-// for each pause in argv[4] (seconds to wait first), printing the results.
+// for each pause in argv[4] (seconds to wait first), printing the results and
+// the roots it started a render of (a render's own write may come after exit).
 const hermesNestedProbe = `import importlib.util, json, os, sys, time
 os.environ["CREWLET_HERMES_PLUGIN"] = sys.argv[2]
 stand = os.path.join(os.path.dirname(sys.argv[2]), "py")
@@ -402,7 +403,7 @@ out = []
 for pause in json.loads(sys.argv[4]):
     time.sleep(pause)
     out.append(hooks["transform_tool_result"](session_id="main", tool_name="terminal", result="cloned"))
-print(json.dumps(out))
+print(json.dumps({"results": out, "rendering": sorted(m._renders)}))
 `
 
 // HERMES'S RENDER OF A LATER CHECKOUT IS BOUNDED, NEVER STARTED TWICE, AND
@@ -463,12 +464,18 @@ func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 			if err != nil {
 				t.Fatalf("the plugin's hook: %v", err)
 			}
-			var got []*string
-			if err = json.Unmarshal(out, &got); err != nil {
+			var got struct {
+				Results   []*string
+				Rendering []string
+			}
+			if err = json.Unmarshal(out, &got); err != nil || len(got.Results) != len(c.want) {
 				t.Fatalf("the probe printed %q: %v", out, err)
 			}
+			if started := len(got.Rendering) > 0; started != (c.starts > 0) {
+				t.Errorf("a render was started: %t, want %t", started, c.starts > 0)
+			}
 			for i, want := range c.want {
-				if g := deref(got[i]); g != want {
+				if g := deref(got.Results[i]); g != want {
 					t.Errorf("firing %d: the result became %q, want %q", i+1, g, want)
 				}
 			}
