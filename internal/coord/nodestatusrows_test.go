@@ -68,7 +68,7 @@ func widestRecord(unlisted int) coord.NodeStatusRecord {
 	}
 	for range 4 * coord.MaxModelLimits {
 		model.Limits = append(model.Limits, coord.ModelLimit{Window: long, Hours: math.MaxInt, Model: long,
-			State: long, Used: &used, ResetsAt: widestInstant, Seen: widestInstant})
+			State: long, Used: &used, ResetsAt: widestInstant, Seen: widestInstant, Read: true})
 	}
 	growth := &coord.GrowthSignals{}
 	for range 4 * coord.MaxGrowthSignals {

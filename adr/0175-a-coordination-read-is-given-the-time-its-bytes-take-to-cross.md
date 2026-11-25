@@ -80,6 +80,7 @@ one deciding none its arrival (the reply at the floor in brackets):
 | `access_review` | `coord.MaxAccessReviewBytes`, 40 KiB | deciding (1.6 s) |
 | `seat_access` | `coord.MaxSeatAccessBytes`, 256 KiB | deciding (10.0 s) |
 | `home_board` | `coord.MaxHomeBoardRecordBytes`, the board and 256 bytes | deciding (20.1 s) |
+| `assistant_instructions` | `coord.MaxAssistantInstructionsRecordBytes`, the instructions and 256 bytes | deciding (0.3 s) |
 | `llm_check` | `coord.MaxModelCheckBytes`, its answer and 4 KiB | deciding (2.7 s) |
 | `mcp_oauth`, `integration_grant` | `coord.MaxOAuthGrantBytes`, 208 KiB | deciding (8.2 s) |
 | `mcp_sign_in`, `integration_sign_in` | `coord.MaxOAuthSignInBytes`, its sealed half and 8 KiB | deciding (2.2 s) |
