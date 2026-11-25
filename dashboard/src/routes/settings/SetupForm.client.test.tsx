@@ -36,8 +36,9 @@ function analytics(
       text: [{ text: "Connect Google Cloud first; no project needs preparing." }],
       needs: "google_cloud",
       connected: over.connected ?? false,
+      done: false,
     },
-    { text: [{ text: "Add the company reader below to each property." }] },
+    { text: [{ text: "Add the company reader below to each property." }], done: false },
   ];
   return {
     key: "google_analytics",

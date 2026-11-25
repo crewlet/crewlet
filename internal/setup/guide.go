@@ -38,7 +38,7 @@ type Step struct {
 
 	// Done is whether the company is past this step, which setupapi answers
 	// from its setup state ([MarkDone]).
-	Done bool `json:"done,omitempty"`
+	Done bool `json:"done"`
 }
 
 // MarkDone marks each of steps done from reqs, the state they are answered

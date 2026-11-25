@@ -676,6 +676,7 @@ function drawOpen(
                 href,
               },
               permitted: true,
+              asked: false,
             },
           },
         }}
