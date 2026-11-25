@@ -537,8 +537,11 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// script's wait on it), the loop stopped, the login exported once more,
 	// the server stopped. The EXIT trap is cleared too, since quit did all it
 	// would: left set, `exit` ran its stops again over stopped processes.
-	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; unbound; end "$harness"; harness=; unsync; [ -z "$imported" ] || keep quit %s --standalone; stop; exit "$1"; }`, next)
-	line(`trap 'unsync; stop' EXIT`)
+	// THE CHECKOUTS' END ([openCodeCheckoutsEnd]) once the server has stopped,
+	// on every end: a teardown's signal, an exit before the run, and its own.
+	line(`ocput() { %s; }`, openCodeCheckoutsEnd(paths))
+	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; unbound; end "$harness"; harness=; unsync; [ -z "$imported" ] || keep quit %s --standalone; stop; ocput; exit "$1"; }`, next)
+	line(`trap 'unsync; stop; ocput' EXIT`)
 	line(`trap 'quit 143' TERM; trap 'quit 130' INT; trap 'quit 129' HUP`)
 	b.WriteString(openCodeSessionGate(session, paths, req.FreshWiring != nil))
 	// THE RECORD, before the server and the run, so a run killed or ended
@@ -553,18 +556,18 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// ([OpenCode.Pack]).
 	line(`endbefore() { endedas=before; %s; exit 143; }`, strings.TrimSuffix(recordEnded(paths), "\n"))
 	line(`[ -z "$endasked" ] || endbefore`)
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([openCodeCheckoutHome]), before
+	// the server that reads their sections and skills starts.
+	b.WriteString(openCodeCheckoutsGate(paths))
 
 	// ON THE SERVER ALONE: it runs the session, so only it reads the run's
 	// configuration, as OPENCODE_CONFIG_CONTENT, which OpenCode ranks above a
-	// repository's opencode.json and .opencode/, and, for a run wired to its
-	// notes, the session its notes plugin admits them to. The client and the
-	// `api` calls, the login's import among them, are answered by it.
-	steered := ""
-	if req.Steer.Set() {
-		steered = `CREWLET_STEER_SESSION="$sid" `
-	}
-	line(`OPENCODE_CONFIG_CONTENT="$config" %sopencode serve --hostname 127.0.0.1 --port 0 < /dev/null > %s 2>&1 &`,
-		steered, srv)
+	// repository's opencode.json and .opencode/, and the run's session, which
+	// its notes plugin admits notes to and its checkouts plugin hands
+	// checkouts in. The client and the `api` calls, the login's import among
+	// them, are answered by it.
+	line(`OPENCODE_CONFIG_CONTENT="$config" CREWLET_RUN_SESSION="$sid" opencode serve --hostname 127.0.0.1 --port 0 < /dev/null > %s 2>&1 &`,
+		srv)
 	line(`spid=$!`)
 	line(`deadline=$(( $(%s) + %d ))`, times.clock, int(times.listen.Seconds()))
 	line(`until grep -q '^server listening on ' %s 2> /dev/null && grep -q '^server password ' %s 2> /dev/null; do`, srv, srv)
@@ -654,7 +657,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	b.WriteString(openCodeContext(paths, times))
 	line(`unsync`)
 	line(`[ -z "$imported" ] || keep last %s --server "$url"`, next)
-	line(`stop; trap - EXIT TERM INT HUP`)
+	line(`stop; ocput; trap - EXIT TERM INT HUP`)
 	line(`exit "$code"`)
 	return b.String()
 }
@@ -1384,12 +1387,14 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	// THE RUN'S OWN SKILLS, in a directory its `skills` names (an entry
 	// OpenCode adds to every other document's), and the plugin reporting each
 	// load to the bridge, with the skill route as its one option
-	// ([writeOpenCodeSkills], opencode_skills.js).
+	// ([writeOpenCodeSkills], opencode_skills.js). The checkouts' skills in a
+	// directory of their own beside them ([openCodeCheckoutHome]).
+	skills := []string{paths.OpenCodeCheckoutSkills()}
 	if len(req.Skills) > 0 {
 		if err := writeOpenCodeSkills(ctx, box, req.Skills, paths); err != nil {
 			return "", err
 		}
-		cfg["skills"] = []string{paths.OpenCodeSkills()}
+		skills = append([]string{paths.OpenCodeSkills()}, skills...)
 		if err := box.WriteFile(ctx, paths.OpenCodeSkillsPlugin()+"/"+openCodeSteerEntry, openCodeSkillsPlugin); err != nil {
 			return "", fmt.Errorf("executor: writing OpenCode's skill-load plugin: %w", err)
 		}
@@ -1397,6 +1402,17 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 			"package": paths.OpenCodeSkillsPlugin(),
 			"options": map[string]string{"url": wired.skills},
 		})
+	}
+	cfg["skills"] = skills
+	// THE CHECKOUTS PLUGIN, where the box holds the helper and no document
+	// keeps it from loading, which then refuses nothing ([writeOpenCodeCheckouts]).
+	checkouts, checkoutsErr := writeOpenCodeCheckouts(ctx, box, req, paths,
+		openCodePluginStopped(docs, paths.OpenCodeCheckoutsPlugin()))
+	if checkoutsErr != nil {
+		return "", checkoutsErr
+	}
+	if checkouts != nil {
+		plugins = append(plugins, checkouts)
 	}
 	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
 	// host have none: their plugins taken out, which on 2.3.2 left webfetch
@@ -1437,17 +1453,21 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	// operator's, in a directory the image decides; rewritten every run, so a
 	// reused box carries no old entry. ABSOLUTE, since a relative entry is
 	// matched walking up from the working directory. TOLD OF NOTES on a run
-	// wired to them ([withNoteInstruction]).
+	// wired to them ([withNoteInstruction]). The checkouts' sections after
+	// it, a file OpenCode skips while the gate has written none
+	// ([openCodeCheckoutHome]).
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, o.NoteInstruction())
 	}
+	instructions := []string{paths.OpenCodeCheckoutSections()}
 	if system != "" {
 		if err := box.WriteFile(ctx, paths.System(), []byte(system)); err != nil {
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
-		cfg["instructions"] = []string{paths.System()}
+		instructions = append([]string{paths.System()}, instructions...)
 	}
+	cfg["instructions"] = instructions
 	blob, err := openCodeJSON(cfg)
 	if err != nil {
 		return "", err
@@ -2294,5 +2314,5 @@ func (OpenCode) artifactFiles(p Paths) []string {
 // own.
 func (OpenCode) artifactDirs(p Paths) []string {
 	return []string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
-		p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin()}
+		p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin(), p.OpenCodeCheckouts(), p.OpenCodeCheckoutsPlugin()}
 }

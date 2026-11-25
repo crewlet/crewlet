@@ -60,7 +60,7 @@
 // cancels its leftovers before it starts (openCodeStaleSteers), so the record
 // alone holds the note and whatever reads the turn next reads it once. An execution OpenCode starts itself
 // afterwards opens the gate again. The session is the one the
-// run's script names, handed over as CREWLET_STEER_SESSION; another session
+// run's script names, handed over as CREWLET_RUN_SESSION; another session
 // of the server's — a subagent's — is never read from or written to.
 //
 // THE ENGINE IS ASKED, NEVER WAITED FOR. setup only registers and returns:
@@ -126,7 +126,7 @@ export default {
   id: "crewlet.steer",
   async setup(ctx) {
     const url = typeof ctx?.options?.url === "string" ? ctx.options.url : ""
-    const session = globalThis.process?.env?.CREWLET_STEER_SESSION ?? ""
+    const session = globalThis.process?.env?.CREWLET_RUN_SESSION ?? ""
     // A run its launch wired to no notes — or one whose reference OpenCode
     // read as empty — has nothing to poll.
     if (url === "" || session === "") return undefined

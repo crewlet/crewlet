@@ -3,6 +3,7 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -15,11 +16,12 @@ import (
 // directory") keeps them: the helper and its state, the launch config
 // ([checkoutSpec]), the home instruction file the harness reads (agents: the
 // first of its candidates that exists, else the first, as a harness reading
-// one file of several names finds it), the home's own copy of it held beside
-// the run while it runs (held), the file the helper writes the checkouts'
-// sections into (sections), and the skills directory they are copied into,
-// with the list of copies the next run removes. A copy is built in
-// state/staging ([checkoutHome.staging]).
+// one file of several names finds it; none where the harness reads sections
+// itself, named in its run's configuration), the home's own copy of it held
+// beside the run while it runs (held), the file the helper writes the
+// checkouts' sections into (sections), and the skills directory they are
+// copied into, with the list of copies the next run removes. A copy is built
+// in state/staging ([checkoutHome.staging]).
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
@@ -71,16 +73,21 @@ type checkoutSpec struct {
 // checkoutSkillDir is a checkout's skill directory as the helper reads it:
 // Dir, below the checkout's root, whose skills are the directories directly
 // in it, written as a string; or, Recursive, every one a walk of it reaches,
-// written as {"dir": ..., "recursive": true}.
+// no deeper than Depth directories below Dir where Depth is set, written as
+// {"dir": ..., "recursive": true[, "depth": n]}.
 type checkoutSkillDir struct {
 	Dir       string
 	Recursive bool
+	Depth     int
 }
 
 // MarshalJSON writes d in the helper's shape.
 func (d checkoutSkillDir) MarshalJSON() ([]byte, error) {
 	if !d.Recursive {
 		return json.Marshal(d.Dir)
+	}
+	if d.Depth > 0 {
+		return json.Marshal(map[string]any{"dir": d.Dir, "recursive": true, "depth": d.Depth})
 	}
 	return json.Marshal(map[string]any{"dir": d.Dir, "recursive": true})
 }
@@ -149,7 +156,8 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 // leading nowhere set aside whole, [heldLink]), the copies an earlier run
 // listed and the state with its staging removed, checkout-launch run, and the
 // checkouts' sections written after the home's own through a link as the home
-// keeps the file, which is left untouched where they hand nothing.
+// keeps the file, which is left untouched where they hand nothing. With no
+// home file (agents) only the sections are written, for the harness to read.
 func (h checkoutHome) gate() string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -160,7 +168,9 @@ func (h checkoutHome) gate() string {
 	}
 	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; rq=%s; hk=`, q(h.state), q(h.helper), q(h.skills), ra,
 		q(h.held), q(h.copied), q(h.sections))
-	line(`%s || exit 1`, h.putBack())
+	if len(h.agents) > 0 {
+		line(`%s || exit 1`, h.putBack())
+	}
 	if len(h.agents) > 1 {
 		// THE FILE THE HARNESS READS, named before it is held, so a run killed
 		// past here is put back by the next ([checkoutHome.putBack]).
@@ -172,8 +182,10 @@ func (h checkoutHome) gate() string {
 			strings.Join(words, " "), q(h.agents[0]))
 		line(`printf '%%s\n' "$ra" > "$rha%s" || exit 1`, heldLive)
 	}
-	line(`if [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
-		`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
+	if len(h.agents) > 0 {
+		line(`if [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
+			`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
+	}
 	line(`%s || exit 1`, h.removeCopies())
 	line(`%s`, h.removeSiblingStaging())
 	line(`: > "$rw" && rm -rf "$rr" "$rq" && mkdir -p "$rr" || exit 1`)
@@ -185,7 +197,9 @@ func (h checkoutHome) gate() string {
 	line(`else`)
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
 	line(`fi`)
-	line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
+	if len(h.agents) > 0 {
+		line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
+	}
 	return b.String()
 }
 
@@ -193,7 +207,8 @@ func (h checkoutHome) gate() string {
 // state's lock, so a firing that began claims and copies all it will before
 // the copies are removed, and one after claims nothing (internal/notehelper's
 // endedMarker; [checkoutEndedWait]), putting the home's
-// own instruction file back once the harness has stopped ([putBackHome]), and
+// own instruction file back once the harness has stopped, where the run holds
+// one ([putBackHome]), and
 // removing the run's copies ([checkoutHome.removeCopies]) and what a firing
 // left in staging ([checkoutHome.staging], [checkoutHome.removeSiblingStaging]),
 // so no repository's skill stays in the home's skills past its run, each step
@@ -204,8 +219,11 @@ func (h checkoutHome) restore() string {
 	q := shellword.Quote
 	ended := fmt.Sprintf(`[ ! -d %[1]s ] || flock -w %[2]d %[1]s/lock touch %[1]s/ended 2> /dev/null || : > %[1]s/ended`,
 		q(h.state), checkoutEndedWait)
-	return everyStep(ended, h.putBack(), h.removeCopies(), "rm -rf "+q(h.staging()),
-		h.removeSiblingStaging())
+	steps := []string{ended, h.removeCopies(), "rm -rf " + q(h.staging()), h.removeSiblingStaging()}
+	if len(h.agents) > 0 {
+		steps = slices.Insert(steps, 1, h.putBack())
+	}
+	return everyStep(steps...)
 }
 
 // removeCopies is the shell removing from the skills directory every copy

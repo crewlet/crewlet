@@ -37,7 +37,7 @@ d="$FAKE_DIR"
 echo "$*" >> "$d/calls"
 printf '%s|%s|%s %s\n' "${OPENCODE_DISABLE_MODELS_FETCH-}" "${OPENCODE_DISABLE_AUTOUPDATE-}" "$1" "$2" >> "$d/pinned"
 printf '%s|%s %s\n' "${OPENCODE_CONFIG_CONTENT+handed}" "$1" "$2" >> "$d/configured"
-printf '%s|%s %s\n' "${CREWLET_STEER_SESSION-}" "$1" "$2" >> "$d/steered"
+printf '%s|%s %s\n' "${CREWLET_RUN_SESSION-}" "$1" "$2" >> "$d/session-handed"
 authed() {
   [ "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" = "$(cat "$d/server-password" 2> /dev/null)" ] && return 0
   echo "Error: Server at http://127.0.0.1:4242 rejected the password" >&2; exit 1
@@ -846,12 +846,13 @@ func TestOnlyTheServerIsHandedTheConfiguration(t *testing.T) {
 	})
 }
 
-// ONLY THE SERVER IS HANDED THE RUN'S SESSION, and only for a run wired to
-// notes: the notes plugin admits notes to the session CREWLET_STEER_SESSION
-// names, the one the client is pointed at with --session.
+// ONLY THE SERVER IS HANDED THE RUN'S SESSION, wired to notes or not: the
+// notes plugin admits notes to the session CREWLET_RUN_SESSION names, the one
+// the client is pointed at with --session, and the checkouts plugin hands
+// checkouts in it alone.
 //
-// Mutation: export the variable for the whole script, or hand it the run's
-// server whatever its wiring.
+// Mutation: export the variable for the whole script, or hand it the server
+// only for a run wired to notes.
 func TestOnlyTheServerIsHandedTheRunsSession(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -871,7 +872,7 @@ func TestOnlyTheServerIsHandedTheRunsSession(t *testing.T) {
 			_, session, _ := strings.Cut(run.calls[at], "--session ")
 			session, _, _ = strings.Cut(session, " ")
 			served := false
-			for _, line := range strings.Split(strings.TrimSpace(readIn(t, run.dir, "steered")), "\n") {
+			for _, line := range strings.Split(strings.TrimSpace(readIn(t, run.dir, "session-handed")), "\n") {
 				handed, call, _ := strings.Cut(line, "|")
 				if !strings.HasPrefix(call, "serve ") {
 					if handed != "" {
@@ -880,11 +881,9 @@ func TestOnlyTheServerIsHandedTheRunsSession(t *testing.T) {
 					continue
 				}
 				served = true
-				switch {
-				case wired && handed != session:
-					t.Errorf("the server was handed the session %q, want the one the run names, %q", handed, session)
-				case !wired && handed != "":
-					t.Errorf("a run wired to no notes handed its server the session %q", handed)
+				if handed != session {
+					t.Errorf("wired %v: the server was handed the session %q, want the one the run names, %q",
+						wired, handed, session)
 				}
 			}
 			if !served {
