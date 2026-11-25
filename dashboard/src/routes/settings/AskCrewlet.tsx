@@ -5,6 +5,9 @@
  * their seat (`save_assistant_instructions`) and applied on top. Both shape
  * tone, length and layout only; what Ask Crewlet may read or change is the
  * engine's, whatever they say.
+ *
+ * BOTH FORMS ARE ONE DRAFT, held here and declared to Ask Crewlet, so it can
+ * read and set what is open; saving stays each card's own press.
  */
 
 import { useState, type ReactNode } from "react";
@@ -23,6 +26,14 @@ import {
   Textarea,
 } from "@crewlethq/ui";
 import { BuildingComplexGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
+import {
+  refuse,
+  useAssistantDraft,
+  useDraftState,
+  writeParts,
+  type DraftFieldSpec,
+  type DraftSetter,
+} from "~/app/assistant/draft.ts";
 import { QueryState } from "~/components/common.tsx";
 import { SettingWriteStatus } from "~/components/SettingWriteStatus.tsx";
 import type { SettingWrite } from "~/lib/useSettingWrite.ts";
@@ -43,6 +54,7 @@ import {
   textLength,
   type InstructionsDraft,
 } from "~/lib/instructions.ts";
+import type { AssistantInstructionsAnswer } from "~/protocol/types.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSettingWrite } from "~/lib/useSettingWrite.ts";
@@ -69,26 +81,129 @@ export function AskCrewletSettings() {
           <QueryState error={query.error} refusal={query.refusal} loading={query.loading} />
         )
       ) : (
-        <Stack gap={5}>
-          <CompanyCard layer={answer.company} onApplied={query.refetch} />
-          <PersonCard seat={answer.seat} layer={answer.mine} revision={answer.revision} />
-        </Stack>
+        <Layers answer={answer} onApplied={query.refetch} />
       )}
     </>
   );
 }
 
+/** The two layers as the page's one draft. */
+interface Both {
+  readonly company: InstructionsDraft;
+  readonly mine: InstructionsDraft;
+}
+
+/** What the page tells Ask Crewlet about the draft it declares. */
+const DRAFT_HELP =
+  "Length is brief, balanced or detailed and layout lead, lists or tldr; empty is the " +
+  `default. The text holds at most ${ASSISTANT_INSTRUCTIONS_MAX_RUNES} characters and never ` +
+  "a credential. Saving stays the person's, with each card's Save.";
+
+/** Both cards, over the draft this page holds and declares. */
+function Layers({
+  answer,
+  onApplied,
+}: {
+  answer: AssistantInstructionsAnswer;
+  onApplied: () => void;
+}) {
+  const may = mayChangeConfig(useViewer());
+  const [company, setCompany] = useDraftState<InstructionsDraft>(() => draftOf(answer.company));
+  const [mine, setMine] = useDraftState<InstructionsDraft>(() => draftOf(answer.mine));
+  useAssistantDraft<Both>({
+    kind: "client",
+    help: DRAFT_HELP,
+    scope: "The instructions open on this page (not saved)",
+    value: { company, mine },
+    fields: [
+      ...layerFields("company", "Company", may),
+      ...(answer.seat === "" ? [] : layerFields("mine", "Yours", true)),
+    ],
+    write: writeParts<Both>({ company, mine }, { company: setCompany, mine: setMine }),
+  });
+  return (
+    <Stack gap={5}>
+      <CompanyCard
+        layer={answer.company}
+        may={may}
+        draft={company}
+        setDraft={setCompany}
+        onApplied={onApplied}
+      />
+      <PersonCard
+        seat={answer.seat}
+        layer={answer.mine}
+        revision={answer.revision}
+        draft={mine}
+        setDraft={setMine}
+      />
+    </Stack>
+  );
+}
+
+/** One layer's three fields as Ask Crewlet reads them, each set only where it may be. */
+function layerFields(layer: keyof Both, whose: string, writable: boolean): DraftFieldSpec<Both>[] {
+  const set = (d: Both, part: Partial<InstructionsDraft>): Both => ({
+    ...d,
+    [layer]: { ...d[layer], ...part },
+  });
+  const choice = (
+    key: "length" | "format",
+    label: string,
+    choices: readonly { value: string }[],
+  ): DraftFieldSpec<Both> => {
+    const allowed = choices.map((c) => c.value);
+    return {
+      path: `${layer}.${key}`,
+      label: `${whose}: ${label}`,
+      hint: `${allowed.filter(Boolean).join(", ")}, or empty for the default`,
+      read: (d) => d[layer][key],
+      ...(writable
+        ? {
+            write: (d: Both, v: unknown) =>
+              typeof v === "string" && allowed.includes(v)
+                ? set(d, { [key]: v } as Partial<InstructionsDraft>)
+                : refuse(`${label} is ${allowed.filter(Boolean).join(", ")}, or empty`),
+          }
+        : {}),
+    };
+  };
+  return [
+    choice("length", "Length", LENGTH_CHOICES),
+    choice("format", "Layout", FORMAT_CHOICES),
+    {
+      path: `${layer}.text`,
+      label: `${whose}: Anything else`,
+      hint: `at most ${ASSISTANT_INSTRUCTIONS_MAX_RUNES} characters`,
+      read: (d) => d[layer].text,
+      ...(writable
+        ? {
+            write: (d: Both, v: unknown) =>
+              typeof v === "string" && textLength(v) <= ASSISTANT_INSTRUCTIONS_MAX_RUNES
+                ? set(d, { text: v })
+                : refuse(`The text holds at most ${ASSISTANT_INSTRUCTIONS_MAX_RUNES} characters`),
+          }
+        : {}),
+    },
+  ];
+}
+
 /** The company's layer: an administrator's form, anybody else's reading of it. */
 function CompanyCard({
   layer,
+  may,
+  draft,
+  setDraft,
   onApplied,
 }: {
   layer: AssistantInstructions;
+  may: boolean;
+  draft: InstructionsDraft;
+  setDraft: DraftSetter<InstructionsDraft>;
   onApplied: () => void;
 }) {
   // WHOSE TO CHANGE is the standing answer; whether it can be pressed NOW
   // (offline, a held document) is the control's reason.
-  const may = mayChangeConfig(useViewer());
   const access = useConfigWriteAccess();
   const write = useSettingWrite({
     reread: "Reload to see the company's instructions as they are now.",
@@ -120,6 +235,8 @@ function CompanyCard({
       header={header}
       name="company"
       saved={layer}
+      draft={draft}
+      setDraft={setDraft}
       busy={write.busy || applying}
       disabledReason={access.can ? undefined : access.reason}
       status={<CompanyStatus write={write} onReload={onApplied} />}
@@ -136,10 +253,14 @@ function PersonCard({
   seat,
   layer,
   revision,
+  draft,
+  setDraft,
 }: {
   seat: string;
   layer: AssistantInstructions;
   revision: number;
+  draft: InstructionsDraft;
+  setDraft: DraftSetter<InstructionsDraft>;
 }) {
   const act = useAct("save_assistant_instructions");
   const [said, setSaid] = useState<string | null>(null);
@@ -169,6 +290,8 @@ function PersonCard({
       header={header}
       name="yours"
       saved={layer}
+      draft={draft}
+      setDraft={setDraft}
       busy={act.busy}
       disabledReason={act.access.can ? undefined : act.access.reason}
       status={
@@ -219,6 +342,8 @@ function InstructionsForm({
   header,
   name,
   saved,
+  draft,
+  setDraft,
   busy,
   status,
   disabledReason,
@@ -228,13 +353,14 @@ function InstructionsForm({
   header: ReactNode;
   name: string;
   saved: AssistantInstructions;
+  draft: InstructionsDraft;
+  setDraft: DraftSetter<InstructionsDraft>;
   busy: boolean;
   status: ReactNode;
   disabledReason?: string | undefined;
   onSave: (next: AssistantInstructions) => void;
   onEdit: () => void;
 }) {
-  const [draft, setDraft] = useState<InstructionsDraft>(() => draftOf(saved));
   const [from, setFrom] = useState(saved);
   // A SAVE LANDED OR ANOTHER BROWSER SAVED: the form follows the stored layer
   // unless the reader is mid-edit.
