@@ -718,3 +718,24 @@ func TestAMuseServerNameStaysWholeUpTo19Characters(t *testing.T) {
 		}
 	}
 }
+
+// A MUSE RUN'S FAILED ATTEMPTS ARE NONE OF ITS REQUESTS: its usage states
+// them apart from the calls answered or cut off, and a refused attempt bills
+// nothing, so the run counts the calls answered and cut off; a usage stating
+// no such split is read by its calls.
+//
+// Mutation: count every call the usage states, and the first row counts 8.
+func TestAMuseRunsFailedAttemptsAreNoneOfItsRequests(t *testing.T) {
+	for payload, want := range map[string]int{
+		`{"calls":8,"completed_calls":6,"failed_calls":2,"cancelled_calls":0,"models":[]}`: 6,
+		`{"calls":5,"completed_calls":4,"failed_calls":0,"cancelled_calls":1,"models":[]}`: 5,
+		`{"calls":3,"models":[]}`: 3,
+	} {
+		dec := &museEvents{}
+		_ = eachLine(strings.NewReader(`{"stream":{"kind":"exec.usage","id":"x"},"payload_type":"run.usage","payload":`+
+			payload+`}`), dec, maxLineBytes)
+		if dec.Requests() != want {
+			t.Errorf("%s: %d requests, want %d", payload, dec.Requests(), want)
+		}
+	}
+}

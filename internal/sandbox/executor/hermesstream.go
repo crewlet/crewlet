@@ -230,11 +230,14 @@ func (d *hermesEvents) Ended() bool { return d.done }
 
 // Requests implements [Decoder]: the responses the run's plugin recorded,
 // which the script appends after Hermes exits ([hermesRequestEvent]); its
-// stdout marks no request.
+// stdout marks no request. Measured on 0.23.3 against a stand-in: 31 for 31,
+// and 6 with a 429 and a 500 it retried.
 func (d *hermesEvents) Requests() int { return len(d.requests) }
 
-// InFlight implements [Decoder]: none, as Hermes's own --max-turns is held
-// to stop before the next request (unmeasured: Hermes runs in no rig yet).
+// InFlight implements [Decoder]: none, as Hermes's own --max-turns stops its
+// loop before the next request (measured on 0.23.3: a cap of 3, 3 requests of
+// its loop). NOT COUNTED: the summary request Hermes makes once its loop is
+// capped, which the plugin's record leaves out (a fourth request there).
 func (d *hermesEvents) InFlight() int { return 0 }
 
 // Result implements [Decoder].
