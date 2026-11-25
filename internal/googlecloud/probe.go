@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/words"
@@ -83,19 +84,22 @@ func Probe(httpClient *http.Client) setup.Probe {
 func probeCheck(
 	ctx context.Context, company string, value func(string) string, hc *http.Client, clk *googleauth.Clock,
 ) (setup.Verdict, error) {
-	email, provider, key := strings.TrimSpace(value("provisioner")), strings.TrimSpace(value("provider")),
+	project, provider, key := strings.TrimSpace(value("identity_project")), strings.TrimSpace(value("provider")),
 		strings.TrimSpace(value("federation_key"))
 	switch {
-	case email == "":
-		return setup.Verdict{}, setup.Unusable("Enter the provisioner service account's email to test the connection.")
+	case project == "":
+		return setup.Verdict{}, setup.Unusable("Enter the identity project's ID to test the connection.")
+	case !config.GoogleCloudIdentityProject(project):
+		return setup.Verdict{}, setup.Unusable("integrations.google_cloud.provisioning.identity_project is not a Google Cloud project ID.")
 	case key == "":
-		return setup.Verdict{}, setup.Unusable("Save the provisioner first: that mints the federation key the " +
+		return setup.Verdict{}, setup.Unusable("Open the form again so Crewlet makes the federation key the " +
 			"provider holds the public half of.")
 	case provider == "":
 		return setup.Verdict{}, setup.Unusable("Paste the provider name the Cloud Shell block prints to test it.")
 	}
 	client, err := NewClient(googleauth.Options{
-		Company: company, Provisioner: email, Provider: provider, FederationKey: key, HTTP: hc,
+		Company: company, Provisioner: config.GoogleCloudProvisioner(project), Provider: provider,
+		FederationKey: key, HTTP: hc,
 	})
 	if err != nil {
 		return setup.Verdict{}, setup.Unusable(googleauth.Sentence(err) + ".")
@@ -121,7 +125,7 @@ func probeCheck(
 				setup.Warning{Action: "Enable " + pronoun(len(missing)) + " on the identity project's APIs page, " +
 					"or run the Cloud Shell block again, then test again."})...), nil
 	}
-	held, err := client.TestProjectPermissions(ctx, identity, accountAdmin)
+	held, err := client.TestProjectPermissions(ctx, identity, append(slices.Clone(accountAdmin), EnablerPermission))
 	if err != nil {
 		return readRefusal(ctx, err, atGrants, "its own permissions on "+identity, adminFix(identity)), nil
 	}
@@ -131,6 +135,13 @@ func probeCheck(
 				setup.Fact{Label: "It lacks", Value: words.And(unquoted(missing))},
 				setup.Warning{Action: "Grant it Service Account Admin on that project, or run the Cloud Shell block " +
 					"again, then test again."})...), nil
+	}
+	if !slices.Contains(held, EnablerPermission) {
+		return setup.Refused("The provisioner cannot turn on a Google product's APIs in "+identity+".",
+			append(setup.Parts(probeParts, atGrants),
+				setup.Fact{Label: "It lacks", Value: EnablerPermission},
+				setup.Warning{Action: "Run the Cloud Shell block again, once: it grants " + EnablerRoleID +
+					", and turning on another Google product then needs no block."})...), nil
 	}
 	accounts, err := client.ServiceAccounts(ctx)
 	if err != nil {
@@ -228,7 +239,7 @@ func works(c *Client, accounts []ServiceAccount, found discovery) setup.Verdict 
 	}
 	var foreign []string
 	for _, a := range accounts {
-		if !crewletsOwn(a.Email, c.Provisioner()) {
+		if !crewletsOwn(a.Email) {
 			foreign = append(foreign, a.Email)
 		}
 	}

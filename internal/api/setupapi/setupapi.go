@@ -155,7 +155,6 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/googleads"
 	"github.com/crewlet/crewlet/internal/googleanalytics"
-	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/googleplay"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -242,6 +241,11 @@ type Options struct {
 	// fails on that form.
 	Probes map[integration.Kind]setup.Probe
 
+	// Drawers redraw a live view from what a form holds, for the kinds whose
+	// requirements carry one: what answers POST
+	// /setup/integrations/{kind}/draw. Nil draws none.
+	Drawers map[integration.Kind]setup.Drawer
+
 	// Sink builds the recorder a pass writes minted credentials through, under
 	// the party the pass runs for.
 	Sink func(by iam.Actor) (provision.TokenSink, error)
@@ -306,10 +310,11 @@ type Service struct {
 	secrets   setup.Secrets
 	passes    *setup.Runner
 	// access is the engine's per-seat access. See [Options.Access].
-	access Access
-	probes map[integration.Kind]setup.Probe
-	sink   sinkFactory
-	status Status
+	access  Access
+	probes  map[integration.Kind]setup.Probe
+	drawers map[integration.Kind]setup.Drawer
+	sink    sinkFactory
+	status  Status
 	// sshTests is [Options.SSHTests].
 	sshTests SSHTests
 	// ssh is [Options.SSH].
@@ -377,6 +382,7 @@ func New(opts Options) (*Service, error) {
 		sshTests:       opts.SSHTests,
 		ssh:            opts.SSH,
 		probes:         maps.Clone(opts.Probes),
+		drawers:        maps.Clone(opts.Drawers),
 		sink:           opts.Sink,
 		status:         opts.Status,
 		slackApps:      opts.SlackApps,
@@ -450,6 +456,13 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// One agent's lane, in words.
 	mount("GET /setup/integrations/{kind}/access/seats/{handle}/{lane}", authz.ActionSetupRead,
 		s.accessSeatRead)
+	// A live view redrawn from a form's values is a read sent as a POST, as
+	// the plan is: it holds public names and public halves alone (draw.go).
+	if err := router.Handle("POST /setup/integrations/{kind}/draw",
+		authz.Policy{Action: authz.ActionSetupRead, Effect: authz.EffectReads},
+		http.HandlerFunc(s.draw)); err != nil {
+		failures = append(failures, err)
+	}
 	// The plan is a read sent as a POST (a draft is a body), so it keeps the
 	// read verb.
 	if err := router.Handle("POST /setup/integrations/{kind}/access/plan",
@@ -1028,8 +1041,11 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// in the document.
 		block := company.Integrations.GoogleCloud
 		guide = googlecloud.Guide()
-		reqs = googlecloud.Requirements(company.Name, block, googleauth.EnabledProducts(company), s.resolve)
-		configured = block != nil
+		reqs = googlecloud.Requirements(company.Name, block, s.resolve)
+		// THE KEY ALONE IS NOT A CONNECTION ANYBODY STARTED: the form makes it
+		// when it opens (MintFirst), and a form opened and closed is nothing
+		// to pause or finish.
+		configured = block.Started()
 		enabled = block != nil && block.Enabled
 	case integration.KindSSH:
 		// No roster; certificates are issued at use, never named in the
