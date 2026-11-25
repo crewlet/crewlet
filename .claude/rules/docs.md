@@ -11,4 +11,5 @@ paths:
 - **Shortening a page keeps every heading's text**: code, `examples/`, absolute docs.crewlet.ai links and `crewlet-operator` link to its anchors, and `internal/docsgate` checks only relative markdown links. Grep the tree for a heading and its slug before renaming or removing it; the operator's links live in its own repository, so an empty grep does not clear them
 - **`docs/reference/metrics.md` and `alarms.md` are generated** (`make metrics-doc`, `make alarms-doc`): edit their source, never the page
 - **`docs/` is product documentation**, for people running Crewlet. Process for people with commit rights on this repository is a root-level file beside `CONTRIBUTING.md`
+- **An ADR lists its gates one per line**: beneath a bare `- **Enforced-by:**`, each gate a bullet indented two spaces (`adr/0000-template.md`), a new one appended at the end, so two changes adding gates merge instead of conflicting on one line. One gate or `nothing` may stay on the field's line; `internal/adr` reads both forms as one value
 - **Diagrams are Mermaid**, never ASCII box art; directory trees and literal command output stay plain code fences

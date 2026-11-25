@@ -2,7 +2,11 @@
 
 - **Status:** accepted
 - **Authority:** `internal/seataccess`
-- **Enforced-by:** `internal/seataccess.TestTheResolverNeverFallsBackSilently`, `internal/seataccess.TestTheRowNeedsYouUntilTheSeatsOwnIdentityWorks`, `internal/seataccess.TestASeatIdentityIsCheckedBeforeItIsKeptAndOnEveryPass`, `internal/seatname.TestEveryNameKeepsItsVendorsRule`
+- **Enforced-by:**
+  - `internal/seataccess.TestTheResolverNeverFallsBackSilently`
+  - `internal/seataccess.TestTheRowNeedsYouUntilTheSeatsOwnIdentityWorks`
+  - `internal/seataccess.TestASeatIdentityIsCheckedBeforeItIsKeptAndOnEveryPass`
+  - `internal/seatname.TestEveryNameKeepsItsVendorsRule`
 - **Cost-when-tried:** not tried. Every growth vendor that offers a seat its own identity would record one actor, the company, for every agent's change, and revoking one agent at the vendor would mean revoking every agent.
 - **Tag-status:** unreleased
 

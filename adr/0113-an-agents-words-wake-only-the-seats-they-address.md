@@ -2,7 +2,34 @@
 
 - **Status:** accepted
 - **Authority:** `internal/routing`
-- **Enforced-by:** `internal/chatlet.TestAnAgentsAcknowledgementWakesNoAgent`, `internal/chatlet.TestAMessageAddressedToAPersonWakesNoUnnamedAgent`, `internal/chatlet.TestAnAnswerWakesTheAgentThatAsked`, `internal/chatlet.TestAnAgentsAskingMessageRoutesAsBefore`, `internal/worklet.TestAnAgentsReplyInAThreadWakesOnlyWhoStillOwesAnAnswer`, `internal/worklet.TestAPersonsCommentNamingSomebodyWakesOnlyWhomItNames`, `internal/chatlet.TestTwoAgentsThankingEachOtherStopAtTheAnswer`, `internal/chatlet.TestTheSeatThatAskedIsWokenByAnyReply`, `internal/chatlet.TestATopLevelAnswerInANamedRoomReachesItsAsker`, `internal/worklet.TestTheAskerOfAnOpenAskIsWokenByAnyReply`, `internal/agent/builtin.TestAnAgentMustSayWhetherItsMessageAsks`, `internal/chatlet.TestACoAskersReplyLeavesTheOtherAskerAsleep`, `internal/worklet.TestACoAskersReplyLeavesTheOtherAskerAsleep`, `internal/chatlet.TestATopLevelPostAnswersOnlyTheNewestAsk`, `internal/chatlet.TestAPersonCoAskersNudgeLeavesTheAgentAsleep`, `internal/worklet.TestAPersonsOpenAskMakesACoAsker`, `internal/chatlet.TestATopLevelPostAnswersEveryAskersNewestAsk`, `internal/chatlet.TestAnAgentsMentionThatAsksNothingWakesNoAgent`, `internal/worklet.TestAnAgentsMentionThatAsksNothingWakesNoAgent`, `internal/agent/builtin.TestAnAgentsCommentMentionWakesOnlyWhenItAsks`, `internal/doclet.TestAnAgentsPageCommentThatAsksNothingWakesNoAgent`, `internal/doclet.TestAPageReplyWakesTheAgentThatAskedInItsThread`, `internal/doclet.TestAPageCommentEditKeepsItsAsks`, `internal/doclet.TestTwoAskersOnAPageStopAfterOneRound`, `internal/doclet.TestAPageCoAskersNudgeLeavesTheOtherAskerAsleep`, `internal/doclet.TestATopLevelPageAnswerNamingTheAskerWakesIt`, `internal/doclet.TestARemovedPageAskStopsWaking`
+- **Enforced-by:**
+  - `internal/chatlet.TestAnAgentsAcknowledgementWakesNoAgent`
+  - `internal/chatlet.TestAMessageAddressedToAPersonWakesNoUnnamedAgent`
+  - `internal/chatlet.TestAnAnswerWakesTheAgentThatAsked`
+  - `internal/chatlet.TestAnAgentsAskingMessageRoutesAsBefore`
+  - `internal/worklet.TestAnAgentsReplyInAThreadWakesOnlyWhoStillOwesAnAnswer`
+  - `internal/worklet.TestAPersonsCommentNamingSomebodyWakesOnlyWhomItNames`
+  - `internal/chatlet.TestTwoAgentsThankingEachOtherStopAtTheAnswer`
+  - `internal/chatlet.TestTheSeatThatAskedIsWokenByAnyReply`
+  - `internal/chatlet.TestATopLevelAnswerInANamedRoomReachesItsAsker`
+  - `internal/worklet.TestTheAskerOfAnOpenAskIsWokenByAnyReply`
+  - `internal/agent/builtin.TestAnAgentMustSayWhetherItsMessageAsks`
+  - `internal/chatlet.TestACoAskersReplyLeavesTheOtherAskerAsleep`
+  - `internal/worklet.TestACoAskersReplyLeavesTheOtherAskerAsleep`
+  - `internal/chatlet.TestATopLevelPostAnswersOnlyTheNewestAsk`
+  - `internal/chatlet.TestAPersonCoAskersNudgeLeavesTheAgentAsleep`
+  - `internal/worklet.TestAPersonsOpenAskMakesACoAsker`
+  - `internal/chatlet.TestATopLevelPostAnswersEveryAskersNewestAsk`
+  - `internal/chatlet.TestAnAgentsMentionThatAsksNothingWakesNoAgent`
+  - `internal/worklet.TestAnAgentsMentionThatAsksNothingWakesNoAgent`
+  - `internal/agent/builtin.TestAnAgentsCommentMentionWakesOnlyWhenItAsks`
+  - `internal/doclet.TestAnAgentsPageCommentThatAsksNothingWakesNoAgent`
+  - `internal/doclet.TestAPageReplyWakesTheAgentThatAskedInItsThread`
+  - `internal/doclet.TestAPageCommentEditKeepsItsAsks`
+  - `internal/doclet.TestTwoAskersOnAPageStopAfterOneRound`
+  - `internal/doclet.TestAPageCoAskersNudgeLeavesTheOtherAskerAsleep`
+  - `internal/doclet.TestATopLevelPageAnswerNamingTheAskerWakesIt`
+  - `internal/doclet.TestARemovedPageAskStopsWaking`
 - **Measured:** on a company running this engine, two agents in one thread answered each other's acknowledgements six times in five minutes, each saying it would stop replying, and agents took turns for status notes addressed to a person only to decide to say nothing. Over the same five hours, 200 turns had a median of 20 seconds. Amended after the rule ran: of 101 turns in 45 minutes, a third were agents woken by another agent's @-mention in a work item comment that asked nothing ("my approval still stands, nothing for QA"), the named agent replying and naming the first back; on one item five agents took about 25 turns in 12 minutes.
 - **Tag-status:** unreleased
 

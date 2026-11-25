@@ -2,7 +2,14 @@
 
 - **Status:** accepted
 - **Authority:** `internal/ssh`
-- **Enforced-by:** `internal/api/setupapi.TestTheCAIsMintedOnSaveAndNeverShown`, `internal/setup.TestAnSSHAuthorityThatIsNotOneIsRefused`, `internal/ssh.TestSSHAccessIsTheDocumentAlone`, `internal/ssh.TestOperateIsAStepUp`, `internal/config.TestEverySSHProblemIsReportedAtItsPath`, `internal/config.TestAnSSHSeatNeedsAHost`, `internal/accessmigrate.TestSSHIsBornMigrated`
+- **Enforced-by:**
+  - `internal/api/setupapi.TestTheCAIsMintedOnSaveAndNeverShown`
+  - `internal/setup.TestAnSSHAuthorityThatIsNotOneIsRefused`
+  - `internal/ssh.TestSSHAccessIsTheDocumentAlone`
+  - `internal/ssh.TestOperateIsAStepUp`
+  - `internal/config.TestEverySSHProblemIsReportedAtItsPath`
+  - `internal/config.TestAnSSHSeatNeedsAHost`
+  - `internal/accessmigrate.TestSSHIsBornMigrated`
 - **Tag-status:** unreleased
 
 ## The decision

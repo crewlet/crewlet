@@ -2,7 +2,16 @@
 
 - **Status:** accepted
 - **Authority:** `internal/ssh`
-- **Enforced-by:** `internal/ssh.TestAServerNotOptedInIsNeverContacted`, `internal/ssh.TestAnInventoryCertificateRunsOnlyTheCommandItNames`, `internal/ssh.TestAServerSetUpWithoutTheInventoryRefusesIt`, `internal/ssh.TestARequestOutsideTheLockedShapesIsNotSigned`, `internal/ssh.TestTheParsersDropTheCommandColumn`, `internal/ssh.TestNoCredentialShapeReachesTheAtlasFromAServer`, `internal/ssh.TestTheInventoryBecomesWorkloadsAndOpenPorts`, `internal/ssh.TestAnInventoryPartThatCouldNotBeReadIsAFinding`, `internal/accessdomain.TestTheEnginesInventoryIsRecordedUnderNoSeat`
+- **Enforced-by:**
+  - `internal/ssh.TestAServerNotOptedInIsNeverContacted`
+  - `internal/ssh.TestAnInventoryCertificateRunsOnlyTheCommandItNames`
+  - `internal/ssh.TestAServerSetUpWithoutTheInventoryRefusesIt`
+  - `internal/ssh.TestARequestOutsideTheLockedShapesIsNotSigned`
+  - `internal/ssh.TestTheParsersDropTheCommandColumn`
+  - `internal/ssh.TestNoCredentialShapeReachesTheAtlasFromAServer`
+  - `internal/ssh.TestTheInventoryBecomesWorkloadsAndOpenPorts`
+  - `internal/ssh.TestAnInventoryPartThatCouldNotBeReadIsAFinding`
+  - `internal/accessdomain.TestTheEnginesInventoryIsRecordedUnderNoSeat`
 - **Cost-when-tried:** not tried. Until this record the engine ran a command on a server only inside an agent's turn or at a person's press of Test connection; nothing ran on a timer.
 - **Tag-status:** unreleased
 

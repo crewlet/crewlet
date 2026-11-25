@@ -2,6 +2,7 @@ package adr_test
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -262,10 +263,10 @@ func TestARecordHeadingIsTheColonForm(t *testing.T) {
 	}
 }
 
-// A FIELD'S LINE IS AS LONG AS ITS VALUE. A record's Enforced-by names every
-// gate behind it on one line, which for a record amended many times runs past
-// a line scanner's default cap of 64 KiB; the record still loads, its field
-// whole. The control is a field just under that cap.
+// A FIELD'S LINE IS AS LONG AS ITS VALUE. A value written on its line, rather
+// than listed beneath it, may run past a line scanner's default cap of 64 KiB;
+// the record still loads, its field whole. The control is a field just under
+// that cap.
 func TestAFieldLongerThanAScannersLineLoadsWhole(t *testing.T) {
 	t.Parallel()
 	for label, size := range map[string]int{"under 64 KiB": 60 << 10, "over 64 KiB": 96 << 10} {
@@ -281,6 +282,111 @@ func TestAFieldLongerThanAScannersLineLoadsWhole(t *testing.T) {
 			}
 			if got := records[0].Fields["Enforced-by"]; !strings.HasSuffix(got, "internal/adr.TestY") {
 				t.Errorf("the field read as %d bytes ending %q, want it whole", len(got), got[max(0, len(got)-40):])
+			}
+		})
+	}
+}
+
+// A FIELD LISTED BENEATH ITS LINE READS AS THE SAME ENTRIES WRITTEN ON IT, so
+// every check over Enforced-by sees one set of gates whichever form a record
+// takes. The list ends at the next field, across a blank line inside it, and
+// at the body, whichever comes first.
+func TestAListedFieldReadsAsItsEntriesWrittenOnItsLine(t *testing.T) {
+	t.Parallel()
+	entries := []string{"`internal/adr.TestA`", "`internal/engine.TestB` and its control", "`cmd/crewlet.TestC`"}
+	oneLine := "- **Enforced-by:** " + strings.Join(entries, ", ") + "\n"
+	listed := "- **Enforced-by:**\n  - " + entries[0] + "\n  - " + entries[1] + "\n\n  - " + entries[2] + "\n"
+	last := func(field string) string { // the field last in the header
+		return "# ADR-0001: One decision\n\n- **Status:** accepted\n- **Authority:** `internal/adr`\n" +
+			"- **Tag-status:** unreleased\n" + field + "\n## The decision\n\nA body.\n"
+	}
+	before := func(field string) string { // the field followed by another
+		return strings.Replace(recordUnder("# ADR-0001: One decision"), "- **Enforced-by:** nothing\n", field, 1)
+	}
+	read := func(t *testing.T, body string) adr.Record {
+		t.Helper()
+		records, err := adr.Load(recordTree(t, map[string]string{"0001-one-decision.md": body}))
+		if err != nil || len(records) != 1 {
+			t.Fatalf("loaded %d record(s), err %v", len(records), err)
+		}
+		return records[0]
+	}
+
+	want := read(t, before(oneLine))
+	if got := want.EnforcedBy(); got != "internal/adr.TestA`, `internal/engine.TestB` and its control, `cmd/crewlet.TestC" {
+		t.Fatalf("control: the one-line form read as %q", got)
+	}
+	for label, body := range map[string]string{"before another field": before(listed), "last in the header": last(listed)} {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+			if got := read(t, body); !maps.Equal(got.Fields, want.Fields) {
+				t.Errorf("the listed form read as %v, the one-line form as %v", got.Fields, want.Fields)
+			}
+		})
+	}
+}
+
+// AN ENTRY BELONGS TO THE FIELD LISTED ABOVE IT, AND ANY OTHER IS REFUSED rather
+// than read into a field it was not written under or dropped with the header's
+// end. The control is the same shape with every entry beneath a listed field.
+func TestAnEntryNoListedFieldOwnsIsRefused(t *testing.T) {
+	t.Parallel()
+	const name = "0001-one-decision.md"
+	record := func(header string) string {
+		return "# ADR-0001: One decision\n\n" + header + "- **Tag-status:** unreleased\n\n## The decision\n\nA body.\n"
+	}
+	if _, err := adr.Load(recordTree(t, map[string]string{name: record(
+		"- **Status:** accepted\n- **Enforced-by:**\n  - `internal/adr.TestA`\n")})); err != nil {
+		t.Fatalf("control: a listed field failed to load: %v", err)
+	}
+
+	for label, c := range map[string]struct{ header, want string }{
+		"before the first field": {
+			"  - `internal/adr.TestA`\n- **Status:** accepted\n- **Enforced-by:** nothing\n", "before its first field"},
+		"beneath a value on its line": {
+			"- **Status:** accepted\n- **Enforced-by:** `internal/adr.TestA`\n  - `internal/adr.TestB`\n", "not both"},
+		"beneath a value across a blank line": {
+			"- **Status:** accepted\n- **Enforced-by:** `internal/adr.TestA`\n\n  - `internal/adr.TestB`\n", "not both"},
+		"a listed field with no entry": {
+			"- **Status:** accepted\n- **Enforced-by:**\n", "no entry beneath it"},
+		"an entry wrapped onto a second line": {
+			"- **Status:** accepted\n- **Enforced-by:**\n  - `internal/adr.TestA` and\n    its control\n", "not an entry"},
+		"a listed field set twice": {
+			"- **Status:** accepted\n- **Enforced-by:**\n  - `internal/adr.TestA`\n- **Enforced-by:** nothing\n", "twice"},
+	} {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+			_, err := adr.Load(recordTree(t, map[string]string{name: record(c.header)}))
+			if err == nil {
+				t.Fatalf("a record whose header is\n%s\nloaded", c.header)
+			}
+			if !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("the refusal does not name %s and say %q: %v", name, c.want, err)
+			}
+		})
+	}
+}
+
+// THE HEADER STILL ENDS AT ITS FIRST LINE THAT IS NEITHER A FIELD NOR AN ENTRY
+// OF ONE: a bullet or an indented entry in the body is the body's, never a
+// field of its own nor one more entry of the field listed last.
+func TestTheHeaderEndsWhereTheBodyBegins(t *testing.T) {
+	t.Parallel()
+	const head = "# ADR-0001: One decision\n\n- **Status:** accepted\n- **Enforced-by:**\n  - `internal/adr.TestA`\n"
+	const body = "- **Note:** a bullet\n  - `internal/adr.TestZ`\n"
+	for label, record := range map[string]string{
+		"at a heading":   head + "\n## The decision\n\n" + body,
+		"at a paragraph": head + "A paragraph straight after the list.\n" + body,
+	} {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+			records, err := adr.Load(recordTree(t, map[string]string{"0001-one-decision.md": record}))
+			if err != nil || len(records) != 1 {
+				t.Fatalf("loaded %d record(s), err %v", len(records), err)
+			}
+			if got := records[0]; got.EnforcedBy() != "internal/adr.TestA" || got.Fields["Note"] != "" {
+				t.Errorf("the header read past its end: Enforced-by %q, Note %q",
+					got.EnforcedBy(), got.Fields["Note"])
 			}
 		})
 	}

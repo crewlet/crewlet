@@ -2,7 +2,33 @@
 
 - **Status:** accepted
 - **Authority:** `internal/decision`
-- **Enforced-by:** `internal/agent/builtin.TestARunsAskIsRecordedAsADecisionOnItsJob`, `internal/agent/builtin.TestEveryFaultOfARunsAskIsNamedAtOnce`, `internal/agent/builtin.TestARunIsToldWhatBecameOfItsAsk`, `internal/agent/builtin.TestAnAskThatDidNotLandIsSaidToTheRun`, `internal/api/queries.TestARunsAnsweredQuestionIsAnAnsweredDecision`, `internal/agent/runner.TestASubmissionBeforeTheAnswerIsNotReplayed`, `internal/agent/builtin.TestAJobThatAskedCannotSubmit`, `internal/engine.TestAResumeIsCutWhereTheAnswerCutTheRound`, `internal/agent/builtin.TestAnAnswerIsToTheQuestionItsPersonRead`, `internal/agent/builtin.TestARunsAskIsRefusedInItsOwnNamesInOnePass`, `internal/sandbox.TestAnAskWhoseRowWentMidWriteIsNotRecorded`, `internal/sandbox.TestALongRunsLogKeepsTheCallsThatEndedIt`, `internal/api/queries.TestARunsAnsweredQuestionReachesWhoMayReadTheRunAndThePerson`, `internal/agent/builtin.TestAnswerExecutorDeliversAChoiceOfTheQuestionsOwnOptions`, `internal/sandbox.TestAnAskIsRefusedWithEveryFaultAtOnce`, `internal/sandbox.TestAnAskIsRedactedInEveryTextItCarries`, `internal/sandbox.TestAnAnswerNamesTheOptionItChoseAsTheRunAskedIt`, `internal/sandbox.TestAnAnswerByTurnRecordsTheOptionItChose`, `internal/sandbox.TestAnAnswerByTurnChoosingWhatWasNotOfferedIsSpentUnrecorded`, `internal/sandbox.TestARunEndedAtItsDeadlineIsNotParkedOnItsQuestion`, `internal/sandbox.TestPendingStoreContract`, `internal/engine.TestARunsAskEndsItLikeItsSubmission`, `internal/engine.TestTheAskBriefNamesWhomTheParkCanResolve`, `internal/api/queries.TestAParkedQuestionReachesItsAudience`, `internal/e2e.TestARunsStructuredQuestionIsAnsweredWithAChoiceAndResumes`, `internal/decision.TestADecisionIsValidatedField`
+- **Enforced-by:**
+  - `internal/agent/builtin.TestARunsAskIsRecordedAsADecisionOnItsJob`
+  - `internal/agent/builtin.TestEveryFaultOfARunsAskIsNamedAtOnce`
+  - `internal/agent/builtin.TestARunIsToldWhatBecameOfItsAsk`
+  - `internal/agent/builtin.TestAnAskThatDidNotLandIsSaidToTheRun`
+  - `internal/api/queries.TestARunsAnsweredQuestionIsAnAnsweredDecision`
+  - `internal/agent/runner.TestASubmissionBeforeTheAnswerIsNotReplayed`
+  - `internal/agent/builtin.TestAJobThatAskedCannotSubmit`
+  - `internal/engine.TestAResumeIsCutWhereTheAnswerCutTheRound`
+  - `internal/agent/builtin.TestAnAnswerIsToTheQuestionItsPersonRead`
+  - `internal/agent/builtin.TestARunsAskIsRefusedInItsOwnNamesInOnePass`
+  - `internal/sandbox.TestAnAskWhoseRowWentMidWriteIsNotRecorded`
+  - `internal/sandbox.TestALongRunsLogKeepsTheCallsThatEndedIt`
+  - `internal/api/queries.TestARunsAnsweredQuestionReachesWhoMayReadTheRunAndThePerson`
+  - `internal/agent/builtin.TestAnswerExecutorDeliversAChoiceOfTheQuestionsOwnOptions`
+  - `internal/sandbox.TestAnAskIsRefusedWithEveryFaultAtOnce`
+  - `internal/sandbox.TestAnAskIsRedactedInEveryTextItCarries`
+  - `internal/sandbox.TestAnAnswerNamesTheOptionItChoseAsTheRunAskedIt`
+  - `internal/sandbox.TestAnAnswerByTurnRecordsTheOptionItChose`
+  - `internal/sandbox.TestAnAnswerByTurnChoosingWhatWasNotOfferedIsSpentUnrecorded`
+  - `internal/sandbox.TestARunEndedAtItsDeadlineIsNotParkedOnItsQuestion`
+  - `internal/sandbox.TestPendingStoreContract`
+  - `internal/engine.TestARunsAskEndsItLikeItsSubmission`
+  - `internal/engine.TestTheAskBriefNamesWhomTheParkCanResolve`
+  - `internal/api/queries.TestAParkedQuestionReachesItsAudience`
+  - `internal/e2e.TestARunsStructuredQuestionIsAnsweredWithAChoiceAndResumes`
+  - `internal/decision.TestADecisionIsValidatedField`
 - **Cost-when-tried:** a run that could not go on without a person ran one shell command, `crewlet-ask "<question>" --to <audience> --branch <branch>`, whose one free-text argument carried everything: the options, the recommendation and the context arrived as a paragraph ("Options: (A) [recommended] keep EXPECTED_DIFFERENCES ... (B) ... (C) Something else ... Which option?"), and the Inbox drew it as a heading repeating its first sentence over the whole text quoted verbatim, with nothing to press. The engine bounded and condensed the text after the run had ended, when the run could no longer fix it, and a question too long for that was not asked at all.
 - **Tag-status:** unreleased
 

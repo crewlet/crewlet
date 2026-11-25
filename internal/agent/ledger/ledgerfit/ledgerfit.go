@@ -101,4 +101,5 @@ var kinds = map[ledger.PieceKind]compact.Kind{
 	ledger.PieceArgument: compact.KindArgument,
 	ledger.PieceError:    compact.KindToolError,
 	ledger.PieceProduced: compact.KindProduced,
+	ledger.PieceAnswer:   compact.KindWriteAnswer,
 }
