@@ -159,7 +159,7 @@
 // not the comments, of every package of another module the module's builds
 // and tests link (go list -deps -test), since a third-party DevTools client
 // names its methods in strings. It fails on any command or event either
-// pinned Chromium's own protocol describes (chromiumtest.Methods): the names
+// pinned Chromium's own protocol describes (chromiumtest.Protocol): the names
 // come from each pin, so the test spells none, and the floor's arm finds the
 // names the newest has dropped. It is a tripwire on Go text, not a proof: a
 // name built at run time — by Sprintf, Join, a constant joined to a literal,

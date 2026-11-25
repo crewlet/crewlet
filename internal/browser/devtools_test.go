@@ -39,7 +39,7 @@ import (
 // literal, or an event's name; the same beneath the client; no exemption.
 func TestNoGoFileButTheRendersClientNamesADevToolsMethod(t *testing.T) {
 	chromiumtest.Each(t, func(t *testing.T, chrome string) {
-		methods := chromiumtest.Methods(t, chrome)
+		methods := chromiumtest.Protocol(t, chrome).Methods()
 		read, err := goText()
 		if err != nil {
 			t.Fatal(err)
