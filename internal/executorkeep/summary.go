@@ -17,7 +17,8 @@ import (
 // never inside, the session's, so a session refused, too large or lost keeps
 // it. Its words are never on a record: the object holds them, scrubbed and
 // redacted, at most [SummaryMaxBytes]. The run's row, the turn's end
-// ([Ending.Summary]) and the executor log's row each NAME it ([Summary]).
+// ([Ending.Summary]) and the executor log's row each NAME it ([Summary]), at
+// the place of the capture whose stamp first named it ([Summary.Place]).
 
 // SummaryMaxBytes bounds the summary a box read keeps, as kept: past it the
 // read keeps its LAST part ([SummaryTail]), where every summary shape puts what
@@ -63,11 +64,19 @@ type Summary struct {
 	// Harness wrote it, and Session is the harness's session it summarises.
 	Harness string `json:"harness"`
 	Session string `json:"session"`
+
+	// Place is the capture whose stamp first named it, the take of the box
+	// read that found it ([CapturePlace]): a session captured at or after it
+	// holds the compaction it tells, and one captured before does not, so
+	// the summary is NEWER than a capture only where Place is After it.
+	// Omitted at its zero, as every versioned field is, which Validate refuses.
+	Place CapturePlace `json:"place,omitzero"`
 }
 
 // Validate refuses a summary no reader could open or place: an object no row
 // can name or past [SummarySealedMaxBytes], no keyring key, no instant, a size
-// that is none, a harness or session id outside its bound.
+// that is none, a harness or session id outside its bound, a place before
+// (1, 1).
 func (s Summary) Validate() error {
 	if err := s.Object.Validate(); err != nil {
 		return fmt.Errorf("the summary's object: %w", err)
@@ -88,6 +97,9 @@ func (s Summary) Validate() error {
 		return fmt.Errorf("the summary's harness is not 1 to %d bytes of UTF-8", HarnessMaxBytes)
 	case len(s.Session) > SessionIDMaxBytes || !utf8.ValidString(s.Session):
 		return fmt.Errorf("the summary's session is not at most %d bytes of UTF-8", SessionIDMaxBytes)
+	case s.Place.LaunchSeq <= 0 || s.Place.CaptureSeq <= 0:
+		return fmt.Errorf("the summary is placed at (%d, %d), and every capture is placed from (1, 1)",
+			s.Place.LaunchSeq, s.Place.CaptureSeq)
 	}
 	return nil
 }
