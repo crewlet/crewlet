@@ -105,7 +105,7 @@ Role (a SEAT: can live at root level OR inside a unit)
 ├── Sandbox *RoleSandbox               (role.sandbox: what the seat's executor
 │                                       box reads: setup, env, optional_keys, mcp,
 │                                       pause_ttl_seconds, max_turns,
-│                                       max_concurrent_runs)
+│                                       max_concurrent_runs, browser)
 ├── Placement                          (role.placement: which nodes may run it)
 ├── CodeAccess string                  (role.code.access as written:
 │                                       read_only, review or full_access;

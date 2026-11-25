@@ -287,9 +287,9 @@ func (c *Cache) hashPack(e *entry, inc *incarnation, h gitproc.Hint, rows *snaps
 // neither names is asked once more of the log's head, linearizable: an
 // adopted pack's row may be past what the copy had applied, and "no row
 // names it" is a kept verdict (packCheck), so never a lagging copy's.
-// Bounded by one read attempt (gitproc.ReadDeadline), HashBudget's term for it.
+// Bounded by one read attempt ([RowReadAttempt]), HashBudget's term for it.
 func (c *Cache) packRow(e *entry, inc *incarnation, pack string, rows *snapshot) (gitlet.PackRow, bool, error) {
-	ctx, cancel := context.WithTimeout(c.life, gitproc.ReadDeadline)
+	ctx, cancel := context.WithTimeout(c.life, RowReadAttempt)
 	defer cancel()
 	find := func(s snapshot) (gitlet.PackRow, bool) {
 		for _, p := range s.packs {

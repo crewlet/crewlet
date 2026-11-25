@@ -42,7 +42,8 @@
 // A seat's EXECUTOR is not a call this walks ([Pick]): its run is the harness's
 // own, in a box, and hours long, so there is no call to continue on the next
 // member once it started — a run that meets a limit midway is not relaunched
-// elsewhere. What can still move is where the next run starts, so the launch
+// elsewhere (the engine relaunches one that met it before any work, once). What
+// can still move is where the next run starts, so the launch
 // asks each member whether it is ready in the same order and with the same
 // vocabulary a call uses: a retryable refusal hands off, a fatal one stops the
 // walk (so does the caller's own cancellation), and running out is the same

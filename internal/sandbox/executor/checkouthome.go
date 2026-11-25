@@ -14,25 +14,39 @@ import (
 // checkout core (internal/notehelper's "Checkouts below the working
 // directory") keeps them: the helper and its state, the launch config
 // ([checkoutSpec]), the home instruction file the harness reads (agents: the
-// first of its candidates that exists, else the first, as a harness reading
-// one file of several names finds it), the home's own copy of it held beside
-// the run while it runs (held), the file the helper writes the checkouts'
-// sections into (sections), and the skills directory they are copied into,
-// with the list of copies the next run removes. A copy is built in
-// state/staging ([checkoutHome.staging]). own, where set, is the run's own
-// instructions, written ahead of the home's (Copilot's share its one file).
+// first of its candidates that exists, else the first; none for a harness
+// handed no instruction text, whose home file is never held), the home's own
+// copy held beside the run (held), the file the helper writes the checkouts'
+// sections into (sections), the skills directory they are copied into with
+// the list of copies the run's end removes, and the file listing their roots
+// for a harness the script points at them (roots, "" for none). A copy is
+// built in state/staging ([checkoutHome.staging]).
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
+	agentsFrom            string
 	held, sections        string
-	skills, copied        string
-	own                   string
+	skills, copied, roots string
+	// own is the run's own instructions, written ahead of the home's
+	// (Copilot's share its one file), "" for none.
+	own string
 }
+
+// holdsHome reports whether h writes a home instruction file: from its
+// candidates, or from the file the script lists them in at run time
+// (agentsFrom, a path a line, for a harness whose file names a setting
+// decides: Qwen Code's context.fileName).
+func (h checkoutHome) holdsHome() bool { return len(h.agents) > 0 || h.agentsFrom != "" }
 
 // heldLive marks which of several home instruction files a run holds
 // (held+heldLive names it), so the put-back restores the one that existed,
 // or removes the one the run made, whichever the next run would choose.
 const heldLive = ".live"
+
+// heldMade names the topmost directory the gate made for the home file
+// (held+heldMade), written before it makes it, so the put-back, this run's or
+// a killed run's next, removes what it made and nothing the home had.
+const heldMade = ".made"
 
 // staging is where the helper builds a checkout's skill before one rename
 // moves it into the skills directory (internal/notehelper's stagingDir):
@@ -57,34 +71,63 @@ func (h checkoutHome) removeSiblingStaging() string {
 // Limit, the harness's own bound in bytes on a checkout's instructions, nil
 // for a harness with none; SkillDirs, the checkout's skill directories
 // ([checkoutSkillDir]); NestedSkillsOnly where the harness's nested adapter
-// hands skills alone, so its firings read no instruction file; and
+// hands skills alone, so its firings read no instruction file;
 // ImportInstructions where the harness reads them itself, each named as an
 // `@<absolute path>` import in place of its text, Limit not applying (Claude
-// Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code need their
-// own measurement of absolute imports before they set it).
+// Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code import no
+// absolute path from a home file, measured on 0.70.0 and 0.28.4); SkillSep,
+// what joins a copy's repository and skill, "" for `:`; and FiringLimit, a
+// nested firing's bound in bytes on all its checkouts' files, nil for none.
 type checkoutSpec struct {
 	Instructions       []checkoutSlot
 	Limit              *int
+	FiringLimit        *int
 	SkillDirs          []checkoutSkillDir
 	NestedSkillsOnly   bool
 	ImportInstructions bool
+	SkillSep           checkoutSkillSep
+	// ListedAs and HomeSkills are the helper's ("grok", Grok Build's listing
+	// rule).
+	ListedAs   string
+	HomeSkills []checkoutSkillDir
 }
+
+// checkoutSkillSep is what joins a copy's repository and skill (the helper's
+// skillSep).
+type checkoutSkillSep string
+
+// checkoutSkillSepHyphen joins them for Gemini CLI and Qwen Code, as Gemini
+// CLI 0.70.0 lists `a:b` as `a-b` and the runners name their own skills so.
+const checkoutSkillSepHyphen checkoutSkillSep = "-"
 
 // checkoutSkillDir is a checkout's skill directory as the helper reads it:
 // Dir, below the checkout's root, whose skills are the directories directly
 // in it, written as a string; or, Recursive, every one a walk of it reaches,
-// written as {"dir": ..., "recursive": true}.
+// or a walk's options set, written as an object.
 type checkoutSkillDir struct {
-	Dir       string
-	Recursive bool
+	Dir       string `json:"dir"`
+	Recursive bool   `json:"recursive,omitempty"`
+	checkoutWalk
+}
+
+// checkoutWalk is how the helper walks a skill directory past Pi's walk, as
+// Grok Build 1.0.92 does: on below a skill (Through), dot directories and
+// node_modules too (Every), to Depth directories below it, or its command
+// files as skills (Commands).
+type checkoutWalk struct {
+	Through  bool `json:"through,omitempty"`
+	Every    bool `json:"every,omitempty"`
+	Depth    int  `json:"depth,omitempty"`
+	Commands bool `json:"commands,omitempty"`
 }
 
 // MarshalJSON writes d in the helper's shape.
 func (d checkoutSkillDir) MarshalJSON() ([]byte, error) {
-	if !d.Recursive {
+	if !d.Recursive && d.checkoutWalk == (checkoutWalk{}) {
 		return json.Marshal(d.Dir)
 	}
-	return json.Marshal(map[string]any{"dir": d.Dir, "recursive": true})
+	type wire checkoutSkillDir
+	return json.Marshal(wire(d))
 }
 
 // checkoutSlot is one instruction slot as the helper reads it: Names, the
@@ -94,27 +137,37 @@ func (d checkoutSkillDir) MarshalJSON() ([]byte, error) {
 type checkoutSlot struct {
 	Names []string
 	Tree  *checkoutTree
+	// Inside follows a name's link only within the checkout; Once hands no
+	// file an earlier slot handed.
+	Inside bool `json:"inside,omitempty"`
+	Once   bool `json:"once,omitempty"`
 }
 
 // checkoutTree is a tree slot: the directory below a checkout's root, the
 // suffix of a handed file's name, the harness whose walk and frontmatter
 // reading the helper follows, and the frontmatter scope that leaves a file
-// out, nil for none.
+// out, nil for none; Once, as [checkoutSlot]'s.
 type checkoutTree struct {
 	Tree   string         `json:"tree"`
 	Suffix string         `json:"suffix"`
 	Form   checkoutForm   `json:"form"`
 	Scoped *checkoutScope `json:"scoped,omitempty"`
+	Once   bool           `json:"once,omitempty"`
 }
 
 // checkoutForm is a harness whose tree walk the helper knows (its treeForm).
 type checkoutForm string
 
-// checkoutFormClaude is Claude Code's walk of .claude/rules, and
-// checkoutFormCopilot Copilot 1.0.114's.
 const (
-	checkoutFormClaude  checkoutForm = "claude"
+	// checkoutFormClaude is Claude Code's walk of .claude/rules.
+	checkoutFormClaude checkoutForm = "claude"
+	// checkoutFormCopilot is Copilot 1.0.114's walk of .claude/rules.
 	checkoutFormCopilot checkoutForm = "copilot"
+	// checkoutFormQwen is Qwen Code's walk of .qwen/rules.
+	checkoutFormQwen checkoutForm = "qwen"
+	// checkoutFormGrok is Grok Build's read of .grok/rules and .claude/rules
+	// (flat, dot files too).
+	checkoutFormGrok checkoutForm = "grok"
 )
 
 // checkoutScope is the frontmatter keys that scope a file to paths, the first
@@ -127,8 +180,15 @@ type checkoutScope struct {
 // MarshalJSON writes s in the helper's shape: a tree as an object, names as a
 // list.
 func (s checkoutSlot) MarshalJSON() ([]byte, error) {
-	if s.Tree != nil {
+	switch {
+	case s.Tree != nil:
 		return json.Marshal(s.Tree)
+	case s.Inside || s.Once:
+		return json.Marshal(struct {
+			Names  []string `json:"names"`
+			Inside bool     `json:"inside,omitempty"`
+			Once   bool     `json:"once,omitempty"`
+		}{s.Names, s.Inside, s.Once})
 	}
 	return json.Marshal(s.Names)
 }
@@ -141,11 +201,17 @@ var checkoutUnlimited *int
 // repositories the run pushes to first, and the seats' namespace reserved, so
 // no repository's skills are listed under it.
 func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
-	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.sections, "first": repos,
-		"instructions": spec.Instructions, "limit": spec.Limit, "skillDirs": spec.SkillDirs,
-		"skills": h.skills, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace},
-		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions})
-	return launch // strings, lists and an int cannot fail to encode
+	config := map[string]any{"state": h.state, "agents": h.sections, "first": repos,
+		"instructions": spec.Instructions, "limit": spec.Limit, "firingLimit": spec.FiringLimit,
+		"skillDirs": spec.SkillDirs, "skills": h.skills, "copied": h.copied,
+		"reserved":         []string{sandbox.SkillNamespace},
+		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions,
+		"skillSep": spec.SkillSep, "roots": h.roots}
+	if spec.ListedAs != "" {
+		config["listedAs"], config["homeSkills"] = spec.ListedAs, spec.HomeSkills
+	}
+	launch, _ := json.Marshal(config)
+	return launch // strings, lists, booleans and ints cannot fail to encode
 }
 
 // gate is the part of a run's script that hands the harness its checkouts'
@@ -155,7 +221,9 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 // leading nowhere set aside whole, [heldLink]), the copies an earlier run
 // listed and the state with its staging removed, checkout-launch run, and the
 // checkouts' sections written after the home's own through a link as the home
-// keeps the file, which is left untouched where they hand nothing.
+// keeps the file, its directory made where there is none (a fresh home, or a
+// Qwen Code context.fileName naming a path below it; [heldMade]), the file
+// left untouched where they hand nothing or the harness reads none.
 func (h checkoutHome) gate() string { return h.prepare() + h.compose() }
 
 // prepare is [checkoutHome.gate] up to checkout-launch: the hold, the
@@ -171,23 +239,15 @@ func (h checkoutHome) prepare() string {
 	}
 	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; rq=%s; hk=`, q(h.state), q(h.helper), q(h.skills), ra,
 		q(h.held), q(h.copied), q(h.sections))
-	line(`%s || exit 1`, h.putBack())
-	if len(h.agents) > 1 {
-		// THE FILE THE HARNESS READS, named before it is held, so a run killed
-		// past here is put back by the next ([checkoutHome.putBack]).
-		words := make([]string, len(h.agents))
-		for i, a := range h.agents {
-			words[i] = q(a)
-		}
-		line(`for rc in %s; do if [ -e "$rc" ]; then ra=$rc; break; fi; done; [ -n "$ra" ] || ra=%s`,
-			strings.Join(words, " "), q(h.agents[0]))
-		line(`printf '%%s\n' "$ra" > "$rha%s" || exit 1`, heldLive)
+	if h.holdsHome() {
+		h.holdHome(line)
 	}
-	line(`if [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
-		`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
 	line(`%s || exit 1`, h.removeCopies())
 	line(`%s`, h.removeSiblingStaging())
 	line(`: > "$rw" && rm -rf "$rr" "$rq" && mkdir -p "$rr" || exit 1`)
+	if h.roots != "" {
+		line(`: > %s || exit 1`, q(h.roots))
+	}
 	line(`if [ -f "$rh" ]; then`)
 	line(`  chmod 700 "$rh" || exit 1`)
 	line(`  "$rh" -adapter checkout-launch -config %s < /dev/null || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`,
@@ -199,18 +259,52 @@ func (h checkoutHome) prepare() string {
 	return b.String()
 }
 
+// holdHome is the gate's shell putting an earlier run's instruction file back
+// and holding the home's own afresh ([checkoutHome.gate]).
+func (h checkoutHome) holdHome(line func(string, ...any)) {
+	q := shellword.Quote
+	line(`%s || exit 1`, h.putBack())
+	if h.agentsFrom != "" {
+		// NO CANDIDATE where the setting names no file: the harness reads no
+		// home file, so none is held or written.
+		line(`ra= rf=; while IFS= read -r rc; do [ -n "$rf" ] || rf=$rc; if [ -e "$rc" ]; then ra=$rc; break; fi; done < %s; [ -n "$ra" ] || ra=$rf`,
+			q(h.agentsFrom))
+		line(`[ -z "$ra" ] || printf '%%s\n' "$ra" > "$rha%s" || exit 1`, heldLive)
+	} else if len(h.agents) > 1 {
+		// THE FILE THE HARNESS READS, named before it is held, so a run killed
+		// past here is put back by the next ([checkoutHome.putBack]).
+		words := make([]string, len(h.agents))
+		for i, a := range h.agents {
+			words[i] = q(a)
+		}
+		line(`for rc in %s; do if [ -e "$rc" ]; then ra=$rc; break; fi; done; [ -n "$ra" ] || ra=%s`,
+			strings.Join(words, " "), q(h.agents[0]))
+		line(`printf '%%s\n' "$ra" > "$rha%s" || exit 1`, heldLive)
+	}
+	line(`if [ -z "$ra" ]; then :; elif [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
+		`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
+}
+
 // compose is the shell writing the home's instruction file from what
 // [checkoutHome.prepare] held and the launch wrote: the run's own (where h has
 // a file of them), the home's own, then the sections, through a link as the
-// home keeps it; left untouched where the run adds nothing. A Copilot run
-// composes again for each launch attempt (copilotAttempts).
+// home keeps it, its directory made where there is none ([heldMade]); left
+// untouched where the run adds nothing or the harness reads no home file. A
+// Copilot run composes again for each launch attempt (copilotAttempts).
 func (h checkoutHome) compose() string {
-	if h.own == "" {
-		return `if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi` + "\n"
+	if !h.holdsHome() {
+		return ""
 	}
-	o := shellword.Quote(h.own)
-	return fmt.Sprintf(`if [ -s "$rq" ] || [ -s %[1]s ]; then { rs=; for rf in %[1]s "$rha" "$rq"; do if [ -s "$rf" ]; then printf "$rs"; cat "$rf"; rs='\n\n'; fi; done; } `+
-		`> "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`+"\n", o)
+	has, text := `[ -s "$rq" ]`, `{ if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; }`
+	if h.own != "" {
+		o := shellword.Quote(h.own)
+		has = `{ [ -s "$rq" ] || [ -s ` + o + ` ]; }`
+		text = `{ rs=; for rf in ` + o + ` "$rha" "$rq"; do if [ -s "$rf" ]; then printf "$rs"; cat "$rf"; rs='\n\n'; fi; done; }`
+	}
+	return fmt.Sprintf(`if %s && [ -n "$ra" ]; then %s > "$rq.all" && `+
+		`{ rmd=$(dirname "$ra"); rmt=; while [ ! -e "$rmd" ]; do rmt=$rmd; rmd=$(dirname "$rmd"); done; `+
+		`[ -z "$rmt" ] || { printf '%%s\n' "$rmt" > "$rha%s" && mkdir -p "$(dirname "$ra")"; }; } && `+
+		`cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`+"\n", has, text, heldMade)
 }
 
 // restore is the shell marking the run ended once no firing holds the
@@ -274,10 +368,24 @@ func (h checkoutHome) skipped() string { return h.state + "/skipped" }
 // held+[heldLive], which goes last, so it runs any number of times. One
 // candidate is the only file the run can hold, so nothing names it.
 func (h checkoutHome) putBack() string {
+	if !h.holdsHome() {
+		return ":"
+	}
 	if len(h.agents) == 1 {
-		return putBackHome(h.agents[0], h.held)
+		live := shellword.Quote(h.agents[0])
+		return "{ " + putBackHomeAt(live, h.held) + " && " + h.removeMade(live) + "; }"
 	}
 	at := shellword.Quote(h.held + heldLive)
-	return fmt.Sprintf(`{ if [ -f %[1]s ]; then rhl=$(cat %[1]s) && %[2]s && rm -f %[1]s; fi; }`, at,
-		putBackHomeAt(`"$rhl"`, h.held))
+	return fmt.Sprintf(`{ if [ -f %[1]s ]; then rhl=$(cat %[1]s) && %[2]s && %[3]s && rm -f %[1]s; fi; }`, at,
+		putBackHomeAt(`"$rhl"`, h.held), h.removeMade(`"$rhl"`))
+}
+
+// removeMade is the shell removing, once the home file at the shell word live
+// is put back, each directory the gate made for it ([heldMade]), deepest
+// first, while it is empty, up to the one recorded; one the home had, or a
+// record naming no directory above live, is left alone.
+func (h checkoutHome) removeMade(live string) string {
+	m := shellword.Quote(h.held + heldMade)
+	return fmt.Sprintf(`if [ -f %[1]s ]; then rmt=$(cat %[1]s) && rmd=$(dirname %[2]s) && case $rmd in "$rmt"|"$rmt"/*) `+
+		`while rmdir "$rmd" 2> /dev/null && [ "$rmd" != "$rmt" ]; do rmd=$(dirname "$rmd"); done;; esac; rm -f %[1]s; fi`, m, live)
 }

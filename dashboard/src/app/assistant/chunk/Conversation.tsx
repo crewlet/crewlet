@@ -72,6 +72,7 @@ import {
   RefusalStrip,
   SendButton,
   Skeleton,
+  Link,
   Tag,
   Text,
   announce,
@@ -97,6 +98,9 @@ import { questionFits } from "~/protocol/assistantWire.ts";
 import { fmtWait } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { rereadViewer, useViewer } from "~/lib/viewer.ts";
+import { layersInUse } from "~/lib/instructions.ts";
+import { useQuery } from "~/lib/useQuery.ts";
+import { href } from "../../router.tsx";
 import { keyRow, matchesRow, pressText } from "../../keymap.ts";
 import { useKeyHints } from "../../layout.ts";
 import { on as onBus, emit } from "../bus.ts";
@@ -117,6 +121,7 @@ import {
   decline,
   deleteConversation,
   deleteRefusal,
+  markOpened,
   newConversation,
   openConversation,
   pageMoved,
@@ -128,6 +133,7 @@ import {
   stop,
   undoAction,
   useConversation,
+  useOpenedCards,
 } from "./session.ts";
 import { AskComposer, useDraftBox, type DraftBox } from "./AskComposer.tsx";
 import { ATTACH_ACCEPT, ATTACH_HINT, useAttachments } from "./attachments.ts";
@@ -244,19 +250,29 @@ export function useAskGestures(): Pick<
 }
 
 /** Holds one conversation's state for the parts drawn under it. */
-export function AskProvider({ place, children }: { place: AskPlace; children: ReactNode }) {
+export function AskProvider({
+  place,
+  box,
+  children,
+}: {
+  place: AskPlace;
+  /** A draft that outlives this provider (the drawer's, kept across a close); its own where absent. */
+  box?: DraftBox;
+  children: ReactNode;
+}) {
   const view = useConversation();
   const screen = usePageSnapshot();
   const page = place.withPage ? screen : null;
   const composer = useRef<HTMLTextAreaElement>(null);
   // THE DRAFT IS NOT THIS COMPONENT'S STATE: a keystroke renders the composer
   // alone, never the thread under it (`AskComposer.tsx` says why).
-  const draft = useDraftBox();
+  const own = useDraftBox();
+  const draft = box ?? own;
   const [removed, setRemoved] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const [deleteFailed, setDeleteFailed] = useState<string | null>(null);
-  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
+  const opened = useOpenedCards();
   const running = openTurn(view);
   // THE SHELL'S ONE CLOCK, as every relative time on screen reads it: an
   // answer that ended between two ticks of a clock of its own read "in 1s".
@@ -443,7 +459,7 @@ export function AskProvider({ place, children }: { place: AskPlace; children: Re
   };
 
   const openHere = (target: InAppTarget, cardId?: string) => {
-    if (cardId) setOpened((s) => new Set(s).add(cardId));
+    if (cardId) markOpened(cardId);
     emit("assistant.navigation.open", { path: target.path, query: target.query, mode: "here" });
   };
 
@@ -583,7 +599,7 @@ export function AskThread({
             approve: (proposal) => void approve(proposal),
             decline: (proposal) => void decline(proposal),
             prepareAgain: (proposal) => a.ask(prepareAgainQuestion(proposal)),
-            openHere: (target) => a.openHere(target),
+            openHere: (target, cardId) => a.openHere(target, cardId),
             ask: (question) => a.ask(question),
             undo: undoAction,
           }}
@@ -815,7 +831,39 @@ export function AskFoot() {
       <Text as="p" variant="caption" tone="tertiary" className="assistant-disclaimer">
         Ask Crewlet can be wrong. Check before you approve.
       </Text>
+      <InstructionsInUse />
     </>
+  );
+}
+
+/** Where answers follow instructions, a quiet link to where they are set; nothing otherwise. */
+function InstructionsInUse() {
+  const { data } = useQuery("assistant_instructions");
+  const inUse = layersInUse(data);
+  if (!inUse.company && !inUse.mine) return null;
+  const whose =
+    inUse.company && inUse.mine
+      ? "the company's instructions and your own"
+      : inUse.mine
+        ? "your instructions"
+        : "the company's instructions";
+  const path = ["settings", "ask-crewlet"];
+  return (
+    <Text as="p" variant="caption" tone="tertiary" className="assistant-disclaimer">
+      <Link
+        variant="subtle"
+        size="inherit"
+        href={href(path)}
+        title={`Answers follow ${whose}. Change them in Settings, Ask Crewlet.`}
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+          e.preventDefault();
+          emit("assistant.navigation.open", { path, query: {}, mode: "here" });
+        }}
+      >
+        Instructions in use
+      </Link>
+    </Text>
   );
 }
 

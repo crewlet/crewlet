@@ -122,8 +122,9 @@ var turnReasons = []Reason{
 
 // ownerReasons start a turn exactly when the change asks something of the
 // task's OWNER ([Notify.ownerAsked]): assignee, collaborators, the lead heard
-// in the owner's place ([ReasonLeadFallback]), and the reporter, who verifies
-// the outcome. One rule for all four, because each answers for the outcome;
+// in the owner's place ([ReasonLeadFallback], never for the owner's own change,
+// [Notify.asks]), and the reporter, who verifies the outcome. One rule for all
+// four, because each answers for the outcome;
 // [Candidates] adds the reporter only for the changes that concern it, so
 // another agent's note on work it handed over never wakes it.
 var ownerReasons = []Reason{
@@ -202,7 +203,10 @@ func Candidates(n *Notify) []routing.Candidate[Reason] {
 	if task {
 		add(n.Snapshot.Assignee, ReasonAssignee, n.assigneeAddressed(handedOff, finishedEdge))
 	}
-	if handedOff {
+	if handedOff && n.Snapshot.LeftUnassigned {
+		// Not the work's owner any more, so no audience for the fallback.
+		b.InboxOnly(n.Snapshot.PrevAssignee, ReasonUnassigned)
+	} else if handedOff {
 		add(n.Snapshot.PrevAssignee, ReasonUnassigned, false)
 	}
 	switch {
@@ -254,9 +258,12 @@ func Candidates(n *Notify) []routing.Candidate[Reason] {
 	if n.Kind == ChangePurged {
 		add(n.Snapshot.ProjectLead, ReasonPurged, false)
 	}
+	// A departure tells each lead once, on one record ([Snapshot.DepartureLead]).
+	add(n.Snapshot.DepartureLead, ReasonLeadFallback, false)
 	// The fallback is always offered, as an ordered list; Route decides its
 	// use. A list because a lead filing a stray into their own team is dropped
-	// as the actor, and the project lead must still get the copy.
+	// as the actor, and the project lead must still get the copy. It wakes
+	// only where the work's owner did not make the change ([Notify.asks]).
 	if n.fallsBack() {
 		b.Fallback(ReasonLeadFallback, n.Snapshot.RoutingUnitLead, n.Snapshot.ProjectLead)
 	}
@@ -277,10 +284,14 @@ func CandidateFor(n *Notify, handle string) (routing.Candidate[Reason], bool) {
 
 // asks reports whether this change asks something of the seat that hears it
 // under reason, for the reasons whose wake depends on it ([ownerReasons] and
-// [ReasonWatcher]).
+// [ReasonWatcher]). A lead is asked to find work an owner, so a change its
+// owner made ([Snapshot.ByOwner]) only tells the lead.
 func (n *Notify) asks(reason Reason) bool {
-	if reason == ReasonWatcher {
+	switch reason {
+	case ReasonWatcher:
 		return n.watcherAsked()
+	case ReasonLeadFallback:
+		return n.ownerAsked() && !n.Snapshot.ByOwner
 	}
 	return n.ownerAsked()
 }
@@ -480,16 +491,38 @@ func (k ChangeKind) TaskCommit() bool {
 }
 
 // fallsBack reports a change that reaches a lead when nobody else is there to
-// hear it: a creation, a move to another project, a removal, a comment, or an
-// update that moved the status or the team ([Notify.moved]). Not every task
-// change: a tag edit on an unwatched task is not worth paging a lead, nor is a
-// status or team a write only restated beside another edit.
+// hear it: a creation, a move to another project, a removal, a comment, an
+// update that moved the status or the team ([Notify.moved]), or one that left
+// the task unassigned ([Snapshot.LeftUnassigned]). Not every task change: a tag edit
+// on an unwatched task is not worth paging a lead, nor is a status or team a
+// write only restated beside another edit.
 func (n *Notify) fallsBack() bool {
 	switch n.Kind {
 	case ChangeCreated, ChangeMoved, ChangeRemoved, ChangeComment:
 		return true
 	}
-	return n.moved("status") || n.moved("routing_unit")
+	return n.moved("status") || n.moved("routing_unit") || n.Snapshot.LeftUnassigned
+}
+
+// ownership is n with who owns the task once a change actor made is done.
+// [Snapshot.LeftUnassigned]: the change took the assignee away and named none.
+// [Snapshot.ByOwner]: actor holds the task, as assignee or collaborator, never
+// as reporter, and only the lead's fallback would hear it; never on a move into
+// another project, which brings the work to a lead who never heard of it.
+func (n *Notify) ownership(actor string) *Notify {
+	if n == nil {
+		return nil
+	}
+	out := *n
+	s := &out.Snapshot
+	s.LeftUnassigned = s.Assignee == "" && n.moved("assignee")
+	holds := actor != "" && (s.Assignee == actor || slices.Contains(s.Collaborators, actor))
+	s.ByOwner = false
+	if holds && n.Kind != ChangeMoved {
+		heard := Heard(Candidates(&out), nil, actor)
+		s.ByOwner = len(heard) == 1 && heard[0].FallbackOnly
+	}
+	return &out
 }
 
 // Route is the post-filter — who is actually woken — with the tracker's one

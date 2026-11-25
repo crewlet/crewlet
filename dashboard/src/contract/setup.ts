@@ -19,17 +19,32 @@ export type SetupRequirementKind =
   | "consent"
   | "redirect";
 
-/** One step at the app, its vendor UI names marked and its page linked. */
+/** One step to connect the app, its UI names marked and its page linked. */
 export interface SetupStep {
+  /** The step in a few words, and where it is taken ("Crewlet", or the app's console or shell); both or neither. */
+  title?: string;
+  where?: string;
   text: VendorTextPart[];
   /** Permissions, roles or scopes to grant there, in the app's own words. */
   grants?: string[];
+  /** What the person sees once the step worked. */
+  result?: VendorTextPart[];
+  /** What people hit at this step, each with its fix. */
+  trouble?: SetupTrouble[];
   /** The field the step produces a value for. */
   yields?: string;
   /** The integration this step connects first. */
   needs?: string;
   /** Whether `needs` is connected: on, with nothing it requires outstanding. */
   connected?: boolean;
+  /** Whether the company is past this step; the first step not done is the one it is on. */
+  done: boolean;
+}
+
+/** One way a step goes wrong: what the person sees, and the fix. */
+export interface SetupTrouble {
+  sign: VendorTextPart[];
+  fix: VendorTextPart[];
 }
 
 /** The one risk an app's credential carries, said once per form. */
@@ -56,6 +71,14 @@ interface SetupRedirectStep {
 }
 
 /** One input an integration needs; every word the form draws comes from here. */
+/** A block or key a person copies to the app, as the engine drew it. */
+export interface SetupPublicView {
+  text: string;
+  language: string;
+  drawn_from?: string[];
+  live?: boolean;
+}
+
 export interface SetupRequirement {
   field: string;
   label: string;
@@ -69,19 +92,29 @@ export interface SetupRequirement {
   connect?: boolean;
   /** One value across every surface of the tool, asked once (Atlassian's account). */
   shared?: boolean;
+  /** The form it is asked in where a tool has more than one: "sign_in" is the Google sign-in client. */
+  group?: string;
   /** A suggestion the form offers where the company has no value, never stored by itself. */
   default?: string;
   /** What a non-credential `${VAR}` here reads as, for the links built from it. */
   resolved_value?: string;
-  /** The app can check a typed value without storing it, so the form offers Test. */
+  /** The app can check a typed value, a key or not, without storing it, so the form offers Test. */
   checkable?: boolean;
   /** When the app proves a credential no Test can check ahead. */
   check_note?: string;
   /** The other fields one check of this credential is made with. */
   check_with?: string[];
   mintable?: boolean;
-  /** The engine's rendering of a minted value's public half, to copy to the app. */
-  public?: { text: string; language: string };
+  /** A mintable value Crewlet makes as soon as the form opens, so its block shows before any save. */
+  mint_first?: boolean;
+  /**
+   * The engine's rendering of a minted value's public half, to copy to the app,
+   * and the fields whose answers it is drawn from. A `live` one is redrawn from
+   * what is typed in those fields (`POST /setup/integrations/{kind}/draw`).
+   */
+  public?: SetupPublicView;
+  /** The field whose block, run at the app, prints this value: needed to finish, never to save. */
+  printed_by?: string;
   /** An `add_identity` step: the email to add at the vendor, at which role and where. */
   identity?: SetupIdentityStep;
   /** A `redirect` step: the address to register at the vendor. */

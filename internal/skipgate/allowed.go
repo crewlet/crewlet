@@ -215,11 +215,11 @@ var allowed = []Allowance{
 	},
 
 	// -----------------------------------------------------------------
-	// Environment: a container runtime. It does NOT skip in CI — the run's
-	// own log carries zero SKIP lines and `--- PASS:
-	// TestTheContainerModeRunsTheSameProtocol` — so this entry covers a
-	// workstation without docker or podman. If it ever starts skipping in
-	// CI, this gate is what says so.
+	// Environment: a container runtime. These do NOT skip in CI, whose
+	// runners are Linux with docker — the run's own log carries zero SKIP
+	// lines and `--- PASS: TestTheContainerModeRunsTheSameProtocol` — so each
+	// entry covers a workstation without docker or podman. If one ever starts
+	// skipping in CI, this gate is what says so.
 	// -----------------------------------------------------------------
 	{
 		Package: "internal/e2e",
@@ -229,21 +229,48 @@ var allowed = []Allowance{
 			"in-box paths are exercised against a real container; the direct mode covers " +
 			"the run protocol itself.",
 	},
+	{
+		Package: "internal/e2e",
+		Test:    "TestABrowserSeatsBoxRunsItsBrowserInAContainer",
+		When:    Environment,
+		Why: "Needs a usable docker or podman on a Linux host, whose newest Chromium pin is a build a " +
+			"Linux container can run. The one case that runs a seat's browser in a real container: the " +
+			"helper's own suite proves the browser on the host, and the launch's step is proven against " +
+			"the sandbox's fakes.",
+	},
+	{
+		Package: "internal/e2e",
+		Test:    "TestABrowserIsWithheldWhereItsBoxReachesItsHostsLoopback",
+		When:    Environment,
+		Why: "Needs a usable docker or podman on a Linux host. The one case that runs the launch's network " +
+			"check in real container boxes: on the bridge, on the host's network and through a relayed host " +
+			"alias; hostreach's own suite proves the protocol on the host and the box's half against " +
+			"fixtures.",
+	},
 
 	// -----------------------------------------------------------------
-	// Environment: a container runtime for a real sshd. Like the container
-	// mode's case above, these do not skip in CI, whose runners have docker;
-	// each entry covers a workstation without docker or podman. An entry names
-	// the case, never one of its images: a case that runs a server per image
-	// skips before its per-image subtests (sshdtest.Require), since a skip is
-	// matched to its entry by the test's exact name.
+	// Environment: a container runtime (imagetest.Require), to build a test
+	// image or run a real sshd. Like the container mode's case above, these do
+	// not skip in CI, whose runners have docker; each entry covers a
+	// workstation without docker or podman. An entry names the case, never one
+	// of its images: a case that runs a server per image skips before its
+	// per-image subtests (sshdtest.Require, which calls imagetest's), since a
+	// skip is matched to its entry by the test's exact name.
 	// -----------------------------------------------------------------
 	{
-		Package: "internal/ssh/sshdtest",
+		Package: "internal/imagetest",
 		Test:    "TestABuildThatFailsSaysWhy",
 		When:    Environment,
 		Why: "Needs a usable docker or podman to build an image whose step fails. Nothing else " +
 			"proves a failed test-image build hands its step's own error to the test.",
+	},
+	{
+		Package: "internal/imagetest",
+		Test:    "TestABuildCopiesFromItsContextDirectory",
+		When:    Environment,
+		Why: "Needs a usable docker or podman to build an image from a context directory. Nothing " +
+			"else proves the runtime takes the Dockerfile on stdin beside the directory: the fake " +
+			"runtime's case holds only the command line it is handed.",
 	},
 	{
 		Package: "internal/ssh",

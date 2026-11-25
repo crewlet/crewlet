@@ -115,7 +115,7 @@ func New(d Draft) (assistantdomain.NewProposal, error) {
 	card := wire.Card{Type: wire.CardProposal, Proposal: &wire.ProposalCard{
 		ProposalID: id, Scope: d.Scope, Tool: d.Tool, Title: p.Title, Target: p.Target,
 		Changes: Rows(p.Changes), Summary: p.Summary, Note: p.Note, Risk: p.Risk,
-		Technical: p.Technical, Audience: p.Audience,
+		Technical: p.Technical, Audience: p.Audience, Own: p.Own,
 		Taint:  d.Taint,
 		StepUp: p.StepUp, Digest: digest, ExpiresAt: fields.ExpiresAt,
 		State: wire.ProposalProposed, SourceRevision: p.SourceRevision,

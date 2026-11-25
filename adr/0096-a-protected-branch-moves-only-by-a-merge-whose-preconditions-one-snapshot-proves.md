@@ -2,7 +2,12 @@
 
 - **Status:** accepted
 - **Authority:** `internal/gitlet`
-- **Enforced-by:** `internal/gitlet.TestAMergeIsDecidedFromOneSnapshot`, `internal/gitlet.TestAMergeMovesTargetDeletesSourceInOneRecord`, `internal/gitlet.TestAnOverrideIsAPersons`, `internal/gitlet.TestAProtectedRefMovesOnlyByAGatedRecord`, `internal/gitlet.TestTheGateReadsNoDecision`
+- **Enforced-by:**
+  - `internal/gitlet.TestAMergeIsDecidedFromOneSnapshot`
+  - `internal/gitlet.TestAMergeMovesTargetDeletesSourceInOneRecord`
+  - `internal/gitlet.TestAnOverrideIsAPersons`
+  - `internal/gitlet.TestAProtectedRefMovesOnlyByAGatedRecord`
+  - `internal/gitlet.TestTheGateReadsNoDecision`
 - **Tag-status:** unreleased
 
 ## The decision

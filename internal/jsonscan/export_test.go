@@ -8,9 +8,6 @@ func NewSized(r io.Reader, size int) *Scanner {
 	return newScanner(r, size)
 }
 
-// ReadBufferSize is the buffer New gives a Scanner, which the memory test's ceiling is stated from.
-const ReadBufferSize = readBufferSize
-
 // MinBufferSize is the least buffer a Scanner reads with, which slides its edge most often.
 const MinBufferSize = minBufferSize
 

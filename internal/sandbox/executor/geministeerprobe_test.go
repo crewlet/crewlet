@@ -117,8 +117,19 @@ echo '{"type":"result","status":"success"}'`)
 		}
 		return answers
 	}
+	// A RUN HANDED NO SKILL RUNS NO TAKE AFTER A TOOL: its one AfterTool hook
+	// is the checkouts' ([geminiCheckoutsEntry]), which, with no checkout
+	// cloned, answers nothing.
+	for _, matcher := range settings.Hooks["AfterTool"] {
+		for _, hook := range matcher.Hooks {
+			if strings.Contains(hook.Command, p.GeminiTake()) {
+				t.Errorf("a run handed no skill runs its take script after a tool: %s", hook.Command)
+			}
+		}
+	}
 	if answers := play("AfterTool", map[string]any{"hook_event_name": "AfterTool", "tool_name": "mcp_crewlet_echo",
-		"tool_response": map[string]any{"llmContent": "echo: hello"}}); len(answers) != 0 {
+		"tool_response": map[string]any{"llmContent": "echo: hello"}}); slices.ContainsFunc(answers,
+		func(a string) bool { return a != "" }) {
 		t.Errorf("a run handed no skill has AfterTool hooks answering %q", answers)
 	}
 	finish := map[string]any{"hook_event_name": "AfterAgent", "stop_hook_active": false}

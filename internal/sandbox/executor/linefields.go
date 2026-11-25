@@ -43,7 +43,7 @@ func (w *lineWalk) wordField(k jsonscan.Kind) (string, bool, error) {
 	case jsonscan.Null:
 		return "", true, nil
 	}
-	return "", false, w.scan.Skip()
+	return "", false, w.skip(k)
 }
 
 // flagField is the bool the value k is, and whether a bool field takes it.
@@ -54,7 +54,7 @@ func (w *lineWalk) flagField(k jsonscan.Kind) (bool, bool, error) {
 	case jsonscan.False, jsonscan.Null:
 		return false, true, nil
 	}
-	return false, false, w.scan.Skip()
+	return false, false, w.skip(k)
 }
 
 // intField is the whole number the value k begins, and whether an int64
@@ -71,7 +71,7 @@ func (w *lineWalk) intField(k jsonscan.Kind) (int64, bool, error) {
 		n, parseErr := strconv.ParseInt(string(raw), 10, 64)
 		return n, parseErr == nil, nil
 	}
-	return 0, false, w.scan.Skip()
+	return 0, false, w.skip(k)
 }
 
 // typedField reports whether a field of kind takes the value k begins,
@@ -86,7 +86,7 @@ func (w *lineWalk) typedField(k jsonscan.Kind, kind fieldKind) (bool, error) {
 		return ok, err
 	}
 	took := k == jsonscan.Null || kind == fieldAny || kind == fieldString && k == jsonscan.String
-	return took, w.scan.Skip()
+	return took, w.skip(k)
 }
 
 // typedObject reports whether a struct whose fields read its members of
@@ -97,13 +97,13 @@ func (w *lineWalk) typedObject(k jsonscan.Kind, fields map[string]fieldKind) (bo
 		return true, nil
 	case jsonscan.ObjectStart:
 	default:
-		return false, w.scan.Skip()
+		return false, w.skip(k)
 	}
 	took := true
 	err := w.members(func(name string, k jsonscan.Kind) error {
 		kind, read := fields[name]
 		if !read {
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		ok, err := w.typedField(k, kind)
 		took = took && ok
@@ -121,7 +121,7 @@ func (w *lineWalk) objectField(k jsonscan.Kind, each func(name string, k jsonsca
 	case jsonscan.ObjectStart:
 		return true, w.members(each)
 	}
-	return false, w.scan.Skip()
+	return false, w.skip(k)
 }
 
 // listField reports whether a slice field takes the value k begins, a list
@@ -133,5 +133,5 @@ func (w *lineWalk) listField(k jsonscan.Kind, each func(k jsonscan.Kind) error) 
 	case jsonscan.ArrayStart:
 		return true, w.elements(func(k jsonscan.Kind) (bool, error) { return true, each(k) })
 	}
-	return false, w.scan.Skip()
+	return false, w.skip(k)
 }

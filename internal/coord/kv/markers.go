@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -332,12 +331,12 @@ func (f *FleetStore) sweepBodies(ctx context.Context, walked sweepPass, cutoff t
 	}
 	named := ""
 	if held {
-		named = record.Body.SHA256
+		named = bodyKey(record.Body)
 	}
 	keys := make([]string, 0)
 	for key, kve := range walked.keys {
-		digest, body := strings.CutPrefix(key, bodyPrefix)
-		if !body || digest == named || kve.Operation() != jetstream.KeyValuePut ||
+		class, _ := coord.KeyClass(key)
+		if class != coord.BodyClass || key == named || kve.Operation() != jetstream.KeyValuePut ||
 			!kve.Created().Before(cutoff) {
 			continue
 		}

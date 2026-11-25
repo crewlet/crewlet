@@ -2,7 +2,29 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestListRunsShowsATitleOnlyForTheSameRequester`, `internal/engine.TestAMessageIsRefusedAcrossRequestersToItselfPastItsBoundsAndToARunNotWorking`, `internal/engine.TestAnotherRunsMessageIsReadFencedAtTheNextStepAsInformation`, `internal/engine.TestAWaitParksAndIsAnsweredOnEachWayItsRunLeaves`, `internal/engine.TestAWaitThatWouldCloseACycleOfRunsIsRefused`, `internal/sandbox.TestARunsMessageIsAnItemOfItsOwnWithinItsJobsBounds`, `internal/sandbox.TestAJobsMessagesToOtherRunsAreCountedWithinTheirBound`, `internal/sandbox.TestTwoRunsShareARequesterOnlyWhereTheirCeilingsNameOne`, `internal/sandbox.TestARunWaitingOnAnotherKeepsItsKeysUntilItResumesOrEnds`, `internal/sandbox.TestAReplyNeverAnswersARunWaitingOnAnotherRun`, `internal/engine.TestASecondTurnNeverStartsInAWaitingRunsConversation`, `internal/agent/runner.TestALaunchListsTheRunsAroundItAndOffersTheirToolsOnlyWhenThereAreSome`, `internal/agent/prompts.TestARunsMessageIsToldAsInformationInItsSendersFence`, `internal/engine.TestOtherSeatsRunsOnTheSameWorkAreListedByHowTheyRelate`, `internal/engine.TestAMessageToAnotherSeatsRunCarriesItsRequesterAndNeedsReach`, `internal/engine.TestAWaitCycleThroughAnotherSeatsRunIsRefused`, `internal/sandbox.TestOtherSeatsRunsOnTheWorkAreOneBoundedListing`, `internal/engine.TestARunAndTheRunOnTheTicketItFiledSeeEachOther`, `internal/sandbox.TestWhatEitherRunWroteFindsItInOneListingOfTheRows`, `internal/engine.TestAJobParkedOnItsOwnCallIsAnsweredOnceAtItsPark`, `internal/engine.TestAParkedCallsResultReachesItsSessionByTheRelaunchWithNoNote`, `internal/agent/prompts.TestEveryRunRelationIsSaid`
+- **Enforced-by:**
+  - `internal/engine.TestListRunsShowsATitleOnlyForTheSameRequester`
+  - `internal/engine.TestAMessageIsRefusedAcrossRequestersToItselfPastItsBoundsAndToARunNotWorking`
+  - `internal/engine.TestAnotherRunsMessageIsReadFencedAtTheNextStepAsInformation`
+  - `internal/engine.TestAWaitParksAndIsAnsweredOnEachWayItsRunLeaves`
+  - `internal/engine.TestAWaitThatWouldCloseACycleOfRunsIsRefused`
+  - `internal/sandbox.TestARunsMessageIsAnItemOfItsOwnWithinItsJobsBounds`
+  - `internal/sandbox.TestAJobsMessagesToOtherRunsAreCountedWithinTheirBound`
+  - `internal/sandbox.TestTwoRunsShareARequesterOnlyWhereTheirCeilingsNameOne`
+  - `internal/sandbox.TestARunWaitingOnAnotherKeepsItsKeysUntilItResumesOrEnds`
+  - `internal/sandbox.TestAReplyNeverAnswersARunWaitingOnAnotherRun`
+  - `internal/engine.TestASecondTurnNeverStartsInAWaitingRunsConversation`
+  - `internal/agent/runner.TestALaunchListsTheRunsAroundItAndOffersTheirToolsOnlyWhenThereAreSome`
+  - `internal/agent/prompts.TestARunsMessageIsToldAsInformationInItsSendersFence`
+  - `internal/engine.TestOtherSeatsRunsOnTheSameWorkAreListedByHowTheyRelate`
+  - `internal/engine.TestAMessageToAnotherSeatsRunCarriesItsRequesterAndNeedsReach`
+  - `internal/engine.TestAWaitCycleThroughAnotherSeatsRunIsRefused`
+  - `internal/sandbox.TestOtherSeatsRunsOnTheWorkAreOneBoundedListing`
+  - `internal/engine.TestARunAndTheRunOnTheTicketItFiledSeeEachOther`
+  - `internal/sandbox.TestWhatEitherRunWroteFindsItInOneListingOfTheRows`
+  - `internal/engine.TestAJobParkedOnItsOwnCallIsAnsweredOnceAtItsPark`
+  - `internal/engine.TestAParkedCallsResultReachesItsSessionByTheRelaunchWithNoNote`
+  - `internal/agent/prompts.TestEveryRunRelationIsSaid`
 - **Cost-when-tried:** with a cap above one ([ADR-0169](0169-a-seat-runs-up-to-its-cap-of-runs-one-per-conversation.md)) a seat runs several runs at once, and nothing told one of the others: two could take the same work item, push the same branch or answer one person twice, each finding out only from the wreckage.
 - **Tag-status:** unreleased
 

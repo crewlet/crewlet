@@ -2,7 +2,10 @@
 
 - **Status:** accepted
 - **Authority:** `internal/events`
-- **Enforced-by:** `internal/events.TestAnUnknownTypesLargeIntegersSurviveARoundTrip`, `internal/events/types.TestUnknownTypeSurvivesIntact`, `internal/events/types.TestPayloadTagsMatchTheWireContract`
+- **Enforced-by:**
+  - `internal/events.TestAnUnknownTypesLargeIntegersSurviveARoundTrip`
+  - `internal/events/types.TestUnknownTypeSurvivesIntact`
+  - `internal/events/types.TestPayloadTagsMatchTheWireContract`
 - **Cost-when-tried:** a consumer that *ignores* what it does not recognise is indistinguishable from one that drops it, and during a rolling upgrade the older nodes are the ones holding the newer events — so every upgrade would strip the new fields off every event it forwarded.
 - **Tag-status:** unreleased
 

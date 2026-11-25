@@ -2,6 +2,7 @@ package setupapi_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -135,7 +136,9 @@ func checkTool(t *testing.T, tool integration.Tool, byKind map[integration.Kind]
 		checkGuide(t, tool.Key, guides[0], fields)
 		checkStepLinks(t, tool.Key, guides[0], fields)
 		for i, step := range guides[0].Prepare {
-			samePage(t, tool.Key+" step "+string(rune('1'+i)), step.Text, pages)
+			for _, text := range stepTexts(step) {
+				samePage(t, tool.Key+" step "+string(rune('1'+i)), text, pages)
+			}
 		}
 	default:
 		t.Errorf("%s: %d surfaces carry a guide, and one form opens on one", tool.Key, len(guides))
@@ -181,6 +184,7 @@ func checkGuide(t *testing.T, tool string, g setup.Guide, fields map[string]setu
 	if n := setuptest.Words(g.Summary); n > maxIntroWords {
 		t.Errorf("%s: the intro runs to %d words, past %d: %q", tool, n, maxIntroWords, g.Summary)
 	}
+	placed := 0
 	for i, step := range g.Prepare {
 		label := tool + " step " + string(rune('1'+i))
 		end := "."
@@ -188,6 +192,10 @@ func checkGuide(t *testing.T, tool string, g setup.Guide, fields map[string]setu
 			end = ":"
 		}
 		said(t, label, step.Text, end)
+		checkStepParts(t, label, step)
+		if step.Title != "" {
+			placed++
+		}
 		if _, ok := fields[step.Yields]; step.Yields != "" && !ok {
 			t.Errorf("%s: yields %q, which is no field of %s", label, step.Yields, tool)
 		}
@@ -197,11 +205,45 @@ func checkGuide(t *testing.T, tool string, g setup.Guide, fields map[string]setu
 			}
 		}
 	}
+	// A GUIDE SAYS WHERE EACH STEP HAPPENS OR NEVER: one step with no place
+	// among placed ones reads as taken where the one before it was.
+	if placed != 0 && placed != len(g.Prepare) {
+		t.Errorf("%s: %d of %d steps carry a title and a place, and a guide gives them on every step or none",
+			tool, placed, len(g.Prepare))
+	}
 	if c := g.Caution; c != nil {
 		if c.Title == "" || strings.HasSuffix(c.Title, ".") || strings.ContainsAny(c.Title, "\n\u2014") {
 			t.Errorf("%s: the caution's title %q is not a heading", tool, c.Title)
 		}
 		line(t, tool+" caution", c.Body, ".")
+	}
+}
+
+// maxTitleWords is the most words a step's heading says.
+const maxTitleWords = 6
+
+// checkStepParts holds a step's heading, place, result and troubles to the
+// rules: a heading and a place together, the rest each one finished line.
+func checkStepParts(t *testing.T, label string, step setup.Step) {
+	t.Helper()
+	if (step.Title == "") != (step.Where == "") {
+		t.Errorf("%s: carries a title %q and a place %q, and a step gives both or neither", label, step.Title,
+			step.Where)
+	}
+	if step.Title != "" {
+		if problem := setuptest.LineProblem(step.Title+".", "."); problem != "" || strings.HasSuffix(step.Title, ".") {
+			t.Errorf("%s: the title %q is not a heading", label, step.Title)
+		}
+		if n := setuptest.Words(step.Title); n > maxTitleWords {
+			t.Errorf("%s: the title %q runs to %d words, past %d", label, step.Title, n, maxTitleWords)
+		}
+	}
+	if len(step.Result) > 0 {
+		said(t, label+" result", step.Result, ".")
+	}
+	for i, trouble := range step.Trouble {
+		said(t, fmt.Sprintf("%s trouble %d sign", label, i+1), trouble.Sign, ".")
+		said(t, fmt.Sprintf("%s trouble %d fix", label, i+1), trouble.Fix, ".")
 	}
 }
 
@@ -260,13 +302,22 @@ func waitsOn(texts ...vendortext.Text) []string {
 	return out
 }
 
+// stepTexts is every text a step says: its words, its result and its troubles.
+func stepTexts(step setup.Step) []vendortext.Text {
+	out := []vendortext.Text{step.Text, step.Result}
+	for _, trouble := range step.Trouble {
+		out = append(out, trouble.Sign, trouble.Fix)
+	}
+	return out
+}
+
 // checkStepLinks holds each step's link to a page it can open: a value its
 // address waits on is one an earlier step produces, or has a default.
 func checkStepLinks(t *testing.T, tool string, g setup.Guide, fields map[string]setup.Requirement) {
 	t.Helper()
 	yielded := map[string]bool{}
 	for i, step := range g.Prepare {
-		for _, field := range waitsOn(step.Text) {
+		for _, field := range waitsOn(stepTexts(step)...) {
 			if !yielded[field] && fields[field].Default == "" {
 				t.Errorf("%s step %d: links a page that waits on %s, and no earlier step "+
 					"produces it, so the step names a page it cannot open", tool, i+1, field)

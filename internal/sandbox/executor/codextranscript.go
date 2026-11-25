@@ -138,6 +138,7 @@ func newCodexReading(b *transcriptBuilder, lines *bufio.Reader) *codexReading {
 	r.setupBounded(b, r, lines)
 	r.bound, r.src.bound = codexWalkBound, codexWalkBound
 	r.quiet, r.tornUnread = true, true
+	r.passImages()
 	return r
 }
 
@@ -183,14 +184,14 @@ func (r *codexReading) record() error {
 			r.compactionOutput = false
 			ok, err = r.objectField(k, func(name string, k jsonscan.Kind) error {
 				if name != "compaction_output" {
-					return r.scan.Skip()
+					return r.skip(k)
 				}
 				flag, took, flagErr := r.flagField(k)
 				r.compactionOutput, r.fragment = flag, r.fragment || !took
 				return flagErr
 			})
 		default:
-			return r.scan.Skip()
+			return r.skip(k)
 		}
 		r.fragment = r.fragment || !ok
 		return err
@@ -207,7 +208,7 @@ func (r *codexReading) payloadField(k jsonscan.Kind) error {
 	case jsonscan.ObjectStart:
 	default:
 		r.compacted, r.item.took = false, false
-		return r.scan.Skip()
+		return r.skip(k)
 	}
 	it := &r.item
 	return r.members(func(name string, k jsonscan.Kind) error {
@@ -227,7 +228,7 @@ func (r *codexReading) payloadField(k jsonscan.Kind) error {
 				err = r.wholeText(&r.summary)
 			case jsonscan.Null:
 			default:
-				ok, err = false, r.scan.Skip()
+				ok, err = false, r.skip(k)
 			}
 			r.compacted = r.compacted && ok
 			return err
@@ -257,18 +258,18 @@ func (r *codexReading) payloadField(k jsonscan.Kind) error {
 			it.input, ok, err = r.stringText(&r.text, TranscriptEntry{Kind: EntryToolCall}, k)
 		case "action":
 			if !r.reads("web_search_call", "local_shell_call") {
-				return r.scan.Skip()
+				return r.skip(k)
 			}
-			it.action, err = r.rawText(&r.raw, &r.compactor, TranscriptEntry{Kind: EntryToolCall})
+			it.action, err = r.rawText(&r.raw, &r.compactor, TranscriptEntry{Kind: EntryToolCall}, k)
 		case "output":
 			if !r.reads("function_call_output", "custom_tool_call_output") {
-				return r.scan.Skip()
+				return r.skip(k)
 			}
 			err = r.output(k)
 		case "internal_chat_message_metadata_passthrough":
 			ok, err = it.meta.read(&r.lineWalk, k)
 		default:
-			return r.scan.Skip()
+			return r.skip(k)
 		}
 		it.took = it.took && ok
 		return err
@@ -307,7 +308,7 @@ func (r *codexReading) argsText(k jsonscan.Kind) (readText, bool, error) {
 		return readText{p: b.held(e, "", ordinal), set: true, blank: true}, true, nil
 	case jsonscan.String:
 	default:
-		return readText{}, false, r.scan.Skip()
+		return readText{}, false, r.skip(k)
 	}
 	t := r.text.begin(b, e, b.shapes(EntryToolCall, ordinal))
 	if err := r.read(t); err != nil {
@@ -335,13 +336,13 @@ func (r *codexReading) output(k jsonscan.Kind) error {
 	case jsonscan.ArrayStart:
 	default:
 		var err error
-		o.value, err = r.rawText(&r.raw, &r.compactor, e)
+		o.value, err = r.rawText(&r.raw, &r.compactor, e, k)
 		return err
 	}
 	o.list = true
 	o.parts.start(b, e, b.shapes(EntryToolResult, b.seen), codexOutputParts)
 	r.listRaw.begin(b, TranscriptEntry{Kind: EntryToolResult}, false)
-	r.listCompact = jsonCompactor{w: &r.listRaw, buf: r.listCompact.buf}
+	r.listCompact = jsonCompactor{w: r.asWritten(&r.listRaw), buf: r.listCompact.buf}
 	if err := r.scan.Tee(&r.listCompact); err != nil {
 		return err
 	}

@@ -2,7 +2,23 @@
 
 - **Status:** accepted
 - **Authority:** `internal/digitalocean`
-- **Enforced-by:** `internal/digitalocean.TestTheAtlasReadsTheTeamsResources`, `internal/digitalocean.TestTheDigitalOceanReadAndTheSettingsNameOneTeam`, `internal/digitalocean.TestATokenThatCanWriteReadsNothing`, `internal/digitalocean.TestAnAgentsTokenIsNeverTheAtlass`, `internal/digitalocean.TestAScopeTheTokenLacksIsAFindingAndRetiresNothing`, `internal/digitalocean.TestNoCredentialShapeReachesTheAtlasFromDigitalOcean`, `internal/digitalocean.TestAListingThatFailsFailsTheDigitalOceanRead`, `internal/digitalocean.TestADigitalOceanWithNoAtlasTokenIsNotConfigured`, `internal/digitalocean.TestTheConnectFormTestsTheAtlasToken`, `internal/expo.TestTheAtlasReadsTheAccountsProjectsAndBuilds`, `internal/expo.TestARobotThatIsNoViewerReadsNothing`, `internal/expo.TestAnAgentsRobotIsNeverTheAtlass`, `internal/expo.TestNoCredentialShapeReachesTheAtlasFromExpo`, `internal/expo.TestAProjectListingIsReadToItsEndOrNotAtAll`, `internal/expo.TestAnExpoWithNoAtlasTokenIsNotConfigured`, `internal/expo.TestTheConnectFormTestsTheAtlasRobot`
+- **Enforced-by:**
+  - `internal/digitalocean.TestTheAtlasReadsTheTeamsResources`
+  - `internal/digitalocean.TestTheDigitalOceanReadAndTheSettingsNameOneTeam`
+  - `internal/digitalocean.TestATokenThatCanWriteReadsNothing`
+  - `internal/digitalocean.TestAnAgentsTokenIsNeverTheAtlass`
+  - `internal/digitalocean.TestAScopeTheTokenLacksIsAFindingAndRetiresNothing`
+  - `internal/digitalocean.TestNoCredentialShapeReachesTheAtlasFromDigitalOcean`
+  - `internal/digitalocean.TestAListingThatFailsFailsTheDigitalOceanRead`
+  - `internal/digitalocean.TestADigitalOceanWithNoAtlasTokenIsNotConfigured`
+  - `internal/digitalocean.TestTheConnectFormTestsTheAtlasToken`
+  - `internal/expo.TestTheAtlasReadsTheAccountsProjectsAndBuilds`
+  - `internal/expo.TestARobotThatIsNoViewerReadsNothing`
+  - `internal/expo.TestAnAgentsRobotIsNeverTheAtlass`
+  - `internal/expo.TestNoCredentialShapeReachesTheAtlasFromExpo`
+  - `internal/expo.TestAProjectListingIsReadToItsEndOrNotAtAll`
+  - `internal/expo.TestAnExpoWithNoAtlasTokenIsNotConfigured`
+  - `internal/expo.TestTheConnectFormTestsTheAtlasRobot`
 - **Cost-when-tried:** not tried. Every source before this one read under a credential the company had already given the engine. DigitalOcean and Expo are the first two vendors where the company's half holds no credential at all: every token is one agent's.
 - **Tag-status:** unreleased
 

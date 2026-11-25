@@ -403,44 +403,39 @@ func TestACopilotRunWithACapItsExtensionNeverRanFails(t *testing.T) {
 	}
 }
 
-// A capped run that made more model requests than its cap FAILS, saying so,
-// whatever the extension said: its own usage records are the count. tool's
-// run made two requests, its extension's line beside them.
+// A COPILOT RUN'S REQUESTS ARE ITS SESSION'S OWN USAGE RECORDS, whatever its
+// extension said: tool's run made two, its extension's line beside them, and
+// a stream that printed a record of its own before the script's mark counts it
+// not ([Decoder.Requests]).
 //
-// Mutation: drop the count check, or count the cap's own last request as past
-// it (>=) — the cap of 1 succeeds, or the cap of 2 fails.
-func TestACopilotRunPastItsCapFailsWhateverItsExtensionSaid(t *testing.T) {
-	run := func(turns int) sandbox.Result {
-		stream := append([]byte(copilotCapLine(turns)+"\n"+copilotArmedLine(t)),
-			copilotCollected(t, "tool.stream.jsonl", "tool.events.jsonl", 0)...)
-		dec := &copilotEvents{}
-		_ = eachLine(bytes.NewReader(stream), dec, maxLineBytes)
-		return dec.Result()
-	}
-	if res := run(1); res.Success || res.Error != "the turn cap of 1 was not enforced: the run made 2 model requests" {
-		t.Fatalf("a cap of 1 over two requests: %+v, want the failure", res)
-	}
-	if res := run(2); !res.Success {
-		t.Fatalf("a cap of 2 over two requests: %+v, want the answer", res)
+// Mutation: count the stream's own records, or the extension's word, and the
+// count is not two.
+func TestACopilotRunsRequestsAreItsSessionsUsageRecords(t *testing.T) {
+	stream := append([]byte(copilotCapLine(1)+"\n"+copilotArmedLine(t)),
+		copilotCollected(t, "tool.stream.jsonl", "tool.events.jsonl", 0)...)
+	record := []byte(`{"type":"session.usage_record","data":{"usage":{"inputTokens":1,"outputTokens":1}}}` + "\n")
+	dec := &copilotEvents{}
+	_ = eachLine(bytes.NewReader(append(record, stream...)), dec, maxLineBytes)
+	if dec.Requests() != 2 {
+		t.Fatalf("the run counts %d requests, want its session's two", dec.Requests())
 	}
 }
 
 // A subagent's events name it on their envelope, beside their type, never in
 // their data (subagent-note: a note served while a `task` subagent ran, which
-// made two requests to the main agent's three): its requests are none of a
-// capped run's main requests, and its lines are its own thread.
+// made two requests to the main agent's three): its requests are the run's,
+// and its lines are its own thread.
 //
-// Mutation: read the agent off the event's data — the cap of 3 fails on five
-// requests, and the subagent's answer files under the main thread.
+// Mutation: read the agent off the event's data — the subagent's answer
+// files under the main thread.
 func TestACopilotSubagentIsToldByItsEnvelope(t *testing.T) {
 	const agent = "716fbfd1-ea35-4e3d-bd51-33d8863b10de"
 	stream := append([]byte(copilotCapLine(3)+"\n"+copilotArmedLine(t)),
 		copilotCollected(t, "subagent-note.stream.jsonl", "subagent-note.events.jsonl", 0)...)
 	dec := &copilotEvents{}
 	_ = eachLine(bytes.NewReader(stream), dec, maxLineBytes)
-	if res := dec.Result(); !res.Success || dec.requests != 5 || dec.mainRequests != 3 {
-		t.Fatalf("result = %+v over %d requests, %d of them main; want the answer over 5, 3 main",
-			res, dec.requests, dec.mainRequests)
+	if res := dec.Result(); !res.Success || dec.Requests() != 5 {
+		t.Fatalf("result = %+v over %d requests; want the answer over 5", res, dec.Requests())
 	}
 	archive := copilotArchive(t, map[string][]byte{
 		"session-state/ffffffff-ffff-4fff-8fff-000000000107/events.jsonl": copilotFixture(t,
@@ -1642,5 +1637,27 @@ func TestACopilotBoxContinuesItsOwnCopyOnlyOnTheReleaseSupported(t *testing.T) {
 	}
 	if copilotFloor() == "" {
 		t.Error("the copilot profile's written_for names no release")
+	}
+}
+
+// A COPILOT COMPACTION IS A REQUEST OF THE RUN'S: its summary request records
+// no usage, so the run's count takes each compaction the stream started beside
+// the usage records ([Decoder.Requests]).
+//
+// Mutation: count the usage records alone, and the run counts two of three.
+func TestACopilotCompactionIsARequestOfTheRuns(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"session.start","data":{"sessionId":"0b5e0000-0000-4000-8000-000000000001"}}`,
+		`{"type":"session.compaction_start","data":{"compactionAttemptId":"a1","trigger":"threshold"}}`,
+		`{"type":"session.compaction_complete","data":{"compactionAttemptId":"a1","success":true}}`,
+		`{"type":"result","sessionId":"0b5e0000-0000-4000-8000-000000000001","exitCode":0}`,
+		`{"type":"crewlet.usage"}`,
+		`{"type":"session.usage_record","data":{"usage":{"inputTokens":1,"outputTokens":1}}}`,
+		`{"type":"session.usage_record","data":{"usage":{"inputTokens":1,"outputTokens":1}}}`,
+	}, "\n")
+	dec := &copilotEvents{}
+	_ = eachLine(strings.NewReader(stream), dec, maxLineBytes)
+	if dec.Requests() != 3 || dec.Result().Turns != 3 {
+		t.Fatalf("requests %d, turns %d; want the 2 recorded and the compaction's", dec.Requests(), dec.Result().Turns)
 	}
 }

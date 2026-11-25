@@ -229,6 +229,10 @@ type attachment struct {
 	failures   map[uint64]*failureRecord
 	failuresMu sync.Mutex
 
+	// spaced is the spaced returns the loop owes ([attachment.sendSpaced]),
+	// touched by the loop alone.
+	spaced []spacedReturn
+
 	// aside is what this attachment holds aside ([queue.OutcomeAside]),
 	// readmitted what a Readmit handed back for the next drain, readmits the
 	// keys readmitted since the running dispatch began, and keeperRunning
@@ -339,11 +343,13 @@ const handBackStopping = "stopping"
 
 // reachedTop records that the consume loop stands at the top of a cycle, with
 // its gate shut when blocked: everything it fetched before is dispatched or
-// handed back, and a blocked loop fetches nothing until a verb opens its gate.
+// handed back, and a blocked loop fetches nothing until a verb opens its gate,
+// so it sends the spaced returns it owes first ([attachment.sendSpaced]).
 // Only the loop writes it, so a load and a store cannot lose a top.
 func (a *attachment) reachedTop(blocked bool) {
 	next := (a.top.Load()>>1 + 1) << 1
 	if blocked {
+		a.sendSpaced()
 		next |= 1
 	}
 	a.top.Store(next)
@@ -386,21 +392,21 @@ func (a *attachment) stop() {
 	}
 }
 
-// fetch asks the broker for up to n messages, waiting at most wait, and hands
-// each to take; the one way every loop fetches, so a stop reaches every fetch
-// through [attachment.fetching].
+// fetch asks the broker for up to n messages, waiting at most wait, hands each
+// to take and reports whether the broker answered (sent, and not refused); the
+// one way every loop fetches, so a stop reaches it ([attachment.fetching]).
 //
 // Two context options, no expiry option: FetchMaxWait is a timer only, so a stop
 // waited out the window. The context option's deadline both becomes the
 // request's expiry (a tenth held back) and ends the client's wait, so a message
-// handed over just before the expiry is dropped and sits out the ack window.
-// So the first carries only a deadline, past wait by the held-back share so the
-// broker's expiry is wait itself; the second is the wait context,
-// [attachment.fetching], with no deadline, ending on the broker's timeout plus
-// grace, or a stop. [TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce] pins both.
-func (a *attachment) fetch(n int, wait time.Duration, take func(jetstream.Msg)) error {
+// handed over just before the expiry is dropped and sits out the ack window. So
+// the first carries only a deadline, past wait by the held-back share so the
+// broker's expiry is wait itself; the second, [attachment.fetching], has none,
+// ending on the broker's timeout plus grace or a stop (pinned by
+// [TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce]).
+func (a *attachment) fetch(n int, wait time.Duration, take func(jetstream.Msg)) (bool, error) {
 	if err := a.fetching.Err(); err != nil {
-		return err
+		return false, err
 	}
 	deadline := time.Now().Add(wait + expiryHeldBack(wait))
 	expiry, cancel := context.WithDeadline(context.Background(), deadline)
@@ -421,9 +427,9 @@ func (a *attachment) fetch(n int, wait time.Duration, take func(jetstream.Msg)) 
 		// itself rather than by the context's Err, which its timer sets a
 		// moment after the instant the client compared against.
 		if errors.Is(err, jetstream.ErrInvalidOption) && !time.Now().Before(deadline) {
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	for msg := range batch.Messages() {
 		take(msg)
@@ -439,7 +445,8 @@ func (a *attachment) fetch(n int, wait time.Duration, take func(jetstream.Msg)) 
 	// logged and waited out like any failed fetch, and a stop still reads
 	// as the cancellation logFetchErr passes over. Read after the drain:
 	// the client sets the error before it closes the channel.
-	return batch.Error()
+	err = batch.Error()
+	return err == nil, err
 }
 
 // expiryHeldBack is how far past the wanted expiry a fetch's deadline is set,
@@ -769,8 +776,9 @@ func (a *attachment) run(ctx context.Context, loop func(context.Context, *attach
 	// Forgotten by [Queue.Loops] before done closes, however it ends.
 	defer a.q.loopEnded(a)
 	// What it held aside goes back first, before the loop is forgotten and a
-	// stop closes the connection under it.
+	// stop closes the connection under it, and what it owes spaced with it.
 	defer a.handBackAside(ctx)
+	defer a.sendSpaced()
 	loop(ctx, a)
 }
 
@@ -844,35 +852,50 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 				}
 				continue
 			}
-			// A READMITTED DELIVERY FIRST ([queue.OutcomeAside]): it was
-			// fetched before anything waiting now. Then THE LANE, one
-			// message at a time like the rest: a message it held is this
-			// round's delivery, and the topic is read only when the lane
-			// had nothing.
-			took := false
-			if a.readmittedOne(func(msg jetstream.Msg) {
-				took = true
-				a.dispatchOne(ctx, msg, true, h)
-			}); took {
-				continue
-			}
-			if err := a.fetchLane(1, func(msg jetstream.Msg) {
-				took = true
-				a.dispatchOne(ctx, msg, false, h)
-			}); err != nil {
-				a.logLaneFetchErr(ctx, err)
-			}
-			if took {
-				continue
-			}
-			//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
-			if err := a.fetch(1, a.q.fetchWait(), func(msg jetstream.Msg) {
-				a.dispatchOne(ctx, msg, false, h)
-			}); err != nil {
-				a.logFetchErr(ctx, err)
-			}
+			a.takeOne(ctx, h)
 		}
 	})
+}
+
+// takeOne is one cycle of a Subscribe loop whose gate is open: one delivery
+// dispatched, or none waiting.
+//
+// A READMITTED DELIVERY FIRST ([queue.OutcomeAside]): it was fetched before
+// anything waiting now. Then THE LANE, one message at a time like the rest: a
+// message it held is this round's delivery, and the topic is read only when
+// the lane had nothing. A cycle the broker answered with nothing sends what the
+// loop owes ([attachment.sendSpaced]), which a delivery taken sends first
+// (dispatchOne); one whose fetch failed or was never sent keeps it owed. Each
+// take is a literal handed straight to its fetch, the shape
+// TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery follows.
+func (a *attachment) takeOne(ctx context.Context, h queue.Handler) {
+	took := false
+	if a.readmittedOne(func(msg jetstream.Msg) {
+		took = true
+		a.dispatchOne(ctx, msg, true, h)
+	}); took {
+		return
+	}
+	if err := a.fetchLane(1, func(msg jetstream.Msg) {
+		took = true
+		a.dispatchOne(ctx, msg, false, h)
+	}); err != nil {
+		a.logLaneFetchErr(ctx, err)
+	}
+	if took {
+		return
+	}
+	//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
+	answered, err := a.fetch(1, a.q.fetchWait(), func(msg jetstream.Msg) {
+		took = true
+		a.dispatchOne(ctx, msg, false, h)
+	})
+	if answered && !took {
+		a.sendSpaced()
+	}
+	if err != nil {
+		a.logFetchErr(ctx, err)
+	}
 }
 
 // fetchLane takes what the priority lane holds RIGHT NOW, up to n, and hands
@@ -924,8 +947,10 @@ func (a *attachment) logFetchErr(ctx context.Context, err error) {
 }
 
 // dispatchOne runs a handler for one message and applies its outcome;
-// readmitted says a Readmit handed it back ([queue.OutcomeAside]).
+// readmitted says a Readmit handed it back ([queue.OutcomeAside]). The spaced
+// returns the loop owes go back first, behind msg ([attachment.sendSpaced]).
 func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, readmitted bool, h queue.Handler) {
+	a.sendSpaced()
 	held, ok := a.toDelivery(msg)
 	if !ok {
 		return
@@ -1223,10 +1248,11 @@ func (a *attachment) handBack(ctx context.Context, msg jetstream.Msg, ev *events
 }
 
 // returnMsg is the one place a message goes back, and the one place the
-// delivery budget is spent. delay 0 returns it immediately. ev is the event
-// for the line; spent is the return (a failure, hand-back or pass) and reason
-// why; itself is whether this return is a failure of the message's own, which
-// with its earlier failures decides where its dead letter is kept
+// delivery budget is spent. delay 0 returns it immediately; a positive delay is
+// owed until the loop holds its next delivery ([attachment.sendSpaced]). ev is
+// the event for the line; spent is the return (a failure, hand-back or pass)
+// and reason why; itself is whether this return is a failure of the message's
+// own, which with its earlier failures decides where its dead letter is kept
 // ([attachment.retire]).
 //
 // A delivery at or past the budget is retired, not only the budget's own: the
@@ -1247,9 +1273,38 @@ func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, ev *event
 		}
 		return
 	}
-	if err := msg.NakWithDelay(delay); err != nil {
-		a.log.Warn("nak_failed", "error", err.Error())
+	// IN PROGRESS WHILE OWED: its ack window restarts now, where the return
+	// used to land, so holding it costs no redelivery; a process that dies
+	// before sending it leaves it to that window, delivered again at least once.
+	if err := msg.InProgress(); err != nil {
+		a.log.Warn("owed_progress_failed", "error", err.Error(),
+			"detail", "a return owed until the loop's next delivery keeps its last ack window")
 	}
+	a.spaced = append(a.spaced, spacedReturn{msg: msg, delay: delay})
+}
+
+// spacedReturn is a failure's or a pass's return of msg at delay, which the
+// loop owes until [attachment.sendSpaced].
+type spacedReturn struct {
+	msg   jetstream.Msg
+	delay time.Duration
+}
+
+// sendSpaced sends the spaced returns the loop owes. The loop calls it once its
+// next cycle holds a delivery or the broker answered that none waited, or once
+// it will take none (gated, or ending), so each comes back BEHIND the mail that
+// waited (package doc, "What it costs, measured"); a fetch refused or never
+// sent keeps them owed, that mail still waiting. Sent at once, a return's
+// backoff raced the next pull, which a loaded node or a leaf's link loses, and
+// the broker serves a due redelivery before new mail. Owed for a fetch, or a
+// drain's later handlers and the next drain, as that drain's own mail waits.
+func (a *attachment) sendSpaced() {
+	for _, r := range a.spaced {
+		if err := r.msg.NakWithDelay(r.delay); err != nil {
+			a.log.Warn("nak_failed", "error", err.Error())
+		}
+	}
+	a.spaced = nil
 }
 
 // retire keeps msg (delivery md), whose return spent its budget, as its

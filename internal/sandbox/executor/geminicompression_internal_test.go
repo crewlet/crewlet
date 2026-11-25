@@ -105,8 +105,8 @@ func TestAGeminiCompressionIsFoundByItsLinesNotItsWords(t *testing.T) {
 	t.Run("count", func(t *testing.T) {
 		t.Parallel()
 		c := newGeminiCounting()
-		for line := range bytes.SplitSeq(bytes.TrimSuffix(record, []byte("\n")), []byte("\n")) {
-			c.line(line)
+		if err := chatFileLines(t.Context(), bytes.NewReader(record), c, new(passBudget), nil); err != nil {
+			t.Fatal(err)
 		}
 		var got []string
 		for id := range c.snapshot {
@@ -121,17 +121,15 @@ func TestAGeminiCompressionIsFoundByItsLinesNotItsWords(t *testing.T) {
 	})
 	t.Run("newest summary", func(t *testing.T) {
 		t.Parallel()
-		g := newGeminiSummaries()
-		lines := newGeminiSummaryReading(g)
+		c := newGeminiCounting()
+		c.summarize()
 		// A REPLY AFTER A USER ENTRY NO `$set` OPENED is no compression's.
 		after := `{"id":"late","timestamp":"t","type":"user","content":[{"text":"no summary"}]}` + "\n" +
-			`{"id":"late-ack","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}`
-		for line := range bytes.SplitSeq(append(append([]byte(nil), record...), after...), []byte("\n")) {
-			lines.take(t.Context(), line)
-		}
-		lines.end(false)
-		if got := g.reading(); lines.err != nil || got.Text != strings.TrimSpace(text) {
-			t.Errorf("the newest summary reads %.60q (%v, %s), want line 94's", got.Text, lines.err, got.Unread)
+			`{"id":"late-ack","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}` + "\n"
+		err := chatFileLines(t.Context(), bytes.NewReader(append(append([]byte(nil), record...), after...)), c,
+			new(passBudget), nil)
+		if got := c.summary(err); got.Text != strings.TrimSpace(text) {
+			t.Errorf("the newest summary reads %.60q (%s), want line 94's", got.Text, got.Unread)
 		}
 	})
 	t.Run("holdings", func(t *testing.T) {
@@ -200,6 +198,51 @@ func TestAGeminiCompressionsFormsHoldOnlyItsOwnLines(t *testing.T) {
 	} {
 		if got := c.form.holds([]byte(c.line)); got != c.want {
 			t.Errorf("%q holds %.80q: %v, want %v", c.form.pieces[0], c.line, got, c.want)
+		}
+	}
+}
+
+// A LINE'S FORMS ARE JUDGED ON THE WHOLE LINE TRIMMED: the walk's head of a
+// line ([lineFormHead]), written a piece at a time, judges each compression
+// form as the whole-line read judges the line cut of its white space at both
+// ends: a form led or trailed by spaces, tabs or no-break spaces to a byte
+// short of [lineFormMaxBytes], to it, a byte past it and far past it, a
+// character split at the head's edge, and a byte that is no character.
+//
+// Mutation: keep a head past the bound untrimmed at its end, or hold the
+// line's leading white space: a case fails.
+func TestALinesFormsAreJudgedOnTheWholeLineTrimmed(t *testing.T) {
+	t.Parallel()
+	forms := []lineForm{geminiCompressionSet, geminiCompressionUser, geminiCompressionAck}
+	set := `{"$set":{"sessionId":"s"}}`
+	ack := `{"id":"a","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}`
+	user := `{"id":"c","timestamp":"t","type":"user","content":[{"text":"<state_snapshot>s"}]}`
+	pad := func(by string, n int) string { return strings.Repeat(by, max(n, 0)/len(by)+1)[:max(n, 0)] }
+	var lines []string
+	for _, form := range []string{set, ack, user} {
+		for _, by := range []string{" ", "\t", " ", "  "} {
+			for _, n := range []int{lineFormMaxBytes - 1, lineFormMaxBytes, lineFormMaxBytes + 1, 3 * lineFormMaxBytes} {
+				lines = append(lines, pad(by, n-len(form))+form, form+pad(by, n-len(form)),
+					pad(by, n/2)+form+pad(by, n/2))
+			}
+		}
+	}
+	long := strings.Repeat("é", lineFormMaxBytes/2)
+	lines = append(lines, `{"id":"c","timestamp":"`+long+`","type":"user","content":[`+"  ",
+		"\xe2\x80"+ack, ack+" \xe2\x80", " \xff "+ack, pad(" ", lineFormMaxBytes)+"é"+ack)
+	for _, line := range lines {
+		whole := bytes.TrimSpace([]byte(line))
+		for _, piece := range []int{1, 2, 3, 4096, len(line)} {
+			var h lineFormHead
+			for rest := []byte(line); len(rest) > 0; rest = rest[min(piece, len(rest)):] {
+				_, _ = h.Write(rest[:min(piece, len(rest))])
+			}
+			for _, f := range forms {
+				if got, want := f.holds(h.form()), f.holds(whole); got != want {
+					t.Errorf("%.40q of %d bytes in pieces of %d: %q holds %v, want %v as the line trimmed whole",
+						line, len(line), piece, f.pieces[0], got, want)
+				}
+			}
 		}
 	}
 }

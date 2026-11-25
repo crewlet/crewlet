@@ -253,18 +253,23 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 		return "", err
 	}
 	// THE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR: the nested hook
-	// runs it ([codexNestedHookFlags]), so the guard holds the hook's switches
+	// runs it ([codexNestedHookFlags]), so the guard reads the hook's switches
 	// only where it is written. A run that needs it for its notes, cap,
 	// skills or bridge check ([codexBridgeCheck]) is refused without one;
-	// any other starts without the hook.
+	// any other starts without the hook. The hook carries checkout handing
+	// alone, so a box that switches it off refuses nothing (D709): the
+	// script starts Codex without it, saying so ([Paths.CodexHooksOffBy]).
 	needed := codexHelped(req) || len(crewletServers(req.MCPServers)) > 0
 	helperErr := writeNoteHelper(ctx, box, paths.CodexNoteHelper())
 	if helperErr != nil && (needed || !errors.Is(helperErr, errNoHelperBuild)) {
 		return "", helperErr
 	}
-	docLimit, said, err := codexGuard(ctx, box, req, paths, home, helperErr == nil)
+	docLimit, said, off, err := codexGuard(ctx, box, req, paths, home, helperErr == nil)
 	if err != nil {
 		return "", err
+	}
+	if err = box.WriteFile(ctx, paths.CodexHooksOffBy(), []byte(strings.Join(off, "; "))); err != nil {
+		return "", fmt.Errorf("executor: writing which settings switch the run's nested hook off: %w", err)
 	}
 	var fresh string
 	if f := req.FreshWiring; f != nil {

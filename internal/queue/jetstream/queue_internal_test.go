@@ -287,7 +287,7 @@ func TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce(t *testing.T) {
 			const wait = 500 * time.Millisecond
 			cons := &expiryRecorder{}
 			a := &attachment{cons: cons, fetching: t.Context()}
-			if err := a.fetch(1, wait, func(jetstream.Msg) {
+			if _, err := a.fetch(1, wait, func(jetstream.Msg) {
 				t.Error("an empty mailbox handed over a message")
 			}); err != nil {
 				t.Fatalf("fetch: %v", err)
@@ -431,14 +431,19 @@ func TestAFetchWhoseWindowLapsedBeforeItWasSentIsAnEmptyOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &attachment{cons: cons, fetching: t.Context()}
-	if err := a.fetch(1, 0, func(jetstream.Msg) {
+	answered, err := a.fetch(1, 0, func(jetstream.Msg) {
 		t.Error("a fetch that was never sent handed over a message")
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("a fetch whose window lapsed before it was sent answered %v, "+
 			"want an empty fetch — the loop logs and sleeps a poll on an error", err)
 	}
+	if answered {
+		t.Error("a fetch never sent reads as answered: the loop would send what it owes " +
+			"before the broker handed over the mail it goes back behind")
+	}
 	var got int
-	if err := a.fetch(1, 5*time.Second, func(msg jetstream.Msg) {
+	if _, err := a.fetch(1, 5*time.Second, func(msg jetstream.Msg) {
 		got++
 		_ = msg.Ack()
 	}); err != nil {

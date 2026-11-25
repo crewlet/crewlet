@@ -222,6 +222,7 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 	}
 	c.fact("request.summary", "History note", redact.Secrets(summary))
 	recency, _ := authz.RecencyOf(authz.Action(act))
+	class, _ := authz.ClassOf(authz.Action(act))
 	return proposal.Preview{
 		Title:        said.Title,
 		Target:       req.Path,
@@ -232,6 +233,7 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 		ApproveLabel: said.ApproveLabel,
 		Changes:      c.rows(),
 		StepUp:       recency == iam.RecencyStepUp,
+		Own:          class == authz.ClassOwnRecord,
 		// ON EVERY METHOD, for a representation that was read: a DELETE or
 		// a PATCH prepared against a version the resource has left is as
 		// stale as a PUT.

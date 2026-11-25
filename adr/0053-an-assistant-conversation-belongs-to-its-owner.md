@@ -2,7 +2,25 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistantdomain`
-- **Enforced-by:** `internal/assistantdomain.TestAnotherPersonsConversationIsNotFound`, `internal/assistantdomain.TestAnotherPersonsFileIsNotFound`, `internal/assistantdomain.TestAFilesBytesAreSealedInTheObjectStore`, `internal/assistantdomain.TestAPurgedConversationsFilesAreCollected`, `internal/assistantdomain.TestEverySealedValueOpensOnlyUnderItsOwnRecord`, `internal/assistantdomain.TestTheApplierNeverOpensASealedValue`, `internal/assistantdomain.TestAPurgedConversationIsNeverRecreated`, `internal/assistantdomain.TestAConversationPastItsRetentionIsReaped`, `internal/assistantdomain.TestAnErasedPersonsConversationsGoInOnePass`, `internal/assistantdomain.TestAComplianceReadIsRecordedBeforeItOpens`, `internal/assistantdomain.TestTheAssistantDomainReadsNoOtherDomain`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`, `internal/assistant/live.TestAFrameOnTheQueueCarriesNoneOfTheTurnsProse`, `internal/assistant/live.TestAFrameReplayedOntoAnotherTurnIsDropped`, `internal/assistant/live.TestTheRunnerRefusesAnotherPersonsTurn`, `internal/assistant.TestStopReachesTheRunningNode`, `internal/api/queries.TestEveryQuestionDeclaresAPosture`, `internal/api/stream.TestAnEventReachesOnlyAnAdmin`
+- **Enforced-by:**
+  - `internal/assistantdomain.TestAnotherPersonsConversationIsNotFound`
+  - `internal/assistantdomain.TestAnotherPersonsFileIsNotFound`
+  - `internal/assistantdomain.TestAFilesBytesAreSealedInTheObjectStore`
+  - `internal/assistantdomain.TestAPurgedConversationsFilesAreCollected`
+  - `internal/assistantdomain.TestEverySealedValueOpensOnlyUnderItsOwnRecord`
+  - `internal/assistantdomain.TestTheApplierNeverOpensASealedValue`
+  - `internal/assistantdomain.TestAPurgedConversationIsNeverRecreated`
+  - `internal/assistantdomain.TestAConversationPastItsRetentionIsReaped`
+  - `internal/assistantdomain.TestAnErasedPersonsConversationsGoInOnePass`
+  - `internal/assistantdomain.TestAComplianceReadIsRecordedBeforeItOpens`
+  - `internal/assistantdomain.TestTheAssistantDomainReadsNoOtherDomain`
+  - `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`
+  - `internal/assistant/live.TestAFrameOnTheQueueCarriesNoneOfTheTurnsProse`
+  - `internal/assistant/live.TestAFrameReplayedOntoAnotherTurnIsDropped`
+  - `internal/assistant/live.TestTheRunnerRefusesAnotherPersonsTurn`
+  - `internal/assistant.TestStopReachesTheRunningNode`
+  - `internal/api/queries.TestEveryQuestionDeclaresAPosture`
+  - `internal/api/stream.TestAnEventReachesOnlyAnAdmin`
 - **Tag-status:** unreleased
 
 ## The decision

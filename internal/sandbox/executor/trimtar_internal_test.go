@@ -11,8 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// trimLastLine is a stand-in [trimmer] for [trimTar]'s own cases: release 9.9.9,
-// and a cut keeping a record's last line alone, where it has two or more.
+// trimLastLine is a stand-in [recordTrimmer] for [trimTar]'s own cases:
+// release 9.9.9, and a cut keeping a record's last line alone, where it has two
+// or more.
 type trimLastLine struct{}
 
 func (trimLastLine) trimRelease() string { return "9.9.9" }

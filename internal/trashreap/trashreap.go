@@ -10,8 +10,24 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// WHAT A PASS'S REPORT HOLDS, so it is the small value its record is
+// (coord.SmallValueBytes; TestTheWidestReportFitsItsRecord): at most
+// MaxSources sources, each named in at most MaxSourceNameBytes, and each
+// source's first failure cut to MaxSourceErrorBytes as stored. A build
+// registers six (internal/engine's trashSources, which its reapSource holds
+// to this); sixteen leaves room for ten more, the widest report then 11,406
+// bytes (every source stopped at MaxPerPass with more due, on a term of its
+// own and its first failure at its bound, every instant to the nanosecond),
+// and a failure's 512 bytes keep a store's error whole in practice.
+const (
+	MaxSources          = 16
+	MaxSourceNameBytes  = 64
+	MaxSourceErrorBytes = 512
 )
 
 // Name is the reaper's one name: the fleet duty's (`worker:trash-reaper`) and
@@ -179,6 +195,10 @@ func New(deps Deps) (*Reaper, error) {
 		return nil, errors.New("trashreap: a reaper needs at least one source; " +
 			"a duty that empties no trash would hold a lease for nothing")
 	}
+	if len(deps.Sources) > MaxSources {
+		return nil, fmt.Errorf("trashreap: %d sources, past the %d a pass's report holds",
+			len(deps.Sources), MaxSources)
+	}
 	seen := map[string]bool{}
 	for i, src := range deps.Sources {
 		if src == nil {
@@ -206,6 +226,10 @@ func New(deps Deps) (*Reaper, error) {
 		return nil, errors.New("trashreap: a reaper needs the id of the node running it, " +
 			"which every report names")
 	}
+	if len(deps.Node) > coord.MaxNodeIDBytes || coord.TextBytes(deps.Node) != len(deps.Node) {
+		return nil, fmt.Errorf("trashreap: node id %q is no node id a report holds: at most "+
+			"%d bytes, each one JSON writes as itself", deps.Node, coord.MaxNodeIDBytes)
+	}
 	now := deps.Now
 	if now == nil {
 		now = time.Now
@@ -228,6 +252,10 @@ var log = logging.Get("trashreap")
 func validName(name string) error {
 	if name == "" {
 		return errors.New("trashreap: a source needs a name")
+	}
+	if len(name) > MaxSourceNameBytes {
+		return fmt.Errorf("trashreap: source name %q is past the %d bytes a pass's report holds",
+			name, MaxSourceNameBytes)
 	}
 	for _, c := range name {
 		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
@@ -428,7 +456,7 @@ func (r *Reaper) Pass(ctx context.Context) (Report, error) {
 		cutoff, own, err := sourceCutoff(ctx, src, slot, report.Cutoff)
 		if err != nil {
 			report.Sources = append(report.Sources, SourceReport{Source: src.Name(),
-				Error: err.Error()})
+				Error: coord.FitText(err.Error(), MaxSourceErrorBytes)})
 			failures = append(failures, fmt.Errorf("trashreap: %s: %w", src.Name(), err))
 			continue
 		}
@@ -529,7 +557,7 @@ func (r *Reaper) reap(ctx context.Context, src Source, slot, cutoff time.Time) (
 	fail := func(err error) {
 		if first == nil {
 			first = err
-			out.Error = err.Error()
+			out.Error = coord.FitText(err.Error(), MaxSourceErrorBytes)
 		}
 	}
 	attempted := map[string]bool{}

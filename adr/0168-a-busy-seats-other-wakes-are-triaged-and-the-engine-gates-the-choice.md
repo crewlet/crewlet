@@ -2,7 +2,21 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestOnlyAWakeAboutTheRunsWorkOrFromItsLeadIsTriaged`, `internal/engine.TestTheEngineGatesTheTriagesChoice`, `internal/engine.TestTheTriagesDecisionsAreClosedAndItsPromptNamesEach`, `internal/engine.TestATriagePlaysOverTheRealToolSessionAndFencesTheWake`, `internal/engine.TestALeadsBurstIsOneNoteAndPastTheCapItStays`, `internal/engine.TestAnInputWakeFromAnotherWriterJoinsAsInformationAndBindsTheTurn`, `internal/engine.TestNoiseIsAbsorbedOnlyOwingNothingAndARequestOrAFailureStays`, `internal/engine.TestASteerNoteHoldsWholeWakesWithinANotesBound`, `internal/engine.TestAWaitingPersonIsToldWhyOncePerWake`, `internal/notify.TestAWaitingMessageIsToldWhyItWaits`, `internal/agent/prompts.TestATriageReadsTheWakeAndTheTaskInTheirFences`, `internal/agent/prompts.TestAnotherWritersWakeIsToldAsInformation`, `internal/engine.TestTheRequestersWakeAboutWhatTheRunWroteJoinsAndAnyoneElsesIsTriaged`, `internal/engine.TestAWakeAboutARecordTheRunWroteReachesTheRunningRun`
+- **Enforced-by:**
+  - `internal/engine.TestOnlyAWakeAboutTheRunsWorkOrFromItsLeadIsTriaged`
+  - `internal/engine.TestTheEngineGatesTheTriagesChoice`
+  - `internal/engine.TestTheTriagesDecisionsAreClosedAndItsPromptNamesEach`
+  - `internal/engine.TestATriagePlaysOverTheRealToolSessionAndFencesTheWake`
+  - `internal/engine.TestALeadsBurstIsOneNoteAndPastTheCapItStays`
+  - `internal/engine.TestAnInputWakeFromAnotherWriterJoinsAsInformationAndBindsTheTurn`
+  - `internal/engine.TestNoiseIsAbsorbedOnlyOwingNothingAndARequestOrAFailureStays`
+  - `internal/engine.TestASteerNoteHoldsWholeWakesWithinANotesBound`
+  - `internal/engine.TestAWaitingPersonIsToldWhyOncePerWake`
+  - `internal/notify.TestAWaitingMessageIsToldWhyItWaits`
+  - `internal/agent/prompts.TestATriageReadsTheWakeAndTheTaskInTheirFences`
+  - `internal/agent/prompts.TestAnotherWritersWakeIsToldAsInformation`
+  - `internal/engine.TestTheRequestersWakeAboutWhatTheRunWroteJoinsAndAnyoneElsesIsTriaged`
+  - `internal/engine.TestAWakeAboutARecordTheRunWroteReachesTheRunningRun`
 - **Cost-when-tried:** under ADR-0167 alone a colleague's fact about a running run's work ("the customer is on the EU region"), a lead's "stop, roll back" in chat and a "thanks!" in the run's room all waited for the run to end: the run worked on without the fact or the correction, and each message then started a turn of its own over a finished result, the thanks included.
 - **Tag-status:** unreleased
 

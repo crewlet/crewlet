@@ -6,7 +6,7 @@
  * when the administrator presses Apply, under the entity's own tag.
  */
 
-import type { ADVISOR_PAGES } from "../contract/advisor.ts";
+import type { ADVISOR_PAGES, OAUTH_CLIENT_VENDORS } from "../contract/advisor.ts";
 import type { AtlasKind } from "../contract/atlas.ts";
 
 /** What ignoring a finding costs. */
@@ -153,6 +153,27 @@ export interface AdvisorNotice {
   /** The raising alarm's words for a company owner; absent where no alarm raised it. */
   title?: string;
   person?: string;
+  /** An `oauth_redirect_moved` notice's new URI and the clients still registered without it. */
+  redirect?: AdvisorRedirectMoved;
+}
+
+/** The redirect URI to add, and every OAuth client a person registered that lacks it. */
+export interface AdvisorRedirectMoved {
+  uri: string;
+  clients: AdvisorRegisteredClient[];
+}
+
+/** An OAuth client a person registered at its vendor, as its last grant left it. */
+export interface AdvisorRegisteredClient {
+  vendor: (typeof OAUTH_CLIENT_VENDORS)[number] | (string & {});
+  /** Its client ID, and what a person finds it by: a Google client's ID shortened, an MCP server's name. */
+  id: string;
+  label: string;
+  /** What signs in as it: each Google product (its integration kind) or the MCP server. */
+  uses: { name: string; title: string }[];
+  /** The redirect URI its last sign-in came back through, and when. */
+  redirect: string;
+  at: string;
 }
 
 /** Every finding at one revision, the most costly first. */
