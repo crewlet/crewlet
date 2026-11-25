@@ -63,7 +63,10 @@ func inClear(v string) bool {
 	return v == "" || (tokenShape().MatchString(v) && accessdomain.GrowthValueRecordable(v))
 }
 
-// failureOf is a failure's closed word for the access log.
+// failureOf is a failure's closed word for the access log: a request never
+// sent (the key's reserve among the causes) fails as timed out where its
+// deadline passed first, else as the engine's own; only an answer lost after
+// the request left is an unknown outcome.
 func failureOf(err error) growth.Failure {
 	var apiErr *APIError
 	switch {
@@ -77,7 +80,7 @@ func failureOf(err error) growth.Failure {
 		return growth.FailureVendorRefused
 	case errors.Is(err, context.DeadlineExceeded):
 		return growth.FailureTimedOut
-	case errors.Is(err, ErrRole), errors.Is(err, ErrReserve):
+	case errors.Is(err, ErrRole), errors.Is(err, errUnsent):
 		return growth.FailureEngineError
 	}
 	return growth.FailureUnknownOutcome

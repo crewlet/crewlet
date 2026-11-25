@@ -262,7 +262,7 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 	defer cancel()
 	b, err := p.beforeOf(act, m)
 	if err != nil {
-		rec.Failure = failureOf(err)
+		rec.Failure = earlyFailure(err)
 		p.note(ctx, growth.StepFailed, rec)
 		return nil, growth.NotSent(said(err))
 	}
@@ -365,8 +365,10 @@ func (p *Product) failEarly(ctx context.Context, held bool, rec growth.Record, e
 	return growth.NotSent(said(err))
 }
 
-// earlyFailure is why an allowed call ended before its request was sent: the
-// seat's access lowered, Apple's refusal of a read, or the engine's own.
+// earlyFailure is why an act ended before its write was sent: the seat's
+// access lowered, Apple's refusal of a read, its deadline, or the engine's
+// own. A read whose answer was lost sent no write, so it is never an unknown
+// outcome here.
 func earlyFailure(err error) growth.Failure {
 	var refused *growth.Refusal
 	var apiErr *APIError

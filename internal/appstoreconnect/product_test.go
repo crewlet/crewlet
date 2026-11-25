@@ -14,12 +14,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,6 +47,34 @@ type store struct {
 	hang bool
 	// vendor is the vendor number the last sales read named.
 	vendor string
+	// tap, where set, sees each request once its answer is read in full, and
+	// fails it with its error as a lost connection would.
+	tap atomic.Pointer[func(*http.Request) error]
+}
+
+// tapped is the client's transport to s: it buffers each answer before the
+// tap sees it, so a context the tap ends cuts no answer already in.
+type tapped struct {
+	base http.RoundTripper
+	s    *store
+}
+
+func (t tapped) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(r)
+	tap := t.s.tap.Load()
+	if err != nil || tap == nil {
+		return resp, err
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	if err := (*tap)(r); err != nil {
+		return nil, err
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return resp, nil
 }
 
 // kidOf is the key ID a request's bearer token names.
@@ -159,6 +190,8 @@ type leases struct {
 	refused atomic.Bool
 	// failed fails every hold with its error, where set.
 	failed atomic.Pointer[error]
+	// held, where set, runs once each hold is taken.
+	held atomic.Pointer[func()]
 }
 
 func (l *leases) Hold(context.Context, string) (func(), error) {
@@ -169,6 +202,9 @@ func (l *leases) Hold(context.Context, string) (func(), error) {
 		return nil, *err
 	}
 	l.mu.Lock()
+	if held := l.held.Load(); held != nil {
+		(*held)()
+	}
 	return l.mu.Unlock, nil
 }
 
@@ -288,7 +324,8 @@ func productLeases(t *testing.T, s *store, level string, team bool, role string)
 			}
 			return v
 		},
-		HTTP: srv.Client(), Base: srv.URL, Audit: a, Leases: l, Identity: ownKey(role),
+		HTTP: &http.Client{Transport: tapped{base: srv.Client().Transport, s: s}}, Base: srv.URL,
+		Audit: a, Leases: l, Identity: ownKey(role),
 		Now: func() time.Time { return time.Date(2026, 11, 21, 18, 0, 0, 0, time.UTC) },
 	})
 	return p, a, l
@@ -849,5 +886,148 @@ func TestAnAppStoreConnectActIsNotSentUntilItsRequestLeaves(t *testing.T) {
 		len(s.writes) != 0 {
 		t.Errorf("an act whose lease the store could not take = %v (wrote %v), want not sent beside the store's "+
 			"failure", err, s.writes)
+	}
+}
+
+// draftEdit is an operate call editing the draft localization L1.
+func draftEdit() growth.Call {
+	return growth.Call{ID: "c1", Handle: "growth", Tool: appstoreconnect.ToolOperate, Args: map[string]any{
+		"operation": "appStoreVersionLocalizations_updateInstance", "path": map[string]any{"id": "L1"},
+		"body": map[string]any{"data": map[string]any{"type": "appStoreVersionLocalizations", "id": "L1",
+			"attributes": map[string]any{"description": "New"}}}, "reason": "fix the description"}}
+}
+
+// failedAs is the failure the last step a recorded names, which must be a
+// failure.
+func failedAs(t *testing.T, a *audit) growth.Failure {
+	t.Helper()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.steps) == 0 || a.steps[len(a.steps)-1].step != growth.StepFailed {
+		t.Fatalf("the last step is not a failure: %+v", a.steps)
+	}
+	return a.steps[len(a.steps)-1].rec.Failure
+}
+
+// A WRITE NEVER SENT IS NOT AN UNKNOWN OUTCOME: an edit whose context ends
+// under its lease, once its target is read again and before its request
+// leaves, is told to the agent as not sent and recorded as the engine's own
+// failure.
+//
+// Mutation: class an unsent request by failureOf's default, and the log says
+// Apple may have made an edit it never received.
+func TestAWriteNeverSentIsNotAnUnknownOutcome(t *testing.T) {
+	t.Parallel()
+	s := &store{state: "PREPARE_FOR_SUBMISSION"}
+	p, a, l := productLeases(t, s, "operate", false, levelRole("operate"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	call := draftEdit()
+	hold, err := p.Prepare(ctx, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// THE TARGET'S READ AGAIN is the one request the act makes under its lease
+	// before its write.
+	endOnRead := func() {
+		end := func(*http.Request) error { cancel(); return nil }
+		s.tap.Store(&end)
+	}
+	l.held.Store(&endOnRead)
+	_, err = p.Apply(ctx, call, hold.Binding)
+	if f := failedAs(t, a); !errors.Is(err, growth.ErrNotSent) || len(s.writes) != 0 || f != growth.FailureEngineError {
+		t.Errorf("a write whose context ended before it was sent = %v (wrote %v), recorded %q; want not sent, "+
+			"recorded %q", err, s.writes, f, growth.FailureEngineError)
+	}
+}
+
+// AN ACT WHOSE TARGET'S READ AGAIN FAILED SENT NO WRITE: a read again that
+// lost Apple's answer to a reset is recorded as the engine's own failure,
+// never as an unknown outcome, and told to the agent as not sent.
+//
+// Mutation: record the read's failure by failureOf, and a write that never
+// left is logged as one Apple may have made.
+func TestAnActWhoseReadAgainFailedIsNotAnUnknownOutcome(t *testing.T) {
+	t.Parallel()
+	s := &store{state: "PREPARE_FOR_SUBMISSION"}
+	p, a, l := productLeases(t, s, "operate", false, levelRole("operate"))
+	ctx := context.Background()
+	call := draftEdit()
+	hold, err := p.Prepare(ctx, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetOnRead := func() {
+		reset := func(*http.Request) error {
+			return &net.OpError{Op: "read", Net: "tcp", Err: os.NewSyscallError("read", syscall.ECONNRESET)}
+		}
+		s.tap.Store(&reset)
+	}
+	l.held.Store(&resetOnRead)
+	_, err = p.Apply(ctx, call, hold.Binding)
+	if f := failedAs(t, a); !errors.Is(err, growth.ErrNotSent) || len(s.writes) != 0 || f != growth.FailureEngineError {
+		t.Errorf("an act whose read again was reset = %v (wrote %v), recorded %q; want not sent, recorded %q",
+			err, s.writes, f, growth.FailureEngineError)
+	}
+}
+
+// A REPLY NEVER SENT IS REPORTED FAILED: an approved reply whose context ends
+// once its lease is held is reported failed, never unknown, and its act is
+// recorded as the engine's own failure, neither an unknown outcome nor
+// Apple's refusal.
+//
+// Mutation: report a reply by writeFailure's unknown alone, or record every
+// failed reply as Apple's refusal, and an agent is told to look for a reply
+// that never left, or the log blames Apple.
+func TestAReplyNeverSentIsReportedFailed(t *testing.T) {
+	t.Parallel()
+	s := &store{reviewed: "It crashes on launch."}
+	p, a, l := productLeases(t, s, "operate", false, "Customer Support")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	call := growth.Call{Handle: "growth", Tool: appstoreconnect.ToolReply, Args: map[string]any{"app": "111",
+		"replies": []any{map[string]any{"review": "R1", "text": "Thanks, fixed in 2.1."}}, "reason": "answer the crash report"}}
+	hold, err := p.Prepare(ctx, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := func() { cancel() }
+	l.held.Store(&end)
+	call.HeldCall, call.Approver = "h1", "founder"
+	got, err := p.Apply(ctx, call, hold.Binding)
+	posted, _ := got.(appstoreconnect.Posted)
+	if err != nil || len(posted.Replies) != 1 || posted.Replies[0].Status != "failed" || len(s.writes) != 0 {
+		t.Errorf("a reply whose context ended before it was sent answered %+v, %v (wrote %v); want it failed",
+			posted, err, s.writes)
+	}
+	if f := failedAs(t, a); f != growth.FailureEngineError {
+		t.Errorf("a reply never sent is recorded %q, want %q", f, growth.FailureEngineError)
+	}
+}
+
+// A READ NEVER SENT IS NOT AN UNKNOWN OUTCOME: a read whose context ended
+// before its request left is recorded as the engine's own failure.
+//
+// Mutation: class an unsent request by failureOf's default, and the log says
+// a read's answer was lost when nothing was asked.
+func TestAReadNeverSentIsNotAnUnknownOutcome(t *testing.T) {
+	t.Parallel()
+	s := &store{}
+	p, a := product(t, s, "read", false)
+	read := growth.Call{ID: "r1", Handle: "growth", Tool: appstoreconnect.ToolRead, Args: map[string]any{
+		"operation": "apps_appStoreVersions_getToManyRelated", "path": map[string]any{"id": "111"}}}
+	// THE FIRST READ lists the team's apps, so the second asks Apple nothing
+	// before its own request.
+	if _, err := p.Run(context.Background(), read); err != nil {
+		t.Fatal(err)
+	}
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	read.ID = "r2"
+	_, err := p.Run(ended, read)
+	f := failedAs(t, a)
+	if last := a.steps[len(a.steps)-1]; err == nil || last.rec.Call != "r2" || f != growth.FailureEngineError {
+		t.Errorf("a read whose context ended before it was sent = %v, recorded %+v; want %q", err, last,
+			growth.FailureEngineError)
 	}
 }
