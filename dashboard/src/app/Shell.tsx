@@ -120,11 +120,12 @@ import {
   ASSISTANT_TRIGGER_ID,
   AssistantControlContext,
   askVerbs,
+  markReopened,
   type AssistantFocus,
 } from "./assistant/control.ts";
-import { framePageOf, setFramePage } from "./assistant/context.ts";
+import { framePageOf, pageIdentityAt, setFramePage } from "./assistant/context.ts";
 import { on as onAssistantBus } from "./assistant/bus.ts";
-import { readTab, writeTab } from "./assistant/tab.ts";
+import { carryConversation, readTab, writeTab } from "./assistant/tab.ts";
 import { pagePath, resolve, resolves } from "./routes.ts";
 import { ToastRoom, useToastInset } from "./toastInset.tsx";
 import { goSignIn } from "~/lib/session.ts";
@@ -614,6 +615,7 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
   const handBack = useRef(false);
   const showAssistant = useCallback((open: boolean, focus: AssistantFocus = "composer") => {
     if (!open) handBack.current = asideHoldsFocus();
+    else if (!readTab().open) markReopened();
     setAssistantFocus(focus);
     setAssistantOpen(open);
     writeTab({ open });
@@ -805,6 +807,10 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
           window.open(href(to, query), "_blank", "noopener");
           return;
         }
+        // Ask Crewlet's own navigation keeps its conversation on the page it
+        // opens; its own page is the conversation, not a page it is about.
+        const there = resolve([...to]);
+        if (there.resolved && there.screen !== "ask") carryConversation(pageIdentityAt(to));
         nav.to(to, query);
         if (assistantShape !== "column") showAssistant(false);
       }),

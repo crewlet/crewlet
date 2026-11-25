@@ -105,8 +105,8 @@ func TestAGeminiCompressionIsFoundByItsLinesNotItsWords(t *testing.T) {
 	t.Run("count", func(t *testing.T) {
 		t.Parallel()
 		c := newGeminiCounting()
-		for line := range bytes.SplitSeq(bytes.TrimSuffix(record, []byte("\n")), []byte("\n")) {
-			c.line(line)
+		if err := chatFileLines(t.Context(), bytes.NewReader(record), c, new(passBudget), nil); err != nil {
+			t.Fatal(err)
 		}
 		var got []string
 		for id := range c.snapshot {
@@ -125,9 +125,10 @@ func TestAGeminiCompressionIsFoundByItsLinesNotItsWords(t *testing.T) {
 		lines := newGeminiSummaryReading(g)
 		// A REPLY AFTER A USER ENTRY NO `$set` OPENED is no compression's.
 		after := `{"id":"late","timestamp":"t","type":"user","content":[{"text":"no summary"}]}` + "\n" +
-			`{"id":"late-ack","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}`
-		for line := range bytes.SplitSeq(append(append([]byte(nil), record...), after...), []byte("\n")) {
-			lines.take(t.Context(), line)
+			`{"id":"late-ack","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}` + "\n"
+		if err := chatFileFollowed(t.Context(), bytes.NewReader(append(append([]byte(nil), record...), after...)),
+			nil, &lines.chatSummaryLines); err != nil {
+			t.Fatal(err)
 		}
 		lines.end(false)
 		if got := g.reading(); lines.err != nil || got.Text != strings.TrimSpace(text) {

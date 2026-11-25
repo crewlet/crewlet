@@ -116,41 +116,46 @@ func storedSession(row executorkeep.TurnRow) executordomain.Session {
 // once as it launches, and hands the briefs on only where its member runs the
 // session's harness ([agentLauncher.continuedFloor]).
 func (l *agentLauncher) ProbeSession(ctx context.Context) runner.SessionBasis {
-	basis := l.probeSession(ctx)
+	basis, own := l.probeSession(ctx)
 	// AND THE WINDOW EVERY PATH'S FIRST REQUEST IS JUDGED UNDER, on every basis
 	// whatever branch answered it: the in-place path is judged too, where no
 	// kept session is continued.
 	basis.Window = l.continuationWindow()
 	basis.Traits = sessionTraits()
+	// AND THE SUMMARY OF THE SESSION IT DOES NOT CONTINUE, within what its brief
+	// has room for under that window ([agentLauncher.handOver]).
+	basis = l.handOver(ctx, basis, own)
 	if n := basis.NotContinued; n != nil {
 		sayNotContinued(ctx, l.seat.Handle(), l.turn.RunID, *n, "decided", "probe")
 	}
 	return basis
 }
 
-// probeSession is [agentLauncher.ProbeSession] before it logs.
-func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
+// probeSession is [agentLauncher.ProbeSession] before it reads the lost
+// session's summary and logs, with the summary the turn's record names, nil
+// where the probe read none.
+func (l *agentLauncher) probeSession(ctx context.Context) (runner.SessionBasis, *executorkeep.Summary) {
 	rt := l.engine.sandbox.Load()
 	manager := l.company.catalogue
 	// NO EVENT WHERE NOTHING CAN BE CONTINUED: a node with no runtime, or a
 	// chain none of whose harnesses keeps a session.
 	if rt == nil || rt.coordinator == nil || manager == nil {
-		return runner.SessionBasis{}
+		return runner.SessionBasis{}, nil
 	}
 	restores, err := l.company.chainRestores(l.seat, manager)
 	switch {
 	case err != nil:
 		return runner.SessionBasis{NotContinued: executorkeep.Lost(executorkeep.LossRestoreFailed,
-			executorkeep.InsteadFresh, err.Error())}
+			executorkeep.InsteadFresh, err.Error())}, nil
 	case len(restores) == 0:
 		// NOTHING TO WAIT FOR: no member could take a session up, whatever
 		// the job's capture comes to.
-		return runner.SessionBasis{}
+		return runner.SessionBasis{}, nil
 	}
 	if l.conversation != nil {
 		// THE TURN'S FIRST LAUNCH: the head its dispatch read, which no
 		// record or row of the turn exists yet to say anything more of.
-		return l.conversation.basis(restores)
+		return l.conversation.basis(restores), nil
 	}
 	continued, why := rt.coordinator.ContinuedCapture(ctx, l.turn.RunID, restores)
 	if base := continued.Base; base != nil {
@@ -159,14 +164,14 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		basis := baseBasis(*base, continued.CopyContext)
 		basis.KeptTurn, basis.CopyNextRequest = continued.KeptTurn, continued.CopyNextRequest
 		basis.NotContinued = continued.NotContinued
-		return basis
+		return basis, continued.Summary
 	}
 	if why != "" {
 		// THE SESSION THE TURN KEEPS, or else the base it froze, where the
 		// relaunch continues neither: a run that starts a session of its own
 		// beside it is told it may read it.
 		return runner.SessionBasis{NotContinued: continued.NotContinued, CopyContext: continued.CopyContext,
-			CopyNextRequest: continued.CopyNextRequest, KeptTurn: continued.KeptTurn}
+			CopyNextRequest: continued.CopyNextRequest, KeptTurn: continued.KeptTurn}, continued.Summary
 	}
 	captured := continued.Capture
 	// ITS SAVE POINT, which every capture a relaunch continues states: one
@@ -206,7 +211,7 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		LateOwed: slices.Clone(captured.LateOmitted),
 		// AND A NEWER CAPTURE OF THE JOB IT PASSED OVER, where it did.
 		NotContinued: continued.NotContinued,
-	}
+	}, continued.Summary
 }
 
 // sayNotContinued is the engine's one `executor_session_not_continued` line: a
@@ -552,12 +557,12 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 	case s == nil:
 		return nil
 	case s.Basis.ContinuesBase():
-		return &sandbox.SessionContinuation{Base: true, Replaced: s.Replaced, Told: s.Told}
+		return &sandbox.SessionContinuation{Base: true, Replaced: s.Replaced, Told: s.Told, Handover: s.Handover}
 	case !s.Basis.Continues():
 		return nil
 	}
 	out := &sandbox.SessionContinuation{LaunchSeq: s.Basis.LaunchSeq, CaptureSeq: s.Basis.CaptureSeq,
-		Brief: s.Brief, Replaced: s.Replaced, Told: s.Told, UnheldDropped: s.UnheldDropped}
+		Brief: s.Brief, Replaced: s.Replaced, Told: s.Told, UnheldDropped: s.UnheldDropped, Handover: s.Handover}
 	if x := s.Exact; x != nil {
 		out.Exact = &sandbox.ExactTelling{Resumer: x.Resumer, Brief: x.Brief, Replaced: x.Replaced, Told: x.Told}
 	}
