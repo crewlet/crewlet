@@ -48,3 +48,17 @@ func TestASessionIsIssuedTokensOnlyForWhatTheEngineHolds(t *testing.T) {
 		}
 	}
 }
+
+// THE AGENTS TAB'S OFFER IS READ WITH THE ENGINE'S TOKENS, so a Google growth
+// lane lists what the company's reader sees rather than nothing.
+//
+// Mutation: open the offer's session without Tokens, and the property chooser
+// lists nothing and says nothing.
+func TestTheAgentsTabsOfferIsReadWithTheEnginesTokens(t *testing.T) {
+	t.Parallel()
+	e := googleCloudEngine(t, googleCloudCompany(t), newSeatGoogle(t), time.Now().Add(-time.Hour))
+	company := e.Company()
+	if open := e.offerInput(company.Config, company.Org); open.Tokens == nil {
+		t.Error("the offer's session holds no token issuer")
+	}
+}
