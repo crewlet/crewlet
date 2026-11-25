@@ -242,14 +242,13 @@ for a; do case "$a" in */grok-checkouts) exit 1;; esac; done
 exec /bin/mkdir "$@"
 `
 
-// ~/.GROK/AGENTS.MD IS THE HOME'S OWN, AND NO COPY IS LEFT, HOWEVER A GROK RUN
-// ENDS: put back once grok has stopped, succeeded or failed, where the gate
-// fails after holding, and on each teardown signal (TERM, INT, HUP), ending
-// grok first; a run killed outright is put back by the next run's clear,
-// whichever harness it drives, its skip log dropped. Nothing held is left.
-//
-// Mutation: drop the put-back after grok, the EXIT trap or a signal's, or
-// Grok's homeKeeper, and a row goes red.
+// ~/.GROK/AGENTS.MD AND THE SETTINGS ARE THE HOME'S OWN, AND NO COPY IS LEFT,
+// HOWEVER A GROK RUN ENDS: put back once grok has stopped, succeeded or
+// failed, where the gate fails after holding, and on each teardown signal
+// (TERM, INT, HUP), ending grok first; a run killed outright is put back by
+// the next run's clear, its skip log dropped. Nothing held is left.
+// Mutation: drop the put-back after grok, the EXIT trap or a signal's, the
+// settings from it, or Grok's homeKeeper, and a row goes red.
 func TestAGrokRunPutsTheHomesInstructionsBackHoweverItEnds(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"ok", "fail", "gate", "term", "int", "hup", "kill"} {
@@ -260,7 +259,8 @@ func TestAGrokRunPutsTheHomesInstructionsBackHoweverItEnds(t *testing.T) {
 				p := executor.PathsFor(box)
 				plant(t, box, piCheckout("repo", map[string]string{"AGENTS.md": "REPO\n",
 					".grok/skills/s/SKILL.md": "---\nname: s\ndescription: S.\n---\n"}))
-				plant(t, box, map[string]string{"mode": mode})
+				const settings = "[compat.claude]\nmcps = false\n"
+				plant(t, box, map[string]string{"mode": mode, ".grok/config.toml": settings})
 				if own != "" {
 					plant(t, box, map[string]string{".grok/AGENTS.md": own})
 				}
@@ -295,6 +295,9 @@ func TestAGrokRunPutsTheHomesInstructionsBackHoweverItEnds(t *testing.T) {
 				}
 				if got := readHomeFile(t, box, ".grok/AGENTS.md"); got != own {
 					t.Errorf("after the run ~/.grok/AGENTS.md is %q, want the home's own %q", got, own)
+				}
+				if got := readHomeFile(t, box, ".grok/config.toml"); mode != "kill" && got != settings {
+					t.Errorf("after the run ~/.grok/config.toml is %q, want the box's own %q", got, settings)
 				}
 				if left := grokCopies(t, box); len(left) != 0 {
 					t.Errorf("~/.grok/skills holds %q after the run, want the copies removed", left)
