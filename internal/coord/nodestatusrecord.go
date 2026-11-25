@@ -426,6 +426,9 @@ type ModelLimit struct {
 	State          string
 	Used           *float64
 	ResetsAt, Seen time.Time
+	// Read is a reading from the plan's own read, dated when it was made:
+	// the only kind that may end a sit-out.
+	Read bool
 }
 
 // MaxModelLimits bounds the windows a model row carries: a plan has a handful
@@ -987,6 +990,9 @@ func (l ModelLimit) meta() map[string]any {
 	if !l.ResetsAt.IsZero() {
 		out["resets_at"] = stamp(l.ResetsAt)
 	}
+	if l.Read {
+		out["read"] = true
+	}
 	return out
 }
 
@@ -1149,6 +1155,7 @@ func limitFromMeta(v any) (ModelLimit, bool) {
 	l := ModelLimit{Window: stringFromMeta(row["window"]), Hours: intFromMeta(row["hours"]),
 		Model: stringFromMeta(row["model"]), State: stringFromMeta(row["state"]),
 		ResetsAt: instant(row["resets_at"]), Seen: instant(row["seen"])}
+	l.Read, _ = row["read"].(bool)
 	if l.Window == "" || l.State == "" {
 		return ModelLimit{}, false
 	}
