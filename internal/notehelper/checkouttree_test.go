@@ -312,7 +312,7 @@ func TestAScopedRuleIsLeftOutAsClaudeCodeReadsItsFrontmatter(t *testing.T) {
 // A LINKED RULES DIRECTORY IS WALKED AS CLAUDE CODE WALKS IT: a .claude/rules
 // that is a link to a directory inside the checkout is the tree (2.1.310 loads
 // its rules, measured, row linkroot of review P2-B); one leading out of the
-// checkout hands nothing.
+// checkout hands nothing, not even a file it links back in.
 //
 // Mutation: check the tree's root without following the link, or follow it
 // out of the checkout, and a row goes red.
@@ -330,6 +330,12 @@ func TestALinkedRulesDirectoryIsWalkedAsClaudeCodeWalksIt(t *testing.T) {
 				target = filepath.Join(root, "shared-rules")
 			}
 			writeTree(t, target, map[string]string{"root.md": "ROOTLINK\n"})
+			writeTree(t, root, map[string]string{"elsewhere/back.md": "BACK\n"})
+			if !tc.inside {
+				if err := os.Symlink(filepath.Join(root, "elsewhere/back.md"), filepath.Join(outside, "back.md")); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := os.MkdirAll(filepath.Join(root, ".claude"), 0o700); err != nil {
 				t.Fatal(err)
 			}
