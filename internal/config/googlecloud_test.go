@@ -10,7 +10,7 @@ import (
 // completeGoogleCloud is an enabled block with every requirement answered.
 const completeGoogleCloud = `    enabled: true
     provisioning:
-      provisioner: crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com
+      identity_project: acme-crewlet-id
       provider: projects/123456789012/locations/global/workloadIdentityPools/crewlet/providers/crewlet-engine
       federation_key: "${GOOGLE_CLOUD_FEDERATION_KEY}"`
 
@@ -25,37 +25,41 @@ func TestACompleteGoogleCloudBlockValidates(t *testing.T) {
 	if err := validateIntegrationDoc(t, "google_cloud", "    enabled: false"); err != nil {
 		t.Fatalf("a switched-off Google Cloud block was refused: %v", err)
 	}
-	early := "    enabled: true\n    provisioning: {provisioner: crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com, " +
+	early := "    enabled: true\n    provisioning: {identity_project: acme-crewlet-id, " +
 		"federation_key: \"${K}\"}"
 	if err := validateIntegrationDoc(t, "google_cloud", early); err != nil {
 		t.Fatalf("a block awaiting its provider was refused: %v", err)
 	}
-	ref := "    enabled: true\n    provisioning: {provisioner: \"${GCP_PROV}\", provider: \"${GCP_PROVIDER}\", federation_key: \"${K}\"}"
+	ref := "    enabled: true\n    provisioning: {identity_project: \"${GCP_IDENTITY}\", provider: \"${GCP_PROVIDER}\", " +
+		"federation_key: \"${K}\"}"
 	if err := validateIntegrationDoc(t, "google_cloud", ref); err != nil {
-		t.Fatalf("a provisioner and provider named by reference were refused: %v", err)
+		t.Fatalf("an identity project and provider named by reference were refused: %v", err)
 	}
 }
 
-// AN ENABLED BLOCK NAMES ITS PROVISIONER AND KEY, and a provider it names is a
-// provider's resource name, each refusal naming the field an operator edits.
+// AN ENABLED BLOCK NAMES ITS IDENTITY PROJECT AND KEY, and a provider it names
+// is a provider's resource name, each refusal naming the field an operator
+// edits.
 func TestGoogleCloudRefusesAnIncompleteOrMalformedBlock(t *testing.T) {
 	t.Parallel()
-	const prov = "crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com"
+	const prov = "identity_project: acme-crewlet-id"
 	for _, tc := range []struct {
 		name, body, path string
 	}{
 		{"no provisioning", "    enabled: true", "integrations.google_cloud.provisioning"},
-		{"no provisioner", "    enabled: true\n    provisioning: {federation_key: \"${K}\"}",
-			"integrations.google_cloud.provisioning.provisioner"},
-		{"a person's email as the provisioner", "    enabled: true\n    provisioning: {provisioner: ops@acme.example, " +
-			"federation_key: \"${K}\"}", "integrations.google_cloud.provisioning.provisioner"},
-		{"a pool's name as the provider", "    enabled: true\n    provisioning: {provisioner: " + prov +
+		{"no identity project", "    enabled: true\n    provisioning: {federation_key: \"${K}\"}",
+			"integrations.google_cloud.provisioning.identity_project"},
+		{"a project's name as its ID", "    enabled: true\n    provisioning: {identity_project: Acme Crewlet, " +
+			"federation_key: \"${K}\"}", "integrations.google_cloud.provisioning.identity_project"},
+		{"a domain-scoped project", "    enabled: true\n    provisioning: {identity_project: \"example.com:acme\", " +
+			"federation_key: \"${K}\"}", "integrations.google_cloud.provisioning.identity_project"},
+		{"a pool's name as the provider", "    enabled: true\n    provisioning: {" + prov +
 			", provider: projects/123/locations/global/workloadIdentityPools/crewlet, federation_key: \"${K}\"}",
 			"integrations.google_cloud.provisioning.provider"},
-		{"a project ID in the provider", "    enabled: true\n    provisioning: {provisioner: " + prov +
+		{"a project ID in the provider", "    enabled: true\n    provisioning: {" + prov +
 			", provider: projects/acme/locations/global/workloadIdentityPools/crewlet/providers/engine, federation_key: \"${K}\"}",
 			"integrations.google_cloud.provisioning.provider"},
-		{"no federation key", "    enabled: true\n    provisioning: {provisioner: " + prov + "}",
+		{"no federation key", "    enabled: true\n    provisioning: {" + prov + "}",
 			"integrations.google_cloud.provisioning.federation_key"},
 	} {
 		err := validateIntegrationDoc(t, "google_cloud", tc.body)
@@ -69,8 +73,25 @@ func TestGoogleCloudRefusesAnIncompleteOrMalformedBlock(t *testing.T) {
 	}
 }
 
-// THE IDENTITY PROJECT IS THE PROVISIONER'S OWN, read from its email.
+// THE PROVISIONER IS CREWLET'S NAME IN THE IDENTITY PROJECT, which a person
+// names alone.
 func TestTheIdentityProjectIsTheProvisionersProject(t *testing.T) {
+	t.Parallel()
+	if got := config.GoogleCloudProvisioner("acme-crewlet-id"); got != "crewlet-provisioner@acme-crewlet-id.iam.gserviceaccount.com" {
+		t.Errorf("the provisioner of acme-crewlet-id is %q", got)
+	}
+	g := &config.GoogleCloud{Provisioning: &config.GoogleCloudProvisioning{IdentityProject: " acme-crewlet-id "}}
+	if project, ok := g.Identity(); !ok || project != "acme-crewlet-id" {
+		t.Errorf("identity %q, %v", project, ok)
+	}
+	g.Provisioning.IdentityProject = "${GCP_IDENTITY}"
+	if _, ok := g.Identity(); ok {
+		t.Error("a reference read as a project ID")
+	}
+}
+
+// A SERVICE ACCOUNT'S EMAIL NAMES ITS PROJECT, and nothing else does.
+func TestAServiceAccountsEmailNamesItsProject(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		email, project string
@@ -177,6 +198,27 @@ func TestGoogleCloudAtlasReadIsOffUnlessWritten(t *testing.T) {
 		}
 		if got := c.Integrations.GoogleCloud.Provisioning.AtlasRead; got != tc.want {
 			t.Errorf("%q reads atlas_read %v, want %v", tc.extra, got, tc.want)
+		}
+	}
+}
+
+// A FORM OPENED AND CLOSED STARTS NOTHING: the key Crewlet made when it opened
+// is no connection to pause or finish, and anything a person saved is.
+func TestTheKeyAloneIsNotAStartedConnection(t *testing.T) {
+	t.Parallel()
+	key := "${GOOGLE_CLOUD_FEDERATION_KEY}"
+	for _, tc := range []struct {
+		in   *config.GoogleCloud
+		want bool
+	}{
+		{nil, false},
+		{&config.GoogleCloud{Provisioning: &config.GoogleCloudProvisioning{FederationKey: key}}, false},
+		{&config.GoogleCloud{Provisioning: &config.GoogleCloudProvisioning{FederationKey: key, IdentityProject: "acme-crewlet-id"}}, true},
+		{&config.GoogleCloud{Provisioning: &config.GoogleCloudProvisioning{FederationKey: key, AtlasRead: true}}, true},
+		{&config.GoogleCloud{Enabled: true, Provisioning: &config.GoogleCloudProvisioning{FederationKey: key}}, true},
+	} {
+		if got := tc.in.Started(); got != tc.want {
+			t.Errorf("%+v: started %v, want %v", tc.in, got, tc.want)
 		}
 	}
 }

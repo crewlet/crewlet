@@ -87,6 +87,7 @@ import { useAssistantDraft, useDraftState, writeVia } from "~/app/assistant/draf
 import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
 import { linkSegment } from "~/lib/segment.ts";
 import { VendorWords } from "~/ui/VendorWords.tsx";
+import { LiveBlock, useMintFirst } from "./LiveBlock.tsx";
 import { NeedsFirst, SetupStepsAside, SetupStepsSheet } from "./SetupSteps.tsx";
 import { RedirectStep } from "./RedirectStep.tsx";
 import { AddIdentity } from "~/components/growth/SetupSteps.tsx";
@@ -770,6 +771,26 @@ export function SetupForm({
       },
     [values],
   );
+  // WHAT A LIVE BLOCK IS DRAWN FROM, as typed: the engine redraws it from these.
+  function typedIn(section: SetupSection, fields: string[]): Record<string, string> {
+    const answered = answeredIn(section, ownBy.get(sectionKey(section)) ?? []);
+    return Object.fromEntries(fields.map((field) => [field, answered(field).trim()]));
+  }
+  // A KEY A BLOCK NEEDS IS MADE WHEN THE FORM OPENS (`mint_first`), so the block
+  // shows before anything is saved.
+  const minting = useMemo(
+    () =>
+      sections.map((section) => ({
+        kind: section.tool.key,
+        ...(section.seat ? { seat: section.seat } : {}),
+        requirements: ownBy.get(sectionKey(section)) ?? [],
+      })),
+    [sections, ownBy],
+  );
+  const refresh = useCallback(async () => {
+    await onDone();
+  }, [onDone]);
+  const mintFailed = useMintFirst(minting, refresh);
   const grouped = useMemo(
     () =>
       sections
@@ -1546,6 +1567,15 @@ export function SetupForm({
             )}
           </div>
 
+          {mintFailed && (
+            <Callout
+              variant="danger"
+              role="alert"
+              title="Crewlet could not make the setup block's key"
+            >
+              {asSentence(mintFailed)} Close the form and open it again to retry.
+            </Callout>
+          )}
           {banner && (
             // The kit's banner around [Problems], which lays a refusal's several
             // problems out one per line rather than as one run.
@@ -1803,6 +1833,29 @@ export function SetupForm({
         ? [other.label]
         : [];
     });
+    // A LIVE BLOCK FOLLOWS WHAT IS TYPED, so a change never waits on a save;
+    // after a run, the new block is still to run again.
+    if (shown.live) {
+      return (
+        <>
+          {changed.length > 0 && printed?.present && (
+            <Callout variant="warning" title="This block changed" live="polite">
+              {`You changed ${listed(changed)}. Run the new block, then paste its new last line into ${printed.label}.`}
+            </Callout>
+          )}
+          <LiveBlock
+            kind={section.tool.key}
+            field={r.field}
+            view={shown}
+            typed={typedIn(section, shown.drawn_from ?? [])}
+            onRefused={(field, said) => {
+              const at = own.find((o) => o.field === field);
+              if (at) setFieldErrors((was) => ({ ...was, [valueKey(section, at)]: said }));
+            }}
+          />
+        </>
+      );
+    }
     if (changed.length > 0) {
       return (
         <Callout variant="neutral" title="Save to update this block" live="polite">
