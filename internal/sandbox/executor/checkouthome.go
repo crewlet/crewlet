@@ -14,17 +14,18 @@ import (
 // checkout core (internal/notehelper's "Checkouts below the working
 // directory") keeps them: the helper and its state, the launch config
 // ([checkoutSpec]), the home instruction file the harness reads (agents: the
-// first of its candidates that exists, else the first, as a harness reading
-// one file of several names finds it), the home's own copy of it held beside
-// the run while it runs (held), the file the helper writes the checkouts'
-// sections into (sections), and the skills directory they are copied into,
-// with the list of copies the next run removes. A copy is built in
-// state/staging ([checkoutHome.staging]).
+// first of its candidates that exists, else the first; none for a harness
+// handed no instruction text, whose home file is never held), the home's own
+// copy held beside the run (held), the file the helper writes the checkouts'
+// sections into (sections), the skills directory they are copied into with
+// the list of copies the run's end removes, and the file listing their roots
+// for a harness the script points at them (roots, "" for none). A copy is
+// built in state/staging ([checkoutHome.staging]).
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
 	held, sections        string
-	skills, copied        string
+	skills, copied, roots string
 }
 
 // heldLive marks which of several home instruction files a run holds
@@ -55,18 +56,28 @@ func (h checkoutHome) removeSiblingStaging() string {
 // Limit, the harness's own bound in bytes on a checkout's instructions, nil
 // for a harness with none; SkillDirs, the checkout's skill directories
 // ([checkoutSkillDir]); NestedSkillsOnly where the harness's nested adapter
-// hands skills alone, so its firings read no instruction file; and
+// hands skills alone, so its firings read no instruction file;
 // ImportInstructions where the harness reads them itself, each named as an
 // `@<absolute path>` import in place of its text, Limit not applying (Claude
-// Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code need their
-// own measurement of absolute imports before they set it).
+// Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code import no
+// absolute path from a home file, measured on 0.70.0 and 0.28.4); and SkillSep,
+// what joins a copy's repository and skill, "" for `:`.
 type checkoutSpec struct {
 	Instructions       []checkoutSlot
 	Limit              *int
 	SkillDirs          []checkoutSkillDir
 	NestedSkillsOnly   bool
 	ImportInstructions bool
+	SkillSep           checkoutSkillSep
 }
+
+// checkoutSkillSep is what joins a copy's repository and skill (the helper's
+// skillSep).
+type checkoutSkillSep string
+
+// checkoutSkillSepHyphen joins them for Gemini CLI and Qwen Code, as Gemini
+// CLI 0.70.0 lists `a:b` as `a-b` and the runners name their own skills so.
+const checkoutSkillSepHyphen checkoutSkillSep = "-"
 
 // checkoutSkillDir is a checkout's skill directory as the helper reads it:
 // Dir, below the checkout's root, whose skills are the directories directly
@@ -108,8 +119,12 @@ type checkoutTree struct {
 // checkoutForm is a harness whose tree walk the helper knows (its treeForm).
 type checkoutForm string
 
-// checkoutFormClaude is Claude Code's walk of .claude/rules.
-const checkoutFormClaude checkoutForm = "claude"
+const (
+	// checkoutFormClaude is Claude Code's walk of .claude/rules.
+	checkoutFormClaude checkoutForm = "claude"
+	// checkoutFormQwen is Qwen Code's walk of .qwen/rules.
+	checkoutFormQwen checkoutForm = "qwen"
+)
 
 // checkoutScope is the frontmatter keys that scope a file to paths, the first
 // present deciding, and the patterns that match every path.
@@ -138,7 +153,8 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "skillDirs": spec.SkillDirs,
 		"skills": h.skills, "copied": h.copied, "reserved": []string{sandbox.SkillNamespace},
-		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions})
+		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions,
+		"skillSep": spec.SkillSep, "roots": h.roots})
 	return launch // strings, lists and an int cannot fail to encode
 }
 
@@ -160,6 +176,33 @@ func (h checkoutHome) gate() string {
 	}
 	line(`rr=%s; rh=%s; rk=%s; ra=%s; rha=%s; rw=%s; rq=%s; hk=`, q(h.state), q(h.helper), q(h.skills), ra,
 		q(h.held), q(h.copied), q(h.sections))
+	if len(h.agents) > 0 {
+		h.holdHome(line)
+	}
+	line(`%s || exit 1`, h.removeCopies())
+	line(`%s`, h.removeSiblingStaging())
+	line(`: > "$rw" && rm -rf "$rr" "$rq" && mkdir -p "$rr" || exit 1`)
+	if h.roots != "" {
+		line(`: > %s || exit 1`, q(h.roots))
+	}
+	line(`if [ -f "$rh" ]; then`)
+	line(`  chmod 700 "$rh" || exit 1`)
+	line(`  "$rh" -adapter checkout-launch -config %s < /dev/null || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`,
+		q(h.launch))
+	line(`  hk=1`)
+	line(`else`)
+	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
+	line(`fi`)
+	if len(h.agents) > 0 {
+		line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
+	}
+	return b.String()
+}
+
+// holdHome is the gate's shell putting an earlier run's instruction file back
+// and holding the home's own afresh ([checkoutHome.gate]).
+func (h checkoutHome) holdHome(line func(string, ...any)) {
+	q := shellword.Quote
 	line(`%s || exit 1`, h.putBack())
 	if len(h.agents) > 1 {
 		// THE FILE THE HARNESS READS, named before it is held, so a run killed
@@ -174,19 +217,6 @@ func (h checkoutHome) gate() string {
 	}
 	line(`if [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
 		`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
-	line(`%s || exit 1`, h.removeCopies())
-	line(`%s`, h.removeSiblingStaging())
-	line(`: > "$rw" && rm -rf "$rr" "$rq" && mkdir -p "$rr" || exit 1`)
-	line(`if [ -f "$rh" ]; then`)
-	line(`  chmod 700 "$rh" || exit 1`)
-	line(`  "$rh" -adapter checkout-launch -config %s < /dev/null || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`,
-		q(h.launch))
-	line(`  hk=1`)
-	line(`else`)
-	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
-	line(`fi`)
-	line(`if [ -s "$rq" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`)
-	return b.String()
 }
 
 // restore is the shell marking the run ended once no firing holds the
@@ -250,6 +280,9 @@ func (h checkoutHome) skipped() string { return h.state + "/skipped" }
 // held+[heldLive], which goes last, so it runs any number of times. One
 // candidate is the only file the run can hold, so nothing names it.
 func (h checkoutHome) putBack() string {
+	if len(h.agents) == 0 {
+		return ":"
+	}
 	if len(h.agents) == 1 {
 		return putBackHome(h.agents[0], h.held)
 	}
