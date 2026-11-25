@@ -23,7 +23,8 @@ import (
 // first turn, then, where $HOME/clone-src names a directory, copies it to
 // $HOME/clone-dst as a clone during a tool call would and plays that tool's
 // result to the extension twice, recording what each answer made of it
-// (nested-1, nested-2); where $HOME/break-home is, it makes the agent
+// (nested-1, nested-2) and the --skill directories after them
+// (skills-late); where $HOME/break-home is, it makes the agent
 // directory's AGENTS.override.md a directory no put-back can write; and it
 // prints a finished answer.
 const piCheckoutStandIn = `import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
@@ -76,6 +77,8 @@ if (existsSync(join(home, "clone-src"))) {
     record("nested-" + i, await fire("tool_result", { toolName: "bash", toolCallId: "call-" + i,
       input: { command: "git clone" }, content: [{ type: "text", text: "cloned" }], isError: false }))
   }
+  for (const dir of Object.keys(skills)) skills[dir] = files(dir)
+  record("skills-late", skills)
 }
 if (existsSync(join(home, "break-home"))) {
   rmSync(join(agent, "AGENTS.override.md"), { force: true })
@@ -144,9 +147,8 @@ func piInstructionFiles(files map[string]string) map[string]string {
 // the skills a walk of .pi/skills and .agents/skills reaches come as
 // `repo:<skill>` in a `--skill` directory of the run's own; nothing else of it
 // reaches what pi starts on. A clone during the run is handed at the next tool
-// result in pi's own wrapping, its skill copied and listed, once.
-//
-// Mutation: drop the gate, the `--skill` or the extension's hand, read another
+// result in pi's own wrapping, its skill copied and listed, once; no copy
+// outlives the run. Mutation: drop the gate, the `--skill` or the extension's hand, read another
 // name first, walk a skill directory flat, or hand twice: a check goes red.
 func TestWhatACheckoutBelowTheStartDirectoryBringsAPiRun(t *testing.T) {
 	t.Parallel()
@@ -277,8 +279,13 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAPiRun(t *testing.T) {
 			if nested2 != nil {
 				t.Errorf("clone: the later tool result was changed again: %v", nested2)
 			}
-			if got := boxFile(t, box, p.PiCheckoutSkills()+"/late:fix/SKILL.md"); got != "---\nname: \"late:fix\"\ndescription: Fixes.\n---\nFix.\n" {
-				t.Errorf("clone: its skill reads %q", got)
+			var lateSkills map[string]map[string]string
+			seenBy(t, box, "skills-late", &lateSkills)
+			if got := lateSkills[p.PiCheckoutSkills()]["late:fix/SKILL.md"]; got != "---\nname: \"late:fix\"\ndescription: Fixes.\n---\nFix.\n" {
+				t.Errorf("clone: its skill read %q while the run held it", got)
+			}
+			if left, err := os.ReadDir(p.PiCheckoutSkills()); err != nil || len(left) != 0 {
+				t.Errorf("clone: the checkouts' skills directory holds %v after the run (%v), want the copies removed", left, err)
 			}
 			if errs := boxFile(t, box, p.Err()); strings.Contains(errs, "no note helper") || strings.Contains(errs, "crewlet: the note helper") {
 				t.Errorf("the run said its checkouts were not handed:\n%s", errs)
@@ -433,7 +440,7 @@ func TestAPiRunsLeftOutLinesReachItsErrorStreamOnce(t *testing.T) {
 			if raw, err := os.ReadDir(p.PiCheckoutSkills()); err != nil || len(raw) != 0 {
 				t.Errorf("the checkouts' skills directory holds %v after the run (%v), want the copies removed", raw, err)
 			}
-			if failed := strings.Contains(errs, "was not put back"); failed != broken {
+			if failed := strings.Contains(errs, p.PiAgentDir()+"/AGENTS.override.md"); failed != broken {
 				t.Errorf("the run's error stream says a put-back failed: %v, want %v:\n%s", failed, broken, errs)
 			}
 		})
