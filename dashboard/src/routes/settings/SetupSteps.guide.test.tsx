@@ -15,10 +15,10 @@ import { join } from "node:path";
 import type { ReactElement } from "react";
 import { cleanup, render as rtlRender, screen } from "@testing-library/react";
 import { LayerHost } from "@crewlethq/ui";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { SetupForm } from "./SetupForm.tsx";
 import { BUCKET_WORDS } from "./integrations/model.ts";
-import type { SetupStep, SetupToolState } from "~/protocol/index.ts";
+import { rest, type SetupStep, type SetupToolState } from "~/protocol/index.ts";
 import type { VendorTextPart } from "~/contract/vendortext.ts";
 
 interface StepsTool {
@@ -75,7 +75,17 @@ function around(states: StepsTool["states"], steps: SetupStep[], i: number) {
 
 const STATUS = new Set(Object.values(BUCKET_WORDS).map((w) => w.label));
 
-afterEach(cleanup);
+// THE FORM'S OWN REQUESTS NEVER SETTLE: opening it makes the block's key and
+// redraws the block, and this suite reads only what the form draws.
+beforeEach(() => {
+  vi.spyOn(rest, "post").mockReturnValue(new Promise(() => {}));
+  vi.spyOn(rest, "get").mockReturnValue(new Promise(() => {}));
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 test("the fixture holds each outside-step integration's steps, placed", () => {
   expect(tools.map((t) => t.kind).sort()).toEqual(["aws", "google_cloud"]);
