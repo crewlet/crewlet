@@ -59,7 +59,7 @@ const (
 	//     may wait statelog.ReadBudget (2s) for the floor and again for the
 	//     level, then runs one query, so a live holder answers inside four
 	//     seconds (a test holds the two together). A failover
-	//     (estate.ReadAttempt, ten seconds) is not covered: the unreadable hint
+	//     (estate.ReadAttempt, fifteen seconds) is not covered: the unreadable hint
 	//     renders and the seat reads the thread itself.
 	ThreadTimeout = 5 * time.Second
 )

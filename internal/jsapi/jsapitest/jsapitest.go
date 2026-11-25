@@ -48,6 +48,7 @@ package jsapitest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -136,6 +137,22 @@ func (r *Read) Answer() error {
 	}
 	return r.h.nc.PublishMsg(&nats.Msg{Subject: r.asked, Reply: r.msg.Reply,
 		Header: r.msg.Header, Data: r.msg.Data})
+}
+
+// Leaderless answers the read as a member does that knows its stream's group,
+// or the metadata group, has no leader: 503, err_code 10008
+// (server.NewJSClusterNotAvailError).
+func (r *Read) Leaderless() error { return r.Refuse(server.NewJSClusterNotAvailError()) }
+
+// Refuse answers the read with JetStream's own error apiErr, on the reply
+// subject the reader listens on. Any time, held or released: it goes to the
+// reader, not on.
+func (r *Read) Refuse(apiErr *server.ApiError) error {
+	body, err := json.Marshal(server.ApiResponse{Error: apiErr})
+	if err != nil {
+		return fmt.Errorf("jsapitest: encode the answer %q: %w", apiErr.Description, err)
+	}
+	return r.h.nc.Publish(r.msg.Reply, body)
 }
 
 // Held is an interception of the leader reads asked on one subject.
