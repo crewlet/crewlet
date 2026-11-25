@@ -69,6 +69,8 @@ export interface SetupRequirement {
   connect?: boolean;
   /** One value across every surface of the tool, asked once (Atlassian's account). */
   shared?: boolean;
+  /** The form it is asked in where a tool has more than one: "sign_in" is the Google sign-in client. */
+  group?: string;
   /** A suggestion the form offers where the company has no value, never stored by itself. */
   default?: string;
   /** What a non-credential `${VAR}` here reads as, for the links built from it. */

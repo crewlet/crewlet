@@ -157,6 +157,7 @@ import (
 	"github.com/crewlet/crewlet/internal/googleanalytics"
 	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
+	"github.com/crewlet/crewlet/internal/googlegrowth"
 	"github.com/crewlet/crewlet/internal/googleplay"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -1028,7 +1029,8 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// in the document.
 		block := company.Integrations.GoogleCloud
 		guide = googlecloud.Guide()
-		reqs = googlecloud.Requirements(company.Name, block, googleauth.EnabledProducts(company), s.resolve)
+		reqs = append(googlecloud.Requirements(company.Name, block, googleauth.EnabledProducts(company), s.resolve),
+			googlegrowth.SignInClient(block, s.resolve)...)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSSH:
@@ -1044,7 +1046,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// grant, and no seat holds a token (ADR-0170).
 		block := company.Integrations.AdMob
 		guide = admob.Guide()
-		reqs = admob.Requirements(company, s.resolve)
+		reqs = admob.Requirements(company)
 		configured = block != nil
 		enabled = block.GrowthEnabled()
 	case integration.KindAdSense:
@@ -1052,7 +1054,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// consent grant, and no seat holds a token (ADR-0170).
 		block := company.Integrations.AdSense
 		guide = adsense.Guide()
-		reqs = adsense.Requirements(company, s.resolve)
+		reqs = adsense.Requirements(company)
 		configured = block != nil
 		enabled = block.GrowthEnabled()
 	case integration.KindGoogleAnalytics:
@@ -1060,7 +1062,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// identities, which the Google identity pass makes.
 		block := company.Integrations.GoogleAnalytics
 		guide = googleanalytics.Guide()
-		reqs = googleanalytics.Requirements(company, s.resolve)
+		reqs = googleanalytics.Requirements(company)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindGoogleAds:
@@ -1084,7 +1086,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// for an administrator.
 		block := company.Integrations.GooglePlay
 		guide = googleplay.Guide()
-		reqs = googleplay.Requirements(company, s.resolve)
+		reqs = googleplay.Requirements(company)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

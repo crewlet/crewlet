@@ -408,7 +408,7 @@ func TestWithoutAnAdminSignInAddItForMeIsAPersonsStep(t *testing.T) {
 
 	company.Integrations.GooglePlay.OAuth = nil
 	g := access.IdentityGuide(company, in.Seat, in.Lane, in.Want)
-	if g.Make == nil || !strings.Contains(g.Make.Unavailable, "signs in on the Settings tab") {
+	if g.Make == nil || !strings.Contains(g.Make.Unavailable, "signs in on the Google page") {
 		t.Errorf("guide without an OAuth client: %+v", g.Make)
 	}
 }

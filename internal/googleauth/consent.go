@@ -164,3 +164,17 @@ func LooksLikeTestingMode(signedIn, failed time.Time) bool {
 	age := failed.Sub(signedIn)
 	return age >= testingFrom && age <= testingTo
 }
+
+// SignInClient is the OAuth client a consent product signs in as under c: own,
+// its block's oauth, else the company's sign_in_client; nothing set is a
+// client with no ID, which the sign-in refuses by name.
+func SignInClient(c *config.Company, own *config.GoogleOAuthClient) ConsentClient {
+	var cl *config.GoogleOAuthClient
+	if c != nil {
+		cl = c.Integrations.GoogleSignInClient(own)
+	}
+	if cl == nil {
+		return ConsentClient{}
+	}
+	return ConsentClient{ID: cl.ClientID, Secret: cl.ClientSecret}
+}
