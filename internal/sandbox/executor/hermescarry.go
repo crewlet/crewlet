@@ -281,19 +281,15 @@ func hermesFreshRoutes(req sandbox.RunRequest, paths Paths) string {
 }
 
 // hermesInstallOverlay writes the run's managed scope from overlay: the box's
-// own (`/etc/hermes`, which the run's HERMES_MANAGED_DIR hides) with overlay's
-// keys over it, through Hermes's own loader (the carry script's `overlay`),
-// and its .env stating NO_PROXY and no_proxy with hosts ([directHosts]) after
-// the process's, the home's and the box's entries, since Hermes loads that
-// .env last. It ends the run before Hermes starts where it cannot: a run on no
-// overlay reaches none of the seat's tools, and one on another session's is
-// one the bridge cannot tell apart. THEN IT ENDS ONE WHOSE SERVERS THE BOX
-// RUNS OTHERWISE, naming what declares them (the carry script's `servers`): a
-// plugin's server under the bridge's name took its place (measured on
-// 0.23.3). On guarded, Crewlet's own servers, a switch off, a tool filter or a
-// header is the guard's to refuse ([hermesGuard]). An answer it cannot read
-// refuses nothing; the bridge's connection holds that run, as for Grok Build
-// ([grokServersHeld]).
+// own (`/etc/hermes`, which HERMES_MANAGED_DIR hides) with overlay's keys over
+// it, through Hermes's own loader, and its .env stating NO_PROXY and no_proxy
+// with hosts ([directHosts]), which Hermes loads last. The run ends before
+// Hermes starts where the overlay cannot be installed, or where the box runs
+// one of its servers otherwise than written (the carry script's `servers`),
+// naming what declares it. On guarded, Crewlet's own servers, a switch off, a
+// tool filter or a header is left to [hermesGuard]. An answer the check cannot
+// read refuses nothing. Why: code-sandbox.md, "The box's Hermes must run the
+// run's servers as the overlay writes them".
 func hermesInstallOverlay(paths Paths, overlay string, hosts, guarded []string) string {
 	q := shellword.Quote
 	names, _ := json.Marshal(guarded) // names always marshal
