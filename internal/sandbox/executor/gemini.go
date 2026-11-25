@@ -43,6 +43,12 @@ func (GeminiCLI) Name() string { return GeminiCLIName }
 // answered whole (measured on 0.70.0).
 func (GeminiCLI) MCPCallCeiling() time.Duration { return 0 }
 
+// CountedAtCollection implements [collectionCounted].
+func (GeminiCLI) CountedAtCollection() string {
+	return "stream-json marks no model request: " +
+		"the session record its count reads is appended by the run's script once Gemini CLI exits"
+}
+
 // resumesOnLaunchRoute: measured on 0.70.0, the one release that continues a
 // carried session ([launchRouted]): created with
 // GOOGLE_GEMINI_BASE_URL at stub A, `--resume` with it at stub B; the resumed
