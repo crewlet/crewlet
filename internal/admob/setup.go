@@ -43,8 +43,9 @@ func Guide() setup.Guide {
 			"through it. No token reaches an agent's box.",
 		Prepare: []setup.Step{
 			googlegrowth.ClientStep("AdMob API"),
-			{Text: vendortext.Of(vendortext.W("Paste the client's ID and secret below, save, then sign in with Google "+
-				"as a person who manages the AdMob account: "), vendortext.UI("Administrator"), vendortext.W(", "),
+			{Text: vendortext.Of(vendortext.W("Paste the client's ID and secret below, press "), vendortext.UI("Connect"),
+				vendortext.W(", then press "), vendortext.UI("Sign in"), vendortext.W(" and sign in with Google "+
+					"as a person who manages the AdMob account: "), vendortext.UI("Administrator"), vendortext.W(", "),
 				vendortext.UI("Manager"), vendortext.W(", or a custom role with the permissions the agents need. "+
 					"Sign in again once an agent is raised to operate, to allow changes."))},
 			{Text: vendortext.Plain("Turn agents on from the Agents tab, each on the publisher accounts it may reach.")},
