@@ -99,9 +99,9 @@ func (b *transcriptBuilder) geminiSessionWhole(ctx context.Context, r io.Reader)
 		return b.geminiRespondedWhole(response)
 	}
 	record, summaries, readErr := geminiRecordWhole(r)
-	read, at := 0, -1
+	read, physical := 0, -1
 	err := readLines(bufio.NewReaderSize(bytes.NewReader(record), lineChunkBytes), maxLineBytes, func(line []byte) error {
-		at++
+		physical++
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -144,7 +144,7 @@ func (b *transcriptBuilder) geminiSessionWhole(ctx context.Context, r io.Reader)
 			if err := flush(); err != nil {
 				return err
 			}
-			if summaries[at] {
+			if summaries[physical] {
 				restating = true
 				if summary := geminiSummary(w.Content, b.valueMax); summary != "" {
 					return b.add(TranscriptEntry{Kind: EntrySummary, At: at, Thread: b.thread}, summary)
@@ -155,7 +155,7 @@ func (b *transcriptBuilder) geminiSessionWhole(ctx context.Context, r io.Reader)
 		}
 		return nil
 	}, func(n int64) error {
-		at++
+		physical++
 		if err := flush(); err != nil {
 			return err
 		}
