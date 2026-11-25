@@ -170,6 +170,14 @@ var trustDoors = map[string]trustDoor{
 		"internal/agent/builtin.TestAnExecutorsAskIsReadAtOneTrustThroughEveryDoor",
 		"internal/assistant.TestARunAnswersReceiptIsReadAtTheRunsTrust",
 	}},
+	// HOW ASK CREWLET IS ASKED TO WRITE: the company's, adopted for everybody,
+	// and the person's own, kept under their seat.
+	"internal/assistant/prompt.go:companyInstructionsFence": {adopted, []string{
+		"internal/assistant.TestInstructionsAreFencedBelowEveryRule",
+	}},
+	"internal/assistant/prompt.go:personInstructionsFence": {hosted, []string{
+		"internal/assistant.TestInstructionsAreFencedBelowEveryRule",
+	}},
 	"internal/assistant/prompt.go:pageFence": {hosted, []string{
 		"internal/assistant.TestThePageContextIsFencedAndARemovedPageIsAbsent",
 		"internal/assistant.TestTheOpenDraftReachesTheModelFencedAndRedacted",

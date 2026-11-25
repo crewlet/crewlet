@@ -92,13 +92,14 @@ func (f *FleetStore) SaveHomeBoard(ctx context.Context, handle string, board jso
 	if err != nil {
 		return 0, false, err
 	}
-	return f.putHomeBoardAt(ctx, "save the Home board of "+handle, coord.HomeBoardKey(handle), raw, revision)
+	return f.putSeatRecordAt(ctx, "save the Home board of "+handle, coord.HomeBoardKey(handle), raw, revision)
 }
 
-// putHomeBoardAt writes a board over the revision read (zero: none), answering
-// where it landed, or false where another writer got there first; it
-// classifies every other failure, as [FleetStore.putChatReadAt] does.
-func (f *FleetStore) putHomeBoardAt(ctx context.Context, what, key string, raw []byte,
+// putSeatRecordAt writes a seat's personal record (a board, its instructions)
+// over the revision read (zero: none), answering where it landed, or false
+// where another writer got there first; it classifies every other failure, as
+// [FleetStore.putChatReadAt] does.
+func (f *FleetStore) putSeatRecordAt(ctx context.Context, what, key string, raw []byte,
 	revision uint64) (uint64, bool, error) {
 
 	if revision == 0 {
@@ -152,7 +153,7 @@ func (f *FleetStore) SetHomeBoardAbsence(ctx context.Context, handle string, sin
 			if err != nil {
 				return false, err
 			}
-			_, written, err := f.putHomeBoardAt(ctx, "stamp the absence on the Home board of "+handle,
+			_, written, err := f.putSeatRecordAt(ctx, "stamp the absence on the Home board of "+handle,
 				coord.HomeBoardKey(handle), raw, revision)
 			return written, err
 		})

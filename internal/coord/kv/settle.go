@@ -175,6 +175,7 @@ var (
 	accessReviewValue  = class{bound: coord.MaxAccessReviewBytes, reply: replyDeciding}
 	seatAccessValue    = class{bound: coord.MaxSeatAccessBytes, reply: replyDeciding}
 	homeBoardValue     = class{bound: coord.MaxHomeBoardRecordBytes, reply: replyDeciding}
+	instructionsValue  = class{bound: coord.MaxAssistantInstructionsRecordBytes, reply: replyDeciding}
 	modelCheckValue    = class{bound: coord.MaxModelCheckBytes, reply: replyDeciding}
 	oauthGrantValue    = class{bound: coord.MaxOAuthGrantBytes, reply: replyDeciding}
 	oauthSignInValue   = class{bound: coord.MaxOAuthSignInBytes, reply: replyDeciding}
@@ -193,6 +194,7 @@ var (
 		{keys: coord.DocumentFilter(coord.AccessReviewClass), class: accessReviewValue},
 		{keys: coord.DocumentFilter(coord.SeatAccessClass), class: seatAccessValue},
 		{keys: coord.DocumentFilter(coord.HomeBoardClass), class: homeBoardValue},
+		{keys: coord.DocumentFilter(coord.AssistantInstructionsClass), class: instructionsValue},
 		{keys: coord.DocumentFilter(coord.ModelCheckClass), class: modelCheckValue},
 		{keys: coord.DocumentFilter(coord.MCPGrantClass), class: oauthGrantValue},
 		{keys: coord.DocumentFilter(coord.IntegrationGrantClass), class: oauthGrantValue},
