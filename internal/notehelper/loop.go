@@ -31,10 +31,12 @@ type harness interface {
 }
 
 // events is what an adapter reports of the harness besides taking notes,
-// each from the harness's reader and so never blocking: every model response
-// of a turn ([stepCap.step]) and every load of one of the run's skills
-// ([reporter.loaded]). A nil func is a report nobody asked for.
+// each from the harness's reader and so never blocking: every turn started
+// ([stepCap.begin]), every model response of a turn ([stepCap.step]) and every
+// load of one of the run's skills ([reporter.loaded]). A nil func is a report
+// nobody asked for.
 type events struct {
+	begin func(turn string)
 	step  func(turn string)
 	skill func(name string)
 }

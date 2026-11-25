@@ -46,7 +46,8 @@ var (
 	_ artifactDirHolder = Muse{}
 	_ inPlaceGate       = Muse{}
 	_ sessionJudge      = Muse{}
-	_ trimmer           = Muse{}
+	_ mcpDeferrer       = Muse{}
+	_ recordTrimmer     = Muse{}
 )
 
 // NewMuse returns the runner.
@@ -75,6 +76,22 @@ var museSupported = sync.OnceValue(func() string {
 	p, _ := harnessprofile.Builtin(MuseName)
 	return harnessprofile.Release(p.WrittenFor)
 })
+
+// museDeferral is how many tools, across a run's MCP servers, make Muse Code
+// send none of them and offer each only through its tool_search, the bridge's
+// included, and the release that was measured on. On 1.4.25 a run listing 96
+// to 99 sent them all, and 77 with one of 200 KB among them; one listing 100
+// deferred them all, one-word tools as much as the browser's, and with four of
+// Muse's own tools fewer too: only MCP tools count, never their size. No
+// setting moves the count or keeps a server loaded. A pin moves only once it
+// is measured again (TestMuseDefersAtACountMeasuredOnTheReleaseItRuns).
+var museDeferral = struct {
+	at      int
+	release string
+}{at: 100, release: "1.4.25"}
+
+// defersMCPAt is [museDeferral]'s count ([mcpDeferrer]).
+func (Muse) defersMCPAt() int { return museDeferral.at }
 
 // museSystemMax is the most bytes of standing instructions Muse Code takes in
 // `run.system_prompt_append`: past it, 1.4.25 refuses the run before its model
@@ -138,8 +155,10 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 		parts = append(parts, "--reasoning-effort", q(req.Effort))
 	}
 	// THE TURN CAP AS MUSE'S OWN: past it a run fails "model did not reach a
-	// terminal state within N step(s)" ([museEvents.Result]); each of the
-	// exec's runs is capped apart ([museCapMark]).
+	// terminal state within N step(s)" ([museEvents.Result]). Each of the
+	// exec's runs is capped apart: one exec runs another of its own once a
+	// subagent's result arrives after its first ended (measured on 1.4.25), so
+	// the collection holds the exec's whole count to the cap ([capVerdict]).
 	if req.Limits.MaxTurns > 0 {
 		parts = append(parts, "--max-model-steps", strconv.Itoa(req.Limits.MaxTurns))
 	}
@@ -156,11 +175,6 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`if ! at %s; then printf 'crewlet: this box runs Muse Code %%s, older than %s, the release this runner is written for\n' "$n" >&2; exit 1; fi`,
 		floorArgs(museSupported()), museSupported())
 	line(`p=%s`, q(paths.Brief()))
-	// THE CAP NAMED IN THE STREAM, for the decoder to hold the exec's runs
-	// to ([museCapMark]).
-	if req.Limits.MaxTurns > 0 {
-		line(`printf '%%s\n' %s`, q(fmt.Sprintf(`{"payload_type":%q,"turns":%d}`, museCapMark, req.Limits.MaxTurns)))
-	}
 	b.WriteString(museSessionGate(session, paths, freshSessionWiring(req, session) != nil))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))

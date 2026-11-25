@@ -312,24 +312,34 @@ function linuxBoot() {
 }
 
 // running is what the kernel says of pid: whether it can still run (it is
-// reported and has not exited, which a zombie has); its command line, exactly
-// on Linux and as one string elsewhere, or where a process rewrote its title
-// into one, as Chromium does in its new headless mode; and its start, which a
-// pid handed out again never shares: field 22 of its stat on Linux, with the
-// boot, and ps's lstart elsewhere. A pid it does not report, or will not
-// describe, is gone. io is the file system /proc is read through.
+// reported, and a thread of it has not exited); its command line, which the
+// kernel holds until the main thread exits, exactly on Linux and as one
+// string elsewhere, or where a process rewrote its title into one, as
+// Chromium does in its new headless mode; and its start, which a pid handed
+// out again never shares: field 22 of its stat on Linux, with the boot, and
+// ps's lstart elsewhere. A pid it does not report, or will not describe, is
+// gone. io is the file system /proc is read through.
 export async function running(pid, io = fsp) {
   if (!Number.isInteger(pid) || pid <= 0) return { alive: false }
   if (process.platform === "linux") {
     try {
       const stat = await io.readFile(`/proc/${pid}/stat`, "utf8")
       // The fields after the command, which may hold any byte but its last
-      // ")": the state first, so field 22 is the twentieth.
+      // ")": the state first, so field n is fields[n - 3].
       const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ")
-      if (fields[0] === "Z" || fields[0] === "X") return { alive: false }
+      // The state is the MAIN THREAD's: Z is the process over only where
+      // num_threads, field 20, counts that thread alone, since every other is
+      // released as it exits, and Node's main thread reads Z for milliseconds
+      // while another finishes its exit; X is the reap, as is x on kernels
+      // 2.6.33 to 3.13. internal/procgroup's parseProcStat reads them so, and
+      // says why.
+      const over = fields[0] === "X" || fields[0] === "x" || (fields[0] === "Z" && Number(fields[17]) <= 1)
+      if (over) return { alive: false }
       const boot = await linuxBoot()
       const start = boot !== undefined && /^[0-9]+$/.test(fields[19] ?? "") ? `${boot}:${fields[19]}` : undefined
-      const argv = (await io.readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0").slice(0, -1)
+      const cmdline = await io.readFile(`/proc/${pid}/cmdline`, "utf8")
+      if (cmdline === "") return { alive: true, start }
+      const argv = cmdline.split("\0").slice(0, -1)
       if (argv.length === 1 && argv[0].includes(" ")) return { alive: true, command: argv[0], start }
       return { alive: true, argv, start }
     } catch {
@@ -350,19 +360,19 @@ export async function running(pid, io = fsp) {
 
 // runs is whether proc, as running read it, was started with args after its
 // executable: exactly on Linux, and as the end of its command elsewhere,
-// which is exact for arguments that hold no space.
+// which is exact for arguments that hold no space. Without a command line,
+// gone or not, it runs nothing.
 export function runs(proc, args) {
-  if (!proc.alive) return false
   if (proc.argv) return proc.argv.length === args.length + 1 && args.every((a, i) => proc.argv[i + 1] === a)
-  return proc.command.endsWith(` ${args.join(" ")}`)
+  return proc.command !== undefined && proc.command.endsWith(` ${args.join(" ")}`)
 }
 
 // carries is whether proc, as running read it, holds arg among its
-// arguments: exactly on Linux, as one space-delimited word elsewhere.
+// arguments: exactly on Linux, as one space-delimited word elsewhere; never
+// without a command line.
 export function carries(proc, arg) {
-  if (!proc.alive) return false
   if (proc.argv) return proc.argv.slice(1).includes(arg)
-  return ` ${proc.command} `.includes(` ${arg} `)
+  return proc.command !== undefined && ` ${proc.command} `.includes(` ${arg} `)
 }
 
 // signal sends sig to pid, or to the process group it leads with group, and
