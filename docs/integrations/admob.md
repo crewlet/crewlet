@@ -43,7 +43,7 @@ Google calls ten methods limited access (marked in the table below): they answer
 
 ## Connecting Crewlet
 
-1. In a Google Cloud project you control, turn on the AdMob API and make the company's OAuth client ([how](google-cloud.md#the-companys-own-oauth-client)): a **Web application** client whose one authorized redirect URI is `<api.public.external_url>/webhooks/mcp-oauth`, exactly as the form shows it, with no JavaScript origins, and an Internal audience or an External one published or listing whoever signs in as a test user. The engine needs a public address a browser reaches, since Google sends the person back to it.
+1. Set the company's Google sign-in client once, under **Google sign-in** on the Google page ([how](google-cloud.md#the-companys-own-oauth-client)): a **Web application** client whose one authorized redirect URI is `<api.public.external_url>/webhooks/mcp-oauth`, exactly as the page shows it, with no JavaScript origins, and an Internal audience or an External one published or listing whoever signs in as a test user. Turn on the AdMob API in that client's Google Cloud project. The engine needs a public address a browser reaches, since Google sends the person back to it.
 2. Paste the client's ID and secret on the AdMob page. The secret is sealed and shown back as `__redacted__`. AdSense may sign in as the same client and name the same secret.
 3. Sign in with Google there, as a person who manages the AdMob account. While every agent reads, the sign-in asks for `admob.readonly` and `admob.report`; once an agent is raised to `operate`, sign in again to add `admob.monetization`, which every change needs.
 4. Turn agents on from the Agents tab, each with its publisher accounts: the picker lists the publisher accounts the sign-in reaches, and takes a typed publisher ID (`pub-` and 16 digits) for one it does not.
@@ -88,7 +88,7 @@ A change is classed per call from what it sets: creating an app is `operate` and
 integrations:
   admob:
     enabled: true
-    oauth:
+    oauth:                                           # optional: a client for AdMob alone, in place of google_cloud.sign_in_client
       client_id: "123456789012-abc.apps.googleusercontent.com"
       client_secret: ${GOOGLE_OAUTH_CLIENT_SECRET}   # sealed; AdSense may name the same variable
     accounts: ["pub-1234567890123456"]               # optional: the accounts agents may be given; absent is every one the sign-in reaches
@@ -99,7 +99,7 @@ roles:
       admob: {enabled: true, level: read, accounts: ["pub-1234567890123456"]}
 ```
 
-The block needs no Google Cloud connection: it signs in as its own OAuth client. The refresh token is never in the document. A company whose AdMob accounts are reached by different Google accounts connects the accounts one person reaches; `accounts.list` names only the account last opened in AdMob, so each agent's accounts are read by their IDs.
+The block needs no Google Cloud connection: it signs in as the company's Google sign-in client, or its own `oauth`. The refresh token is never in the document. A company whose AdMob accounts are reached by different Google accounts connects the accounts one person reaches; `accounts.list` names only the account last opened in AdMob, so each agent's accounts are read by their IDs.
 
 ## Every method, and its class
 

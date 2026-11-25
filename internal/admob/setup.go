@@ -10,13 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/vendortext"
 )
 
-// credentialsURL is where a person makes the company's OAuth client.
-const credentialsURL = "https://console.cloud.google.com/apis/credentials"
-
 // Requirements says what the company still needs for AdMob: the integration
-// on, and its own OAuth client, which the sign-in is made as. A nil block
-// answers every field absent, so the form still renders.
-func Requirements(c *config.Company, resolve func(string) (string, bool)) []setup.Requirement {
+// on, and a person's Google sign-in, made as the company's sign-in client
+// (googlegrowth.SignInClient). A nil block answers every field absent.
+func Requirements(c *config.Company) []setup.Requirement {
 	var block config.AdMob
 	if c != nil && c.Integrations.AdMob != nil {
 		block = *c.Integrations.AdMob
@@ -29,11 +26,9 @@ func Requirements(c *config.Company, resolve func(string) (string, bool)) []setu
 		ConfigPath: base + ".enabled", Required: true, Hidden: true, Default: "true",
 	}
 	enabled.Present, enabled.Resolved, enabled.Stored = setup.Toggle(block.Enabled)
-	ask := googlegrowth.OAuthClientAsk{Kind: string(Kind), Client: block.OAuth, Required: true,
-		Purpose: vendortext.Of(vendortext.W("The client's ID, from "),
-			vendortext.UI("Google Cloud", "Credentials").At(credentialsURL), vendortext.W(".")),
-		SignIn: vendortext.Plain("As a person who manages the AdMob account; again once agents may change.")}
-	return append([]setup.Requirement{enabled}, googlegrowth.OAuthClient(ask, resolve)...)
+	signIn := googlegrowth.SignIn(googlegrowth.SignInAsk{Kind: string(Kind), Required: true,
+		SignIn: vendortext.Plain("As a person who manages the AdMob account; again once agents may change.")})
+	return append([]setup.Requirement{enabled}, signIn...)
 }
 
 // Guide is what the connect form says around its fields.

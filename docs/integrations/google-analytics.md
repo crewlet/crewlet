@@ -48,7 +48,7 @@ The integration's Settings tab then lists each connection and the properties it 
 
 **Or once, on the account.** Added under **Account access management**, one add covers every property of the account, now and later. That is broader access at Google: the identity reaches every property there, though Crewlet still holds the agent to its own.
 
-**Add it for me.** With the company's own OAuth client (`oauth`, made as [Google Cloud's page describes](google-cloud.md#the-companys-own-oauth-client), which Google Play may share) and an Administrator's sign-in on the Settings tab, **Add it for me** binds the identity to each property at the level's role through the Admin API's access bindings, where it holds no role at or above it on the property or its account, keeping any No Cost Metrics or No Revenue Metrics restriction. Turning the agent off removes those bindings. The sign-in only adds, reads and removes agents' identities; no agent's call is made with it.
+**Add it for me.** With the company's Google sign-in client (set once on the Google page, as [Google Cloud's page describes](google-cloud.md#the-companys-own-oauth-client), or `oauth` here) and an Administrator's sign-in on the Google page, **Add it for me** binds the identity to each property at the level's role through the Admin API's access bindings, where it holds no role at or above it on the property or its account, keeping any No Cost Metrics or No Revenue Metrics restriction. Turning the agent off removes those bindings. The sign-in only adds, reads and removes agents' identities; no agent's call is made with it.
 
 **The check, on every pass:** Crewlet signs in as the identity and lists the properties it reaches; one not listed is not added yet, and one listed holds Viewer at least. A `read` agent is then **In sync**. Google Analytics shows any other role only to an Administrator, so an `operate` or `administer` agent's role is read with the admin sign-in, on each property and its account, which every property inherits: one below the level's is the wrong role, and Administrator below `administer` is a warning. Without that sign-in the row reads **Role not checked**, never In sync, and says which role to set; a call Google refuses names what is missing.
 
@@ -96,7 +96,7 @@ roles:
       google_analytics: {enabled: true, level: operate, role: marketer, properties: ["123456789"]}
 ```
 
-The block needs `integrations.google_cloud` on with its provisioning block. Its one secret is the optional OAuth client's.
+The block needs `integrations.google_cloud` on with its provisioning block. Its one secret is the optional OAuth client's, where it names its own.
 
 ## Every method, and its class
 

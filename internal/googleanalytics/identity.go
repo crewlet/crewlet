@@ -120,7 +120,7 @@ func digits(s string) bool {
 // adminUnavailable is why Crewlet cannot add an identity for c.
 func adminUnavailable(c *config.Company) string {
 	if c == nil || c.Integrations.GoogleAnalytics == nil || c.Integrations.GoogleAnalytics.OAuth == nil {
-		return "A Google Analytics Administrator signs in on the Settings tab first."
+		return "A Google Analytics Administrator signs in on the Google page first."
 	}
 	return ""
 }
@@ -354,18 +354,14 @@ func remove(ctx context.Context, in googlegrowth.AdminCall) error {
 	return nil
 }
 
-// adminClient is the company's own OAuth client an admin signs in as, false
-// where Google Analytics is off; on with no oauth block is a client with nothing set,
-// which the sign-in refuses by name.
+// adminClient is the OAuth client an admin signs in as (googleauth.SignInClient),
+// false where Google Analytics is off.
 func adminClient(c *config.Company) (googleauth.ConsentClient, bool) {
 	b := c.Integrations.GoogleAnalytics
 	if b == nil || !b.Enabled {
 		return googleauth.ConsentClient{}, false
 	}
-	if b.OAuth == nil {
-		return googleauth.ConsentClient{}, true
-	}
-	return googleauth.ConsentClient{ID: b.OAuth.ClientID, Secret: b.OAuth.ClientSecret}, true
+	return googleauth.SignInClient(c, b.OAuth), true
 }
 
 // adminScopes are what the admin sign-in asks for: managing users, and
