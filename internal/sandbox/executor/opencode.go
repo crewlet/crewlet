@@ -2022,8 +2022,9 @@ func (d *openCodeEvents) Ended() bool { return d.ended }
 // step and a step one model request, whichever of its start and finish the
 // stream holds: a step cut off where its harness was killed has no finish.
 // Measured on 2.3.2 against a stand-in: 31 messages for 31 requests, none for a
-// 429 or a 500 it retried. A subagent's steps are its own session's, which
-// `opencode run` does not print, so its requests are not counted here.
+// 429 or a 500 it retried. NOT COUNTED: a subagent's steps, which are its own
+// session's and which `opencode run` does not print: measured, 4 counted of a
+// run's 7 requests, a subagent's 3 among them.
 func (d *openCodeEvents) Requests() int { return len(d.steps) }
 
 // InFlight implements [Decoder]: none, as OpenCode's own steps stops before

@@ -307,7 +307,10 @@ func (d *grokEvents) limitReport() string { return d.limit }
 func (d *grokEvents) Ended() bool { return d.ended || d.capped || d.failure != "" }
 
 // Requests implements [Decoder]: the `usage` lines, one a request, every
-// agent's, a subagent's included.
+// agent's, a subagent's included. NOT COUNTED: the session title's request,
+// which writes no usage line. Measured on 1.0.92 against a stand-in: one
+// title request a run beside the loop's, whose 12 of 12 and 3 under a cap of
+// 3 were counted, and 6 with a 429 and a 500 retried.
 func (d *grokEvents) Requests() int { return d.requests }
 
 // InFlight implements [Decoder]: none, as Grok's own --max-turns stops before
