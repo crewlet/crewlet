@@ -73,7 +73,8 @@ func TestEveryAuxiliaryCallStatesItsPurpose(t *testing.T) {
 // was built to close, back in the most natural spelling there is. The seam
 // itself resolves it, and one probe asks whether ANY seat has an auxiliary
 // model without making a call on it; nothing else may. Head and Take are both
-// the registry's head; Take also takes an LLM fleet's pick.
+// the registry's head (Take also takes an LLM fleet's pick), and Walk the whole
+// chain an LLM fleet's call walks.
 func TestNothingResolvesTheAuxiliaryChainBesideTheSeam(t *testing.T) {
 	t.Parallel()
 	allowed := map[string]string{
@@ -89,7 +90,7 @@ func TestNothingResolvesTheAuxiliaryChainBesideTheSeam(t *testing.T) {
 					return true
 				}
 				sel, ok := call.Fun.(*ast.SelectorExpr)
-				head := ok && (sel.Sel.Name == "Head" || sel.Sel.Name == "Take")
+				head := ok && (sel.Sel.Name == "Head" || sel.Sel.Name == "Take" || sel.Sel.Name == "Walk")
 				if !head || len(call.Args) != 2 || !isSelector(call.Args[1], "phase", "Auxiliary") {
 					return true
 				}
