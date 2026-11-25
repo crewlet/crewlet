@@ -40,6 +40,8 @@ var (
 	_ saver             = Pi{}
 	_ inboxDelivery     = Pi{}
 	_ recordConfirmer   = Pi{}
+	_ threadHarness     = Pi{}
+	_ mainThreadHarness = Pi{}
 	_ noteReader        = Pi{}
 	_ notesOffExplainer = Pi{}
 	_ artifactDirHolder = Pi{}

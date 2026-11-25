@@ -1079,11 +1079,12 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7480.5 KiB,
+	// kit releases account for its growth, and the last measure was 7480.8 KiB,
 	// on kit 0.188.2, with the MCP wizard keeping the headers an integration
-	// does not send, a consent product's OAuth client on the connect form, and
-	// Ask Crewlet reading an outline of the screen. A raise names the measured
-	// size and its cause in its commit.
+	// does not send, a consent product's OAuth client on the connect form, Ask
+	// Crewlet reading an outline of the screen, and a session's newest summary
+	// on a seat's Sessions. A raise names the measured size and its cause in its
+	// commit.
 	treeBudget = 5<<20 + 2361<<10
 )
 

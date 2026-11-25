@@ -210,11 +210,11 @@ func TestACollectionsReadOfAMuseSessionIsItsWholeLineRead(t *testing.T) {
 		asked := museTokensIn([]byte(record))
 		delete(asked, museToken("9"))
 		want, wantErr := museHeldWhole(strings.NewReader(record), digest, asked)
-		got, err := museHeld(t.Context(), strings.NewReader(record), digest, asked)
+		got, err := museHeld(t.Context(), strings.NewReader(record), digest, asked, nil)
 		if !maps.Equal(got, want) || fmt.Sprint(err) != fmt.Sprint(wantErr) {
 			t.Errorf("%s: held %v (%v), want %v (%v)", name, got, err, want, wantErr)
 		}
-		got, err = museHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, digest, asked)
+		got, err = museHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, digest, asked, nil)
 		if !maps.Equal(got, want) || fmt.Sprint(err) != fmt.Sprint(wantErr) {
 			t.Errorf("%s in pieces: held %v (%v), want %v (%v)", name, got, err, want, wantErr)
 		}

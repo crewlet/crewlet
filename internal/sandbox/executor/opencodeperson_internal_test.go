@@ -111,7 +111,7 @@ func TestAReadEndsAtItsLinesBound(t *testing.T) {
 				"cut where the step began", tc.items, len(page.Entries), page.Cut, last.Text)
 		}
 		var count openCodeCountReading
-		if _, err = countExport(t.Context(), bytes.NewReader(gzipOf(t, doc)), &count); err != nil {
+		if _, err = countExport(t.Context(), bytes.NewReader(gzipOf(t, doc)), &count, nil); err != nil {
 			t.Errorf("the meter reads an export past a person's lines bound: %v", err)
 		}
 	}

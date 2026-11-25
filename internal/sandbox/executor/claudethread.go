@@ -2322,8 +2322,9 @@ var _ mainThreadHarness = ClaudeCode{}
 // box, in the order mainthread.go's file comment states. The release and the saved
 // compaction mark the count alone: takes asked are read in the walk all the
 // same, the chain first on each line, unless no walk could decide one
-// ([unreadTakes]). A count marked before the walk leaves no estimate of the
-// next request, so the floor reads the copy's last request's input.
+// ([unreadTakes]), and so is the newest summary ([claudeSummaryReading]). A
+// count marked before the walk leaves no estimate of the next request, so the
+// floor reads the copy's last request's input.
 func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
@@ -2332,7 +2333,15 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 	if why := unreadTakes(ask); why != "" {
 		reading.Receipts, takes = sandbox.TakeReceipts{Why: why}, nil
 	}
-	if !ask.Count && !ask.Next && len(takes) == 0 {
+	var summary *claudeSummaryReading
+	if ask.Summary {
+		if why := summaryReleaseWhy(ask.Release, claudeSummaryReleases...); why != "" {
+			reading.Summary = summaryUnread(why)
+		} else {
+			summary = &claudeSummaryReading{}
+		}
+	}
+	if !ask.Count && !ask.Next && len(takes) == 0 && summary == nil {
 		return reading
 	}
 	early := false
@@ -2346,6 +2355,9 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 		marked(sandbox.CountUnread)
 		if len(takes) > 0 {
 			reading.Receipts = sandbox.TakeReceipts{Why: why}
+		}
+		if summary != nil {
+			reading.Summary = summaryUnread(why)
 		}
 		return reading
 	}
@@ -2372,10 +2384,11 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 		}
 	}
 	counts, nexts := ask.Count && !early, ask.Next && !early
-	if !counts && !nexts && len(takes) == 0 {
+	if !counts && !nexts && len(takes) == 0 && summary == nil {
 		return reading
 	}
-	body, err := box.OpenFile(ctx, paths.ClaudeConfigDir()+"/"+thread)
+	file := paths.ClaudeConfigDir() + "/" + thread
+	body, err := box.OpenFile(ctx, file)
 	if err != nil {
 		return unread("the thread did not open")
 	}
@@ -2402,6 +2415,9 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 	if hooks != nil {
 		readings = append(readings, hooks)
 	}
+	if summary != nil {
+		readings = append(readings, summary)
+	}
 	walkThread(ctx, body, threadPlainMax, &large, readings...)
 	if counts {
 		reading.Count = count.count(0)
@@ -2411,6 +2427,9 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 	}
 	if hooks != nil {
 		reading.Receipts = hooks.receipts(ctx, ask)
+	}
+	if summary != nil {
+		reading.Summary = summary.reading(ctx, box, file)
 	}
 	return reading
 }
