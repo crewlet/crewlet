@@ -5,19 +5,20 @@ import (
 	"testing"
 )
 
-// A MACHINE'S CODEX REQUIREMENTS CANNOT SWITCH THE NESTED HOOK OFF UNSEEN.
-// Codex 0.171.0's /etc/codex/requirements.toml runs managed hooks alone where
-// its top-level `allow_managed_hooks_only` is true (read in the binary: a
-// field of its requirements, root's file), so the guard's answer holding it
-// refuses the run, naming the file and the key; false, the key under another
-// table, no file and a file that is no TOML start it. Mutations, each red:
-// skip the requirements; read the key under any table.
-func TestACodexMachinesRequirementsCannotSwitchTheNestedHookOffUnseen(t *testing.T) {
+// A MACHINE'S CODEX REQUIREMENTS SWITCH THE NESTED HOOK OFF, NAMED. Codex
+// 0.171.0's /etc/codex/requirements.toml runs managed hooks alone where its
+// top-level `allow_managed_hooks_only` is true (read in the binary: a field of
+// its requirements, root's file), so the guard's answer holding it names the
+// file and the key as switching the hook off ([codexHooksSwitchedOff]);
+// false, the key under another table, no file and a file that is no TOML
+// switch nothing. Mutations, each red: skip the requirements; read the key
+// under any table.
+func TestACodexMachinesRequirementsSwitchTheNestedHookOffNamed(t *testing.T) {
 	t.Parallel()
 	read := `{"id":2,"result":{"config":{"features":{}},"layers":[{"name":{"type":"sessionFlags"},"config":{}}]}}`
 	for name, tc := range map[string]struct {
 		requirements string
-		refused      bool
+		off          bool
 	}{
 		"managed hooks alone":                 {"allow_managed_hooks_only = true\n", true},
 		"managed hooks alone, no layers read": {"allow_managed_hooks_only = true\n", true},
@@ -32,12 +33,12 @@ func TestACodexMachinesRequirementsCannotSwitchTheNestedHookOffUnseen(t *testing
 			if strings.HasSuffix(name, "no layers read") {
 				out = "\n" + codexRequirementsMark + "\n" + tc.requirements
 			}
-			err := codexHooksVerdict(out, "/home/box/.codex/config.toml")
-			if (err != nil) != tc.refused {
-				t.Fatalf("refused %v, want %t", err, tc.refused)
+			off := codexHooksSwitchedOff(out, "/home/box/.codex/config.toml")
+			if (len(off) > 0) != tc.off {
+				t.Fatalf("switched off by %q, want %t", off, tc.off)
 			}
-			if tc.refused && !strings.Contains(err.Error(), "/etc/codex/requirements.toml sets allow_managed_hooks_only = true") {
-				t.Errorf("the refusal does not name the file and the key: %v", err)
+			if tc.off && !strings.Contains(strings.Join(off, "; "), "/etc/codex/requirements.toml sets allow_managed_hooks_only = true") {
+				t.Errorf("the switch does not name the file and the key: %q", off)
 			}
 		})
 	}
