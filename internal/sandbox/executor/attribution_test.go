@@ -356,8 +356,8 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 	},
 	// One `grok` process is the run, and its shell inherits its environment
 	// whole; its stand-in answers the release check every run's script asks
-	// first and fails the guard's `inspect`, which starts the run, then runs
-	// the scenario.
+	// first, fails the guard's `inspect` (which starts the run) and answers the
+	// launch's `grok inspect` with nothing, then runs the scenario.
 	executor.GrokName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 		return standInBox(t, executor.NewGrok(), map[string]string{"grok": "#!/bin/sh\n" +
 			"case \"$1\" in --version) echo 'grok 1.0.92 (b06756fd6256)'; exit 0;; inspect) exit 1;; esac\n" +

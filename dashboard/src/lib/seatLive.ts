@@ -12,7 +12,7 @@
  * A PAUSE IS ON A SEAT BEFORE IT TAKES EFFECT. The engine lets a running turn
  * finish, so a paused seat reads `working` until it does, and `needs` while
  * its executor asks; both are said beside the state ([PauseNote]) rather than
- * left to read as a seat nobody paused.
+ * left to read as a seat nobody paused, and it counts as paused ([countedStateOf]).
  */
 
 import { useMemo } from "react";
@@ -20,11 +20,13 @@ import { waitedOn } from "./budget.ts";
 import { useNow } from "./clock.ts";
 import {
   awaitingPerson,
+  countedStateOf,
   failureWords,
   indexOrg,
   liveRowFor,
   nameOfIn,
   shownStateOf,
+  stateGroupOf,
   stateLine,
   stateWord,
   toneOf,
@@ -86,6 +88,8 @@ export interface SeatLive {
   seat: Seat;
   row: AgentRow | undefined;
   state: ShownState;
+  /** The state its chips, legend and counts file it under ([countedStateOf]). */
+  counted: ShownState;
   word: string;
   tone: SeatTone | "neutral";
   /** What it is doing, in the state line's words. */
@@ -196,6 +200,7 @@ export function seatLiveOf(
     seat,
     row: human ? undefined : row,
     state,
+    counted: human ? state : countedStateOf(row),
     word: human ? "Person" : stateWord(state),
     tone: human ? "neutral" : toneOf(state),
     line: stateLine(row, { now: opts.now, seat, nameOf: opts.nameOf }),
@@ -296,7 +301,7 @@ export function countsOf(seats: Iterable<SeatLive>): StatusCounts {
   for (const s of seats) {
     if (s.seat.kind === "human") continue;
     c.all += 1;
-    c[s.state] += 1;
+    c[s.counted] += 1;
     if (s.problems.length > 0) c.problems += 1;
   }
   return c;
@@ -339,11 +344,10 @@ export function matches(s: SeatLive, filter: StatusFilter): boolean {
   switch (filter) {
     case "working":
     case "needs":
+    case "stopped":
     case "idle":
     case "offline":
-      return s.state === filter;
-    case "stopped":
-      return s.state === "paused" || s.state === "stopped";
+      return stateGroupOf(s.counted) === filter;
     case "problems":
       return s.problems.length > 0;
   }

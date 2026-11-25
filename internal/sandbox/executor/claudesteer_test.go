@@ -104,9 +104,9 @@ const (
 // hook said without it. A token of any other shape, or one the line does not
 // end in, is a person's words and stays.
 //
-// Mutation: leave the token on the live line (claudeSteerSaid without the cut),
-// and both transcripts show it; drop it from the answer, and the answer names
-// no take.
+// Mutation: leave the token on the live line (claudeSteerSaid without the cut)
+// or on the session's (claudeHookSaid without it), and that transcript shows
+// it; drop it from the answer, and the answer names no take.
 func TestAHookAnswerNamesItsTakeAndTheLiveLineLeavesItOut(t *testing.T) {
 	t.Parallel()
 	for event, said := range map[string]string{
@@ -129,7 +129,8 @@ func TestAHookAnswerNamesItsTakeAndTheLiveLineLeavesItOut(t *testing.T) {
 		if got := decodeClaude(line); got != "[steer] "+said {
 			t.Errorf("%s: the live line reads %q, want %q", event, got, "[steer] "+said)
 		}
-		described, raw := claudeCaptureOf(t, []string{line}, nil)
+		described, raw := claudeCaptureOf(t, []string{hookSaid(t, event, out.SystemMessage,
+			"2026-10-30T12:00:03.100Z")}, nil)
 		got, err := executor.ReadTranscript(t.Context(), described.Harness, described.Format,
 			opener(bytes.NewReader(raw)), 0)
 		if err != nil {

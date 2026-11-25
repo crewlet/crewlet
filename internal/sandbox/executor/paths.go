@@ -131,9 +131,9 @@
 //     ([threadMessage.Notification]), which its one reader matches only
 //     against legs whose call it read.
 //
-// What these rules were measured on is Claude Code 2.1.310 and 2.1.322, driven
-// as the engine drives a box's executor, and 2.1.118 beside 2.1.310 for a hook
-// that follows one call (a skill's). The take's context meter (measure.go)
+// These rules were measured on Claude Code 2.1.310, 2.1.322 and 2.1.330,
+// driven as the engine drives a box's executor, and 2.1.118 beside 2.1.310
+// for a hook that follows one call (a skill's). The take's context meter (measure.go)
 // reads the main thread through the layer in one walk of its lines
 // ([walkThread]): it decides what a continuation of the capture is told, by
 // what Claude Code counts the session at ([resumedReading]), and reads the
@@ -425,11 +425,11 @@
 // pairs nothing. The success's stdout is the hook's whole answer, so it is
 // never a confirmation.
 //
-// HELD where the pair's two records are handed ([threadChain.Handed]) on a
-// thread every size path of the resume reads alike ([threadChain.AnySize]:
-// the box's copy is read, and the archive's resume may take another path),
-// the job's release is one whose resume was read ([claudeResumeRead]), and no
-// restart ([threadRestarts.See]) lies after the system message. RESTARTED
+// HELD where the pair's two records are handed ([threadChain.Handed]) and read
+// alike by every size path of the resume ([threadChain.Alike]: the box's copy
+// is read, and the archive's resume may take another path), the job's release
+// is one whose resume was read ([claudeResumeRead]), and no restart
+// ([threadRestarts.See]) lies after the system message. RESTARTED
 // where the same holds but one does, or, for a BATCH pair, a main reply after
 // it says its request cleared tool results or says it unreadably
 // ([threadLine.ToolResultsCleared]): a batch's note rides its batch's last
@@ -437,14 +437,13 @@
 // a turn of its own. A pair the resume does not hand (a withdrawn record, a
 // parent naming no record) is neither, and is evidence its take arrived.
 //
-// SO A THREAD THAT COMPACTED DECIDES NO TAKE, wherever its pairs lie: a
-// compaction's boundary, or a record the dispatch from the last record does
-// not reach (a later root's thread), binds it to the small path, so it is no
-// thread every size path reads alike, and every take on it is undecided and
-// its note told again; Restarted is never reached through a compaction or a
-// later root. Holding the pairs after the last boundary needs what every size
-// path hands of the records after it, which the readers' ports have not
-// measured.
+// A THREAD THAT COMPACTED DECIDES ITS TAKES BY ITS LAST BOUNDARY (#1532):
+// every size path hands the same records past it (measured on 2.1.310,
+// 2.1.322 and 2.1.330: c1 resumed small, by the dispatch and by the prune). A
+// pair after it is held as above; one before it RESTARTED where a reply of
+// the model followed it with no restart between ([hookReading.answer]), else
+// undecided, as only the summary carried it. A later root's thread still binds
+// the whole thread to the small path.
 //
 // No walk is made for takes on a release whose resume was not read, where
 // none can be held and so none absent, nor for more than 64, which a hook
@@ -901,16 +900,16 @@
 // decoded and written again from a map, which writes its keys sorted, the
 // attachment (a subagent's agentId before it) first and its list inside it.
 // Claude Code reads a session file past 5 MiB by the bytes of its lines, and
-// finds a record by where its keys sit, in two readings (read in 2.1.310 and
-// 2.1.322):
+// finds a record by where its keys sit, in two readings (read in 2.1.310,
+// 2.1.322 and 2.1.330):
 //
 //   - 2.1.310, reading such a file as it does by default, takes a record for
 //     a subagent's only where `"isSidechain":true` sits in its line's first
 //     256 bytes, and walks the thread back from the last record it takes for
 //     the main thread's. A subagent's record written sorted, its list before
 //     that key, is taken for the main thread's, and the records the subagent
-//     wrote after it are left out of the thread a relaunch resumes. 2.1.322
-//     looks for the key past those bytes as well.
+//     wrote after it are left out of the thread a relaunch resumes. The
+//     others look past those bytes too.
 //   - Under CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP (a switch a managed settings
 //     file can set whatever a launch unsets), both prune such a file, taking a
 //     line for a record only where it begins `{"parentUuid":` and walking the

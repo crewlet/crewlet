@@ -27,6 +27,8 @@ esac
 s= p=; for a; do [ "$p" = --session-id ] && s=$a; p=$a; done
 cat > /dev/null; : > "$HOME/started"
 printf '{"type":"session.start","data":{"sessionId":"%s"}}\n' "$s"
+[ ! -f "$COPILOT_HOME/extensions/crewlet-notes/extension.mjs" ] ||
+  echo '{"type":"session.info","data":{"message":"crewlet: the run'"'"'s extension is running"}}'
 echo '{"type":"assistant.message","data":{"messageId":"m1","content":"done","toolRequests":[]}}'
 printf '{"type":"result","sessionId":"%s","exitCode":0}\n' "$s"
 `

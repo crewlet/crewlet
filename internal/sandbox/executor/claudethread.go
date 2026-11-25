@@ -1511,6 +1511,17 @@ func (l threadLine) IsVirtual() (bool, error) {
 	return wireBool("isVirtual", raw)
 }
 
+// PutsBack reports whether a user record carries `rowsAheadOfPutBack`, rows
+// 2.1.330's walk puts back ahead of it under foamy_spring (Etn @321995710,
+// `rowsAheadOfPutBack===void 0`), whatever the key holds, null included;
+// false where absent and on other types. No probed thread holds one. Reader:
+// the model of which records a resume hands its model, which reads no thread
+// holding one. ITS PRESENCE IS THE WHOLE READING, so this accessor has no
+// error.
+func (l threadLine) PutsBack() bool {
+	return l.Head.Type == recordUser && l.facts().putBack
+}
+
 // InterruptedByShutdown reports whether a user record says a SHUTDOWN
 // INTERRUPTED the calls its results answer: `interruptedByShutdown` JSON true;
 // false where absent or false and on other types. A stopped harness writes the
