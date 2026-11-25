@@ -18,11 +18,13 @@
 #                                                   is the one Hermes froze with the session titled TITLE
 #   hermes_carry.py servers STAGED                  whether the box's Hermes runs each MCP server of STAGED as
 #                                                   STAGED writes it
-#   hermes_carry.py guard PLUGIN SERVERS SKILLS BOUND  whether the box's Hermes would start with the run's plugin
+#   hermes_carry.py guard PLUGIN SERVERS SKILLS     whether the box's Hermes would start with the run's plugin
 #                                                   and its servers (JSON: each name's own header names) as the
-#                                                   run wrote them, its skills listed, and its hook given BOUND s
-#   hermes_carry.py gate PEEK OUT WINDOW            what Hermes makes of each checkout PEEK's roots name, the
-#                                                   note helper's gate, written to OUT (checkout_gate)
+#                                                   run wrote them, and its skills listed
+#   hermes_carry.py gate PEEK OUT MODEL BOUND       what Hermes makes of each checkout PEEK's roots name at the
+#                                                   window it resolves for MODEL, the note helper's gate, written
+#                                                   to OUT (checkout_gate); `off <why>` where Hermes's hook bound is
+#                                                   under BOUND s, `refused <why>` where an INTERNALS entry moved
 #
 # Run under Hermes's own interpreter through its launcher (`hermes --run-module cProfile -o /dev/null`),
 # which keeps no exit status, so every command ends on one line of its own on stdout: `crewlet-carry ok`
@@ -30,7 +32,8 @@
 # the store holds no session of that title (or, for renew, no launch Hermes froze with it; for route, no
 # route; for trim, no row to leave out), route answers `crewlet-carry moved` for another route, servers
 # `crewlet-carry taken` and why, and guard `crewlet-carry refused <why>` where the box would switch the run's
-# own plugin or servers off. Anything else is a failure, its traceback on stderr.
+# own plugin or servers off. Anything else is a failure, its traceback on stderr. INTERNALS names what the script
+# reads of Hermes's own code beyond its configuration loader.
 #
 # A dump is JSON lines: the store's schema ({"ddl", "kind"}, never the full-text index's own tables, which
 # its triggers fill again), the store's own bookkeeping rows whole, then the session's rows ({"t", "r"}),
@@ -529,6 +532,98 @@ def plugoff(plugin):
     return "ok" if not held else "refused " + " and ".join(held)
 
 
+# WHAT THE RUN READS OF HERMES'S OWN CODE to hand it its checkouts, each by module, name and the parameters it is
+# called with (None: a constant): checked at every launch (gate), a release that moved one refused by name before
+# it starts, since a wrong render or verdict would hand a model what Hermes itself would not. A Hermes release bump
+# re-checks this list against the new release's source (0.23.3's, read).
+INTERNALS = (
+    ("agent.prompt_builder", "build_context_files_prompt", ("cwd", "skip_soul", "context_length")),
+    ("agent.prompt_builder", "discover_context_files", ("cwd_path",)),
+    ("agent.skill_utils", "_skills_cfg_get", ("key",)),
+    ("agent.skill_utils", "get_disabled_skill_names", ("platform",)),
+    ("agent.skill_utils", "_candidate_project_skills_dirs", ("root",)),
+    ("agent.skill_utils", "iter_skill_index_files", ("skills_dir", "filename")),
+    ("agent.skill_utils", "is_project_root_trusted", ("root",)),
+    ("agent.skill_utils", "is_quarantined_project_skill", ("skill_md",)),
+    ("agent.skill_utils", "iter_project_skill_files", ("project_dir",)),
+    ("agent.skill_utils", "get_skill_search_roots", ("local", "include_project")),
+    ("agent.skill_utils", "parse_frontmatter", ("content",)),
+    ("agent.skill_utils", "TIER_PROJECT", None),
+    ("agent.model_metadata", "get_model_context_length",
+     ("model", "base_url", "api_key", "config_context_length", "provider", "custom_providers")),
+    ("agent.agent_init", "_scope_context_length_to_default_runtime",
+     ("agent", "_agent_cfg", "_model_cfg", "_custom_providers", "_config_context_length", "base_url")),
+    ("hermes_cli.config", "get_compatible_custom_providers", ("config",)),
+    ("hermes_cli.config", "get_custom_provider_context_length", ("model", "base_url", "custom_providers")),
+    ("hermes_cli.runtime_provider", "resolve_runtime_provider",
+     ("requested", "explicit_api_key", "explicit_base_url", "target_model")),
+    ("gateway.session_local_route", "resolve_launch_route", ("params", "config")),
+    ("hermes_cli.gateway_chat", "env_launch_flags", ()),
+    ("hermes_cli.plugins", "_resolve_hook_callback_timeout", ()),
+    ("tools.budget_config", "budget_for_context_window", ("context_length",)),
+)
+
+
+def internals():
+    """Each INTERNALS entry this Hermes lacks, or whose parameters lack one the run passes, a phrase each."""
+    import importlib
+    import inspect
+    moved = []
+    for module, name, params in INTERNALS:
+        try:
+            found = getattr(importlib.import_module(module), name)
+        except (ImportError, AttributeError):
+            moved.append("%s.%s is gone" % (module, name))
+            continue
+        if params is None:
+            continue
+        try:
+            have = inspect.signature(found).parameters
+        except (TypeError, ValueError):
+            moved.append("%s.%s is no function" % (module, name))
+            continue
+        lost = [p for p in params if p not in have]
+        if lost:
+            moved.append("%s.%s takes no %s" % (module, name, ", ".join(lost)))
+    return moved
+
+
+def launch_window(model):
+    """The window Hermes's agent resolves for the run's model as a session starts (agent/agent_init.py, its
+    context compressor's get_model_context_length): the launch's route (-m's words, then resolve_runtime_provider, as
+    route reads it), model.context_length where it describes that runtime, else a custom provider's, then Hermes's
+    own resolution, which falls back to its DEFAULT_FALLBACK_CONTEXT where it cannot place the model."""
+    from types import SimpleNamespace
+    from agent.agent_init import _scope_context_length_to_default_runtime
+    from agent.model_metadata import get_model_context_length
+    from gateway.session_local_route import resolve_launch_route
+    from hermes_cli.config import get_compatible_custom_providers, get_custom_provider_context_length, load_config
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+    config = load_config()
+    section = config.get("model") if isinstance(config.get("model"), dict) else {}
+    launch = resolve_launch_route({"model": model}, config) if model else {}
+    runtime = resolve_runtime_provider(requested=launch.get("provider") or None,
+                                       explicit_api_key=launch.get("api_key"),
+                                       explicit_base_url=launch.get("base_url"), target_model=launch.get("model"))
+    agent = SimpleNamespace(model=launch.get("model") or configured_model(config.get("model")),
+                            provider=runtime.get("provider"), base_url=runtime.get("base_url"))
+    custom = get_compatible_custom_providers(config)
+    pinned = section.get("context_length")
+    try:
+        pinned = int(pinned) if pinned is not None else None
+    except (TypeError, ValueError):
+        pinned = None
+    if pinned is not None:
+        pinned = _scope_context_length_to_default_runtime(agent, config, section, custom, pinned,
+                                                          launch.get("base_url"))
+    if pinned is None and custom:
+        pinned = get_custom_provider_context_length(model=agent.model, base_url=agent.base_url,
+                                                    custom_providers=custom) or None
+    return get_model_context_length(agent.model, base_url=agent.base_url or "", api_key=runtime.get("api_key") or "",
+                                    config_context_length=pinned, provider=agent.provider or "",
+                                    custom_providers=custom)
+
+
 # What build_context_files_prompt opens its answer with, which the run's sections replace with their own label.
 CONTEXT_HEADER = "# Project Context\n\nThe following project context files have been loaded and should be followed:\n\n"
 
@@ -603,20 +698,30 @@ def skill_names():
     return taken
 
 
-def gate(peek_path, out_path, window):
-    """checkout_gate for the roots the note helper's hermes-peek wrote at peek_path, written to out_path, under
-    the box's .env as Hermes reads it; window 0 for none."""
-    with open(peek_path, encoding="utf-8") as f:
-        roots = json.load(f).get("roots") or []
+def gate(peek_path, out_path, model, bound):
+    """checkout_gate for the roots the note helper's hermes-peek wrote at peek_path, at the window Hermes resolves
+    for model (launch_window; asked only where there are roots), written to out_path, under the box's .env as
+    Hermes reads it: refused where an INTERNALS entry moved, off (the run goes on without its nested hand, said)
+    where plugins.hook_callback_timeout leaves the hand less than bound seconds."""
     from hermes_cli.env_loader import load_hermes_dotenv
     load_hermes_dotenv(hermes_home=os.environ.get("HERMES_HOME", ""), load_external_secrets=False)
-    answer = checkout_gate(roots, int(window) or None)
+    moved = internals()
+    if moved:
+        return "refused " + "; ".join(moved)
+    with open(peek_path, encoding="utf-8") as f:
+        roots = json.load(f).get("roots") or []
+    answer = checkout_gate(roots, launch_window(model)) if roots else {}
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(answer, f)
+    from hermes_cli.plugins import _resolve_hook_callback_timeout
+    hook = _resolve_hook_callback_timeout()
+    if 0 < hook < float(bound):
+        return ("off plugins.hook_callback_timeout is %g, under the %s seconds the hand may take, so Hermes would "
+                "abandon it with the repository claimed (raise it to %s or remove it)" % (hook, bound, bound))
     return "ok"
 
 
-def guard(plugin, servers, skills, bound):
+def guard(plugin, servers, skills):
     """Why the box's Hermes would start without the run's plugin or one of servers' tools, by what Hermes itself
     reads (load_config() under the run's managed scope, its own gates), each reason naming the file, key and
     entry: a sticky profile (main._apply_profile_override's read), a launch switch in an environment or .env, a
@@ -625,8 +730,7 @@ def guard(plugin, servers, skills, bound):
     gated off, or one of skills (the run's seat skills' names) disabled for the cli, by Hermes's own
     get_disabled_skills, which Hermes leaves unlisted (read in its code). A box file's own switch of one of
     servers (enabled false, disabled true, a tools list leaving out or hiding its tools, servers giving
-    each one's tools) refuses it too, though the run's overlay would state it back (measured on 0.23.3); and a
-    plugins.hook_callback_timeout under bound, the seconds the run's nested hand may take."""
+    each one's tools) refuses it too, though the run's overlay would state it back (measured on 0.23.3)."""
     names = json.loads(servers)
     os.environ.pop("CREWLET_HERMES_PLUGIN", None)  # a plugin Hermes loads while answering registers nothing
     home_dir = os.environ.get("HERMES_HOME", "")
@@ -749,27 +853,19 @@ def guard(plugin, servers, skills, bound):
             held = (where(("plugins", "disabled"), lambda v: isinstance(v, list) and plugin in v) if plugin in disabled
                     else where(("plugins", "enabled"), lambda v: True))
             found.append("%s, so Hermes would not load the run's plugin %s: %s" % (held, plugin, verdict.error))
-
-    # THE HOOK THAT HANDS A LATER CHECKOUT is given its bound, or Hermes abandons it with the checkout claimed.
-    from hermes_cli.plugins import _resolve_hook_callback_timeout
-    hook = _resolve_hook_callback_timeout()
-    if 0 < hook < float(bound):
-        found.append("%s, under the %s seconds the run's hook that hands a checkout cloned during it may take, so "
-                     "Hermes would abandon it with that checkout's instructions (raise it to %s or remove it)" % (
-                         where(("plugins", "hook_callback_timeout"), lambda v: True), bound, bound))
     return "ok" if not found else "refused " + " | ".join(found).replace("\n", " ")
 
 
 COMMANDS = {"dump": (dump, 4), "trim": (trim, 2), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 3),
-            "top": (top, 1), "route": (route, 3), "servers": (servers, 2), "guard": (guard, 4), "plugoff": (plugoff, 1),
-            "gate": (gate, 3)}
+            "top": (top, 1), "route": (route, 3), "servers": (servers, 2), "guard": (guard, 3), "plugoff": (plugoff, 1),
+            "gate": (gate, 4)}
 
 if __name__ == "__main__":
     command = COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if command is None or len(sys.argv) != command[1] + 2:
         sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | trim SRC DST | renew DB TITLE SYSTEM | "
                          "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED HOSTS | top DB | route DB TITLE MODEL | "
-                         "servers STAGED GUARDED | guard PLUGIN SERVERS SKILLS BOUND | plugoff PLUGIN | "
-                         "gate PEEK OUT WINDOW\n")
+                         "servers STAGED GUARDED | guard PLUGIN SERVERS SKILLS | plugoff PLUGIN | "
+                         "gate PEEK OUT MODEL BOUND\n")
         sys.exit(2)
     sys.stdout.write("crewlet-carry %s\n" % command[0](*sys.argv[2:]))

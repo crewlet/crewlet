@@ -144,7 +144,7 @@ func hermesScript(req sandbox.RunRequest, session Session, paths Paths, times he
 	// their firings run, has stopped, and what those firings left out said
 	// ([hermesCheckoutHome]), each step whatever came of the other; a run
 	// killed outright leaves them to the next run's clear ([homeKeeper]).
-	home := hermesCheckoutHome(paths)
+	home := hermesLaunchHome(paths, req.Model)
 	line(`hput() { %s; }`, everyStep(home.restore(), home.saySkipped()))
 	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; endgw; end "$harness"; harness=; hput; finish; exit "$1"; }`)
 	line(`trap 'endgw; hput' EXIT`)

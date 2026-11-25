@@ -19,7 +19,8 @@ import (
 // Hermes's does in its system prompt), the home's own held beside the run
 // (held) and the helper's sections; the skills directory copies go into, the
 // list the next run removes, each built in state/staging; and, for a gated
-// spec ([checkoutSpec.Gated]), gateCmd, writing what checkout-launch reads.
+// spec ([checkoutSpec.Gated]), gateCmd, writing what checkout-launch reads or
+// ending the run.
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
@@ -198,15 +199,9 @@ func (h checkoutHome) gate() string {
 		line(`  %s`, fmt.Sprintf(launch, "/dev/null"))
 		line(`  hk=1`)
 	} else {
-		// A HARNESS WHOSE OWN CODE CANNOT ANSWER (a release whose modules
-		// moved) starts without the checkouts, saying so, as its guard
-		// starts where it cannot judge.
-		line(`  if %s; then`, h.gateCmd)
-		line(`    %s`, fmt.Sprintf(launch, q(h.gateFile())))
-		line(`    hk=1`)
-		line(`  else`)
-		line(`    echo 'crewlet: the harness could not say what its repositories bring, so the run starts without their instructions and skills' >&2`)
-		line(`  fi`)
+		line(`  %s`, h.gateCmd) // which ends the run itself where it cannot write the gate
+		line(`  %s`, fmt.Sprintf(launch, q(h.gateFile())))
+		line(`  hk=1`)
 	}
 	line(`else`)
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)

@@ -500,6 +500,11 @@ def resolve_runtime_provider(*, requested=None, explicit_api_key=None, explicit_
 	maps.Copy(modules, hermesGuardStandIn)
 	maps.Copy(modules, hermesCheckoutStandIn)
 	modules["agent/skill_utils.py"] += hermesSkillUtilsStandIn
+	modules["hermes_cli/config.py"] += `def get_compatible_custom_providers(config):
+    return config.get("custom_providers") or []
+def get_custom_provider_context_length(model, base_url, custom_providers, config=None):
+    return None
+`
 	// THE MCP LOADER beside the guard's scans, one module as in 0.23.3.
 	modules["tools/mcp_tool_config.py"] += `from hermes_cli.config import load_config
 from hermes_cli.plugins import declared
@@ -1890,9 +1895,20 @@ func TestAFailedHermesTurnSettlesNoNote(t *testing.T) {
 // .cursor/rules/*.mdc), each file stripped, one holding IGNORE-ALL-PREVIOUS
 // blocked as its injection scan blocks one, a .hermes.md's frontmatter
 // dropped, each kind cut to 70% head and 20% tail of 6% of the window at four
-// characters a token (20,000 to 500,000) with its notice; and the tool result
-// budget of a large window.
+// characters a token (20,000 to 500,000) with its notice; the tool result
+// budget of a large window; and the window resolver, which places the
+// stand-in's default model at 300,000 tokens and falls back to 256,000.
 var hermesCheckoutStandIn = map[string]string{
+	"agent/model_metadata.py": `def get_model_context_length(model, base_url="", api_key="", config_context_length=None, provider="",
+                             custom_providers=None):
+    if config_context_length:
+        return config_context_length
+    return {"stand-in-default": 300000}.get(model, 256000)
+`,
+	"agent/agent_init.py": `def _scope_context_length_to_default_runtime(agent, _agent_cfg, _model_cfg, _custom_providers,
+                                            _config_context_length, base_url):
+    return _config_context_length
+`,
 	"agent/prompt_builder.py": `from pathlib import Path
 def _cap(window):
     return max(20000, min(int(window * 4 * 0.06), 500000)) if window else 20000
@@ -1913,8 +1929,8 @@ def _scan(content, label):
     if "IGNORE-ALL-PREVIOUS" in content:
         return "[BLOCKED: %s contained potential prompt injection (ignore_previous). Content not loaded.]" % label
     return content
-def discover_context_files(cwd):
-    cwd = Path(cwd)
+def discover_context_files(cwd_path):
+    cwd = Path(cwd_path)
     out = []
     found = next((cwd / n for n in (".hermes.md", "HERMES.md") if (cwd / n).is_file()), None)
     if found is not None:
@@ -1999,3 +2015,40 @@ def parse_frontmatter(content):
             front[key.strip()] = value.strip().strip('"')
     return front, content[end + 4:]
 `
+
+// A HERMES GATE THAT DOES NOT ANSWER REFUSES THE RUN, NEVER HANGS IT: past its
+// wait the gate's Hermes is killed and the script ends 1, saying the release
+// and the wait, before any checkout is claimed.
+//
+// Mutation: drop the wait loop or its kill, or go on past it, and this goes red.
+func TestAHermesGateThatDoesNotAnswerRefusesTheRun(t *testing.T) {
+	t.Parallel()
+	sh := prereqtest.OnPath(t, "sh", "the case runs the gate's shell", "install a POSIX shell")
+	home := t.TempDir()
+	paths := Paths{Home: home}
+	bin := filepath.Join(home, "bin")
+	state := paths.HermesCheckouts()
+	for _, dir := range []string{bin, state} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range map[string]string{"hermes": "#!/bin/sh\nexec sleep 60\n",
+		"helper": "#!/bin/sh\necho '{\"roots\":[]}'\n"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := "n=0.23.3 rr=" + shellword.Quote(state) + " rh=" + shellword.Quote(filepath.Join(bin, "helper")) + "\n" +
+		hermesGateCommand(paths, "", time.Second) + "\necho GATE-PASSED\n"
+	cmd := exec.Command(sh, "-c", script)
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 || strings.Contains(string(out), "GATE-PASSED") {
+		t.Fatalf("the gate ended %v, saying %q; want exit 1 before anything past it", err, out)
+	}
+	if want := "crewlet: Hermes Agent 0.23.3 did not say within 1 seconds what the run's repositories bring"; !strings.Contains(string(out), want) {
+		t.Errorf("the gate said %q, want %q", out, want)
+	}
+}

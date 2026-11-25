@@ -256,10 +256,29 @@ def _room(tool, result, window):
     return int(threshold) - len(result)
 
 
+def _render(hand, roots, window, deadline):
+    """Hermes's own answer for roots (the carry script's checkout_gate at the run's window), None where it did not
+    come by deadline or failed: on a worker, since its reads are the checkouts' files, which no bound of Hermes's
+    own holds; one left running past it ends on its own and hands nothing."""
+    answer = {}
+
+    def work():
+        answer["gate"] = _carry_module(hand["carry"]).checkout_gate(roots, int(window) if window else None)
+
+    worker = threading.Thread(target=work, name="crewlet-checkouts", daemon=True)
+    worker.start()
+    worker.join(max(0.0, deadline - time.monotonic()))
+    return answer.get("gate")
+
+
 def _hand_checkouts(hand, tool, result, window):
     """What a nested firing adds to result, "" for nothing: the checkouts the note helper may claim
     (hermes-peek), Hermes's own answer for each (checkout_gate, at the run's window), then the helper's
-    claim and answer within the result's room (hermes-nested), all within the hand's bound."""
+    claim and answer within the result's room (hermes-nested), all within the hand's bound; nothing where
+    the launch turned the hand off (its gate's nested-off) or the render did not finish, the checkouts
+    then waiting, unclaimed."""
+    if os.path.exists(os.path.join(os.path.dirname(hand["config"]), "nested-off")):
+        return ""
     deadline = time.monotonic() + hand["timeout"]
 
     def helper(*args, stdin=None):
@@ -273,7 +292,10 @@ def _hand_checkouts(hand, tool, result, window):
         roots = (json.loads(helper("-adapter", "hermes-peek") or b"{}").get("roots") or [])
         if not roots:
             return ""
-        gate = _carry_module(hand["carry"]).checkout_gate(roots, int(window or hand["window"]))
+        gate = _render(hand, roots, window, deadline)
+        if gate is None:
+            logger.warning("crewlet: Hermes did not render the checkouts within the hand's bound; they wait")
+            return ""
         room = _room(tool, result, window)
         return helper("-adapter", "hermes-nested", "-room", str(room),
                       stdin=json.dumps(gate).encode("utf-8")).decode("utf-8", "replace")

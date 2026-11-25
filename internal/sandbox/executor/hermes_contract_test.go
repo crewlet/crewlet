@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // hermesPluginOf is the plugin WriteConfig staged for req's run in a box, its
@@ -370,6 +372,64 @@ func TestAHermesRunsNotesFollowItsSessionIntoACompactionsChild(t *testing.T) {
 	} {
 		if !slices.Equal(seen[store], want) {
 			t.Errorf("%s: after each of the last three hooks the plugin's turn is %+v, want %+v", store, seen[store], want)
+		}
+	}
+}
+
+// hermesNestedProbe registers the plugin with a stand-in of Hermes's plugin
+// context, settings argv[2], and fires its transform_tool_result for the run's
+// own session after its turn starts, printing what it made of the result.
+const hermesNestedProbe = `import importlib.util, json, os, sys
+os.environ["CREWLET_HERMES_PLUGIN"] = sys.argv[2]
+spec = importlib.util.spec_from_file_location("crewlet_plugin", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+hooks = {}
+class Ctx:
+    def register_hook(self, name, fn, **kw):
+        hooks[name] = fn
+m.register(Ctx())
+hooks["pre_llm_call"](session_id="main")
+print(json.dumps(hooks["transform_tool_result"](session_id="main", tool_name="terminal", result="cloned")))
+`
+
+// HERMES'S RENDER OF A LATER CHECKOUT IS BOUNDED, AND A LATE ONE CLAIMS
+// NOTHING: where Hermes's own render does not finish within the hand's bound,
+// the plugin leaves the result as it was and never runs the helper's claim, so
+// the checkout waits for a later call; one that finishes is claimed and
+// handed. Mutation: wait on the render unbounded, or claim on its timeout, and
+// a row goes red.
+func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
+	t.Parallel()
+	python := prereqtest.OnPath(t, "python3", "the case runs Hermes's plugin", "install python3")
+	plugin, _ := hermesPluginOf(t, sandbox.RunRequest{})
+	for _, c := range []struct {
+		name, render, want string
+		claimed            bool
+	}{
+		{"late", "time.sleep(30)", "null", false},
+		{"in time", "pass", `"cloned\n\nHANDED"`, true},
+	} {
+		dir := t.TempDir()
+		helper := "#!/bin/sh\nif [ \"$2\" = hermes-peek ]; then echo '{\"roots\":[\"/r\"]}'; exit 0; fi\n" +
+			": > " + shellword.Quote(filepath.Join(dir, "claimed")) + "\nprintf HANDED\n"
+		carry := "import time\ndef checkout_gate(roots, window):\n    " + c.render + "\n    return {\"checkouts\": {}}\n"
+		settings, _ := json.Marshal(map[string]any{"checkouts": map[string]any{"helper": filepath.Join(dir, "helper"),
+			"config": filepath.Join(dir, "nested.json"), "carry": filepath.Join(dir, "carry.py"), "timeout": 1}})
+		for name, body := range map[string]string{"helper": helper, "carry.py": carry, "settings.json": string(settings)} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := exec.Command(python, "-I", "-c", hermesNestedProbe, plugin, filepath.Join(dir, "settings.json")).Output()
+		if err != nil {
+			t.Fatalf("%s: the plugin's hook: %v", c.name, err)
+		}
+		if got := strings.TrimSpace(string(out)); got != c.want {
+			t.Errorf("%s: the result became %s, want %s", c.name, got, c.want)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "claimed")); (err == nil) != c.claimed {
+			t.Errorf("%s: the helper's claim ran: %v", c.name, err == nil)
 		}
 	}
 }

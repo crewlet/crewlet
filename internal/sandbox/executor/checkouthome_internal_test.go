@@ -347,7 +347,7 @@ func TestCodexAndPiCheckoutFormsCarryNoGateBesideHermess(t *testing.T) {
 	}{
 		"codex":  {codexCheckoutHome(paths), codexCheckouts(codexProjectDocMaxBytes), false},
 		"pi":     {piCheckoutHome(paths), piCheckouts(), false},
-		"hermes": {hermesCheckoutHome(paths), hermesCheckouts(paths), true},
+		"hermes": {hermesLaunchHome(paths, "m"), hermesCheckouts(paths), true},
 	} {
 		want := plain
 		if c.gated {

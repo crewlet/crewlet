@@ -56,11 +56,11 @@ plugins["disabled"] = [n for n in plugins.get("disabled") or [] if n != sys.argv
 json.dump(config, open(path, "w"))
 `
 
-// hermesGuardBox is a box whose `hermes` answers the release, enables a plugin
-// ([hermesEnable]), runs the carry script's overlay, guard and plugoff under
-// a stand-in of Hermes's modules whose managed scope is the box home's
-// `system`, and answers `chat` as a finished run (a measured stream) only
-// where [hermesReach] says the bridge is reached.
+// hermesGuardBox is a box whose `hermes` answers the release, enables a
+// plugin ([hermesEnable]), runs the carry script's overlay, guard, plugoff
+// and gate under a stand-in of Hermes's modules whose managed scope is the box
+// home's `system`, and answers `chat` as a finished run (a measured stream)
+// only where [hermesReach] says the bridge is reached.
 func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 	t.Helper()
 	runner, box := standInBox(t, executor.NewHermes(), nil)
@@ -78,7 +78,7 @@ func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 	launch := q(bin+"/hermes") + " --run-module cProfile -o /dev/null "
 	writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/hermes", "#!/bin/sh\ncase \"$1\" in\n"+
 		"--version) echo 'Hermes Agent v0.23.3 (2026.9.24)'; exit 0;;\n"+
-		"--run-module) case \"$6\" in overlay|guard|plugoff) exec "+q(bin+"/hermes")+" \"$@\";; esac; exit 0;;\n"+
+		"--run-module) case \"$6\" in overlay|guard|plugoff|gate) exec "+q(bin+"/hermes")+" \"$@\";; esac; exit 0;;\n"+
 		"plugins) [ \"$2\" = enable ] && exec "+launch+q(bin+"/enable.py")+" \"$3\"; exit 0;;\n"+
 		"chat) r=$("+launch+q(bin+"/reach.py")+")\n"+
 		"  [ \"$r\" = reached ] || { echo \"$r\" >&2; exit 1; }\n"+
@@ -94,10 +94,10 @@ func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 // starts, naming the file, key and entry: a disabled toolset naming the bridge
 // (a web-denied run's too), a cli toolset list leaving it out, a launch switch,
 // a sticky profile, a header beside the run's own, an entry Hermes skips, the
-// plugin gated off, a seat skill disabled, a hook bound under the nested
-// hand's; others' pass. Mutations, each red: drop the guard or a leaf of the
-// run's entry; match one toolset spelling; skip any check; read the launch
-// switches from the process alone; name no file, or show a header's value.
+// plugin gated off, a seat skill disabled; others' pass. Mutations, each red:
+// drop the guard or a leaf of the run's entry; match one toolset spelling;
+// skip any check; read the launch switches from the process alone; name no
+// file, or show a header's value.
 func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const reason = "Hermes Agent would not start with the run's own plugin and MCP servers as written: "
@@ -196,13 +196,6 @@ func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 		"the home disables the plugin once it is enabled": {enabled: true, switchOffCase: switchOffCase{
 			plant: map[string]string{".hermes/config.yaml": `{"plugins": {"enabled": ["crewlet-runner"], "disabled": ["crewlet-runner"]}}`},
 			fails: []string{reason, home + `plugins.disabled is ["crewlet-runner"], so Hermes would not load the run's plugin crewlet-runner`}}},
-		"the home gives the plugin's hooks less than the nested hand's bound": {switchOffCase: switchOffCase{
-			plant: map[string]string{".hermes/config.yaml": `{"plugins": {"hook_callback_timeout": 9.5}}`},
-			fails: []string{reason, home + "plugins.hook_callback_timeout is 9.5, under the 10 seconds the run's hook that " +
-				"hands a checkout cloned during it may take"}}},
-		"the home gives the plugin's hooks the nested hand's bound, or none": {switchOffCase: switchOffCase{
-			plant: map[string]string{".hermes/config.yaml": `{"plugins": {"hook_callback_timeout": 10}}`,
-				"system/config.yaml": `{"plugins": {"hook_callback_timeout": 0}}`}}},
 		"the home switches seat skills off": {skills: true, switchOffCase: switchOffCase{
 			plant: map[string]string{".hermes/config.yaml": `{"skills": {"disabled": ["crewlet:getting-unstuck"], ` +
 				`"platform_disabled": {"cli": ["crewlet:mcp-github"], "telegram": ["crewlet:getting-unstuck"]}}}`},

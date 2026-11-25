@@ -63,8 +63,8 @@ sys.stdout.write(open(sys.argv[1]).read())
 // hermesCheckoutBox is a real box whose `hermes` answers the release,
 // enables a plugin ([hermesEnable]), runs the carry script's overlay, guard,
 // plugoff and gate under the stand-in of Hermes's modules, and answers
-// `chat` with [hermesCheckoutChat].
-func hermesCheckoutBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+// `chat` with [hermesCheckoutChat]; and the stand-in's directory.
+func hermesCheckoutBox(t *testing.T) (*executor.Runner, sandbox.Sandbox, string) {
 	t.Helper()
 	runner, box := standInBox(t, executor.NewHermes(), nil)
 	bin := executor.HermesStandIn(t, box.Home()+"/system")
@@ -86,7 +86,7 @@ func hermesCheckoutBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 		"plugins) [ \"$2\" = enable ] && exec "+launch+q(bin+"/enable.py")+" \"$3\"; exit 0;;\n"+
 		"chat) exec "+launch+q(bin+"/chat.py")+" "+q(bin+"/stream.jsonl")+";;\n"+
 		"esac\nexit 0\n")
-	return runner, box
+	return runner, box, bin
 }
 
 // hermesSkill is a SKILL.md named name, its body marking it.
@@ -97,7 +97,7 @@ func hermesSkill(name, body string) string {
 // WHAT A CHECKOUT BELOW THE START DIRECTORY BRINGS A HERMES RUN: what Hermes's
 // own code renders of a session started there (one kind: .hermes.md, else an
 // AGENTS name, else CLAUDE.md, else .cursorrules and the .mdc rules, a file
-// its scan blocks blocked), cut at the launch's 256,000-token window, after
+// its scan blocks blocked), cut at the window Hermes resolves, after
 // the run's own text, whole while the 128 KiB fit, else named, a later
 // smaller one whole; a trusted root's skills copied, less a quarantined one,
 // a home name's and an untrusted root's, each said once; nothing else. A
@@ -107,7 +107,7 @@ func hermesSkill(name, body string) string {
 // and a check goes red.
 func TestWhatACheckoutBelowTheStartDirectoryBringsAHermesRun(t *testing.T) {
 	t.Parallel()
-	runner, box := hermesCheckoutBox(t)
+	runner, box, _ := hermesCheckoutBox(t)
 	p := executor.PathsFor(box)
 	big := func(mark string) string { return strings.Repeat(mark+" line\n", 200000/len(mark+" line\n")) }
 	files := map[string]string{}
@@ -154,14 +154,14 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAHermesRun(t *testing.T) {
 	label := func(name string) string { return "for `" + name + "` with root " + real + "/" + name + "\n\n" }
 	cut := func(name, mark string) string {
 		body := "## AGENTS.md\n\n" + strings.TrimSpace(big(mark))
-		return body[:43008] + "\n\n[...truncated AGENTS.md: kept 43008+12288 of " + strconv.Itoa(len(body)) + " chars. The middle " +
+		return body[:50400] + "\n\n[...truncated AGENTS.md: kept 50400+14400 of " + strconv.Itoa(len(body)) + " chars. The middle " +
 			"is omitted. If you need the full instructions, read the complete file with the read_file tool: " + real + "/" +
-			name + "/AGENTS.md]\n\n" + body[len(body)-12288:]
+			name + "/AGENTS.md]\n\n" + body[len(body)-14400:]
 	}
 	want := strings.TrimRight(boxFile(t, box, p.System()), "\n") + "\n\n" + strings.Join([]string{
 		label("ag") + "## AGENTS.md\n\nAG-AGENTS",
 		label("big1") + cut("big1", "BIG1"),
-		label("big2") + cut("big2", "BIG2"),
+		label("big2") + "read " + real + "/big2/AGENTS.md for its instructions, which whole pass what the run's system prompt has room for",
 		label("big3") + "read " + real + "/big3/AGENTS.md for its instructions, which whole pass what the run's system prompt has room for",
 		label("cl") + "## CLAUDE.md\n\nCL-CLAUDE",
 		label("cu") + "## .cursorrules\n\nCU-RULES\n\n## .cursor/rules/a.mdc\n\nCU-A\n\n## .cursor/rules/b.mdc\n\n" +
@@ -199,6 +199,7 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAHermesRun(t *testing.T) {
 		"the skills of " + real + "/ag are left out: Hermes loads a checkout's skills only where its skills.trusted_project_dirs names the checkout's root",
 		"the skill " + real + "/cl/.hermes/skills/evil is left out: Hermes's scan quarantines it",
 		"the skill " + real + "/cl/.agents/skills/deploy is left out: the home's skill " + p.HermesSkills() + "/mine is found by its name cl:deploy",
+		"the instructions of " + real + "/big2 are named, not handed",
 		"the instructions of " + real + "/big3 are named, not handed",
 	} {
 		if n := strings.Count(errs, line); n != 1 {
@@ -243,4 +244,76 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// A HERMES BOX WHOSE HOOK BOUND IS SHORTER THAN THE NESTED HAND'S STARTS
+// WITHOUT THE HAND, SAYING SO ONCE: only checkout handing needs that bound, so
+// a plugins.hook_callback_timeout of 5 s refuses nothing; the launch still
+// hands its checkouts, a clone during the run is not handed, and the run's
+// error stream names the setting once, after the run.
+//
+// Mutation: refuse the run, hand the clone anyway, or say it twice, and this
+// goes red.
+func TestAHermesRunWithAShortHookBoundStartsWithoutTheNestedHand(t *testing.T) {
+	t.Parallel()
+	runner, box, _ := hermesCheckoutBox(t)
+	p := executor.PathsFor(box)
+	files := piCheckout("workspace/repo", map[string]string{"AGENTS.md": "REPO-AGENTS\n"})
+	files[".hermes/config.yaml"] = `{"plugins": {"hook_callback_timeout": 5}}`
+	plant(t, box, files)
+	late := t.TempDir()
+	for rel, body := range piCheckout("late", map[string]string{"AGENTS.md": "LATE-INSTRUCTIONS\n"}) {
+		plantFile(t, filepath.Join(late, rel), body)
+	}
+	plant(t, box, map[string]string{"clone-src": filepath.Join(late, "late"),
+		"clone-dst": filepath.Join(box.Home(), "workspace", "late")})
+	if _, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"}); !res.Success {
+		t.Fatalf("the run failed: %s\n%s", res.Error, boxFile(t, box, p.Err()))
+	}
+	var prompt string
+	seenBy(t, box, "prompt", &prompt)
+	if !strings.Contains(prompt, "## AGENTS.md\n\nREPO-AGENTS") {
+		t.Errorf("the launch handed no checkout: %q", prompt)
+	}
+	var nested map[string]*string
+	seenBy(t, box, "nested", &nested)
+	if nested["main-1"] != nil {
+		t.Errorf("the clone was handed past the hook bound: %q", *nested["main-1"])
+	}
+	line := "crewlet: a repository cloned during the run is not handed its instructions and skills: " +
+		"plugins.hook_callback_timeout is 5, under the 10 seconds the hand may take"
+	if errs := boxFile(t, box, p.Err()); strings.Count(errs, line) != 1 {
+		t.Errorf("the run's error stream says %q %d times, want once:\n%s", line, strings.Count(errs, line), errs)
+	}
+}
+
+// A HERMES WHOSE OWN CODE MOVED IS REFUSED BY NAME: where a function the
+// runner reads to hand the checkouts is gone (here, the context discovery),
+// the run is refused before Hermes starts, naming the release and the
+// function, never handing what it cannot have Hermes render.
+//
+// Mutation: skip the check, or start without the checkouts, and this goes red.
+func TestAHermesWhoseReadCodeMovedIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	runner, box, bin := hermesCheckoutBox(t)
+	p := executor.PathsFor(box)
+	moved := filepath.Join(bin, "py", "agent", "prompt_builder.py")
+	src, err := os.ReadFile(moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(moved, []byte(strings.Replace(string(src), "def discover_context_files(", "def found_context_files(", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"}); res.Success {
+		t.Fatal("the run started on a Hermes whose context discovery moved")
+	}
+	want := "crewlet: Hermes Agent 0.23.3 moved what the runner reads of its code to hand the run its repositories " +
+		"(agent.prompt_builder.discover_context_files is gone); the run was refused before Hermes Agent started"
+	if errs := boxFile(t, box, p.Err()); !strings.Contains(errs, want) {
+		t.Errorf("the run's error stream does not say %q:\n%s", want, errs)
+	}
+	if _, err := os.Stat(filepath.Join(box.Home(), "seen", "prompt")); err == nil {
+		t.Error("hermes chat ran")
+	}
 }

@@ -10,18 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// A BOX CANNOT SWITCH A HERMES RUN'S OWN SERVER, PLUGIN OR HOOK OFF UNSEEN.
-// The overlay states its servers' leaves ([hermesOwnLeaves]); Hermes's own
-// loader and gates judge the rest before it starts (the carry script's
-// `guard`, measured on 0.23.3): a sticky `active_profile`; HERMES_SAFE_MODE or
+// A BOX CANNOT SWITCH A HERMES RUN'S OWN SERVER OR PLUGIN OFF UNSEEN. The
+// overlay states its servers' leaves ([hermesOwnLeaves]); Hermes's own loader
+// and gates judge the rest before it starts (the carry script's `guard`,
+// measured on 0.23.3): a sticky `active_profile`; HERMES_SAFE_MODE or
 // HERMES_IGNORE_USER_CONFIG set; a disabled toolset or a cli toolset list
 // leaving the server out; a header beside the run's own; an `env` Hermes
-// finds suspicious or a malformed `tool_costs`; the plugin gated off; a box
-// file's own switch the overlay would state back (`enabled: false`,
-// `disabled: true`, a `tools` list hiding its tools); and, notes or not, a
-// `plugins.hook_callback_timeout` under [hermesNestedTimeout], past which
-// Hermes abandons a nested firing with its checkout claimed. Entries naming
-// another server, toolset or plugin pass.
+// finds suspicious or a malformed `tool_costs`; the plugin gated off, which
+// holds the run's record, notes and skill loads; a box file's own switch the
+// overlay would state back (`enabled: false`, `disabled: true`, a `tools`
+// list hiding its tools). What only cuts the nested hand short refuses
+// nothing ([hermesGateCommand]). Entries naming another server, toolset or
+// plugin pass.
 
 // hermesGuarded is the servers the guard judges: Crewlet's own, the run's and
 // a fresh session's ([crewletServers]), sorted.
@@ -63,6 +63,6 @@ func hermesGuard(req sandbox.RunRequest) string {
 		skills = append(skills, s.Listed())
 	}
 	listed, _ := json.Marshal(skills) // names always marshal
-	return fmt.Sprintf(`hg=$(hcarry guard %s %s %s %d); case "$hg" in 'crewlet-carry refused '*) printf 'crewlet: Hermes Agent would not start with the run'"'"'s own plugin and MCP servers as written: %%s. The run was refused before Hermes Agent started.\n' "${hg#crewlet-carry refused }" >&2; exit 1;; esac
-`, hermesPluginName, shellword.Quote(string(raw)), shellword.Quote(string(listed)), hermesNestedTimeout)
+	return fmt.Sprintf(`hg=$(hcarry guard %s %s %s); case "$hg" in 'crewlet-carry refused '*) printf 'crewlet: Hermes Agent would not start with the run'"'"'s own plugin and MCP servers as written: %%s. The run was refused before Hermes Agent started.\n' "${hg#crewlet-carry refused }" >&2; exit 1;; esac
+`, hermesPluginName, shellword.Quote(string(raw)), shellword.Quote(string(listed)))
 }
