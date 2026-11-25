@@ -82,6 +82,9 @@ func OpenAccess(
 // ProbeParts are the Test's parts, in the order it runs them.
 var ProbeParts = probeParts
 
+// Ours is the rule for an account Crewlet keeps in the identity project.
+var Ours = crewletsOwn
+
 // ProbeWith is the Test probe on a test's transport and clock.
 func ProbeWith(
 	ctx context.Context, company string, value func(string) string, hc *http.Client,

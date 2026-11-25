@@ -16,6 +16,13 @@ const (
 	descriptionMax = 256
 )
 
+// crewletsOwn reports whether email is an account Crewlet keeps in the identity
+// project: the provisioner, or one named with accountPrefix. The Cloud Shell
+// block's preflight applies the same rule ([preflightLines]).
+func crewletsOwn(email, provisioner string) bool {
+	return email == provisioner || strings.HasPrefix(email, accountPrefix)
+}
+
 // AccountID is the ID one seat's Google Cloud service account is created
 // under: `crewlet-`, a 17-character handle slug, a dash and 4 hex characters
 // of the company and handle ([googleauth.ServiceAccountID]).

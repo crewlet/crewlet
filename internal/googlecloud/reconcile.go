@@ -96,7 +96,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		case a.Email == c.Provisioner() || recorded[a.UniqueID] || intended[a.Email]:
 		case strings.HasPrefix(a.Email, accountPrefix) && strings.HasPrefix(a.DisplayName, ours):
 			res.orphaned = append(res.orphaned, a.Email)
-		case !strings.HasPrefix(a.Email, accountPrefix):
+		case !crewletsOwn(a.Email, c.Provisioner()):
 			res.foreign = append(res.foreign, a.Email)
 		}
 	}
