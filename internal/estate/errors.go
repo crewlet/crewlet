@@ -277,9 +277,10 @@ var sentinels = []sentinel{
 	{"query.ErrNotIndexed", query.ErrNotIndexed},
 
 	// The executor log's ([ExecutorReads], [ExecutorWrites]): an ended turn, a
-	// stale ordinal, the seat's budget, a delete no longer due and a listing
-	// not answerable whole each mean a different next step for the engine, so
-	// each crosses as itself.
+	// stale ordinal, a carry no longer named, the seat's budget, a delete no
+	// longer due and a listing not answerable whole each mean a different next
+	// step for the engine, so each crosses as itself.
+	{"executordomain.ErrCarryGone", executordomain.ErrCarryGone},
 	{"executordomain.ErrConflict", executordomain.ErrConflict},
 	{"executordomain.ErrIncomplete", executordomain.ErrIncomplete},
 	{"executordomain.ErrInvalid", executordomain.ErrInvalid},
@@ -314,9 +315,10 @@ var sentinels = []sentinel{
 	{"advisordomain.ErrInvalid", advisordomain.ErrInvalid},
 	{"advisordomain.ErrNotFound", advisordomain.ErrNotFound},
 	{"advisordomain.ErrStaleVersion", advisordomain.ErrStaleVersion},
-	// The session bound the executor log refuses a capture past lives in
-	// executorkeep, since the sandbox that takes a session stops at it too.
+	// The session bounds the executor log refuses a capture past live in
+	// executorkeep, since the sandbox that takes a session stops at them too.
 	{"executorkeep.ErrSessionTooLarge", executorkeep.ErrSessionTooLarge},
+	{"executorkeep.ErrSessionPlainTooLarge", executorkeep.ErrSessionPlainTooLarge},
 
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
 	{"estate.ErrNoGitletNode", ErrNoGitletNode},

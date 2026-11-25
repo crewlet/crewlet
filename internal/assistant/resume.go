@@ -139,6 +139,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	}
 	page, fresh := s.resumedPage(ctx, keep, r)
 	t := s.newTurn(person, r.Conversation, r.Turn, "", r.Read, page, acts)
+	t.decidedBy(provider)
 	if history, historyErr := s.transcripts.Transcript(ctx, person.ID, r.Conversation); historyErr == nil {
 		t.seePerson(history.Messages, "", page)
 	}
@@ -165,6 +166,12 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	t.taintedBy(provenance.Source(keep.Outside))
 	t.subjects = keep.Subjects
 	decision, screen := resultOf(r, t.boundary, t.readAnswer), ""
+	if readsScreen(r) {
+		decision = "The screen was read."
+		if r.State != wire.ProposalApplied || !fresh {
+			decision = "The screen could not be read; describe it from the page context you have."
+		}
+	}
 	if fresh {
 		screen = screenNow(t.boundary, page)
 	}
@@ -174,7 +181,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 
 	after := s.openStream(t, transcript.Conversation, true, floor)
 	s.settleWaiting(ctx, t.write(), waitingSteps(transcript, r.Turn), r.State, r.Failure, t.emit)
-	if r.Card.Type != "" {
+	if r.Card.Type != "" && !readsScreen(r) {
 		if err := s.showProposal(ctx, t, r.Proposal, r.Card); err != nil {
 			s.log.WarnContext(ctx, "assistant_proposal_card_unshown", "turn", r.Turn,
 				"proposal", r.Proposal, "error", redact.Secrets(err.Error()))
@@ -216,6 +223,12 @@ func (s *Service) resumedPage(ctx context.Context, keep parked, r approval.Resum
 		return keep.Page, false
 	}
 	return page, page != nil
+}
+
+// readsScreen reports a resumption of [catalog.ReadScreenTool]: nothing was
+// proposed, so no card is shown and the model reads the screen, not an outcome.
+func readsScreen(r approval.Resumption) bool {
+	return r.Card.Proposal != nil && r.Card.Proposal.Tool == catalog.ReadScreenTool
 }
 
 // joinBlocks is the non-empty blocks of a tool's answer, a blank line apart.

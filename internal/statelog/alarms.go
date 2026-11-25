@@ -1970,17 +1970,16 @@ var table = []rule{
 		},
 		remedy: "A queued attempt waits for a Gitlet node that runs checks to " +
 			"claim it, so the backlog is no Gitlet node claiming — the fleet's Gitlet " +
-			"nodes gone, stopped or failing their checks' boxes, or none setting " +
-			"CREWLET_BOX_GIT_URL (`code_checks_not_run`) — or every cell a check " +
-			"may run in busy: a Gitlet node's own container cells, `gitlet.max_checks` " +
-			"of them (`crewlet.code.checks.running` pinned there), and the remote " +
-			"cells, as many at once and for as long a day as the company allows. " +
-			"Read the Gitlet nodes' logs and " +
-			"`crewlet.code.checks.claims`: claims refused `claimed` are nodes " +
-			"racing for the same attempts, which is no backlog. Against the " +
+			"nodes gone, stopped or failing their checks' boxes, none setting " +
+			"CREWLET_BOX_GIT_URL (`code_checks_not_run`), or none with a container " +
+			"backend (`code_checks_container_unconfigured`) — or every Gitlet " +
+			"node's containers busy, `gitlet.max_checks` of them a node " +
+			"(`crewlet.code.checks.running` pinned there). Read the Gitlet nodes' " +
+			"logs and `crewlet.code.checks.claims`: claims refused `claimed` are " +
+			"nodes racing for the same attempts, which is no backlog. Against the " +
 			"rate attempts end (`crewlet.code.checks.finished`) the queue's " +
-			"wait is capacity: more Gitlet nodes, or more cells allowed to run at " +
-			"once. Nothing is lost while it waits: a change whose required " +
+			"wait is capacity: more Gitlet nodes, or a higher `gitlet.max_checks` " +
+			"on those there are. Nothing is lost while it waits: a change whose required " +
 			"check waits cannot merge until it runs, and an attempt cancelled " +
 			"meanwhile — its head moved on — leaves the queue. See " +
 			"docs/concepts/gitlet.md.",
@@ -2065,7 +2064,7 @@ var table = []rule{
 			return AlarmEntry{Detail: expiryDetail(m, left), Since: m.ExpiresAt.Add(-CredentialNoticeDays * day)},
 				!m.ExpiresAt.IsZero() && left <= CredentialNoticeDays*day && left > CredentialWarningDays*day
 		},
-		remedy: modelRemedy("Rotate the credential before it expires: Settings › Models › the " +
+		remedy: modelRemedy("Rotate the credential before it expires: Settings › Models & Fleets › the " +
 			"entry › Rotate tests the new value before it replaces the old one, and the " +
 			"models that read it switch to it at once."),
 	},
@@ -2079,7 +2078,7 @@ var table = []rule{
 			return AlarmEntry{Detail: expiryDetail(m, left), Since: m.ExpiresAt.Add(-CredentialWarningDays * day)},
 				!m.ExpiresAt.IsZero() && left <= CredentialWarningDays*day && left > 0
 		},
-		remedy: modelRemedy("Rotate the credential now: Settings › Models › the entry › " +
+		remedy: modelRemedy("Rotate the credential now: Settings › Models & Fleets › the entry › " +
 			"Rotate. Once it expires every seat on the model is refused."),
 	},
 	{
@@ -2106,7 +2105,7 @@ var table = []rule{
 			}
 			return AlarmEntry{}, false
 		},
-		remedy: modelRemedy("Give the model a credential that signs in: Settings › Models › " +
+		remedy: modelRemedy("Give the model a credential that signs in: Settings › Models & Fleets › " +
 			"the entry › Rotate for a token or a key, or sign the harness in on the node " +
 			"(`crewlet llm login <key>`) for a host login. Every call on it is refused " +
 			"until then, and its seats fall back to the next entry in their chain if " +
@@ -2127,7 +2126,7 @@ var table = []rule{
 		},
 		remedy: modelRemedy("Nothing, if the plan's limit is expected: the engine tries the " +
 			"model again on its own and its seats fall back meanwhile. To end it now, " +
-			"Settings › Models › the entry › Retry asks the vendor once, and Clear " +
+			"Settings › Models & Fleets › the entry › Retry asks the vendor once, and Clear " +
 			"stops every node sitting it out."),
 	},
 	{
@@ -2149,7 +2148,7 @@ var table = []rule{
 		},
 		remedy: modelRemedy("Seats are not working. Add a fallback entry to their chain " +
 			"(a model on another sign-in), raise the plan, or wait for the reset the " +
-			"vendor named; Settings › Models › the entry › Retry asks the vendor once."),
+			"vendor named; Settings › Models & Fleets › the entry › Retry asks the vendor once."),
 	},
 	{
 		// A mirror not brought level for longer than its own refresh promise (the
@@ -2560,7 +2559,7 @@ const day = 24 * time.Hour
 // modelRemedy is a model alarm's remedy, ending with the two places a person
 // reads the entry from: the page and the doctor.
 func modelRemedy(what string) string {
-	return what + " Settings › Models names the entry, and `crewlet llm doctor <key>` " +
+	return what + " Settings › Models & Fleets names the entry, and `crewlet llm doctor <key>` " +
 		"checks it end to end on a node."
 }
 

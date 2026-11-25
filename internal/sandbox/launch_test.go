@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -267,12 +268,12 @@ func TestTheHarnessIsToldItsTaskAndItsEnvironment(t *testing.T) {
 // on a line of its own after the one naming every server it is handed: the box
 // reaches its own servers past the bridge, so its standing instructions are the
 // only place their descriptions reach the model. A server the bridge serves
-// gets no such line though the launch knows its words (MCPGuidance): its
-// endpoint says them as its MCP instructions, so a line would say them twice.
+// gets no such line: its endpoint says its words as its MCP instructions, so a
+// line would say them twice.
 //
 // Mutation: drop the description line in EnvironmentBrief, give it before the
-// line naming every server, list MCPGuidance there, or list a server whose
-// description is blank, and this goes red.
+// line naming every server, or list a server whose description is blank, and
+// this goes red.
 func TestARunIsToldWhatEachServerInItsBoxIsFor(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -283,8 +284,7 @@ func TestARunIsToldWhatEachServerInItsBoxIsFor(t *testing.T) {
 		"linear": {Name: "linear", Transport: TransportStdio, Command: "linear-mcp", Description: "  "},
 	}
 	// THE BRIDGE'S SERVERS AS THE ENGINE NAMES THEM: no description of their
-	// own, and what each says it is for on its endpoint beside them.
-	req.MCPGuidance = map[string]string{"handbook": "Searches the engineering handbook"}
+	// own, since each says it on its endpoint.
 	req.Opened = func(job OpenedJob) (Opening, error) {
 		endpoint := "https://engine.example.com/mcp/" + job.LaunchID
 		return Opening{Servers: map[string]MCPServer{
@@ -320,9 +320,6 @@ func TestARunIsToldWhatEachServerInItsBoxIsFor(t *testing.T) {
 					"the box runs with the company's words for it gets: %q", name, line)
 			}
 		}
-	}
-	if strings.Contains(system, req.MCPGuidance["handbook"]) {
-		t.Errorf("the standing instructions repeat what a bridged server's endpoint says:\n%s", system)
 	}
 }
 
@@ -550,9 +547,10 @@ func TestAJobRecordsTheSignInItWasHandedAndWhyItFollows(t *testing.T) {
 	}
 }
 
-// A box nothing names is billed for until its TTL. The launch kills its own
-// box and the ending reclaims the row's, here the same box (a provider answers
-// the second kill as the reclaim it wanted), and nothing else is killed.
+// A box nothing names is held until its host's sweep finds it. The launch
+// kills its own box and the ending reclaims the row's, here the same box (a
+// provider answers the second kill as the reclaim it wanted), and nothing else
+// is killed.
 func TestABoxIsReclaimedWhenTheJobCannotStart(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -839,5 +837,45 @@ func TestTheStartedEventNamesTheMemberThatTookTheRun(t *testing.T) {
 	if started.ProviderKey != "spare" || started.Model != "claude-haiku" {
 		t.Fatalf("the announcement names %q/%q, want the member that took the run",
 			started.ProviderKey, started.Model)
+	}
+}
+
+// A LAUNCH ONTO A HARNESS THAT STARTS FRESH KEEPS ITS CALLER'S VERDICT: the
+// engine dropped the session before the launch (the member picked runs another
+// harness, or no member restores the base's), so the launch is handed no
+// session and the verdict, and its record and its announcement say it. A seat
+// whose chain falls back to such a harness lost its conversation's session
+// with no word on the launch, its collection, the counter or the objective.
+//
+// Mutation: decide the fresh harness's verdict only where it was handed a
+// session, and this goes red.
+func TestAFreshHarnessKeepsTheCallersVerdict(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	rig.runner.Fresh = true
+	req := launchReq("t1")
+	dropped := executorkeep.Lost(executorkeep.LossHarnessChanged, executorkeep.InsteadFresh,
+		"the session was written by claude-code, and the member the launch picked runs another harness")
+	dropped.LostTurn = "t0"
+	req.NotContinued = dropped
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if got := rig.get("t1").Launch.NotContinued; got == nil || *got != *dropped {
+		t.Errorf("the launch's record says %+v, want the caller's verdict %+v", got, dropped)
+	}
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	said := 0
+	for _, p := range rig.queue.published {
+		if started, ok := p.event.Data.(*types.ExecutorLaunched); ok {
+			said++
+			if got := started.SessionNotContinued; got == nil || *got != *dropped {
+				t.Errorf("the launch's announcement says %+v, want the caller's verdict", got)
+			}
+		}
+	}
+	if said == 0 {
+		t.Error("the launch announced nothing")
 	}
 }

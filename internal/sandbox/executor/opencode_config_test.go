@@ -318,8 +318,8 @@ func TestEveryServerValueIsReadFromAFile(t *testing.T) {
 // THE ENTRIES THE RUN OWNS SAY THEY ARE ON. OpenCode combines every document it
 // reads, and one beneath the run's — the checkout's, the image's — may disable a
 // server or an agent under the name the run declares; so every server the run
-// declares, and the agent its turn cap is set on, states `disabled: false`
-// rather than leave the field to whichever document set it.
+// declares, and the run's agent, states `disabled: false` rather than leave
+// the field to whichever document set it.
 //
 // Mutation: drop `disabled` from a server's entry, or from the agent's.
 func TestTheEntriesTheRunOwnsStateDisabledFalse(t *testing.T) {
@@ -357,6 +357,57 @@ func TestTheEntriesTheRunOwnsStateDisabledFalse(t *testing.T) {
 	agent, ok := cfg.Agents[cfg.DefaultAgent]
 	if !ok || agent.Disabled == nil || *agent.Disabled {
 		t.Errorf("the run's agent %q does not state disabled: false:\n%s", cfg.DefaultAgent, raw)
+	}
+}
+
+// A RUN FIRES NO OPENCODE AUTOMATION, its model's or a person's. OpenCode 2.3.2
+// keeps automations (a prompt, a script or a shell command on a timer) in the
+// box's database behind `experimental.automations`; a document beneath the
+// run's that turns it on (the box home's, a repository's) let the model's and
+// the person's schedules fire on the box's next server, with no turn behind
+// them. The run's document turns it off, and OpenCode ranks the run's above
+// both, so none fires (measured on 2.3.2, code-sandbox.md's OpenCode section).
+//
+// Mutation: drop the key, or write it true, and this goes red.
+func TestARunFiresNoOpenCodeAutomation(t *testing.T) {
+	t.Parallel()
+	_, box := openCodeBox(t, t.TempDir())
+	p := executor.PathsFor(box)
+	optIn := []byte(`{"experimental":{"automations":true}}` + "\n")
+	for _, at := range []string{filepath.Join(p.Home, ".config", "opencode", "opencode.json"),
+		filepath.Join(p.Home, sandbox.WorkspaceSubdir, "opencode.json")} {
+		if err := os.MkdirAll(filepath.Dir(at), 0o755); err != nil { //nolint:gosec // the box's own directory
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(at, optIn, 0o644); err != nil { //nolint:gosec // the box's own file
+			t.Fatal(err)
+		}
+	}
+	for name, req := range map[string]sandbox.RunRequest{
+		"a run with servers": {MCPServers: seatServers()},
+		"a bare run":         {},
+		"a web-denied run":   {MCPServers: seatServers(), WebDenied: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, executor.Session{}, p)
+			if err != nil {
+				t.Fatalf("WriteConfig: %v", err)
+			}
+			raw, err := os.ReadFile(path) //nolint:gosec // the configuration WriteConfig wrote
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cfg struct {
+				Experimental map[string]json.RawMessage `json:"experimental"`
+			}
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				t.Fatalf("unmarshal: %v\n%s", err, raw)
+			}
+			if len(cfg.Experimental) != 1 || string(cfg.Experimental["automations"]) != "false" {
+				t.Errorf("the configuration's experimental is %s, want automations false alone:\n%s",
+					cfg.Experimental, raw)
+			}
+		})
 	}
 }
 

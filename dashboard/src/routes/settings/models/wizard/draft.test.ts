@@ -336,6 +336,14 @@ describe("the harnesses that run coding", () => {
   });
 });
 
+// WHO RUNS ON A MODEL IS CHOSEN UNDER WHO RUNS ON WHICH MODEL, never in the
+// wizard. Mutation: put "assign" back in WIZARD_STEPS and it is offered again.
+test("no harness's wizard asks what the model is used for", () => {
+  for (const harness of [...EXECUTORS, "pi", "gemini-cli"])
+    expect(stepsFor(draft({ harness }))).toEqual(expect.not.arrayContaining(["assign" as never]));
+  expect(stepsFor(draft())).toEqual(["harness", "signin", "model", "runs", "limits", "review"]);
+});
+
 describe("a model id on a harness that names its provider", () => {
   test("always names the chosen provider before the provider's own id, a slash or its name included", () => {
     const oc = { harness: "opencode", provider: "openrouter" };
@@ -448,6 +456,73 @@ describe("the next document", () => {
     ],
   } as unknown as CompanyDocument;
 
+  // THE FLEETS ARE NOT THE WIZARD'S: a model added or edited leaves every fleet as written.
+  test("a document's fleets are kept whole through a model's write", () => {
+    const fleets = {
+      "claude-opus": { name: "Claude Opus", strategy: "sequential", members: ["default", "zeta"] },
+    };
+    const withFleets = {
+      ...doc,
+      providers: { ...(doc.providers as object), llm_fleets: fleets },
+    } as unknown as CompanyDocument;
+    const next = nextDocument(withFleets, draft({ key: "aaa" })).doc as Record<string, any>;
+    expect(next.providers.llm_fleets).toEqual(fleets);
+  });
+
+  // A MODEL JOINS THE DEFAULT FLEET in the revision that adds it, written out
+  // where the engine only made it; a first model's seats and helpers go there too.
+  test("joining writes the default fleet with the model, and moves only the seats and helpers asked", () => {
+    const join = { seats: ["qa", "pm"], assistant: true, advisor: false };
+    const next = nextDocument(doc, draft({ key: "aaa" }), undefined, join).doc as Record<
+      string,
+      any
+    >;
+    expect(next.providers.llm_fleets).toEqual({
+      "default-fleet": { name: "default-fleet", strategy: "balanced", members: ["aaa"] },
+    });
+    // QA's review on two models is on no fleet: every job moves, the review with it.
+    expect(next.roles).toEqual([
+      { handle: "qa", name: "QA", llm: "fleet:default-fleet" },
+      { handle: "pm", name: "PM", llm: "fleet:default-fleet" },
+    ]);
+    expect(next.assistant).toEqual({ model: "fleet:default-fleet" });
+    expect(next.advisor).toBeUndefined();
+  });
+
+  test("joining keeps the default fleet's members and settings, and moves nobody unless asked", () => {
+    const written = {
+      ...doc,
+      providers: {
+        ...(doc.providers as object),
+        llm_fleets: {
+          "default-fleet": { name: "default-fleet", strategy: "sequential", members: ["zeta"] },
+        },
+      },
+    } as unknown as CompanyDocument;
+    const join = { seats: [], assistant: false, advisor: false };
+    const next = nextDocument(written, draft({ key: "aaa" }), undefined, join).doc as Record<
+      string,
+      any
+    >;
+    expect(next.providers.llm_fleets["default-fleet"]).toEqual({
+      name: "default-fleet",
+      strategy: "sequential",
+      members: ["zeta", "aaa"],
+    });
+    expect(next.roles).toEqual((doc as Record<string, any>).roles);
+  });
+
+  test("a helper already on a fleet keeps it when a first model joins", () => {
+    const onFleet = { ...doc, assistant: { model: "fleet:codex" } } as unknown as CompanyDocument;
+    const join = { seats: [], assistant: true, advisor: true };
+    const next = nextDocument(onFleet, draft({ key: "aaa" }), undefined, join).doc as Record<
+      string,
+      any
+    >;
+    expect(next.assistant).toEqual({ model: "fleet:codex" });
+    expect(next.advisor).toEqual({ model: "fleet:default-fleet" });
+  });
+
   test("a new model goes last in the company's order, whatever its name sorts as", () => {
     const next = nextDocument(doc, draft({ key: "aaa" })).doc as Record<string, any>;
     expect(next.providers.llm_order).toEqual(["default", "zeta", "aaa"]);
@@ -521,9 +596,11 @@ describe("problems", () => {
     expect(distinctProblems([], [engine, engine], "sonnet-key")).toHaveLength(1);
   });
 
-  test("a tested value's refusal is the Method's, a seat's is Use it for", () => {
+  test("a tested value's refusal is the Method's, a seat's is Review's, web tools are Limits'", () => {
     expect(stepOf({ segments: ["values", "ANTHROPIC_API_KEY"] }, "k")).toBe("signin");
-    expect(stepOf({ segments: ["roles", 0, "llm"] }, "k")).toBe("assign");
+    expect(stepOf({ segments: ["roles", 0, "llm"] }, "k")).toBe("review");
+    expect(stepOf({ segments: ["assistant", "model"] }, "k")).toBe("review");
+    expect(stepOf({ segments: ["providers", "llm", "k", "overrides"] }, "k")).toBe("limits");
     expect(stepOf({ segments: ["providers", "llm", "k", "run_in"] }, "k")).toBe("runs");
   });
 });
@@ -635,11 +712,11 @@ test("a coding model on a company with no sandbox block writes this host as the 
   const next = nextDocument(doc, draft()).doc as Record<string, any>;
   expect(next.providers.sandbox).toEqual({ local: {}, default_run_in: "direct" });
   // A COMPANY THAT HAS ONE keeps it as it is.
-  const own = { name: "Acme", providers: { sandbox: { e2b: {}, default_run_in: "e2b" } } } as never;
-  expect((nextDocument(own, draft()).doc as Record<string, any>).providers.sandbox).toEqual({
-    e2b: {},
-    default_run_in: "e2b",
-  });
+  const sandbox = { local: { image: "ghcr.io/example/agent:1" }, default_run_in: "container" };
+  const own = { name: "Acme", providers: { sandbox: structuredClone(sandbox) } } as never;
+  expect((nextDocument(own, draft()).doc as Record<string, any>).providers.sandbox).toEqual(
+    sandbox,
+  );
   // A HARNESS THAT RUNS NO CODING needs none.
   const helperOnly = nextDocument(doc, draft({ harness: "gemini-cli" })).doc as Record<string, any>;
   expect(helperOnly.providers.sandbox).toBeUndefined();

@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
@@ -289,30 +290,67 @@ var _ mainThreadHarness = QwenCode{}
 // threadTraits is what a Qwen Code run's main-thread read settles: its copy's
 // count alone, a copy its harness was cut off in uncounted; its notes are
 // confirmed off its record ([recordConfirmer]).
-func (QwenCode) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{} }
+func (QwenCode) threadTraits() sandbox.ThreadTraits {
+	return sandbox.ThreadTraits{Reads: true, Summaries: true}
+}
 
 // readMainThread counts the copy of ask's session a Qwen Code job's box holds,
 // where ask asks ([chatCopyCount]): the one chat file naming it
-// ([qwenChatFile]).
+// ([qwenChatFile]), its newest summary read in the same walk
+// ([qwenSummaryReading]), or with no count off the notes' walk.
 func (QwenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
+	var reading sandbox.MainThreadReading
+	var summary *summaryRead
+	if ask.Summary {
+		if why := summaryReleaseWhy(ask.Release, qwenRelease); why != "" {
+			reading.Summary = summaryUnread(why)
+		} else {
+			summary = &summaryRead{}
+		}
+	}
 	if !ask.Count {
-		return sandbox.MainThreadReading{}
+		if summary != nil {
+			_, _ = QwenCode{}.notesHeld(ctx, box, Session{ID: ask.Session}, nil, summary)
+			reading.Summary = summary.reading()
+		}
+		return reading
 	}
 	var file string
 	if sandbox.ValidSessionID(ask.Session) {
 		file, _ = qwenChatFile(ctx, box, ask.Session)
 	}
-	return sandbox.MainThreadReading{Count: chatCopyCount(ctx, box, file, new(qwenCounting), ask.Release, qwenRelease)}
+	var counter chatCounter
+	if ask.Count {
+		counter = new(qwenCounting)
+	}
+	var also func([]byte)
+	var lines *qwenSummaryReading
+	if summary != nil {
+		lines = newQwenSummaryReading(summary)
+		also = func(raw []byte) { lines.take(ctx, raw) }
+	}
+	count, err := chatCopyCount(ctx, box, file, counter, ask.Release, qwenRelease, also)
+	reading.Count = count
+	if summary != nil {
+		if err = cmp.Or(err, lines.err); err != nil {
+			summary.fail("the session's chat file was not read to its end: " + err.Error())
+		}
+		reading.Summary = summary.reading()
+	}
+	return reading
 }
 
 // sessionTraits is how a relaunch judges a Qwen Code session: in the box the
 // launch gets, since a box's settings can move its point or its window
-// ([qwenPoint]); no call keying, as no reading of its session exists; a brief
-// at a byte a token, above 0.28.4's quarter of a UTF-16 unit.
+// ([qwenPoint]); its calls keyed by their place in the round's log, which its
+// reading reads by content, as Qwen Code hands the bridge no call id
+// ([QwenCode.readHoldings]); a brief at a byte a token, above 0.28.4's quarter
+// of a UTF-16 unit.
 func (QwenCode) sessionTraits() sandbox.SessionTraits {
-	return sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestBox, CallKeying: sandbox.CallKeyingNone, Charge: 1}
+	return sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestBox, CallKeying: sandbox.CallKeyingByLogPlace,
+		Charge: 1}
 }
 
 // qwenDefaultWindow is 0.28.4's DEFAULT_TOKEN_LIMIT, the window of a model no

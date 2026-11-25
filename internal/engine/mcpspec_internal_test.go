@@ -546,8 +546,9 @@ roles:
 // server's MCP instructions, which the harness hands its model, so a
 // description on its entry would have the brief say it a second time.
 //
-// Mutation: give each of bridgeServers' servers what its endpoint says
-// (mcpbridge.Guidance) as its description, and this goes red.
+// Mutation: give each of bridgeServers' servers what its tools carry of it
+// (their ServerDescription, which its endpoint says) as its description, and
+// this goes red.
 func TestAServerTheBridgeServesCarriesNoWordsForTheBrief(t *testing.T) {
 	t.Parallel()
 	reg := tools.NewRegistry()
@@ -558,11 +559,18 @@ func TestAServerTheBridgeServesCarriesNoWordsForTheBrief(t *testing.T) {
 	seat := &org.Role{Name: "Engineer", DeclaredHandle: "swe"}
 	surface := tools.NewSurface("execute", reg.Snapshot(), []string{"create_issue"}).
 		ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat})
-	if mcpbridge.Guidance(surface)["github"] == "" {
-		t.Fatal("github's endpoint says nothing of what it is for, so the case holds nothing")
+	described := false
+	for _, entry := range surface.Universe().Entries() {
+		if server, fromMCP := entry.FromMCP(); fromMCP && server == "github" && entry.ServerDescription != "" {
+			described = true
+		}
+	}
+	if !described {
+		t.Fatal("github's tools carry nothing of what it is for, so the case holds nothing")
 	}
 
-	servers := bridgeServers("https://engine.example.com/mcp/job-token", surface, time.Minute)
+	servers := bridgeServers("https://engine.example.com/mcp/job-token", &mcpbridge.Session{Surface: surface},
+		time.Minute)
 	if _, served := servers["github"]; !served {
 		t.Fatal("the bridge does not serve github under its own name, so the case holds nothing")
 	}

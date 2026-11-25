@@ -105,24 +105,24 @@ func TestALoginsAccountIsReadAtItsIdentityKeys(t *testing.T) {
 	}
 }
 
-// A REFRESH CARRIES ITS TOKENS ALONE AND FAILS CLOSED: a home is seeded with a
-// mixed file's login fields alone; a refresh carries exactly its refresh keys'
+// A REFRESH CARRIES ITS TOKENS ALONE AND FAILS CLOSED: a mixed file's login is
+// its login fields alone; a refresh carries exactly its refresh keys'
 // leaves the shared copy holds, of the same kind, in the shared copy's layout
 // and never as the home's bytes; anything else stays as shared has it, a key
 // ending in `*` carries nothing; and a copy either side cannot read (malformed,
 // a key twice, anything after it, a `//` line where none is declared) carries
 // nothing, saying why. refresh_keys refuses a path ending in `*`.
 //
-// Mutation: seed a mixed file whole, carry a copy whole or as its bytes, carry
+// Mutation: take a mixed file whole for its login, carry a copy whole or as its bytes, carry
 // an added leaf or one of another kind, read `//` lines in every file, or take
 // a trailing `*`.
 func TestARefreshCarriesItsTokensAloneAndFailsClosed(t *testing.T) {
 	t.Parallel()
 	mixed := FileRule{Name: "config.toml", LoginKeys: []string{"default_provider", "providers"}}
-	seed, err := mixed.Seed([]byte("default_provider = \"p\"\n\n[providers.p]\nbase_url = \"https://a.example\"\n\n" +
+	seed, err := mixed.Login([]byte("default_provider = \"p\"\n\n[providers.p]\nbase_url = \"https://a.example\"\n\n" +
 		"[[hooks]]\nname = \"SHARED-SETTING\"\n"))
 	if err != nil || strings.Contains(string(seed), "SHARED-SETTING") || !strings.Contains(string(seed), "https://a.example") {
-		t.Errorf("a mixed file seeded %q, %v; want its login alone", seed, err)
+		t.Errorf("a mixed file's login is %q, %v; want its login fields alone", seed, err)
 	}
 	rule := FileRule{Name: "auth.json", RefreshKeys: []string{"token", "*.access", "pool.*.access", "n", "added", "x"}}
 	shared := `{"token":"t1","n":1,"url":"https://a.example","x":{"access":"a1","type":"oauth"},"pool":[{"access":"p1"}]}`
@@ -285,9 +285,9 @@ func TestEveryHarnessSaysHowEachLoginFileTravels(t *testing.T) {
 			}
 		}
 		for file, content := range login.Seed {
-			seed, err := p.FileRule(file).Seed([]byte(content))
+			seed, err := p.FileRule(file).Login([]byte(content))
 			if err != nil || strings.Contains(string(seed), "SHARED-SETTING") {
-				t.Errorf("%s: %s seeded %q, %v; want no setting of the shared copy", name, file, seed, err)
+				t.Errorf("%s: %s's login is %q, %v; want no setting of the shared copy", name, file, seed, err)
 			}
 			got, err := p.FileRule(file).Carry([]byte(login.Refresh[file]), []byte(content))
 			if err != nil || string(got) != login.Carried[file] {

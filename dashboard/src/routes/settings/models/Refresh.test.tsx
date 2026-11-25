@@ -1,5 +1,5 @@
 /**
- * Settings › Models after its own writes, on the screen the frame mounts.
+ * Settings › Models & Fleets after its own writes, on the screen the frame mounts.
  *
  * The invariant: after a change the page draws the engine's answer, never the
  * one from before the change. A config write answers once its revision is
@@ -14,7 +14,7 @@ import type { ModelEntriesAnswer } from "~/protocol/models.ts";
 import { healthFrame } from "~/test/health.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 import { engineAnswer, mountSettings, stubEngine } from "~/test/settingsScreen.tsx";
-import { modelEntry } from "./fixtures.ts";
+import { DEFAULT_FLEET_EMPTY, modelEntry } from "./fixtures.ts";
 import { Models } from "./Models.tsx";
 
 afterEach(() => {
@@ -39,9 +39,12 @@ const answer = (...keys: string[]): ModelEntriesAnswer =>
     entries: keys.map((key) => modelEntry({ key, model: key === "spare" ? "haiku" : "opus" })),
   }) as unknown as ModelEntriesAnswer;
 
+/** The engine-made default fleet alone, before any member joins. */
+const FLEETS = { reading: "admin", fleets: [DEFAULT_FLEET_EMPTY], assignments: [] };
+
 /** The model names the list draws, in its order. */
 const listed = () =>
-  screen
+  within(screen.getByRole("table"))
     .getAllByRole("row")
     .map((r) => /^(default|spare)/.exec(r.textContent ?? "")?.[1] ?? "")
     .filter(Boolean);
@@ -62,7 +65,12 @@ async function removeSpare(remove: () => Response) {
   });
   const mounted = mountSettings(
     <Models />,
-    { llm_entries: () => served, config: DOC, llm_models: { aliases: [], models: [] } },
+    {
+      llm_fleets: FLEETS,
+      llm_entries: () => served,
+      config: DOC,
+      llm_models: { aliases: [], models: [] },
+    },
     { hash: "#/settings/models?flow=remove&entry=spare" },
   );
   await act(afterMicrotasks);
@@ -111,7 +119,7 @@ const edited = (): ModelEntriesAnswer => {
   return a;
 };
 const rows = () =>
-  screen
+  within(screen.getByRole("table"))
     .getAllByRole("row")
     .map((r) =>
       /^(default|spare|fresh)(\S*)/
@@ -134,7 +142,7 @@ test.each([
     let served = answer("default", "spare");
     const { store } = mountSettings(
       <Models />,
-      { llm_entries: () => served, config: DOC },
+      { llm_fleets: FLEETS, llm_entries: () => served, config: DOC },
       { hash: "#/settings/models" },
     );
     await act(afterMicrotasks);
@@ -153,7 +161,7 @@ test.each([
 test("the viewer, which says whether Ask Crewlet has a model, is asked again once this node applies a revision", async () => {
   const { store, asked } = mountSettings(
     <Models />,
-    { llm_entries: () => answer("default", "spare"), config: DOC },
+    { llm_fleets: FLEETS, llm_entries: () => answer("default", "spare"), config: DOC },
     { hash: "#/settings/models" },
   );
   await act(afterMicrotasks);

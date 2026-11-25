@@ -881,7 +881,7 @@ func TestARelaunchThatWillNotWaitOutAKeepContinuesTheBaseTheTurnStillHolds(t *te
 			t.Parallel()
 			inBubble(t, func(t *testing.T) {
 				rig, logbook, _ := conversingRig(t)
-				rig.coordinator.relaunchWait = 50 * time.Millisecond
+				rig.relaunchWithin(50 * time.Millisecond)
 				read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
 				ctx := t.Context()
 				if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
@@ -970,7 +970,7 @@ func TestABaseIsContinuedOnlyInABoxOfItsOwn(t *testing.T) {
 					req.Continue = &Continuation{SessionID: "sess-own", Brief: "carry on in the box you left"}
 				}
 				got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-					rig.runner, tc.reused, false, RunSources{})
+					rig.runner, tc.reused, false)
 				t.Cleanup(got.release)
 				if got.kind != tc.want || got.session != tc.session || (got.carried != nil) != tc.carried {
 					t.Fatalf("the launch hands %s on session %q, carrying %v; want %s on %q, carrying %v",

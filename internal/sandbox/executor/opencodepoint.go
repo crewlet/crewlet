@@ -46,23 +46,6 @@ const (
 	openCodeShareFloor = 16000
 )
 
-// The bytes of OpenCode's renders the read charges beside what each renders
-// whole, measured on 2.3.2 in a continued session's update: the headers of a
-// changed instruction, a list's preamble, a skill's escaped entry tags (133)
-// beside its listed name twice, a server's entry beside its name twice, the
-// date's line, the environment block beside its working directory twice and
-// the box's home, each rounded up past the longest. Text inside an entry is
-// XML-escaped ([openCodeEscapedLen]). What no constant bounds is the package
-// doc's to say.
-const (
-	openCodeInstructionHeader = 64
-	openCodeListHeader        = 1024
-	openCodeSkillEntry        = 160
-	openCodeServerEntry       = 128
-	openCodeDateBytes         = 64
-	openCodeEnvironmentBytes  = 1024
-)
-
 // readBoxPoint reads, in box, where its OpenCode compacts a continued
 // session's first request ([Runner.ReadBoxPoint]): the package doc's section on
 // the first request judged in its box says what it reads and why. Three
@@ -85,7 +68,14 @@ func (OpenCode) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 	env := make(map[string]string, len(ask.Env))
 	maps.Copy(env, ask.Env)
 	delete(env, "OPENCODE_CONFIG_CONTENT")
-	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(openCodePointScript(paths, dir, ask)),
+	version := ""
+	if ask.Release == "" {
+		var err error
+		if version, err = releaseAsk(ctx, OpenCode{}, paths, OpenCode{}.VersionCommand()); err != nil {
+			return sandbox.BoxPoint{}, err
+		}
+	}
+	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(openCodePointScript(paths, dir, version)),
 		sandbox.ExecOptions{Env: env, TimeoutSec: openCodePointWait.Seconds()})
 	defer clearPointAnswers(ctx, box, dir)
 	if err != nil {
@@ -112,18 +102,17 @@ func (OpenCode) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 				f.name, err)), nil
 		}
 	}
-	return openCodePointOf(ask, answers, paths), nil
+	return openCodePointOf(ask, answers), nil
 }
 
 // openCodePointScript is the one exec the read runs ([Runner.ReadBoxPoint]):
-// the login imported where the box holds one, the release asked where the
-// launch has none, model.list and config.get each answered into a file (the
-// exec's stdout carries the read's own lines, and each answer is read back
-// apart, held to its bound), the plugin
-// folders listed, and in the box that holds the session's copy the sizes of
-// the instruction files OpenCode may hand it. Every line it prints is the
-// read's: `status`, `cwd`, `dir`, `plugin`, `walk`, `instr`.
-func openCodePointScript(paths Paths, dir string, ask sandbox.PointAsk) string {
+// the login imported where the box holds one, the release read by version
+// ([releaseAsk]) where the launch has none, model.list and config.get each
+// answered into a file (the exec's stdout carries the read's own lines, and
+// each answer is read back apart, held to its bound), the plugin folders
+// listed. Every line it prints is the read's: `status`, `dir`,
+// `plugin`.
+func openCodePointScript(paths Paths, dir, version string) string {
 	q := shellword.Quote
 	doc := q(paths.CredentialDocument())
 	var b strings.Builder
@@ -132,24 +121,17 @@ func openCodePointScript(paths Paths, dir string, ask sandbox.PointAsk) string {
 	line(`d=%s; rm -rf "$d" && mkdir -p "$d" || exit 70`, q(dir))
 	line(`if [ -s %s ]; then opencode auth import --standalone < %s > /dev/null 2>&1; echo "status import $?"; fi`,
 		doc, doc)
-	if ask.Release == "" {
-		line(`opencode --version < /dev/null > "$d/version" 2> /dev/null; echo "status version $?"`)
+	if version != "" {
+		line(`%s > "$d/version" 2> /dev/null; echo "status version $?"`, version)
 	}
 	line(`opencode api --standalone model.list < /dev/null > "$d/models" 2> /dev/null; echo "status models $?"`)
 	line(`opencode api --standalone config.get < /dev/null > "$d/config" 2> /dev/null; echo "status config $?"`)
-	line(`echo "cwd $PWD"`)
 	line(`c=${XDG_CONFIG_HOME:-$HOME/.config}/opencode`)
 	line(`for g in "$c" ${OPENCODE_CONFIG_DIR:+"$OPENCODE_CONFIG_DIR"}; do echo "dir $g"; ` +
 		`for p in "$g"/plugins/* "$g"/plugin/*; do [ -e "$p" ] && echo "plugin $p"; done; done`)
 	line(`w=$PWD; while :; do echo "dir $w/.opencode"; ` +
 		`for p in "$w"/.opencode/plugins/* "$w"/.opencode/plugin/*; do [ -e "$p" ] && echo "plugin $p"; done; ` +
 		`[ "$w" = / ] && break; w=$(dirname "$w"); done`)
-	if ask.Sources != nil {
-		line(`for f in "$c/AGENTS.md" ${OPENCODE_CONFIG_DIR:+"$OPENCODE_CONFIG_DIR/AGENTS.md"} ` +
-			`"$HOME/.claude/CLAUDE.md"; do [ -f "$f" ] && echo "instr $(wc -c < "$f") $f"; done`)
-		line(`w=$PWD; while :; do echo "walk $w"; for f in "$w/AGENTS.md" "$w/CLAUDE.md"; do ` +
-			`[ -f "$f" ] && echo "instr $(wc -c < "$f") $f"; done; [ "$w" = / ] && break; w=$(dirname "$w"); done`)
-	}
 	line(`exit 0`)
 	return b.String()
 }
@@ -216,9 +198,8 @@ func releaseMarked(release, writer string) (sandbox.BoxPoint, bool) {
 // openCodePointOf decides the point from what the read brought back, for the
 // launch's model: every mark it finds, the first of [sandbox.PointMarks] kept;
 // else the point by the box's release's rule, or Never where compaction is
-// off; and in the box that holds the session's copy what it hands over before
-// the brief ([openCodeBoxBytes]).
-func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandbox.BoxPoint {
+// off.
+func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers) sandbox.BoxPoint {
 	release := strings.TrimSpace(a.release)
 	if release == "" {
 		release = releaseOf(string(a.version))
@@ -264,16 +245,6 @@ func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandb
 		mark(sandbox.PointContextManagement, "a box document sets "+provider+"'s contextManagement option, "+
 			"which edits the conversation server-side")
 	}
-	if ask.Sources != nil {
-		if keys := docs.sources; len(keys) > 0 {
-			mark(sandbox.PointBoxSources, "a box document adds context sources the read cannot size: "+
-				words.And(keys))
-		}
-		if unsized := ask.Sources.Unsized; len(unsized) > 0 {
-			mark(sandbox.PointBoxSources, "the run's own MCP servers say their instructions to OpenCode "+
-				"themselves: "+words.And(unsized))
-		}
-	}
 	if provider == "" {
 		mark(sandbox.PointNoModel, fmt.Sprintf("the launch's model %q names no provider", ask.Model))
 	}
@@ -311,9 +282,6 @@ func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandb
 		point.Never = true
 	} else if point.Tokens, err = openCodePointAt(limit, docs.buffer); err != nil {
 		return pointMarked(sandbox.PointUnread, "the box's compaction buffer did not read: "+err.Error())
-	}
-	if ask.Sources != nil {
-		point.BoxBytes = openCodeBoxBytes(*ask.Sources, listing, paths)
 	}
 	return point
 }
@@ -363,144 +331,11 @@ func openCodeBufferOf(limit int64, raw json.RawMessage) (int64, error) {
 	return int64(math.Floor(float64(limit)*share/100 + 0.5)), nil
 }
 
-// openCodeBoxBytes is what OpenCode may hand a session in the box that holds
-// it before its first request, in bytes: every context source that may have
-// changed since its last request there, each at most its whole render. The
-// package doc's section on the first request judged in its box lists them.
-func openCodeBoxBytes(sources sandbox.RunSources, listing pointListing, paths Paths) int64 {
-	system := finalSystem(sources.System, paths, sources.Reported)
-	if sources.Steered {
-		system = withNoteInstruction(system, OpenCodeSteerInstruction)
-	}
-	total := int64(openCodeInstructionHeader + len(paths.System()) + len(system))
-	for _, file := range listing.instructions {
-		total += openCodeInstructionHeader + int64(len(file.path)) + file.bytes
-	}
-	for _, dir := range listing.walked {
-		total += 2 * (openCodeInstructionHeader + int64(len(dir)))
-	}
-	if len(sources.Skills) > 0 {
-		total += openCodeListHeader
-		for _, skill := range sources.Skills {
-			total += openCodeSkillEntry + 2*openCodeEscapedLen(skill.Listed()) + openCodeEscapedLen(skill.Description)
-		}
-	}
-	if len(sources.Guidance) > 0 {
-		total += openCodeListHeader
-		for server, said := range sources.Guidance {
-			total += openCodeServerEntry + int64(2*len(server)+4*(strings.Count(said, "\n")+1)) +
-				openCodeEscapedLen(said)
-		}
-	}
-	if len(sources.Catalogs) > 0 {
-		total += openCodeListHeader
-		for server, tools := range sources.Catalogs {
-			total += openCodeCatalogServer + openCodeEscapedLen(server)
-			for _, tool := range tools {
-				total += openCodeCatalogTool + openCodeEscapedLen(server) + openCodeEscapedLen(tool.Name) +
-					openCodeEscapedLen(tool.Description) + openCodeSchemaBytes(tool.Schema, 0)
-			}
-		}
-	}
-	return total + openCodeDateBytes + openCodeEnvironmentBytes + 2*int64(len(listing.cwd)) +
-		int64(len(paths.Home))
-}
-
-// THE CODE MODE CATALOG. A server new to a session is listed in its update
-// as a line naming it and one TypeScript signature per tool, `tools.<server>.
-// <tool>(<schema>): Promise&lt;unknown&gt; // <description>`, escaped as every
-// entry is. Its bytes are bounded, not re-rendered: each schema node at most
-// its own keywords as JSON, escaped, plus [openCodeCatalogNode] and three
-// lines of its depth's indentation; children walked. Measured on 2.3.2 over
-// nested, enum, array, union and escaped schemas, the bound was 2 to 3.5
-// times the render, and it grows faster than the render with depth.
-const (
-	openCodeCatalogServer = 32
-	openCodeCatalogTool   = 48
-	openCodeCatalogNode   = 32
-)
-
-// openCodeSchemaOne, openCodeSchemaMap and openCodeSchemaList are the keywords
-// whose values are schemas (one, a map of them by name, a list), each walked
-// as a node of its own.
-var (
-	openCodeSchemaOne  = []string{"items", "additionalProperties", "not", "if", "then", "else", "contains"}
-	openCodeSchemaMap  = []string{"properties", "patternProperties", "$defs", "definitions"}
-	openCodeSchemaList = []string{"anyOf", "oneOf", "allOf", "prefixItems"}
-)
-
-// openCodeSchemaBytes bounds what OpenCode renders of the schema node at
-// depth, its children included ([openCodeCatalogNode]).
-func openCodeSchemaBytes(node map[string]any, depth int64) int64 {
-	own := make(map[string]any, len(node))
-	var total int64
-	for key, value := range node {
-		switch v := value.(type) {
-		case map[string]any:
-			switch {
-			case slices.Contains(openCodeSchemaOne, key):
-				total += openCodeSchemaBytes(v, depth+1)
-				continue
-			case slices.Contains(openCodeSchemaMap, key):
-				for name, child := range v {
-					if c, ok := child.(map[string]any); ok {
-						total += openCodeEscapedLen(name) + openCodeSchemaBytes(c, depth+1)
-					} else {
-						total += openCodeEscapedLen(name) + openCodeJSONBytes(child)
-					}
-				}
-				continue
-			}
-		case []any:
-			if slices.Contains(openCodeSchemaList, key) {
-				for _, child := range v {
-					if c, ok := child.(map[string]any); ok {
-						total += openCodeSchemaBytes(c, depth+1)
-					} else {
-						total += openCodeJSONBytes(child)
-					}
-				}
-				continue
-			}
-		}
-		own[key] = value
-	}
-	return total + openCodeJSONBytes(own) + openCodeCatalogNode + 6*(depth+1)
-}
-
-// openCodeJSONBytes is value as JSON, `<`, `>` and `&` left as they are, then
-// escaped as an update escapes them ([openCodeEscapedLen]).
-func openCodeJSONBytes(value any) int64 {
-	var b bytes.Buffer
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(value); err != nil {
-		return openCodeEscapedLen(fmt.Sprint(value))
-	}
-	return openCodeEscapedLen(b.String())
-}
-
-// openCodeEscapedLen is the bytes text renders to inside an entry of a
-// session's update: OpenCode 2.3.2 escapes `<` and `>` (four bytes each) and
-// `&` (five), and leaves quotes as they are (measured).
-func openCodeEscapedLen(text string) int64 {
-	return int64(len(text) + 3*strings.Count(text, "<") + 3*strings.Count(text, ">") + 4*strings.Count(text, "&"))
-}
-
 // pointListing is the lines the read's script printed ([openCodePointScript]).
 type pointListing struct {
-	statuses     map[string]int
-	cwd          string
-	dirs         map[string]bool
-	plugins      []string
-	walked       []string
-	instructions []pointFile
-}
-
-// pointFile is an instruction file the read sized.
-type pointFile struct {
-	path  string
-	bytes int64
+	statuses map[string]int
+	dirs     map[string]bool
+	plugins  []string
 }
 
 // readPointListing reads the script's lines; one it does not know does not
@@ -519,21 +354,10 @@ func readPointListing(text string) (pointListing, error) {
 				return l, fmt.Errorf("a status %q", value)
 			}
 			l.statuses[name] = n
-		case "cwd":
-			l.cwd = value
 		case "dir":
 			l.dirs[path.Clean(value)] = true
 		case "plugin":
 			l.plugins = append(l.plugins, value)
-		case "walk":
-			l.walked = append(l.walked, value)
-		case "instr":
-			size, file, _ := strings.Cut(strings.TrimLeft(value, " \t"), " ")
-			n, err := strconv.ParseInt(size, 10, 64)
-			if err != nil || n < 0 {
-				return l, fmt.Errorf("a size %q", value)
-			}
-			l.instructions = append(l.instructions, pointFile{path: file, bytes: n})
 		case "":
 		default:
 			return l, fmt.Errorf("a line %q", firstLine(line, transcriptDetailLimit))
@@ -575,17 +399,7 @@ type openCodeDocuments struct {
 	directories []string
 	// contextManagement is every provider a document sets the option on.
 	contextManagement map[string]bool
-	// sources is every key of a document that adds a context source the
-	// read cannot size.
-	sources []string
 }
-
-// openCodeSourceKeys are a document's keys that add a context source the read
-// cannot size in the box that holds the session: MCP servers (their
-// guidance), skills, instruction entries (a glob or a URL among them),
-// references, Code Mode, and an experimental key, whatever it turns on.
-var openCodeSourceKeys = []string{"mcp", "skills", "instructions", "references", "reference", "codemode",
-	"experimental"}
 
 // openCodeModelKey names a model as OpenCode lists it.
 type openCodeModelKey struct{ provider, model string }
@@ -620,11 +434,6 @@ func readOpenCodeDocuments(raw []byte) (openCodeDocuments, error) {
 
 // read reads one document's keys into d, over what a lower one set.
 func (d *openCodeDocuments) read(info map[string]json.RawMessage) error {
-	for _, key := range openCodeSourceKeys {
-		if v, ok := info[key]; ok && !bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
-			d.sources = append(d.sources, key)
-		}
-	}
 	if raw, ok := info["compaction"]; ok {
 		var c struct {
 			Auto   *bool           `json:"auto"`

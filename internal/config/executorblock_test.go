@@ -10,6 +10,6 @@ import "testing"
 func TestAnEntryCannotSetTheExecutorBlock(t *testing.T) {
 	t.Parallel()
 	rejects(t, assistantCompany("    assistant:\n      harness: claude-code\n      model: sonnet\n"+
-		"      overrides: {executor: {runner: true, e2b_template: base}}\n", ""),
+		"      overrides: {executor: {runner: true, temp_env: X_TMP}}\n", ""),
 		"providers.llm.assistant.overrides.executor")
 }

@@ -594,7 +594,7 @@ reads and writes the company document, so it needs a session holding `admin`:
 the one you signed in with using `$CREWLET_API_TOKEN_FOUNDER` carries it, and a
 person you invite needs it ticked to build the company, or to lead a unit, whose
 own team they may edit without it. The dashboard adds no model provider
-(Settings › Models & keys edits one the configuration already declares), so one
+(Settings › Models & Fleets edits one the configuration already declares), so one
 step stays outside it. Until it is done the company runs and no agent seat takes
 a turn; whatever is sent to a seat waits on its inbox. The builder's next steps
 give it: with `crewlet run` stopped, write the company to a file with `crewlet
@@ -685,7 +685,7 @@ boxes have no listener to dial: export
 `CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"`, the data node's API, in both
 terminals. The data node relays each call to the agents node over the broker,
 and needs the variable too: a node that runs no seats serves the bridge's
-route only when it is set. A box in a `container` or `e2b` cell needs that
+route only when it is set. A box in a `container` cell needs that
 address whatever the agents node binds; see [Where a box dials
 it](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box).
 
@@ -749,7 +749,7 @@ each), then wire them in:
   it starts, and start it again with `crewlet run -import-company
   company.yaml`. The boxes dial that address under the runtime's name for
   this host, and `api.host` above is already off loopback, which Docker and
-  Podman on Linux need. A local box is seeded with the same `crewlet llm
+  Podman on Linux need. A box is seeded with the same `crewlet llm
   login`
 - **You already have chat.** `chat.backend` defaults to the engine's own, so
   the units you gave a `channel` above have rooms in the dashboard right now,

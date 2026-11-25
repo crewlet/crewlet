@@ -39,6 +39,16 @@ const copilotTurnPrefix = "crewlet-note:"
 // ([copilotEvents]).
 const copilotCapMessage = "crewlet: this run reached its turn cap of "
 
+// copilotUnkeptMessage is the line copilot_steer.js logs as it stops a capped
+// run whose turn count it cannot keep or read back, which the run's failure
+// says ([copilotEvents]).
+const copilotUnkeptMessage = "crewlet: this run's turn count could not be kept, so the run was stopped"
+
+// copilotNotesUnkeptMessage is the line copilot_steer.js logs, once, where a
+// note's id cannot be kept, so no note is sent: the notes wait unconfirmed and
+// are served again after the run, and the stream says why none arrived.
+const copilotNotesUnkeptMessage = "crewlet: this run's notes could not be kept, so none is sent until they can be"
+
 // copilotArmedMessage is the line copilot_steer.js logs once it runs in the
 // session (its armedMessage): a run with a turn cap whose stream lacks it ran
 // with the cap unenforced ([copilotEvents]).
@@ -61,10 +71,15 @@ func copilotCapLine(turns int) string {
 func CopilotClientTurnID(inbox string) string { return copilotTurnPrefix + inbox }
 
 // copilotExtensionSettings is what the extension is written with: the run's
-// notes route, "" for a run wired to none, and its turn cap, 0 for none.
+// notes route, "" for a run wired to none, and its turn cap, 0 for none; the
+// file it keeps its count, cursor and sent notes in across a restart
+// ([Paths.CopilotNotesState]), and the launch that state belongs to, a key
+// minted for each launch: a state another launch left counts nothing.
 type copilotExtensionSettings struct {
-	URL string `json:"url"`
-	Cap int    `json:"cap"`
+	URL   string `json:"url"`
+	Cap   int    `json:"cap"`
+	State string `json:"state"`
+	Run   string `json:"run"`
 }
 
 // copilotExtension is the extension's file as a run's box is written it: the
@@ -72,6 +87,12 @@ type copilotExtensionSettings struct {
 // JavaScript expression, so the settings need no quoting of their own; `<` and
 // friends are escaped by the encoder all the same.
 func copilotExtension(settings copilotExtensionSettings) (string, error) {
+	// A WIRED EXTENSION KEEPS ITS STATE: without a file and a launch it would
+	// send no note and stop a capped run at its first request.
+	if (settings.URL != "" || settings.Cap > 0) && (settings.State == "" || settings.Run == "") {
+		return "", fmt.Errorf("executor: the Copilot extension is wired to notes or a cap with no state file or "+
+			"launch (state %q, launch %q)", settings.State, settings.Run)
+	}
 	if n := strings.Count(copilotNotesExtension, copilotExtensionConfig); n != 1 {
 		return "", fmt.Errorf("executor: the embedded Copilot extension holds its settings' placeholder %d times, not once", n)
 	}

@@ -278,6 +278,8 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// Each model's condition and uses, in two readings: a member's names no
 		// credential, no account and no vendor sentence, an admin's all of it.
 		"llm_entries": "everybody",
+		// Which fleet member takes whose work: the engine's words in both readings.
+		"llm_fleets": "everybody",
 		// Each MCP server's condition and tools, in two readings: a member's
 		// names no launch line, header, variable, account or call.
 		"mcp_servers_status": "everybody",

@@ -59,6 +59,7 @@ up() {
   case "${1-}" in '' | [Xx]*) return 1 ;; Z*) [ "${18:-1}" -gt 1 ] ;; esac
 }
 case "$1" in
+debug) cat "$d/agents.json" 2> /dev/null || echo '[]' ;;
 --version)
   [ -z "${FAKE_VERSION_FAIL:-}" ] || { echo "$FAKE_VERSION_FAIL" >&2; exit 3; }
   echo "${FAKE_VERSION:-opencode v2.3.2}" ;;
@@ -73,9 +74,6 @@ auth)
 serve)
   printf '%s|%s' "${OPENCODE_PASSWORD:-}" "${OPENCODE_SERVER_PASSWORD:-}" > "$d/serve-env"
   printf '%s' "${OPENCODE_CONFIG_CONTENT-}" > "$d/serve-config"
-  printf '%s' "${OPENCODE_CONFIG_DIR-}" > "$d/serve-config-dir"
-  ls -A "${OPENCODE_CONFIG_DIR:-$d/none}" > "$d/serve-config-dir-held" 2> /dev/null
-  (cd "$HOME" && find . -path ./.crewlet -prune -o -type f -print) > "$d/serve-home" 2> /dev/null
   if [ -n "${FAKE_VALUES:-}" ]; then
     cat "$FAKE_VALUES/v1" > "$d/served-value" 2> /dev/null
     if [ -e "$FAKE_VALUES-fresh" ]; then echo yes; else echo no; fi > "$d/served-beside-other"
@@ -98,6 +96,7 @@ serve)
 api)
   if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; hangs "$1"; fi
   case "$1" in
+  config.get) cat "$d/config-get.json" 2> /dev/null || echo '[]' ;;
   credential.list)
     [ -e "$d/creds" ] || for id in ${FAKE_CREDS-}; do echo "$id"; done > "$d/creds"
     printf '{"data":[' ; sep=
@@ -142,7 +141,7 @@ session)
     if up; then echo "$id serving" >> "$d/exported"; else echo "$id stopped" >> "$d/exported"; fi
     held "$id" || { echo "Error: Session not found: $id" >&2; exit 1; }
     if [ -n "${FAKE_SESSION_EXPORT_SLEEP:-}" ]; then : > "$d/packing"; sleep "$FAKE_SESSION_EXPORT_SLEEP"; fi
-    if [ -e "$d/export-fails" ]; then printf '{"info":{"id":"%s"' "$id"; echo "Error: the export broke off" >&2; exit 1; fi
+    if [ -e "$d/export-fails" ] || [ -n "${FAKE_EXPORT_FAILS:-}" ]; then printf '{"info":{"id":"%s"' "$id"; echo "Error: the export broke off" >&2; exit 1; fi
     if [ -n "${FAKE_SESSION_EXPORT_BYTES:-}" ]; then dd if=/dev/null of=/dev/stdout bs=1 seek="$FAKE_SESSION_EXPORT_BYTES" 2> /dev/null; exit 0; fi
     if [ -e "$d/export-doc" ]; then cat "$d/export-doc"; exit 0; fi
     if [ -n "${FAKE_SESSION_EXPORT:-}" ]; then printf '%s\n' "$FAKE_SESSION_EXPORT"; else
@@ -204,6 +203,8 @@ type scriptOpts struct {
 	session *executor.Session
 	// held is every session the box's database holds as the case starts.
 	held []string
+	// noDatabase leaves the held sessions' database file out.
+	noDatabase bool
 	// carried, where set, is a session export carried into the box, gzipped at
 	// [executor.Paths.SessionCarried] as a run's start writes it.
 	carried string
@@ -224,9 +225,6 @@ type scriptOpts struct {
 	values, freshValues string
 	// pages is the fake's `session.message.list` answer by cursor, "first" for none.
 	pages map[string]string
-	// planted is files the box's home holds as the run starts, by their path
-	// under it, as an earlier run in the box could have left them.
-	planted map[string]string
 }
 
 // scriptConfig is the run configuration a case's script finds, as
@@ -291,14 +289,6 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 		}
 	}
 	writeStandIn(t, filepath.Join(bin, "opencode"), fakeOpenCode)
-	for rel, content := range o.planted {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(home, rel)), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(home, rel), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
 	alive := serverPipe(t, dir)
 	paths := executor.Paths{Home: home}
 	if !o.unconfigured {
@@ -320,6 +310,17 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(dir, "sessions", id), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// THE DATABASE THE HELD SESSIONS ARE IN, where OpenCode keeps it: a
+	// re-import bounds its memory by the file's size ([openCodeRenew]).
+	if len(o.held) > 0 && !o.noDatabase {
+		db := filepath.Join(home, ".local", "share", "opencode", "opencode.db")
+		if err := os.MkdirAll(filepath.Dir(db), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(db, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -742,12 +743,12 @@ func forEachShell(t *testing.T, test func(t *testing.T, sh boxShell)) {
 }
 
 // loginFree reports whether name, in a box's work directory, is a file a run's
-// script leaves there that holds no login: its configuration ([scriptConfig])
-// and configuration directory, its session record, export and export digests,
-// and its end protocol's pid and end records.
+// script leaves there that holds no login: its configuration ([scriptConfig]),
+// its session record, export and export digests, and its end protocol's pid
+// and end records.
 func loginFree(p executor.Paths, name string) bool {
-	for _, path := range []string{p.OpenCodeConfig(), p.OpenCodeConfigDir(), p.SessionRecord(), p.SessionCapture(),
-		p.SessionDigests(), p.JobScript(), p.JobEnded()} {
+	for _, path := range []string{p.OpenCodeConfig(), p.SessionRecord(), p.SessionCapture(), p.SessionDigests(),
+		p.JobScript(), p.JobEnded()} {
 		if name == filepath.Base(path) {
 			return true
 		}

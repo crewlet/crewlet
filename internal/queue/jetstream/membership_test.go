@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -61,7 +62,7 @@ func TestEachAnswerToARemovalIsReadByWhichAskItCouldBeAbout(t *testing.T) {
 			settled: false, want: ErrNotAMetaPeer},
 		{name: "not a member, later ask, view unreadable", data: notMember, asks: 2,
 			listed: true, counted: func() (bool, error) { return false, viewFails },
-			settled: true, want: viewFails},
+			settled: true, want: ErrRemovalUnconfirmed},
 		{name: "in flight, first ask", data: inFlight, asks: 1, listed: true,
 			settled: true, want: ErrMembershipChanging},
 		{name: "in flight, later ask", data: inFlight, asks: 2, listed: true,
@@ -139,10 +140,12 @@ func TestARemovalWaitsForThisMembersOwnViewToDropTheVoter(t *testing.T) {
 		t.Fatalf("a view that never caught up answered %v", err)
 	}
 
-	unreadable := errors.New("no view")
+	// AN UNREADABLE VIEW AFTER THE COMMIT IS AN UNCONFIRMED REMOVAL, never
+	// a group that is down: the asker moves on to another member on that.
+	unreadable := fmt.Errorf("%w: off", ErrMetaGroupDown)
 	if err := awaitApplied(t.Context(), func() (MetaGroup, error) {
 		return MetaGroup{}, unreadable
-	}, gone); !errors.Is(err, unreadable) {
+	}, gone); !errors.Is(err, ErrRemovalUnconfirmed) {
 		t.Fatalf("an unreadable view answered %v", err)
 	}
 }

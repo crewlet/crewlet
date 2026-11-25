@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -22,6 +23,7 @@ import (
 func (Copilot) transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error {
 	tr := tar.NewReader(archive)
 	b.handed.r = tr
+	r := newCopilotReading(b, bufio.NewReaderSize(&b.handed, lineChunkBytes))
 	for {
 		h, err := tr.Next()
 		switch {
@@ -40,7 +42,9 @@ func (Copilot) transcript(ctx context.Context, b *transcriptBuilder, archive io.
 			}
 			continue
 		}
-		if err := b.copilotRecord(ctx, bufio.NewReaderSize(&b.handed, lineChunkBytes)); err != nil {
+		r.framed = 0
+		r.lines.Reset(&b.handed)
+		if err := r.member(ctx); err != nil {
 			return err
 		}
 	}
@@ -53,120 +57,351 @@ func copilotEventsMember(name string) bool {
 	return len(parts) == 3 && parts[0] == copilotSessionState && parts[1] != "" && parts[2] == "events.jsonl"
 }
 
-// copilotRecord reads one events.jsonl as entries, in recorded order:
+// A COPILOT LINE'S MEMBERS ARE READ BY ITS WHOLE-LINE DECODE'S FIELDS
+// ([fieldKind], [copilotEvent]): one refused by them is read for its type
+// alone, as that decode read it ([decodeCopilotEvent]), and a compaction's
+// summary by its own decode. A line that names no type is no record.
+
+// copilotReading is a person's transcript of one events.jsonl on the bounded
+// line walk ([lineWalk.setupBounded]), in recorded order, a subagent's lines
+// its thread, named by its agent:
 //   - a user message is the brief, or, where it opens with an engine heading
 //     (a note, a late call, a wake the extension sent), each it carries
 //     ([headedIn]);
 //   - an assistant message is the model's words and a call per tool request;
 //   - a call's completion its result, failed where Copilot recorded it so;
 //   - a completed compaction its summary.
-//
-// A subagent's lines are its thread, named by its agent. A line that is no
-// record, or one past the line bound, is said where it was.
-func (b *transcriptBuilder) copilotRecord(ctx context.Context, lines *bufio.Reader) error {
-	read := 0
-	err := readLines(lines, maxLineBytes, func(line []byte) error {
-		if err := ctx.Err(); err != nil {
-			return err
+type copilotReading struct {
+	lineWalk
+	typ          string
+	typed, whole bool
+	// agent is the line's agent as written, or as shown past the value bound;
+	// stamp its time.
+	agent, stamp string
+	// The data: its content, its tool requests, a completion's call, success,
+	// result and failure, and a compaction's summary, which its own decode
+	// reads where the data's (summed) is of its kind.
+	content           textJoin
+	calls             callList
+	requested         bool
+	callID            string
+	succeeded         bool
+	result, failure   readText
+	summary           readText
+	summed            bool
+	text, name, input valueText
+	compactor         jsonCompactor
+	s                 entryShape
+}
+
+// newCopilotReading is a person's reading into b of the members lines reads.
+func newCopilotReading(b *transcriptBuilder, lines *bufio.Reader) *copilotReading {
+	r := &copilotReading{}
+	r.setupBounded(b, r, lines)
+	return r
+}
+
+// copilotWords is how a message's content is read: as one text, written whole.
+var copilotWords = joinRule{kind: "text"}
+
+// start starts the record the next line holds.
+func (r *copilotReading) start() {
+	r.typ, r.typed, r.whole, r.agent, r.stamp = "", true, true, "", ""
+	r.dataStart()
+}
+
+// dataStart starts the record's data: data written again replaces it.
+func (r *copilotReading) dataStart() {
+	r.content.start(r.b, TranscriptEntry{Kind: EntryBrief}, false, copilotWords)
+	r.calls.reset(r.b.seen)
+	r.requested, r.callID, r.succeeded = false, "", false
+	r.result, r.failure, r.summary, r.summed = readText{}, readText{}, readText{}, true
+}
+
+func (*copilotReading) own(*valueText) error { return nil }
+
+func (r *copilotReading) linesPast() error { return r.b.linesPast("record", "lines") }
+
+// copilotEventFields and copilotDataFields are the members of a line and of
+// its data that [copilotEvent] decodes and this read does not, by their
+// fields' kinds; copilotUsageFields a usage record's.
+var (
+	copilotEventFields = map[string]fieldKind{"sessionId": fieldString, "exitCode": fieldAny}
+	copilotDataFields  = map[string]fieldKind{"sessionId": fieldString, "parentToolCallId": fieldString,
+		"clientTurnId": fieldString, "delivery": fieldString, "toolName": fieldString, "arguments": fieldAny,
+		"mcpServerName": fieldString, "mcpConfigSource": fieldString, "errorType": fieldString,
+		"errorCode": fieldString, "message": fieldString, "aborted": fieldBool, "turns": fieldInt}
+	copilotUsageFields = map[string]fieldKind{"inputTokens": fieldInt, "outputTokens": fieldInt,
+		"cacheReadTokens": fieldInt, "cacheWriteTokens": fieldInt, "maxPromptTokens": fieldInt}
+)
+
+// record reads a line's type, agent, time and data.
+func (r *copilotReading) record() error {
+	return r.members(func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "type":
+			r.typ, ok, err = r.wordField(k)
+			r.typed = r.typed && ok
+		case "agentId":
+			r.agent, ok, err = r.agentField(k)
+		case "timestamp":
+			r.stamp, ok, err = r.wordField(k)
+		case "data":
+			ok, err = r.data(k)
+		default:
+			kind, read := copilotEventFields[name]
+			if !read {
+				return r.scan.Skip()
+			}
+			ok, err = r.typedField(k, kind)
 		}
-		if read++; read > b.bounds.ReadLines {
-			return b.linesPast("record", "lines")
-		}
-		return b.copilotLine(line)
-	}, func(n int64) error {
-		return b.unread(fmt.Sprintf("a line of %s of the harness's record is past the %s one read reads, "+
-			"and was not read", humanSize(n), humanSize(maxLineBytes)))
+		r.whole = r.whole && ok
+		return err
 	})
+}
+
+// agentField reads a line's agent, the string value k begins: as written
+// within the value bound, as an entry shows it past it.
+func (r *copilotReading) agentField(k jsonscan.Kind) (string, bool, error) {
+	if k != jsonscan.String {
+		_, ok, err := r.wordField(k)
+		return "", ok, err
+	}
+	t := r.name.begin(r.b, TranscriptEntry{}, false)
+	if err := r.read(t); err != nil {
+		t.drop()
+		return "", true, err
+	}
+	if !t.past {
+		agent := t.text()
+		t.drop()
+		return agent, true, nil
+	}
+	shown, _ := t.shownName()
+	return shown, true, nil
+}
+
+// data reads a line's data.
+func (r *copilotReading) data(k jsonscan.Kind) (bool, error) {
+	r.dataStart()
+	r.summed = k == jsonscan.ObjectStart || k == jsonscan.Null
+	return r.objectField(k, func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "content":
+			ok = k == jsonscan.String || k == jsonscan.Null
+			r.content.start(r.b, TranscriptEntry{Kind: EntryBrief},
+				r.b.shapes(EntryBrief, r.b.seen) || r.b.shapes(EntryModel, r.b.seen), copilotWords)
+			if k == jsonscan.String {
+				err = r.wholeText(&r.content)
+			} else {
+				err = r.scan.Skip()
+			}
+		case "toolRequests":
+			ok, err = true, r.requests(k)
+		case "toolCallId":
+			r.callID, ok, err = r.wordField(k)
+		case "success":
+			r.succeeded, ok, err = k == jsonscan.True, true, r.scan.Skip()
+		case "result":
+			r.result = readText{}
+			ok, err = r.objectField(k, func(name string, k jsonscan.Kind) error {
+				if name != "content" {
+					return r.scan.Skip()
+				}
+				result, took, readErr := r.stringText(&r.text, TranscriptEntry{Kind: EntryToolResult}, k)
+				r.result, r.whole = result, r.whole && took
+				return readErr
+			})
+		case "error":
+			ok, err = true, r.failed(k)
+		case "summaryContent":
+			var took bool
+			r.summary, took, err = r.stringText(&r.text, TranscriptEntry{Kind: EntrySummary}, k)
+			r.summed = r.summed && took
+			return err
+		case "usage":
+			ok, err = r.typedObject(k, copilotUsageFields)
+		default:
+			kind, read := copilotDataFields[name]
+			if !read {
+				return r.scan.Skip()
+			}
+			ok, err = r.typedField(k, kind)
+		}
+		r.whole = r.whole && ok
+		return err
+	})
+}
+
+// requests reads an assistant message's tool requests
+// (`toolRequests[{toolCallId, name, arguments}]`), a call each, or says they
+// have no shape this read knows where their list's decode refuses them.
+func (r *copilotReading) requests(k jsonscan.Kind) error {
+	r.calls.reset(r.b.seen)
+	r.requested = true
+	if k != jsonscan.ArrayStart {
+		if k != jsonscan.Null {
+			r.calls.unshaped(r.b)
+		}
+		return r.scan.Skip()
+	}
+	shaped := true
+	err := r.elements(func(k jsonscan.Kind) (bool, error) {
+		var id string
+		var tool toolName
+		var input *valueText
+		took, err := r.objectField(k, func(name string, k jsonscan.Kind) error {
+			var ok bool
+			var err error
+			switch name {
+			case "toolCallId":
+				id, ok, err = r.wordField(k)
+			case "name":
+				tool, ok, err = r.toolName(&r.name, k)
+			case "arguments":
+				input = r.input.begin(r.b, TranscriptEntry{Kind: EntryToolCall}, r.calls.shapes(r.b))
+				r.compactor = jsonCompactor{w: input, buf: r.compactor.buf}
+				if teeErr := r.scan.Tee(&r.compactor); teeErr != nil {
+					return teeErr
+				}
+				ok, err = true, r.scan.Skip()
+			default:
+				return r.scan.Skip()
+			}
+			shaped = shaped && ok
+			return err
+		})
+		shaped = shaped && took
+		switch {
+		case err == nil && shaped:
+			r.calls.add(r.b, input, tool, id)
+		case input != nil:
+			input.drop()
+		}
+		return true, err
+	})
+	if err == nil && !shaped {
+		r.calls.unshaped(r.b)
+	}
 	return err
 }
 
-// copilotLine adds the entries one line of an events.jsonl makes.
-func (b *transcriptBuilder) copilotLine(line []byte) error {
-	if len(strings.TrimSpace(string(line))) == 0 {
-		return nil
+// failed reads a completion's error, any value, as the text a failed result
+// shows: the words of an object's `message` where they are not blank, else
+// the error as [errorText] makes it, a string's words or any other value as
+// written and compacted.
+func (r *copilotReading) failed(k jsonscan.Kind) error {
+	e := TranscriptEntry{Kind: EntryToolResult}
+	var err error
+	switch k {
+	case jsonscan.String, jsonscan.Null:
+		r.failure, _, err = r.stringText(&r.text, e, k)
+		return err
+	case jsonscan.ObjectStart:
+	default:
+		r.failure, err = r.rawText(&r.input, &r.compactor, e)
+		return err
 	}
-	ev, ok := decodeCopilotEvent(line)
-	if !ok {
-		return b.notARecord(len(line))
+	ordinal := r.b.seen
+	t := r.input.begin(r.b, e, r.b.shapes(EntryToolResult, ordinal))
+	r.compactor = jsonCompactor{w: t, buf: r.compactor.buf}
+	if err = r.scan.Tee(&r.compactor); err != nil {
+		t.drop()
+		return err
 	}
-	data := ev.Data
-	b.thread = ev.AgentID
-	at := claudeTime(ev.Timestamp)
-	switch ev.Type {
+	var words readText
+	err = r.members(func(name string, k jsonscan.Kind) error {
+		if name != "message" {
+			return r.scan.Skip()
+		}
+		message, _, readErr := r.stringText(&r.text, e, k)
+		if words = message; !words.set {
+			words = readText{blank: true}
+		}
+		return readErr
+	})
+	if err != nil {
+		t.drop()
+		return err
+	}
+	r.failure = readText{p: r.textEntry(t, e, ordinal), set: true}
+	if words.set && !words.blank {
+		r.failure = words
+	}
+	return nil
+}
+
+// commit commits the reading the line's type picks: a line read for its type
+// alone has no agent, no time and no data but its summary's.
+func (r *copilotReading) commit() error {
+	b, s := r.b, &r.s
+	if !r.typed || r.typ == "" {
+		return r.refused()
+	}
+	at := time.Time{}
+	if b.thread = ""; r.whole {
+		b.thread, at = r.agent, claudeTime(r.stamp)
+	}
+	s.reset(b.seen)
+	switch r.typ {
 	case "user.message":
-		return b.copilotWords(data.Content, at)
+		if r.whole {
+			r.wordsInto(s)
+		}
 	case "assistant.message":
-		if strings.TrimSpace(data.Content) != "" {
-			if err := b.add(TranscriptEntry{Kind: EntryModel, At: at, Thread: b.thread}, data.Content); err != nil {
-				return err
-			}
+		if !r.whole {
+			break
 		}
-		return b.copilotCalls(data.ToolRequests, at)
+		words := !r.content.blank()
+		if words {
+			s.add(b, textAs(b, &r.content, s, EntryModel), time.Time{})
+		}
+		if err := b.commitThread(s, at); err != nil || !r.requested {
+			return err
+		}
+		return r.calls.commitAfter(b, words, at)
 	case "tool.execution_complete":
-		failed := !looseTrue(data.Success)
-		text := data.Result.Content
-		if failed {
-			var why struct {
-				Message string `json:"message"`
-			}
-			_ = json.Unmarshal(data.Error, &why)
-			text = firstNonBlank(why.Message, errorText(data.Error))
+		failed := !r.whole || !r.succeeded
+		p := b.held(TranscriptEntry{Kind: EntryToolResult}, "", s.next())
+		switch {
+		case !r.whole:
+		case failed:
+			p = r.failure.entry(b, EntryToolResult, s.next())
+		default:
+			p = r.result.entry(b, EntryToolResult, s.next())
 		}
-		return b.add(TranscriptEntry{Kind: EntryToolResult, At: at, Thread: b.thread,
-			Tool: b.answered(data.ToolCallID), Failed: failed}, text)
+		if p.entry.Kind == EntryToolResult {
+			p.entry.Failed = failed
+		}
+		id := ""
+		if r.whole {
+			id = r.callID
+		}
+		s.addEvent(b, p, time.Time{}, claudeEvent{kind: eventResult, id: id})
 	case "session.compaction_complete":
-		var summary struct {
-			Data struct {
-				SummaryContent string `json:"summaryContent"`
-			} `json:"data"`
-		}
-		if json.Unmarshal(line, &summary) == nil && strings.TrimSpace(summary.Data.SummaryContent) != "" {
-			return b.add(TranscriptEntry{Kind: EntrySummary, At: at, Thread: b.thread}, summary.Data.SummaryContent)
+		if r.summed && r.summary.set && !r.summary.blank {
+			s.add(b, r.summary.p, time.Time{})
 		}
 	}
-	return nil
+	return b.commitThread(s, at)
 }
 
-// copilotWords adds a user message: each note, late call and wake it carries
-// where it opens with an engine heading, else the brief.
-func (b *transcriptBuilder) copilotWords(text string, at time.Time) error {
-	if strings.TrimSpace(text) == "" {
-		return nil
+// wordsInto adds a user message to s: each note, late call and wake it
+// carries where it opens with an engine heading, else the brief; past the
+// bound the brief alone (R1).
+func (r *copilotReading) wordsInto(s *entryShape) {
+	j := &r.content
+	switch text, held := j.text(); {
+	case j.blank():
+	case held:
+		r.b.proseInto(s, EntryBrief, text)
+	default:
+		s.add(r.b, textAs(r.b, j, s, EntryBrief), time.Time{})
 	}
-	if !opensWithHeading(text) {
-		return b.add(TranscriptEntry{Kind: EntryBrief, At: at, Thread: b.thread}, text)
-	}
-	for kind, words := range headedIn(text) {
-		if err := b.add(TranscriptEntry{Kind: kind, At: at, Thread: b.thread}, words); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// copilotCalls adds a call per tool request of an assistant message
-// (`toolRequests[{toolCallId, name, arguments}]`), each remembered for its
-// result.
-func (b *transcriptBuilder) copilotCalls(raw json.RawMessage, at time.Time) error {
-	if len(raw) == 0 {
-		return nil
-	}
-	var requests []struct {
-		ID        string          `json:"toolCallId"`
-		Name      string          `json:"name"`
-		Arguments json.RawMessage `json:"arguments"`
-	}
-	if err := json.Unmarshal(raw, &requests); err != nil {
-		return b.unread("a message's tool requests have no shape this read knows, and were not read")
-	}
-	for _, r := range requests {
-		b.called(r.ID, r.Name)
-		if err := b.add(TranscriptEntry{Kind: EntryToolCall, At: at, Thread: b.thread, Tool: r.Name},
-			compactJSON(r.Arguments)); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // copilotNotesHeld is the inbox ids of takes, in serve order and once each,
@@ -180,106 +415,125 @@ func (b *transcriptBuilder) copilotCalls(raw json.RawMessage, at time.Time) erro
 // compacted-queued), as [copilotWindow] counts them. The line alone is no
 // proof (ruling 1 of #1818's design): a kill or a refusal can follow it. A
 // last line with no newline is a write cut off; one past the bound, no note.
-func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake) ([]string, error) {
-	asked := make(map[string]string, len(takes))
+// Walked for notes ([lineWalk.noteLine]), and its newest summary, if asked.
+func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake,
+	summary *summaryRead) ([]string, error) {
+	notes := copilotNotes{asked: make(map[string]string, len(takes)), pending: map[string]copilotPending{},
+		held: map[string]bool{}}
 	for _, take := range takes {
-		asked[CopilotClientTurnID(take.InboxID)] = take.InboxID
+		notes.asked[CopilotClientTurnID(take.InboxID)] = take.InboxID
 	}
-	// pending is each note sent and not yet held, by its line; window the
-	// lines that may be messages the main agent's model reads, and retained
-	// the notes the compaction started last carries over whole.
-	pending := map[string]copilotPending{}
-	var window copilotWindow
-	var retained map[string]bool
-	held := map[string]bool{}
-	n := 0
-	// moved is what the line read last moved to held, taken back where that
-	// line turns out to be the file's unended last.
-	var moved []string
 	src := &lastByte{r: events}
-	err := readLines(bufio.NewReaderSize(src, lineChunkBytes), maxLineBytes, func(line []byte) error {
-		if err := ctx.Err(); err != nil {
-			return err
+	var w lineWalk
+	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes), maxLineBytes)
+	var ev copilotNoteLine
+	if summary != nil {
+		ev.summary = &summaryText{}
+	}
+	for {
+		line, err := w.noteLine(ctx, func() error { return ev.read(&w) })
+		if err != nil {
+			return nil, fmt.Errorf("executor: reading which notes the Copilot session holds: %w", err)
 		}
-		n++
-		moved = moved[:0]
-		ev, ok := decodeCopilotNoteLine(line)
-		window.read(n, ev, ok)
-		if !ok {
-			return nil
+		if line.none {
+			break
 		}
-		// A note and a request are the main agent's only where the line names
-		// no agent at all: the window counts more lines than this holds.
-		switch ev.Type {
-		case "user.message":
-			if ev.AgentID != "" {
-				return nil
-			}
-			inbox, ours := asked[ev.Data.ClientTurnID]
-			at, timed := copilotTime(ev.Timestamp)
-			// A line whose time cannot be read is one no request can be
-			// shown to have begun after.
-			if ours && timed && (ev.Data.Delivery == "steering" || ev.Data.Delivery == "queued") {
-				pending[inbox] = copilotPending{line: n, at: at}
-			}
-		case "session.usage_record":
-			// A FAILED MAIN REQUEST WRITES NONE (measured on 1.0.114: a
-			// provider answering 500 past its five retries left a
-			// session.error and no usage record), so it settles nothing.
-			if ev.AgentID != "" || ev.Data.Usage.InteractionType != copilotMainRequest {
-				return nil
-			}
-			began, ok := copilotBegan(ev)
-			if !ok {
-				return nil
-			}
-			for inbox, note := range pending {
-				if note.at.After(began) {
-					continue
-				}
-				delete(pending, inbox)
-				if !held[inbox] {
-					held[inbox] = true
-					moved = append(moved, inbox)
-				}
-			}
-		case "session.compaction_start":
-			retained = copilotRetained(pending, window.messages, looseInt(ev.Data.RetainedInputMessages))
-		case "session.compaction_complete":
-			// Past a compaction, a request may carry the note only inside
-			// its summary: only one that says it failed keeps every note, and
-			// one that applied those it carried over whole.
-			if string(ev.Data.Success) != "false" {
-				for inbox := range pending {
-					if !retained[inbox] {
-						delete(pending, inbox)
-					}
-				}
-			}
-			retained = nil
+		if summary != nil {
+			ev.summarised(line, summary)
 		}
-		return nil
-	}, func(int64) error {
-		n++
-		moved = moved[:0]
-		window.read(n, copilotNoteLine{}, false)
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("executor: reading which notes the Copilot session holds: %w", err)
+		notes.read(ev, ev.decoded(line))
+		if line.ended {
+			break
+		}
 	}
 	if src.read && src.last != '\n' {
-		for _, inbox := range moved {
-			delete(held, inbox)
+		for _, inbox := range notes.moved {
+			delete(notes.held, inbox)
 		}
 	}
 	var out []string
 	for _, take := range takes {
-		if held[take.InboxID] && !slices.Contains(out, take.InboxID) {
+		if notes.held[take.InboxID] && !slices.Contains(out, take.InboxID) {
 			out = append(out, take.InboxID)
 		}
 	}
 	return out, nil
+}
+
+// copilotNotes is what [copilotNotesHeld] keeps as it reads: the notes it is
+// asked about, by their clientTurnId; each note sent and not yet held, by its
+// line; the lines that may be messages the main agent's model reads; the
+// notes the compaction started last carries over whole; the notes held; how
+// many lines it read; and what the line read last moved to held, taken back
+// where that line turns out to be the file's unended last.
+type copilotNotes struct {
+	asked    map[string]string
+	pending  map[string]copilotPending
+	window   copilotWindow
+	retained map[string]bool
+	held     map[string]bool
+	n        int
+	moved    []string
+}
+
+// read reads the record's next line, ev where ok.
+func (c *copilotNotes) read(ev copilotNoteLine, ok bool) {
+	c.n++
+	c.moved = c.moved[:0]
+	c.window.read(c.n, ev, ok)
+	if !ok {
+		return
+	}
+	// A note and a request are the main agent's only where the line names
+	// no agent at all: the window counts more lines than this holds.
+	switch ev.Type {
+	case "user.message":
+		if !ev.AgentID.empty() {
+			return
+		}
+		inbox, ours := c.asked[ev.Data.ClientTurnID]
+		at, timed := copilotTime(ev.Timestamp)
+		// A line whose time cannot be read is one no request can be
+		// shown to have begun after.
+		if ours && timed && (ev.Data.Delivery == "steering" || ev.Data.Delivery == "queued") {
+			c.pending[inbox] = copilotPending{line: c.n, at: at}
+		}
+	case "session.usage_record":
+		// A FAILED MAIN REQUEST WRITES NONE (measured on 1.0.114: a
+		// provider answering 500 past its five retries left a
+		// session.error and no usage record), so it settles nothing.
+		if !ev.AgentID.empty() || ev.Data.Usage.InteractionType != copilotMainRequest {
+			return
+		}
+		began, ok := copilotBegan(ev)
+		if !ok {
+			return
+		}
+		for inbox, note := range c.pending {
+			if note.at.After(began) {
+				continue
+			}
+			delete(c.pending, inbox)
+			if !c.held[inbox] {
+				c.held[inbox] = true
+				c.moved = append(c.moved, inbox)
+			}
+		}
+	case "session.compaction_start":
+		c.retained = copilotRetained(c.pending, c.window.messages, ev.Data.RetainedInputMessages)
+	case "session.compaction_complete":
+		// Past a compaction, a request may carry the note only inside
+		// its summary: only one that says it failed keeps every note, and
+		// one that applied those it carried over whole.
+		if !ev.Data.Failed {
+			for inbox := range c.pending {
+				if !c.retained[inbox] {
+					delete(c.pending, inbox)
+				}
+			}
+		}
+		c.retained = nil
+	}
 }
 
 // copilotRetained is the pending notes a compaction starting now carries over
@@ -312,13 +566,13 @@ func copilotRetained(pending map[string]copilotPending, messages []int, count in
 // window. The compaction's own start is where the count is read.
 type copilotWindow struct {
 	messages  []int
-	announced map[string]bool
+	announced map[recordWord]bool
 }
 
 func (w *copilotWindow) read(n int, ev copilotNoteLine, ok bool) {
-	if ok && ev.Type == "subagent.started" && ev.AgentID != "" {
+	if ok && ev.Type == "subagent.started" && !ev.AgentID.empty() {
 		if w.announced == nil {
-			w.announced = map[string]bool{}
+			w.announced = map[recordWord]bool{}
 		}
 		w.announced[ev.AgentID] = true
 	}
@@ -375,31 +629,152 @@ func copilotTime(stamp string) (time.Time, bool) {
 }
 
 // copilotNoteLine is what [copilotNotesHeld] reads of one events.jsonl line:
-// its own few fields, raw where Copilot's kind could vary, so that no other
-// field of the line can lose them, as a field of another type loses the whole
-// of [decodeCopilotEvent]'s.
+// its own few members, those Copilot's kind could vary read as written, so
+// that no other member of the line can lose them, as a member of another kind
+// loses the whole of [decodeCopilotEvent]'s; whole where each of them is of
+// its field's kind ([fieldKind]), typed where at least its type is.
 type copilotNoteLine struct {
-	Type      string `json:"type"`
-	AgentID   string `json:"agentId"`
-	Timestamp string `json:"timestamp"`
+	Type      string
+	AgentID   recordWord
+	Timestamp string
 	Data      struct {
-		ClientTurnID string          `json:"clientTurnId"`
-		Delivery     string          `json:"delivery"`
-		Success      json.RawMessage `json:"success"`
+		ClientTurnID string
+		Delivery     string
+		// Failed is a compaction's completion that states it failed
+		// (`success: false`).
+		Failed bool
 		// RetainedInputMessages, on a compaction's start: "Number of
 		// trailing conversation messages (the turn's not-yet-answered input)
 		// kept verbatim after the summary instead of being compacted.
 		// Omitted when every message at compaction start is summarized."
-		// (schemas/session-events.schema.json, 1.0.114's bundle.)
-		RetainedInputMessages json.RawMessage `json:"retainedInputMessages"`
+		// (schemas/session-events.schema.json, 1.0.114's bundle.) A whole
+		// int64 ([looseInt]), else 0.
+		RetainedInputMessages int64
 		Usage                 struct {
-			InteractionType string          `json:"interactionType"`
-			Duration        json.RawMessage `json:"duration"`
-		} `json:"usage"`
-	} `json:"data"`
+			InteractionType string
+			// Duration is the request's `duration` as written, where it is
+			// a number within [transcriptNameMaxBytes].
+			Duration json.RawMessage
+		}
+	}
 	// bareHook is a `hook.end` whose data holds only its id, its kind and its
 	// success: a hook that handed the model nothing.
-	bareHook bool
+	bareHook     bool
+	whole, typed bool
+	// summary, where a read asks one, is the data's summaryContent.
+	summary *summaryText
+}
+
+// read reads one line's members.
+func (l *copilotNoteLine) read(w *lineWalk) error {
+	*l = copilotNoteLine{whole: true, typed: true, bareHook: true, summary: l.summary}
+	if l.summary != nil {
+		l.summary.reset()
+	}
+	return w.members(func(name string, k jsonscan.Kind) error {
+		var ok bool
+		var err error
+		switch name {
+		case "type":
+			l.Type, ok, err = w.wordField(k)
+			l.typed = l.typed && ok
+		case "agentId":
+			l.AgentID, ok, err = w.idField(k)
+		case "timestamp":
+			l.Timestamp, ok, err = w.wordField(k)
+		case "data":
+			l.Data, l.bareHook = copilotNoteLine{}.Data, true
+			if l.summary != nil {
+				l.summary.reset()
+			}
+			ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
+				l.bareHook = l.bareHook && (name == "hookInvocationId" || name == "hookType" || name == "success")
+				return l.data(w, name, k)
+			})
+		default:
+			return w.scan.Skip()
+		}
+		l.whole = l.whole && ok
+		return err
+	})
+}
+
+// data reads one member of the line's data.
+func (l *copilotNoteLine) data(w *lineWalk, name string, k jsonscan.Kind) error {
+	var ok bool
+	var err error
+	switch name {
+	case "clientTurnId":
+		l.Data.ClientTurnID, ok, err = w.wordField(k)
+	case "delivery":
+		l.Data.Delivery, ok, err = w.wordField(k)
+	case "success":
+		l.Data.Failed, ok, err = k == jsonscan.False, true, w.scan.Skip()
+	case "summaryContent":
+		if l.summary == nil {
+			return w.scan.Skip()
+		}
+		_, err = l.summary.read(w, k)
+		return err
+	case "retainedInputMessages":
+		raw, rawErr := w.numberAsWritten(k)
+		l.Data.RetainedInputMessages, ok, err = looseInt(raw), true, rawErr
+	case "usage":
+		l.Data.Usage.InteractionType, l.Data.Usage.Duration = "", nil
+		ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
+			var took bool
+			var fieldErr error
+			switch name {
+			case "interactionType":
+				l.Data.Usage.InteractionType, took, fieldErr = w.wordField(k)
+			case "duration":
+				var raw []byte
+				raw, fieldErr = w.numberAsWritten(k)
+				l.Data.Usage.Duration, took = slices.Clone(raw), true
+			default:
+				return w.scan.Skip()
+			}
+			l.whole = l.whole && took
+			return fieldErr
+		})
+	default:
+		return w.scan.Skip()
+	}
+	l.whole = l.whole && ok
+	return err
+}
+
+// decoded reports whether the line read is one of a type, keeping what the
+// read takes of it: the whole of it, or its type alone where some other member
+// is of another kind than its field. A line read for its type is no note's,
+// its usage record no main request's, and its compaction one that applied; a
+// line past the bound, or no JSON object, is of none.
+func (l *copilotNoteLine) decoded(line noteLine) bool {
+	switch {
+	case line.past, !line.object, !l.typed:
+		*l = copilotNoteLine{summary: l.summary}
+	case !l.whole:
+		*l = copilotNoteLine{Type: l.Type, summary: l.summary}
+	case l.Type != "hook.end":
+		l.bareHook = false
+	}
+	return l.Type != ""
+}
+
+// summarised makes the line's summaryContent the newest summary where it is a
+// main agent's completed compaction's, as the transcript reads one
+// ([copilotReading.commit]): a line whose members are not all of their kinds
+// is the main agent's there, and a summary of no string none. A line past the
+// bound leaves the newest unsaid.
+func (l *copilotNoteLine) summarised(line noteLine, s *summaryRead) {
+	t := l.summary
+	switch {
+	case line.past:
+		s.unshaped(fmt.Sprintf("a line of the record runs past the %d bytes a line is read to", maxLineBytes))
+	case !line.object || !l.typed || l.Type != "session.compaction_complete" || l.whole && !l.AgentID.empty():
+	case !t.odd:
+		s.taken(t)
+	}
 }
 
 // copilotMainRequest is the `interactionType` of a main agent's own model
@@ -410,46 +785,57 @@ type copilotNoteLine struct {
 // request carries the main conversation a note was sent into.
 const copilotMainRequest = "conversation-agent"
 
-// decodeCopilotNoteLine decodes one line for [copilotNotesHeld], false where
-// it is no JSON object of a type. A line whose own fields are of another type
-// is read for its type alone: a note line is then no note's, a usage record no
-// main request's, and a compaction one that applied.
-func decodeCopilotNoteLine(line []byte) (copilotNoteLine, bool) {
-	var ev copilotNoteLine
-	if err := json.Unmarshal(line, &ev); err != nil {
-		var typed struct {
-			Type string `json:"type"`
-		}
-		if json.Unmarshal(line, &typed) != nil || typed.Type == "" {
-			return copilotNoteLine{}, false
-		}
-		return copilotNoteLine{Type: typed.Type}, true
-	}
-	if ev.Type == "hook.end" {
-		var hook struct {
-			Data map[string]json.RawMessage `json:"data"`
-		}
-		ev.bareHook = json.Unmarshal(line, &hook) == nil
-		for field := range hook.Data {
-			if field != "hookInvocationId" && field != "hookType" && field != "success" {
-				ev.bareHook = false
-			}
-		}
-	}
-	return ev, ev.Type != ""
-}
-
 // notesHeld is the inbox ids of takes ([Copilot.inboxID]) whose note
 // the box's copy of session shows reached the model ([copilotNotesHeld]): its
 // [recordConfirmer], as its extension confirms nothing (ruling 1 of #1818's
-// design), which the Runner's main-thread read asks for the takes it is asked.
-// An error where the record could not be read, which is neither held nor not.
+// design), which the Runner's main-thread read asks for the takes it is asked,
+// and the newest summary into summary in the same walk. An error where the
+// record could not be read, which is neither held nor not.
 func (Copilot) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
-	takes []ServedTake) ([]string, error) {
+	takes []ServedTake, summary *summaryRead) ([]string, error) {
 	events, err := box.OpenFile(ctx, PathsFor(box).CopilotSessionDir(session.ID)+"/events.jsonl")
 	if err != nil {
-		return nil, fmt.Errorf("executor: opening the Copilot session's record: %w", err)
+		return nil, summary.failedBy(fmt.Errorf("executor: opening the Copilot session's record: %w", err))
 	}
 	defer func() { _ = events.Close() }()
-	return copilotNotesHeld(ctx, events, takes)
+	held, err := copilotNotesHeld(ctx, events, takes, summary)
+	return held, summary.failedBy(err)
 }
+
+// summaryWhy is why ask's summary is not read off its record, "" where it is:
+// on the release its summary was read on, of a session its record is named by.
+func (Copilot) summaryWhy(ask sandbox.MainThreadAsk) string {
+	if why := summaryReleaseWhy(ask.Release, copilotFloor()); why != "" {
+		return why
+	}
+	if !sandbox.ValidSessionID(ask.Session) {
+		return fmt.Sprintf("the run's Copilot session %q is no session id its record is named by", ask.Session)
+	}
+	return ""
+}
+
+// recordSummary reports whether the receipts' walk reads ask's summary: its
+// record is the one walk that reads it.
+func (c Copilot) recordSummary(ask sandbox.MainThreadAsk) bool { return c.summaryWhy(ask) == "" }
+
+// readMainThread reads the newest summary on the main thread of ask's session
+// in box, off the box's copy of its record ([Copilot.notesHeld]), on the
+// release its summary was read on alone. Its receipts are its record's
+// ([recordConfirmer]).
+func (c Copilot) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
+	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
+
+	if !ask.Summary {
+		return sandbox.MainThreadReading{}
+	}
+	if why := c.summaryWhy(ask); why != "" {
+		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
+	}
+	var summary summaryRead
+	_, _ = c.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
+	return sandbox.MainThreadReading{Summary: summary.reading()}
+}
+
+// threadTraits is what Copilot's main-thread read settles: the newest summary
+// alone, its record's receipts added by [Runner.ThreadTraits].
+func (Copilot) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{Summaries: true} }

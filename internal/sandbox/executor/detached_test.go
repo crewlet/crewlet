@@ -49,8 +49,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(),
 		p.MCPConfig(), p.Findings(), p.BinDir(),
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
-		p.ClaudeSkillsSettings(), p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(),
-		p.ClaudeSkillsSettingsPinned(), p.CommitAttribution(), p.AttributionHook(), p.GitHooks(),
+		p.ClaudeHooksOff(), p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.CommitAttribution(), p.AttributionHook(), p.GitHooks(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.SessionStaging(), p.SessionDigests(),
 		p.SessionPackStaging("a-pack"), p.SessionPackHeld("a-pack"), p.ClaudeConfigDir(), p.JobScript(),
 		p.JobEnded(), p.SessionSave("node-a:a-taker", "a-save"), p.SessionSaveStaging("node-a:a-taker", "a-save"),
@@ -192,8 +191,9 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	cleared := ""
+	// The clear may first put back a home file a killed run left ([homeKeeper]).
 	for _, cmd := range b.Commands() {
-		if strings.HasPrefix(cmd, "rm -f ") {
+		if strings.Contains(cmd, "rm -f ") && strings.Contains(cmd, p.Done()) {
 			cleared = cmd
 		}
 	}
@@ -207,8 +207,7 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 		// The previous run's instructions, which are not this run's — its
 		// hooks name a bridge session its end closed.
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
-		p.ClaudeSkillsSettings(), p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(),
-		p.ClaudeSkillsSettingsPinned(), p.OpenCodeConfig(),
+		p.ClaudeHooksOff(), p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.OpenCodeConfig(),
 		// And its MCP configuration under either token, which names a bridge
 		// session that is over, and which this run's start writes as a new file.
 		"'" + p.MCPConfig() + "'", "'" + p.MCPConfigFresh() + "'",
@@ -250,10 +249,7 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	// so are the harness's own session store, which a run here continues, and
 	// the digests of what it holds, without which an archive the box packed
 	// itself would be restored over the copy that ran on past it.
-	// THE CHECKOUT BY ITS PATH, as a word or a path's leading part: a harness's
-	// own name holding the word (Kimi Code's `workspace-trust`) is not it.
-	checkout := shellword.Quote(p.Home + "/" + sandbox.WorkspaceSubdir)
-	if strings.Contains(cleared, checkout) || strings.Contains(cleared, strings.TrimSuffix(checkout, "'")+"/") {
+	if strings.Contains(cleared, "/"+sandbox.WorkspaceSubdir) {
 		t.Fatalf("the clear reached into the checkout: %s", cleared)
 	}
 	if strings.Contains(cleared, p.ClaudeConfigDir()) {

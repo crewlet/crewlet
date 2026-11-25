@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -23,14 +24,14 @@ const PiName = "pi"
 
 // Pi drives the Pi Coding Agent headless (`pi --mode json -p`, the brief on
 // stdin), measured on 1.6.0. Its model is reached through the run ENVIRONMENT
-// (the provider's own key variable) or, in a local cell, the login its agent
-// directory keeps ([Paths.PiAgentDir]). Everything the run adds to pi is ONE
+// (the provider's own key variable) or the login its agent directory keeps
+// ([Paths.PiAgentDir]). Everything the run adds to pi is ONE
 // EXTENSION (pi_extension.mjs, [Pi.WriteConfig]): the seat's MCP servers, its
 // standing instructions, its turn cap, notes and skill loads. Its session is one
-// file at one path ([Paths.PiSessionFile], [piSessionGate], [piPack]). Every
-// run leaves its working directory untrusted (`--no-approve`), so no
-// repository file loads in the run's place; pi has no approval layer, so the
-// run is fully permissioned by construction.
+// file at one path ([Paths.PiSessionFile], [piSessionGate], [piPack]). A run
+// loads what a person's session loads: its working directory trusted
+// (`--approve`), the agent directory's own config beside the run's. Pi has no
+// approval layer, so the run is fully permissioned by construction.
 type Pi struct{}
 
 var (
@@ -40,9 +41,10 @@ var (
 	_ saver             = Pi{}
 	_ inboxDelivery     = Pi{}
 	_ recordConfirmer   = Pi{}
+	_ threadHarness     = Pi{}
+	_ mainThreadHarness = Pi{}
 	_ noteReader        = Pi{}
 	_ notesOffExplainer = Pi{}
-	_ artifactHolder    = Pi{}
 	_ artifactDirHolder = Pi{}
 	_ inPlaceGate       = Pi{}
 	_ sessionJudge      = Pi{}
@@ -54,6 +56,11 @@ func NewPi() *Runner { return New(Pi{}) }
 
 // Name is the harness's key in the runner registry.
 func (Pi) Name() string { return PiName }
+
+// MCPCallCeiling is none: the server's `timeout` carries the bridge's own
+// bound ([piMCP]), and a 1040-second call under a 1050-second one was answered
+// whole (measured on 1.6.0).
+func (Pi) MCPCallCeiling() time.Duration { return 0 }
 
 // resumesOnLaunchRoute: measured on 1.6.0, the one release supported
 // ([launchRouted]): created on a
@@ -122,18 +129,15 @@ const piExtensionMark = "crewlet.extension"
 func piScript(req sandbox.RunRequest, session Session, paths Paths, extension string, stop time.Duration) string {
 	q := shellword.Quote
 	parts := []string{"pi", "--mode", "json", "-p",
-		// THE WORKING DIRECTORY UNTRUSTED: a repository's .pi settings, MCP
-		// servers, extensions, skills, prompts and system-prompt files do not
-		// load (its compaction settings measured ignored on 1.6.0); its
-		// AGENTS.md, which pi reads whatever trust says, still does. Pi only
-		// creates the directory its sessionDir names, which stays empty: the
-		// run's session is its own file.
-		"--no-approve",
-		// AND NOTHING OF THE AGENT DIRECTORY'S BUT WHAT THE LAUNCH NAMES: its
-		// extensions, skills, prompts and themes are not discovered; the run's
-		// own extension and skills are named, with pi's MCP support, which
-		// --no-extensions turns off with the rest.
-		"--no-extensions", "-e", "builtin:mcp", "--no-skills", "--no-prompt-templates", "--no-themes"}
+		// THE WORKING DIRECTORY TRUSTED, as a person answering pi's prompt
+		// trusts it: a repository's .pi settings, MCP servers, extensions,
+		// skills, prompts and system-prompt files load beside the agent
+		// directory's. Pi only creates the directory a sessionDir setting
+		// names: the run's session is its own file.
+		// PI'S MCP SUPPORT IS ITS OWN, on unless a settings file takes it away,
+		// which the extension refuses rather than the launch loading it back
+		// (mcpRemovedBy in pi_extension.mjs; 1.6.0).
+		"--approve"}
 	// VERBATIM, as the pi entry names it in pi's own terms (provider/id).
 	if req.Model != "" {
 		parts = append(parts, "--model", q(req.Model))
@@ -147,7 +151,9 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 	if len(req.Skills) > 0 {
 		parts = append(parts, "--skill", q(paths.PiSkills()))
 	}
-	parts = append(parts, `"$@"`)
+	// THE CHECKOUTS' SKILLS IN A DIRECTORY OF THEIR OWN ([piCheckoutHome]), so
+	// the seat's stays its skills alone, each of which the extension reports.
+	parts = append(parts, "--skill", q(paths.PiCheckoutSkills()), `"$@"`)
 
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -164,7 +170,19 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 	b.WriteString(piSessionGate(session, paths, req.FreshWiring != nil && extension != ""))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([piCheckoutHome]), and once
+	// pi has stopped, on a failure before and on a teardown's signal, the
+	// agent directory's own instruction file back and what a firing left out
+	// said, each step whatever came of the other ([everyStep]); a run killed
+	// outright leaves the put-back to the next run's clear ([homeKeeper]).
+	home := piCheckoutHome(paths)
+	line(`piput() { %s; }`, everyStep(home.restore(), home.saySkipped()))
+	line(`piquit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; piput; exit "$1"; }`)
+	line(`trap piput EXIT; trap 'piquit 143' TERM; trap 'piquit 130' INT; trap 'piquit 129' HUP`)
+	line(`mkdir -p %s %s || exit 1`, q(paths.PiAgentDir()), q(paths.PiCheckoutSkills()))
+	b.WriteString(home.gate())
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
+	line(`piput; trap - EXIT TERM INT HUP`)
 	b.WriteString(piCapture(paths))
 	line(`exit "$code"`)
 	return b.String()
@@ -478,28 +496,14 @@ func (Pi) Events() Decoder { return &piEvents{} }
 // result IS its stream.
 func (Pi) Parse(stdout []byte) sandbox.Result { return decodeAll(&piEvents{}, stdout) }
 
-// piHomeSettings is the agent directory's own settings, written whole by every
-// run: pi's defaults, so nothing an earlier command wrote there (a package to
-// install, a shell prefix, compaction) reaches the run.
-const piHomeSettings = `{}`
-
-// piHomeMCP is the agent directory's own MCP servers, written empty by every
-// run: a server there named like one the extension registers would replace it.
-const piHomeMCP = `{"mcpServers":{}}`
-
-// WriteConfig writes what a Pi run reads: the agent directory's empty server
-// list ([piHomeMCP]), the run's skills ([Paths.PiSkills]), and its extension
-// ([Paths.PiExtension]), returned as the file `-e` names, with a fresh
-// session's copy beside it ([sandbox.RunRequest.FreshWiring]). What an earlier
-// run wrote the clear removes first ([Pi.artifactFiles], [Pi.artifactDirs]).
+// WriteConfig writes what a Pi run adds to pi, beside whatever the agent
+// directory and the working directory hold: the run's skills
+// ([Paths.PiSkills]) and its extension ([Paths.PiExtension]), returned as the
+// file `-e` names, with a fresh session's copy beside it
+// ([sandbox.RunRequest.FreshWiring]). What an earlier run wrote the clear
+// removes first ([Pi.artifactDirs]).
 func (p Pi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	if err := box.WriteFile(ctx, paths.PiAgentDir()+"/mcp.json", []byte(piHomeMCP)); err != nil {
-		return "", fmt.Errorf("executor: writing Pi's own MCP servers: %w", err)
-	}
-	if err := box.WriteFile(ctx, paths.PiAgentDir()+"/settings.json", []byte(piHomeSettings)); err != nil {
-		return "", fmt.Errorf("executor: writing Pi's own settings: %w", err)
-	}
 	skills := make(map[string]string, len(req.Skills))
 	for _, s := range req.Skills {
 		file, err := skillFile(s.Listed(), s.Description, s.Body)
@@ -512,33 +516,63 @@ func (p Pi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.Ru
 		}
 		skills[at] = s.Listed()
 	}
-	if err := p.writeExtension(ctx, box, paths.PiExtension(), req, req.MCPServers, req.Steer,
-		req.SkillLoads, skills); err != nil {
+	// THE NOTE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR, which hands
+	// the checkouts below the start directory theirs ([piCheckoutHome]); a box
+	// with none starts without them, its gate saying so.
+	var nested *piNestedHand
+	if err := writeNoteHelper(ctx, box, paths.PiNoteHelper()); err == nil {
+		nested = piNested(paths)
+	} else if !errors.Is(err, errNoHelperBuild) {
+		return "", err
+	}
+	launch := piCheckoutHome(paths).launchConfig(piCheckouts(), req.ReportedRepos)
+	if err := box.WriteFile(ctx, paths.PiCheckoutLaunch(), launch); err != nil {
+		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
+	}
+	if err := p.writeExtension(ctx, box, paths, paths.PiExtension(), req, req.MCPServers, req.Steer,
+		req.SkillLoads, skills, nested); err != nil {
 		return "", err
 	}
 	if f := req.FreshWiring; f != nil {
-		if err := p.writeExtension(ctx, box, paths.PiExtensionFresh(), req, f.MCPServers, f.Steer,
-			f.SkillLoads, skills); err != nil {
+		if err := p.writeExtension(ctx, box, paths, paths.PiExtensionFresh(), req, f.MCPServers, f.Steer,
+			f.SkillLoads, skills, nested); err != nil {
 			return "", err
 		}
 	}
 	return paths.PiExtension(), nil
 }
 
+// piMCPFiles is the `mcp.json` files pi 1.6.0 reads servers from, whose
+// entry wins over a server an extension registers under its name: the agent
+// directory's, and the trusted working directory's `.pi/mcp.json`, which the
+// extension resolves against its own.
+func piMCPFiles(paths Paths) []string {
+	return []string{paths.PiAgentDir() + "/mcp.json", ".pi/mcp.json"}
+}
+
+// piSettingsFiles is the settings files pi 1.6.0 merges, the trusted working
+// directory's `.pi/settings.json` over the agent directory's: the extension
+// names the one whose `codemode.mode` keeps the seat's tools from the model,
+// or whose `defaultTools` keeps its skills from it.
+func piSettingsFiles(paths Paths) []string {
+	return []string{paths.PiAgentDir() + "/settings.json", ".pi/settings.json"}
+}
+
 // writeExtension writes the extension, wired to servers, steer's notes route
-// and loads' skill route, with req's cap and the names its sign-in is under,
-// to file: the seat's system text told of notes where the run is wired to
-// them.
-func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, file string, req sandbox.RunRequest,
-	servers map[string]sandbox.MCPServer, steer sandbox.SteerWiring, loads sandbox.SkillWiring,
-	skills map[string]string) error {
+// and loads' skill route, with req's cap and nested's hand of a checkout
+// cloned during the run (nil for none), to file: the seat's system text told
+// of notes where the run is wired to them.
+func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, paths Paths, file string,
+	req sandbox.RunRequest, servers map[string]sandbox.MCPServer, steer sandbox.SteerWiring, loads sandbox.SkillWiring,
+	skills map[string]string, nested *piNestedHand) error {
 
 	system := req.System
 	if steer.Set() {
 		system = withNoteInstruction(system, p.NoteInstruction())
 	}
 	settings := piExtensionSettings{System: system, Cap: max(req.Limits.MaxTurns, 0),
-		Required: piRequired(servers), Withheld: piWithheld(req.SignInEnv), WithheldPrefixes: piShellWithout}
+		Required: piRequired(servers), MCPFiles: piMCPFiles(paths), SettingsFiles: piSettingsFiles(paths),
+		Listed: len(skills) > 0, Checkouts: nested}
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		settings.Servers = append(settings.Servers, piServer{Name: name, Config: piMCP(servers[name])})
 	}
@@ -557,20 +591,6 @@ func (p Pi) writeExtension(ctx context.Context, box sandbox.Sandbox, file string
 	}
 	return nil
 }
-
-// piWithheld is the names the model's shell runs without: every name that
-// signs pi in ([sandbox.RunRequest.SignInEnv]), sorted and once each. Pi reads
-// them from its own environment; its bash tool's children never see them.
-func piWithheld(names []string) []string {
-	out := slices.Clone(names)
-	slices.Sort(out)
-	return slices.Compact(out)
-}
-
-// piShellWithout is the prefixes of the names the model's shell runs without
-// whatever the run sets: the telemetry exporter's settings, its endpoint and
-// its headers, which pi keeps for its own export.
-var piShellWithout = []string{"OTEL_EXPORTER_OTLP_"}
 
 // piRequired is the servers a run fails without, the extension checking each
 // offers a tool at its first turn: those the engine marks always loaded, the
@@ -611,30 +631,13 @@ func piMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// artifactFiles is the files a Pi run leaves in its box of its own, removed
-// before every run: everything pi reads from its agent directory that a
-// command of an earlier run could have written there (its system-prompt and
-// context files, saved trust, its own provider definitions, whose keys can be
-// commands, and the catalogue's cache), all but the login
-// ([Paths.PiAgentDir]'s auth.json) and the files the run writes afresh
-// ([Pi.WriteConfig]).
-func (Pi) artifactFiles(p Paths) []string {
-	a := p.PiAgentDir() + "/"
-	return []string{a + "SYSTEM.md", a + "APPEND_SYSTEM.md", a + "AGENTS.md", a + "AGENTS.override.md",
-		a + "CLAUDE.md", a + "trust.json", a + "models.json", a + "models-store.json", a + "keybindings.json"}
-}
-
 // artifactDirs is the directories a Pi run leaves in its box of its own,
-// removed whole: its run's own (the extension and skills), and its agent
-// directory's extensions, skills, prompts, themes, installed packages, its
-// own session store, and `bin`, which pi puts first on its shell's PATH (a
-// planted `rg` ran for the model's `rg`, measured on 1.6.0). Pi runs without
-// `bin` and, offline, never fills it again. The engine's sessions are kept.
-func (Pi) artifactDirs(p Paths) []string {
-	a := p.PiAgentDir() + "/"
-	return []string{p.PiRun(), a + "extensions", a + "skills", a + "prompts", a + "themes", a + "npm", a + "git",
-		a + "sessions", a + "bin"}
-}
+// removed whole: its run's own (the extension and skills), and the agent
+// directory's `bin`, which pi puts first on its shell's PATH (a planted `rg`
+// ran for the model's `rg`, measured on 1.6.0). Pi runs without `bin` and,
+// offline, never fills it again. The rest of the agent directory is the
+// home's own config, which loads as a person's session does.
+func (Pi) artifactDirs(p Paths) []string { return []string{p.PiRun(), p.PiAgentDir() + "/bin"} }
 
 // notesOffWhy is what switches a Pi run's reading of notes off: the extension
 // failing to load, which pi says on the run's error stream ("Extension error")

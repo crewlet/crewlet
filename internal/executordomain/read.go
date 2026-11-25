@@ -76,10 +76,15 @@ type Session struct {
 
 	// Object is the sealed session, its Key zero on a row that names none:
 	// an ending-only row, or one whose session the seat's budget released or
-	// a run's running out of context retired ([Session.RetiredBy]).
+	// a launch's spending it retired ([Session.RetiredBy]).
 	Object        objstore.Object
 	ContentKey    string
 	ArchiveFormat int
+
+	// Media is every media object the session's frames name ([Capture.Media]),
+	// in digest order, none for a session kept whole: filled by every read of
+	// a row naming an object ([withMedia]), so every opener splices it whole.
+	Media []executorkeep.MediaObject `json:",omitempty"`
 
 	LaunchSeq  int64
 	CaptureSeq int64
@@ -92,6 +97,10 @@ type Session struct {
 	// was captured into.
 	ContextTokens int64
 	Interrupted   bool
+
+	// Trimmed is the newest capture's ([Capture.Trimmed]): its session was cut
+	// to what its harness's resume loads, said by [Session.TrimmedNote].
+	Trimmed bool
 
 	// CapturedAt is the broker's instant for the newest capture, zero on a
 	// row nothing was captured into.
@@ -111,9 +120,11 @@ type Session struct {
 	// read holds its base").
 	BaseTurn string
 
-	// RetiredBy is the turn in which this row's session ran out of its model's
-	// context, which took it off the row ([applyEnd]); empty where none did.
-	RetiredBy string
+	// RetiredBy is the turn a launch of which spent this row's session, whose end
+	// took it off the row ([applyEnd]), and RetiredLoss how, as that end kept it
+	// ([executorkeep.Ending.SpentSessions]); both empty where none did.
+	RetiredBy   string
+	RetiredLoss executorkeep.Loss
 
 	// EndedAt and EndedAtPosition are the end's broker instant and its
 	// position on the log, both zero while the turn is live; Ending is how
@@ -124,6 +135,12 @@ type Session struct {
 
 	// AskExcerpt is what the turn was asked: somebody else's words.
 	AskExcerpt string `untrusted:"fence"`
+
+	// Summary is the newest compaction summary a box read of the turn kept,
+	// as its end named it, which the row keeps until it goes ([nameSummary]):
+	// nil where none is. Its words are in its object alone
+	// ([SessionStore.OpenSummary]).
+	Summary *executorkeep.Summary
 }
 
 // Ended reports a turn whose end applied.
@@ -131,6 +148,16 @@ func (s Session) Ended() bool { return s.Ending != nil }
 
 // HasObject reports a row that names a session's object.
 func (s Session) HasObject() bool { return !s.Object.Key.IsZero() }
+
+// MediaBytes is the sealed size of the media objects the row names, each
+// counted here however many other rows name it too.
+func (s Session) MediaBytes() int64 {
+	var n int64
+	for _, m := range s.Media {
+		n += m.Object.Size
+	}
+	return n
+}
 
 // Unkept is the turn's newest capture its end named as not kept
 // ([executorkeep.Ending.Unkept]), WHERE THAT STILL STANDS ON THE ROW: nil where
@@ -241,6 +268,36 @@ func (s Session) InProgressNote() string {
 	return note + "; its run may have gone on past it, and its last call may have no result yet."
 }
 
+// TrimmedNote is a row whose kept session was trimmed ([Session.Trimmed]) in a
+// reader's words, "" of any other: the ONE SENTENCE OF IT, for every surface
+// that shows a row in words. The engine's words alone, as
+// [Session.InProgressNote] is, so a surface never fences it.
+func (s Session) TrimmedNote() string {
+	if !s.Trimmed || !s.HasObject() {
+		return ""
+	}
+	return TrimmedSentence
+}
+
+// TrimmedSentence is what [Session.TrimmedNote] says.
+const TrimmedSentence = "The history before this session's newest compaction was trimmed to keep it " +
+	"within the bound a kept session is held to: its transcript begins there."
+
+// NotContinuedNote is what the turn's runs did not continue, in the engine's
+// sentence of each verdict its end names ([executorkeep.NotContinued.Sentence]):
+// its first and its newest. "" where its runs lost nothing, or it has not
+// ended. The engine's words alone: a verdict's detail is never in it.
+func (s Session) NotContinuedNote() string {
+	if s.Ending == nil {
+		return ""
+	}
+	said := make([]string, 0, len(s.Ending.NotContinued))
+	for _, n := range s.Ending.NotContinued {
+		said = append(said, n.Sentence())
+	}
+	return strings.Join(said, " ")
+}
+
 // Kept is the row as continuing its turn's kept session reads it
 // ([executorkeep.TurnRow]): the ONE conversion of a row into the sandbox's
 // view of it, made by the engine's restore and the read surface alike, so a
@@ -256,7 +313,7 @@ func (s Session) Kept() executorkeep.TurnRow {
 		Handle: s.Handle, Turn: s.Turn,
 		Harness: s.Harness, HarnessVersion: s.HarnessVersion, Entry: s.Entry, SessionID: s.SessionID,
 		ArchiveFormat: s.ArchiveFormat, LaunchSeq: s.LaunchSeq, CaptureSeq: s.CaptureSeq,
-		Object: s.Object, Ended: s.Ended(),
+		Object: s.Object, Media: slices.Clone(s.Media), Ended: s.Ended(),
 		ConversationKey: s.ConversationKey, NotKept: s.NotKept(),
 		ContentKey: s.ContentKey, Home: s.Home, Workspace: s.Workspace,
 		ContextTokens: s.ContextTokens, Interrupted: s.Interrupted, CapturedAt: s.CapturedAt,
@@ -285,21 +342,6 @@ func (h Head) Kept() executorkeep.ConversationHead {
 	return kept
 }
 
-// RetiredWhy is why the read names no head where a session ran out of context, ""
-// where it names one or nothing did: what a launch that starts fresh logs, so an
-// operator can tell a retired line from one that never was.
-func (h Head) RetiredWhy() string {
-	if h.Session != nil {
-		return ""
-	}
-	for _, ended := range slices.Backward(h.Endings) {
-		if ended.RetiredBy != "" {
-			return executorkeep.ExhaustedWhy(ended.SessionID, ended.RetiredBy)
-		}
-	}
-	return ""
-}
-
 // RelaunchRead is the level a relaunch reads its turn's row at, and so the
 // level every reader of whether a relaunch would continue the turn's session
 // decides on (internal/sandbox's ReadContinuityOf): the capture it continues
@@ -314,7 +356,7 @@ func BindRead() statelog.Freshness { return statelog.Freshness{Level: statelog.R
 
 // NotKept is why the row names no session's object, in a reader's words, ""
 // where it names one. Told apart off the row alone, it is one of four: a launch
-// ran the session out of context ([Session.RetiredBy]); nothing was captured
+// spent the session ([Session.RetiredBy]); nothing was captured
 // (yet, on a live row); the end named the newest capture unkept
 // ([Session.Unkept]) and no older one was kept, or an end below [wentOnVersion]
 // released it ([applyEnd]); or the seat's budget released it ([seatPlan]).
@@ -331,7 +373,7 @@ func (s Session) NotKept() string {
 	case s.HasObject():
 		return ""
 	case s.RetiredBy != "":
-		return executorkeep.ExhaustedWhy(s.SessionID, s.RetiredBy) + "; how the turn ended is kept"
+		return executorkeep.SpentWhy(s.SessionID, s.RetiredBy, s.RetiredLoss) + "; how the turn ended is kept"
 	case unkept != nil && !keptByItsEnd:
 		return fmt.Sprintf("the turn's newest capture of its session (launch %d, capture %d) was not kept: "+
 			"%s; how the turn ended is kept", unkept.LaunchSeq, unkept.CaptureSeq, unkeptReason(*unkept))
@@ -367,7 +409,7 @@ const sessionColumns = `agent_handle, turn_id, conversation_key, work_key, harne
 	harness_version, session_id, object, object_hash, object_size, content_key,
 	archive_format, launch_seq, capture_seq, home, workspace, captured_at,
 	read_through, absorbs, ended_at, end_seq, outcome, delivered, ending, ask_excerpt,
-	base_turn, context_tokens, interrupted, retired_by, entry`
+	base_turn, context_tokens, interrupted, retired_by, retired_loss, entry, trimmed`
 
 // scanSession reads one row.
 func scanSession(row rowScanner) (Session, error) {
@@ -381,16 +423,17 @@ func scanSession(row rowScanner) (Session, error) {
 		outcome, ending       string
 		absorbs               string
 		delivered             int
-		interrupted           int
+		interrupted, trimmed  int
 	)
 	if err := row.Scan(&s.Handle, &s.Turn, &s.ConversationKey, &s.WorkKey, &s.Harness,
 		&s.HarnessVersion, &s.SessionID, &object, &hash, &size, &s.ContentKey,
 		&s.ArchiveFormat, &s.LaunchSeq, &s.CaptureSeq, &s.Home, &s.Workspace, &captured,
 		&readThrough, &absorbs, &endedAt, &endSeq, &outcome, &delivered, &ending,
-		&s.AskExcerpt, &s.BaseTurn, &s.ContextTokens, &interrupted, &s.RetiredBy, &s.Entry); err != nil {
+		&s.AskExcerpt, &s.BaseTurn, &s.ContextTokens, &interrupted, &s.RetiredBy, &s.RetiredLoss,
+		&s.Entry, &trimmed); err != nil {
 		return Session{}, err
 	}
-	s.Absorbs, s.Interrupted = splitAbsorbs(absorbs), interrupted == 1
+	s.Absorbs, s.Interrupted, s.Trimmed = splitAbsorbs(absorbs), interrupted == 1, trimmed == 1
 	stream := Domain{}.Stream().Name
 	if object.Valid {
 		key, err := objstore.ParseKey(object.String)
@@ -425,6 +468,55 @@ func scanSession(row rowScanner) (Session, error) {
 		s.Ending = &e
 	}
 	return s, nil
+}
+
+// mediaStatement is the media objects one turn's row names, by its key, in
+// digest order.
+const mediaStatement = `
+	SELECT digest, object, object_hash, object_size, content_key
+	FROM executor_session_media INDEXED BY ` + mediaKey + `
+	WHERE agent_handle = ? AND turn_id = ? ORDER BY digest`
+
+// withMedia fills [Session.Media] of every session that names an object, one
+// point read of its turn's media each, in the caller's transaction: THE ONE
+// LOADER every read of a row goes through, so no reader opens a session's
+// frames without the media they splice in. A row naming no object names none.
+func withMedia(ctx context.Context, tx *sql.Tx, sessions []Session) error {
+	for i := range sessions {
+		if !sessions[i].HasObject() {
+			continue
+		}
+		media, err := mediaOf(ctx, tx, sessions[i].Handle, sessions[i].Turn)
+		if err != nil {
+			return err
+		}
+		sessions[i].Media = media
+	}
+	return nil
+}
+
+// mediaOf is the media objects one turn's row names.
+func mediaOf(ctx context.Context, tx *sql.Tx, handle, turn string) ([]executorkeep.MediaObject, error) {
+	rows, err := tx.QueryContext(ctx, mediaStatement, handle, turn)
+	if err != nil {
+		return nil, fmt.Errorf("executordomain: read %s's media of turn %s: %w", handle, turn, err)
+	}
+	var out []executorkeep.MediaObject
+	for rows.Next() {
+		var (
+			m         executorkeep.MediaObject
+			key, hash string
+		)
+		if err = rows.Scan(&m.Digest, &key, &hash, &m.Object.Size, &m.ContentKey); err == nil {
+			m.Object, err = parsedObject(key, hash, m.Object.Size)
+		}
+		if err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("executordomain: %s's turn %s names media %s: %w", handle, turn, m.Digest, err)
+		}
+		out = append(out, m)
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
 }
 
 // Head is what a conversation's next turn launches from: its head, the turn
@@ -639,9 +731,16 @@ func (r *Reader) Head(ctx context.Context, handle, conversationKey string,
 			// NO TURN HAS AN EMPTY ID, so with no head nothing is left out.
 			var headTurn string
 			if head != nil {
-				out.Session, headTurn = head, head.Turn
+				one := []Session{*head}
+				if headErr = withMedia(ctx, tx, one); headErr != nil {
+					return headErr
+				}
+				out.Session, headTurn = &one[0], head.Turn
 			}
 			endings, total, endingsErr := endingsOf(ctx, tx, handle, conversationKey, headTurn)
+			if endingsErr == nil {
+				endingsErr = withMedia(ctx, tx, endings)
+			}
 			if endingsErr != nil {
 				return endingsErr
 			}
@@ -684,7 +783,55 @@ func oneSession(ctx context.Context, tx *sql.Tx, query string, args ...any) (*Se
 	case err != nil:
 		return nil, err
 	}
+	if s.Summary, err = summaryOf(ctx, tx, s.Handle, s.Turn); err != nil {
+		return nil, err
+	}
 	return &s, nil
+}
+
+// summaryStatement is one turn's summary, by its key.
+const summaryStatement = `
+	SELECT object, object_hash, object_size, content_key, harness, session_id, kept_at, bytes, kept_bytes, cut
+	FROM executor_session_summaries INDEXED BY ` + summaryKey + ` WHERE agent_handle = ? AND turn_id = ?`
+
+// summaryOf is the summary handle's turn's row keeps, nil where it keeps none.
+// EVERY READ OF A ROW READS IT, one point read after the row's own query is
+// closed, so a Session read anywhere says whether its row keeps one.
+func summaryOf(ctx context.Context, tx *sql.Tx, handle, turn string) (*executorkeep.Summary, error) {
+	var (
+		object, hash string
+		keptAt       int64
+		cut          int
+		summary      executorkeep.Summary
+	)
+	err := tx.QueryRowContext(ctx, summaryStatement, handle, turn).Scan(&object, &hash, &summary.Object.Size,
+		&summary.ContentKey, &summary.Harness, &summary.Session, &keptAt, &summary.Bytes, &summary.Kept, &cut)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("executordomain: read %s's summary of turn %s: %w", handle, turn, err)
+	}
+	if summary.Object.Key, err = objstore.ParseKey(object); err != nil {
+		return nil, fmt.Errorf("executordomain: %s's summary of turn %s names %w", handle, turn, err)
+	}
+	if summary.Object.Hash, err = objstore.ParseHash(hash); err != nil {
+		return nil, fmt.Errorf("executordomain: %s's summary of turn %s: %w", handle, turn, err)
+	}
+	summary.At, summary.Cut = store.DecodeTime(keptAt), cut == 1
+	return &summary, nil
+}
+
+// withSummaries fills the summary of each of sessions ([summaryOf]).
+func withSummaries(ctx context.Context, tx *sql.Tx, sessions []Session) error {
+	for i := range sessions {
+		summary, err := summaryOf(ctx, tx, sessions[i].Handle, sessions[i].Turn)
+		if err != nil {
+			return err
+		}
+		sessions[i].Summary = summary
+	}
+	return nil
 }
 
 // boundedSessions is at most limit rows of query (which takes args, then the
@@ -706,6 +853,9 @@ func boundedSessions(ctx context.Context, tx *sql.Tx, query, count string, limit
 		out = append(out, s)
 	}
 	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, 0, err
+	}
+	if err = withSummaries(ctx, tx, out); err != nil {
 		return nil, 0, err
 	}
 	if len(out) < limit {
@@ -781,7 +931,12 @@ func (r *Reader) Session(ctx context.Context, handle, turn string,
 		if out, readErr = oneSession(ctx, tx, sessionStatement, handle, turn); readErr != nil || out == nil {
 			return readErr
 		}
-		heads, readErr := headsOf(ctx, tx, handle, []Session{*out})
+		one := []Session{*out}
+		if readErr = withMedia(ctx, tx, one); readErr != nil {
+			return readErr
+		}
+		out = &one[0]
+		heads, readErr := headsOf(ctx, tx, handle, one)
 		head = heads[out.ConversationKey]
 		return readErr
 	})
@@ -882,8 +1037,10 @@ func (r *Reader) Sessions(ctx context.Context, handle, cursor string, limit int,
 		if queryErr != nil {
 			return queryErr
 		}
-		var begun []int64
-		held := statelog.RowsOf(ctx)
+		var (
+			read  []Session
+			begun []int64
+		)
 		for rows.Next() {
 			var first int64
 			s, scanErr := scanSession(trailing{rows, &first})
@@ -891,13 +1048,25 @@ func (r *Reader) Sessions(ctx context.Context, handle, cursor string, limit int,
 				_ = rows.Close()
 				return scanErr
 			}
-			if !held.TakeEncoded(s) {
-				break
-			}
-			out.Sessions, begun = append(out.Sessions, s), append(begun, first)
+			read, begun = append(read, s), append(begun, first)
 		}
 		if closeErr := errors.Join(rows.Err(), rows.Close()); closeErr != nil {
 			return closeErr
+		}
+		// HELD TO ITS BYTES WITH ITS MEDIA AND ITS SUMMARY, which are read once
+		// the page's rows are closed: a row is what the answer carries of it.
+		if mediaErr := withMedia(ctx, tx, read); mediaErr != nil {
+			return mediaErr
+		}
+		if summaryErr := withSummaries(ctx, tx, read); summaryErr != nil {
+			return summaryErr
+		}
+		held := statelog.RowsOf(ctx)
+		for _, s := range read {
+			if !held.TakeEncoded(s) {
+				break
+			}
+			out.Sessions = append(out.Sessions, s)
 		}
 		// A PAGE CUT SHORT BY ITS BYTES goes on from its last kept row, as a
 		// full one does. Heads beside them are one entry per conversation of
@@ -907,7 +1076,7 @@ func (r *Reader) Sessions(ctx context.Context, handle, cursor string, limit int,
 			out.Sessions = out.Sessions[:limit]
 			out.Next = strconv.FormatInt(begun[limit-1], 10)
 		case held.Cut():
-			out.Next = strconv.FormatInt(begun[len(begun)-1], 10)
+			out.Next = strconv.FormatInt(begun[len(out.Sessions)-1], 10)
 		}
 		var headErr error
 		out.Heads, headErr = headsOf(ctx, tx, handle, out.Sessions)
@@ -1237,8 +1406,8 @@ func (r *Reader) HandlesPage(ctx context.Context, after string, fresh statelog.F
 	return out, nil
 }
 
-// SealedCount is how many sessions sit sealed under each keyring key: what a
-// keyring rotation waits out before it drops an old key.
+// SealedCount is how many session and media objects sit sealed under each
+// keyring key: what a keyring rotation waits out before it drops an old key.
 //
 // Waited out, never moved: an object is sealed once, by the capture that
 // uploaded it, and leaves only with its row. So a rotation keeps the old key
@@ -1252,38 +1421,61 @@ type SealedCount struct {
 // active.
 func (c SealedCount) Outside(active string) int { return c.Values.Outside(active) }
 
-// sealedKeysStatement counts the named objects by the key that sealed them.
-const sealedKeysStatement = `
+// sealedKeysStatement counts the named objects by the key that sealed them,
+// sealedMediaKeysStatement the media rows likewise (a media object two rows
+// name counts twice, which waits out the same key), and
+// sealedSummaryKeysStatement the named summaries.
+const (
+	sealedKeysStatement = `
 	SELECT content_key, COUNT(*) FROM executor_sessions
 	WHERE object IS NOT NULL AND length(content_key) > 0 GROUP BY content_key`
+	sealedMediaKeysStatement = `
+	SELECT content_key, COUNT(*) FROM executor_session_media
+	WHERE length(content_key) > 0 GROUP BY content_key`
+	sealedSummaryKeysStatement = `
+	SELECT content_key, COUNT(*) FROM executor_session_summaries
+	WHERE length(content_key) > 0 GROUP BY content_key`
+)
 
-// SealedKeys counts every session object this node's rows name, by the keyring
-// key its row says it is sealed under, fetching none of them.
+// SealedKeys counts every session, media and summary object this node's rows
+// name, by the keyring key its row says it is sealed under, fetching none: a
+// summary is sealed under the keyring as a session is.
 func (r *Reader) SealedKeys(ctx context.Context) (SealedCount, error) {
 	out := SealedCount{Values: secrets.KeyCounts{}}
 	_, err := r.log.Read(ctx, stale.Query(DomainScope(), true), func(tx *sql.Tx) error {
 		clear(out.Values)
-		rows, queryErr := tx.QueryContext(ctx, sealedKeysStatement)
-		if queryErr != nil {
-			return queryErr
-		}
-		for rows.Next() {
-			var (
-				key string
-				n   int
-			)
-			if scanErr := rows.Scan(&key, &n); scanErr != nil {
-				_ = rows.Close()
-				return scanErr
+		for _, statement := range []string{sealedKeysStatement, sealedMediaKeysStatement,
+			sealedSummaryKeysStatement} {
+			if countErr := countSealed(ctx, tx, statement, out.Values); countErr != nil {
+				return countErr
 			}
-			out.Values[key] += n
 		}
-		return errors.Join(rows.Err(), rows.Close())
+		return nil
 	})
 	if err != nil {
 		return SealedCount{}, fmt.Errorf("executordomain: count the sessions by key: %w", err)
 	}
 	return out, nil
+}
+
+// countSealed adds what statement counts by sealing key to counts.
+func countSealed(ctx context.Context, tx *sql.Tx, statement string, counts secrets.KeyCounts) error {
+	rows, err := tx.QueryContext(ctx, statement)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var (
+			key string
+			n   int
+		)
+		if scanErr := rows.Scan(&key, &n); scanErr != nil {
+			_ = rows.Close()
+			return scanErr
+		}
+		counts[key] += n
+	}
+	return errors.Join(rows.Err(), rows.Close())
 }
 
 // ---- the collector's estate -------------------------------------------- //

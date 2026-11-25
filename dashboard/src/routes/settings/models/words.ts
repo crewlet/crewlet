@@ -1,5 +1,5 @@
 /**
- * What every state on Settings › Models is called, and the words for what a
+ * What every state on Settings › Models & Fleets is called, and the words for what a
  * model is for.
  *
  * EXHAUSTIVE over each engine enum (`contract/models.ts`, held to the engine
@@ -119,12 +119,10 @@ export const ALARM_TONE: Record<ModelAlarmKind, "danger" | "warning"> = {
   llm_limit_waiting: "warning",
 };
 
-/** A category's words: its name, its one-word name over a seat's picker, what it covers, and the verb a summary uses. */
+/** A category's words: its name, and its one-word name. */
 interface CategoryWords {
   label: string;
   short: string;
-  hint: string;
-  verb: string;
 }
 
 /** The words with every field a non-empty literal: an empty one is `never`, which nothing satisfies. */
@@ -134,20 +132,14 @@ const WORDS = {
   coding: {
     label: "Coding",
     short: "Coding",
-    hint: "The seat's own work: writing code, running tools, and its onboarding pass.",
-    verb: "code",
   },
   reviews: {
     label: "Reviewing and delegations",
     short: "Reviews",
-    hint: "Checks a turn's result and runs the smaller jobs a seat hands off.",
-    verb: "review work and run delegated tasks",
   },
   routines: {
     label: "Routines and evaluations",
     short: "Routines",
-    hint: "Background memory and summaries, the checks that decide when onboarding is done, and sorting messages to a busy seat.",
-    verb: "run routines and evaluations",
   },
 } as const satisfies Record<JobCategory, CategoryWords>;
 
@@ -166,25 +158,19 @@ export function categoryTip(category: JobCategory): string {
 /** Ask Crewlet as a use of a model: company-wide, one key, no seats. */
 export const ASSISTANT_USE = {
   label: "Ask Crewlet",
-  hint: "Answers you in the dashboard.",
   tip: "Sets assistant.model. Ask Crewlet is the company's, so no seats are picked.",
 } as const;
 
 /** The Advisor: the model it explains its findings and writes its weekly summary with. */
 export const ADVISOR_USE = {
   label: "Advisor",
-  hint: "Explains what it finds worth changing in the company.",
   tip: "Sets advisor.model. The Advisor is the company's, so no seats are picked; its checks run without a model too, with no explanations.",
 } as const;
 
-/** Every seat job at once, and each helper that has no model yet. */
+/** Every seat job at once. */
 export const EVERYTHING = {
   label: "Everything",
   hint: "Use this model for every seat job: coding, reviewing and delegations, and routines and evaluations.",
-  helpers: "Also Ask Crewlet and the Advisor, where either has no model yet.",
-  tip: "Sets the seat's llm to this model and clears llm_review, llm_subagent, llm_auxiliary, llm_judge and llm_triage, so every seat job resolves to it.",
-  helpersTip:
-    "Sets assistant.model and advisor.model where either names none of the company's models; a helper on a model moves only by its own switch.",
 } as const;
 
 /**
@@ -217,5 +203,4 @@ export const either = (parts: readonly string[]) =>
 export const RUN_IN: Record<RunnerCellName, string> = {
   direct: "On this engine's host",
   container: "In a container",
-  e2b: "In E2B",
 };

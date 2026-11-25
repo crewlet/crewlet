@@ -50,7 +50,8 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 		return
 	}
 	in := &e.entryInputs
-	leases, records, err := e.statusListings(ctx)
+	leases, records, err := e.statusListings(ctx, coord.NodeStatusRead{MCP: len(c.Config.MCPServers) > 0,
+		Models: len(c.Config.Providers.LLM) > 0})
 	in.mu.Lock()
 	var statuses map[string]coord.NodeStatusRecord
 	if err != nil {
@@ -202,7 +203,7 @@ func variableOf(source config.CredentialSource) string {
 // storedRecords is the row of each secret this node resolves from, by name,
 // as its snapshot holds it ([secretView]): empty before one is installed. THE
 // SNAPSHOT, never the store, for the alarm beat ([Engine.storedAt]) and
-// Settings › Models ([Engine.LocalModels]) alike: what both judge is the value
+// Settings › Models & Fleets ([Engine.LocalModels]) alike: what both judge is the value
 // this node sends, and a listing every beat on every node would carry every
 // sealed value across its link (ADR-0175, "The secrets bucket declares its
 // class"). A value written with its reload deferred keeps its earlier row
@@ -258,8 +259,10 @@ func (e *Engine) namedEntries(c *Company) map[string]bool {
 			}
 		}
 	}
-	if key, err := c.Config.AssistantModel(); err == nil {
-		out[key] = true
+	if ref, err := c.Config.AssistantModel(); err == nil {
+		for _, key := range c.Config.FleetMembers(ref) {
+			out[key] = true
+		}
 	}
 	return out
 }

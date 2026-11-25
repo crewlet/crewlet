@@ -138,6 +138,10 @@ func storedObject(t *testing.T, backend *memobj.Backend, name string) []byte {
 // silentObjects is an object store that does not answer.
 type silentObjects struct{}
 
+func (silentObjects) OpenSummary(context.Context, executordomain.Session) (io.ReadCloser, error) {
+	return nil, errors.New("objstore: the bucket did not answer within its budget")
+}
+
 func (silentObjects) Open(context.Context, executordomain.Session) (io.ReadCloser, error) {
 	return nil, errors.New("objstore: the bucket did not answer within its budget")
 }
@@ -184,7 +188,7 @@ func TestEveryReaderOfASessionSaysItsStateInOneSetOfWords(t *testing.T) {
 		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeFailed}}
 	unkept := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), CapturedAt: when,
 		LaunchSeq: 1, CaptureSeq: 1, EndedAt: when, Ending: &executorkeep.Ending{
-			Outcome: executorkeep.OutcomeFailed, Unkept: &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1,
+			Outcome: executorkeep.OutcomeFailed, Unkept: &executorkeep.Unkept{Loss: executorkeep.LossStoreRefused, LaunchSeq: 2, CaptureSeq: 1,
 				Reason: "refused by a store that quoted ghp_" + strings.Repeat("Qx7Rb2", 6)}}}
 	rows := &stubRows{rows: []executordomain.Session{missing, tampered, malformed, unsupported, nothing,
 		unkept}}
@@ -255,6 +259,11 @@ func TestEveryReaderOfASessionSaysItsStateInOneSetOfWords(t *testing.T) {
 // answers.
 type waitingObjects struct{}
 
+func (waitingObjects) OpenSummary(ctx context.Context, _ executordomain.Session) (io.ReadCloser, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 func (waitingObjects) Open(ctx context.Context, _ executordomain.Session) (io.ReadCloser, error) {
 	<-ctx.Done()
 	return nil, ctx.Err()
@@ -264,6 +273,10 @@ func (waitingObjects) Open(ctx context.Context, _ executordomain.Session) (io.Re
 type failingObjects struct{}
 
 func (failingObjects) Open(context.Context, executordomain.Session) (io.ReadCloser, error) {
+	return nil, errors.New("the store refused the read")
+}
+
+func (failingObjects) OpenSummary(context.Context, executordomain.Session) (io.ReadCloser, error) {
 	return nil, errors.New("the store refused the read")
 }
 

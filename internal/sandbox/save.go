@@ -29,8 +29,9 @@ type SessionSaver interface {
 	// Streamed is how far the event stream of box's job has run, in bytes.
 	Streamed(ctx context.Context, box Sandbox) (int64, error)
 	// PackSave packs a save of box's session for taker, at a path of its
-	// own; a zero archive where the box holds no session yet, and an error
-	// wrapping [ErrSaveNoRoom] where the box lacks the memory to pack it.
+	// own; a zero archive where the box holds no session yet, an error
+	// wrapping [ErrSaveNoRoom] where the box lacks the memory to pack it, and
+	// an [UnrestorableError], nothing packed, where no box continues it.
 	// session is a minting harness's bound session ([SessionTake.Session]),
 	// and a save whose box names another is refused, as a take is.
 	PackSave(ctx context.Context, box Sandbox, taker, session string) (SessionArchive, error)
@@ -56,11 +57,11 @@ const (
 const saveRetryCeiling = time.Hour
 
 // maxConcurrentSaves is how many saves a node takes at once, each from its
-// offer to its keep's end, for both its waiters together: it bounds the packs
-// and the scrubs (a pack of 1 to 20 MiB takes 0.04 to 0.46 s of a core), and
-// sizes the room every spool shares ([spoolRoomBytes]). A run's final
-// captures take none. A judgment for E2B and a container's hop, which the
-// saved line's took_s measures.
+// offer to its keep's end, for its waiter's offers and its drain's saves
+// together: it bounds the packs and the scrubs (a pack of 1 to 20 MiB takes
+// 0.04 to 0.46 s of a core), and sizes the room every spool shares
+// ([spoolRoomBytes]). A run's final captures take none. A judgment for a
+// container's exec hop, which the saved line's took_s measures.
 const maxConcurrentSaves = 4
 
 // drainSaveWait is the longest a draining node saves its Direct jobs'
@@ -116,6 +117,9 @@ type saveMemo struct {
 	running *saveRun
 	// logged is every kind of failure already logged at Warn for the job.
 	logged map[string]bool
+	// unrestorable says a save of the job found its session one no box of this
+	// build continues ([saveUnrestorable]): no save of it is offered again.
+	unrestorable bool
 }
 
 // of reports whether m is the memory of run's job and box.
@@ -141,8 +145,9 @@ const (
 	saveNotMoved saveClass = "not_moved"
 	// saveGone: the row is gone, or names another job or box.
 	saveGone saveClass = "gone"
-	// saveStoodDown: the duty, the drain's end or the coordinator ended the
-	// task before its reservation, or the coordinator stopped before its keep.
+	// saveStoodDown: its offerer's stop, the drain's end or the coordinator
+	// ended the task before its reservation, or the coordinator stopped
+	// before its keep.
 	saveStoodDown saveClass = "stood_down"
 	// saveNotYet: something the save needs is not there now (the box, the
 	// license, the policy, the ledger, the taker, the box's room for its
@@ -154,6 +159,10 @@ const (
 	saveNothing saveClass = "nothing"
 	// saveFailed: the save was tried and failed.
 	saveFailed saveClass = "failed"
+	// saveUnrestorable: no box of this build continues the job's session
+	// ([UnrestorableError]), and none will while the job runs: the release that
+	// wrote it is the record's, made before its harness started.
+	saveUnrestorable saveClass = "unrestorable"
 	// saveUnresolved: the keep's record was sent and not answered.
 	saveUnresolved saveClass = "unresolved"
 	// saveLanded: the keep landed.
@@ -163,7 +172,7 @@ const (
 	saveRaced saveClass = "raced"
 )
 
-// saveJob is what one save task is handed beside its stint: the run as its
+// saveJob is what one save task is handed beside its offerer: the run as its
 // offer found it, and what this node's memory says of the run's saves.
 type saveJob struct {
 	run PendingRun
@@ -216,6 +225,10 @@ type saveOutcome struct {
 	// "spool" for a node whose spools filled their room ([spoolRoomBytes]):
 	// what no stamp's line logs. "" for every other outcome.
 	unplaced string
+	// loss is the unplaced failure in the one vocabulary where it is not
+	// [executorkeep.LossKeepFailed]: a session past its bound or one no box
+	// continues, a spool with no room.
+	loss executorkeep.Loss
 }
 
 // saveTaken is what a save task holds once its session is in hand.
@@ -239,10 +252,10 @@ type saveTaken struct {
 // counted it in c.inflight; it is counted there exactly once until its keep
 // starts, and with the keeps from then on, so a stop that comes first cuts it
 // within the stop's grace and one that comes after gives its keep the keeps'
-// drain. It runs on ctx, and duty bounds its box phase
+// drain. It runs on ctx, and phase bounds its box phase
 // ([Coordinator.saveContexts]). It writes nothing to memory: its outcome is
 // its spawner's.
-func (c *Coordinator) saveTask(ctx, duty context.Context, job saveJob) saveOutcome {
+func (c *Coordinator) saveTask(ctx, phase context.Context, job saveJob) saveOutcome {
 	inflight := sync.OnceFunc(c.inflight.Done)
 	defer inflight()
 	passed := sync.OnceFunc(func() {
@@ -254,7 +267,7 @@ func (c *Coordinator) saveTask(ctx, duty context.Context, job saveJob) saveOutco
 	start := c.now()
 	point := job.point()
 	out := saveOutcome{streamed: -1}
-	in, out := c.saveInHand(ctx, duty, job, out)
+	in, out := c.saveInHand(ctx, phase, job, out)
 	if in != nil {
 		// ITS ROOM BACK ONCE ITS KEEP HAS ENDED, as its spool's removal gives
 		// it, or where none was spooled.
@@ -276,47 +289,48 @@ func (c *Coordinator) saveTask(ctx, duty context.Context, job saveJob) saveOutco
 }
 
 // saveContexts is what a save task runs on: life, the coordinator's own
-// lifetime, which its take and keep go on under past its stint; and duty,
-// which bounds its box phase and ends with stint, a drain's end (drainEnd,
-// zero for none) or the coordinator. cancel ends duty.
-func (c *Coordinator) saveContexts(stint context.Context, drainEnd time.Time) (life, duty context.Context,
+// lifetime, which its take and keep go on under past its offerer; and phase,
+// which bounds its box phase and ends with offerer (the life of the waiter that
+// offered it), a drain's end (drainEnd, zero for none) or the coordinator.
+// cancel ends phase.
+func (c *Coordinator) saveContexts(offerer context.Context, drainEnd time.Time) (life, phase context.Context,
 	cancel context.CancelFunc) {
 
-	duty, endDuty := context.WithCancel(c.life)
-	stop := context.AfterFunc(stint, endDuty)
+	phase, endPhase := context.WithCancel(c.life)
+	stop := context.AfterFunc(offerer, endPhase)
 	cancel = func() {
 		stop()
-		endDuty()
+		endPhase()
 	}
 	if !drainEnd.IsZero() {
 		var endDrain context.CancelFunc
-		duty, endDrain = context.WithDeadline(duty, drainEnd)
-		endStint := cancel
+		phase, endDrain = context.WithDeadline(phase, drainEnd)
+		endOffered := cancel
 		cancel = func() {
 			endDrain()
-			endStint()
+			endOffered()
 		}
 	}
-	return c.life, duty, cancel
+	return c.life, phase, cancel
 }
 
 // saveInHand is a save's steps up to its charge: the box attached, its stream,
 // the one read of the row, the policy, the seat's room, what the box was
 // handed, the taker, the pack, and the charge, on ctx, the box's steps under
-// duty. Nil, with the outcome, where the task ends there; the pack is
+// phase. Nil, with the outcome, where the task ends there; the pack is
 // released from its box on every such end.
-func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out saveOutcome) (*saveTaken,
+func (c *Coordinator) saveInHand(ctx, phase context.Context, job saveJob, out saveOutcome) (*saveTaken,
 	saveOutcome) {
 
 	run := job.run
 	packed := false
 	var spooling, scrubbing *spoolHold
-	// STOOD DOWN where the coordinator stopped, or the duty ended while the
+	// STOOD DOWN where the coordinator stopped, or the phase ended while the
 	// box phase ran: past the pack the save is the coordinator's.
 	end := func(class saveClass, why string) (*saveTaken, saveOutcome) {
 		spooling.release()
 		scrubbing.release()
-		if (class == saveNotYet || class == saveFailed) && (ctx.Err() != nil || (!packed && duty.Err() != nil)) {
+		if (class == saveNotYet || class == saveFailed) && (ctx.Err() != nil || (!packed && phase.Err() != nil)) {
 			class = saveStoodDown
 		}
 		out.class, out.why = class, why
@@ -330,7 +344,7 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 	if manager == nil {
 		return end(saveNotYet, "this node has no sandbox manager")
 	}
-	box, runner, err := manager.Attach(duty, Placement(run.Placement), run.SandboxID, run.Harness)
+	box, runner, err := manager.Attach(phase, Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {
 		return end(saveNotYet, fmt.Sprintf("the run's box could not be attached: %v", err))
 	}
@@ -339,14 +353,14 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 		return end(saveNotYet, "the run's harness takes no save of a running job")
 	}
 	// RULE 6: an unreadable stream reads as moved, and the pack is the test.
-	if streamed, streamErr := saver.Streamed(duty, box); streamErr == nil {
+	if streamed, streamErr := saver.Streamed(phase, box); streamErr == nil {
 		out.streamed = streamed
 		if streamed <= job.mark {
 			return end(saveNotMoved, "the job's stream has not moved since its last save here")
 		}
 	}
-	if duty.Err() != nil {
-		return end(saveStoodDown, "the duty ended before the save read its row")
+	if phase.Err() != nil {
+		return end(saveStoodDown, "the box phase ended before the save read its row")
 	}
 	row, class, why := c.saveRow(ctx, job)
 	if class != "" {
@@ -389,20 +403,24 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 	// final take the room saves never fill ([spoolRoomBytes]). The scrub's
 	// spool's part is split off at once ([takeRoomBytes]).
 	if spooling = c.trySpoolRoom(takeRoomBytes); spooling == nil {
-		out.unplaced = "spool"
+		out.unplaced, out.loss = "spool", executorkeep.LossNoSpoolRoom
 		return end(saveNotYet, fmt.Sprintf("this node's session spools fill their room (%d bytes)",
 			spoolRoomBytes))
 	}
 	scrubbing = spooling.split(takeRoomBytes - executorkeep.SealedMaxBytes)
 	// ONE PACK AT A TIME in a box that shares the node's memory
 	// ([Coordinator.sharedPack]), given back as the pack returns.
-	give, err := c.packSlot(duty, row)
+	give, err := c.packSlot(phase, row)
 	if err != nil {
 		return end(saveStoodDown, err.Error())
 	}
-	archive, err := saver.PackSave(duty, box, hold.holder, row.Launch.Minted)
+	archive, err := saver.PackSave(phase, box, hold.holder, row.Launch.Minted)
 	give()
 	switch {
+	case errors.As(err, new(*UnrestorableError)):
+		loss, why := takeRefusal(phase, err)
+		out.unplaced, out.loss = "pack", loss
+		return end(saveUnrestorable, why)
 	case errors.Is(err, ErrSaveNoRoom):
 		out.unplaced = "room"
 		return end(saveNotYet, fmt.Sprintf("the box's session was not packed: %v", err))
@@ -453,7 +471,7 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 // where the save ends here.
 func (c *Coordinator) saveRow(ctx context.Context, job saveJob) (PendingRun, saveClass, string) {
 	run := job.run
-	read, cancel := c.rowContext(ctx, c.recordBudget)
+	read, cancel := c.rowReadContext(ctx, c.recordBudget)
 	row, found, err := c.pending.Get(read, run.TurnID)
 	cancel()
 	ours := func(r PendingRun) bool {
@@ -502,7 +520,7 @@ func (c *Coordinator) savePolicy(ctx context.Context) (SessionPolicy, string) {
 // marked incomplete (which stays so for the launch) costs the box nothing;
 // the scrub's own values are read after the pack.
 func (c *Coordinator) saveHanded(ctx context.Context, row PendingRun) string {
-	read, cancel := c.rowContext(ctx, c.recordBudget)
+	read, cancel := c.rowReadContext(ctx, c.recordBudget)
 	defer cancel()
 	sealed, err := c.pending.Handed(read, row)
 	switch {
@@ -626,7 +644,12 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	switch {
 	case err != nil:
 		out.unplaced = "take"
-		return end(saveFailed, takeRefusal(take, err))
+		loss, why := takeRefusal(take, err)
+		out.loss = loss
+		if errors.As(err, new(*UnrestorableError)) {
+			return end(saveUnrestorable, why)
+		}
+		return end(saveFailed, why)
 	case taken.Body == nil:
 		out.unplaced = "take"
 		return end(saveFailed, "the save was gone from its box when it was taken")
@@ -658,18 +681,18 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	spooled, err := c.spool(take, row, stamp, taken, &savePlaces{run: row, resumeRead: taken.ResumeRead,
 		needsResumeRead: placesWithResumeRead(in.saver)}, in.room)
 	if err != nil {
-		why := takeRefusal(take, err)
+		loss, why := takeRefusal(take, err)
 		if errors.Is(err, errSpoolPastHold) {
 			why = fmt.Sprintf("the session sealed is past the %d bytes its seat's save ledger counted for it",
 				in.counted)
 		}
-		c.finishCapture(take, by, row, stamp, CaptureRefused, why)
+		c.finishCapture(take, by, row, stamp, CaptureRefused, loss, why)
 		return end(saveFailed, why)
 	}
 	c.spooledWhole(take, by, row, spooled, taken, 0)
 	if !c.joinKeeps() {
 		// A SAVE NEVER STANDS BY, so its spool is refused, never withdrawn.
-		c.finishCapture(take, time.Time{}, spooled.run, spooled.stamp, CaptureRefused,
+		c.finishCapture(take, time.Time{}, spooled.run, spooled.stamp, CaptureRefused, executorkeep.LossKeepFailed,
 			"the node stopped before the session could be uploaded")
 		spooled.remove()
 		return end(saveStoodDown, "the node stopped before the save could be kept")
@@ -699,18 +722,19 @@ func (c *Coordinator) keepSave(spooled *spooledCapture) *SessionKept {
 	return c.keepCapture(c.keepLife, spooled)
 }
 
-// SaveRunning is offered run's box, which a waiter's poll found running under
-// stint, for a save of its job's session as it works ([WaiterOptions.Save]).
+// SaveRunning is offered run's box, which a waiter's poll found running while
+// offerer, that waiter's life, lasts, for a save of its job's session as it
+// works ([WaiterOptions.Save]).
 // It decides from memory alone and returns at once: a save that is due and
 // finds a slot free runs as a task of the coordinator's own lifetime (the
 // package doc's "A save is offered by the poll, from memory").
-func (c *Coordinator) SaveRunning(stint context.Context, run PendingRun, runner Runner) {
-	c.offerSave(stint, run, runner)
+func (c *Coordinator) SaveRunning(offerer context.Context, run PendingRun, runner Runner) {
+	c.offerSave(offerer, run, runner)
 }
 
 // offerSave is [Coordinator.SaveRunning], answering the task it started, nil
 // for none.
-func (c *Coordinator) offerSave(stint context.Context, run PendingRun, runner Runner) *saveRun {
+func (c *Coordinator) offerSave(offerer context.Context, run PendingRun, runner Runner) *saveRun {
 	// RULE 1, saves are on: a save names its taker and is charged to a ledger.
 	if !c.capturing() || c.taker == nil || c.saves.ledger == nil {
 		return nil
@@ -719,9 +743,9 @@ func (c *Coordinator) offerSave(stint context.Context, run PendingRun, runner Ru
 	if saver, ok := runner.(SessionSaver); !ok || !saver.Saves() {
 		return nil
 	}
-	// RULE 3, the duty's stint is live, the node is not draining and no task
-	// of the turn runs here.
-	if stint == nil || stint.Err() != nil {
+	// RULE 3, the offering waiter lives, the node is not draining and no
+	// task of the turn runs here.
+	if offerer == nil || offerer.Err() != nil {
 		return nil
 	}
 	now, interval := c.now(), c.keep.SaveInterval()
@@ -731,9 +755,10 @@ func (c *Coordinator) offerSave(stint context.Context, run PendingRun, runner Ru
 		return nil
 	}
 	memo := c.saves.memoOf(run, now, interval)
-	// RULE 4, due; RULE 5, a slot free now, or the next poll offers again.
+	// RULE 4, due, of a session some box continues; RULE 5, a slot free now, or
+	// the next poll offers again.
 	due := memo.due(interval)
-	if now.Before(due) {
+	if now.Before(due) || memo.unrestorable {
 		c.saves.mu.Unlock()
 		return nil
 	}
@@ -748,18 +773,18 @@ func (c *Coordinator) offerSave(stint context.Context, run PendingRun, runner Ru
 	job := saveJob{run: run, due: due, mark: memo.mark, interval: interval, last: memo.last,
 		counted: memo.counted, taken: running.taken}
 	c.saves.mu.Unlock()
-	return c.spawnSave(stint, job, memo, running)
+	return c.spawnSave(offerer, job, memo, running)
 }
 
-// spawnSave starts job's task under stint, counted in c.inflight, unless the
+// spawnSave starts job's task under offerer, counted in c.inflight, unless the
 // coordinator has stopped: then it gives back the slot its caller took and
 // clears memo's task, and answers nil.
-func (c *Coordinator) spawnSave(stint context.Context, job saveJob, memo *saveMemo, running *saveRun) *saveRun {
+func (c *Coordinator) spawnSave(offerer context.Context, job saveJob, memo *saveMemo, running *saveRun) *saveRun {
 	c.mu.Lock()
 	closed := c.closed
 	if !closed {
 		c.inflight.Add(1)
-		go c.runSave(stint, job, memo, running)
+		go c.runSave(offerer, job, memo, running)
 	}
 	c.mu.Unlock()
 	if closed {
@@ -845,7 +870,8 @@ type hostedSave struct {
 // hostedSaves is every job a drain saves, most stale first by this node's
 // memory of its last save, else by the later of its launch's start and its
 // newest capture: running, its ending undecided, its box a Direct one this
-// node launched, its harness one that saves.
+// node launched, its harness one that saves, and no save of it here found its
+// session one no box continues ([saveUnrestorable]).
 func (c *Coordinator) hostedSaves(ctx context.Context) []hostedSave {
 	manager := c.mgr()
 	if manager == nil {
@@ -853,7 +879,7 @@ func (c *Coordinator) hostedSaves(ctx context.Context) []hostedSave {
 	}
 	runs, err := c.pending.ListActive(ctx)
 	if err != nil {
-		log.WarnContext(ctx, "executor_session_not_kept", "point", drainSavePoint,
+		sayNotKept(ctx, slog.LevelWarn, executorkeep.LossKeepFailed, "", "point", drainSavePoint,
 			"detail", fmt.Sprintf("this node's runs could not be listed: %v", err))
 		return nil
 	}
@@ -871,6 +897,9 @@ func (c *Coordinator) hostedSaves(ctx context.Context) []hostedSave {
 		}
 		job := hostedSave{run: run, stale: lastSaved(run, now)}
 		if memo := c.saves.memos[run.TurnID]; memo != nil {
+			if memo.of(run) && memo.unrestorable {
+				continue
+			}
 			job.running = memo.running
 			if memo.of(run) {
 				job.stale = memo.last
@@ -907,20 +936,20 @@ func (c *Coordinator) drainSave(wait context.Context, run PendingRun, begun, dra
 	job := saveJob{run: run, drainEnd: drainEnd, due: begun, mark: memo.mark, interval: interval, last: memo.last,
 		counted: memo.counted, taken: running.taken}
 	c.saves.mu.Unlock()
-	// NO STINT: a drain's save ends its box phase at drainEnd or the
+	// NO OFFERER: a drain's save ends its box phase at drainEnd or the
 	// coordinator's stop, never with the wait that picked it.
 	return c.spawnSave(context.WithoutCancel(wait), job, memo, running)
 }
 
-// runSave runs one save task its offer spawned under stint, then writes what
+// runSave runs one save task its offer spawned under offerer, then writes what
 // came of it to memo, gives its slot back once its keep has ended, and logs a
 // failure no stamp's line names, all before it closes running.ended: a waiter
 // on ended may move the clock or the memory on.
-func (c *Coordinator) runSave(stint context.Context, job saveJob, memo *saveMemo, running *saveRun) {
+func (c *Coordinator) runSave(offerer context.Context, job saveJob, memo *saveMemo, running *saveRun) {
 	start := c.now()
-	life, duty, endDuty := c.saveContexts(stint, job.drainEnd)
-	out := c.saveTask(life, duty, job)
-	endDuty()
+	life, phase, endPhase := c.saveContexts(offerer, job.drainEnd)
+	out := c.saveTask(life, phase, job)
+	endPhase()
 	c.saves.mu.Lock()
 	memo.running = nil
 	if out.counted > 0 {
@@ -939,6 +968,8 @@ func (c *Coordinator) runSave(stint context.Context, job saveJob, memo *saveMemo
 	case saveFailed:
 		memo.last = start
 		memo.failures++
+	case saveUnrestorable:
+		memo.last, memo.unrestorable = start, true
 	case saveLanded:
 		memo.last, memo.failures, memo.mark = start, 0, out.streamed
 	}
@@ -957,7 +988,11 @@ func (c *Coordinator) runSave(stint context.Context, job saveJob, memo *saveMemo
 	if unlogged {
 		level = slog.LevelWarn
 	}
-	log.Log(life, level, "executor_session_not_kept", "turn_id", job.run.TurnID, "point", job.point(),
+	loss := out.loss
+	if loss == "" {
+		loss = executorkeep.LossKeepFailed
+	}
+	sayNotKept(life, level, loss, job.run.TurnID, "point", job.point(),
 		"failures", failures, "next_due_s", nextDue.Seconds(), "detail", out.why)
 }
 

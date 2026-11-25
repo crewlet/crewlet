@@ -71,6 +71,7 @@ import { PageFailed, QueryState, TryAgain } from "~/components/common.tsx";
 import { conversationLabel } from "~/lib/conversationKey.ts";
 import { fmtBytes, fmtDateTime, fmtExact, relTime } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdownText.ts";
+import { lossWords } from "~/lib/sessionLoss.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -130,6 +131,7 @@ export const STATE_TITLES: Record<Exclude<TranscriptState, "read">, string> = {
   unreadable: "The session does not open",
   malformed: "The session is not a readable archive",
   unsupported: "This build does not read this session",
+  summary: "No session was kept; its newest summary was",
 };
 
 /**
@@ -487,7 +489,14 @@ function Transcript({
                 </Button>
               </div>
             )}
-            {first.state !== "read" ? (
+            {first.state === "summary" && (
+              // A SESSION NOT KEPT WHOSE NEWEST SUMMARY WAS: why the session
+              // is not, and the summary below as the transcript's one entry.
+              <Callout variant="info">
+                <strong>{STATE_TITLES.summary}.</strong> {first.why}
+              </Callout>
+            )}
+            {first.state !== "read" && first.state !== "summary" ? (
               <Callout variant="warning">
                 <strong>{STATE_TITLES[first.state]}.</strong> {first.why}
               </Callout>
@@ -776,7 +785,10 @@ export function continuableWords(row: ExecutorSessionRow): string {
  * session it went on past (`kept_note`) under when it was captured, so the
  * capture is never read as all the turn did. That note names the newer capture
  * that was not kept and why, so the line saying the newest session was not
- * kept is drawn only where no note says it: the reason once.
+ * kept is drawn only where no note says it: the reason once, its loss in the
+ * engine's clause. What the turn's runs did not continue is the engine's
+ * sentence (`not_continued_note`), drawn as sent, and so is a kept session's
+ * trim (`trimmed_note`), under the size it was kept at.
  */
 export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
   const ending = row.ending;
@@ -802,8 +814,11 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
         {row.harness_version ? ` ${row.harness_version}` : ""}
         {row.captured_at ? ` · captured ${fmtDateTime(row.captured_at)}` : ""}
         {row.ended_at ? ` · ended ${fmtDateTime(row.ended_at)}` : ""}
-        {row.kept ? ` · ${fmtBytes(row.object_bytes)} kept` : ""}
+        {row.kept ? ` · ${fmtBytes(row.object_bytes + row.media_bytes)} kept` : ""}
+        {row.kept && row.media_bytes > 0 ? `, ${fmtBytes(row.media_bytes)} of it media` : ""}
+        {row.summary_kept ? ` · ${fmtBytes(row.summary_bytes)} summary kept` : ""}
       </p>
+      {row.trimmed_note && <p className="t-caption">{row.trimmed_note}</p>}
       {note && <p className="t-caption">{note}</p>}
       {row.base_turn && <HandedSession turn={row.base_turn} />}
       <p className="t-caption">{continuableWords(row)}</p>
@@ -822,11 +837,10 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
       )}
       {ending?.unkept && !note && (
         <p className="t-caption">
-          {unkept
-            ? `Its newest session was not kept: ${unkept}.`
-            : "Its newest session was not kept."}
+          {`Its newest session was not kept: ${lossWords(ending.unkept.loss)}${unkept ? `; ${unkept}` : ""}.`}
         </p>
       )}
+      {row.not_continued_note && <p className="t-caption">{row.not_continued_note}</p>}
       {ending?.answer && <p className="t-caption">It answered a colleague: {ending.answer}.</p>}
       {ending?.completed_work && <p className="t-body">{ending.completed_work}</p>}
       {ending?.blocked_on && <p className="t-caption">Blocked on: {ending.blocked_on}</p>}
@@ -865,8 +879,8 @@ function HandedSession({ turn }: { turn: string }) {
 
 /**
  * One entry of a transcript: who it is from, the subagent whose transcript
- * holds it, the tool, a failure marked, when — and its text, an opening marked
- * as one where the entry was cut to its bound.
+ * holds it, the tool, a failure marked, when — and its text, an opening (or a
+ * kept summary's end) marked as one where the entry was cut to its bound.
  *
  * A CALL'S INPUT AND A TOOL'S OUTPUT ARE BLOCKS, scrolling within the ceiling
  * every block in the shell's scroller takes, because their whitespace is the
@@ -887,6 +901,7 @@ export function TranscriptEntryView({ entry }: { entry: TranscriptEntry }) {
     );
   }
   const block = entry.kind === "tool_call" || entry.kind === "tool_result";
+  const part = entry.tail ? "The end alone" : "The opening alone";
   return (
     <div className="thread-entry">
       <div className="row gap-1 wrap">
@@ -913,7 +928,9 @@ export function TranscriptEntryView({ entry }: { entry: TranscriptEntry }) {
         <p className="prose">{entry.text}</p>
       )}
       {entry.cut && (
-        <p className="t-caption">The opening alone: the whole entry is {fmtBytes(entry.bytes)}.</p>
+        <p className="t-caption">
+          {part}: the whole entry is {fmtBytes(entry.bytes)}.
+        </p>
       )}
     </div>
   );

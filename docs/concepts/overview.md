@@ -42,7 +42,7 @@ The hierarchy is informational and delegation-routing, with no special upward es
 
 - **Event-driven**: agents are reactive; events trigger agent work, which produces events
 - **Concurrent by default**: a seat's turn, its MCP children and the node's own duties run in parallel; every shared structure is checked under the race detector
-- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM and a place for its runs are required: tracker, knowledge base and chat ship with the engine, and a [code sandbox](code-sandbox.md) cell of `local: {}` with `default_run_in: direct` is the engine host itself. So one signed-in Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Copilot, Grok Build, Muse Code, Kimi Code, Hermes Agent or Pi plus that cell runs a company, with nothing to sign up for ([Choosing Your Stack](../getting-started/choosing-your-stack.md#code-sandbox-where-every-executor-runs))
+- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM and a place for its runs are required: tracker, knowledge base and chat ship with the engine, and a [code sandbox](code-sandbox.md) cell of `local: {}` with `default_run_in: direct` is the engine host itself. So one signed-in Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor Agent, Copilot, Grok Build, Muse Code, Kimi Code, Hermes Agent or Pi plus that cell runs a company, with nothing to sign up for ([Choosing Your Stack](../getting-started/choosing-your-stack.md#code-sandbox-where-every-executor-runs))
 - **Config-driven**: a company is a YAML document, validated against a schema generated from the types the engine runs on
 - **Extension-oriented**: anything beyond running the company is built outside the process
 - **Observable**: structured logging, OpenTelemetry tracing and an event store the dashboard reads, from day one
@@ -60,7 +60,7 @@ flowchart TB
         direction TB
         API["<b>ingress — API + dashboard</b><br/>webhook routes · REST · /config · /secrets<br/>/ws/stream · OTLP ingest · /health · /ready"]
         SEAT["<b>seats — the agents</b><br/>Seat host: leases, mailboxes, MCP children<br/>Turn engine: executor → reviewer, one per running turn<br/>Post-turn reflection, where the seat's memory is held<br/>Tool registry: builtins · per-role MCP · a2a_ask<br/>Provider chain: fallback models, each a harness"]
-        DUTY["<b>workers: company-wide singletons</b><br/>scheduler · sandbox waiter · maintenance sweep · learning passes<br/>log trim · embeddings · identity sweep · object collector<br/>chat prune · trash reaper · integration reconcile · code retention<br/>delegated decisions sweep · atlas collect<br/>atlas wake"]
+        DUTY["<b>workers: company-wide singletons</b><br/>scheduler · launch-node watch · maintenance sweep · learning passes<br/>log trim · embeddings · identity sweep · object collector<br/>chat prune · trash reaper · integration reconcile · code retention<br/>delegated decisions sweep · atlas collect<br/>atlas wake"]
         CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · observability edge · chat hub<br/>usage publisher, on a data node"]
     end
 

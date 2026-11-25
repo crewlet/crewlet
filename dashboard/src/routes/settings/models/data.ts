@@ -1,5 +1,5 @@
 /**
- * What Settings › Models reads, and the one view of it every part of the page
+ * What Settings › Models & Fleets reads, and the one view of it every part of the page
  * draws: each model's condition and uses as the engine reports them
  * (`llm_entries`), joined for an admin to the model as the company document
  * writes it (`config`), which an edit starts from.
@@ -25,6 +25,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { usesOf, type Uses } from "~/lib/modelUses.ts";
 import { nameKey, useModelNames } from "./modelNames.ts";
 import type { AgentRow, CompanyDocument, LogRefusal, QueryRefusal } from "~/protocol/types.ts";
+import type { FleetsAnswer } from "~/protocol/fleets.ts";
 import type {
   MemberModelEntry,
   ModelAlarm,
@@ -86,6 +87,8 @@ export interface ModelsData {
   seats: Seat[];
   /** The five model alarms as this node last evaluated them; empty for a member. */
   alarms: ModelAlarm[];
+  /** The LLM fleets and what each seat and helper runs on; null until the engine answers. */
+  fleets: FleetsAnswer | null;
   /** The live nodes, and whether each reported its models. */
   nodes: ModelNode[];
   /** The node that answered. */
@@ -206,6 +209,10 @@ export function useModelsData(): ModelsData {
     refetchOnFocus: true,
   });
   const config = useQuery("config", undefined, { enabled: admin });
+  const fleets = useQuery("llm_fleets", undefined, {
+    pollMs: MODELS_POLL_MS,
+    refetchOnFocus: true,
+  });
   const org = useOrg();
   const agents = useAgents();
 
@@ -214,6 +221,7 @@ export function useModelsData(): ModelsData {
   const limits = limitsKey(agents);
   const { refetch: refetchEntries } = entries;
   const { refetch: refetchConfig } = config;
+  const { refetch: refetchFleets } = fleets;
   const seen = useRef(limits);
   useEffect(() => {
     if (seen.current === limits) return;
@@ -230,39 +238,46 @@ export function useModelsData(): ModelsData {
   const advisor = useMemo(() => advisorOf(doc, models), [doc, models]);
   const reload = useCallback(() => {
     refetchEntries();
+    refetchFleets();
     if (admin) refetchConfig();
-  }, [admin, refetchEntries, refetchConfig]);
+  }, [admin, refetchEntries, refetchFleets, refetchConfig]);
 
+  const failed = failedOf(entries, fleets, config);
   return {
     admin,
     doc,
     models,
     seats,
     alarms: answer?.reading === "admin" ? (answer.alarms ?? []) : [],
+    fleets: fleets.data ?? null,
     nodes: answer?.nodes ?? [],
     node: answer?.node ?? "",
     assistant,
     advisor,
     executors: answer?.executor_harnesses ?? NO_EXECUTORS,
-    loading: (entries.loading && !entries.data) || (admin && config.loading && !config.data),
-    error: entries.error
-      ? (entries.detail ?? entries.error)
-      : config.error
-        ? (config.detail ?? config.error)
-        : null,
-    failed: entries.error
-      ? {
-          error: entries.error,
-          refusal: entries.refusal,
-          ...(entries.detail ? { detail: entries.detail } : {}),
-        }
-      : config.error
-        ? {
-            error: config.error,
-            refusal: config.refusal,
-            ...(config.detail ? { detail: config.detail } : {}),
-          }
-        : null,
+    loading:
+      (entries.loading && !entries.data) ||
+      (fleets.loading && !fleets.data) ||
+      (admin && config.loading && !config.data),
+    error: failed ? (failed.detail ?? failed.error) : null,
+    failed,
     reload,
+  };
+}
+
+/** The first of the page's reads that failed, whole, or null where none did. */
+function failedOf(
+  ...reads: {
+    error: string | null;
+    refusal: QueryRefusal | LogRefusal | null;
+    detail?: string | undefined;
+  }[]
+): ModelsData["failed"] {
+  const read = reads.find((r) => r.error);
+  if (!read?.error) return null;
+  return {
+    error: read.error,
+    refusal: read.refusal,
+    ...(read.detail ? { detail: read.detail } : {}),
   };
 }

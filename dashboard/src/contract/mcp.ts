@@ -221,9 +221,18 @@ export interface McpServerStatus extends McpMemberServerStatus {
    * The entry's `tool_annotations` keys that no instance started on a
    * reporting node lists a tool for, sorted: each overrides nothing anywhere.
    * A key only some instances lack is not here, since a per-seat child serves
-   * what its seat's credentials reach. Empty where no instance started.
+   * what its seat's credentials reach. Empty where no instance started. A
+   * node names as many as its status row holds, the first by sort, so the
+   * list may be cut: see `unlisted_annotations_count`.
    */
   unlisted_annotations: string[];
+  /**
+   * How many keys the list stands for: its length where whole, and where a
+   * node's list was cut the most it may hold (the fewest a node counts).
+   * Never below the list's length; above it, a node's list was cut, so the
+   * list may miss keys.
+   */
+  unlisted_annotations_count: number;
   nodes: McpServerNode[];
 }
 
@@ -491,14 +500,6 @@ export type McpInstanceState = "running" | "failed" | "waiting";
 export type McpAuth = "none" | "headers" | "integration" | "oauth";
 
 /**
- * Why the engine expects a placement to fail. `private_address_in_cloud_box`:
- * a remote server on a private network given to a box in the `e2b` cell,
- * which runs outside that network. `command_in_box`: a local server given to
- * a box that runs its own image, which must provide the command.
- */
-type McpPlacementWarningKind = "private_address_in_cloud_box" | "command_in_box";
-
-/**
  * How a call to a server's tool ended. `answered`: it ran and the server
  * answered. `failed`: the server answered with an error, or the call broke
  * on the way. `unavailable`: the server was not there to ask. `refused`: the
@@ -654,11 +655,13 @@ interface McpBoxSeat {
   cell: string;
 }
 
-/** One placement the engine expects to fail. */
+/**
+ * One placement the engine expects to fail: a local server given to a seat
+ * whose box is a container, which starts the server's command from its own
+ * image, so the image or a setup step must provide it.
+ */
 interface McpPlacementWarning {
-  kind: McpPlacementWarningKind;
   seat: string;
-  cell: string;
   message: string;
 }
 

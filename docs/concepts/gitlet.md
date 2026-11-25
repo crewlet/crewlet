@@ -1296,7 +1296,6 @@ checks:
     report:
       junit: out/junit.xml
       sarif: out/lint.sarif
-    run_in: container          # or e2b
     checkout: [cmd, internal]  # a cone, or none
     env: [NPM_TOKEN]
   - name: api-shape
@@ -1314,7 +1313,6 @@ The file is a mapping holding `checks:` and nothing else (`checks: []` defines n
 | `timeout_seconds` | yes | A whole number, 1 to 21 600 (GitHub Actions' per-job ceiling of six hours). A company may hold checks to a lower ceiling (`code.checks.max_timeout_seconds`) |
 | `paths` | no | At most 32 path globs, in the grammar [path owners](#path-owners) use (`*` within a component, `**` for whole components, relative to the repository's root); a change must touch one for the check to run. None runs it on every change |
 | `report` | no | `junit` and `sarif`: files the check writes results to, each a path inside its checkout, read once the command ends. With neither, the exit code alone judges |
-| `run_in` | no | `container` (on a Gitlet node) or `e2b` (a remote box), among the cells the company allows (`code.checks.allow_run_in`); unset is the company's choice (`code.checks.run_in`, see [Check boxes](code-sandbox.md#check-boxes)). **`direct` is refused by name**: it would run a change's own code as the engine's user on the engine host, reading what the engine reads |
 | `checkout` | no | All of the tree (unset), a **cone** (at most 64 directories, git's sparse checkout, each a clean directory inside the repository), or `none`, for a check that reads what it needs by object id through the API |
 | `env` | no | At most 32 variable names, each a key of the company's check secrets (`code.checks.env`). A check gets none it does not name |
 
@@ -1493,9 +1491,9 @@ Read through `code.read`, held to the reader's grant on the repository:
   key is refused, so no read that forgot whom it asks for is answered held to no
   grant;
 - **`checks_queued`**, engine only, a Gitlet node's [claim
-  walk](#who-runs-a-check): every repository's queued attempts whose checks
-  name one cell (or none), oldest queued first, each with the definition it was
-  queued under and its repository's name, a page at a time;
+  walk](#who-runs-a-check): every repository's queued attempts, oldest queued
+  first, each with the definition it was queued under and its repository's
+  name, a page at a time;
 - **`checks_running`**, engine only, a home's sweep of a runner that is gone:
   the repositories holding a running attempt, or one repository's running
   attempts.
@@ -1582,9 +1580,8 @@ checked merged onto its branch. A data node of an older build refuses
 
 ### Check boxes
 
-A check runs in a **box** of its own, a container on a Gitlet node or a remote
-box, with no harness in it ([Code Sandbox → Check
-boxes](code-sandbox.md#check-boxes)). It reaches Gitlet as a [coding
+A check runs in a **box** of its own, a container on a Gitlet node, with no
+harness in it ([Code Sandbox → Check boxes](code-sandbox.md#check-boxes)). It reaches Gitlet as a [coding
 box](#coding-boxes) does, at `/box/git/<name>.git` on a node whose roles name
 `gitlet` (on the public listener where one is set), with a credential of its
 own: git's Basic user name `check` and, as the password, a token naming **one
@@ -1707,14 +1704,9 @@ the same order from the same set of Gitlet nodes; there is no lease and no
 coordinator. A node walks the queue when a check record lands on the code log,
 at most once a second, and every fifteen seconds regardless.
 
-**A node reads only what it can claim.** The queue is read by the cell each
-check names, and a node reads only cells it can start a check in now: ones the
-company lets a check run in, that its own sandbox catalogue configures, and
-that have room (a container slot free, or an `e2b` cell the company's caps have
-not held back): a node with full container slots reads none of the container
-backlog. One cell's backlog never costs a walk in another. Within a cell
-the attempts are taken oldest queued first, whether a check names the cell or
-falls to it as the company's default.
+**A node reads only what it can claim.** A node reads the queue only with a
+container slot free: a node with full slots reads none of the backlog. The
+attempts are taken oldest queued first.
 
 **The claim comes before the box.** A runner claims an attempt (a
 `check_started` record naming itself, decided by the repository's checks writer,
@@ -1729,9 +1721,7 @@ container on the Gitlet node's own machine, so a node runs at most
 `gitlet.max_checks` of them at once: unset, a quarter of its cores and at least
 one; `0`, none ([Deployment](../guides/deployment.md#running-checks-on-gitlet-nodes)).
 A node with no free container cell claims no container check, and the next node
-of the attempt's order claims it two seconds later. An `e2b` check runs on
-another machine and takes none of them; the company's own caps bound it,
-whichever node starts it ([What a check costs](#what-a-check-costs)).
+of the attempt's order claims it two seconds later.
 
 **The run.** The box is a [check box](code-sandbox.md#check-boxes): no harness,
 no model's sign-in, none of `providers.sandbox.setup`; only the company's check
@@ -1739,8 +1729,7 @@ secrets its file names, what the check is, and Gitlet's base and its check's
 token, with no commit identity. It is made (its git's floor checked and its one
 commit checked out) within ten minutes of the claim (`gitlet.CheckBoxGrace`);
 then its command runs in its checkout, detached, and every fifteen seconds the
-runner asks whether it still runs, refreshes the box's lifetime, and reads the
-attempt's row:
+runner asks whether it still runs and reads the attempt's row:
 
 | What happens | How the attempt ends |
 |---|---|
@@ -1749,14 +1738,13 @@ attempt's row:
 | The command runs past its timeout (the file's `timeout_seconds`, held to `code.checks.max_timeout_seconds`, from the command's start) | `failed` `timed_out`, with its tail, how many lines its output had then, and its log, its box closed: the timeout is the check's own, so running past it measured the commit |
 | The box could not be made, or stopped answering for four polls in a row | `errored` `box_failed` |
 | A setup step failed (the git floor, the checkout) or a named secret resolved to nothing | `errored` `setup_failed` |
-| The file names a cell the company does not allow, or a secret it does not declare | `errored` `defs_invalid`, with no box |
+| The file names a secret the company does not declare, or the company runs no check (it sets no `providers.sandbox.local.image`, which every check's container is made from) | `errored` `defs_invalid`, with no box |
 | The row ended meanwhile: its head moved on, a person stopped it, the home swept it | nothing more: its box is closed |
 
 The box is closed on every path. **A check spends no tokens**: no model runs in
 its box, and what it costs is its box's time, recorded as its duration. The
 runner counts what it holds on `crewlet.code.checks.running` and how long each
-took on `crewlet.code.checks.duration`, by placement
-([metrics](../reference/metrics.md)).
+took on `crewlet.code.checks.duration` ([metrics](../reference/metrics.md)).
 
 **A runner that is gone.** A runner that dies holding attempts leaves their
 rows running. The repository's **home** sweeps them at every pass of its loop:
@@ -1765,93 +1753,46 @@ that left the fleet), or whose claim is older than its check's timeout plus the
 ten minutes of setup and two minutes more (the minute to read a run's reports
 and keep its log, the half minute to record the ending; this covers a node that
 restarted mid-run and is in the order again holding nothing), is ended
-`errored` `runner_lost`, and its box killed where it is an `e2b` one: by the
-box the attempt names, or, where the runner died before naming one, by the
-stamp of its claim ([Check boxes](code-sandbox.md#check-boxes)); a container box
-on a node that left is that node's own container runtime's to reclaim. The home queues such an attempt again, so **a dead runner's check runs
-at most three attempts**. A runner that was only slow and ends its attempt after
+`errored` `runner_lost`. The sweep kills nothing: the box is on the runner's own
+node, which no other node reaches, and that node reclaims it (below). The home
+queues such an attempt again, so **a dead runner's check runs at most three
+attempts**. A runner that was only slow and ends its attempt after
 the sweep replaces `runner_lost` with its measurement. A runner that **stops**
 (its node draining) ends each attempt it holds `runner_lost` itself, so it is
 queued again at once.
 
+**A box its attempt left is reclaimed by its node.** A check's box records its
+attempt. A box its runner never closed (the engine crashed or was killed), whose
+container the runtime would not remove when its run ended, or that a failed
+create left without handing it over (the attempt ended `errored` `box_failed`)
+is a container still on its node, holding its disk and memory, and no timer on
+it ends it. So each node's runner, at its start and at every walk, kills each
+check box on its node whose attempt it is not running itself and whose row has
+ended, runs in another box or is gone, and logs it once as
+`code_check_box_reclaimed`. A kill the runtime refuses keeps the box and its
+record, is logged as `code_check_box_reclaim_failed` and is tried again. A box
+is kept while its attempt runs in it, or runs naming no box yet: a box a crashed
+engine left goes at its node's first walk after the home has swept its attempt
+(above). A walk judges at most four boxes, each at most once every fifteen
+seconds.
+
 **A node without `CREWLET_BOX_GIT_URL` runs no check**: a check's box clones
 its commit from Gitlet at that address, and reads it without a clone at its
 `/box/gitlet` sibling, so the address is the public listener with `/box/git`
-on the end. Such a node says so once, as `code_checks_not_run`, and leaves the
-fleet's checks to its other Gitlet nodes; a fleet where none runs them raises
+on the end; a loopback one reaches the container under its runtime's name for
+the engine host ([Local sandboxes](code-sandbox.md#local-sandboxes)). Such a
+node says so once, as `code_checks_not_run`, and leaves the fleet's checks to
+its other Gitlet nodes; a fleet where none runs them raises
 `code_checks_backlog`.
 
 ### What a check costs
 
-A check spends no tokens, so what it costs is **its box's time**. A `container`
-box runs on a Gitlet node's own machine, bounded by that node's
-`gitlet.max_checks`. An `e2b` box runs on the provider's machines, billed to
-the company's account there, so it is bounded **company-wide** by two caps in
-`code.checks.remote`
-([configuration](../getting-started/configuration.md#code)):
-
-| Cap | Unset | What it bounds |
-|---|---|---|
-| `max_running` | 16 | How many `e2b` check boxes run at once, whichever Gitlet node starts them |
-| `box_hours_per_day` | 192 | How many hours of `e2b` box time the company spends on checks in a UTC day, midnight to midnight |
-
-**A check past a cap waits queued.** A runner takes room under both caps
-*before* it claims an `e2b` check, so a check the caps hold back is claimed by
-nobody and stays `queued`, never errored, until a box ends or the day turns
-over and the next walk of whichever Gitlet node finds room claims it. Queued
-checks are taken oldest first.
-
-**At once is a lease.** The boxes running are `max_running` slots in the
-[coordination store](coordination.md): leases `check-remote:0` to
-`check-remote:<n-1>`, each taken for one box before its claim, renewed every 20
-seconds while the box lives and given back when it is closed. A slot whose node
-died holding it lapses within 60 seconds, so a dead runner never holds the cap
-longer than a minute. A cap lowered while the old one's boxes run holds every
-new box back until enough have ended. A Gitlet node lists the slots once a walk,
-however many boxes the walk starts, and a node that found them all held lists
-them again only once a box of its own has given its slot back, the cap is
-raised, or 15 seconds have passed: a full cap costs the coordination store one
-listing per Gitlet node every 15 seconds, never one every walk.
-
-**A day is counted a minute at a time.** Each `e2b` box is charged one minute
-to the fleet's shared counter when its slot is taken, and one more each minute
-it is held (making and setup included, since the provider bills those too)
-against `box_hours_per_day` × 60 minutes in the UTC day's window. Once a charge
-is refused the day is spent: no new `e2b` box starts until the next UTC
-midnight, or until the cap is raised. A box running when the day fills runs to
-its own end, its timeout bounding it, so a day overruns its hours by at most
-what those boxes take to finish. Caps are read at every walk: raising either
-takes effect at the next walk, with no restart.
-
-**A store that cannot say starts nothing.** Where the coordination store cannot
-list the slots, take one or count a minute, no `e2b` box starts (a cap nobody
-can ask about cannot hold) and the check waits queued for the next walk. A box
-already running keeps running: an unanswered renewal or minute is asked again at
-its next renewal.
-
-**A box whose slot lapsed is counted again.** A node whose renewals do not
-reach the store for 60 seconds (an outage, its host asleep, a stall) has its
-running boxes' slots lapse, and the cap stops counting them, so other Gitlet
-nodes may start boxes in their room. A lapsed lease cannot be renewed, so each
-such box takes a slot again at every renewal until it holds one: a slot the
-store lists as free, or else one past `check-remote:<n-1>`, which no new box is
-offered and every count includes. The cap then holds every new box back at
-once, and the overrun lasts only until the boxes started in the gap have ended.
-The node logs the lapse once, as `code_check_remote_slot_lost`, and the slot
-taken again as `code_check_remote_slot_retaken`, whose `over_cap` says it is
-one past the cap.
-
-`crewlet.code.checks.remote.capped` counts the walks a cap held a check back
-on, by `reason`: `max_running`, `box_hours_per_day`, or `unknown` for a store
-that could not say ([metrics](../reference/metrics.md)).
-`crewlet.code.checks.running{placement=e2b}` counts the boxes each node runs.
-The defaults are **provisional**: sixteen is a merge queue's full round of four
-candidates running two checks each, doubled for the head checks beside it,
-inside the twenty sandboxes E2B's Hobby plan runs at once; 192 hours is one
-protected branch's queue saturated all day at ten-minute checks (144 rounds ×
-4 candidates × 2 checks × ⅙ hour). A company on a larger plan raises
-`max_running` to its plan's limit, and `box_hours_per_day` to what it means to
-spend.
+A check spends no tokens, so what it costs is **its box's time**: a container on
+a Gitlet node's own machine, holding one of that node's `gitlet.max_checks`
+slots until it ends or its timeout (the file's `timeout_seconds`, held to
+`code.checks.max_timeout_seconds`) ends it. How many run at once across the
+fleet is the sum of its Gitlet nodes' slots
+([configuration](../getting-started/configuration.md#code)).
 
 ### How long a check is kept
 
@@ -2662,9 +2603,11 @@ a token another minted, and a keyring rotation in flight keeps them working
 **A run checks its repositories out, and the engine gives the box the rest.**
 Every launch on a node serving Gitlet hands the run, in its environment alone,
 the token and Gitlet's address: the node's `CREWLET_BOX_GIT_URL`, a Gitlet
-node's public `/box/git` or a balancer over the Gitlet nodes. The box's git
-presents the token for that address only, and the token reaches nothing yet: the
-run's row grants no repository. Each `code_checkout` the agent calls through its
+node's public `/box/git` or a balancer over the Gitlet nodes, as the box dials
+it (a loopback one under a container's [name for the engine
+host](code-sandbox.md#local-sandboxes)). The box's git presents the token for
+that address only, and the token reaches nothing yet: the run's row grants no
+repository. Each `code_checkout` the agent calls through its
 tool bridge resolves one repository into a grant at the seat's level (and its
 requester's, in a turn somebody woke), writes it on the run's row before the
 call answers, and answers the commands that clone it ([Code Sandbox →
@@ -4108,7 +4051,7 @@ The repository's [home Gitlet node](#the-home-gitlet-node) runs its queues: a wo
 - **Test.** Each candidate's tip is queued the required checks it holds no attempt of, **defined by the checks file at the train's base** (the branch's tip), never by a candidate's own, so a change cannot narrow the check it is measured by. An attempt its runner's infrastructure ended is queued again. Where the base's file defines a required check in no form that runs, every entry the train tests is ejected `checks_undefined` naming it, never `check_failed`: a gate requiring a check only a person's CI reports takes no change through its queue until the checks file defines it.
 - **Land.** The **longest green prefix** lands in ONE `land` record: every candidate up to the last whose tip passed every required check, with no candidate before it failed. A tip holds every change before it, so its pass is the whole prefix's, and a candidate still running in front of a passed one lands with it. Each change lands as its enqueuer. An entry the decide refuses (gate no longer met, head moved) is ejected `gate_unmet` or `head_moved`, and the next turn builds the train again without it.
 - **Bisect.** A red first candidate is **bisected over its entries' own commits**, each the candidate's merge up to that entry: the commit midway between the last known good (the train's base where none passed) and the first known red is queued the failed checks (`purpose: bisect`), until the first red commit follows a good one. Its entry is the culprit, ejected `check_failed` naming the checks and the commit they failed on (the train's merge onto the branch at its base); the eject abandons the train, and the next turn builds it again without that change. A batch of `batch` changes finds its culprit in log₂ `batch` more rounds, and while it does nothing behind it lands. That is why `batch` defaults to two: at a 5 % failure rate, arrivals as fast as the queue lands and the default depth, a change waits at most 5 rounds at p99, against 9 at a batch of four and 12 at eight, while a queue that never batches falls further behind with every red candidate. A larger batch spends a few fewer check runs a landed change (0.98 at two, 0.95 at four, 0.94 at eight) for that wait. A data node of an earlier build holds back an ejection that names its train, and every later record of its repository, until upgraded ([Which records an upgrade holds back](../guides/replication.md#which-records-an-upgrade-holds-back)).
-- **Cancel what a given-up train still runs.** An eject, a dequeue, a person moving the branch and a new train each give the train up, and its candidates' and probes' checks still queued or running measure commits nothing will land while holding a Gitlet node's `gitlet.max_checks` cells or the company's e2b box time ahead of the live train's (a runner takes the oldest queued first). The home **cancels** each, `dequeued` where a change its candidate merged left the queue and `abandoned` otherwise; a box running one stops once its row has ended. A check is given up by its COMMIT, not its candidate: a train built again from the same entries is the same commits, and its test of one an earlier run is measuring takes that run as its own. So the turn that records a train cancels nothing, and the next only what the new train does not test. A commit a later train tests again after its run was cancelled is queued again, up to the check's last attempt.
+- **Cancel what a given-up train still runs.** An eject, a dequeue, a person moving the branch and a new train each give the train up, and its candidates' and probes' checks still queued or running measure commits nothing will land while holding a Gitlet node's `gitlet.max_checks` slots ahead of the live train's (a runner takes the oldest queued first). The home **cancels** each, `dequeued` where a change its candidate merged left the queue and `abandoned` otherwise; a box running one stops once its row has ended. A check is given up by its COMMIT, not its candidate: a train built again from the same entries is the same commits, and its test of one an earlier run is measuring takes that run as its own. So the turn that records a train cancels nothing, and the next only what the new train does not test. A commit a later train tests again after its run was cancelled is queued again, up to the check's last attempt.
 - **Close the work item.** Once a landing has applied, every landed entry that asked it has its change's work item closed (set `done` in Worklet) **as its enqueuer**, decided by the authority table as theirs, under an operation id derived from the landing's, so a close asked again is the same write. A seat's enqueue made in a turn it worked for somebody is that turn's write, and so is the close, made late: it is written **for them** and decided **within the apps they use**, composed again on the closing node (a person by the grants they hold now, a credential narrowed by what that node gives it) as the seat's own merge would be ([Reads made for somebody else](#reads-made-for-somebody-else)). A person without Worklet who has a seat merge into a queue does not have the item closed for them.
 
   The close is **owed on the entry's row** from the landing's apply until its home settles it: the landing records the close's operation on each entry that asked it (`code_queue.close_op`), and every home's queue work lists the repositories owing one. So a landing answered `pending`, a home that stops or hands the repository on, and a close the tracker could not answer are each closed by the next turn on whichever home holds the repository, never lost (an archived repository's wait until it is unarchived).

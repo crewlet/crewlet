@@ -1,0 +1,32 @@
+# A required field the screen shows empty, with its error. The assistant
+# names the field and the error as the screen shows them, and never guesses
+# at a value it cannot see.
+person:
+  apps: [admin]
+page:
+  screen: integrations
+  title: Integrations › Google Cloud
+  params: {kind: gcp}
+  query: {}
+  resources: []
+  selection: null
+  source_revision: integrations@1
+  accepts: [page.read]
+  action_args:
+    page.read: {type: object, additionalProperties: false}
+  action_revisions: {page.read: screen}
+  view:
+    nodes:
+      - {role: heading, name: Google Cloud, level: 1}
+      - {role: field, name: Project ID, field: text, filled: false, required: true, error: Enter the project's ID}
+      - {role: field, name: Service account key, field: secret, filled: true, required: true}
+      - {role: button, name: Connect}
+question: Why won't Connect work?
+script:
+  - say: >-
+      The Project ID field is empty, and it is required: the form says "Enter
+      the project's ID". Fill it in, then press Connect.
+expect:
+  proposals: 0
+  state: completed
+  says: [Project ID, empty, Connect]

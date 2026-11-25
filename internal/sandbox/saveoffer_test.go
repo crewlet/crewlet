@@ -17,7 +17,7 @@ import (
 )
 
 // offerOf offers turnID's box for a save as a poll does, under the case's own
-// stint, and waits for the task the offer started to end: true where one
+// context as its offerer, and waits for the task the offer started to end: true where one
 // started.
 func offerOf(t *testing.T, rig *coordRig, turnID string) bool {
 	t.Helper()
@@ -29,16 +29,12 @@ func offerOf(t *testing.T, rig *coordRig, turnID string) bool {
 	return true
 }
 
-// savingWaiter is a waiter of rig's runs that drives drives and offers each box
-// its poll finds running to save, claiming its duty through claim where set.
-func savingWaiter(t *testing.T, rig *waiterRig, drives Drives, save SaveFunc, claim DutyFunc) *Waiter {
+// savingWaiter is a waiter of rig's runs that offers each box its poll finds
+// running to save.
+func savingWaiter(t *testing.T, rig *waiterRig, save SaveFunc) *Waiter {
 	t.Helper()
-	opts := WaiterOptions{Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: drives,
-		Now: func() time.Time { return rig.now }, Save: save}
-	if claim != nil {
-		opts.ClaimDuty, opts.DutyTTL = claim, 3*DefaultPollInterval
-	}
-	waiter, err := NewWaiter(opts)
+	waiter, err := NewWaiter(WaiterOptions{Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Now: func() time.Time { return rig.now }, Save: save})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
 	}
@@ -68,8 +64,8 @@ func (o *offerLog) offered() ([]string, []Runner) {
 // spawning is a waiter's offer to rig's coordinator that hands every task it
 // started to spawned.
 func spawning(rig *coordRig, spawned chan<- *saveRun) SaveFunc {
-	return func(stint context.Context, run PendingRun, runner Runner) {
-		if running := rig.coordinator.offerSave(stint, run, runner); running != nil {
+	return func(offerer context.Context, run PendingRun, runner Runner) {
+		if running := rig.coordinator.offerSave(offerer, run, runner); running != nil {
 			spawned <- running
 		}
 	}
@@ -251,6 +247,45 @@ func TestASaveThatFailedIsNotTriedAgainWithinTheInterval(t *testing.T) {
 	})
 }
 
+// A JOB WHOSE SESSION NO BOX CONTINUES IS SAVED NO MORE: its save is refused
+// before its pack, as no box of this build continuing it, and the release that
+// wrote its session is the job's for its whole run, so neither the poll,
+// however long after, nor a drain offers it again; nothing of it is taken or
+// stamped.
+//
+// Mutation: back the refusal off as a failure, or let a drain pick the job, and
+// this goes red.
+func TestAJobWhoseSessionNoBoxContinuesIsSavedNoMore(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := savingRig(t, memory.NewFleet(), newTakerStore())
+		everyCell(t, rig)
+		rig.launchKept(t, "t1")
+		if hosted := rig.coordinator.hostedSaves(t.Context()); len(hosted) != 1 {
+			t.Fatalf("the premise: a drain would save %d jobs, want the one", len(hosted))
+		}
+		rig.runner.PackSaveErr = &UnrestorableError{Loss: executorkeep.LossReleaseFloor,
+			Why: "the session was written by a release below the floor"}
+		rig.now = rig.now.Add(rigSaveInterval)
+		if !offerOf(t, rig, "t1") {
+			t.Fatal("the premise: no save was started an interval after the launch")
+		}
+		// OFFERED AS A POLL OFFERS IT, so this node's memory of the job stays.
+		for range 8 {
+			rig.now = rig.now.Add(saveRetryCeiling / 2)
+			if offerOf(t, rig, "t1") {
+				t.Fatalf("the poll offered a save again, at %v, of a job whose session no box continues", rig.now)
+			}
+		}
+		if hosted := rig.coordinator.hostedSaves(t.Context()); len(hosted) != 0 {
+			t.Errorf("a drain would save %d jobs, want none", len(hosted))
+		}
+		if takes, row := rig.runner.Takes(), rig.get("t1"); len(takes) != 0 || row.Capture != nil {
+			t.Errorf("took %d sessions and stamps %+v, want nothing taken or stamped", len(takes), row.Capture)
+		}
+	})
+}
+
 // A SAVE NEVER HOLDS THE POLL OR READS THE BOX IN IT: the waiter's offer
 // returns before the save's pack does, the poll's next pass polls the box while
 // the pack is still held, and the offer reads nothing of the box itself.
@@ -263,7 +298,7 @@ func TestASaveNeverHoldsThePollOrReadsTheBoxInIt(t *testing.T) {
 		rig.launchKept(t, "t1")
 		rig.now = rig.now.Add(rigSaveInterval)
 		spawned := make(chan *saveRun, 2)
-		rig.waiter = savingWaiter(t, rig.waiterRig, DrivesLocal, spawning(rig, spawned), nil)
+		rig.waiter = savingWaiter(t, rig.waiterRig, spawning(rig, spawned))
 		polls := 0
 		rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
 			polls++
@@ -291,20 +326,19 @@ func TestASaveNeverHoldsThePollOrReadsTheBoxInIt(t *testing.T) {
 	})
 }
 
-// BOTH WAITERS OFFER THEIR RUNNING BOXES FOR A SAVE: a node's own waiter and
-// the fleet's each offer the box of a running job, with the runner their poll
-// asked; neither offers one past its turn's cap, one whose poll failed, or one
-// a collection read back.
+// EVERY RUNNING BOX THE POLL FINDS IS OFFERED FOR A SAVE, in either cell, with
+// the runner the poll asked; none past its turn's cap, none whose poll failed,
+// and none a collection read back.
 //
-// Mutation: put the hook in one waiter only, or ahead of the cap's check.
-func TestBothWaitersOfferTheirRunningBoxesForASave(t *testing.T) {
+// Mutation: drop the hook from the poll, or put it ahead of the cap's check.
+func TestEveryRunningBoxThePollFindsIsOfferedForASave(t *testing.T) {
 	t.Parallel()
-	for _, cell := range []Placement{Direct, E2B} {
+	for _, cell := range Placements {
 		t.Run(string(cell), func(t *testing.T) {
 			t.Parallel()
 			rig := newWaiterRigIn(t, cell)
 			offers := &offerLog{}
-			rig.waiter = savingWaiter(t, rig, rigDrives(cell), offers.save, nil)
+			rig.waiter = savingWaiter(t, rig, offers.save)
 			rig.launch("running")
 			rig.launchUntil("capped", rig.now.Add(time.Minute))
 			failing := rig.launch("failing")
@@ -417,35 +451,36 @@ func TestTheSaveSlotsBoundTheTakesAndTheKeepsOnANode(t *testing.T) {
 	})
 }
 
-// A POLL THAT ENDS AFTER A STAND-DOWN OFFERS NO SAVE: a poll whose box
-// answered before its waiter stood down from the duty carries the stint that
-// stand-down ended, and offers nothing; the next pass that holds the duty
-// offers again.
+// A POLL THAT ENDS AFTER ITS WAITER STOPPED OFFERS NO SAVE: the offer is made
+// under the waiter's life, and a box whose poll answered as the waiter was
+// stopping is offered nothing, while one polled before the stop was.
 //
-// Mutation: read the stint at the hook rather than as the poll's task began.
-func TestAPollThatEndsAfterAStandDownOffersNoSave(t *testing.T) {
+// Mutation: offer the save whatever the waiter's life says.
+func TestAPollThatEndsAfterItsWaiterStoppedOffersNoSave(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRigIn(t, E2B)
+	rig := newWaiterRig(t)
 	offers := &offerLog{}
-	holds := func(context.Context) (bool, error) { return true, nil }
-	waiter := savingWaiter(t, rig, DrivesRemote, offers.save, holds)
+	waiter, err := NewWaiter(WaiterOptions{Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Interval: time.Hour, Now: func() time.Time { return rig.now }, Save: offers.save})
+	if err != nil {
+		t.Fatalf("NewWaiter: %v", err)
+	}
+	life, stop := context.WithCancel(t.Context())
+	waiter.Start(life)
+	t.Cleanup(waiter.Stop)
 	rig.waiter = waiter
 	rig.launch("t1")
-	standingDown := true
+	rig.tick()
+	if turns, _ := offers.offered(); !slices.Equal(turns, []string{"t1"}) {
+		t.Fatalf("the premise: a poll of the living waiter offered %v, want t1", turns)
+	}
 	rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
-		if standingDown {
-			waiter.standDown()
-		}
+		stop()
 		return JobRunning, nil
 	}
 	rig.tick()
-	if turns, _ := offers.offered(); len(turns) != 0 {
-		t.Errorf("a poll that ended after its waiter stood down offered %v", turns)
-	}
-	standingDown = false
-	rig.tick()
 	if turns, _ := offers.offered(); !slices.Equal(turns, []string{"t1"}) {
-		t.Errorf("the next pass holding the duty offered %v, want t1", turns)
+		t.Errorf("a poll that ended after its waiter stopped offered %v, want nothing more", turns)
 	}
 }
 
@@ -595,11 +630,11 @@ func TestALostJobWithItsBoxGoneContinuesItsNewestSave(t *testing.T) {
 	inBubble(t, func(t *testing.T) {
 		rig, _, keep := savingRig(t, memory.NewFleet(), newTakerStore())
 		rig.runner.Carries = true
-		rig.coordinator.relaunchWait = 2 * time.Second
+		rig.relaunchWithin(2 * time.Second)
 		run := rig.launchKept(t, "t1")
 		rig.now = rig.now.Add(rigSaveInterval)
 		spawned := make(chan *saveRun, 1)
-		rig.waiter = savingWaiter(t, rig.waiterRig, DrivesLocal, spawning(rig, spawned), nil)
+		rig.waiter = savingWaiter(t, rig.waiterRig, spawning(rig, spawned))
 		rig.tick()
 		<-(<-spawned).ended
 		saved := rig.get("t1").Kept

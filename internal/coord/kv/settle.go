@@ -162,7 +162,7 @@ var (
 	}, rest: undeclared}
 	// undeclaredHolding is every bucket's but the runs, the config, the
 	// positions register, the uploads, the chat reads, the secrets, the three
-	// atlas buckets and the integrations.
+	// atlas buckets, the integrations and the node status.
 	undeclaredHolding = holding{rest: undeclared}
 
 	// The positions register's classes, each at the bound its writer holds
@@ -175,11 +175,17 @@ var (
 	accessReviewValue  = class{bound: coord.MaxAccessReviewBytes, reply: replyDeciding}
 	seatAccessValue    = class{bound: coord.MaxSeatAccessBytes, reply: replyDeciding}
 	homeBoardValue     = class{bound: coord.MaxHomeBoardRecordBytes, reply: replyDeciding}
+	modelCheckValue    = class{bound: coord.MaxModelCheckBytes, reply: replyDeciding}
+	oauthGrantValue    = class{bound: coord.MaxOAuthGrantBytes, reply: replyDeciding}
+	oauthSignInValue   = class{bound: coord.MaxOAuthSignInBytes, reply: replyDeciding}
+	grantRequestValue  = class{bound: coord.MaxGrantRequestBytes, reply: replyTerm}
 	smallValue         = class{bound: coord.SmallValueBytes, reply: replyTerm}
 
-	// positionsHolding is the positions register's: every class above, and
-	// the rest undeclared, every class a boot lists among them, so no boot
-	// window moves.
+	// positionsHolding is the positions register's: a class for every key
+	// family it holds, each record's widest within its bound. Every class a
+	// boot reads (a node's row, a floor, a capacity window, an admission) is
+	// small, read at the term, so no boot window moves. No key the store
+	// writes falls to the rest (TestFleetContract records them).
 	positionsHolding = holding{classes: []keyClass{
 		{keys: coord.DocumentFilter(coord.MCPListingClass), class: mcpListingValue},
 		{keys: coord.DocumentFilter(coord.MCPDefinitionClass), class: mcpDefinitionValue},
@@ -187,8 +193,33 @@ var (
 		{keys: coord.DocumentFilter(coord.AccessReviewClass), class: accessReviewValue},
 		{keys: coord.DocumentFilter(coord.SeatAccessClass), class: seatAccessValue},
 		{keys: coord.DocumentFilter(coord.HomeBoardClass), class: homeBoardValue},
+		{keys: coord.DocumentFilter(coord.ModelCheckClass), class: modelCheckValue},
+		{keys: coord.DocumentFilter(coord.MCPGrantClass), class: oauthGrantValue},
+		{keys: coord.DocumentFilter(coord.IntegrationGrantClass), class: oauthGrantValue},
+		{keys: coord.DocumentFilter(coord.MCPSignInClass), class: oauthSignInValue},
+		{keys: coord.DocumentFilter(coord.IntegrationSignInClass), class: oauthSignInValue},
+		{keys: coord.DocumentFilter(coord.GrantRequestClass), class: grantRequestValue},
 		{keys: coord.DocumentFilter(coord.AtlasWakeClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.DeviceSignInClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.PositionClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.HoldClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.FloorClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.BackupPointClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.MaintenanceClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.AdmissionClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.MaintenanceAckClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.RetirementClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.FeedMarkClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.SeatPauseClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.BoxReadingClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.ConversationHoldClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.ModelRetryClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.MCPAcceptedClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.MCPRestartClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.SSHTestClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.IssueReportClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.InsightRecordClass), class: smallValue},
+		{keys: coord.DocumentFilter(coord.GoogleIdentityClass), class: smallValue},
 	}, rest: undeclared}
 
 	// The uploads bucket's classes (ADR-0175, "The uploads bucket declares
@@ -256,6 +287,21 @@ var (
 		{keys: coord.DocumentFilter(coord.IntegrationStatusClass), class: smallValue},
 		{keys: coord.DocumentFilter(coord.IntegrationFindingsClass), class: integrationFindingsValue},
 	}, rest: undeclared}
+
+	// nodeStatusRowValue is one row of a node's status (ADR-0175, "The node
+	// status bucket declares its classes"), read at the term by every alarm,
+	// page and atlas read of the rows.
+	nodeStatusRowValue = class{bound: coord.MaxNodeStatusRowBytes, reply: replyTerm}
+
+	// nodeStatusHolding is the node status bucket's: a node's own row, each
+	// MCP server's, each model entry's and its growth signals, and the rest,
+	// which no writer writes, small.
+	nodeStatusHolding = holding{classes: []keyClass{
+		{keys: coord.DocumentFilter(string(coord.NodeStatusOwn)), class: nodeStatusRowValue},
+		{keys: coord.DocumentFilter(string(coord.NodeStatusMCP)), class: nodeStatusRowValue},
+		{keys: coord.DocumentFilter(string(coord.NodeStatusModel)), class: nodeStatusRowValue},
+		{keys: coord.DocumentFilter(string(coord.NodeStatusGrowth)), class: nodeStatusRowValue},
+	}, rest: smallValue}
 )
 
 // quiet is how long a pass or a watch over keys may go without a delivery
@@ -320,7 +366,8 @@ func (r Reach) valueCrossing() time.Duration {
 
 // readCrossing is how long a leader's reply to a read of a value at
 // [coord.MaxValueBytes] takes to cross as r: the value and [kvHeaderBytes],
-// base64-encoded (internal/jsapi's Crossing), at r's pace, none in process.
+// base64-encoded (internal/jsapi's Crossing), at r's pace, none in process;
+// coord.MaxValueReadCrossing across a link, which a test holds equal.
 // It is exactly what such a read gets beyond the read term ([leaderReader.leaderFor]):
 // the reply's handling is CPU the read term covers off the race detector
 // (internal/jsapi's Leader.Deciding).

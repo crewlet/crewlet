@@ -10,9 +10,10 @@
 // # Resolution
 //
 // Which provider entries a seat's phase runs on is ONE resolution, [Resolve],
-// and [ResolveWithSource] is the same walk also naming the level that decided
-// it, so a page showing where a job lands reads the engine's answer, never a
-// copy of its precedence.
+// which also names the level that decided it and the LLM fleet it runs on,
+// so a page showing where a job lands reads the engine's answer, never a copy
+// of its precedence. A fleet's member for each piece of work is its
+// balancer's pick ([Registry.Chain], internal/providers/llm/fleet).
 package phase
 
 // Phase names one pass of the turn engine.

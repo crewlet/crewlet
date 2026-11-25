@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -864,13 +865,14 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 // session its own harness wrote, in the one format it packs, by a release whose
 // sessions another box continues: what every reader of whether a session
 // continues asks before the box's own release is asked. A runner of one
-// release (Kimi Code, Copilot, Muse Code, Grok Build) restores a session that
-// release wrote: judged of the writer alone, never refused for want of a box.
+// release (Kimi Code, Copilot, Muse Code, Grok Build, Cursor Agent) restores
+// a session that release wrote, judged of the writer alone.
 //
 // Mutation: drop the writer's floor or the one release Gemini CLI and Qwen
 // Code continue on, answer for another harness's session, or judge a
-// one-release runner's writer beside no box ([carrier.Continues] of ""), and
-// a row goes red.
+// one-release runner's writer beside no box ([carrier.Continues] of ""), or
+// name a refusal as any loss but the harness's or the writer's, and a row goes
+// red.
 func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -919,6 +921,11 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 			Format: executor.GrokArchiveFormat, Version: "1.0.92"}, true, ""},
 		"grok, another release's writer": {executor.NewGrok(), sandbox.SessionArchive{Harness: executor.GrokName,
 			Format: executor.GrokArchiveFormat, Version: "1.0.93"}, false, "only a session 1.0.92 wrote"},
+		"cursor's own": {executor.NewCursorAgent(), sandbox.SessionArchive{Harness: executor.CursorAgentName,
+			Format: executor.CursorAgentArchiveFormat, Version: "2026.11.22"}, true, ""},
+		"cursor, another release's writer": {executor.NewCursorAgent(), sandbox.SessionArchive{
+			Harness: executor.CursorAgentName, Format: executor.CursorAgentArchiveFormat, Version: "2026.11.23"},
+			false, "written by Cursor Agent 2026.11.23"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -926,9 +933,22 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 			// (TestACarriedSessionContinuesOnlyUnderTheEntryItRanUnder).
 			archive := tc.archive
 			archive.Entry = "an-entry"
-			restores, why := tc.runner.RestoresUnder(archive, archive.Entry)
+			restored := tc.runner.RestoresUnder(archive, archive.Entry)
+			restores, why := restored.Continues, restored.Why
 			if restores != tc.restores || !strings.Contains(why, tc.why) || (restores && why != "") {
 				t.Errorf("Restores = %v, %q; want %v saying %q", restores, why, tc.restores, tc.why)
+			}
+			// A REFUSAL IS THE HARNESS THAT CHANGED, else THE WRITER'S RELEASE OR
+			// FORMAT: never a fault of the box's, which only the box can say.
+			loss := executorkeep.Loss("")
+			if !tc.restores {
+				loss = executorkeep.LossReleaseFloor
+				if strings.Contains(tc.why, "harness that wrote it") {
+					loss = executorkeep.LossHarnessChanged
+				}
+			}
+			if restored.Loss != loss {
+				t.Errorf("Restores refused for %q, want %q", restored.Loss, loss)
 			}
 		})
 	}

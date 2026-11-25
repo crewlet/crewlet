@@ -270,12 +270,15 @@ var ErrExternalBroker = errors.New("engine: this fleet's broker is an external "
 var ErrNoBrokerMember = errors.New("engine: no live member of the fleet's broker " +
 	"could carry it")
 
-// ErrRemovalOutcomeUnknown is a removal handed to a member that did not answer
-// within the gesture's wait. It may have proposed the change before it went
-// silent, and the group commits a proposal whoever is listening — so whether
-// the voter is gone is unknown, and the metadata group is what says.
+// ErrRemovalOutcomeUnknown is a removal whose carrying member may have proposed
+// it and gave no answer that settles it: it did not answer within the
+// gesture's wait, it answered with nothing this node can believe, or it
+// proposed and then lost its own view of the group ([jetstream.
+// ErrRemovalUnconfirmed]). The group commits a proposal whoever is listening,
+// so whether the voter is gone is unknown, and the metadata group is what says.
 var ErrRemovalOutcomeUnknown = errors.New("engine: the member carrying the " +
-	"removal did not answer, so whether the metadata group committed it is unknown")
+	"removal may have proposed it and gave no answer that settles it, so whether " +
+	"the metadata group committed it is unknown")
 
 // BrokerMemberLive is a removal refused because the named voter's node holds a
 // live presence lease AS A MEMBER (or does not say what its broker is): it is
@@ -350,6 +353,7 @@ func (r brokerReply) Answers() string { return r.Request }
 
 const (
 	brokerCodeNoGroup   = "no_meta_group"
+	brokerCodeGroupDown = "meta_group_down"
 	brokerCodeNotPeer   = "not_a_peer"
 	brokerCodeChanging  = "membership_changing"
 	brokerCodeNoLeader  = "no_leader"
@@ -364,7 +368,17 @@ const (
 	// brokerCodeStale is a request the member did not run because it was
 	// not one to take now: past its deadline, unbound, or already taken.
 	brokerCodeStale = "stale"
+	// brokerCodeUnconfirmed is a removal the member proposed and couldn't
+	// then confirm ([jetstream.ErrRemovalUnconfirmed]): it may have landed,
+	// so the gesture ends rather than another member proposing it again.
+	brokerCodeUnconfirmed = "removal_unconfirmed"
 )
+
+// A CODE AN ASKER DOES NOT KNOW ENDS ITS GESTURE as a refusal naming the
+// member's detail ([brokerReply.errorOf]'s default), never "could not carry":
+// a newer member's code may follow a proposal, and a second proposal is the
+// one unsafe answer. So an older asker meeting meta_group_down or
+// removal_unconfirmed stops where it once moved on, which fails safe.
 
 // errUnverifiedRequest is a member's answer that it ran nothing because it
 // could not verify what it was sent ([brokerCodeUnauthenticated]) or was not to
@@ -381,6 +395,10 @@ func (r brokerReply) errorOf() error {
 		return fmt.Errorf("%w (%s)", errUnverifiedRequest, r.Detail)
 	case brokerCodeNoGroup:
 		return fmt.Errorf("%w (%s)", jetstream.ErrNoMetaGroup, r.Detail)
+	case brokerCodeGroupDown:
+		return fmt.Errorf("%w (%s)", jetstream.ErrMetaGroupDown, r.Detail)
+	case brokerCodeUnconfirmed:
+		return fmt.Errorf("%w: %w (%s)", ErrRemovalOutcomeUnknown, jetstream.ErrRemovalUnconfirmed, r.Detail)
 	case brokerCodeNotPeer:
 		return fmt.Errorf("%w (%s)", jetstream.ErrNotAMetaPeer, r.Detail)
 	case brokerCodeChanging:
@@ -397,8 +415,14 @@ func (r brokerReply) errorOf() error {
 func replyFor(node string, err error) brokerReply {
 	out := brokerReply{Node: node, Detail: err.Error()}
 	switch {
+	case errors.Is(err, jetstream.ErrRemovalUnconfirmed):
+		// FIRST: it wraps the view's own error, which alone would read as
+		// nothing proposed, and the removal would be proposed again.
+		out.Code = brokerCodeUnconfirmed
 	case errors.Is(err, jetstream.ErrNoMetaGroup):
 		out.Code = brokerCodeNoGroup
+	case errors.Is(err, jetstream.ErrMetaGroupDown):
+		out.Code = brokerCodeGroupDown
 	case errors.Is(err, jetstream.ErrNotAMetaPeer):
 		out.Code = brokerCodeNotPeer
 	case errors.Is(err, jetstream.ErrMembershipChanging):
@@ -662,7 +686,8 @@ func (f *FleetBroker) List(ctx context.Context) (BrokerView, error) {
 // within one [brokerReadWait]: asked in turn, a member that died with its
 // presence lease still live would spend the whole wait. When none reports it,
 // the others' reasons or silence are what the listing says. The last value is
-// Solo: a lone member with no group runs unclustered, which is a state.
+// Solo: a lone member configured unclustered ([jetstream.ErrNoMetaGroup]),
+// which is a state; a clustered member whose group is down never is.
 func (f *FleetBroker) readGroup(ctx context.Context, live map[string]placement.NodeProfile) (
 	*jetstream.MetaGroup, string, string, bool) {
 
@@ -787,8 +812,8 @@ func brokerFindings(live map[string]placement.NodeProfile, group *jetstream.Meta
 //
 // ONE DEADLINE, [BrokerRemoveWait], for the whole gesture, members asked in
 // [FleetBroker.askOrder]: one that cannot carry it answers at once and the
-// next is asked; one that does not answer ENDS it ([ErrRemovalOutcomeUnknown]),
-// since it may have proposed the change and a second proposal would at best
+// next is asked; one that may have proposed and settles nothing ENDS it
+// ([ErrRemovalOutcomeUnknown] says how), since a second proposal would at best
 // meet a membership change in flight.
 func (f *FleetBroker) Remove(ctx context.Context, req BrokerRemoval) (BrokerRemoved, error) {
 	peer, node, err := req.target()
@@ -823,7 +848,8 @@ func (f *FleetBroker) Remove(ctx context.Context, req BrokerRemoval) (BrokerRemo
 	// group, an unknown operation, or a request it could not verify and so
 	// ran nothing of. The next member is asked.
 	cannotCarry := func(reply brokerReply, err error) bool {
-		return errors.Is(err, jetstream.ErrNoMetaGroup) || errors.Is(err, errUnverifiedRequest) ||
+		return errors.Is(err, jetstream.ErrNoMetaGroup) || errors.Is(err, jetstream.ErrMetaGroupDown) ||
+			errors.Is(err, errUnverifiedRequest) ||
 			reply.Code == brokerCodeUnknownOp
 	}
 

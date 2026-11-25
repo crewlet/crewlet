@@ -2158,7 +2158,7 @@ Every node keeps each instance it runs in its own memory (a shared server's one 
 
 The status record still carries, bounded, per node and server: since when its longest-failed instance has been down (the same instant across every retry of one outage), the class of the failure it names, and how many times its instances came back. A count that climbs while the server stays up is a server that flaps.
 
-The page also carries what the engine decides from the configuration: how the engine signs in to the server (an integration's per-agent credential, values the configuration sets, or nothing), that a local server runs on the engine host, the startup and per-call timeouts in force (120 and 300 seconds where none is set), the integration a per-agent server reads and the keys it is started with, the seats whose box is given the server and the cell each box runs in, and two placements expected to fail: a server on a private network given to an `e2b` box, which runs outside the company's network, and a local server given to a box that runs its own image (`container` or `e2b`), whose image or setup steps must provide the command. A server's address is shown with any credential in it withheld: in its query, a path segment, its fragment or a user name.
+The page also carries what the engine decides from the configuration: how the engine signs in to the server (an integration's per-agent credential, values the configuration sets, or nothing), that a local server runs on the engine host, the startup and per-call timeouts in force (120 and 300 seconds where none is set), the integration a per-agent server reads and the keys it is started with, the seats whose box is given the server and the cell each box runs in, and one placement expected to fail: a local server given to a `container` box, whose image or setup steps must provide the command. A server's address is shown with any credential in it withheld: in its query, a path segment, its fragment or a user name.
 
 ### Why a server failed
 
@@ -2254,7 +2254,7 @@ mcp_servers:
 | `dcr` | The engine registers a client at the vendor when the sign-in starts (dynamic registration) and keeps what it is issued with the grant |
 | `own` | A client you registered at the vendor beforehand: its `client_id`, and its `client_secret` (a `${VAR}`) where it has one |
 
-`scopes` lists what to ask for; absent, the engine asks for the ones the server lists. `oauth` is refused on a per-agent server (`shared: false`), a local server, beside an `Authorization` header (the sign-in sends it), and in a seat's `sandbox.mcp.servers`: a box is handed a server's values once, at launch, and an access token runs out within the hour, so a box uses the bridge instead.
+`scopes` lists what to ask for, at most 50, each at most 256 bytes; absent, the engine asks for the ones the server lists. A `client_id` is at most 2,048 bytes. Those are what the grant the sign-in makes can keep, so a sign-in whose authorization server gives a longer client id, issuer, resource or scope to ask for is refused before anybody is sent to consent, naming the server and the field; a scope the vendor grants unasked past 256 bytes is left out of the grant and logged as `oauth_scope_not_recorded`. `oauth` is refused on a per-agent server (`shared: false`), a local server, beside an `Authorization` header (the sign-in sends it), and in a seat's `sandbox.mcp.servers`: a box is handed a server's values once, at launch, and an access token runs out within the hour, so a box uses the bridge instead.
 
 **Signing in.** Until somebody signs in, the server is not started and its state is `needs_sign_in`. **Sign in** on the Connection tab's **Sign-in** card, or on the `mcp_oauth_needs_sign_in` alarm (Settings › MCP & tools and the Inbox) ([`POST /mcp-servers/{name}/oauth`](../reference/api-endpoints.md#post-mcp-serversnameoauth)) takes an administrator who stepped up recently, never Ask Crewlet. It opens the vendor's consent page in a new tab (a blocked tab is offered as a link) and waits until the engine says the sign-in is approved or why it failed. The engine refuses an authorization server that does not offer PKCE with S256. On approval the vendor redirects the browser to `/webhooks/mcp-oauth` on your engine's public address, the engine exchanges the code, keeps the grant, and every node starts the server. A vendor that only redirects to allowlisted addresses (Atlassian, for one) is given the two addresses the Servers answer names: `callback_url` and `client_metadata_url`.
 
@@ -2356,6 +2356,15 @@ An entry that declares nothing is bound by what the engine recognises it as, by 
 | The Mattermost server | `mcp-server-mattermost` | `MATTERMOST_TOKEN` |
 | `mcp-atlassian` | the package or image name | `JIRA_API_TOKEN`, `JIRA_USERNAME`, `CONFLUENCE_API_TOKEN`, `CONFLUENCE_USERNAME` |
 | `scw mcp server serve` | the `scw` command with `mcp` | `SCW_SECRET_KEY`, `SCW_ACCESS_KEY` |
+
+A recognised server that also reads one of its integration's own values, the same for every seat, is handed that too, from the integration's block, beside each seat's credential:
+
+| Server | Reads | From |
+|---|---|---|
+| Datadog's remote server | `DD_API_KEY` | `integrations.datadog.provisioning.api_key` |
+| The Mattermost server | `MATTERMOST_URL` | `integrations.mattermost.url` |
+
+A value the entry writes for one of these keys (`headers`, `env`), or a seat's own block writes, is sent instead. A remote server the engine recognises is refused when a header its catalogue entry requires is sent by nothing: not its entry, not its integration, and not any agent seat it reaches (a seat without it is reported on its own instance). Datadog answers every request without `DD_API_KEY` with 401, so a shared `datadog` entry signed in with headers names both keys. An OAuth sign-in replaces the headers, and a local server is not judged, since it may read its host's own sign-in.
 
 A declaration replaces the recognised keys rather than adding to them. A per-seat server named after one of these integrations that neither declares nor is recognised is reported on the integration as **tool declared but no credential binding**: it would start for every agent and act as nobody. The integration's Agents tab reports each seat's tool as live, waiting for its credential, or missing because no per-seat server reads it.
 
@@ -2554,7 +2563,7 @@ mcp_servers:
       tavily_research: { read_only: true, open_world: true }
 ```
 
-Keys accept snake_case (`read_only`) or MCP camelCase (`readOnlyHint`); overrides win over what the server advertised. A key naming no tool the server lists overrides nothing. The server's row on **Settings › MCP & tools** names every key no started instance lists, on its Tools tab (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)), and each instance's `tools_discovered` log line names the keys its own listing does not answer, which can be right, since a per-role child lists only the tools its seat's credentials reach. Every tool server, including `atlassian`, `slack` and `github`, is an `mcp_servers` entry, so `tool_annotations` is declared there. This and a server's `tools` levels ([Setting each tool's level](#setting-each-tools-level)) are the *only* places tool names appear in config for behaviour; the engine never hardcodes them. See [Tool Capabilities](../concepts/tool-capabilities.md).
+Keys accept snake_case (`read_only`) or MCP camelCase (`readOnlyHint`); overrides win over what the server advertised. A key naming no tool the server lists overrides nothing. The server's row on **Settings › MCP & tools** names the keys no started instance lists, on its Tools tab (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)): every one, unless they outgrow a node's 16 KiB status row, when it names the first by sort and says how many more there may be, and each instance's `tools_discovered` log line names the keys its own listing does not answer, which can be right, since a per-role child lists only the tools its seat's credentials reach. Every tool server, including `atlassian`, `slack` and `github`, is an `mcp_servers` entry, so `tool_annotations` is declared there. This and a server's `tools` levels ([Setting each tool's level](#setting-each-tools-level)) are the *only* places tool names appear in config for behaviour; the engine never hardcodes them. See [Tool Capabilities](../concepts/tool-capabilities.md).
 
 ---
 

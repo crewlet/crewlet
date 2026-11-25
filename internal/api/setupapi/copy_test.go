@@ -234,6 +234,10 @@ func checkField(t *testing.T, tool string, r setup.Requirement) {
 			line(t, label+" choice "+c.Value, c.Hint, ".")
 		}
 	}
+	// THE FORM MARKS A FIELD OPTIONAL FROM required, so a label saying so is read twice.
+	if strings.Contains(strings.ToLower(r.Label), "optional") {
+		t.Errorf("%s: the label %q says optional, which the form marks from required", label, r.Label)
+	}
 	// A FIELD THE INTEGRATION CANNOT WORK WITHOUT NEVER CALLS ITSELF OPTIONAL.
 	if r.Required && strings.HasPrefix(strings.ToLower(r.Hint.String()), "optional") {
 		t.Errorf("%s: is required and its hint %q calls it optional", label, r.Hint)

@@ -163,7 +163,7 @@ func TestAnOpenCodeContinuationThatMayCompactIsHandedTheSummarizedBrief(t *testi
 			rig, opened, req := opencodeKept(t, true, "2.3.2")
 			rig.runner.Point = func(PointAsk) (BoxPoint, error) { return pointAt(tc.point), nil }
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false, RunSources{})
+				rig.runner, tc.reused, false)
 			t.Cleanup(got.release)
 			if got.brief != tc.brief || !sameTold(got.told, tc.told) || got.decision().Summarized != tc.summed {
 				t.Fatalf("the launch hands %q telling %+v, summarized %v; want %q telling %+v, summarized %v",
@@ -196,14 +196,14 @@ func TestAnOpenCodeContinuationThatMayCompactIsHandedTheSummarizedBrief(t *testi
 			Count: &ResumedCount{Tokens: 100000}, CountProvider: "stub"}
 		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Prior: PriorBox{Writer: "2.3.2"}}
 		got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"), rig.runner,
-			true, false, RunSources{})
+			true, false)
 		t.Cleanup(got.release)
 		if got.brief != summarizedSameBox || !sameTold(got.told, toldAsSummary) || !got.decision().Summarized {
 			t.Fatalf("the copy is handed %q telling %+v, summarized %v; want the summarized brief",
 				got.brief, got.told, got.decision().Summarized)
 		}
 		asks := rig.runner.PointAsks()
-		if len(asks) != 1 || asks[0].Writer != "2.3.2" || asks[0].Sources == nil || asks[0].Release != "" {
+		if len(asks) != 1 || asks[0].Writer != "2.3.2" || asks[0].Release != "" {
 			t.Errorf("the copy's box was asked %+v, want one ask of the writer the job before's record "+
 				"names, in its box, its release asked", asks)
 		}
@@ -219,13 +219,10 @@ func sameTold(a, b BriefTold) bool { return reflect.DeepEqual(a, b) }
 // THE OWN COPY IS READ TOO. A kept capture its harness ended in this very box
 // is continued without asking the box whether it carries the session
 // ([SessionRestorer.CheckCarry]), but its first request is judged all the
-// same: the box is asked its point, its release asked with it, the writer's
-// release and what the run hands its server beside the ask, since the box
-// holds the session's copy. After an import into another box nothing is
-// handed over before the brief, so that ask carries no sources.
+// same: the box is asked its point, its release asked with it, and the
+// writer's release beside the ask.
 //
-// Mutation: read the point only after CheckCarry, or hand the sources on an
-// import, and a case goes red.
+// Mutation: read the point only after CheckCarry, and a case goes red.
 func TestTheOwnCopyIsReadToo(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -233,41 +230,38 @@ func TestTheOwnCopyIsReadToo(t *testing.T) {
 		interrupted bool
 		reused      bool
 		release     string
-		inBox       bool
 	}{
-		{name: "its own box, the harness ended there", reused: true, inBox: true},
-		{name: "its own box, the copy replaced", interrupted: true, reused: true, release: "2.3.2", inBox: true},
+		{name: "its own box, the harness ended there", reused: true},
+		{name: "its own box, the copy replaced", interrupted: true, reused: true, release: "2.3.2"},
 		{name: "a new box", interrupted: true, release: "2.3.2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rig, opened, req := opencodeKept(t, tc.interrupted, "2.3.2")
 			rig.runner.Point = func(PointAsk) (BoxPoint, error) { return pointAt(170000), nil }
-			sources := RunSources{System: "the run's own"}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false, sources)
+				rig.runner, tc.reused, false)
 			t.Cleanup(got.release)
 			asks := rig.runner.PointAsks()
 			if len(asks) != 1 {
 				t.Fatalf("the box was asked its point %d times, want once", len(asks))
 			}
 			ask := asks[0]
-			if ask.Release != tc.release || ask.Writer != "2.1.310" || ask.Model != "stub/model" ||
-				(ask.Sources != nil) != tc.inBox {
-				t.Errorf("the box was asked %+v, want release %q of writer 2.1.310 for stub/model, sources "+
-					"handed %v", ask, tc.release, tc.inBox)
+			if ask.Release != tc.release || ask.Writer != "2.1.310" || ask.Model != "stub/model" {
+				t.Errorf("the box was asked %+v, want release %q of writer 2.1.310 for stub/model", ask,
+					tc.release)
 			}
 		})
 	}
 }
 
-// THE BOX'S SOURCES ARE CHARGED IN ITS OWN BOX. What the box hands over before
-// the brief (BoxBytes, which the read sizes only where the box holds the
-// session's copy) is charged beside the brief at a quarter of its bytes: a
-// held brief that sends whole with nothing handed over may compact with it.
+// WHAT THE BOX HANDS OVER BESIDE THE BRIEF IS CHARGED. What the box adds to
+// the first request beside the brief (BoxBytes: Gemini CLI's session context,
+// Qwen Code's dated reminder) is charged with it, at the harness's rate: a
+// brief that sends whole with nothing handed over may compact with it.
 //
 // Mutation: leave BoxBytes out of SendsWhole, and this goes red.
-func TestTheBoxsSourcesAreChargedInItsOwnBox(t *testing.T) {
+func TestWhatTheBoxHandsOverBesideTheBriefIsCharged(t *testing.T) {
 	t.Parallel()
 	count := &ResumedCount{Tokens: 160000}
 	brief := briefOf(4000)
@@ -277,7 +271,7 @@ func TestTheBoxsSourcesAreChargedInItsOwnBox(t *testing.T) {
 	point := pointAt(170000)
 	point.BoxBytes = 4 * 9000
 	if point.SendsWhole(count, "stub", "stub", brief) {
-		t.Error("a session whose box hands 9,000 tokens over before the brief is sent whole")
+		t.Error("a session whose box hands 9,000 tokens over beside the brief is sent whole")
 	}
 }
 
@@ -304,7 +298,7 @@ func TestAFailedReadHandsTheSummarizedBrief(t *testing.T) {
 			rig, opened, req := opencodeKept(t, true, "2.3.2")
 			rig.runner.Point = tc.point
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, false, false, RunSources{})
+				rig.runner, false, false)
 			t.Cleanup(got.release)
 			if got.brief != summarizedNewBox || !got.decision().Summarized {
 				t.Errorf("the launch hands %q, want the summarized brief", got.brief)
@@ -326,7 +320,7 @@ func TestAFailedReadHandsTheSummarizedBrief(t *testing.T) {
 			Prior: PriorBox{Writer: "2.3.2", Entry: "entry-a"}}
 		// ITS RUNNER INTERFACE ALONE, so no read of a point is offered.
 		got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-			struct{ Runner }{rig.runner}, true, false, RunSources{})
+			struct{ Runner }{rig.runner}, true, false)
 		t.Cleanup(got.release)
 		if got.brief != summarizedSameBox || !got.decision().Summarized || len(rig.runner.PointAsks()) != 0 {
 			t.Errorf("the launch hands %q after %d asks, want the summarized brief and none", got.brief,
@@ -363,7 +357,7 @@ func TestAnOpenCodeTellingByAReadingIsJudgedOnItsOwnBrief(t *testing.T) {
 				Told: toldByReading}
 			rig.runner.Point = func(PointAsk) (BoxPoint, error) { return pointAt(110000), nil }
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, false, false, RunSources{})
+				rig.runner, false, false)
 			t.Cleanup(got.release)
 			if got.brief != tc.want || got.decision().Summarized {
 				t.Fatalf("the launch hands %q (summarized %v), want %q", got.brief, got.decision().Summarized,
@@ -404,42 +398,6 @@ func TestASummarizedTellIsBounded(t *testing.T) {
 		if err := tc.req(within).toldBounded(); err != nil {
 			t.Errorf("a %s of a whole log's calls is refused: %v", tc.field, err)
 		}
-	}
-}
-
-// THE RUN'S SOURCES ARE WHAT ITS SERVER IS HANDED. In the box that holds the
-// session's copy the launch charges what OpenCode tells the session before its
-// first request: the run's instructions as its runner writes them, its skills,
-// what each server its bridge serves says it is for and offers, and, apart, every server
-// the box dials itself, whose instructions only the box knows and which makes
-// the box no point there. A server naming the job took over is the bridge's,
-// never the box's own.
-//
-// Mutation: hand the launch no guidance or no catalogs, or count a server the
-// bridge took over as one the box dials, and a case goes red.
-func TestTheRunsSourcesAreWhatItsServerIsHanded(t *testing.T) {
-	t.Parallel()
-	req := launchReq("t1")
-	req.System = "the seat's instructions"
-	req.Skills = []Skill{{Name: "deploy", Description: "how to deploy"}}
-	req.MCPGuidance = map[string]string{"tracker": "the tracker's instructions"}
-	req.MCPCatalogs = map[string][]CatalogTool{"tracker": {{Name: "file_bug", Description: "File a bug.",
-		Schema: map[string]any{"type": "object"}}}}
-	own := map[string]MCPServer{"repo": {Command: "repo-mcp"}, "crewlet": {Command: "stale"}}
-	bridged := map[string]MCPServer{"crewlet": {Transport: TransportHTTP, URL: "https://engine.example.com/mcp/j"}}
-	req.MCPServers = withServers(own, bridged)
-	got := runSourcesOf(req, own, bridged, true, nil)
-	switch {
-	case !reflect.DeepEqual(got.Unsized, []string{"repo"}):
-		t.Errorf("the box dials %q itself, want repo alone", got.Unsized)
-	case !reflect.DeepEqual(got.Guidance, req.MCPGuidance):
-		t.Errorf("the run's servers say %q, want what the launch was handed", got.Guidance)
-	case !reflect.DeepEqual(got.Catalogs, req.MCPCatalogs):
-		t.Errorf("the run's servers offer %+v, want what the launch was handed", got.Catalogs)
-	case got.System != buildSystem(req, nil) || !strings.Contains(got.System, "the seat's instructions"):
-		t.Errorf("the run's instructions read %q, want its runner's", got.System)
-	case !reflect.DeepEqual(got.Skills, req.Skills) || !got.Steered:
-		t.Errorf("the run's sources are %+v, want its skills and its steering", got)
 	}
 }
 

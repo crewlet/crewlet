@@ -275,6 +275,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: a sign-in's consent at the vendor; its one field is the callback address, read-only",
   "routes/settings/models/flows/RemoveDialog.tsx":
     "modal: where the seats, Ask Crewlet and the Advisor move when a model is removed, in its dialog",
+  "routes/settings/models/fleets/parts.tsx":
+    "modal: where the seats and helpers on a fleet move when it is deleted, in its dialog",
   "routes/settings/mcp-tools/flows/TestDialog.tsx":
     "modal: which agent a per-agent server is tested as, in its dialog",
   "routes/settings/mcp-tools/flows/ValueDialog.tsx":
@@ -308,6 +310,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "not an editor: one configuration field; every host is a modal or the create-company form, which declares",
   "routes/artifacts/DashboardView.tsx":
     "not an editor: its select filters what a published board shows, and changes nothing",
+  "routes/settings/RedirectStep.tsx":
+    "not an editor: the address a sign-in comes back to, copied out and never typed",
   "routes/signin/SignIn.tsx": "signed out: there is no assistant before a sign-in",
   "routes/signin/Invite.tsx": "signed out: accepting an invitation",
   "routes/signin/NewPassword.tsx": "signed out: a password reset",

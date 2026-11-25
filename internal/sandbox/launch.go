@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -235,6 +236,10 @@ type LaunchRequest struct {
 	// entry that served them, on whichever node collects the run.
 	ProviderKey string
 
+	// Fleet is why ProviderKey took the run where an LLM fleet picked it, for
+	// the launch's announcement ([types.ExecutorLaunched]); empty when pinned.
+	Fleet types.FleetDecision
+
 	// SignInID is the sign-in identity the run's harness is handed, written onto
 	// the job's record ([LaunchRecord.SignInID]).
 	SignInID string
@@ -280,6 +285,14 @@ type LaunchRequest struct {
 	// or continues one in place (Continue). The launch takes it up, or says
 	// why not and starts fresh with Brief: see restore.go.
 	Session *SessionContinuation
+
+	// NotContinued is the caller's verdict on the newest session the turn or
+	// its conversation left that the launch does not take up: an older one
+	// continued in its place (Session), or none ([executorkeep.NotContinued]).
+	// Nil where nothing was lost. The launch decides the final one before its
+	// job starts, on what its own checks find, and records it on the job
+	// ([LaunchRecord.NotContinued]) and its launch's event.
+	NotContinued *executorkeep.NotContinued
 
 	// FreshOwn is the leads Brief opened with of its own where no Continue
 	// names them ([Continuation.Fresh]): a turn's first launch and a
@@ -400,10 +413,13 @@ type LaunchRequest struct {
 	// (ADR-0093). Asked ONCE, AFTER the store has minted the launch id the
 	// job's credentials name and before any box exists, because a credential
 	// minted before the store names the job could only name a job the row
-	// does not hold. Its variables win over every other source of the run
-	// environment for the names they set, and an error abandons the launch
-	// like every failure past the row. Nil adds nothing.
-	RunEnv func(launchID string) (LaunchEnv, error)
+	// does not hold; with the name the engine host answers to in the box's
+	// cell ([Manager.EngineHost]), under which an address of the engine's it
+	// hands is written ([EngineHost.Address]). Its variables win over every
+	// other source of the run environment for the names they set, and an
+	// error abandons the launch like every failure past the row. Nil adds
+	// nothing.
+	RunEnv func(launchID string, host EngineHost) (LaunchEnv, error)
 
 	// HomePaths is each variable the job is handed a path in its box under,
 	// to that path relative to the box's home: a file a CLI is pointed at by
@@ -411,19 +427,6 @@ type LaunchRequest struct {
 	// the box is known ([jobEnvFor]). Beneath every other source of the job's
 	// environment for the names it shares. Nil sets none.
 	HomePaths map[string]string
-
-	// MCPGuidance is the instructions of each MCP server the run's bridge
-	// serves it, by server, as each server says them on its endpoint: what
-	// OpenCode lists to a session among its context sources, which the launch
-	// charges an OpenCode continuation in the box that holds its copy
-	// ([RunSources.Guidance]). Nil lists none.
-	MCPGuidance map[string]string
-
-	// MCPCatalogs is the tools each MCP server the run's bridge serves it
-	// offers, by server: what OpenCode lists a session in each server's Code
-	// Mode catalog, which the launch charges an OpenCode continuation in the
-	// box that holds its copy ([RunSources.Catalogs]). Nil lists none.
-	MCPCatalogs map[string][]CatalogTool
 
 	// MCPTools is how many tools MCPServers list the run's harness in all, as
 	// the seat's tools hold them: every tool of each, since a box reaches a
@@ -486,19 +489,35 @@ type OpenedJob struct {
 	// through the job's one constructor ([PendingRun.NamedJob]). Nothing
 	// records it; a build that does not know it reads no id.
 	CallIDMeta string
+
+	// CallCeiling is how long the job's harness waits for one call whatever
+	// its box's settings say, as the runner that starts the job's box states
+	// it ([CallCeilinged], [Manager.MCPCallCeiling]): what serves the box
+	// answers a call still running before it, and zero answers none early.
+	// THE RUNNER'S, NEVER THE ROW'S, as CallIDMeta is.
+	CallCeiling time.Duration
+
+	// ParkedCalls is how many calls the job is parked on already, as its row
+	// holds them ([PendingRun.ParkedCalls]): zero for a job just opened, and
+	// the row's count for one a node serves again after taking its seat over.
+	// What serves the box counts its own parks after it, and admits no call
+	// that could park the job past [MaxParkedCalls].
+	ParkedCalls int
 }
 
 // NamedJob is the job r's row names, as what serves its box is told it
-// ([OpenedJob]), its calls numbered after lastSeq and each call's id read
-// under callIDMeta, the key the runner of the job's box declares
-// ([OpenedJob.CallIDMeta], "" for none): the job and the round it works in,
-// off the one row. ONE CONSTRUCTOR for the launch that opens the job and for a
+// ([OpenedJob]), its calls numbered after lastSeq, each call's id read under
+// callIDMeta, the key the runner of the job's box declares
+// ([OpenedJob.CallIDMeta], "" for none), and each call answered before
+// ceiling, the wait that runner states ([OpenedJob.CallCeiling], zero for
+// none): the job, the round it works in and the calls it is parked on, off
+// the one row. ONE CONSTRUCTOR for the launch that opens the job and for a
 // node that serves it again after taking its seat over (internal/engine's
-// reopenAgentRun), so neither names a job without its round, nor without the
-// key its calls' ids are read by — a job named without it would have every
-// call's id dropped without a word.
-func (r PendingRun) NamedJob(lastSeq int, callIDMeta string) OpenedJob {
-	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq, CallIDMeta: callIDMeta}
+// reopenAgentRun), so neither names a job without its round, nor without what
+// its runner states of its calls.
+func (r PendingRun) NamedJob(lastSeq int, callIDMeta string, ceiling time.Duration) OpenedJob {
+	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq, CallIDMeta: callIDMeta,
+		CallCeiling: ceiling, ParkedCalls: len(r.ParkedCalls)}
 }
 
 // Opening is what a job's box is given once the job has a name — see
@@ -838,7 +857,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		ColleagueAsk: req.Turn.ColleagueAsk,
 		// The turn's cap, for the poll — see [PendingRun.Deadline].
 		Deadline: req.Turn.Deadline,
-		// Whose host a local box is on — see [PendingRun.LaunchNode]. This
+		// Whose host the box is on — see [PendingRun.LaunchNode]. This
 		// node's: the box is made here. A relaunch whose row still names the
 		// previous job's box keeps that box's host until the attach below
 		// names this node with this job's box ([BoxRef.Node]).
@@ -941,11 +960,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// list the servers a box has.
 	var steer SteerWiring
 	var skillLoads SkillWiring
-	// THE SERVERS THE BOX IS HANDED, before what names the job joins its own,
-	// and what that joined: the run's sources tell the two apart ([runSourcesOf]).
-	own := req.MCPServers
-	var bridged map[string]MCPServer
-	// bridgedTools is how many tools bridged lists in all ([Opening.Tools]).
+	// bridgedTools is how many tools the servers naming the job joins list in
+	// all ([Opening.Tools]).
 	var bridgedTools int
 	// fresh is how the job's box is wired where its script starts a session of
 	// its own in place of the one this launch continues — see
@@ -955,7 +971,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// AND HOW ITS HARNESS NAMES ITS CALLS, as the runner the job is
 		// started on declares it: m's, which the spec was built with and
 		// which starts the box.
-		named, openErr := req.Opened(opened.NamedJob(opened.OpenedAfter, m.CallIDMeta(req.Spec.Harness)))
+		named, openErr := req.Opened(opened.NamedJob(opened.OpenedAfter, m.CallIDMeta(req.Spec.Harness),
+			m.MCPCallCeiling(req.Spec.Harness)))
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)
@@ -964,7 +981,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 			fresh = &Wiring{MCPServers: withServers(req.MCPServers, f.Servers), Steer: f.Steer,
 				SkillLoads: f.SkillLoads}
 		}
-		req.MCPServers, bridged, bridgedTools = withServers(req.MCPServers, named.Servers), named.Servers, named.Tools
+		req.MCPServers, bridgedTools = withServers(req.MCPServers, named.Servers), named.Tools
 		steer = named.Steer
 		skillLoads = named.SkillLoads
 	}
@@ -976,7 +993,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// once a checkout answers need the job's credential; and it lives in this frame alone: the spec
 	// is never persisted, and a job that continues the run hours later is
 	// launched anew, with credentials of its own.
-	env, gitAccess, err := launchEnv(req, opened.LaunchID)
+	env, gitAccess, err := launchEnv(req, opened.LaunchID, m.EngineHost(req.Spec.Placement))
 	if err != nil {
 		c.abandon(ctx, m, req, fence, "")
 		return LaunchResult{}, fmt.Errorf("sandbox: the run's environment: %w", err)
@@ -994,10 +1011,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		req.HomePaths = paths
 		req.Secrets = append(slices.Clone(req.Secrets), gitAccess)
 	}
-	// THE BOX IS MADE FOR THIS TURN, which a local box records so its host
-	// can tell when no run names it any more ([Spec.TurnID]), AND THIS LAUNCH,
-	// which a remote box carries for the run's ending to find ([Spec.LaunchID]).
-	req.Spec.TurnID, req.Spec.LaunchID = req.Turn.TurnID, opened.LaunchID
+	// THE BOX IS MADE FOR THIS TURN, which the box records so its host
+	// can tell when no run names it any more ([Spec.TurnID]).
+	req.Spec.TurnID = req.Turn.TurnID
 	box, runner, reused, err := c.acquire(ctx, m, req, opened.Prior)
 	if err != nil {
 		// The row is open and this launch is over. Every failure past this
@@ -1033,7 +1049,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// THE PREVIOUS JOB'S BOX ON ANOTHER NODE'S HOST is named by nothing from
 	// here, which is the moment its host may reclaim it: told now rather
 	// than found at its next pass ([Coordinator.acquire]).
-	if prior := opened.Prior; prior.SandboxID != "" && !c.hostsPrior(m, prior) {
+	if prior := opened.Prior; prior.SandboxID != "" && !prior.ReachableFrom(c.node) {
 		c.tellHost(ctx, PendingRun{TurnID: req.Turn.TurnID, LaunchID: opened.LaunchID})
 	}
 	// A KEPT BOX'S EXPIRING FILES, brought up to date before the job that
@@ -1042,7 +1058,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// [CoordinatorOptions.Refresh]. Handed the row as this launch opened
 	// it, which already names this box, its cell, its harness and its host: a
 	// kept box is the previous job's, continued only where all four match
-	// ([PriorBox.ContinuesIn], [Coordinator.hostsPrior]). EACH TOKEN IT
+	// ([PriorBox.ContinuesIn], [PriorBox.ReachableFrom]). EACH TOKEN IT
 	// WRITES IS KEPT FOR THE JOB'S SEALED SET (renewed), which the attach that
 	// names the job's command writes: the refresh runs before that set exists.
 	var renewed HandedSecrets
@@ -1071,13 +1087,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		browserOut = &outcome
 		if outcome.Server != nil {
 			served := map[string]MCPServer{browser.ServerName: *outcome.Server}
-			own, req.MCPServers = withServers(own, served), withServers(req.MCPServers, served)
+			req.MCPServers = withServers(req.MCPServers, served)
 			if fresh != nil {
 				fresh.MCPServers = withServers(fresh.MCPServers, served)
-			}
-			if _, bridges := bridged[browser.ServerName]; bridges {
-				bridged = maps.Clone(bridged)
-				delete(bridged, browser.ServerName)
 			}
 		}
 	}
@@ -1089,8 +1101,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// none: see restore.go. The run carries the brief its session needs, and
 	// the one a session of its own does, for its script to hand over the one
 	// its restore's outcome chose.
-	continued := c.continueSession(ctx, req, opened, box, runner, reused, begun,
-		runSourcesOf(req, own, bridged, steer.Set(), browserOut))
+	continued := c.continueSession(ctx, req, opened, box, runner, reused, begun)
 	defer continued.release()
 	if req.Decided != nil {
 		req.Decided(continued.decision())
@@ -1102,9 +1113,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	//
 	// Its TELEMETRY ENDPOINT IS MINTED HERE, at the job's start, rather than
 	// with the launch's environment above: its token lives a fixed span from
-	// its minting ([otelTokenTTL]), and whatever the box's provisioning took
-	// would come off the job's own.
-	jobEnv, err := jobEnvFor(m, req, box)
+	// its minting ([OtelReceiverOptions.TokenTTL]), and whatever the box's
+	// provisioning took would come off the job's own.
+	jobEnv, err := jobEnvFor(m, req, box, runner)
 	if err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: the job's telemetry endpoint: %w", err)
@@ -1126,7 +1137,6 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Resume:      continued.session,
 		Carried:     continued.carried,
 		Env:         jobEnv,
-		SignInEnv:   req.Spec.SignInEnv,
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -1186,8 +1196,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// into it.
 		Handed: c.sealHanded(ctx, req, jobEnv, opened.Prior, reused, renewed),
 		// AND WHICH BRIEF IT WAS HANDED, for the record its collection
-		// publishes beside whether its run did continue the session.
-		Brief: continued.kind,
+		// publishes beside whether its run did continue the session, with the
+		// launch's verdict on the session it did not.
+		Brief: continued.kind, NotContinued: continued.notContinued,
 		// AND WHAT THAT BRIEF, AND THE FRESH ONE ITS BOX FALLS BACK TO, LEFT
 		// OUT OF THE ROUND IT CARRIES ON, for every later reader of what the
 		// job's session holds ([BriefTold]).
@@ -1232,7 +1243,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		SandboxID: box.ID(), Harness: req.Spec.Harness,
 		// THE MEMBER THAT TOOK IT — see [types.ExecutorLaunched.ProviderKey].
-		ProviderKey: req.ProviderKey, Model: req.Model,
+		ProviderKey: req.ProviderKey, Model: req.Model, FleetDecision: req.Fleet,
 		// THE IDENTITY on the announcement: this event is read for
 		// display, and what a person means by "which conversation is
 		// this run for" is the durable thread rather than the batch the
@@ -1241,6 +1252,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		WorkItem:        req.Turn.WorkItem,
 		Task:            req.label(),
 		Browser:         browserOut.record(),
+		// AND THE SESSION IT DID NOT CONTINUE, as the launch decided it, for
+		// the live turn's screens.
+		SessionNotContinued: continued.notContinued,
 	}
 	ev := events.New(started, events.TraceContext{
 		TraceID: req.Turn.TraceID, ParentSpanID: req.Turn.SpanID,
@@ -1294,7 +1308,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 // run_in moves the run. An unreattachable box is reclaimed, then replaced.
 func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) (_ Sandbox, _ Runner, _ bool, err error) {
 	defer origin.Stamp(&err)
-	if prior.SandboxID != "" && !c.hostsPrior(m, prior) {
+	if prior.SandboxID != "" && !prior.ReachableFrom(c.node) {
 		// ANOTHER NODE'S HOST: the seat moved since the previous job
 		// launched, and its box is a process tree or a container there,
 		// which this node can neither continue in nor kill. Left to that
@@ -1379,22 +1393,22 @@ type LaunchEnv struct {
 
 // launchEnv is the environment of THIS LAUNCH's box: the spec's run
 // environment, and then the engine's own variables for the job
-// ([LaunchRequest.RunEnv]), which win over every other source for the names
-// they set — an operator's value for one of those would break what the engine
-// minted it for, and configuration refuses the names where an operator writes
-// the run environment. The box is made with it and every setup step runs with
-// it; the harness runs with it and the run's telemetry
-// ([withTelemetry]).
+// ([LaunchRequest.RunEnv], asked with host, the box's [EngineHost]), which win
+// over every other source for the names they set — an operator's value for
+// one would break what the engine minted it for, and configuration refuses the
+// names where an operator writes the run environment. The box is made with it
+// and every setup step runs with it; the harness runs with it and the run's
+// telemetry ([withTelemetry]).
 //
 // A COPY, never the spec's own map, which the caller's [Spec] goes on holding:
 // what a box, its setup or its runner does with the map it is handed never
 // reaches the configuration the next launch is built from.
-func launchEnv(req LaunchRequest, launchID string) (_ map[string]string, gitAccess string, err error) {
+func launchEnv(req LaunchRequest, launchID string, host EngineHost) (_ map[string]string, gitAccess string, err error) {
 	defer origin.Stamp(&err)
 	var added LaunchEnv
 	if req.RunEnv != nil {
 		var err error
-		if added, err = req.RunEnv(launchID); err != nil {
+		if added, err = req.RunEnv(launchID, host); err != nil {
 			return nil, "", err
 		}
 	}
@@ -1402,18 +1416,6 @@ func launchEnv(req LaunchRequest, launchID string) (_ map[string]string, gitAcce
 	maps.Copy(out, req.Spec.Env)
 	maps.Copy(out, added.Env)
 	return out, added.GitAccess, nil
-}
-
-// hostsPrior reports whether this node can reach the turn's previous box: one
-// in a cell every node reaches, or one this node launched ([Coordinator.hosts]).
-// The cell is resolved through the newest catalogue first, as the reclaim's is,
-// and the launch's where that one does not name it.
-func (c *Coordinator) hostsPrior(m *Manager, prior PriorBox) bool {
-	cell := m.DefaultPlacement()
-	if current := c.mgr(); current != nil {
-		cell = current.DefaultPlacement()
-	}
-	return prior.ReachableFrom(c.node, cell)
 }
 
 // reclaimPrior kills the turn's previous box through the cell that holds it.
@@ -1424,8 +1426,8 @@ func (c *Coordinator) hostsPrior(m *Manager, prior PriorBox) bool {
 // be in ([Coordinator.SetManager]), one a later revision dropped included.
 //
 // BEST EFFORT, the launch goes ahead whatever it answers: a failed kill
-// leaves the box to its TTL and the orphan reaper, and refusing the launch
-// would cost the turn too. Under a context of its own ([Coordinator.abandon]).
+// leaves the box for its host to reclaim, and refusing the launch would cost
+// the turn too. Under a context of its own ([Coordinator.abandon]).
 func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) {
 	killCtx, cancel := detached(ctx)
 	defer cancel()
@@ -1597,14 +1599,15 @@ const agentRunNote = "You are running inside a command-line coding tool as one s
 // its node's listener where the node forwards, every other box to the
 // fleet's address ([OtelReceiver.Reaches], [EngineAddress]: a loopback one
 // reaches nothing from a container). A TRACE ID NO TOKEN CAN CARRY REDACTED
-// IS REFUSED ([OtelTokens.Mint]), and the job's start with it.
-func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
-	if m.telemetry == nil {
+// IS REFUSED ([OtelTokens.Mint]), and the job's start with it. ONLY FOR A
+// RUNNER WHOSE HARNESS EXPORTS BY IT ([exportsTelemetry]): any other's
+// harness reads none of it, and its model's shell would hold it for nothing.
+func withTelemetry(m *Manager, req LaunchRequest, box Sandbox, runner Runner) (map[string]string, error) {
+	if m.telemetry == nil || !exportsTelemetry(runner) {
 		return req.Spec.Env, nil
 	}
 	added, err := m.telemetry.RunEnv(req.Turn.TraceID, req.Turn.SpanID,
-		req.Turn.TurnID, req.Turn.AgentHandle, req.Spec.Placement == Direct,
-		otelTokenTTL(req.Spec))
+		req.Turn.TurnID, req.Turn.AgentHandle, req.Spec.Placement == Direct)
 	if err != nil {
 		return nil, err
 	}
@@ -1624,56 +1627,17 @@ func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) (map[string]strin
 	return env, nil
 }
 
-// otelTokenTTL is how long a run's export endpoint stays valid.
-//
-// TIED TO THE BOX'S OWN LIFETIME rather than picked: a token that expires
-// while its box is still running loses the tail of the run's telemetry —
-// exactly the part that explains a failure — and one that outlives the box is
-// a credential nothing needs. The pause TTL is added because a run parked on
-// a human's answer resumes into the same box and keeps exporting, and the
-// doubling covers the keepalive refreshing the box's own timer.
-func otelTokenTTL(spec Spec) time.Duration {
-	ttl := time.Duration(spec.TimeoutSec) * time.Second
-	if ttl <= 0 {
-		ttl = DefaultBoxTimeout
-	}
-	ttl *= 2
-	if pause := time.Duration(spec.PauseTTLSec) * time.Second; pause > 0 {
-		ttl += pause
-	}
-	return ttl
-}
-
 // jobEnvFor is the environment a job is started with in box: the launch's own
 // with the run's telemetry ([withTelemetry]), and beneath both each of
 // [LaunchRequest.HomePaths] joined onto box's own home, so the path is right
 // in every backend's box. A copy where it adds a path, never the launch's map.
 // An error where the telemetry's token cannot be minted ([withTelemetry]).
-func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
-	env, err := withTelemetry(m, req, box)
+func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox, runner Runner) (map[string]string, error) {
+	env, err := withTelemetry(m, req, box, runner)
 	if err != nil {
 		return nil, err
 	}
 	return withHomePaths(env, req, box), nil
-}
-
-// runSourcesOf is the context sources req's run hands its server
-// ([RunSources]): its instructions as its runner writes them, told of its
-// browser as browserOut came to, its skills, what each server its bridge
-// serves says it is for, and, as Unsized, every server of own (the box's own,
-// a ready browser's among them) that bridged (what naming the job joined)
-// does not take over, whose instructions only the box knows.
-func runSourcesOf(req LaunchRequest, own, bridged map[string]MCPServer, steered bool,
-	browserOut *BrowserOutcome) RunSources {
-	var unsized []string
-	for name := range own {
-		if _, ok := bridged[name]; !ok {
-			unsized = append(unsized, name)
-		}
-	}
-	slices.Sort(unsized)
-	return RunSources{System: buildSystem(req, browserOut), Reported: repoNames(Pushable(req.Spec.Repos)),
-		Steered: steered, Skills: req.Skills, Guidance: req.MCPGuidance, Catalogs: req.MCPCatalogs, Unsized: unsized}
 }
 
 // withHomePaths is env with each of [LaunchRequest.HomePaths] joined onto box's
@@ -1698,9 +1662,13 @@ func withHomePaths(env map[string]string, req LaunchRequest, box Sandbox) map[st
 // order between the engine's telemetry variables and the operator's own. Both
 // end up inside a box that a test cannot look into, and getting the order
 // wrong sends somebody else's spans to the engine — silently, because they do
-// arrive somewhere.
+// arrive somewhere. The runner is the one m holds for the launch's harness.
 func RunEnvFor(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
-	return withTelemetry(m, req, box)
+	runner, err := m.RunnerFor(req.Spec.Harness)
+	if err != nil {
+		return nil, err
+	}
+	return withTelemetry(m, req, box, runner)
 }
 
 // handBackSubject is where a reply a run let go of goes back to: the seat's

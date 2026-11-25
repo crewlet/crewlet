@@ -21,6 +21,13 @@ func (p Paths) GrokConfig() string { return p.GrokHome() + "/config.toml" }
 // a run cut off before that leaves the box's own here.
 func (p Paths) GrokConfigBox() string { return p.WorkDir() + "/grok-config-box.toml" }
 
+// GrokConfigOurs is the names the run's servers stand under in
+// [Paths.GrokConfig], one a line, recorded before they are written there and
+// removed once the box's own settings are back: the guard holds Grok to them
+// ([grokGuard]), and the next run's start takes a cut-off run's out of the
+// settings as they then stand ([grokLeftOut]).
+func (p Paths) GrokConfigOurs() string { return p.WorkDir() + "/grok-config-ours" }
+
 // GrokConfigFresh is [Paths.GrokConfig] for a session a continuing run's script
 // starts of its own ([grokSessionGate]).
 func (p Paths) GrokConfigFresh() string { return p.WorkDir() + "/grok-config-fresh.toml" }
@@ -81,6 +88,15 @@ func (p Paths) GrokTakeConfigFresh() string { return p.WorkDir() + "/grok-take-f
 // its gate has named it, which a note hook reads so that a subagent's firing
 // takes nothing ([grokHooks]).
 func (p Paths) GrokThread() string { return p.WorkDir() + "/grok-thread" }
+
+// GrokHookIDs is the ids Grok Build gives the run's hooks, one a line, as
+// `grok inspect --json` lists them and `~/.grok/disabled-hooks` names them
+// ([grokMergeConfig]), which the guard reads ([grokGuard]).
+func (p Paths) GrokHookIDs() string { return p.WorkDir() + "/grok-hook-ids" }
+
+// GrokDisabledHooks is the box home's list of the hooks Grok Build skips, one
+// id a line ([grokGuard]).
+func (p Paths) GrokDisabledHooks() string { return p.GrokHome() + "/disabled-hooks" }
 
 // GrokNoteHelper is the note helper's build for the box (internal/notehelper),
 // written at each launch of a run wired to its notes or skills.

@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/kept"
 )
 
@@ -25,6 +26,7 @@ func init() {
 	events.Register[ExecutorFailed]()
 	events.Register[ExecutorStopped]()
 	events.Register[ExecutorAnswerGiven]()
+	events.Register[ExecutorWaitOver]()
 	events.Register[ExecutorAnswered]()
 }
 
@@ -52,6 +54,9 @@ type ExecutorLaunched struct {
 	ProviderKey     string `json:"provider_key,omitempty"`
 	Model           string `json:"model,omitempty"`
 	ConversationKey string `json:"conversation_key"`
+	// FleetDecision is why ProviderKey took the run, where an LLM fleet
+	// picked it.
+	FleetDecision
 	// WorkItem is the item the launching turn is charged to, absent when
 	// it is on nothing. The run is part of that turn, so a running-runs
 	// panel can say which item a box is working on without joining back to
@@ -65,9 +70,16 @@ type ExecutorLaunched struct {
 	// launch. A turn can launch more than one job, and these are what pair
 	// a start with the job's own [ExecutorCollected] record (which carries
 	// the same id) and what a live-output request (`executor_tail`) names.
-	// Absent on an announcement whose row could not be read back.
+	// The store's own answer as it opened the job, so every announcement
+	// names it.
 	LaunchID  string    `json:"launch_id,omitempty"`
 	StartedAt time.Time `json:"started_at,omitzero"`
+	// SessionNotContinued is the launch's verdict on the newest session its turn
+	// or conversation left that its run does not continue: the loss, what the
+	// run did instead and the turns either side, said in the engine's
+	// sentence (executorkeep.NotContinued.Sentence). Absent where it lost none.
+	// The collected record carries the final verdict.
+	SessionNotContinued *executorkeep.NotContinued `json:"session_not_continued,omitempty"`
 	// Browser is a browser seat's browser as this launch readied it, nil for
 	// a seat with none.
 	Browser *ExecutorBrowser `json:"browser,omitempty"`
@@ -299,6 +311,9 @@ type ExecutorCollected struct {
 	// company's `turn_engine.conversation_session.enabled` off.
 	SessionTakenBytes int64  `json:"session_taken_bytes,omitempty"`
 	SessionNotKept    string `json:"session_not_kept,omitempty"`
+	// SessionNotKeptLoss is SessionNotKept in the one vocabulary
+	// (executorkeep.Loss), absent beside an absent reason.
+	SessionNotKeptLoss executorkeep.Loss `json:"session_not_kept_loss,omitempty"`
 	// ContextWindowTokens is the context window a run was pinned to, from the
 	// model it ran, as its runner pins it (internal/sandbox's windowPinner;
 	// Claude Code's CLAUDE_CODE_AUTO_COMPACT_WINDOW): the harness compacts under
@@ -312,14 +327,19 @@ type ExecutorCollected struct {
 	// its own) or `fresh`. Absent where none was recorded.
 	//
 	// HarnessSessionContinued says the run did continue the session it was
-	// asked to; HarnessSessionFellBack why one asked to continue started its own,
-	// as its script said: it is handed the fresh brief, so `continued` beside
-	// HarnessSessionContinued false is a run that read the fresh one. The reason
-	// is one sentence, redacted and cut to a KiB, marked `…`
-	// (internal/sandbox's MaxFellBackBytes); the whole is on the error stream.
+	// asked to: it is handed the fresh brief where its script started its own,
+	// so `continued` beside HarnessSessionContinued false is a run that read
+	// the fresh one, which SessionNotContinued says why of.
 	Brief                   string `json:"brief,omitempty"`
 	HarnessSessionContinued bool   `json:"harness_session_continued,omitempty"`
-	HarnessSessionFellBack  string `json:"harness_session_fell_back,omitempty"`
+	// SessionNotContinued is the launch's FINAL verdict on the newest session
+	// its turn or conversation left that its run did not continue
+	// (executorkeep.NotContinued): the launch's own, or, where its box's
+	// restore failed and its script started a session of its own, `restore_failed`
+	// with the script's reason as its detail, redacted and cut to a KiB, marked
+	// `…`. Absent where it lost none. Published once per launch, as the record
+	// is, and counted once (crewlet.executor.session.not_continued).
+	SessionNotContinued *executorkeep.NotContinued `json:"session_not_continued,omitempty"`
 }
 
 // The kinds of a launch that did not succeed ([ExecutorCollected.ErrorKind]).
@@ -736,12 +756,47 @@ type ExecutorAnswerGiven struct {
 	// no LaunchID: the holder only reads the row again, and a build that
 	// predates fold-ins spends it as an answer naming no question.
 	FoldIn string `json:"fold_in,omitempty"`
+}
 
-	// Waited is how the run a parked run waited for (`wait_for_run`) left its
-	// seat's slots, where the engine answers that wait (ADR-0176), nil for
-	// every other answer. The node holding the seat takes it only for a run
-	// whose row waits on that very run (internal/sandbox's PendingRun.WaitsFor).
-	Waited *RunWaited `json:"waited,omitempty"`
+// ExecutorWaitOver is the WAKE the engine puts on a seat's control topic once
+// a run parked on what the engine answers, a `wait_for_run` or its own calls
+// (ADR-0176), may be carried on. NEVER AN ANSWER, and never recorded as one:
+// it names the run and the job that parked, and the seat's holder reads the
+// row again and carries the run on from it, rebuilding how the waited run left
+// or which calls returned (internal/sandbox's Coordinator.OnWaitOver). A TYPE
+// OF ITS OWN, so a build that predates it acknowledges and drops it, as every
+// type it does not know, and never hears a person's answer in it. NEVER A
+// TURN, and kept out of the event store like the other wakes.
+type ExecutorWaitOver struct {
+	// TurnID is the parked run, and LaunchID the job that parked on the
+	// wait: the wake carries the run on only while that job still waits.
+	TurnID   string `json:"turn_id"`
+	LaunchID string `json:"launch_id"`
+
+	// Agent is the seat the run belongs to, by its derived id, whose
+	// control topic this travels on (ADR-0013); AgentHandle its handle, for
+	// a person reading the log line.
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+}
+
+// EventType is the "executor_wait_over" wire type.
+func (ExecutorWaitOver) EventType() string { return "executor_wait_over" }
+
+// AgentID is the seat whose run may carry on.
+func (e ExecutorWaitOver) AgentID() string { return e.Agent }
+
+// SummaryFor says what the wake is, for a log line: it is never on a feed.
+func (e ExecutorWaitOver) SummaryFor(actor string) string {
+	return lead(actor, "had its parked executor's wait end")
+}
+
+// CallReturned names a bridged call a parked job waited on, which has
+// returned: its tool and its place among the run's calls. What it returned is
+// on the run's log, which the brief carrying the run on tells.
+type CallReturned struct {
+	Tool string `json:"tool"`
+	Seq  int    `json:"seq"`
 }
 
 // RunWaited is how a run another run waited for left its seat's slots, as the

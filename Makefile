@@ -432,9 +432,10 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifact
 # depend on the source and go.mod alone: go.mod's own toolchain (never a newer
 # one `auto` would keep), -trimpath, no VCS stamp (it would change with every
 # commit), an empty build id, and gzipbuild's compress/gzip in place of the
-# gzip program, whose output is its version's. x/net/websocket is its one
-# module beyond std, as only it saves hand-rolling RFC 6455, which #1818's
-# ruling forbids; its version is in the build info, so its bumps rebuild
+# gzip program, whose output is its version's. x/net/websocket and
+# klauspost/compress/zstd are its modules beyond std, as only they save
+# hand-rolling RFC 6455 and RFC 8878, which #1818's ruling forbids; their
+# versions are in the build info, so their bumps rebuild
 # (.github/workflows/dependabot-notehelper.yml). `go doc ./internal/notehelper`.
 NOTEHELPER_OUT := internal/sandbox/executor/notehelper
 NOTEHELPER_GO := go$(shell sed -n 's/^go //p' go.mod)
@@ -875,7 +876,8 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # environment (toolenv_test.go) — and of its Kimi Code driver
 # (kimi_driver_internal_test.go), against a stand-in of Kimi Code's server —
 # and of Pi's extension (pi_extension_internal_test.go), against a stand-in of
-# pi's extension API — and
+# pi's extension API — and of its Cursor Agent helper
+# (cursorcarry_internal_test.go), on real chat stores of the release — and
 # internal/browser/boxhelper, which runs the box helper under this node and the
 # floor's, each box installing the Playwright tree with that Node's own npm,
 # offline. Without node those cases fail under REQUIRED
@@ -1028,7 +1030,8 @@ require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCod
 	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
 	  echo "  module over the frames a real engine produced,"; \
 	  echo "  internal/sandbox/executor runs the three OpenCode plugins and"; \
-	  echo "  the Kimi Code driver and Pi extension the engine embeds, and"; \
+	  echo "  the Kimi Code driver, Pi extension and Cursor Agent helper the"; \
+	  echo "  engine embeds, and"; \
 	  echo "  internal/browser/boxhelper runs the box"; \
 	  echo "  helper's modules under node, each box installing its Playwright"; \
 	  echo "  tree with that node's npm. Each FAILS without node"; \

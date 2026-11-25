@@ -26,6 +26,10 @@ type ThreadTraits struct {
 	// PlacesWithResumeRead says a capture is placed at a save point only
 	// where its release's resume was read ([TakenSession.ResumeRead]).
 	PlacesWithResumeRead bool
+	// Summaries says the runner reads its main thread's newest compaction
+	// summary ([MainThreadAsk.Summary]) at every box read, whether or not it
+	// counts the thread (Reads).
+	Summaries bool
 }
 
 // ThreadTraitsOf is runner's [ThreadTraits], zero for a runner that states
@@ -157,6 +161,19 @@ func resumesOnLaunchRoute(runner Runner) bool {
 func startsFresh(runner Runner) bool {
 	starter, ok := runner.(freshStarter)
 	return ok && starter.StartsFresh()
+}
+
+// telemetryExporter is a [Runner] whose harness exports its run's OTLP to
+// the engine's receiver by the environment the run is started with
+// ([withTelemetry]). Optional: a runner that is none is handed none of
+// Crewlet's telemetry, so its model's shell holds none of it either.
+type telemetryExporter interface{ ExportsTelemetry() bool }
+
+// exportsTelemetry reports whether runner's harness exports its run's OTLP to
+// the engine's receiver.
+func exportsTelemetry(runner Runner) bool {
+	exporter, ok := runner.(telemetryExporter)
+	return ok && exporter.ExportsTelemetry()
 }
 
 // MCPDeferrer is a [Runner] whose harness hides every MCP server's tools

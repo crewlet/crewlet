@@ -152,6 +152,7 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"EmbeddingProvider", "type", strs(EmbeddingProviderTypes)},
 		{"SandboxProvider", "default_run_in", strs(Placements)},
 		{"LLMProvider", "run_in", strs(Placements)},
+		{"LLMFleet", "strategy", strs(LLMFleetStrategies)},
 		{"RoleAvatar", "character", strs(AvatarCharacters)},
 		{"RoleAvatar", "color", strs(AvatarColors)},
 		{"LocalSandbox", "runtime", strs(ContainerRuntimes)},

@@ -263,7 +263,8 @@ func TestARetirementDropsTheServedRowAlone(t *testing.T) {
 	out := newTurn()
 	e.begin(beginning(e.head(servedSeat, servedTicket), servedSeat, servedTicket, out, ""))
 	e.end(ending(servedSeat, servedTicket, out, "", executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
-		Exhausted: []string{row.SessionID}}))
+		SpentSessions: []executorkeep.SpentSession{{Session: row.SessionID,
+			Loss: executorkeep.LossContextExhausted}}}))
 	if got := headTurn(e, servedTicket); got != "" || e.servedRows(run) != 0 {
 		t.Errorf("the ticket reads head %q after its turn ran out of context in it", got)
 	}

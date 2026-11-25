@@ -697,7 +697,7 @@ func TestEveryConditionIsToldInTheSameWordsOnEveryTransport(t *testing.T) {
 // A RUNNING RUN'S OUTPUT THAT COULD NOT BE READ IS TOLD BY WHAT CLEARS IT, on
 // both transports: a box its provider did not answer and a node that could not
 // answer just now are a 503 with a Retry-After, a setup somebody has to fix is
-// a 503 with none, and only a fault of the node that owns the run is a 500 —
+// a 503 with none, and only a fault of the node hosting the run's box is a 500 —
 // each in the engine's own words, with nothing of the provider's. A provider
 // outage while somebody watched a run used to be a 500 query_failed, the
 // answer that says the node broke and waiting won't help.
@@ -707,7 +707,7 @@ func TestEveryConditionIsToldInTheSameWordsOnEveryTransport(t *testing.T) {
 // Retry-After.
 func TestARunsOutputThatCouldNotBeReadIsToldByWhatClearsIt(t *testing.T) {
 	t.Parallel()
-	host := errors.New("e2b: GET https://49983-box.e2b.example.com/files: 502 Bad Gateway")
+	host := errors.New("docker: Cannot connect to the Docker daemon at unix:///var/run/docker.sock")
 	for name, c := range map[string]struct {
 		err    error
 		status int
@@ -716,16 +716,16 @@ func TestARunsOutputThatCouldNotBeReadIsToldByWhatClearsIt(t *testing.T) {
 		"a box its provider did not answer": {err: fmt.Errorf("sandbox: read the box of "+
 			"run t1: %w", sandbox.Because(sandbox.WhyProviderUnavailable, host)),
 			status: http.StatusServiceUnavailable, waits: true},
-		"the owner's provider did not answer": {err: &sandbox.TailError{Node: "n2",
+		"the host's provider did not answer": {err: &sandbox.TailError{Node: "n2",
 			TurnID: "t1", Failure: sandbox.TailFailure(sandbox.WhyProviderUnavailable)},
 			status: http.StatusServiceUnavailable, waits: true},
-		"the owner could not answer just now": {err: &sandbox.TailError{Node: "n2",
+		"the host could not answer just now": {err: &sandbox.TailError{Node: "n2",
 			TurnID: "t1", Failure: sandbox.TailFailedUnanswered},
 			status: http.StatusServiceUnavailable, waits: true},
-		"the owner's sandbox setup": {err: &sandbox.TailError{Node: "n2", TurnID: "t1",
+		"the host's sandbox setup": {err: &sandbox.TailError{Node: "n2", TurnID: "t1",
 			Failure: sandbox.TailFailure(sandbox.WhyConfiguration)},
 			status: http.StatusServiceUnavailable},
-		"a fault of the owner's": {err: &sandbox.TailError{Node: "n2", TurnID: "t1",
+		"a fault of the host's": {err: &sandbox.TailError{Node: "n2", TurnID: "t1",
 			Failure: sandbox.TailFailedFault}, status: http.StatusInternalServerError},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -738,7 +738,7 @@ func TestARunsOutputThatCouldNotBeReadIsToldByWhatClearsIt(t *testing.T) {
 			if rec.Code != c.status {
 				t.Fatalf("REST status = %d, want %d: %s", rec.Code, c.status, rec.Body.String())
 			}
-			for _, leak := range []string{"e2b.example.com", "502", "n2 owns"} {
+			for _, leak := range []string{"docker.sock", "Docker daemon", "n2 reads"} {
 				if strings.Contains(rec.Body.String(), leak) {
 					t.Errorf("REST body carries %q: %s", leak, rec.Body.String())
 				}

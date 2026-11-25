@@ -1,11 +1,14 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,13 +29,13 @@ const MuseName = "muse-code"
 // Muse drives Muse Code headless (`muse exec --json`), measured on 1.4.25.
 //
 // Its model is reached through the run ENVIRONMENT (META_API_KEY) or the login
-// a local box is seeded with (`.config/muse/auth.json`). Its settings are
-// written whole ([museSettings]); its session is a directory, packed and
-// restored by its script ([museSessionGate], [musePack]). Every run is
-// `--yolo`: approvals and the OS sandbox off and the workspace trusted for
-// this run alone, since 1.4.25 loads no MCP server, the seat's bridge
-// included, in an untrusted workspace (measured), so a repository's rules,
-// skills and MCP servers load as they do under Claude Code. Its end on
+// a local box is seeded with (`.config/muse/auth.json`). It loads what a
+// person's `muse exec` loads from the box home and its workspace, its own
+// settings over the home's ([museLayer], [museMergeSystem]); its session is a
+// directory, packed and restored by its script ([museSessionGate],
+// [musePack]). Every run is `--yolo`: approvals and the OS sandbox off and the
+// workspace trusted for this run alone, since 1.4.25 loads no MCP server, the
+// seat's bridge included, in an untrusted workspace (measured). Its end on
 // request is end.go's protocol: SIGTERM flushes the session and exits 143.
 type Muse struct{}
 
@@ -52,6 +55,12 @@ func NewMuse() *Runner { return New(Muse{}) }
 
 // Name is the harness's key in the runner registry.
 func (Muse) Name() string { return MuseName }
+
+// MCPCallCeiling is none: `tool_timeout_sec` carries the bridge's own bound
+// ([museMCP]). Its calls carry no progress token, so a response is silent until
+// its answer, and its client waits it out: a 1040-second call under a
+// 1050-second bound was answered whole (measured on 1.4.25).
+func (Muse) MCPCallCeiling() time.Duration { return 0 }
 
 // Resumes says Muse Code continues a session it ran: `muse exec --session-id`
 // on an id its data directory holds resumes it (measured on 1.4.25).
@@ -131,9 +140,6 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 		// The goal-reminder observers are model requests of their own, which
 		// a seat's run has no use for and would pay for.
 		"--disable-reminders",
-		// No Claude Code or Codex personal rules and skills from the box
-		// home: the seat's are its own.
-		"--no-foreign-personal-context",
 		// Exec offers no ask-the-user tool; the flag holds that whatever a
 		// later release does. ask_and_wait is on the bridge.
 		"--disable-request-user-input",
@@ -154,13 +160,13 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	if req.Limits.MaxTurns > 0 {
 		parts = append(parts, "--max-model-steps", strconv.Itoa(req.Limits.MaxTurns))
 	}
-	// THE KEY ON STDIN, where the entry signs in by it (META_API_KEY): the
-	// script reads it, and Muse's own environment, which its shell inherits
-	// whole, never holds it (measured on 1.4.25).
-	parts = append(parts, `--prompt-file "$p" $kf`)
+	parts = append(parts, museLayer, `--prompt-file "$p"`)
 
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	// THE HOME'S OWN SETTINGS BACK however the script exits; a run killed
+	// first leaves them to the next run's clear ([Muse.mendHome]).
+	line(`museput() { %s; }; trap museput EXIT`, museRestore(paths))
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
 	b.WriteString(museRelease)
@@ -176,13 +182,78 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
 	b.WriteString(museWiring(paths))
-	b.WriteString(museShellEnvironment(paths, req.SignInEnv))
 	before, after := museChildUsage(paths)
 	b.WriteString(before)
-	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
+	watch := ""
+	if own := museOwnServers(req); len(own) > 0 {
+		b.WriteString(museGuard(paths, own))
+		watch = "museguard"
+	}
+	b.WriteString(launchWatched(strings.Join(parts, " "), watch, paths))
 	b.WriteString(after)
+	b.WriteString(museUnwire(paths))
 	b.WriteString(museCapture(paths))
 	line(`exit "$code"`)
+	return b.String()
+}
+
+// museOwnServers is the run's servers of Crewlet's own ([crewletServers]),
+// a fresh session's included, which [museGuard] holds Muse Code to.
+func museOwnServers(req sandbox.RunRequest) []string {
+	own := crewletServers(req.MCPServers)
+	if f := req.FreshWiring; f != nil {
+		own = append(own, crewletServers(f.MCPServers)...)
+	}
+	slices.Sort(own)
+	return slices.Compact(own)
+}
+
+// museGuard is the part of a run's script that counts the session's lines as
+// its harness starts (gb) and defines `museguard`, which [launchWatched] runs
+// once it has: at THIS run's first model request, the first
+// `model_request_configured` record past gb, it ends the harness unless that
+// record offers the model a tool of a server of own, `mcp__<name>__` under the
+// name the run added it by ([Paths.MuseServersAdded]), `-` written `_`; saying
+// why on the error stream. The request is the run's own whatever the server's
+// name: a resumed run writes no new tool catalog where its servers kept their
+// names (measured on 1.4.25), and a dropped one offers none of their tools
+// (64 configurations measured). A session or request it cannot find, or a
+// name past what Muse shows whole, is no verdict.
+func museGuard(paths Paths, own []string) string {
+	q := shellword.Quote
+	sessions := q(paths.MuseSessions())
+	settings := q(paths.MuseSettings())
+	var names []string
+	for _, name := range own {
+		if len(name)+len("-")+museNonceLen <= museServerNameShown {
+			names = append(names, q(name)+"-??????")
+		}
+	}
+	if len(names) == 0 {
+		return "museguard() { :; }\n"
+	}
+	var b strings.Builder
+	b.WriteString(`gb=0; for gy in ` + sessions + `/*/*/*/"$s"; do [ -s "$gy/session.jsonl" ] && [ ! -L "$gy" ] && gb=$(wc -l < "$gy/session.jsonl"); done
+museguard() {
+gs= gm=
+while [ -z "$endhalted" ] && kill -0 "$harness" 2> /dev/null; do
+[ -n "$gs" ] || for gy in ` + sessions + `/*/*/*/"$s"; do [ -s "$gy/session.jsonl" ] && [ ! -L "$gy" ] && gs=$gy/session.jsonl; done
+[ -z "$gs" ] || gm=$(tail -n +"$((gb + 1))" "$gs" 2> /dev/null | grep -n -F '"kind":"model_request_configured"' | head -n 1)
+[ -z "$gm" ] || break
+sleep 0.1
+done
+[ -z "$endhalted" ] && [ -n "$gm" ] || return 0
+gl=$(sed -n "$((gb + ${gm%%:*}))p" "$gs" 2> /dev/null); gk=; gn=
+while IFS= read -r gx; do case "$gx" in ` + strings.Join(names, "|") + `) gk=1; gt=$(printf '%s' "$gx" | tr - _); case "$gl" in *"\"mcp__${gt}__"*) gn=1 ;; esac ;; esac; done < ` + q(paths.MuseServersAdded()) + ` 2> /dev/null
+[ -n "$gk" ] && [ -z "$gn" ] || return 0
+gf=; gd=$(pwd -P); gr=$(git rev-parse --show-toplevel 2> /dev/null)
+while :; do [ ! -f "$gd/.mcp.json" ] || gf="$gf${gf:+, }$gd/.mcp.json"; case "$gr" in ''|"$gd") break ;; esac; [ "$gd" != / ] || break; gd=$(dirname "$gd"); done
+[ ! -f ` + settings + ` ] || gf="$gf${gf:+, }"` + settings + `
+gh=$(muse mcp list --user --json < /dev/null 2>&1 | grep -e mcp_configuration_fault -e ' failed (' | head -c 400)
+printf 'crewlet: %s%s. The run was ended as it started.\n' "Muse Code started without Crewlet's MCP server, which the run's notes and tools go through: it leaves out every MCP server, saying nothing, where one entry under mcpServers in a file it reads them from is one it does not take (measured on 1.4.25: a type it does not know, a server with no command or url or with both, a field of the wrong kind, a variable it cannot expand in a url or env), or the file is no JSON object, or the home's settings hold mcp_servers beside it, and no setting of the run's undoes that. Fix or remove the entry in ${gf:-the files it reads (each .mcp.json from the root of the repository down to the start directory, and the settings of the home)}" "${gh:+; Muse says of the settings of the home: $gh}" >&2
+end "$harness"
+}
+`)
 	return b.String()
 }
 
@@ -490,26 +561,229 @@ func (Muse) Events() Decoder { return &museEvents{} }
 // result IS its stream.
 func (Muse) Parse(stdout []byte) sandbox.Result { return decodeAll(&museEvents{}, stdout) }
 
-// museSettings is the run's own settings ([Paths.MuseSettings]), written whole:
-// telemetry off (26 connections to api.meta.ai over two runs without it, none
-// with it, measured) and the seat's standing instructions appended to Muse's
-// own system prompt. Its MCP servers are added by the run's script
-// ([museWiring]).
-type museSettings struct {
-	SchemaVersion int           `json:"schema_version"`
-	Telemetry     museTelemetry `json:"telemetry"`
-	Run           *museRun      `json:"run,omitempty"`
+// museLayer is the run's telemetry off, set for this run alone over the box
+// home's settings (`-c`, measured on 1.4.25: the home's other settings and MCP
+// servers load beside it, and the file is not written); 26 connections to
+// api.meta.ai over two runs without it, none with it. The standing
+// instructions are no `-c`, which would put them on the command line
+// ([museMergeSystem]).
+const museLayer = `-c telemetry.enabled=false`
+
+// museMergeSystem sets the box home's settings' `run.system_prompt_append`,
+// which Muse adds at the very end of its own instructions and re-reads on
+// every resume (measured on 1.4.25), to the home's own append with system
+// after it, held to [museSystemMax] together; every other setting stays as
+// the home has it. The home's file is held first ([Paths.MuseHeldSettings]),
+// for the script to put back whole as the run ends ([museRestore]), or the
+// next clear where it was killed first ([Muse.mendHome]). A file that is no
+// JSON object, or an append that is no string, is refused, naming it.
+func museMergeSystem(ctx context.Context, box sandbox.Sandbox, paths Paths, system string) error {
+	raw, err := museHold(ctx, box, paths)
+	if err != nil {
+		return err
+	}
+	path := paths.MuseSettings()
+	settings := map[string]json.RawMessage{"schema_version": json.RawMessage("1")}
+	if len(bytes.TrimSpace(raw)) > 0 {
+		settings = nil
+		if err = json.Unmarshal(raw, &settings); err != nil || settings == nil {
+			return fmt.Errorf("executor: the box home's Muse Code settings (%s) are no JSON object (%v): "+
+				"fix or remove the file in the box's image", path, err)
+		}
+	}
+	run := map[string]json.RawMessage{}
+	if held, ok := settings["run"]; ok {
+		if err = json.Unmarshal(held, &run); err != nil || run == nil {
+			return fmt.Errorf("executor: the box home's Muse Code settings (%s) hold a `run` that is no "+
+				"object (%v): fix or remove it in the box's image", path, err)
+		}
+	}
+	appended := system
+	if held, ok := run["system_prompt_append"]; ok {
+		var own string
+		if err = json.Unmarshal(held, &own); err != nil {
+			return fmt.Errorf("executor: the box home's Muse Code settings (%s) hold a "+
+				"run.system_prompt_append that is no string (%v): fix it in the box's image", path, err)
+		}
+		if own != "" {
+			appended = own + "\n\n" + system
+		}
+		if n := len(appended); n > museSystemMax {
+			return fmt.Errorf("executor: the box home's run.system_prompt_append (%s, %d bytes) and this "+
+				"run's standing instructions (%d bytes) come to %d bytes, and Muse Code takes at most %d: "+
+				"shorten the home's or the seat's system prompt, its policies or its memory", path, len(own),
+				len(system), n, museSystemMax)
+		}
+	}
+	if run["system_prompt_append"], err = json.Marshal(appended); err != nil {
+		return fmt.Errorf("executor: encoding the standing instructions for Muse Code: %w", err)
+	}
+	if settings["run"], err = json.Marshal(run); err != nil {
+		return fmt.Errorf("executor: encoding Muse Code's settings: %w", err)
+	}
+	if err = writeJSON(ctx, box, path, settings); err != nil {
+		return fmt.Errorf("executor: writing Muse Code's settings: %w", err)
+	}
+	return nil
 }
 
-type museTelemetry struct {
-	Enabled bool `json:"enabled"`
+// museSwitchedOff refuses a run where the box home switches off what the run
+// brings of its own, each with no word otherwise (measured on 1.4.25): its
+// notes plugin, where it has one, by the settings' `plugins.activation` "off",
+// a disable recorded in installed.json ([Paths.MuseInstalled]), a reject
+// recorded as a hook's runtime capability, or an installed.json Muse cannot
+// read (it then loads no plugin); a seat skill, by `skills.activation.user`
+// "off" on its file. The plugin's records are read on every run, before the
+// script's remove and install, which would reset them: a run with no use for
+// the plugin is not refused, but its script leaves the plugin alone
+// ([Paths.MusePluginOff]); nothing is switched back on. Settings that do not
+// read are Muse's to refuse, which it does loudly.
+func museSwitchedOff(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
+	path := paths.MuseSettings()
+	raw, err := box.ReadFile(ctx, path)
+	if err != nil {
+		return fmt.Errorf("executor: reading the box home's own Muse Code settings (%s): %w", path, err)
+	}
+	var settings struct {
+		Plugins struct {
+			Activation map[string]json.RawMessage `json:"activation"`
+		} `json:"plugins"`
+		Capabilities map[string]struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"runtime_capabilities"`
+		Skills struct {
+			Activation struct {
+				User map[string]json.RawMessage `json:"user"`
+			} `json:"activation"`
+		} `json:"skills"`
+	}
+	_ = json.Unmarshal(raw, &settings) // a value that does not decode switches nothing off
+	var off []string
+	if string(settings.Plugins.Activation[museNotesPlugin]) == `"off"` {
+		off = append(off, fmt.Sprintf(`%s sets plugins.activation.%s to "off"`, path, museNotesPlugin))
+	}
+	for _, h := range museNoteHooks {
+		key := "plugin:" + museNotesPlugin + ":hook:" + h.id
+		if c, ok := settings.Capabilities[key]; ok && c.Enabled != nil && !*c.Enabled {
+			off = append(off, fmt.Sprintf("%s sets runtime_capabilities.%q.enabled to false (`muse plugins "+
+				"reject`)", path, key))
+		}
+	}
+	installed, err := museInstalledOff(ctx, box, paths)
+	if err != nil {
+		return err
+	}
+	off = append(off, installed...)
+	if err = museMarkPluginOff(ctx, box, paths, len(off) > 0); err != nil {
+		return err
+	}
+	var said []string
+	if req.Steer.Set() || req.SkillLoads.Set() {
+		said = off
+	}
+	for _, s := range req.Skills {
+		file := paths.MuseSkills() + "/" + s.Listed() + "/SKILL.md"
+		if string(settings.Skills.Activation.User[file]) == `"off"` {
+			said = append(said, fmt.Sprintf(`%s sets skills.activation.user[%q] to "off", the seat skill %s`,
+				path, file, s.Listed()))
+		}
+	}
+	if len(said) == 0 {
+		return nil
+	}
+	return fmt.Errorf("executor: the box home switches off what the run brings of its own, which Muse Code "+
+		"would then go without unseen, and the run never switches back on what a person switched off: %s; "+
+		"undo that there (`muse plugins enable` or `approve`, `muse skills enable`), or run without notes, "+
+		"skill loads and skills", strings.Join(said, "; "))
 }
 
-// museRun is the settings' `run` block: SystemPromptAppend lands at the very
-// end of the request's instructions, re-read from the settings on every
-// resume (measured on 1.4.25), so a continued run is told by its own launch.
-type museRun struct {
-	SystemPromptAppend string `json:"system_prompt_append,omitempty"`
+// museInstalledOff is what installed.json ([Paths.MuseInstalled]) says of the
+// notes plugin, read by the box's shell as Muse reads it: a disable
+// (`plugins.<id>.enabled` false), or the file there and unreadable (a link,
+// not a regular file, not readable, no JSON object), which leaves Muse with no
+// plugin at all (measured on 1.4.25). A missing file says nothing.
+func museInstalledOff(ctx context.Context, box sandbox.Sandbox, paths Paths) ([]string, error) {
+	file := paths.MuseInstalled()
+	q := shellword.Quote(file)
+	res, err := box.Exec(ctx, "if [ -L "+q+" ] || { [ -e "+q+" ] && { [ ! -f "+q+" ] || [ ! -r "+q+" ]; }; }; "+
+		"then echo unreadable; elif [ -f "+q+" ]; then echo read; cat -- "+q+"; fi; exit 0", sandbox.ExecOptions{})
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("executor: reading the box home's Muse Code plugin store (%s): %w", file, err)
+	}
+	unreadable := []string{file + " is there but no regular file Muse Code can read, which leaves it no plugin"}
+	head, body, _ := strings.Cut(res.Stdout, "\n")
+	switch head {
+	case "unreadable":
+		return unreadable, nil
+	case "read":
+	default:
+		return nil, nil
+	}
+	var store struct {
+		Plugins map[string]struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"plugins"`
+	}
+	if read := json.Unmarshal([]byte(body), &store) == nil; !read {
+		return []string{file + " does not read as JSON, which leaves Muse Code no plugin"}, nil
+	}
+	if p, ok := store.Plugins[museNotesPlugin]; ok && p.Enabled != nil && !*p.Enabled {
+		return []string{fmt.Sprintf("%s sets plugins.%s.enabled to false (`muse plugins disable`)", file,
+			museNotesPlugin)}, nil
+	}
+	return nil, nil
+}
+
+// museMarkPluginOff records for the run's script whether a person switched the
+// notes plugin off ([Paths.MusePluginOff]): present, the script neither
+// removes, installs nor approves it, so the person's record stays as it is.
+func museMarkPluginOff(ctx context.Context, box sandbox.Sandbox, paths Paths, off bool) error {
+	q := shellword.Quote(paths.MusePluginOff())
+	cmd := "rm -f -- " + q
+	if off {
+		cmd = "mkdir -p " + shellword.Quote(paths.WorkDir()) + " && : > " + q
+	}
+	return execOK(ctx, box, cmd, "recording whether the box home switched the run's notes plugin off")
+}
+
+// museHold holds the box home's settings as the run finds them
+// ([Paths.MuseHeldSettings], empty where the home has none) and returns them:
+// the copy already held where there is one, which is the home's own, the live
+// file holding an earlier run's.
+func museHold(ctx context.Context, box sandbox.Sandbox, paths Paths) ([]byte, error) {
+	held, err := heldInBox(ctx, box, paths.MuseHeldSettings())
+	if err != nil {
+		return nil, err
+	}
+	path := paths.MuseSettings()
+	if held {
+		path = paths.MuseHeldSettings()
+	}
+	raw, err := box.ReadFile(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("executor: reading the box home's own Muse Code settings (%s): %w", path, err)
+	}
+	if held {
+		return raw, nil
+	}
+	if err = box.WriteFile(ctx, paths.MuseHeldSettings(), raw); err != nil {
+		return nil, fmt.Errorf("executor: holding the box home's own Muse Code settings: %w", err)
+	}
+	return raw, nil
+}
+
+// museRestore is the shell putting the home's own settings back once Muse has
+// stopped ([museMergeSystem]): the held copy written over the run's, through a
+// link as the home keeps it, or neither where the home had none; nothing where
+// none is held, so it runs any number of times. A whole copy: the run's MCP
+// servers and the notes plugin's approval go with it, and a later run's
+// install and approval of the plugin take as well (measured on 1.4.25).
+func museRestore(paths Paths) string {
+	return fmt.Sprintf(`if [ -e %[1]s ]; then if [ -s %[1]s ]; then cat %[1]s > %[2]s && rm -f %[1]s; else rm -f %[1]s %[2]s; fi; fi`,
+		shellword.Quote(paths.MuseHeldSettings()), shellword.Quote(paths.MuseSettings()))
 }
 
 // museMCPServer is one server as Muse's settings read it (1.4.25): an HTTP
@@ -547,6 +821,9 @@ func museMCP(s sandbox.MCPServer) museMCPServer {
 	return out
 }
 
+// museNonceLen is how many hex digits [museNonce] makes.
+const museNonceLen = 6
+
 // museNonce is a run's own suffix to its servers' names: six hex digits (24
 // bits) from the system's random source, new every run, so the run's servers
 // are under names no file of the repository's can declare beforehand (a
@@ -554,7 +831,7 @@ func museMCP(s sandbox.MCPServer) museMCPServer {
 // up to 19 characters stays whole ([museServerNameShown]). A variable so a
 // case can name the files it reads.
 var museNonce = func() string {
-	var b [3]byte
+	var b [museNonceLen / 2]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
@@ -600,19 +877,16 @@ func museServerName(name string) bool {
 	return true
 }
 
-// WriteConfig writes what a Muse Code run reads: its settings
-// ([museSettings]), its MCP servers ([writeMuseServers]) with a fresh
-// session's beside them ([sandbox.RunRequest.FreshWiring]), its skills, its
-// notes plugin, take config and note helper where it is wired to its notes or
-// its skills' loads, and its brief, and the brief a new session is handed in
-// a continued one's place, which `--prompt-file` names. Its standing
-// instructions, told of notes where it reads them, are refused past
-// [museSystemMax].
+// WriteConfig writes what a Muse Code run reads of its own: its standing
+// instructions, told of notes where it reads them, into the home's settings
+// ([museMergeSystem]), refused past [museSystemMax]; its MCP servers
+// ([writeMuseServers]) with a fresh session's beside them
+// ([sandbox.RunRequest.FreshWiring]); its skills; its notes plugin, take
+// config and note helper where it is wired to its notes or its skills' loads;
+// and its brief, and the brief a new session is handed in a continued one's
+// place, which `--prompt-file` names.
 func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	if _, err := toolEnvOmitted(req.SignInEnv); err != nil {
-		return "", err
-	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, m.NoteInstruction())
@@ -622,12 +896,14 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			"at most %d (run.system_prompt_append): shorten the seat's system prompt, its policies or its "+
 			"memory", n, museSystemMax)
 	}
-	settings := museSettings{SchemaVersion: 1}
-	if system != "" {
-		settings.Run = &museRun{SystemPromptAppend: system}
+	if err := museSwitchedOff(ctx, box, req, paths); err != nil {
+		return "", err
 	}
-	if err := writeJSON(ctx, box, paths.MuseSettings(), settings); err != nil {
-		return "", fmt.Errorf("executor: writing Muse Code's settings: %w", err)
+	notes, loads := req.Steer.Set(), req.SkillLoads.Set()
+	if system != "" {
+		if err := museMergeSystem(ctx, box, paths, system); err != nil {
+			return "", err
+		}
 	}
 	nonce := museNonce()
 	if err := writeMuseServers(ctx, box, paths.MuseServers(), req.MCPServers, nonce); err != nil {
@@ -636,7 +912,6 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err := writeMuseSkills(ctx, box, req.Skills, paths); err != nil {
 		return "", err
 	}
-	notes, loads := req.Steer.Set(), req.SkillLoads.Set()
 	if notes || loads {
 		if err := writeMuseNotes(ctx, box, req, paths); err != nil {
 			return "", err
@@ -689,17 +964,18 @@ func writeMuseNotes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReq
 	return writeNoteHelper(ctx, box, paths.MuseNoteHelper())
 }
 
-// museWiring is the part of a run's script that wires its settings before its
-// harness starts: the run's notes plugin installed and approved where it has
-// one, among no other, since the clear removed every installed plugin
-// ([Paths.MusePlugins]); then each MCP server added
-// whole. AN APPROVAL REWRITES THE SETTINGS, dropping every server's
-// `required` and `tool_timeout_sec`, while `muse mcp add-json` keeps both
-// (measured on 1.4.25), so the servers come after it. A plugin Muse would not
-// take leaves the run without its notes, as its error stream says; a server
-// it would not take fails the run, which would have no tools. The install's
-// answer is kept whole ([Paths.MuseNotesInstall]) for the confirm to read the
-// package's digest from, and removed where the approval failed.
+// museWiring is the part of a run's script that wires the box home's settings
+// before its harness starts: an earlier run's notes plugin removed, and this
+// run's installed and approved where it has one; and each of this run's MCP
+// servers recorded ([Paths.MuseServersAdded]) and added whole, beside the
+// home's own, an earlier run's gone already ([Muse.mendHome]). AN APPROVAL REWRITES THE
+// SETTINGS, dropping every server's `required` and `tool_timeout_sec`, while
+// `muse mcp add-json` keeps both (measured on 1.4.25), so the servers come
+// after it. A plugin Muse would not take leaves the run without its notes, as
+// its error stream says; a server it would not add fails the run.
+// The install's answer is kept whole ([Paths.MuseNotesInstall]) for the
+// confirm to read the package's digest from, and removed where the approval
+// failed.
 func museWiring(paths Paths) string {
 	q := shellword.Quote
 	plugin := paths.MuseNotesPlugin()
@@ -707,7 +983,12 @@ func museWiring(paths Paths) string {
 	installed := q(paths.MuseNotesInstall())
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	line(`if [ -f %s ]; then`, q(plugin+"/.muse-plugin/plugin.json"))
+	added := q(paths.MuseServersAdded())
+	// NOT OVER A PERSON'S OFF ([museSwitchedOff]): the remove and install
+	// reset a disable and a reject, so where one stands they are skipped.
+	off := q(paths.MusePluginOff())
+	line(`[ -e %s ] || muse plugins remove %s --json < /dev/null > /dev/null 2>&1; rm -f %s`, off, museNotesPlugin, installed)
+	line(`if [ ! -e %s ] && [ -f %s ]; then`, off, q(plugin+"/.muse-plugin/plugin.json"))
 	line(`  chmod 0755 %s 2> /dev/null`, q(paths.MuseNoteHelper()))
 	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > %s 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
 		q(plugin), installed, errs, museNotesPlugin, errs)
@@ -718,6 +999,7 @@ func museWiring(paths Paths) string {
 	line(`for f in %s/*.json; do`, q(paths.MuseServers()))
 	line(`  [ -f "$f" ] || continue`)
 	line(`  n=${f##*/}; n=${n%%.json}`)
+	line(`  printf '%%s\n' "$n" >> %s`, added)
 	line(`  muse mcp add-json "$n" "$(cat "$f")" --user < /dev/null > /dev/null 2> %s || { echo "crewlet: the MCP server $n could not be added to the run's settings, so the run does not start: $(head -c 400 %s 2> /dev/null)" >&2; exit 1; }`,
 		errs, errs)
 	line(`done`)
@@ -725,60 +1007,155 @@ func museWiring(paths Paths) string {
 	return b.String()
 }
 
-// museShellOff is every variable the run's model's shell runs without, since
-// it inherits Muse's environment whole (measured on 1.4.25): the entry's key,
-// which the script hands Muse on stdin instead ([museShellEnvironment]), and
-// OTEL_EXPORTER_OTLP_*, an exporter's address and headers, of which Muse reads
-// the endpoint alone.
-const museShellOff = "OTEL_EXPORTER_OTLP_"
+// museUnwire is the part of a run's script that takes the run's MCP servers
+// out of the home's settings once Muse has exited ([museWiring]), so no
+// bridge token of the run's stays in a home file; the record goes once every
+// one is out, and one left is the next clear's ([Muse.mendHome]).
+func museUnwire(paths Paths) string {
+	added := shellword.Quote(paths.MuseServersAdded())
+	return `if [ -f ` + added + ` ]; then gu=; while IFS= read -r n; do [ -n "$n" ] || continue; ` +
+		`muse mcp remove "$n" --user < /dev/null > /dev/null 2>&1 || gu=1; done < ` + added + `; ` +
+		`[ -n "$gu" ] || rm -f ` + added + `; fi
+`
+}
 
-// museShellEnvironment is the part of a run's script that keeps the
-// environment its harness, and so the model's shell, starts with to what it
-// needs: the entry's META_API_KEY, where it has one, written to a file only
-// the script's user reads, opened as the script's stdin, which the launch
-// hands the harness, and removed at once, so Muse reads the key on stdin
-// (`--api-key-stdin`, kf) and no file or variable keeps it; every other
-// variable the run signs in by (signIn, [sandbox.RunRequest.SignInEnv]),
-// which Muse never reads, and every OTEL_EXPORTER_OTLP_* variable unset.
-// A sign-in name no shell can unset is refused by [Muse.WriteConfig].
-func museShellEnvironment(paths Paths, signIn []string) string {
-	key := shellword.Quote(paths.WorkDir() + "/muse-key")
-	unset := "unset META_API_KEY"
-	if names, err := toolEnvOmitted(signIn); err == nil {
-		for _, name := range names {
-			unset += " " + name
+var _ homeMender = Muse{}
+
+// mendHome takes what a run killed before its script put the home's settings
+// back left in them out before the next run in the box, whichever harness it
+// runs: the servers it added, by the names it recorded
+// ([Paths.MuseServersAdded]), with their bridge's token, and its standing
+// instructions, the home's own `run.system_prompt_append` put back from the
+// held copy ([Paths.MuseHeldSettings], [museAppendBack]). Every other key
+// stays as the file holds it, an edit made since included; nothing where
+// neither is held.
+func (Muse) mendHome(ctx context.Context, box sandbox.Sandbox, p Paths) error {
+	added, err := heldInBox(ctx, box, p.MuseServersAdded())
+	if err != nil {
+		return err
+	}
+	held, err := heldInBox(ctx, box, p.MuseHeldSettings())
+	if err != nil || !added && !held {
+		return err
+	}
+	var names, home []byte
+	if added {
+		if names, err = box.ReadFile(ctx, p.MuseServersAdded()); err != nil {
+			return fmt.Errorf("executor: reading the servers a Muse Code run added: %w", err)
 		}
 	}
-	return `kf=
-if [ -n "${META_API_KEY-}" ]; then
-  (umask 077 && printf '%s' "$META_API_KEY" > ` + key + `) && exec 0< ` + key + ` && kf=--api-key-stdin
-  rm -f ` + key + `
-fi
-` + unset + `
-for o in $(env | sed -n 's/^\(` + museShellOff + `[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$o"; done
-`
+	if held {
+		if home, err = box.ReadFile(ctx, p.MuseHeldSettings()); err != nil {
+			return fmt.Errorf("executor: reading the box home's own Muse Code settings, held: %w", err)
+		}
+	}
+	raw, err := box.ReadFile(ctx, p.MuseSettings())
+	if err != nil {
+		return fmt.Errorf("executor: reading the box home's Muse Code settings: %w", err)
+	}
+	if len(bytes.TrimSpace(raw)) > 0 {
+		var settings map[string]json.RawMessage
+		if err = json.Unmarshal(raw, &settings); err != nil || settings == nil {
+			return fmt.Errorf("executor: the box home's Muse Code settings (%s) are no JSON object (%v), so an "+
+				"earlier run's MCP servers and standing instructions cannot be taken out: fix or remove the file",
+				p.MuseSettings(), err)
+		}
+		if err = museServersOut(settings, strings.Fields(string(names)), p.MuseSettings()); err != nil {
+			return err
+		}
+		if held {
+			if err = museAppendBack(settings, home, p.MuseSettings()); err != nil {
+				return err
+			}
+		}
+		if err = writeJSON(ctx, box, p.MuseSettings(), settings); err != nil {
+			return fmt.Errorf("executor: writing Muse Code's settings: %w", err)
+		}
+	}
+	return execOK(ctx, box, "rm -f "+shellword.Quote(p.MuseServersAdded())+" "+shellword.Quote(p.MuseHeldSettings()),
+		"removing the record of a Muse Code run's servers and the home's held settings")
+}
+
+// museServersOut takes each of names out of settings' `mcpServers`, file
+// being where settings were read.
+func museServersOut(settings map[string]json.RawMessage, names []string, file string) error {
+	held, ok := settings["mcpServers"]
+	if !ok || len(names) == 0 {
+		return nil
+	}
+	var servers map[string]json.RawMessage
+	if err := json.Unmarshal(held, &servers); err != nil {
+		return fmt.Errorf("executor: the box home's Muse Code settings (%s) hold mcpServers that are no "+
+			"object (%v): fix or remove it", file, err)
+	}
+	for _, name := range names {
+		delete(servers, name)
+	}
+	var err error
+	if settings["mcpServers"], err = json.Marshal(servers); err != nil {
+		return fmt.Errorf("executor: encoding Muse Code's settings: %w", err)
+	}
+	return nil
+}
+
+// museAppendBack sets settings' `run.system_prompt_append` back to the one
+// home, the home's own settings file as held, sets: removed where it set
+// none, and `run` with it where nothing else is left in it and home had none.
+func museAppendBack(settings map[string]json.RawMessage, home []byte, file string) error {
+	var own map[string]json.RawMessage
+	if len(bytes.TrimSpace(home)) > 0 {
+		if err := json.Unmarshal(home, &own); err != nil {
+			return fmt.Errorf("executor: the box home's own Muse Code settings, held, are no JSON object "+
+				"(%v), so its run.system_prompt_append cannot be put back into %s: set it there", err, file)
+		}
+	}
+	var ownRun, run map[string]json.RawMessage
+	if held, ok := own["run"]; ok {
+		_ = json.Unmarshal(held, &ownRun)
+	}
+	if held, ok := settings["run"]; ok {
+		if err := json.Unmarshal(held, &run); err != nil {
+			return fmt.Errorf("executor: the box home's Muse Code settings (%s) hold a `run` that is no "+
+				"object (%v): fix or remove it", file, err)
+		}
+	}
+	if run == nil {
+		run = map[string]json.RawMessage{}
+	}
+	if v, ok := ownRun["system_prompt_append"]; ok {
+		run["system_prompt_append"] = v
+	} else {
+		delete(run, "system_prompt_append")
+	}
+	if _, had := own["run"]; len(run) == 0 && !had {
+		delete(settings, "run")
+		return nil
+	}
+	var err error
+	if settings["run"], err = json.Marshal(run); err != nil {
+		return fmt.Errorf("executor: encoding Muse Code's settings: %w", err)
+	}
+	return nil
 }
 
 // artifactFiles is the files a Muse Code run leaves in its box of its own
 // beside its sessions, which a later run must not find ([artifactHolder]):
 // the note helper, its take configs, its answer to the notes plugin's install
-// and the count of its subagents' lines its script kept, and the personal
-// AGENTS.md Muse loads as the user's own instructions, whatever wrote it
-// (measured on 1.4.25). Its settings are written whole by every run, and its
-// sessions and login are kept.
+// and the count of its subagents' lines its script kept. The record of the
+// servers it added and the home's held settings stay for the clear to put the
+// home's back by ([Muse.mendHome]);
+// the home's settings, skills, instructions and plugins, its sessions and its
+// login are kept.
 func (Muse) artifactFiles(p Paths) []string {
 	return []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
-		p.MuseNotesInstall(), p.MuseInstructions()}
+		p.MuseNotesInstall()}
 }
 
 // artifactDirs is the directories a Muse Code run leaves of its own
-// ([artifactDirHolder]): its MCP servers, a fresh session's, and its plugin;
-// and the two skill directories and the installed plugins Muse loads as the
-// user's own, whatever wrote them (measured on 1.4.25), so a run loads only
-// the skills its launch writes.
+// ([artifactDirHolder]): its MCP servers, a fresh session's, and its plugin.
+// Its skills are cleared by name ([writeMuseSkills]), beside the home's own.
 func (Muse) artifactDirs(p Paths) []string {
-	return []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin(), p.MuseSkills(), p.MuseConfigSkills(),
-		p.MusePlugins()}
+	return []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}
 }
 
 // museChargeBytes is the fewest bytes a Muse Code session's brief is counted

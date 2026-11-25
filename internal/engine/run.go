@@ -66,6 +66,7 @@ import (
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
+	"github.com/crewlet/crewlet/internal/providers/llm/fleet"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -515,12 +516,10 @@ type Engine struct {
 	// lease from its build ([Engine.publishSandbox]).
 	sandboxStart sync.Mutex
 
-	// sandboxWaiter is the fleet's completion poll (the boxes every node
-	// reaches, under the waiter duty) and sandboxHostWaiter this node's own
-	// for boxes on its host ([sandbox.Drives]). Each starts once, on a node
-	// that publishes, when a runtime and the node exist.
-	sandboxWaiter     atomic.Pointer[sandbox.Waiter]
-	sandboxHostWaiter atomic.Pointer[sandbox.Waiter]
+	// sandboxWaiter is this node's completion poll, for the boxes it launched,
+	// which also claims the launch-node watch ([sandbox.Waiter]). It starts
+	// once, on a node that publishes, when a runtime and the node exist.
+	sandboxWaiter atomic.Pointer[sandbox.Waiter]
 
 	// sandboxPollInterval is Options.SandboxPollInterval, kept because an
 	// apply can start the poll.
@@ -568,6 +567,15 @@ type Engine struct {
 	// every revision's build, so a sit-out outlives every apply and a
 	// sign-in's id is the same on every node.
 	plans *harness.Plans
+	// ledger is the node's LLM fleet balancer memory ([fleet.Ledger]): each
+	// seat job's home and each member's last serve, kept across applies.
+	ledger *fleet.Ledger
+	// readings is what this node kept of each sign-in's windows in its own
+	// file, read back at each apply ([Engine.recallReadings]).
+	readings keptReadings
+	// mcpDown is when each MCP instance this node holds stopped serving, kept
+	// in its own file across a restart ([Engine.keepMCPDown]).
+	mcpDown mcpDown
 
 	// fakePlay is Options.fakePlay: what a `providers.sandbox.fake` company's
 	// runs do, nil for the double's own demonstration. Kept because every
@@ -1119,7 +1127,7 @@ type Engine struct {
 
 	// boxReads asks a box's host to read it back and answers for boxes on this
 	// node's host; stopBoxReadServe and stopNudgeListen withdraw this node as
-	// answerer of those reads and listener for the nudges its waiters act on.
+	// answerer of those reads and listener for the nudges its waiter acts on.
 	// Nil without a broker (sandboxhost.go).
 	boxReads         *boxReads
 	stopBoxReadServe queue.Unsubscribe
@@ -1231,8 +1239,8 @@ type Options struct {
 	// reads it, then [mcpbridge.Build].
 	Bridge *mcpbridge.Bridge
 
-	// BoxHostURL is where a box on this node's own host (the `direct` cell)
-	// reaches the tool bridge and the telemetry receiver: the node's own
+	// BoxHostURL is where a box that shares this node's loopback (the `direct`
+	// cell) reaches the tool bridge and the telemetry receiver: the node's own
 	// listener serving them, on loopback ([mcpbridge.Options.HostURL],
 	// [sandbox.OtelReceiverOptions.HostURL]). The caller that bound the
 	// listener derives it on a node that runs seats: an ingress node serves
@@ -1490,16 +1498,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = boxURLs.Refusal(); err != nil {
 		return nil, fmt.Errorf("engine: a URL a box dials back to the engine: %w", err)
 	}
-	otel := opts.OtelReceiver
-	if otel == nil {
-		otel, err = sandbox.BuildOtelReceiver(getenv(environ),
-			tokenMaterial(opts.Bootstrap), opts.BoxHostURL)
-		if err != nil {
-			return nil, fmt.Errorf("engine: sandbox telemetry: %w", err)
-		}
-	}
-	// Same key material, different domain, built here for the receiver's
-	// reason: a fleet mints on one node and may verify on another, so every
+	// The bridge: a fleet mints on one node and may verify on another, so every
 	// node derives its key from the fleet's keyring. Its base is the bridge URL
 	// [ReadBoxURLs] read.
 	bridge := opts.Bridge
@@ -1507,6 +1506,15 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		if bridge, err = mcpbridge.Build(boxURLs.Bridge.URL, tokenMaterial(opts.Bootstrap),
 			opts.BoxHostURL); err != nil {
 			return nil, fmt.Errorf("engine: tool bridge: %w", err)
+		}
+	}
+	// Same key material, different domain, built here for the bridge's reason.
+	otel := opts.OtelReceiver
+	if otel == nil {
+		otel, err = sandbox.BuildOtelReceiver(getenv(environ),
+			tokenMaterial(opts.Bootstrap), opts.BoxHostURL)
+		if err != nil {
+			return nil, fmt.Errorf("engine: sandbox telemetry: %w", err)
 		}
 	}
 	// A coding box's git credential, the third per-run token beside the
@@ -1669,6 +1677,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		directoryNudge: make(chan struct{}, 1),
 	}
 	e.nextStart = opts.NextStart
+	// On the engine's clock, which a test may pin after New.
+	e.ledger = fleet.NewLedger(e.now)
+	e.ledger.OnRunning(e.statusRowsMoved)
 	// The claim gate's watch: every log whose health gates admission tells it
 	// from its apply loop from boot, and the seat host is built over its gate.
 	e.claims = newGateWatch(e.seatsAdmitted)
@@ -1965,7 +1976,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// On the node's registry of sign-ins, as every apply's revision is
 		// ([Engine.Apply]): built on none, the boot's entries kept sit-outs in
 		// registries the first apply's entries never found.
-		company, err = newCompany(opts.Company, e.resolver(), e.plans)
+		company, err = newCompany(opts.Company, e.resolver(), e.plans, e.ledger)
 		if err != nil {
 			return nil, err
 		}
@@ -2012,6 +2023,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// the shared login's lock, which a startup probe sized for the store
 		// knows nothing of.
 		company.restoreBundles(ctx)
+		company.warnAncestorFiles(ctx)
 	}
 	e.installEpoch(ctx, company)
 
@@ -2168,7 +2180,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armCodeHolds(ctx); err != nil {
 		return nil, err
 	}
-	// And the live output of the executors' boxes it owns, likewise
+	// And the live output of the executors' boxes it launched, likewise
 	// (executortail.go).
 	if err = e.armExecutorTails(ctx); err != nil {
 		return nil, fmt.Errorf("engine: serve executors' live output: %w", err)
@@ -2398,6 +2410,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.Provider == nil {
 		d.Provider = e.providerPark
+	}
+	if d.FleetEmpty == nil {
+		d.FleetEmpty = e.fleetEmptyPark
 	}
 	if d.Failure == nil {
 		d.Failure = e.failureHold

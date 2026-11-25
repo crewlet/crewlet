@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -116,9 +117,9 @@ func takeSessionSlot(ctx context.Context) (func(), error) {
 // value where the box holds no session: a harness this runner carries none
 // for, a run whose record names none, one whose harness wrote nothing to pack,
 // or a save no longer there. An error where it holds one that cannot be taken:
-// a pack that failed, an archive the box describes as past take's bound,
-// refused before a byte of it is read, or a save named by a path that is no
-// save's.
+// a pack that failed, an archive no box continues ([sandbox.UnrestorableError])
+// or one past take's bound, each refused before a byte of it is read, or a
+// save named by a path that is no save's.
 func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	take sandbox.SessionTake) (sandbox.TakenSession, error) {
 
@@ -181,12 +182,22 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	if err != nil || body == nil {
 		return sandbox.TakenSession{}, err
 	}
+	// NOR IS ONE ITS SCRIPT OR A SAVE PACKED read, whatever its size: it is
+	// refused before a byte of it is streamed ([sandbox.UnrestorableError]).
+	if refused := r.unrestorable(archive); refused != nil {
+		_ = body.Close()
+		release(ctx)
+		return sandbox.TakenSession{}, refused
+	}
 	if archive.Size > take.MaxBytes {
 		_ = body.Close()
 		release(ctx)
 		return sandbox.TakenSession{}, fmt.Errorf("executor: the session's archive is %d bytes, past the %d "+
-			"a session is kept at", archive.Size, take.MaxBytes)
+			"a session is kept at: %w", archive.Size, take.MaxBytes, executorkeep.ErrSessionTooLarge)
 	}
+	// WHAT ITS PACK TRIMMED, the box's word beside the archive (trim.go).
+	archive.Trim = r.trimOf(ctx, box, archive)
+	logTrim(ctx, r.harness.Name(), archive)
 	// ONE PASS, the scrub and its meter: held to the base, past it the one
 	// large slot both share while either holds a piece past it (the package
 	// doc's "A collection's read of a thread"). Each one's wait for it ends
@@ -238,9 +249,9 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 			}
 			return again, nil
 		}
-		scrubErr := scrubContained(ctx, func() error {
+		scrubErr := plainTooLarge(scrubContained(ctx, func() error {
 			return scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum, meter), scrub, bounds)
-		})
+		}))
 		logMemoUse(ctx, remembered)
 		out.finished(scrubErr, sum.String())
 		// THE METER ENDS BEFORE THE READER DOES, so a caller that has read the
@@ -271,6 +282,17 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
 		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next, RunLines: runLines,
 		ResumeRead: r.resumeRead(archive.Version)}, nil
+}
+
+// plainTooLarge is a take's scrub error as the take refuses it: past the
+// plaintext the take's scrub reads ([scrubPlainMax]), a session too large to
+// keep ([executorkeep.ErrSessionPlainTooLarge]), whose stamp says so as it
+// says the archive's own bound, never as a take that failed.
+func plainTooLarge(err error) error {
+	if errors.Is(err, errScrubBound) {
+		return fmt.Errorf("%w: %w", executorkeep.ErrSessionPlainTooLarge, err)
+	}
+	return err
 }
 
 // logMemoUse logs what a take's scrub did with the process's memo, where it
@@ -558,7 +580,7 @@ func (r *Runner) packCapture(ctx context.Context, box sandbox.Sandbox, working b
 	pack := uuid.NewString()
 	paths := PathsFor(box)
 	staged, dest := paths.SessionPackStaging(pack), paths.SessionPackHeld(pack)
-	release := func(ctx context.Context) { r.dropPack(ctx, box, staged, dest) }
+	release := func(ctx context.Context) { r.dropPack(ctx, box, staged, trimMarkOf(dest), dest) }
 	// A pack that fails is an error, never "no session": the capture is
 	// stamped refused so a later launch does not read an older capture as the
 	// last; the pack says which by its exit ([packNothing]). A working job is
@@ -643,8 +665,8 @@ func releaseContext(ctx context.Context, now time.Time) (context.Context, contex
 //
 // FIVE SECONDS, and a judgment: the release is one `rm` of a file and a
 // directory, which a box that answers at all answers in a fraction of a second
-// — a local exec in milliseconds, a container's or an e2b sandbox's command in
-// a few hundred — and past it the box is one that has stopped answering, whose
+// — a local exec in milliseconds, a container's command in a few hundred —
+// and past it the box is one that has stopped answering, whose
 // leftovers the clear before its next run removes. It comes out of the half
 // minute the take leaves its outcome stamp, a write the coordination store
 // answers in milliseconds.
@@ -657,8 +679,10 @@ const packReleaseFloor = 5 * time.Second
 // stream and remove. A zero description means nothing to save (no [saver], a
 // record that names no session, a harness that holds none of it yet); an error
 // says why it could not be made, wrapping [sandbox.ErrSaveNoRoom] where the box
-// lacks room ([packNoRoom]), or that taker names none. Packed first so what the take's scrub reads
-// (tokens renewed in the box) is read once the session is packed.
+// lacks room ([packNoRoom]), an [sandbox.UnrestorableError] where no box of
+// this build continues the session ([Runner.packNow]), or that taker names
+// none. Packed first so what the take's scrub reads (tokens renewed in the box)
+// is read once the session is packed.
 func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker, session string) (sandbox.SessionArchive,
 	error) {
 	saves, ok := r.harness.(saver)
@@ -692,7 +716,7 @@ func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker, sessi
 		err = fmt.Errorf("executor: %s's session %s was saved and left no archive behind", r.harness.Name(), rec.id)
 	}
 	if err != nil {
-		r.dropPack(ctx, box, staged, dest)
+		r.dropPack(ctx, box, staged, trimMarkOf(dest), dest)
 		return sandbox.SessionArchive{}, err
 	}
 	return *described, nil
@@ -738,7 +762,7 @@ func (r *Runner) ReleaseSave(ctx context.Context, box sandbox.Sandbox, path stri
 		return fmt.Errorf("executor: %q is no save a runner packed in the box, and a release removes a save "+
 			"and nothing else", path)
 	}
-	r.dropPack(ctx, box, path)
+	r.dropPack(ctx, box, trimMarkOf(path), path)
 	return nil
 }
 
@@ -757,7 +781,7 @@ func (r *Runner) openSave(ctx context.Context, box sandbox.Sandbox, path, bound 
 		return sandbox.SessionArchive{}, nil, nil, fmt.Errorf("executor: %q is no save a runner packed in the "+
 			"box, and a take of a save streams one and nothing else", path)
 	}
-	release := func(ctx context.Context) { r.dropPack(ctx, box, path) }
+	release := func(ctx context.Context) { r.dropPack(ctx, box, trimMarkOf(path), path) }
 	rec, refusal, err := r.readSessionRecord(ctx, box, paths, bound)
 	var described *sandbox.SessionArchive
 	if err == nil && refusal == "" {
@@ -797,8 +821,10 @@ func savePath(paths Paths, path string) bool {
 // first on its PATH as the run's wrapper runs it, within
 // [sandbox.SessionPackWait]: packed, where the pack made its archive; not, with
 // no error, where there is nothing to pack — a record that names no session, a
-// harness that wrote no transcript ([packNothing]); and an error where pack
-// refused the record before any script ran, saying why, where the pack failed,
+// harness that wrote no transcript ([packNothing]); and an error where no box
+// of this build continues the session the record names
+// ([sandbox.UnrestorableError]) or pack refused the record, each before any
+// script ran, saying why, where the pack failed,
 // with what it said ([packFailed]), or where a save's box lacked the room to
 // pack it, wrapping [sandbox.ErrSaveNoRoom] ([packNoRoom]).
 func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox, bound string,
@@ -812,11 +838,18 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox, bound string,
 	if refusal != "" || rec.id == "" {
 		return sessionRecord{}, false, nil
 	}
+	// A SESSION NO BOX CONTINUES IS NOT PACKED, its release read off the record.
+	if refused := r.unrestorable(r.recorded(rec)); refused != nil {
+		return sessionRecord{}, false, refused
+	}
 	packs, err := pack(paths, rec)
 	if err != nil {
 		return sessionRecord{}, false, err
 	}
-	script := "PATH=" + shellword.Quote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" + packs
+	// THE RELEASE THAT WROTE THE SESSION, off the record the engine read, which
+	// a pack trims by alone ([trimRelVar]).
+	script := "PATH=" + shellword.Quote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" +
+		trimRelVar + "=" + shellword.Quote(releaseOf(rec.release)) + "\n" + packs
 	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(script),
 		sandbox.ExecOptions{TimeoutSec: sandbox.SessionPackWait.Seconds()})
 	if err != nil {

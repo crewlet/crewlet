@@ -54,7 +54,7 @@ Identity, delegation, communication and knowledge are scoped by a seat's place i
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/code-sandbox.svg" width="64" alt=""><br>
 <b>Agents that ship code</b><br>
-<sub>Every agent seat is its harness's own run in a box (your host, a container or a remote VM); an engineer seat opens the merge request under its own identity, not yours.</sub>
+<sub>Every agent seat is its harness's own run in a box (your host or a container); an engineer seat opens the merge request under its own identity, not yours.</sub>
 </td>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/knowledge.svg" width="64" alt=""><br>
@@ -124,7 +124,7 @@ providers:
   sandbox:               # where every agent seat's executor runs: Claude Code's
     local: {}            #   own fully permissioned run, as you on this host —
     default_run_in: direct   # a first run on your own machine while its seats
-                             #   take work from you alone; container or e2b
+                             #   take work from you alone; container
                              #   before a seat takes work from anyone else
 
 roles:
@@ -173,12 +173,12 @@ Crewlet is the engine; you choose the surfaces your agents work on: [Choosing yo
 
 | | Options |
 |---|---|
-| **LLM** | Every model through the vendor's own [harness](docs/concepts/llm-backends.md): Claude Code for Anthropic's (Claude plan or API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server. Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Copilot, Grok Build, Muse Code, Kimi Code, Hermes Agent or Pi runs each seat's executor |
+| **LLM** | Every model through the vendor's own [harness](docs/concepts/llm-backends.md): Claude Code for Anthropic's (Claude plan or API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server. Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor Agent, Copilot, Grok Build, Muse Code, Kimi Code, Hermes Agent or Pi runs each seat's executor |
 | **Tracker** | [Jira](docs/integrations/jira.md) (Cloud or Data Center) or [GitLab](docs/integrations/gitlab.md) / [GitHub](docs/integrations/github.md) issues |
 | **Knowledge base** | [Confluence](docs/integrations/confluence.md) (searched at turn start and on demand, as the asking seat) |
 | **Code host** | [Gitlet, the engine's own](docs/concepts/gitlet.md) (clone and push over HTTPS, changes reviewed in the dashboard, can run beside a vendor), [GitLab](docs/integrations/gitlab.md) (gitlab.com or self-hosted) or [GitHub](docs/integrations/github.md) (github.com or Enterprise Server) |
 | **Chat** | [Chatlet, the engine's own](docs/concepts/chatlet.md) (dashboard rooms; the default where no vendor is declared), [Mattermost](docs/integrations/mattermost.md) (self-hosted, one bot identity per agent) or [Slack](docs/integrations/slack.md) (one app per agent) |
-| **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container, with Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, GitHub Copilot CLI, Grok Build, Muse Code, Kimi Code, Hermes Agent or Pi as the harness |
+| **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container, with Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor Agent, GitHub Copilot CLI, Grok Build, Muse Code, Kimi Code, Hermes Agent or Pi as the harness |
 
 The knowledge base is **single-homed**: one searcher per company, because two would make the answer to "what do we already know about this" depend on which was asked. It sits behind the backend-neutral `knowledge.Searcher` seam, so a second backend is a new implementation. Everything else composes: a company can run GitHub beside GitLab, or Slack beside Mattermost (a migration, an open-source presence).
 

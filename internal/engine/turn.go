@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -154,6 +155,11 @@ type Dispatcher struct {
 	// Nil parks nothing: a limited turn is then NAKed like any other
 	// failure, and its redelivery meets the backend's own sit-out.
 	Provider func(ctx context.Context, handle string, limit llmchain.Limit) (reason string, parked bool, err error)
+
+	// FleetEmpty holds the seat whose turn met an LLM fleet with no member,
+	// until one joins, and reports the deferral reason; an error defers as
+	// Provider's does. Nil holds nothing.
+	FleetEmpty func(ctx context.Context, handle, fleet string) (reason string, parked bool, err error)
 
 	// Failure pauses the seat on the second failure in a row a retry cannot
 	// cure (failurehold.go). An error is a pause that could not be taken,
@@ -863,6 +869,19 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 				if parked {
 					log.InfoContext(ctx, "turn_provider_parked", "seat", handle,
 						"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
+					return result
+				}
+			}
+			// AND A FLEET WITH NO MEMBER: held until one joins, which no
+			// redelivery can bring about.
+			var empty *phase.EmptyFleetError
+			if errors.As(err, &empty) && d.FleetEmpty != nil {
+				result, held := d.parkOn(ctx, handle, "empty fleet hold", func(ctx context.Context) (string, bool, error) {
+					return d.FleetEmpty(ctx, handle, empty.Fleet)
+				})
+				if held {
+					log.InfoContext(ctx, "turn_fleet_empty_held", "seat", handle,
+						"run_id", req.RunID, "work_key", req.WorkKey, "fleet", empty.Fleet)
 					return result
 				}
 			}

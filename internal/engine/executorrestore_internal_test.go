@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -270,12 +272,13 @@ func TestAProbeThatContinuesNoKeptCaptureAnswersItsJobsCopysMeasure(t *testing.T
 	t.Run("beside a capture an earlier job of the turn kept", func(t *testing.T) {
 		t.Parallel()
 		k := newKeptLaunch(t, 40000, 0, 0)
-		if _, err := k.relaunch(t, runner.SessionBasis{Why: "a send-back opens a new round"}, nil); err != nil {
+		if _, err := k.relaunch(t, runner.SessionBasis{}, nil); err != nil {
 			t.Fatalf("the turn's second launch: %v", err)
 		}
 		refuseAfter(t, k.e.sandbox.Load().pending, "t1", k.kept, 61000)
 		got := k.l.ProbeSession(k.ctx)
-		if got.Continues() || !strings.Contains(got.Why, "the job kept none before it") ||
+		if got.Continues() || got.NotContinued == nil ||
+			!strings.Contains(got.NotContinued.Detail, "the job kept none before it") ||
 			got.CopyContext != 61000 || got.ContextTokens != 0 {
 			t.Fatalf("the probe answered %+v, want no kept capture continued, said, with the 61000 its job's "+
 				"refused capture measured as the copy's and no kept capture's own", got)
@@ -440,7 +443,7 @@ func TestAContinuedLaunchIsHeldToItsSessionsFloor(t *testing.T) {
 			basis := k.l.ProbeSession(k.ctx)
 			var continued *runner.Continuation
 			if inPlace {
-				basis = runner.SessionBasis{Why: "the newest capture was not kept", CopyContext: 80000}
+				basis = runner.SessionBasis{CopyContext: 80000}
 				continued = &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 80000}
 				k.claimed(t)
 			}
@@ -874,7 +877,8 @@ func TestARelaunchsProbeAsksEveryMemberOfTheChain(t *testing.T) {
 			if err != nil {
 				t.Fatalf("chainRestores: %v", err)
 			}
-			ok, why := restores.Restores(claude)
+			restored := restores.Restores(claude)
+			ok, why := restored.Continues, restored.Why
 			if ok != tc.restores || !strings.Contains(why, tc.why) {
 				t.Fatalf("the chain restores the session %v (%q), want %v saying %q", ok, why, tc.restores, tc.why)
 			}
@@ -923,7 +927,7 @@ func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
 	member := inBox.l.company.Config.Providers.LLM["api"]
 	member.RunIn = config.Placement(sandbox.Container)
 	inBox.l.company.Config.Providers.LLM["api"] = member
-	decided, err = inBox.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept",
+	decided, err = inBox.relaunch(t, runner.SessionBasis{
 		CopyContext: 80000}, &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 80000})
 	if err != nil {
 		t.Fatalf("a launch whose member cannot continue in the job's box: %v, want it launched on its fresh "+
@@ -965,7 +969,7 @@ func TestABoxOnAnotherNodesHostAddsNothingToALaunchsFloor(t *testing.T) {
 	t.Cleanup(moved.Stop)
 	k.e.useSandbox(rt.pending, moved)
 	k.e.id = "node-b"
-	decided, err := k.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept", CopyContext: 80000},
+	decided, err := k.relaunch(t, runner.SessionBasis{CopyContext: 80000},
 		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 80000})
 	if err != nil {
 		t.Fatalf("a relaunch on another node than its job's box's: %v, want it launched on its fresh brief's "+
@@ -1003,7 +1007,7 @@ func TestAJobsBoxWhoseRecordCannotBeReadHoldsTheLaunchToItsSession(t *testing.T)
 	k.claimed(t)
 	rt := k.e.sandbox.Load()
 	k.e.useSandbox(unreadRuns{PendingStore: rt.pending}, rt.coordinator)
-	_, err := k.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept", CopyContext: 80000},
+	_, err := k.relaunch(t, runner.SessionBasis{CopyContext: 80000},
 		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 80000})
 	var refused *floorRefusal
 	if !errors.Is(err, toolloop.ErrBudgetExhausted) || !errors.As(err, &refused) ||
@@ -1049,7 +1053,7 @@ func TestARunTakenOverIsHeldToWhatItsBoxSaysAsItsRecordNamesTheBrief(t *testing.
 			}
 			run.Launch.Brief = tc.brief
 			ledger := newBridgeLedger(store, nil)
-			ledger.bind(run.NamedJob(run.OpenedAfter, ""))
+			ledger.bind(run.NamedJob(run.OpenedAfter, "", 0))
 			var armed []bool
 			reopenedStarted(ledger, run, func(continued bool) { armed = append(armed, continued) })(ctx,
 				tc.fellBack)
@@ -1078,14 +1082,14 @@ func TestARunTakenOverIsHeldToWhatItsBoxSaysAsItsRecordNamesTheBrief(t *testing.
 // THE RESTORE STREAMS THE OBJECT ITS ROW NAMES, OPENED AGAINST THAT ROW AS IT
 // STREAMS: a restore and a reading of what a kept session holds read exactly
 // the archive the turn kept, every chunk of it authenticated; the same object
-// named by another turn's row does not
-// open, its seal being bound to the turn its row names; and a row naming no
-// object is unreadable, as the store says of one.
+// named by another turn's row does not open, its seal bound to that turn; a
+// row naming media streams its archive with each member spliced in; and a row
+// naming no object is unreadable, as the store says of one.
 //
 // Mutation: stream the object unopened, or open it against anything but its
-// own row, and the bytes differ or the turn's own stream fails; answer a row
-// naming no object, or another turn's, with an empty stream, and its case
-// goes red.
+// own row, and the bytes differ; leave the row's media out of storedSession
+// and its frames stream as the archive; answer a row naming no object, or
+// another turn's, with an empty stream, and its case goes red.
 func TestTheRestoreOpensTheObjectItsRowNamesAsItStreams(t *testing.T) {
 	t.Parallel()
 	objects, err := objstore.NewStore(memobj.New())
@@ -1123,6 +1127,34 @@ func TestTheRestoreOpensTheObjectItsRowNamesAsItStreams(t *testing.T) {
 	bare := executorkeep.TurnRow{Handle: "swe", Turn: turn}
 	if _, err := streamOf(t, restore, bare); !errors.Is(err, executordomain.ErrUnreadable) {
 		t.Errorf("a row naming no object streamed: %v, want it unreadable", err)
+	}
+
+	member := bytes.Repeat([]byte("a large payload "), secrets.StreamChunkBytes/16+1)
+	var spool bytes.Buffer
+	sealedMember, err := sessions.SealMedia("swe", bytes.NewReader(member), &spool)
+	if err != nil {
+		t.Fatalf("SealMedia: %v", err)
+	}
+	kept, err := sessions.UploadMedia(t.Context(), sealedMember, &spool)
+	if err != nil {
+		t.Fatalf("UploadMedia: %v", err)
+	}
+	digest, err := hex.DecodeString(kept.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := append(binary.AppendUvarint([]byte{executorkeep.FrameText}, uint64(len(archive))), archive...)
+	frames = append(append(frames, executorkeep.FrameMedia), digest...)
+	framed, err := sessions.Put(t.Context(), "swe", turn, io.NopCloser(bytes.NewReader(frames)))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	withMedia := executorkeep.TurnRow{Handle: "swe", Turn: turn, Object: framed.Object,
+		Media: []executorkeep.MediaObject{kept}}
+	if streamed, err := streamOf(t, restore, withMedia); err != nil ||
+		!bytes.Equal(streamed, append(bytes.Clone(archive), member...)) {
+		t.Errorf("the restore streamed %d bytes of a row naming media (%v), want its archive and member spliced",
+			len(streamed), err)
 	}
 }
 

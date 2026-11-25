@@ -2,9 +2,7 @@ package sandbox
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,19 +13,19 @@ import (
 // A CELL PROBE answers "can a box start in this cell on this node, now?" for
 // the Models page and for a person reading why a run did not start. Each asks
 // the cell's own mechanism through the functions its backend uses, so probe
-// and launch cannot disagree about what the cell needs. A probe never makes a
-// box; every refusal names the one thing to do.
+// and launch cannot disagree about what the cell needs:
 //
-//   - direct: the platform runs the local backend, and [BoxRoot] is writable;
+//   - direct: [BoxRoot] is writable;
 //   - container: the runtime resolves on PATH ([ResolveContainerRuntime]) and
-//     its daemon answers a version read within [CellProbeBudget];
-//   - e2b: the API key resolved on this node, and an authenticated read of the
-//     API and, of a self-hosted cluster, the connect its floor ([e2bV2Floor])
-//     adds answered within [CellProbeBudget].
+//     its daemon answers a version read within [CellProbeBudget].
+//
+// A probe never makes a box; every refusal names the one thing to do.
 
-// CellProbeBudget bounds a probe's one network or daemon round trip: past a
-// daemon's version read (milliseconds) and a cloud API's p99, and short enough
-// that probing every cell on a node without network ends inside a heartbeat.
+// CellProbeBudget bounds the container probe's one daemon round trip. A
+// healthy daemon answers a version read in milliseconds, so a daemon silent
+// for five seconds is down or wedged; it sits under the mount probe's budget
+// (containerProbeTimeout), which runs a command in a box rather than reading
+// a version.
 const CellProbeBudget = 5 * time.Second
 
 // CellProbe is what one probe found.
@@ -40,13 +38,8 @@ type CellProbe struct {
 	Fix string
 }
 
-// ProbeDirect probes the direct cell: a platform the local backend runs on,
-// and a box root it can write.
+// ProbeDirect probes the direct cell: a box root the engine can write.
 func ProbeDirect(stateDir string) CellProbe {
-	if !localSupported {
-		return CellProbe{Detail: unsupportedReason,
-			Fix: "Run the engine on Linux or macOS to use run_in: direct, or use another cell"}
-	}
 	root := BoxRoot(stateDir)
 	if err := writable(root); err != nil {
 		return CellProbe{Detail: fmt.Sprintf("the box root %s is not writable: %v", root, err),
@@ -103,65 +96,6 @@ func probeRuntime(ctx context.Context, path string, budget time.Duration) CellPr
 		name = "Podman"
 	}
 	return CellProbe{Ready: true, Detail: name + " " + answer}
-}
-
-// ProbeE2B probes the e2b cell: the key it would authenticate with, one read
-// of the API with it, and, of a self-hosted cluster, the connect its floor
-// adds ([e2bAPI.servesFloor]). E2B's cloud serves it, so asking would only send
-// a vendor every node's request every five minutes. The read goes first: it
-// proves the key, and every build serving it answers a path it lacks 404, so
-// the connect's 400 is the route served, never one missing.
-func ProbeE2B(ctx context.Context, opts E2BOptions) CellProbe {
-	if strings.TrimSpace(opts.APIKey) == "" {
-		return CellProbe{Detail: "providers.sandbox.e2b.api_key resolves to nothing on this node",
-			Fix: "Set the e2b API key's variable under Settings › Secrets"}
-	}
-	ctx, cancel := context.WithTimeout(ctx, CellProbeBudget)
-	defer cancel()
-	api := newE2BAPI(opts.APIKey, opts.Domain, opts.HTTP)
-	if err := api.listBoxes(ctx, 1); err != nil {
-		return e2bProbeFailed(ctx, api, err)
-	}
-	if api.domain != DefaultE2BDomain {
-		served, err := api.servesFloor(ctx)
-		if err != nil {
-			return e2bProbeFailed(ctx, api, err)
-		}
-		if !served {
-			return e2bOlderThanTheFloor(api, "POST "+e2bFloorProbe, http.StatusNotFound)
-		}
-	}
-	return CellProbe{Ready: true, Detail: "the e2b API at " + api.domain + " answers with this key"}
-}
-
-// e2bProbeFailed is the cell's refusal for a probe's request that failed. A
-// cluster's 404 or 400 is to the read ([e2bAPI.servesFloor] reads the
-// connect's), which a build serving it never answers so: the cluster is older
-// still than the floor.
-func e2bProbeFailed(ctx context.Context, api *e2bAPI, err error) CellProbe {
-	var refused *E2BError
-	switch {
-	case errors.As(err, &refused) && (refused.Status == http.StatusUnauthorized || refused.Status == http.StatusForbidden):
-		return CellProbe{Detail: err.Error(),
-			Fix: "Replace the e2b API key under Settings › Secrets: the API refused it"}
-	case errors.As(err, &refused) && api.domain != DefaultE2BDomain &&
-		(refused.Status == http.StatusNotFound || refused.Status == http.StatusBadRequest):
-		return e2bOlderThanTheFloor(api, refused.Method+" "+refused.Path, refused.Status)
-	case ctx.Err() != nil:
-		return CellProbe{Detail: fmt.Sprintf("the e2b API at %s did not answer within %s", api.base, CellProbeBudget),
-			Fix: "Check this node's network route to the e2b API"}
-	}
-	return CellProbe{Detail: err.Error(), Fix: "Check this node's network route to the e2b API"}
-}
-
-// e2bOlderThanTheFloor is the cell's refusal for a cluster that answered
-// asked with status, as only a build older than [e2bV2Floor] does.
-func e2bOlderThanTheFloor(api *e2bAPI, asked string, status int) CellProbe {
-	return CellProbe{
-		Detail: fmt.Sprintf("the e2b API at %s answers %s %d: it is older than %s, which serves "+
-			"the create and connect this engine calls", api.domain, asked, status, e2bV2Floor),
-		Fix: "Run " + e2bV2Floor + " or later on the cluster at " + api.domain,
-	}
 }
 
 // firstLineOf is a command's first line of output, or its error where it said

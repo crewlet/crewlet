@@ -17,6 +17,7 @@
       "gemini-cli",
       "qwen-code",
       "opencode",
+      "cursor-agent",
       "copilot",
       "grok",
       "muse-code",
@@ -39,7 +40,6 @@
       "none",
       "direct",
       "container",
-      "e2b",
       "unknown"
     ],
     "topology.stream": [

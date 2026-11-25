@@ -226,16 +226,21 @@ updates.
   this deployment is reached at. An absent `Origin` is allowed for a bearer
   client — a cross-site page cannot make a bearer travel — and refused for a
   cookie-authenticated request, which a browser would always have sent one on.
-- **Only the webhook and sandbox routes need to be public.** The routes
-  outside parties call — `/webhooks/*` (vendor deliveries, verified by each
+- **Only the webhook and sandbox routes need to be public.** The routes a
+  vendor or a box calls — `/webhooks/*` (vendor deliveries, verified by each
   vendor's signature or shared token) and the sandbox endpoints
-  `/otlp/{token}` and `/mcp/{token}` (a signed per-run token in the path: the
-  telemetry receiver's expires, the tool bridge's has no expiry and ends with
-  its run) — hold no credential of a person's. Setting `api.public.port` serves
-  them on a listener of their own and nowhere else, and every other route —
-  `/config`, `/secrets`, `/iam` and the sign-in routes under `/auth` included —
-  only on `api.port`, so a deployment can publish the first and keep the
-  second private without filtering paths in a proxy. A vendor is handed the
+  `/otlp/{token}`, `/mcp/{token}`, `/box/git/*` and `/box/gitlet/*` (a signed
+  per-run token in the path, or as git's password: the tool bridge's has no
+  expiry and ends with its run, the others expire) — hold no
+  credential of a person's. A box that does not share its node's loopback (a
+  container on the runtime's network, a box on a satellite in another network
+  or on a seats node without ingress) reaches only what is published, and it
+  runs untrusted code fully permissioned. Setting `api.public.port` serves
+  these routes on a listener of their own and nowhere else, and every other
+  route — `/config`, `/secrets`, `/iam` and the sign-in routes under `/auth`
+  included — only on `api.port`, so a deployment can publish the first and
+  keep the second private, out of every box's reach, without filtering paths
+  in a proxy. A vendor is handed the
   public listener's own address, `api.public.external_url`, and a person
   `api.external_url`, so no link anybody follows points at the published
   socket. The public listener answers every route it does not serve with the
@@ -420,25 +425,19 @@ updates.
   because a headless run has nobody to answer a permission prompt, so the
   cell it runs in, not the harness's own prompts, is the isolation model. The cell
   is the one the `providers.llm` entry it launches on names in `run_in`, else
-  `providers.sandbox.default_run_in`. `e2b` is a remote VM per run and
-  `container` a Docker or Podman container on the engine host; `direct` runs
+  `providers.sandbox.default_run_in`. `container` is a Docker or Podman
+  container on the engine host; `direct` runs
   a fully permissioned harness **as the engine's own user on the engine host**,
   which keeps each box's state apart and not the host — the run can read
   what that user can. Use `direct` only on a dedicated host you are willing
   to hand to an autonomous agent, for the entry that needs the host itself,
   or for a first run on your own machine while its seats take work from you
-  alone — the quickstart's start; for any other local instance, a
+  alone — the quickstart's start; for any other instance, a
   workstation included, and before a seat takes work from anyone else,
-  place the runs in `container` (or `e2b`). Treat anything you put into a
+  place the runs in `container`. Treat anything you put into a
   box (tokens in `role.sandbox.env`) as visible to the code that runs there.
   See
   [Code Sandbox § Local sandboxes](docs/concepts/code-sandbox.md#local-sandboxes).
-  E2B boxes are created with secured access, so a box's in-box agent runs a
-  command or serves a file only for a holder of that box's access token,
-  which the engine reads from E2B and never stores, and with public traffic
-  off, so a service a run starts in its box answers a request from outside
-  the box only when it carries that box's traffic token, which the engine
-  never keeps (`docs/concepts/code-sandbox.md#sandbox-backends`).
 - **A deck runs nothing, and its renderer is a trust boundary.** A `slides`
   artifact is drawn on the dashboard's own origin, so it is held to a closed
   subset at publish (no script, no event attribute, no embedded page, no style

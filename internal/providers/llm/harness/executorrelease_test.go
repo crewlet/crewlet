@@ -53,12 +53,12 @@ func codexEntry(t *testing.T, probe int) *Provider {
 
 // A DIRECT BOX'S CODEX IS HELD TO ITS RUNNER'S FLOOR AND PROBE, since a direct
 // box runs this host's own, and one naming no release (a pre-release) is
-// refused as its run's script refuses it; a box in another cell runs its
-// image's, which its run's script holds to the floor, so there it is a line
-// and no problem. A harness whose runner states neither reports nothing here.
+// refused as its run's script refuses it; a container box runs its image's,
+// which its run's script holds to the floor, so there it is a line and no
+// problem. A harness whose runner states neither reports nothing here.
 //
 // Mutation: drop the floor's or the probe's check, take a pre-release for a
-// release, or raise either for a remote cell, and a case goes red.
+// release, or raise either for a container cell, and a case goes red.
 func TestADirectBoxsCodexIsHeldToItsRunnersFloorAndProbe(t *testing.T) {
 	t.Parallel()
 	direct := DiagnoseOptions{ExecutorSeats: []string{"swe"}, ExecutorHarnesses: []string{"codex"}, Cell: directCell}
@@ -74,8 +74,8 @@ func TestADirectBoxsCodexIsHeldToItsRunnersFloorAndProbe(t *testing.T) {
 		"a pre-release":                    {0, "codex-cli 0.172.0-alpha.1", direct, "names no release"},
 		"a pre-release of three parts":     {0, "codex-cli 0.172.0-rc", direct, "names no release"},
 		"no app-server":                    {1, "codex-cli 0.171.0", direct, "app-server --help` exited 1"},
-		"a remote cell": {1, "codex-cli 0.150.0", DiagnoseOptions{ExecutorSeats: []string{"swe"},
-			ExecutorHarnesses: []string{"codex"}, Cell: "e2b"}, ""},
+		"a container cell": {1, "codex-cli 0.150.0", DiagnoseOptions{ExecutorSeats: []string{"swe"},
+			ExecutorHarnesses: []string{"codex"}, Cell: "container"}, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -40,13 +40,12 @@ var floorCases = []fleetCase{{
 	// THE WRITE FENCE ASKS ABOUT ONE DOMAIN, so a floor is read by the domain
 	// that names it and answers for nobody else: a cursor on one log compared
 	// against another log's floor compares two number spaces. The domain
-	// whose name is the first one's with a segment added is the prefix
-	// confusion a key read could only commit if the grammar stopped escaping
-	// the separator.
+	// whose name begins with the first one's is the prefix confusion a read
+	// by prefix rather than by key would commit.
 	name: "a floor reads back under its own domain and no other",
 	fn: func(h *fleetHarness) {
 		want := h.putFloor("tracker", 3, 900)
-		h.putFloor("tracker.archive", 1, 5)
+		h.putFloor("tracker_archive", 1, 5)
 		got, found := h.floorOf("tracker")
 		if !found {
 			h.t.Fatal("a published floor read back as never written: the write " +
@@ -61,9 +60,9 @@ var floorCases = []fleetCase{{
 		if _, pages := h.floorOf("pages"); pages {
 			h.t.Fatal("a domain the trim never wrote for read back a floor")
 		}
-		archive, archived := h.floorOf("tracker.archive")
-		if !archived || archive.Floor != 5 || archive.Domain != "tracker.archive" {
-			h.t.Fatalf("Floor(tracker.archive) = (%+v, %v), want its own row "+
+		archive, archived := h.floorOf("tracker_archive")
+		if !archived || archive.Floor != 5 || archive.Domain != "tracker_archive" {
+			h.t.Fatalf("Floor(tracker_archive) = (%+v, %v), want its own row "+
 				"at 5", archive, archived)
 		}
 	},

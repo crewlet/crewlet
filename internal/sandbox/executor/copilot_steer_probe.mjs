@@ -13,8 +13,8 @@
 //   {"op":"release-sends","fail":F}     …this, failing where F is true
 //
 // Reports, one JSON object a line on stdout: `joined` (the hooks registered),
-// `send` (the options the extension passed), `abort`, `log` (message, level),
-// `hooked` (name, output), `error`.
+// `holding` (hold-sends applied), `send` (the options the extension passed),
+// `abort`, `log` (message, level), `hooked` (name, output), `error`.
 
 import { createInterface } from "node:readline"
 
@@ -70,6 +70,7 @@ function listen() {
         if (command.op === "hold-sends") {
           let open
           held = { promise: new Promise((resolve) => (open = resolve)), open: (pass) => open(pass) }
+          report({ op: "holding" })
         }
         if (command.op === "release-sends") {
           const h = held

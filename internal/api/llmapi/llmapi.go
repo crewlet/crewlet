@@ -1,4 +1,4 @@
-// Package llmapi serves the model routes Settings › Models writes through:
+// Package llmapi serves the model routes Settings › Models & Fleets writes through:
 // a model's credential, tested before it is stored; its checks; a retry of a
 // sit-out; a host login's status; and a Codex device sign-in.
 //
@@ -285,7 +285,7 @@ type Leases interface {
 // Records is the fleet's node status records ([coord.NodeStatusRecords]), which
 // carry each node's model rows beside its presence.
 type Records interface {
-	NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusRecord, error)
+	NodeStatusRecords(ctx context.Context, read coord.NodeStatusRead) ([]coord.NodeStatusRecord, error)
 }
 
 // Options wire the service. Every field is required: `crewlet run` builds

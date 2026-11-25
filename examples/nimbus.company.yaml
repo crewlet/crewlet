@@ -191,10 +191,9 @@ providers:
                                     #   entry: a cell of providers.sandbox
                                     #   below.  On the ENTRY rather than the
                                     #   seat, because it is a property of
-                                    #   this runtime: the subscription login
-                                    #   lives on the engine host, so a local
-                                    #   cell reaches it directly and a remote
-                                    #   one would need a headless token.
+                                    #   this runtime: whether its work gets
+                                    #   the engine user's reach (direct) or
+                                    #   none of the host's files (container).
       # ONE LOGIN, NAMED.  state_dir defaults to a directory derived PER
       # PROVIDER KEY (~/.crewlet/llm-harness/default here), so a second entry
       # on this same login — a per-phase model on the same plan, say —
@@ -241,6 +240,17 @@ providers:
                                     #   stray ANTHROPIC_API_KEY would bill
                                     #   the metered account while you
                                     #   believed you were on a flat rate.
+
+  # A second plan of the same model makes a FLEET: a seat set to
+  # fleet:<key> runs each new turn on whichever member has room, so seats
+  # spread across the plans instead of spending the first one first.  Every
+  # company also has default-fleet, empty until written.  Members are entries
+  # of one model class on one harness.  See docs/concepts/llm-fleets.md.
+  # llm_fleets:
+  #   claude-sonnet:
+  #     name: Claude Sonnet
+  #     strategy: balanced            # balanced (default) | sequential
+  #     members: [default, second-plan]
   embeddings:
     type: openai
     # The model decides the width — 3072 here — so `dimensions` is left
@@ -259,16 +269,10 @@ providers:
   # below.  See docs/concepts/code-sandbox.md.
   #
   # NO EXTRA CREDENTIAL.  The harness those boxes run is the `default`
-  # entry's `claude-code`, and on a LOCAL cell the backend seeds that
+  # entry's `claude-code`, and in either cell the backend seeds that
   # provider's credential files into the box and writes the refreshed one
   # back afterwards — so the run uses the subscription `crewlet llm login`
-  # already established.  (That seeding is exactly why a remote `e2b` cell
-  # would NOT work on this login as it stands: the credential files carry a
-  # refresh token whose rotation is fleet state and deliberately never
-  # leave the engine host, so a remote box needs a headless token —
-  # `crewlet llm login default -capture-token` — instead.  The engine
-  # refuses such a run up front rather than provisioning a box that cannot
-  # authenticate.)  Nor does the box's git need one: the engine hands each
+  # already established.  Nor does the box's git need one: the engine hands each
   # run its own Gitlet credential, scoped to the repositories it checks out
   # and ending with the run, and configures the box's git to present it —
   # at the address CREWLET_BOX_GIT_URL names, which
@@ -276,32 +280,24 @@ providers:
   # every checkout (`sandbox_git_url_unset`) rather than grant a box a
   # repository it cannot reach.
   sandbox:
-    # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST, and each
-    # providers.llm entry places its runs in one with its `run_in`.
-    # Configure `local:`, `e2b:`, or both — the run that should use the
-    # login on this machine and the run whose generated code must never
-    # touch it are different runs, and a company-wide backend could only
-    # ever answer for both.
+    # THE PROVIDER BLOCK IS A CATALOGUE: it says how boxes are made, and
+    # each providers.llm entry places its runs in one of its two cells with
+    # its `run_in` — the run whose harness needs this machine's own reach and
+    # the run whose generated code must reach none of its files are different
+    # runs, and a company-wide cell could only ever answer for both.
     #
-    # This company configures the ENGINE HOST only: each seat's executor runs
-    # as a process tree on the machine running `crewlet run` — no remote
-    # account, no API key, nothing to provision — as a first run on your own
-    # machine while its seats take work from you alone.  Every executor is
-    # its harness, fully permissioned, as the engine's user, so before a
-    # seat takes work from anyone else (a person you invite onto a seat, a
-    # vendor chat or code host), or on a host others share, move the
-    # executors into `container` (below) or `e2b`.
-    #
-    # For anything shared, add `e2b:` with its `api_key` (and `domain` for a
-    # self-hosted cluster) and give the entry those seats run on
-    # `run_in: e2b` — signed in with `-capture-token`, above, since the
-    # plan's credential files never leave this host — or keep them local
-    # in `container`, which the plan login still seeds.
-    # A `template` there must carry the harness (Claude Code here) as well
-    # as the toolchains those seats' setup steps check for (Go, Node with
-    # corepack, uv): naming one replaces E2B's prebuilt per-agent template
-    # for every e2b box in the company, and a step only checks for its tool,
-    # so nothing installs either into the template.
+    # This company runs every executor `direct`: each seat's executor runs
+    # as a process tree on the machine running `crewlet run` — no image,
+    # nothing to provision — as a first run on your own machine while its
+    # seats take work from you alone.  Every executor is its harness, fully
+    # permissioned, as the engine's user, so before a seat takes work from
+    # anyone else (a person you invite onto a seat, a vendor chat or code
+    # host), or on a host others share, move the executors into `container`
+    # (below), which the plan login still seeds.
+    # Its image must carry the harness (Claude Code here) as well as the
+    # toolchains those seats' setup steps check for (Go, Node with
+    # corepack, uv): a step only checks for its tool, so nothing installs
+    # either into the image.
     # (`fake: true` is in-process stubs for a demonstration — it runs no
     # real harness.)
     #
@@ -316,7 +312,7 @@ providers:
     # seats' steps below CHECK for their tools and name what is missing,
     # rather than install anything on the host.
     local:
-      # The local backend serves both local cells, chosen per entry:
+      # The local backend serves both cells, chosen per entry:
       #
       #   run_in: direct     state isolation only — each box gets its own
       #                      HOME, XDG directories and an allowlisted
@@ -330,10 +326,8 @@ providers:
       #                      on a host others share.
       #
       #   run_in: container  real host isolation. Needs an image carrying
-      #                      the harness, and is where a local box
-      #                      is SIZED (run_args takes --cpus/--memory,
-      #                      mirroring how a remote box is sized by its
-      #                      template):
+      #                      the harness, and is where a container box is
+      #                      SIZED (run_args takes --cpus/--memory):
       #
       #                        image: "your-registry/harness:latest"
       #                        runtime: auto      # auto | docker | podman
@@ -353,15 +347,16 @@ providers:
       #                        run_args: ["--security-opt", "seccomp=/etc/crewlet/playwright-seccomp.json"]
       #                        chromium_sandbox: waived   # Chromium with --no-sandbox
       state_dir: "./nimbus-data/sandboxes"       # box directories; removed at teardown,
-                                                 #   and orphans from a crashed engine are
-                                                 #   reaped on the next create
-    # WHERE A RUN ON AN ENTRY THAT NAMES NO run_in HAPPENS. Required whenever the catalogue
-    # offers more than one cell — and `local:` alone is two, because it
-    # serves `direct` and `container`. There is deliberately no implicit
-    # answer: `direct` runs the harness as the engine's user, which is
-    # a trade to make deliberately and never one to inherit by accident.
-    default_run_in: direct                       # direct | container | e2b
-    default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
+                                                 #   and one a crashed engine left is
+                                                 #   reclaimed by its node
+    # WHERE A RUN ON AN ENTRY THAT NAMES NO run_in HAPPENS. Required for
+    # `local:`, which serves two cells, `direct` and `container`, unless
+    # every entry a seat's executor launches on names its own. There is
+    # deliberately no implicit answer: `direct` runs the harness as the
+    # engine's user, which is a trade to make deliberately and never one to
+    # inherit by accident, and `container` needs an image.
+    default_run_in: direct                       # direct | container
+    host_grace_seconds: 900                      # how long a node that launched boxes may be away (a restart, a deploy) before its runs are recorded lost or released, and the orphan reaper's cutoff on its box root — NOT a run cap: a job runs as long as it needs. 900 is the default.
     default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (its working tree held as it was if they reply soon; the run's harness session is continued in any box where the turn kept it); a paused box costs its state for as long as it is held, so the engine reaps it after this long and re-seeds from the pushed branch. 0 = never pause, always re-seed; omit the key entirely for this 1800s default.
     # ENGINE-WIDE setup steps — applied to every agent seat's box
     # before each role's own role.sandbox.setup extras.  Put anything shared
@@ -400,7 +395,7 @@ providers:
 # the seats keep theirs.  token_budget caps each person on top of the
 # company's own budget.  See docs/getting-started/configuration.md#ask-crewlet.
 # assistant:
-#   model: default
+#   model: default                  # or fleet:<key>, any member of a fleet
 #   token_budget: { day: 200000 }
 
 # Turn engine — executor/reviewer settings.  Includes the round-cap
@@ -654,11 +649,11 @@ knowledge:
 # ``scratch`` is left unset: a seat's own repositories, ``<handle>.<slug>``,
 # which only its tools make, are at most 50 a seat (``max_per_seat``) and
 # deleted once idle for 7 days (``idle_days``) unless a live turn holds one.
-# ``checks`` is left unset too, and so the checks a repository defines in its
+# ``checks`` is left unset too, and the checks a repository defines in its
 # ``.crewlet/checks.yaml`` run in no box here: a check runs a change's own
-# code, so never in this catalogue's ``direct`` cell, and only in a
-# ``container`` or an ``e2b`` box — ``checks.run_in`` names one once the
-# catalogue configures it (an image, or ``e2b:``).
+# code, so never in a ``direct`` box, only in a container made from
+# ``providers.sandbox.local.image``, which this direct catalogue does not
+# set.  Setting it runs them, on the Gitlet node that claims each one.
 #
 # ``identity_domain`` is the domain a commit the engine builds through a tool
 # spells its addresses in: its committer, ``Crewlet <engine@example.com>``,
@@ -1098,17 +1093,11 @@ units:
               # The box runs where the default entry places it:
               # providers.sandbox.default_run_in (direct). A seat whose
               # work must not touch this host runs on an entry naming
-              # `run_in: container` or `e2b`, and the catalogue then has to
-              # serve it:
-              # `container` needs providers.sandbox.local.image, an image
-              # carrying the harness AND this seat's toolchain (the go
-              # step below checks for Go inside it), and `e2b` needs an
-              # `e2b:` block with its api_key, a headless token for the
-              # entry (`crewlet llm login default -capture-token`: the plan's
-              # credential files never leave this host) and a `template`
-              # carrying the same — Go 1.21 or later here: the engine installs nothing
-              # into a template, and E2B's prebuilt per-agent one is built
-              # for the harness rather than for this seat's repos.
+              # `run_in: container`, which needs
+              # providers.sandbox.local.image, an image carrying the
+              # harness AND this seat's toolchain — Go 1.21 or later here
+              # (the go step below checks for it inside the image): the
+              # engine installs nothing into an image.
               # No `mcp:` scope, deliberately: every box gets the seat's
               # tool bridge, which already serves this seat's LIVE tool set
               # under the reserved `crewlet` server — its chat, work-item,
@@ -1146,7 +1135,7 @@ units:
                     - |
                       case "$(go env GOVERSION 2>/dev/null)" in
                         go1.2[1-9]*|go1.[3-9][0-9]*|devel*) ;;
-                        *) echo 'no Go 1.21 or later on PATH: install one on the engine host (run_in direct), in the image (container) or in the E2B template (e2b)' >&2; exit 1 ;;
+                        *) echo 'no Go 1.21 or later on PATH: install one on the engine host (run_in direct) or in the image (container)' >&2; exit 1 ;;
                       esac
                   env:
                     GOTOOLCHAIN: auto
@@ -1220,7 +1209,7 @@ units:
                   # CI=1 keeps installs/tests non-interactive (no watch
                   # modes, no prompts) for a headless harness.
                   commands:
-                    - "command -v node >/dev/null 2>&1 && command -v corepack >/dev/null 2>&1 || { echo 'no node or corepack on PATH: install Node with corepack on the engine host (run_in direct), in the image (container) or in the E2B template (e2b)' >&2; exit 1; }"
+                    - "command -v node >/dev/null 2>&1 && command -v corepack >/dev/null 2>&1 || { echo 'no node or corepack on PATH: install Node with corepack on the engine host (run_in direct) or in the image (container)' >&2; exit 1; }"
                   env:
                     CI: "1"
                   brief: >-
@@ -1296,7 +1285,7 @@ units:
                   # refused for it.  uv keeps each project's environment in
                   # its checkout and its cache in the box's home.
                   commands:
-                    - "command -v uv >/dev/null 2>&1 || { echo 'no uv on PATH: install uv on the engine host (run_in direct), in the image (container) or in the E2B template (e2b)' >&2; exit 1; }"
+                    - "command -v uv >/dev/null 2>&1 || { echo 'no uv on PATH: install uv on the engine host (run_in direct) or in the image (container)' >&2; exit 1; }"
                   brief: >-
                     Python workspace: you own the Phase-2 framework
                     repository on Gitlet, nimbusflow. uv is

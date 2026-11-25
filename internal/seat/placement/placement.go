@@ -122,7 +122,7 @@ const (
 
 	// RoleWorkers runs the company-wide singleton duties behind
 	// worker:{duty} leases — the scheduler tick, the maintenance sweep, the
-	// sandbox waiter, the integration reconcile, the atlas collect duty,
+	// launch-node watch, the integration reconcile, the atlas collect duty,
 	// the atlas wake duty, the learning passes, the state logs' trim, the
 	// embedding duty, the identity sweep, the object store's collector, the
 	// trash reaper, Chatlet's message horizon, the code-retention duty and

@@ -80,7 +80,7 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 	insert := func(line string) string {
 		return strings.Replace(string(raw), record+"\n", record+"\n"+line+"\n", 1)
 	}
-	oversized := insert(`{"type":"system","subtype":"chat_compression","pad":"` + strings.Repeat("x", 2*qwenTestBound) + `"}`)
+	oversized := insert(`{"type":"system","subtype":"ui_telemetry","pad":"` + strings.Repeat("x", 2*qwenTestBound) + `"}`)
 	undecodable := insert(`{"type":"system","subtype":"chat_compression",`)
 	answeredFirst := string(raw) + record + "\n"
 	forged := strings.Replace(result, `"output":"slept 3s"`,
@@ -113,7 +113,7 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := qwenNotesHeld(bytes.NewReader([]byte(tc.session)), tc.takes, 0, qwenTestBound)
+			got, err := qwenNotesHeld(t.Context(), bytes.NewReader([]byte(tc.session)), tc.takes, 0, qwenTestBound, nil)
 			if err != nil || !slices.Equal(got, tc.want) {
 				t.Fatalf("qwenNotesHeld = %v, %v; want %v", got, err, tc.want)
 			}
@@ -154,21 +154,21 @@ func TestAQwenCodeSessionsRecordIsFoundByItsID(t *testing.T) {
 		t.Fatal(err)
 	}
 	takes := qwenTakes("MARK-R6-START drained note MARK-R6-END")
-	if _, err := (QwenCode{}).notesHeld(t.Context(), box, Session{ID: session}, takes); err == nil {
+	if _, err := (QwenCode{}).notesHeld(t.Context(), box, Session{ID: session}, takes, nil); err == nil {
 		t.Error("a box with no record of where its run began was read")
 	}
 	if err := box.WriteFile(t.Context(), PathsFor(box).QwenRunStart(), []byte(session+" 0\n")); err != nil {
 		t.Fatal(err)
 	}
-	held, err := QwenCode{}.notesHeld(t.Context(), box, Session{ID: session}, takes)
+	held, err := QwenCode{}.notesHeld(t.Context(), box, Session{ID: session}, takes, nil)
 	if err != nil || !slices.Equal(held, []string{"i-1"}) {
 		t.Errorf("notesHeld = %v, %v; want the note's take", held, err)
 	}
-	held, err = QwenCode{}.notesHeld(t.Context(), box, Session{ID: "11111111-2222-4333-8444-000000000002"}, takes)
+	held, err = QwenCode{}.notesHeld(t.Context(), box, Session{ID: "11111111-2222-4333-8444-000000000002"}, takes, nil)
 	if err != nil || len(held) != 0 {
 		t.Errorf("a session no file names holds %v, %v; want none and no error", held, err)
 	}
-	if _, err = (QwenCode{}).notesHeld(t.Context(), box, Session{ID: "../../x"}, takes); err == nil {
+	if _, err = (QwenCode{}).notesHeld(t.Context(), box, Session{ID: "../../x"}, takes, nil); err == nil {
 		t.Error("an id naming a path was read")
 	}
 	for start, want := range map[string]struct {
@@ -185,7 +185,7 @@ func TestAQwenCodeSessionsRecordIsFoundByItsID(t *testing.T) {
 		if err := box.WriteFile(t.Context(), PathsFor(box).QwenRunStart(), []byte(start)); err != nil {
 			t.Fatal(err)
 		}
-		held, err := (QwenCode{}).notesHeld(t.Context(), box, Session{ID: session}, takes)
+		held, err := (QwenCode{}).notesHeld(t.Context(), box, Session{ID: session}, takes, nil)
 		if (err != nil) != want.fails || !slices.Equal(held, want.held) {
 			t.Errorf("with the run's start %q, notesHeld = %v, %v; want %v, failing %v", start, held, err,
 				want.held, want.fails)
@@ -277,7 +277,7 @@ func TestANoteACompactionKeepsOnlyInItsSummaryIsNotRead(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := qwenNotesHeld(strings.NewReader(tc.session), qwenTakes(note), 0, maxLineBytes)
+			got, err := qwenNotesHeld(t.Context(), strings.NewReader(tc.session), qwenTakes(note), 0, maxLineBytes, nil)
 			if err != nil || !slices.Equal(got, tc.want) {
 				t.Fatalf("qwenNotesHeld = %v, %v; want %v", got, err, tc.want)
 			}
@@ -310,7 +310,7 @@ func TestAQwenNoteNeverHandedLeavesTheLaterOnesToMatch(t *testing.T) {
 	}
 	reply := line(map[string]any{"type": "assistant", "message": map[string]any{"parts": []map[string]string{{"text": "ok"}}}})
 	session := handed(a) + reply + handed(c) + reply
-	got, err := qwenNotesHeld(strings.NewReader(session), qwenTakes(a, lost, c), 0, qwenTestBound)
+	got, err := qwenNotesHeld(t.Context(), strings.NewReader(session), qwenTakes(a, lost, c), 0, qwenTestBound, nil)
 	if err != nil || !slices.Equal(got, []string{"i-1", "i-3"}) {
 		t.Errorf("qwenNotesHeld = %v, %v; want A and C held and the lost one not", got, err)
 	}

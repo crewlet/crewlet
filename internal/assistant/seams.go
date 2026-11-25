@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -46,6 +47,12 @@ type Models interface {
 	// Searches is whether the model's harness has a search-only run, which
 	// search_web is answered through.
 	Searches() bool
+}
+
+// fleetDecided is a model an LLM fleet picked, which says why: the turn's
+// decision record ([types.FleetDecision]).
+type fleetDecided interface {
+	FleetDecision() types.FleetDecision
 }
 
 // Budget is the meter a turn charges its rounds through: the company's

@@ -34,6 +34,12 @@ func NewCodex() *Runner { return New(Codex{}) }
 // Name is the harness's key in the runner registry.
 func (Codex) Name() string { return CodexName }
 
+// MCPCallCeiling is none: `tool_timeout_sec` carries the bridge's own bound
+// ([codexConfigTOML]), and Codex cuts a call at it whatever progress flows. Unset,
+// it cuts one at 300 seconds ("timed out awaiting tools/call after 300s");
+// set to 1050, a 1040-second call was answered whole (measured on 0.171.0).
+func (Codex) MCPCallCeiling() time.Duration { return 0 }
+
 // resumesOnLaunchRoute: measured on 0.171.0, the one release supported
 // ([launchRouted]): created on a config provider at stub A, resumed through
 // `app-server` and `exec --remote resume` with its base_url at stub B; the
@@ -155,7 +161,10 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	// stop: the watcher, the helper, then the app-server, TERM again on each
 	// probe: on TERM it finishes the running turn first, and a second TERM
 	// ends it at once (measured on 0.171.0), all within the job's grace.
-	line(`stop() { end "$tpid"; end "$gpid"; end "$hpid"; end "$apid" again; tpid= gpid= hpid= apid=; rm -f %s; }`, sock)
+	// THEN what the nested hook left out said ([checkoutHome.saySkipped]) and
+	// THE HOME'S OWN CONFIGURATION BACK once the server is gone ([codexRestoreHome]).
+	line(`stop() { end "$tpid"; end "$gpid"; end "$hpid"; end "$apid" again; tpid= gpid= hpid= apid=; rm -f %s; %s; %s; }`,
+		sock, codexCheckoutHome(paths).saySkipped(), codexRestoreHome(paths))
 	// THE THREAD, off the stream's first line, the one `exec --json` prints as
 	// the server starts the thread, before its turn: written for the helper
 	// and reported for collection, with where the run began in its rollout
@@ -179,22 +188,20 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`, q(paths.SessionRecord()))
 	line(`endbefore() { endedas=before; %s; exit 143; }`, strings.TrimSuffix(recordEnded(paths), "\n"))
 	line(`[ -z "$endasked" ] || endbefore`)
-	// WHERE THE RUN BEGAN IN THE ROLLOUT IT CONTINUES: every line past it is
-	// the run's own, which is all the result reads.
 	if session.Continues {
-		line(`if [ "$k" = yes ]; then r=$(%s); [ -z "$r" ] || { lc=$(wc -l < "$r" | tr -d " ") && [ -n "$lc" ] && before=$lc; } || before=0; fi`,
-			codexRolloutPath(paths, session.ID))
+		b.WriteString(codexRunStart(paths, session.ID))
 	}
 
 	line(`rm -f %s %s %s %s`, sock, thread, threadNext, runStart)
 	// THE REPOSITORIES' INSTRUCTIONS AND SKILLS, none of their configuration
-	// ([codexRepoGate]), and the nested hook that hands a later checkout's
+	// ([codexCheckoutHome]), and the nested hook that hands a later checkout's
 	// where the box holds the helper it runs ([codexNestedHookFlags]).
-	b.WriteString(codexRepoGate(paths, req.ReportedRepos))
+	line(`[ ! -s %[1]s ] || cat %[1]s >&2`, q(paths.CodexGuardSaid()))
+	b.WriteString(codexCheckoutHome(paths).gate())
 	hook, state := codexNestedHookFlags(paths)
 	line(`hp=%s; hs=%s`, q(hook), q(state))
-	// No --ignore-user-config: app-server has none, and the config.toml it
-	// always loads is the run's own ([Paths.CodexLiveConfig]). Started in the
+	// The config.toml it loads is the home's with the run's over it
+	// ([codexConfigOver]), as a person's session loads the home's. Started in the
 	// script's own directory, exec's: under --remote a relative path and an
 	// item's cwd resolve against the SERVER's (CODEX-MEASURE §18).
 	line(`codex app-server --listen %s %s ${hk:+-c "$hp" -c "$hs"} < /dev/null > %s 2>&1 &`,
@@ -332,7 +339,7 @@ func codexStartHelper(req sandbox.RunRequest, paths Paths) string {
 	if limit := req.Limits.MaxTurns; limit > 0 {
 		flags += fmt.Sprintf(" -step-cap %d -cap-marker %s", limit, q(paths.CodexCapFired()))
 	}
-	// The helper is executable: the repository gate made it so ([codexRepoGate]).
+	// The helper is executable: the repository gate made it so ([checkoutHome.gate]).
 	return fmt.Sprintf(`%[1]s%[2]s%[3]s < /dev/null > /dev/null &
 hpid=$!
 ( while kill -0 $$ 2> /dev/null && kill -0 "$hpid" 2> /dev/null; do sleep %[4]s; done; kill -0 $$ 2> /dev/null || exit 0; : > %[5]s; %[2]s -interrupt-once < /dev/null > /dev/null || end "$apid" again ) &
@@ -345,10 +352,20 @@ gpid=$!
 // most that before its turn is interrupted.
 const codexGuardPoll = "0.5"
 
+// codexRunStart sets before to WHERE THE RUN BEGINS IN THE ROLLOUT IT
+// CONTINUES, its line count once the gate has settled it (a compressed one
+// written plain, [codexSessionGate]): every line past it is the run's own,
+// which is all the result reads.
+func codexRunStart(paths Paths, thread string) string {
+	return fmt.Sprintf(`if [ "$k" = yes ]; then r=$(%s); [ -z "$r" ] || { lc=$(wc -l < "$r" | tr -d " ") && [ -n "$lc" ] && before=$lc; } || before=0; fi`+"\n",
+		codexRolloutPath(paths, thread))
+}
+
 // codexAborted defines the script's `aborted`: true where the rollout lines
 // the run appended (past before, of the thread reported, else the one
 // continued) record a turn aborted as interrupted, as the result reads them
-// ([codexEvents.keepRollout]).
+// ([codexEvents.keepRollout]). A compressed rollout alone is no resume's, so
+// it holds no line of the run's, and is passed over, as finish passes it.
 func codexAborted(paths Paths) string {
 	return fmt.Sprintf(`aborted() { as=${tid:-$sid}; [ -n "$as" ] || return 1; af=$(find %s -type f -name "rollout-*-$as.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1); [ -n "$af" ] && tail -n +$((before + 1)) "$af" | grep -E '"type": *"turn_aborted"' | grep -qE '"reason": *"interrupted"'; }`+"\n",
 		shellword.Quote(paths.CodexSessions()))
@@ -398,13 +415,14 @@ func (Codex) Events() Decoder { return &codexEvents{} }
 func (Codex) Parse(stdout []byte) sandbox.Result { return decodeAll(&codexEvents{}, stdout) }
 
 // artifactFiles is what a Codex run leaves in its box beside the session it
-// continues: the configuration with its tokens, the socket, the thread, the
-// helper and its routes, the server's output. No
-// directory: its skills sit in CODEX_HOME's own skill root beside any the
-// image installed, and the next Codex run removes the run's ([writeCodexSkills]).
+// continues: its staged configurations with their tokens (config.toml is the
+// home's, put back as the run ends), the socket, the thread, the helper, its
+// routes and its renew config, the server's output. No directory: its skills
+// sit in CODEX_HOME's own skill root beside the home's, and the next Codex run
+// removes the run's ([writeCodexSkills]).
 func (Codex) artifactFiles(p Paths) []string {
-	return []string{p.CodexLiveConfig(), p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
+	return []string{p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
 		p.CodexCapFired(), p.CodexHelperLost(), p.CodexSkillsURL(), p.CodexSkillsURLFresh(),
 		p.CodexThread(), p.CodexThread() + ".next", p.CodexNoteHelper(), p.CodexNotesURL(),
-		p.CodexNotesURLFresh(), p.WorkDir() + "/codex-server.log"}
+		p.CodexNotesURLFresh(), p.CodexRenew(), p.CodexRepoAgents(), p.WorkDir() + "/codex-server.log"}
 }

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/browser/hostreach"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -34,11 +35,10 @@ type FakeSandbox struct {
 	id    string
 	home  string
 	files map[string][]byte
-	// timeouts is every refresh of the box's timer, with when it came: see
-	// [FakeSandbox.Timeouts].
-	timeouts []FakeTimeout
-	paused   bool
-	closed   bool
+	// touches is when each Touch came: see [FakeSandbox.Touches].
+	touches []time.Time
+	paused  bool
+	closed  bool
 	// reclaimed is a box its provider killed ([FakeProvider.Kill]): unreadable.
 	reclaimed  bool
 	commands   []string
@@ -52,6 +52,9 @@ type FakeSandbox struct {
 	// delivered is how many bytes its reads have handed out: see
 	// [FakeSandbox.Delivered].
 	delivered int64
+	// engineHost is its provider's [FakeProvider.HostAlias]: see
+	// [FakeSandbox.EngineHost].
+	engineHost string
 
 	// ExecFunc, when set, answers Exec instead of the default success.
 	ExecFunc func(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error)
@@ -66,8 +69,13 @@ type FakeSandbox struct {
 
 	// PauseFunc, when set, is asked first by every Pause, and a non-nil
 	// answer is that pause's error, leaving the box unpaused: a backend slow
-	// to snapshot the box, or one that could not.
+	// to freeze the box, or one that could not.
 	PauseFunc func(ctx context.Context) error
+
+	// CloseFunc, when set, is asked first by every Close, and a non-nil
+	// answer is that close's error, leaving the box open and its provider
+	// listing it: a local backend whose runtime kept the box's container.
+	CloseFunc func(ctx context.Context) error
 
 	// ReadErr, when set, is consulted by every read with the file's path,
 	// and a non-nil answer is that read's error — standing in for a box
@@ -101,6 +109,11 @@ var _ Sandbox = (*FakeSandbox)(nil)
 func NewFakeSandbox(id string) *FakeSandbox {
 	return &FakeSandbox{id: id, home: DefaultHome, files: map[string][]byte{}}
 }
+
+// EngineHost is the name the engine host answers to inside the box, as a
+// container box answers it ([EngineAddress]): its provider's
+// [FakeProvider.HostAlias], "" for a box on the host's network.
+func (s *FakeSandbox) EngineHost() string { return s.engineHost }
 
 // CapReads holds the box's whole reads to n bytes rather than [MaxFileBytes],
 // and returns the box.
@@ -198,10 +211,18 @@ func (s *FakeSandbox) Execs() []FakeExec {
 	return slices.Clone(s.execs)
 }
 
-// Job answers through [FakeSandbox.Exec], the way a remote box does, so a
-// test scripts liveness with ExecFunc ([remoteJob]).
+// Job answers through [FakeSandbox.Exec], so a test scripts liveness with
+// ExecFunc: running while `kill -0` says so ([probeByKill]), else ended. A
+// fake job is never lost: the fake keeps no engine process to lose it with.
 func (s *FakeSandbox) Job(ctx context.Context, commandID string) (JobState, error) {
-	return remoteJob(ctx, s, commandID)
+	running, err := probeByKill(ctx, s, commandID)
+	switch {
+	case err != nil:
+		return "", err
+	case running:
+		return JobRunning, nil
+	}
+	return JobEnded, nil
 }
 
 // EndJob records the end request — "end <commandID> <script>" — and answers
@@ -348,8 +369,7 @@ func (s *FakeSandbox) OpenRange(ctx context.Context, p string, off, n int64) (io
 
 // Delivered is how many bytes of its files the box's reads have handed out —
 // each stream as far as its reader took it, a refused whole read as far as the
-// refusal read: what a remote box would have sent over the wire, a reader's
-// cost.
+// refusal read: a reader's cost.
 func (s *FakeSandbox) Delivered() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -398,31 +418,25 @@ func (s *FakeSandbox) content(p string) ([]byte, error) {
 	return slices.Clone(s.files[path.Clean(p)]), nil
 }
 
-// SetTimeout records the refresh and when it came, and ends nothing: a case
-// about a box its timer ends models the end from [FakeSandbox.Timeouts].
-func (s *FakeSandbox) SetTimeout(ctx context.Context, seconds float64) error {
+// Touch records when it came, on the clock the case runs under, and ends
+// nothing: a case about a box whose stamp ages out models the reap from
+// [FakeSandbox.Touches].
+func (s *FakeSandbox) Touch(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.timeouts = append(s.timeouts, FakeTimeout{At: time.Now(), Seconds: seconds})
+	s.touches = append(s.touches, time.Now())
 	return nil
 }
 
-// FakeTimeout is one refresh of a [FakeSandbox]'s timer: when it was asked for,
-// on the clock the case runs under, and the seconds it set the timer to.
-type FakeTimeout struct {
-	At      time.Time
-	Seconds float64
-}
-
-// Timeouts is every refresh of the box's timer, in order — the waiter's
-// keepalive and a launch's while it provisions the box alike.
-func (s *FakeSandbox) Timeouts() []FakeTimeout {
+// Touches is when each Touch came, in order — the waiter's keepalive and a
+// launch's while it provisions the box alike.
+func (s *FakeSandbox) Touches() []time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.Clone(s.timeouts)
+	return slices.Clone(s.touches)
 }
 
-// Pause marks the box snapshotted, once [FakeSandbox.PauseFunc] answers no
+// Pause marks the box paused, once [FakeSandbox.PauseFunc] answers no
 // error where one is set; [FakeSandbox.Paused] reports it.
 func (s *FakeSandbox) Pause(ctx context.Context) error {
 	if s.PauseFunc != nil {
@@ -436,20 +450,26 @@ func (s *FakeSandbox) Pause(ctx context.Context) error {
 	return nil
 }
 
-// Close marks the box torn down; [FakeSandbox.Closed] reports it.
+// Close marks the box torn down, once [FakeSandbox.CloseFunc] answers no
+// error where one is set; [FakeSandbox.Closed] reports it.
 func (s *FakeSandbox) Close(ctx context.Context) error {
+	if s.CloseFunc != nil {
+		if err := s.CloseFunc(ctx); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
 	return nil
 }
 
-// Keepalives is how many times this box's TTL was refreshed: by the waiter's
+// Keepalives is how many times this box was touched: by the waiter's
 // keepalive, and by a launch while it provisioned the box.
 func (s *FakeSandbox) Keepalives() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.timeouts)
+	return len(s.touches)
 }
 
 // unreadable reports whether the box can no longer be read: paused, or
@@ -460,7 +480,7 @@ func (s *FakeSandbox) unreadable() bool {
 	return s.paused || s.reclaimed
 }
 
-// Paused reports whether the box is currently snapshotted.
+// Paused reports whether the box is currently paused.
 func (s *FakeSandbox) Paused() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -523,20 +543,26 @@ type FakeProvider struct {
 	KillErr error
 	// AttachFunc, when set, is called by every Attach before it answers,
 	// WITHOUT the provider's lock, and a non-nil answer fails the Attach: a
-	// control plane slow or silent for one box while it answers the rest.
+	// runtime slow or silent for one box while it answers the rest.
 	AttachFunc func(ctx context.Context, sandboxID string) error
 	// KillFunc, when set, is called by every Kill on a live context before
 	// it answers, WITHOUT the provider's lock, and a non-nil answer fails
-	// the Kill unrecorded: a control plane slow or silent on a reclaim.
+	// the Kill unrecorded: a runtime slow or silent on a reclaim.
 	KillFunc func(ctx context.Context, sandboxID string) error
 	// Made, when set, is handed every box Create makes, before Create
 	// answers: a case scripts a fresh box's commands there.
 	Made func(box *FakeSandbox)
+	// HostAlias is the name the engine host answers to inside this backend's
+	// boxes, standing in for a container runtime's alias: what
+	// [Manager.EngineHost] reads of its cell and what each box it makes
+	// answers. Empty, the default, is a cell on the host's network.
+	HostAlias string
 
 	// runs is the run each box was made for ([HostBox]), kept only for a box
-	// made for a turn in a cell on the engine's host: the one kind a local
-	// backend lists.
-	runs map[string]HostBox
+	// made for a turn in a cell this build knows, as a local backend records
+	// and lists one; checks the check attempt ([CheckBox]), likewise.
+	runs   map[string]HostBox
+	checks map[string]CheckBox
 }
 
 var _ Provider = (*FakeProvider)(nil)
@@ -545,9 +571,6 @@ var _ Provider = (*FakeProvider)(nil)
 func NewFakeProvider() *FakeProvider {
 	return &FakeProvider{boxes: map[string]*FakeSandbox{}, Vanished: map[string]bool{}}
 }
-
-// Kind names the backend, for the messages a real provider's errors carry.
-func (p *FakeProvider) Kind() string { return "fake" }
 
 // Create mints a box and remembers it, so a later Connect hands back the
 // same one.
@@ -559,21 +582,36 @@ func (p *FakeProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 	p.next++
 	box := NewFakeSandbox(fmt.Sprintf("box-%d", p.next))
+	box.engineHost = p.HostAlias
 	p.boxes[box.id] = box
 	if p.Made != nil {
 		p.Made(box)
 	}
-	if spec.TurnID != "" && spec.Placement.OnEngineHost() {
+	if spec.TurnID != "" && spec.Placement.Valid() {
 		if p.runs == nil {
 			p.runs = map[string]HostBox{}
 		}
 		p.runs[box.id] = HostBox{SandboxID: box.id, TurnID: spec.TurnID, Placement: spec.Placement}
 	}
+	if spec.Check != "" && spec.TurnID == "" && spec.Placement.Valid() {
+		if p.checks == nil {
+			p.checks = map[string]CheckBox{}
+		}
+		p.checks[box.id] = CheckBox{SandboxID: box.id, Check: spec.Check, Placement: spec.Placement}
+	}
 	return box, nil
 }
 
-// RunBoxes lists the boxes made for a turn in a cell on the engine's host
-// that have not been killed, as [Local.RunBoxes] does.
+// EngineHost is [FakeProvider.HostAlias], as [Local.EngineHost] answers its
+// cell's.
+func (p *FakeProvider) EngineHost() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.HostAlias
+}
+
+// RunBoxes lists the boxes made for a turn that have not been killed, as
+// [Local.RunBoxes] does.
 func (p *FakeProvider) RunBoxes() ([]HostBox, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -581,6 +619,20 @@ func (p *FakeProvider) RunBoxes() ([]HostBox, error) {
 	for _, id := range slices.Sorted(maps.Keys(p.runs)) {
 		if _, live := p.boxes[id]; live {
 			out = append(out, p.runs[id])
+		}
+	}
+	return out, nil
+}
+
+// CheckBoxes lists the boxes made for a check attempt that have been neither
+// killed nor closed, as [Local.CheckBoxes] does: either removes a local box.
+func (p *FakeProvider) CheckBoxes() ([]CheckBox, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []CheckBox
+	for _, id := range slices.Sorted(maps.Keys(p.checks)) {
+		if box, live := p.boxes[id]; live && !box.Closed() {
+			out = append(out, p.checks[id])
 		}
 	}
 	return out, nil
@@ -605,7 +657,7 @@ func (p *FakeProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, 
 }
 
 // Attach returns a previously created box WITHOUT resuming it, and refuses a
-// paused one with [ErrBoxPaused], as the remote backend does: the stricter of
+// paused one with [ErrBoxPaused], as the container cell does: the stricter of
 // the two real answers, so a reader certified here copes with a box it may not
 // read.
 func (p *FakeProvider) Attach(ctx context.Context, sandboxID string) (Sandbox, error) {
@@ -629,11 +681,10 @@ func (p *FakeProvider) Attach(ctx context.Context, sandboxID string) (Sandbox, e
 	return box, nil
 }
 
-// Kill records the id and forgets the box. It HONOURS ctx, as every real
-// provider does (E2B's is an HTTP call, the local one waits on a process
-// group): a fake that reaped on a dead context would leave every
-// teardown-detach guard untested, the box reclaimed whether or not the caller
-// detached.
+// Kill records the id and forgets the box. It HONOURS ctx, as the real
+// provider does (it runs the runtime's `rm -f`, or waits on a process group):
+// a fake that reaped on a dead context would leave every teardown-detach guard
+// untested, the box reclaimed whether or not the caller detached.
 func (p *FakeProvider) Kill(ctx context.Context, sandboxID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -723,6 +774,11 @@ type FakeRunner struct {
 	// launch.
 	Fresh bool
 
+	// Exports is what [FakeRunner.ExportsTelemetry] answers: the harness this
+	// fake stands in for exports its run's OTLP to the engine's receiver.
+	// Set it before the first launch.
+	Exports bool
+
 	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the
 	// harness this fake stands in for takes a person's notes between its own
 	// steps. Set it before the first collection.
@@ -747,6 +803,11 @@ type FakeRunner struct {
 	// harness this fake stands in for sends each call's id under, "" for
 	// none. Set it before the launch that should read it.
 	CallIDKey string
+
+	// Ceiling is what [FakeRunner.MCPCallCeiling] answers: how long the
+	// harness this fake stands in for waits for one bridged call, zero for no
+	// such ceiling. Set it before the launch that should read it.
+	Ceiling time.Duration
 
 	// StartErr, when set, fails every Start.
 	StartErr error
@@ -1031,6 +1092,13 @@ var (
 	_ CallIdentifier = (*FakeRunner)(nil)
 	_ MCPDeferrer    = (*FakeRunner)(nil)
 )
+
+// MCPCallCeiling answers [FakeRunner.Ceiling]: the optional answer a runner
+// whose harness gives up on a call at a wait of its own gives the launch
+// ([CallCeilinged]).
+func (r *FakeRunner) MCPCallCeiling() time.Duration { return r.Ceiling }
+
+var _ CallCeilinged = (*FakeRunner)(nil)
 
 // Install records that the agent was provisioned into the box.
 func (r *FakeRunner) Install(ctx context.Context, box Sandbox) error {
@@ -1658,9 +1726,9 @@ var _ SessionSaver = (*FakeRunner)(nil)
 // where [FakeRunner.Carries] is set — a session its own harness wrote, in
 // [FakeArchiveFormat], under an entry [EntryContinues] lets it continue under
 // ([FakeRunner.EntryBound]) — and restores nothing otherwise.
-func (r *FakeRunner) RestoresUnder(archive SessionArchive, entry string) (bool, string) {
-	if ok, why := r.restores(archive); !ok {
-		return false, why
+func (r *FakeRunner) RestoresUnder(archive SessionArchive, entry string) SessionContinuity {
+	if restores := r.restores(archive); !restores.Continues {
+		return restores
 	}
 	return EntryContinues(archive.Entry, entry, r.name, r.ResumesOnLaunchRoute())
 }
@@ -1674,19 +1742,20 @@ func (r *FakeRunner) ResumesOnLaunchRoute() bool {
 
 // restores is [FakeRunner.RestoresUnder] less the entry, which a box's own
 // check ([FakeRunner.CheckCarry]) follows.
-func (r *FakeRunner) restores(archive SessionArchive) (bool, string) {
+func (r *FakeRunner) restores(archive SessionArchive) SessionContinuity {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	switch {
 	case !r.Carries:
-		return false, "fake: this runner carries no session between boxes"
+		return refusedFor(executorkeep.LossHarnessChanged, "fake: this runner carries no session between boxes")
 	case archive.Harness != r.name:
-		return false, fmt.Sprintf("fake: the session was written by %q, and this runner drives %q",
-			archive.Harness, r.name)
+		return refusedFor(executorkeep.LossHarnessChanged, fmt.Sprintf("fake: the session was written by %q, "+
+			"and this runner drives %q", archive.Harness, r.name))
 	case archive.Format != FakeArchiveFormat:
-		return false, fmt.Sprintf("fake: the session's archive is format %d", archive.Format)
+		return refusedFor(executorkeep.LossReleaseFloor, fmt.Sprintf("fake: the session's archive is format %d",
+			archive.Format))
 	}
-	return true, ""
+	return continues
 }
 
 // CheckCarry answers [FakeRunner.restores], and then [FakeRunner.CarryWhy] for
@@ -1694,12 +1763,13 @@ func (r *FakeRunner) restores(archive SessionArchive) (bool, string) {
 // ([FakeRunner.CarryVersion]) either way, as a real runner reads it before it
 // decides.
 func (r *FakeRunner) CheckCarry(_ context.Context, _ Sandbox, archive SessionArchive) (CarryCheck, error) {
-	ok, why := r.restores(archive)
+	restores := r.restores(archive)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	switch {
-	case !ok:
-		return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Why: why}, nil
+	case !restores.Continues:
+		return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Loss: restores.Loss,
+			Why: restores.Why}, nil
 	case r.CarryWhy != "":
 		return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Why: r.CarryWhy}, nil
 	}
@@ -1810,6 +1880,13 @@ func (r *FakeRunner) StartsFresh() bool {
 	return r.Fresh
 }
 
+// ExportsTelemetry answers [FakeRunner.Exports].
+func (r *FakeRunner) ExportsTelemetry() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Exports
+}
+
 // PinnedWindow answers [FakeRunner.Pin] of model, 0 where it is unset.
 func (r *FakeRunner) PinnedWindow(model string) int {
 	r.mu.Lock()
@@ -1819,6 +1896,24 @@ func (r *FakeRunner) PinnedWindow(model string) int {
 		return 0
 	}
 	return pin(model)
+}
+
+var _ summaryKeeper = (*FakeRunner)(nil)
+
+// KeepSummary keeps found as a runner does: scrubbed of scrub, by value alone
+// (the fake redacts nothing by shape), and held to its bound by its end.
+func (r *FakeRunner) KeepSummary(found ThreadSummary, scrub []string) ThreadSummary {
+	if found.Unread != "" || found.Text == "" {
+		return found
+	}
+	text := found.Text
+	for _, value := range scrub {
+		if value != "" {
+			text = strings.ReplaceAll(text, value, "[scrubbed]")
+		}
+	}
+	kept, cut := executorkeep.SummaryTail(text)
+	return ThreadSummary{Text: kept, Bytes: int64(len(text)), Cut: cut}
 }
 
 // ReadMainThread answers a collection's read of a job's main thread with what

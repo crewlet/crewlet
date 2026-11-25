@@ -152,6 +152,11 @@ func NewOpenCode() *Runner { return New(OpenCode{}) }
 // Name is the harness's key in the runner registry.
 func (OpenCode) Name() string { return OpenCodeName }
 
+// MCPCallCeiling is none: `timeout.execution` carries the bridge's own bound
+// ([openCodeMCP]), and a 1040-second call under a 1050-second one was answered
+// whole (measured on 2.3.2).
+func (OpenCode) MCPCallCeiling() time.Duration { return 0 }
+
 // resumesOnLaunchRoute: measured on 2.3.2, the one release supported
 // ([launchRouted]): created on a
 // provider whose baseURL was stub A, `run --session` with it at stub B, with
@@ -306,10 +311,6 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 	q := shellword.Quote
 	var b strings.Builder
 	b.WriteString("sid=" + q(session) + " packed=\n" + openCodeStandalonePins)
-	// A CONFIGURATION DIRECTORY INSIDE ITS OWN STAGING ONE, which the pack
-	// makes anew and removes ([openCodePack]): a pack loads nothing a run left
-	// in the box. OpenCode makes the directory where it is missing.
-	fmt.Fprintf(&b, "OPENCODE_CONFIG_DIR=%s; export OPENCODE_CONFIG_DIR\n", q(staged+"/opencode-config"))
 	if room {
 		// THE ROOM BEFORE ANY OPENCODE PROCESS, the probe's included: the
 		// probe is a standalone OpenCode too. No database yet is no session
@@ -500,14 +501,6 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// one whose release does not read (a pre-release among them) is let run,
 	// as a release the engine cannot read is taken for a current one.
 	line(`%s`, openCodeOlderCheck())
-	// THE RUN LOADS ONLY THE CONFIGURATION ITS LAUNCH WRITES, before any
-	// command that reads one: OpenCode's global directory is the run's own,
-	// empty ([Paths.OpenCodeConfigDir]), and what it reads from the home and
-	// the workspace's parent is removed ([openCodeHomeConfig]).
-	line(`rm -rf %[1]s && mkdir -p %[1]s || { echo 'crewlet: the run could not make its OpenCode configuration directory' >&2; exit 1; }`,
-		shellword.Quote(paths.OpenCodeConfigDir()))
-	line(`OPENCODE_CONFIG_DIR=%s; export OPENCODE_CONFIG_DIR`, shellword.Quote(paths.OpenCodeConfigDir()))
-	line(`rm -rf %s`, strings.Join(openCodeHomeConfig(paths), " "))
 	// THE SERVER'S PASSWORD IS ITS OWN: `opencode serve` given
 	// OPENCODE_PASSWORD or OPENCODE_SERVER_PASSWORD prints none, and the
 	// listen wait would run out. So both are unset, the wait asks for the
@@ -587,11 +580,11 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`url=$(sed -n 's/^server listening on //p' %s)`, srv)
 	line(`OPENCODE_PASSWORD=$(sed -n 's/^server password //p' %s); export OPENCODE_PASSWORD`, srv)
 	line(`rm -f %s`, srv)
-	// THE LOGIN, where the box was given one ([Paths.CredentialDocument], a
-	// local box's): imported through the run's own server, once every login
-	// its database held is removed ([openCodeForgetLogins]), and exported over
-	// the document while the run works and as it ends ([openCodeLoginSync]).
-	// A remote box is given none and signs in with the run environment's key.
+	// THE LOGIN, where the box was given one ([Paths.CredentialDocument]):
+	// imported through the run's own server, once every login its database
+	// held is removed ([openCodeForgetLogins]), and exported over the document
+	// while the run works and as it ends ([openCodeLoginSync]). An entry that
+	// signs in with a key gives its box none: the run environment's key signs it in.
 	// Through the server, so no second OpenCode runtime opens the database.
 	// Before the client, so an end request ends each call and starts no run.
 	b.WriteString(openCodeForgetLogins(ans, secs(times.call)))
@@ -694,23 +687,6 @@ func openCodeAnswerFile(paths Paths) string {
 	return shellword.Quote(paths.WorkDir() + "/opencode-answer")
 }
 
-// openCodeHomeConfig is every path under a box's home OpenCode reads as
-// configuration or instructions besides its global directory, shell-quoted:
-// the skill roots it reads from any home, Claude Code's instructions and
-// skills, and what the project walk finds in the home, the workspace's parent.
-// Measured on 2.3.2: each loaded from a box's home, and none once removed.
-// OPENCODE_DISABLE_CLAUDE_CODE is no substitute: it drops the repository's
-// CLAUDE.md and .claude/skills as well.
-func openCodeHomeConfig(paths Paths) []string {
-	rel := []string{".agents/skills", ".claude/CLAUDE.md", ".claude/skills", ".opencode", "opencode.json",
-		"opencode.jsonc", "AGENTS.md", "CLAUDE.md", "CONTEXT.md"}
-	out := make([]string, len(rel))
-	for i, r := range rel {
-		out[i] = shellword.Quote(paths.Home + "/" + r)
-	}
-	return out
-}
-
 // openCodeForgetLogins removes, through the run's server and ans, every login
 // the box's database holds: an earlier run's import, and whatever else was
 // stored since. The run imports its own after, so only the login it was handed
@@ -805,6 +781,7 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`    rm -rf %s`, q(staged))
 	line(`  fi`)
 	line(`fi`)
+	b.WriteString(openCodeRenew(session, paths))
 	line(`rm -f %s`, carried)
 	// A NEW SESSION IS HANDED THE BRIEF WRITTEN FOR ONE where the run was
 	// given it ([sandbox.RunRequest.FreshBrief]): the brief on stdin continues
@@ -831,6 +808,35 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 			fresh, values, values, fresh, fresh, values, fresh)
 	}
 	return b.String()
+}
+
+// openCodeRenew is the part of a continuing run's gate that re-imports the
+// box's own copy (h), so its first request renders this launch's standing
+// instructions whole as the leading ones: the package doc's "A continued
+// OpenCode session's standing instructions" says why, and what it costs. The
+// copy is exported, held to a carried export's checks (the save room, non-empty,
+// within [heldPlainMax], naming the session), deleted only then, and imported;
+// any failure starts the minted session, saying why, and an import that failed
+// keeps its export at [Paths.OpenCodeRenewExport]. The copy's child sessions
+// are deleted with it and not imported, as on the carried path: nothing reads
+// a finished run's children from the box (every read names sid alone).
+func openCodeRenew(session Session, paths Paths) string {
+	q := shellword.Quote
+	return sandbox.MemoryDomainScript + "\n" + openCodeSaveRoom + "\n" + fmt.Sprintf(`if [ -n "$h" ] && [ -z "$w" ]; then
+  rx=%[1]s re=%[2]s kept= db="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db"; rm -f "$rx"; mkdir -p %[3]s
+  if [ ! -f "$db" ]; then w="its database is not at $db, so the memory re-importing it takes cannot be bounded"
+  elif ! crewlet_memory 2> /dev/null | crewlet_save_fits "$(crewlet_size "$db")" "$(crewlet_size "$db-wal")" 2> "$re"; then w="its box lacks the room to re-import it: $(cat "$re" 2> /dev/null)"
+  elif ! opencode session export --standalone "$sid" < /dev/null > "$rx" 2> "$re"; then w="OpenCode did not export it to renew its instructions: $(tr '\n' ' ' < "$re" 2> /dev/null)"
+  elif ! n=$(($(wc -c < "$rx"))) || [ "$n" -le 0 ] || [ "$n" -gt %[4]d ] || ! grep -qF %[5]s "$rx"; then w="its export to renew its instructions is empty, past %[4]d bytes or names another session"
+  elif ! out=$(opencode session delete --standalone "$sid" < /dev/null 2>&1); then w="OpenCode did not delete it to renew its instructions: $(printf '%%s' "$out" | tr '\n' ' ')"
+  else
+    out=$(opencode session import --standalone --directory "$PWD" "$rx" < /dev/null 2>&1)
+    case "$out" in *%[6]s*) ;; *) kept=1 w="OpenCode did not re-import it to renew its instructions, its export kept at $rx: $(printf '%%s' "$out" | tr '\n' ' ')";; esac
+  fi
+  [ -n "$kept" ] || rm -f "$rx"; rm -f "$re"
+fi
+`, q(paths.OpenCodeRenewExport()), q(paths.SessionStaging()+"/renew-error"), q(paths.SessionStaging()), heldPlainMax,
+		q(`"id":"`+session.ID+`"`), q("Imported session: "+session.ID))
 }
 
 // openCodeCapture exports the session the run worked in (sid) once the run has
@@ -1124,6 +1130,18 @@ func openCodeShadowCheck(servers map[string]sandbox.MCPServer) string {
 	return b.String()
 }
 
+// openCodeToolPrefix is how OpenCode names each tool of server name, less its
+// `_<tool>`: every character outside `A-Za-z0-9_-` written `_`
+// ([openCodeShadowCheck]).
+func openCodeToolPrefix(name string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '_' || r == '-' || r < 128 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, name)
+}
+
 // jsonStringify spells s as JavaScript's JSON.stringify does, as OpenCode
 // prints a server's name, not as encoding/json does: Go escapes `&`, `<`, `>`,
 // U+2028 and U+2029, which JSON.stringify leaves literal, so such a
@@ -1170,46 +1188,41 @@ func jsonStringify(s string) string {
 // repository's own loads beneath it. 2.0's format: a directly offered server,
 // a remote one without OAuth and a last-match-wins rule list exist only there.
 // No credential is written; a key rides the run env. Every entry the run owns
-// states `disabled: false`, since a document beneath may disable one of the
-// same name. Values are files ([openCodeValueFiles]); the plugins come last in
+// states `disabled: false`, and a document switching the run's agent or
+// Crewlet's server off refuses the run ([openCodePolicy]). Values are files ([openCodeValueFiles]); the plugins come last in
 // `plugins`, after any `-<id>` removal beneath. Every path is under the work
 // dir ([openCodeReferable]). Written every run: the script refuses to run
 // without it.
 func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
-	// THE COMMANDS ITS MODEL RUNS START WITHOUT WHAT THE HARNESS ALONE READS:
-	// the names it signs in by and its own variables, on every run
-	// (opencode_toolenv.js).
-	omitted, refused := toolEnvOmitted(req.SignInEnv, openCodeHarnessEnv...)
-	if refused != nil {
-		return "", refused
-	}
 	// So every run's configuration names a path under the work dir.
 	if err := openCodeReferable(paths.WorkDir()); err != nil {
 		return "", fmt.Errorf("executor: this box's home %q cannot be named in an OpenCode "+
 			"run's configuration: %w; a local box's home is under providers.sandbox.local.state_dir, "+
 			"which needs a path without such characters", paths.Home, err)
 	}
+	docs, askErr := openCodeDocs(ctx, box, req, paths)
+	if askErr != nil {
+		return "", askErr
+	}
+	// ALLOW, STATED RATHER THAN INHERITED, in 2.0's ordered rule list:
+	// `opencode run` is headless, so a gate left at `ask` refuses the call and
+	// the run carries on without it. The box is the boundary, as for
+	// claude-code's bypassPermissions ([ClaudeCode.Command]), and a vendor
+	// default moves between releases. The person's own top-level rules follow
+	// it, an ask as allow, so their deny still decides ([openCodePersonsRules]).
+	// `question` alone is denied: it asks a PERSON through a form a headless run
+	// cancels, where the bridge's `ask_and_wait` parks the run on an answer. An
+	// agent's own rules are read after these (2.3.2).
+	top := append(openCodeRunRules("permissions", map[string]string{"action": "*", "resource": "*",
+		"effect": "allow"}), openCodePersonsRules(docs)...)
+	top = append(top, openCodeRunRules("permissions", map[string]string{"action": "question", "resource": "*",
+		"effect": "deny"})...)
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
 		// Sharing is disabled: a run's transcript is company work, and
 		// OpenCode's share feature publishes it to a URL.
 		"share": "disabled",
-		// ALLOW, STATED RATHER THAN INHERITED, in 2.0's ordered rule list:
-		// `opencode run` is headless, so a gate left at `ask` refuses the call
-		// and the run carries on without it, reading as an agent that would
-		// not do the work. The box is the boundary, as for claude-code's
-		// bypassPermissions ([ClaudeCode.Command]), and a vendor default moves
-		// between releases (internal/providers/llm/harness). `question` alone
-		// is denied: it asks a PERSON through a form a headless run cancels,
-		// where the bridge's `ask_and_wait` parks the run on an answer. Every
-		// document's rules are added in OpenCode's order, so these, last,
-		// decide among them; an agent's own rules, a repository's included,
-		// are read after them (2.3.2).
-		"permissions": []map[string]string{
-			{"action": "*", "resource": "*", "effect": "allow"},
-			{"action": "question", "resource": "*", "effect": "deny"},
-		},
 		// A harness that updates itself mid-run swaps the tool under the brief
 		// between launch and result, needs network a box may not have, and
 		// does both while a seat's turn is suspended waiting on it.
@@ -1229,31 +1242,68 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		// the export holds, so its tokens are spent and never counted. Off,
 		// none goes out (measured); a compaction runs as it always does.
 		"compaction": map[string]any{"background": false},
+		// NO AUTOMATIONS: nothing a run starts may fire outside it, and a
+		// person's own automation firing at the box's next server is outside
+		// one too. A home's or a repository's opt-in beneath this document let
+		// both fire there with no turn behind them; off here, OpenCode offers
+		// no scheduling tool and fires no schedule (measured on 2.3.2,
+		// code-sandbox.md's OpenCode section).
+		"experimental": map[string]any{"automations": false},
 	}
-	agent := map[string]any{}
+	// THE RUN'S AGENT STATED ON, for the reason its servers are; a home's or a
+	// repository's switching it off refuses the run instead ([openCodePolicy]).
+	agent := map[string]any{"disabled": false}
 	// THE RUN'S TURN CAP, as the agent's `steps` (Claude Code's --max-turns,
 	// [ClaudeCode.Command]): the one bound on an executor's work, already
 	// reconciled into Limits. Absent at zero, which is uncapped: OpenCode
 	// refuses a step count below one.
 	if req.Limits.MaxTurns > 0 {
 		agent["steps"] = req.Limits.MaxTurns
-		agent["disabled"] = false
 	}
+	var rules []map[string]string
 	// THE ENTRY'S WEB DENIED IN THE PERMISSIONS TOO, the run's and its agent's,
 	// beside the web tools' plugins taken out below: Code Mode's `execute`
 	// fetches under the webfetch permission, and on 2.3.2 a repository's agent
 	// rule allowing it outranked the run's own rules until the agent's denied
 	// it as well.
 	if req.WebDenied {
-		denied := []map[string]string{
+		rules = []map[string]string{
 			{"action": "webfetch", "resource": "*", "effect": "deny"},
 			{"action": "websearch", "resource": "*", "effect": "deny"},
 		}
-		cfg["permissions"] = append(cfg["permissions"].([]map[string]string), denied...)
-		agent["permissions"] = denied
+		top = append(top, openCodeRunRules("permissions", rules...)...)
 	}
-	if len(agent) > 0 {
-		cfg["agents"] = map[string]any{openCodeAgent: agent}
+	cfg["permissions"] = openCodeRuleList(top)
+	// THE TOOLS OF THE RUN'S OWN SERVERS ALLOWED LAST in its agent's rules,
+	// over an `ask` of a person's: 2.3.2 reads an agent's rules after every
+	// document's own, the run's included. A person's deny of them refuses the
+	// run instead ([openCodePolicy]): without them a model's call answered "No
+	// tool named" with the run exiting 0 (measured). A seat's other servers
+	// stay a home's to deny.
+	for _, name := range crewletServers(req.MCPServers) {
+		rules = append(rules, map[string]string{"action": openCodeToolPrefix(name) + "_*", "resource": "*",
+			"effect": "allow"})
+	}
+	if len(rules) > 0 {
+		agent["permissions"] = rules
+	}
+	cfg["agents"] = map[string]any{openCodeAgent: agent}
+	// NO PLUGIN, SEAT SKILL OR SERVER OF THE RUN'S A CONFIGURATION STOPS,
+	// judged under the run's own rules ([openCodePolicy]).
+	own := []string{paths.OpenCodeToolEnvPlugin()}
+	if req.Steer.Set() {
+		own = append(own, paths.OpenCodeSteerPlugin())
+	}
+	if len(req.Skills) > 0 {
+		own = append(own, paths.OpenCodeSkillsPlugin())
+	}
+	resolved, rulesErr := openCodeAgentRules(ctx, box, req, paths, top)
+	if rulesErr != nil {
+		return "", rulesErr
+	}
+	if err := openCodePolicy(docs, req, own, top, openCodeRunRules("agents."+openCodeAgent+".permissions",
+		rules...), resolved); err != nil {
+		return "", err
 	}
 	values := &openCodeValueFiles{dir: paths.OpenCodeValues()}
 	wired := openCodeWiring(sandbox.Wiring{MCPServers: req.MCPServers, Steer: req.Steer,
@@ -1319,14 +1369,14 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	if req.WebDenied {
 		plugins = append(plugins, "-opencode.tool.webfetch", "-opencode.tool.websearch")
 	}
-	// AND ON EVERY RUN THE PLUGIN THAT KEEPS omitted OUT OF THE COMMANDS ITS
-	// MODEL RUNS (opencode_toolenv.js), last.
+	// AND ON EVERY RUN THE PLUGIN THAT KEEPS [openCodeHarnessEnv] OUT OF THE
+	// COMMANDS ITS MODEL RUNS (opencode_toolenv.js), last.
 	if err := box.WriteFile(ctx, paths.OpenCodeToolEnvPlugin()+"/"+openCodeSteerEntry, openCodeToolEnvPlugin); err != nil {
 		return "", fmt.Errorf("executor: writing OpenCode's tool-environment plugin: %w", err)
 	}
 	cfg["plugins"] = append(plugins, map[string]any{
 		"package": paths.OpenCodeToolEnvPlugin(),
-		"options": map[string]any{"names": omitted},
+		"options": map[string]any{"names": openCodeHarnessEnv},
 	})
 	for _, v := range values.files {
 		if err := box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {
@@ -2176,7 +2226,9 @@ const openCodeChargeBytes sandbox.Charge = 4
 // threadTraits is what OpenCode's main-thread read settles: its export, taken
 // as its script ends, may lack what a cut-off copy holds, so such a copy is
 // not counted; its plugin's serves confirm themselves, so it asks no receipts.
-func (OpenCode) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{} }
+func (OpenCode) threadTraits() sandbox.ThreadTraits {
+	return sandbox.ThreadTraits{Reads: true, Summaries: true}
+}
 
 // sessionTraits is how a relaunch judges an OpenCode session: at the point its
 // box says, its calls keyed by their place in the round's log, a brief at
@@ -2186,18 +2238,24 @@ func (OpenCode) sessionTraits() sandbox.SessionTraits {
 		Charge: openCodeChargeBytes}
 }
 
+// exportsTelemetry: OpenCode's server exports its traces and logs to
+// OTEL_EXPORTER_OTLP_ENDPOINT wherever it is set, under
+// OTEL_RESOURCE_ATTRIBUTES (2.3.2's bundle).
+func (OpenCode) exportsTelemetry() bool { return true }
+
 // notesOffWhy is what switches OpenCode's reading of notes off.
 func (OpenCode) notesOffWhy() string {
-	return "a managed policy that denies the run's notes plugin (integration.use), or a plugin OpenCode " +
-		"failed to load, which its own log names"
+	return "a plugin OpenCode failed to load, which its own log names"
 }
 
 // artifactFiles is the files an OpenCode run leaves in its box of its own.
-func (OpenCode) artifactFiles(p Paths) []string { return []string{p.OpenCodeConfig()} }
+func (OpenCode) artifactFiles(p Paths) []string {
+	return []string{p.OpenCodeConfig(), p.OpenCodeRenewExport()}
+}
 
 // artifactDirs is the directories an OpenCode run leaves in its box of its
 // own.
 func (OpenCode) artifactDirs(p Paths) []string {
 	return []string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
-		p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin(), p.OpenCodeConfigDir()}
+		p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin()}
 }

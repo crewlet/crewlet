@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Test connection and the audit: each press proves a server's setup with
@@ -101,7 +100,7 @@ func (s *Service) sshTest(w http.ResponseWriter, r *http.Request) {
 	for _, step := range steps {
 		ok = ok && step.OK
 		kept = append(kept, coord.SSHTestStep{ID: step.ID, OK: step.OK,
-			Detail: textcut.Within(step.Detail, coord.MaxSSHTestDetailBytes)})
+			Detail: coord.FitText(step.Detail, coord.MaxSSHTestDetailBytes)})
 	}
 	by := auth.AttributionOf(r.Context())
 	if _, err := s.sshTests.PutSSHTest(r.Context(), coord.SSHTest{

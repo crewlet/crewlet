@@ -614,6 +614,13 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 			"because it is resolved on the engine's host rather than yours",
 			ErrBadDestination, dir)
 	}
+	if len(dir) > coord.MaxBackupDirBytes {
+		// The fleet's backup register names the directory, and its row is
+		// held to a small value: refused before a byte is copied rather
+		// than taken and left unannounced, which blocks the trim.
+		return Manifest{}, fmt.Errorf("%w: %s is %d bytes, past the %d the backup register "+
+			"names; choose a shorter path", ErrBadDestination, dir, len(dir), coord.MaxBackupDirBytes)
+	}
 	// ONE AT A TIME, refused before anything is written — the directory
 	// included — and after the two refusals above, which are the caller's
 	// own mistakes and answered the same whatever is running.

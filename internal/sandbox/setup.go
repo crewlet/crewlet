@@ -18,9 +18,9 @@ import (
 // backend's control timeout, sized for a mkdir.
 //
 // It bounds one command, never the provisioning: a launch's steps together may
-// outrun the box's TTL ([DefaultBoxTimeout]), since the launch keeps the box's
-// timer refreshed while it provisions ([keepProvisioning]) and only this
-// budget ends a slow step.
+// outrun the orphan reaper's cutoff ([DefaultHostGrace]), since the launch
+// keeps the box's stamp touched while it provisions ([keepProvisioning]) and
+// only this budget ends a slow step.
 const DefaultSetupTimeout = 10 * time.Minute
 
 // SetupStep is one declarative provisioning unit applied to a fresh sandbox.
