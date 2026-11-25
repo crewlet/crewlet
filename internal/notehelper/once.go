@@ -33,6 +33,7 @@ var oneShots = map[string]oneShot{
 	"codex-renew":       {run: runCodexRenew, config: true},
 	"codex-materialize": {run: runCodexMaterialize},
 	"copilot-launch":    {run: runCopilotLaunch, config: true},
+	"copilot-nested":    {run: runCopilotNested, config: true},
 }
 
 // oneShot is one adapter run once: its run, and whether it reads -config,

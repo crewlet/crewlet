@@ -662,7 +662,8 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 		return "", helperErr
 	}
 	// THE GUARD BEFORE ANY WRITE: a refused run leaves the home as it found it.
-	if err = copilotGuard(ctx, box, req, paths, c.policy, settings); err != nil {
+	handing := helperErr == nil
+	if err = copilotGuard(ctx, box, req, paths, c.policy, settings, handing); err != nil {
 		return "", err
 	}
 	if err = holdHome(ctx, box, paths.CopilotSettings(), paths.CopilotHeldSettings()); err != nil {
@@ -695,17 +696,20 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 	if err = box.WriteFile(ctx, paths.CopilotCheckoutLaunch(), launch); err != nil {
 		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
-	if req.Steer.Set() || req.Limits.MaxTurns > 0 {
+	if req.Steer.Set() || req.Limits.MaxTurns > 0 || handing {
 		// THIS LAUNCH'S OWN KEY, never the session's: a continued session keeps
 		// its id across runs, and a state an earlier run left must count nothing.
-		launch := uuid.NewString()
+		settings := copilotExtensionSettings{Cap: req.Limits.MaxTurns, State: paths.CopilotNotesState(),
+			Run: uuid.NewString()}
+		if handing {
+			settings.Helper, settings.Nested = paths.CopilotNoteHelper(), paths.CopilotRepo()+"/nested.json"
+		}
 		if err := writeCopilotExtension(ctx, box, paths.CopilotExtension()+"/extension.mjs", req.Steer,
-			req.Limits.MaxTurns, paths.CopilotNotesState(), launch); err != nil {
+			settings); err != nil {
 			return "", err
 		}
 		if f := req.FreshWiring; f != nil {
-			if err := writeCopilotExtension(ctx, box, paths.CopilotExtensionFresh(), f.Steer,
-				req.Limits.MaxTurns, paths.CopilotNotesState(), launch); err != nil {
+			if err := writeCopilotExtension(ctx, box, paths.CopilotExtensionFresh(), f.Steer, settings); err != nil {
 				return "", err
 			}
 		}
@@ -752,12 +756,10 @@ func copilotMergedSettings(ctx context.Context, box sandbox.Sandbox, file string
 	return json.MarshalIndent(settings, "", "  ")
 }
 
-// writeCopilotExtension writes the extension, wired to steer's notes route
-// where it is set and to the turn cap, to file, keeping its state in state
-// under launch, this launch's own key.
+// writeCopilotExtension writes the extension with settings, wired to steer's
+// notes route where it is set, to file.
 func writeCopilotExtension(ctx context.Context, box sandbox.Sandbox, file string, steer sandbox.SteerWiring,
-	turns int, state, launch string) error {
-	settings := copilotExtensionSettings{Cap: turns, State: state, Run: launch}
+	settings copilotExtensionSettings) error {
 	if steer.Set() {
 		settings.URL = steer.URL
 	}

@@ -74,12 +74,16 @@ func CopilotClientTurnID(inbox string) string { return copilotTurnPrefix + inbox
 // notes route, "" for a run wired to none, and its turn cap, 0 for none; the
 // file it keeps its count, cursor and sent notes in across a restart
 // ([Paths.CopilotNotesState]), and the launch that state belongs to, a key
-// minted for each launch: a state another launch left counts nothing.
+// minted for each launch: a state another launch left counts nothing; and
+// the note helper and its nested config, which hand a checkout cloned during
+// the run its skills ([copilotCheckoutHome]), "" for a box without the helper.
 type copilotExtensionSettings struct {
-	URL   string `json:"url"`
-	Cap   int    `json:"cap"`
-	State string `json:"state"`
-	Run   string `json:"run"`
+	URL    string `json:"url"`
+	Cap    int    `json:"cap"`
+	State  string `json:"state"`
+	Run    string `json:"run"`
+	Helper string `json:"helper"`
+	Nested string `json:"nested"`
 }
 
 // copilotExtension is the extension's file as a run's box is written it: the

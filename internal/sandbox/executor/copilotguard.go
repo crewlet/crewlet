@@ -63,14 +63,17 @@ var copilotRuleFamilies = []string{"Bash", "Shell", "PowerShell", "Read", "Edit"
 
 // copilotGuard refuses req's run where something the run cannot undo switches
 // off its own servers ([crewletServers]) or, for a run written the notes
-// extension, that extension. settings is the home's settings.json as the run
-// will write it, which the box's Copilot is asked about in a home of its own,
-// so a value the run's own key replaces is not held against it. A box with no
-// copilot is the script's to refuse; its policy file is still read.
+// extension, that extension: a run with notes or a cap, and every run handing
+// its checkouts (handing), whose extension hands a checkout cloned during it
+// and removes a launch attempt Copilot refused. settings is the home's
+// settings.json as the run will write it, which the box's Copilot is asked
+// about in a home of its own, so a value the run's own key replaces is not
+// held against it. A box with no copilot is the script's to refuse; its
+// policy file is still read.
 func copilotGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths,
-	policy copilotPolicy, settings []byte) error {
+	policy copilotPolicy, settings []byte, handing bool) error {
 	servers := crewletServers(req.MCPServers)
-	notes := req.Steer.Set() || req.Limits.MaxTurns > 0
+	notes := req.Steer.Set() || req.Limits.MaxTurns > 0 || handing
 	if len(servers) == 0 && !notes {
 		return nil
 	}
@@ -92,7 +95,7 @@ func copilotGuard(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReque
 	if len(said) == 0 {
 		return nil
 	}
-	return fmt.Errorf("executor: Copilot would start without what the run's tools or notes rest on, and no "+
+	return fmt.Errorf("executor: Copilot would start without what the run's tools, notes or checkouts rest on, and no "+
 		"setting of the run's undoes it: %s. Change those entries, or run on a box without them",
 		strings.Join(said, "; "))
 }
