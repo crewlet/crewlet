@@ -153,7 +153,8 @@
 // tool calls: it claims each checkout that appeared since, once, under state's
 // lock, copies its skills, and writes in its harness's shape what the harness
 // does not load itself: codex-nested the instructions and the skills' listing
-// (name, description, the copy's SKILL.md). A harness taking checkouts adds a
+// (name, description, the copy's SKILL.md), copilot-nested the listing alone,
+// as plain text its extension appends to the tool's result. A harness taking checkouts adds a
 // nested adapter, never a second core; its runner holds the home file and the
 // copies (internal/sandbox/executor's checkoutHome). What a nested firing
 // leaves out (a skill whose name the home's skills hold, one that leads out

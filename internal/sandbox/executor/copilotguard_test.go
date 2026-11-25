@@ -67,9 +67,13 @@ func TestCopilotsBridgeAndExtensionCannotBeSwitchedOffUnseen(t *testing.T) {
 			policy: `{"deniedMcpServers":[{"serverName":"other"},{"serverName":"Crewlet"},{"serverUrl":"http://127.0.0.1:9/MCP/*"}],
 				"allowedMcpServers":[{"serverUrl":"HTTP://127.0.0.1:9/*"},{"serverName":"other"}],"allowManagedHooksOnly":true,
 				"strictPluginOnlyCustomization":["skills","hooks"],"permissions":{"deny":["Shell(rm)","shell(git push)"]}}`},
-		"the extension's switches on a run without it": {bridgeOnly: true,
+		// THE EXTENSION HANDS A RUN'S CHECKOUTS, so a run with neither notes nor a
+		// cap needs it too wherever the box has the note helper, as here.
+		"the extension's switches on a run without notes": {bridgeOnly: true,
 			settings: dropped + "extensions.mode=disabled\nextensions.disabledExtensions=user:crewlet-notes\n",
-			policy:   `{"strictPluginOnlyCustomization":["extensions"]}`},
+			policy:   `{"strictPluginOnlyCustomization":["extensions"]}`,
+			switchOffCase: switchOffCase{fails: []string{settings + ` sets extensions.mode to "disabled"`,
+				settings + " lists user:crewlet-notes", `strictPluginOnlyCustomization to ["extensions"]`}}},
 		"the bridge's switches on a run without it": {notesOnly: true,
 			mcp:      "Error: Invalid MCP config at HOME/.copilot/mcp-config.json: mcpServers: Required\n",
 			settings: "disabledMcpServers=crewlet\n",

@@ -94,6 +94,7 @@ type copilotProbeReport struct {
 	Message string         `json:"message"`
 	Level   string         `json:"level"`
 	Name    string         `json:"name"`
+	Output  map[string]any `json:"output"`
 }
 
 // copilotProbe is the rendered extension running under node against the

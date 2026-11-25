@@ -49,7 +49,17 @@
 // later), so one writer at a time. FAILING CLOSED: a note whose id cannot be
 // kept is not sent, and a capped run whose count cannot be kept, or whose file
 // cannot be read, is stopped (unkeptMessage); no restart counts from nothing.
+//
+// A CHECKOUT CLONED DURING THE RUN. After each of the main agent's tool calls
+// (a subagent's input carries an agentId) the note helper hands each checkout
+// cloned since its skills (`copilot-nested`, internal/notehelper), and their
+// listing is appended to that tool's own result, `modifiedResult`'s
+// textResultForLlm, which reaches the next request whole, where
+// additionalContext is cut at 10,240 characters without a word (measured on
+// 1.0.114). Its instructions Copilot loads itself on the first view of a file
+// in it. The helper's own skip lines are kept for the run's end, not repeated.
 
+import { execFileSync } from "node:child_process"
 import { readFileSync, renameSync, writeFileSync } from "node:fs"
 import { joinSession } from "@microsoft/copilot-sdk/extension"
 
@@ -91,6 +101,19 @@ const unkeptMessage = "crewlet: this run's turn count could not be kept, so the 
 // notes stay unconfirmed and are served again after the run.
 const notesUnkeptMessage = "crewlet: this run's notes could not be kept, so none is sent until they can be"
 
+// nestedTimeoutMs bounds one firing of the note helper, which Copilot does not
+// (measured on 1.0.114: a 75 s hook held the turn and was answered): ten
+// seconds, as Codex's nested hook (codexrepo.go, codexNestedTimeout), where the
+// slowest firing measured on the build VM took 0.12 s. nestedMaxBuffer holds
+// its answer, a listing the helper bounds at 64 KiB (maxListing).
+const nestedTimeoutMs = 10_000
+const nestedMaxBuffer = 1 << 20
+
+// nestedFailedMessage opens the log line written where a firing of the helper
+// failed, so what it claimed is not listed.
+const nestedFailedMessage =
+  "crewlet: the note helper handing a checkout cloned during the run failed, so its skills are not listed: "
+
 // armedMessage is the log line written once the extension runs in the session
 // (copilotsteer.go, copilotArmedMessage): a run with a turn cap whose stream
 // lacks it is collected as a failure, the cap never enforced.
@@ -100,14 +123,15 @@ if (config !== null && typeof config === "object") {
   await arm(config)
 }
 
-async function arm({ url, cap, state, run }) {
+async function arm({ url, cap, state, run, helper, nested }) {
   // kept is what an earlier process of this launch left (A RESTART RESUMES THE
   // RUN, above): the requests counted, the cursor, and the inbox ids sent; or
   // broken, a file this process cannot read, which sends no note.
   const kept = resume(state, run)
   const polling = typeof url === "string" && url !== "" && !kept.broken
   const capped = Number.isSafeInteger(cap) && cap > 0
-  if (!polling && !capped) return
+  const handing = typeof helper === "string" && helper !== "" && typeof nested === "string" && nested !== ""
+  if (!polling && !capped && !handing) return
 
   // life is the extension's whole run; a refusal of the route ends its polling.
   const life = new AbortController()
@@ -244,11 +268,36 @@ async function arm({ url, cap, state, run }) {
     if (mainAgent(input) !== false && spent()) await capNow()
   }
 
+  // handNested hands the checkouts cloned since the last of the main agent's
+  // tools (A CHECKOUT CLONED DURING THE RUN, above) as input's tool result
+  // with their listing appended; nothing where there is none.
+  const handNested = (input) => {
+    if (!handing || mainAgent(input) === false || aborting) return undefined
+    let listing
+    try {
+      listing = execFileSync(helper, ["-adapter", "copilot-nested", "-config", nested], {
+        encoding: "utf8",
+        timeout: nestedTimeoutMs,
+        maxBuffer: nestedMaxBuffer,
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+    } catch (error) {
+      quietly(session.log(nestedFailedMessage + String(error?.message ?? error).split("\n")[0], { level: "warning" }))
+      return undefined
+    }
+    if (listing === "") return undefined
+    const result = input?.toolResult ?? {}
+    return { modifiedResult: { ...result, textResultForLlm: (result.textResultForLlm ?? "") + "\n\n" + listing } }
+  }
+
   // JOINED LAST, every function it can call defined: the hook may fire as
   // soon as the session is joined.
   const session = await joinSession({
     hooks: {
-      onPostToolUse: async (input) => capAfterTool(input),
+      onPostToolUse: async (input) => {
+        await capAfterTool(input)
+        return handNested(input)
+      },
       onPostToolUseFailure: async (input) => capAfterTool(input),
       onAgentStop: async (input) => {
         if (!polling || mainAgent(input) === false || life.signal.aborted || spent()) return

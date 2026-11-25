@@ -184,3 +184,42 @@ func writeNames(path string, names []string) error {
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o600)
 }
+
+// runCopilotNested is one firing of a Copilot run's extension after a tool of
+// its main loop (internal/sandbox/executor's copilot_steer.js): it hands each
+// checkout cloned since, once ([handNested]), as its skills' listing and what
+// it left out, plain text the extension appends to the tool's result. No
+// instructions: Copilot loads a checkout's itself on the first view of a file
+// in it (measured, section 10). It reads no stdin and exits 0 whatever
+// happened, its trouble on stderr.
+func runCopilotNested(_ context.Context, f flags, _ io.Reader, stdout, stderr io.Writer, _ func(string) string) int {
+	c, err := readNested(f.config)
+	if err != nil {
+		fmt.Fprintf(stderr, "notehelper: the nested config: %v\n", err)
+		return exitDone
+	}
+	handed, skipped, err := handNested(c, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "notehelper: handing a checkout's skills: %v\n", err)
+	}
+	_, _ = io.WriteString(stdout, copilotNestedListing(handed, skipped))
+	return exitDone
+}
+
+// copilotNestedListing is the checkouts handed as a Copilot firing lists them:
+// each one's skills ([skillsListing]), since Copilot lists no skill copied
+// after its launch (measured, row m8), then what the firing left out, within
+// one firing's bound ([listingBudget]).
+func copilotNestedListing(handed []handedCheckout, skipped []string) string {
+	var blocks []string
+	budget := newListingBudget()
+	for _, h := range handed {
+		if listing := budget.take(skillsListing(h)); listing != "" {
+			blocks = append(blocks, listing)
+		}
+	}
+	if listing := budget.take(skippedListing(skipped)); listing != "" {
+		blocks = append(blocks, listing)
+	}
+	return strings.Join(blocks, "\n\n")
+}
