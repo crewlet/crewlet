@@ -248,42 +248,51 @@ func deref(s *string) string {
 
 // A HERMES BOX WHOSE HOOK BOUND IS SHORTER THAN THE NESTED HAND'S STARTS
 // WITHOUT THE HAND, SAYING SO ONCE: only checkout handing needs that bound, so
-// a plugins.hook_callback_timeout of 5 s refuses nothing; the launch still
+// a plugins.hook_callback_timeout under 10 s refuses nothing; the launch still
 // hands its checkouts, a clone during the run is not handed, and the run's
-// error stream names the setting once, after the run.
+// error stream names the setting once, after the run. At 10 s, the hand's
+// margin, claim reserve and render floor together, the clone is handed.
 //
-// Mutation: refuse the run, hand the clone anyway, or say it twice, and this
-// goes red.
+// Mutation: refuse the run, hand the clone anyway, say it twice, or turn the
+// hand off at the bound itself, and a row goes red.
 func TestAHermesRunWithAShortHookBoundStartsWithoutTheNestedHand(t *testing.T) {
 	t.Parallel()
-	runner, box, _ := hermesCheckoutBox(t)
-	p := executor.PathsFor(box)
-	files := piCheckout("workspace/repo", map[string]string{"AGENTS.md": "REPO-AGENTS\n"})
-	files[".hermes/config.yaml"] = `{"plugins": {"hook_callback_timeout": 5}}`
-	plant(t, box, files)
-	late := t.TempDir()
-	for rel, body := range piCheckout("late", map[string]string{"AGENTS.md": "LATE-INSTRUCTIONS\n"}) {
-		plantFile(t, filepath.Join(late, rel), body)
-	}
-	plant(t, box, map[string]string{"clone-src": filepath.Join(late, "late"),
-		"clone-dst": filepath.Join(box.Home(), "workspace", "late")})
-	if _, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"}); !res.Success {
-		t.Fatalf("the run failed: %s\n%s", res.Error, boxFile(t, box, p.Err()))
-	}
-	var prompt string
-	seenBy(t, box, "prompt", &prompt)
-	if !strings.Contains(prompt, "## AGENTS.md\n\nREPO-AGENTS") {
-		t.Errorf("the launch handed no checkout: %q", prompt)
-	}
-	var nested map[string]*string
-	seenBy(t, box, "nested", &nested)
-	if nested["main-1"] != nil {
-		t.Errorf("the clone was handed past the hook bound: %q", *nested["main-1"])
-	}
-	line := "crewlet: a repository cloned during the run is not handed its instructions and skills: " +
-		"plugins.hook_callback_timeout is 5, under the 10 seconds the hand may take"
-	if errs := boxFile(t, box, p.Err()); strings.Count(errs, line) != 1 {
-		t.Errorf("the run's error stream says %q %d times, want once:\n%s", line, strings.Count(errs, line), errs)
+	for _, c := range []struct {
+		bound  string
+		handed bool
+	}{{"5", false}, {"9.99", false}, {"10", true}} {
+		t.Run(c.bound, func(t *testing.T) {
+			t.Parallel()
+			runner, box, _ := hermesCheckoutBox(t)
+			p := executor.PathsFor(box)
+			files := piCheckout("workspace/repo", map[string]string{"AGENTS.md": "REPO-AGENTS\n"})
+			files[".hermes/config.yaml"] = `{"plugins": {"hook_callback_timeout": ` + c.bound + `}}`
+			plant(t, box, files)
+			late := t.TempDir()
+			for rel, body := range piCheckout("late", map[string]string{"AGENTS.md": "LATE-INSTRUCTIONS\n"}) {
+				plantFile(t, filepath.Join(late, rel), body)
+			}
+			plant(t, box, map[string]string{"clone-src": filepath.Join(late, "late"),
+				"clone-dst": filepath.Join(box.Home(), "workspace", "late")})
+			if _, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"}); !res.Success {
+				t.Fatalf("the run failed: %s\n%s", res.Error, boxFile(t, box, p.Err()))
+			}
+			var prompt string
+			seenBy(t, box, "prompt", &prompt)
+			if !strings.Contains(prompt, "## AGENTS.md\n\nREPO-AGENTS") {
+				t.Errorf("the launch handed no checkout: %q", prompt)
+			}
+			var nested map[string]*string
+			seenBy(t, box, "nested", &nested)
+			if (nested["main-1"] != nil) != c.handed {
+				t.Errorf("the clone was handed: %v, want %v", nested["main-1"] != nil, c.handed)
+			}
+			line := "crewlet: a repository cloned during the run is not handed its instructions and skills: " +
+				"plugins.hook_callback_timeout is " + c.bound + ", under the 10 seconds the hand may take"
+			if errs := boxFile(t, box, p.Err()); strings.Count(errs, line) != map[bool]int{true: 0, false: 1}[c.handed] {
+				t.Errorf("the run's error stream says %q %d times:\n%s", line, strings.Count(errs, line), errs)
+			}
+		})
 	}
 }
 
@@ -327,10 +336,19 @@ func TestAHermesWhoseReadCodeMovedStartsWithoutItsCheckouts(t *testing.T) {
 	if nested["main-1"] != nil {
 		t.Errorf("the clone was handed: %q", *nested["main-1"])
 	}
-	line := "crewlet: no repository below the working directory is handed its instructions and skills: Hermes Agent " +
-		"0.23.3 moved what the runner reads of its code (agent.prompt_builder.discover_context_files is gone)"
-	if errs := boxFile(t, box, p.Err()); strings.Count(errs, line) != 1 {
-		t.Errorf("the run's error stream says %q %d times, want once:\n%s", line, strings.Count(errs, line), errs)
+	work, err := filepath.EvalSymlinks(filepath.Join(box.Home(), "workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	errs := boxFile(t, box, p.Err())
+	for _, line := range []string{"crewlet: no repository below the working directory is handed its instructions and " +
+		"skills: Hermes Agent 0.23.3 moved what the runner reads of its code " +
+		"(agent.prompt_builder.discover_context_files is gone)",
+		"crewlet: " + work + "/repo is not handed its instructions and skills, since the run hands no checkout after " +
+			"its launch; read " + work + "/repo for its instructions"} {
+		if strings.Count(errs, line) != 1 {
+			t.Errorf("the run's error stream says %q %d times, want once:\n%s", line, strings.Count(errs, line), errs)
+		}
 	}
 }
 

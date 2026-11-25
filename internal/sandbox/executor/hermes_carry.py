@@ -731,8 +731,10 @@ def gate(peek_path, out_path, model, bound):
     with open(peek_path, encoding="utf-8") as f:
         roots = json.load(f).get("roots") or []
     answer = checkout_gate(roots, launch_window(model)) if roots else {}
-    with open(out_path, "w", encoding="utf-8") as f:
+    # WRITTEN WHOLE OR NOT AT ALL: a gate killed past its wait leaves no half of one for checkout-launch.
+    with open(out_path + ".tmp", "w", encoding="utf-8") as f:
         json.dump(answer, f)
+    os.replace(out_path + ".tmp", out_path)
     from hermes_cli.plugins import _resolve_hook_callback_timeout
     hook = _resolve_hook_callback_timeout()
     if 0 < hook < float(bound):

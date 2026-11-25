@@ -8,11 +8,22 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// hermesNestedTimeout is a nested firing's bound in seconds: two note helper
-// runs and Hermes's own render of the checkouts, in the gateway. Codex's
-// ([codexNestedTimeout]), a third of Hermes's own hook bound (30 s); a box
-// whose bound is shorter starts without the nested hand ([hermesGateCommand]).
-const hermesNestedTimeout = codexNestedTimeout
+// A nested firing runs within Hermes's own hook bound (its
+// plugins.hook_callback_timeout, 30 s by default; past it Hermes drops the
+// answer and skips the hook 60 s, measured) less hermesHandMargin, its own
+// work after the helper and the callback's thread; it claims only while
+// hermesClaimReserve is left, the helper's claim, copies and answer (0.12 s at
+// its full copy bound, measured), so no claim outlives its answer; Hermes's
+// render of the checkouts takes what is before that, at least
+// hermesRenderFloor, some 12 times its slowest (0.40 s for three checkouts,
+// measured). A box whose
+// hook bound is under hermesNestedTimeout, their sum, has no nested hand.
+const (
+	hermesHandMargin    = 2 * time.Second
+	hermesClaimReserve  = 3 * time.Second
+	hermesRenderFloor   = 5 * time.Second
+	hermesNestedTimeout = int((hermesHandMargin + hermesClaimReserve + hermesRenderFloor) / time.Second)
+)
 
 // hermesGateWait is the most the launch waits for Hermes to render the
 // checkouts ([hermesGateCommand]), past which the run starts without them:
@@ -51,6 +62,11 @@ func hermesCheckoutHome(paths Paths) checkoutHome {
 func hermesLaunchHome(paths Paths, model string) checkoutHome {
 	h := hermesCheckoutHome(paths)
 	h.gateCmd = hermesGateCommand(paths, model, hermesGateWait)
+	// EACH CHECKOUT THE LAUNCH LEFT FOR A FIRING where none will come (one that
+	// waited for room or the copy bound, or every one Hermes could not render)
+	// named in the skip log with what to read.
+	h.afterLaunch = fmt.Sprintf(`if [ -e "$rr/%s" ]; then "$rh" -adapter hermes-peek -lines -config %s < /dev/null | while IFS= read -r hr; do printf 'crewlet: %%s is not handed its instructions and skills, since the run hands no checkout after its launch; read %%s for its instructions\n' "$hr" "$hr" >> "$rr/skipped"; done; fi`,
+		hermesNestedOff, shellword.Quote(paths.HermesCheckoutLaunch()))
 	return h
 }
 
@@ -121,16 +137,18 @@ func (Hermes) homeRestore(p Paths) string {
 // hermesNestedHand is the plugin's settings for a nested firing: the note
 // helper, the config checkout-launch wrote (beside which the gate may mark the
 // hand off, [hermesNestedOff]), the carry script it renders checkouts with,
-// and its bound in seconds.
+// and the seconds it leaves of Hermes's hook bound and reserves for a claim
+// ([hermesHandMargin], [hermesClaimReserve]).
 type hermesNestedHand struct {
-	Helper  string `json:"helper"`
-	Config  string `json:"config"`
-	Carry   string `json:"carry"`
-	Timeout int    `json:"timeout"`
+	Helper  string  `json:"helper"`
+	Config  string  `json:"config"`
+	Carry   string  `json:"carry"`
+	Margin  float64 `json:"margin"`
+	Reserve float64 `json:"reserve"`
 }
 
 // hermesNested is the plugin's [hermesNestedHand] for a run in paths.
 func hermesNested(paths Paths) *hermesNestedHand {
 	return &hermesNestedHand{Helper: paths.HermesNoteHelper(), Config: paths.HermesCheckouts() + "/nested.json",
-		Carry: paths.HermesCarry(), Timeout: hermesNestedTimeout}
+		Carry: paths.HermesCarry(), Margin: hermesHandMargin.Seconds(), Reserve: hermesClaimReserve.Seconds()}
 }

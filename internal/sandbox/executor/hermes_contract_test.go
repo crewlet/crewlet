@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -377,10 +378,17 @@ func TestAHermesRunsNotesFollowItsSessionIntoACompactionsChild(t *testing.T) {
 }
 
 // hermesNestedProbe registers the plugin with a stand-in of Hermes's plugin
-// context, settings argv[2], and fires its transform_tool_result for the run's
-// own session after its turn starts, printing what it made of the result.
-const hermesNestedProbe = `import importlib.util, json, os, sys
+// context and hook bound (argv[3] seconds), settings argv[2], and fires its
+// transform_tool_result for the run's own session after its turn starts, once
+// for each pause in argv[4] (seconds to wait first), printing the results.
+const hermesNestedProbe = `import importlib.util, json, os, sys, time
 os.environ["CREWLET_HERMES_PLUGIN"] = sys.argv[2]
+stand = os.path.join(os.path.dirname(sys.argv[2]), "py")
+os.makedirs(os.path.join(stand, "hermes_cli"), exist_ok=True)
+open(os.path.join(stand, "hermes_cli", "__init__.py"), "w").close()
+with open(os.path.join(stand, "hermes_cli", "plugins.py"), "w") as f:
+    f.write("def _resolve_hook_callback_timeout():\n    return %s\n" % sys.argv[3])
+sys.path.insert(0, stand)
 spec = importlib.util.spec_from_file_location("crewlet_plugin", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -390,46 +398,123 @@ class Ctx:
         hooks[name] = fn
 m.register(Ctx())
 hooks["pre_llm_call"](session_id="main")
-print(json.dumps(hooks["transform_tool_result"](session_id="main", tool_name="terminal", result="cloned")))
+out = []
+for pause in json.loads(sys.argv[4]):
+    time.sleep(pause)
+    out.append(hooks["transform_tool_result"](session_id="main", tool_name="terminal", result="cloned"))
+print(json.dumps(out))
 `
 
-// HERMES'S RENDER OF A LATER CHECKOUT IS BOUNDED, AND A LATE ONE CLAIMS
-// NOTHING: where Hermes's own render does not finish within the hand's bound,
-// the plugin leaves the result as it was and never runs the helper's claim, so
-// the checkout waits for a later call; one that finishes is claimed and
-// handed. Mutation: wait on the render unbounded, or claim on its timeout, and
-// a row goes red.
+// HERMES'S RENDER OF A LATER CHECKOUT IS BOUNDED, NEVER STARTED TWICE, AND
+// SAID ONCE IT KEEPS FAILING: a firing waits on a render only until the claim
+// reserve is left of Hermes's hook bound less the margin; a late render is
+// never started again while it runs and its result serves a later firing; a
+// render late or failing at three firings is claimed as left out, said with
+// its cause (an error named as one); and no claim starts without the reserve.
+//
+// Mutation: wait unbounded, start a render per firing, never give up, say a
+// raise as late, or claim without the reserve, and a row goes red.
 func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 	t.Parallel()
 	python := prereqtest.OnPath(t, "python3", "the case runs Hermes's plugin", "install python3")
 	plugin, _ := hermesPluginOf(t, sandbox.RunRequest{})
 	for _, c := range []struct {
-		name, render, want string
-		claimed            bool
+		name, render, pauses string
+		reserve              float64
+		want                 []string // each firing's result, "" for none
+		starts               int
+		said                 string // in the gate the last claim read
 	}{
-		{"late", "time.sleep(30)", "null", false},
-		{"in time", "pass", `"cloned\n\nHANDED"`, true},
+		{name: "in time", render: "pass", pauses: "[0]", reserve: 1, want: []string{"cloned\n\nHANDED"}, starts: 1},
+		{name: "late, then kept for the next firing", render: "time.sleep(2.5)", pauses: "[0, 2]", reserve: 1,
+			want: []string{"", "cloned\n\nHANDED"}, starts: 1},
+		{name: "late at three firings", render: "time.sleep(60)", pauses: "[0, 0, 0]", reserve: 1,
+			want: []string{"", "", "cloned\n\nHANDED"}, starts: 1,
+			said: "the instructions and skills of /r are left out: Hermes did not render it within the hand's bound at 3 firings"},
+		{name: "failing at three firings", render: "raise RuntimeError('boom')", pauses: "[0, 0, 0]", reserve: 1,
+			want: []string{"", "", "cloned\n\nHANDED"}, starts: 3,
+			said: "the instructions and skills of /r are left out: its render failed: RuntimeError: boom"},
+		{name: "no claim without the reserve", render: "pass", pauses: "[0]", reserve: 5, want: []string{""}, starts: 1},
 	} {
-		dir := t.TempDir()
-		helper := "#!/bin/sh\nif [ \"$2\" = hermes-peek ]; then echo '{\"roots\":[\"/r\"]}'; exit 0; fi\n" +
-			": > " + shellword.Quote(filepath.Join(dir, "claimed")) + "\nprintf HANDED\n"
-		carry := "import time\ndef checkout_gate(roots, window):\n    " + c.render + "\n    return {\"checkouts\": {}}\n"
-		settings, _ := json.Marshal(map[string]any{"checkouts": map[string]any{"helper": filepath.Join(dir, "helper"),
-			"config": filepath.Join(dir, "nested.json"), "carry": filepath.Join(dir, "carry.py"), "timeout": 1}})
-		for name, body := range map[string]string{"helper": helper, "carry.py": carry, "settings.json": string(settings)} {
-			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil {
-				t.Fatal(err)
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			q := shellword.Quote
+			helper := "#!/bin/sh\nif [ \"$2\" = hermes-peek ]; then echo '{\"roots\":[\"/r\"]}'; exit 0; fi\n" +
+				"cat > " + q(filepath.Join(dir, "gate.json")) + "\nprintf HANDED\n"
+			carry := "import time\ndef checkout_gate(roots, window):\n    open(" + strconv.Quote(filepath.Join(dir, "starts")) +
+				", \"a\").write(\"s\")\n    " + c.render + "\n    return {\"checkouts\": {roots[0]: {\"text\": \"T\"}}, \"taken\": {}}\n"
+			settings, _ := json.Marshal(map[string]any{"checkouts": map[string]any{"helper": filepath.Join(dir, "helper"),
+				"config": filepath.Join(dir, "nested.json"), "carry": filepath.Join(dir, "carry.py"), "margin": 1,
+				"reserve": c.reserve}})
+			for name, body := range map[string]string{"helper": helper, "carry.py": carry, "settings.json": string(settings)} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil {
+					t.Fatal(err)
+				}
 			}
-		}
-		out, err := exec.Command(python, "-I", "-c", hermesNestedProbe, plugin, filepath.Join(dir, "settings.json")).Output()
+			out, err := exec.Command(python, "-I", "-c", hermesNestedProbe, plugin, filepath.Join(dir, "settings.json"),
+				"4", c.pauses).Output()
+			if err != nil {
+				t.Fatalf("the plugin's hook: %v", err)
+			}
+			var got []*string
+			if err = json.Unmarshal(out, &got); err != nil {
+				t.Fatalf("the probe printed %q: %v", out, err)
+			}
+			for i, want := range c.want {
+				if g := deref(got[i]); g != want {
+					t.Errorf("firing %d: the result became %q, want %q", i+1, g, want)
+				}
+			}
+			starts, _ := os.ReadFile(filepath.Join(dir, "starts"))
+			if len(starts) != c.starts {
+				t.Errorf("Hermes was asked to render %d times, want %d", len(starts), c.starts)
+			}
+			if gate, _ := os.ReadFile(filepath.Join(dir, "gate.json")); c.said != "" && !strings.Contains(string(gate), c.said) {
+				t.Errorf("the last claim's gate %s says nothing of %q", gate, c.said)
+			}
+		})
+	}
+}
+
+// hermesRoomProbe loads the plugin beside a stand-in of Hermes 0.23.3's
+// result budget for a large window and prints the room a result of argv[2]
+// characters has in a batch of argv[3] calls.
+const hermesRoomProbe = `import importlib.util, os, sys
+stand = sys.argv[4]
+os.makedirs(os.path.join(stand, "tools"), exist_ok=True)
+open(os.path.join(stand, "tools", "__init__.py"), "w").close()
+with open(os.path.join(stand, "tools", "budget_config.py"), "w") as f:
+    f.write("class B:\\n    default_result_size = 100000\\n    turn_budget = 200000\\n"
+            "    def resolve_threshold(self, tool):\\n        return 100000\\n"
+            "def budget_for_context_window(context_length):\\n    return B()\\n")
+sys.path.insert(0, stand)
+spec = importlib.util.spec_from_file_location("crewlet_plugin", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+print(m._room("terminal", "x" * int(sys.argv[2]), 262144, int(sys.argv[3])))
+`
+
+// A HERMES HAND IN A BATCH OF CALLS KEEPS TO ITS SHARE OF THE TURN BUDGET:
+// alone, a result has Hermes's per-result threshold; in a batch of five, its
+// share of the 200,000-character turn budget less room for Hermes's own hint,
+// since past that budget Hermes spills the batch's largest result first
+// (measured on 0.23.3: our 86,283-character clone result was spilled).
+//
+// Mutation: ignore the batch, or leave no room for the hint, and a row goes red.
+func TestAHermesHandInABatchKeepsToItsShareOfTheTurnBudget(t *testing.T) {
+	t.Parallel()
+	python := prereqtest.OnPath(t, "python3", "the case runs Hermes's plugin", "install python3")
+	plugin, _ := hermesPluginOf(t, sandbox.RunRequest{})
+	for _, c := range []struct{ result, calls, want string }{
+		{"6", "1", "99994"}, {"6", "5", "7594"}, {"1000", "2", "66600"},
+	} {
+		out, err := exec.Command(python, "-I", "-c", hermesRoomProbe, plugin, c.result, c.calls, t.TempDir()).Output()
 		if err != nil {
-			t.Fatalf("%s: the plugin's hook: %v", c.name, err)
+			t.Fatalf("the probe: %v", err)
 		}
 		if got := strings.TrimSpace(string(out)); got != c.want {
-			t.Errorf("%s: the result became %s, want %s", c.name, got, c.want)
-		}
-		if _, err := os.Stat(filepath.Join(dir, "claimed")); (err == nil) != c.claimed {
-			t.Errorf("%s: the helper's claim ran: %v", c.name, err == nil)
+			t.Errorf("a %s-character result in a batch of %s has room %s, want %s", c.result, c.calls, got, c.want)
 		}
 	}
 }

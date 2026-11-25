@@ -52,12 +52,16 @@ _REACH_SECONDS = 5.0
 # served again), so waiting longer buys nothing but a later note's delay; 10 s is some 180 times the worst.
 _STEER_SECONDS = 10.0
 
+# The most a subdirectory hint Hermes adds to a result after the plugin's answer holds (agent/subdirectory_hints.py's
+# _MAX_HINT_CHARS, 32,000, and its header and cut notice), which the batch's share of the turn budget keeps room for.
+_HINT_CHARS = 32_400
+
 # The smallest result Hermes 0.23.3 keeps whole on any model (tools/budget_config.py's _MIN_RESULT_SIZE_CHARS):
 # a nested hand's room where Hermes's own budget cannot be read, so its answer never makes a result spill.
 _FLOOR_RESULT_CHARS = 8_000
 
 _lock = threading.Lock()
-_turn = {"running": False, "session": None, "window": None}
+_turn = {"running": False, "session": None, "window": None, "calls": 0}
 _wake = threading.Event()
 
 
@@ -167,6 +171,7 @@ def register(ctx):
         if kw.get("session_id") and kw.get("context_length") and ours(kw["session_id"]):
             with _lock:
                 _turn["window"] = kw["context_length"]
+                _turn["calls"] = kw.get("assistant_tool_call_count") or 0
         if not record:
             return
         usage = kw.get("usage") or {}
@@ -216,14 +221,15 @@ def register(ctx):
     hand = settings.get("checkouts")
 
     def nested(**kw):
-        # THE MAIN LOOP'S CALLS ALONE: a delegated subagent's carry no marker but a session of their own
-        # (measured on 0.23.4), and a checkout handed into a subagent's result never reaches the run.
+        # THE MAIN LOOP'S CALLS ALONE: a delegated subagent's calls carry no marker but their own session id, and a
+        # checkout handed into a subagent's result never reaches the run (measured on 0.23.4, and with this plugin
+        # on 0.23.3: rig g2, the subagent's clone result untouched, the main loop's next result handed it).
         session, result = kw.get("session_id"), kw.get("result")
         with _lock:
-            pinned, window = _turn["session"], _turn["window"]
+            pinned, window, calls = _turn["session"], _turn["window"], _turn["calls"]
         if not isinstance(result, str) or not session or not pinned or not ours(session):
             return None
-        added = _hand_checkouts(hand, kw.get("tool_name") or "", result, window)
+        added = _hand_checkouts(hand, kw.get("tool_name") or "", result, window, calls)
         return result + "\n\n" + added if added else None
 
     ctx.register_hook("pre_llm_call", turn_started)
@@ -249,47 +255,115 @@ def _carry_module(path):
     return _carry[path]
 
 
-def _room(tool, result, window):
+def _room(tool, result, window, calls):
     """The characters result has left before Hermes would spill it to a file, as 0.23.3's tool executor
     judges it: the per-result threshold of its budget for the run's window (budget_for_context_window,
-    resolve_threshold), a tool it never spills held to the default result size."""
+    resolve_threshold), a tool it never spills held to the default result size; and, in a batch of calls (the
+    response's tool calls), the result's share of the turn budget (turn_budget), less a subdirectory hint
+    Hermes may add after us, since past that budget Hermes spills the batch's largest results first (measured on
+    0.23.3: a clone handed 86,283 characters beside four 45,687-character reads was spilled). Within its share it
+    is never the batch's largest while the batch passes its budget."""
     try:
         from tools.budget_config import budget_for_context_window
         budget = budget_for_context_window(int(window) if window else None)
-        threshold = min(budget.resolve_threshold(tool), budget.default_result_size)
+        room = min(budget.resolve_threshold(tool), budget.default_result_size)
+        if calls > 1:
+            room = min(room, budget.turn_budget // calls - _HINT_CHARS)
     except Exception:  # a release whose budget moved: the floor every budget keeps
-        threshold = _FLOOR_RESULT_CHARS
-    return int(threshold) - len(result)
+        room = _FLOOR_RESULT_CHARS
+    return int(room) - len(result)
 
 
-def _render(hand, roots, window, deadline):
-    """Hermes's own answer for roots (the carry script's checkout_gate at the run's window), None where it did not
-    come by deadline or failed: on a worker, since its reads are the checkouts' files, which no bound of Hermes's
-    own holds; one left running past it ends on its own and hands nothing."""
-    answer = {}
+# A checkout whose render failed this many times (raised, or missed its firing's bound, or was still running when a
+# later firing came) is claimed as left out, said once: one render took 0.21 to 0.40 s for three checkouts (measured
+# on 0.23.3) against a share of seconds, so a busy moment gets two more firings and a render that hangs or fails for a
+# cause a retry does not change is said by the third, never retried at every call.
+_RENDER_TRIES = 3
+
+# Hermes 0.23.3's own hook bound where plugins.hook_callback_timeout sets none (hermes_cli/plugins.py's default), which
+# the hand holds itself to where the box has Hermes wait on a hook for good.
+_HOOK_DEFAULT_SECONDS = 30.0
+
+_renders = {}  # root -> {"worker", "answer", "taken", "error", "failures"}, under _lock
+
+
+def _hook_bound():
+    """The seconds Hermes waits on a hook callback before it abandons it (its own resolver), its default where it
+    sets none or cannot be read."""
+    try:
+        from hermes_cli.plugins import _resolve_hook_callback_timeout
+        bound = float(_resolve_hook_callback_timeout())
+    except Exception:  # a release whose resolver moved: the launch's gate has turned the hand off already
+        return _HOOK_DEFAULT_SECONDS
+    return bound if bound > 0 else _HOOK_DEFAULT_SECONDS
+
+
+def _start_render(hand, root, window):
+    """A worker rendering root (the carry script's checkout_gate), its outcome kept in _renders for whichever
+    firing comes after it: never two for one root."""
+    record = _renders.setdefault(root, {"failures": 0})
 
     def work():
-        answer["gate"] = _carry_module(hand["carry"]).checkout_gate(roots, int(window) if window else None)
+        try:
+            gate = _carry_module(hand["carry"]).checkout_gate([root], int(window) if window else None)
+            with _lock:
+                record.update(answer=gate["checkouts"][root], taken=gate.get("taken") or {}, error=None)
+        except Exception as err:  # said as the render's error once it has failed enough
+            with _lock:
+                record.update(answer=None, error="%s: %s" % (type(err).__name__, str(err)[:200]))
+                record["failures"] += 1
 
     worker = threading.Thread(target=work, name="crewlet-checkouts", daemon=True)
+    record.update(worker=worker, answer=None, error=None)
     worker.start()
-    worker.join(max(0.0, deadline - time.monotonic()))
-    return answer.get("gate")
+    return worker
 
 
-def _hand_checkouts(hand, tool, result, window):
-    """What a nested firing adds to result, "" for nothing: the checkouts the note helper may claim
-    (hermes-peek), Hermes's own answer for each (checkout_gate, at the run's window), then the helper's
-    claim and answer within the result's room (hermes-nested), all within the hand's bound; nothing where
-    the launch turned the hand off (its gate's nested-off) or the render did not finish, the checkouts
-    then waiting, unclaimed."""
+def _gate(hand, roots, window, until):
+    """The gate for this firing: each root's kept answer, a render started for one with none (never while one runs),
+    waited on until `until`; a root whose renders failed _RENDER_TRIES times claimed as left out, said; the rest
+    left out of the gate, so they wait unclaimed."""
+    started = []
+    with _lock:
+        for root in roots:
+            record = _renders.get(root)
+            if record and record.get("worker") and record["worker"].is_alive():
+                record["failures"] += 1  # still running at a later firing
+            elif not record or (record.get("answer") is None and record["failures"] < _RENDER_TRIES):
+                started.append(_start_render(hand, root, window))
+    for worker in started:
+        worker.join(max(0.0, until - time.monotonic()))
+    gate = {"checkouts": {}, "taken": {}}
+    with _lock:
+        for root in roots:
+            record = _renders[root]
+            if record.get("answer") is not None:
+                gate["checkouts"][root] = record["answer"]
+                gate["taken"].update(record.get("taken") or {})
+                continue
+            if record["worker"] in started and record["worker"].is_alive():
+                record["failures"] += 1  # late at its own firing
+            if record["failures"] >= _RENDER_TRIES:
+                why = ("its render failed: %s" % record["error"]) if record.get("error") else \
+                    "Hermes did not render it within the hand's bound at %d firings" % _RENDER_TRIES
+                gate["checkouts"][root] = {"text": "", "files": [], "skills": [],
+                                           "said": ["the instructions and skills of %s are left out: %s" % (root, why)]}
+    return gate
+
+
+def _hand_checkouts(hand, tool, result, window, calls):
+    """What a nested firing adds to result, "" for nothing, within Hermes's own hook bound less hand["margin"]: the
+    checkouts the note helper may claim (hermes-peek), Hermes's own answer for each ([_gate], until hand["reserve"]
+    is left), then the helper's claim and answer within the result's room (hermes-nested, given the rest), started
+    only where the reserve is left, else every checkout waits, unclaimed; nothing where the launch turned the hand off
+    (its gate's nested-off)."""
     if os.path.exists(os.path.join(os.path.dirname(hand["config"]), "nested-off")):
         return ""
-    deadline = time.monotonic() + hand["timeout"]
+    end = time.monotonic() + _hook_bound() - hand["margin"]
 
     def helper(*args, stdin=None):
         done = subprocess.run([hand["helper"], *args, "-config", hand["config"]], input=stdin, capture_output=True,
-                              timeout=max(0.1, deadline - time.monotonic()), check=False)
+                              timeout=max(0.1, end - time.monotonic()), check=False)
         if done.stderr:
             logger.warning("crewlet: the note helper said: %s", done.stderr.decode("utf-8", "replace")[-2000:])
         return done.stdout if done.returncode == 0 else b""
@@ -298,11 +372,10 @@ def _hand_checkouts(hand, tool, result, window):
         roots = (json.loads(helper("-adapter", "hermes-peek") or b"{}").get("roots") or [])
         if not roots:
             return ""
-        gate = _render(hand, roots, window, deadline)
-        if gate is None:
-            logger.warning("crewlet: Hermes did not render the checkouts within the hand's bound; they wait")
+        gate = _gate(hand, roots, window, end - hand["reserve"])
+        if not gate["checkouts"] or end - time.monotonic() < hand["reserve"]:
             return ""
-        room = _room(tool, result, window)
+        room = _room(tool, result, window, calls)
         return helper("-adapter", "hermes-nested", "-room", str(room),
                       stdin=json.dumps(gate).encode("utf-8")).decode("utf-8", "replace")
     except Exception as err:  # the run goes on; a checkout claimed is in the run's log, a later one waits

@@ -19,14 +19,14 @@ import (
 // Hermes's does in its system prompt), the home's own held beside the run
 // (held) and the helper's sections; the skills directory copies go into, the
 // list the next run removes, each built in state/staging; and, for a gated
-// spec ([checkoutSpec.Gated]), gateCmd, writing what checkout-launch reads or
-// ending the run.
+// spec ([checkoutSpec.Gated]), gateCmd, writing what checkout-launch reads,
+// and afterLaunch, run once it has claimed.
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
 	held, sections        string
 	skills, copied        string
-	gateCmd               string
+	gateCmd, afterLaunch  string
 }
 
 // gateFile is where [checkoutHome]'s gateCmd writes the gate
@@ -217,6 +217,9 @@ func (h checkoutHome) gate() string {
 	} else {
 		line(`  %s`, h.gateCmd) // which writes the gate, an empty one where the harness cannot answer
 		line(`  %s`, fmt.Sprintf(launch, q(h.gateFile())))
+		if h.afterLaunch != "" {
+			line(`  %s`, h.afterLaunch)
+		}
 		line(`  hk=1`)
 	}
 	line(`else`)
