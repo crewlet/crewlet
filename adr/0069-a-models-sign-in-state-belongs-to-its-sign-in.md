@@ -2,7 +2,30 @@
 
 - **Status:** accepted
 - **Authority:** `internal/providers/llm/harness`
-- **Enforced-by:** `internal/providers/llm/harness.TestASitOutFollowsTheSignInAcrossAnApply`, `internal/providers/llm/harness.TestANewCredentialUnderTheSameNameStartsClean`, `internal/providers/llm/harness.TestEntriesOnOneSignInSitOutTogether`, `internal/providers/llm/harness.TestAModelScopedLimitHoldsOnlyThatModel`, `internal/providers/llm/harness.TestARefreshWriteBackKeepsTheSignIn`, `internal/providers/llm/harness.TestASignInIDIsComparableOnlyUnderOneKey`, `internal/providers/llm/harness.TestASweepKeepsAWindowInForce`, `internal/providers/llm/harness.TestAClearEndsOnlyWhatWasReportedBeforeIt`, `internal/providers/llm/harness.TestARefusedSignInIsTheSignInsLastFailure`, `internal/providers/llm/harness.TestALimitIsDatedAndNamedByTheHarnessEvent`, `internal/providers/llm/harness.TestARefusedSignInIsReadFromTheHarnessFields`, `internal/providers/llm/harness.TestEveryChildIsHandedTheEnginesZone`, `internal/engine.TestAnApplyKeepsASpentPlanSpent`, `internal/engine.TestARunningNodesApplyKeepsTheSignInsSitOut`, `internal/providers/llm/harness.TestAnEnvSignInIsOneSignInPerPlaceItReaches`, `internal/secrets.TestADerivedKeyIsTheFleetsOnePerPurpose`, `internal/engine.TestEachEntrysRowIsItsSignInsStateOnThisNode`, `internal/engine.TestARetryClearsEveryNodesSitOut`, `internal/engine.TestARunRefusedAfterARotationIsRelaunchedOnce`, `internal/engine.TestAModelsConditionIsTheFleetsStatusRecords`, `internal/engine.TestAFleetSitOutIsReadOffALivePeersRecord`, `internal/api/llmapi.TestACredentialClearsOnlyWhatThisNodesLiveRecordSatOut`, `internal/statelog.TestModelAlarmsFireAtTheOwnersThresholds`
+- **Enforced-by:**
+  - `internal/providers/llm/harness.TestASitOutFollowsTheSignInAcrossAnApply`
+  - `internal/providers/llm/harness.TestANewCredentialUnderTheSameNameStartsClean`
+  - `internal/providers/llm/harness.TestEntriesOnOneSignInSitOutTogether`
+  - `internal/providers/llm/harness.TestAModelScopedLimitHoldsOnlyThatModel`
+  - `internal/providers/llm/harness.TestARefreshWriteBackKeepsTheSignIn`
+  - `internal/providers/llm/harness.TestASignInIDIsComparableOnlyUnderOneKey`
+  - `internal/providers/llm/harness.TestASweepKeepsAWindowInForce`
+  - `internal/providers/llm/harness.TestAClearEndsOnlyWhatWasReportedBeforeIt`
+  - `internal/providers/llm/harness.TestARefusedSignInIsTheSignInsLastFailure`
+  - `internal/providers/llm/harness.TestALimitIsDatedAndNamedByTheHarnessEvent`
+  - `internal/providers/llm/harness.TestARefusedSignInIsReadFromTheHarnessFields`
+  - `internal/providers/llm/harness.TestEveryChildIsHandedTheEnginesZone`
+  - `internal/engine.TestAnApplyKeepsASpentPlanSpent`
+  - `internal/engine.TestARunningNodesApplyKeepsTheSignInsSitOut`
+  - `internal/providers/llm/harness.TestAnEnvSignInIsOneSignInPerPlaceItReaches`
+  - `internal/secrets.TestADerivedKeyIsTheFleetsOnePerPurpose`
+  - `internal/engine.TestEachEntrysRowIsItsSignInsStateOnThisNode`
+  - `internal/engine.TestARetryClearsEveryNodesSitOut`
+  - `internal/engine.TestARunRefusedAfterARotationIsRelaunchedOnce`
+  - `internal/engine.TestAModelsConditionIsTheFleetsStatusRecords`
+  - `internal/engine.TestAFleetSitOutIsReadOffALivePeersRecord`
+  - `internal/api/llmapi.TestACredentialClearsOnlyWhatThisNodesLiveRecordSatOut`
+  - `internal/statelog.TestModelAlarmsFireAtTheOwnersThresholds`
 - **Measured:** on Claude Code 2.1.312 (2026-10-28), every `-p --output-format stream-json` run writes a `rate_limit_event` whose `rate_limit_info` carries `status` (`allowed`, `allowed_warning`, `rejected`), `resetsAt` in epoch seconds and `rateLimitType` (`five_hour`, `seven_day`); a refused key or token ends in a result event with `api_error_status: 401`, and a refused token is first retried in `system` `api_retry` events naming `error: authentication_failed`. On Codex 0.150.1, `exec --json` writes no rate-limit event (its `rate_limits` are in the session rollout only, which a plain call's `--ephemeral` never writes), and its limit sentence names the reset as a local time with no zone (`%-I:%M %p`, or `%b %-d<st|nd|rd|th>, %Y %-I:%M %p` on another day).
 - **Cost-when-tried:** the sit-out was a field of the provider, and every apply rebuilds every provider, so the first fix copied it to a rebuilt entry whose config spec was `reflect.DeepEqual` to its predecessor's (`carrySitOuts`). A spec holds `${VAR}` names, not values, so it read the wrong thing both ways: a new token stored under the same name stayed benched for up to an hour (`maxLimitBench`) on a credential nobody had refused, while an edit to the entry's timeout dropped a sit-out the vendor still held and the node's seats each spent a process relearning it. Entries on one token learned one plan-wide limit separately, one launch each. Separately, a claude-code entry signed in through its `env` (Bedrock, Vertex, Foundry, a gateway's `ANTHROPIC_AUTH_TOKEN`) read as having no sign-in, which held the assistant off it, and under the default mode it was still handed the plan token, into its box too, where the cloud switch outranks it and it was never used.
 - **Tag-status:** unreleased

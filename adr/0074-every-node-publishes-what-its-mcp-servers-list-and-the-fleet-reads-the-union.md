@@ -2,7 +2,21 @@
 
 - **Status:** accepted
 - **Authority:** `internal/coord`
-- **Enforced-by:** `internal/coord.TestAListingCountsOnlyForItsNodesCurrentIncarnation`, `internal/coord.TestADefinitionIsBoundedAsItIsStored`, `internal/mcp.TestAServerListingMoreToolsThanTheLimitIsRefusedWhole`, `internal/engine.TestTheMostToolsAServerListsFitOneListing`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`, `internal/engine.TestANodesListingIsTheUnionOfItsInstances`, `internal/engine.TestAListingKeepsItsDefinitionsWithinItsBudgetAChangeFirst`, `internal/engine.TestAListingIsWrittenWhenItMovesAndAgainUnderANewEpoch`, `internal/engine.TestAnotherNodesListingReachesThisNodesCatalogueWhileItsNodeIsLive`, `internal/engine.TestTheSweepRemovesOnlyWhatNoReaderCounts`, `internal/engine.TestANodeThatStopsRemovesItsOwnListings`, `internal/api/queries.TestTwoNodesListingsOfAServerMergeIntoItsDetail`, `internal/api/queries.TestAListedToolJoinsTheCatalogueUnderANameNoRowHolds`
+- **Enforced-by:**
+  - `internal/coord.TestAListingCountsOnlyForItsNodesCurrentIncarnation`
+  - `internal/coord.TestADefinitionIsBoundedAsItIsStored`
+  - `internal/mcp.TestAServerListingMoreToolsThanTheLimitIsRefusedWhole`
+  - `internal/engine.TestTheMostToolsAServerListsFitOneListing`
+  - `internal/coord/memory.TestFleetContract`
+  - `internal/coord/kv.TestFleetContract`
+  - `internal/engine.TestANodesListingIsTheUnionOfItsInstances`
+  - `internal/engine.TestAListingKeepsItsDefinitionsWithinItsBudgetAChangeFirst`
+  - `internal/engine.TestAListingIsWrittenWhenItMovesAndAgainUnderANewEpoch`
+  - `internal/engine.TestAnotherNodesListingReachesThisNodesCatalogueWhileItsNodeIsLive`
+  - `internal/engine.TestTheSweepRemovesOnlyWhatNoReaderCounts`
+  - `internal/engine.TestANodeThatStopsRemovesItsOwnListings`
+  - `internal/api/queries.TestTwoNodesListingsOfAServerMergeIntoItsDetail`
+  - `internal/api/queries.TestAListedToolJoinsTheCatalogueUnderANameNoRowHolds`
 - **Cost-when-tried:** the tool catalogue was each node's own registry, which holds a shared server's tools and none of a per-agent server's, whose children run only on the node holding each seat. A company running GitHub's and Datadog's servers per agent showed none of their tools on any screen, though every agent was offered them, and a node's answer about a server depended on which seats it happened to hold.
 - **Tag-status:** unreleased
 

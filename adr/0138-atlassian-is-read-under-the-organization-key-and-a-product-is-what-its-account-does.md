@@ -2,7 +2,14 @@
 
 - **Status:** accepted
 - **Authority:** `internal/atlassian`
-- **Enforced-by:** `internal/atlassian.TestTheAtlasReadsTheOrganizationsSitesAndProducts`, `internal/atlassian.TestTheAtlassianReadAndTheSettingsNameTheSameAccounts`, `internal/atlassian.TestAListingAtlassianRefusesIsAFindingAndRetiresNothing`, `internal/atlassian.TestAnAtlassianSiteTwoReadsMissIsRetired`, `internal/atlassian.TestNoCredentialShapeReachesTheAtlasFromAtlassian`, `internal/atlassian.TestAListingThatFailsOrIsRateLimitedFailsTheAtlassianRead`, `internal/atlassian.TestTheAtlassianListingIsWalkedToItsEnd`
+- **Enforced-by:**
+  - `internal/atlassian.TestTheAtlasReadsTheOrganizationsSitesAndProducts`
+  - `internal/atlassian.TestTheAtlassianReadAndTheSettingsNameTheSameAccounts`
+  - `internal/atlassian.TestAListingAtlassianRefusesIsAFindingAndRetiresNothing`
+  - `internal/atlassian.TestAnAtlassianSiteTwoReadsMissIsRetired`
+  - `internal/atlassian.TestNoCredentialShapeReachesTheAtlasFromAtlassian`
+  - `internal/atlassian.TestAListingThatFailsOrIsRateLimitedFailsTheAtlassianRead`
+  - `internal/atlassian.TestTheAtlassianListingIsWalkedToItsEnd`
 - **Cost-when-tried:** not tried. The reconcile loop already lists an organization's workspaces on every pass and keeps one site of the answer. The atlas keeps the rest, which is every Atlassian product the company has rather than the two the engine works in.
 - **Tag-status:** unreleased
 

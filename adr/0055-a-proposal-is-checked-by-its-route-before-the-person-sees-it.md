@@ -2,7 +2,14 @@
 
 - **Status:** accepted
 - **Authority:** `internal/authz`
-- **Enforced-by:** `internal/authz.TestACheckIsTheWriteDecidedAtTheReadsProof`, `internal/api/configapi.TestEveryWriteThatReadsDryRunDeclaresIt`, `internal/assistant/catalog.TestAChangeTheRouteWouldRefuseIsNeverACard`, `internal/assistant/catalog.TestAWriteThatKeepsAHistoryCarriesTheLineThePersonApproved`, `internal/assistant/catalog.TestACreatesCardNamesWhereItLandsOrIsNoCard`, `internal/api.TestASeatTheUnitWouldRefuseIsRefusedBeforeThePersonSeesIt`, `internal/assistant/catalog.TestARoomMembershipChangeRemovesOnlyWhatItNames`
+- **Enforced-by:**
+  - `internal/authz.TestACheckIsTheWriteDecidedAtTheReadsProof`
+  - `internal/api/configapi.TestEveryWriteThatReadsDryRunDeclaresIt`
+  - `internal/assistant/catalog.TestAChangeTheRouteWouldRefuseIsNeverACard`
+  - `internal/assistant/catalog.TestAWriteThatKeepsAHistoryCarriesTheLineThePersonApproved`
+  - `internal/assistant/catalog.TestACreatesCardNamesWhereItLandsOrIsNoCard`
+  - `internal/api.TestASeatTheUnitWouldRefuseIsRefusedBeforeThePersonSeesIt`
+  - `internal/assistant/catalog.TestARoomMembershipChangeRemovesOnlyWhatItNames`
 - **Cost-when-tried:** three proposals in one browser session reached the person, were approved and stepped up for, and were refused only then: a unit carrying seat fields the route does not take, the same unit with no revision summary, and a page whose card said "Your team's space" for a person whose team owns none
 - **Tag-status:** unreleased
 

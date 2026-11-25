@@ -2,7 +2,16 @@
 
 - **Status:** accepted
 - **Authority:** `internal/queue/jetstream`
-- **Enforced-by:** `internal/queue/jetstream.TestALinksMeterCountsWhatCrossesItEachWay`, `internal/queue/jetstream.TestALinksMeterStandsStillOnABlackholedLink`, `internal/learning/memsync.TestAHydrationBehindADownloadOnItsLinkIsNotRefused`, `internal/learning/memsync.TestAHydrationOnASilentLinkIsRefusedForItsSilence`, `internal/learning/memsync.TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull`, `internal/jsprovision.TestACeilingRunsOnlyWhileItsLinkIsStill`, `internal/engine.TestANodesHydrationReadsItsLinksMeter`, `internal/objstore/natsobj.TestATransferBehindAMovingLinkIsNotStalled`, `internal/queue/jetstream.TestTheDataPathIsProvenEndToEnd`
+- **Enforced-by:**
+  - `internal/queue/jetstream.TestALinksMeterCountsWhatCrossesItEachWay`
+  - `internal/queue/jetstream.TestALinksMeterStandsStillOnABlackholedLink`
+  - `internal/learning/memsync.TestAHydrationBehindADownloadOnItsLinkIsNotRefused`
+  - `internal/learning/memsync.TestAHydrationOnASilentLinkIsRefusedForItsSilence`
+  - `internal/learning/memsync.TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull`
+  - `internal/jsprovision.TestACeilingRunsOnlyWhileItsLinkIsStill`
+  - `internal/engine.TestANodesHydrationReadsItsLinksMeter`
+  - `internal/objstore/natsobj.TestATransferBehindAMovingLinkIsNotStalled`
+  - `internal/queue/jetstream.TestTheDataPathIsProvenEndToEnd`
 - **Measured:** the meter reads its link every 250 ms (a quarter of a read term) and keeps a minute of readings; a link is moving at 70% of the floor of 30 s a MiB, about 24.5 KB/s, in either direction, midway between the 40% of background a documented fleet's quiet link carries and the floor a busy one does; one message at the transport's 8 MiB takes 240 s to cross at the floor, and 248 s to arrive with its handling, which caps every hold but the data path's probe, capped at 246 s on the shipped pings (two minutes, two out) with a probe period and a read term; a replay is placed again past 8.5 MB read across a link (one transport message and a 139,810-byte window) and refused at 253 s with nothing heard; a held wait is judged again every 250 ms (a request) or every second (a replay), so a link that falls still ends it within its span and that judgment of its last byte
 - **Cost-when-tried:** a replay timed by words alone was refused behind one download in flight on its own link (15.5 s of it against a 20.5 s stall at the shipped lease), and behind any event past about 0.67 MiB; at the floor lease the stall was 10.2 s, so one download refused it there too
 - **Tag-status:** unreleased

@@ -2,7 +2,17 @@
 
 - **Status:** accepted
 - **Authority:** `internal/github`
-- **Enforced-by:** `internal/github.TestTheAtlasReadsRepositoriesWorkflowsAndEnvironments`, `internal/github.TestAFailingDeploymentIsTheHealthOfWhatItDeploys`, `internal/github.TestARepositoryGitletMirrorsIsOneEntry`, `internal/github.TestAPartNoInstallationMayReadIsAFindingAndRetiresNothing`, `internal/github.TestAnInstallationThatCannotBeReadCarriesWhatOnlyItCovered`, `internal/github.TestAnEnvironmentThatIsGoneRetiresNothingItDeployed`, `internal/github.TestNoCredentialShapeReachesTheAtlasFromGitHub`, `internal/github.TestAListingThatFailsOrIsRateLimitedFailsTheRead`, `internal/atlas.TestAFailingPipelineIsASignalOnWhatItDeploys`, `internal/atlas.TestAVisibilityIsAFactOfEachHost`
+- **Enforced-by:**
+  - `internal/github.TestTheAtlasReadsRepositoriesWorkflowsAndEnvironments`
+  - `internal/github.TestAFailingDeploymentIsTheHealthOfWhatItDeploys`
+  - `internal/github.TestARepositoryGitletMirrorsIsOneEntry`
+  - `internal/github.TestAPartNoInstallationMayReadIsAFindingAndRetiresNothing`
+  - `internal/github.TestAnInstallationThatCannotBeReadCarriesWhatOnlyItCovered`
+  - `internal/github.TestAnEnvironmentThatIsGoneRetiresNothingItDeployed`
+  - `internal/github.TestNoCredentialShapeReachesTheAtlasFromGitHub`
+  - `internal/github.TestAListingThatFailsOrIsRateLimitedFailsTheRead`
+  - `internal/atlas.TestAFailingPipelineIsASignalOnWhatItDeploys`
+  - `internal/atlas.TestAVisibilityIsAFactOfEachHost`
 - **Cost-when-tried:** not tried. The two sources before this one each read under one company credential, so "whose access" had one answer; GitHub is the first vendor where the engine holds no company credential that can read, only an app per agent.
 - **Tag-status:** unreleased
 

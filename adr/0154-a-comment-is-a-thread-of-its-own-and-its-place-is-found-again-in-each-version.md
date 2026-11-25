@@ -2,7 +2,12 @@
 
 - **Status:** accepted
 - **Authority:** `internal/artifacts/commentanchor`
-- **Enforced-by:** `internal/artifacts/commentanchor.TestAPlaceIsFoundByItsContentNotItsPosition`, `internal/artifacts/commentanchor.TestAnAnchorThatIsGoneIsOutdatedNeverDropped`, `internal/artifacts/commentanchor.TestEveryKindAnswersWhereItsCommentsMayPoint`, `internal/artifactsdomain.TestACommentRidesItsThreadsSubjectNeverTheArtifacts`, `internal/artifactsdomain.TestAThreadKeepsTheAnchorAndVersionItWasMadeOn`
+- **Enforced-by:**
+  - `internal/artifacts/commentanchor.TestAPlaceIsFoundByItsContentNotItsPosition`
+  - `internal/artifacts/commentanchor.TestAnAnchorThatIsGoneIsOutdatedNeverDropped`
+  - `internal/artifacts/commentanchor.TestEveryKindAnswersWhereItsCommentsMayPoint`
+  - `internal/artifactsdomain.TestACommentRidesItsThreadsSubjectNeverTheArtifacts`
+  - `internal/artifactsdomain.TestAThreadKeepsTheAnchorAndVersionItWasMadeOn`
 - **Cost-when-tried:** ADR-0042 fixed each kind's anchor and said a publish re-anchors a comment "by finding its own content again". Doing that AT PUBLISH means one write per open thread after every version, a window in which the head is published and its threads still point at the version before, and a retention sweep that deletes the version a thread was made on before anything moved it. Riding the artifact's subject, as a page's comments ride the page's, makes every remark contend with every publish.
 - **Tag-status:** unreleased
 

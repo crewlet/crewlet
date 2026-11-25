@@ -2,7 +2,19 @@
 
 - **Status:** accepted
 - **Authority:** `internal/changefeed`
-- **Enforced-by:** `internal/changefeed.TestAnUnreachableClaimStorePublishesAnyway`, and for the amendment below `internal/changefeed.TestARecordAPeerCanReadIsHandedBackWithABackoffNeverAcked`, `internal/changefeed.TestARecordHandedBackForAnHourIsKeptWholeAndOnlyThenAcked`, `internal/changefeed.TestADeadLetterThatCannotBeKeptLeavesItsRecordHandedBack`, `internal/changefeed.TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry`, `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`, `internal/engine.TestANodeThatStartsAbleToReadADeadLetterDerivesItsWakeAndDropsIt`, `internal/queue/jetstream.TestAFeedsDeadLetterIsKeptInTheDeadLetterStreamForTheEventRetention`, for the reads of an entry `internal/queue/jetstream.TestAListingMovesNoFrameAndLeavesNoConsumer`, `internal/queue/jetstream.TestAWakeFeedsLargestEntryIsKept`, `internal/changefeed.TestARuneAboveTheBMPIsSpelledAsItsSurrogatePair`, `internal/engine.TestABeatWhoseMarksDidNotMoveListsNothing`, `internal/engine.TestAKeepAndAnExpiryInOneBeatAreBothSeen`, `internal/engine.TestAnEntryThatGoesWhileNothingIsKeptLeavesTheReading` and `internal/engine.TestAListingThatDisagreesWithTheMarksIsListedAgain`, and for an operator's discard `internal/engine.TestADiscardDropsTheEntryItNamesAnswersItAndLogsAndCountsIt` and `internal/engine.TestADiscardIsAccountedSoNoNodeCountsItAsAWakeTheRetentionLost`
+- **Enforced-by:**
+  - `internal/changefeed.TestAnUnreachableClaimStorePublishesAnyway`, and for the amendment below `internal/changefeed.TestARecordAPeerCanReadIsHandedBackWithABackoffNeverAcked`
+  - `internal/changefeed.TestARecordHandedBackForAnHourIsKeptWholeAndOnlyThenAcked`
+  - `internal/changefeed.TestADeadLetterThatCannotBeKeptLeavesItsRecordHandedBack`
+  - `internal/changefeed.TestAReplayDerivesAKeptRecordsWakeOnceAndDropsItsEntry`
+  - `internal/engine.TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt`
+  - `internal/engine.TestANodeThatStartsAbleToReadADeadLetterDerivesItsWakeAndDropsIt`
+  - `internal/queue/jetstream.TestAFeedsDeadLetterIsKeptInTheDeadLetterStreamForTheEventRetention`, for the reads of an entry `internal/queue/jetstream.TestAListingMovesNoFrameAndLeavesNoConsumer`
+  - `internal/queue/jetstream.TestAWakeFeedsLargestEntryIsKept`
+  - `internal/changefeed.TestARuneAboveTheBMPIsSpelledAsItsSurrogatePair`
+  - `internal/engine.TestABeatWhoseMarksDidNotMoveListsNothing`
+  - `internal/engine.TestAKeepAndAnExpiryInOneBeatAreBothSeen`
+  - `internal/engine.TestAnEntryThatGoesWhileNothingIsKeptLeavesTheReading` and `internal/engine.TestAListingThatDisagreesWithTheMarksIsListedAgain`, and for an operator's discard `internal/engine.TestADiscardDropsTheEntryItNamesAnswersItAndLogsAndCountsIt` and `internal/engine.TestADiscardIsAccountedSoNoNodeCountsItAsAWakeTheRetentionLost`
 - **Cost-when-tried:** both failure modes were already in the tree when this was written. The Mattermost socket path SWALLOWS a failed publish — a wake lost with a logged line and no retry — and the webhook path is correct only because the vendor retries it, which is a property of somebody else's product rather than of this engine.
 - **Tag-status:** unreleased
 

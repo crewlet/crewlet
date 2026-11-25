@@ -2,7 +2,32 @@
 
 - **Status:** accepted
 - **Authority:** `internal/agent/builtin`
-- **Enforced-by:** `internal/agent/builtin.TestAnAgentRecordsWhatACallOfItsTurnShowed`, `internal/agent/builtin.TestAnUncitedValueIsRefused`, `internal/agent/builtin.TestAFactFromAChatMessageStaysUnconfirmed`, `internal/agent/builtin.TestATurnAStrangerWokeRecordsNothing`, `internal/agent/builtin.TestAnAgentCannotRetireAnythingOrSetAnOwner`, `internal/agent/builtin.TestTheAtlasRecordCapsHold`, `internal/agent/builtin.TestTheCompanySwitchTurnsAgentRecordsOff`, `internal/agent/builtin.TestARecordTheAtlasAlreadyHoldsWritesNothing`, `internal/agent/builtin.TestACredentialShapedValueIsRefusedFromAnAgent`, `internal/agent/builtin.TestADisputeNamesACallThatLookedAtTheEntry`, `internal/atlas.TestAnAgentsDisputeNeverWins`, `internal/atlas.TestAnUnbackedRecordStaysHiddenUntilAPersonConfirmsIt`, `internal/atlas.TestAValueIsShownOnlyAsAWholeWord`, `internal/atlas.TestAnAgentNeverSetsMeaning`, `internal/atlasdomain.TestAnAgentsClaimLandsOnEveryNodeWithItsEvidence`, `internal/atlasdomain.TestOnlyAnAgentObservesAndNamesItsTurn`, `internal/atlasdomain.TestAnAgentNeverRecordsWhatAPersonDecides`, `internal/atlasdomain.TestAnAgentsDisputeRetiresNothingOnTheLog`, `internal/estate.TestAnAgentsAtlasRecordFromANodeWithoutDataCrossesWhole`, `internal/tools.TestAnAnsweredCallIsKeptForTheTurnAndAFailedOneIsNot`, `internal/agent/turnctx.TestATurnKeepsItsNewestAnswersWithinItsBound`, `internal/config.TestAgentsRecordInTheAtlasUnlessTurnedOff`, `internal/atlas.TestAWaitingEntryCarriesEachAgentsNewestReport`, `internal/atlas.TestTheReviewNarrowsToWhatContradictsOnePersonsWord`, `internal/atlas.TestOnlyAnAgentsSourceNamesAToolAndNeverACredential`
+- **Enforced-by:**
+  - `internal/agent/builtin.TestAnAgentRecordsWhatACallOfItsTurnShowed`
+  - `internal/agent/builtin.TestAnUncitedValueIsRefused`
+  - `internal/agent/builtin.TestAFactFromAChatMessageStaysUnconfirmed`
+  - `internal/agent/builtin.TestATurnAStrangerWokeRecordsNothing`
+  - `internal/agent/builtin.TestAnAgentCannotRetireAnythingOrSetAnOwner`
+  - `internal/agent/builtin.TestTheAtlasRecordCapsHold`
+  - `internal/agent/builtin.TestTheCompanySwitchTurnsAgentRecordsOff`
+  - `internal/agent/builtin.TestARecordTheAtlasAlreadyHoldsWritesNothing`
+  - `internal/agent/builtin.TestACredentialShapedValueIsRefusedFromAnAgent`
+  - `internal/agent/builtin.TestADisputeNamesACallThatLookedAtTheEntry`
+  - `internal/atlas.TestAnAgentsDisputeNeverWins`
+  - `internal/atlas.TestAnUnbackedRecordStaysHiddenUntilAPersonConfirmsIt`
+  - `internal/atlas.TestAValueIsShownOnlyAsAWholeWord`
+  - `internal/atlas.TestAnAgentNeverSetsMeaning`
+  - `internal/atlasdomain.TestAnAgentsClaimLandsOnEveryNodeWithItsEvidence`
+  - `internal/atlasdomain.TestOnlyAnAgentObservesAndNamesItsTurn`
+  - `internal/atlasdomain.TestAnAgentNeverRecordsWhatAPersonDecides`
+  - `internal/atlasdomain.TestAnAgentsDisputeRetiresNothingOnTheLog`
+  - `internal/estate.TestAnAgentsAtlasRecordFromANodeWithoutDataCrossesWhole`
+  - `internal/tools.TestAnAnsweredCallIsKeptForTheTurnAndAFailedOneIsNot`
+  - `internal/agent/turnctx.TestATurnKeepsItsNewestAnswersWithinItsBound`
+  - `internal/config.TestAgentsRecordInTheAtlasUnlessTurnedOff`
+  - `internal/atlas.TestAWaitingEntryCarriesEachAgentsNewestReport`
+  - `internal/atlas.TestTheReviewNarrowsToWhatContradictsOnePersonsWord`
+  - `internal/atlas.TestOnlyAnAgentsSourceNamesAToolAndNeverACredential`
 - **Cost-when-tried:** not tried. No build let an agent write to the atlas. The nearest earlier shape is an agent's note on a shared surface (a page, a work item), which another agent reads back as a colleague's words: on the atlas the same relay would turn one injected sentence into a fact every agent plans from.
 - **Tag-status:** unreleased
 

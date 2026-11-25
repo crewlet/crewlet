@@ -2,7 +2,12 @@
 
 - **Status:** accepted
 - **Authority:** `internal/artifactupload`
-- **Enforced-by:** `internal/artifactupload.TestNoByteIsAcceptedBeforeItsReservation`, `internal/artifactupload.TestFinalizeRefusesBytesThatDoNotMatchTheirDigest`, `internal/artifactupload.TestUnnamedBytesNeverExceedTheReservationBudget`, `internal/artifactsdomain.TestACarriedObjectMustBeNamedWhereItIsCarriedFrom`, `internal/artifactsdomain.TestNoCarryCrossesAnArtifact`
+- **Enforced-by:**
+  - `internal/artifactupload.TestNoByteIsAcceptedBeforeItsReservation`
+  - `internal/artifactupload.TestFinalizeRefusesBytesThatDoNotMatchTheirDigest`
+  - `internal/artifactupload.TestUnnamedBytesNeverExceedTheReservationBudget`
+  - `internal/artifactsdomain.TestACarriedObjectMustBeNamedWhereItIsCarriedFrom`
+  - `internal/artifactsdomain.TestNoCarryCrossesAnArtifact`
 - **Cost-when-tried:** a project file upload stores its object, then writes its row, and holds no quota over what the company stores at all. An upload refused at the row, abandoned by its client, or cut off by a node leaves its object in the store for the collector's day, and nothing bounds how many such objects one principal can leave: a looping client at the 1 GiB file limit can fill a `nats` bucket that shares its broker with the fleet's leases and ledgers before the first collection runs.
 - **Tag-status:** unreleased
 

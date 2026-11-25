@@ -2,7 +2,13 @@
 
 - **Status:** accepted
 - **Authority:** `internal/presence`
-- **Enforced-by:** `internal/presence.TestPresenceWritesNoRowAnywhere`, `internal/presence.TestAPresenceFrameTheFleetDidNotSealShowsNobody`, `internal/presence.TestPresenceExpiresAfterThreeMissedHeartbeats`, `internal/presence.TestABroadcastIsNeverRetained`, `internal/presence.TestARoomIsItsKindAndItsID`, `internal/api/stream.TestPresenceNeitherReachesNorNamesSomebodyOutsideTheRoom`
+- **Enforced-by:**
+  - `internal/presence.TestPresenceWritesNoRowAnywhere`
+  - `internal/presence.TestAPresenceFrameTheFleetDidNotSealShowsNobody`
+  - `internal/presence.TestPresenceExpiresAfterThreeMissedHeartbeats`
+  - `internal/presence.TestABroadcastIsNeverRetained`
+  - `internal/presence.TestARoomIsItsKindAndItsID`
+  - `internal/api/stream.TestPresenceNeitherReachesNorNamesSomebodyOutsideTheRoom`
 - **Tag-status:** unreleased
 
 ## The decision

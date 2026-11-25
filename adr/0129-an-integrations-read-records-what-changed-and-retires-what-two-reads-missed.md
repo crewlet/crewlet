@@ -2,7 +2,27 @@
 
 - **Status:** accepted
 - **Authority:** `internal/atlas/collect`
-- **Enforced-by:** `internal/atlas/collect.TestAnUnchangedReadRecordsNothing`, `internal/atlas/collect.TestAChangedEntryIsRecordedWholeAndAtOnce`, `internal/atlas/collect.TestRetirementTakesTwoCompleteMissesADayApart`, `internal/atlas/collect.TestARetiredEntryIsNeitherMissedNorRetiredAgain`, `internal/atlas/collect.TestAFailedReadRecordsAndRetiresNothing`, `internal/atlas/collect.TestASourceIsReadWhenDueAndAnUnchangedReadWritesNothing`, `internal/atlas/collect.TestNoCredentialShapeReachesARead`, `internal/atlasdomain.TestAReadRecordsWhatChangedAndWithdrawsTheRestOnEveryNode`, `internal/atlasdomain.TestAReadWithdrawsOnlyItsOwnVoice`, `internal/atlasdomain.TestOnlyTheEngineRecordsAnIntegrationsRead`, `internal/atlasdomain.TestAReadsRetirementIsTheEntrysDenialAndALaterReadRestoresIt`, `internal/atlas.TestAnIntegrationDeniesOnlyTheEntryItself`, `internal/cloudflare.TestTheAtlasReadsEveryNameAndCertificate`, `internal/cloudflare.TestNoCredentialShapeReachesTheAtlasFromCloudflare`, `internal/cloudflare.TestAPartialReadFailsWhole`, `internal/cloudflare.TestOnePassListsTheZonesOnce`, `internal/redact/redacttest.TestEveryShapeIsAKnownCredential`, `internal/atlas/collect.TestAnAskIsHonouredOnlyOnceTheFloorHasPassed`, `internal/atlas/collect.TestAnAskNothingWaitsOnIsDropped`, `internal/agent/builtin.TestARefreshInsideTheFloorIsRefusedWithItsInstant`
+- **Enforced-by:**
+  - `internal/atlas/collect.TestAnUnchangedReadRecordsNothing`
+  - `internal/atlas/collect.TestAChangedEntryIsRecordedWholeAndAtOnce`
+  - `internal/atlas/collect.TestRetirementTakesTwoCompleteMissesADayApart`
+  - `internal/atlas/collect.TestARetiredEntryIsNeitherMissedNorRetiredAgain`
+  - `internal/atlas/collect.TestAFailedReadRecordsAndRetiresNothing`
+  - `internal/atlas/collect.TestASourceIsReadWhenDueAndAnUnchangedReadWritesNothing`
+  - `internal/atlas/collect.TestNoCredentialShapeReachesARead`
+  - `internal/atlasdomain.TestAReadRecordsWhatChangedAndWithdrawsTheRestOnEveryNode`
+  - `internal/atlasdomain.TestAReadWithdrawsOnlyItsOwnVoice`
+  - `internal/atlasdomain.TestOnlyTheEngineRecordsAnIntegrationsRead`
+  - `internal/atlasdomain.TestAReadsRetirementIsTheEntrysDenialAndALaterReadRestoresIt`
+  - `internal/atlas.TestAnIntegrationDeniesOnlyTheEntryItself`
+  - `internal/cloudflare.TestTheAtlasReadsEveryNameAndCertificate`
+  - `internal/cloudflare.TestNoCredentialShapeReachesTheAtlasFromCloudflare`
+  - `internal/cloudflare.TestAPartialReadFailsWhole`
+  - `internal/cloudflare.TestOnePassListsTheZonesOnce`
+  - `internal/redact/redacttest.TestEveryShapeIsAKnownCredential`
+  - `internal/atlas/collect.TestAnAskIsHonouredOnlyOnceTheFloorHasPassed`
+  - `internal/atlas/collect.TestAnAskNothingWaitsOnIsDropped`
+  - `internal/agent/builtin.TestARefreshInsideTheFloorIsRefusedWithItsInstant`
 - **Cost-when-tried:** not tried. The nearest earlier shape is the integration reconcile loop, whose contract forbids a write on a converged pass (`internal/integration`, certified by `integrationtest`): reading inventory inside it would have made every unchanged pass either a write or a lie about what it read.
 - **Tag-status:** unreleased
 
