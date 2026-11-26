@@ -54,17 +54,16 @@ func runMuseNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr i
 }
 
 // museNestedAnswer is the hook's answer, "" where it hands nothing: its
-// context as a PostToolUse's additional context, every byte of it within
-// [museAnswerBytes], past which Muse Code 1.4.25 delivers nothing at all
-// (measured, row hook40). The context is each checkout's instructions under
-// "for `<name>` with root <path>", each file wrapped and escaped as Muse puts a
-// project's rules file in its reminder, whole while they fit, the checkouts first in order, and every
-// other named by its files to read; then each one's skills listed by name and
-// path ([skillsListing]), since Muse lists no skill copied after it started
-// but reads one by either (measured, row mid); then what the firing left out
-// ([skippedListing]), the listings cut where the bound falls; and a line for
-// the run's skip log for each checkout the cut drops whole, claimed and so
-// never handed again.
+// context as a PostToolUse's additional context, every byte within
+// [museAnswerBytes], past which Muse Code 1.4.25 delivers nothing (measured,
+// row hook40). The context is each checkout's instructions under "for
+// `<name>` with root <path>", each file wrapped and escaped as Muse puts a
+// project's rules file in its reminder, whole while they fit, the checkouts
+// first in order, every other named by its files; each one's skills listed
+// by name and path ([skillsListing]), as Muse lists no skill copied after it
+// started but reads one by either (measured, row mid); what the firing left
+// out ([skippedListing]), taken first, the skills cut where the bound falls;
+// and a skip-log line for each checkout the cut drops whole, claimed for good.
 func museNestedAnswer(handed []handedCheckout, skipped []string) (string, []string) {
 	room := museAnswerBytes - len(museNestedEncode(""))
 	var whole, named, roots []string
@@ -115,6 +114,9 @@ func museNestedAnswer(handed []handedCheckout, skipped []string) (string, []stri
 			}
 		}
 	}
+	// WHAT WAS LEFT OUT IS TAKEN FIRST, shown last: a claimed checkout's file
+	// or skill not handed is the model's only by its line ([listingBudget.listings]).
+	left := budget.take(skippedListing(skipped))
 	for _, h := range handed {
 		listing := skillsListing(h)
 		b := budget.take(listing)
@@ -126,8 +128,8 @@ func museNestedAnswer(handed []handedCheckout, skipped []string) (string, []stri
 			blocks = append(blocks, b)
 		}
 	}
-	if b := budget.take(skippedListing(skipped)); b != "" {
-		blocks = append(blocks, b)
+	if left != "" {
+		blocks = append(blocks, left)
 	}
 	if len(blocks) == 0 {
 		return "", dropped

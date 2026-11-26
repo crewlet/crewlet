@@ -483,3 +483,25 @@ func TestAMuseCheckoutNamedForAPrefixMuseRefusesTakesAnotherTag(t *testing.T) {
 		t.Error("a copy was made under a name Muse refuses")
 	}
 }
+
+// A MUSE ANSWER KEEPS WHAT IT LEFT OUT BEFORE ITS SKILLS: where the skills'
+// listing and the left-out lines pass the hook's bound, the left-out lines
+// come whole, last, and the skills' listing before them is cut.
+//
+// Mutation: take the skills first, and this goes red.
+func TestAMuseAnswerKeepsWhatItLeftOutBeforeItsSkills(t *testing.T) {
+	t.Parallel()
+	h := handedCheckout{name: "late", root: "/w/late"}
+	for i := range 200 {
+		h.skills = append(h.skills, handedSkill{name: fmt.Sprintf("late:s%d", i), description: strings.Repeat("d", 200),
+			path: fmt.Sprintf("/h/skills/late:s%d/SKILL.md", i)})
+	}
+	skipped := []string{"the skill /w/late/.muse/skills/x is left out: its name is taken"}
+	answer, _ := museNestedAnswer([]handedCheckout{h}, skipped)
+	got := museContext(t, answer)
+	skills, ok := strings.CutSuffix(got, "\n\n"+skippedListing(skipped))
+	if !ok || !strings.HasSuffix(skills, "\n"+museNestedListingCut) || len(answer) > museAnswerBytes {
+		t.Errorf("the answer (%d bytes) is not the skills cut, then what was left out whole: ...%s", len(answer),
+			got[max(len(got)-300, 0):])
+	}
+}
