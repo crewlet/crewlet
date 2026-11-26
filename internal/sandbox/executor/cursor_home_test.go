@@ -86,6 +86,8 @@ func TestWhatACursorRunLoadsAndWhatACheckoutBelowItBringsIt(t *testing.T) {
 	plant(t, box, map[string]string{
 		"workspace/AGENTS.md":                         "WORKDIR-INSTRUCTIONS\n",
 		"workspace/repo/.git/HEAD":                    "ref: refs/heads/main\n",
+		"workspace/repo/.git/index":                   "DIRC",
+		"workspace/repo/.git/refs/heads/main":         strings.Repeat("0", 40) + "\n",
 		"workspace/repo/AGENTS.md":                    "REPO-INSTRUCTIONS\n",
 		"workspace/repo/.cursor/rules/own.mdc":        "---\nalwaysApply: true\n---\nREPO-RULE\n",
 		"workspace/repo/.cursor/rules/sub/nested.mdc": "---\nalwaysApply: true\n---\nREPO-NESTED\n",
