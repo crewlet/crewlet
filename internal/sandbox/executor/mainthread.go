@@ -176,8 +176,8 @@ const (
 // What a read holds for its summary's words beyond the same read of as long a
 // file asking none or a short one, at the worst of the eleven readers
 // (TestABoxReadsSummaryIsBudgeted): within their share ([summaryBaseBytes]),
-// Gemini CLI's allocates 309,920 bytes, counted at 320 KiB; past it to
-// [summaryReadMaxBytes], under the large slot, Gemini CLI's holds 4,165,816
+// Gemini CLI's allocates 310,104 bytes, counted at 320 KiB; past it to
+// [summaryReadMaxBytes], under the large slot, Gemini CLI's holds 4,164,880
 // live (the collector at every 1% of growth), counted at 4.5 MiB.
 const (
 	summaryBaseHeldBytes  = 320 << 10
