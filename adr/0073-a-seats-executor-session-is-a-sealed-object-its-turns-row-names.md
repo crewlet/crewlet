@@ -6596,9 +6596,11 @@ within `SessionMaxBytes`. A rotation waits out media objects as it does
 sessions. The API row and the Sessions screen state `media_bytes` beside
 `object_bytes`. A keep reads which media its turn's row and held base name
 before its upload, in the listing's room, and a save amends its charge to what
-it uploads in a room of its own: a third read before the upload, which the
-keep's budget counts (`keepBudgetFor`). A take keeps apart only what that
-budget's pace holds, each object paced by the mebibyte begun.
+it uploads in a room of its own: the fourth of its steps before the upload,
+after its media count and its mint, and made again with the read again and the
+record where the log finds a carry gone, all counted in the keep's budget
+(`keepBudgetFor`). A take keeps apart only what that budget's pace holds, each
+object paced by the mebibyte begun.
 
 **Mid-upgrade.** An older build retains a capture naming media, so it never
 applies a row whose frames its estate does not name; its collector then reads
