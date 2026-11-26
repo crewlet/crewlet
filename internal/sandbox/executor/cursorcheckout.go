@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp/syntax"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -76,11 +77,15 @@ func cursorCheckoutsEnd(paths Paths) string {
 	return everyStep(putBackHome(paths.CursorHooks(), paths.CursorHeldHooks()), h.restore(), h.saySkipped())
 }
 
-// cursorHookTimeout is the seconds Cursor waits on the run's hook: a firing's
-// own bound, as Pi's and OpenCode's calls are held to ([codexNestedTimeout]),
-// past which Cursor drops its answer and goes on (measured: an entry's
-// "timeout" holds, the default being 60 s).
-const cursorHookTimeout = codexNestedTimeout
+// cursorHookTimeout is the seconds Cursor waits on the run's hook before it
+// drops its answer and goes on (measured: an entry's "timeout" holds; the
+// default is 60 s): twice the note helper's own claim deadline
+// (cursorClaimWithin, the firing bound of Pi and OpenCode,
+// [codexNestedTimeout]), past which a firing claims nothing and the clone goes
+// at the next MCP call. What follows a claim, reading at most 39,000 bytes of
+// files and copying at most 32 MiB of skills (0.12 s on the build VM), gets
+// as long again, so a loaded box answers a claim in time.
+const cursorHookTimeout = 2 * codexNestedTimeout
 
 // cursorHookSources is every file Cursor Agent 2026.11.22-e9042b2 reads hooks
 // from, by where it sits, and the key its postToolUse entries are under (read
@@ -110,7 +115,8 @@ var errCursorHookUnread = errors.New("does not read as a JSON object with an obj
 // run's postToolUse entry (cmd) added: every key and entry of the home's as
 // the home wrote it, a
 // version where it names none. "" and the reason where the run lays none:
-// another post-tool hook in any of files (path to contents), since Cursor runs
+// another post-tool hook in any of files (path to contents) that can fire on
+// an MCP call ([cursorPostToolEntries]), since Cursor runs
 // each on the call's own result and hands the model only one answer
 // (measured), so the run's would drop that hook's or be dropped with a clone
 // it claimed; or a home file the run cannot read.
@@ -118,8 +124,8 @@ func cursorHooked(homeFile string, home []byte, files map[string][]byte, sources
 	cmd string) ([]byte, string) {
 	for _, s := range sources {
 		if key, ok := cursorPostToolEntries(files[s.file], s.key); ok {
-			return nil, fmt.Sprintf("%s holds a %s hook, and Cursor hands the model only one post-tool hook's "+
-				"answer, so the run lays none of its own beside it", s.file, key)
+			return nil, fmt.Sprintf("%s holds a %s hook that can fire on an MCP call, and Cursor hands the "+
+				"model only one post-tool hook's answer, so the run lays none of its own beside it", s.file, key)
 		}
 	}
 	doc := map[string]json.RawMessage{}
@@ -134,8 +140,12 @@ func cursorHooked(homeFile string, home []byte, files map[string][]byte, sources
 			return nil, fmt.Sprintf("%s %v, so the run lays no hook into it", homeFile, errCursorHookUnread)
 		}
 	}
-	entry, _ := json.Marshal([]map[string]any{{"command": cmd, "timeout": cursorHookTimeout}})
-	hooks["postToolUse"] = entry
+	var post []json.RawMessage
+	if raw := bytes.TrimSpace(hooks["postToolUse"]); len(raw) > 0 && json.Unmarshal(raw, &post) != nil {
+		return nil, fmt.Sprintf("%s %v, so the run lays no hook into it", homeFile, errCursorHookUnread)
+	}
+	entry, _ := json.Marshal(map[string]any{"command": cmd, "timeout": cursorHookTimeout})
+	hooks["postToolUse"], _ = json.Marshal(append(post, entry))
 	doc["hooks"], _ = json.Marshal(hooks)
 	if _, named := doc["version"]; !named {
 		doc["version"] = json.RawMessage("1")
@@ -144,9 +154,11 @@ func cursorHooked(homeFile string, home []byte, files map[string][]byte, sources
 	return append(out, '\n'), ""
 }
 
-// cursorPostToolEntries reports whether raw, a hooks file, lists an entry under
-// hooks.<key>; a file that does not read lists none, as Cursor loads none from
-// it.
+// cursorPostToolEntries reports whether raw, a hooks file, lists an entry
+// under hooks.<key> that can fire on an MCP call: Claude Code's any (Cursor
+// maps their tool names its own way), Cursor's any whose matcher can match an
+// MCP call's name ([cursorMatcherSkipsMCP]). A file that does not read lists
+// none, as Cursor loads none from it.
 func cursorPostToolEntries(raw []byte, key string) (string, bool) {
 	var file struct {
 		Hooks map[string][]json.RawMessage `json:"hooks"`
@@ -154,7 +166,75 @@ func cursorPostToolEntries(raw []byte, key string) (string, bool) {
 	if json.Unmarshal(raw, &file) != nil {
 		return "", false
 	}
-	return key, len(file.Hooks[key]) > 0
+	for _, entry := range file.Hooks[key] {
+		var e struct {
+			Matcher *string `json:"matcher"`
+		}
+		if key != "postToolUse" || json.Unmarshal(entry, &e) != nil || e.Matcher == nil ||
+			!cursorMatcherSkipsMCP(*e.Matcher) {
+			return key, true
+		}
+	}
+	return key, false
+}
+
+// cursorMCPName is how an MCP call's tool name begins when Cursor matches a
+// hook's matcher against it: a regular expression searched for anywhere in
+// `MCP:<tool>` (measured: `t_tool` and `MCP` fire on MCP:t_tool, `^t_tool$`
+// and `Shell` do not).
+const cursorMCPName = "MCP:"
+
+// cursorMatcherSkipsMCP reports whether matcher can match no MCP call's name,
+// whatever the tool: each alternative anchored at the start on a literal that
+// departs from [cursorMCPName]. An unanchored one can, as a server may name a
+// tool anything, and so can a matcher this cannot read.
+func cursorMatcherSkipsMCP(matcher string) bool {
+	re, err := syntax.Parse(matcher, syntax.Perl)
+	if err != nil {
+		return false
+	}
+	re = re.Simplify()
+	alts := []*syntax.Regexp{re}
+	if re.Op == syntax.OpAlternate {
+		alts = re.Sub
+	}
+	for _, alt := range alts {
+		if alt.Op != syntax.OpConcat || len(alt.Sub) < 2 ||
+			(alt.Sub[0].Op != syntax.OpBeginText && alt.Sub[0].Op != syntax.OpBeginLine) {
+			return false
+		}
+		if !cursorDepartsFromMCP(alt.Sub[1]) {
+			return false
+		}
+	}
+	return true
+}
+
+// cursorDepartsFromMCP reports whether every name re matches at its start
+// departs from [cursorMCPName] within its first bytes: a literal that does,
+// or an alternation or group of such, case kept.
+func cursorDepartsFromMCP(re *syntax.Regexp) bool {
+	switch re.Op {
+	case syntax.OpLiteral:
+		if re.Flags&syntax.FoldCase != 0 {
+			return false
+		}
+		lit := string(re.Rune)
+		n := min(len(lit), len(cursorMCPName))
+		return lit[:n] != cursorMCPName[:n]
+	case syntax.OpConcat:
+		return len(re.Sub) > 0 && cursorDepartsFromMCP(re.Sub[0])
+	case syntax.OpCapture:
+		return cursorDepartsFromMCP(re.Sub[0])
+	case syntax.OpAlternate:
+		for _, sub := range re.Sub {
+			if !cursorDepartsFromMCP(sub) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // cursorHookSep ends each file [cursorHookFiles] reads: a control character

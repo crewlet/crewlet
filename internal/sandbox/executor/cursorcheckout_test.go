@@ -40,11 +40,12 @@ fi
 // cursorHomeHooks is a home hooks.json of the person's own, written as a
 // person may write one: hooks of other events, their own spacing.
 const cursorHomeHooks = "{\n  \"version\": 1,\n    \"hooks\": {\"sessionStart\": [ {\"command\": \"home-start\"} ],\n" +
+	"  \"postToolUse\": [{\"command\": \"home-shell\", \"matcher\": \"^Shell$\"}],\n" +
 	"  \"stop\":[{\"command\":\"home-stop\",\"loop_limit\":2}]}, \"extra\": {\"k\": [1,2]}\n}\n"
 
 // A CHECKOUT CLONED DURING A CURSOR RUN IS HANDED AT ITS NEXT MCP CALL, ONCE:
 // while the run runs, the home's hooks.json holds every entry of the home's
-// own and one postToolUse entry of the run's, bounded by Cursor's timeout;
+// own, its Shell-only postToolUse hook too, and one of the run's after it;
 // that entry answers a Shell call {} and the first MCP call after the clone
 // with the call's own content and the clone's instructions and skills as one
 // more text item, and a later MCP call {}. Once over, the home's hooks.json is
@@ -80,16 +81,18 @@ func TestACheckoutClonedDuringACursorRunIsHandedAtItsNextMCPCall(t *testing.T) {
 	}
 	if during.Version != 1 || compact(during.Extra) != `{"k":[1,2]}` || len(during.Hooks["sessionStart"]) != 1 ||
 		compact(during.Hooks["sessionStart"][0]) != `{"command":"home-start"}` || len(during.Hooks["stop"]) != 1 ||
-		compact(during.Hooks["stop"][0]) != `{"command":"home-stop","loop_limit":2}` {
+		compact(during.Hooks["stop"][0]) != `{"command":"home-stop","loop_limit":2}` ||
+		len(during.Hooks["postToolUse"]) != 2 ||
+		compact(during.Hooks["postToolUse"][0]) != `{"command":"home-shell","matcher":"^Shell$"}` {
 		t.Errorf("while the run ran, the home's own entries were not all there: %+v", during)
 	}
 	var ours []struct {
 		Command string `json:"command"`
 		Timeout int    `json:"timeout"`
 	}
-	if raw, _ := json.Marshal(during.Hooks["postToolUse"]); json.Unmarshal(raw, &ours) != nil || len(ours) != 1 ||
-		ours[0].Timeout != 10 || !strings.HasPrefix(ours[0].Command, shellword.Quote(p.CursorNoteHelper())+" -adapter cursor-nested ") {
-		t.Errorf("while the run ran, its postToolUse entries were %+v, want its one, bounded at 10 s", ours)
+	if raw, _ := json.Marshal(during.Hooks["postToolUse"][1:]); json.Unmarshal(raw, &ours) != nil || len(ours) != 1 ||
+		ours[0].Timeout != 20 || !strings.HasPrefix(ours[0].Command, shellword.Quote(p.CursorNoteHelper())+" -adapter cursor-nested ") {
+		t.Errorf("while the run ran, its postToolUse entries were %+v, want its one, bounded at 20 s", ours)
 	}
 	if got := strings.TrimSpace(recordedFile(t, record, "answer0")); got != "{}" {
 		t.Errorf("a Shell call was answered %q, want {}", got)
@@ -188,20 +191,23 @@ func TestACursorRunPutsTheHomesHooksBackHoweverItEnds(t *testing.T) {
 	}
 }
 
-// A CURSOR RUN LAYS NO HOOK BESIDE ANOTHER POST-TOOL HOOK: Cursor runs each
-// post-tool hook on the call's own result and hands the model only one
-// answer (measured), so where the home's hooks.json, the project's, or Claude
-// Code's settings, which Cursor reads too, hold one, the run lays none and
-// says once, naming the file, that a checkout cloned during it is not handed;
-// so it does for a home hooks.json it cannot read. The run is not refused,
-// and the home's file is left as it was.
+// A CURSOR RUN LAYS NO HOOK BESIDE ANOTHER POST-TOOL HOOK THAT CAN FIRE ON AN
+// MCP CALL: Cursor runs each on the call's own result and hands the model
+// only one answer (measured), so where the home's hooks.json, the project's,
+// or Claude Code's settings, which Cursor reads too, hold one (a matcher not
+// anchored away from `MCP:` among them), the run lays none and says once,
+// naming the file, that a clone is not handed; so it does for a home
+// hooks.json it cannot read. Nothing is refused; the file stays as it was.
 //
-// Mutation: skip a source, lay the hook all the same, refuse the run, or say
-// it twice, and a row goes red.
+// Mutation: skip a source, take an unanchored matcher for Shell-only, lay the
+// hook all the same, refuse the run, or say it twice, and a row goes red.
 func TestACursorRunLaysNoHookBesideAnotherPostToolHook(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct{ rel, body, file string }{
-		"the home's":     {".cursor/hooks.json", `{"version":1,"hooks":{"postToolUse":[{"command":"theirs"}]}}`, "/.cursor/hooks.json"},
+		"the home's": {".cursor/hooks.json", `{"version":1,"hooks":{"postToolUse":[{"command":"theirs"}]}}`, "/.cursor/hooks.json"},
+		"an unanchored matcher": {".cursor/hooks.json",
+			`{"hooks":{"postToolUse":[{"command":"theirs","matcher":"^Shell$"},{"command":"theirs","matcher":"Shell"}]}}`,
+			"/.cursor/hooks.json"},
 		"the project's":  {"workspace/.cursor/hooks.json", `{"hooks":{"postToolUse":[{"command":"theirs"}]}}`, "/workspace/.cursor/hooks.json"},
 		"Claude Code's":  {".claude/settings.json", `{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"x"}]}]}}`, "/.claude/settings.json"},
 		"an unread home": {".cursor/hooks.json", "{not json", "/.cursor/hooks.json does not read"},
