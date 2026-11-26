@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // cursorSpec is the spec a Cursor Agent run's launch gives the core
@@ -157,6 +158,46 @@ func keysOf(m map[string]json.RawMessage) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// A FIRING PAST ITS DEADLINE CLAIMS NOTHING: a firing slowed past
+// [cursorClaimWithin] (here started with it spent) answers {} and leaves the
+// clone unclaimed, its lines unsaid, so the next MCP call hands it rather
+// than Cursor dropping a late answer that claimed it.
+//
+// Mutation: drop the deadline's check, or keep its lines, and this goes red.
+func TestACursorFiringPastItsDeadlineClaimsNothing(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.cursorLaunch(t)
+	r.add(t, map[string]string{"late/.git/": "", "late/AGENTS.md": "LATE\n",
+		"late/.cursor/skills/s/SKILL.md": "---\nname: s\ndescription: S.\n---\n",
+		"late/.cursor/skills/out/":       ""})
+	// A SKILL LEADING OUT OF ITS CHECKOUT, which a claim says is left out.
+	outside := filepath.Join(t.TempDir(), "SKILL.md")
+	if err := os.WriteFile(outside, []byte("---\nname: out\ndescription: Out.\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(r.work, "late/.cursor/skills/out/SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	var errs bytes.Buffer
+	spent := time.Now().Add(-time.Second)
+	if answer := cursorNestedAnswer(flags{config: filepath.Join(r.state, "nested.json")},
+		strings.NewReader(cursorInput("MCP:t_tool", cursorResult, "")), &errs, spent); string(answer) != "{}" {
+		t.Errorf("a firing past its deadline answered %q, want {}", answer)
+	}
+	if kept, _ := os.ReadFile(filepath.Join(r.state, skippedLog)); len(kept) > 0 {
+		t.Errorf("a firing past its deadline kept lines for a clone it did not claim: %q", kept)
+	}
+	answer, _ := r.cursorFire(t, cursorInput("MCP:t_tool", cursorResult, ""))
+	if _, items := cursorUpdated(t, answer); !strings.Contains(string(items[len(items)-1]), "LATE") ||
+		strings.Count(string(items[len(items)-1]), "/out is left out") != 1 {
+		t.Errorf("the next MCP call is not handed the clone, its left-out skill said once: %q", answer)
+	}
+	if kept, _ := os.ReadFile(filepath.Join(r.state, skippedLog)); strings.Count(string(kept), "/out is left out") != 1 {
+		t.Errorf("the skip log says the left-out skill other than once: %q", kept)
+	}
 }
 
 // A FIRING THAT CANNOT APPEND CLAIMS NOTHING: a call that is no MCP call (its

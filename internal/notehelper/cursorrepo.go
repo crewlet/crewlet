@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 )
 
 // cursorResultInline is the most bytes the MCP call's result may come to with
@@ -36,22 +37,32 @@ type cursorNestedInput struct {
 }
 
 // runCursorNested is one firing of a Cursor Agent run's postToolUse hook
-// (internal/sandbox/executor's cursorHook): at an MCP call of the main agent
-// whose result leaves room ([cursorRoom]), it claims each checkout cloned
-// since the last firing, once ([handNested]), and answers the call's result
-// as Cursor handed it with one text item more ([cursorAppended]), the only
-// part of a hook's answer that reaches the model mid-run (measured on
-// 2026.11.22-e9042b2). Any other call, a subagent's, a result it cannot keep
-// whole, and too little room answer {} and claim nothing. Exit 0 whatever
-// happened, its trouble on stderr.
+// (internal/sandbox/executor's cursorNestedCommand): at an MCP call of the
+// main agent whose result leaves room ([cursorRoom]), it claims each checkout
+// cloned since the last firing, once ([handNested]), by [cursorClaimWithin],
+// and answers the call's result as Cursor handed it with one text item more
+// ([cursorAppended]), the only part of a hook's answer that reaches the model
+// mid-run (measured on 2026.11.22-e9042b2). Any other call, a subagent's, a
+// result it cannot keep whole, and too little room answer {} and claim
+// nothing. Exit 0 whatever happened, its trouble on stderr.
 func runCursorNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr io.Writer, _ func(string) string) int {
-	answer := cursorNestedAnswer(f, stdin, stderr)
+	answer := cursorNestedAnswer(f, stdin, stderr, time.Now().Add(cursorClaimWithin))
 	_, _ = stdout.Write(append(answer, '\n'))
 	return exitDone
 }
 
-// cursorNestedAnswer is the hook's answer: {} where it hands nothing.
-func cursorNestedAnswer(f flags, stdin io.Reader, stderr io.Writer) []byte {
+// cursorClaimWithin is how long a firing may take to claim: past it, it claims
+// nothing and the clone waits for the next MCP call, since Cursor drops an
+// answer past its hook's timeout (measured) and a clone claimed into a dropped
+// answer is never handed. The runner's timeout is twice it
+// (internal/sandbox/executor's cursorHookTimeout), so what follows a claim,
+// reading at most [cursorResultInline] bytes and copying at most
+// [maxCopyBytes] (0.12 s on the build VM), has as long again.
+const cursorClaimWithin = 10 * time.Second
+
+// cursorNestedAnswer is the hook's answer, claiming only by claimBy: {} where
+// it hands nothing.
+func cursorNestedAnswer(f flags, stdin io.Reader, stderr io.Writer, claimBy time.Time) []byte {
 	none := []byte("{}")
 	raw, err := io.ReadAll(io.LimitReader(stdin, maxHookInput+1))
 	if err != nil || len(raw) > maxHookInput {
@@ -78,6 +89,7 @@ func cursorNestedAnswer(f flags, stdin io.Reader, stderr io.Writer) []byte {
 		fmt.Fprintf(stderr, "notehelper: the nested config: %v\n", err)
 		return none
 	}
+	c.claimBy = claimBy
 	listings := room / 4
 	firing := room - listings
 	if c.FiringLimit == nil || *c.FiringLimit > firing {

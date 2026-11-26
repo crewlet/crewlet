@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf8"
 )
 
@@ -56,6 +57,9 @@ type checkoutSpec struct {
 	HomeSkills []skillDirSlot `json:"homeSkills,omitempty"`
 	// held is the names the home takes, read once a firing ([homeNames]).
 	held *homeNames
+	// claimBy is when a firing whose harness drops a late answer stops
+	// claiming (cursor-nested's cursorClaimWithin); zero for none.
+	claimBy time.Time
 }
 
 // skillSep is what joins a copy's tag and skill: `:` (the zero value), or `-`
@@ -580,6 +584,13 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 		claimed, plans[name] = append(claimed, name), taken
 	}
 	if len(claimed) == 0 {
+		return nil, nil
+	}
+	// PAST ITS DEADLINE A FIRING CLAIMS NOTHING, its lines unsaid: a clone
+	// claimed there would go in an answer its harness drops, and never again.
+	if !spec.claimBy.IsZero() && !time.Now().Before(spec.claimBy) {
+		said.lines = nil
+		fmt.Fprintln(said.stderr, "notehelper: this firing's deadline passed before it claimed; the checkouts wait for the next")
 		return nil, nil
 	}
 	// CLAIMED BEFORE ANYTHING IS HANDED: a firing that dies past this point has
