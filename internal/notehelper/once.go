@@ -34,9 +34,13 @@ var oneShots = map[string]oneShot{
 	"gemini-nested":     {run: runGeminiNested, config: true},
 	"qwen-nested":       {run: runQwenNested, config: true},
 	"codex-bridge":      {run: runCodexBridge, config: true},
+	"grok-nested":       {run: runGrokNested, config: true},
 	"pi-nested":         {run: runPiNested, config: true},
+	"kimi-nested":       {run: runKimiNested, config: true},
 	"codex-renew":       {run: runCodexRenew, config: true},
 	"codex-materialize": {run: runCodexMaterialize},
+	"copilot-launch":    {run: runCopilotLaunch, config: true},
+	"copilot-nested":    {run: runCopilotNested, config: true},
 }
 
 // oneShot is one adapter run once: its run, and whether it reads -config,
@@ -67,6 +71,8 @@ func runOnce(ctx context.Context, args []string, getenv func(string) string, std
 	set.StringVar(&f.rollout, "rollout", "", "")
 	set.StringVar(&f.sessions, "sessions", "", "")
 	set.StringVar(&f.thread, "thread", "", "")
+	set.IntVar(&f.keep, "keep", -1, "")
+	set.StringVar(&f.kept, "kept", "", "")
 	if set.Parse(args) != nil {
 		return 0, false
 	}

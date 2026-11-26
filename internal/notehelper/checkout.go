@@ -49,6 +49,13 @@ type checkoutSpec struct {
 	Reserved           []string          `json:"reserved,omitempty"`
 	ImportInstructions bool              `json:"importInstructions,omitempty"`
 	SkillSep           skillSep          `json:"skillSep,omitempty"`
+	// ListedAs and HomeSkills are the harness whose rule names a listed skill
+	// ([listingRules]) and the home's skill directories whose names a copy may
+	// not take ([homeHolds]).
+	ListedAs   string         `json:"listedAs,omitempty"`
+	HomeSkills []skillDirSlot `json:"homeSkills,omitempty"`
+	// held is the names the home takes, read once a firing ([homeNames]).
+	held *homeNames
 }
 
 // skillSep is what joins a copy's tag and skill: `:` (the zero value), or `-`
@@ -151,6 +158,9 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if !c.SkillSep.Valid() {
 		return fmt.Errorf("the launch config's skillSep %q is neither %q nor %q", c.SkillSep, ":", "-")
 	}
+	if _, ok := listingRules[c.ListedAs]; c.ListedAs != "" && !ok {
+		return fmt.Errorf("the launch config's listedAs %q is none of %q and %q", c.ListedAs, listedGrok, listedKimi)
+	}
 	work, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return err
@@ -166,9 +176,11 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 		return err
 	}
 	var sections, roots []string
+	kept := make([]launched, 0, len(handed))
 	for _, h := range handed {
+		kept = append(kept, launched{Name: h.name, Root: h.root, Text: h.text})
 		if h.text != "" {
-			sections = append(sections, "for `"+h.name+"` with root "+h.root+"\n\n"+h.text)
+			sections = append(sections, checkoutHeader(h.name, h.root)+"\n\n"+h.text)
 		}
 		roots = append(roots, h.root+"\n")
 	}
@@ -176,6 +188,9 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 		if err = os.WriteFile(c.Roots, []byte(strings.Join(roots, "")), 0o600); err != nil {
 			return err
 		}
+	}
+	if err = writeLaunched(c.State, kept); err != nil {
+		return err
 	}
 	if err = os.Remove(c.Agents); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
@@ -195,6 +210,49 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	}
 	return os.WriteFile(filepath.Join(c.State, "nested.json"), append(nested, '\n'), 0o600)
 }
+
+// checkoutHeader is the line a checkout's section opens with, naming it.
+func checkoutHeader(name, root string) string { return "for `" + name + "` with root " + root }
+
+// launchedFile is the file under a run's checkout state where checkout-launch
+// keeps every checkout it handed, in its order, with its instructions, for a
+// runner that composes the launch again without some of them (copilot-launch).
+const launchedFile = "launched.json"
+
+// launched is one checkout checkout-launch handed: its name, root and
+// instructions ("" for none).
+type launched struct {
+	Name string `json:"name"`
+	Root string `json:"root"`
+	Text string `json:"text"`
+}
+
+// writeLaunched writes kept to state's [launchedFile].
+func writeLaunched(state string, kept []launched) error {
+	raw, err := json.Marshal(kept)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(state, launchedFile), append(raw, '\n'), 0o600)
+}
+
+// readLaunched is state's [launchedFile].
+func readLaunched(state string) ([]launched, error) {
+	raw, err := readBounded(filepath.Join(state, launchedFile), maxLaunched)
+	if err != nil {
+		return nil, err
+	}
+	var kept []launched
+	if err = json.Unmarshal(raw, &kept); err != nil {
+		return nil, fmt.Errorf("%s: %w", launchedFile, err)
+	}
+	return kept, nil
+}
+
+// maxLaunched bounds [launchedFile] as read back: the instructions of every
+// checkout under a harness with no limit, which Copilot refuses to start with
+// far below this (its static budget, some 110,000 tokens at most).
+const maxLaunched = 64 << 20
 
 // skippedLog is the file under a run's checkout state a nested firing keeps
 // what it left out in ([skips]), for the runner's script to print once the
@@ -422,6 +480,7 @@ func readNested(path string) (nestedConfig, error) {
 // `<tag>:<skill>` ([copyPlanned]). What it leaves out is
 // said to said, and kept where said asks, under the lock.
 func handCheckouts(state, work string, first []string, spec checkoutSpec, firing int, said *skips) ([]handedCheckout, error) {
+	spec.held = &homeNames{}
 	lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -581,19 +640,25 @@ func checkoutName(work, name string) bool {
 }
 
 // instructionParts is root's instructions, file by file, each slot's in order
-// (a slot of names its first regular file, links followed; a tree's files,
-// [treeTexts]): each file's path and its text, cut to what is left of limit
+// (a slot of names its first regular file, links followed, within the
+// checkout alone where Inside; a tree's files, [treeTexts]; where Once, none
+// an earlier slot handed, [slotOptions]): each file's path and its text, cut to what is left of limit
 // on a rune boundary, invalid UTF-8 replaced, and how many bytes they took
 // ([joinParts] hands them as one text). A file the limit cut spends all of
 // it, as a harness charging what it read hands nothing after it, never the
 // bytes a split rune left. A file of whitespace alone, as a harness reads
-// one, is its slot's file and hands nothing, charged nothing.
+// one, is its slot's file and hands nothing, charged nothing, unless the slot
+// passes it over (SkipBlank).
 func instructionParts(root string, limit int, slots []instructionSlot, said *skips) ([]instructionPart, int) {
 	var texts []instructionPart
 	spent := 0
+	handed := handedFiles{}
 	for _, slot := range slots {
 		if slot.Tree != nil {
 			for _, file := range treeTexts(root, *slot.Tree, said) {
+				if !handed.first(file.real, slot.Tree.Once) {
+					continue
+				}
 				text, n, cut := fitInstructions(file.raw, limit-spent)
 				if n > 0 {
 					texts, spent = append(texts, instructionPart{path: file.path, text: text}), spent+n
@@ -610,7 +675,13 @@ func instructionParts(root string, limit int, slots []instructionSlot, said *ski
 			if err != nil || !info.Mode().IsRegular() {
 				continue
 			}
+			if real, ok := slotFile(root, path, slot.slotOptions); !ok || !handed.first(real, slot.Once) {
+				continue
+			}
 			text, n, cut := readInstructions(path, info.Size(), limit-spent)
+			if n == 0 && !cut && slot.SkipBlank {
+				continue
+			}
 			if n > 0 {
 				texts, spent = append(texts, instructionPart{path: path, text: text}), spent+n
 			}
@@ -621,6 +692,34 @@ func instructionParts(root string, limit int, slots []instructionSlot, said *ski
 		}
 	}
 	return texts, spent
+}
+
+// handedFiles is the real paths of the files a checkout's slots handed.
+type handedFiles map[string]bool
+
+// first records real as handed and reports whether it may be handed: always,
+// unless once and an earlier slot handed it.
+func (h handedFiles) first(real string, once bool) bool {
+	if once && h[real] {
+		return false
+	}
+	h[real] = true
+	return true
+}
+
+// slotFile is the real path of a slot's file at path, of the checkout at
+// root, and whether the slot hands it: not where it is Inside and the file
+// leads out of the checkout.
+func slotFile(root, path string, o slotOptions) (string, bool) {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path, !o.Inside
+	}
+	if !o.Inside {
+		return real, true
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	return real, err == nil && within(realRoot, real)
 }
 
 // joinParts is parts' texts as one, apart by a blank line.

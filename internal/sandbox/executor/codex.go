@@ -438,24 +438,32 @@ func codexAborted(paths Paths) string {
 // session is the thread Codex reported, else the one it continued, as
 // collection reads it ([Runner.ReportedSession]); the rollout lines the run
 // appended of the kinds the result reads go to the stream
-// ([codexRolloutEvent]); and the session is packed ([codexCapture]).
+// ([codexRolloutEvent]), each told by the kind its line opens with, as
+// [codexRolloutKinds] matches it; and the session is packed ([codexCapture]).
 func codexFinish(paths Paths) string {
 	var b strings.Builder
 	b.WriteString("finish() {\n")
 	b.WriteString(`[ -z "$tid" ] || sid=$tid` + "\n")
 	fmt.Fprintf(&b, `r=; [ -z "$sid" ] || r=$(find %s -type f -name "rollout-*-$sid.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1)`+"\n",
 		shellword.Quote(paths.CodexSessions()))
-	fmt.Fprintf(&b, `[ -z "$r" ] || tail -n +$((before + 1)) "$r" | grep -E %s | sed 's/^/{"type":"%s","line":/; s/$/}/'`+"\n",
-		shellword.Quote(codexRolloutKinds), codexRolloutEvent)
+	fmt.Fprintf(&b, `[ -z "$r" ] || tail -n +$((before + 1)) "$r" | grep -E '%s' | sed 's/^/{"type":"%s","line":/; s/$/}/'`+"\n",
+		codexRolloutKinds, codexRolloutEvent)
 	b.WriteString(codexCapture(paths))
 	b.WriteString("}\n")
 	return b.String()
 }
 
-// codexRolloutKinds is the rollout lines a run's script appends to its stream
-// ([codexFinish]), the kinds its result reads; codexKept matches the same.
-const codexRolloutKinds = `"type": *"(turn_context|token_usage_record|token_count|turn_aborted)"`
+// codexRolloutKinds matches a rollout line of a kind a run's result reads, as
+// Codex 0.171.0 opens one (its envelope's time, ordinal and type, and an
+// event's own type first in its payload): a turn's context or spend, a token
+// count or an aborted turn. Matched at the line's head, never anywhere in it,
+// so no other line that quotes one in its text reaches the result's
+// whole-line read ([readCodexRollout]): an MCP call's end whose structured
+// content names one runs past its bound beside an image.
+const codexRolloutKinds = `^[{]"timestamp":"[^"]*","ordinal":[0-9][0-9]*,"type":"(turn_context|token_usage_record|` +
+	`event_msg","payload":[{]"type":"(token_count|turn_aborted))"`
 
+// codexKept matches a rollout line the script appends ([codexRolloutKinds]).
 var codexKept = regexp.MustCompile(codexRolloutKinds)
 
 // codexPointer defines the script's `rollout`: the rollout of the thread the

@@ -32,20 +32,20 @@ func (Codex) recordTally(context.Context, sandbox.Sandbox, Paths) (recordTally, 
 // the script appends of it ([codexEvents.keepRollout], [codexRolloutSkipped]).
 type codexRolloutCount struct{ responses, unread int }
 
+// Line counts a response the script would append ([codexKept]).
 func (c *codexRolloutCount) Line(line []byte) {
-	if codexResponseLine(line) {
+	if codexKept.Match(line) && codexResponseLine(line) {
 		c.responses++
 	}
 }
 
 // Skipped judges the line as the script wraps it, and only where the script
-// would append it: its kind shows at one end ([codexRolloutKinds]).
+// would append it: its kind opens it ([codexRolloutKinds]).
 func (c *codexRolloutCount) Skipped(line LongLine) {
-	w := wrapped(line, `{"type":"`+codexRolloutEvent+`","line":`, "}")
-	if !codexKept.Match(w.Head) && !codexKept.Match(w.Tail) {
+	if !codexKept.Match(line.Head) {
 		return
 	}
-	response, undecided := codexRolloutSkipped(w)
+	response, undecided := codexRolloutSkipped(wrapped(line, `{"type":"`+codexRolloutEvent+`","line":`, "}"))
 	if response {
 		c.responses++
 	}

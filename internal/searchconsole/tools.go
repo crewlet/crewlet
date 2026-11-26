@@ -2,6 +2,7 @@ package searchconsole
 
 import (
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/tools/toolschema"
 )
 
 // The curated tools, for the acts agents make most, each with typed
@@ -50,15 +51,6 @@ func stringList(desc string) map[string]any {
 	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": desc}
 }
 
-// object is an object schema.
-func object(props map[string]any, required ...string) map[string]any {
-	out := map[string]any{"type": "object", "properties": props, "additionalProperties": false}
-	if len(required) > 0 {
-		out["required"] = required
-	}
-	return out
-}
-
 // verificationMethods are the ways Site Verification checks a token, by the
 // kind of property: a URL prefix's, then a domain's.
 var verificationMethods = []string{"META", "FILE", "ANALYTICS", "TAG_MANAGER", "DNS_TXT", "DNS_CNAME", "DNS"}
@@ -71,11 +63,11 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolSitesList, Class: growth.ClassRead, Operations: []string{"webmasters.sites.list"},
 			Description: "List the Search Console properties this agent may reach, with its identity's " +
 				"permission on each, and the ones of its sites its identity is not added to yet.",
-			Parameters: object(map[string]any{})},
+			Parameters: toolschema.Object(map[string]any{})},
 		{Name: toolSearchAnalytics, Class: growth.ClassRead, Operations: []string{"webmasters.searchanalytics.query"},
 			Description: "Query a property's Google Search performance: clicks, impressions, CTR and " +
 				"position, grouped by query, page, country, device, date or search appearance, in Pacific time.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"site": siteArg(),
 				"range": stringEnum("A named range instead of dates, cut in Pacific time; last_28_days by default.",
 					rangeNames()...),
@@ -100,29 +92,29 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			}, "site")},
 		{Name: toolSitemapsList, Class: growth.ClassRead, Operations: []string{"webmasters.sitemaps.list"},
 			Description: "List a property's sitemaps with their errors, warnings and submitted counts.",
-			Parameters: object(map[string]any{"site": siteArg(),
+			Parameters: toolschema.Object(map[string]any{"site": siteArg(),
 				"sitemap_index": urlArg("A sitemap index file, to list its children instead.")}, "site")},
 		{Name: toolInspectURL, Class: growth.ClassRead, Operations: []string{"searchconsole.urlInspection.index.inspect"},
 			Description: "Inspect one page as Google has indexed it: verdict, coverage, crawl, canonicals, " +
 				"rich results. It cannot test the live page or request indexing.",
-			Parameters: object(map[string]any{"site": siteArg(),
+			Parameters: toolschema.Object(map[string]any{"site": siteArg(),
 				"url":      urlArg("The page, under the property."),
 				"language": map[string]any{"type": "string", "description": "An IETF language tag for Google's issue text."},
 			}, "site", "url")},
 		{Name: toolVerificationToken, Class: growth.ClassRead, Operations: []string{"siteVerification.webResource.getToken"},
 			Description: "Get the token that proves this agent's Google identity owns a property, and where " +
 				"to place it; then search_console_verify_site.",
-			Parameters: object(map[string]any{"site": siteArg(), "method": method}, "site", "method")},
+			Parameters: toolschema.Object(map[string]any{"site": siteArg(), "method": method}, "site", "method")},
 		{Name: toolSitemapSubmit, Class: growth.ClassOperate, Operations: []string{"webmasters.sitemaps.submit"},
 			Description: "Submit a sitemap to a property, or submit it again so Google fetches it again. " +
 				"Recorded; nobody is asked.",
-			Parameters: object(map[string]any{"site": siteArg(),
+			Parameters: toolschema.Object(map[string]any{"site": siteArg(),
 				"sitemap": urlArg("The sitemap's URL.")}, "site", "sitemap")},
 		{Name: toolIndexNotify, Class: growth.ClassOperate, Operations: []string{"indexing.urlNotifications.publish"},
 			Description: "Tell Google a job posting or livestream page was updated or removed. Google allows it " +
 				"only for pages carrying JobPosting, or BroadcastEvent in VideoObject, structured data, which " +
 				"the engine reads first.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"url": urlArg("The page, under one of this agent's sites."),
 				"type": stringEnum("URL_UPDATED (the default) for a new or changed page; URL_DELETED for one "+
 					"that answers 404 or 410 or carries noindex.", "URL_UPDATED", "URL_DELETED"),
@@ -130,11 +122,11 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolVerifySite, Class: growth.ClassAdmin, Operations: []string{"siteVerification.webResource.insert"},
 			Description: "Ask an administrator to let this agent's Google identity verify ownership of a " +
 				"property, once its token is placed (search_console_verification_token); held until they answer.",
-			Parameters: object(map[string]any{"site": siteArg(), "method": method}, "site", "method")},
+			Parameters: toolschema.Object(map[string]any{"site": siteArg(), "method": method}, "site", "method")},
 		{Name: toolOwnersUpdate, Class: growth.ClassAdmin, Operations: []string{"siteVerification.webResource.update"},
 			Description: "Ask an administrator to add or remove owners of a verified property; held until " +
 				"they answer. Removing one's own ownership is search_console_admin's webResource.delete.",
-			Parameters: object(map[string]any{"site": siteArg(),
+			Parameters: toolschema.Object(map[string]any{"site": siteArg(),
 				"add":    stringList("Emails to make owners."),
 				"remove": stringList("Emails to remove as owners; only owners without their own token."),
 			}, "site")},
@@ -149,7 +141,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		out = append(out, growth.Tool{
 			Name: genericTools()[class], Class: class, Operations: ids,
 			Description: genericDescription(class),
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"operation": map[string]any{"type": "string", "enum": ids,
 					"description": "The method's ID, as docs/integrations/google-search-console.md lists it."},
 				"path": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"},

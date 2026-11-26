@@ -67,12 +67,10 @@ type chatSinks struct {
 	// the harness's own words ("" for none).
 	user *entryShape
 	own  string
-	// summary takes the content's first text a thought is not, and snap its
-	// words as held, for a record its reader may find a compression's summary
-	// (nil for none; [geminiCompressionSet]), a box read's newest summary
-	// among them ([geminiSummaryReading]).
+	// summary takes the content's first text a thought is not, for a record
+	// its reader may find a compression's summary (nil for none;
+	// [geminiCompressionSet]).
 	summary *entryShape
-	snap    *summaryText
 	// words take a content written as one string, as the model's words (each
 	// reading of a Gemini CLI response).
 	words []*entryShape
@@ -95,12 +93,12 @@ func (r *chatReading) parts(k jsonscan.Kind, sk *chatSinks) error {
 	case jsonscan.ArrayStart:
 		return r.elements(func(k jsonscan.Kind) (bool, error) {
 			if k != jsonscan.ObjectStart {
-				return true, r.scan.Skip()
+				return true, r.skip(k)
 			}
 			return true, r.partObject(sk)
 		})
 	}
-	return r.scan.Skip()
+	return r.skip(k)
 }
 
 // partObject reads one part, an object, and shapes what it makes.
@@ -119,7 +117,7 @@ func (r *chatReading) partObject(sk *chatSinks) error {
 		case "functionResponse":
 			return r.response(k, sk)
 		}
-		return r.scan.Skip()
+		return r.skipMember(name, k)
 	})
 	if err != nil {
 		return err
@@ -148,7 +146,7 @@ func (r *chatReading) call(k jsonscan.Kind, sk *chatSinks) error {
 	p := &r.part
 	p.call, p.callArgs, p.callID, p.callTool = k == jsonscan.ObjectStart, false, "", toolName{}
 	if !p.call || sk.model == nil {
-		return r.scan.Skip()
+		return r.skip(k)
 	}
 	return r.members(func(name string, k jsonscan.Kind) error {
 		var err error
@@ -160,12 +158,12 @@ func (r *chatReading) call(k jsonscan.Kind, sk *chatSinks) error {
 		case "args":
 			p.callArgs = true
 			t := r.args.begin(r.b, TranscriptEntry{Kind: EntryToolCall}, sk.model.shapes(r.b, EntryToolCall))
-			r.compactor = jsonCompactor{w: t, buf: r.compactor.buf}
+			r.compactor = jsonCompactor{w: r.asWritten(t), buf: r.compactor.buf}
 			if err = r.scan.Tee(&r.compactor); err == nil {
-				err = r.scan.Skip()
+				err = r.skip(k)
 			}
 		default:
-			err = r.scan.Skip()
+			err = r.skip(k)
 		}
 		return err
 	})
@@ -178,7 +176,7 @@ func (r *chatReading) response(k jsonscan.Kind, sk *chatSinks) error {
 	p := &r.part
 	p.result, p.failed, p.resultID, p.resultAs = k == jsonscan.ObjectStart, false, "", ""
 	if !p.result || sk.user == nil {
-		return r.scan.Skip()
+		return r.skip(k)
 	}
 	s := sk.user
 	p.answer = r.b.held(TranscriptEntry{Kind: EntryToolResult}, "", s.next())
@@ -196,7 +194,7 @@ func (r *chatReading) response(k jsonscan.Kind, sk *chatSinks) error {
 		case "response":
 			p.answer, p.failed, err = r.answer(k, s)
 		default:
-			err = r.scan.Skip()
+			err = r.skip(k)
 		}
 		return err
 	})
@@ -227,7 +225,7 @@ func (r *chatReading) answer(k jsonscan.Kind, s *entryShape) (pendingEntry, bool
 	ordinal, shaped := s.next(), s.shapes(b, EntryToolResult)
 	a := chatAnswer{texts: [3]*valueText{&r.body, &r.output, &r.failure}}
 	r.body.begin(b, e, shaped)
-	r.compactor = jsonCompactor{w: a.writer(0), buf: r.compactor.buf}
+	r.compactor = jsonCompactor{w: r.asWritten(a.writer(0)), buf: r.compactor.buf}
 	if err := r.scan.Tee(&r.compactor); err != nil {
 		return pendingEntry{}, false, err
 	}
@@ -243,7 +241,7 @@ func (r *chatReading) answer(k jsonscan.Kind, s *entryShape) (pendingEntry, bool
 			case "error":
 				rank, kind = 2, &failure
 			default:
-				return r.scan.Skip()
+				return r.skip(k)
 			}
 			switch k {
 			case jsonscan.String:
@@ -257,7 +255,7 @@ func (r *chatReading) answer(k jsonscan.Kind, s *entryShape) (pendingEntry, bool
 			}
 			*kind = chatOther
 			if kind != &failure {
-				return r.scan.Skip()
+				return r.skip(k)
 			}
 			raw, whole, captureErr := r.scan.Capture(b.valueMax)
 			r.failedRaw = append(r.failedRaw[:0], raw...)
@@ -267,7 +265,7 @@ func (r *chatReading) answer(k jsonscan.Kind, s *entryShape) (pendingEntry, bool
 			return captureErr
 		})
 	} else {
-		err = r.scan.Skip()
+		err = r.skip(k)
 	}
 	defer func() { r.output.drop(); r.failure.drop(); r.body.drop() }()
 	if err != nil {
@@ -381,13 +379,10 @@ func (r *chatReading) partEnd(sk *chatSinks, str bool) {
 			s.add(b, r.textAs(s, EntryBrief), time.Time{})
 		}
 	}
-	if (sk.summary != nil || sk.snap != nil) && p.text && !p.thought && !r.firstSeen {
+	if s := sk.summary; s != nil && p.text && !p.thought && !r.firstSeen {
 		r.firstSeen = true
-		if s := sk.summary; s != nil && !r.text.blank {
+		if !r.text.blank {
 			s.add(b, r.textAs(s, EntrySummary), time.Time{})
-		}
-		if sk.snap != nil {
-			sk.snap.heldFrom(&r.text)
 		}
 	}
 	for _, s := range sk.words {

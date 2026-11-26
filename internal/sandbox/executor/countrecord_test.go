@@ -38,7 +38,7 @@ type recordFixture struct {
 const fixtureSession = "0b5e0000-0000-4000-8000-000000000001"
 
 func codexTokenCount(i int) string {
-	return fmt.Sprintf(`{"timestamp":"t","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":%d,"output_tokens":1,"total_tokens":3}}}}`, i)
+	return fmt.Sprintf(`{"timestamp":"t","ordinal":%[1]d,"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":%[1]d,"output_tokens":1,"total_tokens":3}}}}`, i)
 }
 
 func copilotUsage(i int) string {
@@ -72,7 +72,7 @@ var recordFixtures = map[string]recordFixture{
 		pointed: true, depth: 3,
 		earlier: []string{codexTokenCount(91), codexTokenCount(92)},
 		request: func(i int) []string {
-			return []string{`{"timestamp":"t","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{}"}}`,
+			return []string{fmt.Sprintf(`{"timestamp":"t","ordinal":%d,"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{}"}}`, 1000+i),
 				codexTokenCount(i)}
 		},
 		stream: func(own []string) string {
