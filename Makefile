@@ -1337,7 +1337,7 @@ image-context: ## stage the engine image's build context, stamped VERSION (ci: m
 	    -o $(IMAGE_CONTEXT)/$$platform/crewlet ./cmd/crewlet || exit 1; \
 	done
 	$(GO) run ./scripts/notices -out $(IMAGE_CONTEXT)/build/notices/THIRD_PARTY_NOTICES.txt \
-	  -main ./cmd/crewlet -targets $$(echo $(IMAGE_PLATFORMS) | tr ' ' ',')
+	  -main ./cmd/crewlet,./internal/notehelper -targets $$(echo $(IMAGE_PLATFORMS) | tr ' ' ',')
 	$(GO) run ./scripts/notehelper -out $(IMAGE_CONTEXT)/build/notehelper
 	mkdir -p $(IMAGE_CONTEXT)/static/dashboard $(IMAGE_CONTEXT)/scripts
 	cp LICENSE NOTICE $(IMAGE_CONTEXT)/
