@@ -110,9 +110,13 @@ func cursorNestedAnswer(f flags, stdin io.Reader, stderr io.Writer, claimBy time
 	c.claimBy = claimBy
 	listings := room / 4
 	firing := room - listings
-	if c.FiringLimit == nil || *c.FiringLimit > firing {
-		c.FiringLimit = &firing
+	if c.FiringLimit != nil && *c.FiringLimit < firing {
+		firing = *c.FiringLimit
 	}
+	// ITS NAMES ARE THE LISTINGS' SHARE: a checkout whose left-out files that
+	// share cannot name waits for a call with room, or cursor-left names it.
+	c.firing = &firingBound{left: firing, count: byteCount, unitBytes: 1,
+		names: newListingBudgetWithin(listings).namesWithin(), namesCap: listings >= maxListing}
 	handed, skipped, err := handNested(c, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: handing a checkout: %v\n", err)
@@ -185,23 +189,18 @@ func cursorAppended(output, text string) ([]byte, bool) {
 // checkouts present then ([checkoutSection], the rule the runner writes them
 // in), each one's skills listed ([skillsListing]), since Cursor lists no skill
 // added after it starts (measured), then what the firing left out
-// ([skippedListing]), the listings within listings bytes. "" where it hands
-// nothing.
+// ([skippedListing]), the listings within listings bytes, the left out taken
+// first ([listingBudget.listings]). "" where it hands nothing.
 func cursorNestedText(handed []handedCheckout, skipped []string, listings int) string {
 	var blocks []string
-	budget := newListingBudgetWithin(listings)
-	for _, h := range handed {
+	skills, left := newListingBudgetWithin(listings).listings(handed, skipped)
+	for i, h := range handed {
 		if h.text != "" {
 			blocks = append(blocks, checkoutSection(h))
 		}
-		if listing := budget.take(skillsListing(h)); listing != "" {
-			blocks = append(blocks, listing)
-		}
+		blocks = appendNonEmpty(blocks, skills[i])
 	}
-	if listing := budget.take(skippedListing(skipped)); listing != "" {
-		blocks = append(blocks, listing)
-	}
-	return strings.Join(blocks, "\n\n")
+	return strings.Join(appendNonEmpty(blocks, left), "\n\n")
 }
 
 // cursorLeftSaid marks, in the run's checkout state, that cursor-left has said

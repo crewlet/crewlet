@@ -390,3 +390,80 @@ func TestACursorLeftPassThatFailsIsTriedAgain(t *testing.T) {
 		t.Errorf("after a failed pass, the next one did not name ./quiet: %q", raw)
 	}
 }
+
+// A CURSOR ANSWER KEEPS WHAT IT LEFT OUT BEFORE ITS SKILLS: where the skills'
+// listing and the left-out lines pass the listings' share of the room, the
+// left-out lines come whole, last, and the skills' listing before them is
+// cut, its cut line naming that share.
+//
+// Mutation: take the skills first, and this goes red.
+func TestACursorAnswerKeepsWhatItLeftOutBeforeItsSkills(t *testing.T) {
+	t.Parallel()
+	h := handedCheckout{name: "late", root: "/w/late"}
+	for i := range 100 {
+		h.skills = append(h.skills, handedSkill{name: fmt.Sprintf("late:s%d", i), description: strings.Repeat("d", 100),
+			path: fmt.Sprintf("/h/skills/late:s%d/SKILL.md", i)})
+	}
+	skipped := []string{"the skill /w/late/.cursor/skills/x is left out: its name is taken"}
+	got := cursorNestedText([]handedCheckout{h}, skipped, 4000)
+	skills, ok := strings.CutSuffix(got, "\n\n"+skippedListing(skipped))
+	if !ok || !strings.HasSuffix(skills, "\n"+newListingBudgetWithin(4000).cutLine) || len(got) > 4000 {
+		t.Errorf("the answer (%d bytes) is not the skills cut, then what was left out whole: ...%s", len(got),
+			got[max(len(got)-300, 0):])
+	}
+}
+
+// A CURSOR FIRING CLAIMS ONLY THE CHECKOUTS ITS LISTINGS CAN NAME: at an MCP
+// call whose result leaves the least room a firing hands in, each claimed
+// clone's file, too big to hand, is named in the appended item, and those
+// whose lines no longer fit the listings' share wait, unclaimed, for a call
+// with more room, which hands them.
+//
+// Mutation: charge the names to the 64 KiB listing bound instead of the
+// listings' share, and this goes red.
+func TestACursorFiringClaimsOnlyTheCheckoutsItsListingsCanName(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.cursorLaunch(t)
+	files := map[string]string{}
+	for i := range 30 {
+		files[fmt.Sprintf("c%02d/.git/", i)] = ""
+		files[fmt.Sprintf("c%02d/AGENTS.md", i)] = strings.Repeat("A", 10_000) + "\n"
+	}
+	r.add(t, files)
+	work := r.workdir(t)
+	fire := func(size int) string {
+		t.Helper()
+		result := `{"content":[{"type":"text","text":"` + strings.Repeat("o", size) + `"}]}`
+		answer, _ := r.cursorFire(t, cursorInput("MCP:t_tool", result, ""))
+		if answer == "{}" {
+			return ""
+		}
+		_, items := cursorUpdated(t, answer)
+		var part struct{ Text string }
+		if err := json.Unmarshal(items[len(items)-1], &part); err != nil {
+			t.Fatal(err)
+		}
+		return part.Text
+	}
+	tight := cursorResultInline - 1 - len(`{"content":[{"type":"text","text":""}]}`) - cursorRoomFloor
+	handed := map[string]bool{}
+	for firing, size := range []int{tight, 0, 0, 0, 0, 0} {
+		got := fire(size)
+		for _, name := range strings.Split(strings.TrimSpace(read(t, filepath.Join(r.state, "handed"))), "\n") {
+			if handed[name] {
+				continue
+			}
+			handed[name] = true
+			if !strings.Contains(got, piLeftOut(filepath.Join(work, name, "AGENTS.md"))) {
+				t.Errorf("firing %d claimed %s but does not name its file", firing, name)
+			}
+		}
+		if firing == 0 && (len(handed) == 0 || len(handed) == 30) {
+			t.Fatalf("the tight firing claimed %d of 30; want some named and some waiting", len(handed))
+		}
+	}
+	if len(handed) != 30 {
+		t.Errorf("later firings handed %d of 30 clones", len(handed))
+	}
+}
