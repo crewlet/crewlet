@@ -151,12 +151,17 @@ type qwenCompaction struct {
 	mark                              int
 	isText, isThought, partPast, word bool
 	trim                              textTrim
+	// claim is the box read's claim the held texts count toward
+	// ([summaryClaim]), nil for none, and counted what they count in it.
+	claim   *summaryClaim
+	counted int
 }
 
 // reset starts a payload read at the value bound max.
 func (c *qwenCompaction) reset(max int) {
+	c.claim.track(&c.counted, 0)
 	*c = qwenCompaction{max: max, held: lineScratch(c.held), ends: lineScratch(c.ends), entry: lineScratch(c.entry),
-		over: -1, trim: textTrim{run: c.trim.run}}
+		over: -1, trim: textTrim{run: c.trim.run, claim: c.claim}, claim: c.claim}
 }
 
 // lineStart starts a line, whose payload is none until one is read; a nil
@@ -271,7 +276,14 @@ func (c *qwenCompaction) entryEnd() {
 	case c.entryPast:
 		c.over = e
 	default:
-		c.held = append(c.held, c.entry...)
+		// The first texts held are the entry's own buffer, never a copy of it:
+		// a summary is a prefix's first user entry.
+		if len(c.held) == 0 {
+			c.held, c.entry = c.entry, c.held[:0]
+		} else {
+			c.held = append(c.held, c.entry...)
+		}
+		c.claim.track(&c.counted, len(c.held)+len(c.entry))
 		c.ends = binary.AppendUvarint(c.ends, uint64(e-c.lastEntry))
 		c.ends = binary.AppendUvarint(c.ends, uint64(len(c.held)-c.lastEnd))
 		c.lastEntry, c.lastEnd = e, len(c.held)
@@ -388,12 +400,12 @@ func (c *qwenCompaction) textRead(w *lineWalk, raw io.Writer) error {
 // Write holds p, the part's text's next bytes, while the join stays within
 // the bound; past it the part is past.
 func (c *qwenCompaction) Write(p []byte) (int, error) {
-	switch {
+	switch n := len(c.held) + len(c.entry) + len(p); {
 	case c.over >= 0, c.partPast:
-	case len(c.held)+len(c.entry)+len(p) > c.max:
+	case n > c.max, !c.claim.track(&c.counted, n):
 		c.partPast = true
 	default:
-		c.entry = append(c.entry, p...)
+		c.entry = append(c.claim.grown(c.entry, len(c.entry)+len(p)), p...)
 	}
 	return len(p), nil
 }
@@ -441,7 +453,8 @@ func (c *qwenCompaction) summary() (words, unread string) {
 // words is the record's summary, the texts of the entries before the prefix,
 // "" for none; shaped false for a payload of no shape, and past where the
 // summary runs past the bound. The transcript ([qwenCompaction.summary]) and
-// a box read's newest summary ([qwenSummaryCapture]) both take it.
+// a box read's newest summary ([qwenSummaryCapture]) both take it, handed
+// over without a copy ([handOver]): the next payload holds texts anew.
 func (c *qwenCompaction) words() (words string, shaped, past bool) {
 	if !c.object || c.refused {
 		return "", false, false
@@ -455,7 +468,10 @@ func (c *qwenCompaction) words() (words string, shaped, past bool) {
 	case c.over >= 0 && prefix > c.over:
 		return "", true, true
 	case end > 0:
-		return string(c.held[:end]), true, false
+		words = handOver(c.held[:end])
+		c.held = nil
+		c.claim.track(&c.counted, len(c.entry))
+		return words, true, false
 	}
 	return "", true, false
 }

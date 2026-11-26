@@ -271,6 +271,9 @@ func countExport(ctx context.Context, r io.Reader, count *openCodeCountReading, 
 		return 0, err
 	}
 	m := &exportMeter{count: count, summary: summary}
+	if summary != nil {
+		m.words.claim = summary.claim
+	}
 	if err = scanExport(ctx, zr, m); err != nil {
 		return 0, err
 	}
@@ -574,12 +577,14 @@ func (OpenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths P
 	if ask.Count && !openCodeCountRead(ask.Release) {
 		reading.Count = &sandbox.ResumedCount{Mark: sandbox.CountRelease}
 	}
+	var large passBudget
+	defer large.release()
 	var summary *summaryRead
 	if ask.Summary {
 		if why := summaryReleaseWhy(ask.Release, openCodeRelease); why != "" {
 			reading.Summary = summaryUnread(why)
 		} else {
-			summary = &summaryRead{}
+			summary = &summaryRead{claim: newSummaryClaim(ctx, &large)}
 		}
 	}
 	if !counts && summary == nil {

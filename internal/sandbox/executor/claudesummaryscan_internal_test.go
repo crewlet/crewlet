@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -249,17 +250,19 @@ const (
 
 // A CLAUDE CODE SUMMARY ADDS ONLY ITS WORDS TO THE WALK: a box read asking
 // the newest summary beside the count allocates at most what the read asking
-// the count alone does, the summary's words
-// [claudeSummaryWordsAllocates] times over, and [claudeSummaryStateAllocates]:
-// the walk reads them, and no second reader reads their line again.
-//
-// Not parallel: it reads the process's allocation count, the fewest bytes of
-// three reads ([allocationsOf]).
+// the count alone does, the summary's words [claudeSummaryWordsAllocates]
+// times over, and [claudeSummaryStateAllocates]: no second reader reads their
+// line again. Not parallel: it reads the process's allocation count, the
+// fewest of five rounds of [allocationsOf] taken in turn, as the walk's json
+// v2 decoder pools, which under -race let a quarter of what is put back go,
+// swing a round's fewest of three by tens of kilobytes.
 //
 // Mutation: read the summary's line again with a reader of its own: this goes
 // red.
 func TestAClaudeSummaryAddsOnlyItsWordsToTheWalk(t *testing.T) {
-	words := "the work so far: " + strings.Repeat("a step taken, a file read, a test run. ", 210)
+	// Just within [summaryGrowAt], so the words grow as append grows them,
+	// and enough of them that the pools' swing is under their allowance.
+	words := "the work so far: " + strings.Repeat("a step taken, a file read, a test run. ", 405)
 	b := claudeSummaryBox(t, func(lines [][]byte) [][]byte {
 		i, line := lineWith(t, lines, `"isCompactSummary":true`)
 		lines[i] = edited(t, line, func(m map[string]any) { m["message"].(map[string]any)["content"] = words })
@@ -273,8 +276,14 @@ func TestAClaudeSummaryAddsOnlyItsWordsToTheWalk(t *testing.T) {
 		})
 		return reading, allocated
 	}
-	_, alone := read(false)
-	summarized, both := read(true)
+	var summarized sandbox.MainThreadReading
+	alone, both := uint64(math.MaxUint64), uint64(math.MaxUint64)
+	for range 5 {
+		_, n := read(false)
+		alone = min(alone, n)
+		summarized, n = read(true)
+		both = min(both, n)
+	}
 	if summarized.Summary.Text != words {
 		t.Fatalf("the read reads the summary %.40q (%s), want its words", summarized.Summary.Text,
 			summarized.Summary.Unread)

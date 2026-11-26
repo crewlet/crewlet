@@ -37,6 +37,10 @@ type claudeSummaryReading struct {
 // ask keeps the walk's reader, which reads a summary's words while armed.
 func (r *claudeSummaryReading) ask(reader *threadReader) { r.reader = reader }
 
+// claim makes the words the read holds count toward c, past
+// [summaryBaseBytes] taking the read's large slot ([summaryClaim]).
+func (r *claudeSummaryReading) claim(c *summaryClaim) { r.text.claim, r.read.claim = c, c }
+
 // arm makes the walk read each record's content as a summary's words, or no more.
 func (r *claudeSummaryReading) arm(on bool) {
 	r.armed = on
@@ -71,12 +75,13 @@ func (r *claudeSummaryReading) found(size int64) {
 	r.noText = false
 	r.read.unsaid = ""
 	switch {
+	case r.read.waitFailed(r.text.claim):
 	case size > claudeSummaryLineMaxBytes, r.text.past:
 		r.read.unshaped(errSummaryPast.Error())
 	case !r.text.set:
 		r.noText = true
 	default:
-		r.read.take(string(r.text.buf))
+		r.read.take(r.text.words())
 	}
 }
 
