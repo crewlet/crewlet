@@ -366,8 +366,9 @@ const (
 	// before it finished: Claude Code's `error_max_turns`.
 	ExecutorErrorMaxTurns = "max_turns"
 	// ExecutorErrorTurnCapExceeded is a run whose stream shows more model
-	// requests than the round cap its launch handed it: what held the cap in
-	// its box did not, and the run fails whatever it reported.
+	// requests than the round cap its launch handed it, or that its launching
+	// node ended at that cap as its stream showed it past while it worked: what
+	// held the cap in its box did not, and the run fails whatever it reported.
 	ExecutorErrorTurnCapExceeded = "turn_cap_exceeded"
 )
 

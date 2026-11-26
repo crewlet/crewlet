@@ -54,8 +54,8 @@ func (r PendingRun) capturesMayLand(now time.Time) bool {
 // completion as announced, whatever its status says: a FINAL capture of this
 // launch as its newest or kept capture (nothing of a job is taken once a take
 // found it ended, [Coordinator.takeCapture]), how its harness ended
-// ([LaunchRecord.HarnessEnd]), its turn's cap seen ending it
-// ([LaunchRecord.EndedAtDeadline]), its box read back
+// ([LaunchRecord.HarnessEnd]), its turn's wall-clock cap or its turn cap seen
+// ending it ([LaunchRecord.EndedAtDeadline], [LaunchRecord.EndedAtTurnCap]), its box read back
 // ([LaunchRecord.Collected]), a collection whose read failed
 // ([LaunchRecord.CollectFailures]), a refused delivery of its completion owed
 // its re-fire ([LaunchRecord.RefusalOwed]), or its loss ([PendingRun.Lost]).
@@ -68,7 +68,7 @@ func (r PendingRun) jobOver() bool {
 	}
 	job := r.Launch
 	return finalOfThisLaunch(r.Capture) || finalOfThisLaunch(r.Kept) || job.HarnessEnd != "" ||
-		job.EndedAtDeadline || job.Collected || job.CollectFailures > 0 || job.RefusalOwed != "" || r.Lost != nil
+		job.EndedAtDeadline || job.EndedAtTurnCap || job.Collected || job.CollectFailures > 0 || job.RefusalOwed != "" || r.Lost != nil
 }
 
 // licensesSave is why run's row refuses save's reservation as of now, empty

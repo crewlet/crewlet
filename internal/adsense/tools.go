@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/tools/toolschema"
 )
 
 // The curated tools, for the acts agents make most, each with typed
@@ -89,15 +90,6 @@ func list(items map[string]any, desc string) map[string]any {
 	return map[string]any{"type": "array", "items": items, "description": desc}
 }
 
-// object is an object schema.
-func object(props map[string]any, required ...string) map[string]any {
-	out := map[string]any{"type": "object", "properties": props, "additionalProperties": false}
-	if len(required) > 0 {
-		out["required"] = required
-	}
-	return out
-}
-
 // pagingArgs adds a listing's paging arguments.
 func pagingArgs(props map[string]any) map[string]any {
 	props["page_size"] = map[string]any{"type": "integer", "minimum": 1, "maximum": maxPageSize,
@@ -138,7 +130,7 @@ func listingTool(name, id, desc string, paged bool, props map[string]any, requir
 		props = pagingArgs(props)
 	}
 	return growth.Tool{Name: name, Class: growth.ClassRead, Operations: []string{id}, Description: desc,
-		Parameters: object(props, append([]string{"account"}, required...)...)}
+		Parameters: toolschema.Object(props, append([]string{"account"}, required...)...)}
 }
 
 // toolDefs are every tool, each in one class.
@@ -147,7 +139,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolAccounts, Class: growth.ClassRead, Operations: []string{accountGetOp},
 			Description: "List this agent's AdSense publisher accounts with each one's name, state (READY, " +
 				"NEEDS_ATTENTION, CLOSED), time zone and sign-up tasks left, and any the company's sign-in cannot reach.",
-			Parameters: object(map[string]any{})},
+			Parameters: toolschema.Object(map[string]any{})},
 		listingTool(toolAdClients, "adsense.accounts.adclients.list", "List an account's ad clients: product "+
 			"(AFC for content, AFS for search) and state.", true, map[string]any{}),
 		listingTool(toolAdUnits, "adsense.accounts.adclients.adunits.list", "List an ad client's ad units: "+
@@ -170,13 +162,13 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			Operations: []string{"adsense.accounts.adclients.getAdcode", "adsense.accounts.adclients.adunits.getAdcode"},
 			Description: "Read the code a page carries: an ad client's Auto ads code, or one ad unit's. The " +
 				"answer is code to place, never to run.",
-			Parameters: object(map[string]any{"account": accountArg(), "ad_client": clientArg(),
+			Parameters: toolschema.Object(map[string]any{"account": accountArg(), "ad_client": clientArg(),
 				"ad_unit": str("The ad unit's ID, the part after adunits/ in its name; absent reads the ad client's.")},
 				"account", "ad_client")},
 		{Name: toolReport, Class: growth.ClassRead, Operations: []string{reportOp},
 			Description: "Run an AdSense report: earnings, page views, impressions, clicks and rates by your " +
 				"dimensions. Figures after yesterday are estimates Google may restate.",
-			Parameters: object(rangeArgs(map[string]any{
+			Parameters: toolschema.Object(rangeArgs(map[string]any{
 				"account":    accountArg(),
 				"dimensions": list(str("", reportDimensions...), "Dimensions to split by."),
 				"metrics":    list(str("", reportMetrics...), "Metrics to return; at least one."),
@@ -189,7 +181,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolSavedReport, Class: growth.ClassRead, Operations: []string{savedListOp, savedReportOp},
 			Description: "List an account's saved reports, or run one by its ID over your dates: its dimensions " +
 				"and metrics are the ones saved in AdSense.",
-			Parameters: object(pagingArgs(rangeArgs(map[string]any{
+			Parameters: toolschema.Object(pagingArgs(rangeArgs(map[string]any{
 				"account": accountArg(),
 				"report":  str("The saved report's ID, the part after reports/ in its name; absent lists them."),
 			})), "account")},
@@ -198,7 +190,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			Description: "Create a display ad unit, or rename, archive or reactivate one. Nothing serves until " +
 				"a page carries its code; a live unit's size or type is the ad every visitor sees, so it is asked " +
 				"through adsense_publish. AdSense for Platforms projects only, until Google enables others.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"account":      accountArg(),
 				"ad_client":    clientArg(),
 				"ad_unit":      str("The ad unit to change; absent creates one."),
@@ -211,7 +203,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 				"adsense.accounts.adclients.customchannels.patch"},
 			Description: "Create a custom channel, or rename one or turn its data collection on or off. A " +
 				"channel only labels reports. AdSense for Platforms projects only, until Google enables others.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"account":        accountArg(),
 				"ad_client":      clientArg(),
 				"custom_channel": str("The channel to change; absent creates one."),
@@ -229,7 +221,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		}
 		out = append(out, growth.Tool{
 			Name: genericTools()[class], Class: class, Operations: ids, Description: genericDescription(class),
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"operation": map[string]any{"type": "string", "enum": ids,
 					"description": "The method's ID, as docs/integrations/adsense.md lists it."},
 				"path": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"},
