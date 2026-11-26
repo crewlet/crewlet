@@ -384,11 +384,11 @@ type session struct {
 	rolesRead      bool
 }
 
-// mintGroup is the group tokens are minted through, or zero on the instance
-// route: an account the group owns is minted on through the group, which is
-// what a group Owner may call, and an instance account through the
-// administrator's route.
-func (s *session) mintGroup() int {
+// ownerGroup is the group that owns the seats' accounts, or zero where the
+// instance does: an account the group owns is listed and minted on through
+// the group, which is what a group Owner may call, and an instance account
+// through the administrator's routes.
+func (s *session) ownerGroup() int {
 	if s.mode.Or() == ModeInstance {
 		return 0
 	}
@@ -510,28 +510,52 @@ func (s *session) membersURL() string {
 // the next pass resolves by creating it.
 var errNoAccount = errors.New("gitlab: the seat has no account yet")
 
-// account finds the seat's account: by the ledger's id where it has one, by
-// the username this engine derives otherwise (an account created before the
-// ledger, or by a step earlier in this sync).
+// account finds the seat's account: by the ledger's id where it has one,
+// otherwise among the owner's own service accounts ([session.owned]).
 func (s *session) account(ctx context.Context, handle string, rec *seataccess.Record) (User, bool, error) {
 	if rec != nil && rec.Held() {
 		if id, err := strconv.Atoi(rec.Account.ID); err == nil {
 			return s.client.UserByID(ctx, id)
 		}
 	}
-	user, found, err := s.named(ctx, handle)
-	if err != nil || !found || !user.Bot {
-		// ONLY A MACHINE ACCOUNT IS THE SEAT'S: a person who happens to
-		// hold the derived username is never read as this engine's account,
-		// and the create step says so instead.
-		return User{}, false, err
-	}
-	return user, true, nil
+	return s.owned(ctx, handle)
 }
 
-// named reads the account holding the seat's derived username in full: the
-// listing finds it, and the single-user read is the one that says whether it
-// is a machine account ([User.Bot]).
+// owned finds the account holding the seat's derived username among the
+// service accounts the company's GitLab owns: provisioning.group's in group
+// mode, the instance's in instance mode (an account made before the ledger,
+// or by a step earlier in this sync).
+//
+// NEVER BY THE USERNAME ALONE: usernames are instance-wide (on GitLab.com,
+// shared by every customer), so the holder may be a person or another
+// group's service account, and every later step would grant, mint and revoke
+// on an account the company does not own. The create step refuses those.
+func (s *session) owned(ctx context.Context, handle string) (User, bool, error) {
+	username := Username(s.cfg.Provisioning, handle)
+	accounts, err := s.client.ServiceAccounts(ctx, s.ownerGroup())
+	if err != nil {
+		return User{}, false, s.ownerRefusal(err)
+	}
+	for _, a := range accounts {
+		if a.Username == username {
+			// The single-user read carries the state the listing omits.
+			return s.client.UserByID(ctx, a.ID)
+		}
+	}
+	return User{}, false, nil
+}
+
+// ownerName is who owns the seats' accounts, in a refusal's words.
+func (s *session) ownerName() string {
+	if s.mode.Or() == ModeInstance {
+		return "this GitLab instance"
+	}
+	return "the group " + s.group.FullPath
+}
+
+// named reads whichever account holds the seat's derived username, in full:
+// the listing finds it, and the single-user read is the one that says
+// whether it is a machine account ([User.Bot]).
 func (s *session) named(ctx context.Context, handle string) (User, bool, error) {
 	listed, found, err := s.client.UserByUsername(ctx, Username(s.cfg.Provisioning, handle))
 	if err != nil || !found {
@@ -568,27 +592,22 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 	return drawn[in.Step.Index].apply(s, ctx, in)
 }
 
-// create makes the seat's service account, or adopts the one this engine's
-// naming finds already there.
+// create makes the seat's service account, or adopts the one the owner
+// already holds under this engine's naming ([session.owned]).
 func (s *session) create(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	username := Username(s.cfg.Provisioning, in.Seat.Handle)
-	user, found, err := s.named(ctx, in.Seat.Handle)
+	user, found, err := s.owned(ctx, in.Seat.Handle)
 	if err != nil {
 		return seataccess.StepResult{}, refuse(s, err)
 	}
-	if found && !user.Bot {
-		// ADOPTED ONLY WHERE IT IS A MACHINE ACCOUNT. A person holding the
-		// username would otherwise be given this agent's memberships and
-		// token, and be blocked when the agent is turned off.
-		return seataccess.StepResult{}, &seataccess.Refusal{
-			Said: "the username " + username + " belongs to a GitLab account that is " +
-				"not a service account, so it is not this agent's",
-			Remedy: "Set integrations.gitlab.provisioning.username_prefix to a prefix no " +
-				"person's username starts with, or rename that account at GitLab.",
-			Actor: seataccess.ByYou, ActionURL: s.membersURL(),
-		}
-	}
 	if !found {
+		holder, taken, lookupErr := s.named(ctx, in.Seat.Handle)
+		if lookupErr != nil {
+			return seataccess.StepResult{}, refuse(s, lookupErr)
+		}
+		if taken {
+			return seataccess.StepResult{}, s.heldElsewhere(username, holder)
+		}
 		if s.mode.Or() == ModeInstance {
 			user, err = s.client.CreateInstanceServiceAccount(ctx, in.Seat.Label(), username)
 		} else {
@@ -601,19 +620,43 @@ func (s *session) create(ctx context.Context, in seataccess.ApplyInput) (seatacc
 				// reports a retry and nobody is sent to act.
 				return seataccess.StepResult{}, fmt.Errorf("%w: %w", ErrNameReserved, err)
 			}
-			refused := refuse(s, err)
-			var refusal *seataccess.Refusal
-			if errors.As(refused, &refusal) {
-				if remedy := createRemedy(s.mode, Status(err)); remedy != "" {
-					refusal.Remedy = remedy
-				}
-			}
-			return seataccess.StepResult{}, refused
+			return seataccess.StepResult{}, s.ownerRefusal(err)
 		}
 	}
 	return seataccess.StepResult{
 		AccountID: strconv.Itoa(user.ID), Account: user.Username,
 	}, nil
+}
+
+// heldElsewhere refuses a derived username some other account holds: a
+// person, or a service account the owner does not hold. Adopting either
+// would hand it this agent's memberships and token, and block it when the
+// agent is turned off.
+func (s *session) heldElsewhere(username string, holder User) error {
+	what := "a GitLab account that is not a service account"
+	if holder.Bot {
+		what = "a service account that " + s.ownerName() + " does not own"
+	}
+	return &seataccess.Refusal{
+		Said: "the username " + username + " belongs to " + what + ", so it is not this agent's",
+		Remedy: "Set integrations.gitlab.provisioning.username_prefix to a prefix no other " +
+			"GitLab account's username starts with, or have that account renamed at GitLab.",
+		Actor: seataccess.ByYou, ActionURL: s.membersURL(),
+	}
+}
+
+// ownerRefusal is [refuse] for a call on the owner's service accounts, with
+// the remedy naming the credential the mode needs where GitLab's status says
+// that is what is missing ([ownerRemedy]).
+func (s *session) ownerRefusal(err error) error {
+	refused := refuse(s, err)
+	var refusal *seataccess.Refusal
+	if errors.As(refused, &refusal) {
+		if remedy := ownerRemedy(s.mode, Status(err)); remedy != "" {
+			refusal.Remedy = remedy
+		}
+	}
+	return refused
 }
 
 // enable turns an account back on: unblocks one that is blocked (the plan
@@ -727,7 +770,7 @@ func (s *session) mint(ctx context.Context, in seataccess.ApplyInput) (seatacces
 	}
 	scopes := ScopesFor(want.Level)
 	if in.Step.Op == seataccess.OpLevel {
-		tokens, listErr := s.client.Tokens(ctx, s.mintGroup(), user.ID)
+		tokens, listErr := s.client.Tokens(ctx, s.ownerGroup(), user.ID)
 		if listErr != nil {
 			return seataccess.StepResult{}, refuse(s, listErr)
 		}
@@ -736,7 +779,7 @@ func (s *session) mint(ctx context.Context, in seataccess.ApplyInput) (seatacces
 				words.And(scopes) + ", the scopes its new role allows"}, nil
 		}
 	}
-	group := s.mintGroup()
+	group := s.ownerGroup()
 	token, err := s.client.CreateToken(ctx, group, user.ID, TokenName(in.Seat.Handle), scopes, noExpiry)
 	if err != nil {
 		return seataccess.StepResult{}, refuse(s, err)
@@ -803,7 +846,7 @@ func (s *session) retire(ctx context.Context, in seataccess.ApplyInput) (seatacc
 	if err != nil {
 		return seataccess.StepResult{}, err
 	}
-	tokens, err := s.client.Tokens(ctx, s.mintGroup(), user.ID)
+	tokens, err := s.client.Tokens(ctx, s.ownerGroup(), user.ID)
 	if err != nil {
 		return seataccess.StepResult{}, refuse(s, err)
 	}
@@ -819,7 +862,7 @@ func (s *session) retire(ctx context.Context, in seataccess.ApplyInput) (seatacc
 		if t.ID == keep.ID || !ownLive(t, in.Seat.Handle) {
 			continue
 		}
-		if err := s.client.RevokeToken(ctx, s.mintGroup(), user.ID, t.ID); err != nil {
+		if err := s.client.RevokeToken(ctx, s.ownerGroup(), user.ID, t.ID); err != nil {
 			return seataccess.StepResult{}, refuse(s, err)
 		}
 		revoked++
@@ -881,7 +924,7 @@ func (s *session) revokeAll(ctx context.Context, in seataccess.ApplyInput) (seat
 	}
 	revoked := 0
 	if found {
-		tokens, err := s.client.Tokens(ctx, s.mintGroup(), user.ID)
+		tokens, err := s.client.Tokens(ctx, s.ownerGroup(), user.ID)
 		if err != nil {
 			return seataccess.StepResult{}, refuse(s, err)
 		}
@@ -889,7 +932,7 @@ func (s *session) revokeAll(ctx context.Context, in seataccess.ApplyInput) (seat
 			if !ownLive(t, in.Seat.Handle) {
 				continue
 			}
-			if err := s.client.RevokeToken(ctx, s.mintGroup(), user.ID, t.ID); err != nil {
+			if err := s.client.RevokeToken(ctx, s.ownerGroup(), user.ID, t.ID); err != nil {
 				return seataccess.StepResult{}, refuse(s, err)
 			}
 			revoked++
@@ -993,24 +1036,25 @@ func nameReserved(err error) bool {
 		strings.Contains(api.Detail, "already been taken")
 }
 
-// createRemedy is the sentence that names the credential a service-account
-// create needs, which differs by where the account is owned.
+// ownerRemedy is the sentence that names the credential a call on the
+// owner's service accounts (listing, creating) needs, which differs by where
+// the accounts are owned.
 //
-// A 403 IS UNREADABLE ON ITS OWN here: group creation is satisfied by a group
-// Owner and instance creation is not, so the same status means two different
-// remedies. A 404 on the instance route means the same thing a third way:
-// GitLab.com does not serve it at all. Empty where the status says nothing
-// mode-specific.
-func createRemedy(mode Mode, status int) string {
+// A 403 IS UNREADABLE ON ITS OWN here: the group's routes are satisfied by a
+// group Owner and the instance's are not, so the same status means two
+// different remedies. A 404 on the instance routes means the same thing a
+// third way: GitLab.com does not serve them at all. Empty where the status
+// says nothing mode-specific.
+func ownerRemedy(mode Mode, status int) string {
 	forbidden := status == http.StatusForbidden || status == http.StatusUnauthorized
 	switch {
 	case mode.Or() != ModeInstance && forbidden:
-		return "Creating a group service account needs a token whose owner is an " +
-			"Owner of provisioning.group (or an instance administrator)."
+		return "Listing and creating group service accounts needs a token whose owner " +
+			"is an Owner of provisioning.group (or an instance administrator)."
 	case mode.Or() == ModeInstance && forbidden:
-		return "Instance mode creates service accounts the instance owns, which " +
-			"only an instance administrator may do: use an administrator's token, " +
-			"or set integrations.gitlab.provisioning.mode: group to create them " +
+		return "Instance mode keeps service accounts the instance owns, which " +
+			"only an instance administrator may list or create: use an administrator's " +
+			"token, or set integrations.gitlab.provisioning.mode: group to keep them " +
 			"under provisioning.group."
 	case mode.Or() == ModeInstance && status == http.StatusNotFound:
 		return "This GitLab does not serve instance service accounts, which is " +
