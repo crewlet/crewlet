@@ -77,7 +77,9 @@ type lookup struct {
 }
 
 // CloudIDOptions configures [NewCloudIDs]. Zero values are the production
-// ones: httpx's client at [TenantInfoTimeout], and the wall clock.
+// ones: httpx's client at [TenantInfoTimeout], and the wall clock. Whatever
+// the client, a redirect is refused: a site's cloud id must come from that
+// site itself, so a 3xx is answered like any other non-200.
 type CloudIDOptions struct {
 	Client *http.Client
 	Now    func() time.Time
@@ -85,10 +87,13 @@ type CloudIDOptions struct {
 
 // NewCloudIDs builds the process's resolver.
 func NewCloudIDs(opts CloudIDOptions) *CloudIDs {
-	c := &CloudIDs{client: opts.Client, now: opts.Now, sites: map[string]lookup{}}
-	if c.client == nil {
-		c.client = httpx.Client(TenantInfoTimeout)
+	client := opts.Client
+	if client == nil {
+		client = httpx.Client(TenantInfoTimeout)
 	}
+	refusing := *client
+	refusing.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	c := &CloudIDs{client: &refusing, now: opts.Now, sites: map[string]lookup{}}
 	if c.now == nil {
 		c.now = func() time.Time { return time.Now().UTC() }
 	}

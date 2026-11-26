@@ -145,3 +145,24 @@ func TestOnlyAWellFormedAnswerIsACloudID(t *testing.T) {
 		}
 	})
 }
+
+// A REDIRECT YIELDS NO CLOUD ID: the id must come from the site itself, so a
+// 3xx is a refusal and wherever it points is never asked. Mutation: let the
+// client follow redirects and the second server is asked and its id kept.
+func TestARedirectedLookupYieldsNoCloudID(t *testing.T) {
+	t.Parallel()
+	elsewhere, asked := site(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"cloudId":"` + siteID + `"}`))
+	})
+	srv, _ := site(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/_edge/tenant_info", http.StatusFound)
+	})
+	ids := atlassian.NewCloudIDs(atlassian.CloudIDOptions{Client: srv.Client()})
+	id, err := ids.Resolve(t.Context(), srv.URL)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 302") {
+		t.Fatalf("Resolve = %q, %v; want a refusal naming HTTP 302", id, err)
+	}
+	if n := asked.Load(); n != 0 {
+		t.Errorf("the redirect's target was asked %d times, want 0", n)
+	}
+}
