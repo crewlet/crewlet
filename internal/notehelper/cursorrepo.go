@@ -103,8 +103,8 @@ func cursorNestedAnswer(f flags, stdin io.Reader, stderr io.Writer, claimBy time
 		fmt.Fprintf(stderr, "notehelper: the nested config: %v\n", err)
 		return none
 	}
-	if run, err := readBounded(filepath.Join(c.State, cursorConversation), 256); err != nil ||
-		in.Conversation == "" || strings.TrimSpace(string(run)) != in.Conversation {
+	run, err := readBounded(filepath.Join(c.State, cursorConversation), 256)
+	if err != nil || in.Conversation == "" || strings.TrimSpace(string(run)) != in.Conversation {
 		return none
 	}
 	c.claimBy = claimBy
@@ -234,8 +234,12 @@ func runCursorLeft(_ context.Context, f flags, _ io.Reader, _, stderr io.Writer,
 // firing claimed, by name, once a run's state is ended and once only; none
 // before the end, as a firing may still claim.
 func cursorLeft(state, work string) ([]string, error) {
-	if _, err := os.Lstat(filepath.Join(state, endedMarker)); err != nil {
+	_, err := os.Lstat(filepath.Join(state, endedMarker))
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	said, err := os.OpenFile(filepath.Join(state, cursorLeftSaid), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if errors.Is(err, fs.ErrExist) {
