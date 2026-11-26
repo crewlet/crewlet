@@ -1,8 +1,10 @@
 package executor
 
 import (
+	"fmt"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +16,11 @@ import (
 // are the whole process's, so another goroutine's allocations land in them:
 // a package's leftover goroutines, a linked package's own (#2160). f must
 // allocate on its own goroutine; one it starts allocates outside the count.
+// Not for a reader that uses sync.Pool at a scale near its bound: the two
+// collections before each reading empty the pools, which under -race also drop
+// a quarter of what is put back, so refills land at random (see
+// [allocationsOf]); the line reader's json v2 decoder refill is a few hundred
+// bytes against its 16 KiB.
 func ownAllocations(f func()) (objects, bytes uint64) {
 	ownMeasuring.Lock()
 	defer ownMeasuring.Unlock()
@@ -124,4 +131,115 @@ func TestAReadersCostIsItsOwnAllocations(t *testing.T) {
 		t.Errorf("a 16 MiB prompt read beside another goroutine's allocations costs its reader %d bytes; want at "+
 			"most 16 KiB more than its twin, %d bytes: the other goroutine's count against it", cost, twinCost)
 	}
+}
+
+// requireNoStrays fails t, naming each by its stack, when a goroutine runs
+// beside the caller that is not the test binary's own: a measurement read off
+// the process's counts ([allocationsOf], [heldBy], [allocated]) would take its
+// allocations for the measured reader's, as #2160's took a linked package's
+// timer for a reader's. It runs before each reading; a reader's own goroutines
+// start after it.
+func requireNoStrays(t testing.TB) {
+	t.Helper()
+	if strays := strayGoroutines(); len(strays) > 0 {
+		t.Fatalf("%d goroutine(s) run beside this measurement, which reads the process's allocation counts "+
+			"and would count theirs as the reader's; end them before measuring:\n\n%s", len(strays),
+			strings.Join(strays, "\n\n"))
+	}
+}
+
+// strayGoroutines is the stack of every goroutine but the caller's that is
+// not parked in the testing package (its main, a case waiting on a subtest,
+// a parallel case waiting its turn), from an all-goroutine dump: the
+// runtime's own are not in it. runtime.NumGoroutine alone counts the parked
+// cases too, which a package's parallel cases make any number.
+func strayGoroutines() []string {
+	buf := make([]byte, 1<<16)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	var strays []string
+	for i, g := range strings.Split(strings.TrimSpace(string(buf)), "\n\n") {
+		if i > 0 && !parkedInTesting(g) {
+			strays = append(strays, g)
+		}
+	}
+	return strays
+}
+
+// parkedInTesting reports whether a goroutine's dump has the testing package
+// as its innermost frame outside the runtime: the binary's own, waiting.
+func parkedInTesting(g string) bool {
+	for line := range strings.Lines(g) {
+		if strings.HasPrefix(line, "goroutine ") || strings.HasPrefix(line, "\t") {
+			continue
+		}
+		if strings.HasPrefix(line, "runtime.") || strings.HasPrefix(line, "sync.") ||
+			strings.HasPrefix(line, "internal/") {
+			continue
+		}
+		return strings.HasPrefix(line, "testing.")
+	}
+	return false
+}
+
+// strayWitness is a testing.TB whose Fatalf keeps what it said and ends the
+// call it fails by panicking it out, so a case can see a measurement refuse.
+type strayWitness struct {
+	testing.TB
+	said string
+}
+
+func (w *strayWitness) Helper() {}
+
+func (w *strayWitness) Fatalf(format string, args ...any) {
+	w.said = fmt.Sprintf(format, args...)
+	panic(w)
+}
+
+// refusal is what measure said failing w, or nothing where it did not fail it.
+func (w *strayWitness) refusal(measure func(testing.TB)) (said string) {
+	defer func() {
+		if r := recover(); r != nil && r != w {
+			panic(r)
+		}
+		said = w.said
+	}()
+	measure(w)
+	return ""
+}
+
+// A MEASUREMENT REFUSES A GOROUTINE BESIDE IT: allocationsOf, heldBy and
+// imagepass's allocated read the process's allocation counts, where another
+// goroutine's allocations land as the measured reader's, so each fails its
+// case naming any goroutine but the test binary's own, by its stack, rather
+// than hand back a skewed figure. A goroutine the case leaves running is one.
+//
+// Mutation: drop requireNoStrays from allocationsOf — the measurement goes on.
+func TestAMeasurementRefusesAGoroutineBesideIt(t *testing.T) {
+	stop, ended := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(ended)
+		<-stop
+	}()
+	for name, measure := range map[string]func(testing.TB){
+		"allocationsOf": func(tb testing.TB) { allocationsOf(tb, func() {}) },
+		"heldBy":        func(tb testing.TB) { heldBy(tb, func() any { return nil }) },
+		"allocated": func(tb testing.TB) {
+			_, _ = allocated(tb, func() error { return nil })
+		},
+	} {
+		said := (&strayWitness{TB: t}).refusal(measure)
+		if !strings.Contains(said, "TestAMeasurementRefusesAGoroutineBesideIt.func1") {
+			t.Errorf("%s beside a goroutine the case left running said %q; want it refused, naming the "+
+				"goroutine by its stack", name, said)
+		}
+	}
+	close(stop)
+	<-ended
 }

@@ -41,15 +41,19 @@ func listBuilder() *transcriptBuilder {
 }
 
 // allocationsOf is what read allocates, heap objects and bytes, the fewest of
-// three calls after a warm-up. GOMAXPROCS is one while it measures, as
-// testing.AllocsPerRun's is, so other goroutines' allocations count as little
-// as they can.
-func allocationsOf(read func()) (objects, bytes uint64) {
+// three calls after a warm-up, read off the process's counts with no goroutine
+// but the test binary's own beside each ([requireNoStrays]). For a reader that
+// allocates on goroutines it starts, or draws on a sync.Pool, which
+// [ownAllocations]' collections would empty. GOMAXPROCS is one meanwhile, as
+// testing.AllocsPerRun's is.
+func allocationsOf(t testing.TB, read func()) (objects, bytes uint64) {
+	t.Helper()
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	read()
 	objects, bytes = math.MaxUint64, math.MaxUint64
 	var before, after runtime.MemStats
 	for range 3 {
+		requireNoStrays(t)
 		runtime.ReadMemStats(&before)
 		read()
 		runtime.ReadMemStats(&after)
@@ -62,8 +66,10 @@ func allocationsOf(read func()) (objects, bytes uint64) {
 // heldBy is how many bytes what read returns keeps alive, the fewest of three
 // calls: heap in use after a collection with the answer held, less that after a
 // collection before the call. Unlike [allocationsOf]'s bytes, what the read let
-// go of along the way is no part of it. GOMAXPROCS is one while it measures.
-func heldBy(read func() any) uint64 {
+// go of along the way is no part of it. No goroutine but the test binary's own
+// may run beside it ([requireNoStrays]); GOMAXPROCS is one while it measures.
+func heldBy(t testing.TB, read func() any) uint64 {
+	t.Helper()
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	held := uint64(math.MaxUint64)
 	var before, after runtime.MemStats
@@ -71,6 +77,7 @@ func heldBy(read func() any) uint64 {
 		// Twice: a sync.Pool's victim cache outlives one, and freed after the read it offsets the read's hold.
 		runtime.GC()
 		runtime.GC()
+		requireNoStrays(t)
 		runtime.ReadMemStats(&before)
 		answer := read()
 		runtime.GC()
@@ -134,8 +141,8 @@ func TestAListInAHarnesssRecordCostsItsReaderOneElementAtATime(t *testing.T) {
 	} {
 		one := tc.head + "1" + tc.tail
 		full := ctListRecord(t, tc.head, "1", tc.tail, listBytes)
-		fewObjects, fewBytes := allocationsOf(tc.read(one))
-		manyObjects, manyBytes := allocationsOf(tc.read(full))
+		fewObjects, fewBytes := allocationsOf(t, tc.read(one))
+		manyObjects, manyBytes := allocationsOf(t, tc.read(full))
 		if manyObjects > fewObjects+listSlack {
 			t.Errorf("%s: a list of %d elements costs %d allocations, and a list of one %d", name,
 				strings.Count(full, ","), manyObjects, fewObjects)
