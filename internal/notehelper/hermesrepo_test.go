@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -351,5 +352,29 @@ func TestAHermesAnswerKeepsWhatItLeftOutBeforeItsSkills(t *testing.T) {
 	if !ok || !strings.HasSuffix(skills, "\n"+newListingBudgetWithin(4000).cutLine) || len(answer)+2 > 4000 {
 		t.Errorf("the answer (%d bytes) is not the skills cut, then what was left out whole: ...%s", len(answer),
 			answer[max(len(answer)-300, 0):])
+	}
+}
+
+// A HERMES BUDGET WITHOUT A GATE IS REFUSED: the room charges what the gate
+// answers for each checkout, so a launch config with a budget of form hermes
+// and no "gated" would claim checkouts with no text and no name; it is
+// refused, naming both keys, before anything is claimed.
+//
+// Mutation: drop the check, and this goes red.
+func TestAHermesBudgetWithoutAGateIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents,
+		Budget: &launchBudget{Form: budgetHermes, Bytes: 4096}, checkoutSpec: checkoutSpec{}})
+	config := filepath.Join(t.TempDir(), "launch.json")
+	if err := os.WriteFile(config, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := checkoutLaunch(config, r.work, strings.NewReader(""), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "budget") || !strings.Contains(err.Error(), `"gated"`) {
+		t.Fatalf("an ungated hermes budget launched: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(r.state, "handed")); !os.IsNotExist(statErr) {
+		t.Errorf("the refused launch wrote its state (%v)", statErr)
 	}
 }

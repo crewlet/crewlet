@@ -189,8 +189,9 @@
 // `nestedSkillsOnly` for a nested adapter that hands no instructions, whose
 // spec then names none to read, and `roots`, a file listing each checkout's
 // root, a line each, for a harness the runner points at them (Gemini CLI's
-// --include-directories). Its `budget` (Hermes's, hermesrepo.go; Muse's,
-// checkoutmuse.go) bounds the sections with what loads beside them; `skipped`
+// --include-directories). Its `budget` (Hermes's, hermesrepo.go, needing
+// `gated`; Muse's, checkoutmuse.go) bounds the sections with what loads
+// beside them; `skipped`
 // lines (D709) go to the skip log. It keeps what it handed in state/launched.json, for copilot-launch
 // (copilotrepo.go). It writes state/nested.json, the -config of the harness's
 // nested adapter, which the run's post-tool hook runs after each of the main

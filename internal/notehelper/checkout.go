@@ -179,6 +179,12 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 		return fmt.Errorf("the launch config's budget, form %q of %d bytes, is none the helper knows", c.Budget.Form,
 			c.Budget.Bytes)
 	}
+	if c.Budget != nil && c.Budget.Form == budgetHermes && !c.Gated {
+		// ITS ROOM CHARGES WHAT THE GATE ANSWERS: an ungated spec would claim
+		// a checkout with no text and no name.
+		return fmt.Errorf("the launch config's budget of form %q needs \"gated\": its room charges the "+
+			"instructions Hermes's gate answers for each checkout", budgetHermes)
+	}
 	if _, ok := listingRules[c.ListedAs]; c.ListedAs != "" && !ok {
 		return fmt.Errorf("the launch config's listedAs %q is none of %q, %q, %q and %q", c.ListedAs, listedGrok,
 			listedKimi, listedOpenCode, listedMuse)
