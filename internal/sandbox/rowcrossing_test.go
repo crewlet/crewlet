@@ -125,7 +125,7 @@ func TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands(t *testing.T) {
 			row: PendingRun{TurnID: "t-reserve", AgentHandle: "swe", Status: StatusRunning,
 				LaunchID: "launch-1", LaunchSeq: 1, Owner: rigLease.Owner, OwnerEpoch: rigLease.Epoch},
 			write: func(ctx context.Context, c *Coordinator, run PendingRun) string {
-				take, cancel, _ := c.takeContext(ctx)
+				take, cancel, _ := c.takeContext(ctx, atKeptBound)
 				defer cancel()
 				deadline, _ := take.Deadline()
 				took, err := c.reserveCapture(take, deadline.Add(-SessionTakeBudget), run.TurnID,

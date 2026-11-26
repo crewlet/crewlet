@@ -3206,7 +3206,7 @@ test("a session not kept is read as its newest summary", async () => {
       executor_session: transcriptPage({
         session: row,
         state: "summary",
-        why: "its session was larger than the 48 MiB kept for one session",
+        why: "its session was larger than one is kept at: 94 MiB in all, at most 48 MiB of it text",
         entries: [said("## Next Move\n\nRerun the provisioner test.", "summary")],
       }),
     },
@@ -3214,7 +3214,7 @@ test("a session not kept is read as its newest summary", async () => {
   expect(await screen.findByText(/Rerun the provisioner test/)).toBeTruthy();
   const card = transcriptCard();
   expect(card.textContent).toMatch(/No session was kept; its newest summary was\./);
-  expect(card.textContent).toMatch(/larger than the 48 MiB kept/);
+  expect(card.textContent).toMatch(/larger than one is kept at: 94 MiB in all/);
 });
 
 /** The transcript's own card: the account, the entries and what is said

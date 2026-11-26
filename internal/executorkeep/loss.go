@@ -19,7 +19,8 @@ import (
 type Loss string
 
 const (
-	// LossTooLarge is when the session was past [SessionMaxBytes], taken or sealed.
+	// LossTooLarge is when the session was past what one is kept at, taken or
+	// sealed: [SessionKeptMaxBytes] in all, or [SessionMaxBytes] of text.
 	LossTooLarge Loss = "too_large"
 
 	// LossKeepFailed is when the session could not be taken out of its box and kept
@@ -120,7 +121,8 @@ const UnnamedLossWords = "for a reason this build does not name"
 func (l Loss) Words() string {
 	switch l {
 	case LossTooLarge:
-		return fmt.Sprintf("its session was larger than the %d MiB kept for one session", SessionMaxBytes>>20)
+		return fmt.Sprintf("its session was larger than one is kept at: %d MiB in all, at most %d MiB of it text",
+			SessionKeptMaxBytes>>20, SessionMaxBytes>>20)
 	case LossKeepFailed:
 		return "its session could not be taken out of its box and kept"
 	case LossNoSpoolRoom:

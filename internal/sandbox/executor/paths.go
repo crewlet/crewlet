@@ -777,20 +777,20 @@
 // loaded tool definitions only once its last key is read; and a tar names each
 // file's size before its bytes. So the first reading rewrites the archive into
 // the take's SPOOL ([unitSpool]: gzip at the kept archive's level, in its
-// process's spool directory), counting each file's size as kept, and the
-// second writes the tar from it, never the box ([spoolCopy]): a header names
-// the size of what follows it, whatever the box's archive does meanwhile. A
-// reading resumes in a member checked by name, kind and length, those before
-// kept ([tarPlan.memberAt]). The first reads each line and `.json` file as JSON
+// process's spool directory), counting each file's size as kept, and the second
+// writes the tar from it, never the box ([spoolCopy]): a header names the size
+// of what follows it, whatever the box's archive does meanwhile. A reading
+// resumes in a member checked by name, kind and length, those before kept
+// ([tarPlan.memberAt]). The first reads each line and `.json` file as JSON
 // alone; the first that is no JSON ends it, and the next goes on from it,
 // reading it as text and every later one both ways ([tarPlan.unitAhead]), each
 // way held to [wayRoomBytes] until the unit's is known ([candidate]): a JSON
 // way past it goes into a gzip member of its own, cut back out of the spool
 // where the text is kept, and a unit whose text was let go before its JSON
-// failed is read once more, as text, all within the first reading. The spool
-// is removed on every way out, before the take's body ends, and held to the
-// room the take holds for it (internal/sandbox's takeRoomBytes): a spool that
-// would pass it refuses the take.
+// failed is read once more, as text, all within the first reading. The spool is
+// held to the take's room (internal/sandbox's takeRoomBytes), in files of
+// executorkeep.SpoolSegmentBytes the second reading removes as it passes,
+// DRAINING it into the seals; one past the room refuses the take.
 //
 // THE PLAN ([tarPlan]) is two streams of bits, each written by the first
 // reading in the order it decides them and read back by the second in that
@@ -807,24 +807,23 @@
 // AN EXPORT IS SPOOLED TOO ([scrubDocument]): one is refused only once read.
 //
 // A TEXT A TAKE FOUND UNCHANGED IS NOT REDACTED AGAIN. The redaction is the
-// scrub's cost, and every turn's take scrubs the whole session: a whole-PDF
-// read, its base64 twice, cost 6.1 s a take. So the process remembers what its
-// own full scrubs found unchanged ([scrubMemo]): of a text of
-// [scrubPieceBaseBytes] or more (a line read as text, a name or string, a
+// scrub's cost, and every turn's take scrubs the whole session. So the process
+// remembers what its own full scrubs found unchanged ([scrubMemo]): of a text
+// of [scrubPieceBaseBytes] or more (a line read as text, a name or string, a
 // file), its length and the digest of its chunks' SHA-256 digests, under its
 // first chunk's digest and the take's agent, never the text. A first reading
-// writes a text whose first chunk the memo knows as it is, and checks the
-// whole at its end; one the memo does not know whole reads the archive again,
-// its spool emptied, without that chunk's answer ([firstReadings]). Every
-// digest is of the by-value pass's output under the take's own values. SOUND
-// because the redaction's answer for a text is the text's alone
-// (redact.Stream; its rules are the build's): each text has a redaction of its
-// own, a key's credential is judged on its raw name, and a credential's value
-// never reaches it. In memory alone: a restart, a deploy or a seat's move
-// costs one take at most what it costs without. On two cores of
-// the build machine, two runs each (BenchmarkASecondTakeOfAPDFSession), that
-// read's take came to 6.1 s with no memo, 5.2 s as a process's first and 3.4 s
-// as its second.
+// writes a text whose first chunk the memo knows as it is, and checks the whole
+// at its end; one the memo does not know whole reads the archive again, its
+// spool emptied, without that chunk's answer ([firstReadings]). Every digest is
+// of the by-value pass's output under the take's own values. SOUND because the
+// redaction's answer for a text is the text's alone (redact.Stream; its rules
+// are the build's): each text has a redaction of its own, a key's credential is
+// judged on its raw name, and a credential's value never reaches it. In memory
+// alone: a restart, a deploy or a seat's move costs one take at most what it
+// costs without. On two cores of the build machine, two runs each
+// (BenchmarkASecondTakeOfAPDFSession), a whole-PDF read's take (its base64
+// twice) came to 6.1 s with no memo, 5.2 s as a process's first and 3.4 s as
+// its second.
 //
 // # The scrub's bounds, and what it holds
 //

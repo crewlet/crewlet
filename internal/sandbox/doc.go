@@ -144,11 +144,10 @@
 // # Every spool on a node in one room
 //
 // The disk holds what the spools hold, so one room bounds them all
-// (spoolroom.go): saves take room at the sealed bound before their pack slot
-// and never wait, leaving a final take its room; a take waits a minute for
-// room at the bound before its pack slot and its scrub's slots, a save's
-// order, then stamps its capture refused; no seal (a media spool's too)
-// writes past its room.
+// (spoolroom.go): saves take a take's room before their pack slot and never
+// wait, leaving a final take its room; a take waits a minute for it before
+// its pack and scrub slots, a save's order, then stamps its capture refused.
+// Its scrub spool drains into its seals within it; no write passes it.
 //
 // # A turn's session is continued in whichever box its next launch gets
 //

@@ -905,6 +905,9 @@ func scrubDocument(first io.Reader, reopen func() (io.ReadCloser, error), dst io
 		return err
 	}
 	plan.media.paced(plan.spool.disk.n)
+	if err = plan.media.inlinePast(plan.spool.disk.n); err != nil {
+		return err
+	}
 	zw, err := newMemberSplit(dst, b.split.body, &plan.media)
 	if err != nil {
 		return err
@@ -957,6 +960,9 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 		return err
 	}
 	plan.media.paced(plan.spool.disk.n)
+	if err = plan.media.inlinePast(plan.spool.disk.n); err != nil {
+		return err
+	}
 	zw, err := newMemberSplit(dst, b.split.body, &plan.media)
 	if err != nil {
 		return err
@@ -1050,7 +1056,8 @@ func firstReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scru
 
 	pieces := newFirstPieces(b.memo)
 	plan := &tarPlan{gate: b.gate, spool: spool,
-		media: mediaPlan{on: b.split.body != nil, allowance: b.split.allowance}}
+		media: mediaPlan{on: b.split.body != nil, allowance: b.split.allowance, pace: b.split.pace,
+			textMax: b.split.textMax}}
 	for src, diverged := first, 0; ; {
 		err := read(src, s.firstReading(pieces).finding(plan.media.finding()), plan)
 		switch {

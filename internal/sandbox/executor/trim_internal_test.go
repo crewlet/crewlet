@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"strings"
 	"testing"
@@ -381,7 +380,7 @@ func TestATrimmedCodexTakeIsSaidSoAndStillBounded(t *testing.T) {
 	box.Put(paths.SessionRecord(), "id "+codexThread+"\ncontinued yes\nwhy \nrelease codex-cli 0.171.0\n")
 	box.Put(paths.SessionCapture(), string(archive))
 	box.Put(trimMarkOf(paths.SessionCapture()), string(codexFile(t, trimMarkOf(p.SessionCapture()))))
-	spool := sandbox.SessionSpool{Dir: t.TempDir(), Bytes: math.MaxInt64, Held: func(int64) {}}
+	spool := unboundSpool(t.TempDir())
 	size := int64(len(archive))
 	_, err := NewCodex().TakeSession(t.Context(), box, sandbox.SessionTake{Spool: spool, MaxBytes: size - 1,
 		Session: codexThread})

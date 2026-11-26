@@ -132,7 +132,11 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return sandbox.TakenSession{}, errors.New("executor: a take names no bound on the archive it keeps, " +
 			"and a session is never read out of a box unbounded")
 	}
-	if take.Spool.Dir == "" || take.Spool.Bytes <= 0 || take.Spool.Held == nil {
+	if take.MediaApart && take.KeepPaceMiB <= 0 {
+		return sandbox.TakenSession{}, errors.New("executor: a take keeping its media apart names no pace " +
+			"its keep uploads in, and its media are never cut apart unpaced")
+	}
+	if take.Spool.Dir == "" || take.Spool.Take == nil || take.Spool.Give == nil || take.Spool.Spooled == nil {
 		return sandbox.TakenSession{}, errors.New("executor: a take names no spool for its scrub, which " +
 			"spools on its process's own disk in the room the take holds")
 	}
@@ -216,7 +220,8 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	// count once the scrub ends (scrubtally.go).
 	tally := newScrubTally(carries, archive.SessionID)
 	bounds := plainBounds(scrubPlainMax).gatedBy(scrubbing, large).remembering(remembered).
-		spooling(spoolPlace{dir: take.Spool.Dir, room: take.Spool.Bytes, held: take.Spool.Held}).tallying(tally)
+		spooling(spoolPlace{dir: take.Spool.Dir, take: take.Spool.Take, give: take.Spool.Give,
+			spooled: take.Spool.Spooled}).tallying(tally)
 	scrub := newScrubber(take.Scrub)
 	archive.RunStart = keptRunStart(scrub, archive.RunStart)
 	// WHERE A CHAT FILE'S RUN BEGAN, checked against the raw bytes the scrub
@@ -237,12 +242,12 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	// reads; a take keeping its media apart frames its body beside it
 	// ([memberSplit]). ITS ALLOWANCE IS THE BOX'S BOUND, MaxBytes, of first
 	// occurrences' text in all: one capture's media never outgrow what a take
-	// admits of its box (SessionMaxBytes today), and crewlet/crewlet#2020's
-	// raise of that bound (piece 4c) moves the allowance with it.
+	// admits of its box, at either of the take's bounds; and they are paced to
+	// its keep's (KeepPaceMiB), so the allowance and the budget rise together.
 	kept := io.MultiWriter(write, sum, meter)
 	if take.MediaApart {
 		kept = io.MultiWriter(sum, meter)
-		bounds = bounds.splitting(write, take.MaxBytes)
+		bounds = bounds.splitting(write, take.MaxBytes, take.KeepPaceMiB)
 	}
 	scrubbingStarted = true
 	go func() {

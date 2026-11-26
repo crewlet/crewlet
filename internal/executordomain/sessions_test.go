@@ -273,8 +273,8 @@ func TestTheSealedCapHoldsASessionAtItsBound(t *testing.T) {
 // rounded up to a whole mebibyte), and the default is no smaller than the floor.
 // internal/config cannot import this package, so they are held together here.
 //
-// Mutation: raise SessionMaxBytes to 64 MiB without moving the config floor, or
-// raise the floor to 64 MiB, and this fails.
+// Mutation: raise SessionMaxBytes to 64 MiB without moving the config floor,
+// raise the floor to 64 MiB, or the default to 94 MiB, and this fails.
 func TestTheSeatBudgetFloorHoldsOneSessionAtItsBound(t *testing.T) {
 	t.Parallel()
 	if config.SessionBytesPerSeatFloor < executorkeep.SealedMaxBytes {
@@ -288,6 +288,14 @@ func TestTheSeatBudgetFloorHoldsOneSessionAtItsBound(t *testing.T) {
 	if config.DefaultSessionBytesPerSeat < config.SessionBytesPerSeatFloor {
 		t.Errorf("the default budget of %d bytes is below the field's own floor of %d",
 			config.DefaultSessionBytesPerSeat, config.SessionBytesPerSeatFloor)
+	}
+	// AT THE DEFAULT, A CAPTURE AT THE KEPT BOUND MEETS THE SEAT'S REFUSAL: the
+	// kept bound admits more than the default budget holds, so the budget,
+	// never the bound, is what a seat's large reads are kept within
+	// (sandbox's TestACaptureAtTheKeptBoundIsHeldToItsSeatsBudget).
+	if config.DefaultSessionBytesPerSeat >= executorkeep.SessionKeptMaxBytes {
+		t.Errorf("the default budget of %d bytes holds a capture at the kept bound (%d), which its doc says "+
+			"the budget refuses", config.DefaultSessionBytesPerSeat, executorkeep.SessionKeptMaxBytes)
 	}
 }
 

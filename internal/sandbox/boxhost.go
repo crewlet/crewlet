@@ -149,6 +149,8 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // host's share ([BoxReadRequest.AnswerBudget]): a slow host is not a stopped
 // one. Only a node asking another node's host waits on it ("Box read budget").
 func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Duration {
+	// The kept bound's take on purpose: an asker cannot know the bound of the
+	// take its read makes.
 	held := SessionTakeBudget + captureReadBudget + MediaReadersRoom + sessionRecordBudget + 3*discardGrace +
 		boxReadChanges*coord.MaxValueCrossing
 	if read.mayEnd(run) {

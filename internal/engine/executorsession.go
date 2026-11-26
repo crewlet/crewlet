@@ -218,6 +218,7 @@ func (k executorKeep) Policy(ctx context.Context) (sandbox.SessionPolicy, error)
 	}
 	media := k.engine.executorMediaRead(ctx)
 	policy.MediaApart, policy.MediaUnread, policy.MediaBelow = media.apart, media.unread, media.below
+	policy.KeptBound, policy.KeptBelow = media.kept, media.keptBelow
 	return policy, nil
 }
 
@@ -242,10 +243,12 @@ func (e *Engine) recordCaptureStamp(ctx context.Context) error {
 
 // mediaAnswer is the gate's answer: exactly one of apart, why the readers went
 // unread or a node has not said (unknown), or the node found below and what it
-// says (a definite no).
+// says (a definite no). Where apart, kept says every stamp reader also reads a
+// take at the kept bound, or keptBelow names the first that does not.
 type mediaAnswer struct {
-	apart         bool
+	apart, kept   bool
 	unread, below string
+	keptBelow     string
 }
 
 // executorMediaRead says whether a take keeps its media apart: every node
@@ -273,6 +276,15 @@ func (e *Engine) executorMediaRead(ctx context.Context) mediaAnswer {
 		log.WarnContext(ctx, "executor_media_kept_inline", "kind", kind, "why", why, "detail", "every take "+
 			"keeps its large payloads inline until every node applying the executor log, and every node "+
 			"that may settle a run's record, is known to read a capture naming them")
+	}
+	if kept := media.keptBelow; kept == "" {
+		e.keptAtText.Store(nil)
+	} else if last := e.keptAtText.Load(); last == nil || *last != kept {
+		e.keptAtText.Store(&kept)
+		log.WarnContext(ctx, "executor_session_kept_at_text_bound", "why", kept, "detail", fmt.Sprintf(
+			"every take keeps a session within %d MiB, its text's bound, until every node that may settle a "+
+				"run's record is known to read one kept up to %d MiB in all", executorkeep.SessionMaxBytes>>20,
+			executorkeep.SessionKeptMaxBytes>>20))
 	}
 	return media
 }
@@ -317,7 +329,13 @@ func (e *Engine) executorMediaReaders(ctx context.Context) mediaAnswer {
 		return mediaAnswer{unread: fmt.Sprintf("node %s is live and said no capture stamp version on its "+
 			"presence this beat, and has recorded none", unsaid[0])}
 	}
-	return mediaAnswer{apart: true}
+	// THE KEPT BOUND OFF THE SAME READ, and only beside media apart: its text
+	// stays within executorkeep.SessionMaxBytes only with its media out of it.
+	if node, version, ok := firstBelow(stamps, 0, sandbox.KeptStampVersion); ok {
+		return mediaAnswer{apart: true, keptBelow: fmt.Sprintf("node %s says capture stamp version %d, "+
+			"below the %d a take at the kept bound is asked again at", node, version, sandbox.KeptStampVersion)}
+	}
+	return mediaAnswer{apart: true, kept: true}
 }
 
 // mediaReads is what the media gate reads of the fleet within its room.

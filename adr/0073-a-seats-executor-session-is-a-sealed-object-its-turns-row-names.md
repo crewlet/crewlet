@@ -1153,7 +1153,16 @@
   - `internal/sandbox/executor.TestAQwenSummaryAddsOnlyItsWordsToTheWalk`
   - `internal/sandbox/executor.TestAQwenSummaryOnTheNotesWalkHoldsNoneOfItsPayload`
   - `internal/sandbox/executor.TestAQwenNoteACompactionKeepsIsHeldWithItsSummaryRead`
-- **Measured:** a harness's session of a day's work compresses to one or two mebibytes, and one that read a whole 20 MiB PDF, Claude Code's limit, to 40.1 MiB as kept; bounded here at 48 MiB, so a session holding more media than that is not kept (crewlet/crewlet#1626); at the reference company's 3 000 turns a day the log that names the sessions grows about 32 MB a day, about a kibibyte of it each turn's first read of its conversation (its `begin`), while the sessions themselves would be gigabytes; crewlet-operator's smallest data volumes leave 448 MiB (12Gi with the objects in S3, and 16Gi beside the nats bucket) above the other logs at their floors, and this log, scaled to its 64 MiB floor there, still fits both — the minimum classes do not move, but the least a fresh node boots in rises by 64 MiB of logs (12348030975 bytes of broker on nats, up 85.3 MiB with the bucket's quarter beside it, and 64 MiB on S3), which is what the operator's own floors follow. At that floor the log holds about two days at the reference company's rate, under the seven-day `min_age` a healthy trim keeps, so a company above about thirty seats on those volumes sets `stream.executor_log_max_bytes` or a larger volume, and `log_ceiling_short` says so; a continued session's first request: Claude Code 2.1.310 and 2.1.322 compact before it at 167,000 tokens under a 200,000-token window (a count of 165,922 sent whole, one of 167,834 compacted, the harness's own count of it replicated to the token on both), and a resume adds at most 2,597 bytes of records beside its brief and its turn's attachments at most 2,232; the count's rule matched the harness's recorded count to 73 tokens at 186 real compactions, each just before its boundary, and the bound read at or above that replica at 376,937 cut points of real sessions; the take's meter walks a 118 MiB thread in 1.61 to 1.75 s beside its scrub's 10.7 to 10.8 s, and the collection's read of a main thread at its 256 MiB bound of ordinary lines takes 1.96 to 2.00 s (`BenchmarkTheMeterAtItsBounds`, `BenchmarkTheMainThreadReadAtItsBound`, on two dedicated cores), within the 15 s wait at twice its figure; a continued Claude Code session hands its model what a reading of its kept archive counts on, as probe T measured 2.1.310 and 2.1.322 continue one: 14 continuations a release, 25 whole-line results after the last restart among them and 4 of those off the chain parallel calls leave, every one carried once with its call, and a result the harness wrote itself only for a call its file held none of; five continuations each carrying a seat server's call and its result whatever its server's state; a task notification carried verbatim; every path behind a flag Anthropic's servers set read in both releases' shipped code, not run; the chain a resume hands its model, its leaf and what it recovers off it read in both releases' shipped code, and the rule the reading builds on it reading every one of the 402 of the probes' 432 main sessions that hold a call (no reading for none) and leaving not whole three of the 80 subagent threads it reads there: P2(d)'s torn thread in its two copies, whose line 25 is no record, and its box's copy cut back whole, a record of its own on a branch its own load does not hand (the strict rule); and a reading holds what its readers read of a line, never the line: a whole PDF's Read, 55,924,056 bytes on one line, is read in 26 to 35 ms holding 146.5 to 151.5 KiB (`BenchmarkAReaderAtALineOfAnyLength`), 255 MiB of ordinary lines, the plaintext's bound, in 3.1 to 3.2 s, four prompts of about 64 MiB to it in 1.09 to 1.11 s, the slowest archive measured, a subagent's lines of blocks to the plaintext's and the lines' bounds (2^20 lines, past which a reading fails closed), in 21.4 to 22.6 s, inside the reading's 30 s wait, a thread at both bounds of the model of the resume in 2.3 to 2.5 s, holding 43 MiB, a reading's worst, and an ordinary session in 72 to 88 ms (`BenchmarkAReadingAtItsBounds`, on a dedicated two-core build slot); a seat's saves of its running sessions hold at most its session budget again in the object store while they wait for the collector; a Codex 0.171.0 rollout cut to its first line and everything from its newest `compacted` line (17 lines, 36,975 bytes of 514,791) resumed from a fresh `CODEX_HOME` with the same request as the whole one, 8 input items and 38,769 bytes each with the same instructions and tools, only the new message's minted id differing; a Hermes Agent 0.23.3 dump cut to all but its inactive messages below its newest compaction summary, each settled admission's stored result slimmed (125,568 bytes of 900,353), resumed in a fresh home with the same requests as the whole one, over 13 request pairs in three cases, one that compacted again included, only a UTC time Hermes writes into a file's name differing; a Claude Code transcript gzips 10.4 to one, past the 5.33 of the plaintext and archive bounds, so text meets the plaintext bound first
+  - `internal/sandbox.TestASessionAtItsKeptBoundFitsOneTakesRoom`
+  - `internal/sandbox.TestATakesSpoolsShareOneRoom`
+  - `internal/sandbox.TestATakeKeepsTheKeptBoundOnlyWhereThePolicyReadsIt`
+  - `internal/sandbox.TestACapturesArchiveSizeIsHeldToItsTakesBound`
+  - `internal/sandbox.TestAKeptBoundRecordIsRefusedOnceAReaderFallsBelow`
+  - `internal/sandbox/executor.TestTheSecondReadingGivesBackWhatItRead`
+  - `internal/sandbox/executor.TestACutBackSpansFiles`
+  - `internal/sandbox/executor.TestTheMediaKeptApartFitTheKeepsPace`
+  - `internal/engine.TestATakeKeepsTheKeptBoundOnlyOnceEveryStampReaderSaysIt`
+- **Measured:** a harness's session of a day's work compresses to one or two mebibytes, and one that read a whole 20 MiB PDF, Claude Code's limit, to 40.1 MiB as kept; bounded here at 48 MiB of text and 94 MiB in all, so a session holding more than that is not kept (crewlet/crewlet#1626); at the reference company's 3 000 turns a day the log that names the sessions grows about 32 MB a day, about a kibibyte of it each turn's first read of its conversation (its `begin`), while the sessions themselves would be gigabytes; crewlet-operator's smallest data volumes leave 448 MiB (12Gi with the objects in S3, and 16Gi beside the nats bucket) above the other logs at their floors, and this log, scaled to its 64 MiB floor there, still fits both — the minimum classes do not move, but the least a fresh node boots in rises by 64 MiB of logs (12348030975 bytes of broker on nats, up 85.3 MiB with the bucket's quarter beside it, and 64 MiB on S3), which is what the operator's own floors follow. At that floor the log holds about two days at the reference company's rate, under the seven-day `min_age` a healthy trim keeps, so a company above about thirty seats on those volumes sets `stream.executor_log_max_bytes` or a larger volume, and `log_ceiling_short` says so; a continued session's first request: Claude Code 2.1.310 and 2.1.322 compact before it at 167,000 tokens under a 200,000-token window (a count of 165,922 sent whole, one of 167,834 compacted, the harness's own count of it replicated to the token on both), and a resume adds at most 2,597 bytes of records beside its brief and its turn's attachments at most 2,232; the count's rule matched the harness's recorded count to 73 tokens at 186 real compactions, each just before its boundary, and the bound read at or above that replica at 376,937 cut points of real sessions; the take's meter walks a 118 MiB thread in 1.61 to 1.75 s beside its scrub's 10.7 to 10.8 s, and the collection's read of a main thread at its 256 MiB bound of ordinary lines takes 1.96 to 2.00 s (`BenchmarkTheMeterAtItsBounds`, `BenchmarkTheMainThreadReadAtItsBound`, on two dedicated cores), within the 15 s wait at twice its figure; a continued Claude Code session hands its model what a reading of its kept archive counts on, as probe T measured 2.1.310 and 2.1.322 continue one: 14 continuations a release, 25 whole-line results after the last restart among them and 4 of those off the chain parallel calls leave, every one carried once with its call, and a result the harness wrote itself only for a call its file held none of; five continuations each carrying a seat server's call and its result whatever its server's state; a task notification carried verbatim; every path behind a flag Anthropic's servers set read in both releases' shipped code, not run; the chain a resume hands its model, its leaf and what it recovers off it read in both releases' shipped code, and the rule the reading builds on it reading every one of the 402 of the probes' 432 main sessions that hold a call (no reading for none) and leaving not whole three of the 80 subagent threads it reads there: P2(d)'s torn thread in its two copies, whose line 25 is no record, and its box's copy cut back whole, a record of its own on a branch its own load does not hand (the strict rule); and a reading holds what its readers read of a line, never the line: a whole PDF's Read, 55,924,056 bytes on one line, is read in 26 to 35 ms holding 146.5 to 151.5 KiB (`BenchmarkAReaderAtALineOfAnyLength`), 255 MiB of ordinary lines, the plaintext's bound, in 3.1 to 3.2 s, four prompts of about 64 MiB to it in 1.09 to 1.11 s, the slowest archive measured, a subagent's lines of blocks to the plaintext's and the lines' bounds (2^20 lines, past which a reading fails closed), in 21.4 to 22.6 s, inside the reading's 30 s wait, a thread at both bounds of the model of the resume in 2.3 to 2.5 s, holding 43 MiB, a reading's worst, and an ordinary session in 72 to 88 ms (`BenchmarkAReadingAtItsBounds`, on a dedicated two-core build slot); a seat's saves of its running sessions hold at most its session budget again in the object store while they wait for the collector; a Codex 0.171.0 rollout cut to its first line and everything from its newest `compacted` line (17 lines, 36,975 bytes of 514,791) resumed from a fresh `CODEX_HOME` with the same request as the whole one, 8 input items and 38,769 bytes each with the same instructions and tools, only the new message's minted id differing; a Hermes Agent 0.23.3 dump cut to all but its inactive messages below its newest compaction summary, each settled admission's stored result slimmed (125,568 bytes of 900,353), resumed in a fresh home with the same requests as the whole one, over 13 request pairs in three cases, one that compacted again included, only a UTC time Hermes writes into a file's name differing; a Claude Code transcript gzips 10.4 to one, past the 5.33 of the plaintext and archive bounds, so text meets the plaintext bound first
 - **Tag-status:** unreleased
 
 ## The decision
@@ -1318,11 +1327,13 @@ follows (internal/sandbox's `session.go` and `handed.go`, internal/engine's
 before the box is paused or reclaimed: the archive, packed where it must be,
 streamed through the scrub and sealed under the fleet keyring into a spool on
 the node's own disk, bounded by the pack's and the scrub's waits
-(`SessionTakeBudget`). The scrub's, `SessionScrubWait`, is six minutes, from
-its measured worst: the slowest session a harness writes at the scrub's
-256 MiB of plaintext (`scrubPlainMax`), 183 s, and the archive read twice out
-of a box at a mebibyte a second, 96 s at 48 MiB, and the minute a take may
-wait for its spool's room (`spoolRoomWait`), 339 s; lines that are no JSON, which
+(`SessionTakeBudget`, each take its own bound's). The scrub's,
+`SessionScrubWait`, is eight minutes at the kept bound (six at the text
+bound), from its measured worst: the slowest session a harness writes at the
+scrub's 256 MiB of plaintext (`scrubPlainMax`), 183 s, and the archive read
+twice out of a box at a mebibyte a second, 188 s at the kept bound's 94 MiB
+(96 s at 48 MiB), and the minute a take may wait for its spool's room
+(`spoolRoomWait`), 431 s (339 s); lines that are no JSON, which
 only a corrupted transcript holds, do not set it. A take past it FAILS CLOSED:
 nothing is kept, its place is refused and the last kept copy stands, so a box
 can only cost its own session. The KEEP — the upload at the object store's
@@ -1464,15 +1475,15 @@ a loss's add `JobEndBudget` (the wait and the kill, 145 seconds) to a
 collection's at the host's three-quarter share, about 193.3 seconds more, so a
 host's take after an end at its bound is still given its whole
 `SessionTakeBudget`. As `BoxReadBudget` (`internal/sandbox/boxhost.go`) computes
-it, a collection of a turn with no cap waits about 5,380.1 seconds (a Claude
+it, a collection of a turn with no cap waits about 5,580.2 seconds (a Claude
 Code one 36 more, for its main thread's read, `MainThreadReadWait`, below) and
-a stop's or a loss's about 5,573.5: the poll's 60-second bound, and at the
-share the take's 480 seconds, its reservation's 30, its read of the run's row's
+a stop's or a loss's about 5,773.5: the poll's 60-second bound, and at the
+share the take's 600 seconds, its reservation's 30, its read of the run's row's
 30 and the 240 that read's reply takes to cross at the slowest node's pace
-(`coord.MaxValueReadCrossing`: a read sends no write), three 30-second graces
-and the four changes of the run's row its host makes, each at the slowest
-node's crossing (`coord.MaxValueCrossing`, about 780.03 seconds), so
-60 + 3,990.1 / 0.75. The figures first given here, 460 and 653 seconds, were
+(`coord.MaxValueReadCrossing`: a read sends no write), the read of who reads
+its media's 30 (`MediaReadersRoom`), three 30-second graces and the four
+changes of the run's row its host makes, each at the slowest node's crossing
+(`coord.MaxValueCrossing`, about 780.03 seconds), so 60 + 4,140.1 / 0.75. The figures first given here, 460 and 653 seconds, were
 from before those changes were counted at their crossings.
 `internal/sandbox.TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing`
 holds the collection's terms and
@@ -4868,7 +4879,8 @@ cross-node read, so the host's take is still handed its whole budget.
 
 **Every step of a capture's life is counted on one clock, and its instant
 read on another within twice their skew.** The budget every age rule read
-(`SessionCaptureBudget`, thirty-four and a half minutes at the floor) counted
+(`SessionCaptureBudget`, thirty-four and a half minutes at the floor in the
+build before this amendment) counted
 a take, a keep and a stamp. It left out the reservation's crossing, the
 keep's own reads of the coordination store (the turn's operations minted and
 the seat's runs listed, which ran inside the upload's pace and at the floor
@@ -4885,23 +4897,23 @@ upload, four with its media count and a save's amend of its charge, each in a
 room of their own, and its read again of who reads its media before its
 record, and an amend, a read again and a record more where the log finds a
 carry gone, beside the upload's pace (`keepReadRoom`, `MediaReadersRoom`,
-`SessionKeepBudget`, twenty-nine minutes), a mint past it refusing
-the capture and a listing past it deciding nothing; a take's life from its
-instant (`takeLife`, an hour and four and a half minutes) and a takeover's
-(`takeOverLife`, an hour and fourteen), the longer of them a capture's
+`SessionKeepBudget`, sixty-eight minutes at the kept bound), a mint past it
+refusing the capture and a listing past it deciding nothing; a take's life from
+its instant (`takeLife`, an hour and forty-five and a half minutes) and a
+takeover's (`takeOverLife`, an hour and fifty-three), the longer of them a capture's
 life (`captureLife`);
 and a read standing by's window from its own instant, its take's rest, its
 own wait, the read of the turn's row on the log past it and the settle it
 decides, and around its takeover a settle, its last read of the run's row and
-the takeover itself (`standbyWindow`, two hours and thirty-four and a half).
+the takeover itself (`standbyWindow`, three hours and fifteen and a half).
 Each change of the run's row counts a change's crossing, and each read of it
 (a takeover's read back, a standby's last read, the end's last read) its
 reply's alone (`captureReadBudget`, four and a half minutes with its reason),
 since a read sends no write. Past a capture's life nothing its taker sends
 lands, and past a standby's window nothing the standby sends does. Every node
 reads a stamp's age against those and twice the skew (`SessionCaptureBudget`,
-three hours and fourteen minutes; `standbyBudget`, four hours and
-thirty-four and a half), so a reader whose clock stands ahead never releases a capture still
+three hours and fifty-three minutes; `standbyBudget`, five hours and
+fifteen and a half), so a reader whose clock stands ahead never releases a capture still
 being kept. The waits decide on their own monotonic clocks instead of on a
 reader's word: a read standing by waits for the capture it stood by for that
 capture's whole life and one read (`standbyWait`), then reads the turn's row
@@ -4917,9 +4929,9 @@ once every bound has passed, the end reads the row once more and decides on
 that read, since its last read inside a bound is issued up to a tick before
 it, and a takeover that landed after that read, in the window's last
 instants, was otherwise never seen and its record met the end's tombstone.
-The bounds are allowances at the floor: an hour and eighteen and a half minutes
-for a capture from first sight, its life and that read, and three hours and
-fifty-seven and a half for a standby's, its window, its takeover's
+The bounds are allowances at the floor: an hour and fifty-seven and a half minutes
+for a capture from first sight, its life and that read, and five hours and
+seventeen and a half for a standby's, its window, its takeover's
 life and a read after each. The
 spools a crash left behind are swept by their process's lock, never their age
 (the amendment on a node's session spools, below). At an ordinary pace every step answers in
@@ -5007,7 +5019,7 @@ second change of the row no room counts. So at the floor any one of them can
 be cut: the harness end left unrecorded, the pause's stamp missing, or the
 capture left begun until a turn's end gives up on it. A taker
 whose leases answer while its stamp never reaches the row is held by readers
-for up to three hours and fourteen minutes on their clocks, and by a
+for up to three hours and fifty-three minutes on their clocks, and by a
 turn's end for its life from first sight and one more read of the row. A read standing
 by beside a capture whose
 record the log took but whose stamp never reached the row takes the place
@@ -5142,9 +5154,9 @@ turn's row for a begun stamp naming a taker whose lease holds, or that the
 store cannot say of, as well, and settles it landed where the row names its
 place: the turn's end at most once every record's budget, thirty seconds on
 its wait's own clock, never at its two-second tick (`heldRowPace`,
-`beganUnderTaker`), about a hundred and forty-three linearizable reads for
-one capture held its whole life from first sight, and about four hundred and
-sixty-five over a standby's chain, the end's rounds alone reading the log; a
+`beganUnderTaker`), about two hundred and thirty-five linearizable reads for
+one capture held its whole life from first sight, and about six hundred and
+thirty-five over a standby's chain, the end's rounds alone reading the log; a
 relaunch once, after its wait has run out, for a stamp of the job it follows
 however long ago it began (`ContinuedCapture`,
 `followedBegunUnderTaker`), since such a host holds its lease for as long as
@@ -5167,8 +5179,8 @@ the capture is begun past its budget on the standby's clock, the standby
 reads the turn's row on the log once there, held to one change of the record,
 before it reads the run's row and decides (`waitedOut`), so a wait that ran
 out first does not upload the session a second time either. The standby's
-window counts that read and the settle it decides (`standbyWindow`, two
-hours and thirty-four and a half minutes). The landed arm needs no fence: the row names the place
+window counts that read and the settle it decides (`standbyWindow`, three
+hours and fifteen and a half minutes). The landed arm needs no fence: the row names the place
 only once the log has taken the record, and nothing takes a record back; so a
 lease the store cannot say of is admitted to it as a lease that holds is, for
 the end's, the relaunch's and the standby's reads alike, since a store that
@@ -5399,7 +5411,8 @@ allowance of a seat's saves, and a seat holds up to twice it. The whole
 company has to agree on it, so it is one value per seat in the coordination
 store's uploads bucket (`coord.SaveAllowances`, key class `save.<seat>`), aged
 out by the bucket's thirty hours with no sweep and no retirement step. Each
-entry is held `saveLedgerHold`, 29 h 4.5 min: the take's life before its
+entry is held `saveLedgerHold`, 29 h 45.5 min, fourteen and a half minutes
+under the bucket's thirty hours, a margin a test pins: the take's life before its
 object is stored, the collector's grace and two of its passes, and twice the
 assumed clock skew, since its end is written on one node's clock and read on
 another's. THE CHARGE COMES BEFORE THE STAMP'S INSTANT, by compare-and-swap,
@@ -6068,13 +6081,13 @@ its bound are gone.
 
 **Every spool of a process shares one room**, `(maxConcurrentSaves + 1) ×
 sandbox.takeRoomBytes` (`sandbox.spoolRoomBytes`), 481.17 MiB: a take's room
-is a sealed session at its bound for its sealed spool, taken first, and as
-much again for its scrub's spool, each with what gzip adds to input it cannot
-shrink and to the scrub spool's members. A save takes a take's room before its pack slot and never waits, so
+is twice a sealed session at the text bound, with what gzip adds to input it
+cannot shrink and to the scrub spool's members, which its scrub's spool and its
+sealed spools share (the kept-bound amendment, below). A save takes a take's room before its pack slot and never waits, so
 saves leave a final take the fifth take's room; a take waits for its room at
 most a minute (`spoolRoomWait`) before its pack slot and its scrub's slots, a
-save's order, shrinks its sealed part to its archive's counted size once
-packed and its scrub's part as that spool is read back and removed, and past
+save's order, shrinks its room to its scrub's spool and its archive's counted
+size once both are known, and past
 the minute keeps nothing and stamps nothing. Every seal is refused before it
 writes past its room, a save's what its seat's ledger counted.
 
@@ -6474,7 +6487,8 @@ mebibyte a second (`boxReadPace`), and its slowest plaintext, 183 s; the digest
 left in its box; and one keep of the sealed session the archive may become
 (`keepBudgetFor` of `countedFor`), and a pace more for each media object its
 take cut apart, each uploaded paced by the mebibyte begun. 8 min 35 s for an
-archive of half a mebibyte, 34 min 9 s at the bound, the longest where it
+archive of half a mebibyte, 34 min 9 s at the text bound, 58 min 41 s at the
+kept bound (the take's bound read off its begun stamp), the longest where it
 waits on two (`Coordinator.relaunchWaitOf`). A take stamps its archive's size
 with its place (`archive_size`, as the box reported it before the scrub), and
 its keep its media count on its begun stamp before uploading any
@@ -6493,14 +6507,14 @@ nothing is stored, and a later put may be) is made again into the same object,
 spaced as a record's attempts are, each begun only while the keep's budget
 left holds the session at the store's slowest pace and its record's room
 (`Coordinator.uploadSpool`), the taker lease's fence asked before each; any
-other refusal is final. `SessionKeepBudget` is unchanged (`keepBudgetFor` of
-the sealed bound, twenty-nine minutes), so a capture's life and
-every bound read from it are too.
+other refusal is final. This moves no budget: `SessionKeepBudget` (the kept
+bound's, sixty-eight minutes, below) and a capture's life stand.
 
 **The scrub's wait** is derived in code from the archive's bound: the spool's
-minute, the archive read twice at the box-read floor (`scrubArchiveReads`,
-96 s at 48 MiB) and the slowest plaintext (`scrubPlainSlowest`), rounded up to
-the minute, six minutes as before.
+minute, the archive read twice at the box-read floor at its take's bound
+(`scrubWaitFor`: 188 s at the kept bound's 94 MiB, 96 s at 48 MiB) and the
+slowest plaintext (`scrubPlainSlowest`), rounded up to the minute: eight
+minutes at the kept bound, six at the text bound.
 
 **Mid-upgrade.** `archive_size` is a new key an older build carries among a
 capture's unknown keys. An older relaunch still waits fifteen seconds, and an
@@ -6570,8 +6584,9 @@ enough.
 scrubbed text is base64 whole, or a data URI's, of a mebibyte or more; the take
 finds it after the scrub, so a secret inside one leaves it inline and redacted,
 and cuts it at the gzip level, never inside the JSON. It keeps apart at most
-`MediaMaxCount` first occurrences holding `SessionMaxBytes` of text, and a
-repeat by its first's digest; past either a payload stays inline.
+`MediaMaxCount` first occurrences holding the take's bound of text
+(`SessionTake.MaxBytes`), and a repeat by its first's digest; past either a
+payload stays inline.
 
 **Named by rows, kept by reachability.** A capture names its session's whole
 media set (`Capture.Media`, record version 9; one with none keeps the older
@@ -6809,3 +6824,65 @@ mid-read.
 **Mid-upgrade.** A build reading an older version retains a version 11 end, and
 a build reading 11 a version 12 end, and every later record of its
 conversation, until it is upgraded.
+
+## Amendment: a session is kept to 94 MiB in all once every node that settles its runs reads it
+
+The media amendment bounds a capture's text and media together at
+`SessionKeptMaxBytes` (94 MiB), but a take admitting only `SessionMaxBytes`
+(48 MiB) of its box, media included, refuses a session whose payloads pass
+48 MiB as `too_large` with that room left.
+
+**Two bounds.** A take holds the TEXT bound, its archive within
+`executorkeep.SessionMaxBytes`, or the KEPT bound, its archive within
+`executorkeep.SessionKeptMaxBytes` in all and its text still within 48 MiB
+(`sandbox.takeBound`). It holds the kept bound only while its media are kept
+apart and every node that may settle a run's row says capture stamp version 2
+(`sandbox.KeptStampVersion`; `CaptureStampVersion` is 2, `MediaStampVersion`
+stays 1), read in the media gate's one pass (`engine.executorMediaReaders`); a
+node at 1 holds every take to the text bound, logged once
+(`executor_session_kept_at_text_bound`). A build at 1 refuses its own write of
+a stamp past 48 MiB and reads a keep at the kept bound, still under way, as
+abandoned, so the version gates the take. The begun stamp carries the take's
+bound (`SessionCapture.KeptBound`, `kept_bound`), which its keep, a takeover and
+a relaunch's wait (`captureRestFor`) size on, and `Bounded` holds a stamp's
+archive to 94 MiB only there. The keep asks again before its record
+(`Coordinator.readersBelow`): a reader definitely below 2 refuses a kept-bound
+capture, and an answer it cannot get lets it land.
+
+**Paced and budgeted together.** A kept-bound take's media are paced to
+`executorkeep.KeptPaceMiB`, 127 (95 mebibytes begun of `KeptSealedMaxBytes`
+and one more for each of `MediaMaxCount` objects), and its keep is budgeted at
+it (`SessionTake.KeepPaceMiB`): one object's pace alone would leave a capture
+near the bound room for none of its media. `SessionKeepBudget` is the kept
+bound's, 68 minutes (5 × 30 + 127 × 30 + 2 × (30 + 30) s), and bounds every
+keep; a keep is held to its own take's, 29 minutes at the text bound. A
+take's scrub and its budget are its own bound's too, six and eight minutes
+at the text bound, eight and ten at the kept bound, and a reader that cannot
+know a take's bound holds it to the kept bound's (`SessionScrubWait`,
+`SessionTakeBudget`). Every figure sized per bound takes the bound as an
+argument (`sandbox.captureBound`) each call must name at compile time, and a
+zero bound is refused at run time, so none is sized at the kept bound by
+omission; each reader holding the kept bound's maximum names it at the call. From these, `captureLife` is
+6,780.08 s, `SessionCaptureBudget` 13,980.08 s, `standbyBudget` 18,932.21 s, and `saveLedgerHold` 29 h 45.5 min,
+fourteen and a half minutes under the uploads bucket's 30 h
+(`coord.UploadRetention`), a margin a test pins.
+
+**One room, drained.** A take's scrub spool and its sealed spools share one
+room, `takeRoomBytes` (96.23 MiB). The scrub spools in files of
+`executorkeep.SpoolSegmentBytes` (1 MiB); its second reading removes each file
+it has read past and gives its bytes back to the take's room, never the
+node's, and the seals write into them, so a take at the kept bound peaks at
+95.18 MiB (`drainPeakBytes`: the spool at its most, one file, and what the
+seals and gzip add). A 95 MiB bound would leave the room under 0.1 MiB. The
+hold shrinks to the scrub spool and the counted archive once both are known,
+then to the sealed size. `spoolRoomBytes` (481.17 MiB) and the operator's
+561Mi floor stand.
+
+**Mid-upgrade.** A node at stamp version 1, live or on its record while
+offline, keeps every take at the text bound until it is upgraded or its id is
+retired. While a reader says version 1, its take, takeover and standby figures
+bound every gated take's: the take's budget (480 s), its keep (29 min), its
+life, its takeover's and a standby's wait and window are each at or within the
+version-1 reader's (a standby waits for the stood-by capture at that
+capture's own bound), a turn's end there holding a standby exactly its window
+(`sandbox.TestAGatedTakeStaysWithinEveryFigureAVersionOneReaderHoldsItTo`).

@@ -21,21 +21,23 @@ import (
 
 // A CAPTURE'S BUDGETS COUNT EVERY STEP OF ITS LIFE AT THE SLOWEST CROSSING, a
 // change's for a change and a read's for a read, and a reading on another
-// machine's clock adds twice the skew. A keep: four steps, the upload, a read
-// again and its record, and an amend, a read and a record more for a carry
-// gone. A take's life: its take's rest with its reservation's room, digest,
-// keep and stamp; an unanswered takeover's: the takeover, withdrawal and read
-// back, keep and stamp; a standby's wait: the longer life and a tick; its
-// window: its take's rest with its reservation's room, digest, three changes
-// past the wait, its last read and its takeover. Each is the docs' figure at
-// today's bounds, to the nanosecond.
+// machine's clock adds twice the skew. A keep: four steps, the upload at the
+// kept bound's pace (the text bound's, a keep of its own), a read again and
+// its record, and an amend, a read and a record more for a carry gone. A
+// take's life: its take's rest with its reservation's room, digest, keep and
+// stamp; an unanswered takeover's: the takeover, withdrawal and read back, keep
+// and stamp; a standby's wait: the longer life and a tick; its window: its
+// take's rest with its reservation's room, digest, three changes past the
+// wait, its last read and its takeover. Each the docs' figure, to the ns.
 //
 // Mutation: drop a term, a reading's skew, or count a read as a change.
 func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	t.Parallel()
 	change := sessionRecordBudget + coord.MaxValueCrossing
 	read := sessionRecordBudget + coord.MaxValueReadCrossing
-	keep := 5*sessionRecordBudget + objstore.PaceFor(executorkeep.SealedMaxBytes) +
+	keep := 5*sessionRecordBudget + time.Duration(executorkeep.KeptPaceMiB)*objstore.MiBPace +
+		2*(sessionRecordBudget+sessionRecordBudget)
+	text := 5*sessionRecordBudget + objstore.PaceFor(executorkeep.SealedMaxBytes) +
 		2*(sessionRecordBudget+sessionRecordBudget)
 	take := SessionPackWait + SessionScrubWait + change + discardGrace + keep + change
 	over := change + change + read + keep + change
@@ -51,15 +53,16 @@ func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	}{
 		{"one change of a run's row another node reads", captureStampBudget, change, "13m30.025663374s"},
 		{"one read of a run's row another node waits on", captureReadBudget, read, "4m30s"},
-		{"a keep", SessionKeepBudget, keep, "29m0s"},
+		{"a keep", SessionKeepBudget, keep, "1h8m0s"},
+		{"a keep at the text bound", textBound.keep, text, "29m0s"},
 		{"a keep's read", keepReadRoom, sessionRecordBudget, "30s"},
-		{"a take's life", takeLife, take, "1h4m30.051326748s"},
-		{"a takeover's life", takeOverLife, over, "1h14m0.076990122s"},
-		{"a capture's life", captureLife, life, "1h14m0.076990122s"},
-		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h14m0.076990122s"},
-		{"a standby's wait", standbyWait, wait, "1h14m2.076990122s"},
-		{"a standby's window", standbyWindow, window, "2h34m32.205306992s"},
-		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h34m32.205306992s"},
+		{"a take's life", takeLife, take, "1h45m30.051326748s"},
+		{"a takeover's life", takeOverLife, over, "1h53m0.076990122s"},
+		{"a capture's life", captureLife, life, "1h53m0.076990122s"},
+		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h53m0.076990122s"},
+		{"a standby's wait", standbyWait, wait, "1h53m2.076990122s"},
+		{"a standby's window", standbyWindow, window, "3h15m32.205306992s"},
+		{"a standby read on another machine's clock", standbyBudget, window + skew, "5h15m32.205306992s"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s is %v, want its terms, %v", c.name, c.got, c.want)
@@ -295,7 +298,7 @@ func TestAKeepsReadsLeaveItsUploadItsWholePace(t *testing.T) {
 		run := rig.launchKept(t, "t1")
 		spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID), rig.runner,
 			readCapture(BoxReadStop, Result{}, true))
-		if spooled == nil || spooled.standby {
+		if spooled == nil || spooled.standingBy() {
 			t.Fatalf("the stop's read spooled %+v, want the capture's own place", spooled)
 		}
 		return spooled
@@ -355,8 +358,8 @@ func TestAKeepsReadsLeaveItsUploadItsWholePace(t *testing.T) {
 //     that never stamps: the end waits until its capture lands and is recorded;
 //   - a takeover lands after the end's last round, inside its window: the end
 //     reads the row once more past the window and waits for it;
-//   - a capture stamped hours ahead, so its age never ends it here: the end
-//     gives up on it a life after first sight, within a tick.
+//   - a capture, or a save at the text bound, stamped hours ahead: the end gives
+//     up on it the kept bound's life after first sight, within a tick.
 //
 // Mutation: cap the end at one life from its own start, decide off the last
 // round's read, or hold no sighting to a bound of its own, and a case fails.
@@ -396,7 +399,7 @@ func TestAnEndWaitsForEachCaptureItSeesItsWholeLifeFromFirstSight(t *testing.T) 
 			standby, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
 				takenAs{FakeRunner: rig.runner, body: bytes.NewReader(standbyArchive)},
 				readCapture(BoxReadCollect, Result{}, true))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("the late read beside node-a's capture spooled %+v, want it standing by", standby)
 			}
 			kept := make(chan *SessionKept, 1)
@@ -508,6 +511,44 @@ func TestAnEndWaitsForEachCaptureItSeesItsWholeLifeFromFirstSight(t *testing.T) 
 			}
 		})
 	})
+	t.Run("a save at the text bound whose age never ends it here", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			rig, _, _ := keepingRig(t)
+			run := rig.launchKept(t, "t1")
+			// AT THE TEXT BOUND, which the end holds to the kept bound's life
+			// all the same: a save's stamp is read as the most a reader holds.
+			save := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
+				State: CaptureBegun, Interrupted: true, Through: new(0),
+				At: rig.coordinator.now().Add(2 * objstore.AssumedClockSkew), Taker: takingProcess, TakerEpoch: 1,
+				Harness: "claude-code", SessionID: "s-1"}
+			if took, err := rig.pending.ReserveSave(t.Context(), "t1", save); err != nil || !took {
+				t.Fatalf("reserving node-a's save = %v, %v", took, err)
+			}
+			// THE SAVE ALONE IN FLIGHT: a final take beside it, refused, so no
+			// capture's own life holds the end.
+			final := save
+			final.CaptureSeq, final.Final, final.Interrupted, final.At = 2, true, false, rig.coordinator.now()
+			refused := final
+			refused.State, refused.Reason = CaptureRefused, "the session could not be uploaded"
+			for _, stamp := range []SessionCapture{final, refused} {
+				if took, err := rig.pending.StampCapture(t.Context(), "t1", stamp); err != nil || !took {
+					t.Fatalf("stamping the final take %s = %v, %v", stamp.State, took, err)
+				}
+			}
+			row := rig.get("t1")
+			began := time.Now()
+			end, found, err := rig.coordinator.awaitEndCaptures(t.Context(), row)
+			if took := time.Since(began); err != nil || !found || took < captureLife ||
+				took > captureLife+captureWaitTick {
+				t.Errorf("the end's wait returned %v (%v, %v) after it first saw the save, want the kept "+
+					"bound's life, %v, and within a tick of it", took, found, err, captureLife)
+			}
+			if got := end.Saving; got == nil || !got.sameTake(save) {
+				t.Errorf("the end's wait returned on the save %+v, want node-a's as it stood", got)
+			}
+		})
+	})
 }
 
 // A READ STANDING BY TAKES THE NEXT PLACE ONCE ITS OWN WAIT OUTLASTS THE
@@ -541,16 +582,20 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			run := rig.launchKept(t, "t1")
 			stuck(t, rig, run)
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
 			}
 			began := time.Now()
 			if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
 				t.Fatalf("the standby's keep came to %+v, want the session kept in the next place", kept)
 			}
-			if took := time.Since(began); took < standbyWait {
-				t.Errorf("the standby took the next place %v into its keep, before its wait of %v ran out", took,
-					standbyWait)
+			// AT THE STOOD-BY CAPTURE'S OWN BOUND, the text bound's, never the
+			// kept bound's longer wait.
+			if took, wait := time.Since(began), standbyWaitFor(atTextBound); took < wait ||
+				took >= standbyWaitFor(atKeptBound) {
+				t.Errorf("the standby took the next place %v into its keep, want past its wait of %v for a "+
+					"capture at the text bound and before the kept bound's %v", took, wait,
+					standbyWaitFor(atKeptBound))
 			}
 			keptByTheStandby(t, rig, writes, keep)
 		})
@@ -566,16 +611,16 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			onTheLog(restore, row)
 			rig.coordinator.restore = restore
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
 			}
 			began := time.Now()
 			if kept := rig.coordinator.keepCapture(t.Context(), standby); kept != nil {
 				t.Errorf("beside the record the log took, the standby's keep came to %+v, want nothing", kept)
 			}
-			if took := time.Since(began); took < standbyWait {
+			if took := time.Since(began); took < standbyWaitFor(atTextBound) {
 				t.Errorf("the standby stood down %v into its keep, before its wait of %v ran out", took,
-					standbyWait)
+					standbyWaitFor(atTextBound))
 			}
 			if read := restore.askedFor(); len(read) != 1 {
 				t.Errorf("the turn's row on the log was read %v, want once, as the standby's wait ran out", read)
@@ -605,7 +650,7 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			held := newHeldArchive(placeHolderArchive)
 			placed := holdingPlace(t, rig, run, held)
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", standby)
 			}
 			held.end <- nil
@@ -624,9 +669,9 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			if kept := rig.coordinator.keepCapture(t.Context(), standby); kept != nil {
 				t.Errorf("beside a record still unanswered, the standby's keep came to %+v, want nothing", kept)
 			}
-			if took := time.Since(began); took < standbyWait {
+			if took := time.Since(began); took < standbyWaitFor(atTextBound) {
 				t.Errorf("the standby stood down %v into its keep, before its wait of %v ran out", took,
-					standbyWait)
+					standbyWaitFor(atTextBound))
 			}
 			if uploads := keep.uploads(); len(uploads) != 1 || !bytes.Equal(uploads[0], placeHolderArchive) {
 				t.Errorf("uploaded %q, want the place-holder's session once", uploads)
@@ -645,7 +690,7 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			run := rig.launchKept(t, "t1")
 			stuck(t, rig, run)
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
 			}
 			ctx, cancel := context.WithCancel(t.Context())
@@ -844,6 +889,7 @@ func (a *floorArchive) Read(p []byte) (int, error) {
 // settle the save in the standby's passes.
 func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 	t.Parallel()
+	keptPace := time.Duration(executorkeep.KeptPaceMiB) * objstore.MiBPace
 	// floor sets every fake of rig at the slowest crossing, and hands back
 	// the store, which notes each step, and the archive a take streams.
 	type floored struct {
@@ -856,6 +902,10 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 		store := &atTheFloor{PendingStore: rig.coordinator.pending, last: last, at: map[string]time.Time{}}
 		var takeBy time.Time
 		archive := &floorArchive{body: bytes.NewReader(standbyArchive), wait: spool(&takeBy)}
+		// AT THE KEPT BOUND, whose keep is the longest a capture lives by.
+		keep.mu.Lock()
+		keep.policy.MediaApart, keep.policy.KeptBound = true, true
+		keep.mu.Unlock()
 		rig.runner.Session.Taking = func(ctx context.Context) { takeBy, _ = ctx.Deadline() }
 		rig.runner.Session.Keeping = func(ctx context.Context) { last(ctx, false) }
 		rig.coordinator.pending = store
@@ -889,11 +939,11 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				if deadline, ok := ctx.Deadline(); ok && (!read || time.Until(deadline) <= captureStampBudget) {
 					time.Sleep(time.Until(deadline) - time.Second)
 				}
-			}, func() { time.Sleep(objstore.PaceFor(executorkeep.SealedMaxBytes) - time.Second) },
+			}, func() { time.Sleep(keptPace - time.Second) },
 				func(by *time.Time) func() { return func() { time.Sleep(time.Until(*by) - time.Second) } })
 			spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
 				takenAs{FakeRunner: rig.runner, body: f.archive}, readCapture(BoxReadStop, Result{}, true))
-			if spooled == nil || spooled.standby {
+			if spooled == nil || spooled.standingBy() {
 				t.Fatalf("the stop's read spooled %+v, want the capture's own place", spooled)
 			}
 			if kept := rig.coordinator.keepCapture(t.Context(), spooled); kept == nil || kept.NotKept != "" {
@@ -920,9 +970,13 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 			if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
 				t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
 			}
+			keep.mu.Lock()
+			keep.policy.MediaApart, keep.policy.KeptBound = true, true
+			keep.mu.Unlock()
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
-				t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
+			if standby == nil || !standby.standingBy() || !standby.stamp.KeptBound {
+				t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by at the kept "+
+					"bound", standby)
 			}
 			refused := begun
 			refused.State, refused.Reason = CaptureRefused, "the session could not be uploaded"
@@ -933,7 +987,7 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				if deadline, ok := ctx.Deadline(); ok && (!read || time.Until(deadline) <= captureStampBudget) {
 					time.Sleep(time.Until(deadline) - time.Second)
 				}
-			}, func() { time.Sleep(objstore.PaceFor(executorkeep.SealedMaxBytes) - time.Second) },
+			}, func() { time.Sleep(keptPace - time.Second) },
 				func(*time.Time) func() { return func() {} })
 			f.store.loseTakeOver = true
 			if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
@@ -982,9 +1036,11 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				}
 				run := rig.launchKept(t, "t1")
 				lease := claimTaker(t, store, takingProcess)
+				// AT THE KEPT BOUND, whose standby waits and lives the longest.
 				begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
 					State: CaptureBegun, Final: true, At: rig.coordinator.now().Add(-time.Second),
-					Taker: takingProcess, TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1"}
+					Taker: takingProcess, TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1",
+					KeptBound: true}
 				if saving {
 					save := begun
 					save.Final, save.Interrupted, save.Through = false, true, new(0)
@@ -1006,11 +1062,11 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 					if deadline, ok := ctx.Deadline(); ok && (!read || time.Until(deadline) <= captureStampBudget) {
 						time.Sleep(time.Until(deadline) - time.Second)
 					}
-				}, func() { time.Sleep(objstore.PaceFor(executorkeep.SealedMaxBytes) - time.Second) },
+				}, func() { time.Sleep(keptPace - time.Second) },
 					func(by *time.Time) func() { return func() { time.Sleep(time.Until(*by) - time.Second) } })
 				standby, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
 					takenAs{FakeRunner: rig.runner, body: f.archive}, readCapture(BoxReadCollect, Result{}, true))
-				if standby == nil || !standby.standby {
+				if standby == nil || !standby.standingBy() {
 					t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
 				}
 				// NODE-A'S LEASE GOES while the wait's last read of the row
@@ -1077,7 +1133,7 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				if deadline, ok := ctx.Deadline(); ok && (!read || time.Until(deadline) <= captureStampBudget) {
 					time.Sleep(time.Until(deadline) - time.Second)
 				}
-			}, func() { time.Sleep(objstore.PaceFor(executorkeep.SealedMaxBytes) - time.Second) },
+			}, func() { time.Sleep(keptPace - time.Second) },
 				func(by *time.Time) func() { return func() { time.Sleep(time.Until(*by) - time.Second) } })
 			// THE TAKE STREAMS TO ITS DEADLINE, as a pack and a scrub at their
 			// bound leave it, once its place is reserved.
@@ -1437,4 +1493,42 @@ func TestAnAskThatLeavesARecordUnansweredWritesNothing(t *testing.T) {
 				continued, why)
 		}
 	})
+}
+
+// A TAKE HELD TO THE TEXT BOUND STAYS WITHIN EVERY FIGURE A VERSION-1 READER
+// HOLDS IT TO: while a node says only MediaStampVersion, every take is gated
+// to the text bound, and such a reader holds that take, its takeover, its
+// standby and its keep to its own figures, a turn's end holding a standby
+// exactly its window. So each gated figure is at or within the reader's
+// (inclusive: several are exactly it), each row pinned at the reader's value,
+// and a figure added later gets a row. Values a build at MediaStampVersion
+// derives (6e94ffd7ac).
+//
+// Mutation: add a room to the text bound's keep or take, hold every take to
+// the kept bound's budget, or wait for a gated capture at the kept life.
+func TestAGatedTakeStaysWithinEveryFigureAVersionOneReaderHoldsItTo(t *testing.T) {
+	t.Parallel()
+	ns := func(n int64) time.Duration { return time.Duration(n) }
+	for _, row := range []struct {
+		figure    string
+		gated, v1 time.Duration
+	}{
+		{"a take's budget, which an asker's box read waits for", textBound.take, 480 * time.Second},
+		{"a keep's budget", textBound.keep, 1_740 * time.Second},
+		{"a take's life", takeLifeWith(atTextBound), ns(3_870_051_326_748)},
+		{"a takeover's life", takeOverLifeWith(atTextBound), ns(4_440_076_990_122)},
+		{"a capture's life, which a turn's end and a stamp's age hold it to", captureLifeAt(atTextBound),
+			ns(4_440_076_990_122)},
+		{"a standby's wait", standbyWaitFor(atTextBound), ns(4_442_076_990_122)},
+		{"a standby's window, which a turn's end holds a standby exactly", standbyWindowFor(atTextBound, atTextBound),
+			ns(9_272_205_306_992)},
+		{"a relaunch's wait at the text bound", captureRestFor(executorkeep.SessionMaxBytes, 0, atTextBound),
+			2_049 * time.Second},
+		{"a relaunch's wait at half a mebibyte", captureRestFor(512<<10, 0, atTextBound), 515 * time.Second},
+	} {
+		if row.gated > row.v1 {
+			t.Errorf("%s at the text bound is %v, past the %v a version-1 reader holds it to", row.figure,
+				row.gated, row.v1)
+		}
+	}
 }

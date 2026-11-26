@@ -38,10 +38,11 @@ const trimTarSlack = 1 << 20
 
 // trimPlainPoint is the members' bytes past which a pack trims: what the take's
 // scrub reads at most ([scrubPlainMax]) less [trimTarSlack]. trimPackedPoint is
-// the archive's bytes past which it trims: what a take keeps
-// ([executorkeep.SessionMaxBytes]). AT THE BOUNDS THEMSELVES, never below them:
-// every pack trims, so no growth is left between a trim and a take, and a trim
-// at the bound keeps the most history Sessions and read_session can read.
+// the archive's bytes past which it trims: the text bound
+// ([executorkeep.SessionMaxBytes]), which a pack cannot tell from a session's
+// media, so a take at the kept bound still receives a trimmer's session cut
+// there (crewlet/crewlet#2020 piece 4c-2 moves it). AT THE BOUNDS, never below
+// them: every pack trims, so no growth is left between a trim and a take.
 const (
 	trimPlainPoint  = scrubPlainMax - trimTarSlack
 	trimPackedPoint = executorkeep.SessionMaxBytes

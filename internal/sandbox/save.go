@@ -242,9 +242,9 @@ type saveTaken struct {
 	// charge is its entry on its seat's save ledger, which its keep amends
 	// to what it uploads.
 	charge *saveCharge
-	// room is the room its sealed spools hold, and scrubbing its scrub's
-	// spool's, from before its pack ([takeRoomBytes]).
-	room, scrubbing *spoolHold
+	// room is the room its spools hold, its scrub's and its sealed ones',
+	// from before its pack ([takeRoomBytes]).
+	room *spoolHold
 	// sealed is the size of the object the keep landed.
 	sealed int64
 }
@@ -275,7 +275,6 @@ func (c *Coordinator) saveTask(ctx, phase context.Context, job saveJob) saveOutc
 		// ITS ROOM BACK ONCE ITS KEEP HAS ENDED, as its spool's removal gives
 		// it, or where none was spooled.
 		defer in.room.release()
-		defer in.scrubbing.release()
 		out = c.takeSave(ctx, job, point, in, out, passed, inflight)
 	}
 	switch out.class {
@@ -327,12 +326,11 @@ func (c *Coordinator) saveInHand(ctx, phase context.Context, job saveJob, out sa
 
 	run := job.run
 	packed := false
-	var spooling, scrubbing *spoolHold
+	var spooling *spoolHold
 	// STOOD DOWN where the coordinator stopped, or the phase ended while the
 	// box phase ran: past the pack the save is the coordinator's.
 	end := func(class saveClass, why string) (*saveTaken, saveOutcome) {
 		spooling.release()
-		scrubbing.release()
 		if (class == saveNotYet || class == saveFailed) && (ctx.Err() != nil || (!packed && phase.Err() != nil)) {
 			class = saveStoodDown
 		}
@@ -401,16 +399,15 @@ func (c *Coordinator) saveInHand(ctx, phase context.Context, job saveJob, out sa
 	if !held {
 		return end(saveNotYet, takerUnheld)
 	}
-	// ROOM FOR ITS SPOOLS AT THE SEALED BOUND, taken before the pack slot and
-	// never waited for: a save that finds none is due again, and leaves a
-	// final take the room saves never fill ([spoolRoomBytes]). The scrub's
-	// spool's part is split off at once ([takeRoomBytes]).
+	// A TAKE'S ROOM FOR ITS SPOOLS, its scrub's and its sealed ones', taken
+	// before the pack slot and never waited for: a save that finds none is due
+	// again, and leaves a final take the room saves never fill
+	// ([spoolRoomBytes]).
 	if spooling = c.trySpoolRoom(takeRoomBytes); spooling == nil {
 		out.unplaced, out.loss = "spool", executorkeep.LossNoSpoolRoom
 		return end(saveNotYet, fmt.Sprintf("this node's session spools fill their room (%d bytes)",
 			spoolRoomBytes))
 	}
-	scrubbing = spooling.split(takeRoomBytes - executorkeep.SealedMaxBytes)
 	// ONE PACK AT A TIME in a box that shares the node's memory
 	// ([Coordinator.sharedPack]), given back as the pack returns.
 	give, err := c.packSlot(phase, row)
@@ -421,7 +418,7 @@ func (c *Coordinator) saveInHand(ctx, phase context.Context, job saveJob, out sa
 	give()
 	switch {
 	case errors.As(err, new(*UnrestorableError)):
-		loss, why := takeRefusal(phase, err)
+		loss, why := takeRefusal(phase, err, policy.bound())
 		out.unplaced, out.loss = "pack", loss
 		return end(saveUnrestorable, why)
 	case errors.Is(err, ErrSaveNoRoom):
@@ -439,7 +436,7 @@ func (c *Coordinator) saveInHand(ctx, phase context.Context, job saveJob, out sa
 		defer cancel()
 		_ = saver.ReleaseSave(rel, box, archive.Path)
 	}
-	counted := countedFor(archive.Size)
+	counted := countedFor(archive.Size, policy.bound())
 	// PACED AT WHAT THE PACK MEASURED, before its charge, where nothing told
 	// the session's size before it ([expectedSave]): released uncharged, its
 	// size kept so the next is paced before its pack. Never again past an
@@ -453,7 +450,7 @@ func (c *Coordinator) saveInHand(ctx, phase context.Context, job saveJob, out sa
 				"session packed at %d", room, counted))
 		}
 	}
-	spooling.shrinkTo(counted)
+	spooling.counting(counted)
 	// CHARGED WHAT IT WILL MOST LIKELY UPLOAD: its archive, less the media
 	// its turn's newest kept capture holds, which its keep carries rather
 	// than uploads; amended once the keep knows ([Coordinator.amendSave]).
@@ -471,7 +468,7 @@ func (c *Coordinator) saveInHand(ctx, phase context.Context, job saveJob, out sa
 	}
 	out.counted = charge.entry.Bytes
 	return &saveTaken{box: box, saver: saver, row: row, policy: policy, archive: archive, counted: counted,
-		charge: charge, room: spooling, scrubbing: scrubbing}, out
+		charge: charge, room: spooling}, out
 }
 
 // saveRow is rule 7: the ONE READ of the run's row a save's place, save point
@@ -629,7 +626,7 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	}
 	// THE TAKE CONTEXT AFTER THE PACK, so the scrub has its whole budget; a
 	// drain's end bounds it after takeContext, never its parent.
-	take, cancel, by := c.takeContext(ctx)
+	take, cancel, by := c.takeContext(ctx, in.policy.bound())
 	defer cancel()
 	if !job.drainEnd.IsZero() {
 		var endDrain context.CancelFunc
@@ -648,13 +645,12 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 		out.unplaced = "spool"
 		return end(saveFailed, err.Error())
 	}
-	taken, err := in.saver.TakeSession(take, in.box, SessionTake{Save: in.archive.Path, Scrub: scrub,
-		MaxBytes: executorkeep.SessionMaxBytes, Scope: row.AgentID, Session: row.Launch.Minted,
-		Spool: in.scrubbing.spooling(dir), MediaApart: in.policy.MediaApart})
+	taken, err := in.saver.TakeSession(take, in.box, in.policy.Bound(SessionTake{Save: in.archive.Path,
+		Scrub: scrub, Scope: row.AgentID, Session: row.Launch.Minted, Spool: in.room.scrubbing(dir)}))
 	switch {
 	case err != nil:
 		out.unplaced = "take"
-		loss, why := takeRefusal(take, err)
+		loss, why := takeRefusal(take, err, in.policy.bound())
 		out.loss = loss
 		if errors.As(err, new(*UnrestorableError)) {
 			return end(saveUnrestorable, why)
@@ -692,7 +688,7 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	spooled, err := c.spool(take, row, stamp, taken, &savePlaces{run: row, resumeRead: taken.ResumeRead,
 		needsResumeRead: placesWithResumeRead(in.saver)}, in.room)
 	if err != nil {
-		loss, why := takeRefusal(take, err)
+		loss, why := takeRefusal(take, err, in.policy.bound())
 		if errors.Is(err, errSpoolPastHold) {
 			why = fmt.Sprintf("the session sealed is past the %d bytes its spools' room held for it",
 				in.counted)
