@@ -169,8 +169,8 @@
 //     name, else is unlisted: rows x1-x7, g4x; a command's lead inferred),
 //     one with no frontmatter under its own name; a copy is `<tag>:<listed>`,
 //     left out, said, where a skill of `skills` or `homeSkills` (the home's
-//     other skill directories, read once a firing) lists under, or rewrites
-//     its own name to, its rewritten name (the latter inferred);
+//     other skill directories) lists under, or rewrites its own name to, its
+//     rewritten name (the latter inferred); "kimi", Kimi 2.7.2's (kimirepo.go);
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (`skillSep` `-` joining them for Gemini CLI,
@@ -222,8 +222,7 @@
 // harness has stopped, since no harness shows a hook's stderr;
 // checkout-launch's stderr is the run's own. The runner's restore marks the
 // state ended, after which a firing claims nothing. A killed run's log is
-// dropped unprinted by the next gate, its lines another run's; each was in its
-// firing's answer already.
+// dropped unprinted by the next gate (its lines were in its firings' answers).
 //
 // # A continued Codex session's standing instructions
 //

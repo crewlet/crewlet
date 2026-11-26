@@ -7,6 +7,31 @@ import (
 	"strings"
 )
 
+// listedKimi is the [checkoutSpec.ListedAs] of a harness that lists skills as
+// Kimi Code 2.7.2 does ([kimiListing]).
+const listedKimi = "kimi"
+
+// kimiListing is Kimi Code 2.7.2's listing rule ([listingRule]): a skill is
+// listed by its frontmatter's name, a loose `.md` at a root's top by its
+// file's less `.md` where it names none, a SKILL.md naming none not at all;
+// names are keyed lower-cased, and of two alike the first root's wins, the
+// run's skills directory before ~/.agents/skills (C 2.7.2: normalizeSkillName,
+// parseSkillText, userRoots). A home walked as Kimi walks one: dot directories
+// holding SKILL.md are skills (walked into, more than Kimi does, which only
+// keeps a copy out), 8 deep at most, nothing refused past that.
+var kimiListing = listingRule{harness: "Kimi Code", walk: skillWalkOptions{Every: true, Depth: 8}, loose: true,
+	key: strings.ToLower, shown: func(name string) string { return name },
+	takes: func(d skillDir) (string, []string) {
+		n, named := frontName(entryFile(d))
+		if !named || n == "" {
+			if !d.command {
+				return "", nil
+			}
+			n = d.name
+		}
+		return n, []string{strings.ToLower(n)}
+	}}
+
 // runKimiNested is one firing of a Kimi Code run's nested hand, which the
 // run's driver runs after each of the main loop's tool calls ends
 // (internal/sandbox/executor's kimi_driver.js, on `item.ended`): it hands each

@@ -11,14 +11,25 @@ import (
 )
 
 // kimiSpec is the spec a Kimi Code run's launch gives the core
-// (internal/sandbox/executor's kimiCheckouts), its skills in skills and its
-// firing bound firing.
+// (internal/sandbox/executor's kimiCheckouts), its skills in skills, the
+// home's other user root (~/.agents/skills) beside it ([kimiAgentsSkills]),
+// and its firing bound firing.
 func kimiSpec(skills string, firing int) checkoutSpec {
+	agents := kimiAgentsSkills(skills)
 	return checkoutSpec{Instructions: []instructionSlot{{Names: []string{".kimi-code/AGENTS.md"}},
 		{Names: []string{"AGENTS.md", "agents.md"}, slotOptions: slotOptions{SkipBlank: true}}},
 		FiringLimit: limited(firing),
 		SkillDirs:   []skillDirSlot{{Dir: ".kimi-code/skills", Recursive: true}, {Dir: ".agents/skills", Recursive: true}},
-		Skills:      skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
+		Skills:      skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"},
+		ListedAs: listedKimi, HomeSkills: []skillDirSlot{
+			{Dir: agents, Recursive: true, skillWalkOptions: skillWalkOptions{Every: true, Depth: 8}},
+			{Dir: agents, skillWalkOptions: skillWalkOptions{Commands: true}}}}
+}
+
+// kimiAgentsSkills is the stand-in ~/.agents/skills of a run whose skills
+// are skills.
+func kimiAgentsSkills(skills string) string {
+	return filepath.Join(filepath.Dir(skills), "agents-skills")
 }
 
 // kimiLaunch runs checkout-launch in r's working directory under Kimi's spec,
@@ -182,5 +193,64 @@ func TestAKimiFiringHandsWholeFilesWithinItsBound(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("the firing printed\n%s\nwant it to hold %q", out, want)
 		}
+	}
+}
+
+// A PERSON'S OWN SKILL IS NEVER HIDDEN BY A KIMI COPY: a copy whose name a
+// skill in either user root Kimi lists, the run's skills or ~/.agents/skills,
+// takes by Kimi's rule (its frontmatter name, case aside; a loose `.md` named
+// by its file where it names none) is left out, said once, and the rest are
+// copied; a SKILL.md naming nothing takes no name (Kimi lists it not).
+//
+// Mutation: compare names in their case, read no home root, take a nameless
+// SKILL.md's directory name, or skip loose `.md` files: red.
+func TestAKimiCopyNeverHidesAPersonsOwnSkill(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	agents := kimiAgentsSkills(r.skills)
+	person := map[string]string{
+		filepath.Join(r.skills, "mine/SKILL.md"):    "---\nname: Late:Fix\ndescription: Mine.\n---\n",
+		filepath.Join(agents, "deep/SKILL.md"):      "---\nname: \"late:deep\"\ndescription: Mine.\n---\n",
+		filepath.Join(agents, "late:loose.md"):      "A loose skill, named by its file.\n",
+		filepath.Join(agents, "late:keep/SKILL.md"): "---\ndescription: Names nothing.\n---\n",
+		filepath.Join(r.skills, "late:solo.md"):     "---\ndescription: Loose in the run's skills.\n---\n",
+	}
+	for path, body := range person {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.kimiLaunch(t, 96<<10)
+	skill := func(name string) string { return "---\nname: " + name + "\ndescription: Theirs.\n---\n" }
+	r.add(t, map[string]string{"late/.git/": "", "late/.agents/skills/fix/SKILL.md": skill("fix"),
+		"late/.agents/skills/deep/SKILL.md": skill("deep"), "late/.agents/skills/loose/SKILL.md": skill("loose"),
+		"late/.agents/skills/keep/SKILL.md": skill("keep"), "late/.agents/skills/solo/SKILL.md": skill("solo")})
+	root := filepath.Join(r.workdir(t), "late")
+	out, said := r.kimiFire(t)
+	for _, want := range []string{
+		"- the skill " + root + "/.agents/skills/fix is left out: the home's " + r.skills + "/mine, which Kimi Code " +
+			"lists as Late:Fix, takes the name late:fix it would list the copy under",
+		"- the skill " + root + "/.agents/skills/deep is left out: the home's " + agents + "/deep, which Kimi Code " +
+			"lists as late:deep, takes the name late:deep it would list the copy under",
+		"- the skill " + root + "/.agents/skills/loose is left out: the home's " + agents + "/late:loose.md, which " +
+			"Kimi Code lists as late:loose, takes the name late:loose it would list the copy under",
+		"- the skill " + root + "/.agents/skills/solo is left out: the home's " + r.skills + "/late:solo.md, which " +
+			"Kimi Code lists as late:solo, takes the name late:solo it would list the copy under",
+		"- late:keep: Theirs. (file: " + r.skills + "/late:keep/SKILL.md)",
+	} {
+		if strings.Count(out, want) != 1 {
+			t.Errorf("the firing printed\n%s\nwant once %q", out, want)
+		}
+	}
+	for _, gone := range []string{"late:fix", "late:deep", "late:loose", "late:solo"} {
+		if _, err := os.Lstat(filepath.Join(r.skills, gone)); err == nil {
+			t.Errorf("%s was copied over the person's own skill", gone)
+		}
+	}
+	if said != "" {
+		t.Errorf("the firing said %q on stderr; want its lines in the run's log alone", said)
 	}
 }
