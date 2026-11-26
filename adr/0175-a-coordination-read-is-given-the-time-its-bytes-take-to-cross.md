@@ -284,7 +284,7 @@ The two ledgers fit by their counts: 256 holds at most, and 512 saves. An
 upload's record holds an intent's files and carried paths and a publish's
 generated files, every path at its bound written as two bytes a byte at
 most, since the record is stored without HTML escaping; its widest is
-2,561,041 bytes. So a publish names at most a version's files before a byte
+2,571,765 bytes. So a publish names at most a version's files before a byte
 moves, and its warnings are cut to 50, each to 512 bytes, with one counting
 the rest, in its first answer as in a retry's. Each file's type is the one it
 is served as, never the client's. The outcome is written after the version
@@ -295,12 +295,12 @@ can reach, is refused by its writer before the retry stores a byte.
 
 A refusal, a close or an early release deletes only what its attempt owns
 (`internal/artifactupload`'s package doc): never a generated file an earlier
-attempt stored, nor a file the record marks offered to a write of unknown
+attempt stored, nor a file the record counts as offered to a write of unknown
 outcome, since a version that write landed may name it. A refusal drops
 another attempt's generated files from the record, keeping their bytes
 reserved as a count on it; a close leaves whatever it does not own held.
 Either way the object collector alone judges them once the hold lapses, and a
-record keeping such bytes is never released early. Each file's mark costs the
+record keeping such bytes is never released early. Each file's count costs the
 record a few bytes, counted in its widest above.
 
 A change of the ledger reads at most four records across its rounds to

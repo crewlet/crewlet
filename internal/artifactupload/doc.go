@@ -65,10 +65,11 @@
 // An object is deleted only by the attempt that owns it, and only where no
 // write of unknown outcome was offered it. An attempt owns the generated
 // objects it stored itself and, once its version lands, the files its upload
-// streamed through the engine. A file offered to a write nobody learned the
-// outcome of is marked so on its record (a retry taking up a claim marks every
-// file the run before it held; an asset is marked before its write, having no
-// claim), since a version or asset it landed may name it. Whatever a run does
+// streamed through the engine. The record counts, on each file, the
+// writes of unknown outcome it was offered to, since a version or asset one
+// landed may name it: a retry taking up a claim counts the run before it, and
+// an asset add, having no claim, counts itself before its write and takes its
+// own count back once a refusal shows nothing landed. Whatever a run does
 // not own stays reserved until its hold lapses, deleted by nothing here; only
 // the collector judges it, and it deletes only what no version names. The
 // record answers this rather than the domain: the operation an attempt wrote

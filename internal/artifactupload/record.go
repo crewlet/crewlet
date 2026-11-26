@@ -104,16 +104,21 @@ type file struct {
 	Transport   transport     `json:"transport"`
 	State       fileState     `json:"state"`
 
-	// Offered marks a file offered to a write whose outcome the record
-	// cannot tell: a version or asset it landed may name the object, so
-	// nothing here deletes it ([run.owns]).
-	Offered bool `json:"offered,omitempty"`
+	// Offers counts the writes this file was offered to whose outcome the
+	// record cannot tell. While any is, a version or asset one landed may
+	// name the object, so nothing here deletes it ([run.owns]). A count, not
+	// a flag: a refusal establishes its own write's outcome alone, and takes
+	// back only its own offer.
+	Offers int `json:"offers,omitempty"`
 }
 
 // object is the object the file's row would name.
 func (f file) object() objstore.Object {
 	return objstore.Object{Key: f.Key, Hash: f.SHA256, Size: f.Size}
 }
+
+// offered reports a file a write of unknown outcome may have named.
+func (f file) offered() bool { return f.Offers > 0 }
 
 // held reports whether the file's bytes are reserved: anything but named or
 // deleted.
@@ -177,15 +182,15 @@ func (r *record) fileAt(path string) int {
 // named: kept ones, or a held file offered to it. Its hold is never released
 // early ([Service.releaseAbandoned]); it lapses.
 func (r *record) keeps() bool {
-	return r.Kept > 0 || slices.ContainsFunc(r.Files, func(f file) bool { return f.Offered && f.held() })
+	return r.Kept > 0 || slices.ContainsFunc(r.Files, func(f file) bool { return f.offered() && f.held() })
 }
 
-// offerHeld marks every file the record still holds offered to a write whose
-// outcome nobody established.
+// offerHeld counts one more write of unknown outcome against every file the
+// record still holds.
 func (r *record) offerHeld() {
 	for i := range r.Files {
 		if r.Files[i].held() {
-			r.Files[i].Offered = true
+			r.Files[i].Offers++
 		}
 	}
 }

@@ -375,3 +375,60 @@ func TestAnAssetWhoseAnswerWasLostKeepsItsObjectThroughTheEarlyRelease(t *testin
 		t.Errorf("the reservations hold %d bytes, less than the asset's %d", held, len(body))
 	}
 }
+
+// A REFUSAL TAKES BACK ONLY ITS OWN ASSET OFFER: an asset add counts its
+// offer before its write. One the domain refuses outright (past the company's
+// quota here) landed nothing and takes its offer back, so once the window
+// closes the upload is released early, its bytes deleted. One refused after
+// an add whose answer was lost takes back its own offer alone, and the
+// object the first add may have landed is kept until the hold lapses.
+//
+// Mutation: keep the offer after a refusal, and the refused upload is never
+// released early; clear every offer on a refusal, and the landed asset names
+// an object the store no longer holds.
+func TestARefusalTakesBackOnlyItsOwnAssetOffer(t *testing.T) {
+	t.Parallel()
+	for _, lost := range []bool{false, true} {
+		t.Run(fmt.Sprintf("after a lost answer=%v", lost), func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t, options{loseAsset: lost})
+			created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": "<p>x</p>"})
+			c := h.person("ada", h.opKey("asset"))
+			body := "asset notes"
+			intent, err := h.svc.Intend(t.Context(), c, created.Artifact, artifacts.UploadRequest{
+				Entries: declare(map[string]string{"notes.txt": body}).Entries, Asset: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := h.svc.Transfer(t.Context(), c, intent.Upload, "notes.txt", strings.NewReader(body),
+				-1); err != nil {
+				t.Fatal(err)
+			}
+			if lost {
+				if _, err := h.svc.AddAsset(t.Context(), h.person("ada", h.opKey("lost")), created.Artifact,
+					intent.Upload, "notes.txt"); err == nil {
+					t.Fatal("premise: the first add's answer was not lost")
+				}
+			}
+			k := h.person("ada", h.opKey("refused"))
+			k.Authority.Limits.CompanyBytes = 1
+			if _, err := h.svc.AddAsset(t.Context(), k, created.Artifact, intent.Upload, "notes.txt"); err == nil ||
+				artifactupload.ReasonOf(err) == "other" {
+				t.Fatalf("premise: the add answered %v, want it refused", err)
+			}
+			h.clock.advance(objstore.MaxPresignTerm + time.Minute)
+			h.upload(h.person("ada", h.opKey("next")), created.Artifact, map[string]string{"c.txt": "next"})
+			if gone := h.gone(); len(gone) > 0 {
+				t.Errorf("rows name %v, which the store no longer holds", gone)
+			}
+			state, _, err := artifactupload.UploadState(t.Context(), h.svc, intent.Upload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if released := state == ""; released == lost {
+				t.Errorf("the asset upload's record is %q once its window closed, want it released early "+
+					"only where no add's answer was lost", state)
+			}
+		})
+	}
+}

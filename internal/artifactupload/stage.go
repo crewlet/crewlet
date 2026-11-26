@@ -413,7 +413,7 @@ func kitFile(version, file string) string { return artifacts.KitPrefix + version
 // reserved until its hold lapses, and only the collector judges it.
 func (r *run) owns(f file) bool {
 	switch {
-	case f.Offered || f.Transport == transportDirect:
+	case f.offered() || f.Transport == transportDirect:
 		return false
 	case f.Transport == transportGenerated:
 		return slices.Contains(r.staged, f.Key)

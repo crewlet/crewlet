@@ -54,7 +54,7 @@ func widestRecord(t *testing.T, path string) *record {
 		}
 		r.Files = append(r.Files, file{Path: widestPath(path), ContentType: widestType,
 			SHA256: objstore.Hash(strings.Repeat("f", 64)), Size: math.MaxInt64,
-			Key: objstore.KeyAt(widestInstant), Transport: tr, State: fileStreaming, Offered: true})
+			Key: objstore.KeyAt(widestInstant), Transport: tr, State: fileStreaming, Offers: math.MaxInt})
 	}
 	for range artifacts.MaxFilesPerVersion - artifacts.MaxFilesPerPublish {
 		r.Carried = append(r.Carried, widestPath(path))
