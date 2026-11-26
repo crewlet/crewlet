@@ -264,7 +264,7 @@ func hermesSessionGate(req sandbox.RunRequest, session Session, paths Paths, rew
 	// THE RUN'S OWN STANDING INSTRUCTIONS, in place of the ones Hermes froze
 	// with the session (measured on 0.23.3: the resume then carries them).
 	line(`if [ -z "$w" ] && [ "$(hcarry renew %s "$sid" %s)" != 'crewlet-carry ok' ]; then w='its standing instructions could not be renewed to this run'"'"'s'; fi`,
-		q(paths.HermesStateDB()), q(paths.System()))
+		q(paths.HermesStateDB()), q(paths.HermesSystem()))
 	line(`if [ -z "$w" ]; then`)
 	if rewired {
 		line(`  rm -f %s`, q(paths.HermesOverlayFresh()))
@@ -354,9 +354,9 @@ func hermesRestore(paths Paths) string {
 }
 
 // hermesCarryRun defines the script's `hcarry`: the carry script run under
-// Hermes's own interpreter, through its launcher's --run-module (measured on
-// 0.23.3: the docker image's venv and install.sh's managed runtime alike,
-// neither of which puts a python3 on PATH). The launcher runs modules, so the
+// Hermes's own interpreter, through its launcher's --run-module, since it
+// reads Hermes's own modules and a python3 on a box's PATH need not be
+// Hermes's (the 0.23.3 image's is, measured). The launcher runs modules, so the
 // script goes through the standard library's cProfile, whose output is
 // discarded; it keeps no exit status, so the answer is the last line printed.
 func hermesCarryRun(paths Paths) string {

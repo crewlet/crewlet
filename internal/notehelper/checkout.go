@@ -34,12 +34,12 @@ import (
 // where it has none); SkillDirs, the skill directories ([skillDirSlot]), an
 // earlier one's skill winning a name; Skills, the run's skills directory (""
 // copies none), and Copied, the file listing each skill copied there;
-// Reserved, the tags no repository takes; ImportInstructions, for a harness
-// that reads its instruction files itself, each file named as an import in
-// place of its text ([rootImports]), Limit not applying; SkillSep, what joins
-// a copy's tag and skill ([skillName]); FiringLimit, the bound in bytes on
-// what one nested firing hands of all its checkouts' instructions, frames
-// counted, nil for none ([fitFiring]).
+// Reserved, the tags no repository takes; ImportInstructions, each instruction
+// file named as an import in place of its text ([rootImports]), Limit not
+// applying; SkillSep, what joins a copy's tag and skill ([skillName]);
+// FiringLimit, a nested firing's bound in bytes on all its checkouts'
+// instructions, frames counted, nil for none ([fitFiring]); Gated, the
+// harness's own code answering for each checkout ([checkoutGate]) on stdin.
 type checkoutSpec struct {
 	Instructions       []instructionSlot `json:"instructions"`
 	Limit              *int              `json:"limit,omitempty"`
@@ -50,13 +50,18 @@ type checkoutSpec struct {
 	Reserved           []string          `json:"reserved,omitempty"`
 	ImportInstructions bool              `json:"importInstructions,omitempty"`
 	SkillSep           skillSep          `json:"skillSep,omitempty"`
+	Gated              bool              `json:"gated,omitempty"`
 	// ListedAs and HomeSkills are the harness whose rule names a listed skill
 	// ([listingRules]) and the home's skill directories whose names a copy may
 	// not take ([homeHolds]).
 	ListedAs   string         `json:"listedAs,omitempty"`
 	HomeSkills []skillDirSlot `json:"homeSkills,omitempty"`
-	// held is the names the home takes, read once a firing ([homeNames]).
+	// held is the names the home takes, read once a firing ([homeNames]);
+	// gate the firing's [checkoutGate] where Gated, and room what its answer
+	// has left ([claimRoom]). None is on the wire.
 	held *homeNames
+	gate *checkoutGate
+	room claimRoom
 	// claimBy is when a firing whose harness drops a late answer stops
 	// claiming (cursor-nested's cursorClaimWithin); zero for none.
 	claimBy time.Time
@@ -81,22 +86,23 @@ func (s skillSep) String() string {
 // launchConfig is what -config names for checkout-launch: the run's checkout
 // state directory (the checkouts handed, the lock), the instruction file it
 // replaces with the launch's sections, the checkouts handed first, in order
-// (the repositories the run pushes to), the spec, NestedSkillsOnly for a
-// nested adapter that hands skills alone, whose spec then names no instruction
-// file to read, and Roots, the file it lists each checkout handed's root in,
-// a line each, for a harness that reads their instructions itself where the
-// runner names them (Gemini CLI's --include-directories); and
-// LaunchSkillsLoaded for a harness that loads the skills of a checkout present
-// at launch itself where the runner names it (Cursor Agent's --add-dir), so
-// the launch copies none and only a nested firing does. The working directory
-// is the adapter's own.
+// (the repositories the run pushes to), the bound the sections share with
+// the text the harness reads beside them (nil for none), the spec,
+// NestedSkillsOnly for a nested adapter that hands skills alone, whose spec
+// then names no instruction file to read, Roots, the file it lists each
+// checkout handed's root in, a line each, for a harness that reads their
+// instructions itself where the runner names them (Gemini CLI's
+// --include-directories), and LaunchSkillsLoaded for a harness that loads a
+// launch checkout's skills itself (Cursor Agent's --add-dir), so the launch
+// copies none. The working directory is the adapter's own.
 type launchConfig struct {
-	State              string   `json:"state"`
-	Agents             string   `json:"agents"`
-	First              []string `json:"first"`
-	NestedSkillsOnly   bool     `json:"nestedSkillsOnly,omitempty"`
-	LaunchSkillsLoaded bool     `json:"launchSkillsLoaded,omitempty"`
-	Roots              string   `json:"roots,omitempty"`
+	State              string        `json:"state"`
+	Agents             string        `json:"agents"`
+	First              []string      `json:"first"`
+	Budget             *launchBudget `json:"budget,omitempty"`
+	NestedSkillsOnly   bool          `json:"nestedSkillsOnly,omitempty"`
+	LaunchSkillsLoaded bool          `json:"launchSkillsLoaded,omitempty"`
+	Roots              string        `json:"roots,omitempty"`
 	checkoutSpec
 }
 
@@ -114,11 +120,13 @@ type nestedConfig struct {
 const maxSkillDescription = 1024
 
 // handedCheckout is a checkout claimed: its name under the working directory,
-// its root, its instructions ("" for none), the files they were read from, and
-// the skills copied for it.
+// its root, its instructions ("" for none), the files they were read from
+// (parts, as the core read them; files, as a gate names them), and the skills
+// copied for it.
 type handedCheckout struct {
 	name, root, text string
 	parts            []instructionPart
+	files            []string
 	skills           []handedSkill
 }
 
@@ -137,10 +145,10 @@ type handedSkill struct {
 // runCheckoutLaunch hands the checkouts under its working directory their
 // instructions and skills as the run starts, and writes the state a nested
 // adapter reads. Exit 0 once written, 1 where it could not write them.
-func runCheckoutLaunch(_ context.Context, f flags, _ io.Reader, _, stderr io.Writer, _ func(string) string) int {
+func runCheckoutLaunch(_ context.Context, f flags, stdin io.Reader, _, stderr io.Writer, _ func(string) string) int {
 	cwd, err := os.Getwd()
 	if err == nil {
-		err = checkoutLaunch(f.config, cwd, stderr)
+		err = checkoutLaunch(f.config, cwd, stdin, stderr)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: handing the run's repositories their instructions: %v\n", err)
@@ -149,8 +157,9 @@ func runCheckoutLaunch(_ context.Context, f flags, _ io.Reader, _, stderr io.Wri
 	return exitDone
 }
 
-// checkoutLaunch is checkout-launch run in the working directory cwd.
-func checkoutLaunch(config, cwd string, stderr io.Writer) error {
+// checkoutLaunch is checkout-launch run in the working directory cwd, a
+// gated spec's gate read from stdin.
+func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error {
 	raw, err := readBounded(config, maxConfig)
 	if err != nil {
 		return err
@@ -166,13 +175,29 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if !c.SkillSep.Valid() {
 		return fmt.Errorf("the launch config's skillSep %q is neither %q nor %q", c.SkillSep, ":", "-")
 	}
+	if c.Budget != nil && (c.Budget.Form != budgetHermes || c.Budget.Bytes <= 0) {
+		return fmt.Errorf("the launch config's budget, form %q of %d bytes, is none the helper knows", c.Budget.Form,
+			c.Budget.Bytes)
+	}
 	if _, ok := listingRules[c.ListedAs]; c.ListedAs != "" && !ok {
 		return fmt.Errorf("the launch config's listedAs %q is none of %q, %q and %q", c.ListedAs, listedGrok,
 			listedKimi, listedOpenCode)
 	}
+	if c.Gated {
+		if c.gate, err = readGate(stdin); err != nil {
+			return err
+		}
+	}
 	work, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return err
+	}
+	var room *hermesRoom
+	if c.Budget != nil {
+		if room, err = hermesLaunchRoom(*c.Budget); err != nil {
+			return err
+		}
+		c.room = room
 	}
 	if err = os.MkdirAll(c.State, 0o700); err != nil {
 		return err
@@ -189,10 +214,15 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 		return err
 	}
 	var sections, roots []string
+	if room != nil {
+		if answer := hermesAnswer(handed, nil, room); answer != "" {
+			sections = append(sections, answer)
+		}
+	}
 	kept := make([]launched, 0, len(handed))
 	for _, h := range handed {
 		kept = append(kept, launched{Name: h.name, Root: h.root, Text: h.text})
-		if h.text != "" {
+		if room == nil && h.text != "" {
 			sections = append(sections, checkoutSection(h))
 		}
 		roots = append(roots, h.root+"\n")
@@ -447,10 +477,12 @@ type listingBudget struct {
 
 func newListingBudget() *listingBudget { return newListingBudgetWithin(maxListing) }
 
-// newListingBudgetWithin is a firing's listing budget where its harness takes
-// less than [maxListing] in one answer: bound bytes, the cut line included.
+// newListingBudgetWithin is a budget whose listings, with the blank line
+// before each, never pass bound bytes: the cut line and the separator before
+// the block it ends are reserved, since a cut keeps at most what is left (its
+// last newline standing in for the cut line's own).
 func newListingBudgetWithin(bound int) *listingBudget {
-	return &listingBudget{left: min(bound, maxListing) - len(listingCut) - 1}
+	return &listingBudget{left: bound - len(listingCut) - len("\n\n")}
 }
 
 // take is block within what is left of b, block apart from the one before by
@@ -539,12 +571,30 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 	room, spent := newCopyRoom(), false
 	var claimed []string
 	plans := map[string][]plannedSkill{}
+	// THE ANSWER'S ROOM DECIDES LAST: a checkout whose skills wait spends none
+	// of it ([claimRoom]).
+	answers := func(name string) bool {
+		if spec.room == nil {
+			return true
+		}
+		h := handedCheckout{name: name, root: filepath.Join(work, name)}
+		if spec.gate != nil {
+			g := spec.gate.Checkouts[h.root]
+			h.text, h.files = g.Text, g.Files
+		}
+		return spec.room.take(h, said)
+	}
 	for _, name := range names {
 		if was[name] || !cloneFinished(filepath.Join(work, name)) {
 			continue
 		}
+		if spec.gate != nil && !spec.gate.holds(filepath.Join(work, name)) {
+			continue // finished after the gate was read: the next firing's gate holds it
+		}
 		if spec.Skills == "" {
-			claimed = append(claimed, name)
+			if answers(name) {
+				claimed = append(claimed, name)
+			}
 			continue
 		}
 		if room.spent() {
@@ -552,7 +602,8 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 				fmt.Fprintln(said.stderr, "notehelper: this firing's copy bound is spent; the checkouts with skills left wait for the next")
 				spent = true
 			}
-			if dirs, over := checkoutSkillDirs(filepath.Join(work, name), spec); len(dirs) > 0 || len(over) > 0 {
+			if dirs, over := checkoutSkillDirs(filepath.Join(work, name), spec); len(dirs) > 0 || len(over) > 0 ||
+				!answers(name) {
 				continue
 			}
 			tags.take(name)
@@ -564,7 +615,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 		// before it is handed.
 		planSaid := &skips{stderr: io.Discard}
 		planned, past := planCheckoutSkills(filepath.Join(work, name), tags.peek(name), spec, planSaid)
-		if (past || !room.fits(planned)) && room.used {
+		if (past || !room.fits(planned)) && room.used || !answers(name) {
 			continue
 		}
 		said.sayAll(planSaid.lines)
@@ -607,9 +658,14 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 	for _, name := range claimed {
 		root := filepath.Join(work, name)
 		h := handedCheckout{name: name, root: root}
-		if spec.ImportInstructions {
+		switch {
+		case spec.gate != nil:
+			g := spec.gate.Checkouts[root]
+			h.text, h.files = g.Text, g.Files
+			said.sayAll(g.Said)
+		case spec.ImportInstructions:
 			h.text = rootImports(root, spec.Instructions, said)
-		} else {
+		default:
 			parts, _ := instructionParts(root, limit, spec.Instructions, said)
 			parts = fitFiring(parts, &firing, said)
 			h.text, h.parts = joinParts(parts), parts
