@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,15 +48,24 @@ func writeBoxStandIn(t *testing.T, box sandbox.Sandbox, path, script string) {
 }
 
 // handedProgram is whether a run put a program at path in box, a fake that
-// runs no command: the program's bytes written beside path, and a command the
-// box was asked to run moving its copy over path (writeProgram).
+// runs no command: the program's bytes written into the programs' staging, and
+// a command the box was asked to run copying them beside path and moving the
+// copy over it (writeProgram).
 func handedProgram(t *testing.T, box *sandbox.FakeSandbox, path string) bool {
 	t.Helper()
-	source, _ := box.ReadFile(t.Context(), path+".source")
-	move := "mv -f " + shellword.Quote(path+".next") + " " + shellword.Quote(path)
-	return len(source) > 0 && slices.ContainsFunc(box.Execs(), func(e sandbox.FakeExec) bool {
-		return strings.Contains(e.Command, move)
-	})
+	staging, next := executor.PathsFor(box).ProgramStaging()+"/", shellword.Quote(path+".next")
+	for _, e := range box.Execs() {
+		if !strings.Contains(e.Command, " && mv -f "+next+" "+shellword.Quote(path)+";") {
+			continue
+		}
+		for _, f := range box.Files() {
+			if strings.HasPrefix(f, staging) && strings.Contains(e.Command, "cp "+shellword.Quote(f)+" "+next) {
+				body, _ := box.ReadFile(t.Context(), f)
+				return len(body) > 0
+			}
+		}
+	}
+	return false
 }
 
 // claim is shell that succeeds in the one process that first runs it on path

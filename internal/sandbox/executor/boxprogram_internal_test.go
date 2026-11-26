@@ -1,7 +1,9 @@
 package executor
 
 import (
+	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,8 +78,50 @@ func TestAProgramTheEngineHandsABoxRunsTheMomentItIsInPlace(t *testing.T) {
 	}
 	left, err := filepath.Glob(box.Home() + "/program-*.*")
 	if err != nil || len(left) > 0 {
-		t.Errorf("the home holds %q (%v) beside the programs, want no source or copy left", left, err)
+		t.Errorf("the home holds %q (%v) beside the programs, want no copy left", left, err)
 	}
+	if staged, err := os.ReadDir(PathsFor(box).ProgramStaging()); err != nil || len(staged) > 0 {
+		t.Errorf("the staging holds %v (%v), want every program's bytes taken", staged, err)
+	}
+}
+
+// A PROGRAM WHOSE COPY NEVER RAN LEAVES NOTHING PAST THE NEXT CLEAR: the
+// engine wrote its bytes, the box was gone before it copied them into place,
+// and the next run's clear removes them with the programs' staging.
+//
+// Mutation: drop [Paths.ProgramStaging] from the clear's directories.
+func TestAProgramWhoseCopyNeverRanLeavesNothingPastTheNextClear(t *testing.T) {
+	t.Parallel()
+	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	box, err := local.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { box.Close(t.Context()) })
+	p := PathsFor(box)
+	if err := writeHelperBuild(t.Context(), copyNeverRuns{box}, p.PiNoteHelper(), []byte("#!/bin/sh\n")); err == nil {
+		t.Fatal("the helper was written though its copy never ran")
+	}
+	if staged, err := os.ReadDir(p.ProgramStaging()); err != nil || len(staged) != 1 {
+		t.Fatalf("the staging holds %v (%v), want the one program's bytes the copy never took", staged, err)
+	}
+	if err := NewPi().ClearArtifacts(t.Context(), box); err != nil {
+		t.Fatalf("the next run's clear: %v", err)
+	}
+	if _, err := os.Lstat(p.ProgramStaging()); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the programs' staging is left after the next run's clear (%v)", err)
+	}
+}
+
+// copyNeverRuns is a box gone before a program's copy reaches it: every
+// command fails to be sent.
+type copyNeverRuns struct{ sandbox.Sandbox }
+
+func (copyNeverRuns) Exec(context.Context, string, sandbox.ExecOptions) (sandbox.ExecResult, error) {
+	return sandbox.ExecResult{}, errors.New("the box is gone")
 }
 
 // programRuns is how many programs [TestAProgramTheEngineHandsABoxRunsTheMomentItIsInPlace]
