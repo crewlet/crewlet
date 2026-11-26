@@ -42,12 +42,14 @@ func (Muse) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
 	var reading sandbox.MainThreadReading
+	var large passBudget
+	defer large.release()
 	var summary *summaryRead
 	if ask.Summary {
 		if why := summaryReleaseWhy(ask.Release, museSupported()); why != "" {
 			reading.Summary = summaryUnread(why)
 		} else {
-			summary = &summaryRead{}
+			summary = &summaryRead{claim: newSummaryClaim(ctx, &large)}
 		}
 	}
 	takes := len(ask.Takes) > 0
@@ -163,7 +165,7 @@ func museHeld(ctx context.Context, r io.Reader, digest string, asked map[string]
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), maxLineBytes)
 	l := museNoteLine{run: museRunRead{stderr: tokenLines{asked: asked}}}
 	if summary != nil {
-		l.summary = &summaryText{}
+		l.summary = summary.newWords()
 	}
 	for n := 1; ; n++ {
 		line, err := w.noteLine(ctx, func() error { return l.read(&w) })

@@ -258,7 +258,7 @@ func (c *codexCounting) read(ctx context.Context, rollout io.Reader, summary *su
 	w.passImages()
 	var l codexCountLine
 	if summary != nil {
-		l.compaction = &codexCompaction{}
+		l.compaction = &codexCompaction{message: *summary.newWords()}
 	}
 	for n := 1; ; n++ {
 		line, err := w.noteLine(ctx, func() error { return l.read(&w) })
@@ -338,12 +338,14 @@ func (Codex) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Path
 	if ask.Count && !codexCountRead(ask.Release) {
 		reading.Count = &sandbox.ResumedCount{Mark: sandbox.CountRelease}
 	}
+	var large passBudget
+	defer large.release()
 	var summary *summaryRead
 	if ask.Summary {
 		if why := summaryReleaseWhy(ask.Release, codexCarryRelease); why != "" {
 			reading.Summary = summaryUnread(why)
 		} else {
-			summary = &summaryRead{}
+			summary = &summaryRead{claim: newSummaryClaim(ctx, &large)}
 		}
 	}
 	if !counts && summary == nil {

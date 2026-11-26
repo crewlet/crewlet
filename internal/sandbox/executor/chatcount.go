@@ -176,9 +176,10 @@ func countChat(release, measured string, walk func() error) (countMarks, error) 
 // ([sandbox.LaunchRecord.ResumedCount]); a release but measured counts nothing.
 // err is why it did not read the file to its end, which leaves a summary c
 // reads on the same walk unread ([geminiCounting.summary],
-// [qwenCounting.summary]).
+// [qwenCounting.summary]). large is the read's pass budget, whose large slot
+// the count and the summary's words share ([summaryClaim]).
 func chatCopyCount(ctx context.Context, box sandbox.Sandbox, file string, c chatCounter,
-	release, measured string) (count *sandbox.ResumedCount, err error) {
+	release, measured string, large *passBudget) (count *sandbox.ResumedCount, err error) {
 
 	if release != measured {
 		return &sandbox.ResumedCount{Mark: sandbox.CountRelease},
@@ -192,7 +193,7 @@ func chatCopyCount(ctx context.Context, box sandbox.Sandbox, file string, c chat
 		return &sandbox.ResumedCount{Mark: sandbox.CountUnread}, err
 	}
 	defer func() { _ = r.Close() }()
-	marks, err := countChat(release, measured, func() error { return chatFileLines(ctx, r, c, new(passBudget)) })
+	marks, err := countChat(release, measured, func() error { return chatFileLines(ctx, r, c, large) })
 	return c.count(marks, 0), err
 }
 
