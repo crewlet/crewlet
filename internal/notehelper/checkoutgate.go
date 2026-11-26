@@ -10,13 +10,15 @@ import (
 
 // THE GATE: a harness whose own code decides what a checkout brings, which no
 // reimplementation keeps exact (Hermes Agent 0.23.3 scans every project file
-// for prompt injection and blocks a hit, and loads a checkout's skills only
-// where its configuration trusts the root, each passing its own scan), hands
-// the core that code's answer for each candidate before a firing claims one
-// ([checkoutGate]). The core then claims, copies and logs as for any harness,
-// never reading the instructions or walking the skill directories of a gated
-// checkout itself. The package doc's "Checkouts below the working directory"
-// has the contract.
+// for prompt injection and loads a checkout's skills only where trusted), has
+// a spec's `gated` set and hands the core that code's answer for each
+// candidate on stdin ([checkoutGate]): its text, files and skill directories
+// stand in for the slots and the skill walk, beside the names the home's
+// skills take; a candidate it does not name waits, so hermes-peek names them
+// first. The core claims, copies and logs as for any harness, never reading a
+// gated checkout's instructions or walking its skills itself; checkout-launch's
+// `budget` and hermes-nested's -room bound the answer (hermesrepo.go). The
+// package doc's "Checkouts below the working directory" has the rest.
 
 // checkoutGate is the harness's own answer for the checkouts a firing may
 // claim, keyed by root as the firing names one (the working directory joined

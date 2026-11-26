@@ -21,11 +21,13 @@
 //
 // # What it does
 //
-// It polls the bridge's notes route OUTBOUND, as OpenCode's plugin does, and
-// hands each note it is served, oldest first, to the harness through the
-// ADAPTER -adapter names. The loop, its pauses and its shutdown are the
-// helper's and name no harness ([harness]); an adapter is one harness's way in.
-// A later harness with neither route adds an adapter, never a second program.
+// It polls the bridge's notes route OUTBOUND, as OpenCode's plugin does
+// (internal/sandbox/executor's opencode_steer.js; internal/api/mcpbridge's
+// SteerPattern), and hands each note it is served, oldest first, to the
+// harness through the ADAPTER -adapter names. The loop, its pauses and its
+// shutdown are the helper's and name no harness ([harness]); an adapter is
+// one harness's way in. A later harness with neither route adds an adapter,
+// never a second program.
 //
 // # It confirms nothing
 //
@@ -48,12 +50,12 @@
 // # When it polls
 //
 // Only while the harness takes a note now ([harness.ready]: for Codex, a turn
-// in flight): a note served after the run's last turn waits on the run's record
-// for its review, never in the helper. The pauses are the plugin's: a failed
-// poll or refused note waits a second, doubling to thirty, reset by the next
-// success, and a poll that handed nothing over starts the next no sooner than a
-// second after it began, so no answer can drive the helper into a loop of
-// requests.
+// in flight), as OpenCode's plugin polls only while its session runs: a note
+// served after the run's last turn waits on the run's record for its review,
+// never in the helper. The pauses are the plugin's: a failed poll or refused
+// note waits a second, doubling to thirty, reset by the next success, and a
+// poll that handed nothing over starts the next no sooner than a second after
+// it began, so no answer can drive the helper into a loop of requests.
 //
 // # The step cap
 //
@@ -86,10 +88,11 @@
 //
 // A harness whose hooks run a program (Muse Code's, Grok Build's) runs the
 // helper once per firing instead (once.go): it takes the run's notes over the
-// bridge's steer_take, hands the answer over through the adapter, and exits 0
-// whatever happened, so a firing never stops the harness; a take the harness
-// never got is told again. A run continuing a Codex session runs it first as
-// codex-renew (codexrenew.go; below).
+// bridge's steer_take, as a hook that calls an MCP tool would, hands the answer
+// over through the adapter, and exits 0 whatever happened, so a firing never
+// stops the harness; a take the harness never got is told again. A run
+// continuing a Codex session runs it first as codex-renew (codexrenew.go;
+// below).
 //
 // # Checkouts below the working directory
 //
@@ -100,46 +103,49 @@
 // once its clone has finished (checkoutclone.go; checkout.go), and once its
 // skills fit what is left of the firing's bound, else at a later firing. Its
 // logic names no harness; a runner gives it a spec:
-//   - `instructions`: slots, in order, within `limit`, the harness's own bound
-//     in bytes on what a session started in the checkout reads of them (Codex:
-//     project_doc_max_bytes), omitted for a harness with none, a file the limit
-//     cuts spending all of it; `firingLimit`, a nested firing's bound on all
-//     its checkouts' files, each counted with its frame, each that fits handed
-//     whole, the rest left out whole and named for the model to read (Grok sets
-//     none: grokrepo.go). A list of file names relative to a checkout's root
-//     hands its first regular file (Codex:
-//     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>, "suffix":
-//     <s>, "form": <harness>, "scoped": {"keys": [...], "whole": [...]}}, hands
-//     each file below dir whose name ends in s, whole, apart by a blank line,
-//     walked depth first, a directory's entries by name in byte order, a file
-//     link followed while it stays in the checkout, and `scoped` leaving out a
-//     file its harness loads only lazily, on a path its frontmatter names:
-//     frontmatter is a line `---` first, after an optional BOM, to the next
-//     `---` line, and the first of keys present in it holds an entry outside
-//     whole. Each form is its harness's walk of .claude/rules (measured).
-//     `copilot` (1.0.114): s in any case, dot entries skipped, a directory link
-//     never followed; keys read as its line reader reads them, a case-exact
-//     `<key>:` line, indentation trimmed, whose value, split on `,` or read as
-//     `[a, b]`, quotes trimmed, is the entries. `claude` (2.1.310): s in its
-//     own case, dot entries walked, a directory link, dir itself included,
-//     followed while it stays in the checkout, each directory once, an empty
-//     file skipped; frontmatter read as YAML, a file whose frontmatter is not
-//     valid YAML left out (it never loads), a key's value a string or a list's
-//     strings, split on `,`, trimmed, its other entries and another kind
-//     holding none. `qwen` (0.28.4, .qwen/rules): as `claude`, but no link
-//     followed at all, each file handed as Qwen Code loads it, its body without
-//     frontmatter or HTML comments, none where that is empty, and `paths` read
-//     as it reads it (qwenrule.go): a non-empty string, `**` included, or a
-//     list entry JavaScript's String makes non-empty names a path, a list
-//     holding a mapping none, and frontmatter its YAML parser refuses is read
-//     by its line reader. `grok` (1.0.92): files directly in dir, dot files
-//     too, s in any case, a file link inside followed, none scoped. A tree past
-//     8 directories deep, 1,024 entries or 32 MiB is left out whole, said.
-//     Names as {"names": [...], "inside": true} follow a link only inside the
-//     checkout, and "once" on either kind hands no file an earlier slot did, by
-//     real path (Grok's); `importInstructions` for a harness that reads them
-//     itself (Claude Code), each file then named as one `@<absolute path>`
-//     import in place of its text, no limit applying (checkoutimport.go);
+//   - `instructions`: slots, in order, within `limit`, the harness's own
+//     bound in bytes on what a session started in the checkout reads of them
+//     (Codex: project_doc_max_bytes), omitted for a harness with none, a file
+//     the limit cuts spending all of it; `firingLimit`, a nested firing's
+//     bound on all its checkouts' files, each counted with its frame, each
+//     that fits handed whole, the rest left out whole and named for the model
+//     to read (Grok sets none: grokrepo.go). A list of file names
+//     relative to a checkout's root hands its first regular file (Codex:
+//     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>,
+//     "suffix": <s>, "form": <harness>, "scoped": {"keys": [...], "whole":
+//     [...]}}, hands each file below dir whose name ends in s, whole, apart by
+//     a blank line, walked depth first, a directory's entries by name in byte
+//     order, a file link followed while it stays in the checkout, and
+//     `scoped` leaving out a file its harness loads only lazily, on a path
+//     its frontmatter names: frontmatter is a line `---` first, after an
+//     optional BOM, to the next `---` line, and the first of keys present in
+//     it holds an entry outside whole. Each form is its harness's walk of
+//     .claude/rules (measured). `copilot` (1.0.114): s in any case, dot
+//     entries skipped, a directory link never followed; keys read as its line
+//     reader reads them, a case-exact `<key>:` line, indentation trimmed,
+//     whose value, split on `,` or read as `[a, b]`, quotes trimmed, is the
+//     entries. `claude` (2.1.310): s in its own case, dot entries walked, a
+//     directory link, dir itself included, followed while it stays in the
+//     checkout, each directory once, an empty file skipped; frontmatter read
+//     as YAML, a file whose frontmatter is not valid YAML left out (it never
+//     loads), a key's value a string or a list's strings, split on `,`,
+//     trimmed, its other entries and another kind holding none. `qwen`
+//     (0.28.4, .qwen/rules): as `claude`, but no link followed at all, each
+//     file handed as Qwen Code loads it, its body without frontmatter or HTML
+//     comments, none where that is empty, and `paths` read as it reads it
+//     (qwenrule.go): a non-empty string, `**` included, or a list entry
+//     JavaScript's String makes non-empty names a path, a list holding a
+//     mapping none, and frontmatter its YAML parser refuses is read by its
+//     line reader. `grok` (1.0.92): files directly in dir, dot files too, s
+//     in any case, a file link inside followed, none scoped.
+//     A tree past 8 directories deep, 1,024 entries or 32 MiB is left out
+//     whole, said: Copilot walks 9 levels and Claude Code 10 at least
+//     (measured), so a deeper tree is the gap. Names as {"names": [...],
+//     "inside": true} follow a link only inside the checkout, and "once" on
+//     either kind hands no file an earlier slot did, by real path (Grok's);
+//     `importInstructions` for a harness that reads them itself (Claude Code),
+//     each file then named as one `@<absolute path>` import in place of its
+//     text, no limit applying (checkoutimport.go);
 //   - `skillDirs`: the checkout's skill directories, an earlier one winning a
 //     name (Codex: [".codex/skills",".agents/skills"]), each skill a
 //     directory directly in one. {"dir": <d>, "recursive": true} walks d as
@@ -197,34 +203,26 @@
 // file and rule framed as Qwen Code frames a context file, then the listing;
 // grok-nested each file as Grok's `## From: <path>` within its hook cut of
 // 10,000 code points, checkouts whole while they fit, the rest named by path;
-// hermes-nested as codex-nested through the gate, for the run's plugin to add
-// to the tool's result; pi-nested the same as codex-nested with each file in
-// Pi's `<project_instructions path=...>`, on stdout for the run's extension to
-// add to the tool's result; copilot-nested the listing alone, added the same
-// way. A nested hook only adds to the launch: a run whose settings switch it
-// off starts, its skip log saying so once; only losing a contract hook (notes,
-// skill loads) refuses. Grok's stays registered, as Grok 1.0.92 skips it itself
-// (measured). A harness taking checkouts adds a nested adapter, never a second
-// core; its runner holds the home file and the copies
-// (internal/sandbox/executor's checkoutHome). What a nested firing leaves out
-// (a skill whose name the home's skills hold, one that leads out of its
-// checkout, a tree past a bound) is a line each on its stderr, in its answer,
-// and in state/skipped under the lock, which the runner's script prints to the
-// run's error stream once the harness has stopped, since no harness shows a
-// hook's stderr; checkout-launch's stderr is the run's own. A gated spec
-// (`gated`: Hermes Agent's) takes on stdin what the harness's own code makes of
-// each candidate (checkoutgate.go): its text, files and skill directories stand
-// in for the slots and the skill walk, beside the names the home's skills take;
-// a candidate it does not name waits, so hermes-peek names them first.
-// checkout-launch's `budget` ({"form": "hermes", "own": <file>, "bytes": N})
-// bounds its sections with the run's own text, and hermes-nested's -room is
-// what the tool's result has left before Hermes spills it: each checkout whole
-// while it fits, else named by its files, else left for a later firing
-// (hermesrepo.go). The runner's restore marks the state ended, after which a
-// firing claims nothing. A run killed before its script printed the log loses
-// it: the next run's gate removes the state unprinted, as its lines in another
-// run's error stream would read as that run's; each was in its firing's answer
-// already.
+// hermes-nested through a gate (checkoutgate.go);
+// pi-nested the same as codex-nested with each file in Pi's
+// `<project_instructions path=...>`, on stdout for the run's extension to add
+// to the tool's result (Pi lists no skill it did not start with and loads
+// instructions only as it starts, measured on 1.6.0); copilot-nested the
+// listing alone, added the same way. A nested hook only adds to the launch: a
+// run whose settings switch it off starts, its skip log saying so once; only
+// losing a contract hook (notes, skill loads) refuses. Grok's stays registered,
+// as Grok 1.0.92 skips it itself (measured). A harness taking checkouts adds a
+// nested adapter, never a second core; its runner holds the home file and the
+// copies (internal/sandbox/executor's checkoutHome). What a nested firing
+// leaves out (a skill whose name the home's skills hold, one that leads out of
+// its checkout, a tree past a bound) is a line each on its stderr, in its
+// answer, and in state/skipped under the lock, which the runner's script prints
+// to the run's error stream once the harness has stopped, since no harness
+// shows a hook's stderr; checkout-launch's stderr is the run's own. The
+// runner's restore marks the state ended, after which a firing claims nothing.
+// A run killed before its script printed the log loses it: the next run's gate
+// removes the state unprinted, as its lines in another run's error stream would
+// read as that run's; each was in its firing's answer already.
 //
 // # A continued Codex session's standing instructions
 //
@@ -232,16 +230,18 @@
 // message its first turn's context opens with, and a resume replays that
 // message from the rollout: the resumed thread's configuration never reaches
 // the model again, whether config.toml's or thread/resume's
-// developerInstructions (measured on 0.171.0). turn/start sets only a
-// collaboration mode's instructions, another section, and `exec --remote`,
-// which drives the run, resumes with the thread id alone. So codex-renew, run
-// by the session gate before the app-server starts, rewrites each item the
-// rollout records them in (content kind generic.developer_instructions, at any
-// depth: a compaction's replacement history too) to the run's text, every other
-// line byte for byte, its line count kept, by a rename over the file. A rollout
-// recording none, which resumed would hand the model no standing instructions
-// at all, is refused, and the run starts a session of its own, as Kimi Code's,
-// Grok Build's and Hermes's runners renew theirs or start fresh.
+// developerInstructions (both measured on 0.171.0 through the app-server: a
+// resume records only world-state changes, and the client's instructions are
+// none). turn/start sets only a collaboration mode's instructions, another
+// section, and `exec --remote`, which drives the run, resumes with the thread
+// id alone. So codex-renew, run by the session gate before the app-server
+// starts, rewrites each item the rollout records them in (content kind
+// generic.developer_instructions, at any depth: a compaction's replacement
+// history too) to the run's text, every other line byte for byte, its line
+// count kept, by a rename over the file. A rollout recording none, which
+// resumed would hand the model no standing instructions at all, is refused, and
+// the run starts a session of its own, as Kimi Code's, Grok Build's and
+// Hermes's runners renew theirs or start fresh.
 //
 // # The Codex bridge check
 //
@@ -252,33 +252,36 @@
 // character outside [A-Za-z0-9_] made `_`, no prefix where it then opens with
 // `mcp__`), under each tool's cleaned name. Two servers whose namespaces clean
 // alike BOTH get a hashed namespace; of two tools whose namespace and name
-// joined with no separator spell the same, one keeps its name and the other is
-// hashed (codex-rs/codex-mcp/src/tools.rs), so a server from any layer can
-// rename the engine's own namespace or tools, unseen (measured). The helper
-// reads Codex's effective configuration with its layers (config/read, from the
-// working directory the thread starts in) and every server's tools as the
+// joined with no separator spell the same, one keeps its name and the other
+// is hashed (codex-rs/codex-mcp/src/tools.rs). So a server `mcp__crewlet` or
+// `mcp::crewlet` from any layer renames the engine's own `mcp__crewlet`
+// namespace, and a server `crewle` listing `tsubmit_work` renames its
+// `submit_work` to `submit_work_<hash>` (measured), each unseen. The helper
+// reads Codex's effective configuration with its layers (config/read, from
+// the working directory the thread starts in) and every server's tools as the
 // server names them (mcpServerStatus/list, which starts each server once, as
 // the thread does again), names them as Codex does, and refuses, naming the
 // server and the layer that declares it: a server whose namespace is the
-// bridge's; one of whose tools joins to a bridge tool's name; one it could not
-// list whose namespace opens one; the bridge served other than at the run's own
-// address (its SHA-256 on the config, since the address carries the job's
-// token) or turned off, as a managed layer above the run's own can do; and a
-// feature that renames the tools or lets a server change them after the check
-// (non_prefixed_mcp_tool_names, multi_environment_mcp, mcp_tool_list_changed),
-// which the run pins off on its command line where no managed layer turns them
-// on.
+// bridge's; one of whose tools joins to a bridge tool's name; one it could
+// not list whose namespace opens one; the bridge served other than at the
+// run's own address (its SHA-256 on the config, since the address carries the
+// job's token) or turned off, as a managed layer above the run's own can do;
+// and a feature that renames the tools or lets a server change them after the
+// check (non_prefixed_mcp_tool_names, multi_environment_mcp,
+// mcp_tool_list_changed), which the run pins off on its command line where no
+// managed layer turns them on.
 //
 // # A rollout a person's Codex compressed
 //
-// Codex 0.171.0 behind its local_thread_store_compression feature, a person's
-// own opt-in the runner leaves as it finds it, compresses at its start each
-// rollout untouched for 7 days to `<name>.zst` beside it, and writes it plain
-// again before appending to it. The gate's cut and renew, the run's start in
-// the rollout and every pack read the plain file before Codex runs, so
-// codex-materialize writes plain, first, every compressed rollout of the thread
-// under -sessions as Codex would: decoded beside it, its mode and mtime kept,
-// linked in under the plain name and never over a file there, which wins, the
+// Codex 0.171.0 behind its local_thread_store_compression feature, a
+// person's own opt-in the runner leaves as it finds it, compresses at its
+// start each rollout untouched for 7 days to `<name>.zst` beside it, and
+// writes it plain again before appending to it. The gate's cut and renew,
+// the run's start in the rollout and every pack read the plain file before
+// Codex runs, so codex-materialize writes plain, first, every compressed
+// rollout of the thread under -sessions as Codex would: decoded beside it,
+// its mode and mtime kept, linked in under the plain name and never over a
+// file there, which wins (Codex writes it before removing the `.zst`), the
 // `.zst` then removed: a resume takes a stale `.zst` over a plain copy
 // elsewhere (measured on 0.171.0).
 //
