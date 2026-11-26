@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
@@ -29,19 +30,7 @@ import (
 // process other than this one.
 func writeStandIn(t *testing.T, path, script string) {
 	t.Helper()
-	source := path + ".source"
-	if err := os.WriteFile(source, []byte(script), 0o600); err != nil {
-		t.Fatalf("write the stand-in's source: %v", err)
-	}
-	if out, err := exec.Command("cp", source, path).CombinedOutput(); err != nil { //nolint:noctx // a local copy of one file
-		t.Fatalf("install the stand-in at %s: %v\n%s", path, err, out)
-	}
-	if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // the stand-in must run
-		t.Fatalf("make the stand-in executable: %v", err)
-	}
-	if err := os.Remove(source); err != nil {
-		t.Fatalf("remove the stand-in's source: %v", err)
-	}
+	executor.WriteHostProgram(t, path, script)
 }
 
 // writeBoxStandIn is [writeStandIn] inside a box: the box's own process copies

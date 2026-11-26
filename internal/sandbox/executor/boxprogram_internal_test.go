@@ -16,13 +16,14 @@ import (
 // A PROGRAM THE ENGINE HANDS A BOX RUNS THE MOMENT IT IS IN PLACE, whatever the
 // engine forks meanwhile: the guard for [writeProgram], through
 // [writeHelperBuild], which every runner's note helper is written by. Eight
-// goroutines fork beside 64 programs written into one direct box and each run
-// as soon as it is written; only a descriptor a fork inherits refuses a run.
+// goroutines fork beside programs written into one direct box and each run as
+// soon as it is written; only a descriptor a fork inherits refuses a run. NOT
+// PARALLEL: its forks would hand any other case's open descriptor to a child,
+// so it runs before the package's parallel cases are released.
 //
-// Mutation: write the program with box.WriteFile in writeHelperBuild, and a
-// share of the runs is refused as the file being busy.
+// Mutation: write the program with box.WriteFile in writeHelperBuild, and runs
+// are refused as the file being busy.
 func TestAProgramTheEngineHandsABoxRunsTheMomentItIsInPlace(t *testing.T) {
-	t.Parallel()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewLocal: %v", err)
@@ -49,8 +50,8 @@ func TestAProgramTheEngineHandsABoxRunsTheMomentItIsInPlace(t *testing.T) {
 	t.Cleanup(func() { close(stop); forkers.Wait() })
 
 	var runs sync.WaitGroup
-	refused := make(chan error, 64)
-	for i := range 64 {
+	refused := make(chan error, programRuns)
+	for i := range programRuns {
 		runs.Go(func() {
 			path := box.Home() + "/program-" + strconv.Itoa(i)
 			if err := writeHelperBuild(t.Context(), box, path, []byte("#!/bin/sh\nexit 0\n")); err != nil {
@@ -71,10 +72,40 @@ func TestAProgramTheEngineHandsABoxRunsTheMomentItIsInPlace(t *testing.T) {
 	runs.Wait()
 	close(refused)
 	if n := len(refused); n > 0 {
-		t.Fatalf("%d of 64 programs were refused as busy when run the moment they were in place", n)
+		t.Fatalf("%d of %d programs were refused as busy when run the moment they were in place", n, programRuns)
 	}
 	left, err := filepath.Glob(box.Home() + "/program-*.*")
 	if err != nil || len(left) > 0 {
 		t.Errorf("the home holds %q (%v) beside the programs, want no source or copy left", left, err)
+	}
+}
+
+// programRuns is how many programs [TestAProgramTheEngineHandsABoxRunsTheMomentItIsInPlace]
+// writes and runs: at 64 the mutation was refused 3 to 10 times in each of 20
+// runs on a two-core VM, so twice that keeps every run of it red on a runner
+// that forks less readily.
+const programRuns = 128
+
+// writeHostProgram puts body at path at mode, a program a case runs or hands a
+// script that runs it. A file this process wrote can be refused when run, as
+// [writeProgram] says of the engine's, so cp, which has exited before anything
+// runs the file, writes it beside path, and it is moved over path.
+func writeHostProgram(t *testing.T, path string, body []byte, mode os.FileMode) {
+	t.Helper()
+	source, next := path+".source", path+".next"
+	if err := os.WriteFile(source, body, 0o600); err != nil {
+		t.Fatalf("writing %s: %v", source, err)
+	}
+	if out, err := exec.CommandContext(t.Context(), "cp", source, next).CombinedOutput(); err != nil {
+		t.Fatalf("copying %s into place: %v\n%s", path, err, out)
+	}
+	if err := os.Chmod(next, mode); err != nil {
+		t.Fatalf("setting %s's mode: %v", next, err)
+	}
+	if err := os.Rename(next, path); err != nil {
+		t.Fatalf("moving %s into place: %v", path, err)
+	}
+	if err := os.Remove(source); err != nil {
+		t.Fatalf("removing %s: %v", source, err)
 	}
 }

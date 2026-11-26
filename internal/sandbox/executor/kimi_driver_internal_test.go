@@ -300,9 +300,7 @@ func kimiDriverRun(t *testing.T, probe *kimiProbe, notes string, args ...string)
 		"servers": probe.servers, "mcpConfig": kimiMCPHome, "webDenied": probe.webDenied, "checkouts": probe.checkouts})
 	for name, body := range map[string][]byte{kimi: []byte(stub), driver: []byte(kimiDriverSource),
 		filepath.Join(dir, "settings.json"): settings} {
-		if err := os.WriteFile(name, body, 0o700); err != nil {
-			t.Fatal(err)
-		}
+		writeHostProgram(t, name, body, 0o700)
 	}
 	cmd := exec.Command(node, append([]string{driver, filepath.Join(dir, "settings.json")}, args...)...) //nolint:gosec // the suite's own probe
 	cmd.Dir = probe.work
