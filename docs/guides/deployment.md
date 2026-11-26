@@ -1439,6 +1439,10 @@ engines starting at once could leave a half-written file that fails
 verification for good. Crewlet therefore extracts under a lock in
 `<cache>/turso-go/`, and clears and re-extracts an entry that will not verify.
 
+- **The same cache holds dictation's recognizer library**, downloaded on the
+  first dictation into `<cache>/sherpa-onnx/` beside `turso-go/` (31 to
+  40 MB) when no prepared copy is found, so one variable moves both. See
+  [Voice Dictation](dictation.md#where-the-recognizer-comes-from).
 - **Point `TURSO_GO_CACHE_DIR` at a writable, persistent path** in an ephemeral
   container. A read-only or per-restart cache costs a 20 MB extraction on every
   start; a cache root that cannot be created fails the store open with an error
