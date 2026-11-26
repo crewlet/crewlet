@@ -98,7 +98,7 @@ var neverReached = []string{
 // The tool session the assistant's model calls through decodes a call's
 // arguments as every transport into a tool does, through the one decode that
 // lives beside the tool registry rather than in it, so the assistant reaches
-// the argument leaves below internal/tools and never the registry.
+// the argument and schema leaves below internal/tools and never the registry.
 var reachedAnyway = map[string]string{
 	"internal/tools/argval": "the one reader per declared argument type " +
 		"(ADR-0059): a value in and a value out, with no registry, no tool and " +
@@ -106,6 +106,9 @@ var reachedAnyway = map[string]string{
 	"internal/tools/toolargs": "a call's arguments as values: the one decode " +
 		"every transport into a tool shares and their canonical form " +
 		"(ADR-0059), with no registry, no tool and no principal",
+	"internal/tools/toolschema": "a tool's input schema as maps: the one object " +
+		"builder and the check a session lists a tool by, with no registry, no " +
+		"tool and no principal",
 }
 
 // THE ASSISTANT IMPORTS NO WRITER AND NO SEAT (ADR-0050).
