@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/tools/toolschema"
 )
 
 // Operation is one method of a vendor's API as its product's catalog lists it:
@@ -433,6 +435,9 @@ func (c Catalog) Validate() error {
 			strings.TrimSpace(t.Description) == "" || t.Parameters == nil {
 			bad("growth: %s tool %q needs a unique name starting %s_, a callable class, its operations, a "+
 				"description and its parameters", c.Kind, t.Name, c.Kind)
+		}
+		if faults := toolschema.Faults(t.Parameters); len(faults) > 0 {
+			bad("growth: %s tool %q has an invalid input schema: %s", c.Kind, t.Name, strings.Join(faults, "; "))
 		}
 		tools[t.Name] = true
 		for _, id := range t.Operations {

@@ -292,6 +292,44 @@ func TestALaunchIsHandedTheToolsTheEnginesOwnServerLists(t *testing.T) {
 	}
 }
 
+// badSchemaTool is a tool whose schema marshals "required": null, which
+// Claude Code refuses, dropping every tool its server lists.
+type badSchemaTool struct{ stubTool }
+
+func (b *badSchemaTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}, "required": []string(nil)}
+}
+
+// ONE TOOL WITH AN INVALID SCHEMA IS LEFT OUT OF EVERYTHING A LAUNCH IS HANDED:
+// the list its endpoint serves, the names the runner holds the harness to
+// and the count, so the guard does not end the run over the tool the bridge
+// left out, and the rest stay listed.
+//
+// Mutation: drop toolsession.Listable from Session.lists and this goes red.
+func TestOneToolWithAnInvalidSchemaIsLeftOutOfALaunch(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	if err := reg.Register(&stubTool{name: "read_page"}, tools.OriginBuiltin); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(&badSchemaTool{stubTool{name: "bad_page"}}, tools.OriginBuiltin); err != nil {
+		t.Fatal(err)
+	}
+	surface := tools.NewSurface("execute", reg.Snapshot(), []string{"read_page", "bad_page"}).ForTurn(seatTurn())
+	var session *mcpbridge.Session
+	f := openServers(t, surface, func(s *mcpbridge.Session) { session = s })
+	own, _ := listed(t, f.endpoint)
+	if !slices.Contains(own, "read_page") || slices.Contains(own, "bad_page") {
+		t.Errorf("the endpoint lists %v, want read_page without bad_page", own)
+	}
+	if got := mcpbridge.Listed(session); !slices.Equal(got, own) {
+		t.Errorf("Listed = %v, the endpoint lists %v", got, own)
+	}
+	if got := session.Listed(); got != len(own) {
+		t.Errorf("the session counts %d tools, the endpoint lists %d", got, len(own))
+	}
+}
+
 // A LAUNCH IS HANDED HOW MANY TOOLS ITS OPENING LISTS IN ALL: the engine's own
 // at the job's endpoint and each MCP server's beneath it, the bridge's loader
 // among them only for a harness handed no skills of its own, exactly as the
