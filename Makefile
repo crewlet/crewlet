@@ -268,7 +268,7 @@ COMPANY ?=
 .PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer setup-steps ssh-held-words objects-answer broker-answer assistant-fixtures retention-alarms \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint notehelper notehelper-check \
         check fmt-check tidy-check signoff-check signoff-test git-test chromium-test node-test playwright-tree-test vet lint test test-norace test-cross test-solo \
-        require-npm bench git test-gitproc test-capture chromium node playwright-tree \
+        require-npm bench git test-gitproc test-capture test-speech chromium node playwright-tree \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -541,6 +541,13 @@ CAPTURE_CASES := ^(TestAPinIsHeldWhileAChildHoldsItsDescription|TestAProbeLeaves
 test-capture: ## run flock's pin cases, the harness capture's cases and the socket counts' (ci: harness capture (macOS))
 	$(REQUIRED) $(SKIPGATE) -- $(GOTEST) -json -run '$(CAPTURE_CASES)' ./internal/flock/ ./internal/providers/llm/harness/
 	$(REQUIRED) $(SKIPGATE) -- $(GOTEST) -json ./internal/sockcount/
+
+# THE REAL DICTATION RECOGNIZER on a fixture WAV: the pinned library and model
+# (internal/speech's known-answer test, build tag speechmodel), fetched into
+# CREWLET_SPEECH_CACHE, about 230 MB on a cold cache, so `make test` leaves it
+# to the speech workflow.
+test-speech: ## run the real recognizer on its fixture (ci: speech)
+	$(GO) test -count=1 -tags speechmodel -run '^TestTheRealRecognizerTranscribesTheFixture$$' -v ./internal/speech/
 
 ##@ The pinned Chromiums
 
