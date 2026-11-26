@@ -356,6 +356,20 @@ export interface TimeRange {
 }
 
 /**
+ * The end of the `step`-wide bucket `now` is in: the edge a window that
+ * includes the bucket in progress ends on.
+ *
+ * AN INSTANT ON A BOUNDARY STARTS ITS BUCKET, so its end is a whole step on.
+ * Rounding up with `Math.ceil` left such an instant where it was, as the end of
+ * the bucket before it: a clock floored to the hour then put a week's edge at
+ * today's midnight for the first hour of every day, and the week reached back
+ * seven days and the minutes past midnight.
+ */
+export function endOfBucket(now: number, step: number): number {
+  return (Math.floor(now / step) + 1) * step;
+}
+
+/**
  * The two windows a range names, as instants.
  *
  * SEPARATED FROM THE HOOK because this is the arithmetic and the hook is the
@@ -392,7 +406,7 @@ export function windowEdges(
   // A NAMED WINDOW MOVES WITH THE CLOCK — a duration, and today — and an
   // interval a reader typed does not.
   const moving = isRange(w) || w.today === true;
-  const edge = moving ? (step > 0 ? Math.ceil(now / step) * step : now) : w.to;
+  const edge = moving ? (step > 0 ? endOfBucket(now, step) : now) : w.to;
   // TODAY STARTS WHERE THE COMPANY'S DAY DID, whatever the clock says now, so
   // its span is measured from that edge rather than carried in the value.
   const span = !isRange(w) && w.today ? edge - w.from : spanOf(w);

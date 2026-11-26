@@ -1099,6 +1099,20 @@ test("a second passing asks the windowed sources nothing again", async () => {
   expect(asks("events")).toBe(before.events);
 });
 
+// THE WINDOW ENDS WITH THE POLL IN PROGRESS, after the clock even on a minute.
+// Mutation: round the edge up with `Math.ceil`, which leaves a clock on a minute
+// where it is, so a row written in that instant is past the window's end.
+test("a clock on a minute asks up to the end of that minute", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-18T13:00:00Z"));
+  location.hash = "#/settings/audit?window=7d";
+  const query = serving({ work_activity: { records: [], complete: true } });
+  mount();
+  await waitFor(() => expect(asked(query, "events").until).toBeTruthy());
+  expect(asked(query, "events").until).toBe("2026-11-18T13:01:00.000Z");
+  expect(asked(query, "events").since).toBe("2026-11-11T13:01:00.000Z");
+});
+
 // A RE-READ OF THE TRAIL IS QUIET, AND STILL MOVES THE WINDOW.
 //
 // A REST read whose key changes shows nothing until it answers. Keyed on the

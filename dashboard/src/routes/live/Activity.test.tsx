@@ -260,8 +260,11 @@ test("a window the engine answered with no rows says the log is empty", async ()
 // edges handed to `event_series` are snapped OUT to the bucket the chart draws
 // in, which is both what keeps the query's identity still and what makes the
 // bars cover the window the badge names. Asked with the raw clock they carried
-// a millisecond, which is what re-keyed the query every tick.
+// a millisecond, which is what re-keyed the query every tick. The clock sits
+// on an hour, which starts the bucket in progress: rounded up with `Math.ceil`,
+// the axis ended on the clock and left that hour off the chart.
 test("the axis is asked for whole buckets, never for the clock's own millisecond", async () => {
+  vi.setSystemTime(new Date("2026-11-18T13:00:00Z"));
   const { asked } = mount();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
@@ -272,8 +275,8 @@ test("the axis is asked for whole buckets, never for the clock's own millisecond
   const until = Date.parse(String(series!.params.until));
   // The default window is `1d`, whose bucket is the hour.
   expect(series!.params.bucket).toBe("hour");
-  expect(until % 3_600_000).toBe(0);
-  expect(since % 3_600_000).toBe(0);
+  expect(series!.params.until).toBe("2026-11-18T14:00:00.000Z");
+  expect(series!.params.since).toBe("2026-11-17T14:00:00.000Z");
   expect(until - since).toBe(24 * 3_600_000);
 });
 
