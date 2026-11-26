@@ -127,7 +127,8 @@ func (Muse) Command(req sandbox.RunRequest, session Session, paths Paths, _ stri
 // museScript is a Muse Code run's script, giving its harness stop to go once
 // asked to end: the end protocol (end.go); the release read and held to
 // [museSupported]; the session named, restored where it was carried, and recorded
-// ([museSessionGate], [Paths.SessionRecord]); the harness run under the end
+// ([museSessionGate], [Paths.SessionRecord]); the checkouts below the start
+// directory handed ([museCheckoutHome]); the harness run under the end
 // protocol ([launchHarness]); its subagents' usage added to the stream
 // ([museChildUsage]); and its session packed ([museCapture]), exiting with
 // the harness's status.
@@ -172,11 +173,18 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	// THE HOME'S OWN SETTINGS BACK however the script exits; a run killed
-	// first leaves them to the next run's clear ([Muse.mendHome]).
-	line(`museput() { %s; }; trap museput EXIT`, museRestore(paths))
+	// THE HOME'S OWN SETTINGS AND RULES FILE BACK, the checkouts' copies gone
+	// and what a firing left out said, however the script exits, each step
+	// whatever came of the others ([everyStep]); a run killed outright leaves
+	// them to the next run's clear ([Muse.mendHome], [Muse.homeRestore]).
+	home := museCheckoutHome(paths)
+	put := everyStep(home.restore(), home.saySkipped())
+	line(`museput() { %s; }; trap museput EXIT`, everyStep(put, museRestore(paths)))
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
+	// A TEARDOWN'S SIGNAL ends muse first, then puts the home back.
+	line(`musequit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; museput; exit "$1"; }`)
+	line(`trap 'musequit 143' TERM; trap 'musequit 130' INT; trap 'musequit 129' HUP`)
 	b.WriteString(museRelease)
 	line(`if ! at %s; then printf 'crewlet: this box runs Muse Code %%s, older than %s, the release this runner is written for\n' "$n" >&2; exit 1; fi`,
 		floorArgs(museSupported()), museSupported())
@@ -185,6 +193,10 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
 	b.WriteString(museWiring(paths))
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([museCheckoutHome]), once the
+	// plugin whose hook hands a later one is installed.
+	line(`mkdir -p %s %s || exit 1`, q(paths.MuseConfig()), q(paths.MuseSkills()))
+	b.WriteString(home.gate())
 	before, after := museChildUsage(paths)
 	b.WriteString(before)
 	watch := ""
@@ -193,6 +205,7 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 		watch = "museguard"
 	}
 	b.WriteString(launchWatched(strings.Join(parts, " "), watch, paths))
+	line(`%s; trap - TERM INT HUP`, put)
 	b.WriteString(after)
 	b.WriteString(museUnwire(paths))
 	b.WriteString(museCapture(paths))
@@ -642,22 +655,22 @@ func museMergeSystem(ctx context.Context, box sandbox.Sandbox, paths Paths, syst
 	return nil
 }
 
-// museSwitchedOff refuses a run where the box home switches off what the run
-// brings of its own, each with no word otherwise (measured on 1.4.25): its
-// notes plugin, where it has one, by the settings' `plugins.activation` "off",
-// a disable recorded in installed.json ([Paths.MuseInstalled]), a reject
-// recorded as a hook's runtime capability, or an installed.json Muse cannot
-// read (it then loads no plugin); a seat skill, by `skills.activation.user`
-// "off" on its file. The plugin's records are read on every run, before the
-// script's remove and install, which would reset them: a run with no use for
-// the plugin is not refused, but its script leaves the plugin alone
-// ([Paths.MusePluginOff]); nothing is switched back on. Settings that do not
-// read are Muse's to refuse, which it does loudly.
-func museSwitchedOff(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
+// museSwitchedOff refuses a run where the box home switches off what carries
+// Crewlet's own contract, each silent in 1.4.25 (measured): the notes plugin
+// of a run with notes or skill loads, by `plugins.activation` "off", a
+// disable in installed.json ([Paths.MuseInstalled]), a note hook's reject or
+// an installed.json Muse cannot read; a seat skill, by
+// `skills.activation.user` "off" on its file. The nested hook alone never
+// refuses (D709): off with the plugin, or rejected alone, it is left out and
+// the lines naming why are returned for the run's skip log. The records are
+// read before the script's remove and install, which would reset them; a run
+// that needs the plugin for nothing else leaves it alone
+// ([Paths.MusePluginOff]). Settings that do not read are Muse's to refuse.
+func museSwitchedOff(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) ([]string, error) {
 	path := paths.MuseSettings()
 	raw, err := box.ReadFile(ctx, path)
 	if err != nil {
-		return fmt.Errorf("executor: reading the box home's own Muse Code settings (%s): %w", path, err)
+		return nil, fmt.Errorf("executor: reading the box home's own Muse Code settings (%s): %w", path, err)
 	}
 	var settings struct {
 		Plugins struct {
@@ -673,27 +686,39 @@ func museSwitchedOff(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRe
 		} `json:"skills"`
 	}
 	_ = json.Unmarshal(raw, &settings) // a value that does not decode switches nothing off
+	rejected := func(id string) string {
+		key := "plugin:" + museNotesPlugin + ":hook:" + id
+		if c, ok := settings.Capabilities[key]; ok && c.Enabled != nil && !*c.Enabled {
+			return fmt.Sprintf("%s sets runtime_capabilities.%q.enabled to false (`muse plugins reject`)", path, key)
+		}
+		return ""
+	}
 	var off []string
 	if string(settings.Plugins.Activation[museNotesPlugin]) == `"off"` {
 		off = append(off, fmt.Sprintf(`%s sets plugins.activation.%s to "off"`, path, museNotesPlugin))
 	}
 	for _, h := range museNoteHooks {
-		key := "plugin:" + museNotesPlugin + ":hook:" + h.id
-		if c, ok := settings.Capabilities[key]; ok && c.Enabled != nil && !*c.Enabled {
-			off = append(off, fmt.Sprintf("%s sets runtime_capabilities.%q.enabled to false (`muse plugins "+
-				"reject`)", path, key))
+		if why := rejected(h.id); why != "" {
+			off = append(off, why)
 		}
 	}
 	installed, err := museInstalledOff(ctx, box, paths)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	off = append(off, installed...)
-	if err = museMarkPluginOff(ctx, box, paths, len(off) > 0); err != nil {
-		return err
+	notes := req.Steer.Set() || req.SkillLoads.Set()
+	nestedOff := slices.Clone(off)
+	if why := rejected(museNestedHookID); why != "" {
+		nestedOff = append(nestedOff, why)
+	}
+	// A PERSON'S RECORD STAYS: the remove and install would reset it, so a run
+	// that needs the plugin for nothing the person left on leaves it alone.
+	if err = museMarkPluginOff(ctx, box, paths, len(off) > 0 || len(nestedOff) > 0 && !notes); err != nil {
+		return nil, err
 	}
 	var said []string
-	if req.Steer.Set() || req.SkillLoads.Set() {
+	if notes {
 		said = off
 	}
 	for _, s := range req.Skills {
@@ -703,13 +728,13 @@ func museSwitchedOff(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRe
 				path, file, s.Listed()))
 		}
 	}
-	if len(said) == 0 {
-		return nil
+	if len(said) > 0 {
+		return nil, fmt.Errorf("executor: the box home switches off what the run brings of its own, which Muse "+
+			"Code would then go without unseen, and the run never switches back on what a person switched off: "+
+			"%s; undo that there (`muse plugins enable` or `approve`, `muse skills enable`), or run without "+
+			"notes, skill loads and skills", strings.Join(said, "; "))
 	}
-	return fmt.Errorf("executor: the box home switches off what the run brings of its own, which Muse Code "+
-		"would then go without unseen, and the run never switches back on what a person switched off: %s; "+
-		"undo that there (`muse plugins enable` or `approve`, `muse skills enable`), or run without notes, "+
-		"skill loads and skills", strings.Join(said, "; "))
+	return nestedOff, nil
 }
 
 // museInstalledOff is what installed.json ([Paths.MuseInstalled]) says of the
@@ -884,9 +909,9 @@ func museServerName(name string) bool {
 // instructions, told of notes where it reads them, into the home's settings
 // ([museMergeSystem]), refused past [museSystemMax]; its MCP servers
 // ([writeMuseServers]) with a fresh session's beside them
-// ([freshSessionWiring]), each named for its session; its skills; its notes
-// plugin, take config and note helper where it is wired to its notes or its
-// skills' loads; and its brief, and the brief a new session is handed in a
+// ([freshSessionWiring]), each named for its session; its skills; its
+// plugin, note helper, take config and checkouts' launch
+// ([writeMuseCheckouts]); and its brief, and the brief a new session is handed in a
 // continued one's place, which `--prompt-file` names.
 func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, session Session,
 	paths Paths) (string, error) {
@@ -902,8 +927,19 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 			"at most %d (run.system_prompt_append): shorten the seat's system prompt, its policies or its "+
 			"memory", n, museSystemMax)
 	}
-	if err := museSwitchedOff(ctx, box, req, paths); err != nil {
+	// THE NOTE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR, whose nested
+	// hook hands a checkout cloned during the run ([museNestedCommand]); a box
+	// with none starts without it, unless notes or loads need the helper.
+	nested := true
+	if err := writeNoteHelper(ctx, box, paths.MuseNoteHelper()); errors.Is(err, errNoHelperBuild) &&
+		!req.Steer.Set() && !req.SkillLoads.Set() {
+		nested = false
+	} else if err != nil {
 		return "", err
+	}
+	nestedOff, offErr := museSwitchedOff(ctx, box, req, paths)
+	if offErr != nil {
+		return "", offErr
 	}
 	notes, loads := req.Steer.Set(), req.SkillLoads.Set()
 	if system != "" {
@@ -924,10 +960,24 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	if err := writeMuseSkills(ctx, box, req.Skills, paths); err != nil {
 		return "", err
 	}
-	if notes || loads {
-		if err := writeMuseNotes(ctx, box, req, paths); err != nil {
-			return "", err
+	// THE NESTED HOOK SWITCHED OFF is left out, said once in the skip log
+	// (D709); where the notes or loads reinstall the plugin, which drops a
+	// person's reject of it, the settings holding it are held to come back.
+	// That hold matters only for a WriteConfig with no standing text: with
+	// it, museMergeSystem holds them anyway.
+	var skipped []string
+	if nested && len(nestedOff) > 0 {
+		nested, skipped = false, []string{"a repository cloned during the run is not handed its instructions and " +
+			"skills: the box home switches off the hook that hands it, and the run never switches it back on: " +
+			strings.Join(nestedOff, "; ")}
+		if req.Steer.Set() || req.SkillLoads.Set() {
+			if _, err := museHold(ctx, box, paths); err != nil {
+				return "", err
+			}
 		}
+	}
+	if err := writeMuseCheckouts(ctx, box, req, paths, nested, skipped); err != nil {
+		return "", err
 	}
 	if f := freshSessionWiring(req, session); f != nil {
 		if err := writeMuseServers(ctx, box, paths.MuseServersFresh(), f.MCPServers, sessionNonce(session.Fresh)); err != nil {
@@ -954,26 +1004,54 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	return paths.MuseSettings(), nil
 }
 
-// writeMuseNotes writes a run's notes plugin ([musePluginManifest]), its take
-// config ([hookTakeConfig]) and the note helper's build for the box's
-// machine ([writeNoteHelper]).
-func writeMuseNotes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
-	take, err := hookTakeConfig(req.MCPServers, req.Steer, req.SkillLoads, "")
+// writeMuseCheckouts writes what a run's plugin and its checkouts need, the
+// note helper written already: the checkouts' launch config and the foreign
+// rules Muse would load in the home file's place ([museCheckoutHome]); the
+// take config where the run has notes or loads; and the plugin
+// ([musePluginManifest]) where it has any hook, the nested one where hooked;
+// skipped, lines the launch keeps in the run's skip log. A box with no helper
+// starts without the checkouts, its gate saying so.
+func writeMuseCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths,
+	hooked bool, skipped []string) error {
+	notes, loads := req.Steer.Set(), req.SkillLoads.Set()
+	var nested []string
+	if hooked {
+		nested = museNestedCommand(paths)
+	}
+	settings, err := box.ReadFile(ctx, paths.MuseSettings())
 	if err != nil {
+		return fmt.Errorf("executor: reading the box home's Muse Code settings (%s): %w", paths.MuseSettings(), err)
+	}
+	rules, skills := museForeignOn(settings)
+	spec := museCheckouts(paths, skills)
+	spec.Skipped = skipped
+	launch := museCheckoutHome(paths).launchConfig(spec, req.ReportedRepos)
+	if err = box.WriteFile(ctx, paths.MuseCheckoutLaunch(), launch); err != nil {
+		return fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
+	}
+	if err = writeMuseForeign(ctx, box, paths, rules); err != nil {
 		return err
 	}
-	if err = box.WriteFile(ctx, paths.MuseTakeConfig(), take); err != nil {
-		return fmt.Errorf("executor: writing the note helper's config: %w", err)
+	if notes || loads {
+		var take []byte
+		if take, err = hookTakeConfig(req.MCPServers, req.Steer, req.SkillLoads, ""); err != nil {
+			return err
+		}
+		if err = box.WriteFile(ctx, paths.MuseTakeConfig(), take); err != nil {
+			return fmt.Errorf("executor: writing the note helper's config: %w", err)
+		}
 	}
-	manifest, err := musePluginManifest(paths.MuseNoteHelper(), paths.MuseTakeConfig(), req.Steer.Set(),
-		req.SkillLoads.Set())
+	if !notes && !loads && nested == nil {
+		return nil
+	}
+	manifest, err := musePluginManifest(paths.MuseNoteHelper(), paths.MuseTakeConfig(), notes, loads, nested)
 	if err != nil {
 		return err
 	}
 	if err = box.WriteFile(ctx, paths.MuseNotesPlugin()+"/.muse-plugin/plugin.json", manifest); err != nil {
-		return fmt.Errorf("executor: writing the run's notes plugin: %w", err)
+		return fmt.Errorf("executor: writing the run's plugin: %w", err)
 	}
-	return writeNoteHelper(ctx, box, paths.MuseNoteHelper())
+	return nil
 }
 
 // museWiring is the part of a run's script that wires the box home's settings
@@ -1004,7 +1082,7 @@ func museWiring(paths Paths) string {
 	line(`  chmod 0755 %s 2> /dev/null`, q(paths.MuseNoteHelper()))
 	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > %s 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
 		q(plugin), installed, errs, museNotesPlugin, errs)
-	line(`    echo "crewlet: the run's notes plugin could not be installed, so the run takes no notes between its steps: $(head -c 400 %s 2> /dev/null)" >&2`, errs)
+	line(`    echo "crewlet: the run's notes plugin could not be installed, so the run takes no notes between its steps and hands a repository cloned during it nothing: $(head -c 400 %s 2> /dev/null)" >&2`, errs)
 	line(`    rm -f %s`, installed)
 	line(`  fi`)
 	line(`fi`)
@@ -1037,10 +1115,10 @@ var _ homeMender = Muse{}
 // back left in them out before the next run in the box, whichever harness it
 // runs: the servers it added, by the names it recorded
 // ([Paths.MuseServersAdded]), with their bridge's token, and its standing
-// instructions, the home's own `run.system_prompt_append` put back from the
-// held copy ([Paths.MuseHeldSettings], [museAppendBack]). Every other key
-// stays as the file holds it, an edit made since included; nothing where
-// neither is held.
+// instructions and its plugin's capability records, the home's own put back
+// from the held copy ([Paths.MuseHeldSettings], [museAppendBack],
+// [museCapabilitiesBack]). Every other key stays as the file holds it, an
+// edit made since included; nothing where neither is held.
 func (Muse) mendHome(ctx context.Context, box sandbox.Sandbox, p Paths) error {
 	added, err := heldInBox(ctx, box, p.MuseServersAdded())
 	if err != nil {
@@ -1077,6 +1155,9 @@ func (Muse) mendHome(ctx context.Context, box sandbox.Sandbox, p Paths) error {
 		}
 		if held {
 			if err = museAppendBack(settings, home, p.MuseSettings()); err != nil {
+				return err
+			}
+			if err = museCapabilitiesBack(settings, home, p.MuseSettings()); err != nil {
 				return err
 			}
 		}
@@ -1150,17 +1231,59 @@ func museAppendBack(settings map[string]json.RawMessage, home []byte, file strin
 	return nil
 }
 
+// museCapabilitiesBack sets settings' `runtime_capabilities` of the run's
+// plugin (`plugin:crewlet-notes:*`) back to the ones home, the home's own
+// settings as held, records: the script's remove and install drop a person's
+// reject of a hook the run left out (D709), which the next run must read as
+// it was. Every other capability stays as the file holds it.
+func museCapabilitiesBack(settings map[string]json.RawMessage, home []byte, file string) error {
+	var own struct {
+		Capabilities map[string]json.RawMessage `json:"runtime_capabilities"`
+	}
+	_ = json.Unmarshal(home, &own) // held settings that do not read are refused by museAppendBack first
+	caps := map[string]json.RawMessage{}
+	if held, ok := settings["runtime_capabilities"]; ok {
+		if err := json.Unmarshal(held, &caps); err != nil || caps == nil {
+			return fmt.Errorf("executor: the box home's Muse Code settings (%s) hold runtime_capabilities that "+
+				"are no object (%v): fix or remove it", file, err)
+		}
+	}
+	prefix := "plugin:" + museNotesPlugin + ":"
+	for key := range caps {
+		if strings.HasPrefix(key, prefix) {
+			delete(caps, key)
+		}
+	}
+	for key, v := range own.Capabilities {
+		if strings.HasPrefix(key, prefix) {
+			caps[key] = v
+		}
+	}
+	if _, had := settings["runtime_capabilities"]; len(caps) == 0 && (!had || own.Capabilities == nil) {
+		delete(settings, "runtime_capabilities")
+		return nil
+	}
+	var err error
+	if settings["runtime_capabilities"], err = json.Marshal(caps); err != nil {
+		return fmt.Errorf("executor: encoding Muse Code's settings: %w", err)
+	}
+	return nil
+}
+
 // artifactFiles is the files a Muse Code run leaves in its box of its own
 // beside its sessions, which a later run must not find ([artifactHolder]):
-// the note helper, its take configs, its answer to the notes plugin's install
-// and the count of its subagents' lines its script kept. The record of the
+// the note helper, its take configs, its answer to the notes plugin's install,
+// the count of its subagents' lines its script kept, and its checkouts'
+// launch config, sections, foreign rules list and the home rules file's
+// opening text ([museCheckoutHome]). The record of the
 // servers it added and the home's held settings stay for the clear to put the
 // home's back by ([Muse.mendHome]);
 // the home's settings, skills, instructions and plugins, its sessions and its
 // login are kept.
 func (Muse) artifactFiles(p Paths) []string {
 	return []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
-		p.MuseNotesInstall()}
+		p.MuseNotesInstall(), p.MuseCheckoutLaunch(), p.MuseCheckoutSections(), p.MuseForeignRules(),
+		p.MuseHomeRulesOwn()}
 }
 
 // artifactDirs is the directories a Muse Code run leaves of its own

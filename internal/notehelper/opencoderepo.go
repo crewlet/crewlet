@@ -19,12 +19,12 @@ const listedOpenCode = "opencode"
 // directory: 6 deep, dot directories and node_modules skipped.
 var openCodeListing = listingRule{harness: "OpenCode", walk: skillWalkOptions{Depth: 6},
 	key: func(name string) string { return name }, shown: func(name string) string { return name },
-	takes: func(d skillDir) (string, []string) {
+	takes: func(d skillDir) (string, []string, bool) {
 		n, named := frontName(entryFile(d))
 		if !named || n == "" {
 			n = d.name
 		}
-		return n, []string{n}
+		return n, []string{n}, true
 	}}
 
 // runOpenCodeNested is one firing of an OpenCode run's nested hand, which the

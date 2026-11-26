@@ -26,13 +26,20 @@ import (
 const budgetHermes = "hermes"
 
 // launchBudget is the bound the launch's sections share with the text the
-// harness reads beside them: Form, whose count applies ([budgetHermes]); Own,
-// the file of the run's own text the sections follow, apart by a blank line
-// (none where it is not there); Bytes, the bound on both.
+// harness reads beside them: Form, whose count applies ([budgetHermes],
+// [budgetMuse]); Own, the file of the text the sections follow (none where it
+// is not there); Bytes, the bound on both, Hermes's alone (Muse Code's is its
+// reminder's own, [museRulesCap], so a muse budget names none).
 type launchBudget struct {
 	Form  string `json:"form"`
 	Own   string `json:"own"`
 	Bytes int    `json:"bytes"`
+}
+
+// known reports whether b is a form the helper counts: Hermes's with a bound
+// of bytes, or Muse's with none.
+func (b launchBudget) known() bool {
+	return (b.Form == budgetHermes && b.Bytes > 0) || (b.Form == budgetMuse && b.Bytes == 0)
 }
 
 // hermesRoom is what a Hermes answer has left, in its channel's count
