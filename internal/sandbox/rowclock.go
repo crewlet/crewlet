@@ -6,15 +6,16 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// A WAIT TIMED BY AN INSTANT ON THE ROW is judged by whichever node handles the
-// run next, whose clock may stand [RowClockAllowance] from the one that
-// stamped it. So each such instant names its node, and the judge is exact for
-// either reading: the node that stamped it judges it on its own clock against
-// the bound; any other, or an instant naming none, against the bound plus the
-// allowance, which never comes before the bound has passed in real time. Where
-// a node other than the one named records the wait again, its window restarts
-// on that node's clock ([RowWindow]), the count and the first instant kept. See
-// the package doc, "Instants another node stamped".
+// A WAIT TIMED BY AN INSTANT ON THE ROW (failed collections or resumes, lost
+// claims, a call in flight's bound, a held call's deadline) is judged by
+// whichever node handles the run next, whose clock may stand
+// [RowClockAllowance] from the stamper's. So each such instant names its node:
+// that node judges it on its own clock against the bound; any other, or an
+// instant naming none (an older build's), against the bound plus the
+// allowance, never before the bound has passed in real time. A node recording
+// the wait again restarts its window on its own clock ([RowWindow]), the count
+// and the first instant kept. A kept box is dated and continued only on its
+// host, so its age is read on that clock ([RelaunchTarget.At]).
 
 // RowClockAllowance is what a node adds to a bound it judges against an
 // instant another node's clock stamped: twice [objstore.AssumedClockSkew], the
@@ -96,8 +97,7 @@ func (w WaitOver) lostWait() rowWait { return rowWait{first: w.FirstLostAt, wind
 // the call in flight: [BridgeCall.Until] where node's clock stamped it, else
 // [RowClockAllowance] past it. Zero for a call with no bound.
 func (c BridgeCall) until(node string) time.Time {
-	switch {
-	case c.Until.IsZero() || c.UntilOn == node:
+	if c.Until.IsZero() || c.UntilOn == node {
 		return c.Until
 	}
 	return c.Until.Add(RowClockAllowance)
