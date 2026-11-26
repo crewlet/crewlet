@@ -22,30 +22,35 @@ import (
 // names and its skill directories are the lists they always were, byte for
 // byte; Claude Code's rules a tree slot after its names, naming its form, and
 // a recursive skill directory, the objects internal/notehelper's
-// instructionSlot and skillDirSlot read.
+// instructionSlot and skillDirSlot read; Kimi Code's names an object with
+// skipBlank, its firing bound, and its listing rule with ~/.agents/skills.
 //
-// Mutation: write a slot of names or a plain skill directory as an object, or
-// drop the tree's form or scope or the directory's recursive, and a case goes
-// red.
+// Mutation: write a slot of names or a plain skill directory as an object,
+// drop the tree's form or scope, the directory's recursive, or Kimi's
+// skipBlank or firing bound, and a case goes red.
 func TestACheckoutSpecReachesTheHelperInTheShapeItReads(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name             string
 		spec             checkoutSpec
 		instructions, sd string
+		firing           *int
 	}{
-		{"codex", codexCheckouts(1), `[["AGENTS.override.md","AGENTS.md"]]`, `[".codex/skills",".agents/skills"]`},
+		{"codex", codexCheckouts(1), `[["AGENTS.override.md","AGENTS.md"]]`, `[".codex/skills",".agents/skills"]`, nil},
 		{"claude", claudeCheckouts, `[["CLAUDE.md"],[".claude/CLAUDE.md"],["CLAUDE.local.md"],` +
 			`{"tree":".claude/rules","suffix":".md","form":"claude","scoped":{"keys":["paths"],"whole":["**"]}}]`,
-			`[".claude/skills"]`},
+			`[".claude/skills"]`, nil},
 		{"a recursive directory", checkoutSpec{Instructions: []checkoutSlot{{Names: []string{"AGENTS.md"}}},
 			SkillDirs: []checkoutSkillDir{{Dir: ".pi/skills", Recursive: true}, {Dir: ".agents/skills"}}},
-			`[["AGENTS.md"]]`, `[{"dir":".pi/skills","recursive":true},".agents/skills"]`},
+			`[["AGENTS.md"]]`, `[{"dir":".pi/skills","recursive":true},".agents/skills"]`, nil},
+		{"kimi", kimiCheckouts(Paths{Home: "/home/u"}), `[[".kimi-code/AGENTS.md"],{"names":["AGENTS.md","agents.md"],"skipBlank":true}]`,
+			`[{"dir":".kimi-code/skills","recursive":true},{"dir":".agents/skills","recursive":true}]`, &kimiFiringLimit},
 	}
 	for _, c := range cases {
 		var launch struct {
 			Instructions json.RawMessage `json:"instructions"`
 			SkillDirs    json.RawMessage `json:"skillDirs"`
+			FiringLimit  *int            `json:"firingLimit"`
 		}
 		if err := json.Unmarshal(checkoutHome{}.launchConfig(c.spec, nil), &launch); err != nil {
 			t.Fatal(err)
@@ -56,6 +61,20 @@ func TestACheckoutSpecReachesTheHelperInTheShapeItReads(t *testing.T) {
 		if got := string(launch.SkillDirs); got != c.sd {
 			t.Errorf("%s: the launch config's skill directories are %s, want %s", c.name, got, c.sd)
 		}
+		if (launch.FiringLimit == nil) != (c.firing == nil) || (c.firing != nil && *launch.FiringLimit != *c.firing) {
+			t.Errorf("%s: the launch config's firingLimit is %v, want %v", c.name, launch.FiringLimit, c.firing)
+		}
+	}
+	var kimi struct {
+		ListedAs   string          `json:"listedAs"`
+		HomeSkills json.RawMessage `json:"homeSkills"`
+	}
+	if err := json.Unmarshal(checkoutHome{}.launchConfig(kimiCheckouts(Paths{Home: "/home/u"}), nil), &kimi); err != nil {
+		t.Fatal(err)
+	}
+	if want := `[{"dir":"/home/u/.agents/skills","recursive":true,"every":true,"depth":8},` +
+		`{"dir":"/home/u/.agents/skills","commands":true}]`; kimi.ListedAs != "kimi" || string(kimi.HomeSkills) != want {
+		t.Errorf("kimi: the launch config lists as %q with home skills %s, want kimi and %s", kimi.ListedAs, kimi.HomeSkills, want)
 	}
 }
 

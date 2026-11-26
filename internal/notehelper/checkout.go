@@ -51,8 +51,8 @@ type checkoutSpec struct {
 	SkillSep           skillSep          `json:"skillSep,omitempty"`
 	Gated              bool              `json:"gated,omitempty"`
 	// ListedAs and HomeSkills are the harness whose rule names a listed skill
-	// and the home's skill directories whose names a copy may not take
-	// ([homeHolds]).
+	// ([listingRules]) and the home's skill directories whose names a copy may
+	// not take ([homeHolds]).
 	ListedAs   string         `json:"listedAs,omitempty"`
 	HomeSkills []skillDirSlot `json:"homeSkills,omitempty"`
 	// held is the names the home takes, read once a firing ([homeNames]);
@@ -171,6 +171,9 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 	if c.Budget != nil && (c.Budget.Form != budgetHermes || c.Budget.Bytes <= 0) {
 		return fmt.Errorf("the launch config's budget, form %q of %d bytes, is none the helper knows", c.Budget.Form,
 			c.Budget.Bytes)
+	}
+	if _, ok := listingRules[c.ListedAs]; c.ListedAs != "" && !ok {
+		return fmt.Errorf("the launch config's listedAs %q is none of %q and %q", c.ListedAs, listedGrok, listedKimi)
 	}
 	if c.Gated {
 		if c.gate, err = readGate(stdin); err != nil {
@@ -705,7 +708,8 @@ func checkoutName(work, name string) bool {
 // ([joinParts] hands them as one text). A file the limit cut spends all of
 // it, as a harness charging what it read hands nothing after it, never the
 // bytes a split rune left. A file of whitespace alone, as a harness reads
-// one, is its slot's file and hands nothing, charged nothing.
+// one, is its slot's file and hands nothing, charged nothing, unless the slot
+// passes it over (SkipBlank).
 func instructionParts(root string, limit int, slots []instructionSlot, said *skips) ([]instructionPart, int) {
 	var texts []instructionPart
 	spent := 0
@@ -736,6 +740,9 @@ func instructionParts(root string, limit int, slots []instructionSlot, said *ski
 				continue
 			}
 			text, n, cut := readInstructions(path, info.Size(), limit-spent)
+			if n == 0 && !cut && slot.SkipBlank {
+				continue
+			}
 			if n > 0 {
 				texts, spent = append(texts, instructionPart{path: path, text: text}), spent+n
 			}

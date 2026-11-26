@@ -93,6 +93,8 @@
 | `tools` | The tool registry and the per-phase surfaces built from it: four kinds of tool under one contract, with where each came from recorded at registration. |
 | `tools/argval` | How a first-party tool reads one argument a model sent: one reader per declared type that both decides whether a value is one and returns it, shared by the surface check and the builtin tools (ADR-0059). A leaf over the standard library |
 | `tools/toolargs` | A tool call's arguments: the one decode every transport shares, and the canonical form (closed-set members spelt as the set spells them, nulls left out) every step after the entry reads. |
+| `tools/toolschema` | A tool's input schema as an MCP client takes it: the one object-schema builder every catalogue uses, and the check the tool session lists a tool by. A leaf over the standard library |
+| `tools/toolschema/toolschematest` | Holds a tool's input schema to that check and the JSON Schema meta-schema, for the sweeps over every first-party tool |
 | `caveat` | What a landed write or a refusal tells its caller beside the outcome, worded for a model and for a person at once, with the action asked of a person (ADR-0060) |
 | `modelnote` | Carries, in process only, the sentence a tool call answered a model with, from the answering route to an in-process caller whose own model made the request (the Dashboard Assistant). |
 | `mcp` | MCP client: supervises each server (a stdio child is a process tree on an allowlisted environment), files and levels its tools, and reports why a server failed. |

@@ -166,10 +166,14 @@ func copilotAttempts(paths Paths, harness string) string {
 	line(`printf '{"type":"%s","data":{"kept":%%d,"sets":%%d}}\n' "$kv" "$((n))"`, copilotRelaunchMark)
 	line(`done`)
 	// A CHECKOUT EXTENSION THAT NEVER RAN, said once: written, not switched off
-	// as the guard saw it, and its session's mark missing.
-	line(`if [ -n "$hk" ] && [ -d "$rr" ] && [ ! -f %s ] && [ -f %s ] && [ "$endedas" != before ] && [ ! -f %s ]; then `+
+	// as the guard saw it, its session's mark missing, and that session begun
+	// in this run, its journal grown past what it held at launch (el lines,
+	// en rotations): a Copilot that exits before its session starts (a failed
+	// sign-in, an unknown model) ran no extension through no setting's doing.
+	line(`if [ -n "$hk" ] && [ -d "$rr" ] && [ ! -f %s ] && [ -f %s ] && [ "$endedas" != before ] && [ ! -f %s ] && `+
+		`[ -s "$ev" ] && { [ "$(($(wc -l < "$ev")))" -gt "$((el))" ] || { %s; [ "$rx" -gt "$((en))" ]; }; }; then `+
 		`printf '%%s\n' %s >> "$rr/skipped"; fi`, q(paths.CopilotExtensionOff()), q(paths.CopilotExtension()+"/extension.mjs"),
-		q(paths.CopilotArmed()), q(copilotExtensionNotRun))
+		q(paths.CopilotArmed()), copilotLastRotated("rx"), q(copilotExtensionNotRun))
 	return b.String()
 }
 

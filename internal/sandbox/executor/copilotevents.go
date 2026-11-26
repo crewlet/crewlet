@@ -504,8 +504,9 @@ func (d *copilotEvents) unheld() string {
 //
 // A RUN WITH A CAP WHOSE EXTENSION NEVER RAN fails whatever it answered: its
 // script named the cap ([copilotCapMark]) and its stream lacks the extension's
-// [copilotArmedMessage], so nothing held it to the cap; and so does one whose
-// own usage records, a model request each, number more than its cap.
+// [copilotArmedMessage], so nothing held it to the cap. A launch that never
+// began work, refused by the run's script ([copilotRefusedMark]) or by
+// Copilot's static budget before any answer, is said first, as its cause.
 //
 // A CAPPED RUN is one the extension aborted ([copilotCapMessage]): its line, an
 // `abort`, an aborted idle and exit 1 with no session error, all four. The line

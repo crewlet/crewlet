@@ -11,10 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// THE WHOLE-LINE READ OF A CLAUDE CODE SUMMARY'S LINE is the oracle the
-// streamed read ([claudeSummaryLine]) is held to: the line read whole off the
-// box's shell (`tail -c +N file | head -c size`), checked by the walk's reader
-// and decoded again, as the read was before it streamed.
+// THE WHOLE-LINE READ OF A CLAUDE CODE SUMMARY'S LINE is the oracle the walk's
+// read of its words ([claudeSummaryReading]) is held to: the line read whole
+// off the box's shell (`tail -c +N file | head -c size`), checked by the
+// walk's reader and decoded again, as the read was before it streamed.
 
 // claudeSummaryLineWhole is the summary the line of file at offset at, size
 // bytes with its break, holds: read in the box alone, checked by the walk's own
