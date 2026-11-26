@@ -118,7 +118,7 @@ export type SessionInstead = "fresh" | "older";
  * held to the engine's by `TestTheSessionsScreenReadsWhatTheAnswersSend`.
  */
 export const SESSION_LOSS_WORDS: Record<SessionLoss, string> = {
-  too_large: "its session was larger than the 48 MiB kept for one session",
+  too_large: "its session was larger than one is kept at: 94 MiB in all, at most 48 MiB of it text",
   keep_failed: "its session could not be taken out of its box and kept",
   no_spool_room: "the node had no spool room to keep its session",
   store_refused: "the object store refused its session",

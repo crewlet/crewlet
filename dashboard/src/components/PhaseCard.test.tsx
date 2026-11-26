@@ -579,8 +579,8 @@ describe("an executor round's launches", () => {
     });
     render(<PhaseCard record={phase({ harness: "claude-code" })} launches={[lost]} defaultOpen />);
     const said =
-      "The run did not continue its session: its session was larger than the 48 MiB kept for one " +
-      "session. It started a fresh session.";
+      "The run did not continue its session: its session was larger than one is kept at: 94 MiB in " +
+      "all, at most 48 MiB of it text. It started a fresh session.";
     expect(
       screen.getByText("session not continued").closest("[title]")?.getAttribute("title"),
     ).toBe(said);
