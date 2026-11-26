@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"runtime"
 	"runtime/debug"
@@ -282,4 +283,41 @@ func TestASummaryWhoseWaitEndedUnmetIsUnreadForIt(t *testing.T) {
 	if got := read.reading(); got.Text != "" || !strings.Contains(got.Unread, "large read slot") {
 		t.Errorf("a summary whose wait ended unmet reads %q (%q), want it unread for the wait", got.Text, got.Unread)
 	}
+}
+
+// A CHAIN'S PASS HOLDS ITS SUMMARY WITHIN ITS TERM: a Claude Code collection's
+// pass past both its bases, its chain past [collectionBaseRecords] records and
+// its summary at [summaryReadMaxBytes], holds live beyond the same pass asking
+// no summary at most what [chainPassHeldBytes] counts beside the chain, the
+// large slot's figure whichever of its holders is the larger.
+//
+// Not parallel: it holds the process's large slot, and runs the collector at
+// every 1% of growth ([liveHeldBy]).
+//
+// Mutation: drop the summary's term from the chain pass's figure: this goes
+// red.
+func TestAChainsPassHoldsItsSummaryWithinItsTerm(t *testing.T) {
+	words := summaryWords(summaryReadMaxBytes)
+	b := claudeSummaryBox(t, func(l [][]byte) [][]byte {
+		i, line := lineWith(t, l, `"isCompactSummary":true`)
+		l[i] = edited(t, line, func(m map[string]any) { m["message"].(map[string]any)["content"] = words })
+		_, record := lineWith(t, l, `"type":"assistant"`)
+		parent := ""
+		for n := range collectionBaseRecords + 64 {
+			id := fmt.Sprintf("5e55100a-0000-4000-8000-%012d", n)
+			l = append(l, edited(t, record, func(m map[string]any) {
+				m["uuid"] = id
+				if parent != "" {
+					m["parentUuid"] = parent
+				}
+			}))
+			parent = id
+		}
+		return l
+	})
+	if got := b.read(t); got.Text != words {
+		t.Fatalf("the pass reads a summary of %d bytes (%s), want its words", len(got.Text), got.Unread)
+	}
+	summaryHeldWithin(t, "a chain's pass past both its bases", b, true, func() { b.asking(t.Context(), true, false) },
+		chainPassHeldBytes-threadChainHeldBytes, true, liveHeldBy)
 }

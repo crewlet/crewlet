@@ -58,7 +58,7 @@ func TestANodeKeepsThePoolsItRunsWithTheLimitsRoom(t *testing.T) {
 // again; size the scrub with no value, or at a reading of nothing.
 func TestTheLargeSlotIsCountedAtTheLargerOfItsTwoHolders(t *testing.T) {
 	t.Parallel()
-	chain := int64(threadChainHeldBytes + summaryLargeHeldBytes)
+	chain := int64(chainPassHeldBytes)
 	line := int64(threadLineMax-collectionBaseLineCharge) * 5 / 4
 	count := int64(geminiCountLargeHeldBytes - meterBaseHeldBytes)
 	take := scrubHeldBytes(scrubPlainMax, scrubLongestMax) - scrubBaseHeldBytes + max(line, count)

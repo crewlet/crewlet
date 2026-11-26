@@ -1126,6 +1126,7 @@
   - `internal/sandbox/executor.TestABoxReadsSummaryIsBudgeted`
   - `internal/sandbox/executor.TestATrimsHeldRunCountsTowardItsClaim`
   - `internal/sandbox/executor.TestASummaryWhoseWaitEndedUnmetIsUnreadForIt`
+  - `internal/sandbox/executor.TestAChainsPassHoldsItsSummaryWithinItsTerm`
   - `internal/sandbox/executor.TestAQwenCompactionsFirstTextsAreHeldWhereTheyWereRead`
   - `internal/sandbox.TestASummaryIsPlacedAtTheCaptureThatFirstNamedIt`
   - `internal/executorkeep.TestALaterPlaceIsALaterLaunchsOrALaterCaptureOfIt`
