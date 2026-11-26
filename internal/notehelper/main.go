@@ -209,7 +209,12 @@
 // instructions only as it starts, measured on 1.6.0); copilot-nested the
 // listing alone, added the same way; kimi-nested as pi-nested, for Kimi's `<!--
 // From: ... -->`, steered in by the run's driver; opencode-nested as pi-nested,
-// after OpenCode's `Instructions from: <path>`. A nested hook only adds to the
+// after OpenCode's `Instructions from: <path>`; cursor-nested each instruction
+// file as the launch's section and the listing, as one text item appended to
+// an MCP call's own result (the only answer of a hook Cursor Agent hands the
+// model mid-run, measured on 2026.11.22-e9042b2), only where the result leaves
+// room under the size past which Cursor moves it to a file, else claiming
+// nothing until the next MCP call. A nested hook only adds to the
 // launch: a run whose settings switch it off starts, its skip log saying so
 // once; only losing a contract hook (notes, skill loads) refuses. Grok's stays
 // registered, as Grok 1.0.92 skips it itself (measured). A harness taking

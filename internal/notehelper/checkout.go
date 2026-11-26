@@ -81,14 +81,18 @@ func (s skillSep) String() string {
 // nested adapter that hands skills alone, whose spec then names no instruction
 // file to read, and Roots, the file it lists each checkout handed's root in,
 // a line each, for a harness that reads their instructions itself where the
-// runner names them (Gemini CLI's --include-directories). The working
-// directory is the adapter's own.
+// runner names them (Gemini CLI's --include-directories); and
+// LaunchSkillsLoaded for a harness that loads the skills of a checkout present
+// at launch itself where the runner names it (Cursor Agent's --add-dir), so
+// the launch copies none and only a nested firing does. The working directory
+// is the adapter's own.
 type launchConfig struct {
-	State            string   `json:"state"`
-	Agents           string   `json:"agents"`
-	First            []string `json:"first"`
-	NestedSkillsOnly bool     `json:"nestedSkillsOnly,omitempty"`
-	Roots            string   `json:"roots,omitempty"`
+	State              string   `json:"state"`
+	Agents             string   `json:"agents"`
+	First              []string `json:"first"`
+	NestedSkillsOnly   bool     `json:"nestedSkillsOnly,omitempty"`
+	LaunchSkillsLoaded bool     `json:"launchSkillsLoaded,omitempty"`
+	Roots              string   `json:"roots,omitempty"`
 	checkoutSpec
 }
 
@@ -172,7 +176,11 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = os.WriteFile(filepath.Join(c.State, "handed"), nil, 0o600); err != nil {
 		return err
 	}
-	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, math.MaxInt, &skips{stderr: stderr})
+	launch := c.checkoutSpec
+	if c.LaunchSkillsLoaded {
+		launch.Skills = ""
+	}
+	handed, err := handCheckouts(c.State, work, c.First, launch, math.MaxInt, &skips{stderr: stderr})
 	if err != nil {
 		return err
 	}
@@ -181,7 +189,7 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	for _, h := range handed {
 		kept = append(kept, launched{Name: h.name, Root: h.root, Text: h.text})
 		if h.text != "" {
-			sections = append(sections, checkoutHeader(h.name, h.root)+"\n\n"+h.text)
+			sections = append(sections, checkoutSection(h))
 		}
 		roots = append(roots, h.root+"\n")
 	}
@@ -214,6 +222,12 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 
 // checkoutHeader is the line a checkout's section opens with, naming it.
 func checkoutHeader(name, root string) string { return "for `" + name + "` with root " + root }
+
+// checkoutSection is h's instructions as the launch hands them: under its
+// header, its files' texts in order.
+func checkoutSection(h handedCheckout) string {
+	return checkoutHeader(h.name, h.root) + "\n\n" + h.text
+}
 
 // launchedFile is the file under a run's checkout state where checkout-launch
 // keeps every checkout it handed, in its order, with its instructions, for a
@@ -427,8 +441,12 @@ type listingBudget struct {
 	cut  bool
 }
 
-func newListingBudget() *listingBudget {
-	return &listingBudget{left: maxListing - len(listingCut) - 1}
+func newListingBudget() *listingBudget { return newListingBudgetWithin(maxListing) }
+
+// newListingBudgetWithin is a firing's listing budget where its harness takes
+// less than [maxListing] in one answer: bound bytes, the cut line included.
+func newListingBudgetWithin(bound int) *listingBudget {
+	return &listingBudget{left: min(bound, maxListing) - len(listingCut) - 1}
 }
 
 // take is block within what is left of b, block apart from the one before by
