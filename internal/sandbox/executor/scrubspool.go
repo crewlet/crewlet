@@ -371,7 +371,8 @@ func readMemberHeader(r io.ByteReader, kind byte) (tar.Header, error) {
 
 // spoolCopy reads a spool back as the session is kept: every byte the first
 // reading wrote, less the loaded tool definitions a line's cut takes
-// ([tarPlan.addCut], [cutFilter]).
+// ([tarPlan.addCut], [cutFilter]), each payload the plan keeps apart read
+// alone, its member opened on split before its first byte ([memberSplit]).
 type spoolCopy struct {
 	r    *bufio.Reader
 	plan *tarPlan
@@ -382,6 +383,12 @@ type spoolCopy struct {
 	pending bool
 	// cut is the line a cut is being applied to, nil between them.
 	cut *cutFilter
+	// split is where the copy's payloads open their members; media is the
+	// plan's next payload, and mediaEnd where the one being read ends, 0
+	// between payloads.
+	split    *memberSplit
+	media    int
+	mediaEnd int64
 }
 
 // spoolCut is one cut of the plan: of the line the spool holds from at,
@@ -391,9 +398,10 @@ type spoolCut struct {
 	cut       *definitionCut
 }
 
-// newSpoolCopy reads spool as plan's cuts keep it.
-func newSpoolCopy(spool io.Reader, plan *tarPlan) *spoolCopy {
-	return &spoolCopy{r: bufio.NewReaderSize(spool, 64<<10), plan: plan}
+// newSpoolCopy reads spool as plan's cuts keep it, each payload it keeps
+// apart opening its member on split.
+func newSpoolCopy(spool io.Reader, plan *tarPlan, split *memberSplit) *spoolCopy {
+	return &spoolCopy{r: bufio.NewReaderSize(spool, 64<<10), plan: plan, split: split}
 }
 
 // ReadByte reads the next byte kept.
@@ -428,6 +436,13 @@ func (c *spoolCopy) Read(p []byte) (int, error) {
 		if c.pending {
 			want = int(min(int64(want), c.next.at-c.at))
 		}
+		bound, err := c.mediaBound()
+		if err != nil {
+			return 0, err
+		}
+		if bound >= 0 {
+			want = int(min(int64(want), bound))
+		}
 		n, err := c.r.Read(p[:want])
 		c.at += int64(n)
 		if errors.Is(err, io.EOF) && c.pending {
@@ -435,6 +450,32 @@ func (c *spoolCopy) Read(p []byte) (int, error) {
 		}
 		return n, err
 	}
+}
+
+// mediaBound is how far the copy reads before the plan's next payload begins
+// or the one being read ends, -1 for no bound: where a payload begins, its
+// member opened first ([memberSplit.media]).
+func (c *spoolCopy) mediaBound() (int64, error) {
+	if c.at < c.mediaEnd {
+		return c.mediaEnd - c.at, nil
+	}
+	found := c.plan.media.found
+	if c.media == len(found) {
+		return -1, nil
+	}
+	next := found[c.media]
+	switch {
+	case next.at > c.at:
+		return next.at - c.at, nil
+	case next.at < c.at:
+		return 0, errSpoolRead
+	}
+	if err := c.split.media(c.media); err != nil {
+		return 0, err
+	}
+	c.media++
+	c.mediaEnd = next.at + next.n
+	return next.n, nil
 }
 
 // readCut reads the plan's next cut, none where none is left.
@@ -459,7 +500,7 @@ func (c *spoolCopy) readCut() error {
 
 // done says the spool and its plan's edits are both read to their ends.
 func (c *spoolCopy) done() bool {
-	if c.pending || c.cut != nil || !c.plan.edits.done() {
+	if c.pending || c.cut != nil || !c.plan.edits.done() || c.media < len(c.plan.media.found) {
 		return false
 	}
 	_, err := c.r.ReadByte()

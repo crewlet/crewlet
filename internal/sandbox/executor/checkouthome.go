@@ -28,6 +28,10 @@ type checkoutHome struct {
 	held, sections        string
 	skills, copied, roots string
 	gateCmd, afterLaunch  string
+	// fallback lists, a path a line, the files a harness loads in the home
+	// file's absence (Muse's foreign rules), the first opening the file the
+	// run makes; homeText keeps the text that file opens with.
+	fallback, homeText string
 	// own is the run's own instructions, written ahead of the home's
 	// (Copilot's share its one file), "" for none.
 	own string
@@ -95,9 +99,14 @@ type checkoutSpec struct {
 	Gated              bool
 	Budget             *checkoutBudget
 	// ListedAs and HomeSkills are the helper's ("grok", Grok Build's listing
-	// rule; "kimi", Kimi Code's; "opencode", OpenCode's).
+	// rule; "kimi", Kimi Code's; "opencode", OpenCode's; "muse", Muse Code's).
 	ListedAs   string
 	HomeSkills []checkoutSkillDir
+	// Skipped is lines for the run's skip log.
+	Skipped []string
+	// Reserved is the tags no checkout takes beside the seats' namespace: a
+	// prefix the harness refuses a skill's name under.
+	Reserved []string
 }
 
 // checkoutBudget is the bound a launch's sections share with the text the
@@ -224,7 +233,7 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	config := map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "firingLimit": spec.FiringLimit,
 		"skillDirs": spec.SkillDirs, "skills": h.skills, "copied": h.copied,
-		"reserved":         []string{sandbox.SkillNamespace},
+		"reserved":         append([]string{sandbox.SkillNamespace}, spec.Reserved...),
 		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions,
 		"skillSep": spec.SkillSep, "roots": h.roots}
 	if spec.ListedAs != "" {
@@ -242,6 +251,9 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	if spec.Budget != nil {
 		config["budget"] = spec.Budget
 	}
+	if len(spec.Skipped) > 0 {
+		config["skipped"] = spec.Skipped
+	}
 	launch, _ := json.Marshal(config)
 	return launch // strings, lists, booleans and ints cannot fail to encode
 }
@@ -252,10 +264,11 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 // ([putBackHome]) and the home's own held afresh, whole ([heldPart]; a link
 // leading nowhere set aside whole, [heldLink]), the copies an earlier run
 // listed and the state with its staging removed, checkout-launch run, and the
-// checkouts' sections written after the home's own through a link as the home
-// keeps the file, its directory made where there is none (a fresh home, or a
-// Qwen Code context.fileName naming a path below it; [heldMade]), the file
-// left untouched where they hand nothing or the harness reads none.
+// checkouts' sections written after the home's own (where the home has none,
+// after the first fallback file there, [checkoutHome]) through a link as the
+// home keeps the file, its directory made where there is none (a fresh home,
+// or a Qwen Code context.fileName naming a path below it; [heldMade]), the
+// file left untouched where they hand nothing or the harness reads none.
 func (h checkoutHome) gate() string { return h.prepare() + h.compose() }
 
 // prepare is [checkoutHome.gate] up to checkout-launch: the hold, the
@@ -324,6 +337,13 @@ func (h checkoutHome) holdHome(line func(string, ...any)) {
 	}
 	line(`if [ -z "$ra" ]; then :; elif [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
 		`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
+	if h.fallback != "" {
+		// THE TEXT THE HARNESS WOULD LOAD IN THE HOME FILE'S PLACE opens the
+		// one the run makes, so the person keeps it ([checkoutHome]).
+		line(`ro=%s; rm -f "$ro" && if [ -e "$rha" ]; then cp "$rha" "$ro"; elif [ -f %s ]; then while IFS= read -r rn; do `+
+			`if [ -f "$rn" ]; then cp "$rn" "$ro" || exit 1; break; fi; done < %s; fi || exit 1`,
+			q(h.homeText), q(h.fallback), q(h.fallback))
+	}
 }
 
 // compose is the shell writing the home's instruction file from what
@@ -336,11 +356,15 @@ func (h checkoutHome) compose() string {
 	if !h.holdsHome() {
 		return ""
 	}
-	has, text := `[ -s "$rq" ]`, `{ if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; }`
+	home := `"$rha"`
+	if h.fallback != "" {
+		home = `"$ro"`
+	}
+	has, text := `[ -s "$rq" ]`, `{ if [ -s `+home+` ]; then cat `+home+`; printf '\n\n'; fi; cat "$rq"; }`
 	if h.own != "" {
 		o := shellword.Quote(h.own)
 		has = `{ [ -s "$rq" ] || [ -s ` + o + ` ]; }`
-		text = `{ rs=; for rf in ` + o + ` "$rha" "$rq"; do if [ -s "$rf" ]; then printf "$rs"; cat "$rf"; rs='\n\n'; fi; done; }`
+		text = `{ rs=; for rf in ` + o + ` ` + home + ` "$rq"; do if [ -s "$rf" ]; then printf "$rs"; cat "$rf"; rs='\n\n'; fi; done; }`
 	}
 	return fmt.Sprintf(`if %s && [ -n "$ra" ]; then %s > "$rq.all" && `+
 		`{ rmd=$(dirname "$ra"); rmt=; while [ ! -e "$rmd" ]; do rmt=$rmd; rmd=$(dirname "$rmd"); done; `+

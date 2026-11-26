@@ -200,6 +200,17 @@ func WidestPositionsRecords() []PositionsWidest {
 			return f.RetireNode(ctx, past)
 		}})
 
+	stamp := coord.CaptureStampRecord{NodeID: plain(coord.MaxNodeIDBytes), CaptureStampVersion: math.MaxInt64,
+		At: widestAt}
+	add(PositionsWidest{Class: coord.CaptureStampClass, Key: coord.CaptureStampKey(stamp.NodeID),
+		Bound: coord.SmallValueBytes, Record: stamp,
+		Write: func(ctx context.Context, f coord.Fleet) error { return f.PutCaptureStamp(ctx, stamp) },
+		Past: func(ctx context.Context, f coord.Fleet) error {
+			past := stamp
+			past.NodeID += "a"
+			return f.PutCaptureStamp(ctx, past)
+		}})
+
 	mark := coord.FeedMark{Stream: plain(coord.MaxStreamNameBytes), Group: plain(coord.MaxDomainNameBytes),
 		Generation: math.MaxUint32, Floor: math.MaxUint64, At: widestAt}
 	add(PositionsWidest{Class: coord.FeedMarkClass, Key: coord.FeedMarkKey(mark.Stream, mark.Group),

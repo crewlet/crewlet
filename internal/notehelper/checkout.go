@@ -86,23 +86,25 @@ func (s skillSep) String() string {
 // launchConfig is what -config names for checkout-launch: the run's checkout
 // state directory (the checkouts handed, the lock), the instruction file it
 // replaces with the launch's sections, the checkouts handed first, in order
-// (the repositories the run pushes to), the bound the sections share with
-// the text the harness reads beside them (nil for none), the spec,
-// NestedSkillsOnly for a nested adapter that hands skills alone, whose spec
-// then names no instruction file to read, Roots, the file it lists each
-// checkout handed's root in, a line each, for a harness that reads their
-// instructions itself where the runner names them (Gemini CLI's
-// --include-directories), and LaunchSkillsLoaded for a harness that loads a
-// launch checkout's skills itself (Cursor Agent's --add-dir), so the launch
-// copies none. The working directory is the adapter's own.
+// (the repositories the run pushes to), the spec, NestedSkillsOnly for a
+// nested adapter that hands skills alone, whose spec then names no instruction
+// file to read; Roots, the file it lists each checkout handed's root in, a
+// line each, for a harness that reads their instructions itself where the
+// runner names them (Gemini CLI's --include-directories); Budget, the bound
+// the sections share with what the harness loads beside them (nil for none);
+// Skipped, lines the runner has for the run's skip log ([skippedLog]); and
+// LaunchSkillsLoaded for a harness that loads a launch checkout's skills
+// itself (Cursor Agent's --add-dir), so the launch copies none. The working
+// directory is the adapter's own.
 type launchConfig struct {
 	State              string        `json:"state"`
 	Agents             string        `json:"agents"`
 	First              []string      `json:"first"`
-	Budget             *launchBudget `json:"budget,omitempty"`
 	NestedSkillsOnly   bool          `json:"nestedSkillsOnly,omitempty"`
-	LaunchSkillsLoaded bool          `json:"launchSkillsLoaded,omitempty"`
 	Roots              string        `json:"roots,omitempty"`
+	Budget             *launchBudget `json:"budget,omitempty"`
+	Skipped            []string      `json:"skipped,omitempty"`
+	LaunchSkillsLoaded bool          `json:"launchSkillsLoaded,omitempty"`
 	checkoutSpec
 }
 
@@ -175,13 +177,13 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 	if !c.SkillSep.Valid() {
 		return fmt.Errorf("the launch config's skillSep %q is neither %q nor %q", c.SkillSep, ":", "-")
 	}
-	if c.Budget != nil && (c.Budget.Form != budgetHermes || c.Budget.Bytes <= 0) {
+	if c.Budget != nil && !c.Budget.known() {
 		return fmt.Errorf("the launch config's budget, form %q of %d bytes, is none the helper knows", c.Budget.Form,
 			c.Budget.Bytes)
 	}
 	if _, ok := listingRules[c.ListedAs]; c.ListedAs != "" && !ok {
-		return fmt.Errorf("the launch config's listedAs %q is none of %q, %q and %q", c.ListedAs, listedGrok,
-			listedKimi, listedOpenCode)
+		return fmt.Errorf("the launch config's listedAs %q is none of %q, %q, %q and %q", c.ListedAs, listedGrok,
+			listedKimi, listedOpenCode, listedMuse)
 	}
 	if c.Gated {
 		if c.gate, err = readGate(stdin); err != nil {
@@ -193,7 +195,7 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 		return err
 	}
 	var room *hermesRoom
-	if c.Budget != nil {
+	if c.Budget != nil && c.Budget.Form == budgetHermes {
 		if room, err = hermesLaunchRoom(*c.Budget); err != nil {
 			return err
 		}
@@ -205,6 +207,7 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 	if err = os.WriteFile(filepath.Join(c.State, "handed"), nil, 0o600); err != nil {
 		return err
 	}
+	keepSkipped(c.State, c.Skipped, stderr)
 	launch := c.checkoutSpec
 	if c.LaunchSkillsLoaded {
 		launch.Skills = ""
@@ -214,15 +217,18 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 		return err
 	}
 	var sections, roots []string
-	if room != nil {
+	switch {
+	case room != nil:
 		if answer := hermesAnswer(handed, nil, room); answer != "" {
 			sections = append(sections, answer)
 		}
+	case c.Budget != nil:
+		sections = museSections(*c.Budget, work, c.Instructions, handed, &skips{stderr: stderr})
 	}
 	kept := make([]launched, 0, len(handed))
 	for _, h := range handed {
 		kept = append(kept, launched{Name: h.name, Root: h.root, Text: h.text})
-		if room == nil && h.text != "" {
+		if c.Budget == nil && h.text != "" {
 			sections = append(sections, checkoutSection(h))
 		}
 		roots = append(roots, h.root+"\n")
@@ -399,6 +405,30 @@ func endsCut(file *os.File, size int64) bool {
 	tail := make([]byte, len(skippedCut))
 	_, err := file.ReadAt(tail, size-int64(len(tail)))
 	return err == nil && string(tail) == skippedCut
+}
+
+// keepSkipped appends lines to the run's [skippedLog] under state's lock, as
+// a firing keeps its own: what a nested adapter's answer left out past its
+// harness's bound, or the runner's lines a launch carries (its `skipped`,
+// D709); its trouble on stderr.
+func keepSkipped(state string, lines []string, stderr io.Writer) {
+	if len(lines) == 0 {
+		return
+	}
+	err := func() error {
+		lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = lock.Close() }()
+		if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+			return err
+		}
+		return appendSkipped(filepath.Join(state, skippedLog), lines)
+	}()
+	if err != nil {
+		fmt.Fprintf(stderr, "notehelper: keeping what the answer left out for the run's end: %v\n", err)
+	}
 }
 
 // endedMarker is the file under a run's checkout state its runner's restore

@@ -97,10 +97,12 @@ func (r executorRestore) Open(ctx context.Context, row executorkeep.TurnRow) (io
 }
 
 // storedSession is the row the session store fetches and opens by: whose turn
-// it is, which names the seal's associated data, the object it names and the
-// media its frames splice in. The store reads nothing else of a row.
+// it is, which names the seal's associated data, the object it names, the
+// media its frames splice in and the archive they restore to, which its read
+// is budgeted for. The store reads nothing else of a row.
 func storedSession(row executorkeep.TurnRow) executordomain.Session {
-	return executordomain.Session{Handle: row.Handle, Turn: row.Turn, Object: row.Object, Media: row.Media}
+	return executordomain.Session{Handle: row.Handle, Turn: row.Turn, Object: row.Object, Media: row.Media,
+		ArchiveBytes: row.ArchiveBytes}
 }
 
 // ProbeSession answers which session a launch of the turn continues

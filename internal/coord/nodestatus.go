@@ -103,6 +103,13 @@ type NodeStatus struct {
 	// settled only once no live node reads it, or says nothing.
 	ParkedStateVersion int
 
+	// CaptureStampVersion is the shape of a run's capture stamp this node's
+	// build asks again whole when it settles one (internal/sandbox's
+	// CaptureStampVersion), zero where a node says none: a take keeps its
+	// media apart only once every node that may settle a run's row says a
+	// version that carries them, so a node not saying holds them inline.
+	CaptureStampVersion int
+
 	// AppliersReady and AppliersTotal are how many of this node's state-log
 	// appliers (one per registered domain, run on every data node) have
 	// caught up, out of how many it runs; zero of zero is a node without
@@ -177,6 +184,9 @@ func (s NodeStatus) Meta() map[string]any {
 	if s.ParkedStateVersion > 0 {
 		out["parked_state_version"] = s.ParkedStateVersion
 	}
+	if s.CaptureStampVersion > 0 {
+		out["capture_stamp_version"] = s.CaptureStampVersion
+	}
 	if s.AdminPosture != "" {
 		// Omitted when unset: an empty string would read as a peer whose
 		// posture differs from everybody's.
@@ -224,7 +234,8 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 		AdminPosture:  iam.AdminPosture(stringFromMeta(raw["admin"])),
 		Build:         stringFromMeta(raw["build"]),
 
-		ParkedStateVersion: max(intFromMeta(raw["parked_state_version"]), 0),
+		ParkedStateVersion:  max(intFromMeta(raw["parked_state_version"]), 0),
+		CaptureStampVersion: max(intFromMeta(raw["capture_stamp_version"]), 0),
 	}
 	status.Draining, _ = raw["draining"].(bool)
 	if at, err := time.Parse(time.RFC3339, stringFromMeta(raw["started_at"])); err == nil {

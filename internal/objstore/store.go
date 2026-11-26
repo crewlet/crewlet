@@ -165,10 +165,20 @@ func (m *metered) Read(p []byte) (int, error) {
 // dead connection ends the read in a minute, not at a budget of hours.
 // A missing object is [ErrNotFound] here, before the first byte.
 func (s *Store) Open(ctx context.Context, o Object) (io.ReadCloser, error) {
+	return s.OpenSpanning(ctx, o, o.Size)
+}
+
+// OpenSpanning is [Store.Open] for a caller that holds o open while span bytes
+// in all stream through it, o's own and those of the objects it reads between
+// o's reads (a container whose frames splice other objects in): the whole is
+// budgeted for span bytes ([ReadBudget]), never for fewer than o's own, since
+// o's deadline runs while the others stream. Each of those objects' own opens
+// keeps its own budget, and every wait on the backend is held to [Stall].
+func (s *Store) OpenSpanning(ctx context.Context, o Object, span int64) (io.ReadCloser, error) {
 	if err := o.Validate(); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, ReadBudget(o.Size))
+	ctx, cancel := context.WithTimeout(ctx, ReadBudget(max(span, o.Size)))
 	body, err := s.begin(ctx, cancel, o, 0, -1)
 	if err != nil {
 		cancel()

@@ -233,6 +233,17 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	// at, read off the archive as it is kept (measure.go), beside the take and
 	// within its context, never holding it up.
 	meter := newContextMeter(metering, carries, archive.SessionID, archive.Version, large)
+	// THE ARCHIVE WHOLE is what the box keeps the digest of and the meter
+	// reads; a take keeping its media apart frames its body beside it
+	// ([memberSplit]). ITS ALLOWANCE IS THE BOX'S BOUND, MaxBytes, of first
+	// occurrences' text in all: one capture's media never outgrow what a take
+	// admits of its box (SessionMaxBytes today), and crewlet/crewlet#2020's
+	// raise of that bound (piece 4c) moves the allowance with it.
+	kept := io.MultiWriter(write, sum, meter)
+	if take.MediaApart {
+		kept = io.MultiWriter(sum, meter)
+		bounds = bounds.splitting(write, take.MaxBytes)
+	}
 	scrubbingStarted = true
 	go func() {
 		defer close(out.done)
@@ -255,7 +266,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 			return again, nil
 		}
 		scrubErr := plainTooLarge(scrubContained(ctx, func() error {
-			return scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum, meter), scrub, bounds)
+			return scrubArchive(carries.layout(), body, reopen, kept, scrub, bounds)
 		}))
 		logMemoUse(ctx, remembered)
 		out.finished(scrubErr, sum.String())
@@ -284,7 +295,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		}
 		return prefix.lines()
 	}
-	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
+	return sandbox.TakenSession{Archive: archive, Body: out, Framed: take.MediaApart, Keep: keep, Context: meter.context,
 		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next, RunLines: runLines,
 		ResumeRead: r.resumeRead(archive.Version)}, nil
 }

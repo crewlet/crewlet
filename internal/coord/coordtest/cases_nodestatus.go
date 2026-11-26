@@ -24,7 +24,7 @@ var nodeStatusCases = []testCase{
 		started := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 		want := coord.NodeStatus{
 			InFlight: 2, Draining: true, Posture: "serve", AdminPosture: iam.AdminRefuse, Build: "v1.2.3",
-			ParkedStateVersion: 4, StartedAt: started, AppliersReady: 3, AppliersTotal: 5,
+			ParkedStateVersion: 4, CaptureStampVersion: 2, StartedAt: started, AppliersReady: 3, AppliersTotal: 5,
 		}
 		h.present("n1", "n1:a", want.Meta())
 		for what, lease := range map[string]coord.Lease{

@@ -454,6 +454,13 @@ type SessionTake struct {
 	// archive wrote, for its second to copy, and the room it holds for that
 	// ([SessionSpool]). A take that names no directory is refused.
 	Spool SessionSpool
+
+	// MediaApart says the take frames each large payload of the archive apart
+	// in its Body ([BodySpliced]), to be stored once: asked only where every
+	// node applying the executor log reads a capture that names media
+	// ([SessionPolicy.MediaApart]). Its first occurrences hold at most
+	// MaxBytes of payload text, and the rest stay inline.
+	MediaApart bool
 }
 
 // SessionSpool is the room a take's scrub spools in ([SessionTake.Spool]): a
@@ -479,9 +486,13 @@ type TakenSession struct {
 	// box's archive, before the scrub, which may change it.
 	Archive SessionArchive
 
-	// Body streams the archive scrubbed, a piece at a time. The caller
-	// closes it, which is safe while a Read is in flight and ends one.
-	Body io.ReadCloser
+	// Body streams the archive scrubbed, a piece at a time: for a take that
+	// keeps its media apart ([SessionTake.MediaApart]), framed, led by
+	// [BodyWhole] or [BodySpliced] ([SplitTakenBody] reads it), which Framed
+	// says. The caller closes it, which is safe while a Read is in flight
+	// and ends one.
+	Body   io.ReadCloser
+	Framed bool
 
 	// Keep records in the box that its own copy of the session holds the
 	// archive Body yielded — the digest a carried archive is compared with

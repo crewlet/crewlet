@@ -84,7 +84,10 @@ type Session struct {
 	// Media is every media object the session's frames name ([Capture.Media]),
 	// in digest order, none for a session kept whole: filled by every read of
 	// a row naming an object ([withMedia]), so every opener splices it whole.
-	Media []executorkeep.MediaObject `json:",omitempty"`
+	// ArchiveBytes is the archive they restore to ([Capture.ArchiveBytes]),
+	// zero beside none: what an open's read is budgeted for.
+	Media        []executorkeep.MediaObject `json:",omitempty"`
+	ArchiveBytes int64                      `json:",omitempty"`
 
 	LaunchSeq  int64
 	CaptureSeq int64
@@ -313,7 +316,7 @@ func (s Session) Kept() executorkeep.TurnRow {
 		Handle: s.Handle, Turn: s.Turn,
 		Harness: s.Harness, HarnessVersion: s.HarnessVersion, Entry: s.Entry, SessionID: s.SessionID,
 		ArchiveFormat: s.ArchiveFormat, LaunchSeq: s.LaunchSeq, CaptureSeq: s.CaptureSeq,
-		Object: s.Object, Media: slices.Clone(s.Media), Ended: s.Ended(),
+		Object: s.Object, Media: slices.Clone(s.Media), ArchiveBytes: s.ArchiveBytes, Ended: s.Ended(),
 		ConversationKey: s.ConversationKey, NotKept: s.NotKept(),
 		ContentKey: s.ContentKey, Home: s.Home, Workspace: s.Workspace,
 		ContextTokens: s.ContextTokens, Interrupted: s.Interrupted, CapturedAt: s.CapturedAt,
@@ -409,7 +412,8 @@ const sessionColumns = `agent_handle, turn_id, conversation_key, work_key, harne
 	harness_version, session_id, object, object_hash, object_size, content_key,
 	archive_format, launch_seq, capture_seq, home, workspace, captured_at,
 	read_through, absorbs, ended_at, end_seq, outcome, delivered, ending, ask_excerpt,
-	base_turn, context_tokens, interrupted, retired_by, retired_loss, entry, trimmed`
+	base_turn, context_tokens, interrupted, retired_by, retired_loss, entry, trimmed,
+	archive_bytes`
 
 // scanSession reads one row.
 func scanSession(row rowScanner) (Session, error) {
@@ -430,7 +434,7 @@ func scanSession(row rowScanner) (Session, error) {
 		&s.ArchiveFormat, &s.LaunchSeq, &s.CaptureSeq, &s.Home, &s.Workspace, &captured,
 		&readThrough, &absorbs, &endedAt, &endSeq, &outcome, &delivered, &ending,
 		&s.AskExcerpt, &s.BaseTurn, &s.ContextTokens, &interrupted, &s.RetiredBy, &s.RetiredLoss,
-		&s.Entry, &trimmed); err != nil {
+		&s.Entry, &trimmed, &s.ArchiveBytes); err != nil {
 		return Session{}, err
 	}
 	s.Absorbs, s.Interrupted, s.Trimmed = splitAbsorbs(absorbs), interrupted == 1, trimmed == 1

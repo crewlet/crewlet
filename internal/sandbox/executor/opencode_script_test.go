@@ -215,6 +215,9 @@ type scriptOpts struct {
 	// ownsCarried keeps the carried export's digest among the box's own
 	// ([executor.Paths.SessionDigests]), as a box that packed or restored it does.
 	ownsCarried bool
+	// members, past one, gzips the carried export as that many members, as a
+	// session kept with its payloads apart is spliced back ([inMembers]).
+	members int
 	// brokenDigests, where set, is the shell command ([brokenDigestLists]) that
 	// makes the box's digest list one that keeps no line, before the script starts.
 	brokenDigests string
@@ -330,6 +333,9 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 	}
 	if o.carried != "" {
 		packed := gzipped(t, o.carried)
+		if o.members > 1 {
+			packed = inMembers(t, packed, o.members)
+		}
 		if err := os.WriteFile(paths.SessionCarried(), packed, 0o600); err != nil {
 			t.Fatal(err)
 		}

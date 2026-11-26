@@ -174,6 +174,16 @@ const SessionPlainMaxBytes = 256 << 20
 var ErrSessionPlainTooLarge = fmt.Errorf("%w: it expands past %d bytes of plaintext", ErrSessionTooLarge,
 	SessionPlainMaxBytes)
 
+// ArchiveMaxBytes bounds the archive a session keeping its media apart
+// restores to, every member spliced in at each frame naming it (a capture's
+// archive size): its text, which its object's seal holds to [SessionMaxBytes],
+// and its payloads at every place they stand, all text one reading of the
+// take's scrub read, so at most [SessionPlainMaxBytes] gzipped, which grows it
+// by under a 3,000th ([GzipMostBytes]). TWICE that bound beside the text's, so
+// it never refuses a take: it keeps off a record, a row and so the deadline a
+// restore's read is given (objstore.ReadBudget) a figure no take writes.
+const ArchiveMaxBytes = SessionMaxBytes + 2*SessionPlainMaxBytes
+
 // SealedObject is an uploaded session: the object a capture names and the
 // keyring key it was sealed under, which the capture records as its content
 // key.

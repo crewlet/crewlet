@@ -16,7 +16,7 @@ import (
 // without SKILL.md, a skill under another name, a plain file, a link leading
 // nowhere), is left out, said, and never listed. Each harness whose copies go
 // into a skills directory of the person's home and that lists by a rule of
-// its own (Grok Build, Kimi Code) leaves the person's entries as they were
+// its own (Grok Build, Kimi Code, Muse Code) leaves the person's entries as they were
 // through a launch's checkout, a clone's nested firing, the run's end and
 // the next run's gate.
 //
@@ -34,6 +34,9 @@ func TestACopyNeverTakesAPersonsEntryInTheRunsSkills(t *testing.T) {
 			return standInBox(t, executor.NewGrok(), map[string]string{"grok": grokCheckoutStandIn})
 		}, executor.Paths.GrokSkills, ""},
 		{"kimi", kimiCheckoutBox, executor.Paths.KimiSkills, "workspace"},
+		{"muse", func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+			return standInBox(t, executor.NewMuse(), map[string]string{"muse": museCheckoutStandIn})
+		}, executor.Paths.MuseSkills, "workspace"},
 	} {
 		for _, kind := range []string{"a directory without SKILL.md", "a skill under another name", "a plain file",
 			"a link leading nowhere"} {

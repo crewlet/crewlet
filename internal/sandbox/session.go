@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -212,6 +214,13 @@ type SessionKeep interface {
 	Seal(handle, turn string, archive io.Reader, dst io.Writer) (executorkeep.SealedSpool, error)
 	Upload(ctx context.Context, spool executorkeep.SealedSpool, sealed io.Reader) (executorkeep.SealedObject, error)
 
+	// SealMedia streams one payload's member sealed into dst under an object
+	// key minted now, answering its digest with the spool (the session
+	// store's SealMedia), and UploadMedia puts what dst held into that object
+	// (its UploadMedia).
+	SealMedia(handle string, member io.Reader, dst io.Writer) (executorkeep.MediaSpool, error)
+	UploadMedia(ctx context.Context, spool executorkeep.MediaSpool, sealed io.Reader) (executorkeep.MediaObject, error)
+
 	// PutSummary seals the summary text yields into a new object of its own,
 	// under a key minted now, sealed apart from any session's (the executor
 	// log's session store, PutSummary), and uploads it. A text past
@@ -230,7 +239,47 @@ type SessionPolicy struct {
 	// SeatBudget is `turn_engine.conversation_session.max_bytes_per_seat`,
 	// carried by every capture so every node applies one number.
 	SeatBudget int64
+
+	// MediaApart says every node applying the executor log reads a capture
+	// that names media, and every node that may settle a run's row asks its
+	// stamp again whole ([CaptureStampVersion]), as read within
+	// [MediaReadersRoom], so a take keeps its large payloads apart
+	// ([SessionTake.MediaApart]); while one does not, or the nodes cannot be
+	// read, a rolling upgrade's takes keep them inline, as the archive always
+	// held them.
+	MediaApart bool
+
+	// MediaUnread is why the nodes could not be read, "" where they were and
+	// MediaApart is their definite answer. Unknown keeps a take's media
+	// inline, but never refuses a capture whose take already read them apart
+	// ([Coordinator.mediaBelow]).
+	MediaUnread string
+
+	// MediaBelow names, where MediaApart is a definite no, a node that falls
+	// below and what it says: which version of which reading, beside the one
+	// a capture naming media needs. The sentence a refused record says why
+	// with ([Coordinator.mediaBelow]); "" where the answer is yes or unknown.
+	MediaBelow string
 }
+
+// CaptureStampVersion is the shape of a capture's stamp ([SessionCapture]) this
+// build asks again whole when it settles one ([Coordinator.settleCapture]): 1,
+// its media included. Every node says it on its presence (coord.NodeStatus), a
+// data node on its position row too (coord.NodePositions), read for one the
+// fleet counts while offline; a take keeps its media apart only once every node
+// that may settle a run's row says it ([SessionPolicy.MediaApart]), since a
+// build before media says nothing and its ask would land the capture without
+// them. THE FORWARD MECHANISM (.claude/rules/compatibility.md): a build adding
+// a key such an ask must carry raises it and writes the key only once every
+// such node says the new version; this build settles a stamp holding a key it
+// does not know off the log rather than ask it short ([Coordinator.settleOffLog]).
+const CaptureStampVersion = MediaStampVersion
+
+// MediaStampVersion is the capture stamp version a node must say before a take
+// keeps media apart ([SessionPolicy.MediaApart]): the first whose ask carries a
+// capture's media. NAMED APART FROM [CaptureStampVersion], which a later stamp
+// field raises while this threshold stands.
+const MediaStampVersion = 1
 
 // SessionKept is what a box read took of the job's session, for the launch's
 // own record (`executor_collected`), on whichever node collects: it rides the
@@ -539,6 +588,26 @@ type SessionCapture struct {
 	Home       string `json:"home,omitempty"`
 	Workspace  string `json:"workspace,omitempty"`
 
+	// Media is every media object the session's frames name, once uploaded
+	// or carried ([CaptureMedia]), at most executorkeep.MediaMaxCount: none
+	// for a session kept whole. ON THE STAMP, so a record asked again
+	// ([Coordinator.settleCapture]) is the very record first asked; its
+	// figure is [mediaRowBytes].
+	Media []CaptureMedia `json:"media,omitempty"`
+
+	// ArchiveBytes is the archive the session restores to, every member at
+	// each frame naming it, as its take's body was read whole
+	// ([TakenText.Restored]): stamped exactly where its media are spooled,
+	// on the stamp for Media's reason, within executorkeep.ArchiveMaxBytes.
+	ArchiveBytes int64 `json:"archive_bytes,omitempty"`
+
+	// MediaCount is how many media objects the take's spool cut apart, every
+	// first, carried or not, at most executorkeep.MediaMaxCount: stamped on
+	// its BEGUN stamp as its keep starts ([Coordinator.stampMediaCount]), since
+	// a relaunch waits for each object's paced upload ([captureRestFor]). Of
+	// the stamp's shape at [MediaStampVersion].
+	MediaCount int `json:"media_count,omitempty"`
+
 	// SeatBudget and Minted are the record's: the per-seat budget it carries
 	// and the instant its operation is derived at, kept so an unresolved
 	// capture is asked again as the very operation it was.
@@ -604,9 +673,29 @@ func (c SessionCapture) Bounded() error {
 		return fmt.Errorf("sandbox: its archive is %d bytes, outside the 0 to %d it may be: %w",
 			c.ArchiveSize, executorkeep.SessionMaxBytes, ErrCaptureUnbounded)
 	}
+	if c.ArchiveBytes < 0 || c.ArchiveBytes > executorkeep.ArchiveMaxBytes {
+		return fmt.Errorf("sandbox: its archive restores to %d bytes, outside the 0 to %d it may: %w",
+			c.ArchiveBytes, executorkeep.ArchiveMaxBytes, ErrCaptureUnbounded)
+	}
 	if len(c.BridgeOpen) > maxOpenPlaces {
 		return fmt.Errorf("sandbox: it names %d open places, past the %d it may: %w", len(c.BridgeOpen),
 			maxOpenPlaces, ErrCaptureUnbounded)
+	}
+	if len(c.Media) > executorkeep.MediaMaxCount {
+		return fmt.Errorf("sandbox: it names %d media objects, past the %d it may: %w", len(c.Media),
+			executorkeep.MediaMaxCount, ErrCaptureUnbounded)
+	}
+	if c.MediaCount < 0 || c.MediaCount > executorkeep.MediaMaxCount {
+		return fmt.Errorf("sandbox: it counts %d media objects, outside the 0 to %d it may: %w", c.MediaCount,
+			executorkeep.MediaMaxCount, ErrCaptureUnbounded)
+	}
+	for _, m := range c.Media {
+		_, keyErr := objstore.ParseKey(m.Object)
+		if !executorkeep.ValidMediaDigest(m.Digest) || keyErr != nil ||
+			len(m.ObjectHash) > 2*executorkeep.MediaDigestBytes || len(m.ContentKey) > secrets.MaxStreamKeyIDBytes {
+			return fmt.Errorf("sandbox: its media %.64q is not one a record names: %w", m.Digest,
+				ErrCaptureUnbounded)
+		}
 	}
 	if n := len(c.Omitted) + len(c.LateOmitted); n > MaxBridgeCalls {
 		return fmt.Errorf("sandbox: it names %d calls its brief left out, past the %d a round's log lists: %w",
@@ -627,6 +716,44 @@ func (c SessionCapture) Bounded() error {
 			"a record escapes: %w", len(c.CountProvider), MaxCountProviderBytes, ErrCaptureUnbounded)
 	}
 	return nil
+}
+
+// CaptureMedia is one media object a capture names (the executor log's
+// NewMedia): uploaded for it, or Carried, named live already by the turn's row
+// or the base that row holds, which the log finds there or refuses the
+// capture. ContentKey is the keyring key's id, as [SessionCapture.ContentKey]
+// is: it names the key and holds none of it.
+type CaptureMedia struct {
+	Digest     string `json:"digest"`
+	Object     string `json:"object"`
+	ObjectHash string `json:"object_hash"`
+	ObjectSize int64  `json:"object_size"`
+	ContentKey string `json:"content_key"`
+	Carried    bool   `json:"carried,omitempty"`
+}
+
+// rowMedia is the media a turn's row names as a capture names them, each
+// carried where stamped names it carried: what a capture settled off the row
+// is stamped with, so its seat's budget and its saves count them.
+func rowMedia(named []executorkeep.MediaObject, stamped []CaptureMedia) []CaptureMedia {
+	carried := map[string]bool{}
+	for _, m := range stamped {
+		carried[m.Digest] = m.Carried
+	}
+	var media []CaptureMedia
+	for _, m := range named {
+		media = append(media, captureMediaOf(m, carried[m.Digest]))
+	}
+	return media
+}
+
+// mediaBytes is what c's media objects hold sealed.
+func (c SessionCapture) mediaBytes() int64 {
+	var n int64
+	for _, m := range c.Media {
+		n += m.ObjectSize
+	}
+	return n
 }
 
 // NextRequest is what c's stamp says the session's next request carries
@@ -742,7 +869,7 @@ func stampOnto(run *PendingRun, capture SessionCapture) bool {
 	case newest == nil || capture.newerThan(*newest):
 		took = true
 	case capture.sameTake(*newest):
-		took = newest.State.advancesTo(capture.State)
+		took = newest.State.advancesTo(capture.State) || newest.countsFewer(capture)
 	}
 	if took {
 		stamped := capture
@@ -758,7 +885,8 @@ func stampOnto(run *PendingRun, capture SessionCapture) bool {
 		kept.StandbyTaker, kept.StandbyTakerEpoch, kept.StandbyAt = "", 0, time.Time{}
 		run.Kept, took = &kept, true
 	}
-	if save := run.Saving; save != nil && capture.sameTake(*save) && save.State.advancesTo(capture.State) {
+	if save := run.Saving; save != nil && capture.sameTake(*save) &&
+		(save.State.advancesTo(capture.State) || save.countsFewer(capture)) {
 		moved := capture
 		moved.StandbyTaker, moved.StandbyTakerEpoch, moved.StandbyAt = "", 0, time.Time{}
 		run.Saving, took = &moved, true
@@ -767,6 +895,14 @@ func stampOnto(run *PendingRun, capture SessionCapture) bool {
 		run.Saving = savingAfter(found, *run)
 	}
 	return took
+}
+
+// countsFewer reports whether c, a begun take, is stamped with fewer media
+// objects than capture, the same take still begun, counts
+// ([Coordinator.stampMediaCount]): the one change a begun stamp takes from its
+// own take short of an outcome, which only grows.
+func (c SessionCapture) countsFewer(capture SessionCapture) bool {
+	return c.State == CaptureBegun && capture.State == CaptureBegun && capture.MediaCount > c.MediaCount
 }
 
 // standDownOnto withdraws standby, the read standing by for run's newest
@@ -850,7 +986,7 @@ func (c SessionCapture) standbyOf() SessionCapture {
 // which another machine's clock wrote: past it, nothing that capture's taker
 // sends lands, so a capture still begun is one whose taker stopped or whose
 // stamp never reached the row, and the read takes the place after it
-// ([Coordinator.waitedOut]). (4,260.08 + 2) s, 1 h 11 min 2 s today.
+// ([Coordinator.waitedOut]). (4,440.08 + 2) s, 1 h 14 min 2 s today.
 var standbyWait = captureLife + captureWaitTick
 
 // standbyWindow is the longest a read standing by can still take the place
@@ -861,8 +997,8 @@ var standbyWait = captureLife + captureWaitTick
 // end, the read of the turn's row past it and the settle it decides,
 // [Coordinator.namedAtWaitsEnd], and its takeover) and its last read of the
 // row ([captureReadBudget]), each at the slowest crossing, since the standby
-// and the wait may be any two nodes. 480 + 30 + 4,262.08 + 5 × 810.03 + 270 =
-// 9,092.21 s, two hours, thirty-one minutes and thirty-two seconds today.
+// and the wait may be any two nodes. 480 + 30 + 4,442.08 + 5 × 810.03 + 270 =
+// 9,272.21 s, two hours, thirty-four minutes and thirty-two seconds today.
 var standbyWindow = SessionTakeBudget + discardGrace + standbyWait + 5*captureStampBudget + captureReadBudget
 
 // standbyBudget is how long after the instant a read stood by
@@ -871,8 +1007,8 @@ var standbyWindow = SessionTakeBudget + discardGrace + standbyWait + 5*captureSt
 // the engine allows any one machine's clock (objstore.AssumedClockSkew), since
 // the instant is the standby's node's clock's and the reader any other node.
 // Past it, a wait reads the read as gone; a lapsed taker lease withdraws it
-// sooner ([Coordinator.standDownGone]). (9,092.21 + 7,200) s, FOUR HOURS,
-// THIRTY-ONE MINUTES AND THIRTY-TWO SECONDS today. Against the window alone, a
+// sooner ([Coordinator.standDownGone]). (9,272.21 + 7,200) s, FOUR HOURS,
+// THIRTY-FOUR MINUTES AND THIRTY-TWO SECONDS today. Against the window alone, a
 // reader whose clock stood ahead read the standby as gone while its takeover
 // could still land, and a turn's end tombstoned the turn ahead of the session
 // kept. A turn's end holds a standby for its window from when it first sees it
@@ -884,7 +1020,7 @@ func (c SessionCapture) kept() *SessionKept {
 	k := &SessionKept{CaptureSeq: c.CaptureSeq}
 	switch c.State {
 	case CaptureLanded:
-		k.Bytes = c.ObjectSize
+		k.Bytes = c.ObjectSize + c.mediaBytes()
 	case CaptureBegun, CaptureUnresolved:
 		// Taken already, and on its way; how it lands is on the row.
 	default:
@@ -997,33 +1133,41 @@ const SessionScrubWait = (spoolRoomWait + scrubArchiveReads + scrubPlainSlowest 
 // before the asker takes it for one that is not.
 const SessionTakeBudget = SessionPackWait + SessionScrubWait
 
-// keepBudgetFor is what a keep of a sealed session of n bytes needs: its two
-// reads of the coordination store before its upload, each in a room of its own
-// ([keepReadRoom]), the upload at the object store's slowest pace
-// (objstore.PaceFor) and its record ([sessionRecordBudget]).
+// keepBudgetFor is what a keep of a sealed session of n bytes needs on its
+// longest path: its four steps before its upload, each in a room of its own
+// ([keepReadRoom]: its media count, the mint, the carry's listing, a save's
+// amend), the upload at the slowest pace (objstore.PaceFor), the read again of
+// who reads its media ([MediaReadersRoom]) and its record
+// ([sessionRecordBudget]); and where the log finds a carry gone, the amend,
+// the read again and the record once more. Its media uploaded then are within
+// the pace, which counts every member the take spooled. A keep that makes
+// fewer is given every room all the same ([boxReadChanges]).
 //
-// THE READS BESIDE THE UPLOAD'S PACE, never inside it: counted inside it, a
-// keep whose reads answered slowly left a session at its bound less than its
-// pace.
+// THE ROOMS BESIDE THE UPLOAD'S PACE, never inside it: inside it, a keep whose
+// reads answered slowly left a session at its bound less than its pace.
 func keepBudgetFor(n int64) time.Duration {
-	return 2*keepReadRoom + objstore.PaceFor(n) + sessionRecordBudget
+	return 5*keepReadRoom + objstore.PaceFor(n) + 2*(MediaReadersRoom+sessionRecordBudget)
 }
 
 // SessionKeepBudget bounds every keep, off the read, whatever its session's
 // size: what a session at its bound needs ([keepBudgetFor] of
 // executorkeep.SealedMaxBytes), within which an upload the store did not take
-// is made again ([Coordinator.uploadSpool]). Twenty-six minutes today.
+// is made again ([Coordinator.uploadSpool]). Twenty-nine minutes today.
 var SessionKeepBudget = keepBudgetFor(executorkeep.SealedMaxBytes)
 
-// captureRestFor is the most a capture of an archive of n bytes may still take
-// once its place is reserved, each step at its floor: its scrub's two readings
-// ([archiveReadFor]) and slowest plaintext ([scrubPlainSlowest]), the digest it
-// leaves in its box ([discardGrace]), and a keep of the sealed session the
-// archive may become ([countedFor], [keepBudgetFor]). What a relaunch waits for
-// a capture it depends on ([Coordinator.relaunchWaitOf]): 5 min 35 s for an
-// archive of half a mebibyte, 31 min 9 s at the bound.
-func captureRestFor(n int64) time.Duration {
-	return 2*archiveReadFor(n) + scrubPlainSlowest + discardGrace + keepBudgetFor(countedFor(n))
+// captureRestFor is the most a capture of an archive of n bytes, its spool
+// cutting media objects apart, may still take once its place is reserved, each
+// step at its floor: its scrub's two readings ([archiveReadFor]) and slowest
+// plaintext ([scrubPlainSlowest]), the digest it leaves in its box
+// ([discardGrace]), and a keep of the sealed session the archive may become
+// ([countedFor], [keepBudgetFor]), each object uploaded beside it paced by the
+// mebibyte begun, so one pace more ([SessionCapture.MediaCount]). What a
+// relaunch waits for a capture it depends on ([Coordinator.relaunchWaitOf]):
+// 8 min 35 s for an archive of half a mebibyte, 34 min 9 s at the bound, and
+// 30 s more for each object.
+func captureRestFor(n int64, media int) time.Duration {
+	return 2*archiveReadFor(n) + scrubPlainSlowest + discardGrace + keepBudgetFor(countedFor(n)) +
+		time.Duration(media)*objstore.MiBPace
 }
 
 // SessionCaptureBudget is how long after its stamped instant
@@ -1032,8 +1176,8 @@ func captureRestFor(n int64) time.Duration {
 // the skew the engine allows any one machine's clock
 // (objstore.AssumedClockSkew), since the instant is its taker's clock's and the
 // reader any other node. A capture begun longer ago than this is one whose
-// taker stopped, or whose stamp never reached the row. (4,260.08 + 7,200) s,
-// THREE HOURS AND ELEVEN MINUTES today. Counting less, or reading another
+// taker stopped, or whose stamp never reached the row. (4,440.08 + 7,200) s,
+// THREE HOURS AND FOURTEEN MINUTES today. Counting less, or reading another
 // machine's stamp as one's own, let a capture still being kept be read as
 // abandoned: a standby took its place over and uploaded again, and a turn's
 // end recorded over the session. No wait holds that long on a reader's word
@@ -1064,17 +1208,32 @@ var captureStampBudget = sessionRecordBudget + coord.MaxValueCrossing
 // 540 s of sends it never makes.
 var captureReadBudget = sessionRecordBudget + coord.MaxValueReadCrossing
 
-// keepReadRoom is the room each of a keep's two reads before its upload is
-// held to ([Coordinator.keepCapture]): the turn's operations minted
-// ([SessionKeep.MintedAt]) and the seat's live runs listed for its budget
-// ([Coordinator.overBudget]). A record's budget ([sessionRecordBudget]), for
-// the same reason: a store that has not answered a small read by then is in an
-// outage its own alarms name. A mint past it refuses the capture, as one that
-// fails does; a listing past it decides nothing, and the log decides again at
-// the record. And the listing reads every run of the fleet
-// (crewlet/crewlet#1369), so on a large fleet across a slow link it can pass
-// its room, and the seat's budget is then decided only at the record.
+// keepReadRoom is the room each of a keep's four steps before its upload is
+// held to ([Coordinator.keepCapture]): its media count stamped
+// ([Coordinator.stampMediaCount]), the turn's operations minted, the media its
+// turn holds read with the seat's live runs listed for its budget
+// ([Coordinator.overBudget]), and a save's charge amended (whose
+// [saveLedgerWait] is this room). A record's budget ([sessionRecordBudget]):
+// a store that has not answered a small read by then is in an outage its own
+// alarms name. A mint past it refuses the capture; a count or a listing past
+// it decides nothing, and the log decides again at the record. The listing
+// reads every run of the fleet (crewlet/crewlet#1369), so on a large fleet
+// across a slow link it can pass its room, and the seat's budget is then
+// decided only at the record.
 const keepReadRoom = sessionRecordBudget
+
+// MediaReadersRoom is the room the read of the policy and who reads a capture
+// naming media is held to ([SessionPolicy.MediaApart]): the activation pointer,
+// four listings of small values (the live nodes' presences, the position
+// register's rows, the nodes' capture stamp records and the retired node ids)
+// and the executor log's evictions, this node's own rows. MEASURED, 24.7 s for
+// a fleet at its widest (coord.MaxMaintenanceParticipants nodes, each record at
+// its widest, each reply at the floor pace, a read term a read; internal/engine's
+// TestTheMediaGatesReadsFitItsRoomAtTheFloor), so a record's budget
+// ([sessionRecordBudget]) holds them. Past it the take keeps its media inline,
+// logged with why. Read before the take's budget begins
+// ([Coordinator.placingPolicy]), so [BoxReadBudget] counts it beside the take.
+const MediaReadersRoom = sessionRecordBudget
 
 // takeLife is the longest a take's begun stamp stands before its taker's last
 // attempt at the stamp of what came of it ends, from the stamp's instant
@@ -1083,7 +1242,7 @@ const keepReadRoom = sessionRecordBudget
 // ([SessionTakeBudget], [captureStampBudget], [Coordinator.takeContext]), the
 // digest it leaves in the box ([discardGrace], [stampContext]), the keep, which
 // starts as the take returns its spool ([SessionKeepBudget]), and the stamp of
-// what came of it ([captureStampBudget]). An hour, one and a half minutes and
+// what came of it ([captureStampBudget]). An hour, four and a half minutes and
 // a fraction at today's bounds.
 var takeLife = SessionTakeBudget + captureStampBudget + discardGrace + SessionKeepBudget + captureStampBudget
 
@@ -1092,8 +1251,8 @@ var takeLife = SessionTakeBudget + captureStampBudget + discardGrace + SessionKe
 // the store did not answer it the standby's withdrawal and its read of the row
 // back ([Coordinator.tookOver]); its keep ([SessionKeepBudget]); and the stamp
 // of what came of it. Each change of the row ([captureStampBudget]), the read
-// back a read ([captureReadBudget]): 3 × 810.03 + 270 + 1,560 = 4,260.08 s,
-// an hour and eleven minutes and a fraction at today's bounds.
+// back a read ([captureReadBudget]): 3 × 810.03 + 270 + 1,740 = 4,440.08 s,
+// an hour, fourteen minutes and a fraction at today's bounds.
 var takeOverLife = 3*captureStampBudget + captureReadBudget + SessionKeepBudget
 
 // captureLife is the longest life of a begun capture, a take's or a
@@ -1107,7 +1266,7 @@ var takeOverLife = 3*captureStampBudget + captureReadBudget + SessionKeepBudget
 // EVERY STEP COUNTED, each at its bound at the slowest crossing: without the
 // reservation's room, a keep's reads and a takeover's steps, a rule reading a
 // begun stamp's age against it could read a capture still being kept as
-// abandoned. max(3,690.05, 4,260.08) s, 1 h 11 min today, a takeover's.
+// abandoned. max(3,870.05, 4,440.08) s, 1 h 14 min today, a takeover's.
 var captureLife = max(takeLife, takeOverLife)
 
 // sessionKeepDrain is how long a stopping coordinator lets keeps already under
@@ -1128,7 +1287,7 @@ const captureWaitTick = 2 * time.Second
 // stamped. ONE RECORD'S BUDGET, since every attempt at a record ends within
 // it, so a sooner read settles at most that much sooner while costing a
 // linearizable read at every tick of the upload: an end's wait for one
-// capture's whole life reads the log at most about a hundred and forty-four
+// capture's whole life reads the log at most about a hundred and forty-three
 // times, where the wait's tick ([captureWaitTick]) would make it fifteen times
 // as many.
 const heldRowPace = sessionRecordBudget
@@ -1356,8 +1515,11 @@ type spooledCapture struct {
 	stamp SessionCapture
 	spool executorkeep.SealedSpool
 	file  string
-	// hold is the room the spool holds in its process's ([spoolHold]), given
-	// back with its file ([spooledCapture.remove]).
+	// media is each payload the take kept apart, sealed in a file of its own
+	// in the order its frames name them.
+	media []spooledMedia
+	// hold is the room the spools hold in its process's ([spoolHold]), given
+	// back with their files ([spooledCapture.remove]).
 	hold *spoolHold
 
 	// standby says the take holds no place of its own: it stands by for
@@ -1374,12 +1536,97 @@ type spooledCapture struct {
 	// summary is the newest summary the take found, scrubbed of its values,
 	// which its keep keeps beside it ([Coordinator.keepSummaryBeside]).
 	summary *readSummary
+
+	// charge is a save's entry on its seat's save ledger, which its keep
+	// amends to what it uploads ([Coordinator.amendSave]); nil for a take.
+	charge *saveCharge
+
+	// begun is the stamp its place was reserved with, counting the media its
+	// spool cut apart, which its keep stamps first ([Coordinator.stampMediaCount]).
+	begun SessionCapture
 }
 
-// remove deletes the spool's file and gives back the room it held.
+// spooledMedia is one payload's member, sealed in file; carried is the object
+// its keep carries in its stead, and uploaded the object its keep put it into.
+// Its spool stays until the record lands ([Coordinator.keepCapture]).
+type spooledMedia struct {
+	spool    executorkeep.MediaSpool
+	file     string
+	carried  *executorkeep.MediaObject
+	uploaded *executorkeep.MediaObject
+}
+
+// carry has s's keep carry each of its media held names, by digest, rather
+// than upload it again. Its spool stays: a record the log refuses for a carry
+// gone meanwhile uploads it after all ([spooledCapture.uncarry]).
+func (s *spooledCapture) carry(held map[string]executorkeep.MediaObject) {
+	for i := range s.media {
+		if object, named := held[s.media[i].spool.Digest]; named {
+			s.media[i].carried = &object
+		}
+	}
+}
+
+// uncarry has s's keep upload every media it carried, reporting whether it
+// carried any: the log found a carried object no longer named.
+func (s *spooledCapture) uncarry() bool {
+	any := false
+	for i := range s.media {
+		any = any || s.media[i].carried != nil
+		s.media[i].carried = nil
+	}
+	return any
+}
+
+// paceLeft is the store's slowest pace for the session, where from is 0, and
+// each media from the from-th on it still uploads ([objstore.PaceFor]): an
+// object begun costs a whole pace unit.
+func (s *spooledCapture) paceLeft(from int) time.Duration {
+	var pace time.Duration
+	if from == 0 {
+		pace, from = objstore.PaceFor(s.spool.Size), 1
+	}
+	for _, m := range s.media[from-1:] {
+		if m.carried == nil && m.uploaded == nil {
+			pace += objstore.PaceFor(m.spool.Size)
+		}
+	}
+	return pace
+}
+
+// remove deletes the spools' files and gives back the room they held.
 func (s *spooledCapture) remove() {
 	_ = os.Remove(s.file)
+	removeMedia(s.media)
 	s.hold.release()
+}
+
+// removeMedia deletes the media spools' files.
+func removeMedia(media []spooledMedia) {
+	for _, m := range media {
+		_ = os.Remove(m.file)
+	}
+}
+
+// bytes is what the capture's spools hold sealed: its session and its media.
+func (s *spooledCapture) bytes() int64 {
+	n := s.spool.Size
+	for _, m := range s.media {
+		n += m.spool.Size
+	}
+	return n
+}
+
+// uploads is what the capture's keep uploads: its session and the media it
+// does not carry, which a save is charged ([Coordinator.amendSave]).
+func (s *spooledCapture) uploads() int64 {
+	n := s.spool.Size
+	for _, m := range s.media {
+		if m.carried == nil {
+			n += m.spool.Size
+		}
+	}
+	return n
 }
 
 // spoolPrefix names a session's spool in its process's own spool directory
@@ -1428,15 +1675,6 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		// longer names, and its box is that job's.
 		return nil, nil
 	}
-	// THE READ'S OWN CONTEXT keeps a refused take's summary past the take's
-	// time, which ends a summary's upload early where the read found one
-	// ([Coordinator.summaryBy]).
-	read := ctx
-	ctx, cancel, _ := c.takeContext(ctx)
-	if at.summary != nil {
-		ctx, cancel = before(ctx, cancel, c.summaryBy(by))
-	}
-	defer cancel()
 	standing := false
 	if last := current.Capture; last != nil && last.LaunchSeq == current.LaunchSeq &&
 		last.Launch == run.LaunchID && last.Final {
@@ -1454,8 +1692,20 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		// place rather than walk away from it.
 		standing = true
 	}
+	// THE FLEET'S WORD ON KEEPING, read before the take's budget begins
+	// ([Coordinator.placingPolicy]).
+	policy, policyErr := c.placingPolicy(ctx, by)
+	// THE READ'S OWN CONTEXT keeps a refused take's summary past the take's
+	// time, which ends a summary's upload early where the read found one
+	// ([Coordinator.summaryBy]).
+	read := ctx
+	ctx, cancel, _ := c.takeContext(ctx)
+	if at.summary != nil {
+		ctx, cancel = before(ctx, cancel, c.summaryBy(by))
+	}
+	defer cancel()
 	// THE VALUES ITS CAPTURE IS SCRUBBED OF, read once for the take and the
-	// summary it keeps ([readSummary]); the policy, read once below, is what
+	// summary it keeps ([readSummary]); the policy, read once above, is what
 	// lets a refusal keep the summary at all.
 	var scrubbed *struct {
 		values []string
@@ -1506,10 +1756,9 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, refuse(nil, executorkeep.LossKeepFailed, fmt.Sprintf("the job's session was not bound: %v", err))
 	}
 	current = bound
-	policy, err := c.keep.Policy(ctx)
-	if err != nil {
+	if policyErr != nil {
 		return nil, refuse(nil, executorkeep.LossKeepFailed, fmt.Sprintf("the company's session policy could "+
-			"not be read off the revision the fleet runs: %v", err))
+			"not be read off the revision the fleet runs: %v", policyErr))
 	}
 	if !policy.Keep {
 		return nil, nil
@@ -1591,7 +1840,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
 		MaxBytes: executorkeep.SessionMaxBytes, Scope: current.AgentID, Session: current.Launch.Minted,
-		Spool: scrubbing.spooling(dir)})
+		Spool: scrubbing.spooling(dir), MediaApart: policy.MediaApart})
 	give()
 	if err != nil {
 		loss, why := takeRefusal(ctx, err)
@@ -1676,7 +1925,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 			spooled.summary = at.summary
 			spooledHold = true
 			c.spooledWhole(ctx, by, run, spooled, taken, at.window)
-			return spooled, &SessionKept{CaptureSeq: stamp.CaptureSeq, Bytes: spooled.spool.Size}
+			return spooled, &SessionKept{CaptureSeq: stamp.CaptureSeq, Bytes: spooled.bytes()}
 		}
 		// ANOTHER READ OF THE SAME RUN HOLDS THIS PLACE — a stop's and a
 		// collection's, at once — and this one stands by for its capture, or
@@ -1842,10 +2091,10 @@ func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run 
 	spooled.standby, spooled.summary = true, at.summary
 	c.spooledWhole(ctx, by, run, spooled, taken, at.window)
 	log.InfoContext(ctx, "executor_session_standing_by", "turn_id", run.TurnID, "point", at.name,
-		"capture_seq", stamp.CaptureSeq, "bytes", spooled.spool.Size,
+		"capture_seq", stamp.CaptureSeq, "bytes", spooled.bytes(),
 		"detail", "another read of the run holds the capture's place; this one keeps the session it took, "+
 			"spooled, to keep in the next place should that capture not land")
-	return spooled, &SessionKept{CaptureSeq: stamp.CaptureSeq, Bytes: spooled.spool.Size}
+	return spooled, &SessionKept{CaptureSeq: stamp.CaptureSeq, Bytes: spooled.bytes()}
 }
 
 // standDown withdraws standby — a read standing by, as the stamp it stood by
@@ -2228,8 +2477,10 @@ func takeRefusal(ctx context.Context, err error) (executorkeep.Loss, string) {
 }
 
 // spool seals taken's body into a file of this node's own, as it streams, under
-// an object key minted now, never past the room hold holds, which it shrinks to
-// the sealed size; the caller gives hold back where it fails.
+// an object key minted now, and each payload a framed body keeps apart
+// ([TakenSession.Framed]) into a file of its own, never all of them past the
+// room hold holds, which it shrinks to their sealed size; the caller gives
+// hold back where it fails.
 //
 // THE CLOSE IS WHAT BOUNDS IT: a box's stream that stalls blocks a read for as
 // long as it stalls, which no check of ctx between reads can interrupt, so the
@@ -2256,17 +2507,57 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: a spool for the session on this node's disk: %w", err)
 	}
+	left := hold.bytes()
+	var (
+		media []spooledMedia
+		split *TakenText
+	)
+	text := io.Reader(taken.Body)
+	if taken.Framed {
+		split = SplitTakenBody(taken.Body, func(member io.Reader) (string, error) {
+			m, mediaErr := c.spoolMedia(dir, run.AgentHandle, member, &left)
+			if mediaErr != nil {
+				return "", mediaErr
+			}
+			media = append(media, m)
+			return m.spool.Digest, nil
+		})
+		text = split
+	}
 	stop := context.AfterFunc(ctx, func() { _ = taken.Body.Close() })
-	sealed, sealErr := c.keep.Seal(run.AgentHandle, run.TurnID, taken.Body,
-		&heldWriter{w: file, left: hold.bytes()})
+	sealed, sealErr := c.keep.Seal(run.AgentHandle, run.TurnID, text, &heldWriter{w: file, left: &left})
 	stop()
 	if err = errors.Join(sealErr, file.Close()); err != nil {
 		_ = os.Remove(file.Name())
+		removeMedia(media)
 		return nil, err
 	}
-	hold.shrinkTo(sealed.Size)
-	return &spooledCapture{run: run, stamp: stamp, spool: sealed, file: file.Name(), hold: hold,
-		places: places}, nil
+	spooled := &spooledCapture{run: run, stamp: stamp, spool: sealed, file: file.Name(), media: media,
+		hold: hold, places: places, begun: stamp}
+	if len(media) > 0 {
+		// THE ARCHIVE ITS RESTORE HANDS BACK, every repeat counted: its seal
+		// read the body whole, so the count is whole; and how many objects
+		// its keep uploads or carries.
+		spooled.stamp.ArchiveBytes = split.Restored()
+		spooled.stamp.MediaCount, spooled.begun.MediaCount = len(media), len(media)
+	}
+	hold.shrinkTo(spooled.bytes())
+	return spooled, nil
+}
+
+// spoolMedia seals one payload's member, member, into a file of dir's own,
+// within what left counts of the take's room.
+func (c *Coordinator) spoolMedia(dir, handle string, member io.Reader, left *int64) (spooledMedia, error) {
+	file, err := os.CreateTemp(dir, spoolPrefix+"*")
+	if err != nil {
+		return spooledMedia{}, fmt.Errorf("sandbox: a spool for the session's media on this node's disk: %w", err)
+	}
+	sealed, sealErr := c.keep.SealMedia(handle, member, &heldWriter{w: file, left: left})
+	if err = errors.Join(sealErr, file.Close()); err != nil {
+		_ = os.Remove(file.Name())
+		return spooledMedia{}, err
+	}
+	return spooledMedia{spool: sealed, file: file.Name()}, nil
 }
 
 // keepLater keeps a spooled capture off the frame that took it, on the
@@ -2317,7 +2608,7 @@ func (c *Coordinator) dropSpool(ctx context.Context, spooled *spooledCapture, lo
 	c.finishCapture(ctx, time.Time{}, spooled.run, spooled.stamp, CaptureRefused, loss, why)
 }
 
-// keepCapture uploads a spooled capture into the object it was sealed for,
+// keepCapture uploads a spooled capture into the objects it was sealed for,
 // records it on the executor log and stamps what came of it under a budget of
 // its own ([SessionKeepBudget]), and removes the spool. A STANDBY first waits
 // to see whether it keeps anything ([Coordinator.takeOver]), answering nil if
@@ -2325,10 +2616,10 @@ func (c *Coordinator) dropSpool(ctx context.Context, spooled *spooledCapture, lo
 // NAMES before every attempt at its upload ([Coordinator.uploadSpool]) and its
 // record, each record's cut at its window's end ([Coordinator.recordCapture]):
 // a keep the lease no longer covers may be one a peer has already settled
-// refused ([Coordinator.fenceKeep]). ITS TWO READS BEFORE THE UPLOAD each have a room
-// ([keepReadRoom]) beside the upload's pace, so a session at its bound gets
-// that pace whole ([takeLife]); a mint past it refuses the capture, a listing
-// past it decides nothing ([Coordinator.overBudget]).
+// refused ([Coordinator.fenceKeep]). ITS FOUR STEPS BEFORE THE UPLOAD (its
+// media count, the mint, the carry read with the listing, a save's amend) each
+// have a room ([keepReadRoom]), and its read again of who reads its media one
+// more ([MediaReadersRoom]), beside the upload's pace ([takeLife]).
 func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) *SessionKept {
 	defer spooled.remove()
 	if spooled.standby && !c.takeOver(ctx, spooled) {
@@ -2336,6 +2627,7 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 	}
 	ctx, cancel := context.WithTimeout(ctx, SessionKeepBudget)
 	defer cancel()
+	c.stampMediaCount(ctx, spooled)
 	// ITS SUMMARY BESIDE IT, waited for before the keep's stamp, which names
 	// it: the session's upload never waits on the summary's.
 	summary := c.keepSummaryBeside(ctx, spooled)
@@ -2353,9 +2645,17 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 			fmt.Sprintf("the turn's operations could not be minted: %v", err))
 	}
 	stamp.Minted = minted
+	// WHICH MEDIA IT CARRIES, read in the listing's room: what the turn's row
+	// and its held base name already is not uploaded again
+	// ([Coordinator.mediaHeld]); and a save's charge amended to what it then
+	// uploads, in a room of its own ([keepBudgetFor]).
 	listing, listed := context.WithTimeout(ctx, keepReadRoom)
-	over := c.overBudget(listing, run, spooled.spool.Size, stamp.SeatBudget)
+	spooled.carry(c.mediaHeld(listing, run, spooled.media))
+	over := c.overBudget(listing, run, spooled.bytes(), stamp.SeatBudget)
 	listed()
+	if over == "" {
+		over = c.amendSave(ctx, spooled)
+	}
 	if over != "" {
 		return c.finishCapture(ctx, time.Time{}, run, named(stamp), CaptureRefused, executorkeep.LossStoreRefused,
 			over)
@@ -2367,47 +2667,147 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 	}
 	stamp.Object, stamp.ObjectHash = sealed.Object.Key.String(), string(sealed.Object.Hash)
 	stamp.ObjectSize, stamp.ContentKey = sealed.Object.Size, sealed.ContentKey
-	outcome, why, fenced := c.recordCapture(ctx, run, stamp, fence)
+	if stamp.Media, ended = c.uploadMedia(ctx, spooled, stamp, fence, named); ended != nil {
+		return ended
+	}
+	if below := c.mediaBelow(ctx, run, stamp); below != "" {
+		return c.finishCapture(ctx, time.Time{}, run, named(stamp), CaptureRefused, executorkeep.LossKeepFailed,
+			below)
+	}
+	outcome, why, fenced, gone := c.recordCapture(ctx, run, stamp, fence)
+	// A CARRY THE LOG FOUND GONE (another capture or a save of the turn moved
+	// its row since the keep read it) is uploaded after all and recorded
+	// again: the log refused the record whole, so its operation took nothing.
+	if gone && !fenced && spooled.uncarry() {
+		if refused := c.amendSave(ctx, spooled); refused != "" {
+			return c.finishCapture(ctx, time.Time{}, run, named(stamp), CaptureRefused,
+				executorkeep.LossStoreRefused, refused)
+		}
+		if stamp.Media, ended = c.uploadMedia(ctx, spooled, stamp, fence, named); ended != nil {
+			return ended
+		}
+		if below := c.mediaBelow(ctx, run, stamp); below != "" {
+			return c.finishCapture(ctx, time.Time{}, run, named(stamp), CaptureRefused,
+				executorkeep.LossKeepFailed, below)
+		}
+		outcome, why, fenced, _ = c.recordCapture(ctx, run, stamp, fence)
+	}
 	if fenced {
 		return c.fenceKeep(ctx, run, named(stamp), "record", outcome, why)
 	}
 	return c.finishCapture(ctx, time.Time{}, run, named(stamp), outcome, executorkeep.LossLogRefused, why)
 }
 
-// uploadSpool uploads spooled into the object it was sealed for, under ctx, the
-// keep's: the object, or the stamp of why it was not uploaded. A PUT THE STORE
-// TOOK NONE OF (objstore.ErrUnanswered: nothing is stored, and a later put may
-// be) IS MADE AGAIN, spaced as a record's attempts are, each begun only while
-// the keep's budget left holds the session at the store's slowest pace and its
-// record's budget, so an attempt never takes the record's room; any other
-// refusal is final. The keep's fence is asked before every attempt.
+// stampMediaCount stamps on a capture's begun stamp, as its place was
+// reserved, how many media objects its spool cut apart ([spooledCapture.begun])
+// in a room of its own ([keepReadRoom], counted in [keepBudgetFor]): a relaunch
+// waits for a capture by that count ([captureRestFor]), each object's upload
+// paced by the mebibyte begun. A takeover's begun stamp carries it already,
+// and a capture with none stamps nothing. Unanswered, the keep goes on: the
+// count lengthens a wait, and decides nothing of the keep.
+func (c *Coordinator) stampMediaCount(ctx context.Context, spooled *spooledCapture) {
+	begun := spooled.begun
+	if spooled.standby || begun.MediaCount == 0 {
+		return
+	}
+	room, cancel := context.WithTimeout(ctx, keepReadRoom)
+	defer cancel()
+	if took, err := c.pending.StampCapture(room, spooled.run.TurnID, begun); err != nil || !took {
+		log.InfoContext(ctx, "executor_media_count_unstamped", "turn_id", spooled.run.TurnID,
+			"capture_seq", begun.CaptureSeq, "media", begun.MediaCount, "error", fmt.Sprint(err),
+			"detail", "a relaunch waits for the capture as for one object until its count is read")
+	}
+}
+
+// uploadSpool uploads spooled's session into the object it was sealed for,
+// under ctx, the keep's: the object, or the stamp of why it was not uploaded
+// ([Coordinator.uploadAgain]).
 func (c *Coordinator) uploadSpool(ctx context.Context, spooled *spooledCapture, stamp SessionCapture,
 	fence func() (time.Time, string), named func(SessionCapture) SessionCapture) (executorkeep.SealedObject,
 	*SessionKept) {
 
+	var sealed executorkeep.SealedObject
+	ended := c.uploadAgain(ctx, spooled, stamp, fence, named, "session", spooled.file, spooled.paceLeft(0),
+		func(body io.Reader) (err error) {
+			sealed, err = c.keep.Upload(ctx, spooled.spool, body)
+			return err
+		})
+	return sealed, ended
+}
+
+// uploadMedia uploads each of spooled's media its keep does not carry, in
+// order, each as its session is ([Coordinator.uploadAgain]), and answers every
+// media object the capture names, uploaded and carried; or the stamp of why
+// one was not uploaded.
+func (c *Coordinator) uploadMedia(ctx context.Context, spooled *spooledCapture, stamp SessionCapture,
+	fence func() (time.Time, string), named func(SessionCapture) SessionCapture) ([]CaptureMedia, *SessionKept) {
+
+	var media []CaptureMedia
+	for i, m := range spooled.media {
+		switch {
+		case m.carried != nil:
+			media = append(media, captureMediaOf(*m.carried, true))
+			continue
+		case m.uploaded != nil:
+			media = append(media, captureMediaOf(*m.uploaded, false))
+			continue
+		}
+		var put executorkeep.MediaObject
+		ended := c.uploadAgain(ctx, spooled, stamp, fence, named, "media "+m.spool.Digest, m.file,
+			spooled.paceLeft(i+1), func(body io.Reader) (err error) {
+				put, err = c.keep.UploadMedia(ctx, m.spool, body)
+				return err
+			})
+		if ended != nil {
+			return nil, ended
+		}
+		spooled.media[i].uploaded = &put
+		media = append(media, captureMediaOf(put, false))
+	}
+	return media, nil
+}
+
+// captureMediaOf is object as a capture names it, carried or uploaded for it.
+func captureMediaOf(object executorkeep.MediaObject, carried bool) CaptureMedia {
+	return CaptureMedia{Digest: object.Digest, Object: object.Object.Key.String(),
+		ObjectHash: string(object.Object.Hash), ObjectSize: object.Object.Size, ContentKey: object.ContentKey,
+		Carried: carried}
+}
+
+// uploadAgain uploads what of spooled's file holds, what, through put, under
+// ctx, the keep's: nil, or the stamp of why it was not uploaded. A PUT THE
+// STORE TOOK NONE OF (objstore.ErrUnanswered: nothing is stored, and a later
+// put may be) IS MADE AGAIN, spaced as a record's attempts are, each begun
+// only while the keep's budget left holds pace, the store's slowest for every
+// object still to upload from this one, and its record's budget, so an
+// attempt never takes the record's room; any other refusal is final. The
+// keep's fence is asked before every attempt.
+func (c *Coordinator) uploadAgain(ctx context.Context, spooled *spooledCapture, stamp SessionCapture,
+	fence func() (time.Time, string), named func(SessionCapture) SessionCapture, what, file string,
+	pace time.Duration, put func(io.Reader) error) *SessionKept {
+
 	run := spooled.run
 	deadline, _ := ctx.Deadline()
-	room := objstore.PaceFor(spooled.spool.Size) + c.recordBudget
+	room := pace + c.recordBudget
 	for attempt := 1; ; attempt++ {
 		if _, why := fence(); why != "" {
-			return executorkeep.SealedObject{}, c.fenceKeep(ctx, run, named(stamp), "upload", CaptureRefused, why)
+			return c.fenceKeep(ctx, run, named(stamp), "upload", CaptureRefused, why)
 		}
-		body, err := os.Open(spooled.file)
+		body, err := os.Open(file)
 		if err != nil {
-			return executorkeep.SealedObject{}, c.finishCapture(ctx, time.Time{}, run, named(stamp), CaptureRefused,
-				executorkeep.LossKeepFailed, fmt.Sprintf("the spooled session could not be read back on this "+
-					"node: %v", err))
+			return c.finishCapture(ctx, time.Time{}, run, named(stamp), CaptureRefused, executorkeep.LossKeepFailed,
+				fmt.Sprintf("the spooled %s could not be read back on this node: %v", what, err))
 		}
-		sealed, err := c.keep.Upload(ctx, spooled.spool, body)
+		err = put(body)
 		_ = body.Close()
 		if err == nil {
-			return sealed, nil
+			return nil
 		}
 		wait := backoff.Doubling(attempt, c.sessionRetry, sessionRetryCeiling)
 		if errors.Is(err, objstore.ErrUnanswered) && time.Until(deadline) >= wait+room {
 			log.InfoContext(ctx, "executor_session_upload_unanswered", "turn_id", run.TurnID,
-				"capture_seq", stamp.CaptureSeq, "attempt", attempt, "error", err.Error(),
-				"detail", "the object store took none of the session; it is uploaded again into the same object")
+				"capture_seq", stamp.CaptureSeq, "attempt", attempt, "error", err.Error(), "spool", what,
+				"detail", "the object store took none of it; it is uploaded again into the same object")
 			select {
 			case <-ctx.Done():
 				err = fmt.Errorf("%w; the keep ended before it was uploaded again: %w", err, ctx.Err())
@@ -2419,9 +2819,39 @@ func (c *Coordinator) uploadSpool(ctx context.Context, spooled *spooledCapture, 
 		if attempt > 1 {
 			why = fmt.Sprintf("%s (attempt %d)", why, attempt)
 		}
-		return executorkeep.SealedObject{}, c.finishCapture(ctx, time.Time{}, run, named(stamp), CaptureRefused,
-			loss, why)
+		return c.finishCapture(ctx, time.Time{}, run, named(stamp), CaptureRefused, loss, why)
 	}
+}
+
+// mediaHeld is the media objects the turn's row, and the base that row holds,
+// name live, by digest: what a capture carries rather than uploads again
+// (ADR-0027's "a session's media, carried"), never another seat's, whose AAD
+// would not open. Nil where the take kept none apart, or a read fails within
+// ctx: each is then uploaded fresh, which is always correct.
+func (c *Coordinator) mediaHeld(ctx context.Context, run PendingRun,
+	media []spooledMedia) map[string]executorkeep.MediaObject {
+
+	if len(media) == 0 || c.restore == nil {
+		return nil
+	}
+	row, err := c.restore.Session(ctx, run.AgentHandle, run.TurnID)
+	if err != nil {
+		return nil
+	}
+	held := map[string]executorkeep.MediaObject{}
+	for _, m := range row.Media {
+		held[m.Digest] = m
+	}
+	if row.HoldsBase() {
+		if base, baseErr := c.restore.Session(ctx, run.AgentHandle, row.BaseTurn); baseErr == nil {
+			for _, m := range base.Media {
+				if _, named := held[m.Digest]; !named {
+					held[m.Digest] = m
+				}
+			}
+		}
+	}
+	return held
 }
 
 // overBudget is why a capture of size bytes cannot fit the seat's budget beside
@@ -2446,10 +2876,10 @@ func (c *Coordinator) overBudget(ctx context.Context, run PendingRun, size, budg
 		switch {
 		case other.TurnID == run.TurnID:
 		case other.Kept != nil:
-			held += other.Kept.ObjectSize
+			held += other.Kept.ObjectSize + other.Kept.mediaBytes()
 		case other.Base != nil && other.Base.Session != nil && !bases[other.Base.Session.Turn]:
 			bases[other.Base.Session.Turn] = true
-			held += other.Base.Session.ObjectSize
+			held += other.Base.Session.ObjectSize + other.Base.Session.MediaBytes
 		}
 	}
 	if held+size <= budget {
@@ -2761,9 +3191,16 @@ func (c *Coordinator) finishCapture(ctx context.Context, by time.Time, run Pendi
 	c.stampSettled(ctx, by, run.TurnID, stamp)
 	switch state {
 	case CaptureLanded:
+		carried := 0
+		for _, m := range stamp.Media {
+			if m.Carried {
+				carried++
+			}
+		}
 		log.InfoContext(ctx, "executor_session_kept", "turn_id", run.TurnID, "agent", run.AgentHandle,
 			"launch_seq", stamp.LaunchSeq, "capture_seq", stamp.CaptureSeq, "object", stamp.Object,
-			"bytes", stamp.ObjectSize, "session", stamp.SessionID, "trimmed", stamp.Trimmed)
+			"bytes", stamp.ObjectSize, "media", stamp.mediaBytes(), "media_fresh", len(stamp.Media)-carried,
+			"media_carried", carried, "session", stamp.SessionID, "trimmed", stamp.Trimmed)
 		c.meterTrim(stamp)
 	default:
 		sayNotKept(ctx, slog.LevelWarn, loss, run.TurnID, "agent", run.AgentHandle,
@@ -2926,23 +3363,21 @@ func uploadRefusal(err error) (executorkeep.Loss, string) {
 
 // recordCapture records a stamped, uploaded capture of run's turn on the
 // executor log under the operation its place derives ([SessionWrites.Capture]),
-// asked again within [sessionRecordBudget]: landed, refused or unresolved.
-// EVERY CAPTURE CARRIES THE TURN'S FIRST READ ([PendingRun.Base]), never a read
-// made now: the log keeps the read the turn's first landed record carried. A
-// KEEP'S FENCE IS ASKED BEFORE EVERY ATTEMPT ([takerLease.fence]; nil for an
-// ask again of an unresolved record): fenced, nothing more is sent, and the
-// answer is refused where no attempt had been sent, else unresolved, which a
-// wait asks again rather than settle refused under a record that may have
-// landed. EVERY ATTEMPT IS CUT AT THE END OF THE WINDOW IT WAS SENT IN: held to
-// the record's budget alone (thirty seconds, past the window's margin), one
-// could land after a peer settled the capture refused; cut, it is unresolved.
+// asked again within [sessionRecordBudget]: landed, refused (gone: a carry the
+// log found gone) or unresolved. EVERY CAPTURE CARRIES THE TURN'S FIRST READ
+// ([PendingRun.Base]). A KEEP'S FENCE IS ASKED BEFORE EVERY ATTEMPT
+// ([takerLease.fence]; nil for an ask again): fenced, nothing more is sent,
+// refused where no attempt had been sent, else unresolved, which a wait asks
+// again rather than settle refused under a record that may have landed. EVERY
+// ATTEMPT IS CUT AT THE END OF THE WINDOW IT WAS SENT IN: held to the record's
+// budget alone, one could land after a peer settled the capture refused.
 func (c *Coordinator) recordCapture(ctx context.Context, run PendingRun, stamp SessionCapture,
-	fence func() (time.Time, string)) (outcome CaptureState, why string, fenced bool) {
+	fence func() (time.Time, string)) (outcome CaptureState, why string, fenced, gone bool) {
 
 	handle, turn := run.AgentHandle, run.TurnID
 	key, err := objstore.ParseKey(stamp.Object)
 	if err != nil {
-		return CaptureRefused, fmt.Sprintf("the capture names no object a record can: %v", err), false
+		return CaptureRefused, fmt.Sprintf("the capture names no object a record can: %v", err), false, false
 	}
 	record := CaptureRecord{
 		Handle: handle, Turn: turn, ConversationKey: run.ConversationKey, WorkKey: run.WorkKey,
@@ -2981,7 +3416,7 @@ func (c *Coordinator) recordCapture(ctx context.Context, run PendingRun, stamp S
 				"another: an end, a newer capture, the seat's removal or the seat's budget got there first"
 			return true, nil
 		case LogRefused:
-			outcome, why = CaptureRefused, fmt.Sprint(err)
+			outcome, why, gone = CaptureRefused, fmt.Sprint(err), errors.Is(err, ErrCarryGone)
 			return true, nil
 		}
 		outcome, why = CaptureUnresolved, fmt.Sprint(err)
@@ -2995,7 +3430,45 @@ func (c *Coordinator) recordCapture(ctx context.Context, run PendingRun, stamp S
 				"error", err.Error(), "detail", "the claim goes with the run's record instead")
 		}
 	}
-	return outcome, why, fenced
+	return outcome, why, fenced, gone
+}
+
+// mediaBelow is why a capture naming media is not recorded, "" where it may be
+// or names none: who reads it asked again before its record, in a room of its
+// own ([MediaReadersRoom], counted in [keepBudgetFor]), since a node below the
+// version that joined after the take would retain it or ask it again short.
+// ONLY A DEFINITE ANSWER REFUSES, naming the node ([SessionPolicy.MediaBelow]).
+// One it cannot get (the readers or the policy unread) is no evidence of such
+// a joiner, whose applier defers the record anyway, and a policy keeping
+// nothing now asks no reader: each goes on, on the take's answer, said apart,
+// rather than lose media already uploaded.
+func (c *Coordinator) mediaBelow(ctx context.Context, run PendingRun, stamp SessionCapture) string {
+	if len(stamp.Media) == 0 {
+		return ""
+	}
+	read, cancel := context.WithTimeout(ctx, MediaReadersRoom)
+	policy, err := c.keep.Policy(read)
+	cancel()
+	var kind, why string
+	switch {
+	case err != nil:
+		kind, why = "unread", fmt.Sprintf("the company's policy could not be read: %v", err)
+	case !policy.Keep:
+		kind, why = "keep_off", "the company keeps no session now, so who reads a capture naming media was "+
+			"not asked again, and its media are uploaded already"
+	case policy.MediaUnread != "":
+		kind, why = "unread", policy.MediaUnread
+	case !policy.MediaApart:
+		below := cmp.Or(policy.MediaBelow, "a node that applies the executor log or settles its runs says a "+
+			"version below the one a capture naming media needs")
+		return below + ", so it no longer reads a capture naming media, and the capture, its media kept " +
+			"apart, was not recorded; the next take keeps them inline"
+	default:
+		return ""
+	}
+	log.InfoContext(ctx, "executor_media_readers_unread", "turn_id", run.TurnID, "kind", kind, "why", why,
+		"detail", "the capture is recorded on its take's answer that every node reads its media")
+	return ""
 }
 
 // beginRecordBudget bounds the record of a turn's begin: every attempt at it,
@@ -3127,7 +3600,14 @@ func (c *Coordinator) askRecord(ctx context.Context, what, turn string, budget t
 func (c *Coordinator) settleCapture(ctx context.Context, run PendingRun,
 	last SessionCapture) SessionCapture {
 
-	last.State, last.Reason, _ = c.recordCapture(ctx, run, last, nil)
+	// A STAMP A NEWER BUILD WROTE KEYS INTO this one cannot rebuild its
+	// record from: asked again short, the log would name less than the take
+	// kept (a media list, once); refused unasked, a record that landed would
+	// read lost. So it is settled off the log ([Coordinator.settleOffLog]).
+	if len(last.Extra) > 0 {
+		return c.settleOffLog(ctx, run, last)
+	}
+	last.State, last.Reason, _, _ = c.recordCapture(ctx, run, last, nil)
 	last.Reason, last.Loss = stampReason(last.Reason), executorkeep.LossLogRefused
 	if last.State == CaptureLanded {
 		last.Loss = ""
@@ -3136,6 +3616,53 @@ func (c *Coordinator) settleCapture(ctx context.Context, run PendingRun,
 		c.stampSettled(ctx, time.Time{}, run.TurnID, last)
 	}
 	return last
+}
+
+// settleOffLog settles an unanswered capture this build cannot ask again whole
+// (its stamp holds keys a newer build wrote, [SessionCapture.Extra]) off ONE
+// read of the turn's row on the executor log: LANDED where the row names its
+// place, written from the row ([landedFrom]); REFUSED where it does not and
+// its object is past the window the log records one within
+// ([pastRecordWithin]), so no ask of it could land; else left unresolved,
+// stamping nothing, for the build that wrote it to ask again. Held to ctx; its
+// stamp to its own room ([Coordinator.stampSettled]).
+func (c *Coordinator) settleOffLog(ctx context.Context, run PendingRun, last SessionCapture) SessionCapture {
+	if c.restore == nil {
+		return last
+	}
+	row, err := c.restore.Session(ctx, run.AgentHandle, run.TurnID)
+	switch {
+	case err == nil && row.LaunchSeq == last.LaunchSeq && row.CaptureSeq == last.CaptureSeq:
+		last = landedFrom(last, row)
+	case (err == nil || errors.Is(err, ErrTurnRowNotFound)) && pastRecordWithin(last.Object, c.now()):
+		last.State, last.Loss = CaptureRefused, executorkeep.LossLogRefused
+		last.Reason = stampReason(fmt.Sprintf("the capture was stamped by a newer build, with %s, which "+
+			"this build cannot ask again; the turn's row on the executor log does not name it, and its "+
+			"object is past the window the log records one within, so it never lands",
+			words.And(slices.Sorted(maps.Keys(last.Extra)))))
+	default:
+		return last
+	}
+	c.stampSettled(ctx, time.Time{}, run.TurnID, last)
+	log.InfoContext(ctx, "executor_session_settled", "turn_id", run.TurnID, "agent", run.AgentHandle,
+		"launch_seq", last.LaunchSeq, "capture_seq", last.CaptureSeq, "state", string(last.State),
+		"detail", "a newer build stamped the capture with keys this build cannot ask its record again with, "+
+			"so what came of it was read off the turn's row on the executor log")
+	return last
+}
+
+// landedFrom is settled stamped LANDED off row, the turn's row on the executor
+// log that names its place: the object, media and context the row holds, as
+// the record that landed wrote them.
+func landedFrom(settled SessionCapture, row executorkeep.TurnRow) SessionCapture {
+	settled.State, settled.Reason, settled.Loss = CaptureLanded, "", ""
+	if row.HasObject() {
+		settled.Object, settled.ObjectHash = row.Object.Key.String(), string(row.Object.Hash)
+		settled.ObjectSize, settled.ContentKey = row.Object.Size, row.ContentKey
+		settled.Media, settled.ArchiveBytes = rowMedia(row.Media, settled.Media), row.ArchiveBytes
+	}
+	settled.ContextTokens = row.ContextTokens
+	return settled
 }
 
 // pastRecordWithin reports whether a capture's object, named by object, is past
@@ -3257,12 +3784,7 @@ func (c *Coordinator) settleGone(ctx context.Context, run PendingRun, admits fun
 		switch {
 		case names:
 			named = append(named, s.begun)
-			settled.State, settled.Reason = CaptureLanded, ""
-			if row.HasObject() {
-				settled.Object, settled.ObjectHash = row.Object.Key.String(), string(row.Object.Hash)
-				settled.ObjectSize, settled.ContentKey = row.Object.Size, row.ContentKey
-			}
-			settled.ContextTokens = row.ContextTokens
+			settled = landedFrom(settled, row)
 			if !s.gone {
 				detail = "the turn's row on the executor log names the capture, so its record landed and it " +
 					"was settled from that row while the lease its taker kept it under was not read gone"
@@ -3463,9 +3985,9 @@ func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun, within t
 // [standbyBudget] still bound what counts as in flight across retries). One
 // pass at least, which settles a begun capture past its age whose taker is
 // gone. WHY AN END WAITS: it tombstones its turn, so a capture recorded after
-// it is refused. At most a life and a read ([captureReadBudget]), 4,260.08 +
-// 270 = 4,530.08 s (1 h 15.5 min), or for a standby 9,092.21 + 270 + 4,530.08
-// = 13,892.28 s (3 h 51.5 min): its window, a read, its takeover's life, a read.
+// it is refused. At most a life and a read ([captureReadBudget]), 4,440.08 +
+// 270 = 4,710.08 s (1 h 18.5 min), or for a standby 9,272.21 + 270 + 4,710.08
+// = 14,252.29 s (3 h 57.5 min): its window, a read, its takeover's life, a read.
 func (c *Coordinator) awaitEndCaptures(ctx context.Context, run PendingRun) (PendingRun, bool, error) {
 	seen := endSightings{}
 	within := captureLife

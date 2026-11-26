@@ -38,9 +38,12 @@ type TurnRow struct {
 
 	// Object is the sealed session, its Key zero on a row that names none,
 	// and Media the media objects its frames splice in ([MediaObject]), none
-	// for a session kept whole.
-	Object objstore.Object
-	Media  []MediaObject
+	// for a session kept whole. ArchiveBytes is the archive they restore to,
+	// every member at each frame naming it, which its open's read is
+	// budgeted for: zero beside no media, whose object is its archive.
+	Object       objstore.Object
+	Media        []MediaObject
+	ArchiveBytes int64
 
 	// Ended is a turn whose end applied: no relaunch of it continues its
 	// session, and only its conversation's next turn may, where the row is
@@ -99,6 +102,16 @@ type TurnRow struct {
 	// nothing continues that base only while its own row holds it.
 	BaseTurn string
 }
+
+// BaseHeld reports whether a turn's row, by what it says, still holds the base
+// its first read froze: the turn has neither ended nor kept a capture of its
+// own (its launch ordinal 0), since its first capture lifts the hold. THE ONE
+// RULE a capture's carry from that base is asked by (internal/sandbox) and
+// decided by (internal/executordomain's carryGone), so the two never drift.
+func BaseHeld(ended bool, launchSeq int64) bool { return !ended && launchSeq == 0 }
+
+// HoldsBase reports whether r holds a base it names ([BaseHeld]).
+func (r TurnRow) HoldsBase() bool { return r.BaseTurn != "" && BaseHeld(r.Ended, r.LaunchSeq) }
 
 // ConversationHead is a read of a conversation's head as a turn's first launch
 // freezes it (internal/sandbox's NewConversationBase): where it was read, the
