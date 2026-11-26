@@ -349,10 +349,11 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 		return runner, b
 	},
 	// One `copilot` process is the run; its stand-in answers the release check
-	// every run's script asks first, then runs the scenario.
+	// every run's script asks first and the guard's asks of the launch (which a
+	// box holding the note helper always makes), then runs the scenario.
 	executor.CopilotName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 		return standInBox(t, executor.NewCopilot(), map[string]string{"copilot": "#!/bin/sh\n" +
-			"case \"$1\" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; esac\n" + scenarioRun})
+			"case \"$1\" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; config|mcp) exit 0;; esac\n" + scenarioRun})
 	},
 	// One `grok` process is the run, and its shell inherits its environment
 	// whole; its stand-in answers the release check every run's script asks

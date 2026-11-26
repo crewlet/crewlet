@@ -476,17 +476,18 @@ func TestAPiNoteHelpersOwnTroubleReachesTheRunsErrorStream(t *testing.T) {
 // THE CLEAR DROPS A SKIP LOG NO SCRIPT PRINTED: a run killed before its
 // script printed what its firings left out leaves the log in its checkout
 // state, and the clear before the next run, whichever harness it drives,
-// removes Codex's, Pi's and Hermes's alike, so a script ended before its gate
-// prints no line of another run's as its own.
+// removes Codex's, Pi's, Hermes's and Copilot's alike, so a script ended
+// before its gate prints no line of another run's as its own.
 //
-// Mutation: drop Codex's or Hermes's removal from its restore, and a row goes
-// red (Pi's state is also under the directory the clear removes whole).
+// Mutation: drop Codex's, Hermes's or Copilot's removal from its restore, and
+// a row goes red (Pi's state is also under the directory the clear removes
+// whole).
 func TestTheClearDropsASkipLogNoScriptPrinted(t *testing.T) {
 	t.Parallel()
 	_, box := standInBox(t, executor.NewPi(), nil)
 	p := executor.PathsFor(box)
 	logs := map[string]string{"codex": p.CodexRepo() + "/skipped", "pi": p.PiCheckouts() + "/skipped",
-		"hermes": p.HermesCheckouts() + "/skipped"}
+		"hermes": p.HermesCheckouts() + "/skipped", "copilot": p.CopilotRepo() + "/skipped"}
 	for _, log := range logs {
 		plantFile(t, log, "notehelper: a killed run's line\n")
 	}

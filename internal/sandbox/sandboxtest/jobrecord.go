@@ -188,6 +188,50 @@ func testAJobItsCapEndedIsRecordedOnceForItsOwnJob(t *testing.T, s sandbox.Pendi
 	}
 }
 
+// A RUNNING JOB ITS TURN CAP'S WATCH ENDED IS RECORDED SO ONCE, AND ONLY FOR
+// ITS OWN JOB. The launching node's watch records it on the running row before
+// the job's completion is announced, and the job's collection reads it there: a
+// record naming a job the row has moved on from is nothing, as is one for a job
+// not running (still launching, or claimed) and one for a run with no record; a
+// second record changes nothing; and the next launch's job starts with nothing
+// said.
+//
+// Mutation: record it on another job's row or on a row not running, or carry
+// it across a relaunch, and a check goes red.
+func testARunningJobItsTurnCapEndedIsRecordedOnceForItsOwnJob(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launching := mustBeginLaunch(t, s, run("t-launching"))
+	if ok, err := s.MarkEndedAtTurnCap(ctx, "t-launching", launching); err != nil || ok {
+		t.Errorf("the turn cap's end of a job still launching = %v, %v", ok, err)
+	}
+	launch := mustLaunched(t, s, run("t-capped"))
+	if ok, err := s.MarkEndedAtTurnCap(ctx, "t-capped", "another-job"); err != nil || ok {
+		t.Errorf("the turn cap's end of a job the record does not hold = %v, %v", ok, err)
+	}
+	if ok, err := s.MarkEndedAtTurnCap(ctx, "t-capped", launch); err != nil || !ok {
+		t.Fatalf("MarkEndedAtTurnCap = %v, %v", ok, err)
+	}
+	if ok, err := s.MarkEndedAtTurnCap(ctx, "t-capped", launch); err != nil || ok {
+		t.Errorf("a second record of the turn cap's end = %v, %v, want nothing written", ok, err)
+	}
+	if !mustGet(t, s, "t-capped").Launch.EndedAtTurnCap {
+		t.Fatal("the job's record does not say its turn cap's watch ended it")
+	}
+	claimedLaunch := mustLaunched(t, s, run("t-claimed"))
+	mustClaim(t, s, "t-claimed")
+	if ok, err := s.MarkEndedAtTurnCap(ctx, "t-claimed", claimedLaunch); err != nil || ok {
+		t.Errorf("the turn cap's end of a claimed job = %v, %v", ok, err)
+	}
+	mustClaim(t, s, "t-capped")
+	mustBeginLaunch(t, s, run("t-capped"))
+	if mustGet(t, s, "t-capped").Launch.EndedAtTurnCap {
+		t.Error("the next job's record says its turn cap's watch ended it, want nothing said")
+	}
+	if ok, err := s.MarkEndedAtTurnCap(ctx, "t-none", "job-1"); err != nil || ok {
+		t.Errorf("the turn cap's end of a run with no record = %v, %v", ok, err)
+	}
+}
+
 // HOW A JOB'S HARNESS ENDED IS RECORDED FOR ITS OWN JOB, AND CUT OFF STANDS. The
 // read that collects a job records on the claimed row whether its harness ended
 // its own run, and a relaunch that carries the round on in the job's box reads

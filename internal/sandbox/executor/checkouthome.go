@@ -28,6 +28,9 @@ type checkoutHome struct {
 	held, sections        string
 	skills, copied, roots string
 	gateCmd, afterLaunch  string
+	// own is the run's own instructions, written ahead of the home's
+	// (Copilot's share its one file), "" for none.
+	own string
 }
 
 // gateFile is where [checkoutHome]'s gateCmd writes the gate
@@ -174,6 +177,8 @@ type checkoutForm string
 const (
 	// checkoutFormClaude is Claude Code's walk of .claude/rules.
 	checkoutFormClaude checkoutForm = "claude"
+	// checkoutFormCopilot is Copilot 1.0.114's walk of .claude/rules.
+	checkoutFormCopilot checkoutForm = "copilot"
 	// checkoutFormQwen is Qwen Code's walk of .qwen/rules.
 	checkoutFormQwen checkoutForm = "qwen"
 	// checkoutFormGrok is Grok Build's read of .grok/rules and .claude/rules
@@ -241,7 +246,12 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 // keeps the file, its directory made where there is none (a fresh home, or a
 // Qwen Code context.fileName naming a path below it; [heldMade]), the file
 // left untouched where they hand nothing or the harness reads none.
-func (h checkoutHome) gate() string {
+func (h checkoutHome) gate() string { return h.prepare() + h.compose() }
+
+// prepare is [checkoutHome.gate] up to checkout-launch: the hold, the
+// removals and the launch, which write the sections [checkoutHome.compose]
+// puts in place.
+func (h checkoutHome) prepare() string {
 	q := shellword.Quote
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -277,12 +287,6 @@ func (h checkoutHome) gate() string {
 	line(`else`)
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
 	line(`fi`)
-	if h.holdsHome() {
-		line(`if [ -s "$rq" ] && [ -n "$ra" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && `+
-			`{ rmd=$(dirname "$ra"); rmt=; while [ ! -e "$rmd" ]; do rmt=$rmd; rmd=$(dirname "$rmd"); done; `+
-			`[ -z "$rmt" ] || { printf '%%s\n' "$rmt" > "$rha%s" && mkdir -p "$(dirname "$ra")"; }; } && `+
-			`cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`, heldMade)
-	}
 	return b.String()
 }
 
@@ -310,6 +314,28 @@ func (h checkoutHome) holdHome(line func(string, ...any)) {
 	}
 	line(`if [ -z "$ra" ]; then :; elif [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
 		`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
+}
+
+// compose is the shell writing the home's instruction file from what
+// [checkoutHome.prepare] held and the launch wrote: the run's own (where h has
+// a file of them), the home's own, then the sections, through a link as the
+// home keeps it, its directory made where there is none ([heldMade]); left
+// untouched where the run adds nothing or the harness reads no home file. A
+// Copilot run composes again for each launch attempt (copilotAttempts).
+func (h checkoutHome) compose() string {
+	if !h.holdsHome() {
+		return ""
+	}
+	has, text := `[ -s "$rq" ]`, `{ if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; }`
+	if h.own != "" {
+		o := shellword.Quote(h.own)
+		has = `{ [ -s "$rq" ] || [ -s ` + o + ` ]; }`
+		text = `{ rs=; for rf in ` + o + ` "$rha" "$rq"; do if [ -s "$rf" ]; then printf "$rs"; cat "$rf"; rs='\n\n'; fi; done; }`
+	}
+	return fmt.Sprintf(`if %s && [ -n "$ra" ]; then %s > "$rq.all" && `+
+		`{ rmd=$(dirname "$ra"); rmt=; while [ ! -e "$rmd" ]; do rmt=$rmd; rmd=$(dirname "$rmd"); done; `+
+		`[ -z "$rmt" ] || { printf '%%s\n' "$rmt" > "$rha%s" && mkdir -p "$(dirname "$ra")"; }; } && `+
+		`cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`+"\n", has, text, heldMade)
 }
 
 // restore is the shell marking the run ended once no firing holds the

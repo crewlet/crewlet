@@ -46,6 +46,12 @@ func (Hermes) Name() string { return HermesName }
 // progress token, so the bridge's progress keeps the response from it.
 func (Hermes) MCPCallCeiling() time.Duration { return 0 }
 
+// CountedAtCollection implements [collectionCounted].
+func (Hermes) CountedAtCollection() string {
+	return "its stdout marks no model request: " +
+		"the plugin's record its count reads is appended by the run's script once Hermes exits"
+}
+
 // HandsSkills reports that a Hermes run takes skills of its own, installed in
 // [Paths.HermesSkills] beside the box's.
 func (Hermes) HandsSkills() bool { return true }

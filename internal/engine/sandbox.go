@@ -2232,6 +2232,11 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 			"the run was no longer launching when its conversation was written", nil)
 		return false, nil
 	}
+	// RUNNING NOW, and counted from now where its turn caps it, not from the
+	// waiter's next pass ([sandbox.Waiter.Watch]).
+	if w := e.sandboxWaiter.Load(); w != nil {
+		w.Watch(ctx, turnID)
+	}
 	return true, nil
 }
 
