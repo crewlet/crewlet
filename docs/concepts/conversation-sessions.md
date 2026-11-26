@@ -151,13 +151,13 @@ before the lost work: the conversation's older head, the head's own older captur
 where its end names its newest not kept, or an older capture of the run's own
 turn), the turn whose session was lost where it is another turn's, and the
 engine's detail. It is said in one sentence everywhere, for example "The run did
-not continue turn 4f1a...'s session: its session was larger than the 48 MiB kept
-for one session. It continued turn 9d8e...'s older session instead, which ends
-before that work."
+not continue turn 4f1a...'s session: its session was larger than one is kept
+at: 94 MiB in all, at most 48 MiB of it text. It continued turn 9d8e...'s
+older session instead, which ends before that work."
 
 | Loss | Fault | What happened |
 |---|---|---|
-| `too_large` | yes | the session was past the 48 MiB kept for one, taken or sealed |
+| `too_large` | yes | the session was past what one is kept at, taken or sealed: 94 MiB in all, at most 48 MiB of it text ([code sandbox](code-sandbox.md#a-sessions-large-payloads-kept-apart)) |
 | `keep_failed` | yes | its take, pack, scrub or stream failed, a taker lease or the company's policy could not be read, the run's bridged log could not be read, or a minted session was not bound |
 | `no_spool_room` | yes | the node's spools held their whole room for the take's minute ([code sandbox](code-sandbox.md#a-sessions-spools-on-its-node)) |
 | `store_refused` | yes | the object store refused the upload, or took none of it however often it was asked within the keep's budget; its reservation or the seat's session budget spent |
