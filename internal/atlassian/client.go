@@ -27,6 +27,13 @@
 // atlas reads (ADR-0138, atlas.go): every site as an account, and each
 // product as a capability of the account it is on. It is read to its end,
 // and nobody a row names is decoded.
+//
+// # A site's cloud id, read from the site
+//
+// A Forge invocation token names its site by cloud id only, and a company may
+// name its Cloud site by url. [CloudIDs] reads the id from the site's public
+// /_edge/tenant_info, bounded, validated and kept for the process's life
+// (cloudid.go); a failure is retried, never kept for good.
 package atlassian
 
 import (

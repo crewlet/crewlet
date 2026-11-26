@@ -1,0 +1,202 @@
+package atlassian
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/sync/singleflight"
+
+	"github.com/crewlet/crewlet/internal/httpx"
+)
+
+const (
+	// TenantInfoTimeout bounds one cloud id lookup: jira.ClientTimeout, the
+	// budget the engine already gives one read of the same site, restated
+	// because jira imports this package (a jira test holds them equal).
+	TenantInfoTimeout = 10 * time.Second
+
+	// TenantInfoMaxBytes caps the answer. It is one line,
+	// {"cloudId":"<36-character id>"}; 4 KiB is room for any envelope
+	// Atlassian adds and still nothing a caller pays to read.
+	TenantInfoMaxBytes = 4 << 10
+
+	// TenantInfoRetryFloor is the least time between two failed lookups of
+	// one site. Forge retries a refused event a minute apart, so a floor
+	// under that gives each retry a fresh lookup while a burst of events
+	// inside one minute shares a single request to the site.
+	TenantInfoRetryFloor = 30 * time.Second
+
+	tenantInfoPath = "/_edge/tenant_info"
+)
+
+// cloudIDShape is a cloud id as Atlassian issues them: a UUID.
+var cloudIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// TenantInfoError is a lookup that did not yield a cloud id: the address
+// asked and a short cause, which every surface names.
+type TenantInfoError struct {
+	URL   string
+	Cause string
+}
+
+func (e *TenantInfoError) Error() string {
+	return "the site's cloud id could not be read from " + e.URL + " (" + e.Cause + ")"
+}
+
+// CloudIDs reads the cloud id of an Atlassian Cloud site named by its url,
+// from the site's own public /_edge/tenant_info (Atlassian Support, "How to
+// Find Your Atlassian Cloud Site's Cloud ID"). One per process, so every
+// surface reads the same last result.
+//
+// A site's cloud id never changes, so a success is kept for the process's
+// life. A failure is kept only as the last result, retried after
+// [TenantInfoRetryFloor]; concurrent asks for one site share one request,
+// which belongs to none of them.
+type CloudIDs struct {
+	client *http.Client
+	now    func() time.Time
+
+	mu    sync.Mutex
+	sites map[string]lookup
+	group singleflight.Group
+}
+
+type lookup struct {
+	id  string
+	err error
+	at  time.Time
+}
+
+// CloudIDOptions configures [NewCloudIDs]. Zero values are the production
+// ones: httpx's client at [TenantInfoTimeout], and the wall clock.
+type CloudIDOptions struct {
+	Client *http.Client
+	Now    func() time.Time
+}
+
+// NewCloudIDs builds the process's resolver.
+func NewCloudIDs(opts CloudIDOptions) *CloudIDs {
+	c := &CloudIDs{client: opts.Client, now: opts.Now, sites: map[string]lookup{}}
+	if c.client == nil {
+		c.client = httpx.Client(TenantInfoTimeout)
+	}
+	if c.now == nil {
+		c.now = func() time.Time { return time.Now().UTC() }
+	}
+	return c
+}
+
+// Known is the last result for site without asking it: its cloud id, the
+// error of its last failed lookup, or ("", nil) when it was never asked.
+func (c *CloudIDs) Known(site string) (string, error) {
+	key, err := tenantInfoURL(site)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	last := c.sites[key]
+	return last.id, last.err
+}
+
+// Resolve is site's cloud id: kept from an earlier success, the last error
+// while inside the retry floor, or else read from the site now.
+func (c *CloudIDs) Resolve(ctx context.Context, site string) (string, error) {
+	key, err := tenantInfoURL(site)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	last, tried := c.sites[key]
+	c.mu.Unlock()
+	switch {
+	case tried && last.err == nil:
+		return last.id, nil
+	case tried && c.now().Sub(last.at) < TenantInfoRetryFloor:
+		return "", last.err
+	}
+	flight := c.group.DoChan(key, func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), TenantInfoTimeout)
+		defer cancel()
+		id, err := c.read(ctx, key)
+		c.mu.Lock()
+		c.sites[key] = lookup{id: id, err: err, at: c.now()}
+		c.mu.Unlock()
+		return id, err
+	})
+	select {
+	case res := <-flight:
+		if res.Err != nil {
+			return "", res.Err
+		}
+		return res.Val.(string), nil
+	case <-ctx.Done():
+		return "", &TenantInfoError{URL: key, Cause: "no answer before the request ended"}
+	}
+}
+
+// read asks address once and validates the answer.
+func (c *CloudIDs) read(ctx context.Context, address string) (string, error) {
+	fail := func(cause string) error { return &TenantInfoError{URL: address, Cause: cause} }
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return "", fail(err.Error())
+	}
+	req.Header.Set("Accept", "application/json")
+	res, err := c.client.Do(req)
+	if err != nil {
+		var timeout interface{ Timeout() bool }
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			return "", fail(fmt.Sprintf("no answer within %s", TenantInfoTimeout))
+		}
+		var request *url.Error
+		if errors.As(err, &request) {
+			err = request.Err
+		}
+		return "", fail("unreachable: " + err.Error())
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		return "", fail(fmt.Sprintf("HTTP %d", res.StatusCode))
+	}
+	body, err := io.ReadAll(io.LimitReader(res.Body, TenantInfoMaxBytes+1))
+	if err != nil {
+		return "", fail("the answer could not be read: " + err.Error())
+	}
+	if len(body) > TenantInfoMaxBytes {
+		return "", fail(fmt.Sprintf("the answer is over %d bytes", TenantInfoMaxBytes))
+	}
+	var answer struct {
+		CloudID *string `json:"cloudId"`
+	}
+	if err := json.Unmarshal(body, &answer); err != nil {
+		return "", fail("the answer is not a JSON object")
+	}
+	if answer.CloudID == nil || strings.TrimSpace(*answer.CloudID) == "" {
+		return "", fail("the answer names no cloudId")
+	}
+	id := strings.ToLower(strings.TrimSpace(*answer.CloudID))
+	if !cloudIDShape.MatchString(id) {
+		return "", fail("the answer's cloudId is not a cloud id")
+	}
+	return id, nil
+}
+
+// tenantInfoURL is site's lookup address: its scheme and host, whatever path
+// the configured url carries (a Confluence site's /wiki).
+func tenantInfoURL(site string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(site))
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return "", &TenantInfoError{URL: site + tenantInfoPath, Cause: "the url is not an http(s) site address"}
+	}
+	return u.Scheme + "://" + strings.ToLower(u.Host) + tenantInfoPath, nil
+}
