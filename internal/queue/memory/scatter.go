@@ -209,7 +209,7 @@ func (q *Queue) AskEach(ctx context.Context, subject string, request []byte, eac
 			// node's answer budget given back ([queue.Replying]).
 			answers <- reply
 			replied()
-		})
+		}, wg.Done) // DROPPED BY A WITHDRAWAL: the scatter stops waiting on it
 		if err != nil {
 			wg.Done()
 			queue.LogDropped(log, subject, err)

@@ -96,7 +96,7 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 					"detail", "the asker's reply mailbox is gone, which is what "+
 						"a deadline that passed looks like from here")
 			}
-		})
+		}, nil) // a request dropped by the withdrawal holds nothing here
 		queue.LogDropped(q.log, subject, err)
 	})
 	if err != nil {

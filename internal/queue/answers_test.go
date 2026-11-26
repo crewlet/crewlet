@@ -136,14 +136,14 @@ func TestARequestPastTheSlotsWaitsInArrivalOrderAndKeepsItsArrival(t *testing.T)
 		release := make(chan struct{})
 		got := make(chan string, 3)
 		begun := time.Now()
-		if err := g.Offer(time.Now(), 1, func(time.Time) { <-release }); err != nil {
+		if err := g.Offer(time.Now(), 1, func(time.Time) { <-release }, nil); err != nil {
 			t.Fatalf("an empty gate refused a request: %v", err)
 		}
 		for _, name := range []string{"second", "third"} {
 			at := time.Now()
 			if err := g.Offer(at, 1, func(arrived time.Time) {
 				got <- fmt.Sprintf("%s arrived %v in", name, arrived.Sub(begun))
-			}); err != nil {
+			}, nil); err != nil {
 				t.Fatalf("a full gate refused %s: %v", name, err)
 			}
 			time.Sleep(5 * time.Second)
@@ -177,7 +177,7 @@ func TestAGateDropsPastWhatItHoldsWaitingInCountOrBytes(t *testing.T) {
 		}
 		release := make(chan struct{})
 		hold := func(time.Time) { <-release }
-		offer := func(size int) error { return g.Offer(time.Now(), size, hold) }
+		offer := func(size int) error { return g.Offer(time.Now(), size, hold, nil) }
 		if err := offer(1); err != nil {
 			t.Fatalf("an empty gate refused a request: %v", err)
 		}
@@ -216,8 +216,8 @@ func TestAGateDropsPastWhatItHoldsWaitingInCountOrBytes(t *testing.T) {
 // have left. Every Serve withdrawal rests on it, or a request queued before an
 // Unsubscribe would be answered after it.
 //
-// Mutation: hand the slot on in Leave without checking the gate is shut, and
-// the held request runs, red.
+// Mutations: hand the slot on in Leave without checking the gate is shut, and
+// the held request runs; drop it without telling its caller, red.
 func TestAWithdrawalAnswersNothingItHeldWaiting(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		g, err := queue.NewServeGate(1, 4, 1<<20)
@@ -225,16 +225,19 @@ func TestAWithdrawalAnswersNothingItHeldWaiting(t *testing.T) {
 			t.Fatalf("NewServeGate: %v", err)
 		}
 		release := make(chan struct{})
-		var ran atomic.Int32
-		if err := g.Offer(time.Now(), 1, func(time.Time) { ran.Add(1); <-release }); err != nil {
+		var ran, dropped atomic.Int32
+		if err := g.Offer(time.Now(), 1, func(time.Time) { ran.Add(1); <-release }, nil); err != nil {
 			t.Fatalf("an empty gate refused a request: %v", err)
 		}
-		if err := g.Offer(time.Now(), 1, func(time.Time) { ran.Add(1) }); err != nil {
+		if err := g.Offer(time.Now(), 1, func(time.Time) { ran.Add(1) }, func() { dropped.Add(1) }); err != nil {
 			t.Fatalf("a full gate refused a request: %v", err)
 		}
 		synctest.Wait()
 		g.Shut()
-		if err := g.Offer(time.Now(), 1, func(time.Time) { ran.Add(1) }); !errors.Is(err, queue.ErrGateClosed) {
+		if n := dropped.Load(); n != 1 {
+			t.Fatalf("the shut told %d dropped requests, want the one it held waiting", n)
+		}
+		if err := g.Offer(time.Now(), 1, func(time.Time) { ran.Add(1) }, nil); !errors.Is(err, queue.ErrGateClosed) {
 			t.Fatalf("an offer to a shut gate = %v, want %v", err, queue.ErrGateClosed)
 		}
 		close(release)
@@ -273,7 +276,7 @@ func TestASlotFreedIsNeverLostToARequestQueuedBesideIt(t *testing.T) {
 			var wg sync.WaitGroup
 			for range offers {
 				wg.Go(func() {
-					if err := g.Offer(time.Now(), 1, func(time.Time) { ran.Add(1) }); err != nil {
+					if err := g.Offer(time.Now(), 1, func(time.Time) { ran.Add(1) }, nil); err != nil {
 						t.Errorf("a gate refused a request within its bound: %v", err)
 					}
 				})

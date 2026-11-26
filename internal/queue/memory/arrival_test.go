@@ -51,3 +51,51 @@ func TestARequestHeldForASlotIsCountedFromItsArrival(t *testing.T) {
 		}
 	})
 }
+
+// AN ASK ACROSS A WITHDRAWAL RETURNS, with no deadline of its own: the request
+// the withdrawal drops from its registration's queue never runs, and the twin
+// stops waiting on it rather than leaking the collection and the ask with it.
+// In a bubble, so "returned" is read once everything has settled.
+//
+// Mutation: drop the queued request without telling the scatter, and the ask
+// never returns, red.
+func TestAnAskAcrossAWithdrawalReturns(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		q := memory.NewBroker().Client()
+		if err := q.Start(t.Context()); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		t.Cleanup(func() { _ = q.Stop(context.Background()) })
+		release := make(chan struct{})
+		stop, err := q.Serve(t.Context(), "held", 1, func(_ context.Context, req []byte) ([]byte, error) {
+			if string(req) == "first" {
+				<-release
+			}
+			return req, nil
+		})
+		if err != nil {
+			t.Fatalf("serve: %v", err)
+		}
+		go func() { _, _ = q.Ask(t.Context(), "held", []byte("first"), 1) }()
+		synctest.Wait()
+		returned := make(chan struct{})
+		go func() {
+			defer close(returned)
+			_, _ = q.Ask(context.Background(), "held", []byte("second"), 1)
+		}()
+		synctest.Wait()
+		stopped := make(chan error, 1)
+		go func() { stopped <- stop(context.Background()) }()
+		synctest.Wait()
+		close(release)
+		if err := <-stopped; err != nil {
+			t.Fatalf("stop serving: %v", err)
+		}
+		synctest.Wait()
+		select {
+		case <-returned:
+		default:
+			t.Fatal("an ask with no deadline, whose request a withdrawal dropped, never returned")
+		}
+	})
+}
