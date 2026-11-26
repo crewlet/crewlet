@@ -431,3 +431,102 @@ type unlistedNodes struct{ coord.Backend }
 func (unlistedNodes) ListLive(context.Context, coord.Class) ([]coord.Lease, error) {
 	return nil, errors.New("the store did not answer")
 }
+
+// A TAKE KEEPS THE KEPT BOUND ONLY ONCE EVERY STAMP READER SAYS IT, read in the
+// media gate's one pass and only beside media apart: every node that may
+// settle a run's row, live on its presence or offline on its record, at
+// sandbox.KeptStampVersion. A node at the media's version and not the kept
+// bound's keeps media apart at the text bound, naming the first such node; a
+// node below media, or readers unread, keep neither.
+//
+// Mutation: read the kept bound at the media's version, answer it without
+// media apart, read only live nodes, or name a node out of order.
+func TestATakeKeepsTheKeptBoundOnlyOnceEveryStampReaderSaysIt(t *testing.T) {
+	t.Parallel()
+	media, kept := executordomain.MediaCaptureVersion, sandbox.KeptStampVersion
+	data, seats := placement.Roles(placement.RoleData, placement.RoleSeats), placement.Roles(placement.RoleSeats)
+	self := mediaRow("data-a", media)
+	type presence struct {
+		node    string
+		roles   placement.RoleSet
+		version int
+	}
+	for name, tc := range map[string]struct {
+		live        []presence
+		stamps      map[string]int
+		rows        []coord.NodePositions
+		apart, keep bool
+		below       string
+	}{
+		"every stamp reader at the kept bound": {live: []presence{{"data-a", data, kept}, {"seats-c", seats, kept}},
+			stamps: map[string]int{"seats-x": kept}, apart: true, keep: true},
+		"a live node at the media's version": {live: []presence{{"data-a", data, kept}, {"seats-d", seats, 1},
+			{"seats-c", seats, 1}}, apart: true, below: "seats-c"},
+		"an offline node recorded at the media's version": {live: []presence{{"data-a", data, kept}},
+			stamps: map[string]int{"seats-x": 1}, apart: true, below: "seats-x"},
+		"a node below media": {live: []presence{{"data-a", data, kept}, {"seats-c", seats, 0}}},
+		"readers unread":     {live: []presence{{"data-a", data, kept}, {"data-b", data, kept}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fleet, leases := &rosterFleet{memoryFleet: coordmemory.NewFleet()}, coordmemory.New()
+			if err := fleet.PutPositions(t.Context(), self); err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range tc.live {
+				sayStamp(t, leases, p.node, p.roles, p.version)
+			}
+			read := mediaFleet{rosterFleet: fleet}
+			for node, version := range tc.stamps {
+				read.stamps = append(read.stamps, coord.CaptureStampRecord{NodeID: node, CaptureStampVersion: version,
+					StoredAt: time.Now().UTC()})
+			}
+			e := mediaNode(t, fleet, leases)
+			e.backends.Fleet = read
+			got := mediaPolicy(t, e)
+			switch {
+			case got.MediaApart != tc.apart || got.KeptBound != tc.keep:
+				t.Errorf("media apart %v and the kept bound %v, want %v and %v (%+v)", got.MediaApart,
+					got.KeptBound, tc.apart, tc.keep, got)
+			case tc.below != "" && !strings.HasPrefix(got.KeptBelow, "node "+tc.below+" says capture stamp version 1,"):
+				t.Errorf("the node below the kept bound reads %q, want it to name %s", got.KeptBelow, tc.below)
+			case tc.below == "" && got.KeptBelow != "":
+				t.Errorf("the kept bound names %q, want no node below it", got.KeptBelow)
+			}
+		})
+	}
+}
+
+// A NODE BELOW THE KEPT BOUND IS LOGGED ONCE NAMING IT: takes held to the text
+// bound by a stamp reader at the media's version are logged once each time the
+// sentence changes, so an operator reads which node to upgrade or retire.
+//
+// Mutation: log every answer, or share the media line's memory, and it goes
+// red.
+func TestANodeBelowTheKeptBoundIsLoggedOnceNamingIt(t *testing.T) {
+	logs := captureLogs(t)
+	fleet, leases := &rosterFleet{memoryFleet: coordmemory.NewFleet()}, coordmemory.New()
+	if err := fleet.PutPositions(t.Context(), mediaRow("data-a", executordomain.MediaCaptureVersion)); err != nil {
+		t.Fatal(err)
+	}
+	sayStamp(t, leases, "seats-c", placement.Roles(placement.RoleSeats), sandbox.MediaStampVersion)
+	e := mediaNode(t, fleet, leases)
+	for range 2 {
+		if got := mediaPolicy(t, e); !got.MediaApart || got.KeptBound || !strings.HasPrefix(got.KeptBelow,
+			"node seats-c ") {
+			t.Errorf("the policy reads %+v, want media apart at the text bound, seats-c named below it", got)
+		}
+	}
+	var lines []map[string]any
+	for _, record := range logs.records(t) {
+		if record["msg"] == "executor_session_kept_at_text_bound" {
+			lines = append(lines, record)
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("logged %d lines for two takes held to the text bound by one node, want one", len(lines))
+	}
+	if why, _ := lines[0]["why"].(string); !strings.Contains(why, "seats-c") {
+		t.Errorf("the line says %q, want it to name seats-c", why)
+	}
+}

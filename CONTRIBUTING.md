@@ -1952,8 +1952,10 @@ older build:
   - a bump of the seat-host lease protocol makes the newer node refuse to claim
     beside a live lower lease;
   - every node durably records the capture stamp version it asks a run's
-    capture again with, and a take keeps media apart only once every live and
-    recorded node says it;
+    capture again with, and a take keeps media apart, or a session at the kept
+    bound, only once every live and recorded node says that version; while a
+    reader says N-1, a v(N-1) reader's take, takeover and standby figures bound
+    every gated vN figure;
   - a run's capture stamp holding keys this build cannot ask its record again
     with is settled off the turn's row on the executor log, never asked short
     nor refused unasked.

@@ -275,23 +275,23 @@ type ConversationSession struct {
 // The per-seat session budget's default and bounds.
 const (
 	// DefaultSessionBytesPerSeat is what an unset max_bytes_per_seat takes:
-	// SIXTY-FOUR MEBIBYTES. A captured session compresses to one or two MiB for
-	// a day's work and is bounded at forty-eight (executorkeep.SessionMaxBytes),
+	// SIXTY-FOUR MEBIBYTES. A session compresses to one or two MiB for a day's
+	// work and its text is bounded at forty-eight (executorkeep.SessionMaxBytes),
 	// so 64 MiB holds a live turn's session at that bound beside about ten
-	// ordinary ones, or thirty to forty ordinary sessions alone. (A live turn's
-	// capped session never needs the head it continued beside it: its own
-	// capture holds that transcript.) It is shared with every other object: on
-	// the default nats backend the bucket is a quarter of the broker's limit,
-	// about 2.6 GiB at the smallest data volume crewlet-operator admits. A seat
-	// at its budget holds up to twice it while its superseded saves wait for the
-	// collector: five seats take a quarter of the bucket, and twenty or more
-	// belong on S3 (store.objects.backend).
+	// ordinary ones, or thirty to forty alone; a capture at the kept bound (94 MiB
+	// in all) is kept only within the seat's budget. A live turn's capped session
+	// never needs the head it continued: its capture holds that transcript. The
+	// budget shares the bucket with every other object, on the default nats
+	// backend a quarter of the broker's limit, about 2.6 GiB at the smallest data
+	// volume crewlet-operator admits; a seat at it holds up to twice it while its
+	// superseded saves wait for the collector: five seats take a quarter of the
+	// bucket, and twenty or more belong on S3 (store.objects.backend).
 	DefaultSessionBytesPerSeat int64 = 64 << 20
 
-	// SessionBytesPerSeatFloor is the least a seat may be given: ONE
+	// SessionBytesPerSeatFloor is the least a seat may be given: ONE TEXT
 	// SESSION AT ITS BOUND, sealed (executorkeep.SealedMaxBytes, a little
-	// over 48 MiB), rounded up to a whole mebibyte, so a capture the
-	// session bound admits is never one the budget refuses outright. A test
+	// over 48 MiB), rounded up to a whole mebibyte, so a capture at the text
+	// bound is never one the budget refuses outright. A test
 	// in internal/executordomain holds the two together, since this package
 	// cannot import that one.
 	SessionBytesPerSeatFloor int64 = 49 << 20

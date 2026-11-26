@@ -823,13 +823,13 @@ type Coordinator struct {
 	captureTick  time.Duration
 	// restore is [CoordinatorOptions.Restore]; relaunchWait bounds a
 	// relaunch's asks ([relaunchAskWait]), and captureRest how long it waits
-	// for a capture of an archive of a size, cutting media objects apart, still
-	// being kept ([captureRestFor]); holdingsWait bounds reading what a cut-off session
+	// for a capture of an archive of a size, cutting media objects apart, at its
+	// bound, still being kept ([captureRestFor]); holdingsWait bounds reading what a cut-off session
 	// holds ([holdingsReadWait]).
 	restore      SessionRestore
 	holders      SessionHolders // [CoordinatorOptions.Holders]
 	relaunchWait time.Duration
-	captureRest  func(archive int64, media int) time.Duration
+	captureRest  func(archive int64, media int, bound captureBound) time.Duration
 	holdingsWait time.Duration
 	// endWait is how long a read waits for a job its script was asked to end
 	// ([JobEndWait]); endPoll how often it asks ([jobEndPoll]).

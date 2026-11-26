@@ -556,8 +556,9 @@ test("a turn whose newest session was not kept says why", () => {
 // Mutation: drop the note's line, or reword it, and the sentence is not found.
 test("a turn whose runs did not continue a session says so in the engine's words", () => {
   const said =
-    "The run did not continue turn 4f1a's session: its session was larger than the 48 MiB kept " +
-    "for one session. It continued turn 9d8e's older session instead, which ends before that work.";
+    "The run did not continue turn 4f1a's session: its session was larger than one is kept at: " +
+    "94 MiB in all, at most 48 MiB of it text. It continued turn 9d8e's older session instead, " +
+    "which ends before that work.";
   render(
     <Router>
       <SessionAccount row={session({ not_continued_note: said })} />

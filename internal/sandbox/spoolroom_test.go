@@ -48,7 +48,7 @@ func finalTake(t *testing.T, rig *coordRig, run PendingRun, runner Runner) (*spo
 // mebibyte, and the final waits out its minute and keeps nothing.
 func TestASaveLeavesRoomForOneFinalSessionAtTheBound(t *testing.T) {
 	t.Parallel()
-	if counted := countedFor(executorkeep.SessionMaxBytes); counted != executorkeep.SealedMaxBytes {
+	if counted := countedFor(executorkeep.SessionMaxBytes, atTextBound); counted != executorkeep.SealedMaxBytes {
 		t.Fatalf("a session at its bound is counted at %d, want the sealed bound %d", counted,
 			executorkeep.SealedMaxBytes)
 	}
@@ -84,16 +84,13 @@ func TestASaveLeavesRoomForOneFinalSessionAtTheBound(t *testing.T) {
 	})
 }
 
-// A TAKE'S SCRUB SPOOLS IN WHAT ITS SEALED SPOOL LEAVES OF ITS ROOM: a final
-// take holds a take's room and names its scrub's spool, in its process's own
-// spool directory, the part of it past a sealed session at the bound, which
-// the seal of a session at the bound keeps whole; and once the take is done
-// its scrub's part is back, the room holding the sealed spool alone.
+// A TAKE'S SPOOLS SHARE ONE ROOM: a final take holds a take's room and names
+// its scrub's spool, in its process's own spool directory, taking from that
+// room, and once the take is done the room holds the sealed spool alone.
 //
-// Mutation: split the scrub's part off first, give it the take's whole room,
-// leave the spool's members out of the room, or keep it past the take, and the
-// part, the seal or the room goes red.
-func TestATakesScrubSpoolsInWhatItsSealedSpoolLeaves(t *testing.T) {
+// Mutation: keep the scrub's part past the take, or name another directory,
+// and a check goes red.
+func TestATakesSpoolsShareOneRoom(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, _, keep := keepingRig(t)
@@ -112,18 +109,76 @@ func TestATakesScrubSpoolsInWhatItsSealedSpoolLeaves(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := takeRoomBytes - executorkeep.SealedMaxBytes; spool.Bytes != want || spool.Dir != dir {
-			t.Errorf("the take named its scrub %d bytes in %s, want %d in the process's own %s", spool.Bytes,
-				spool.Dir, want, dir)
-		}
-		if least := executorkeep.GzipMostBytes(executorkeep.SealedMaxBytes) +
-			executorkeep.SpoolMembersMostBytes; spool.Bytes < least {
-			t.Errorf("the take named its scrub %d bytes, short of the %d a kept session at the bound comes to "+
-				"as gzip writes it, with every member", spool.Bytes, least)
+		if spool.Dir != dir || spool.Take == nil || spool.Give == nil || spool.Spooled == nil {
+			t.Errorf("the take named its scrub a spool in %s, want one taking from its room in the "+
+				"process's own %s", spool.Dir, dir)
 		}
 		if used := roomInUse(rig.coordinator); used != spooled.spool.Size {
 			t.Errorf("once the take is done the room holds %d bytes, want its sealed spool's %d", used,
 				spooled.spool.Size)
+		}
+		close(keep.gate)
+		rig.coordinator.keepLater(t.Context(), spooled)
+		rig.awaitKeeps()
+	})
+}
+
+// A SESSION AT ITS KEPT BOUND FITS ONE TAKE'S ROOM, DRAINED: its scrub's
+// spool at its most, one file of it read and not yet removed, and what the
+// seals and gzip add past the bound, all within a take's room; a bound a
+// mebibyte higher would leave under a tenth of a mebibyte. And a take whose
+// scrub drains as a real one does (each file given back as its body is read
+// past it) seals beside it never holding more than its spool and one file,
+// keeps its session, and leaves the room holding its sealed spool alone: what
+// the drain gives back is the take's, never the node's room's.
+//
+// Mutation: keep the scrub's files until its end, or give a file back to the
+// node's room, and the peak or the room's counts go red.
+func TestASessionAtItsKeptBoundFitsOneTakesRoom(t *testing.T) {
+	t.Parallel()
+	if drainPeakBytes > takeRoomBytes {
+		t.Errorf("a take at the kept bound peaks at %d bytes, past a take's room of %d", drainPeakBytes,
+			takeRoomBytes)
+	}
+	if above := drainPeakFor(executorkeep.SessionKeptMaxBytes + 1<<20); above > takeRoomBytes ||
+		takeRoomBytes-above >= 100<<10 {
+		t.Errorf("a bound a mebibyte higher peaks at %d bytes against a take's room of %d, want it within "+
+			"and under a tenth of a mebibyte to spare, so the bound is the most the room holds", above,
+			takeRoomBytes)
+	}
+	inBubble(t, func(t *testing.T) {
+		meter := &spoolMeterSpy{}
+		rig, _, keep := keepingRigWith(t, func(o *CoordinatorOptions) { o.Spools = meter })
+		run := rig.launchKept(t, "t1")
+		keep.gate = make(chan struct{})
+		body := bytes.Repeat([]byte("s"), 8<<20+12345)
+		rig.runner.mu.Lock()
+		rig.runner.Session.Body, rig.runner.Session.Drains = body, true
+		rig.runner.Session.Archive.Size = int64(len(body))
+		rig.runner.mu.Unlock()
+		spooled, kept := finalTake(t, rig, run, rig.runner)
+		if spooled == nil || kept == nil || kept.NotKept != "" {
+			t.Fatalf("a draining take came to %+v, want it spooled", kept)
+		}
+		spooled.hold.mu.Lock()
+		peak := spooled.hold.peak
+		spooled.hold.mu.Unlock()
+		if most := int64(len(body)) + executorkeep.SpoolSegmentBytes; peak > most {
+			t.Errorf("the take's spools held %d bytes at once, past its scrub's %d and one file (%d)", peak,
+				len(body), most)
+		}
+		if used := roomInUse(rig.coordinator); used != spooled.spool.Size {
+			t.Errorf("once the take is done the room holds %d bytes, want its sealed spool's %d", used,
+				spooled.spool.Size)
+		}
+		// THE ROOM MOVES THREE TIMES, from nothing: the take's room, its
+		// shrink once the spool and the archive are known, its sealed size.
+		meter.mu.Lock()
+		helds := slices.Clone(meter.helds)
+		meter.mu.Unlock()
+		if len(helds) != 4 || helds[1] != takeRoomBytes || helds[3] != spooled.spool.Size {
+			t.Errorf("the room was told %v, want nothing, a take's room, its settled hold and its sealed "+
+				"spool: a file the drain gave back moved the node's room", helds)
 		}
 		close(keep.gate)
 		rig.coordinator.keepLater(t.Context(), spooled)
@@ -282,7 +337,7 @@ func TestEverySpoolGivesItsRoomBackWithItsFile(t *testing.T) {
 			rig.launchKept(t, "t1")
 			archive := rig.runner.Session.Archive
 			archive.Size = 1
-			counted := countedFor(archive.Size)
+			counted := countedFor(archive.Size, atTextBound)
 			rig.runner.mu.Lock()
 			rig.runner.Session = &FakeSession{Archive: archive, Body: bytes.Repeat([]byte("s"), int(2*counted))}
 			rig.runner.mu.Unlock()
@@ -308,7 +363,7 @@ func TestEverySpoolGivesItsRoomBackWithItsFile(t *testing.T) {
 			run := rig.launchKept(t, "t1")
 			stampedBegun(t, rig, run)
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("the read beside node-a's capture spooled %+v, want it standing by", standby)
 			}
 			rig.now = rig.now.Add(SessionCaptureBudget)
@@ -325,7 +380,7 @@ func TestEverySpoolGivesItsRoomBackWithItsFile(t *testing.T) {
 			run := rig.launchKept(t, "t1")
 			stampedBegun(t, rig, run)
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("the read beside node-a's capture spooled %+v, want it standing by", standby)
 			}
 			rig.coordinator.Stop()
@@ -366,7 +421,7 @@ func TestAFinalTakeWaitsForRoomBeforeItHoldsWhatASaveWaitsFor(t *testing.T) {
 		full := rig.coordinator.trySpoolRoom(spoolRoomBytes)
 		var streamingHeld int64
 		rig.runner.mu.Lock()
-		counted := countedFor(rig.runner.Session.Archive.Size)
+		counted := countedFor(rig.runner.Session.Archive.Size, atTextBound)
 		rig.runner.Session.Streaming = func(context.Context) { streamingHeld = roomInUse(rig.coordinator) }
 		rig.runner.mu.Unlock()
 		var spooled *spooledCapture
@@ -408,6 +463,8 @@ type spoolMeterSpy struct {
 	waits    map[SpoolOutcome][]time.Duration
 	held     int64
 	heldTold bool
+	// helds is every count the spy was told, in order.
+	helds []int64
 }
 
 func (m *spoolMeterSpy) SpoolWaited(outcome SpoolOutcome, waited time.Duration) {
@@ -423,6 +480,7 @@ func (m *spoolMeterSpy) SpoolHeld(bytes int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.held, m.heldTold = bytes, true
+	m.helds = append(m.helds, bytes)
 }
 
 // waited is the waits the spy was told ended with outcome.

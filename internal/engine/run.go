@@ -466,6 +466,11 @@ type Engine struct {
 	// ([Engine.executorMediaRead]).
 	mediaInline atomic.Pointer[string]
 
+	// keptAtText is why takes last kept sessions at the text bound, a stamp
+	// reader below the kept bound's version, logged once each time it changes
+	// ([Engine.executorMediaRead]).
+	keptAtText atomic.Pointer[string]
+
 	// drainOnce makes the drain one operation however many callers ask:
 	// [Engine.Stop] drains for a caller that did not, and a second run would
 	// announce a second stop.

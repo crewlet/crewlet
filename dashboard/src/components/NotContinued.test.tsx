@@ -23,8 +23,8 @@ test("a session not continued is said in the engine's sentence, its detail behin
   );
   expect(
     screen.getByText(
-      "The run did not continue its session: its session was larger than the 48 MiB kept for one " +
-        "session. It started a fresh session.",
+      "The run did not continue its session: its session was larger than one is kept at: 94 MiB in " +
+        "all, at most 48 MiB of it text. It started a fresh session.",
     ),
   ).toBeDefined();
   expect(screen.getByText(/an older capture of its turn \(launch 1, capture 2\)/)).toBeDefined();

@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -1222,7 +1221,7 @@ func takeWithin(ctx context.Context, archive []byte) (sandbox.TakenSession, erro
 	box.Put(p.SessionRecord(), "id "+ctSession+"\ncontinued no\nrelease 2.1.322 (Claude Code)\n")
 	box.Put(p.SessionCapture(), string(archive))
 	return NewClaudeCode().TakeSession(ctx, box, sandbox.SessionTake{MaxBytes: 32 << 20,
-		Spool: sandbox.SessionSpool{Dir: os.TempDir(), Bytes: math.MaxInt64, Held: func(int64) {}}})
+		Spool: unboundSpool(os.TempDir())})
 }
 
 // countedWriter counts what is written to it.
