@@ -226,17 +226,53 @@ func TestAURLNamedSiteBindsThroughItsCloudID(t *testing.T) {
 	}
 }
 
+// A SITE IS LOOKED UP ONLY FOR A VERIFIED TOKEN, so nobody unauthenticated
+// can make this node ask a site. Mutation: look up before verifying and the
+// count goes to 1.
+func TestNoSiteIsLookedUpBeforeTheTokenVerifies(t *testing.T) {
+	t.Parallel()
+	sites := &siteIDs{ids: map[string]string{"https://acme.atlassian.net": ownSite}}
+	e := newEdge(t, func(o *webhooks.Options) { o.CloudIDs = sites })
+	e.secrets.ForgeSites = nil
+	e.secrets.ForgeLookups = map[string]string{"jira": "https://acme.atlassian.net"}
+	claims := forgeClaimsFor(ownSite)
+	claims["aud"] = "someone-elses-app"
+	if got := postForge(t, e, forgeJiraEvent, claims).Code; got != http.StatusUnauthorized {
+		t.Fatalf("got %d, want 401", got)
+	}
+	if sites.asks != 0 {
+		t.Errorf("the site was asked %d times for a token that did not verify", sites.asks)
+	}
+}
+
+// AN EVENT OF NEITHER PRODUCT FROM A HELD SITE IS HELD: with Confluence bound
+// and Jira's lookup failing, a token naming another site may be Jira's, so it
+// answers the hold's 503 rather than a mismatch. Mutation: answer the
+// mismatch and this gets 401.
+func TestAnEventOfNeitherProductFromAHeldSiteIsHeld(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t, func(o *webhooks.Options) { o.CloudIDs = &siteIDs{} })
+	e.secrets.ForgeSites = map[string]string{"confluence": ownSite}
+	e.secrets.ForgeLookups = map[string]string{"jira": "https://down.atlassian.net"}
+	body := []byte(`{"eventType":"avi:forge:other"}`)
+	if got := postForge(t, e, body, forgeClaimsFor(otherSite)).Code; got != http.StatusServiceUnavailable {
+		t.Errorf("got %d, want 503 for the held product", got)
+	}
+}
+
 // siteIDs answers a site's cloud id from a table and fails for any other
 // site, as an unreachable one would; Known is its last answer.
 type siteIDs struct {
 	mu   sync.Mutex
 	ids  map[string]string
 	last map[string]error
+	asks int
 }
 
 func (s *siteIDs) Resolve(_ context.Context, site string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.asks++
 	if s.last == nil {
 		s.last = map[string]error{}
 	}

@@ -119,7 +119,13 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 			forgeHeld(w, event, source, held)
 			return
 		}
-		err = bindSite(claims, ids)
+		// An event of neither product may come from a held product's
+		// site, whose id this node cannot bind: that is the hold, not a
+		// mismatch, so it answers the hold's 503 like that product's own.
+		if err = bindSite(claims, ids); err != nil && len(held) > 0 {
+			forgeHeld(w, event, source, held)
+			return
+		}
 	}
 	if err != nil {
 		// The REASON reaches the log, never the caller: it distinguishes
