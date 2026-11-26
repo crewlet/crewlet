@@ -3370,17 +3370,21 @@ func (c *Coordinator) recordCapture(ctx context.Context, run PendingRun, stamp S
 // be or names none: asked again before its record, since a node below the
 // version that joined after the take would retain it or ask it again short.
 // ONLY A DEFINITE ANSWER REFUSES (a counted node below): an unknown one (the
-// room ran out, the store unread) is no evidence of such a joiner, whose
-// applier defers the record anyway, and refusing it would throw away media
-// already uploaded on a merely slow store; it goes on, on the take's answer.
+// room ran out, the store or the policy unread, or a policy keeping nothing
+// now, which asks no reader) is no evidence of such a joiner, whose applier
+// defers the record anyway, and refusing it would throw away media already
+// uploaded; it goes on, on the take's answer.
 func (c *Coordinator) mediaUnread(ctx context.Context, stamp SessionCapture) string {
 	if len(stamp.Media) == 0 {
 		return ""
 	}
 	policy, err := c.keep.Policy(ctx)
 	unknown := policy.MediaUnread
-	if err != nil {
+	switch {
+	case err != nil:
 		unknown = err.Error()
+	case !policy.Keep:
+		unknown = "the policy keeps no session now, so who reads a capture naming media was not asked"
 	}
 	switch {
 	case unknown != "":

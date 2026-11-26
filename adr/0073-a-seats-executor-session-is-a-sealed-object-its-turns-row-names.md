@@ -6598,8 +6598,11 @@ may settle a run's row says `sandbox.CaptureStampVersion` (a live node on its
 presence, one the log counts while offline on its last position row); until
 then, and whenever these cannot be read within `sandbox.MediaReadersRoom` (30
 s, counted in `BoxReadBudget`), every capture keeps them inline, unchanged. A
-node below the version that joins later defers such a capture on its applier,
-never drops it. An older asker's `BoxReadBudget` holds no room for that read,
+keep asks again before its record, and only a definite answer refuses: a node
+below that joined since the take refuses the capture, while an answer it
+cannot get is no evidence of one, and the capture lands on its take's answer
+rather than lose media already uploaded. A node below the version that joins
+later, after the record, defers such a capture on its applier, never drops it. An older asker's `BoxReadBudget` holds no room for that read,
 so a newer host's read spends up to 30 s of the asker's wait before its take.
 
 ## Amendment: a kept session is what its harness's resume loads

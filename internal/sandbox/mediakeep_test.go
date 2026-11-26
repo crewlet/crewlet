@@ -499,19 +499,24 @@ func TestACarryTheLogFindsGoneIsRecordedAgainFresh(t *testing.T) {
 // or ask it again short, and a take is not made again; so the policy is read
 // again before the record's first send, and a definite answer below refuses the
 // capture, saying why, with nothing sent. An unknown answer (the readers not
-// read in their room) is no evidence of such a node, and the capture lands on
-// its take's answer rather than lose media already uploaded.
+// read in their room, the policy unread or keeping nothing now) is no evidence
+// of such a node, and the capture lands on its take's answer rather than lose
+// media already uploaded.
 //
-// Mutation: read the policy at the take alone, or refuse an unknown answer,
-// and a case goes red.
+// Mutation: read the policy at the take alone, or refuse an unknown answer of
+// any kind, and a case goes red.
 func TestAMediaRecordIsRefusedOnceAReaderFallsBelow(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		unread string
+		err    error
+		off    bool
 		lands  bool
 	}{
-		"a reader below the version":   {},
-		"readers unread in their room": {unread: "the position register could not be read", lands: true},
+		"a reader below the version":      {},
+		"readers unread in their room":    {unread: "the position register could not be read", lands: true},
+		"the policy unread":               {err: errors.New("the activation pointer could not be read"), lands: true},
+		"a policy keeping no session now": {off: true, lands: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -524,6 +529,7 @@ func TestAMediaRecordIsRefusedOnceAReaderFallsBelow(t *testing.T) {
 				}
 				keep.mu.Lock()
 				keep.policy.MediaApart, keep.policy.MediaUnread = false, tc.unread
+				keep.policyErr, keep.policy.Keep = tc.err, !tc.off
 				keep.mu.Unlock()
 				kept := rig.coordinator.keepCapture(t.Context(), spooled)
 				captured := writes.captured()

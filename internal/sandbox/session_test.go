@@ -152,6 +152,8 @@ type sessionKeep struct {
 	// policyHook, when set, runs on every read of the policy before it answers:
 	// a store slow to say who reads a capture naming media.
 	policyHook func(context.Context)
+	// policyErr, when set, fails every read of the policy.
+	policyErr error
 	// now is the rig's clock, which a spool's key is minted on: the
 	// coordinator ages the key against that clock ([objstore.RecordWithin]).
 	now    func() time.Time
@@ -194,7 +196,7 @@ func (k *sessionKeep) Policy(ctx context.Context) (SessionPolicy, error) {
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	return k.policy, nil
+	return k.policy, k.policyErr
 }
 
 func (k *sessionKeep) Keeps() bool {
