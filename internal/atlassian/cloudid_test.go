@@ -211,7 +211,7 @@ func TestAKeptCloudIDIsNeverOverwritten(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := atlassian.FlyForTest(ids, context.Background(), acmeSite)
+		_, err := atlassian.FlyForTest(context.Background(), ids, acmeSite)
 		done <- err
 	}()
 	<-arrived
@@ -225,7 +225,7 @@ func TestAKeptCloudIDIsNeverOverwritten(t *testing.T) {
 	}
 
 	before := rt.calls.Load()
-	if id, err := atlassian.FlyForTest(ids, t.Context(), acmeSite); err != nil || id != siteID {
+	if id, err := atlassian.FlyForTest(t.Context(), ids, acmeSite); err != nil || id != siteID {
 		t.Errorf("a lookup with an id kept = %q, %v; want the kept id", id, err)
 	}
 	if rt.calls.Load() != before {
@@ -314,7 +314,7 @@ func TestTheResolversOwnClientHasTheReadBudget(t *testing.T) {
 		t.Errorf("client timeout = %s, want %s", client.Timeout, atlassian.TenantInfoTimeout)
 	}
 	if client.CheckRedirect == nil ||
-		client.CheckRedirect(&http.Request{}, nil) != http.ErrUseLastResponse {
+		!errors.Is(client.CheckRedirect(&http.Request{}, nil), http.ErrUseLastResponse) {
 		t.Error("the client follows redirects")
 	}
 }
