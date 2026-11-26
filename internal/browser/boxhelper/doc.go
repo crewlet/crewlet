@@ -131,8 +131,9 @@
 // closes its socket and model connections, then the browser through
 // Playwright, so Chromium writes its profile, killing its group past
 // stop_grace_ms (a frozen browser never answers); a TERM as it launches waits
-// for the launch and serves nothing. Killed outright, it takes its browser
-// too: Chromium exits as its pipe closes.
+// for the launch and serves nothing, and one as it begins serving waits for
+// that step, closes what it opened and never says ready. Killed outright, it
+// takes its browser too: Chromium exits as its pipe closes.
 //
 // Before anything loads it installs its own policy: an unhandled rejection is
 // logged and it carries on, since Playwright MCP listens for one only while a

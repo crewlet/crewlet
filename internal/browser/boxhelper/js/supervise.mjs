@@ -140,7 +140,11 @@ export class Supervisor {
     }
     // A stop that came while the browser launched closes it: nothing is served.
     if (this.stopping) return
-    await this.serveBrowser(launch, mcp)
+    this.serving = this.serveBrowser(launch, mcp)
+    await this.serving
+    // A stop that came while it began serving closes what it opened, once
+    // that has settled: never ready.
+    if (this.stopping) return
     await this.setState("ready")
     this.io.report(`ready ${this.current.version}`)
   }
@@ -166,6 +170,7 @@ export class Supervisor {
       onTabs: (job, action, answer) => this.tell("onTabs", job, action, answer),
     })
     for (const a of this.attachments) {
+      if (this.stopping) return
       let hooks
       try {
         hooks = await a.attach(this)
@@ -344,6 +349,7 @@ export class Supervisor {
     this.stopping = true
     void (async () => {
       try {
+        await this.serving?.catch(() => {})
         this.tell("close")
         this.attached = []
         await this.server?.close()

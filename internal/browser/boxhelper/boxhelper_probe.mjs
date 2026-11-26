@@ -76,9 +76,11 @@
 //                                          names its attachments, in order:
 //                                          "record", a stand-in recording each
 //                                          call it is told; "fail", one whose
-//                                          attach throws; and "fail_hooks",
-//                                          one whose every hook throws or
-//                                          rejects
+//                                          attach throws; "fail_hooks", one
+//                                          whose every hook throws or rejects;
+//                                          "stop", one that stops the
+//                                          supervisor as it attaches, its
+//                                          close recorded
 //   {"op":"attached","until":U}            answer once "record" has recorded
 //                                          a call whose fields hold U's values
 //   {"op":"advance","ms":N}                move the clock N ms, every timer due
@@ -346,6 +348,12 @@ const attachments = {
       }
       const rejects = () => Promise.reject(new Error("a hook that rejects"))
       return { onLaunched: throws, onState: rejects, onModel: throws, onTabs: rejects, close: throws }
+    },
+  },
+  stop: {
+    attach(s) {
+      void s.stop()
+      return { close: closed(s) }
     },
   },
 }

@@ -711,6 +711,34 @@ func TestTheSupervisorOpensWhatAttachesBeforeItSaysReadyAndClosesItFirst(t *test
 	})
 }
 
+// A STOP AS THE SUPERVISOR BEGINS SERVING NEVER SAYS READY: a stop that comes
+// while browser.sock opens and what attaches is attached, here from an
+// attachment that stops the supervisor as it attaches, waits for that step to
+// settle, closes every attachment while browser.sock is there, removes the
+// socket and ends stopped, never ready and nothing reported to ensure.
+//
+// Mutations, each red: say ready after a stop that came as it began serving;
+// close before what is attaching has attached.
+func TestAStopAsTheSupervisorBeginsServingNeverSaysReady(t *testing.T) {
+	boxhelpertest.Each(t, func(t *testing.T, env boxhelpertest.Env) {
+		box := boxhelpertest.Start(t, env, boxhelpertest.Options{Route: boxhelpertest.OnPath})
+		probe, _ := supervised(t, box, false, nil, "record", "stop")
+		var got supervisedAnswer
+		probe.Do(map[string]any{"op": "stopped"}, &got)
+		if got.State != "stopped" || len(got.Reports) != 0 || len(got.calls("state")) != 0 {
+			t.Errorf("a supervisor stopped as it began serving answered %s, reported %q and told %+v, want "+
+				"stopped, never ready", got.State, got.Reports, got.Attached)
+		}
+		if closed := got.calls("close"); len(closed) != 2 || !closed[0].Socket || !closed[1].Socket {
+			t.Errorf("a stop as they attached closed %+v, want both attachments, while browser.sock was there",
+				closed)
+		}
+		if _, err := os.Lstat(filepath.Join(box.Folder, "browser.sock")); !os.IsNotExist(err) {
+			t.Errorf("a supervisor stopped as it began serving left browser.sock (%v)", err)
+		}
+	})
+}
+
 // attachedTabs drives a model connection to box's probe's supervisor through
 // browser.sock and holds what its recording attachment is told: the
 // connection's job, and each tab call that moved the current tab, with the
