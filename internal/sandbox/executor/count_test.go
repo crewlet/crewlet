@@ -27,40 +27,10 @@ func countedStream(t *testing.T, h executor.Harness, made int) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// EVERY RUNNER IS COUNTED LIVE OR SAYS WHY NOT: its live count is begun
-// ([executor.Runner.Count]) and checked against its collection below, or it
-// declares that its stream shows its requests only once its harness exits,
-// and why. A runner doing neither fails, so none is left out of the watch
-// unsaid.
-//
-// Mutation: answer no count for a runner that declares nothing, or declare a
-// runner without its reason, and its row fails.
-func TestEveryRunnerIsCountedLiveOrSaysWhyNot(t *testing.T) {
-	t.Parallel()
-	for _, h := range executor.Registered() {
-		counter := executor.New(h).Count(sandbox.RunHandle{TurnCap: 3})
-		declared, says := h.(interface{ CountedAtCollection() string })
-		switch {
-		case counter == nil && !says:
-			t.Errorf("%s answers no live count and declares no reason: count it live, or declare why its "+
-				"stream shows its requests only once it exits", h.Name())
-		case counter != nil && says:
-			t.Errorf("%s declares it is counted at collection alone (%q), yet answers a live count",
-				h.Name(), declared.CountedAtCollection())
-		case says && strings.TrimSpace(declared.CountedAtCollection()) == "":
-			t.Errorf("%s declares it is counted at collection alone and says nothing of why", h.Name())
-		case counter != nil:
-			if _, ok := requestStreams[h.Name()]; !ok {
-				t.Errorf("%s is counted live and has no request stream to hold its count to", h.Name())
-			}
-		}
-	}
-}
-
 // A LIVE COUNT IS ITS COLLECTION'S COUNT, HOWEVER THE STREAM ARRIVES: for
-// every runner counted live, its stream read as it grows (split mid-line, and
-// inside a line past the bound), a read at a time of a few bytes, and after
-// a rewrite that shrank it, ends on exactly the requests, in-flight
+// every runner counted off its stream, the stream read as it grows (split
+// mid-line, and inside a line past the bound), a few bytes a read, and after a
+// rewrite that shrank it, ends on exactly the requests, in-flight
 // allowance and undecided lines [executor.Runner.Collect] counts of the
 // whole; no read's count is ever below the one before; and a read takes only
 // the bytes the stream grew by since the last.
@@ -73,8 +43,8 @@ func TestALiveCountIsItsCollectionsCountHoweverTheStreamArrives(t *testing.T) {
 	t.Parallel()
 	const made = 6
 	for _, h := range executor.Registered() {
-		if executor.New(h).Count(sandbox.RunHandle{}) == nil {
-			continue // TestEveryRunnerIsCountedLiveOrSaysWhyNot judges it
+		if executor.RecordCounted(h) {
+			continue // TestALiveRecordCountIsItsCollectionsCountHoweverTheRecordArrives holds it
 		}
 		t.Run(h.Name(), func(t *testing.T) {
 			t.Parallel()

@@ -572,7 +572,8 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		p.SessionRecord(), p.SessionReport(), p.sessionReportStaging(), p.SessionCapture(),
 		trimMarkOf(p.SessionCapture()), p.SessionCarried(),
 		p.MCPConfig(), p.MCPConfigFresh(),
-		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
+		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next",
+		p.CountRecord(), p.CountRecord() + ".next"}
 	dirs := []string{p.CommitAttribution(), p.SessionStaging()}
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
 	// A home file a killed run left holding its settings, the bridge's token

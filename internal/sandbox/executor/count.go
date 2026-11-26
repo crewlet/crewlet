@@ -16,20 +16,16 @@ import (
 // skipped, and no read holds a slot for longer than one that size takes.
 const countReadBytes = liveBacklog
 
-// collectionCounted is a harness whose stream shows its run's model requests
-// only once the harness has exited, so its runs are counted at their
-// collection alone and never live ([Runner.Count]): CountedAtCollection says
-// why, at the declaration.
-type collectionCounted interface{ CountedAtCollection() string }
-
 // Count implements [sandbox.Runner]: a reading of the job's event stream from
 // its first byte, through a decoder of the harness's own kept for the reading's
 // life and the line handling [Runner.Collect] reads with, so its count is the
-// collection's of the same bytes. Nil for a harness counted at its collection
-// alone ([collectionCounted]), or one with no event stream.
+// collection's of the same bytes; or, for a harness whose stream shows its
+// requests only once it exits, of its own record of the session
+// ([recordCounted]).
 func (r *Runner) Count(sandbox.RunHandle) sandbox.Counter {
-	if _, atEnd := r.harness.(collectionCounted); atEnd {
-		return nil
+	if rc, ok := r.harness.(recordCounted); ok {
+		return &recordCount{harness: rc, bound: r.lineBound, readBytes: countReadBytes,
+			inFlight: r.harness.Events().InFlight()}
 	}
 	return &counter{harness: r.harness, bound: r.lineBound, readBytes: countReadBytes}
 }

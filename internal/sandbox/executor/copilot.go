@@ -67,12 +67,6 @@ func (Copilot) Name() string { return CopilotName }
 // answered whole (measured on 1.0.114).
 func (Copilot) MCPCallCeiling() time.Duration { return 0 }
 
-// CountedAtCollection implements [collectionCounted].
-func (Copilot) CountedAtCollection() string {
-	return "its stream marks no model request: " +
-		"the usage records its count reads are appended by the run's script once Copilot exits"
-}
-
 // Resumes says Copilot continues a session it reported: `--session-id` on an
 // id its home holds resumes it (measured on 1.0.114).
 func (Copilot) Resumes() bool { return true }
@@ -215,6 +209,10 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 		q(paths.SessionRecord()))
 	line(`ev=%s/"$s"/events.jsonl`, q(paths.CopilotHome()+"/"+copilotSessionState))
 	b.WriteString(copilotJournalAtLaunch())
+	// THE JOURNAL AND ITS LINES AS THE RUN BEGINS, for the live count
+	// ([Copilot.liveRecord]).
+	line(`printf '%%s\n%%s\n' "$ev" "$el" > %s.next && mv -f %s.next %s`, q(paths.CountRecord()),
+		q(paths.CountRecord()), q(paths.CountRecord()))
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(copilotUsage())
 	b.WriteString(copilotCapture(paths))

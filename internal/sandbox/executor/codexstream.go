@@ -328,19 +328,32 @@ func (d *codexEvents) keepRollout(line json.RawMessage) {
 func (d *codexEvents) Skipped(line LongLine) {
 	d.sawLine = true
 	d.transcript.skip(line.Size, line.Bound)
-	// A ROLLOUT LINE NAMES ITS KIND AT ITS HEAD; a response's token_count is
-	// numbers alone, so its usage is in one window or the other.
 	switch lineType(line) {
 	case codexRolloutEvent:
-		switch {
-		case !inEither(line, `"token_count"`) && !bytes.Contains(line.Head, []byte(`"payload"`)):
-			d.undecided++
-		case inEither(line, `"token_count"`) && inEither(line, `"last_token_usage":{`):
+		response, undecided := codexRolloutSkipped(line)
+		if response {
 			d.responses++
+		}
+		if undecided {
+			d.undecided++
 		}
 	case "":
 		d.undecided++
 	}
+}
+
+// codexRolloutSkipped is whether a rollout line the script appended
+// ([codexRolloutEvent]), past the bound, is a response, or may be one the count
+// cannot read. A ROLLOUT LINE NAMES ITS KIND AT ITS HEAD; a response's
+// token_count is numbers alone, so its usage is in one window or the other.
+func codexRolloutSkipped(line LongLine) (response, undecided bool) {
+	switch {
+	case !inEither(line, `"token_count"`) && !bytes.Contains(line.Head, []byte(`"payload"`)):
+		return false, true
+	case inEither(line, `"token_count"`) && inEither(line, `"last_token_usage":{`):
+		return true, false
+	}
+	return false, false
 }
 
 // figures is what the run's appended rollout lines say, and false where the

@@ -394,10 +394,26 @@ const CountReadBytes = countReadBytes
 
 // CountingBy is r's live count of a job, each read taking at most readBytes.
 func CountingBy(r *Runner, readBytes int64) sandbox.Counter {
-	c, ok := r.Count(sandbox.RunHandle{}).(*counter)
-	if !ok {
-		return nil
+	switch c := r.Count(sandbox.RunHandle{}).(type) {
+	case *counter:
+		c.readBytes = readBytes
+		return c
+	case *recordCount:
+		c.readBytes = readBytes
+		return c
 	}
-	c.readBytes = readBytes
-	return c
+	return nil
 }
+
+// RecordCounted reports whether h is counted live off its harness's own
+// record of the session rather than its stream.
+func RecordCounted(h Harness) bool {
+	_, ok := h.(recordCounted)
+	return ok
+}
+
+// CodexRolloutKinds is the rollout lines a Codex run's script appends.
+const CodexRolloutKinds = codexRolloutKinds
+
+// MuseTraceNeedle is how a Muse Code run's script picks its traces out.
+const MuseTraceNeedle = museTraceNeedle

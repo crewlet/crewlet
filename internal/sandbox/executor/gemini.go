@@ -43,12 +43,6 @@ func (GeminiCLI) Name() string { return GeminiCLIName }
 // answered whole (measured on 0.70.0).
 func (GeminiCLI) MCPCallCeiling() time.Duration { return 0 }
 
-// CountedAtCollection implements [collectionCounted].
-func (GeminiCLI) CountedAtCollection() string {
-	return "stream-json marks no model request: " +
-		"the session record its count reads is appended by the run's script once Gemini CLI exits"
-}
-
 // resumesOnLaunchRoute: measured on 0.70.0, the one release that continues a
 // carried session ([launchRouted]): created with
 // GOOGLE_GEMINI_BASE_URL at stub A, `--resume` with it at stub B; the resumed
@@ -211,11 +205,30 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 			` "$s" > `+before+`.part 2> /dev/null && mv -f `+before+`.part `+before+`; else : > `+before+`; fi`,
 		`if [ "$k" = yes ]; then set -- --resume "$s"; else set -- --session-id "$s"; fi`,
 		geminiIncludeRoots(paths),
+		// ITS CHAT FILE, named for the live count once Gemini CLI writes it
+		// ([geminiPointer]).
+		geminiPointer(paths),
 		run,
+		`kill "$gwp" 2> /dev/null`,
 		"node "+q(paths.GeminiHelper())+" usage "+q(paths.GeminiChats())+` "$s" `+before,
 		geminiLocate(paths),
 		strings.TrimSuffix(chatCapture(paths, paths.GeminiSlugDir(), GeminiCLI{}), "\n"),
 		"exit $code"), "\n")
+}
+
+// geminiPointer starts, in the background as gwp, a watcher that names in
+// [Paths.CountRecord] the chat file of the run's session once Gemini CLI writes
+// it, as the helper finds it (gemini_helper.mjs, sessionFile): a file of the
+// chats directory named for the session's first eight characters whose first
+// line names the session ([GeminiCLI.liveRecord]). None where the list of the
+// responses the session held was never written: the helper counts none then.
+func geminiPointer(paths Paths) string {
+	q := shellword.Quote
+	pointer := q(paths.CountRecord())
+	return `g8=$(printf '%.8s' "$s"); ( [ -f ` + q(paths.GeminiUsageBefore()) + ` ] || exit 0; while kill -0 $$ 2> /dev/null; do for f in ` + q(paths.GeminiChats()) +
+		`/session-*-"$g8".jsonl; do if [ -f "$f" ] && [ ! -L "$f" ] && head -n 1 "$f" | grep -qF "$s"; then ` +
+		`printf '%s\n0\n' "$f" > ` + pointer + `.next && mv -f ` + pointer + `.next ` + pointer + `; exit 0; fi; done; ` +
+		`sleep 0.1; done ) & gwp=$!`
 }
 
 // geminiBridgedPrefix opens the name Gemini CLI gives each tool of the

@@ -62,12 +62,6 @@ func (Muse) Name() string { return MuseName }
 // 1050-second bound was answered whole (measured on 1.4.25).
 func (Muse) MCPCallCeiling() time.Duration { return 0 }
 
-// CountedAtCollection implements [collectionCounted].
-func (Muse) CountedAtCollection() string {
-	return "its stream marks no model request: " +
-		"the session's traces its count reads are appended by the run's script once Muse Code exits"
-}
-
 // Resumes says Muse Code continues a session it ran: `muse exec --session-id`
 // on an id its data directory holds resumes it (measured on 1.4.25).
 func (Muse) Resumes() bool { return true }
@@ -189,12 +183,15 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	b.WriteString(before)
 	counted, traced := museTraces(paths)
 	b.WriteString(counted)
+	watched, unwatched := musePointer(paths)
+	b.WriteString(watched)
 	watch := ""
 	if own := museOwnServers(req); len(own) > 0 {
 		b.WriteString(museGuard(paths, own))
 		watch = "museguard"
 	}
 	b.WriteString(launchWatched(strings.Join(parts, " "), watch, paths))
+	b.WriteString(unwatched)
 	b.WriteString(traced)
 	b.WriteString(after)
 	b.WriteString(museUnwire(paths))
@@ -406,6 +403,21 @@ func museTraces(paths Paths) (before, after string) {
 		q(museTraceNeedle) + ` | sed 's/^/{"payload_type":"` + museTraceEvent + `","line":/; s/$/}/'; fi
 `
 	return before, after
+}
+
+// musePointer is the two parts of a run's script around its harness that name
+// the main thread's session.jsonl in [Paths.CountRecord] once Muse writes it,
+// with its lines as the run began (mb, [museTraces]), for the live count
+// ([Muse.liveRecord]): a watcher started before the launch, stopped after it.
+func musePointer(paths Paths) (start, stop string) {
+	q := shellword.Quote
+	sessions, pointer := q(paths.MuseSessions()), q(paths.CountRecord())
+	start = `( while kill -0 $$ 2> /dev/null; do for y in ` + sessions + `/*/*/*/"$s"; do if [ -s "$y/session.jsonl" ] && [ ! -L "$y" ]; then printf '%s\n%s\n' "$y/session.jsonl" "$mb" > ` + pointer + `.next && mv -f ` + pointer + `.next ` + pointer + `; exit 0; fi; done; sleep 0.1; done ) &
+mwp=$!
+`
+	stop = `kill "$mwp" 2> /dev/null
+`
+	return start, stop
 }
 
 // museArchiveFormat is the layout a Muse Code run packs its session in
