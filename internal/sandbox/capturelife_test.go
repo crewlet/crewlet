@@ -358,8 +358,8 @@ func TestAKeepsReadsLeaveItsUploadItsWholePace(t *testing.T) {
 //     that never stamps: the end waits until its capture lands and is recorded;
 //   - a takeover lands after the end's last round, inside its window: the end
 //     reads the row once more past the window and waits for it;
-//   - a capture stamped hours ahead, so its age never ends it here: the end
-//     gives up on it a life after first sight, within a tick.
+//   - a capture, or a save at the text bound, stamped hours ahead: the end gives
+//     up on it the kept bound's life after first sight, within a tick.
 //
 // Mutation: cap the end at one life from its own start, decide off the last
 // round's read, or hold no sighting to a bound of its own, and a case fails.
@@ -508,6 +508,44 @@ func TestAnEndWaitsForEachCaptureItSeesItsWholeLifeFromFirstSight(t *testing.T) 
 					captureLife+10*time.Minute, captureLife)
 				cancel()
 				<-ended
+			}
+		})
+	})
+	t.Run("a save at the text bound whose age never ends it here", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			rig, _, _ := keepingRig(t)
+			run := rig.launchKept(t, "t1")
+			// AT THE TEXT BOUND, which the end holds to the kept bound's life
+			// all the same: a save's stamp is read as the most a reader holds.
+			save := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
+				State: CaptureBegun, Interrupted: true, Through: new(0),
+				At: rig.coordinator.now().Add(2 * objstore.AssumedClockSkew), Taker: takingProcess, TakerEpoch: 1,
+				Harness: "claude-code", SessionID: "s-1"}
+			if took, err := rig.pending.ReserveSave(t.Context(), "t1", save); err != nil || !took {
+				t.Fatalf("reserving node-a's save = %v, %v", took, err)
+			}
+			// THE SAVE ALONE IN FLIGHT: a final take beside it, refused, so no
+			// capture's own life holds the end.
+			final := save
+			final.CaptureSeq, final.Final, final.Interrupted, final.At = 2, true, false, rig.coordinator.now()
+			refused := final
+			refused.State, refused.Reason = CaptureRefused, "the session could not be uploaded"
+			for _, stamp := range []SessionCapture{final, refused} {
+				if took, err := rig.pending.StampCapture(t.Context(), "t1", stamp); err != nil || !took {
+					t.Fatalf("stamping the final take %s = %v, %v", stamp.State, took, err)
+				}
+			}
+			row := rig.get("t1")
+			began := time.Now()
+			end, found, err := rig.coordinator.awaitEndCaptures(t.Context(), row)
+			if took := time.Since(began); err != nil || !found || took < captureLife ||
+				took > captureLife+captureWaitTick {
+				t.Errorf("the end's wait returned %v (%v, %v) after it first saw the save, want the kept "+
+					"bound's life, %v, and within a tick of it", took, found, err, captureLife)
+			}
+			if got := end.Saving; got == nil || !got.sameTake(save) {
+				t.Errorf("the end's wait returned on the save %+v, want node-a's as it stood", got)
 			}
 		})
 	})
