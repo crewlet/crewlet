@@ -87,15 +87,14 @@ func (s skillSep) String() string {
 // state directory (the checkouts handed, the lock), the instruction file it
 // replaces with the launch's sections, the checkouts handed first, in order
 // (the repositories the run pushes to), the spec, NestedSkillsOnly for a
-// nested adapter that hands skills alone, whose spec then names no instruction
-// file to read; Roots, the file it lists each checkout handed's root in, a
-// line each, for a harness that reads their instructions itself where the
-// runner names them (Gemini CLI's --include-directories); Budget, the bound
-// the sections share with what the harness loads beside them (nil for none);
-// Skipped, lines the runner has for the run's skip log ([skippedLog]); and
-// LaunchSkillsLoaded for a harness that loads a launch checkout's skills
-// itself (Cursor Agent's --add-dir), so the launch copies none. The working
-// directory is the adapter's own.
+// nested adapter that hands skills alone (its spec then names no instruction
+// file); Roots, the file listing each handed checkout's root, a line each, for
+// a harness that reads their instructions where the runner names them (Gemini
+// CLI's --include-directories); Budget, the bound the sections share with what
+// loads beside them (nil for none); Skipped, lines for the run's skip log
+// ([skippedLog]); and LaunchSkillsLoaded for a harness that loads a launch
+// checkout's skills itself (Cursor Agent's --add-dir), so the launch copies
+// none. The working directory is the adapter's own.
 type launchConfig struct {
 	State              string        `json:"state"`
 	Agents             string        `json:"agents"`

@@ -3,4 +3,4 @@
 package helpersource
 
 // Digest is the note helper's source, as the package doc says.
-const Digest = Prefix + "d92ec34c8e563bf367e964ff8491472748e7b5ad5bda297175e3f4442ccc0b91"
+const Digest = Prefix + "71fb710214669c2e5b79a89219da7693fb722dd11af74feb444480b14152fc39"
