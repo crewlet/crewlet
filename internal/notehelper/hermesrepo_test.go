@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -315,7 +316,7 @@ func TestEveryFiringsListingStaysWithinItsBound(t *testing.T) {
 		answer func([]handedCheckout) string
 	}{
 		{"codex", maxListing, func(h []handedCheckout) string { return codexNestedContext(h, nil) }},
-		{"pi", maxListing, func(h []handedCheckout) string { return piNestedText(h, nil) }},
+		{"pi", maxListing, func(h []handedCheckout) string { return piNestedText(h, nil, maxListing) }},
 		{"claude", maxListing, func(h []handedCheckout) string { return claudeNestedContext(h, nil) }},
 		{"hermes", 3000, func(h []handedCheckout) string {
 			return "\n\n" + hermesAnswer(h, nil, newNestedRoom(3000)) // the blank line after the tool's result
@@ -323,12 +324,57 @@ func TestEveryFiringsListingStaysWithinItsBound(t *testing.T) {
 	} {
 		for shift := range 160 {
 			got := c.answer(handedWith(shift, c.bound))
-			if !strings.Contains(got, listingCut) {
+			if !strings.Contains(got, newListingBudgetWithin(min(c.bound, maxListing)).cutLine) {
 				t.Fatalf("%s, shift %d: the listing was not cut", c.name, shift)
 			}
 			if len(got) > c.bound {
 				t.Errorf("%s, shift %d: %d bytes past a bound of %d", c.name, shift, len(got), c.bound)
 			}
 		}
+	}
+}
+
+// A HERMES ANSWER KEEPS WHAT IT LEFT OUT BEFORE ITS SKILLS: where the skills'
+// listing and the left-out lines pass the tool result's room, the left-out
+// lines come whole, last, and the skills' listing before them is cut.
+//
+// Mutation: take the skills first, and this goes red.
+func TestAHermesAnswerKeepsWhatItLeftOutBeforeItsSkills(t *testing.T) {
+	t.Parallel()
+	h := handedCheckout{name: "late", root: "/w/late"}
+	for i := range 100 {
+		h.skills = append(h.skills, handedSkill{name: "late:s" + strconv.Itoa(i), description: strings.Repeat("d", 100),
+			path: "/h/skills/late:s" + strconv.Itoa(i) + "/SKILL.md"})
+	}
+	skipped := []string{"the skill /w/late/.hermes/skills/x is left out: its name is taken"}
+	answer := hermesAnswer([]handedCheckout{h}, skipped, newNestedRoom(4000))
+	skills, ok := strings.CutSuffix(answer, "\n\n"+skippedListing(skipped))
+	if !ok || !strings.HasSuffix(skills, "\n"+newListingBudgetWithin(4000).cutLine) || len(answer)+2 > 4000 {
+		t.Errorf("the answer (%d bytes) is not the skills cut, then what was left out whole: ...%s", len(answer),
+			answer[max(len(answer)-300, 0):])
+	}
+}
+
+// A HERMES BUDGET WITHOUT A GATE IS REFUSED: the room charges what the gate
+// answers for each checkout, so a launch config with a budget of form hermes
+// and no "gated" would claim checkouts with no text and no name; it is
+// refused, naming both keys, before anything is claimed.
+//
+// Mutation: drop the check, and this goes red.
+func TestAHermesBudgetWithoutAGateIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	raw, _ := json.Marshal(launchConfig{State: r.state, Agents: r.agents,
+		Budget: &launchBudget{Form: budgetHermes, Bytes: 4096}, checkoutSpec: checkoutSpec{}})
+	config := filepath.Join(t.TempDir(), "launch.json")
+	if err := os.WriteFile(config, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := checkoutLaunch(config, r.work, strings.NewReader(""), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "budget") || !strings.Contains(err.Error(), `"gated"`) {
+		t.Fatalf("an ungated hermes budget launched: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(r.state, "handed")); !os.IsNotExist(statErr) {
+		t.Errorf("the refused launch wrote its state (%v)", statErr)
 	}
 }

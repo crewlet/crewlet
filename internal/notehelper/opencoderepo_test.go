@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,5 +155,26 @@ func TestACopyNeverTakesTheNameOfASkillTheHarnessListsElsewhere(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(r.skills, "late:ok", "SKILL.md")); err != nil || !strings.Contains(out, "- late:ok:") {
 		t.Errorf("the skill no listed one names was not copied and listed (%v):\n%s", err, out)
+	}
+}
+
+// AN OPENCODE ANSWER KEEPS WHAT IT LEFT OUT BEFORE ITS SKILLS: where the
+// skills' listing and the left-out lines pass one firing's bound, the
+// left-out lines come whole, last, and the skills' listing before them is cut.
+//
+// Mutation: take the skills first, and this goes red.
+func TestAnOpenCodeAnswerKeepsWhatItLeftOutBeforeItsSkills(t *testing.T) {
+	t.Parallel()
+	h := handedCheckout{name: "late", root: "/w/late"}
+	for i := range 200 {
+		h.skills = append(h.skills, handedSkill{name: fmt.Sprintf("late:s%d", i),
+			description: strings.Repeat("d", maxSkillDescription), path: fmt.Sprintf("/h/skills/late:s%d/SKILL.md", i)})
+	}
+	skipped := []string{"the skill /w/late/.opencode/skills/x is left out: its name is taken"}
+	answer := openCodeNestedText([]handedCheckout{h}, skipped)
+	skills, ok := strings.CutSuffix(answer, "\n\n"+skippedListing(skipped))
+	if !ok || !strings.HasSuffix(skills, "\n"+listingCut) || len(answer) > maxListing {
+		t.Errorf("the answer (%d bytes) is not the skills cut, then what was left out whole: ...%s", len(answer),
+			answer[max(len(answer)-300, 0):])
 	}
 }

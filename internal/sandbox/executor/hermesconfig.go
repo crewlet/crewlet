@@ -227,7 +227,7 @@ func (h Hermes) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 		}
 	}
 	// THE NOTE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR, which hands
-	// the checkouts below the start directory theirs ([hermesCheckoutHome]);
+	// the checkouts below the start directory theirs ([Hermes.checkoutHome]);
 	// a box with none starts without them, its gate saying so.
 	var nested *hermesNestedHand
 	if err = writeNoteHelper(ctx, box, paths.HermesNoteHelper()); err == nil {
@@ -235,7 +235,7 @@ func (h Hermes) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 	} else if !errors.Is(err, errNoHelperBuild) {
 		return "", err
 	}
-	launch := hermesCheckoutHome(paths).launchConfig(hermesCheckouts(paths), req.ReportedRepos)
+	launch := h.checkoutHome(paths).launchConfig(hermesCheckouts(paths), req.ReportedRepos)
 	if err = box.WriteFile(ctx, paths.HermesCheckoutLaunch(), launch); err != nil {
 		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}

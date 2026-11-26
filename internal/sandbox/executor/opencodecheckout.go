@@ -91,13 +91,13 @@ func openCodeClaudeOff(env map[string]string) (prompt, skills bool) {
 // named in the skip listing, to be read.
 var openCodeFiringLimit = 192 << 10
 
-// openCodeCheckoutHome is where an OpenCode run keeps its checkouts'
+// checkoutHome is where an OpenCode run keeps its checkouts'
 // instructions and skills ([checkoutHome]): no home file, since the run's
 // configuration names the sections file in its `instructions`, which OpenCode
 // reads after every other document's, and a skills directory of the run's
 // own its `skills` names, each skill copied as `<repository>:<skill>`, which
 // 2.3.2 lists and loads under that name (measured).
-func openCodeCheckoutHome(paths Paths) checkoutHome {
+func (OpenCode) checkoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.OpenCodeCheckoutState(), helper: paths.OpenCodeNoteHelper(),
 		launch: paths.OpenCodeCheckoutLaunch(), sections: paths.OpenCodeCheckoutSections(),
 		skills: paths.OpenCodeCheckoutSkills(), copied: paths.OpenCodeCheckoutSkillsCopied()}
@@ -138,7 +138,7 @@ func writeOpenCodeCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbo
 	} else if err != nil {
 		return nil, err
 	}
-	home := openCodeCheckoutHome(paths)
+	home := OpenCode{}.checkoutHome(paths)
 	if err := box.WriteFile(ctx, paths.OpenCodeCheckoutLaunch(), home.launchConfig(openCodeCheckouts(paths, req.Env), req.ReportedRepos)); err != nil {
 		return nil, fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
@@ -166,7 +166,7 @@ func writeOpenCodeCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbo
 // and runs [checkoutHome.restore].
 func openCodeCheckoutsGate(paths Paths) string {
 	q := shellword.Quote
-	h := openCodeCheckoutHome(paths)
+	h := OpenCode{}.checkoutHome(paths)
 	by := q(paths.OpenCodeCheckoutsOffBy())
 	return "mkdir -p " + q(paths.OpenCodeCheckoutSkills()) + " || exit 1\n" + h.gate() +
 		`if [ -n "$hk" ] && [ -s ` + by + ` ]; then printf 'crewlet: checkouts cloned during the run are not ` +
@@ -180,6 +180,6 @@ func openCodeCheckoutsGate(paths Paths) string {
 // step whatever came of the other ([everyStep]); the clear before the next
 // run removes the rest ([OpenCode.artifactDirs]).
 func openCodeCheckoutsEnd(paths Paths) string {
-	h := openCodeCheckoutHome(paths)
+	h := OpenCode{}.checkoutHome(paths)
 	return everyStep(h.saySkipped(), h.restore())
 }

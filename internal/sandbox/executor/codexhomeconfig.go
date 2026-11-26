@@ -18,7 +18,7 @@ func (p Paths) CodexHomeConfig() string { return p.WorkDir() + "/codex-home-conf
 
 // CodexHomeInstructions is the home's own CODEX_HOME/AGENTS.md, held in the
 // run's work directory while the run's, the home's with its repositories'
-// after it, stands in its place ([codexCheckoutHome], [codexRestoreHome],
+// after it, stands in its place ([Codex.checkoutHome], [codexRestoreHome],
 // [holdHome]).
 func (p Paths) CodexHomeInstructions() string { return p.WorkDir() + "/codex-home-AGENTS.md" }
 
@@ -106,6 +106,6 @@ func (Codex) homeRestore(p Paths) string { return codexRestoreHome(p) }
 // the other files put back all the same ([everyStep]); and the skip log no
 // script printed dropped ([checkoutHome.dropSkipped]).
 func codexRestoreHome(paths Paths) string {
-	h := codexCheckoutHome(paths)
+	h := Codex{}.checkoutHome(paths)
 	return everyStep(putBackHome(paths.CodexLiveConfig(), paths.CodexHomeConfig()), h.restore(), h.dropSkipped())
 }

@@ -118,8 +118,8 @@ func (r *hermesRoom) take(h handedCheckout, said *skips) bool {
 // hermesAnswer is what a Hermes run is handed of the checkouts claimed: each
 // one's instructions as its room took them ([hermesRoom.take]), then the
 // skills copied ([skillsListing]) and what was left out ([skippedListing]),
-// within what the room has left and [maxListing], cut as [listingBudget] cuts;
-// "" for nothing.
+// within what the room has left and [maxListing], the left out taken first
+// ([listingBudget.listings]); "" for nothing.
 func hermesAnswer(handed []handedCheckout, skipped []string, r *hermesRoom) string {
 	var blocks []string
 	for _, h := range handed {
@@ -135,16 +135,8 @@ func hermesAnswer(handed []handedCheckout, skipped []string, r *hermesRoom) stri
 		return strings.Join(blocks, "\n\n") // no room even to say a listing is cut
 	}
 	// IN BYTES, which no character count passes, from what the blocks left.
-	budget := newListingBudgetWithin(min(maxListing, r.left))
-	for _, h := range handed {
-		if listing := budget.take(skillsListing(h)); listing != "" {
-			blocks = append(blocks, listing)
-		}
-	}
-	if listing := budget.take(skippedListing(skipped)); listing != "" {
-		blocks = append(blocks, listing)
-	}
-	return strings.Join(blocks, "\n\n")
+	skills, left := newListingBudgetWithin(min(maxListing, r.left)).listings(handed, skipped)
+	return strings.Join(appendNonEmpty(appendNonEmpty(blocks, skills...), left), "\n\n")
 }
 
 // peekConfig is what hermes-peek reads of a launch's or a nested adapter's

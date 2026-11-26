@@ -61,19 +61,11 @@ func runHookNested(f flags, stdin io.Reader, stdout, stderr io.Writer, event str
 
 // claudeNestedContext is the checkouts handed as a Claude Code firing hands
 // them: each one's skills listed ([skillsListing]), then what the firing left
-// out ([skippedListing]), within one listing's bound ([listingBudget]).
+// out ([skippedListing]), within one listing's bound
+// ([listingBudget.listings], the left out first).
 func claudeNestedContext(handed []handedCheckout, skipped []string) string {
-	var blocks []string
-	budget := newListingBudget()
-	for _, h := range handed {
-		if listing := budget.take(skillsListing(h)); listing != "" {
-			blocks = append(blocks, listing)
-		}
-	}
-	if listing := budget.take(skippedListing(skipped)); listing != "" {
-		blocks = append(blocks, listing)
-	}
-	return strings.Join(blocks, "\n\n")
+	skills, left := newListingBudget().listings(handed, skipped)
+	return strings.Join(appendNonEmpty(appendNonEmpty(nil, skills...), left), "\n\n")
 }
 
 // hookAgent is the agent_id a Claude Code hook's input names, "" for the main

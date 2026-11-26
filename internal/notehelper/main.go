@@ -100,16 +100,16 @@
 // started in a repository checked out below it would, so the helper hands each
 // checkout directly under W (a directory or a link to one, holding .git, its
 // name with no leading dot or control character) its instructions and skills
-// once its clone has finished (checkoutclone.go; checkout.go), and once its
-// skills fit what is left of the firing's bound, else at a later firing. Its
-// logic names no harness; a runner gives it a spec:
+// once its clone has finished (checkoutclone.go; checkout.go) and its skills
+// and the names of its files left out fit what the firing has left, else at a
+// later firing. Its logic names no harness; a runner gives it a spec:
 //   - `instructions`: slots, in order, within `limit`, the harness's own
 //     bound in bytes on what a session started in the checkout reads of them
 //     (Codex: project_doc_max_bytes), omitted for a harness with none, a file
 //     the limit cuts spending all of it; `firingLimit`, a nested firing's
-//     bound on all its checkouts' files, each counted with its frame, each
-//     that fits handed whole, the rest left out whole and named for the model
-//     to read (Grok sets none: grokrepo.go). A list of file names
+//     bound on its checkouts' files, each framed, those that fit handed
+//     whole, the rest left out whole and named for the model (Grok and Pi
+//     set none). A list of file names
 //     relative to a checkout's root hands its first regular file (Codex:
 //     [["AGENTS.override.md","AGENTS.md"]]). A tree, {"tree": <dir>,
 //     "suffix": <s>, "form": <harness>, "scoped": {"keys": [...], "whole":
@@ -189,8 +189,9 @@
 // `nestedSkillsOnly` for a nested adapter that hands no instructions, whose
 // spec then names none to read, and `roots`, a file listing each checkout's
 // root, a line each, for a harness the runner points at them (Gemini CLI's
-// --include-directories). Its `budget` (Hermes's, hermesrepo.go; Muse's,
-// checkoutmuse.go) bounds the sections with what loads beside them; `skipped`
+// --include-directories). Its `budget` (Hermes's, hermesrepo.go, needing
+// `gated`; Muse's, checkoutmuse.go) bounds the sections with what loads
+// beside them; `skipped`
 // lines (D709) go to the skip log. It keeps what it handed in state/launched.json, for copilot-launch
 // (copilotrepo.go). It writes state/nested.json, the -config of the harness's
 // nested adapter, which the run's post-tool hook runs after each of the main
@@ -207,10 +208,12 @@
 // main loop only (muserepo.go); pi-nested the same as codex-nested with each
 // file in Pi's `<project_instructions path=...>`, on stdout for the run's
 // extension to add to the tool's result (Pi lists no skill it did not start
-// with and loads instructions only as it starts, measured on 1.6.0);
+// with and loads instructions only as it starts, measured on 1.6.0), within
+// -room (pirepo.go);
 // copilot-nested the listing alone, added the same way; kimi-nested as
 // pi-nested, for Kimi's `<!-- From: ... -->`, steered in by the run's driver;
-// opencode-nested as pi-nested, after OpenCode's `Instructions from: <path>`. A
+// opencode-nested as pi-nested, after OpenCode's `Instructions from: <path>`;
+// cursor-nested on an MCP call's result. A
 // nested hook only adds to the launch: a run whose settings switch it off
 // starts, its skip log saying so once; only losing a contract hook (notes,
 // skill loads) refuses. Grok's stays registered, as Grok 1.0.92 skips it itself
@@ -374,8 +377,9 @@ type flags struct {
 	config                string
 	skillLoads, loadsOnly bool
 	slot                  int
-	// hermes-nested's: the characters the tool's result has left; hermes-peek's:
-	// the skip log's line for each checkout a launch left with no firing to come.
+	// pi-nested's and hermes-nested's: the characters the answer, or the
+	// tool's result, has left; hermes-peek's: the skip log's line for each
+	// checkout a launch left with no firing to come.
 	room int
 	left bool
 	// codex-renew's: the rollout of the session the run continues.

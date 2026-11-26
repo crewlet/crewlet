@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"slices"
 	"strings"
 )
 
@@ -43,6 +45,7 @@ func runMuseNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr i
 		fmt.Fprintf(stderr, "notehelper: the nested config: %v\n", err)
 		return exitDone
 	}
+	c.firing = museFiring()
 	handed, skipped, err := handNested(c, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: handing a checkout's instructions: %v\n", err)
@@ -54,17 +57,16 @@ func runMuseNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr i
 }
 
 // museNestedAnswer is the hook's answer, "" where it hands nothing: its
-// context as a PostToolUse's additional context, every byte of it within
-// [museAnswerBytes], past which Muse Code 1.4.25 delivers nothing at all
-// (measured, row hook40). The context is each checkout's instructions under
-// "for `<name>` with root <path>", each file wrapped and escaped as Muse puts a
-// project's rules file in its reminder, whole while they fit, the checkouts first in order, and every
-// other named by its files to read; then each one's skills listed by name and
-// path ([skillsListing]), since Muse lists no skill copied after it started
-// but reads one by either (measured, row mid); then what the firing left out
-// ([skippedListing]), the listings cut where the bound falls; and a line for
-// the run's skip log for each checkout the cut drops whole, claimed and so
-// never handed again.
+// context as a PostToolUse's additional context, every byte within
+// [museAnswerBytes], past which Muse Code 1.4.25 delivers nothing (measured,
+// row hook40). The context is each checkout's instructions under "for
+// `<name>` with root <path>", each file wrapped and escaped as Muse puts a
+// project's rules file in its reminder, whole while they fit, the checkouts
+// first in order, every other named by its files; each one's skills listed
+// by name and path ([skillsListing]), as Muse lists no skill copied after it
+// started but reads one by either (measured, row mid); what the firing left
+// out ([skippedListing]), taken first, the skills cut where the bound falls;
+// and a skip-log line for each checkout the cut drops whole, claimed for good.
 func museNestedAnswer(handed []handedCheckout, skipped []string) (string, []string) {
 	room := museAnswerBytes - len(museNestedEncode(""))
 	var whole, named, roots []string
@@ -74,30 +76,36 @@ func museNestedAnswer(handed []handedCheckout, skipped []string) (string, []stri
 			continue
 		}
 		files := make([]string, len(h.parts))
-		paths := make([]string, len(h.parts))
 		for i, p := range h.parts {
 			text := p.text
 			if !strings.HasSuffix(text, "\n") {
 				text += "\n"
 			}
 			files[i] = museTag("project", p.path) + museEscape(text) + museFileClose
-			paths[i] = p.path
+		}
+		named = append(named, museNamed(h.name, h.root, h.parts))
+		roots = append(roots, h.root)
+		if slices.ContainsFunc(h.parts, func(p instructionPart) bool { return p.unread }) {
+			whole = append(whole, named[len(named)-1]) // a file past the answer was never read
+			continue
 		}
 		whole = append(whole, "for `"+h.name+"` with root "+h.root+"\n\n"+strings.Join(files, "\n\n"))
-		named = append(named, "for `"+h.name+"` with root "+h.root+": read "+strings.Join(paths, ", ")+
-			" for its instructions, which pass what this answer holds")
-		roots = append(roots, h.root)
 	}
-	// EVERY CHECKOUT NAMED FIRST, then made whole in order while the bound
-	// holds: one too big for it never keeps a later one from being named.
+	// EVERY CHECKOUT NAMED FIRST, then what the firing left out held room
+	// for, then each made whole in order while the bound holds: one too big
+	// for it never keeps a later one from being named, nor a left-out line.
 	apart := museEscapedBytes("\n\n")
 	used := apart * max(len(named)-1, 0)
 	for _, n := range named {
 		used += museEscapedBytes(n)
 	}
+	held := 0
+	if leftOut := skippedListing(skipped); leftOut != "" {
+		held = museEscapedBytes(leftOut) + apart
+	}
 	blocks := append([]string(nil), named...)
 	for i := range whole {
-		if grow := museEscapedBytes(whole[i]) - museEscapedBytes(named[i]); used+grow <= room {
+		if grow := museEscapedBytes(whole[i]) - museEscapedBytes(named[i]); used+grow+held <= room {
 			blocks[i], used = whole[i], used+grow
 		}
 	}
@@ -115,6 +123,9 @@ func museNestedAnswer(handed []handedCheckout, skipped []string) (string, []stri
 			}
 		}
 	}
+	// WHAT WAS LEFT OUT IS TAKEN FIRST, shown last: a claimed checkout's file
+	// or skill not handed is the model's only by its line ([listingBudget.listings]).
+	left := budget.take(skippedListing(skipped))
 	for _, h := range handed {
 		listing := skillsListing(h)
 		b := budget.take(listing)
@@ -126,13 +137,41 @@ func museNestedAnswer(handed []handedCheckout, skipped []string) (string, []stri
 			blocks = append(blocks, b)
 		}
 	}
-	if b := budget.take(skippedListing(skipped)); b != "" {
-		blocks = append(blocks, b)
+	if left != "" {
+		blocks = append(blocks, left)
 	}
 	if len(blocks) == 0 {
 		return "", dropped
 	}
 	return museNestedEncode(strings.Join(blocks, "\n\n")), dropped
+}
+
+// museNamed is a claimed checkout's block where its files do not fit whole:
+// the paths to read them at.
+func museNamed(name, root string, parts []instructionPart) string {
+	paths := make([]string, len(parts))
+	for i, p := range parts {
+		paths[i] = p.path
+	}
+	return "for `" + name + "` with root " + root + ": read " + strings.Join(paths, ", ") +
+		" for its instructions, which pass what this answer holds"
+}
+
+// museFiring is a Muse firing's bound, as Grok's ([grokFiring]): no bound on
+// its files, which [museNestedAnswer] hands whole while they fit, but a file
+// past the answer's bytes never read, kept to be named, and a names room in
+// escaped bytes from [museAnswerBytes] that each claimed checkout's named
+// block and lines are charged at claim, so one the answer cannot name waits
+// for a later firing rather than be claimed for good unnamed.
+func museFiring() *firingBound {
+	room := museAnswerBytes - len(museNestedEncode(""))
+	apart := museEscapedBytes("\n\n")
+	return &firingBound{left: math.MaxInt, count: museEscapedBytes, unitBytes: 1, readCap: room,
+		nameCount: museEscapedBytes, names: room - museEscapedBytes(skippedListing([]string{""})) - apart,
+		nameCost: func(name, root string, parts []instructionPart) int {
+			return museEscapedBytes(museNamed(name, root, parts)) + apart
+		},
+		namesCap: true}
 }
 
 // museNestedEncode is text as a PostToolUse hook's answer, with no line break

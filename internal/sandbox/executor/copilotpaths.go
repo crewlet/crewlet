@@ -16,7 +16,7 @@ func (p Paths) CopilotSettings() string { return p.CopilotHome() + "/settings.js
 
 // CopilotInstructions is where a Copilot run's standing instructions are
 // written, the home's own and its checkouts' sections after them
-// ([copilotCheckoutHome]): Copilot appends this file to its own system prompt
+// ([Copilot.checkoutHome]): Copilot appends this file to its own system prompt
 // after its tool list and before the repository's instructions, and renders it
 // afresh on every resume (measured on 1.0.114), so a continued run is told by
 // its own launch. The home's file is held and put back.
@@ -63,14 +63,14 @@ func (p Paths) CopilotGuardSettings() string { return p.WorkDir() + "/copilot-gu
 
 // CopilotSkills is the home's skills directory, which Copilot lists every
 // `<dir>/SKILL.md` of at launch (measured on 1.0.114), where a run copies its
-// checkouts' skills ([copilotCheckoutHome]).
+// checkouts' skills ([Copilot.checkoutHome]).
 func (p Paths) CopilotSkills() string { return p.CopilotHome() + "/skills" }
 
 // CopilotNoteHelper is the note helper a Copilot run hands its checkouts
 // with (internal/notehelper), written at every launch.
 func (p Paths) CopilotNoteHelper() string { return p.WorkDir() + "/copilot-notehelper" }
 
-// CopilotRepo is the run's checkout state ([copilotCheckoutHome]): the
+// CopilotRepo is the run's checkout state ([Copilot.checkoutHome]): the
 // checkouts handed, the lock, the nested adapter's config and each launch
 // attempt's directories and kept sets, remade by every run.
 func (p Paths) CopilotRepo() string { return p.WorkDir() + "/copilot-repo" }

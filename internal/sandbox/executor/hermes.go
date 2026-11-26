@@ -142,7 +142,7 @@ func hermesScript(req sandbox.RunRequest, session Session, paths Paths, times he
 	b.WriteString(hermesFinish(paths))
 	// THE CHECKOUTS' COPIES OUT OF THE HOME'S SKILLS once the gateway, where
 	// their firings run, has stopped, and what those firings left out said
-	// ([hermesCheckoutHome]), each step whatever came of the other; a run
+	// ([Hermes.checkoutHome]), each step whatever came of the other; a run
 	// killed outright leaves them to the next run's clear ([homeKeeper]).
 	home := hermesLaunchHome(paths, req.Model)
 	line(`hput() { %s; }`, everyStep(home.restore(), home.saySkipped()))

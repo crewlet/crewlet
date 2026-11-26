@@ -31,13 +31,18 @@ func (r *Runner) Count(sandbox.RunHandle) sandbox.Counter {
 		return r.recordCounter(rc)
 	}
 	if rs, ok := r.harness.(recordsCounted); ok {
-		m := &maxCount{}
+		// ITS STREAM AMONG THEM, as its collection reads it too ([Runner.collectedRecords]).
+		m := &maxCount{parts: []sandbox.Counter{&counter{harness: r.harness, bound: r.lineBound, readBytes: countReadBytes}}}
 		for _, rc := range rs.countedRecords() {
 			m.parts = append(m.parts, r.recordCounter(rc))
 		}
 		return m
 	}
-	return &counter{harness: r.harness, bound: r.lineBound, readBytes: countReadBytes}
+	stream := &counter{harness: r.harness, bound: r.lineBound, readBytes: countReadBytes}
+	if sc, ok := r.harness.(sideCounted); ok {
+		return &sumCount{stream: stream, side: sc.sideCount()}
+	}
+	return stream
 }
 
 // recordCounter is one live count of the job off record rc.

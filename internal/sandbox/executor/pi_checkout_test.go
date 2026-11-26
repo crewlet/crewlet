@@ -25,7 +25,8 @@ import (
 // result to the extension twice, recording what each answer made of it
 // (nested-1, nested-2) and the --skill directories after them
 // (skills-late), its nested config removed first where $HOME/break-nested
-// is; where $HOME/break-home is, it makes the agent
+// is, its context usage $HOME/usage's (200,000 tokens' window, 1,000 used,
+// where none); where $HOME/break-home is, it makes the agent
 // directory's AGENTS.override.md a directory no put-back can write; and it
 // prints a finished answer.
 const piCheckoutStandIn = `import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
@@ -59,7 +60,9 @@ const pi = {
   getActiveTools: () => ["read", "bash"],
   getSettings: () => ({}),
 }
-const ctx = { cwd: process.cwd(), abort: () => {}, getContextUsage: () => undefined }
+const usage = existsSync(join(home, "usage")) ? JSON.parse(readFileSync(join(home, "usage"), "utf8"))
+  : { tokens: 1000, contextWindow: 200000, percent: 0.5 }
+const ctx = { cwd: process.cwd(), abort: () => {}, getContextUsage: () => usage }
 const fire = async (name, event) => {
   let answer = null
   for (const h of handlers.get(name) ?? []) { const a = await h(event, ctx); if (a !== undefined) answer = a }
@@ -296,6 +299,56 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAPiRun(t *testing.T) {
 	}
 }
 
+// A CLONE DURING A PI RUN IS HANDED WITHIN ITS CONTEXT'S ROOM: its 100,000-byte
+// file comes whole in a 200,000-token window with 1,000 used; in an
+// 80,000-token window with 12,000 used, whose room (what pi's estimate leaves
+// below the window less its 16,384-token reserve twice, four characters a
+// token) leaves the files less than it past the listings' 64 KiB, it is named
+// for the model to read, and the answer stays within that room.
+//
+// Mutation: hand the helper no room or the window's whole, or drop the
+// reserve, and a case goes red.
+func TestAPiCloneIsHandedWithinItsContextsRoom(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("L", 100_000)
+	for _, c := range []struct {
+		window, used int
+		whole        bool
+	}{{200_000, 1_000, true}, {80_000, 12_000, false}} {
+		t.Run(fmt.Sprintf("window %d", c.window), func(t *testing.T) {
+			t.Parallel()
+			runner, box := piCheckoutBox(t)
+			late := t.TempDir()
+			for rel, body := range piCheckout("late", map[string]string{"AGENTS.md": text}) {
+				plantFile(t, filepath.Join(late, rel), body)
+			}
+			plant(t, box, map[string]string{"clone-src": filepath.Join(late, "late"),
+				"clone-dst": filepath.Join(box.Home(), "workspace", "late"),
+				"usage":     fmt.Sprintf(`{"tokens":%d,"contextWindow":%d}`, c.used, c.window)})
+			if _, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"}); !res.Success {
+				t.Fatalf("the run failed: %s", res.Error)
+			}
+			var nested struct {
+				Content []struct{ Text string } `json:"content"`
+			}
+			seenBy(t, box, "nested-1", &nested)
+			if len(nested.Content) != 2 {
+				t.Fatalf("the tool result after the clone was %+v, want the answer added", nested)
+			}
+			answer := nested.Content[1].Text
+			if whole := strings.Contains(answer, text+"\n</project_instructions>"); whole != c.whole {
+				t.Errorf("the file came whole: %v, want %v:\n%.300s", whole, c.whole, answer)
+			}
+			if !c.whole && !strings.Contains(answer, "/late/AGENTS.md is left out") {
+				t.Errorf("the answer does not name the file left out:\n%s", answer)
+			}
+			if room := 4*(c.window-2*16_384-c.used) - len("cloned"); len(answer) > room {
+				t.Errorf("the answer takes %d characters, past its room of %d", len(answer), room)
+			}
+		})
+	}
+}
+
 // must is v, failing nothing: the case's own JSON cannot fail to encode.
 func must(v []byte, _ error) []byte { return v }
 
@@ -476,20 +529,20 @@ func TestAPiNoteHelpersOwnTroubleReachesTheRunsErrorStream(t *testing.T) {
 // THE CLEAR DROPS A SKIP LOG NO SCRIPT PRINTED: a run killed before its
 // script printed what its firings left out leaves the log in its checkout
 // state, and the clear before the next run, whichever harness it drives,
-// removes Codex's, Pi's, Hermes's, Copilot's, Kimi Code's and Muse Code's
-// alike, so a script ended before its gate prints no line of another run's as
-// its own.
+// removes every checkout-handing runner's alike, so a script ended before its
+// gate prints no line of another run's as its own.
 //
-// Mutation: drop Codex's, Hermes's, Copilot's, Kimi's or Muse's removal from
-// its restore, and a row goes red (Pi's state is also under the directory the
-// clear removes whole).
+// Mutation: drop a runner's dropSkipped from its clear (Qwen Code's or Kimi
+// Code's, say), and its row goes red; Claude Code's, OpenCode's, Pi's and
+// Cursor Agent's logs sit under a directory the clear removes whole.
 func TestTheClearDropsASkipLogNoScriptPrinted(t *testing.T) {
 	t.Parallel()
 	_, box := standInBox(t, executor.NewPi(), nil)
 	p := executor.PathsFor(box)
-	logs := map[string]string{"codex": p.CodexRepo() + "/skipped", "pi": p.PiCheckouts() + "/skipped",
-		"hermes": p.HermesCheckouts() + "/skipped", "copilot": p.CopilotRepo() + "/skipped",
-		"kimi": p.KimiCheckouts() + "/skipped", "muse": p.MuseCheckouts() + "/skipped"}
+	logs := executor.CheckoutSkipLogs(p)
+	if len(logs) == 0 {
+		t.Fatal("no runner hands its checkouts, so no skip log was held")
+	}
 	for _, log := range logs {
 		plantFile(t, log, "notehelper: a killed run's line\n")
 	}

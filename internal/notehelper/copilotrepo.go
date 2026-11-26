@@ -235,17 +235,8 @@ func runCopilotNested(_ context.Context, f flags, _ io.Reader, stdout, stderr io
 // copilotNestedListing is the checkouts handed as a Copilot firing lists them:
 // each one's skills ([skillsListing]), since Copilot lists no skill copied
 // after its launch (measured, row m8), then what the firing left out, within
-// one firing's bound ([listingBudget]).
+// one firing's bound ([listingBudget.listings], the left out first).
 func copilotNestedListing(handed []handedCheckout, skipped []string) string {
-	var blocks []string
-	budget := newListingBudget()
-	for _, h := range handed {
-		if listing := budget.take(skillsListing(h)); listing != "" {
-			blocks = append(blocks, listing)
-		}
-	}
-	if listing := budget.take(skippedListing(skipped)); listing != "" {
-		blocks = append(blocks, listing)
-	}
-	return strings.Join(blocks, "\n\n")
+	skills, left := newListingBudget().listings(handed, skipped)
+	return strings.Join(appendNonEmpty(appendNonEmpty(nil, skills...), left), "\n\n")
 }

@@ -28,7 +28,7 @@ func TestTheBlankNamesLineIsSaidOnlyWhereTheHelperRan(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			p := Paths{Home: t.TempDir()}
-			h := qwenCheckoutHome(p)
+			h := QwenCode{}.checkoutHome(p)
 			for _, dir := range []string{p.WorkDir(), filepath.Dir(h.helper), h.skills} {
 				if err := os.MkdirAll(dir, 0o700); err != nil {
 					t.Fatal(err)

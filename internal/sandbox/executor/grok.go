@@ -190,14 +190,14 @@ func grokScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	// refused run puts the box's settings back as an ended one does.
 	b.WriteString(grokGuard(paths))
 	b.WriteString(`grokguard || { ` + strings.TrimSuffix(grokRestoreConfig(paths), "\n") + "; exit 1; }\n")
-	// THE CHECKOUTS BELOW THE START DIRECTORY ([grokCheckoutHome]), and once
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([Grok.checkoutHome]), and once
 	// grok has stopped, on a failure before and on a teardown's signal,
 	// ~/.grok/AGENTS.md back, the copies gone, what a firing left out said
 	// and the box's own settings back ([grokRestoreConfig]), each whatever
 	// came of the others ([everyStep]); a run killed outright leaves the
 	// put-back to the next run's clear ([homeKeeper]) and the settings to the
 	// next run, which starts from the box's own kept copy.
-	home := grokCheckoutHome(paths)
+	home := Grok{}.checkoutHome(paths)
 	line(`grokput() { %s; }`, everyStep(home.restore(), home.saySkipped(),
 		strings.TrimSuffix(grokRestoreConfig(paths), "\n")))
 	line(`grokquit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; grokput; exit "$1"; }`)
@@ -205,6 +205,8 @@ func grokScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`mkdir -p %s || exit 1`, q(paths.GrokHome()))
 	b.WriteString(home.gate())
 	b.WriteString(grokNestedOff())
+	// WHERE THE RUN BEGINS IN ITS SESSION, for its side requests' count ([grokRunStart]).
+	b.WriteString(grokRunStart(paths))
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	line(`grokput; trap - EXIT TERM INT HUP`)
 	b.WriteString(grokMainRecord(paths))
@@ -992,7 +994,7 @@ func grokRulesJSON(system string) ([]byte, error) {
 // them ([freshSessionWiring]), each naming its servers for its session; its
 // agent files and the renewal a continued session is handed; its skills; its
 // take config where it is wired to its notes or its skills' loads; the note
-// helper and its checkouts' launch config ([grokCheckoutHome]); and, once the
+// helper and its checkouts' launch config ([Grok.checkoutHome]); and, once the
 // box's Grok runs the run's servers as they are written ([grokServersHeld]),
 // its brief, and the brief a new session is handed in a continued one's
 // place, each as words ([briefNotACommand]).
@@ -1036,7 +1038,7 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		return "", fmt.Errorf("executor: recording the Grok Build run's own MCP servers: %w", err)
 	}
 	// THE NOTE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR, which hands
-	// the checkouts below the start directory theirs ([grokCheckoutHome]),
+	// the checkouts below the start directory theirs ([Grok.checkoutHome]),
 	// with the nested hook; a box with none starts without them, its gate
 	// saying so, unless notes or loads need it.
 	nested := true
@@ -1045,7 +1047,7 @@ func (g Grok) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	} else if err != nil {
 		return "", err
 	}
-	launch := grokCheckoutHome(paths).launchConfig(grokCheckouts(paths), req.ReportedRepos)
+	launch := g.checkoutHome(paths).launchConfig(grokCheckouts(paths), req.ReportedRepos)
 	if err = box.WriteFile(ctx, paths.GrokCheckoutLaunch(), launch); err != nil {
 		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
@@ -1182,13 +1184,13 @@ func writeGrokSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.
 // beside its sessions, which a later run must not find ([artifactHolder]): its
 // agent files, renewal, a fresh session's settings, the note helper, its
 // configs, its hooks' ids, the session it names, and its checkouts' launch
-// config and sections ([grokCheckoutHome]). Never ~/.grok/config.toml, the
+// config and sections ([Grok.checkoutHome]). Never ~/.grok/config.toml, the
 // box's own settings, which the run puts back ([grokRestoreConfig]), nor the
 // copy kept of them while a run runs, nor its sessions and login.
 func (Grok) artifactFiles(p Paths) []string {
 	return []string{p.GrokAgent(), p.GrokAgentFresh(), p.GrokRules(), p.GrokConfigFresh(), p.GrokTakeConfig(),
 		p.GrokTakeConfigFresh(), p.GrokThread(), p.GrokNoteHelper(), p.GrokHookIDs(), p.GrokNestedHookID(),
-		p.GrokCheckoutLaunch(), p.GrokCheckoutSections()}
+		p.GrokCheckoutLaunch(), p.GrokCheckoutSections(), p.GrokRunStart(), p.GrokRunStart() + ".next"}
 }
 
 // grokChargeBytes is the fewest bytes a Grok Build session's brief is counted

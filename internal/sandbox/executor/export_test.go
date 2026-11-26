@@ -407,9 +407,17 @@ func CountingBy(r *Runner, readBytes int64) sandbox.Counter {
 	case *recordCount:
 		c.readBytes = readBytes
 		return c
+	case *sumCount:
+		c.stream.readBytes = readBytes
+		return c
 	case *maxCount:
 		for _, part := range c.parts {
-			part.readBytes = readBytes
+			switch p := part.(type) {
+			case *counter:
+				p.readBytes = readBytes
+			case *recordCount:
+				p.readBytes = readBytes
+			}
 		}
 		return c
 	}
@@ -435,7 +443,8 @@ const MuseTraceNeedle = museTraceNeedle
 // none of them ([recordsCounted]); none for a harness counted off its stream.
 func CollectedRecordCount(ctx context.Context, r *Runner, box sandbox.Sandbox) (sandbox.RequestCount, error) {
 	if rs, ok := r.harness.(recordsCounted); ok {
-		return r.collectedRecords(ctx, box, rs, sandbox.RequestCount{})
+		count, _, err := r.collectedRecords(ctx, box, rs, sandbox.RequestCount{}, 0)
+		return count, err
 	}
 	rc, ok := r.harness.(recordCollected)
 	if !ok {
@@ -449,4 +458,16 @@ func CollectedRecordCount(ctx context.Context, r *Runner, box sandbox.Sandbox) (
 func StoreCounted(h Harness) bool {
 	_, ok := h.(storeCounted)
 	return ok
+}
+
+// CheckoutSkipLogs is the skip log of every runner that hands its checkouts
+// ([checkoutHolder]), by its harness's name.
+func CheckoutSkipLogs(p Paths) map[string]string {
+	logs := map[string]string{}
+	for _, h := range Registered() {
+		if c, ok := h.(checkoutHolder); ok {
+			logs[h.Name()] = c.checkoutHome(p).skipped()
+		}
+	}
+	return logs
 }

@@ -137,6 +137,13 @@ func collectCapped(t *testing.T, h executor.Harness, stream string, turnCap int)
 			return sandbox.ExecResult{}, nil
 		}
 	}
+	if h.Name() == executor.OpenCodeName {
+		// ITS COUNT PLUGIN'S RECORD BESIDE IT, loaded: a line for each step the
+		// stream names.
+		made := strings.Count(stream, `"type":"step_start"`)
+		record := `{"type":"start"}` + "\n" + strings.Repeat(`{"type":"request","session":"s"}`+"\n", made)
+		b.Put(p.OpenCodeCountRecord(), record)
+	}
 	if h.Name() == executor.GeminiCLIName {
 		// ITS TELEMETRY BESIDE IT, the record its collection counts: as many
 		// responses as the stream's own record states requests.

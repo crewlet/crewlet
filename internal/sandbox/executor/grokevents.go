@@ -316,12 +316,11 @@ func (d *grokEvents) limitReport() string { return d.limit }
 func (d *grokEvents) Ended() bool { return d.ended || d.capped || d.failure != "" }
 
 // Requests implements [Decoder]: the `usage` lines, one a request, every
-// agent's, a subagent's included. NOT COUNTED: the session title's request,
-// which writes no usage line. Measured on 1.0.92 against a stand-in: one
-// title request a run beside the loop's, whose 12 of 12 and 3 under a cap of
-// 3 were counted, and 6 with a 429 and a 500 retried. NOR a compaction's
-// summary requests, which write no usage line either: a run whose 8
-// compactions failed on the stand-in's summary made 40 of them, none counted.
+// agent's, a subagent's included. Measured on 1.0.92 against a stand-in: 12 of
+// 12 and 3 under a cap of 3, and 6 with a 429 and a 500 retried. The session
+// title's request and a compaction's summary requests write no usage line:
+// THE TURN CAP'S COUNT adds what the session's directory keeps of them
+// ([Grok.sideCount]).
 func (d *grokEvents) Requests() int { return d.requests }
 
 // InFlight implements [Decoder]: none, as Grok's own --max-turns stops before

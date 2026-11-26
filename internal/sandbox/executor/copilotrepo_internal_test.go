@@ -34,7 +34,7 @@ func copilotRepoLaunched(t *testing.T, files map[string]string) (Paths, string) 
 		}
 	}
 	writeHostProgram(t, p.CopilotNoteHelper(), bin, 0o700)
-	if err = os.WriteFile(p.CopilotCheckoutLaunch(), copilotCheckoutHome(p).launchConfig(copilotCheckouts(), nil), 0o600); err != nil {
+	if err = os.WriteFile(p.CopilotCheckoutLaunch(), Copilot{}.checkoutHome(p).launchConfig(copilotCheckouts(), nil), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(p.CopilotNoteHelper(), "-adapter", "checkout-launch", "-config", p.CopilotCheckoutLaunch()) //nolint:gosec // the engine's own helper

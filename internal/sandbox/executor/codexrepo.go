@@ -27,11 +27,11 @@ func codexCheckouts(limit int) checkoutSpec {
 		SkillDirs: []checkoutSkillDir{{Dir: ".codex/skills"}, {Dir: ".agents/skills"}}}
 }
 
-// codexCheckoutHome is where a Codex run keeps its checkouts' instructions
+// checkoutHome is where a Codex run keeps its checkouts' instructions
 // and skills ([checkoutHome]): CODEX_HOME/AGENTS.md, the home's own held
 // beside the run ([codexRestoreHome]), and CODEX_HOME's skills, each copied as
 // `<repository>:<skill>`.
-func codexCheckoutHome(paths Paths) checkoutHome {
+func (Codex) checkoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.CodexRepo(), helper: paths.CodexNoteHelper(), launch: paths.CodexCheckoutLaunch(),
 		agents: []string{paths.CodexHome() + "/AGENTS.md"}, held: paths.CodexHomeInstructions(), sections: paths.CodexRepoAgents(),
 		skills: paths.CodexSkills(), copied: paths.CodexRepoSkills()}
@@ -62,7 +62,7 @@ const codexNestedHookKey = "/<session-flags>/config.toml:post_tool_use:0:0"
 
 // codexNestedCommand is the nested hook's command: the run's note helper as
 // the one-shot `codex-nested` adapter, reading the state checkout-launch wrote
-// ([codexCheckoutHome]).
+// ([Codex.checkoutHome]).
 func codexNestedCommand(paths Paths) string {
 	q := shellword.Quote
 	return q(paths.CodexNoteHelper()) + " -adapter codex-nested -config " + q(paths.CodexRepo()+"/nested.json")
