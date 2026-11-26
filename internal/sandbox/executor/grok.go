@@ -205,6 +205,8 @@ func grokScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`mkdir -p %s || exit 1`, q(paths.GrokHome()))
 	b.WriteString(home.gate())
 	b.WriteString(grokNestedOff())
+	// WHERE THE RUN BEGINS IN ITS SESSION, for its side requests' count ([grokRunStart]).
+	b.WriteString(grokRunStart(paths))
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	line(`grokput; trap - EXIT TERM INT HUP`)
 	b.WriteString(grokMainRecord(paths))
@@ -1188,7 +1190,7 @@ func writeGrokSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.
 func (Grok) artifactFiles(p Paths) []string {
 	return []string{p.GrokAgent(), p.GrokAgentFresh(), p.GrokRules(), p.GrokConfigFresh(), p.GrokTakeConfig(),
 		p.GrokTakeConfigFresh(), p.GrokThread(), p.GrokNoteHelper(), p.GrokHookIDs(), p.GrokNestedHookID(),
-		p.GrokCheckoutLaunch(), p.GrokCheckoutSections()}
+		p.GrokCheckoutLaunch(), p.GrokCheckoutSections(), p.GrokRunStart(), p.GrokRunStart() + ".next"}
 }
 
 // grokChargeBytes is the fewest bytes a Grok Build session's brief is counted

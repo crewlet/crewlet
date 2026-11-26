@@ -1160,6 +1160,15 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 		requests, undecided = count.Requests, count.Undecided
 	}
+	// AND THE SIDE REQUESTS A RECORD KEEPS beside a stream that shows none of
+	// them ([sideCounted]), added as its live count adds them.
+	if sc, ok := r.harness.(sideCounted); ok {
+		n, err := sc.sideCount().read(ctx, box, paths)
+		if err != nil {
+			return sandbox.Result{}, err
+		}
+		requests += n
+	}
 	// AND ONE WHOSE SESSION STORE DOES ([storeCounted]), asked as its live count
 	// asks it.
 	if sc, ok := r.harness.(storeCounted); ok {

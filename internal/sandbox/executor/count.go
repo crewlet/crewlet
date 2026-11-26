@@ -38,7 +38,11 @@ func (r *Runner) Count(sandbox.RunHandle) sandbox.Counter {
 		}
 		return m
 	}
-	return &counter{harness: r.harness, bound: r.lineBound, readBytes: countReadBytes}
+	stream := &counter{harness: r.harness, bound: r.lineBound, readBytes: countReadBytes}
+	if sc, ok := r.harness.(sideCounted); ok {
+		return &sumCount{stream: stream, side: sc.sideCount()}
+	}
+	return stream
 }
 
 // recordCounter is one live count of the job off record rc.

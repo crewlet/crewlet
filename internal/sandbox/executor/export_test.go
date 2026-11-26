@@ -407,6 +407,9 @@ func CountingBy(r *Runner, readBytes int64) sandbox.Counter {
 	case *recordCount:
 		c.readBytes = readBytes
 		return c
+	case *sumCount:
+		c.stream.readBytes = readBytes
+		return c
 	case *maxCount:
 		for _, part := range c.parts {
 			switch p := part.(type) {
