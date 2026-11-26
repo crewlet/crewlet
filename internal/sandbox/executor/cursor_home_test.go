@@ -68,9 +68,8 @@ const cursorToken = "STANDIN-BRIDGE-TOKEN-0123456789"
 
 // WHAT A CURSOR RUN LOADS, AND WHAT A CHECKOUT BELOW ITS DIRECTORY BRINGS IT, in
 // a real box with a checkout at ./repo and a home MCP server: while it runs,
-// its standing instructions are a rule; the checkout's instructions in the
-// checkouts' rule under its root, its rules copied (nested ones too, globs
-// under its directory),
+// its standing instructions are a rule, the checkout's in the checkouts' rule
+// under its root, its rules copied (nested ones too, globs under its directory),
 // `--add-dir` naming it for its skills, its MCP servers and hooks nowhere; the
 // run's server beside the home's own. Once over, the home's file holds its own
 // server alone, no home file the bridge's token, and the rules are gone.

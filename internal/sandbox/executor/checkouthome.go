@@ -77,9 +77,7 @@ func (h checkoutHome) removeSiblingStaging() string {
 // Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code import no
 // absolute path from a home file, measured on 0.70.0 and 0.28.4); SkillSep,
 // what joins a copy's repository and skill, "" for `:`; FiringLimit, a
-// nested firing's bound in bytes on all its checkouts' files, nil for none;
-// and LaunchSkillsLoaded where the harness loads a launch checkout's skills
-// itself, so only a nested firing copies any.
+// firing's bound in bytes, nil for none; LaunchSkillsLoaded, no launch copy.
 type checkoutSpec struct {
 	Instructions       []checkoutSlot
 	Limit              *int

@@ -138,13 +138,12 @@ const cursorRule = ".cursor/rules/crewlet-standing.mdc"
 // cursorScript is a Cursor run's script, giving its harness stop to go once
 // asked to end: the end protocol (end.go); the release read and an older one
 // refused; Cursor's node found; the routing the run does not set removed
-// ([cursorRoutingOff]); its rules written ([cursorRules]) and its checkouts
-// handed ([cursorCheckoutsGate]); the session settled and recorded
-// ([cursorSessionGate]); its MCP servers laid into the home's; the harness run
-// with its cap's follower ([cursorCapFollow]); the home's hooks.json put back
-// on every end ([cursorEndTraps]); Cursor's own end added to the stream
-// ([cursorTurnEnded]); the servers and rules taken out again; and the session
-// packed ([cursorCapture]).
+// ([cursorRoutingOff]); its rules and checkouts ([cursorRules],
+// [cursorCheckoutsGate]); the session settled ([cursorSessionGate]); its MCP
+// servers laid into the home's; the harness run with its cap's follower
+// ([cursorCapFollow]), the home's hooks.json put back on every end
+// ([cursorEndTraps]); Cursor's own end added to the stream ([cursorTurnEnded]);
+// the servers and rules taken out; and the session packed ([cursorCapture]).
 //
 // THE BRIEF IS NOT ON ITS COMMAND LINE: print mode with no prompt argument
 // reads stdin, the brief's file (measured on [cursorSupported]).
