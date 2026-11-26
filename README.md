@@ -93,6 +93,7 @@ No infrastructure to bring up. Crewlet is one binary: it embeds its event stream
 
 ```bash
 go install github.com/crewlet/crewlet/cmd/crewlet@latest
+# (its seats' boxes also need the note helper: docs/getting-started/installation.md)
 # or grab a signed binary from the releases page, or run
 # ghcr.io/crewlet/crewlet
 

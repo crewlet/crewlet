@@ -30,7 +30,6 @@ import {
   Select,
   Stack,
   Switch,
-  Textarea,
   type ComboboxOption,
   type SelectOption,
 } from "@crewlethq/ui";
@@ -81,6 +80,7 @@ import { TokenScope } from "./InlineToken.tsx";
 import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 import type { ActResult, ExecutorRow } from "~/protocol/index.ts";
 import { useServicesRun } from "~/lib/services.ts";
+import { useDictation } from "~/lib/dictation/source.ts";
 
 /**
  * Hand a task to somebody — or to nobody — with a line saying why.
@@ -1181,6 +1181,7 @@ function AskAnswer({
   const write = useAct("comment_on_work_item");
   const named = label || item;
   const rec = options.find((o) => o.id === recommended);
+  const dictation = useDictation();
   const words = options.length === 0;
   const [chosen, setChosen] = useState<string>(rec?.id ?? (words ? OTHER : ""));
   const [text, setText] = useState("");
@@ -1271,6 +1272,7 @@ function AskAnswer({
       placeholder={placeholder}
       disabled={!write.access.can || write.busy}
       actions={actions}
+      dictation={dictation}
       autoFocus
     />
   );
@@ -1293,6 +1295,7 @@ function AskAnswer({
               placeholder={placeholder}
               disabled={!write.access.can || write.busy}
               autoFocus={!words}
+              dictation={dictation}
               actions={
                 <>
                   {!words && (
@@ -1547,6 +1550,7 @@ function AnswerRunDialog({
 }) {
   // ITS OWN WRITE: a presented dialog is drawn away from the button that opened it.
   const write = useAct("answer_executor");
+  const dictation = useDictation();
   const onClose = () => {
     write.dismiss();
     close();
@@ -1632,13 +1636,18 @@ function AnswerRunDialog({
                 htmlFor="answer-run-text"
                 helper="The executor carries on with your answer."
               >
-                <Textarea
-                  id="answer-run-text"
-                  rows={5}
-                  value={answer}
-                  autoFocus={open}
-                  onChange={(event) => setAnswer(event.target.value)}
-                />
+                {(field) => (
+                  <Composer
+                    id={field.id}
+                    aria-describedby={field.describedBy}
+                    label="Your answer"
+                    rows={5}
+                    value={answer}
+                    autoFocus={open}
+                    onChange={setAnswer}
+                    dictation={dictation}
+                  />
+                )}
               </FormField>
               <RefusalNote write={write} />
             </>
@@ -2109,6 +2118,7 @@ export function SteerTurnDialog({
   onClose: () => void;
 }) {
   const [note, setNote] = useState("");
+  const dictation = useDictation();
   const length = [...note.trim()].length;
   const blocked =
     length === 0
@@ -2155,12 +2165,17 @@ export function SteerTurnDialog({
           htmlFor="steer-turn-note"
           helper={`The turn reads it at its next step. ${length} of ${STEER_NOTE_MAX_RUNES} characters.`}
         >
-          <Textarea
-            id="steer-turn-note"
-            rows={4}
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-          />
+          {(field) => (
+            <Composer
+              id={field.id}
+              aria-describedby={field.describedBy}
+              label="Note"
+              rows={4}
+              value={note}
+              onChange={setNote}
+              dictation={dictation}
+            />
+          )}
         </FormField>
         <RefusalNote write={write} />
       </div>

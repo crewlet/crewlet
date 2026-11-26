@@ -38,9 +38,7 @@ func TestTheBlankNamesLineIsSaidOnlyWhereTheHelperRan(t *testing.T) {
 				t.Fatal(err)
 			}
 			if helped {
-				if err := os.WriteFile(h.helper, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // a stand-in the gate runs
-					t.Fatal(err)
-				}
+				writeHostProgram(t, h.helper, []byte("#!/bin/sh\nexit 0\n"), 0o700)
 			}
 			script := "qn=" + shellword.Quote(line) + "\n" + h.gate() + qwenBlankNamesSaid(h)
 			cmd := exec.Command(sh, "-c", script) //nolint:gosec // the script under test

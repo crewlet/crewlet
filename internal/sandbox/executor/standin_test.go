@@ -6,11 +6,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
@@ -27,19 +29,7 @@ import (
 // process other than this one.
 func writeStandIn(t *testing.T, path, script string) {
 	t.Helper()
-	source := path + ".source"
-	if err := os.WriteFile(source, []byte(script), 0o600); err != nil {
-		t.Fatalf("write the stand-in's source: %v", err)
-	}
-	if out, err := exec.Command("cp", source, path).CombinedOutput(); err != nil { //nolint:noctx // a local copy of one file
-		t.Fatalf("install the stand-in at %s: %v\n%s", path, err, out)
-	}
-	if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // the stand-in must run
-		t.Fatalf("make the stand-in executable: %v", err)
-	}
-	if err := os.Remove(source); err != nil {
-		t.Fatalf("remove the stand-in's source: %v", err)
-	}
+	executor.WriteHostProgram(t, path, script)
 }
 
 // writeBoxStandIn is [writeStandIn] inside a box: the box's own process copies
@@ -55,6 +45,27 @@ func writeBoxStandIn(t *testing.T, box sandbox.Sandbox, path, script string) {
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("install the stand-in at %s: %v (exit %d) %s", path, err, res.ExitCode, res.Stderr)
 	}
+}
+
+// handedProgram is whether a run put a program at path in box, a fake that
+// runs no command: the program's bytes written into the programs' staging, and
+// a command the box was asked to run copying them beside path and moving the
+// copy over it (writeProgram).
+func handedProgram(t *testing.T, box *sandbox.FakeSandbox, path string) bool {
+	t.Helper()
+	staging, next := executor.PathsFor(box).ProgramStaging()+"/", shellword.Quote(path+".next")
+	for _, e := range box.Execs() {
+		if !strings.Contains(e.Command, " && mv -f "+next+" "+shellword.Quote(path)+";") {
+			continue
+		}
+		for _, f := range box.Files() {
+			if strings.HasPrefix(f, staging) && strings.Contains(e.Command, "cp "+shellword.Quote(f)+" "+next) {
+				body, _ := box.ReadFile(t.Context(), f)
+				return len(body) > 0
+			}
+		}
+	}
+	return false
 }
 
 // claim is shell that succeeds in the one process that first runs it on path

@@ -22,7 +22,8 @@ import (
 // a rewind to no record standing leaves every snapshot before it unsaid.
 type geminiSummaryCapture struct {
 	snaps []geminiSnap
-	held  int
+	// held is the snapshots' words, which counted counts in the read's claim.
+	held, counted int
 	// first is the place of the first snapshot met, unknown where the replay
 	// could not follow the file and why, -1 for neither ([geminiSnap.place]).
 	first, unknown int
@@ -73,8 +74,12 @@ type geminiSnapCopy struct {
 var errGeminiCountFull = errors.New("the chat file holds more records than a read holds")
 
 // summarize has the count read the newest summary on its walk too
-// ([geminiCounting.summary]).
-func (c *geminiCounting) summarize() { c.sum = &geminiSummaryCapture{first: -1, unknown: -1} }
+// ([geminiCounting.summary]), its words past [summaryBaseBytes] taking the
+// read's large slot through claim ([summaryClaim]).
+func (c *geminiCounting) summarize(claim *summaryClaim) {
+	c.sum = &geminiSummaryCapture{first: -1, unknown: -1}
+	c.sum.read.claim, c.sum.record.claim, c.sum.update.claim = claim, claim, claim
+}
 
 // summary is the newest summary the walk read, the walk ended with err:
 // unread where it did not read the file to its end, or past the ids the count
@@ -249,8 +254,13 @@ func (s *geminiSummaryCapture) snapshot(c *geminiCounting, key string, words *su
 		return
 	}
 	snap := geminiSnap{id: key, place: 2*at + 1}
-	if snap.text = string(words.buf); words.past {
-		snap.text, snap.unsaid = "", errSummaryPast.Error()
+	switch {
+	case s.read.waitFailed(words.claim):
+		return
+	case words.past:
+		snap.unsaid = errSummaryPast.Error()
+	default:
+		snap.text = words.words()
 	}
 	s.add(snap)
 }
@@ -276,6 +286,7 @@ func (s *geminiSummaryCapture) add(snap geminiSnap) {
 			n.text, n.unsaid = "", errSummaryPast.Error()
 		}
 	}
+	s.read.claim.track(&s.counted, s.held)
 }
 
 // drop lets each snapshot gone go.
@@ -287,6 +298,7 @@ func (s *geminiSummaryCapture) drop(gone func(geminiSnap) bool) {
 		}
 		return false
 	})
+	s.read.claim.track(&s.counted, s.held)
 }
 
 // reading is the newest snapshot standing.
@@ -302,6 +314,9 @@ func (s *geminiSummaryCapture) reading() sandbox.ThreadSummary {
 	case newest.unsaid != "":
 		s.read.unshaped(newest.unsaid)
 	default:
+		// The newest is the read's from here, every other let go of: its
+		// words count once.
+		s.read.claim.track(&s.counted, 0)
 		s.read.take(newest.text)
 	}
 	return s.read.reading()
@@ -316,6 +331,8 @@ type geminiWords struct {
 	text, part summaryText
 	trim       textTrim
 	first      bool
+	// claim is the box read's claim its words count toward ([summaryClaim]).
+	claim *summaryClaim
 }
 
 // start starts a content.
@@ -332,6 +349,7 @@ func (w *geminiWords) partText() io.Writer {
 		return nil
 	}
 	w.part.reset()
+	w.part.claim, w.trim.claim = w.claim, w.claim
 	return w.trim.begin(&w.part, TranscriptValueMaxBytes)
 }
 

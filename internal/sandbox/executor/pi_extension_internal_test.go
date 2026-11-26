@@ -500,9 +500,7 @@ func TestThePiExtensionAddsWhatTheNoteHelperHandsToTheToolsResult(t *testing.T) 
 		"c=" + shellword.Quote(calls) + "\ncase \"$(cat " + shellword.Quote(said) + ")\" in " +
 		"hang) trap 'echo killed >> \"$c\"; kill $!; exit 143' TERM; sleep 30 & wait;; fail) echo partial; exit 3;; esac\n" +
 		"cat " + shellword.Quote(said) + "\n"
-	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own helper
-		t.Fatal(err)
-	}
+	writeHostProgram(t, helper, []byte(script), 0o700)
 	p := startPiProbe(t, piExtensionSettings{Checkouts: piTestHand(helper, 500)})
 	p.expect("loaded")
 	result := func(saying string, event map[string]any) string {
@@ -700,9 +698,7 @@ func TestThePiExtensionKeepsPollingWhileTheNoteHelperRuns(t *testing.T) {
 	dir := t.TempDir()
 	helper, release := filepath.Join(dir, "notehelper"), filepath.Join(dir, "release")
 	script := "#!/bin/sh\nuntil [ -e " + shellword.Quote(release) + " ]; do sleep 0.05; done\n"
-	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own helper
-		t.Fatal(err)
-	}
+	writeHostProgram(t, helper, []byte(script), 0o700)
 	p := startPiProbe(t, piExtensionSettings{Notes: route.url, Checkouts: piTestHand(helper, 60_000)})
 	p.expect("loaded")
 	p.event("agent_start", map[string]any{})

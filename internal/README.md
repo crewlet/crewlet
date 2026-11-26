@@ -131,14 +131,17 @@
 | `providers/llm/harness` | The only model backend: drives a vendor's own harness as a process, with a seat home per call, the seat's tools served as one MCP server, and a spent sign-in benched on this node. |
 | `providers/llm/harness/harnessprofile` | The harness profile table (`profiles.yaml`): what each harness accepts, the merge of an entry's `overrides` and the rules a merged profile is held to; a leaf so `config` can judge entries against it. |
 | `providers/embeddings` | The vector backend: the one place a text becomes a vector for the knowledge corpus, knowledge search queries, and diary and episode recall, enforcing each model's input limits. |
+| `speech` | Dictation's speech-to-text: a local streaming recognizer (sherpa-onnx, embedded per platform, in a re-executed worker process) behind the `Streamer` interface, its pinned model table and the `Fake`. |
 | `sandbox` | The executor runtime: every agent seat's executor is its harness's own run in a box, launched detached, collected and resumed by the engine, its session kept between boxes; the in-box runners are `sandbox/executor`'s. |
-| `notehelper` | A `main` package the engine embeds per box arch (committed builds, `make notehelper`): beside a harness with no hook or plugin, hands it the bridge's notes, caps a turn's model responses and reports skill loads, through an adapter (Codex app-server). |
-| `notehelper/gzipbuild` | A `main` package `make notehelper` runs: gzips a note helper build with `compress/gzip` under an empty header, so the committed builds depend on the toolchain alone, never the machine's `gzip`. |
+| `notehelper` | A `main` package built per box arch with the engine and written into a box: beside a harness with no hook or plugin, hands it the bridge's notes, caps a turn's model responses and reports skill loads, through an adapter (Codex app-server). |
+| `notehelper/helperbuild` | The one recipe that builds the note helper per box arch, for the release, the image, `make notehelper` and the tests (`WithHelpers`). |
+| `notehelper/helpersource` | The committed digest of the note helper's source, which the helper carries and the engine checks, so a helper from other source is refused. |
 | `hostbox` | The primitives for running somebody else's process on the engine host: one environment allowlist, safe file placement, and journaled shared-login writes, shared by the harness backend, local sandbox and MCP stdio children. |
 | `hostbox/hostboxtest` | The kill matrix every writer of a shared login passes: it SIGKILLs the re-executed writer at each named step of its journaled writes and judges what the kill left. |
 | `shellword` | The one quoting of a value as a word of a POSIX shell, for every command the engine writes for a shell to read. |
 | `skillname` | The one rewrite of a skill's name as a harness lists it (Grok Build's), for the engine and the note helper alike. |
 | `flock` | The one exclusive cross-process file lock (`store`, `queue/jetstream`, `hostbox`, `gitlet/cache`), plus a pin: a lock on a file description a child inherits, held while any process holds it. |
+| `nativelib` | The native-library cache a library the binary embeds is unpacked into (Turso's, the speech recognizer's), its cross-process lock and the verified archive extraction. |
 | `sockcount` | What a TCP socket's kernel holds unacknowledged and has had acknowledged, read from the connection's own descriptor (Linux and darwin). |
 | `procgroup` | Signals a child process tree as one process group, tells whether a recorded group is still the same one, and sums a group's CPU |
 | `nodememory` | The memory this node's processes may hold, the least of the machine's and every cgroup limit above the process: the one reader for every bound that is a share of it. |
@@ -200,6 +203,7 @@
 | `api/assistantapi` | `/assistant/`: a person's assistant conversations, turns, streams, files and approvals over HTTP, guarded and refusing in the engine's envelope. |
 | `api/secretsapi` | `/secrets`: the company's credentials, written through a running node because the coordination broker has no socket; admin-only, reveals are break-glass and logged, a write re-activates the revision that reads it. |
 | `api/stream` | The dashboard's `/ws/stream` socket: live pushes decided per reader and room, its query channel, and how an open socket's credential is decided again. |
+| `api/dictation` | The `/ws/dictation` socket: a person's audio to the recognizer and its partials and finals back, admitted and kept decided as `/ws/stream` is, with its session limits. |
 | `observe` | The observability edge: what becomes a durable event-store row, what reaches the live dashboard, and the custody that lets a node without `data` keep its events on the fleet's data nodes. |
 | `eventfan` | Answers the fleet's turn-level history (events, turns, traces, tool calls, outcomes) by asking every data node its own store at query time and merging exactly, with a coverage naming nodes that did not answer (ADR-0021) |
 | `tokens` | Rolls LLM spend into the one breakdown a dashboard renders (phase, model, provider, worker, seat, time), for the live window and for named windows read from the replicated `usage` domain. |

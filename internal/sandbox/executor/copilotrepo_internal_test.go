@@ -28,14 +28,14 @@ func copilotRepoLaunched(t *testing.T, files map[string]string) (Paths, string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for path, body := range map[string][]byte{p.CopilotNoteHelper(): bin,
-		p.CopilotCheckoutLaunch(): copilotCheckoutHome(p).launchConfig(copilotCheckouts(), nil)} {
+	for _, path := range []string{p.CopilotNoteHelper(), p.CopilotCheckoutLaunch()} {
 		if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err = os.WriteFile(path, body, 0o700); err != nil {
-			t.Fatal(err)
-		}
+	}
+	writeHostProgram(t, p.CopilotNoteHelper(), bin, 0o700)
+	if err = os.WriteFile(p.CopilotCheckoutLaunch(), copilotCheckoutHome(p).launchConfig(copilotCheckouts(), nil), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	cmd := exec.Command(p.CopilotNoteHelper(), "-adapter", "checkout-launch", "-config", p.CopilotCheckoutLaunch()) //nolint:gosec // the engine's own helper
 	cmd.Dir = work

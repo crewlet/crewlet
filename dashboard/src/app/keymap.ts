@@ -456,6 +456,15 @@ const COMPOSE: KeyRow[] = [
     by: "kit",
     whileTyping: true,
   },
+  {
+    // The kit's own chord (`DICTATION_SHORTCUT`), from a focused composer.
+    id: "compose.dictate",
+    scope: "compose",
+    presses: [{ key: " ", mod: true, shift: true }],
+    does: "Dictate; again to pause or resume",
+    by: "kit",
+    whileTyping: true,
+  },
 ];
 
 /**
@@ -872,6 +881,7 @@ const CAP_NAMES: Record<string, string> = {
   delete: "Delete",
   arrowup: "ArrowUp",
   arrowdown: "ArrowDown",
+  " ": "Space",
 };
 
 /**
@@ -910,7 +920,7 @@ export function ariaKeysOf(press: Press): string {
   const rest = [
     press.alt ? "Alt" : null,
     press.shift ? "Shift" : null,
-    press.key.length === 1 ? press.key.toUpperCase() : (CAP_NAMES[press.key] ?? press.key),
+    CAP_NAMES[press.key] ?? (press.key.length === 1 ? press.key.toUpperCase() : press.key),
   ]
     .filter((k): k is string => k !== null)
     .join("+");

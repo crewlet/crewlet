@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,15 +21,22 @@ import (
 // collections before each reading empty the pools, which under -race also drop
 // a quarter of what is put back, so refills land at random (see
 // [allocationsOf]); the line reader's json v2 decoder refill is a few hundred
-// bytes against its 16 KiB.
-func ownAllocations(f func()) (objects, bytes uint64) {
+// bytes against its 16 KiB. [ownAllocationsWithin] counts such a reader's part.
+func ownAllocations(f func()) (objects, bytes uint64) { return ownAllocationsWithin(f) }
+
+// ownAllocationsWithin is [ownAllocations] of what f allocates within the
+// functions within names, each a prefix of a function's name a frame below
+// f's must open with, a pool's refill aside (a stack through sync.Pool's Get,
+// which under -race drops a quarter of what is put back, so its refills land
+// at random): a part of a reading, counted alone.
+func ownAllocationsWithin(f func(), within ...string) (objects, bytes uint64) {
 	ownMeasuring.Lock()
 	defer ownMeasuring.Unlock()
 	defer func(rate int) { runtime.MemProfileRate = rate }(runtime.MemProfileRate)
 	runtime.MemProfileRate = 1
-	objectsBefore, bytesBefore := profiledIn()
+	objectsBefore, bytesBefore := profiledIn(within)
 	allocatingIn(f)
-	objectsAfter, bytesAfter := profiledIn()
+	objectsAfter, bytesAfter := profiledIn(within)
 	return objectsAfter - objectsBefore, bytesAfter - bytesBefore
 }
 
@@ -42,9 +50,10 @@ var ownMeasuring sync.Mutex
 func allocatingIn(f func()) { f() }
 
 // profiledIn is what the memory profile records allocated under
-// [allocatingIn], after two collections publish every allocation made before
-// them (the profile may be up to two cycles old, runtime.MemProfile).
-func profiledIn() (objects, bytes uint64) {
+// [allocatingIn], and where within names any function, within one of them and
+// through no pool's Get, after two collections publish every allocation made
+// before them (the profile may be up to two cycles old, runtime.MemProfile).
+func profiledIn(within []string) (objects, bytes uint64) {
 	runtime.GC()
 	runtime.GC()
 	marker := runtime.FuncForPC(reflect.ValueOf(allocatingIn).Pointer()).Name()
@@ -56,13 +65,18 @@ func profiledIn() (objects, bytes uint64) {
 	}
 	for _, r := range records[:n] {
 		frames := runtime.CallersFrames(r.Stack())
+		in, pooled := len(within) == 0, false
 		for {
 			f, more := frames.Next()
 			if f.Function == marker {
-				objects += uint64(r.AllocObjects)
-				bytes += uint64(r.AllocBytes)
+				if in && !pooled {
+					objects += uint64(r.AllocObjects)
+					bytes += uint64(r.AllocBytes)
+				}
 				break
 			}
+			in = in || slices.ContainsFunc(within, func(name string) bool { return strings.HasPrefix(f.Function, name) })
+			pooled = pooled || len(within) > 0 && f.Function == poolGet
 			if !more {
 				break
 			}
@@ -70,6 +84,21 @@ func profiledIn() (objects, bytes uint64) {
 	}
 	return objects, bytes
 }
+
+// poolGet is the frame a pool's refill is made under, its New called from it.
+var poolGet = functionOf((*sync.Pool).Get)
+
+// methodsOf is the name every method of m's receiver type is compiled under
+// up to the method's own, closures inside them included
+// ([ownAllocationsWithin]): a rename moves it with the type.
+func methodsOf(m any) string {
+	name := runtime.FuncForPC(reflect.ValueOf(m).Pointer()).Name()
+	return name[:strings.LastIndex(name, ".")+1]
+}
+
+// functionOf is the name f is compiled under, closures inside it included
+// ([ownAllocationsWithin]).
+func functionOf(f any) string { return runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name() }
 
 // noiseSink keeps each of [allocateMeanwhile]'s allocations on the heap.
 var noiseSink atomic.Pointer[[]byte]
@@ -242,4 +271,38 @@ func TestAMeasurementRefusesAGoroutineBesideIt(t *testing.T) {
 	}
 	close(stop)
 	<-ended
+}
+
+// The heap [TestAPartsOwnAllocationsAreItsFunctionsAlone]'s allocations stay
+// on: the part's own, the rest's around it, and the pool's refill.
+var (
+	partSink   atomic.Pointer[[4 << 10]byte]
+	aroundSink atomic.Pointer[[8 << 10]byte]
+	refillSink atomic.Pointer[[1 << 10]byte]
+)
+
+// allocatingPart allocates 4 KiB of its own and takes a buffer from pool,
+// whose New makes one.
+//
+//go:noinline
+func allocatingPart(pool *sync.Pool) {
+	partSink.Store(new([4 << 10]byte))
+	refillSink.Store(pool.Get().(*[1 << 10]byte))
+}
+
+// A PART'S OWN ALLOCATIONS ARE ITS FUNCTIONS' ALONE, A POOL'S REFILL ASIDE:
+// [ownAllocationsWithin] counts what the functions it names allocate, never
+// what the rest of the read does around them, nor a refill a pool's New makes
+// within them.
+//
+// Mutation: count every frame, or a pool's refill: this goes red.
+func TestAPartsOwnAllocationsAreItsFunctionsAlone(t *testing.T) {
+	pool := &sync.Pool{New: func() any { return new([1 << 10]byte) }}
+	_, bytes := ownAllocationsWithin(func() {
+		aroundSink.Store(new([8 << 10]byte))
+		allocatingPart(pool)
+	}, functionOf(allocatingPart))
+	if bytes != 4<<10 {
+		t.Errorf("the part allocates %d bytes counted alone, want its own 4,096", bytes)
+	}
 }

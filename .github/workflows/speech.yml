@@ -1,0 +1,61 @@
+name: speech
+
+# THE REAL DICTATION RECOGNIZER, end to end: internal/speech's known-answer
+# test (`make test-speech`) runs the pinned library and model, fetched as a
+# node fetches them, on a fixture WAV, on Linux and macOS. Only when what it
+# proves can change; both are cached under their pins.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "internal/speech/**"
+      - "internal/nativelib/**"
+      - "go.mod"
+      - ".github/workflows/speech.yml"
+  pull_request:
+    paths:
+      - "internal/speech/**"
+      - "internal/nativelib/**"
+      - "go.mod"
+      - ".github/workflows/speech.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-run-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  recognizer:
+    name: real recognizer (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The recognizer under its pins: a pull request that moves them
+      # misses, and so proves the downloads too. Saved from main alone, as
+      # ci.yml's caches are.
+      - name: name the recognizer's cache directory
+        run: echo "CREWLET_SPEECH_CACHE=$HOME/.cache/crewlet-speech" >> "$GITHUB_ENV"
+      - name: restore the recognizer main fetched
+        id: model
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CREWLET_SPEECH_CACHE }}
+          key: speech-recognizer-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('internal/speech/model.go', 'internal/speech/native.go') }}
+      - name: the known answer
+        run: go test -count=1 -tags speechmodel -run '^TestTheRealRecognizerTranscribesTheFixture$' -v ./internal/speech/
+      - name: save the recognizer
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.model.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CREWLET_SPEECH_CACHE }}
+          key: speech-recognizer-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('internal/speech/model.go', 'internal/speech/native.go') }}
