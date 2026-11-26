@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/tools/toolschema"
 )
 
 // The curated tools, for the acts agents make most, each with typed
@@ -34,15 +35,6 @@ func customerArg() map[string]any {
 		"description": "The 10-digit customer ID, without hyphens, one of this agent's accounts (google_ads_list_accounts)."}
 }
 
-// schemaObject is an object schema.
-func schemaObject(props map[string]any, required ...string) map[string]any {
-	out := map[string]any{"type": "object", "properties": props, "additionalProperties": false}
-	if len(required) > 0 {
-		out["required"] = required
-	}
-	return out
-}
-
 // pausable are the collections google_ads_pause pauses resources of, as a
 // resource name writes them, each through its own service's mutate
 // (pauseOf).
@@ -58,11 +50,11 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolListAccounts, Class: growth.ClassRead,
 			Operations:  []string{"googleads.customers.listAccessibleCustomers", searchOp},
 			Description: "List the Google Ads accounts this agent may reach, with each one's name, currency, time zone and status.",
-			Parameters:  schemaObject(map[string]any{})},
+			Parameters:  toolschema.Object(map[string]any{})},
 		{Name: toolQuery, Class: growth.ClassRead, Operations: []string{searchOp},
 			Description: "Run a Google Ads Query Language (GAQL) query on one account: campaigns, ad groups, ads, keywords, " +
 				"search terms, assets and their metrics over a date range.",
-			Parameters: schemaObject(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"customer": customerArg(),
 				"query": map[string]any{"type": "string", "description": "The GAQL query, such as SELECT campaign.name, " +
 					"metrics.clicks FROM campaign WHERE segments.date DURING LAST_7_DAYS."},
@@ -71,7 +63,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolPause, Class: growth.ClassOperate, Operations: pauseOperations(),
 			Description: "Pause campaigns, ad groups, ads, keywords, criteria, asset groups or asset links by resource name. " +
 				"Pausing stops spend and is undone by enabling, which an administrator approves.",
-			Parameters: schemaObject(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"resources": map[string]any{"type": "array", "minItems": 1, "maxItems": 100,
 					"items":       map[string]any{"type": "string", "pattern": "^customers/[0-9]{10}/[A-Za-z]+/[A-Za-z0-9_~-]+$"},
 					"description": "Resource names to pause, all in one account, such as customers/1234567890/campaigns/111."},
@@ -79,7 +71,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolSetBudget, Class: growth.ClassSpend, Operations: []string{"googleads.customers.campaignBudgets.mutate"},
 			Description: "Ask an administrator to set a campaign budget's daily amount. Held to the account's spending caps " +
 				"before anyone is asked and again when it is made.",
-			Parameters: schemaObject(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"budget": map[string]any{"type": "string", "pattern": "^customers/[0-9]{10}/campaignBudgets/[0-9]+$",
 					"description": "The campaign budget's resource name."},
 				"amount": map[string]any{"type": "string", "pattern": `^[0-9]+(\.[0-9]{1,6})?$`,
@@ -97,7 +89,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		out = append(out, growth.Tool{
 			Name: genericTools()[class], Class: class, Operations: ids,
 			Description: genericDescription(class),
-			Parameters: schemaObject(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"operation": map[string]any{"type": "string", "enum": ids,
 					"description": "The method's ID, as docs/integrations/google-ads.md lists it."},
 				"path": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"},

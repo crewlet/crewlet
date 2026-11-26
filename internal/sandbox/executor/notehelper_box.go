@@ -33,19 +33,30 @@ var errNoHelperBuild = errors.New("no note helper build for this machine")
 // across builds would otherwise run another build's helper against this
 // one's bridge. The run's script makes it executable.
 func writeNoteHelper(ctx context.Context, box sandbox.Sandbox, path string) error {
+	helper, err := noteHelperFor(ctx, box)
+	if err != nil {
+		return err
+	}
+	return writeHelperBuild(ctx, box, path, helper)
+}
+
+// noteHelperFor is the note helper's build for box's machine, read before
+// anything is written ([errNoHelperBuild] where the engine carries none).
+func noteHelperFor(ctx context.Context, box sandbox.Sandbox) ([]byte, error) {
 	machine, err := box.Exec(ctx, "uname -m", sandbox.ExecOptions{})
 	if err != nil {
-		return fmt.Errorf("executor: reading the box's machine for the note helper: %w", err)
+		return nil, fmt.Errorf("executor: reading the box's machine for the note helper: %w", err)
 	}
 	arch, err := noteHelperArch(machine.Stdout)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	helper, err := noteHelperBinary(arch)
-	if err != nil {
-		return err
-	}
-	if err = box.WriteFile(ctx, path, helper); err != nil {
+	return noteHelperBinary(arch)
+}
+
+// writeHelperBuild writes helper, a build [noteHelperFor] read, to path.
+func writeHelperBuild(ctx context.Context, box sandbox.Sandbox, path string, helper []byte) error {
+	if err := box.WriteFile(ctx, path, helper); err != nil {
 		return fmt.Errorf("executor: writing the note helper: %w", err)
 	}
 	return nil

@@ -1407,7 +1407,8 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// A RUN PAST ITS CAP fails next, whatever it reported: decided here, after
 	// the report's success above and nowhere else, so no runner can let a
 	// defeated cap collect as a success ([capVerdict]).
-	if verdict, past := capVerdict(handle.TurnCap, requests, inFlight, result.RoundCapped); past {
+	count := sandbox.RequestCount{Requests: requests, InFlight: inFlight, Undecided: undecided}
+	if verdict, past := capVerdict(handle.TurnCap, count, result.RoundCapped); past {
 		result.Success, result.TurnCapExceeded = false, verdict.exceeded
 		result.RoundCapped = !verdict.exceeded
 		sentences = append(sentences, verdict.sentence)
@@ -1415,8 +1416,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// AND A CAPPED RUN WHOSE STREAM MAY HIDE REQUESTS in lines past the bound
 	// ([Decoder.Undecided]) that could take it past its cap: each such line
 	// hides one request at most, so a run within its cap with all of them
-	// counted is judged within it.
-	if handle.TurnCap > 0 && undecided > 0 && requests+undecided > handle.TurnCap {
+	// counted is judged within it. ONE PREDICATE with the launching node's
+	// watch, which ends a run as soon as this would fail it ([sandbox.RequestCount]).
+	if count.Unjudged(handle.TurnCap) {
 		result.Success = false
 		sentences = append(sentences, fmt.Sprintf("the run's turn cap of %d could not be judged: %d line(s) of its "+
 			"stream, past the %s a line is read within, may hold a model request whose marker neither end of the "+
@@ -1461,17 +1463,18 @@ type capJudgment struct {
 // shell that rewrites the stream (docs/concepts/code-sandbox.md, "What ends a
 // run"). A run past it is NEVER A SUCCESS: past by no more than its runner's
 // in-flight requests ([Decoder.InFlight]), with its enforcer's stop in its
-// stream (stopped), it collects as stopped at its cap; else as past it.
-func capVerdict(turnCap, requests, inFlight int, stopped bool) (capJudgment, bool) {
-	if turnCap <= 0 || requests <= turnCap {
+// stream (stopped), it collects as stopped at its cap; else as past it
+// ([sandbox.RequestCount.Exceeds], the launching node's watch's predicate too).
+func capVerdict(turnCap int, count sandbox.RequestCount, stopped bool) (capJudgment, bool) {
+	if turnCap <= 0 || count.Requests <= turnCap {
 		return capJudgment{}, false
 	}
-	if stopped && requests <= turnCap+max(inFlight, 0) {
+	if stopped && !count.Exceeds(turnCap) {
 		return capJudgment{sentence: fmt.Sprintf("the run was stopped at its turn cap of %d: it made %d model "+
-			"requests, the last already made as its harness was stopped", turnCap, requests)}, true
+			"requests, the last already made as its harness was stopped", turnCap, count.Requests)}, true
 	}
 	return capJudgment{exceeded: true, sentence: fmt.Sprintf("the turn cap of %d was exceeded: the run made %d "+
-		"model requests", turnCap, requests)}, true
+		"model requests", turnCap, count.Requests)}, true
 }
 
 // bridgeUnconnected is a run's failure where its harness ended it without ever

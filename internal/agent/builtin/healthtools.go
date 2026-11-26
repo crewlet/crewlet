@@ -1044,7 +1044,7 @@ func (t *codeStatus) hottest(ctx context.Context, turn *turnctx.Turn, c codeCall
 // THE FIRST READ THAT FAILS ENDS THE JUDGEMENT: a failure answers the whole
 // call, so its error cancels every read in flight and starts no more. With the
 // code log out of quorum each read fails only after its barrier's budget
-// (statelog.DefaultBarrierBudget), so reads left running would hold the caller
+// (statelog.ElectionBarrierBudget), so reads left running would hold the caller
 // a budget per wave and append barriers to the failing log just as an alarm's
 // wake sends every granted seat to look.
 func (t *codeStatus) judgeWave(ctx context.Context, turn *turnctx.Turn, c codeCaller, wave []string,
