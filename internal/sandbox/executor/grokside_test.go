@@ -50,11 +50,27 @@ func grokSideBox(t *testing.T, runner *executor.Runner, streamed int, startTitle
 	if titled {
 		b.Put(dir+"/summary.json", `{"info":{"id":"x"},"generated_title": "Cap run"}`)
 	}
+	// A SUBAGENT SESSION THE RUN STARTED, its own title and a checkpoint, and
+	// one an earlier run started, which counts nothing.
+	sub, earlier := "01a218ac-fbd4-7ee1-ba19-a0933fa48306", "01a218ac-fbd4-7ee1-ba19-a0933fa48307"
+	start += "subagents " + earlier + "\n"
+	b.Put(p.GrokRunStart(), start)
+	child := p.GrokSessionsKey() + "/" + sub
+	b.Put(dir+"/subagents/"+sub+"/meta.json", `{"child_session_id":"`+sub+`","child_cwd":"`+p.Home+`"}`)
+	b.Put(dir+"/subagents/"+earlier+"/meta.json", `{"child_session_id":"`+earlier+`","child_cwd":"`+p.Home+`"}`)
+	b.Put(child+"/summary.json", `{"generated_title": "Cap run"}`)
+	b.Put(p.GrokSessionsKey()+"/"+earlier+"/summary.json", `{"generated_title": "Cap run"}`)
 	listing := "compaction_requests " + ids[0] + ".json\ncompaction_requests " + ids[1] + ".json\n" +
 		"compaction_requests " + ids[2] + ".json\ncompaction_requests notes.json\n" +
-		"compaction_checkpoints " + ids[3] + ".json\ncompaction_checkpoints " + ids[4] + ".json\n"
+		"compaction_checkpoints " + ids[3] + ".json\ncompaction_checkpoints " + ids[4] + ".json\n" +
+		"subagents " + sub + "\nsubagents " + earlier + "\n"
 	b.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
-		if strings.Contains(cmd, "compaction_checkpoints") {
+		switch {
+		case !strings.Contains(cmd, "compaction_checkpoints"):
+			return sandbox.ExecResult{}, nil
+		case strings.Contains(cmd, child):
+			return sandbox.ExecResult{Stdout: "compaction_checkpoints 00000000-0000-4000-8000-00000000000f.json\n"}, nil
+		case strings.Contains(cmd, dir):
 			return sandbox.ExecResult{Stdout: listing}, nil
 		}
 		return sandbox.ExecResult{}, nil
@@ -74,13 +90,14 @@ func grokSideBox(t *testing.T, runner *executor.Runner, streamed int, startTitle
 // IT, live and at its collection alike: each attempt a refused compaction's
 // file lists, all but the last of a kept one's, which its checkpoint counts,
 // each checkpoint, and the title the session gained, added to the stream's
-// usage lines, which show none of them; never an earlier run's file, a title
-// the session already had, or a key of a file's chat history. Each is a
+// usage lines, which show none of them, and a subagent session's title and
+// checkpoints the run started; never an earlier run's file or subagent, a
+// title the session already had, or a key of a file's chat history. Each is a
 // request the run made, so the sum never counts more than it did.
 //
 // Mutation: take the larger instead of the sum, count a kept compaction's last
-// attempt, an earlier run's file, a title held at the start, or every
-// "attempt" key, and a row goes red.
+// attempt, an earlier run's file or subagent, a title held at the start, every
+// "attempt" key, or no subagent session, and a row goes red.
 func TestAGrokRunIsCountedByItsStreamAndItsSessionsSideRecords(t *testing.T) {
 	t.Parallel()
 	runner := executor.New(executor.Grok{})
@@ -89,9 +106,9 @@ func TestAGrokRunIsCountedByItsStreamAndItsSessionsSideRecords(t *testing.T) {
 		startTitled, titled bool
 		want                int
 	}{
-		{"a title gained", false, true, 4 + 3 + 1 + 2 + 1},
-		{"a title held at the start", true, true, 4 + 3 + 1 + 2},
-		{"no title yet", false, false, 4 + 3 + 1 + 2},
+		{"a title gained", false, true, 4 + 3 + 1 + 2 + 1 + 2},
+		{"a title held at the start", true, true, 4 + 3 + 1 + 2 + 2},
+		{"no title yet", false, false, 4 + 3 + 1 + 2 + 2},
 	} {
 		b := grokSideBox(t, runner, 4, c.startTitled, c.titled)
 		if got, err := runner.Count(sandbox.RunHandle{}).Read(t.Context(), b); err != nil || got.Requests != c.want {

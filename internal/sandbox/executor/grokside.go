@@ -46,32 +46,47 @@ func (c *sumCount) Read(ctx context.Context, box sandbox.Sandbox) (sandbox.Reque
 	return streamed, errors.Join(streamErr, sideErr)
 }
 
-// sideCount implements [sideCounted]: what a Grok Build session's directory
-// keeps of the requests its stream's usage lines never show (measured on
-// 1.0.92 against a stand-in). Each compaction whose summary Grok refused
-// leaves a file in compaction_requests/ listing its attempts, each a request,
-// the last one Grok kept where the file records no error; each compaction it
-// kept leaves a checkpoint, one request at least; and the session's title,
-// written once a session to summary.json, is one request. NOT COUNTED: a
-// refused compaction's retries past its listed attempts (2 of 5 measured), a
-// kept compaction's second request, and a resumed session's title.
+// sideCount implements [sideCounted]: what a Grok Build run's sessions keep
+// of the requests its stream's usage lines never show (measured on 1.0.92
+// against a stand-in; the lines show a subagent's requests, 3 of 3). Each
+// compaction Grok refused leaves a file in compaction_requests/ listing its
+// attempts, the last one kept where it records no error; each kept one a
+// checkpoint, one request at least; and each session's title, the run's and
+// each subagent's, is one request (summary.json). NOT COUNTED: a refused
+// compaction's retries past its listed attempts (2 of 5 measured), a kept
+// compaction's second request, and a resumed session's title.
 func (Grok) sideCount() sideCounter {
-	return &grokSideCount{files: map[string]int{}, checkpoints: map[string]bool{}}
+	return &grokSideCount{}
 }
 
 // grokEntryName is a compaction file's or checkpoint's name: a UUID's JSON.
 var grokEntryName = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$`)
 
-// grokSideCount is one reading of a Grok Build run's side requests: each
-// compaction file read once, by name, and the names its session held as the
-// run began ([Paths.GrokRunStart]) left out.
+// grokSessionName is a subagent's or session's id as Grok Build names its
+// directory: a UUID.
+var grokSessionName = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// grokSideCount is one reading of a Grok Build run's side requests, over its
+// session and each subagent session it starts (measured on 1.0.92: a
+// subagent's session is filed apart, named in its parent's subagents/, with
+// a title of its own): each compaction file read once, by name, and what the
+// run's session held as it began ([Paths.GrokRunStart]) left out.
 type grokSideCount struct {
 	session         string
 	titled, started bool
 	before          map[string]bool
-	files           map[string]int
-	checkpoints     map[string]bool
-	title           int
+	// sessions is each session read, by its directory, the run's first.
+	sessions map[string]*grokSessionSide
+	order    []string
+}
+
+// grokSessionSide is what one session's directory records of the requests
+// the stream shows none of.
+type grokSessionSide struct {
+	files       map[string]int
+	checkpoints map[string]bool
+	subagents   map[string]bool
+	title       int
 }
 
 func (g *grokSideCount) read(ctx context.Context, box sandbox.Sandbox, paths Paths) (int, error) {
@@ -80,44 +95,94 @@ func (g *grokSideCount) read(ctx context.Context, box sandbox.Sandbox, paths Pat
 			return 0, err
 		}
 	}
-	dir := paths.GrokSessionsKey() + "/" + g.session
-	q := shellword.Quote
-	res, err := box.Exec(ctx, `cd `+q(dir)+` 2> /dev/null || exit 0; for k in compaction_requests compaction_checkpoints; do `+
-		`[ -d "$k" ] && [ ! -L "$k" ] && ls -1 "$k" | sed "s|^|$k |"; done; exit 0`, sandbox.ExecOptions{})
-	if err != nil {
-		return g.total(), fmt.Errorf("executor: listing a Grok Build session's compactions: %w", err)
+	if g.sessions == nil {
+		g.sessions = map[string]*grokSessionSide{}
+		g.add(paths.GrokSessionsKey() + "/" + g.session)
 	}
-	sc := bufio.NewScanner(strings.NewReader(res.Stdout))
-	for sc.Scan() {
-		kind, name, _ := strings.Cut(sc.Text(), " ")
-		if !grokEntryName.MatchString(name) || g.before[kind+" "+name] {
-			continue
-		}
-		switch kind {
-		case "compaction_requests":
-			if _, read := g.files[name]; !read {
-				n, err := grokAttempts(ctx, box, dir+"/"+kind+"/"+name)
-				if err != nil {
-					return g.total(), err
-				}
-				g.files[name] = n
-			}
-		case "compaction_checkpoints":
-			g.checkpoints[name] = true
-		}
-	}
-	if g.title == 0 && !g.titled {
-		if raw, err := box.ReadFile(ctx, dir+"/summary.json"); err == nil && grokTitled(raw) {
-			g.title = 1
+	for i := 0; i < len(g.order); i++ {
+		if err := g.readSession(ctx, box, paths, g.order[i], i == 0); err != nil {
+			return g.total(), err
 		}
 	}
 	return g.total(), nil
 }
 
+// add is a session directory to read, once.
+func (g *grokSideCount) add(dir string) {
+	if _, ok := g.sessions[dir]; !ok {
+		g.sessions[dir] = &grokSessionSide{files: map[string]int{}, checkpoints: map[string]bool{},
+			subagents: map[string]bool{}}
+		g.order = append(g.order, dir)
+	}
+}
+
+// readSession reads one session's directory: the run's own past what it held
+// as the run began, a subagent's whole, each subagent it names added.
+func (g *grokSideCount) readSession(ctx context.Context, box sandbox.Sandbox, paths Paths, dir string, root bool) error {
+	side := g.sessions[dir]
+	q := shellword.Quote
+	res, err := box.Exec(ctx, `cd `+q(dir)+` 2> /dev/null || exit 0; for k in compaction_requests compaction_checkpoints `+
+		`subagents; do [ -d "$k" ] && [ ! -L "$k" ] && ls -1 "$k" | sed "s|^|$k |"; done; exit 0`, sandbox.ExecOptions{})
+	if err != nil {
+		return fmt.Errorf("executor: listing a Grok Build session's compactions: %w", err)
+	}
+	sc := bufio.NewScanner(strings.NewReader(res.Stdout))
+	for sc.Scan() {
+		kind, name, _ := strings.Cut(sc.Text(), " ")
+		if root && g.before[kind+" "+name] {
+			continue
+		}
+		switch {
+		case kind == "compaction_requests" && grokEntryName.MatchString(name):
+			if _, read := side.files[name]; !read {
+				n, err := grokAttempts(ctx, box, dir+"/"+kind+"/"+name)
+				if err != nil {
+					return err
+				}
+				side.files[name] = n
+			}
+		case kind == "compaction_checkpoints" && grokEntryName.MatchString(name):
+			side.checkpoints[name] = true
+		case kind == "subagents" && grokSessionName.MatchString(name) && !side.subagents[name]:
+			if child, ok := grokChild(ctx, box, paths, dir+"/subagents/"+name+"/meta.json"); ok {
+				side.subagents[name] = true
+				g.add(child)
+			}
+		}
+	}
+	if side.title == 0 && (!root || !g.titled) {
+		if raw, err := box.ReadFile(ctx, dir+"/summary.json"); err == nil && grokTitled(raw) {
+			side.title = 1
+		}
+	}
+	return nil
+}
+
+// grokChild is the directory of the subagent session a parent's meta.json
+// names: under its own working directory's key, as Grok files it; false
+// until the file names one.
+func grokChild(ctx context.Context, box sandbox.Sandbox, paths Paths, meta string) (string, bool) {
+	raw, err := box.ReadFile(ctx, meta)
+	if err != nil {
+		return "", false
+	}
+	var m struct {
+		Child string `json:"child_session_id"`
+		Cwd   string `json:"child_cwd"`
+	}
+	if json.Unmarshal(raw, &m) != nil || !grokSessionName.MatchString(m.Child) || m.Cwd == "" {
+		return "", false
+	}
+	return paths.GrokSessions() + "/" + grokPathKey(m.Cwd) + "/" + m.Child, true
+}
+
 func (g *grokSideCount) total() int {
-	n := len(g.checkpoints) + g.title
-	for _, attempts := range g.files {
-		n += attempts
+	n := 0
+	for _, side := range g.sessions {
+		n += len(side.checkpoints) + side.title
+		for _, attempts := range side.files {
+			n += attempts
+		}
 	}
 	return n
 }
@@ -137,7 +202,7 @@ func (g *grokSideCount) start(ctx context.Context, box sandbox.Sandbox, paths Pa
 			g.session = value
 		case "titled":
 			g.titled = true
-		case "compaction_requests", "compaction_checkpoints":
+		case "compaction_requests", "compaction_checkpoints", "subagents":
 			g.before[line] = true
 		}
 	}
@@ -189,7 +254,7 @@ func grokTitled(raw []byte) bool {
 func grokRunStart(paths Paths) string {
 	q := shellword.Quote
 	return `{ printf 'session %s\n' "$s"; x=` + q(paths.GrokSessionsKey()) + `/"$s"; if [ -d "$x" ] && [ ! -L "$x" ]; then ` +
-		`grep -q '"generated_title": *"[^"]' "$x/summary.json" 2> /dev/null && echo titled; for k in compaction_requests compaction_checkpoints; do ` +
+		`grep -q '"generated_title": *"[^"]' "$x/summary.json" 2> /dev/null && echo titled; for k in compaction_requests compaction_checkpoints subagents; do ` +
 		`[ -d "$x/$k" ] && ls -1 "$x/$k" | sed "s|^|$k |"; done; fi; } > ` + q(paths.GrokRunStart()+".next") +
 		` && mv -f ` + q(paths.GrokRunStart()+".next") + " " + q(paths.GrokRunStart()) + "\n"
 }
