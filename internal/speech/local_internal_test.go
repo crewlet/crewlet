@@ -103,25 +103,32 @@ func TestPastCapacityOpenIsBusy(t *testing.T) {
 	}
 }
 
-// A WORKER THAT DIES FAILS ITS STREAMS WITH ErrLost, and the next dictation
-// starts a new one: a crash in native code ends dictations, never the engine.
-// Mutation: end the streams of an exited worker with a nil error, and the
-// first stream reads as a clean finish.
+// A WORKER THAT DIES FAILS ITS STREAMS WITH ErrLost, and a dictation opened
+// the moment one of them learns it starts a new worker: a crash in native
+// code ends dictations, never the engine. Each crash is a fresh chance at the
+// window between a stream's end and the recognizer letting go of the dead
+// worker. Mutations: end the streams with a nil error, and the first stream
+// reads as a clean finish; end them before the recognizer lets go, and an
+// open lands on the dead worker.
 func TestAWorkerThatDiesFailsItsStreamsAndIsReplaced(t *testing.T) {
 	t.Parallel()
+	const crashes = 50
 	l, spawns := scriptedLocal(t, 4, scriptedCrash)
-	s := open(t, l)
-	for range 2 {
-		_ = s.Send(FakeSpeech(100 * time.Millisecond))
-	}
-	drain(t, s)
-	if err := s.Err(); !errors.Is(err, ErrLost) {
-		t.Fatalf("a stream whose worker died ended with %v, want ErrLost", err)
+	for i := range crashes {
+		s := open(t, l)
+		for range 2 {
+			_ = s.Send(FakeSpeech(100 * time.Millisecond))
+		}
+		drain(t, s)
+		if err := s.Err(); !errors.Is(err, ErrLost) {
+			t.Fatalf("crash %d: a stream whose worker died ended with %v, want ErrLost", i+1, err)
+		}
+		s.Close()
 	}
 	again := open(t, l)
 	defer again.Close()
-	if n := spawns.Load(); n != 2 {
-		t.Errorf("%d workers started, want a second after the first died", n)
+	if n := spawns.Load(); n != crashes+1 {
+		t.Errorf("%d workers started, want one per crash and one after the last", n)
 	}
 	if a := l.Availability(); !a.Available {
 		t.Errorf("after a crash the recognizer reads %+v, want available", a)
