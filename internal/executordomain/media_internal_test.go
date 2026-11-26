@@ -149,13 +149,13 @@ func TestACaptureNamesEachMediaOnce(t *testing.T) {
 	e.capture(first)
 	later := naming(capturing("ana", "chat:room", turn, 1, 2, 100, budget), carry(a))
 	encoded := e.encode(ConversationSubject("ana", "chat:room", turn), OpCapture, seatScope("ana"), later)
-	if env, err := DecodeEnvelope(encoded); err != nil || env.V != mediaVersion {
-		t.Fatalf("a capture naming media is stamped %d (%v), want %d", env.V, err, mediaVersion)
+	if env, err := DecodeEnvelope(encoded); err != nil || env.V != MediaVersion {
+		t.Fatalf("a capture naming media is stamped %d (%v), want %d", env.V, err, MediaVersion)
 	}
 	if env, err := DecodeEnvelope(e.encode(ConversationSubject("ana", "chat:room", turn), OpCapture,
-		seatScope("ana"), capturing("ana", "chat:room", turn, 1, 3, 100, budget))); err != nil || env.V >= mediaVersion {
+		seatScope("ana"), capturing("ana", "chat:room", turn, 1, 3, 100, budget))); err != nil || env.V >= MediaVersion {
 		t.Errorf("a capture naming no media is stamped %d (%v), want below %d: an older build reads it",
-			env.V, err, mediaVersion)
+			env.V, err, MediaVersion)
 	}
 	e.applyEncoded(OpCapture, encoded)
 	refs, err := SessionMediaReferences.Records(encoded)

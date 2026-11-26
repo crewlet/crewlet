@@ -124,6 +124,9 @@ type scrubBounds struct {
 	// tally is what the scrub took out of the members a meter counts
 	// ([scrubBounds.tallying]); nil keeps none.
 	tally *scrubTally
+	// split is where a take that keeps its media apart writes its body
+	// ([scrubBounds.splitting]); a nil body keeps none apart.
+	split mediaSplit
 }
 
 // plainBounds is a scrub that reads at most plain bytes of plaintext in one
@@ -254,7 +257,8 @@ const (
 	// archiveHeldBytes is the archive's own readers and writers, the gzip
 	// writer's compressor the largest: flate's hash chains and window, under
 	// a mebibyte at [keptGzipLevel], beside gzip's reader, tar's reader
-	// and writer and the buffers of the readers and writers above them.
+	// and writer, the member split's frame ([memberOut]) and the buffers of
+	// the readers and writers above them.
 	archiveHeldBytes = 2 << 20
 	// planBlockBytes is the room of the [bitList] blocks being filled beyond
 	// their bits: each of the plan's two streams, the three lists a line's
@@ -337,12 +341,22 @@ type scrubber struct {
 	// tally says each text's scrub keeps tally of what it takes out
 	// ([scrubber.tallying]).
 	tally bool
+	// media is the first reading's plan of the payloads it keeps apart,
+	// which each string value's rewrite tells ([mediaRun]); nil finds none.
+	media *mediaPlan
 }
 
 // firstReading is s staging its texts through pieces, on its text way first
 // ([scrubber.way]).
 func (s scrubber) firstReading(pieces *firstPieces) scrubber {
 	s.first = &pieces.ways[textWay]
+	return s
+}
+
+// finding is s telling media of each payload its string values hold, nil
+// telling none.
+func (s scrubber) finding(media *mediaPlan) scrubber {
+	s.media = media
 	return s
 }
 
@@ -840,8 +854,9 @@ func lastRunes(b []byte, n int) []byte {
 	return append(b[:0], b[at:]...)
 }
 
-// scrubArchive streams the archive first holds, of layout, scrubbed onto dst,
-// within bounds. reopen opens the same archive again from its start, for the
+// scrubArchive streams the archive first holds, of layout, scrubbed onto dst
+// whole, within bounds, and framed onto their body where they keep media
+// apart ([scrubBounds.splitting]). reopen opens the same archive again from its start, for the
 // second of the two readings every layout is read in. It closes nothing it was
 // handed; the caller owns every reader.
 func scrubArchive(layout archiveLayout, first io.Reader, reopen func() (io.ReadCloser, error),
@@ -889,11 +904,11 @@ func scrubDocument(first io.Reader, reopen func() (io.ReadCloser, error), dst io
 	if err != nil {
 		return err
 	}
-	zw, err := newKeptGzip(dst)
+	zw, err := newMemberSplit(dst, b.split.body, &plan.media)
 	if err != nil {
 		return err
 	}
-	from := newSpoolCopy(kept, plan)
+	from := newSpoolCopy(kept, plan, zw)
 	if _, err = io.Copy(zw, from); err != nil {
 		return err
 	}
@@ -940,12 +955,12 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 	if err != nil {
 		return err
 	}
-	zw, err := newKeptGzip(dst)
+	zw, err := newMemberSplit(dst, b.split.body, &plan.media)
 	if err != nil {
 		return err
 	}
 	tw := tar.NewWriter(zw)
-	from := newSpoolCopy(kept, plan)
+	from := newSpoolCopy(kept, plan, zw)
 	for !plan.members.done() {
 		kind, ok := plan.members.takeByte()
 		if !ok {
@@ -1032,9 +1047,10 @@ func firstReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scru
 	spool *unitSpool, read func(io.Reader, scrubber, *tarPlan) error) (*tarPlan, error) {
 
 	pieces := newFirstPieces(b.memo)
-	plan := &tarPlan{gate: b.gate, spool: spool}
+	plan := &tarPlan{gate: b.gate, spool: spool,
+		media: mediaPlan{on: b.split.body != nil, allowance: b.split.allowance}}
 	for src, diverged := first, 0; ; {
-		err := read(src, s.firstReading(pieces), plan)
+		err := read(src, s.firstReading(pieces).finding(plan.media.finding()), plan)
 		switch {
 		case errors.Is(err, errReadBothWays) || errors.Is(err, errTextAgain):
 			// THE UNIT'S JSON IS CUT BACK OUT ALREADY, so the spool stands
@@ -1050,7 +1066,8 @@ func firstReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scru
 			if err = spool.empty(); err != nil {
 				return plan, err
 			}
-			plan = &tarPlan{gate: b.gate, spool: spool, bothFrom: plan.bothFrom, textUnit: plan.textUnit}
+			plan = &tarPlan{gate: b.gate, spool: spool, bothFrom: plan.bothFrom, textUnit: plan.textUnit,
+				media: plan.media.restarted()}
 		default:
 			// THE WAYS' ROOM IS THE FIRST READING'S ALONE: the second holds
 			// none of it.
@@ -1313,6 +1330,8 @@ type tarPlan struct {
 	// says it does.
 	gate pieceGate
 	held bool
+	// media is the payloads the take keeps apart ([mediaPlan]).
+	media mediaPlan
 }
 
 // holdPast holds the large slot once the plan is past [scrubPieceBaseBytes]
@@ -1426,9 +1445,9 @@ func (p *tarPlan) resumeAtMark() {
 // it but its member's kind ([tarPlan.notJSON]), and the unit's JSON cut back
 // out of the spool, so both stand at the mark as the reading left them.
 type planMark struct {
-	member, membersBits, units int
-	offset, size, spoolAt      int64
-	name                       string
+	member, membersBits, units, media int
+	offset, size, spoolAt             int64
+	name                              string
 }
 
 // markMember marks the regular member named name at its place among the
@@ -1443,6 +1462,7 @@ func (p *tarPlan) markMember(member, membersBits int, name string) {
 // its lines before it come to size as kept.
 func (p *tarPlan) markUnit(offset, size int64) {
 	p.mark.offset, p.mark.size, p.mark.units, p.mark.spoolAt = offset, size, p.units, p.spool.at
+	p.mark.media, p.media.unitAt = len(p.media.found), p.spool.at
 }
 
 // memberAt begins the member at its place among the archive's members, h its
@@ -1468,6 +1488,7 @@ func (p *tarPlan) memberAt(member int, h *tar.Header, body io.Reader) (resumed b
 		return false, errMemberChanged(h.Name)
 	}
 	p.members.list.truncate(r.membersBits)
+	p.media.dropTo(r.media)
 	p.units = r.units
 	p.resume, p.carry = nil, r
 	if _, err = io.CopyN(io.Discard, body, r.offset); errors.Is(err, io.EOF) {
@@ -1682,6 +1703,9 @@ func measureLines(src io.Reader, s scrubber, plan *tarPlan) (int64, error) {
 			}
 			n := asJSON.n
 			if list, taken, ok := defs.decide(asJSON.marked); ok {
+				// A LINE THAT LOSES A DEFINITION KEEPS ITS PAYLOADS INLINE, so
+				// the second reading's cut never meets a member's edge.
+				plan.media.dropTo(plan.mark.media)
 				plan.addCut(plan.mark.spoolAt, list, taken)
 				n -= taken
 				// THE CUT TAKES OUT BYTES OF THE LINE AS WRITTEN, which the

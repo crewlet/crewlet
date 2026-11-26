@@ -1051,6 +1051,12 @@
   - `internal/executordomain.TestAnOpenSplicesEveryMediaWhereItsFrameStands`
   - `internal/executordomain.TestNoMediaOutlivesItsSession`
   - `internal/executordomain.TestTheSeatBudgetCountsSharedMediaOnce`
+  - `internal/sandbox/executor.TestATakeCutsEachLargePayloadIntoAMemberOfItsOwn`
+  - `internal/sandbox/executor.TestAValuePlantedBesideAPayloadIsStillTakenOut`
+  - `internal/sandbox/executor.TestASessionSplicedFromItsMembersIsRestoredAsOne`
+  - `internal/sandbox.TestAKeepCarriesMediaItsTurnHolds`
+  - `internal/sandbox.TestAMissingMediaObjectRestoresNothing`
+  - `internal/engine.TestATakeKeepsMediaApartOnlyOnceEveryReaderReadsIt`
   - `internal/sandbox/executor.TestTheTrimPointsAreTheTakesBounds`
   - `internal/sandbox/executor.TestATrimmedCodexPackKeepsWhatItsResumeLoads`
   - `internal/sandbox/executor.TestACodexPackWithNothingToTrimIsPackedWhole`
@@ -6513,9 +6519,7 @@ A harness keeps every image, PDF or file it read inline, as base64 in its
 transcript: a whole-PDF Claude Code read is 40.1 MiB of the 48 MiB bound, kept
 twice where a read repeats, and kept again in every capture of the session. So a
 kept session's large payloads are stored apart from its text, once each
-(crewlet/crewlet#1626). The log and the session store hold and restore a
-session so; the take still keeps every session whole until its scrub cuts the
-payloads apart (crewlet/crewlet#2020).
+(crewlet/crewlet#1626).
 
 **Stored by its member, spliced back byte for byte.** Each payload is a gzip
 member of its own in the archive a take writes; the session's text object
@@ -6529,6 +6533,13 @@ its frame stands, checking it against its digest once read, so the box, every
 reader and the take's own digest of the archive see exactly the bytes the take
 wrote, and no reader parses a reference inside a transcript. A session with no
 media is stored as before.
+
+**Cut by the take, after its scrub.** A payload is a JSON string value whose
+scrubbed text is base64 whole, or a data URI's, of a mebibyte or more; the take
+finds it after the scrub, so a secret inside one leaves it inline and redacted,
+and cuts it at the gzip level, never inside the JSON. It keeps apart at most
+`MediaMaxCount` first occurrences holding `SessionMaxBytes` of text, and a
+repeat by its first's digest; past either a payload stays inline.
 
 **Named by rows, kept by reachability.** A capture names its session's whole
 media set (`Capture.Media`, record version 9; one with none keeps the older
@@ -6555,7 +6566,9 @@ sessions. The API row and the Sessions screen state `media_bytes` beside
 
 **Mid-upgrade.** An older build retains a capture naming media, so it never
 applies a row whose frames its estate does not name; its collector then reads
-an incomplete estate and deletes nothing. A capture with no media is unchanged.
+an incomplete estate and deletes nothing. A take keeps its media apart only
+once every node applying the log says it reads record version 9
+(`statelog.Readers`); until then every capture keeps them inline, unchanged.
 
 ## Amendment: a kept session is what its harness's resume loads
 

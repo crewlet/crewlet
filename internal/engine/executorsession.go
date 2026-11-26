@@ -74,12 +74,17 @@ var sandboxAuthor = iam.Actor{Name: "sandbox", Kind: iam.ActorSystem}
 // every attempt at it is one operation, however often the sandbox asks.
 func (r executorRecords) Capture(ctx context.Context, c sandbox.CaptureRecord) (sandbox.LogAnswer, error) {
 	stamp := c.Stamp
+	media, err := capturedMedia(stamp.Media)
+	if err != nil {
+		return sandbox.LogRefused, err
+	}
 	call := executordomain.Call{By: sandboxAuthor,
 		OpID: executordomain.CaptureOpID(stamp.Minted, c.Handle, c.Turn, stamp.Launch, stamp.CaptureSeq)}
 	n := executordomain.NewCapture{
 		Handle: c.Handle, Turn: c.Turn, ConversationKey: c.ConversationKey, WorkKey: c.WorkKey,
 		Harness: stamp.Harness, HarnessVersion: stamp.HarnessVersion, Entry: stamp.Entry,
 		SessionID: stamp.SessionID, Object: c.Object, ContentKey: stamp.ContentKey, ArchiveFormat: stamp.ArchiveFormat,
+		Media:     media,
 		LaunchSeq: stamp.LaunchSeq, CaptureSeq: stamp.CaptureSeq,
 		Home: stamp.Home, Workspace: stamp.Workspace, SeatBudget: stamp.SeatBudget,
 		// WHAT ONLY THE RUN'S ROW KNEW OF THE SESSION, carried onto the log's
@@ -103,6 +108,22 @@ func (r executorRecords) Capture(ctx context.Context, c sandbox.CaptureRecord) (
 		return sandbox.LogRefused, err
 	}
 	return sandbox.LogUnsettled, unsettledRecord(res.Outcome, err)
+}
+
+// capturedMedia is the media a capture's stamp names, as the log takes them: a
+// name that is no object key refuses the record ([executordomain.ErrInvalid]).
+func capturedMedia(media []sandbox.CaptureMedia) ([]executordomain.NewMedia, error) {
+	out := make([]executordomain.NewMedia, 0, len(media))
+	for _, m := range media {
+		key, err := objstore.ParseKey(m.Object)
+		if err != nil {
+			return nil, fmt.Errorf("%w: media %s names no object: %w", executordomain.ErrInvalid, m.Digest, err)
+		}
+		out = append(out, executordomain.NewMedia{Carried: m.Carried, MediaObject: executorkeep.MediaObject{
+			Digest: m.Digest, ContentKey: m.ContentKey,
+			Object: objstore.Object{Key: key, Hash: objstore.Hash(m.ObjectHash), Size: m.ObjectSize}}})
+	}
+	return out, nil
 }
 
 // Begin records a turn's first read of its conversation under the one
@@ -186,7 +207,42 @@ func (k executorKeep) Policy(ctx context.Context) (sandbox.SessionPolicy, error)
 	if k.engine.Objects() == nil {
 		return sandbox.SessionPolicy{}, nil
 	}
-	return k.engine.executorPolicy(ctx)
+	policy, err := k.engine.executorPolicy(ctx)
+	if err != nil || !policy.Keep {
+		return policy, err
+	}
+	policy.MediaApart = k.engine.executorMediaRead(ctx)
+	return policy, nil
+}
+
+// executorMediaRead says whether every node applying the executor log reads a
+// capture that names media (executordomain.MediaVersion): its counted set as
+// the trim counts it ([statelog.CountedSet]), each node at the version its
+// heartbeat says it reads ([statelog.Readers]). A node that has not said, or
+// a set that cannot be read, answers false, and the take keeps its media
+// inline: an older build would retain the capture, its estate naming none of
+// its media, and its collector take them.
+func (e *Engine) executorMediaRead(ctx context.Context) bool {
+	if e.backends == nil || e.backends.Fleet == nil || e.backends.Coord == nil {
+		return false
+	}
+	rows, err := e.backends.Fleet.Positions(ctx)
+	if err != nil {
+		return false
+	}
+	live, err := e.holdersOf().LiveData(ctx)
+	if err != nil {
+		return false
+	}
+	domain := executordomain.Domain{}
+	tombs, _ := logTombstones(ctx, e.backends.Store, domain, 0)
+	readers := statelog.Readers(statelog.CountedSet(e.now(), reportedPositions(rows, domain.Name()), live, tombs))
+	for _, version := range readers {
+		if version < executordomain.MediaVersion {
+			return false
+		}
+	}
+	return len(readers) > 0
 }
 
 // Keeps is whether the revision this node runs keeps sessions, read with no
@@ -292,6 +348,28 @@ func (k executorKeep) Upload(ctx context.Context, spool executorkeep.SealedSpool
 		return executorkeep.SealedObject{}, err
 	}
 	return store.Upload(ctx, spool, sealed)
+}
+
+// SealMedia streams one payload's member sealed into dst, under an object key
+// minted now ([sandbox.SessionKeep.SealMedia]).
+func (k executorKeep) SealMedia(handle string, member io.Reader, dst io.Writer) (executorkeep.MediaSpool, error) {
+	store, err := k.engine.executorSessionStore()
+	if err != nil {
+		return executorkeep.MediaSpool{}, err
+	}
+	return store.SealMedia(handle, member, dst)
+}
+
+// UploadMedia puts what [executorKeep.SealMedia] sealed into the object it was
+// sealed for.
+func (k executorKeep) UploadMedia(ctx context.Context, spool executorkeep.MediaSpool,
+	sealed io.Reader) (executorkeep.MediaObject, error) {
+
+	store, err := k.engine.executorSessionStore()
+	if err != nil {
+		return executorkeep.MediaObject{}, err
+	}
+	return store.UploadMedia(ctx, spool, sealed)
 }
 
 // PutSummary seals a session's newest summary into an object of its own and

@@ -721,10 +721,9 @@
 //     way a token at a time as it streams, and one of blanks alone written as
 //     nothing ([rewriteDocument]), since blanks hold nothing a harness reads.
 //     A `.json` file the rewrite cannot read as one JSON value (a task file
-//     its harness was killed while it wrote, which the run's own end packs as
-//     it finds it) is redacted as text, as a transcript's torn line is, rather
-//     than costing the session; an export read on internal/jsonscan holds
-//     none of its strings.
+//     its harness was killed writing) is redacted as text, as a transcript's
+//     torn line is, rather than costing the session; an export read on
+//     internal/jsonscan holds none of its strings.
 //   - ANYTHING ELSE, as text, scrubbed and redacted as it streams, so a rule
 //     that reads across lines sees them all.
 //
@@ -782,36 +781,33 @@
 // the take's SPOOL ([unitSpool]: gzip at the kept archive's level, in its
 // process's spool directory), counting each file's size as kept, and the
 // second writes the tar from it, never the box ([spoolCopy]): a header names
-// the size of what follows it, whatever the box's archive does meanwhile.
-// Members before a reading's resume point are kept as the first reading read
-// them; the member it resumes in is checked by name, kind and length
-// ([tarPlan.memberAt]). The first reads each line and `.json` file as JSON
+// the size of what follows it, whatever the box's archive does meanwhile. A
+// reading resumes in a member checked by name, kind and length, those before
+// kept ([tarPlan.memberAt]). The first reads each line and `.json` file as JSON
 // alone; the first that is no JSON ends it, and the next goes on from it,
 // reading it as text and every later one both ways ([tarPlan.unitAhead]), each
 // way held to [wayRoomBytes] until the unit's is known ([candidate]): a JSON
 // way past it goes into a gzip member of its own, cut back out of the spool
 // where the text is kept, and a unit whose text was let go before its JSON
-// failed is read once more, as text, all within the first reading. Both ways
-// run on the scrub's own goroutine, where the take contains a panic
-// ([measureFile]). The spool is removed on every way out, before the take's
-// body ends, and held to the room the take holds for it (internal/sandbox's
-// takeRoomBytes): a spool that would pass it refuses the take.
+// failed is read once more, as text, all within the first reading. The spool
+// is removed on every way out, before the take's body ends, and held to the
+// room the take holds for it (internal/sandbox's takeRoomBytes): a spool that
+// would pass it refuses the take.
 //
 // THE PLAN ([tarPlan]) is two streams of bits, each written by the first
 // reading in the order it decides them and read back by the second in that
 // order: for each member its kind, and for a regular file its size as kept;
 // and each line that loses a definition: where the spool holds it, which list,
 // how many elements it holds, the bytes the cut takes and a bit each, set for
-// one cut. So it is AT MOST A SIXTEENTH OF THE PLAINTEXT: a member's header is
-// 512 bytes against a few dozen bits, a list's element, a byte and its comma,
-// one bit, and its cut a few dozen more, which the record it is cut out of
-// pays for. A record of its own for each member, line or cut would let a box's
-// archive of a mebibyte hold the engine host to gibibytes between the two
-// readings.
+// one cut; and each payload kept apart ([mediaPlan]). So it is AT MOST A
+// SIXTEENTH OF THE PLAINTEXT: a member's header is 512 bytes against a few
+// dozen bits, a list's element, a byte and its comma, one bit, and its cut a
+// few dozen more, which the record it is cut out of pays for. A record of its
+// own for each member, line or cut would let a box's archive of a mebibyte
+// hold the engine host to gibibytes between the two readings.
 //
-// AN EXPORT IS SPOOLED TOO ([scrubDocument]): a reading refuses a document
-// only once it has read it, and what it rewrote before a refusal would else
-// reach the take's pipe, uploader, checksum and meter.
+// AN EXPORT IS SPOOLED TOO: a reading refuses a document only once it has
+// read it ([scrubDocument]).
 //
 // A TEXT A TAKE FOUND UNCHANGED IS NOT REDACTED AGAIN. The redaction is the
 // scrub's cost, and every turn's take scrubs the whole session: a whole-PDF
@@ -875,6 +871,12 @@
 // why a take past it fails closed are in code-sandbox.md); the torn string,
 // read on from its last line, the slowest. A string is redacted once, as JSON
 // in its first reading.
+//
+// # A kept session's media is kept apart
+//
+// Each large payload a take keeps apart is found after the scrub ([mediaRun])
+// and cut into a gzip member alone ([memberSplit]): no JSON text changes,
+// and the archive whole is what the box digests and a restore hands back.
 //
 // # A definition the scrub renamed is cut out of its line
 //

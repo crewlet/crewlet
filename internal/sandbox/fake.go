@@ -1375,6 +1375,11 @@ type FakeSession struct {
 	Archive SessionArchive
 	Body    []byte
 
+	// Framed, where set, is the body a take keeping its media apart is
+	// handed ([SessionTake.MediaApart], [TakenSession.Framed]); nil hands it
+	// Body, unframed, as a runner that keeps none apart does.
+	Framed []byte
+
 	// TakeErr fails the take, as a box whose session cannot be read does,
 	// and KeepErr the record of its digest in the box.
 	TakeErr, KeepErr error
@@ -1491,6 +1496,10 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	if session.Count != nil {
 		count = func() *ResumedCount { counted := *session.Count; return &counted }
 	}
+	framed := take.MediaApart && session.Framed != nil
+	if framed {
+		raw = session.Framed
+	}
 	body := &takenFake{Reader: bytes.NewReader(raw), take: ctx}
 	if session.Streaming != nil {
 		body.stall = func() { session.Streaming(ctx) }
@@ -1498,6 +1507,7 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	return TakenSession{
 		Archive:    archive,
 		Body:       body,
+		Framed:     framed,
 		ResumeRead: session.ResumeRead,
 		Context:    func() int64 { return session.ContextTokens },
 		Next:       func() NextRequest { return session.NextRequest },

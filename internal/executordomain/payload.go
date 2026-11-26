@@ -57,7 +57,7 @@ type Capture struct {
 	// Media is every media object the session's frames name, the turn's
 	// whole set, which replaces the one its row named: none for a session
 	// kept whole, which keeps the record readable by an older build. Record
-	// version 9 ([mediaVersion]).
+	// version 9 ([MediaVersion]).
 	Media []CaptureMedia `json:"media,omitempty"`
 
 	// LaunchSeq and CaptureSeq are the capture's ordinals (its launch, and

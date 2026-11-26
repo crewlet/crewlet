@@ -183,7 +183,7 @@ func copiedSpool(t testing.TB, plan *tarPlan, size int64) string {
 	if err != nil {
 		t.Fatalf("reading the spool back: %v", err)
 	}
-	from := newSpoolCopy(kept, plan)
+	from := newSpoolCopy(kept, plan, nil)
 	var out bytes.Buffer
 	if _, err = io.Copy(&out, from); err != nil {
 		t.Fatalf("the second reading of the spool: %v", err)

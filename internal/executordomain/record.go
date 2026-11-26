@@ -59,12 +59,14 @@ const notContinuedVersion = 7
 // launch can continue.
 const spentSessionsVersion = 8
 
-// mediaVersion stamps a capture that names its session's media objects
+// MediaVersion stamps a capture that names its session's media objects
 // ([Capture.Media]), which the apply names on the turn's media rows. An older
 // build retains it: applied without them, its row would name a text object
 // whose frames no media row of its estate names, and its collector would
-// delete the media under a session the fleet still keeps.
-const mediaVersion = 9
+// delete the media under a session the fleet still keeps. Exported so a take
+// keeps its media apart only once every node applying the log reads it
+// (internal/engine's executorMediaRead, statelog.Readers).
+const MediaVersion = 9
 
 // trimmedVersion stamps a capture whose archive its pack cut to what its
 // harness's resume loads ([Capture.Trimmed]). An older build retains it:
@@ -117,7 +119,7 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "ending", "not_continued"}},
 	{Name: "End.Ending.SpentSessions", Since: spentSessionsVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "spent_sessions"}},
-	{Name: "Capture.Media", Since: mediaVersion, Op: string(OpCapture), Path: []string{"mutation", "media"}},
+	{Name: "Capture.Media", Since: MediaVersion, Op: string(OpCapture), Path: []string{"mutation", "media"}},
 	{Name: "Capture.Trimmed", Since: trimmedVersion, Op: string(OpCapture), Path: []string{"mutation", "trimmed"}},
 	{Name: "End.Ending.Summary", Since: summaryVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "summary"}},

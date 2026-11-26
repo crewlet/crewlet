@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -70,14 +71,14 @@ var saveLedgerHold = takeLife + collectPendingGrace + 2*collectInterval + 2*objs
 // archive, for what the scrub's re-tar and redaction add (countedFor).
 const saveMarginFloor = 64 << 10
 
-// countedFor is what a save packed at size bytes is charged against its seat:
-// sealed, with a margin of an eighth or 64 KiB for what the scrub changes, and
-// never past the largest object a session is stored as. The scrub's rewrite
-// measured within 1% of the box's pack for media and 2% under it for text
+// countedFor is the room a save packed at size bytes spools in: sealed, with
+// a margin of an eighth or 64 KiB for what the scrub changes, and never past
+// the largest object a session is stored as. The scrub's rewrite measured
+// within 1% of the box's pack for media and 2% under it for text
 // (internal/sandbox/executor's keptGzipLevel), so the margin is the markers'
-// and the re-tar's room; a spool
-// sealing past it is refused before its keep, and the saved line's counted and
-// bytes measure it.
+// and the re-tar's room; a spool sealing past it is refused. Its seat is
+// charged it less the media its keep will most likely carry, and then what
+// its keep uploads ([Coordinator.amendSave]).
 func countedFor(size int64) int64 {
 	return min(secrets.SealedStreamSize(size+max(size/8, saveMarginFloor),
 		strings.Repeat("k", secrets.MaxStreamKeyIDBytes)), executorkeep.SealedMaxBytes)
@@ -179,11 +180,21 @@ func (c *Coordinator) seatSaveRoom(ctx context.Context, seat string, budget int6
 func (c *Coordinator) chargeSave(ctx context.Context, seat string, entry savedEntry,
 	budget int64) (saveClass, string) {
 
+	return c.swapLedger(ctx, seat, func(raw []byte) ([]byte, saveClass, string) {
+		return chargedLedger(raw, entry, budget, c.now())
+	})
+}
+
+// swapLedger is a charge's compare-and-swap of seat's ledger, decide's
+// decision of each value read ([Coordinator.chargeSave] answers as it does).
+func (c *Coordinator) swapLedger(ctx context.Context, seat string,
+	decide func(raw []byte) ([]byte, saveClass, string)) (saveClass, string) {
+
 	ask, cancel := context.WithTimeout(ctx, saveLedgerWait)
 	defer cancel()
 	races := 0
 	for attempt := 1; ; attempt++ {
-		class, why, err := c.chargeOnce(ask, seat, entry, budget)
+		class, why, err := c.chargeOnce(ask, seat, decide)
 		switch {
 		case err == nil && class == saveRaced:
 			if races++; races >= saveLedgerRaces {
@@ -204,16 +215,16 @@ func (c *Coordinator) chargeSave(ctx context.Context, seat string, entry savedEn
 	}
 }
 
-// chargeOnce is one read, decision and swap of [Coordinator.chargeSave]:
+// chargeOnce is one read, decision and swap of [Coordinator.swapLedger]:
 // [saveRaced] for a lost race, an error where the store did not answer.
-func (c *Coordinator) chargeOnce(ctx context.Context, seat string, entry savedEntry,
-	budget int64) (saveClass, string, error) {
+func (c *Coordinator) chargeOnce(ctx context.Context, seat string,
+	decide func(raw []byte) ([]byte, saveClass, string)) (saveClass, string, error) {
 
 	raw, revision, err := c.saves.ledger.SaveLedger(ctx, seat)
 	if err != nil {
 		return "", "", err
 	}
-	value, class, why := chargedLedger(raw, entry, budget, c.now())
+	value, class, why := decide(raw)
 	if value == nil {
 		return class, why, nil
 	}
@@ -250,6 +261,73 @@ func chargedLedger(raw []byte, entry savedEntry, budget int64, now time.Time) ([
 			ledgerHeld(live), entry.Bytes, budget)
 	}
 	value, err := json.Marshal(saveLedger{V: saveLedgerVersion, Entries: append(live, entry)})
+	if err != nil {
+		return nil, saveNotYet, fmt.Sprintf("the seat's save ledger could not be encoded: %v", err)
+	}
+	return value, "", ""
+}
+
+// saveCharge is a save's entry on its seat's ledger, and the budget it was
+// charged against.
+type saveCharge struct {
+	seat   string
+	budget int64
+	entry  savedEntry
+}
+
+// amendSave has a save's entry count what its keep uploads, its sealed session
+// and the media it does not carry: "" where it does, or the keep is no save's;
+// else why the save is refused, the amended charge past the seat's budget, or
+// one raised that the ledger did not take. A lowered charge the ledger did not
+// take over-counts, the safe direction, and refuses nothing.
+func (c *Coordinator) amendSave(ctx context.Context, spooled *spooledCapture) string {
+	charge := spooled.charge
+	if charge == nil || charge.entry.Bytes == spooled.bytes() {
+		return ""
+	}
+	amended := charge.entry
+	amended.Bytes = spooled.bytes()
+	class, why := c.swapLedger(ctx, charge.seat, func(raw []byte) ([]byte, saveClass, string) {
+		return amendedLedger(raw, charge.entry.Bytes, amended, charge.budget, c.now())
+	})
+	switch {
+	case class == "":
+		charge.entry = amended
+		return ""
+	case class == savePaced:
+		return why
+	case amended.Bytes < charge.entry.Bytes:
+		return ""
+	}
+	return fmt.Sprintf("the save's charge could not be raised to the %d bytes it uploads: %s", amended.Bytes, why)
+}
+
+// amendedLedger is the decision of moving entry's charge on the ledger raw as
+// of now, from was to entry's: the ledger to write, or nil with what it comes
+// to without a write, as [chargedLedger] answers. A raise is held to budget;
+// an entry the ledger no longer counts is charged again.
+func amendedLedger(raw []byte, was int64, entry savedEntry, budget int64, now time.Time) ([]byte, saveClass,
+	string) {
+
+	ledger, err := readSaveLedger(raw)
+	if err != nil {
+		return nil, saveNotYet, err.Error()
+	}
+	live := ledger.live(now)
+	at := slices.IndexFunc(live, func(e savedEntry) bool { return e.ID == entry.ID })
+	switch {
+	case at < 0:
+		return chargedLedger(raw, entry, budget, now)
+	case live[at].Bytes == entry.Bytes:
+		return nil, "", ""
+	}
+	live[at].Bytes = entry.Bytes
+	if held := ledgerHeld(live); entry.Bytes > was && held > budget {
+		return nil, savePaced, fmt.Sprintf("the seat's saves hold %d bytes with this one's upload of %d: past "+
+			"the seat's budget of %d (turn_engine.conversation_session.max_bytes_per_seat)", held, entry.Bytes,
+			budget)
+	}
+	value, err := json.Marshal(saveLedger{V: saveLedgerVersion, Entries: live})
 	if err != nil {
 		return nil, saveNotYet, fmt.Sprintf("the seat's save ledger could not be encoded: %v", err)
 	}

@@ -62,10 +62,16 @@ func TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives(t *testi
 	t.Parallel()
 	minted := time.Date(2026, 8, 23, 11, 0, 0, 0, time.UTC)
 	object := objstore.Object{Key: objstore.KeyAt(minted), Hash: objstore.Hash("h"), Size: 42}
+	fresh := objstore.Object{Key: objstore.KeyAt(minted), Hash: objstore.Hash("m1"), Size: 7}
+	carried := objstore.Object{Key: objstore.KeyAt(minted), Hash: objstore.Hash("m2"), Size: 9}
+	digest := func(c string) string { return strings.Repeat(c, 2*executorkeep.MediaDigestBytes) }
 	stamp := sandbox.SessionCapture{Minted: minted, Launch: "launch-2", LaunchSeq: 2, CaptureSeq: 3,
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1", ContentKey: "k1",
 		ArchiveFormat: 1, Home: "/home/agent", Workspace: "/workspace", SeatBudget: 64 << 20,
-		ContextTokens: 61_000, Interrupted: true}
+		ContextTokens: 61_000, Interrupted: true, Media: []sandbox.CaptureMedia{
+			{Digest: digest("a"), Object: fresh.Key.String(), ObjectHash: "m1", ObjectSize: 7, ContentKey: "k1"},
+			{Digest: digest("b"), Object: carried.Key.String(), ObjectHash: "m2", ObjectSize: 9, ContentKey: "k0",
+				Carried: true}}}
 	log := &recordingLog{result: statelog.Result{Outcome: statelog.OutcomeApplied}, recorded: true}
 	records := executorRecords{log: log}
 
@@ -83,7 +89,10 @@ func TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives(t *testi
 	want := executordomain.NewCapture{Handle: "swe", Turn: "t1", ConversationKey: "chat:room", WorkKey: "w1",
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1", Object: object, ContentKey: "k1",
 		ArchiveFormat: 1, LaunchSeq: 2, CaptureSeq: 3, Home: "/home/agent", Workspace: "/workspace",
-		SeatBudget: 64 << 20, ContextTokens: 61_000, Interrupted: true}
+		SeatBudget: 64 << 20, ContextTokens: 61_000, Interrupted: true, Media: []executordomain.NewMedia{
+			{MediaObject: executorkeep.MediaObject{Digest: digest("a"), Object: fresh, ContentKey: "k1"}},
+			{MediaObject: executorkeep.MediaObject{Digest: digest("b"), Object: carried, ContentKey: "k0"},
+				Carried: true}}}
 	if fmt.Sprintf("%+v", log.capture) != fmt.Sprintf("%+v", want) {
 		t.Errorf("the log was asked to record\n%+v\nwant\n%+v", log.capture, want)
 	}

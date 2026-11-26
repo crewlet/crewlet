@@ -708,6 +708,11 @@ func worstRow(t *testing.T) PendingRun {
 	for i := range capture.BridgeOpen {
 		capture.BridgeOpen[i] = math.MaxInt
 	}
+	for range executorkeep.MediaMaxCount {
+		capture.Media = append(capture.Media, CaptureMedia{Digest: strings.Repeat("a", 64),
+			Object: objstore.KeyAt(worstAt).String(), ObjectHash: plain(64), ObjectSize: math.MaxInt64,
+			ContentKey: plain(secrets.MaxStreamKeyIDBytes), Carried: true})
+	}
 	if err := capture.Bounded(); err != nil {
 		t.Fatalf("the worst capture is past what the row carries: %v", err)
 	}
@@ -909,7 +914,7 @@ func worstRow(t *testing.T) PendingRun {
 		Siblings: []BaseSibling{{Turn: plain(64), Object: plain(256), ObjectHash: plain(64),
 			ObjectSize: math.MaxInt64}},
 		Session: &BaseSession{Turn: plain(64), Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64,
-			ContentKey: plain(256), Harness: plain(32), HarnessVersion: plain(64), SessionID: plain(128),
+			MediaBytes: math.MaxInt64, ContentKey: plain(256), Harness: plain(32), HarnessVersion: plain(64), SessionID: plain(128),
 			Entry:         plain(executorkeep.EntryMaxBytes),
 			ArchiveFormat: 99, Home: plain(1024), Workspace: plain(1024), ContextTokens: math.MaxInt64,
 			Interrupted: true, CapturedAt: worstAt, WentOn: true, Lost: true, EndedAt: worstAt}},
