@@ -70,11 +70,9 @@ func (s Secrets) forgeBinding(products []string) (ids []string, lookups []siteLo
 }
 
 // CloudIDSource reads the cloud id of a Cloud site a company names by url
-// ([atlassian.CloudIDs]): Resolve asks it when nothing is kept, Known is
-// the last result without asking.
+// ([atlassian.CloudIDs]), asking the site when nothing is kept.
 type CloudIDSource interface {
 	Resolve(ctx context.Context, site string) (string, error)
-	Known(site string) (string, error)
 }
 
 // forgeClaims are the invocation token's claims this edge reads: the

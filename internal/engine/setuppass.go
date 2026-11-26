@@ -188,14 +188,15 @@ func forgeFindings(ctx context.Context, in config.Integrations, resolve func(str
 	for _, hold := range relay.Held {
 		if hold.Product == product {
 			findings = append(findings, integration.Finding{
-				Kind: integration.FindingIngressBlocked, Detail: hold.Reason,
+				Kind: integration.FindingIngressBlocked, Title: config.ForgeHoldTitle, Detail: hold.Reason,
 			})
 		}
 	}
 	if site, ok := relay.Lookups[product]; ok {
 		if _, err := sites.Resolve(ctx, site); err != nil {
 			findings = append(findings, integration.Finding{
-				Kind: integration.FindingIngressBlocked, Detail: config.ForgeLookupHold(product, err).Reason,
+				Kind: integration.FindingIngressBlocked, Title: config.ForgeHoldTitle,
+				Detail: config.ForgeLookupHold(product, err).Reason,
 			})
 		}
 	}

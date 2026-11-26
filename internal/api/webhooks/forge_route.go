@@ -103,7 +103,10 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 	claims, err := r.forge.verify(req.Context(), token, appID)
 	if err == nil {
 		// A site named by url is looked up only for a verified token, so
-		// nobody unauthenticated can make this process ask a site.
+		// nobody unauthenticated can make this process ask a site. This
+		// node's cache decides only this route. A cold, slow site can cost
+		// one delivery attempt (Forge waits 5 s, the lookup up to 10 s), but
+		// the lookup outlives the request and caches, so Forge's retry binds.
 		for _, lookup := range lookups {
 			id, lookupErr := r.cloudIDs.Resolve(req.Context(), lookup.site)
 			if lookupErr != nil {

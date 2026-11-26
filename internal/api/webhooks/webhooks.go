@@ -164,8 +164,8 @@ type Options struct {
 	Keys KeySource
 
 	// CloudIDs reads the cloud id of a Cloud site the company names by url,
-	// to bind a Forge token to it. REQUIRED, and the engine's own: the
-	// integrations answer reads the same last result.
+	// to bind a Forge token to it. REQUIRED, and the engine's own, so the
+	// route and the node's passes share one lookup.
 	CloudIDs CloudIDSource
 }
 

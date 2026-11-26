@@ -138,23 +138,16 @@ func (s Secrets) Verifiable() []string {
 }
 
 // IngressHolds names, by surface, why a route refuses every delivery of a
-// kind although its material resolved: today the Forge relay, for a product
-// with no address yet, or one whose site's cloud id the last lookup in sites
-// could not read. A site never asked is not held. Empty holds nothing.
-func (s Secrets) IngressHolds(sites interface{ Known(string) (string, error) }) map[string]string {
+// kind although its material resolved, from config alone: today the Forge
+// relay, for a product whose block names no address yet. A url-named site
+// whose cloud id cannot be read is a run-time hold, which the integrations
+// answer takes from the Jira and Confluence passes' shared findings, not from
+// any one node's lookup. Empty holds nothing.
+func (s Secrets) IngressHolds() map[string]string {
 	var reasons []string
 	if s.ForgeAppID != "" {
-		for _, product := range []string{"jira", "confluence"} {
-			for _, hold := range s.ForgeHeld {
-				if hold.Product == product {
-					reasons = append(reasons, hold.Reason)
-				}
-			}
-			if site, ok := s.ForgeLookups[product]; ok && sites != nil {
-				if _, err := sites.Known(site); err != nil {
-					reasons = append(reasons, config.ForgeLookupHold(product, err).Reason)
-				}
-			}
+		for _, hold := range s.ForgeHeld {
+			reasons = append(reasons, hold.Reason)
 		}
 	}
 	holds := map[string]string{}

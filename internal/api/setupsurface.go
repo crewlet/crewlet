@@ -63,7 +63,7 @@ func NewSetupSurface(boot *config.Bootstrap, e *engine.Engine, configSurface *co
 		// secret_usable family exists to surface.
 		Resolve: e.LookupSecret,
 		// The engine's one reader of a url-named site's cloud id, so a
-		// write's forge_held and the integrations answer agree.
+		// write's lookup is the one the node's route then reuses.
 		CloudIDs: e.AtlassianCloudIDs(),
 		// WHERE A VENDOR REACHES THIS DEPLOYMENT (the public listener's
 		// address where one is configured, `api.external_url` otherwise)

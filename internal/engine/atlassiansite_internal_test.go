@@ -48,7 +48,9 @@ func TestAProductsPassNamesItsForgeHold(t *testing.T) {
 	want := "Forge relay events for Jira are refused: the site's cloud id could not be read " +
 		"from https://down.atlassian.net/_edge/tenant_info (HTTP 502); check the site is " +
 		"reachable, or set integrations.jira.cloud_id with site_url in place of url"
-	if len(got) != 1 || got[0].Kind != integration.FindingIngressBlocked || got[0].Detail != want {
+	// The title is how the integrations answer finds it in the shared store.
+	if len(got) != 1 || got[0].Kind != integration.FindingIngressBlocked ||
+		got[0].Title != config.ForgeHoldTitle || got[0].Detail != want {
 		t.Fatalf("jira findings = %+v, want the lookup's hold", got)
 	}
 	if sites.asks != 1 {

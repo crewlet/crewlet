@@ -214,8 +214,8 @@ type Options struct {
 	Resolve func(string) (string, bool)
 
 	// CloudIDs reads the cloud id of a Cloud site a Jira or Confluence block
-	// names by url: the engine's one reader, so a write's answer and the
-	// integrations answer read the same result.
+	// names by url: the engine's one reader, so a write's lookup is the one
+	// the node's Forge route then reuses.
 	CloudIDs interface {
 		Resolve(ctx context.Context, site string) (string, error)
 	}

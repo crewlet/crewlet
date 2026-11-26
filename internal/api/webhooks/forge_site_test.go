@@ -189,11 +189,16 @@ func TestTheRouteHoldsExactlyWhatTheIntegrationsAnswerHolds(t *testing.T) {
 					t.Errorf("event of %q: got %d, want %d", product, got, tc.want[product])
 				}
 			}
-			holds := material.IngressHolds(sites)["forge"]
+			// A product's 503 is a static hold config names, or a lookup
+			// that failed: the two things a surface reports.
+			static := material.IngressHolds()["forge"]
 			for _, product := range []string{"jira", "confluence"} {
 				name := map[string]string{"jira": "Jira", "confluence": "Confluence"}[product]
-				if shown := strings.Contains(holds, "for "+name+" are refused"); shown != (tc.want[product] == 503) {
-					t.Errorf("%s: answer holds %q, route answered %d", product, holds, tc.want[product])
+				_, lookupFailed := sites.Known(material.ForgeLookups[product])
+				held := strings.Contains(static, "for "+name+" are refused") ||
+					(material.ForgeLookups[product] != "" && lookupFailed != nil)
+				if held != (tc.want[product] == 503) {
+					t.Errorf("%s: held %v (static %q), route answered %d", product, held, static, tc.want[product])
 				}
 			}
 		})
@@ -308,50 +313,41 @@ roles:
 	}
 }
 
-// A HELD PRODUCT IS NAMED WITH WHAT CLEARS IT, in the words the route logs
-// and every surface shows: a block with no address yet is told to set its
-// cloud_id, a url-named site whose id could not be read is told why and what
-// to do. A url-named site never asked, a cloud id, a Data Center block and no
-// app id hold nothing. Mutation: hold a url-named site statically, or word
-// the two holds alike, and a case goes red.
-func TestAForgeHoldNamesWhatClearsIt(t *testing.T) {
+// A STATIC HOLD IS A BLOCK WITH NO ADDRESS YET, named with the field that
+// clears it. A url-named site is a run-time hold, read from the passes'
+// shared findings, never from config: so neither it, a cloud id, a Data
+// Center block nor no app id holds anything here. Mutation: hold a url-named
+// site statically and a case goes red.
+func TestAStaticForgeHoldIsABlockWithNoAddressYet(t *testing.T) {
 	t.Parallel()
-	const (
-		addressless = "Forge relay events for Confluence are refused until " +
-			"integrations.confluence.cloud_id (with site_url) is set"
-		unreadable = "Forge relay events for Jira are refused: the site's cloud id could " +
-			"not be read from https://down.atlassian.net/_edge/tenant_info (HTTP 502); check " +
-			"the site is reachable, or set integrations.jira.cloud_id with site_url in place of url"
-	)
-	asked := &siteIDs{}
-	_, _ = asked.Resolve(t.Context(), "https://down.atlassian.net")
+	const addressless = "Forge relay events for Confluence are refused until " +
+		"integrations.confluence.cloud_id (with site_url) is set"
 	for _, tc := range []struct {
-		name  string
-		in    config.Integrations
-		sites *siteIDs
-		want  string
+		name string
+		in   config.Integrations
+		want string
 	}{
-		{"an unreadable site and a block with no address yet", config.Integrations{
+		{"a url-named site and a block with no address yet", config.Integrations{
 			ForgeAppID: "app-123",
 			Jira:       &config.Jira{URL: "https://down.atlassian.net"},
 			Confluence: &config.Confluence{},
-		}, asked, unreadable + "; " + addressless},
-		{"a url-named site never asked", config.Integrations{
+		}, addressless},
+		{"a url-named site", config.Integrations{
 			ForgeAppID: "app-123", Jira: &config.Jira{URL: "https://down.atlassian.net"},
-		}, &siteIDs{}, ""},
+		}, ""},
 		{"a cloud id", config.Integrations{
 			ForgeAppID: "app-123", Jira: &config.Jira{CloudID: ownSite},
-		}, asked, ""},
+		}, ""},
 		{"a Data Center url", config.Integrations{
 			ForgeAppID: "app-123", Jira: &config.Jira{URL: "https://jira.example.com"},
-		}, asked, ""},
+		}, ""},
 		{"no forge app id", config.Integrations{
 			Jira: &config.Jira{URL: "https://down.atlassian.net"}, Confluence: &config.Confluence{},
-		}, asked, ""},
+		}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := webhooks.SecretsOf(&config.Company{Integrations: tc.in}, nil, literal).IngressHolds(tc.sites)
+			got := webhooks.SecretsOf(&config.Company{Integrations: tc.in}, nil, literal).IngressHolds()
 			if got["forge"] != tc.want || (tc.want == "") != (len(got) == 0) {
 				t.Errorf("IngressHolds() = %v, want forge: %q", got, tc.want)
 			}

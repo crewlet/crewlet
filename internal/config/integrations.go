@@ -1336,6 +1336,10 @@ func (i Integrations) DiscoversAtlassianSite() bool {
 	return i.Atlassian != nil && i.Atlassian.IsCloud()
 }
 
+// ForgeHoldTitle leads every finding a Forge hold is reported as, which is
+// how the integrations answer finds those findings in the shared status store.
+const ForgeHoldTitle = "Forge relay events are refused"
+
 // ForgeHold is a product whose Forge relay events are refused, and the
 // sentence saying what clears it.
 type ForgeHold struct {

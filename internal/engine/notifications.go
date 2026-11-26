@@ -711,7 +711,7 @@ func (e *Engine) IngressHolds() map[string]string {
 	if e.Company() == nil {
 		return nil
 	}
-	return e.WebhookSecrets().IngressHolds(e.cloudIDs)
+	return e.WebhookSecrets().IngressHolds()
 }
 
 // AtlassianCloudIDs is the process's one reader of a url-named Cloud site's

@@ -54,8 +54,8 @@ func (e *TenantInfoError) Error() string {
 
 // CloudIDs reads the cloud id of an Atlassian Cloud site named by its url,
 // from the site's own public /_edge/tenant_info (Atlassian Support, "How to
-// Find Your Atlassian Cloud Site's Cloud ID"). One per process, so every
-// surface reads the same last result.
+// Find Your Atlassian Cloud Site's Cloud ID"). One per process, shared by
+// the node's Forge route, its passes and setup.
 //
 // A site's cloud id never changes, so a success is kept for the process's
 // life. A failure is kept only as the last result, retried after
@@ -93,19 +93,6 @@ func NewCloudIDs(opts CloudIDOptions) *CloudIDs {
 		c.now = func() time.Time { return time.Now().UTC() }
 	}
 	return c
-}
-
-// Known is the last result for site without asking it: its cloud id, the
-// error of its last failed lookup, or ("", nil) when it was never asked.
-func (c *CloudIDs) Known(site string) (string, error) {
-	key, err := tenantInfoURL(site)
-	if err != nil {
-		return "", err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	last := c.sites[key]
-	return last.id, last.err
 }
 
 // Resolve is site's cloud id: kept from an earlier success, the last error

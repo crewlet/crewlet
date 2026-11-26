@@ -1500,7 +1500,7 @@ type Inbound struct {
 	Keys webhooks.KeySource
 
 	// CloudIDs reads a url-named Cloud site's cloud id for the Forge route:
-	// the engine's one reader, which the integrations answer reads too.
+	// the engine's one reader, shared with the node's passes and setup.
 	CloudIDs webhooks.CloudIDSource
 }
 

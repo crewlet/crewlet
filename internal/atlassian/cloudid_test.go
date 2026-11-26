@@ -67,9 +67,6 @@ func TestASitesCloudIDIsReadOnce(t *testing.T) {
 	if n := asks.Load(); n != 1 {
 		t.Errorf("%d lookups for one site, want 1", n)
 	}
-	if id, err := ids.Known(srv.URL); id != siteID || err != nil {
-		t.Errorf("Known = %q, %v; want the kept id", id, err)
-	}
 }
 
 // A FAILURE IS RETRIED, BUT NOT BY EVERY EVENT: inside the floor the last
@@ -95,9 +92,6 @@ func TestAFailedLookupIsRetriedAfterTheFloor(t *testing.T) {
 	down.Store(false)
 	if _, err := ids.Resolve(t.Context(), srv.URL); err == nil || asks.Load() != 1 {
 		t.Errorf("inside the floor: err %v after %d asks, want the last error and 1 ask", err, asks.Load())
-	}
-	if _, err := ids.Known(srv.URL); err == nil {
-		t.Error("Known forgot the failure the surfaces must show")
 	}
 	now.advance(atlassian.TenantInfoRetryFloor)
 	if id, err := ids.Resolve(t.Context(), srv.URL); err != nil || id != siteID {

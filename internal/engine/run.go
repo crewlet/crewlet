@@ -910,8 +910,8 @@ type Engine struct {
 	}
 
 	// cloudIDs reads the cloud id of a Cloud site the company names by url,
-	// once per process: the Forge route, the passes, setup and the
-	// integrations answer all read its one last result.
+	// once per process, for the Forge route, the passes and setup. The
+	// integrations answer reads the passes' shared findings instead.
 	cloudIDs *atlassian.CloudIDs
 
 	// embeddings is the company's vector backend, swapped on apply. Atomic,

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -138,6 +139,13 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	var held map[string]string
 	if s.Held != nil {
 		held = s.Held(ctx)
+	}
+	if reason := forgeHeld(held["forge"], reconciled); reason != "" {
+		held = maps.Clone(held)
+		if held == nil {
+			held = map[string]string{}
+		}
+		held["forge"] = reason
 	}
 
 	out := []map[string]any{}
@@ -1065,6 +1073,29 @@ func (s Sources) reconcileStates(ctx context.Context) (map[string]integration.St
 // ([Sources.ReconcileStatuses]).
 func (s Sources) reconcileStatuses(ctx context.Context) (map[string]integration.State, bool) {
 	return keyedStates(ctx, s.ReconcileStatuses)
+}
+
+// forgeHeld is the Forge relay's hold: static, the holds config names (every
+// node reads the same config), and the Jira and Confluence passes'
+// ingress_blocked findings from the shared status store, where a url-named
+// site's failed lookup is reported. THE SHARED FINDING WINS over any node's
+// own lookup: it is the fleet's view, while a node's cache decides only its
+// own route, and a node that never asked the site would show nothing.
+func forgeHeld(static string, reconciled map[string]integration.State) string {
+	reasons := static
+	for _, product := range []string{"jira", "confluence"} {
+		for _, f := range reconciled[product].Findings {
+			if f.Kind != integration.FindingIngressBlocked || f.Title != config.ForgeHoldTitle ||
+				strings.Contains(reasons, f.Detail) {
+				continue
+			}
+			if reasons != "" {
+				reasons += "; "
+			}
+			reasons += f.Detail
+		}
+	}
+	return reasons
 }
 
 // keyedStates is what read answers keyed by surface, and false where it cannot
