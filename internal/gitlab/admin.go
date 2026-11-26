@@ -216,6 +216,42 @@ func (c *Client) CreateInstanceServiceAccount(ctx context.Context, name, usernam
 	return out, err
 }
 
+// ServiceAccounts lists the service accounts one owner holds: the group's
+// (`GET /groups/:id/service_accounts`, an Owner's read) where groupID is
+// set, the instance's (`GET /service_accounts`, an administrator's) where it
+// is zero. Rows carry id, username and name.
+//
+// PAGED TO EXHAUSTION, like [Client.members]: an account past a truncated
+// first page would read as not this owner's.
+func (c *Client) ServiceAccounts(ctx context.Context, groupID int) ([]User, error) {
+	path, owner := "/service_accounts", "this instance"
+	if groupID != 0 {
+		path, owner = "/groups/"+strconv.Itoa(groupID)+"/service_accounts", fmt.Sprintf("group %d", groupID)
+	}
+	var out []User
+	for page := 1; ; page++ {
+		var batch []User
+		err := c.get(ctx, path, url.Values{
+			"order_by": {"id"}, "sort": {"asc"},
+			"per_page": {strconv.Itoa(userPageSize)},
+			"page":     {strconv.Itoa(page)},
+		}, &batch)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, batch...)
+		if len(batch) < userPageSize {
+			return out, nil
+		}
+		if len(out) >= userWalkCeiling {
+			return nil, fmt.Errorf(
+				"gitlab: %s holds more than %d service accounts, which is not an "+
+					"owner Crewlet provisions into: set integrations.gitlab.provisioning.group "+
+					"to a group of the company's own (mode: group)", owner, userWalkCeiling)
+		}
+	}
+}
+
 // DeleteInstanceServiceAccount removes an instance service account.
 //
 // The symmetric route to the create, not the instance-wide user delete: the

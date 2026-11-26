@@ -467,3 +467,40 @@ func TestAClaudeCompactionIsARequestOfTheRuns(t *testing.T) {
 		t.Fatalf("requests %d, want the 2 messages and the compaction's", dec.Requests())
 	}
 }
+
+// A CLAUDE CODE MESSAGE OF ITS OWN IS NO REQUEST: once Claude Code ends a turn
+// itself ("Autocompact is thrashing", measured on 2.1.330), it writes an
+// assistant message of the model `<synthetic>`, which no model request made,
+// so the count takes the messages and compactions alone, the synthetic one
+// read whole or past the line bound alike.
+//
+// Mutation: count the synthetic message, read whole or long, and the run
+// counts more requests than it made.
+func TestAClaudeCodeMessageOfItsOwnIsNoRequest(t *testing.T) {
+	t.Parallel()
+	synthetic := `{"type":"assistant","message":{"diagnostics":null,"id":"5c22e2b6-1cb8-45a7-bc85-586d75effa4f",` +
+		`"container":null,"model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence",` +
+		`"content":[{"type":"text","text":"Autocompact is thrashing"}],"usage":{"input_tokens":0,"output_tokens":0}}}`
+	stream := []string{
+		`{"type":"assistant","message":{"id":"msg_1","model":"claude-sonnet-4-5","role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		`{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto"}}`,
+		`{"type":"assistant","message":{"id":"msg_2","model":"claude-sonnet-4-5","role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		synthetic,
+	}
+	dec := executor.ClaudeCode{}.Events()
+	for _, l := range stream {
+		dec.Line([]byte(l))
+	}
+	if dec.Requests() != 3 {
+		t.Errorf("read whole: requests %d, want the 2 messages and the compaction's", dec.Requests())
+	}
+	long := executor.ClaudeCode{}.Events()
+	for _, l := range stream[:3] {
+		long.Line([]byte(l))
+	}
+	long.Skipped(executor.LongLine{Size: 1 << 30, Bound: 1 << 20, Head: []byte(synthetic[:200]),
+		Tail: []byte(synthetic[len(synthetic)-40:])})
+	if long.Requests() != 3 || long.Undecided() != 0 {
+		t.Errorf("read past the bound: requests %d, undecided %d; want 3 and none", long.Requests(), long.Undecided())
+	}
+}

@@ -72,6 +72,7 @@ roles:
 
 | What the seat holds | How the engine applies it |
 |---|---|
+| The account | A service account named `<username_prefix>-<handle>`, created where `mode` says accounts are owned. One already holding that username is adopted only when it is among the owner's own service accounts: `provisioning.group`'s in group mode, the instance's in instance mode. Usernames are instance-wide (on GitLab.com, shared by every customer), so a username held by a person or by a service account another group owns is refused, naming the username, and nothing is granted or minted on that account; set `username_prefix` to a prefix no other account's username starts with. |
 | The role | A direct membership at that `access_level` (or custom role) in each listed project, or in the group where `projects` is empty. Security Manager (a beta, disabled by default outside GitLab.com) and Minimal Access (grants nothing alone) are not offered. |
 | The token | One personal access token named `crewlet-<handle>`; scopes follow the role: `read_api` and `read_repository` below Developer, `api` from Developer up. A role change that changes scopes mints a new token, seals it, then revokes the old one. |
 | Off | Account blocked where the provisioning token is an instance administrator's; with a group Owner token (every GitLab.com deployment) its memberships are removed instead. Either way every token the engine minted is revoked; the account and history are kept. |

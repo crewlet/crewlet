@@ -39,6 +39,10 @@ func (p Paths) GrokConfigFresh() string { return p.WorkDir() + "/grok-config-fre
 // key ([grokSessionGate]).
 func (p Paths) GrokSessionsKey() string { return p.GrokSessions() + "/" + grokPathKey(p.Home) }
 
+// GrokRunStart is where a Grok Build run records where it began in its
+// session, for its side requests' count ([grokRunStart], [Grok.sideCount]).
+func (p Paths) GrokRunStart() string { return p.WorkDir() + "/grok-run-start" }
+
 // GrokSessions is the directory Grok Build files every session under, one
 // directory per working directory's key: a subagent started in another
 // directory is filed under that one's ([grokPack]).

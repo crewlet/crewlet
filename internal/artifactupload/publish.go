@@ -425,11 +425,26 @@ func (s *Service) addAsset(ctx context.Context, c artifactsdomain.Call, id artif
 		if _, err := s.readBack(ctx, f); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return artifactsdomain.Asset{}, err
 		}
+		// OFFERED BEFORE THE WRITE: an asset upload has no claim a retry
+		// would take, so a write whose outcome nobody learns (a lost
+		// answer, a node gone) is counted here or nowhere, and the early
+		// release never deletes what it may have named.
+		if err := s.offerAsset(ctx, upload, p, 1); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
+			return artifactsdomain.Asset{}, err
+		}
 	}
 	asset, _, err := s.writes.AddAsset(ctx, c, artifactsdomain.AssetInput{
 		Artifact: id, Name: p, ContentType: f.ContentType, Object: f.object(),
 	})
 	if err != nil {
+		if refused(err) && f.State != fileNamed {
+			// A REFUSAL ESTABLISHES THAT NOTHING LANDED: its offer is taken
+			// back, so the upload is released early again where no other
+			// write of unknown outcome was offered the file.
+			if oerr := s.offerAsset(context.WithoutCancel(ctx), upload, p, -1); oerr != nil {
+				log.WarnContext(ctx, "artifact_upload_record_failed", "upload", upload, "error", oerr.Error())
+			}
+		}
 		return asset, err
 	}
 	closed, err := s.updateRecord(context.WithoutCancel(ctx), upload, func(r *record) error {
@@ -450,6 +465,19 @@ func (s *Service) addAsset(ctx context.Context, c artifactsdomain.Call, id artif
 	}
 	s.release(ctx, closed.ID)
 	return asset, nil
+}
+
+// offerAsset counts one more write of unknown outcome against an asset
+// upload's file (by +1), or takes one back (by -1) once a refusal establishes
+// that its write landed nothing.
+func (s *Service) offerAsset(ctx context.Context, upload, p string, by int) error {
+	_, err := s.updateRecord(ctx, upload, func(r *record) error {
+		if j := r.fileAt(p); j >= 0 {
+			r.Files[j].Offers = max(r.Files[j].Offers+by, 0)
+		}
+		return nil
+	})
+	return err
 }
 
 // readBack reads one uploaded file's object through the store's verifying

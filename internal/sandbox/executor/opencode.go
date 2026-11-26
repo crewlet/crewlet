@@ -1337,6 +1337,9 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	// NO PLUGIN, SEAT SKILL OR SERVER OF THE RUN'S A CONFIGURATION STOPS,
 	// judged under the run's own rules ([openCodePolicy]).
 	own := []string{paths.OpenCodeToolEnvPlugin()}
+	if req.Limits.MaxTurns > 0 {
+		own = append(own, paths.OpenCodeCountPlugin())
+	}
 	if req.Steer.Set() {
 		own = append(own, paths.OpenCodeSteerPlugin())
 	}
@@ -1427,6 +1430,17 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	// naming them again does not bring them back.
 	if req.WebDenied {
 		plugins = append(plugins, "-opencode.tool.webfetch", "-opencode.tool.websearch")
+	}
+	// A CAPPED RUN'S COUNT PLUGIN, recording each request its server answers
+	// for the turn cap ([openCodeCountRecord]).
+	if req.Limits.MaxTurns > 0 {
+		if err := box.WriteFile(ctx, paths.OpenCodeCountPlugin()+"/"+openCodeSteerEntry, openCodeCountPlugin); err != nil {
+			return "", fmt.Errorf("executor: writing OpenCode's count plugin: %w", err)
+		}
+		plugins = append(plugins, map[string]any{
+			"package": paths.OpenCodeCountPlugin(),
+			"options": map[string]string{"file": paths.OpenCodeCountRecord()},
+		})
 	}
 	// AND ON EVERY RUN THE PLUGIN THAT KEEPS [openCodeHarnessEnv] OUT OF THE
 	// COMMANDS ITS MODEL RUNS (opencode_toolenv.js), last.
@@ -2130,11 +2144,11 @@ func (d *openCodeEvents) Ended() bool { return d.ended }
 // step and a step one model request, whichever of its start and finish the
 // stream holds: a step cut off where its harness was killed has no finish.
 // Measured on 2.3.2 against a stand-in: 31 messages for 31 requests, none for a
-// 429 or a 500 it retried. NOT COUNTED: a subagent's steps, which are its own
-// session's and which `opencode run` does not print: measured, 4 counted of a
-// run's 7 requests, a subagent's 3 among them. NOR a compaction's summary
-// requests: a run whose compaction failed on the stand-in's summary made 2,
-// none counted.
+// 429 or a 500 it retried. Not a subagent's steps, which are its own
+// session's and which `opencode run` does not print (measured: 4 of a run's
+// 7 requests, a subagent's 3 among them), nor a compaction's summary
+// requests: THE TURN CAP'S COUNT is the larger of it and the count plugin's
+// record, which shows both ([OpenCode.countedRecords]).
 func (d *openCodeEvents) Requests() int { return len(d.steps) }
 
 // InFlight implements [Decoder]: none, as OpenCode's own steps stops before
@@ -2357,12 +2371,13 @@ func (OpenCode) notesOffWhy() string {
 
 // artifactFiles is the files an OpenCode run leaves in its box of its own.
 func (OpenCode) artifactFiles(p Paths) []string {
-	return []string{p.OpenCodeConfig(), p.OpenCodeRenewExport()}
+	return []string{p.OpenCodeConfig(), p.OpenCodeRenewExport(), p.OpenCodeCountRecord()}
 }
 
 // artifactDirs is the directories an OpenCode run leaves in its box of its
 // own.
 func (OpenCode) artifactDirs(p Paths) []string {
 	return []string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
-		p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin(), p.OpenCodeCheckouts(), p.OpenCodeCheckoutsPlugin()}
+		p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin(), p.OpenCodeCheckouts(), p.OpenCodeCheckoutsPlugin(),
+		p.OpenCodeCountPlugin()}
 }

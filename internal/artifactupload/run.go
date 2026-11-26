@@ -187,11 +187,16 @@ const claimLease = 15 * time.Minute
 
 // takeClaim takes the claim on a record this operation already claimed, unless
 // a run of it is still within its lease.
+//
+// THE RUN BEFORE ENDED WITH NO OUTCOME ANYONE ESTABLISHED (a close or a
+// refusal would have settled the record), so every stored file it was offered
+// counts that offer: a version it landed may name them ([record.offerStored]).
 func (s *Service) takeClaim(rec *record) error {
 	if now := s.now(); !rec.Claimed.IsZero() && now.Sub(rec.Claimed) < claimLease {
 		return fmt.Errorf("%w: a publish under this operation key is still running; try again "+
 			"when it has answered", ErrUploadConsumed)
 	}
+	rec.offerStored()
 	rec.Claimed = s.now()
 	return nil
 }

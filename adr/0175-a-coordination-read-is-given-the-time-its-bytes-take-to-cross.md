@@ -284,7 +284,7 @@ The two ledgers fit by their counts: 256 holds at most, and 512 saves. An
 upload's record holds an intent's files and carried paths and a publish's
 generated files, every path at its bound written as two bytes a byte at
 most, since the record is stored without HTML escaping; its widest is
-2,549,551 bytes. So a publish names at most a version's files before a byte
+2,571,765 bytes. So a publish names at most a version's files before a byte
 moves, and its warnings are cut to 50, each to 512 bytes, with one counting
 the rest, in its first answer as in a retry's. Each file's type is the one it
 is served as, never the client's. The outcome is written after the version
@@ -293,15 +293,15 @@ leaves room for the widest outcome (262,713 bytes) and close always fits. A
 record past that, which only retries ending unknown that record other bytes
 can reach, is refused by its writer before the retry stores a byte.
 
-A refusal deletes and drops only the generated files its own attempt staged.
-A generated file an earlier attempt recorded is dropped from the record
-without being deleted, since that attempt's outcome is unknown and a version
-it landed may name it: the object collector alone judges it, and its bytes
-stay reserved, kept as a count on the record, until the hold lapses, when the
-collector could have taken it. A record keeping such bytes is never released
-early. The files an upload transferred stay held on the upload the refusal
-reopens, so its next publish's close, or its early release where it keeps no
-such bytes, still deletes those a landed version names (#1986).
+A refusal, a close or an early release deletes only what its attempt owns
+(`internal/artifactupload`'s package doc): never a generated file an earlier
+attempt stored, nor a file the record counts as offered to a write of unknown
+outcome, since a version that write landed may name it. A refusal drops
+another attempt's generated files from the record, keeping their bytes
+reserved as a count on it; a close leaves whatever it does not own held.
+Either way the object collector alone judges them once the hold lapses, and a
+record keeping such bytes is never released early. Each file's count costs the
+record a few bytes, counted in its widest above.
 
 A change of the ledger reads at most four records across its rounds to
 release abandoned uploads, since each read is a record's crossing inside a

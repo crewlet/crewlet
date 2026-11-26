@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -49,7 +50,16 @@ type glUser struct {
 	Name     string `json:"name"`
 	State    string `json:"state"`
 	Bot      bool   `json:"bot"`
+	// owner is whose service account it is: ownedByGroup, ownedByInstance,
+	// another group's name, or empty for a person. Only GitLab knows it,
+	// through each owner's own listing.
+	owner string
 }
+
+const (
+	ownedByGroup    = "acme"
+	ownedByInstance = "instance"
+)
 
 type glToken struct {
 	id      int
@@ -155,9 +165,22 @@ func (g *glSite) serve(w http.ResponseWriter, r *http.Request) {
 	case call == "POST /groups/9/service_accounts" || call == "POST /service_accounts":
 		g.nextID++
 		u := &glUser{ID: g.nextID, Username: str(body["username"]), Name: str(body["name"]),
-			State: "active", Bot: true}
+			State: "active", Bot: true, owner: ownedByGroup}
+		if call == "POST /service_accounts" {
+			u.owner = ownedByInstance
+		}
 		g.users[u.ID] = u
 		reply(http.StatusCreated, u)
+	case call == "GET /groups/9/service_accounts" || call == "GET /service_accounts":
+		owner := ownedByGroup
+		if call == "GET /service_accounts" {
+			if !g.admin {
+				reply(http.StatusForbidden, map[string]string{"message": "403 Forbidden"})
+				return
+			}
+			owner = ownedByInstance
+		}
+		reply(http.StatusOK, g.serviceAccountPage(owner, r.URL.Query()))
 	case r.Method == http.MethodPost && reBlock.MatchString(path):
 		m := reBlock.FindStringSubmatch(path)
 		if !g.admin {
@@ -296,6 +319,30 @@ func (g *glSite) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		missing()
 	}
+}
+
+// serviceAccountPage is one page of an owner's service accounts, by id
+// ascending, in the listing's shape: no state and no bot mark.
+func (g *glSite) serviceAccountPage(owner string, q url.Values) []map[string]any {
+	var ids []int
+	for id, u := range g.users {
+		if u.owner == owner {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	size, page := 20, 1
+	if n := atoi(q.Get("per_page")); n > 0 {
+		size = n
+	}
+	if n := atoi(q.Get("page")); n > 0 {
+		page = n
+	}
+	out := []map[string]any{}
+	for _, id := range ids[min((page-1)*size, len(ids)):min(page*size, len(ids))] {
+		out = append(out, map[string]any{"id": id, "username": g.users[id].Username, "name": g.users[id].Name})
+	}
+	return out
 }
 
 func accessOf(body map[string]any) gitlab.Access {
@@ -540,7 +587,7 @@ func TestOptionsAreGitLabsRolesPlusLiveCustomRoles(t *testing.T) {
 func TestACreateAdoptsAnExistingAccountAndRetiresItsEarlierTokens(t *testing.T) {
 	t.Parallel()
 	g := newGLSite(t)
-	g.seed(&glUser{ID: 500, Username: "crewlet-sre", State: "active", Bot: true})
+	g.seed(&glUser{ID: 500, Username: "crewlet-sre", State: "active", Bot: true, owner: ownedByGroup})
 	g.mu.Lock()
 	g.tokens[500] = []*glToken{{id: 77, name: "crewlet-sre", owner: 500, value: "old", scopes: []string{"api"}}}
 	// GitLab's token ids grow instance-wide, so the one minted next is
@@ -1134,5 +1181,125 @@ func TestAPersonHoldingTheUsernameIsNotAdopted(t *testing.T) {
 	}
 	if g.called("POST /groups/9/service_accounts") {
 		t.Fatal("a second account was created beside the person's")
+	}
+}
+
+// openGLMode opens a session provisioning in mode, with an administrator's
+// token, which instance mode needs to list the instance's accounts.
+func openGLMode(t *testing.T, g *glSite, mode config.GitLabMode) seataccess.Session {
+	t.Helper()
+	g.mu.Lock()
+	g.admin = true
+	g.mu.Unlock()
+	cfg := glCompany(g.server.URL, nil, &config.RoleGitLab{Enabled: on(), AccessLevel: 30})
+	cfg.Integrations.GitLab.Provisioning.Mode = mode
+	s, err := gitlab.Vendor{}.Open(context.Background(), seataccess.OpenInput{Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// writes is every call the site took that was not a read.
+func (g *glSite) writes() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var out []string
+	for _, call := range g.calls {
+		if !strings.HasPrefix(call, "GET ") {
+			out = append(out, call)
+		}
+	}
+	return out
+}
+
+// A SERVICE ACCOUNT THE OWNER DOES NOT HOLD IS NEVER THE SEAT'S, whatever its
+// username: usernames are instance-wide, so the derived one may be another
+// group's service account (or, in instance mode, a group's). The seat reads as
+// having no account, the create is refused with the remedy, and no step of any
+// op, each finding the account by name with no ledger id, writes anything.
+//
+// Mutation: finding the account by the instance-wide username lookup
+// (s.named) in session.owned, or in session.account's fallback alone (which
+// leaves the create's refusal standing), turns this red.
+func TestAServiceAccountTheOwnerDoesNotHoldIsNeverAdopted(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		mode         config.GitLabMode
+		holder, said string
+	}{
+		{config.GitLabModeGroup, "rival", "the group acme does not own"},
+		{config.GitLabModeGroup, ownedByInstance, "the group acme does not own"},
+		{config.GitLabModeInstance, "rival", "this GitLab instance does not own"},
+		{config.GitLabModeInstance, ownedByGroup, "this GitLab instance does not own"},
+	} {
+		t.Run(string(tc.mode)+"/"+tc.holder, func(t *testing.T) {
+			t.Parallel()
+			g := newGLSite(t)
+			g.seed(&glUser{ID: 700, Username: "crewlet-sre", State: "active", Bot: true, owner: tc.holder})
+			g.mu.Lock()
+			g.tokens[700] = []*glToken{{id: 5, name: "crewlet-sre", owner: 700, value: "theirs", scopes: []string{"api"}}}
+			g.mu.Unlock()
+			s := openGLMode(t, g, tc.mode)
+			if have := observeOne(t, s, nil); have.Exists {
+				t.Errorf("another owner's account was observed as the seat's: %+v", have)
+			}
+			want := seataccess.Desired{Enabled: true, Level: "30"}
+			err := runOpUntil(t, s, seataccess.OpCreate, want, 0)
+			var refusal *seataccess.Refusal
+			if !errors.As(err, &refusal) || !strings.Contains(refusal.Said, "crewlet-sre") ||
+				!strings.Contains(refusal.Said, tc.said) ||
+				!strings.Contains(refusal.Remedy, "integrations.gitlab.provisioning.username_prefix") {
+				t.Errorf("create = %v", err)
+			}
+			have := seataccess.Observed{Exists: true, Enabled: true, Level: "20"}
+			for _, op := range []seataccess.Op{seataccess.OpCreate, seataccess.OpEnable, seataccess.OpLevel,
+				seataccess.OpScope, seataccess.OpMint, seataccess.OpRotate, seataccess.OpDisable,
+				seataccess.OpRevoke, seataccess.OpRemove} {
+				for _, step := range (gitlab.Vendor{}).Steps(sre, seataccess.LaneGitLab, op, want, have) {
+					// Errors are expected: what matters is what reached GitLab.
+					_, _ = s.Apply(context.Background(), seataccess.ApplyInput{
+						Seat: sre, Lane: seataccess.LaneGitLab, Step: step, Want: want, Have: have,
+					})
+				}
+			}
+			if w := g.writes(); len(w) != 0 {
+				t.Errorf("calls written for another owner's account: %v", w)
+			}
+			if _, member := g.inGroup(700); member || len(g.liveTokens(700)) != 1 {
+				t.Error("another owner's account was given a membership or lost its token")
+			}
+		})
+	}
+}
+
+// A SERVICE ACCOUNT THE OWNER HOLDS IS ADOPTED, in either mode, wherever it
+// falls in the owner's listing: here past the first page of a hundred.
+//
+// Mutation: reading only the listing's first page in Client.ServiceAccounts
+// turns this red (the create makes a second account beside it).
+func TestAServiceAccountTheOwnerHoldsIsAdoptedInEitherMode(t *testing.T) {
+	t.Parallel()
+	for mode, owner := range map[config.GitLabMode]string{
+		config.GitLabModeGroup: ownedByGroup, config.GitLabModeInstance: ownedByInstance,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+			g := newGLSite(t)
+			for id := 1; id <= 150; id++ {
+				g.seed(&glUser{ID: id, Username: fmt.Sprintf("other-%d", id), State: "active", Bot: true, owner: owner})
+			}
+			g.seed(&glUser{ID: 500, Username: "crewlet-sre", State: "active", Bot: true, owner: owner})
+			s := openGLMode(t, g, mode)
+			if have := observeOne(t, s, nil); !have.Exists || have.AccountID != "500" {
+				t.Fatalf("the owner's account was not observed as the seat's: %+v", have)
+			}
+			results := runOp(t, s, seataccess.OpCreate, seataccess.Desired{Enabled: true, Level: "30"},
+				seataccess.Observed{}, nil)
+			if results[0].AccountID != "500" || len(g.liveTokens(500)) != 1 ||
+				g.called("POST /groups/9/service_accounts") || g.called("POST /service_accounts") {
+				t.Fatalf("adoption: results %+v, calls %v", results, g.writes())
+			}
+		})
 	}
 }
