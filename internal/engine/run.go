@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/atlas/collect"
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/atlaswake"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	awsint "github.com/crewlet/crewlet/internal/aws"
@@ -913,6 +914,11 @@ type Engine struct {
 		material webhooks.Secrets
 	}
 
+	// cloudIDs reads the cloud id of a Cloud site the company names by url,
+	// once per process, for the Forge route, the passes and setup. The
+	// integrations answer reads the passes' shared findings instead.
+	cloudIDs *atlassian.CloudIDs
+
 	// embeddings is the company's vector backend, swapped on apply. Atomic,
 	// not a mutex: read on the turn's prefetch hot path, written only by an
 	// apply, so a read must not queue behind anything.
@@ -1627,6 +1633,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	}
 
 	e := &Engine{
+		cloudIDs: atlassian.NewCloudIDs(atlassian.CloudIDOptions{}),
 		boot:     opts.Bootstrap,
 		environ:  environ,
 		refusals: newRefusalLatch(),

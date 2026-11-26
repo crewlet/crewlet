@@ -2195,6 +2195,53 @@ test("saving a connected app does not say it connected", async () => {
   expect(screen.queryAllByText(/Datadog connected/)).toHaveLength(0);
 });
 
+// A SAVE THAT LEAVES THE FORGE RELAY REFUSING SAYS SO, naming the field, while
+// the form is in view. Mutation: drop the forge_held toast and this goes red.
+test("a save the Forge relay will refuse names the field that clears it", async () => {
+  const held =
+    "Forge relay events for Jira are refused until integrations.jira.url is replaced by cloud_id (with site_url)";
+  stubFetch(
+    () =>
+      new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [], forge_held: held }), {
+        status: 201,
+      }),
+  );
+  render(
+    <ToastProvider>
+      <SetupForm
+        sections={[
+          {
+            name: "Datadog",
+            tool: {
+              ...tool,
+              configured: true,
+              requirements: [
+                req({
+                  field: "route_to",
+                  label: "Fallback seat",
+                  kind: "handle",
+                  present: true,
+                  choices: [{ value: "sre-lead", label: "SRE Lead (sre-lead)" }],
+                }),
+              ],
+            },
+          },
+        ]}
+        title="Datadog"
+        onClose={() => {}}
+        onDone={() => {}}
+      />
+    </ToastProvider>,
+  );
+  choose(screen.getByLabelText("Fallback seat"), /sre-lead/);
+  fireEvent.click(screen.getByRole("button", { name: /Save|Connect/ }));
+  await eventually(() =>
+    expect(
+      screen.getAllByText(/integrations\.jira\.url is replaced by cloud_id/).length,
+    ).toBeGreaterThan(0),
+  );
+});
+
 // A REFUSAL NEVER HIDES BEHIND THE FOLD.
 //
 // The disclosure is closed in both directions on purpose (a settings form

@@ -168,6 +168,21 @@ func IsGateway(raw string) bool {
 	return isGatewayHost(host(raw))
 }
 
+// GatewayCloudID is the cloud id a gateway address's /ex/{product}/{id} path
+// names, lower-cased, for Jira or Confluence; "" for any other shape. The host
+// is not judged: a Forge token's apiBaseUrl is Atlassian's own statement.
+func GatewayCloudID(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "ex" || (parts[1] != "jira" && parts[1] != "confluence") {
+		return ""
+	}
+	return strings.ToLower(parts[2])
+}
+
 // Gateway is the host of the API gateway a cloud id is read through, for a
 // company whose site is at site: Government Cloud's for a Government Cloud
 // site, and the commercial gateway for anything else — a commercial site, a

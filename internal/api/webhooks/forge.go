@@ -63,14 +63,15 @@ func newForgeVerifier(keys KeySource, now func() time.Time) *forgeVerifier {
 }
 
 // verify checks one invocation token against the app id it must be addressed
-// to, returning the reason it failed rather than a bare false: the difference
-// between an expired token and one for somebody else's app is what an operator
-// needs, and it is invisible from the outside.
+// to and returns its claims, or the reason it failed rather than a bare false:
+// the difference between an expired token and one for somebody else's app is
+// what an operator needs, and it is invisible from the outside. The claims
+// still have to name the company's own site ([bindSite]).
 //
 // The options are assembled per call, not captured once, because two of them
 // move: the app id comes from config and changes with a reload, and the clock
 // is the receiver's own so a test can pin it.
-func (f *forgeVerifier) verify(ctx context.Context, raw, appID string) error {
+func (f *forgeVerifier) verify(ctx context.Context, raw, appID string) (*forgeClaims, error) {
 	keyfunc := func(token *jwt.Token) (any, error) {
 		kid, _ := token.Header["kid"].(string)
 		if kid == "" {
@@ -83,7 +84,8 @@ func (f *forgeVerifier) verify(ctx context.Context, raw, appID string) error {
 		}
 		return f.keys.Key(ctx, kid)
 	}
-	_, err := jwt.Parse(raw, keyfunc,
+	claims := &forgeClaims{}
+	_, err := jwt.ParseWithClaims(raw, claims, keyfunc,
 		// The algorithm is PINNED: Atlassian signs RS256, so a token
 		// naming anything else did not come from the path this trusts.
 		//
@@ -103,5 +105,8 @@ func (f *forgeVerifier) verify(ctx context.Context, raw, appID string) error {
 		jwt.WithExpirationRequired(),
 		jwt.WithTimeFunc(f.now),
 	)
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return claims, nil
 }

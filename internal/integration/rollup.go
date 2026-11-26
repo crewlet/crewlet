@@ -178,6 +178,9 @@ type SurfaceStatus struct {
 	SecretUsable    *bool
 	Routes          *bool
 	EndpointCurrent *bool
+	// Held is why the route refuses every delivery although its material
+	// resolved, in the route's words; empty where nothing is held.
+	Held string
 }
 
 // ToolRollup is one tool's answer: its state, the words for it, and why.
@@ -292,6 +295,12 @@ func judge(s SurfaceStatus, name string) verdict {
 		r := s.State.Reported()
 		v.state, v.label, v.reason, v.phase, v.tearing =
 			ToolNotConnected, r.Phase.Label(), r.Detail, r.Phase, true
+		return v
+	}
+	if s.Enabled && s.Held != "" {
+		// A HOLD IS A FACT whatever the loop reports or cannot read: the
+		// route refuses every delivery until a person changes the config.
+		v.state, v.label, v.reason = ToolAttention, labelActionNeeded, s.Held
 		return v
 	}
 	if s.Known && s.State != nil && s.State.Observed() {

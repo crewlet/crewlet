@@ -213,6 +213,13 @@ type Options struct {
 	// engine's own chain.
 	Resolve func(string) (string, bool)
 
+	// CloudIDs reads the cloud id of a Cloud site a Jira or Confluence block
+	// names by url: the engine's one reader, so a write's lookup is the one
+	// the node's Forge route then reuses.
+	CloudIDs interface {
+		Resolve(ctx context.Context, site string) (string, error)
+	}
+
 	// WebhookBase is where a third-party app reaches this deployment, without
 	// its trailing slash: [config.API.WebhookBase] (`api.public.external_url`
 	// where configured, else `api.external_url`).
@@ -298,9 +305,12 @@ type Options struct {
 
 // Service serves /setup.
 type Service struct {
-	config  *configapi.Service
-	writer  setup.Writer
-	resolve func(string) (string, bool)
+	config   *configapi.Service
+	writer   setup.Writer
+	resolve  func(string) (string, bool)
+	cloudIDs interface {
+		Resolve(ctx context.Context, site string) (string, error)
+	}
 	// webhookBase and webhookBaseKey are the vendor's address and the Tier
 	// A key it is read from. See [Options.WebhookBase].
 	webhookBase, webhookBaseKey string
@@ -339,6 +349,7 @@ func New(opts Options) (*Service, error) {
 		{"Config", opts.Config == nil},
 		{"Secrets", opts.Secrets == nil},
 		{"Resolve", opts.Resolve == nil},
+		{"CloudIDs", opts.CloudIDs == nil},
 		{"Passes", opts.Passes == nil},
 		{"Probes", opts.Probes == nil},
 		{"Sink", opts.Sink == nil},
@@ -375,6 +386,7 @@ func New(opts Options) (*Service, error) {
 	s := &Service{
 		config:         opts.Config,
 		resolve:        opts.Resolve,
+		cloudIDs:       opts.CloudIDs,
 		webhookBase:    opts.WebhookBase,
 		webhookBaseKey: opts.WebhookBaseKey,
 		secrets:        opts.Secrets,
@@ -2138,11 +2150,44 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 			"revision", result.RevisionID, "error", afterErr.Error(),
 			"detail", "the write landed; its answer carries the state read before it")
 	}
-	httpjson.Write(w, http.StatusCreated, map[string]any{
+	answer := map[string]any{
 		"revision_id": result.RevisionID, "epoch": result.Epoch,
 		"wrote_secrets": result.Secrets, "reloaded": result.Reloaded,
 		"state": fresh,
-	})
+	}
+	if afterErr == nil {
+		if held := s.forgeHeld(r.Context(), after.company, kind); held != "" {
+			answer["forge_held"] = held
+		}
+	}
+	httpjson.Write(w, http.StatusCreated, answer)
+}
+
+// forgeHeld is the sentence for a Jira or Confluence write that leaves the
+// Forge relay refusing that product's events while an app id is set: a block
+// with no address yet, or a url-named site whose cloud id cannot be read now.
+// Reading it here is the lookup a new connection starts with. Empty otherwise.
+func (s *Service) forgeHeld(ctx context.Context, company *config.Company, kind integration.Kind) string {
+	if company == nil || (kind != integration.KindJira && kind != integration.KindConfluence) {
+		return ""
+	}
+	value := func(v string) string { return setup.Deref(v, s.resolve) }
+	if strings.TrimSpace(value(company.Integrations.ForgeAppID)) == "" {
+		return ""
+	}
+	product := string(kind)
+	relay := company.Integrations.ForgeRelay(value)
+	for _, hold := range relay.Held {
+		if hold.Product == product {
+			return hold.Reason
+		}
+	}
+	if site, ok := relay.Lookups[product]; ok {
+		if _, err := s.cloudIDs.Resolve(ctx, site); err != nil {
+			return config.ForgeLookupHold(product, err).Reason
+		}
+	}
+	return ""
 }
 
 // disconnect serves DELETE /setup/integrations/{kind}.

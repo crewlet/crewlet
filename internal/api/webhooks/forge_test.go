@@ -78,11 +78,27 @@ func forgeToken(t *testing.T, claims jwt.MapClaims, method jwt.SigningMethod, ki
 }
 
 func validForgeClaims() jwt.MapClaims {
+	return forgeClaimsFor(ownSite)
+}
+
+// forgeClaimsFor is a valid token's claims for an installation on the site
+// with cloud id site, stated as Atlassian's reference shapes them.
+func forgeClaimsFor(site string) jwt.MapClaims {
 	return jwt.MapClaims{
 		"iss": webhooks.ForgeIssuer,
 		"aud": "app-123",
 		"exp": pinned.Add(time.Minute).Unix(),
 		"iat": pinned.Add(-time.Minute).Unix(),
+		"app": map[string]any{
+			"apiBaseUrl": "https://api.atlassian.com/ex/jira/" + site,
+			"installation": map[string]any{
+				"contexts": []any{map[string]any{
+					"name":       "jira",
+					"cloudId":    site,
+					"apiBaseUrl": "https://api.atlassian.com/ex/jira/" + site,
+				}},
+			},
+		},
 	}
 }
 
