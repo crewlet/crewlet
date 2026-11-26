@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolschema/toolschematest"
 )
 
 // everySchema is every builtin's advertised schema, by where it is served and
@@ -57,6 +58,20 @@ func TestEveryBuiltinSchemaIsOneTheCheckKeeps(t *testing.T) {
 	for name, schema := range schemas {
 		if bad := tools.UnsupportedSchema(schema); len(bad) > 0 {
 			t.Errorf("%s advertises what the check cannot keep: %v", name, bad)
+		}
+	}
+}
+
+// EVERY BUILTIN'S SCHEMA IS ONE AN MCP CLIENT TAKES: the bridge serves each
+// as a tool's inputSchema, and Claude Code lists none of a server's tools when
+// one of them is invalid (package toolschema).
+//
+// Mutation: give a tool a nil required list and this names it.
+func TestEveryBuiltinSchemaIsOneAnMCPClientTakes(t *testing.T) {
+	t.Parallel()
+	for name, schema := range everySchema(t) {
+		if faults := toolschematest.Faults(schema); len(faults) > 0 {
+			t.Errorf("%s: %v", name, faults)
 		}
 	}
 }

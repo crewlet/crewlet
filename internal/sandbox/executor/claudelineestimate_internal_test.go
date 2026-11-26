@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -1048,9 +1047,9 @@ func TestALineReadUnaskedAnswersNoEstimate(t *testing.T) {
 // AN ESTIMATING READER ALLOCATES NOTHING AN ELEMENT: a result of nested
 // elements, a document of a content source of a text block each, read
 // estimating, allocates at four thousand elements within 16 KiB of what it
-// does at one thousand (the fewest of five readings each, so what another
-// goroutine allocates meanwhile counts against neither), so no charge, fault
-// or walk of an element is held past it.
+// does at one thousand (the fewest of five readings each, its own allocations
+// alone, [ownAllocations]), so no charge, fault or walk of an element is held
+// past it.
 //
 // Mutation: hold an element's charge in a growing list, or make a fault an
 // error as it is met, and this fails.
@@ -1062,7 +1061,6 @@ func TestAnEstimatingReaderAllocatesNothingAnElement(t *testing.T) {
 	tail := `}]},"uuid":"` + ctUUID(1) + `","timestamp":"` + ctStamp + `"}`
 	line := func(n int) []scanPart { return scanLine(scanLit(head), scanList(element, n), scanLit(tail)) }
 	allocated := func(parts []scanPart) uint64 {
-		defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 		fewest := uint64(math.MaxUint64)
 		for range 5 {
 			r := newThreadReader(&scanGenerated{parts: line(1)}, threadPlainMax)
@@ -1072,14 +1070,15 @@ func TestAnEstimatingReaderAllocatesNothingAnElement(t *testing.T) {
 			}
 			r.Reset(&scanGenerated{parts: parts}, threadPlainMax, threadLinesMax)
 			r.Estimating()
-			var before, after runtime.MemStats
-			runtime.ReadMemStats(&before)
-			l, err := r.Next(t.Context())
-			runtime.ReadMemStats(&after)
+			var (
+				l   threadLine
+				err error
+			)
+			_, bytes := ownAllocations(func() { l, err = r.Next(t.Context()) })
 			if got, estErr := l.Estimate(); err != nil || estErr != nil || got.At3 == 0 {
 				t.Fatalf("the line reads as %v, estimated at %+v (%v); want a record and its figure", err, got, estErr)
 			}
-			fewest = min(fewest, after.TotalAlloc-before.TotalAlloc)
+			fewest = min(fewest, bytes)
 		}
 		return fewest
 	}

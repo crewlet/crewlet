@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/tools/toolschema"
 )
 
 // THE DEEP RUN (ADR-0166): an investigation in rounds, on the Advisor's model,
@@ -330,8 +331,7 @@ var _ toolloop.Surface = (*deepSurface)(nil)
 
 func (s *deepSurface) ToolDefs() []llm.ToolDef {
 	object := func(required []string, props map[string]any) map[string]any {
-		return map[string]any{"type": "object", "additionalProperties": false, "required": required,
-			"properties": props}
+		return toolschema.Object(props, required...)
 	}
 	return []llm.ToolDef{
 		{Name: SnapshotTool, Description: "The company's numbers over the last 7 days: stats beside the 7 " +
