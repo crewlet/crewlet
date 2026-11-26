@@ -378,6 +378,12 @@ func copyPlanned(p plannedSkill, spec checkoutSpec, staging string, said *skips)
 		}
 		listed, key = rule.shown(p.name), rule.key(p.name)
 	}
+	// NOTHING THE RUN DID NOT MAKE IS LISTED AS ITS COPY: the run's end
+	// removes every name listed, so an entry already at the copy's place (a
+	// person's, of any kind) leaves the copy out rather than being listed.
+	if why := skillsHold(spec, p.name); why != "" {
+		return handedSkill{}, errors.New(why)
+	}
 	if spec.Copied != "" {
 		if err := appendLines(spec.Copied, []string{p.name}); err != nil {
 			return handedSkill{}, fmt.Errorf("listing it for removal: %w", err)
