@@ -1273,6 +1273,7 @@ func seatSetupSteps(in []SandboxSetupStep) []org.SandboxSetupStep {
 			OptionalKeys:   slices.Clone(step.OptionalKeys),
 			Brief:          step.Brief,
 			TimeoutSeconds: step.TimeoutSeconds,
+			EveryBox:       step.EveryBox,
 		})
 	}
 	return out

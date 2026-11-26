@@ -221,6 +221,8 @@ const (
 
 	ExecutorSessionNotContinued = "crewlet.executor.session.not_continued"
 	ExecutorSessionTrimmed      = "crewlet.executor.session.trimmed"
+
+	ExecutorHomeCuts = "crewlet.executor.home.cuts"
 )
 
 // THE NODE'S ANSWER BUDGET'S INSTRUMENTS, which internal/queue measures and

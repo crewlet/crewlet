@@ -30,7 +30,7 @@ func TestAFakeCatalogueCompletesEveryHarnessRuns(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			manager, err := buildSandbox(cfg, nil, nil, tc.play)
+			manager, err := buildSandbox(cfg, nil, nil, tc.play, nil)
 			if err != nil || manager == nil {
 				t.Fatalf("buildSandbox = %v, %v", manager, err)
 			}

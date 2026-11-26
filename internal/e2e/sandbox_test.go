@@ -1169,18 +1169,7 @@ func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
 	if runtime == "" {
 		t.Skip("no usable container runtime; the direct mode covers the protocol here")
 	}
-	image := os.Getenv("CREWLET_TEST_SANDBOX_IMAGE")
-	if image == "" {
-		// PINNED, like every image docker-compose.yml names. `alpine:3` is a
-		// floating tag, and CLAUDE.md's rule against those is not about
-		// tidiness: a green run under one is a claim about a build nobody can
-		// name afterwards, and the day the tag moves this gate's subject
-		// changes with no commit to point at. 3.24.1 is the version `3`
-		// resolves to today (Docker Hub puts 3, 3.24, 3.24.1 and latest on one
-		// digest); nothing bumps a literal in Go source, so a failure here that
-		// names the image IS the bump signal.
-		image = "alpine:3.24.1"
-	}
+	image := sandboxImage()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{
 		Placement: sandbox.Container, StateDir: t.TempDir(),
 		Image: image, Runtime: filepath.Base(runtime),
@@ -1218,6 +1207,22 @@ func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
 // usableContainerRuntime returns a runtime that can actually start a
 // container, or "". Present-on-PATH is not enough: a daemon can be installed
 // and unreachable, which is the ordinary case in a container-in-container CI.
+// sandboxImage is the image the container legs run their boxes from.
+func sandboxImage() string {
+	if image := os.Getenv("CREWLET_TEST_SANDBOX_IMAGE"); image != "" {
+		return image
+	}
+	// PINNED, like every image docker-compose.yml names. `alpine:3` is a
+	// floating tag, and CLAUDE.md's rule against those is not about
+	// tidiness: a green run under one is a claim about a build nobody can
+	// name afterwards, and the day the tag moves this gate's subject
+	// changes with no commit to point at. 3.24.1 is the version `3`
+	// resolves to today (Docker Hub puts 3, 3.24, 3.24.1 and latest on one
+	// digest); nothing bumps a literal in Go source, so a failure here that
+	// names the image IS the bump signal.
+	return "alpine:3.24.1"
+}
+
 func usableContainerRuntime(t *testing.T) string {
 	t.Helper()
 	found, err := sandbox.ResolveContainerRuntime("auto")

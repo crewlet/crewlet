@@ -583,6 +583,13 @@ type SandboxSetupStep struct {
 	// mkdir, not for work — so any real step (a dependency install, a cold
 	// image pull, a large clone) was killed and failed the acquisition.
 	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Per-command wall-clock cap for this step."`
+
+	// EveryBox runs the step in every box. Unset, a step a container box's
+	// home is cached with runs once per node, in a build handed no
+	// credential (docs/concepts/code-sandbox.md, "A container box's home,
+	// cached"); this is for a step that needs one the engine cannot see it
+	// read, such as a tool that takes a token from the environment.
+	EveryBox bool `yaml:"every_box,omitempty" json:"every_box,omitempty" desc:"Run this step in every box rather than once per node into a container box's cached home: for a step that needs a credential the engine cannot see it read."`
 }
 
 // IdentityKey is the step's name: the handle a failure message and a log line

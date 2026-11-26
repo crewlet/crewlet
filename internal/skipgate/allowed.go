@@ -223,6 +223,14 @@ var allowed = []Allowance{
 	// -----------------------------------------------------------------
 	{
 		Package: "internal/e2e",
+		Test:    "TestAContainerBoxStartsFromItsSeatsCachedHome",
+		When:    Environment,
+		Why: "Needs a usable docker or podman. It is the only case that builds a cached home in a real " +
+			"container and reads the container's own changes; internal/sandbox/homecache covers the " +
+			"cache without one.",
+	},
+	{
+		Package: "internal/e2e",
 		Test:    "TestTheContainerModeRunsTheSameProtocol",
 		When:    Environment,
 		Why: "Needs a usable docker or podman. It is the only place containerBox's " +
