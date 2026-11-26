@@ -61,3 +61,36 @@ func (p Paths) KimiSettingsFresh() string { return p.WorkDir() + "/kimi-run-fres
 // KimiLinesBefore is where a continuing run's script records how many lines
 // each agent's wire.jsonl held before its driver started ([kimiLinesBefore]).
 func (p Paths) KimiLinesBefore() string { return p.WorkDir() + "/kimi-lines-before" }
+
+// KimiNoteHelper is where a Kimi run's note helper is written, which hands the
+// checkouts below its start directory theirs ([kimiCheckoutHome]).
+func (p Paths) KimiNoteHelper() string { return p.WorkDir() + "/kimi-notehelper" }
+
+// KimiCheckouts is the run's checkout state, which the note helper's
+// checkout-launch remakes and its kimi-nested firings read.
+func (p Paths) KimiCheckouts() string { return p.WorkDir() + "/kimi-checkouts" }
+
+// KimiCheckoutLaunch is the run's checkout-launch config ([kimiCheckouts]).
+func (p Paths) KimiCheckoutLaunch() string { return p.WorkDir() + "/kimi-checkout-launch.json" }
+
+// KimiCheckoutSections is where checkout-launch writes the checkouts'
+// instructions, which the gate writes after the home's own into
+// [Paths.KimiHomeAgents].
+func (p Paths) KimiCheckoutSections() string { return p.WorkDir() + "/kimi-checkout-sections.md" }
+
+// KimiCheckoutSkillsCopied lists, a name a line, the checkouts' skills a run
+// copied into [Paths.KimiSkills], for its end, or the next run's gate, to
+// remove.
+func (p Paths) KimiCheckoutSkillsCopied() string { return p.WorkDir() + "/kimi-checkout-skills" }
+
+// KimiHomeAgents is the home's instruction file, which Kimi Code 2.7.2 loads
+// whole ahead of a project's: KIMI_CODE_HOME/AGENTS.md.
+func (p Paths) KimiHomeAgents() string { return p.KimiHome() + "/AGENTS.md" }
+
+// KimiHomeInstructions is the home's own [Paths.KimiHomeAgents], held beside
+// the run while the checkouts' sections stand after it.
+func (p Paths) KimiHomeInstructions() string { return p.WorkDir() + "/kimi-home-instructions.md" }
+
+// KimiSkills is the home's skills directory, the first of the user skill
+// roots Kimi Code 2.7.2 reads, which the checkouts' skills are copied into.
+func (p Paths) KimiSkills() string { return p.KimiHome() + "/skills" }
