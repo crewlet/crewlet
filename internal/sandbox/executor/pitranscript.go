@@ -3,6 +3,7 @@ package executor
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -501,7 +502,7 @@ func (p *piSummaries) newest(branch []piNode, s *summaryRead) {
 		if n.kind != piCompaction || n.summary < 0 {
 			continue
 		}
-		if t := p.texts[n.summary]; t.set && (t.past || strings.TrimSpace(string(t.buf)) != "") {
+		if t := p.texts[n.summary]; t.set && (t.past || len(bytes.TrimSpace(t.buf)) > 0) {
 			at = n.summary
 			break
 		}
