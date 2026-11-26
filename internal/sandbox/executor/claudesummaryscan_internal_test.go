@@ -258,10 +258,10 @@ var claudeSummaryFrames = []string{methodsOf((*claudeSummaryReading).line), meth
 // the newest summary allocates in the summary's own reading
 // ([claudeSummaryFrames]) is at least its words and at most them
 // [claudeSummaryWordsAllocates] times over and [claudeSummaryStateAllocates]:
-// no second reader reads their line again. Counted alone
-// ([ownAllocationsWithin]), never as the difference of two whole reads, which
-// the walk's json v2 decoder pools, letting a quarter of what is put back go
-// under -race, swing by over a hundred kilobytes.
+// no second reader reads their line again. Counted alone, a pool's refill
+// aside ([ownAllocationsWithin]), never as the difference of two whole reads,
+// which the walk's json v2 decoder pools, letting a quarter of what is put
+// back go under -race, swing by over a hundred kilobytes.
 //
 // Mutation: read the summary's line again with a reader of its own: this goes
 // red.
