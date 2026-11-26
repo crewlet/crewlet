@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/speech"
 )
 
 // fakeCredentials is the engine's half of the credential feed: it keeps what
@@ -167,7 +168,7 @@ func newSocketNode(t *testing.T, now func() time.Time) *socketNode {
 	// once a second — and a tab the case had not named closed between two
 	// steps of it, now and then.
 	app := newApp(t, api.Options{Bootstrap: &b, Sessions: arm, Credentials: feed,
-		Now: now})
+		Now: now, Dictation: speech.NewFake("Every word stays in memory.")})
 	srv := httptest.NewServer(app)
 	t.Cleanup(srv.Close)
 	return &socketNode{b: b, signer: signer, rows: rows, feed: feed, srv: srv,
@@ -177,6 +178,12 @@ func newSocketNode(t *testing.T, now func() time.Time) *socketNode {
 // tab signs a person in, at the node's clock, with a session whose absolute
 // deadline is absolute, and opens their tab's socket with its cookie.
 func (n *socketNode) tab(t *testing.T, login string, absolute time.Time) signedInTab {
+	t.Helper()
+	return n.tabOn(t, login, absolute, "/ws/stream")
+}
+
+// tabOn is [socketNode.tab] opening the socket at path.
+func (n *socketNode) tabOn(t *testing.T, login string, absolute time.Time, path string) signedInTab {
 	t.Helper()
 	at := n.now()
 	lineage := uuid.Must(uuid.NewV7())
@@ -202,7 +209,7 @@ func (n *socketNode) tab(t *testing.T, login string, absolute time.Time) signedI
 	n.rows.mu.Unlock()
 	cookie := &http.Cookie{Name: session.CookieName(n.b.API.ExternalBase()), Value: bearer}
 	conn, _, err := websocket.Dial(t.Context(),
-		"ws"+strings.TrimPrefix(n.srv.URL, "http")+"/ws/stream",
+		"ws"+strings.TrimPrefix(n.srv.URL, "http")+path,
 		&websocket.DialOptions{HTTPHeader: http.Header{
 			"Cookie": {cookie.String()},
 			"Origin": {n.b.API.ExternalURL},

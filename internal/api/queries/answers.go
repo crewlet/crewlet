@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/speech"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/words"
@@ -211,6 +212,10 @@ type Sources struct {
 	// this deployment at all: `viewer`'s `artifact_pages`. internal/api fills it
 	// from the Bootstrap it is handed.
 	ArtifactPages bool
+
+	// Dictation is whether this node's recognizer can serve /ws/dictation
+	// now, and why not: `viewer`'s `dictation`. Nil answers it switched off.
+	Dictation func() speech.Availability
 
 	// SignIn is this node's `api.auth`, whose limits the company's sign-in
 	// policy is held within ([SignInPolicyOf]). Nil leaves `sign_in_policy`
