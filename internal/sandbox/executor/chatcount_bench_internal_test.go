@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -97,7 +98,9 @@ func chatBenchHarnesses() []chatBenchHarness {
 				return `{"type":"assistant","message":{"role":"model","parts":[{"functionCall":{"id":"c1",` +
 					`"name":"run_shell_command","args":{"command":` + q + `}}}]}}`
 			},
-			summarize: func(c chatCounter) { c.(*qwenCounting).summarize() },
+			summarize: func(c chatCounter) {
+				c.(*qwenCounting).summarize(newSummaryClaim(context.Background(), new(passBudget)))
+			},
 			ids: func(n int) string {
 				parts := make([]string, qwenCountIDs)
 				for i := range parts {
@@ -129,7 +132,9 @@ func chatBenchHarnesses() []chatBenchHarness {
 				}
 				return strings.Join(lines, "\n")
 			},
-			summarize: func(c chatCounter) { c.(*geminiCounting).summarize() },
+			summarize: func(c chatCounter) {
+				c.(*geminiCounting).summarize(newSummaryClaim(context.Background(), new(passBudget)))
+			},
 			idsBase: func() string {
 				lines := make([]string, geminiCountBaseIDs-1)
 				for i := range lines {

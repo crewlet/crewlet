@@ -677,6 +677,8 @@ func (QwenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
 	var reading sandbox.MainThreadReading
+	var large passBudget
+	defer large.release()
 	summarize := false
 	if ask.Summary {
 		if why := summaryReleaseWhy(ask.Release, qwenRelease); why != "" {
@@ -687,7 +689,7 @@ func (QwenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths
 	}
 	if !ask.Count {
 		if summarize {
-			var summary summaryRead
+			summary := summaryRead{claim: newSummaryClaim(ctx, &large)}
 			_, _ = QwenCode{}.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
 			reading.Summary = summary.reading()
 		}
@@ -699,9 +701,9 @@ func (QwenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths
 	}
 	counter := new(qwenCounting)
 	if summarize {
-		counter.summarize()
+		counter.summarize(newSummaryClaim(ctx, &large))
 	}
-	count, err := chatCopyCount(ctx, box, file, counter, ask.Release, qwenRelease)
+	count, err := chatCopyCount(ctx, box, file, counter, ask.Release, qwenRelease, &large)
 	reading.Count = count
 	if summarize {
 		reading.Summary = counter.summary(err)

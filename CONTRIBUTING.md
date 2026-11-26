@@ -1200,7 +1200,7 @@ the engine *does*, not merely that it parses.
 ## Dependency updates
 
 Dependabot watches every dependency manifest and opens a pull request for a
-newer release. The git, Chromium and floor Node pins are no manifest, so a
+newer release. The git, Chromium, floor Node and sherpa-onnx pins are no manifest, so a
 workflow of this repository's own watches them; the tool servers the docs and
 examples launch are held by a test (see below).
 
@@ -1215,6 +1215,7 @@ examples launch are held by a test (see below).
 | `scripts/git-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the gits the engine image builds and the suite runs |
 | `scripts/chromium-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the Chromiums the suite drives |
 | `scripts/node-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the oldest Node, with its npm, the box helper supports |
+| `internal/speech/native.go` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the sherpa-onnx release dictation's recognizer fetches |
 
 **Choosing a version goes the same direction: take the newest release, and pin
 it exactly.** Find the newest in the registry, not memory, and write a literal

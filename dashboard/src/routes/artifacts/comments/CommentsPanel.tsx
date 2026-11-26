@@ -38,6 +38,7 @@ import {
 import type { ArtifactCommentThread } from "~/protocol/index.ts";
 import { DraftComposer } from "./DraftComposer.tsx";
 import { useComments, useCommentWrite } from "./state.tsx";
+import { useDictation } from "~/lib/dictation/source.ts";
 
 /** What the list says when a filter holds nothing. */
 const NONE_UNDER: Readonly<Record<CommentFilter, string>> = {
@@ -123,6 +124,7 @@ function Start({ onPlace }: { onPlace: () => void }) {
   const write = useCommentWrite();
   const [whole, setWhole] = useState(false);
   const [text, setText] = useState("");
+  const dictation = useDictation();
   const post = async () => {
     if (!text.trim() || write.busy) return;
     const ok = await write.run(
@@ -143,6 +145,7 @@ function Start({ onPlace }: { onPlace: () => void }) {
           onChange={setText}
           placeholder={`Comment on version ${c.version} as a whole`}
           onSubmit={() => void post()}
+          dictation={dictation}
           actions={
             <>
               <Button size="small" variant="ghost" onClick={() => setWhole(false)}>
@@ -202,6 +205,7 @@ function ThreadCard({ t, now }: { t: ArtifactCommentThread; now: number | undefi
   const people = useArtifactPeople();
   const write = useCommentWrite();
   const versionHref = useVersionHref();
+  const dictation = useDictation();
   const card = useRef<HTMLLIElement>(null);
   const selected = c.selected === t.id;
   useEffect(() => {
@@ -275,6 +279,7 @@ function ThreadCard({ t, now }: { t: ArtifactCommentThread; now: number | undefi
         heading={false}
         comments={rows}
         subject={where}
+        dictation={dictation}
         {...(now === undefined ? {} : { now })}
         {...(c.can && selected
           ? {

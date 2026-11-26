@@ -1,7 +1,7 @@
 /** The review of a change's head: the three verdicts as menu items, held as the reader's access and
  *  authorship leave them, and the one dialog each opens. */
 import { useState, type ReactNode } from "react";
-import { Button, Menu, Stack, Textarea, type MenuItem } from "@crewlethq/ui";
+import { Button, Composer, Menu, Stack, type MenuItem } from "@crewlethq/ui";
 import {
   CheckGlyph,
   ChevronDownGlyph,
@@ -15,6 +15,7 @@ import { authoredBy } from "~/lib/code.ts";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { draftedRevisions, findingOf, forgetDrafts, readDrafts } from "~/lib/reviewDrafts.ts";
 import { useAct } from "~/lib/useAct.ts";
+import { useDictation } from "~/lib/dictation/source.ts";
 import { menuHold, type WriteAccess } from "~/lib/useWriteAccess.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import type { CodeChangeDetail, CodeVerdict } from "~/protocol/index.ts";
@@ -92,6 +93,7 @@ export function ReviewDialog({
   const write = useAct("code_review_change");
   const viewer = useViewer();
   const [summary, setSummary] = useState("");
+  const dictation = useDictation();
   const drafts = readDrafts(change.id, change.revision);
   const elsewhere = draftedRevisions(change.id).filter((d) => d.revision !== change.revision);
   const read = useStandingFindings(change, viewer.owner);
@@ -146,12 +148,13 @@ export function ReviewDialog({
         </>
       }
     >
-      <Textarea
-        aria-label="Summary"
+      <Composer
+        label="Summary"
         placeholder="What you found, in a sentence or two"
         value={summary}
         rows={4}
-        onChange={(event) => setSummary(event.target.value)}
+        onChange={setSummary}
+        dictation={dictation}
       />
       <p className="muted">
         {drafts.length === 0

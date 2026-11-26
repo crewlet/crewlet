@@ -428,7 +428,7 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake,
 	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes), maxLineBytes)
 	var ev copilotNoteLine
 	if summary != nil {
-		ev.summary = &summaryText{}
+		ev.summary = summary.newWords()
 	}
 	for {
 		line, err := w.noteLine(ctx, func() error { return ev.read(&w) })
@@ -831,7 +831,9 @@ func (c Copilot) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Path
 	if why := c.summaryWhy(ask); why != "" {
 		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
 	}
-	var summary summaryRead
+	var large passBudget
+	defer large.release()
+	summary := summaryRead{claim: newSummaryClaim(ctx, &large)}
 	_, _ = c.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
 	return sandbox.MainThreadReading{Summary: summary.reading()}
 }
