@@ -21,7 +21,7 @@ import (
 
 // A CAPTURE'S BUDGETS COUNT EVERY STEP OF ITS LIFE AT THE SLOWEST CROSSING, a
 // change's for a change and a read's for a read, and a reading on another
-// machine's clock adds twice the skew allowed one. A keep is two reads, upload
+// machine's clock adds twice the skew allowed one. A keep is three reads, upload
 // and record; a take's life, the rest of its take with its reservation's room,
 // its digest, keep and stamp; an unanswered takeover's, the takeover,
 // withdrawal and read back, keep and stamp; a standby's wait, the longer life
@@ -35,7 +35,7 @@ func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	t.Parallel()
 	change := sessionRecordBudget + coord.MaxValueCrossing
 	read := sessionRecordBudget + coord.MaxValueReadCrossing
-	keep := 2*sessionRecordBudget + objstore.PaceFor(executorkeep.SealedMaxBytes) + sessionRecordBudget
+	keep := 3*sessionRecordBudget + objstore.PaceFor(executorkeep.SealedMaxBytes) + sessionRecordBudget
 	take := SessionPackWait + SessionScrubWait + change + discardGrace + keep + change
 	over := change + change + read + keep + change
 	life := max(take, over)
@@ -50,15 +50,15 @@ func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	}{
 		{"one change of a run's row another node reads", captureStampBudget, change, "13m30.025663374s"},
 		{"one read of a run's row another node waits on", captureReadBudget, read, "4m30s"},
-		{"a keep", SessionKeepBudget, keep, "26m0s"},
+		{"a keep", SessionKeepBudget, keep, "26m30s"},
 		{"a keep's read", keepReadRoom, sessionRecordBudget, "30s"},
-		{"a take's life", takeLife, take, "1h1m30.051326748s"},
-		{"a takeover's life", takeOverLife, over, "1h11m0.076990122s"},
-		{"a capture's life", captureLife, life, "1h11m0.076990122s"},
-		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h11m0.076990122s"},
-		{"a standby's wait", standbyWait, wait, "1h11m2.076990122s"},
-		{"a standby's window", standbyWindow, window, "2h31m32.205306992s"},
-		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h31m32.205306992s"},
+		{"a take's life", takeLife, take, "1h2m0.051326748s"},
+		{"a takeover's life", takeOverLife, over, "1h11m30.076990122s"},
+		{"a capture's life", captureLife, life, "1h11m30.076990122s"},
+		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h11m30.076990122s"},
+		{"a standby's wait", standbyWait, wait, "1h11m32.076990122s"},
+		{"a standby's window", standbyWindow, window, "2h32m2.205306992s"},
+		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h32m2.205306992s"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s is %v, want its terms, %v", c.name, c.got, c.want)

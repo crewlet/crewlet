@@ -149,6 +149,9 @@ func (w *sessionWrites) calls() []string {
 type sessionKeep struct {
 	mu     sync.Mutex
 	policy SessionPolicy
+	// policyHook, when set, runs on every read of the policy before it answers:
+	// a store slow to say who reads a capture naming media.
+	policyHook func(context.Context)
 	// now is the rig's clock, which a spool's key is minted on: the
 	// coordinator ages the key against that clock ([objstore.RecordWithin]).
 	now    func() time.Time
@@ -182,7 +185,13 @@ type sessionKeep struct {
 	copied map[objstore.Key]string
 }
 
-func (k *sessionKeep) Policy(context.Context) (SessionPolicy, error) {
+func (k *sessionKeep) Policy(ctx context.Context) (SessionPolicy, error) {
+	k.mu.Lock()
+	hook := k.policyHook
+	k.mu.Unlock()
+	if hook != nil {
+		hook(ctx)
+	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.policy, nil

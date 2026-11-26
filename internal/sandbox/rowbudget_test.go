@@ -707,13 +707,13 @@ func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 	t.Parallel()
 	const crossing = 7 * time.Minute
 	run := PendingRun{TurnID: "t1"}
-	held := SessionTakeBudget + 2*sessionRecordBudget + coord.MaxValueReadCrossing + 3*discardGrace +
-		4*coord.MaxValueCrossing
+	held := SessionTakeBudget + 2*sessionRecordBudget + coord.MaxValueReadCrossing + MediaReadersRoom +
+		3*discardGrace + 4*coord.MaxValueCrossing
 	if got, want := BoxReadBudget(run, BoxReadCollect, ThreadTraits{}),
 		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
 		t.Errorf("a collection of a turn with no cap waits %v, want the poll's bound and, at the host's "+
-			"share, the take, the reasons of its read of the row and its reservation, that read's reply "+
-			"and four changes of the row at the slowest node's crossing, and three graces, %v", got, want)
+			"share, the take, the reasons of its read of the row and its reservation, that read's reply, "+
+			"the room of its read of who reads its media, and four changes of the row at the slowest node's crossing, and three graces, %v", got, want)
 	}
 	inBubble(t, func(t *testing.T) {
 		rig := newCoordRigWith(t, func(o *CoordinatorOptions) {

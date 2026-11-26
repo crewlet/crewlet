@@ -100,6 +100,16 @@ type TurnRow struct {
 	BaseTurn string
 }
 
+// BaseHeld reports whether a turn's row, by what it says, still holds the base
+// its first read froze: the turn has neither ended nor kept a capture of its
+// own (its launch ordinal 0), since its first capture lifts the hold. THE ONE
+// RULE a capture's carry from that base is asked by (internal/sandbox) and
+// decided by (internal/executordomain's carryGone), so the two never drift.
+func BaseHeld(ended bool, launchSeq int64) bool { return !ended && launchSeq == 0 }
+
+// HoldsBase reports whether r holds a base it names ([BaseHeld]).
+func (r TurnRow) HoldsBase() bool { return r.BaseTurn != "" && BaseHeld(r.Ended, r.LaunchSeq) }
+
 // ConversationHead is a read of a conversation's head as a turn's first launch
 // freezes it (internal/sandbox's NewConversationBase): where it was read, the
 // turns it handed out, the siblings that ran beside the head, and the head.

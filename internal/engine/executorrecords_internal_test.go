@@ -188,6 +188,9 @@ func TestTheLogsAnswerIsReadAsWhatTheSandboxDoesNext(t *testing.T) {
 				t.Error("a refused or unsettled record answered no error to say why")
 			case tc.err != nil && !errors.Is(err, tc.err):
 				t.Errorf("the answer's error %v does not carry the log's %v", err, tc.err)
+			case errors.Is(tc.err, executordomain.ErrCarryGone) != errors.Is(err, sandbox.ErrCarryGone):
+				t.Errorf("the answer's error %v says a carry gone %v, want it %v, so the keep uploads it",
+					err, !errors.Is(tc.err, executordomain.ErrCarryGone), errors.Is(tc.err, executordomain.ErrCarryGone))
 			case answer == sandbox.LogUnsettled && !strings.Contains(err.Error(), string(tc.result.Outcome)):
 				t.Errorf("an unsettled answer says %q, not the log's outcome %q", err, tc.result.Outcome)
 			}

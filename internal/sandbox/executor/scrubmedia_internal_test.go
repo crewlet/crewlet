@@ -245,7 +245,7 @@ func TestATakeCutsEachLargePayloadIntoAMemberOfItsOwn(t *testing.T) {
 		"a transcript's tar": {archiveTar, claudeArchive(t, claudeRead(payload, false))},
 		"an export":          {archiveDocument, gzipOf(t, export)},
 	} {
-		whole, body := mediaTake(t, tc.layout, tc.archive, newScrubber(nil), math.MaxInt64)
+		whole, body := mediaTake(t, tc.layout, tc.archive, newScrubber(nil), executorkeep.SessionMaxBytes)
 		if body[0] != sandbox.BodySpliced {
 			t.Fatalf("%s: the body is led by %q, want it spliced", name, body[0])
 		}
@@ -300,7 +300,7 @@ func TestTheFullStreamIsTheArchiveATakeWithoutMediaKeeps(t *testing.T) {
 		"a transcript's tar": {archiveTar, claudeArchive(t, claudeRead(payload, true), `{"type":"x"}`)},
 		"an export":          {archiveDocument, gzipOf(t, export)},
 	} {
-		whole, _ := mediaTake(t, tc.layout, tc.archive, newScrubber(nil), math.MaxInt64)
+		whole, _ := mediaTake(t, tc.layout, tc.archive, newScrubber(nil), executorkeep.SessionMaxBytes)
 		if got, want := mediaPlain(t, whole), mediaPlain(t, inlineTake(t, tc.layout, tc.archive,
 			newScrubber(nil))); got != want {
 			t.Errorf("%s: the archive kept with its media apart reads %d bytes, and kept whole %d", name,
@@ -308,7 +308,7 @@ func TestTheFullStreamIsTheArchiveATakeWithoutMediaKeeps(t *testing.T) {
 		}
 	}
 	text := claudeArchive(t, `{"type":"assistant","message":{"content":"short"}}`)
-	whole, body := mediaTake(t, archiveTar, text, newScrubber(nil), math.MaxInt64)
+	whole, body := mediaTake(t, archiveTar, text, newScrubber(nil), executorkeep.SessionMaxBytes)
 	if body[0] != sandbox.BodyWhole || !bytes.Equal(body[1:], whole) || !bytes.Equal(whole,
 		inlineTake(t, archiveTar, text, newScrubber(nil))) {
 		t.Error("a session with no payload is not its archive whole behind the body's lead")
@@ -326,7 +326,7 @@ func TestAPayloadWrittenTwiceIsStoredOnce(t *testing.T) {
 	t.Parallel()
 	payload := mediaPayload(3, mediaMinBytes)
 	whole, body := mediaTake(t, archiveTar, claudeArchive(t, claudeRead(payload, true)), newScrubber(nil),
-		math.MaxInt64)
+		executorkeep.SessionMaxBytes)
 	members := gzipMembers(t, whole)
 	if len(members) != 5 || !bytes.Equal(members[1], members[3]) {
 		t.Fatalf("the archive is %d members, want the payload's twice, alike, between the text's", len(members))
@@ -352,7 +352,7 @@ func TestAPayloadUnderTheThresholdStaysInline(t *testing.T) {
 	t.Parallel()
 	for n, apart := range map[int]bool{mediaMinBytes: true, mediaMinBytes - 4: false} {
 		export := `{"parts":[{"url":"data:image/png;base64,` + mediaPayload(4, n) + `"}]}`
-		_, body := mediaTake(t, archiveDocument, gzipOf(t, export), newScrubber(nil), math.MaxInt64)
+		_, body := mediaTake(t, archiveDocument, gzipOf(t, export), newScrubber(nil), executorkeep.SessionMaxBytes)
 		if got := body[0] == sandbox.BodySpliced; got != apart {
 			t.Errorf("a payload of %d bytes is kept apart: %v, want %v", n, got, apart)
 		}
@@ -371,7 +371,7 @@ func TestARedactedRunStaysInline(t *testing.T) {
 	payload := mediaPayload(5, mediaMinBytes)
 	payload = payload[:len(payload)/2] + planted + payload[len(payload)/2:]
 	whole, body := mediaTake(t, archiveTar, claudeArchive(t, claudeRead(payload, false)),
-		newScrubber([]string{planted}), math.MaxInt64)
+		newScrubber([]string{planted}), executorkeep.SessionMaxBytes)
 	if body[0] != sandbox.BodyWhole {
 		t.Errorf("a payload the scrub redacted is kept apart")
 	}
@@ -392,7 +392,7 @@ func TestAValuePlantedBesideAPayloadIsStillTakenOut(t *testing.T) {
 	payload := mediaPayload(6, mediaMinBytes)
 	line := strings.TrimSuffix(claudeRead(payload, false), "}") + `,"note":"the token is ` + planted + `"}`
 	whole, body := mediaTake(t, archiveTar, claudeArchive(t, line), newScrubber([]string{planted}),
-		math.MaxInt64)
+		executorkeep.SessionMaxBytes)
 	if body[0] != sandbox.BodySpliced {
 		t.Fatal("the payload beside the planted value was not kept apart")
 	}
@@ -442,13 +442,6 @@ func TestMediaPastTheAllowanceOrCapStaysInline(t *testing.T) {
 			allowed.taken, len(allowed.found))
 	}
 
-	first, second := mediaPayload(7, mediaMinBytes), mediaPayload(8, mediaMinBytes)
-	archive := claudeArchive(t, claudeRead(first, false), claudeRead(second, false))
-	whole, _ := mediaTake(t, archiveTar, archive, newScrubber(nil), int64(len(first)))
-	if members := gzipMembers(t, whole); len(members) != 3 || mediaPlain(t, members[1]) != first {
-		t.Errorf("a take allowed one payload keeps %d members, want the first payload's alone apart",
-			len(members))
-	}
 }
 
 // A LINE THAT LOSES A DEFINITION CUTS NO MEDIA: its cut is applied as the
@@ -465,12 +458,12 @@ func TestALineThatLosesADefinitionCutsNoMedia(t *testing.T) {
 		`"deferred_tools_record","entries":[{"name":"mcp__cloudhost__backup_list","description":"x"},` +
 		`{"name":"mcp__monitor__search","description":"y"}]}}`
 	s := newScrubber([]string{"cloudhost"})
-	whole, body := mediaTake(t, archiveTar, claudeArchive(t, record), s, math.MaxInt64)
+	whole, body := mediaTake(t, archiveTar, claudeArchive(t, record), s, executorkeep.SessionMaxBytes)
 	if body[0] != sandbox.BodyWhole || strings.Contains(mediaPlain(t, whole), "backup_list") {
 		t.Fatalf("a line losing a definition keeps its payload apart (%q) or its definition", body[0])
 	}
 	whole, body = mediaTake(t, archiveTar, claudeArchive(t, record, claudeRead(payload, false)), s,
-		math.MaxInt64)
+		executorkeep.SessionMaxBytes)
 	if members := gzipMembers(t, whole); len(members) != 3 || mediaPlain(t, members[1]) != payload {
 		t.Fatalf("the next line's payload is %d members, want the one it first holds apart", len(members))
 	}
@@ -538,8 +531,39 @@ func TestALineKeptAsTextCutsNoMedia(t *testing.T) {
 	t.Parallel()
 	payload := mediaPayload(11, mediaMinBytes)
 	whole, body := mediaTake(t, archiveTar, claudeArchive(t, claudeRead(payload, false)+" and more"),
-		newScrubber(nil), math.MaxInt64)
+		newScrubber(nil), executorkeep.SessionMaxBytes)
 	if body[0] != sandbox.BodyWhole || !strings.Contains(mediaPlain(t, whole), payload+`"}}]}]}} and more`) {
 		t.Errorf("a line kept as text keeps its payload apart (%q), or not as written", body[0])
+	}
+}
+
+// THE MEDIA KEPT APART FIT THE KEEP'S PACE: the store paces each object by the
+// mebibyte begun, so thirty-two payloads of 1.4 MiB kept apart would cost a
+// keep at the floor pace a third more than today's budget, and the take keeps
+// fewer apart, the rest inline, so its session and media fit that budget.
+//
+// Mutation: count the allowance in raw bytes alone, or forget the text
+// object's own mebibyte, and the keep's pace passes its budget.
+func TestTheMediaKeptApartFitTheKeepsPace(t *testing.T) {
+	t.Parallel()
+	const payload = 1_468_006
+	member := int64(payload)*3/4 + 4<<10
+	plan := &mediaPlan{on: true, allowance: executorkeep.SessionMaxBytes}
+	for i := range executorkeep.MediaMaxCount {
+		plan.add(int64(i)<<22, payload, [sha256.Size]byte{byte(i), 1})
+	}
+	kept := int64(executorkeep.MediaMaxCount)*member + 1<<20
+	plan.paced(kept)
+	apart := int64(len(plan.texts))
+	if apart == 0 || apart >= executorkeep.MediaMaxCount || int64(len(plan.found)) != apart {
+		t.Fatalf("the take keeps %d of %d payloads apart (%d listed), want fewer, each once", apart,
+			executorkeep.MediaMaxCount, len(plan.found))
+	}
+	pace := objstore.PaceFor(kept - apart*member)
+	for range apart {
+		pace += objstore.PaceFor(member)
+	}
+	if budget := objstore.PaceFor(executorkeep.SealedMaxBytes); pace > budget {
+		t.Errorf("a keep of %d payloads apart is paced %v, past today's %v", apart, pace, budget)
 	}
 }

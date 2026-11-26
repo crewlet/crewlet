@@ -47,16 +47,17 @@ func TestThePresenceLeaseAtItsWorstFitsItsBound(t *testing.T) {
 	}
 	widest := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
 	status := coord.NodeStatus{
-		InFlight:           math.MaxInt64,
-		Draining:           false, // "false" is the longer of the two
-		Posture:            string(longest(t, configplane.Postures()...)),
-		StartedAt:          widest,
-		Build:              strings.Repeat(costliestByte(t), 16*coord.MaxBuildBytes),
-		ParkedStateVersion: math.MaxInt64,
-		AppliersReady:      math.MaxInt64,
-		AppliersTotal:      math.MaxInt64,
-		AdminPosture:       longest(t, iam.AdminPostures...),
-		AlarmsEvaluated:    true,
+		InFlight:            math.MaxInt64,
+		Draining:            false, // "false" is the longer of the two
+		Posture:             string(longest(t, configplane.Postures()...)),
+		StartedAt:           widest,
+		Build:               strings.Repeat(costliestByte(t), 16*coord.MaxBuildBytes),
+		ParkedStateVersion:  math.MaxInt64,
+		CaptureStampVersion: math.MaxInt64,
+		AppliersReady:       math.MaxInt64,
+		AppliersTotal:       math.MaxInt64,
+		AdminPosture:        longest(t, iam.AdminPostures...),
+		AlarmsEvaluated:     true,
 	}
 	kinds := statelog.Kinds()
 	if len(kinds) == 0 {

@@ -283,7 +283,7 @@ func (c *Coordinator) saveTask(ctx, phase context.Context, job saveJob) saveOutc
 		log.InfoContext(ctx, "executor_session_saved", "turn_id", job.run.TurnID, "agent", job.run.AgentHandle,
 			"launch_seq", in.row.LaunchSeq, "capture_seq", nextCaptureSeq(in.row), "point", point,
 			"late_s", start.Sub(job.due).Seconds(), "took_s", c.now().Sub(start).Seconds(),
-			"counted", out.counted, "bytes", in.sealed)
+			"counted", out.counted, "amended", in.charge.entry.Bytes, "bytes", in.sealed)
 	case saveNotMoved, savePaced, saveNotYet:
 		log.DebugContext(ctx, "executor_session_save_deferred", "turn_id", job.run.TurnID, "point", point,
 			"class", string(out.class), "why", out.why)

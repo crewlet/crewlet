@@ -95,6 +95,12 @@ type NodePositions struct {
 	At            time.Time `json:"at"`
 	EngineVersion string    `json:"engine_version,omitempty"`
 
+	// CaptureStampVersion is what the node's build says on its presence
+	// ([NodeStatus.CaptureStampVersion]), kept here so a node the fleet still
+	// counts while offline is read at what it last said, as the trim reads its
+	// positions; zero is a node not saying.
+	CaptureStampVersion int `json:"capture_stamp_version,omitempty"`
+
 	// StoredAt is the instant the store took the row this one was read from,
 	// by the STORE's clock (on the KV backend the stream leader's), filled by
 	// every [PositionRegister.Positions] and never written, so no writer can

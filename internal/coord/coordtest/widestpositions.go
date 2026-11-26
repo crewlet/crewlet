@@ -91,7 +91,8 @@ func WidestPositionsRecords() []PositionsWidest {
 	add := func(w PositionsWidest) { out = append(out, w) }
 
 	node := coord.NodePositions{NodeID: plain(coord.MaxNodeIDBytes), At: widestAt,
-		EngineVersion: plain(coord.MaxEngineVersionBytes), Domains: map[string]coord.DomainPosition{},
+		EngineVersion: plain(coord.MaxEngineVersionBytes), CaptureStampVersion: math.MinInt64,
+		Domains:       map[string]coord.DomainPosition{},
 		SnapshotBytes: math.MinInt64, SnapshotSkip: plain(coord.MaxSnapshotSkipBytes)}
 	for i := range coord.MaxLogDomains {
 		node.Domains[numbered(i, coord.MaxDomainNameBytes)] = coord.DomainPosition{

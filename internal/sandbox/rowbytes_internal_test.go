@@ -1231,6 +1231,17 @@ func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	if parked := whole - encoded(t, withoutParked); parked > parkedRowBytes {
 		t.Errorf("the calls the job parked on weigh %d, past their figure %d", parked, parkedRowBytes)
 	}
+	withoutMedia := run
+	for _, section := range []**SessionCapture{&withoutMedia.Capture, &withoutMedia.Kept, &withoutMedia.Saving} {
+		if *section != nil {
+			bare := **section
+			bare.Media = nil
+			*section = &bare
+		}
+	}
+	if media := whole - encoded(t, withoutMedia); media == 0 || media > mediaRowBytes {
+		t.Errorf("the captures' media weigh %d, past their figure %d or none", media, mediaRowBytes)
+	}
 
 	// THE HANDED SET, the third value: the most secrets a launch keeps
 	// ([MaxHandedBytes]), sealed and written as one string — a third more,

@@ -35,6 +35,13 @@ const (
 	FrameMemberEnd byte = 'E'
 )
 
+// ErrCarryGone is the executor log's refusal of a capture carrying a media
+// object its turn's row, or the base that row holds, no longer names: a record
+// refused whole, which its keep makes again uploading that media
+// ([Coordinator.keepCapture]). The engine wraps the log's own refusal in it,
+// since this package links no state log.
+var ErrCarryGone = errors.New("sandbox: a media object the capture carries is no longer named by its turn")
+
 // errBodyFrames is a body framed otherwise than a take frames one.
 var errBodyFrames = errors.New("sandbox: the take's body is framed otherwise than a take frames it")
 

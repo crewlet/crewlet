@@ -36,7 +36,7 @@ func TestAPublishedStatusRoundTrips(t *testing.T) {
 	started := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	want := coord.NodeStatus{
 		InFlight: 3, Draining: true, Posture: "shed", StartedAt: started,
-		AdminPosture: iam.AdminServe, Build: "v1.2.3", ParkedStateVersion: 4,
+		AdminPosture: iam.AdminServe, Build: "v1.2.3", ParkedStateVersion: 4, CaptureStampVersion: 1,
 		AppliersReady: 2, AppliersTotal: 5,
 	}
 	got, ok := coord.StatusFromMeta(map[string]any{coord.StatusKey: want.Meta()})
@@ -150,6 +150,7 @@ func TestAStatusSurvivesTheJSONRoundTripTheLeaseStoreDoes(t *testing.T) {
 	t.Parallel()
 	want := coord.NodeStatus{
 		InFlight: 7, Posture: "serve", AppliersReady: 1, AppliersTotal: 3, ParkedStateVersion: 2,
+		CaptureStampVersion: 3,
 	}
 	raw, err := json.Marshal(map[string]any{coord.StatusKey: want.Meta()})
 	if err != nil {

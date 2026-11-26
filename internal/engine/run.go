@@ -461,7 +461,7 @@ type Engine struct {
 	shuttingDown atomic.Bool
 
 	// mediaInline is why takes last kept their media inline for want of the
-	// executor log's readers, logged once each time it changes
+	// readers of a capture naming them, logged once each time it changes
 	// ([Engine.executorMediaRead]).
 	mediaInline atomic.Pointer[string]
 
@@ -3720,7 +3720,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 func (e *Engine) nodeStatus(ctx context.Context) (coord.NodeStatus, error) {
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt, AdminPosture: e.adminPosture, Build: version.String(),
-		ParkedStateVersion: execstate.Version,
+		ParkedStateVersion: execstate.Version, CaptureStampVersion: sandbox.CaptureStampVersion,
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()

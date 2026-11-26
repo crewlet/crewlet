@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -246,6 +247,36 @@ func (p *mediaPlan) dropTo(mark int) {
 func (p mediaPlan) restarted() mediaPlan {
 	return mediaPlan{on: p.on, allowance: p.allowance}
 }
+
+// paced lets go of every first occurrence past what the keep's upload pace
+// holds, and its repeats, kept being the archive's kept size: the store paces
+// each object by the mebibyte begun (objstore.PaceFor), so k members cost up
+// to k+1 paced mebibytes more than the archive kept whole, and the keep's
+// budget is the pace of the allowance sealed, a mebibyte more than it. kept is
+// counted with the margin a save's charge has (an eighth or 64 KiB), and one
+// mebibyte more covers the seals' tags. The rest stays inline.
+func (p *mediaPlan) paced(kept int64) {
+	budget := paceUnits(p.allowance) + 1
+	firsts := max(budget-2-paceUnits(kept+max(kept/8, 64<<10)), 0)
+	if int64(len(p.texts)) <= firsts {
+		return
+	}
+	found := p.found[:0]
+	seen := make([]bool, firsts)
+	for _, f := range p.found {
+		if int64(f.text) >= firsts {
+			continue
+		}
+		if !seen[f.text] {
+			seen[f.text], p.texts[f.text].first = true, len(found)
+		}
+		found = append(found, f)
+	}
+	p.found, p.texts = found, p.texts[:firsts]
+}
+
+// paceUnits is how many mebibytes begun n bytes are, the store's pace unit.
+func paceUnits(n int64) int64 { return (n + objstore.MiB - 1) / objstore.MiB }
 
 // finding is p where the take keeps media apart, nil where it does not.
 func (p *mediaPlan) finding() *mediaPlan {

@@ -673,7 +673,7 @@ func carryGone(ctx context.Context, tx *sql.Tx, handle, turn string, row session
 	media []CaptureMedia) (string, error) {
 
 	var base string
-	if found && !row.ended && row.launchSeq == 0 {
+	if found && executorkeep.BaseHeld(row.ended, row.launchSeq) {
 		base = row.baseTurn
 	}
 	for _, m := range media {

@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -147,13 +148,17 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	if mine == nil {
 		t.Fatalf("the heartbeat published no row for %s: %+v", e.id, rows)
 	}
-	rowFields := []string{"at", "domains", "engine_version", "node_id",
+	rowFields := []string{"at", "capture_stamp_version", "domains", "engine_version", "node_id",
 		"snapshot_bytes", "snapshot_skip"}
 	for _, key := range jsonKeys(t, *mine) {
 		if !slices.Contains(rowFields, key) {
 			t.Errorf("the node's row carries %q, which the listed fields do not: %v",
 				key, rowFields)
 		}
+	}
+	if mine.CaptureStampVersion != sandbox.CaptureStampVersion {
+		t.Errorf("the node's row says capture stamp %d, want this build's %d, which a peer reads "+
+			"for it while it is offline", mine.CaptureStampVersion, sandbox.CaptureStampVersion)
 	}
 	// AND ITS DUTIES AND ARTEFACTS ARE WHERE THEY ARE DECLARED: the trim and the
 	// embedding are one fleet singleton each, on the lease named here, which

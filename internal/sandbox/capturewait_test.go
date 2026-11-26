@@ -56,7 +56,7 @@ func TestTheScrubWaitIsDerivedFromTheArchivesBound(t *testing.T) {
 func TestARelaunchsWaitForACaptureCountsWhatItsSizeStillNeeds(t *testing.T) {
 	t.Parallel()
 	keep := func(paces time.Duration) time.Duration {
-		return 2*sessionRecordBudget + paces*objstore.MiBPace + sessionRecordBudget
+		return 3*sessionRecordBudget + paces*objstore.MiBPace + sessionRecordBudget
 	}
 	bound := executorkeep.SessionMaxBytes / objstore.MiB
 	for _, c := range []struct {
@@ -65,11 +65,11 @@ func TestARelaunchsWaitForACaptureCountsWhatItsSizeStillNeeds(t *testing.T) {
 		docs      string
 	}{
 		{"half a mebibyte", captureRestFor(512 << 10),
-			2*time.Second + scrubPlainSlowest + discardGrace + keep(1), "5m35s"},
+			2*time.Second + scrubPlainSlowest + discardGrace + keep(1), "6m5s"},
 		{"at the bound", captureRestFor(executorkeep.SessionMaxBytes),
 			2*time.Duration(bound)*time.Second + scrubPlainSlowest + discardGrace + keep(time.Duration(bound)+1),
-			"31m9s"},
-		{"a keep at the bound", keepBudgetFor(executorkeep.SealedMaxBytes), SessionKeepBudget, "26m0s"},
+			"31m39s"},
+		{"a keep at the bound", keepBudgetFor(executorkeep.SealedMaxBytes), SessionKeepBudget, "26m30s"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s: %s, want its terms, %s", c.name, c.got, c.want)

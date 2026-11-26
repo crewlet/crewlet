@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/recordseal"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -3388,10 +3389,11 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	tail := s.waitingTail()
 	held := s.running()
 	row := coord.NodePositions{
-		NodeID:        s.nodeID,
-		At:            time.Now().UTC(),
-		EngineVersion: version.String(),
-		Domains:       make(map[string]coord.DomainPosition, len(held)),
+		NodeID:              s.nodeID,
+		At:                  time.Now().UTC(),
+		EngineVersion:       version.String(),
+		CaptureStampVersion: sandbox.CaptureStampVersion,
+		Domains:             make(map[string]coord.DomainPosition, len(held)),
 	}
 	below := false
 	// The fleet's generations, for the one way a node falls out of step that

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/executorkeep"
@@ -104,6 +105,8 @@ func (r executorRecords) Capture(ctx context.Context, c sandbox.CaptureRecord) (
 		return sandbox.LogLanded, nil
 	case err == nil && res.Outcome == statelog.OutcomeApplied:
 		return sandbox.LogPassedOver, nil
+	case errors.Is(err, executordomain.ErrCarryGone):
+		return sandbox.LogRefused, fmt.Errorf("%w: %w", sandbox.ErrCarryGone, err)
 	case refusedCapture(err):
 		return sandbox.LogRefused, err
 	}
@@ -215,16 +218,17 @@ func (k executorKeep) Policy(ctx context.Context) (sandbox.SessionPolicy, error)
 	return policy, nil
 }
 
-// executorMediaRead says whether every node applying the executor log reads a
-// capture that names media (executordomain.MediaVersion): its counted set as
-// the trim counts it ([statelog.CountedSet]), each node at the version its
-// heartbeat says it reads ([statelog.Readers]). Never a guess: a node below
-// it or not yet saying answers inline, and readers that cannot be read do
-// too, logged once with why. A node below it that joins after the answer
-// defers such a capture on its applier, never drops it
-// (.claude/rules/compatibility.md), so its estate names none of the media
-// until it upgrades, and its collector deletes nothing meanwhile (ADR-0073's
-// amendment, "Mid-upgrade").
+// executorMediaRead says whether a take keeps its media apart: every node
+// applying the executor log reads a capture naming them
+// (executordomain.MediaVersion), its counted set as the trim counts it
+// ([statelog.CountedSet], [statelog.Readers]), and every node that may settle
+// a run's row asks its stamp again whole ([stampReaders]). Never a guess: a
+// node below either or not saying answers inline, and readers not read within
+// [sandbox.MediaReadersRoom] do too, logged once with why. A node below the
+// log's version that joins after the answer defers such a capture on its
+// applier, never drops it (.claude/rules/compatibility.md), so its estate names
+// none of the media until it upgrades, and its collector deletes nothing
+// meanwhile (ADR-0073's amendment, "Mid-upgrade").
 func (e *Engine) executorMediaRead(ctx context.Context) bool {
 	apart, why := e.executorMediaReaders(ctx)
 	if why == "" {
@@ -232,35 +236,88 @@ func (e *Engine) executorMediaRead(ctx context.Context) bool {
 	} else if last := e.mediaInline.Load(); last == nil || *last != why {
 		e.mediaInline.Store(&why)
 		log.WarnContext(ctx, "executor_media_kept_inline", "why", why, "detail", "every take keeps its "+
-			"large payloads inline until every node applying the executor log is known to read a capture "+
-			"naming them")
+			"large payloads inline until every node applying the executor log, and every node that may "+
+			"settle a run's record, is known to read a capture naming them")
 	}
 	return apart
 }
 
 // executorMediaReaders is [Engine.executorMediaRead]'s answer, and why it is
-// inline where the readers could not say.
+// inline where the readers could not say: the live nodes, the position
+// register and the log's evictions, read together in [sandbox.MediaReadersRoom],
+// the live data nodes taken off that one listing as [Engine.holdersOf] takes
+// them.
 func (e *Engine) executorMediaReaders(ctx context.Context) (bool, string) {
 	if e.backends == nil || e.backends.Fleet == nil || e.backends.Coord == nil {
 		return false, "this node has no coordination store to read the executor log's readers from"
 	}
-	rows, err := e.backends.Fleet.Positions(ctx)
+	room, cancel := context.WithTimeout(ctx, sandbox.MediaReadersRoom)
+	defer cancel()
+	held, err := e.backends.Coord.ListLive(room, coord.ClassNode)
 	if err != nil {
-		return false, fmt.Sprintf("the position register could not be read: %v", err)
+		return false, mediaReadersUnread(ctx, room, "the live nodes could not be listed", err)
 	}
-	live, err := e.holdersOf().LiveData(ctx)
+	rows, err := e.backends.Fleet.Positions(room)
 	if err != nil {
-		return false, fmt.Sprintf("the live data nodes could not be listed: %v", err)
+		return false, mediaReadersUnread(ctx, room, "the position register could not be read", err)
 	}
 	domain := executordomain.Domain{}
-	tombs, _ := logTombstones(ctx, e.backends.Store, domain, 0)
-	readers := statelog.Readers(statelog.CountedSet(e.now(), reportedPositions(rows, domain.Name()), live, tombs))
+	tombs, _ := logTombstones(room, e.backends.Store, domain, 0)
+	if err := room.Err(); err != nil {
+		return false, mediaReadersUnread(ctx, room, "the executor log's evictions could not be read", err)
+	}
+	counted := statelog.CountedSet(e.now(), reportedPositions(rows, domain.Name()), presencesOf(dataNodesOf(held)), tombs)
+	readers := statelog.Readers(counted)
 	for _, version := range readers {
 		if version < executordomain.MediaVersion {
 			return false, ""
 		}
 	}
+	for _, version := range stampReaders(e.selfNode(), held, rows, counted) {
+		if version < sandbox.CaptureStampVersion {
+			return false, ""
+		}
+	}
 	return len(readers) > 0, ""
+}
+
+// mediaReadersUnread is why the readers went unread: what failed, and the room
+// where its end, not the caller's, cut the read.
+func mediaReadersUnread(ctx, room context.Context, what string, err error) string {
+	if ctx.Err() == nil && room.Err() != nil {
+		return fmt.Sprintf("%s within the %s the readers are read in: %v", what, sandbox.MediaReadersRoom, err)
+	}
+	return fmt.Sprintf("%s: %v", what, err)
+}
+
+// stampReaders is the capture stamp's version each node that may settle a
+// run's row asks again whole ([sandbox.CaptureStampVersion]): every live node,
+// of any role, at what its presence says ([coord.NodeStatus]); every node the
+// log's counted set holds while offline at what its position row last said, as
+// the trim reads it; this node at its own build's. Zero is a node not saying,
+// a build before media among them, whose ask would land a capture naming media
+// without them.
+func stampReaders(self string, held []coord.Lease, rows []coord.NodePositions,
+	counted []statelog.NodePosition) map[string]int {
+
+	said := make(map[string]int, len(rows))
+	for _, row := range rows {
+		said[row.NodeID] = row.CaptureStampVersion
+	}
+	out := make(map[string]int, len(counted)+len(held))
+	for _, n := range counted {
+		out[n.NodeID] = said[n.NodeID]
+	}
+	for _, lease := range held {
+		if node, ok := coord.ClassNode.Name(lease.Resource); ok {
+			status, _ := coord.StatusFromMeta(lease.Meta)
+			out[node] = status.CaptureStampVersion
+		}
+	}
+	if self != "" {
+		out[self] = sandbox.CaptureStampVersion
+	}
+	return out
 }
 
 // Keeps is whether the revision this node runs keeps sessions, read with no

@@ -84,6 +84,18 @@ func (c *Coordinator) placingRow(ctx context.Context, by time.Time, turnID strin
 	}
 }
 
+// placingPolicy is the fleet's word on keeping the session a take places
+// ([SessionKeep.Policy]), read as the row it places by is
+// ([Coordinator.placingRow]): BEFORE THE TAKE'S BUDGET BEGINS, so its read of
+// who reads a capture naming media, held to [MediaReadersRoom] and counted in
+// [BoxReadBudget] beside the take, costs the pack and the scrub nothing, and
+// never past the take's end ([Coordinator.takeBy]).
+func (c *Coordinator) placingPolicy(ctx context.Context, by time.Time) (SessionPolicy, error) {
+	read, cancel := before(ctx, func() {}, c.takeBy(by))
+	defer cancel()
+	return c.keep.Policy(read)
+}
+
 // SessionMeter is told, once per collected launch that had a session to
 // continue, its final verdict ([LaunchRecord.NotContinued], nil where it
 // continued it) and what the brief its run read handed of the lost session's

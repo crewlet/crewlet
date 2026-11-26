@@ -139,17 +139,17 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // BoxReadBudget is how long a node waits for a box's host to make a read of
 // run's box ([BoxReader]) before taking it for a host that did not answer, by
 // what the read may do there: [pollBound], plus the take of the job's harness
-// session ([SessionTakeBudget]) with its read of the row ([captureReadBudget]),
-// its reservation's reason ([sessionRecordBudget]) and graces, each change of
-// the row at coord.MaxValueCrossing, the job's end ([JobEndBudget]) for every
-// collection of a turn with a cap and for a stop or loss, and the main-thread
-// read ([MainThreadReadWait]) with, where the copy holds a hook's serve, its
-// verdict ([hookVerdictWait]), and the upload of its newest summary where its
-// runner reads one ([summaryUploadRoom]), all at the host's share
-// ([BoxReadRequest.AnswerBudget]): a slow host is not a stopped one. Only a
-// node asking another node's host waits on it ("Box read budget").
+// session ([SessionTakeBudget]) with its reads of the row ([captureReadBudget])
+// and of who reads its media ([MediaReadersRoom]), its reservation's reason
+// ([sessionRecordBudget]) and graces, each change of the row at
+// coord.MaxValueCrossing, the job's end ([JobEndBudget]) for every collection
+// of a turn with a cap and for a stop or loss, the main-thread read
+// ([MainThreadReadWait]) with a hook's serve's verdict ([hookVerdictWait]), and
+// the newest summary's upload a runner reads ([summaryUploadRoom]), all at the
+// host's share ([BoxReadRequest.AnswerBudget]): a slow host is not a stopped
+// one. Only a node asking another node's host waits on it ("Box read budget").
 func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Duration {
-	held := SessionTakeBudget + captureReadBudget + sessionRecordBudget + 3*discardGrace +
+	held := SessionTakeBudget + captureReadBudget + MediaReadersRoom + sessionRecordBudget + 3*discardGrace +
 		boxReadChanges*coord.MaxValueCrossing
 	if read.mayEnd(run) {
 		held += JobEndBudget

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -292,6 +293,11 @@ func TestAKeepCarriesMediaItsTurnHolds(t *testing.T) {
 		"its held base names one": {carried: 1, rows: func(first []CaptureMedia) map[string]executorkeep.TurnRow {
 			return map[string]executorkeep.TurnRow{"t1": mediaRow("t1", "t0", nil), "t0": mediaRow("t0", "", first[:1])}
 		}},
+		"a base its row no longer holds": {rows: func(first []CaptureMedia) map[string]executorkeep.TurnRow {
+			own := mediaRow("t1", "t0", nil)
+			own.LaunchSeq = 1
+			return map[string]executorkeep.TurnRow{"t1": own, "t0": mediaRow("t0", "", first[:1])}
+		}},
 		"another turn names them": {rows: func(first []CaptureMedia) map[string]executorkeep.TurnRow {
 			return map[string]executorkeep.TurnRow{"t1": mediaRow("t1", "", nil), "t9": mediaRow("t9", "", first)}
 		}},
@@ -408,39 +414,139 @@ func (lateRows) Session(ctx context.Context, _, _ string) (executorkeep.TurnRow,
 	return executorkeep.TurnRow{}, ctx.Err()
 }
 
-// carryRefusing is the executor log refusing a capture that carries media its
-// row no longer names, as its apply finds it gone (executordomain's
-// ErrCarryGone).
-type carryRefusing struct{ *sessionWrites }
+// carryRefusing is the executor log refusing, once, a capture that carries
+// media its row no longer names, as its decide finds it gone: another capture
+// or a save of the turn moved the row since the keep read it.
+type carryRefusing struct {
+	*sessionWrites
+	refused *bool
+}
 
 func (w carryRefusing) Capture(ctx context.Context, c CaptureRecord) (LogAnswer, error) {
 	for _, m := range c.Stamp.Media {
-		if m.Carried {
-			return LogRefused, fmt.Errorf("media %s of turn %s is no longer named by its row", m.Digest, c.Turn)
+		if m.Carried && !*w.refused {
+			*w.refused = true
+			return LogRefused, fmt.Errorf("%w: media %s of turn %s", ErrCarryGone, m.Digest, c.Turn)
 		}
 	}
 	return w.sessionWrites.Capture(ctx, c)
 }
 
-// A REFUSED CARRY IS STAMPED LOG REFUSED: a row that moved between the keep's
-// read and the record leaves the carry naming media no row names, which the
-// log refuses for good, and the stamp says so as every refusal of the log is.
+// A CARRY THE LOG FINDS GONE IS RECORDED AGAIN, FRESH: a save and a capture
+// of one turn race, the loser's carry names an object the winner's record took
+// off the row, and the log refuses its record whole; its keep, which kept the
+// carried member's spool, uploads it and records again, and the capture lands
+// naming its own fresh object.
 //
-// Mutation: read the refusal as unsettled, and the capture stands unresolved.
-func TestARefusedCarryIsStampedLogRefused(t *testing.T) {
+// Mutation: refuse the capture at the log's refusal, or drop a carried spool
+// before the record lands, and the session is lost or cannot be uploaded.
+func TestACarryTheLogFindsGoneIsRecordedAgainFresh(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		whole, body := mediaBody(t, "one", mediaPart+strings.Repeat("JVBERi0xLjQK", 6<<10), "two")
-		rig, writes, _ := mediaRig(t, whole, body)
+		rig, writes, keep := mediaRig(t, whole, body)
 		if kept := keptFinal(t, rig, "t1"); kept == nil || kept.NotKept != "" {
 			t.Fatalf("the first keep came to %+v", kept)
 		}
-		spooled := secondCapture(t, rig, "t1",
-			map[string]executorkeep.TurnRow{"t1": mediaRow("t1", "", rig.get("t1").Kept.Media)})
-		rig.coordinator.sessions = carryRefusing{writes}
+		first := rig.get("t1").Kept.Media
+		spooled := secondCapture(t, rig, "t1", map[string]executorkeep.TurnRow{"t1": mediaRow("t1", "", first)})
+		refused := false
+		rig.coordinator.sessions = carryRefusing{sessionWrites: writes, refused: &refused}
+		if kept := rig.coordinator.keepCapture(t.Context(), spooled); kept == nil || kept.NotKept != "" || !refused {
+			t.Fatalf("the carry the log found gone came to %+v (refused once: %v), want it recorded fresh", kept,
+				refused)
+		}
+		captured := writes.captured()
+		media := captured[len(captured)-1].Stamp.Media
+		if len(media) != 1 || media[0].Carried || media[0].Object == first[0].Object {
+			t.Errorf("the capture landed naming %+v, want its member uploaded fresh", media)
+		}
+		if uploads := keep.uploads(); len(uploads) != 4 {
+			t.Errorf("the keeps uploaded %d objects, want the first's two and the second's text and member", len(uploads))
+		}
+	})
+}
+
+// A MEDIA RECORD IS REFUSED ONCE A READER FALLS BELOW: a node that joined
+// after the take and reads no capture naming media would retain it, or ask it
+// again short, and a take is not made again; so the policy is read again
+// before the record's first send, and the capture refused, saying why, with
+// nothing sent.
+//
+// Mutation: read the policy at the take alone, and the record is sent.
+func TestAMediaRecordIsRefusedOnceAReaderFallsBelow(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		whole, body := mediaBody(t, "one", mediaPart+strings.Repeat("JVBERi0xLjQK", 6<<10), "two")
+		rig, writes, keep := mediaRig(t, whole, body)
+		spooled, taken := finalTake(t, rig, rig.launchKept(t, "t1"), rig.runner)
+		if spooled == nil || len(spooled.media) != 1 {
+			t.Fatalf("the take came to %+v, want its member spooled apart", taken)
+		}
+		keep.mu.Lock()
+		keep.policy.MediaApart = false
+		keep.mu.Unlock()
 		kept := rig.coordinator.keepCapture(t.Context(), spooled)
-		if kept == nil || !strings.Contains(kept.NotKept, "no longer named") || kept.Loss != executorkeep.LossLogRefused {
-			t.Errorf("the refused carry came to %+v, want it refused as the log refused it", kept)
+		if kept == nil || !strings.Contains(kept.NotKept, "no longer reads a capture naming media") {
+			t.Errorf("the keep came to %+v, want the media record refused", kept)
+		}
+		if captured := writes.captured(); len(captured) != 0 {
+			t.Errorf("sent %d records, want none", len(captured))
+		}
+	})
+}
+
+// A STAMP A NEWER BUILD EXTENDED IS NOT ASKED AGAIN SHORT: a capture stamped
+// with keys this build does not know (a media list, to a build before it) is
+// one whose record it cannot rebuild, so its re-ask refuses it, naming the
+// keys, and sends nothing the log would land short.
+//
+// Mutation: ask it again whatever its stamp carries, and a short record is sent.
+func TestAStampANewerBuildExtendedIsNotAskedAgainShort(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, writes, _ := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		stamp := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
+			State: CaptureUnresolved, Object: objstore.KeyAt(rig.now).String(), ObjectHash: strings.Repeat("a", 64),
+			ObjectSize: 14, Extra: map[string]json.RawMessage{"media_next": json.RawMessage(`[]`)}}
+		settled := rig.coordinator.settleCapture(t.Context(), run, stamp)
+		if settled.State != CaptureRefused || !strings.Contains(settled.Reason, "media_next") {
+			t.Errorf("the stamp settled %s, %q, want it refused naming the key it does not know", settled.State,
+				settled.Reason)
+		}
+		if captured := writes.captured(); len(captured) != 0 {
+			t.Errorf("sent %d records, want none", len(captured))
+		}
+	})
+}
+
+// A CAPTURE SETTLED OFF THE LOG KEEPS ITS MEDIA: a keep whose taker stopped
+// after its record landed is settled from the turn's row, and stamped kept
+// with every media object that row names, so its seat's budget and its saves
+// count them.
+//
+// Mutation: settle the object alone, and the stamp keeps no media.
+func TestACaptureSettledOffTheLogKeepsItsMedia(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		store := newTakerStore()
+		rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
+		rig.relaunchWithin(2 * time.Second)
+		lease := claimTaker(t, store, takingProcess)
+		begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
+		row := landedRow(t, begun)
+		row.Media = []executorkeep.MediaObject{{Digest: strings.Repeat("b", 64), ContentKey: "k1",
+			Object: objstore.Object{Key: objstore.KeyAt(rig.now), Hash: objstore.Hash(strings.Repeat("c", 64)),
+				Size: 9}}}
+		onTheLog(restore, row)
+		if _, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, "")); why != "" {
+			t.Fatalf("the relaunch decided %q, want the capture the log took", why)
+		}
+		got := rig.get("t1").Kept
+		if got == nil || len(got.Media) != 1 || got.Media[0] != captureMediaOf(row.Media[0], false) ||
+			got.mediaBytes() != 9 {
+			t.Errorf("the row keeps %+v, want the capture settled with the media its row names", got)
 		}
 	})
 }
@@ -528,6 +634,36 @@ func TestAMissingMediaObjectRestoresNothing(t *testing.T) {
 	}
 }
 
+// mediaSaved is a saving rig whose policy keeps media apart, its runner
+// handing body, framed, of the archive whole, and whose turn t1 landed one save
+// charged at its text and its member.
+//
+//fixedwait:bubble
+func mediaSaved(t *testing.T, whole, body []byte) (*coordRig, *memory.Fleet, *sessionKeep) {
+	t.Helper()
+	ledger := memory.NewFleet()
+	rig, _, keep := savingRig(t, ledger, newTakerStore())
+	keep.policy.MediaApart = true
+	rig.runner.mu.Lock()
+	rig.runner.Session.Body, rig.runner.Session.Framed = whole, body
+	rig.runner.Session.Archive.Size = int64(len(whole))
+	rig.runner.mu.Unlock()
+	rig.launchKept(t, "t1")
+	if out := saveOf(rig, "t1", mediaLongPast); out.class != saveLanded {
+		t.Fatalf("the first save came to %+v, want it landed", out)
+	}
+	uploads := keep.uploads()
+	if got := ledgerOf(t, ledger, "swe"); len(got.Entries) != 1 ||
+		got.Entries[0].Bytes != int64(len(uploads[0])+len(uploads[1])) {
+		t.Fatalf("the ledger holds %+v, want the save at its text and its member, %d", got.Entries,
+			len(uploads[0])+len(uploads[1]))
+	}
+	return rig, ledger, keep
+}
+
+// mediaLongPast paces a save long past its last, so its charge alone decides.
+func mediaLongPast(j *saveJob) { j.last = j.last.Add(-3 * saveLedgerHold) }
+
 // A SAVE IS CHARGED WHAT IT UPLOADS: before its take, its archive less the
 // media its turn's newest kept capture holds, which its keep will most likely
 // carry; once its keep knows its carries, the entry is amended to its sealed
@@ -542,38 +678,16 @@ func TestASaveIsChargedWhatItUploads(t *testing.T) {
 	raw := make([]byte, 640<<10)
 	rand.NewChaCha8([32]byte{2}).Read(raw)
 	whole, body := mediaBody(t, "text", mediaPart+string(raw), "end")
-	longPast := func(j *saveJob) { j.last = j.last.Add(-3 * saveLedgerHold) }
-	saving := func(t *testing.T) (*coordRig, *memory.Fleet, *sessionKeep) {
-		t.Helper()
-		ledger := memory.NewFleet()
-		rig, _, keep := savingRig(t, ledger, newTakerStore())
-		keep.policy.MediaApart = true
-		rig.runner.mu.Lock()
-		rig.runner.Session.Body, rig.runner.Session.Framed = whole, body
-		rig.runner.Session.Archive.Size = int64(len(whole))
-		rig.runner.mu.Unlock()
-		rig.launchKept(t, "t1")
-		if out := saveOf(rig, "t1", longPast); out.class != saveLanded {
-			t.Fatalf("the first save came to %+v, want it landed", out)
-		}
-		uploads := keep.uploads()
-		if got := ledgerOf(t, ledger, "swe"); len(got.Entries) != 1 ||
-			got.Entries[0].Bytes != int64(len(uploads[0])+len(uploads[1])) {
-			t.Fatalf("the ledger holds %+v, want the save at its text and its member, %d", got.Entries,
-				len(uploads[0])+len(uploads[1]))
-		}
-		return rig, ledger, keep
-	}
 	counted := countedFor(int64(len(whole)))
 	t.Run("a save carrying its media", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			rig, ledger, keep := saving(t)
+			rig, ledger, keep := mediaSaved(t, whole, body)
 			first := ledgerHeld(ledgerOf(t, ledger, "swe").Entries)
 			keep.policy.SeatBudget = first + counted - rig.get("t1").Kept.mediaBytes()
 			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{
 				"t1": mediaRow("t1", "", rig.get("t1").Kept.Media)}}
-			if out := saveOf(rig, "t1", longPast); out.class != saveLanded {
+			if out := saveOf(rig, "t1", mediaLongPast); out.class != saveLanded {
 				t.Fatalf("a save carrying its media came to %+v, want it landed within %d", out,
 					keep.policy.SeatBudget)
 			}
@@ -588,12 +702,12 @@ func TestASaveIsChargedWhatItUploads(t *testing.T) {
 	t.Run("a save whose upload passes the budget at its amend", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			rig, ledger, keep := saving(t)
+			rig, ledger, keep := mediaSaved(t, whole, body)
 			first := ledgerHeld(ledgerOf(t, ledger, "swe").Entries)
 			keep.policy.SeatBudget = first + counted - rig.get("t1").Kept.mediaBytes()
 			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{
 				"t1": mediaRow("t1", "", nil)}}
-			out := saveOf(rig, "t1", longPast)
+			out := saveOf(rig, "t1", mediaLongPast)
 			if out.class != saveFailed || !strings.Contains(out.why, "max_bytes_per_seat") {
 				t.Fatalf("a save uploading its media past the budget came to %+v, want it refused at its amend",
 					out)

@@ -904,6 +904,7 @@ func scrubDocument(first io.Reader, reopen func() (io.ReadCloser, error), dst io
 	if err != nil {
 		return err
 	}
+	plan.media.paced(plan.spool.disk.n)
 	zw, err := newMemberSplit(dst, b.split.body, &plan.media)
 	if err != nil {
 		return err
@@ -955,6 +956,7 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 	if err != nil {
 		return err
 	}
+	plan.media.paced(plan.spool.disk.n)
 	zw, err := newMemberSplit(dst, b.split.body, &plan.media)
 	if err != nil {
 		return err

@@ -469,6 +469,39 @@ func TestAPlaceReservedAsTheTakesTimeRanOutIsSettled(t *testing.T) {
 	}
 }
 
+// A TAKE'S READ OF WHO READS ITS MEDIA COSTS ITS PACK AND SCRUB NOTHING: the
+// fleet's word on keeping is read before the take's budget begins
+// ([Coordinator.placingPolicy]), in a room [BoxReadBudget] counts beside it, so
+// a store that takes the whole room to say still leaves the session's stream
+// the take's budget and its reservation's room. Bubbled.
+//
+// Mutation: read the policy inside the take's budget, and the stream is cut a
+// room early.
+func TestATakesReadOfWhoReadsItsMediaCostsItsPackAndScrubNothing(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, _, keep := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		keep.mu.Lock()
+		keep.policyHook = func(context.Context) { time.Sleep(MediaReadersRoom) }
+		keep.mu.Unlock()
+		streamed := make(chan time.Duration, 1)
+		rig.runner.Session.Streaming = func(ctx context.Context) {
+			start := time.Now()
+			<-ctx.Done()
+			streamed <- time.Since(start)
+		}
+		spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID), rig.runner,
+			readCapture(BoxReadStop, Result{}, false))
+		rig.coordinator.keepLater(t.Context(), spooled)
+		rig.awaitKeeps()
+		if took, whole := <-streamed, SessionTakeBudget+rig.coordinator.reserveRoom(); took <= whole-MediaReadersRoom {
+			t.Errorf("the stream was cut %v after it began, behind a policy read of %v, want the take's "+
+				"whole %v", took, MediaReadersRoom, whole)
+		}
+	})
+}
+
 // A TAKE WHOSE SCRUB RUNS PAST ITS WAIT FAILS CLOSED: a session still
 // streaming out of its scrub when the take's time ends, which holds the
 // scrub's whole wait ([SessionScrubWait]) beside the pack's, is cut there,
