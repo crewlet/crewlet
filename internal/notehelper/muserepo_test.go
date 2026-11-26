@@ -406,11 +406,15 @@ func TestAMuseCopyAHomeSkillIsListedBesideIsLeftOutSaid(t *testing.T) {
 	}
 }
 
-// A HOME SKILL'S NAME IS READ AS YAML READS A ONE-LINE SCALAR: a plain value
-// up to a comment, trimmed; a quoted one's inside, a `#` in it kept and a
-// comment after it dropped; so `name: repo:x  # mine` takes repo:x from a copy.
+// A HOME SKILL'S NAME IS READ AS YAML READS A ONE-LINE SCALAR, OR NOT AT ALL:
+// a plain value up to a comment, trimmed; a quoted one's inside, a `#` in it
+// kept and a comment after it dropped; an empty or null one, the directory's
+// (""); a number or boolean, its text or the directory's. One no line settles
+// (a block, flow, anchor, tag or alias, an escape, a quote closed later, a
+// mapping, a continued line) is not plain, so no copy is made on a guess.
 //
-// Mutation: keep a plain value's comment, or cut a quoted value at its `#`.
+// Mutation: keep a plain value's comment, cut a quoted value at its `#`, take
+// an empty name, read an escape, a block or a continued line as plain.
 func TestAHomeSkillsNameIsReadAsYAMLReadsIt(t *testing.T) {
 	t.Parallel()
 	for line, want := range map[string]string{
@@ -420,16 +424,40 @@ func TestAHomeSkillsNameIsReadAsYAMLReadsIt(t *testing.T) {
 		`name: "repo:x # kept"  # a comment`: "repo:x # kept",
 		`name: 'it''s # kept'`:               "it's # kept",
 		`name: "repo:x"`:                     "repo:x",
-		`name: # no value`:                   "",
 		`name:   repo:x   `:                  "repo:x",
+		`name: # no value`:                   "",
+		`name:`:                              "",
+		`name: ""`:                           "",
+		`name: ~`:                            "",
+		`name: null`:                         "",
+		`name: 2024`:                         "2024|",
+		`name: true`:                         "true|",
+		`name: |`:                            "!",
+		`name: >-`:                           "!",
+		`name: [repo:x]`:                     "!",
+		`name: {a: b}`:                       "!",
+		`name: &a repo:x`:                    "!",
+		`name: !!str repo:x`:                 "!",
+		`name: *a`:                           "!",
+		`name: "repo:\x41"`:                  "!",
+		`name: "repo:x`:                      "!",
+		`name: 'repo:x' tail`:                "!",
+		`name: repo: x`:                      "!",
+		"name: repo:x\n  more":               "!",
+		"name:\n  repo:x":                    "!",
 	} {
 		path := filepath.Join(t.TempDir(), "SKILL.md")
 		if err := os.WriteFile(path, []byte("---\n"+line+"\ndescription: d\n---\nbody\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		got, ok := museFrontName(path)
-		if !ok || got != want {
-			t.Errorf("%q reads as %q (%v), want %q", line, got, ok, want)
+		names, plain := museFrontName(path)
+		got := strings.Join(names, "|")
+		if !plain {
+			got = "!"
+		}
+		if got != want {
+			t.Errorf("%q reads as %q, want %q (\"\" the directory's, ! not plain)", line, got, want)
 		}
 	}
 }
+

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -198,52 +199,88 @@ func museStartFile(work string, slots []instructionSlot) (string, string, bool) 
 	return "", "", false
 }
 
-// museFrontName is the name a SKILL.md's frontmatter gives as Muse Code
-// 1.4.25 reads it (a one-line YAML scalar, [yamlScalar]), and whether it gives
-// one: a file opening with `---` and a `name:` line before the `---` that
-// closes it, read no further ([scanFrontmatter]).
-func museFrontName(path string) (string, bool) {
-	var name string
-	named := scanFrontmatter(path, func(l string) bool { return l == "---" }, func(l string) bool {
+// museFrontName is the names a SKILL.md's frontmatter may have Muse Code
+// 1.4.25 list its skill under, "" for its directory's, and whether it can be
+// read plainly: a file opening with `---` and a `name:` line before the `---`
+// that closes it, read no further ([scanFrontmatter]), its value a one-line
+// YAML scalar ([yamlScalar]); none, or an empty or null value, is the
+// directory's; a number or boolean, its text or the directory's. A value no
+// one-line reading settles (a block, flow, anchor, tag or alias, an escape,
+// one a later indented line continues) is not read plainly: never guessed.
+func museFrontName(path string) ([]string, bool) {
+	var names []string
+	plain, seen := true, false
+	scanFrontmatter(path, func(l string) bool { return l == "---" }, func(l string) bool {
+		if seen { // a later indented line continues the value; a blank one may too
+			if strings.TrimSpace(l) == "" {
+				return false
+			}
+			plain = plain && l[0] != ' ' && l[0] != '\t'
+			return true
+		}
 		if key, ok := frontKey(l); !ok || key != "name" {
 			return false
 		}
 		_, value, _ := strings.Cut(l, ":")
-		name = yamlScalar(strings.TrimSpace(value))
-		return true
+		name, ok := yamlScalar(strings.TrimSpace(value))
+		_, number := strconv.ParseFloat(name, 64)
+		switch {
+		case !ok:
+			plain = false
+		case name == "" || name == "~" || strings.EqualFold(name, "null"):
+		case number == nil || strings.EqualFold(name, "true") || strings.EqualFold(name, "false"):
+			names = []string{name, ""}
+		default:
+			names = []string{name}
+		}
+		seen = true
+		return false
 	})
-	return name, named
+	if len(names) == 0 {
+		names = []string{""}
+	}
+	return names, plain
 }
 
-// yamlScalar is a one-line YAML scalar's value: a quoted one's inside (in
-// single quotes, a doubled quote read as one), a comment after it dropped; a
-// plain one up to a comment (` #` or a leading `#`), trimmed.
-func yamlScalar(v string) string {
-	if v != "" && (v[0] == '"' || v[0] == '\'') {
+// yamlScalar is a one-line YAML scalar's value, and whether one line settles
+// it: a quoted one's inside (in single quotes, a doubled quote read as one),
+// then nothing but a comment; a plain one up to a comment (` #` or a leading
+// `#`), trimmed. Not settled: a block, flow, anchor, tag, alias or reserved
+// indicator first, a double-quoted escape, a quote closed on a later line, and
+// a plain value holding `: ` or ending in `:`, which a parser refuses.
+func yamlScalar(v string) (string, bool) {
+	switch {
+	case v == "" || v[0] == '#':
+		return "", true
+	case strings.ContainsRune("|>[{&!*@`%", rune(v[0])),
+		len(v) > 1 && strings.ContainsRune("-?:", rune(v[0])) && (v[1] == ' ' || v[1] == '\t'):
+		return "", false
+	case v[0] == '"' || v[0] == '\'':
 		q := v[0]
 		for i := 1; i < len(v); i++ {
 			switch {
 			case q == '"' && v[i] == '\\':
-				i++
+				return "", false
 			case v[i] == q && q == '\'' && i+1 < len(v) && v[i+1] == '\'':
 				i++
 			case v[i] == q:
-				inner := v[1:i]
-				if q == '\'' {
-					inner = strings.ReplaceAll(inner, "''", "'")
+				rest := strings.TrimLeft(v[i+1:], " \t")
+				if rest != "" && (rest[0] != '#' || len(rest) == len(v[i+1:])) {
+					return "", false
 				}
-				return inner
+				return strings.ReplaceAll(v[1:i], string(q)+string(q), string(q)), true
 			}
 		}
-		return v
-	}
-	if strings.HasPrefix(v, "#") {
-		return ""
+		return "", false
 	}
 	for j := 1; j < len(v); j++ {
 		if v[j] == '#' && (v[j-1] == ' ' || v[j-1] == '\t') {
-			return strings.TrimSpace(v[:j])
+			v = strings.TrimSpace(v[:j])
+			break
 		}
 	}
-	return v
+	if strings.Contains(v, ": ") || strings.Contains(v, ":\t") || strings.HasSuffix(v, ":") {
+		return "", false
+	}
+	return v, true
 }

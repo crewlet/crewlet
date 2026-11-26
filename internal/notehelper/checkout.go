@@ -363,9 +363,10 @@ func endsCut(file *os.File, size int64) bool {
 	return err == nil && string(tail) == skippedCut
 }
 
-// keepSkipped appends lines, what a nested adapter's answer left out past
-// its harness's bound, to the run's [skippedLog] under state's lock, as a
-// firing keeps its own; its trouble on stderr.
+// keepSkipped appends lines to the run's [skippedLog] under state's lock, as
+// a firing keeps its own: what a nested adapter's answer left out past its
+// harness's bound, or the runner's lines a launch carries (its `skipped`,
+// D709); its trouble on stderr.
 func keepSkipped(state string, lines []string, stderr io.Writer) {
 	if len(lines) == 0 {
 		return

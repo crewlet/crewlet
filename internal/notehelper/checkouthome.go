@@ -16,12 +16,12 @@ import (
 // copy lists under ([homeHolds]). The home's skill directories are walked as
 // a checkout's are (a plain one: the skills directly in it, dot ones too),
 // read once a firing, each SKILL.md only to its frontmatter's close, the
-// firing's copies added as each lands; one that cannot be read leaves out
-// every copy, as it may hold the name. Muse Code 1.4.25 lists a skill under
-// its frontmatter's name (a one-line YAML scalar), else its directory's, and
-// no two of one name (measured, rows fn1-fn4, so1-so6), so even where the
-// copy would win (over ~/.claude/skills and ~/.codex/skills) the person's
-// keeps its name.
+// firing's copies added as each lands; a directory that cannot be read, or a
+// name that cannot be read plainly ([museFrontName]), leaves out every copy,
+// as it may hold the name. Muse Code 1.4.25 lists a skill under its
+// frontmatter's name, else its directory's, and no two of one name
+// (measured, rows fn1-fn4, so1-so6), so even where the copy would win (over
+// ~/.claude/skills and ~/.codex/skills) the person's keeps its name.
 
 // skillListing is a harness's rule for the name it lists a skill under
 // ([checkoutSpec.ListedAs]): "" checks the run's skills directory alone.
@@ -46,8 +46,12 @@ func (l skillListing) key(name string) string {
 	return name
 }
 
-// homeTake is a name a home skill takes, and why a copy may not take it.
-type homeTake struct{ key, why string }
+// homeTake is a name a home skill takes, and why a copy may not take it; any,
+// every name, for a skill whose name cannot be read plainly.
+type homeTake struct {
+	key, why string
+	any      bool
+}
 
 // takes is the names the home's skill d takes under l. Grok Build: its
 // listed name and its own name rewritten. Muse Code: the name it lists under,
@@ -56,17 +60,26 @@ type homeTake struct{ key, why string }
 // keeps its name and the copy is left out.
 func (l skillListing) takes(d skillDir) []homeTake {
 	if l == listedMuse {
-		listed := d.name
-		if n, ok := museFrontName(entryFile(d)); ok {
-			listed = n
+		names, plain := museFrontName(entryFile(d))
+		if !plain {
+			return []homeTake{{why: "the home's " + d.src + " names its skill in a form the helper does not read " +
+				"plainly, so Muse Code may list it under any copy's name", any: true}}
 		}
-		return []homeTake{{listed, "the home's " + d.src + " is listed as " + listed + " too, and Muse Code would not list both"}}
+		var out []homeTake
+		for _, listed := range names {
+			if listed == "" {
+				listed = d.name
+			}
+			out = append(out, homeTake{key: listed, why: "the home's " + d.src + " is listed as " + listed +
+				" too, and Muse Code would not list both"})
+		}
+		return out
 	}
 	n, named := frontName(entryFile(d))
 	listed, _ := skillname.GrokListed(n, named, d.name)
 	var out []homeTake
 	for _, key := range []string{listed, skillname.Grok(d.name)} {
-		out = append(out, homeTake{key, "the home's " + d.src + ", which Grok Build lists as " + listed +
+		out = append(out, homeTake{key: key, why: "the home's " + d.src + ", which Grok Build lists as " + listed +
 			", takes the name " + key + " it would list the copy under"})
 	}
 	return out
@@ -137,6 +150,9 @@ func (h *homeNames) readHome(spec checkoutSpec) string {
 		}
 		for _, d := range found {
 			for _, t := range spec.ListedAs.takes(d) {
+				if t.any {
+					return t.why
+				}
 				if _, ok := h.taken[t.key]; t.key != "" && !ok {
 					h.taken[t.key] = t.why
 				}

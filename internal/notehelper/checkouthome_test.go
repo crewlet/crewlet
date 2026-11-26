@@ -60,20 +60,22 @@ func TestASkillsNameIsReadNoFurtherThanItsFrontmattersClose(t *testing.T) {
 // A MUSE HOME IS READ AS MUSE CODE 1.4.25 LISTS IT (rows fn1-fn4): a skill
 // directory directly in a home skill directory, a dot one too (unmeasured, so
 // not assumed unlisted), takes the name its frontmatter gives, read past a
-// long body; a directory holding no SKILL.md is no skill and takes no name,
-// so the copies those hide are left out, said, and the rest are made.
+// long body, or its directory's where that is empty; a directory holding no
+// SKILL.md is no skill and takes no name, so the copies those hide are left
+// out, said, and the rest are made.
 //
-// Mutation: skip dot directories, or take a directory without SKILL.md, and
-// this goes red.
+// Mutation: skip dot directories, take a directory without SKILL.md, or take
+// an empty name, and this goes red.
 func TestAMuseHomeIsReadAsMuseListsIt(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, nil)
 	home := filepath.Join(t.TempDir(), "config-skills")
 	long := strings.Repeat("body line\n", 8<<10)
 	for dir, body := range map[string]string{
-		".dot/SKILL.md":  "---\nname: late:dot\n---\n",
-		"long/SKILL.md":  "---\ndescription: d\nname: 'late:long'\n---\n" + long,
-		"late:bare/x.md": "not a skill\n",
+		".dot/SKILL.md":       "---\nname: late:dot\n---\n",
+		"late:empty/SKILL.md": "---\nname: \"\"\n---\n",
+		"long/SKILL.md":       "---\ndescription: d\nname: 'late:long'\n---\n" + long,
+		"late:bare/x.md":      "not a skill\n",
 	} {
 		if err := os.MkdirAll(filepath.Join(home, filepath.Dir(dir)), 0o700); err != nil {
 			t.Fatal(err)
@@ -84,14 +86,15 @@ func TestAMuseHomeIsReadAsMuseListsIt(t *testing.T) {
 	}
 	r.museLaunch(t, "", home)
 	files := map[string]string{"late/.git/": ""}
-	for _, s := range []string{"dot", "long", "bare"} {
+	for _, s := range []string{"dot", "long", "bare", "empty"} {
 		files["late/.agents/skills/"+s+"/SKILL.md"] = "---\nname: " + s + "\ndescription: D" + s + ".\n---\n"
 	}
 	r.add(t, files)
 	got := museContext(t, r.museFire(t, "s", "s"))
-	for _, s := range []string{"dot", "long"} {
+	for _, s := range []string{"dot", "long", "empty"} {
 		line := "the skill " + r.workdir(t) + "/late/.agents/skills/" + s + " is left out: the home's " +
-			filepath.Join(home, map[string]string{"dot": ".dot", "long": "long"}[s]) + " is listed as late:" + s +
+			filepath.Join(home, map[string]string{"dot": ".dot", "long": "long", "empty": "late:empty"}[s]) +
+			" is listed as late:" + s +
 			" too, and Muse Code would not list both"
 		if !strings.Contains(got, "- "+line) {
 			t.Errorf("the answer is\n%s\nwant %q", got, line)
@@ -149,5 +152,37 @@ func TestALaunchRefusesAListingRuleItDoesNotKnow(t *testing.T) {
 	err := checkoutLaunch(config, r.work, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "listedAs") {
 		t.Fatalf("the launch with listedAs hermes returned %v, want it refused naming listedAs", err)
+	}
+}
+
+// A MUSE HOME SKILL NAMED IN A FORM NO LINE SETTLES LEAVES EVERY COPY OUT,
+// SAID: a block scalar's name may be any copy's, so none is made on a guess.
+//
+// Mutation: read the skill under its directory's name instead, and the copies
+// are made.
+func TestAMuseHomeSkillNamedUnplainlyLeavesEveryCopyOut(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	home := filepath.Join(t.TempDir(), "config-skills")
+	if err := os.MkdirAll(filepath.Join(home, "block"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "block", "SKILL.md"), []byte("---\nname: |\n  late:deploy\n---\n"),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.museLaunch(t, "", home)
+	r.add(t, map[string]string{"late/.git/": "",
+		"late/.agents/skills/deploy/SKILL.md": "---\nname: deploy\ndescription: Deploys.\n---\n",
+		"late/.agents/skills/lint/SKILL.md":   "---\nname: lint\ndescription: Lints.\n---\n"})
+	got := museContext(t, r.museFire(t, "s", "s"))
+	want := "the home's " + filepath.Join(home, "block") + " names its skill in a form the helper does not read plainly"
+	if strings.Count(got, want) != 2 {
+		t.Errorf("the answer is\n%s\nwant both copies left out: %q", got, want)
+	}
+	for _, name := range []string{"late:deploy", "late:lint"} {
+		if _, err := os.Lstat(filepath.Join(r.skills, name)); err == nil {
+			t.Errorf("the copy %s was made beside a home skill whose name may be its", name)
+		}
 	}
 }
