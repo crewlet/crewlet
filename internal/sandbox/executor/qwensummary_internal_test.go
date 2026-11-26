@@ -369,7 +369,7 @@ func TestAQwenSummaryAddsOnlyItsWordsToTheWalk(t *testing.T) {
 	counted := func(summarize bool) (sandbox.MainThreadReading, uint64) {
 		var reading sandbox.MainThreadReading
 		ask := sandbox.MainThreadAsk{Session: session, Release: qwenRelease, Count: true, Summary: summarize}
-		_, allocated := allocationsOf(func() {
+		_, allocated := allocationsOf(t, func() {
 			reading = QwenCode{}.readMainThread(context.Background(), box, PathsFor(box), ask)
 		})
 		return reading, allocated
@@ -378,7 +378,7 @@ func TestAQwenSummaryAddsOnlyItsWordsToTheWalk(t *testing.T) {
 	both, withSummary := counted(true)
 	within("count's walk", alone, withSummary, both.Summary)
 	noted := func(read *summaryRead) uint64 {
-		_, allocated := allocationsOf(func() {
+		_, allocated := allocationsOf(t, func() {
 			_, _ = QwenCode{}.notesHeld(context.Background(), box, Session{ID: session}, nil, read)
 		})
 		return allocated

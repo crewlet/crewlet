@@ -46,7 +46,7 @@ func TestALiveReadAddsItsEntriesOnce(t *testing.T) {
 			entries[i] = "a step " + string(rune('a'+i%26))
 		}
 		var f follower
-		objects, bytes = allocationsOf(func() {
+		objects, bytes = allocationsOf(t, func() {
 			f = follower{lineBound: maxLineBytes, dec: &presetEntries{entries: entries}}
 			if err := f.readEvents(t.Context(), b, p.Stream(), false); err != nil {
 				t.Fatalf("readEvents: %v", err)
