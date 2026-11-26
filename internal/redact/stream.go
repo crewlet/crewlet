@@ -105,12 +105,11 @@ func (e *decidedEarly) Unwrap() error { return ErrDecidedEarly }
 var errStreamClosed = errors.New("redact: write to a closed stream")
 
 // Stream redacts a text written to it in pieces, writing the redacted text to
-// the writer it was made with, in one pass, or refuses it. However the text
-// is cut into writes, it holds its stages' windows (a live stream also the
-// text past its settled point, [liveHeldBytes] at most), whether it refuses
-// depends on the text and its flushes alone ([Stream.Flush]; a live stream's
-// also on whether it trails, which where its writes are cut decides too), and
-// where Close answers nil it wrote exactly [Secrets]. Writes cut at any byte.
+// the writer it was made with, in one pass, or refuses it. It holds its
+// stages' windows (a live stream also the text past its settled point,
+// [liveHeldBytes] at most); whether it refuses depends on the text, its
+// flushes ([Stream.Flush]) and whether it trails ([Stream.Trailing]); and
+// where Close answers nil it wrote exactly [Secrets], its writes cut anywhere.
 //
 // A refusal is [ErrDecidedEarly], from Close and every later write: the keys'
 // stage decided a window before the rules' claims there were known. What was
