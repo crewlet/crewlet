@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -252,5 +253,26 @@ func TestAKimiCopyNeverHidesAPersonsOwnSkill(t *testing.T) {
 	}
 	if said != "" {
 		t.Errorf("the firing said %q on stderr; want its lines in the run's log alone", said)
+	}
+}
+
+// A KIMI ANSWER KEEPS WHAT IT LEFT OUT BEFORE ITS SKILLS: where the skills'
+// listing and the left-out lines pass one firing's bound, the left-out lines
+// come whole, last, and the skills' listing before them is cut.
+//
+// Mutation: take the skills first, and this goes red.
+func TestAKimiAnswerKeepsWhatItLeftOutBeforeItsSkills(t *testing.T) {
+	t.Parallel()
+	h := handedCheckout{name: "late", root: "/w/late"}
+	for i := range 200 {
+		h.skills = append(h.skills, handedSkill{name: fmt.Sprintf("late:s%d", i),
+			description: strings.Repeat("d", maxSkillDescription), path: fmt.Sprintf("/h/skills/late:s%d/SKILL.md", i)})
+	}
+	skipped := []string{"the skill /w/late/.kimi/skills/x is left out: its name is taken"}
+	answer := kimiNestedText([]handedCheckout{h}, skipped)
+	skills, ok := strings.CutSuffix(answer, "\n\n"+skippedListing(skipped))
+	if !ok || !strings.HasSuffix(skills, "\n"+listingCut) || len(answer) > maxListing {
+		t.Errorf("the answer (%d bytes) is not the skills cut, then what was left out whole: ...%s", len(answer),
+			answer[max(len(answer)-300, 0):])
 	}
 }
