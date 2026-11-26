@@ -240,19 +240,20 @@ func (h *spoolHold) release() {
 	}
 }
 
-// heldWriter writes to w at most left bytes, the room its spool holds, and
+// heldWriter writes to w at most what left counts, the room its spool holds,
+// shared by every file a take spools (its session and its media), and
 // refuses whole the write that would pass it, so no byte past the room
 // reaches the disk.
 type heldWriter struct {
 	w    io.Writer
-	left int64
+	left *int64
 }
 
 func (h *heldWriter) Write(p []byte) (int, error) {
-	if int64(len(p)) > h.left {
+	if int64(len(p)) > *h.left {
 		return 0, errSpoolPastHold
 	}
 	n, err := h.w.Write(p)
-	h.left -= int64(n)
+	*h.left -= int64(n)
 	return n, err
 }

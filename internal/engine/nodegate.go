@@ -632,11 +632,17 @@ func livePresences(ctx context.Context, leases liveLeases) ([]statelog.Presence,
 	if err != nil {
 		return nil, fmt.Errorf("list the live nodes: %w", err)
 	}
+	return presencesOf(ids), nil
+}
+
+// presencesOf is the live nodes ids names, as a counted set takes them
+// ([statelog.CountedSet]).
+func presencesOf(ids []string) []statelog.Presence {
 	out := make([]statelog.Presence, 0, len(ids))
 	for _, id := range ids {
 		out = append(out, statelog.Presence{NodeID: id})
 	}
-	return out, nil
+	return out
 }
 
 // domainOpID is one log's operation id for a gesture: STABLE, so a retry is the

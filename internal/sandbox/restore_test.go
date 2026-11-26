@@ -183,7 +183,7 @@ func keptTurnBy(t *testing.T, with func(*CoordinatorOptions)) (*coordRig, *keptR
 // ([captureRestFor]) alike, so a case's wait runs out where the case says.
 func (r *coordRig) relaunchWithin(wait time.Duration) {
 	r.coordinator.relaunchWait = wait
-	r.coordinator.captureRest = func(int64) time.Duration { return wait }
+	r.coordinator.captureRest = func(int64, int) time.Duration { return wait }
 }
 
 // continuingKept is the relaunch of t1 that continues kept, with its three
@@ -1008,7 +1008,7 @@ func TestARelaunchWaitsForTheCaptureOfTheJobItFollowsAsLongAsItsSizeNeeds(t *tes
 		return newer
 	}
 	for _, size := range []int64{512 << 10, executorkeep.SessionMaxBytes} {
-		rest := captureRestFor(size)
+		rest := captureRestFor(size, 0)
 		t.Run(fmt.Sprintf("%d bytes still being kept", size), func(t *testing.T) {
 			t.Parallel()
 			inBubble(t, func(t *testing.T) {
@@ -1056,6 +1056,85 @@ func TestARelaunchWaitsForTheCaptureOfTheJobItFollowsAsLongAsItsSizeNeeds(t *tes
 				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
 				if why != "" || !continued.Capture.samePlace(landed) || continued.NotContinued != nil {
 					t.Fatalf("the relaunch continues %+v (%q), want the capture kept while it waited", continued, why)
+				}
+			})
+		})
+	}
+}
+
+// A RELAUNCH WAITS FOR EACH MEDIA OBJECT ITS CAPTURE'S KEEP UPLOADS, each paced
+// by the mebibyte begun ([captureRestFor]): counted on the begun stamp when it
+// asked, or stamped while it waits ([Coordinator.stampMediaCount]), from the
+// same start. A capture landing past its archive's wait and inside its
+// objects' is continued; one still begun past both is passed over, said with
+// the longer wait. Exact, in a bubble.
+//
+// Mutation: price a capture's media as one object, or price the wait once and
+// never again.
+func TestARelaunchWaitsForEachMediaObjectItsCapturesKeepUploads(t *testing.T) {
+	t.Parallel()
+	const size, media = int64(512 << 10), 4
+	base, rest := captureRestFor(size, 0), captureRestFor(size, media)
+	for name, tc := range map[string]struct {
+		countedAt time.Duration // when the count is stamped, from the ask; 0 is before it
+		lands     bool
+	}{
+		"counted when it asked":      {lands: true},
+		"counted while it waits":     {countedAt: base / 2, lands: true},
+		"still being kept past both": {countedAt: base / 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, restore, kept := keptTurn(t)
+				newer := kept
+				newer.CaptureSeq, newer.State, newer.At = kept.CaptureSeq+1, CaptureBegun, rig.coordinator.now()
+				newer.ArchiveSize = size
+				counted := newer
+				counted.MediaCount = media
+				first := newer
+				if tc.countedAt == 0 {
+					first = counted
+				}
+				if _, err := rig.pending.StampCapture(t.Context(), "t1", first); err != nil {
+					t.Fatalf("StampCapture: %v", err)
+				}
+				go func() {
+					if tc.countedAt > 0 {
+						time.Sleep(tc.countedAt)
+						if took, err := rig.pending.StampCapture(context.Background(), "t1", counted); err != nil ||
+							!took {
+							t.Errorf("stamping the count = %v, %v", took, err)
+						}
+					}
+					if !tc.lands {
+						return
+					}
+					time.Sleep(base + (rest-base)/2 - tc.countedAt)
+					landed := counted
+					landed.State = CaptureLanded
+					row := keptRow(t, kept)
+					row.CaptureSeq = landed.CaptureSeq
+					restore.mu.Lock()
+					restore.rows["t1"] = row
+					restore.mu.Unlock()
+					_, _ = rig.pending.StampCapture(context.Background(), "t1", landed)
+				}()
+				asked := time.Now()
+				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, ""))
+				waited := time.Since(asked)
+				if tc.lands {
+					if why != "" || !continued.Capture.samePlace(counted) || continued.NotContinued != nil {
+						t.Fatalf("the relaunch continues %+v (%q), want the capture kept inside its objects' wait",
+							continued, why)
+					}
+					return
+				}
+				said := continued.NotContinued
+				if waited < rest || waited >= rest+captureWaitTick || said == nil ||
+					said.Loss != executorkeep.LossCaptureLate || !strings.Contains(said.Detail, rest.String()) {
+					t.Errorf("the relaunch waited %s and says %+v, want capture_late after its objects' wait, %s",
+						waited, said, rest)
 				}
 			})
 		})

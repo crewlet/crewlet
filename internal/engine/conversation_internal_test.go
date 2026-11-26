@@ -369,6 +369,15 @@ func (conversingKeep) Upload(context.Context, executorkeep.SealedSpool,
 	return executorkeep.SealedObject{}, errors.New("no case here keeps a session")
 }
 
+func (conversingKeep) SealMedia(string, io.Reader, io.Writer) (executorkeep.MediaSpool, error) {
+	return executorkeep.MediaSpool{}, errors.New("no case here keeps a session")
+}
+
+func (conversingKeep) UploadMedia(context.Context, executorkeep.MediaSpool,
+	io.Reader) (executorkeep.MediaObject, error) {
+	return executorkeep.MediaObject{}, errors.New("no case here keeps a session")
+}
+
 func (conversingKeep) PutSummary(context.Context, string, string, io.Reader) (executorkeep.SealedObject, error) {
 	return executorkeep.SealedObject{}, errors.New("no case here keeps a summary")
 }

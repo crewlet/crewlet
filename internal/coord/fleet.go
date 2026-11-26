@@ -1729,6 +1729,7 @@ type Fleet interface {
 	BackupRegister
 	MaintenanceRegister
 	NodeRetirements
+	CaptureStampRecords
 	Markers
 	ActivationBodies
 	Custody

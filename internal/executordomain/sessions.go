@@ -492,7 +492,8 @@ func (s *SessionStore) OpenSummary(ctx context.Context, session Session) (io.Rea
 	if summary == nil {
 		return nil, fmt.Errorf("%w: %s's turn %s names no summary", ErrUnreadable, session.Handle, session.Turn)
 	}
-	return s.openSealed(ctx, summary.Object, SummaryAAD(session.Handle, session.Turn, summary.Object.Key),
+	return s.openSealed(ctx, summary.Object, summary.Object.Size,
+		SummaryAAD(session.Handle, session.Turn, summary.Object.Key),
 		func(err error) error { return unreadable(session, err) })
 }
 
@@ -521,54 +522,88 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// Open streams one session's archive back out of the store: the object
-// checked against its row by the object store, and every chunk authenticated
-// against [AAD] before a byte of it is handed out. The caller closes it. A row
-// naming media names a text object of frames ([executorkeep.FrameText]), each
-// media member spliced back where its frame stands, verbatim.
+// Open streams one session's archive back out of the store, checked against
+// its row and every chunk authenticated against [AAD] before a byte is handed
+// out; the caller closes it. A row naming media names a text object of frames
+// ([executorkeep.FrameText]), each member spliced back verbatim where it stands.
 //
 // WHAT IT HANDS OUT IS PROVISIONAL UNTIL io.EOF: a cut stream is known cut
 // only when the read past its last whole chunk fails, so a restorer unpacking
 // as it reads stages what it unpacks and keeps none unless it reached EOF.
 //
-// A row naming no object, an object or media gone, and bytes not sealed for
-// this row, not its digest, or that no keyring key opens are [ErrUnreadable].
+// A row naming no object or no media over frames, an object or media gone, and
+// bytes not sealed for this row, not its digest or no key opens: [ErrUnreadable].
 func (s *SessionStore) Open(ctx context.Context, session Session) (io.ReadCloser, error) {
 	if !session.HasObject() {
 		return nil, fmt.Errorf("%w: %s's turn %s names no session", ErrUnreadable,
 			session.Handle, session.Turn)
 	}
-	fail := func(err error) error { return unreadable(session, err) }
-	text, err := s.openSealed(ctx, session.Object, AAD(session.Handle, session.Turn, session.Object.Key), fail)
-	if err != nil || len(session.Media) == 0 {
-		return text, err
-	}
 	named := make(map[[executorkeep.MediaDigestBytes]byte]executorkeep.MediaObject, len(session.Media))
 	for _, m := range session.Media {
 		var digest [executorkeep.MediaDigestBytes]byte
 		if !executorkeep.ValidMediaDigest(m.Digest) {
-			_ = text.Close()
 			return nil, fmt.Errorf("%w: %s's turn %s names media %q, which is no digest", ErrUnreadable,
 				session.Handle, session.Turn, m.Digest)
 		}
 		_, _ = hex.Decode(digest[:], []byte(m.Digest))
 		named[digest] = m
 	}
-	open := func(m executorkeep.MediaObject) (io.ReadCloser, error) {
-		return s.openSealed(ctx, m.Object, MediaAAD(session.Handle, m.Object.Key), func(err error) error {
-			return unreadable(session, fmt.Errorf("media %s: %w", m.Digest, err))
-		})
+	fail := func(err error) error { return unreadable(session, err) }
+	// THE TEXT OBJECT STAYS OPEN WHILE EVERY MEMBER STREAMS between its
+	// frames, at each frame naming it, so its deadline is budgeted for the
+	// archive they restore to ([Session.ArchiveBytes]), not its own bytes,
+	// nor each member once: a member framed again streams again.
+	span := session.Object.Size
+	if len(named) > 0 {
+		span = session.ArchiveBytes
 	}
-	return &splicedSession{session: session, text: text, frames: bufio.NewReader(text), named: named,
-		open: open}, nil
+	text, err := s.openSealed(ctx, session.Object, span, AAD(session.Handle, session.Turn, session.Object.Key),
+		fail)
+	if err != nil {
+		return nil, err
+	}
+	frames := bufio.NewReader(text)
+	if len(named) == 0 {
+		return wholeSession(session, text, frames)
+	}
+	open := func(m executorkeep.MediaObject) (io.ReadCloser, error) {
+		return s.openSealed(ctx, m.Object, m.Object.Size, MediaAAD(session.Handle, m.Object.Key),
+			func(err error) error { return unreadable(session, fmt.Errorf("media %s: %w", m.Digest, err)) })
+	}
+	return &splicedSession{session: session, text: text, frames: frames, named: named, open: open}, nil
 }
 
-// openSealed opens one sealed object of a session under aad, each failure
-// read through fail.
-func (s *SessionStore) openSealed(ctx context.Context, object objstore.Object, aad []byte,
+// wholeSession is the text object of a row naming no media, its first byte
+// peeked and handed out with the rest: a session kept whole is a gzip archive,
+// and one opening on a frame is a container whose row lost, or never named,
+// the media it splices, which would reach a harness as its archive.
+func wholeSession(session Session, text io.Closer, frames *bufio.Reader) (io.ReadCloser, error) {
+	head, err := frames.Peek(1)
+	switch {
+	case errors.Is(err, io.EOF):
+	case err != nil:
+		_ = text.Close()
+		return nil, err
+	case head[0] == executorkeep.FrameText || head[0] == executorkeep.FrameMedia:
+		_ = text.Close()
+		return nil, fmt.Errorf("%w: %s's turn %s: its session's frames name media its row does not",
+			ErrUnreadable, session.Handle, session.Turn)
+	}
+	// NOT THE bufio.Reader ITSELF, whose WriteTo would drain the session in
+	// 4 KiB reads where a caller's copy asks for more.
+	return struct {
+		io.Reader
+		io.Closer
+	}{frames, text}, nil
+}
+
+// openSealed opens one sealed object of a session under aad, budgeted for the
+// span bytes that stream while it is open
+// ([objstore.Store.OpenSpanning]), each failure read through fail.
+func (s *SessionStore) openSealed(ctx context.Context, object objstore.Object, span int64, aad []byte,
 	fail func(error) error) (io.ReadCloser, error) {
 
-	body, err := s.objects.Open(ctx, object)
+	body, err := s.objects.OpenSpanning(ctx, object, span)
 	if err != nil {
 		return nil, fail(err)
 	}

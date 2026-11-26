@@ -149,6 +149,11 @@ func (w *sessionWrites) calls() []string {
 type sessionKeep struct {
 	mu     sync.Mutex
 	policy SessionPolicy
+	// policyHook, when set, runs on every read of the policy before it answers:
+	// a store slow to say who reads a capture naming media.
+	policyHook func(context.Context)
+	// policyErr, when set, fails every read of the policy.
+	policyErr error
 	// now is the rig's clock, which a spool's key is minted on: the
 	// coordinator ages the key against that clock ([objstore.RecordWithin]).
 	now    func() time.Time
@@ -168,6 +173,8 @@ type sessionKeep struct {
 	// spool took, a seal refused part way included.
 	uploaded [][]byte
 	wrote    []int64
+	// media is the digest of every media member uploaded, in order.
+	media []string
 	// summaries is every summary put, apart from the sessions' uploads, and
 	// copies every one copied under a fresh key; summaryErr, when set, refuses
 	// every put, and summaryGate, when set, holds every put until closed or its
@@ -180,10 +187,16 @@ type sessionKeep struct {
 	copied map[objstore.Key]string
 }
 
-func (k *sessionKeep) Policy(context.Context) (SessionPolicy, error) {
+func (k *sessionKeep) Policy(ctx context.Context) (SessionPolicy, error) {
+	k.mu.Lock()
+	hook := k.policyHook
+	k.mu.Unlock()
+	if hook != nil {
+		hook(ctx)
+	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	return k.policy, nil
+	return k.policy, k.policyErr
 }
 
 func (k *sessionKeep) Keeps() bool {
@@ -275,6 +288,32 @@ func (k *sessionKeep) Upload(ctx context.Context, spool executorkeep.SealedSpool
 	return executorkeep.SealedObject{ContentKey: spool.ContentKey, Object: objstore.Object{
 		Key: spool.Key, Hash: objstore.Hash(hex.EncodeToString(sum[:])), Size: int64(len(body)),
 	}}, nil
+}
+
+// SealMedia spools a member as it came, under a key the rig mints, with the
+// digest of what it read.
+func (k *sessionKeep) SealMedia(_ string, member io.Reader, dst io.Writer) (executorkeep.MediaSpool, error) {
+	sum := sha256.New()
+	n, err := io.Copy(dst, io.TeeReader(member, sum))
+	if err != nil {
+		return executorkeep.MediaSpool{}, err
+	}
+	return executorkeep.MediaSpool{Digest: hex.EncodeToString(sum.Sum(nil)),
+		SealedSpool: executorkeep.SealedSpool{Key: objstore.KeyAt(k.now()), ContentKey: "k1", Size: n}}, nil
+}
+
+// UploadMedia keeps what it read among the uploads, as Upload does.
+func (k *sessionKeep) UploadMedia(ctx context.Context, spool executorkeep.MediaSpool,
+	sealed io.Reader) (executorkeep.MediaObject, error) {
+
+	put, err := k.Upload(ctx, spool.SealedSpool, sealed)
+	if err != nil {
+		return executorkeep.MediaObject{}, err
+	}
+	k.mu.Lock()
+	k.media = append(k.media, spool.Digest)
+	k.mu.Unlock()
+	return executorkeep.MediaObject{Digest: spool.Digest, Object: put.Object, ContentKey: put.ContentKey}, nil
 }
 
 func (k *sessionKeep) PutSummary(ctx context.Context, _, _ string, text io.Reader) (executorkeep.SealedObject, error) {

@@ -29,9 +29,16 @@ func carry(m CaptureMedia) CaptureMedia {
 	return m
 }
 
-// naming is c naming media.
+// naming is c naming media, restoring to an archive of its object's size and
+// each member's once, as a take of it framing each member once would.
 func naming(c Capture, media ...CaptureMedia) Capture {
-	c.Media = media
+	c.Media, c.ArchiveBytes = media, 0
+	for _, m := range media {
+		c.ArchiveBytes += m.ObjectSize
+	}
+	if len(media) > 0 {
+		c.ArchiveBytes += c.ObjectSize
+	}
 	return c
 }
 
@@ -133,6 +140,7 @@ func TestACaptureNamesEachMediaOnce(t *testing.T) {
 		for _, m := range media {
 			n.Media = append(n.Media, newMedia(t, m))
 		}
+		n.ArchiveBytes = 4 << 20
 		if err := n.validate(); !errors.Is(err, ErrInvalid) {
 			t.Errorf("a capture naming %s: %v, want ErrInvalid", name, err)
 		}
@@ -141,6 +149,7 @@ func TestACaptureNamesEachMediaOnce(t *testing.T) {
 	for i := range executorkeep.MediaMaxCount {
 		atCap.Media = append(atCap.Media, newMedia(t, payload(fmt.Sprint(i), 1)))
 	}
+	atCap.ArchiveBytes = 4 << 20
 	if err := atCap.validate(); err != nil {
 		t.Errorf("a capture naming MediaMaxCount media was refused: %v", err)
 	}
@@ -149,8 +158,8 @@ func TestACaptureNamesEachMediaOnce(t *testing.T) {
 	e.capture(first)
 	later := naming(capturing("ana", "chat:room", turn, 1, 2, 100, budget), carry(a))
 	encoded := e.encode(ConversationSubject("ana", "chat:room", turn), OpCapture, seatScope("ana"), later)
-	if env, err := DecodeEnvelope(encoded); err != nil || env.V != mediaVersion {
-		t.Fatalf("a capture naming media is stamped %d (%v), want %d", env.V, err, mediaVersion)
+	if env, err := DecodeEnvelope(encoded); err != nil || env.V != MediaCaptureVersion {
+		t.Fatalf("a capture naming media is stamped %d (%v), want %d", env.V, err, MediaCaptureVersion)
 	}
 	if env, err := DecodeEnvelope(e.encode(ConversationSubject("ana", "chat:room", turn), OpCapture,
 		seatScope("ana"), capturing("ana", "chat:room", turn, 1, 3, 100, budget))); err != nil || env.V >= mediaVersion {
@@ -197,6 +206,7 @@ func TestACarryNamesOnlyAnObjectItsTurnOrBaseNamesLive(t *testing.T) {
 		for _, m := range c.Media {
 			n.Media = append(n.Media, newMedia(t, m))
 		}
+		n.ArchiveBytes = c.ArchiveBytes
 		return e.decide(n, monday)
 	}
 	elsewhere := naming(capturing("ana", "chat:other", stranger, 1, 1, 100, budget), carry(pdf))
@@ -263,7 +273,7 @@ func TestACarryOfMediaNoRowHoldsIsRefused(t *testing.T) {
 	}
 	c := naming(capturing("ana", "chat:room", holder, 1, 1, 100, budget), carry(pdf))
 	n := newCapture("ana", "chat:room", holder, 1, 1, 100, monday)
-	n.Media = []NewMedia{newMedia(t, carry(pdf))}
+	n.Media, n.ArchiveBytes = []NewMedia{newMedia(t, carry(pdf))}, c.ArchiveBytes
 	if err := e.decide(n, monday); !errors.Is(err, ErrCarryGone) {
 		t.Errorf("a carry from a retired base: %v, want ErrCarryGone", err)
 	}
@@ -456,25 +466,30 @@ func TestAReleaseFreesOnlyMediaNoOtherRowNames(t *testing.T) {
 	}
 }
 
-// EVERY READ CARRIES ITS MEDIA: a row naming media is read with them by every
-// read of it — a turn's row, a seat's page, a conversation's head and its
-// siblings, a search's hits — and copied by the views a relaunch and a person's
-// read open it through, so no reader opens a session's frames without what
-// they splice in. A row naming none reads none.
+// EVERY READ CARRIES ITS MEDIA: a row naming media is read with them, and with
+// the archive they restore to, by every read of it — a turn's row, a seat's
+// page, a conversation's head and its siblings, a search's hits — and both are
+// copied by the views a relaunch and a person's read open it through, so no
+// reader opens a session's frames without what they splice in or the span its
+// read is budgeted for. A row naming none reads neither.
 //
-// Mutation: skip withMedia in any one read, or leave Media out of
-// Session.Kept, and its check goes red.
+// Mutation: skip withMedia in any one read, leave archive_bytes out of
+// sessionColumns, or leave Media or ArchiveBytes out of Session.Kept, and its
+// check goes red.
 func TestEveryReadCarriesItsMedia(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
 	older, head, plain := newTurn(), newTurn(), newTurn()
 	pdf, image, earlier := payload("pdf", 40<<20), payload("image", 20<<20), payload("earlier", 20<<20)
-	e.capture(naming(capturing("ana", "chat:room", older, 1, 1, 100, budget), earlier))
+	olderCapture := naming(capturing("ana", "chat:room", older, 1, 1, 100, budget), earlier)
+	headCapture := naming(capturing("ana", "chat:room", head, 1, 1, 100, budget), pdf, image)
+	e.capture(olderCapture)
 	e.end(ending("ana", "chat:room", older, "", completed))
-	e.capture(naming(capturing("ana", "chat:room", head, 1, 1, 100, budget), pdf, image))
+	e.capture(headCapture)
 	e.end(ending("ana", "chat:room", head, "", completed))
 	e.capture(capturing("ana", "chat:plain", plain, 1, 1, 100, budget))
 	want := map[string][]string{older: {earlier.Digest}, head: digestsOf(e.media("ana", head)), plain: nil}
+	restores := map[string]int64{older: olderCapture.ArchiveBytes, head: headCapture.ArchiveBytes}
 	if len(want[head]) != 2 {
 		t.Fatalf("the premise: the head names media %v", want[head])
 	}
@@ -485,6 +500,10 @@ func TestEveryReadCarriesItsMedia(t *testing.T) {
 		}
 		if got := digestsOf(s.Kept().Media); !slices.Equal(got, want[s.Turn]) {
 			t.Errorf("%s's view of turn %s carries media %v, want %v", read, s.Turn, got, want[s.Turn])
+		}
+		if s.ArchiveBytes != restores[s.Turn] || s.Kept().ArchiveBytes != restores[s.Turn] {
+			t.Errorf("%s reads turn %s restoring to %d bytes, its view to %d, want %d", read, s.Turn,
+				s.ArchiveBytes, s.Kept().ArchiveBytes, restores[s.Turn])
 		}
 	}
 	r := e.reader()
@@ -509,9 +528,11 @@ func TestEveryReadCarriesItsMedia(t *testing.T) {
 	check("the conversation's head", *h.Session)
 	check("the conversation's sibling", h.Siblings[0])
 	if kept := h.Kept(); !slices.Equal(digestsOf(kept.Session.Media), want[head]) ||
-		!slices.Equal(digestsOf(kept.Siblings[0].Media), want[older]) {
-		t.Errorf("the head's frozen view carries media %v and %v", digestsOf(kept.Session.Media),
-			digestsOf(kept.Siblings[0].Media))
+		!slices.Equal(digestsOf(kept.Siblings[0].Media), want[older]) ||
+		kept.Session.ArchiveBytes != restores[head] || kept.Siblings[0].ArchiveBytes != restores[older] {
+		t.Errorf("the head's frozen view carries media %v and %v, restoring to %d and %d bytes",
+			digestsOf(kept.Session.Media), digestsOf(kept.Siblings[0].Media), kept.Session.ArchiveBytes,
+			kept.Siblings[0].ArchiveBytes)
 	}
 	hits := e.search("ana", "build", "", MaxPageSize).Hits
 	if len(hits) != 2 {
@@ -608,5 +629,67 @@ func TestTheSealedCensusCountsMediaToo(t *testing.T) {
 	e.capture(capturing("ana", "chat:b", newTurn(), 1, 1, 90, tight))
 	if got := census(); got["k1"] != 1 || got["k2"] != 0 {
 		t.Errorf("the census after the release is %v, want the new session alone", got)
+	}
+}
+
+// THE APPLY KEEPS ONLY AN ARCHIVE SIZE A TAKE WRITES, AND ONLY WITH ITS OBJECT:
+// a capture naming media and no size, a size past executorkeep.ArchiveMaxBytes,
+// a negative one, or a size beside no media, is refused by the writer, writes
+// nothing at the apply and names no object (placedCapture); one at the bound is
+// taken. A size a take writes is kept on the row, and goes with the object when
+// the seat's budget releases it.
+//
+// Mutation: drop any clause of archiveSized, or leave archive_bytes on a
+// released row, and a check goes red.
+func TestTheApplyKeepsOnlyAnArchiveSizeATakeWrites(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	const tight = 100
+	pdf := payload("pdf", 40)
+	for name, tc := range map[string]struct {
+		media   []CaptureMedia
+		archive int64
+	}{
+		"media and no archive size":      {media: []CaptureMedia{pdf}},
+		"media past the archive's bound": {media: []CaptureMedia{pdf}, archive: executorkeep.ArchiveMaxBytes + 1},
+		"media and a negative size":      {media: []CaptureMedia{pdf}, archive: -1},
+		"an archive size and no media":   {archive: 90},
+	} {
+		turn := newTurn()
+		c := capturing("ana", "chat:"+turn, turn, 1, 1, 50, tight)
+		c.Media, c.ArchiveBytes = tc.media, tc.archive
+		encoded := e.encode(ConversationSubject(c.Handle, c.ConversationKey, turn), OpCapture, seatScope("ana"), c)
+		if _, placed, err := placedCapture(encoded); err != nil || placed {
+			t.Errorf("a capture naming %s names its object: %v (%v)", name, placed, err)
+		}
+		if _, written := e.capture(c); written != 0 {
+			t.Errorf("a capture naming %s wrote %d rows", name, written)
+		}
+		n := newCapture("ana", c.ConversationKey, turn, 1, 1, 50, monday)
+		for _, m := range tc.media {
+			n.Media = append(n.Media, newMedia(t, m))
+		}
+		n.ArchiveBytes = tc.archive
+		if err := n.validate(); !errors.Is(err, ErrInvalid) {
+			t.Errorf("a capture naming %s: %v, want ErrInvalid", name, err)
+		}
+	}
+	atBound := newCapture("ana", "chat:bound", newTurn(), 1, 1, 50, monday)
+	atBound.Media, atBound.ArchiveBytes = []NewMedia{newMedia(t, pdf)}, executorkeep.ArchiveMaxBytes
+	if err := atBound.validate(); err != nil {
+		t.Errorf("a capture restoring to the archive's bound was refused: %v", err)
+	}
+
+	turn := newTurn()
+	kept := naming(capturing("ana", "chat:a", turn, 1, 1, 50, tight), pdf)
+	e.capture(kept)
+	if s, _ := e.session("ana", turn); s.ArchiveBytes != kept.ArchiveBytes {
+		t.Fatalf("the row restores to %d bytes, want the capture's %d", s.ArchiveBytes, kept.ArchiveBytes)
+	}
+	e.end(ending("ana", "chat:a", turn, "", completed))
+	e.capture(capturing("ana", "chat:b", newTurn(), 1, 1, 90, tight))
+	if s, _ := e.session("ana", turn); s.HasObject() || s.ArchiveBytes != 0 {
+		t.Errorf("the released row names object %v and restores to %d bytes, want neither", s.HasObject(),
+			s.ArchiveBytes)
 	}
 }

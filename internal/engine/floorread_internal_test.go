@@ -136,6 +136,13 @@ func (f *listingsHeld) NodeRetirements(ctx context.Context) ([]coord.NodeRetirem
 	return f.wrappedFleet.NodeRetirements(ctx)
 }
 
+func (f *listingsHeld) CaptureStamps(ctx context.Context) ([]coord.CaptureStampRecord, error) {
+	if err := f.hold(ctx); err != nil {
+		return nil, err
+	}
+	return f.wrappedFleet.CaptureStamps(ctx)
+}
+
 func (f *listingsHeld) Admissions(ctx context.Context) ([]coord.Admission, error) {
 	if err := f.hold(ctx); err != nil {
 		return nil, err

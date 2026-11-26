@@ -160,14 +160,14 @@ func TestTheSaveLedgerHoldOutlastsTheCollectorAndFitsTheUploadsBucket(t *testing
 
 // A SEAT'S SAVES STAY WITHIN ITS ALLOWANCE. Every save is counted against its
 // seat before its stamp, on the size its packed archive seals at with a
-// margin, in one ledger every node agrees on: two runs of one seat on two
-// nodes share it; an entry counts until its end, read on this node's clock;
-// the ledger holds at most its cap; a newer build's ledger is never
-// rewritten; an append asked again counts once; and a spool sealing past its
-// count is refused before its keep.
+// margin, and at its keep on what it uploads, in one ledger every node agrees
+// on: two runs of one seat on two nodes share it; an entry counts until its
+// end, read on this node's clock; the ledger holds at most its cap; a newer
+// build's ledger is never rewritten; an append asked again counts once; and a
+// spool sealing past its room is refused before its keep.
 //
 // Mutation: drop the room check, the end, the cap, the version check, the id
-// check or the spool's count check, or charge the save after its reservation.
+// check or the spool's room check, or charge the save after its reservation.
 func TestASeatsSavesStayWithinItsAllowance(t *testing.T) {
 	t.Parallel()
 	counted := countedFor(14)
@@ -180,11 +180,18 @@ func TestASeatsSavesStayWithinItsAllowance(t *testing.T) {
 			ledger := memory.NewFleet()
 			first, _, firstKeep := savingRig(t, ledger, newTakerStore())
 			second, _, secondKeep := savingRig(t, ledger, newTakerStore())
-			firstKeep.policy.SeatBudget, secondKeep.policy.SeatBudget = counted*3/2, counted*3/2
+			// AN UPLOAD OF OVER HALF THE COUNT, so the first save's entry, cut
+			// to what it uploads at its keep, still leaves the second no room.
+			const size = 128 << 10
+			charged := countedFor(size)
+			for _, rig := range []*coordRig{first, second} {
+				rig.runner.Session.Archive.Size, rig.runner.Session.Body = size, bytes.Repeat([]byte("x"), size)
+			}
+			firstKeep.policy.SeatBudget, secondKeep.policy.SeatBudget = charged*3/2, charged*3/2
 			first.launchKept(t, "t1")
 			second.launchKept(t, "t1")
-			if out := saveOf(first, "t1", longPast); out.class != saveLanded || out.counted != counted {
-				t.Fatalf("the first node's save came to %+v, want it landed and counted at %d", out, counted)
+			if out := saveOf(first, "t1", longPast); out.class != saveLanded || out.counted != charged {
+				t.Fatalf("the first node's save came to %+v, want it landed and counted at %d", out, charged)
 			}
 			out := saveOf(second, "t1", longPast)
 			if out.class != savePaced {
@@ -196,8 +203,9 @@ func TestASeatsSavesStayWithinItsAllowance(t *testing.T) {
 			if released := second.runner.Released(); len(released) != 1 {
 				t.Errorf("the second node released %v, want its one pack released", released)
 			}
-			if got := ledgerOf(t, ledger, "swe"); len(got.Entries) != 1 || got.Entries[0].Bytes != counted {
-				t.Errorf("the seat's ledger holds %+v, want the first save alone, at %d", got.Entries, counted)
+			if got := ledgerOf(t, ledger, "swe"); len(got.Entries) != 1 || got.Entries[0].Bytes != size {
+				t.Errorf("the seat's ledger holds %+v, want the first save alone, at what it uploaded, %d",
+					got.Entries, size)
 			}
 		})
 	})
@@ -268,16 +276,15 @@ func TestASeatsSavesStayWithinItsAllowance(t *testing.T) {
 			spy := &swapSpy{SaveLedgers: memory.NewFleet()}
 			rig, _, _ := savingRig(t, spy, newTakerStore())
 			rig.launchKept(t, "t1")
-			swaps := 0
+			var reserved []bool
 			spy.swapping = func(ctx context.Context) {
-				swaps++
-				if row := rig.getIn(ctx, "t1"); row.Capture != nil {
-					t.Errorf("the seat's ledger was charged with the run's row holding %+v, want nothing reserved "+
-						"yet", row.Capture)
-				}
+				reserved = append(reserved, rig.getIn(ctx, "t1").Capture != nil)
 			}
-			if out := saveOf(rig, "t1", nil); out.class != saveLanded || swaps != 1 {
-				t.Errorf("the save came to %+v after %d charges, want it landed after one", out, swaps)
+			// THE CHARGE, then its amend at the keep to what the save uploads.
+			if out := saveOf(rig, "t1", nil); out.class != saveLanded || len(reserved) != 2 || reserved[0] ||
+				!reserved[1] {
+				t.Errorf("the save came to %+v, its ledger swapped with a place reserved %v, want it charged "+
+					"before its reservation and amended after", out, reserved)
 			}
 		})
 	})
@@ -298,7 +305,7 @@ func TestASeatsSavesStayWithinItsAllowance(t *testing.T) {
 			}
 		})
 	})
-	t.Run("a spool sealed past its count is refused before its keep", func(t *testing.T) {
+	t.Run("a spool sealed past its room is refused before its keep", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
 			rig, _, keep := savingRig(t, memory.NewFleet(), newTakerStore())
@@ -312,8 +319,8 @@ func TestASeatsSavesStayWithinItsAllowance(t *testing.T) {
 				t.Errorf("uploaded %d sessions, want none", len(uploads))
 			}
 			if row := rig.get("t1"); row.Capture == nil || row.Capture.State != CaptureRefused ||
-				!strings.Contains(row.Capture.Reason, "save ledger counted") {
-				t.Errorf("the run's newest capture is %+v, want the save refused past its count", row.Capture)
+				!strings.Contains(row.Capture.Reason, "spools' room held") {
+				t.Errorf("the run's newest capture is %+v, want the save refused past its room", row.Capture)
 			}
 			if left := rig.spools(t); len(left) != 0 {
 				t.Errorf("left the spools %v, want none", left)
@@ -545,7 +552,7 @@ func TestADrainSaveIsNeverPacedAfterItsPack(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		ledger := memory.NewFleet()
-		rig, _, _ := savingRig(t, ledger, newTakerStore())
+		rig, _, keep := savingRig(t, ledger, newTakerStore())
 		rig.launchKept(t, "t1")
 		const size = 24 << 20
 		rig.runner.Session.Archive.Size = size
@@ -553,9 +560,9 @@ func TestADrainSaveIsNeverPacedAfterItsPack(t *testing.T) {
 		if out := saveOf(rig, "t1", drain); out.class != saveLanded || out.counted != countedFor(size) {
 			t.Errorf("the drain save came to %+v, want it landed and counted at %d", out, countedFor(size))
 		}
-		if got := ledgerOf(t, ledger, "swe"); len(got.Entries) != 1 || got.Entries[0].Bytes != countedFor(size) {
-			t.Errorf("the seat's ledger holds %+v, want the drain save charged at %d", got.Entries,
-				countedFor(size))
+		if got := ledgerOf(t, ledger, "swe"); len(got.Entries) != 1 ||
+			got.Entries[0].Bytes != int64(len(keep.uploads()[0])) {
+			t.Errorf("the seat's ledger holds %+v, want the drain save charged at what it uploaded", got.Entries)
 		}
 	})
 }
@@ -951,9 +958,13 @@ func TestASavesOutcomeLandsWithinItsLife(t *testing.T) {
 			t.Errorf("the save's place was asked %v after its instant (asked %t), want at once: nothing waits "+
 				"between the two", asked.Sub(kept.At), ok)
 		}
-		if life := to.Sub(kept.At); life > takeLife || life < takeLife-time.Minute {
-			t.Errorf("the save's outcome came %v after its instant, want within a minute of its life, %v",
-				life, takeLife)
+		// UNMADE, the keep's media steps (its count, its read again, and the
+		// amend, read again and record of a carry gone), which a save naming
+		// none never makes.
+		unmade := 2*keepReadRoom + 2*MediaReadersRoom + sessionRecordBudget
+		if life := to.Sub(kept.At); life > takeLife || life < takeLife-unmade-time.Minute {
+			t.Errorf("the save's outcome came %v after its instant, want within a minute and its unmade "+
+				"media steps, %v, of its life, %v", life, unmade, takeLife)
 		}
 	})
 }
