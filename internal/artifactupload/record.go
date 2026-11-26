@@ -103,12 +103,22 @@ type file struct {
 	Key         objstore.Key  `json:"key"`
 	Transport   transport     `json:"transport"`
 	State       fileState     `json:"state"`
+
+	// Offers counts the writes this file was offered to whose outcome the
+	// record cannot tell. While any is, a version or asset one landed may
+	// name the object, so nothing here deletes it ([run.owns]). A count, not
+	// a flag: a refusal establishes its own write's outcome alone, and takes
+	// back only its own offer.
+	Offers int `json:"offers,omitempty"`
 }
 
 // object is the object the file's row would name.
 func (f file) object() objstore.Object {
 	return objstore.Object{Key: f.Key, Hash: f.SHA256, Size: f.Size}
 }
+
+// offered reports a file a write of unknown outcome may have named.
+func (f file) offered() bool { return f.Offers > 0 }
 
 // held reports whether the file's bytes are reserved: anything but named or
 // deleted.
@@ -166,6 +176,24 @@ type record struct {
 // fileAt is the index of the upload's file at path, -1 for none.
 func (r *record) fileAt(path string) int {
 	return slices.IndexFunc(r.Files, func(f file) bool { return f.Path == path })
+}
+
+// keeps reports a record holding bytes an attempt of unknown outcome may have
+// named: kept ones, or a held file offered to it. Its hold is never released
+// early ([Service.releaseAbandoned]); it lapses.
+func (r *record) keeps() bool {
+	return r.Kept > 0 || slices.ContainsFunc(r.Files, func(f file) bool { return f.offered() && f.held() })
+}
+
+// offerStored counts one more write of unknown outcome against every file
+// whose bytes the record has stored: no version can name bytes that never
+// landed.
+func (r *record) offerStored() {
+	for i := range r.Files {
+		if r.Files[i].State == fileStored {
+			r.Files[i].Offers++
+		}
+	}
 }
 
 // heldBytes is every byte the record's files still hold, and the bytes it
