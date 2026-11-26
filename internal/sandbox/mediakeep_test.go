@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -496,17 +497,19 @@ func TestACarryTheLogFindsGoneIsRecordedAgainFresh(t *testing.T) {
 
 // A MEDIA RECORD IS REFUSED ONCE A READER FALLS BELOW, AND ONLY THEN: a node
 // that joined after the take and reads no capture naming media would retain it,
-// or ask it again short, and a take is not made again; so the policy is read
-// again before the record's first send, and a definite answer below refuses the
-// capture, saying why, with nothing sent. An unknown answer (the readers not
-// read in their room, the policy unread or keeping nothing now) is no evidence
-// of such a node, and the capture lands on its take's answer rather than lose
-// media already uploaded.
+// or ask it again short, and a take is not made again; so who reads it is read
+// again before the record, in a room of its own ([MediaReadersRoom]), and a
+// definite answer below refuses the capture as keep_failed, naming the node,
+// with nothing sent. An unknown answer (the readers not read in their room,
+// the policy unread) is no evidence of such a node, and a policy keeping
+// nothing now asks none: the capture lands on its take's answer rather than
+// lose media already uploaded.
 //
-// Mutation: read the policy at the take alone, or refuse an unknown answer of
-// any kind, and a case goes red.
+// Mutation: read the policy at the take alone or within the record's budget,
+// refuse an unknown answer of any kind, or stamp the refusal as the log's.
 func TestAMediaRecordIsRefusedOnceAReaderFallsBelow(t *testing.T) {
 	t.Parallel()
+	const below = "node seats-1 says capture stamp version 0, below the 1 a capture naming media is asked again at"
 	for name, tc := range map[string]struct {
 		unread string
 		err    error
@@ -527,49 +530,124 @@ func TestAMediaRecordIsRefusedOnceAReaderFallsBelow(t *testing.T) {
 				if spooled == nil || len(spooled.media) != 1 {
 					t.Fatalf("the take came to %+v, want its member spooled apart", taken)
 				}
+				var room time.Duration
 				keep.mu.Lock()
-				keep.policy.MediaApart, keep.policy.MediaUnread = false, tc.unread
+				keep.policy.MediaApart, keep.policy.MediaUnread, keep.policy.MediaBelow = false, tc.unread, ""
+				if tc.unread == "" && tc.err == nil && !tc.off {
+					keep.policy.MediaBelow = below
+				}
 				keep.policyErr, keep.policy.Keep = tc.err, !tc.off
+				keep.policyHook = func(ctx context.Context) {
+					if by, ok := ctx.Deadline(); ok {
+						room = time.Until(by)
+					}
+				}
 				keep.mu.Unlock()
 				kept := rig.coordinator.keepCapture(t.Context(), spooled)
-				captured := writes.captured()
+				captured, stamp := writes.captured(), rig.get("t1").Capture
 				switch {
+				case room != MediaReadersRoom:
+					t.Errorf("who reads the capture's media was read again in %s, want a room of its own, %s", room,
+						MediaReadersRoom)
 				case tc.lands && (kept == nil || kept.NotKept != "" || len(captured) != 1):
 					t.Errorf("the keep came to %+v after %d records, want the capture landed on its take's "+
 						"answer", kept, len(captured))
-				case !tc.lands && (kept == nil || !strings.Contains(kept.NotKept,
-					"no longer reads a capture naming media") || len(captured) != 0):
-					t.Errorf("the keep came to %+v after %d records, want the media record refused unsent", kept,
-						len(captured))
+				case !tc.lands && (kept == nil || !strings.Contains(kept.NotKept, below) || len(captured) != 0 ||
+					stamp == nil || stamp.Loss != executorkeep.LossKeepFailed):
+					t.Errorf("the keep came to %+v after %d records, stamped %+v, want the media record refused "+
+						"unsent as keep_failed, naming the node below", kept, len(captured), stamp)
 				}
 			})
 		})
 	}
 }
 
-// A STAMP A NEWER BUILD EXTENDED IS NOT ASKED AGAIN SHORT: a capture stamped
-// with keys this build does not know (a media list, to a build before it) is
-// one whose record it cannot rebuild, so its re-ask refuses it, naming the
-// keys, and sends nothing the log would land short.
+// A KEEP STAMPS ITS MEDIA COUNT ON ITS BEGUN STAMP FIRST: before its upload,
+// the capture's begun stamp says how many media objects its spool cut apart,
+// which a relaunch prices its wait by ([captureRestFor]), and its outcome
+// says the same.
 //
-// Mutation: ask it again whatever its stamp carries, and a short record is sent.
-func TestAStampANewerBuildExtendedIsNotAskedAgainShort(t *testing.T) {
+// Mutation: stamp no count, stamp it only with the outcome, or let the row
+// refuse a begun take's count as it grows.
+func TestAKeepStampsItsMediaCountOnItsBegunStampFirst(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
-		rig, writes, _ := keepingRig(t)
-		run := rig.launchKept(t, "t1")
-		stamp := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
-			State: CaptureUnresolved, Object: objstore.KeyAt(rig.now).String(), ObjectHash: strings.Repeat("a", 64),
-			ObjectSize: 14, Extra: map[string]json.RawMessage{"media_next": json.RawMessage(`[]`)}}
-		settled := rig.coordinator.settleCapture(t.Context(), run, stamp)
-		if settled.State != CaptureRefused || !strings.Contains(settled.Reason, "media_next") {
-			t.Errorf("the stamp settled %s, %q, want it refused naming the key it does not know", settled.State,
-				settled.Reason)
+		whole, body := mediaBody(t, "one", mediaPart+strings.Repeat("JVBERi0xLjQK", 6<<10), "two")
+		rig, _, keep := mediaRig(t, whole, body)
+		keep.gate = make(chan struct{})
+		spooled, _ := finalTake(t, rig, rig.launchKept(t, "t1"), rig.runner)
+		if spooled == nil || len(spooled.media) != 1 {
+			t.Fatalf("the take spooled %+v, want its member apart", spooled)
 		}
-		if captured := writes.captured(); len(captured) != 0 {
-			t.Errorf("sent %d records, want none", len(captured))
+		rig.coordinator.keepLater(t.Context(), spooled)
+		synctest.Wait()
+		if got := rig.get("t1").Capture; got == nil || got.State != CaptureBegun || got.MediaCount != 1 {
+			t.Errorf("before its upload the row holds %+v, want its begun stamp counting its one media object", got)
+		}
+		close(keep.gate)
+		rig.awaitKeeps()
+		if got := rig.get("t1").Capture; got == nil || got.State != CaptureLanded || got.MediaCount != 1 {
+			t.Errorf("the keep left %+v, want it landed counting its one media object", got)
 		}
 	})
+}
+
+// A STAMP A NEWER BUILD EXTENDED IS SETTLED OFF THE LOG: a capture stamped with
+// keys this build does not know (a media list, to a build before it) is one
+// whose record it cannot rebuild, so it is never asked again short, nor refused
+// unasked while its record may have landed. The turn's row on the executor log
+// decides: LANDED where it names the capture's place; REFUSED, naming the keys,
+// where it does not and the object is past the window the log records one
+// within; otherwise left unresolved for the build that wrote it.
+//
+// Mutation: refuse the stamp unasked, ask it again whatever it carries, or
+// settle it refused within the window, and a case goes red.
+func TestAStampANewerBuildExtendedIsSettledOffTheLog(t *testing.T) {
+	t.Parallel()
+	stale := objstore.RecordWithin + 2*objstore.AssumedClockSkew + time.Minute
+	for name, tc := range map[string]struct {
+		minted time.Duration
+		landed bool
+		want   CaptureState
+	}{
+		"its record landed":                    {landed: true, want: CaptureLanded},
+		"named nowhere, past the log's window": {minted: -stale, want: CaptureRefused},
+		"named nowhere, within the window":     {want: CaptureUnresolved},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, restore, kept := keptTurn(t)
+				writes := rig.coordinator.sessions.(*sessionWrites)
+				sent := len(writes.captured())
+				stamp := kept
+				stamp.CaptureSeq, stamp.State, stamp.At = kept.CaptureSeq+1, CaptureUnresolved, rig.now
+				stamp.Object = objstore.KeyAt(rig.now.Add(tc.minted)).String()
+				stamp.Extra = map[string]json.RawMessage{"media_next": json.RawMessage(`[]`)}
+				if took, err := rig.pending.StampCapture(t.Context(), "t1", stamp); err != nil || !took {
+					t.Fatalf("stamping the unanswered capture = %v, %v", took, err)
+				}
+				if tc.landed {
+					onTheLog(restore, landedRow(t, stamp))
+				}
+				settled := rig.coordinator.settleCapture(t.Context(), rig.get("t1"), stamp)
+				newest := rig.get("t1").Capture
+				switch {
+				case settled.State != tc.want || newest == nil || newest.State != tc.want:
+					t.Errorf("the stamp settled %s and the row holds %+v, want %s", settled.State, newest, tc.want)
+				case tc.want == CaptureLanded && (newest.ContentKey != "k2" || newest.ContextTokens != 42_000):
+					t.Errorf("the landed stamp holds %+v, want it written from the turn's row", newest)
+				case tc.want == CaptureRefused && (!strings.Contains(newest.Reason, "media_next") ||
+					newest.Loss != executorkeep.LossLogRefused):
+					t.Errorf("the refused stamp says %q (%s), want the key it does not know named", newest.Reason,
+						newest.Loss)
+				}
+				if captured := writes.captured(); len(captured) != sent {
+					t.Errorf("sent %d records, want none", len(captured)-sent)
+				}
+			})
+		})
+	}
 }
 
 // A CAPTURE SETTLED OFF THE LOG KEEPS ITS MEDIA: a keep whose taker stopped

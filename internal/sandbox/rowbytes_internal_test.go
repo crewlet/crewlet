@@ -713,7 +713,7 @@ func worstRow(t *testing.T) PendingRun {
 			Object: objstore.KeyAt(worstAt).String(), ObjectHash: plain(64), ObjectSize: math.MaxInt64,
 			ContentKey: plain(secrets.MaxStreamKeyIDBytes), Carried: true})
 	}
-	capture.ArchiveBytes = executorkeep.ArchiveMaxBytes
+	capture.ArchiveBytes, capture.MediaCount = executorkeep.ArchiveMaxBytes, executorkeep.MediaMaxCount
 	if err := capture.Bounded(); err != nil {
 		t.Fatalf("the worst capture is past what the row carries: %v", err)
 	}
@@ -1236,7 +1236,7 @@ func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	for _, section := range []**SessionCapture{&withoutMedia.Capture, &withoutMedia.Kept, &withoutMedia.Saving} {
 		if *section != nil {
 			bare := **section
-			bare.Media, bare.ArchiveBytes = nil, 0
+			bare.Media, bare.ArchiveBytes, bare.MediaCount = nil, 0, 0
 			*section = &bare
 		}
 	}

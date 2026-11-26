@@ -212,8 +212,8 @@ func TestAFinalTakeWithNoRoomIsNotKeptAndSaysWhy(t *testing.T) {
 
 // EVERY SPOOL GIVES ITS ROOM BACK WITH ITS FILE, and holds no more than its
 // sealed size while it waits for its keep: a final take kept, one a stopped
-// node drops, a save landed, a save whose seal passes what its seat's ledger
-// counted, a standby that takes the next place and one a stopped node drops.
+// node drops, a save landed, a save whose seal passes the room its archive was
+// counted at, a standby that takes the next place and one a stopped node drops.
 // No seal writes past the room its spool holds.
 //
 // Mutation: drop the release from a spool's removal, the shrink to its sealed
@@ -286,9 +286,12 @@ func TestEverySpoolGivesItsRoomBackWithItsFile(t *testing.T) {
 			rig.runner.mu.Lock()
 			rig.runner.Session = &FakeSession{Archive: archive, Body: bytes.Repeat([]byte("s"), int(2*counted))}
 			rig.runner.mu.Unlock()
+			// REFUSED AT THE ROOM, which holds its archive counted: the ledger
+			// is charged an estimate, less the media a keep carries, and
+			// amended to what the keep uploads, so the room is the bound.
 			out := saveOf(rig, "t1", nil)
-			if out.class != saveFailed || !strings.Contains(out.why, "save ledger counted") {
-				t.Fatalf("the save came to %+v, want it refused past what its seat's ledger counted", out)
+			if out.class != saveFailed || !strings.Contains(out.why, "its spools' room held for it") {
+				t.Fatalf("the save came to %+v, want it refused past the room its archive was counted at", out)
 			}
 			for _, wrote := range keep.seals() {
 				if wrote > counted {

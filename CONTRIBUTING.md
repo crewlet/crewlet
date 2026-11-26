@@ -1967,7 +1967,10 @@ older build:
     whole or refused;
   - an apply refuses only a revision that cannot run;
   - a bump of the seat-host lease protocol makes the newer node refuse to claim
-    beside a live lower lease.
+    beside a live lower lease;
+  - a run's capture stamp holding keys this build cannot ask its record again
+    with is settled off the turn's row on the executor log, never asked short
+    nor refused unasked.
 
   That contract runs FORWARD, to the builds after this one, and never obliges
   this tree to read what an earlier unreleased build wrote.

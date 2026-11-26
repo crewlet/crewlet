@@ -50,13 +50,15 @@ func TestTheScrubWaitIsDerivedFromTheArchivesBound(t *testing.T) {
 // A RELAUNCH'S WAIT FOR A CAPTURE COUNTS WHAT ITS SIZE STILL NEEDS once its
 // place is reserved, each step at its floor: the scrub's two readings of its
 // archive and slowest plaintext, the digest and one keep of the sealed session
-// the archive may become. Each is the docs' figure, to the second.
+// the archive may become, a pace more for each media object its spool cut
+// apart. Each is the docs' figure, to the second.
 //
-// Mutation: drop a term, read the archive once, or size the keep at the bound.
+// Mutation: drop a term, read the archive once, size the keep at the bound, or
+// price its media as one object.
 func TestARelaunchsWaitForACaptureCountsWhatItsSizeStillNeeds(t *testing.T) {
 	t.Parallel()
 	keep := func(paces time.Duration) time.Duration {
-		return 3*sessionRecordBudget + paces*objstore.MiBPace + sessionRecordBudget
+		return 4*sessionRecordBudget + paces*objstore.MiBPace + sessionRecordBudget + sessionRecordBudget
 	}
 	bound := executorkeep.SessionMaxBytes / objstore.MiB
 	for _, c := range []struct {
@@ -64,12 +66,14 @@ func TestARelaunchsWaitForACaptureCountsWhatItsSizeStillNeeds(t *testing.T) {
 		got, want time.Duration
 		docs      string
 	}{
-		{"half a mebibyte", captureRestFor(512 << 10),
-			2*time.Second + scrubPlainSlowest + discardGrace + keep(1), "6m5s"},
-		{"at the bound", captureRestFor(executorkeep.SessionMaxBytes),
+		{"half a mebibyte", captureRestFor(512<<10, 0),
+			2*time.Second + scrubPlainSlowest + discardGrace + keep(1), "7m5s"},
+		{"at the bound", captureRestFor(executorkeep.SessionMaxBytes, 0),
 			2*time.Duration(bound)*time.Second + scrubPlainSlowest + discardGrace + keep(time.Duration(bound)+1),
-			"31m39s"},
-		{"a keep at the bound", keepBudgetFor(executorkeep.SealedMaxBytes), SessionKeepBudget, "26m30s"},
+			"32m39s"},
+		{"half a mebibyte cutting three media objects apart", captureRestFor(512<<10, 3),
+			2*time.Second + scrubPlainSlowest + discardGrace + keep(1+3), "8m35s"},
+		{"a keep at the bound", keepBudgetFor(executorkeep.SealedMaxBytes), SessionKeepBudget, "27m30s"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s: %s, want its terms, %s", c.name, c.got, c.want)
@@ -95,6 +99,10 @@ func TestARelaunchWaitsAsLongAsTheLongestKeepItDependsOnNeeds(t *testing.T) {
 		return &SessionCapture{LaunchSeq: launch, CaptureSeq: place, Launch: fmt.Sprintf("launch-%d", launch),
 			State: CaptureBegun, At: now, ArchiveSize: size}
 	}
+	counted := func(c *SessionCapture, media int) *SessionCapture {
+		c.MediaCount = media
+		return c
+	}
 	kept := &SessionCapture{LaunchSeq: 1, CaptureSeq: 1, Launch: "launch-1", State: CaptureLanded, At: now}
 	small, large := int64(512<<10), int64(executorkeep.SessionMaxBytes)
 	for _, c := range []struct {
@@ -104,21 +112,23 @@ func TestARelaunchWaitsAsLongAsTheLongestKeepItDependsOnNeeds(t *testing.T) {
 	}{
 		{"nothing being kept", PendingRun{LaunchSeq: 2, Kept: kept}, relaunchAskWait},
 		{"the followed job's capture", PendingRun{LaunchSeq: 2, Kept: kept, Capture: begun(2, 2, small)},
-			captureRestFor(small)},
+			captureRestFor(small, 0)},
+		{"the followed job's capture cutting media apart", PendingRun{LaunchSeq: 2, Kept: kept,
+			Capture: counted(begun(2, 2, small), 5)}, captureRestFor(small, 5)},
 		{"its save beside a smaller final take", PendingRun{LaunchSeq: 2, Kept: kept, Capture: begun(2, 3, small),
-			Saving: begun(2, 2, large)}, captureRestFor(large)},
+			Saving: begun(2, 2, large)}, captureRestFor(large, 0)},
 		{"an earlier job's capture beside one the turn kept",
 			PendingRun{LaunchSeq: 3, Kept: kept, Capture: begun(2, 2, large)}, relaunchAskWait},
 		{"an earlier job's capture, the turn having kept none",
-			PendingRun{LaunchSeq: 3, Capture: begun(2, 1, large)}, captureRestFor(large)},
+			PendingRun{LaunchSeq: 3, Capture: begun(2, 1, large)}, captureRestFor(large, 0)},
 	} {
 		if got := coordinator.relaunchWaitOf(c.run, now); got != c.want {
 			t.Errorf("%s: the relaunch waits %s, want %s", c.name, got, c.want)
 		}
 	}
-	if captureRestFor(0) <= relaunchAskWait {
+	if captureRestFor(0, 0) <= relaunchAskWait {
 		t.Errorf("a capture of no bytes is waited %s, within an ask's %s: an ask's wait would cut it short",
-			captureRestFor(0), relaunchAskWait)
+			captureRestFor(0, 0), relaunchAskWait)
 	}
 }
 
