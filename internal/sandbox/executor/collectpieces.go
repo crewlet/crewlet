@@ -28,8 +28,8 @@ const collectHeldMultiple = 5
 
 // collectionWeight is what a collection of pieces holding sizes bytes holds of
 // the node's answer budget: [collectHeldMultiple] times them, at least the
-// fixed per-read buffers ([baseTierReadBytes]) and at most what one collection
-// can hold ([sandbox.BoxReadHeldBytes]).
+// fixed per-read buffers and summary ([baseTierReadBytes]) and at most what one
+// collection can hold ([sandbox.BoxReadHeldBytes]).
 func collectionWeight(sizes int64) int64 {
 	return min(max(collectHeldMultiple*sizes, baseTierReadBytes), sandbox.BoxReadHeldBytes)
 }

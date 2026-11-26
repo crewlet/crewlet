@@ -1,0 +1,5 @@
+sherpa-onnx-online-punct-en-2024-08-06: the English punctuation and casing
+model of frankyoujian/Edge-Punct-Casing (Apache License 2.0), as the
+sherpa-onnx release packages it. Its int8 model and BPE vocabulary are fetched
+from that release or baked into the container image, not linked into the
+binary.

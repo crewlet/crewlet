@@ -56,13 +56,3 @@ test("a pick's key stays on one line beside a title too long for the row", () =>
     host.getBoundingClientRect().right,
   );
 });
-
-// A FIELD PAST ITS CAP SCROLLS, AND ITS WORDS KEEP THEIR WIDTH. Without a
-// gutter the bar took its width from the words as it came, so a long comment
-// re-wrapped the moment it reached sixteen lines. Mutation: drop the gutter.
-test.each(["comment", "reply"])("a %s field keeps its bar's gutter", (mode) => {
-  host = document.createElement("div");
-  host.innerHTML = `<div class="composer" data-mode="${mode}"><div class="composer-field"><textarea class="crewlet-textarea"></textarea></div></div>`;
-  document.body.append(host);
-  expect(getComputedStyle(host.querySelector("textarea")!).scrollbarGutter).toBe("stable");
-});

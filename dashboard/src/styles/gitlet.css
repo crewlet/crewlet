@@ -1361,26 +1361,18 @@
   background: var(--color-surface-subtle);
 }
 
-/* A REPLY: one line beside its press, growing as it is written. In a
-   thread's foot it takes the row's room beside Resolve; under a finding it
-   is a row of the card's column. */
+/* A REPLY: one line with its press at the end, growing as it is written,
+   its refusal under it. In a thread's foot it takes the row's room beside
+   Resolve; under a finding it is a row of the card's column. */
 .code-reply {
   display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-2);
+  flex-direction: column;
+  gap: var(--spacing-1);
   min-width: 0;
 }
 
 .code-thread__foot > .code-reply {
   flex: 1 1 18rem;
-}
-
-.code-reply__field {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
 }
 
 /* A COMMENT OF THE READER'S OWN, at the foot, its face on the spine. */

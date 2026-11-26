@@ -30,13 +30,15 @@ import {
   Button,
   Callout,
   Checkbox,
+  Composer as KitComposer,
   FormField,
   IconButton,
   Input,
+  MentionMenu,
   Select,
   Text,
-  Textarea,
-  useSendOnEnter,
+  mentionQuery,
+  type MentionOption,
   type SelectOption,
 } from "@crewlethq/ui";
 import { Modal } from "./Modal.tsx";
@@ -52,6 +54,7 @@ import {
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useAct } from "~/lib/useAct.ts";
+import { useDictation } from "~/lib/dictation/source.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -106,6 +109,7 @@ export const Composer = forwardRef<
 >(function Composer({ item, label, mode, to, index, placeholder: said, onSent }, ref) {
   const named = label || item;
   const write = useAct("comment_on_work_item");
+  const dictation = useDictation();
   const [text, setText] = useState("");
   const [picker, setPicker] = useState<"link" | "page" | "ask" | null>(null);
   const field = useRef<HTMLTextAreaElement | null>(null);
@@ -114,23 +118,34 @@ export const Composer = forwardRef<
   // THE `@` BEING TYPED, from the caret back to the sign.
   const [caret, setCaret] = useState(0);
   const [active, setActive] = useState(0);
-  // ESCAPE PUTS THE PICKER AWAY until the text changes again.
+  // ESCAPE PUTS THE LIST AWAY until the text changes again.
   const [dismissed, setDismissed] = useState(false);
-  const typing = /(?:^|\s)@([\w.-]*)$/.exec(text.slice(0, caret));
-  const query = typing && !dismissed ? typing[1]!.toLowerCase() : null;
-  const choices = useMemo(() => {
+  const typing = mentionQuery(text, caret);
+  const query = typing?.trigger === "@" && !dismissed ? typing : null;
+  const choices = useMemo<MentionOption[]>(() => {
     if (query === null) return [];
+    const q = query.query.toLowerCase();
     return index.seats
-      .filter((s) => s.handle.toLowerCase().includes(query) || s.name.toLowerCase().includes(query))
-      .slice(0, MENTION_CHOICES);
+      .filter((s) => s.handle.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))
+      .slice(0, MENTION_CHOICES)
+      .map((seat) => ({
+        id: seat.handle,
+        insert: `@${seat.handle}`,
+        label: seat.name,
+        detail: handleLabel(seat.handle),
+        mark: <ChoiceFace seat={seat} />,
+      }));
   }, [index.seats, query]);
   const listId = `mention-${item}`;
+  const shown = Math.min(active, Math.max(0, choices.length - 1));
 
-  const pick = (handle: string) => {
-    const before = text.slice(0, caret).replace(/@[\w.-]*$/, `@${handle} `);
+  const pick = (option: MentionOption) => {
+    if (!query) return;
+    const before = `${text.slice(0, query.start)}${option.insert} `;
     const next = before + text.slice(caret);
     setText(next);
     setCaret(before.length);
+    setActive(0);
     requestAnimationFrame(() => {
       field.current?.focus();
       field.current?.setSelectionRange(before.length, before.length);
@@ -163,132 +178,111 @@ export const Composer = forwardRef<
       ? `Reply to ${to}… @mention to bring someone in`
       : `Leave a comment… @mention to bring someone in`);
   const fieldLabel = mode.kind === "reply" ? `Reply to ${to}` : `Comment on ${named}`;
-  // THE KIT'S SEND KEYS, as in every message box: Enter sends, Shift+Enter
-  // is a new line. An open `@` list takes its Enter first.
-  const keys = useSendOnEnter({ onSend: () => void send(), canSend: blocked === undefined });
 
   return (
-    <div className="composer" data-mode={mode.kind}>
-      <div className="composer-field">
-        <Textarea
-          ref={field}
-          rows={mode.kind === "comment" ? 1 : 2}
-          value={text}
-          aria-label={fieldLabel}
-          placeholder={placeholder}
-          // A TEXTBOX THAT OWNS A LIST, never a combobox: ARIA in HTML allows
-          // no combobox role on a textarea (axe aria-allowed-role), and a
-          // textbox points at its @ list with these three, as Chatlet's
-          // message box does.
-          aria-autocomplete="list"
-          aria-controls={choices.length > 0 ? listId : undefined}
-          aria-activedescendant={choices.length > 0 ? `${listId}-${active}` : undefined}
-          aria-describedby={keys.describedBy}
-          onChange={(event) => {
-            setText(event.target.value);
-            setCaret(event.target.selectionStart ?? event.target.value.length);
-            setActive(0);
-            setDismissed(false);
-          }}
-          onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
-          onKeyDown={(event) => {
-            if (choices.length > 0) {
-              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                event.preventDefault();
-                const step = event.key === "ArrowDown" ? 1 : -1;
-                setActive((i) => (i + step + choices.length) % choices.length);
-                return;
-              }
-              if (event.key === "Enter" || event.key === "Tab") {
-                event.preventDefault();
-                pick(choices[active]!.handle);
-                return;
-              }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                event.stopPropagation();
-                setDismissed(true);
-                return;
-              }
-            }
-            keys.onKeyDown(event);
-          }}
+    <div className="task-composer">
+      {choices.length > 0 && (
+        <MentionMenu
+          id={listId}
+          label="Mention somebody"
+          options={choices}
+          active={shown}
+          onPick={pick}
+          onHover={setActive}
         />
-        {keys.description}
-        {choices.length > 0 && (
-          <ul
-            className="composer-mentions"
-            id={listId}
-            role="listbox"
-            aria-label="Mention somebody"
-          >
-            {choices.map((seat, i) => (
-              <li
-                key={seat.handle}
-                id={`${listId}-${i}`}
-                role="option"
-                aria-selected={i === active}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  pick(seat.handle);
-                }}
+      )}
+      <KitComposer
+        ref={field}
+        label={fieldLabel}
+        placeholder={placeholder}
+        value={text}
+        // THE KIT'S SEND KEYS, as in every message box: Enter sends, Shift+Enter
+        // is a new line. An open `@` list takes its Enter first.
+        onSubmit={() => void send()}
+        canSubmit={blocked === undefined}
+        sendHint={false}
+        dictation={dictation}
+        // A TEXTBOX THAT OWNS A LIST, never a combobox: ARIA in HTML allows
+        // no combobox role on a textarea (axe aria-allowed-role), and a
+        // textbox points at its @ list with these three, as Chatlet's
+        // message box does.
+        aria-autocomplete="list"
+        aria-controls={choices.length > 0 ? listId : undefined}
+        aria-activedescendant={choices.length > 0 ? `${listId}-${shown}` : undefined}
+        onChange={(next) => {
+          setText(next);
+          setCaret(field.current?.selectionStart ?? next.length);
+          setActive(0);
+          setDismissed(false);
+        }}
+        onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
+        onKeyDown={(event) => {
+          if (choices.length === 0) return;
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            const step = event.key === "ArrowDown" ? 1 : -1;
+            setActive((i) => (i + step + choices.length) % choices.length);
+          } else if (event.key === "Enter" || event.key === "Tab") {
+            event.preventDefault();
+            pick(choices[shown]!);
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            setDismissed(true);
+          }
+        }}
+        tools={
+          <>
+            <IconButton
+              size="sm"
+              variant="ghost"
+              label="Attach a page"
+              icon={<PaperclipGlyph size="sm" />}
+              onClick={() => setPicker("page")}
+            />
+            <IconButton
+              size="sm"
+              variant="ghost"
+              label="Link a task"
+              icon={<HashGlyph size="sm" />}
+              onClick={() => setPicker("link")}
+            />
+            {mode.kind === "comment" && (
+              // AN ASK IS A COMMENT PUT TO ONE SEAT, so it starts from what was
+              // written here: the dialog adds who owes the answer and, if they
+              // are to choose, between what.
+              <WriteButton
+                write={write}
+                size="small"
+                variant="ghost"
+                leadingIcon={<CircleQuestionMarkGlyph size="sm" />}
+                showRefusal={false}
+                blocked={text.trim() ? undefined : "Write the question first."}
+                onPress={() => setPicker("ask")}
               >
-                <ChoiceFace seat={seat} />
-                <strong>{seat.name}</strong>
-                <span className="t-caption">{handleLabel(seat.handle)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-      <div className="composer-foot">
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label="Attach a page"
-          icon={<PaperclipGlyph size="sm" />}
-          onClick={() => setPicker("page")}
-        />
-        <IconButton
-          size="sm"
-          variant="ghost"
-          label="Link a task"
-          icon={<HashGlyph size="sm" />}
-          onClick={() => setPicker("link")}
-        />
-        {mode.kind === "comment" && (
-          // AN ASK IS A COMMENT PUT TO ONE SEAT, so it starts from what was
-          // written here: the dialog adds who owes the answer and, if they
-          // are to choose, between what.
+                Ask…
+              </WriteButton>
+            )}
+          </>
+        }
+        actions={
           <WriteButton
             write={write}
             size="small"
-            variant="ghost"
-            leadingIcon={<CircleQuestionMarkGlyph size="sm" />}
+            // THE TASK PAGE'S COMMENT IS SECONDARY, as the artboard draws it: on
+            // a page whose every other control is a field, a filled button under
+            // the thread outshouts the work. The Inbox's reply is the pane's one
+            // action and keeps the fill.
+            variant={mode.kind === "comment" ? "secondary" : "primary"}
+            leadingIcon={<SendGlyph size="sm" />}
             showRefusal={false}
-            blocked={text.trim() ? undefined : "Write the question first."}
-            onPress={() => setPicker("ask")}
+            blocked={blocked}
+            onPress={() => void send()}
           >
-            Ask…
+            {mode.kind === "comment" ? "Comment" : "Send"}
           </WriteButton>
-        )}
-        <span className="spacer" />
-        <WriteButton
-          write={write}
-          size="small"
-          // THE TASK PAGE'S COMMENT IS SECONDARY, as the artboard draws it: on
-          // a page whose every other control is a field, a filled button under
-          // the thread outshouts the work. The Inbox's reply is the pane's one
-          // action and keeps the fill.
-          variant={mode.kind === "comment" ? "secondary" : "primary"}
-          leadingIcon={<SendGlyph size="sm" />}
-          showRefusal={false}
-          blocked={blocked}
-          onPress={() => void send()}
-        >
-          {mode.kind === "comment" ? "Comment" : "Send"}
-        </WriteButton>
-      </div>
+        }
+      />
       <RefusalNote write={write} />
       {picker === "link" && (
         <LinkTaskDialog item={item} named={named} onClose={() => setPicker(null)} />
@@ -361,6 +355,7 @@ function AskDialog({
   write: ReturnType<typeof useAct<"comment_on_work_item">>;
   onClose: (sent: boolean) => void;
 }) {
+  const dictation = useDictation();
   const [who, setWho] = useState("");
   const [choose, setChoose] = useState(false);
   // THE FIRST LINE WHOLE. It was sliced to 200 characters — not the
@@ -474,12 +469,18 @@ function AskDialog({
               helper={questionBudget.over ? undefined : questionBudget.line}
               error={questionBudget.over ? questionBudget.line : undefined}
             >
-              <Input
-                id="composer-ask-q"
-                value={question}
-                error={questionBudget.over}
-                onChange={(event) => setQuestion(event.target.value)}
-              />
+              {(field) => (
+                <KitComposer
+                  singleLine
+                  dictation={dictation}
+                  id={field.id}
+                  aria-describedby={field.describedBy}
+                  aria-invalid={field.invalid || undefined}
+                  label="What is being decided"
+                  value={question}
+                  onChange={setQuestion}
+                />
+              )}
             </FormField>
             <fieldset className="col gap-2 composer-ask-fieldset">
               <legend className="t-label">Options. Mark the one you recommend.</legend>

@@ -20,15 +20,20 @@ type qwenSummaryCapture struct {
 	read       *summaryRead
 }
 
-// newQwenSummaryCapture is a capture of the newest summary into read.
+// newQwenSummaryCapture is a capture of the newest summary into read, its
+// words counting toward read's claim ([summaryClaim]).
 func newQwenSummaryCapture(read *summaryRead) *qwenSummaryCapture {
 	s := &qwenSummaryCapture{read: read}
+	s.compaction.claim = read.claim
 	s.compaction.reset(summaryReadMaxBytes)
 	return s
 }
 
-// summarize makes c read the newest summary on its walk.
-func (c *qwenCounting) summarize() { c.sum = newQwenSummaryCapture(new(summaryRead)) }
+// summarize makes c read the newest summary on its walk, its words past
+// [summaryBaseBytes] taking the read's large slot through claim.
+func (c *qwenCounting) summarize(claim *summaryClaim) {
+	c.sum = newQwenSummaryCapture(&summaryRead{claim: claim})
+}
 
 // summary is the newest summary the walk read, the walk ended with err:
 // unread where it did not read the file to its end.
@@ -72,6 +77,9 @@ func (s *qwenSummaryCapture) noteLine(line noteLine, l *qwenNoteLine) {
 // take makes the compaction record's summary the newest, or one that cannot
 // be said: a payload of no shape, or a summary past the bound.
 func (s *qwenSummaryCapture) take() {
+	if s.read.waitFailed(s.compaction.claim) {
+		return
+	}
 	switch words, shaped, past := s.compaction.words(); {
 	case !shaped:
 		s.read.unshaped(qwenCompactionUnread)

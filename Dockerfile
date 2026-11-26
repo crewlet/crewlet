@@ -93,6 +93,17 @@ RUN set -eu; \
 COPY scripts/git-pin.env scripts/git.sh /src/scripts/
 RUN GIT_PIN_TARGET_ARCH="$TARGETARCH" GIT_PIN_PREFIX=/usr/local DESTDIR=/out /src/scripts/git.sh node
 
+# THE DICTATION RECOGNIZER, the target's library and the model, baked in so a
+# pod needs no egress for it. The target's own binary fetches and verifies both
+# (`crewlet speech prepare`, pinned in internal/speech): a context holds no other.
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS speech
+ARG TARGETPLATFORM
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY ${TARGETPLATFORM}/crewlet /usr/local/bin/crewlet
+RUN crewlet speech prepare -dir /out/usr/local/share/crewlet/speech
+
 FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 # ca-certificates: every vendor call is HTTPS, and a container with no trust
@@ -169,6 +180,8 @@ WORKDIR /home/crewlet
 # path changed here is changed there.
 ARG TARGETPLATFORM
 COPY ${TARGETPLATFORM}/crewlet /usr/local/bin/crewlet
+# Beside the binary, where internal/speech looks before downloading anything.
+COPY --from=speech /out/usr/local/share/crewlet/ /usr/local/share/crewlet/
 
 # The license, its notice and the third-party notices, where Debian keeps a
 # package's: the image redistributes the binary and everything it links, so it

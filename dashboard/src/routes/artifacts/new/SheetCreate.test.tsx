@@ -9,6 +9,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { TestClient } from "~/test/client.tsx";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { keyedWrite, type KeyedAnswer, type KeyedRequest } from "~/lib/keyedWrite.ts";
 import { SheetCreate } from "./SheetCreate.tsx";
 import { draftField, openFrame, setDraft } from "../draftTesting.ts";
@@ -74,13 +75,15 @@ function mount(hash = "#/artifacts/new/sheet") {
   // A CLIENT TO STAND IN: the page reads the folder tree for its Save in.
   return render(
     <TestClient>
-      <Router>
-        <LayerHost>
-          <ToastProvider>
-            <SheetCreate />
-          </ToastProvider>
-        </LayerHost>
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <LayerHost>
+            <ToastProvider>
+              <SheetCreate />
+            </ToastProvider>
+          </LayerHost>
+        </Router>
+      </ViewerProvider>
     </TestClient>,
   );
 }
