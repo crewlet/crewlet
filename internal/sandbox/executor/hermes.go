@@ -121,16 +121,16 @@ at %[2]s || { echo "crewlet: this box runs Hermes Agent $n; the hermes runner dr
 
 // hermesScript is a Hermes run's script ([Hermes.Command]): the end protocol
 // (end.go), whose end request stops the gateway before the client; the
-// release, refused below [hermesFloor]; the plugin and the run's skills
-// installed ([hermesInstall]); the session settled and the overlay installed
+// release, refused below [hermesFloor]; the plugin and skills installed
+// ([hermesInstall]); any gateway an earlier run left stopped, so the run's
+// own starts with its environment; the checkouts handed in the run's system
+// prompt ([hermesCheckouts]); the session settled and the overlay installed
 // ([hermesSessionGate]); the run refused where the box would switch its own
-// server or plugin off ([hermesGuard]); the session recorded; any gateway an
-// earlier run left stopped, so the run's own starts with the run's
-// environment; the client
-// under the end protocol ([launchHarness]), once more after a discard where
-// Hermes asks for one ([hermesDiscard]); the gateway stopped; the session
-// indexed and its launch kept; the plugin's record and the round cap's line
-// added to the stream; then the session packed ([hermesFinish]).
+// server, plugin or hook off ([hermesGuard]); the session recorded; the client
+// under the end protocol ([launchHarness]), again after a discard Hermes asks
+// for ([hermesDiscard]); the gateway stopped, the checkouts' copies removed
+// and their skips said; the session indexed, the plugin's record and the
+// round cap's line added to the stream; the session packed ([hermesFinish]).
 func hermesScript(req sandbox.RunRequest, session Session, paths Paths, times hermesTimes) string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -146,13 +146,24 @@ func hermesScript(req sandbox.RunRequest, session Session, paths Paths, times he
 	b.WriteString(hermesInstall(req, paths))
 	line(`st= code=1`)
 	b.WriteString(hermesFinish(paths))
-	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; endgw; end "$harness"; harness=; finish; exit "$1"; }`)
-	line(`trap 'endgw' EXIT`)
+	// THE CHECKOUTS' COPIES OUT OF THE HOME'S SKILLS once the gateway, where
+	// their firings run, has stopped, and what those firings left out said
+	// ([hermesCheckoutHome]), each step whatever came of the other; a run
+	// killed outright leaves them to the next run's clear ([homeKeeper]).
+	home := hermesLaunchHome(paths, req.Model)
+	line(`hput() { %s; }`, everyStep(home.restore(), home.saySkipped()))
+	line(`quit() { trap '' USR1; trap - EXIT TERM INT HUP; endgw; end "$harness"; harness=; hput; finish; exit "$1"; }`)
+	line(`trap 'endgw; hput' EXIT`)
 	line(`trap 'quit 143' TERM; trap 'quit 130' INT; trap 'quit 129' HUP`)
 	// NO GATEWAY WHILE THE STORE IS RESTORED OR RENEWED, nor one an earlier run
 	// left serving the next client with its own environment and plugin
 	// settings (measured on 0.23.3).
 	line(`endgw`)
+	// THE CHECKOUTS BELOW THE START DIRECTORY, as Hermes's own code reads them,
+	// in the system prompt the session gate renews and the client launches
+	// with ([hermesCheckouts]).
+	b.WriteString(home.gate())
+	b.WriteString(hermesSystemWithCheckouts(paths))
 	b.WriteString(hermesSessionGate(req, session, paths, req.FreshWiring != nil))
 	b.WriteString(hermesGuard(req))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`, q(paths.SessionRecord()))
@@ -162,7 +173,7 @@ func hermesScript(req sandbox.RunRequest, session Session, paths Paths, times he
 	line(`cat > %s || { echo 'crewlet: the brief could not be kept for Hermes, so the run does not start' >&2; exit 1; }`,
 		q(paths.HermesBrief()))
 	line(`rm -f %s %s`, q(paths.HermesRecord()), q(paths.HermesStderr()))
-	line(`sp=; [ ! -s %s ] || sp=$(cat %s)`, q(paths.System()), q(paths.System()))
+	line(`sp=; [ ! -s %s ] || sp=$(cat %s)`, q(paths.HermesSystem()), q(paths.HermesSystem()))
 	// WHERE THIS LAUNCH'S ROWS BEGIN in the store, for its notes' confirm
 	// ([Hermes.notesHeld]); none written where it cannot be read.
 	line(`rm -f %[1]s; rs=$(hcarry top %[2]s); case "$rs" in 'crewlet-carry ok '[0-9]*) printf '%%s %%s\n' "$sid" "${rs#crewlet-carry ok }" > %[1]s;; esac`,
@@ -171,7 +182,7 @@ func hermesScript(req sandbox.RunRequest, session Session, paths Paths, times he
 	launch := hermesLaunch(req, paths)
 	b.WriteString(launchHarness(launch, paths))
 	b.WriteString(hermesDiscard(paths, launch))
-	line(`endgw`)
+	line(`endgw; hput`)
 	line(`st=$(sed -n 's/^Session: *\([A-Za-z0-9_-]*\)$/\1/p' %s 2> /dev/null | head -n 1)`, q(paths.HermesStderr()))
 	b.WriteString(hermesIndex(paths))
 	line(`[ ! -s %s ] || sed 's/^/{"type":"%s","line":/; s/$/}/' %s`, q(paths.HermesRecord()), hermesRequestEvent,
@@ -352,12 +363,14 @@ func (Hermes) Parse(stdout []byte) sandbox.Result { return decodeAll(&hermesEven
 // artifactFiles is what a Hermes run leaves in its box beside the session it
 // continues: the overlays with their tokens and the managed .env beside them,
 // the plugin's settings and record, the routes, the kept brief, the client's
-// error stream and the carry script.
+// error stream, the carry script, and the note helper with its launch config
+// and the system prompt with the checkouts' sections.
 func (Hermes) artifactFiles(p Paths) []string {
 	return []string{p.HermesOverlay(), p.HermesManagedEnv(), p.HermesOverlayStaged(), p.HermesOverlayFresh(), p.HermesPluginConfig(),
 		p.HermesRecord(), p.HermesNotesURL(), p.HermesNotesURLFresh(), p.HermesSkillsURL(),
 		p.HermesSkillsURLFresh(), p.HermesBrief(), p.HermesStderr(), p.HermesCarry(), p.HermesCarryErrors(),
-		p.HermesRecordRead(), p.HermesRunStart()}
+		p.HermesRecordRead(), p.HermesRunStart(), p.HermesNoteHelper(), p.HermesCheckoutLaunch(),
+		p.HermesCheckoutSections(), p.HermesSystem()}
 }
 
 // artifactDirs is the staging directory a Hermes run installs its plugin and

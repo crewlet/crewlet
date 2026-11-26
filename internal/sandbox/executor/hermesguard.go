@@ -11,16 +11,17 @@ import (
 )
 
 // A BOX CANNOT SWITCH A HERMES RUN'S OWN SERVER OR PLUGIN OFF UNSEEN. The
-// run's overlay states its servers' leaves ([hermesOwnLeaves]); the rest is
-// judged before Hermes starts by Hermes's own loader and gates (the carry
-// script's `guard`), measured on 0.23.3: a sticky `active_profile`;
-// HERMES_SAFE_MODE or HERMES_IGNORE_USER_CONFIG in the environment or a
-// `.env`; `agent.disabled_toolsets` naming the server; a `platform_toolsets.cli`
-// leaving it out; a header beside the run's own; an `env` Hermes finds
-// suspicious or a malformed `tool_costs`; the plugin gated off; and a box
-// file's own switch of the bridge the overlay would state back (`enabled:
-// false`, `disabled: true`, a `tools` list leaving out or hiding its tools).
-// Entries naming another server, toolset or plugin pass.
+// overlay states its servers' leaves ([hermesOwnLeaves]); Hermes's own loader
+// and gates judge the rest before it starts (the carry script's `guard`,
+// measured on 0.23.3): a sticky `active_profile`; HERMES_SAFE_MODE or
+// HERMES_IGNORE_USER_CONFIG set; a disabled toolset or a cli toolset list
+// leaving the server out; a header beside the run's own; an `env` Hermes
+// finds suspicious or a malformed `tool_costs`; the plugin gated off, which
+// holds the run's record, notes and skill loads; a box file's own switch the
+// overlay would state back (`enabled: false`, `disabled: true`, a `tools`
+// list hiding its tools). What only cuts the nested hand short refuses
+// nothing ([hermesGateCommand]). Entries naming another server, toolset or
+// plugin pass.
 
 // hermesGuarded is the servers the guard judges: Crewlet's own, the run's and
 // a fresh session's ([crewletServers]), sorted.

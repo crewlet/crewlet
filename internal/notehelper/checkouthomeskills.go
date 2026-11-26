@@ -36,8 +36,9 @@ var listingRules = map[string]listingRule{listedGrok: grokListing, listedKimi: k
 
 // homeHolds is why a copy named name may not be made, "" where it may: by
 // the spec's listing rule, the home's skills or a copy this firing made
-// take its key ([homeNames]); and, whatever the rule, the run's skills hold
-// an entry of that name ([skillsHold]), checked after the rule's so a copy
+// take its key ([homeNames]); where a gate answers, a skill of the home's is
+// found by it ([checkoutGate.Taken]); and, whatever the rule, the run's skills
+// hold an entry of that name ([skillsHold]), checked after the rule's so a copy
 // this firing made keeps its own wording.
 func homeHolds(spec checkoutSpec, name string) string {
 	if rule, ruled := listingRules[spec.ListedAs]; ruled {
@@ -48,6 +49,9 @@ func homeHolds(spec checkoutSpec, name string) string {
 		if why := held.holds(spec, rule, rule.key(name)); why != "" {
 			return why
 		}
+	}
+	if held, ok := spec.gate.taken(name); ok {
+		return "the home's skill " + held + " is found by its name " + name
 	}
 	return skillsHold(spec, name)
 }
