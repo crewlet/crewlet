@@ -173,9 +173,11 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 		return err
 	}
 	var sections, roots []string
+	kept := make([]launched, 0, len(handed))
 	for _, h := range handed {
+		kept = append(kept, launched{Name: h.name, Root: h.root, Text: h.text})
 		if h.text != "" {
-			sections = append(sections, "for `"+h.name+"` with root "+h.root+"\n\n"+h.text)
+			sections = append(sections, checkoutHeader(h.name, h.root)+"\n\n"+h.text)
 		}
 		roots = append(roots, h.root+"\n")
 	}
@@ -183,6 +185,9 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 		if err = os.WriteFile(c.Roots, []byte(strings.Join(roots, "")), 0o600); err != nil {
 			return err
 		}
+	}
+	if err = writeLaunched(c.State, kept); err != nil {
+		return err
 	}
 	if err = os.Remove(c.Agents); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
@@ -202,6 +207,49 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	}
 	return os.WriteFile(filepath.Join(c.State, "nested.json"), append(nested, '\n'), 0o600)
 }
+
+// checkoutHeader is the line a checkout's section opens with, naming it.
+func checkoutHeader(name, root string) string { return "for `" + name + "` with root " + root }
+
+// launchedFile is the file under a run's checkout state where checkout-launch
+// keeps every checkout it handed, in its order, with its instructions, for a
+// runner that composes the launch again without some of them (copilot-launch).
+const launchedFile = "launched.json"
+
+// launched is one checkout checkout-launch handed: its name, root and
+// instructions ("" for none).
+type launched struct {
+	Name string `json:"name"`
+	Root string `json:"root"`
+	Text string `json:"text"`
+}
+
+// writeLaunched writes kept to state's [launchedFile].
+func writeLaunched(state string, kept []launched) error {
+	raw, err := json.Marshal(kept)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(state, launchedFile), append(raw, '\n'), 0o600)
+}
+
+// readLaunched is state's [launchedFile].
+func readLaunched(state string) ([]launched, error) {
+	raw, err := readBounded(filepath.Join(state, launchedFile), maxLaunched)
+	if err != nil {
+		return nil, err
+	}
+	var kept []launched
+	if err = json.Unmarshal(raw, &kept); err != nil {
+		return nil, fmt.Errorf("%s: %w", launchedFile, err)
+	}
+	return kept, nil
+}
+
+// maxLaunched bounds [launchedFile] as read back: the instructions of every
+// checkout under a harness with no limit, which Copilot refuses to start with
+// far below this (its static budget, some 110,000 tokens at most).
+const maxLaunched = 64 << 20
 
 // skippedLog is the file under a run's checkout state a nested firing keeps
 // what it left out in ([skips]), for the runner's script to print once the
