@@ -125,8 +125,10 @@ func collectCapped(t *testing.T, h executor.Harness, stream string, turnCap int)
 	b.Put(p.ExitCode(), "0")
 	if h.Name() == executor.HermesName {
 		// ITS SESSION STORE BESIDE IT, asked through the box: as many answers
-		// as the plugin's record the stream carries holds responses.
-		made := strings.Count(stream, `"crewlet.hermes_request"`)
+		// as the plugin's record the stream carries holds responses, and the
+		// summary a run its round cap stopped asks for, which the store
+		// records and the plugin's record leaves out.
+		made := strings.Count(stream, `"crewlet.hermes_request"`) + strings.Count(stream, `"crewlet.round_cap"`)
 		b.Put(p.HermesRunStart(), fixtureSession+" 0\n")
 		b.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
 			if strings.Contains(cmd, "hcarry requests") {
@@ -280,8 +282,14 @@ var capStops = map[string]struct {
 	stopped  func(n int) string
 }{
 	executor.ClaudeCodeName: {}, executor.CopilotName: {}, executor.GeminiCLIName: {}, executor.GrokName: {},
-	executor.KimiName: {}, executor.MuseName: {}, executor.OpenCodeName: {}, executor.HermesName: {},
+	executor.KimiName: {}, executor.MuseName: {}, executor.OpenCodeName: {},
 	executor.PiName: {}, executor.QwenCodeName: {},
+	executor.HermesName: {inFlight: 1, stopped: func(n int) string {
+		return streamOf(`{"type": "system", "subtype": "init", "model": "", "session_id": ""}`,
+			`{"type": "result", "session_id": "local-1", "exit_code": 1, "text": "the limit was reached"}`,
+			each(n-1, `{"type":"crewlet.hermes_request","line":{"api_request_id":"t:api:%d","turn_id":"t","finish_reason":"tool_calls","tool_calls":1}}`),
+			fmt.Sprintf(`{"type":"crewlet.round_cap","rounds":%d}`, n-1))
+	}},
 	executor.CodexName: {inFlight: 1, stopped: func(n int) string {
 		return streamOf(`{"type":"thread.started","thread_id":"01a20286-faf2-7490-a21d-7f1215273287"}`,
 			each(n, `{"type":"crewlet.rollout","line":{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":%d,"output_tokens":1,"total_tokens":3}}}}}`),

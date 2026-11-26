@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -71,10 +72,91 @@ func TestAHermesRunIsCountedOffItsSessionStore(t *testing.T) {
 	}
 }
 
+// A CAPPED HERMES RUN IS LEFT TO ITS OWN STOP FOR ITS SUMMARY AND NO FURTHER:
+// the one request past its cap is the summary Hermes asks for once its own
+// --max-turns stops its loop, which its store records, so neither the watch
+// nor the collection ends or fails a run its store shows at its cap and one,
+// and both do at its cap and two.
+//
+// Mutation: declare Hermes's allowance as 0, and the run at its cap and one is
+// ended and failed; as 2, and the run at its cap and two is neither.
+func TestACappedHermesRunIsLeftToItsSummaryAndNoFurther(t *testing.T) {
+	t.Parallel()
+	const turnCap = 3
+	runner := executor.New(executor.Hermes{})
+	for _, c := range []struct {
+		store int
+		past  bool
+	}{{turnCap + 1, false}, {turnCap + 2, true}} {
+		b, _ := storeBox(t, runner, c.store)
+		p := executor.PathsFor(b)
+		b.Put(p.HermesRunStart(), fixtureSession+" 0\n")
+		got, err := runner.Count(sandbox.RunHandle{TurnCap: turnCap}).Read(t.Context(), b)
+		if err != nil || got.PastCap(turnCap) != c.past {
+			t.Errorf("%d in the store under a cap of %d: live %+v (%v), past the cap %v; want %v", c.store, turnCap,
+				got, err, got.PastCap(turnCap), c.past)
+		}
+		b.Put(executor.Hermes{}.Output(p).Stdout, hermesStopped(turnCap))
+		b.Put(p.Findings(), "Outcome: succeeded")
+		b.Put(p.ExitCode(), "0")
+		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{TurnCap: turnCap}, queue.NewAnswerBudget(nil))
+		if err != nil || res.Success || res.TurnCapExceeded != c.past || res.RoundCapped == c.past {
+			t.Errorf("%d in the store under a cap of %d: success %v, exceeded %v, capped %v (%v); want exceeded %v",
+				c.store, turnCap, res.Success, res.TurnCapExceeded, res.RoundCapped, err, c.past)
+		}
+	}
+}
+
+// hermesStopped is the stream of a Hermes run its own --max-turns stopped at
+// turnCap: the plugin's record of the cap's tool rounds and the cap's line.
+func hermesStopped(turnCap int) string { return capStops[executor.HermesName].stopped(turnCap + 1) }
+
+// A HERMES COUNT THE BOX COULD NOT TAKE IS AN ERROR, NEVER NONE: an exec that
+// failed, and one whose answer is no count, fail the live read and the
+// collection alike, so a store that cannot be asked never reads as a run
+// within its cap.
+//
+// Mutation: read a failed exec, or an answer that is no count, as 0, and a
+// check goes red.
+func TestAHermesCountTheBoxCouldNotTakeIsAnError(t *testing.T) {
+	t.Parallel()
+	runner := executor.New(executor.Hermes{})
+	for _, c := range []struct {
+		name string
+		res  sandbox.ExecResult
+		err  error
+	}{
+		{"exec failed", sandbox.ExecResult{}, errors.New("the box went away")},
+		{"no count", sandbox.ExecResult{ExitCode: 1, Stderr: "Traceback (most recent call last):"}, nil},
+	} {
+		b := box(t, runner)
+		p := executor.PathsFor(b)
+		b.Put(p.HermesRunStart(), fixtureSession+" 0\n")
+		b.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+			if strings.Contains(cmd, "hcarry requests") {
+				return c.res, c.err
+			}
+			return sandbox.ExecResult{}, nil
+		}
+		if got, err := runner.Count(sandbox.RunHandle{TurnCap: 3}).Read(t.Context(), b); err == nil {
+			t.Errorf("%s: the live read is %+v with no error", c.name, got)
+		}
+		b.Put(executor.Hermes{}.Output(p).Stdout, requestStreams[executor.HermesName](1))
+		b.Put(p.Findings(), "Outcome: succeeded")
+		b.Put(p.ExitCode(), "0")
+		if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{TurnCap: 3},
+			queue.NewAnswerBudget(nil)); err == nil {
+			t.Errorf("%s: the collection is success %v, exceeded %v, with no error", c.name, res.Success,
+				res.TurnCapExceeded)
+		}
+	}
+}
+
 // hermesStore is a Python script that writes a Hermes 0.23.3 session store at
 // argv[1]: the sessions and messages columns the count reads, the run's session
-// titled "t", rotated once by a compaction into a child, another session
-// beside it, and the rows its count is held to.
+// titled "t", rotated once by a compaction into a child, a subagent it
+// delegated to (rotated once too), another session beside it, and the rows its
+// count is held to.
 const hermesStore = `
 import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
@@ -84,7 +166,9 @@ db.execute("create table messages (id integer primary key, session_id text, role
            "display_kind text, display_metadata text)")
 db.executemany("insert into sessions values (?, ?, ?, ?, ?, ?, ?)", [
     ("root", None, 1, None, "cli", None, "compression"), ("child", "t", 2, "root", "cli", None, None),
-    ("other", "u", 3, None, "cli", None, None)])
+    ("other", "u", 3, None, "cli", None, None),
+    ("sub", None, 4, "child", "subagent", '{"_delegate_from": "child"}', "compression"),
+    ("subnext", None, 5, "sub", "subagent", '{"_delegate_from": "child"}', None)])
 db.executemany("insert into messages (id, session_id, role, content, display_kind, display_metadata) " +
                "values (?, ?, ?, ?, ?, ?)", [
     (1, "root", "assistant", "an earlier launch's answer", None, None),
@@ -94,19 +178,23 @@ db.executemany("insert into messages (id, session_id, role, content, display_kin
     (5, "child", "assistant", "Operation interrupted: waiting", None, '{"interrupted": true}'),
     (6, "child", "assistant", "Gateway shutting down", "failed_turn", None),
     (7, "other", "assistant", "another session's", None, None),
-    (8, "child", "tool", "{}", None, None)])
+    (8, "child", "tool", "{}", None, None),
+    (9, "sub", "assistant", "a delegate's answer", None, None),
+    (10, "subnext", "assistant", "its answer past a compaction", None, None)])
 db.commit()
 `
 
 // HERMES'S STORE COUNTS A RUN'S ANSWERS, NOT ITS NOTES (hermes_carry.py's
-// requests): the assistant rows of the run's session and the sessions a
-// compaction rotated it through, past where the run began, but the notes
-// Hermes writes as one, an interrupt's and a failed turn's, which no answer
-// carries the marks of (measured on 0.23.3); never another session's rows, and
-// none of a store holding no messages.
+// requests): the assistant rows of the run's session tree, the sessions a
+// compaction rotated it through and those of the subagents it delegated to,
+// past where the run began, but the notes Hermes writes as one, an
+// interrupt's and a failed turn's, which no answer carries the marks of
+// (measured on 0.23.3); never another session's rows, and none of a store
+// holding no messages.
 //
 // Mutation: count every assistant row, count the run's newest session alone,
-// or count from the store's first row, and the count is not 2.
+// count its compaction lineage alone, or count from the store's first row,
+// and the count is not 4.
 func TestHermesStoreCountsARunsAnswersNotItsNotes(t *testing.T) {
 	t.Parallel()
 	python := prereqtest.OnPath(t, "python3", "the case runs Hermes's store count", "install python3")
@@ -123,8 +211,8 @@ func TestHermesStoreCountsARunsAnswersNotItsNotes(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	if got := count(db, "1"); got != "crewlet-carry ok 2" {
-		t.Errorf("the run's answers past row 1 read %q, want its 2", got)
+	if got := count(db, "1"); got != "crewlet-carry ok 4" {
+		t.Errorf("the run's answers past row 1 read %q, want its 4", got)
 	}
 	if got := count(filepath.Join(t.TempDir(), "none.db"), "0"); got != "crewlet-carry ok 0" {
 		t.Errorf("a store not there reads %q, want none", got)

@@ -40,14 +40,14 @@ func (c *storeCount) Read(ctx context.Context, box sandbox.Sandbox) (sandbox.Req
 }
 
 // storeRequests implements [storeCounted]: the model responses Hermes's store
-// holds for the run's session past where the run began ([Paths.HermesRunStart],
-// hermes_carry.py's requests): its assistant rows but the notes Hermes writes as
-// one, an interrupt's or a failed turn's. Measured on 0.23.3 against a stand-in,
-// as many as the requests answered in every run, the summary a run its round cap
-// stopped asks for included, and written within 0.35 s of each. ONE EXEC OF
-// HERMES'S OWN PYTHON A READ, so a capped Hermes run costs its box one a tick.
-// NOT COUNTED: a summary its answer came back empty for, asked again, which
-// writes one row for two requests (Hermes's own rule, unmeasured).
+// holds for the run's session tree past where the run began
+// ([Paths.HermesRunStart], hermes_carry.py's requests): its assistant rows, a
+// delegated subagent's child session's among them (0.23.3's code), but the
+// notes Hermes writes as one. Measured on 0.23.3: as many as the requests
+// answered, a capped run's summary included, each within 0.35 s; a request an
+// end cuts off leaves no row. ONE EXEC A READ: a capped run costs its box one a
+// tick. NOT COUNTED, only at the cap's own stop: the first of a summary asked
+// twice for an empty answer, and both of a summary that fails (Hermes's code).
 func (Hermes) storeRequests(ctx context.Context, box sandbox.Sandbox, paths Paths) (int, bool, error) {
 	raw, err := box.ReadFile(ctx, paths.HermesRunStart())
 	if err != nil {

@@ -298,17 +298,33 @@ def top(db_path):
     return "ok %d" % (db.execute("select coalesce(max(id), 0) from messages").fetchone()[0])
 
 
+def tree(db, title):
+    """The session titled title's lineage with every session descending from it by parent_session_id, whatever
+    the kind: 0.23.3 writes a delegated subagent's turns to a child session of its delegator in the same store
+    (tools/delegate_tool_child_run.py: source "subagent", _delegate_from naming the parent), and that child's
+    own compaction continuations and delegates descend from it in turn."""
+    ids = lineage(db, title)
+    seen = set(ids)
+    for sid in ids:
+        for (child,) in db.execute("select id from sessions where parent_session_id = ? order by started_at", (sid,)):
+            if child not in seen:
+                seen.add(child)
+                ids.append(child)
+    return ids
+
+
 def requests(db_path, title, after):
-    """The model responses the store holds for the session titled title (its lineage) past message id after: its
+    """The model responses the store holds for the run's session tree ([tree]) past message id after: its
     assistant rows but the notes Hermes writes as one (an interrupt's, a failed turn's), which carry a display_kind
-    or display_metadata no response carries (measured on 0.23.3: a capped run's summary row included)."""
+    or display_metadata no response carries (measured on 0.23.3: a capped run's summary row included). A request
+    an end cuts off before its answer leaves no row (measured)."""
     if not os.path.isfile(db_path):
         return "ok 0"
     db = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
     if db.execute("select 1 from sqlite_master where type = 'table' and name = 'messages'").fetchone() is None:
         return "ok 0"
     db.execute("begin")
-    ids = lineage(db, title)
+    ids = tree(db, title)
     if not ids:
         return "ok 0"
     return "ok %d" % db.execute("select count(*) from messages where session_id in (%s) and id > ? and role = "
