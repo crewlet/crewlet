@@ -222,7 +222,9 @@ func roundCap(c *config.Company, ev Evidence) []Finding {
 	return out
 }
 
-// roundCapFix offers the seat twice its cap, or none.
+// roundCapFix offers the seat twice its cap, at most [config.RoundCapCeiling],
+// or none. A seat already at the ceiling is offered no raise the config would
+// refuse: its items split, or its cap lifted.
 func roundCapFix(r *config.Role, limit int) Fix {
 	handle := r.Seat().Handle()
 	capTo := func(n int, label string) Option {
@@ -231,13 +233,19 @@ func roundCapFix(r *config.Role, limit int) Fix {
 			Merge:   map[string]any{"sandbox": map[string]any{"max_turns": n}},
 			Summary: fmt.Sprintf("Set %s's round cap to %d", handle, n)}}
 	}
+	lift := capTo(0, "Lift the cap for this agent")
+	if limit >= config.RoundCapCeiling {
+		return Fix{Kind: FixConfigChange,
+			Sentence: fmt.Sprintf("%s's cap is at the most a round cap may be, %d: split its items into smaller "+
+				"ones, or lift its cap.", r.Name, config.RoundCapCeiling),
+			Unchanged: "Every other agent's cap stays as it is.",
+			Options:   []Option{lift}}
+	}
+	raised := min(2*limit, config.RoundCapCeiling)
 	return Fix{Kind: FixConfigChange,
 		Sentence:  fmt.Sprintf("Give %s's runs more rounds, or split its items into smaller ones.", r.Name),
 		Unchanged: "Every other agent's cap stays as it is.",
-		Options: []Option{
-			capTo(2*limit, fmt.Sprintf("Raise the cap to %d rounds", 2*limit)),
-			capTo(0, "Lift the cap for this agent"),
-		}}
+		Options:   []Option{capTo(raised, fmt.Sprintf("Raise the cap to %d rounds", raised)), lift}}
 }
 
 // at is path with fields under it, as the document names it.
