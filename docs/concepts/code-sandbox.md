@@ -3234,7 +3234,9 @@ into the box at each launch, so a box image needs nothing for it. The engine
 reads the build for the box's arch from the directory `CREWLET_NOTE_HELPER_DIR`
 names, and only there while it is set; else beside its own executable (a
 release archive, `make crewlet`), then under `/usr/local/share/crewlet` (the
-image). An engine that finds none refuses the run, naming where it looked. The run's script starts it
+image). An engine that finds none refuses the run, naming where it looked, and
+so does one that finds a helper built from other source than its own (each
+carries a digest of the helper's source), naming both. The run's script starts it
 beside the app-server and stops it with `exec`; its errors go to the run's error
 stream. The same helper holds a run to its round cap and reports its skill loads
 ([Codex](#codex)). It polls the run's notes route **outbound**, as OpenCode's plugin does

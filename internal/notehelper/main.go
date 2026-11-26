@@ -326,6 +326,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+
+	"github.com/crewlet/crewlet/internal/notehelper/helpersource"
 )
 
 // The exit statuses (the package doc's "Exit").
@@ -389,6 +391,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	var f flags
 	set := flag.NewFlagSet("notehelper", flag.ContinueOnError)
 	set.SetOutput(stderr)
+	// The source this build was made from, which also keeps the stamp in the
+	// binary for the engine to read (internal/notehelper/helpersource).
+	set.Usage = func() {
+		_, _ = fmt.Fprintf(stderr, "notehelper, built from %s:\n", helpersource.Digest)
+		set.PrintDefaults()
+	}
 	set.StringVar(&f.adapter, "adapter", "", "the harness to hand notes to: codex-app-server")
 	set.StringVar(&f.socket, "socket", "", "the harness's unix socket")
 	set.StringVar(&f.threadFile, "thread-file", "", "the file the run's script writes the harness's thread id to")

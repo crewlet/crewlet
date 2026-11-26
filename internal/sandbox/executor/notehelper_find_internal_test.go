@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/notehelper/helperbuild"
+	"github.com/crewlet/crewlet/internal/notehelper/helpersource"
 )
 
 // EACH BOX ARCH GETS A STATIC LINUX EXECUTABLE OF ITS OWN ARCH: the build for
@@ -48,17 +49,47 @@ func TestTheNoteHelperIsReadFromTheFirstDirectoryHoldingIt(t *testing.T) {
 	t.Parallel()
 	search := helperSearch{dirs: []string{t.TempDir(), t.TempDir(), t.TempDir()}}
 	for i, dir := range search.dirs {
-		if err := os.WriteFile(filepath.Join(dir, helperbuild.File("amd64")), []byte{byte('a' + i)}, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, helperbuild.File("amd64")), stamped(i), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for i, dir := range search.dirs {
 		got, err := findNoteHelper("amd64", search)
-		if err != nil || string(got) != string([]byte{byte('a' + i)}) {
+		if err != nil || string(got) != string(stamped(i)) {
 			t.Fatalf("with directories %d on holding the build, read %q, %v; want directory %d's", i, got, err, i)
 		}
 		if err = os.Remove(filepath.Join(dir, helperbuild.File("amd64"))); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// stamped is a stand-in build of this engine's source, told apart by n.
+func stamped(n int) []byte {
+	return []byte("\x7fELF " + helpersource.Digest + " " + string(rune('a'+n)))
+}
+
+// A HELPER BUILT FROM OTHER SOURCE IS REFUSED, NAMING BOTH: the flags, configs
+// and routes between engine and helper are one commit's, so a stale build
+// found on disk must not run against this engine's bridge. One that names no
+// source at all is refused the same way. Mutation, red: accept any helper read.
+func TestAHelperBuiltFromOtherSourceIsRefusedNamingBoth(t *testing.T) {
+	t.Parallel()
+	other := helpersource.Prefix + strings.Repeat("ab", 32)
+	for build, names := range map[string]string{"\x7fELF " + other + " x": other, "\x7fELF x": "no source it names"} {
+		search := helperSearch{dirs: []string{t.TempDir()}}
+		path := filepath.Join(search.dirs[0], helperbuild.File("amd64"))
+		if err := os.WriteFile(path, []byte(build), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := findNoteHelper("amd64", search)
+		if err == nil || errors.Is(err, errNoHelperBuild) {
+			t.Fatalf("a helper built from %s answered %v, want a refusal", names, err)
+		}
+		for _, want := range []string{path + " was built from " + names, "this engine from " + helpersource.Digest} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal %q does not say %q", err, want)
+			}
 		}
 	}
 }

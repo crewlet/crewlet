@@ -444,7 +444,11 @@ built, never committed: the release archives carry a build per box arch beside
 the binary, the image under `/usr/local/share/crewlet`, and tests build their own
 (`go doc ./internal/notehelper/helperbuild`). `make crewlet` builds it beside
 `./crewlet`, where the engine looks; an engine with none (a bare `go build`)
-refuses every executor launch, naming where it looked.
+refuses every executor launch, naming where it looked. A change to the helper's source
+(any package of this module it links) regenerates its committed digest with
+`go run ./scripts/notehelper -digest`: the engine refuses a helper built from
+other source, and `internal/notehelper/helperbuild`'s suite fails while the
+digest is stale.
 
 `go mod tidy -diff` gates the silent half of tidiness (an *under*-tidy module
 already stops `go build ./...`): a `require` left behind when its last import was

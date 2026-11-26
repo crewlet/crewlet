@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/notehelper/helperbuild"
+	"github.com/crewlet/crewlet/internal/notehelper/helpersource"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -74,6 +76,9 @@ func findNoteHelper(arch string, search helperSearch) ([]byte, error) {
 		path := filepath.Join(dir, name)
 		helper, err := os.ReadFile(path) //nolint:gosec // the engine's own install directories
 		if err == nil {
+			if err = sameSource(path, helper); err != nil {
+				return nil, err
+			}
 			return helper, nil
 		}
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -82,4 +87,22 @@ func findNoteHelper(arch string, search helperSearch) ([]byte, error) {
 	}
 	return nil, fmt.Errorf("executor: no note helper for a linux/%s box: %s is not %s. %s",
 		arch, name, search.looked, search.fix)
+}
+
+// sameSource refuses a helper built from other source than this engine's: the
+// flags, configs and routes between them are one commit's contract, and a
+// helper found on disk is not tied to the engine by anything else
+// (internal/notehelper/helpersource). The stamp is read from the file's bytes,
+// since a darwin engine cannot run a linux helper to ask it.
+func sameSource(path string, helper []byte) error {
+	from := "no source it names"
+	if i := bytes.Index(helper, []byte(helpersource.Prefix)); i >= 0 && i+len(helpersource.Digest) <= len(helper) {
+		from = string(helper[i : i+len(helpersource.Digest)])
+	}
+	if from == helpersource.Digest {
+		return nil
+	}
+	return fmt.Errorf("executor: the note helper %s was built from %s, and this engine from %s: put the "+
+		"notehelper-linux-* files of this engine's own release or image beside it, or build both with "+
+		"`make crewlet` in one checkout", path, from, helpersource.Digest)
 }
