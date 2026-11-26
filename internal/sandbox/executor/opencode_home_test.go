@@ -87,8 +87,8 @@ const openCodeServeView = `printf '%s' "$PWD" > "$d/serve-pwd"
 // the run's server starts in the start directory with every file of
 // [openCodeHomeLoads] in place and no global directory of its own, so OpenCode
 // reads the home's as a person's session does; Crewlet's configuration, handed
-// above them, still declares its bridge on, its notes and skill plugins and
-// its instructions, and names no server or plugin of theirs.
+// above them, still declares its bridge on, its notes, skill and checkouts
+// plugins and its instructions, and names no server or plugin of theirs.
 //
 // Mutations, each red: point OPENCODE_CONFIG_DIR at a directory of the run's
 // own; remove a home path before the server; drop `disabled: false`.
@@ -162,7 +162,8 @@ func openCodeLoads(t *testing.T) {
 		}
 		plugins = append(plugins, named.Package)
 	}
-	if want := []string{p.OpenCodeSteerPlugin(), p.OpenCodeSkillsPlugin(), p.OpenCodeToolEnvPlugin()}; !slices.Equal(plugins, want) {
+	if want := []string{p.OpenCodeSteerPlugin(), p.OpenCodeSkillsPlugin(), p.OpenCodeCheckoutsPlugin(),
+		p.OpenCodeToolEnvPlugin()}; !slices.Equal(plugins, want) {
 		t.Errorf("the run's configuration names plugins %v, want its own %v", plugins, want)
 	}
 	// ITS ONE REMOVAL, OpenCode Desktop's browser, which every run's
@@ -170,7 +171,8 @@ func openCodeLoads(t *testing.T) {
 	if !slices.Equal(removed, []string{"opencode.browser"}) {
 		t.Errorf("the run's configuration removes %v of OpenCode's own plugins, want Desktop's browser alone", removed)
 	}
-	if !slices.Equal(handed.Skills, []string{p.OpenCodeSkills()}) || !slices.Equal(handed.Instructions, []string{p.System()}) {
+	if !slices.Equal(handed.Skills, []string{p.OpenCodeSkills(), p.OpenCodeCheckoutSkills()}) ||
+		!slices.Equal(handed.Instructions, []string{p.System(), p.OpenCodeCheckoutSections()}) {
 		t.Errorf("the run's skills %v and instructions %v are not its own alone", handed.Skills, handed.Instructions)
 	}
 }

@@ -268,7 +268,7 @@ func TestAClaudeSummaryAddsOnlyItsWordsToTheWalk(t *testing.T) {
 	read := func(summarize bool) (sandbox.MainThreadReading, uint64) {
 		var reading sandbox.MainThreadReading
 		ask := sandbox.MainThreadAsk{Session: b.session, Release: b.release, Count: true, Summary: summarize}
-		_, allocated := allocationsOf(func() {
+		_, allocated := allocationsOf(t, func() {
 			reading = b.h.readMainThread(context.Background(), b.box, PathsFor(b.box), ask)
 		})
 		return reading, allocated

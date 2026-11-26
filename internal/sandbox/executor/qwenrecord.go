@@ -73,7 +73,7 @@ func (r *qwenReading) record() error {
 		case "message":
 			err = r.messageValue(k)
 		case "systemPayload":
-			err = r.compaction.read(&r.chatReading, k)
+			err = r.compaction.read(&r.lineWalk, k)
 		default:
 			err = r.skip(k)
 		}
@@ -144,78 +144,122 @@ type qwenCompaction struct {
 	over int
 	// The entry read: its role and its texts after the join's, and whether
 	// they ran past the bound; the part read: where its text begins in entry,
-	// and what it holds.
-	role                                  string
-	entry                                 []byte
-	entryPast                             bool
-	mark                                  int
-	partText, partThought, partPast, word bool
+	// and what it holds; trim, its text's trim.
+	roleWord                          string
+	entry                             []byte
+	entryPast                         bool
+	mark                              int
+	isText, isThought, partPast, word bool
+	trim                              textTrim
 }
 
 // reset starts a payload read at the value bound max.
 func (c *qwenCompaction) reset(max int) {
 	*c = qwenCompaction{max: max, held: lineScratch(c.held), ends: lineScratch(c.ends), entry: lineScratch(c.entry),
-		over: -1}
+		over: -1, trim: textTrim{run: c.trim.run}}
+}
+
+// lineStart starts a line, whose payload is none until one is read; a nil
+// one reads none.
+func (c *qwenCompaction) lineStart() {
+	if c != nil {
+		c.reset(c.max)
+	}
 }
 
 // read reads a record's system payload: its prefix's length and its
-// compressed history, each checked by its whole-line decode's field.
-func (c *qwenCompaction) read(r *chatReading, k jsonscan.Kind) error {
-	c.reset(c.max)
-	if c.object = k == jsonscan.ObjectStart; !c.object {
-		return r.skip(k)
+// compressed history, each checked by its whole-line decode's field. A
+// count's walk, or a walk for notes, takes the same steps as it reads the
+// payload for its own ([qwenSummaryCapture]).
+func (c *qwenCompaction) read(w *lineWalk, k jsonscan.Kind) error {
+	if !c.payload(k) {
+		return w.skip(k)
 	}
-	return r.members(func(name string, k jsonscan.Kind) error {
+	return w.members(func(name string, k jsonscan.Kind) error {
 		switch name {
 		case "summaryPrefixLength":
-			n, ok, err := r.intField(k)
-			c.refused = c.refused || !ok
-			c.prefix, c.prefixSet = n, ok && k == jsonscan.Number
-			return err
+			return c.prefixLength(w, k)
 		case "compressedHistory":
-			c.entries, c.held, c.ends, c.over, c.lastEntry, c.lastEnd = 0, c.held[:0], c.ends[:0], -1, 0, 0
-			switch k {
-			case jsonscan.Null:
-				return nil
-			case jsonscan.ArrayStart:
-				return r.elements(func(k jsonscan.Kind) (bool, error) { return true, c.historyEntry(r, k) })
+			if c.history(k) {
+				return w.elements(func(k jsonscan.Kind) (bool, error) { return true, c.historyEntry(w, k) })
 			}
-			c.refused = true
 		}
-		return r.skip(k)
+		return w.skip(k)
 	})
+}
+
+// payload starts a payload, the value k begins, and reports whether it is an
+// object, whose members are read.
+func (c *qwenCompaction) payload(k jsonscan.Kind) bool {
+	c.reset(c.max)
+	c.object = k == jsonscan.ObjectStart
+	return c.object
+}
+
+// prefixLength reads summaryPrefixLength, the value k begins.
+func (c *qwenCompaction) prefixLength(w *lineWalk, k jsonscan.Kind) error {
+	n, ok, err := w.intField(k)
+	c.prefixRead(n, ok, k)
+	return err
+}
+
+// prefixRead takes summaryPrefixLength as another read read it: n of a value
+// of kind k, ok where an int field takes it ([lineWalk.intField]).
+func (c *qwenCompaction) prefixRead(n int64, ok bool, k jsonscan.Kind) {
+	c.refused = c.refused || !ok
+	c.prefix, c.prefixSet = n, ok && k == jsonscan.Number
+}
+
+// history starts compressedHistory, the value k begins, and reports whether
+// its entries follow, a list's: null holds none, any other value is refused.
+func (c *qwenCompaction) history(k jsonscan.Kind) bool {
+	c.entries, c.held, c.ends, c.over, c.lastEntry, c.lastEnd = 0, c.held[:0], c.ends[:0], -1, 0, 0
+	c.refused = c.refused || k != jsonscan.Null && k != jsonscan.ArrayStart
+	return k == jsonscan.ArrayStart
 }
 
 // historyEntry reads one entry of the history: null an entry of no role, an
 // object its role and parts, any other value one its decode refuses.
-func (c *qwenCompaction) historyEntry(r *chatReading, k jsonscan.Kind) error {
-	c.role, c.entry, c.entryPast = "", c.entry[:0], false
-	switch k {
-	case jsonscan.Null:
-	case jsonscan.ObjectStart:
-		err := r.members(func(name string, k jsonscan.Kind) error {
-			var err error
+func (c *qwenCompaction) historyEntry(w *lineWalk, k jsonscan.Kind) error {
+	if !c.entryStart(k) {
+		return w.skip(k)
+	}
+	if k == jsonscan.ObjectStart {
+		err := w.members(func(name string, k jsonscan.Kind) error {
 			switch name {
 			case "role":
-				c.role, err = r.wordValue(k)
+				return c.role(w, k)
 			case "parts":
-				c.entry, c.entryPast = c.entry[:0], false
-				err = c.parts(r, k)
-			default:
-				err = r.skip(k)
+				return c.parts(w, k)
 			}
-			return err
+			return w.skip(k)
 		})
 		if err != nil {
 			return err
 		}
-	default:
-		c.refused = true
-		return r.skip(k)
 	}
 	c.entryEnd()
 	return nil
 }
+
+// entryStart starts an entry, the value k begins, and reports whether it is
+// one, null or an object, which [qwenCompaction.entryEnd] ends; any other
+// value is refused.
+func (c *qwenCompaction) entryStart(k jsonscan.Kind) bool {
+	c.roleWord, c.entry, c.entryPast = "", c.entry[:0], false
+	c.refused = c.refused || k != jsonscan.Null && k != jsonscan.ObjectStart
+	return k == jsonscan.Null || k == jsonscan.ObjectStart
+}
+
+// role reads the entry's role, the value k begins.
+func (c *qwenCompaction) role(w *lineWalk, k jsonscan.Kind) (err error) {
+	c.roleWord, err = w.wordValue(k)
+	return err
+}
+
+// roleRead takes the entry's role as another read read it, "" for a value of
+// no string ([lineWalk.wordField]).
+func (c *qwenCompaction) roleRead(word string) { c.roleWord = word }
 
 // entryEnd ends the entry read: a user's joins its texts while within the
 // bound, and its index and the join's length are kept as [qwenCompaction.ends].
@@ -223,7 +267,7 @@ func (c *qwenCompaction) entryEnd() {
 	e := c.entries
 	c.entries++
 	switch {
-	case c.role != "user" || c.over >= 0 || len(c.entry) == 0 && !c.entryPast:
+	case c.roleWord != "user" || c.over >= 0 || len(c.entry) == 0 && !c.entryPast:
 	case c.entryPast:
 		c.over = e
 	default:
@@ -253,56 +297,92 @@ func (c *qwenCompaction) summaryEnd(prefix int) int {
 
 // parts reads an entry's parts as its whole-line decode read them
 // ([chatReading.parts]), joining each text a thought is not.
-func (c *qwenCompaction) parts(r *chatReading, k jsonscan.Kind) error {
-	switch k {
-	case jsonscan.String:
-		c.partStart()
-		if err := c.text(r); err != nil {
-			return err
-		}
-		c.partText = r.trim.n > 0
-		c.partEnd()
-		return nil
-	case jsonscan.ArrayStart:
-		return r.elements(func(k jsonscan.Kind) (bool, error) {
-			if k != jsonscan.ObjectStart {
-				return true, r.skip(k)
-			}
-			c.partStart()
-			err := r.members(func(name string, k jsonscan.Kind) error {
-				switch name {
-				case "text":
-					if c.partText = k == jsonscan.String; c.partText {
-						return c.text(r)
-					}
-					c.entry = c.entry[:c.mark]
-				case "thought":
-					c.partThought = k == jsonscan.True
-				}
-				return r.skipMember(name, k)
-			})
-			c.partEnd()
-			return true, err
-		})
+func (c *qwenCompaction) parts(w *lineWalk, k jsonscan.Kind) error {
+	switch read, err := c.partsStart(w, k); {
+	case read:
+		return err
+	case k != jsonscan.ArrayStart:
+		return w.skip(k)
 	}
-	return r.skip(k)
+	return w.elements(func(k jsonscan.Kind) (bool, error) {
+		if k != jsonscan.ObjectStart {
+			return true, w.skip(k)
+		}
+		c.partStart()
+		err := w.members(func(name string, k jsonscan.Kind) error {
+			switch name {
+			case "text":
+				return c.partText(w, k)
+			case "thought":
+				c.thought(k)
+			}
+			return w.skipMember(name, k)
+		})
+		c.partEnd()
+		return true, err
+	})
+}
+
+// partsStart starts the entry's parts, the value k begins, and reads them
+// whole where they are a string, one part's text, reporting whether it did;
+// a list's parts are each an object's, from [qwenCompaction.partStart] to
+// [qwenCompaction.partEnd].
+func (c *qwenCompaction) partsStart(w *lineWalk, k jsonscan.Kind) (bool, error) {
+	c.entry, c.entryPast = c.entry[:0], false
+	if k != jsonscan.String {
+		return false, nil
+	}
+	c.partStart()
+	if err := c.text(w, nil); err != nil {
+		return true, err
+	}
+	c.isText = c.trim.n > 0
+	c.partEnd()
+	return true, nil
 }
 
 // partStart starts a part.
 func (c *qwenCompaction) partStart() {
-	c.mark, c.partText, c.partThought, c.partPast, c.word = len(c.entry), false, false, false, false
+	c.mark, c.isText, c.isThought, c.partPast, c.word = len(c.entry), false, false, false, false
 }
 
+// partText reads a part's text, the value k begins: a string's, any other
+// value none.
+func (c *qwenCompaction) partText(w *lineWalk, k jsonscan.Kind) error {
+	if k != jsonscan.String {
+		c.noText()
+		return w.skip(k)
+	}
+	c.isText = true
+	return c.text(w, nil)
+}
+
+// noText takes a part's text member of no string, which another read passes
+// over.
+func (c *qwenCompaction) noText() { c.isText, c.entry = false, c.entry[:c.mark] }
+
+// thought reads a part's thought, the value k begins: true says the part is
+// the model's reasoning.
+func (c *qwenCompaction) thought(k jsonscan.Kind) { c.isThought = k == jsonscan.True }
+
 // text reads the current string as the part's text, trimmed, after the
-// join's separator, held while the join stays within the bound.
-func (c *qwenCompaction) text(r *chatReading) error {
+// join's separator, held while the join stays within the bound; and as
+// written into raw too where raw is not nil ([lineWalk.readAlso]).
+func (c *qwenCompaction) text(w *lineWalk, raw io.Writer) error {
 	c.entry, c.partPast = c.entry[:c.mark], false
 	if len(c.held) > 0 || c.mark > 0 {
 		_, _ = c.Write([]byte("\n\n"))
 	}
-	err := r.read(r.trim.begin(c, c.max))
-	c.word = r.trim.headN > 0
+	err := w.readAlso(c.trim.begin(c, c.max), raw)
+	c.word = c.trim.headN > 0
 	return err
+}
+
+// textRead takes a part's text, a string another read reads into raw as
+// written ([qwenCompaction.text]).
+func (c *qwenCompaction) textRead(w *lineWalk, raw io.Writer) error {
+	c.isText = true
+	return c.text(w, raw)
 }
 
 // Write holds p, the part's text's next bytes, while the join stays within
@@ -321,7 +401,7 @@ func (c *qwenCompaction) Write(p []byte) (int, error) {
 // partEnd keeps the part's text where it is one a thought is not and holds
 // words, the entry past the bound where it ran past it.
 func (c *qwenCompaction) partEnd() {
-	if !c.partText || c.partThought || !c.word {
+	if !c.isText || c.isThought || !c.word {
 		c.entry = c.entry[:c.mark]
 		return
 	}
@@ -343,13 +423,28 @@ func (c *qwenCompaction) commit(b *transcriptBuilder, s *entryShape, at time.Tim
 	return b.commitThread(s, at)
 }
 
-// summary is the record's summary, the texts of the entries before the
-// prefix, "" for none; or, for one past the bound or a payload of no shape,
-// why it is not read. The transcript and a box read's newest summary
-// ([qwenSummaryReading]) both take it.
+// summary is the record's summary as the transcript reads it
+// ([qwenCompaction.words]): one past the bound, or a payload of no shape,
+// said in its place.
 func (c *qwenCompaction) summary() (words, unread string) {
-	if !c.object || c.refused {
+	switch words, shaped, past := c.words(); {
+	case !shaped:
 		return "", qwenCompactionUnread
+	case past:
+		return "", fmt.Sprintf("a compaction record's summary runs past %s, and was not read",
+			humanSize(int64(c.max)))
+	default:
+		return words, ""
+	}
+}
+
+// words is the record's summary, the texts of the entries before the prefix,
+// "" for none; shaped false for a payload of no shape, and past where the
+// summary runs past the bound. The transcript ([qwenCompaction.summary]) and
+// a box read's newest summary ([qwenSummaryCapture]) both take it.
+func (c *qwenCompaction) words() (words string, shaped, past bool) {
+	if !c.object || c.refused {
+		return "", false, false
 	}
 	prefix := c.entries
 	if c.prefixSet && c.prefix >= 0 {
@@ -358,12 +453,11 @@ func (c *qwenCompaction) summary() (words, unread string) {
 	end := c.summaryEnd(prefix)
 	switch {
 	case c.over >= 0 && prefix > c.over:
-		return "", fmt.Sprintf("a compaction record's summary runs past %s, and was not read",
-			humanSize(int64(c.max)))
+		return "", true, true
 	case end > 0:
-		return string(c.held[:end]), ""
+		return string(c.held[:end]), true, false
 	}
-	return "", ""
+	return "", true, false
 }
 
 // qwenCompactionUnread is what a compaction record whose payload has no shape

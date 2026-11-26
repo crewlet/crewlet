@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -20,8 +19,8 @@ import (
 const Election = 9*time.Second + time.Second
 
 // Leaderless reports a broker ANSWERING that the group a request needs has no
-// leader: 503, err_code 10008, as the client decodes it (*jetstream.APIError)
-// or a raw read does (*server.ApiError, internal/jsapi's leader reads), or a
+// leader: 503, err_code 10008, as the client decodes it (*jetstream.APIError;
+// internal/jsapi's raw reads hand theirs over so, jsapi.ClientError), or a
 // publish nobody heard to a stream its caller found there ([Unheard]). Not
 // silence ([Unanswered]), which says nothing about who leads, and never a
 // stream that is not there ([StreamAbsent]).
@@ -30,11 +29,7 @@ func Leaderless(err error) bool {
 		return true
 	}
 	var client *jetstream.APIError
-	if errors.As(err, &client) {
-		return client.ErrorCode == errCodeNoLeader
-	}
-	var raw *server.ApiError
-	return errors.As(err, &raw) && raw.ErrCode == uint16(server.JSClusterNotAvailErr)
+	return errors.As(err, &client) && client.ErrorCode == errCodeNoLeader
 }
 
 // Unheard is err, a publish's [jetstream.ErrNoStreamResponse], once its caller
@@ -52,22 +47,22 @@ func (u *unheard) Error() string {
 func (u *unheard) Unwrap() error { return u.err }
 
 // StreamAbsent reports a broker answering that the stream asked about is not
-// there (err_code 10059), as the client decodes it or a raw read does.
+// there (err_code 10059), as the client decodes it.
 func StreamAbsent(err error) bool {
 	if errors.Is(err, jetstream.ErrStreamNotFound) {
 		return true
 	}
 	var client *jetstream.APIError
-	if errors.As(err, &client) {
-		return client.ErrorCode == jetstream.JSErrCodeStreamNotFound
-	}
-	var raw *server.ApiError
-	return errors.As(err, &raw) && raw.ErrCode == uint16(server.JSStreamNotFoundErr)
+	return errors.As(err, &client) && client.ErrorCode == jetstream.JSErrCodeStreamNotFound
 }
 
-// errCodeNoLeader is the client's spelling of JSClusterNotAvailErr, which the
-// client exports no constant for.
-const errCodeNoLeader = jetstream.ErrorCode(server.JSClusterNotAvailErr)
+// errCodeNoLeader is nats-server's JSClusterNotAvailErr, which the client
+// exports no constant for. Spelled here, never read off nats-server's server
+// package: this package is linked wherever internal/statelog is, and that
+// package's pse starts sampling the process every second at init
+// (server/pse/pse_linux.go:42, :87), allocating beside whatever runs (#2160).
+// TestTheNoLeaderCodeIsTheServers holds it to the server's.
+const errCodeNoLeader jetstream.ErrorCode = 10008
 
 // ThroughElection asks one until its answer is not [Leaderless], one [ReAsk]
 // apart, while ctx allows, or for one [Election] from the first such answer

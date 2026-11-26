@@ -45,7 +45,7 @@ func TestACollectionDecodesALongTextOnce(t *testing.T) {
 	const slack = 4*unparsedShownBytes + 1<<20
 	// decode is the text's own decode, in this build: under the race detector a
 	// pool drops buffers, and the decode allocates more.
-	_, decode := allocationsOf(func() { _ = looseString(quoted) })
+	_, decode := allocationsOf(t, func() { _ = looseString(quoted) })
 	// holding is a decoder whose transcript holds the text as it is, so what
 	// is counted is the line's decode, not its redaction's stream.
 	holding := func() *claudeEvents {
@@ -68,7 +68,7 @@ func TestACollectionDecodesALongTextOnce(t *testing.T) {
 		if c.decodes {
 			limit += decode
 		}
-		if _, allocated := allocationsOf(c.read); allocated > limit {
+		if _, allocated := allocationsOf(t, c.read); allocated > limit {
 			t.Errorf("%s allocated %d bytes for a text of %d, past its decode (%d if it decodes it) and %d beside it",
 				c.name, allocated, len(text), decode, slack)
 		}

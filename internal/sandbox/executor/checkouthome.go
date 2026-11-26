@@ -14,13 +14,13 @@ import (
 // (internal/notehelper's "Checkouts below the working directory") keeps them:
 // the helper, its state and launch config ([checkoutSpec]); the home
 // instruction file the harness reads (agents: the first candidate that exists,
-// else the first; none where no text is handed there, Hermes's sections riding
-// its system prompt), the home's own held beside it (held), the helper's
-// sections (sections); the skills directory copies go into, each built in
-// state/staging, with the list the run's end removes; roots, the file listing
-// their roots for a harness the script points at them ("" for none); and, for a
-// gated spec, gateCmd, writing what checkout-launch reads, and afterLaunch, run
-// once it has claimed.
+// else the first; none for a harness whose home file is never held, its
+// sections read where they are written), the home's own held beside it (held),
+// the helper's sections (sections); the skills directory copies go into, each
+// built in state/staging ([checkoutHome.staging]), with the list the run's end
+// removes; roots, listing their roots for a harness the script points at them
+// ("" for none); for a gated spec, gateCmd, writing what checkout-launch reads,
+// and afterLaunch, run once it has claimed.
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
@@ -94,7 +94,7 @@ type checkoutSpec struct {
 	Gated              bool
 	Budget             *checkoutBudget
 	// ListedAs and HomeSkills are the helper's ("grok", Grok Build's listing
-	// rule; "kimi", Kimi Code's).
+	// rule; "kimi", Kimi Code's; "opencode", OpenCode's).
 	ListedAs   string
 	HomeSkills []checkoutSkillDir
 }
@@ -227,7 +227,10 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions,
 		"skillSep": spec.SkillSep, "roots": h.roots}
 	if spec.ListedAs != "" {
-		config["listedAs"], config["homeSkills"] = spec.ListedAs, spec.HomeSkills
+		config["listedAs"] = spec.ListedAs
+	}
+	if len(spec.HomeSkills) > 0 {
+		config["homeSkills"] = spec.HomeSkills
 	}
 	if spec.Gated {
 		config["gated"] = true

@@ -693,12 +693,13 @@ func TestOneFiringsCopiesAreBound(t *testing.T) {
 	}
 }
 
-// A COPY IS LISTED FOR REMOVAL BEFORE IT IS WRITTEN AND APPEARS WHOLE OR NOT
-// AT ALL: copies that cannot be built (the staging directory blocked) are
-// listed and leave no skill under their names; once they can, each is listed,
-// under its name with its SKILL.md renamed, and no staging is left.
+// A COPY APPEARS WHOLE OR NOT AT ALL, LISTED WHILE IT IS THERE: copies that
+// cannot be built (the staging directory blocked) leave no skill under their
+// names and come off the list again; once they can, each is listed, under its
+// name with its SKILL.md renamed, and no staging is left (that a name is
+// listed before its copy is written: TestACopyThatNeverLandsIsTakenOffTheList).
 //
-// Mutation: list a name after its copy, build it in place, or keep the
+// Mutation: leave a copy never built listed, build it in place, or keep the
 // staging, and a check goes red.
 func TestACopyIsListedBeforeItIsWrittenAndAppearsWhole(t *testing.T) {
 	t.Parallel()
@@ -715,8 +716,8 @@ func TestACopyIsListedBeforeItIsWrittenAndAppearsWhole(t *testing.T) {
 		t.Errorf("the launch said %q, want both skills named", said)
 	}
 	copied := filepath.Join(filepath.Dir(r.skills), "copied")
-	if got := read(t, copied); got != "repo:one\nrepo:two\n" {
-		t.Errorf("the copies listed are %q, want both, though neither was built", got)
+	if got := read(t, copied); got != "" {
+		t.Errorf("the copies listed are %q, want none, as neither was built", got)
 	}
 	for _, name := range []string{"repo:one", "repo:two"} {
 		if _, err := os.Lstat(r.skills + "/" + name); !os.IsNotExist(err) {
@@ -1199,9 +1200,9 @@ func TestNothingIsEverBuiltInsideASkillsDirectory(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		landed = append(landed, filepath.Base(to)+" onto "+strings.Join(names, ","))
-		return os.Rename(from, to)
+		return renameNoReplace(from, to)
 	}
-	t.Cleanup(func() { renameCopy = os.Rename })
+	t.Cleanup(func() { renameCopy = renameNoReplace })
 	r.launchSaying(t)
 	if got, want := strings.Join(landed, "; "), "repo:one onto own; repo:two onto own,repo:one"; got != want {
 		t.Errorf("the copies landed as %q, want %q", got, want)
@@ -1220,7 +1221,7 @@ func TestACopyAcrossFilesystemsIsLeftOutSaid(t *testing.T) {
 	renameCopy = func(from, to string) error {
 		return &os.LinkError{Op: "rename", Old: from, New: to, Err: syscall.EXDEV}
 	}
-	t.Cleanup(func() { renameCopy = os.Rename })
+	t.Cleanup(func() { renameCopy = renameNoReplace })
 	staging := filepath.Join(r.state, stagingDir)
 	said := r.launchSaying(t)
 	if want := "the skill " + filepath.Join(r.workdir(t), "repo/.codex/skills/s") + " is left out: the run's skills " +
@@ -1364,9 +1365,9 @@ func TestACopyForSkillsOnAnotherFilesystemIsBuiltBesideThem(t *testing.T) {
 	var from []string
 	renameCopy = func(old, to string) error {
 		from = append(from, old)
-		return os.Rename(old, to)
+		return renameNoReplace(old, to)
 	}
-	t.Cleanup(func() { onOneFilesystem, renameCopy = oneFilesystem, os.Rename })
+	t.Cleanup(func() { onOneFilesystem, renameCopy = oneFilesystem, renameNoReplace })
 	if said := r.launchSaying(t); said != "" {
 		t.Errorf("the launch said %q", said)
 	}

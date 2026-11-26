@@ -39,6 +39,7 @@ var oneShots = map[string]oneShot{
 	"hermes-peek":       {run: runHermesPeek, config: true},
 	"hermes-nested":     {run: runHermesNested, config: true},
 	"kimi-nested":       {run: runKimiNested, config: true},
+	"opencode-nested":   {run: runOpenCodeNested, config: true},
 	"codex-renew":       {run: runCodexRenew, config: true},
 	"codex-materialize": {run: runCodexMaterialize},
 	"copilot-launch":    {run: runCopilotLaunch, config: true},

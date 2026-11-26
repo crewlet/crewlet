@@ -173,7 +173,8 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 			c.Budget.Bytes)
 	}
 	if _, ok := listingRules[c.ListedAs]; c.ListedAs != "" && !ok {
-		return fmt.Errorf("the launch config's listedAs %q is none of %q and %q", c.ListedAs, listedGrok, listedKimi)
+		return fmt.Errorf("the launch config's listedAs %q is none of %q, %q and %q", c.ListedAs, listedGrok,
+			listedKimi, listedOpenCode)
 	}
 	if c.Gated {
 		if c.gate, err = readGate(stdin); err != nil {
