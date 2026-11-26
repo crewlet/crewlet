@@ -131,6 +131,7 @@ func qwenCountVariants() []string {
 		}
 		out = append(out, `{"subtype":"chat_compression"`+member+`,"uuid":"c1","type":"system"}`)
 	}
+	out = append(out, append(qwenMediaLines(chatMediaKB), qwenCountMediaLines(chatMediaKB)...)...)
 	return append(out, `{"uuid":"u","message":{"parts":[{"text":"no type"}]}}`,
 		`{"type":null,"message":{"parts":[]}}`, `{"type":5}`, `{"type":"`+long+`"}`, `{"type":"system","subtype":5}`,
 		`{"type":"system","subtype":"slash_command","message":{"parts":[{"text":"not counted"}]}}`,
@@ -256,6 +257,7 @@ func geminiCountVariants() []string {
 		`{"id":"r18","type":"user","content":"`+"\xff"+` invalid"}`,
 		`{"ID":"r19","type":"user","content":"another key"}`)
 	out = append(out, geminiPieceEdgeLines()...)
+	out = append(out, append(geminiMediaLines(chatMediaKB), geminiCountMediaLines(chatMediaKB)...)...)
 	return append(out, geminiFormHeadEdgeLines()...)
 }
 

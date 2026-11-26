@@ -49,10 +49,11 @@ func geminiConfirmed(ctx context.Context, r io.Reader, takes []geminiAskedTake, 
 	next, restating, at := 0, false, -1
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), bound)
+	w.passImages()
 	l := geminiNoteLine{takes: takes}
 	var compression geminiCompressionWatch
 	for {
-		read := func() error { return w.scan.Skip() }
+		read := func() error { return w.skip(jsonscan.ObjectStart) }
 		if next < len(takes) {
 			read = func() error { return l.read(&w, next, at+1) }
 		}
@@ -124,7 +125,7 @@ func (l *geminiNoteLine) read(w *lineWalk, next, at int) error {
 			l.contentStart()
 			return l.content(w, k)
 		}
-		return w.scan.Skip()
+		return w.skip(k)
 	})
 }
 
@@ -148,7 +149,7 @@ func (l *geminiNoteLine) content(w *lineWalk, k jsonscan.Kind) error {
 	case jsonscan.ArrayStart:
 		return w.elements(func(k jsonscan.Kind) (bool, error) {
 			if k != jsonscan.ObjectStart {
-				return true, w.scan.Skip()
+				return true, w.skip(k)
 			}
 			l.partText = false
 			err := w.members(func(name string, k jsonscan.Kind) error {
@@ -157,13 +158,13 @@ func (l *geminiNoteLine) content(w *lineWalk, k jsonscan.Kind) error {
 						return l.text(w)
 					}
 				}
-				return w.scan.Skip()
+				return w.skipMember(name, k)
 			})
 			l.partEnd()
 			return true, err
 		})
 	}
-	return w.scan.Skip()
+	return w.skip(k)
 }
 
 // text reads the current string: its digest, and its opening trimmed.

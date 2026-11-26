@@ -194,7 +194,7 @@ func (c *qwenCounting) record(w *lineWalk) error {
 			member(qwenCountPayloadMember)
 			err = w.qwenPayload(k, &l.payload, &l.twice)
 		default:
-			err = w.scan.Skip()
+			err = w.skip(k)
 		}
 		return err
 	})
@@ -305,7 +305,7 @@ func (w *lineWalk) qwenUsage(k jsonscan.Kind, u *qwenCountUsage, again *bool) er
 	case jsonscan.ObjectStart:
 	default:
 		u.present, u.bad = true, true
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	u.present = true
 	var seen uint16
@@ -323,7 +323,7 @@ func (w *lineWalk) qwenUsage(k jsonscan.Kind, u *qwenCountUsage, again *bool) er
 		case "totalTokenCount":
 			v, set, bit = &u.total, &u.hasTotal, 8
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		*again = twice(&seen, bit) || *again
 		*v, *set = 0, k != jsonscan.Null
@@ -346,7 +346,7 @@ func (w *lineWalk) qwenPayload(k jsonscan.Kind, p *qwenCountPayload, again *bool
 		return nil
 	case jsonscan.ObjectStart:
 	default:
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	p.decoded = true
 	var seen uint16
@@ -358,7 +358,7 @@ func (w *lineWalk) qwenPayload(k jsonscan.Kind, p *qwenCountPayload, again *bool
 			p.newCount, p.hasNew = 0, false
 			ok, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
 				if name != "newTokenCount" {
-					return w.scan.Skip()
+					return w.skip(k)
 				}
 				*again = twice(&seen, 4) || *again
 				n, ok, err := w.intField(k)
@@ -371,7 +371,7 @@ func (w *lineWalk) qwenPayload(k jsonscan.Kind, p *qwenCountPayload, again *bool
 			*again = twice(&seen, 2) || *again
 			p.history, p.images, p.answers = k == jsonscan.ArrayStart, 0, 0
 			if !p.history {
-				return w.scan.Skip()
+				return w.skip(k)
 			}
 			return w.elements(func(k jsonscan.Kind) (bool, error) {
 				err := w.qwenContent(k, &entry, false, again)
@@ -380,7 +380,7 @@ func (w *lineWalk) qwenPayload(k jsonscan.Kind, p *qwenCountPayload, again *bool
 				return true, err
 			})
 		}
-		return w.scan.Skip()
+		return w.skip(k)
 	})
 }
 
@@ -395,11 +395,11 @@ func (w *lineWalk) qwenContent(k jsonscan.Kind, m *qwenCountContent, calls bool,
 	var seen uint16
 	size, err := w.sizedValue(k, func() error {
 		if !m.object {
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		return w.members(func(name string, k jsonscan.Kind) error {
 			if name != "parts" {
-				return w.scan.Skip()
+				return w.skip(k)
 			}
 			*again = twice(&seen, 1) || *again
 			m.partsBad, m.imagesBad, m.idsBad, m.images, m.answers = false, false, false, 0, 0
@@ -430,7 +430,7 @@ func (w *lineWalk) qwenPart(k jsonscan.Kind, m *qwenCountContent, calls bool, ag
 	case jsonscan.ObjectStart:
 	default:
 		m.partsBad = true
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	var seen uint16
 	var opened, closed, inline, file bool
@@ -447,10 +447,10 @@ func (w *lineWalk) qwenPart(k jsonscan.Kind, m *qwenCountContent, calls bool, ag
 			present := k != jsonscan.Null
 			if name == "inlineData" {
 				inline = present
-			} else {
-				file = present
+				return w.skipInline(k)
 			}
-			return w.scan.Skip()
+			file = present
+			return w.skip(k)
 		case "functionResponse":
 			*again = twice(&seen, qwenCountPartAnswer) || *again
 			closed, answer, images = k == jsonscan.ObjectStart, recordWord{}, 0
@@ -462,7 +462,7 @@ func (w *lineWalk) qwenPart(k jsonscan.Kind, m *qwenCountContent, calls bool, ag
 			}
 			n, err := w.sizedValue(k, func() error {
 				if k != jsonscan.ObjectStart {
-					return w.scan.Skip()
+					return w.skip(k)
 				}
 				var inner uint16
 				return w.members(func(name string, k jsonscan.Kind) error {
@@ -486,7 +486,7 @@ func (w *lineWalk) qwenPart(k jsonscan.Kind, m *qwenCountContent, calls bool, ag
 						m.imagesBad = m.imagesBad || !ok
 						return err
 					}
-					return w.scan.Skip()
+					return w.skip(k)
 				})
 			})
 			m.answers += n
@@ -497,7 +497,7 @@ func (w *lineWalk) qwenPart(k jsonscan.Kind, m *qwenCountContent, calls bool, ag
 			var inner uint16
 			ok, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
 				if name != "id" {
-					return w.scan.Skip()
+					return w.skip(k)
 				}
 				*again = twice(&inner, 1) || *again
 				var ok bool
@@ -509,7 +509,7 @@ func (w *lineWalk) qwenPart(k jsonscan.Kind, m *qwenCountContent, calls bool, ag
 			m.idsBad = m.idsBad || !ok
 			return err
 		}
-		return w.scan.Skip()
+		return w.skip(k)
 	})
 	if inline || file {
 		images++
@@ -535,7 +535,7 @@ func (w *lineWalk) qwenData(k jsonscan.Kind, again *bool) (int, bool, error) {
 		return 0, true, nil
 	case jsonscan.ObjectStart:
 	default:
-		return 0, false, w.scan.Skip()
+		return 0, false, w.skip(k)
 	}
 	var seen uint16
 	var inline, file bool
@@ -548,7 +548,10 @@ func (w *lineWalk) qwenData(k jsonscan.Kind, again *bool) (int, bool, error) {
 			*again = twice(&seen, 2) || *again
 			file = k != jsonscan.Null
 		}
-		return w.scan.Skip()
+		if name == "inlineData" {
+			return w.skipInline(k)
+		}
+		return w.skip(k)
 	})
 	if inline || file {
 		return 1, true, err
