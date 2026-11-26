@@ -86,8 +86,8 @@ type checkoutSpec struct {
 	NestedSkillsOnly   bool
 	ImportInstructions bool
 	SkillSep           checkoutSkillSep
-	// ListedAs is the helper's listing rule ("grok", Grok Build's); HomeSkills
-	// the home's other skill directories whose names no copy takes.
+	// ListedAs and HomeSkills are the helper's ("grok", Grok Build's listing
+	// rule; "kimi", Kimi Code's; "opencode", OpenCode's).
 	ListedAs   string
 	HomeSkills []checkoutSkillDir
 }
@@ -138,9 +138,11 @@ type checkoutSlot struct {
 	Names []string
 	Tree  *checkoutTree
 	// Inside follows a name's link only within the checkout; Once hands no
-	// file an earlier slot handed.
-	Inside bool `json:"inside,omitempty"`
-	Once   bool `json:"once,omitempty"`
+	// file an earlier slot handed; SkipBlank passes over a name's file of
+	// whitespace alone for the next name (Kimi Code, measured on 2.7.2).
+	Inside    bool `json:"inside,omitempty"`
+	Once      bool `json:"once,omitempty"`
+	SkipBlank bool `json:"skipBlank,omitempty"`
 }
 
 // checkoutTree is a tree slot: the directory below a checkout's root, the
@@ -183,12 +185,13 @@ func (s checkoutSlot) MarshalJSON() ([]byte, error) {
 	switch {
 	case s.Tree != nil:
 		return json.Marshal(s.Tree)
-	case s.Inside || s.Once:
+	case s.Inside || s.Once || s.SkipBlank:
 		return json.Marshal(struct {
-			Names  []string `json:"names"`
-			Inside bool     `json:"inside,omitempty"`
-			Once   bool     `json:"once,omitempty"`
-		}{s.Names, s.Inside, s.Once})
+			Names     []string `json:"names"`
+			Inside    bool     `json:"inside,omitempty"`
+			Once      bool     `json:"once,omitempty"`
+			SkipBlank bool     `json:"skipBlank,omitempty"`
+		}{s.Names, s.Inside, s.Once, s.SkipBlank})
 	}
 	return json.Marshal(s.Names)
 }

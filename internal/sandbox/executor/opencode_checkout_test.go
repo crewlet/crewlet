@@ -200,7 +200,7 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAnOpenCodeRun(t *testing.T) {
 		t.Errorf("the checkouts' skills directory holds %v after the run (%v), want the copies removed", left, err)
 	}
 	if errs := boxFile(t, box, p.Err()); !strings.Contains(errs, "the skill "+work+"/repo/.claude/skills/cl is left out: "+
-		"the home's "+box.Home()+"/.config/opencode/skills/mine is a skill named repo:cl already") {
+		"the home's "+box.Home()+"/.config/opencode/skills/mine, which OpenCode lists as repo:cl") {
 		t.Errorf("skills: the run does not say its copy repo:cl is left out for the home's skill of that name:\n%s", errs)
 	}
 	if nested := boxFile(t, box, p.OpenCodeCheckoutState()+"/nested.json"); !strings.Contains(nested, `"firingLimit":196608`) {

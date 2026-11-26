@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -106,9 +107,11 @@ func (Kimi) Command(req sandbox.RunRequest, session Session, paths Paths, config
 // [kimiSupported] refused;
 // node required, which the driver runs on; the routing variables the entry did
 // not set removed ([kimiRoutingOff]); the session settled and recorded
-// ([kimiSessionGate], [Paths.SessionRecord]); the driver run under the end
+// ([kimiSessionGate], [Paths.SessionRecord]); the checkouts below the start
+// directory handed theirs ([kimiCheckoutHome]); the driver run under the end
 // protocol ([launchHarness]), its brief on stdin; the server it started ended
-// where it outlived it; the run's own usage added to the stream
+// where it outlived it, and the home's AGENTS.md and skills put back; the
+// run's own usage added to the stream
 // ([kimiUsage]); the home's own MCP servers put back ([kimiRestoreMCP]); and
 // its session packed ([kimiCapture]), exiting with the driver's status.
 func kimiScript(req sandbox.RunRequest, session Session, paths Paths, settings string, stop time.Duration) string {
@@ -128,11 +131,22 @@ func kimiScript(req sandbox.RunRequest, session Session, paths Paths, settings s
 	b.WriteString(kimiSessionGate(session, paths, req.FreshWiring != nil))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`, q(paths.SessionRecord()))
 	b.WriteString(kimiLinesBefore(paths))
-	b.WriteString(launchHarness("node "+q(paths.KimiDriver())+" "+q(settings)+` "$@"`, paths))
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([kimiCheckoutHome]), and once
+	// Kimi has stopped, on a failure before and on a teardown's signal, the
+	// home's own AGENTS.md back, the copies removed and what a firing left out
+	// said, each step whatever came of the other ([everyStep]); a run killed
+	// outright leaves the put-back to the next run's clear ([homeKeeper]).
+	home := kimiCheckoutHome(paths)
+	line(`kput() { %s; }`, everyStep(home.restore(), home.saySkipped()))
+	line(`kquit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; kserver; kput; exit "$1"; }`)
+	line(`trap kput EXIT; trap 'kquit 143' TERM; trap 'kquit 130' INT; trap 'kquit 129' HUP`)
 	// THE SERVER, ENDED WHERE IT OUTLIVED ITS DRIVER: one the end had to kill
 	// never got to stop it. Asked at once, so its pid is the driver's child's.
-	line(`p=$(cat %s 2> /dev/null) || p=; case "$p" in ''|*[!0-9]*) ;; *) kill -0 "$p" 2> /dev/null && end "$p" ;; esac`,
+	line(`kserver() { p=$(cat %s 2> /dev/null) || p=; case "$p" in ''|*[!0-9]*) ;; *) kill -0 "$p" 2> /dev/null && end "$p" ;; esac; }`,
 		q(paths.KimiServerPid()))
+	b.WriteString(home.gate())
+	b.WriteString(launchHarness("node "+q(paths.KimiDriver())+" "+q(settings)+` "$@"`, paths))
+	line(`kserver; kput; trap - EXIT TERM INT HUP`)
 	line(`%s`, kimiRestoreMCP(paths))
 	b.WriteString(kimiSessionOf(paths))
 	b.WriteString(kimiUsage(paths))
@@ -335,6 +349,9 @@ type kimiSettings struct {
 	// WebDenied has the driver post the brief with Kimi's web tools on the
 	// session's disabled_tools ([kimiWebTools]).
 	WebDenied bool `json:"webDenied,omitempty"`
+	// Checkouts is the driver's hand of a checkout cloned during the run
+	// ([kimiNested]), nil in a box with no note helper for its machine.
+	Checkouts *kimiNestedHand `json:"checkouts,omitempty"`
 }
 
 // kimiProfileDir is the directory under the home's agents a run's profile is
@@ -396,6 +413,18 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		Staging: paths.sessionReportStaging(), ServerPid: paths.KimiServerPid(),
 		Servers: slices.Sorted(maps.Keys(req.MCPServers)), MCPConfig: paths.KimiMCPConfig(), WebDenied: req.WebDenied,
 		ServerStartMs: kimiServerStartMs}
+	// THE NOTE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR, which hands
+	// the checkouts below the start directory theirs ([kimiCheckoutHome]); a
+	// box with none starts without them, its gate saying so.
+	if err := writeNoteHelper(ctx, box, paths.KimiNoteHelper()); err == nil {
+		settings.Checkouts = kimiNested(paths)
+	} else if !errors.Is(err, errNoHelperBuild) {
+		return "", err
+	}
+	launch := kimiCheckoutHome(paths).launchConfig(kimiCheckouts(paths), req.ReportedRepos)
+	if err := box.WriteFile(ctx, paths.KimiCheckoutLaunch(), launch); err != nil {
+		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
+	}
 	if !kimiKeySignsIn(req) {
 		settings.Model = req.Model
 	}

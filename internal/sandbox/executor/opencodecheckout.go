@@ -69,6 +69,7 @@ func openCodeCheckouts(paths Paths, env map[string]string) checkoutSpec {
 		FiringLimit:  &openCodeFiringLimit,
 		SkillDirs:    walked(dirs),
 		HomeSkills:   walked(listed),
+		ListedAs:     "opencode",
 	}
 }
 

@@ -29,6 +29,7 @@ import (
 func (b *transcriptBuilder) qwenSession(ctx context.Context, r io.Reader) error {
 	q := &qwenReading{}
 	q.setupBounded(b, q, bufio.NewReaderSize(r, lineChunkBytes))
+	q.passImages()
 	return q.member(ctx)
 }
 
@@ -74,7 +75,7 @@ func (r *qwenReading) record() error {
 		case "systemPayload":
 			err = r.compaction.read(&r.chatReading, k)
 		default:
-			err = r.scan.Skip()
+			err = r.skip(k)
 		}
 		return err
 	})
@@ -85,12 +86,12 @@ func (r *qwenReading) messageValue(k jsonscan.Kind) error {
 	r.asst.reset(r.b.seen)
 	r.user.reset(r.b.seen)
 	if r.message = k == jsonscan.ObjectStart; !r.message {
-		return r.scan.Skip()
+		return r.skip(k)
 	}
 	sinks := chatSinks{model: &r.asst, user: &r.user}
 	return r.members(func(name string, k jsonscan.Kind) error {
 		if name != "parts" {
-			return r.scan.Skip()
+			return r.skip(k)
 		}
 		r.asst.reset(r.b.seen)
 		r.user.reset(r.b.seen)
@@ -162,7 +163,7 @@ func (c *qwenCompaction) reset(max int) {
 func (c *qwenCompaction) read(r *chatReading, k jsonscan.Kind) error {
 	c.reset(c.max)
 	if c.object = k == jsonscan.ObjectStart; !c.object {
-		return r.scan.Skip()
+		return r.skip(k)
 	}
 	return r.members(func(name string, k jsonscan.Kind) error {
 		switch name {
@@ -181,7 +182,7 @@ func (c *qwenCompaction) read(r *chatReading, k jsonscan.Kind) error {
 			}
 			c.refused = true
 		}
-		return r.scan.Skip()
+		return r.skip(k)
 	})
 }
 
@@ -201,7 +202,7 @@ func (c *qwenCompaction) historyEntry(r *chatReading, k jsonscan.Kind) error {
 				c.entry, c.entryPast = c.entry[:0], false
 				err = c.parts(r, k)
 			default:
-				err = r.scan.Skip()
+				err = r.skip(k)
 			}
 			return err
 		})
@@ -210,7 +211,7 @@ func (c *qwenCompaction) historyEntry(r *chatReading, k jsonscan.Kind) error {
 		}
 	default:
 		c.refused = true
-		return r.scan.Skip()
+		return r.skip(k)
 	}
 	c.entryEnd()
 	return nil
@@ -265,7 +266,7 @@ func (c *qwenCompaction) parts(r *chatReading, k jsonscan.Kind) error {
 	case jsonscan.ArrayStart:
 		return r.elements(func(k jsonscan.Kind) (bool, error) {
 			if k != jsonscan.ObjectStart {
-				return true, r.scan.Skip()
+				return true, r.skip(k)
 			}
 			c.partStart()
 			err := r.members(func(name string, k jsonscan.Kind) error {
@@ -278,13 +279,13 @@ func (c *qwenCompaction) parts(r *chatReading, k jsonscan.Kind) error {
 				case "thought":
 					c.partThought = k == jsonscan.True
 				}
-				return r.scan.Skip()
+				return r.skipMember(name, k)
 			})
 			c.partEnd()
 			return true, err
 		})
 	}
-	return r.scan.Skip()
+	return r.skip(k)
 }
 
 // partStart starts a part.

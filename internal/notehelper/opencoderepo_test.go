@@ -19,7 +19,8 @@ func openCodeSpec(skills string) checkoutSpec {
 	return checkoutSpec{Instructions: names([]string{"AGENTS.md", "CLAUDE.md"}),
 		SkillDirs: []skillDirSlot{walked(".opencode/skills"), walked(".opencode/skill"), walked(".claude/skills"),
 			walked(".agents/skills")},
-		Skills: skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"}}
+		Skills: skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"},
+		ListedAs: listedOpenCode}
 }
 
 // openCodeLaunch runs checkout-launch in r's working directory under

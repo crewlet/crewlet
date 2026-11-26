@@ -8,15 +8,16 @@ import (
 	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
-// AN IMAGE A SESSION'S LINE HOLDS INLINE IS PASSED, NEVER HELD OR BOUNDED: a
-// walk that passes images ([lineWalk.passImages]) walks every value its
-// reader passes over ([lineWalk.pass]), reads each image's bytes a piece at a
-// time and counts them out of the line's bound ([lineSource.skipped]), so the
-// bound holds what the reader keeps. A text an image is joined into shows its
-// place and size ([imagePlaceholder]), and a value shown as written shows it
-// so too ([asWrittenImages]). Codex inlines every image it reads or is handed
-// (view_image, a person's, an MCP tool's) as a data URL, a real one past
-// 100 MiB (0.171.0), and Hermes 0.23.3 the newest a compaction kept.
+// MEDIA A SESSION'S LINE HOLDS INLINE IS PASSED, NEVER HELD OR BOUNDED: a walk
+// that passes images ([lineWalk.passImages]) walks every value its reader
+// passes over ([lineWalk.pass]), reads each payload a piece at a time and
+// counts it out of the line's bound ([lineSource.skipped]), so the bound
+// holds what the reader keeps. A payload is media of any type, not only an
+// image: no reader keeps base64 as text. A text it is joined into shows its
+// place and size ([mediaPlaceholder]), and so does a value shown as written
+// ([asWrittenImages]). Codex 0.171.0 inlines images as data URLs, a real one
+// past 100 MiB; Hermes 0.23.3 keeps those a compaction kept; Gemini CLI and
+// Qwen Code write any file or MCP medium as `inlineData`, its base64 raw.
 
 // imageSlack is what a walk that passes images takes of a line past its bound
 // before the source stops handing it on: the most bytes of an image taken
@@ -28,27 +29,27 @@ import (
 // verdict is [lineSource.over]'s, exact once the line ends.
 const imageSlack = lineChunkBytes + 2*jsonscan.ReadBufferSize + dataURLHeadMax
 
-// dataURLHeadMax is the most of a string read to tell an image's data URL by
-// its head, `data:image/<subtype>[;<parameter>]...;base64,`: a subtype runs to
-// RFC 6838's 127 characters, which leaves room for parameters.
+// dataURLHeadMax is the most of a string read to tell a data URL by its head,
+// `data:<type>/<subtype>[;<parameter>]...;base64,`: a type and a subtype run
+// to RFC 6838's 127 characters each, which leaves room for parameters.
 const dataURLHeadMax = 512
 
-// dataURLOpen opens an image's data URL.
-const dataURLOpen = "data:image/"
+// dataURLOpen opens a data URL.
+const dataURLOpen = "data:"
 
-// headVerdict is what a string's opening says of it: not yet told, an image's
-// data URL, or none.
+// headVerdict is what a string's opening says of it: not yet told, a data
+// URL's of some media, or none.
 type headVerdict uint8
 
 const (
 	headUndecided headVerdict = iota
-	headImage
+	headMedia
 	headNot
 )
 
-// dataURLHead tells head, the opening of a string's words, as an image's
-// base64 data URL: its media type an image's, its parameters and `;base64`
-// printable ASCII up to the comma that opens the data.
+// dataURLHead tells head, the opening of a string's words, as a base64 data
+// URL of any media: a media type holding a slash, its parameters and
+// `;base64` printable ASCII up to the comma that opens the data.
 func dataURLHead(head []byte) headVerdict {
 	if len(head) < len(dataURLOpen) {
 		if bytes.HasPrefix([]byte(dataURLOpen), head) {
@@ -62,8 +63,9 @@ func dataURLHead(head []byte) headVerdict {
 	for i := len(dataURLOpen); i < len(head); i++ {
 		switch c := head[i]; {
 		case c == ',':
-			if bytes.HasSuffix(head[:i], []byte(";base64")) {
-				return headImage
+			typ, _, _ := bytes.Cut(head[len(dataURLOpen):i], []byte(";"))
+			if bytes.HasSuffix(head[:i], []byte(";base64")) && bytes.IndexByte(typ, '/') > 0 {
+				return headMedia
 			}
 			return headNot
 		case c <= ' ' || c >= 0x7f || c == '"' || c == '\\':
@@ -85,6 +87,22 @@ func imagePlaceholder(passed int64) string {
 	return "[an image of " + humanSize(passed) + "]"
 }
 
+// mediaPlaceholder is what the payload of a data URL whose head is head, or of
+// an inlineData object (head nil), passed bytes long, reads as in a text: an
+// image's as [imagePlaceholder] says; other media by its type as written;
+// inline data, whose type its text need not name before it, as data.
+func mediaPlaceholder(head []byte, passed int64) string {
+	if head == nil {
+		return "[inline data of " + humanSize(passed) + "]"
+	}
+	comma := bytes.IndexByte(head, ',')
+	typ, _, _ := bytes.Cut(head[len(dataURLOpen):max(comma, len(dataURLOpen))], []byte(";"))
+	if bytes.HasPrefix(bytes.ToLower(typ), []byte("image/")) {
+		return imagePlaceholder(passed)
+	}
+	return "[inline " + string(typ) + " of " + humanSize(passed) + "]"
+}
+
 // passImages makes w a walk that passes images.
 func (w *lineWalk) passImages() {
 	w.images, w.src.slack = true, imageSlack
@@ -100,10 +118,11 @@ func (w *lineWalk) skip(k jsonscan.Kind) error {
 	return w.pass(k)
 }
 
-// pass passes over the value k begins, holding none of it, each image in it
-// passed ([lineWalk.passString]): a string that is an image's data URL, or
-// the `data` string of an object whose `type` is `image`, written before it
-// as serde writes the tag of an MCP image (Codex's mcp_tool_call_end).
+// pass passes over the value k begins, holding none of it, each payload in it
+// passed ([lineWalk.passString]): a string that is a data URL, the `data`
+// string of an object whose `type` is `image`, written before it as serde
+// writes the tag of an MCP image (Codex's mcp_tool_call_end), and an
+// `inlineData` object's `data` ([lineWalk.passInline]).
 func (w *lineWalk) pass(k jsonscan.Kind) error {
 	switch k {
 	case jsonscan.String:
@@ -118,6 +137,8 @@ func (w *lineWalk) pass(k jsonscan.Kind) error {
 				return err
 			case name == "data" && image && k == jsonscan.String:
 				return w.passString(true)
+			case name == "inlineData" && k == jsonscan.ObjectStart:
+				return w.passInline()
 			}
 			return w.pass(k)
 		})
@@ -127,8 +148,39 @@ func (w *lineWalk) pass(k jsonscan.Kind) error {
 	return w.scan.Skip()
 }
 
+// passInline passes over an `inlineData` object, its opening brace current:
+// its `data`, base64 of any media type (Gemini CLI 0.70.0 writes it before or
+// after `mimeType`, by the tool), passed whole, as is any payload in the rest.
+func (w *lineWalk) passInline() error {
+	return w.members(func(name string, k jsonscan.Kind) error {
+		if name == "data" && k == jsonscan.String {
+			return w.passString(true)
+		}
+		return w.pass(k)
+	})
+}
+
+// skipInline passes over the value k begins, an `inlineData` member's: as
+// [lineWalk.passInline] passes an object on a walk that passes images, else
+// as [lineWalk.skip] does.
+func (w *lineWalk) skipInline(k jsonscan.Kind) error {
+	if w.images && k == jsonscan.ObjectStart {
+		return w.passInline()
+	}
+	return w.skip(k)
+}
+
+// skipMember passes over the value k of the member name: an `inlineData`
+// member's as [lineWalk.skipInline] does, any other's as [lineWalk.skip].
+func (w *lineWalk) skipMember(name string, k jsonscan.Kind) error {
+	if name == "inlineData" {
+		return w.skipInline(k)
+	}
+	return w.skip(k)
+}
+
 // passString passes over the current string, its words read a piece at a
-// time: an image's, where image says it is one or its head tells a data URL
+// time: a payload's, where image says it is one or its head tells a data URL
 // ([dataURLHead]), each piece counted out of the line's bound as it is read;
 // else the rest skipped.
 func (w *lineWalk) passString(image bool) error {
@@ -153,12 +205,12 @@ func (w *lineWalk) passString(image bool) error {
 }
 
 // told reads the current string's opening on from head, which is w.head's,
-// until it is told an image's data URL or not ([dataURLHead]), and is what it
-// read, whether it is an image's, and whether the string ended within it.
+// until it is told a data URL or not ([dataURLHead]), and is what it read,
+// whether it is one, and whether the string ended within it.
 func (w *lineWalk) told(head []byte) ([]byte, bool, bool, error) {
 	for {
 		switch dataURLHead(head) {
-		case headImage:
+		case headMedia:
 			return head, true, false, nil
 		case headNot:
 			return head, false, false, nil
@@ -170,7 +222,7 @@ func (w *lineWalk) told(head []byte) ([]byte, bool, bool, error) {
 		head = head[:len(head)+n]
 		switch {
 		case errors.Is(err, io.EOF):
-			return head, dataURLHead(head) == headImage, true, nil
+			return head, dataURLHead(head) == headMedia, true, nil
 		case err != nil:
 			return head, false, false, err
 		case n == 0:
@@ -200,8 +252,8 @@ func (w *lineWalk) passRest(passed int64) (int64, error) {
 }
 
 // readImage reads the current string on from its opening, head, into to,
-// where the walk passes images and it is one: its place written
-// ([imagePlaceholder]), its bytes passed; it reports whether it was one, and
+// where the walk passes images and it is a data URL: its place written
+// ([mediaPlaceholder]), its bytes passed; it reports whether it was one, and
 // else is what it read of the opening and whether the string ended there.
 func (w *lineWalk) readImage(to io.Writer, head []byte, ended bool) (bool, []byte, bool, error) {
 	if !w.images || ended {
@@ -217,7 +269,7 @@ func (w *lineWalk) readImage(to io.Writer, head []byte, ended bool) (bool, []byt
 	} else {
 		passed, err = w.passRest(passed)
 	}
-	_, _ = io.WriteString(to, imagePlaceholder(passed))
+	_, _ = io.WriteString(to, mediaPlaceholder(head, passed))
 	return true, nil, true, err
 }
 
@@ -227,34 +279,53 @@ func (w *lineWalk) asWritten(t io.Writer) io.Writer {
 	if !w.images {
 		return t
 	}
-	w.written = asWrittenImages{w: t, head: w.written.head[:0], out: w.written.out[:0]}
-	return &w.written
+	a := &w.written
+	*a = asWrittenImages{w: t, head: a.head[:0], key: a.key[:0], open: a.open[:0], out: a.out[:0]}
+	return a
 }
 
-// asWrittenImages writes a JSON value as written on to w, but each string that
-// is an image's data URL ([dataURLHead]) as its place ([imagePlaceholder]),
-// sized by the bytes written between its quotes. Its writes never fail.
+// asWrittenImages writes a JSON value as written on to w, but each payload in
+// it as its place ([mediaPlaceholder]), sized by the bytes written between
+// its quotes: a string that is a data URL ([dataURLHead]), and an
+// `inlineData` object's `data` string. Its writes never fail.
 type asWrittenImages struct {
 	w io.Writer
 	// at is where in the value the next byte falls; escaped says it follows
 	// a backslash in a string, head is a string's opening while it is told,
-	// and passed is the bytes of the image being passed.
+	// and passed is the bytes of the payload being passed.
 	at      writtenAt
 	escaped bool
 	head    []byte
 	passed  int64
-	out     []byte
+	// open is the containers open, innermost last: an array, an object, or
+	// an `inlineData` member's object; key is the last member name read and
+	// valued that a colon followed it.
+	open   []writtenOpen
+	key    []byte
+	valued bool
+	out    []byte
 }
 
 // writtenAt is where a value written falls: outside every string, in a
-// string's opening being told, in an image's data URL or in another string.
+// string's opening being told, in a data URL's payload, in an `inlineData`
+// object's `data` or in another string.
 type writtenAt uint8
 
 const (
 	writtenOutside writtenAt = iota
 	writtenHead
 	writtenImage
+	writtenInline
 	writtenString
+)
+
+// writtenOpen is a container a value written holds open.
+type writtenOpen uint8
+
+const (
+	writtenArray writtenOpen = iota
+	writtenObject
+	writtenInlineObject
 )
 
 func (a *asWrittenImages) Write(p []byte) (int, error) {
@@ -262,20 +333,21 @@ func (a *asWrittenImages) Write(p []byte) (int, error) {
 	for _, c := range p {
 		switch a.at {
 		case writtenOutside:
-			a.out = append(a.out, c)
-			if c == '"' {
-				a.at, a.head = writtenHead, a.head[:0]
-			}
+			a.outside(c)
 		case writtenHead:
 			a.headByte(c)
-		case writtenImage:
+		case writtenImage, writtenInline:
 			switch {
 			case a.escaped:
 				a.escaped = false
 			case c == '\\':
 				a.escaped = true
 			case c == '"':
-				a.out = append(a.out, imagePlaceholder(a.passed)...)
+				head := a.head
+				if a.at == writtenInline {
+					head = nil
+				}
+				a.out = append(a.out, mediaPlaceholder(head, a.passed)...)
 				a.out = append(a.out, c)
 				a.at = writtenOutside
 				continue
@@ -286,10 +358,14 @@ func (a *asWrittenImages) Write(p []byte) (int, error) {
 			switch {
 			case a.escaped:
 				a.escaped = false
+				a.keep(c)
 			case c == '\\':
 				a.escaped = true
+				a.keep(c)
 			case c == '"':
-				a.at = writtenOutside
+				a.ended()
+			default:
+				a.keep(c)
 			}
 		}
 	}
@@ -297,25 +373,118 @@ func (a *asWrittenImages) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// outside takes c, a byte outside every string: a string's opening quote, an
+// `inlineData` object's `data` passed from it, and the containers and names
+// that tell one.
+func (a *asWrittenImages) outside(c byte) {
+	a.out = append(a.out, c)
+	top := len(a.open) - 1
+	switch c {
+	case '"':
+		a.at, a.head = writtenHead, a.head[:0]
+		if top >= 0 && a.open[top] == writtenInlineObject && a.valued && string(a.key) == "data" {
+			a.at, a.passed = writtenInline, 0
+		}
+	case ':':
+		a.valued = true
+	case ',':
+		a.valued = false
+	case '{':
+		inline := top >= 0 && a.open[top] != writtenArray && a.valued && string(a.key) == "inlineData"
+		a.open = append(a.open, writtenObject)
+		if inline {
+			a.open[top+1] = writtenInlineObject
+		}
+		a.valued = false
+	case '[':
+		a.open, a.valued = append(a.open, writtenArray), false
+	case '}', ']':
+		if top >= 0 {
+			a.open = a.open[:top]
+		}
+	}
+}
+
+// writtenKeyMax is the most of a string kept to tell it as a member's name:
+// past it, it names no member a payload is told by.
+const writtenKeyMax = 16
+
+// keep keeps c, the next byte of a string written as it is, to tell it as a
+// member's name.
+func (a *asWrittenImages) keep(c byte) {
+	if len(a.head) <= writtenKeyMax {
+		a.head = append(a.head, c)
+	}
+}
+
+// ended ends a string written as it is: a member's name, where it stands for
+// one, is kept as the key.
+func (a *asWrittenImages) ended() {
+	a.at = writtenOutside
+	if top := len(a.open) - 1; top >= 0 && a.open[top] != writtenArray && !a.valued {
+		a.key = a.key[:0]
+		if len(a.head) <= writtenKeyMax {
+			a.key = append(a.key, a.head...)
+		}
+	}
+}
+
 // headByte takes c, the next byte of a string's opening: a string that ends
-// or escapes a byte before it is told an image's is written as it is.
+// or escapes a byte before it is told a data URL's is written as it is.
 func (a *asWrittenImages) headByte(c byte) {
 	if c == '"' {
-		if dataURLHead(a.head) == headImage {
-			a.out = append(a.out, imagePlaceholder(int64(len(a.head)))...)
+		if dataURLHead(a.head) == headMedia {
+			a.out = append(a.out, mediaPlaceholder(a.head, int64(len(a.head)))...)
 		} else {
 			a.out = append(a.out, a.head...)
 		}
 		a.out = append(a.out, c)
-		a.at = writtenOutside
+		a.ended()
 		return
 	}
 	a.head = append(a.head, c)
 	switch told := dataURLHead(a.head); {
-	case told == headImage:
+	case told == headMedia:
 		a.at, a.passed = writtenImage, int64(len(a.head))
 	case told == headNot, c == '\\':
 		a.out = append(a.out, a.head...)
 		a.at, a.escaped = writtenString, c == '\\'
+	}
+}
+
+// passing counts a string read as text out of the line's bound where it is a
+// payload: told by its head ([dataURLHead]) on a walk that passes images, or
+// from its first byte where the walk reads an inline one ([lineWalk.inline]).
+// Its head is the walk's ([lineWalk.head]); taken is what it read before.
+type passing struct {
+	telling, on bool
+	taken       int64
+}
+
+// start starts a string's text on w.
+func (p *passing) start(w *lineWalk) {
+	*p = passing{telling: w.images && !w.inline, on: w.images && w.inline}
+	w.head = w.head[:0]
+}
+
+// read takes b, the string's next bytes read.
+func (p *passing) read(w *lineWalk, b []byte) {
+	switch {
+	case p.on:
+		w.src.skipped += int64(len(b))
+		return
+	case !p.telling:
+		return
+	}
+	p.taken += int64(len(b))
+	w.head = append(w.head, b[:min(len(b), cap(w.head)-len(w.head))]...)
+	switch dataURLHead(w.head) {
+	case headMedia:
+		p.on, p.telling = true, false
+		w.src.skipped += p.taken
+	case headNot:
+		p.telling = false
+	default:
+		p.telling = len(w.head) < cap(w.head)
 	}
 }

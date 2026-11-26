@@ -7,6 +7,26 @@ import (
 	"strings"
 )
 
+// listedOpenCode is the [checkoutSpec.ListedAs] of a harness that lists skills
+// as OpenCode 2.3.2 does ([openCodeListing]).
+const listedOpenCode = "opencode"
+
+// openCodeListing is OpenCode 2.3.2's listing rule ([listingRule]): a skill is
+// listed and keyed by its frontmatter's name as written, else its
+// directory's, and of two of one name, in any of its skill directories or
+// the home's, it loads neither (measured, row clashact), so a copy a home
+// skill's name takes is left out. A home walked as OpenCode walks a skill
+// directory: 6 deep, dot directories and node_modules skipped.
+var openCodeListing = listingRule{harness: "OpenCode", walk: skillWalkOptions{Depth: 6},
+	key: func(name string) string { return name }, shown: func(name string) string { return name },
+	takes: func(d skillDir) (string, []string) {
+		n, named := frontName(entryFile(d))
+		if !named || n == "" {
+			n = d.name
+		}
+		return n, []string{n}
+	}}
+
 // runOpenCodeNested is one firing of an OpenCode run's nested hand, which the
 // run's checkouts plugin runs after each tool call of the run's own session
 // (internal/sandbox/executor's opencode_checkouts.js): it hands each checkout
