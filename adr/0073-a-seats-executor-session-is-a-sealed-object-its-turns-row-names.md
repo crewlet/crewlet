@@ -1125,6 +1125,7 @@
   - `internal/sandbox/executor.TestAClaudeSummaryAddsOnlyItsWordsToTheWalk`
   - `internal/sandbox/executor.TestABoxReadsSummaryIsBudgeted`
   - `internal/sandbox/executor.TestATrimsHeldRunCountsTowardItsClaim`
+  - `internal/sandbox/executor.TestASummaryWhoseWaitEndedUnmetIsUnreadForIt`
   - `internal/sandbox.TestASummaryIsPlacedAtTheCaptureThatFirstNamedIt`
   - `internal/executorkeep.TestALaterPlaceIsALaterLaunchsOrALaterCaptureOfIt`
   - `internal/agent/runner.TestAReseedTellsTheSessionItDoesNotContinueBeforeItsCalls`

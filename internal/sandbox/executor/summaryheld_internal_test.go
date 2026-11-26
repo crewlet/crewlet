@@ -267,3 +267,19 @@ func TestATrimsHeldRunCountsTowardItsClaim(t *testing.T) {
 			len(trim.run), trim.claim.err())
 	}
 }
+
+// A SUMMARY WHOSE WAIT FOR THE LARGE SLOT ENDED UNMET IS UNREAD FOR THAT, never
+// as one past its bound: the words past the share were never held, and the
+// read says why.
+//
+// Mutation: read a failed wait's words as past the bound: this goes red.
+func TestASummaryWhoseWaitEndedUnmetIsUnreadForIt(t *testing.T) {
+	t.Parallel()
+	read := summaryRead{claim: &summaryClaim{waited: true, failed: errLargeWait}}
+	words := read.newWords()
+	_, _ = words.Write([]byte("the work so far."))
+	read.taken(words)
+	if got := read.reading(); got.Text != "" || !strings.Contains(got.Unread, "large read slot") {
+		t.Errorf("a summary whose wait ended unmet reads %q (%q), want it unread for the wait", got.Text, got.Unread)
+	}
+}
