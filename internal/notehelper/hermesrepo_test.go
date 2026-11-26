@@ -332,3 +332,24 @@ func TestEveryFiringsListingStaysWithinItsBound(t *testing.T) {
 		}
 	}
 }
+
+// A HERMES ANSWER KEEPS WHAT IT LEFT OUT BEFORE ITS SKILLS: where the skills'
+// listing and the left-out lines pass the tool result's room, the left-out
+// lines come whole, last, and the skills' listing before them is cut.
+//
+// Mutation: take the skills first, and this goes red.
+func TestAHermesAnswerKeepsWhatItLeftOutBeforeItsSkills(t *testing.T) {
+	t.Parallel()
+	h := handedCheckout{name: "late", root: "/w/late"}
+	for i := range 100 {
+		h.skills = append(h.skills, handedSkill{name: "late:s" + strconv.Itoa(i), description: strings.Repeat("d", 100),
+			path: "/h/skills/late:s" + strconv.Itoa(i) + "/SKILL.md"})
+	}
+	skipped := []string{"the skill /w/late/.hermes/skills/x is left out: its name is taken"}
+	answer := hermesAnswer([]handedCheckout{h}, skipped, newNestedRoom(4000))
+	skills, ok := strings.CutSuffix(answer, "\n\n"+skippedListing(skipped))
+	if !ok || !strings.HasSuffix(skills, "\n"+newListingBudgetWithin(4000).cutLine) || len(answer)+2 > 4000 {
+		t.Errorf("the answer (%d bytes) is not the skills cut, then what was left out whole: ...%s", len(answer),
+			answer[max(len(answer)-300, 0):])
+	}
+}
