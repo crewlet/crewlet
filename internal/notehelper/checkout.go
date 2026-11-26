@@ -830,7 +830,7 @@ func fitClaim(work, name string, limit int, spec checkoutSpec, firing *firingBou
 	}
 	cost := 0
 	for _, line := range trial.lines {
-		cost += count(line) + len("\n- ")
+		cost += count(line + "\n- ")
 	}
 	if firing.nameCost != nil && len(kept) > 0 {
 		cost += firing.nameCost(name, root, kept)

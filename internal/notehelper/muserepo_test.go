@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -333,13 +334,28 @@ func TestAMuseAnswerFillsMusesCeilingToTheByte(t *testing.T) {
 	}
 }
 
-// A FIRING WHOSE NAMES ALONE PASS THE BOUND KEEPS EVERY CHECKOUT IT DROPS: of
-// 120 checkouts cloned at once, those whose names the answer cannot hold are
-// claimed all the same, so each is a line in the run's skip log, and every
-// one is in the answer or the log.
+// museFireWaiting is [repoRun.museFire] for a firing that may leave
+// checkouts waiting, which it says on stderr: what it printed, and stderr.
+func (r repoRun) museFireWaiting(t *testing.T) (string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	in := `{"hook_event_name":"PostToolUse","session_id":"s","tool_name":"bash"}`
+	getenv := func(k string) string { return map[string]string{"MUSE_SESSION_ID": "s"}[k] }
+	if code := runMuseNested(context.Background(), flags{config: filepath.Join(r.state, "nested.json")},
+		strings.NewReader(in), &stdout, &stderr, getenv); code != exitDone || stdout.Len() > museAnswerBytes {
+		t.Fatalf("the firing exited %d, printing %d bytes: %s", code, stdout.Len(), stderr.String())
+	}
+	return stdout.String(), stderr.String()
+}
+
+// A MUSE FIRING CLAIMS ONLY THE CHECKOUTS ITS ANSWER CAN NAME: of 120
+// checkouts cloned at once, each the first firing claims is in its answer,
+// whole or named; those whose names no longer fit wait, unclaimed and said on
+// stderr, and later firings hand every one of them, none in the skip log.
 //
-// Mutation: drop the lines for the dropped names, and this goes red.
-func TestAMuseFiringPastItsBoundKeepsEveryCheckoutItDrops(t *testing.T) {
+// Mutation: charge no named block at claim, claim past the names room, or
+// give later firings no room, and this goes red.
+func TestAMuseFiringClaimsOnlyTheCheckoutsItsAnswerCanName(t *testing.T) {
 	t.Parallel()
 	r := newRepoRun(t, nil)
 	r.museLaunch(t, "")
@@ -349,22 +365,55 @@ func TestAMuseFiringPastItsBoundKeepsEveryCheckoutItDrops(t *testing.T) {
 		files[fmt.Sprintf("c%03d/AGENTS.md", i)] = strings.Repeat("i", 400) + "\n"
 	}
 	r.add(t, files)
-	got := museContext(t, r.museFire(t, "s", "s"))
-	log := read(t, filepath.Join(r.state, skippedLog))
 	work := r.workdir(t)
-	dropped := 0
-	for i := range 120 {
-		root := fmt.Sprintf("%s/c%03d", work, i)
-		in, kept := strings.Contains(got, root+": read "), strings.Contains(log, "the instructions of "+root+" are left out")
-		if in == kept {
-			t.Errorf("%s: named in the answer %v, in the skip log %v; want exactly one", root, in, kept)
+	handed := map[string]bool{}
+	for firing := 0; firing < 10 && len(handed) < 120; firing++ {
+		out, said := r.museFireWaiting(t)
+		got := museContext(t, out)
+		claimed := strings.Split(strings.TrimSpace(read(t, filepath.Join(r.state, "handed"))), "\n")
+		for _, name := range claimed {
+			if handed[name] {
+				continue
+			}
+			handed[name] = true
+			if !strings.Contains(got, work+"/"+name+"/AGENTS.md") {
+				t.Errorf("firing %d claimed %s but neither handed nor named it", firing, name)
+			}
 		}
-		if kept {
-			dropped++
+		if firing == 0 && (len(handed) == 120 || !strings.Contains(said, "the checkouts left wait for the next")) {
+			t.Fatalf("the first firing claimed %d of 120, saying %q; want some waiting, said", len(handed), said)
 		}
 	}
-	if dropped == 0 {
-		t.Error("no checkout was dropped: the case does not pass the bound")
+	if len(handed) != 120 {
+		t.Errorf("later firings handed %d of 120 checkouts", len(handed))
+	}
+	if log, err := os.ReadFile(filepath.Join(r.state, skippedLog)); err == nil && strings.Contains(string(log), "left out") {
+		t.Errorf("the skip log names a checkout left out: %s", log)
+	}
+}
+
+// A MUSE FIRING NEVER READS A FILE PAST ITS ANSWER: a sparse AGENTS.md of
+// 256 MiB, which no answer holds whole, is named by path from its size alone,
+// the firing allocating a fraction of it. Not parallel: it reads the heap's
+// allocations.
+//
+// Mutation: read the file before deciding, and this goes red.
+func TestAMuseFiringNeverReadsAFilePastItsAnswer(t *testing.T) {
+	r := newRepoRun(t, nil)
+	r.museLaunch(t, "")
+	r.add(t, map[string]string{"huge/.git/": "", "huge/AGENTS.md": ""})
+	if err := os.Truncate(filepath.Join(r.workdir(t), "huge", "AGENTS.md"), 256<<20); err != nil {
+		t.Fatal(err)
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	out, _ := r.museFireWaiting(t)
+	runtime.ReadMemStats(&after)
+	if got := museContext(t, out); !strings.Contains(got, "/huge: read "+r.workdir(t)+"/huge/AGENTS.md for its instructions") {
+		t.Errorf("the huge file is not named by path:\n%.400s", got)
+	}
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 32<<20 {
+		t.Errorf("the firing allocated %d bytes for a file it does not hand", grew)
 	}
 }
 
