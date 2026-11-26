@@ -958,8 +958,10 @@ func TestASavesOutcomeLandsWithinItsLife(t *testing.T) {
 			t.Errorf("the save's place was asked %v after its instant (asked %t), want at once: nothing waits "+
 				"between the two", asked.Sub(kept.At), ok)
 		}
-		// UNMADE, the keep's media steps, which a save naming none never makes.
-		unmade := keepReadRoom + MediaReadersRoom
+		// UNMADE, the keep's media steps (its count, its read again, and the
+		// amend, read again and record of a carry gone), which a save naming
+		// none never makes.
+		unmade := 2*keepReadRoom + 2*MediaReadersRoom + sessionRecordBudget
 		if life := to.Sub(kept.At); life > takeLife || life < takeLife-unmade-time.Minute {
 			t.Errorf("the save's outcome came %v after its instant, want within a minute and its unmade "+
 				"media steps, %v, of its life, %v", life, unmade, takeLife)

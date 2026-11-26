@@ -21,22 +21,22 @@ import (
 
 // A CAPTURE'S BUDGETS COUNT EVERY STEP OF ITS LIFE AT THE SLOWEST CROSSING, a
 // change's for a change and a read's for a read, and a reading on another
-// machine's clock adds twice the skew allowed one. A keep is four steps before
-// its upload, the upload, a read again and its record; a take's life, the rest of its take with its reservation's room,
-// its digest, keep and stamp; an unanswered takeover's, the takeover,
-// withdrawal and read back, keep and stamp; a standby's wait, the longer life
-// and one tick; its window, the rest of its take with its reservation's room,
-// its digest, three changes past the wait (a settle still writing, the read of
-// the log and the settle it decides), its last read and its takeover. Each is
-// the docs' figure at today's bounds, to the nanosecond.
+// machine's clock adds twice the skew. A keep: four steps, the upload, a read
+// again and its record, and an amend, a read and a record more for a carry
+// gone. A take's life: its take's rest with its reservation's room, digest,
+// keep and stamp; an unanswered takeover's: the takeover, withdrawal and read
+// back, keep and stamp; a standby's wait: the longer life and a tick; its
+// window: its take's rest with its reservation's room, digest, three changes
+// past the wait, its last read and its takeover. Each is the docs' figure at
+// today's bounds, to the nanosecond.
 //
 // Mutation: drop a term, a reading's skew, or count a read as a change.
 func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	t.Parallel()
 	change := sessionRecordBudget + coord.MaxValueCrossing
 	read := sessionRecordBudget + coord.MaxValueReadCrossing
-	keep := 4*sessionRecordBudget + objstore.PaceFor(executorkeep.SealedMaxBytes) + sessionRecordBudget +
-		sessionRecordBudget
+	keep := 5*sessionRecordBudget + objstore.PaceFor(executorkeep.SealedMaxBytes) +
+		2*(sessionRecordBudget+sessionRecordBudget)
 	take := SessionPackWait + SessionScrubWait + change + discardGrace + keep + change
 	over := change + change + read + keep + change
 	life := max(take, over)
@@ -51,15 +51,15 @@ func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	}{
 		{"one change of a run's row another node reads", captureStampBudget, change, "13m30.025663374s"},
 		{"one read of a run's row another node waits on", captureReadBudget, read, "4m30s"},
-		{"a keep", SessionKeepBudget, keep, "27m30s"},
+		{"a keep", SessionKeepBudget, keep, "29m0s"},
 		{"a keep's read", keepReadRoom, sessionRecordBudget, "30s"},
-		{"a take's life", takeLife, take, "1h3m0.051326748s"},
-		{"a takeover's life", takeOverLife, over, "1h12m30.076990122s"},
-		{"a capture's life", captureLife, life, "1h12m30.076990122s"},
-		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h12m30.076990122s"},
-		{"a standby's wait", standbyWait, wait, "1h12m32.076990122s"},
-		{"a standby's window", standbyWindow, window, "2h33m2.205306992s"},
-		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h33m2.205306992s"},
+		{"a take's life", takeLife, take, "1h4m30.051326748s"},
+		{"a takeover's life", takeOverLife, over, "1h14m0.076990122s"},
+		{"a capture's life", captureLife, life, "1h14m0.076990122s"},
+		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h14m0.076990122s"},
+		{"a standby's wait", standbyWait, wait, "1h14m2.076990122s"},
+		{"a standby's window", standbyWindow, window, "2h34m32.205306992s"},
+		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h34m32.205306992s"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s is %v, want its terms, %v", c.name, c.got, c.want)
@@ -865,10 +865,11 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 		return floored{store: store, archive: archive}
 	}
 	// within holds a step's life to its figure: never past it, and within a
-	// minute and slack of it. A keep's media steps (its count's stamp and its
-	// read again of who reads its media) are rooms a capture naming none never
-	// makes, so a keep's figure leaves them as slack (unmade).
-	unmade := keepReadRoom + MediaReadersRoom
+	// minute and slack of it. A keep's media steps (its count's stamp, its read
+	// again of who reads its media, and a carry the log found gone, recorded
+	// again after an amend and a read again) are rooms a capture naming none
+	// never makes, so a keep's figure leaves them as slack (unmade).
+	unmade := 2*keepReadRoom + 2*MediaReadersRoom + sessionRecordBudget
 	within := func(t *testing.T, what string, life, figure, slack time.Duration) {
 		t.Helper()
 		if life > figure {

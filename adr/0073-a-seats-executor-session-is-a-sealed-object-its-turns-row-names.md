@@ -4883,24 +4883,25 @@ the session's record. The figures are now derived step by step at the slowest
 crossing (internal/sandbox's `session.go`): the keep's steps before its
 upload, four with its media count and a save's amend of its charge, each in a
 room of their own, and its read again of who reads its media before its
-record, beside the upload's pace (`keepReadRoom`, `MediaReadersRoom`,
-`SessionKeepBudget`, twenty-seven and a half minutes), a mint past it refusing
+record, and an amend, a read again and a record more where the log finds a
+carry gone, beside the upload's pace (`keepReadRoom`, `MediaReadersRoom`,
+`SessionKeepBudget`, twenty-nine minutes), a mint past it refusing
 the capture and a listing past it deciding nothing; a take's life from its
-instant (`takeLife`, an hour and three minutes) and a takeover's
-(`takeOverLife`, an hour and twelve and a half), the longer of them a capture's
+instant (`takeLife`, an hour and four and a half minutes) and a takeover's
+(`takeOverLife`, an hour and fourteen), the longer of them a capture's
 life (`captureLife`);
 and a read standing by's window from its own instant, its take's rest, its
 own wait, the read of the turn's row on the log past it and the settle it
 decides, and around its takeover a settle, its last read of the run's row and
-the takeover itself (`standbyWindow`, two hours and thirty-three).
+the takeover itself (`standbyWindow`, two hours and thirty-four and a half).
 Each change of the run's row counts a change's crossing, and each read of it
 (a takeover's read back, a standby's last read, the end's last read) its
 reply's alone (`captureReadBudget`, four and a half minutes with its reason),
 since a read sends no write. Past a capture's life nothing its taker sends
 lands, and past a standby's window nothing the standby sends does. Every node
 reads a stamp's age against those and twice the skew (`SessionCaptureBudget`,
-three hours and twelve and a half minutes; `standbyBudget`, four hours and
-thirty-three), so a reader whose clock stands ahead never releases a capture still
+three hours and fourteen minutes; `standbyBudget`, four hours and
+thirty-four and a half), so a reader whose clock stands ahead never releases a capture still
 being kept. The waits decide on their own monotonic clocks instead of on a
 reader's word: a read standing by waits for the capture it stood by for that
 capture's whole life and one read (`standbyWait`), then reads the turn's row
@@ -4916,9 +4917,9 @@ once every bound has passed, the end reads the row once more and decides on
 that read, since its last read inside a bound is issued up to a tick before
 it, and a takeover that landed after that read, in the window's last
 instants, was otherwise never seen and its record met the end's tombstone.
-The bounds are allowances at the floor: an hour and seventeen minutes for a
-capture from first sight, its life and that read, and three hours and
-fifty-four and a half for a standby's, its window, its takeover's
+The bounds are allowances at the floor: an hour and eighteen and a half minutes
+for a capture from first sight, its life and that read, and three hours and
+fifty-seven and a half for a standby's, its window, its takeover's
 life and a read after each. The
 spools a crash left behind are swept by their process's lock, never their age
 (the amendment on a node's session spools, below). At an ordinary pace every step answers in
@@ -5006,7 +5007,7 @@ second change of the row no room counts. So at the floor any one of them can
 be cut: the harness end left unrecorded, the pause's stamp missing, or the
 capture left begun until a turn's end gives up on it. A taker
 whose leases answer while its stamp never reaches the row is held by readers
-for up to three hours and twelve and a half minutes on their clocks, and by a
+for up to three hours and fourteen minutes on their clocks, and by a
 turn's end for its life from first sight and one more read of the row. A read standing
 by beside a capture whose
 record the log took but whose stamp never reached the row takes the place
@@ -5167,7 +5168,7 @@ reads the turn's row on the log once there, held to one change of the record,
 before it reads the run's row and decides (`waitedOut`), so a wait that ran
 out first does not upload the session a second time either. The standby's
 window counts that read and the settle it decides (`standbyWindow`, two
-hours and thirty-three minutes). The landed arm needs no fence: the row names the place
+hours and thirty-four and a half minutes). The landed arm needs no fence: the row names the place
 only once the log has taken the record, and nothing takes a record back; so a
 lease the store cannot say of is admitted to it as a lease that holds is, for
 the end's, the relaunch's and the standby's reads alike, since a store that
@@ -5398,7 +5399,7 @@ allowance of a seat's saves, and a seat holds up to twice it. The whole
 company has to agree on it, so it is one value per seat in the coordination
 store's uploads bucket (`coord.SaveAllowances`, key class `save.<seat>`), aged
 out by the bucket's thirty hours with no sweep and no retirement step. Each
-entry is held `saveLedgerHold`, 29 h 3 min: the take's life before its
+entry is held `saveLedgerHold`, 29 h 4.5 min: the take's life before its
 object is stored, the collector's grace and two of its passes, and twice the
 assumed clock skew, since its end is written on one node's clock and read on
 another's. THE CHARGE COMES BEFORE THE STAMP'S INSTANT, by compare-and-swap,
@@ -6472,8 +6473,8 @@ scrub's two readings of the archive out of its box at the box-read floor, a
 mebibyte a second (`boxReadPace`), and its slowest plaintext, 183 s; the digest
 left in its box; and one keep of the sealed session the archive may become
 (`keepBudgetFor` of `countedFor`), and a pace more for each media object its
-take cut apart, each uploaded paced by the mebibyte begun. 7 min 5 s for an
-archive of half a mebibyte, 32 min 39 s at the bound, the longest where it
+take cut apart, each uploaded paced by the mebibyte begun. 8 min 35 s for an
+archive of half a mebibyte, 34 min 9 s at the bound, the longest where it
 waits on two (`Coordinator.relaunchWaitOf`). A take stamps its archive's size
 with its place (`archive_size`, as the box reported it before the scrub), and
 its keep its media count on its begun stamp before uploading any
@@ -6493,7 +6494,7 @@ spaced as a record's attempts are, each begun only while the keep's budget
 left holds the session at the store's slowest pace and its record's room
 (`Coordinator.uploadSpool`), the taker lease's fence asked before each; any
 other refusal is final. `SessionKeepBudget` is unchanged (`keepBudgetFor` of
-the sealed bound, twenty-seven and a half minutes), so a capture's life and
+the sealed bound, twenty-nine minutes), so a capture's life and
 every bound read from it are too.
 
 **The scrub's wait** is derived in code from the archive's bound: the spool's
@@ -6612,10 +6613,14 @@ claims presence (`coord.CaptureStampRecord`); none whose retirement stands
 against its record. A node that recorded nothing is a build from before the
 record, which no tag shipped, and the gate does not look for it: the record,
 and a stamp a newer build extended being settled off the log, are the forward
-mechanisms that hold every upgrade from here on. A definite no names the first node below and what it says
-(`SessionPolicy.MediaBelow`). Until then, and whenever these cannot be read
-within `sandbox.MediaReadersRoom` (30 s, counted in `BoxReadBudget`) or no node
-says what it reads of the log, every capture keeps them inline, unchanged. A
+mechanisms that hold every upgrade from here on. A definite no names the first
+node below and what it says (`SessionPolicy.MediaBelow`). A node that has not
+said is no node below: a live one whose presence carried no status for a beat
+(its hook overran) stands on its record, and with none it is unknown, as is a
+log reader at zero, a live data node with no position row yet. Until then, and
+whenever these cannot be read within `sandbox.MediaReadersRoom` (30 s, counted
+in `BoxReadBudget`) or a node has not said, every capture keeps them inline,
+unchanged. A
 keep asks again before its record, and only a definite answer refuses: a node
 below that joined since the take refuses the capture, naming the node, while
 an answer it cannot get is no evidence of one, and the capture lands on its

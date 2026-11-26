@@ -21,17 +21,17 @@ import (
 )
 
 // A TAKE KEEPS ITS MEDIA APART ONLY ONCE EVERY READER READS IT: every node the
-// executor log counts reads a capture naming media at its stamp's version
-// (executordomain.MediaCaptureVersion), and every node that may settle a run's
-// row says sandbox.MediaStampVersion: live on its presence, offline on its
-// record. A node that recorded nothing is a build before the record, not
-// looked for. A no names the first node below; a standing retirement uncounts
-// an offline node.
+// executor log counts at executordomain.MediaCaptureVersion, every node that
+// may settle a run's row at sandbox.MediaStampVersion, live on its presence,
+// offline on its record; one that recorded nothing is not looked for. A no
+// names the first node below; a standing retirement uncounts an offline node.
+// ONE THAT HAS NOT SAID IS UNKNOWN, NEVER BELOW: a presence with no status
+// stands on its record, or with none is unsaid, as is a log reader with no row.
 //
-// Mutation: answer apart whatever the readers say, skip a node at zero, count
-// no recorded node, count a node that recorded nothing, read a record over a
-// live presence, honour a retirement a later record voids, read this node's
-// own presence, or name a node out of order, and a case goes red.
+// Mutation: answer apart whatever, skip a node at zero, count no record or a
+// node with none, read a record over a live presence, read a presence with no
+// status or a log reader at zero as below, honour a retirement a later record
+// voids, read this node's own presence, or name a node out of order.
 func TestATakeKeepsMediaApartOnlyOnceEveryReaderReadsIt(t *testing.T) {
 	t.Parallel()
 	media, stamp := executordomain.MediaCaptureVersion, sandbox.MediaStampVersion
@@ -59,8 +59,18 @@ func TestATakeKeepsMediaApartOnlyOnceEveryReaderReadsIt(t *testing.T) {
 			live: []presence{self, {"data-b", data, stamp + 1}, {"seats-c", seats, stamp}}, apart: true},
 		"a live seats-only node that says no stamp": {rows: []coord.NodePositions{selfRow},
 			live: []presence{self, {"seats-c", seats, 0}}, below: "seats-c"},
-		"a live seats-only node that says nothing": {rows: []coord.NodePositions{selfRow},
-			live: []presence{self, {"seats-c", seats, -1}}, below: "seats-c"},
+		"a live node saying no status this beat, its record at the stamp": {rows: []coord.NodePositions{
+			selfRow}, live: []presence{self, {"seats-c", seats, -1}}, stamps: map[string]int{"seats-c": stamp},
+			apart: true},
+		"a live node saying no status this beat, its record below": {rows: []coord.NodePositions{selfRow},
+			live: []presence{self, {"seats-c", seats, -1}}, stamps: map[string]int{"seats-c": 0},
+			below: "seats-c"},
+		"a live node saying no status this beat, with no record": {rows: []coord.NodePositions{selfRow},
+			live: []presence{self, {"seats-c", seats, -1}}, unread: true},
+		"a live data node with no position row": {rows: []coord.NodePositions{selfRow},
+			live: []presence{self, {"data-b", data, stamp}}, unread: true},
+		"a node below beside one unsaid": {rows: []coord.NodePositions{selfRow},
+			live: []presence{self, {"seats-c", seats, -1}, {"seats-d", seats, 0}}, below: "seats-d"},
 		"a live node whose presence says no stamp, its record one": {rows: []coord.NodePositions{selfRow},
 			live: []presence{self, {"seats-c", seats, 0}}, stamps: map[string]int{"seats-c": stamp},
 			below: "seats-c"},

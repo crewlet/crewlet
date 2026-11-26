@@ -58,7 +58,7 @@ func TestTheScrubWaitIsDerivedFromTheArchivesBound(t *testing.T) {
 func TestARelaunchsWaitForACaptureCountsWhatItsSizeStillNeeds(t *testing.T) {
 	t.Parallel()
 	keep := func(paces time.Duration) time.Duration {
-		return 4*sessionRecordBudget + paces*objstore.MiBPace + sessionRecordBudget + sessionRecordBudget
+		return 5*sessionRecordBudget + paces*objstore.MiBPace + 2*(sessionRecordBudget+sessionRecordBudget)
 	}
 	bound := executorkeep.SessionMaxBytes / objstore.MiB
 	for _, c := range []struct {
@@ -67,13 +67,13 @@ func TestARelaunchsWaitForACaptureCountsWhatItsSizeStillNeeds(t *testing.T) {
 		docs      string
 	}{
 		{"half a mebibyte", captureRestFor(512<<10, 0),
-			2*time.Second + scrubPlainSlowest + discardGrace + keep(1), "7m5s"},
+			2*time.Second + scrubPlainSlowest + discardGrace + keep(1), "8m35s"},
 		{"at the bound", captureRestFor(executorkeep.SessionMaxBytes, 0),
 			2*time.Duration(bound)*time.Second + scrubPlainSlowest + discardGrace + keep(time.Duration(bound)+1),
-			"32m39s"},
+			"34m9s"},
 		{"half a mebibyte cutting three media objects apart", captureRestFor(512<<10, 3),
-			2*time.Second + scrubPlainSlowest + discardGrace + keep(1+3), "8m35s"},
-		{"a keep at the bound", keepBudgetFor(executorkeep.SealedMaxBytes), SessionKeepBudget, "27m30s"},
+			2*time.Second + scrubPlainSlowest + discardGrace + keep(1+3), "10m5s"},
+		{"a keep at the bound", keepBudgetFor(executorkeep.SealedMaxBytes), SessionKeepBudget, "29m0s"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s: %s, want its terms, %s", c.name, c.got, c.want)

@@ -241,7 +241,8 @@ func (e *Engine) recordCaptureStamp(ctx context.Context) error {
 }
 
 // mediaAnswer is the gate's answer: exactly one of apart, why the readers went
-// unread (unknown), or the node found below and what it says (a definite no).
+// unread or a node has not said (unknown), or the node found below and what it
+// says (a definite no).
 type mediaAnswer struct {
 	apart         bool
 	unread, below string
@@ -252,13 +253,13 @@ type mediaAnswer struct {
 // (executordomain.MediaCaptureVersion), its counted set as the trim counts it
 // ([statelog.CountedSet], [statelog.Readers]), and every node that may settle
 // a run's row asks its stamp again whole ([stampReaders]). Never a guess: a
-// node below either or not saying answers inline, naming the first in node
-// order, and readers not read within [sandbox.MediaReadersRoom] or not there to
-// read answer unknown; either is logged once each time its sentence changes. A
-// node below the log's version that joins after the answer defers such a
-// capture on its applier, never drops it (.claude/rules/compatibility.md), so
-// its estate names none of the media until it upgrades, and its collector
-// deletes nothing meanwhile (ADR-0073's amendment, "Mid-upgrade").
+// node below either answers inline, naming the first in node order; a node
+// that has not said, or readers not read in [sandbox.MediaReadersRoom], answer
+// unknown; either is logged once each time its sentence changes. A node below
+// the log's version that joins after the answer defers such a capture on its
+// applier, never drops it (.claude/rules/compatibility.md), so its estate
+// names none of the media until it upgrades, and its collector deletes
+// nothing meanwhile (ADR-0073's amendment, "Mid-upgrade").
 func (e *Engine) executorMediaRead(ctx context.Context) mediaAnswer {
 	media := e.executorMediaReaders(ctx)
 	kind, why := "below", media.below
@@ -279,8 +280,11 @@ func (e *Engine) executorMediaRead(ctx context.Context) mediaAnswer {
 // executorMediaReaders is [Engine.executorMediaRead]'s answer: the live nodes,
 // the position register, the log's evictions and who may settle a run's row
 // ([mediaReads]), read together in [sandbox.MediaReadersRoom], the live data
-// nodes taken off that one listing as [Engine.holdersOf] takes them. A log
-// nobody has said they read is unknown, never a node below.
+// nodes taken off that one listing as [Engine.holdersOf] takes them. A NODE
+// THAT HAS NOT SAID IS UNKNOWN, NEVER BELOW: a log reader at zero (a live data
+// node with no position row yet, [statelog.Readers]) and a live node whose
+// presence carried no status this beat and that recorded nothing
+// ([stampReaders]). Any definite below answers first, then any unsaid.
 func (e *Engine) executorMediaReaders(ctx context.Context) mediaAnswer {
 	if e.backends == nil || e.backends.Fleet == nil || e.backends.Coord == nil {
 		return mediaAnswer{unread: "this node has no coordination store to read the executor log's readers from"}
@@ -296,13 +300,22 @@ func (e *Engine) executorMediaReaders(ctx context.Context) mediaAnswer {
 	if len(readers) == 0 {
 		return mediaAnswer{unread: "no node the executor log counts has said which record version it reads"}
 	}
-	if node, version, ok := firstBelow(readers, executordomain.MediaCaptureVersion); ok {
+	stamps, unsaid := stampReaders(e.selfNode(), read)
+	if node, version, ok := firstBelow(readers, 1, executordomain.MediaCaptureVersion); ok {
 		return mediaAnswer{below: fmt.Sprintf("node %s reads the executor log to record version %d, below "+
 			"the %d a capture naming media is stamped at", node, version, executordomain.MediaCaptureVersion)}
 	}
-	if node, version, ok := firstBelow(stampReaders(e.selfNode(), read), sandbox.MediaStampVersion); ok {
+	if node, version, ok := firstBelow(stamps, 0, sandbox.MediaStampVersion); ok {
 		return mediaAnswer{below: fmt.Sprintf("node %s says capture stamp version %d, below the %d a "+
 			"capture naming media is asked again at", node, version, sandbox.MediaStampVersion)}
+	}
+	if node, _, ok := firstBelow(readers, 0, 1); ok {
+		return mediaAnswer{unread: fmt.Sprintf("node %s has not said which record version it reads on the "+
+			"executor log", node)}
+	}
+	if len(unsaid) > 0 {
+		return mediaAnswer{unread: fmt.Sprintf("node %s is live and said no capture stamp version on its "+
+			"presence this beat, and has recorded none", unsaid[0])}
 	}
 	return mediaAnswer{apart: true}
 }
@@ -339,10 +352,11 @@ func (e *Engine) readMediaReaders(room context.Context) (mediaReads, string, err
 	return read, "", nil
 }
 
-// firstBelow is the first node, in node order, whose version is below want.
-func firstBelow(versions map[string]int, want int) (string, int, bool) {
+// firstBelow is the first node, in node order, whose version is from or more
+// and below want.
+func firstBelow(versions map[string]int, from, want int) (string, int, bool) {
 	for _, node := range slices.Sorted(maps.Keys(versions)) {
-		if versions[node] < want {
+		if v := versions[node]; v >= from && v < want {
 			return node, versions[node], true
 		}
 	}
@@ -359,14 +373,16 @@ func mediaReadersUnread(ctx, room context.Context, what string, err error) strin
 }
 
 // stampReaders is the capture stamp version each node that may settle a run's
-// row says ([sandbox.CaptureStampVersion]): every node that recorded it, at its
-// record's, and every live node at its presence's word over it; this node at
-// its own build's. An offline node whose retirement stands against its record
-// is gone for good, and not counted. A node that recorded nothing is a build
-// before the record, unreleased, so not looked for (CLAUDE.md, "Breaking
-// Changes Are Free Until a Tag Ships Them"): the record is the forward
-// mechanism (ADR-0073's amendment, "Mid-upgrade").
-func stampReaders(self string, read mediaReads) map[string]int {
+// row says ([sandbox.CaptureStampVersion]), and the live nodes that have not
+// said, in node order: every node that recorded it, at its record's; every
+// live node whose presence said its status, at its word over it (zero where it
+// names no version); this node at its own build's. A presence that carried no
+// status this beat (its hook overran, internal/seat's sweep) leaves the record
+// standing, or, with none, the node unsaid. A retirement standing against a
+// record takes the node out. A node that recorded nothing and is not live is a
+// build before the record, unreleased, and not looked for (ADR-0073's
+// amendment, "Mid-upgrade").
+func stampReaders(self string, read mediaReads) (map[string]int, []string) {
 	out := make(map[string]int, len(read.stamps)+len(read.held))
 	stored := make(map[string]time.Time, len(read.stamps))
 	for _, r := range read.stamps {
@@ -377,16 +393,26 @@ func stampReaders(self string, read mediaReads) map[string]int {
 			delete(out, r.NodeID)
 		}
 	}
+	var unsaid []string
 	for _, lease := range read.held {
-		if node, ok := coord.ClassNode.Name(lease.Resource); ok {
-			status, _ := coord.StatusFromMeta(lease.Meta)
+		node, ok := coord.ClassNode.Name(lease.Resource)
+		if !ok || node == self {
+			continue
+		}
+		status, said := coord.StatusFromMeta(lease.Meta)
+		_, recorded := out[node]
+		switch {
+		case said:
 			out[node] = status.CaptureStampVersion
+		case !recorded:
+			unsaid = append(unsaid, node)
 		}
 	}
 	if self != "" {
 		out[self] = sandbox.CaptureStampVersion
 	}
-	return out
+	slices.Sort(unsaid)
+	return out, unsaid
 }
 
 // Keeps is whether the revision this node runs keeps sessions, read with no
