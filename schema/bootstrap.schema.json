@@ -523,6 +523,99 @@
         "null"
       ]
     },
+    "Dictation": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "anyOf": [
+            {
+              "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$"
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
+            }
+          ],
+          "description": "Whether this node serves voice dictation from its local recognizer. Unset = true: no key, vendor or download step is needed, and audio never leaves the engine.",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "idle_seconds": {
+          "anyOf": [
+            {
+              "maximum": 300,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Seconds without audio after which a dictation ends. 0 = 15. At most 300, and no more than session_seconds."
+        },
+        "max_concurrent": {
+          "anyOf": [
+            {
+              "maximum": 1024,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Most dictations this node transcribes at once; past it a person is told busy. 0 = 4 per available core (a dictation uses about a fifth of a core)."
+        },
+        "recognizer_dir": {
+          "anyOf": [
+            {
+              "maxLength": 4096
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+            }
+          ],
+          "description": "Directory holding the dictation recognizer (its library for this platform and its model), as crewlet speech prepare -dir writes it; read, never written. Relative paths are resolved against store.path's directory. Empty uses the recognizer baked into the container image, else downloads it once: the library into the native-library cache, the model into the data directory.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "session_seconds": {
+          "anyOf": [
+            {
+              "maximum": 3600,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Longest single dictation, in seconds of time and of audio. 0 = 300. At most 3600."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Gitlet": {
       "additionalProperties": false,
       "properties": {
@@ -2128,6 +2221,9 @@
     },
     "coordination": {
       "$ref": "#/$defs/Coordination"
+    },
+    "dictation": {
+      "$ref": "#/$defs/Dictation"
     },
     "gitlet": {
       "$ref": "#/$defs/Gitlet"

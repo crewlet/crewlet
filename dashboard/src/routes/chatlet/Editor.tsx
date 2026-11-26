@@ -37,6 +37,7 @@ import type { ChatMessageView } from "~/protocol/index.ts";
 import { bodyBudget, bodyRefusal, MessageBox, SHORTEN_FIRST } from "./Composer.tsx";
 import { useChatNav } from "./nav.tsx";
 import { useRoomScope } from "./scope.tsx";
+import { useDictationBox } from "~/lib/dictation/source.ts";
 
 /** A rewrite's Enter saves it. */
 const SAVE_KEYS = { send: "to save" };
@@ -96,6 +97,7 @@ export function InlineEditor({ view }: { view: ChatMessageView }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const { dictation, refusal: dictating } = useDictationBox();
   useDraftBox({
     path: `rewrite.${view.channel_seq}`,
     label: rewriteLabel(message),
@@ -104,7 +106,7 @@ export function InlineEditor({ view }: { view: ChatMessageView }) {
     rank: 2 + view.channel_seq,
     value,
     set: setValue,
-    refuses: (next) => (saving ? "That rewrite is being saved." : bodyRefusal(next)),
+    refuses: (next) => dictating ?? (saving ? "That rewrite is being saved." : bodyRefusal(next)),
   });
 
   const rewrite = value.trim();
@@ -140,6 +142,7 @@ export function InlineEditor({ view }: { view: ChatMessageView }) {
   return (
     <div className="chat-composer chat-inline-editor">
       <MessageBox
+        dictation={dictation}
         fieldRef={box}
         value={value}
         onChange={setValue}

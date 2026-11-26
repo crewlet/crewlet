@@ -36,6 +36,7 @@ import { useAct } from "~/lib/useAct.ts";
 import { ownsRemark, useViewer } from "~/lib/viewer.ts";
 import { pathSegment, type PageComment } from "~/protocol/index.ts";
 import { session } from "~/protocol/session.ts";
+import { useDictation } from "~/lib/dictation/source.ts";
 
 /** A remark's own address on its page. */
 export function pageRemarkRoute(pageID: string, commentID: string): string {
@@ -75,6 +76,7 @@ export function PageCommentThread({
   const write = useAct("comment_on_page");
   const remark = useKeyedGesture();
   const toast = useToast();
+  const dictation = useDictation();
   const viewer = useViewer();
   const org = useOrg();
   const rows = useMemo<CommentThreadComment[]>(() => {
@@ -121,6 +123,7 @@ export function PageCommentThread({
       comments={rows}
       subject={title}
       now={now}
+      dictation={dictation}
       // GIVEN WHENEVER THE PAGE TAKES A COMMENT, so a reader who cannot write
       // sees the field and why it is closed to them, rather than a thread
       // that silently has no composer. A page in the trash takes none.

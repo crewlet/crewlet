@@ -43,9 +43,9 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 // holding a slot of [sessionTakes] from before it asks its box for anything
 // to its scrub's and its meter's end. 29: a take at its base holds at most
 // 11.64 MiB ([takeBaseHeldBytes]); 29 times over is 337.5 MiB, within the
-// base tier's 340.6 MiB (64 reads at [baseTierReadBytes], the package doc's
-// "A collection's read of a thread"): so the takes at their base hold no
-// more than every read of the tier does.
+// 340.6 MiB of the base tier's 64 reads' passes ([baseTierPassBytes], the
+// package doc's "A collection's read of a thread"): so the takes at their base
+// hold no more than every read's pass does, a take reading no summary.
 const SessionTakesAtOnce = 29
 
 // takeBaseHeldBytes is what a take at its base holds at most, its scrub's and
@@ -75,9 +75,9 @@ func takeLargeHeldBytes() int64 {
 		max((threadLineMax-collectionBaseLineCharge)*5/4, geminiCountLargeHeldBytes-meterBaseHeldBytes)
 }
 
-// The takes at their base hold no more than the box host's reads for its peers
-// at [baseTierReadBytes] each: a negative constant does not compile.
-const _ = uint(queue.ConcurrentAnswers*baseTierReadBytes - SessionTakesAtOnce*takeBaseHeldBytes)
+// The takes at their base hold no more than the box host's reads for its peers'
+// passes at [baseTierPassBytes] each: a negative constant does not compile.
+const _ = uint(queue.ConcurrentAnswers*baseTierPassBytes - SessionTakesAtOnce*takeBaseHeldBytes)
 
 // sessionTakes holds a slot for each take in flight ([SessionTakesAtOnce]).
 var sessionTakes = make(chan struct{}, SessionTakesAtOnce)

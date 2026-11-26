@@ -168,7 +168,9 @@ func (h Hermes) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths
 	if why := h.summaryWhy(ask); why != "" {
 		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
 	}
-	var summary summaryRead
+	var large passBudget
+	defer large.release()
+	summary := summaryRead{claim: newSummaryClaim(ctx, &large)}
 	body, err := hermesRecordDump(ctx, box, ask.Session)
 	if err != nil {
 		return sandbox.MainThreadReading{Summary: summaryUnread(err.Error())}
@@ -239,7 +241,7 @@ func hermesNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from 
 	var l hermesNoteRow
 	l.parse.setup(takes)
 	if summary != nil {
-		l.words = &hermesSummaryWords{}
+		l.words = &hermesSummaryWords{text: *summary.newWords(), partText: *summary.newWords()}
 	}
 	for {
 		l.start(next)

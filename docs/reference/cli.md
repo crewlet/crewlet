@@ -84,6 +84,8 @@ subcommand below is served by it.
 | `crewlet github provision <company.yaml>` | Report a [GitHub](../integrations/github.md) deployment against the config (which account each seat's credential authenticates as) and register the inbound webhooks with a minted secret: one on the organization where the credential may, else one per named repository. GitHub issues no credentials for a provisioner, so it reports more than it changes |
 | `crewlet mattermost doctor <company.yaml>` | Check a [Mattermost](../integrations/mattermost.md) install end to end: reachability, the Site URL every browser inherits (against the address people browse, given `-browser-url`), a browser-shaped websocket upgrade, one real authenticated socket per agent seat |
 | `crewlet mcp-relay <socket>` | Not for people: the MCP server a seat's harness starts, relaying the harness's stdio to the engine's tool socket and back; see [`crewlet mcp-relay`](#crewlet-mcp-relay) |
+| `crewlet speech prepare -dir <DIR> [-platform GOOS/GOARCH]` | Download the pinned [dictation](../guides/dictation.md) recognizer, a platform's library (this machine's by default) and the model, and verify every file against its SHA-256, into `DIR`: for `dictation.recognizer_dir` on a host with no route to the releases, or a container image |
+| `crewlet speech-worker` | Not for people: the dictation recognizer the engine starts from its own binary as a child process; see [Voice Dictation](../guides/dictation.md#how-it-works) |
 | `crewlet version` | Show the installed version (`--version` and `-v` too) |
 | `crewlet help` | Show the usage message (`--help` and `-h` too) |
 

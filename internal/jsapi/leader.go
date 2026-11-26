@@ -141,16 +141,16 @@ func (l *Leader) Carrying(messageBytes int, pace time.Duration) *Leader {
 
 // Deciding is [Leader.Carrying] for a reader whose reads DECIDE A WRITE its
 // caller is waiting on (a sandbox run's record, internal/coord/kv's runs): each
-// read is given the time its reply takes to CROSS the link ([Crossing]) beyond
-// the read term, the client's own bound and the lookup ceiling, and none of the
-// reply's [Handling]. On a member's own connection it is read at the read term.
-//
-// No handling: the writer waits within a budget of its own (five to ten
-// seconds) and a request dropped across an election must be re-asked inside it,
-// at two seconds; handling only buys a reply built once under a slow race
-// detector ([HandlingPace]). Its crossing all the same: across a link no byte
-// is heard before the last, so less re-asks while the first reply is on the
-// link, and one past the lookup ceiling is never taken (crewlet/crewlet#1149).
+// read is given its reply's [Crossing] beyond the read term, the client's own
+// bound and the lookup ceiling, and no [Handling]; on a member's own connection
+// it is read at the read term. No handling: the writer waits within a budget of
+// its own (five to ten seconds), inside which a request dropped across an
+// election is re-asked at two. Handling is 3.5 ms a MiB without the race
+// detector ([HandlingPace]): a claim of a 6 MiB run took at most 949 ms in
+// process at six busy goroutines a core, a fifth of the five-second bound
+// (#2175). Its crossing all the same: across a link no byte is heard before the
+// last, so less re-asks while the first reply is on the link, and one past the
+// lookup ceiling is never taken (crewlet/crewlet#1149).
 func (l *Leader) Deciding(messageBytes int, pace time.Duration) *Leader {
 	c := *l
 	c.arrival = Crossing(messageBytes, pace)

@@ -74,9 +74,11 @@ func qwenSummaryLineWhole(read *summaryRead, line []byte) {
 // qwenSummaryOnTheWalk is chat's newest summary as a box read's count reads
 // it on its walk ([QwenCode.readMainThread]).
 func qwenSummaryOnTheWalk(ctx context.Context, chat string) sandbox.ThreadSummary {
+	var large passBudget
+	defer large.release()
 	c := new(qwenCounting)
-	c.summarize()
-	return c.summary(chatFileLines(ctx, strings.NewReader(chat), c, new(passBudget)))
+	c.summarize(newSummaryClaim(ctx, &large))
+	return c.summary(chatFileLines(ctx, strings.NewReader(chat), c, &large))
 }
 
 // qwenSummaryOnTheNotesWalk is chat's newest summary as a read of its notes
@@ -367,7 +369,7 @@ func TestAQwenSummaryAddsOnlyItsWordsToTheWalk(t *testing.T) {
 	counted := func(summarize bool) (sandbox.MainThreadReading, uint64) {
 		var reading sandbox.MainThreadReading
 		ask := sandbox.MainThreadAsk{Session: session, Release: qwenRelease, Count: true, Summary: summarize}
-		_, allocated := allocationsOf(func() {
+		_, allocated := allocationsOf(t, func() {
 			reading = QwenCode{}.readMainThread(context.Background(), box, PathsFor(box), ask)
 		})
 		return reading, allocated
@@ -376,7 +378,7 @@ func TestAQwenSummaryAddsOnlyItsWordsToTheWalk(t *testing.T) {
 	both, withSummary := counted(true)
 	within("count's walk", alone, withSummary, both.Summary)
 	noted := func(read *summaryRead) uint64 {
-		_, allocated := allocationsOf(func() {
+		_, allocated := allocationsOf(t, func() {
 			_, _ = QwenCode{}.notesHeld(context.Background(), box, Session{ID: session}, nil, read)
 		})
 		return allocated

@@ -495,7 +495,7 @@ func leastAllocation(t *testing.T, read func() error) uint64 {
 	t.Helper()
 	least := ^uint64(0)
 	for range 5 {
-		got, err := allocated(read)
+		got, err := allocated(t, read)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -504,8 +504,11 @@ func leastAllocation(t *testing.T, read func() error) uint64 {
 	return least
 }
 
-// allocated is the bytes read allocates.
-func allocated(read func() error) (uint64, error) {
+// allocated is the bytes read allocates, read off the process's counts with
+// no goroutine but the test binary's own beside it ([requireNoStrays]).
+func allocated(t testing.TB, read func() error) (uint64, error) {
+	t.Helper()
+	requireNoStrays(t)
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	err := read()

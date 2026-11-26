@@ -1130,6 +1130,11 @@
   - `internal/sandbox/executor.TestAClaudeSummaryReadOnTheWalkIsItsWholeLineRead`
   - `internal/sandbox/executor.TestEveryRecordedClaudeSummaryReadsAsBeforeTheWalk`
   - `internal/sandbox/executor.TestAClaudeSummaryAddsOnlyItsWordsToTheWalk`
+  - `internal/sandbox/executor.TestABoxReadsSummaryIsBudgeted`
+  - `internal/sandbox/executor.TestATrimsHeldRunCountsTowardItsClaim`
+  - `internal/sandbox/executor.TestASummaryWhoseWaitEndedUnmetIsUnreadForIt`
+  - `internal/sandbox/executor.TestAChainsPassHoldsItsSummaryWithinItsTerm`
+  - `internal/sandbox/executor.TestAQwenCompactionsFirstTextsAreHeldWhereTheyWereRead`
   - `internal/sandbox.TestASummaryIsPlacedAtTheCaptureThatFirstNamedIt`
   - `internal/executorkeep.TestALaterPlaceIsALaterLaunchsOrALaterCaptureOfIt`
   - `internal/agent/runner.TestAReseedTellsTheSessionItDoesNotContinueBeforeItsCalls`
@@ -4911,9 +4916,9 @@ once every bound has passed, the end reads the row once more and decides on
 that read, since its last read inside a bound is issued up to a tick before
 it, and a takeover that landed after that read, in the window's last
 instants, was otherwise never seen and its record met the end's tombstone.
-The bounds are allowances at the floor: an hour and sixteen minutes for a
+The bounds are allowances at the floor: an hour and seventeen minutes for a
 capture from first sight, its life and that read, and three hours and
-fifty-two and a half for a standby's, its window, its takeover's
+fifty-four and a half for a standby's, its window, its takeover's
 life and a read after each. The
 spools a crash left behind are swept by their process's lock, never their age
 (the amendment on a node's session spools, below). At an ordinary pace every step answers in

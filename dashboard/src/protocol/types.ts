@@ -57,6 +57,7 @@ import type { OBJECT_FINDINGS, OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { EXECUTOR_TAIL_OUTCOMES } from "../contract/executor.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
+import type { DictationReason } from "../contract/dictation.ts";
 import type { CHECK_PURPOSES, CHECK_STATES, QUEUE_STATES } from "../contract/checks.ts";
 import type {
   McpHeldCall,
@@ -6545,6 +6546,15 @@ export interface Viewer {
   /** Whether this deployment names an artifact origin, so a framed kind's page
    *  can be opened at all (Tier A's `api.artifacts.external_url`). */
   artifact_pages?: boolean;
+  /** Whether a composer's microphone can dictate through this node's own
+   *  recognizer, and why not (`speech.Availability`). */
+  dictation?: ViewerDictation;
+}
+
+/** The viewer's `dictation`: `reason` only while it is unavailable. */
+export interface ViewerDictation {
+  available: boolean;
+  reason?: DictationReason;
 }
 
 // ---------------------------------------------------------------------------

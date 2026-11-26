@@ -81,6 +81,7 @@ import {
   type FormFieldRender,
   type MarkdownFormat,
   type MarkdownTextFormat,
+  type DictationSource,
   type MentionOption,
   type SendKeysLabels,
 } from "@crewlethq/ui";
@@ -125,6 +126,7 @@ import { quietHint, reachRecipients } from "./receipts.ts";
 import { roomMark } from "./rooms.ts";
 import { useRoomScope } from "./scope.tsx";
 import { SHORTEN } from "./start.ts";
+import { useDictationBox } from "~/lib/dictation/source.ts";
 
 /** What a message's Send or Save says over a body past the cap. */
 export const SHORTEN_FIRST = "Shorten it first.";
@@ -283,6 +285,7 @@ export function Composer({
     [drafts, key, channelID, threadRoot],
   );
   const field = useRef<HTMLTextAreaElement | null>(null);
+  const { dictation, refusal: dictating } = useDictationBox();
   // A BOX DOCKED AT THE WINDOW'S FOOT (a thread's, Activity's reply box) KEEPS
   // THE TOAST STACK ABOVE IT as it grows; one following a short thread up the
   // pane asks nothing (`toastInset.tsx`'s `clearOf`).
@@ -321,7 +324,7 @@ export function Composer({
           rank: threadRoot ? 1 : 0,
           value,
           set: setValue,
-          refuses: bodyRefusal,
+          refuses: (next) => dictating ?? bodyRefusal(next),
         },
   );
 
@@ -367,6 +370,7 @@ export function Composer({
   return (
     <div ref={box} className="chat-composer">
       <MessageBox
+        dictation={dictation}
         fieldRef={field}
         value={value}
         onChange={(next) => {
@@ -467,6 +471,8 @@ export interface MessageBoxProps {
   extraTools?: ReactNode;
   /** The footer's end: Send, or Cancel and Save. */
   actions: ReactNode;
+  /** Dictation, from the caller that keeps the box's draft (`useDictationBox`). */
+  dictation: DictationSource;
 }
 
 /**
@@ -487,6 +493,7 @@ export function MessageBox({
   onKey,
   extraTools,
   actions,
+  dictation,
 }: MessageBoxProps) {
   const scope = useRoomScope();
   const nav = useChatNav();
@@ -823,6 +830,7 @@ export function MessageBox({
             toolbar={formatBar}
             tools={tools}
             actions={actions}
+            dictation={dictation}
             aria-controls={menuOpen ? listID : undefined}
             aria-activedescendant={menuOpen ? `${listID}-${activeIndex}` : undefined}
             aria-autocomplete="list"
