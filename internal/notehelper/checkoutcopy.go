@@ -11,8 +11,6 @@ import (
 	"slices"
 	"strings"
 	"syscall"
-
-	"github.com/crewlet/crewlet/internal/skillname"
 )
 
 // THE SKILL COPY: a checkout's skill is the checkout's own content, copied
@@ -265,15 +263,18 @@ func planCheckoutSkills(root, tag string, spec checkoutSpec, said *skips) ([]pla
 	if grok {
 		dirs = grokSessionSkills(dirs)
 	}
+	rule, ruled := listingRules[spec.ListedAs]
 	var plans []plannedSkill
 	planned := map[string]skillDir{}
 	files, bytes := 0, int64(0)
 	for _, d := range dirs {
 		name := skillName(tag, d.name, spec.SkillSep)
-		key := name
 		if grok { // NAMED AS GROK LISTS IT: two skills of one directory name, apart in the walk, both kept
 			name = skillName(tag, d.listed, spec.SkillSep)
-			key = skillname.Grok(name)
+		}
+		key := name
+		if ruled {
+			key = rule.key(name)
 		}
 		if first, ok := planned[key]; ok {
 			if first.slot == d.slot || grok {
@@ -368,14 +369,14 @@ func planEntry(d skillDir, realRoot, name string, bare bool) (plannedSkill, plan
 // copyPlanned copies p to spec.Skills, built in staging, crash-safe (the
 // file's header), saying each entry left out of it, and is it as listed.
 func copyPlanned(p plannedSkill, spec checkoutSpec, staging string, said *skips) (handedSkill, error) {
-	listed := p.name
-	if spec.ListedAs == listedGrok {
+	listed, key := p.name, p.name
+	if rule, ok := listingRules[spec.ListedAs]; ok {
 		// ONE FIRING PLANS EVERY CHECKOUT BEFORE IT COPIES ANY, so another
 		// checkout's copy this firing made can take the name only now.
 		if why := homeHolds(spec, p.name); why != "" {
 			return handedSkill{}, errors.New(why)
 		}
-		listed = skillname.Grok(p.name)
+		listed, key = rule.shown(p.name), rule.key(p.name)
 	}
 	if spec.Copied != "" {
 		if err := appendLines(spec.Copied, []string{p.name}); err != nil {
@@ -399,7 +400,7 @@ func copyPlanned(p plannedSkill, spec checkoutSpec, staging string, said *skips)
 	}
 	_ = os.Remove(staging) // emptied; never one holding another firing's copy
 	if spec.held != nil {
-		spec.held.add(listed, final)
+		spec.held.add(key, final)
 	}
 	for _, note := range p.notes {
 		said.say("the skill %s is copied without %s", p.src, note)
