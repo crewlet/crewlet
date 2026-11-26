@@ -93,6 +93,9 @@ type checkoutSpec struct {
 	HomeSkills []checkoutSkillDir
 	Budget     string
 	Skipped    []string
+	// Reserved is the tags no checkout takes beside the seats' namespace: a
+	// prefix the harness refuses a skill's name under.
+	Reserved []string
 }
 
 // checkoutSkillSep is what joins a copy's repository and skill (the helper's
@@ -208,7 +211,7 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	config := map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "firingLimit": spec.FiringLimit,
 		"skillDirs": spec.SkillDirs, "skills": h.skills, "copied": h.copied,
-		"reserved":         []string{sandbox.SkillNamespace},
+		"reserved":         append([]string{sandbox.SkillNamespace}, spec.Reserved...),
 		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions,
 		"skillSep": spec.SkillSep, "roots": h.roots}
 	if spec.ListedAs != "" {

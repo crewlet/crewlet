@@ -17,7 +17,7 @@ import (
 func museSpec(skills string, home ...string) checkoutSpec {
 	spec := checkoutSpec{Instructions: names([]string{"AGENTS.md", "CLAUDE.md", ".agents/AGENTS.md", ".claude/CLAUDE.md"}),
 		SkillDirs: []skillDirSlot{{Dir: ".agents/skills"}, {Dir: ".claude/skills"}, {Dir: ".codex/skills"}},
-		Skills:    skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet"},
+		Skills:    skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet", "bundled", "plugin"},
 		ListedAs: listedMuse}
 	for _, dir := range home {
 		spec.HomeSkills = append(spec.HomeSkills, skillDirSlot{Dir: dir})
@@ -461,3 +461,23 @@ func TestAHomeSkillsNameIsReadAsYAMLReadsIt(t *testing.T) {
 	}
 }
 
+// A MUSE CHECKOUT NAMED FOR A PREFIX MUSE REFUSES TAKES ANOTHER TAG: Muse Code
+// 1.4.25 refuses a skill named `plugin:...` or `bundled:...` at load, said on
+// its error stream alone (rows p2, p5), so the runner reserves both and a
+// checkout named Plugin copies as `plugin-2:<skill>`, which Muse lists.
+//
+// Mutation: drop the reserved tags, and the copy is `plugin:deploy`.
+func TestAMuseCheckoutNamedForAPrefixMuseRefusesTakesAnotherTag(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.museLaunch(t, "")
+	r.add(t, map[string]string{"Plugin/.git/": "",
+		"Plugin/.agents/skills/deploy/SKILL.md": "---\nname: deploy\ndescription: Deploys.\n---\n"})
+	got := museContext(t, r.museFire(t, "s", "s"))
+	if !strings.Contains(got, "- plugin-2:deploy: Deploys.") {
+		t.Errorf("the answer is\n%s\nwant the copy listed as plugin-2:deploy", got)
+	}
+	if _, err := os.Lstat(filepath.Join(r.skills, "plugin:deploy")); err == nil {
+		t.Error("a copy was made under a name Muse refuses")
+	}
+}

@@ -161,10 +161,11 @@
 //     {"dir": <d>, "commands": true} each `*.md` directly in d, dot files
 //     too, as a skill named by its file less `.md`. Grok follows a link out
 //     too; the walks do not;
-//   - `listedAs`: the rule a harness lists a skill by, "grok" (Grok 1.0.92's,
+//   - `listedAs`: a harness's listing rule, "grok" (Grok 1.0.92's,
 //     checkoutgrok.go) or "muse" (Muse 1.4.25's); a copy is left out, said,
-//     where a skill of `homeSkills` (Grok's: of `skills` too) takes the name
-//     it lists under (checkouthome.go);
+//     where a skill of `homeSkills` (Grok's: of `skills` too) takes its
+//     listed name (checkouthome.go); Muse lists a plugin's skill as
+//     `plugin:<id>:<skill>`, no copy's (rows p1-p3);
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (`skillSep` `-` joining them for Gemini CLI,
@@ -175,8 +176,9 @@
 //     directory, and moved into place by one rename; `copied`: the file each
 //     copy is listed in before it is written, for the runner's next launch to
 //     remove (checkoutcopy.go); `reserved`: the tags no checkout takes (the
-//     seats' namespace). A tag is the checkout's name lower-cased, a byte
-//     outside [a-z0-9] a hyphen, `-2`, `-3`... where taken.
+//     seats' namespace; Muse's `bundled`, `plugin`: rows p2, p5). A tag is
+//     the checkout's name lower-cased, a byte outside [a-z0-9] a hyphen, `-2`,
+//     `-3`... where taken.
 //
 // checkout-launch runs once, in W, before the harness: its -config is the spec
 // with `state` (the run's checkout state, remade per run), `agents` (the file
@@ -204,8 +206,8 @@
 // muse-nested as codex-nested, each file as Muse wraps a rules file, within
 // the 16,384 bytes Muse reads of a hook, the rest named, for the main loop
 // alone (muserepo.go); pi-nested the same as codex-nested with each file in
-// Pi's `<project_instructions path=...>`, on stdout for the run's extension to add
-// to the tool's result (Pi lists no skill it did not start with and loads
+// Pi's `<project_instructions path=...>`, on stdout for the run's extension to
+// add to the tool's result (Pi lists no skill it did not start with and loads
 // instructions only as it starts, measured on 1.6.0); copilot-nested the
 // listing alone, added the same way. A nested hook only adds to the launch: a
 // run whose settings switch it off starts, its skip log saying so once; only

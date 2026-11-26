@@ -38,9 +38,15 @@ func museCheckouts(paths Paths, foreign bool) checkoutSpec {
 	for _, dir := range dirs {
 		spec.HomeSkills = append(spec.HomeSkills, checkoutSkillDir{Dir: dir})
 	}
-	spec.ListedAs = museListedAs
+	spec.ListedAs, spec.Reserved = museListedAs, museReserved
 	return spec
 }
+
+// museReserved is the tags no checkout takes on a Muse Code run: 1.4.25
+// refuses a skill named `bundled:...` or `plugin:...` at load, saying so only on
+// its error stream (measured, rows p2 and p5), so a checkout named either
+// would lose every copy unseen; it is tagged `bundled-2`, `plugin-2` instead.
+var museReserved = []string{"bundled", "plugin"}
 
 // museListedAs is the note helper's listing rule for Muse Code 1.4.25: a
 // home skill listed under its frontmatter's name, else its directory's.

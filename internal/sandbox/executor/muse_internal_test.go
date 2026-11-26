@@ -820,8 +820,9 @@ func TestAKilledMuseRunsPluginRecordsComeBack(t *testing.T) {
 // the start directory's three, and ~/.claude/skills and ~/.codex/skills only
 // where the home's settings leave Muse listing another harness's skills.
 //
-// Mutation: drop a directory, check the foreign ones whatever the setting, or
-// name no listing rule (the helper then reads none of them).
+// Mutation: drop a directory, check the foreign ones whatever the setting,
+// name no listing rule (the helper then reads none of them), or leave the
+// tags `bundled` and `plugin` free (rows p2, p5: Muse refuses those names).
 func TestAMuseCopyIsCheckedAgainstTheSkillsMuseListsBesideIt(t *testing.T) {
 	p := Paths{Home: "/h"}
 	for _, foreign := range []bool{true, false} {
@@ -840,6 +841,9 @@ func TestAMuseCopyIsCheckedAgainstTheSkillsMuseListsBesideIt(t *testing.T) {
 		launch := museCheckoutHome(p).launchConfig(museCheckouts(p, foreign), nil)
 		if !strings.Contains(string(launch), `"listedAs":"muse"`) {
 			t.Errorf("foreign skills %v: the launch names no Muse listing rule, so no home skill is read: %s", foreign, launch)
+		}
+		if !strings.Contains(string(launch), `"reserved":["crewlet","bundled","plugin"]`) {
+			t.Errorf("foreign skills %v: the launch leaves a tag Muse refuses a skill under free: %s", foreign, launch)
 		}
 	}
 	if rules, skills := museForeignOn([]byte(`{"context":{"foreign_personal_skills":false}}`)); !rules || skills {
