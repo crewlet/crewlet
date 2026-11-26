@@ -399,9 +399,10 @@ func (c *Coordinator) saveInHand(ctx, phase context.Context, job saveJob, out sa
 	if !held {
 		return end(saveNotYet, takerUnheld)
 	}
-	// ROOM FOR ITS SPOOLS AT THE SEALED BOUND, taken before the pack slot and
-	// never waited for: a save that finds none is due again, and leaves a
-	// final take the room saves never fill ([spoolRoomBytes]).
+	// A TAKE'S ROOM FOR ITS SPOOLS, its scrub's and its sealed ones', taken
+	// before the pack slot and never waited for: a save that finds none is due
+	// again, and leaves a final take the room saves never fill
+	// ([spoolRoomBytes]).
 	if spooling = c.trySpoolRoom(takeRoomBytes); spooling == nil {
 		out.unplaced, out.loss = "spool", executorkeep.LossNoSpoolRoom
 		return end(saveNotYet, fmt.Sprintf("this node's session spools fill their room (%d bytes)",
