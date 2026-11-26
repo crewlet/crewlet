@@ -310,6 +310,27 @@ func TestAGrokFiringClaimsOnlyTheCheckoutsItsAnswerCanName(t *testing.T) {
 	}
 }
 
+// A CHECKOUT WITH NOTHING TO NAME NEVER WAITS ON A SPENT NAMES ROOM: where
+// the first checkout's named block alone passes Grok's names room (claimed
+// all the same, since no firing names more), a checkout with no instruction
+// file is claimed in the same firing.
+//
+// Mutation: hold a cost-free checkout to the spent room, and this goes red.
+func TestACheckoutWithNothingToNameNeverWaitsOnASpentNamesRoom(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.grokLaunch(t)
+	files := map[string]string{"a/.git/": "", "b/.git/": ""}
+	for i := range 200 {
+		files["a/.grok/rules/rule-with-a-long-name-"+strconv.Itoa(1000+i)+".md"] = "R\n"
+	}
+	r.add(t, files)
+	r.grokFire(t, grokMainCall)
+	if handed := read(t, filepath.Join(r.state, "handed")); !strings.Contains(handed, "a\n") || !strings.Contains(handed, "b\n") {
+		t.Errorf("the firing claimed %q, want a past the room and b beside it", handed)
+	}
+}
+
 // A GROK FIRING NEVER READS A FILE PAST ITS ANSWER: a sparse AGENTS.md of
 // 256 MiB, which no answer holds whole, is named by path from its size alone,
 // the firing allocating a fraction of it. Not parallel: it reads the heap's
