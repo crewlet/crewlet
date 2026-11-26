@@ -388,24 +388,16 @@ func TestEveryRunnerHandsItsCheckouts(t *testing.T) {
 	}
 }
 
-// checkoutSections is each runner's section of docs/concepts/code-sandbox.md,
-// by its harness's name; no profile names a harness as a reader does.
-var checkoutSections = map[string]string{
-	"claude-code": "Claude Code", "opencode": "OpenCode", "codex": "Codex", "gemini-cli": "Gemini CLI",
-	"qwen-code": "Qwen Code", "copilot": "GitHub Copilot CLI", "grok": "Grok Build", "muse-code": "Muse Code",
-	"kimi-code": "Kimi Code", "hermes": "Hermes Agent", "pi": "Pi", "cursor-agent": "Cursor Agent",
-}
-
 // checkoutLabel opens each runner's statement of what a checkout's own
 // configuration leaves out of a run started above it.
 const checkoutLabel = "**What a checkout does not bring**"
 
 // unlabelledSections names each of names whose section of page is not named
-// in [checkoutSections], is missing, or does not hold [checkoutLabel].
+// in [runnerSections], is missing, or does not hold [checkoutLabel].
 func unlabelledSections(page string, names []string) []string {
 	var out []string
 	for _, name := range names {
-		title, ok := checkoutSections[name]
+		title, ok := runnerSections[name]
 		if !ok {
 			out = append(out, name+" names no section")
 			continue
