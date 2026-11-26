@@ -2045,9 +2045,10 @@ def budget_for_context_window(context_length):
 // hermesSkillUtilsStandIn is what checkout_gate and skill_names read of
 // 0.23.3's agent/skill_utils.py: the skills config, a project root trusted
 // where skills.trusted_project_dirs names it, its .hermes/skills and
-// .agents/skills, every SKILL.md below a directory, one holding QUARANTINE
-// quarantined, the home's skills as the one root searched, and a SKILL.md's
-// frontmatter.
+// .agents/skills, every SKILL.md below a directory and the walk's pruned
+// names, a skill with QUARANTINE in any file quarantined (the verdict kept per
+// directory for the process's life, as 0.23.3 keeps it), the home's skills as
+// the one root searched, and a SKILL.md's frontmatter.
 const hermesSkillUtilsStandIn = `import os
 from pathlib import Path
 TIER_PROJECT, TIER_LOCAL = 0, 1
@@ -2067,8 +2068,16 @@ def iter_skill_index_files(skills_dir, filename):
         if filename in files:
             found.append(os.path.join(top, filename))
     yield from map(Path, sorted(found))
+EXCLUDED_SKILL_DIRS = frozenset((".git", "node_modules"))
+SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
+_PROJECT_QUARANTINE_CACHE = {}
 def is_quarantined_project_skill(skill_md):
-    return "QUARANTINE" in Path(skill_md).read_text(encoding="utf-8")
+    d = Path(skill_md).parent
+    key = str(d.resolve())
+    if key not in _PROJECT_QUARANTINE_CACHE:
+        _PROJECT_QUARANTINE_CACHE[key] = any("QUARANTINE" in f.read_text(encoding="utf-8", errors="replace")
+                                             for f in d.rglob("*") if f.is_file())
+    return _PROJECT_QUARANTINE_CACHE[key]
 def iter_project_skill_files(project_dir):
     yield from (p for p in iter_skill_index_files(project_dir, "SKILL.md") if not is_quarantined_project_skill(p))
 def get_skill_search_roots(local=None, *, include_project=True):

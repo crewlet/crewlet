@@ -545,10 +545,13 @@ CHECKOUT_INTERNALS = (
     ("agent.skill_utils", "_skills_cfg_get", ("key",)),
     ("agent.skill_utils", "get_disabled_skill_names", ("platform",)),
     ("agent.skill_utils", "_candidate_project_skills_dirs", ("root",)),
-    ("agent.skill_utils", "iter_skill_index_files", ("skills_dir", "filename")),
+    ("agent.skill_utils", "iter_skill_index_files", ("skills_dir", "filename")),  # mirrored, bounded: skill_index
+    ("agent.skill_utils", "iter_project_skill_files", ("project_dir",)),  # mirrored in skill_names
+    ("agent.skill_utils", "EXCLUDED_SKILL_DIRS", None),
+    ("agent.skill_utils", "SKILL_SUPPORT_DIRS", None),
+    ("agent.skill_utils", "_PROJECT_QUARANTINE_CACHE", None),
     ("agent.skill_utils", "is_project_root_trusted", ("root",)),
     ("agent.skill_utils", "is_quarantined_project_skill", ("skill_md",)),
-    ("agent.skill_utils", "iter_project_skill_files", ("project_dir",)),
     ("agent.skill_utils", "get_skill_search_roots", ("local", "include_project")),
     ("agent.skill_utils", "parse_frontmatter", ("content",)),
     ("agent.skill_utils", "TIER_PROJECT", None),
@@ -658,8 +661,9 @@ def checkout_gate(roots, window):
     session started there loads them, Hermes's own build_context_files_prompt (one kind, the first with a
     non-empty file; every file through the injection scan; Hermes's cut at window tokens, None for Hermes's
     floor), the files of that kind, and the skill directories such a session loads (only for a root
-    skills.trusted_project_dirs names, each passing Hermes's quarantine scan and not disabled), what it leaves
-    out a line each; and every name the home's skills are found by. The run's plugin imports it too."""
+    skills.trusted_project_dirs names, walked within its bounds ([skill_index]), each passing Hermes's quarantine
+    scan of its content now and not disabled), what it leaves out a line each; and every name the home's skills
+    are found by. The run's plugin imports it too."""
     from agent import prompt_builder as pb, skill_utils as su
     from hermes_cli.gateway_chat import env_launch_flags
     ignore = bool(env_launch_flags().get("ignore_rules"))
@@ -678,15 +682,19 @@ def checkout_gate(roots, window):
             text = pb.build_context_files_prompt(cwd=str(path), skip_soul=True, context_length=window)
             entry["text"] = text[len(CONTEXT_HEADER):] if text.startswith(CONTEXT_HEADER) else text
             entry["files"] = [str(p) for kind, _label, p, content in found if kind == won and content]
-        skills = [md for d in su._candidate_project_skills_dirs(path.resolve())
-                  for md in su.iter_skill_index_files(d, "SKILL.md")]
-        if skills and not (discovery and su.is_project_root_trusted(path)):
-            entry["said"].append("the skills of %s are left out: Hermes loads a checkout's skills only where its "
-                                 "skills.trusted_project_dirs names the checkout's root" % root)
-            skills = []
+        dirs, skills = su._candidate_project_skills_dirs(path.resolve()), []
+        if not (discovery and su.is_project_root_trusted(path)):  # TRUST FIRST: an untrusted tree is never walked
+            if any_skill(dirs):
+                entry["said"].append("the skills of %s are left out: Hermes loads a checkout's skills only where "
+                                     "its skills.trusted_project_dirs names the checkout's root" % root)
+        else:
+            try:
+                skills = [md for d in dirs for md in skill_index(d)]
+            except WalkBound as err:
+                entry["said"].append("the skills of %s are left out: %s" % (root, err))
         for md in skills:
             names = {md.parent.name, str(skill_frontmatter(md).get("name", md.parent.name))}
-            if su.is_quarantined_project_skill(md):
+            if quarantined_now(md):
                 entry["said"].append("the skill %s is left out: Hermes's scan quarantines it" % md.parent)
             elif names & disabled:
                 entry["said"].append("the skill %s is left out: skills.disabled names it" % md.parent)
@@ -696,23 +704,124 @@ def checkout_gate(roots, window):
     return {"checkouts": checkouts, "taken": skill_names()}
 
 
+# A CHECKOUT'S SKILL WALKS ARE BOUNDED as the note helper bounds its own (internal/notehelper's maxWalkDirs and
+# maxWalkSkills for a walk, maxCopyFiles for a skill's files): Hermes's iter_skill_index_files follows every link
+# unguarded, so a clone linking a directory to itself walks without end (measured on 0.23.3: still running after
+# 20 s), which in the run's gateway would spin for the rest of the run. Past a bound the skills are left out, said.
+WALK_DIRS, WALK_SKILLS, SKILL_FILES = 4096, 1024, 1024
+
+
+class WalkBound(Exception):
+    """A skill walk past its bound, named in a sentence."""
+
+
+def skill_index(skills_dir):
+    """iter_skill_index_files(skills_dir, "SKILL.md") as Hermes 0.23.3 walks it (links followed, EXCLUDED_SKILL_DIRS
+    and a skill's SKILL_SUPPORT_DIRS pruned, sorted), each directory once by device and inode, within WALK_DIRS
+    directories read and WALK_SKILLS skills; WalkBound past either."""
+    from agent import skill_utils as su
+    seen, found, stack = set(), [], [str(skills_dir)]
+    while stack:
+        top = stack.pop()
+        try:
+            st = os.stat(top)
+            if (st.st_dev, st.st_ino) in seen:
+                continue
+            seen.add((st.st_dev, st.st_ino))
+            entries = list(os.scandir(top))
+        except OSError:
+            continue
+        if len(seen) > WALK_DIRS:
+            raise WalkBound("%s holds more than %d directories to walk" % (skills_dir, WALK_DIRS))
+        subdirs, files = [], set()
+        for e in entries:
+            try:
+                is_dir = e.is_dir()  # a link to a directory counts, as os.walk's followlinks walk counts it
+            except OSError:
+                is_dir = False
+            if is_dir:
+                subdirs.append(e.name)
+            else:
+                files.add(e.name)
+        has_skill = "SKILL.md" in files
+        stack += [os.path.join(top, d) for d in subdirs
+                  if d not in su.EXCLUDED_SKILL_DIRS and not (has_skill and d in su.SKILL_SUPPORT_DIRS)]
+        if has_skill:
+            found.append(os.path.join(top, "SKILL.md"))
+            if len(found) > WALK_SKILLS:
+                raise WalkBound("%s holds more than %d skills" % (skills_dir, WALK_SKILLS))
+    return [Path(p) for p in sorted(found)]
+
+
+def any_skill(dirs):
+    """Whether a SKILL.md lies below dirs, for an untrusted root's line: a walk that follows no link, within
+    WALK_DIRS directories, past which it answers yes."""
+    read = 0
+    for d in dirs:
+        for _top, _subdirs, files in os.walk(d):
+            read += 1
+            if "SKILL.md" in files or read >= WALK_DIRS:
+                return True
+    return False
+
+
+def quarantined_now(md):
+    """Hermes's quarantine verdict on md's skill by its current content: is_quarantined_project_skill, its
+    in-process verdict for the skill's directory dropped first, since Hermes keeps that verdict for the process's
+    life (measured on 0.23.3) and the plugin renders in the run's gateway, while the scan it runs is keyed by the
+    digest of the whole directory, so a re-render judges each skill by what it holds then."""
+    from agent import skill_utils as su
+    try:
+        key = str(md.parent.resolve())
+    except OSError:
+        key = str(md.parent)
+    su._PROJECT_QUARANTINE_CACHE.pop(key, None)
+    return su.is_quarantined_project_skill(md)
+
+
 def checkout_stamp(root):
-    """What a render of root reads, as Hermes finds it, a [path, mtime_ns, size] each: every context file its
-    discovery finds there and every SKILL.md below its project skill directories. The run's plugin renders a
-    checkout again where a kept render's stamp no longer matches."""
+    """What a render of root reads, as Hermes finds it, or None where it cannot be said within the walks' bounds:
+    the root's trust; every context file Hermes's discovery finds there, a [path, mtime_ns, size] each; and, for a
+    trusted root, every file below each skill directory, as Hermes's scan reads them, within SKILL_FILES each. The
+    run's plugin renders a checkout again where a kept render's stamp no longer matches, or is None."""
     from agent import prompt_builder as pb, skill_utils as su
     path = Path(root)
-    files = [p for _kind, _label, p, _content in pb.discover_context_files(path)]
-    files += [md for d in su._candidate_project_skills_dirs(path.resolve())
-              for md in su.iter_skill_index_files(d, "SKILL.md")]
-    stamp = []
+    trusted = su._skills_cfg_get("project_discovery") is not False and su.is_project_root_trusted(path)
+    files = [str(p) for _kind, _label, p, _content in pb.discover_context_files(path)]
+    try:
+        for md in [md for d in su._candidate_project_skills_dirs(path.resolve()) for md in skill_index(d)] \
+                if trusted else []:
+            files += skill_files(md.parent)
+    except WalkBound:
+        return None
+    stamp = [trusted]
     for p in files:
         try:
             st = os.stat(p)
-            stamp.append([str(p), st.st_mtime_ns, st.st_size])
+            stamp.append([p, st.st_mtime_ns, st.st_size])
         except OSError:
-            stamp.append([str(p), None, None])
+            stamp.append([p, None, None])
     return stamp
+
+
+def skill_files(skill_dir):
+    """Every file below skill_dir, links followed, each directory once, within SKILL_FILES entries; WalkBound
+    past it."""
+    seen, out = set(), []
+    for top, subdirs, files in os.walk(str(skill_dir), followlinks=True):
+        try:
+            st = os.stat(top)
+        except OSError:
+            subdirs[:] = []
+            continue
+        if (st.st_dev, st.st_ino) in seen:
+            subdirs[:] = []
+            continue
+        seen.add((st.st_dev, st.st_ino))
+        out += [os.path.join(top, f) for f in files]
+        if len(out) + len(seen) > SKILL_FILES:
+            raise WalkBound("%s holds more than %d entries" % (skill_dir, SKILL_FILES))
+    return sorted(out)
 
 
 def skill_frontmatter(md):
@@ -728,12 +837,14 @@ def skill_frontmatter(md):
 def skill_names():
     """Every name a skill the box's Hermes finds is found by (its declared name, its directory's, its path
     under its root: resolve_skill_catalog's aliases), each with that skill's directory, over every root it
-    searches, a trusted project's quarantined skills left out as Hermes leaves them."""
+    searches, a trusted project's quarantined skills left out as Hermes leaves them; each root walked within its
+    bounds ([skill_index]), WalkBound past them."""
     from agent import skill_utils as su
     taken = {}
     for tier, root in su.get_skill_search_roots():
-        files = su.iter_project_skill_files(root) if tier == su.TIER_PROJECT else su.iter_skill_index_files(root,
-                                                                                                          "SKILL.md")
+        files = skill_index(root)
+        if tier == su.TIER_PROJECT:  # iter_project_skill_files' filter
+            files = [md for md in files if not su.is_quarantined_project_skill(md)]
         for md in files:
             aliases = {md.parent.name, str(skill_frontmatter(md).get("name", md.parent.name)),
                        md.parent.relative_to(root).as_posix()}
