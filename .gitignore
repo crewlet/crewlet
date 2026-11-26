@@ -38,6 +38,7 @@
 /alarmgen
 /gen
 /notices
+/notehelper
 
 # Python bytecode. This tree has not held a `.py` file since the Go rewrite,
 # which is exactly why the rule was missing and exactly why it is needed: the

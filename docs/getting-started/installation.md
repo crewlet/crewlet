@@ -108,6 +108,11 @@ credential bundle or a headless token in the secret store; see
 go install github.com/crewlet/crewlet/cmd/crewlet@latest
 ```
 
+A binary from `go install` carries no note helper, the small program a seat's
+executor writes into its box, so every executor launch is refused until it finds
+one: put the two `notehelper-linux-*` files from the release archive of the same
+version beside it, or in a directory `CREWLET_NOTE_HELPER_DIR` names.
+
 Or take a signed release binary: every tag publishes archives for linux and
 macOS on amd64 and arm64, plus a `checksums.txt` with a keyless
 [Sigstore](https://www.sigstore.dev/) signature beside it
@@ -131,7 +136,9 @@ cosign verify-blob checksums.txt \
 sha256sum -c checksums.txt --ignore-missing
 ```
 
-Each archive holds the `crewlet` binary, `LICENSE`, `NOTICE`, `README.md` and
+Each archive holds the `crewlet` binary, beside it the note helper's builds for
+a linux/amd64 and a linux/arm64 box (`notehelper-linux-amd64`,
+`notehelper-linux-arm64`; keep them beside the binary), `LICENSE`, `NOTICE`, `README.md` and
 the third-party notices it redistributes: `THIRD_PARTY_NOTICES.txt` for the Go
 toolchain and every Go module the binary links, and
 `dashboard/THIRD_PARTY_NOTICES.txt` for the embedded dashboard: its npm
@@ -172,9 +179,11 @@ A binary from `go install` reports its module version, a release's reports its t
 git clone https://github.com/crewlet/crewlet.git
 cd crewlet
 go build ./cmd/crewlet
+make notehelper && export CREWLET_NOTE_HELPER_DIR="$PWD/build/notehelper"
 ```
 
-That is the whole setup; see [CONTRIBUTING.md](https://github.com/crewlet/crewlet/blob/main/CONTRIBUTING.md) for test and lint commands.
+The second line builds the note helper an executor writes into its box, which
+the engine finds through `CREWLET_NOTE_HELPER_DIR`. That is the whole setup; see [CONTRIBUTING.md](https://github.com/crewlet/crewlet/blob/main/CONTRIBUTING.md) for test and lint commands.
 
 ## Infrastructure
 

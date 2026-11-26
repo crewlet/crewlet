@@ -48,6 +48,12 @@ project_name: crewlet
 before:
   hooks:
     - go run ./scripts/notices -out build/notices/THIRD_PARTY_NOTICES.txt -main ./cmd/crewlet -targets linux/amd64,linux/arm64,darwin/amd64,darwin/arm64
+    # The note helper a box runs, one build per box arch, into every archive
+    # and the image (internal/notehelper/helperbuild's recipe). Built here, not
+    # as a `builds` entry, because every archive carries both linux builds
+    # (a box is Linux, and its arch is its own), and a build's artifacts reach
+    # only the archives of their own platform.
+    - go run ./scripts/notehelper -out build/notehelper
 
 builds:
   - id: crewlet
@@ -156,6 +162,12 @@ archives:
       - src: static/dashboard/THIRD_PARTY_NOTICES.txt
         dst: dashboard
         strip_parent: true
+      # Beside the binary, where the engine looks first. Exact paths, so a
+      # build missing from build/notehelper fails the release.
+      - src: build/notehelper/notehelper-linux-amd64
+        strip_parent: true
+      - src: build/notehelper/notehelper-linux-arm64
+        strip_parent: true
 
 checksum:
   name_template: checksums.txt
@@ -256,6 +268,8 @@ dockers_v2:
       - NOTICE
       - build/notices/THIRD_PARTY_NOTICES.txt
       - static/dashboard/THIRD_PARTY_NOTICES.txt
+      - build/notehelper/notehelper-linux-amd64
+      - build/notehelper/notehelper-linux-arm64
       - scripts/git-pin.env
       - scripts/git.sh
     labels:
