@@ -40,7 +40,7 @@ func (c *clock) advance(d time.Duration) {
 func site(t *testing.T, answer func(w http.ResponseWriter, r *http.Request)) (*httptest.Server, *atomic.Int64) {
 	t.Helper()
 	var asks atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/_edge/tenant_info" {
 			http.NotFound(w, r)
 			return
@@ -154,9 +154,14 @@ func TestOnlyAWellFormedAnswerIsACloudID(t *testing.T) {
 // client follow redirects and the second server is asked and its id kept.
 func TestARedirectedLookupYieldsNoCloudID(t *testing.T) {
 	t.Parallel()
-	elsewhere, asked := site(t, func(w http.ResponseWriter, _ *http.Request) {
+	// Plain http, which the client would follow to: a second TLS server's
+	// certificate would refuse the request whether or not it was redirected.
+	var asked atomic.Int64
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		asked.Add(1)
 		_, _ = w.Write([]byte(`{"cloudId":"` + siteID + `"}`))
-	})
+	}))
+	t.Cleanup(elsewhere.Close)
 	srv, _ := site(t, func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, elsewhere.URL+"/_edge/tenant_info", http.StatusFound)
 	})
@@ -311,5 +316,23 @@ func TestTheResolversOwnClientHasTheReadBudget(t *testing.T) {
 	if client.CheckRedirect == nil ||
 		client.CheckRedirect(&http.Request{}, nil) != http.ErrUseLastResponse {
 		t.Error("the client follows redirects")
+	}
+}
+
+// ONLY HTTPS IS ASKED: Atlassian Cloud serves nothing else, so a url naming
+// another scheme is refused without a request. Mutation: accept http and
+// the site is asked.
+func TestALookupIsMadeOverHTTPSOnly(t *testing.T) {
+	t.Parallel()
+	rt := &transport{answer: func(int64, *http.Request) (*http.Response, error) {
+		return reply(http.StatusOK, `{"cloudId":"`+siteID+`"}`), nil
+	}}
+	ids := atlassian.NewCloudIDs(atlassian.CloudIDOptions{Client: &http.Client{Transport: rt}})
+	id, err := ids.Resolve(t.Context(), "http://acme.atlassian.net")
+	if err == nil || !strings.Contains(err.Error(), "serves only https") {
+		t.Errorf("Resolve(http://…) = %q, %v; want a refusal naming https", id, err)
+	}
+	if n := rt.calls.Load(); n != 0 {
+		t.Errorf("an http url was asked %d times, want 0", n)
 	}
 }

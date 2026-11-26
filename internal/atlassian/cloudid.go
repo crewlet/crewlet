@@ -197,12 +197,18 @@ func (c *CloudIDs) read(ctx context.Context, address string) (string, error) {
 	return id, nil
 }
 
-// tenantInfoURL is site's lookup address: its scheme and host, whatever path
-// the configured url carries (a Confluence site's /wiki).
+// tenantInfoURL is site's lookup address: https and its host, whatever path
+// the configured url carries (a Confluence site's /wiki). Atlassian Cloud
+// serves only https, so a url naming another scheme is refused unasked.
 func tenantInfoURL(site string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(site))
-	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
-		return "", &TenantInfoError{URL: site + tenantInfoPath, Cause: "the url is not an http(s) site address"}
+	if err != nil || u.Host == "" {
+		return "", &TenantInfoError{URL: site + tenantInfoPath, Cause: "the url is not a site address"}
 	}
-	return u.Scheme + "://" + strings.ToLower(u.Host) + tenantInfoPath, nil
+	address := "https://" + strings.ToLower(u.Host) + tenantInfoPath
+	if u.Scheme != "https" {
+		return "", &TenantInfoError{URL: address, Cause: "Atlassian Cloud serves only https; " +
+			"the url must start with https://"}
+	}
+	return address, nil
 }
