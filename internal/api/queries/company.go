@@ -133,6 +133,12 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		verifiable = s.Verifiable(ctx)
 		verifiableKnown = verifiable != nil
 	}
+	// And what a route refuses although its material resolved. A nil map
+	// reads as nothing held: a hold is stated, never inferred.
+	var held map[string]string
+	if s.Held != nil {
+		held = s.Held(ctx)
+	}
 
 	out := []map[string]any{}
 	// WHAT THE ROLL-UP READS, one per row, built from the same values the
@@ -212,6 +218,12 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 			secretUsable = boolPtr(slices.Contains(verifiable, kind))
 		}
 		row["secret_usable"] = secretUsable
+		// WHY EVERY DELIVERY IS REFUSED where the secret is not the reason,
+		// in the route's own words; null where nothing is held.
+		row["held"] = nil
+		if reason := held[kind]; reason != "" {
+			row["held"] = reason
+		}
 		// THREE-VALUED again: null means nothing checks this surface from
 		// here, an absent entry means the loop has not reached it yet, a
 		// present one is a real finding. A ROW IS NOT A REPORT: the setup
@@ -247,6 +259,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		status := integration.SurfaceStatus{
 			Key: kind, Enabled: enabled, Known: reconcileKnown,
 			SecretUsable: secretUsable, Routes: routes, EndpointCurrent: endpointCurrent,
+			Held: held[kind],
 		}
 		if state, checked := reconciled[kind]; reconcileKnown && checked {
 			status.State = &state

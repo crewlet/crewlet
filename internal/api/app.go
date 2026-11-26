@@ -960,6 +960,9 @@ func New(opts Options) (*App, error) {
 	sources.Verifiable = func(ctx context.Context) []string {
 		return opts.Runtime.Snapshot(ctx).VerifiableSources
 	}
+	sources.Held = func(ctx context.Context) map[string]string {
+		return opts.Runtime.Snapshot(ctx).IngressHolds
+	}
 	// WHAT THIS PRINCIPAL MAY DO, from the SAME catalogue the act route
 	// serves and the same authority every one of its tools is decided by:
 	// a list computed anywhere else would be a second opinion about which

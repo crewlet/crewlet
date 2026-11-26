@@ -178,6 +178,9 @@ type SurfaceStatus struct {
 	SecretUsable    *bool
 	Routes          *bool
 	EndpointCurrent *bool
+	// Held is why the route refuses every delivery although its material
+	// resolved, in the route's words; empty where nothing is held.
+	Held string
 }
 
 // ToolRollup is one tool's answer: its state, the words for it, and why.
@@ -339,6 +342,9 @@ func judge(s SurfaceStatus, name string) verdict {
 	case !s.Enabled:
 		v.state, v.label = ToolNotInUse, labelPaused
 		v.reason = name + " is switched off in the company configuration"
+	case s.Held != "":
+		// A HOLD IS A FACT whatever the loop has or has not reported.
+		v.state, v.label, v.reason = ToolAttention, labelActionNeeded, s.Held
 	case s.Converges != nil && !*s.Converges:
 		// A SURFACE NO PASS CONVERGES NEVER REPORTS, so "the loop has not
 		// got to it yet" would be a permanent claim about it. Judged from
@@ -365,6 +371,8 @@ func judge(s SurfaceStatus, name string) verdict {
 // ingressFault is the sentence for a delivery path that cannot work, or "".
 func ingressFault(s SurfaceStatus, name string) string {
 	switch {
+	case s.Held != "":
+		return s.Held
 	case s.SecretUsable != nil && !*s.SecretUsable:
 		return name + "'s delivery secret did not resolve on this node, so every " +
 			"delivery is refused"

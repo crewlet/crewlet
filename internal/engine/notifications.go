@@ -703,6 +703,16 @@ func (e *Engine) VerifiableSources() []string {
 	return sources
 }
 
+// IngressHolds names, by surface, why a route refuses every delivery of a
+// kind although its material resolved ([webhooks.Secrets.IngressHolds]). Nil
+// when there is no company yet ("cannot say").
+func (e *Engine) IngressHolds() map[string]string {
+	if e.Company() == nil {
+		return nil
+	}
+	return e.WebhookSecrets().IngressHolds()
+}
+
 // Mattermost is the running chat transport, or nil when the company has no
 // chat surface. Beside [Engine.Registry] and [Engine.Status]: the facts only
 // the engine can answer about what it actually built.

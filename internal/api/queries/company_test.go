@@ -2617,6 +2617,35 @@ func TestTheAtlassianOrganizationClaimsNoIngress(t *testing.T) {
 	}
 }
 
+// A HELD FORGE RELAY IS NOT SILENT: the row and the Atlassian card both say
+// what holds it, in the route's words, field included. Mutation: drop the
+// row's held field or the status's Held and a check goes red.
+func TestAHeldForgeRelayNamesTheFieldThatClearsIt(t *testing.T) {
+	t.Parallel()
+	const why = "Forge relay events for Jira are refused until integrations.jira.cloud_id (with site_url) is set"
+	cfg := company(t)
+	cfg.Integrations.ForgeAppID = "ari:cloud:ecosystem::app/a1b2"
+	body := asMap(t, answer(t, queries.Sources{
+		Company:   companySource(t, cfg),
+		Converges: func(integration.Kind) bool { return false },
+		Held: func(context.Context) map[string]string {
+			return map[string]string{"forge": why}
+		},
+	}, "integrations", nil))
+	if got := surfacesOf(t, body)["forge"]["held"]; got != why {
+		t.Errorf("forge held = %v, want %q", got, why)
+	}
+	for _, tool := range rowsOf(t, body["tools"]) {
+		if tool["key"] == "atlassian" {
+			if tool["state"] != "attention" || tool["reason"] != why {
+				t.Errorf("atlassian card = %v, want attention naming the field", tool)
+			}
+			return
+		}
+	}
+	t.Fatal("no atlassian roll-up")
+}
+
 // THE FORGE RELAY ROUTES AS THE PRODUCT IT RELAYS, and the row has to answer
 // for that rather than for its own name.
 //
