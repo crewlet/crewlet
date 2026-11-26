@@ -214,7 +214,7 @@ func (s *session) observe(ctx context.Context, r *roster, handle string, rec *se
 	out.Level = observedLevel(held, applied)
 	out.Scope = observedScope(r, user.ID, s.group.FullPath)
 
-	tokens, err := s.client.Tokens(ctx, s.mintGroup(), user.ID)
+	tokens, err := s.client.Tokens(ctx, s.ownerGroup(), user.ID)
 	if err != nil {
 		return seataccess.Observed{}, fmt.Errorf("list tokens: %w", err)
 	}
