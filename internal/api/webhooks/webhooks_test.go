@@ -161,8 +161,9 @@ func newEdgeOn(t *testing.T, db *store.DB, opts ...func(*webhooks.Options)) *edg
 	secrets := &webhooks.Secrets{
 		GitHub: "gh-secret", GitLab: gitlabSecret,
 		Jira: "jira-secret", Confluence: "conf-secret", ConfluenceToken: "EXAMPLECONFLUENCETOKEN0000", ForgeAppID: "app-123",
-		Datadog: "EXAMPLEDATADOGTOKEN0000000",
-		Slack:   map[string]string{"ceo": "slack-secret"},
+		Datadog:    "EXAMPLEDATADOGTOKEN0000000",
+		Slack:      map[string]string{"ceo": "slack-secret"},
+		ForgeSites: map[string]string{"jira": ownSite, "confluence": ownSite},
 	}
 	configured := true
 	e := &edge{

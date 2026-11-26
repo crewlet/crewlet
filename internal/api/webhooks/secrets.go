@@ -44,6 +44,12 @@ type Secrets struct {
 	// app id there is nothing to check the token against.
 	ForgeAppID string
 
+	// ForgeSites are the cloud ids a Forge token must name, keyed by the
+	// product ("jira", "confluence") whose events it carries. A product
+	// with no entry has no cloud id to bind a token to, and its relayed
+	// events answer 503 like a missing secret (forge_site.go).
+	ForgeSites map[string]string
+
 	// Slack is PER SEAT, keyed by agent handle, because each agent has its
 	// own Slack app. The handle comes from the URL path, which is why that
 	// route is the only one whose secret depends on where it was addressed.
@@ -104,11 +110,15 @@ func (s Secrets) Verifiable() []string {
 		{"github", s.GitHub},
 		{"jira", s.Jira},
 		{"datadog", s.Datadog},
-		{"forge", s.ForgeAppID},
 	} {
 		if pair.secret != "" {
 			out = append(out, pair.kind)
 		}
+	}
+	// Forge needs a site beside the app id: a token is refused unless it
+	// names one of the company's Cloud sites.
+	if s.ForgeAppID != "" && len(s.ForgeSites) > 0 {
+		out = append(out, "forge")
 	}
 	// One seat is enough. A company with ten Slack apps and one unresolved
 	// ${VAR} is not a company whose Slack is unverifiable; it is one seat
@@ -154,12 +164,22 @@ func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) stri
 		if in.GitLab != nil && in.GitLab.Enabled {
 			s.GitLab = resolve(in.GitLab.SigningSecret)
 		}
+		site := func(product, rawURL, cloudID string) {
+			if id := cloudIDOf(resolve(rawURL), resolve(cloudID)); id != "" {
+				if s.ForgeSites == nil {
+					s.ForgeSites = map[string]string{}
+				}
+				s.ForgeSites[product] = id
+			}
+		}
 		if in.Jira != nil {
 			s.Jira = resolve(in.Jira.WebhookSecret)
+			site("jira", in.Jira.URL, in.Jira.CloudID)
 		}
 		if in.Confluence != nil {
 			s.Confluence = resolve(in.Confluence.WebhookSecret)
 			s.ConfluenceToken = resolve(in.Confluence.WebhookToken)
+			site("confluence", in.Confluence.URL, in.Confluence.CloudID)
 		}
 		if in.Datadog != nil && in.Datadog.Enabled {
 			s.Datadog = resolve(in.Datadog.WebhookToken)

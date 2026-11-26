@@ -84,7 +84,7 @@ Config validation, this client and the [Confluence](confluence.md) client decide
 
 **`webhook_name` says which hook on the instance is this deployment's.** The reconcile converges the hook carrying that name whatever address it points at, so a change of public base leaves no live orphan. A hook with the name but a path other than `/webhooks/jira` was not registered by this engine and is left alone. It defaults to `crewlet`, and **two deployments watching one instance must set two names** (staging and production of one company share this document; with one name each pass would repoint the other's hook). `crewlet jira decommission` removes the hook by the same name.
 
-On **Cloud**, `webhook_secret` works as on Data Center: the engine registers an admin webhook signed with it. Validation does not *require* it for Cloud, because a company on the Forge relay has no HMAC in its path; instead the reconcile refuses to register a hook it cannot sign, and says so. The same holds for a `url` whose host is a `${VAR}` in a company declaring no deployment: validation judges the deployment unknown rather than Data Center, and the reconcile names `webhook_secret` once the address resolves to a Data Center instance. Declare `deployment: data_center` and validation asks for it up front; a reference only in the path (`https://jira.example.com/${JIRA_CONTEXT}`) leaves the host judged as written. The Forge route stays available, verified by the app's invocation token against `integrations.forge_app_id`.
+On **Cloud**, `webhook_secret` works as on Data Center: the engine registers an admin webhook signed with it. Validation does not *require* it for Cloud, because a company on the Forge relay has no HMAC in its path; instead the reconcile refuses to register a hook it cannot sign, and says so. The same holds for a `url` whose host is a `${VAR}` in a company declaring no deployment: validation judges the deployment unknown rather than Data Center, and the reconcile names `webhook_secret` once the address resolves to a Data Center instance. Declare `deployment: data_center` and validation asks for it up front; a reference only in the path (`https://jira.example.com/${JIRA_CONTEXT}`) leaves the host judged as written. The Forge route stays available, verified by the app's invocation token against `integrations.forge_app_id` and this block's `cloud_id`.
 
 ---
 
@@ -144,7 +144,7 @@ The [Crewlet Forge app](https://github.com/crewlet/forge) is the alternative whe
 - `avi:jira:updated:issue` — ticket field changed (status, assignee, priority, etc.)
 - `avi:jira:deleted:issue` — ticket deleted
 
-Events are delivered via Forge Remote to `POST /webhooks/forge`. The Forge platform handles authentication automatically.
+Events are delivered via Forge Remote to `POST /webhooks/forge`, each with a Forge Invocation Token. The engine accepts one only when it is for `integrations.forge_app_id` **and** names the site this block's `cloud_id` names, so an installation of the same app on another site is refused. The token names its site by cloud id only, so a company on the relay gives `cloud_id` (with `site_url` for links) rather than the site's `url`. Setup records both from the [Atlassian organization](#configuration) when no address is given; until the block has a `cloud_id`, Jira events on the route answer `503`. See [`/webhooks/forge`](../reference/api-endpoints.md#webhooksforge).
 
 
 ### Jira Data Center — Direct Webhook Registration

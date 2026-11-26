@@ -21,10 +21,13 @@
 //
 // Datadog and Confluence Cloud sign nothing, so a shared token IS the
 // authentication there and [secrets.CheckSharedToken] gives it a length floor;
-// the other providers verify a signature over the body. The OAuth landings
-// (Slack, the GitHub App return, the MCP sign-in callback) and the engine's
-// client metadata document live here too; mcp_oauth.go says what the callback
-// trusts.
+// the other providers verify a signature over the body, except Forge, whose
+// Atlassian-signed token must name the app AND the company's own Cloud site for
+// the event's product (forge_site.go): one app id is shared by every site that
+// installs the app, and a product with no Cloud site is a missing secret. The
+// OAuth landings (Slack, the GitHub App return, the MCP sign-in callback) and
+// the engine's client metadata document live here too; mcp_oauth.go says what
+// the callback trusts.
 package webhooks
 
 import (

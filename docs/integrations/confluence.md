@@ -189,7 +189,7 @@ Install the [Crewlet Forge app](https://github.com/crewlet/forge) from the Atlas
 - `avi:confluence:created:blogpost` — new blog post
 - `avi:confluence:updated:blogpost` — blog post updated
 
-Events are delivered via Forge Remote to `POST /webhooks/forge`. The Forge platform handles authentication. Label events are not forwarded.
+Events are delivered via Forge Remote to `POST /webhooks/forge`, each with a Forge Invocation Token. The engine accepts one only when it is for `integrations.forge_app_id` **and** names the site this block's `cloud_id` names, which may differ from Jira's. The token names its site by cloud id only, so a company on the relay gives `cloud_id` (with `site_url` for links) rather than the site's `url`. Setup records both from the [Atlassian organization](#configuration) when no address is given; until the block has a `cloud_id`, Confluence events on the route answer `503`. See [`/webhooks/forge`](../reference/api-endpoints.md#webhooksforge). Label events are not forwarded.
 
 ### Confluence Data Center — Direct Webhook Registration
 

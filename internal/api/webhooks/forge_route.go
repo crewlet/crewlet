@@ -66,7 +66,8 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	appID := r.secrets().ForgeAppID
+	material := r.secrets()
+	appID := material.ForgeAppID
 	if appID == "" {
 		// The same class as a missing HMAC secret: the app id IS the
 		// audience this route verifies against, so without it there is
@@ -74,12 +75,34 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 		noSecret(w, "forge")
 		return
 	}
+	// And so is a product with no cloud id: there is nothing to bind the
+	// token to. Held with a 503 rather than refused, so the relay's
+	// retries land once the id is recorded (by hand, or by the Atlassian
+	// organization's pass).
+	source := forgeSource(event)
+	sites := material.forgeSites(source)
+	if len(sites) == 0 {
+		field := "integrations." + source + ".cloud_id"
+		if source == "" {
+			field = "integrations.jira.cloud_id or integrations.confluence.cloud_id"
+		}
+		log.Error("forge_no_cloud_site", "event", event, "product", source,
+			"detail", "a Forge token names its site by cloud id only; set "+field+
+				" (with site_url, in place of a site url) to the site the app is installed on")
+		httpjson.Unavailable(w, httpjson.CodeNoWebhookSecret,
+			httpjson.RetrySeconds(NoSecretRetryAfter))
+		return
+	}
 	token, found := strings.CutPrefix(req.Header.Get("Authorization"), "Bearer ")
 	if !found || token == "" {
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidSignature)
 		return
 	}
-	if err := r.forge.verify(req.Context(), token, appID); err != nil {
+	claims, err := r.forge.verify(req.Context(), token, appID)
+	if err == nil {
+		err = bindSite(claims, sites)
+	}
+	if err != nil {
 		// The REASON reaches the log, never the caller: it distinguishes
 		// an expired token from one addressed at another app, which is
 		// what an operator needs and what an attacker would use to probe.
