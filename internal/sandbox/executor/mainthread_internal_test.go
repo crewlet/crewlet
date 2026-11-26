@@ -212,11 +212,8 @@ func scratchGrown(tb testing.TB, line string, typeText int) int {
 	var r *threadReader
 	made := ^uint64(0)
 	for range 3 {
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		r = newThreadReader(src, threadPlainMax)
-		runtime.ReadMemStats(&after)
-		made = min(made, after.TotalAlloc-before.TotalAlloc)
+		_, bytes := ownAllocations(func() { r = newThreadReader(src, threadPlainMax) })
+		made = min(made, bytes)
 	}
 	if _, err := r.Next(context.Background()); err != nil {
 		tb.Fatalf("the line reads %v", err)
