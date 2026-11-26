@@ -334,11 +334,11 @@ def _start_render(hand, root, window, started, span, record):
             answer, stamp, error = None, None, "%s: %s" % (type(err).__name__, str(err)[:200])
         late = int((time.monotonic() - started) // span)
         with _lock:
-            if error is None:
-                record.update(answer=answer, stamp=stamp)
+            if error is None:  # a render that answered starts the count afresh: nothing older names its cause
+                record.update(answer=answer, stamp=stamp, failures=0, error=None)
             else:
-                record["error"], late = error, max(late, 1)
-            record["failures"] += late
+                record["error"] = error
+                record["failures"] += max(late, 1)
             record["worker"] = None
 
     worker = threading.Thread(target=work, name="crewlet-checkouts", daemon=True)
@@ -346,23 +346,45 @@ def _start_render(hand, root, window, started, span, record):
     worker.start()
 
 
-def _gate(hand, roots, window, started, until):
+def _within(deadline, fn):
+    """fn() on a worker, waited on until deadline: (True, its value), else (False, None) where it raised (logged)
+    or runs on, which it does only within the bounds of the walks it makes."""
+    out = {}
+
+    def work():
+        try:
+            out["value"] = fn()
+        except Exception as err:  # the firing goes on without it
+            out["error"] = "%s: %s" % (type(err).__name__, str(err)[:200])
+
+    worker = threading.Thread(target=work, name="crewlet-checkouts", daemon=True)
+    worker.start()
+    worker.join(max(0.0, deadline - time.monotonic()))
+    if "error" in out:
+        logger.warning("crewlet: reading what a checkout's hand needs failed (%s)", out["error"])
+    return ("value" in out and not worker.is_alive()), out.get("value")
+
+
+def _gate(hand, roots, window, started, until, claim_by):
     """The gate for a firing that started at `started`: each root's kept answer, unless what it read changed since
-    (then rendered again); a render started for a root with none (never while one runs); every running render
-    waited on until `until`; a root whose renders failed _RENDER_TRIES times claimed as left out, said with the last
-    error, else as late; the rest left out of the gate, so they wait unclaimed. The home's taken names are read now,
-    for the claim: a person may have added a skill since a kept answer was rendered."""
+    (then rendered afresh) or cannot be told by `until` (then kept, not handed); a render started for a root with
+    none (never while one runs); every running render waited on until `until`; a root whose renders failed
+    _RENDER_TRIES times claimed as left out, said with the last error, else as late; the rest left out of the gate,
+    so they wait unclaimed. The home's taken names are read for the claim by `claim_by`, else nothing is claimed: a
+    person may have added a skill since a kept answer was rendered."""
     carry = _carry_module(hand["carry"])
     with _lock:
         kept = [root for root in roots if (_renders.get(root) or {}).get("answer") is not None]
-    stamps = {root: carry.checkout_stamp(root) for root in kept}
+    told, stamps = _within(until, lambda: {root: carry.checkout_stamp(root) for root in kept}) if kept else (True, {})
+    untold = set() if told else set(kept)
     waits = []
     with _lock:
         for root in roots:
             record = _renders.setdefault(root, {"worker": None, "answer": None, "stamp": None, "error": None,
                                                 "failures": 0})
-            if root in stamps and record["answer"] is not None and record["stamp"] != stamps[root]:
-                record["answer"] = None
+            if told and root in stamps and record["answer"] is not None and (stamps[root] is None or
+                                                                           stamps[root] != record["stamp"]):
+                record["answer"] = None  # its count started afresh when that render answered
             if record["worker"] is None and record["answer"] is None and record["failures"] < _RENDER_TRIES:
                 _start_render(hand, root, window, started, until - started, record)
             if record["worker"] is not None:
@@ -375,14 +397,17 @@ def _gate(hand, roots, window, started, until):
         for root in roots:
             record = _renders[root]
             if record["answer"] is not None:
-                gate["checkouts"][root] = record["answer"]
+                if root not in untold:
+                    gate["checkouts"][root] = record["answer"]
             elif _failures(record, now) >= _RENDER_TRIES:
                 why = ("its render failed: %s" % record["error"]) if record["error"] else \
                     "Hermes did not render it within the hand's bound %d times" % _RENDER_TRIES
                 gate["checkouts"][root] = {"text": "", "files": [], "skills": [],
                                            "said": ["the instructions and skills of %s are left out: %s" % (root, why)]}
     if gate["checkouts"]:
-        gate["taken"] = carry.skill_names()
+        named, taken = _within(claim_by, carry.skill_names)
+        gate = gate if named else {"checkouts": {}, "taken": {}}
+        gate["taken"] = taken or {}
     return gate
 
 
@@ -410,7 +435,7 @@ def _hand_checkouts(hand, tool, args, result, window, calls):
         roots = (json.loads(helper("-adapter", "hermes-peek") or b"{}").get("roots") or [])
         if not roots or time.monotonic() >= until:
             return ""  # no room left for a render and a claim: every checkout waits
-        gate = _gate(hand, roots, window, started, until)
+        gate = _gate(hand, roots, window, started, until, end - hand["claim_reserve"])
         if not gate["checkouts"]:
             return ""
         room = _room(tool, args, result, window, calls)

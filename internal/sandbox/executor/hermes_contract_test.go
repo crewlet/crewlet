@@ -382,8 +382,9 @@ func TestAHermesRunsNotesFollowItsSessionIntoACompactionsChild(t *testing.T) {
 // transform_tool_result for the run's own session after its turn starts:
 // for each pause in argv[4] (seconds to wait first), argv[5] firings at once,
 // each on its own thread as a parallel batch's are. It prints the results in
-// firing order and the roots it started a render of (a render's own write may
-// come after the probe exits).
+// firing order, the roots it started a render of (a render's own write may
+// come after the probe exits), and each firing that outlasted the hook bound.
+// argv[6], where not empty, is the stand-in's tools/budget_config.py.
 const hermesNestedProbe = `import importlib.util, json, os, sys, threading, time
 os.environ["CREWLET_HERMES_PLUGIN"] = sys.argv[2]
 stand = os.path.join(os.path.dirname(sys.argv[2]), "py")
@@ -391,6 +392,11 @@ os.makedirs(os.path.join(stand, "hermes_cli"), exist_ok=True)
 open(os.path.join(stand, "hermes_cli", "__init__.py"), "w").close()
 with open(os.path.join(stand, "hermes_cli", "plugins.py"), "w") as f:
     f.write("def _resolve_hook_callback_timeout():\n    return %s\n" % sys.argv[3])
+if sys.argv[6]:
+    os.makedirs(os.path.join(stand, "tools"), exist_ok=True)
+    open(os.path.join(stand, "tools", "__init__.py"), "w").close()
+    with open(os.path.join(stand, "tools", "budget_config.py"), "w") as f:
+        f.write(sys.argv[6])
 sys.path.insert(0, stand)
 spec = importlib.util.spec_from_file_location("crewlet_plugin", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
@@ -401,19 +407,23 @@ class Ctx:
         hooks[name] = fn
 m.register(Ctx())
 hooks["pre_llm_call"](session_id="main")
-out = []
+out, outlasted = [], []
 for pause in json.loads(sys.argv[4]):
     time.sleep(pause)
-    wave = [None] * int(sys.argv[5])
+    wave, over = [None] * int(sys.argv[5]), []
     def fire(i):
+        t0 = time.monotonic()
         wave[i] = hooks["transform_tool_result"](session_id="main", tool_name="terminal", result="cloned")
+        if time.monotonic() - t0 >= float(sys.argv[3]):
+            over.append(len(out) + i + 1)
     threads = [threading.Thread(target=fire, args=(i,)) for i in range(len(wave))]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
     out += wave
-print(json.dumps({"results": out, "rendering": sorted(m._renders)}))
+    outlasted += over
+print(json.dumps({"results": out, "rendering": sorted(m._renders), "outlasted": outlasted}))
 `
 
 // HERMES'S RENDER OF A LATER CHECKOUT IS BOUNDED, NEVER STARTED TWICE, AND
@@ -421,9 +431,10 @@ print(json.dumps({"results": out, "rendering": sorted(m._renders)}))
 // parallel batch's too) waits on it within its bound; a late result serves a
 // later firing unless what it read changed (then rendered again), its claim
 // taking the home's names of then; a render fails once per bound it outlives,
-// and once where it raised; at three the checkout is claimed as left out,
-// said with the last error, else as late; no render starts without the
-// render's reserve, no claim without its own (plugin's _gate).
+// once where it raised, and an answer clears the count; at three the checkout
+// is claimed as left out, said with the last error, else as late; no render
+// starts without the render's reserve, no claim without its own; no firing
+// outlasts the hook bound, a slow stamp or name read included (plugin's _gate).
 //
 // Mutation: undo any of these (a failure per firing finding a render running,
 // a late raise counted twice, an error forgotten), and a row goes red.
@@ -434,12 +445,12 @@ func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 	late := "the instructions and skills of /r are left out: Hermes did not render it within the hand's bound 3 times"
 	failed := "the instructions and skills of /r are left out: its render failed: RuntimeError: boom"
 	for _, c := range []struct {
-		name, render, pauses, names string
-		width                       int // firings at once at each pause
-		reserve                     float64
-		want                        []string // each firing's result, "" for none
-		starts                      int
-		said, unsaid                string // in the gate the last claim read
+		name, render, pauses, names, budget string
+		width                               int // firings at once at each pause
+		reserve                             float64
+		want                                []string // each firing's result, "" for none
+		starts                              int
+		said, unsaid                        string // in the gate the last claim read
 	}{
 		{name: "in time", render: "pass", pauses: "[0]", reserve: 1, want: []string{"cloned\n\nHANDED"}, starts: 1},
 		{name: "a parallel batch waits on one render", render: "time.sleep(0.5)", pauses: "[0]", width: 4, reserve: 1,
@@ -465,7 +476,16 @@ func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 			want:   []string{"", "", "cloned\n\nHANDED"}, starts: 3, said: failed},
 		{name: "no render or claim without the reserve", render: "pass", pauses: "[0]", reserve: 5, want: []string{""}},
 		{name: "no claim without the claim's reserve", render: "pass", pauses: "[0]", reserve: 1,
-			names: "time.sleep(2.6)", want: []string{""}, starts: 1},
+			names: "time.sleep(5)", want: []string{""}, starts: 1},
+		{name: "no claim once the room's read passes the claim's reserve", render: "pass", pauses: "[0]", reserve: 1,
+			budget: "import time\ndef budget_for_context_window(context_length):\n    time.sleep(2.6)\n",
+			want:   []string{""}, starts: 1},
+		{name: "a kept render whose stamp is slow waits", pauses: "[0, 2]", reserve: 1,
+			render: "time.sleep(2.5)\n    open(STAMP, 'w').write('slow')", want: []string{"", ""}, starts: 1},
+		{name: "an answer clears the failures before it", pauses: "[0, 0, 0, 0]", reserve: 1,
+			render: "n = len(open(STARTS).read())\n    if n == 3:\n        open(STAMP, 'w').write('v2')\n" +
+				"    if n != 3:\n        raise RuntimeError('boom')",
+			want: []string{"", "", "cloned\n\nHANDED", ""}, starts: 4},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -482,7 +502,7 @@ func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 				strconv.Quote(filepath.Join(dir, "taken")) + ", " + strconv.Quote(filepath.Join(dir, "stamp")) + "\n" +
 				"def _read(path):\n    try:\n        return open(path).read()\n    except OSError:\n        return \"\"\n" +
 				"def skill_names():\n    " + names + "\n    return {\"home\": _read(TAKEN)}\n" +
-				"def checkout_stamp(root):\n    return _read(STAMP)\n" +
+				"def checkout_stamp(root):\n    s = _read(STAMP)\n    if s == \"slow\":\n        time.sleep(5)\n    return s\n" +
 				"def checkout_gate(roots, window):\n    taken = {\"home\": _read(TAKEN)}\n" +
 				"    open(STARTS, \"a\").write(\"s\")\n    " + c.render +
 				"\n    return {\"checkouts\": {roots[0]: {\"text\": \"T\"}}, \"taken\": taken}\n"
@@ -496,16 +516,20 @@ func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
 			}
 			width := max(c.width, 1)
 			out, err := exec.Command(python, "-I", "-c", hermesNestedProbe, plugin, filepath.Join(dir, "settings.json"),
-				"4", c.pauses, strconv.Itoa(width)).Output()
+				"4", c.pauses, strconv.Itoa(width), c.budget).Output()
 			if err != nil {
 				t.Fatalf("the plugin's hook: %v", err)
 			}
 			var got struct {
 				Results   []*string
 				Rendering []string
+				Outlasted []int
 			}
 			if err = json.Unmarshal(out, &got); err != nil || len(got.Results) != len(c.want) {
 				t.Fatalf("the probe printed %q: %v", out, err)
+			}
+			if len(got.Outlasted) > 0 {
+				t.Errorf("firings %v outlasted Hermes's hook bound", got.Outlasted)
 			}
 			if started := len(got.Rendering) > 0; started != (c.starts > 0) {
 				t.Errorf("a render was started: %t, want %t", started, c.starts > 0)
