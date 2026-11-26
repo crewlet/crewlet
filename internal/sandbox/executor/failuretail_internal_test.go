@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"math/rand/v2"
 	"strings"
@@ -42,8 +43,8 @@ func (c *readCounter) Close() error { return nil }
 func failureTailOf(t *testing.T, text string, keep int) failureTail {
 	t.Helper()
 	body := &readCounter{text: strings.NewReader(text), r: rand.New(rand.NewPCG(uint64(len(text)), uint64(keep)))}
-	tail, err := (&Runner{now: stillClock}).readFailureTail(&piece{path: "err", what: "the error stream",
-		body: body, size: int64(len(text))}, keep)
+	tail, err := (&Runner{now: stillClock}).readFailureTail(t.Context(), &piece{path: "err",
+		what: "the error stream", body: body, size: int64(len(text))}, keep, time.Time{})
 	if err != nil {
 		t.Fatalf("readFailureTail: %v", err)
 	}
@@ -116,23 +117,34 @@ func TestAFailuresTailIsTheEndOfItsWholeStreamsRedaction(t *testing.T) {
 	}
 }
 
-// A FAILURE'S TAIL IS NOT SHOWN PAST THE READ'S WAIT: a stream whose redaction
-// has not reached its end within [sandbox.FailureReadWait] on the runner's
-// clock shows none of it and says why, since an end the redaction has not
-// reached is no end of the stream's; one that reached it in time is shown.
+// A FAILURE'S TAIL IS NOT SHOWN PAST THE READ'S BOUND: a stream whose
+// redaction has not reached its end within [sandbox.FailureReadWait] on the
+// runner's clock, or by the bound its box read handed it
+// ([sandbox.RunHandle.FailureReadBy]), or once its read's context ended, shows
+// none of it and says why and the time it was given, since an end the
+// redaction has not reached is no end of the stream's; one that reached it in
+// time is shown.
 //
-// Mutations, each red: show what the ring holds at the wait; read the clock
-// only before the first piece; read on past the wait.
-func TestAFailuresTailIsNotShownPastTheReadsWait(t *testing.T) {
+// Mutations, each red: show what the ring holds at the bound; read the clock
+// only before the first piece; read on past the bound; ignore the handle's
+// bound or the context's end.
+func TestAFailuresTailIsNotShownPastTheReadsBound(t *testing.T) {
 	t.Parallel()
 	text := strings.Repeat("compiling a package of the build\n", 4*failureReadPiece/33) + "FATAL: the last line\n"
+	ended, end := context.WithCancel(context.Background())
+	end()
 	for _, c := range []struct {
-		name  string
-		step  time.Duration
-		shown bool
+		name   string
+		step   time.Duration
+		readBy time.Duration
+		ctx    context.Context
+		given  string
 	}{
-		{"a read that ends within the wait", sandbox.FailureReadWait / 16, true},
-		{"a read the wait ends", sandbox.FailureReadWait / 3, false},
+		{"a read that ends within the wait", sandbox.FailureReadWait / 16, 0, nil, ""},
+		{"a read the wait ends", sandbox.FailureReadWait / 3, 0, nil, "32s"},
+		{"a read its box read's bound ends", sandbox.FailureReadWait / 16, sandbox.FailureReadWait / 8, nil, "4s"},
+		{"a read handed a bound already passed", sandbox.FailureReadWait / 16, -time.Second, nil, "0s"},
+		{"a read whose context ended", sandbox.FailureReadWait / 16, 0, ended, "32s"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -141,19 +153,30 @@ func TestAFailuresTailIsNotShownPastTheReadsWait(t *testing.T) {
 				now = now.Add(c.step)
 				return now
 			}
+			var readBy time.Time
+			if c.readBy != 0 {
+				// The first reading of the clock is the read's start.
+				readBy = time.Time{}.Add(c.step + c.readBy)
+			}
+			ctx := c.ctx
+			if ctx == nil {
+				ctx = t.Context()
+			}
 			body := &readCounter{text: strings.NewReader(text)}
-			tail, err := (&Runner{now: clock}).readFailureTail(&piece{path: "err", what: "the error stream",
-				body: body, size: int64(len(text))}, 1<<10)
+			tail, err := (&Runner{now: clock}).readFailureTail(ctx, &piece{path: "err",
+				what: "the error stream", body: body, size: int64(len(text))}, 1<<10, readBy)
 			if err != nil {
 				t.Fatal(err)
 			}
+			withheld := "ran past the collection's bound on its read, " + c.given + ","
 			switch {
-			case c.shown && (tail.withheld != "" || !strings.HasSuffix(tail.shown, "FATAL: the last line\n")):
+			case c.given == "" && (tail.withheld != "" || !strings.HasSuffix(tail.shown, "FATAL: the last line\n")):
 				t.Errorf("the tail is %q, withheld %q; want the stream's end", tail.shown, tail.withheld)
-			case !c.shown && (tail.shown != "" || !strings.Contains(tail.note(), "ran past the collection's bound on its read, 32s")):
-				t.Errorf("the tail shows %q with the note %q; want none of it, and the wait said", tail.shown, tail.note())
-			case !c.shown && body.all >= len(text):
-				t.Errorf("the read went on to the stream's end, %d bytes, past its wait", body.all)
+			case c.given != "" && (tail.shown != "" || !strings.Contains(tail.note(), withheld)):
+				t.Errorf("the tail shows %q with the note %q; want none of it, and %q", tail.shown, tail.note(),
+					withheld)
+			case c.given != "" && body.all >= len(text):
+				t.Errorf("the read went on to the stream's end, %d bytes, past its bound", body.all)
 			}
 		})
 	}
@@ -197,8 +220,8 @@ func TestAFailuresTailHoldsItsBoundNeverItsStream(t *testing.T) {
 	line := "compiling a package of the build, step 0000000\n"
 	text := strings.Repeat(line, (24<<20)/len(line))
 	body := &readCounter{text: io.MultiReader(strings.NewReader(text), strings.NewReader("grown after the open"))}
-	tail, err := (&Runner{now: stillClock}).readFailureTail(&piece{path: "err", what: "the error stream",
-		body: body, size: int64(len(text))}, keep)
+	tail, err := (&Runner{now: stillClock}).readFailureTail(t.Context(), &piece{path: "err",
+		what: "the error stream", body: body, size: int64(len(text))}, keep, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

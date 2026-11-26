@@ -396,6 +396,13 @@ type RunHandle struct {
 	// that its harness never connected. False on a handle a runner's Start
 	// answers.
 	BridgeHolderChanged bool
+
+	// FailureReadBy is when the collection ends its read of the error stream
+	// for the reads after it to keep their whole budgets, on the clock of the
+	// node reading the box: set from the deadline that read runs under, for a
+	// read for another node the wait it carried ([failureReadBy]); zero where
+	// nothing bounds it but [FailureReadWait].
+	FailureReadBy time.Time
 }
 
 // Result is one launch's outcome.

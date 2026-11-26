@@ -164,3 +164,40 @@ func TestAPieceThatGrewAfterItsOpenIsReadNoFurtherThanItsSize(t *testing.T) {
 			"want it described and not read", result.Success, len(result.Text), result.Error)
 	}
 }
+
+// A COLLECTION READS NO MORE PIECES WHOLE THAN A BOX READ'S BUDGET HOLDS ROOM
+// FOR ([sandbox.CollectWholePieces], each at its cap at the box-read floor),
+// for every harness: a piece added past it would be read on time the budget
+// never gave, out of the session take's.
+//
+// Mutation: open one more piece whole, or lower the figure, and a harness
+// collects more than it holds.
+func TestACollectionReadsNoMorePiecesWholeThanItsBudgetHolds(t *testing.T) {
+	t.Parallel()
+	most := 0
+	for _, h := range Registered() {
+		r := New(h)
+		b, _ := collectedBox(1<<10, 1<<10)
+		p := PathsFor(b)
+		c, err := r.openCollection(t.Context(), b, p, h.Output(p))
+		if err != nil {
+			t.Fatalf("%s: %v", h.Name(), err)
+		}
+		whole := 0
+		for _, piece := range c.all() {
+			if piece != nil && piece != c.stream && piece != c.stderr {
+				whole++
+			}
+		}
+		c.close()
+		if whole > sandbox.CollectWholePieces {
+			t.Errorf("%s's collection reads %d pieces whole, past the %d a box read's budget holds room for",
+				h.Name(), whole, sandbox.CollectWholePieces)
+		}
+		most = max(most, whole)
+	}
+	if most != sandbox.CollectWholePieces {
+		t.Errorf("the most pieces any harness's collection reads whole is %d; sandbox.CollectWholePieces "+
+			"holds room for %d", most, sandbox.CollectWholePieces)
+	}
+}

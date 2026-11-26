@@ -1293,7 +1293,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		refused = append(refused, refusal)
 	}
 	stderrTail := sync.OnceValues(func() (failureTail, error) {
-		return r.readFailureTail(pieces.stderr, r.failureBound)
+		return r.readFailureTail(ctx, pieces.stderr, r.failureBound, handle.FailureReadBy)
 	})
 	if result.Transcript == "" {
 		tail, tailErr := stderrTail()

@@ -1,10 +1,12 @@
 package executor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -61,9 +63,11 @@ func (f failureTail) transcript() string {
 // than the size it was weighed at, through one redaction stream, keeping the
 // last keep+1 bytes of what it writes ([endRing]): with the byte before them,
 // [sandbox.KeepEnd] of those is KeepEnd of the whole redaction. ON THE
-// RUNNER'S CLOCK: past [sandbox.FailureReadWait] the read stops and withholds
-// the end, since an end the redaction has not reached is not the stream's.
-func (r *Runner) readFailureTail(p *piece, keep int) (failureTail, error) {
+// RUNNER'S CLOCK, BY ITS BOUND: [sandbox.FailureReadWait], or the earlier of
+// readBy ([sandbox.RunHandle.FailureReadBy]) and ctx's deadline where they come
+// sooner; past it the read stops and withholds the end, since an end the
+// redaction has not reached is not the stream's.
+func (r *Runner) readFailureTail(ctx context.Context, p *piece, keep int, readBy time.Time) (failureTail, error) {
 	tail := failureTail{size: p.size}
 	if p.body == nil || p.size == 0 {
 		return tail, nil
@@ -74,12 +78,18 @@ func (r *Runner) readFailureTail(p *piece, keep int) (failureTail, error) {
 	src := io.LimitReader(p.body, p.size)
 	buf := make([]byte, failureReadPiece)
 	began, read := r.now(), int64(0)
+	by := began.Add(sandbox.FailureReadWait)
+	for _, sooner := range []time.Time{readBy, deadlineOf(ctx)} {
+		if !sooner.IsZero() && sooner.Before(by) {
+			by = sooner
+		}
+	}
 	for {
-		if r.now().Sub(began) > sandbox.FailureReadWait {
+		if r.now().After(by) || ctx.Err() != nil {
 			tail.withheld = fmt.Sprintf("it ran past the collection's bound on its read, %v, within which its "+
 				"redaction read %s of it from its first byte and did not reach its end, so its end is withheld: "+
 				"an end the redaction has not reached may still change with what came before it",
-				sandbox.FailureReadWait, humanSize(read))
+				max(by.Sub(began), 0).Round(time.Second), humanSize(read))
 			return tail, nil
 		}
 		n, err := src.Read(buf)
@@ -102,6 +112,12 @@ func (r *Runner) readFailureTail(p *piece, keep int) (failureTail, error) {
 	shown, at := sandbox.KeepEnd(end.String(), keep)
 	tail.shown, tail.before = shown, end.dropped()+int64(at)
 	return tail, nil
+}
+
+// deadlineOf is ctx's deadline, or zero where it carries none.
+func deadlineOf(ctx context.Context) time.Time {
+	d, _ := ctx.Deadline()
+	return d
 }
 
 // declinedTail is tail withheld because its redaction stream refused the text
