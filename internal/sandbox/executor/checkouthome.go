@@ -76,14 +76,17 @@ func (h checkoutHome) removeSiblingStaging() string {
 // `@<absolute path>` import in place of its text, Limit not applying (Claude
 // Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code import no
 // absolute path from a home file, measured on 0.70.0 and 0.28.4); SkillSep,
-// what joins a copy's repository and skill, "" for `:`; and FiringLimit, a
-// nested firing's bound in bytes on all its checkouts' files, nil for none.
+// what joins a copy's repository and skill, "" for `:`; FiringLimit, a
+// nested firing's bound in bytes on all its checkouts' files, nil for none;
+// and LaunchSkillsLoaded where the harness loads a launch checkout's skills
+// itself, so only a nested firing copies any.
 type checkoutSpec struct {
 	Instructions       []checkoutSlot
 	Limit              *int
 	FiringLimit        *int
 	SkillDirs          []checkoutSkillDir
 	NestedSkillsOnly   bool
+	LaunchSkillsLoaded bool
 	ImportInstructions bool
 	SkillSep           checkoutSkillSep
 	// ListedAs and HomeSkills are the helper's ("grok", Grok Build's listing
@@ -208,8 +211,9 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 		"instructions": spec.Instructions, "limit": spec.Limit, "firingLimit": spec.FiringLimit,
 		"skillDirs": spec.SkillDirs, "skills": h.skills, "copied": h.copied,
 		"reserved":         []string{sandbox.SkillNamespace},
-		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions,
-		"skillSep": spec.SkillSep, "roots": h.roots}
+		"nestedSkillsOnly": spec.NestedSkillsOnly, "launchSkillsLoaded": spec.LaunchSkillsLoaded,
+		"importInstructions": spec.ImportInstructions,
+		"skillSep":           spec.SkillSep, "roots": h.roots}
 	if spec.ListedAs != "" {
 		config["listedAs"] = spec.ListedAs
 	}

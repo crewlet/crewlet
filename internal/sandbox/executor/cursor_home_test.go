@@ -68,8 +68,9 @@ const cursorToken = "STANDIN-BRIDGE-TOKEN-0123456789"
 
 // WHAT A CURSOR RUN LOADS, AND WHAT A CHECKOUT BELOW ITS DIRECTORY BRINGS IT, in
 // a real box with a checkout at ./repo and a home MCP server: while it runs,
-// its standing instructions are a rule; the checkout's instructions a rule of
-// their own, its rules copied (nested ones too, globs under its directory),
+// its standing instructions are a rule; the checkout's instructions in the
+// checkouts' rule under its root, its rules copied (nested ones too, globs
+// under its directory),
 // `--add-dir` naming it for its skills, its MCP servers and hooks nowhere; the
 // run's server beside the home's own. Once over, the home's file holds its own
 // server alone, no home file the bridge's token, and the rules are gone.
@@ -109,10 +110,10 @@ func TestWhatACursorRunLoadsAndWhatACheckoutBelowItBringsIt(t *testing.T) {
 		!strings.Contains(got, "---\nSTANDING-TEXT") {
 		t.Errorf("standing instructions: the run's rule is %q, want them, always applied", got)
 	}
-	checkout := recordedFile(t, record, "rules/crewlet-checkout-repo.mdc")
-	if !strings.Contains(checkout, "REPO-INSTRUCTIONS") || strings.Contains(checkout, "WORKDIR-INSTRUCTIONS") ||
-		!strings.Contains(checkout, work+"/repo") {
-		t.Errorf("the checkout's instructions: its rule is %q, want its own AGENTS.md under its root", checkout)
+	checkout := recordedFile(t, record, "rules/crewlet-checkouts.mdc")
+	if !strings.Contains(checkout, "alwaysApply: true") || strings.Contains(checkout, "WORKDIR-INSTRUCTIONS") ||
+		!strings.Contains(checkout, "for `repo` with root "+work+"/repo\n\nREPO-INSTRUCTIONS\n") {
+		t.Errorf("the checkout's instructions: the checkouts' rule is %q, want its own AGENTS.md under its root", checkout)
 	}
 	if got := recordedFile(t, record, "rules/crewlet-checkout-repo--own.mdc"); !strings.Contains(got, "REPO-RULE") {
 		t.Errorf("the checkout's own rule was not copied beside the run's: %q", got)
