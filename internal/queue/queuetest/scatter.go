@@ -550,6 +550,65 @@ func (s *suite) runScatter(t *testing.T) {
 		}
 	})
 
+	// EVERY REQUEST PAST THE BOUND WAITS AT THE REGISTRATION, and none of them
+	// is answered after its withdrawal. Delivery never parks for a slot: a
+	// delivery that did left every later request in the transport's buffer,
+	// where nothing counted its wait (queue.Arrived), so with one slot held all
+	// three requests behind it are counted waiting at once. And a withdrawal
+	// drops what it held waiting: the slot the held answer frees is handed on
+	// to nobody.
+	//
+	// Mutations: park the delivery for a slot, and only one request is counted
+	// waiting; hand the freed slot on in a withdrawn gate, and a second
+	// request is answered, red.
+	t.Run("every_request_past_the_bound_waits_at_the_registration_and_none_after_its_withdrawal",
+		func(t *testing.T) {
+			t.Parallel()
+			answering := s.needAnswering(t)
+			q := s.start(ctx, t)
+			held := ns(t) + ".held"
+			var entered atomic.Int32
+			release := make(chan struct{})
+			var once sync.Once
+			releaseAll := func() { once.Do(func() { close(release) }) }
+			t.Cleanup(releaseAll)
+			stop, err := q.Serve(ctx, held, 1, func(context.Context, []byte) ([]byte, error) {
+				entered.Add(1)
+				<-release
+				return []byte("done"), nil
+			})
+			if err != nil {
+				t.Fatalf("serve: %v", err)
+			}
+			asked, cancelAsked := context.WithTimeout(ctx, hangFor)
+			defer cancelAsked()
+			const behind = 3
+			for i := range behind + 1 {
+				go func() { _, _ = q.Ask(asked, held, fmt.Appendf(nil, "r%d", i), 1) }()
+			}
+			awaitState(t, "every request past the bound to be counted waiting at the registration", func() bool {
+				running, waiting := answering(q, held)
+				return running == 1 && waiting == behind
+			})
+
+			stopped := make(chan error, 1)
+			bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), stallFor)
+			defer cancel()
+			go func() { stopped <- stop(bounded) }()
+			awaitState(t, "the withdrawal to drop the requests it held waiting", func() bool {
+				_, waiting := answering(q, held)
+				return waiting == 0
+			})
+			releaseAll()
+			if err := <-stopped; err != nil {
+				t.Fatalf("stop serving: %v", err)
+			}
+			if n := entered.Load(); n != 1 {
+				t.Fatalf("%d requests reached the answerer, want only the one it was running when it "+
+					"was withdrawn: a request held waiting was answered after the withdrawal", n)
+			}
+		})
+
 	t.Run("a_bound_below_one_is_refused", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)

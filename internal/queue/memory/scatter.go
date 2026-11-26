@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
+
+	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -47,7 +50,9 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 	if subject == "" {
 		return nil, ErrEmptySubject
 	}
-	gate, err := queue.NewAnswerGate(answers)
+	// THE REAL BACKEND'S BOUND on the requests waiting for a slot, its
+	// subscription's pending defaults, so the twin drops where it does.
+	gate, err := queue.NewServeGate(answers, nats.DefaultSubPendingMsgsLimit, nats.DefaultSubPendingBytesLimit)
 	if err != nil {
 		return nil, fmt.Errorf("memory: serve %s: %w", subject, err)
 	}
@@ -69,6 +74,9 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 	log.Debug("scatter_server_added", "subject", subject)
 
 	return func(ctx context.Context) error {
+		// SHUT FIRST, so nothing it holds waiting is answered after the
+		// withdrawal ([queue.AnswerGate.Shut]).
+		sub.gate.Shut()
 		q.broker.mu.Lock()
 		before := len(q.broker.servers)
 		q.broker.servers = slices.DeleteFunc(q.broker.servers,
@@ -94,8 +102,8 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 // their gates' [queue.AnswerGate.Occupancy].
 //
 // Reported so the conformance suite can see a registration's bound hold a
-// request: here a request waits for a slot on a goroutine of its asker's,
-// parked in the gate, where nothing else this twin exports can see it.
+// request: here a request waits for a slot in the gate's queue, where nothing
+// else this twin exports can see it.
 func (q *Queue) Answering(subject string) (running, waiting int) {
 	q.broker.mu.Lock()
 	var gates []*queue.AnswerGate
@@ -171,34 +179,25 @@ func (q *Queue) AskEach(ctx context.Context, subject string, request []byte, eac
 		return nil
 	}
 
-	// THE SCATTER'S OWN CONTEXT, cancelled when the collection ends. It is
-	// what stops an answerer running on after its reply stopped mattering
-	// — the caller left, or want was reached — which is the difference
-	// between a bounded ask and a goroutine per query that outlives it.
-	scatter, done := context.WithCancel(ctx)
-	defer done()
-
+	// THE REQUEST REACHES EVERY SERVER NOW, and its arrival is stamped
+	// before any wait for a slot, as the real backend's callback stamps it.
+	arrived := time.Now()
 	answers := make(chan []byte, len(servers))
 	var wg sync.WaitGroup
 	for _, s := range servers {
 		wg.Add(1)
-		go func() {
+		// HELD FOR A SLOT IN THE GATE, in arrival order, whether or not
+		// its asker still waits: a request queues past the cap rather than
+		// drops, up to the real backend's bound, exactly as on the broker.
+		err := s.gate.Offer(arrived, len(request), func(arrived time.Time) {
 			defer wg.Done()
-			// A SLOT FIRST, waited for no longer than the asker waits:
-			// past the cap a request queues rather than drops, exactly
-			// as it does on the broker.
-			if !s.gate.Enter(scatter) {
-				return
-			}
-			answering, replied := queue.Replying(s.serving) //nolint:contextcheck // as below
 			//nolint:contextcheck // the ANSWERER's context, which the
-			// contract hands an answerer: the asker's deadline bounds
-			// the wait for a slot above and the collection below, never
-			// the answer — see [serveSub.serving].
+			// contract hands an answerer: the asker's deadline bounds the
+			// collection below, never the answer — see [serveSub.serving].
+			answering, replied := queue.Replying(queue.Arriving(s.serving, arrived))
 			reply, err := s.call(answering, request)
 			if err != nil {
 				replied()
-				s.gate.Leave()
 				// AN ERROR ANSWERS NOTHING, which is the same
 				// fact as a server that was down — see
 				// [queue.AnswerFunc].
@@ -210,8 +209,11 @@ func (q *Queue) AskEach(ctx context.Context, subject string, request []byte, eac
 			// node's answer budget given back ([queue.Replying]).
 			answers <- reply
 			replied()
-			s.gate.Leave()
-		}()
+		})
+		if err != nil {
+			wg.Done()
+			queue.LogDropped(log, subject, err)
+		}
 	}
 	// Closed by a goroutine of its own rather than after the loop, because
 	// the collection below has to be able to leave on its deadline while
