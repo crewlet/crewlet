@@ -122,21 +122,52 @@ func TestARefusedWalksSkillsStayOpenToALaterLink(t *testing.T) {
 }
 
 // A SKILL DIRECTORY KEEPS ITS SHAPE ON THE WIRE: a plain one is the string it
-// always was, a recursive one the object the runner wrote.
+// always was, a recursive one the object the runner wrote, its depth bound
+// with it where it has one; a depth below 0 is refused.
 //
-// Mutation: write a plain directory as an object, or drop recursive, and the
-// round trip goes red.
+// Mutation: write a plain directory as an object, drop recursive or depth,
+// or read a negative depth, and the round trip goes red.
 func TestASkillDirectoryKeepsItsShapeOnTheWire(t *testing.T) {
 	t.Parallel()
-	wire := `[".codex/skills",{"dir":".pi/skills","recursive":true}]`
+	wire := `[".codex/skills",{"dir":".pi/skills","recursive":true},{"dir":".opencode/skills","recursive":true,"depth":6}]`
 	var dirs []skillDirSlot
 	if err := json.Unmarshal([]byte(wire), &dirs); err != nil {
 		t.Fatal(err)
 	}
-	if !dirs[1].Recursive || dirs[0].Recursive {
+	if !dirs[1].Recursive || dirs[0].Recursive || dirs[1].Depth != 0 || dirs[2].Depth != 6 {
 		t.Errorf("the directories read as %+v", dirs)
 	}
 	if again, err := json.Marshal(dirs); err != nil || string(again) != wire {
 		t.Errorf("the directories read back as %s (%v), want %s", again, err, wire)
+	}
+	if err := json.Unmarshal([]byte(`[{"dir":"x","recursive":true,"depth":-1}]`), &dirs); err == nil {
+		t.Error("a depth below 0 was read")
+	}
+}
+
+// A RECURSIVE SKILL DIRECTORY WITH A DEPTH STOPS THERE, as OpenCode 2.3.2
+// lists skills no more than 6 directories below one of its skill directories
+// (measured, row depth): a skill 6 deep is found, one 7 deep is not, and a
+// branch deeper than the helper's own bound is never entered, so nothing is
+// refused.
+//
+// Mutation: walk past the depth, stop one level short, or count from the
+// skill rather than the directory, and the list goes red.
+func TestARecursiveSkillDirectoryWithADepthStopsThere(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	skill := "---\nname: s\ndescription: S.\n---\n"
+	writeTree(t, root, map[string]string{
+		".opencode/skills/one/SKILL.md":                   skill,
+		".opencode/skills/a/b/c/d/e/six/SKILL.md":         skill,
+		".opencode/skills/a/b/c/d/e/f/seven/SKILL.md":     skill,
+		".opencode/skills/p/q/r/s/t/u/v/w/x/y/z/notes.md": "no skill\n",
+	})
+	spec := checkoutSpec{SkillDirs: []skillDirSlot{{Dir: ".opencode/skills", Recursive: true,
+		skillWalkOptions: skillWalkOptions{Depth: 6}}}}
+	dirs, over := checkoutSkillDirs(root, spec)
+	want := []string{"six=.opencode/skills/a/b/c/d/e/six", "one=.opencode/skills/one"}
+	if got := skillNames(t, root, dirs); !slices.Equal(got, want) || len(over) > 0 {
+		t.Errorf("the walk found %q (over %q), want %q", got, over, want)
 	}
 }

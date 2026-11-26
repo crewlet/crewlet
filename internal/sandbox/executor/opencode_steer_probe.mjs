@@ -124,7 +124,7 @@ function gate() {
 
 const commands = {
   async setup({ name, url, session }) {
-    process.env.CREWLET_STEER_SESSION = session
+    process.env.CREWLET_RUN_SESSION = session
     const self = instance(name, url)
     instances.set(name, self)
     const started = performance.now()
