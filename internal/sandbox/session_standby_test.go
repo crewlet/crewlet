@@ -363,6 +363,12 @@ func TestAReadWhoseReservationAnotherReadBeatStandsByForItsCapture(t *testing.T)
 			t.Fatalf("the read whose reservation the stop's beat spooled %+v, want it standing by at the stop's "+
 				"place", standby)
 		}
+		// AT THE STOP'S CAPTURE'S OWN BOUND, off the row read again: the text
+		// bound's wait, as a version-1 reader's turn end holds it.
+		if standby.stood != textBound {
+			t.Errorf("the standby waits for the stop's capture at %+v, want the text bound it was taken at",
+				standby.stood)
+		}
 		held.end <- errScrubRefused
 		if spooled := <-placed; spooled != nil {
 			t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
@@ -876,6 +882,10 @@ func TestAReadWhoseReservationWentUnansweredBesideAnotherStandsByForIt(t *testin
 		if standby == nil || !standby.standby || standby.stamp.CaptureSeq != 1 {
 			t.Fatalf("the read whose reservation went unanswered spooled %+v, want it standing by for the stop's",
 				standby)
+		}
+		if standby.stood != textBound {
+			t.Errorf("the standby waits for the stop's capture at %+v, want the text bound it was taken at",
+				standby.stood)
 		}
 		held.end <- errScrubRefused
 		if spooled := <-placed; spooled != nil {
@@ -1393,4 +1403,65 @@ func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *tes
 			})
 		})
 	}
+}
+
+// failsGets is a run store whose reads of a row fail once armed, as a store
+// that stopped answering reads does.
+type failsGets struct {
+	PendingStore
+	armed atomic.Bool
+}
+
+func (s *failsGets) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	if s.armed.Load() {
+		return PendingRun{}, false, errNoLeader
+	}
+	return s.PendingStore.Get(ctx, turnID)
+}
+
+// A STANDBY WHOSE ROW WENT UNREAD WAITS AT ITS OWN BOUND: a read whose
+// reservation another read beat, and which then cannot read the row again,
+// stands by at its own place, its wait held to its own take's bound, the text
+// bound in a gated fleet, never the kept bound's longer wait, which would
+// outlive a version-1 reader's turn end.
+//
+// Mutation: default the stood-by capture's bound to the kept bound, and it
+// goes red.
+func TestAStandbyWhoseRowWentUnreadWaitsAtItsOwnBound(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := keepingRig(t)
+		run := ownMemory(t, rig, rig.launchKept(t, "t1"))
+		store := &failsGets{PendingStore: rig.coordinator.pending}
+		rig.coordinator.pending = store
+		taking, proceed := make(chan struct{}), make(chan struct{})
+		second := make(chan *spooledCapture, 1)
+		go func() {
+			spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
+				takenAs{FakeRunner: rig.runner, body: bytes.NewReader(standbyArchive), taking: taking, proceed: proceed},
+				readCapture(BoxReadCollect, Result{}, true))
+			second <- spooled
+		}()
+		select {
+		case <-taking:
+		case got := <-second:
+			t.Fatalf("the collection's read ended before its take: %+v", got)
+		}
+		held := newHeldArchive(placeHolderArchive)
+		placed := holdingPlace(t, rig, run, held)
+		store.armed.Store(true)
+		rig.now = rig.now.Add(time.Second)
+		close(proceed)
+		standby := <-second
+		store.armed.Store(false)
+		if standby == nil || !standby.standby {
+			t.Fatalf("the read whose row went unread spooled %+v, want it standing by", standby)
+		}
+		if standby.stood != textBound {
+			t.Errorf("the standby waits at %+v, want its own take's text bound", standby.stood)
+		}
+		held.end <- errScrubRefused
+		<-placed
+		standby.remove()
+	})
 }

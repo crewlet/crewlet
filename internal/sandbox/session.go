@@ -2011,19 +2011,19 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// longer spool, and leaves the outcome stamp none of the room it is kept
 	// before by ([Coordinator.takeContext]).
 	reserveBy, _ := ctx.Deadline()
-	standBy := func(stamp SessionCapture) (*spooledCapture, *SessionKept) {
-		// THE STOOD-BY CAPTURE'S OWN BOUND where the row names it, the kept
-		// bound's where it does not.
-		stood := keptBound
-		if held := current.Capture; held != nil && held.CaptureSeq == stamp.CaptureSeq {
-			stood = boundOf(held.KeptBound)
-		}
+	// THE STOOD-BY CAPTURE'S OWN BOUND, off the row that names it: the row read
+	// before the take where it stands by from the start, the row read again
+	// where another read's reservation beat it ([Coordinator.besideAnother]).
+	// Where no row names it, this take's own: a gated fleet holds none at the
+	// kept bound.
+	own := boundOf(policy.kept())
+	standBy := func(stamp SessionCapture, stood takeBound) (*spooledCapture, *SessionKept) {
 		spooled, kept := c.standBy(ctx, by, reserveBy, run, stamp, taken, at, places, room, stood)
 		spooledHold = spooled != nil
 		return spooled, kept
 	}
 	if standing {
-		return standBy(stamp)
+		return standBy(stamp, current.boundAt(stamp.CaptureSeq, own))
 	}
 	for {
 		took, stampErr := c.reserveCapture(ctx, reserveBy, run.TurnID, stamp)
@@ -2057,9 +2057,9 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		// takes the place after it ([Coordinator.besideAnother]). Never this
 		// take's own earlier ask, answered too late: the store answers a stamp
 		// the row already holds as taken ([PendingStore.StampCapture]).
-		placed, after := c.besideAnother(ctx, run, stamp)
+		placed, after, stood := c.besideAnother(ctx, run, stamp, own)
 		if !after {
-			return standBy(placed)
+			return standBy(placed, stood)
 		}
 		stamp = placed
 	}
@@ -2095,28 +2095,38 @@ func captureStamp(row PendingRun, launch string, place int64, final, interrupted
 // taken as the job stood, a read whose end could not end it or poll it
 // ([Coordinator.endJob]), which standing by, this take would have left kept
 // wherever it landed — answered true; and otherwise standing by for that
-// capture at its own place, false. The stamp as it was, standing by, where
-// the row cannot be read or names that capture no more: the store decides
-// ([PendingStore.StandBy]).
-func (c *Coordinator) besideAnother(ctx context.Context, run PendingRun, stamp SessionCapture) (SessionCapture,
-	bool) {
+// capture at its own place, false, with that capture's bound off the row,
+// which its wait is held to ([standbyWaitFor]). The stamp as it was, standing
+// by at own, where the row cannot be read or names that capture no more: the
+// store decides ([PendingStore.StandBy]).
+func (c *Coordinator) besideAnother(ctx context.Context, run PendingRun, stamp SessionCapture,
+	own takeBound) (SessionCapture, bool, takeBound) {
 
 	current, found, err := c.pending.Get(ctx, run.TurnID)
 	if err != nil || !found {
-		return stamp, false
+		return stamp, false, own
 	}
 	newest := current.Capture
 	if newest == nil || newest.Launch != stamp.Launch || newest.LaunchSeq != stamp.LaunchSeq ||
 		newest.CaptureSeq < stamp.CaptureSeq {
-		return stamp, false
+		return stamp, false, own
 	}
 	placed := stamp
 	if stamp.Final && !newest.Final {
 		placed.CaptureSeq = newest.CaptureSeq + 1
-		return placed, true
+		return placed, true, own
 	}
 	placed.CaptureSeq = newest.CaptureSeq
-	return placed, false
+	return placed, false, current.boundAt(placed.CaptureSeq, own)
+}
+
+// boundAt is the bound of the capture r names at place, or, where it names
+// none there, otherwise.
+func (r PendingRun) boundAt(place int64, otherwise takeBound) takeBound {
+	if held := r.Capture; held != nil && held.CaptureSeq == place {
+		return boundOf(held.KeptBound)
+	}
+	return otherwise
 }
 
 // spooledWhole is what a take does once its session is spooled: the last
