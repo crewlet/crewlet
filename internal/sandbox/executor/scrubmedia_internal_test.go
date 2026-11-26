@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -365,24 +366,146 @@ func TestAPayloadUnderTheThresholdStaysInline(t *testing.T) {
 	}
 }
 
-// A RUN THE SCRUB REDACTED STAYS INLINE, redacted: a value the engine put in
-// the box that a payload's text holds is taken out, and the marker in its
-// place ends the run, so no member holds it and the archive is kept as today.
+// A PAYLOAD HOLDING A VALUE THE ENGINE PUT IN THE BOX IS KEPT APART,
+// REDACTED: its text is classed as it came, so the marker the by-value pass
+// writes in the value's place leaves it a payload, and the value is out of its
+// member, the archive and the session opened.
 //
-// Mutation: find payloads in the text before its scrub, and the value is kept
-// apart, unscrubbed.
-func TestARedactedRunStaysInline(t *testing.T) {
+// Mutation: class a payload by its text as kept, and it stays inline; keep a
+// payload from the by-value pass, and its member holds the value.
+func TestAPayloadHoldingAValueIsKeptApartRedacted(t *testing.T) {
 	t.Parallel()
 	const planted = "PlantedTokenValue0123456789abcdef"
 	payload := mediaPayload(5, mediaMinBytes)
 	payload = payload[:len(payload)/2] + planted + payload[len(payload)/2:]
 	whole, body := mediaTake(t, archiveTar, claudeArchive(t, claudeRead(payload, false)),
 		newScrubber([]string{planted}), executorkeep.SessionMaxBytes)
-	if body[0] != sandbox.BodyWhole {
-		t.Errorf("a payload the scrub redacted is kept apart")
+	if body[0] != sandbox.BodySpliced {
+		t.Fatal("a payload holding a value the scrub took out is not kept apart")
 	}
-	if strings.Contains(mediaPlain(t, whole), planted) {
+	opened, text, kept := keptApart(t, body)
+	if strings.Contains(mediaPlain(t, whole), planted) || strings.Contains(mediaPlain(t, opened), planted) ||
+		bytes.Contains(text, []byte(planted)) {
 		t.Error("the kept archive holds the planted value")
+	}
+	for _, member := range kept {
+		if m := mediaPlain(t, member); strings.Contains(m, planted) || !strings.Contains(m, scrubMarker) {
+			t.Error("the payload's member holds the planted value, or no marker in its place")
+		}
+	}
+}
+
+// shapedPayload is n bytes of base64 seeded by seed, url-safe where url, that
+// spells shape at its middle: a token's shape, as encoded bytes spell one by
+// chance.
+func shapedPayload(seed byte, n int, url bool, shape string) string {
+	raw := make([]byte, n/4*3)
+	rand.NewChaCha8([32]byte{seed}).Read(raw)
+	enc := base64.StdEncoding.EncodeToString(raw)
+	if url {
+		enc = base64.RawURLEncoding.EncodeToString(raw)
+	}
+	return enc[:len(enc)/2] + shape + enc[len(enc)/2:]
+}
+
+// payloadShapes is a payload spelling each shape a rule reads that base64 can
+// spell (internal/redact's TestTheRulesBase64CanSpellAreKnown names them).
+var payloadShapes = map[string]struct {
+	url   bool
+	shape string
+}{
+	"a Google refresh token's": {shape: "1//0" + strings.Repeat("Ab3", 20)},
+	"an AWS access key id's":   {shape: "AKIAABCDEFGHIJKLMNOP"},
+	"an AWS session key id's":  {shape: "ASIAABCDEFGHIJKLMNOP"},
+	"an API key's":             {url: true, shape: "sk-" + strings.Repeat("Ab3_", 6)},
+	"an Anthropic key's":       {url: true, shape: "sk-ant-" + strings.Repeat("Ab3_", 6)},
+	"an OpenAI project key's":  {url: true, shape: "sk-proj-" + strings.Repeat("Ab3_", 6)},
+	"a Slack token's":          {url: true, shape: "xoxb-" + strings.Repeat("Ab3-", 6)},
+	"a GitHub token's":         {url: true, shape: "ghp_" + strings.Repeat("Ab3", 13)},
+	"a GitHub fine-grained's":  {url: true, shape: "github_pat_" + strings.Repeat("Ab3_", 13)},
+	"a GitLab token's":         {url: true, shape: "glpat-" + strings.Repeat("Ab3_", 6)},
+	"a GitLab runner token's":  {url: true, shape: "glrt-" + strings.Repeat("Ab3_", 6)},
+	"a Google client secret's": {url: true, shape: "GOCSPX-" + strings.Repeat("Ab3_", 6)},
+	"a DigitalOcean token's":   {url: true, shape: "dop_v1_" + strings.Repeat("ab3", 8)},
+}
+
+// A PAYLOAD IS KEPT FROM THE SHAPE RULES, WHOLE: one spelling by chance what a
+// rule reads, for every rule base64 can spell, is kept apart and opens byte
+// for byte as it was read, its member the payload's text, in a transcript and
+// as an export's data URI; no marker is written into it. The case first holds
+// that the rule does take the shape out of the payload read alone.
+//
+// Mutation: shape a payload's text, as every text's, and every case goes red.
+func TestAPayloadIsKeptFromTheShapeRulesWhole(t *testing.T) {
+	t.Parallel()
+	seed := byte(30)
+	for name, tc := range payloadShapes {
+		seed++
+		payload := shapedPayload(seed, mediaMinBytes+8, tc.url, tc.shape)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if redact.Secrets(payload) == payload {
+				t.Fatalf("the premise: the shape rules leave %q alone in a payload read alone", tc.shape)
+			}
+			export := `{"parts":[{"url":"data:image/png;base64,` + payload + `"}]}`
+			for layout, archive := range map[archiveLayout][]byte{
+				archiveTar:      claudeArchive(t, claudeRead(payload, false)),
+				archiveDocument: gzipOf(t, export),
+			} {
+				whole, body := mediaTake(t, layout, archive, newScrubber(nil), executorkeep.SessionMaxBytes)
+				if body[0] != sandbox.BodySpliced {
+					t.Fatalf("layout %d: the payload is not kept apart", layout)
+				}
+				if members := gzipMembers(t, whole); len(members) != 3 || mediaPlain(t, members[1]) != payload {
+					t.Errorf("layout %d: the payload's member is not the payload as it was read", layout)
+				}
+				opened, _, _ := keptApart(t, body)
+				if plain := mediaPlain(t, opened); !strings.Contains(plain, payload) ||
+					strings.Contains(plain, redact.Marker) {
+					t.Errorf("layout %d: the session opened does not hold the payload as it was read", layout)
+				}
+			}
+		})
+	}
+}
+
+// A TEXT READ AS A PAYLOAD THAT TURNS OUT NONE IS SHAPED AS EVERY TEXT IS: a
+// mebibyte and more of base64 and then words is kept byte for byte as a take
+// keeping no media apart keeps it, and inline, whether the shape rules changed
+// its first mebibyte (the first reading read again, every payload shaped) or
+// left it as it came (shaped on from where it was written), a key in its
+// words taken out either way.
+//
+// Mutation: write its first mebibyte unshaped where the rules change it, or
+// its words unshaped, and a case goes red.
+func TestATextReadAsAPayloadThatTurnsOutNoneIsShaped(t *testing.T) {
+	t.Parallel()
+	const words = ` and then the key sk-ant-api03-REALKEY0123456789abcdefABCDEF here`
+	clean := mediaPayload(41, mediaMinBytes+8)
+	if redact.Secrets(clean) != clean {
+		t.Fatal("the premise: the shape rules leave the clean payload alone")
+	}
+	for name, text := range map[string]string{
+		"its first mebibyte changed by the shape rules": shapedPayload(42, mediaMinBytes+8, false,
+			payloadShapes["a Google refresh token's"].shape) + words,
+		"its first mebibyte as it came": clean + words,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			archive := claudeArchive(t, claudeRead(text, false))
+			whole, body := mediaTake(t, archiveTar, archive, newScrubber(nil), executorkeep.SessionMaxBytes)
+			if body[0] != sandbox.BodyWhole {
+				t.Error("a text that turned out no payload is kept apart")
+			}
+			plain, want := mediaPlain(t, whole), mediaPlain(t, inlineTake(t, archiveTar, archive, newScrubber(nil)))
+			if plain != want {
+				t.Errorf("the text kept is not what a take keeping no media apart keeps (%d bytes, want %d)",
+					len(plain), len(want))
+			}
+			if strings.Contains(plain, "REALKEY") {
+				t.Error("the key in the text's words is kept")
+			}
+		})
 	}
 }
 

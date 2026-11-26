@@ -1054,6 +1054,10 @@
   - `internal/sandbox/executor.TestATakeCutsEachLargePayloadIntoAMemberOfItsOwn`
   - `internal/sandbox/executor.TestAValuePlantedBesideAPayloadIsStillTakenOut`
   - `internal/sandbox/executor.TestASessionSplicedFromItsMembersIsRestoredAsOne`
+  - `internal/sandbox/executor.TestAPayloadIsKeptFromTheShapeRulesWhole`
+  - `internal/sandbox/executor.TestAPayloadHoldingAValueIsKeptApartRedacted`
+  - `internal/sandbox/executor.TestATextReadAsAPayloadThatTurnsOutNoneIsShaped`
+  - `internal/redact.TestTheRulesBase64CanSpellAreKnown`
   - `internal/sandbox.TestAKeepCarriesMediaItsTurnHolds`
   - `internal/sandbox.TestAMissingMediaObjectRestoresNothing`
   - `internal/engine.TestATakeKeepsMediaApartOnlyOnceEveryReaderReadsIt`
@@ -6886,3 +6890,35 @@ life, its takeover's and a standby's wait and window are each at or within the
 version-1 reader's (a standby waits for the stood-by capture at that
 capture's own bound), a turn's end there holding a standby exactly its window
 (`sandbox.TestAGatedTakeStaysWithinEveryFigureAVersionOneReaderHoldsItTo`).
+
+## Amendment: a payload is classed as it came, and kept from the shape rules
+
+The media amendment found a payload after the scrub, so "a secret inside one
+leaves it inline and redacted". A shape rule reads a token's form, and encoded
+bytes spell some by chance: a Google refresh token's `1//0` and sixty more in
+a standard 13 MiB payload about one time in eight, an `sk-` and twenty in every
+base64url one, whose greedy rule then took the payload's rest
+(`redact.TestTheRulesBase64CanSpellAreKnown` names every rule base64 can
+spell). The marker took out no secret: it broke the image or the document a
+resumed session sends, and made the payload text.
+
+**Classed as it came.** A string's class is decided on its text before any
+redaction (`executor.mediaRun`) and its bytes measured as kept
+(`executor.payloadSpan`). A value the engine put in the box is still taken out
+inside a payload, which stays one, its member holding the marker. No other
+node classes a payload again: the class travels as the body's members and the
+capture's media list, which a restore splices back as they stand, so no peer
+reads anything new and no stamp or record version moves.
+
+**Kept from the shape rules, never from the values.** A payload's text gets
+the by-value pass and no shape rule (`executor.payloadScrub`); `redact.Secrets`
+and `redact.Stream` are unchanged. The shape pass still reads its text beside
+it, writing nothing while the string is a payload: one that turns out none, at
+a byte outside the alphabet or ending short, goes on through that shape pass
+from where its written bytes end, which is what every text gets wherever the
+shape pass left those bytes as they were; where it changed them, the first
+reading is read again from its start with every payload shaped, as a memo
+that diverged is. That costs one reading, for a mebibyte of base64 followed by
+words that spells a token. A text under a mebibyte is held until it is
+decided, never written unshaped.
+

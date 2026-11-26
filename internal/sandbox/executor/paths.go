@@ -870,11 +870,10 @@
 //
 // # A kept session's media is kept apart
 //
-// Each large payload a take keeps apart is found after the scrub ([mediaRun])
-// and cut into a gzip member alone ([memberSplit]); no JSON text changes. The
-// box digests and restores the archive whole, so its gzip must read several
-// members, as GNU's and BusyBox's do
-// (TestASessionSplicedFromItsMembersIsRestoredAsOne).
+// Each large payload is cut into a gzip member alone ([memberSplit]), which
+// the box's gzip reads on (TestASessionSplicedFromItsMembersIsRestoredAsOne).
+// It is classed as it came and kept from the shape rules ([payloadScrub];
+// ADR-0073, "a payload is classed as it came").
 //
 // # A definition the scrub renamed is cut out of its line
 //

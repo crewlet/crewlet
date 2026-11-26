@@ -342,8 +342,12 @@ type scrubber struct {
 	// ([scrubber.tallying]).
 	tally bool
 	// media is the first reading's plan of the payloads it keeps apart,
-	// which each string value's rewrite tells ([mediaRun]); nil finds none.
+	// which each string value's rewrite tells ([payloadScrub]); nil finds
+	// none.
 	media *mediaPlan
+	// shapePayloads says a payload's text is shaped as every text is
+	// ([scrubber.shapingPayloads]).
+	shapePayloads bool
 }
 
 // firstReading is s staging its texts through pieces, on its text way first
@@ -357,6 +361,15 @@ func (s scrubber) firstReading(pieces *firstPieces) scrubber {
 // telling none.
 func (s scrubber) finding(media *mediaPlan) scrubber {
 	s.media = media
+	return s
+}
+
+// shapingPayloads is s shaping a payload's text as every text's, where
+// shaped: a first reading read again once a text read as a payload diverged
+// ([errPayloadDiverged]), so it diverges no more. Its payloads are still
+// classed as they came, and kept apart, with the shape rules' markers.
+func (s scrubber) shapingPayloads(shaped bool) scrubber {
+	s.shapePayloads = shaped
 	return s
 }
 
@@ -1050,7 +1063,9 @@ func firstTarReadings(first io.Reader, reopen func() (io.ReadCloser, error), s s
 // to it kept and the unit's spooled ways cut back ([errReadBothWays],
 // [errTextAgain], [tarPlan.memberAt]); and from the start, the spool emptied,
 // where the memo's answer for a text diverged ([errMemoDiverged]), once with
-// that text's first chunk looked up no more, then with no lookups at all.
+// that text's first chunk looked up no more, then with no lookups at all; and
+// once where a text read as a payload diverged ([errPayloadDiverged]), with
+// every payload shaped.
 func firstReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scrubber, b scrubBounds,
 	spool *unitSpool, read func(io.Reader, scrubber, *tarPlan) error) (*tarPlan, error) {
 
@@ -1058,8 +1073,8 @@ func firstReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scru
 	plan := &tarPlan{gate: b.gate, spool: spool,
 		media: mediaPlan{on: b.split.body != nil, allowance: b.split.allowance, pace: b.split.pace,
 			textMax: b.split.textMax}}
-	for src, diverged := first, 0; ; {
-		err := read(src, s.firstReading(pieces).finding(plan.media.finding()), plan)
+	for src, diverged, shaped := first, 0, false; ; {
+		err := read(src, s.firstReading(pieces).finding(plan.media.finding()).shapingPayloads(shaped), plan)
 		switch {
 		case errors.Is(err, errReadBothWays) || errors.Is(err, errTextAgain):
 			// THE UNIT'S JSON IS CUT BACK OUT ALREADY, so the spool stands
@@ -1067,6 +1082,16 @@ func firstReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scru
 			if spool.at != plan.resume.spoolAt {
 				return plan, errSpoolRead
 			}
+		case errors.Is(err, errPayloadDiverged) && !shaped:
+			// READ AGAIN FROM ITS START with every payload shaped, as a
+			// diverged memo is: once, since a shaped payload diverges no more.
+			shaped = true
+			plan.letGo()
+			if err = spool.empty(); err != nil {
+				return plan, err
+			}
+			plan = &tarPlan{gate: b.gate, spool: spool, bothFrom: plan.bothFrom, textUnit: plan.textUnit,
+				media: plan.media.restarted()}
 		case errors.Is(err, errMemoDiverged):
 			if diverged++; diverged == 2 {
 				pieces.lookups = false

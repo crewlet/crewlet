@@ -121,6 +121,10 @@ func (t *textScrub) Close() error {
 	return nil
 }
 
+// took is what the text's scrub took out, once it is closed, where its
+// scrubber tallies.
+func (t *textScrub) took() int64 { return t.taken }
+
 // redactionRefusal is what a text's scrub answers for err, what its redaction's
 // stream answered at its close, wrote the first error its writer gave:
 // nothing for nothing, the writer's own error as it came, a stage's own
@@ -255,9 +259,9 @@ type jsonStringWriter struct {
 	capMax  int
 	over    bool
 	err     error
-	// media reads the text as kept for a payload, nil where nothing does
+	// media measures the text as kept for a payload, nil where nothing does
 	// ([jsonStringWriter.finding]).
-	media *mediaRun
+	media *payloadSpan
 }
 
 // begin opens a string onto out, keeping its first capMax bytes.
@@ -266,10 +270,11 @@ func (e *jsonStringWriter) begin(out *rewriteOut, capMax int) error {
 	return out.writeByte('"')
 }
 
-// finding has run read the string just begun for a payload.
-func (e *jsonStringWriter) finding(run *mediaRun) {
-	run.begin(e.out.n)
-	e.media = run
+// finding has span measure the string just begun, where its scrub classes it
+// a payload ([payloadScrub]).
+func (e *jsonStringWriter) finding(span *payloadSpan) {
+	span.begin(e.out.n)
+	e.media = span
 }
 
 // Write writes the next piece of the text, escaped.
@@ -431,9 +436,9 @@ type jsonRewrite struct {
 	buf []byte
 	str jsonStringWriter
 	key keyReading
-	// payload reads a string value for a payload where the scrub finds
-	// media ([scrubber.media]).
-	payload mediaRun
+	// payload measures a string value its scrub classed a payload, where
+	// the scrub finds media ([scrubber.media]).
+	payload payloadSpan
 	// containers is how many containers the text has opened so far, which
 	// names the list a cut applies to.
 	containers int
@@ -827,7 +832,12 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 			break
 		}
 	}
-	t := j.scrub.text(&j.str)
+	var t stringScrub
+	if key == nil && j.scrub.media != nil {
+		t = j.scrub.payloadText(&j.str, &j.payload)
+	} else {
+		t = j.scrub.text(&j.str)
+	}
 	total, held := 0, false
 	defer func() {
 		if held {
@@ -860,12 +870,12 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 	if err := t.Close(); err != nil {
 		return err
 	}
-	j.out.tally(t.taken)
+	j.out.tally(t.took())
 	return j.ended()
 }
 
 // ended closes the string, telling the scrub's plan of the payload it is
-// ([mediaRun]).
+// ([payloadSpan]).
 func (j *jsonRewrite) ended() error {
 	if err := j.str.end(); err != nil {
 		return err
