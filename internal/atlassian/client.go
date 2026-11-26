@@ -184,7 +184,8 @@ type ClientOptions struct {
 	BaseURL string
 
 	// HTTP overrides the transport, for a test or a caller that counts its
-	// requests; nil is the vendor clients' own.
+	// requests; nil is the vendor clients' own. Either way [NewClient]
+	// refuses redirects on it.
 	HTTP *http.Client
 
 	// Wait replaces the sleep a rate limit takes, for a test.
@@ -201,9 +202,14 @@ func NewClient(opts ClientOptions) *Client {
 	if hc == nil {
 		hc = httpx.Client(ClientTimeout)
 	}
+	// One fixed host answers every call, the discovered site's cloud id
+	// among them, so a copy that refuses redirects: a 3xx is a non-2xx
+	// like any other. A listing's next link is a new request, not a 3xx.
+	refusing := *hc
+	refusing.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	limit := httpx.VendorRateLimit()
 	limit.Wait = opts.Wait
-	return &Client{base: base, http: hc, limit: limit}
+	return &Client{base: base, http: &refusing, limit: limit}
 }
 
 // The product keys a grant names, one per lane a seat can be on. One
