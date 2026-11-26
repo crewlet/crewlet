@@ -45,7 +45,28 @@ const fixtureSession = "0b5e0000-0000-4000-8000-000000000001"
 const (
 	geminiTelemetryRow = executor.GeminiCLIName + " telemetry"
 	geminiChatRow      = executor.GeminiCLIName + " chat"
+	qwenChatRow        = executor.QwenCodeName + " chat"
+	openCodeCountRow   = executor.OpenCodeName + " count"
 )
+
+// openCodeCountLine is a line of an OpenCode run's count plugin's record: kind
+// "start" its load, else a request of session's.
+func openCodeCountLine(kind, session string) string {
+	if kind == "start" {
+		return `{"type":"start"}`
+	}
+	return `{"type":"request","session":"` + session + `"}`
+}
+
+// qwenChatLine is a line of a Qwen Code chat file: kind "response" an answered
+// request's ui_telemetry line, "error" a failed attempt's, else an assistant entry.
+func qwenChatLine(i int, kind string) string {
+	switch kind {
+	case "response", "error":
+		return fmt.Sprintf(`{"uuid":"t%[1]d","type":"system","subtype":"ui_telemetry","systemPayload":{"uiEvent":{"event.name":"qwen-code.api_%[2]s","response_id":"c%[1]d"}}}`, i, kind)
+	}
+	return fmt.Sprintf(`{"uuid":"a%d","type":"assistant","message":{"role":"model","parts":[{"text":"step"}]}}`, i)
+}
 
 // of is the runner the fixture of row name is a record of.
 func (f recordFixture) of(name string) string {
@@ -168,6 +189,29 @@ var recordFixtures = map[string]recordFixture{
 			return geminiUsage(n) + "\n"
 		},
 	},
+	qwenChatRow: {
+		harness: executor.QwenCodeName,
+		path: func(p executor.Paths) string {
+			return p.QwenDir() + "/projects/-tmp-sb-work-proj/chats/" + fixtureSession + ".jsonl"
+		},
+		pointed: true, depth: 2,
+		earlier: []string{qwenChatLine(91, "response"), qwenChatLine(92, "response")},
+		request: func(i int) []string {
+			return []string{qwenChatLine(i, "response"), qwenChatLine(i, "assistant")}
+		},
+	},
+	openCodeCountRow: {
+		harness: executor.OpenCodeName,
+		path:    func(p executor.Paths) string { return p.OpenCodeCountRecord() },
+		earlier: []string{openCodeCountLine("start", "")},
+		request: func(i int) []string {
+			session := "ses_main"
+			if i%3 == 0 {
+				session = "ses_sub"
+			}
+			return []string{openCodeCountLine("request", session)}
+		},
+	},
 	geminiTelemetryRow: {
 		harness: executor.GeminiCLIName,
 		path:    func(p executor.Paths) string { return p.GeminiTelemetry() },
@@ -196,7 +240,7 @@ func fixtureRecord(fixture recordFixture, made, long int) (string, []string) {
 		own = append(own, lines...)
 	}
 	all := append(append([]string{}, fixture.earlier...), own...)
-	if strings.Contains(fixture.path(executor.Paths{Home: "/h"}), "/chats/") {
+	if strings.Contains(fixture.path(executor.Paths{Home: "/h"}), "/.gemini/") {
 		all = append([]string{`{"sessionId":"` + fixtureSession + `","kind":"main"}`}, all...)
 	}
 	return strings.Join(all, "\n") + "\n", own
@@ -205,8 +249,8 @@ func fixtureRecord(fixture recordFixture, made, long int) (string, []string) {
 // pointTo names path in b's pointer, with fixture's earlier lines.
 func pointTo(b *sandbox.FakeSandbox, fixture recordFixture, path string) {
 	skip := len(fixture.earlier)
-	if strings.Contains(path, "/chats/") {
-		skip = 0 // A CHAT FILE'S EARLIER RESPONSES are left out by id ([executor.Paths.GeminiUsageBefore]).
+	if strings.Contains(path, "/.gemini/") {
+		skip = 0 // A GEMINI CHAT FILE'S EARLIER RESPONSES are left out by id ([executor.Paths.GeminiUsageBefore]).
 	}
 	b.Put(executor.PathsFor(b).CountRecord(), path+"\n"+strconv.Itoa(skip)+"\n")
 }
@@ -534,6 +578,127 @@ func TestAGeminiRunIsCountedByTheLargerOfItsRecords(t *testing.T) {
 					res.TurnCapExceeded, err, past)
 			}
 		}
+	}
+}
+
+// A QWEN CODE RUN IS COUNTED BY THE LARGER OF ITS STREAM AND ITS CHAT FILE,
+// live and at its collection alike: the stream's usage shows no compression's
+// side requests, the chat file an api_response line for every answered
+// request, side ones included, and a failed attempt's api_error line counts
+// nothing. Each is a lower bound, so the larger never counts a request the
+// run did not make.
+//
+// Mutation: count the stream alone, the chat file alone, their sum, or a
+// failed attempt's line, and a row goes red.
+func TestAQwenRunIsCountedByTheLargerOfItsStreamAndChatFile(t *testing.T) {
+	t.Parallel()
+	runner := executor.New(executor.QwenCode{})
+	chat := recordFixtures[qwenChatRow]
+	for _, c := range []struct {
+		name           string
+		streamed, chat int
+		want           int
+	}{
+		{"a compression's side requests the stream never shows", 2, 3, 3},
+		{"a chat file not yet named", 4, 0, 4},
+	} {
+		b := recordBox(t, runner, chat)
+		p := executor.PathsFor(b)
+		if c.chat > 0 {
+			record, _ := fixtureRecord(chat, c.chat, 0)
+			b.Put(chat.path(p), record+qwenChatLine(99, "error")+"\n")
+		} else {
+			b.Put(p.CountRecord(), "")
+		}
+		b.Put(executor.QwenCode{}.Output(p).Stdout, requestStreams[executor.QwenCodeName](c.streamed))
+		if got, err := runner.Count(sandbox.RunHandle{}).Read(t.Context(), b); err != nil || got.Requests != c.want {
+			t.Errorf("%s: the live count reads %+v (%v), want %d", c.name, got, err, c.want)
+		}
+		b.Put(p.Findings(), "Outcome: succeeded")
+		b.Put(p.ExitCode(), "0")
+		for turnCap, past := range map[int]bool{c.want: false, c.want - 1: true} {
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{TurnCap: turnCap}, queue.NewAnswerBudget(nil))
+			if err != nil || res.TurnCapExceeded != past {
+				t.Errorf("%s: collected under a cap of %d as exceeded %v (%v), want %v", c.name, turnCap,
+					res.TurnCapExceeded, err, past)
+			}
+		}
+	}
+}
+
+// AN OPENCODE RUN IS COUNTED BY THE LARGER OF ITS STREAM AND ITS COUNT
+// PLUGIN'S RECORD, live and at its collection alike: the stream shows the
+// main session's steps alone, the record each request the server answered,
+// a subagent's and a compaction's included. Each is a lower bound, so the
+// larger never counts a request the run did not make.
+//
+// Mutation: count the stream alone, the record alone, or their sum, and a row
+// goes red.
+func TestAnOpenCodeRunIsCountedByTheLargerOfItsStreamAndCountRecord(t *testing.T) {
+	t.Parallel()
+	runner := executor.New(executor.OpenCode{})
+	record := recordFixtures[openCodeCountRow]
+	for _, c := range []struct {
+		name             string
+		streamed, record int
+		want             int
+	}{
+		{"a subagent's requests the stream never shows", 4, 7, 7},
+		{"a record behind the stream", 5, 2, 5},
+	} {
+		b := recordBox(t, runner, record)
+		p := executor.PathsFor(b)
+		lines, _ := fixtureRecord(record, c.record, 0)
+		b.Put(record.path(p), lines)
+		out := executor.OpenCode{}.Output(p)
+		stream := requestStreams[executor.OpenCodeName](c.streamed)
+		b.Put(out.Stdout, stream)
+		if got, err := runner.Count(sandbox.RunHandle{}).Read(t.Context(), b); err != nil || got.Requests != c.want {
+			t.Errorf("%s: the live count reads %+v (%v), want %d", c.name, got, err, c.want)
+		}
+		b.Put(p.Findings(), "Outcome: succeeded")
+		b.Put(p.ExitCode(), "0")
+		for turnCap, past := range map[int]bool{c.want: false, c.want - 1: true} {
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{TurnCap: turnCap}, queue.NewAnswerBudget(nil))
+			if err != nil || res.TurnCapExceeded != past {
+				t.Errorf("%s: collected under a cap of %d as exceeded %v (%v), want %v", c.name, turnCap,
+					res.TurnCapExceeded, err, past)
+			}
+		}
+	}
+}
+
+// A CAPPED OPENCODE RUN WHOSE COUNT PLUGIN NEVER LOADED IS NEVER JUDGED WITHIN
+// ITS CAP: its record holds no start line, so nothing recorded the requests
+// the stream cannot show. Live, once the stream shows a request, the count
+// holds a request undecided, so the watch ends the run past what its cap
+// allows; collected, the run is never a success, and says why.
+//
+// Mutation: read a record with no start line as none, live or at collection,
+// and a check goes red.
+func TestACappedOpenCodeRunWhoseCountPluginNeverLoadedIsNeverJudgedWithin(t *testing.T) {
+	t.Parallel()
+	runner := executor.New(executor.OpenCode{})
+	b := box(t, runner)
+	p := executor.PathsFor(b)
+	out := executor.OpenCode{}.Output(p)
+	b.Put(out.Stdout, requestStreams[executor.OpenCodeName](2))
+	got, err := runner.Count(sandbox.RunHandle{TurnCap: 2}).Read(t.Context(), b)
+	if err != nil || got.Requests != 2 || got.Undecided == 0 || !got.PastCap(2) {
+		t.Errorf("live: %+v (%v); want its 2 requests with one undecided, past a cap of 2", got, err)
+	}
+	b.Put(p.Findings(), "Outcome: succeeded")
+	b.Put(p.ExitCode(), "0")
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{TurnCap: 10}, queue.NewAnswerBudget(nil))
+	if err != nil || res.Success || !strings.Contains(res.Error, "never loaded") {
+		t.Errorf("collected under a cap of 10: success %v, error %q (%v); want a failure saying the plugin never "+
+			"loaded", res.Success, res.Error, err)
+	}
+	b.Put(p.OpenCodeCountRecord(), openCodeCountLine("start", "")+"\n")
+	if res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{TurnCap: 10}, queue.NewAnswerBudget(nil)); err != nil ||
+		!res.Success {
+		t.Errorf("with the plugin loaded: success %v, error %q (%v); want the success it reported", res.Success,
+			res.Error, err)
 	}
 }
 

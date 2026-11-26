@@ -121,11 +121,26 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 		`; printf 'release %s\n' "$v"; } > ` + q(paths.SessionRecord()))
 	line(`printf '%s %s\n' "$s" "$n" > ` + q(paths.QwenRunStart()))
 	line(`if [ "$k" = yes ]; then m=load; else m=new; fi`)
+	// ITS CHAT FILE, named for the live count once Qwen Code writes it ([qwenPointer]).
+	b.WriteString(qwenPointer(paths) + "\n")
 	b.WriteString(launchHarness("node "+q(paths.QwenHelper())+" run "+q(paths.QwenHelperConfig())+` "$s" "$m"`, paths))
+	line(`kill "$qwp" 2> /dev/null`)
 	line(qwenLocate(paths))
 	b.WriteString(chatCapture(paths, paths.QwenDir(), QwenCode{}))
 	line(`exit "$code"`)
 	return b.String()
+}
+
+// qwenPointer starts, in the background as qwp, a watcher that names in
+// [Paths.CountRecord] the run's session chat file once Qwen Code writes it, as
+// [qwenLocate] finds it, with its lines as the run began (n,
+// [chatRunStartFrom]), for the live count ([qwenChatRecord]).
+func qwenPointer(paths Paths) string {
+	q := shellword.Quote
+	pointer := q(paths.CountRecord())
+	return `( while kill -0 $$ 2> /dev/null; do for f in ` + q(paths.QwenDir()) + `/projects/*/chats/"$s".jsonl; do ` +
+		`if [ -s "$f" ] && [ ! -L "$f" ]; then printf '%s\n%s\n' "$f" "$n" > ` + pointer + `.next && mv -f ` +
+		pointer + `.next ` + pointer + `; exit 0; fi; done; sleep 0.1; done ) & qwp=$!`
 }
 
 // Output is the helper's stream on stdout, which is also the result: the

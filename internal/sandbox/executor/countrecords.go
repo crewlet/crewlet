@@ -306,3 +306,72 @@ func (m *museTraceCount) Skipped(line LongLine) {
 
 func (m *museTraceCount) requests() int  { return m.n }
 func (m *museTraceCount) undecided() int { return m.unread }
+
+// countedRecords implements [recordsCounted]: the chat file beside the stream.
+// The stream shows the driver's usage of each request but none of a
+// compression's side requests (measured on 0.28.4: 1 of 2); the chat file
+// writes an api_response line for every answered request, side requests
+// included, a few milliseconds after it (3 ms median, measured: 31 for 31, 6
+// for 6 beside a 429 and a 500 its api_error lines record apart, 3 for 3 with
+// a compression's 2). So the count is their larger, live and at collection.
+func (QwenCode) countedRecords() []recordCounted { return []recordCounted{qwenChatRecord{}} }
+
+// qwenChatRecord is a Qwen Code run's chat file as a record its requests are
+// counted off ([QwenCode.countedRecords]), live and at its collection alike.
+type qwenChatRecord struct{}
+
+// qwenChatName is a session's chat file name, `<session>.jsonl`, its session
+// a UUID as the runner mints one.
+var qwenChatName = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$`)
+
+// liveRecord implements [recordCounted]: the chat file the script found for
+// the run's session, and its lines as the run began ([qwenPointer]).
+func (qwenChatRecord) liveRecord(ctx context.Context, box sandbox.Sandbox, paths Paths) (string, int, bool, error) {
+	return recordPlace{root: paths.QwenDir() + "/projects", depth: 2, name: qwenChatName}.named(ctx, box, paths)
+}
+
+// recordTally implements [recordCounted].
+func (qwenChatRecord) recordTally(context.Context, sandbox.Sandbox, Paths) (recordTally, error) {
+	return &qwenChatCount{}, nil
+}
+
+// collectsFromRecord implements [recordCollected].
+func (qwenChatRecord) collectsFromRecord() {}
+
+// qwenResponseHead opens the chat line that records one answered request,
+// written whole by Qwen Code with its keys in this order (0.28.4).
+const qwenResponseHead = `"subtype":"ui_telemetry","systemPayload":{"uiEvent":{"event.name":"qwen-code.api_response"`
+
+// qwenChatCount is a chat file's count of its answered requests.
+type qwenChatCount struct{ n, unread int }
+
+func (q *qwenChatCount) Line(line []byte) {
+	var entry struct {
+		Type          string `json:"type"`
+		Subtype       string `json:"subtype"`
+		SystemPayload struct {
+			UIEvent struct {
+				Name string `json:"event.name"`
+			} `json:"uiEvent"`
+		} `json:"systemPayload"`
+	}
+	if json.Unmarshal(line, &entry) == nil && entry.Type == "system" && entry.Subtype == "ui_telemetry" &&
+		entry.SystemPayload.UIEvent.Name == "qwen-code.api_response" {
+		q.n++
+	}
+}
+
+// Skipped reads a line too long to decode at its head: an answered request's
+// line names its event there, any other line its type; a head naming neither
+// may be one the count cannot read.
+func (q *qwenChatCount) Skipped(line LongLine) {
+	switch {
+	case bytes.Contains(line.Head, []byte(`"type":"system"`)) && bytes.Contains(line.Head, []byte(qwenResponseHead)):
+		q.n++
+	case windowField(line.Head, "type", false) == "":
+		q.unread++
+	}
+}
+
+func (q *qwenChatCount) requests() int  { return q.n }
+func (q *qwenChatCount) undecided() int { return q.unread }

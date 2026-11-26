@@ -51,25 +51,61 @@ type recordsCounted interface {
 	countedRecords() []recordCounted
 }
 
-// maxCount is one live count of a job off several records ([recordsCounted]):
-// the most requests any of them shows, and, where a record holds lines it
-// cannot read, as many undecided as take the reading that may show the most
-// to its most ([reachOf]). Each part never goes down, so neither does it.
-type maxCount struct{ parts []*recordCount }
+// maxCount is one live count of a job off several records ([recordsCounted]),
+// its stream among them: the most requests any of them shows, and, where a
+// record holds lines it cannot read, as many undecided as take the reading
+// that may show the most to its most ([reachOf]). Each part never goes down,
+// so neither does it.
+type maxCount struct{ parts []sandbox.Counter }
 
 // Read implements [sandbox.Counter]: every part is read, and a part that
 // failed fails the read, the others' count still standing.
 func (m *maxCount) Read(ctx context.Context, box sandbox.Sandbox) (sandbox.RequestCount, error) {
 	counts := make([]sandbox.RequestCount, 0, len(m.parts))
 	var errs []error
+	unarmed := false
 	for _, p := range m.parts {
 		c, err := p.Read(ctx, box)
 		counts = append(counts, c)
 		if err != nil {
 			errs = append(errs, err)
 		}
+		if rc, ok := p.(*recordCount); ok && !rc.armed() {
+			unarmed = true
+		}
 	}
-	return reachOf(counts...), errors.Join(errs...)
+	out := reachOf(counts...)
+	// A RECORD THAT NEVER STARTED while the stream shows a request may hide
+	// every request it should have held: the run is not judged within its cap
+	// ([armedRecord]).
+	if unarmed && len(counts) > 0 && counts[0].Requests > 0 {
+		out.Undecided = max(out.Undecided, 1)
+	}
+	return out, errors.Join(errs...)
+}
+
+// armedRecord is a record a capped run must have started writing: one a
+// plugin of the run's writes, which says it loaded by its first line. A
+// capped run whose record never started is never judged within its cap.
+type armedRecord interface {
+	recordCounted
+	// unarmed is why a run capped at turnCap had nothing recording its requests.
+	unarmed(turnCap int) string
+}
+
+// armedTally is a record's count that knows whether its record started.
+type armedTally interface {
+	armed() bool
+}
+
+// armed reports whether c's record is not one that must start ([armedRecord]),
+// or has started.
+func (c *recordCount) armed() bool {
+	if _, ok := c.harness.(armedRecord); !ok {
+		return true
+	}
+	t, ok := c.rec.(armedTally)
+	return ok && t.armed()
 }
 
 // reachOf is counts read as one: the most requests any shows, and undecided
@@ -254,19 +290,24 @@ func (r *Runner) collectedRecord(ctx context.Context, box sandbox.Sandbox, rc re
 // each record its collection reads itself ([recordCollected]), as [maxCount]
 // reads them live.
 func (r *Runner) collectedRecords(ctx context.Context, box sandbox.Sandbox, rs recordsCounted,
-	streamed sandbox.RequestCount) (sandbox.RequestCount, error) {
+	streamed sandbox.RequestCount, turnCap int) (sandbox.RequestCount, string, error) {
 
-	counts := []sandbox.RequestCount{streamed}
+	counts, unheld := []sandbox.RequestCount{streamed}, ""
 	for _, rc := range rs.countedRecords() {
 		if collected, ok := rc.(recordCollected); ok {
-			c, err := r.collectedRecord(ctx, box, collected)
+			c := &recordCount{harness: collected, bound: r.lineBound, readBytes: math.MaxInt64,
+				inFlight: r.harness.Events().InFlight()}
+			count, err := c.read(ctx, box, true)
 			if err != nil {
-				return sandbox.RequestCount{}, err
+				return sandbox.RequestCount{}, "", err
 			}
-			counts = append(counts, c)
+			counts = append(counts, count)
+			if a, ok := rc.(armedRecord); ok && turnCap > 0 && !c.armed() && unheld == "" {
+				unheld = a.unarmed(turnCap)
+			}
 		}
 	}
-	return reachOf(counts...), nil
+	return reachOf(counts...), unheld, nil
 }
 
 // restart begins the reading at the record's first byte, with a fresh count.
