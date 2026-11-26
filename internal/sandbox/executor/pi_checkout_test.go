@@ -476,20 +476,20 @@ func TestAPiNoteHelpersOwnTroubleReachesTheRunsErrorStream(t *testing.T) {
 // THE CLEAR DROPS A SKIP LOG NO SCRIPT PRINTED: a run killed before its
 // script printed what its firings left out leaves the log in its checkout
 // state, and the clear before the next run, whichever harness it drives,
-// removes Codex's, Pi's, Hermes's, Copilot's, Kimi Code's and Muse Code's
-// alike, so a script ended before its gate prints no line of another run's as
-// its own.
+// removes every checkout-handing runner's alike, so a script ended before its
+// gate prints no line of another run's as its own.
 //
-// Mutation: drop Codex's, Hermes's, Copilot's, Kimi's or Muse's removal from
-// its restore, and a row goes red (Pi's state is also under the directory the
-// clear removes whole).
+// Mutation: drop a runner's dropSkipped from its clear (Qwen Code's or Kimi
+// Code's, say), and its row goes red; Claude Code's, OpenCode's, Pi's and
+// Cursor Agent's logs sit under a directory the clear removes whole.
 func TestTheClearDropsASkipLogNoScriptPrinted(t *testing.T) {
 	t.Parallel()
 	_, box := standInBox(t, executor.NewPi(), nil)
 	p := executor.PathsFor(box)
-	logs := map[string]string{"codex": p.CodexRepo() + "/skipped", "pi": p.PiCheckouts() + "/skipped",
-		"hermes": p.HermesCheckouts() + "/skipped", "copilot": p.CopilotRepo() + "/skipped",
-		"kimi": p.KimiCheckouts() + "/skipped", "muse": p.MuseCheckouts() + "/skipped"}
+	logs := executor.CheckoutSkipLogs(p)
+	if len(logs) == 0 {
+		t.Fatal("no runner hands its checkouts, so no skip log was held")
+	}
 	for _, log := range logs {
 		plantFile(t, log, "notehelper: a killed run's line\n")
 	}
