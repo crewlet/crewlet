@@ -160,7 +160,7 @@ func keysOf(m map[string]json.RawMessage) []string {
 }
 
 // A FIRING THAT CANNOT APPEND CLAIMS NOTHING: a call that is no MCP call (its
-// result Cursor never takes back), a subagent's, a result holding an item
+// result Cursor never takes back, however it reads), a subagent's, a result holding an item
 // that is no text (Cursor would read it back as its JSON text), one that does
 // not read, and one that leaves less room than [cursorRoomFloor] each answer
 // {} and leave the clone for the next MCP call, which hands it.
@@ -171,7 +171,7 @@ func TestACursorFiringThatCannotAppendClaimsNothing(t *testing.T) {
 	t.Parallel()
 	long := `{"content":[{"type":"text","text":"` + strings.Repeat("x", cursorResultInline-cursorRoomFloor) + `"}]}`
 	for name, input := range map[string]string{
-		"a shell call":    cursorInput("Shell", `{"output":"ok","exitCode":0}`, ""),
+		"a shell call":    cursorInput("Shell", cursorResult, ""),
 		"a subagent's":    cursorInput("MCP:t_tool", cursorResult, "call-1"),
 		"an image item":   cursorInput("MCP:t_tool", `{"content":[{"type":"image","data":"AA==","mimeType":"image/png"}]}`, ""),
 		"no object":       cursorInput("MCP:t_tool", `"just text"`, ""),
@@ -202,8 +202,8 @@ func TestACursorFiringThatCannotAppendClaimsNothing(t *testing.T) {
 // [cursorResultInline], itself under the 39,043 bytes Cursor put in a request
 // whole (measured), so the call's own text is never moved to a file for it.
 //
-// Mutation: raise the bound past 39,043, drop the room's share of the
-// listings, or count the room from nothing, and this goes red.
+// Mutation: raise the bound past 39,043, or count the room from nothing,
+// and this goes red.
 func TestACursorAnswerStaysUnderTheSizeCursorMovesToAFile(t *testing.T) {
 	t.Parallel()
 	if cursorResultInline >= 39_043 {
