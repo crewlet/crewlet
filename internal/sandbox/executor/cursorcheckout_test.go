@@ -18,7 +18,8 @@ import (
 // cursorMidRunClone is a stand-in body that, as Cursor runs, keeps the home's
 // hooks.json as it stands in record, clones a checkout at ./late, then runs
 // the run's postToolUse entry (the home's last) as Cursor does at an MCP
-// call, twice, keeping each answer, and once at a Shell call.
+// call, twice, keeping each answer, and once at a Shell call; then clones
+// ./quiet, which no MCP call follows.
 func cursorMidRunClone(record string) string {
 	r := shellword.Quote(record)
 	return `cp "$HOME/.cursor/hooks.json" ` + r + `/hooks.json 2> /dev/null
@@ -27,13 +28,15 @@ mkdir -p late/.git/refs/heads late/.cursor/skills/sk
 echo 'ref: refs/heads/main' > late/.git/HEAD; printf DIRC > late/.git/index; printf '%040d\n' 0 > late/.git/refs/heads/main
 echo LATE-AGENTS > late/AGENTS.md
 printf -- '---\nname: sk\ndescription: Dsk.\n---\n' > late/.cursor/skills/sk/SKILL.md
-mcp='{"tool_name":"MCP:t_tool","tool_output":"{\"content\":[{\"type\":\"text\",\"text\":\"ORIG\"}],\"isError\":false}"}'
-shell='{"tool_name":"Shell","tool_output":"{\"output\":\"x\"}"}'
+mcp='{"conversation_id":"'"$s"'","tool_name":"MCP:t_tool","tool_output":"{\"content\":[{\"type\":\"text\",\"text\":\"ORIG\"}],\"isError\":false}"}'
+shell='{"conversation_id":"'"$s"'","tool_name":"Shell","tool_output":"{\"output\":\"x\"}"}'
 if [ -n "$cmd" ]; then
   printf '%s' "$shell" | sh -c "$cmd" > ` + r + `/answer0
   printf '%s' "$mcp" | sh -c "$cmd" > ` + r + `/answer1
   printf '%s' "$mcp" | sh -c "$cmd" > ` + r + `/answer2
 fi
+mkdir -p quiet/.git/refs/heads; echo 'ref: refs/heads/main' > quiet/.git/HEAD; printf DIRC > quiet/.git/index
+printf '%040d\n' 0 > quiet/.git/refs/heads/main; echo QUIET > quiet/AGENTS.md
 `
 }
 
@@ -45,11 +48,12 @@ const cursorHomeHooks = "{\n  \"version\": 1,\n    \"hooks\": {\"sessionStart\":
 
 // A CHECKOUT CLONED DURING A CURSOR RUN IS HANDED AT ITS NEXT MCP CALL, ONCE:
 // while the run runs, the home's hooks.json holds every entry of the home's
-// own, its Shell-only postToolUse hook too, and one of the run's after it;
+// own, its Shell-only postToolUse hook too, and one of the run's after it,
+// for MCP calls alone;
 // that entry answers a Shell call {} and the first MCP call after the clone
 // with the call's own content and the clone's instructions and skills as one
 // more text item, and a later MCP call {}. Once over, the home's hooks.json is
-// the home's own, byte for byte.
+// the home's own, byte for byte, and a clone no MCP call followed is named.
 //
 // Mutation: lay the entry first or without its timeout, drop a home entry,
 // hand at a Shell call, hand twice, or leave the run's entry in the file, and
@@ -88,10 +92,11 @@ func TestACheckoutClonedDuringACursorRunIsHandedAtItsNextMCPCall(t *testing.T) {
 	}
 	var ours []struct {
 		Command string `json:"command"`
+		Matcher string `json:"matcher"`
 		Timeout int    `json:"timeout"`
 	}
 	if raw, _ := json.Marshal(during.Hooks["postToolUse"][1:]); json.Unmarshal(raw, &ours) != nil || len(ours) != 1 ||
-		ours[0].Timeout != 20 || !strings.HasPrefix(ours[0].Command, shellword.Quote(p.CursorNoteHelper())+" -adapter cursor-nested ") {
+		ours[0].Timeout != 20 || ours[0].Matcher != "^MCP:" || !strings.HasPrefix(ours[0].Command, shellword.Quote(p.CursorNoteHelper())+" -adapter cursor-nested ") {
 		t.Errorf("while the run ran, its postToolUse entries were %+v, want its one, bounded at 20 s", ours)
 	}
 	if got := strings.TrimSpace(recordedFile(t, record, "answer0")); got != "{}" {
@@ -121,6 +126,10 @@ func TestACheckoutClonedDuringACursorRunIsHandedAtItsNextMCPCall(t *testing.T) {
 	}
 	if got := boxFile(t, box, p.CursorHooks()); got != cursorHomeHooks {
 		t.Errorf("after the run the home's hooks.json is\n%q\nwant the home's own\n%q", got, cursorHomeHooks)
+	}
+	quiet := "the checkout " + work + "/quiet was cloned during the run and not handed"
+	if errs := boxFile(t, box, p.Err()); strings.Count(errs, quiet) != 1 || strings.Contains(errs, work+"/late was") {
+		t.Errorf("the error stream does not name ./quiet alone, once, as never handed:\n%s", errs)
 	}
 }
 
@@ -232,5 +241,37 @@ func TestACursorRunLaysNoHookBesideAnotherPostToolHook(t *testing.T) {
 				t.Errorf("the error stream says it %d times, naming %s, want once:\n%s", n, c.file, errs)
 			}
 		})
+	}
+}
+
+// A CHECKOUT CLONED HALF WAY BEFORE A CURSOR RUN IS HANDED NOTHING: the
+// launch takes only a finished clone, by the note helper's own test, for its
+// instructions, its skills (--add-dir) and its rules alike, so a clone cut
+// off in a reused box gets none of them rather than some.
+//
+// Mutation: go back to any directory holding .git for --add-dir or the rules,
+// and this goes red.
+func TestACursorLaunchHandsAHalfClonedCheckoutNothing(t *testing.T) {
+	t.Parallel()
+	record := t.TempDir()
+	runner, box := cursorBox(t, cursorRecording(record))
+	plant(t, box, map[string]string{
+		"workspace/half/.git/HEAD":                 "ref: refs/heads/main\n",
+		"workspace/half/AGENTS.md":                 "HALF-INSTRUCTIONS\n",
+		"workspace/half/.cursor/rules/r.mdc":       "---\nalwaysApply: true\n---\nHALF-RULE\n",
+		"workspace/half/.cursor/skills/s/SKILL.md": "---\nname: s\ndescription: S.\n---\n",
+	})
+	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go"})
+	if !res.Success {
+		t.Fatalf("the run failed: %s\n%s", res.Error, boxFile(t, box, paths(box).Err()))
+	}
+	if argv := recordedFile(t, record, "argv"); strings.Contains(argv, "--add-dir") {
+		t.Errorf("the run's argv names --add-dir for a half clone: %q", argv)
+	}
+	rules, _ := filepath.Glob(filepath.Join(record, "rules", "crewlet-checkout*"))
+	for _, rule := range rules {
+		if raw, _ := os.ReadFile(rule); strings.Contains(string(raw), "HALF") {
+			t.Errorf("the half clone's %s reached the run in %s", raw, rule)
+		}
 	}
 }

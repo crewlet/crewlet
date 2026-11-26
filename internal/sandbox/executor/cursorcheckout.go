@@ -18,8 +18,8 @@ import (
 // repository's root started there (measured): its AGENTS.md, CLAUDE.md and
 // .cursorrules, each whole, and the skills directly in its .cursor/skills,
 // .claude/skills and .agents/skills. A checkout present at launch has its
-// skills loaded by Cursor itself through --add-dir ([cursorRules]), so only a
-// firing copies any.
+// skills loaded by Cursor itself through --add-dir ([cursorCheckoutRules]), so
+// only a firing copies any.
 func cursorCheckouts() checkoutSpec {
 	return checkoutSpec{Instructions: []checkoutSlot{{Names: []string{"AGENTS.md"}}, {Names: []string{"CLAUDE.md"}},
 		{Names: []string{".cursorrules"}}}, Limit: checkoutUnlimited,
@@ -70,12 +70,23 @@ func cursorCheckoutsGate(paths Paths) string {
 
 // cursorCheckoutsEnd is the shell every end of a run's script runs, the
 // teardown's signals and the EXIT trap included: the home's hooks.json put
-// back, the run marked ended and its copies removed, then what its firings
-// left out said, each step whatever came of the others ([everyStep]).
+// back, the run marked ended and its copies removed, each clone no launch or
+// firing claimed named (the helper's cursor-left), then the skip log said,
+// each step whatever came of the others ([everyStep]). The log comes last, as
+// a firing that ends inside restore's wait for its lock still writes to it.
 func cursorCheckoutsEnd(paths Paths) string {
+	q := shellword.Quote
 	h := CursorAgent{}.checkoutHome(paths)
-	return everyStep(putBackHome(paths.CursorHooks(), paths.CursorHeldHooks()), h.restore(), h.saySkipped())
+	nested := q(paths.CursorCheckouts() + "/nested.json")
+	left := fmt.Sprintf(`[ ! -x %[1]s ] || [ ! -f %[2]s ] || %[1]s -adapter cursor-left -config %[2]s < /dev/null`,
+		q(paths.CursorNoteHelper()), nested)
+	return everyStep(putBackHome(paths.CursorHooks(), paths.CursorHeldHooks()), h.restore(), left, h.saySkipped())
 }
+
+// cursorHookMatcher is the run's entry's matcher: Cursor starts the hook only
+// at an MCP call, whose name it matches as `MCP:<tool>` (measured: `^MCP:`
+// fires on MCP:t_tool and not on Shell), not at every Shell, Read or Write.
+const cursorHookMatcher = "^" + cursorMCPName
 
 // cursorHookTimeout is the seconds Cursor waits on the run's hook before it
 // drops its answer and goes on (measured: an entry's "timeout" holds; the
@@ -144,7 +155,7 @@ func cursorHooked(homeFile string, home []byte, files map[string][]byte, sources
 	if raw := bytes.TrimSpace(hooks["postToolUse"]); len(raw) > 0 && json.Unmarshal(raw, &post) != nil {
 		return nil, fmt.Sprintf("%s %v, so the run lays no hook into it", homeFile, errCursorHookUnread)
 	}
-	entry, _ := json.Marshal(map[string]any{"command": cmd, "timeout": cursorHookTimeout})
+	entry, _ := json.Marshal(map[string]any{"command": cmd, "matcher": cursorHookMatcher, "timeout": cursorHookTimeout})
 	hooks["postToolUse"], _ = json.Marshal(append(post, entry))
 	doc["hooks"], _ = json.Marshal(hooks)
 	if _, named := doc["version"]; !named {
@@ -189,16 +200,23 @@ const cursorMCPName = "MCP:"
 // departs from [cursorMCPName]. An unanchored one can, as a server may name a
 // tool anything, and so can a matcher this cannot read.
 func cursorMatcherSkipsMCP(matcher string) bool {
+	// CURSOR RUNS A JAVASCRIPT REGEXP, where only a source `^` anchors: Go's
+	// parser takes `\A` for one too (a literal A there) and inline flags,
+	// which JavaScript does not compile.
+	if strings.Contains(matcher, `\A`) || strings.Contains(matcher, "(?") {
+		return false
+	}
 	re, err := syntax.Parse(matcher, syntax.Perl)
 	if err != nil {
 		return false
 	}
-	re = re.Simplify()
+	re = uncaptured(re.Simplify())
 	alts := []*syntax.Regexp{re}
 	if re.Op == syntax.OpAlternate {
 		alts = re.Sub
 	}
 	for _, alt := range alts {
+		alt = uncaptured(alt)
 		if alt.Op != syntax.OpConcat || len(alt.Sub) < 2 ||
 			(alt.Sub[0].Op != syntax.OpBeginText && alt.Sub[0].Op != syntax.OpBeginLine) {
 			return false
@@ -208,6 +226,15 @@ func cursorMatcherSkipsMCP(matcher string) bool {
 		}
 	}
 	return true
+}
+
+// uncaptured is re without the groups around it: `(^Shell)` anchors as
+// `^Shell` does.
+func uncaptured(re *syntax.Regexp) *syntax.Regexp {
+	for re.Op == syntax.OpCapture {
+		re = re.Sub[0]
+	}
+	return re
 }
 
 // cursorDepartsFromMCP reports whether every name re matches at its start
