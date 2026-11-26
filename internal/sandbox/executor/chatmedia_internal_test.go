@@ -104,7 +104,7 @@ func TestAChatLinePastTheBoundOnItsMediaIsReadItPassed(t *testing.T) {
 			record := h.base + "\n" + line + "\n" + h.base + "\n"
 			walk := h.walk()
 			marks, err := countChat(h.release, h.release, func() error {
-				return chatFileLines(t.Context(), strings.NewReader(record), walk, new(passBudget), nil)
+				return chatFileLines(t.Context(), strings.NewReader(record), walk, new(passBudget))
 			})
 			if err != nil {
 				t.Errorf("%s line %d: the count fails: %v", h.name, i, err)
@@ -124,7 +124,7 @@ func TestAChatLinePastTheBoundOnItsMediaIsReadItPassed(t *testing.T) {
 	h := chatCountHarnessOf(t, "qwen")
 	record := h.base + "\n" + qwenRecord("user", inlineData("image/png", 100<<20, true)) + "\n"
 	if _, err := countChat(h.release, h.release, func() error {
-		return chatFileLines(t.Context(), strings.NewReader(record), h.walk(), new(passBudget), nil)
+		return chatFileLines(t.Context(), strings.NewReader(record), h.walk(), new(passBudget))
 	}); err != nil {
 		t.Errorf("a 100 MiB medium fails the count: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestAChatLineWhoseTextOutsideItsMediaPassesTheBoundIsRefused(t *testing.T) 
 			line = geminiSessionLine("user", "u7", `[{"text":"`+words+`"},`+inlineData("image/png", 1<<20, true)+`]`, "")
 		}
 		_, err := countChat(h.release, h.release, func() error {
-			return chatFileLines(t.Context(), strings.NewReader(h.base+"\n"+line+"\n"), h.walk(), new(passBudget), nil)
+			return chatFileLines(t.Context(), strings.NewReader(h.base+"\n"+line+"\n"), h.walk(), new(passBudget))
 		})
 		if !errors.Is(err, errChatLine) {
 			t.Errorf("%s: the count reads the line (%v), want it refused", h.name, err)
@@ -267,7 +267,7 @@ func TestAChatLineOfTheBoundBesideItsMediaIsCountedAndOnePastItNot(t *testing.T)
 			t.Fatalf("%s: the line keeps %d bytes, want %d", c.name, got, c.kept)
 		}
 		_, err := countChat(h.release, h.release, func() error {
-			return chatFileLines(t.Context(), strings.NewReader(h.base+"\n"+line+"\n"), h.walk(), new(passBudget), nil)
+			return chatFileLines(t.Context(), strings.NewReader(h.base+"\n"+line+"\n"), h.walk(), new(passBudget))
 		})
 		if (err == nil) != c.read {
 			t.Errorf("%s: the count reads it %v (%v)", c.name, err == nil, err)
@@ -290,7 +290,7 @@ func TestReadingAChatLinesMediaHoldsNoneOfIt(t *testing.T) {
 		{"Qwen Code's count", func(ctx context.Context, n int) func() error {
 			body := []byte(qwen.base + "\n" + qwenMediaLines(n)[2] + "\n")
 			return func() error {
-				return chatFileLines(ctx, bytes.NewReader(body), qwen.walk(), new(passBudget), nil)
+				return chatFileLines(ctx, bytes.NewReader(body), qwen.walk(), new(passBudget))
 			}
 		}},
 		{"Gemini CLI's collection", func(ctx context.Context, n int) func() error {
