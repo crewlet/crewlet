@@ -44,20 +44,15 @@ func runCodexNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr 
 // listed ([skillsListing]), since Codex 0.171.0 lists a skill copied during a
 // turn only from the next turn on (measured) and reads a skill by its path,
 // then what the firing left out ([skippedListing]), the listings within one
-// firing's bound ([listingBudget]).
+// firing's bound ([listingBudget.listings], the left out first).
 func codexNestedContext(handed []handedCheckout, skipped []string) string {
 	var blocks []string
-	budget := newListingBudget()
-	for _, h := range handed {
+	skills, left := newListingBudget().listings(handed, skipped)
+	for i, h := range handed {
 		if h.text != "" {
 			blocks = append(blocks, "# AGENTS.md instructions for "+h.root+"\n\n<INSTRUCTIONS>\n"+h.text+"\n</INSTRUCTIONS>")
 		}
-		if listing := budget.take(skillsListing(h)); listing != "" {
-			blocks = append(blocks, listing)
-		}
+		blocks = appendNonEmpty(blocks, skills[i])
 	}
-	if listing := budget.take(skippedListing(skipped)); listing != "" {
-		blocks = append(blocks, listing)
-	}
-	return strings.Join(blocks, "\n\n")
+	return strings.Join(appendNonEmpty(blocks, left), "\n\n")
 }

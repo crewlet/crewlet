@@ -1054,7 +1054,7 @@ const (
 	// can draw. It began at 300 KiB, under two seconds on a 1.5 Mbit/s link
 	// (the slow end of a phone tether), and has moved up with each kit release
 	// and frame feature; the last measure was 447.3 KiB, about 2.44 seconds,
-	// on kit 0.193.0, whose Composer draws a mic and has a one-line mode.
+	// on kit 0.194.0, whose Composer draws a mic and has a one-line mode.
 	// The one sheet carries every design-system rule by rule (see
 	// TestNoLazyStylesheetCarriesTheDesignSystem), so kit releases grow it even
 	// when no screen joins the entry. A raise names the measured size and its
@@ -1079,8 +1079,8 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7571.9 KiB,
-	// on kit 0.193.0 with dictation in every composer. A raise names the
+	// kit releases account for its growth, and the last measure was 7572.6 KiB,
+	// on kit 0.194.0 with dictation in every composer. A raise names the
 	// measured size and its cause in its commit.
 	treeBudget = 5<<20 + 2454<<10
 )

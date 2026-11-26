@@ -11,9 +11,11 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf8"
 )
 
@@ -61,6 +63,9 @@ type checkoutSpec struct {
 	held *homeNames
 	gate *checkoutGate
 	room claimRoom
+	// claimBy is when a firing whose harness drops a late answer stops
+	// claiming (cursor-nested's cursorClaimWithin); zero for none.
+	claimBy time.Time
 }
 
 // skillSep is what joins a copy's tag and skill: `:` (the zero value), or `-`
@@ -83,31 +88,35 @@ func (s skillSep) String() string {
 // state directory (the checkouts handed, the lock), the instruction file it
 // replaces with the launch's sections, the checkouts handed first, in order
 // (the repositories the run pushes to), the spec, NestedSkillsOnly for a
-// nested adapter that hands skills alone, whose spec then names no instruction
-// file to read; Roots, the file it lists each checkout handed's root in, a
-// line each, for a harness that reads their instructions itself where the
-// runner names them (Gemini CLI's --include-directories); Budget, the bound
-// the sections share with what the harness loads beside them (nil for none);
-// and Skipped, lines the runner has for the run's skip log ([skippedLog]).
-// The working directory is the adapter's own.
+// nested adapter that hands skills alone (its spec then names no instruction
+// file); Roots, the file listing each handed checkout's root, a line each, for
+// a harness that reads their instructions where the runner names them (Gemini
+// CLI's --include-directories); Budget, the bound the sections share with what
+// loads beside them (nil for none); Skipped, lines for the run's skip log
+// ([skippedLog]); and LaunchSkillsLoaded for a harness that loads a launch
+// checkout's skills itself (Cursor Agent's --add-dir), so the launch copies
+// none. The working directory is the adapter's own.
 type launchConfig struct {
-	State            string        `json:"state"`
-	Agents           string        `json:"agents"`
-	First            []string      `json:"first"`
-	NestedSkillsOnly bool          `json:"nestedSkillsOnly,omitempty"`
-	Roots            string        `json:"roots,omitempty"`
-	Budget           *launchBudget `json:"budget,omitempty"`
-	Skipped          []string      `json:"skipped,omitempty"`
+	State              string        `json:"state"`
+	Agents             string        `json:"agents"`
+	First              []string      `json:"first"`
+	NestedSkillsOnly   bool          `json:"nestedSkillsOnly,omitempty"`
+	Roots              string        `json:"roots,omitempty"`
+	Budget             *launchBudget `json:"budget,omitempty"`
+	Skipped            []string      `json:"skipped,omitempty"`
+	LaunchSkillsLoaded bool          `json:"launchSkillsLoaded,omitempty"`
 	checkoutSpec
 }
 
 // nestedConfig is what -config names for a nested adapter, written by
 // checkout-launch: the state directory, the working directory its checkouts
-// sit directly under, and the launch's spec.
+// sit directly under, and the launch's spec; firing, not on the wire, is the
+// firing's own bound where its adapter takes -room, in place of FiringLimit.
 type nestedConfig struct {
 	State   string `json:"state"`
 	Workdir string `json:"workdir"`
 	checkoutSpec
+	firing *firingBound
 }
 
 // maxSkillDescription is the most characters of a skill's description a
@@ -126,9 +135,11 @@ type handedCheckout struct {
 }
 
 // instructionPart is one file of a checkout's instructions: its path and the
-// text handed of it, for an adapter whose harness wraps each file by its path.
+// text handed of it, for an adapter whose harness wraps each file by its path;
+// unread for one a claim left out by its size alone ([fitClaim]).
 type instructionPart struct {
 	path, text string
+	unread     bool
 }
 
 // handedSkill is a checkout's skill as the run lists it: its name, its
@@ -174,6 +185,12 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 		return fmt.Errorf("the launch config's budget, form %q of %d bytes, is none the helper knows", c.Budget.Form,
 			c.Budget.Bytes)
 	}
+	if c.Budget != nil && c.Budget.Form == budgetHermes && !c.Gated {
+		// ITS ROOM CHARGES WHAT THE GATE ANSWERS: an ungated spec would claim
+		// a checkout with no text and no name.
+		return fmt.Errorf("the launch config's budget of form %q needs \"gated\": its room charges the "+
+			"instructions Hermes's gate answers for each checkout", budgetHermes)
+	}
 	if _, ok := listingRules[c.ListedAs]; c.ListedAs != "" && !ok {
 		return fmt.Errorf("the launch config's listedAs %q is none of %q, %q, %q and %q", c.ListedAs, listedGrok,
 			listedKimi, listedOpenCode, listedMuse)
@@ -201,7 +218,12 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 		return err
 	}
 	keepSkipped(c.State, c.Skipped, stderr)
-	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, math.MaxInt, &skips{stderr: stderr})
+	launch := c.checkoutSpec
+	if c.LaunchSkillsLoaded {
+		launch.Skills = ""
+	}
+	handed, err := handCheckouts(c.State, work, c.First, launch,
+		unboundNames(&firingBound{left: math.MaxInt, count: byteCount, unitBytes: 1}), &skips{stderr: stderr})
 	if err != nil {
 		return err
 	}
@@ -218,7 +240,7 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 	for _, h := range handed {
 		kept = append(kept, launched{Name: h.name, Root: h.root, Text: h.text})
 		if c.Budget == nil && h.text != "" {
-			sections = append(sections, checkoutHeader(h.name, h.root)+"\n\n"+h.text)
+			sections = append(sections, checkoutSection(h))
 		}
 		roots = append(roots, h.root+"\n")
 	}
@@ -251,6 +273,12 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 
 // checkoutHeader is the line a checkout's section opens with, naming it.
 func checkoutHeader(name, root string) string { return "for `" + name + "` with root " + root }
+
+// checkoutSection is h's instructions as the launch hands them: under its
+// header, its files' texts in order.
+func checkoutSection(h handedCheckout) string {
+	return checkoutHeader(h.name, h.root) + "\n\n" + h.text
+}
 
 // launchedFile is the file under a run's checkout state where checkout-launch
 // keeps every checkout it handed, in its order, with its instructions, for a
@@ -323,12 +351,26 @@ type skips struct {
 	stderr io.Writer
 	keep   string
 	lines  []string
+	files  int // how many of lines, from the first, [skips.sayFiles] said
 }
 
 // say says one line of what the firing left out.
 func (s *skips) say(format string, args ...any) {
-	line := fmt.Sprintf(format, args...)
-	s.lines = append(s.lines, line)
+	s.put(len(s.lines), fmt.Sprintf(format, args...))
+}
+
+// sayFiles says lines about a checkout's instruction files, ahead of every
+// line about a skill: they name what a claimed checkout was not handed, and a
+// cut listing keeps its first lines.
+func (s *skips) sayFiles(lines []string) {
+	for _, line := range lines {
+		s.put(s.files, line)
+		s.files++
+	}
+}
+
+func (s *skips) put(at int, line string) {
+	s.lines = slices.Insert(s.lines, at, line)
 	if s.keep == "" {
 		fmt.Fprintf(s.stderr, "notehelper: %s\n", line)
 	}
@@ -424,41 +466,102 @@ func keepSkipped(state string, lines []string, stderr io.Writer) {
 const endedMarker = "ended"
 
 // handNested is a nested adapter's firing under c ([handCheckouts]), within
-// its spec's FiringLimit: the checkouts handed and what it left out, kept in
-// [skippedLog] too.
+// its room, else its spec's FiringLimit in bytes: the checkouts handed and
+// what it left out, kept in [skippedLog] too.
 func handNested(c nestedConfig, stderr io.Writer) ([]handedCheckout, []string, error) {
 	said := &skips{stderr: stderr, keep: filepath.Join(c.State, skippedLog)}
-	firing := math.MaxInt
-	if c.FiringLimit != nil {
-		firing = *c.FiringLimit
+	firing := c.firing
+	if firing == nil {
+		firing = &firingBound{left: math.MaxInt, count: byteCount, unitBytes: 1, names: newListingBudget().namesWithin(),
+			namesCap: true}
+		if c.FiringLimit != nil {
+			firing.left = *c.FiringLimit
+		}
 	}
 	handed, err := handCheckouts(c.State, c.Workdir, nil, c.checkoutSpec, firing, said)
 	return handed, said.lines, err
 }
 
-// fitFiring is parts within left, what is left of a firing's bound on its
+// firingBound is what is left of a firing's bound on its instructions, and
+// how it counts text: in bytes ([byteCount]), or as the harness reading the
+// answer counts its characters ([utf16Count]).
+type firingBound struct {
+	left  int
+	count func(string) int
+	// unitBytes is the most bytes one unit of count takes, so a file's size
+	// over it is the least it counts (1 a byte, 3 a UTF-16 unit, 4 a code
+	// point); readCap, where above 0, the most units a file is read to whatever
+	// left allows, a file past it kept unread for its adapter to name, not
+	// left out.
+	unitBytes, readCap int
+	// names is what is left, in nameCount (bytes where nil), for the lines
+	// naming the files left out, each with its "\n- ", and for nameCost's
+	// block naming a claimed checkout's files ([fitClaim]); namesCap whether
+	// no later firing names more, so the first checkout is claimed even past
+	// it; namesUsed whether one took any; namesSaid whether a wait was said.
+	names                          int
+	nameCount                      func(string) int
+	nameCost                       func(name, root string, parts []instructionPart) int
+	namesCap, namesUsed, namesSaid bool
+}
+
+// unboundNames is a firing bound with no bound on its names: a launch's.
+func unboundNames(b *firingBound) *firingBound {
+	b.names, b.namesCap = math.MaxInt, true
+	return b
+}
+
+// namesWithin is the bytes a firing's left-out listing, taken first from
+// budget b ([listingBudget.listings]), holds for its lines.
+func (b *listingBudget) namesWithin() int {
+	return max(b.left-len(skippedListing([]string{""})), 0)
+}
+
+// byteCount is s's length in bytes.
+func byteCount(s string) int { return len(s) }
+
+// utf16Count is s's length as a JavaScript string's, in UTF-16 code units: one
+// a character, two past U+FFFF, and one an invalid byte, which decoding
+// replaces with U+FFFD once a sequence at most. A unit is never more than
+// three bytes, so a byte bound three times a unit bound holds the same text.
+func utf16Count(s string) int {
+	n := 0
+	for _, r := range s {
+		n++
+		if r > 0xFFFF {
+			n++
+		}
+	}
+	return n
+}
+
+// fitFiring is parts within what is left of a firing's bound on its
 // instructions, each counted with its frame ([framedCost]): each part that
 // fits whole, in order, and the rest left out whole, each said by its path
 // for the model to read there, never cut, as a cut file reads as the whole.
-func fitFiring(parts []instructionPart, left *int, said *skips) []instructionPart {
+func fitFiring(parts []instructionPart, firing *firingBound, said *skips) []instructionPart {
 	var kept []instructionPart
 	for _, p := range parts {
-		if cost := framedCost(p); cost > *left {
+		if cost := framedCost(p, firing.count); p.unread && firing.readCap == 0 || cost > firing.left {
 			said.say("the instruction file %s is left out: it passes what is left of the firing's bound on "+
 				"instructions; read it at that path", p.path)
 		} else {
-			*left -= cost
+			firing.left -= cost
 			kept = append(kept, p)
 		}
 	}
 	return kept
 }
 
-// framedCost is what part p takes of a firing's bound: its text, its path
-// three times and 64 bytes, more than any adapter wraps a file in
+// framedCost is what part p takes of a firing's bound, in count: its text,
+// its path three times and 64 more, more than any adapter wraps a file in
 // (qwen-nested: the path twice and 47 bytes; a checkout's section header, its
-// root and 22 bytes, once per checkout), so the bound holds the answer whole.
-func framedCost(p instructionPart) int { return len(p.text) + 3*len(p.path) + 64 }
+// root and 22 bytes, once per checkout; pi-nested: the path and 54 bytes, and
+// once per checkout a label of its name, its root and 21 bytes, a file's path
+// its root's and 10 bytes more), so the bound holds the answer whole.
+func framedCost(p instructionPart, count func(string) int) int {
+	return count(p.text) + 3*count(p.path) + 64
+}
 
 // skippedListing is what a firing left out, as a nested adapter hands it to
 // the model, "" for nothing: a line each, so a model told of a repository's
@@ -481,11 +584,12 @@ const maxListing = 64 << 10
 // listingCut ends a firing's listings cut at [maxListing].
 const listingCut = "(The rest of this listing passes its 64 KiB bound and is not shown.)"
 
-// listingBudget is what is left of one firing's [maxListing], and whether
-// its listings were cut.
+// listingBudget is what is left of one firing's bound on its listings, the
+// line a cut ends with, naming that bound, and whether they were cut.
 type listingBudget struct {
-	left int
-	cut  bool
+	left    int
+	cutLine string
+	cut     bool
 }
 
 func newListingBudget() *listingBudget { return newListingBudgetWithin(maxListing) }
@@ -493,14 +597,23 @@ func newListingBudget() *listingBudget { return newListingBudgetWithin(maxListin
 // newListingBudgetWithin is a budget whose listings, with the blank line
 // before each, never pass bound bytes: the cut line and the separator before
 // the block it ends are reserved, since a cut keeps at most what is left (its
-// last newline standing in for the cut line's own).
+// last newline standing in for the cut line's own). A bound below
+// [maxListing] is the room the answer had, which its cut line names; one too
+// small to say a cut lists nothing.
 func newListingBudgetWithin(bound int) *listingBudget {
-	return &listingBudget{left: bound - len(listingCut) - len("\n\n")}
+	cutLine := listingCut
+	if bound < maxListing {
+		cutLine = fmt.Sprintf("(The rest of this listing passes the %d bytes this answer had room for and is not shown.)",
+			bound)
+	}
+	b := &listingBudget{left: bound - len(cutLine) - len("\n\n"), cutLine: cutLine}
+	b.cut = b.left < 0
+	return b
 }
 
 // take is block within what is left of b, block apart from the one before by
 // a blank line: whole where it fits, else cut after its last line that does,
-// with [listingCut], once; "" for an empty block and for every block after a
+// with b's cut line, once; "" for an empty block and for every block after a
 // cut.
 func (b *listingBudget) take(block string) string {
 	if block == "" || b.cut {
@@ -513,9 +626,33 @@ func (b *listingBudget) take(block string) string {
 	b.cut = true
 	kept := block[:max(b.left, 0)]
 	if i := strings.LastIndexByte(kept, '\n'); i >= 0 {
-		return kept[:i] + "\n" + listingCut
+		return kept[:i] + "\n" + b.cutLine
 	}
-	return listingCut
+	return b.cutLine
+}
+
+// appendNonEmpty is blocks with each of more that is not "".
+func appendNonEmpty(blocks []string, more ...string) []string {
+	for _, b := range more {
+		if b != "" {
+			blocks = append(blocks, b)
+		}
+	}
+	return blocks
+}
+
+// listings is each handed checkout's skills' listing ([skillsListing]) and
+// what the firing left out ([skippedListing]) within b, in the order they
+// are shown (each checkout's, then the left out), the left-out lines taken
+// first: a checkout is claimed for good, so a file or skill it was not
+// handed is the model's to find only by the line naming it.
+func (b *listingBudget) listings(handed []handedCheckout, skipped []string) (skills []string, left string) {
+	left = b.take(skippedListing(skipped))
+	skills = make([]string, len(handed))
+	for i, h := range handed {
+		skills[i] = b.take(skillsListing(h))
+	}
+	return skills, left
 }
 
 // readNested is a nested adapter's config, refused where it names no state or
@@ -547,7 +684,7 @@ func readNested(path string) (nestedConfig, error) {
 // theirs within firing ([fitFiring]), and its skills copied as
 // `<tag>:<skill>` ([copyPlanned]). What it leaves out is
 // said to said, and kept where said asks, under the lock.
-func handCheckouts(state, work string, first []string, spec checkoutSpec, firing int, said *skips) ([]handedCheckout, error) {
+func handCheckouts(state, work string, first []string, spec checkoutSpec, firing *firingBound, said *skips) ([]handedCheckout, error) {
 	spec.held = &homeNames{}
 	lock, err := os.OpenFile(filepath.Join(state, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -584,11 +721,13 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 	room, spent := newCopyRoom(), false
 	var claimed []string
 	plans := map[string][]plannedSkill{}
+	parts := map[string][]instructionPart{}
 	// THE ANSWER'S ROOM DECIDES LAST: a checkout whose skills wait spends none
-	// of it ([claimRoom]).
+	// of it ([claimRoom]); a gated spec's files are the gate's, so only the
+	// room charges them, and an ungated one's only the firing ([fitClaim]).
 	answers := func(name string) bool {
 		if spec.room == nil {
-			return true
+			return fitClaim(work, name, limit, spec, firing, parts, said)
 		}
 		h := handedCheckout{name: name, root: filepath.Join(work, name)}
 		if spec.gate != nil {
@@ -650,6 +789,13 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 	if len(claimed) == 0 {
 		return nil, nil
 	}
+	// PAST ITS DEADLINE A FIRING CLAIMS NOTHING, its lines unsaid: a clone
+	// claimed there would go in an answer its harness drops, and never again.
+	if !spec.claimBy.IsZero() && !time.Now().Before(spec.claimBy) {
+		said.lines, said.files = nil, 0
+		fmt.Fprintln(said.stderr, "notehelper: this firing's deadline passed before it claimed; the checkouts wait for the next")
+		return nil, nil
+	}
 	// CLAIMED BEFORE ANYTHING IS HANDED: a firing that dies past this point has
 	// handed some of a checkout, never one the next firing claims again and
 	// finds its skills' names taken by its own copies.
@@ -672,9 +818,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 		case spec.ImportInstructions:
 			h.text = rootImports(root, spec.Instructions, said)
 		default:
-			parts, _ := instructionParts(root, limit, spec.Instructions, said)
-			parts = fitFiring(parts, &firing, said)
-			h.text, h.parts = joinParts(parts), parts
+			h.text, h.parts = joinParts(parts[name]), parts[name]
 		}
 		for _, p := range plans[name] {
 			skill, err := copyPlanned(p, spec, staging, said)
@@ -687,6 +831,52 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 		handed = append(handed, h)
 	}
 	return handed, nil
+}
+
+// fitClaim is whether the checkout name under work may be claimed now for
+// its instructions: its files read within limit and what is left of firing,
+// one whose size alone passes that never read ([instructionPartsWithin]),
+// fitted ([fitFiring]) into parts, the lines naming those left out said
+// first ([skips.sayFiles]); those lines and firing's nameCost within its
+// names. One past what is left waits for a later firing, said once, unless
+// it would be the first to name any where no firing names more: a checkout
+// is claimed for good, and a file it was not handed is the model's to find
+// only by its name. An importing spec reads its files at hand, and a gated
+// one takes them from its gate ([checkoutGate]), naming none here.
+func fitClaim(work, name string, limit int, spec checkoutSpec, firing *firingBound,
+	parts map[string][]instructionPart, said *skips) bool {
+	if spec.ImportInstructions || spec.gate != nil {
+		return true
+	}
+	root := filepath.Join(work, name)
+	trial := &skips{stderr: io.Discard}
+	read, _ := instructionPartsWithin(root, limit, spec.Instructions, firing, trial)
+	try := *firing
+	kept := fitFiring(read, &try, trial)
+	count := firing.nameCount
+	if count == nil {
+		count = byteCount
+	}
+	cost := 0
+	for _, line := range trial.lines {
+		cost += count(line + "\n- ")
+	}
+	if firing.nameCost != nil && len(kept) > 0 {
+		cost += firing.nameCost(name, root, kept)
+	}
+	if cost > 0 && cost > firing.names && (firing.namesUsed || !firing.namesCap) {
+		if !firing.namesSaid {
+			fmt.Fprintln(said.stderr, "notehelper: this firing's room to name what it leaves out is spent; the "+
+				"checkouts left wait for the next")
+			firing.namesSaid = true
+		}
+		return false
+	}
+	firing.left, firing.names = try.left, firing.names-cost
+	firing.namesUsed = firing.namesUsed || cost > 0
+	parts[name] = kept
+	said.sayFiles(trial.lines)
+	return true
 }
 
 // checkoutNames is every checkout directly under work: the names in first
@@ -742,6 +932,16 @@ func checkoutName(work, name string) bool {
 // one, is its slot's file and hands nothing, charged nothing, unless the slot
 // passes it over (SkipBlank).
 func instructionParts(root string, limit int, slots []instructionSlot, said *skips) ([]instructionPart, int) {
+	return instructionPartsWithin(root, limit, slots, nil, said)
+}
+
+// instructionPartsWithin is [instructionParts] for a claim within fit (nil for
+// none): a slot's file whose size over fit's unitBytes, with its frame, passes
+// what is left of fit is left out unread, never opened, and one read is read
+// to at most unitBytes a unit left, past which it is left out too, so a file
+// of any size costs a firing a stat.
+func instructionPartsWithin(root string, limit int, slots []instructionSlot, fit *firingBound,
+	said *skips) ([]instructionPart, int) {
 	var texts []instructionPart
 	spent := 0
 	handed := handedFiles{}
@@ -770,7 +970,32 @@ func instructionParts(root string, limit int, slots []instructionSlot, said *ski
 			if real, ok := slotFile(root, path, slot.slotOptions); !ok || !handed.first(real, slot.Once) {
 				continue
 			}
-			text, n, cut := readInstructions(path, info.Size(), limit-spent)
+			room, most := limit-spent, math.MaxInt
+			if fit != nil {
+				most = fit.left
+				if fit.readCap > 0 && fit.readCap < most {
+					most = fit.readCap
+				}
+			}
+			if fit != nil && most < math.MaxInt/max(fit.unitBytes, 1) {
+				least := int((info.Size() + int64(fit.unitBytes) - 1) / int64(max(fit.unitBytes, 1)))
+				if least+3*fit.count(path)+64 > most {
+					texts = append(texts, instructionPart{path: path, unread: true})
+					break
+				}
+				if bytes := fit.unitBytes * most; bytes < room {
+					if info.Size() > int64(bytes) {
+						texts = append(texts, instructionPart{path: path, unread: true})
+						break
+					}
+					room = bytes
+				}
+			}
+			text, n, cut := readInstructions(path, info.Size(), room)
+			if cut && room < limit-spent {
+				texts = append(texts, instructionPart{path: path, unread: true}) // it grew past the cap since its stat
+				break
+			}
 			if n == 0 && !cut && slot.SkipBlank {
 				continue
 			}

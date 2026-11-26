@@ -188,19 +188,48 @@ type options struct {
 	// loseRequest makes the domain never see the first publish, which
 	// answers as one whose answer was lost.
 	loseRequest bool
+
+	// loseCreate makes the domain land the first create and lose its
+	// answer.
+	loseCreate bool
+
+	// loseAsset makes the domain land the first asset and lose its answer.
+	loseAsset bool
 }
 
 // losingWrites is the domain's writer whose first publish answers an error
 // that establishes nothing, as an answer lost in flight does: landed, or
-// where lands is false, never sent.
+// where lands is false, never sent. Its first create or asset, where creates
+// or assets is set, lands and loses its answer.
 type losingWrites struct {
 	artifactupload.Writes
-	lands bool
-	lost  atomic.Bool
+	publishes, lands, creates, assets bool
+	lost                              atomic.Bool
+}
+
+func (w *losingWrites) Create(ctx context.Context, c artifactsdomain.Call,
+	in artifactsdomain.CreateInput) (artifactsdomain.Published, error) {
+	published, err := w.Writes.Create(ctx, c, in)
+	if err == nil && w.creates && w.lost.CompareAndSwap(false, true) {
+		return artifactsdomain.Published{}, errors.New("the create's answer was lost")
+	}
+	return published, err
+}
+
+func (w *losingWrites) AddAsset(ctx context.Context, c artifactsdomain.Call,
+	in artifactsdomain.AssetInput) (artifactsdomain.Asset, artifactsdomain.Written, error) {
+	asset, written, err := w.Writes.AddAsset(ctx, c, in)
+	if err == nil && w.assets && w.lost.CompareAndSwap(false, true) {
+		return artifactsdomain.Asset{}, artifactsdomain.Written{}, errors.New("the asset's answer was lost")
+	}
+	return asset, written, err
 }
 
 func (w *losingWrites) Publish(ctx context.Context, c artifactsdomain.Call,
 	in artifactsdomain.PublishInput) (artifactsdomain.Published, error) {
+	if !w.publishes {
+		return w.Writes.Publish(ctx, c, in)
+	}
 	if !w.lands && w.lost.CompareAndSwap(false, true) {
 		return artifactsdomain.Published{}, errors.New("the publish's request was lost")
 	}
@@ -270,8 +299,9 @@ func newHarness(t *testing.T, o options) *harness {
 	if o.presign {
 		deps.Presign = store
 	}
-	if o.loseAnswer || o.loseRequest {
-		deps.Writes = &losingWrites{Writes: h.domain.writer, lands: o.loseAnswer}
+	if o.loseAnswer || o.loseRequest || o.loseCreate || o.loseAsset {
+		deps.Writes = &losingWrites{Writes: h.domain.writer, publishes: o.loseAnswer || o.loseRequest,
+			lands: o.loseAnswer, creates: o.loseCreate, assets: o.loseAsset}
 	}
 	if !o.noVendor {
 		cache, err := vendor.New(vendor.Options{Hosts: deps.Hosts.Names(),
@@ -485,6 +515,18 @@ func (h *harness) named() map[objstore.Key]bool {
 		return nil
 	}); err != nil {
 		h.t.Fatal(err)
+	}
+	return out
+}
+
+// gone is every key a row names that the store no longer holds.
+func (h *harness) gone() []objstore.Key {
+	stored := h.stored()
+	var out []objstore.Key
+	for k := range h.named() {
+		if _, ok := stored[k]; !ok {
+			out = append(out, k)
+		}
 	}
 	return out
 }

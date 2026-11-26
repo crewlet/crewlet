@@ -51,6 +51,13 @@ func (p Paths) GeminiChats() string { return p.GeminiSlugDir() + "/chats" }
 // as its run starts, which the run's spend leaves out ([geminiScript]).
 func (p Paths) GeminiUsageBefore() string { return p.WorkDir() + "/gemini-usage-before" }
 
+// GeminiTelemetry is the run's own telemetry file, which Gemini CLI writes as it
+// makes each model request and which its turn cap is counted off
+// ([geminiTelemetryRecord]): under the work directory, cleared with every run,
+// and outside the one directory a Gemini CLI pack reads ([Paths.GeminiSlugDir]),
+// so no kept session carries it.
+func (p Paths) GeminiTelemetry() string { return p.WorkDir() + "/gemini-telemetry.json" }
+
 // GeminiProjectSlug is the project slug every run's working directory is
 // pinned to: one constant, so the session sits at the same path whatever the
 // box's working directory is called (Gemini CLI otherwise slugs its basename).
@@ -97,10 +104,10 @@ func (p Paths) GeminiTakesDir() string { return p.WorkDir() + "/gemini-takes" }
 func (p Paths) GeminiUnbridged() string { return p.WorkDir() + "/gemini-unbridged" }
 
 // GeminiNoteHelper is where a Gemini CLI run's launch writes the note helper
-// its checkout gate and checkouts' hook run ([geminiCheckoutHome]).
+// its checkout gate and checkouts' hook run ([GeminiCLI.checkoutHome]).
 func (p Paths) GeminiNoteHelper() string { return p.WorkDir() + "/gemini-notehelper" }
 
-// GeminiCheckouts is the run's checkout state ([geminiCheckoutHome]): the
+// GeminiCheckouts is the run's checkout state ([GeminiCLI.checkoutHome]): the
 // checkouts handed, the lock, the skip log and the hook's config, remade by
 // every run.
 func (p Paths) GeminiCheckouts() string { return p.WorkDir() + "/gemini-checkouts" }

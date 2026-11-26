@@ -82,29 +82,29 @@ func (p Paths) ClaudeNotesSettingsPinned() string {
 // before every run ([Runner.ClearArtifacts]).
 func (p Paths) ClaudeSkillsPlugin() string { return p.WorkDir() + "/claude-skills" }
 
-// ClaudeRepo is the run's checkout state ([claudeCheckoutHome]): the checkouts
+// ClaudeRepo is the run's checkout state ([ClaudeCode.checkoutHome]): the checkouts
 // handed, the lock and the nested hook's config, remade by every run.
 func (p Paths) ClaudeRepo() string { return p.WorkDir() + "/claude-repo" }
 
 // ClaudeRepoSkills lists, a name a line, the checkouts' skills a run copied
-// into the home's `.claude/skills` ([claudeCheckoutHome]), so the run's end
+// into the home's `.claude/skills` ([ClaudeCode.checkoutHome]), so the run's end
 // removes them and none of the home's, or the next run's gate where the run
 // was killed first.
 func (p Paths) ClaudeRepoSkills() string { return p.WorkDir() + "/claude-repo-skills" }
 
 // ClaudeHomeInstructions is the home's own `.claude/CLAUDE.md`, held in the
 // work directory while the run's, the home's with its checkouts' after it,
-// stands in its place ([claudeCheckoutHome], [ClaudeCode.homeRestore],
+// stands in its place ([ClaudeCode.checkoutHome], [ClaudeCode.homeRestore],
 // [putBackHome]).
 func (p Paths) ClaudeHomeInstructions() string { return p.WorkDir() + "/claude-home-CLAUDE.md" }
 
 // ClaudeRepoInstructions is where checkout-launch writes the instructions of
-// a run's checkouts ([claudeCheckoutHome]), which the gate then writes after
+// a run's checkouts ([ClaudeCode.checkoutHome]), which the gate then writes after
 // the home's own into `.claude/CLAUDE.md` through a link as the home keeps it.
 func (p Paths) ClaudeRepoInstructions() string { return p.WorkDir() + "/claude-repo-CLAUDE.md" }
 
 // ClaudeNoteHelper is where a Claude Code run's launch writes the note helper
-// its checkout gate and checkouts' hook run ([claudeCheckoutHome]).
+// its checkout gate and checkouts' hook run ([ClaudeCode.checkoutHome]).
 func (p Paths) ClaudeNoteHelper() string { return p.WorkDir() + "/claude-notehelper" }
 
 // ClaudeCheckoutLaunch is the run's checkout-launch config, which its launch

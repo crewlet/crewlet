@@ -269,12 +269,13 @@ func (s *Service) decided(ctx context.Context, refusal, err error) error {
 
 // releaseAbandoned releases, ahead of their lapse, the holds of uploads whose
 // transfer window has closed with no publish having claimed them, where the
-// engine knows every put: it deletes the upload's record first (so no transfer
-// or finalize can take it after), then every object it stored, and adds the
-// holds that may go to released, as it saw them. A hold whose objects could
-// not all be deleted is kept, and lapses on its own. It reads at most
-// [earlyReads] records not in read, adding each to it; the change moves each
-// kept one's Expires on, so a hold it cannot release never pins the reads.
+// engine knows every put and no write of unknown outcome was offered a file
+// ([record.keeps]): it deletes the upload's record first (so no transfer or
+// finalize can take it after), then every object it stored, and adds the holds
+// that may go to released, as it saw them. A hold whose objects could not all
+// be deleted is kept, and lapses on its own. It reads at most [earlyReads]
+// records not in read, adding each to it; the change moves each kept one's
+// Expires on, so a hold it cannot release never pins the reads.
 func (s *Service) releaseAbandoned(ctx context.Context, l *ledger, now time.Time, read map[string]bool,
 	released map[string]hold) {
 
@@ -287,9 +288,9 @@ func (s *Service) releaseAbandoned(ctx context.Context, l *ledger, now time.Time
 		}
 		read[h.Upload] = true
 		r, rev, err := s.readRecord(ctx, h.Upload)
-		// A RECORD KEEPING ANOTHER ATTEMPT'S BYTES ([record.Kept]) keeps its
+		// A RECORD KEEPING BYTES A WRITE OF UNKNOWN OUTCOME MAY NAME keeps its
 		// hold until it lapses, which no early release may shorten.
-		if err != nil || r == nil || r.State != stateOpen || r.Kept > 0 {
+		if err != nil || r == nil || r.State != stateOpen || r.keeps() {
 			continue
 		}
 		if slices.ContainsFunc(r.Files, func(f file) bool { return f.State == fileStreaming }) {

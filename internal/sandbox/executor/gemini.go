@@ -43,12 +43,6 @@ func (GeminiCLI) Name() string { return GeminiCLIName }
 // answered whole (measured on 0.70.0).
 func (GeminiCLI) MCPCallCeiling() time.Duration { return 0 }
 
-// CountedAtCollection implements [collectionCounted].
-func (GeminiCLI) CountedAtCollection() string {
-	return "stream-json marks no model request: " +
-		"the session record its count reads is appended by the run's script once Gemini CLI exits"
-}
-
 // resumesOnLaunchRoute: measured on 0.70.0, the one release that continues a
 // carried session ([launchRouted]): created with
 // GOOGLE_GEMINI_BASE_URL at stub A, `--resume` with it at stub B; the resumed
@@ -129,7 +123,7 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		// foreground command the signal also reached returns. A run killed
 		// outright leaves them to the next run's clear ([homeKeeper]).
 		// What the checkouts' hook left out said first ([checkoutHome.saySkipped]).
-		"restore() { " + geminiCheckoutHome(paths).saySkipped() + "; " + GeminiCLI{}.homeRestore(paths) +
+		"restore() { " + GeminiCLI{}.checkoutHome(paths).saySkipped() + "; " + GeminiCLI{}.homeRestore(paths) +
 			"; }; trap restore EXIT",
 		`trap 'restore; trap - EXIT; exit 143' TERM; trap 'restore; trap - EXIT; exit 130' INT; ` +
 			`trap 'restore; trap - EXIT; exit 129' HUP`,
@@ -156,7 +150,7 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		// NOTHING OF CREWLET'S OWN SWITCHED OFF OR REPLACED where no tier of the
 		// run's undoes it ([geminiGuard]), checked before Gemini CLI first starts;
 		// the checkouts' hook switched off only said in the skip log (D709).
-		"gk=" + q(geminiCheckoutsHook) + "; gs=" + q(geminiCheckoutHome(paths).skipped()),
+		"gk=" + q(geminiCheckoutsHook) + "; gs=" + q(GeminiCLI{}.checkoutHome(paths).skipped()),
 		"node " + q(paths.GeminiHelper()) + " guard" + geminiGuard(req) +
 			` ${hk:+--checkouts "$gk" --skipped "$gs"} || exit 1`,
 		// WHETHER NO OTHER SERVER CAN SPELL THE BRIDGE'S TOOLS, read before the
@@ -211,11 +205,30 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 			` "$s" > `+before+`.part 2> /dev/null && mv -f `+before+`.part `+before+`; else : > `+before+`; fi`,
 		`if [ "$k" = yes ]; then set -- --resume "$s"; else set -- --session-id "$s"; fi`,
 		geminiIncludeRoots(paths),
+		// ITS CHAT FILE, named for the live count once Gemini CLI writes it
+		// ([geminiPointer]).
+		geminiPointer(paths),
 		run,
+		`kill "$gwp" 2> /dev/null`,
 		"node "+q(paths.GeminiHelper())+" usage "+q(paths.GeminiChats())+` "$s" `+before,
 		geminiLocate(paths),
 		strings.TrimSuffix(chatCapture(paths, paths.GeminiSlugDir(), GeminiCLI{}), "\n"),
 		"exit $code"), "\n")
+}
+
+// geminiPointer starts, in the background as gwp, a watcher that names in
+// [Paths.CountRecord] the chat file of the run's session once Gemini CLI writes
+// it, as the helper finds it (gemini_helper.mjs, sessionFile): a file of the
+// chats directory named for the session's first eight characters whose first
+// line names the session ([geminiChatRecord]). None where the list of the
+// responses the session held was never written: the helper counts none then.
+func geminiPointer(paths Paths) string {
+	q := shellword.Quote
+	pointer := q(paths.CountRecord())
+	return `g8=$(printf '%.8s' "$s"); ( [ -f ` + q(paths.GeminiUsageBefore()) + ` ] || exit 0; while kill -0 $$ 2> /dev/null; do for f in ` + q(paths.GeminiChats()) +
+		`/session-*-"$g8".jsonl; do if [ -f "$f" ] && [ ! -L "$f" ] && head -n 1 "$f" | grep -qF "$s"; then ` +
+		`printf '%s\n0\n' "$f" > ` + pointer + `.next && mv -f ` + pointer + `.next ` + pointer + `; exit 0; fi; done; ` +
+		`sleep 0.1; done ) & gwp=$!`
 }
 
 // geminiBridgedPrefix opens the name Gemini CLI gives each tool of the
@@ -302,12 +315,28 @@ const geminiCodeAssist = "https://cloudcode-pa.googleapis.com"
 // empty, which Gemini CLI reads as its own endpoint; the Code Assist endpoint
 // is named, since an empty one is read as a URL; the prompt files are `false`
 // until the script names its own (measured on 0.70.0).
-func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, _ Paths) []Pinned {
-	return []Pinned{{Name: "GEMINI_CLI_TRUST_WORKSPACE", Value: "true"}, {Name: "NO_BROWSER", Value: "true"},
+func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
+	return append([]Pinned{{Name: "GEMINI_CLI_TRUST_WORKSPACE", Value: "true"}, {Name: "NO_BROWSER", Value: "true"},
 		{Name: "GEMINI_SYSTEM_MD", Value: "false"}, {Name: "GEMINI_WRITE_SYSTEM_MD", Value: "false"},
 		{Name: "CODE_ASSIST_ENDPOINT", Value: cmp.Or(req.Env["CODE_ASSIST_ENDPOINT"], geminiCodeAssist)},
 		{Name: "GOOGLE_GEMINI_BASE_URL", Value: req.Env["GOOGLE_GEMINI_BASE_URL"]},
-		{Name: "GOOGLE_VERTEX_BASE_URL", Value: req.Env["GOOGLE_VERTEX_BASE_URL"]}}
+		{Name: "GOOGLE_VERTEX_BASE_URL", Value: req.Env["GOOGLE_VERTEX_BASE_URL"]}}, geminiTelemetryPins(req, paths)...)
+}
+
+// geminiTelemetryPins turn on Gemini CLI's own telemetry, into the run's file
+// alone ([Paths.GeminiTelemetry]), for a CAPPED run alone: the record its turn
+// cap is counted off, which nothing else reads, so an uncapped run writes none
+// and the file is bounded by the cap ([geminiTelemetryRecord]). PINNED IN THE
+// ENVIRONMENT, which outranks every settings file (measured on 0.70.0): a file
+// switches the OTLP export off, and the local target keeps a "gcp" one from
+// exporting ahead of it (0 connections in a run whose home's settings named
+// both). The prompts stay out of the file.
+func geminiTelemetryPins(req sandbox.RunRequest, paths Paths) []Pinned {
+	if req.Limits.MaxTurns <= 0 {
+		return nil
+	}
+	return []Pinned{{Name: "GEMINI_TELEMETRY_ENABLED", Value: "true"}, {Name: "GEMINI_TELEMETRY_TARGET", Value: "local"},
+		{Name: "GEMINI_TELEMETRY_LOG_PROMPTS", Value: "false"}, {Name: "GEMINI_TELEMETRY_OUTFILE", Value: paths.GeminiTelemetry()}}
 }
 
 // routing answers [router] with the endpoints [GeminiCLI.Pins] fills from the
@@ -558,8 +587,8 @@ var _ homeKeeper = GeminiCLI{}
 // where the home had none; nothing where none is held, so it runs any number
 // of times; and the checkouts' copies removed and a skip log no script
 // printed dropped ([checkoutHome.restore], [checkoutHome.dropSkipped]).
-func (GeminiCLI) homeRestore(paths Paths) string {
-	h := geminiCheckoutHome(paths)
+func (g GeminiCLI) homeRestore(paths Paths) string {
+	h := g.checkoutHome(paths)
 	return everyStep(fmt.Sprintf(`if [ -e %[1]s ]; then if [ -s %[1]s ]; then cat %[1]s > %[2]s && rm -f %[1]s; else rm -f %[1]s %[2]s; fi; fi`,
 		shellword.Quote(paths.GeminiHeldSettings()), shellword.Quote(paths.GeminiHomeSettings())), h.restore(), h.dropSkipped())
 }
@@ -633,5 +662,5 @@ func (GeminiCLI) artifactFiles(p Paths) []string {
 		p.GeminiAdminPolicy() + "/crewlet.toml",
 		p.GeminiSettings(), p.GeminiSettings() + ".fresh", p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem(),
 		p.GeminiUsageBefore(), p.GeminiUsageBefore() + ".part", p.GeminiNoteHelper(), p.GeminiCheckoutLaunch(),
-		p.GeminiCheckoutSections(), p.GeminiCheckoutRoots()}
+		p.GeminiCheckoutSections(), p.GeminiCheckoutRoots(), p.GeminiTelemetry()}
 }

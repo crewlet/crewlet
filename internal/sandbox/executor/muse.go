@@ -62,12 +62,6 @@ func (Muse) Name() string { return MuseName }
 // 1050-second bound was answered whole (measured on 1.4.25).
 func (Muse) MCPCallCeiling() time.Duration { return 0 }
 
-// CountedAtCollection implements [collectionCounted].
-func (Muse) CountedAtCollection() string {
-	return "its stream states a run's requests once, " +
-		"on the run.usage line Muse Code prints as that run ends"
-}
-
 // Resumes says Muse Code continues a session it ran: `muse exec --session-id`
 // on an id its data directory holds resumes it (measured on 1.4.25).
 func (Muse) Resumes() bool { return true }
@@ -128,7 +122,7 @@ func (Muse) Command(req sandbox.RunRequest, session Session, paths Paths, _ stri
 // asked to end: the end protocol (end.go); the release read and held to
 // [museSupported]; the session named, restored where it was carried, and recorded
 // ([museSessionGate], [Paths.SessionRecord]); the checkouts below the start
-// directory handed ([museCheckoutHome]); the harness run under the end
+// directory handed ([Muse.checkoutHome]); the harness run under the end
 // protocol ([launchHarness]); its subagents' usage added to the stream
 // ([museChildUsage]); and its session packed ([museCapture]), exiting with
 // the harness's status.
@@ -177,7 +171,7 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	// and what a firing left out said, however the script exits, each step
 	// whatever came of the others ([everyStep]); a run killed outright leaves
 	// them to the next run's clear ([Muse.mendHome], [Muse.homeRestore]).
-	home := museCheckoutHome(paths)
+	home := Muse{}.checkoutHome(paths)
 	put := everyStep(home.restore(), home.saySkipped())
 	line(`museput() { %s; }; trap museput EXIT`, everyStep(put, museRestore(paths)))
 	b.WriteString(endPrologue(paths, stop))
@@ -193,18 +187,24 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
 	b.WriteString(museWiring(paths))
-	// THE CHECKOUTS BELOW THE START DIRECTORY ([museCheckoutHome]), once the
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([Muse.checkoutHome]), once the
 	// plugin whose hook hands a later one is installed.
 	line(`mkdir -p %s %s || exit 1`, q(paths.MuseConfig()), q(paths.MuseSkills()))
 	b.WriteString(home.gate())
 	before, after := museChildUsage(paths)
 	b.WriteString(before)
+	counted, traced := museTraces(paths)
+	b.WriteString(counted)
+	watched, unwatched := musePointer(paths)
+	b.WriteString(watched)
 	watch := ""
 	if own := museOwnServers(req); len(own) > 0 {
 		b.WriteString(museGuard(paths, own))
 		watch = "museguard"
 	}
 	b.WriteString(launchWatched(strings.Join(parts, " "), watch, paths))
+	b.WriteString(unwatched)
+	b.WriteString(traced)
 	line(`%s; trap - TERM INT HUP`, put)
 	b.WriteString(after)
 	b.WriteString(museUnwire(paths))
@@ -401,6 +401,36 @@ func museChildUsage(paths Paths) (before, after string) {
 		`while IFS= read -r f; do n=$(sed -n "s|^ *\([0-9][0-9]*\) $f\$|\1|p" ` + lines + ` | head -n 1); ` +
 		`tail -n +"$((${n:-0} + 1))" "$f" | grep -F '"kind":"model_completed"'; done; fi` + "\n"
 	return before, after
+}
+
+// museTraces is the two parts of a run's script around its harness that read
+// its model requests off the main thread's session.jsonl ([museTraceKind]):
+// before the launch, the file's lines as the run begins (mb); after it, on an
+// end too, the run's own traces added to the stream ([museTraceEvent]).
+func museTraces(paths Paths) (before, after string) {
+	q := shellword.Quote
+	sessions := q(paths.MuseSessions())
+	before = `mb=0; for y in ` + sessions + `/*/*/*/"$s"; do [ -s "$y/session.jsonl" ] && [ ! -L "$y" ] && mb=$(wc -l < "$y/session.jsonl"); done
+`
+	after = museFind(paths) + `if [ -n "$x" ]; then tail -n +"$((mb + 1))" "$x/session.jsonl" | grep -F ` +
+		q(museTraceNeedle) + ` | sed 's/^/{"payload_type":"` + museTraceEvent + `","line":/; s/$/}/'; fi
+`
+	return before, after
+}
+
+// musePointer is the two parts of a run's script around its harness that name
+// the main thread's session.jsonl in [Paths.CountRecord] once Muse writes it,
+// with its lines as the run began (mb, [museTraces]), for the live count
+// ([Muse.liveRecord]): a watcher started before the launch, stopped after it.
+func musePointer(paths Paths) (start, stop string) {
+	q := shellword.Quote
+	sessions, pointer := q(paths.MuseSessions()), q(paths.CountRecord())
+	start = `( while kill -0 $$ 2> /dev/null; do for y in ` + sessions + `/*/*/*/"$s"; do if [ -s "$y/session.jsonl" ] && [ ! -L "$y" ]; then printf '%s\n%s\n' "$y/session.jsonl" "$mb" > ` + pointer + `.next && mv -f ` + pointer + `.next ` + pointer + `; exit 0; fi; done; sleep 0.1; done ) &
+mwp=$!
+`
+	stop = `kill "$mwp" 2> /dev/null
+`
+	return start, stop
 }
 
 // museArchiveFormat is the layout a Muse Code run packs its session in
@@ -1006,7 +1036,7 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 
 // writeMuseCheckouts writes what a run's plugin and its checkouts need, the
 // note helper written already: the checkouts' launch config and the foreign
-// rules Muse would load in the home file's place ([museCheckoutHome]); the
+// rules Muse would load in the home file's place ([Muse.checkoutHome]); the
 // take config where the run has notes or loads; and the plugin
 // ([musePluginManifest]) where it has any hook, the nested one where hooked;
 // skipped, lines the launch keeps in the run's skip log. A box with no helper
@@ -1025,7 +1055,7 @@ func writeMuseCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbox.Ru
 	rules, skills := museForeignOn(settings)
 	spec := museCheckouts(paths, skills)
 	spec.Skipped = skipped
-	launch := museCheckoutHome(paths).launchConfig(spec, req.ReportedRepos)
+	launch := Muse{}.checkoutHome(paths).launchConfig(spec, req.ReportedRepos)
 	if err = box.WriteFile(ctx, paths.MuseCheckoutLaunch(), launch); err != nil {
 		return fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
@@ -1275,7 +1305,7 @@ func museCapabilitiesBack(settings map[string]json.RawMessage, home []byte, file
 // the note helper, its take configs, its answer to the notes plugin's install,
 // the count of its subagents' lines its script kept, and its checkouts'
 // launch config, sections, foreign rules list and the home rules file's
-// opening text ([museCheckoutHome]). The record of the
+// opening text ([Muse.checkoutHome]). The record of the
 // servers it added and the home's held settings stay for the clear to put the
 // home's back by ([Muse.mendHome]);
 // the home's settings, skills, instructions and plugins, its sessions and its

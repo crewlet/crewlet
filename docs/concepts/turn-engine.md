@@ -406,7 +406,7 @@ Resolution order for a satellite (`phase.Registry.Chain`): the role's per-phase 
 
 The first-turn onboarding pass, which runs on the engine's own tool loop, has a tool-call round cap (`onboarding_max_tool_rounds`, 10 by default). When the LLM exhausts it before finishing, the pass ends unmarked and retries next turn, discarding in-progress work even if the agent was close.
 
-The executor is not judged. It is its harness's own run, whose rounds the harness counts against `role.sandbox.max_turns` / `providers.sandbox.default_max_turns` where either sets a cap, and uncapped otherwise ([Code Sandbox](code-sandbox.md)). A run that stops without submitting, on such a cap or any other way, is rescued: the engine writes an `incomplete` outcome and the reviewer judges the record.
+The executor is not judged. It is its harness's own run, whose model requests its harness and the engine count against `role.sandbox.max_turns` / `providers.sandbox.default_max_turns` where either sets a cap, and uncapped otherwise ([Each runner's cap](code-sandbox.md#each-runners-cap)). A run that stops without submitting, on such a cap or any other way, is rescued: the engine writes an `incomplete` outcome and the reviewer judges the record.
 
 The **extension judge** interposes between exhaustion and rescue: a cheap LLM call inspects the tool log and the last assistant message and decides:
 

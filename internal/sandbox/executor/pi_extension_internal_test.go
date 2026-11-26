@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -93,8 +94,9 @@ type piProbe struct {
 	t       *testing.T
 	stdin   io.WriteCloser
 	reports chan piProbeReport
-	// dir is the probe's working directory, its ctx.cwd.
-	dir string
+	// dir is the probe's working directory, its ctx.cwd; stderr, the file
+	// its error stream goes to.
+	dir, stderr string
 }
 
 // startPiProbe renders the extension with settings and runs it.
@@ -115,9 +117,15 @@ func startPiProbe(t *testing.T, settings piExtensionSettings) *piProbe {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &piProbe{t: t, reports: make(chan piProbeReport, 256), dir: dir}
+	p := &piProbe{t: t, reports: make(chan piProbeReport, 256), dir: dir, stderr: filepath.Join(dir, "stderr")}
+	errs, err := os.Create(p.stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = errs.Close() })
 	cmd := exec.Command(node, probe, ext) //nolint:gosec // the suite's own probe
 	cmd.Dir = dir
+	cmd.Stderr = errs
 	cmd.Env = append(os.Environ(), "NODE_NO_WARNINGS=1")
 	if p.stdin, err = cmd.StdinPipe(); err != nil {
 		t.Fatal(err)
@@ -493,8 +501,7 @@ func TestThePiExtensionAddsWhatTheNoteHelperHandsToTheToolsResult(t *testing.T) 
 		"hang) trap 'echo killed >> \"$c\"; kill $!; exit 143' TERM; sleep 30 & wait;; fail) echo partial; exit 3;; esac\n" +
 		"cat " + shellword.Quote(said) + "\n"
 	writeHostProgram(t, helper, []byte(script), 0o700)
-	p := startPiProbe(t, piExtensionSettings{Checkouts: &piNestedHand{Helper: helper, Config: "/run/nested.json",
-		TimeoutMs: 500, MaxOutput: piNestedMaxOutput}})
+	p := startPiProbe(t, piExtensionSettings{Checkouts: piTestHand(helper, 500)})
 	p.expect("loaded")
 	result := func(saying string, event map[string]any) string {
 		t.Helper()
@@ -528,9 +535,153 @@ func TestThePiExtensionAddsWhatTheNoteHelperHandsToTheToolsResult(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := strings.Repeat("-adapter|pi-nested|-config|/run/nested.json|\n", 4) + "killed\n"; string(raw) != want {
+	firing := fmt.Sprintf("-adapter|pi-nested|-config|/run/nested.json|-room|%d|\n", piNestedFallbackRoom-len("OWN"))
+	if want := strings.Repeat(firing, 4) + "killed\n"; string(raw) != want {
 		t.Errorf("the helper was run as\n%s\nwant four firings, none for the nested call and none fed any input, "+
 			"the last stopped at its bound:\n%s", raw, want)
+	}
+}
+
+// piTestHand is a run's hand for the helper at helper, its timeout timeoutMs
+// and the run's own bounds.
+func piTestHand(helper string, timeoutMs int64) *piNestedHand {
+	return &piNestedHand{Helper: helper, Config: "/run/nested.json", TimeoutMs: timeoutMs,
+		MaxOutput: piNestedMaxOutput, MaxRoom: piNestedMaxRoom, FallbackRoom: piNestedFallbackRoom,
+		MinRoom: piNestedMinRoom}
+}
+
+// THE EXTENSION HANDS THE HELPER THE ROOM PI LEAVES: -room is what
+// ctx.getContextUsage leaves below the window less pi's compaction reserve
+// twice (override, setting, 16,384), less the batch's results (an image
+// 4,800), four characters a token, within the most room. A parallel batch
+// hands at its last result, each other result (one ended unrun too, a nested
+// one never) ceil(characters/4); a sequential call is a batch alone, and
+// turn_end drops one left open. With no tokens, the fallback, within half
+// what the window leaves an empty context, said once; under the floor, none.
+//
+// Mutation: take the reserve once, skip the override, image, cap, floor
+// edge, a sibling or its rounding, the fallback's cap or the turn's reset,
+// or say the fallback each time, and a case goes red.
+func TestThePiExtensionHandsTheHelperTheRoomPiLeaves(t *testing.T) {
+	t.Parallel()
+	usage := func(tokens any, window int) map[string]any {
+		return map[string]any{"tokens": tokens, "contextWindow": window}
+	}
+	reserves := map[string]any{"compaction": map[string]any{"reserveTokens": 20_000,
+		"modelOverrides": map[string]any{"p/m": map[string]any{"reserveTokens": 30_000}}}}
+	texts := func(s string) []map[string]any { return []map[string]any{{"type": "text", "text": s}} }
+	image := []map[string]any{{"type": "text", "text": "OWN"}, {"type": "image", "data": "", "mimeType": "image/png"}}
+	big := strings.Repeat("R", 39_500)
+	type step struct {
+		name  string
+		event map[string]any
+		room  int // a tool_result's -room, 0 for no firing
+	}
+	start := func(id string) step { return step{"tool_execution_start", map[string]any{"toolCallId": id}, 0} }
+	end := func(id, text string) step { // pi ends every call after its tool_result
+		return step{"tool_execution_end", map[string]any{"toolCallId": id, "result": map[string]any{"content": texts(text)}}, 0}
+	}
+	result := func(id string, content []map[string]any, room int) step {
+		return step{"tool_result", map[string]any{"toolCallId": id, "toolName": "bash", "content": content}, room}
+	}
+	free := 200_000 - 2*16_384 - 1_000 // tokens below pi's reserve twice, 1,000 used
+	for _, c := range []struct {
+		name     string
+		usage    map[string]any
+		settings map[string]any
+		model    map[string]any
+		steps    []step
+	}{
+		{"pi's own reserve", usage(1_000, 200_000), nil, nil, []step{result("a", texts("OWN"), 4*free-3)}},
+		{"the model's override", usage(1_000, 200_000), reserves, map[string]any{"provider": "p", "id": "m"},
+			[]step{result("a", texts("OWN"), 4*(200_000-2*30_000-1_000)-3)}},
+		{"the setting", usage(1_000, 200_000), reserves, map[string]any{"provider": "p", "id": "x"},
+			[]step{result("a", texts("OWN"), 4*(200_000-2*20_000-1_000)-3)}},
+		{"an image", usage(1_000, 200_000), nil, nil, []step{result("a", image, 4*free-3-4_800)}},
+		{"a window past the cap", usage(0, 20_000_000), nil, nil, []step{result("a", texts("OWN"), piNestedMaxRoom)}},
+		{"at the least room", usage(6_208, 40_000), nil, nil, []step{result("a", texts(""), piNestedMinRoom)}},
+		{"a character under it", usage(6_208, 40_000), nil, nil, []step{result("a", texts("O"), 0)}},
+		{"a parallel batch", usage(1_000, 200_000), nil, nil, []step{start("a"), start("b"), start("c"),
+			result("c", texts("cloned"), 0), end("c", "cloned"), result("a", texts(big+"R"), 0), end("a", big+"R"),
+			result("b", texts(big), 4*(free-2-9_876)-39_500), end("b", big)}},
+		{"a call ended unrun", usage(1_000, 200_000), nil, nil, []step{start("a"),
+			{"tool_execution_end", map[string]any{"toolCallId": "a", "result": map[string]any{"content": texts("refused")}}, 0},
+			start("b"), start("c"), result("b", texts("OWN"), 0), result("c", texts("OWN"), 4*(free-2-1)-3)}},
+		{"a nested call", usage(1_000, 200_000), nil, nil, []step{start("a"),
+			{"tool_execution_start", map[string]any{"toolCallId": "n", "parentToolCallId": "a"}, 0},
+			result("a", texts("OWN"), 4*free-3)}},
+		{"sequential calls", usage(1_000, 200_000), nil, nil, []step{start("a"), result("a", texts("OWN"), 4*free-3),
+			start("b"), result("b", texts("OWN"), 4*free-3)}},
+		{"a turn ended open", usage(1_000, 200_000), nil, nil, []step{start("a"),
+			{"turn_end", map[string]any{"entries": []any{}}, 0}, start("b"), result("b", texts("OWN"), 4*free-3)}},
+		{"no tokens known", usage(nil, 200_000), nil, nil, []step{result("a", texts("OWN"), piNestedFallbackRoom-3)}},
+		{"no tokens, a parallel batch", usage(nil, 200_000), nil, nil, []step{start("a"), start("b"),
+			result("a", texts("cloned"), 0), end("a", "cloned"), result("b", texts("OWN"), piNestedFallbackRoom-4*2-3)}},
+		{"no tokens in a small window", usage(nil, 60_000), nil, nil,
+			[]step{result("a", texts("OWN"), 2*(60_000-2*16_384)-3)}},
+		{"no tokens in a window under the least room", usage(nil, 34_000), nil, nil, []step{result("a", texts("OWN"), 0)}},
+		{"no usage, twice", nil, nil, nil, []step{result("a", texts("OWN"), piNestedFallbackRoom-3),
+			result("b", texts("OWN"), piNestedFallbackRoom-3)}},
+	} {
+		dir := t.TempDir()
+		helper, calls := filepath.Join(dir, "notehelper"), filepath.Join(dir, "calls")
+		script := "#!/bin/sh\nprintf '%s ' \"$@\" >> " + shellword.Quote(calls) + "; echo >> " + shellword.Quote(calls) +
+			"\necho HANDED\n"
+		writeHostProgram(t, helper, []byte(script), 0o700)
+		p := startPiProbe(t, piExtensionSettings{Checkouts: piTestHand(helper, 60_000)})
+		p.expect("loaded")
+		p.send(map[string]any{"op": "usage", "usage": c.usage})
+		p.send(map[string]any{"op": "settings", "settings": c.settings})
+		p.send(map[string]any{"op": "model", "model": c.model})
+		var want []string
+		for _, s := range c.steps {
+			got := string(p.handled(s.name, s.event).Result)
+			if s.name != "tool_result" {
+				continue
+			}
+			if s.room > 0 {
+				want = append(want, fmt.Sprintf("-adapter pi-nested -config /run/nested.json -room %d ", s.room))
+			}
+			if handed := strings.Contains(got, "HANDED"); handed != (s.room > 0) {
+				t.Errorf("%s: %s's result handed %v (%s), want %v", c.name, s.event["toolCallId"], handed, got, s.room > 0)
+			}
+		}
+		raw, err := os.ReadFile(calls) //nolint:gosec // the case's own file
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		var wantRaw strings.Builder
+		for _, w := range want {
+			wantRaw.WriteString(w + "\n")
+		}
+		if string(raw) != wantRaw.String() {
+			t.Errorf("%s: the helper ran as\n%s\nwant\n%s", c.name, raw, wantRaw.String())
+		}
+		errs, err := os.ReadFile(p.stderr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fallback := c.usage == nil || c.usage["tokens"] == nil
+		if n := strings.Count(string(errs), "pi gave no context usage"); n != map[bool]int{true: 1, false: 0}[fallback] {
+			t.Errorf("%s: the fallback was said %d times:\n%s", c.name, n, errs)
+		}
+	}
+}
+
+// THE EXTENSION'S OUTPUT BOUND HOLDS A WHOLE ANSWER: a pi-nested answer
+// within the most room a firing is handed prints at most three bytes a
+// UTF-16 unit, and the extension hands nothing of an answer past its output
+// bound (measured), so the bound must hold the largest; the fallback and
+// least rooms lie within it.
+//
+// Mutation: raise the room past a third of the output bound, and this goes red.
+func TestThePiExtensionsOutputBoundHoldsAWholeAnswer(t *testing.T) {
+	t.Parallel()
+	if answer := 3 * piNestedMaxRoom; answer > piNestedMaxOutput {
+		t.Errorf("a firing may print %d bytes, past the extension's bound of %d", answer, piNestedMaxOutput)
+	}
+	if piNestedMinRoom > piNestedFallbackRoom || piNestedFallbackRoom > piNestedMaxRoom {
+		t.Errorf("the rooms %d <= %d <= %d do not hold", piNestedMinRoom, piNestedFallbackRoom, piNestedMaxRoom)
 	}
 }
 
@@ -546,8 +697,7 @@ func TestThePiExtensionKeepsPollingWhileTheNoteHelperRuns(t *testing.T) {
 	helper, release := filepath.Join(dir, "notehelper"), filepath.Join(dir, "release")
 	script := "#!/bin/sh\nuntil [ -e " + shellword.Quote(release) + " ]; do sleep 0.05; done\n"
 	writeHostProgram(t, helper, []byte(script), 0o700)
-	p := startPiProbe(t, piExtensionSettings{Notes: route.url, Checkouts: &piNestedHand{Helper: helper,
-		Config: "/run/nested.json", TimeoutMs: 60_000, MaxOutput: piNestedMaxOutput}})
+	p := startPiProbe(t, piExtensionSettings{Notes: route.url, Checkouts: piTestHand(helper, 60_000)})
 	p.expect("loaded")
 	p.event("agent_start", map[string]any{})
 	p.expect("handled")

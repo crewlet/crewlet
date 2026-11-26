@@ -1,6 +1,7 @@
 package advisor_test
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -104,6 +106,38 @@ func TestARunEndedOnItsCapIsTheOwnersToRaise(t *testing.T) {
 	ev.RunsUnread = true
 	if got := stalls(t, stallShape, ev, advisor.ClassRoundCap); len(got) != 0 {
 		t.Errorf("an unread source raised %+v", got)
+	}
+}
+
+// A CAP IS RAISED NO HIGHER THAN A CAP MAY BE: twice the cap, at most
+// config.RoundCapCeiling, so a seat near it is offered the ceiling, and a
+// seat at it is offered no raise the config would refuse, only splitting its
+// items or lifting its cap.
+//
+// Mutation: offer twice the cap past the ceiling, or a raise at it, and a row
+// goes red.
+func TestARoundCapIsRaisedNoHigherThanItsCeiling(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		cap  int
+		want []any
+	}{{config.RoundCapCeiling - 400, []any{config.RoundCapCeiling, 0}}, {config.RoundCapCeiling, []any{0}}} {
+		doc := stallShape + fmt.Sprintf("    sandbox: {max_turns: %d}\n", c.cap)
+		ev := advisor.Evidence{Runs: []advisor.EndedRun{capped("ops", "t4", 2_000_000, int64(c.cap))}}
+		found := stalls(t, doc, ev, advisor.ClassRoundCap)
+		if len(found) != 1 {
+			t.Fatalf("a cap of %d raised %+v, want one finding", c.cap, found)
+		}
+		var caps []any
+		for _, o := range found[0].Fix.Options {
+			caps = append(caps, o.Change.Merge["sandbox"].(map[string]any)["max_turns"])
+		}
+		if !slices.Equal(caps, c.want) {
+			t.Errorf("a cap of %d is offered %v, want %v", c.cap, caps, c.want)
+		}
+		if c.cap == config.RoundCapCeiling && !strings.Contains(found[0].Fix.Sentence, "split its items") {
+			t.Errorf("a cap at the ceiling says %q, want its items split or its cap lifted", found[0].Fix.Sentence)
+		}
 	}
 }
 

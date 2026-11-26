@@ -83,8 +83,8 @@ func (h checkoutHome) removeSiblingStaging() string {
 // itself, each an `@<absolute path>` import, Limit not applying (Claude Code,
 // measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code import no absolute
 // path from a home file, measured on 0.70.0 and 0.28.4); SkillSep, what joins
-// a copy's repository and skill, "" for `:`; FiringLimit, a nested firing's
-// bound in bytes on all its checkouts' files, nil for none; Gated where the
+// a copy's repository and skill, "" for `:`; FiringLimit, a firing's bound in
+// bytes, nil for none; LaunchSkillsLoaded, no launch copy; Gated where the
 // harness's own code answers (internal/notehelper's checkoutGate); Budget, the
 // bound the sections share with the run's own text, nil for none.
 type checkoutSpec struct {
@@ -93,6 +93,7 @@ type checkoutSpec struct {
 	FiringLimit        *int
 	SkillDirs          []checkoutSkillDir
 	NestedSkillsOnly   bool
+	LaunchSkillsLoaded bool
 	ImportInstructions bool
 	SkillSep           checkoutSkillSep
 	Gated              bool
@@ -243,6 +244,9 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	}
 	if spec.Gated {
 		config["gated"] = true
+	}
+	if spec.LaunchSkillsLoaded {
+		config["launchSkillsLoaded"] = true
 	}
 	if spec.Budget != nil {
 		config["budget"] = spec.Budget

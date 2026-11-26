@@ -8,6 +8,7 @@
 //   {"op":"tools","names":[...]}           what pi.getAllTools() and getActiveTools() name from now on
 //   {"op":"settings","settings":S}         what pi.getSettings() answers
 //   {"op":"usage","usage":U}               what ctx.getContextUsage() answers
+//   {"op":"model","model":M}               ctx.model
 //   {"op":"event","name":N,"event":E}      every handler of N, awaited in order
 //
 // Reports, one JSON object a line on stdout: `loaded`, `register` (name,
@@ -72,7 +73,8 @@ for await (const line of createInterface({ input: process.stdin })) {
     const command = JSON.parse(line)
     if (command.op === "tools") tools = command.names
     if (command.op === "usage") usage = command.usage
-    if (command.op === "settings") settings = command.settings
+    if (command.op === "settings") settings = command.settings ?? {}
+    if (command.op === "model") ctx.model = command.model ?? undefined
     if (command.op === "event") {
       const event = command.event ?? {}
       let result

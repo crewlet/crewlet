@@ -60,6 +60,7 @@ type claudeEventWire struct {
 type claudeMessageWire struct {
 	Content json.RawMessage `json:"content"`
 	ID      json.RawMessage `json:"id"`
+	Model   json.RawMessage `json:"model"`
 	Usage   json.RawMessage `json:"usage"`
 }
 
@@ -432,7 +433,12 @@ func (d *claudeEvents) Line(line []byte) {
 		}
 	case "assistant":
 		message := claudeMessageOf(ev.Message)
-		d.requested(looseString(message.ID))
+		// A `<synthetic>` MESSAGE IS CLAUDE CODE'S OWN, written for a turn it
+		// ended itself ("Autocompact is thrashing", measured on 2.1.330): no
+		// request of the model's.
+		if looseString(message.Model) != claudeSyntheticModel {
+			d.requested(looseString(message.ID))
+		}
 		d.count(looseString(message.ID), looseUsage(message.Usage))
 		d.measure(ev.ParentToolUseID, message.Usage)
 		_ = eachClaudeBlock(message.Content, func(block claudeBlock) error {
@@ -522,7 +528,9 @@ func (d *claudeEvents) Skipped(line LongLine) {
 	switch lineType(line) {
 	case "assistant":
 		if id := windowField(line.Head, "id", false); id != "" {
-			d.requested(id)
+			if windowField(line.Head, "model", false) != claudeSyntheticModel {
+				d.requested(id)
+			}
 		} else {
 			d.undecided++
 		}
@@ -554,13 +562,14 @@ func (d *claudeEvents) Ended() bool { return d.ended }
 // Requests implements [Decoder]: the assistant messages the stream named, by
 // id, every thread's, a subagent's included, and a summary request for each
 // compaction it recorded ([subtypeCompactBoundary]), whose request no message
-// names. Never the result's `num_turns`, which is the harness's own word on
-// its count and absent where it was cut off. Measured on 2.1.330 against a
-// stand-in: ids equal the requests answered (31 of 31; 7 of 7 with a
-// subagent's 3, where num_turns said 1; 3 under a cap of 3, where it said 4),
-// and a 429 or 500 retried names no id of its own; a run that compacted once
-// wrote one boundary and no message for its summary, and a summary request it
-// made again, after the stand-in's unusable answer, wrote nothing to count.
+// names; never a `<synthetic>` message, Claude Code's own, nor the result's
+// `num_turns`, its own word on its count, absent where it was cut off.
+// Measured on 2.1.330 against a stand-in: ids equal the requests answered (31
+// of 31; 7 of 7 with a subagent's 3, where num_turns said 1; 3 under a cap of
+// 3, where it said 4), and a 429 or 500 retried names no id of its own; a run
+// that compacted once wrote one boundary and no message for its summary, and a
+// summary request it made again, after the stand-in's unusable answer, wrote
+// nothing to count.
 func (d *claudeEvents) Requests() int { return len(d.requests) + d.compactions }
 
 // InFlight implements [Decoder]: none, as Claude Code's own --max-turns

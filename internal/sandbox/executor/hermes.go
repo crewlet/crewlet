@@ -46,12 +46,6 @@ func (Hermes) Name() string { return HermesName }
 // progress token, so the bridge's progress keeps the response from it.
 func (Hermes) MCPCallCeiling() time.Duration { return 0 }
 
-// CountedAtCollection implements [collectionCounted].
-func (Hermes) CountedAtCollection() string {
-	return "its stdout marks no model request: " +
-		"the plugin's record its count reads is appended by the run's script once Hermes exits"
-}
-
 // HandsSkills reports that a Hermes run takes skills of its own, installed in
 // [Paths.HermesSkills] beside the box's.
 func (Hermes) HandsSkills() bool { return true }
@@ -148,7 +142,7 @@ func hermesScript(req sandbox.RunRequest, session Session, paths Paths, times he
 	b.WriteString(hermesFinish(paths))
 	// THE CHECKOUTS' COPIES OUT OF THE HOME'S SKILLS once the gateway, where
 	// their firings run, has stopped, and what those firings left out said
-	// ([hermesCheckoutHome]), each step whatever came of the other; a run
+	// ([Hermes.checkoutHome]), each step whatever came of the other; a run
 	// killed outright leaves them to the next run's clear ([homeKeeper]).
 	home := hermesLaunchHome(paths, req.Model)
 	line(`hput() { %s; }`, everyStep(home.restore(), home.saySkipped()))

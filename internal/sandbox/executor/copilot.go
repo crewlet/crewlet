@@ -68,12 +68,6 @@ func (Copilot) Name() string { return CopilotName }
 // answered whole (measured on 1.0.114).
 func (Copilot) MCPCallCeiling() time.Duration { return 0 }
 
-// CountedAtCollection implements [collectionCounted].
-func (Copilot) CountedAtCollection() string {
-	return "its stream marks no model request: " +
-		"the usage records its count reads are appended by the run's script once Copilot exits"
-}
-
 // Resumes says Copilot continues a session it reported: `--session-id` on an
 // id its home holds resumes it (measured on 1.0.114).
 func (Copilot) Resumes() bool { return true }
@@ -193,7 +187,7 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 	// a run killed first leaves them to the next run's clear ([homeKeeper]).
 	// AND WHAT THE RUN'S HANDING LEFT OUT SAID first ([checkoutHome.saySkipped]),
 	// once per run, whatever its attempts.
-	line(`cput() { %s; %s; }; trap cput EXIT`, copilotCheckoutHome(paths).saySkipped(), Copilot{}.homeRestore(paths))
+	line(`cput() { %s; %s; }; trap cput EXIT`, Copilot{}.checkoutHome(paths).saySkipped(), Copilot{}.homeRestore(paths))
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
 	b.WriteString(copilotRelease)
@@ -218,10 +212,14 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 		q(paths.SessionRecord()))
 	line(`ev=%s/"$s"/events.jsonl`, q(paths.CopilotHome()+"/"+copilotSessionState))
 	b.WriteString(copilotJournalAtLaunch())
-	// THE CHECKOUTS BELOW THE START DIRECTORY ([copilotCheckoutHome]), beside the
+	// THE JOURNAL AND ITS LINES AS THE RUN BEGINS, for the live count
+	// ([Copilot.liveRecord]).
+	line(`printf '%%s\n%%s\n' "$ev" "$el" > %s.next && mv -f %s.next %s`, q(paths.CountRecord()),
+		q(paths.CountRecord()), q(paths.CountRecord()))
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([Copilot.checkoutHome]), beside the
 	// person's own instruction directories (pi, ps).
 	line(`pi=${COPILOT_CUSTOM_INSTRUCTIONS_DIRS-}; ps=${COPILOT_CUSTOM_INSTRUCTIONS_DIRS+1}`)
-	b.WriteString(copilotCheckoutHome(paths).prepare())
+	b.WriteString(Copilot{}.checkoutHome(paths).prepare())
 	b.WriteString(copilotAttempts(paths, strings.Join(parts, " ")))
 	b.WriteString(copilotUsage())
 	b.WriteString(copilotCapture(paths))
@@ -726,7 +724,7 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 		// THE PERSON'S OWN INSTRUCTIONS STILL LOAD, after the run's, in the one
 		// file Copilot reads them from: the script writes both and the
 		// checkouts' sections, and puts the home's back as the run ends
-		// ([copilotCheckoutHome]).
+		// ([Copilot.checkoutHome]).
 		if err = box.WriteFile(ctx, paths.CopilotRunInstructions(), []byte(system)); err != nil {
 			return "", fmt.Errorf("executor: writing Copilot's standing instructions: %w", err)
 		}
@@ -741,7 +739,7 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 			return "", fmt.Errorf("executor: writing the check of a refused launch: %w", err)
 		}
 	}
-	launch := copilotCheckoutHome(paths).launchConfig(copilotCheckouts(), req.ReportedRepos)
+	launch := c.checkoutHome(paths).launchConfig(copilotCheckouts(), req.ReportedRepos)
 	if err = box.WriteFile(ctx, paths.CopilotCheckoutLaunch(), launch); err != nil {
 		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
@@ -896,8 +894,8 @@ var _ homeKeeper = Copilot{}
 // script printed ([checkoutHome.dropSkipped]), each whatever came of the
 // others ([everyStep]), run by the script as it exits, after it printed that
 // log, and by the clear before every run whichever harness it runs.
-func (Copilot) homeRestore(p Paths) string {
-	h := copilotCheckoutHome(p)
+func (c Copilot) homeRestore(p Paths) string {
+	h := c.checkoutHome(p)
 	return everyStep(putBackHome(p.CopilotSettings(), p.CopilotHeldSettings()), h.restore(), h.dropSkipped())
 }
 

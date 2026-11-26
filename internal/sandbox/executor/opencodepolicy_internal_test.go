@@ -64,7 +64,8 @@ func TestOpenCodesPoliciesAreReadAsOpenCodeReadsThem(t *testing.T) {
 func TestEachOpenCodePluginIsKnownByTheIDItsSourceDeclares(t *testing.T) {
 	t.Parallel()
 	want := map[string]string{"opencode-steer": "crewlet.steer", "opencode-skill-loads": "crewlet.skills",
-		"opencode-tool-env": "crewlet.toolenv", "opencode-checkouts-plugin": "crewlet.checkouts"}
+		"opencode-tool-env": "crewlet.toolenv", "opencode-checkouts-plugin": "crewlet.checkouts",
+		"opencode-count": "crewlet.count"}
 	if !maps.Equal(openCodePluginIDs, want) {
 		t.Errorf("the run's plugins are known as %v, want %v", openCodePluginIDs, want)
 	}

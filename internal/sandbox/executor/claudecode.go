@@ -215,7 +215,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// (the NO_PROXY steps, the session gate, a refusal below) or a teardown's
 	// signal, which ends the harness first. Set before the gate, whose own exits
 	// it covers too; the put-back does nothing where nothing is held.
-	line(`chome() { %s; }; trap chome EXIT`, claudeCheckoutHome(paths).restore())
+	line(`chome() { %s; }; trap chome EXIT`, ClaudeCode{}.checkoutHome(paths).restore())
 	line(`trap 'end "$harness"; chome; trap - EXIT; exit 143' TERM; trap 'end "$harness"; chome; trap - EXIT; exit 130' INT; trap 'end "$harness"; chome; trap - EXIT; exit 129' HUP`)
 	// THE CHECKOUTS' INSTRUCTIONS AND SKILLS, and the hook that hands a later
 	// checkout's skills ([claudeCheckoutsGate]), started only where hooks run

@@ -1090,12 +1090,11 @@ type Runner interface {
 	// has said nothing yet reads as nothing rather than as an error.
 	Follow(handle RunHandle) LiveReading
 
-	// Count begins a LIVE COUNT of the model requests a running job's stream
-	// shows ([Counter]), for the watch that ends a run past its turn cap
+	// Count begins a LIVE COUNT of the model requests a running job shows
+	// ([Counter]), for the watch that ends a run past its turn cap
 	// ([Waiter.Watch]): its collection's count, read as the job writes it. Nil
-	// for a runner whose stream shows its requests only once its harness has
-	// exited, which its collection alone counts. Required, so no runner is
-	// left out of the watch unsaid.
+	// for a runner with no live count, which its collection alone counts.
+	// Required, so no runner is left out of the watch unsaid.
 	Count(handle RunHandle) Counter
 }
 

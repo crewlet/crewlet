@@ -672,7 +672,7 @@ Shown and not changed: each schedule's cron, timezone, runner and task, and the 
 | Learning | Agent seats, on **Advanced**. `learning_enabled`: the company's default (unset), on or off. Off skips reflection after the seat's turns; episodes are still written. |
 | Workers it may delegate to | Agent seats, on **Advanced**. `workers`, chosen from the delegate templates the company publishes; empty is every one. |
 | Placement: pinned to node, node labels | Agent seats, on **Advanced**. `placement.node` and `placement.labels`, each label written `key=value`; a node must carry every label to run the seat. |
-| Executor box: paused for, rounds per run, runs at once | Agent seats, on **Advanced**. `sandbox.pause_ttl_seconds`, `sandbox.max_turns` and `sandbox.max_concurrent_runs`, whole numbers; empty is the default. 0 is a setting for the first two (never pause, or no round cap); runs at once takes 1 or more. |
+| Executor box: paused for, rounds per run, runs at once | Agent seats, on **Advanced**. `sandbox.pause_ttl_seconds`, `sandbox.max_turns` and `sandbox.max_concurrent_runs`, whole numbers; empty is the default. 0 is a setting for the first two (never pause, or no round cap); rounds per run takes at most 1,000, and the engine's refusal past it shows on the field; runs at once takes 1 or more. |
 
 Shown and not changed, each depending on a company-level block the builder does not edit: the rest of the executor box (setup steps, variables, tool servers and its browser; where it runs is its model entry's `run_in`), tool credentials (names only) and whether the seat is the Datadog fallback.
 

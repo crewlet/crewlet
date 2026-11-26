@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"maps"
 	"slices"
 	"testing"
 
@@ -8,13 +9,25 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
+// runnerSections is each runner's section of docs/concepts/code-sandbox.md,
+// by its harness's name; no profile names a harness as a reader does, so a
+// runner added to the profiles adds its title here
+// ([TestEveryListedRunnerIsRegisteredInProfileOrder]).
+var runnerSections = map[string]string{
+	"claude-code": "Claude Code", "opencode": "OpenCode", "codex": "Codex", "gemini-cli": "Gemini CLI",
+	"qwen-code": "Qwen Code", "copilot": "GitHub Copilot CLI", "grok": "Grok Build", "muse-code": "Muse Code",
+	"kimi-code": "Kimi Code", "hermes": "Hermes Agent", "pi": "Pi", "cursor-agent": "Cursor Agent",
+}
+
 // EVERY LISTED RUNNER IS REGISTERED, IN THE PROFILES' ORDER: a harness whose
 // built-in profile has an executor block has a runner, and [Names],
 // [Registered] and config.ExecutorHarnesses agree in that order whatever order
-// Go ran the runner files' inits in.
+// Go ran the runner files' inits in; and each names its docs section in
+// [runnerSections].
 //
 // Mutation: drop a runner file's init, list a harness in profiles.yaml with no
-// runner, or order the list by registration, and this goes red.
+// runner, order the list by registration, or leave a runner out of
+// [runnerSections], and this goes red.
 func TestEveryListedRunnerIsRegisteredInProfileOrder(t *testing.T) {
 	t.Parallel()
 	listed := harnessprofile.ExecutorRunners()
@@ -37,6 +50,10 @@ func TestEveryListedRunnerIsRegisteredInProfileOrder(t *testing.T) {
 	}
 	if !slices.Equal(cfg, listed) {
 		t.Errorf("config.ExecutorHarnesses() = %v, the profiles list %v", cfg, listed)
+	}
+	sections := slices.Sorted(maps.Keys(runnerSections))
+	if !slices.Equal(sections, slices.Sorted(slices.Values(listed))) {
+		t.Errorf("runnerSections names %v, the profiles list %v", sections, listed)
 	}
 }
 
