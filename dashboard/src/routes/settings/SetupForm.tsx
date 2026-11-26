@@ -101,6 +101,8 @@ interface Submitted {
   wrote_secrets?: string[];
   reloaded?: boolean;
   state?: SetupToolState;
+  /** The Forge relay refuses this product's events until a field changes. */
+  forge_held?: string;
 }
 
 /**
@@ -1192,6 +1194,7 @@ export function SetupForm({
     }
     try {
       let rotated = false;
+      const held: string[] = [];
       const answers: { section: SetupSection; state?: SetupToolState }[] = [];
       for (const { section, body } of work) {
         // WHICH AGENT THE ENGINE WAS ANSWERING ABOUT. A per-seat app writes
@@ -1206,6 +1209,7 @@ export function SetupForm({
           },
         )) as Submitted;
         rotated = rotated || answer.reloaded === true;
+        if (answer.forge_held) held.push(answer.forge_held);
         answers.push({ section, state: answer.state });
       }
       refused.current = undefined;
@@ -1241,6 +1245,17 @@ export function SetupForm({
             ? `${title} connected`
             : `${title} settings saved`,
       );
+      // A SAVE THAT LEAVES THE FORGE RELAY REFUSING says so while the form is
+      // still in view, naming the field, and stays until dismissed: every
+      // event refused meanwhile is lost.
+      if (held.length > 0) {
+        toast.show({
+          variant: "warning",
+          title: "Forge events are refused",
+          message: held.map((sentence) => `${sentence}.`).join(" "),
+          duration: 0,
+        });
+      }
       if (next === null) {
         onClose();
         return;
