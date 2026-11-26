@@ -186,13 +186,11 @@ func TestAPersonsReadOfAQwenSessionIsItsWholeLineRead(t *testing.T) {
 // A COLLECTION'S READ OF A QWEN CODE SESSION ON THE WALK IS ITS WHOLE-LINE
 // READ'S: over every recorded chat file, every person's variant and the lines
 // that pick a note's receipt apart (compactions keeping and summarizing it,
-// members of another kind, a note in another part, keys in another case,
-// null and torn lines),
-// between a note and its reply and torn after them, read whole and in pieces
-// of seventeen bytes, from the start and past a line, it holds the notes the
-// whole-line read holds; in pieces, with the newest summary read on the same
-// walk, it holds them too, the summary its whole-line read's
-// ([qwenNotesSummaryWholeOf]).
+// members of another kind, a note in another part, keys in another case, null
+// and torn lines), between a note and its reply and torn after them, read
+// whole and in pieces of seventeen bytes, from the start and past a line, it
+// holds the notes the whole-line read holds, in pieces with the newest
+// summary read beside them as its whole-line read reads it.
 //
 // Mutation: keep a note a compaction's prefix covers, take a note's text from
 // a part past the first, or keep pending notes past a line of another kind:
