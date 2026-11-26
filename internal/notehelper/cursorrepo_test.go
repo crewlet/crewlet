@@ -415,9 +415,9 @@ func TestACursorAnswerKeepsWhatItLeftOutBeforeItsSkills(t *testing.T) {
 
 // A CURSOR FIRING CLAIMS ONLY THE CHECKOUTS ITS LISTINGS CAN NAME: at an MCP
 // call whose result leaves the least room a firing hands in, each claimed
-// clone's file, too big to hand, is named in the appended item, and those
-// whose lines no longer fit the listings' share wait, unclaimed, for a call
-// with more room, which hands them.
+// clone's file, too big to hand there, is named in the appended item, and
+// those whose lines no longer fit the listings' share wait, unclaimed, for a
+// call with more room, which hands or names each.
 //
 // Mutation: charge the names to the 64 KiB listing bound instead of the
 // listings' share, and this goes red.
@@ -455,8 +455,10 @@ func TestACursorFiringClaimsOnlyTheCheckoutsItsListingsCanName(t *testing.T) {
 				continue
 			}
 			handed[name] = true
-			if !strings.Contains(got, piLeftOut(filepath.Join(work, name, "AGENTS.md"))) {
-				t.Errorf("firing %d claimed %s but does not name its file", firing, name)
+			root := filepath.Join(work, name)
+			if !strings.Contains(got, piLeftOut(filepath.Join(root, "AGENTS.md"))) &&
+				!strings.Contains(got, checkoutHeader(name, root)+"\n\n") {
+				t.Errorf("firing %d claimed %s but neither hands nor names its file", firing, name)
 			}
 		}
 		if firing == 0 && (len(handed) == 0 || len(handed) == 30) {
