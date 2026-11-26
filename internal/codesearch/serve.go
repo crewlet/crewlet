@@ -134,7 +134,7 @@ func (s *Server) Answer(ctx context.Context, sealed []byte) ([]byte, error) {
 	if len(asked) == 0 {
 		return nil, errNotAsked
 	}
-	due, nobody := signedask.Due(arrived, req.BudgetMS, req.Deadline, now)
+	due, nobody := signedask.Due(arrived, req.BudgetMS)
 	if nobody != "" {
 		return nil, fmt.Errorf("codesearch: %s request refused: %s", signedask.Stale, nobody)
 	}

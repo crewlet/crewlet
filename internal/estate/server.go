@@ -49,8 +49,7 @@ type ServerOptions struct {
 	Envelopes *Envelopes
 
 	// Now is this node's clock, injected for tests: the one a request's
-	// deadline is admitted on and, for an older asker's request carrying no
-	// wait, bound on ([request.BudgetMS]). Nil is the wall clock.
+	// deadline is admitted on. Nil is the wall clock.
 	Now func() time.Time
 
 	// Answers is the node's answer budget a read answering a page or a
@@ -185,7 +184,7 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	}
 	req := admitted.Request
 	out.Request = req.ID
-	due, nobody := signedask.Due(arrived, req.BudgetMS, req.Deadline, now)
+	due, nobody := signedask.Due(arrived, req.BudgetMS)
 	if nobody != "" {
 		log.WarnContext(ctx, "estate_request_refused", "node", s.self,
 			"from", req.From, "op", req.Op, "detail", nobody)

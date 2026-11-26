@@ -471,7 +471,7 @@ func TestARequestIsStampedWithTheProtocolItNeeds(t *testing.T) {
 	} {
 		id := fmt.Sprintf("req-%d", i)
 		sealed, err := wire(t, fleetRing).SealRequest(codesearch.Request{Version: tc.version, ID: id,
-			Deadline: time.Now().Add(time.Minute), Asker: person, Search: tc.search, Assign: assign})
+			Deadline: time.Now().Add(time.Minute), BudgetMS: signedask.WaitMS(time.Minute), Asker: person, Search: tc.search, Assign: assign})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -577,7 +577,7 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := codesearch.Request{Version: codesearch.Protocol, ID: "req-1", Deadline: time.Now().Add(time.Minute),
+	req := codesearch.Request{Version: codesearch.Protocol, ID: "req-1", Deadline: time.Now().Add(time.Minute), BudgetMS: signedask.WaitMS(time.Minute),
 		Asker: person, Search: gitlet.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral},
 		Assign: map[string][]codesearch.Assigned{"git-a": {{RepoID: r.ref.ID, Name: "alpha", Home: true}}}}
 	stranger := recordseal.OneKey("k1", "somebody else's key material")
@@ -592,7 +592,7 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 	// A plain search at the older protocol, whose asker drops a reply of another version.
 	plain := codesearch.ContextProtocol - 1
 	unknown, err := wire(t, other).SealRequest(codesearch.Request{Version: plain, ID: "req-2",
-		Deadline: req.Deadline, Asker: person, Search: req.Search, Assign: req.Assign})
+		Deadline: req.Deadline, BudgetMS: req.BudgetMS, Asker: person, Search: req.Search, Assign: req.Assign})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1116,7 +1116,7 @@ func TestASeatReadFindsAUnitWhileASearchRuns(t *testing.T) {
 		assign = append(assign, codesearch.Assigned{RepoID: fmt.Sprintf("id-%02d", i), Name: fmt.Sprintf("r%02d", i),
 			Home: true})
 	}
-	req := codesearch.Request{Version: codesearch.Protocol, ID: "req-share", Deadline: time.Now().Add(time.Minute),
+	req := codesearch.Request{Version: codesearch.Protocol, ID: "req-share", Deadline: time.Now().Add(time.Minute), BudgetMS: signedask.WaitMS(time.Minute),
 		Asker: person, Search: gitlet.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral},
 		Assign: map[string][]codesearch.Assigned{"git-a": assign}}
 	sealed, err := wire(t, fleetRing).SealRequest(req)

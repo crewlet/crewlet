@@ -38,8 +38,8 @@
 // carries an id and a deadline inside its signed body, a node takes an id
 // once, and a reply names the request it answers — internal/signedask's rules,
 // in key domains of the scatter's own. The asker's wait crosses beside them as
-// a duration ([Request.BudgetMS]), counted from arrival on each node's own
-// clock: an additive field, so a mixed fleet answers both ways.
+// a duration ([Request.BudgetMS]), required, counted from arrival on each
+// node's own clock; an older node ignores it.
 //
 // # The merge is exact
 //

@@ -106,10 +106,10 @@
 // past its asker where it stood behind. So a channel whose taking node bounds
 // its work by its asker's wait carries that wait beside the deadline
 // ([WaitMS]), and the taking node counts it from the request's arrival on its
-// own clock ([Due]); the deadline only binds and admits the request. The field
-// is additive, so a rolling upgrade serves both ways: an older taking node
-// ignores it, and a request carrying none, an older asker's, is due at its
-// deadline as that build's nodes judged it.
+// own clock ([Due]); the deadline only binds and admits the request. The wait
+// is REQUIRED: a request carrying none runs nothing, since an older unreleased
+// build gets no compatibility. The field is additive, so an older taking node
+// ignores it and serves a newer asker as it always did.
 //
 // And a reply names the request it answers ([Reply]): an asker believes only a
 // reply that verifies AND is bound to the id it sent, so a reply to another

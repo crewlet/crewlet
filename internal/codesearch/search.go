@@ -821,8 +821,7 @@ func (s *Searcher) round(ctx context.Context, q Query, sq gitlet.SearchQuery, he
 	deadline, _ := rctx.Deadline()
 	wait := time.Until(deadline)
 	if wait <= 0 {
-		// NOTHING LEFT TO ASK WITH: a request carrying no wait would read as
-		// an older asker's, bound by its deadline on each node's clock.
+		// NOTHING LEFT TO ASK WITH: a request carrying no wait is refused.
 		return nil, cmp.Or(ctx.Err(), context.DeadlineExceeded)
 	}
 	req := Request{Version: requestProtocol(sq), ID: signedask.NewID(), Deadline: deadline,

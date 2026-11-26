@@ -225,7 +225,7 @@ func sealWrite(w gitlet.EngineWrite) (string, []byte, error) {
 		return "", nil, err
 	}
 	req := request{ID: signedask.NewID(), Op: opCodeGitWrite.spec.name, Args: args, From: "agent-9",
-		Deadline: time.Now().Add(time.Minute)}
+		Deadline: time.Now().Add(time.Minute), BudgetMS: signedask.WaitMS(time.Minute)}
 	sealed, err := fleetEnvelopes.sealRequest(req)
 	return req.ID, sealed, err
 }

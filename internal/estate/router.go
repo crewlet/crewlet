@@ -1399,8 +1399,7 @@ func (r *Router) ask(ctx context.Context, node, subject string, req request,
 	deadline, bounded := attempt.Deadline()
 	wait := time.Until(deadline)
 	if bounded && wait <= 0 {
-		// NOTHING LEFT TO ASK WITH: a request carrying no wait would read as
-		// an older asker's, bound by its deadline on the node's clock.
+		// NOTHING LEFT TO ASK WITH: a request carrying no wait is refused.
 		return reply{}, heard{}, fmt.Errorf("no time left to ask %s: %w", node,
 			cmp.Or(context.Cause(attempt), context.DeadlineExceeded))
 	}

@@ -307,8 +307,9 @@ type request struct {
 	// (signedask.WaitMS), which the serving node counts from the request's
 	// arrival on its own clock to bound everything it runs for it
 	// (signedask.Due), so two clocks standing apart neither cut the work
-	// short nor let it run past its asker. Zero is an older asker's request,
-	// bound by its deadline as that build's nodes bound it.
+	// short nor let it run past its asker. REQUIRED: a request carrying none
+	// runs nothing, as an older unreleased build gets no compatibility; an
+	// older serving node ignores the field and serves as it always did.
 	BudgetMS int64 `json:"budget_ms,omitzero"`
 
 	// From is the asking node, for the serving node's log.

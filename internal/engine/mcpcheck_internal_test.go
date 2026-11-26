@@ -449,7 +449,8 @@ func TestAnMCPTestsAnswerHoldsItsWeightBeforeItTests(t *testing.T) {
 	defer release()
 	e := &Engine{mcpChecks: checks, answerBudget: answers, testNode: "node-b"}
 	sealed, err := checks.wire.SealRequest(mcpCheckAsk{Version: mcpCheckWire, ID: "ask-1",
-		Deadline: time.Now().Add(mcpCheckReplyMargin + time.Second), Asker: "node-a",
+		Deadline: time.Now().Add(mcpCheckReplyMargin + time.Second),
+		BudgetMS: signedask.WaitMS(mcpCheckReplyMargin + time.Second), Asker: "node-a",
 		Nodes: []string{"node-b"}, Server: "files"})
 	if err != nil {
 		t.Fatal(err)
@@ -464,11 +465,12 @@ func TestAnMCPTestsAnswerHoldsItsWeightBeforeItTests(t *testing.T) {
 // less the reply's round trip, counted from the request's arrival: whether the
 // node's clock stands three seconds ahead or ahead by more than the wait less
 // the margin, the answer waits for its weight of a held budget exactly that
-// long, and no longer. An older asker's request, carrying no wait, runs until
-// its deadline as the node's own clock reads it, less the margin.
+// long, and no longer. A request carrying no wait tests nothing and waits for
+// nothing: an older unreleased build's asker gets no compatibility.
 //
-// Mutation: bound every test by the deadline on the node's clock, and a node
-// ahead cuts it short by its lead, red.
+// Mutations: bound every test by the deadline on the node's clock, and a node
+// ahead cuts it short by its lead, red; run one carrying no wait to its
+// deadline, red.
 //
 // In a synctest bubble, so the request's trip takes no time and the wait is
 // exact arithmetic.
@@ -483,8 +485,7 @@ func TestAnMCPTestOnANodeAheadOfItsAskerMayRunForItsAskersWholeWait(t *testing.T
 		"three seconds ahead": {ahead: 3 * time.Second, carries: true, may: wait - mcpCheckReplyMargin},
 		"ahead by more than the wait less the margin": {ahead: wait - mcpCheckReplyMargin + 500*time.Millisecond,
 			carries: true, may: wait - mcpCheckReplyMargin},
-		"an older asker's, two seconds ahead": {ahead: 2 * time.Second,
-			may: wait - 2*time.Second - mcpCheckReplyMargin},
+		"carrying no wait": {ahead: 2 * time.Second},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -513,6 +514,13 @@ func TestAnMCPTestOnANodeAheadOfItsAskerMayRunForItsAskersWholeWait(t *testing.T
 				begun := time.Now()
 				_, err = e.answerMCPCheck(t.Context(), sealed)
 				waited := time.Since(begun)
+				if !tc.carries {
+					if err == nil || errors.Is(err, queue.ErrAnswerBudget) || waited != 0 {
+						t.Fatalf("an MCP test carrying no wait = %v after %v, want it refused at once, "+
+							"waiting for nothing", err, waited)
+					}
+					return
+				}
 				if !errors.Is(err, queue.ErrAnswerBudget) {
 					t.Fatalf("an MCP test behind a held budget = %v, want it ended waiting for its weight", err)
 				}

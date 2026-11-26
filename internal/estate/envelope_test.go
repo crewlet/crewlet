@@ -33,15 +33,15 @@ func mustEnvelopes(ring recordseal.Keyring) *Envelopes {
 	return env
 }
 
-// signed is req as a fleet member sends it, with an id and a deadline of its
-// own where the case named none.
+// signed is req as a fleet member sends it, with an id, and a deadline and
+// the wait to it of its own, where the case named none.
 func signed(t *testing.T, env *Envelopes, req request) (request, []byte) {
 	t.Helper()
 	if req.ID == "" {
 		req.ID = signedask.NewID()
 	}
 	if req.Deadline.IsZero() {
-		req.Deadline = time.Now().Add(time.Minute)
+		req.Deadline, req.BudgetMS = time.Now().Add(time.Minute), signedask.WaitMS(time.Minute)
 	}
 	sealed, err := env.sealRequest(req)
 	if err != nil {
@@ -133,7 +133,7 @@ func TestARequestTheFleetDidNotSignRunsNothing(t *testing.T) {
 	node := f.nodes["data-a"]
 	write := request{ID: "r-forged", Op: opCreateTask.spec.name, Actor: mustInput(t, swe),
 		Args:     json.RawMessage(`{"OpID":"op-forged","Task":{"Project":"ENG"}}`),
-		Deadline: time.Now().Add(time.Minute)}
+		Deadline: time.Now().Add(time.Minute), BudgetMS: signedask.WaitMS(time.Minute)}
 
 	unsigned, err := json.Marshal(write)
 	if err != nil {

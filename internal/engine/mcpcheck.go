@@ -123,8 +123,9 @@ type mcpCheckAsk struct {
 	// BudgetMS is how long the asker waits (signedask.WaitMS), which an
 	// answering node counts from the request's arrival on its own clock
 	// (signedask.Due), so a node ahead of its asker tests for the whole wait.
-	// Zero is an older asker's, bound by its deadline. No wire version of its
-	// own: an older node ignoring it tests as it always did.
+	// REQUIRED: one carrying none tests nothing, as an older unreleased build
+	// gets no compatibility. No wire version of its own, since an older node
+	// ignoring it tests as it always did.
 	BudgetMS int64 `json:"budget_ms,omitzero"`
 	// Asker is the node that asked, which tests on its own account rather
 	// than over the broker.
@@ -506,7 +507,7 @@ func (e *Engine) answerMCPCheck(ctx context.Context, raw []byte) ([]byte, error)
 	}
 	// ITS ANSWER HAS TO REACH THE ASKER WHILE IT WAITS, so the test ends a
 	// reply's round trip before the wait, counted from arrival, runs out.
-	due, nobody := signedask.Due(arrived, ask.BudgetMS, ask.Deadline, now)
+	due, nobody := signedask.Due(arrived, ask.BudgetMS)
 	if nobody != "" {
 		return nil, fmt.Errorf("engine: an MCP test not to be taken: %s", nobody)
 	}

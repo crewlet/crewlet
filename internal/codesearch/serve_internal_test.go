@@ -32,12 +32,13 @@ func (r *servedUntil) Read(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAn
 // A NODE AHEAD OF ITS ASKER READS FOR ITS ASKER'S WHOLE WAIT: its reads are
 // served until a reply's margin before the wait the request carries ends,
 // counted from the request's arrival, whether its clock stands three seconds
-// ahead of the asker's or ahead by more than the round less the margin. An
-// older asker's request, carrying no wait, is still served, until its deadline
-// as the node's own clock reads it.
+// ahead of the asker's or ahead by more than the round less the margin. A
+// request carrying no wait reads nothing and is answered with nothing: an
+// older unreleased build's asker gets no compatibility.
 //
-// Mutation: serve every request until its deadline on the node's clock, and
-// the reads of a node ahead are cut short by its lead, red.
+// Mutations: serve every request until its deadline on the node's clock, and
+// the reads of a node ahead are cut short by its lead, red; serve one
+// carrying no wait to its deadline, red.
 //
 // In a synctest bubble, so the request's trip takes no time and the instant
 // is exact arithmetic.
@@ -53,8 +54,7 @@ func TestANodeAheadOfItsAskerReadsForItsAskersWholeWait(t *testing.T) {
 			served: RoundBudget - gitlet.ReplyMargin},
 		"ahead by more than the round less the margin": {ahead: RoundBudget - gitlet.ReplyMargin + 500*time.Millisecond,
 			carries: true, served: RoundBudget - gitlet.ReplyMargin},
-		"an older asker's, two seconds ahead": {ahead: 2 * time.Second,
-			served: RoundBudget - 2*time.Second - gitlet.ReplyMargin},
+		"carrying no wait": {ahead: 2 * time.Second},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -81,16 +81,23 @@ func TestANodeAheadOfItsAskerReadsForItsAskersWholeWait(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := srv.Answer(t.Context(), sealed); err != nil {
-					t.Fatalf("a node %v ahead of its asker answered nothing: %v", tc.ahead, err)
-				}
-				want := arrived.Add(tc.served)
+				raw, err := srv.Answer(t.Context(), sealed)
 				reads.mu.Lock()
 				got := reads.deadlines
 				reads.mu.Unlock()
-				if len(got) != 1 || !got[0].Equal(want) {
+				if !tc.carries {
+					if raw != nil || err == nil || len(got) > 0 {
+						t.Fatalf("a request carrying no wait was answered %d bytes (%v) and read %d repositories, "+
+							"want nothing answered or read", len(raw), err, len(got))
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("a node %v ahead of its asker answered nothing: %v", tc.ahead, err)
+				}
+				if want := arrived.Add(tc.served); len(got) != 1 || !got[0].Equal(want) {
 					t.Errorf("the node's read was served until %v, want %v: %v after the request arrived", got,
-						want, tc.served)
+						arrived.Add(tc.served), tc.served)
 				}
 			})
 		})

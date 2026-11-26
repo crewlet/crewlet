@@ -127,45 +127,34 @@ func TestAGitletNodeAheadOfItsAskerServesAGitReadItsAskersWholeWait(t *testing.T
 	}
 }
 
-// AN OLDER ASKER'S REQUEST IS BOUND BY ITS DEADLINE ON THE NODE'S CLOCK, as that
-// build's nodes bound it: in a rolling upgrade a request carrying no wait is
-// still served, until its deadline as the serving node's own clock reads it.
+// A REQUEST CARRYING NO WAIT RUNS NOTHING, a read or a write alike: nothing
+// says how long its asker waits, and an older unreleased build's asker, the
+// only one that sends none, gets no compatibility. It is answered stale, bound
+// to its id, so the asker moves on.
 //
-// Mutation: refuse a request carrying no wait, or bound it by the runtime's
-// clock rather than the node's, red.
-//
-// In a synctest bubble ([inBubble]), for
-// [TestADataNodeAheadOfItsAskerServesItsAskersWholeWait]'s reason.
-func TestAnOlderAskersRequestIsBoundByItsDeadlineOnTheNodesClock(t *testing.T) {
+// Mutation: bound a request carrying no wait by its deadline on the node's
+// clock, as the build before did, and both run, red.
+func TestARequestCarryingNoWaitRunsNothing(t *testing.T) {
 	t.Parallel()
-	inBubble(t, func(t *testing.T) {
-		const ahead, left = 2 * time.Second, 5 * time.Second
-		f := newFleet(t)
-		node := &fakeNode{name: "data-a", units: chartOf("data-a")}
-		cut := make(chan time.Duration, 1)
-		node.levelRead = func(ctx context.Context) error {
-			begun := time.Now()
-			<-ctx.Done()
-			cut <- time.Since(begun)
-			return ctx.Err()
+	f := newFleet(t, "data-a")
+	args, err := json.Marshal(tasksArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, req := range map[string]request{
+		"a read": {ID: "r-read", Op: opTasks.spec.name, Args: args, Deadline: time.Now().Add(time.Minute)},
+		"a write": {ID: "r-write", Op: opCreateTask.spec.name, Actor: mustInput(t, swe),
+			Args:     json.RawMessage(`{"OpID":"op-unwaited","Task":{"Project":"ENG"}}`),
+			Deadline: time.Now().Add(time.Minute)},
+	} {
+		if rep := askSigned(t, f.start(t), "data-a", req); rep.Unserved != unservedStale || rep.Request != req.ID {
+			t.Errorf("%s carrying no wait was answered %+v, want it %q, bound to %q", name, rep, unservedStale,
+				req.ID)
 		}
-		serveAhead(t, f, node, nil, ahead)
-		args, err := json.Marshal(tasksArgs{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = askSigned(t, f.start(t), "data-a", request{Op: opTasks.spec.name, Args: args,
-			Deadline: time.Now().Add(left), From: "agent-9"})
-		select {
-		case got := <-cut:
-			if got != left-ahead {
-				t.Errorf("an older asker's read with %v left, on a node %v ahead, was cut %v after it "+
-					"arrived, want %v: its deadline on the node's own clock", left, ahead, got, left-ahead)
-			}
-		default:
-			t.Fatal("an older asker's read was never run")
-		}
-	})
+	}
+	if node := f.nodes["data-a"]; node.askedFor("tasks") || node.askedFor("create") {
+		t.Fatal("a request carrying no wait ran")
+	}
 }
 
 // A DATA NODE THREE SECONDS AHEAD IS HEARD FOR ITS ASKER'S WHOLE WAIT, the one
