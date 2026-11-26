@@ -207,9 +207,11 @@ func (g *AnswerGate) Leave() {
 		go g.start(next)
 		return
 	}
-	g.mu.Unlock()
+	// RELEASED UNDER THE LOCK, in the step that found the queue empty: freed
+	// after unlocking, an Offer between the two found every slot taken and
+	// queued, and the slot came free with nobody left to start it. The
+	// receive cannot block, since the caller holds a slot.
 	<-g.slots
-	g.mu.Lock()
 	g.n--
 	if g.n == 0 && g.idle != nil {
 		close(g.idle)

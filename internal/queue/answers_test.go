@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -248,4 +249,42 @@ func TestAWithdrawalAnswersNothingItHeldWaiting(t *testing.T) {
 			t.Fatalf("a closed gate reports %d running and %d waiting, want none", running, waiting)
 		}
 	})
+}
+
+// A SLOT FREED IS NEVER LOST TO A REQUEST QUEUED BESIDE IT: a one-slot gate
+// hammered by concurrent offers, whose answers return at once, runs every one
+// of them and holds none waiting once everything settles, round after round.
+// A slot freed apart from the check that found nobody waiting leaves a request
+// queued in between with a free slot and nobody to start it, and the gate
+// wedged for good. Under -race, in a bubble per round, so "settled" is the
+// bubble's own reading, never a pause.
+//
+// Mutation: free the slot in Leave after letting the lock go, and a round
+// settles with a request still waiting, red.
+func TestASlotFreedIsNeverLostToARequestQueuedBesideIt(t *testing.T) {
+	const rounds, offers = 2000, 16
+	for range rounds {
+		synctest.Test(t, func(t *testing.T) {
+			g, err := queue.NewServeGate(1, offers, 1<<20)
+			if err != nil {
+				t.Fatalf("NewServeGate: %v", err)
+			}
+			var ran atomic.Int32
+			var wg sync.WaitGroup
+			for range offers {
+				wg.Go(func() {
+					if err := g.Offer(time.Now(), 1, func(time.Time) { ran.Add(1) }); err != nil {
+						t.Errorf("a gate refused a request within its bound: %v", err)
+					}
+				})
+			}
+			wg.Wait()
+			synctest.Wait()
+			if running, waiting := g.Occupancy(); running != 0 || waiting != 0 || ran.Load() != offers {
+				t.Fatalf("once every offer settled the gate had run %d of %d requests and reports %d "+
+					"running and %d waiting: a request was left waiting beside a free slot", ran.Load(),
+					offers, running, waiting)
+			}
+		})
+	}
 }
