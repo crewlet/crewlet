@@ -164,6 +164,7 @@ import { TaskLink } from "./TaskLink.tsx";
 import { ArtifactLink, artifactHref } from "~/components/ArtifactLink.tsx";
 import { Thread, type ThreadOf } from "./Thread.tsx";
 import { questionWithheld } from "~/lib/access.ts";
+import { useDictation } from "~/lib/dictation/source.ts";
 
 interface PaneProps {
   row: InboxRow | null;
@@ -1284,6 +1285,7 @@ function RunPane({
   onSettled: (label: string | null, answer?: AskAnswer, hold?: boolean) => void;
 }) {
   const write = useAct("answer_executor");
+  const dictation = useDictation();
   const [text, setText] = useState("");
   // "SOMETHING ELSE" OPENED THE FIELD in the options' place.
   const [open, setOpen] = useState(false);
@@ -1566,6 +1568,7 @@ function RunPane({
                   placeholder="Answer as the harness will read it"
                   disabled={!write.access.can || write.busy}
                   autoFocus={open}
+                  dictation={dictation}
                   actions={
                     <>
                       {options.length > 0 && (

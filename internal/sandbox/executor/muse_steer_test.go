@@ -75,7 +75,7 @@ func museReachesTheBridgesTool(t *testing.T) {
 	if err := json.Unmarshal(raw, &take); err != nil || take.Endpoint != endpoint || take.Tool != mcpbridge.SteerTool {
 		t.Fatalf("the take config %s (%v): want the run's endpoint and steer_take", raw, err)
 	}
-	if helper, _ := box.ReadFile(t.Context(), p.MuseNoteHelper()); len(helper) == 0 {
+	if !handedProgram(t, box, p.MuseNoteHelper()) {
 		t.Error("the run was written no note helper")
 	}
 	events := map[string]int{}

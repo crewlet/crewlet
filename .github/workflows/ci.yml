@@ -209,31 +209,6 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "::error::gofmt needed:"; echo "$unformatted"; exit 1
           fi
-      # `make notehelper-check`, the same commands; change the two together.
-      # The note helper's builds are committed and embedded, so a drifted one
-      # compiles and passes every Go test while a box runs code nobody wrote.
-      # GOTOOLCHAIN is go.mod's own, as setup-go's `local` already is here.
-      - name: the committed note helper builds are what internal/notehelper builds
-        run: |
-          out=internal/sandbox/executor/notehelper
-          tc="go$(sed -n 's/^go //p' go.mod)"
-          tmp="$(mktemp -d)"
-          GOTOOLCHAIN="$tc" go build -o "$tmp/gzipbuild" ./internal/notehelper/gzipbuild
-          for arch in amd64 arm64; do
-            GOTOOLCHAIN="$tc" CGO_ENABLED=0 GOOS=linux GOARCH="$arch" GOAMD64=v1 GOARM64=v8.0 \
-              go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" \
-              -o "$tmp/notehelper" ./internal/notehelper
-            "$tmp/gzipbuild" "$tmp/notehelper" "$out/notehelper-linux-$arch.gz"
-            ls -l "$out/notehelper-linux-$arch.gz"
-          done
-          untracked="$(git ls-files --others -- "$out")"
-          if ! git diff --exit-code --stat -- "$out" || [ -n "$untracked" ]; then
-            echo "::error::$out is not what internal/notehelper builds at go.mod's toolchain and modules."
-            git status --porcelain --untracked-files=all --ignored=matching -- "$out" | grep -v '^. ' || true
-            echo "Fix: run 'make notehelper', then commit both builds:"
-            echo "  git add $out/notehelper-linux-amd64.gz $out/notehelper-linux-arm64.gz"
-            exit 1
-          fi
 
       # `go mod tidy` has to be a no-op on a pull request, and only half of
       # that is covered without this step. An UNDER-tidy module already fails

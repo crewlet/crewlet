@@ -133,8 +133,9 @@
 | `providers/embeddings` | The vector backend: the one place a text becomes a vector for the knowledge corpus, knowledge search queries, and diary and episode recall, enforcing each model's input limits. |
 | `speech` | Dictation's speech-to-text: a local streaming recognizer (sherpa-onnx, embedded per platform, in a re-executed worker process) behind the `Streamer` interface, its pinned model table and the `Fake`. |
 | `sandbox` | The executor runtime: every agent seat's executor is its harness's own run in a box, launched detached, collected and resumed by the engine, its session kept between boxes; the in-box runners are `sandbox/executor`'s. |
-| `notehelper` | A `main` package the engine embeds per box arch (committed builds, `make notehelper`): beside a harness with no hook or plugin, hands it the bridge's notes, caps a turn's model responses and reports skill loads, through an adapter (Codex app-server). |
-| `notehelper/gzipbuild` | A `main` package `make notehelper` runs: gzips a note helper build with `compress/gzip` under an empty header, so the committed builds depend on the toolchain alone, never the machine's `gzip`. |
+| `notehelper` | A `main` package built per box arch with the engine and written into a box: beside a harness with no hook or plugin, hands it the bridge's notes, caps a turn's model responses and reports skill loads, through an adapter (Codex app-server). |
+| `notehelper/helperbuild` | The one recipe that builds the note helper per box arch, for the release, the image, `make notehelper` and the tests (`WithHelpers`). |
+| `notehelper/helpersource` | The committed digest of the note helper's source, which the helper carries and the engine checks, so a helper from other source is refused. |
 | `hostbox` | The primitives for running somebody else's process on the engine host: one environment allowlist, safe file placement, and journaled shared-login writes, shared by the harness backend, local sandbox and MCP stdio children. |
 | `hostbox/hostboxtest` | The kill matrix every writer of a shared login passes: it SIGKILLs the re-executed writer at each named step of its journaled writes and judges what the kill left. |
 | `shellword` | The one quoting of a value as a word of a POSIX shell, for every command the engine writes for a shell to read. |

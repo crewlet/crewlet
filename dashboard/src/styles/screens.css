@@ -7849,63 +7849,12 @@ ul.md-tasks > li > input[type="checkbox"] {
   overflow-wrap: anywhere;
 }
 
-.composer {
+/* The `@` list stands over the box, against this. */
+.task-composer {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: var(--spacing-3) 14px;
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-}
-.composer:focus-within {
-  border-color: var(--color-border-strong);
-}
-.composer-field {
-  position: relative;
-}
-.composer-field textarea {
-  width: 100%;
-  padding: 0;
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  resize: none;
-  /* It keeps its bar's gutter, so the words never re-wrap as the bar comes. */
-  scrollbar-gutter: stable;
-}
-.composer-field textarea:focus-visible {
-  outline: 2px solid transparent;
-}
-.composer-foot {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.composer-mentions {
-  position: absolute;
-  bottom: 100%;
-  left: 0;
-  z-index: var(--z-index-dropdown);
-  min-width: 14rem;
-  margin: 0 0 var(--spacing-1);
-  padding: var(--spacing-1);
-  list-style: none;
-  background: var(--color-surface-elevated);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
-}
-.composer-mentions li {
-  display: flex;
-  align-items: baseline;
-  gap: var(--spacing-2);
-  padding: 6px var(--spacing-2);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-.composer-mentions li[aria-selected="true"] {
-  background: var(--color-brand-accent-soft);
+  gap: var(--spacing-1);
 }
 .composer-picklist {
   display: flex;
@@ -7952,23 +7901,6 @@ ul.md-tasks > li > input[type="checkbox"] {
   padding-top: var(--spacing-3);
   border-top: 1px solid var(--color-border-default);
 }
-/* THE TASK PAGE'S COMPOSER IS ONE LINE until it is written in, as the
-   artboard draws it: the field, then its marks and the button, on one row
-   that wraps below a comfortable measure. It grows with what is typed. */
-.composer[data-mode="comment"] {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-}
-.composer[data-mode="comment"] .composer-field {
-  flex: 1 1 16rem;
-}
-.composer[data-mode="comment"] .composer-field textarea {
-  min-height: 0;
-  field-sizing: content;
-  max-height: 16lh;
-}
-
 /* ONE PANE UNDER 640px OF THE SCREEN'S WIDTH, with Back: on a phone, and
    beside an assistant the reader opened, where a desktop window can leave the
    screen a phone's room and a pane beside a 260px list was drawn 130px wide.

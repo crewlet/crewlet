@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -46,14 +47,14 @@ func TestALeafBootsBesideRunsAtTheirBound(t *testing.T) {
 		turn := fmt.Sprintf("t%d", i+1)
 		row := fmt.Sprintf(`{"turn_id":%q,"agent_id":%q,"agent_handle":"swe","status":"running",`+
 			`"launch_id":"l1","launch_seq":1}`, turn, seat)
-		if made, err := across.Member.CreateSandboxRun(t.Context(), turn,
-			kvtest.AtTheBound(t, []byte(row), 8<<10), nil); err != nil || !made {
-			t.Fatalf("seed run %s at its bound = (%v, %v)", turn, made, err)
+		if made, err := across.Member.CreateSandboxRun(t.Context(), turn, []byte(row), nil); err != nil || !made {
+			t.Fatalf("seed run %s = (%v, %v)", turn, made, err)
 		}
 		// THE CLAIM'S WRITE, a change of the row, is what states it here.
 		if won, err := member.ClaimOwnership(t.Context(), turn, "n1", epoch-int64(i)); err != nil || !won {
 			t.Fatalf("stamp run %s with a lease = (%v, %v)", turn, won, err)
 		}
+		padToTheBound(t, across, turn)
 	}
 	nc, err := across.LeafBroker.Conn()
 	if err != nil {
@@ -84,5 +85,34 @@ func TestALeafBootsBesideRunsAtTheirBound(t *testing.T) {
 	if err != nil || next != epoch+1 {
 		t.Errorf("the seat's next epoch = (%d, %v), want %d: the counter stands at its runs' highest", next,
 			err, epoch+1)
+	}
+}
+
+// padToTheBound grows turn's claimed record to its bound in one change that
+// states what the claim's write stated (the listing of standings), so the
+// record at its bound stands as the claim left it.
+//
+// THE CLAIM IS TAKEN SMALL, the pad after: a claim is a read and a write of the
+// record, and on a member's own connection the read is asked again every two
+// seconds while nobody answers (internal/coord/kv's runs class). The leader
+// builds the reply of a record at its bound again for every ask, seconds each
+// under the race detector beside the package's other cases, until the claim
+// runs out its bound before the boot this case is about.
+func padToTheBound(t *testing.T, across kvtest.Across, turn string) {
+	t.Helper()
+	stood, err := across.Member.SandboxRunStandings(t.Context())
+	if err != nil {
+		t.Fatalf("list the runs' standing: %v", err)
+	}
+	i := slices.IndexFunc(stood, func(r coord.StoodRun) bool { return r.TurnID == turn })
+	if i < 0 {
+		t.Fatalf("run %s is not among the runs' standing %v", turn, stood)
+	}
+	if _, changed, err := across.Member.MutateSandboxRun(t.Context(), turn,
+		func(read coord.Record) (coord.SandboxRunChange, error) {
+			return coord.SandboxRunChange{Put: kvtest.AtTheBound(t, read.Value, 8<<10),
+				Standing: stood[i].Standing}, nil
+		}); err != nil || !changed {
+		t.Fatalf("pad run %s to its bound = (%v, %v)", turn, changed, err)
 	}
 }

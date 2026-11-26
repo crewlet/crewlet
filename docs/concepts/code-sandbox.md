@@ -3236,9 +3236,15 @@ Codex 0.171.0 puts a steered note into the next request as a user message after
 the tool output of the step in flight. No Codex hook is used, so a note has one
 route and one confirmation.
 
-**The note helper** is a small static program the engine embeds
-(`internal/notehelper`, built for linux amd64 and arm64) and writes into the box
-at each launch, so an image needs nothing for it. The run's script starts it
+**The note helper** is a small static program (`internal/notehelper`, built
+for linux amd64 and arm64 wherever the engine is built) that the engine writes
+into the box at each launch, so a box image needs nothing for it. The engine
+reads the build for the box's arch from the directory `CREWLET_NOTE_HELPER_DIR`
+names, and only there while it is set; else beside its own executable (a
+release archive, `make crewlet`), then under `/usr/local/share/crewlet` (the
+image). An engine that finds none refuses the run, naming where it looked, and
+so does one that finds a helper built from other source than its own (each
+carries a digest of the helper's source), naming both. The run's script starts it
 beside the app-server and stops it with `exec`; its errors go to the run's error
 stream. The same helper holds a run to its round cap and reports its skill loads
 ([Codex](#codex)). It polls the run's notes route **outbound**, as OpenCode's plugin does

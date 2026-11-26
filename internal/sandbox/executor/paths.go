@@ -1579,6 +1579,12 @@ func (p Paths) MCPConfigFresh() string { return p.WorkDir() + "/mcp-fresh.json" 
 // and its own, removed whole before every run ([Runner.ClearArtifacts]).
 func (p Paths) CommitAttribution() string { return p.WorkDir() + "/commit-attribution" }
 
+// ProgramStaging is the DIRECTORY the engine writes a program's bytes into
+// before the box's own process copies them into place ([writeProgram]),
+// removed whole before every run ([Runner.ClearArtifacts]), so a write whose
+// copy never ran leaves nothing past the next run's clear.
+func (p Paths) ProgramStaging() string { return p.WorkDir() + "/program-staging" }
+
 // AttributionHook is the one script every hook name in [Paths.GitHooks] links
 // to.
 func (p Paths) AttributionHook() string { return p.CommitAttribution() + "/hook" }

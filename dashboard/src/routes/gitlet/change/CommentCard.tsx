@@ -3,17 +3,18 @@
  */
 
 import { useRef, useState, type ReactNode } from "react";
-import { Button, Menu, Stack, Textarea } from "@crewlethq/ui";
+import { Button, Composer, Menu, Stack } from "@crewlethq/ui";
 import { EllipsisGlyph, PencilGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useDraftState } from "~/app/assistant/draft.ts";
 import { ConfirmModal } from "~/components/Modal.tsx";
-import { WriteButton, pressable } from "~/components/WriteButton.tsx";
+import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { ago } from "~/lib/ago.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useAct } from "~/lib/useAct.ts";
+import { useDictationBox } from "~/lib/dictation/source.ts";
 import { menuHold } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeDetail, CodeCommentRow } from "~/protocol/index.ts";
@@ -185,6 +186,7 @@ function EditComment({
 }) {
   const write = useAct("code_comment_on_change");
   const [opened, setOpened] = useState(comment.body);
+  const { dictation, refusal: dictating } = useDictationBox();
   const [body, setBody] = useDraftState(opened);
   // A draft's path is lowercase letters, digits, dots and underscores.
   useDraftBox({
@@ -194,7 +196,7 @@ function EditComment({
     rank: 1,
     value: body,
     set: setBody,
-    refuses: () => null,
+    refuses: () => dictating,
   });
   const stale = comment.body !== opened;
   const blocked = stale
@@ -231,40 +233,44 @@ function EditComment({
       }}
     >
       <Stack gap={2}>
-        <Textarea
-          aria-label="Comment"
+        <Composer
+          label="Comment"
           value={body}
           rows={3}
-          autoResize
           autoFocus
-          onChange={(event) => setBody(event.target.value)}
+          onChange={setBody}
+          dictation={dictation}
           onKeyDown={(event) => {
             if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
               event.preventDefault();
               void save();
             }
           }}
+          actions={
+            <>
+              {stale && (
+                <Button size="small" variant="ghost" onClick={again}>
+                  Start again from the latest
+                </Button>
+              )}
+              <Button size="small" variant="secondary" onClick={onDone} disabled={write.busy}>
+                Cancel
+              </Button>
+              <WriteButton
+                write={write}
+                size="small"
+                variant="primary"
+                type="submit"
+                showRefusal={false}
+                blocked={blocked}
+                onPress={() => void save()}
+              >
+                Save
+              </WriteButton>
+            </>
+          }
         />
-        <div className="code-description__actions">
-          {stale && (
-            <Button size="small" variant="ghost" onClick={again}>
-              Start again from the latest
-            </Button>
-          )}
-          <Button size="small" variant="secondary" onClick={onDone} disabled={write.busy}>
-            Cancel
-          </Button>
-          <WriteButton
-            write={write}
-            size="small"
-            variant="primary"
-            type="submit"
-            blocked={blocked}
-            onPress={() => void save()}
-          >
-            Save
-          </WriteButton>
-        </div>
+        <RefusalNote write={write} />
         {blocked && <p className="muted t-caption">{blocked}</p>}
       </Stack>
     </form>

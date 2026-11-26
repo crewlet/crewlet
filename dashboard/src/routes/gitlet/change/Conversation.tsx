@@ -22,12 +22,11 @@ import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "re
 import {
   AsideLayout,
   Button,
+  Composer,
   Kbd,
   MarkdownEditor,
   Stack,
   Tag,
-  Textarea,
-  useSendOnEnter,
   type MarkdownEditorApi,
 } from "@crewlethq/ui";
 import {
@@ -53,7 +52,7 @@ import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useDraftState } from "~/app/assistant/draft.ts";
 import { PageFailed } from "~/components/common.tsx";
 import { FINDING_SEVERITIES, SOURCE_DELETED } from "~/contract/code.ts";
-import { WriteButton, pressable } from "~/components/WriteButton.tsx";
+import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { ago } from "~/lib/ago.ts";
 import { ejectReasonWord } from "~/lib/checks.ts";
 import { changeLive, refName } from "~/lib/code.ts";
@@ -61,6 +60,7 @@ import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useAct } from "~/lib/useAct.ts";
+import { useDictationBox } from "~/lib/dictation/source.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type {
   CodeChangeDetail,
@@ -940,6 +940,7 @@ export function ReplyComposer({
   // lowercase letters, digits, dots and underscores, so the id is spelled
   // in those.
   const answers = "thread" in target ? `thread ${target.thread}` : `finding ${target.finding}`;
+  const { dictation, refusal: dictating } = useDictationBox();
   useDraftBox({
     path: `reply.${answers.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`.slice(0, 64),
     label: "thread" in target ? "Reply in the thread" : "Reply to the finding",
@@ -947,7 +948,7 @@ export function ReplyComposer({
     rank: 2,
     value: body,
     set: setBody,
-    refuses: () => null,
+    refuses: () => dictating,
   });
   const blocked = body.trim() ? undefined : "Write the reply first.";
   const send = async () => {
@@ -955,32 +956,32 @@ export function ReplyComposer({
     if (result && (result.kind === "applied" || result.kind === "pending")) setBody("");
   };
   // Enter sends, as in every message box; the button's own gate holds it.
-  const keys = useSendOnEnter({ onSend: () => void send(), canSend: pressable(write, blocked) });
   return (
     <div className="code-reply">
-      <span className="code-reply__field">
-        <Textarea
-          aria-label="Reply"
-          aria-describedby={keys.describedBy}
-          autoFocus={focus}
-          placeholder="Reply…"
-          value={body}
-          rows={1}
-          autoResize
-          onChange={(event) => setBody(event.target.value)}
-          onKeyDown={keys.onKeyDown}
-        />
-        {keys.description}
-      </span>
-      <WriteButton
-        write={write}
-        size="small"
-        variant="secondary"
-        blocked={blocked}
-        onPress={() => void send()}
-      >
-        Reply
-      </WriteButton>
+      <Composer
+        label="Reply"
+        autoFocus={focus}
+        placeholder="Reply…"
+        value={body}
+        onChange={setBody}
+        onSubmit={() => void send()}
+        canSubmit={pressable(write, blocked)}
+        sendHint={false}
+        dictation={dictation}
+        trailing={
+          <WriteButton
+            write={write}
+            size="small"
+            variant="secondary"
+            showRefusal={false}
+            blocked={blocked}
+            onPress={() => void send()}
+          >
+            Reply
+          </WriteButton>
+        }
+      />
+      <RefusalNote write={write} />
     </div>
   );
 }
