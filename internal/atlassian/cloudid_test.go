@@ -1,7 +1,9 @@
 package atlassian_test
 
 import (
+	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -164,5 +166,63 @@ func TestARedirectedLookupYieldsNoCloudID(t *testing.T) {
 	}
 	if n := asked.Load(); n != 0 {
 		t.Errorf("the redirect's target was asked %d times, want 0", n)
+	}
+}
+
+// transport answers each request with answer, counting them.
+type transport struct {
+	calls  atomic.Int64
+	answer func(n int64, r *http.Request) (*http.Response, error)
+}
+
+func (f *transport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f.answer(f.calls.Add(1), r)
+}
+
+func reply(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}
+}
+
+const acmeSite = "https://acme.atlassian.net"
+
+// A KEPT CLOUD ID IS NEVER ASKED AGAIN NOR OVERWRITTEN by a later lookup of
+// the same site: a lookup that finds one kept answers it, and one that fails
+// while another stored a success leaves that success. Flight 1 is held open
+// on a gate while a second lookup stores the id. Mutation: drop either
+// check in fly and a check goes red.
+func TestAKeptCloudIDIsNeverOverwritten(t *testing.T) {
+	t.Parallel()
+	arrived, gate := make(chan struct{}), make(chan struct{})
+	rt := &transport{answer: func(n int64, _ *http.Request) (*http.Response, error) {
+		if n == 1 {
+			close(arrived)
+			<-gate
+			return reply(http.StatusBadGateway, "busy"), nil
+		}
+		return reply(http.StatusOK, `{"cloudId":"`+siteID+`"}`), nil
+	}}
+	ids := atlassian.NewCloudIDs(atlassian.CloudIDOptions{Client: &http.Client{Transport: rt}})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := atlassian.FlyForTest(ids, context.Background(), acmeSite)
+		done <- err
+	}()
+	<-arrived
+	if id, err := ids.Resolve(t.Context(), acmeSite); err != nil || id != siteID {
+		t.Fatalf("Resolve = %q, %v while flight 1 is held", id, err)
+	}
+	close(gate)
+	<-done
+	if id, err := ids.Resolve(t.Context(), acmeSite); err != nil || id != siteID {
+		t.Errorf("after flight 1 failed: %q, %v; want the kept id", id, err)
+	}
+
+	before := rt.calls.Load()
+	if id, err := atlassian.FlyForTest(ids, t.Context(), acmeSite); err != nil || id != siteID {
+		t.Errorf("a lookup with an id kept = %q, %v; want the kept id", id, err)
+	}
+	if rt.calls.Load() != before {
+		t.Error("a lookup asked the site for an id already kept")
 	}
 }

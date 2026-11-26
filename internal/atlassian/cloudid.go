@@ -116,15 +116,7 @@ func (c *CloudIDs) Resolve(ctx context.Context, site string) (string, error) {
 	case tried && c.now().Sub(last.at) < TenantInfoRetryFloor:
 		return "", last.err
 	}
-	flight := c.group.DoChan(key, func() (any, error) {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), TenantInfoTimeout)
-		defer cancel()
-		id, err := c.read(ctx, key)
-		c.mu.Lock()
-		c.sites[key] = lookup{id: id, err: err, at: c.now()}
-		c.mu.Unlock()
-		return id, err
-	})
+	flight := c.group.DoChan(key, func() (any, error) { return c.fly(ctx, key) })
 	select {
 	case res := <-flight:
 		if res.Err != nil {
@@ -134,6 +126,28 @@ func (c *CloudIDs) Resolve(ctx context.Context, site string) (string, error) {
 	case <-ctx.Done():
 		return "", &TenantInfoError{URL: key, Cause: "no answer before the request ended"}
 	}
+}
+
+// fly is one shared lookup of key, which belongs to no one caller. A success
+// kept since the caller read the map is answered without asking, and a
+// failure never replaces one: a site's cloud id never changes.
+func (c *CloudIDs) fly(ctx context.Context, key string) (string, error) {
+	c.mu.Lock()
+	last, tried := c.sites[key]
+	c.mu.Unlock()
+	if tried && last.err == nil {
+		return last.id, nil
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), TenantInfoTimeout)
+	defer cancel()
+	id, err := c.read(ctx, key)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if kept, ok := c.sites[key]; ok && kept.err == nil {
+		return kept.id, nil
+	}
+	c.sites[key] = lookup{id: id, err: err, at: c.now()}
+	return id, err
 }
 
 // read asks address once and validates the answer.
