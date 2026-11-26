@@ -443,7 +443,8 @@ const MuseTraceNeedle = museTraceNeedle
 // none of them ([recordsCounted]); none for a harness counted off its stream.
 func CollectedRecordCount(ctx context.Context, r *Runner, box sandbox.Sandbox) (sandbox.RequestCount, error) {
 	if rs, ok := r.harness.(recordsCounted); ok {
-		return r.collectedRecords(ctx, box, rs, sandbox.RequestCount{})
+		count, _, err := r.collectedRecords(ctx, box, rs, sandbox.RequestCount{}, 0)
+		return count, err
 	}
 	rc, ok := r.harness.(recordCollected)
 	if !ok {

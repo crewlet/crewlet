@@ -134,13 +134,15 @@ func openCodeRuleList(rules []openCodePolicyRule) []map[string]string {
 
 // openCodePluginIDs is each of the run's plugins' id, by its directory's
 // name, read off the plugin's own source (opencode_steer.js,
-// opencode_skills.js, opencode_toolenv.js, opencode_checkouts.js) so the two
+// opencode_skills.js, opencode_toolenv.js, opencode_checkouts.js,
+// opencode_count.js) so the two
 // cannot disagree.
 var openCodePluginIDs = map[string]string{
 	path.Base(Paths{}.OpenCodeSteerPlugin()):     openCodePluginID(openCodeSteerPlugin),
 	path.Base(Paths{}.OpenCodeSkillsPlugin()):    openCodePluginID(openCodeSkillsPlugin),
 	path.Base(Paths{}.OpenCodeToolEnvPlugin()):   openCodePluginID(openCodeToolEnvPlugin),
 	path.Base(Paths{}.OpenCodeCheckoutsPlugin()): openCodePluginID(openCodeCheckoutsPlugin),
+	path.Base(Paths{}.OpenCodeCountPlugin()):     openCodePluginID(openCodeCountPlugin),
 }
 
 // openCodePluginIDLine is a plugin source's own `id: "<id>",` line.

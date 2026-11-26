@@ -50,6 +50,15 @@ func (p Paths) OpenCodeSteerPlugin() string { return p.WorkDir() + "/opencode-st
 // ([Paths.OpenCodeSteerPlugin]), and for the same reasons a directory of its own.
 func (p Paths) OpenCodeToolEnvPlugin() string { return p.WorkDir() + "/opencode-tool-env" }
 
+// OpenCodeCountPlugin is the directory a capped OpenCode run's count plugin is
+// written in ([openCodeCountPlugin]).
+func (p Paths) OpenCodeCountPlugin() string { return p.WorkDir() + "/opencode-count" }
+
+// OpenCodeCountRecord is the file a capped OpenCode run's count plugin writes,
+// a line a request its server answered ([openCodeCountRecord]): under the work
+// directory, which no pack reads, cleared with every run.
+func (p Paths) OpenCodeCountRecord() string { return p.WorkDir() + "/opencode-count.jsonl" }
+
 // OpenCodeSkills is the DIRECTORY an OpenCode run's own skills are written into
 // ([sandbox.RunRequest.Skills], [OpenCode.WriteConfig]), a directory per skill,
 // and named in the run's configuration's `skills`. Its own, under WorkDir, for

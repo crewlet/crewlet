@@ -853,11 +853,12 @@ lint: ## run golangci-lint (ci: golangci-lint)
 	golangci-lint run
 
 # require-node, because this half runs packages that drive `node`:
-# internal/sandbox/executor's probes of the three OpenCode plugins the engine
+# internal/sandbox/executor's probes of the OpenCode plugins the engine
 # embeds — notes (opencode_steer_test.go), run under node against a stand-in of
 # the bridge's notes route and a real bridge's, skill-load
-# (opencode_skills_test.go), against a stand-in of its skill route, and tool
-# environment (toolenv_test.go) — and of its Kimi Code driver
+# (opencode_skills_test.go), against a stand-in of its skill route, tool
+# environment (toolenv_test.go) and count (opencodecountplugin_test.go), against a
+# stand-in of the server's events — and of its Kimi Code driver
 # (kimi_driver_internal_test.go), against a stand-in of Kimi Code's server —
 # and of Pi's extension (pi_extension_internal_test.go), against a stand-in of
 # pi's extension API — and of its Cursor Agent helper
@@ -1013,7 +1014,7 @@ require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCod
 	  echo "node is not on PATH, and three of the suite's gates need it."; \
 	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
 	  echo "  module over the frames a real engine produced,"; \
-	  echo "  internal/sandbox/executor runs the three OpenCode plugins and"; \
+	  echo "  internal/sandbox/executor runs the OpenCode plugins and"; \
 	  echo "  the Kimi Code driver, Pi extension and Cursor Agent helper the"; \
 	  echo "  engine embeds, and"; \
 	  echo "  internal/browser/boxhelper runs the box"; \

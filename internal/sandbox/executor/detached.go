@@ -1154,11 +1154,15 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		requests, undecided = count.Requests, count.Undecided
 	}
 	if rs, ok := r.harness.(recordsCounted); ok {
-		count, err := r.collectedRecords(ctx, box, rs, sandbox.RequestCount{Requests: requests, Undecided: undecided})
+		count, unarmed, err := r.collectedRecords(ctx, box, rs, sandbox.RequestCount{Requests: requests,
+			Undecided: undecided}, handle.TurnCap)
 		if err != nil {
 			return sandbox.Result{}, err
 		}
 		requests, undecided = count.Requests, count.Undecided
+		if unheld == "" {
+			unheld = unarmed
+		}
 	}
 	// AND THE SIDE REQUESTS A RECORD KEEPS beside a stream that shows none of
 	// them ([sideCounted]), added as its live count adds them.
