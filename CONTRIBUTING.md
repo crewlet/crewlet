@@ -442,10 +442,9 @@ The dashboard is the one committed build: a Go build cannot run Node. The note
 helper (`internal/notehelper`), which runs inside a box, needs only Go, so it is
 built, never committed: the release archives carry a build per box arch beside
 the binary, the image under `/usr/local/share/crewlet`, and tests build their own
-(`go doc ./internal/notehelper/helperbuild`). An engine built from a checkout
-finds it after `make notehelper` with `CREWLET_NOTE_HELPER_DIR` set to
-`build/notehelper`; without it, every executor launch is refused, naming where it
-looked.
+(`go doc ./internal/notehelper/helperbuild`). `make crewlet` builds it beside
+`./crewlet`, where the engine looks; an engine with none (a bare `go build`)
+refuses every executor launch, naming where it looked.
 
 `go mod tidy -diff` gates the silent half of tidiness (an *under*-tidy module
 already stops `go build ./...`): a `require` left behind when its last import was

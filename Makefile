@@ -285,11 +285,14 @@ help: ## list every target
 build: ## compile every package (ci: build + vet)
 	$(GO) build ./...
 
-crewlet: ## build the engine binary into ./crewlet
+crewlet: notehelper ## build the engine binary into ./crewlet, the note helper beside it
 	$(GO) build -o $(BIN) ./cmd/crewlet
 
-install: ## go install the engine onto your PATH
+# The note helper beside the installed binary too, where the engine looks.
+install: ## go install the engine onto your PATH, the note helper beside it
 	$(GO) install ./cmd/crewlet
+	@bin="$$($(GO) env GOBIN)"; [ -n "$$bin" ] || bin="$$($(GO) env GOPATH)/bin"; \
+	$(GO) run ./scripts/notehelper -out "$$bin"
 
 # -s, AND THAT IS NOT THE SAME FLAG `fmt-check` OMITS.
 #
@@ -324,8 +327,8 @@ tidy: ## tidy go.mod / go.sum
 # directories beside them are a checkout's own company state, not something
 # this file produced, so removing them is the developer's call and not a
 # side effect of cleaning a build.
-clean: ## remove the build output (./crewlet, dist/ and build/)
-	rm -f $(BIN)
+clean: ## remove the build output (./crewlet, the note helper beside it, dist/ and build/)
+	rm -f $(BIN) $(NOTEHELPER_FILES)
 	rm -rf dist build
 	rm -rf $(UI)/node_modules
 
@@ -427,13 +430,14 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifact
 
 # internal/notehelper runs IN a box, so it is built per box arch beside the
 # engine, never committed: the release archives carry the builds beside the
-# binary, the image under /usr/local/share/crewlet, and a checkout here, which
-# an engine finds through CREWLET_NOTE_HELPER_DIR. One recipe for all of them
+# binary, the image under /usr/local/share/crewlet, and a checkout beside
+# ./crewlet, where the engine looks, so a make-built engine always has the
+# helper built from its own source. One recipe for all of them
 # (`go doc ./internal/notehelper/helperbuild`).
-NOTEHELPER_OUT ?= build/notehelper
+NOTEHELPER_FILES := notehelper-linux-amd64 notehelper-linux-arm64
 
-notehelper: ## build the note helper for every box arch into build/notehelper (point CREWLET_NOTE_HELPER_DIR there)
-	$(GO) run ./scripts/notehelper -out $(NOTEHELPER_OUT)
+notehelper: ## build the note helper for every box arch beside ./crewlet
+	$(GO) run ./scripts/notehelper -out $(dir $(BIN))
 
 ##@ The pinned gits
 

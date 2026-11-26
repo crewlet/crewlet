@@ -19,7 +19,7 @@ paths:
 
 - **Dictation's recognizer is a native library the binary does NOT embed**: sherpa-onnx's official shared-library archive per platform, pinned in `internal/speech/native.go` (URL, size, SHA-256 and its members'), fetched into `internal/nativelib`'s cache like Turso's is extracted there. The Dockerfile's `speech` stage runs the target's own `crewlet speech prepare` and bakes the library and the model beside the binary. A bump changes the four pins, `SherpaVersion` and the notices under `internal/speech/third_party/` together
 
-- **The note helper a box runs is built beside the engine, never committed**: goreleaser's before hook and `make image-context` run `scripts/notehelper` (`internal/notehelper/helperbuild`'s recipe) for linux/amd64 and linux/arm64; every archive carries both beside the binary and the image under `/usr/local/share/crewlet/`, where the executor looks before `CREWLET_NOTE_HELPER_DIR`. An install missing them refuses every executor launch
+- **The note helper a box runs is built beside the engine, never committed**: goreleaser's before hook and `make image-context` run `scripts/notehelper` (`internal/notehelper/helperbuild`'s recipe) for linux/amd64 and linux/arm64; every archive carries both beside the binary and the image under `/usr/local/share/crewlet/`. The executor looks only in `CREWLET_NOTE_HELPER_DIR` while it is set, else beside its executable, then there; an install missing them refuses every executor launch, and `scripts/notices` covers the helper's modules
 
 ## Releases
 Signed binaries and a container image, built by goreleaser from a `v*` tag.

@@ -16,58 +16,62 @@ import (
 // beside the speech files (Dockerfile).
 const sharedHelperDir = "/usr/local/share/crewlet"
 
-// helperPlace is one directory the engine looks in for the note helper's
-// builds, and how the refusal names it.
-type helperPlace struct {
-	dir, says string
+// helperSearch is where this engine looks for the note helper's builds, in
+// order, and the refusal's words for where it looked and how to get them.
+type helperSearch struct {
+	dirs        []string
+	looked, fix string
 }
 
-// noteHelperPlaces is where this engine looks, in order: beside its own
-// executable (a release archive), sharedHelperDir (the image), then the
-// directory helperbuild.DirEnv names (a checkout's `make notehelper`, a test
-// binary). Read at each launch, so a variable set after start counts.
-func noteHelperPlaces() []helperPlace {
-	beside, besideSays := "", "beside the engine (its path unread)"
+// noteHelperSearch is where this engine looks, read at each launch: only the
+// directory helperbuild.DirEnv names while it is set, since a person who names
+// one means that build; else beside its own executable (a release archive,
+// `make notehelper`), then sharedHelperDir (the image).
+func noteHelperSearch() helperSearch {
+	if named := os.Getenv(helperbuild.DirEnv); named != "" {
+		return helperSearch{dirs: []string{named},
+			looked: fmt.Sprintf("in %s, which %s names, and while it is set the engine looks nowhere else",
+				named, helperbuild.DirEnv),
+			fix: fmt.Sprintf("Put both notehelper-linux-* files there, or unset %s for the engine to look "+
+				"beside itself, then in %s", helperbuild.DirEnv, sharedHelperDir)}
+	}
+	beside, besideSays := "", "beside the engine (whose path could not be read)"
 	if exe, err := os.Executable(); err == nil {
 		if exe, err = filepath.EvalSymlinks(exe); err == nil {
 			beside = filepath.Dir(exe)
 			besideSays = "beside the engine (" + beside + ")"
 		}
 	}
-	named, namedSays := os.Getenv(helperbuild.DirEnv), "unset"
-	if named != "" {
-		namedSays = named
-	}
-	return []helperPlace{
-		{dir: beside, says: besideSays},
-		{dir: sharedHelperDir, says: "in " + sharedHelperDir},
-		{dir: named, says: "in " + helperbuild.DirEnv + " (" + namedSays + ")"},
-	}
+	return helperSearch{dirs: []string{beside, sharedHelperDir},
+		looked: fmt.Sprintf("%s, nor then in %s (%s is unset)", besideSays, sharedHelperDir, helperbuild.DirEnv),
+		fix: fmt.Sprintf("Put both notehelper-linux-* files from the release archive of this engine's version "+
+			"beside it, run `make crewlet` in a checkout of its source, which builds them beside the engine, "+
+			"or name a directory holding them in %s", helperbuild.DirEnv)}
 }
 
 // noteHelperBinary is the note helper's executable for a linux box of arch,
-// by GOARCH's names, read from the first of [noteHelperPlaces] holding it, at
-// each launch. An arch with no build is [errNoHelperBuild]; a build missing
-// from this install is a refusal that is NOT, so no harness that starts
-// without the helper on an arch it has no build for starts without it here.
+// by GOARCH's names, read from the first of [noteHelperSearch]'s directories
+// holding it, at each launch. An arch with no build is [errNoHelperBuild]; a
+// build missing from this install is a refusal that is NOT, so no harness that
+// starts without the helper on an arch it has no build for starts without it
+// here.
 func noteHelperBinary(arch string) ([]byte, error) {
 	if !slices.Contains(helperbuild.Archs, arch) {
 		return nil, fmt.Errorf("executor: no note helper is built for a box of arch %q; the builds are %s: %w",
 			arch, words.And(helperbuild.Archs), errNoHelperBuild)
 	}
-	return findNoteHelper(arch, noteHelperPlaces())
+	return findNoteHelper(arch, noteHelperSearch())
 }
 
-// findNoteHelper reads arch's build from the first of places holding it.
-func findNoteHelper(arch string, places []helperPlace) ([]byte, error) {
+// findNoteHelper reads arch's build from the first of search's directories
+// holding it.
+func findNoteHelper(arch string, search helperSearch) ([]byte, error) {
 	name := helperbuild.File(arch)
-	said := make([]words.Said, 0, len(places))
-	for _, p := range places {
-		said = append(said, words.Said(p.says))
-		if p.dir == "" {
+	for _, dir := range search.dirs {
+		if dir == "" {
 			continue
 		}
-		path := filepath.Join(p.dir, name)
+		path := filepath.Join(dir, name)
 		helper, err := os.ReadFile(path) //nolint:gosec // the engine's own install directories
 		if err == nil {
 			return helper, nil
@@ -76,8 +80,6 @@ func findNoteHelper(arch string, places []helperPlace) ([]byte, error) {
 			return nil, fmt.Errorf("executor: reading the note helper %s: %w", path, err)
 		}
 	}
-	return nil, fmt.Errorf("executor: no note helper for a linux/%s box: %s is not %s. Take both "+
-		"notehelper-linux-* files from the release archive of this engine's version and put them beside it, "+
-		"or run `make notehelper` in a checkout of its source and set %s to its build/notehelper",
-		arch, name, words.Or(said), helperbuild.DirEnv)
+	return nil, fmt.Errorf("executor: no note helper for a linux/%s box: %s is not %s. %s",
+		arch, name, search.looked, search.fix)
 }

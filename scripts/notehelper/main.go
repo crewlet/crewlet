@@ -3,8 +3,8 @@
 //
 //	go run ./scripts/notehelper -out build/notehelper
 //
-// `make notehelper`, `make image-context` and goreleaser's before hook
-// (.goreleaser.yaml) run it, so the release archives, the image and a
+// `make notehelper` (beside ./crewlet), `make install`, `make image-context`
+// and goreleaser's before hook (.goreleaser.yaml) run it, so the release archives, the image and a
 // checkout carry builds of one recipe. It builds with the go that runs it
 // (CREWLET_GO, else PATH's), the toolchain that builds the engine beside it.
 package main

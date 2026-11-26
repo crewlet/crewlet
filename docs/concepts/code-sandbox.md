@@ -3231,10 +3231,10 @@ route and one confirmation.
 **The note helper** is a small static program (`internal/notehelper`, built
 for linux amd64 and arm64 wherever the engine is built) that the engine writes
 into the box at each launch, so a box image needs nothing for it. The engine
-reads the build for the box's arch beside its own executable (a release
-archive), then under `/usr/local/share/crewlet` (the image), then in the
-directory `CREWLET_NOTE_HELPER_DIR` names (a checkout's `make notehelper`); an
-engine that finds none refuses the run, naming where it looked. The run's script starts it
+reads the build for the box's arch from the directory `CREWLET_NOTE_HELPER_DIR`
+names, and only there while it is set; else beside its own executable (a
+release archive, `make crewlet`), then under `/usr/local/share/crewlet` (the
+image). An engine that finds none refuses the run, naming where it looked. The run's script starts it
 beside the app-server and stops it with `exec`; its errors go to the run's error
 stream. The same helper holds a run to its round cap and reports its skill loads
 ([Codex](#codex)). It polls the run's notes route **outbound**, as OpenCode's plugin does

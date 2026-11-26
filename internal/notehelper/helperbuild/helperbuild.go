@@ -6,8 +6,9 @@
 // A box is Linux whatever host the engine runs on, and its arch is its own, so
 // every engine install carries a build per arch in [Archs], named [File]. The
 // engine finds them at run time (internal/sandbox/executor's
-// noteHelperPlaces): beside its executable, under /usr/local/share/crewlet
-// (the image), then in the directory [DirEnv] names.
+// noteHelperSearch): only in the directory [DirEnv] names while it is set,
+// else beside its executable (a release archive, `make crewlet`), then under
+// /usr/local/share/crewlet (the image).
 //
 // # The recipe
 //
@@ -15,7 +16,9 @@
 // (GOAMD64=v1, GOARM64=v8.0), with -trimpath, no VCS stamp and an empty build
 // id, so the bytes depend on the source, the modules and the toolchain alone.
 // GOFLAGS is cleared: a caller's flags (a test run's -race, a -tags) are for
-// what the caller builds, never for the helper.
+// what the caller builds, never for the helper. It builds with the go that
+// builds the engine beside it, with no toolchain pin of its own: the pin to
+// go.mod's go line existed only so committed builds matched a rebuild.
 //
 // # Tests
 //
@@ -34,7 +37,7 @@ import (
 )
 
 // DirEnv names the environment variable holding a directory of note helper
-// builds, the last place the engine looks.
+// builds: while it is set, the only place the engine looks.
 const DirEnv = "CREWLET_NOTE_HELPER_DIR"
 
 // Archs are the box arches the helper is built for, by GOARCH's names.

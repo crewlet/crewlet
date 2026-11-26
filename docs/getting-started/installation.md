@@ -111,7 +111,8 @@ go install github.com/crewlet/crewlet/cmd/crewlet@latest
 A binary from `go install` carries no note helper, the small program a seat's
 executor writes into its box, so every executor launch is refused until it finds
 one: put the two `notehelper-linux-*` files from the release archive of the same
-version beside it, or in a directory `CREWLET_NOTE_HELPER_DIR` names.
+version beside it, or in a directory `CREWLET_NOTE_HELPER_DIR` names (while that
+is set, the engine looks nowhere else).
 
 Or take a signed release binary: every tag publishes archives for linux and
 macOS on amd64 and arm64, plus a `checksums.txt` with a keyless
@@ -178,12 +179,11 @@ A binary from `go install` reports its module version, a release's reports its t
 ```bash
 git clone https://github.com/crewlet/crewlet.git
 cd crewlet
-go build ./cmd/crewlet
-make notehelper && export CREWLET_NOTE_HELPER_DIR="$PWD/build/notehelper"
+make crewlet
 ```
 
-The second line builds the note helper an executor writes into its box, which
-the engine finds through `CREWLET_NOTE_HELPER_DIR`. That is the whole setup; see [CONTRIBUTING.md](https://github.com/crewlet/crewlet/blob/main/CONTRIBUTING.md) for test and lint commands.
+It builds `./crewlet` and, beside it, the note helper an executor writes into its
+box (a bare `go build ./cmd/crewlet` builds no helper). That is the whole setup; see [CONTRIBUTING.md](https://github.com/crewlet/crewlet/blob/main/CONTRIBUTING.md) for test and lint commands.
 
 ## Infrastructure
 

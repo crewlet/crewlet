@@ -41,35 +41,40 @@ func TestEachBoxArchGetsAStaticLinuxNoteHelperOfItsOwnArch(t *testing.T) {
 	}
 }
 
-// THE FIRST PLACE HOLDING THE BUILD WINS, in the order the places are looked
-// in: each place's own build is read while the places before it hold none.
-// Mutation, red: look in the places from the last.
-func TestTheNoteHelperIsReadFromTheFirstPlaceHoldingIt(t *testing.T) {
+// THE FIRST DIRECTORY HOLDING THE BUILD WINS, in the order they are looked
+// in: each one's own build is read while those before it hold none.
+// Mutation, red: look in the directories from the last.
+func TestTheNoteHelperIsReadFromTheFirstDirectoryHoldingIt(t *testing.T) {
 	t.Parallel()
-	places := []helperPlace{{dir: t.TempDir()}, {dir: t.TempDir()}, {dir: t.TempDir()}}
-	for i, p := range places {
-		if err := os.WriteFile(filepath.Join(p.dir, helperbuild.File("amd64")), []byte{byte('a' + i)}, 0o600); err != nil {
+	search := helperSearch{dirs: []string{t.TempDir(), t.TempDir(), t.TempDir()}}
+	for i, dir := range search.dirs {
+		if err := os.WriteFile(filepath.Join(dir, helperbuild.File("amd64")), []byte{byte('a' + i)}, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for i, p := range places {
-		got, err := findNoteHelper("amd64", places)
+	for i, dir := range search.dirs {
+		got, err := findNoteHelper("amd64", search)
 		if err != nil || string(got) != string([]byte{byte('a' + i)}) {
-			t.Fatalf("with places %d on holding the build, read %q, %v; want place %d's", i, got, err, i)
+			t.Fatalf("with directories %d on holding the build, read %q, %v; want directory %d's", i, got, err, i)
 		}
-		if err = os.Remove(filepath.Join(p.dir, helperbuild.File("amd64"))); err != nil {
+		if err = os.Remove(filepath.Join(dir, helperbuild.File("amd64"))); err != nil {
 			t.Fatal(err)
 		}
 	}
 }
 
-// THE ENGINE LOOKS BESIDE ITSELF, THEN IN THE IMAGE'S DIRECTORY, THEN WHERE
-// THE VARIABLE SAYS: a release archive's builds sit beside its binary, the
-// image's under /usr/local/share/crewlet, a checkout's where it names them.
-// Mutation, red: swap two places.
-func TestTheEngineLooksBesideItselfThenInTheImageThenWhereTheVariableSays(t *testing.T) {
+// A NAMED DIRECTORY IS THE ONLY PLACE LOOKED, AND OTHERWISE THE ENGINE LOOKS
+// BESIDE ITSELF, THEN IN THE IMAGE'S: whoever sets the variable means that
+// build, so nothing found elsewhere stands in for it; a release archive's
+// builds sit beside its binary, the image's under /usr/local/share/crewlet.
+// Mutations, red: fall back past a named directory; swap the two others.
+func TestANamedDirectoryIsTheOnlyPlaceLookedElseBesideTheEngineThenTheImage(t *testing.T) {
 	named := t.TempDir()
 	t.Setenv(helperbuild.DirEnv, named)
+	if got := noteHelperSearch().dirs; strings.Join(got, "\n") != named {
+		t.Errorf("with %s set the engine looks in %q, want %q alone", helperbuild.DirEnv, got, named)
+	}
+	t.Setenv(helperbuild.DirEnv, "")
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -77,35 +82,43 @@ func TestTheEngineLooksBesideItselfThenInTheImageThenWhereTheVariableSays(t *tes
 	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		t.Fatal(err)
 	}
-	var got []string
-	for _, p := range noteHelperPlaces() {
-		got = append(got, p.dir)
-	}
-	if want := []string{filepath.Dir(exe), "/usr/local/share/crewlet", named}; strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Errorf("the engine looks in %q, want %q", got, want)
+	got, want := noteHelperSearch().dirs, []string{filepath.Dir(exe), "/usr/local/share/crewlet"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("with %s unset the engine looks in %q, want %q", helperbuild.DirEnv, got, want)
 	}
 }
 
-// A MISSING BUILD REFUSES THE LAUNCH, NAMING WHERE IT LOOKED AND HOW TO GET
-// ONE, and is never errNoHelperBuild, which several harnesses start without:
-// an install missing its helper must not quietly run boxes without it.
-// Mutations, red: answer errNoHelperBuild; drop a place from the sentence.
+// A MISSING BUILD REFUSES THE LAUNCH, SAYING WHERE IT LOOKED, IN WHAT ORDER,
+// AND HOW TO GET ONE, and is never errNoHelperBuild, which several harnesses
+// start without: an install missing its helper must not quietly run boxes
+// without it. Mutations, red: answer errNoHelperBuild; drop the order.
 func TestAMissingNoteHelperRefusesNamingWhereItLookedAndHowToGetIt(t *testing.T) {
-	t.Parallel()
-	_, err := findNoteHelper("arm64", []helperPlace{
-		{dir: t.TempDir(), says: "beside the engine (/opt/crewlet)"},
-		{dir: t.TempDir(), says: "in /usr/local/share/crewlet"},
-		{says: "in CREWLET_NOTE_HELPER_DIR (unset)"}})
-	if err == nil {
-		t.Fatal("no build anywhere answered a note helper")
-	}
-	if errors.Is(err, errNoHelperBuild) {
-		t.Errorf("a missing build is errNoHelperBuild, which a harness starts without: %v", err)
-	}
-	for _, want := range []string{"linux/arm64", "notehelper-linux-arm64 is not beside the engine (/opt/crewlet), " +
-		"in /usr/local/share/crewlet or in CREWLET_NOTE_HELPER_DIR (unset)", "release archive", "make notehelper"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal %q does not say %q", err, want)
+	t.Setenv(helperbuild.DirEnv, "")
+	unset := noteHelperSearch()
+	unset.dirs = []string{t.TempDir(), t.TempDir()}
+	named := t.TempDir()
+	t.Setenv(helperbuild.DirEnv, named)
+	for _, tc := range []struct {
+		search helperSearch
+		says   []string
+	}{
+		{unset, []string{"notehelper-linux-arm64 is not beside the engine (", "), nor then in " +
+			"/usr/local/share/crewlet (CREWLET_NOTE_HELPER_DIR is unset)", "release archive", "make crewlet"}},
+		{noteHelperSearch(), []string{"notehelper-linux-arm64 is not in " + named + ", which " +
+			"CREWLET_NOTE_HELPER_DIR names, and while it is set the engine looks nowhere else", "unset " +
+			"CREWLET_NOTE_HELPER_DIR for the engine to look beside itself, then in /usr/local/share/crewlet"}},
+	} {
+		_, err := findNoteHelper("arm64", tc.search)
+		if err == nil {
+			t.Fatal("no build anywhere answered a note helper")
+		}
+		if errors.Is(err, errNoHelperBuild) {
+			t.Errorf("a missing build is errNoHelperBuild, which a harness starts without: %v", err)
+		}
+		for _, want := range append(tc.says, "linux/arm64") {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal %q does not say %q", err, want)
+			}
 		}
 	}
 }
