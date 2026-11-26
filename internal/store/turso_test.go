@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
+	"github.com/crewlet/crewlet/internal/nativelib"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 
@@ -99,7 +99,7 @@ func TestConcurrentStartsDoNotCorruptTheLibraryCache(t *testing.T) {
 		wg.Go(func() {
 			cmd := exec.Command(os.Args[0], //nolint:gosec // os.Args[0] is this test binary
 				"-test.run=^TestTursoLibraryPreparedByAChildProcess$", "-test.count=1")
-			cmd.Env = childEnv(tursoChildEnv+"=1", tursoCacheEnv+"="+root)
+			cmd.Env = childEnv(tursoChildEnv+"=1", nativelib.CacheEnv+"="+root)
 			out, err := cmd.CombinedOutput()
 			switch {
 			case err != nil:
@@ -124,7 +124,7 @@ func TestConcurrentStartsDoNotCorruptTheLibraryCache(t *testing.T) {
 // they have never heard of.
 func TestAHalfWrittenLibraryCacheIsHealed(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv(tursoCacheEnv, root)
+	t.Setenv(nativelib.CacheEnv, root)
 	if err := prepareTursoLibraryNow(); err != nil {
 		t.Fatalf("first prepare: %v", err)
 	}
@@ -178,85 +178,6 @@ func theCachedLibrary(t *testing.T, root string) string {
 	return libraries[0]
 }
 
-// A LOCK IS NOT STOLEN WHILE IT IS FRESH — the whole point is that a peer
-// mid-extraction is waited for rather than raced.
-func TestAFreshLockIsWaitedForRatherThanStolen(t *testing.T) {
-	dir := t.TempDir()
-	first, held := acquireTursoLock(dir, time.Now().Add(time.Minute))
-	if !held {
-		t.Fatal("the first caller did not take the lock")
-	}
-	defer first()
-
-	start := time.Now()
-	if _, held := acquireTursoLock(dir, time.Now().Add(150*time.Millisecond)); held {
-		t.Fatal("a second caller took a lock the first still holds")
-	}
-	if waited := time.Since(start); waited < 100*time.Millisecond {
-		t.Fatalf("the second caller gave up after %v; it must wait for the peer that is "+
-			"extracting, or the serialisation buys nothing", waited)
-	}
-}
-
-// AND A STALE ONE IS RECLAIMED. A lock is held only across an extraction, so
-// one older than that belongs to a process that was killed holding it —
-// and never reclaiming it would wedge every engine on the host.
-func TestAStaleLockIsReclaimed(t *testing.T) {
-	dir := t.TempDir()
-	lock := filepath.Join(dir, ".crewlet-extract.lock")
-	if err := os.Mkdir(lock, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-2 * tursoLockStale)
-	if err := os.Chtimes(lock, old, old); err != nil {
-		t.Fatal(err)
-	}
-	release, held := acquireTursoLock(dir, time.Now().Add(time.Second))
-	if !held {
-		t.Fatal("an abandoned lock was never reclaimed")
-	}
-	release()
-}
-
-// DEBRIS AT THE LOCK PATH IS CLEARED RATHER THAN WAITED FOR. Only this code
-// creates that path and it only ever creates a directory, so a file there is
-// not a peer — and treating it as one would stall every engine on the host for
-// the whole timeout, on this start and on every start after it.
-func TestDebrisAtTheLockPathIsCleared(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".crewlet-extract.lock"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	start := time.Now()
-	release, held := acquireTursoLock(dir, time.Now().Add(tursoPrepareTimeout))
-	if !held {
-		t.Fatal("a file at the lock path was treated as a lock somebody holds")
-	}
-	release()
-	if waited := time.Since(start); waited > time.Second {
-		t.Fatalf("clearing debris took %v; it must not wait out the timeout", waited)
-	}
-}
-
-// A LOCK THAT CANNOT BE TAKEN AT ALL IS NOT AN ERROR, and is not waited for
-// either: there is no peer to wait for when the path cannot hold a lock.
-// prepareTursoLibraryNow runs the preparation unguarded in that case, which is
-// the behaviour before any of this existed and strictly better than an engine
-// that refuses to start.
-func TestALockThatCannotBeTakenIsGivenUpAtOnce(t *testing.T) {
-	notADirectory := filepath.Join(t.TempDir(), "file")
-	if err := os.WriteFile(notADirectory, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	start := time.Now()
-	if _, held := acquireTursoLock(notADirectory, time.Now().Add(tursoPrepareTimeout)); held {
-		t.Fatal("acquireTursoLock claimed a lock it does not hold")
-	}
-	if waited := time.Since(start); waited > time.Second {
-		t.Fatalf("gave up after %v; a path that cannot hold a lock has no peer to wait for", waited)
-	}
-}
-
 // A CACHE ROOT THAT CANNOT EXIST IS REPORTED AS ITSELF, not as a library that
 // would not verify. The second message tells an operator to clear a directory,
 // and sending them to clear one that cannot be created is worse than useless.
@@ -265,7 +186,7 @@ func TestAnUnusableCacheRootIsReportedAsOne(t *testing.T) {
 	if err := os.WriteFile(root, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(tursoCacheEnv, root)
+	t.Setenv(nativelib.CacheEnv, root)
 	err := prepareTursoLibraryNow()
 	if err == nil {
 		t.Fatal("an unusable cache root was accepted")
@@ -289,7 +210,7 @@ func TestAnUnusableCacheRootIsReportedAsOne(t *testing.T) {
 // to fall back to.
 func TestALibraryThatWillNotHealSaysWhatToDo(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv(tursoCacheEnv, root)
+	t.Setenv(nativelib.CacheEnv, root)
 	if err := prepareTursoLibraryNow(); err != nil {
 		t.Fatalf("first prepare: %v", err)
 	}
@@ -309,7 +230,7 @@ func TestALibraryThatWillNotHealSaysWhatToDo(t *testing.T) {
 	if err == nil {
 		t.Fatal("a library that cannot be verified or healed was accepted")
 	}
-	for _, want := range []string{filepath.Join(root, tursoCacheDirName), tursoCacheEnv,
+	for _, want := range []string{filepath.Join(root, tursoCacheDirName), nativelib.CacheEnv,
 		"no second driver"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %v; it must name %q", err, want)
@@ -333,7 +254,7 @@ func TestOpenReportsABrokenLibraryCacheInsteadOfPanicking(t *testing.T) {
 	}
 	cmd := exec.Command(os.Args[0], //nolint:gosec // os.Args[0] is this test binary
 		"-test.run=^TestOpenWithABrokenLibraryCacheInAChildProcess$", "-test.count=1")
-	cmd.Env = childEnv(tursoChildEnv+"=1", tursoCacheEnv+"="+root)
+	cmd.Env = childEnv(tursoChildEnv+"=1", nativelib.CacheEnv+"="+root)
 	out, err := cmd.CombinedOutput()
 	requireChildRan(t, "Open did not report the broken cache", out, err)
 }
@@ -349,7 +270,7 @@ func TestOpenWithABrokenLibraryCacheInAChildProcess(t *testing.T) {
 	if err == nil {
 		t.Fatal("Open succeeded against a library cache that cannot exist")
 	}
-	if !strings.Contains(err.Error(), os.Getenv(tursoCacheEnv)) {
+	if !strings.Contains(err.Error(), os.Getenv(nativelib.CacheEnv)) {
 		t.Fatalf("error = %v; it must name the cache an operator has to look at", err)
 	}
 	fmt.Println(childRan)
