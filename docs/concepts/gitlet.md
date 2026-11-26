@@ -2106,8 +2106,8 @@ runs: each pool at its worst, half again for the heap's room under the
 engine's [memory limit](../guides/deployment.md#the-engines-memory-limit), over
 that limit's nine tenths: 107 MiB for the
 [transcript reads](code-sandbox.md#reading-a-seats-sessions) its API answers,
-and on a node running seats too 1 834 MiB at the default `node.max_concurrent`
-(its collections of runs and reads of its boxes for its peers, 8.0 MiB a
+and on a node running seats too 1 884 MiB at the default `node.max_concurrent`
+(its collections of runs and reads of its boxes for its peers, 8.5 MiB a
 turn, the sessions it takes from boxes, and its seats' reads). A Gitlet node
 always serves ingress (git is served on the API listener, which only an
 ingress node mounts), so every Gitlet node keeps the transcript reads' pool,
@@ -2178,17 +2178,17 @@ At the default lanes, with and without seats beside Gitlet (MiB, rounded):
 | Node | Seats | Executor's pools | Answers in flight | Store's page cache | Read lane | Transfers | Kept for the broker, the engine's own heap and the rest of the store | Background budget |
 |---|---|---|---|---|---|---|---|---|
 | 2 GiB, one core | no | 107 | 284 | 128 | 128 | 2 | 613 | 340 |
-| 2 GiB, one core | yes | 1 834 | 284 | 128 | 128 | 1 | 0 | 0 |
+| 2 GiB, one core | yes | 1 884 | 284 | 128 | 128 | 1 | 0 | 0 |
 | 4 GiB, two cores | no | 107 | 284 | 256 | 256 | 6 | 1 397 | 452 |
-| 4 GiB, two cores | yes | 1 834 | 284 | 256 | 256 | 2 | 641 | 376 |
+| 4 GiB, two cores | yes | 1 884 | 284 | 256 | 256 | 2 | 619 | 348 |
 | 8 GiB, four cores | no | 107 | 284 | 512 | 512 | 13 | 2 965 | 900 |
-| 8 GiB, four cores | yes | 1 834 | 284 | 512 | 512 | 9 | 2 209 | 824 |
+| 8 GiB, four cores | yes | 1 884 | 284 | 512 | 512 | 9 | 2 187 | 796 |
 | 16 GiB, eight cores | no | 107 | 284 | 1 024 | 1 024 | 27 | 6 101 | 1 796 |
-| 16 GiB, eight cores | yes | 1 834 | 284 | 1 024 | 1 024 | 23 | 5 345 | 1 720 |
+| 16 GiB, eight cores | yes | 1 884 | 284 | 1 024 | 1 024 | 23 | 5 323 | 1 692 |
 
 Its pools, page cache and read lane alone outgrow 2 GiB, and a node keeps at
-least one transfer, so 2 GiB running seats beside Gitlet keeps 551 MiB more
-than its memory, and its Go memory limit, 1 411 MiB, sits below the 1 907 MiB
+least one transfer, so 2 GiB running seats beside Gitlet keeps 601 MiB more
+than its memory, and its Go memory limit, 1 411 MiB, sits below the 1 952 MiB
 its pools and answers in flight keep: under concurrent load at the bounds its
 pools exceed the node, so expect GC pressure, then the out-of-memory killer.
 Small and development installs run there, so it still boots and serves, and
@@ -4935,7 +4935,7 @@ A Gitlet node's [cache](#the-cache-on-a-gitlet-node) logs under the component `g
 | `code_cache_map_count_unread` | `WARN` | `/proc/sys/vm/max_map_count` could not be read (`error`), so mapped runs are bounded as if the count were Linux's default (`assumed`, 65 530). A sandboxed kernel hiding `/proc/sys`; nothing to do unless the host lowered the count below default, which lowers what every process on it may map. |
 | `code_cache_memory_changed` | `INFO` | The node's memory read differently (a container resized in place) and `maintenance_budget` moved with it; `was` is the earlier reading. The git lanes keep their boot sizes until a restart. |
 | `code_cache_memory_unreadable` | `WARN` | Memory could not be read again; the last reading and budget stand until a read succeeds. Once until then. |
-| `code_cache_memory_short` | `WARN` | At boot, what the node keeps for everything but background work (`memory_reserved`: what the engine `kept` beside Gitlet (the Go runtime's share for the executor's pools and the answers in flight, the store's page cache and its read lane), 224 MiB for each of its `transfer_slots`, and the serving share) is past its `memory` by `shortfall`: with its pools, its transfers and its serving share at their worst at once, the node is out of memory. It still boots and serves. Its `remedy` names the cause. Where the engine's pools pass what the memory less its transfers leaves the Go runtime, the Go limit sits below them: under concurrent load at the bounds the pools exceed the node, so expect GC pressure, then the out-of-memory killer, and give it 4 GiB or more, or run Gitlet on a node of its own. Otherwise give it `memory_needed` or more, the least memory that holds what it keeps at these lanes, since the serving share grows with the memory (4 GiB or more in all where it runs seats beside Gitlet at the default `node.max_concurrent`, [The budget](#the-cache-on-a-gitlet-node)); or, where `gitlet.max_transfers` is set, fewer transfers; or, on a node running seats, a lower `node.max_concurrent` (8.0 MiB a turn). Once a boot. |
+| `code_cache_memory_short` | `WARN` | At boot, what the node keeps for everything but background work (`memory_reserved`: what the engine `kept` beside Gitlet (the Go runtime's share for the executor's pools and the answers in flight, the store's page cache and its read lane), 224 MiB for each of its `transfer_slots`, and the serving share) is past its `memory` by `shortfall`: with its pools, its transfers and its serving share at their worst at once, the node is out of memory. It still boots and serves. Its `remedy` names the cause. Where the engine's pools pass what the memory less its transfers leaves the Go runtime, the Go limit sits below them: under concurrent load at the bounds the pools exceed the node, so expect GC pressure, then the out-of-memory killer, and give it 4 GiB or more, or run Gitlet on a node of its own. Otherwise give it `memory_needed` or more, the least memory that holds what it keeps at these lanes, since the serving share grows with the memory (4 GiB or more in all where it runs seats beside Gitlet at the default `node.max_concurrent`, [The budget](#the-cache-on-a-gitlet-node)); or, where `gitlet.max_transfers` is set, fewer transfers; or, on a node running seats, a lower `node.max_concurrent` (8.5 MiB a turn). Once a boot. |
 | `code_cache_trashed` | `WARN` | At boot, something in the cache that is not a repository's current copy was moved aside to be removed: a copy an interrupted rebuild left, a stray, or a copy in another build's format (`why` says which). Nothing is lost: the rows and object store bring the repository back at its next fetch. |
 | `code_cache_state_unreadable` | `WARN` | A copy has no readable record of what it holds. It is kept; its next fetch reads the repository whole, reusing every pack held. Recurring, it is the disk. |
 | `code_cache_evicted` | `INFO` | A copy was evicted to bring the cache under its byte budget, least recently used first; `idle_for` is how long it was unused. Its next fetch is a cold sync. Frequent, the budget is too small for the repositories served. |
