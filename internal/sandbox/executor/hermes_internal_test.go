@@ -454,9 +454,7 @@ func hermesLauncherIn(t *testing.T, bin, system string) {
 		"); sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')"
 	launcher := "#!/bin/sh\n[ \"$1 $2 $3 $4\" = '--run-module cProfile -o /dev/null' ] || exit 2\nshift 4\n" +
 		shellword.Quote(python) + " -I -c " + shellword.Quote(run) + " \"$@\"\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(bin, "hermes"), []byte(launcher), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeHostProgram(t, filepath.Join(bin, "hermes"), []byte(launcher), 0o700)
 }
 
 // hermesSystemScope is the stand-in's `/etc/hermes`.

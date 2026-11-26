@@ -483,9 +483,6 @@ doing the thing, or does more), so read the file when you touch it:
   ruleset keeps approvals across pushes, anything pushed onto an open Dependabot
   branch merges once CI is green, so the token's scope is the only limit on what
   it can land. Weakening any of these makes the workflow reach *more*, never fail.
-  `.github/workflows/dependabot-notehelper.yml` holds the same token behind the
-  same guards and split, line for line, and writes only the two note helper
-  builds by name; read it with this one.
 - **`.github/workflows/pins.yml` runs, on its schedule, with `contents: read`
   and `issues: write` and no secret.** It is the only watcher of
   `scripts/git-pin.env`, `scripts/chromium-pin.env` and
@@ -509,10 +506,10 @@ doing the thing, or does more), so read the file when you touch it:
 
 | | Contents |
 |---|---|
-| **archives** (`crewlet_X.Y.Z_<os>_<arch>.tar.gz`) | one `crewlet` binary, `LICENSE`, `NOTICE`, `README.md`, `THIRD_PARTY_NOTICES.txt` (the license and notice files of the Go toolchain and every Go module the binary links, written by `scripts/notices` in goreleaser's before hook) and `dashboard/THIRD_PARTY_NOTICES.txt` (the embedded dashboard's bundled packages, fonts and icon paths, from the committed bundle). Four of them: linux and darwin × amd64 and arm64. **No Windows**, and **no musl**; see below |
+| **archives** (`crewlet_X.Y.Z_<os>_<arch>.tar.gz`) | one `crewlet` binary, `LICENSE`, `NOTICE`, `README.md`, `THIRD_PARTY_NOTICES.txt` (the license and notice files of the Go toolchain and every Go module the binary and the note helper link, written by `scripts/notices` in goreleaser's before hook) and `dashboard/THIRD_PARTY_NOTICES.txt` (the embedded dashboard's bundled packages, fonts and icon paths, from the committed bundle), and the note helper a box runs, `notehelper-linux-amd64` and `notehelper-linux-arm64` (`scripts/notehelper` in the before hook), in every archive whatever its platform, since a box is Linux and its arch is its own. Four of them: linux and darwin × amd64 and arm64. **No Windows**, and **no musl**; see below |
 | **`checksums.txt`** | SHA-256 over every archive |
 | **`checksums.txt.sigstore.json`** | the keyless cosign signature, its certificate and its Rekor entry, as one Sigstore bundle |
-| **`ghcr.io/crewlet/crewlet:vX.Y.Z`** | a multi-arch image (linux/amd64, linux/arm64), tagged with the release tag itself, also `:latest` on a stable tag, and signed by digest with the same keyless identity as the checksums. `LICENSE`, `NOTICE` and both notices files are under `/usr/share/doc/crewlet/`; the git it builds carries its own under `/usr/local/share/doc/git/` — git's licence texts, its source tarball, the recipe that built it and a `SOURCE` file saying which is which |
+| **`ghcr.io/crewlet/crewlet:vX.Y.Z`** | a multi-arch image (linux/amd64, linux/arm64), tagged with the release tag itself, also `:latest` on a stable tag, and signed by digest with the same keyless identity as the checksums. The note helper's two builds (about 15 MB together) are under `/usr/local/share/crewlet/`. `LICENSE`, `NOTICE` and both notices files are under `/usr/share/doc/crewlet/`; the git it builds carries its own under `/usr/local/share/doc/git/` — git's licence texts, its source tarball, the recipe that built it and a `SOURCE` file saying which is which |
 
 The binary is self-contained: dashboard assets embedded, the store a file it creates, the event stream an embedded NATS JetStream server. There is no runtime to install and no DSN.
 

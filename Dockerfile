@@ -182,6 +182,10 @@ ARG TARGETPLATFORM
 COPY ${TARGETPLATFORM}/crewlet /usr/local/bin/crewlet
 # Beside the binary, where internal/speech looks before downloading anything.
 COPY --from=speech /out/usr/local/share/crewlet/ /usr/local/share/crewlet/
+# The note helper a box runs, both arches whatever this image's: a box's arch
+# is its own. The engine looks here after its own directory
+# (internal/sandbox/executor's noteHelperPlaces).
+COPY build/notehelper/notehelper-linux-amd64 build/notehelper/notehelper-linux-arm64 /usr/local/share/crewlet/
 
 # The license, its notice and the third-party notices, where Debian keeps a
 # package's: the image redistributes the binary and everything it links, so it

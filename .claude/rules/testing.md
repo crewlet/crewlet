@@ -29,7 +29,6 @@ paths:
 - `golangci-lint run`, a prebuilt release: one built with a Go whose language version is older than `go.mod`'s refuses the module
 - `go build ./...`, and a cross-compile of every release target
 - the dashboard's `dashboard-lint` (`npm run format:check`), `dashboard-check` (rebuild and diff the committed bundle) and `dashboard-test` (`npm run typecheck && npm test && npm run test:layout`, the last in a headless browser)
-- `notehelper-check`: rebuild `internal/notehelper`'s committed builds (`make notehelper`) and diff them
 - `make git`, `make chromium`, `make node` and `make playwright-tree`: the pinned gits (built), Chromiums (fetched: the newest and the floor, `internal/browser.MinChromiumMajor`) and floor Node with its npm (fetched: the newest release of Node `internal/browser/boxhelper.MinNodeMajor`), once per machine, and the Playwright tree (installed with npm from `internal/browser/boxhelper/tree`'s lock, once per lock). Both test targets depend on them, so no gate runs the machine's own git or Chrome, nor hands the box helper's cases the newest Node alone
 - `make test`, then `make test-solo`
 

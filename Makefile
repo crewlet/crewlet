@@ -266,7 +266,7 @@ COMPANY ?=
 .DEFAULT_GOAL := help
 
 .PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer setup-steps ssh-held-words objects-answer broker-answer assistant-fixtures retention-alarms \
-        dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint notehelper notehelper-check \
+        dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint notehelper \
         check fmt-check tidy-check signoff-check signoff-test git-test chromium-test node-test playwright-tree-test vet lint test test-norace test-cross test-solo \
         require-npm bench git test-gitproc test-capture test-speech speech-pin-test chromium node playwright-tree \
         mattermost-up mattermost-down \
@@ -285,11 +285,14 @@ help: ## list every target
 build: ## compile every package (ci: build + vet)
 	$(GO) build ./...
 
-crewlet: ## build the engine binary into ./crewlet
+crewlet: notehelper ## build the engine binary into ./crewlet, the note helper beside it
 	$(GO) build -o $(BIN) ./cmd/crewlet
 
-install: ## go install the engine onto your PATH
+# The note helper beside the installed binary too, where the engine looks.
+install: ## go install the engine onto your PATH, the note helper beside it
 	$(GO) install ./cmd/crewlet
+	@bin="$$($(GO) env GOBIN)"; [ -n "$$bin" ] || bin="$$($(GO) env GOPATH)/bin"; \
+	$(GO) run ./scripts/notehelper -out "$$bin"
 
 # -s, AND THAT IS NOT THE SAME FLAG `fmt-check` OMITS.
 #
@@ -324,8 +327,8 @@ tidy: ## tidy go.mod / go.sum
 # directories beside them are a checkout's own company state, not something
 # this file produced, so removing them is the developer's call and not a
 # side effect of cleaning a build.
-clean: ## remove the build output (./crewlet, dist/ and build/)
-	rm -f $(BIN)
+clean: ## remove the build output (./crewlet, the note helper beside it, dist/ and build/)
+	rm -f $(BIN) $(NOTEHELPER_FILES)
 	rm -rf dist build
 	rm -rf $(UI)/node_modules
 
@@ -425,49 +428,16 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifact
 
 ##@ The note helper
 
-# internal/notehelper runs IN a box, so the engine embeds a build per box arch,
-# committed as static/dashboard is (`go build ./...` stays one command on a
-# clean checkout) and held to its source by `notehelper-check` and ci.yml's
-# build job, the same commands. Byte for byte reproducible, so the bytes
-# depend on the source and go.mod alone: go.mod's own toolchain (never a newer
-# one `auto` would keep), -trimpath, no VCS stamp (it would change with every
-# commit), an empty build id, and gzipbuild's compress/gzip in place of the
-# gzip program, whose output is its version's. x/net/websocket and
-# klauspost/compress/zstd are its modules beyond std, as only they save
-# hand-rolling RFC 6455 and RFC 8878, which #1818's ruling forbids, and
-# yaml.v3, the engine's own YAML module, as Claude Code reads a rule's
-# frontmatter as YAML; their versions are in the build info, so their bumps
-# rebuild (.github/workflows/dependabot-notehelper.yml). `go doc
-# ./internal/notehelper`.
-NOTEHELPER_OUT := internal/sandbox/executor/notehelper
-NOTEHELPER_GO := go$(shell sed -n 's/^go //p' go.mod)
+# internal/notehelper runs IN a box, so it is built per box arch beside the
+# engine, never committed: the release archives carry the builds beside the
+# binary, the image under /usr/local/share/crewlet, and a checkout beside
+# ./crewlet, where the engine looks, so a make-built engine always has the
+# helper built from its own source. One recipe for all of them
+# (`go doc ./internal/notehelper/helperbuild`).
+NOTEHELPER_FILES := notehelper-linux-amd64 notehelper-linux-arm64
 
-notehelper: ## rebuild the note helper's embedded builds into internal/sandbox/executor/notehelper (commit the result)
-	@set -e; tmp="$$(mktemp -d)"; mkdir -p $(NOTEHELPER_OUT); \
-	GOTOOLCHAIN=$(NOTEHELPER_GO) $(GO) build -o "$$tmp/gzipbuild" ./internal/notehelper/gzipbuild; \
-	for arch in amd64 arm64; do \
-	  GOTOOLCHAIN=$(NOTEHELPER_GO) CGO_ENABLED=0 GOOS=linux GOARCH=$$arch GOAMD64=v1 GOARM64=v8.0 \
-	    $(GO) build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" \
-	    -o "$$tmp/notehelper" ./internal/notehelper; \
-	  "$$tmp/gzipbuild" "$$tmp/notehelper" "$(NOTEHELPER_OUT)/notehelper-linux-$$arch.gz"; \
-	  rm -f "$$tmp/notehelper"; \
-	done; \
-	rm -f "$$tmp/gzipbuild"; rmdir "$$tmp"
-
-# Rebuild, then judge against the index, as dashboard-check does and for its
-# reasons: a changed build and one no commit carries both fail. A pull request
-# moving go.mod's toolchain or x/net without the rebuild fails here too.
-notehelper-check: notehelper ## fail if internal/sandbox/executor/notehelper is not what internal/notehelper builds (ci: build + vet)
-	@untracked="$$(git ls-files --others -- $(NOTEHELPER_OUT))" || exit 1; \
-	if ! git diff --exit-code --stat -- $(NOTEHELPER_OUT) || [ -n "$$untracked" ]; then \
-	  { echo; \
-	    echo "$(NOTEHELPER_OUT) is not what internal/notehelper builds at go.mod's toolchain and modules."; \
-	    git status --porcelain --untracked-files=all --ignored=matching \
-	      -- $(NOTEHELPER_OUT) | grep -v '^. '; \
-	    echo "Fix: run 'make notehelper', then commit both builds:"; \
-	    echo "  git add $(NOTEHELPER_OUT)/notehelper-linux-amd64.gz $(NOTEHELPER_OUT)/notehelper-linux-arm64.gz"; } >&2; \
-	  exit 1; \
-	fi
+notehelper: ## build the note helper for every box arch beside ./crewlet
+	$(GO) run ./scripts/notehelper -out $(dir $(BIN))
 
 ##@ The pinned gits
 
@@ -702,7 +672,7 @@ SUITE_ENV = $(REQUIRED) $(GIT_ENV) $(CHROMIUM_ENV) $(NODE_FLOOR_ENV) $(PLAYWRIGH
 # environment and a sub-make inherits the parent's command line, so a value
 # exported in the shell or given to `make check` would run one shard of each
 # half and print that every gate passed.
-check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test node-test speech-pin-test playwright-tree-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test notehelper-check ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test node-test speech-pin-test playwright-tree-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@status=0; \
 	$(MAKE) test TEST_SHARD= || status=1; \
 	$(MAKE) test-solo TEST_SHARD= || status=1; \
@@ -1348,7 +1318,8 @@ snapshot: ## rehearse a release locally (needs goreleaser and docker)
 # carries, which neither way goreleaser runs can do, so the build is written
 # out here with .goreleaser.yaml's settings (CGO_ENABLED=0, -trimpath, -s -w,
 # the -X stamp) and staged in the layout its dockers_v2 stages: each binary
-# under its platform, beside the license, its notice, both notices files and
+# under its platform, beside the note helper's builds, the license, its
+# notice, both notices files and
 # the git pin and recipe (scripts/git-pin.env, scripts/git.sh) the Dockerfile's
 # git stage builds from — the files .goreleaser.yaml's extra_files names. A
 # change to the release build is a change to both files.
@@ -1370,7 +1341,8 @@ image-context: ## stage the engine image's build context, stamped VERSION (ci: m
 	    -o $(IMAGE_CONTEXT)/$$platform/crewlet ./cmd/crewlet || exit 1; \
 	done
 	$(GO) run ./scripts/notices -out $(IMAGE_CONTEXT)/build/notices/THIRD_PARTY_NOTICES.txt \
-	  -main ./cmd/crewlet -targets $$(echo $(IMAGE_PLATFORMS) | tr ' ' ',')
+	  -main ./cmd/crewlet,./internal/notehelper -targets $$(echo $(IMAGE_PLATFORMS) | tr ' ' ',')
+	$(GO) run ./scripts/notehelper -out $(IMAGE_CONTEXT)/build/notehelper
 	mkdir -p $(IMAGE_CONTEXT)/static/dashboard $(IMAGE_CONTEXT)/scripts
 	cp LICENSE NOTICE $(IMAGE_CONTEXT)/
 	cp static/dashboard/THIRD_PARTY_NOTICES.txt $(IMAGE_CONTEXT)/static/dashboard/
