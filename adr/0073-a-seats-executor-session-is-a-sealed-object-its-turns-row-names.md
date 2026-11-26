@@ -4877,7 +4877,8 @@ cross-node read, so the host's take is still handed its whole budget.
 
 **Every step of a capture's life is counted on one clock, and its instant
 read on another within twice their skew.** The budget every age rule read
-(`SessionCaptureBudget`, thirty-four and a half minutes at the floor) counted
+(`SessionCaptureBudget`, thirty-four and a half minutes at the floor in the
+build before this amendment) counted
 a take, a keep and a stamp. It left out the reservation's crossing, the
 keep's own reads of the coordination store (the turn's operations minted and
 the seat's runs listed, which ran inside the upload's pace and at the floor
@@ -5151,9 +5152,9 @@ turn's row for a begun stamp naming a taker whose lease holds, or that the
 store cannot say of, as well, and settles it landed where the row names its
 place: the turn's end at most once every record's budget, thirty seconds on
 its wait's own clock, never at its two-second tick (`heldRowPace`,
-`beganUnderTaker`), about a hundred and forty-three linearizable reads for
-one capture held its whole life from first sight, and about four hundred and
-sixty-five over a standby's chain, the end's rounds alone reading the log; a
+`beganUnderTaker`), about two hundred and thirty-five linearizable reads for
+one capture held its whole life from first sight, and about six hundred and
+thirty-five over a standby's chain, the end's rounds alone reading the log; a
 relaunch once, after its wait has run out, for a stamp of the job it follows
 however long ago it began (`ContinuedCapture`,
 `followedBegunUnderTaker`), since such a host holds its lease for as long as
