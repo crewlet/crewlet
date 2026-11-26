@@ -318,10 +318,12 @@ func TestAGrowthCallIsMadeOnlyAtTheLevelItsClassNeeds(t *testing.T) {
 	if strings.Contains(got.Output, `"feedback": "Ignore`) || !strings.Contains(got.Output, "api_answer") {
 		t.Errorf("the vendor's words reached the model unfenced: %s", got.Output)
 	}
-	for _, c := range []struct{ handle, tool string }{{"sre", growthOperateTool}, {"dev", growthReadTool}} {
+	for _, c := range []struct{ handle, tool, level string }{{"sre", growthOperateTool, "Manage (operate)"},
+		{"dev", growthReadTool, "View (read)"}} {
 		got, err := byName[c.tool].CallForTurn(asSeat(c.handle), growthTurn(t, c.handle), map[string]any{})
-		if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden {
-			t.Errorf("%s calling %s answered %q, want it refused", c.handle, c.tool, got.Output)
+		if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
+			!strings.Contains(got.Output, c.tool+" makes it, offered to an agent at "+c.level) {
+			t.Errorf("%s calling %s answered %q, want it refused naming its level", c.handle, c.tool, got.Output)
 		}
 	}
 	if len(ads.calls) != 1 {

@@ -78,6 +78,12 @@ func (c Catalog) WayTo(class Class, held Level) string {
 	return c.way(through, class, held)
 }
 
+// WayThrough is [Catalog.WayTo] for a call of tool itself.
+func (c Catalog) WayThrough(tool string, held Level) string {
+	t, _ := c.Tool(tool)
+	return c.way([]words.Said{words.Said(tool)}, t.Class, held)
+}
+
 // way is [Catalog.WayTo] through the tools named.
 func (c Catalog) way(through []words.Said, class Class, held Level) string {
 	if held.Allows(class) {

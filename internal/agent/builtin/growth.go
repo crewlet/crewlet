@@ -164,7 +164,7 @@ func (t *growthTool) admitted(ctx context.Context, turn *turnctx.Turn) (string, 
 	}
 	if level := t.product.Level(handle); !level.Allows(t.def.Class) {
 		r := refused(tools.RefusalForbidden, fmt.Sprintf("%s didn't run: its calls are %s-class. %s No vendor "+
-			"was reached.", t.Name(), t.def.Class, t.product.Catalog().WayTo(t.def.Class, level)))
+			"was reached.", t.Name(), t.def.Class, t.product.Catalog().WayThrough(t.Name(), level)))
 		return "", &r
 	}
 	return handle, nil
