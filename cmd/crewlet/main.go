@@ -2113,6 +2113,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Backups:     e.Backends().Fleet,
 			BackupFloor: boot.Stream.TrackerRetention.Floor(),
 			NodeID:      nodeID,
+			Incarnation: e.Node().Owner(),
 			// Artifacts, decided per artifact and shaped by the reader's role;
 			// nil on an engine with no router.
 			Artifacts: artifactsSource,

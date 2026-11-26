@@ -182,8 +182,10 @@ func TestAWaitStopsAtTheCapAtACallsBoundAndAtItsProcessGone(t *testing.T) {
 			rig := newCoordRigWith(t, taking("node-b:collector", store))
 			claimTaker(t, store, "node-a:alive")
 			rig.launch("t1")
+			// ITS BOUND SET ON THE COLLECTOR'S OWN CLOCK, so read at its word
+			// (rowclock.go).
 			call := BridgeCall{Name: "delegate", Seq: 1, StartedAt: rig.now, Until: rig.now.Add(tc.until),
-				Runner: tc.runner, Digest: strings.Repeat("d", 64)}
+				UntilClock: "node-b:collector", Runner: tc.runner, Digest: strings.Repeat("d", 64)}
 			run := beginInFlight(t, rig, "t1", call)
 			if tc.deadline != 0 {
 				run.Deadline = rig.now.Add(tc.deadline)

@@ -121,7 +121,7 @@ func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.
 		if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Fence: next, Lost: true}); err == nil || ok {
 			t.Fatalf("a revival naming no answer = %v, %v, want an error", ok, err)
 		}
-		revival := sandbox.Revival{Launch: launch, Answer: []string{"r1"}, Fence: next, Lost: true, Node: "node-a"}
+		revival := sandbox.Revival{Launch: launch, Answer: []string{"r1"}, Fence: next, Lost: true, Clock: "node-a"}
 		lost := time.Now().UTC()
 		revived, ok, err := s.ReviveAnswer(ctx, "t1", revival)
 		if err != nil || !ok {
@@ -136,7 +136,7 @@ func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.
 			!a.FirstLostAt.Equal(lost) {
 			t.Fatalf("answer %+v, want the same answer, untaken, its lost claim counted at %s", a, lost)
 		}
-		if on := got.Answer.LostOn; on == nil || on.Node != "node-a" || !on.Since.Equal(lost) || !on.Of.Equal(lost) {
+		if on := got.Answer.LostOn; on == nil || on.Clock != "node-a" || !on.Since.Equal(lost) || !on.Of.Equal(lost) {
 			t.Fatalf("the losses are timed on %+v, want on the reviving node from %s", on, lost)
 		}
 		if revived.Status != got.Status || revived.OwnerEpoch != got.OwnerEpoch ||
@@ -160,14 +160,14 @@ func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.
 			t.Fatalf("the revived run's claim = %v, %v", ok, err)
 		}
 		if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Answer: []string{"r1"},
-			Fence: later, Lost: true, Node: "node-b"}); err != nil || !ok {
+			Fence: later, Lost: true, Clock: "node-b"}); err != nil || !ok {
 			t.Fatalf("the second revival = %v, %v", ok, err)
 		}
 		if a := mustGet(t, s, "t1").Answer; a.LostClaims != 2 || !a.FirstLostAt.Equal(lost) {
 			t.Fatalf("answer lost %d claims since %v, want 2 since %v", a.LostClaims, a.FirstLostAt, lost)
 		}
 		moved := lost.Add(time.Second)
-		if on := mustGet(t, s, "t1").Answer.LostOn; on == nil || on.Node != "node-b" || !on.Since.Equal(moved) ||
+		if on := mustGet(t, s, "t1").Answer.LostOn; on == nil || on.Clock != "node-b" || !on.Since.Equal(moved) ||
 			!on.Of.Equal(lost) {
 			t.Fatalf("after a revival on another node the losses are timed on %+v, want on it from %s", on, moved)
 		}

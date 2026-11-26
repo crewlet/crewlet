@@ -37,10 +37,10 @@ import (
 // digits of fraction and a zone that is not UTC.
 var worstAt = time.Date(2026, 11, 3, 23, 59, 59, 999_999_999, time.FixedZone("x", 5*3600+1800))
 
-// worstWindow is a [RowWindow] at its widest: a node id at its bound and its
-// two instants at [worstAt].
+// worstWindow is a [RowWindow] at its widest: an incarnation at its bound and
+// its two instants at [worstAt].
 func worstWindow() *RowWindow {
-	return &RowWindow{Node: strings.Repeat("n", coord.MaxNodeIDBytes), Since: worstAt, Of: worstAt}
+	return &RowWindow{Clock: strings.Repeat("n", maxIncarnationBytes), Since: worstAt, Of: worstAt}
 }
 
 // worstCall is one bridged call with every field at its widest, the payloads
@@ -247,7 +247,7 @@ func everyField(t *testing.T, name string) BridgeCall {
 	call.Held, call.Approved, call.ArgsBytes, call.OutputBytes = true, true, math.MaxInt, math.MaxInt
 	call.ArgsUnparsed = true
 	call.Runner, call.Until = strings.Repeat("<", 4<<10), worstAt
-	call.UntilOn = strings.Repeat("n", 4<<10)
+	call.UntilClock = strings.Repeat("n", 4<<10)
 	return call
 }
 
@@ -790,7 +790,7 @@ func worstRow(t *testing.T) PendingRun {
 		Raw: plain(128), Digest: plain(64), Arguments: plain(MaxHeldArgsBytes - 2), Fixed: true,
 		Approvers: plain(32), Binding: plain(maxHeldBindingBytes), Acting: acting, Act: plain(32),
 		Subject: plain(maxHeldBindingBytes), Delegation: delegation, HeldAt: worstAt,
-		HeldOn: plain(coord.MaxNodeIDBytes), LapsesAt: worstAt, CallingAt: worstAt, MadeAt: worstAt}
+		HeldClock: plain(maxIncarnationBytes), LapsesAt: worstAt, CallingAt: worstAt, MadeAt: worstAt}
 	held.Result = heldResultAtItsWorst(t, *held)
 	// THE CALL A PERSON APPROVED, as the store records it on the held call
 	// ([approvedCall]) and a reset carries it on to the log it is owed to
@@ -1335,13 +1335,13 @@ var zeroInTheWorstRow = func() map[string]string {
 		"Held":   "it was made, so it is marked approved and never held (approvedCall)",
 		"ArgsUnparsed": "its arguments were sealed and approved, so they parsed, and the log keeps none of a " +
 			"withheld call's to read (approvedCall)",
-		"Seq":       "it has no place until the log takes it and places it (approvedCall, BridgeLog.withApproved)",
-		"Appended":  "nor a number, which the log gives it as it takes it (approvedCall, BridgeLog.appendCall)",
-		"Late":      "the store appends it for its own round, so it is never late (approvedCall)",
-		"Abandoned": "no harness gave it up: the resume made it on the engine host (approvedCall)",
-		"Runner":    "nobody waits for a finished call, so it keeps no runner (keptCall)",
-		"Until":     "nor a bound to wait for it until (keptCall)",
-		"UntilOn":   "nor the node that bounded it (keptCall)",
+		"Seq":        "it has no place until the log takes it and places it (approvedCall, BridgeLog.withApproved)",
+		"Appended":   "nor a number, which the log gives it as it takes it (approvedCall, BridgeLog.appendCall)",
+		"Late":       "the store appends it for its own round, so it is never late (approvedCall)",
+		"Abandoned":  "no harness gave it up: the resume made it on the engine host (approvedCall)",
+		"Runner":     "nobody waits for a finished call, so it keeps no runner (keptCall)",
+		"Until":      "nor a bound to wait for it until (keptCall)",
+		"UntilClock": "nor the clock that bounded it (keptCall)",
 	} {
 		zero["HeldCall.Call."+field], zero["OwedCall.Call."+field] = why, why
 	}
@@ -1514,7 +1514,7 @@ var zeroInTheWorstLog = func() map[string]string {
 			"parse carries none (BridgeCall.ArgsUnparsed), so it weighs less (worstCall)",
 		"Calls[0].Runner":         finished,
 		"Calls[0].Until":          finished,
-		"Calls[0].UntilOn":        finished,
+		"Calls[0].UntilClock":     finished,
 		"ElidedCalls[0].Name":     folded,
 		"ElidedCalls[0].Digest":   folded,
 		"AbsorbedCalls[0].Name":   absorbed,

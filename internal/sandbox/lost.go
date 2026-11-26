@@ -324,7 +324,7 @@ func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time)
 		return verdict
 	}
 	verdict.givenUp = run.Launch.CollectFailures+1 >= MinConnectFailures &&
-		run.Launch.collectWait().lasted(c.node, now, ConnectGiveUp)
+		run.Launch.collectWait().lasted(c.incarnation, now, ConnectGiveUp)
 	return verdict
 }
 

@@ -1072,7 +1072,7 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			if run.Launch.CollectFailingSince.IsZero() {
 				run.Launch.CollectFailingSince = at.UTC()
 			}
-			run.Launch.CollectFailingOn = run.Launch.collectWait().recorded(release.FailedOn, at,
+			run.Launch.CollectFailingOn = run.Launch.collectWait().recorded(release.Clock, at,
 				run.Launch.CollectFailingSince)
 		}
 		if at := release.ResumeFailedAt; !at.IsZero() {
@@ -1080,7 +1080,7 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			if run.Launch.ResumeFailingSince.IsZero() {
 				run.Launch.ResumeFailingSince = at.UTC()
 			}
-			run.Launch.ResumeFailingOn = run.Launch.resumeWait().recorded(release.FailedOn, at,
+			run.Launch.ResumeFailingOn = run.Launch.resumeWait().recorded(release.Clock, at,
 				run.Launch.ResumeFailingSince)
 		}
 		// THE RUN OF FAILURES ENDS AT A COLLECTION THAT READ THE BOX; the job is
@@ -1626,7 +1626,7 @@ func (s *CoordStore) ReviveAnswer(ctx context.Context, turnID string, revival Re
 			if answer.FirstLostAt.IsZero() {
 				answer.FirstLostAt = now
 			}
-			answer.LostOn = rowWait{first: answer.FirstLostAt, window: answer.LostOn}.recorded(revival.Node, now,
+			answer.LostOn = rowWait{first: answer.FirstLostAt, window: answer.LostOn}.recorded(revival.Clock, now,
 				answer.FirstLostAt)
 		}
 		run.Answer = &answer

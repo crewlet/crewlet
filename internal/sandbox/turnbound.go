@@ -37,15 +37,15 @@ const MinResumeFailures = 3
 
 // failure is what a hand-back counts onto the job's record: the instant a
 // collection could not read its box ([Release.CollectFailedAt]) or a resume
-// failed ([Release.ResumeFailedAt]), on the clock of node on
-// ([Release.FailedOn]); and, in this node's memory rather than on
+// failed ([Release.ResumeFailedAt]), on the clock of the process clock names
+// ([Release.Clock]); and, in this node's memory rather than on
 // the record, the kind of a condition only an operator clears that the resume
 // failed on, which counts the run in [Coordinator.ResumesBlocked] once the
 // hand-back lands ([blockedResume]). The zero value counts nothing.
 type failure struct {
 	collectFailed time.Time
 	resumeFailed  time.Time
-	on            string
+	clock         string
 	blocked       string
 }
 
@@ -186,7 +186,7 @@ func (c *Coordinator) resumeGivenUp(ctx context.Context, run PendingRun, now tim
 // (rowclock.go).
 func (c *Coordinator) resumeGiveUpDue(run PendingRun, now time.Time) bool {
 	return run.Launch.ResumeFailures+1 >= MinResumeFailures &&
-		run.Launch.resumeWait().lasted(c.node, now, ResumeGiveUp)
+		run.Launch.resumeWait().lasted(c.incarnation, now, ResumeGiveUp)
 }
 
 // runsOwnFailure reports whether err, the failure of run's resume, is the

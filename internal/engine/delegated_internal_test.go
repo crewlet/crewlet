@@ -137,7 +137,7 @@ func TestTheSweepTimesACallAnotherNodeHeldOnItsOwnClock(t *testing.T) {
 	store := sandbox.NewCoordStore(memory.NewFleet())
 	sandboxtest.DelegatedParked(t, store, "t-ahead", []string{"security-a"}, heldAt)
 	rules, audit := sweepRules{delegates: []string{"security-a"}, live: true}, &sweepAudit{}
-	seen := &heldSightings{node: "node-b"}
+	seen := &heldSightings{clock: "node-b:2"}
 	ahead := heldAt.Add(30*time.Minute + time.Second)
 	sweepDelegated(t.Context(), store, rules, delegated.DefaultDeadline, audit, openHeld(t), seen, ahead)
 	if e := escalation(t, store, "t-ahead"); e != nil {

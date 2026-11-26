@@ -225,7 +225,7 @@ func testARunOfFailuresIsTimedOnTheNodeRecordingIt(t *testing.T, s sandbox.Pendi
 		node string
 	}{{first, "node-a"}, {first.Add(20 * time.Second), "node-a"}, {moved, "node-b"}} {
 		release := releaseOf(mustClaim(t, s, "t1"))
-		release.CollectFailedAt, release.ResumeFailedAt, release.FailedOn = step.at, step.at, step.node
+		release.CollectFailedAt, release.ResumeFailedAt, release.Clock = step.at, step.at, step.node
 		if released, err := s.ReleaseClaim(t.Context(), "t1", release); err != nil || !released {
 			t.Fatalf("release %d: released=%v err=%v", i, released, err)
 		}
@@ -234,11 +234,11 @@ func testARunOfFailuresIsTimedOnTheNodeRecordingIt(t *testing.T, s sandbox.Pendi
 		if step.node == "node-b" {
 			since = moved
 		}
-		want := sandbox.RowWindow{Node: step.node, Since: since, Of: first}
+		want := sandbox.RowWindow{Clock: step.node, Since: since, Of: first}
 		for name, got := range map[string]*sandbox.RowWindow{
 			"collections": facts.CollectFailingOn, "resumes": facts.ResumeFailingOn,
 		} {
-			if got == nil || got.Node != want.Node || !got.Since.Equal(want.Since) || !got.Of.Equal(want.Of) {
+			if got == nil || got.Clock != want.Clock || !got.Since.Equal(want.Since) || !got.Of.Equal(want.Of) {
 				t.Errorf("after failure %d on %s the failed %s are timed on %+v, want %+v", i+1, step.node, name,
 					got, want)
 			}

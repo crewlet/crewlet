@@ -639,10 +639,11 @@ type CoordinatorOptions struct {
 	// TakerTTL / [coord.KeptRenewals], released by [Coordinator.Stop] after the
 	// last keep. Every capture names the lease ([SessionCapture.Taker],
 	// [SessionCapture.TakerEpoch]); a wait for another process's capture settles
-	// from the executor log once that lease lapsed (session.go). Held to
-	// [maxIncarnationBytes]. BOTH OR NEITHER ([NewCoordinator] checks): a holder
-	// with no lease would read as a taker gone the moment its capture began;
-	// neither is a test's coordinator, waited for by stamp age.
+	// from the executor log once that lease lapsed (session.go). It names this
+	// process's clock beside every instant it stamps on a row (rowclock.go). Held
+	// to [maxIncarnationBytes]. BOTH OR NEITHER ([NewCoordinator] checks): a
+	// holder with no lease would read as a taker gone the moment its capture
+	// began; neither is a test's coordinator, waited for by stamp age.
 	Incarnation string
 	Takers      TakerLeases
 
@@ -804,6 +805,9 @@ type Coordinator struct {
 	node  string
 	boxes BoxReader
 	nudge func(ctx context.Context, n Nudge)
+	// incarnation is [CoordinatorOptions.Incarnation]: the clock every instant
+	// this process stamps on a run's row names (rowclock.go).
+	incarnation string
 	// taker is this process's taker lease ([CoordinatorOptions.Takers]), nil
 	// where none is wired.
 	taker *takerLease
@@ -1125,6 +1129,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		busy:               opts.Busy,
 		foldInAnswered:     opts.FoldInAnswered,
 		node:               opts.Node,
+		incarnation:        opts.Incarnation,
 		boxes:              opts.Boxes,
 		nudge:              opts.Nudge,
 		refresh:            opts.Refresh,
@@ -2070,7 +2075,7 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 	// outlasting its delivery would otherwise start a new run each time and never
 	// be given up ([Release.BoxAnswered]).
 	run.BoxAnswered = false
-	if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{collectFailed: now, on: c.node}, nil,
+	if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{collectFailed: now, clock: c.incarnation}, nil,
 		BudgetWindow{}); err != nil {
 		//nolint:nilerr // Deliberate, as at every other hand-back: the claim
 		// did not go back, so the run has been ended and announced, and a
@@ -3752,7 +3757,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			if c.resumeGivenUp(ctx, run, now, err) {
 				return AnswerConsumed, nil
 			}
-			failed.resumeFailed, failed.on = now, c.node
+			failed.resumeFailed, failed.clock = now, c.incarnation
 		}
 		// AND THE WINDOW AN ANSWER'S RELAUNCH WAS REFUSED BELOW ITS FLOOR IN, onto
 		// the job's record ([Release.RelaunchRefusedIn]): the answer's wait is its
@@ -5741,7 +5746,7 @@ func (c *Coordinator) revivableAfter(run PendingRun, what string, lost int, dyin
 		return fmt.Sprintf("%d claims of %s have now died before their turn took it", lost+1, what)
 	}
 	now := c.now()
-	if window := answerWindow(run); window > 0 && dying.lasted(c.node, now, window) {
+	if window := answerWindow(run); window > 0 && dying.lasted(c.incarnation, now, window) {
 		return fmt.Sprintf("%s has been owed its resume for %s since the first claim of it "+
 			"died, past the run's pause_ttl_seconds", what, now.Sub(dying.first).Round(time.Second))
 	}
@@ -5757,7 +5762,7 @@ func (c *Coordinator) reviveAnswer(ctx context.Context, run PendingRun, fence Fe
 	written, won, err := c.pending.ReviveAnswer(ctx, run.TurnID, Revival{
 		Launch: run.LaunchID, Answer: run.Answer.EventIDs, Fence: fence,
 		// A CLAIM WHOSE NODE STOPPED, so counted ([MaxAnswerRevivals]).
-		Lost: true, Node: c.node,
+		Lost: true, Clock: c.incarnation,
 	})
 	switch {
 	case errors.Is(err, ErrAnswerTaken):

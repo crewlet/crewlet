@@ -189,18 +189,21 @@ hours of each other:
   the decider's than that gives a host up early, and writes off the stopped
   run's spend while the host may still be restarting.
 - A run's give-ups and waits timed by an instant on its record are judged on
-  the clock of the node that stamped it, which the record names: a collection
-  that keeps failing (a minute), a resume that keeps failing (half an hour), a
+  the clock of the engine process that stamped it, which the record names by
+  its incarnation, not its node id, so a node that comes back under the same
+  id on another machine reads its old instants as another clock's: a
+  collection that keeps failing (a minute), a resume that keeps failing (half
+  an hour), a
   revived answer's or carried-on wait's lost claims (the run's
   `pause_ttl_seconds`), a collection's wait for a
   [call still in flight](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box) (the
   call's bound) and a [delegated request's](delegated-decisions.md)
-  deadline. Any other node, or a record an older engine wrote, gives up once
-  the bound and two hours have passed by its own clock, or sooner on its own
-  clock alone: a node recording another failure of the run restarts its window
-  there, and the delegated-decisions duty counts a deadline from the pass that
-  first saw the request. A node whose clock runs further ahead of the
-  stamper's than the two hours can give up early.
+  deadline. Any other process, or a record an older engine wrote, gives up
+  once the bound and two hours have passed by its own clock, or sooner on its
+  own clock alone: a process recording another failure of the run restarts its
+  window there, and the delegated-decisions duty counts a deadline from the
+  pass that first saw the request. A node whose clock runs further ahead of
+  the stamper's than the two hours can give up early.
 - A token the poll renewed in a box stays in the run's set for its scrub until
   two hours past its issuer's expiry by the clock of the node recording the
   next renewal.

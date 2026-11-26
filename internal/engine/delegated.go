@@ -555,13 +555,15 @@ type delegatedSweep struct {
 	seen *heldSightings
 }
 
-// heldSightings is the sweep's own clock on the calls it sweeps: node, the
-// node holding the duty, and when it first saw each call waiting on its
-// delegates, by ID, on its clock, which times a call another node held
-// ([sandbox.HeldCall.WaitedFor]). Forgotten at a restart or a move of the
-// duty, which times it from the call's own instant and the clocks' allowance.
+// heldSightings is the sweep's own clock on the calls it sweeps: clock, this
+// process's incarnation, and when it first saw each call waiting on its
+// delegates, by ID, on that clock, which times a call another process held
+// ([sandbox.HeldCall.WaitedFor]). Kept in this process's memory, each pass
+// keeping only the calls it listed waiting: lost at a restart, and stale while
+// the duty is held elsewhere, when this node runs no pass. A stale sighting is
+// still a lower bound on the call's wait, never early.
 type heldSightings struct {
-	node  string
+	clock string
 	first map[string]time.Time
 }
 
@@ -577,7 +579,7 @@ func (s *heldSightings) sighted(held sandbox.HeldCall, now time.Time, next map[s
 		at = now
 	}
 	next[held.ID] = at
-	return s.node, at
+	return s.clock, at
 }
 
 // startDelegatedSweep arms the sweep on a node that runs workers.
@@ -586,7 +588,7 @@ func (e *Engine) startDelegatedSweep(ctx context.Context) {
 		return
 	}
 	s := &delegatedSweep{engine: e, claim: e.workerDuty(delegatedSweepName, delegatedSweepTTL),
-		now: time.Now, done: make(chan struct{}), seen: &heldSightings{node: e.id}}
+		now: time.Now, done: make(chan struct{}), seen: &heldSightings{clock: e.incarnation}}
 	// DETACHED from the caller's context, as every long-running loop here is.
 	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
 	s.stop = stop
@@ -676,7 +678,7 @@ type delegatedRecorder interface {
 }
 
 // sweepDelegated puts to people every active held call that waited on its
-// delegates past deadline, timed on seen's node ([heldSightings]), or whose
+// delegates past deadline, timed on seen's clock ([heldSightings]), or whose
 // delegation the live rules no longer hold, each through escalateHeld.
 func sweepDelegated(ctx context.Context, store sandbox.PendingStore, rules builtin.DelegatedRules,
 	deadline time.Duration, audit delegatedRecorder, open func(sandbox.PendingRun) (map[string]any, error),
@@ -699,11 +701,11 @@ func sweepDelegated(ctx context.Context, store sandbox.PendingStore, rules built
 			run.Ending != nil || run.LaunchID != held.LaunchID {
 			continue
 		}
-		node, since := seen.sighted(*held, now, next)
+		clock, since := seen.sighted(*held, now, next)
 		word, said := ownRequest(run)
 		if word == "" {
 			delegates, _, _, live := rules.Rule(delegated.Kind(held.Act))
-			word, said = dueEscalation(*held, delegates, live, deadline, node, since, now)
+			word, said = dueEscalation(*held, delegates, live, deadline, clock, since, now)
 		}
 		if word == "" {
 			continue
@@ -770,9 +772,10 @@ func escalateHeld(ctx context.Context, store sandbox.PendingStore, audit delegat
 // the closed word and the sentence people read, "" for one that still waits:
 // its kind no longer delegated (live false), a delegate it was put to no
 // longer the rule's, or the company's deadline passed since it was held, by
-// node's clock, which first saw it waiting at seen ([sandbox.HeldCall.WaitedFor]).
+// the clock of the process clock names, which first saw it waiting at seen
+// ([sandbox.HeldCall.WaitedFor]).
 func dueEscalation(held sandbox.HeldCall, delegates []string, live bool, deadline time.Duration,
-	node string, seen, now time.Time) (string, string) {
+	clock string, seen, now time.Time) (string, string) {
 	if !live {
 		return delegated.OverruledOff, "Delegated decisions for " + held.Act + " were turned off, so the " +
 			"request came to people."
@@ -783,7 +786,7 @@ func dueEscalation(held sandbox.HeldCall, delegates []string, live bool, deadlin
 				"came to people."
 		}
 	}
-	if held.WaitedFor(node, now, seen, deadline) {
+	if held.WaitedFor(clock, now, seen, deadline) {
 		return delegated.OverruledDeadline, "No delegate answered within " +
 			delegated.Limits{Deadline: deadline}.DeadlineWords() + ", so the request came to people."
 	}

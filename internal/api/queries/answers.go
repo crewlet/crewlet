@@ -600,6 +600,11 @@ type Sources struct {
 	// lease carries, never the raw `node.id` field.
 	NodeID string
 
+	// Incarnation is this process's incarnation, the clock an instant it judges
+	// against another process's stamp is named by (internal/sandbox's
+	// rowclock.go). Empty reads every such instant as another clock's.
+	Incarnation string
+
 	// Now is the ONE clock every answer here reads, injectable so a caller
 	// can pin it. Nil is the wall clock.
 	//

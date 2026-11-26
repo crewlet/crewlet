@@ -194,7 +194,7 @@ func (s *CoordStore) ReviveWaitOver(ctx context.Context, turnID string, revival 
 			if over.FirstLostAt.IsZero() {
 				over.FirstLostAt = now
 			}
-			over.LostOn = over.lostWait().recorded(revival.Node, now, over.FirstLostAt)
+			over.LostOn = over.lostWait().recorded(revival.Clock, now, over.FirstLostAt)
 		}
 		run.Status, run.WaitOver = over.From, &over
 		if fence.Fenced() {
@@ -394,7 +394,7 @@ func (c *Coordinator) reviveWaitOver(ctx context.Context, run PendingRun, fence 
 		return nil, reapLeft, false
 	}
 	revived, won, err := c.pending.ReviveWaitOver(ctx, run.TurnID, Revival{Launch: run.LaunchID, Fence: fence,
-		Lost: true, Node: c.node})
+		Lost: true, Clock: c.incarnation})
 	switch {
 	case errors.Is(err, ErrWaitOverTaken):
 		return nil, reapLeft, false

@@ -287,8 +287,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_432_677
-	measuredSpare       = 350_939
+	measuredOtherFields = 2_432_874
+	measuredSpare       = 350_742
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -402,11 +402,11 @@ const (
 	// MaxCallInFlightBytes bounds one entry in flight as the log holds it
 	// ([keptEntry]): its identity — its name at its worst (256 bytes escaped
 	// six-fold, 1,538 as the encoder writes it), its digest, its place, the
-	// instants the log and the bridge took it at, its bound and its node
-	// ([BridgeCall.Until], [BridgeCall.UntilOn]), the incarnation that runs it
+	// instants the log and the bridge took it at, its bound and its clock
+	// ([BridgeCall.Until], [BridgeCall.UntilClock]), the incarnation that runs it
 	// ([BridgeCall.Runner], held to [maxIncarnationBytes], 770 at its most
 	// escaped) — and the id its harness gave it ([BridgeCall.CallID], held to
-	// [MaxBridgeCallIDBytes]): 2,694 bytes at their widest, 2,617 without that
+	// [MaxBridgeCallIDBytes]): 2,761 bytes at their widest, 2,684 without that
 	// id, measured by TestACallInFlightIsHeldToItsShare. FOUR KIB is that
 	// rounded up to the next power of two: what is left is the room for the
 	// keys a later build adds to an entry, which this build carries unread
@@ -533,13 +533,13 @@ var ErrHeldCallTooLarge = errors.New("sandbox: a held call's sealed arguments ar
 // in the clear would let a log reader confirm a guess at what the seal hides
 // ([BridgeCall.Withheld], [approvedCall]). The harness's id is kept WHOLE OR
 // NOT AT ALL ([keptCallID]); a finished call keeps NOTHING THAT WAITS FOR IT
-// ([BridgeCall.Runner], [BridgeCall.Until], [BridgeCall.UntilOn]), held here
+// ([BridgeCall.Runner], [BridgeCall.Until], [BridgeCall.UntilClock]), held here
 // whatever handed it, since only an entry's are bounded ([keptEntry]).
 // IDEMPOTENT: a size already recorded is the whole's, never replaced.
 func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 	call.Name = textcut.Within(call.Name, MaxBridgeCallNameBytes)
 	call.CallID = keptCallID(call.CallID)
-	call.Runner, call.Until, call.UntilOn = "", time.Time{}, ""
+	call.Runner, call.Until, call.UntilClock = "", time.Time{}, ""
 	if call.Withheld() {
 		call.Args, call.ArgsBytes, call.Digest = "", 0, ""
 	}
@@ -785,7 +785,7 @@ func keptEntry(call BridgeCall) BridgeCall {
 		Name: textcut.Within(call.Name, MaxBridgeCallNameBytes), Digest: call.Digest,
 		CallID: keptCallID(call.CallID), At: call.At, Seq: call.Seq, StartedAt: call.StartedAt,
 		Runner: textcut.Within(call.Runner, maxIncarnationBytes), Until: call.Until,
-		UntilOn: textcut.Within(call.UntilOn, coord.MaxNodeIDBytes),
+		UntilClock: textcut.Within(call.UntilClock, maxIncarnationBytes),
 	}
 }
 
@@ -1001,9 +1001,9 @@ func (l BridgeLog) ElisionKnown() bool {
 // digits of fraction and a zone of its own, never `Z`.
 var widestInstant = time.Date(9999, 12, 31, 23, 59, 59, 999_999_999, time.FixedZone("", 14*3600))
 
-// widestWindow is a [RowWindow] at its widest: a node id at its bound
-// ([coord.MaxNodeIDBytes], plain bytes), and its two instants at theirs.
-var widestWindow = RowWindow{Node: strings.Repeat("n", coord.MaxNodeIDBytes), Since: widestInstant,
+// widestWindow is a [RowWindow] at its widest: an incarnation at its bound
+// ([maxIncarnationBytes], plain bytes), and its two instants at theirs.
+var widestWindow = RowWindow{Clock: strings.Repeat("n", maxIncarnationBytes), Since: widestInstant,
 	Of: widestInstant}
 
 // keptTitle is a run's title as its row keeps it: within [MaxRunTitleBytes]

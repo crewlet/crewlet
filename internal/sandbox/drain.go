@@ -281,7 +281,7 @@ func (c *Coordinator) stillWaited(inFlight []BridgeCall, run PendingRun, gone ma
 ) (waiting []BridgeCall, left []unfinishedCall) {
 	now := c.now()
 	for _, call := range inFlight {
-		until := call.until(c.node)
+		until := call.until(c.incarnation)
 		switch {
 		case !run.Deadline.IsZero() && !now.Before(run.Deadline):
 			left = append(left, unfinishedCall{call: call, why: "the turn's cap passed"})
@@ -311,7 +311,7 @@ func (c *Coordinator) nextDue(inFlight []BridgeCall, run PendingRun) time.Durati
 		at(run.Deadline)
 	}
 	for _, call := range inFlight {
-		at(call.until(c.node))
+		at(call.until(c.incarnation))
 	}
 	return due
 }

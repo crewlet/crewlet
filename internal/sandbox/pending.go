@@ -160,10 +160,10 @@ type Release struct {
 	// a resume held on a condition included, which is a wait.
 	ResumeFailedAt time.Time
 
-	// FailedOn is the node whose clock read CollectFailedAt and ResumeFailedAt,
-	// which the record names beside the run of failures it times
-	// ([LaunchRecord.CollectFailingOn], [RowWindow]).
-	FailedOn string
+	// Clock is the incarnation of the process whose clock read CollectFailedAt
+	// and ResumeFailedAt, which the record names beside the run of failures it
+	// times ([LaunchRecord.CollectFailingOn], [RowWindow]).
+	Clock string
 
 	// Hold, where set, holds the resume back until the refusal lifts
 	// ([PendingRun.HeldFor]). Nil hands back a claim to be retried as the
@@ -549,9 +549,9 @@ type Revival struct {
 	// [answerWindow], ending in a decline rather than an ending.
 	Lost bool
 
-	// Node is the reviving node, whose clock dates a lost claim
-	// ([RecordedAnswer.LostOn]).
-	Node string
+	// Clock is the reviving process's incarnation, whose clock dates a lost
+	// claim ([RecordedAnswer.LostOn]).
+	Clock string
 }
 
 // Holding are the statuses in which a run holds its seat, so the seat takes no
@@ -757,11 +757,11 @@ type BridgeCall struct {
 	// Until is the instant past which no collection waits for an in-flight
 	// call: the bridge's stamp of its tool's own bound plus the bridge's margin
 	// (internal/api/mcpbridge's wait.go), so a node not holding the call reads
-	// it; UntilOn is the node whose clock stamped it, and any other waits
-	// [RowClockAllowance] past it ([BridgeCall.until]). Zero on a finished call
-	// ([keptCall]). Additive on the wire.
-	Until   time.Time `json:"until,omitzero"`
-	UntilOn string    `json:"until_on,omitempty"`
+	// it; UntilClock is the incarnation whose clock stamped it, and any other
+	// process waits [RowClockAllowance] past it ([BridgeCall.until]). Zero on a
+	// finished call ([keptCall]). Additive on the wire.
+	Until      time.Time `json:"until,omitzero"`
+	UntilClock string    `json:"until_clock,omitempty"`
 
 	// Extra is every key of the call this build does not know, kept verbatim and
 	// written back by every write of the record (wirekeys.go). Filled by the
@@ -3086,8 +3086,11 @@ type RecordedAnswer struct {
 	// they bound a series no one node sees: a dying claim is a stopped node, and a
 	// node's own attempt count resets with exactly that ([MaxAnswerAttempts]). See
 	// [MaxAnswerRevivals].
-	// LostOn times them on one node's clock ([RowWindow]), restarted by each
-	// revival on another node.
+	// LostOn times them on one clock ([RowWindow]), restarted by each revival in
+	// another process. KEPT HERE, not at the row's top: an older build's write
+	// drops it, the answer carrying no unknown keys, which leaves the bound plus
+	// the allowance (late, never early), and here every write clearing the answer
+	// clears it.
 	LostClaims  int        `json:"lost_claims,omitempty"`
 	FirstLostAt time.Time  `json:"first_lost_at,omitzero"`
 	LostOn      *RowWindow `json:"lost_on,omitempty"`
