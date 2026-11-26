@@ -210,15 +210,15 @@
 // listing alone, added the same way; opencode-nested as pi-nested, after
 // OpenCode's `Instructions from: <path>`. A nested hook only adds to the
 // launch: a run whose settings switch it off starts, its skip log saying so
-// once; only losing a contract hook (notes, skill loads) refuses. Grok's
-// stays registered, as Grok 1.0.92 skips it itself (measured). A harness taking checkouts adds a
-// nested adapter, never a second core; its runner holds the home file and the
-// copies (internal/sandbox/executor's checkoutHome). What a nested firing
-// leaves out (a skill whose name the home's skills hold, one that leads out of
-// its checkout, a tree past a bound) is a line each on its stderr, in its
-// answer, and in state/skipped under the lock, which the runner's script prints
-// to the run's error stream once the harness has stopped, since no harness
-// shows a hook's stderr; checkout-launch's stderr is the run's own. The
+// once; only losing a contract hook (notes, skill loads) refuses. Grok's stays
+// registered, as Grok 1.0.92 skips it itself (measured). A harness taking
+// checkouts adds a nested adapter, never a second core; its runner holds the
+// home file and the copies (internal/sandbox/executor's checkoutHome). What a
+// nested firing leaves out (a skill whose name the home's skills hold, one that
+// leads out of its checkout, a tree past a bound) is a line each on its stderr,
+// in its answer, and in state/skipped under the lock, which the runner's script
+// prints to the run's error stream once the harness has stopped, since no
+// harness shows a hook's stderr; checkout-launch's stderr is the run's own. The
 // runner's restore marks the state ended, after which a firing claims nothing.
 // A run killed before its script printed the log loses it: the next run's gate
 // removes the state unprinted, as its lines in another run's error stream would
