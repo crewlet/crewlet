@@ -68,6 +68,12 @@ func (Copilot) Name() string { return CopilotName }
 // answered whole (measured on 1.0.114).
 func (Copilot) MCPCallCeiling() time.Duration { return 0 }
 
+// CountedAtCollection implements [collectionCounted].
+func (Copilot) CountedAtCollection() string {
+	return "its stream marks no model request: " +
+		"the usage records its count reads are appended by the run's script once Copilot exits"
+}
+
 // Resumes says Copilot continues a session it reported: `--session-id` on an
 // id its home holds resumes it (measured on 1.0.114).
 func (Copilot) Resumes() bool { return true }

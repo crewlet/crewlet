@@ -634,7 +634,8 @@ type Result struct {
 	// the round cap its launch handed it ([RunHandle.TurnCap],
 	// types.ExecutorErrorTurnCapExceeded): whatever held the cap in its box
 	// did not, so the run fails whatever it reported. Set by the runner's
-	// collection, never a decoder, from the engine's own cap.
+	// collection, never a decoder, from the engine's own cap; and by the
+	// collection of a run its turn cap's watch ended ([endedAtTurnCap]).
 	TurnCapExceeded bool
 
 	// Unbridged says the run's guard stopped it because another MCP server
@@ -1088,6 +1089,14 @@ type Runner interface {
 	// on a job in any state: one that has finished says so, and one that
 	// has said nothing yet reads as nothing rather than as an error.
 	Follow(handle RunHandle) LiveReading
+
+	// Count begins a LIVE COUNT of the model requests a running job's stream
+	// shows ([Counter]), for the watch that ends a run past its turn cap
+	// ([Waiter.Watch]): its collection's count, read as the job writes it. Nil
+	// for a runner whose stream shows its requests only once its harness has
+	// exited, which its collection alone counts. Required, so no runner is
+	// left out of the watch unsaid.
+	Count(handle RunHandle) Counter
 }
 
 // CallIdentifier is a [Runner] whose harness hands each tool call it makes over
