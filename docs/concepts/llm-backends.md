@@ -1143,11 +1143,10 @@ onboarding pass by `mark_onboarded` — follows the same ending with another run
 opened by a corrective naming its tool, up to twice (see
 [Turn Engine](turn-engine.md#round-cap-extension-judge)). The executor's run has
 instead the seat's system prompt, which tells it the run ends with that call.
-Its rounds are uncapped unless the seat's `role.sandbox.max_turns`, else
-`providers.sandbox.default_max_turns`, sets a turn cap, which becomes the
-harness's own on every runner — Claude Code's `--max-turns`, Gemini CLI's and Qwen Code's `model.maxSessionTurns`, OpenCode's agent
-`steps`, the extension's abort past the cap on Copilot ([its runner](code-sandbox.md#github-copilot-cli)), Grok Build's `--max-turns`, Muse Code's `--max-model-steps`, Kimi Code's steps a turn, Pi's extension, which aborts the turn past it — and a Codex run's note helper counts its
-model responses and interrupts the turn at the cap.
+Its requests are uncapped unless the seat's `role.sandbox.max_turns`, else
+`providers.sandbox.default_max_turns`, sets a turn cap, which its harness's own
+stop and the engine's count of its record both hold it to
+([Each runner's cap](code-sandbox.md#each-runners-cap)).
 #### The tool bridge
 
 The seat's tools cannot be shipped into the box: most are MCP children
