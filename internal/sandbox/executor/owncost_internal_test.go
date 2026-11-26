@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,15 +21,21 @@ import (
 // collections before each reading empty the pools, which under -race also drop
 // a quarter of what is put back, so refills land at random (see
 // [allocationsOf]); the line reader's json v2 decoder refill is a few hundred
-// bytes against its 16 KiB.
-func ownAllocations(f func()) (objects, bytes uint64) {
+// bytes against its 16 KiB. [ownAllocationsWithin] counts such a reader's part.
+func ownAllocations(f func()) (objects, bytes uint64) { return ownAllocationsWithin(f) }
+
+// ownAllocationsWithin is [ownAllocations] of what f allocates within the
+// functions within names, each a prefix of a function's name a frame below
+// f's must open with: a part of a reading, counted alone where the rest draws
+// on pools whose refills land at random, which the part does not.
+func ownAllocationsWithin(f func(), within ...string) (objects, bytes uint64) {
 	ownMeasuring.Lock()
 	defer ownMeasuring.Unlock()
 	defer func(rate int) { runtime.MemProfileRate = rate }(runtime.MemProfileRate)
 	runtime.MemProfileRate = 1
-	objectsBefore, bytesBefore := profiledIn()
+	objectsBefore, bytesBefore := profiledIn(within)
 	allocatingIn(f)
-	objectsAfter, bytesAfter := profiledIn()
+	objectsAfter, bytesAfter := profiledIn(within)
 	return objectsAfter - objectsBefore, bytesAfter - bytesBefore
 }
 
@@ -42,9 +49,10 @@ var ownMeasuring sync.Mutex
 func allocatingIn(f func()) { f() }
 
 // profiledIn is what the memory profile records allocated under
-// [allocatingIn], after two collections publish every allocation made before
-// them (the profile may be up to two cycles old, runtime.MemProfile).
-func profiledIn() (objects, bytes uint64) {
+// [allocatingIn], and within a function within names where it names any,
+// after two collections publish every allocation made before them (the
+// profile may be up to two cycles old, runtime.MemProfile).
+func profiledIn(within []string) (objects, bytes uint64) {
 	runtime.GC()
 	runtime.GC()
 	marker := runtime.FuncForPC(reflect.ValueOf(allocatingIn).Pointer()).Name()
@@ -56,13 +64,17 @@ func profiledIn() (objects, bytes uint64) {
 	}
 	for _, r := range records[:n] {
 		frames := runtime.CallersFrames(r.Stack())
+		in := len(within) == 0
 		for {
 			f, more := frames.Next()
 			if f.Function == marker {
-				objects += uint64(r.AllocObjects)
-				bytes += uint64(r.AllocBytes)
+				if in {
+					objects += uint64(r.AllocObjects)
+					bytes += uint64(r.AllocBytes)
+				}
 				break
 			}
+			in = in || slices.ContainsFunc(within, func(name string) bool { return strings.HasPrefix(f.Function, name) })
 			if !more {
 				break
 			}
@@ -70,6 +82,18 @@ func profiledIn() (objects, bytes uint64) {
 	}
 	return objects, bytes
 }
+
+// methodsOf is the name every method of m's receiver type is compiled under
+// up to the method's own, closures inside them included
+// ([ownAllocationsWithin]): a rename moves it with the type.
+func methodsOf(m any) string {
+	name := runtime.FuncForPC(reflect.ValueOf(m).Pointer()).Name()
+	return name[:strings.LastIndex(name, ".")+1]
+}
+
+// functionOf is the name f is compiled under, closures inside it included
+// ([ownAllocationsWithin]).
+func functionOf(f any) string { return runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name() }
 
 // noiseSink keeps each of [allocateMeanwhile]'s allocations on the heap.
 var noiseSink atomic.Pointer[[]byte]
