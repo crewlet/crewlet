@@ -39,15 +39,19 @@ func (w NodeWork) MemoryPools(memory int64) int64 {
 // largeReadHeldBytes is what the large slot ([CollectionLargeReadsAtOnce])
 // adds at its worst: the larger of its holders' figures, never their sum. Each
 // pass takes it through its own [passBudget] (readMainThread's, take.go's), so
-// one holds it at a time; only a collection's builds a chain, beside which its
-// read may hold its summaries' words past their share ([summaryLargeHeldBytes]),
-// and a take's is its scrub and its meter at once, counted past its base
-// ([takeLargeHeldBytes]), reading no summary. The chain's is whole, its base's
-// 2.7 MiB in it, which the max never reads; a collection's Gemini CLI count
-// past its base holds less than a chain ([geminiCountLargeHeldBytes]).
+// one holds it at a time: a collection's, past both its bases
+// ([chainPassHeldBytes]), and a take's, its scrub and its meter at once,
+// counted past its base ([takeLargeHeldBytes]), reading no summary. A
+// collection's Gemini CLI count past its base holds less than a chain
+// ([geminiCountLargeHeldBytes]).
 func largeReadHeldBytes() int64 {
-	return max(threadChainHeldBytes+summaryLargeHeldBytes, takeLargeHeldBytes())
+	return max(chainPassHeldBytes, takeLargeHeldBytes())
 }
+
+// chainPassHeldBytes is what a collection's pass holds past both its bases:
+// its chain, whole, its base's 2.7 MiB in it ([threadChainHeldBytes]), and
+// beside it its summary's words past their share ([summaryLargeHeldBytes]).
+const chainPassHeldBytes = threadChainHeldBytes + summaryLargeHeldBytes
 
 // transcriptReads is how many transcripts w's node decodes at once: every
 // slot ([TranscriptReadsAtOnce]) where people read them, the seats' own
