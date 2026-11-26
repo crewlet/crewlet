@@ -79,6 +79,13 @@ type kimiProbe struct {
 	events  []string
 	briefed chan struct{}
 	stderr  bytes.Buffer
+	// checkouts is the settings' hand of a checkout cloned during the run,
+	// nil for none; with keepHands, each hand steered adds a turn a hook
+	// blocked to the record, and the session's last outcome is `failed`.
+	checkouts map[string]any
+	keepHands bool
+	// onIdle runs once, after the first `:wait` answered idle.
+	onIdle func()
 }
 
 // kimiMCPHome is the home's MCP file the probe's run names in its settings.
@@ -148,7 +155,16 @@ func (p *kimiProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ok(map[string]any{"id": id, "manifest_path": p.manifest[id]})
 	case path == "/api/v1/sessions/session_probe/agents/main/turns":
 		p.record("turns")
-		ok(map[string]any{"turns": p.turns, "has_more": false})
+		p.mu.Lock()
+		turns := slices.Clone(p.turns)
+		for _, s := range p.steers {
+			if id, text, _ := strings.Cut(s, " "); p.keepHands && strings.HasPrefix(id, "crewlet-checkouts-") {
+				turns = append(turns, map[string]any{"turn_id": "t_hand", "outcome": "failed", "end_reason": "blocked",
+					"steps": []any{}, "items": []map[string]any{{"type": "user_message", "item_id": id, "text": text}}})
+			}
+		}
+		p.mu.Unlock()
+		ok(map[string]any{"turns": turns, "has_more": false})
 	case path == "/api/v1/sessions/session_throwaway:delete":
 		p.record("delete")
 		ok(map[string]any{"deleted": true})
@@ -221,9 +237,20 @@ func (p *kimiProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case <-p.idle:
 			p.mu.Lock()
 			p.idled++
+			last := "completed"
+			if p.keepHands {
+				last = "failed"
+			}
 			p.mu.Unlock()
-			ok(map[string]any{"session": map[string]any{"activity": "idle", "last_turn_outcome": "completed"},
+			ok(map[string]any{"session": map[string]any{"activity": "idle", "last_turn_outcome": last},
 				"pending_interactions": []any{}, "timed_out": false})
+			p.mu.Lock()
+			idled := p.onIdle
+			p.onIdle = nil
+			p.mu.Unlock()
+			if idled != nil {
+				idled()
+			}
 		case <-r.Context().Done():
 		}
 	case path == "/api/v1/sessions/session_probe:cancel":
@@ -270,7 +297,7 @@ func kimiDriverRun(t *testing.T, probe *kimiProbe, notes string, args ...string)
 	}
 	settings, _ := json.Marshal(map[string]any{"profile": "crewlet-probe", "notes": notes,
 		"report": probe.report, "reportStaging": probe.report + ".next", "serverPid": filepath.Join(dir, "kimi-server.pid"), "kimi": kimi,
-		"servers": probe.servers, "mcpConfig": kimiMCPHome, "webDenied": probe.webDenied})
+		"servers": probe.servers, "mcpConfig": kimiMCPHome, "webDenied": probe.webDenied, "checkouts": probe.checkouts})
 	for name, body := range map[string][]byte{kimi: []byte(stub), driver: []byte(kimiDriverSource),
 		filepath.Join(dir, "settings.json"): settings} {
 		if err := os.WriteFile(name, body, 0o700); err != nil {
