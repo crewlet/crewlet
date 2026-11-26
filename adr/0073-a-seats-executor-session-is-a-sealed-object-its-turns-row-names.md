@@ -243,7 +243,8 @@
   - `internal/sandbox.TestATokenTheLaunchWritesInAKeptBoxIsSealedWithItsJob`
   - `internal/sandbox.TestAnIssuedDocumentIsScrubbedByEveryStringItHolds`
   - `internal/sandbox.TestAServiceAccountKeysPublishedConstantsStayInItsSessions`
-  - `internal/sandbox.TestARenewedValueIsDroppedAnHourPastItsExpiry`
+  - `internal/sandbox.TestARenewedValueIsDroppedTheLapsePastItsExpiry`
+  - `internal/sandbox.TestARenewedValueStaysUntilItsIssuerCountsItLapsed`
   - `internal/sandbox.TestAnOlderBuildsScrubTakesTheRenewedValues`
   - `internal/sandbox.TestARenewalPastTheSetsBoundIsWrittenAndRefusesEveryLaterCapture`
   - `internal/sandbox.TestARenewalTheStoreDidNotAnswerIsKeptOutOfTheBox`
@@ -2111,9 +2112,10 @@ job's attach still replaces the part whole.
 
 **In `Values` itself**, which an older build's scrub decodes alone, so its
 captures take the renewed values too. When each lapses rides beside them in
-`Expires`, which only this build reads, and a value is dropped an hour past its
-expiry: a lapsed token opens nothing, and a day of an AWS session's renewals
-would otherwise outgrow the set's bound. A value is taken out whole and, where
+`Expires`, which only this build reads, and a value is dropped twice
+`objstore.AssumedClockSkew` past its expiry by the dropping node's clock, so
+only once its issuer's clock is past it too: a lapsed token opens nothing, and
+a day of an AWS session's renewals would otherwise outgrow the set's bound. A value is taken out whole and, where
 it is a JSON document, by every string it holds, the launch's own values among
 them: an AWS session reaches its box as the document its `credential_process`
 prints, whose token a transcript prints alone. Every string, a JSON-valued
