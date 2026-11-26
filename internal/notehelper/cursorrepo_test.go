@@ -330,8 +330,8 @@ func TestACursorCloneNeverHandedIsNamedOnceAsTheRunEnds(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(r.state, endedMarker), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	want := "notehelper: the checkout " + filepath.Join(r.workdir(t), "quiet") + " was cloned during the run and " +
-		"not handed: no MCP call with room for it came after it\n"
+	want := "notehelper: the checkout " + filepath.Join(r.workdir(t), "quiet") + " was not handed: its clone " +
+		"finished after the run's launch, and no MCP call with room for it came after that\n"
 	if got := left(); got != want {
 		t.Errorf("once the run ended, the skip log is\n%q\nwant\n%q", got, want)
 	}
@@ -356,5 +356,37 @@ func TestACursorFiringClaimsNothingBeforeTheRunNamesItsConversation(t *testing.T
 	r.add(t, map[string]string{"late/.git/": "", "late/AGENTS.md": "LATE\n"})
 	if answer, _ := r.cursorFire(t, cursorInput("MCP:t_tool", cursorResult, "")); answer != "{}" {
 		t.Errorf("a firing with no run conversation answered %q, want {}", answer)
+	}
+}
+
+// A PASS OF CURSOR-LEFT THAT FAILS IS TRIED AGAIN: its once-only mark is made
+// only after its lines are written, so an end whose skip log cannot take them
+// (here a directory in its place) leaves the mark unmade, and the end's next
+// path writes the line.
+//
+// Mutation: make the mark before the lines, and this goes red.
+func TestACursorLeftPassThatFailsIsTriedAgain(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.cursorLaunch(t)
+	r.add(t, map[string]string{"quiet/.git/": "", "quiet/AGENTS.md": "QUIET\n"})
+	log := filepath.Join(r.state, skippedLog)
+	if err := os.WriteFile(filepath.Join(r.state, endedMarker), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(log, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := cursorLeft(r.state, r.workdir(t)); err == nil {
+		t.Fatal("a pass whose skip log is a directory reported no trouble")
+	}
+	if err := os.Remove(log); err != nil {
+		t.Fatal(err)
+	}
+	if err := cursorLeft(r.state, r.workdir(t)); err != nil {
+		t.Fatalf("the second pass: %v", err)
+	}
+	if raw, _ := os.ReadFile(log); !strings.Contains(string(raw), filepath.Join(r.workdir(t), "quiet")+" was not handed") {
+		t.Errorf("after a failed pass, the next one did not name ./quiet: %q", raw)
 	}
 }

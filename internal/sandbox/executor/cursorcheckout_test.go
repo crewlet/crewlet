@@ -127,7 +127,7 @@ func TestACheckoutClonedDuringACursorRunIsHandedAtItsNextMCPCall(t *testing.T) {
 	if got := boxFile(t, box, p.CursorHooks()); got != cursorHomeHooks {
 		t.Errorf("after the run the home's hooks.json is\n%q\nwant the home's own\n%q", got, cursorHomeHooks)
 	}
-	quiet := "the checkout " + work + "/quiet was cloned during the run and not handed"
+	quiet := "the checkout " + work + "/quiet was not handed: its clone finished after the run's launch"
 	if errs := boxFile(t, box, p.Err()); strings.Count(errs, quiet) != 1 || strings.Contains(errs, work+"/late was") {
 		t.Errorf("the error stream does not name ./quiet alone, once, as never handed:\n%s", errs)
 	}

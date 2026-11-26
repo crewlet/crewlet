@@ -213,56 +213,58 @@ const cursorLeftSaid = "left-said"
 // run has ended ([endedMarker]), so a clone no MCP call with room followed is
 // said rather than silently never handed: on Cursor a firing comes only at an
 // MCP call ([runCursorNested]), where the other runners fire after every
-// tool. Once per run ([cursorLeftSaid]); exit 0 whatever happened.
+// tool. Once per run: [cursorLeftSaid] is made only once its lines are
+// written, so a pass that fails is tried again at the end's next path. Exit 0
+// whatever happened.
 func runCursorLeft(_ context.Context, f flags, _ io.Reader, _, stderr io.Writer, _ func(string) string) int {
 	c, err := readNested(f.config)
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: the nested config: %v\n", err)
 		return exitDone
 	}
-	lines, err := cursorLeft(c.State, c.Workdir)
-	if err == nil && len(lines) > 0 {
-		err = appendSkipped(filepath.Join(c.State, skippedLog), lines)
-	}
-	if err != nil {
+	if err = cursorLeft(c.State, c.Workdir); err != nil {
 		fmt.Fprintf(stderr, "notehelper: naming the clones the run did not hand: %v\n", err)
 	}
 	return exitDone
 }
 
-// cursorLeft is the skip lines for each finished clone under work no launch or
-// firing claimed, by name, once a run's state is ended and once only; none
-// before the end, as a firing may still claim.
-func cursorLeft(state, work string) ([]string, error) {
-	_, err := os.Lstat(filepath.Join(state, endedMarker))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+// cursorLeft adds to the skip log a line for each finished clone under work no
+// launch or firing claimed, by name, then marks it said ([cursorLeftSaid]):
+// nothing before a run's state is ended, as a firing may still claim, nor
+// once it is said. A checkout present but unfinished at launch reads as one
+// that finished after it.
+func cursorLeft(state, work string) error {
+	for _, marker := range []string{endedMarker, cursorLeftSaid} {
+		_, err := os.Lstat(filepath.Join(state, marker))
+		if marker == endedMarker && errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if marker == cursorLeftSaid && err == nil {
+			return nil
+		}
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
 	}
-	if err != nil {
-		return nil, err
-	}
-	said, err := os.OpenFile(filepath.Join(state, cursorLeftSaid), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if errors.Is(err, fs.ErrExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	_ = said.Close()
 	handed, err := readHanded(filepath.Join(state, "handed"))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	names, err := checkoutNames(work, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	var lines []string
 	for _, name := range names {
 		if !slices.Contains(handed, name) && cloneFinished(filepath.Join(work, name)) {
-			lines = append(lines, fmt.Sprintf("the checkout %s was cloned during the run and not handed: no MCP "+
-				"call with room for it came after it", filepath.Join(work, name)))
+			lines = append(lines, fmt.Sprintf("the checkout %s was not handed: its clone finished after the "+
+				"run's launch, and no MCP call with room for it came after that", filepath.Join(work, name)))
 		}
 	}
-	return lines, nil
+	if len(lines) > 0 {
+		if err = appendSkipped(filepath.Join(state, skippedLog), lines); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(filepath.Join(state, cursorLeftSaid), nil, 0o600)
 }
