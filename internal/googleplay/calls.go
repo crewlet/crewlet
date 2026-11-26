@@ -112,8 +112,7 @@ func (p *Product) genericRequest(call growth.Call, args map[string]any) (googleg
 	}
 	id, _ := args["operation"].(string)
 	if !slices.Contains(tool.Operations, id) {
-		return googlegrowth.Request{}, refusal(growth.RefusedInvalid, fmt.Sprintf("%s cannot call %q: name one "+
-			"of its operations. No vendor was reached.", call.Tool, id))
+		return googlegrowth.Request{}, p.Catalog().Outside(call.Tool, id, p.Level(call.Handle))
 	}
 	op, _ := p.Catalog().Operation(id)
 	return newRequest(op, stringArgs(args["path"]), stringArgs(args["query"]), objectArg(args["body"]))

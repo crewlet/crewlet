@@ -17,9 +17,9 @@ An agent is on at one level across every property it is granted.
 | `read` (the default) | Every report (standard, pivot, realtime, funnel, audience exports, report tasks), metadata, every setting read, change history and the access report where its role allows | Viewer or above. Change history needs Editor; the access report and access listing need Administrator |
 | `operate` as Marketer (`role: marketer`), shown as **Marketer** | Everything `read` can, plus Marketer's changes made at once and recorded: audiences, key events, attribution settings and event create rules. Any other change is refused before Google | Marketer, which only a person adds and Crewlet cannot read back, so the row reads Role not checked |
 | `operate` | Everything `read` can, plus reversible changes made at once and recorded: key events, custom dimensions and metrics, audiences, annotations, channel groups, event rules, data stream and reporting settings | Marketer for key events, audiences and attribution; Editor for the rest |
-| `administer` | Everything `operate` can, plus asking an administrator to approve each account, access, link, key, deletion or other irreversible change | Editor; Administrator for access bindings |
+| `administer` | Everything `operate` can, plus asking an administrator to approve each account, access, link, key, data retention, deletion or other irreversible change | Editor; Administrator for access bindings |
 
-Raising an agent to `operate` or `administer` asks for a fresh sign-in (step-up).
+Raising an agent to `operate` or `administer` asks for a fresh sign-in (step-up). An agent holds only its level's tools, and each tool that takes a method's ID says what lies above it. A method above the agent's level, named on a tool it holds, is refused before Google Analytics is called, naming the method's class, the tool and level that make it, whether an administrator approves each call, and that an administrator raises the level on the Agents tab, asked in words (`request_access` asks for no level). A method Crewlet does not offer is refused as one no level reaches.
 
 The roles Google Analytics gives, least first: **Viewer** (sees settings and data, runs every report), **Analyst** (adds annotations and shared explorations), **Marketer** (adds key events, audiences, event create rules and attribution; set in Google Analytics, since its API cannot grant it), **Editor** (every setting, stream, link, key and deletion, but not users), **Administrator** (adds users and access). **No Cost Metrics** and **No Revenue Metrics** are restrictions beside a role: those metrics read as zero.
 
@@ -62,7 +62,7 @@ The integration's Settings tab then lists each connection and the properties it 
 | `google_analytics_mark_key_event` | operate | Marks an event as a key event |
 | `google_analytics_read` | read | Any method that only reads, by its ID |
 | `google_analytics_operate` | operate | Any reversible change, by its method's ID |
-| `google_analytics_admin` | admin | Any account, access, link, key or irreversible change, by its method's ID: asked first |
+| `google_analytics_admin` | admin | Any account, access, link, key, data retention or irreversible change, by its method's ID: asked first |
 
 A write whose class depends on what it changes is classed per call from its update mask and its new values, however the mask and the body spell a field (`displayName` or `display_name`, `updateMask` or `update_mask`): renaming a custom metric is `operate`, and taking off its revenue or cost restriction is `admin`. A field no rule names takes the method's highest class, and a `*` mask counts every field the resource holds, since it replaces them all. A call on the wrong tool for what it changes is refused with the tool that may make it.
 

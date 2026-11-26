@@ -145,16 +145,10 @@ func (m made) where() string {
 // generic is a generic tool's one request.
 func (m *made) generic(args map[string]any) error {
 	id, _ := args["operation"].(string)
-	r, ok := rowOf()[id]
-	if !ok {
-		return invalid("%q is not a Meta Ads operation: %s lists them.", id, ToolOperations)
-	}
 	def, _ := Catalog().Tool(m.tool)
-	if !slices.Contains(def.Operations, id) {
-		if r.op.Class == growth.ClassNever {
-			return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s is not offered: %s No call was made.", id, r.op.Reason))
-		}
-		return invalid("%s is a %s operation: call it with %s.", id, r.op.Class, genericTool[r.op.Class])
+	r, ok := rowOf()[id]
+	if !ok || !slices.Contains(def.Operations, id) {
+		return Catalog().Outside(m.tool, id, growth.LevelOf(m.seat.Level))
 	}
 	t := target{row: r}
 	var err error

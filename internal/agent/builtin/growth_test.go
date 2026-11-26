@@ -352,11 +352,11 @@ func TestAGrowthWriteIsMadeOnlyWithinItsToolsClass(t *testing.T) {
 		len(ads.applied) != 1 {
 		t.Fatalf("a pause answered %q and applied %v", got.Output, ads.applied)
 	}
-	for _, args := range []map[string]any{{"daily_budget": "900"}, {"owner": "someone"}} {
-		got, _ := pause.CallForTurn(asSeat("sre"), growthTurn(t, "sre"), args)
+	for args, through := range map[string]string{"daily_budget": growthSpendTool, "owner": growthAdminTool} {
+		got, _ := pause.CallForTurn(asSeat("sre"), growthTurn(t, "sre"), map[string]any{args: "900"})
 		if !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden || len(ads.applied) != 1 ||
-			!strings.Contains(got.Output, "Ask through") {
-			t.Errorf("%v through the pause tool answered %q and applied %v", args, got.Output, ads.applied)
+			!strings.Contains(got.Output, through+" ") {
+			t.Errorf("%s through the pause tool answered %q and applied %v", args, got.Output, ads.applied)
 		}
 	}
 	desk := &askDesk{outcome: sandbox.AskRecorded}

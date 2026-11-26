@@ -34,14 +34,14 @@ const maxStateReads = 4
 func (p *Product) needState(ctx context.Context, m *made) error {
 	i := slices.IndexFunc(m.op.States, func(s growth.StateRule) bool { return s.Class == m.class })
 	if i < 0 {
-		return invalid("%s is a %s operation: call it with %s.", m.op.ID, m.op.Class, toolFor(m.op.Class))
+		return invalid("%s is %s-class. %s", m.op.ID, m.op.Class, Catalog().WayTo(m.op.Class, m.level))
 	}
 	rule := m.op.States[i]
 	holds, err := p.inState(ctx, m, rule.When)
 	if err != nil || !holds {
 		return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s is %s here: what it changes is not %s (or "+
-			"its state could not be read), so customers or external testers would see it. Ask with %s. No call was made.",
-			m.op.ID, m.op.Class, stateWords[rule.When], toolFor(m.op.Class)))
+			"its state could not be read), so customers or external testers would see it. %s No call was made.",
+			m.op.ID, m.op.Class, stateWords[rule.When], Catalog().WayTo(m.op.Class, m.level)))
 	}
 	return nil
 }

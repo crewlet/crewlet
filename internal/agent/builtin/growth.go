@@ -19,7 +19,6 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE GROWTH TOOLS (internal/growth; ADR-0170, ADR-0171): every tool a growth
@@ -139,7 +138,13 @@ var _ tools.SeatCallable = (*growthTool)(nil)
 
 func (t *growthTool) Name() string { return t.def.Name }
 
-func (t *growthTool) Description() string { return t.def.Description }
+// Description is the catalog's, and what lies above the tool's class there.
+func (t *growthTool) Description() string {
+	if above := t.product.Catalog().Above(t.def.Name); above != "" {
+		return t.def.Description + " " + above
+	}
+	return t.def.Description
+}
 
 func (t *growthTool) Parameters() map[string]any { return t.def.Parameters }
 
@@ -157,16 +162,9 @@ func (t *growthTool) admitted(ctx context.Context, turn *turnctx.Turn) (string, 
 	if refusal = companyRequester(ctx, turn, t.deps.Requesters, t.deps.Chart, t.Name(), growthTerms); refusal != nil {
 		return "", refusal
 	}
-	level := t.product.Level(handle)
-	if !level.Allows(t.def.Class) {
-		at := "off"
-		if level != "" {
-			at = "at " + level.Label()
-		}
-		// THE LEVELS BY THE NAMES THE AGENTS TAB SHOWS, so a person relaying this finds them there.
-		r := refused(tools.RefusalForbidden, fmt.Sprintf("%s didn't run: this agent's %s access is %s, and %s "+
-			"needs it at %s. A person raises it on the integration's Agents tab. No vendor was reached.",
-			t.Name(), t.product.Catalog().API, at, t.Name(), t.def.Class.Level().Label()))
+	if level := t.product.Level(handle); !level.Allows(t.def.Class) {
+		r := refused(tools.RefusalForbidden, fmt.Sprintf("%s didn't run: its calls are %s-class. %s No vendor "+
+			"was reached.", t.Name(), t.def.Class, t.product.Catalog().WayTo(t.def.Class, level)))
 		return "", &r
 	}
 	return handle, nil
@@ -193,7 +191,7 @@ func (t *growthTool) CallForTurn(ctx context.Context, turn *turnctx.Turn, args m
 	if err != nil {
 		return growthFailure(ctx, t.Name(), err, false), nil
 	}
-	if r := t.within(ctx, hold); r != nil {
+	if r := t.within(ctx, handle, hold); r != nil {
 		return *r, nil
 	}
 	return t.makeNow(ctx, turn, handle, call, hold)
@@ -217,7 +215,7 @@ func (t *growthTool) makeNow(ctx context.Context, turn *turnctx.Turn, handle str
 // within refuses a prepared write its tool may not make: one that comes to a
 // class above the tool's, which another tool asks for at its own level, or a
 // hold bound to nothing.
-func (t *growthTool) within(ctx context.Context, hold growth.Hold) *tools.Result {
+func (t *growthTool) within(ctx context.Context, handle string, hold growth.Hold) *tools.Result {
 	if !hold.Class.Valid() || len(hold.Binding) != sha256.Size*2 ||
 		(hold.Subject != "" && len(hold.Subject) != sha256.Size*2) {
 		r := faulted(ctx, t.Name(), fmt.Errorf("builtin: %s prepared a write with class %q and no digest binding it",
@@ -228,18 +226,9 @@ func (t *growthTool) within(ctx context.Context, hold growth.Hold) *tools.Result
 	if hold.Class.Rank() <= t.def.Class.Rank() {
 		return nil
 	}
-	ask := "No tool makes it: a person makes it in the vendor's own console."
-	var through []string
-	for _, def := range t.product.Catalog().Tools {
-		if def.Class == hold.Class {
-			through = append(through, def.Name)
-		}
-	}
-	if len(through) > 0 && hold.Class.Callable() {
-		ask = "Ask through " + words.Or(through) + "."
-	}
 	r := refused(tools.RefusalForbidden, fmt.Sprintf("%s didn't run: as its target reads now, this change is %s, "+
-		"which %s does not make. %s No vendor was changed.", t.Name(), hold.Class, t.Name(), ask))
+		"which %s does not make. %s No vendor was changed.", t.Name(), hold.Class, t.Name(),
+		t.product.Catalog().WayTo(hold.Class, t.product.Level(handle))))
 	return &r
 }
 
@@ -300,7 +289,7 @@ var (
 // Digest is the tool's definition's digest, which a resume holds the call to.
 func (t *growthHeldTool) Digest() string {
 	data, err := json.Marshal(map[string]any{"name": t.def.Name, "class": t.def.Class,
-		"description": t.def.Description, "parameters": t.def.Parameters})
+		"description": t.Description(), "parameters": t.def.Parameters})
 	if err != nil {
 		return ""
 	}
@@ -334,7 +323,7 @@ func (t *growthHeldTool) PrepareHold(ctx context.Context, turn *turnctx.Turn, ar
 		r := growthFailure(ctx, t.Name(), err, false)
 		return HeldPrep{}, &r
 	}
-	if r := t.within(ctx, hold); r != nil {
+	if r := t.within(ctx, handle, hold); r != nil {
 		return HeldPrep{}, r
 	}
 	if !hold.Class.Held() && t.product.Level(handle).Allows(hold.Class) {

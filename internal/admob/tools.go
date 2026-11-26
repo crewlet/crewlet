@@ -239,7 +239,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			}
 		}
 		out = append(out, growth.Tool{
-			Name: genericTools()[class], Class: class, Operations: ids, Description: genericDescription(class),
+			Name: genericTools()[class], Class: class, Operations: ids, Description: genericDescription(class), Covers: genericCovers(class),
 			Parameters: toolschema.Object(map[string]any{
 				"operation": map[string]any{"type": "string", "enum": ids,
 					"description": "The method's ID, as docs/integrations/admob.md lists it."},
@@ -266,6 +266,19 @@ func genericDescription(class growth.Class) string {
 		return "Ask an administrator to approve an AdMob change that cannot be undone, by its method's ID: " +
 			"linking a new app to its store listing, removing a mediation line, or stopping an A/B experiment " +
 			"keeping the treatment's lines. Held until they answer, at a fresh step-up."
+	}
+}
+
+// genericCovers is what a generic tool of class above read changes, which the
+// tools below it name (growth.Catalog.Above).
+func genericCovers(class growth.Class) string {
+	switch class {
+	case growth.ClassRead:
+		return ""
+	case growth.ClassOperate:
+		return "apps, ad units, mappings, mediation groups and A/B experiments"
+	default:
+		return "linking an app to its store listing, removing a mediation line and stopping an A/B experiment"
 	}
 }
 

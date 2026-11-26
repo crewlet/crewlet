@@ -70,7 +70,7 @@ Every resource a call names that belongs to an app, in its path, its filters or 
 
 | Tool | Class | What it does |
 |---|---|---|
-| `app_store_connect_operations` | read | Lists the operations the agent may call now, with their class and roles |
+| `app_store_connect_operations` | read | Lists every operation, with the level that offers it (one above the agent's marked), their class and roles |
 | `app_store_connect_read` | read | Any read of the API on the agent's apps |
 | `app_store_connect_operate` | operate | A change nobody outside the team sees; refused where the target is live |
 | `app_store_connect_publish` | public | Asks for a change customers or external testers see |
@@ -84,6 +84,8 @@ A write is classed by what its target is when it is made: an edit to a version i
 ## Decisions
 
 A public or admin call is held for an administrator, who answers **Allow once** or **Deny** at a fresh sign-in, never a delegate ([ADR-0171](../../adr/0171-spend-public-and-admin-acts-are-held-for-an-administrator-never-a-delegate.md)); an allowed call is sent with the asking agent's own key. The administrator reads the exact request and the target as it is now; if the target changes before the answer, Allow once sends nothing and the agent is told to ask again. An unanswered ask lapses after a day. Every call, ask, answer and outcome is in the access log. A call that failed before its request left (its lease, the target's read again, its context's end) is recorded as failed for that cause and told to the agent as not sent; a write whose request got no answer from Apple is recorded as an unknown outcome, and such a reply is reported `unknown`, to check on the review.
+
+An agent holds only its level's tools, and each tool that takes a method's ID says what lies above it. A method above the agent's level, named on a tool it holds, is refused before Apple is called, naming the method's class, the tool and level that make it, whether an administrator approves each call, and that an administrator raises the level on the Agents tab, asked in words (`request_access` asks for no level). A method Crewlet does not offer is refused as one no level reaches.
 
 ## Limits
 

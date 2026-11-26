@@ -156,6 +156,9 @@ type OperationRow struct {
 	Danger   bool     `json:"cannot_be_undone,omitempty"`
 	Roles    []string `json:"roles"`
 	Tool     string   `json:"tool"`
+	// Level is the least level offering it; Above marks one above this agent's.
+	Level string `json:"level"`
+	Above bool   `json:"above_your_level,omitempty"`
 }
 
 // OperationList is the discovery tool's answer.
@@ -168,7 +171,8 @@ type OperationList struct {
 // maxListed bounds the discovery tool's answer.
 const maxListed = 200
 
-// listOperations lists the operations the seat's level allows, filtered.
+// listOperations lists the operations, filtered, each with the least level
+// offering it and whether that is above the seat's.
 func (p *Product) listOperations(call growth.Call) (any, error) {
 	seat, err := p.seat(call.Handle)
 	if err != nil {
@@ -189,8 +193,6 @@ func (p *Product) listOperations(call growth.Call) (any, error) {
 			}
 		}
 		switch {
-		case !level.Allows(lowest):
-			continue
 		case resource != "" && !strings.EqualFold(resource, op.Resource):
 			continue
 		case class != "" && class != string(op.Class) && !slices.ContainsFunc(op.States,
@@ -206,7 +208,8 @@ func (p *Product) listOperations(call growth.Call) (any, error) {
 		}
 		out.Operations = append(out.Operations, OperationRow{ID: op.ID, Method: op.Method, Path: op.Path,
 			Resource: op.Resource, Class: string(op.Class), Lowered: lowered, Danger: op.Danger,
-			Roles: rolesNames(op.Roles), Tool: toolFor(op.Class)})
+			Roles: rolesNames(op.Roles), Tool: toolFor(op.Class), Level: string(lowest.Level()),
+			Above: !level.Allows(lowest)})
 	}
 	return out, nil
 }
