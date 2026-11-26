@@ -381,7 +381,7 @@ flowchart TD
   mode and covers none of the corpus, rendered as "could not be searched" rather
   than "nothing matched".
 
-A read waits up to ten seconds on one data node before the next is asked, a
+A read waits up to fifteen seconds on one data node before the next is asked, a
 write up to a minute (or the caller's own deadline); none is ever longer than
 the caller's deadline. Every request carries the asking node's own writes as a
 floor, so the answering node has applied them or says it is behind; see
