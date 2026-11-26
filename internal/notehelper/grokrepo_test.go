@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -264,6 +265,118 @@ func TestAGrokAnswerHoldsWholeCheckoutsWithinGroksCut(t *testing.T) {
 	}
 }
 
+// A GROK FIRING CLAIMS ONLY THE CHECKOUTS ITS ANSWER CAN NAME: each claimed
+// checkout's files come whole or named by path within Grok's cut, and one
+// whose named block no longer fits waits, unclaimed, for a later firing,
+// which hands it.
+//
+// Mutation: charge no named block at claim, and this goes red.
+func TestAGrokFiringClaimsOnlyTheCheckoutsItsAnswerCanName(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.grokLaunch(t)
+	work := r.workdir(t)
+	files := map[string]string{}
+	for i := range 60 {
+		files["g"+strconv.Itoa(100+i)+"/.git/"] = ""
+		files["g"+strconv.Itoa(100+i)+"/AGENTS.md"] = strings.Repeat("G", 1000)
+	}
+	r.add(t, files)
+	got := r.grokFire(t, grokMainCall)
+	if units(got) > grokNestedChars {
+		t.Errorf("the answer is %d code points, past Grok's cut", units(got))
+	}
+	claimed := map[string]bool{}
+	for _, name := range strings.Split(strings.TrimSpace(read(t, filepath.Join(r.state, "handed"))), "\n") {
+		claimed[name] = true
+	}
+	var waiting []string
+	for i := range 60 {
+		name := "g" + strconv.Itoa(100+i)
+		if !claimed[name] {
+			waiting = append(waiting, name)
+		} else if !strings.Contains(got, work+"/"+name+"/AGENTS.md") {
+			t.Errorf("%s is claimed but its file is neither handed nor named", name)
+		}
+	}
+	if len(waiting) == 0 || len(waiting) == 60 {
+		t.Fatalf("%d of 60 checkouts wait, want some named and some waiting", len(waiting))
+	}
+	later := r.grokFire(t, grokMainCall)
+	for _, name := range waiting {
+		if !strings.Contains(later, work+"/"+name+"/AGENTS.md") {
+			t.Errorf("%s, which waited, is not handed by a later firing", name)
+		}
+	}
+}
+
+// A CHECKOUT WITH NOTHING TO NAME NEVER WAITS ON A SPENT NAMES ROOM: where
+// the first checkout's named block alone passes Grok's names room (claimed
+// all the same, since no firing names more), a checkout with no instruction
+// file is claimed in the same firing.
+//
+// Mutation: hold a cost-free checkout to the spent room, and this goes red.
+func TestACheckoutWithNothingToNameNeverWaitsOnASpentNamesRoom(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.grokLaunch(t)
+	files := map[string]string{"a/.git/": "", "b/.git/": ""}
+	for i := range 200 {
+		files["a/.grok/rules/rule-with-a-long-name-"+strconv.Itoa(1000+i)+".md"] = "R\n"
+	}
+	r.add(t, files)
+	r.grokFire(t, grokMainCall)
+	if handed := read(t, filepath.Join(r.state, "handed")); !strings.Contains(handed, "a\n") || !strings.Contains(handed, "b\n") {
+		t.Errorf("the firing claimed %q, want a past the room and b beside it", handed)
+	}
+}
+
+// A GROK FIRING NEVER READS A FILE PAST ITS ANSWER: a sparse AGENTS.md of
+// 256 MiB, which no answer holds whole, is named by path from its size alone,
+// the firing allocating a fraction of it. Not parallel: it reads the heap's
+// allocations.
+//
+// Mutation: read the file before deciding, and this goes red.
+func TestAGrokFiringNeverReadsAFilePastItsAnswer(t *testing.T) {
+	r := newRepoRun(t, nil)
+	r.grokLaunch(t)
+	r.add(t, map[string]string{"huge/.git/": "", "huge/AGENTS.md": ""})
+	if err := os.Truncate(filepath.Join(r.workdir(t), "huge", "AGENTS.md"), 256<<20); err != nil {
+		t.Fatal(err)
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got := r.grokFire(t, grokMainCall)
+	runtime.ReadMemStats(&after)
+	if !strings.Contains(got, "/huge: read "+r.workdir(t)+"/huge/AGENTS.md for its instructions") {
+		t.Errorf("the huge file is not named by path:\n%.400s", got)
+	}
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 32<<20 {
+		t.Errorf("the firing allocated %d bytes for a file it does not hand", grew)
+	}
+}
+
+// A GROK ANSWER KEEPS WHAT IT LEFT OUT BEFORE ITS SKILLS: where the skills'
+// listing and the left-out lines pass the hook's cut, the left-out lines
+// come whole, last, and the skills' listing before them is cut.
+//
+// Mutation: take the skills first, and this goes red.
+func TestAGrokAnswerKeepsWhatItLeftOutBeforeItsSkills(t *testing.T) {
+	t.Parallel()
+	h := handedCheckout{name: "late", root: "/w/late"}
+	for i := range 40 {
+		h.skills = append(h.skills, handedSkill{name: "late-s" + strconv.Itoa(i), description: strings.Repeat("d", 300),
+			path: "/h/skills/late-s" + strconv.Itoa(i) + "/SKILL.md"})
+	}
+	skipped := []string{"the skill /w/late/.grok/skills/x is left out: its name is taken"}
+	answer := grokNestedContext([]handedCheckout{h}, skipped)
+	skills, ok := strings.CutSuffix(answer, "\n\n"+skippedListing(skipped))
+	if !ok || !strings.HasSuffix(skills, "\n"+grokListingCut) || units(answer) > grokNestedChars {
+		t.Errorf("the answer (%d code points) is not the skills cut, then what was left out whole:\n%.300s...%s",
+			units(answer), answer, answer[max(len(answer)-300, 0):])
+	}
+}
+
 // A COPY THAT A PERSON'S SKILL WOULD HIDE, OR RENAME, IS LEFT OUT, SAID
 // (rows x1-x7): Grok lists a copy `late:foo` as late-foo, so a home skill
 // whose name or directory rewrites to it (late-foo; late-bar-x named
@@ -451,5 +564,35 @@ func TestAGrokCopyIsNamedAsGrokListsIt(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(r.skills, copied, "SKILL.md")); err != nil {
 			t.Errorf("the copy %s is missing: %v", copied, err)
 		}
+	}
+}
+
+// A GROK ANSWER NAMES WHAT IT LEFT OUT BEFORE IT HANDS A FILE WHOLE: a
+// checkout whose AGENTS.md alone would fit Grok's cut whole is named instead
+// where whole it would leave no room for the line saying what the firing left
+// out, which comes whole.
+//
+// Mutation: upgrade to whole before holding the left-out lines' room, and
+// this goes red.
+func TestAGrokAnswerNamesWhatItLeftOutBeforeItHandsAFileWhole(t *testing.T) {
+	t.Parallel()
+	handed := func(n int) []handedCheckout {
+		return []handedCheckout{{name: "x", root: "/r", parts: []instructionPart{{path: "/r/AGENTS.md",
+			text: strings.Repeat("i", n)}}}}
+	}
+	lo, hi := 0, grokNestedChars // the largest file handed whole with nothing left out
+	for lo < hi {
+		if mid := (lo + hi + 1) / 2; strings.Contains(grokNestedContext(handed(mid), nil), strings.Repeat("i", mid)) {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	skipped := []string{"the skill /r/.grok/skills/deploy is left out: the home's skills take its name"}
+	got := grokNestedContext(handed(lo), skipped)
+	if !strings.HasSuffix(got, skippedListing(skipped)) || !strings.Contains(got, "read /r/AGENTS.md") ||
+		units(got) > grokNestedChars {
+		t.Errorf("a %d-character file beside a left-out skill answered %d code points ending ...%s; want it named, "+
+			"the line whole", lo, units(got), got[max(len(got)-200, 0):])
 	}
 }
