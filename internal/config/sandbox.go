@@ -128,8 +128,7 @@ type SandboxProvider struct {
 	// scheduled turn's timeout_seconds, or when a person stops it, never on a
 	// clock of its box's or part-way through a budget.
 	//
-	// A PLAIN INT: zero (left out or 0) is uncapped, every other value the cap,
-	// at most [RoundCapCeiling].
+	// A PLAIN INT: 0 is uncapped, any other value the cap, at most [RoundCapCeiling].
 	DefaultMaxTurns int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0;max=1000" desc:"Agentic-round cap for one executor run on seats that name none. Unset or 0 = uncapped; at most 1000."`
 
 	// CommitAttribution says whether every commit an executor authors as itself
