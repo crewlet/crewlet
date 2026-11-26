@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/objstore"
 )
 
 // HandedSecrets is every value a launch handed its box out of a credential
@@ -62,22 +64,24 @@ type HandedSecrets struct {
 // sealed: its own, those carried from earlier jobs in the same box, and the
 // tokens a refresh renewed there since.
 //
-// 64 KiB: a box is handed a few kibibytes (tokens, MCP headers, a deploy key, a
-// login document of a kibibyte or two), so this is room for a dozen key files
-// across a turn's relaunches, plus a run's renewals, which the drop holds to
-// about eight AWS sessions of ~2 KiB each ([handedLapse]). A launch past it keeps
-// none, and a set renewals take past it is marked incomplete
-// ([PendingStore.AddHanded]); either way its captures are refused, never scrubbed
-// of only some values.
-const MaxHandedBytes = 64 << 10
+// 80 KiB: a box is handed a few kibibytes (tokens, MCP headers, a deploy key, a
+// login document of a kibibyte or two), so 48 KiB is room for a dozen key files
+// across a turn's relaunches; and a run's renewals, which the drop holds to
+// fourteen AWS sessions of ~2 KiB each (one every ten minutes, kept fifteen
+// minutes and [handedLapse] past it), 28 KiB, rounded up to a 16 KiB step. A
+// launch past it keeps none, and a set renewals take past it is marked
+// incomplete ([PendingStore.AddHanded]); either way its captures are refused,
+// never scrubbed of only some values.
+const MaxHandedBytes = 80 << 10
 
-// handedLapse is how long past its expiry a token a refresh recorded stays in
-// the set ([HandedSecrets.drop]). An hour: a lapsed token opens nothing, and an
-// hour is far past any clock error between the issuer and the nodes that record
-// and drop it, so nothing still good is dropped. It is what bounds a long run:
-// an AWS session renewed every ten minutes, lapsing fifteen after, would pass
-// [MaxHandedBytes] within hours undropped, and holds about eight at once with it.
-const handedLapse = time.Hour
+// handedLapse is how long past its expiry, by the dropping node's clock, a token
+// a refresh recorded stays in the set ([HandedSecrets.drop]): twice
+// [objstore.AssumedClockSkew], the most that clock and the issuer's, each held
+// within the bound, stand apart. So a value is dropped only once its issuer's
+// clock is past the expiry too, and a lapsed token opens nothing. It is what
+// bounds a long run: an AWS session renewed every ten minutes, lapsing fifteen
+// after, would pass [MaxHandedBytes] within hours undropped.
+const handedLapse = 2 * objstore.AssumedClockSkew
 
 // expiryKey is what [HandedSecrets.Expires] holds value's expiry under: the
 // first sixteen bytes of its SHA-256 in hex, 128 bits, so two values of one set
