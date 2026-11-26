@@ -963,7 +963,8 @@ func (m Muse) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	// THE NESTED HOOK SWITCHED OFF is left out, said once in the skip log
 	// (D709); where the notes or loads reinstall the plugin, which drops a
 	// person's reject of it, the settings holding it are held to come back.
-	// A run that leaves the plugin alone holds nothing.
+	// That hold matters only for a WriteConfig with no standing text: with
+	// it, museMergeSystem holds them anyway.
 	var skipped []string
 	if nested && len(nestedOff) > 0 {
 		nested, skipped = false, []string{"a repository cloned during the run is not handed its instructions and " +

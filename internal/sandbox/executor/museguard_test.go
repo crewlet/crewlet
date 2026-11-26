@@ -109,7 +109,9 @@ func TestAMuseRunsPluginAndSkillsCannotBeSwitchedOffUnseen(t *testing.T) {
 // home's settings, the reject among them, back after; each says once, in its
 // skip log, that a repository cloned during it is not handed, naming the
 // record. Mutations, each red: refuse; install the nested hook anyway; say
-// nothing; drop the hold that puts the reject back.
+// nothing. (Dropping the D709 hold is
+// TestAMuseRunHoldsTheNestedRejectWhereItReinstallsThePlugin's: a real run
+// always has standing text, whose merge holds the settings anyway.)
 func TestAMuseRunsNestedHookOffNeverRefusesItAlone(t *testing.T) {
 	t.Parallel()
 	const rejected = `{"schema_version":1,"runtime_capabilities":{"plugin:crewlet-notes:hook:stop":` +
