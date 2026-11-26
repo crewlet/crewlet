@@ -35,10 +35,13 @@ type instructionSlot struct {
 // slotOptions is how a slot reads past what Codex and Copilot do (both false
 // for them): Inside, a name's file followed through a link only while it
 // stays in the checkout, as a tree's is; Once, a file an earlier slot handed,
-// by its real path, not handed again (Grok Build 1.0.92 for both, measured).
+// by its real path, not handed again (Grok Build 1.0.92 for both, measured);
+// SkipBlank, a name's file of whitespace alone or unreadable passed over for
+// the next name (Kimi Code 2.7.2: a blank AGENTS.md loads agents.md, measured).
 type slotOptions struct {
-	Inside bool `json:"inside,omitempty"`
-	Once   bool `json:"once,omitempty"`
+	Inside    bool `json:"inside,omitempty"`
+	Once      bool `json:"once,omitempty"`
+	SkipBlank bool `json:"skipBlank,omitempty"`
 }
 
 // instructionTree is a tree slot: Tree, the directory below the checkout's
@@ -122,7 +125,7 @@ func (s instructionSlot) MarshalJSON() ([]byte, error) {
 	switch {
 	case s.Tree != nil:
 		return json.Marshal(s.Tree)
-	case s.Inside || s.Once:
+	case s.Inside || s.Once || s.SkipBlank:
 		return json.Marshal(struct {
 			Names []string `json:"names"`
 			slotOptions
