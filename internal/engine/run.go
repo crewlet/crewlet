@@ -460,6 +460,11 @@ type Engine struct {
 	// ([Engine.ShuttingDown]).
 	shuttingDown atomic.Bool
 
+	// mediaInline is why takes last kept their media inline for want of the
+	// executor log's readers, logged once each time it changes
+	// ([Engine.executorMediaRead]).
+	mediaInline atomic.Pointer[string]
+
 	// drainOnce makes the drain one operation however many callers ask:
 	// [Engine.Stop] drains for a caller that did not, and a second run would
 	// announce a second stop.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -79,4 +80,44 @@ func TestASessionSplicedFromItsMembersIsRestoredAsOne(t *testing.T) {
 	if got := boxFile(t, b, transcriptOf(b, ran.SessionID)); !strings.HasPrefix(got, own) {
 		t.Errorf("the box's own copy was written over by the spliced session it already held:\n%s", got)
 	}
+}
+
+// AN OPENCODE EXPORT SPLICED FROM ITS MEMBERS IS IMPORTED AS ONE, under every
+// sh a box may run: its script unpacks it (gzip -dc) whole, imports and
+// resumes it, and keeps the digest of those very bytes, so the same export
+// carried back into a box that keeps it is that box's own copy, never imported
+// over.
+//
+// Mutation: have the script unpack one member alone, or digest the archive
+// otherwise than the take does, and the import or the copy's recognition goes
+// red.
+func TestAnOpenCodeExportSplicedFromItsMembersIsImportedAsOne(t *testing.T) {
+	t.Parallel()
+	export := openCodeExport(carriedOpenCode)
+	spliced := inMembers(t, gzipped(t, export), 3)
+	own := `{"info":{"id":"` + carriedOpenCode + `","title":"crewlet"},"messages":[{"id":"msg_2","type":"user",` +
+		`"text":"went on in this box"}]}`
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		run := runScript(t, scriptOpts{shell: sh, session: &continuingOpenCode, carried: export, members: 3,
+			req: sandbox.RunRequest{Resume: carriedOpenCode, MCPServers: bridgeOnly}})
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		if got := readIn(t, run.dir, "imported-session"); got != export || sessionOf(t, run) != carriedOpenCode {
+			t.Errorf("the import was handed %q, want the spliced export unpacked whole", got)
+		}
+		if !keeps(t, run, carriedOpenCode, spliced) {
+			t.Errorf("the box keeps no digest of the spliced export it imported: %q",
+				readIn(t, filepath.Join(run.home, ".crewlet"), "session-digests"))
+		}
+		back := runScript(t, scriptOpts{shell: sh, session: &continuingOpenCode, held: []string{carriedOpenCode},
+			carried: export, members: 3, ownsCarried: true, env: []string{"FAKE_SESSION_EXPORT=" + own},
+			req: sandbox.RunRequest{Resume: carriedOpenCode, MCPServers: bridgeOnly}})
+		if back.code != 0 {
+			t.Fatalf("exit %d:\n%s", back.code, back.stderr)
+		}
+		if got := readIn(t, back.dir, "imported-session"); got != own+"\n" {
+			t.Errorf("a box keeping the spliced export imported %q over its own copy", got)
+		}
+	})
 }

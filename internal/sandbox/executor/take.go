@@ -235,7 +235,10 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	meter := newContextMeter(metering, carries, archive.SessionID, archive.Version, large)
 	// THE ARCHIVE WHOLE is what the box keeps the digest of and the meter
 	// reads; a take keeping its media apart frames its body beside it
-	// ([memberSplit]), every payload's text held to the archive's own bound.
+	// ([memberSplit]). ITS ALLOWANCE IS THE BOX'S BOUND, MaxBytes, of first
+	// occurrences' text in all: one capture's media never outgrow what a take
+	// admits of its box (SessionMaxBytes today), and crewlet/crewlet#2020's
+	// raise of that bound (piece 4c) moves the allowance with it.
 	kept := io.MultiWriter(write, sum, meter)
 	if take.MediaApart {
 		kept = io.MultiWriter(sum, meter)

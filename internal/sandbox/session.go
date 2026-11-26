@@ -665,7 +665,8 @@ func (c SessionCapture) Bounded() error {
 // CaptureMedia is one media object a capture names (the executor log's
 // NewMedia): uploaded for it, or Carried, named live already by the turn's row
 // or the base that row holds, which the log finds there or refuses the
-// capture.
+// capture. ContentKey is the keyring key's id, as [SessionCapture.ContentKey]
+// is: it names the key and holds none of it.
 type CaptureMedia struct {
 	Digest     string `json:"digest"`
 	Object     string `json:"object"`

@@ -612,8 +612,8 @@
 // never over a box whose copy holds that archive ([Paths.SessionDigests]), and
 // starts its own, saying why, where it can do neither. Whether a box can
 // continue a carried session is its harness's release, asked of the box
-// ([Runner.CheckCarry]). What each archive holds is its harness's: see carry.go
-// and each runner's own carry.
+// ([Runner.CheckCarry]). What each archive holds is its harness's (carry.go,
+// each runner's own).
 //
 // A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
 // it, by the pack the run's own end makes held to a stricter rule: a file the
@@ -689,10 +689,10 @@
 //
 //  1. BY VALUE: every secret the engine itself put in the box, its login and
 //     its environment's credentials, is taken out wherever it appears, in its
-//     raw form and in the form a JSON string holds it in, whatever its shape,
-//     so a value redact's rules would never recognise (an operator's opaque
-//     token) is gone all the same. First, so the second pass sees the marker
-//     where the value was rather than a half it could not place.
+//     raw form and in the form a JSON string holds it in, so a value redact's
+//     rules would never recognise (an operator's opaque token) is gone too.
+//     First, so the second pass sees the marker where the value was rather
+//     than a half it could not place.
 //  2. BY SHAPE: redact.Secrets, the one denylist every surface uses, which
 //     catches what the engine did not put there: a key the run printed.
 //
@@ -803,8 +803,7 @@
 // own for each member, line or cut would let a box's archive of a mebibyte
 // hold the engine host to gibibytes between the two readings.
 //
-// AN EXPORT IS SPOOLED TOO: a reading refuses a document only once it has
-// read it ([scrubDocument]).
+// AN EXPORT IS SPOOLED TOO ([scrubDocument]): one is refused only once read.
 //
 // A TEXT A TAKE FOUND UNCHANGED IS NOT REDACTED AGAIN. The redaction is the
 // scrub's cost, and every turn's take scrubs the whole session: a whole-PDF
@@ -820,8 +819,8 @@
 // because the redaction's answer for a text is the text's alone
 // (redact.Stream; its rules are the build's): each text has a redaction of its
 // own, a key's credential is judged on its raw name, and a credential's value
-// never reaches it. In memory alone: a restart, a deploy or a seat's move to
-// another node costs one take at most what it costs without. On two cores of
+// never reaches it. In memory alone: a restart, a deploy or a seat's move
+// costs one take at most what it costs without. On two cores of
 // the build machine, two runs each (BenchmarkASecondTakeOfAPDFSession), that
 // read's take came to 6.1 s with no memo, 5.2 s as a process's first and 3.4 s
 // as its second.
@@ -837,7 +836,7 @@
 // one whose text the redaction refuses ([errRedaction], what the redaction said
 // read off its error, and redact.ErrDecidedEarly whether its stream decided a
 // window before what it read there was known, at a write or at its close), is
-// refused, stamped with why, rather than costing the engine host its memory;
+// refused, stamped with why, rather than costing the host its memory;
 // and the whole scrub is held to the take's time (internal/sandbox's
 // SessionScrubWait). A panic in the scrub is CONTAINED on the take's own
 // goroutine (scrubContained, take.go), which reads every byte of the archive, a
@@ -854,7 +853,7 @@
 // 132 MiB at the bound and [scrubLongestMax], 16 MiB of it the plan and 12 MiB
 // that value, near nothing in a real session. A test holds it at a smaller
 // bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the real one,
-// both readings from a file on disk.
+// both readings from disk.
 // On two cores of the build machine:
 //
 //	one string to the bound:   16.2 s a scrub, held 17.8 MiB (256 MiB from 28 MiB)
@@ -872,8 +871,10 @@
 // # A kept session's media is kept apart
 //
 // Each large payload a take keeps apart is found after the scrub ([mediaRun])
-// and cut into a gzip member alone ([memberSplit]): no JSON text changes,
-// and the archive whole is what the box digests and a restore hands back.
+// and cut into a gzip member alone ([memberSplit]); no JSON text changes. The
+// box digests and restores the archive whole, so its gzip must read several
+// members, as GNU's and BusyBox's do
+// (TestASessionSplicedFromItsMembersIsRestoredAsOne).
 //
 // # A definition the scrub renamed is cut out of its line
 //

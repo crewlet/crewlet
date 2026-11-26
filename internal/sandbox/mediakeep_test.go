@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -270,17 +271,19 @@ func mediaRow(turn, base string, media []CaptureMedia) executorkeep.TurnRow {
 // A KEEP CARRIES THE MEDIA ITS TURN HOLDS, and uploads the rest: a payload
 // the turn's own row names live, or the base that row holds, is named carried,
 // its very object, its spool dropped, and never uploaded again; one neither
-// names is uploaded fresh; and a row that cannot be read uploads every one
-// fresh, which is always correct.
+// names is uploaded fresh; and a row that cannot be read, or is read only past
+// the keep's room for it, uploads every one fresh, which is always correct,
+// the read costing the keep that room and no more.
 //
-// Mutation: carry from another turn's row, upload a carried member, or keep a
-// carried spool, and a case goes red.
+// Mutation: carry from another turn's row, upload a carried member, keep a
+// carried spool, or wait on the row past its room, and a case goes red.
 func TestAKeepCarriesMediaItsTurnHolds(t *testing.T) {
 	t.Parallel()
 	pdf, image := strings.Repeat("JVBERi0xLjQK", 6<<10), strings.Repeat("iVBORw0KGgo", 2<<10)
 	whole, body := mediaBody(t, "one", mediaPart+pdf, "two", mediaPart+image, "three")
 	for name, tc := range map[string]struct {
 		rows    func(first []CaptureMedia) map[string]executorkeep.TurnRow
+		late    bool
 		carried int
 	}{
 		"the turn's own row names both": {carried: 2, rows: func(first []CaptureMedia) map[string]executorkeep.TurnRow {
@@ -293,6 +296,9 @@ func TestAKeepCarriesMediaItsTurnHolds(t *testing.T) {
 			return map[string]executorkeep.TurnRow{"t1": mediaRow("t1", "", nil), "t9": mediaRow("t9", "", first)}
 		}},
 		"the row cannot be read": {rows: func([]CaptureMedia) map[string]executorkeep.TurnRow { return nil }},
+		"the row is read only past its room": {late: true, rows: func(first []CaptureMedia) map[string]executorkeep.TurnRow {
+			return map[string]executorkeep.TurnRow{"t1": mediaRow("t1", "", first)}
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -303,8 +309,16 @@ func TestAKeepCarriesMediaItsTurnHolds(t *testing.T) {
 				}
 				first := rig.get("t1").Kept.Media
 				spooled := secondCapture(t, rig, "t1", tc.rows(first))
+				if tc.late {
+					rig.coordinator.restore = lateRows{rig.coordinator.restore}
+				}
+				began := time.Now()
 				if kept := rig.coordinator.keepCapture(t.Context(), spooled); kept == nil || kept.NotKept != "" {
 					t.Fatalf("the second keep came to %+v, want it kept", kept)
+				}
+				if took := time.Since(began); tc.late && took != keepReadRoom {
+					t.Errorf("the keep took %v beside a row read past its room, want the room, %v", took,
+						keepReadRoom)
 				}
 				captured := writes.captured()
 				media := captured[len(captured)-1].Stamp.Media
@@ -329,6 +343,69 @@ func TestAKeepCarriesMediaItsTurnHolds(t *testing.T) {
 			})
 		})
 	}
+}
+
+// A CAPTURE NAMING MEDIA THAT NEVER REACHED THE LOG IS ASKED AGAIN WHOLE: its
+// run's row carries its media list beside its object, so the turn's end asks
+// the very record its keep sent, naming every member its frames splice, and
+// the session the log then names reads back whole. Asked without the list, the
+// log would name a text object of frames whose members nothing names, which
+// opens to no archive at all.
+//
+// Mutation: rebuild the record asked again without the stamp's media, and the
+// session it names is unreadable.
+func TestACaptureNamingMediaIsAskedAgainWhole(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		pdf, image := strings.Repeat("JVBERi0xLjQK", 6<<10), strings.Repeat("iVBORw0KGgo", 2<<10)
+		whole, body := mediaBody(t, "one", mediaPart+pdf, "two", mediaPart+image, "three")
+		rig, writes, keep := mediaRig(t, whole, body)
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
+		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+		collectHeld(t, rig, "t1")
+		if run := rig.get("t1"); run.Capture == nil || run.Capture.State != CaptureUnresolved {
+			t.Fatalf("the row holds %+v, want the capture unresolved", run.Capture)
+		}
+
+		writes.answer(nil)
+		ctx := t.Context()
+		if owed, err := rig.coordinator.OweEnd(ctx, "t1", executorkeep.Ending{
+			Outcome: executorkeep.OutcomeCompleted}); err != nil || !owed {
+			t.Fatalf("OweEnd = %v, %v", owed, err)
+		}
+		if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
+			t.Fatalf("publishEnd: %v", err)
+		}
+		all := writes.captured()
+		asked := all[len(all)-1]
+		if run := rig.get("t1"); run.Kept == nil || run.Kept.State != CaptureLanded {
+			t.Fatalf("the row keeps %+v, want the capture the end's ask landed", run.Kept)
+		}
+		uploads := keep.uploads()
+		members := uploadedMembers(uploads)
+		named := map[string][]byte{}
+		for _, m := range asked.Stamp.Media {
+			named[m.Digest] = members[m.Digest]
+		}
+		if len(named) != len(members) {
+			t.Fatalf("the record asked again names %d media of the %d its session's frames splice", len(named),
+				len(members))
+		}
+		if got := spliced(t, uploads[0], named); !bytes.Equal(got, whole) {
+			t.Error("the session the record asked again names does not read back as the archive taken")
+		}
+	})
+}
+
+// lateRows answers no read of a turn's row before its context ends, as a store
+// slow past the keep's room does.
+type lateRows struct{ SessionRestore }
+
+func (lateRows) Session(ctx context.Context, _, _ string) (executorkeep.TurnRow, error) {
+	<-ctx.Done()
+	return executorkeep.TurnRow{}, ctx.Err()
 }
 
 // carryRefusing is the executor log refusing a capture that carries media its

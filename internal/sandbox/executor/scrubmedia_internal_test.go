@@ -178,6 +178,31 @@ func frameKinds(t *testing.T, text []byte) (kinds string, named [][]byte) {
 	return kinds, named
 }
 
+// textFrames is how many text frames frames holds: a take's body past its
+// lead, or a text object.
+func textFrames(t *testing.T, frames []byte) int {
+	t.Helper()
+	n := 0
+	for r := bytes.NewReader(frames); r.Len() > 0; {
+		switch kind, _ := r.ReadByte(); kind {
+		case executorkeep.FrameText, sandbox.FrameMember:
+			size, err := binary.ReadUvarint(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = r.Seek(int64(size), io.SeekCurrent)
+			if kind == executorkeep.FrameText {
+				n++
+			}
+		case executorkeep.FrameMedia, sandbox.FrameMemberEnd:
+			_, _ = r.Seek(executorkeep.MediaDigestBytes, io.SeekCurrent)
+		default:
+			t.Fatalf("a frame of kind %q", kind)
+		}
+	}
+	return n
+}
+
 // claudeRead is a Claude Code line holding a file it read whole: the payload in
 // the message the model is sent and, where twice is set, again in the tool's
 // own result, as Claude Code writes a PDF read.
@@ -202,11 +227,12 @@ func claudeArchive(t *testing.T, lines ...string) []byte {
 // text's after it, the payload's member holds the payload's text alone, and
 // the body framed from it, split, kept and opened as a launch opens it, reads
 // back byte for byte as the archive whole, the digest its box keeps
-// included. Each layout: a transcript's tar, and an export, its payload a data
-// URI's base64.
+// included, its text's frames merged a read at a time around the payload's.
+// Each layout: a transcript's tar, and an export, its payload a data URI's
+// base64.
 //
-// Mutation: open the payload's member a byte late, or splice its frame in the
-// wrong place, and the members or the open differ.
+// Mutation: open the payload's member a byte late, splice its frame in the
+// wrong place, or merge text frames short, and the members or the open differ.
 func TestATakeCutsEachLargePayloadIntoAMemberOfItsOwn(t *testing.T) {
 	t.Parallel()
 	payload := mediaPayload(1, mediaMinBytes+8)
@@ -248,6 +274,10 @@ func TestATakeCutsEachLargePayloadIntoAMemberOfItsOwn(t *testing.T) {
 		}
 		if strings.Contains(string(text), payload[:64]) {
 			t.Errorf("%s: the text object still holds the payload", name)
+		}
+		if merged, framed := textFrames(t, text), textFrames(t, body[1:]); merged >= framed {
+			t.Errorf("%s: the text object holds %d text frames of the body's %d, want them merged", name, merged,
+				framed)
 		}
 	}
 }

@@ -6572,7 +6572,9 @@ sessions. The API row and the Sessions screen state `media_bytes` beside
 applies a row whose frames its estate does not name; its collector then reads
 an incomplete estate and deletes nothing. A take keeps its media apart only
 once every node applying the log says it reads record version 9
-(`statelog.Readers`); until then every capture keeps them inline, unchanged.
+(`statelog.Readers`); until then, and whenever the readers cannot be read,
+every capture keeps them inline, unchanged. A node below the version that joins
+later defers such a capture on its applier, never drops it.
 
 ## Amendment: a kept session is what its harness's resume loads
 

@@ -218,31 +218,49 @@ func (k executorKeep) Policy(ctx context.Context) (sandbox.SessionPolicy, error)
 // executorMediaRead says whether every node applying the executor log reads a
 // capture that names media (executordomain.MediaVersion): its counted set as
 // the trim counts it ([statelog.CountedSet]), each node at the version its
-// heartbeat says it reads ([statelog.Readers]). A node that has not said, or
-// a set that cannot be read, answers false, and the take keeps its media
-// inline: an older build would retain the capture, its estate naming none of
-// its media, and its collector take them.
+// heartbeat says it reads ([statelog.Readers]). Never a guess: a node below
+// it or not yet saying answers inline, and readers that cannot be read do
+// too, logged once with why. A node below it that joins after the answer
+// defers such a capture on its applier, never drops it
+// (.claude/rules/compatibility.md), so its estate names none of the media
+// until it upgrades, and its collector deletes nothing meanwhile (ADR-0073's
+// amendment, "Mid-upgrade").
 func (e *Engine) executorMediaRead(ctx context.Context) bool {
+	apart, why := e.executorMediaReaders(ctx)
+	if why == "" {
+		e.mediaInline.Store(nil)
+	} else if last := e.mediaInline.Load(); last == nil || *last != why {
+		e.mediaInline.Store(&why)
+		log.WarnContext(ctx, "executor_media_kept_inline", "why", why, "detail", "every take keeps its "+
+			"large payloads inline until every node applying the executor log is known to read a capture "+
+			"naming them")
+	}
+	return apart
+}
+
+// executorMediaReaders is [Engine.executorMediaRead]'s answer, and why it is
+// inline where the readers could not say.
+func (e *Engine) executorMediaReaders(ctx context.Context) (bool, string) {
 	if e.backends == nil || e.backends.Fleet == nil || e.backends.Coord == nil {
-		return false
+		return false, "this node has no coordination store to read the executor log's readers from"
 	}
 	rows, err := e.backends.Fleet.Positions(ctx)
 	if err != nil {
-		return false
+		return false, fmt.Sprintf("the position register could not be read: %v", err)
 	}
 	live, err := e.holdersOf().LiveData(ctx)
 	if err != nil {
-		return false
+		return false, fmt.Sprintf("the live data nodes could not be listed: %v", err)
 	}
 	domain := executordomain.Domain{}
 	tombs, _ := logTombstones(ctx, e.backends.Store, domain, 0)
 	readers := statelog.Readers(statelog.CountedSet(e.now(), reportedPositions(rows, domain.Name()), live, tombs))
 	for _, version := range readers {
 		if version < executordomain.MediaVersion {
-			return false
+			return false, ""
 		}
 	}
-	return len(readers) > 0
+	return len(readers) > 0, ""
 }
 
 // Keeps is whether the revision this node runs keeps sessions, read with no
