@@ -131,7 +131,7 @@ func qwenChatFile(ctx context.Context, box sandbox.Sandbox, session string) (str
 // not held, so the note is served again. A line past bound, or one that does
 // not decode, drops every pending match: it may have been a compaction that
 // summarized them. The record is walked for notes ([lineWalk.noteLine]), and
-// every line for the newest summary where summary is not nil ([qwenSummaries]).
+// every line for the newest summary where summary is not nil ([qwenSummaryCapture]).
 func qwenNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from, bound int,
 	summary *summaryRead) ([]string, error) {
 	type match struct{ id, digest string }
@@ -140,12 +140,13 @@ func qwenNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from, b
 	next, at := 0, -1
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), bound)
+	w.passImages()
 	var l qwenNoteLine
-	var sums *qwenSummaries
-	skip := func() error { return w.scan.Skip() }
+	var sum *qwenSummaryCapture
+	skip := func() error { return w.skip(jsonscan.ObjectStart) }
 	if summary != nil {
-		sums = newQwenSummaries(summary)
-		l.payload = &sums.payload
+		sum = newQwenSummaryCapture(summary)
+		l.sum = &sum.compaction
 		skip = func() error { return l.readKind(&w) }
 	}
 	for {
@@ -164,9 +165,7 @@ func qwenNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from, b
 		if line.none {
 			break
 		}
-		if sums != nil {
-			sums.line(ctx, line, &l)
-		}
+		sum.noteLine(line, &l)
 		at++
 		switch {
 		case line.past:
@@ -206,9 +205,6 @@ func qwenNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, from, b
 			break
 		}
 	}
-	if sums != nil && sums.lines.err != nil {
-		return nil, sums.lines.err
-	}
 	return settled, nil
 }
 
@@ -221,8 +217,9 @@ type qwenNoteLine struct {
 	whole, handedSet bool
 	handed           framedDigest
 	kept             qwenPreserved
-	// payload, where a read asks the summary, is the system payload as written.
-	payload *qwenPayload
+	// sum, where a read asks the summary, reads the system payload's summary
+	// as kept reads the payload ([qwenSummaryCapture]).
+	sum *qwenCompaction
 }
 
 // read reads one record's members. A KEY MATCHES ITS NAME EXACTLY, AND ONE
@@ -232,7 +229,7 @@ type qwenNoteLine struct {
 func (l *qwenNoteLine) read(w *lineWalk) error {
 	l.typ, l.subtype, l.whole, l.handedSet = "", "", true, false
 	l.kept.reset()
-	l.payload.reset()
+	l.sum.lineStart()
 	return w.members(func(name string, k jsonscan.Kind) error {
 		var ok bool
 		var err error
@@ -242,27 +239,24 @@ func (l *qwenNoteLine) read(w *lineWalk) error {
 		case "subtype":
 			l.subtype, ok, err = w.wordField(k)
 		case "systemPayload":
-			if err = l.payload.tee(w); err != nil {
-				return err
-			}
-			ok, err = true, l.kept.read(w, k)
+			ok, err = true, l.kept.read(w, k, l.sum)
 		case "message":
 			l.handedSet = false
 			ok, err = w.objectField(k, func(name string, k jsonscan.Kind) error {
 				if name != "parts" {
-					return w.scan.Skip()
+					return w.skip(k)
 				}
 				l.handedSet = false
 				first := true
 				listed, listErr := w.listField(k, func(k jsonscan.Kind) error {
 					took, partErr := w.objectField(k, func(name string, k jsonscan.Kind) error {
 						if name != "text" {
-							return w.scan.Skip()
+							return w.skipMember(name, k)
 						}
 						switch k {
 						case jsonscan.String:
 							if !first {
-								return w.scan.Skip()
+								return w.skip(k)
 							}
 							l.handedSet = true
 							return l.handed.scan(w)
@@ -271,7 +265,7 @@ func (l *qwenNoteLine) read(w *lineWalk) error {
 							return nil
 						}
 						l.whole = false
-						return w.scan.Skip()
+						return w.skip(k)
 					})
 					first = false
 					l.whole = l.whole && took
@@ -281,7 +275,7 @@ func (l *qwenNoteLine) read(w *lineWalk) error {
 				return listErr
 			})
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		l.whole = l.whole && ok
 		return err
@@ -292,7 +286,7 @@ func (l *qwenNoteLine) read(w *lineWalk) error {
 // reads alone: its type, subtype and system payload.
 func (l *qwenNoteLine) readKind(w *lineWalk) error {
 	l.typ, l.subtype = "", ""
-	l.payload.reset()
+	l.sum.lineStart()
 	return w.members(func(name string, k jsonscan.Kind) error {
 		var err error
 		switch name {
@@ -301,11 +295,9 @@ func (l *qwenNoteLine) readKind(w *lineWalk) error {
 		case "subtype":
 			l.subtype, _, err = w.wordField(k)
 		case "systemPayload":
-			if err = l.payload.tee(w); err == nil {
-				err = w.scan.Skip()
-			}
+			err = l.sum.read(w, k)
 		default:
-			err = w.scan.Skip()
+			err = w.skip(k)
 		}
 		return err
 	})
@@ -341,12 +333,16 @@ func (p *qwenPreserved) reset() {
 }
 
 // read reads a record's system payload, each member checked by its
-// whole-line decode's field.
-func (p *qwenPreserved) read(w *lineWalk, k jsonscan.Kind) error {
+// whole-line decode's field; and where sum is not nil, its summary by the
+// steps of its transcript's read ([qwenCompaction.read]).
+func (p *qwenPreserved) read(w *lineWalk, k jsonscan.Kind, sum *qwenCompaction) error {
 	p.reset()
+	if sum != nil {
+		sum.payload(k)
+	}
 	if p.object = k == jsonscan.ObjectStart; !p.object {
 		p.refused = k != jsonscan.Null
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	if p.last == nil {
 		p.last, p.counts = map[string][]int{}, map[string]int{}
@@ -359,63 +355,62 @@ func (p *qwenPreserved) read(w *lineWalk, k jsonscan.Kind) error {
 		case "summaryPrefixLength":
 			n, ok, err = w.intField(k)
 			p.summary, p.summarySet = n, ok && k == jsonscan.Number
+			if sum != nil {
+				sum.prefixRead(n, ok, k)
+			}
 		case "contextPrefixLength":
 			n, ok, err = w.intField(k)
 			p.context, p.contextSet = n, ok && k == jsonscan.Number
 		case "compressedHistory":
 			p.entries = 0
 			clear(p.last)
-			ok, err = w.listField(k, func(k jsonscan.Kind) error { return p.entry(w, k) })
+			if sum != nil {
+				sum.history(k)
+			}
+			ok, err = w.listField(k, func(k jsonscan.Kind) error { return p.entry(w, k, sum) })
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		p.refused = p.refused || !ok
 		return err
 	})
 }
 
-// entry reads one entry of the history, counting the texts of a user one.
-func (p *qwenPreserved) entry(w *lineWalk, k jsonscan.Kind) error {
+// entry reads one entry of the history, counting the texts of a user one;
+// and where sum is not nil, as an entry of its summary's history
+// ([qwenCompaction.historyEntry]).
+func (p *qwenPreserved) entry(w *lineWalk, k jsonscan.Kind, sum *qwenCompaction) error {
 	p.role = ""
 	clear(p.counts)
+	entry := sum != nil && sum.entryStart(k)
 	took, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
 		var ok bool
 		var err error
 		switch name {
 		case "role":
 			p.role, ok, err = w.wordField(k)
+			if sum != nil {
+				sum.roleRead(p.role)
+			}
 		case "parts":
 			clear(p.counts)
-			ok, err = w.listField(k, func(k jsonscan.Kind) error {
-				took, partErr := w.objectField(k, func(name string, k jsonscan.Kind) error {
-					if name != "text" {
-						return w.scan.Skip()
-					}
-					switch k {
-					case jsonscan.String:
-						if scanErr := p.text.scan(w); scanErr != nil {
-							return scanErr
-						}
-						if d := p.text.digest(); p.want[d] > 0 {
-							p.counts[d]++
-						}
-						return nil
-					case jsonscan.Null:
-						return nil
-					}
+			if sum != nil {
+				if read, partsErr := sum.partsStart(w, k); read {
 					p.refused = true
-					return w.scan.Skip()
-				})
-				p.refused = p.refused || !took
-				return partErr
-			})
+					return partsErr
+				}
+			}
+			ok, err = w.listField(k, func(k jsonscan.Kind) error { return p.part(w, k, sum) })
 		default:
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		p.refused = p.refused || !ok
 		return err
 	})
 	p.refused = p.refused || !took
+	if entry && err == nil {
+		sum.entryEnd()
+	}
 	e := p.entries
 	p.entries++
 	if p.role == "user" {
@@ -427,6 +422,49 @@ func (p *qwenPreserved) entry(w *lineWalk, k jsonscan.Kind) error {
 			}
 		}
 	}
+	return err
+}
+
+// part reads one part of an entry, counting its text by its digest; and
+// where sum is not nil, as its summary reads a part ([qwenCompaction.parts]).
+func (p *qwenPreserved) part(w *lineWalk, k jsonscan.Kind, sum *qwenCompaction) error {
+	if k != jsonscan.ObjectStart {
+		sum = nil
+	}
+	if sum != nil {
+		sum.partStart()
+		defer sum.partEnd()
+	}
+	took, err := w.objectField(k, func(name string, k jsonscan.Kind) error {
+		if name != "text" {
+			if name == "thought" && sum != nil {
+				sum.thought(k)
+			}
+			return w.skipMember(name, k)
+		}
+		if k != jsonscan.String {
+			if sum != nil {
+				sum.noText()
+			}
+			p.refused = p.refused || k != jsonscan.Null
+			return w.skip(k)
+		}
+		var err error
+		if sum != nil {
+			p.text.start()
+			err = sum.textRead(w, &p.text)
+		} else {
+			err = p.text.scan(w)
+		}
+		if err != nil {
+			return err
+		}
+		if d := p.text.digest(); p.want[d] > 0 {
+			p.counts[d]++
+		}
+		return nil
+	})
+	p.refused = p.refused || !took
 	return err
 }
 
@@ -462,25 +500,10 @@ type framedDigest struct {
 
 // scan reads w's current string into d, holding none of it.
 func (d *framedDigest) scan(w *lineWalk) error {
-	if d.whole == nil {
-		d.whole, d.rest = sha256.New(), sha256.New()
-	}
-	d.whole.Reset()
-	d.rest.Reset()
-	d.n, d.opens = 0, true
-	framing := "\n" + qwenNoteFraming
+	d.start()
 	for {
 		n, err := w.scan.Read(w.piece)
-		p := w.piece[:n]
-		_, _ = d.whole.Write(p)
-		if d.n < len(framing) {
-			k := min(len(p), len(framing)-d.n)
-			d.opens = d.opens && string(p[:k]) == framing[d.n:d.n+k]
-			_, _ = d.rest.Write(p[k:])
-		} else {
-			_, _ = d.rest.Write(p)
-		}
-		d.n += n
+		_, _ = d.Write(w.piece[:n])
 		switch {
 		case errors.Is(err, io.EOF):
 			return nil
@@ -488,6 +511,31 @@ func (d *framedDigest) scan(w *lineWalk) error {
 			return err
 		}
 	}
+}
+
+// start starts a text.
+func (d *framedDigest) start() {
+	if d.whole == nil {
+		d.whole, d.rest = sha256.New(), sha256.New()
+	}
+	d.whole.Reset()
+	d.rest.Reset()
+	d.n, d.opens = 0, true
+}
+
+// Write digests p, the text's next bytes.
+func (d *framedDigest) Write(p []byte) (int, error) {
+	framing := "\n" + qwenNoteFraming
+	_, _ = d.whole.Write(p)
+	if d.n < len(framing) {
+		k := min(len(p), len(framing)-d.n)
+		d.opens = d.opens && string(p[:k]) == framing[d.n:d.n+k]
+		_, _ = d.rest.Write(p[k:])
+	} else {
+		_, _ = d.rest.Write(p)
+	}
+	d.n += len(p)
+	return len(p), nil
 }
 
 // framed reports whether the text opens with the framing.

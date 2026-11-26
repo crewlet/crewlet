@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,25 +16,85 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// piecesBox is a box whose ranges stream n bytes a read.
-type piecesBox struct {
-	*sandbox.FakeSandbox
-	n int
+// claudeSummaryFind is the walk's search for a Claude Code thread's newest
+// summary's line as the read before the walk read its words kept it (#2127):
+// where the line lies, never its words.
+type claudeSummaryFind struct {
+	at, size, next int64
+	armed          bool
+	read           summaryRead
 }
 
-func (b piecesBox) OpenRange(ctx context.Context, p string, off, n int64) (io.ReadCloser, int64, error) {
-	body, size, err := b.FakeSandbox.OpenRange(ctx, p, off, n)
-	if err != nil {
-		return nil, size, err
+func (r *claudeSummaryFind) line(l threadLine) {
+	at := r.next
+	r.next += int64(l.Size)
+	switch h := l.Head; {
+	case h.Type == recordSystem && h.Subtype == subtypeCompactBoundary:
+		r.armed = true
+	case r.armed && h.Type == recordUser:
+		summary, err := l.IsCompactSummary()
+		meta, metaErr := l.IsMeta()
+		switch {
+		case err != nil || metaErr != nil:
+			r.read.unshaped("a user record after the newest compaction's boundary does not say whether it is " +
+				"its summary")
+		case summary && !meta:
+			r.at, r.size, r.armed, r.read.unsaid = at, int64(l.Size), false, ""
+		}
 	}
-	return struct {
-		io.Reader
-		io.Closer
-	}{&exportPieces{r: body, n: b.n}, body}, size, nil
 }
 
-// summaryLineRead is what a read of a summary's line answers, as words.
-func summaryLineRead(text string, err error) string { return fmt.Sprintf("%q %v", text, err) }
+func (r *claudeSummaryFind) refused(err *threadLineError) {
+	r.next += int64(err.Size)
+	if r.armed {
+		r.read.unshaped(fmt.Sprintf("line %d, after the newest compaction's boundary, is no record", err.N))
+	}
+}
+
+func (r *claudeSummaryFind) end(_ bool, err error) {
+	if err != nil {
+		r.read.fail("the thread was not read to its end: " + err.Error())
+	}
+}
+
+// claudeSummaryWhole is the newest summary of thread as the read before the
+// walk read its words answered it: the walk finds the newest summary's line,
+// read again whole off the box ([claudeSummaryLineWhole]).
+func claudeSummaryWhole(t *testing.T, thread string) sandbox.ThreadSummary {
+	t.Helper()
+	const file = "/home/user/thread.jsonl"
+	box := sandbox.NewFakeSandbox("b")
+	box.Put(file, thread)
+	answering(box, nil)
+	f := &claudeSummaryFind{}
+	walkThread(t.Context(), strings.NewReader(thread), threadPlainMax, new(passBudget), f)
+	if f.size == 0 || f.read.failed != "" || f.read.unsaid != "" {
+		return f.read.reading()
+	}
+	text, err := claudeSummaryLineWhole(t.Context(), box, file, f.at, f.size)
+	switch {
+	case errors.Is(err, errSummaryPast):
+		f.read.unshaped(errSummaryPast.Error())
+	case err != nil:
+		f.read.fail(err.Error())
+	default:
+		f.read.take(text)
+	}
+	return f.read.reading()
+}
+
+// claudeSummaryOnTheWalk is the newest summary of thread as a box read reads
+// it, on the walk, the thread handed over n bytes a read (0: whole).
+func claudeSummaryOnTheWalk(t *testing.T, thread string, n int) (sandbox.ThreadSummary, *claudeSummaryReading) {
+	t.Helper()
+	var body io.Reader = strings.NewReader(thread)
+	if n > 0 {
+		body = &exportPieces{r: body, n: n}
+	}
+	r := &claudeSummaryReading{}
+	walkThread(t.Context(), body, threadPlainMax, new(passBudget), r)
+	return r.reading(), r
+}
 
 // summaryLineOf is a summary's record holding message, as written.
 func summaryLineOf(message string) string {
@@ -77,92 +139,62 @@ func claudeSummaryLineVariants() []string {
 	}
 }
 
-// A CLAUDE CODE SUMMARY'S LINE STREAMED IS ITS WHOLE-LINE READ: over every
-// variant and the recorded summary, read where the walk found it, a byte
-// before and after, a byte shorter and longer, over a thread cut short inside
-// it and one whose line runs on past it, whole and in pieces of seventeen
-// bytes, the streamed read answers the text and the error the whole-line
-// oracle answers ([claudeSummaryLineWhole]).
+// A CLAUDE CODE SUMMARY READ ON THE WALK IS ITS WHOLE-LINE READ: over every
+// variant and the recorded summary, after a compaction's boundary, over a
+// thread whose line ends it, one cut inside it, one cut at its break and one
+// whose line runs on past it, whole and in pieces of seventeen bytes, the
+// summary the walk reads is the one the read before it found and read again
+// whole ([claudeSummaryWhole]).
 //
 // Mutation: hold the text a byte short, read a list's text as the summary,
 // take a meta or an unmarked record, take a content written before another,
-// or read a line of another size than the walk's: a case fails.
-func TestAClaudeSummarysLineStreamedIsItsWholeLineRead(t *testing.T) {
+// arm the walk before a boundary, or keep reading after the summary: a case
+// fails.
+func TestAClaudeSummaryReadOnTheWalkIsItsWholeLineRead(t *testing.T) {
 	t.Parallel()
-	const file = "/home/user/thread.jsonl"
 	before, after := `{"type":"system","subtype":"compact_boundary"}`, `{"type":"assistant"}`
 	_, recorded := lineWith(t, claudeSummaryFixture(t), `"isCompactSummary":true`)
 	lines := append(claudeSummaryLineVariants(), strings.TrimSuffix(string(recorded), "\n"))
 	for i, line := range lines {
-		at, size := int64(len(before)+1), int64(len(line)+1)
-		for _, c := range []struct {
-			name      string
-			body      string
-			at, size  int64
-			piecewise bool
-		}{
-			{name: "where the walk read it", body: before + "\n" + line + "\n" + after + "\n", at: at, size: size},
-			{name: "a byte before", body: before + "\n" + line + "\n" + after + "\n", at: at - 1, size: size},
-			{name: "a byte after", body: before + "\n" + line + "\n" + after + "\n", at: at + 1, size: size},
-			{name: "a byte shorter", body: before + "\n" + line + "\n" + after + "\n", at: at, size: size - 1},
-			{name: "a byte longer", body: before + "\n" + line + "\n" + after + "\n", at: at, size: size + 1},
-			{name: "the thread cut inside it", body: before + "\n" + line[:len(line)/2], at: at, size: size},
-			{name: "the thread cut at its break", body: before + "\n" + line, at: at, size: size},
-			{name: "its line running on", body: before + "\n" + line + "x\n", at: at, size: size},
+		for _, c := range []struct{ name, thread string }{
+			{"ending it", before + "\n" + line + "\n" + after + "\n"},
+			{"the thread cut inside it", before + "\n" + line[:len(line)/2]},
+			{"the thread cut at its break", before + "\n" + line},
+			{"its line running on", before + "\n" + line + "x\n"},
+			{"no boundary before it", line + "\n" + after + "\n"},
+			{"a later user record", before + "\n" + line + "\n" + summaryLineOf(`{"content":"after"}`) + "\n"},
 		} {
-			box := sandbox.NewFakeSandbox("b")
-			box.Put(file, c.body)
-			answering(box, nil)
-			want := summaryLineRead(claudeSummaryLineWhole(t.Context(), box, file, c.at, c.size))
-			if got := summaryLineRead(claudeSummaryLine(t.Context(), box, file, c.at, c.size)); got != want {
-				t.Errorf("line %d %.80q, %s: read %.300s, want %.300s", i, line, c.name, got, want)
-			}
-			pieces := piecesBox{FakeSandbox: box, n: 17}
-			if got := summaryLineRead(claudeSummaryLine(t.Context(), pieces, file, c.at, c.size)); got != want {
-				t.Errorf("line %d %.80q, %s, in pieces: read %.300s, want %.300s", i, line, c.name, got, want)
+			want := claudeSummaryWhole(t, c.thread)
+			for _, n := range []int{0, 17} {
+				if got, _ := claudeSummaryOnTheWalk(t, c.thread, n); got != want {
+					t.Errorf("line %d %.80q, %s, in pieces of %d: read %+.300v, want %+.300v", i, line, c.name, n,
+						got, want)
+				}
 			}
 		}
 	}
 }
 
-// A CLAUDE CODE SUMMARY'S LINE PAST ITS BOUND IS NEVER READ: a line past
-// [claudeSummaryLineMaxBytes] is the summary past the read's bound without a
-// byte of it streamed, and a content past [summaryReadMaxBytes] on a line
-// within it is said so too, holding none of it.
+// A CLAUDE CODE SUMMARY'S LINE PAST ITS BOUND IS NEVER KEPT: a line past
+// [claudeSummaryLineMaxBytes] is the summary past the read's bound, though
+// its content is short, and a content past [summaryReadMaxBytes] on a line
+// within it is said so too, the walk holding none of it.
 //
-// Mutation: stream a line past the bound, or keep a content past its bound:
-// a case fails.
-func TestAClaudeSummarysLinePastItsBoundIsNeverRead(t *testing.T) {
+// Mutation: keep a line past the bound, or a content past its bound: a case
+// fails.
+func TestAClaudeSummarysLinePastItsBoundIsNeverKept(t *testing.T) {
 	t.Parallel()
-	const file = "/home/user/thread.jsonl"
-	content := strings.Repeat("x", summaryReadMaxBytes+1)
-	line := summaryLineOf(`{"content":` + boundedQuoted(content) + `}`)
-	box := sandbox.NewFakeSandbox("b")
-	box.Put(file, line+"\n")
-	if _, err := claudeSummaryLine(t.Context(), box, file, 0, claudeSummaryLineMaxBytes+1); !errors.Is(err, errSummaryPast) ||
-		box.Delivered() != 0 {
-		t.Errorf("a line past the bound: %v, %d bytes streamed; want the summary past, none streamed", err,
-			box.Delivered())
-	}
-	if text, err := claudeSummaryLine(t.Context(), box, file, 0, int64(len(line)+1)); !errors.Is(err, errSummaryPast) ||
-		text != "" {
-		t.Errorf("a content past its bound: %.40q, %v; want none, the summary past", text, err)
-	}
-}
-
-// A CLAUDE CODE THREAD GONE UNDER A SUMMARY'S READ IS ONE THAT CHANGED: the
-// box streams nothing of a file removed after the walk found its summary, so
-// its read says the line is no longer where the walk read it, where the
-// whole-line read said the shell's failure to read it.
-//
-// Mutation: take an empty stream as a line, or as a summary of no words: this
-// goes red.
-func TestAClaudeThreadGoneUnderASummarysReadIsOneThatChanged(t *testing.T) {
-	t.Parallel()
-	box := sandbox.NewFakeSandbox("b")
-	_, err := claudeSummaryLine(t.Context(), box, "/home/user/gone.jsonl", 10, 100)
-	if err == nil || !strings.Contains(err.Error(), "the thread changed under the read") {
-		t.Errorf("a thread gone: %v, want it said changed under the read", err)
+	boundary := `{"type":"system","subtype":"compact_boundary"}` + "\n"
+	pad := `,"toolUseResult":` + boundedQuoted(strings.Repeat("p", claudeSummaryLineMaxBytes)) + `}`
+	for name, line := range map[string]string{
+		"a line past its bound": strings.TrimSuffix(summaryLineOf(`{"content":"short"}`), "}") + pad,
+		"a content past its bound": summaryLineOf(`{"content":` + boundedQuoted(strings.Repeat("x",
+			summaryReadMaxBytes+1)) + `}`),
+	} {
+		got, r := claudeSummaryOnTheWalk(t, boundary+line+"\n", 0)
+		if got.Unread != errSummaryPast.Error() || got.Text != "" || len(r.read.text) != 0 {
+			t.Errorf("%s: read %.60q (unread %q), want none, the summary past", name, got.Text, got.Unread)
+		}
 	}
 }
 
@@ -201,5 +233,101 @@ func TestAClaudeSummaryPastAControlCommandsOutputIsRead(t *testing.T) {
 		Session: claudeSummarySession, Release: "2.1.322", Summary: true}).Summary
 	if got.Unread != "" || got.Text != words {
 		t.Errorf("the summary read %d bytes (unread %q), want its %d", len(got.Text), got.Unread, len(words))
+	}
+}
+
+// What a Claude Code box read asking the newest summary may allocate beyond
+// its walk alone ([TestAClaudeSummaryAddsOnlyItsWordsToTheWalk]): six times
+// the summary's words, their buffer grown a piece at a time (Go's append past
+// 256 bytes: at most five times what it ends at) and the string the answer
+// holds one more; and its reading's own state, at 4 KiB. A second reader of
+// the summary's line, its buffers alone 64 KiB, is past both.
+const (
+	claudeSummaryWordsAllocates = 6
+	claudeSummaryStateAllocates = 4 << 10
+)
+
+// A CLAUDE CODE SUMMARY ADDS ONLY ITS WORDS TO THE WALK: a box read asking
+// the newest summary beside the count allocates at most what the read asking
+// the count alone does, the summary's words
+// [claudeSummaryWordsAllocates] times over, and [claudeSummaryStateAllocates]:
+// the walk reads them, and no second reader reads their line again.
+//
+// Not parallel: it reads the process's allocation count, the fewest bytes of
+// three reads ([allocationsOf]).
+//
+// Mutation: read the summary's line again with a reader of its own: this goes
+// red.
+func TestAClaudeSummaryAddsOnlyItsWordsToTheWalk(t *testing.T) {
+	words := "the work so far: " + strings.Repeat("a step taken, a file read, a test run. ", 210)
+	b := claudeSummaryBox(t, func(lines [][]byte) [][]byte {
+		i, line := lineWith(t, lines, `"isCompactSummary":true`)
+		lines[i] = edited(t, line, func(m map[string]any) { m["message"].(map[string]any)["content"] = words })
+		return lines
+	})
+	read := func(summarize bool) (sandbox.MainThreadReading, uint64) {
+		var reading sandbox.MainThreadReading
+		ask := sandbox.MainThreadAsk{Session: b.session, Release: b.release, Count: true, Summary: summarize}
+		_, allocated := allocationsOf(func() {
+			reading = b.h.readMainThread(context.Background(), b.box, PathsFor(b.box), ask)
+		})
+		return reading, allocated
+	}
+	_, alone := read(false)
+	summarized, both := read(true)
+	if summarized.Summary.Text != words {
+		t.Fatalf("the read reads the summary %.40q (%s), want its words", summarized.Summary.Text,
+			summarized.Summary.Unread)
+	}
+	limit := alone + claudeSummaryWordsAllocates*uint64(len(words)) + claudeSummaryStateAllocates
+	t.Logf("the walk alone allocates %d bytes, with the summary of %d bytes %d (%d more)", alone, len(words), both,
+		int64(both)-int64(alone))
+	if both > limit {
+		t.Errorf("with the summary the read allocates %d bytes, %d past the walk's %d; want at most %d", both,
+			both-alone, alone, limit)
+	}
+}
+
+// EVERY RECORDED CLAUDE CODE THREAD'S SUMMARY READS AS IT DID BEFORE THE WALK
+// READ ITS WORDS: each of the 46 threads under testdata/claude reads the
+// answer the line read again after the walk (#2127) gave it, pinned here when
+// #2020 removed that read: the summary of each thread that compacted, and none
+// elsewhere.
+//
+// Mutation: take a summary's content cut short, or the summary of a record
+// before the boundary: a recording fails.
+func TestEveryRecordedClaudeSummaryReadsAsBeforeTheWalk(t *testing.T) {
+	t.Parallel()
+	pinned := map[string]string{
+		"2.1.310/holdings/s1/projects/crewlet/5e55100a-0000-4000-8000-000000000106.jsonl": "text:1047:2c0a8aa95ea8fba7",
+		"2.1.310/holdings/s2/projects/crewlet/5e55100a-0000-4000-8000-000000000107.jsonl": "text:1047:cb013bad5a7be07d",
+		"2.1.322/holdings/s1/projects/crewlet/5e55100a-0000-4000-8000-000000000113.jsonl": "text:1110:a921bc8fcc7421ab",
+		"2.1.322/holdings/s2/projects/crewlet/5e55100a-0000-4000-8000-000000000114.jsonl": "text:1110:9dbbdbaa1d7bbe7c",
+		"2.1.330/holdings/c1/projects/crewlet/5e55100a-0000-4000-8000-000000000162.jsonl": "text:1004:be4a655131770a42",
+	}
+	read, met := 0, 0
+	err := filepath.WalkDir(filepath.Join("testdata", "claude"), func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+			return err
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		name := filepath.ToSlash(strings.TrimPrefix(path, filepath.Join("testdata", "claude")+string(filepath.Separator)))
+		want, ok := pinned[name]
+		if ok {
+			met++
+		} else {
+			want = "none"
+		}
+		read++
+		if got, _ := claudeSummaryOnTheWalk(t, string(raw), 0); geminiSummaryString(got) != want {
+			t.Errorf("%s: the summary reads %s, want %s", name, geminiSummaryString(got), want)
+		}
+		return nil
+	})
+	if err != nil || read != 46 || met != len(pinned) {
+		t.Errorf("read %d threads (%v), %d of the %d pinned; want all 46", read, err, met, len(pinned))
 	}
 }

@@ -131,6 +131,7 @@ func qwenCountVariants() []string {
 		}
 		out = append(out, `{"subtype":"chat_compression"`+member+`,"uuid":"c1","type":"system"}`)
 	}
+	out = append(out, append(qwenMediaLines(chatMediaKB), qwenCountMediaLines(chatMediaKB)...)...)
 	return append(out, `{"uuid":"u","message":{"parts":[{"text":"no type"}]}}`,
 		`{"type":null,"message":{"parts":[]}}`, `{"type":5}`, `{"type":"`+long+`"}`, `{"type":"system","subtype":5}`,
 		`{"type":"system","subtype":"slash_command","message":{"parts":[{"text":"not counted"}]}}`,
@@ -256,6 +257,7 @@ func geminiCountVariants() []string {
 		`{"id":"r18","type":"user","content":"`+"\xff"+` invalid"}`,
 		`{"ID":"r19","type":"user","content":"another key"}`)
 	out = append(out, geminiPieceEdgeLines()...)
+	out = append(out, append(geminiMediaLines(chatMediaKB), geminiCountMediaLines(chatMediaKB)...)...)
 	return append(out, geminiFormHeadEdgeLines()...)
 }
 
@@ -400,7 +402,7 @@ func TestAChatCountOnTheWalkIsItsWholeLineRead(t *testing.T) {
 		eachChatCountRecord(h, func(name, record string) {
 			walk := h.walk()
 			marks, err := countChat(h.release, h.release, func() error {
-				return chatFileLines(t.Context(), strings.NewReader(record), walk, new(passBudget), nil)
+				return chatFileLines(t.Context(), strings.NewReader(record), walk, new(passBudget))
 			})
 			whole := h.whole()
 			wantMarks, wantErr := countWholeOf(t.Context(), whole, []byte(record), h.release, h.release)
@@ -440,7 +442,7 @@ func TestAChatCountsKeyWrittenTwiceLeavesItUnread(t *testing.T) {
 	for _, h := range chatCountHarnesses(t) {
 		for _, line := range h.twices {
 			walk := h.walk()
-			if err := chatFileLines(t.Context(), strings.NewReader(h.base+"\n"+line+"\n"), walk, new(passBudget), nil); err != nil {
+			if err := chatFileLines(t.Context(), strings.NewReader(h.base+"\n"+line+"\n"), walk, new(passBudget)); err != nil {
 				t.Fatalf("%s %s: %v", h.name, line, err)
 			}
 			if got := walk.count(0, 0); got.Mark != sandbox.CountUnread {
@@ -491,7 +493,7 @@ func TestAChatCountPastItsCallsBoundIsUnread(t *testing.T) {
 		h := chatCountHarnesses(t)[c.h]
 		record := h.base + "\n" + c.line + "\n"
 		walk := h.walk()
-		if err := chatFileLines(t.Context(), strings.NewReader(record), walk, new(passBudget), nil); err != nil {
+		if err := chatFileLines(t.Context(), strings.NewReader(record), walk, new(passBudget)); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		got := walk.count(0, 0)
@@ -522,7 +524,7 @@ func TestAGeminiCountPastItsIDsKeepsNoMore(t *testing.T) {
 	}
 	b.WriteString(`{"$patch":{"removeIds":["k0000001","b0"]}}` + "\n")
 	c := newGeminiCounting()
-	if err := chatFileLines(t.Context(), strings.NewReader(b.String()), c, new(passBudget), nil); err != nil {
+	if err := chatFileLines(t.Context(), strings.NewReader(b.String()), c, new(passBudget)); err != nil {
 		t.Fatal(err)
 	}
 	held := len(c.quarters) + len(c.answers) + len(c.calls) + len(c.removed)
@@ -553,7 +555,7 @@ func TestAChatCountsRestartNoCountCarriesLeavesItUnread(t *testing.T) {
 			{hs[1], hs[1].base + "\n" + geminiCompressionOf(`"`+id+`"`) + "\n"},
 		} {
 			walk := c.h.walk()
-			if err := chatFileLines(t.Context(), strings.NewReader(c.record), walk, new(passBudget), nil); err != nil {
+			if err := chatFileLines(t.Context(), strings.NewReader(c.record), walk, new(passBudget)); err != nil {
 				t.Fatal(err)
 			}
 			got := walk.count(0, 0)
@@ -639,7 +641,7 @@ func TestAGeminiCountPastItsBaseHoldsTheLargeSlot(t *testing.T) {
 	free := holdLargeSlot(t)
 	c := newGeminiCounting()
 	ctx := &chatSlotWait{Context: t.Context(), waited: make(chan struct{})}
-	if err := chatFileLines(ctx, strings.NewReader(records(geminiCountBaseIDs)), c, new(passBudget), nil); err != nil {
+	if err := chatFileLines(ctx, strings.NewReader(records(geminiCountBaseIDs)), c, new(passBudget)); err != nil {
 		t.Fatalf("a count at its base: %v", err)
 	}
 	select {
@@ -659,7 +661,7 @@ func TestAGeminiCountPastItsBaseHoldsTheLargeSlot(t *testing.T) {
 		go func() {
 			defer close(done)
 			marks, err = countChat(geminiRelease, geminiRelease, func() error {
-				return chatFileLines(ctx, strings.NewReader(records(geminiCountBaseIDs+1)), c, new(passBudget), nil)
+				return chatFileLines(ctx, strings.NewReader(records(geminiCountBaseIDs+1)), c, new(passBudget))
 			})
 		}()
 		select {

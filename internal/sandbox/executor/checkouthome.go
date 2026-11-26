@@ -15,7 +15,7 @@ import (
 // directory") keeps them: the helper and its state, the launch config
 // ([checkoutSpec]), the home instruction file the harness reads (agents: the
 // first of its candidates that exists, else the first; none for a harness
-// handed no instruction text, whose home file is never held), the home's own
+// whose home file is never held, its sections read where they are written), the home's own
 // copy held beside the run (held), the file the helper writes the checkouts'
 // sections into (sections), the skills directory they are copied into with
 // the list of copies the run's end removes, and the file listing their roots
@@ -87,7 +87,7 @@ type checkoutSpec struct {
 	ImportInstructions bool
 	SkillSep           checkoutSkillSep
 	// ListedAs and HomeSkills are the helper's ("grok", Grok Build's listing
-	// rule).
+	// rule; "kimi", Kimi Code's; "opencode", OpenCode's).
 	ListedAs   string
 	HomeSkills []checkoutSkillDir
 }
@@ -138,9 +138,11 @@ type checkoutSlot struct {
 	Names []string
 	Tree  *checkoutTree
 	// Inside follows a name's link only within the checkout; Once hands no
-	// file an earlier slot handed.
-	Inside bool `json:"inside,omitempty"`
-	Once   bool `json:"once,omitempty"`
+	// file an earlier slot handed; SkipBlank passes over a name's file of
+	// whitespace alone for the next name (Kimi Code, measured on 2.7.2).
+	Inside    bool `json:"inside,omitempty"`
+	Once      bool `json:"once,omitempty"`
+	SkipBlank bool `json:"skipBlank,omitempty"`
 }
 
 // checkoutTree is a tree slot: the directory below a checkout's root, the
@@ -183,12 +185,13 @@ func (s checkoutSlot) MarshalJSON() ([]byte, error) {
 	switch {
 	case s.Tree != nil:
 		return json.Marshal(s.Tree)
-	case s.Inside || s.Once:
+	case s.Inside || s.Once || s.SkipBlank:
 		return json.Marshal(struct {
-			Names  []string `json:"names"`
-			Inside bool     `json:"inside,omitempty"`
-			Once   bool     `json:"once,omitempty"`
-		}{s.Names, s.Inside, s.Once})
+			Names     []string `json:"names"`
+			Inside    bool     `json:"inside,omitempty"`
+			Once      bool     `json:"once,omitempty"`
+			SkipBlank bool     `json:"skipBlank,omitempty"`
+		}{s.Names, s.Inside, s.Once, s.SkipBlank})
 	}
 	return json.Marshal(s.Names)
 }
@@ -208,7 +211,10 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions,
 		"skillSep": spec.SkillSep, "roots": h.roots}
 	if spec.ListedAs != "" {
-		config["listedAs"], config["homeSkills"] = spec.ListedAs, spec.HomeSkills
+		config["listedAs"] = spec.ListedAs
+	}
+	if len(spec.HomeSkills) > 0 {
+		config["homeSkills"] = spec.HomeSkills
 	}
 	launch, _ := json.Marshal(config)
 	return launch // strings, lists, booleans and ints cannot fail to encode

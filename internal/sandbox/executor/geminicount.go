@@ -364,11 +364,11 @@ func (c *geminiCounting) record(w *lineWalk) error {
 			if name == "$rewindTo" && c.sum != nil {
 				return c.sum.rewindMember(w, k)
 			}
-			return w.scan.Skip()
+			return w.skip(k)
 		}
 		handled, err := c.recordMember(w, name, k, &l.record, &seen, &l.twice)
 		if !handled {
-			err = w.scan.Skip()
+			err = w.skip(k)
 		}
 		return err
 	})
@@ -513,7 +513,7 @@ func (c *geminiCounting) patch(w *lineWalk, k jsonscan.Kind) error {
 	l := &c.l
 	if k != jsonscan.ObjectStart {
 		l.unread, l.shapeless = true, true
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	var seen uint16
 	return w.members(func(name string, k jsonscan.Kind) error {
@@ -523,7 +523,7 @@ func (c *geminiCounting) patch(w *lineWalk, k jsonscan.Kind) error {
 			ok, err := w.listField(k, func(k jsonscan.Kind) error {
 				if k != jsonscan.ObjectStart {
 					l.unread, l.shapeless = true, true
-					return w.scan.Skip()
+					return w.skip(k)
 				}
 				if len(l.updates) < cap(l.updates) {
 					l.updates = l.updates[:len(l.updates)+1]
@@ -542,7 +542,7 @@ func (c *geminiCounting) patch(w *lineWalk, k jsonscan.Kind) error {
 					}
 					handled, err := c.recordMember(w, name, k, r, &fields, &l.twice)
 					if !handled {
-						err = w.scan.Skip()
+						err = w.skip(k)
 					}
 					return err
 				})
@@ -576,7 +576,7 @@ func (c *geminiCounting) patch(w *lineWalk, k jsonscan.Kind) error {
 			l.unread = l.unread || k != jsonscan.Null
 			l.shapeless = l.shapeless || k != jsonscan.Null
 		}
-		return w.scan.Skip()
+		return w.skip(k)
 	})
 }
 
@@ -606,7 +606,7 @@ func (w *lineWalk) geminiContent(k jsonscan.Kind, r *geminiCountRecord, words *g
 		})
 	}
 	r.marks = r.marks.with(sandbox.CountUnread)
-	return w.scan.Skip()
+	return w.skip(k)
 }
 
 // The members of a part [lineWalk.geminiPart] reads, a bit each for [twice].
@@ -625,7 +625,7 @@ func (w *lineWalk) geminiPart(k jsonscan.Kind, i int, r *geminiCountRecord, word
 	again *bool) error {
 	if k != jsonscan.ObjectStart {
 		r.marks = r.marks.with(sandbox.CountUnread)
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	var (
 		seen                   uint16
@@ -644,7 +644,7 @@ func (w *lineWalk) geminiPart(k jsonscan.Kind, i int, r *geminiCountRecord, word
 		case "text":
 			*again = twice(&seen, geminiCountPartText) || *again
 			if textOn, textOK = !null, k == jsonscan.String; !textOK {
-				return 4, w.scan.Skip()
+				return 4, w.skip(k)
 			}
 			var err error
 			text, err = w.chatTextTo(false, words.partText())
@@ -669,7 +669,10 @@ func (w *lineWalk) geminiPart(k jsonscan.Kind, i int, r *geminiCountRecord, word
 			if null {
 				return 4, nil
 			}
-			return 0, w.scan.Skip()
+			if name == "inlineData" {
+				return 0, w.skipInline(k)
+			}
+			return 0, w.skip(k)
 		case "functionCall":
 			*again = twice(&seen, geminiCountPartCall) || *again
 			callOn, callOK, call = !null, k == jsonscan.ObjectStart, geminiCountCall{place: geminiCountPlace{at: i}}
@@ -763,7 +766,7 @@ func (w *lineWalk) geminiAnswer(k jsonscan.Kind, at geminiCountPlace, again *boo
 
 	var marks countMarks
 	if k != jsonscan.ObjectStart {
-		return geminiCountAnswer{}, marks.with(sandbox.CountUnread), w.scan.Skip()
+		return geminiCountAnswer{}, marks.with(sandbox.CountUnread), w.skip(k)
 	}
 	a := geminiCountAnswer{place: at}
 	var name int64
@@ -792,9 +795,9 @@ func (w *lineWalk) geminiAnswer(k jsonscan.Kind, at geminiCountPlace, again *boo
 				// A TOOL'S MEDIA rides beside its response, estimated at no length.
 				marks = marks.with(sandbox.CountMedia)
 			}
-			err = w.scan.Skip()
+			err = w.skip(k)
 		default:
-			err = w.scan.Skip()
+			err = w.skip(k)
 		}
 		return err
 	})
@@ -820,7 +823,7 @@ func (w *lineWalk) geminiThoughts(k jsonscan.Kind, r *geminiCountRecord, again *
 				*again = twice(&seen, 2) || *again
 				t = &description
 			default:
-				return w.scan.Skip()
+				return w.skip(k)
 			}
 			*t = chatText{}
 			switch k {
@@ -832,7 +835,7 @@ func (w *lineWalk) geminiThoughts(k jsonscan.Kind, r *geminiCountRecord, again *
 				return err
 			}
 			r.marks = r.marks.with(sandbox.CountUnread)
-			return w.scan.Skip()
+			return w.skip(k)
 		})
 		if !took {
 			r.marks = r.marks.with(sandbox.CountUnread)
@@ -893,7 +896,7 @@ func (w *lineWalk) geminiToolCalls(k jsonscan.Kind, r *geminiCountRecord, again 
 				}
 				return listErr
 			default:
-				err = w.scan.Skip()
+				err = w.skip(k)
 			}
 			return err
 		})
@@ -916,12 +919,12 @@ func (w *lineWalk) geminiToolCalls(k jsonscan.Kind, r *geminiCountRecord, again 
 // answer, where it is an object holding one, into r.
 func (w *lineWalk) geminiResult(k jsonscan.Kind, at geminiCountPlace, r *geminiCountRecord, again *bool) error {
 	if k != jsonscan.ObjectStart {
-		return w.scan.Skip()
+		return w.skip(k)
 	}
 	var seen uint16
 	return w.members(func(name string, k jsonscan.Kind) error {
 		if name != "functionResponse" {
-			return w.scan.Skip()
+			return w.skipMember(name, k)
 		}
 		*again = twice(&seen, 1) || *again
 		if k == jsonscan.Null {

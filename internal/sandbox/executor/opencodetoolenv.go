@@ -17,4 +17,4 @@ var openCodeToolEnvPlugin []byte
 // configuration, which names the bridge's token, and the session its notes
 // plugin admits to. Measured on 2.3.2, OpenCode hands its commands both
 // otherwise.
-var openCodeHarnessEnv = []string{"OPENCODE_CONFIG_CONTENT", "CREWLET_STEER_SESSION"}
+var openCodeHarnessEnv = []string{"OPENCODE_CONFIG_CONTENT", "CREWLET_RUN_SESSION"}

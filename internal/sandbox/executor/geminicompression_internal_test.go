@@ -105,7 +105,7 @@ func TestAGeminiCompressionIsFoundByItsLinesNotItsWords(t *testing.T) {
 	t.Run("count", func(t *testing.T) {
 		t.Parallel()
 		c := newGeminiCounting()
-		if err := chatFileLines(t.Context(), bytes.NewReader(record), c, new(passBudget), nil); err != nil {
+		if err := chatFileLines(t.Context(), bytes.NewReader(record), c, new(passBudget)); err != nil {
 			t.Fatal(err)
 		}
 		var got []string
@@ -127,7 +127,7 @@ func TestAGeminiCompressionIsFoundByItsLinesNotItsWords(t *testing.T) {
 		after := `{"id":"late","timestamp":"t","type":"user","content":[{"text":"no summary"}]}` + "\n" +
 			`{"id":"late-ack","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}` + "\n"
 		err := chatFileLines(t.Context(), bytes.NewReader(append(append([]byte(nil), record...), after...)), c,
-			new(passBudget), nil)
+			new(passBudget))
 		if got := c.summary(err); got.Text != strings.TrimSpace(text) {
 			t.Errorf("the newest summary reads %.60q (%s), want line 94's", got.Text, got.Unread)
 		}

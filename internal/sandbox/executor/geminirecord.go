@@ -40,6 +40,7 @@ func (b *transcriptBuilder) geminiSession(ctx context.Context, r io.Reader) erro
 	g := &geminiReading{}
 	g.held, g.over, g.after = &g.turns[0], &g.turns[1], &g.turns[2]
 	g.setupBounded(b, g, bufio.NewReaderSize(r, lineChunkBytes))
+	g.passImages()
 	if err := g.member(ctx); err != nil {
 		return err
 	}
@@ -122,13 +123,13 @@ func (r *geminiReading) record() error {
 			r.stamp, err = r.wordValue(k)
 		case "$patch", "$rewindTo":
 			r.patched = true
-			err = r.scan.Skip()
+			err = r.skip(k)
 		case "content":
 			err = r.content(k)
 		case "toolCalls":
 			err = r.toolCalls(k)
 		default:
-			err = r.scan.Skip()
+			err = r.skip(k)
 		}
 		return err
 	})
@@ -139,7 +140,7 @@ func (r *geminiReading) record() error {
 // words.
 func (r *geminiReading) content(k jsonscan.Kind) error {
 	if r.restating {
-		return r.scan.Skip()
+		return r.skip(k)
 	}
 	r.over.words.reset(r.over.words.base)
 	r.after.words.reset(r.after.words.base)
@@ -157,17 +158,17 @@ func (r *geminiReading) content(k jsonscan.Kind) error {
 // compacted.
 func (r *geminiReading) toolCalls(k jsonscan.Kind) error {
 	if r.restating {
-		return r.scan.Skip()
+		return r.skip(k)
 	}
 	r.over.calls.reset(r.over.words.base)
 	r.after.calls.reset(r.after.words.base)
 	if k != jsonscan.ArrayStart {
-		return r.scan.Skip()
+		return r.skip(k)
 	}
 	shapes := []*entryShape{&r.over.calls.after, &r.over.calls.alone, &r.after.calls.after, &r.after.calls.alone}
 	return r.elements(func(k jsonscan.Kind) (bool, error) {
 		if k != jsonscan.ObjectStart {
-			return true, r.scan.Skip()
+			return true, r.skip(k)
 		}
 		var id string
 		var tool toolName
@@ -185,12 +186,12 @@ func (r *geminiReading) toolCalls(k jsonscan.Kind) error {
 					shaped = shaped || s.shapes(r.b, EntryToolCall)
 				}
 				input = r.args.begin(r.b, TranscriptEntry{Kind: EntryToolCall}, shaped)
-				r.compactor = jsonCompactor{w: input, buf: r.compactor.buf}
+				r.compactor = jsonCompactor{w: r.asWritten(input), buf: r.compactor.buf}
 				if err = r.scan.Tee(&r.compactor); err == nil {
-					err = r.scan.Skip()
+					err = r.skip(k)
 				}
 			default:
-				err = r.scan.Skip()
+				err = r.skip(k)
 			}
 			return err
 		})

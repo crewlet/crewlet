@@ -3,6 +3,7 @@ package executor_test
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -69,8 +70,9 @@ func TestTheStandingInstructionsReachClaudeCodeOnItsAppendChannel(t *testing.T) 
 }
 
 // AN OPENCODE RUN GETS THEM AS AN INSTRUCTION FILE its config names, which
-// OpenCode adds after its default agent's prompt — and its stdin, the prompt
-// it runs, holds the task and nothing else.
+// OpenCode adds after its default agent's prompt, before the checkouts'
+// sections file — and its stdin, the prompt it runs, holds the task and
+// nothing else.
 //
 // ABSOLUTE, because a relative `instructions` entry is matched by walking up
 // from the working directory, which is the checkout.
@@ -97,15 +99,18 @@ func TestTheStandingInstructionsReachOpenCodeAsAnInstructionFile(t *testing.T) {
 	if err := json.Unmarshal(blob, &cfg); err != nil {
 		t.Fatalf("unmarshal: %v\n%s", err, blob)
 	}
-	if len(cfg.Instructions) != 1 || cfg.Instructions[0] != p.System() || !strings.HasPrefix(p.System(), "/") {
-		t.Errorf("instructions = %q, want exactly the absolute %q:\n%s", cfg.Instructions, p.System(), blob)
+	if len(cfg.Instructions) != 2 || cfg.Instructions[0] != p.System() || !strings.HasPrefix(p.System(), "/") ||
+		cfg.Instructions[1] != p.OpenCodeCheckoutSections() {
+		t.Errorf("instructions = %q, want the absolute %q, then the checkouts' %q:\n%s", cfg.Instructions,
+			p.System(), p.OpenCodeCheckoutSections(), blob)
 	}
 }
 
 // A harness GIVEN NO SYSTEM TEXT WRITES NOTHING AND PASSES NOTHING: no file in
-// the box, no flag on the command line, no instruction in the config. The
-// runner always gives some (the report instruction), so this holds the
-// harness's own contract apart from the runner's.
+// the box, no flag on the command line, no instruction in the config but
+// OpenCode's checkouts' sections file, which every run names. The runner
+// always gives some (the report instruction), so this holds the harness's own
+// contract apart from the runner's.
 func TestAHarnessGivenNoSystemTextWritesAndPassesNothing(t *testing.T) {
 	t.Parallel()
 	for _, cli := range []executor.Harness{executor.ClaudeCode{}, executor.OpenCode{}, executor.GeminiCLI{}} {
@@ -126,8 +131,11 @@ func TestAHarnessGivenNoSystemTextWritesAndPassesNothing(t *testing.T) {
 				t.Errorf("a run with no system text passes one:\n%s", cmd)
 			}
 			if config != "" {
-				if blob, _ := b.ReadFile(t.Context(), config); strings.Contains(string(blob), `"instructions"`) {
-					t.Errorf("a run with no system text names an instruction file:\n%s", blob)
+				var cfg struct{ Instructions []string }
+				blob, _ := b.ReadFile(t.Context(), config)
+				if err := json.Unmarshal(blob, &cfg); err != nil || slices.Contains(cfg.Instructions, p.System()) ||
+					(len(cfg.Instructions) > 0 && !slices.Equal(cfg.Instructions, []string{p.OpenCodeCheckoutSections()})) {
+					t.Errorf("a run with no system text names an instruction file of it (%v):\n%s", err, blob)
 				}
 			}
 		})

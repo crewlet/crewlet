@@ -30,8 +30,8 @@ func TestAnOpenCodeRunTakesItsSkillsAsADirectoryItsConfigurationNames(t *testing
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if !slices.Equal(cfg.Skills, []string{p.OpenCodeSkills()}) {
-		t.Errorf("skills = %v, want the run's own directory", cfg.Skills)
+	if !slices.Equal(cfg.Skills, []string{p.OpenCodeSkills(), p.OpenCodeCheckoutSkills()}) {
+		t.Errorf("skills = %v, want the run's own directory, then its checkouts'", cfg.Skills)
 	}
 	plugins := runPlugins(cfg.Plugins)
 	if len(plugins) != 1 || plugins[0].Package != p.OpenCodeSkillsPlugin() {

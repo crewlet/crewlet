@@ -53,8 +53,20 @@
 // followed sooner than a second after its poll began, and a 401 or 404 ends
 // the polling for the rest of the run. SIGTERM is the end request (end.go):
 // the turn is cancelled, the server stopped, and the driver exits 143.
+//
+// A CHECKOUT CLONED DURING THE RUN. Kimi loads a repository's instructions
+// and skills only where a session starts, so after each of the main loop's
+// tool calls ends (`item.ended`; a subagent's calls send no event, measured on
+// 2.7.2) the note helper's kimi-nested adapter hands each checkout cloned
+// since, once (kimirepo.go), and its text is steered into the session under a
+// prompt_id of its own (handPrefix), one firing at a time, every firing
+// settled before the run is judged over. Kimi cuts the request in
+// flight and sends it again with the steer, one request more per firing that
+// hands anything. A hand a hook keeps from the model never ends the run: the
+// run's skip log says so once (handsKept), and the run's outcome is its last
+// turn's that no such hand opened.
 
-import { spawn } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
@@ -109,6 +121,9 @@ const stopBoundMs = 10_000
 // (kimisteer.go, kimiNotePrefix).
 const notePrefix = "crewlet-note-"
 const briefPrefix = "crewlet-brief-"
+// handPrefix opens the prompt_id of every checkout's hand (A CHECKOUT CLONED
+// DURING THE RUN), never one of ours, so a hook's block of it ends no run.
+const handPrefix = "crewlet-checkouts-"
 
 // webTools is Kimi's own web tools, posted with the brief and every steered
 // note as the session's disabled_tools on a web-denied run, which every agent
@@ -156,6 +171,12 @@ let refused = ""
 // allows). ours is every prompt this run posted, brief and notes.
 const ran = new Set()
 const ours = new Set()
+// hands is every checkout's hand steered; handing settles once no firing
+// runs, and again is a firing asked for while one ran.
+const hands = new Set()
+let handing = Promise.resolve()
+let firing = false
+let again = false
 
 process.on("SIGTERM", () => {
   if (asked) return
@@ -233,6 +254,9 @@ async function run() {
     const session = waited.data?.session ?? {}
     for (const pending of waited.data?.pending_interactions ?? []) await answer(pending)
     if (session.activity === "turn") continue
+    // A HAND IN FLIGHT IS STEERED BEFORE THE RUN IS JUDGED OVER: the clone
+    // the run's last call made is handed, and its turn waited out below.
+    await handing
     // NOT IDLE WHILE A PROMPT IS ACTIVE OR QUEUED: between the turn a note was
     // steered into and the turn it opens, the session reads idle for an
     // instant, and a run ended there cancels the note's turn (measured on
@@ -249,9 +273,12 @@ async function run() {
       continue
     }
     notes?.end()
-    const stopped = await blocked()
+    const page = await call("GET", `/api/v1/sessions/${sid}/agents/main/turns?page_size=200`)
+    const turns = page.ok ? page.data?.turns ?? [] : []
+    const stopped = await blocked(turns)
     if (stopped !== "") return refusal(stopped)
-    return session.last_turn_outcome === "completed" ? 0 : 1
+    await handsKept(turns)
+    return outcome(turns, session.last_turn_outcome) === "completed" ? 0 : 1
   }
 }
 
@@ -323,17 +350,86 @@ function denial(event) {
 // Kimi's record of the main agent's turns holds a turn of one of the run's
 // prompts that ended `blocked` before any step, as a UserPromptSubmit hook
 // blocking it ends one (measured on 2.7.2, the brief's and a note's alike).
-async function blocked() {
-  const page = await call("GET", `/api/v1/sessions/${sid}/agents/main/turns?page_size=200`)
-  for (const turn of page.ok ? page.data?.turns ?? [] : []) {
-    if (turn?.end_reason !== "blocked" || (turn.steps ?? []).length > 0) continue
-    const prompt = (turn.items ?? []).find((i) => i?.type === "user_message" && ours.has(i.item_id))
+// turns is that record's newest page, oldest first.
+async function blocked(turns) {
+  for (const turn of turns) {
+    const prompt = keptBy(turn, ours)
     if (prompt === undefined) continue
     const said = (turn.items ?? []).find((i) => i?.type === "assistant_message")?.text ?? ""
     const what = prompt.item_id.startsWith(briefPrefix) ? "the run's brief" : `the note ${prompt.item_id.slice(notePrefix.length)}`
     return hookBlock({ event: "UserPromptSubmit", value: prompt.text ?? "", what: `Kimi kept ${what} from the model`, says: said.replace(/<\/?hook_result[^>]*>/g, "").trim() })
   }
   return ""
+}
+
+// keptBy is the user message of turn, one of prompts, that a hook kept from
+// the model: the turn ended `blocked` before any step (blocked); else none.
+function keptBy(turn, prompts) {
+  if (turn?.end_reason !== "blocked" || (turn.steps ?? []).length > 0) return undefined
+  return (turn.items ?? []).find((i) => i?.type === "user_message" && prompts.has(i.item_id))
+}
+
+// handsKept says once, in the run's skip log, that a hook kept a checkout's
+// hand from the model, naming each hook Kimi lists that matches it: a hand
+// carries no note, brief or tool of the run's, so the run goes on.
+async function handsKept(turns) {
+  const kept = turns.map((turn) => keptBy(turn, hands)).find((prompt) => prompt !== undefined)
+  if (kept === undefined || !settings.checkouts?.skipped) return
+  const sources = await hooksFor("UserPromptSubmit", kept.text ?? "")
+  const where = sources.length > 0 ? sources.join("; ") : "no UserPromptSubmit hook Kimi lists matches it"
+  try {
+    fs.appendFileSync(settings.checkouts.skipped, `crewlet: a UserPromptSubmit hook kept the instructions and skills of a checkout cloned during the run from the model: ${where}\n`)
+  } catch (error) {
+    process.stderr.write("crewlet: the run's skip log could not be written: " + error.message + "\n")
+  }
+}
+
+// outcome is the run's outcome: the session's, unless its last turns are
+// checkout hands a hook kept from the model, then that of the last turn
+// before them, since a kept hand fails a turn the run's work never was.
+function outcome(turns, last) {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (keptBy(turns[i], hands) === undefined) return i === turns.length - 1 ? last : turns[i].outcome
+  }
+  return last
+}
+
+// hand runs a firing of the note helper's kimi-nested adapter and steers what
+// it hands, one firing at a time: one asked for while another runs is run
+// once that ends, as it may find a checkout the other did not (A CHECKOUT
+// CLONED DURING THE RUN).
+function hand() {
+  if (!settings.checkouts) return
+  if (firing) {
+    again = true
+    return
+  }
+  firing = true
+  handing = (async () => {
+    do {
+      again = false
+      await handOnce()
+    } while (again && !life.signal.aborted)
+    firing = false
+  })()
+}
+
+// handOnce is one firing: the helper's text steered whole, its own trouble
+// passed on to the run's error stream.
+async function handOnce() {
+  const c = settings.checkouts
+  const text = await new Promise((resolve) =>
+    execFile(c.helper, ["-adapter", "kimi-nested", "-config", c.config], { timeout: c.timeoutMs, maxBuffer: c.maxOutput, encoding: "utf8" }, (error, stdout, stderr) => {
+      if (stderr) process.stderr.write(stderr)
+      if (error) process.stderr.write("crewlet: the note helper handing a checkout cloned during the run failed, so what it took is not handed: " + error.message + "\n")
+      resolve(error ? "" : stdout)
+    }),
+  )
+  if (text === "" || life.signal.aborted) return
+  const id = handPrefix + randomUUID()
+  hands.add(id)
+  const steered = await call("POST", `/api/v1/sessions/${sid}/steer`, { prompt_id: id, content: [{ type: "text", text }], disabled_tools: disabledTools() })
+  if (!steered.ok) process.stderr.write("crewlet: Kimi refused the instructions and skills of a checkout cloned during the run: " + steered.why + "\n")
 }
 
 // hookBlock is why a hook's block ends the run: what it kept, what it said,
@@ -516,6 +612,7 @@ async function subscribe() {
         }
         if (kept.has(event?.type)) process.stdout.write(text.replace(/\n/g, " ") + "\n")
         if (event?.type === "item.updated" && event.set?.fields !== undefined) ran.add(event.item_id)
+        if (event?.type === "item.ended" && event?.item?.type === "tool_call" && event.agent_id === "main") hand()
         const why = refused === "" ? denial(event) : ""
         if (why !== "") {
           refused = why
