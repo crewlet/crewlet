@@ -9397,7 +9397,7 @@ was ended in: its record waits only for the ending's last steps, which on an
 engine that records every turn's end include [recording that
 end](../concepts/turn-engine.md#how-a-turn-ends-on-the-executor-log) once the
 turn's captures have settled, and can take minutes, and up to about three
-hours and fifty-one and a half minutes from the moment the end first sees a read standing
+hours and fifty-seven and a half minutes from the moment the end first sees a read standing
 by for one of them, where a store answers each change and read of a run's record at
 the slowest pace a link is allowed. The seat's next work
 waits behind it. `answerable_in_chat` is `false`

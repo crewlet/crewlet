@@ -21,21 +21,22 @@ import (
 
 // A CAPTURE'S BUDGETS COUNT EVERY STEP OF ITS LIFE AT THE SLOWEST CROSSING, a
 // change's for a change and a read's for a read, and a reading on another
-// machine's clock adds twice the skew allowed one. A keep is two reads, upload
-// and record; a take's life, the rest of its take with its reservation's room,
-// its digest, keep and stamp; an unanswered takeover's, the takeover,
-// withdrawal and read back, keep and stamp; a standby's wait, the longer life
-// and one tick; its window, the rest of its take with its reservation's room,
-// its digest, three changes past the wait (a settle still writing, the read of
-// the log and the settle it decides), its last read and its takeover. Each is
-// the docs' figure at today's bounds, to the nanosecond.
+// machine's clock adds twice the skew. A keep: four steps, the upload, a read
+// again and its record, and an amend, a read and a record more for a carry
+// gone. A take's life: its take's rest with its reservation's room, digest,
+// keep and stamp; an unanswered takeover's: the takeover, withdrawal and read
+// back, keep and stamp; a standby's wait: the longer life and a tick; its
+// window: its take's rest with its reservation's room, digest, three changes
+// past the wait, its last read and its takeover. Each is the docs' figure at
+// today's bounds, to the nanosecond.
 //
 // Mutation: drop a term, a reading's skew, or count a read as a change.
 func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	t.Parallel()
 	change := sessionRecordBudget + coord.MaxValueCrossing
 	read := sessionRecordBudget + coord.MaxValueReadCrossing
-	keep := 2*sessionRecordBudget + objstore.PaceFor(executorkeep.SealedMaxBytes) + sessionRecordBudget
+	keep := 5*sessionRecordBudget + objstore.PaceFor(executorkeep.SealedMaxBytes) +
+		2*(sessionRecordBudget+sessionRecordBudget)
 	take := SessionPackWait + SessionScrubWait + change + discardGrace + keep + change
 	over := change + change + read + keep + change
 	life := max(take, over)
@@ -50,15 +51,15 @@ func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	}{
 		{"one change of a run's row another node reads", captureStampBudget, change, "13m30.025663374s"},
 		{"one read of a run's row another node waits on", captureReadBudget, read, "4m30s"},
-		{"a keep", SessionKeepBudget, keep, "26m0s"},
+		{"a keep", SessionKeepBudget, keep, "29m0s"},
 		{"a keep's read", keepReadRoom, sessionRecordBudget, "30s"},
-		{"a take's life", takeLife, take, "1h1m30.051326748s"},
-		{"a takeover's life", takeOverLife, over, "1h11m0.076990122s"},
-		{"a capture's life", captureLife, life, "1h11m0.076990122s"},
-		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h11m0.076990122s"},
-		{"a standby's wait", standbyWait, wait, "1h11m2.076990122s"},
-		{"a standby's window", standbyWindow, window, "2h31m32.205306992s"},
-		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h31m32.205306992s"},
+		{"a take's life", takeLife, take, "1h4m30.051326748s"},
+		{"a takeover's life", takeOverLife, over, "1h14m0.076990122s"},
+		{"a capture's life", captureLife, life, "1h14m0.076990122s"},
+		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h14m0.076990122s"},
+		{"a standby's wait", standbyWait, wait, "1h14m2.076990122s"},
+		{"a standby's window", standbyWindow, window, "2h34m32.205306992s"},
+		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h34m32.205306992s"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s is %v, want its terms, %v", c.name, c.got, c.want)
@@ -275,9 +276,9 @@ func (s *unansweredListing) listed() (began, cut time.Time) {
 	return s.began, s.cut
 }
 
-// A KEEP'S READS LEAVE ITS UPLOAD ITS WHOLE PACE. Its two reads of the
+// A KEEP'S READS LEAVE ITS UPLOAD ITS WHOLE PACE. Its reads of the
 // coordination store before the upload (the turn's operations minted, the
-// seat's runs listed) each have a room of their own beside the upload's pace in
+// seat's runs listed, a save's amend) each have a room of their own beside the upload's pace in
 // the keep's budget, so a store slow or silent on them costs the upload
 // nothing. A listing that never answers is cut at its room and decides nothing:
 // the upload is handed at least its pace at the slowest and its record's
@@ -864,7 +865,11 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 		return floored{store: store, archive: archive}
 	}
 	// within holds a step's life to its figure: never past it, and within a
-	// minute and slack of it.
+	// minute and slack of it. A keep's media steps (its count's stamp, its read
+	// again of who reads its media, and a carry the log found gone, recorded
+	// again after an amend and a read again) are rooms a capture naming none
+	// never makes, so a keep's figure leaves them as slack (unmade).
+	unmade := 2*keepReadRoom + 2*MediaReadersRoom + sessionRecordBudget
 	within := func(t *testing.T, what string, life, figure, slack time.Duration) {
 		t.Helper()
 		if life > figure {
@@ -899,8 +904,9 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 			if !asked || !made {
 				t.Fatalf("the premise: the take's reservation asked %t, its landing stamped %t", asked, made)
 			}
-			within(t, "the take's stamp of what came of it", to.Sub(from), takeLife, 0)
-			within(t, "the take's stamp of what came of it", to.Sub(from), captureLife, captureLife-takeLife)
+			within(t, "the take's stamp of what came of it", to.Sub(from), takeLife, unmade)
+			within(t, "the take's stamp of what came of it", to.Sub(from), captureLife,
+				captureLife-takeLife+unmade)
 		})
 	})
 	t.Run("a takeover the store never answered", func(t *testing.T) {
@@ -938,9 +944,9 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 			if !asked || !made {
 				t.Fatalf("the premise: the takeover asked %t, its landing stamped %t", asked, made)
 			}
-			within(t, "the takeover's stamp of what came of it", to.Sub(from), takeOverLife, 0)
+			within(t, "the takeover's stamp of what came of it", to.Sub(from), takeOverLife, unmade)
 			within(t, "the takeover's stamp of what came of it", to.Sub(from), captureLife,
-				captureLife-takeOverLife)
+				captureLife-takeOverLife+unmade)
 		})
 	})
 	// THE STANDBY'S ROW, alone and beside a save of the same job begun under
@@ -1102,9 +1108,9 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				t.Fatal("the collection's keep had stamped nothing a keep's budget and a stamp's room after " +
 					"its box's pause began blocking, want its capture stamped landed while the pause blocks")
 			}
-			within(t, "the collection's stamp of what came of it", to.Sub(from), takeLife, 0)
+			within(t, "the collection's stamp of what came of it", to.Sub(from), takeLife, unmade)
 			within(t, "the collection's stamp of what came of it", to.Sub(from), captureLife,
-				captureLife-takeLife)
+				captureLife-takeLife+unmade)
 		})
 	})
 }

@@ -900,12 +900,12 @@ const relaunchAskWait = beginRecordBudget
 // relaunchWaitOf is how long a relaunch of run's turn waits, from now, for what
 // its decision depends on: its asks ([relaunchAskWait]), and each capture or
 // save it waits for ([relaunchWaitsOn]) as long as a capture of its archive's
-// size may still take ([captureRestFor]), so it passes over none its keep may
-// still land. The longest of them.
+// size, cutting its media objects apart, may still take ([captureRestFor]), so
+// it passes over none its keep may still land. The longest of them.
 func (c *Coordinator) relaunchWaitOf(run PendingRun, now time.Time) time.Duration {
 	wait := c.relaunchWait
 	for _, stamp := range stampsInFlight(run, now, relaunchAdmits(run)) {
-		wait = max(wait, c.captureRest(stamp.ArchiveSize))
+		wait = max(wait, c.captureRest(stamp.ArchiveSize, stamp.MediaCount))
 	}
 	return wait
 }
@@ -941,7 +941,8 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	// the longest needs. The settles are this node's own writes, each in its
 	// own room past it.
 	wait := c.relaunchWaitOf(run, c.now())
-	settleBy := time.Now().Add(wait)
+	asked := time.Now()
+	settleBy := asked.Add(wait)
 	// THE FOLLOWED JOB'S UNANSWERED RECORDS ASKED FIRST, whatever else is in
 	// flight: past the wait the relaunch continues the newest capture the job
 	// kept beside a newer one still being kept, so an ask that lands a record
@@ -949,6 +950,17 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	// only once the wait ran out it would have no time left.
 	run = c.askFollowed(ctx, settleBy, run)
 	run, found, err = c.awaitCapture(ctx, run, time.Until(settleBy), relaunchWaits)
+	// A COUNT STAMPED SINCE THE WAIT WAS PRICED lengthens it, from the same
+	// start: a capture's media count is stamped as its keep begins
+	// ([Coordinator.stampMediaCount]), often after the relaunch read it.
+	for found && err == nil && relaunchWaits(run, c.now()) {
+		longer := c.relaunchWaitOf(run, c.now())
+		if longer <= wait {
+			break
+		}
+		wait, settleBy = longer, asked.Add(longer)
+		run, found, err = c.awaitCapture(ctx, run, time.Until(settleBy), relaunchWaits)
+	}
 	if found && err == nil && followedBegunUnderTaker(run) {
 		// THE ONE READ PAST THE WAIT, for a capture still begun under a taker
 		// whose lease holds or cannot be read: the log may hold it although no

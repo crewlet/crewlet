@@ -460,6 +460,11 @@ type Engine struct {
 	// ([Engine.ShuttingDown]).
 	shuttingDown atomic.Bool
 
+	// mediaInline is why takes last kept their media inline, a node below or
+	// readers unread, logged once each time it changes
+	// ([Engine.executorMediaRead]).
+	mediaInline atomic.Pointer[string]
+
 	// drainOnce makes the drain one operation however many callers ask:
 	// [Engine.Stop] drains for a caller that did not, and a second run would
 	// announce a second stop.
@@ -2510,6 +2515,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 // during the start begins the host's drain at once ([node.Node.BeginDrain],
 // on [Engine.stopping]'s allowance): the pass claims nothing more.
 func (e *Engine) Start(ctx context.Context) error {
+	if err := e.recordCaptureStamp(ctx); err != nil {
+		return fmt.Errorf("engine: start: %w", err)
+	}
 	cutDone := make(chan struct{})
 	stopCut := context.AfterFunc(ctx, func() {
 		defer close(cutDone)
@@ -3715,7 +3723,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 func (e *Engine) nodeStatus(ctx context.Context) (coord.NodeStatus, error) {
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt, AdminPosture: e.adminPosture, Build: version.String(),
-		ParkedStateVersion: execstate.Version,
+		ParkedStateVersion: execstate.Version, CaptureStampVersion: sandbox.CaptureStampVersion,
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()

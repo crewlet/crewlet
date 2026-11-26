@@ -332,13 +332,11 @@ func (d *geminiEvents) runSpend() (runSpend, bool) {
 // Ended implements [Decoder]: the stream's `result` event.
 func (d *geminiEvents) Ended() bool { return d.result != nil }
 
-// Requests implements [Decoder]: the requests the run's own record of its
-// session states, which the script appends after Gemini CLI exits
-// ([geminiUsageEvent]); its stdout marks no request of its own. NOT COUNTED:
-// the side calls Gemini CLI makes on its flash model, which that record leaves
-// out. Measured on 0.70.0 against a stand-in: 31 counted of a run's 41
-// requests, the 10 others gemini-3-flash-preview's; 11 of 11, and 6 with a 429
-// and a 500 retried, in runs that made none.
+// Requests implements [Decoder]: the requests the run's chat file states, which
+// the script appends after Gemini CLI exits ([geminiUsageEvent]), its main
+// model's alone (measured on 0.70.0: 31 of a run's 41, the 10 others its flash
+// side calls). THE TURN CAP'S COUNT is the larger of it and the run's
+// telemetry's, which holds the side calls too ([GeminiCLI.countedRecords]).
 func (d *geminiEvents) Requests() int { return d.requests }
 
 // InFlight implements [Decoder]: none, as Gemini CLI's own maxSessionTurns

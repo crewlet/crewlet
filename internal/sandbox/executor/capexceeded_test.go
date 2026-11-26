@@ -1,7 +1,10 @@
 package executor_test
 
 import (
+	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -54,9 +57,12 @@ var requestStreams = map[string]func(n int) string{
 			`{"type":"crewlet.end","asked":false,"code":0}`)
 	},
 	executor.MuseName: func(n int) string {
+		// THE SESSION'S TRACES, one a request, which the script appends after
+		// Muse exits; run.usage's calls are its spend's alone.
 		return streamOf(
-			fmt.Sprintf(`{"stream":{"kind":"exec.usage","id":"0b5e0000-0000-4000-8000-000000000002"},"payload_type":"run.usage","payload":{"calls":%d,"models":[]}}`, n),
-			`{"stream":{"kind":"session","id":"0b5e0000-0000-4000-8000-000000000001"},"payload_type":"run.terminal.completed","payload":{"text":"done"}}`)
+			`{"stream":{"kind":"exec.usage","id":"0b5e0000-0000-4000-8000-000000000002"},"payload_type":"run.usage","payload":{"calls":99,"models":[]}}`,
+			`{"stream":{"kind":"session","id":"0b5e0000-0000-4000-8000-000000000001"},"payload_type":"run.terminal.completed","payload":{"text":"done"}}`,
+			each(n, `{"payload_type":"crewlet.muse_trace","line":{"schema_version":1,"id":"e%d","stream":{"kind":"session","id":"s"},"payload_type":"runtime.session","payload":{"event":{"base_instructions":"b","kind":"model_input_trace_recorded"},"kind":"run"}}}`))
 	},
 	executor.OpenCodeName: func(n int) string {
 		return streamOf(
@@ -117,6 +123,30 @@ func collectCapped(t *testing.T, h executor.Harness, stream string, turnCap int)
 	}
 	b.Put(p.Findings(), "Outcome: succeeded")
 	b.Put(p.ExitCode(), "0")
+	if h.Name() == executor.HermesName {
+		// ITS SESSION STORE BESIDE IT, asked through the box: as many answers
+		// as the plugin's record the stream carries holds responses, and the
+		// summary a run its round cap stopped asks for, which the store
+		// records and the plugin's record leaves out.
+		made := strings.Count(stream, `"crewlet.hermes_request"`) + strings.Count(stream, `"crewlet.round_cap"`)
+		b.Put(p.HermesRunStart(), fixtureSession+" 0\n")
+		b.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+			if strings.Contains(cmd, "hcarry requests") {
+				return sandbox.ExecResult{Stdout: fmt.Sprintf("crewlet-carry ok %d\n", made)}, nil
+			}
+			return sandbox.ExecResult{}, nil
+		}
+	}
+	if h.Name() == executor.GeminiCLIName {
+		// ITS TELEMETRY BESIDE IT, the record its collection counts: as many
+		// responses as the stream's own record states requests.
+		made := 0
+		if m := regexp.MustCompile(`"requests":([0-9]+)`).FindStringSubmatch(stream); m != nil {
+			made, _ = strconv.Atoi(m[1])
+		}
+		record, _ := fixtureRecord(recordFixtures[geminiTelemetryRow], made, 0)
+		b.Put(p.GeminiTelemetry(), record)
+	}
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{TurnCap: turnCap}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -252,8 +282,14 @@ var capStops = map[string]struct {
 	stopped  func(n int) string
 }{
 	executor.ClaudeCodeName: {}, executor.CopilotName: {}, executor.GeminiCLIName: {}, executor.GrokName: {},
-	executor.KimiName: {}, executor.MuseName: {}, executor.OpenCodeName: {}, executor.HermesName: {},
+	executor.KimiName: {}, executor.MuseName: {}, executor.OpenCodeName: {},
 	executor.PiName: {}, executor.QwenCodeName: {},
+	executor.HermesName: {inFlight: 1, stopped: func(n int) string {
+		return streamOf(`{"type": "system", "subtype": "init", "model": "", "session_id": ""}`,
+			`{"type": "result", "session_id": "local-1", "exit_code": 1, "text": "the limit was reached"}`,
+			each(n-1, `{"type":"crewlet.hermes_request","line":{"api_request_id":"t:api:%d","turn_id":"t","finish_reason":"tool_calls","tool_calls":1}}`),
+			fmt.Sprintf(`{"type":"crewlet.round_cap","rounds":%d}`, n-1))
+	}},
 	executor.CodexName: {inFlight: 1, stopped: func(n int) string {
 		return streamOf(`{"type":"thread.started","thread_id":"01a20286-faf2-7490-a21d-7f1215273287"}`,
 			each(n, `{"type":"crewlet.rollout","line":{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":%d,"output_tokens":1,"total_tokens":3}}}}}`),
@@ -307,5 +343,34 @@ func TestARunStoppedWithARequestInFlightCollectsAsStoppedNeverASuccess(t *testin
 					res.TurnCapExceeded, res.RoundCapped)
 			}
 		})
+	}
+}
+
+// A MUSE RUN ITS END CUT OFF MID-REQUEST COLLECTS ITS REQUESTS, the cut-off one
+// included: Muse prints no run.usage for a run its job's end stopped, so the
+// requests are read off the session's traces its script appends, one a
+// request made (measured on 1.4.25: 4 traces for 3 answered requests and the
+// one the end cut off). Past a cap of 3, it fails as past it.
+//
+// Mutation: count Muse's requests off its run.usage, and the run collects
+// with none, within its cap.
+func TestAMuseRunEndedMidRequestCollectsItsRequests(t *testing.T) {
+	t.Parallel()
+	runner := executor.New(executor.Muse{})
+	b := box(t, runner)
+	p := paths(b)
+	b.Put(executor.Muse{}.Output(p).Stdout, streamOf(
+		`{"stream":{"kind":"session","id":"0b5e0000-0000-4000-8000-000000000001"},"payload_type":"run.output.delta","payload":{"text":"working"}}`,
+		each(4, `{"payload_type":"crewlet.muse_trace","line":{"schema_version":1,"id":"e%d","stream":{"kind":"session","id":"s"},"payload_type":"runtime.session","payload":{"event":{"base_instructions":"b","kind":"model_input_trace_recorded"},"kind":"run"}}}`)))
+	b.Put(p.ExitCode(), "143")
+	b.Put(p.JobEnded(), "asked")
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{TurnCap: 3}, queue.NewAnswerBudget(nil))
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	const want = "the turn cap of 3 was exceeded: the run made 4 model requests"
+	if res.Success || !res.TurnCapExceeded || !strings.Contains(res.Error, want) {
+		t.Fatalf("a run ended mid-request with 4 traces under a cap of 3: success %v, exceeded %v, error %q; "+
+			"want %q", res.Success, res.TurnCapExceeded, res.Error, want)
 	}
 }

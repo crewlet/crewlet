@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -453,6 +454,38 @@ func TestAReadIsBoundedByItsBudget(t *testing.T) {
 	if !backend.deadline.Equal(want) {
 		t.Fatalf("the backend read under %v, want the caller's sooner %v", backend.deadline, want)
 	}
+}
+
+// A READ HELD OPEN ACROSS OTHERS IS BUDGETED FOR ALL THEY SPAN: OpenSpanning
+// budgets the read for the span bytes its caller streams while it holds the
+// object open (ReadBudget), and never for fewer than the object's own. In a
+// bubble, so the deadline is exact.
+//
+// Mutation: budget the read for the object's size alone, or for the smaller
+// of the two, and a deadline differs.
+func TestAReadHeldOpenAcrossOthersIsBudgetedForItsSpan(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		backend := &watching{Backend: memobj.New()}
+		s := newStore(t, backend)
+		o := put(t, s, patterned(1000, 1))
+		for _, c := range []struct {
+			span int64
+			want time.Duration
+		}{
+			{span: 7 * objstore.MiB, want: objstore.ReadBudget(7 * objstore.MiB)},
+			{span: 0, want: objstore.ReadBudget(o.Size)},
+		} {
+			r, err := s.OpenSpanning(t.Context(), o, c.span)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = r.Close()
+			if want := time.Now().Add(c.want); !backend.deadline.Equal(want) {
+				t.Errorf("a read spanning %d bytes ran under %v, want %v", c.span, backend.deadline, want)
+			}
+		}
+	})
 }
 
 // A STALLED READ IS ENDED, AND A CLOSED ONE STOPS THE BACKEND'S: a backend

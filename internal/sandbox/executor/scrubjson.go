@@ -255,12 +255,21 @@ type jsonStringWriter struct {
 	capMax  int
 	over    bool
 	err     error
+	// media reads the text as kept for a payload, nil where nothing does
+	// ([jsonStringWriter.finding]).
+	media *mediaRun
 }
 
 // begin opens a string onto out, keeping its first capMax bytes.
 func (e *jsonStringWriter) begin(out *rewriteOut, capMax int) error {
-	e.out, e.nheld, e.capture, e.capMax, e.over, e.err = out, 0, e.capture[:0], capMax, false, nil
+	e.out, e.nheld, e.capture, e.capMax, e.over, e.err, e.media = out, 0, e.capture[:0], capMax, false, nil, nil
 	return out.writeByte('"')
+}
+
+// finding has run read the string just begun for a payload.
+func (e *jsonStringWriter) finding(run *mediaRun) {
+	run.begin(e.out.n)
+	e.media = run
 }
 
 // Write writes the next piece of the text, escaped.
@@ -329,6 +338,9 @@ func (e *jsonStringWriter) end() error {
 // U+2029 as their escapes, each byte that begins no rune as U+FFFD, and every
 // other byte as it is, `<`, `>` and `&` among them.
 func (e *jsonStringWriter) escape(s []byte) error {
+	if e.media != nil {
+		e.media.feed(s)
+	}
 	start := 0
 	flush := func(i int) error {
 		err := e.out.write(s[start:i])
@@ -419,6 +431,9 @@ type jsonRewrite struct {
 	buf []byte
 	str jsonStringWriter
 	key keyReading
+	// payload reads a string value for a payload where the scrub finds
+	// media ([scrubber.media]).
+	payload mediaRun
 	// containers is how many containers the text has opened so far, which
 	// names the list a cut applies to.
 	containers int
@@ -784,6 +799,9 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 	if err := j.str.begin(j.out, capMax); err != nil {
 		return err
 	}
+	if key == nil && j.scrub.media != nil {
+		j.str.finding(&j.payload)
+	}
 	read := 0
 	for {
 		n, err := j.sc.Read(j.buf[read:])
@@ -800,7 +818,7 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 			if _, werr := j.str.Write([]byte(kept)); werr != nil {
 				return werr
 			}
-			return j.str.end()
+			return j.ended()
 		}
 		if err != nil {
 			return err
@@ -843,7 +861,21 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 		return err
 	}
 	j.out.tally(t.taken)
-	return j.str.end()
+	return j.ended()
+}
+
+// ended closes the string, telling the scrub's plan of the payload it is
+// ([mediaRun]).
+func (j *jsonRewrite) ended() error {
+	if err := j.str.end(); err != nil {
+		return err
+	}
+	if j.str.media != nil {
+		if at, n, sum, ok := j.payload.payload(); ok {
+			j.scrub.media.add(at, n, sum)
+		}
+	}
+	return nil
 }
 
 // definitionsReading is the first reading's half of the cut of a transcript

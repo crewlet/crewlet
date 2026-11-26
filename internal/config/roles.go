@@ -341,7 +341,7 @@ type RoleSandbox struct {
 	// legitimately runs long — a migration, a large refactor — could not
 	// escape a cap set for everybody else, because its "no cap" and its
 	// "say nothing" would be the same zero.
-	MaxTurns *int `yaml:"max_turns,omitempty" json:"max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one of this seat's executor runs. Unset = providers.sandbox.default_max_turns; 0 = uncapped."`
+	MaxTurns *int `yaml:"max_turns,omitempty" json:"max_turns,omitempty" js:"min=0;max=1000" desc:"Agentic-round cap for one of this seat's executor runs. Unset = providers.sandbox.default_max_turns; 0 = uncapped; at most 1000."`
 
 	// MaxConcurrentRuns caps how many of this seat's executor runs hold it at
 	// once, at most one per conversation (ADR-0169). UNSET is
@@ -416,10 +416,14 @@ func (s *RoleSandbox) validate(path Path) error {
 				"field to inherit providers.sandbox.default_pause_ttl_seconds, or "+
 				"set 0 to never pause)", *s.PauseTTLSeconds)
 	}
-	if s.MaxTurns != nil && *s.MaxTurns < 0 {
+	switch {
+	case s.MaxTurns == nil:
+	case *s.MaxTurns < 0:
 		p.add(at(path, "max_turns"), ErrOutOfRange,
 			"%d (a round cap cannot be negative; omit the field to inherit "+
 				"the provider default, or set 0 for uncapped)", *s.MaxTurns)
+	case *s.MaxTurns > RoundCapCeiling:
+		p.add(at(path, "max_turns"), ErrOutOfRange, "%s", roundCapPastCeiling(*s.MaxTurns))
 	}
 	if s.MaxConcurrentRuns != nil && *s.MaxConcurrentRuns < 1 {
 		p.add(at(path, "max_concurrent_runs"), ErrOutOfRange,

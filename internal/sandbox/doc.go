@@ -109,7 +109,7 @@
 //
 // save.go, saveledger.go: steps cheapest first, so a refused save costs its box
 // nothing. The seat's allowance is charged by compare-and-swap before the
-// stamp's instant, so a failure can only over-count.
+// stamp, amended at the keep to what it uploads, so a failure only over-counts.
 //
 // # A capture no read places is reserved at zero, and raised after its take
 //
@@ -121,9 +121,9 @@
 //
 // # A save is offered by the poll, from memory
 //
-// The poll already reaches every running box; any other trigger would be a
-// second way in. The offer decides from memory and never blocks the
-// keepalive; [maxConcurrentSaves] slots bound packs and uploads.
+// The poll reaches every running box; another trigger is a second way in.
+// The offer decides from memory, never blocking the keepalive;
+// [maxConcurrentSaves] slots bound packs and uploads.
 //
 // # A save as its node drains
 //
@@ -147,7 +147,8 @@
 // (spoolroom.go): saves take room at the sealed bound before their pack slot
 // and never wait, leaving a final take its room; a take waits a minute for
 // room at the bound before its pack slot and its scrub's slots, a save's
-// order, then stamps its capture refused; a seal never writes past its room.
+// order, then stamps its capture refused; no seal (a media spool's too)
+// writes past its room.
 //
 // # A turn's session is continued in whichever box its next launch gets
 //

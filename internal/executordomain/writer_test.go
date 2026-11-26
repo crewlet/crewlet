@@ -2,7 +2,9 @@ package executordomain_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -547,6 +549,45 @@ func TestACapturesContextAndCutOffReachTheRow(t *testing.T) {
 	below.ContextTokens = -1
 	if _, err := n.writer.Capture(t.Context(), engineCall(), below); !errors.Is(err, executordomain.ErrInvalid) {
 		t.Errorf("a capture of -1 tokens: %v, want ErrInvalid", err)
+	}
+}
+
+// A CAPTURE'S ARCHIVE SIZE REACHES THE ROW: a capture naming media states the
+// archive they restore to, every member at each frame naming it, which the row
+// keeps through a turn's first capture (insert) and a later one (update), the
+// newest's winning, and a later capture kept whole states none; the writer
+// refuses a capture naming media and no size, naming it.
+//
+// Mutation: drop the size from the payload Writer.Capture builds, from either
+// statement or from the read, and a read goes red.
+func TestACapturesArchiveSizeReachesTheRow(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openExecutorLog(t), "node-a")
+	turn := newTurnID()
+	member := func(seed string) []executordomain.NewMedia {
+		sum := sha256.Sum256([]byte(seed))
+		return []executordomain.NewMedia{{MediaObject: executorkeep.MediaObject{Digest: hex.EncodeToString(sum[:]),
+			Object:     objstore.Object{Key: objstore.KeyAt(writerClock), Hash: objstore.HashOf([]byte(seed)), Size: 2 << 20},
+			ContentKey: "k1"}}}
+	}
+	for i, archive := range []int64{7 << 20, 5 << 20, 0} {
+		c := newCaptureOf("ana", "chat:a", turn, int64(i+1), 1<<20, 64<<20)
+		if archive > 0 {
+			c.Media, c.ArchiveBytes = member(string(rune('a'+i))), archive
+		}
+		if res, err := n.writer.Capture(t.Context(), engineCall(), c); err != nil || !res.Recorded {
+			t.Fatalf("capture %d answered (%+v, %v)", i+1, res, err)
+		}
+		if s := n.session("ana", turn); s.ArchiveBytes != archive || s.Kept().ArchiveBytes != archive {
+			t.Errorf("after capture %d the row restores to %d bytes (kept %d), want its %d", i+1, s.ArchiveBytes,
+				s.Kept().ArchiveBytes, archive)
+		}
+	}
+	unsized := newCaptureOf("ana", "chat:a", turn, 4, 1<<20, 64<<20)
+	unsized.Media = member("unsized")
+	if _, err := n.writer.Capture(t.Context(), engineCall(), unsized); !errors.Is(err, executordomain.ErrInvalid) ||
+		!strings.Contains(err.Error(), "archive") {
+		t.Errorf("a capture naming media and no archive size: %v, want ErrInvalid naming it", err)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf8"
 )
 
@@ -62,6 +63,9 @@ type checkoutSpec struct {
 	held *homeNames
 	gate *checkoutGate
 	room claimRoom
+	// claimBy is when a firing whose harness drops a late answer stops
+	// claiming (cursor-nested's cursorClaimWithin); zero for none.
+	claimBy time.Time
 }
 
 // skillSep is what joins a copy's tag and skill: `:` (the zero value), or `-`
@@ -84,21 +88,23 @@ func (s skillSep) String() string {
 // state directory (the checkouts handed, the lock), the instruction file it
 // replaces with the launch's sections, the checkouts handed first, in order
 // (the repositories the run pushes to), the spec, NestedSkillsOnly for a
-// nested adapter that hands skills alone, whose spec then names no instruction
-// file to read; Roots, the file it lists each checkout handed's root in, a
-// line each, for a harness that reads their instructions itself where the
-// runner names them (Gemini CLI's --include-directories); Budget, the bound
-// the sections share with what the harness loads beside them (nil for none);
-// and Skipped, lines the runner has for the run's skip log ([skippedLog]).
-// The working directory is the adapter's own.
+// nested adapter that hands skills alone (its spec then names no instruction
+// file); Roots, the file listing each handed checkout's root, a line each, for
+// a harness that reads their instructions where the runner names them (Gemini
+// CLI's --include-directories); Budget, the bound the sections share with what
+// loads beside them (nil for none); Skipped, lines for the run's skip log
+// ([skippedLog]); and LaunchSkillsLoaded for a harness that loads a launch
+// checkout's skills itself (Cursor Agent's --add-dir), so the launch copies
+// none. The working directory is the adapter's own.
 type launchConfig struct {
-	State            string        `json:"state"`
-	Agents           string        `json:"agents"`
-	First            []string      `json:"first"`
-	NestedSkillsOnly bool          `json:"nestedSkillsOnly,omitempty"`
-	Roots            string        `json:"roots,omitempty"`
-	Budget           *launchBudget `json:"budget,omitempty"`
-	Skipped          []string      `json:"skipped,omitempty"`
+	State              string        `json:"state"`
+	Agents             string        `json:"agents"`
+	First              []string      `json:"first"`
+	NestedSkillsOnly   bool          `json:"nestedSkillsOnly,omitempty"`
+	Roots              string        `json:"roots,omitempty"`
+	Budget             *launchBudget `json:"budget,omitempty"`
+	Skipped            []string      `json:"skipped,omitempty"`
+	LaunchSkillsLoaded bool          `json:"launchSkillsLoaded,omitempty"`
 	checkoutSpec
 }
 
@@ -212,7 +218,11 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 		return err
 	}
 	keepSkipped(c.State, c.Skipped, stderr)
-	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec,
+	launch := c.checkoutSpec
+	if c.LaunchSkillsLoaded {
+		launch.Skills = ""
+	}
+	handed, err := handCheckouts(c.State, work, c.First, launch,
 		unboundNames(&firingBound{left: math.MaxInt, count: byteCount, unitBytes: 1}), &skips{stderr: stderr})
 	if err != nil {
 		return err
@@ -230,7 +240,7 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 	for _, h := range handed {
 		kept = append(kept, launched{Name: h.name, Root: h.root, Text: h.text})
 		if c.Budget == nil && h.text != "" {
-			sections = append(sections, checkoutHeader(h.name, h.root)+"\n\n"+h.text)
+			sections = append(sections, checkoutSection(h))
 		}
 		roots = append(roots, h.root+"\n")
 	}
@@ -263,6 +273,12 @@ func checkoutLaunch(config, cwd string, stdin io.Reader, stderr io.Writer) error
 
 // checkoutHeader is the line a checkout's section opens with, naming it.
 func checkoutHeader(name, root string) string { return "for `" + name + "` with root " + root }
+
+// checkoutSection is h's instructions as the launch hands them: under its
+// header, its files' texts in order.
+func checkoutSection(h handedCheckout) string {
+	return checkoutHeader(h.name, h.root) + "\n\n" + h.text
+}
 
 // launchedFile is the file under a run's checkout state where checkout-launch
 // keeps every checkout it handed, in its order, with its instructions, for a
@@ -771,6 +787,13 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 		claimed, plans[name] = append(claimed, name), taken
 	}
 	if len(claimed) == 0 {
+		return nil, nil
+	}
+	// PAST ITS DEADLINE A FIRING CLAIMS NOTHING, its lines unsaid: a clone
+	// claimed there would go in an answer its harness drops, and never again.
+	if !spec.claimBy.IsZero() && !time.Now().Before(spec.claimBy) {
+		said.lines, said.files = nil, 0
+		fmt.Fprintln(said.stderr, "notehelper: this firing's deadline passed before it claimed; the checkouts wait for the next")
 		return nil, nil
 	}
 	// CLAIMED BEFORE ANYTHING IS HANDED: a firing that dies past this point has
