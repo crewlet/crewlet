@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/codeindex"
@@ -184,13 +185,16 @@ type fleet struct {
 	servers map[string]*codesearch.Server
 	silent  map[string]bool
 	order   func(replies [][]byte) [][]byte
-	// versions is the protocol of every request asked, in order.
+	// versions is the protocol of every request asked, in order, and waits
+	// the wait each carried.
 	versions []int
+	waits    []int64
 }
 
 func (f *fleet) ask(ctx context.Context, request []byte, each func([]byte) bool) error {
 	if w, err := codesearch.NewWire(fleetRing); err == nil {
-		f.versions = append(f.versions, w.Admit(request, signedask.NewGuard(), time.Now()).Request.Version)
+		asked := w.Admit(request, signedask.NewGuard(), time.Now()).Request
+		f.versions, f.waits = append(f.versions, asked.Version), append(f.waits, asked.BudgetMS)
 	}
 	var replies [][]byte
 	for id, s := range f.servers {
@@ -484,6 +488,45 @@ func TestARequestIsStampedWithTheProtocolItNeeds(t *testing.T) {
 				rep, why, err)
 		}
 	}
+}
+
+// A ROUND CARRIES ITS ASKER'S WAIT AS A DURATION, which each node counts from
+// the request's arrival on its own clock: the round's whole budget, or what its
+// caller has left where that ends sooner.
+//
+// Mutation: send no wait, and both rounds carry none, red.
+//
+// In a synctest bubble, so the caller's time left is exact.
+func TestARoundCarriesItsAskersWait(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		// TWO REPOSITORIES, so the search scatters: one is read through the
+		// estate's keyed walk.
+		var repos []repo
+		for _, name := range []string{"alpha", "beta"} {
+			r := indexed(name, "git-a")
+			r.lines = []gitlet.SearchHit{line("a.go", 1)}
+			repos = append(repos, r)
+		}
+		e := &estate{repos: repos}
+		f := newFleet(t, e, map[string]*node{"git-a": {}})
+		s := searcher(t, e, f)
+		short := codesearch.RoundBudget - 3*time.Second
+		for _, left := range []time.Duration{0, short} {
+			ctx, cancel := t.Context(), context.CancelFunc(func() {})
+			if left > 0 {
+				ctx, cancel = context.WithTimeout(ctx, left)
+			}
+			f.waits = nil
+			_, err := s.Search(ctx, query("needle"))
+			cancel()
+			want := signedask.WaitMS(cmp.Or(left, codesearch.RoundBudget))
+			if err != nil || !slices.Equal(f.waits, []int64{want}) {
+				t.Errorf("a caller with %v left (0: none) asked carrying %v ms (%v), want %d", left, f.waits, err,
+					want)
+			}
+		}
+	})
 }
 
 // A REPOSITORY NAMED TWICE IS SEARCHED ONCE: a repo: filter naming alpha

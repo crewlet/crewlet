@@ -65,6 +65,13 @@ type Request struct {
 	// so a round and its runner-up round are two requests.
 	ID       string    `json:"id"`
 	Deadline time.Time `json:"deadline"`
+	// BudgetMS is how long the asker waits for the round
+	// (signedask.WaitMS), which a node counts from the request's arrival on
+	// its own clock to end its reads a reply's margin before (signedask.Due):
+	// the deadline read on its clock cut them short by however far it stood
+	// ahead. Zero is an older asker's request, bound by its deadline. No
+	// protocol of its own: an older node ignoring it answers as it always did.
+	BudgetMS int64 `json:"budget_ms,omitzero"`
 
 	Asker       gitlet.Principal   `json:"asker"`
 	CeilingSeat string             `json:"ceiling_seat,omitempty"`

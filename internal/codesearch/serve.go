@@ -106,7 +106,10 @@ func NewServer(wire *Wire, node string, reads Reads, units int, answers *queue.A
 // signed under a key this node does not hold is answered Unverified, naming
 // the keys it holds, so the asker can say what to fix.
 func (s *Server) Answer(ctx context.Context, sealed []byte) ([]byte, error) {
-	adm := s.wire.Admit(sealed, s.taken, s.now())
+	// THE REQUEST'S ARRIVAL, on both clocks at once: the runtime's, on which
+	// its reads are counted, and the node's own, which admits it.
+	arrived, now := time.Now(), s.now()
+	adm := s.wire.Admit(sealed, s.taken, now)
 	switch adm.Disposition {
 	case signedask.Admitted:
 	case signedask.KeyUnknown:
@@ -131,7 +134,11 @@ func (s *Server) Answer(ctx context.Context, sealed []byte) ([]byte, error) {
 	if len(asked) == 0 {
 		return nil, errNotAsked
 	}
-	rctx, cancel := gitlet.AnswerBy(ctx, req.Deadline)
+	due, nobody := signedask.Due(arrived, req.BudgetMS, req.Deadline, now)
+	if nobody != "" {
+		return nil, fmt.Errorf("codesearch: %s request refused: %s", signedask.Stale, nobody)
+	}
+	rctx, cancel := gitlet.AnswerBy(ctx, due)
 	defer cancel()
 	// HELD FROM BEFORE THE READS until the reply is written, waited for no
 	// longer than the answer is due: one the budget cannot admit by then
