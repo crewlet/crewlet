@@ -122,7 +122,7 @@ func TestAGeminiCompressionIsFoundByItsLinesNotItsWords(t *testing.T) {
 	t.Run("newest summary", func(t *testing.T) {
 		t.Parallel()
 		c := newGeminiCounting()
-		c.summarize()
+		c.summarize(newSummaryClaim(t.Context(), new(passBudget)))
 		// A REPLY AFTER A USER ENTRY NO `$set` OPENED is no compression's.
 		after := `{"id":"late","timestamp":"t","type":"user","content":[{"text":"no summary"}]}` + "\n" +
 			`{"id":"late-ack","timestamp":"t","type":"gemini","content":[{"text":"` + geminiAck + `"}]}` + "\n"

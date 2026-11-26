@@ -41,12 +41,14 @@ func (Grok) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
 	var reading sandbox.MainThreadReading
+	var large passBudget
+	defer large.release()
 	var summary *summaryRead
 	if ask.Summary {
 		if why := summaryReleaseWhy(ask.Release, grokSupported()); why != "" {
 			reading.Summary = summaryUnread(why)
 		} else {
-			summary = &summaryRead{}
+			summary = &summaryRead{claim: newSummaryClaim(ctx, &large)}
 		}
 	}
 	if len(ask.Takes) == 0 && summary == nil {
@@ -239,7 +241,7 @@ func grokHeld(ctx context.Context, r io.Reader, summary *summaryRead) (map[strin
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), maxLineBytes)
 	var l grokNoteLine
 	if summary != nil {
-		l.summary = &summaryText{}
+		l.summary = summary.newWords()
 	}
 	for n := 1; ; n++ {
 		line, err := w.noteLine(ctx, func() error { return l.read(&w) })
@@ -372,10 +374,11 @@ func (l *grokNoteLine) summarised(s *summaryRead) {
 	t := l.summary
 	switch {
 	case l.reason != grokCompactionReason || !l.words || !t.set:
+	case s.waitFailed(t.claim):
 	case t.past:
 		s.unshaped(errSummaryPast.Error())
 	case !bytes.HasPrefix(t.buf, []byte(grokUserInfoOpen)):
-		s.take(strings.TrimSuffix(strings.TrimPrefix(string(t.buf), grokQueryOpen), grokQueryClose))
+		s.take(strings.TrimSuffix(strings.TrimPrefix(t.words(), grokQueryOpen), grokQueryClose))
 	}
 }
 

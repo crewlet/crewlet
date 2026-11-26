@@ -44,7 +44,7 @@ func kimiNotesHeld(ctx context.Context, wire io.Reader, takes []ServedTake, summ
 	w.setupNotes(bufio.NewReaderSize(src, lineChunkBytes), maxLineBytes)
 	var l kimiWireLine
 	if summary != nil {
-		l.summary = &summaryText{}
+		l.summary = summary.newWords()
 	}
 	for {
 		line, err := w.noteLine(ctx, func() error { return l.read(&w) })
@@ -237,7 +237,9 @@ func (k Kimi) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
 	if why := summaryReleaseWhy(ask.Release, kimiSupported); why != "" {
 		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
 	}
-	var summary summaryRead
+	var large passBudget
+	defer large.release()
+	summary := summaryRead{claim: newSummaryClaim(ctx, &large)}
 	_, _ = k.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
 	return sandbox.MainThreadReading{Summary: summary.reading()}
 }

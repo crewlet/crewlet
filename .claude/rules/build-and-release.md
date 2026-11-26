@@ -17,6 +17,8 @@ paths:
   - bounds the release matrix to linux and darwin on amd64 and arm64, no Windows; `internal/store/platform.go` makes any other build a compile error
   - links the linux binary dynamically against glibc, so it does not run on musl or `scratch`. Do NOT "fix" that with `-extldflags -static`: a static program cannot `dlopen`, so that build segfaults on its first query (ci.yml's `cross` job asserts the artifact stays dynamic). `-tags musl` picks the embedded `.so`, not the binary's linkage, so it gives no Alpine build either
 
+- **Dictation's recognizer is a native library the binary does NOT embed**: sherpa-onnx's official shared-library archive per platform, pinned in `internal/speech/native.go` (URL, size, SHA-256 and its members'), fetched into `internal/nativelib`'s cache like Turso's is extracted there. The Dockerfile's `speech` stage runs the target's own `crewlet speech prepare` and bakes the library and the model beside the binary. A bump changes the four pins, `SherpaVersion` and the notices under `internal/speech/third_party/` together
+
 ## Releases
 Signed binaries and a container image, built by goreleaser from a `v*` tag.
 - **The tag is the version** (`CLAUDE.md`): `main`'s image is stamped `main-` plus twelve hex digits of the commit, and a binary built any other way reports its module build info
