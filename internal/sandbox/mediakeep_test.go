@@ -232,12 +232,14 @@ func TestACapturesRestoredSizeIsHeldToItsBound(t *testing.T) {
 	}
 }
 
-// A TAKE'S MEDIA SHARE THE ROOM ITS SESSION HOLDS: today's sealed half of a
-// take's room holds the text object and every member together, so a text and
-// a member that each fit it alone and together do not are refused before a
-// byte past it lands, the capture refused and no spool left.
+// A TAKE'S MEDIA SHARE THE ROOM ITS SESSION HOLDS: the sealed spools of a
+// take are held together to its archive counted ([countedFor]), the text
+// object and every member, so a text and a member that each fit it alone and
+// together do not are refused before a byte past it lands, the capture
+// refused and no spool left, though its scrub's drained spool left the take
+// room for both.
 //
-// Mutation: hold each spool to the room apart, and the two land past it.
+// Mutation: hold each spool to the count apart, and the two land past it.
 func TestATakesMediaShareTheRoomItsSessionHolds(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -246,7 +248,7 @@ func TestATakesMediaShareTheRoomItsSessionHolds(t *testing.T) {
 		whole, body := mediaBody(t, string(raw[:40<<10]), mediaPart+string(raw[40<<10:]), "end")
 		rig, _, keep := mediaRig(t, whole, body)
 		rig.runner.mu.Lock()
-		rig.runner.Session.Archive.Size = 14
+		rig.runner.Session.Archive.Size, rig.runner.Session.Drains = 14, true
 		rig.runner.mu.Unlock()
 		spooled, taken := finalTake(t, rig, rig.launchKept(t, "t1"), rig.runner)
 		if spooled != nil || taken == nil || taken.NotKept == "" {

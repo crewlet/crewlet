@@ -8,9 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
 // THE FIRST READING SPOOLS WHAT IT WRITES, AND THE SECOND COPIES IT: every
@@ -33,17 +34,20 @@ const unitSpoolPrefix = "unit-"
 // holds for it: the session is not kept.
 var errUnitSpoolPastRoom = errors.New("executor: the scrub's spool would pass the room its take holds for it")
 
-// spoolPlace is where a take's scrub spools and in how much room: a directory
-// of its process's own, the bytes it may write there, and a way to tell the
-// take's room what it holds now ([sandbox.SessionTake.Spool]).
+// spoolPlace is where a take's scrub spools and in what room: a directory of
+// its process's own, and the take's room, which take debits before a byte is
+// written and give credits as one leaves the disk, both refused past or
+// counted in the room the take holds ([sandbox.SessionSpool]); spooled is told
+// once the first reading has written all it will.
 //
-// A ZERO DIRECTORY is the system's temporary one, a zero room no bound, and a
-// nil held tells nobody: a scrub a test runs. A take always names all three
-// ([Runner.TakeSession] refuses one that does not).
+// A ZERO DIRECTORY is the system's temporary one, a nil take no bound, and a
+// nil give or spooled tells nobody: a scrub a test runs. A take always names
+// them ([Runner.TakeSession] refuses one that does not).
 type spoolPlace struct {
-	dir  string
-	room int64
-	held func(int64)
+	dir     string
+	take    func(int64) error
+	give    func(int64)
+	spooled func()
 }
 
 // spooling is b spooling at place.
@@ -59,14 +63,13 @@ func (b scrubBounds) spooling(place spoolPlace) scrubBounds {
 // the spool can be cut back to where that unit began ([unitSpool.cutBack]).
 type unitSpool struct {
 	place spoolPlace
-	file  *os.File
-	disk  spoolDisk
+	disk  *spoolDisk
 	zw    *gzip.Writer
 	bw    *bufio.Writer
 	// at is how many bytes the readings have written to it, before its gzip:
 	// where the next lands, which a plan's marks and cuts name.
 	at int64
-	// memberFile and memberAt are where the member open began: in the file,
+	// memberFile and memberAt are where the member open began: on the disk,
 	// and in what the readings wrote.
 	memberFile, memberAt int64
 	// taken is what the scrub took out of what the spool holds ([tallier]),
@@ -75,35 +78,144 @@ type unitSpool struct {
 	taken, memberTaken int64
 }
 
-// spoolDisk counts what the spool's gzip writes to its file and refuses whole
-// the write that would pass the room, so no byte past it reaches the disk.
+// spoolDisk is what the spool's gzip writes, in files of
+// executorkeep.SpoolSegmentBytes each, so THE SECOND READING DRAINS IT: each
+// file it has read to its end is removed and given back to the take's room
+// at once, which the take's sealed spools then write into (the package doc's
+// "The scrub holds no value whole"). A gzip member may span files. Every byte
+// is taken from the room before it is written, a write refused whole past it,
+// so no byte past the room reaches the disk.
 type spoolDisk struct {
-	f       *os.File
-	n, room int64
+	place spoolPlace
+	// name is the first file's; file i past it is name-NNNN.
+	name string
+	// files are the ones on disk, files[0] being number first.
+	files []*os.File
+	first int
+	// n is every byte written, a global offset; held is what the files on
+	// disk hold, taken from the room and not yet given back; off is how far
+	// the reading is into files[0].
+	n, held, off int64
 }
+
+// segmentBytes is one file's size.
+const segmentBytes = executorkeep.SpoolSegmentBytes
 
 func (d *spoolDisk) Write(p []byte) (int, error) {
-	if int64(len(p)) > d.room-d.n {
-		return 0, errUnitSpoolPastRoom
+	if d.place.take != nil {
+		if err := d.place.take(int64(len(p))); err != nil {
+			return 0, fmt.Errorf("%w: %w", errUnitSpoolPastRoom, err)
+		}
 	}
-	n, err := d.f.Write(p)
-	d.n += int64(n)
-	return n, err
+	d.held += int64(len(p))
+	written := 0
+	for written < len(p) {
+		f, err := d.writing()
+		if err != nil {
+			d.giveBack(int64(len(p) - written))
+			return written, err
+		}
+		chunk := p[written:min(len(p), written+int(segmentBytes-d.n%segmentBytes))]
+		n, err := f.Write(chunk)
+		d.n += int64(n)
+		written += n
+		if err != nil {
+			d.giveBack(int64(len(p) - written))
+			return written, err
+		}
+	}
+	return written, nil
 }
 
-// newUnitSpool is an empty spool at place, its file the owner's alone (0600,
-// as [os.CreateTemp] makes it).
-func newUnitSpool(place spoolPlace) (*unitSpool, error) {
-	room := place.room
-	if room == 0 {
-		room = math.MaxInt64
+// writing is the file the next byte lands in, opened where the spool's last
+// is full.
+func (d *spoolDisk) writing() (*os.File, error) {
+	i := int(d.n / segmentBytes)
+	if i < len(d.files) {
+		return d.files[i], nil
 	}
+	f, err := os.OpenFile(fmt.Sprintf("%s-%04d", d.name, i), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("executor: a file of the scrub's spool on this node's disk: %w", err)
+	}
+	d.files = append(d.files, f)
+	return f, nil
+}
+
+// giveBack gives n bytes of what the files held back to the take's room.
+func (d *spoolDisk) giveBack(n int64) {
+	d.held -= n
+	if d.place.give != nil && n > 0 {
+		d.place.give(n)
+	}
+}
+
+// truncate cuts the spool back to its first at bytes, while it is written:
+// the file holding at is cut there and every later one removed, and what they
+// held given back.
+func (d *spoolDisk) truncate(at int64) error {
+	i := int(at / segmentBytes)
+	for len(d.files) > i+1 {
+		last := d.files[len(d.files)-1]
+		d.files = d.files[:len(d.files)-1]
+		_ = last.Close()
+		_ = os.Remove(last.Name())
+	}
+	removed := d.n - at
+	d.n = at
+	defer d.giveBack(removed)
+	if i == len(d.files) {
+		return nil
+	}
+	f, cut := d.files[i], at-int64(i)*segmentBytes
+	if err := f.Truncate(cut); err != nil {
+		return err
+	}
+	_, err := f.Seek(cut, io.SeekStart)
+	return err
+}
+
+// Read reads the spool from its start, removing each file it has read to its
+// end and giving its bytes back to the take's room before the next is read.
+func (d *spoolDisk) Read(p []byte) (int, error) {
+	for len(d.files) > 0 {
+		f := d.files[0]
+		size := min(segmentBytes, d.n-int64(d.first)*segmentBytes)
+		if d.off < size {
+			n, err := f.ReadAt(p[:min(int64(len(p)), size-d.off)], d.off)
+			d.off += int64(n)
+			if err == io.EOF {
+				err = nil
+			}
+			return n, err
+		}
+		d.files, d.first, d.off = d.files[1:], d.first+1, 0
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		d.giveBack(size)
+	}
+	return 0, io.EOF
+}
+
+// remove removes every file left and gives back what they held.
+func (d *spoolDisk) remove() {
+	for _, f := range d.files {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+	}
+	d.files = nil
+	d.giveBack(d.held)
+}
+
+// newUnitSpool is an empty spool at place, its files the owner's alone (0600,
+// as [os.CreateTemp] makes them).
+func newUnitSpool(place spoolPlace) (*unitSpool, error) {
 	f, err := os.CreateTemp(place.dir, unitSpoolPrefix+"*")
 	if err != nil {
 		return nil, fmt.Errorf("executor: a spool for the scrub on this node's disk: %w", err)
 	}
-	s := &unitSpool{place: place, file: f, disk: spoolDisk{f: f, room: room}}
-	if s.zw, err = gzip.NewWriterLevel(&s.disk, unitSpoolGzipLevel); err != nil {
+	s := &unitSpool{place: place, disk: &spoolDisk{place: place, name: f.Name(), files: []*os.File{f}}}
+	if s.zw, err = gzip.NewWriterLevel(s.disk, unitSpoolGzipLevel); err != nil {
 		s.remove()
 		return nil, fmt.Errorf("executor: the scrub's spool at gzip level %d: %w", unitSpoolGzipLevel, err)
 	}
@@ -137,25 +249,22 @@ func (s *unitSpool) newMember() error {
 	if err := s.zw.Close(); err != nil {
 		return err
 	}
-	s.zw.Reset(&s.disk)
+	s.zw.Reset(s.disk)
 	s.memberFile, s.memberAt, s.memberTaken = s.disk.n, s.at, s.taken
 	return nil
 }
 
 func (s *unitSpool) tally(taken int64) { s.taken += taken }
 
-// cutBack drops all the member open holds, the file cut back to where it
+// cutBack drops all the member open holds, the spool cut back to where it
 // began, so a unit not kept takes no room ([candidate.discard]).
 func (s *unitSpool) cutBack() error {
 	s.bw.Reset(s.zw)
-	if err := s.file.Truncate(s.memberFile); err != nil {
+	if err := s.disk.truncate(s.memberFile); err != nil {
 		return err
 	}
-	if _, err := s.file.Seek(s.memberFile, io.SeekStart); err != nil {
-		return err
-	}
-	s.disk.n, s.at, s.taken = s.memberFile, s.memberAt, s.memberTaken
-	s.zw.Reset(&s.disk)
+	s.at, s.taken = s.memberAt, s.memberTaken
+	s.zw.Reset(s.disk)
 	return nil
 }
 
@@ -166,8 +275,9 @@ func (s *unitSpool) empty() error {
 	return s.cutBack()
 }
 
-// reader ends the spool's writing, tells its take's room what it holds, and
-// reads it back from its start, its members one stream.
+// reader ends the spool's writing, tells its take the first reading is done,
+// and reads it back from its start, its members one stream, draining it.
+// bufio's read-ahead only removes a file sooner.
 func (s *unitSpool) reader() (io.Reader, error) {
 	if err := s.bw.Flush(); err != nil {
 		return nil, err
@@ -176,29 +286,21 @@ func (s *unitSpool) reader() (io.Reader, error) {
 		return nil, err
 	}
 	s.bw, s.zw = nil, nil
-	if s.place.held != nil {
-		s.place.held(s.disk.n)
+	if s.place.spooled != nil {
+		s.place.spooled()
 	}
-	if _, err := s.file.Seek(0, io.SeekStart); err != nil {
-		return nil, err
-	}
-	zr, err := gzip.NewReader(bufio.NewReaderSize(s.file, 64<<10))
+	zr, err := gzip.NewReader(bufio.NewReaderSize(s.disk, 64<<10))
 	if err != nil {
 		return nil, fmt.Errorf("executor: reading the scrub's spool back: %w", err)
 	}
 	return zr, nil
 }
 
-// remove removes the spool and tells its take's room it holds nothing: on
-// every way out of the scrub, a panic's included (the caller defers it).
+// remove removes the spool and gives back what it held: on every way out of
+// the scrub, a panic's included (the caller defers it).
 func (s *unitSpool) remove() {
-	if s == nil {
-		return
-	}
-	_ = s.file.Close()
-	_ = os.Remove(s.file.Name())
-	if s.place.held != nil {
-		s.place.held(0)
+	if s != nil {
+		s.disk.remove()
 	}
 }
 

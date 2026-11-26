@@ -1806,13 +1806,13 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	if err != nil {
 		return nil, refuse(calls, executorkeep.LossKeepFailed, err.Error())
 	}
-	// ROOM FOR ITS SPOOLS AT THE SEALED BOUND, before anything the take holds,
-	// in a save's order: room, the pack slot, then the take's own slots, so no
-	// take waits for room holding what a save holding room waits for. The
-	// sealed spool's part is shrunk to the archive's counted size once its size
-	// is known, and the scrub's is shrunk and given back as its spool tells it
-	// ([takeRoomBytes]). None within the wait keeps nothing, and is stamped
-	// refused as any other refusal is ([spoolRoomWait]).
+	// ROOM FOR ITS SPOOLS AT THE BOUND, before anything the take holds, in a
+	// save's order: room, the pack slot, then the take's own slots, so no take
+	// waits for room holding what a save holding room waits for. Its scrub's
+	// spool and its sealed spools share it, the scrub's drained into the seal,
+	// and it shrinks once the archive's size and the scrub's spool are known
+	// ([takeRoomBytes], [spoolHold.settleLocked]). None within the wait keeps
+	// nothing, and is stamped refused as any other refusal is ([spoolRoomWait]).
 	room, refused := c.awaitSpoolRoom(ctx, takeRoomBytes)
 	if refused != nil {
 		return nil, refuse(calls, executorkeep.LossNoSpoolRoom, refused.reason(), refused.logAttrs()...)
@@ -1823,8 +1823,6 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 			room.release()
 		}
 	}()
-	scrubbing := room.split(takeRoomBytes - executorkeep.SealedMaxBytes)
-	defer scrubbing.release()
 	dir, err := c.spoolHere()
 	if err != nil {
 		loss, why := takeRefusal(ctx, err)
@@ -1840,7 +1838,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
 		MaxBytes: executorkeep.SessionMaxBytes, Scope: current.AgentID, Session: current.Launch.Minted,
-		Spool: scrubbing.spooling(dir), MediaApart: policy.MediaApart})
+		Spool: room.scrubbing(dir), MediaApart: policy.MediaApart})
 	give()
 	if err != nil {
 		loss, why := takeRefusal(ctx, err)
@@ -1850,7 +1848,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, nil
 	}
 	defer func() { _ = taken.Body.Close() }()
-	room.shrinkTo(countedFor(taken.Archive.Size))
+	room.counting(countedFor(taken.Archive.Size))
 	// AND THE TENURE THE STAMP NAMES, read again once the session is in hand,
 	// right before its place is reserved: the pack and the scrub can take
 	// minutes ([SessionTakeBudget]), and a lease that lapsed and was claimed
@@ -2507,7 +2505,6 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: a spool for the session on this node's disk: %w", err)
 	}
-	left := hold.bytes()
 	var (
 		media []spooledMedia
 		split *TakenText
@@ -2515,7 +2512,7 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 	text := io.Reader(taken.Body)
 	if taken.Framed {
 		split = SplitTakenBody(taken.Body, func(member io.Reader) (string, error) {
-			m, mediaErr := c.spoolMedia(dir, run.AgentHandle, member, &left)
+			m, mediaErr := c.spoolMedia(dir, run.AgentHandle, member, hold)
 			if mediaErr != nil {
 				return "", mediaErr
 			}
@@ -2525,7 +2522,7 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 		text = split
 	}
 	stop := context.AfterFunc(ctx, func() { _ = taken.Body.Close() })
-	sealed, sealErr := c.keep.Seal(run.AgentHandle, run.TurnID, text, &heldWriter{w: file, left: &left})
+	sealed, sealErr := c.keep.Seal(run.AgentHandle, run.TurnID, text, hold.sealing(file))
 	stop()
 	if err = errors.Join(sealErr, file.Close()); err != nil {
 		_ = os.Remove(file.Name())
@@ -2546,13 +2543,13 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 }
 
 // spoolMedia seals one payload's member, member, into a file of dir's own,
-// within what left counts of the take's room.
-func (c *Coordinator) spoolMedia(dir, handle string, member io.Reader, left *int64) (spooledMedia, error) {
+// within the take's room, hold.
+func (c *Coordinator) spoolMedia(dir, handle string, member io.Reader, hold *spoolHold) (spooledMedia, error) {
 	file, err := os.CreateTemp(dir, spoolPrefix+"*")
 	if err != nil {
 		return spooledMedia{}, fmt.Errorf("sandbox: a spool for the session's media on this node's disk: %w", err)
 	}
-	sealed, sealErr := c.keep.SealMedia(handle, member, &heldWriter{w: file, left: left})
+	sealed, sealErr := c.keep.SealMedia(handle, member, hold.sealing(file))
 	if err = errors.Join(sealErr, file.Close()); err != nil {
 		_ = os.Remove(file.Name())
 		return spooledMedia{}, err

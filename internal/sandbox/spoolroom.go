@@ -17,15 +17,42 @@ import (
 // Every session spool on a node is held to one room, counted in bytes: the
 // package doc's "Every spool on a node in one room" has the argument.
 
-// takeRoomBytes is the room one take holds, in two parts of one size: a
-// sealed session at its bound ([executorkeep.SealedMaxBytes]) with as much as
-// gzip adds to input it cannot shrink ([executorkeep.GzipMostBytes]) and the
-// scrub spool's members ([executorkeep.SpoolMembersMostBytes]). Its sealed
-// spool takes its part first, and its scrub's spool ([SessionSpool]), written
-// at the kept archive's level so a session the seal keeps fits, the rest, so a
-// scrub's spool never makes a seal fail. 96.23 MiB today.
+// takeRoomBytes is the room one take holds: its scrub's spool ([SessionSpool])
+// and its sealed spools, the session's text and each payload it keeps apart,
+// in ONE ROOM, which the scrub's second reading drains into the seal: each
+// file of the scrub's spool it has read is given back to the take as the seal
+// writes ([executorkeep.SpoolSegmentBytes]). A session at its kept bound
+// ([executorkeep.SessionKeptMaxBytes]) peaks at its scrub's spool, one file
+// and its seals' and gzip's overhead ([drainPeakBytes]), which this holds.
+// Twice a sealed session at the text bound ([executorkeep.SealedMaxBytes]) as
+// gzip writes input it cannot shrink ([executorkeep.GzipMostBytes]) with the
+// scrub spool's members ([executorkeep.SpoolMembersMostBytes]): 96.23 MiB
+// today, and the kept bound is the most it holds drained (a test holds both).
 var takeRoomBytes = 2 * (executorkeep.GzipMostBytes(executorkeep.SealedMaxBytes) +
 	executorkeep.SpoolMembersMostBytes)
+
+// drainPeakBytes is the most a take at the kept bound holds of its room at
+// once ([drainPeakFor]): 95.18 MiB.
+var drainPeakBytes = drainPeakFor(executorkeep.SessionKeptMaxBytes)
+
+// drainPeakFor is the most a take keeping bound bytes holds of its room at
+// once: its scrub's spool at its most ([scrubSpoolMaxBytes] at that bound),
+// and the sealed spools, which lag what the second reading consumed (the
+// take's body is a pipe) while the files it has read trail it by under one
+// ([executorkeep.SpoolSegmentBytes]); so the spool, one file, and what the
+// seals and their gzip add past the bound (the bound sealed,
+// executorkeep.KeptSealedFor, as gzip writes it, less the bound).
+func drainPeakFor(bound int64) int64 {
+	return executorkeep.GzipMostBytes(bound) + executorkeep.SpoolMembersMostBytes +
+		executorkeep.SpoolSegmentBytes + executorkeep.GzipMostBytes(executorkeep.KeptSealedFor(bound)) - bound
+}
+
+// scrubSpoolMaxBytes is the most a take's scrub spools: the kept bound as
+// gzip writes input it cannot shrink, with every member it may open. A spool
+// past it would leave the seal no room before the first file is read, so it
+// is refused as it writes.
+var scrubSpoolMaxBytes = executorkeep.GzipMostBytes(executorkeep.SessionKeptMaxBytes) +
+	executorkeep.SpoolMembersMostBytes
 
 // spoolRoomBytes is the room every spool of one process shares: a take's
 // ([takeRoomBytes]) for each save a node takes at once ([maxConcurrentSaves])
@@ -127,12 +154,29 @@ func (r *spoolRoom) heldBytes() int64 {
 	return r.held
 }
 
-// spoolHold is room one spool holds in its process's room, from before its
-// first byte until its file is removed.
+// spoolHold is the room one take holds in its process's room, from before its
+// first byte until its last file is removed, and what its spools hold of it:
+// its scrub's ([spoolHold.scrubbing]) and its sealed ones'
+// ([spoolHold.sealing]), each byte taken before it is written, refused past
+// the hold ([errSpoolPastHold]), and given back to the HOLD as it leaves the
+// disk, never to the room, so the seal writes into what the scrub's second
+// reading drained (the package doc's "Every spool on a node in one room").
 type spoolHold struct {
 	room *spoolRoom
 	mu   sync.Mutex
 	n    int64
+	// used is what the spools hold now, peak the most they have held, and
+	// scrub and sealed each's part of used.
+	used, peak, scrub, sealed int64
+	// spooled is what the scrub's spool held as its first reading ended, -1
+	// until it has; counted is the sealed spools' bound, the archive's
+	// counted size ([countedFor]), 0 until the archive is known.
+	spooled, counted int64
+}
+
+// newSpoolHold is a hold of n bytes of r, nothing used.
+func newSpoolHold(r *spoolRoom, n int64) *spoolHold {
+	return &spoolHold{room: r, n: n, spooled: -1}
 }
 
 // trySpoolRoom takes n bytes of the room without waiting, nil where they are
@@ -145,7 +189,7 @@ func (c *Coordinator) trySpoolRoom(n int64) *spoolHold {
 		return nil
 	}
 	r.countLocked(n)
-	return &spoolHold{room: r, n: n}
+	return newSpoolHold(r, n)
 }
 
 // spoolRoomRefusal is a take's wait for room that ended without it: the
@@ -195,65 +239,128 @@ func (c *Coordinator) awaitSpoolRoom(ctx context.Context, n int64) (*spoolHold, 
 	r.countLocked(n)
 	r.mu.Unlock()
 	r.waited(SpoolTaken, waited)
-	return &spoolHold{room: r, n: n}, nil
+	return newSpoolHold(r, n), nil
 }
 
-// bytes is the room h holds.
-func (h *spoolHold) bytes() int64 {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.n
-}
-
-// shrinkTo gives back all but n bytes of what h holds; nothing where it holds
-// n or less.
+// shrinkTo gives back all but n bytes of what h holds, never what its spools
+// use; nothing where it holds n or less.
 func (h *spoolHold) shrinkTo(n int64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if n < h.n {
+	h.shrinkLocked(n)
+}
+
+func (h *spoolHold) shrinkLocked(n int64) {
+	if n = max(n, h.used); n < h.n {
 		h.room.give(h.n - n)
 		h.n = n
 	}
 }
 
-// split moves n bytes of what h holds into a hold of their own, which it
-// answers, h keeping the rest: a take's sealed spool and its scrub's, each
-// given back on its own ([takeRoomBytes]).
-func (h *spoolHold) split(n int64) *spoolHold {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	n = min(n, h.n)
-	h.n -= n
-	return &spoolHold{room: h.room, n: n}
+// takeLocked takes n bytes for a spool, refused past what h holds.
+func (h *spoolHold) takeLocked(n int64) error {
+	if h.used+n > h.n {
+		return fmt.Errorf("%w (%d bytes held, %d of them written, %d more asked)", errSpoolPastHold, h.n,
+			h.used, n)
+	}
+	h.used += n
+	h.peak = max(h.peak, h.used)
+	return nil
 }
 
-// spooling is the scrub's spool a take names in dir, held by h, which it
-// shrinks and gives back as the scrub tells it what the spool holds.
-func (h *spoolHold) spooling(dir string) SessionSpool {
-	return SessionSpool{Dir: dir, Bytes: h.bytes(), Held: h.shrinkTo}
+// counting is the archive's counted size known: the sealed spools are held to
+// it, and the hold shrinks ([spoolHold.settleLocked]).
+func (h *spoolHold) counting(counted int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.counted = counted
+	h.settleLocked()
+}
+
+// settleLocked shrinks h, once both the scrub's spool and the archive's
+// counted size are known, to what the two hold together at most: the sealed
+// spools are held to the counted size, so the take never needs more, drained
+// or not. A small session gives its room back before it streams; one at the
+// bound gives back nothing, and the drain carries it.
+func (h *spoolHold) settleLocked() {
+	if h.spooled >= 0 && h.counted > 0 {
+		h.shrinkLocked(min(h.n, h.spooled+h.counted))
+	}
+}
+
+// scrubbing is the scrub's spool a take names in dir, taking from h, held to
+// [scrubSpoolMaxBytes] of it, and giving back to h as its second reading
+// drains it.
+func (h *spoolHold) scrubbing(dir string) SessionSpool {
+	return SessionSpool{Dir: dir,
+		Take: func(n int64) error {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if h.scrub+n > scrubSpoolMaxBytes {
+				return fmt.Errorf("%w: the scrub's spool would pass its %d bytes", errSpoolPastHold,
+					scrubSpoolMaxBytes)
+			}
+			if err := h.takeLocked(n); err != nil {
+				return err
+			}
+			h.scrub += n
+			return nil
+		},
+		Give: func(n int64) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.scrub -= n
+			h.used -= n
+		},
+		Spooled: func() {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.spooled = h.scrub
+			h.settleLocked()
+		},
+	}
+}
+
+// sealing is w taking every byte from h before it is written, the sealed
+// spools held together to the archive's counted size once it is known, a
+// write refused whole past either, so no byte past the room reaches the disk.
+func (h *spoolHold) sealing(w io.Writer) io.Writer { return &heldWriter{w: w, hold: h} }
+
+// heldWriter is a sealed spool's writer ([spoolHold.sealing]).
+type heldWriter struct {
+	w    io.Writer
+	hold *spoolHold
+}
+
+func (w *heldWriter) Write(p []byte) (int, error) {
+	h, n := w.hold, int64(len(p))
+	h.mu.Lock()
+	err := errSpoolPastHold
+	if h.counted <= 0 || h.sealed+n <= h.counted {
+		err = h.takeLocked(n)
+	}
+	if err == nil {
+		h.sealed += n
+	}
+	h.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	written, err := w.w.Write(p)
+	if short := n - int64(written); short > 0 {
+		h.mu.Lock()
+		h.sealed, h.used = h.sealed-short, h.used-short
+		h.mu.Unlock()
+	}
+	return written, err
 }
 
 // release gives back everything h holds. Safe on nil and twice.
 func (h *spoolHold) release() {
 	if h != nil {
-		h.shrinkTo(0)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.used = 0
+		h.shrinkLocked(0)
 	}
-}
-
-// heldWriter writes to w at most what left counts, the room its spool holds,
-// shared by every file a take spools (its session and its media), and
-// refuses whole the write that would pass it, so no byte past the room
-// reaches the disk.
-type heldWriter struct {
-	w    io.Writer
-	left *int64
-}
-
-func (h *heldWriter) Write(p []byte) (int, error) {
-	if int64(len(p)) > *h.left {
-		return 0, errSpoolPastHold
-	}
-	n, err := h.w.Write(p)
-	*h.left -= int64(n)
-	return n, err
 }

@@ -129,9 +129,14 @@ const (
 // and the header and last chunk's tag each of [MediaMaxCount] more objects
 // adds. It is what a media object is uploaded under and what the object
 // store's pacing is held to for a capture's uploads.
-var KeptSealedMaxBytes = secrets.SealedStreamSize(SessionKeptMaxBytes,
-	strings.Repeat("k", secrets.MaxStreamKeyIDBytes)) +
-	MediaMaxCount*secrets.SealedStreamSize(0, strings.Repeat("k", secrets.MaxStreamKeyIDBytes))
+var KeptSealedMaxBytes = KeptSealedFor(SessionKeptMaxBytes)
+
+// KeptSealedFor is what a capture keeping n bytes in all holds sealed, its
+// objects at the most there may be ([KeptSealedMaxBytes]).
+func KeptSealedFor(n int64) int64 {
+	key := strings.Repeat("k", secrets.MaxStreamKeyIDBytes)
+	return secrets.SealedStreamSize(n, key) + MediaMaxCount*secrets.SealedStreamSize(0, key)
+}
 
 // GzipMostBytes is the most Go's gzip writes of n bytes it cannot shrink, at
 // any level, in one member: flate stores such input as it came, five bytes of
@@ -157,6 +162,15 @@ const GzipMemberBytes = 10 + 8 + 5
 // internal/sandbox/executor's wayRoomBytes and scrubPlainMax are those bounds,
 // which its test holds together with these.
 const SpoolMembersMostBytes = (256<<20/(64<<10) + 1) * GzipMemberBytes
+
+// SpoolSegmentBytes is the size of each file a take's scrub spool is written
+// in, which its second reading removes as it reads past it, so the sealed
+// spools write into the room the scrub's gives back (internal/sandbox's
+// takeRoomBytes). ONE MEBIBYTE: a take's drain holds at most one file it has
+// read, so this is the drain's peak overhead, beside the store's and the box
+// read's pace unit (objstore.MiB); 94 files a take at [SessionKeptMaxBytes]
+// cost nothing a disk notices, and a smaller file only opens more.
+const SpoolSegmentBytes = objstore.MiB
 
 // ErrSessionTooLarge reports an archive past [SessionMaxBytes]: nothing is
 // recorded, and the turn's next launch starts from the session the row already

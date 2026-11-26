@@ -8,11 +8,79 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
+
+// unboundSpool is a take's spool in dir whose room never refuses.
+func unboundSpool(dir string) sandbox.SessionSpool {
+	return sandbox.SessionSpool{Dir: dir, Take: func(int64) error { return nil }, Give: func(int64) {},
+		Spooled: func() {}}
+}
+
+// spoolLedger is a take's room as a test keeps it: what the spool took and gave
+// back, refused past room (zero, no bound), and what it
+// held as its first reading ended, by the room's count and on disk.
+type spoolLedger struct {
+	mu                     sync.Mutex
+	room                   int64
+	used, taken, freed     int64
+	spooled, spooledOnDisk int64
+	dir                    string
+	// drained is each give after the first reading, in order.
+	drained []int64
+}
+
+// place is the ledger's spool in dir.
+func (l *spoolLedger) place(dir string) spoolPlace {
+	l.dir, l.spooled = dir, -1
+	return spoolPlace{dir: dir,
+		take: func(n int64) error {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			if l.room > 0 && l.used+n > l.room {
+				return errors.New("the test's room is full")
+			}
+			l.used, l.taken = l.used+n, l.taken+n
+			return nil
+		},
+		give: func(n int64) {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			l.used, l.freed = l.used-n, l.freed+n
+			if l.spooled >= 0 {
+				l.drained = append(l.drained, n)
+			}
+		},
+		spooled: func() {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			l.spooled, l.spooledOnDisk = l.used, onDisk(l.dir)
+		},
+	}
+}
+
+// onDisk is what the scrub's spool files in dir hold, -1 where it cannot be read.
+func onDisk(dir string) int64 {
+	files, err := filepath.Glob(filepath.Join(dir, unitSpoolPrefix+"*"))
+	if err != nil {
+		return -1
+	}
+	var n int64
+	for _, f := range files {
+		info, err := os.Stat(f)
+		if err != nil {
+			return -1
+		}
+		n += info.Size()
+	}
+	return n
+}
 
 // spoolsLeft is the scrub's spools left in dir.
 func spoolsLeft(t *testing.T, dir string) []string {
@@ -203,8 +271,9 @@ func TestTheSpoolIsHeldToItsRoom(t *testing.T) {
 	} {
 		dir := t.TempDir()
 		dst := &counted{}
+		ledger := &spoolLedger{room: tc.room}
 		err := scrubTar(bytes.NewReader(archive), reopenOf(archive), dst, s,
-			testBounds.spooling(spoolPlace{dir: dir, room: tc.room}))
+			testBounds.spooling(ledger.place(dir)))
 		switch {
 		case tc.kept && err != nil:
 			t.Errorf("%s: the session was refused: %v", name, err)
@@ -212,8 +281,8 @@ func TestTheSpoolIsHeldToItsRoom(t *testing.T) {
 			t.Errorf("%s: the scrub ended %v having written %d bytes, want it refused for its room before "+
 				"writing", name, err, dst.n)
 		}
-		if left := spoolsLeft(t, dir); len(left) != 0 {
-			t.Errorf("%s: the scrub left %v", name, left)
+		if left := spoolsLeft(t, dir); len(left) != 0 || ledger.used != 0 {
+			t.Errorf("%s: the scrub left %v, %d bytes of its room taken", name, left, ledger.used)
 		}
 	}
 }
@@ -262,23 +331,122 @@ func TestAWayNotKeptTakesNoRoom(t *testing.T) {
 	s := newScrubber([]string{longValue})
 	torn := "{" + strings.Repeat(`"k":"v",`, 1<<20/8)
 	archive := tarOf(t, map[string]string{"projects/p/s.jsonl": torn + "\n"})
-	var spooled int64
-	held := func(n int64) {
-		if n > 0 && spooled == 0 {
-			spooled = n
-		}
-	}
+	ledger := &spoolLedger{}
 	var out bytes.Buffer
 	if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), &out, s,
-		testBounds.spooling(spoolPlace{dir: t.TempDir(), held: held})); err != nil {
+		testBounds.spooling(ledger.place(t.TempDir()))); err != nil {
 		t.Fatal(err)
 	}
+	spooled := ledger.spooled
 	kept := untarOf(t, out.Bytes())["projects/p/s.jsonl"]
 	if want := keptText(s, torn) + "\n"; kept != want {
 		t.Fatalf("the torn line was kept as %.80q…, want its text", kept)
 	}
 	if bound := executorkeep.GzipMostBytes(int64(len(kept)) + 1<<10); spooled == 0 || spooled > bound {
 		t.Errorf("the spool held %d bytes, past the %d its line's text comes to at most", spooled, bound)
+	}
+}
+
+// THE SECOND READING GIVES BACK WHAT IT READ: a session whose spool spans
+// several files has each removed and given back, in order, as the second
+// reading reads past it, so what the spool holds and what the take has
+// written beside it never pass the spool's size and one file; and by the
+// scrub's end everything it took is back, nothing left on disk. Sampled on
+// the take's own writes, so no wait decides it.
+//
+// Mutation: keep each file until the scrub ends, or give a file back twice,
+// and a check goes red.
+func TestTheSecondReadingGivesBackWhatItRead(t *testing.T) {
+	t.Parallel()
+	s := newScrubber(nil)
+	archive := tarOf(t, map[string]string{"notes.txt": randomBase64(31, 5<<20) + "\n"})
+	dir := t.TempDir()
+	ledger := &spoolLedger{}
+	worst := int64(0)
+	dst := &watchedWriter{wrote: func(out int64) {
+		ledger.mu.Lock()
+		defer ledger.mu.Unlock()
+		if ledger.spooled >= 0 {
+			worst = max(worst, ledger.used+out-ledger.spooled)
+		}
+	}}
+	if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), dst, s,
+		testBounds.spooling(ledger.place(dir))); err != nil {
+		t.Fatal(err)
+	}
+	if ledger.spooled < 3*segmentBytes {
+		t.Fatalf("the spool held %d bytes, want at least three files' worth", ledger.spooled)
+	}
+	// THE TAKE'S OUTPUT IS THE SPOOL'S KEPT TEXT GZIPPED AGAIN, at the
+	// spool's level, so what it writes tracks what it read within a block.
+	if slack := int64(64 << 10); worst > segmentBytes+slack {
+		t.Errorf("the spool and the take's output held %d bytes past the spool's size at once, want at "+
+			"most one file (%d) and %d of gzip's slack", worst, segmentBytes, slack)
+	}
+	files := (ledger.spooled + segmentBytes - 1) / segmentBytes
+	if got := int64(len(ledger.drained)); got != files {
+		t.Errorf("the second reading gave the room back in %d steps %v, want one for each of its %d files",
+			got, ledger.drained, files)
+	}
+	for i, n := range ledger.drained {
+		if want := min(segmentBytes, ledger.spooled-int64(i)*segmentBytes); n != want {
+			t.Errorf("give %d was %d bytes, want file %d's %d, in order", i, n, i, want)
+		}
+	}
+	if ledger.used != 0 || ledger.freed != ledger.taken || len(spoolsLeft(t, dir)) != 0 {
+		t.Errorf("the scrub ended holding %d bytes (took %d, gave back %d), files %v left", ledger.used,
+			ledger.taken, ledger.freed, spoolsLeft(t, dir))
+	}
+}
+
+// watchedWriter counts what is written to it and tells wrote each time.
+type watchedWriter struct {
+	n     int64
+	wrote func(n int64)
+}
+
+func (w *watchedWriter) Write(p []byte) (int, error) {
+	w.n += int64(len(p))
+	w.wrote(w.n)
+	return len(p), nil
+}
+
+// A CUT BACK SPANS FILES: a torn line of short fields, its JSON way spilled
+// into a member that runs over several of the spool's files, is cut back out
+// of the spool once it is no JSON; every file past the cut is removed and its
+// bytes given back, so as the first reading ends the files on disk hold
+// exactly what the take's room counts, and the line is kept as its text.
+//
+// Mutation: leave the files past the cut, or give back what the cut file
+// held less than it lost, and the count goes red.
+func TestACutBackSpansFiles(t *testing.T) {
+	t.Parallel()
+	s := newScrubber([]string{longValue})
+	var torn strings.Builder
+	torn.WriteString("{")
+	for i := 0; torn.Len() < 6<<20; i++ {
+		torn.WriteString(`"k":"` + randomBase64(uint64(i), 24) + `",`)
+	}
+	archive := tarOf(t, map[string]string{"projects/p/s.jsonl": torn.String() + "\n"})
+	dir := t.TempDir()
+	ledger := &spoolLedger{}
+	var out bytes.Buffer
+	if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), &out, s,
+		testBounds.spooling(ledger.place(dir))); err != nil {
+		t.Fatal(err)
+	}
+	if want := keptText(s, torn.String()) + "\n"; untarOf(t, out.Bytes())["projects/p/s.jsonl"] != want {
+		t.Fatal("the torn line was not kept as its text")
+	}
+	if cut := ledger.taken - ledger.spooled; cut < 2*segmentBytes {
+		t.Fatalf("the first reading cut back %d bytes, want a member over at least two files", cut)
+	}
+	if ledger.spooledOnDisk != ledger.spooled {
+		t.Errorf("as the first reading ended its files held %d bytes, want the %d its room counts",
+			ledger.spooledOnDisk, ledger.spooled)
+	}
+	if ledger.used != 0 || len(spoolsLeft(t, dir)) != 0 {
+		t.Errorf("the scrub ended holding %d bytes, files %v left", ledger.used, spoolsLeft(t, dir))
 	}
 }
 

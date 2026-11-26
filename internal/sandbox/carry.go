@@ -465,14 +465,17 @@ type SessionTake struct {
 
 // SessionSpool is the room a take's scrub spools in ([SessionTake.Spool]): a
 // directory of the process's own, so the sweep that removes a crashed
-// process's spools removes the scrub's too; the bytes the spool may write
-// there, counted as written and refused past; and Held, told the bytes the
-// spool holds whenever that moves, none once it is removed, which it is
-// before the take's body ends.
+// process's spools removes the scrub's too; Take, which takes n bytes of the
+// take's room before the spool writes them and refuses past it, and Give,
+// which gives them back as they leave the disk, to the TAKE's room, never the
+// node's, so the take's sealed spools write into what its second reading
+// drained; and Spooled, told once the first reading has written all it keeps.
+// Every byte is given back before the take's body ends.
 type SessionSpool struct {
-	Dir   string
-	Bytes int64
-	Held  func(bytes int64)
+	Dir     string
+	Take    func(n int64) error
+	Give    func(n int64)
+	Spooled func()
 }
 
 // TakenSession is a session archive on its way out of its box: described, and
