@@ -2440,7 +2440,7 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 		reading.Receipts = hooks.receipts(ctx, ask)
 	}
 	if summary != nil {
-		reading.Summary = summary.reading(ctx, box, file)
+		reading.Summary = summary.reading()
 	}
 	return reading
 }

@@ -27,8 +27,9 @@ import (
 // errChatArchive is an archive that holds no one chat file the meter reads.
 var errChatArchive = errors.New("executor: the archive holds no one chat file")
 
-// errChatLine is a chat file line past [codexRolloutLineMaxBytes], which no
-// count reads past.
+// errChatLine is a chat file line whose text outside its media runs past
+// [codexRolloutLineMaxBytes], which no count reads past: its media are passed
+// ([lineWalk.passImages]).
 var errChatLine = errors.New("executor: a chat file line is past the bound a count reads")
 
 // chatMemberLines walks the one regular member of the gzipped tar r that
@@ -85,6 +86,7 @@ func chatFileLines(ctx context.Context, r io.Reader, c chatCounter, large *passB
 	}()
 	var w lineWalk
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), codexWalkBound)
+	w.passImages()
 	w.src.tee = c.tee(&w.trim)
 	if follow != nil {
 		w.src.tee = teeTwo{w.src.tee, follow}
@@ -248,7 +250,7 @@ type chatSkip struct{}
 
 func (chatSkip) tee(trim *lineTrim) io.Writer                  { return trim }
 func (chatSkip) start()                                        {}
-func (chatSkip) record(w *lineWalk) error                      { return w.scan.Skip() }
+func (chatSkip) record(w *lineWalk) error                      { return w.skip(jsonscan.ObjectStart) }
 func (chatSkip) line(bool)                                     {}
 func (chatSkip) pastBase() bool                                { return false }
 func (chatSkip) count(countMarks, int64) *sandbox.ResumedCount { return nil }
@@ -340,7 +342,7 @@ func (t *byteTally) Write(p []byte) (int, error) {
 // none may be while the value is read.
 func (w *lineWalk) sizedValue(k jsonscan.Kind, read func() error) (int64, error) {
 	if read == nil {
-		read = w.scan.Skip
+		read = func() error { return w.skip(k) }
 	}
 	if k == jsonscan.ObjectStart || k == jsonscan.ArrayStart {
 		start := w.scan.Offset()
@@ -353,7 +355,7 @@ func (w *lineWalk) sizedValue(k jsonscan.Kind, read func() error) (int64, error)
 	if err := w.scan.Tee(&n); err != nil {
 		return 0, err
 	}
-	err := w.scan.Skip()
+	err := w.skip(k)
 	return int64(n), err
 }
 
@@ -400,10 +402,15 @@ func (t chatText) name() string {
 func (w *lineWalk) chatText(word bool) (chatText, error) { return w.chatTextTo(word, nil) }
 
 // chatTextTo is [lineWalk.chatText] writing the text's bytes to tee too, nil
-// for nowhere.
+// for nowhere. On a walk that passes images, a text that is a data URL, or the
+// payload [lineWalk.inline] says it reads, is counted out of the line's bound
+// as it is read, as [lineWalk.passString] counts one, and measured all the
+// same.
 func (w *lineWalk) chatTextTo(word bool, tee io.Writer) (chatText, error) {
 	var t chatText
 	t.js = 2
+	var pass passing
+	pass.start(w)
 	head := w.wordBuf[:0]
 	var tail [len(redact.Marker) - 1]byte
 	var edge [2 * len(tail)]byte
@@ -439,6 +446,7 @@ func (w *lineWalk) chatTextTo(word bool, tee io.Writer) (chatText, error) {
 			}
 		}
 		t.take(p)
+		pass.read(w, p)
 		if tee != nil {
 			_, _ = tee.Write(p)
 		}
@@ -506,7 +514,7 @@ func (t *chatText) take(p []byte) {
 func (w *lineWalk) jsValue(k jsonscan.Kind) (int64, error) {
 	switch k {
 	case jsonscan.ObjectStart:
-		return w.jsMembers(func(_ string, k jsonscan.Kind) (int64, error) { return w.jsValue(k) })
+		return w.jsObject()
 	case jsonscan.ArrayStart:
 		return w.jsElements(w.jsValue)
 	case jsonscan.String:
@@ -518,6 +526,42 @@ func (w *lineWalk) jsValue(k jsonscan.Kind) (int64, error) {
 		return 5, nil
 	}
 	return 4, nil
+}
+
+// jsObject is [lineWalk.jsValue] of the object whose start is the current
+// token, each payload in it counted out of the line's bound as
+// [lineWalk.pass] tells it: the `data` of an object typed `image`, and an
+// `inlineData` object's.
+func (w *lineWalk) jsObject() (int64, error) {
+	image := false
+	return w.jsMembers(func(name string, k jsonscan.Kind) (int64, error) {
+		switch {
+		case !w.images:
+		case name == "type" && k == jsonscan.String:
+			t, err := w.chatText(false)
+			image = t.name() == "image"
+			return t.js, err
+		case name == "data" && image && k == jsonscan.String:
+			return w.jsPayload()
+		case name == "inlineData" && k == jsonscan.ObjectStart:
+			return w.jsMembers(func(name string, k jsonscan.Kind) (int64, error) {
+				if name == "data" && k == jsonscan.String {
+					return w.jsPayload()
+				}
+				return w.jsValue(k)
+			})
+		}
+		return w.jsValue(k)
+	})
+}
+
+// jsPayload is [lineWalk.jsValue] of the current string, a payload, counted
+// out of the line's bound as it is read ([lineWalk.inline]).
+func (w *lineWalk) jsPayload() (int64, error) {
+	w.inline = true
+	t, err := w.chatText(false)
+	w.inline = false
+	return t.js, err
 }
 
 // jsNumber reads the current number and is its length as JSON.stringify

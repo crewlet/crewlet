@@ -89,7 +89,9 @@ type Decoder interface {
 //
 // A LINE IS READ IN ONE PIECE, so it takes the bound on a piece read whole
 // ([sandbox.MaxFileBytes]): one line costs at most what one file read could.
-// A runner reads it through [Runner.lineBound], which its suite lowers.
+// A runner reads it through [Runner.lineBound], which its suite lowers. A
+// session's walk that passes media holds it to what is not media
+// ([lineWalk.passImages]).
 const maxLineBytes = sandbox.MaxFileBytes
 
 // eachLine feeds r to dec a line at a time, in memory bounded by bound; a

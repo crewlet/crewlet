@@ -30,6 +30,7 @@ var errChatSummaryLines = fmt.Errorf("the chat file holds more than the %d lines
 func (c *chatSummaryLines) setup(rd lineRecords) {
 	c.setupBounded(newTranscriptBuilder(0, TranscriptReadBounds(), TranscriptFilter{}), rd,
 		bufio.NewReaderSize(nil, lineChunkBytes))
+	c.passImages()
 }
 
 // take reads raw, the file's next line, unless the reading has ended.
@@ -91,7 +92,7 @@ func (q *qwenSummaryReading) record() error {
 		case "systemPayload":
 			err = q.compaction.read(&q.chatReading, k)
 		default:
-			err = q.scan.Skip()
+			err = q.skip(k)
 		}
 		return err
 	})
@@ -176,7 +177,7 @@ func (p *qwenPayload) tee(w *lineWalk) error {
 	}
 	p.reset()
 	p.set = true
-	return w.scan.Tee(p)
+	return w.scan.Tee(w.asWritten(p))
 }
 
 func (p *qwenPayload) Write(b []byte) (int, error) {
