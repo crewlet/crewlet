@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -261,6 +262,76 @@ func TestAGrokAnswerHoldsWholeCheckoutsWithinGroksCut(t *testing.T) {
 	}
 	if strings.Contains(got, "B-LOCAL") || units(got) > grokNestedChars {
 		t.Errorf("the answer is %d units, holding b's text: %t", units(got), strings.Contains(got, "B-LOCAL"))
+	}
+}
+
+// A GROK FIRING CLAIMS ONLY THE CHECKOUTS ITS ANSWER CAN NAME: each claimed
+// checkout's files come whole or named by path within Grok's cut, and one
+// whose named block no longer fits waits, unclaimed, for a later firing,
+// which hands it.
+//
+// Mutation: charge no named block at claim, and this goes red.
+func TestAGrokFiringClaimsOnlyTheCheckoutsItsAnswerCanName(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.grokLaunch(t)
+	work := r.workdir(t)
+	files := map[string]string{}
+	for i := range 60 {
+		files["g"+strconv.Itoa(100+i)+"/.git/"] = ""
+		files["g"+strconv.Itoa(100+i)+"/AGENTS.md"] = strings.Repeat("G", 1000)
+	}
+	r.add(t, files)
+	got := r.grokFire(t, grokMainCall)
+	if units(got) > grokNestedChars {
+		t.Errorf("the answer is %d code points, past Grok's cut", units(got))
+	}
+	claimed := map[string]bool{}
+	for _, name := range strings.Split(strings.TrimSpace(read(t, filepath.Join(r.state, "handed"))), "\n") {
+		claimed[name] = true
+	}
+	var waiting []string
+	for i := range 60 {
+		name := "g" + strconv.Itoa(100+i)
+		if !claimed[name] {
+			waiting = append(waiting, name)
+		} else if !strings.Contains(got, work+"/"+name+"/AGENTS.md") {
+			t.Errorf("%s is claimed but its file is neither handed nor named", name)
+		}
+	}
+	if len(waiting) == 0 || len(waiting) == 60 {
+		t.Fatalf("%d of 60 checkouts wait, want some named and some waiting", len(waiting))
+	}
+	later := r.grokFire(t, grokMainCall)
+	for _, name := range waiting {
+		if !strings.Contains(later, work+"/"+name+"/AGENTS.md") {
+			t.Errorf("%s, which waited, is not handed by a later firing", name)
+		}
+	}
+}
+
+// A GROK FIRING NEVER READS A FILE PAST ITS ANSWER: a sparse AGENTS.md of
+// 256 MiB, which no answer holds whole, is named by path from its size alone,
+// the firing allocating a fraction of it. Not parallel: it reads the heap's
+// allocations.
+//
+// Mutation: read the file before deciding, and this goes red.
+func TestAGrokFiringNeverReadsAFilePastItsAnswer(t *testing.T) {
+	r := newRepoRun(t, nil)
+	r.grokLaunch(t)
+	r.add(t, map[string]string{"huge/.git/": "", "huge/AGENTS.md": ""})
+	if err := os.Truncate(filepath.Join(r.workdir(t), "huge", "AGENTS.md"), 256<<20); err != nil {
+		t.Fatal(err)
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got := r.grokFire(t, grokMainCall)
+	runtime.ReadMemStats(&after)
+	if !strings.Contains(got, "/huge: read "+r.workdir(t)+"/huge/AGENTS.md for its instructions") {
+		t.Errorf("the huge file is not named by path:\n%.400s", got)
+	}
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 32<<20 {
+		t.Errorf("the firing allocated %d bytes for a file it does not hand", grew)
 	}
 }
 

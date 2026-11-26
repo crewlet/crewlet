@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -48,6 +50,7 @@ func runGrokNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr i
 		fmt.Fprintf(stderr, "notehelper: the nested config: %v\n", err)
 		return exitDone
 	}
+	c.firing = grokFiring()
 	handed, skipped, err := handNested(c, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: handing a checkout's instructions: %v\n", err)
@@ -77,14 +80,15 @@ func grokNestedContext(handed []handedCheckout, skipped []string) string {
 			continue
 		}
 		files := make([]string, len(h.parts))
-		paths := make([]string, len(h.parts))
 		for i, p := range h.parts {
 			files[i] = "## From: " + p.path + "\n" + p.text
-			paths[i] = p.path
+		}
+		named = append(named, grokNamed(h.name, h.root, h.parts))
+		if slices.ContainsFunc(h.parts, func(p instructionPart) bool { return p.unread }) {
+			whole = append(whole, named[len(named)-1]) // a file past the answer was never read
+			continue
 		}
 		whole = append(whole, "for `"+h.name+"` with root "+h.root+"\n\n"+strings.Join(files, "\n\n"))
-		named = append(named, "for `"+h.name+"` with root "+h.root+": read "+strings.Join(paths, ", ")+
-			" for its instructions, which pass what this answer holds")
 	}
 	// EVERY CHECKOUT NAMED FIRST, then made whole in order while the bound
 	// holds: one too big for it never keeps a later one from being named.
@@ -113,6 +117,32 @@ func grokNestedContext(handed []handedCheckout, skipped []string) string {
 		blocks = appendNonEmpty(blocks, room.take(skillsListing(h)))
 	}
 	return strings.Join(appendNonEmpty(blocks, left), "\n\n")
+}
+
+// grokNamed is a claimed checkout's block where its files do not fit whole:
+// the paths to read them at.
+func grokNamed(name, root string, parts []instructionPart) string {
+	paths := make([]string, len(parts))
+	for i, p := range parts {
+		paths[i] = p.path
+	}
+	return "for `" + name + "` with root " + root + ": read " + strings.Join(paths, ", ") +
+		" for its instructions, which pass what this answer holds"
+}
+
+// grokFiring is a Grok firing's bound: no bound on its files, which
+// [grokNestedContext] hands whole while they fit and names past that, a file
+// past the answer's code points never read but named, and a
+// names room in code points from [grokNestedChars] that every claimed
+// checkout's named block, and the lines naming what was left out, are
+// charged to at claim, so a checkout the answer cannot name waits for a
+// later firing rather than be claimed for good unnamed.
+func grokFiring() *firingBound {
+	return &firingBound{left: math.MaxInt, count: units, unitBytes: utf8.UTFMax, readCap: grokNestedChars,
+		nameCount: units,
+		names:     grokNestedChars - units(skippedListing([]string{""})) - len("\n\n"),
+		nameCost:  func(name, root string, parts []instructionPart) int { return units(grokNamed(name, root, parts)) + 2 },
+		namesCap:  true}
 }
 
 // units is s's length as Grok counts it: code points.
