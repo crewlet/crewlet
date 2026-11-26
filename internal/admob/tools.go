@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/tools/toolschema"
 )
 
 // The curated tools, for the acts agents make most, each with typed
@@ -80,15 +81,6 @@ func list(items map[string]any, desc string) map[string]any {
 	return map[string]any{"type": "array", "items": items, "description": desc}
 }
 
-// object is an object schema.
-func object(props map[string]any, required ...string) map[string]any {
-	out := map[string]any{"type": "object", "properties": props, "additionalProperties": false}
-	if len(required) > 0 {
-		out["required"] = required
-	}
-	return out
-}
-
 // paging are a listing's paging arguments.
 func paging(props map[string]any) map[string]any {
 	props["page_size"] = map[string]any{"type": "integer", "minimum": 1, "maximum": maxPageSize,
@@ -113,11 +105,11 @@ func reportArgs(dimensions, metrics []string, streamed bool) map[string]any {
 			"description": "Rows to return, 200 by default."},
 	}
 	if streamed {
-		props["dimension_filters"] = list(object(map[string]any{
+		props["dimension_filters"] = list(toolschema.Object(map[string]any{
 			"dimension":   str("", dimensions...),
 			"matches_any": list(str(""), "Values the dimension matches, any of them."),
 		}, "dimension", "matches_any"), "Rows to keep, by dimension values.")
-		props["sort"] = list(object(map[string]any{
+		props["sort"] = list(toolschema.Object(map[string]any{
 			"dimension": str("Sort by this dimension; or give metric.", dimensions...),
 			"metric":    str("Sort by this metric; or give dimension.", metrics...),
 			"order":     str("", "ASCENDING", "DESCENDING"),
@@ -126,7 +118,7 @@ func reportArgs(dimensions, metrics []string, streamed bool) map[string]any {
 		props["time_zone"] = str("The zone the report's days are cut in: the account's reporting zone by "+
 			"default, or America/Los_Angeles, the one other zone Google accepts.", pacific)
 	}
-	return object(props, "account", "metrics")
+	return toolschema.Object(props, "account", "metrics")
 }
 
 // rangeNames are the named ranges' words.
@@ -144,16 +136,16 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolAccounts, Class: growth.ClassRead, Operations: []string{"admob.accounts.get"},
 			Description: "List this agent's AdMob publisher accounts with each one's currency and reporting time " +
 				"zone, and any the company's sign-in cannot reach.",
-			Parameters: object(map[string]any{})},
+			Parameters: toolschema.Object(map[string]any{})},
 		{Name: toolApps, Class: growth.ClassRead, Operations: []string{"admob.accounts.apps.list"},
 			Description: "List an account's apps: platform, store link or manual name, and approval state.",
-			Parameters:  object(paging(map[string]any{"account": accountArg()}), "account")},
+			Parameters:  toolschema.Object(paging(map[string]any{"account": accountArg()}), "account")},
 		{Name: toolAdUnits, Class: growth.ClassRead, Operations: []string{"admob.accounts.adUnits.list"},
 			Description: "List an account's ad units: app, format, media types and reward settings.",
-			Parameters:  object(paging(map[string]any{"account": accountArg()}), "account")},
+			Parameters:  toolschema.Object(paging(map[string]any{"account": accountArg()}), "account")},
 		{Name: toolMediationGroups, Class: growth.ClassRead, Operations: []string{"admob.accounts.mediationGroups.list"},
 			Description: "List an account's mediation groups with their targeting, lines and A/B experiment state.",
-			Parameters: object(paging(map[string]any{"account": accountArg(),
+			Parameters: toolschema.Object(paging(map[string]any{"account": accountArg(),
 				"filter": str("Google's filter: IN(FIELD, \"v\", ...) or CONTAINS_ANY(FIELD, ...), joined by " +
 					"AND, over AD_SOURCE_IDS, AD_UNIT_IDS, APP_IDS, DISPLAY_NAME, FORMAT, MEDIATION_GROUP_ID, " +
 					"PLATFORM, STATE and TARGETED_REGION_CODES.")}), "account")},
@@ -173,7 +165,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			Description: "Add an app to an account by the name you give it, not linked to a store. Google " +
 				"reviews it; no API removes it. Linking an app to its store listing cannot be undone, so it is " +
 				"asked through admob_admin.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"account":            accountArg(),
 				"platform":           str("", "IOS", "ANDROID"),
 				"display_name":       map[string]any{"type": "string", "maxLength": 80, "description": "The app's name in AdMob."},
@@ -182,7 +174,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolAdUnitCreate, Class: growth.ClassOperate, Operations: []string{"admob.accounts.adUnits.create"},
 			Description: "Create an ad unit for an app. Nothing serves until the app ships its ID; no API " +
 				"removes it, and archiving it in AdMob is permanent.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"account":       accountArg(),
 				"app_id":        str("The app's ID, ca-app-pub-...~..., from admob_apps_list."),
 				"display_name":  map[string]any{"type": "string", "maxLength": 80, "description": "The ad unit's name."},
@@ -195,10 +187,10 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			Operations: []string{"admob.accounts.adUnits.adUnitMappings.create", "admob.accounts.adUnitMappings.batchCreate"},
 			Description: "Map ad units to a third-party ad source's adapter, one or up to 100 at once. A " +
 				"mapping serves only once a mediation line names it; no API removes it.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"account": accountArg(),
 				"mappings": map[string]any{"type": "array", "minItems": 1, "maxItems": maxBatchMappings,
-					"items": object(map[string]any{
+					"items": toolschema.Object(map[string]any{
 						"ad_unit":      str("The ad unit's ID fragment, the part after adUnits/ in its name."),
 						"adapter_id":   str("The adapter's ID (admob_read adSources.adapters.list)."),
 						"display_name": str("The mapping's name."),
@@ -212,7 +204,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			Operations: []string{"admob.accounts.mediationGroups.create", "admob.accounts.mediationGroups.patch"},
 			Description: "Create a mediation group, or change one: its lines' ad sources, eCPM, mode and " +
 				"state, and its ad units. Removing a line cannot be undone, so it is asked through admob_admin.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"account":            accountArg(),
 				"mediation_group_id": str("The group to change; absent creates one."),
 				"update_mask": str("For a change: the fields it sets, comma-separated, as Google names them " +
@@ -227,7 +219,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			Description: "Start a mediation A/B experiment on a group, or stop the running one keeping the " +
 				"control lines (VARIANT_CHOICE_A). Keeping the treatment's (VARIANT_CHOICE_B) removes every control " +
 				"line it lacks, so it is asked through admob_admin.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"account":            accountArg(),
 				"mediation_group_id": str("The mediation group."),
 				"action":             str("", "start", "stop"),
@@ -248,7 +240,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		}
 		out = append(out, growth.Tool{
 			Name: genericTools()[class], Class: class, Operations: ids, Description: genericDescription(class),
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"operation": map[string]any{"type": "string", "enum": ids,
 					"description": "The method's ID, as docs/integrations/admob.md lists it."},
 				"path": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"},
