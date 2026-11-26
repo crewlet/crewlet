@@ -312,3 +312,32 @@ func TestARunStoppedWithARequestInFlightCollectsAsStoppedNeverASuccess(t *testin
 		})
 	}
 }
+
+// A MUSE RUN ITS END CUT OFF MID-REQUEST COLLECTS ITS REQUESTS, the cut-off one
+// included: Muse prints no run.usage for a run its job's end stopped, so the
+// requests are read off the session's traces its script appends, one a
+// request made (measured on 1.4.25: 4 traces for 3 answered requests and the
+// one the end cut off). Past a cap of 3, it fails as past it.
+//
+// Mutation: count Muse's requests off its run.usage, and the run collects
+// with none, within its cap.
+func TestAMuseRunEndedMidRequestCollectsItsRequests(t *testing.T) {
+	t.Parallel()
+	runner := executor.New(executor.Muse{})
+	b := box(t, runner)
+	p := paths(b)
+	b.Put(executor.Muse{}.Output(p).Stdout, streamOf(
+		`{"stream":{"kind":"session","id":"0b5e0000-0000-4000-8000-000000000001"},"payload_type":"run.output.delta","payload":{"text":"working"}}`,
+		each(4, `{"payload_type":"crewlet.muse_trace","line":{"schema_version":1,"id":"e%d","stream":{"kind":"session","id":"s"},"payload_type":"runtime.session","payload":{"event":{"base_instructions":"b","kind":"model_input_trace_recorded"},"kind":"run"}}}`)))
+	b.Put(p.ExitCode(), "143")
+	b.Put(p.JobEnded(), "asked")
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{TurnCap: 3}, queue.NewAnswerBudget(nil))
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	const want = "the turn cap of 3 was exceeded: the run made 4 model requests"
+	if res.Success || !res.TurnCapExceeded || !strings.Contains(res.Error, want) {
+		t.Fatalf("a run ended mid-request with 4 traces under a cap of 3: success %v, exceeded %v, error %q; "+
+			"want %q", res.Success, res.TurnCapExceeded, res.Error, want)
+	}
+}
