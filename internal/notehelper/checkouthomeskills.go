@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,21 +41,35 @@ var listingRules = map[string]listingRule{listedGrok: grokListing, listedKimi: k
 
 // homeHolds is why a copy named name may not be made, "" where it may: by
 // the spec's listing rule, the home's skills or a copy this firing made
-// take its key ([homeNames]); with none, the run's skills hold an entry of
-// that name.
+// take its key ([homeNames]); and, whatever the rule, the run's skills hold
+// an entry of that name ([skillsHold]).
 func homeHolds(spec checkoutSpec, name string) string {
-	rule, ruled := listingRules[spec.ListedAs]
-	if !ruled {
-		if _, err := os.Lstat(filepath.Join(spec.Skills, name)); err == nil {
-			return "the home's skills hold " + name + " already"
+	if rule, ruled := listingRules[spec.ListedAs]; ruled {
+		held := spec.held
+		if held == nil {
+			held = &homeNames{}
 		}
-		return ""
+		if why := held.holds(spec, rule, rule.key(name)); why != "" {
+			return why
+		}
 	}
-	held := spec.held
-	if held == nil {
-		held = &homeNames{}
+	return skillsHold(spec, name)
+}
+
+// skillsHold is why the run's skills directory has no place for a copy named
+// name, "" where it has: an entry of that name there, whatever it is (a
+// directory without SKILL.md, a file, a link leading nowhere), which the copy
+// would replace and the run's end then remove, as it removes every copy
+// listed; or a place it cannot read.
+func skillsHold(spec checkoutSpec, name string) string {
+	_, err := os.Lstat(filepath.Join(spec.Skills, name))
+	switch {
+	case err == nil:
+		return "the home's skills hold " + name + " already"
+	case !errors.Is(err, fs.ErrNotExist):
+		return "the home's skills could not be read for " + name + ": " + err.Error()
 	}
-	return held.holds(spec, rule, rule.key(name))
+	return ""
 }
 
 // homeNames is the keys the home's skills take by a listing rule, read once

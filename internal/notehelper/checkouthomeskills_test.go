@@ -193,3 +193,75 @@ func TestAMuseHomeSkillNamedUnplainlyLeavesEveryCopyOut(t *testing.T) {
 		}
 	}
 }
+
+// A COPY'S PLACE ALREADY TAKEN IS NEVER LISTED AS THE RUN'S: the run's end
+// removes every name its copied list holds, so an entry already at the
+// copy's place, of any kind and under any listing rule, refuses the copy
+// before it is listed, and the entry is as it was.
+//
+// Mutation: drop copyPlanned's place check, and the name is listed.
+func TestACopysTakenPlaceIsNeverListedAsTheRuns(t *testing.T) {
+	t.Parallel()
+	for _, listedAs := range []string{"", listedGrok, listedKimi, listedMuse} {
+		r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.agents/skills/s/SKILL.md": "---\nname: s\n---\n"})
+		root := filepath.Join(r.work, "repo")
+		real, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, _, err := planSkill(filepath.Join(root, ".agents/skills/s"), real, "repo:s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mine := filepath.Join(r.skills, "repo:s", "x.md")
+		if err := os.MkdirAll(filepath.Dir(mine), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(mine, []byte("MINE"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		spec := museSpec(r.skills)
+		spec.ListedAs, spec.held = listedAs, &homeNames{read: true, taken: map[string]string{}}
+		_, err = copyPlanned(plan, spec, filepath.Join(r.state, stagingDir), &skips{stderr: io.Discard})
+		if err == nil || err.Error() != "the home's skills hold repo:s already" {
+			t.Errorf("listedAs %q: the copy over a person's entry returned %v", listedAs, err)
+		}
+		if copied, _ := os.ReadFile(spec.Copied); strings.Contains(string(copied), "repo:s") {
+			t.Errorf("listedAs %q: the person's entry was listed for removal: %q", listedAs, copied)
+		}
+		if raw, _ := os.ReadFile(mine); string(raw) != "MINE" {
+			t.Errorf("listedAs %q: the person's entry reads %q", listedAs, raw)
+		}
+	}
+}
+
+// WHATEVER THE LISTING RULE, A NAME THE RUN'S SKILLS HOLD IS HELD: a plain
+// file or a link leading nowhere is no skill any rule reads, yet a copy there
+// would replace it or be listed and removed, so planning says the name is
+// held, after the rule's own reasons (a copy this firing made keeps its
+// wording).
+//
+// Mutation: drop homeHolds' place check for a ruled harness, and the name is
+// free.
+func TestARunsSkillsEntryHoldsItsNameWhateverTheRule(t *testing.T) {
+	t.Parallel()
+	skills := t.TempDir()
+	if err := os.WriteFile(filepath.Join(skills, "late:file"), []byte("MINE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("nowhere", filepath.Join(skills, "late:link")); err != nil {
+		t.Fatal(err)
+	}
+	for _, listedAs := range []string{"", listedGrok, listedKimi, listedMuse} {
+		spec := checkoutSpec{Skills: skills, ListedAs: listedAs}
+		spec.held = &homeNames{}
+		for _, name := range []string{"late:file", "late:link"} {
+			if got, want := homeHolds(spec, name), "the home's skills hold "+name+" already"; got != want {
+				t.Errorf("listedAs %q: %s is held for %q, want %q", listedAs, name, got, want)
+			}
+		}
+		if got := homeHolds(spec, "late:free"); got != "" {
+			t.Errorf("listedAs %q: a free name is held for %q", listedAs, got)
+		}
+	}
+}
