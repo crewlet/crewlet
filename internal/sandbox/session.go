@@ -1820,7 +1820,8 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// time, which ends a summary's upload early where the read found one
 	// ([Coordinator.summaryBy]).
 	read := ctx
-	ctx, cancel, _ := c.takeContext(ctx, boundOf(policy.kept()).take)
+	budget := boundOf(policy.kept()).take
+	ctx, cancel, _ := c.takeContext(ctx, budget)
 	if at.summary != nil {
 		ctx, cancel = before(ctx, cancel, c.summaryBy(by))
 	}
@@ -1946,7 +1947,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	}()
 	dir, err := c.spoolHere()
 	if err != nil {
-		loss, why := takeRefusal(ctx, err)
+		loss, why := takeRefusal(ctx, err, budget)
 		return nil, refuse(calls, loss, why)
 	}
 	// ONE PACK AT A TIME in a box that shares the node's memory
@@ -1954,7 +1955,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// made once TakeSession returns, before the stream the spool reads.
 	give, err := c.packSlot(ctx, current)
 	if err != nil {
-		loss, why := takeRefusal(ctx, err)
+		loss, why := takeRefusal(ctx, err, budget)
 		return nil, refuse(calls, loss, why)
 	}
 	limit := boundOf(policy.kept())
@@ -1962,7 +1963,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		Scope: current.AgentID, Session: current.Launch.Minted, Spool: room.scrubbing(dir)}))
 	give()
 	if err != nil {
-		loss, why := takeRefusal(ctx, err)
+		loss, why := takeRefusal(ctx, err, budget)
 		return nil, refuse(calls, loss, why)
 	}
 	if taken.Body == nil {
@@ -2043,7 +2044,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		case took:
 			spooled, err := c.spool(ctx, run, stamp, taken, places, room)
 			if err != nil {
-				loss, why := takeRefusal(ctx, err)
+				loss, why := takeRefusal(ctx, err, budget)
 				stamp.Summary = keepRefused()
 				return nil, c.finishCapture(ctx, by, run, stamp, CaptureRefused, loss, why)
 			}
@@ -2223,7 +2224,7 @@ func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run 
 	}
 	spooled, err := c.spool(ctx, run, stamp, taken, places, hold)
 	if err != nil {
-		_, why := takeRefusal(ctx, err)
+		_, why := takeRefusal(ctx, err, boundOf(stamp.KeptBound).take)
 		c.standDown(ctx, by, run, stamp, why)
 		return nil, nil
 	}
@@ -2598,7 +2599,7 @@ func before(ctx context.Context, cancel context.CancelFunc, by time.Time) (conte
 // takeRefusal is why a take was refused, in the words its stamp keeps: the
 // take's budget where that is what ended it, which says so plainly rather than
 // as a deadline error.
-func takeRefusal(ctx context.Context, err error) (executorkeep.Loss, string) {
+func takeRefusal(ctx context.Context, err error, budget time.Duration) (executorkeep.Loss, string) {
 	var unrestorable *UnrestorableError
 	switch {
 	case errors.As(err, &unrestorable):
@@ -2611,7 +2612,7 @@ func takeRefusal(ctx context.Context, err error) (executorkeep.Loss, string) {
 		return executorkeep.LossTooLarge, tooLargeWhy(err)
 	case ctx.Err() != nil:
 		return executorkeep.LossKeepFailed, fmt.Sprintf("the session could not be taken out of its box within "+
-			"the read's budget (at most %s): %v", SessionTakeBudget, err)
+			"the take's budget (%s at its bound): %v", budget, err)
 	}
 	return executorkeep.LossKeepFailed, fmt.Sprintf("the box's session could not be taken: %v", err)
 }

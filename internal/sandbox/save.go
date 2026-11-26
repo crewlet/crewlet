@@ -418,7 +418,7 @@ func (c *Coordinator) saveInHand(ctx, phase context.Context, job saveJob, out sa
 	give()
 	switch {
 	case errors.As(err, new(*UnrestorableError)):
-		loss, why := takeRefusal(phase, err)
+		loss, why := takeRefusal(phase, err, boundOf(policy.kept()).take)
 		out.unplaced, out.loss = "pack", loss
 		return end(saveUnrestorable, why)
 	case errors.Is(err, ErrSaveNoRoom):
@@ -650,7 +650,7 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	switch {
 	case err != nil:
 		out.unplaced = "take"
-		loss, why := takeRefusal(take, err)
+		loss, why := takeRefusal(take, err, boundOf(in.policy.kept()).take)
 		out.loss = loss
 		if errors.As(err, new(*UnrestorableError)) {
 			return end(saveUnrestorable, why)
@@ -688,7 +688,7 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	spooled, err := c.spool(take, row, stamp, taken, &savePlaces{run: row, resumeRead: taken.ResumeRead,
 		needsResumeRead: placesWithResumeRead(in.saver)}, in.room)
 	if err != nil {
-		loss, why := takeRefusal(take, err)
+		loss, why := takeRefusal(take, err, boundOf(in.policy.kept()).take)
 		if errors.Is(err, errSpoolPastHold) {
 			why = fmt.Sprintf("the session sealed is past the %d bytes its spools' room held for it",
 				in.counted)
