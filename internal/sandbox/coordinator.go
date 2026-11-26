@@ -2070,7 +2070,7 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 	// outlasting its delivery would otherwise start a new run each time and never
 	// be given up ([Release.BoxAnswered]).
 	run.BoxAnswered = false
-	if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{collectFailed: now}, nil,
+	if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{collectFailed: now, on: c.node}, nil,
 		BudgetWindow{}); err != nil {
 		//nolint:nilerr // Deliberate, as at every other hand-back: the claim
 		// did not go back, so the run has been ended and announced, and a
@@ -3752,7 +3752,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			if c.resumeGivenUp(ctx, run, now, err) {
 				return AnswerConsumed, nil
 			}
-			failed.resumeFailed = now
+			failed.resumeFailed, failed.on = now, c.node
 		}
 		// AND THE WINDOW AN ANSWER'S RELAUNCH WAS REFUSED BELOW ITS FLOOR IN, onto
 		// the job's record ([Release.RelaunchRefusedIn]): the answer's wait is its
@@ -5730,19 +5730,20 @@ const MaxAnswerRevivals = 3
 // (a claim is only taken on a run having it; the resume's own refusal,
 // [types.ExecutorFailureNoExecuteState], hands the answer back anyway).
 func (c *Coordinator) revivable(run PendingRun) string {
-	return c.revivableAfter(run, "this answer", run.Answer.LostClaims, run.Answer.FirstLostAt)
+	return c.revivableAfter(run, "this answer", run.Answer.LostClaims, run.Answer.lostWait())
 }
 
 // revivableAfter is [Coordinator.revivable] on a claim's own counts: lost claims
 // of what (the claim, said as the reason says it) died before their turn took
-// it, the first at firstLost.
-func (c *Coordinator) revivableAfter(run PendingRun, what string, lost int, firstLost time.Time) string {
+// it, timed as dying (rowclock.go).
+func (c *Coordinator) revivableAfter(run PendingRun, what string, lost int, dying rowWait) string {
 	if lost >= MaxAnswerRevivals {
 		return fmt.Sprintf("%d claims of %s have now died before their turn took it", lost+1, what)
 	}
-	if window := answerWindow(run); window > 0 && !firstLost.IsZero() && c.now().Sub(firstLost) >= window {
+	now := c.now()
+	if window := answerWindow(run); window > 0 && dying.lasted(c.node, now, window) {
 		return fmt.Sprintf("%s has been owed its resume for %s since the first claim of it "+
-			"died, past the run's pause_ttl_seconds", what, c.now().Sub(firstLost).Round(time.Second))
+			"died, past the run's pause_ttl_seconds", what, now.Sub(dying.first).Round(time.Second))
 	}
 	return ""
 }
@@ -5756,7 +5757,7 @@ func (c *Coordinator) reviveAnswer(ctx context.Context, run PendingRun, fence Fe
 	written, won, err := c.pending.ReviveAnswer(ctx, run.TurnID, Revival{
 		Launch: run.LaunchID, Answer: run.Answer.EventIDs, Fence: fence,
 		// A CLAIM WHOSE NODE STOPPED, so counted ([MaxAnswerRevivals]).
-		Lost: true,
+		Lost: true, Node: c.node,
 	})
 	switch {
 	case errors.Is(err, ErrAnswerTaken):

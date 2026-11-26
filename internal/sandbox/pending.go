@@ -160,6 +160,11 @@ type Release struct {
 	// a resume held on a condition included, which is a wait.
 	ResumeFailedAt time.Time
 
+	// FailedOn is the node whose clock read CollectFailedAt and ResumeFailedAt,
+	// which the record names beside the run of failures it times
+	// ([LaunchRecord.CollectFailingOn], [RowWindow]).
+	FailedOn string
+
 	// Hold, where set, holds the resume back until the refusal lifts
 	// ([PendingRun.HeldFor]). Nil hands back a claim to be retried as the
 	// completion comes round and clears any earlier hold. A hold also owes the
@@ -543,6 +548,10 @@ type Revival struct {
 	// abandoned tail. That series is bounded by [MaxAnswerAttempts] and
 	// [answerWindow], ending in a decline rather than an ending.
 	Lost bool
+
+	// Node is the reviving node, whose clock dates a lost claim
+	// ([RecordedAnswer.LostOn]).
+	Node string
 }
 
 // Holding are the statuses in which a run holds its seat, so the seat takes no
@@ -748,8 +757,11 @@ type BridgeCall struct {
 	// Until is the instant past which no collection waits for an in-flight
 	// call: the bridge's stamp of its tool's own bound plus the bridge's margin
 	// (internal/api/mcpbridge's wait.go), so a node not holding the call reads
-	// it. Zero on a finished call ([keptCall]). Additive on the wire.
-	Until time.Time `json:"until,omitzero"`
+	// it; UntilOn is the node whose clock stamped it, and any other waits
+	// [RowClockAllowance] past it ([BridgeCall.until]). Zero on a finished call
+	// ([keptCall]). Additive on the wire.
+	Until   time.Time `json:"until,omitzero"`
+	UntilOn string    `json:"until_on,omitempty"`
 
 	// Extra is every key of the call this build does not know, kept verbatim and
 	// written back by every write of the record (wirekeys.go). Filled by the
@@ -2615,10 +2627,11 @@ type PendingStore interface {
 	TakeWaitOver(ctx context.Context, turnID, launch string, fence Fence) (bool, error)
 
 	// ReviveWaitOver gives that claim, untaken, back to the status it was
-	// claimed out of, fenced to the reviving lease, counted where lost (as
-	// [Revival.Lost]); the row IFF THIS CALL WON. One a turn took answers
-	// [ErrWaitOverTaken] with the row: take and revival are exclusive.
-	ReviveWaitOver(ctx context.Context, turnID, launch string, fence Fence, lost bool) (PendingRun, bool, error)
+	// claimed out of, fenced to the reviving lease, counted where lost, as
+	// [PendingStore.ReviveAnswer] does (revival's Answer unread); the row IFF
+	// THIS CALL WON. One a turn took answers [ErrWaitOverTaken] with the row:
+	// take and revival are exclusive.
+	ReviveWaitOver(ctx context.Context, turnID string, revival Revival) (PendingRun, bool, error)
 
 	// MarkHeldCall records that the resume a claim drives is making the held call its
 	// run's job made ([PendingRun.HeldCall]), and answers the held call as the row
@@ -3073,8 +3086,11 @@ type RecordedAnswer struct {
 	// they bound a series no one node sees: a dying claim is a stopped node, and a
 	// node's own attempt count resets with exactly that ([MaxAnswerAttempts]). See
 	// [MaxAnswerRevivals].
-	LostClaims  int       `json:"lost_claims,omitempty"`
-	FirstLostAt time.Time `json:"first_lost_at,omitzero"`
+	// LostOn times them on one node's clock ([RowWindow]), restarted by each
+	// revival on another node.
+	LostClaims  int        `json:"lost_claims,omitempty"`
+	FirstLostAt time.Time  `json:"first_lost_at,omitzero"`
+	LostOn      *RowWindow `json:"lost_on,omitempty"`
 }
 
 // Taken reports whether a resumed turn took this answer ([RecordedAnswer.TakenAt]).
@@ -3638,7 +3654,8 @@ type LaunchRecord struct {
 	Published bool `json:"published,omitempty"`
 
 	// CollectFailures is how many collections of this job failed to read its box back
-	// SINCE THE LAST ONE THAT DID, and CollectFailingSince when the first failed: the
+	// SINCE THE LAST ONE THAT DID, CollectFailingSince when the first failed and
+	// CollectFailingOn where the run is timed on one node's clock ([RowWindow]): the
 	// run of consecutive failures [Coordinator.OnCompleted] bounds before giving the job
 	// up as unreachable ([Coordinator.collectFailed]). A collection that read the box
 	// ends the run ([Release.Collected]).
@@ -3646,8 +3663,9 @@ type LaunchRecord struct {
 	// ON THE JOB'S RECORD for Published's reason: each failure hands the claim back, the
 	// retry may run on another node or after a restart, and a memory count would grant
 	// every node a fresh allowance. WRITTEN BY THE RELEASE ([Release.CollectFailedAt]).
-	CollectFailures     int       `json:"collect_failures,omitempty"`
-	CollectFailingSince time.Time `json:"collect_failing_since,omitzero"`
+	CollectFailures     int        `json:"collect_failures,omitempty"`
+	CollectFailingSince time.Time  `json:"collect_failing_since,omitzero"`
+	CollectFailingOn    *RowWindow `json:"collect_failing_on,omitempty"`
 
 	// ResumeFailures is how many resumes of this job's turn failed, and
 	// ResumeFailingSince when the first failed: the run [Coordinator.resumeAndSettle]
@@ -3656,9 +3674,11 @@ type LaunchRecord struct {
 	//
 	// ON THE JOB'S RECORD for CollectFailures' reason: a memory count granted every
 	// attempt a fresh allowance, and an always-failing resume was retried on every poll
-	// as long as the engine ran. WRITTEN BY THE RELEASE ([Release.ResumeFailedAt]).
-	ResumeFailures     int       `json:"resume_failures,omitempty"`
-	ResumeFailingSince time.Time `json:"resume_failing_since,omitzero"`
+	// as long as the engine ran. WRITTEN BY THE RELEASE ([Release.ResumeFailedAt]),
+	// with ResumeFailingOn, which times it as CollectFailingOn does.
+	ResumeFailures     int        `json:"resume_failures,omitempty"`
+	ResumeFailingSince time.Time  `json:"resume_failing_since,omitzero"`
+	ResumeFailingOn    *RowWindow `json:"resume_failing_on,omitempty"`
 
 	// RelaunchRefusedIn is the budget window the last relaunch a resume of this job's turn
 	// tried was refused below its floor in ([Refusal.Window]). The next relaunch reads it to

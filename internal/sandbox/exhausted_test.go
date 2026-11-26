@@ -371,7 +371,7 @@ func TestAReaderIsToldASessionThatRanOutIsNotContinued(t *testing.T) {
 	if got.Continues || !got.Decided || !strings.Contains(got.Why, ranOutWords) {
 		t.Fatalf("a reader is told %+v, want it decided, not continued, saying the session ran out", got)
 	}
-	if box, why := inParkedBox(run, row, target, now); box != boxNot || !strings.Contains(why, ranOutWords) {
+	if box, why := inParkedBox(run, row, target); box != boxNot || !strings.Contains(why, ranOutWords) {
 		t.Fatalf("the parked box is answered (%v, %q), want it not continued, saying why", box, why)
 	}
 }

@@ -1065,23 +1065,29 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		if release.Published {
 			run.Launch.Published = true
 		}
+		// EACH RUN OF FAILURES TIMED ON THE NODE RECORDING IT, restarted where
+		// another node timed it (rowclock.go).
 		if at := release.CollectFailedAt; !at.IsZero() {
 			run.Launch.CollectFailures++
 			if run.Launch.CollectFailingSince.IsZero() {
 				run.Launch.CollectFailingSince = at.UTC()
 			}
+			run.Launch.CollectFailingOn = run.Launch.collectWait().recorded(release.FailedOn, at,
+				run.Launch.CollectFailingSince)
 		}
 		if at := release.ResumeFailedAt; !at.IsZero() {
 			run.Launch.ResumeFailures++
 			if run.Launch.ResumeFailingSince.IsZero() {
 				run.Launch.ResumeFailingSince = at.UTC()
 			}
+			run.Launch.ResumeFailingOn = run.Launch.resumeWait().recorded(release.FailedOn, at,
+				run.Launch.ResumeFailingSince)
 		}
 		// THE RUN OF FAILURES ENDS AT A COLLECTION THAT READ THE BOX; the job is
 		// its turn's from then on ([LaunchRecord.Collected]).
 		if release.Collected {
 			run.Launch.CollectFailures = 0
-			run.Launch.CollectFailingSince = time.Time{}
+			run.Launch.CollectFailingSince, run.Launch.CollectFailingOn = time.Time{}, nil
 			run.Launch.Collected = true
 			if run.Launch.CollectedAt.IsZero() && !release.CollectedAt.IsZero() {
 				run.Launch.CollectedAt = release.CollectedAt.UTC()
@@ -1091,7 +1097,7 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		// uncounted: the job is not collected ([Release.BoxAnswered]).
 		if release.BoxAnswered {
 			run.Launch.CollectFailures = 0
-			run.Launch.CollectFailingSince = time.Time{}
+			run.Launch.CollectFailingSince, run.Launch.CollectFailingOn = time.Time{}, nil
 		}
 		// HOW ITS HARNESS ENDED, in the write that returns the row to running.
 		run.Launch.HarnessEnd = run.Launch.HarnessEnd.after(release.HarnessEnd)
@@ -1615,10 +1621,13 @@ func (s *CoordStore) ReviveAnswer(ctx context.Context, turnID string, revival Re
 		}
 		answer := *run.Answer
 		if revival.Lost {
+			now := s.clock()
 			answer.LostClaims++
 			if answer.FirstLostAt.IsZero() {
-				answer.FirstLostAt = s.clock()
+				answer.FirstLostAt = now
 			}
+			answer.LostOn = rowWait{first: answer.FirstLostAt, window: answer.LostOn}.recorded(revival.Node, now,
+				answer.FirstLostAt)
 		}
 		run.Answer = &answer
 		run.Status = StatusAnswered

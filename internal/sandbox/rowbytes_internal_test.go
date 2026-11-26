@@ -37,6 +37,12 @@ import (
 // digits of fraction and a zone that is not UTC.
 var worstAt = time.Date(2026, 11, 3, 23, 59, 59, 999_999_999, time.FixedZone("x", 5*3600+1800))
 
+// worstWindow is a [RowWindow] at its widest: a node id at its bound and its
+// two instants at [worstAt].
+func worstWindow() *RowWindow {
+	return &RowWindow{Node: strings.Repeat("n", coord.MaxNodeIDBytes), Since: worstAt, Of: worstAt}
+}
+
 // worstCall is one bridged call with every field at its widest, the payloads
 // far past what the row keeps and in the bytes that escape the most: a name
 // past its bound; arguments holding a body of markup beside the identifiers
@@ -241,6 +247,7 @@ func everyField(t *testing.T, name string) BridgeCall {
 	call.Held, call.Approved, call.ArgsBytes, call.OutputBytes = true, true, math.MaxInt, math.MaxInt
 	call.ArgsUnparsed = true
 	call.Runner, call.Until = strings.Repeat("<", 4<<10), worstAt
+	call.UntilOn = strings.Repeat("n", 4<<10)
 	return call
 }
 
@@ -782,8 +789,8 @@ func worstRow(t *testing.T) PendingRun {
 	held := &HeldCall{ID: uuid.NewString(), LaunchID: uuid.NewString(), Server: plain(32), Tool: plain(128),
 		Raw: plain(128), Digest: plain(64), Arguments: plain(MaxHeldArgsBytes - 2), Fixed: true,
 		Approvers: plain(32), Binding: plain(maxHeldBindingBytes), Acting: acting, Act: plain(32),
-		Subject: plain(maxHeldBindingBytes), Delegation: delegation, HeldAt: worstAt, LapsesAt: worstAt,
-		CallingAt: worstAt, MadeAt: worstAt}
+		Subject: plain(maxHeldBindingBytes), Delegation: delegation, HeldAt: worstAt,
+		HeldOn: plain(coord.MaxNodeIDBytes), LapsesAt: worstAt, CallingAt: worstAt, MadeAt: worstAt}
 	held.Result = heldResultAtItsWorst(t, *held)
 	// THE CALL A PERSON APPROVED, as the store records it on the held call
 	// ([approvedCall]) and a reset carries it on to the log it is owed to
@@ -806,7 +813,7 @@ func worstRow(t *testing.T) PendingRun {
 	}
 	answer := paddedTo(t, MaxAnswerBytes, RecordedAnswer{Sealed: []byte(plain(64 << 10)), Via: types.AnswerViaChat,
 		EventIDs: ids(20), PostedAt: worstAt, RecordedAt: worstAt, From: StatusAwaiting, TakenAt: worstAt,
-		LostClaims: math.MaxInt, FirstLostAt: worstAt}, func(a *RecordedAnswer, pad string) {
+		LostClaims: math.MaxInt, FirstLostAt: worstAt, LostOn: worstWindow()}, func(a *RecordedAnswer, pad string) {
 		a.Events = []json.RawMessage{json.RawMessage(`"` + pad + `"`)}
 	})
 	// A REFUSAL BESIDE IT, AT ITS BOUND, which the row never holds beside an
@@ -848,8 +855,9 @@ func worstRow(t *testing.T) PendingRun {
 		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), BridgeConnected: true,
 		Minted:      plain(128),
 		ResumeCarry: ResumeCarry(plain(32)), Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt,
-		CollectFailingSince: worstAt,
-		ResumeFailures:      math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,
+		CollectFailingSince: worstAt, CollectFailingOn: worstWindow(),
+		ResumeFailures: math.MaxInt, ResumeFailingSince: worstAt, ResumeFailingOn: worstWindow(),
+		Collected: true, CollectedAt: worstAt,
 		// THE WIDEST WINDOW A RELEASE COUNTS ONTO THE RECORD, a day's: a
 		// release writes none that is no window (BudgetWindow.Valid), and of
 		// the three periods a day spells the widest pair, written as itself.
@@ -1333,6 +1341,7 @@ var zeroInTheWorstRow = func() map[string]string {
 		"Abandoned": "no harness gave it up: the resume made it on the engine host (approvedCall)",
 		"Runner":    "nobody waits for a finished call, so it keeps no runner (keptCall)",
 		"Until":     "nor a bound to wait for it until (keptCall)",
+		"UntilOn":   "nor the node that bounded it (keptCall)",
 	} {
 		zero["HeldCall.Call."+field], zero["OwedCall.Call."+field] = why, why
 	}
@@ -1505,6 +1514,7 @@ var zeroInTheWorstLog = func() map[string]string {
 			"parse carries none (BridgeCall.ArgsUnparsed), so it weighs less (worstCall)",
 		"Calls[0].Runner":         finished,
 		"Calls[0].Until":          finished,
+		"Calls[0].UntilOn":        finished,
 		"ElidedCalls[0].Name":     folded,
 		"ElidedCalls[0].Digest":   folded,
 		"AbsorbedCalls[0].Name":   absorbed,
@@ -1700,6 +1710,7 @@ func TestAnAnswerIsMeasuredAsTheRowWillHoldIt(t *testing.T) {
 		a := handed
 		a.From = slices.MaxFunc(Awaiting, func(x, y string) int { return cmp.Compare(len(x), len(y)) })
 		a.TakenAt, a.FirstLostAt, a.LostClaims = widestInstant, widestInstant, math.MaxInt
+		a.LostOn = new(widestWindow)
 		return a
 	}
 	if err := answerFits("t1", paddedTo(t, MaxAnswerBytes, written(), pad)); err != nil {
@@ -1710,6 +1721,7 @@ func TestAnAnswerIsMeasuredAsTheRowWillHoldIt(t *testing.T) {
 		"when it was taken":                 func(a *RecordedAnswer) { a.TakenAt = time.Time{} },
 		"when it was first lost":            func(a *RecordedAnswer) { a.FirstLostAt = time.Time{} },
 		"how many times it was lost":        func(a *RecordedAnswer) { a.LostClaims = 0 },
+		"the clock its losses are timed on": func(a *RecordedAnswer) { a.LostOn = nil },
 	} {
 		short := written()
 		unset(&short)

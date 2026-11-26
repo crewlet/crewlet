@@ -282,6 +282,16 @@
 // ([collectVerdict]). [reannounceCeilingPolls] stays inside the broker's
 // delivery budget.
 //
+// # Instants another node stamped
+//
+// A wait timed by an instant on the row (a run of failed collections or
+// resumes, an answer's lost claims, an in-flight call's bound, a held call's
+// deadline) is judged by whichever node handles the run next. The instant names
+// the node that stamped it: that node judges it on its own clock against the
+// bound, any other against the bound plus [RowClockAllowance], never before the
+// bound in real time. A node recording the wait again restarts its window on its
+// own clock ([RowWindow]). A kept box's age is read on its host's clock.
+//
 // # The clock on a box host's store
 //
 // [hostUnsettled]: a host whose own store alone is silent is given up after the

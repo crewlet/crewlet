@@ -121,7 +121,7 @@ func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.
 		if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Fence: next, Lost: true}); err == nil || ok {
 			t.Fatalf("a revival naming no answer = %v, %v, want an error", ok, err)
 		}
-		revival := sandbox.Revival{Launch: launch, Answer: []string{"r1"}, Fence: next, Lost: true}
+		revival := sandbox.Revival{Launch: launch, Answer: []string{"r1"}, Fence: next, Lost: true, Node: "node-a"}
 		lost := time.Now().UTC()
 		revived, ok, err := s.ReviveAnswer(ctx, "t1", revival)
 		if err != nil || !ok {
@@ -135,6 +135,9 @@ func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.
 		if a := got.Answer; a == nil || !bytes.Equal(a.Sealed, sealOf("use main")) || a.Taken() || a.LostClaims != 1 ||
 			!a.FirstLostAt.Equal(lost) {
 			t.Fatalf("answer %+v, want the same answer, untaken, its lost claim counted at %s", a, lost)
+		}
+		if on := got.Answer.LostOn; on == nil || on.Node != "node-a" || !on.Since.Equal(lost) || !on.Of.Equal(lost) {
+			t.Fatalf("the losses are timed on %+v, want on the reviving node from %s", on, lost)
 		}
 		if revived.Status != got.Status || revived.OwnerEpoch != got.OwnerEpoch ||
 			revived.Answer == nil || revived.Answer.LostClaims != 1 {
@@ -150,17 +153,23 @@ func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.
 
 		// THE NEXT CLAIM DYING TOO is counted on the same answer, from the same
 		// first instant: what the count bounds is a series no one node sees.
+		// Revived on another node, its window restarts on that node's clock.
 		time.Sleep(time.Second)
 		later := sandbox.Fence{Owner: "later", Epoch: 3}
 		if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), next); err != nil || !ok {
 			t.Fatalf("the revived run's claim = %v, %v", ok, err)
 		}
 		if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Answer: []string{"r1"},
-			Fence: later, Lost: true}); err != nil || !ok {
+			Fence: later, Lost: true, Node: "node-b"}); err != nil || !ok {
 			t.Fatalf("the second revival = %v, %v", ok, err)
 		}
 		if a := mustGet(t, s, "t1").Answer; a.LostClaims != 2 || !a.FirstLostAt.Equal(lost) {
 			t.Fatalf("answer lost %d claims since %v, want 2 since %v", a.LostClaims, a.FirstLostAt, lost)
+		}
+		moved := lost.Add(time.Second)
+		if on := mustGet(t, s, "t1").Answer.LostOn; on == nil || on.Node != "node-b" || !on.Since.Equal(moved) ||
+			!on.Of.Equal(lost) {
+			t.Fatalf("after a revival on another node the losses are timed on %+v, want on it from %s", on, moved)
 		}
 
 		// NOT UNDER AN OUTRANKED LEASE: a holder that lost the seat revives
@@ -433,7 +442,7 @@ func testTheEnginesCarryingOnIsAClaimOfItsOwnNeverAnAnswer(t *testing.T, s sandb
 		t.Fatalf("a second claim = %v, %v, want refused", ok, err)
 	}
 	next := sandbox.Fence{Owner: "next", Epoch: 2}
-	revived, ok, err := s.ReviveWaitOver(ctx, "t1", launch, next, true)
+	revived, ok, err := s.ReviveWaitOver(ctx, "t1", sandbox.Revival{Launch: launch, Fence: next, Lost: true})
 	if err != nil || !ok || revived.Status != sandbox.StatusAwaiting || revived.OwnerEpoch != 2 ||
 		revived.WaitOver.LostClaims != 1 || revived.WaitOver.Taken() {
 		t.Fatalf("ReviveWaitOver = %+v, %v, %v; want it waiting again under epoch 2, the lost claim counted",
@@ -451,7 +460,8 @@ func testTheEnginesCarryingOnIsAClaimOfItsOwnNeverAnAnswer(t *testing.T, s sandb
 	if ok, err = s.TakeWaitOver(ctx, "t1", launch, next); err != nil || !ok {
 		t.Fatalf("TakeWaitOver = %v, %v", ok, err)
 	}
-	if _, ok, err = s.ReviveWaitOver(ctx, "t1", launch, sandbox.Fence{Owner: "later", Epoch: 3}, true); ok ||
+	if _, ok, err = s.ReviveWaitOver(ctx, "t1", sandbox.Revival{Launch: launch,
+		Fence: sandbox.Fence{Owner: "later", Epoch: 3}, Lost: true}); ok ||
 		!errors.Is(err, sandbox.ErrWaitOverTaken) {
 		t.Fatalf("a revival of a taken claim = %v, %v, want ErrWaitOverTaken", ok, err)
 	}

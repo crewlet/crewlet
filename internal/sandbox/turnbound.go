@@ -37,13 +37,15 @@ const MinResumeFailures = 3
 
 // failure is what a hand-back counts onto the job's record: the instant a
 // collection could not read its box ([Release.CollectFailedAt]) or a resume
-// failed ([Release.ResumeFailedAt]); and, in this node's memory rather than on
+// failed ([Release.ResumeFailedAt]), on the clock of node on
+// ([Release.FailedOn]); and, in this node's memory rather than on
 // the record, the kind of a condition only an operator clears that the resume
 // failed on, which counts the run in [Coordinator.ResumesBlocked] once the
 // hand-back lands ([blockedResume]). The zero value counts nothing.
 type failure struct {
 	collectFailed time.Time
 	resumeFailed  time.Time
+	on            string
 	blocked       string
 }
 
@@ -150,17 +152,18 @@ func deadlineDetail(deadline time.Time, delivered []string, elided int) string {
 // resumeGivenUp settles a claimed run whose turn's resume has now failed
 // [MinResumeFailures] times across [ResumeGiveUp], counting this failure, and
 // reports whether it did; the count is on the job's record
-// ([LaunchRecord.ResumeFailures]) across nodes and restarts. Only the run's own
-// failures count ([Coordinator.runsOwnFailure]): not the node's or its
-// infrastructure's, and not [ErrResumeElsewhere] while a live node may resume
-// it. See the package doc, "What bounds a collected job's turn".
+// ([LaunchRecord.ResumeFailures]) across nodes and restarts, timed on the row
+// (rowclock.go). Only the run's own failures count ([Coordinator.runsOwnFailure]):
+// not the node's or its infrastructure's, and not [ErrResumeElsewhere] while a
+// live node may resume it. See the package doc, "What bounds a collected job's
+// turn".
 func (c *Coordinator) resumeGivenUp(ctx context.Context, run PendingRun, now time.Time, cause error) bool {
 	attempts := run.Launch.ResumeFailures + 1
 	since := run.Launch.ResumeFailingSince
 	if since.IsZero() {
 		since = now
 	}
-	if attempts < MinResumeFailures || now.Sub(since) < ResumeGiveUp {
+	if !c.resumeGiveUpDue(run, now) {
 		return false
 	}
 	log.ErrorContext(ctx, "sandbox_resume_given_up",
@@ -176,6 +179,14 @@ func (c *Coordinator) resumeGivenUp(ctx context.Context, run PendingRun, now tim
 	}
 	c.settleNoted(ctx, run, note)
 	return true
+}
+
+// resumeGiveUpDue reports whether run's resume, failing once more at now, has
+// failed [MinResumeFailures] times across [ResumeGiveUp] by this node's clock
+// (rowclock.go).
+func (c *Coordinator) resumeGiveUpDue(run PendingRun, now time.Time) bool {
+	return run.Launch.ResumeFailures+1 >= MinResumeFailures &&
+		run.Launch.resumeWait().lasted(c.node, now, ResumeGiveUp)
 }
 
 // runsOwnFailure reports whether err, the failure of run's resume, is the

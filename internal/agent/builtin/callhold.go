@@ -42,6 +42,9 @@ type CallHold struct {
 	acting ActedDecisions
 	rules  DelegatedRules
 	now    func() time.Time
+	// node is this node, whose clock dates every call held here
+	// ([sandbox.HeldCall.HeldOn]); "" in a test's holder.
+	node string
 }
 
 // HeldDesk is where a held call is recorded and where a seat's other runs are
@@ -82,6 +85,14 @@ func NewCallHold(desk HeldDesk, seal *sandbox.CallSeal, acting ActedDecisions, r
 		return nil
 	}
 	return &CallHold{desk: desk, seal: seal, acting: acting, rules: rules, now: time.Now}
+}
+
+// OnNode is h holding calls on node, whose clock dates them; nil stays nil.
+func (h *CallHold) OnNode(node string) *CallHold {
+	if h != nil {
+		h.node = node
+	}
+	return h
 }
 
 // delegation is how a held call of act is put to delegates before any
@@ -172,7 +183,7 @@ func (h *CallHold) Hold(ctx context.Context, turn *turnctx.Turn, call tools.Held
 	held := sandbox.HeldCall{
 		ID: uuid.Must(uuid.NewV7()).String(), LaunchID: launch,
 		Server: tool.Server(), Tool: call.Name, Raw: tool.RawName(), Digest: tool.Digest(),
-		HeldAt: h.now().UTC(), Acting: h.actedOn(ctx, turn), Act: string(delegated.KindOther),
+		HeldAt: h.now().UTC(), HeldOn: h.node, Acting: h.actedOn(ctx, turn), Act: string(delegated.KindOther),
 	}
 	if res, ok := h.sealArgs(ctx, runID, &held, call); !ok {
 		return res, false
@@ -232,7 +243,7 @@ func (h *CallHold) holdFixed(ctx context.Context, turn *turnctx.Turn, runID, lau
 	held := sandbox.HeldCall{
 		ID: uuid.Must(uuid.NewV7()).String(), LaunchID: launch,
 		Server: config.ToolServerName, Tool: call.Name, Raw: call.Name, Digest: tool.Digest(),
-		HeldAt: h.now().UTC(), Fixed: true, Approvers: tool.Approvers(), Binding: prep.Binding,
+		HeldAt: h.now().UTC(), HeldOn: h.node, Fixed: true, Approvers: tool.Approvers(), Binding: prep.Binding,
 		Acting: acting, Act: string(tool.Act()), Delegation: h.delegation(tool.Act(), call.Args),
 		Subject: prep.Subject,
 	}

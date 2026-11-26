@@ -188,6 +188,25 @@ hours of each other:
   grace has passed in real time, so a node whose clock runs further ahead of
   the decider's than that gives a host up early, and writes off the stopped
   run's spend while the host may still be restarting.
+- A run's give-ups and waits timed by an instant on its record are judged on
+  the clock of the node that stamped it, which the record names: a collection
+  that keeps failing (a minute), a resume that keeps failing (half an hour), a
+  revived answer's or carried-on wait's lost claims (the run's
+  `pause_ttl_seconds`), a collection's wait for a
+  [call still in flight](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box) (the
+  call's bound) and a [delegated request's](delegated-decisions.md)
+  deadline. Any other node, or a record an older engine wrote, gives up once
+  the bound and two hours have passed by its own clock, or sooner on its own
+  clock alone: a node recording another failure of the run restarts its window
+  there, and the delegated-decisions duty counts a deadline from the pass that
+  first saw the request. A node whose clock runs further ahead of the
+  stamper's than the two hours can give up early.
+- A token the poll renewed in a box stays in the run's set for its scrub until
+  two hours past its issuer's expiry by the clock of the node recording the
+  next renewal.
+- A held call answered by an administrator lapses a day after it was held, by
+  the clock of the node deciding the answer: a policy's edge, moved by up to
+  the two hours.
 - A [joining node](retention.md#the-join-runbook) waits on every node whose
   positions-register row names an artefact and was taken by the coordination
   store within the last forty seconds and two hours, by the joining node's
@@ -233,7 +252,7 @@ while no node raises it, every data node and that member keep within an hour of
 the fleet's clock, and any two of them — every member of an embedded broker
 among them — within two hours of each other, inside every margin above. A rule
 judged on the clock of a node that runs seats, a turn's hold, a capture's or a
-standby's age, a box read's admission or a stop's give-up above, rests on a
+standby's age, a box read's admission, a stop's or a run's give-up above, rests on a
 clock the alarm measures only where that node holds data too: a node without
 the `data` role writes no row to the register, so nothing measures its clock,
 and NTP on it is all that keeps it inside the bound. With two data nodes

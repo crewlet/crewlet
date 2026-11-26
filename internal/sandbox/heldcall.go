@@ -281,8 +281,10 @@ type HeldCall struct {
 	// nobody's Inbox.
 	Delegation *HeldDelegation `json:"delegation,omitempty"`
 
-	// HeldAt is when the call was held.
+	// HeldAt is when the call was held, and HeldOn the node whose clock read it,
+	// which judges its delegates' deadline on that clock ([HeldCall.WaitedFor]).
 	HeldAt time.Time `json:"held_at"`
+	HeldOn string    `json:"held_on,omitempty"`
 
 	// LapsesAt is when a call answered by [HeldApproversAdmin] lapses
 	// unanswered, [HeldLapse] after HeldAt: the engine then answers it Deny,
@@ -319,6 +321,22 @@ func (h HeldCall) Calling() bool { return !h.CallingAt.IsZero() }
 // Lapsed reports whether the call lapses and now is past it ([HeldCall.LapsesAt]):
 // it then takes Deny alone, never an answer that makes it.
 func (h HeldCall) Lapsed(now time.Time) bool { return !h.LapsesAt.IsZero() && !now.Before(h.LapsesAt) }
+
+// WaitedFor reports whether the call has waited d by node's clock at now: from
+// HeldAt where node's clock read it ([HeldCall.HeldOn]); from seen, when node
+// first saw it waiting, on its own clock; or from HeldAt and
+// [RowClockAllowance], whoever read it (rowclock.go). A zero seen is never seen.
+func (h HeldCall) WaitedFor(node string, now, seen time.Time, d time.Duration) bool {
+	switch {
+	case h.HeldAt.IsZero():
+		return false
+	case h.HeldOn == node && now.Sub(h.HeldAt) >= d:
+		return true
+	case !seen.IsZero() && now.Sub(seen) >= d:
+		return true
+	}
+	return now.Sub(h.HeldAt) >= d+RowClockAllowance
+}
 
 // Delegated reports whether the call waits on its delegates alone: put to
 // agent delegates and not yet escalated to people.

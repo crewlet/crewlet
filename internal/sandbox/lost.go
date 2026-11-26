@@ -303,11 +303,12 @@ func (v collectVerdict) lostWithHost() bool { return v.givenUp && v.unsettled }
 // collectGivenUp is the verdict on a collection that failed with cause, at now
 // ([collectVerdict]): past asking again where its box is gone, or after
 // [MinConnectFailures] attempts spanning [ConnectGiveUp] since the last read of
-// the box. Never for a read that did not start ([errReadUnstarted]) or a step
-// the store did not answer ([ErrStoreSilent]), which say nothing of the box;
-// but a host whose store alone is silent for the host grace is given up as a
-// silent host is, its job lost with it ([collectVerdict.lostWithHost]). See
-// [Coordinator.collectFailed] and the package doc, "Lost jobs".
+// the box, timed on the row (rowclock.go). Never for a read that did not start
+// ([errReadUnstarted]) or a step the store did not answer ([ErrStoreSilent]),
+// which say nothing of the box; but a host whose store alone is silent for the
+// host grace is given up as a silent host is, its job lost with it
+// ([collectVerdict.lostWithHost]). See [Coordinator.collectFailed] and the
+// package doc, "Lost jobs".
 func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time) collectVerdict {
 	verdict := collectVerdict{at: now}
 	switch {
@@ -322,11 +323,8 @@ func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time)
 	case errors.Is(cause, errReadUnstarted):
 		return verdict
 	}
-	since := run.Launch.CollectFailingSince
-	if since.IsZero() {
-		since = now
-	}
-	verdict.givenUp = run.Launch.CollectFailures+1 >= MinConnectFailures && now.Sub(since) >= ConnectGiveUp
+	verdict.givenUp = run.Launch.CollectFailures+1 >= MinConnectFailures &&
+		run.Launch.collectWait().lasted(c.node, now, ConnectGiveUp)
 	return verdict
 }
 

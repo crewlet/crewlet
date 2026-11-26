@@ -61,10 +61,12 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(ctx)) })
 	// THE HOLDER'S PICKS, by turn: a member that restores what Claude Code
-	// wrote, in a company that keeps none; every member sitting out; and no
-	// member at all, saying why.
+	// wrote, in a company that keeps none, said at the holder's clock, which a
+	// box it launched is dated on; every member sitting out; and no member at
+	// all, saying why.
+	holderAt := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
 	picks := map[string]sandbox.RelaunchTarget{
-		"t-held": {Harness: "claude-code", Placement: sandbox.Container, Node: "node-a",
+		"t-held": {Harness: "claude-code", Placement: sandbox.Container, Node: "node-a", At: holderAt,
 			Entry: "entry-held", LaunchRouted: true, Restorer: onlyClaude{}, NoKept: sandbox.NoKeptSession},
 		"t-sitting-out": {Node: "node-a", Undecided: true,
 			Why: "every member of the seat's executor chain is sitting out its plan"},
@@ -101,7 +103,7 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 	}
 	if held := got[0]; held.Undecided || held.Harness != "claude-code" || held.Placement != sandbox.Container ||
 		held.Node != "node-a" || held.NoKept != sandbox.NoKeptSession || held.Why != "" ||
-		held.Entry != "entry-held" || !held.LaunchRouted {
+		held.Entry != "entry-held" || !held.LaunchRouted || !held.At.Equal(holderAt) {
 		t.Fatalf("a reader on another node was answered %+v, want the holder's pick", held)
 	}
 	if r := got[0].Restores(claude); !r.Continues || r.Why != "" {

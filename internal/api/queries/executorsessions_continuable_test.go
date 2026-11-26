@@ -137,11 +137,11 @@ func (r restoring) Restores(archive sandbox.SessionArchive) sandbox.SessionConti
 const holder = "node-a"
 
 // claudeTarget is a relaunch of ana's turns launched on a Claude Code member in
-// the direct cell, as the node holding the seat picks it, whose runner
-// restores what Claude Code wrote.
+// the direct cell, as the node holding the seat picks it at [holderAt], whose
+// runner restores what Claude Code wrote.
 func claudeTarget() sandbox.RelaunchTarget {
 	return sandbox.RelaunchTarget{Harness: executor.ClaudeCodeName, LaunchRouted: true, Placement: sandbox.Direct, Node: holder,
-		Restorer: restoring{harness: executor.ClaudeCodeName}}
+		At: holderAt, Restorer: restoring{harness: executor.ClaudeCodeName}}
 }
 
 // sessionAt is when ana's live turn kept its capture, and the clock the
@@ -149,6 +149,10 @@ func claudeTarget() sandbox.RelaunchTarget {
 // relaunch after [sandbox.KeptBoxMaxAge], so read on the wall clock these
 // fixtures stopped being continuable a week after they were written.
 var sessionAt = time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+
+// holderAt is the holder's clock as it answers, which a box's age is read on:
+// pinned with the reader's.
+var holderAt = sessionAt.Add(time.Hour)
 
 // liveSession is ana's live turn whose job, its second, kept its session's
 // first capture, as the executor log's row names it and the run's record keeps
@@ -672,7 +676,7 @@ func TestEachRowIsDecidedByItsOwnTurnsTarget(t *testing.T) {
 	// container cell; the open segment relaunches on the one it was admitted
 	// under, Claude Code in the direct cell.
 	targets := targetOf(sandbox.RelaunchTarget{Harness: executor.OpenCodeName, LaunchRouted: true, Placement: sandbox.Container,
-		Node: holder, Restorer: restoring{harness: executor.OpenCodeName}})
+		Node: holder, At: holderAt, Restorer: restoring{harness: executor.OpenCodeName}})
 	targets.byTurn = map[string]sandbox.RelaunchTarget{open.Turn: claudeTarget()}
 	s.RelaunchTargets = targets
 	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)

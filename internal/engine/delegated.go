@@ -550,6 +550,34 @@ type delegatedSweep struct {
 	now    func() time.Time
 	stop   context.CancelFunc
 	done   chan struct{}
+	// seen is this node's own clock on the calls it sweeps, touched by
+	// the sweep's one goroutine alone.
+	seen *heldSightings
+}
+
+// heldSightings is the sweep's own clock on the calls it sweeps: node, the
+// node holding the duty, and when it first saw each call waiting on its
+// delegates, by ID, on its clock, which times a call another node held
+// ([sandbox.HeldCall.WaitedFor]). Forgotten at a restart or a move of the
+// duty, which times it from the call's own instant and the clocks' allowance.
+type heldSightings struct {
+	node  string
+	first map[string]time.Time
+}
+
+// sighted is when s first saw held waiting, now for a call new to it, kept for
+// the pass after in next. A nil s is a node that never saw it.
+func (s *heldSightings) sighted(held sandbox.HeldCall, now time.Time, next map[string]time.Time) (string,
+	time.Time) {
+	if s == nil {
+		return "", time.Time{}
+	}
+	at, ok := s.first[held.ID]
+	if !ok {
+		at = now
+	}
+	next[held.ID] = at
+	return s.node, at
 }
 
 // startDelegatedSweep arms the sweep on a node that runs workers.
@@ -558,7 +586,7 @@ func (e *Engine) startDelegatedSweep(ctx context.Context) {
 		return
 	}
 	s := &delegatedSweep{engine: e, claim: e.workerDuty(delegatedSweepName, delegatedSweepTTL),
-		now: time.Now, done: make(chan struct{})}
+		now: time.Now, done: make(chan struct{}), seen: &heldSightings{node: e.id}}
 	// DETACHED from the caller's context, as every long-running loop here is.
 	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
 	s.stop = stop
@@ -612,7 +640,7 @@ func (s *delegatedSweep) pass(ctx context.Context) {
 	rules := delegatedRules{engine: s.engine}
 	store := sandbox.NewCoordStore(s.engine.backends.Fleet)
 	sweepDelegated(ctx, store, rules, rules.Limits().Deadline,
-		sshServers{engine: s.engine}, delegatedDesk{engine: s.engine}.RawArguments, s.now())
+		sshServers{engine: s.engine}, delegatedDesk{engine: s.engine}.RawArguments, s.seen, s.now())
 	sweepLapsed(ctx, store, delegatedDesk{engine: s.engine}.answerAsEngine, s.now())
 }
 
@@ -648,27 +676,34 @@ type delegatedRecorder interface {
 }
 
 // sweepDelegated puts to people every active held call that waited on its
-// delegates past deadline, or whose delegation the live rules no longer
-// hold, each through escalateHeld.
+// delegates past deadline, timed on seen's node ([heldSightings]), or whose
+// delegation the live rules no longer hold, each through escalateHeld.
 func sweepDelegated(ctx context.Context, store sandbox.PendingStore, rules builtin.DelegatedRules,
 	deadline time.Duration, audit delegatedRecorder, open func(sandbox.PendingRun) (map[string]any, error),
-	now time.Time) {
+	seen *heldSightings, now time.Time) {
 
 	runs, err := store.ListActive(ctx)
 	if err != nil {
 		log.WarnContext(ctx, "delegated_sweep_unread", "error", err.Error())
 		return
 	}
+	next := map[string]time.Time{}
+	defer func() {
+		if seen != nil {
+			seen.first = next
+		}
+	}()
 	for _, run := range runs {
 		held := run.HeldCall
 		if held == nil || !held.Delegated() || !slices.Contains(sandbox.Awaiting, run.Status) ||
 			run.Ending != nil || run.LaunchID != held.LaunchID {
 			continue
 		}
+		node, since := seen.sighted(*held, now, next)
 		word, said := ownRequest(run)
 		if word == "" {
 			delegates, _, _, live := rules.Rule(delegated.Kind(held.Act))
-			word, said = dueEscalation(*held, delegates, live, deadline, now)
+			word, said = dueEscalation(*held, delegates, live, deadline, node, since, now)
 		}
 		if word == "" {
 			continue
@@ -734,9 +769,10 @@ func escalateHeld(ctx context.Context, store sandbox.PendingStore, audit delegat
 // dueEscalation is why a call waiting on its delegates goes to people now, as
 // the closed word and the sentence people read, "" for one that still waits:
 // its kind no longer delegated (live false), a delegate it was put to no
-// longer the rule's, or the company's deadline passed since it was held.
+// longer the rule's, or the company's deadline passed since it was held, by
+// node's clock, which first saw it waiting at seen ([sandbox.HeldCall.WaitedFor]).
 func dueEscalation(held sandbox.HeldCall, delegates []string, live bool, deadline time.Duration,
-	now time.Time) (string, string) {
+	node string, seen, now time.Time) (string, string) {
 	if !live {
 		return delegated.OverruledOff, "Delegated decisions for " + held.Act + " were turned off, so the " +
 			"request came to people."
@@ -747,7 +783,7 @@ func dueEscalation(held sandbox.HeldCall, delegates []string, live bool, deadlin
 				"came to people."
 		}
 	}
-	if !now.Before(held.HeldAt.Add(deadline)) {
+	if held.WaitedFor(node, now, seen, deadline) {
 		return delegated.OverruledDeadline, "No delegate answered within " +
 			delegated.Limits{Deadline: deadline}.DeadlineWords() + ", so the request came to people."
 	}

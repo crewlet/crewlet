@@ -1557,7 +1557,7 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			LaunchNode: "node-a", Harness: "claude-code", SessionID: "s-1", LaunchSeq: 2, Capture: &kept,
 			Kept: &kept, BoxSince: now.Add(-time.Hour)}
 	}
-	target := RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct, Node: "node-a", Restorer: fakeRestorer{}}
+	target := RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct, Node: "node-a", At: now, Restorer: fakeRestorer{}}
 	older := target
 	older.Restorer = fakeRestorer{why: "older than 2.1.300"}
 	moved := older
@@ -1609,10 +1609,10 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 		"its box reclaimed": {target: older, decided: true, whyHolds: "is gone",
 			run: func(r *PendingRun) { r.SandboxID = "" }},
 		"a member elsewhere": {decided: true, whyHolds: "in the container cell",
-			target: RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Container, Node: "node-a",
+			target: RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Container, Node: "node-a", At: now,
 				Restorer: older.Restorer}},
 		"a member of another harness": {decided: true, whyHolds: "launched on opencode",
-			target: RelaunchTarget{Harness: "opencode", LaunchRouted: true, Placement: Direct, Node: "node-a",
+			target: RelaunchTarget{Harness: "opencode", LaunchRouted: true, Placement: Direct, Node: "node-a", At: now,
 				Restorer: older.Restorer}},
 		"a box on the host of a node that no longer holds the seat": {target: moved, decided: true,
 			whyHolds: "cannot continue in it"},
@@ -1750,7 +1750,7 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			}},
 		"a capture whose record awaits its answer, in a company that keeps no session": {decided: true,
 			in: ContinuesInParkedBox, whyHolds: "keeps no executor session",
-			target: RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct, Node: "node-a",
+			target: RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct, Node: "node-a", At: now,
 				Restorer: fakeRestorer{}, NoKept: NoKeptSession},
 			run: func(r *PendingRun) { r.Capture = unanswered(now.Add(-time.Minute)) }},
 		"a target that cannot be said": {whyHolds: "sitting out",
@@ -1761,7 +1761,7 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			run: func(r *PendingRun) { r.Ending = &RecordedEnding{ID: "ending-1"} }},
 		"a company that keeps no session": {decided: true, in: ContinuesInParkedBox,
 			whyHolds: "keeps no executor session",
-			target: RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct, Node: "node-a",
+			target: RelaunchTarget{Harness: "claude-code", LaunchRouted: true, Placement: Direct, Node: "node-a", At: now,
 				Restorer: fakeRestorer{}, NoKept: NoKeptSession}},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -275,15 +275,17 @@ func (c *Coordinator) readRunners(ctx context.Context, runners []string, read, g
 
 // stillWaited splits the calls in flight into those a collection still waits
 // for and those it stops waiting for, each with why, read as the clock stands
-// now: the turn's cap passed, the call's own bound passed, or its runner gone.
+// now: the turn's cap passed, the call's own bound passed ([BridgeCall.until]),
+// or its runner gone.
 func (c *Coordinator) stillWaited(inFlight []BridgeCall, run PendingRun, gone map[string]bool,
 ) (waiting []BridgeCall, left []unfinishedCall) {
 	now := c.now()
 	for _, call := range inFlight {
+		until := call.until(c.node)
 		switch {
 		case !run.Deadline.IsZero() && !now.Before(run.Deadline):
 			left = append(left, unfinishedCall{call: call, why: "the turn's cap passed"})
-		case !call.Until.IsZero() && !now.Before(call.Until):
+		case !until.IsZero() && !now.Before(until):
 			left = append(left, unfinishedCall{call: call, why: "its own bound passed"})
 		case call.Runner != "" && gone[call.Runner]:
 			left = append(left, unfinishedCall{call: call, why: "its process stopped"})
@@ -309,7 +311,7 @@ func (c *Coordinator) nextDue(inFlight []BridgeCall, run PendingRun) time.Durati
 		at(run.Deadline)
 	}
 	for _, call := range inFlight {
-		at(call.Until)
+		at(call.until(c.node))
 	}
 	return due
 }
