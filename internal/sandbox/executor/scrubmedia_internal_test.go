@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"io"
 	"math"
 	"math/rand/v2"
@@ -597,5 +598,50 @@ func TestTheMediaKeptApartFitTheKeepsPace(t *testing.T) {
 		if budget := time.Duration(tc.pace) * objstore.MiBPace; pace > budget {
 			t.Errorf("%s: a keep of %d payloads apart is paced %v, past its %v", name, apart, pace, budget)
 		}
+	}
+}
+
+// TEXT PAST ITS BOUND IS REFUSED BEFORE THE SECOND READING: a take keeping its
+// media apart whose first reading leaves more text inline than its seal keeps
+// (here a session of text alone) is refused as too large once that reading is
+// done, nothing written to its body and no spool left; within the bound it is
+// kept.
+//
+// Mutation: drop the check, or count the payloads kept apart as text, and a
+// case goes red.
+func TestTextPastItsBoundIsRefusedBeforeTheSecondReading(t *testing.T) {
+	t.Parallel()
+	var lines []string
+	for i := range 32 {
+		lines = append(lines, `{"type":"assistant","text":"`+mediaPayload(byte(i), 64<<10)+`"}`)
+	}
+	archive := claudeArchive(t, lines...)
+	for name, tc := range map[string]struct {
+		textMax int64
+		kept    bool
+	}{
+		"text past its bound": {textMax: 1 << 20},
+		"text within it":      {textMax: 8 << 20, kept: true},
+	} {
+		dir := t.TempDir()
+		var full, framed bytes.Buffer
+		bounds := testBounds.spooling(spoolPlace{dir: dir}).splitting(&framed, executorkeep.SessionKeptMaxBytes,
+			executorkeep.KeptPaceMiB)
+		bounds.split.textMax = tc.textMax
+		err := scrubArchive(archiveTar, bytes.NewReader(archive), reopenOf(archive), &full, newScrubber(nil), bounds)
+		switch {
+		case tc.kept && err != nil:
+			t.Errorf("%s: refused: %v", name, err)
+		case !tc.kept && (!errors.Is(err, executorkeep.ErrSessionTooLarge) || framed.Len() != 0 || full.Len() != 0):
+			t.Errorf("%s: came to %v having written %d bytes, want it refused as too large before writing", name,
+				err, framed.Len()+full.Len())
+		}
+		if left := spoolsLeft(t, dir); len(left) != 0 {
+			t.Errorf("%s: the scrub left %v", name, left)
+		}
+	}
+	plan := &mediaPlan{on: true, textMax: 1 << 20, found: []mediaAt{{n: 4 << 20}}}
+	if err := plan.inlinePast(5<<20 - 64<<10); err != nil {
+		t.Errorf("a spool of payloads kept apart is refused as text past its bound: %v", err)
 	}
 }
