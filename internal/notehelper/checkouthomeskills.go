@@ -28,7 +28,8 @@ type listingRule struct {
 }
 
 // listingRules is each listing rule by its checkoutSpec.ListedAs.
-var listingRules = map[string]listingRule{listedGrok: grokListing, listedKimi: kimiListing}
+var listingRules = map[string]listingRule{listedGrok: grokListing, listedKimi: kimiListing,
+	listedOpenCode: openCodeListing}
 
 // homeHolds is why a copy named name may not be made, "" where it may: by
 // the spec's listing rule, the home's skills or a copy this firing made

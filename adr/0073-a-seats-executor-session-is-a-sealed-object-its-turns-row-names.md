@@ -1120,6 +1120,9 @@
   - `internal/executordomain.TestAnEndNamesTheSummaryItsRowKeeps`
   - `internal/executorread.TestASessionNotKeptReadsAsItsSummary`
   - `internal/sandbox/executor.TestTheNewestSummaryIsTheMainThreadsLast`
+  - `internal/sandbox/executor.TestAClaudeSummaryReadOnTheWalkIsItsWholeLineRead`
+  - `internal/sandbox/executor.TestEveryRecordedClaudeSummaryReadsAsBeforeTheWalk`
+  - `internal/sandbox/executor.TestAClaudeSummaryAddsOnlyItsWordsToTheWalk`
   - `internal/sandbox.TestASummaryIsPlacedAtTheCaptureThatFirstNamedIt`
   - `internal/executorkeep.TestALaterPlaceIsALaterLaunchsOrALaterCaptureOfIt`
   - `internal/agent/runner.TestAReseedTellsTheSessionItDoesNotContinueBeforeItsCalls`

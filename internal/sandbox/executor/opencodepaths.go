@@ -67,3 +67,51 @@ func (p Paths) OpenCodeSkillsPlugin() string { return p.WorkDir() + "/opencode-s
 // copy of its session to re-import it ([openCodeRenew]), kept there where the
 // import failed so the run can say what it held.
 func (p Paths) OpenCodeRenewExport() string { return p.WorkDir() + "/opencode-renew-export.json" }
+
+// OpenCodeCheckouts is the DIRECTORY of what an OpenCode run hands the
+// checkouts below its working directory with ([openCodeCheckoutHome]): the
+// note helper, its launch config, the sections file and skills directory the
+// run's configuration names, and the checkouts' state. Under WorkDir, removed
+// whole before every run ([OpenCode.artifactDirs]), so no run's copies or
+// sections outlive the next run's clear.
+func (p Paths) OpenCodeCheckouts() string { return p.WorkDir() + "/opencode-checkouts" }
+
+// OpenCodeNoteHelper is the note helper an OpenCode run writes at every
+// launch ([writeNoteHelper]): its gate runs checkout-launch, and its
+// checkouts plugin the opencode-nested adapter.
+func (p Paths) OpenCodeNoteHelper() string { return p.OpenCodeCheckouts() + "/notehelper" }
+
+// OpenCodeCheckoutState is the run's checkout state ([openCodeCheckoutHome]):
+// the checkouts handed, the lock, the skip log and the nested adapter's
+// config, remade by every run's gate.
+func (p Paths) OpenCodeCheckoutState() string { return p.OpenCodeCheckouts() + "/state" }
+
+// OpenCodeCheckoutLaunch is the run's checkout-launch config
+// ([openCodeCheckouts]).
+func (p Paths) OpenCodeCheckoutLaunch() string { return p.OpenCodeCheckouts() + "/launch.json" }
+
+// OpenCodeCheckoutSections is where checkout-launch writes the run's
+// checkouts' instructions, a file the run's configuration names in its
+// `instructions` ([OpenCode.WriteConfig]), which OpenCode skips while it is
+// not there (measured on 2.3.2).
+func (p Paths) OpenCodeCheckoutSections() string { return p.OpenCodeCheckouts() + "/instructions.md" }
+
+// OpenCodeCheckoutSkills is the directory the checkouts' skills are copied
+// into, as `<repository>:<skill>`, which the run's configuration names in its
+// `skills`, apart from the seat's own ([Paths.OpenCodeSkills]).
+func (p Paths) OpenCodeCheckoutSkills() string { return p.OpenCodeCheckouts() + "/skills" }
+
+// OpenCodeCheckoutSkillsCopied lists, a name a line, the skills a run copied
+// into [Paths.OpenCodeCheckoutSkills], so the run's end removes them.
+func (p Paths) OpenCodeCheckoutSkillsCopied() string { return p.OpenCodeCheckouts() + "/skills-copied" }
+
+// OpenCodeCheckoutsOffBy is each file and rule that keeps the run's checkouts
+// plugin from loading, written by [OpenCode.WriteConfig] where one does, for
+// the run's skip log ([openCodeCheckoutsGate]).
+func (p Paths) OpenCodeCheckoutsOffBy() string { return p.OpenCodeCheckouts() + "/plugin-off-by" }
+
+// OpenCodeCheckoutsPlugin is the DIRECTORY of the plugin that hands a checkout
+// cloned during the run its instructions and skills (opencode_checkouts.js),
+// written and named as the notes plugin is ([Paths.OpenCodeSteerPlugin]), and
+// for the same reasons a directory of its own.
+func (p Paths) OpenCodeCheckoutsPlugin() string { return p.WorkDir() + "/opencode-checkouts-plugin" }
