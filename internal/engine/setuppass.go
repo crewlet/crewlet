@@ -148,45 +148,50 @@ func (p *atlassianPass) run(ctx context.Context, in setup.PassInput) ([]integrat
 	if err != nil {
 		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
 	}
-	var findings []integration.Finding
-	if note := p.recordSite(ctx, company, res.Site, in.Sink != nil); note != "" {
-		findings = append(findings, integration.Finding{
-			Kind: integration.FindingGrantShort, Detail: note,
-		})
-	}
-	return findings, nil
+	return p.recordSite(ctx, company, res.Site, in.Sink != nil), nil
 }
 
 // recordSite writes the site this pass discovered (the org key lists it) into
 // the Jira and Confluence blocks naming no address, or says why it could not.
 // Only a writing pass, one handed a sink, records: the dashboard's read-only
 // check must not advance the config epoch. The cloud ID is load-bearing: a
-// provisioned service account's token is accepted only at the API gateway,
-// never the site host. A value the company set itself is left alone.
+// provisioned service account's token is accepted only at the API gateway, and
+// a Forge token is bound to it. A value the company set itself is left alone,
+// so a block naming its site by url is told what the Forge relay needs.
 func (p *atlassianPass) recordSite(
 	ctx context.Context, company *Company, site atlassian.Site, writing bool,
-) string {
-	if !writing {
-		return ""
+) []integration.Finding {
+	in := company.Config.Integrations
+	patch := sitePatch(in, site)
+	var findings []integration.Finding
+	recorded := map[string]bool{}
+	if writing && len(patch) > 0 {
+		if note := p.applySite(ctx, patch, site); note != "" {
+			findings = append(findings, integration.Finding{
+				Kind: integration.FindingGrantShort, Detail: note,
+			})
+		} else {
+			for product := range patch {
+				recorded[product] = true
+			}
+		}
 	}
-	patch := sitePatch(company.Config.Integrations, site)
-	if len(patch) == 0 {
-		return ""
+	return append(findings, forgeHolds(in, p.engine.Resolve, recorded)...)
+}
+
+// forgeHolds is a finding for each product whose Forge relay events are
+// refused for want of a cloud id, except one this pass has just recorded.
+func forgeHolds(in config.Integrations, resolve func(string) string, recorded map[string]bool) []integration.Finding {
+	_, held := in.ForgeBinding(resolve)
+	var findings []integration.Finding
+	for _, product := range held {
+		if !recorded[product] {
+			findings = append(findings, integration.Finding{
+				Kind: integration.FindingIngressBlocked, Detail: config.ForgeHoldReason(product),
+			})
+		}
 	}
-	writer := p.engine.configWriterOrNil()
-	if writer == nil {
-		return "this node cannot write the company configuration, so the Atlassian " +
-			"site it discovered was not recorded: set integrations.jira.cloud_id " +
-			"and integrations.confluence.cloud_id to " + site.CloudID
-	}
-	body, err := json.Marshal(map[string]any{"integrations": patch})
-	if err != nil {
-		return "the discovered Atlassian site could not be encoded: " + err.Error()
-	}
-	if err := writer.Apply(ctx, body, "record the Atlassian site", loopActor()); err != nil {
-		return "the Atlassian site could not be recorded: " + err.Error()
-	}
-	return ""
+	return findings
 }
 
 // sitePatch is the cloud id and site address for each product block naming
@@ -207,6 +212,26 @@ func sitePatch(in config.Integrations, site atlassian.Site) map[string]map[strin
 		}
 	}
 	return patch
+}
+
+// applySite writes patch into the company document, or says why it could not.
+func (p *atlassianPass) applySite(
+	ctx context.Context, patch map[string]map[string]string, site atlassian.Site,
+) string {
+	writer := p.engine.configWriterOrNil()
+	if writer == nil {
+		return "this node cannot write the company configuration, so the Atlassian " +
+			"site it discovered was not recorded: set integrations.jira.cloud_id " +
+			"and integrations.confluence.cloud_id to " + site.CloudID
+	}
+	body, err := json.Marshal(map[string]any{"integrations": patch})
+	if err != nil {
+		return "the discovered Atlassian site could not be encoded: " + err.Error()
+	}
+	if err := writer.Apply(ctx, body, "record the Atlassian site", loopActor()); err != nil {
+		return "the Atlassian site could not be recorded: " + err.Error()
+	}
+	return ""
 }
 
 // NO TEARDOWN for Atlassian: it registers no webhook (Cloud events arrive
