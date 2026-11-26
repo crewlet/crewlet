@@ -133,6 +133,7 @@
 | `providers/embeddings` | The vector backend: the one place a text becomes a vector for the knowledge corpus, knowledge search queries, and diary and episode recall, enforcing each model's input limits. |
 | `speech` | Dictation's speech-to-text: a local streaming recognizer (sherpa-onnx, embedded per platform, in a re-executed worker process) behind the `Streamer` interface, its pinned model table and the `Fake`. |
 | `sandbox` | The executor runtime: every agent seat's executor is its harness's own run in a box, launched detached, collected and resumed by the engine, its session kept between boxes; the in-box runners are `sandbox/executor`'s. |
+| `sandbox/homecache` | A node's cache of provisioned container box homes: a seat's setup run once per key, a new box's home copied from it, no credential ever kept. |
 | `notehelper` | A `main` package built per box arch with the engine and written into a box: beside a harness with no hook or plugin, hands it the bridge's notes, caps a turn's model responses and reports skill loads, through an adapter (Codex app-server). |
 | `notehelper/helperbuild` | The one recipe that builds the note helper per box arch, for the release, the image, `make notehelper` and the tests (`WithHelpers`). |
 | `notehelper/helpersource` | The committed digest of the note helper's source, which the helper carries and the engine checks, so a helper from other source is refused. |
