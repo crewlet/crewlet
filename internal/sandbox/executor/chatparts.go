@@ -438,6 +438,11 @@ type textTrim struct {
 	n     int
 	head  [textDigestHeadBytes]byte
 	headN int
+	// claim is the box read's claim the run held counts toward, for a
+	// summary's words ([summaryClaim]), nil for none, and counted what the
+	// run counts in it.
+	claim   *summaryClaim
+	counted int
 }
 
 // trimState is where a [textTrim] stands: before the text's first character
@@ -454,7 +459,8 @@ const (
 
 // begin starts a text trimmed into w, holding a run to runMax.
 func (t *textTrim) begin(w io.Writer, runMax int) *textTrim {
-	*t = textTrim{w: w, runMax: runMax, run: lineScratch(t.run)}
+	t.claim.track(&t.counted, 0)
+	*t = textTrim{w: w, runMax: runMax, run: lineScratch(t.run), claim: t.claim}
 	return t
 }
 
@@ -484,6 +490,11 @@ func (t *textTrim) Write(p []byte) (int, error) {
 	}
 	if t.state == trimText || t.state == trimSpilled {
 		t.emit(p[from:])
+	}
+	if !t.claim.track(&t.counted, len(t.run)) {
+		// The read fails on its claim ([summaryRead.waitFailed]): its run
+		// is let go of.
+		t.run = t.run[:0]
 	}
 	return len(p), nil
 }

@@ -7,6 +7,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unsafe"
+
+	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
 // qwenMembers is a Qwen Code archive's chat file holding lines.
@@ -369,5 +372,33 @@ func TestAQwenCompactionsEntryEndsGrowNoFasterThanItsJoin(t *testing.T) {
 	c.reset(TranscriptValueMaxBytes)
 	if cap(c.ends) > lineScratchKeep || cap(c.held) > lineScratchKeep {
 		t.Errorf("the next payload keeps %d and %d bytes of the last one's buffers", cap(c.ends), cap(c.held))
+	}
+}
+
+// A QWEN CODE COMPACTION'S FIRST TEXTS ARE HELD WHERE THEY WERE READ: the
+// first user entry's texts, read into the entry, become the join with no copy,
+// so a summary, a prefix's first user entry, is held once; a later entry's
+// are joined after them.
+//
+// Mutation: copy the first entry into the join: this goes red.
+func TestAQwenCompactionsFirstTextsAreHeldWhereTheyWereRead(t *testing.T) {
+	t.Parallel()
+	var c qwenCompaction
+	c.reset(TranscriptValueMaxBytes)
+	c.history(jsonscan.ArrayStart)
+	read := func(text string) *byte {
+		c.entryStart(jsonscan.ObjectStart)
+		c.roleWord = "user"
+		c.entry = append(c.entry, text...)
+		at := unsafe.SliceData(c.entry)
+		c.entryEnd()
+		return at
+	}
+	if first := read("the summary"); unsafe.SliceData(c.held) != first {
+		t.Error("the first entry's texts were copied into the join, not held where they were read")
+	}
+	read("the tail")
+	if end := c.summaryEnd(1); string(c.held[:end]) != "the summary" || string(c.held) != "the summarythe tail" {
+		t.Errorf("the join holds %q, the first entry ending at %d; want both entries, the first its own", c.held, end)
 	}
 }

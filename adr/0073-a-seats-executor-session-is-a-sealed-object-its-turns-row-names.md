@@ -1123,6 +1123,11 @@
   - `internal/sandbox/executor.TestAClaudeSummaryReadOnTheWalkIsItsWholeLineRead`
   - `internal/sandbox/executor.TestEveryRecordedClaudeSummaryReadsAsBeforeTheWalk`
   - `internal/sandbox/executor.TestAClaudeSummaryAddsOnlyItsWordsToTheWalk`
+  - `internal/sandbox/executor.TestABoxReadsSummaryIsBudgeted`
+  - `internal/sandbox/executor.TestATrimsHeldRunCountsTowardItsClaim`
+  - `internal/sandbox/executor.TestASummaryWhoseWaitEndedUnmetIsUnreadForIt`
+  - `internal/sandbox/executor.TestAChainsPassHoldsItsSummaryWithinItsTerm`
+  - `internal/sandbox/executor.TestAQwenCompactionsFirstTextsAreHeldWhereTheyWereRead`
   - `internal/sandbox.TestASummaryIsPlacedAtTheCaptureThatFirstNamedIt`
   - `internal/executorkeep.TestALaterPlaceIsALaterLaunchsOrALaterCaptureOfIt`
   - `internal/agent/runner.TestAReseedTellsTheSessionItDoesNotContinueBeforeItsCalls`

@@ -60,11 +60,13 @@ func (g GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, path
 		if names, err := geminiSessionFiles(ctx, box, paths, ask.Session); err == nil && len(names) == 1 {
 			file = paths.GeminiChats() + "/" + names[0]
 		}
+		var large passBudget
+		defer large.release()
 		counter := newGeminiCounting()
 		if summarize {
-			counter.summarize()
+			counter.summarize(newSummaryClaim(ctx, &large))
 		}
-		count, err := chatCopyCount(ctx, box, file, counter, ask.Release, geminiRelease)
+		count, err := chatCopyCount(ctx, box, file, counter, ask.Release, geminiRelease, &large)
 		if ask.Count {
 			reading.Count = count
 		}
