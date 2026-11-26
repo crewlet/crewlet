@@ -1,9 +1,68 @@
 package executor
 
 import (
+	"reflect"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
+
+// ownAllocations is what f allocates, heap objects and bytes, counted from a
+// memory profile of every allocation made with [allocatingIn]'s frame on the
+// stack: f's own, on its goroutine. The runtime's counts ([runtime.MemStats])
+// are the whole process's, so another goroutine's allocations land in them:
+// a package's leftover goroutines, a linked package's own (#2160). f must
+// allocate on its own goroutine; one it starts allocates outside the count.
+func ownAllocations(f func()) (objects, bytes uint64) {
+	ownMeasuring.Lock()
+	defer ownMeasuring.Unlock()
+	defer func(rate int) { runtime.MemProfileRate = rate }(runtime.MemProfileRate)
+	runtime.MemProfileRate = 1
+	objectsBefore, bytesBefore := profiledIn()
+	allocatingIn(f)
+	objectsAfter, bytesAfter := profiledIn()
+	return objectsAfter - objectsBefore, bytesAfter - bytesBefore
+}
+
+// ownMeasuring serializes [ownAllocations]' writes of runtime.MemProfileRate,
+// which cases measuring at once would otherwise race on.
+var ownMeasuring sync.Mutex
+
+// allocatingIn is the frame [ownAllocations] counts under.
+//
+//go:noinline
+func allocatingIn(f func()) { f() }
+
+// profiledIn is what the memory profile records allocated under
+// [allocatingIn], after two collections publish every allocation made before
+// them (the profile may be up to two cycles old, runtime.MemProfile).
+func profiledIn() (objects, bytes uint64) {
+	runtime.GC()
+	runtime.GC()
+	marker := runtime.FuncForPC(reflect.ValueOf(allocatingIn).Pointer()).Name()
+	var records []runtime.MemProfileRecord
+	n, ok := runtime.MemProfile(nil, true)
+	for !ok {
+		records = make([]runtime.MemProfileRecord, n+64)
+		n, ok = runtime.MemProfile(records, true)
+	}
+	for _, r := range records[:n] {
+		frames := runtime.CallersFrames(r.Stack())
+		for {
+			f, more := frames.Next()
+			if f.Function == marker {
+				objects += uint64(r.AllocObjects)
+				bytes += uint64(r.AllocBytes)
+				break
+			}
+			if !more {
+				break
+			}
+		}
+	}
+	return objects, bytes
+}
 
 // noiseSink keeps each of [allocateMeanwhile]'s allocations on the heap.
 var noiseSink atomic.Pointer[[]byte]
