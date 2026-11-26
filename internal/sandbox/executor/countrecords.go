@@ -119,12 +119,13 @@ func (c *copilotJournalCount) undecided() int { return c.unread }
 
 // liveRecord implements [recordCounted]: the run's own telemetry file, at the
 // run's own path, cleared before the run starts ([Paths.GeminiTelemetry]): no
-// pointer to read. IT IS LARGE: about 130 KB a request (measured on 0.70.0,
-// 5.35 MB for 41: its spans 59%, its metrics 22%, the inference details 15%,
-// and no setting of 0.70.0's trims them without the responses), so at the
-// fastest measured pace, about 31 requests in 2 s, a tick reads some 4 MB, under
-// [countReadBytes], and the count keeps up. IT LAGS: Gemini CLI writes it a
-// second at a time (measured: at most 1.1 s after the request).
+// pointer to read. IT IS LARGE, about 130 KB a request (measured on 0.70.0:
+// request metadata, and the system instructions and tool definitions Gemini
+// CLI sends, never the messages), so a tick at the fastest measured pace (31
+// requests in 2 s) reads some 4 MB, under [countReadBytes]. BOUNDED BY THE CAP:
+// pinned for a capped run alone, it holds at most (cap + 1 + one tick's ~31)
+// requests before the watch ends the run, until the next launch clears it or
+// the box goes. IT LAGS, written a second at a time (at most 1.1 s, measured).
 //
 //nolint:unparam // the interface's: the runners whose scripts find their record read a pointer that can fail.
 func (GeminiCLI) liveRecord(_ context.Context, _ sandbox.Sandbox, paths Paths) (string, int, bool, error) {

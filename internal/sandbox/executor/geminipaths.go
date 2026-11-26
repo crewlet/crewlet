@@ -53,7 +53,9 @@ func (p Paths) GeminiUsageBefore() string { return p.WorkDir() + "/gemini-usage-
 
 // GeminiTelemetry is the run's own telemetry file, which Gemini CLI writes as it
 // makes each model request and which its turn cap is counted off
-// ([GeminiCLI.liveRecord]): under the work directory, cleared with every run.
+// ([GeminiCLI.liveRecord]): under the work directory, cleared with every run,
+// and outside the one directory a Gemini CLI pack reads ([Paths.GeminiSlugDir]),
+// so no kept session carries it.
 func (p Paths) GeminiTelemetry() string { return p.WorkDir() + "/gemini-telemetry.json" }
 
 // GeminiProjectSlug is the project slug every run's working directory is

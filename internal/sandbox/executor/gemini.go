@@ -301,17 +301,21 @@ func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, paths Paths) []
 		{Name: "GEMINI_SYSTEM_MD", Value: "false"}, {Name: "GEMINI_WRITE_SYSTEM_MD", Value: "false"},
 		{Name: "CODE_ASSIST_ENDPOINT", Value: cmp.Or(req.Env["CODE_ASSIST_ENDPOINT"], geminiCodeAssist)},
 		{Name: "GOOGLE_GEMINI_BASE_URL", Value: req.Env["GOOGLE_GEMINI_BASE_URL"]},
-		{Name: "GOOGLE_VERTEX_BASE_URL", Value: req.Env["GOOGLE_VERTEX_BASE_URL"]}}, geminiTelemetryPins(paths)...)
+		{Name: "GOOGLE_VERTEX_BASE_URL", Value: req.Env["GOOGLE_VERTEX_BASE_URL"]}}, geminiTelemetryPins(req, paths)...)
 }
 
 // geminiTelemetryPins turn on Gemini CLI's own telemetry, into the run's file
-// alone ([Paths.GeminiTelemetry]): the record its turn cap is counted off.
-// PINNED IN THE ENVIRONMENT, which outranks every settings file (measured on
-// 0.70.0), so a person's own telemetry settings change nothing of it: a file
+// alone ([Paths.GeminiTelemetry]), for a CAPPED run alone: the record its turn
+// cap is counted off, which nothing else reads, so an uncapped run writes none
+// and the file is bounded by the cap ([GeminiCLI.liveRecord]). PINNED IN THE
+// ENVIRONMENT, which outranks every settings file (measured on 0.70.0): a file
 // switches the OTLP export off, and the local target keeps a "gcp" one from
-// exporting ahead of the file (0 connections in a run whose home's settings
-// named both). The prompts stay out of the file.
-func geminiTelemetryPins(paths Paths) []Pinned {
+// exporting ahead of it (0 connections in a run whose home's settings named
+// both). The prompts stay out of the file.
+func geminiTelemetryPins(req sandbox.RunRequest, paths Paths) []Pinned {
+	if req.Limits.MaxTurns <= 0 {
+		return nil
+	}
 	return []Pinned{{Name: "GEMINI_TELEMETRY_ENABLED", Value: "true"}, {Name: "GEMINI_TELEMETRY_TARGET", Value: "local"},
 		{Name: "GEMINI_TELEMETRY_LOG_PROMPTS", Value: "false"}, {Name: "GEMINI_TELEMETRY_OUTFILE", Value: paths.GeminiTelemetry()}}
 }

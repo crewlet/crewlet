@@ -427,25 +427,37 @@ func TestAGeminiRunIsCountedByItsTelemetrysResponses(t *testing.T) {
 	}
 }
 
-// GEMINI CLI'S TELEMETRY IS PINNED TO THE RUN'S OWN FILE, in the environment,
-// which outranks every settings file: on, local, prompts out, and into the
-// file its turn cap is counted off. Measured on 0.70.0, a home's settings
-// naming a gcp target and an OTLP endpoint beside these pins exported nothing.
+// GEMINI CLI'S TELEMETRY IS PINNED TO THE RUN'S OWN FILE, FOR A CAPPED RUN
+// ALONE, in the environment, which outranks every settings file: on, local,
+// prompts out, and into the file its turn cap is counted off. Measured on
+// 0.70.0, a home's settings naming a gcp target and an OTLP endpoint beside
+// these pins exported nothing. An uncapped run, whose count nothing reads,
+// writes no telemetry, so the file is bounded by the cap.
 //
-// Mutation: leave the target unpinned, or point the file elsewhere, and a pin
-// is missing.
-func TestGeminisTelemetryIsPinnedToTheRunsOwnFile(t *testing.T) {
+// Mutation: leave the target unpinned, point the file elsewhere, or pin it for
+// an uncapped run, and a check goes red.
+func TestGeminisTelemetryIsPinnedToTheRunsOwnFileWhenCapped(t *testing.T) {
 	t.Parallel()
 	p := paths(sandbox.NewFakeSandbox("box-1"))
 	want := map[string]string{"GEMINI_TELEMETRY_ENABLED": "true", "GEMINI_TELEMETRY_TARGET": "local",
 		"GEMINI_TELEMETRY_LOG_PROMPTS": "false", "GEMINI_TELEMETRY_OUTFILE": p.GeminiTelemetry()}
-	got := map[string]string{}
-	for _, pin := range (executor.GeminiCLI{}).Pins(t.Context(), sandbox.RunRequest{}, p) {
-		got[pin.Name] = pin.Value
+	pinned := func(maxTurns int) map[string]string {
+		got := map[string]string{}
+		req := sandbox.RunRequest{Limits: sandbox.Limits{MaxTurns: maxTurns}}
+		for _, pin := range (executor.GeminiCLI{}).Pins(t.Context(), req, p) {
+			got[pin.Name] = pin.Value
+		}
+		return got
 	}
+	capped := pinned(10)
 	for name, value := range want {
-		if got[name] != value {
-			t.Errorf("%s is pinned to %q, want %q", name, got[name], value)
+		if capped[name] != value {
+			t.Errorf("%s is pinned to %q for a capped run, want %q", name, capped[name], value)
+		}
+	}
+	for name := range pinned(0) {
+		if strings.HasPrefix(name, "GEMINI_TELEMETRY_") {
+			t.Errorf("an uncapped run pins %s", name)
 		}
 	}
 }
