@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // forgeEvent names the integration a relayed Cloud event belongs to and the
@@ -76,19 +77,23 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// And so is a product with no cloud id: there is nothing to bind the
-	// token to. Held with a 503 rather than refused, so the relay's
-	// retries land once the id is recorded (by hand, or by the Atlassian
-	// organization's pass).
+	// token to. 503 for the same class, but nothing waits: Forge retries a
+	// refused event up to four times, a minute apart, then drops it, so only
+	// an id recorded within those minutes saves it. The integrations answer
+	// names the field ([Secrets.IngressHolds]).
 	source := forgeSource(event)
 	sites := material.forgeSites(source)
 	if len(sites) == 0 {
-		field := "integrations." + source + ".cloud_id"
+		products := []string{source}
 		if source == "" {
-			field = "integrations.jira.cloud_id or integrations.confluence.cloud_id"
+			products = []string{"jira", "confluence"}
+		}
+		reasons := make([]string, 0, len(products))
+		for _, product := range products {
+			reasons = append(reasons, config.ForgeHoldReason(product))
 		}
 		log.Error("forge_no_cloud_site", "event", event, "product", source,
-			"detail", "a Forge token names its site by cloud id only; set "+field+
-				" (with site_url, in place of a site url) to the site the app is installed on")
+			"detail", strings.Join(reasons, "; "))
 		httpjson.Unavailable(w, httpjson.CodeNoWebhookSecret,
 			httpjson.RetrySeconds(NoSecretRetryAfter))
 		return

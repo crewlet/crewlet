@@ -1336,6 +1336,51 @@ func (i Integrations) DiscoversAtlassianSite() bool {
 	return i.Atlassian != nil && i.Atlassian.IsCloud()
 }
 
+// ForgeBinding is what the Jira and Confluence blocks bind the Forge relay
+// to: each product's cloud id (its `cloud_id`, or the id a gateway `url`
+// carries), and, while `forge_app_id` is set, the products whose relayed
+// events are refused for want of one. A Forge token names its site by cloud
+// id only, so a site `url` binds nothing; a Data Center block is never held,
+// since no Forge event is its own. Values are read through resolve.
+func (i Integrations) ForgeBinding(resolve func(string) string) (sites map[string]string, held []string) {
+	type block struct{ product, url, cloudID string }
+	var blocks []block
+	if j := i.Jira; j != nil {
+		blocks = append(blocks, block{"jira", j.URL, j.CloudID})
+	}
+	if c := i.Confluence; c != nil {
+		blocks = append(blocks, block{"confluence", c.URL, c.CloudID})
+	}
+	declared := i.Atlassian.Declared()
+	relayed := strings.TrimSpace(resolve(i.ForgeAppID)) != ""
+	for _, b := range blocks {
+		address := strings.TrimSpace(resolve(b.url))
+		id := strings.ToLower(strings.TrimSpace(resolve(b.cloudID)))
+		if id == "" && atlassianhost.IsGateway(address) {
+			id = atlassianhost.GatewayCloudID(address)
+		}
+		switch {
+		case id != "":
+			if sites == nil {
+				sites = map[string]string{}
+			}
+			sites[b.product] = id
+		case relayed && (address == "" || atlassianhost.Of(address, declared) != atlassianhost.DataCenter):
+			// No address yet is a site the organization has not supplied.
+			held = append(held, b.product)
+		}
+	}
+	return sites, held
+}
+
+// ForgeHoldReason is the one sentence for a product [Integrations.ForgeBinding]
+// holds: the relay route's log, the integrations answer and setup all say it.
+func ForgeHoldReason(product string) string {
+	name := map[string]string{"jira": "Jira", "confluence": "Confluence"}[product]
+	return "Forge relay events for " + name + " are refused until integrations." +
+		product + ".cloud_id (with site_url) is set"
+}
+
 // DatadogIgnore is the route_to value that means "wake nobody".
 //
 // A VALUE, not an empty string, and the difference is the whole point. Empty

@@ -3,7 +3,6 @@ package webhooks
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"slices"
 	"strings"
 
@@ -24,33 +23,6 @@ import (
 // the one a gateway `url` carries. A Cloud site named only by its host has no
 // cloud id to compare, and its product's relayed events are held. The body's
 // `context` is never read for any of this: the token does not sign it.
-
-// cloudIDOf is the cloud id one product block names, lower-cased, or "": a
-// block naming a Data Center instance, a Cloud site by its host, or a site the
-// Atlassian organization has not supplied yet.
-func cloudIDOf(rawURL, cloudID string) string {
-	if id := strings.ToLower(strings.TrimSpace(cloudID)); id != "" {
-		return id
-	}
-	if rawURL = strings.TrimSpace(rawURL); atlassianhost.IsGateway(rawURL) {
-		return gatewayCloudID(rawURL)
-	}
-	return ""
-}
-
-// gatewayCloudID is the cloud id in a gateway address's /ex/{product}/{id}
-// path, lower-cased, or "" for any other shape.
-func gatewayCloudID(raw string) string {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return ""
-	}
-	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(parts) < 3 || parts[0] != "ex" || (parts[1] != "jira" && parts[1] != "confluence") {
-		return ""
-	}
-	return strings.ToLower(parts[2])
-}
 
 // forgeSource is the product an event name belongs to, "" for neither.
 // Decided by prefix rather than by [forgeEvents], so an event this build does
@@ -110,10 +82,10 @@ func (c *forgeClaims) site() (string, error) {
 			named[id] = true
 		}
 	}
-	add(gatewayCloudID(c.App.APIBaseURL))
+	add(atlassianhost.GatewayCloudID(c.App.APIBaseURL))
 	for _, installed := range c.App.Installation.Contexts {
 		add(installed.CloudID)
-		add(gatewayCloudID(installed.APIBaseURL))
+		add(atlassianhost.GatewayCloudID(installed.APIBaseURL))
 	}
 	ids := make([]string, 0, len(named))
 	for id := range named {

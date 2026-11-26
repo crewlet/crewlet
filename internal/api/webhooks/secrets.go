@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
@@ -49,6 +50,10 @@ type Secrets struct {
 	// with no entry has no cloud id to bind a token to, and its relayed
 	// events answer 503 like a missing secret (forge_site.go).
 	ForgeSites map[string]string
+
+	// ForgeHeld are the products whose relayed events are held for want
+	// of a cloud id while an app id is set ([config.Integrations.ForgeBinding]).
+	ForgeHeld []string
 
 	// Slack is PER SEAT, keyed by agent handle, because each agent has its
 	// own Slack app. The handle comes from the URL path, which is why that
@@ -134,6 +139,21 @@ func (s Secrets) Verifiable() []string {
 	return out
 }
 
+// IngressHolds names, by surface, why a route refuses every delivery of a
+// kind although its material resolved: today the Forge relay, for each
+// product with no cloud id ([config.ForgeHoldReason]). Empty holds nothing.
+func (s Secrets) IngressHolds() map[string]string {
+	holds := map[string]string{}
+	if len(s.ForgeHeld) > 0 {
+		reasons := make([]string, 0, len(s.ForgeHeld))
+		for _, product := range s.ForgeHeld {
+			reasons = append(reasons, config.ForgeHoldReason(product))
+		}
+		holds["forge"] = strings.Join(reasons, "; ")
+	}
+	return holds
+}
+
 // SecretsOf reads the verification material out of a company epoch.
 //
 // Secrets are RESOLVED from their ${VAR}: the literal is a config field the
@@ -164,22 +184,13 @@ func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) stri
 		if in.GitLab != nil && in.GitLab.Enabled {
 			s.GitLab = resolve(in.GitLab.SigningSecret)
 		}
-		site := func(product, rawURL, cloudID string) {
-			if id := cloudIDOf(resolve(rawURL), resolve(cloudID)); id != "" {
-				if s.ForgeSites == nil {
-					s.ForgeSites = map[string]string{}
-				}
-				s.ForgeSites[product] = id
-			}
-		}
+		s.ForgeSites, s.ForgeHeld = in.ForgeBinding(resolve)
 		if in.Jira != nil {
 			s.Jira = resolve(in.Jira.WebhookSecret)
-			site("jira", in.Jira.URL, in.Jira.CloudID)
 		}
 		if in.Confluence != nil {
 			s.Confluence = resolve(in.Confluence.WebhookSecret)
 			s.ConfluenceToken = resolve(in.Confluence.WebhookToken)
-			site("confluence", in.Confluence.URL, in.Confluence.CloudID)
 		}
 		if in.Datadog != nil && in.Datadog.Enabled {
 			s.Datadog = resolve(in.Datadog.WebhookToken)
