@@ -1278,10 +1278,9 @@ func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 		}
 	}
 
-	// A THOUSAND MEMBERS, ONE READER: the fewest bytes of five walks, so what
-	// another goroutine allocates meanwhile counts against no claim, held
-	// below an eighth of what a fresh reader's buffers take, the fewest of
-	// three makings.
+	// A THOUSAND MEMBERS, ONE READER: the fewest bytes of five walks, each its
+	// own allocations ([ownAllocations]), held below an eighth of what a fresh
+	// reader's buffers take, the fewest of three makings.
 	member := ctThread(brief)
 	r := newThreadReader(strings.NewReader(""), 0)
 	const members = 1000
@@ -1297,20 +1296,16 @@ func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 	}
 	walk()
 	each := uint64(math.MaxUint64)
-	var before, after runtime.MemStats
 	for range 5 {
-		runtime.ReadMemStats(&before)
-		walk()
-		runtime.ReadMemStats(&after)
-		each = min(each, (after.TotalAlloc-before.TotalAlloc)/members)
+		_, bytes := ownAllocations(walk)
+		each = min(each, bytes/members)
 	}
 	buffers := uint64(math.MaxUint64)
 	for range 3 {
-		runtime.ReadMemStats(&before)
-		fresh := newThreadReader(strings.NewReader(member), threadPlainMax)
-		runtime.ReadMemStats(&after)
+		var fresh *threadReader
+		_, bytes := ownAllocations(func() { fresh = newThreadReader(strings.NewReader(member), threadPlainMax) })
 		runtime.KeepAlive(fresh)
-		buffers = min(buffers, after.TotalAlloc-before.TotalAlloc)
+		buffers = min(buffers, bytes)
 	}
 	if buffers < 2*lineChunkBytes || each >= buffers/8 {
 		t.Errorf("one reader reading a member after another allocates %d bytes a member, where a fresh reader's "+
@@ -1509,17 +1504,15 @@ func scanRead(ctx context.Context, parts []scanPart) (threadLine, error) {
 
 // scanAllocated is the fewest bytes a reading in one pass allocates from its
 // Next to its return reading the line parts make, of runs readings, and what
-// the last answered. Each is a fresh reader's, warmed first on the line warm
-// makes, so neither its buffers nor its scratch growing to a first line
-// count, and what one reading keeps across lines counts in every reading.
-// GOMAXPROCS is one meanwhile, as [allocationsOf]'s is.
+// the last answered: its own allocations ([ownAllocations]), never another
+// goroutine's. Each is a fresh reader's, warmed first on the line warm makes,
+// so neither its buffers nor its scratch growing to a first line count, and
+// what one reading keeps across lines counts in every reading.
 func scanAllocated(ctx context.Context, warm, parts []scanPart, runs int) (uint64, threadLine, error) {
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	fewest := uint64(math.MaxUint64)
 	var (
-		line          threadLine
-		err           error
-		before, after runtime.MemStats
+		line threadLine
+		err  error
 	)
 	for range runs {
 		r := newThreadReader(&scanGenerated{parts: warm}, threadPlainMax)
@@ -1527,10 +1520,8 @@ func scanAllocated(ctx context.Context, warm, parts []scanPart, runs int) (uint6
 			return 0, threadLine{}, fmt.Errorf("the line it was warmed on: %w", err)
 		}
 		r.Reset(&scanGenerated{parts: parts}, threadPlainMax, threadLinesMax)
-		runtime.ReadMemStats(&before)
-		line, err = r.Next(ctx)
-		runtime.ReadMemStats(&after)
-		fewest = min(fewest, after.TotalAlloc-before.TotalAlloc)
+		_, bytes := ownAllocations(func() { line, err = r.Next(ctx) })
+		fewest = min(fewest, bytes)
 	}
 	return fewest, line, err
 }

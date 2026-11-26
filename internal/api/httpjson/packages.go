@@ -17,7 +17,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 	return map[string]bool{
 		"a2a": true, "a2atest": true, "accessdomain": true, "activityline": true, "accessmigrate": true, "accessreview": true, "adr": true, "agentaccess": true, "alarmwake": true,
 		"advisor": true, "advisordomain": true, "duty": true, "modelpass": true, "api": true, "atlas": true, "atlasdomain": true, "derive": true, "gather": true, "codescan": true, "collecttest": true, "deployfiles": true,
-		"argval": true, "toolargs": true, "artifactdata": true, "artifactdataapi": true, "artifacts": true,
+		"argval": true, "toolargs": true, "toolschema": true, "toolschematest": true, "artifactdata": true, "artifactdataapi": true, "artifacts": true,
 		"artifactrender": true, "artifactsapi": true, "artifactsdomain": true, "artifactserve": true,
 		"artifactspike": true, "artifactupload": true,
 		"approval": true, "approvaltest": true, "assistant": true, "assistantapi": true, "assistantdomain": true,
