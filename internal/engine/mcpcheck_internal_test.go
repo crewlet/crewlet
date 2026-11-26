@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,7 +23,10 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/recordseal"
+	"github.com/crewlet/crewlet/internal/signedask"
 )
 
 var checkingJane = iam.Actor{Name: "jane.doe", Kind: iam.ActorHuman, OperatorID: "session:abc"}
@@ -453,4 +458,128 @@ func TestAnMCPTestsAnswerHoldsItsWeightBeforeItTests(t *testing.T) {
 		t.Fatalf("an MCP test behind a held budget answered %d bytes and %v, want nothing and ErrAnswerBudget",
 			len(reply), err)
 	}
+}
+
+// AN MCP TEST ON A NODE AHEAD OF ITS ASKER MAY RUN FOR ITS ASKER'S WHOLE WAIT,
+// less the reply's round trip, counted from the request's arrival: whether the
+// node's clock stands three seconds ahead or ahead by more than the wait less
+// the margin, the answer waits for its weight of a held budget exactly that
+// long, and no longer. An older asker's request, carrying no wait, runs until
+// its deadline as the node's own clock reads it, less the margin.
+//
+// Mutation: bound every test by the deadline on the node's clock, and a node
+// ahead cuts it short by its lead, red.
+//
+// In a synctest bubble, so the request's trip takes no time and the wait is
+// exact arithmetic.
+func TestAnMCPTestOnANodeAheadOfItsAskerMayRunForItsAskersWholeWait(t *testing.T) {
+	t.Parallel()
+	const wait = mcpCheckSlack + 10*time.Second
+	for name, tc := range map[string]struct {
+		ahead   time.Duration
+		carries bool
+		may     time.Duration
+	}{
+		"three seconds ahead": {ahead: 3 * time.Second, carries: true, may: wait - mcpCheckReplyMargin},
+		"ahead by more than the wait less the margin": {ahead: wait - mcpCheckReplyMargin + 500*time.Millisecond,
+			carries: true, may: wait - mcpCheckReplyMargin},
+		"an older asker's, two seconds ahead": {ahead: 2 * time.Second,
+			may: wait - 2*time.Second - mcpCheckReplyMargin},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				checks, err := newMCPChecks(recordseal.OneKey("k1", "the engine cases' fleet key material"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				checks.now = func() time.Time { return time.Now().Add(tc.ahead) }
+				answers := queue.NewAnswerBudget(nil)
+				release, err := answers.Acquire(t.Context(), queue.AnswerHistory, queue.AnswerBudgetBytes)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer release()
+				e := &Engine{mcpChecks: checks, answerBudget: answers, testNode: "node-b"}
+				ask := mcpCheckAsk{Version: mcpCheckWire, ID: "ask-1", Deadline: time.Now().Add(wait),
+					Asker: "node-a", Nodes: []string{"node-b"}, Server: "files"}
+				if tc.carries {
+					ask.BudgetMS = signedask.WaitMS(wait)
+				}
+				sealed, err := checks.wire.SealRequest(ask)
+				if err != nil {
+					t.Fatal(err)
+				}
+				begun := time.Now()
+				_, err = e.answerMCPCheck(t.Context(), sealed)
+				waited := time.Since(begun)
+				if !errors.Is(err, queue.ErrAnswerBudget) {
+					t.Fatalf("an MCP test behind a held budget = %v, want it ended waiting for its weight", err)
+				}
+				if waited != tc.may {
+					t.Errorf("on a node %v ahead, the test could run %v, want %v", tc.ahead, waited, tc.may)
+				}
+			})
+		})
+	}
+}
+
+// AN MCP TEST CROSSES WITH ITS ASKER'S WAIT AS A DURATION, which each node
+// counts from arrival on its own clock: the test's budget, or what its caller
+// has left where that ends sooner; its deadline, the asker's instant, is bound
+// to the same wait.
+//
+// Mutation: send no wait, and both asks carry none, red.
+//
+// In a synctest bubble, so the caller's time left is exact.
+func TestAnMCPTestCrossesWithItsAskersWait(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ring := recordseal.OneKey("k1", "the engine cases' fleet key material")
+		checks, err := newMCPChecks(ring)
+		if err != nil {
+			t.Fatal(err)
+		}
+		broker := memory.NewBroker()
+		asker, peer := broker.Client(), broker.Client()
+		for _, q := range []*memory.Queue{asker, peer} {
+			if err := q.Start(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = q.Stop(context.Background()) })
+		}
+		heard := make(chan mcpCheckAsk, 2)
+		stop, err := peer.Serve(t.Context(), topics.MCPCheck, 1, func(_ context.Context, raw []byte) ([]byte, error) {
+			heard <- checks.wire.Admit(raw, signedask.NewGuard(), time.Now()).Request
+			return nil, errors.New("this peer only listens")
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = stop(context.Background()) })
+		e := &Engine{backends: &Backends{Queue: asker}, mcpChecks: checks, testNode: "node-a"}
+		const budget = 40 * time.Second
+		for _, left := range []time.Duration{0, budget - 15*time.Second} {
+			ctx, cancel := t.Context(), context.CancelFunc(func() {})
+			if left > 0 {
+				ctx, cancel = context.WithTimeout(ctx, left)
+			}
+			asked := time.Now()
+			_, _, err := e.askPeersMCPCheck(ctx, mcpCheckAsk{Version: mcpCheckWire, ID: signedask.NewID(),
+				Asker: "node-a", Nodes: []string{"node-a", "node-b"}, Server: "files"}, []string{"node-b"}, budget)
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wait := budget
+			if left > 0 {
+				wait = left
+			}
+			got := <-heard
+			if got.BudgetMS != signedask.WaitMS(wait) || !got.Deadline.Equal(asked.Add(wait)) {
+				t.Errorf("a caller with %v left (0: none) asked carrying %d ms until %v, want %d ms until %v",
+					left, got.BudgetMS, got.Deadline, signedask.WaitMS(wait), asked.Add(wait))
+			}
+		}
+	})
 }
