@@ -421,7 +421,7 @@ func TestAKimiRunPutsTheHomesAGENTSmdBackHoweverItEnds(t *testing.T) {
 					if own {
 						want = "OWN\n\n\n" + want
 					}
-					if got := boxFile(t, box, box.Home()+"/seen-agents"); got != want {
+					if got := startedRecord(t, box, box.Home()+"/seen-agents"); got != want {
 						t.Fatalf("the driver started on the home's AGENTS.md\n%q\nwant\n%q", got, want)
 					}
 				}
