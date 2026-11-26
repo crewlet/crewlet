@@ -20,6 +20,11 @@ var errLogPastBound = errors.New("checkrun: the log's redaction is past its boun
 // redaction was not the stream's.
 var errLogUnsettled = errors.New("checkrun: the log's start is not settled")
 
+// errLogChanged is a log whose output was cut, grown or written over while it
+// was read ([sandbox.ChangeOf]), or read short of the size its open found:
+// what was read may join two versions of it, so none of it is kept.
+var errLogChanged = errors.New("checkrun: the log's output changed while it was read")
+
 // errLogNoLine is a log whose redaction, dropped to its bound, holds no line.
 var errLogNoLine = errors.New("checkrun: the log's bound holds no line")
 
@@ -98,6 +103,8 @@ func (a *attempt) logUnkept(ctx context.Context, limit int64, err error) string 
 		return "its log was not kept: its text could not be redacted in one pass"
 	case errors.Is(err, errLogUnsettled):
 		return "its log was not kept: no line of its output's end could be redacted as the whole output is"
+	case errors.Is(err, errLogChanged):
+		return "its log was not kept: its output changed while it was read"
 	case errors.Is(err, errLogNoLine):
 		return fmt.Sprintf("its log was not kept: its last line, redacted, is past the %d MiB a log keeps",
 			limit>>20)
@@ -129,7 +136,8 @@ func openLog(ctx context.Context, box sandbox.Sandbox, n, limit, over int64) (*l
 		_ = rc.Close()
 		return nil, 0, nil
 	}
-	l := &logReader{rc: rc, src: rc, limit: limit, drop: over, toLine: over > 0, piece: make([]byte, 32<<10)}
+	l := &logReader{rc: rc, src: rc, limit: limit, drop: over, toLine: over > 0, piece: make([]byte, 32<<10),
+		expect: min(n, size)}
 	if size > n {
 		head := make([]byte, min(n, 2*redact.LookBack))
 		k, err := io.ReadFull(rc, head)
@@ -155,9 +163,10 @@ func openLog(ctx context.Context, box sandbox.Sandbox, n, limit, over int64) (*l
 // logReader is a run's output read as its kept log: redacted by s, the
 // redaction dropped up to where the log begins (drop bytes, to a line's start
 // where toLine), the dropped bytes checked against want, and at most limit
-// bytes handed on, past which it fails errLogPastBound.
+// bytes handed on, past which it fails errLogPastBound; read whole, expect
+// bytes of one version of the output, or it fails errLogChanged.
 type logReader struct {
-	rc     io.Closer
+	rc     io.ReadCloser
 	src    io.Reader
 	s      *redact.Stream
 	out    bytes.Buffer
@@ -171,6 +180,7 @@ type logReader struct {
 	dropped       int64
 	atLine        bool
 	served, limit int64
+	read, expect  int64
 	err           error
 	closed        bool
 }
@@ -212,6 +222,7 @@ func (l *logReader) Read(p []byte) (int, error) {
 func (l *logReader) fill() error {
 	for l.out.Len() == 0 && !l.ended {
 		k, err := l.src.Read(l.piece)
+		l.read += int64(k)
 		if k > 0 {
 			if _, werr := l.s.Write(l.piece[:k]); werr != nil {
 				return werr
@@ -220,10 +231,25 @@ func (l *logReader) fill() error {
 		switch {
 		case errors.Is(err, io.EOF):
 			l.ended = true
+			if err := l.unchanged(); err != nil {
+				return err
+			}
 			return l.s.Close()
 		case err != nil:
 			return logReadError{err}
 		}
+	}
+	return nil
+}
+
+// unchanged is nil where the output was read whole, as one version of it.
+func (l *logReader) unchanged() error {
+	change, err := sandbox.ChangeOf(l.rc)
+	switch {
+	case err != nil:
+		return logReadError{err}
+	case l.read != l.expect, change != sandbox.FileUnchanged:
+		return errLogChanged
 	}
 	return nil
 }

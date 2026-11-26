@@ -82,3 +82,8 @@ func SummaryOf(s string) string { return summaryOf(s) }
 
 // AttemptRecord is attempt as a check's box records it.
 func AttemptRecord(attempt gitlet.CheckKey) (string, error) { return attemptRecord(attempt) }
+
+// TailOf is the end of box's output a run's ending reads into its summary.
+func TailOf(ctx context.Context, box sandbox.Sandbox) string {
+	return attemptOf(gitlet.CheckDef{}, "web", nil).tail(ctx, box).text
+}

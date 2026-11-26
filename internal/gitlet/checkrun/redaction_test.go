@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -238,5 +239,53 @@ func TestALogsBoundHoldsAfterItsRedaction(t *testing.T) {
 	}
 	if read != 2*int64(len(output)) {
 		t.Errorf("keeping the log read %d bytes from the box; want the output twice, %d", read, 2*len(output))
+	}
+}
+
+// A RUN'S OUTPUT IS KEPT AND SUMMED UP ONLY AS ONE VERSION OF IT: an output cut
+// or grown in place while its log or its tail is read keeps no log, saying
+// why, and leaves the tail empty, since what was read may join two versions of
+// it; one left alone, or written anew over its path, is kept and read.
+//
+// Mutation: leave the check of the output after the log's read, or the tail's,
+// out.
+func TestARunsOutputIsKeptOnlyAsOneVersionOfIt(t *testing.T) {
+	t.Parallel()
+	output := strings.Repeat("compiling a package of the build\n", 2000) + "FAIL web\n"
+	for _, c := range []struct {
+		name    string
+		edit    func(b *sandbox.FakeSandbox)
+		changed bool
+	}{
+		{"left alone", func(*sandbox.FakeSandbox) {}, false},
+		{"written anew", func(b *sandbox.FakeSandbox) { b.Put(checkrun.OutputFile, output) }, false},
+		{"grown in place", func(b *sandbox.FakeSandbox) { b.AppendInPlace(checkrun.OutputFile, []byte("ok\n")) }, true},
+		{"cut in place", func(b *sandbox.FakeSandbox) { b.TruncateInPlace(checkrun.OutputFile, 100) }, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			// A box of its own for each read, edited as its first open reads it.
+			fresh := func() *sandbox.FakeSandbox {
+				box := sandbox.NewFakeSandbox("box-1")
+				box.Put(checkrun.OutputFile, output)
+				var once sync.Once
+				box.Streams = func(path string, r io.Reader) io.Reader {
+					once.Do(func() { c.edit(box) })
+					return r
+				}
+				return box
+			}
+			log, why := checkrun.KeepLogWithin(t.Context(), fresh(), storeOver(t, memobj.New()), 1<<20)
+			tail := checkrun.TailOf(t.Context(), fresh())
+			switch {
+			case c.changed && (log != nil || why != "its log was not kept: its output changed while it was read"):
+				t.Errorf("an output %s while read kept log %v (%q); want none, saying why", c.name, log, why)
+			case c.changed && tail != "":
+				t.Errorf("an output %s while read sums up as %q; want nothing", c.name, tail)
+			case !c.changed && (log == nil || !strings.HasSuffix(tail, "FAIL web\n")):
+				t.Errorf("an output %s kept log %v (%q) and sums up as …%q; want both", c.name, log, why,
+					tail[max(0, len(tail)-40):])
+			}
+		})
 	}
 }
