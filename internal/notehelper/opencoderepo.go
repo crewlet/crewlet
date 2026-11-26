@@ -54,11 +54,12 @@ func runOpenCodeNested(_ context.Context, f flags, _ io.Reader, stdout, stderr i
 // <path>", as the launch's sections are; then its skills listed by path
 // ([skillsListing]), since OpenCode lists no skill added after it started
 // (measured); then what the firing left out ([skippedListing]), the listings
-// within one firing's bound ([listingBudget]). "" where they hand nothing.
+// within one firing's bound ([listingBudget.listings], the left out first).
+// "" where they hand nothing.
 func openCodeNestedText(handed []handedCheckout, skipped []string) string {
 	var blocks []string
-	budget := newListingBudget()
-	for _, h := range handed {
+	skills, left := newListingBudget().listings(handed, skipped)
+	for i, h := range handed {
 		files := make([]string, 0, len(h.parts))
 		for _, p := range h.parts {
 			files = append(files, "Instructions from: "+p.path+"\n"+p.text)
@@ -66,12 +67,7 @@ func openCodeNestedText(handed []handedCheckout, skipped []string) string {
 		if len(files) > 0 {
 			blocks = append(blocks, "for `"+h.name+"` with root "+h.root+"\n\n"+strings.Join(files, "\n\n"))
 		}
-		if listing := budget.take(skillsListing(h)); listing != "" {
-			blocks = append(blocks, listing)
-		}
+		blocks = appendNonEmpty(blocks, skills[i])
 	}
-	if listing := budget.take(skippedListing(skipped)); listing != "" {
-		blocks = append(blocks, listing)
-	}
-	return strings.Join(blocks, "\n\n")
+	return strings.Join(appendNonEmpty(blocks, left), "\n\n")
 }
