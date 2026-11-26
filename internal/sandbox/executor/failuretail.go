@@ -19,7 +19,7 @@ const failureReadPiece = 32 << 10
 // the end of the WHOLE stream's redaction, read from its first byte through one
 // [redact.Stream], at most a bound of whole lines ([sandbox.KeepEnd]); or, where
 // that redaction did not end within [sandbox.FailureReadWait] or the stream
-// declined the text ([redact.ErrDecidedEarly]), none of it, and why.
+// refused the text ([redact.ErrDecidedEarly]), none of it, and why.
 type failureTail struct {
 	// shown is the end; before how many redacted bytes came before it.
 	shown  string
@@ -73,15 +73,17 @@ func (r *Runner) readFailureTail(p *piece, keep int) (failureTail, error) {
 	s := redact.NewStream(end)
 	src := io.LimitReader(p.body, p.size)
 	buf := make([]byte, failureReadPiece)
-	began := r.now()
+	began, read := r.now(), int64(0)
 	for {
 		if r.now().Sub(began) > sandbox.FailureReadWait {
-			tail.withheld = fmt.Sprintf("its redaction, read from its first byte, did not reach its end within "+
-				"the %v a collection gives it, and an end the redaction has not reached may still be changed "+
-				"by what comes before it", sandbox.FailureReadWait)
+			tail.withheld = fmt.Sprintf("it ran past the collection's bound on its read, %v, within which its "+
+				"redaction read %s of it from its first byte and did not reach its end, so its end is withheld: "+
+				"an end the redaction has not reached may still change with what came before it",
+				sandbox.FailureReadWait, humanSize(read))
 			return tail, nil
 		}
 		n, err := src.Read(buf)
+		read += int64(n)
 		if n > 0 {
 			if _, werr := s.Write(buf[:n]); werr != nil {
 				return declinedTail(tail, werr)
@@ -102,17 +104,23 @@ func (r *Runner) readFailureTail(p *piece, keep int) (failureTail, error) {
 	return tail, nil
 }
 
-// declinedTail is tail withheld because its redaction stream declined the text
+// declinedTail is tail withheld because its redaction stream refused the text
 // ([redact.ErrDecidedEarly]): what it wrote may hold what redaction takes out.
 // The ring never fails a write, so any other error is the stream's own fault.
 func declinedTail(tail failureTail, err error) (failureTail, error) {
 	if !errors.Is(err, redact.ErrDecidedEarly) {
 		return failureTail{}, fmt.Errorf("executor: redacting the error stream: %w", err)
 	}
-	tail.withheld = "its redaction declined it (a key's block read beside a password's key it could " +
-		"not decide in one pass), and a text the redaction declines is never shown"
+	tail.withheld = redactionRefused
 	return tail, nil
 }
+
+// redactionRefused says why a text a redaction stream refused
+// ([redact.ErrDecidedEarly]) is not shown, in its kind alone: never a word of
+// the text, whose redaction is what could not be trusted.
+const redactionRefused = "the redaction stream refused it: a stretch it decided early was contradicted " +
+	"by a credential's claim it read later (a key's block beside a password's key), so what it wrote may " +
+	"hold what redaction takes out, and none of it is shown"
 
 // endRing is the last keep bytes written to it, in a buffer of at most keep
 // bytes however much is written, and how much was written in all.

@@ -150,7 +150,7 @@ func TestAFailuresTailIsNotShownPastTheReadsWait(t *testing.T) {
 			switch {
 			case c.shown && (tail.withheld != "" || !strings.HasSuffix(tail.shown, "FATAL: the last line\n")):
 				t.Errorf("the tail is %q, withheld %q; want the stream's end", tail.shown, tail.withheld)
-			case !c.shown && (tail.shown != "" || !strings.Contains(tail.note(), "did not reach its end within the 32s")):
+			case !c.shown && (tail.shown != "" || !strings.Contains(tail.note(), "ran past the collection's bound on its read, 32s")):
 				t.Errorf("the tail shows %q with the note %q; want none of it, and the wait said", tail.shown, tail.note())
 			case !c.shown && body.all >= len(text):
 				t.Errorf("the read went on to the stream's end, %d bytes, past its wait", body.all)
@@ -176,7 +176,7 @@ func TestAFailuresTailTheRedactionDeclinesIsNotShown(t *testing.T) {
 				strings.Repeat("pwd:\n", 12000) + "sk-" + strings.Repeat("Ab0_-x9Z", 1<<20) + "\n" +
 				strings.Repeat("ok\n", tail)
 			got := failureTailOf(t, text, 64<<10)
-			if got.shown != "" || !strings.Contains(got.note(), "its redaction declined it") {
+			if got.shown != "" || !strings.Contains(got.note(), redactionRefused) {
 				t.Errorf("a declined stream shows %d bytes with the note %q; want none, and why", len(got.shown),
 					got.note())
 			}

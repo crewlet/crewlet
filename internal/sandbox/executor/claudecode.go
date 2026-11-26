@@ -1409,7 +1409,7 @@ const unparsedShownBytes = sandbox.MaxFailureBytes / 2
 // and the warnings) is at its END; past it, that end as a failure's tail shows
 // the error stream's ([Runner.readFailureTail]): the end of the whole output's
 // redaction in whole lines, and the output's size; none of it where the
-// redaction declines it. Never more: a failure's head is never cut
+// redaction stream refuses it. Never more: a failure's head is never cut
 // ([failureDetail]), so a whole output past the bound would ride the failure
 // at up to [sandbox.MaxFileBytes].
 func unparsedFailure(text []byte) string {
@@ -1425,8 +1425,7 @@ func unparsedFailure(text []byte) string {
 		err = s.Close()
 	}
 	if err != nil {
-		return fmt.Sprintf("%s: it is %s, and its redaction declined it (a key's block read beside a password's "+
-			"key it could not decide in one pass), so none of it is shown", opening, size)
+		return fmt.Sprintf("%s: it is %s, and %s", opening, size, redactionRefused)
 	}
 	shown, _ := sandbox.KeepEnd(end.String(), unparsedShownBytes)
 	return opening + " (" + size + "; its end shown):\n" + shown

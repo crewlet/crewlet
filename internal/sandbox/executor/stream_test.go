@@ -252,35 +252,70 @@ func TestTheErrorStreamsEndIsShownAndItsStartIsSaid(t *testing.T) {
 	}
 }
 
-// AN ERROR STREAM WHOSE REDACTION DID NOT END WITHIN ITS WAIT IS SAID, NOT
-// SHOWN: on a clock that passes [sandbox.FailureReadWait] while the stream is
-// read, the transcript and the failure give its size and why, and none of it.
+// AN ERROR STREAM WHOSE TAIL IS WITHHELD SAYS WHY, NEVER A WORD OF IT, so an
+// operator tells it from an empty one: past the collection's bound on its read
+// ([sandbox.FailureReadWait], on a clock that passes it two pieces in), the
+// failure and the transcript say how much was read and that it ran past the
+// bound; refused by the redaction stream (a key's armour, then password's
+// keys and a run past the stream's hold), they name the refusal's kind. An
+// empty error stream says neither, nor anything of the stream.
 //
-// Mutation: show the end read so far at the wait, and the stream reaches both.
-func TestAnErrorStreamPastItsWaitIsSaidNotShown(t *testing.T) {
+// Mutations, each red: show the end read so far at the wait; leave out how
+// much was read; show what the refused stream wrote; say nothing of either.
+func TestAWithheldErrorStreamSaysWhyNeverAWordOfIt(t *testing.T) {
 	t.Parallel()
-	var now time.Time
-	runner := executor.Clocked(executor.Bounded(executor.NewClaudeCode(), testFailureBound, executor.MaxLineBytes),
-		func() time.Time {
-			now = now.Add(sandbox.FailureReadWait / 2)
-			return now
-		})
-	b := box(t, runner)
-	p := paths(b)
-	stderr := strings.Repeat("noise line\n", 3*testFailureBound/11) + "FATAL: the last line"
-	b.Put(p.Err(), stderr)
-	b.Put(p.ExitCode(), "1")
+	const bound = "ran past the collection's bound on its read, 32s, within which its redaction read 64 KiB of it"
+	const refused = "the redaction stream refused it: a stretch it decided early was contradicted by a " +
+		"credential's claim it read later"
+	for _, c := range []struct {
+		name, stderr, said string
+		clock              bool
+		never              []string
+	}{
+		{"past the bound", strings.Repeat("noise line\n", 3*testFailureBound/11) + "FATAL: the last line",
+			bound, true, []string{"noise line", "FATAL", refused}},
+		{"refused", "k: -----BEGIN RSA PRIVATE KEY-----\n" +
+			"MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n\n" +
+			strings.Repeat("pwd:\n", 12000) + "sk-" + strings.Repeat("Ab0_-x9Z", 1<<20) + "\n" +
+			strings.Repeat("ok\n", 256<<10), refused, false, []string{"MIIEow", "pwd:", "Ab0_", "\nok", bound}},
+		{"empty", "", "", false, []string{"error stream", bound, refused}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			runner := executor.Bounded(executor.NewClaudeCode(), testFailureBound, executor.MaxLineBytes)
+			// A clock that stands still unless the case moves it, so the
+			// race detector's slower redaction never passes the bound.
+			var now time.Time
+			runner = executor.Clocked(runner, func() time.Time {
+				if c.clock {
+					now = now.Add(sandbox.FailureReadWait / 2)
+				}
+				return now
+			})
+			b := box(t, runner)
+			p := paths(b)
+			b.Put(p.Err(), c.stderr)
+			b.Put(p.ExitCode(), "1")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	said := "(the error stream, " + executor.HumanSize(int64(len(stderr))) + ", is not shown: its redaction, " +
-		"read from its first byte, did not reach its end within the 32s a collection gives it"
-	for name, got := range map[string]string{"transcript": res.Transcript, "failure": res.Error} {
-		if !strings.Contains(got, said) || strings.Contains(got, "noise line") || strings.Contains(got, "FATAL") {
-			t.Errorf("the %s is …%q; want %q, none of the stream shown", name, tailOf(got, 200), said)
-		}
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			if !strings.Contains(res.Error, "the harness exited with status 1") {
+				t.Fatalf("the failure %q does not say the run failed; the case needs one that did", res.Error)
+			}
+			for name, got := range map[string]string{"transcript": res.Transcript, "failure": res.Error} {
+				said := "(the error stream, " + executor.HumanSize(int64(len(c.stderr))) + ", is not shown: "
+				if c.said != "" && (!strings.Contains(got, said) || !strings.Contains(got, c.said)) {
+					t.Errorf("the %s is …%q; want %q and why: %q", name, tailOf(got, 300), said, c.said)
+				}
+				for _, word := range c.never {
+					if strings.Contains(got, word) {
+						t.Errorf("the %s says %q: …%q", name, word, tailOf(got, 300))
+					}
+				}
+			}
+		})
 	}
 }
 
