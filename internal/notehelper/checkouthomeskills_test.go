@@ -183,9 +183,12 @@ func TestACopyThatNeverLandsIsTakenOffTheList(t *testing.T) {
 // parallel: it stands in for renameCopy.
 func TestACopyNeverReplacesWhatCameToItsPlace(t *testing.T) {
 	r, plan, spec := plannedCopy(t)
-	occupied := t.TempDir()
-	if err := renameCopy(t.TempDir(), occupied); !errors.Is(err, os.ErrExist) {
-		t.Errorf("the copy's move onto an empty directory returned %v, want EEXIST", err)
+	occupied := filepath.Join(t.TempDir(), "mine")
+	if err := os.WriteFile(occupied, []byte("MINE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameCopy(t.TempDir(), occupied); !errors.Is(err, syscall.EEXIST) {
+		t.Errorf("the copy's move onto a file returned %v, want EEXIST, whatever the entry", err)
 	}
 	place := filepath.Join(r.skills, "late:s")
 	renameCopy = func(from, to string) error {
