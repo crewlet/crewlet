@@ -40,8 +40,7 @@ func (r *servedUntil) Read(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAn
 // the reads of a node ahead are cut short by its lead, red; serve one
 // carrying no wait to its deadline, red.
 //
-// In a synctest bubble, so the request's trip takes no time and the instant
-// is exact arithmetic.
+// In a synctest bubble, so the instant is exact arithmetic.
 func TestANodeAheadOfItsAskerReadsForItsAskersWholeWait(t *testing.T) {
 	t.Parallel()
 	ring := recordseal.OneKey("k1", "the code search suite's fleet key material")

@@ -472,8 +472,7 @@ func TestAnMCPTestsAnswerHoldsItsWeightBeforeItTests(t *testing.T) {
 // ahead cuts it short by its lead, red; run one carrying no wait to its
 // deadline, red.
 //
-// In a synctest bubble, so the request's trip takes no time and the wait is
-// exact arithmetic.
+// In a synctest bubble, so the wait is exact arithmetic.
 func TestAnMCPTestOnANodeAheadOfItsAskerMayRunForItsAskersWholeWait(t *testing.T) {
 	t.Parallel()
 	const wait = mcpCheckSlack + 10*time.Second
