@@ -2,6 +2,7 @@ package executordomain_test
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
@@ -210,6 +212,96 @@ func TestAFrameNamingMediaTheRowDoesNotIsUnreadable(t *testing.T) {
 			t.Errorf("%s: %v, want ErrUnreadable", name, err)
 		}
 	}
+}
+
+// A ROW NAMING NO MEDIA OPENS NO FRAMES: a session kept whole is a gzip
+// archive, so a text object of frames under a row naming no media is one whose
+// row lost or never named the media its frames splice. Open refuses it as
+// ErrUnreadable, before a byte is handed out, rather than hand a harness the
+// frames as its archive; a gzip archive kept whole opens byte for byte, the
+// byte Open peeked at handed out first.
+//
+// Mutation: drop the frame check, or either kind from it, and a container
+// opens; consume the peeked byte, and the archive comes back without it.
+func TestARowNamingNoMediaOpensNoFrames(t *testing.T) {
+	t.Parallel()
+	store, _ := sessionStore(t, "k1")
+	kept := keepMedia(t, store, "ana", archive(t, 1000))
+	for name, frames := range map[string][]byte{
+		"led by a text frame":  slices.Concat(textFrame([]byte("text")), mediaFrame(kept.Digest)),
+		"led by a media frame": slices.Concat(mediaFrame(kept.Digest), textFrame([]byte("text"))),
+	} {
+		row := keepFramed(t, store, "ana", statelog.NewOpID(time.Now(), ""), frames)
+		r, err := store.Open(t.Context(), row)
+		if err == nil {
+			_ = r.Close()
+		}
+		if !errors.Is(err, executordomain.ErrUnreadable) {
+			t.Errorf("frames %s under a row naming no media: Open = %v, want ErrUnreadable", name, err)
+		}
+	}
+	var zipped bytes.Buffer
+	zw := gzip.NewWriter(&zipped)
+	if _, err := zw.Write(archive(t, 5000)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	whole := keepFramed(t, store, "ana", statelog.NewOpID(time.Now(), ""), zipped.Bytes())
+	if got, err := readAll(t, store, whole); err != nil || !bytes.Equal(got, zipped.Bytes()) {
+		t.Errorf("a gzip archive kept whole read back %d bytes (%v), want the %d put", len(got), err,
+			zipped.Len())
+	}
+}
+
+// A SPLICED RESTORE IS BUDGETED FOR EVERY MEMBER IT STREAMS: the text object
+// stays open while each member streams between its frames, so its read is
+// budgeted for the text and every media object together, and a restore read
+// at objstore.ReadBudget's floor on both legs (two MiBPace a mebibyte) reads
+// the session whole where the text object's own budget would have ended it
+// past the member. In a bubble, so the pace is exact and costs no wall time.
+//
+// Mutation: open the text object under its own budget, and the read of the
+// text after the member fails past its deadline.
+func TestASplicedRestoreIsBudgetedForEveryMemberItStreams(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		store, _ := sessionStore(t, "k1")
+		// THE TEXT AFTER THE MEMBER spans sealed chunks the text object's
+		// read has not fetched when the member begins.
+		head, member, tail := archive(t, 100), archive(t, 3*objstore.MiB), archive(t, 3*secrets.StreamChunkBytes)
+		kept := keepMedia(t, store, "ana", member)
+		row := keepFramed(t, store, "ana", statelog.NewOpID(time.Now(), ""),
+			slices.Concat(textFrame(head), mediaFrame(kept.Digest), textFrame(tail)), kept)
+		want := slices.Concat(head, member, tail)
+		const piece = 32 << 10
+		pace := 2 * objstore.MiBPace * piece / objstore.MiB
+		if past := pace * time.Duration((len(head)+len(member))/piece); past <= objstore.ReadBudget(row.Object.Size) {
+			t.Fatalf("the member is read whole %v in, within the text object's own budget: the case "+
+				"proves nothing", past)
+		}
+		r, err := store.Open(t.Context(), row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = r.Close() }()
+		got, buf := make([]byte, 0, len(want)), make([]byte, piece)
+		for {
+			n, err := io.ReadFull(r, buf)
+			got = append(got, buf[:n]...)
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("the paced restore failed after %d of %d bytes: %v", len(got), len(want), err)
+			}
+			time.Sleep(pace)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("the paced restore read back %d bytes, want the %d the take wrote", len(got), len(want))
+		}
+	})
 }
 
 // A MEDIA MEMBER PAST THE KEPT BOUND IS REFUSED WHOLE: one capture keeps at most
