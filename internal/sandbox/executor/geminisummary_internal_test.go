@@ -277,7 +277,7 @@ func geminiSummaryWholeOf(chat string) sandbox.ThreadSummary {
 func geminiSummaryOnTheWalk(ctx context.Context, chat string) sandbox.ThreadSummary {
 	c := newGeminiCounting()
 	c.summarize()
-	return c.summary(chatFileFollowed(ctx, strings.NewReader(chat), c, nil))
+	return c.summary(chatFileLines(ctx, strings.NewReader(chat), c, new(passBudget)))
 }
 
 // geminiSummaryString is a summary in a line: its size and digest, why it is
