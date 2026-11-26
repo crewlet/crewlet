@@ -142,7 +142,7 @@ import { useClock } from "~/lib/clock.ts";
 import { sortGridRows, useGridPage } from "~/lib/gridPage.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { indexOrg, kindOfAuthor, type SeatKind } from "~/lib/seats.ts";
-import { useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
+import { endOfBucket, useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
 import { isLogRefusal, rest, RestError } from "~/protocol/index.ts";
 import { EngineLine } from "~/components/InlineToken.tsx";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
@@ -730,11 +730,11 @@ export function Audit() {
   // fleet-wide event read were asked once a second where the poll says once a
   // minute, and an answer slower than a second — the event read waits up to
   // two for a node that does not answer — was dropped for the next tick's, so
-  // its rows never arrived. Rounded UP to the poll, the window still ends at or
-  // after now, so the newest row is in it.
+  // its rows never arrived. Ended where the poll in progress ends, the window
+  // still ends after now, so the newest row is in it.
   // Read through `useClock`, so the screen re-renders once a poll rather than
   // once a second; the When cells tick on their own.
-  const edge = useClock((now) => Math.ceil(now / POLL_MS) * POLL_MS);
+  const edge = useClock((now) => endOfBucket(now, POLL_MS));
   const range = useTimeRange(edge, AUDIT_OFFER, false);
   const { since, until } = range;
   const history = useEngineHealth()?.event_history_seconds;

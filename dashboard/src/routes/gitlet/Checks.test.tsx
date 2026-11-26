@@ -193,29 +193,29 @@ const tabs = () =>
     .getAllByRole("radio")
     .map((r) => r.textContent);
 
-// Mutation: send `until`, or ask the window's ended attempts with no `standing`.
-// The clock is pinned half an hour past a UTC midnight, where a week's edge,
-// the hour rounded up to a whole day, is that midnight itself: the window
-// reaches back seven days and the half hour, which a bound read off the
-// machine's clock refused during that hour of every day.
+// Mutation: send `until`, ask the window's ended attempts with no `standing`, or round the
+// window's edge up with `Math.ceil`. The board's clock is floored to the hour, so from 00:00 to
+// 00:59 UTC it sits on a day's start; rounded up, the week's edge stayed at that midnight and
+// the window reached back seven days and the minutes past it.
 test("the section asks where each check stands since the window's start, failing first, with no end", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(new Date("2026-11-18T00:30:00Z"));
-  const { asked } = await mountBoard();
-  const first = listed(asked)[0]!;
-  expect(first.searchParams.get("standing")).toBe("failing");
-  expect(first.searchParams.has("until")).toBe(false);
-  // A day: from the hour a day before the clock's hour.
-  expect(first.searchParams.get("since")).toBe("2026-11-17T00:00:00.000Z");
-  cleanup();
-  const week = await mountBoard("#/gitlet/checks?window=7d");
-  // A week: from seven days before the clock's hour rounded up to a day.
-  expect(listed(week.asked)[0]!.searchParams.get("since")).toBe("2026-11-11T00:00:00.000Z");
-  vi.setSystemTime(new Date("2026-11-18T13:30:00Z"));
-  cleanup();
-  const later = await mountBoard("#/gitlet/checks?window=7d");
-  expect(listed(later.asked)[0]!.searchParams.get("since")).toBe("2026-11-12T00:00:00.000Z");
-  cleanup();
+  // A day ends with the hour in progress, and a week with the day in progress, at either hour.
+  const sinces = {
+    "2026-11-18T00:30:00Z": { day: "2026-11-17T01:00:00.000Z", week: "2026-11-12T00:00:00.000Z" },
+    "2026-11-18T12:30:00Z": { day: "2026-11-17T13:00:00.000Z", week: "2026-11-12T00:00:00.000Z" },
+  };
+  for (const [clock, since] of Object.entries(sinces)) {
+    vi.setSystemTime(new Date(clock));
+    const { asked } = await mountBoard();
+    const first = listed(asked)[0]!;
+    expect(first.searchParams.get("standing")).toBe("failing");
+    expect(first.searchParams.has("until")).toBe(false);
+    expect(first.searchParams.get("since"), `a day at ${clock}`).toBe(since.day);
+    cleanup();
+    const week = await mountBoard("#/gitlet/checks?window=7d");
+    expect(listed(week.asked)[0]!.searchParams.get("since"), `a week at ${clock}`).toBe(since.week);
+    cleanup();
+  }
   const recent = await mountBoard("#/gitlet/checks?sort=recent");
   expect(listed(recent.asked)[0]!.searchParams.get("standing")).toBe("recent");
 });
@@ -313,7 +313,7 @@ test("the hour turning keeps the rows on screen and ticking, and the next poll r
   const windows = listed(asked)
     .filter((u) => u.searchParams.has("standing"))
     .map((u) => u.searchParams.get("since"));
-  expect(windows).toEqual(["2026-11-17T13:00:00.000Z", "2026-11-17T14:00:00.000Z"]);
+  expect(windows).toEqual(["2026-11-17T14:00:00.000Z", "2026-11-17T15:00:00.000Z"]);
 });
 
 // Mutation: filter the rows loaded, or offer only the names of the narrowed page.

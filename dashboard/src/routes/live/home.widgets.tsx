@@ -16,6 +16,7 @@ import { ActivityGlyph, BrainGlyph, SquareTerminalGlyph } from "@crewlethq/icons
 import { href } from "~/app/router.tsx";
 import { EventRow } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
+import { endOfBucket } from "~/lib/range.ts";
 import { fmtDateTime, fmtDuration, plural, relTime } from "~/lib/format.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
 import { indexOrg, nameOfIn } from "~/lib/seats.ts";
@@ -144,7 +145,7 @@ function FailedTurns() {
   // every tick of the clock.
   const range = useHomeRange();
   const zone = useCompanyZone();
-  const edge = Math.ceil(now / HOUR) * HOUR;
+  const edge = endOfBucket(now, HOUR);
   const since = rangeSince(range, now, zone);
   const params = useMemo(
     () => ({
