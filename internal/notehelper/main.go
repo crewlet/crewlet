@@ -177,9 +177,10 @@
 //     name rewritten to that, never over one already there, built in
 //     state/staging (or, where the state is on another filesystem than the
 //     skills, beside the skills directory's real path), outside every skills
-//     directory, and moved into place by one rename; `copied`: the file each
-//     copy is listed in before it is written, for the runner's next launch to
-//     remove (checkoutcopy.go); `reserved`: the tags no checkout takes (the
+//     directory, and moved into place by one rename replacing nothing;
+//     `copied`: the file each copy is listed in before it is written, and off
+//     again where it never lands, for the runner's next launch to remove
+//     (checkoutcopy.go); `reserved`: the tags no checkout takes (the
 //     seats' namespace). A tag is the checkout's name lower-cased, a byte
 //     outside [a-z0-9] a hyphen, `-2`, `-3`... where taken.
 //

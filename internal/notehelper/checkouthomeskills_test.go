@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -107,4 +109,118 @@ func TestARunsSkillsEntryHoldsItsNameWhateverTheRule(t *testing.T) {
 			t.Errorf("listedAs %q: a free name is held for %q", listedAs, got)
 		}
 	}
+}
+
+// plannedCopy is a run whose checkout late holds the skill s (SKILL.md and a
+// data file), planned as late:s, with the Codex spec: the run, the plan and
+// the spec.
+func plannedCopy(t *testing.T) (repoRun, plannedSkill, checkoutSpec) {
+	t.Helper()
+	r := newRepoRun(t, map[string]string{"late/.git/": "", "late/.agents/skills/s/SKILL.md": "---\nname: s\n---\n",
+		"late/.agents/skills/s/data": "DATA"})
+	root := filepath.Join(r.work, "late")
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, _, err := planSkill(filepath.Join(root, ".agents/skills/s"), real, "late:s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, plan, codexSpec(r.skills)
+}
+
+// unlisted fails t where the run's list of copies names late:s.
+func unlisted(t *testing.T, spec checkoutSpec, why string) {
+	t.Helper()
+	if copied, _ := os.ReadFile(spec.Copied); strings.Contains(string(copied), "late:s") {
+		t.Errorf("%s: the copy that never landed is still listed for removal: %q", why, copied)
+	}
+}
+
+// A COPY THAT NEVER LANDS IS TAKEN OFF THE LIST: its name is listed before
+// it is written (a firing killed mid-copy leaves nothing the next gate does
+// not remove), so a copy that fails after that (here something put at its
+// place while it was built, which the rename then refuses) comes off the
+// list, or the run's end would remove that entry, and the entry is as it was.
+//
+// Mutation: list the name after the copy, or leave a failed copy listed, and
+// this goes red. Not parallel: it stands in for renameCopy.
+func TestACopyThatNeverLandsIsTakenOffTheList(t *testing.T) {
+	r, plan, spec := plannedCopy(t)
+	mine := filepath.Join(r.skills, "late:s", "x.md")
+	renameCopy = func(from, to string) error {
+		if copied, _ := os.ReadFile(spec.Copied); !strings.Contains(string(copied), "late:s") {
+			t.Errorf("the copy is moved into place before it is listed for removal: %q", copied)
+		}
+		if err := os.MkdirAll(filepath.Dir(mine), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(mine, []byte("MINE"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return &os.LinkError{Op: "rename", Old: from, New: to, Err: syscall.ENOTEMPTY}
+	}
+	t.Cleanup(func() { renameCopy = renameNoReplace })
+	if _, err := copyPlanned(plan, spec, filepath.Join(r.state, stagingDir), &skips{stderr: io.Discard}); err == nil {
+		t.Fatal("the copy onto a place taken while it was built succeeded")
+	}
+	unlisted(t, spec, "a rename refused")
+	if raw, _ := os.ReadFile(mine); string(raw) != "MINE" {
+		t.Errorf("the entry put at the copy's place reads %q", raw)
+	}
+}
+
+// A COPY NEVER REPLACES WHAT CAME TO ITS PLACE AFTER THE CHECK: the copy is
+// moved by renameat2 with RENAME_NOREPLACE, so even an empty directory made
+// at its place after the check of it (which a plain rename would replace) is
+// left as it was, the copy refused as the home's skills holding its name, and
+// its name off the list.
+//
+// Mutation: move it by a plain rename, and the copy replaces the entry. Not
+// parallel: it stands in for renameCopy.
+func TestACopyNeverReplacesWhatCameToItsPlace(t *testing.T) {
+	r, plan, spec := plannedCopy(t)
+	place := filepath.Join(r.skills, "late:s")
+	renameCopy = func(from, to string) error {
+		if err := os.MkdirAll(place, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return renameNoReplace(from, to)
+	}
+	t.Cleanup(func() { renameCopy = renameNoReplace })
+	_, err := copyPlanned(plan, spec, filepath.Join(r.state, stagingDir), &skips{stderr: io.Discard})
+	if err == nil || err.Error() != "the home's skills hold late:s already" {
+		t.Errorf("the copy onto a directory made after the check returned %v", err)
+	}
+	unlisted(t, spec, "a rename onto an entry")
+	if entries, err := os.ReadDir(place); err != nil || len(entries) != 0 {
+		t.Errorf("the directory made at the copy's place now holds %v (%v)", entries, err)
+	}
+	if err := renameNoReplace(t.TempDir(), place); !errors.Is(err, os.ErrExist) {
+		t.Errorf("a no-replace rename onto an entry returned %v, want EEXIST", err)
+	}
+}
+
+// A COPY WHOSE FILE CHANGED SINCE ITS PLAN IS TAKEN OFF THE LIST: the build
+// refuses a planned file no longer the one planned, and the name it listed
+// before the build comes off, so nothing put at the place later in the run,
+// the skill installed by hand among it, is removed at its end.
+//
+// Mutation: leave a failed copy listed, and this goes red.
+func TestACopyWhoseFileChangedIsTakenOffTheList(t *testing.T) {
+	t.Parallel()
+	r, plan, spec := plannedCopy(t)
+	data := filepath.Join(r.work, "late/.agents/skills/s/data")
+	if err := os.WriteFile(data+".new", []byte("OTHER"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(data+".new", data); err != nil { // another file, as a checkout's pull would make
+		t.Fatal(err)
+	}
+	if _, err := copyPlanned(plan, spec, filepath.Join(r.state, stagingDir), &skips{stderr: io.Discard}); !errors.Is(err,
+		errChanged) {
+		t.Errorf("the copy of a changed file returned %v, want errChanged", err)
+	}
+	unlisted(t, spec, "a changed file")
 }
