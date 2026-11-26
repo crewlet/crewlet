@@ -26,7 +26,7 @@ func runPiNested(_ context.Context, f flags, _ io.Reader, stdout, stderr io.Writ
 	listings := min(maxListing, room)
 	// A ROOM UNDER THE LISTINGS' FULL BOUND NAMES LESS THAN A LATER ONE MAY:
 	// a checkout it cannot name waits for that one.
-	c.firing = &firingBound{left: room - listings, count: utf16Count,
+	c.firing = &firingBound{left: room - listings, count: utf16Count, unitBytes: 3,
 		names: newListingBudgetWithin(listings).namesWithin(), namesCap: listings >= maxListing}
 	handed, skipped, err := handNested(c, stderr)
 	if err != nil {

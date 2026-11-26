@@ -118,9 +118,11 @@ type handedCheckout struct {
 }
 
 // instructionPart is one file of a checkout's instructions: its path and the
-// text handed of it, for an adapter whose harness wraps each file by its path.
+// text handed of it, for an adapter whose harness wraps each file by its path;
+// unread for one a claim left out by its size alone ([fitClaim]).
 type instructionPart struct {
 	path, text string
+	unread     bool
 }
 
 // handedSkill is a checkout's skill as the run lists it: its name, its
@@ -172,7 +174,7 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 		return err
 	}
 	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec,
-		unboundNames(&firingBound{left: math.MaxInt, count: byteCount}), &skips{stderr: stderr})
+		unboundNames(&firingBound{left: math.MaxInt, count: byteCount, unitBytes: 1}), &skips{stderr: stderr})
 	if err != nil {
 		return err
 	}
@@ -286,7 +288,7 @@ type skips struct {
 	stderr io.Writer
 	keep   string
 	lines  []string
-	files  int // how many lines open lines, said by [skips.sayFiles]
+	files  int // how many of lines, from the first, [skips.sayFiles] said
 }
 
 // say says one line of what the firing left out.
@@ -383,7 +385,7 @@ func handNested(c nestedConfig, stderr io.Writer) ([]handedCheckout, []string, e
 	said := &skips{stderr: stderr, keep: filepath.Join(c.State, skippedLog)}
 	firing := c.firing
 	if firing == nil {
-		firing = &firingBound{left: math.MaxInt, count: byteCount, names: newListingBudget().namesWithin(),
+		firing = &firingBound{left: math.MaxInt, count: byteCount, unitBytes: 1, names: newListingBudget().namesWithin(),
 			namesCap: true}
 		if c.FiringLimit != nil {
 			firing.left = *c.FiringLimit
@@ -399,12 +401,21 @@ func handNested(c nestedConfig, stderr io.Writer) ([]handedCheckout, []string, e
 type firingBound struct {
 	left  int
 	count func(string) int
-	// names is the bytes left for the lines naming the files left out, each
-	// with its "\n- " ([fitClaim]); namesCap whether no later firing names
-	// more, so the first checkout is claimed even past it; namesUsed whether
-	// one took any.
-	names               int
-	namesCap, namesUsed bool
+	// unitBytes is the most bytes one unit of count takes, so a file's size
+	// over it is the least it counts (1 a byte, 3 a UTF-16 unit, 4 a code
+	// point); readCap, where above 0, the most units a file is read to whatever
+	// left allows, a file past it kept unread for its adapter to name, not
+	// left out.
+	unitBytes, readCap int
+	// names is what is left, in nameCount (bytes where nil), for the lines
+	// naming the files left out, each with its "\n- ", and for nameCost's
+	// block naming a claimed checkout's files ([fitClaim]); namesCap whether
+	// no later firing names more, so the first checkout is claimed even past
+	// it; namesUsed whether one took any; namesSaid whether a wait was said.
+	names                          int
+	nameCount                      func(string) int
+	nameCost                       func(name, root string, parts []instructionPart) int
+	namesCap, namesUsed, namesSaid bool
 }
 
 // unboundNames is a firing bound with no bound on its names: a launch's.
@@ -444,7 +455,7 @@ func utf16Count(s string) int {
 func fitFiring(parts []instructionPart, firing *firingBound, said *skips) []instructionPart {
 	var kept []instructionPart
 	for _, p := range parts {
-		if cost := framedCost(p, firing.count); cost > firing.left {
+		if cost := framedCost(p, firing.count); p.unread && firing.readCap == 0 || cost > firing.left {
 			said.say("the instruction file %s is left out: it passes what is left of the firing's bound on "+
 				"instructions; read it at that path", p.path)
 		} else {
@@ -710,27 +721,41 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 }
 
 // fitClaim is whether the checkout name under work may be claimed now for
-// its instructions: its files read within limit and fitted to what is left
-// of firing ([fitFiring]) into parts, the lines naming those left out said
-// first ([skips.sayFiles]) and within firing's names, a line each with its
-// "\n- ". One whose lines pass what is left waits for a later firing, unless
+// its instructions: its files read within limit and what is left of firing,
+// one whose size alone passes that never read ([instructionPartsWithin]),
+// fitted ([fitFiring]) into parts, the lines naming those left out said
+// first ([skips.sayFiles]); those lines and firing's nameCost within its
+// names. One past what is left waits for a later firing, said once, unless
 // it would be the first to name any where no firing names more: a checkout
 // is claimed for good, and a file it was not handed is the model's to find
-// only by its line. An importing spec reads its files at hand, naming none.
+// only by its name. An importing spec reads its files at hand, naming none.
 func fitClaim(work, name string, limit int, spec checkoutSpec, firing *firingBound,
 	parts map[string][]instructionPart, said *skips) bool {
 	if spec.ImportInstructions {
 		return true
 	}
+	root := filepath.Join(work, name)
 	trial := &skips{stderr: io.Discard}
-	read, _ := instructionParts(filepath.Join(work, name), limit, spec.Instructions, trial)
+	read, _ := instructionPartsWithin(root, limit, spec.Instructions, firing, trial)
 	try := *firing
 	kept := fitFiring(read, &try, trial)
+	count := firing.nameCount
+	if count == nil {
+		count = byteCount
+	}
 	cost := 0
 	for _, line := range trial.lines {
-		cost += len(line) + len("\n- ")
+		cost += count(line) + len("\n- ")
 	}
-	if cost > firing.names && (firing.namesUsed || !firing.namesCap) {
+	if firing.nameCost != nil && len(kept) > 0 {
+		cost += firing.nameCost(name, root, kept)
+	}
+	if cost > 0 && cost > firing.names && (firing.namesUsed || !firing.namesCap) {
+		if !firing.namesSaid {
+			fmt.Fprintln(said.stderr, "notehelper: this firing's room to name what it leaves out is spent; the "+
+				"checkouts left wait for the next")
+			firing.namesSaid = true
+		}
 		return false
 	}
 	firing.left, firing.names = try.left, firing.names-cost
@@ -792,6 +817,16 @@ func checkoutName(work, name string) bool {
 // bytes a split rune left. A file of whitespace alone, as a harness reads
 // one, is its slot's file and hands nothing, charged nothing.
 func instructionParts(root string, limit int, slots []instructionSlot, said *skips) ([]instructionPart, int) {
+	return instructionPartsWithin(root, limit, slots, nil, said)
+}
+
+// instructionPartsWithin is [instructionParts] for a claim within fit (nil for
+// none): a slot's file whose size over fit's unitBytes, with its frame, passes
+// what is left of fit is left out unread, never opened, and one read is read
+// to at most unitBytes a unit left, past which it is left out too, so a file
+// of any size costs a firing a stat.
+func instructionPartsWithin(root string, limit int, slots []instructionSlot, fit *firingBound,
+	said *skips) ([]instructionPart, int) {
 	var texts []instructionPart
 	spent := 0
 	handed := handedFiles{}
@@ -820,7 +855,32 @@ func instructionParts(root string, limit int, slots []instructionSlot, said *ski
 			if real, ok := slotFile(root, path, slot.slotOptions); !ok || !handed.first(real, slot.Once) {
 				continue
 			}
-			text, n, cut := readInstructions(path, info.Size(), limit-spent)
+			room, most := limit-spent, math.MaxInt
+			if fit != nil {
+				most = fit.left
+				if fit.readCap > 0 && fit.readCap < most {
+					most = fit.readCap
+				}
+			}
+			if fit != nil && most < math.MaxInt/max(fit.unitBytes, 1) {
+				least := int((info.Size() + int64(fit.unitBytes) - 1) / int64(max(fit.unitBytes, 1)))
+				if least+3*fit.count(path)+64 > most {
+					texts = append(texts, instructionPart{path: path, unread: true})
+					break
+				}
+				if bytes := fit.unitBytes * most; bytes < room {
+					if info.Size() > int64(bytes) {
+						texts = append(texts, instructionPart{path: path, unread: true})
+						break
+					}
+					room = bytes
+				}
+			}
+			text, n, cut := readInstructions(path, info.Size(), room)
+			if cut && room < limit-spent {
+				texts = append(texts, instructionPart{path: path, unread: true}) // it grew past the cap since its stat
+				break
+			}
 			if n > 0 {
 				texts, spent = append(texts, instructionPart{path: path, text: text}), spent+n
 			}

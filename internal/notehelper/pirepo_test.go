@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -294,6 +295,34 @@ func piFiringNamesWhatItClaims(t *testing.T, room int) {
 	for _, name := range waiting {
 		if !strings.Contains(later, piFramed(work, name, "AGENTS.md", "C\n")) {
 			t.Errorf("%s, which waited, is not handed whole by a firing with room", name)
+		}
+	}
+}
+
+// A PI FIRING NEVER READS A FILE IT LEAVES OUT: a sparse AGENTS.md of
+// 256 MiB is named from its size alone, in a room under the listings' 64 KiB
+// (which hands no file) and in the most room a firing gets, the firing
+// allocating a fraction of it. Not parallel: it reads the heap's allocations.
+//
+// Mutation: read the file before deciding, and this goes red.
+func TestAPiFiringNeverReadsAFileItLeavesOut(t *testing.T) {
+	for _, room := range []int{6_000, piRoomed} {
+		r := newRepoRun(t, nil)
+		r.launchWith(t, piSpec(r.skills), false, "")
+		r.add(t, map[string]string{"huge/.git/": "", "huge/AGENTS.md": ""})
+		file := filepath.Join(r.workdir(t), "huge", "AGENTS.md")
+		if err := os.Truncate(file, 256<<20); err != nil {
+			t.Fatal(err)
+		}
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		out, _ := r.piFireWithin(t, room)
+		runtime.ReadMemStats(&after)
+		if !strings.Contains(out, piLeftOut(file)) {
+			t.Errorf("a room of %d does not name the huge file:\n%.400s", room, out)
+		}
+		if grew := after.TotalAlloc - before.TotalAlloc; grew > 32<<20 {
+			t.Errorf("a room of %d allocated %d bytes for a file it leaves out", room, grew)
 		}
 	}
 }
