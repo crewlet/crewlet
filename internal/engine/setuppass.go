@@ -158,26 +158,18 @@ func (p *atlassianPass) run(ctx context.Context, in setup.PassInput) ([]integrat
 }
 
 // recordSite writes the site this pass discovered (the org key lists it) into
-// the Jira and Confluence blocks, or says why it could not. Only a writing
-// pass, one handed a sink, records: the dashboard's read-only check must not
-// advance the config epoch. The cloud ID is load-bearing: a provisioned
-// service account's token is accepted only at the API gateway, never the
-// site host. A value the company set itself is left alone.
+// the Jira and Confluence blocks naming no address, or says why it could not.
+// Only a writing pass, one handed a sink, records: the dashboard's read-only
+// check must not advance the config epoch. The cloud ID is load-bearing: a
+// provisioned service account's token is accepted only at the API gateway,
+// never the site host. A value the company set itself is left alone.
 func (p *atlassianPass) recordSite(
 	ctx context.Context, company *Company, site atlassian.Site, writing bool,
 ) string {
-	if !writing || site.CloudID == "" {
+	if !writing {
 		return ""
 	}
-	patch := map[string]map[string]string{}
-	if j := company.Config.Integrations.Jira; j != nil && j.CloudID == "" {
-		patch["jira"] = map[string]string{"cloud_id": site.CloudID, "site_url": site.HostURL}
-	}
-	if c := company.Config.Integrations.Confluence; c != nil && c.CloudID == "" {
-		patch["confluence"] = map[string]string{
-			"cloud_id": site.CloudID, "site_url": site.HostURL + "/wiki",
-		}
-	}
+	patch := sitePatch(company.Config.Integrations, site)
 	if len(patch) == 0 {
 		return ""
 	}
@@ -195,6 +187,26 @@ func (p *atlassianPass) recordSite(
 		return "the Atlassian site could not be recorded: " + err.Error()
 	}
 	return ""
+}
+
+// sitePatch is the cloud id and site address for each product block naming
+// no address of its own; empty when the site is unknown or every block names
+// one. A block naming a url is never given a cloud id beside it, which config
+// refuses as two names for one instance.
+func sitePatch(in config.Integrations, site atlassian.Site) map[string]map[string]string {
+	patch := map[string]map[string]string{}
+	if site.CloudID == "" {
+		return patch
+	}
+	if j := in.Jira; j != nil && j.CloudID == "" && j.URL == "" {
+		patch["jira"] = map[string]string{"cloud_id": site.CloudID, "site_url": site.HostURL}
+	}
+	if c := in.Confluence; c != nil && c.CloudID == "" && c.URL == "" {
+		patch["confluence"] = map[string]string{
+			"cloud_id": site.CloudID, "site_url": site.HostURL + "/wiki",
+		}
+	}
+	return patch
 }
 
 // NO TEARDOWN for Atlassian: it registers no webhook (Cloud events arrive
