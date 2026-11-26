@@ -16,7 +16,9 @@
 // need a larger budget, both would have had to learn it separately.
 //
 // It imports the JetStream client and nothing from the rest of the engine, so
-// either side can take it without taking the other.
+// either side can take it without taking the other; nor nats-server, whose
+// pse package starts sampling the process every second at init in every
+// binary that links it ([errCodeNoLeader]).
 //
 // # Why the clustered budget is four times the solo one
 //
