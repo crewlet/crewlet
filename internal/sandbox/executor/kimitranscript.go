@@ -191,7 +191,7 @@ func (Kimi) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
 	}
 	defer func() { _ = wire.Close() }()
 	held, err := kimiNotesHeld(ctx, wire, takes, summary)
-	return held, summary.failedBy(err)
+	return held, summary.failedBy(unchangedRecord(wire, "the Kimi session's record", err))
 }
 
 // recordSummary reports whether the receipts' walk reads ask's summary: its

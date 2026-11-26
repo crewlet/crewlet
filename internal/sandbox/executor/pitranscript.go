@@ -641,7 +641,7 @@ func (Pi) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session, t
 	}
 	defer func() { _ = f.Close() }()
 	held, err := piNotesHeld(ctx, f, takes, summary)
-	return held, summary.failedBy(err)
+	return held, summary.failedBy(unchangedRecord(f, "the Pi session's record", err))
 }
 
 // summaryWhy is why ask's summary is not read off its session file, "" where

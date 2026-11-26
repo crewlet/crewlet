@@ -201,3 +201,131 @@ func TestACollectionReadsNoMorePiecesWholeThanItsBudgetHolds(t *testing.T) {
 			"holds room for %d", most, sandbox.CollectWholePieces)
 	}
 }
+
+// A PIECE READ WHOLE STANDS FOR ONE VERSION OF ITS FILE: read short of the
+// size its open found, or cut, or cut and grown short again while it was
+// read, it is refused as a piece that changed while it was read; grown in
+// place, as one past its bound; a file written anew over its path while it
+// was read leaves the one opened whole, and it is read.
+//
+// Mutations, each red: accept a read short of the size; leave out the check of
+// the file after the read; take an append for no change.
+func TestAPieceReadWholeStandsForOneVersionOfItsFile(t *testing.T) {
+	t.Parallel()
+	const report = 64 << 10
+	for _, c := range []struct {
+		name   string
+		during func(b *sandbox.FakeSandbox, path string)
+		short  bool
+		want   string
+	}{
+		{"read short of its size", nil, true, "changed while the collection read it"},
+		{"cut while read", func(b *sandbox.FakeSandbox, path string) { b.TruncateInPlace(path, 100) }, false,
+			"changed while the collection read it"},
+		{"cut and grown short", func(b *sandbox.FakeSandbox, path string) {
+			b.TruncateInPlace(path, 0)
+			b.AppendInPlace(path, []byte(strings.Repeat("s", report/2)))
+		}, false, "changed while the collection read it"},
+		{"grown in place", func(b *sandbox.FakeSandbox, path string) { b.AppendInPlace(path, []byte("more")) },
+			false, "grew past the"},
+		{"written anew over its path", func(b *sandbox.FakeSandbox, path string) { b.Put(path, "another") },
+			false, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			b, _ := collectedBox(report, 1<<10)
+			findings := PathsFor(b).Findings()
+			b.Streams = func(path string, r io.Reader) io.Reader {
+				if path != findings {
+					return r
+				}
+				if c.short {
+					return io.LimitReader(r, report/2)
+				}
+				return &firstRead{r: r, then: func() {
+					if c.during != nil {
+						c.during(b, findings)
+					}
+				}}
+			}
+			r := NewClaudeCode()
+			p := PathsFor(b)
+			pieces, err := r.openCollection(t.Context(), b, p, r.harness.Output(p))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pieces.close()
+			raw, refusal, err := pieces.findings.whole()
+			switch {
+			case err != nil:
+				t.Fatal(err)
+			case c.want == "" && (refusal != "" || len(raw) != report):
+				t.Errorf("the piece read %d bytes, refused %q; want the file opened, whole", len(raw), refusal)
+			case c.want != "" && (raw != nil || !strings.Contains(refusal, c.want)):
+				t.Errorf("the piece read %d bytes, refused %q; want none, refused as %q", len(raw), refusal, c.want)
+			}
+		})
+	}
+}
+
+// firstRead is r, calling then once its first read has handed something over.
+type firstRead struct {
+	r    io.Reader
+	then func()
+	done bool
+}
+
+func (f *firstRead) Read(p []byte) (int, error) {
+	n, err := f.r.Read(p[:min(len(p), 1024)])
+	if n > 0 && !f.done {
+		f.done = true
+		f.then()
+	}
+	return n, err
+}
+
+// A SESSION'S RECORD IS READ AS ONE VERSION OF IT, for the harnesses whose
+// notes and newest summary are read off it (Copilot's events, Pi's session
+// file): a record written to while its walk read it is refused, neither held
+// nor not, since what was read may join two versions of it; one left alone
+// reads as it did.
+//
+// Mutation: leave the check of the record after its walk out of either.
+func TestASessionsRecordIsReadAsOneVersionOfIt(t *testing.T) {
+	t.Parallel()
+	const session = "9a8b7c6d-0000-4000-8000-000000000002"
+	for name, c := range map[string]struct {
+		path func(Paths) string
+		read func(context.Context, sandbox.Sandbox) error
+	}{
+		"Copilot": {func(p Paths) string { return p.CopilotSessionDir(session) + "/events.jsonl" },
+			func(ctx context.Context, b sandbox.Sandbox) error {
+				_, err := Copilot{}.notesHeld(ctx, b, Session{ID: session}, nil, nil)
+				return err
+			}},
+		"Pi": {func(p Paths) string { return p.PiSessionFile(session) },
+			func(ctx context.Context, b sandbox.Sandbox) error {
+				_, err := Pi{}.notesHeld(ctx, b, Session{ID: session}, nil, nil)
+				return err
+			}},
+	} {
+		for _, written := range []bool{false, true} {
+			b := sandbox.NewFakeSandbox("box-1")
+			path := c.path(PathsFor(b))
+			b.Put(path, "")
+			if written {
+				b.Streams = func(p string, r io.Reader) io.Reader {
+					if p != path {
+						return r
+					}
+					b.AppendInPlace(path, []byte("{}\n"))
+					return r
+				}
+			}
+			err := c.read(t.Context(), b)
+			if refused := err != nil && strings.Contains(err.Error(), "while it was read"); refused != written {
+				t.Errorf("%s's record, written to while read %v, read with %v", name, written, err)
+			}
+		}
+	}
+}

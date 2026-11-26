@@ -60,9 +60,12 @@ func (p *piece) close() {
 	}
 }
 
-// whole reads the piece whole, at most the size it was opened and weighed at:
-// one byte more is a file that grew past it after the open, which is refused
-// as a piece past its bound, since a cut report reads as a finished one.
+// whole reads the piece whole, at most the size it was opened and weighed at,
+// and only as one version of its file ([sandbox.ChangeOf]): one byte more, or
+// a file grown since the open, is refused as a piece past its bound, since a
+// cut report reads as a finished one; a read short of the size, or a file cut
+// or written over since, as a piece that changed while it was read, since what
+// was read may join two versions of it.
 func (p *piece) whole() ([]byte, string, error) {
 	if p.refusal != "" || p.body == nil {
 		return nil, p.refusal, nil
@@ -72,8 +75,16 @@ func (p *piece) whole() ([]byte, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("executor: reading %s (%s): %w", p.what, p.path, err)
 	}
-	if int64(len(raw)) > p.size {
+	change, err := sandbox.ChangeOf(p.body)
+	if err != nil {
+		return nil, "", fmt.Errorf("executor: telling whether %s (%s) changed while it was read: %w",
+			p.what, p.path, err)
+	}
+	switch {
+	case int64(len(raw)) > p.size, change == sandbox.FileAppended:
 		return nil, grownPiece(p.path, p.what, p.size), nil
+	case int64(len(raw)) < p.size, change != sandbox.FileUnchanged:
+		return nil, changedPiece(p.path, p.what, int64(len(raw)), p.size), nil
 	}
 	return raw, "", nil
 }
@@ -89,6 +100,33 @@ func (p *piece) text() (string, string, error) {
 func grownPiece(path, what string, size int64) string {
 	return fmt.Sprintf("%s (%s) grew past the %s it held when the collection opened it, "+
 		"so it was not read", what, path, humanSize(size))
+}
+
+// unchangedRecord is err, or, where a walk of the session record body named by
+// what ended without one, its refusal as a record that changed while it was
+// read ([sandbox.ChangeOf]): what was read may join two versions of it, so its
+// notes and its summary are read off neither.
+func unchangedRecord(body io.Reader, what string, err error) error {
+	if err != nil {
+		return err
+	}
+	change, err := sandbox.ChangeOf(body)
+	if err != nil {
+		return fmt.Errorf("executor: telling whether %s changed while it was read: %w", what, err)
+	}
+	if change != sandbox.FileUnchanged {
+		return fmt.Errorf("executor: %s was %s while it was read, so what was read may join two versions of it",
+			what, change)
+	}
+	return nil
+}
+
+// changedPiece describes a piece cut or written over while the collection read
+// it: read bytes of the size it held at the open.
+func changedPiece(path, what string, read, size int64) string {
+	return fmt.Sprintf("%s (%s) changed while the collection read it (%s of the %s it held when opened "+
+		"were read, and it was cut or written over meanwhile), so it was not read", what, path,
+		humanSize(read), humanSize(size))
 }
 
 // openWhole opens a piece read whole ([sandbox.Sandbox.OpenWhole]): refused,

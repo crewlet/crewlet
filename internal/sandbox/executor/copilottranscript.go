@@ -799,7 +799,7 @@ func (Copilot) notesHeld(ctx context.Context, box sandbox.Sandbox, session Sessi
 	}
 	defer func() { _ = events.Close() }()
 	held, err := copilotNotesHeld(ctx, events, takes, summary)
-	return held, summary.failedBy(err)
+	return held, summary.failedBy(unchangedRecord(events, "the Copilot session's record", err))
 }
 
 // summaryWhy is why ask's summary is not read off its record, "" where it is:
