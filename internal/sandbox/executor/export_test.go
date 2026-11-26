@@ -417,3 +417,13 @@ const CodexRolloutKinds = codexRolloutKinds
 
 // MuseTraceNeedle is how a Muse Code run's script picks its traces out.
 const MuseTraceNeedle = museTraceNeedle
+
+// CollectedRecordCount is what r's collection counts off its harness's own
+// record in box ([recordCollected]); none for a harness counted off its stream.
+func CollectedRecordCount(ctx context.Context, r *Runner, box sandbox.Sandbox) (sandbox.RequestCount, error) {
+	rc, ok := r.harness.(recordCollected)
+	if !ok {
+		return sandbox.RequestCount{}, nil
+	}
+	return r.collectedRecord(ctx, box, rc)
+}

@@ -1142,6 +1142,15 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		requests, unheld, inFlight = streamed.requests, streamed.unheld, streamed.inFlight
 		undecided = streamed.undecided
 	}
+	// A HARNESS WHOSE OWN RECORD SHOWS ITS REQUESTS ([recordCollected]) is held to
+	// its cap by that record, read as its live count reads it.
+	if rc, ok := r.harness.(recordCollected); ok {
+		count, err := r.collectedRecord(ctx, box, rc)
+		if err != nil {
+			return sandbox.Result{}, err
+		}
+		requests, undecided = count.Requests, count.Undecided
+	}
 	// THE STREAM BEFORE THE RESULT FILE, keeping not its last line: what its
 	// reading holds after is the record's halves, so the file is parsed beside
 	// nothing; the line is read again only where it stands for the file.

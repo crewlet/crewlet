@@ -205,30 +205,11 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 			` "$s" > `+before+`.part 2> /dev/null && mv -f `+before+`.part `+before+`; else : > `+before+`; fi`,
 		`if [ "$k" = yes ]; then set -- --resume "$s"; else set -- --session-id "$s"; fi`,
 		geminiIncludeRoots(paths),
-		// ITS CHAT FILE, named for the live count once Gemini CLI writes it
-		// ([geminiPointer]).
-		geminiPointer(paths),
 		run,
-		`kill "$gwp" 2> /dev/null`,
 		"node "+q(paths.GeminiHelper())+" usage "+q(paths.GeminiChats())+` "$s" `+before,
 		geminiLocate(paths),
 		strings.TrimSuffix(chatCapture(paths, paths.GeminiSlugDir(), GeminiCLI{}), "\n"),
 		"exit $code"), "\n")
-}
-
-// geminiPointer starts, in the background as gwp, a watcher that names in
-// [Paths.CountRecord] the chat file of the run's session once Gemini CLI writes
-// it, as the helper finds it (gemini_helper.mjs, sessionFile): a file of the
-// chats directory named for the session's first eight characters whose first
-// line names the session ([GeminiCLI.liveRecord]). None where the list of the
-// responses the session held was never written: the helper counts none then.
-func geminiPointer(paths Paths) string {
-	q := shellword.Quote
-	pointer := q(paths.CountRecord())
-	return `g8=$(printf '%.8s' "$s"); ( [ -f ` + q(paths.GeminiUsageBefore()) + ` ] || exit 0; while kill -0 $$ 2> /dev/null; do for f in ` + q(paths.GeminiChats()) +
-		`/session-*-"$g8".jsonl; do if [ -f "$f" ] && [ ! -L "$f" ] && head -n 1 "$f" | grep -qF "$s"; then ` +
-		`printf '%s\n0\n' "$f" > ` + pointer + `.next && mv -f ` + pointer + `.next ` + pointer + `; exit 0; fi; done; ` +
-		`sleep 0.1; done ) & gwp=$!`
 }
 
 // geminiBridgedPrefix opens the name Gemini CLI gives each tool of the
@@ -315,12 +296,24 @@ const geminiCodeAssist = "https://cloudcode-pa.googleapis.com"
 // empty, which Gemini CLI reads as its own endpoint; the Code Assist endpoint
 // is named, since an empty one is read as a URL; the prompt files are `false`
 // until the script names its own (measured on 0.70.0).
-func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, _ Paths) []Pinned {
-	return []Pinned{{Name: "GEMINI_CLI_TRUST_WORKSPACE", Value: "true"}, {Name: "NO_BROWSER", Value: "true"},
+func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
+	return append([]Pinned{{Name: "GEMINI_CLI_TRUST_WORKSPACE", Value: "true"}, {Name: "NO_BROWSER", Value: "true"},
 		{Name: "GEMINI_SYSTEM_MD", Value: "false"}, {Name: "GEMINI_WRITE_SYSTEM_MD", Value: "false"},
 		{Name: "CODE_ASSIST_ENDPOINT", Value: cmp.Or(req.Env["CODE_ASSIST_ENDPOINT"], geminiCodeAssist)},
 		{Name: "GOOGLE_GEMINI_BASE_URL", Value: req.Env["GOOGLE_GEMINI_BASE_URL"]},
-		{Name: "GOOGLE_VERTEX_BASE_URL", Value: req.Env["GOOGLE_VERTEX_BASE_URL"]}}
+		{Name: "GOOGLE_VERTEX_BASE_URL", Value: req.Env["GOOGLE_VERTEX_BASE_URL"]}}, geminiTelemetryPins(paths)...)
+}
+
+// geminiTelemetryPins turn on Gemini CLI's own telemetry, into the run's file
+// alone ([Paths.GeminiTelemetry]): the record its turn cap is counted off.
+// PINNED IN THE ENVIRONMENT, which outranks every settings file (measured on
+// 0.70.0), so a person's own telemetry settings change nothing of it: a file
+// switches the OTLP export off, and the local target keeps a "gcp" one from
+// exporting ahead of the file (0 connections in a run whose home's settings
+// named both). The prompts stay out of the file.
+func geminiTelemetryPins(paths Paths) []Pinned {
+	return []Pinned{{Name: "GEMINI_TELEMETRY_ENABLED", Value: "true"}, {Name: "GEMINI_TELEMETRY_TARGET", Value: "local"},
+		{Name: "GEMINI_TELEMETRY_LOG_PROMPTS", Value: "false"}, {Name: "GEMINI_TELEMETRY_OUTFILE", Value: paths.GeminiTelemetry()}}
 }
 
 // routing answers [router] with the endpoints [GeminiCLI.Pins] fills from the
@@ -646,5 +639,5 @@ func (GeminiCLI) artifactFiles(p Paths) []string {
 		p.GeminiAdminPolicy() + "/crewlet.toml",
 		p.GeminiSettings(), p.GeminiSettings() + ".fresh", p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem(),
 		p.GeminiUsageBefore(), p.GeminiUsageBefore() + ".part", p.GeminiNoteHelper(), p.GeminiCheckoutLaunch(),
-		p.GeminiCheckoutSections(), p.GeminiCheckoutRoots()}
+		p.GeminiCheckoutSections(), p.GeminiCheckoutRoots(), p.GeminiTelemetry()}
 }

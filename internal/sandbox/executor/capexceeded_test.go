@@ -2,6 +2,8 @@ package executor_test
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -120,6 +122,16 @@ func collectCapped(t *testing.T, h executor.Harness, stream string, turnCap int)
 	}
 	b.Put(p.Findings(), "Outcome: succeeded")
 	b.Put(p.ExitCode(), "0")
+	if h.Name() == executor.GeminiCLIName {
+		// ITS TELEMETRY BESIDE IT, the record its collection counts: as many
+		// responses as the stream's own record states requests.
+		made := 0
+		if m := regexp.MustCompile(`"requests":([0-9]+)`).FindStringSubmatch(stream); m != nil {
+			made, _ = strconv.Atoi(m[1])
+		}
+		record, _ := fixtureRecord(recordFixtures[executor.GeminiCLIName], made, 0)
+		b.Put(p.GeminiTelemetry(), record)
+	}
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{TurnCap: turnCap}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)

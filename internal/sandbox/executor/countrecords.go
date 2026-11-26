@@ -4,15 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"regexp"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // The five runners counted live off their harness's own record
-// ([recordCounted]), each by the rule its collection counts the same record by.
+// ([recordCounted]), each by the rule its collection counts the same record by:
+// read off the lines its script appends of it, or off the record itself
+// ([recordCollected]).
 
 // codexRolloutName is a rollout's file name, `rollout-<time>-<thread>.jsonl`.
 var codexRolloutName = regexp.MustCompile(`^rollout-[0-9A-Za-z.:-]+\.jsonl$`)
@@ -149,85 +149,49 @@ func (c *copilotJournalCount) Skipped(line LongLine) {
 func (c *copilotJournalCount) requests() int  { return c.n + c.compactions }
 func (c *copilotJournalCount) undecided() int { return c.unread }
 
-// geminiChatName is a session's chat file name, `session-<time>-<id8>.jsonl`.
-var geminiChatName = regexp.MustCompile(`^session-[0-9A-Za-z.:_-]+\.jsonl$`)
-
-// liveRecord implements [recordCounted]: the chat file the script found for
-// the run's session ([geminiPointer]). IN NEITHER IT NOR THE COLLECTION: the
-// side calls Gemini CLI makes on its flash model ([geminiEvents.Requests]).
-func (GeminiCLI) liveRecord(ctx context.Context, box sandbox.Sandbox, paths Paths) (string, int, bool, error) {
-	return recordPlace{root: paths.GeminiChats(), depth: 0, name: geminiChatName}.named(ctx, box, paths)
+// liveRecord implements [recordCounted]: the run's own telemetry file, at the
+// run's own path, cleared before the run starts ([Paths.GeminiTelemetry]): no
+// pointer to read. IT IS LARGE: about 130 KB a request (measured on 0.70.0,
+// 5.35 MB for 41: its spans 59%, its metrics 22%, the inference details 15%,
+// and no setting of 0.70.0's trims them without the responses), so at the
+// fastest measured pace, about 31 requests in 2 s, a tick reads some 4 MB, under
+// [countReadBytes], and the count keeps up. IT LAGS: Gemini CLI writes it a
+// second at a time (measured: at most 1.1 s after the request).
+//
+//nolint:unparam // the interface's: the runners whose scripts find their record read a pointer that can fail.
+func (GeminiCLI) liveRecord(_ context.Context, _ sandbox.Sandbox, paths Paths) (string, int, bool, error) {
+	return paths.GeminiTelemetry(), 0, true, nil
 }
 
-// recordTally implements [recordCounted]: the helper's own rule
-// (gemini_helper.mjs, usage): the distinct responses with tokens, but those the
-// session held as the run began ([Paths.GeminiUsageBefore]). Where that list
-// was never written the helper counts none, and the script names no record
-// ([geminiPointer]).
-func (GeminiCLI) recordTally(ctx context.Context, box sandbox.Sandbox, paths Paths) (recordTally, error) {
-	raw, err := box.ReadFile(ctx, paths.GeminiUsageBefore())
-	if err != nil {
-		return nil, fmt.Errorf("executor: reading the responses the session held as the run began: %w", err)
-	}
-	before := map[string]bool{}
-	for _, id := range strings.Split(string(raw), "\n") {
-		before[id] = true
-	}
-	return &geminiChatCount{before: before, ids: map[string]bool{}}, nil
+// recordTally implements [recordCounted].
+func (GeminiCLI) recordTally(context.Context, sandbox.Sandbox, Paths) (recordTally, error) {
+	return &geminiTelemetryCount{}, nil
 }
 
-// geminiChatCount is a chat file's count. ONE ID A RESPONSE: the file appends a
-// response's entry again as it completes (measured on 0.70.0: 91 entries for
-// 31 responses). The ids held are the responses', one a request.
-type geminiChatCount struct {
-	before, ids map[string]bool
-	unread      int
-}
+// collectsFromRecord implements [recordCollected]: the stream states no request
+// the side calls make, and the telemetry does.
+func (GeminiCLI) collectsFromRecord() {}
 
-func (g *geminiChatCount) Line(line []byte) {
-	var entry struct {
-		Type   string          `json:"type"`
-		ID     string          `json:"id"`
-		Tokens json.RawMessage `json:"tokens"`
-	}
-	if json.Unmarshal(line, &entry) != nil || entry.Type != "gemini" || entry.ID == "" ||
-		!jsTruthy(entry.Tokens) {
-		return
-	}
-	g.add(entry.ID)
-}
+// geminiResponse is the line of the telemetry file, a JSON object printed whole
+// a field a line, that names one model response: each request answered, its
+// side calls on the flash model included, a request retried after a 429 or a
+// 500 once (measured on 0.70.0: 31 main and 10 side calls of 41 at the stand-in;
+// 6 for 6 answered beside 2 failed attempts).
+var geminiResponse = regexp.MustCompile(`^ *"event\.name": "gemini_cli\.api_response",$`)
 
-// Skipped reads the entry's kind and id at its head, where the file writes
-// them; a line whose head names no kind may be a response the count cannot read.
-func (g *geminiChatCount) Skipped(line LongLine) {
-	switch t := windowField(line.Head, "type", false); {
-	case t == "gemini" && windowField(line.Head, "id", false) != "":
-		g.add(windowField(line.Head, "id", false))
-	case t == "":
-		g.unread++
+// geminiTelemetryCount is a telemetry file's count of its responses.
+type geminiTelemetryCount struct{ n int }
+
+func (g *geminiTelemetryCount) Line(line []byte) {
+	if geminiResponse.Match(line) {
+		g.n++
 	}
 }
 
-func (g *geminiChatCount) add(id string) {
-	if !g.before[id] {
-		g.ids[id] = true
-	}
-}
-
-func (g *geminiChatCount) requests() int  { return len(g.ids) }
-func (g *geminiChatCount) undecided() int { return g.unread }
-
-// jsTruthy reports whether a JSON value reads as true where the helper tests
-// it: present, and neither null, false, a zero nor an empty string.
-func jsTruthy(v json.RawMessage) bool {
-	switch s := strings.TrimSpace(string(v)); s {
-	case "", "null", "false", `""`:
-		return false
-	default:
-		var n float64
-		return json.Unmarshal([]byte(s), &n) != nil || n != 0
-	}
-}
+// Skipped is no response: the line naming one is that field alone.
+func (g *geminiTelemetryCount) Skipped(LongLine) {}
+func (g *geminiTelemetryCount) requests() int    { return g.n }
+func (g *geminiTelemetryCount) undecided() int   { return 0 }
 
 // liveRecord implements [recordCounted]: the main thread's session.jsonl the
 // script found for the run's session, and its lines as the run began

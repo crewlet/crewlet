@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -129,6 +130,12 @@ type recordCount struct {
 
 // Read implements [sandbox.Counter].
 func (c *recordCount) Read(ctx context.Context, box sandbox.Sandbox) (sandbox.RequestCount, error) {
+	return c.read(ctx, box, false)
+}
+
+// read is [recordCount.Read]; with end, the job is over, and a last line with
+// no break is a line.
+func (c *recordCount) read(ctx context.Context, box sandbox.Sandbox, end bool) (sandbox.RequestCount, error) {
 	paths := PathsFor(box)
 	if c.path == "" {
 		named, skip, ok, err := c.harness.liveRecord(ctx, box, paths)
@@ -154,7 +161,7 @@ func (c *recordCount) Read(ctx context.Context, box sandbox.Sandbox) (sandbox.Re
 		return c.most, fmt.Errorf("executor: opening the run's record to count its requests: %w", err)
 	}
 	defer func() { _ = body.Close() }()
-	err = c.lines.read(bufio.NewReaderSize(body, lineChunkBytes), false,
+	err = c.lines.read(bufio.NewReaderSize(body, lineChunkBytes), end,
 		func(line []byte) error {
 			if c.seen++; c.seen > c.skip {
 				c.rec.Line(line)
@@ -176,6 +183,24 @@ func (c *recordCount) Read(ctx context.Context, box sandbox.Sandbox) (sandbox.Re
 		return c.most, fmt.Errorf("executor: reading the run's record to count its requests: %w", err)
 	}
 	return c.most, nil
+}
+
+// recordCollected is a [recordCounted] harness whose collection counts its
+// requests off the same record, read whole by the same rule, rather than off
+// lines its script appends to its stream.
+type recordCollected interface {
+	recordCounted
+	collectsFromRecord()
+}
+
+// collectedRecord is the requests the run's own record shows once its job is
+// over ([recordCollected]), read whole by the rule its live count reads it with:
+// none where the record is not there.
+func (r *Runner) collectedRecord(ctx context.Context, box sandbox.Sandbox, rc recordCollected) (
+	sandbox.RequestCount, error) {
+
+	c := &recordCount{harness: rc, bound: r.lineBound, readBytes: math.MaxInt64, inFlight: r.harness.Events().InFlight()}
+	return c.read(ctx, box, true)
 }
 
 // restart begins the reading at the record's first byte, with a fresh count.

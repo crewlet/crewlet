@@ -1,17 +1,14 @@
 package executor_test
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -31,7 +28,7 @@ type recordFixture struct {
 	earlier []string
 	request func(i int) []string
 	// stream is what the script appends to the stream of the run's own lines;
-	// nil where a helper of the harness's counts them ([geminiHelperCount]).
+	// nil where the collection reads the record itself.
 	stream func(own []string) string
 }
 
@@ -49,8 +46,11 @@ func museEvent(i int, kind string) string {
 	return fmt.Sprintf(`{"schema_version":1,"id":"e%[1]d","stream":{"kind":"session","id":"s"},"sequence":%[1]d,"payload_type":"runtime.session","payload":{"event":{"base_instructions":"b","kind":"%[2]s"},"kind":"run"}}`, i, kind)
 }
 
-func geminiEntry(id string, tokens string) string {
-	return fmt.Sprintf(`{"id":"%s","timestamp":"t","type":"gemini","content":"step","tokens":%s,"model":"gemini-2.5-pro"}`, id, tokens)
+// geminiTelemetry is a telemetry record as Gemini CLI prints one, a field a line,
+// naming event on model.
+func geminiTelemetry(event, model string) string {
+	return "{\n  \"attributes\": {\n    \"session.id\": \"s\",\n    \"event.name\": \"" + event +
+		"\",\n    \"model\": \"" + model + "\"\n  }\n}"
 }
 
 // wrapEach is each line of own that keep holds, wrapped as a script's sed wraps it.
@@ -124,14 +124,14 @@ var recordFixtures = map[string]recordFixture{
 		},
 	},
 	executor.GeminiCLIName: {
-		path: func(p executor.Paths) string {
-			return p.GeminiChats() + "/session-2026-11-25T00-00-" + fixtureSession[:8] + ".jsonl"
-		},
-		pointed: true,
+		path: func(p executor.Paths) string { return p.GeminiTelemetry() },
 		request: func(i int) []string {
-			id := fmt.Sprintf("r-%d", i)
-			return []string{fmt.Sprintf(`{"id":"u%d","timestamp":"t","type":"user","content":[{"text":"go"}]}`, i),
-				geminiEntry(id, `{"input":1,"output":1}`), geminiEntry(id, `{"input":1,"output":2}`)}
+			model := "gemini-2.5-pro"
+			if i%3 == 0 {
+				model = "gemini-3-flash-preview"
+			}
+			return append(strings.Split(geminiTelemetry("gemini_cli.api_request", model), "\n"),
+				strings.Split(geminiTelemetry("gemini_cli.api_response", model), "\n")...)
 		},
 	},
 }
@@ -150,19 +150,12 @@ func fixtureRecord(fixture recordFixture, made, long int) (string, []string) {
 		own = append(own, lines...)
 	}
 	all := append(append([]string{}, fixture.earlier...), own...)
-	if strings.Contains(fixture.path(executor.Paths{Home: "/h"}), "/chats/") {
-		all = append([]string{`{"sessionId":"` + fixtureSession + `","kind":"main"}`}, all...)
-	}
 	return strings.Join(all, "\n") + "\n", own
 }
 
 // pointTo names path in b's pointer, with fixture's earlier lines.
 func pointTo(b *sandbox.FakeSandbox, fixture recordFixture, path string) {
-	skip := len(fixture.earlier)
-	if strings.Contains(path, "/chats/") {
-		skip = 0
-	}
-	b.Put(executor.PathsFor(b).CountRecord(), path+"\n"+strconv.Itoa(skip)+"\n")
+	b.Put(executor.PathsFor(b).CountRecord(), path+"\n"+strconv.Itoa(len(fixture.earlier))+"\n")
 }
 
 // recordBox is a box for runner with fixture's record, of record, at its
@@ -174,7 +167,6 @@ func recordBox(t *testing.T, runner *executor.Runner, fixture recordFixture) *sa
 	if fixture.pointed {
 		pointTo(b, fixture, fixture.path(p))
 	}
-	b.Put(p.GeminiUsageBefore(), "")
 	return b
 }
 
@@ -208,8 +200,8 @@ func TestEveryRunnerIsCountedLive(t *testing.T) {
 // THE RECORD ARRIVES: for every runner counted off its record, the record read
 // as it grows (split mid-line, and inside a line past the bound), a few bytes a
 // read, and after a rewrite that shrank it, ends on exactly what its collection
-// counts of the lines its script appends of the same record, an earlier run's
-// lines left out; no read's count is below the one before; and a read takes
+// counts of the lines its script appends of the same record, or of the record
+// itself, an earlier run's lines left out; no read's count is below the one before; and a read takes
 // only the bytes the record grew by.
 //
 // Mutation: count an earlier run's lines, judge a line past the bound
@@ -220,22 +212,26 @@ func TestALiveRecordCountIsItsCollectionsCountHoweverTheRecordArrives(t *testing
 	t.Parallel()
 	const made = 6
 	for name, fixture := range recordFixtures {
-		if fixture.stream == nil {
-			continue // TestAGeminiLiveCountIsItsHelpersCount holds it
-		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			runner := executor.Bounded(executor.New(harnessNamed(t, name)), sandbox.MaxFailureBytes, countLineBound)
 			record, own := fixtureRecord(fixture, made, 2)
-			want, err := executor.CollectedCount(runner, []byte(fixture.stream(own)))
+			b := recordBox(t, runner, fixture)
+			at := fixture.path(executor.PathsFor(b))
+			var want sandbox.RequestCount
+			var err error
+			if fixture.stream != nil {
+				want, err = executor.CollectedCount(runner, []byte(fixture.stream(own)))
+			} else {
+				b.Put(at, record)
+				want, err = executor.CollectedRecordCount(t.Context(), runner, b)
+			}
 			if err != nil {
 				t.Fatalf("the collection's count: %v", err)
 			}
 			if want.Requests < made-1 {
 				t.Fatalf("the premise: the collection counts %+v of a record of %d requests", want, made)
 			}
-			b := recordBox(t, runner, fixture)
-			at := fixture.path(executor.PathsFor(b))
 			read := recordReader(t, b)
 
 			t.Run("as it grows", func(t *testing.T) {
@@ -317,50 +313,6 @@ func harnessNamed(t *testing.T, name string) executor.Harness {
 	return nil
 }
 
-// A GEMINI CLI RUN'S LIVE COUNT IS ITS HELPER'S COUNT of the same chat file:
-// the distinct responses with tokens, but those the session held as the run
-// began, each counted once however often the file writes it again, a line past
-// the bound included.
-//
-// Mutation: count each entry rather than each response, or count one with no
-// tokens or one the session held already, and the count is not the helper's.
-func TestAGeminiLiveCountIsItsHelpersCount(t *testing.T) {
-	t.Parallel()
-	node := geminiNode(t)
-	fixture := recordFixtures[executor.GeminiCLIName]
-	runner := executor.Bounded(executor.New(executor.GeminiCLI{}), sandbox.MaxFailureBytes, countLineBound)
-	record, _ := fixtureRecord(fixture, 5, 2)
-	record += geminiEntry("held-1", `{"input":1}`) + "\n" + geminiEntry("no-tokens", "null") + "\n"
-	b := recordBox(t, runner, fixture)
-	p := executor.PathsFor(b)
-	b.Put(fixture.path(p), record)
-	b.Put(p.GeminiUsageBefore(), "held-1\n")
-
-	chats := t.TempDir()
-	if err := os.WriteFile(filepath.Join(chats, filepath.Base(fixture.path(p))), []byte(record), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	before := filepath.Join(t.TempDir(), "before")
-	if err := os.WriteFile(before, []byte("held-1\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	out, err := exec.CommandContext(t.Context(), node, filepath.Join(".", "gemini_helper.mjs"), "usage", chats,
-		fixtureSession, before).Output()
-	if err != nil {
-		t.Fatalf("the helper's usage: %v", err)
-	}
-	var usage struct {
-		Requests int `json:"requests"`
-	}
-	if err := json.Unmarshal(bytes.TrimSpace(out), &usage); err != nil || usage.Requests != 5 {
-		t.Fatalf("the premise: the helper counts %s (%v), want the five responses", out, err)
-	}
-	got, err := executor.CountingBy(runner, executor.CountReadBytes).Read(t.Context(), b)
-	if err != nil || got.Requests != usage.Requests {
-		t.Fatalf("the live count reads %+v (%v); the helper counts %d", got, err, usage.Requests)
-	}
-}
-
 // A POINTER OUTSIDE ITS RECORD'S PLACE COUNTS NOTHING: a run's script names its
 // record in the box's pointer, which the run can write too, so the count reads
 // the file it names only where it is the harness's own record's place (under
@@ -436,5 +388,70 @@ func TestACopilotJournalsCheckpointsAreNoRequests(t *testing.T) {
 	b.Put(fixture.path(executor.PathsFor(b)), record)
 	if got, err := runner.Count(sandbox.RunHandle{}).Read(t.Context(), b); err != nil || got.Requests != 2 {
 		t.Fatalf("a journal of two requests and two checkpoints counts %+v (%v), want the two", got, err)
+	}
+}
+
+// A GEMINI CLI RUN IS COUNTED BY ITS TELEMETRY'S RESPONSES, live and at its
+// collection: every model's, its flash side calls' included, a request's
+// record and an attribute that only quotes the event counting nothing. Past
+// its cap by them, it collects as past it, whatever its chat file states.
+//
+// Mutation: count the requests rather than the responses, count the main
+// model's alone, drop the rule's anchor, or collect off the chat file's count,
+// and a check goes red.
+func TestAGeminiRunIsCountedByItsTelemetrysResponses(t *testing.T) {
+	t.Parallel()
+	fixture := recordFixtures[executor.GeminiCLIName]
+	runner := executor.New(executor.GeminiCLI{})
+	record, _ := fixtureRecord(fixture, 5, 0)
+	// A FAILED ATTEMPT, a request with no response, and an attribute quoting the event.
+	record += geminiTelemetry("gemini_cli.api_request", "gemini-2.5-pro") + "\n" +
+		geminiTelemetry("gemini_cli.api_error", "gemini-2.5-pro") + "\n" +
+		"{\n  \"attributes\": {\n    \"note\": 1, \"event.name\": \"gemini_cli.api_response\",\n  }\n}\n"
+	b := box(t, runner)
+	b.Put(executor.PathsFor(b).GeminiTelemetry(), record)
+	got, err := runner.Count(sandbox.RunHandle{}).Read(t.Context(), b)
+	if err != nil || got.Requests != 5 {
+		t.Fatalf("the live count reads %+v (%v), want the five responses, one in three a side call's", got, err)
+	}
+	if collected, err := executor.CollectedRecordCount(t.Context(), runner, b); err != nil || collected != got {
+		t.Fatalf("the collection counts %+v (%v), the live count %+v", collected, err, got)
+	}
+	// COLLECTED BY THE SAME, not by the chat file's count of the main model's
+	// requests, which here states 4, within a cap of 4.
+	p := paths(b)
+	b.Put(executor.GeminiCLI{}.Output(p).Stdout, streamOf(
+		`{"type":"init","session_id":"0b5e0000-0000-4000-8000-000000000001","model":"gemini-2.5-pro"}`,
+		`{"type":"result","status":"success"}`,
+		`{"type":"crewlet_gemini_usage","tokens":{"input":1,"output":1},"requests":4}`))
+	b.Put(p.Findings(), "Outcome: succeeded")
+	b.Put(p.ExitCode(), "0")
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{TurnCap: 4}, queue.NewAnswerBudget(nil))
+	if err != nil || res.Success || !res.TurnCapExceeded {
+		t.Fatalf("five responses, a side call's among them, under a cap of 4 collect as success %v, exceeded %v "+
+			"(%v); want past the cap", res.Success, res.TurnCapExceeded, err)
+	}
+}
+
+// GEMINI CLI'S TELEMETRY IS PINNED TO THE RUN'S OWN FILE, in the environment,
+// which outranks every settings file: on, local, prompts out, and into the
+// file its turn cap is counted off. Measured on 0.70.0, a home's settings
+// naming a gcp target and an OTLP endpoint beside these pins exported nothing.
+//
+// Mutation: leave the target unpinned, or point the file elsewhere, and a pin
+// is missing.
+func TestGeminisTelemetryIsPinnedToTheRunsOwnFile(t *testing.T) {
+	t.Parallel()
+	p := paths(sandbox.NewFakeSandbox("box-1"))
+	want := map[string]string{"GEMINI_TELEMETRY_ENABLED": "true", "GEMINI_TELEMETRY_TARGET": "local",
+		"GEMINI_TELEMETRY_LOG_PROMPTS": "false", "GEMINI_TELEMETRY_OUTFILE": p.GeminiTelemetry()}
+	got := map[string]string{}
+	for _, pin := range (executor.GeminiCLI{}).Pins(t.Context(), sandbox.RunRequest{}, p) {
+		got[pin.Name] = pin.Value
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Errorf("%s is pinned to %q, want %q", name, got[name], value)
+		}
 	}
 }
