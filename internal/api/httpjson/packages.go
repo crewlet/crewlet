@@ -37,7 +37,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"engine": true, "enginedocs": true, "envfile": true, "envref": true, "es256": true, "estate": true, "executordomain": true, "executordomaintest": true, "executorkeep": true, "executorread": true,
 		"eventfan": true, "eventfantest": true, "events": true, "execstate": true, "expo": true,
 		"extension": true, "externaltest": true, "fixedwait": true, "fleet": true, "fleetsecrets": true, "flock": true,
-		"foldername": true, "github": true, "gitlab": true, "gitproc": true, "gitref": true, "gittest": true, "admob": true, "adsense": true, "googleads": true, "googleanalytics": true, "googleplay": true, "googleauth": true, "googlecloud": true, "googlegrowth": true, "growth": true, "home": true, "host": true, "hostbox": true, "hostreach": true,
+		"foldername": true, "github": true, "gitlab": true, "gitproc": true, "gitref": true, "gittest": true, "admob": true, "adsense": true, "googleads": true, "googleanalytics": true, "googleplay": true, "googleauth": true, "googlecloud": true, "googlegrowth": true, "growth": true, "home": true, "homecache": true, "host": true, "hostbox": true, "hostreach": true,
 		"helperbuild": true, "helpersource": true, "hostboxtest": true, "httpjson": true, "httprelay": true, "httpx": true, "httpxtest": true, "iam": true,
 		"iamapi": true, "iamdomain": true, "imagetest": true, "inbox": true, "insights": true, "integration": true, "notice": true, "issuereport": true,
 		"integrationtest": true, "jetstream": true, "jetstreamtest": true,
