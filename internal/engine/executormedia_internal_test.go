@@ -152,16 +152,16 @@ func TestATakeKeepsMediaApartOnlyOnceEveryReaderReadsIt(t *testing.T) {
 	}
 }
 
-// THE MEDIA GATE'S READS FIT ITS ROOM AT THE FLOOR: every read the gate makes
-// across a link ([Engine.readMediaReaders]) of a fleet at its widest
-// (coord.MaxMaintenanceParticipants nodes): each node's presence at its
-// class's bound, its position row, capture stamp record and retirement at
-// their widest, each reply whole at the floor pace (jsapi.Crossing at
-// objstore.MiBPace), and a read term for each listing's own round trip. The
-// log's evictions are this node's own rows. The figure is
-// sandbox.MediaReadersRoom's doc's, to the tenth of a second.
+// THE MEDIA GATE'S READS FIT ITS ROOM AT THE FLOOR: every read the policy makes
+// across a link ([executorKeep.Policy]) of a fleet at its widest
+// (coord.MaxMaintenanceParticipants nodes): the activation pointer at its bound
+// ([Engine.servedFleetRevision]), and the gate's ([Engine.readMediaReaders]):
+// each node's presence at its class's bound, its position row, record and
+// retirement at their widest, each reply whole at the floor pace (jsapi.Crossing
+// at objstore.MiBPace), a read term for each read's own round trip. The log's
+// evictions are this node's own rows. The figure is MediaReadersRoom's doc's.
 //
-// Mutation: drop a listing, or raise the fleet past the room.
+// Mutation: drop a listing or the pointer, or raise the fleet past the room.
 func TestTheMediaGatesReadsFitItsRoomAtTheFloor(t *testing.T) {
 	t.Parallel()
 	widest := map[string]int{}
@@ -172,12 +172,13 @@ func TestTheMediaGatesReadsFitItsRoomAtTheFloor(t *testing.T) {
 	node := cross(coord.SmallValueBytes) + cross(widest[coord.PositionClass]) +
 		cross(widest[coord.CaptureStampClass]) + cross(widest[coord.RetirementClass])
 	const listings = 4
-	reads := time.Duration(coord.MaxMaintenanceParticipants)*node + listings*jsprovision.ReadTerm
+	pointer := cross(coord.MaxPointerBytes) + jsprovision.ReadTerm
+	reads := pointer + time.Duration(coord.MaxMaintenanceParticipants)*node + listings*jsprovision.ReadTerm
 	if reads > sandbox.MediaReadersRoom {
 		t.Errorf("the gate's reads take %v at the floor, past its room, %v", reads, sandbox.MediaReadersRoom)
 	}
-	if got := reads.Round(100 * time.Millisecond).String(); got != "23.3s" {
-		t.Errorf("the gate's reads take %s at the floor, and sandbox.MediaReadersRoom's doc states 23.3s: "+
+	if got := reads.Round(100 * time.Millisecond).String(); got != "24.7s" {
+		t.Errorf("the gate's reads take %s at the floor, and sandbox.MediaReadersRoom's doc states 24.7s: "+
 			"restate it", got)
 	}
 }

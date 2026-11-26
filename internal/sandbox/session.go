@@ -1222,13 +1222,13 @@ var captureReadBudget = sessionRecordBudget + coord.MaxValueReadCrossing
 // decided only at the record.
 const keepReadRoom = sessionRecordBudget
 
-// MediaReadersRoom is the room the read of who reads a capture naming media is
-// held to ([SessionPolicy.MediaApart]): four listings of small values (the live
-// nodes' presences, the position register's rows, the nodes' capture stamp
-// records and the retired node ids) and the executor log's evictions, this
-// node's own rows. MEASURED, 23.3 s for a fleet at its widest
-// (coord.MaxMaintenanceParticipants nodes, each record at its widest, each
-// reply crossing at the floor pace, a read term a listing; internal/engine's
+// MediaReadersRoom is the room the read of the policy and who reads a capture
+// naming media is held to ([SessionPolicy.MediaApart]): the activation pointer,
+// four listings of small values (the live nodes' presences, the position
+// register's rows, the nodes' capture stamp records and the retired node ids)
+// and the executor log's evictions, this node's own rows. MEASURED, 24.7 s for
+// a fleet at its widest (coord.MaxMaintenanceParticipants nodes, each record at
+// its widest, each reply at the floor pace, a read term a read; internal/engine's
 // TestTheMediaGatesReadsFitItsRoomAtTheFloor), so a record's budget
 // ([sessionRecordBudget]) holds them. Past it the take keeps its media inline,
 // logged with why. Read before the take's budget begins
