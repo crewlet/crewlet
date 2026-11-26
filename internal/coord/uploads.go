@@ -29,7 +29,7 @@ const MaxUploadLedgerBytes = 72 << 10
 // MaxUploadRecordBytes bounds one upload's record as stored, paths in their
 // own bytes. Its widest holds 255 uploaded and 511 generated files and 256
 // carried paths, every path 1,024 bytes JSON writes as two each, and the 50
-// warnings a report keeps and a count: 2,549,551 bytes
+// warnings a report keeps and a count: 2,561,041 bytes
 // (TestTheWidestUploadRecordFitsItsBound). Its read may wait 100 s on a link
 // at the floor; keeping less would drop what a retry is answered from. A
 // writer refuses a record past it.

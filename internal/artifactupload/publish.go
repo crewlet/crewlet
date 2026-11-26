@@ -425,6 +425,20 @@ func (s *Service) addAsset(ctx context.Context, c artifactsdomain.Call, id artif
 		if _, err := s.readBack(ctx, f); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return artifactsdomain.Asset{}, err
 		}
+		if !f.Offered {
+			// OFFERED BEFORE THE WRITE: an asset upload has no claim a
+			// retry would take, so a write whose outcome nobody learns
+			// (a lost answer, a node gone) is marked here or nowhere, and
+			// the early release never deletes what it may have named.
+			if _, err := s.updateRecord(ctx, upload, func(r *record) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml
+				if j := r.fileAt(p); j >= 0 {
+					r.Files[j].Offered = true
+				}
+				return nil
+			}); err != nil {
+				return artifactsdomain.Asset{}, err
+			}
+		}
 	}
 	asset, _, err := s.writes.AddAsset(ctx, c, artifactsdomain.AssetInput{
 		Artifact: id, Name: p, ContentType: f.ContentType, Object: f.object(),

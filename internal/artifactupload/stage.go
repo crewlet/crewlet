@@ -405,15 +405,29 @@ func (r *run) kitHint(file string) string {
 // kitFile is the path a page links one file of a kit release at.
 func kitFile(version, file string) string { return artifacts.KitPrefix + version + "/" + file }
 
+// owns reports whether this run may delete f's object once no version of its
+// own names it: the run wrote it (a generated file it staged), or it is the
+// caller's upload's own streamed file. Never one offered to a write of unknown
+// outcome, nor a direct put that may still land; and never another attempt's
+// generated file, whose version may name it. What a run does not own stays
+// reserved until its hold lapses, and only the collector judges it.
+func (r *run) owns(f file) bool {
+	switch {
+	case f.Offered || f.Transport == transportDirect:
+		return false
+	case f.Transport == transportGenerated:
+		return slices.Contains(r.staged, f.Key)
+	}
+	return f.Transport == transportEngine
+}
+
 // fail answers a publish the domain or the pipeline refused, undoing what the
-// run wrote: every object it staged ([run.staged]) is deleted, dropped from
-// the record and its reservation released, and the caller's upload is open
-// again for another try. A generated file another attempt recorded is dropped
-// from the record and never deleted, since that attempt's outcome is unknown
-// and a version it landed may name it: its bytes stay reserved as the
-// record's Kept until the hold lapses, and only the collector judges it. The
-// upload's own transferred files stay held on it (#1986). An outcome nobody
-// could establish leaves everything for the retry of the same operation.
+// run wrote: every generated object it owns ([run.owns]) is deleted, dropped
+// from the record and its reservation released, and the caller's upload is
+// open again for another try, its own files still held on it. A generated
+// file the run does not own is dropped from the record and never deleted: its
+// bytes stay reserved as the record's Kept. An outcome nobody could establish
+// leaves everything for the retry of the same operation.
 func (r *run) fail(ctx context.Context, cause error) error {
 	if r.stage == nil || r.stageNew {
 		return cause
@@ -432,7 +446,7 @@ func (r *run) fail(ctx context.Context, cause error) error {
 	}
 	var deleted []objstore.Key
 	for _, f := range r.stage.Files {
-		if f.held() && slices.Contains(r.staged, f.Key) {
+		if f.held() && f.Transport == transportGenerated && r.owns(f) {
 			if err := r.s.objects.Delete(ctx, f.Key); err != nil {
 				log.WarnContext(ctx, "artifact_upload_delete_failed", "key", f.Key.String(),
 					"error", err.Error())
@@ -443,18 +457,16 @@ func (r *run) fail(ctx context.Context, cause error) error {
 	}
 	updated, err := r.s.updateRecord(ctx, r.stage.ID, func(rec *record) error {
 		// DROPPED, NOT MARKED: the upload opens again for another publish,
-		// whose files would pile onto these past the record's bound; and an
-		// earlier attempt's, left held, would be deleted by its next close
-		// or its early release.
+		// whose files would pile onto these past the record's bound.
 		rec.Files = slices.DeleteFunc(rec.Files, func(f file) bool {
 			if slices.Contains(deleted, f.Key) {
 				return true
 			}
-			another := f.Transport == transportGenerated && !slices.Contains(r.staged, f.Key)
-			if another && f.held() {
+			kept := f.Transport == transportGenerated && !r.owns(f)
+			if kept && f.held() {
 				rec.Kept += f.Size
 			}
-			return another
+			return kept
 		})
 		if rec.Purpose == purposeStage {
 			rec.State = stateClosed
@@ -473,11 +485,11 @@ func (r *run) fail(ctx context.Context, cause error) error {
 }
 
 // close records a publish that landed: the files the version names are named,
-// the outcome kept for a retry of the same operation, and then every object the
-// engine wrote or streamed that the version does not name is deleted, its
-// reservation released. A file the client put straight to the bucket and the
-// version does not name stays held until the hold lapses: its put may still be
-// in flight on a URL the engine cannot recall.
+// the outcome kept for a retry of the same operation, and then every object
+// the run owns ([run.owns]) that the version does not name is deleted, its
+// reservation released. Whatever else the record holds stays held until the
+// hold lapses: a direct put may still be in flight on a URL the engine cannot
+// recall, and an earlier attempt's version may name the rest.
 func (r *run) close(ctx context.Context, published artifactsdomain.Published, m artifacts.Manifest) {
 	if r.stage == nil || r.stageNew {
 		return
@@ -508,7 +520,7 @@ func (r *run) close(ctx context.Context, published artifactsdomain.Published, m 
 	}
 	var deleted []objstore.Key
 	for _, f := range closed.Files {
-		if !f.held() || f.Transport == transportDirect {
+		if !f.held() || !r.owns(f) {
 			continue
 		}
 		if err := r.s.objects.Delete(ctx, f.Key); err != nil {

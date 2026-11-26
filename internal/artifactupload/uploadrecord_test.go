@@ -121,45 +121,59 @@ func TestAnUploadRecordsTheTypeAFileIsServedAs(t *testing.T) {
 // A RETRY REFUSED AS MOVED LEAVES WHAT AN EARLIER ATTEMPT LANDED: a publish
 // whose version landed and whose answer was lost is retried under its
 // operation key, the head has moved past its base, and the retry is refused
-// as moved before it stages a byte. The generated file the landed version
-// names stays stored, inline or beside an upload's file, through what may
-// follow on the upload the refusal reopens: its window closing and a ledger
-// change releasing it early, or another publish of it closing.
+// as moved before it stages a byte. The generated and the uploaded file the
+// landed version names stay stored and reserved through what may follow on
+// the upload the refusal reopened: its window closing and a ledger change
+// releasing it early, or another publish of it landing, with the uploaded file
+// or without it.
 //
-// Mutation: let fail delete every held generated file of the record, or keep
-// another attempt's generated files on the record it reopens, and the landed
-// version's notes are gone.
+// Mutation: let fail delete another attempt's generated files, drop
+// takeClaim's marks, or let releaseAbandoned or close delete an offered file,
+// and the landed version names an object the store no longer holds.
 func TestARetryRefusedAsMovedLeavesWhatAnEarlierAttemptLanded(t *testing.T) {
 	t.Parallel()
+	again := func(names bool) func(h *harness, id artifacts.ID, up string) {
+		return func(h *harness, id artifacts.ID, up string) {
+			req := artifactupload.PublishRequest{Artifact: id, Base: 2, Mode: manifest.ModePatch, Upload: up,
+				Files: []artifactupload.FileSpec{{Path: "b.txt", Upload: true}}}
+			if names {
+				req.Files = append(req.Files, artifactupload.FileSpec{Path: "a.txt", Upload: true})
+			}
+			if _, _, err := h.svc.Publish(h.t.Context(), h.person("ada", h.opKey("again")), req); err != nil {
+				h.t.Fatalf("publish the reopened upload again: %v", err)
+			}
+		}
+	}
+	released := func(h *harness, id artifacts.ID, _ string) {
+		h.clock.advance(objstore.MaxPresignTerm + time.Minute)
+		h.upload(h.person("ada", h.opKey("next")), id, map[string]string{"c.txt": "next"})
+	}
 	for _, c := range []struct {
 		name string
-		// upload carries an uploaded file beside the inline one.
-		upload bool
+		// inline and upload are the files the publish names: inline notes,
+		// an uploaded file, or both.
+		inline, upload bool
 		// then is what follows the refusal on the upload it reopened.
 		then func(h *harness, id artifacts.ID, up string)
 	}{
-		{"inline", false, func(*harness, artifacts.ID, string) {}},
-		{"with an upload, released once its window closes", true, func(h *harness, id artifacts.ID, _ string) {
-			h.clock.advance(objstore.MaxPresignTerm + time.Minute)
-			h.upload(h.person("ada", h.opKey("next")), id, map[string]string{"b.txt": "next"})
-		}},
-		{"with an upload, published again", true, func(h *harness, id artifacts.ID, up string) {
-			if _, _, err := h.svc.Publish(h.t.Context(), h.person("ada", h.opKey("again")),
-				artifactupload.PublishRequest{Artifact: id, Base: 2, Mode: manifest.ModePatch, Upload: up,
-					Files: []artifactupload.FileSpec{{Path: "a.txt", Upload: true}}}); err != nil {
-				h.t.Fatalf("publish the reopened upload again: %v", err)
-			}
-		}},
+		{"inline", true, false, func(*harness, artifacts.ID, string) {}},
+		{"with an upload, released once its window closes", true, true, released},
+		{"an upload alone, released once its window closes", false, true, released},
+		{"with an upload, published again with its file", true, true, again(true)},
+		{"with an upload, published again without its file", true, true, again(false)},
+		{"an upload alone, published again without its file", false, true, again(false)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			h := newHarness(t, options{loseAnswer: true})
 			created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": "<p>v1</p>"})
-			req := artifactupload.PublishRequest{Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch,
-				Files: []artifactupload.FileSpec{{Path: "notes.txt", Inline: []byte("landed notes")}}}
+			req := artifactupload.PublishRequest{Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch}
+			if c.inline {
+				req.Files = []artifactupload.FileSpec{{Path: "notes.txt", Inline: []byte("landed notes")}}
+			}
 			if c.upload {
 				req.Upload = h.upload(h.person("ada", h.opKey("upload")), created.Artifact,
-					map[string]string{"a.txt": "uploaded"})
+					map[string]string{"a.txt": "uploaded", "b.txt": "uploaded later"})
 				req.Files = append(req.Files, artifactupload.FileSpec{Path: "a.txt", Upload: true})
 			}
 			k := h.person("ada", h.opKey("lost"))
@@ -172,9 +186,192 @@ func TestARetryRefusedAsMovedLeavesWhatAnEarlierAttemptLanded(t *testing.T) {
 				t.Fatalf("the retry answered %v, want it refused as moved", err)
 			}
 			c.then(h, created.Artifact, req.Upload)
-			if got := h.file(h.version(created.Artifact, 2), "notes.txt"); got != "landed notes" {
-				t.Errorf("the landed version's notes read %q, want them as landed", got)
+			if gone := h.gone(); len(gone) > 0 {
+				t.Errorf("rows name %v, which the store no longer holds", gone)
+			}
+			landed := h.version(created.Artifact, 2)
+			if c.inline {
+				if got := h.file(landed, "notes.txt"); got != "landed notes" {
+					t.Errorf("the landed version's notes read %q, want them as landed", got)
+				}
+			}
+			if c.upload {
+				if got := h.file(landed, "a.txt"); got != "uploaded" {
+					t.Errorf("the landed version's uploaded file reads %q, want it as uploaded", got)
+				}
+			}
+			if unnamed, held := h.unnamedBytes(), h.held(); unnamed > held {
+				t.Errorf("the store holds %d bytes nothing names and the reservations hold %d", unnamed, held)
 			}
 		})
+	}
+}
+
+// A KEYED RETRY OF OTHER BYTES LEAVES WHAT ITS FIRST ATTEMPT LANDED: a create,
+// inline or of an upload, lands and loses its answer, and its retry under the
+// same operation key brings other bytes, so the domain takes it for another
+// operation and lands a second artifact. The retry's close deletes nothing
+// the first attempt stored, which the first landing names.
+//
+// Mutation: let close delete a held generated file the run did not stage, or
+// an uploaded file offered to the first attempt, and a landed version names an
+// object the store no longer holds.
+func TestAKeyedRetryOfOtherBytesLeavesWhatItsFirstAttemptLanded(t *testing.T) {
+	t.Parallel()
+	const firstBody = "<p>the first attempt</p>"
+	for _, c := range []struct {
+		name string
+		o    options
+		// attempt sends one attempt of the operation, bringing body.
+		attempt func(h *harness, k artifactsdomain.Call, up, body string) (artifactsdomain.Published, error)
+		// upload is what the case uploads first; nil for none.
+		upload map[string]string
+	}{
+		{"a create", options{loseCreate: true},
+			func(h *harness, k artifactsdomain.Call, _, body string) (artifactsdomain.Published, error) {
+				p, _, err := h.svc.Create(h.t.Context(), k, artifactupload.CreateRequest{
+					Kind: artifacts.KindHTML, Title: "A page", Owner: "ada", OwnerKind: k.Authority.Actor.Kind,
+					Entry: "index.html", Files: []artifactupload.FileSpec{{Path: "index.html", Inline: []byte(body)}}})
+				return p, err
+			}, nil},
+		{"a create of an upload", options{loseCreate: true},
+			// THE RETRY NAMES NO UPLOADED FILE (the domain refuses a second
+			// artifact one the first names), leaving the first's to close.
+			func(h *harness, k artifactsdomain.Call, up, body string) (artifactsdomain.Published, error) {
+				files := []artifactupload.FileSpec{{Path: "index.html", Inline: []byte(body)}}
+				if body == firstBody {
+					files = append(files, artifactupload.FileSpec{Path: "a.txt", Upload: true})
+				}
+				p, _, err := h.svc.Create(h.t.Context(), k, artifactupload.CreateRequest{
+					Kind: artifacts.KindHTML, Title: "A page", Owner: "ada", OwnerKind: k.Authority.Actor.Kind,
+					Entry: "index.html", Upload: up, Files: files})
+				return p, err
+			}, map[string]string{"a.txt": "uploaded"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t, c.o)
+			var up string
+			if c.upload != nil {
+				up = h.upload(h.person("ada", h.opKey("upload")), artifacts.ID{}, c.upload)
+			}
+			before := h.named()
+			k := h.person("ada", h.opKey("lost"))
+			if _, err := c.attempt(h, k, up, firstBody); err == nil ||
+				!strings.Contains(err.Error(), "answer was lost") {
+				t.Fatalf("premise: the first attempt answered %v, want its answer lost", err)
+			}
+			first := map[objstore.Key]bool{}
+			for key := range h.named() {
+				if !before[key] {
+					first[key] = true
+				}
+			}
+			if len(first) == 0 {
+				t.Fatal("premise: the first attempt landed nothing")
+			}
+			retried, err := c.attempt(h, k, up, "<p>the retry</p>")
+			if err != nil {
+				t.Fatalf("the retry of other bytes was refused: %v", err)
+			}
+			second := map[objstore.Key]bool{}
+			for _, e := range h.version(retried.Artifact, retried.Number).Manifest.Files {
+				second[e.Object.Key] = true
+			}
+			// THE BYTES ONLY THE FIRST LANDING NAMES stay on the retry's
+			// record, which holds them until the hold lapses.
+			stored := h.stored()
+			var firstBytes int64
+			for key := range first {
+				size, ok := stored[key]
+				if !ok {
+					t.Errorf("the first attempt's landed object %s is gone after the retry landed", key)
+				}
+				if !second[key] {
+					firstBytes += size
+				}
+			}
+			if gone := h.gone(); len(gone) > 0 {
+				t.Errorf("rows name %v, which the store no longer holds", gone)
+			}
+			if unnamed, held := h.unnamedBytes(), h.held(); unnamed > held || held < firstBytes {
+				t.Errorf("the reservations hold %d bytes, with %d unnamed and %d only the first landing names",
+					held, unnamed, firstBytes)
+			}
+		})
+	}
+}
+
+// A LANDED PUBLISH DELETES WHAT IT OWNS AND THE VERSION DOES NOT NAME: the
+// page its upload streamed, which the version names linted instead, is
+// deleted at once and its reservation released, as no write of unknown
+// outcome was offered it.
+//
+// Mutation: let close delete nothing of the upload's own, or treat every
+// uploaded file as offered, and the page stays stored and held.
+func TestALandedPublishDeletesWhatItOwnsAndTheVersionDoesNotName(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{})
+	created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": "<p>v1</p>"})
+	c := h.person("ada", h.opKey("publish"))
+	up := h.upload(c, created.Artifact, map[string]string{"index.html": page})
+	raw, err := artifactupload.UploadKey(t.Context(), h.svc, up, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := objstore.ParseKey(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.svc.Publish(t.Context(), c, artifactupload.PublishRequest{
+		Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch, Upload: up,
+		Files: []artifactupload.FileSpec{{Path: "index.html", Upload: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if h.named()[key] {
+		t.Fatal("premise: the version names the page as uploaded, not linted")
+	}
+	if _, ok := h.stored()[key]; ok {
+		t.Error("the uploaded page the version superseded is still stored")
+	}
+	if held, unnamed := h.held(), h.unnamedBytes(); held != 0 || unnamed != 0 {
+		t.Errorf("after the publish %d bytes are held and %d unnamed, want none", held, unnamed)
+	}
+}
+
+// AN ASSET WHOSE ANSWER WAS LOST KEEPS ITS OBJECT THROUGH THE EARLY RELEASE:
+// the asset lands and its answer is lost, so its upload is still open when
+// its window closes; the ledger change that would release it early leaves it
+// to lapse, since the asset names the object.
+//
+// Mutation: drop the mark addAsset makes before its write, or let
+// releaseAbandoned release a record holding an offered file, and the asset
+// names an object the store no longer holds.
+func TestAnAssetWhoseAnswerWasLostKeepsItsObjectThroughTheEarlyRelease(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{loseAsset: true})
+	created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": "<p>x</p>"})
+	c := h.person("ada", h.opKey("asset"))
+	body := "asset notes"
+	intent, err := h.svc.Intend(t.Context(), c, created.Artifact, artifacts.UploadRequest{
+		Entries: declare(map[string]string{"notes.txt": body}).Entries, Asset: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.Transfer(t.Context(), c, intent.Upload, "notes.txt", strings.NewReader(body), -1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.AddAsset(t.Context(), h.person("ada", h.opKey("add")), created.Artifact, intent.Upload,
+		"notes.txt"); err == nil {
+		t.Fatal("premise: the asset's answer was not lost")
+	}
+	h.clock.advance(objstore.MaxPresignTerm + time.Minute)
+	h.upload(h.person("ada", h.opKey("next")), created.Artifact, map[string]string{"c.txt": "next"})
+	if gone := h.gone(); len(gone) > 0 {
+		t.Errorf("rows name %v, which the store no longer holds", gone)
+	}
+	if held := h.held(); held < int64(len(body)) {
+		t.Errorf("the reservations hold %d bytes, less than the asset's %d", held, len(body))
 	}
 }

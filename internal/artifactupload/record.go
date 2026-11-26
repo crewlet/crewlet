@@ -103,6 +103,11 @@ type file struct {
 	Key         objstore.Key  `json:"key"`
 	Transport   transport     `json:"transport"`
 	State       fileState     `json:"state"`
+
+	// Offered marks a file offered to a write whose outcome the record
+	// cannot tell: a version or asset it landed may name the object, so
+	// nothing here deletes it ([run.owns]).
+	Offered bool `json:"offered,omitempty"`
 }
 
 // object is the object the file's row would name.
@@ -166,6 +171,23 @@ type record struct {
 // fileAt is the index of the upload's file at path, -1 for none.
 func (r *record) fileAt(path string) int {
 	return slices.IndexFunc(r.Files, func(f file) bool { return f.Path == path })
+}
+
+// keeps reports a record holding bytes an attempt of unknown outcome may have
+// named: kept ones, or a held file offered to it. Its hold is never released
+// early ([Service.releaseAbandoned]); it lapses.
+func (r *record) keeps() bool {
+	return r.Kept > 0 || slices.ContainsFunc(r.Files, func(f file) bool { return f.Offered && f.held() })
+}
+
+// offerHeld marks every file the record still holds offered to a write whose
+// outcome nobody established.
+func (r *record) offerHeld() {
+	for i := range r.Files {
+		if r.Files[i].held() {
+			r.Files[i].Offered = true
+		}
+	}
 }
 
 // heldBytes is every byte the record's files still hold, and the bytes it
