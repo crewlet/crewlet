@@ -9,6 +9,8 @@ import (
 	"time"
 
 	turso_libs "github.com/tursodatabase/turso-go-platform-libs"
+
+	"github.com/crewlet/crewlet/internal/nativelib"
 )
 
 // Turso's native library, and why this file exists.
@@ -27,11 +29,6 @@ import (
 // costs a heal that clears nothing, never a wrong file.
 const tursoCacheDirName = "turso-go"
 
-// tursoCacheEnv overrides the cache root, for upstream and for this file
-// alike. Read rather than set: an operator who has pointed the cache at a
-// shared volume must not find the engine preparing a different one.
-const tursoCacheEnv = "TURSO_GO_CACHE_DIR"
-
 // tursoPrepareTimeout bounds the whole preparation: waiting for a peer that is
 // already extracting, plus this process's own extraction and verification.
 //
@@ -43,21 +40,6 @@ const tursoCacheEnv = "TURSO_GO_CACHE_DIR"
 // up here degrades to the old behaviour rather than refusing to run.
 const tursoPrepareTimeout = time.Minute
 
-// tursoLockStale is how long a lock directory may stand before it is treated
-// as abandoned.
-//
-// A lock is held only across the extraction above, so anything older than this
-// belongs to a process that was killed mid-copy. Reclaiming it too eagerly
-// costs a concurrent extraction — which is the behaviour without any lock at
-// all — while never reclaiming it would wedge every engine on the host for
-// good on the first SIGKILL.
-const tursoLockStale = 2 * time.Minute
-
-// tursoLockPoll is how often a waiting process retries the lock. Short enough
-// that a warm cache adds nothing measurable to startup, long enough not to spin
-// on the filesystem for a wait that is normally sub-second.
-const tursoLockPoll = 25 * time.Millisecond
-
 // prepareTursoLibrary readies the native library exactly once per process.
 //
 // The result is memoised INCLUDING a failure: a second attempt would take the
@@ -65,27 +47,16 @@ const tursoLockPoll = 25 * time.Millisecond
 // retry.
 var prepareTursoLibrary = sync.OnceValue(prepareTursoLibraryNow)
 
-// tursoCacheRoot is where upstream extracts, derived the same way it does.
-func tursoCacheRoot() string {
-	if override := os.Getenv(tursoCacheEnv); override != "" {
-		return override
-	}
-	if dir, err := os.UserCacheDir(); err == nil {
-		return dir
-	}
-	return os.TempDir()
-}
-
 // prepareTursoLibraryNow extracts and verifies the library under a
 // cross-process lock, healing a cache a previous run left half-written.
 //
 // It takes no root: the loader reads the location from the ENVIRONMENT and
 // offers no other way to direct it, so a parameter here could only ever name a
 // directory this function locked and healed while upstream extracted somewhere
-// else. Point [tursoCacheEnv] at a different cache and both halves move
+// else. Point [nativelib.CacheEnv] at a different cache and both halves move
 // together — which is also how this is tested.
 func prepareTursoLibraryNow() error {
-	dir := filepath.Join(tursoCacheRoot(), tursoCacheDirName)
+	dir := filepath.Join(nativelib.CacheRoot(), tursoCacheDirName)
 	// 0755, matching what upstream creates: a cache both processes write is
 	// one whose mode they must agree on.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -95,7 +66,7 @@ func prepareTursoLibraryNow() error {
 	// this process cannot write — is not a reason to refuse: the preparation
 	// then runs unguarded, which is exactly the behaviour before this file
 	// existed and strictly better than an engine that will not start.
-	if release, held := acquireTursoLock(dir, time.Now().Add(tursoPrepareTimeout)); held {
+	if release, held := nativelib.Lock(dir, time.Now().Add(tursoPrepareTimeout)); held {
 		defer release()
 	}
 	return loadOrHealTursoLibrary(dir)
@@ -119,7 +90,7 @@ func loadOrHealTursoLibrary(dir string) error {
 			"at %s was cleared and re-extracted and still does not verify or will not "+
 			"load — delete that directory by hand, or point %s at a writable directory "+
 			"of its own and start again. There is no second driver to fall back to.%s: %w",
-			dir, tursoCacheEnv, libcAdvice(), err)
+			dir, nativelib.CacheEnv, libcAdvice(), err)
 	}
 	return nil
 }
@@ -183,63 +154,6 @@ func clearTursoCache(dir string) {
 	for _, path := range matches {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			log.Warn("turso_library_cache_entry_not_cleared", "path", path, "error", err.Error())
-		}
-	}
-}
-
-// acquireTursoLock takes a cross-process lock on the cache directory.
-//
-// A DIRECTORY, because mkdir is the one exclusive-create primitive every
-// filesystem and OS this engine ships for agrees on (flock needs a build-tagged
-// twin). Held only across an extraction.
-//
-// The second return says whether the lock is HELD; false is not an error: a
-// timed-out wait or an unwritable cache directory runs the preparation
-// unguarded, better than refusing to start.
-func acquireTursoLock(dir string, deadline time.Time) (release func(), held bool) {
-	lock := filepath.Join(dir, ".crewlet-extract.lock")
-	for {
-		err := os.Mkdir(lock, 0o755)
-		if err == nil {
-			return func() {
-				if removeErr := os.Remove(lock); removeErr != nil {
-					log.Warn("turso_library_lock_not_released",
-						"lock", lock, "error", removeErr.Error())
-				}
-			}, true
-		}
-		if !errors.Is(err, os.ErrExist) {
-			// The path cannot hold a lock at all — there is no peer here
-			// to wait for, so waiting would only burn the timeout.
-			log.Debug("turso_library_lock_unavailable", "lock", lock, "error", err.Error())
-			return nil, false
-		}
-		switch info, statErr := os.Stat(lock); {
-		case statErr != nil:
-			// It existed a moment ago and does not now: the holder
-			// released it between the mkdir and the stat.
-		case !info.IsDir():
-			// NOT A LOCK AT ALL. Only this code creates this path and it
-			// only ever creates a directory, so a file here is debris —
-			// and waiting for it would stall every engine on the host for
-			// the whole timeout, once, and then again on the next start.
-			log.Warn("turso_library_lock_debris_cleared", "lock", lock)
-			_ = os.Remove(lock)
-		case time.Since(info.ModTime()) > tursoLockStale:
-			// A lock older than the work it guards belongs to a process
-			// that was killed holding it.
-			log.Warn("turso_library_lock_reclaimed", "lock", lock,
-				"age", time.Since(info.ModTime()).String())
-			_ = os.Remove(lock)
-		}
-		// EVERY path through the loop passes here, deliberately: a retry
-		// that skipped the deadline could spin against a lock that keeps
-		// changing under it, and one that skipped the sleep would spin hot
-		// for the whole minute rather than waiting.
-		time.Sleep(tursoLockPoll)
-		if time.Now().After(deadline) {
-			log.Warn("turso_library_lock_wait_timed_out", "lock", lock)
-			return nil, false
 		}
 	}
 }
