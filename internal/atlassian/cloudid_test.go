@@ -290,8 +290,8 @@ func TestACancelledCallerLeavesTheLookupRunning(t *testing.T) {
 		}()
 		synctest.Wait()
 		cancel()
-		if err := <-gaveUp; err == nil {
-			t.Error("a cancelled caller got an answer")
+		if err := <-gaveUp; !errors.Is(err, context.Canceled) {
+			t.Errorf("a cancelled caller got %v, want its cancellation beneath the refusal", err)
 		}
 		close(gate)
 		synctest.Wait()
@@ -334,5 +334,19 @@ func TestALookupIsMadeOverHTTPSOnly(t *testing.T) {
 	}
 	if n := rt.calls.Load(); n != 0 {
 		t.Errorf("an http url was asked %d times, want 0", n)
+	}
+}
+
+// THE TRANSPORT'S ERROR IS BENEATH THE REFUSAL, so a caller can ask what it
+// was. Mutation: drop Unwrap, or the error it returns, and this goes red.
+func TestATransportErrorIsKeptBeneathTheRefusal(t *testing.T) {
+	t.Parallel()
+	refused := errors.New("connection refused by the test")
+	rt := &transport{answer: func(int64, *http.Request) (*http.Response, error) { return nil, refused }}
+	ids := atlassian.NewCloudIDs(atlassian.CloudIDOptions{Client: &http.Client{Transport: rt}})
+	_, err := ids.Resolve(t.Context(), acmeSite)
+	var lookup *atlassian.TenantInfoError
+	if !errors.As(err, &lookup) || !errors.Is(err, refused) {
+		t.Errorf("Resolve err = %v; want a TenantInfoError over the transport's error", err)
 	}
 }

@@ -42,15 +42,20 @@ const (
 var cloudIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // TenantInfoError is a lookup that did not yield a cloud id: the address
-// asked and a short cause, which every surface names.
+// asked and a short cause, which every surface names, and the error beneath
+// it where there is one (a transport's, a decoder's, a cancelled caller's).
 type TenantInfoError struct {
 	URL   string
 	Cause string
+	Err   error
 }
 
 func (e *TenantInfoError) Error() string {
 	return "the site's cloud id could not be read from " + e.URL + " (" + e.Cause + ")"
 }
+
+// Unwrap is the error beneath, so errors.Is reaches a transport's error.
+func (e *TenantInfoError) Unwrap() error { return e.Err }
 
 // CloudIDs reads the cloud id of an Atlassian Cloud site named by its url,
 // from the site's own public /_edge/tenant_info (Atlassian Support, "How to
@@ -124,7 +129,7 @@ func (c *CloudIDs) Resolve(ctx context.Context, site string) (string, error) {
 		}
 		return res.Val.(string), nil
 	case <-ctx.Done():
-		return "", &TenantInfoError{URL: key, Cause: "no answer before the request ended"}
+		return "", &TenantInfoError{URL: key, Cause: "no answer before the request ended", Err: ctx.Err()}
 	}
 }
 
@@ -152,47 +157,50 @@ func (c *CloudIDs) fly(ctx context.Context, key string) (string, error) {
 
 // read asks address once and validates the answer.
 func (c *CloudIDs) read(ctx context.Context, address string) (string, error) {
-	fail := func(cause string) error { return &TenantInfoError{URL: address, Cause: cause} }
+	fail := func(cause string, err error) error {
+		return &TenantInfoError{URL: address, Cause: cause, Err: err}
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
-		return "", fail(err.Error())
+		return "", fail(err.Error(), err)
 	}
 	req.Header.Set("Accept", "application/json")
 	res, err := c.client.Do(req)
 	if err != nil {
 		var timeout interface{ Timeout() bool }
 		if errors.As(err, &timeout) && timeout.Timeout() {
-			return "", fail(fmt.Sprintf("no answer within %s", TenantInfoTimeout))
+			return "", fail(fmt.Sprintf("no answer within %s", TenantInfoTimeout), err)
 		}
+		cause := err
 		var request *url.Error
 		if errors.As(err, &request) {
-			err = request.Err
+			cause = request.Err
 		}
-		return "", fail("unreachable: " + err.Error())
+		return "", fail("unreachable: "+cause.Error(), err)
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
-		return "", fail(fmt.Sprintf("HTTP %d", res.StatusCode))
+		return "", fail(fmt.Sprintf("HTTP %d", res.StatusCode), nil)
 	}
 	body, err := io.ReadAll(io.LimitReader(res.Body, TenantInfoMaxBytes+1))
 	if err != nil {
-		return "", fail("the answer could not be read: " + err.Error())
+		return "", fail("the answer could not be read: "+err.Error(), err)
 	}
 	if len(body) > TenantInfoMaxBytes {
-		return "", fail(fmt.Sprintf("the answer is over %d bytes", TenantInfoMaxBytes))
+		return "", fail(fmt.Sprintf("the answer is over %d bytes", TenantInfoMaxBytes), nil)
 	}
 	var answer struct {
 		CloudID *string `json:"cloudId"`
 	}
 	if err := json.Unmarshal(body, &answer); err != nil {
-		return "", fail("the answer is not a JSON object")
+		return "", fail("the answer is not a JSON object", err)
 	}
 	if answer.CloudID == nil || strings.TrimSpace(*answer.CloudID) == "" {
-		return "", fail("the answer names no cloudId")
+		return "", fail("the answer names no cloudId", nil)
 	}
 	id := strings.ToLower(strings.TrimSpace(*answer.CloudID))
 	if !cloudIDShape.MatchString(id) {
-		return "", fail("the answer's cloudId is not a cloud id")
+		return "", fail("the answer's cloudId is not a cloud id", nil)
 	}
 	return id, nil
 }
