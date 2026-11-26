@@ -262,7 +262,8 @@ function arm(pi, { servers, required, system, notes, cap, skills, skillURL, list
   // checkouts are handed at the batch's last result, within what all leave.
   // A call pi answers without running it (refused, unknown) ends at once,
   // with no tool_result, and still counts; a sequential batch holds one call
-  // at a time. Its last result or turn_end ends it.
+  // at a time, so one refused before it is in pi's usage and counted again,
+  // tens of tokens on the safe side. Its last result or turn_end ends it.
   pi.on("tool_execution_start", (event) => {
     if (event.parentToolCallId) return
     batch ??= { open: new Set(), tokens: 0 }

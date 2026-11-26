@@ -580,6 +580,9 @@ func TestThePiExtensionHandsTheHelperTheRoomPiLeaves(t *testing.T) {
 		room  int // a tool_result's -room, 0 for no firing
 	}
 	start := func(id string) step { return step{"tool_execution_start", map[string]any{"toolCallId": id}, 0} }
+	end := func(id, text string) step { // pi ends every call after its tool_result
+		return step{"tool_execution_end", map[string]any{"toolCallId": id, "result": map[string]any{"content": texts(text)}}, 0}
+	}
 	result := func(id string, content []map[string]any, room int) step {
 		return step{"tool_result", map[string]any{"toolCallId": id, "toolName": "bash", "content": content}, room}
 	}
@@ -601,8 +604,8 @@ func TestThePiExtensionHandsTheHelperTheRoomPiLeaves(t *testing.T) {
 		{"at the least room", usage(6_208, 40_000), nil, nil, []step{result("a", texts(""), piNestedMinRoom)}},
 		{"a character under it", usage(6_208, 40_000), nil, nil, []step{result("a", texts("O"), 0)}},
 		{"a parallel batch", usage(1_000, 200_000), nil, nil, []step{start("a"), start("b"), start("c"),
-			result("c", texts("cloned"), 0), result("a", texts(big+"R"), 0),
-			result("b", texts(big), 4*(free-2-9_876)-39_500)}},
+			result("c", texts("cloned"), 0), end("c", "cloned"), result("a", texts(big+"R"), 0), end("a", big+"R"),
+			result("b", texts(big), 4*(free-2-9_876)-39_500), end("b", big)}},
 		{"a call ended unrun", usage(1_000, 200_000), nil, nil, []step{start("a"),
 			{"tool_execution_end", map[string]any{"toolCallId": "a", "result": map[string]any{"content": texts("refused")}}, 0},
 			start("b"), start("c"), result("b", texts("OWN"), 0), result("c", texts("OWN"), 4*(free-2-1)-3)}},
@@ -614,6 +617,8 @@ func TestThePiExtensionHandsTheHelperTheRoomPiLeaves(t *testing.T) {
 		{"a turn ended open", usage(1_000, 200_000), nil, nil, []step{start("a"),
 			{"turn_end", map[string]any{"entries": []any{}}, 0}, start("b"), result("b", texts("OWN"), 4*free-3)}},
 		{"no tokens known", usage(nil, 200_000), nil, nil, []step{result("a", texts("OWN"), piNestedFallbackRoom-3)}},
+		{"no tokens, a parallel batch", usage(nil, 200_000), nil, nil, []step{start("a"), start("b"),
+			result("a", texts("cloned"), 0), end("a", "cloned"), result("b", texts("OWN"), piNestedFallbackRoom-4*2-3)}},
 		{"no tokens in a small window", usage(nil, 60_000), nil, nil,
 			[]step{result("a", texts("OWN"), 2*(60_000-2*16_384)-3)}},
 		{"no tokens in a window under the least room", usage(nil, 34_000), nil, nil, []step{result("a", texts("OWN"), 0)}},
