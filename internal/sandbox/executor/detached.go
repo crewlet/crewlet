@@ -1151,6 +1151,15 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 		requests, undecided = count.Requests, count.Undecided
 	}
+	// AND ONE WHOSE SESSION STORE DOES ([storeCounted]), asked as its live count
+	// asks it.
+	if sc, ok := r.harness.(storeCounted); ok {
+		n, _, err := sc.storeRequests(ctx, box, paths)
+		if err != nil {
+			return sandbox.Result{}, err
+		}
+		requests, undecided = n, 0
+	}
 	// THE STREAM BEFORE THE RESULT FILE, keeping not its last line: what its
 	// reading holds after is the record's halves, so the file is parsed beside
 	// nothing; the line is read again only where it stands for the file.

@@ -9,8 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// The five runners counted live off their harness's own record
-// ([recordCounted]), each by the rule its collection counts the same record by:
+// The runners counted live off their harness's own record ([recordCounted]),
+// each by the rule its collection counts the same record by:
 // read off the lines its script appends of it, or off the record itself
 // ([recordCollected]).
 
@@ -56,38 +56,6 @@ func (c *codexRolloutCount) Skipped(line LongLine) {
 
 func (c *codexRolloutCount) requests() int  { return c.responses }
 func (c *codexRolloutCount) undecided() int { return c.unread }
-
-// liveRecord implements [recordCounted]: the plugin's record, at the run's own
-// path, cleared before the run starts ([Paths.HermesRecord]): no pointer to read. IN NEITHER IT NOR
-// THE COLLECTION: the request for a summary Hermes makes once its round cap
-// stops its loop, which the plugin is not told of (measured on 0.23.3: a cap of
-// 3, three requests recorded and that one not).
-//
-//nolint:unparam // the interface's: the other runners read a pointer that can fail.
-func (Hermes) liveRecord(_ context.Context, _ sandbox.Sandbox, paths Paths) (string, int, bool, error) {
-	return paths.HermesRecord(), 0, true, nil
-}
-
-// recordTally implements [recordCounted].
-func (Hermes) recordTally(context.Context, sandbox.Sandbox, Paths) (recordTally, error) {
-	return &hermesRecordCount{}, nil
-}
-
-// hermesRecordCount counts the plugin's record as the collection counts the lines
-// the script appends of it ([hermesEvents.Line]): each that reads, and each
-// too long to read.
-type hermesRecordCount struct{ n int }
-
-func (h *hermesRecordCount) Line(line []byte) {
-	var r hermesRequest
-	if json.Unmarshal(line, &r) == nil {
-		h.n++
-	}
-}
-
-func (h *hermesRecordCount) Skipped(LongLine) { h.n++ }
-func (h *hermesRecordCount) requests() int    { return h.n }
-func (h *hermesRecordCount) undecided() int   { return 0 }
 
 // liveRecord implements [recordCounted]: the session's events.jsonl, and its
 // lines as the run began ([copilotJournalAtLaunch]). IT LAGS: Copilot writes a

@@ -427,3 +427,10 @@ func CollectedRecordCount(ctx context.Context, r *Runner, box sandbox.Sandbox) (
 	}
 	return r.collectedRecord(ctx, box, rc)
 }
+
+// StoreCounted reports whether h is counted off its session store, asked
+// through the box.
+func StoreCounted(h Harness) bool {
+	_, ok := h.(storeCounted)
+	return ok
+}

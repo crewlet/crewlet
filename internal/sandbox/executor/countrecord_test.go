@@ -80,15 +80,7 @@ var recordFixtures = map[string]recordFixture{
 			return wrapEach(own, func(l string) bool { return kept.MatchString(l) }, `{"type":"crewlet.rollout","line":`)
 		},
 	},
-	executor.HermesName: {
-		path: func(p executor.Paths) string { return p.HermesRecord() },
-		request: func(i int) []string {
-			return []string{fmt.Sprintf(`{"api_request_id":"r%d","turn_id":"t_1","model":"m","finish_reason":"tool_calls","context_length":10,"tool_calls":1,"usage":{"input_tokens":1,"output_tokens":1,"cache_read_tokens":0,"cache_write_tokens":0}}`, i)}
-		},
-		stream: func(own []string) string {
-			return wrapEach(own, func(string) bool { return true }, `{"type":"crewlet.hermes_request","line":`)
-		},
-	},
+
 	executor.CopilotName: {
 		path: func(p executor.Paths) string {
 			return p.CopilotHome() + "/session-state/" + fixtureSession + "/events.jsonl"
@@ -173,7 +165,8 @@ func recordBox(t *testing.T, runner *executor.Runner, fixture recordFixture) *sa
 // EVERY RUNNER IS COUNTED LIVE: off its stream, held to a stream of requests
 // ([requestStreams]), or, where its stream shows its requests only once its
 // harness exits, off the harness's own record of the session, held to a
-// record of requests ([recordFixtures]). A runner neither counts nothing while
+// record of requests ([recordFixtures]), or off its session store
+// ([TestAHermesRunIsCountedOffItsSessionStore]). A runner neither counts nothing while
 // it runs, and fails.
 //
 // Mutation: answer no count for a runner, or count one off its stream that
@@ -187,6 +180,7 @@ func TestEveryRunnerIsCountedLive(t *testing.T) {
 		}
 		_, recorded := recordFixtures[h.Name()]
 		switch {
+		case executor.StoreCounted(h):
 		case executor.RecordCounted(h) && !recorded:
 			t.Errorf("%s is counted off its own record and has no record of requests to hold its count to", h.Name())
 		case !executor.RecordCounted(h) && recorded:

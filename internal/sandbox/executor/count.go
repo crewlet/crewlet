@@ -21,8 +21,11 @@ const countReadBytes = liveBacklog
 // life and the line handling [Runner.Collect] reads with, so its count is the
 // collection's of the same bytes; or, for a harness whose stream shows its
 // requests only once it exits, of its own record of the session
-// ([recordCounted]).
+// ([recordCounted]) or its session store ([storeCounted]).
 func (r *Runner) Count(sandbox.RunHandle) sandbox.Counter {
+	if sc, ok := r.harness.(storeCounted); ok {
+		return &storeCount{harness: sc, inFlight: r.harness.Events().InFlight()}
+	}
 	if rc, ok := r.harness.(recordCounted); ok {
 		return &recordCount{harness: rc, bound: r.lineBound, readBytes: countReadBytes,
 			inFlight: r.harness.Events().InFlight()}

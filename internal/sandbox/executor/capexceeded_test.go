@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -122,6 +123,18 @@ func collectCapped(t *testing.T, h executor.Harness, stream string, turnCap int)
 	}
 	b.Put(p.Findings(), "Outcome: succeeded")
 	b.Put(p.ExitCode(), "0")
+	if h.Name() == executor.HermesName {
+		// ITS SESSION STORE BESIDE IT, asked through the box: as many answers
+		// as the plugin's record the stream carries holds responses.
+		made := strings.Count(stream, `"crewlet.hermes_request"`)
+		b.Put(p.HermesRunStart(), fixtureSession+" 0\n")
+		b.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+			if strings.Contains(cmd, "hcarry requests") {
+				return sandbox.ExecResult{Stdout: fmt.Sprintf("crewlet-carry ok %d\n", made)}, nil
+			}
+			return sandbox.ExecResult{}, nil
+		}
+	}
 	if h.Name() == executor.GeminiCLIName {
 		// ITS TELEMETRY BESIDE IT, the record its collection counts: as many
 		// responses as the stream's own record states requests.

@@ -43,7 +43,7 @@ func TestALiveCountIsItsCollectionsCountHoweverTheStreamArrives(t *testing.T) {
 	t.Parallel()
 	const made = 6
 	for _, h := range executor.Registered() {
-		if executor.RecordCounted(h) {
+		if executor.RecordCounted(h) || executor.StoreCounted(h) {
 			continue // TestALiveRecordCountIsItsCollectionsCountHoweverTheRecordArrives holds it
 		}
 		t.Run(h.Name(), func(t *testing.T) {

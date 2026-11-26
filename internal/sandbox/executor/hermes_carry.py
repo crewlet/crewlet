@@ -298,6 +298,24 @@ def top(db_path):
     return "ok %d" % (db.execute("select coalesce(max(id), 0) from messages").fetchone()[0])
 
 
+def requests(db_path, title, after):
+    """The model responses the store holds for the session titled title (its lineage) past message id after: its
+    assistant rows but the notes Hermes writes as one (an interrupt's, a failed turn's), which carry a display_kind
+    or display_metadata no response carries (measured on 0.23.3: a capped run's summary row included)."""
+    if not os.path.isfile(db_path):
+        return "ok 0"
+    db = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
+    if db.execute("select 1 from sqlite_master where type = 'table' and name = 'messages'").fetchone() is None:
+        return "ok 0"
+    db.execute("begin")
+    ids = lineage(db, title)
+    if not ids:
+        return "ok 0"
+    return "ok %d" % db.execute("select count(*) from messages where session_id in (%s) and id > ? and role = "
+                                "'assistant' and display_kind is null and display_metadata is null"
+                                % ",".join("?" * len(ids)), ids + [int(after)]).fetchone()[0]
+
+
 def configured_model(model):
     """A model section's default model; a bare string names it alone, as Hermes reads it."""
     return (model.get("default") if isinstance(model, dict) else model) or ""
@@ -663,13 +681,14 @@ def guard(plugin, servers, skills):
 
 
 COMMANDS = {"dump": (dump, 4), "trim": (trim, 2), "renew": (renew, 3), "restore": (restore, 4), "overlay": (overlay, 3),
-            "top": (top, 1), "route": (route, 3), "servers": (servers, 2), "guard": (guard, 3), "plugoff": (plugoff, 1)}
+            "top": (top, 1), "requests": (requests, 3), "route": (route, 3), "servers": (servers, 2), "guard": (guard, 3), "plugoff": (plugoff, 1)}
 
 if __name__ == "__main__":
     command = COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if command is None or len(sys.argv) != command[1] + 2:
         sys.stderr.write("usage: hermes_carry.py dump DB TITLE POLICY OUT | trim SRC DST | renew DB TITLE SYSTEM | "
-                         "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED HOSTS | top DB | route DB TITLE MODEL | "
+                         "restore MEMBER DB POLICY TITLE | overlay STAGED MANAGED HOSTS | top DB | requests DB TITLE AFTER | "
+                         "route DB TITLE MODEL | "
                          "servers STAGED GUARDED | guard PLUGIN SERVERS SKILLS | plugoff PLUGIN\n")
         sys.exit(2)
     sys.stdout.write("crewlet-carry %s\n" % command[0](*sys.argv[2:]))
