@@ -90,16 +90,21 @@ func grokNestedContext(handed []handedCheckout, skipped []string) string {
 		}
 		whole = append(whole, "for `"+h.name+"` with root "+h.root+"\n\n"+strings.Join(files, "\n\n"))
 	}
-	// EVERY CHECKOUT NAMED FIRST, then made whole in order while the bound
-	// holds: one too big for it never keeps a later one from being named.
+	// EVERY CHECKOUT NAMED FIRST, then what the firing left out held room
+	// for, then each made whole in order while the bound holds: one too big
+	// for it never keeps a later one from being named, nor a left-out line.
 	used := 0
 	for _, n := range named {
 		used += units(n) + 2
 	}
+	held := 0
+	if leftOut := skippedListing(skipped); leftOut != "" {
+		held = units(leftOut) + 2
+	}
 	blocks := make([]string, len(named))
 	copy(blocks, named)
 	for i := range whole {
-		if grow := units(whole[i]) - units(named[i]); used+grow <= grokNestedChars {
+		if grow := units(whole[i]) - units(named[i]); used+grow+held <= grokNestedChars {
 			blocks[i], used = whole[i], used+grow
 		}
 	}

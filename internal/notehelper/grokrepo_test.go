@@ -566,3 +566,33 @@ func TestAGrokCopyIsNamedAsGrokListsIt(t *testing.T) {
 		}
 	}
 }
+
+// A GROK ANSWER NAMES WHAT IT LEFT OUT BEFORE IT HANDS A FILE WHOLE: a
+// checkout whose AGENTS.md alone would fit Grok's cut whole is named instead
+// where whole it would leave no room for the line saying what the firing left
+// out, which comes whole.
+//
+// Mutation: upgrade to whole before holding the left-out lines' room, and
+// this goes red.
+func TestAGrokAnswerNamesWhatItLeftOutBeforeItHandsAFileWhole(t *testing.T) {
+	t.Parallel()
+	handed := func(n int) []handedCheckout {
+		return []handedCheckout{{name: "x", root: "/r", parts: []instructionPart{{path: "/r/AGENTS.md",
+			text: strings.Repeat("i", n)}}}}
+	}
+	lo, hi := 0, grokNestedChars // the largest file handed whole with nothing left out
+	for lo < hi {
+		if mid := (lo + hi + 1) / 2; strings.Contains(grokNestedContext(handed(mid), nil), strings.Repeat("i", mid)) {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	skipped := []string{"the skill /r/.grok/skills/deploy is left out: the home's skills take its name"}
+	got := grokNestedContext(handed(lo), skipped)
+	if !strings.HasSuffix(got, skippedListing(skipped)) || !strings.Contains(got, "read /r/AGENTS.md") ||
+		units(got) > grokNestedChars {
+		t.Errorf("a %d-character file beside a left-out skill answered %d code points ending ...%s; want it named, "+
+			"the line whole", lo, units(got), got[max(len(got)-200, 0):])
+	}
+}

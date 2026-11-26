@@ -91,16 +91,21 @@ func museNestedAnswer(handed []handedCheckout, skipped []string) (string, []stri
 		}
 		whole = append(whole, "for `"+h.name+"` with root "+h.root+"\n\n"+strings.Join(files, "\n\n"))
 	}
-	// EVERY CHECKOUT NAMED FIRST, then made whole in order while the bound
-	// holds: one too big for it never keeps a later one from being named.
+	// EVERY CHECKOUT NAMED FIRST, then what the firing left out held room
+	// for, then each made whole in order while the bound holds: one too big
+	// for it never keeps a later one from being named, nor a left-out line.
 	apart := museEscapedBytes("\n\n")
 	used := apart * max(len(named)-1, 0)
 	for _, n := range named {
 		used += museEscapedBytes(n)
 	}
+	held := 0
+	if leftOut := skippedListing(skipped); leftOut != "" {
+		held = museEscapedBytes(leftOut) + apart
+	}
 	blocks := append([]string(nil), named...)
 	for i := range whole {
-		if grow := museEscapedBytes(whole[i]) - museEscapedBytes(named[i]); used+grow <= room {
+		if grow := museEscapedBytes(whole[i]) - museEscapedBytes(named[i]); used+grow+held <= room {
 			blocks[i], used = whole[i], used+grow
 		}
 	}

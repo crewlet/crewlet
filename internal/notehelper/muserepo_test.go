@@ -554,3 +554,38 @@ func TestAMuseAnswerKeepsWhatItLeftOutBeforeItsSkills(t *testing.T) {
 			got[max(len(got)-300, 0):])
 	}
 }
+
+// A MUSE ANSWER NAMES WHAT IT LEFT OUT BEFORE IT HANDS A FILE WHOLE: a
+// checkout whose AGENTS.md alone would fit the hook's answer whole is named
+// instead where whole it would leave no room for the line saying what the
+// firing left out, which comes whole.
+//
+// Mutation: upgrade to whole before holding the left-out lines' room, and
+// this goes red.
+func TestAMuseAnswerNamesWhatItLeftOutBeforeItHandsAFileWhole(t *testing.T) {
+	t.Parallel()
+	handed := func(n int) []handedCheckout {
+		return []handedCheckout{{name: "x", root: "/r", parts: []instructionPart{{path: "/r/AGENTS.md",
+			text: strings.Repeat("i", n)}}}}
+	}
+	whole := func(n int, skipped []string) bool {
+		out, _ := museNestedAnswer(handed(n), skipped)
+		return strings.Contains(museContext(t, out), strings.Repeat("i", n))
+	}
+	lo, hi := 0, museAnswerBytes // the largest file handed whole with nothing left out
+	for lo < hi {
+		if mid := (lo + hi + 1) / 2; whole(mid, nil) {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	skipped := []string{"the skill /r/.muse/skills/deploy is left out: the home's skills take its name"}
+	out, _ := museNestedAnswer(handed(lo), skipped)
+	got := museContext(t, out)
+	if !strings.HasSuffix(got, skippedListing(skipped)) || !strings.Contains(got, "read /r/AGENTS.md") ||
+		len(out) > museAnswerBytes {
+		t.Errorf("a %d-byte file beside a left-out skill answered %d bytes ending ...%s; want it named, the line whole",
+			lo, len(out), got[max(len(got)-200, 0):])
+	}
+}
