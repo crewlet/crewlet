@@ -33,6 +33,9 @@ import { useKeyedGesture, type KeyedAnswer } from "~/lib/keyedWrite.ts";
 import { ownsRemark, useViewer } from "~/lib/viewer.ts";
 import { pathSegment, type WorkComment, type WorkItem } from "~/protocol/index.ts";
 import { session } from "~/protocol/session.ts";
+import { useDictationBox } from "~/lib/dictation/source.ts";
+import { useDraftBox } from "~/app/assistant/boxes.ts";
+import { useDraftState } from "~/app/assistant/draft.ts";
 
 /** The remark's own address on its task. */
 export function remarkRoute(item: Pick<WorkItem, "id">, comment: Pick<WorkComment, "id">): string {
@@ -144,7 +147,18 @@ function RemarkEditor({
 }) {
   const write = useKeyedGesture();
   const toast = useToast();
-  const [body, setBody] = useState(comment.body);
+  const [body, setBody] = useDraftState(comment.body);
+  const { dictation, refusal: dictating } = useDictationBox();
+  // A FIELD of the task page's one draft, after its title and description.
+  useDraftBox({
+    path: `remark.${comment.id.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`.slice(0, 64),
+    label: `Your comment on ${item.key}`,
+    hint: "Markdown",
+    rank: 2,
+    value: body,
+    set: setBody,
+    refuses: () => dictating,
+  });
   const wanted = body.trim();
   const held =
     wanted === ""
@@ -178,6 +192,7 @@ function RemarkEditor({
         canSubmit={!held && !write.busy}
         onSubmit={() => void save()}
         sendLabels={SAVE_KEYS}
+        dictation={dictation}
         onKeyDown={(event) => {
           if (event.key !== "Escape" || write.busy) return;
           event.preventDefault();

@@ -51,7 +51,13 @@ import {
 import { useQuery } from "./useQuery.ts";
 import { useFrameSession } from "./frameSession.ts";
 import { ADMIN, CHATLET, DOCLET, GITLET, WORKLET, holds } from "./access.ts";
-import type { LogRefusal, QueryRefusal, SessionAnswer, Viewer } from "~/protocol/index.ts";
+import type {
+  LogRefusal,
+  QueryRefusal,
+  SessionAnswer,
+  Viewer,
+  ViewerDictation,
+} from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { AssistantModelNotice } from "~/contract/assistant.ts";
 import {
@@ -190,6 +196,11 @@ export interface ViewerState {
    * nobody has said, which offers the page and leaves it to the frame.
    */
   artifactPages?: boolean | undefined;
+  /**
+   * Whether this node's own recognizer can dictate, and why not. Absent while
+   * nobody has said, which leaves the answer to the socket.
+   */
+  dictation?: ViewerDictation | undefined;
 }
 
 /** The mounted reads of the viewer, asked again by [rereadViewer]. */
@@ -275,6 +286,7 @@ function viewerState(
     assistantCanAssign: data?.assistant?.can_assign === true,
     chatVendors: data?.chat_vendors ?? [],
     artifactPages: data?.artifact_pages,
+    dictation: data?.dictation,
   };
 }
 
