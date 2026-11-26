@@ -164,7 +164,8 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 		return fmt.Errorf("the launch config's skillSep %q is neither %q nor %q", c.SkillSep, ":", "-")
 	}
 	if _, ok := listingRules[c.ListedAs]; c.ListedAs != "" && !ok {
-		return fmt.Errorf("the launch config's listedAs %q is none of %q and %q", c.ListedAs, listedGrok, listedKimi)
+		return fmt.Errorf("the launch config's listedAs %q is none of %q, %q and %q", c.ListedAs, listedGrok,
+			listedKimi, listedOpenCode)
 	}
 	work, err := filepath.EvalSymlinks(cwd)
 	if err != nil {

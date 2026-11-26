@@ -19,7 +19,8 @@ import (
 
 // kimiCheckoutKAP is a `kimi web`, run under node, that records in $HOME/seen
 // what Kimi Code 2.7.2 reads as a session starts (agents: the home's
-// AGENTS.md, null for none; skills: the home's skills directory's files) and
+// AGENTS.md, null for none; skills: the home's skills directory's files, a
+// link leading nowhere passed over) and
 // answers the driver's routes as kimiKAP does. Once the brief is posted it
 // copies $HOME/clone-src, where that names a directory, to $HOME/clone-dst,
 // as a clone during a tool call would, and sends two of the main agent's tool
@@ -38,7 +39,7 @@ const record = (name, value) => fs.writeFileSync(join(seen, name), JSON.stringif
 const files = (dir) => {
   const out = {}
   if (!fs.existsSync(dir)) return out
-  for (const rel of fs.readdirSync(dir, { recursive: true })) if (fs.statSync(join(dir, rel)).isFile()) out[rel] = fs.readFileSync(join(dir, rel), "utf8")
+  for (const rel of fs.readdirSync(dir, { recursive: true })) if (fs.statSync(join(dir, rel), { throwIfNoEntry: false })?.isFile()) out[rel] = fs.readFileSync(join(dir, rel), "utf8")
   return out
 }
 const keep = fs.existsSync(join(home, "keep-hands"))

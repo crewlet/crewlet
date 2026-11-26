@@ -907,7 +907,7 @@ func TestGeminiReadingHoldsNoLine(t *testing.T) {
 		h      sandbox.SessionHoldings
 		err    error
 	)
-	_, allocated := allocationsOf(func() {
+	_, allocated := allocationsOf(t, func() {
 		tarred.Reset(archive)
 		h, err = readGeminiHoldings(context.Background(), &tarred, ghSession, ghBegan, ask)
 	})
