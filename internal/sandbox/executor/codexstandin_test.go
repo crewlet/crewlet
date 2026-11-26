@@ -21,6 +21,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"golang.org/x/net/websocket"
 
+	"github.com/crewlet/crewlet/internal/notehelper/helperbuild"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -41,7 +42,9 @@ func TestMain(m *testing.M) {
 	if socket := os.Getenv(codexStandInSocket); socket != "" {
 		os.Exit(serveCodexStandIn(socket, os.Getenv(codexStandInRecord)))
 	}
-	os.Exit(m.Run())
+	// Every launch here writes the note helper, which a test binary finds
+	// only where helperbuild names it (go doc ./internal/notehelper/helperbuild).
+	os.Exit(helperbuild.WithHelpers(m.Run))
 }
 
 // codexStandInTurn is the turn the stand-in says is in flight.

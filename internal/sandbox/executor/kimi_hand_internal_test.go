@@ -36,9 +36,7 @@ func kimiHands(t *testing.T, events []string, hands ...string) (*kimiProbe, stri
 	t.Helper()
 	dir := t.TempDir()
 	helper := filepath.Join(dir, "notehelper")
-	if err := os.WriteFile(helper, []byte(kimiHandHelper), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeHostProgram(t, helper, []byte(kimiHandHelper), 0o700)
 	for i, text := range hands {
 		if text == "" {
 			continue

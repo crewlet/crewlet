@@ -1,6 +1,7 @@
-// Command notices writes the third-party notices for the crewlet binary: the
-// license and notice files of every Go module linked into it, and of the Go
-// toolchain whose standard library and runtime it carries.
+// Command notices writes the third-party notices for the binaries a release
+// ships, the crewlet binary and the note helper (-main names each): the
+// license and notice files of every Go module linked into them, and of the Go
+// toolchain whose standard library and runtime they carry.
 //
 // goreleaser runs it as a before hook (.goreleaser.yaml), and the release
 // archives and the container image ship what it writes beside LICENSE. The
@@ -74,7 +75,7 @@ import (
 
 func main() {
 	out := flag.String("out", "", "file to write the notices to (required)")
-	pkg := flag.String("main", "", "the main package the binary is built from, for example ./cmd/crewlet (required)")
+	pkg := flag.String("main", "", "comma-separated main packages the release ships binaries of, for example ./cmd/crewlet,./internal/notehelper (required)")
 	targets := flag.String("targets", "", "comma-separated GOOS/GOARCH release targets, for example linux/amd64,darwin/arm64 (required)")
 	flag.Parse()
 
@@ -99,7 +100,7 @@ func run(ctx context.Context, out, pkg, targetList string) error {
 	}
 	lists := make([][]component, 0, 2*len(targets))
 	for _, t := range targets {
-		listed, std, own, listErr := goList(ctx, pkg, t)
+		listed, std, own, listErr := goList(ctx, strings.Split(pkg, ","), t)
 		if listErr != nil {
 			return listErr
 		}
@@ -169,12 +170,14 @@ type listedModule struct {
 	Replace *listedModule
 }
 
-// goList runs `go list -deps -json` for one target.
+// goList runs `go list -deps -json` over pkgs for one target, so the notices
+// cover every binary an archive ships (the engine and the note helper).
 //
 // CGO_ENABLED=0 because that is how every release target is built, and cgo
 // changes which files, and so which imports, a package has.
-func goList(ctx context.Context, pkg string, t target) ([]component, []string, []string, error) {
-	cmd := exec.CommandContext(ctx, "go", "list", "-deps", "-json", pkg)
+func goList(ctx context.Context, pkgs []string, t target) ([]component, []string, []string, error) {
+	cmd := exec.CommandContext(ctx, "go", append([]string{"list", "-deps", "-json"}, pkgs...)...)
+	pkg := strings.Join(pkgs, " ")
 	cmd.Env = append(os.Environ(), "GOOS="+t.goos, "GOARCH="+t.goarch, "CGO_ENABLED=0")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

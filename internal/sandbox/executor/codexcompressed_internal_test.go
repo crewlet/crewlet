@@ -39,9 +39,7 @@ func codexCompressedBox(t *testing.T, rollout []byte, helper string) Paths {
 		t.Fatal(err)
 	}
 	if helper != "" {
-		if err := os.WriteFile(p.CodexNoteHelper(), []byte(helper), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writeHostProgram(t, p.CodexNoteHelper(), []byte(helper), 0o600)
 	}
 	return p
 }
