@@ -74,7 +74,7 @@ roles:
 	if err != nil {
 		t.Fatalf("buildProviders: %v", err)
 	}
-	manager, err := buildSandbox(cfg, config.EnvOnly(), nil, nil)
+	manager, err := buildSandbox(cfg, config.EnvOnly(), nil, nil, nil)
 	if err != nil || manager == nil {
 		t.Fatalf("buildSandbox = %v, %v", manager, err)
 	}

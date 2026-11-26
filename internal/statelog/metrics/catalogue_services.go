@@ -347,6 +347,21 @@ func serviceInstruments() []Instrument {
 				"steady rate is long sessions working as designed; one harness " +
 				"rising alone is its sessions growing faster between compactions.",
 		},
+		{
+			Name: ExecutorHomeCuts, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "Builds of a container box's cached home that cached fewer " +
+				"setup steps than they were given, counted once per build, " +
+				"by `reason`: `outside_home`, a step changed the box outside " +
+				"its home (a package installed system-wide), so it and every " +
+				"later step run in each box; `credential`, the build left a " +
+				"value the launch hands the box as a credential, which it " +
+				"was never handed, so nothing of the seat's setup is cached. " +
+				"Each is kept with its key, so a steady rate is new setups or " +
+				"images, not the same one retried. The " +
+				"`local_sandbox_home_cut` and `local_sandbox_home_refused` " +
+				"lines name the seat, the step and the paths.",
+		},
 
 		// ---- the node's answer budget ------------------------------------
 		{

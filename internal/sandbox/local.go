@@ -1004,6 +1004,10 @@ type LocalOptions struct {
 	// manager's [Manager.HostGrace], one value for every box on this root
 	// whichever box's Create runs the sweep. Zero takes [DefaultHostGrace].
 	HostGrace time.Duration
+
+	// Homes is told each cached home's build that cached less than it was
+	// given ([Local.CreateProvisioned]). Nil records nothing.
+	Homes HomeMeter
 }
 
 // Local mints sandboxes on the engine host, directly or in a container.
@@ -1095,6 +1099,22 @@ func (l *Local) EngineHost() string {
 
 // Create mints a box and, in container mode, starts the container behind it.
 func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
+	return l.create(ctx, spec, createOptions{})
+}
+
+// createOptions is what [Local.CreateProvisioned] asks of a create beyond
+// [Local.Create].
+type createOptions struct {
+	// fill fills the new home: after its own directories are made and before
+	// a login is seeded, so nothing it copies overwrites the seat's login. The
+	// box is kept stamped while it runs, which may be a build of minutes.
+	fill func(home string) error
+	// build makes a cached home's build box: no run record, which names a
+	// turn or a check, so the orphan sweep takes one a crash left.
+	build bool
+}
+
+func (l *Local) create(ctx context.Context, spec Spec, opts createOptions) (Sandbox, error) {
 	id := uuid.NewString()
 	id = strings.ReplaceAll(id, "-", "")[:16]
 	layout, err := l.layout(id)
@@ -1125,6 +1145,15 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 			id, layout.records(), err)
 	}
 
+	if opts.fill != nil {
+		stop := keepStamped(layout)
+		err = opts.fill(layout.home())
+		stop()
+		if err != nil {
+			_ = os.RemoveAll(layout.root)
+			return nil, err
+		}
+	}
 	l.reapOrphans(ctx, l.opts.HostGrace)
 	seeded := seedCredentials(ctx, layout, spec.CredentialFiles, spec.CredentialRules)
 	// The box records what it was seeded with and stamps itself alive before
@@ -1136,11 +1165,13 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		// worth saying out loud, and not worth failing the box for.
 		localLog.Warn("local_sandbox_credential_map_unwritable", "sandbox_id", layout.id, "error", err.Error())
 	}
-	if err = recordRun(layout, boxRun{TurnID: spec.TurnID, Check: spec.Check, Placement: l.opts.Placement}); err != nil {
-		// LOST, the box is one its host's waiter or check runner cannot tell
-		// is still in use, so neither reclaims it — only, once nothing runs
-		// in it, the orphan reaper. Worth saying; not worth the box.
-		localLog.Warn("local_sandbox_run_unrecorded", "sandbox_id", layout.id, "error", err.Error())
+	if !opts.build {
+		if err = recordRun(layout, boxRun{TurnID: spec.TurnID, Check: spec.Check, Placement: l.opts.Placement}); err != nil {
+			// LOST, the box is one its host's waiter or check runner cannot tell
+			// is still in use, so neither reclaims it — only, once nothing runs
+			// in it, the orphan reaper. Worth saying; not worth the box.
+			localLog.Warn("local_sandbox_run_unrecorded", "sandbox_id", layout.id, "error", err.Error())
+		}
 	}
 	touchAlive(layout)
 

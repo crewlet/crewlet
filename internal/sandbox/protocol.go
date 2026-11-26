@@ -144,6 +144,13 @@ type Spec struct {
 	// never written back.
 	CredentialRules map[string]harnessprofile.FileRule
 
+	// Secrets is every value the launch hands the box from a credential
+	// position ([HandedSecrets.Values]). A container box's home cache
+	// ([Local.CreateProvisioned]) caches no step that writes one into a file,
+	// and keeps no home holding one. Set by [Coordinator.Launch], never by a
+	// caller, and never written into a box.
+	Secrets []string
+
 	// Repos are the repositories on Gitlet this run is
 	// given, each resolved at launch ([RunRepo]), at most [MaxRunRepos]. Empty
 	// for a run that clones nothing from Gitlet — a repository on

@@ -1023,6 +1023,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// THE BOX IS MADE FOR THIS TURN, which the box records so its host
 	// can tell when no run names it any more ([Spec.TurnID]).
 	req.Spec.TurnID = req.Turn.TurnID
+	// WHAT NO CACHED HOME MAY HOLD ([Spec.Secrets]): the launch's own set,
+	// the scrub's, whole and by its JSON strings.
+	req.Spec.Secrets = handedSecrets(req, req.Spec.Env).Values
 	box, runner, reused, err := c.acquire(ctx, m, req, opened.Prior)
 	if err != nil {
 		// The row is open and this launch is over. Every failure past this

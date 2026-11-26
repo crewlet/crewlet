@@ -24,7 +24,7 @@ func TestTheCatalogueCreditsCommitsAsTheCompanySays(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			manager, err := buildSandbox(parseCompany(t, sandboxDoc(tc.extra)), nil, nil, nil)
+			manager, err := buildSandbox(parseCompany(t, sandboxDoc(tc.extra)), nil, nil, nil, nil)
 			if err != nil || manager == nil {
 				t.Fatalf("buildSandbox = %v, %v", manager, err)
 			}
