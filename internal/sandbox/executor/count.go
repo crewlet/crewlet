@@ -31,7 +31,8 @@ func (r *Runner) Count(sandbox.RunHandle) sandbox.Counter {
 		return r.recordCounter(rc)
 	}
 	if rs, ok := r.harness.(recordsCounted); ok {
-		m := &maxCount{}
+		// ITS STREAM AMONG THEM, as its collection reads it too ([Runner.collectedRecords]).
+		m := &maxCount{parts: []sandbox.Counter{&counter{harness: r.harness, bound: r.lineBound, readBytes: countReadBytes}}}
 		for _, rc := range rs.countedRecords() {
 			m.parts = append(m.parts, r.recordCounter(rc))
 		}

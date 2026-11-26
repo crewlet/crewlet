@@ -51,11 +51,12 @@ type recordsCounted interface {
 	countedRecords() []recordCounted
 }
 
-// maxCount is one live count of a job off several records ([recordsCounted]):
-// the most requests any of them shows, and, where a record holds lines it
-// cannot read, as many undecided as take the reading that may show the most
-// to its most ([reachOf]). Each part never goes down, so neither does it.
-type maxCount struct{ parts []*recordCount }
+// maxCount is one live count of a job off several records ([recordsCounted]),
+// its stream among them: the most requests any of them shows, and, where a
+// record holds lines it cannot read, as many undecided as take the reading
+// that may show the most to its most ([reachOf]). Each part never goes down,
+// so neither does it.
+type maxCount struct{ parts []sandbox.Counter }
 
 // Read implements [sandbox.Counter]: every part is read, and a part that
 // failed fails the read, the others' count still standing.

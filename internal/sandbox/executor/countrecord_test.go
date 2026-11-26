@@ -45,7 +45,18 @@ const fixtureSession = "0b5e0000-0000-4000-8000-000000000001"
 const (
 	geminiTelemetryRow = executor.GeminiCLIName + " telemetry"
 	geminiChatRow      = executor.GeminiCLIName + " chat"
+	qwenChatRow        = executor.QwenCodeName + " chat"
 )
+
+// qwenChatLine is a line of a Qwen Code chat file: kind "response" an answered
+// request's ui_telemetry line, "error" a failed attempt's, else an assistant entry.
+func qwenChatLine(i int, kind string) string {
+	switch kind {
+	case "response", "error":
+		return fmt.Sprintf(`{"uuid":"t%[1]d","type":"system","subtype":"ui_telemetry","systemPayload":{"uiEvent":{"event.name":"qwen-code.api_%[2]s","response_id":"c%[1]d"}}}`, i, kind)
+	}
+	return fmt.Sprintf(`{"uuid":"a%d","type":"assistant","message":{"role":"model","parts":[{"text":"step"}]}}`, i)
+}
 
 // of is the runner the fixture of row name is a record of.
 func (f recordFixture) of(name string) string {
@@ -168,6 +179,17 @@ var recordFixtures = map[string]recordFixture{
 			return geminiUsage(n) + "\n"
 		},
 	},
+	qwenChatRow: {
+		harness: executor.QwenCodeName,
+		path: func(p executor.Paths) string {
+			return p.QwenDir() + "/projects/-tmp-sb-work-proj/chats/" + fixtureSession + ".jsonl"
+		},
+		pointed: true, depth: 2,
+		earlier: []string{qwenChatLine(91, "response"), qwenChatLine(92, "response")},
+		request: func(i int) []string {
+			return []string{qwenChatLine(i, "response"), qwenChatLine(i, "assistant")}
+		},
+	},
 	geminiTelemetryRow: {
 		harness: executor.GeminiCLIName,
 		path:    func(p executor.Paths) string { return p.GeminiTelemetry() },
@@ -196,7 +218,7 @@ func fixtureRecord(fixture recordFixture, made, long int) (string, []string) {
 		own = append(own, lines...)
 	}
 	all := append(append([]string{}, fixture.earlier...), own...)
-	if strings.Contains(fixture.path(executor.Paths{Home: "/h"}), "/chats/") {
+	if strings.Contains(fixture.path(executor.Paths{Home: "/h"}), "/.gemini/") {
 		all = append([]string{`{"sessionId":"` + fixtureSession + `","kind":"main"}`}, all...)
 	}
 	return strings.Join(all, "\n") + "\n", own
@@ -205,8 +227,8 @@ func fixtureRecord(fixture recordFixture, made, long int) (string, []string) {
 // pointTo names path in b's pointer, with fixture's earlier lines.
 func pointTo(b *sandbox.FakeSandbox, fixture recordFixture, path string) {
 	skip := len(fixture.earlier)
-	if strings.Contains(path, "/chats/") {
-		skip = 0 // A CHAT FILE'S EARLIER RESPONSES are left out by id ([executor.Paths.GeminiUsageBefore]).
+	if strings.Contains(path, "/.gemini/") {
+		skip = 0 // A GEMINI CHAT FILE'S EARLIER RESPONSES are left out by id ([executor.Paths.GeminiUsageBefore]).
 	}
 	b.Put(executor.PathsFor(b).CountRecord(), path+"\n"+strconv.Itoa(skip)+"\n")
 }
@@ -525,6 +547,51 @@ func TestAGeminiRunIsCountedByTheLargerOfItsRecords(t *testing.T) {
 		b.Put(executor.GeminiCLI{}.Output(p).Stdout, streamOf(
 			`{"type":"init","session_id":"`+fixtureSession+`","model":"gemini-2.5-pro"}`,
 			`{"type":"result","status":"success"}`, geminiUsage(c.chat)))
+		b.Put(p.Findings(), "Outcome: succeeded")
+		b.Put(p.ExitCode(), "0")
+		for turnCap, past := range map[int]bool{c.want: false, c.want - 1: true} {
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{TurnCap: turnCap}, queue.NewAnswerBudget(nil))
+			if err != nil || res.TurnCapExceeded != past {
+				t.Errorf("%s: collected under a cap of %d as exceeded %v (%v), want %v", c.name, turnCap,
+					res.TurnCapExceeded, err, past)
+			}
+		}
+	}
+}
+
+// A QWEN CODE RUN IS COUNTED BY THE LARGER OF ITS STREAM AND ITS CHAT FILE,
+// live and at its collection alike: the stream's usage shows no compression's
+// side requests, the chat file an api_response line for every answered
+// request, side ones included, and a failed attempt's api_error line counts
+// nothing. Each is a lower bound, so the larger never counts a request the
+// run did not make.
+//
+// Mutation: count the stream alone, the chat file alone, their sum, or a
+// failed attempt's line, and a row goes red.
+func TestAQwenRunIsCountedByTheLargerOfItsStreamAndChatFile(t *testing.T) {
+	t.Parallel()
+	runner := executor.New(executor.QwenCode{})
+	chat := recordFixtures[qwenChatRow]
+	for _, c := range []struct {
+		name           string
+		streamed, chat int
+		want           int
+	}{
+		{"a compression's side requests the stream never shows", 2, 3, 3},
+		{"a chat file not yet named", 4, 0, 4},
+	} {
+		b := recordBox(t, runner, chat)
+		p := executor.PathsFor(b)
+		if c.chat > 0 {
+			record, _ := fixtureRecord(chat, c.chat, 0)
+			b.Put(chat.path(p), record+qwenChatLine(99, "error")+"\n")
+		} else {
+			b.Put(p.CountRecord(), "")
+		}
+		b.Put(executor.QwenCode{}.Output(p).Stdout, requestStreams[executor.QwenCodeName](c.streamed))
+		if got, err := runner.Count(sandbox.RunHandle{}).Read(t.Context(), b); err != nil || got.Requests != c.want {
+			t.Errorf("%s: the live count reads %+v (%v), want %d", c.name, got, err, c.want)
+		}
 		b.Put(p.Findings(), "Outcome: succeeded")
 		b.Put(p.ExitCode(), "0")
 		for turnCap, past := range map[int]bool{c.want: false, c.want - 1: true} {
