@@ -3135,3 +3135,35 @@ func TestARefusedValueIsAnsweredAtItsField(t *testing.T) {
 		}
 	}
 }
+
+// SETUP SAYS WHAT A FORGE RELAY WILL REFUSE: a Jira write naming its site by
+// url, beside a Forge app id, leaves no cloud id to bind the relay's tokens
+// to, and the answer names the field. Mutation: drop forge_held from the
+// answer and the first check goes red; set it regardless of the app id and
+// the second does.
+func TestAJiraWriteBesideAForgeAppNamesTheCloudIDItLacks(t *testing.T) {
+	t.Parallel()
+	submission := `{"values": {"url": "https://acme.atlassian.net", "email": "admin@example.com", "token": "jira-token"}}`
+	for _, tc := range []struct {
+		name, doc string
+		want      any
+	}{
+		{"with a forge app id", strings.Replace(companyDoc, `"name": "Acme",`,
+			`"name": "Acme", "integrations": {"forge_app_id": "app-123"},`, 1),
+			"Forge relay events for Jira are refused until integrations.jira.cloud_id (with site_url) is set"},
+		{"without one", companyDoc, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			s.seedDocument(t, tc.doc)
+			res := s.do(t, http.MethodPost, "/setup/integrations/jira/inputs", submission, nil)
+			if res.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want 201: %s", res.Code, res.Body)
+			}
+			if got := decode(t, res)["forge_held"]; got != tc.want {
+				t.Errorf("forge_held = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

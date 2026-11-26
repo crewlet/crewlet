@@ -2138,11 +2138,34 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 			"revision", result.RevisionID, "error", afterErr.Error(),
 			"detail", "the write landed; its answer carries the state read before it")
 	}
-	httpjson.Write(w, http.StatusCreated, map[string]any{
+	answer := map[string]any{
 		"revision_id": result.RevisionID, "epoch": result.Epoch,
 		"wrote_secrets": result.Secrets, "reloaded": result.Reloaded,
 		"state": fresh,
+	}
+	if afterErr == nil {
+		if held := s.forgeHeld(after.company, kind); held != "" {
+			answer["forge_held"] = held
+		}
+	}
+	httpjson.Write(w, http.StatusCreated, answer)
+}
+
+// forgeHeld is the sentence for a Jira or Confluence write that leaves the
+// Forge relay refusing that product's events: an app id is set and the block
+// names no cloud id, because a site url was typed or no organization could
+// supply one ([config.Integrations.ForgeBinding]). Empty otherwise.
+func (s *Service) forgeHeld(company *config.Company, kind integration.Kind) string {
+	if company == nil || (kind != integration.KindJira && kind != integration.KindConfluence) {
+		return ""
+	}
+	_, held := company.Integrations.ForgeBinding(func(value string) string {
+		return setup.Deref(value, s.resolve)
 	})
+	if slices.Contains(held, string(kind)) {
+		return config.ForgeHoldReason(string(kind))
+	}
+	return ""
 }
 
 // disconnect serves DELETE /setup/integrations/{kind}.
