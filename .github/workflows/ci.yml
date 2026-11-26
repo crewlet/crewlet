@@ -743,6 +743,23 @@ jobs:
         name: install what building git needs
         if: steps.git.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev zlib1g-dev
+      # EVERY AWK A BOX'S PACK MAY RUN. A box image is the company's own, so a
+      # trimming harness's pack meets mawk (Debian, Ubuntu), gawk (Fedora, RHEL,
+      # Arch), busybox's (Alpine) or BWK's (macOS, a `direct` box), and its
+      # media count runs under each; `internal/prereqtest` fails a missing one
+      # under the make targets. The runner image carries mawk; only what it
+      # lacks is installed, with apt's retries for the mirror #849 records.
+      - &box-awks
+        name: install every awk a box's pack may run
+        run: |
+          missing=""
+          for p in gawk:gawk busybox:busybox original-awk:original-awk mawk:mawk; do
+            command -v "${p%%:*}" >/dev/null || missing="$missing ${p#*:}"
+          done
+          if [ -n "$missing" ]; then
+            sudo apt-get -o Acquire::Retries=5 update
+            sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends $missing
+          fi
       # THE PINNED CHROMIUMS. Both test targets depend on `make chromium`,
       # which fetches the two Chrome for Testing builds
       # scripts/chromium-pin.env pins into CREWLET_CHROMIUM_CACHE (the
@@ -1113,6 +1130,7 @@ jobs:
       - *git-cache-dir
       - *git-restore
       - *git-deps
+      - *box-awks
       - *chromium-cache-dir
       - *chromium-restore
       - *node-cache-dir
