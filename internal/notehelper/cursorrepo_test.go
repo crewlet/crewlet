@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,16 +35,25 @@ func (r repoRun) cursorLaunch(t *testing.T) {
 	if err := checkoutLaunch(config, r.work, &errs); err != nil || errs.Len() > 0 {
 		t.Fatalf("the launch failed: %v\n%s", err, errs.String())
 	}
+	if err := os.WriteFile(filepath.Join(r.state, cursorConversation), []byte(cursorRunConversation+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
+// cursorRunConversation is the run's session id, its script's
+// [cursorConversation]; a subagent's call is in a conversation of its own.
+const cursorRunConversation = "11111111-2222-4333-8444-555555555555"
+
 // cursorInput is a postToolUse hook's input as Cursor writes it: the tool,
-// its result as JSON text, and the call a subagent's call runs under.
-func cursorInput(tool, output, parent string) string {
-	in := map[string]any{"conversation_id": "c", "tool_name": tool, "tool_input": map[string]any{},
-		"tool_output": output, "duration": 12.5, "tool_use_id": "u", "hook_event_name": "postToolUse"}
-	if parent != "" {
-		in["parent_tool_call_id"] = parent
+// its result as JSON text, and the conversation the call is in, its session
+// and generation ids the same (measured), the run's where conversation is "".
+func cursorInput(tool, output, conversation string) string {
+	if conversation == "" {
+		conversation = cursorRunConversation
 	}
+	in := map[string]any{"conversation_id": conversation, "session_id": conversation,
+		"generation_id": conversation, "tool_name": tool, "tool_input": map[string]any{}, "tool_output": output,
+		"duration": 12.5, "tool_use_id": "u", "hook_event_name": "postToolUse"}
 	raw, _ := json.Marshal(in)
 	return string(raw)
 }
@@ -201,10 +211,12 @@ func TestACursorFiringPastItsDeadlineClaimsNothing(t *testing.T) {
 }
 
 // A FIRING THAT CANNOT APPEND CLAIMS NOTHING: a call that is no MCP call (its
-// result Cursor never takes back, however it reads), a subagent's, a result holding an item
-// that is no text (Cursor would read it back as its JSON text), one that does
-// not read, and one that leaves less room than [cursorRoomFloor] each answer
-// {} and leave the clone for the next MCP call, which hands it.
+// result Cursor never takes back, however it reads), a subagent's (in a
+// conversation not the run's, as Cursor marks one, measured), a result
+// holding an item that is no text (Cursor would read it back as its JSON
+// text), one that does not read, and one that leaves less room than
+// [cursorRoomFloor] each answer {} and leave the clone for the next MCP call
+// of the run's own conversation, which hands it.
 //
 // Mutation: claim before any of these checks, or drop one, and its row goes
 // red.
@@ -213,7 +225,7 @@ func TestACursorFiringThatCannotAppendClaimsNothing(t *testing.T) {
 	long := `{"content":[{"type":"text","text":"` + strings.Repeat("x", cursorResultInline-cursorRoomFloor) + `"}]}`
 	for name, input := range map[string]string{
 		"a shell call":    cursorInput("Shell", cursorResult, ""),
-		"a subagent's":    cursorInput("MCP:t_tool", cursorResult, "call-1"),
+		"a subagent's":    cursorInput("MCP:t_tool", cursorResult, "ed80bdf2-8b7c-4f18-ace4-80baa047c84e"),
 		"an image item":   cursorInput("MCP:t_tool", `{"content":[{"type":"image","data":"AA==","mimeType":"image/png"}]}`, ""),
 		"no object":       cursorInput("MCP:t_tool", `"just text"`, ""),
 		"no content":      cursorInput("MCP:t_tool", `{"isError":true}`, ""),
@@ -281,5 +293,68 @@ func TestACursorAnswerStaysUnderTheSizeCursorMovesToAFile(t *testing.T) {
 					len(texts[len(texts)-1]), cursorResultInline)
 			}
 		})
+	}
+}
+
+// A CLONE NO MCP CALL WITH ROOM FOLLOWED IS NAMED ONCE AS THE RUN ENDS: once
+// the run's state is ended, cursor-left adds one skip line for each finished
+// clone under the working directory that no launch or firing claimed, and
+// none for a launch checkout, a handed clone, or one cloned half way; before
+// the end it says nothing, and a second end says nothing again.
+//
+// Mutation: name a claimed checkout, a half clone, or before the end, or say
+// it twice, and this goes red.
+func TestACursorCloneNeverHandedIsNamedOnceAsTheRunEnds(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, map[string]string{"first/.git/": "", "first/AGENTS.md": "FIRST\n"})
+	r.cursorLaunch(t)
+	r.add(t, map[string]string{"handed/.git/": "", "handed/AGENTS.md": "HANDED\n"})
+	if answer, _ := r.cursorFire(t, cursorInput("MCP:t_tool", cursorResult, "")); !strings.Contains(answer, "HANDED") {
+		t.Fatalf("the clone before the MCP call was not handed: %q", answer)
+	}
+	r.add(t, map[string]string{"quiet/.git/": "", "quiet/AGENTS.md": "QUIET\n",
+		"half/.git/HEAD": "ref: refs/heads/main\n", "half/AGENTS.md": "HALF\n"})
+	left := func() string {
+		t.Helper()
+		var stderr bytes.Buffer
+		if code := runCursorLeft(context.Background(), flags{config: filepath.Join(r.state, "nested.json")},
+			strings.NewReader(""), io.Discard, &stderr, os.Getenv); code != exitDone || stderr.Len() > 0 {
+			t.Fatalf("cursor-left exited %d: %s", code, stderr.String())
+		}
+		raw, _ := os.ReadFile(filepath.Join(r.state, skippedLog))
+		return string(raw)
+	}
+	if got := left(); got != "" {
+		t.Errorf("before the run ended, cursor-left said %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(r.state, endedMarker), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := "notehelper: the checkout " + filepath.Join(r.workdir(t), "quiet") + " was cloned during the run and " +
+		"not handed: no MCP call with room for it came after it\n"
+	if got := left(); got != want {
+		t.Errorf("once the run ended, the skip log is\n%q\nwant\n%q", got, want)
+	}
+	if got := left(); got != want {
+		t.Errorf("a second end changed the skip log to %q", got)
+	}
+}
+
+// A FIRING CLAIMS NOTHING BEFORE THE RUN NAMES ITS CONVERSATION: with no
+// [cursorConversation] in the state (a script that has not yet settled its
+// session), no call can be told from a subagent's, so it answers {} and the
+// clone waits.
+//
+// Mutation: hand where the file is missing, and this goes red.
+func TestACursorFiringClaimsNothingBeforeTheRunNamesItsConversation(t *testing.T) {
+	t.Parallel()
+	r := newRepoRun(t, nil)
+	r.cursorLaunch(t)
+	if err := os.Remove(filepath.Join(r.state, cursorConversation)); err != nil {
+		t.Fatal(err)
+	}
+	r.add(t, map[string]string{"late/.git/": "", "late/AGENTS.md": "LATE\n"})
+	if answer, _ := r.cursorFire(t, cursorInput("MCP:t_tool", cursorResult, "")); answer != "{}" {
+		t.Errorf("a firing with no run conversation answered %q, want {}", answer)
 	}
 }

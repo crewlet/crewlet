@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -28,13 +32,22 @@ const cursorRoomFloor = 8 << 10
 
 // cursorNestedInput is the part of a Cursor Agent postToolUse hook's input
 // cursor-nested reads: the tool (`MCP:<tool>` for an MCP call), its result as
-// the JSON text Cursor hands the hook, and the call a subagent's call runs
-// under.
+// the JSON text Cursor hands the hook, and the conversation the call is in:
+// the run's session, or a subagent's own, which Cursor names nothing else by
+// (measured on 2026.11.22-e9042b2: no parent field; conversation, session and
+// generation ids all the subagent's).
 type cursorNestedInput struct {
-	ToolName   string `json:"tool_name"`
-	ToolOutput string `json:"tool_output"`
-	Parent     string `json:"parent_tool_call_id"`
+	ToolName     string `json:"tool_name"`
+	ToolOutput   string `json:"tool_output"`
+	Conversation string `json:"conversation_id"`
 }
+
+// cursorConversation is the file in the run's checkout state its script
+// writes the run's session id to once it has settled it (internal/sandbox/
+// executor's cursorScript): a firing claims only in that conversation, so a
+// subagent's call, whose context ends with its answer, hands the main loop no
+// clone it will never see; a firing with no such file claims nothing.
+const cursorConversation = "conversation"
 
 // runCursorNested is one firing of a Cursor Agent run's postToolUse hook
 // (internal/sandbox/executor's cursorNestedCommand): at an MCP call of the
@@ -42,9 +55,9 @@ type cursorNestedInput struct {
 // cloned since the last firing, once ([handNested]), by [cursorClaimWithin],
 // and answers the call's result as Cursor handed it with one text item more
 // ([cursorAppended]), the only part of a hook's answer that reaches the model
-// mid-run (measured on 2026.11.22-e9042b2). Any other call, a subagent's, a
-// result it cannot keep whole, and too little room answer {} and claim
-// nothing. Exit 0 whatever happened, its trouble on stderr.
+// mid-run (measured on 2026.11.22-e9042b2). Any other call, one outside the
+// run's conversation ([cursorConversation]), a result it cannot keep whole,
+// and too little room answer {} and claim nothing. Exit 0 whatever happened, its trouble on stderr.
 func runCursorNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr io.Writer, _ func(string) string) int {
 	answer := cursorNestedAnswer(f, stdin, stderr, time.Now().Add(cursorClaimWithin))
 	_, _ = stdout.Write(append(answer, '\n'))
@@ -75,7 +88,7 @@ func cursorNestedAnswer(f flags, stdin io.Reader, stderr io.Writer, claimBy time
 		fmt.Fprintf(stderr, "notehelper: the hook's input: %v\n", err)
 		return none
 	}
-	if !strings.HasPrefix(in.ToolName, "MCP:") || in.Parent != "" {
+	if !strings.HasPrefix(in.ToolName, "MCP:") {
 		return none
 	}
 	room := cursorRoom(in.ToolOutput)
@@ -88,6 +101,10 @@ func cursorNestedAnswer(f flags, stdin io.Reader, stderr io.Writer, claimBy time
 	c, err := readNested(f.config)
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: the nested config: %v\n", err)
+		return none
+	}
+	if run, err := readBounded(filepath.Join(c.State, cursorConversation), 256); err != nil ||
+		in.Conversation == "" || strings.TrimSpace(string(run)) != in.Conversation {
 		return none
 	}
 	c.claimBy = claimBy
@@ -185,4 +202,63 @@ func cursorNestedText(handed []handedCheckout, skipped []string, listings int) s
 		blocks = append(blocks, listing)
 	}
 	return strings.Join(blocks, "\n\n")
+}
+
+// cursorLeftSaid marks, in the run's checkout state, that cursor-left has said
+// the clones the run never handed, so the end's every path says them once.
+const cursorLeftSaid = "left-said"
+
+// runCursorLeft names in the skip log ([skippedLog]) each finished clone under
+// the working directory no launch or firing claimed, a line each, once the
+// run has ended ([endedMarker]), so a clone no MCP call with room followed is
+// said rather than silently never handed: on Cursor a firing comes only at an
+// MCP call ([runCursorNested]), where the other runners fire after every
+// tool. Once per run ([cursorLeftSaid]); exit 0 whatever happened.
+func runCursorLeft(_ context.Context, f flags, _ io.Reader, _, stderr io.Writer, _ func(string) string) int {
+	c, err := readNested(f.config)
+	if err != nil {
+		fmt.Fprintf(stderr, "notehelper: the nested config: %v\n", err)
+		return exitDone
+	}
+	lines, err := cursorLeft(c.State, c.Workdir)
+	if err == nil && len(lines) > 0 {
+		err = appendSkipped(filepath.Join(c.State, skippedLog), lines)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "notehelper: naming the clones the run did not hand: %v\n", err)
+	}
+	return exitDone
+}
+
+// cursorLeft is the skip lines for each finished clone under work no launch or
+// firing claimed, by name, once a run's state is ended and once only; none
+// before the end, as a firing may still claim.
+func cursorLeft(state, work string) ([]string, error) {
+	if _, err := os.Lstat(filepath.Join(state, endedMarker)); err != nil {
+		return nil, nil
+	}
+	said, err := os.OpenFile(filepath.Join(state, cursorLeftSaid), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	_ = said.Close()
+	handed, err := readHanded(filepath.Join(state, "handed"))
+	if err != nil {
+		return nil, err
+	}
+	names, err := checkoutNames(work, nil)
+	if err != nil {
+		return nil, err
+	}
+	var lines []string
+	for _, name := range names {
+		if !slices.Contains(handed, name) && cloneFinished(filepath.Join(work, name)) {
+			lines = append(lines, fmt.Sprintf("the checkout %s was cloned during the run and not handed: no MCP "+
+				"call with room for it came after it", filepath.Join(work, name)))
+		}
+	}
+	return lines, nil
 }
