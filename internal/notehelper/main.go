@@ -142,7 +142,8 @@
 //     whole, said: Copilot walks 9 levels and Claude Code 10 at least
 //     (measured), so a deeper tree is the gap. Names as {"names": [...],
 //     "inside": true} follow a link only inside the checkout, and "once" on
-//     either kind hands no file an earlier slot did, by real path (Grok's);
+//     either kind hands no file an earlier slot did, by real path (Grok's),
+//     and names' "skipBlank" skips a blank file (Kimi's);
 //     `importInstructions` for a harness that reads them itself (Claude Code),
 //     each file then named as one `@<absolute path>` import in place of its
 //     text, no limit applying (checkoutimport.go);
@@ -168,8 +169,8 @@
 //     name, else is unlisted: rows x1-x7, g4x; a command's lead inferred),
 //     one with no frontmatter under its own name; a copy is `<tag>:<listed>`,
 //     left out, said, where a skill of `skills` or `homeSkills` (the home's
-//     other skill directories, read once a firing) lists under, or rewrites
-//     its own name to, its rewritten name (the latter inferred);
+//     other skill directories) lists under, or rewrites its own name to, its
+//     rewritten name (the latter inferred); "kimi", Kimi 2.7.2's (kimirepo.go);
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (`skillSep` `-` joining them for Gemini CLI,
@@ -207,21 +208,21 @@
 // `<project_instructions path=...>`, on stdout for the run's extension to add
 // to the tool's result (Pi lists no skill it did not start with and loads
 // instructions only as it starts, measured on 1.6.0); copilot-nested the
-// listing alone, added the same way. A nested hook only adds to the launch: a
-// run whose settings switch it off starts, its skip log saying so once; only
-// losing a contract hook (notes, skill loads) refuses. Grok's stays registered,
-// as Grok 1.0.92 skips it itself (measured). A harness taking checkouts adds a
-// nested adapter, never a second core; its runner holds the home file and the
-// copies (internal/sandbox/executor's checkoutHome). What a nested firing
-// leaves out (a skill whose name the home's skills hold, one that leads out of
-// its checkout, a tree past a bound) is a line each on its stderr, in its
-// answer, and in state/skipped under the lock, which the runner's script prints
-// to the run's error stream once the harness has stopped, since no harness
-// shows a hook's stderr; checkout-launch's stderr is the run's own. The
-// runner's restore marks the state ended, after which a firing claims nothing.
-// A run killed before its script printed the log loses it: the next run's gate
-// removes the state unprinted, as its lines in another run's error stream would
-// read as that run's; each was in its firing's answer already.
+// listing alone, added the same way; kimi-nested as pi-nested, for Kimi's
+// `<!-- From: ... -->`, steered in by the run's driver. A nested hook only adds
+// to the launch: a run whose settings switch it off starts, its skip log
+// saying so once; only losing a contract hook (notes, skill loads) refuses.
+// Grok's stays registered, as Grok 1.0.92 skips it itself (measured). A
+// harness taking checkouts adds a nested adapter, never a second core; its
+// runner holds the home file and the copies (internal/sandbox/executor's
+// checkoutHome). What a nested firing leaves out (a skill whose name the
+// home's skills hold, one that leads out of its checkout, a tree past a bound)
+// is a line each on its stderr, in its answer, and in state/skipped under the
+// lock, which the runner's script prints to the run's error stream once the
+// harness has stopped, since no harness shows a hook's stderr;
+// checkout-launch's stderr is the run's own. The runner's restore marks the
+// state ended, after which a firing claims nothing. A killed run's log is
+// dropped unprinted by the next gate (its lines were in its firings' answers).
 //
 // # A continued Codex session's standing instructions
 //
