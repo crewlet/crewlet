@@ -54,9 +54,12 @@ var requestStreams = map[string]func(n int) string{
 			`{"type":"crewlet.end","asked":false,"code":0}`)
 	},
 	executor.MuseName: func(n int) string {
+		// THE SESSION'S TRACES, one a request, which the script appends after
+		// Muse exits; run.usage's calls are its spend's alone.
 		return streamOf(
-			fmt.Sprintf(`{"stream":{"kind":"exec.usage","id":"0b5e0000-0000-4000-8000-000000000002"},"payload_type":"run.usage","payload":{"calls":%d,"models":[]}}`, n),
-			`{"stream":{"kind":"session","id":"0b5e0000-0000-4000-8000-000000000001"},"payload_type":"run.terminal.completed","payload":{"text":"done"}}`)
+			`{"stream":{"kind":"exec.usage","id":"0b5e0000-0000-4000-8000-000000000002"},"payload_type":"run.usage","payload":{"calls":99,"models":[]}}`,
+			`{"stream":{"kind":"session","id":"0b5e0000-0000-4000-8000-000000000001"},"payload_type":"run.terminal.completed","payload":{"text":"done"}}`,
+			each(n, `{"payload_type":"crewlet.muse_trace","line":{"schema_version":1,"id":"e%d","stream":{"kind":"session","id":"s"},"payload_type":"runtime.session","payload":{"event":{"base_instructions":"b","kind":"model_input_trace_recorded"},"kind":"run"}}}`))
 	},
 	executor.OpenCodeName: func(n int) string {
 		return streamOf(

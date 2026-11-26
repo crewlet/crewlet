@@ -40,6 +40,18 @@ func museFixture(t *testing.T, name string) []byte {
 	return raw
 }
 
+// museTraceLines is n lines a run's script appends of its session's traces, one a
+// model request ([museTraceEvent]).
+func museTraceLines(n int) []byte {
+	var b bytes.Buffer
+	for i := range n {
+		fmt.Fprintf(&b, `{"payload_type":"%s","line":{"schema_version":1,"id":"e%d","stream":{"kind":"session","id":"s"},`+
+			`"payload_type":"runtime.session","payload":{"event":{"base_instructions":"b","kind":"%s"},"kind":"run"}}}`+"\n",
+			museTraceEvent, i, museTraceKind)
+	}
+	return b.Bytes()
+}
+
 // museDecoded is the decoder fed stream.
 func museDecoded(t *testing.T, stream []byte) *museEvents {
 	t.Helper()
@@ -58,7 +70,7 @@ func museDecoded(t *testing.T, stream []byte) *museEvents {
 // Mutation: drop the records after the mark, or keep only the last
 // `run.usage`, and the spend comes out short.
 func TestALaunchedMuseRunReadsAsItsAnswerAndItsWholeSpend(t *testing.T) {
-	res := (Muse{}).Parse(museFixture(t, "launched.result.jsonl"))
+	res := (Muse{}).Parse(append(museFixture(t, "launched.result.jsonl"), museTraceLines(4)...))
 	if !res.Success || res.Text != "ANSWER launched run." || res.SessionID != "0b5e0000-0000-4000-8000-0000000000e1" {
 		t.Fatalf("result = %+v, want the answer of session ...e1", res)
 	}
@@ -126,16 +138,21 @@ func TestAMuseRunItsCapStoppedReadsAsCapped(t *testing.T) {
 	}
 }
 
-// AN EXEC'S REQUESTS ARE EVERY ONE OF ITS RUNS', whatever each run's own cap
-// said: `--max-model-steps` caps each run apart, so the collection holds the
-// exec's whole count to the cap ([Decoder.Requests]). tools made five.
+// AN EXEC'S REQUESTS ARE ITS SESSION'S TRACES, every one of its runs':
+// `--max-model-steps` caps each run apart, so the collection holds the exec's
+// whole count to the cap ([Decoder.Requests]), read off the main thread's
+// session, never off a run.usage, which a run its end cut off never prints.
+// tools made five, each run's run.usage stating its own.
 //
-// Mutation: count one run's requests, or none, and the count is not five.
-func TestAMuseExecsRequestsAreEveryRunsWhateverEachRunSaid(t *testing.T) {
-	dec := &museEvents{}
-	_ = eachLine(bytes.NewReader(museFixture(t, "tools.stream.jsonl")), dec, maxLineBytes)
+// Mutation: count the run.usages' calls, or one run's traces, and the count is
+// not five.
+func TestAMuseExecsRequestsAreItsSessionsTraces(t *testing.T) {
+	if dec := museDecoded(t, museFixture(t, "tools.stream.jsonl")); dec.Requests() != 0 {
+		t.Fatalf("the exec's stream alone counts %d requests, want none: run.usage is its spend's", dec.Requests())
+	}
+	dec := museDecoded(t, append(museFixture(t, "tools.stream.jsonl"), museTraceLines(5)...))
 	if dec.Requests() != 5 {
-		t.Fatalf("the exec counts %d requests, want five", dec.Requests())
+		t.Fatalf("the exec counts %d requests, want its five traces", dec.Requests())
 	}
 }
 
@@ -790,23 +807,34 @@ func TestAMuseServerNameStaysWholeUpTo19Characters(t *testing.T) {
 	}
 }
 
-// A MUSE RUN'S FAILED ATTEMPTS ARE NONE OF ITS REQUESTS: its usage states
-// them apart from the calls answered or cut off, and a refused attempt bills
-// nothing, so the run counts the calls answered and cut off; a usage stating
-// no such split is read by its calls.
+// A MUSE RUN'S REQUESTS ARE ITS SESSION'S TRACES ALONE ([museTraceKind]): an
+// appended line of another event is none, and one too long to read counts
+// where an end shows its trace, or may hide one where neither does.
 //
-// Mutation: count every call the usage states, and the first row counts 8.
-func TestAMuseRunsFailedAttemptsAreNoneOfItsRequests(t *testing.T) {
-	for payload, want := range map[string]int{
-		`{"calls":8,"completed_calls":6,"failed_calls":2,"cancelled_calls":0,"models":[]}`: 6,
-		`{"calls":5,"completed_calls":4,"failed_calls":0,"cancelled_calls":1,"models":[]}`: 5,
-		`{"calls":3,"models":[]}`: 3,
+// Mutation: count every appended line, read the kind off the line's stream
+// rather than its event, or count a long line by its type alone, and a row
+// goes red.
+func TestAMuseRunsRequestsAreItsSessionsTracesAlone(t *testing.T) {
+	other := []byte(`{"payload_type":"` + museTraceEvent + `","line":{"stream":{"kind":"` + museTraceKind + `"},` +
+		`"payload_type":"runtime.session","payload":{"event":{"kind":"model_completed"}}}}` + "\n")
+	if dec := museDecoded(t, append(museTraceLines(2), other...)); dec.Requests() != 2 {
+		t.Errorf("two traces and a completion count %d requests, want 2", dec.Requests())
+	}
+	for _, c := range []struct {
+		name                string
+		head, tail          string
+		requests, undecided int
+	}{
+		{"a trace at its tail", `{"payload_type":"` + museTraceEvent + `","line":{"payload":{"event":{"base_instructions":"`,
+			`"kind":"` + museTraceKind + `"},"kind":"run"}}}`, 1, 0},
+		{"no trace at either end", `{"payload_type":"` + museTraceEvent + `","line":{"payload":{"event":{"base_instructions":"`,
+			`xxx"}}}}`, 0, 1},
 	} {
 		dec := &museEvents{}
-		_ = eachLine(strings.NewReader(`{"stream":{"kind":"exec.usage","id":"x"},"payload_type":"run.usage","payload":`+
-			payload+`}`), dec, maxLineBytes)
-		if dec.Requests() != want {
-			t.Errorf("%s: %d requests, want %d", payload, dec.Requests(), want)
+		dec.Skipped(LongLine{Size: 1 << 30, Bound: maxLineBytes, Head: []byte(c.head), Tail: []byte(c.tail)})
+		if dec.Requests() != c.requests || dec.Undecided() != c.undecided {
+			t.Errorf("%s: %d requests and %d undecided, want %d and %d", c.name, dec.Requests(), dec.Undecided(),
+				c.requests, c.undecided)
 		}
 	}
 }

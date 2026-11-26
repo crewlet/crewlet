@@ -64,8 +64,8 @@ func (Muse) MCPCallCeiling() time.Duration { return 0 }
 
 // CountedAtCollection implements [collectionCounted].
 func (Muse) CountedAtCollection() string {
-	return "its stream states a run's requests once, " +
-		"on the run.usage line Muse Code prints as that run ends"
+	return "its stream marks no model request: " +
+		"the session's traces its count reads are appended by the run's script once Muse Code exits"
 }
 
 // Resumes says Muse Code continues a session it ran: `muse exec --session-id`
@@ -187,12 +187,15 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	b.WriteString(museWiring(paths))
 	before, after := museChildUsage(paths)
 	b.WriteString(before)
+	counted, traced := museTraces(paths)
+	b.WriteString(counted)
 	watch := ""
 	if own := museOwnServers(req); len(own) > 0 {
 		b.WriteString(museGuard(paths, own))
 		watch = "museguard"
 	}
 	b.WriteString(launchWatched(strings.Join(parts, " "), watch, paths))
+	b.WriteString(traced)
 	b.WriteString(after)
 	b.WriteString(museUnwire(paths))
 	b.WriteString(museCapture(paths))
@@ -387,6 +390,21 @@ func museChildUsage(paths Paths) (before, after string) {
 		`if [ -n "$x" ] && [ -d "$x/subagent" ]; then find "$x/subagent" -type f -name session.jsonl 2> /dev/null | ` +
 		`while IFS= read -r f; do n=$(sed -n "s|^ *\([0-9][0-9]*\) $f\$|\1|p" ` + lines + ` | head -n 1); ` +
 		`tail -n +"$((${n:-0} + 1))" "$f" | grep -F '"kind":"model_completed"'; done; fi` + "\n"
+	return before, after
+}
+
+// museTraces is the two parts of a run's script around its harness that read
+// its model requests off the main thread's session.jsonl ([museTraceKind]):
+// before the launch, the file's lines as the run begins (mb); after it, on an
+// end too, the run's own traces added to the stream ([museTraceEvent]).
+func museTraces(paths Paths) (before, after string) {
+	q := shellword.Quote
+	sessions := q(paths.MuseSessions())
+	before = `mb=0; for y in ` + sessions + `/*/*/*/"$s"; do [ -s "$y/session.jsonl" ] && [ ! -L "$y" ] && mb=$(wc -l < "$y/session.jsonl"); done
+`
+	after = museFind(paths) + `if [ -n "$x" ]; then tail -n +"$((mb + 1))" "$x/session.jsonl" | grep -F ` +
+		q(museTraceNeedle) + ` | sed 's/^/{"payload_type":"` + museTraceEvent + `","line":/; s/$/}/'; fi
+`
 	return before, after
 }
 
