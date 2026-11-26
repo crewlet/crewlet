@@ -489,3 +489,52 @@ func TestOnlyAStoredFileCountsAnUnansweredWritesOffer(t *testing.T) {
 		t.Errorf("rows name %v, which the store no longer holds", gone)
 	}
 }
+
+// A RETRY OF A REFUSED PUBLISH LEAVES WHAT AN UNANSWERED ATTEMPT LANDED: a
+// keyed publish is refused (its label taken), which closes its reservation
+// with no outcome, so the next attempt under its key takes no claim and
+// counts no offer. That attempt lands and its answer is lost; the one after
+// is refused as moved, and its refusal deletes only the objects it staged
+// itself, never the landed version's notes.
+//
+// Mutation: let owns take any generated file for the run's, not only one in
+// run.staged, and the landed version names an object the store no longer
+// holds.
+func TestARetryOfARefusedPublishLeavesWhatAnUnansweredAttemptLanded(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{loseAnswer: true})
+	ada := h.person("ada", h.opKey("create"))
+	created, _, err := h.svc.Create(t.Context(), ada, artifactupload.CreateRequest{
+		Kind: artifacts.KindHTML, Title: "A page", Owner: "ada", OwnerKind: ada.Authority.Actor.Kind,
+		Entry: "index.html", Label: "release",
+		Files: []artifactupload.FileSpec{{Path: "index.html", Inline: []byte("<p>v1</p>")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := h.person("ada", h.opKey("publish"))
+	attempt := func(label, notes string) error {
+		_, _, err := h.svc.Publish(t.Context(), k, artifactupload.PublishRequest{
+			Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch, Label: label,
+			Files: []artifactupload.FileSpec{{Path: "notes.txt", Inline: []byte(notes)}}})
+		return err
+	}
+	if err := attempt("release", "refused notes"); !errors.Is(err, artifactsdomain.ErrLabelTaken) {
+		t.Fatalf("premise: the first attempt answered %v, want its label taken", err)
+	}
+	if err := attempt("next", "landed notes"); err == nil {
+		t.Fatal("premise: the second attempt's answer was not lost")
+	}
+	var moved *artifactsdomain.VersionMoved
+	if err := attempt("next", "landed notes"); !errors.As(err, &moved) {
+		t.Fatalf("the third attempt answered %v, want it refused as moved", err)
+	}
+	if gone := h.gone(); len(gone) > 0 {
+		t.Errorf("rows name %v, which the store no longer holds", gone)
+	}
+	if got := h.file(h.version(created.Artifact, 2), "notes.txt"); got != "landed notes" {
+		t.Errorf("the landed version's notes read %q, want them as landed", got)
+	}
+	if unnamed, held := h.unnamedBytes(), h.held(); unnamed > held {
+		t.Errorf("the store holds %d bytes nothing names and the reservations hold %d", unnamed, held)
+	}
+}
