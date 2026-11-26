@@ -5,7 +5,9 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/redact/redacttest"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A transcript line stays within its bound in BYTES, marker included, and is
@@ -58,13 +60,13 @@ func TestATranscriptLineHonoursItsOwnBound(t *testing.T) {
 
 // UNPARSEABLE OUTPUT IS ITS FAILURE'S DETAIL, AT MOST ITS END: whole within
 // [unparsedShownBytes], since its actual error comes at the END, after the
-// banner; past it, that end redacted and the output's size, never the whole,
-// which would ride the failure uncut ([failureDetail]); and an end that is one
-// line begun before it is none of it shown, never a cut of that line.
+// banner; past it, the end of the whole output's redaction in whole lines and
+// the output's size, never the whole, which would ride the failure uncut
+// ([failureDetail]); and a line longer than the end keeps its own end, marked.
 //
 // Mutations, each red: quote the whole output past the bound; keep its start
-// rather than its end; leave the end unredacted; leave the size unsaid; show a
-// cut of one long line.
+// rather than its end; leave the end unredacted; leave the size unsaid; redact
+// only a window of the end, which shows nothing of one long line.
 func TestUnparseableOutputIsItsFailuresDetailAtMostItsEnd(t *testing.T) {
 	t.Parallel()
 	const opening = "the harness's output could not be parsed"
@@ -97,9 +99,22 @@ func TestUnparseableOutputIsItsFailuresDetailAtMostItsEnd(t *testing.T) {
 		t.Errorf("unparseable output read as a report (text %d bytes, success %v)", len(res.Text), res.Success)
 	}
 
-	line := strings.Repeat("x", 2*unparsedShownBytes)
-	if got := (ClaudeCode{}).Parse([]byte(line)).Error; len(got) > 256 || strings.Contains(got, "xxx") {
-		t.Errorf("one long line left the failure %.120q (%d bytes), want only its size said", got, len(got))
+	if want, _ := sandbox.KeepEnd(redact.Secrets(long), unparsedShownBytes); !strings.HasSuffix(res.Error, "):\n"+want) {
+		t.Errorf("the failure ends …%q, want the end of the whole output's redaction",
+			res.Error[max(0, len(res.Error)-80):])
+	}
+	// A token whose body runs on past the end: redacted whole, the line is a
+	// marker; a window of the end alone would show the body as it is.
+	body := strings.Repeat("Ab0x9Z", unparsedShownBytes/3)
+	token := (ClaudeCode{}).Parse([]byte("banner\nthe key was " + key + body + "\nError: token expired")).Error
+	if strings.Contains(token, body[:64]) || !strings.HasSuffix(token, "the key was [REDACTED:api-key]\nError: token expired") {
+		t.Errorf("a token run past the end left the failure …%q, want it redacted whole", token[max(0, len(token)-120):])
+	}
+	line := strings.Repeat("x", 2*unparsedShownBytes) + "Error: token expired"
+	got := (ClaudeCode{}).Parse([]byte(line)).Error
+	if !strings.Contains(got, "; its end shown):\n…xxx") || !strings.HasSuffix(got, "xxxError: token expired") ||
+		len(got) > unparsedShownBytes+len(opening)+64 {
+		t.Errorf("one long line left the failure %.120q (%d bytes), want its own end, marked", got, len(got))
 	}
 }
 

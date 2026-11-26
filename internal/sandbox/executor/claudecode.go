@@ -1406,22 +1406,30 @@ const unparsedShownBytes = sandbox.MaxFailureBytes / 2
 
 // unparsedFailure is the failure of output that is no result: the output whole
 // within [unparsedShownBytes], since the useful part (the error after the banner
-// and the warnings) is at its END; past it, that end as [streamEnd] shows the
-// error stream's, redacted before it is cut, and the output's size. Never more:
-// a failure's head is never cut ([failureDetail]), so a whole output past the
-// bound would ride the failure at up to [sandbox.MaxFileBytes].
+// and the warnings) is at its END; past it, that end as a failure's tail shows
+// the error stream's ([Runner.readFailureTail]): the end of the whole output's
+// redaction in whole lines, and the output's size; none of it where the
+// redaction declines it. Never more: a failure's head is never cut
+// ([failureDetail]), so a whole output past the bound would ride the failure
+// at up to [sandbox.MaxFileBytes].
 func unparsedFailure(text []byte) string {
 	const opening = "the harness's output could not be parsed"
 	if len(text) <= unparsedShownBytes {
 		return opening + ":\n" + string(text)
 	}
 	size := humanSize(int64(len(text)))
-	window := string(text[len(text)-unparsedShownBytes-redact.LookBack:])
-	if shown, _ := settledEnd(window, redact.LookBack, unparsedShownBytes); shown != "" {
-		return opening + " (" + size + "; its end shown):\n" + shown
+	end := &endRing{keep: unparsedShownBytes + 1}
+	s := redact.NewStream(end)
+	_, err := s.Write(text)
+	if err == nil {
+		err = s.Close()
 	}
-	return fmt.Sprintf("%s: it is %s, and its last %s are one line begun before them, so none of it is shown",
-		opening, size, humanSize(unparsedShownBytes))
+	if err != nil {
+		return fmt.Sprintf("%s: it is %s, and its redaction declined it (a key's block read beside a password's "+
+			"key it could not decide in one pass), so none of it is shown", opening, size)
+	}
+	shown, _ := sandbox.KeepEnd(end.String(), unparsedShownBytes)
+	return opening + " (" + size + "; its end shown):\n" + shown
 }
 
 // claudeMaxTurns is the result subtype of a run that reached its --max-turns.

@@ -430,19 +430,6 @@ func (t *transcriptLines) take(end bool) []string {
 	return lines
 }
 
-// settledEnd is the redacted end of text that its first ctx bytes settle
-// ([redact.SettledEnd]), at most keep bytes of it as [sandbox.KeepEnd] keeps
-// them, and how much came before it: in text's bytes up to the settled start,
-// in redacted bytes past it.
-func settledEnd(text string, ctx, keep int) (string, int) {
-	end, at := redact.SettledEnd(text, ctx)
-	if end == "" {
-		return "", at
-	}
-	kept, k := sandbox.KeepEnd(end, keep)
-	return kept, at + k
-}
-
 // humanSize renders a byte count as a reader would say it.
 func humanSize(n int64) string {
 	switch {

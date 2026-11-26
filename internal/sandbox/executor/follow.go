@@ -167,7 +167,7 @@ type pendingText struct{ ctx, text string }
 // bounded short of it ([redact.MaxReach]), so a line's end redacts as its
 // line does, from the line's start. A line the text opens is redacted with
 // all the context the lead kept and the rest of the line it ended in, as the
-// first line a stream's end shows is with all read before it ([settledEnd]).
+// first line a stream's end shows is with all read before it ([redact.SettledEnd]).
 func (p *pendingText) add(s string) {
 	if p.text == "" && p.ctx != "" && p.ctx[len(p.ctx)-1] != '\n' {
 		i := strings.IndexByte(s, '\n') + 1
