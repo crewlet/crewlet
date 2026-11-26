@@ -189,11 +189,11 @@ func (q *Queue) AskEach(ctx context.Context, subject string, request []byte, eac
 		// HELD FOR A SLOT IN THE GATE, in arrival order, whether or not
 		// its asker still waits: a request queues past the cap rather than
 		// drops, up to the real backend's bound, exactly as on the broker.
-		err := s.gate.Offer(arrived, len(request), func(arrived time.Time) {
+		// THE ANSWERER'S CONTEXT, which the contract hands an answerer: the
+		// asker's deadline bounds the collection below, never the answer —
+		// see [serveSub.serving].
+		err := s.gate.Offer(arrived, len(request), func(arrived time.Time) { //nolint:contextcheck // as above
 			defer wg.Done()
-			//nolint:contextcheck // the ANSWERER's context, which the
-			// contract hands an answerer: the asker's deadline bounds the
-			// collection below, never the answer — see [serveSub.serving].
 			answering, replied := queue.Replying(queue.Arriving(s.serving, arrived))
 			reply, err := s.call(answering, request)
 			if err != nil {
