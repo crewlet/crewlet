@@ -74,8 +74,9 @@ func (s *skillDirSlot) UnmarshalJSON(raw []byte) error {
 // The bounds of one skill directory's walk: the directories it reads and the
 // skills it finds, never the files beside them, which it reads past without a
 // look. 4,096 directories took 0.2 s on the build VM (16,384 took 0.77 s), so
-// a firing's walks (a checkout's four skill directories, the home's four)
-// stay near 2 s inside the 10 s a hook is given; maxWalkSkills is
+// a firing's walks (at most 16, Grok Build's eight of a checkout and eight of
+// the home, half of them command files; Muse Code's three and seven) stay
+// near 3 s inside the 10 s a hook is given; maxWalkSkills is
 // [maxCopyFiles], as no firing copies more skills than its entry bound.
 const (
 	maxWalkDirs   = 4096

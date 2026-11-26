@@ -1,7 +1,6 @@
 package main
 
 import (
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -10,63 +9,46 @@ import (
 
 // SKILLS AS GROK BUILD LISTS THEM (checkoutSpec.ListedAs "grok"): Grok Build
 // 1.0.92 lists a skill under [skillname.GrokListed] of its frontmatter name,
-// its directory's name (a command's file less `.md`) where that fails, and
-// settles two that list alike by its own rule, so a copy is named, checked
+// its directory's name (a command's file less `.md`) where that fails, one
+// with no frontmatter under its own name, and settles two that list alike by
+// its own rule (rows x1-x7, g4x): a skill whose own name rewrites to it, or a
+// command, first (a command's lead inferred); another falls back to its own
+// rewritten name, else is unlisted. So a checkout's skills are those a
+// session started in it lists, each copied as `<tag>:<listed>`, checked
 // against the home and listed by the name Grok gives it, never the one
-// written. The package doc's "Checkouts below the working directory" has the
-// rule and the rows it rests on.
+// written; a home skill whose own name rewrites to the copy's takes it too
+// (inferred).
 
 // listedGrok is the [checkoutSpec.ListedAs] of a harness that lists skills as
 // Grok Build 1.0.92 does.
 const listedGrok = "grok"
 
-// maxFrontmatter bounds the bytes of a SKILL.md read for its name alone: a
-// real frontmatter is a few lines. One longer reads as naming nothing, so the
-// skill is named by its directory, as Grok names one whose name fails.
-const maxFrontmatter = 64 << 10
-
 // frontName is the `name` a SKILL.md's frontmatter gives, and whether it has
 // one: the frontmatter's lines between a first line `---` and the next, the
-// first `name:` key's value, its quotes trimmed. A file opening with no
-// frontmatter, or one past [maxFrontmatter], names nothing.
+// first `name:` key's value, its quotes trimmed, read no further
+// ([scanFrontmatter]). A file opening with no frontmatter, or one past
+// [maxFrontmatter], names nothing.
 func frontName(path string) (string, bool) {
-	raw, err := readBounded(path, maxFrontmatter)
-	if err != nil {
-		return "", false
-	}
-	lines := strings.Split(string(raw), "\n")
-	if strings.TrimSpace(lines[0]) != "---" {
-		return "", false
-	}
-	for _, line := range lines[1:] {
-		l := strings.TrimSuffix(line, "\r")
-		if strings.TrimSpace(l) == "---" {
-			return "", false
-		}
+	var name string
+	named := scanFrontmatter(path, func(l string) bool { return strings.TrimSpace(l) == "---" }, func(l string) bool {
 		key, ok := frontKey(l)
 		if !ok || key != "name" {
-			continue
+			return false
 		}
 		_, value, _ := strings.Cut(l, ":")
 		value = strings.TrimSpace(value)
-		if unq, err := strconv.Unquote(value); err == nil && strings.HasPrefix(value, `"`) {
-			return unq, true
+		unq, err := strconv.Unquote(value)
+		switch {
+		case err == nil && strings.HasPrefix(value, `"`):
+			name = unq
+		case len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'':
+			name = strings.ReplaceAll(value[1:len(value)-1], "''", "'")
+		default:
+			name = value
 		}
-		if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
-			return strings.ReplaceAll(value[1:len(value)-1], "''", "'"), true
-		}
-		return value, true
-	}
-	return "", false
-}
-
-// entryFile is the file a skill's name is read from: a command itself, a
-// skill directory's SKILL.md.
-func entryFile(d skillDir) string {
-	if d.command {
-		return d.src
-	}
-	return filepath.Join(d.src, "SKILL.md")
+		return true
+	})
+	return name, named
 }
 
 // grokSessionSkills is those of dirs, in their order (the checkout's skill
@@ -125,10 +107,10 @@ func grokSessionSkills(dirs []skillDir) []skillDir {
 // name and lists the person's skill by another (measured, section 11's rule),
 // so the copy is left out. A home walked as Grok walks a skills directory.
 var grokListing = listingRule{harness: "Grok Build", walk: grokHomeWalk, key: skillname.Grok, shown: skillname.Grok,
-	takes: func(d skillDir) (string, []string) {
+	takes: func(d skillDir) (string, []string, bool) {
 		n, named := frontName(entryFile(d))
 		listed, _ := skillname.GrokListed(n, named, d.name)
-		return listed, []string{listed, skillname.Grok(d.name)}
+		return listed, []string{listed, skillname.Grok(d.name)}, true
 	}}
 
 // grokHomeWalk is how the run's skills directory is walked for the names it

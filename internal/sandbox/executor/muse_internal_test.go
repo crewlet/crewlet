@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -673,13 +674,14 @@ func TestAMuseRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	p := Paths{Home: "/h"}
 	files, dirs := (Muse{}).artifactFiles(p), (Muse{}).artifactDirs(p)
 	if !slices.Equal(files, []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
-		p.MuseNotesInstall()}) ||
+		p.MuseNotesInstall(), p.MuseCheckoutLaunch(), p.MuseCheckoutSections(), p.MuseForeignRules(),
+		p.MuseHomeRulesOwn()}) ||
 		!slices.Equal(dirs, []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}) {
 		t.Fatalf("artifacts = %v %v", files, dirs)
 	}
 	for _, kept := range []string{p.MuseSettings(), p.MuseConfig() + "/auth.json", p.MuseSessions(),
 		p.MuseConfig() + "/AGENTS.md", p.MuseSkills() + "/home", p.MuseConfig() + "/skills/home",
-		p.Home + "/.local/share/muse/plugins/installed.json", p.MuseServersAdded()} {
+		p.Home + "/.local/share/muse/plugins/installed.json", p.MuseServersAdded(), p.MuseHomeRules()} {
 		if slices.ContainsFunc(append(files, dirs...), func(gone string) bool {
 			return kept == gone || strings.HasPrefix(kept, gone+"/")
 		}) {
@@ -801,6 +803,120 @@ func TestAMuseServerNameStaysWholeUpTo19Characters(t *testing.T) {
 	for _, name := range []string{readable, long} {
 		if _, err := box.ReadFile(t.Context(), "/s/"+name+"-"+nonce+".json"); err != nil {
 			t.Errorf("the server %s is not written under its name and the run's suffix: %v", name, err)
+		}
+	}
+}
+
+// A KILLED MUSE RUN'S PLUGIN RECORDS COME BACK AS THE HOME HELD THEM: the
+// script's remove and install drop a person's reject of the nested hook, which
+// the run left out (D709); the clear puts the home's own
+// `plugin:crewlet-notes:*` capabilities back from the held settings, the run's
+// approvals gone, and leaves every other capability as the file holds it.
+//
+// Mutation: skip the capabilities at the clear, or replace them all.
+func TestAKilledMuseRunsPluginRecordsComeBack(t *testing.T) {
+	home := []byte(`{"runtime_capabilities":{"plugin:crewlet-notes:hook:posttooluse-checkouts":{"enabled":false},` +
+		`"plugin:other:hook:x":{"enabled":false}}}`)
+	settings := map[string]json.RawMessage{"runtime_capabilities": json.RawMessage(
+		`{"plugin:crewlet-notes:hook:stop":{"enabled":true},"plugin:other:hook:y":{"enabled":true}}`)}
+	if err := museCapabilitiesBack(settings, home, "/h/settings.json"); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	_ = json.Unmarshal(settings["runtime_capabilities"], &got)
+	if want := []string{"plugin:crewlet-notes:hook:posttooluse-checkouts", "plugin:other:hook:y"}; !slices.Equal(
+		slices.Sorted(maps.Keys(got)), want) {
+		t.Errorf("the capabilities after the clear are %v, want %v", slices.Sorted(maps.Keys(got)), want)
+	}
+}
+
+// A MUSE COPY IS CHECKED AGAINST EVERY SKILL DIRECTORY MUSE WOULD LIST BESIDE
+// IT (measured, rows so1-so6): ~/.config/muse/skills and the start
+// directory's three beside ~/.agents/skills (the run's skills, which the
+// helper reads itself), and ~/.claude/skills and ~/.codex/skills only where
+// the home's settings leave Muse listing another harness's skills, each read
+// for the skill directories directly in it, as Muse lists them.
+//
+// Mutation: drop a directory, walk one deeper, check the foreign ones
+// whatever the setting,
+// name no listing rule (the helper then reads none of them), or leave the
+// tags `bundled` and `plugin` free (rows p2, p5: Muse refuses those names).
+func TestAMuseCopyIsCheckedAgainstTheSkillsMuseListsBesideIt(t *testing.T) {
+	p := Paths{Home: "/h"}
+	for _, foreign := range []bool{true, false} {
+		var got []string
+		for _, d := range museCheckouts(p, foreign).HomeSkills {
+			got = append(got, d.Dir)
+			if !d.Recursive || d.checkoutWalk != (checkoutWalk{Every: true, Depth: 1}) {
+				t.Errorf("foreign skills %v: %s is read as %+v, want the skill directories directly in it", foreign, d.Dir, d)
+			}
+		}
+		want := []string{"/h/.config/muse/skills", "/h/workspace/.agents/skills",
+			"/h/workspace/.claude/skills", "/h/workspace/.codex/skills"}
+		if foreign {
+			want = append(want, "/h/.claude/skills", "/h/.codex/skills")
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("foreign skills %v: the copies are checked against %q, want %q", foreign, got, want)
+		}
+		launch := museCheckoutHome(p).launchConfig(museCheckouts(p, foreign), nil)
+		if !strings.Contains(string(launch), `"listedAs":"muse"`) {
+			t.Errorf("foreign skills %v: the launch names no Muse listing rule, so no home skill is read: %s", foreign, launch)
+		}
+		if !strings.Contains(string(launch), `"reserved":["crewlet","bundled","plugin"]`) {
+			t.Errorf("foreign skills %v: the launch leaves a tag Muse refuses a skill under free: %s", foreign, launch)
+		}
+	}
+	if rules, skills := museForeignOn([]byte(`{"context":{"foreign_personal_skills":false}}`)); !rules || skills {
+		t.Errorf("foreign_personal_skills false read as rules %v, skills %v", rules, skills)
+	}
+}
+
+// A RUN THAT REINSTALLS THE PLUGIN HOLDS THE SETTINGS A NESTED REJECT IS IN,
+// AND ONLY SUCH A RUN (D709): with skill loads alone, and no standing text,
+// the reinstall drops a person's reject of the nested hook, so the launch
+// holds the home's settings for the script to put back whole; with neither
+// notes nor loads the plugin is left alone and nothing is held. Either way the
+// hook is left out of the plugin and the skip log is handed the line.
+//
+// Mutation: hold only where there is standing text, hold for every run, or
+// install the hook.
+func TestAMuseRunHoldsTheNestedRejectWhereItReinstallsThePlugin(t *testing.T) {
+	const settings = `{"schema_version":1,"runtime_capabilities":{"plugin:crewlet-notes:hook:posttooluse-checkouts":` +
+		`{"enabled":false}}}`
+	for _, loads := range []bool{true, false} {
+		box := sandbox.NewFakeSandbox("b")
+		box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+			if cmd == "uname -m" {
+				return sandbox.ExecResult{Stdout: "x86_64\n"}, nil
+			}
+			return sandbox.ExecResult{}, nil
+		}
+		p := PathsFor(box)
+		if err := box.WriteFile(t.Context(), p.MuseSettings(), []byte(settings)); err != nil {
+			t.Fatal(err)
+		}
+		req := sandbox.RunRequest{Brief: "x"}
+		if loads {
+			req.SkillLoads = sandbox.SkillWiring{Server: "crewlet", Tool: "skill_loaded", URL: "http://127.0.0.1:7/mcp/t/skill"}
+		}
+		if _, err := (Muse{}).WriteConfig(t.Context(), box, req, Session{ID: "s"}, p); err != nil {
+			t.Fatalf("loads %v: WriteConfig: %v", loads, err)
+		}
+		want := ""
+		if loads {
+			want = settings
+		}
+		if held, _ := box.ReadFile(t.Context(), p.MuseHeldSettings()); string(held) != want {
+			t.Errorf("loads %v: the home's settings were held as %q, want %q", loads, held, want)
+		}
+		if manifest, _ := box.ReadFile(t.Context(), p.MuseNotesPlugin()+"/.muse-plugin/plugin.json"); strings.Contains(
+			string(manifest), "muse-nested") {
+			t.Errorf("loads %v: the plugin carries the nested hook the person rejected", loads)
+		}
+		if launch, _ := box.ReadFile(t.Context(), p.MuseCheckoutLaunch()); !strings.Contains(string(launch),
+			`"skipped":["a repository cloned during the run is not handed`) {
+			t.Errorf("loads %v: the launch hands the skip log no line: %s", loads, launch)
 		}
 	}
 }
