@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -228,4 +230,84 @@ func TestADataNodeThreeSecondsAheadIsHeardForItsAskersWholeWait(t *testing.T) {
 			}
 		})
 	})
+}
+
+// A REQUEST HELD FOR A LANE'S SLOT IS SERVED ITS ASKER'S WAIT FROM ITS
+// DELIVERY, not from when a slot came free: with every slot of the shared lane
+// held, a read delivered with 15 s to wait and let in 10 s later is cut 15 s
+// after its delivery, and one let in only once its wait is spent runs nothing.
+// The queue stamps the arrival before the wait for a slot (queue.Arrived); a
+// read counted from its slot would run 10 s past its asker, holding the slot
+// and deepening the backlog.
+//
+// Mutation: count the wait from the handler's start, and the read is cut 25 s
+// after its delivery, and the spent one runs, red.
+//
+// In a synctest bubble ([inBubble]), so the instants are exact.
+func TestARequestHeldForALanesSlotIsServedItsWaitFromDelivery(t *testing.T) {
+	t.Parallel()
+	const wait = 15 * time.Second
+	for name, tc := range map[string]struct {
+		held time.Duration
+		runs bool
+	}{
+		"let in ten seconds after its delivery": {held: 10 * time.Second, runs: true},
+		"let in once its wait is spent":         {held: wait + time.Second},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				f := newFleet(t)
+				hang := make(chan struct{})
+				cut := make(chan time.Time, 1)
+				node := &fakeNode{name: "data-a", units: chartOf("data-a"), hang: hang, hangFrom: "holder",
+					levelRead: func(ctx context.Context) error {
+						<-ctx.Done()
+						cut <- time.Now()
+						return ctx.Err()
+					}}
+				serveAhead(t, f, node, nil, 0)
+				args, err := json.Marshal(tasksArgs{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				q := f.start(t)
+				ask := func(from string, wait time.Duration) {
+					ctx, cancel := context.WithTimeout(t.Context(), wait)
+					_, sealed := signed(t, fleetEnvelopes, request{Op: opTasks.spec.name, Args: args, From: from,
+						Deadline: time.Now().Add(wait), BudgetMS: signedask.WaitMS(wait)})
+					go func() {
+						defer cancel()
+						_, _ = q.Ask(ctx, Subject("data-a"), sealed, 1)
+					}()
+				}
+				for range queue.ConcurrentAnswers {
+					ask("holder", time.Minute)
+				}
+				synctest.Wait()
+				delivered := time.Now()
+				ask("agent-9", wait)
+				synctest.Wait()
+				time.Sleep(tc.held)
+				close(hang)
+				// PAST EVERY TIMER the read could run to, then settled, so
+				// a cut is read only once it could have happened.
+				time.Sleep(wait)
+				synctest.Wait()
+				select {
+				case at := <-cut:
+					if !tc.runs {
+						t.Errorf("a read let in %v after its delivery, its %v wait spent, ran", tc.held, wait)
+					} else if got := at.Sub(delivered); got != wait {
+						t.Errorf("a read held %v for a slot was cut %v after its delivery, want its "+
+							"asker's whole %v from delivery", tc.held, got, wait)
+					}
+				default:
+					if tc.runs {
+						t.Errorf("a read held %v for a slot, with %v to wait, never ran", tc.held, wait)
+					}
+				}
+			})
+		})
+	}
 }

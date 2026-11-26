@@ -7,25 +7,30 @@ import (
 
 // A CARRIED WAIT IS COUNTED FROM ARRIVAL, and no clock but the taking node's
 // runtime is asked: the answer is due exactly the wait after the request
-// reached it. A request carrying no wait, or one that is no duration, is
-// nobody's: no sender of this build sends either, and an older unreleased
-// build's asker gets no compatibility.
+// reached it, however long it then waited for a slot, and one whose wait was
+// spent before it started is nobody's. So is a request carrying no wait, or
+// one that is no duration: no sender of this build sends either, and an older
+// unreleased build's asker gets no compatibility.
 //
-// Mutation: give a request carrying no wait a due instant, red.
+// Mutations: give a request carrying no wait a due instant, or count the wait
+// from the start rather than the arrival, red.
 func TestACarriedWaitIsCountedFromArrivalAndNoWaitIsNobodys(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		waitMS int64
+		start  time.Duration // after arrival
 		due    time.Time
 		nobody bool
 	}{
 		"a fifteen-second wait":            {waitMS: 15_000, due: instant.Add(15 * time.Second)},
+		"held ten seconds for a slot":      {waitMS: 15_000, start: 10 * time.Second, due: instant.Add(15 * time.Second)},
+		"held past its wait":               {waitMS: 15_000, start: 15 * time.Second, nobody: true},
 		"a millisecond's wait":             {waitMS: 1, due: instant.Add(time.Millisecond)},
 		"no wait":                          {nobody: true},
 		"a wait below zero":                {waitMS: -1, nobody: true},
 		"a wait too long to be a duration": {waitMS: 1 << 62, nobody: true},
 	} {
-		due, why := Due(instant, tc.waitMS)
+		due, why := Due(instant, tc.waitMS, instant.Add(tc.start))
 		switch {
 		case tc.nobody && why == "":
 			t.Errorf("%s: due %v, want it refused as a wait nobody is waiting out", name, due)

@@ -216,9 +216,9 @@ const (
 	// close of what it started ([mcp.Test]'s stop, ten seconds at most) and
 	// the broker's round trips, with time to spare.
 	mcpCheckSlack = 15 * time.Second
-	// mcpCheckReplyMargin is how long before the asker's deadline an
-	// answering node's test ends, so its reply arrives in time: a broker
-	// round trip, many times over.
+	// mcpCheckReplyMargin is how long before its asker's wait runs out,
+	// counted from the request's arrival, an answering node's test ends, so
+	// its reply arrives in time: a broker round trip, many times over.
 	mcpCheckReplyMargin = 2 * time.Second
 	// maxMCPCheckToolBytes bounds the tools one node's reply carries, as
 	// encoded: every tool the server listed (at most [mcp.MaxServerTools]),
@@ -486,10 +486,11 @@ var errMCPCheckNotHere = errors.New("engine: the MCP test is for other nodes")
 // answerMCPCheck is the serve handler: one test request, answered only where
 // the fleet signed it and it names this node (or a seat this node holds).
 func (e *Engine) answerMCPCheck(ctx context.Context, raw []byte) ([]byte, error) {
-	// THE REQUEST'S ARRIVAL, on both clocks at once: the runtime's, on which
-	// the test is counted, and the node's own, which admits it.
-	arrived, now := time.Now(), e.mcpChecks.now()
-	admitted := e.mcpChecks.wire.Admit(raw, e.mcpChecks.taken, now)
+	// THE REQUEST'S ARRIVAL at this process, stamped by the queue before any
+	// wait for a slot (queue.Arrived), on the runtime clock the test is
+	// counted on; the channel's own clock admits it.
+	arrived := queue.Arrived(ctx)
+	admitted := e.mcpChecks.wire.Admit(raw, e.mcpChecks.taken, e.mcpChecks.now())
 	switch admitted.Disposition {
 	case signedask.Admitted:
 	case signedask.Tampered:
@@ -507,7 +508,7 @@ func (e *Engine) answerMCPCheck(ctx context.Context, raw []byte) ([]byte, error)
 	}
 	// ITS ANSWER HAS TO REACH THE ASKER WHILE IT WAITS, so the test ends a
 	// reply's round trip before the wait, counted from arrival, runs out.
-	due, nobody := signedask.Due(arrived, ask.BudgetMS)
+	due, nobody := signedask.Due(arrived, ask.BudgetMS, time.Now())
 	if nobody != "" {
 		return nil, fmt.Errorf("engine: an MCP test not to be taken: %s", nobody)
 	}

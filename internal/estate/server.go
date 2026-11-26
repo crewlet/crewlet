@@ -112,7 +112,7 @@ func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe
 		if err != nil {
 			// A ROLLBACK, so it takes a context the failure cannot
 			// have ended: each answer it waits for is bounded by its
-			// own request's deadline.
+			// own asker's wait, counted from its arrival.
 			if undo := withdraw(context.WithoutCancel(ctx)); undo != nil {
 				err = errors.Join(err, undo)
 			}
@@ -146,10 +146,11 @@ type server struct {
 // its asker would wait out its budget before trying the next.
 func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	out := reply{Node: s.self}
-	// THE REQUEST'S ARRIVAL, on both clocks at once: the runtime's, on which
-	// every wait for it is counted, and the node's own, which admits it.
-	arrived, now := time.Now(), s.now()
-	admitted := s.env.admit(raw, s.seen, now)
+	// THE REQUEST'S ARRIVAL at this process, stamped by the queue before any
+	// wait for a lane's slot (queue.Arrived), on the runtime clock every wait
+	// for it is counted on; the node's own clock admits it.
+	arrived := queue.Arrived(ctx)
+	admitted := s.env.admit(raw, s.seen, s.now())
 	switch admitted.Disposition {
 	case signedask.Tampered:
 		// NOT THE FLEET'S, so nothing in it is believed, not even the id a
@@ -184,7 +185,7 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	}
 	req := admitted.Request
 	out.Request = req.ID
-	due, nobody := signedask.Due(arrived, req.BudgetMS)
+	due, nobody := signedask.Due(arrived, req.BudgetMS, time.Now())
 	if nobody != "" {
 		log.WarnContext(ctx, "estate_request_refused", "node", s.self,
 			"from", req.From, "op", req.Op, "detail", nobody)

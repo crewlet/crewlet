@@ -184,7 +184,9 @@ hours of each other:
   [code search](../concepts/gitlet.md#code-search) and a
   [test of an MCP server](tools-and-mcp.md#testing-a-server) each carry how
   long the asker waits, which the node asked counts from the request's arrival
-  on its own clock, ending its work a reply's margin before. It takes the
+  on its own clock, time waiting for a free slot included, ending its work a
+  reply's margin before; one whose wait ran out while it waited runs nothing.
+  It takes the
   request only until the asker's deadline by its own clock, with no allowance,
   so a node whose clock runs ahead of its asker's by more than the wait refuses
   it: the estate's router asks the next data node, and a code search or a test
