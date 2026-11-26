@@ -297,11 +297,19 @@ type request struct {
 	// operation's own domain. See the package doc.
 	Floors []statelog.Position `json:"floors,omitempty"`
 
-	// Deadline is the asker's, so the serving node stops working on an
-	// answer nobody is waiting for — and REQUIRED, because it is also how
-	// long a serving node remembers [request.ID]: a request that arrives
+	// Deadline is the asker's instant, which binds and admits the request
+	// (internal/signedask) and nothing else — REQUIRED, because it is also
+	// how long a serving node remembers [request.ID]: a request that arrives
 	// after it is refused unrun, so a replay of it is refused either way.
 	Deadline time.Time `json:"deadline"`
+
+	// BudgetMS is how long the asker waits for the reply
+	// (signedask.WaitMS), which the serving node counts from the request's
+	// arrival on its own clock to bound everything it runs for it
+	// (signedask.Due), so two clocks standing apart neither cut the work
+	// short nor let it run past its asker. Zero is an older asker's request,
+	// bound by its deadline as that build's nodes bound it.
+	BudgetMS int64 `json:"budget_ms,omitzero"`
 
 	// From is the asking node, for the serving node's log.
 	From string `json:"from,omitempty"`
@@ -389,7 +397,8 @@ const (
 
 	// unservedStale: the request is not one this node may take now — it
 	// names no id or no deadline, its deadline had passed when it arrived,
-	// or this node has already taken its id ([signedask.Guard]). Nothing ran.
+	// it carries a wait that is no duration ([request.BudgetMS]), or this
+	// node has already taken its id ([signedask.Guard]). Nothing ran.
 	unservedStale unservedReason = "stale"
 )
 

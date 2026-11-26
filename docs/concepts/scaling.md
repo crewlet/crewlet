@@ -383,8 +383,13 @@ flowchart TD
 
 A read waits up to fifteen seconds on one data node before the next is asked, a
 write up to a minute (or the caller's own deadline); none is ever longer than
-the caller's deadline. Every request carries the asking node's own writes as a
-floor, so the answering node has applied them or says it is behind; see
+the caller's deadline. The request carries that wait, and the data node counts
+it from the request's arrival on its own clock, so a node whose clock stands
+ahead of the asker's still has all of it; it takes the request only until the
+asker's deadline by its own clock, so one ahead by more than the wait refuses
+it ([Every machine's clock](../guides/deployment.md#every-machines-clock)).
+Every request carries the asking node's own writes as a floor, so the
+answering node has applied them or says it is behind; see
 [Read Consistency](../guides/consistency.md#reading-your-own-write-back). It says
 so **while the asker is still listening**: every wait a data node makes before
 answering (for that floor, for the barrier a `linearizable` read appends and the

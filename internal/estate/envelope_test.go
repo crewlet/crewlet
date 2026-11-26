@@ -330,20 +330,29 @@ func TestAReplayedRequestRunsOnce(t *testing.T) {
 }
 
 // A REQUEST NOBODY IS WAITING FOR RUNS NOTHING: one whose deadline had passed
-// when it arrived, and one that names no deadline or no id — none of which the
-// fleet's own router sends, and each of which is how a replay would outlive the
-// window a node remembers ids for.
+// when it arrived, one that names no deadline or no id, and one carrying a wait
+// that is no duration — none of which the fleet's own router sends, and each of
+// which is how a replay would outlive the window a node remembers ids for. The
+// wait a request carries is counted from its arrival, so a request that
+// carries its asker's whole wait is still refused once its deadline, which
+// binds it, has passed.
+//
+// Mutation: serve a carried wait that is no duration as a moment's, and that
+// write runs, red.
 func TestARequestNobodyIsWaitingForRunsNothing(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
 	write := request{Op: opCreateTask.spec.name, Actor: mustInput(t, swe),
 		Args: json.RawMessage(`{"OpID":"op-late","Task":{"Project":"ENG"}}`)}
+	whole := signedask.WaitMS(time.Minute)
 	for name, req := range map[string]request{
 		"past its deadline": {ID: "r-late", Op: write.Op, Actor: write.Actor, Args: write.Args,
-			Deadline: time.Now().Add(-time.Second)},
-		"no deadline": {ID: "r-open", Op: write.Op, Actor: write.Actor, Args: write.Args},
+			Deadline: time.Now().Add(-time.Second), BudgetMS: whole},
+		"no deadline": {ID: "r-open", Op: write.Op, Actor: write.Actor, Args: write.Args, BudgetMS: whole},
 		"no id": {Op: write.Op, Actor: write.Actor, Args: write.Args,
-			Deadline: time.Now().Add(time.Minute)},
+			Deadline: time.Now().Add(time.Minute), BudgetMS: whole},
+		"a wait that is no duration": {ID: "r-spent", Op: write.Op, Actor: write.Actor, Args: write.Args,
+			Deadline: time.Now().Add(time.Minute), BudgetMS: -1},
 	} {
 		replies, err := f.start(t).Ask(t.Context(), Subject("data-a"), sealUnbound(t, req), 1)
 		if err != nil || len(replies) != 1 {

@@ -569,10 +569,10 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 		"a read request": {
 			value: request{ID: "r-1", Op: opTasks.spec.name, Args: json.RawMessage(`{"Query":{}}`),
 				Floors:   []statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 7}},
-				Deadline: envelopeInstant, From: "agent-1"},
+				Deadline: envelopeInstant, BudgetMS: 15_000, From: "agent-1"},
 			want: `{"id":"r-1","op":"tracker.tasks","args":{"Query":{}},` +
 				`"floors":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":7}],` +
-				`"deadline":"2026-10-04T12:00:00Z","from":"agent-1"}`,
+				`"deadline":"2026-10-04T12:00:00Z","budget_ms":15000,"from":"agent-1"}`,
 		},
 		"a read asked after a node refused it": {
 			value: request{ID: "r-4", Op: opTasks.spec.name, Args: json.RawMessage(`{"Query":{}}`),
@@ -613,7 +613,7 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 		"admission's ping": {
 			value: pingEnvelope,
 			want: `{"id":"r-3","op":"estate.ping","args":{},` +
-				`"deadline":"2026-10-04T12:00:00Z","from":"agent-1"}`,
+				`"deadline":"2026-10-04T12:00:00Z","budget_ms":5000,"from":"agent-1"}`,
 		},
 		"an answer": {
 			value: reply{Node: "data-a", Request: "r-1", Result: json.RawMessage(`{"TotalHint":7}`)},
@@ -674,7 +674,7 @@ var envelopeInstant = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 
 // pingEnvelope is admission's ping as the envelope golden pins it.
 var pingEnvelope = request{ID: "r-3", Op: opPing.spec.name, Args: json.RawMessage(`{}`),
-	Deadline: envelopeInstant, From: "agent-1"}
+	Deadline: envelopeInstant, BudgetMS: 5_000, From: "agent-1"}
 
 // WHAT THE ROUTER ACTUALLY SENDS FOR ADMISSION'S PING is the golden above, read
 // off the wire: the envelope test pins a request spelled by hand, so only this
@@ -718,7 +718,11 @@ func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
 		t.Error("the ping carries no deadline, so a data node keeps working on an " +
 			"answer nobody is waiting for")
 	}
-	req.ID, req.Deadline = pingEnvelope.ID, pingEnvelope.Deadline
+	if req.BudgetMS <= 0 {
+		t.Error("the ping carries no wait, so a data node bounds its answer by the asker's deadline on its " +
+			"own clock")
+	}
+	req.ID, req.Deadline, req.BudgetMS = pingEnvelope.ID, pingEnvelope.Deadline, pingEnvelope.BudgetMS
 	raw, err := json.Marshal(req)
 	if err != nil {
 		t.Fatal(err)
