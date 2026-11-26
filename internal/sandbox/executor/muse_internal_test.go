@@ -859,7 +859,7 @@ func TestAMuseCopyIsCheckedAgainstTheSkillsMuseListsBesideIt(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Errorf("foreign skills %v: the copies are checked against %q, want %q", foreign, got, want)
 		}
-		launch := museCheckoutHome(p).launchConfig(museCheckouts(p, foreign), nil)
+		launch := Muse{}.checkoutHome(p).launchConfig(museCheckouts(p, foreign), nil)
 		if !strings.Contains(string(launch), `"listedAs":"muse"`) {
 			t.Errorf("foreign skills %v: the launch names no Muse listing rule, so no home skill is read: %s", foreign, launch)
 		}

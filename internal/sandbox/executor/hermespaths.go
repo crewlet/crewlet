@@ -117,10 +117,10 @@ func (p Paths) HermesEnabled() string { return p.WorkDir() + "/hermes-plugin-ena
 // HermesNoteHelper is the note helper a Hermes run writes at every launch
 // ([writeNoteHelper]): its gate runs hermes-peek and checkout-launch, and
 // its plugin hermes-peek and hermes-nested after each of the main loop's tool
-// calls ([hermesCheckoutHome]).
+// calls ([Hermes.checkoutHome]).
 func (p Paths) HermesNoteHelper() string { return p.WorkDir() + "/hermes-notehelper" }
 
-// HermesCheckouts is the run's checkout state ([hermesCheckoutHome]): the
+// HermesCheckouts is the run's checkout state ([Hermes.checkoutHome]): the
 // checkouts handed, the lock, the gate and the nested adapter's config,
 // remade by every run.
 func (p Paths) HermesCheckouts() string { return p.WorkDir() + "/hermes-checkouts" }

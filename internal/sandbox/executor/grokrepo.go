@@ -52,12 +52,12 @@ func grokCheckouts(paths Paths) checkoutSpec {
 	return spec
 }
 
-// grokCheckoutHome is where a Grok Build run keeps its checkouts'
+// checkoutHome is where a Grok Build run keeps its checkouts'
 // instructions and skills ([checkoutHome]): ~/.grok/AGENTS.md, which 1.0.92
 // reads whole before W's own AGENTS.md (measured), the home's own held beside
 // the run; and ~/.grok/skills, each copied as `<repository>:<skill>`, listed
 // as Grok rewrites that name.
-func grokCheckoutHome(paths Paths) checkoutHome {
+func (Grok) checkoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.GrokCheckouts(), helper: paths.GrokNoteHelper(), launch: paths.GrokCheckoutLaunch(),
 		agents: []string{paths.GrokHome() + "/AGENTS.md"}, held: paths.GrokHomeInstructions(),
 		sections: paths.GrokCheckoutSections(), skills: paths.GrokSkills(), copied: paths.GrokCheckoutCopied()}
@@ -69,8 +69,8 @@ var _ homeKeeper = Grok{}
 // killed Grok Build run left them ([checkoutHome.restore]) and drops the skip
 // log it left ([checkoutHome.dropSkipped]), run by the clear before every
 // run, whichever harness it runs.
-func (Grok) homeRestore(p Paths) string {
-	h := grokCheckoutHome(p)
+func (g Grok) homeRestore(p Paths) string {
+	h := g.checkoutHome(p)
 	return everyStep(h.restore(), h.dropSkipped())
 }
 
@@ -81,7 +81,7 @@ func grokNestedCommand(paths Paths) string {
 	return q(paths.GrokNoteHelper()) + " -adapter grok-nested -config " + q(paths.GrokCheckouts()+"/nested.json")
 }
 
-// GrokCheckouts is the run's checkout state ([grokCheckoutHome]): the
+// GrokCheckouts is the run's checkout state ([Grok.checkoutHome]): the
 // checkouts handed, the lock and the nested hook's config, remade by every run.
 func (p Paths) GrokCheckouts() string { return p.WorkDir() + "/grok-checkouts" }
 
@@ -90,7 +90,7 @@ func (p Paths) GrokCheckoutLaunch() string { return p.WorkDir() + "/grok-checkou
 
 // GrokCheckoutSections is where checkout-launch writes the run's checkouts'
 // instructions, which the gate writes after the home's own into
-// ~/.grok/AGENTS.md ([grokCheckoutHome]).
+// ~/.grok/AGENTS.md ([Grok.checkoutHome]).
 func (p Paths) GrokCheckoutSections() string { return p.WorkDir() + "/grok-checkout-sections.md" }
 
 // GrokCheckoutCopied lists, a name a line, the checkouts' skills a run copied

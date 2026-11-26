@@ -28,13 +28,13 @@ func copilotCheckouts() checkoutSpec {
 		NestedSkillsOnly: true}
 }
 
-// copilotCheckoutHome is where a Copilot run keeps its checkouts'
+// checkoutHome is where a Copilot run keeps its checkouts'
 // instructions and skills ([checkoutHome]): the home's copilot-instructions.md,
 // the run's standing instructions first and the home's own held beside the
 // run, and the home's skills, which Copilot lists at launch, each copy named
 // `<repository>:<skill>` within the 64 characters past which 1.0.114 drops a
 // skill without a word (measured, row k2).
-func copilotCheckoutHome(paths Paths) checkoutHome {
+func (Copilot) checkoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.CopilotRepo(), helper: paths.CopilotNoteHelper(),
 		launch: paths.CopilotCheckoutLaunch(), agents: []string{paths.CopilotInstructions()},
 		held: paths.CopilotHeldInstructions(), sections: paths.CopilotRepoInstructions(),
@@ -59,7 +59,7 @@ func copilotInstructionDirs(state string) string {
 // helper (hk), n the sets there are, then the home file and the instruction
 // directories.
 func copilotLaunchCompose(paths Paths, args string) string {
-	h := copilotCheckoutHome(paths)
+	h := Copilot{}.checkoutHome(paths)
 	q := shellword.Quote
 	var b strings.Builder
 	fmt.Fprintf(&b, `if [ -n "$hk" ]; then n=$(%s -adapter copilot-launch -config %s %s < /dev/null) || `+

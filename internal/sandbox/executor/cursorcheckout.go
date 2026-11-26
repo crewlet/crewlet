@@ -43,8 +43,8 @@ var _ homeKeeper = CursorAgent{}
 // homeRestore puts the home's own hooks.json back and the run's copies out,
 // run by the clear before every run whichever harness it runs, so a killed
 // run's postToolUse hook is in no home file once the next run starts.
-func (CursorAgent) homeRestore(p Paths) string {
-	h := CursorAgent{}.checkoutHome(p)
+func (c CursorAgent) homeRestore(p Paths) string {
+	h := c.checkoutHome(p)
 	return everyStep(putBackHome(p.CursorHooks(), p.CursorHeldHooks()), h.restore(), h.dropSkipped())
 }
 

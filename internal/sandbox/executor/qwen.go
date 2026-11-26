@@ -107,7 +107,7 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	// NOTHING OF CREWLET'S OWN SWITCHED OFF by a list no tier undoes
 	// ([qwenGuard]), checked before Qwen Code starts; the checkouts' hook
 	// switched off only said in the skip log (D709).
-	line("qk=" + q(qwenCheckoutsHook) + "; qs=" + q(qwenCheckoutHome(paths).skipped()))
+	line("qk=" + q(qwenCheckoutsHook) + "; qs=" + q(QwenCode{}.checkoutHome(paths).skipped()))
 	line("node " + q(paths.QwenHelper()) + " guard" + qwenGuard(req) +
 		` ${hk:+--checkouts "$qk" --skipped "$qs"} < /dev/null || exit 1`)
 	b.WriteString(chatSessionGate(session, paths, qwenGate(paths, fresh)))

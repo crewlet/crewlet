@@ -26,12 +26,12 @@ var claudeCheckouts = checkoutSpec{Instructions: []checkoutSlot{{Names: []string
 		Scoped: &checkoutScope{Keys: []string{"paths"}, Whole: []string{"**"}}}}},
 	Limit: checkoutUnlimited, SkillDirs: []checkoutSkillDir{{Dir: ".claude/skills"}}, NestedSkillsOnly: true, ImportInstructions: true}
 
-// claudeCheckoutHome is where a Claude Code run keeps its checkouts'
+// checkoutHome is where a Claude Code run keeps its checkouts'
 // instructions and skills ([checkoutHome]): the home's `.claude/CLAUDE.md`,
 // the home's own held beside the run ([ClaudeCode.homeRestore]), and its
 // `.claude/skills`, each copied as `<repository>:<skill>`, which 2.1.310 lists
 // and loads under that name (measured).
-func claudeCheckoutHome(paths Paths) checkoutHome {
+func (ClaudeCode) checkoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.ClaudeRepo(), helper: paths.ClaudeNoteHelper(), launch: paths.ClaudeCheckoutLaunch(),
 		agents: []string{paths.ClaudeConfigDir() + "/CLAUDE.md"}, held: paths.ClaudeHomeInstructions(),
 		sections: paths.ClaudeRepoInstructions(), skills: paths.ClaudeConfigDir() + "/skills",
@@ -43,7 +43,7 @@ var _ homeKeeper = ClaudeCode{}
 // homeRestore puts the home's own `.claude/CLAUDE.md` back, run by the clear
 // before every run whichever harness it runs, so a killed run's checkouts'
 // sections are in no home file once the next run starts.
-func (ClaudeCode) homeRestore(p Paths) string { return claudeCheckoutHome(p).restore() }
+func (c ClaudeCode) homeRestore(p Paths) string { return c.checkoutHome(p).restore() }
 
 // claudeCheckoutsFloor is the oldest Claude Code release a run hands its
 // checkouts on: 2.1.310, the release main pins, where a home skill named
@@ -73,7 +73,7 @@ func writeClaudeCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	} else if err != nil {
 		return false, err
 	}
-	home := claudeCheckoutHome(paths)
+	home := ClaudeCode{}.checkoutHome(paths)
 	if err := box.WriteFile(ctx, paths.ClaudeCheckoutLaunch(), home.launchConfig(claudeCheckouts, req.ReportedRepos)); err != nil {
 		return false, fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
@@ -113,7 +113,7 @@ func writeClaudeCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbox.
 // home back ([checkoutHome.saySkipped]), once this gate removed a killed run's.
 func claudeCheckoutsGate(paths Paths) string {
 	q := shellword.Quote
-	h := claudeCheckoutHome(paths)
+	h := ClaudeCode{}.checkoutHome(paths)
 	by := q(paths.ClaudeHooksOffBy())
 	return "if at " + floorArgs(claudeCheckoutsFloor) + "; then\nho=$hk\n" + h.gate() +
 		"chome() { " + h.saySkipped() + "; " + h.restore() + "; }\n" +

@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/shellword"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // A CHECKOUT SPEC REACHES THE HELPER IN THE SHAPE IT READS: Codex's slot of
@@ -213,7 +214,7 @@ func TestTheSectionsGoIntoTheHomeFileTheHarnessReads(t *testing.T) {
 // removal, and the script goes red.
 func TestOneHomeFileCandidateNamesNoHeldFile(t *testing.T) {
 	t.Parallel()
-	h := codexCheckoutHome(Paths{Home: "/home/box"})
+	h := Codex{}.checkoutHome(Paths{Home: "/home/box"})
 	if strings.Contains(h.gate()+h.restore(), heldLive) {
 		t.Errorf("Codex's gate or put-back names the held file:\n%s\n%s", h.gate(), h.restore())
 	}
@@ -367,8 +368,8 @@ func TestCodexAndPiCheckoutFormsCarryNoGateBesideHermess(t *testing.T) {
 		spec  checkoutSpec
 		gated bool
 	}{
-		"codex":  {codexCheckoutHome(paths), codexCheckouts(codexProjectDocMaxBytes), false},
-		"pi":     {piCheckoutHome(paths), piCheckouts(), false},
+		"codex":  {Codex{}.checkoutHome(paths), codexCheckouts(codexProjectDocMaxBytes), false},
+		"pi":     {Pi{}.checkoutHome(paths), piCheckouts(), false},
 		"hermes": {hermesLaunchHome(paths, "m"), hermesCheckouts(paths), true},
 	} {
 		want := plain
@@ -392,5 +393,102 @@ func TestCodexAndPiCheckoutFormsCarryNoGateBesideHermess(t *testing.T) {
 		if peeks := strings.Contains(gate, "-adapter hermes-peek"); peeks != c.gated {
 			t.Errorf("%s: the gate peeks: %v", name, peeks)
 		}
+	}
+}
+
+// checkoutHolder is a runner that hands the checkouts below its run's start
+// directory what its harness would load at their roots ([checkoutHome]).
+type checkoutHolder interface {
+	checkoutHome(paths Paths) checkoutHome
+}
+
+// unhandedCheckouts names each of hs that is no [checkoutHolder].
+func unhandedCheckouts(hs []Harness) []string {
+	var out []string
+	for _, h := range hs {
+		if _, holds := h.(checkoutHolder); !holds {
+			out = append(out, h.Name()+" hands no checkout")
+		}
+	}
+	return out
+}
+
+// checkoutlessRunner is a runner that hands no checkout, as a new one would.
+type checkoutlessRunner struct{ Harness }
+
+func (checkoutlessRunner) Name() string { return "checkoutless" }
+
+// EVERY RUNNER HANDS THE CHECKOUTS BELOW ITS START DIRECTORY: a run loads what
+// a person's session of its harness started at a checkout's root would load
+// there (docs/concepts/code-sandbox.md, each runner's section: "A run is
+// handed its repositories' ..."), through its [checkoutHome], so a runner
+// added without one would run with none of its checkouts' instructions or
+// skills and no test would notice. Every registered runner is a
+// [checkoutHolder]; none is excused.
+//
+// Mutation: rename one runner's checkoutHome method, or hand the check a
+// runner without one, and it goes red.
+func TestEveryRunnerHandsItsCheckouts(t *testing.T) {
+	t.Parallel()
+	for _, problem := range unhandedCheckouts(Registered()) {
+		t.Error(problem)
+	}
+	added := []Harness{Pi{}, checkoutlessRunner{Harness: Pi{}}}
+	if got := unhandedCheckouts(added); !slices.Equal(got, []string{"checkoutless hands no checkout"}) {
+		t.Errorf("a runner added without a checkout home is reported as %q", got)
+	}
+}
+
+// checkoutLabel opens each runner's statement of what a checkout's own
+// configuration leaves out of a run started above it.
+const checkoutLabel = "**What a checkout does not bring**"
+
+// unlabelledSections names each of names whose section of page is not named
+// in [runnerSections], is missing, or does not hold [checkoutLabel].
+func unlabelledSections(page string, names []string) []string {
+	var out []string
+	for _, name := range names {
+		title, ok := runnerSections[name]
+		if !ok {
+			out = append(out, name+" names no section")
+			continue
+		}
+		_, section, found := strings.Cut(page, "\n### "+title+"\n")
+		if !found {
+			out = append(out, name+": no section "+title)
+			continue
+		}
+		for _, next := range []string{"\n## ", "\n### "} {
+			if end := strings.Index(section, next); end >= 0 {
+				section = section[:end]
+			}
+		}
+		if !strings.Contains(section, checkoutLabel) {
+			out = append(out, name+": "+title+" does not say "+checkoutLabel)
+		}
+	}
+	return out
+}
+
+// EVERY RUNNER'S SECTION SAYS WHAT A CHECKOUT DOES NOT BRING: a run hands a
+// checkout what its harness loads at the checkout's root, and what the harness
+// loads only where a session starts (settings, servers, hooks) differs per
+// harness, so each runner's section of code-sandbox.md states it under one
+// label a reader finds it by.
+//
+// Mutation: drop the label from one runner's section, or hand the check a
+// runner with no section named, and it goes red.
+func TestEveryRunnersSectionSaysWhatACheckoutDoesNotBring(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "concepts", "code-sandbox.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, problem := range unlabelledSections(string(raw), Names()) {
+		t.Error(problem)
+	}
+	if got := unlabelledSections(string(raw), []string{"pi", "checkoutless"}); !slices.Equal(got,
+		[]string{"checkoutless names no section"}) {
+		t.Errorf("a runner added with no section is reported as %q", got)
 	}
 }

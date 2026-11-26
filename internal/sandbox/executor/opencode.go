@@ -556,7 +556,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// ([OpenCode.Pack]).
 	line(`endbefore() { endedas=before; %s; exit 143; }`, strings.TrimSuffix(recordEnded(paths), "\n"))
 	line(`[ -z "$endasked" ] || endbefore`)
-	// THE CHECKOUTS BELOW THE START DIRECTORY ([openCodeCheckoutHome]), before
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([OpenCode.checkoutHome]), before
 	// the server that reads their sections and skills starts.
 	b.WriteString(openCodeCheckoutsGate(paths))
 
@@ -1394,7 +1394,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	// OpenCode adds to every other document's), and the plugin reporting each
 	// load to the bridge, with the skill route as its one option
 	// ([writeOpenCodeSkills], opencode_skills.js). The checkouts' skills in a
-	// directory of their own beside them ([openCodeCheckoutHome]).
+	// directory of their own beside them ([OpenCode.checkoutHome]).
 	skills := []string{paths.OpenCodeCheckoutSkills()}
 	if len(req.Skills) > 0 {
 		if err := writeOpenCodeSkills(ctx, box, req.Skills, paths); err != nil {
@@ -1461,7 +1461,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	// matched walking up from the working directory. TOLD OF NOTES on a run
 	// wired to them ([withNoteInstruction]). The checkouts' sections after
 	// it, a file OpenCode skips while the gate has written none
-	// ([openCodeCheckoutHome]).
+	// ([OpenCode.checkoutHome]).
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, o.NoteInstruction())
