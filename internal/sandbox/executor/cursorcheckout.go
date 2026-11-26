@@ -303,7 +303,8 @@ func cursorNestedCommand(paths Paths) string {
 // helper, where the engine has a build for the box, the launch config, and
 // the run's postToolUse hook laid into the home's hooks.json, held whole
 // first ([holdHome]); or, where it lays none, why ([Paths.CursorHooksOff]). A
-// box with no helper build starts without either, its script saying so.
+// box with no helper build starts without its checkouts, at launch and
+// mid-run alike, its script saying so.
 func cursorCheckoutsSetup(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
 	launch := CursorAgent{}.checkoutHome(paths).launchConfig(cursorCheckouts(), req.ReportedRepos)
 	if err := box.WriteFile(ctx, paths.CursorCheckoutLaunch(), launch); err != nil {
