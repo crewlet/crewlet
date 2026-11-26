@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/backoff"
-	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -63,25 +62,27 @@ const (
 // take's life before its object is stored, the collector's grace and two of
 // its passes, and twice the engine's assumed skew for an end written on one
 // node's clock and read on another's (the package doc's "A save taken as its
-// job works"). Twenty-nine hours and four and a half minutes at today's bounds, under the
-// uploads bucket's age, which a test holds.
+// job works"). Twenty-nine hours, forty-five and a half minutes at today's
+// bounds: FOURTEEN AND A HALF MINUTES under the uploads bucket's age
+// (coord.UploadRetention, 30 h), which a test holds, so a raise of the keep's
+// or the take's budget past that margin goes red there first.
 var saveLedgerHold = takeLife + collectPendingGrace + 2*collectInterval + 2*objstore.AssumedClockSkew
 
 // saveMarginFloor is the least margin a save is counted at beyond its packed
 // archive, for what the scrub's re-tar and redaction add (countedFor).
 const saveMarginFloor = 64 << 10
 
-// countedFor is the room a save packed at size bytes spools in: sealed, with
-// a margin of an eighth or 64 KiB for what the scrub changes, and never past
-// the largest object a session is stored as. The scrub's rewrite measured
+// countedFor is the room a take packed at size bytes spools in: sealed, with a
+// margin of an eighth or 64 KiB for what the scrub changes, and never past the
+// most its bound's objects hold sealed ([takeBound]). The scrub's rewrite measured
 // within 1% of the box's pack for media and 2% under it for text
 // (internal/sandbox/executor's keptGzipLevel), so the margin is the markers'
 // and the re-tar's room; a spool sealing past it is refused. Its seat is
 // charged it less the media its keep will most likely carry, and then what
 // its keep uploads ([Coordinator.amendSave]).
-func countedFor(size int64) int64 {
+func countedFor(size, sealed int64) int64 {
 	return min(secrets.SealedStreamSize(size+max(size/8, saveMarginFloor),
-		strings.Repeat("k", secrets.MaxStreamKeyIDBytes)), executorkeep.SealedMaxBytes)
+		strings.Repeat("k", secrets.MaxStreamKeyIDBytes)), sealed)
 }
 
 // saveLedger is a seat's ledger as written: every save counted against the

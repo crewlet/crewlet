@@ -26,7 +26,9 @@ func TestThePlaintextBoundIsTooLarge(t *testing.T) {
 		t.Errorf("the plaintext bound came to %s: %q, want too_large naming 256 MiB of plaintext", loss, why)
 	}
 	loss, why = takeRefusal(t.Context(), fmt.Errorf("sealing: %w", executorkeep.ErrSessionTooLarge))
-	if loss != executorkeep.LossTooLarge || !strings.Contains(why, fmt.Sprint(executorkeep.SessionMaxBytes)) {
-		t.Errorf("the archive's bound came to %s: %q, want too_large naming its bytes", loss, why)
+	if loss != executorkeep.LossTooLarge || !strings.Contains(why, "48 MiB of text and 94 MiB in all") ||
+		!strings.Contains(why, "sealing") {
+		t.Errorf("the archive's bound came to %s: %q, want too_large naming both bounds and what refused it",
+			loss, why)
 	}
 }

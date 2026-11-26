@@ -21,21 +21,23 @@ import (
 
 // A CAPTURE'S BUDGETS COUNT EVERY STEP OF ITS LIFE AT THE SLOWEST CROSSING, a
 // change's for a change and a read's for a read, and a reading on another
-// machine's clock adds twice the skew. A keep: four steps, the upload, a read
-// again and its record, and an amend, a read and a record more for a carry
-// gone. A take's life: its take's rest with its reservation's room, digest,
-// keep and stamp; an unanswered takeover's: the takeover, withdrawal and read
-// back, keep and stamp; a standby's wait: the longer life and a tick; its
-// window: its take's rest with its reservation's room, digest, three changes
-// past the wait, its last read and its takeover. Each is the docs' figure at
-// today's bounds, to the nanosecond.
+// machine's clock adds twice the skew. A keep: four steps, the upload at the
+// kept bound's pace (the text bound's, a keep of its own), a read again and
+// its record, and an amend, a read and a record more for a carry gone. A
+// take's life: its take's rest with its reservation's room, digest, keep and
+// stamp; an unanswered takeover's: the takeover, withdrawal and read back, keep
+// and stamp; a standby's wait: the longer life and a tick; its window: its
+// take's rest with its reservation's room, digest, three changes past the
+// wait, its last read and its takeover. Each the docs' figure, to the ns.
 //
 // Mutation: drop a term, a reading's skew, or count a read as a change.
 func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	t.Parallel()
 	change := sessionRecordBudget + coord.MaxValueCrossing
 	read := sessionRecordBudget + coord.MaxValueReadCrossing
-	keep := 5*sessionRecordBudget + objstore.PaceFor(executorkeep.SealedMaxBytes) +
+	keep := 5*sessionRecordBudget + time.Duration(executorkeep.KeptPaceMiB)*objstore.MiBPace +
+		2*(sessionRecordBudget+sessionRecordBudget)
+	text := 5*sessionRecordBudget + objstore.PaceFor(executorkeep.SealedMaxBytes) +
 		2*(sessionRecordBudget+sessionRecordBudget)
 	take := SessionPackWait + SessionScrubWait + change + discardGrace + keep + change
 	over := change + change + read + keep + change
@@ -51,15 +53,16 @@ func TestACapturesBudgetsCountEveryStepAtTheSlowestCrossing(t *testing.T) {
 	}{
 		{"one change of a run's row another node reads", captureStampBudget, change, "13m30.025663374s"},
 		{"one read of a run's row another node waits on", captureReadBudget, read, "4m30s"},
-		{"a keep", SessionKeepBudget, keep, "29m0s"},
+		{"a keep", SessionKeepBudget, keep, "1h8m0s"},
+		{"a keep at the text bound", textBound.keep, text, "29m0s"},
 		{"a keep's read", keepReadRoom, sessionRecordBudget, "30s"},
-		{"a take's life", takeLife, take, "1h4m30.051326748s"},
-		{"a takeover's life", takeOverLife, over, "1h14m0.076990122s"},
-		{"a capture's life", captureLife, life, "1h14m0.076990122s"},
-		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h14m0.076990122s"},
-		{"a standby's wait", standbyWait, wait, "1h14m2.076990122s"},
-		{"a standby's window", standbyWindow, window, "2h34m32.205306992s"},
-		{"a standby read on another machine's clock", standbyBudget, window + skew, "4h34m32.205306992s"},
+		{"a take's life", takeLife, take, "1h45m30.051326748s"},
+		{"a takeover's life", takeOverLife, over, "1h53m0.076990122s"},
+		{"a capture's life", captureLife, life, "1h53m0.076990122s"},
+		{"a capture read on another machine's clock", SessionCaptureBudget, life + skew, "3h53m0.076990122s"},
+		{"a standby's wait", standbyWait, wait, "1h53m2.076990122s"},
+		{"a standby's window", standbyWindow, window, "3h15m32.205306992s"},
+		{"a standby read on another machine's clock", standbyBudget, window + skew, "5h15m32.205306992s"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s is %v, want its terms, %v", c.name, c.got, c.want)
@@ -844,6 +847,7 @@ func (a *floorArchive) Read(p []byte) (int, error) {
 // settle the save in the standby's passes.
 func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 	t.Parallel()
+	keptPace := time.Duration(executorkeep.KeptPaceMiB) * objstore.MiBPace
 	// floor sets every fake of rig at the slowest crossing, and hands back
 	// the store, which notes each step, and the archive a take streams.
 	type floored struct {
@@ -856,6 +860,10 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 		store := &atTheFloor{PendingStore: rig.coordinator.pending, last: last, at: map[string]time.Time{}}
 		var takeBy time.Time
 		archive := &floorArchive{body: bytes.NewReader(standbyArchive), wait: spool(&takeBy)}
+		// AT THE KEPT BOUND, whose keep is the longest a capture lives by.
+		keep.mu.Lock()
+		keep.policy.MediaApart, keep.policy.KeptBound = true, true
+		keep.mu.Unlock()
 		rig.runner.Session.Taking = func(ctx context.Context) { takeBy, _ = ctx.Deadline() }
 		rig.runner.Session.Keeping = func(ctx context.Context) { last(ctx, false) }
 		rig.coordinator.pending = store
@@ -889,7 +897,7 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				if deadline, ok := ctx.Deadline(); ok && (!read || time.Until(deadline) <= captureStampBudget) {
 					time.Sleep(time.Until(deadline) - time.Second)
 				}
-			}, func() { time.Sleep(objstore.PaceFor(executorkeep.SealedMaxBytes) - time.Second) },
+			}, func() { time.Sleep(keptPace - time.Second) },
 				func(by *time.Time) func() { return func() { time.Sleep(time.Until(*by) - time.Second) } })
 			spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
 				takenAs{FakeRunner: rig.runner, body: f.archive}, readCapture(BoxReadStop, Result{}, true))
@@ -920,9 +928,13 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 			if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
 				t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
 			}
+			keep.mu.Lock()
+			keep.policy.MediaApart, keep.policy.KeptBound = true, true
+			keep.mu.Unlock()
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
-				t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
+			if standby == nil || !standby.standby || !standby.stamp.KeptBound {
+				t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by at the kept "+
+					"bound", standby)
 			}
 			refused := begun
 			refused.State, refused.Reason = CaptureRefused, "the session could not be uploaded"
@@ -933,7 +945,7 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				if deadline, ok := ctx.Deadline(); ok && (!read || time.Until(deadline) <= captureStampBudget) {
 					time.Sleep(time.Until(deadline) - time.Second)
 				}
-			}, func() { time.Sleep(objstore.PaceFor(executorkeep.SealedMaxBytes) - time.Second) },
+			}, func() { time.Sleep(keptPace - time.Second) },
 				func(*time.Time) func() { return func() {} })
 			f.store.loseTakeOver = true
 			if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
@@ -1006,7 +1018,7 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 					if deadline, ok := ctx.Deadline(); ok && (!read || time.Until(deadline) <= captureStampBudget) {
 						time.Sleep(time.Until(deadline) - time.Second)
 					}
-				}, func() { time.Sleep(objstore.PaceFor(executorkeep.SealedMaxBytes) - time.Second) },
+				}, func() { time.Sleep(keptPace - time.Second) },
 					func(by *time.Time) func() { return func() { time.Sleep(time.Until(*by) - time.Second) } })
 				standby, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
 					takenAs{FakeRunner: rig.runner, body: f.archive}, readCapture(BoxReadCollect, Result{}, true))
@@ -1077,7 +1089,7 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				if deadline, ok := ctx.Deadline(); ok && (!read || time.Until(deadline) <= captureStampBudget) {
 					time.Sleep(time.Until(deadline) - time.Second)
 				}
-			}, func() { time.Sleep(objstore.PaceFor(executorkeep.SealedMaxBytes) - time.Second) },
+			}, func() { time.Sleep(keptPace - time.Second) },
 				func(by *time.Time) func() { return func() { time.Sleep(time.Until(*by) - time.Second) } })
 			// THE TAKE STREAMS TO ITS DEADLINE, as a pack and a scrub at their
 			// bound leave it, once its place is reserved.

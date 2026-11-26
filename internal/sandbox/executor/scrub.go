@@ -1050,7 +1050,7 @@ func firstReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scru
 
 	pieces := newFirstPieces(b.memo)
 	plan := &tarPlan{gate: b.gate, spool: spool,
-		media: mediaPlan{on: b.split.body != nil, allowance: b.split.allowance}}
+		media: mediaPlan{on: b.split.body != nil, allowance: b.split.allowance, pace: b.split.pace}}
 	for src, diverged := first, 0; ; {
 		err := read(src, s.firstReading(pieces).finding(plan.media.finding()), plan)
 		switch {

@@ -435,7 +435,7 @@ func (c *Coordinator) saveInHand(ctx, phase context.Context, job saveJob, out sa
 		defer cancel()
 		_ = saver.ReleaseSave(rel, box, archive.Path)
 	}
-	counted := countedFor(archive.Size)
+	counted := countedFor(archive.Size, boundOf(policy.kept()).sealed)
 	// PACED AT WHAT THE PACK MEASURED, before its charge, where nothing told
 	// the session's size before it ([expectedSave]): released uncharged, its
 	// size kept so the next is paced before its pack. Never again past an
@@ -644,9 +644,10 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 		out.unplaced = "spool"
 		return end(saveFailed, err.Error())
 	}
+	bound := boundOf(in.policy.kept())
 	taken, err := in.saver.TakeSession(take, in.box, SessionTake{Save: in.archive.Path, Scrub: scrub,
-		MaxBytes: executorkeep.SessionMaxBytes, Scope: row.AgentID, Session: row.Launch.Minted,
-		Spool: in.room.scrubbing(dir), MediaApart: in.policy.MediaApart})
+		MaxBytes: bound.archive, Scope: row.AgentID, Session: row.Launch.Minted,
+		Spool: in.room.scrubbing(dir), MediaApart: in.policy.MediaApart, KeepPaceMiB: bound.paceMiB})
 	switch {
 	case err != nil:
 		out.unplaced = "take"

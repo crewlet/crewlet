@@ -138,6 +138,15 @@ func KeptSealedFor(n int64) int64 {
 	return secrets.SealedStreamSize(n, key) + MediaMaxCount*secrets.SealedStreamSize(0, key)
 }
 
+// KeptPaceMiB is the store's pace units (objstore.PaceFor, a mebibyte begun
+// each) a capture at the kept bound uploads in all: [KeptSealedMaxBytes]
+// begun, and one more for each of [MediaMaxCount] objects beside the text,
+// since Σ⌈sᵢ⌉ ≤ ⌈Σsᵢ⌉ + k for k+1 objects. 127. The take's media are paced
+// to it and its keep is budgeted at it (internal/sandbox's
+// SessionKeepBudget), so the two rise together; one object's pace alone would
+// leave a capture near the bound room for none of its media.
+var KeptPaceMiB = (KeptSealedMaxBytes+objstore.MiB-1)/objstore.MiB + MediaMaxCount
+
 // GzipMostBytes is the most Go's gzip writes of n bytes it cannot shrink, at
 // any level, in one member: flate stores such input as it came, five bytes of
 // header to a block, and its levels end a block of literals at 32 KiB (seven
@@ -172,7 +181,9 @@ const SpoolMembersMostBytes = (256<<20/(64<<10) + 1) * GzipMemberBytes
 // cost nothing a disk notices, and a smaller file only opens more.
 const SpoolSegmentBytes = objstore.MiB
 
-// ErrSessionTooLarge reports an archive past [SessionMaxBytes]: nothing is
+// ErrSessionTooLarge reports a session past a bound it is kept within: an
+// archive past its take's ([SessionKeptMaxBytes] at most), a text past
+// [SessionMaxBytes] sealed, or an object past the store's. Nothing is
 // recorded, and the turn's next launch starts from the session the row already
 // names, or fresh.
 var ErrSessionTooLarge = errors.New("executorkeep: the session is over its size bound")

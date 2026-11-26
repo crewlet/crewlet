@@ -48,7 +48,7 @@ func finalTake(t *testing.T, rig *coordRig, run PendingRun, runner Runner) (*spo
 // mebibyte, and the final waits out its minute and keeps nothing.
 func TestASaveLeavesRoomForOneFinalSessionAtTheBound(t *testing.T) {
 	t.Parallel()
-	if counted := countedFor(executorkeep.SessionMaxBytes); counted != executorkeep.SealedMaxBytes {
+	if counted := countedFor(executorkeep.SessionMaxBytes, textBound.sealed); counted != executorkeep.SealedMaxBytes {
 		t.Fatalf("a session at its bound is counted at %d, want the sealed bound %d", counted,
 			executorkeep.SealedMaxBytes)
 	}
@@ -337,7 +337,7 @@ func TestEverySpoolGivesItsRoomBackWithItsFile(t *testing.T) {
 			rig.launchKept(t, "t1")
 			archive := rig.runner.Session.Archive
 			archive.Size = 1
-			counted := countedFor(archive.Size)
+			counted := countedFor(archive.Size, textBound.sealed)
 			rig.runner.mu.Lock()
 			rig.runner.Session = &FakeSession{Archive: archive, Body: bytes.Repeat([]byte("s"), int(2*counted))}
 			rig.runner.mu.Unlock()
@@ -421,7 +421,7 @@ func TestAFinalTakeWaitsForRoomBeforeItHoldsWhatASaveWaitsFor(t *testing.T) {
 		full := rig.coordinator.trySpoolRoom(spoolRoomBytes)
 		var streamingHeld int64
 		rig.runner.mu.Lock()
-		counted := countedFor(rig.runner.Session.Archive.Size)
+		counted := countedFor(rig.runner.Session.Archive.Size, textBound.sealed)
 		rig.runner.Session.Streaming = func(context.Context) { streamingHeld = roomInUse(rig.coordinator) }
 		rig.runner.mu.Unlock()
 		var spooled *spooledCapture

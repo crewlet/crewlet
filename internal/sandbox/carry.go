@@ -430,7 +430,7 @@ type SessionTake struct {
 	// passes.
 	Scrub []string
 
-	// MaxBytes is the largest archive kept (executorkeep.SessionMaxBytes):
+	// MaxBytes is the largest archive kept, the take's bound's ([takeBound]):
 	// one the box describes as larger is refused before a byte of it is read,
 	// and it bounds the plaintext the scrub reads out of the archive, and with
 	// it what the scrub holds, which holds no piece whole: an archive the
@@ -461,6 +461,12 @@ type SessionTake struct {
 	// ([SessionPolicy.MediaApart]). Its first occurrences hold at most
 	// MaxBytes of payload text, and the rest stay inline.
 	MediaApart bool
+
+	// KeepPaceMiB is the store's pace units (objstore.PaceFor) the take's keep
+	// uploads its objects in, its budget's ([takeBound]): a take keeping its
+	// media apart keeps no more apart than that pace holds, every object's
+	// mebibyte begun counted, and the rest inline. Named by every such take.
+	KeepPaceMiB int64
 }
 
 // SessionSpool is the room a take's scrub spools in ([SessionTake.Spool]): a

@@ -162,7 +162,7 @@ before that work."
 | `no_spool_room` | yes | the node's spools held their whole room for the take's minute ([code sandbox](code-sandbox.md#a-sessions-spools-on-its-node)) |
 | `store_refused` | yes | the object store refused the upload, or took none of it however often it was asked within the keep's budget; its reservation or the seat's session budget spent |
 | `log_refused` | yes | the executor log refused the capture's record or never answered it, its row names another, or the conversation could not be read |
-| `capture_late` | yes | a newer capture was still being kept past what a capture of its size takes at the floors (eight and a half minutes for half a mebibyte, thirty-four at the bound, thirty seconds more for each media object its take cut apart), which a relaunch waits out and no longer ([code sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
+| `capture_late` | yes | a newer capture was still being kept past what a capture of its size takes at the floors (eight and a half minutes for half a mebibyte, thirty-four at the text bound and fifty-eight and two thirds at the kept bound, thirty seconds more for each media object its take cut apart), which a relaunch waits out and no longer ([code sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
 | `release_floor` | yes | the session was written by a harness release or archive format no box of this build continues; its capture is refused unpacked ([code sandbox](code-sandbox.md#each-launchs-session-kept)) |
 | `box_refused` | yes | the box's harness said it does not continue the session, or could not be asked |
 | `restore_failed` | yes | the session's object could not be fetched or read, or the box's restore failed and its script started a session of its own |
@@ -494,9 +494,10 @@ handed is held until that turn keeps a session of its own or ends, so it
 counts beside the seat's live turns for as long. A payload a session keeps apart
 counts once however many of the seat's sessions hold it, and is freed only with
 the last of them. The default, 64 MiB, holds a
-live turn's session at its 48 MiB bound beside about ten ordinary ones (a
-day's work compresses to one or two mebibytes); the least it accepts, 49 MiB,
-is one session at that bound once sealed. It is also the **allowance of the
+live turn's session at its 48 MiB text bound beside about ten ordinary ones (a
+day's work compresses to one or two mebibytes); a capture at the kept bound,
+94 MiB in all, is kept only within the seat's budget. The least it accepts,
+49 MiB, is one session at the text bound once sealed. It is also the **allowance of the
 seat's saves** of its running sessions: a save another replaces is kept by the
 object store until its collector deletes it, a day and more, so a seat holds up
 to twice its budget. Every seat's sessions share the object store with the

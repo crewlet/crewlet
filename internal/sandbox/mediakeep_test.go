@@ -811,7 +811,7 @@ func TestASaveIsChargedWhatItUploads(t *testing.T) {
 	raw := make([]byte, 640<<10)
 	rand.NewChaCha8([32]byte{2}).Read(raw)
 	whole, body := mediaBody(t, "text", mediaPart+string(raw), "end")
-	counted := countedFor(int64(len(whole)))
+	counted := countedFor(int64(len(whole)), textBound.sealed)
 	t.Run("a save carrying its media", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {

@@ -184,10 +184,11 @@ func (m *mediaRun) payload() (at, n int64, sum [sha256.Size]byte, ok bool) {
 // kept as written, is not listed and stays inline. A few dozen bytes a
 // payload of a mebibyte or more, far inside the plan's sixteenth.
 type mediaPlan struct {
-	// on says the take keeps media apart ([scrubBounds.splitting]), and
-	// allowance is the payload text its first occurrences may hold in all.
-	on        bool
-	allowance int64
+	// on says the take keeps media apart ([scrubBounds.splitting]),
+	// allowance is the payload text its first occurrences may hold in all, and
+	// pace the store's pace units its keep uploads its objects in.
+	on              bool
+	allowance, pace int64
 	// unitAt is where in the spool the unit being read begins, which a
 	// payload's place in what its rewrite wrote counts from.
 	unitAt int64
@@ -245,19 +246,18 @@ func (p *mediaPlan) dropTo(mark int) {
 
 // restarted is p for a first reading begun again from its start.
 func (p mediaPlan) restarted() mediaPlan {
-	return mediaPlan{on: p.on, allowance: p.allowance}
+	return mediaPlan{on: p.on, allowance: p.allowance, pace: p.pace}
 }
 
 // paced lets go of every first occurrence past what the keep's upload pace
 // holds, and its repeats, kept being the archive's kept size: the store paces
 // each object by the mebibyte begun (objstore.PaceFor), so k members cost up
 // to k+1 paced mebibytes more than the archive kept whole, and the keep's
-// budget is the pace of the allowance sealed, a mebibyte more than it. kept is
+// budget is the take's pace (sandbox.SessionTake.KeepPaceMiB). kept is
 // counted with the margin a save's charge has (an eighth or 64 KiB), and one
 // mebibyte more covers the seals' tags. The rest stays inline.
 func (p *mediaPlan) paced(kept int64) {
-	budget := paceUnits(p.allowance) + 1
-	firsts := max(budget-2-paceUnits(kept+max(kept/8, 64<<10)), 0)
+	firsts := max(p.pace-2-paceUnits(kept+max(kept/8, 64<<10)), 0)
 	if int64(len(p.texts)) <= firsts {
 		return
 	}
@@ -286,18 +286,19 @@ func (p *mediaPlan) finding() *mediaPlan {
 	return p
 }
 
-// mediaSplit is where a take that keeps its media apart writes its body, and
-// the payload text it may keep apart in all ([scrubBounds.splitting]).
+// mediaSplit is where a take that keeps its media apart writes its body, the
+// payload text it may keep apart in all, and the pace units its keep uploads
+// in ([scrubBounds.splitting]).
 type mediaSplit struct {
-	body      io.Writer
-	allowance int64
+	body            io.Writer
+	allowance, pace int64
 }
 
 // splitting is b keeping each large payload apart in body, its first
-// occurrences at most allowance bytes of text in all, beside the archive whole
-// its scrub writes.
-func (b scrubBounds) splitting(body io.Writer, allowance int64) scrubBounds {
-	b.split = mediaSplit{body: body, allowance: allowance}
+// occurrences at most allowance bytes of text in all and paced to pace units,
+// beside the archive whole its scrub writes.
+func (b scrubBounds) splitting(body io.Writer, allowance, pace int64) scrubBounds {
+	b.split = mediaSplit{body: body, allowance: allowance, pace: pace}
 	return b
 }
 

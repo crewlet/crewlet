@@ -166,9 +166,11 @@ type sessionKeep struct {
 	sealErr                   error
 	refuseSealOf, refusePutOf []byte
 	// gate, when set, holds every upload until closed; mintGate holds every
-	// keep at its first step, before its upload.
-	gate     chan struct{}
-	mintGate chan struct{}
+	// keep at its first step, before its upload; uploadHook, when set, is
+	// told every upload's context.
+	gate       chan struct{}
+	mintGate   chan struct{}
+	uploadHook func(context.Context)
 	// uploaded is what every upload read, and wrote the bytes each seal's
 	// spool took, a seal refused part way included.
 	uploaded [][]byte
@@ -262,8 +264,11 @@ func (k *sessionKeep) Upload(ctx context.Context, spool executorkeep.SealedSpool
 	sealed io.Reader) (executorkeep.SealedObject, error) {
 
 	k.mu.Lock()
-	gate := k.gate
+	gate, hook := k.gate, k.uploadHook
 	k.mu.Unlock()
+	if hook != nil {
+		hook(ctx)
+	}
 	if gate != nil {
 		select {
 		case <-gate:

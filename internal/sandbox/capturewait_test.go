@@ -15,10 +15,10 @@ import (
 )
 
 // THE SCRUB'S WAIT IS DERIVED FROM THE ARCHIVE'S BOUND. Its size term is the
-// archive at executorkeep.SessionMaxBytes read twice out of its box at the
+// archive at executorkeep.SessionKeptMaxBytes read twice out of its box at the
 // box-read floor, a mebibyte begun a second, and the wait is that, the spool's
-// room and the slowest plaintext, rounded up to the minute: 96 s and six
-// minutes at today's bound, as docs/concepts/code-sandbox.md states them. A
+// room and the slowest plaintext, rounded up to the minute: 188 s and eight
+// minutes at the kept bound, as docs/concepts/code-sandbox.md states them. A
 // bound that moves moves both, and this case names what to restate.
 //
 // Mutation: write the size term as a literal, read the archive once, count a
@@ -31,7 +31,7 @@ func TestTheScrubWaitIsDerivedFromTheArchivesBound(t *testing.T) {
 			t.Errorf("%d bytes of archive are given %s to come out of a box, want %s", n, got, want)
 		}
 	}
-	reads := 2 * archiveReadFor(executorkeep.SessionMaxBytes)
+	reads := 2 * archiveReadFor(executorkeep.SessionKeptMaxBytes)
 	if scrubArchiveReads != reads {
 		t.Errorf("the scrub's size term is %s, want the archive at its bound read twice at the box-read floor, %s",
 			scrubArchiveReads, reads)
@@ -40,10 +40,10 @@ func TestTheScrubWaitIsDerivedFromTheArchivesBound(t *testing.T) {
 	if SessionScrubWait < sum || SessionScrubWait-sum >= time.Minute || SessionScrubWait%time.Minute != 0 {
 		t.Errorf("the scrub's wait is %s, want its terms, %s, rounded up to the minute", SessionScrubWait, sum)
 	}
-	if reads != 96*time.Second || SessionScrubWait != 6*time.Minute {
-		t.Errorf("the scrub reads its archive for %s and waits %s at today's bound, and the docs state 96 s and "+
-			"six minutes: restate them (code-sandbox.md, \"Six minutes for the scrub\"; ADR-0073)", reads,
-			SessionScrubWait)
+	if reads != 188*time.Second || SessionScrubWait != 8*time.Minute {
+		t.Errorf("the scrub reads its archive for %s and waits %s at today's bound, and the docs state 188 s "+
+			"and eight minutes: restate them (code-sandbox.md, \"Eight minutes for the scrub\"; ADR-0073)",
+			reads, SessionScrubWait)
 	}
 }
 
@@ -61,19 +61,28 @@ func TestARelaunchsWaitForACaptureCountsWhatItsSizeStillNeeds(t *testing.T) {
 		return 5*sessionRecordBudget + paces*objstore.MiBPace + 2*(sessionRecordBudget+sessionRecordBudget)
 	}
 	bound := executorkeep.SessionMaxBytes / objstore.MiB
+	kept := executorkeep.SessionKeptMaxBytes / objstore.MiB
+	keptSealed := (executorkeep.KeptSealedMaxBytes + objstore.MiB - 1) / objstore.MiB
 	for _, c := range []struct {
 		name      string
 		got, want time.Duration
 		docs      string
 	}{
-		{"half a mebibyte", captureRestFor(512<<10, 0),
+		{"half a mebibyte", captureRestFor(512<<10, 0, false),
 			2*time.Second + scrubPlainSlowest + discardGrace + keep(1), "8m35s"},
-		{"at the bound", captureRestFor(executorkeep.SessionMaxBytes, 0),
+		{"at the text bound", captureRestFor(executorkeep.SessionMaxBytes, 0, false),
 			2*time.Duration(bound)*time.Second + scrubPlainSlowest + discardGrace + keep(time.Duration(bound)+1),
 			"34m9s"},
-		{"half a mebibyte cutting three media objects apart", captureRestFor(512<<10, 3),
+		{"at the kept bound", captureRestFor(executorkeep.SessionKeptMaxBytes, 0, true),
+			2*time.Duration(kept)*time.Second + scrubPlainSlowest + discardGrace + keep(time.Duration(keptSealed)),
+			"58m41s"},
+		{"at the kept bound, thirty-two objects", captureRestFor(executorkeep.SessionKeptMaxBytes,
+			executorkeep.MediaMaxCount, true), 2*time.Duration(kept)*time.Second + scrubPlainSlowest +
+			discardGrace + keep(time.Duration(keptSealed+executorkeep.MediaMaxCount)), "1h14m41s"},
+		{"half a mebibyte cutting three media objects apart", captureRestFor(512<<10, 3, false),
 			2*time.Second + scrubPlainSlowest + discardGrace + keep(1+3), "10m5s"},
-		{"a keep at the bound", keepBudgetFor(executorkeep.SealedMaxBytes), SessionKeepBudget, "29m0s"},
+		{"a keep at the text bound", keepBudgetFor(executorkeep.SealedMaxBytes), textBound.keep, "29m0s"},
+		{"a keep at the kept bound", keep(time.Duration(executorkeep.KeptPaceMiB)), SessionKeepBudget, "1h8m0s"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s: %s, want its terms, %s", c.name, c.got, c.want)
@@ -89,8 +98,11 @@ func TestARelaunchsWaitForACaptureCountsWhatItsSizeStillNeeds(t *testing.T) {
 // being kept, and an ask's wait where neither is; a keep it does not depend on,
 // an earlier job's beside a capture the turn kept, adds nothing.
 //
+// A capture taken at the kept bound is waited for at that bound's count.
+//
 // Mutation: size the wait by the newest stamp alone, count a stamp the
-// relaunch does not depend on, or let a small capture cut an ask's wait short.
+// relaunch does not depend on, read no stamp's bound, or let a small capture
+// cut an ask's wait short.
 func TestARelaunchWaitsAsLongAsTheLongestKeepItDependsOnNeeds(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
@@ -103,6 +115,10 @@ func TestARelaunchWaitsAsLongAsTheLongestKeepItDependsOnNeeds(t *testing.T) {
 		c.MediaCount = media
 		return c
 	}
+	atKept := func(c *SessionCapture) *SessionCapture {
+		c.KeptBound = true
+		return c
+	}
 	kept := &SessionCapture{LaunchSeq: 1, CaptureSeq: 1, Launch: "launch-1", State: CaptureLanded, At: now}
 	small, large := int64(512<<10), int64(executorkeep.SessionMaxBytes)
 	for _, c := range []struct {
@@ -112,23 +128,25 @@ func TestARelaunchWaitsAsLongAsTheLongestKeepItDependsOnNeeds(t *testing.T) {
 	}{
 		{"nothing being kept", PendingRun{LaunchSeq: 2, Kept: kept}, relaunchAskWait},
 		{"the followed job's capture", PendingRun{LaunchSeq: 2, Kept: kept, Capture: begun(2, 2, small)},
-			captureRestFor(small, 0)},
+			captureRestFor(small, 0, false)},
 		{"the followed job's capture cutting media apart", PendingRun{LaunchSeq: 2, Kept: kept,
-			Capture: counted(begun(2, 2, small), 5)}, captureRestFor(small, 5)},
+			Capture: counted(begun(2, 2, small), 5)}, captureRestFor(small, 5, false)},
 		{"its save beside a smaller final take", PendingRun{LaunchSeq: 2, Kept: kept, Capture: begun(2, 3, small),
-			Saving: begun(2, 2, large)}, captureRestFor(large, 0)},
+			Saving: begun(2, 2, large)}, captureRestFor(large, 0, false)},
+		{"the followed job's capture taken at the kept bound", PendingRun{LaunchSeq: 2, Kept: kept,
+			Capture: atKept(begun(2, 2, large))}, captureRestFor(large, 0, true)},
 		{"an earlier job's capture beside one the turn kept",
 			PendingRun{LaunchSeq: 3, Kept: kept, Capture: begun(2, 2, large)}, relaunchAskWait},
 		{"an earlier job's capture, the turn having kept none",
-			PendingRun{LaunchSeq: 3, Capture: begun(2, 1, large)}, captureRestFor(large, 0)},
+			PendingRun{LaunchSeq: 3, Capture: begun(2, 1, large)}, captureRestFor(large, 0, false)},
 	} {
 		if got := coordinator.relaunchWaitOf(c.run, now); got != c.want {
 			t.Errorf("%s: the relaunch waits %s, want %s", c.name, got, c.want)
 		}
 	}
-	if captureRestFor(0, 0) <= relaunchAskWait {
+	if captureRestFor(0, 0, false) <= relaunchAskWait {
 		t.Errorf("a capture of no bytes is waited %s, within an ask's %s: an ask's wait would cut it short",
-			captureRestFor(0, 0), relaunchAskWait)
+			captureRestFor(0, 0, false), relaunchAskWait)
 	}
 }
 
@@ -241,14 +259,15 @@ func TestAnUploadTheStoreTookNoneOfIsMadeAgainWithinTheKeepsBudget(t *testing.T)
 			}
 			attempts, _ := puts.made()
 			room := objstore.PaceFor(spooled.spool.Size) + rig.coordinator.recordBudget
-			last, lastBy := attempts[len(attempts)-1], began.Add(SessionKeepBudget-room)
+			budget := boundOf(spooled.stamp.KeptBound).keep
+			last, lastBy := attempts[len(attempts)-1], began.Add(budget-room)
 			if len(attempts) < 2 || last.After(lastBy) || !last.After(lastBy.Add(-sessionRetryCeiling)) {
 				t.Errorf("uploaded %d times, the last %s into the keep, want attempts until the budget left could "+
 					"not hold another at the store's pace and the record's room, the last within %s before %s",
 					len(attempts), last.Sub(began), sessionRetryCeiling, lastBy.Sub(began))
 			}
-			if ended.Sub(began) > SessionKeepBudget {
-				t.Errorf("the keep ended %s after it began, past its budget, %s", ended.Sub(began), SessionKeepBudget)
+			if ended.Sub(began) > budget {
+				t.Errorf("the keep ended %s after it began, past its budget, %s", ended.Sub(began), budget)
 			}
 			if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused {
 				t.Errorf("the row holds %+v, want the capture refused", c)
@@ -276,19 +295,29 @@ func TestAnUploadTheStoreTookNoneOfIsMadeAgainWithinTheKeepsBudget(t *testing.T)
 	})
 }
 
-// A CAPTURE'S ARCHIVE SIZE IS HELD TO THE ARCHIVE'S BOUND. The size is the box's
+// A CAPTURE'S ARCHIVE SIZE IS HELD TO ITS TAKE'S BOUND. The size is the box's
 // word ([SessionArchive.Size]), and a relaunch sizes its wait by it, so a stamp
-// stating a size below zero or past executorkeep.SessionMaxBytes is refused
-// before the row carries it, as every other field a box states is.
+// stating a size below zero, or past executorkeep.SessionMaxBytes, or past
+// executorkeep.SessionKeptMaxBytes stamped at the kept bound, is refused before
+// the row carries it, as every other field a box states is: a node whose
+// stamp readers do not all read the kept bound never writes one past the text
+// bound, and a build below it refuses one.
 //
-// Mutation: leave the size unbounded, or bound it short of the archive's bound.
-func TestACapturesArchiveSizeIsHeldToTheArchivesBound(t *testing.T) {
+// Mutation: leave the size unbounded, or bound it at either bound alone.
+func TestACapturesArchiveSizeIsHeldToItsTakesBound(t *testing.T) {
 	t.Parallel()
-	for size, refused := range map[int64]bool{-1: true, 0: false, executorkeep.SessionMaxBytes: false,
-		executorkeep.SessionMaxBytes + 1: true} {
-		err := SessionCapture{ArchiveSize: size}.Bounded()
-		if got := errors.Is(err, ErrCaptureUnbounded); got != refused {
-			t.Errorf("a stamp of an archive of %d bytes is refused %t (%v), want %t", size, got, err, refused)
+	for _, tc := range []struct {
+		size          int64
+		kept, refused bool
+	}{
+		{-1, false, true}, {0, false, false}, {executorkeep.SessionMaxBytes, false, false},
+		{executorkeep.SessionMaxBytes + 1, false, true}, {executorkeep.SessionMaxBytes + 1, true, false},
+		{executorkeep.SessionKeptMaxBytes, true, false}, {executorkeep.SessionKeptMaxBytes + 1, true, true},
+	} {
+		err := SessionCapture{ArchiveSize: tc.size, KeptBound: tc.kept}.Bounded()
+		if got := errors.Is(err, ErrCaptureUnbounded); got != tc.refused {
+			t.Errorf("a stamp of an archive of %d bytes, at the kept bound %t, is refused %t (%v), want %t",
+				tc.size, tc.kept, got, err, tc.refused)
 		}
 	}
 }

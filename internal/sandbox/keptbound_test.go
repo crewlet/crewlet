@@ -1,0 +1,117 @@
+package sandbox
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/executorkeep"
+)
+
+// A TAKE KEEPS THE KEPT BOUND ONLY WHERE THE POLICY READS IT, AND ONLY BESIDE
+// ITS MEDIA APART: a take under KeptBound and MediaApart admits its box's
+// archive up to executorkeep.SessionKeptMaxBytes, paces its media to
+// executorkeep.KeptPaceMiB, stamps its place at the kept bound and keeps within
+// that bound's budget; under either alone it keeps the text bound, its
+// archive within executorkeep.SessionMaxBytes, 4b's pace and 29 minutes.
+//
+// Mutation: read KeptBound without MediaApart, take or pace at one bound and
+// keep at the other, or stamp no bound, and a case goes red.
+func TestATakeKeepsTheKeptBoundOnlyWhereThePolicyReadsIt(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		apart, kept bool
+		want        takeBound
+	}{
+		"every reader at the kept bound":     {apart: true, kept: true, want: keptBound},
+		"media apart, a reader below it":     {apart: true, want: textBound},
+		"the kept bound without media apart": {kept: true, want: textBound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, _, keep := keepingRig(t)
+				var room time.Duration
+				keep.mu.Lock()
+				keep.policy.MediaApart, keep.policy.KeptBound = tc.apart, tc.kept
+				keep.uploadHook = func(ctx context.Context) {
+					if by, ok := ctx.Deadline(); ok {
+						room = time.Until(by)
+					}
+				}
+				keep.mu.Unlock()
+				spooled, taken := finalTake(t, rig, rig.launchKept(t, "t1"), rig.runner)
+				if spooled == nil || taken == nil || taken.NotKept != "" {
+					t.Fatalf("the take came to %+v, want its session spooled", taken)
+				}
+				takes := rig.runner.Takes()
+				take := takes[len(takes)-1]
+				if take.MaxBytes != tc.want.archive || (tc.apart && take.KeepPaceMiB != tc.want.paceMiB) {
+					t.Errorf("the take admitted %d bytes paced at %d, want %d at %d", take.MaxBytes,
+						take.KeepPaceMiB, tc.want.archive, tc.want.paceMiB)
+				}
+				if got := rig.get("t1").Capture; got == nil || got.KeptBound != (tc.want == keptBound) {
+					t.Errorf("the capture was stamped %+v, want it at the kept bound %t", got, tc.want == keptBound)
+				}
+				rig.coordinator.keepCapture(t.Context(), spooled)
+				if room != tc.want.keep {
+					t.Errorf("the keep uploaded within %s, want its bound's %s", room, tc.want.keep)
+				}
+			})
+		})
+	}
+}
+
+// A KEPT-BOUND RECORD IS REFUSED ONCE A READER FALLS BELOW, AND ONLY THEN: a
+// capture taken at the kept bound, naming no media, is read again before its
+// record as one naming media is; a node that joined after the take and says a
+// stamp version below the kept bound's refuses it as keep_failed, naming the
+// node, nothing sent; readers unread let it land on its take's answer.
+//
+// Mutation: ask again only a capture naming media, or refuse an unknown
+// answer, and a case goes red.
+func TestAKeptBoundRecordIsRefusedOnceAReaderFallsBelow(t *testing.T) {
+	t.Parallel()
+	const below = "node seats-1 says capture stamp version 1, below the 2 a take at the kept bound is asked again at"
+	for name, tc := range map[string]struct {
+		unread string
+		lands  bool
+	}{
+		"a stamp reader below the kept bound": {},
+		"readers unread in their room":        {unread: "the position register could not be read", lands: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, writes, keep := keepingRig(t)
+				keep.mu.Lock()
+				keep.policy.MediaApart, keep.policy.KeptBound = true, true
+				keep.mu.Unlock()
+				spooled, taken := finalTake(t, rig, rig.launchKept(t, "t1"), rig.runner)
+				if spooled == nil || !spooled.stamp.KeptBound || len(spooled.media) != 0 {
+					t.Fatalf("the take came to %+v, want it spooled at the kept bound naming no media", taken)
+				}
+				keep.mu.Lock()
+				keep.policy.KeptBound, keep.policy.MediaUnread, keep.policy.KeptBelow = false, tc.unread, ""
+				if tc.unread == "" {
+					keep.policy.KeptBelow = below
+				} else {
+					keep.policy.MediaApart = false
+				}
+				keep.mu.Unlock()
+				kept := rig.coordinator.keepCapture(t.Context(), spooled)
+				captured, stamp := writes.captured(), rig.get("t1").Capture
+				switch {
+				case tc.lands && (kept == nil || kept.NotKept != "" || len(captured) != 1):
+					t.Errorf("the keep came to %+v after %d records, want it landed on its take's answer", kept,
+						len(captured))
+				case !tc.lands && (kept == nil || !strings.Contains(kept.NotKept, below) || len(captured) != 0 ||
+					stamp == nil || stamp.Loss != executorkeep.LossKeepFailed):
+					t.Errorf("the keep came to %+v after %d records, stamped %+v, want it refused unsent as "+
+						"keep_failed, naming the node below", kept, len(captured), stamp)
+				}
+			})
+		})
+	}
+}
