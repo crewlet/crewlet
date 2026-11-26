@@ -235,79 +235,97 @@ func TestADataNodeThreeSecondsAheadIsHeardForItsAskersWholeWait(t *testing.T) {
 // A REQUEST HELD FOR A LANE'S SLOT IS SERVED ITS ASKER'S WAIT FROM ITS
 // DELIVERY, not from when a slot came free: with every slot of the shared lane
 // held, a read delivered with 15 s to wait and let in 10 s later is cut 15 s
-// after its delivery, and one let in only once its wait is spent runs nothing.
-// The queue stamps the arrival before the wait for a slot (queue.Arrived); a
-// read counted from its slot would run 10 s past its asker, holding the slot
-// and deepening the backlog.
+// after its delivery, and a write let in only once its wait is spent runs
+// nothing, on a node whose clock stands behind its asker's, so admission
+// still takes it. The queue stamps the arrival before the wait for a slot
+// (queue.Arrived); counted from its slot, the read runs 10 s past its asker.
 //
-// Mutation: count the wait from the handler's start, and the read is cut 25 s
-// after its delivery, and the spent one runs, red.
+// Mutations: count the wait from the handler's start, and the read is cut
+// 25 s after its delivery, red; serve a spent wait, and the write runs, red.
 //
 // In a synctest bubble ([inBubble]), so the instants are exact.
 func TestARequestHeldForALanesSlotIsServedItsWaitFromDelivery(t *testing.T) {
 	t.Parallel()
 	const wait = 15 * time.Second
-	for name, tc := range map[string]struct {
-		held time.Duration
-		runs bool
-	}{
-		"let in ten seconds after its delivery": {held: 10 * time.Second, runs: true},
-		"let in once its wait is spent":         {held: wait + time.Second},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			inBubble(t, func(t *testing.T) {
-				f := newFleet(t)
-				hang := make(chan struct{})
-				cut := make(chan time.Time, 1)
-				node := &fakeNode{name: "data-a", units: chartOf("data-a"), hang: hang, hangFrom: "holder",
-					levelRead: func(ctx context.Context) error {
-						<-ctx.Done()
-						cut <- time.Now()
-						return ctx.Err()
-					}}
-				serveAhead(t, f, node, nil, 0)
-				args, err := json.Marshal(tasksArgs{})
-				if err != nil {
-					t.Fatal(err)
-				}
-				q := f.start(t)
-				ask := func(from string, wait time.Duration) {
-					ctx, cancel := context.WithTimeout(t.Context(), wait)
-					_, sealed := signed(t, fleetEnvelopes, request{Op: opTasks.spec.name, Args: args, From: from,
-						Deadline: time.Now().Add(wait), BudgetMS: signedask.WaitMS(wait)})
-					go func() {
-						defer cancel()
-						_, _ = q.Ask(ctx, Subject("data-a"), sealed, 1)
-					}()
-				}
-				for range queue.ConcurrentAnswers {
-					ask("holder", time.Minute)
-				}
-				synctest.Wait()
-				delivered := time.Now()
-				ask("agent-9", wait)
-				synctest.Wait()
-				time.Sleep(tc.held)
-				close(hang)
-				// PAST EVERY TIMER the read could run to, then settled, so
-				// a cut is read only once it could have happened.
-				time.Sleep(wait)
-				synctest.Wait()
-				select {
-				case at := <-cut:
-					if !tc.runs {
-						t.Errorf("a read let in %v after its delivery, its %v wait spent, ran", tc.held, wait)
-					} else if got := at.Sub(delivered); got != wait {
-						t.Errorf("a read held %v for a slot was cut %v after its delivery, want its "+
-							"asker's whole %v from delivery", tc.held, got, wait)
-					}
-				default:
-					if tc.runs {
-						t.Errorf("a read held %v for a slot, with %v to wait, never ran", tc.held, wait)
-					}
-				}
-			})
-		})
+	reads, err := json.Marshal(tasksArgs{})
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Run("a read let in ten seconds after its delivery", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			cut := make(chan time.Time, 1)
+			node := &fakeNode{name: "data-a", units: chartOf("data-a"), levelRead: func(ctx context.Context) error {
+				<-ctx.Done()
+				cut <- time.Now()
+				return ctx.Err()
+			}}
+			delivered := holdTheLane(t, node, 0, 10*time.Second,
+				request{Op: opTasks.spec.name, Args: reads, From: "agent-9"}, wait)
+			select {
+			case at := <-cut:
+				if got := at.Sub(delivered); got != wait {
+					t.Errorf("a read held 10s for a slot was cut %v after its delivery, want its asker's "+
+						"whole %v from delivery", got, wait)
+				}
+			default:
+				t.Errorf("a read held 10s for a slot, with %v to wait, never ran", wait)
+			}
+		})
+	})
+	t.Run("a write let in once its wait is spent", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			node := &fakeNode{name: "data-a", units: chartOf("data-a")}
+			holdTheLane(t, node, 5*time.Second, wait+time.Second, request{Op: opCreateTask.spec.name,
+				Actor: mustInput(t, swe), Args: json.RawMessage(`{"OpID":"op-spent","Task":{"Project":"ENG"}}`),
+				From: "agent-9"}, wait)
+			if node.askedFor("create") {
+				t.Errorf("a write let in %v after its delivery, its %v wait spent, ran", wait+time.Second, wait)
+			}
+		})
+	})
+}
+
+// holdTheLane serves node with its clock behind by behind, holds every slot
+// of its shared lane with reads from "holder", delivers probe with wait to
+// wait, frees the slots held later, and returns once anything probe could
+// run has run: the instant probe was delivered. In a bubble.
+//
+//fixedwait:bubble
+func holdTheLane(t *testing.T, node *fakeNode, behind, held time.Duration, probe request,
+	wait time.Duration) time.Time {
+	t.Helper()
+	f := newFleet(t)
+	hang := make(chan struct{})
+	node.hang, node.hangFrom = hang, "holder"
+	serveAhead(t, f, node, nil, -behind)
+	reads, err := json.Marshal(tasksArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := f.start(t)
+	ask := func(req request, wait time.Duration) {
+		ctx, cancel := context.WithTimeout(t.Context(), wait)
+		req.Deadline, req.BudgetMS = time.Now().Add(wait), signedask.WaitMS(wait)
+		_, sealed := signed(t, fleetEnvelopes, req)
+		go func() {
+			defer cancel()
+			_, _ = q.Ask(ctx, Subject("data-a"), sealed, 1)
+		}()
+	}
+	for range queue.ConcurrentAnswers {
+		ask(request{Op: opTasks.spec.name, Args: reads, From: "holder"}, time.Minute)
+	}
+	synctest.Wait()
+	delivered := time.Now()
+	ask(probe, wait)
+	synctest.Wait()
+	time.Sleep(held)
+	close(hang)
+	// PAST EVERY TIMER the probe could run to, then settled, so what it did
+	// is read only once it could have happened.
+	time.Sleep(wait)
+	synctest.Wait()
+	return delivered
 }
