@@ -93,10 +93,15 @@ func (p Paths) GrokTakeConfigFresh() string { return p.WorkDir() + "/grok-take-f
 // takes nothing ([grokHooks]).
 func (p Paths) GrokThread() string { return p.WorkDir() + "/grok-thread" }
 
-// GrokHookIDs is the ids Grok Build gives the run's hooks, one a line, as
-// `grok inspect --json` lists them and `~/.grok/disabled-hooks` names them
-// ([grokMergeConfig]), which the guard reads ([grokGuard]).
+// GrokHookIDs is the ids Grok Build gives the run's contract hooks (notes,
+// skill loads), one a line, as `grok inspect --json` lists them and
+// `~/.grok/disabled-hooks` names them ([grokMergeConfig]), which the guard
+// reads ([grokGuard]).
 func (p Paths) GrokHookIDs() string { return p.WorkDir() + "/grok-hook-ids" }
+
+// GrokNestedHookID is the id Grok Build gives the run's nested hook
+// ([grokNestedHook]), whose being switched off refuses nothing ([grokGuard]).
+func (p Paths) GrokNestedHookID() string { return p.WorkDir() + "/grok-nested-hook-id" }
 
 // GrokDisabledHooks is the box home's list of the hooks Grok Build skips, one
 // id a line ([grokGuard]).

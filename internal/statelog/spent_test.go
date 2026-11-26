@@ -233,9 +233,9 @@ func TestASingleMembersStalledBarrierIsNeverAMissedQuorum(t *testing.T) {
 			heldIndex(t, newHeldAppender(t), h.log.Members))
 		began := time.Now()
 		stalled(t, "a barrier the member held past its budget", read(t.Context(), r))
-		if took := time.Since(began); took < statelog.DefaultBarrierBudget {
+		if took := time.Since(began); took < statelog.SoloBarrierBudget {
 			t.Errorf("refused after %v, before the barrier's own %v budget was spent",
-				took, statelog.DefaultBarrierBudget)
+				took, statelog.SoloBarrierBudget)
 		}
 	})
 	t.Run("the asker's attempt ran out", func(t *testing.T) {

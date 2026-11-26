@@ -182,25 +182,27 @@ func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Durat
 const boxReadChanges = 4
 
 // recordsTheCap reports whether a host's read of run's box may make, beside
-// [boxReadChanges], the record that the turn's cap ended a job it saw working
-// ([Coordinator.markEndedAtDeadline]), a fifth change of the row counted in
-// [BoxReadBudget] at its reason and the slowest node's crossing: a collection
-// of a turn with a cap, which may end its job ([BoxRead.mayEnd]).
+// [boxReadChanges], the record that the turn's wall-clock cap ended a job it saw
+// working ([Coordinator.markEndedAtDeadline]), a fifth change of the row counted
+// in [BoxReadBudget] at its reason and the slowest node's crossing: a
+// collection of a turn with that cap ([PendingRun.Deadline]).
 func (r BoxRead) recordsTheCap(run PendingRun) bool {
-	return r == BoxReadCollect && r.mayEnd(run)
+	return r == BoxReadCollect && !run.Deadline.IsZero()
 }
 
 // mayEnd reports whether the read may end run's job before it takes its
 // session ([Coordinator.endJob]): a stop's and a loss's always do, and a
-// collection's does where run's turn has a cap ([PendingRun.Deadline]), since
-// it ends a job still working once that cap has passed ([Coordinator.readBox]):
-// every such collection, as the host judges the cap on its own clock.
+// collection's does where run's turn has a wall-clock cap ([PendingRun.Deadline]),
+// since it ends a job still working once that cap has passed
+// ([Coordinator.readBox]), every such collection, as the host judges the cap on
+// its own clock; or where the job's turn cap's watch ended it
+// ([LaunchRecord.EndedAtTurnCap]).
 func (r BoxRead) mayEnd(run PendingRun) bool {
 	switch r {
 	case BoxReadStop, BoxReadLoss:
 		return true
 	case BoxReadCollect:
-		return !run.Deadline.IsZero()
+		return !run.Deadline.IsZero() || run.Launch.EndedAtTurnCap
 	}
 	return false
 }
@@ -357,8 +359,8 @@ type BoxReadReply struct {
 	Node string `json:"node"`
 	// Result is the run's account, floored and with its transcript and
 	// refs bounded ([boundBox]), its text held to what one reply carries
-	// ([CarriedResult]); Ended is whether its turn's cap ended it. Nil on
-	// every other answer.
+	// ([CarriedResult]); Ended is whether a cap ended it, its turn's
+	// wall-clock cap or its turn cap. Nil on every other answer.
 	Result *Result `json:"result,omitempty"`
 	Ended  bool    `json:"ended,omitempty"`
 	// Gone is a box the host found no longer there ([ErrBoxGone]).
@@ -669,9 +671,9 @@ func (c *Coordinator) hostStoreSeen(ctx context.Context, run PendingRun, failed 
 // unread stop, a loss's on a decided loss with an unread box
 // ([Coordinator.capturesLoss]). So even a replayed or forged request makes no
 // read the run's own protocol is not making: no running job's box is paused and
-// no job ended that is not decided stopped or lost, or claimed past its cap (by
-// this node's clock or [LaunchRecord.EndedAtDeadline]). A stop's or loss's read
-// ends the job first, a collection's one past its cap ([Coordinator.endJob]).
+// no job ended that is not decided stopped or lost, or claimed past a cap (this
+// node's clock, [LaunchRecord.EndedAtDeadline], [LaunchRecord.EndedAtTurnCap]),
+// each read ending its job first ([Coordinator.endJob]).
 func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandboxID string,
 	read BoxRead) (Result, bool, error) {
 

@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/tools/toolschema"
 )
 
 // The curated tools, for the acts agents make most, each with typed
@@ -37,18 +38,9 @@ func stringList(desc string) map[string]any {
 	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": desc}
 }
 
-// object is an object schema.
-func object(props map[string]any, required ...string) map[string]any {
-	out := map[string]any{"type": "object", "properties": props, "additionalProperties": false}
-	if len(required) > 0 {
-		out["required"] = required
-	}
-	return out
-}
-
 // toolDefs are every tool, each in one class.
 func toolDefs(ops []growth.Operation) []growth.Tool {
-	report := object(map[string]any{
+	report := toolschema.Object(map[string]any{
 		"property":   propertyArg(),
 		"start_date": map[string]any{"type": "string", "description": "First day, YYYY-MM-DD, or Google's NdaysAgo, yesterday or today. Default 28daysAgo."},
 		"end_date":   map[string]any{"type": "string", "description": "Last day, YYYY-MM-DD, NdaysAgo, yesterday or today. Default yesterday."},
@@ -61,13 +53,13 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		"limit":         map[string]any{"type": "integer", "minimum": 1, "maximum": growth.ReportMaxRows, "description": "Rows to return, 200 by default."},
 		"offset":        map[string]any{"type": "integer", "minimum": 0, "description": "Rows to skip, for the next page."},
 	}, "property", "metrics")
-	realtime := object(map[string]any{
+	realtime := toolschema.Object(map[string]any{
 		"property":   propertyArg(),
 		"dimensions": stringList("Realtime dimension API names (country, unifiedScreenName ...)."),
 		"metrics":    stringList("Realtime metric API names (activeUsers, eventCount ...)."),
 		"limit":      map[string]any{"type": "integer", "minimum": 1, "maximum": growth.ReportMaxRows},
 	}, "property", "metrics")
-	keyEvent := object(map[string]any{
+	keyEvent := toolschema.Object(map[string]any{
 		"property":   propertyArg(),
 		"event_name": map[string]any{"type": "string", "description": "The event to mark as a key event."},
 		"counting_method": map[string]any{"type": "string", "enum": []string{"ONCE_PER_EVENT", "ONCE_PER_SESSION"},
@@ -77,7 +69,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolListProperties, Class: growth.ClassRead,
 			Operations:  []string{"analyticsadmin.accountSummaries.list"},
 			Description: "List the Google Analytics accounts and properties this agent may reach, with each property's ID and name.",
-			Parameters:  object(map[string]any{})},
+			Parameters:  toolschema.Object(map[string]any{})},
 		{Name: toolRunReport, Class: growth.ClassRead, Operations: []string{"analyticsdata.properties.runReport"},
 			Description: "Run a Google Analytics report on one property: dimensions and metrics over a date range, " +
 				"with Google's thresholding, sampling and other-row flags passed through.",
@@ -102,7 +94,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		out = append(out, growth.Tool{
 			Name: genericTools()[class], Class: class, Operations: ids,
 			Description: genericDescription(class),
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"operation": map[string]any{"type": "string", "enum": ids,
 					"description": "The method's ID, as docs/integrations/google-analytics.md lists it."},
 				"path": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"},

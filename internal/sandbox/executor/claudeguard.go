@@ -48,10 +48,10 @@ func crewletServers(servers map[string]sandbox.MCPServer) []string {
 //
 // AN INIT EVENT IT CANNOT FIND, OR ONE LISTING NO TOOLS, IS NO VERDICT: every
 // release measured opens its stream with one. The reason names what switched
-// the server off: a settings file holding a deny or allow list, each file and
-// entry that can take the missing tools away (`claudedenies`, and each `agent`
-// setting with its definition, `claudeagent`: the verdict is the init event's,
-// so an entry is named, never judged), or the state file that disables it.
+// the server off: a refused tool schema, a settings file with a deny or allow
+// list, each file and entry that can take the missing tools away (`claudedenies`,
+// and each `agent` setting with its definition, `claudeagent`: the verdict is
+// the init event's, so an entry is named, never judged), or the state file.
 func claudeGuard(paths Paths, servers []string, mcp map[string]sandbox.MCPServer) string {
 	q := shellword.Quote
 	stream := q(paths.Stream())
@@ -99,7 +99,8 @@ case "$gt" in '') ;;
 			`out, takes them away, and no setting of the run's undoes that. Entries that can: ` +
 			`${gn:-` + read + `}"; } ;;
 *) claudedenies ` + wild + `; claudeagent; gw="Claude Code started with ` + said + ` connected, and none ` +
-			`of its tools: a permissions.deny entry naming it (` + tool + `), its tools or a wildcard matching ` +
+			`of its tools: one tool whose input schema Claude Code refuses drops the server's whole list, ` +
+			`or a permissions.deny entry naming it (` + tool + `), its tools or a wildcard matching ` +
 			`them, or an agent setting running the main thread as an agent whose tools leave them out, takes ` +
 			`them away, and no setting of the run's undoes that. Entries that can: ${gn:-` + read + `}" ;; esac ;;
 *` + q(entry+`"pending"`) + `*) ;;
