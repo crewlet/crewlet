@@ -56,7 +56,7 @@ func (r repoRun) grokLaunch(t *testing.T) string {
 		t.Fatal(err)
 	}
 	var errs bytes.Buffer
-	if err := checkoutLaunch(config, r.work, &errs); err != nil {
+	if err := checkoutLaunch(config, r.work, strings.NewReader(""), &errs); err != nil {
 		t.Fatalf("the launch failed: %v\n%s", err, errs.String())
 	}
 	return errs.String()
@@ -484,7 +484,7 @@ func TestAGrokLaunchWithARulesTreeHandsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	var errs bytes.Buffer
-	if err := checkoutLaunch(config, r.work, &errs); err != nil {
+	if err := checkoutLaunch(config, r.work, strings.NewReader(""), &errs); err != nil {
 		t.Fatalf("the launch failed: %v\n%s", err, errs.String())
 	}
 	if got, want := read(t, r.agents), "for `repo` with root "+filepath.Join(r.workdir(t), "repo")+"\n\nRULE\n"; got != want {

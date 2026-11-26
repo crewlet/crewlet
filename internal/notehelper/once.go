@@ -36,6 +36,8 @@ var oneShots = map[string]oneShot{
 	"codex-bridge":      {run: runCodexBridge, config: true},
 	"grok-nested":       {run: runGrokNested, config: true},
 	"pi-nested":         {run: runPiNested, config: true},
+	"hermes-peek":       {run: runHermesPeek, config: true},
+	"hermes-nested":     {run: runHermesNested, config: true},
 	"kimi-nested":       {run: runKimiNested, config: true},
 	"opencode-nested":   {run: runOpenCodeNested, config: true},
 	"codex-renew":       {run: runCodexRenew, config: true},
@@ -67,6 +69,7 @@ func runOnce(ctx context.Context, args []string, getenv func(string) string, std
 	set.BoolVar(&f.loadsOnly, "loads-only", false, "")
 	set.IntVar(&f.slot, "slot", 0, "")
 	set.IntVar(&f.room, "room", 0, "")
+	set.BoolVar(&f.left, "left", false, "")
 	set.StringVar(&f.threadFile, "thread-file", "", "")
 	f.digests = digestFlag{}
 	set.Var(f.digests, "skill-digest", "")

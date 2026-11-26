@@ -134,7 +134,7 @@
 //     file's body without frontmatter or HTML comments, none if empty, and
 //     `paths` read as Qwen Code reads them (qwenrule.go). `grok` (1.0.92):
 //     files directly in dir, dot files too, s in any case, a file link
-//     followed, none scoped.
+//     inside followed, none scoped.
 //     A tree past 8 directories deep, 1,024 entries or 32 MiB is left out
 //     whole, said: Copilot walks 9 levels and Claude Code 10 at least
 //     (measured), so a deeper tree is the gap. Names as {"names": [...],
@@ -374,8 +374,11 @@ type flags struct {
 	config                string
 	skillLoads, loadsOnly bool
 	slot                  int
-	// pi-nested's: the characters its answer has left.
+	// pi-nested's and hermes-nested's: the characters the answer, or the
+	// tool's result, has left; hermes-peek's: the skip log's line for each
+	// checkout a launch left with no firing to come.
 	room int
+	left bool
 	// codex-renew's: the rollout of the session the run continues.
 	rollout string
 	// codex-materialize's: Codex's sessions directory, and the thread whose
