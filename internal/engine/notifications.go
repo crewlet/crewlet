@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -710,8 +711,12 @@ func (e *Engine) IngressHolds() map[string]string {
 	if e.Company() == nil {
 		return nil
 	}
-	return e.WebhookSecrets().IngressHolds()
+	return e.WebhookSecrets().IngressHolds(e.cloudIDs)
 }
+
+// AtlassianCloudIDs is the process's one reader of a url-named Cloud site's
+// cloud id, for the Forge route and setup to share with the engine.
+func (e *Engine) AtlassianCloudIDs() *atlassian.CloudIDs { return e.cloudIDs }
 
 // Mattermost is the running chat transport, or nil when the company has no
 // chat surface. Beside [Engine.Registry] and [Engine.Status]: the facts only

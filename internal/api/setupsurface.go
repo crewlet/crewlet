@@ -62,6 +62,9 @@ func NewSetupSurface(boot *config.Bootstrap, e *engine.Engine, configSurface *co
 		// wrote one down. That gap is the silent outage the whole
 		// secret_usable family exists to surface.
 		Resolve: e.LookupSecret,
+		// The engine's one reader of a url-named site's cloud id, so a
+		// write's forge_held and the integrations answer agree.
+		CloudIDs: e.AtlassianCloudIDs(),
 		// WHERE A VENDOR REACHES THIS DEPLOYMENT (the public listener's
 		// address where one is configured, `api.external_url` otherwise)
 		// from Tier A rather than through the resolver above: it cannot

@@ -45,15 +45,13 @@ type Secrets struct {
 	// app id there is nothing to check the token against.
 	ForgeAppID string
 
-	// ForgeSites are the cloud ids a Forge token must name, keyed by the
-	// product ("jira", "confluence") whose events it carries. A product
-	// with no entry has no cloud id to bind a token to, and its relayed
-	// events answer 503 like a missing secret (forge_site.go).
-	ForgeSites map[string]string
-
-	// ForgeHeld are the products whose relayed events are held for want
-	// of a cloud id while an app id is set ([config.Integrations.ForgeBinding]).
-	ForgeHeld []config.ForgeHold
+	// ForgeSites, ForgeLookups and ForgeHeld bind a Forge token to the
+	// company's sites, by product ("jira", "confluence"): a cloud id from
+	// config, a Cloud site url whose id is read from the site, or a hold
+	// for a block with no address yet ([config.ForgeRelay]).
+	ForgeSites   map[string]string
+	ForgeLookups map[string]string
+	ForgeHeld    []config.ForgeHold
 
 	// Slack is PER SEAT, keyed by agent handle, because each agent has its
 	// own Slack app. The handle comes from the URL path, which is why that
@@ -122,7 +120,7 @@ func (s Secrets) Verifiable() []string {
 	}
 	// Forge needs a site beside the app id: a token is refused unless it
 	// names one of the company's Cloud sites.
-	if s.ForgeAppID != "" && len(s.ForgeSites) > 0 {
+	if s.ForgeAppID != "" && len(s.ForgeSites)+len(s.ForgeLookups) > 0 {
 		out = append(out, "forge")
 	}
 	// One seat is enough. A company with ten Slack apps and one unresolved
@@ -140,15 +138,27 @@ func (s Secrets) Verifiable() []string {
 }
 
 // IngressHolds names, by surface, why a route refuses every delivery of a
-// kind although its material resolved: today the Forge relay, for each
-// product with no cloud id ([config.ForgeHold]). Empty holds nothing.
-func (s Secrets) IngressHolds() map[string]string {
-	holds := map[string]string{}
-	if len(s.ForgeHeld) > 0 {
-		reasons := make([]string, 0, len(s.ForgeHeld))
-		for _, hold := range s.ForgeHeld {
-			reasons = append(reasons, hold.Reason)
+// kind although its material resolved: today the Forge relay, for a product
+// with no address yet, or one whose site's cloud id the last lookup in sites
+// could not read. A site never asked is not held. Empty holds nothing.
+func (s Secrets) IngressHolds(sites interface{ Known(string) (string, error) }) map[string]string {
+	var reasons []string
+	if s.ForgeAppID != "" {
+		for _, product := range []string{"jira", "confluence"} {
+			for _, hold := range s.ForgeHeld {
+				if hold.Product == product {
+					reasons = append(reasons, hold.Reason)
+				}
+			}
+			if site, ok := s.ForgeLookups[product]; ok && sites != nil {
+				if _, err := sites.Known(site); err != nil {
+					reasons = append(reasons, config.ForgeLookupHold(product, err).Reason)
+				}
+			}
 		}
+	}
+	holds := map[string]string{}
+	if len(reasons) > 0 {
 		holds["forge"] = strings.Join(reasons, "; ")
 	}
 	return holds
@@ -184,7 +194,8 @@ func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) stri
 		if in.GitLab != nil && in.GitLab.Enabled {
 			s.GitLab = resolve(in.GitLab.SigningSecret)
 		}
-		s.ForgeSites, s.ForgeHeld = in.ForgeBinding(resolve)
+		relay := in.ForgeRelay(resolve)
+		s.ForgeSites, s.ForgeLookups, s.ForgeHeld = relay.Sites, relay.Lookups, relay.Held
 		if in.Jira != nil {
 			s.Jira = resolve(in.Jira.WebhookSecret)
 		}

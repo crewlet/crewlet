@@ -162,6 +162,11 @@ type Options struct {
 	// Keys verifies Forge invocation tokens. Nil uses Atlassian's
 	// published JWKS.
 	Keys KeySource
+
+	// CloudIDs reads the cloud id of a Cloud site the company names by url,
+	// to bind a Forge token to it. REQUIRED, and the engine's own: the
+	// integrations answer reads the same last result.
+	CloudIDs CloudIDSource
 }
 
 // Receiver serves the inbound edge.
@@ -172,6 +177,7 @@ type Receiver struct {
 	configured func() bool
 	now        func() time.Time
 	forge      *forgeVerifier
+	cloudIDs   CloudIDSource
 	appFlow    AppCompleter
 
 	slackInstalls SlackInstaller
@@ -199,6 +205,7 @@ func New(opts Options) (*Receiver, error) {
 		{"Claims", opts.Claims == nil},
 		{"Configured", opts.Configured == nil},
 		{"AppFlow", opts.AppFlow == nil},
+		{"CloudIDs", opts.CloudIDs == nil},
 	} {
 		if field.absent {
 			missing = append(missing, "Options."+field.name)
@@ -220,6 +227,7 @@ func New(opts Options) (*Receiver, error) {
 		claims:        opts.Claims,
 		configured:    opts.Configured,
 		now:           opts.Now,
+		cloudIDs:      opts.CloudIDs,
 	}
 	if r.now == nil {
 		r.now = func() time.Time { return time.Now().UTC() }

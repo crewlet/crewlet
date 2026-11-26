@@ -1,14 +1,17 @@
 package webhooks_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -137,11 +140,13 @@ func TestEachProductIsHeldToItsOwnSite(t *testing.T) {
 
 func TestTheRouteHoldsExactlyWhatTheIntegrationsAnswerHolds(t *testing.T) {
 	t.Parallel()
-	// One rule decides both: a 503 for a product the answer shows held, and
-	// for no other. A product with no Cloud site that is not held (Data
-	// Center, or no block) is refused. Mutation: answer 503 whenever a
-	// product has no site, or decide it from anything but ForgeHeld, and a
-	// case goes red.
+	// One rule decides both: after the events, the answer holds exactly the
+	// products whose events got 503. A product with no Cloud site at all
+	// (Data Center, or no block) is refused; a url-named site binds through
+	// its looked-up cloud id, or is held when the lookup fails. Mutation:
+	// answer 503 whenever a product has no configured id, or hold a
+	// url-named site statically, and a case goes red.
+	const acme, down = "https://acme.atlassian.net", "https://down.atlassian.net"
 	events := map[string][]byte{
 		"jira": forgeJiraEvent, "confluence": forgePageEvent,
 		"": []byte(`{"eventType":"avi:forge:other"}`),
@@ -149,53 +154,103 @@ func TestTheRouteHoldsExactlyWhatTheIntegrationsAnswerHolds(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		in   config.Integrations
+		want map[string]int
 	}{
 		{"Data Center blocks", config.Integrations{
 			Jira:       &config.Jira{URL: "https://jira.example.com"},
 			Confluence: &config.Confluence{URL: "https://wiki.example.com"},
-		}},
-		{"no blocks", config.Integrations{}},
-		{"a url-named Cloud site", config.Integrations{
-			Jira: &config.Jira{URL: "https://acme.atlassian.net"},
-		}},
+		}, map[string]int{"jira": 401, "confluence": 401, "": 401}},
+		{"no blocks", config.Integrations{}, map[string]int{"jira": 401, "confluence": 401, "": 401}},
+		{"a url-named site whose id is read", config.Integrations{
+			Jira: &config.Jira{URL: acme},
+		}, map[string]int{"jira": 200, "confluence": 401, "": 200}},
+		{"a url-named site whose id cannot be read", config.Integrations{
+			Jira: &config.Jira{URL: down},
+		}, map[string]int{"jira": 503, "confluence": 401, "": 503}},
 		{"a block with no address yet", config.Integrations{
 			Confluence: &config.Confluence{},
-		}},
+		}, map[string]int{"jira": 401, "confluence": 503, "": 503}},
 		{"cloud ids", config.Integrations{
 			Jira: &config.Jira{CloudID: ownSite}, Confluence: &config.Confluence{CloudID: ownSite},
-		}},
-		{"one of each", config.Integrations{
-			Jira: &config.Jira{URL: "https://acme.atlassian.net"}, Confluence: &config.Confluence{CloudID: ownSite},
-		}},
+		}, map[string]int{"jira": 200, "confluence": 200, "": 200}},
+		{"an unreadable site beside a cloud id", config.Integrations{
+			Jira: &config.Jira{URL: down}, Confluence: &config.Confluence{CloudID: ownSite},
+		}, map[string]int{"jira": 503, "confluence": 200, "": 200}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.in.ForgeAppID = "app-123"
 			material := webhooks.SecretsOf(&config.Company{Integrations: tc.in}, nil, literal)
-			held := map[string]bool{}
-			for _, hold := range material.ForgeHeld {
-				held[hold.Product] = true
-			}
-			if (len(held) > 0) != (material.IngressHolds()["forge"] != "") {
-				t.Fatalf("ForgeHeld %v and IngressHolds %v disagree", material.ForgeHeld, material.IngressHolds())
-			}
+			sites := &siteIDs{ids: map[string]string{acme: ownSite}}
 			for product, body := range events {
-				e := newEdge(t)
+				e := newEdge(t, func(o *webhooks.Options) { o.CloudIDs = sites })
 				*e.secrets = material
-				_, site := material.ForgeSites[product]
-				want := http.StatusUnauthorized
-				switch {
-				case product == "" && len(material.ForgeSites) > 0, site:
-					want = http.StatusOK
-				case held[product], product == "" && len(held) > 0:
-					want = http.StatusServiceUnavailable
+				if got := postForge(t, e, body, validForgeClaims()).Code; got != tc.want[product] {
+					t.Errorf("event of %q: got %d, want %d", product, got, tc.want[product])
 				}
-				if got := postForge(t, e, body, validForgeClaims()).Code; got != want {
-					t.Errorf("event of %q: got %d, want %d", product, got, want)
+			}
+			holds := material.IngressHolds(sites)["forge"]
+			for _, product := range []string{"jira", "confluence"} {
+				name := map[string]string{"jira": "Jira", "confluence": "Confluence"}[product]
+				if shown := strings.Contains(holds, "for "+name+" are refused"); shown != (tc.want[product] == 503) {
+					t.Errorf("%s: answer holds %q, route answered %d", product, holds, tc.want[product])
 				}
 			}
 		})
 	}
+}
+
+// A URL-NAMED SITE BINDS THROUGH THE CLOUD ID ITS SITE NAMES: the site's own
+// token is accepted, another site's refused. Mutation: skip the lookup's id
+// in the binding and the first case goes red; accept any token once the
+// lookup succeeds and the second does.
+func TestAURLNamedSiteBindsThroughItsCloudID(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		site string
+		want int
+	}{{ownSite, http.StatusOK}, {otherSite, http.StatusUnauthorized}} {
+		e := newEdge(t, func(o *webhooks.Options) {
+			o.CloudIDs = &siteIDs{ids: map[string]string{"https://acme.atlassian.net": ownSite}}
+		})
+		e.secrets.ForgeSites = nil
+		e.secrets.ForgeLookups = map[string]string{"jira": "https://acme.atlassian.net"}
+		if got := postForge(t, e, forgeJiraEvent, forgeClaimsFor(tc.site)).Code; got != tc.want {
+			t.Errorf("a token for %s: got %d, want %d", tc.site, got, tc.want)
+		}
+	}
+}
+
+// siteIDs answers a site's cloud id from a table and fails for any other
+// site, as an unreachable one would; Known is its last answer.
+type siteIDs struct {
+	mu   sync.Mutex
+	ids  map[string]string
+	last map[string]error
+}
+
+func (s *siteIDs) Resolve(_ context.Context, site string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.last == nil {
+		s.last = map[string]error{}
+	}
+	if id, ok := s.ids[site]; ok {
+		s.last[site] = nil
+		return id, nil
+	}
+	err := &atlassian.TenantInfoError{URL: site + "/_edge/tenant_info", Cause: "HTTP 502"}
+	s.last[site] = err
+	return "", err
+}
+
+func (s *siteIDs) Known(site string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.last[site]; err != nil {
+		return "", err
+	}
+	return s.ids[site], nil
 }
 
 func TestSecretsOfReadsEachProductsCloudID(t *testing.T) {
@@ -253,43 +308,50 @@ roles:
 	}
 }
 
-// A HELD PRODUCT IS NAMED WITH THE FIELD THAT CLEARS IT, in the words the
-// route logs and the integrations answer shows, and they depend on the block:
-// config refuses a url beside a cloud_id, so a url-named block is told to
-// replace its url. Mutation: hold a block with a cloud id, a Data Center
-// block, or any block with no app id, or word both holds alike, and a case
-// goes red.
-func TestAForgeHoldNamesTheFieldThatClearsIt(t *testing.T) {
+// A HELD PRODUCT IS NAMED WITH WHAT CLEARS IT, in the words the route logs
+// and every surface shows: a block with no address yet is told to set its
+// cloud_id, a url-named site whose id could not be read is told why and what
+// to do. A url-named site never asked, a cloud id, a Data Center block and no
+// app id hold nothing. Mutation: hold a url-named site statically, or word
+// the two holds alike, and a case goes red.
+func TestAForgeHoldNamesWhatClearsIt(t *testing.T) {
 	t.Parallel()
 	const (
-		urlNamed = "Forge relay events for Jira are refused until integrations.jira.url " +
-			"is replaced by cloud_id (with site_url)"
 		addressless = "Forge relay events for Confluence are refused until " +
 			"integrations.confluence.cloud_id (with site_url) is set"
+		unreadable = "Forge relay events for Jira are refused: the site's cloud id could " +
+			"not be read from https://down.atlassian.net/_edge/tenant_info (HTTP 502); check " +
+			"the site is reachable, or set integrations.jira.cloud_id with site_url in place of url"
 	)
+	asked := &siteIDs{}
+	_, _ = asked.Resolve(t.Context(), "https://down.atlassian.net")
 	for _, tc := range []struct {
-		name string
-		in   config.Integrations
-		want string
+		name  string
+		in    config.Integrations
+		sites *siteIDs
+		want  string
 	}{
-		{"a url-named Cloud site and a block with no address yet", config.Integrations{
+		{"an unreadable site and a block with no address yet", config.Integrations{
 			ForgeAppID: "app-123",
-			Jira:       &config.Jira{URL: "https://acme.atlassian.net"},
+			Jira:       &config.Jira{URL: "https://down.atlassian.net"},
 			Confluence: &config.Confluence{},
-		}, urlNamed + "; " + addressless},
+		}, asked, unreadable + "; " + addressless},
+		{"a url-named site never asked", config.Integrations{
+			ForgeAppID: "app-123", Jira: &config.Jira{URL: "https://down.atlassian.net"},
+		}, &siteIDs{}, ""},
 		{"a cloud id", config.Integrations{
 			ForgeAppID: "app-123", Jira: &config.Jira{CloudID: ownSite},
-		}, ""},
+		}, asked, ""},
 		{"a Data Center url", config.Integrations{
 			ForgeAppID: "app-123", Jira: &config.Jira{URL: "https://jira.example.com"},
-		}, ""},
+		}, asked, ""},
 		{"no forge app id", config.Integrations{
-			Jira: &config.Jira{URL: "https://acme.atlassian.net"}, Confluence: &config.Confluence{},
-		}, ""},
+			Jira: &config.Jira{URL: "https://down.atlassian.net"}, Confluence: &config.Confluence{},
+		}, asked, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := webhooks.SecretsOf(&config.Company{Integrations: tc.in}, nil, literal).IngressHolds()
+			got := webhooks.SecretsOf(&config.Company{Integrations: tc.in}, nil, literal).IngressHolds(tc.sites)
 			if got["forge"] != tc.want || (tc.want == "") != (len(got) == 0) {
 				t.Errorf("IngressHolds() = %v, want forge: %q", got, tc.want)
 			}

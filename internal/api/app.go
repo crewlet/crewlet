@@ -1370,6 +1370,7 @@ func (o Options) missing() error {
 		{"Inbound.Claims", o.Inbound.Claims == nil},
 		{"Inbound.Secrets", o.Inbound.Secrets == nil},
 		{"Inbound.AppFlow", o.Inbound.AppFlow == nil},
+		{"Inbound.CloudIDs", o.Inbound.CloudIDs == nil},
 		{"Config", o.Config == nil},
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
@@ -1497,6 +1498,10 @@ type Inbound struct {
 	// Keys verifies Forge invocation tokens. Nil uses Atlassian's
 	// published JWKS.
 	Keys webhooks.KeySource
+
+	// CloudIDs reads a url-named Cloud site's cloud id for the Forge route:
+	// the engine's one reader, which the integrations answer reads too.
+	CloudIDs webhooks.CloudIDSource
 }
 
 // mountWebhooks registers the inbound edge.
@@ -1508,6 +1513,7 @@ func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, signIns webhooks.OA
 		Publisher:  in.Publisher,
 		Claims:     in.Claims,
 		Keys:       in.Keys,
+		CloudIDs:   in.CloudIDs,
 		AppFlow:    in.AppFlow,
 		Recheck:    in.Recheck,
 		Configured: a.Configured,

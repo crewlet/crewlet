@@ -2,11 +2,11 @@ package webhooks
 
 import (
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // forgeEvent names the integration a relayed Cloud event belongs to and the
@@ -76,35 +76,23 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 		noSecret(w, "forge")
 		return
 	}
-	// And so is a product HELD for want of a cloud id ([Secrets.IngressHolds],
-	// the same rule the integrations answer reads). 503 for that class, but
-	// nothing waits: Forge retries a refused event up to four times, a minute
-	// apart, then drops it. A product with no Cloud site that is not held (a
-	// Data Center block, or none) is refused: no Forge event for it can come
-	// from the company's own site.
+	// And so is a product HELD for want of a cloud id: the same rule the
+	// integrations answer reads ([Secrets.IngressHolds]), and nothing waits
+	// on the 503: Forge retries a refused event up to four times, a minute
+	// apart, then drops it. A product with no Cloud site at all (a Data
+	// Center block, or none) is refused: no Forge event for it can come from
+	// the company's own site.
 	source := forgeSource(event)
-	sites := material.forgeSites(source)
-	if len(sites) == 0 {
-		products := []string{source}
-		if source == "" {
-			products = []string{"jira", "confluence"}
-		}
-		var reasons []string
-		for _, hold := range material.ForgeHeld {
-			if slices.Contains(products, hold.Product) {
-				reasons = append(reasons, hold.Reason)
-			}
-		}
-		if len(reasons) == 0 {
+	products := forgeProducts(source)
+	ids, lookups, held := material.forgeBinding(products)
+	if len(ids) == 0 && len(lookups) == 0 {
+		if len(held) == 0 {
 			log.Warn("forge_fit_invalid", "error",
 				"no Cloud site configured for "+strings.Join(products, " or "))
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidSignature)
 			return
 		}
-		log.Error("forge_no_cloud_site", "event", event, "product", source,
-			"detail", strings.Join(reasons, "; "))
-		httpjson.Unavailable(w, httpjson.CodeNoWebhookSecret,
-			httpjson.RetrySeconds(NoSecretRetryAfter))
+		forgeHeld(w, event, source, held)
 		return
 	}
 	token, found := strings.CutPrefix(req.Header.Get("Authorization"), "Bearer ")
@@ -114,7 +102,21 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 	}
 	claims, err := r.forge.verify(req.Context(), token, appID)
 	if err == nil {
-		err = bindSite(claims, sites)
+		// A site named by url is looked up only for a verified token, so
+		// nobody unauthenticated can make this process ask a site.
+		for _, lookup := range lookups {
+			id, lookupErr := r.cloudIDs.Resolve(req.Context(), lookup.site)
+			if lookupErr != nil {
+				held = append(held, config.ForgeLookupHold(lookup.product, lookupErr).Reason)
+				continue
+			}
+			ids = append(ids, id)
+		}
+		if len(ids) == 0 {
+			forgeHeld(w, event, source, held)
+			return
+		}
+		err = bindSite(claims, ids)
 	}
 	if err != nil {
 		// The REASON reaches the log, never the caller: it distinguishes
@@ -167,6 +169,14 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 		forgeID: atlassianID,
 		headers: safeHeaders(req.Header),
 	}, statusOK)
+}
+
+// forgeHeld answers a relayed event of a held product: 503, the same class
+// as a missing secret, with each hold's sentence in the log.
+func forgeHeld(w http.ResponseWriter, event, source string, held []string) {
+	log.Error("forge_no_cloud_site", "event", event, "product", source,
+		"detail", strings.Join(held, "; "))
+	httpjson.Unavailable(w, httpjson.CodeNoWebhookSecret, httpjson.RetrySeconds(NoSecretRetryAfter))
 }
 
 // transformForge rewrites a relayed payload into the shape the native

@@ -2189,6 +2189,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Claims:    e.Backends().Fleet,
 			AppFlow:   setupSurface.AppFlow(),
 			Recheck:   e,
+			CloudIDs:  e.AtlassianCloudIDs(),
 			// Each agent's Slack install, finished here when Slack returns the
 			// browser; the object the setup surface mints links with.
 			SlackInstalls: slackInstalls,

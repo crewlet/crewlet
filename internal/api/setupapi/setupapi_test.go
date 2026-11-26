@@ -330,6 +330,9 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	if opts.Resolve == nil {
 		opts.Resolve = v.get
 	}
+	if opts.CloudIDs == nil {
+		opts.CloudIDs = fixtureSites{}
+	}
 	if opts.Passes == nil {
 		opts.Passes = setup.NewRunner(nil, nil, func() time.Time { return pinned })
 	}
@@ -391,6 +394,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 			Config:         cfg,
 			Secrets:        v,
 			Resolve:        v.get,
+			CloudIDs:       fixtureSites{},
 			Passes:         setup.NewRunner(nil, nil, nil),
 			Probes:         inertProbes(),
 			Sink:           func(iam.Actor) (provision.TokenSink, error) { return nil, nil },
@@ -411,6 +415,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Config":         func(o *setupapi.Options) { o.Config = nil },
 		"Secrets":        func(o *setupapi.Options) { o.Secrets = nil },
 		"Resolve":        func(o *setupapi.Options) { o.Resolve = nil },
+		"CloudIDs":       func(o *setupapi.Options) { o.CloudIDs = nil },
 		"Passes":         func(o *setupapi.Options) { o.Passes = nil },
 		"Probes":         func(o *setupapi.Options) { o.Probes = nil },
 		"Sink":           func(o *setupapi.Options) { o.Sink = nil },
@@ -3136,28 +3141,44 @@ func TestARefusedValueIsAnsweredAtItsField(t *testing.T) {
 	}
 }
 
-// SETUP SAYS WHAT A FORGE RELAY WILL REFUSE: a Jira write naming its site by
-// url, beside a Forge app id, leaves no cloud id to bind the relay's tokens
-// to, and the answer names the field. Mutation: drop forge_held from the
-// answer and the first check goes red; set it regardless of the app id and
-// the second does.
-func TestAJiraWriteBesideAForgeAppNamesTheCloudIDItLacks(t *testing.T) {
+// fixtureSites reads acme.atlassian.net's cloud id and no other site's, as an
+// unreachable one would fail.
+type fixtureSites struct{}
+
+func (fixtureSites) Resolve(_ context.Context, site string) (string, error) {
+	if site == "https://acme.atlassian.net" {
+		return "0f3a6c1e-0000-4000-8000-00000000c0de", nil
+	}
+	return "", &atlassian.TenantInfoError{URL: site + "/_edge/tenant_info", Cause: "HTTP 502"}
+}
+
+// SETUP SAYS WHAT A FORGE RELAY WILL REFUSE when it writes the block: a Jira
+// site named by url, beside a Forge app id, is looked up there and then, and a
+// site whose cloud id cannot be read is named with what to do. Mutation: drop
+// forge_held from the answer, or skip the lookup, and a case goes red.
+func TestAJiraWriteBesideAForgeAppSaysWhatTheRelayRefuses(t *testing.T) {
 	t.Parallel()
-	submission := `{"values": {"url": "https://acme.atlassian.net", "email": "admin@example.com", "token": "jira-token"}}`
+	forge := strings.Replace(companyDoc, `"name": "Acme",`,
+		`"name": "Acme", "integrations": {"forge_app_id": "app-123"},`, 1)
+	write := func(site string) string {
+		return `{"values": {"url": "` + site + `", "email": "admin@example.com", "token": "jira-token"}}`
+	}
 	for _, tc := range []struct {
-		name, doc string
-		want      any
+		name, doc, submission string
+		want                  any
 	}{
-		{"with a forge app id", strings.Replace(companyDoc, `"name": "Acme",`,
-			`"name": "Acme", "integrations": {"forge_app_id": "app-123"},`, 1),
-			"Forge relay events for Jira are refused until integrations.jira.url is replaced by cloud_id (with site_url)"},
-		{"without one", companyDoc, nil},
+		{"a site whose id cannot be read", forge, write("https://down.atlassian.net"),
+			"Forge relay events for Jira are refused: the site's cloud id could not be read from " +
+				"https://down.atlassian.net/_edge/tenant_info (HTTP 502); check the site is reachable, " +
+				"or set integrations.jira.cloud_id with site_url in place of url"},
+		{"a site whose id is read", forge, write("https://acme.atlassian.net"), nil},
+		{"no forge app id", companyDoc, write("https://down.atlassian.net"), nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			s := newSurface(t)
 			s.seedDocument(t, tc.doc)
-			res := s.do(t, http.MethodPost, "/setup/integrations/jira/inputs", submission, nil)
+			res := s.do(t, http.MethodPost, "/setup/integrations/jira/inputs", tc.submission, nil)
 			if res.Code != http.StatusCreated {
 				t.Fatalf("status = %d, want 201: %s", res.Code, res.Body)
 			}

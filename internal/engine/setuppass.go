@@ -156,38 +156,46 @@ func (p *atlassianPass) run(ctx context.Context, in setup.PassInput) ([]integrat
 // Only a writing pass, one handed a sink, records: the dashboard's read-only
 // check must not advance the config epoch. The cloud ID is load-bearing: a
 // provisioned service account's token is accepted only at the API gateway, and
-// a Forge token is bound to it. A value the company set itself is left alone,
-// so a block naming its site by url is told what the Forge relay needs.
+// a Forge token is bound to it. A value the company set itself is left alone.
 func (p *atlassianPass) recordSite(
 	ctx context.Context, company *Company, site atlassian.Site, writing bool,
 ) []integration.Finding {
-	in := company.Config.Integrations
-	patch := sitePatch(in, site)
-	var findings []integration.Finding
-	recorded := map[string]bool{}
-	if writing && len(patch) > 0 {
-		if note := p.applySite(ctx, patch, site); note != "" {
-			findings = append(findings, integration.Finding{
-				Kind: integration.FindingGrantShort, Detail: note,
-			})
-		} else {
-			for product := range patch {
-				recorded[product] = true
-			}
-		}
+	patch := sitePatch(company.Config.Integrations, site)
+	if !writing || len(patch) == 0 {
+		return nil
 	}
-	return append(findings, forgeHolds(in, p.engine.Resolve, recorded)...)
+	if note := p.applySite(ctx, patch, site); note != "" {
+		return []integration.Finding{{Kind: integration.FindingGrantShort, Detail: note}}
+	}
+	return nil
 }
 
-// forgeHolds is a finding for each product whose Forge relay events are
-// refused for want of a cloud id, except one this pass has just recorded.
-func forgeHolds(in config.Integrations, resolve func(string) string, recorded map[string]bool) []integration.Finding {
-	_, held := in.ForgeBinding(resolve)
+// forgeFindings is the Forge relay's hold on product as its pass reports it:
+// an ingress_blocked finding in the words every surface uses, for a block with
+// no address yet, or a url-named site whose cloud id sites cannot read now.
+// Reading it here is what looks a site up when the integration starts, before
+// any event arrives.
+func forgeFindings(ctx context.Context, in config.Integrations, resolve func(string) string,
+	sites interface {
+		Resolve(context.Context, string) (string, error)
+	}, product string,
+) []integration.Finding {
+	if strings.TrimSpace(resolve(in.ForgeAppID)) == "" {
+		return nil
+	}
+	relay := in.ForgeRelay(resolve)
 	var findings []integration.Finding
-	for _, hold := range held {
-		if !recorded[hold.Product] {
+	for _, hold := range relay.Held {
+		if hold.Product == product {
 			findings = append(findings, integration.Finding{
 				Kind: integration.FindingIngressBlocked, Detail: hold.Reason,
+			})
+		}
+	}
+	if site, ok := relay.Lookups[product]; ok {
+		if _, err := sites.Resolve(ctx, site); err != nil {
+			findings = append(findings, integration.Finding{
+				Kind: integration.FindingIngressBlocked, Detail: config.ForgeLookupHold(product, err).Reason,
 			})
 		}
 	}
@@ -721,6 +729,7 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 	if cfg == nil {
 		return nil, integration.ErrNotConfigured
 	}
+	forge := forgeFindings(ctx, company.Config.Integrations, p.engine.Resolve, p.engine.cloudIDs, "jira")
 	env := p.engine.resolver()
 	base := jiraBaseURL(cfg, env)
 	token := strings.TrimSpace(env.Value(cfg.Token))
@@ -728,11 +737,11 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 		// A finding, as the loop reports it: a pass that cannot reach the
 		// instance observed nothing, and a fault would send an operator
 		// hunting an outage.
-		return []integration.Finding{{
+		return append(forge, integration.Finding{
 			Kind: integration.FindingCredentialMissing,
 			Detail: "the Jira site address or the org token did not resolve, so " +
 				"this pass could not reach the instance",
-		}}, nil
+		}), nil
 	}
 	client, err := jira.NewClient(jira.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
@@ -753,7 +762,7 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 	if err != nil {
 		return nil, fmt.Errorf("engine: jira pass: %w", err)
 	}
-	return res.Findings(), nil
+	return append(forge, res.Findings()...), nil
 }
 
 // Teardown removes the webhook this pass registered, through the function a
@@ -803,15 +812,16 @@ func (p *confluencePass) Run(ctx context.Context, in setup.PassInput) ([]integra
 	if cfg == nil {
 		return nil, integration.ErrNotConfigured
 	}
+	forge := forgeFindings(ctx, company.Config.Integrations, p.engine.Resolve, p.engine.cloudIDs, "confluence")
 	env := p.engine.resolver()
 	base := confluenceBaseURL(cfg, env)
 	token := strings.TrimSpace(env.Value(cfg.Token))
 	if base == "" || token == "" {
-		return []integration.Finding{{
+		return append(forge, integration.Finding{
 			Kind: integration.FindingCredentialMissing,
 			Detail: "the Confluence site address or the org token did not resolve, " +
 				"so this pass could not reach the instance",
-		}}, nil
+		}), nil
 	}
 	client, err := confluence.NewClient(confluence.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
@@ -828,7 +838,7 @@ func (p *confluencePass) Run(ctx context.Context, in setup.PassInput) ([]integra
 	if err != nil {
 		return nil, fmt.Errorf("engine: confluence pass: %w", err)
 	}
-	return res.Findings(), nil
+	return append(forge, res.Findings()...), nil
 }
 
 // Teardown removes the hooks this pass registered, and strands no credential:

@@ -196,6 +196,8 @@ func newEdgeOn(t *testing.T, db *store.DB, opts ...func(*webhooks.Options)) *edg
 		AppFlow: &stubFlow{},
 		Now:     func() time.Time { return pinned },
 		Keys:    testKeys(t),
+		// No case reaches a site: a Cloud site named by url answers here.
+		CloudIDs: &siteIDs{ids: map[string]string{}},
 	}
 	for _, opt := range opts {
 		opt(&options)

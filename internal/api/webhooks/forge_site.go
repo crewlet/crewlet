@@ -1,6 +1,7 @@
 package webhooks
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -37,16 +38,43 @@ func forgeSource(event string) string {
 	return ""
 }
 
-// forgeSites are the cloud ids a token for an event of source may name: that
-// product's, or for an event of neither product either one's.
-func (s Secrets) forgeSites(source string) []string {
-	var out []string
-	for _, product := range []string{"jira", "confluence"} {
-		if id, ok := s.ForgeSites[product]; ok && (source == "" || source == product) {
-			out = append(out, id)
+// forgeProducts are the products an event of source may belong to: its own,
+// or for an event of neither product either one.
+func forgeProducts(source string) []string {
+	if source == "" {
+		return []string{"jira", "confluence"}
+	}
+	return []string{source}
+}
+
+// siteLookup is a product whose site's cloud id is read from the site.
+type siteLookup struct{ product, site string }
+
+// forgeBinding is what binds a token for products: the cloud ids config
+// names, the sites whose id is read at run time, and the static holds.
+func (s Secrets) forgeBinding(products []string) (ids []string, lookups []siteLookup, held []string) {
+	for _, product := range products {
+		if id, ok := s.ForgeSites[product]; ok {
+			ids = append(ids, id)
+		}
+		if site, ok := s.ForgeLookups[product]; ok {
+			lookups = append(lookups, siteLookup{product, site})
 		}
 	}
-	return out
+	for _, hold := range s.ForgeHeld {
+		if slices.Contains(products, hold.Product) {
+			held = append(held, hold.Reason)
+		}
+	}
+	return ids, lookups, held
+}
+
+// CloudIDSource reads the cloud id of a Cloud site a company names by url
+// ([atlassian.CloudIDs]): Resolve asks it when nothing is kept, Known is
+// the last result without asking.
+type CloudIDSource interface {
+	Resolve(ctx context.Context, site string) (string, error)
+	Known(site string) (string, error)
 }
 
 // forgeClaims are the invocation token's claims this edge reads: the

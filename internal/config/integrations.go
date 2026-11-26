@@ -1336,54 +1336,75 @@ func (i Integrations) DiscoversAtlassianSite() bool {
 	return i.Atlassian != nil && i.Atlassian.IsCloud()
 }
 
-// ForgeHold is a product whose Forge relay events are refused for want of a
-// cloud id, and the sentence saying what clears it.
+// ForgeHold is a product whose Forge relay events are refused, and the
+// sentence saying what clears it.
 type ForgeHold struct {
 	Product string
 	Reason  string
 }
 
-// ForgeBinding is what the Jira and Confluence blocks bind the Forge relay
-// to: each product's cloud id (its `cloud_id`, or the id a gateway `url`
-// carries), and, while `forge_app_id` is set, the products whose relayed
-// events are refused for want of one, in catalogue order. A Forge token names
-// its site by cloud id only, so a site `url` binds nothing; a Data Center
-// block is never held, since no Forge event is its own. Each hold's Reason is
-// the one sentence every surface says. Values are read through resolve.
-func (i Integrations) ForgeBinding(resolve func(string) string) (sites map[string]string, held []ForgeHold) {
-	type block struct{ product, name, url, cloudID string }
+// ForgeRelay is what the Jira and Confluence blocks bind the Forge relay to.
+// A Forge token names its site by cloud id only, so each Cloud product is
+// bound by one: its `cloud_id` or a gateway `url`'s (Sites), or the id read
+// from the site a `url` names (Lookups, read at run time). A block with no
+// address yet is Held while `forge_app_id` is set. A Data Center block is in
+// none: no Forge event is its own.
+type ForgeRelay struct {
+	Sites   map[string]string
+	Lookups map[string]string
+	Held    []ForgeHold
+}
+
+// ForgeRelay reads the blocks through resolve, in catalogue order.
+func (i Integrations) ForgeRelay(resolve func(string) string) ForgeRelay {
+	type block struct{ product, url, cloudID string }
 	var blocks []block
 	if j := i.Jira; j != nil {
-		blocks = append(blocks, block{"jira", "Jira", j.URL, j.CloudID})
+		blocks = append(blocks, block{"jira", j.URL, j.CloudID})
 	}
 	if c := i.Confluence; c != nil {
-		blocks = append(blocks, block{"confluence", "Confluence", c.URL, c.CloudID})
+		blocks = append(blocks, block{"confluence", c.URL, c.CloudID})
 	}
 	declared := i.Atlassian.Declared()
 	relayed := strings.TrimSpace(resolve(i.ForgeAppID)) != ""
+	var out ForgeRelay
+	put := func(m *map[string]string, product, value string) {
+		if *m == nil {
+			*m = map[string]string{}
+		}
+		(*m)[product] = value
+	}
 	for _, b := range blocks {
 		address := strings.TrimSpace(resolve(b.url))
 		id := strings.ToLower(strings.TrimSpace(resolve(b.cloudID)))
 		if id == "" && atlassianhost.IsGateway(address) {
 			id = atlassianhost.GatewayCloudID(address)
 		}
-		refused := "Forge relay events for " + b.name + " are refused until integrations." + b.product
 		switch {
 		case id != "":
-			if sites == nil {
-				sites = map[string]string{}
-			}
-			sites[b.product] = id
-		case !relayed:
-		case address == "":
+			put(&out.Sites, b.product, id)
+		case address != "" && atlassianhost.Of(address, declared) == atlassianhost.Cloud:
+			put(&out.Lookups, b.product, address)
+		case address == "" && relayed:
 			// A site the organization has not supplied yet.
-			held = append(held, ForgeHold{b.product, refused + ".cloud_id (with site_url) is set"})
-		case atlassianhost.Of(address, declared) != atlassianhost.DataCenter:
-			// Config refuses a url and a cloud_id together, so the url goes.
-			held = append(held, ForgeHold{b.product, refused + ".url is replaced by cloud_id (with site_url)"})
+			out.Held = append(out.Held, ForgeHold{b.product, "Forge relay events for " +
+				forgeProductName(b.product) + " are refused until integrations." +
+				b.product + ".cloud_id (with site_url) is set"})
 		}
 	}
-	return sites, held
+	return out
+}
+
+// ForgeLookupHold is the hold for a product whose site's cloud id could not
+// be read: cause names the address asked and why ([ForgeRelay.Lookups]).
+func ForgeLookupHold(product string, cause error) ForgeHold {
+	return ForgeHold{product, "Forge relay events for " + forgeProductName(product) +
+		" are refused: " + cause.Error() + "; check the site is reachable, or set integrations." +
+		product + ".cloud_id with site_url in place of url"}
+}
+
+func forgeProductName(product string) string {
+	return map[string]string{"jira": "Jira", "confluence": "Confluence"}[product]
 }
 
 // DatadogIgnore is the route_to value that means "wake nobody".
