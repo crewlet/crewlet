@@ -62,10 +62,10 @@ const (
 // take's life before its object is stored, the collector's grace and two of
 // its passes, and twice the engine's assumed skew for an end written on one
 // node's clock and read on another's (the package doc's "A save taken as its
-// job works"). Twenty-nine hours, forty-five and a half minutes at today's
-// bounds: FOURTEEN AND A HALF MINUTES under the uploads bucket's age
-// (coord.UploadRetention, 30 h), which a test holds, so a raise of the keep's
-// or the take's budget past that margin goes red there first.
+// job works"). 29 h 45 min 30.05 s at today's bounds: 14 MIN 29.95 S UNDER
+// the uploads bucket's age (coord.UploadRetention, 30 h), the room left to
+// any raise of the take's or the keep's budget; a test holds the hold under
+// it and pins the margin.
 var saveLedgerHold = takeLife + collectPendingGrace + 2*collectInterval + 2*objstore.AssumedClockSkew
 
 // saveMarginFloor is the least margin a save is counted at beyond its packed

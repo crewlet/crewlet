@@ -1450,3 +1450,32 @@ func TestAnAskThatLeavesARecordUnansweredWritesNothing(t *testing.T) {
 		}
 	})
 }
+
+// mediaReaderCaptureLife is the capture life a build at MediaStampVersion
+// reads a begun capture by, on its own clock: 4,440.076990122 s (its
+// takeOverLife: three changes of the row, a read and its 1,740 s keep). Such a
+// build reads a capture as kept while its age is under that and twice the
+// skew, so a take it may watch must end its last attempt at or before it.
+const mediaReaderCaptureLife = 4_440_076_990_122 * time.Nanosecond
+
+// A TAKE HELD TO THE TEXT BOUND LIVES WITHIN A VERSION-1 READER'S CAPTURE LIFE:
+// while a stamp reader says only MediaStampVersion, a take keeps the text
+// bound, and both its life and a takeover's, at that bound's keep, end at or
+// before the life such a reader waits for (inclusive: the takeover's is
+// exactly it), so the reader never reads a capture still being kept as
+// abandoned. A second more on the gated take's keep goes red.
+//
+// Mutation: add a room to the text bound's keep, or keep a gated take at the
+// kept bound's budget, and it goes red.
+func TestAGatedTakeLivesWithinAVersionOneReadersCaptureLife(t *testing.T) {
+	t.Parallel()
+	take, over := takeLifeWith(textBound.keep), takeOverLifeWith(textBound.keep)
+	if life := max(take, over); life > mediaReaderCaptureLife {
+		t.Errorf("a take at the text bound lives %v (take %v, takeover %v), past the %v a version-1 reader "+
+			"reads a capture as kept for", life, take, over, mediaReaderCaptureLife)
+	}
+	if over != mediaReaderCaptureLife {
+		t.Errorf("a takeover at the text bound lives %v, and the docs state it equals a version-1 reader's "+
+			"%v: restate them", over, mediaReaderCaptureLife)
+	}
+}

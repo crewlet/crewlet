@@ -1319,7 +1319,13 @@ const MediaReadersRoom = sessionRecordBudget
 // starts as the take returns its spool ([SessionKeepBudget]), and the stamp of
 // what came of it ([captureStampBudget]). An hour, forty-five and a half
 // minutes and a fraction at today's bounds.
-var takeLife = SessionTakeBudget + captureStampBudget + discardGrace + SessionKeepBudget + captureStampBudget
+var takeLife = takeLifeWith(SessionKeepBudget)
+
+// takeLifeWith is [takeLife] with a keep of keep, a take's at its own bound
+// ([takeBound]).
+func takeLifeWith(keep time.Duration) time.Duration {
+	return SessionTakeBudget + captureStampBudget + discardGrace + keep + captureStampBudget
+}
 
 // takeOverLife is the same of a takeover's begun stamp, from its own instant
 // ([Coordinator.takeOver]): the takeover ([PendingStore.TakeOver]), and where
@@ -1328,7 +1334,13 @@ var takeLife = SessionTakeBudget + captureStampBudget + discardGrace + SessionKe
 // of what came of it. Each change of the row ([captureStampBudget]), the read
 // back a read ([captureReadBudget]): 3 × 810.03 + 270 + 4,080 = 6,780.08 s,
 // an hour, fifty-three minutes and a fraction at today's bounds.
-var takeOverLife = 3*captureStampBudget + captureReadBudget + SessionKeepBudget
+var takeOverLife = takeOverLifeWith(SessionKeepBudget)
+
+// takeOverLifeWith is [takeOverLife] with a keep of keep, a takeover's at its
+// capture's bound ([takeBound]).
+func takeOverLifeWith(keep time.Duration) time.Duration {
+	return 3*captureStampBudget + captureReadBudget + keep
+}
 
 // captureLife is the longest life of a begun capture, a take's or a
 // takeover's, from its instant to the end of its taker's last attempt at the
@@ -1362,9 +1374,9 @@ const captureWaitTick = 2 * time.Second
 // stamped. ONE RECORD'S BUDGET, since every attempt at a record ends within
 // it, so a sooner read settles at most that much sooner while costing a
 // linearizable read at every tick of the upload: an end's wait for one
-// capture's whole life reads the log at most about a hundred and forty-three
-// times, where the wait's tick ([captureWaitTick]) would make it fifteen times
-// as many.
+// capture's whole life (7,050.08 s, [Coordinator.awaitEndCaptures]) reads the
+// log at most about two hundred and thirty-five times, where the wait's tick
+// ([captureWaitTick]) would make it fifteen times as many.
 const heldRowPace = sessionRecordBudget
 
 // beganUnderTaker reports whether run's turn has a begun stamp in sight that
