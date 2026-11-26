@@ -123,10 +123,11 @@ var standingRoutes = map[string]standingProbe{
 		}
 	}},
 	// Copilot renders its instructions file afresh on every resume
-	// (measured on 1.0.114).
+	// (measured on 1.0.114), which the script writes this launch's text into
+	// first ([copilotCheckoutHome]).
 	CopilotName: {routeReload, func(t *testing.T, h Harness, req sandbox.RunRequest, session Session) {
 		box, p := standingWritten(t, h, req, session)
-		if standingFile(t, box, p.CopilotInstructions()) != req.System {
+		if standingFile(t, box, p.CopilotRunInstructions()) != req.System {
 			t.Error("a continued run's instructions file is not this launch's text")
 		}
 	}},
