@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -55,6 +57,18 @@ func writeBoxStandIn(t *testing.T, box sandbox.Sandbox, path, script string) {
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("install the stand-in at %s: %v (exit %d) %s", path, err, res.ExitCode, res.Stderr)
 	}
+}
+
+// handedProgram is whether a run put a program at path in box, a fake that
+// runs no command: the program's bytes written beside path, and a command the
+// box was asked to run moving its copy over path (writeProgram).
+func handedProgram(t *testing.T, box *sandbox.FakeSandbox, path string) bool {
+	t.Helper()
+	source, _ := box.ReadFile(t.Context(), path+".source")
+	move := "mv -f " + shellword.Quote(path+".next") + " " + shellword.Quote(path)
+	return len(source) > 0 && slices.ContainsFunc(box.Execs(), func(e sandbox.FakeExec) bool {
+		return strings.Contains(e.Command, move)
+	})
 }
 
 // claim is shell that succeeds in the one process that first runs it on path

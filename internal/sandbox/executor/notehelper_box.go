@@ -54,9 +54,10 @@ func noteHelperFor(ctx context.Context, box sandbox.Sandbox) ([]byte, error) {
 	return noteHelperBinary(arch)
 }
 
-// writeHelperBuild writes helper, a build [noteHelperFor] read, to path.
+// writeHelperBuild writes helper, a build [noteHelperFor] read, to path as a
+// program the box runs ([writeProgram]).
 func writeHelperBuild(ctx context.Context, box sandbox.Sandbox, path string, helper []byte) error {
-	if err := box.WriteFile(ctx, path, helper); err != nil {
+	if err := writeProgram(ctx, box, path, helper); err != nil {
 		return fmt.Errorf("executor: writing the note helper: %w", err)
 	}
 	return nil
