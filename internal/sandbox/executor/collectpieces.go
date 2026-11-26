@@ -41,6 +41,17 @@ type piece struct {
 	body       io.ReadCloser
 	size       int64
 	refusal    string
+	// kind and reason say what the piece is, and why it was refused where
+	// it was, to count ([sandbox.Withholding]); meter is what counts it.
+	kind   sandbox.WithheldPiece
+	reason sandbox.WithheldReason
+	meter  sandbox.CollectMeter
+}
+
+// withhold counts the piece withheld for reason, and answers refusal.
+func (p *piece) withhold(reason sandbox.WithheldReason, refusal string) string {
+	sandbox.Withholding{Piece: p.kind, Reason: reason}.To(p.meter)
+	return refusal
 }
 
 // weight is what the piece counts toward its collection's weight: its size,
@@ -82,9 +93,9 @@ func (p *piece) whole() ([]byte, string, error) {
 	}
 	switch {
 	case int64(len(raw)) > p.size, change == sandbox.FileAppended:
-		return nil, grownPiece(p.path, p.what, p.size), nil
+		return nil, p.withhold(sandbox.WithheldGrown, grownPiece(p.path, p.what, p.size)), nil
 	case int64(len(raw)) < p.size, change != sandbox.FileUnchanged:
-		return nil, changedPiece(p.path, p.what, int64(len(raw)), p.size), nil
+		return nil, p.withhold(sandbox.WithheldChanged, changedPiece(p.path, p.what, int64(len(raw)), p.size)), nil
 	}
 	return raw, "", nil
 }
@@ -115,10 +126,39 @@ func unchangedRecord(body io.Reader, what string, err error) error {
 		return fmt.Errorf("executor: telling whether %s changed while it was read: %w", what, err)
 	}
 	if change != sandbox.FileUnchanged {
-		return fmt.Errorf("executor: %s was %s while it was read, so what was read may join two versions of it",
-			what, change)
+		return fmt.Errorf("executor: %s was %s while it was read, so what was read may join two versions of it: %w",
+			what, change, errRecordChanged)
 	}
 	return nil
+}
+
+// errRecordChanged is a session record written to while a walk read it
+// ([unchangedRecord]).
+var errRecordChanged = errors.New("executor: a session record changed while it was read")
+
+// countRecordChanged counts, to the meter ctx carries ([sandbox.MeterOf]), a
+// walk of a session record err says changed while it was read
+// ([errRecordChanged]).
+func countRecordChanged(ctx context.Context, err error) {
+	if errors.Is(err, errRecordChanged) {
+		sandbox.Withholding{Piece: sandbox.WithheldSessionRecord, Reason: sandbox.WithheldChanged}.
+			To(sandbox.MeterOf(ctx))
+	}
+}
+
+// counting has every piece of c counted by the meter ctx carries
+// ([sandbox.MeterOf]), those refused at their open counted now.
+func (c *collectionPieces) counting(ctx context.Context) {
+	meter := sandbox.MeterOf(ctx)
+	for _, p := range c.all() {
+		if p == nil {
+			continue
+		}
+		p.meter = meter
+		if p.reason != "" {
+			sandbox.Withholding{Piece: p.kind, Reason: p.reason}.To(meter)
+		}
+	}
 }
 
 // changedPiece describes a piece cut or written over while the collection read
@@ -134,33 +174,34 @@ func changedPiece(path, what string, read, size int64) string {
 // whole-read cap, as [readWholeBytes] refuses it.
 func openWhole(ctx context.Context, box sandbox.Sandbox, path, what string) (*piece, error) {
 	body, size, err := box.OpenWhole(ctx, path)
+	const kind = sandbox.WithheldWholePiece
 	if refusal := notRegularPiece(err, path, what); refusal != "" {
-		return &piece{path: path, what: what, refusal: refusal}, nil
+		return &piece{path: path, what: what, refusal: refusal, kind: kind, reason: sandbox.WithheldNotRegular}, nil
 	}
 	var tooLarge *sandbox.FileTooLargeError
 	switch {
 	case errors.As(err, &tooLarge):
 		return &piece{path: path, what: what, refusal: fmt.Sprintf("%s (%s) is %s, past the %s the engine "+
 			"reads back from a box whole, so it was not read", what, path, humanSize(tooLarge.Size),
-			humanSize(int64(tooLarge.Limit)))}, nil
+			humanSize(int64(tooLarge.Limit))), kind: kind, reason: sandbox.WithheldTooLarge}, nil
 	case err != nil:
 		return nil, fmt.Errorf("executor: opening %s (%s): %w", what, path, err)
 	}
-	return &piece{path: path, what: what, body: body, size: size}, nil
+	return &piece{path: path, what: what, body: body, size: size, kind: kind}, nil
 }
 
 // openStream opens an event stream, decoded a line at a time and never read
 // whole: as it stood when opened, its size from that open.
 func openStream(ctx context.Context, box sandbox.Sandbox, path string) (*piece, error) {
-	const what = "the event stream"
+	const what, kind = "the event stream", sandbox.WithheldEventStream
 	body, size, err := box.OpenRange(ctx, path, 0, math.MaxInt64)
 	if refusal := notRegularPiece(err, path, what); refusal != "" {
-		return &piece{path: path, what: what, refusal: refusal}, nil
+		return &piece{path: path, what: what, refusal: refusal, kind: kind, reason: sandbox.WithheldNotRegular}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("executor: opening the event stream: %w", err)
 	}
-	return &piece{path: path, what: what, body: body, size: size}, nil
+	return &piece{path: path, what: what, body: body, size: size, kind: kind}, nil
 }
 
 // collectionPieces is every piece one collection reads, opened before its
@@ -253,14 +294,16 @@ func (r *Runner) openCollection(ctx context.Context, box sandbox.Sandbox, paths 
 	// FROM ITS FIRST BYTE, as it stood at the open: a failure shows the end of
 	// the whole stream's redaction ([Runner.readFailureTail]).
 	body, size, err := box.OpenRange(ctx, paths.Err(), 0, math.MaxInt64)
+	const kind = sandbox.WithheldErrorStream
 	if refusal := notRegularPiece(err, paths.Err(), "the error stream"); refusal != "" {
-		c.stderr = &piece{path: paths.Err(), what: "the error stream", refusal: refusal}
+		c.stderr = &piece{path: paths.Err(), what: "the error stream", refusal: refusal, kind: kind,
+			reason: sandbox.WithheldNotRegular}
 		return c, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("executor: reading the error stream: %w", err)
 	}
-	c.stderr = &piece{path: paths.Err(), what: "the error stream", body: body, size: size}
+	c.stderr = &piece{path: paths.Err(), what: "the error stream", body: body, size: size, kind: kind}
 	return c, nil
 }
 

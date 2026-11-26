@@ -5,10 +5,13 @@ import (
 	"context"
 	"io"
 	"math/rand/v2"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -251,4 +254,79 @@ func TestAFailuresTailHoldsItsBoundNeverItsStream(t *testing.T) {
 		t.Errorf("the ring holds %d bytes after %d; want the last %d written after %d", len(got), ring.dropped(),
 			len(want), all.Len()-ring.keep)
 	}
+}
+
+// EVERY PIECE A COLLECTION REFUSES OR DOES NOT SHOW IS COUNTED, WITH WHY
+// ([sandbox.CountingWithheld]): an error stream past its bound, a report
+// past the whole-read cap and a session record cut while it was read, each
+// once, by its piece and reason; a collection that gives up nothing counts
+// nothing.
+//
+// Mutation: leave any of the counts out, or count a refusal at its open twice.
+func TestEveryPieceACollectionWithholdsIsCounted(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		box  func(b *sandbox.FakeSandbox, p Paths)
+		want []sandbox.Withholding
+	}{
+		{"nothing given up", func(b *sandbox.FakeSandbox, p Paths) { b.Put(p.Err(), "a warning\n") }, nil},
+		{"each withheld", func(b *sandbox.FakeSandbox, p Paths) {
+			b.Put(p.Findings(), strings.Repeat("r", b.ReadCap()+1))
+			b.Streams = func(path string, r io.Reader) io.Reader {
+				if path == p.SessionRecord() {
+					b.TruncateInPlace(path, 10)
+				}
+				return r
+			}
+		}, []sandbox.Withholding{
+			{Piece: sandbox.WithheldWholePiece, Reason: sandbox.WithheldTooLarge},
+			{Piece: sandbox.WithheldWholePiece, Reason: sandbox.WithheldChanged},
+			{Piece: sandbox.WithheldErrorStream, Reason: sandbox.WithheldPastBound},
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			var now time.Time
+			runner := New(OpenCode{})
+			runner.now = func() time.Time {
+				now = now.Add(sandbox.FailureReadWait / 2)
+				return now
+			}
+			b := sandbox.NewFakeSandbox("box-1")
+			p := PathsFor(b)
+			b.Put(p.Result(), "not a result\n")
+			b.Put(p.Err(), strings.Repeat("noise line\n", 3*failureReadPiece/11))
+			b.Put(p.ExitCode(), "1")
+			b.Put(p.SessionRecord(), "9a8b7c6d-0000-4000-8000-000000000002 0\n")
+			c.box(b, p)
+			meter := &withholdings{}
+			_, err := runner.Collect(sandbox.CountingWithheld(t.Context(), meter), b, sandbox.RunHandle{},
+				queue.NewAnswerBudget(nil))
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			if got := meter.all(); !slices.Equal(got, c.want) {
+				t.Errorf("the collection counted %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// withholdings is a meter that keeps what it is told, in order.
+type withholdings struct {
+	mu  sync.Mutex
+	got []sandbox.Withholding
+}
+
+func (m *withholdings) Withheld(w sandbox.Withholding) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.got = append(m.got, w)
+}
+
+func (m *withholdings) all() []sandbox.Withholding {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.got)
 }

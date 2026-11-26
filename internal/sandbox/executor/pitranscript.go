@@ -676,7 +676,8 @@ func (p Pi) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
 	var large passBudget
 	defer large.release()
 	summary := summaryRead{claim: newSummaryClaim(ctx, &large)}
-	_, _ = p.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
+	_, err := p.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
+	countRecordChanged(ctx, err)
 	return sandbox.MainThreadReading{Summary: summary.reading()}
 }
 

@@ -332,6 +332,23 @@ func serviceInstruments() []Instrument {
 				"`executor_session_not_kept` lines, which name it.",
 		},
 		{
+			Name: ExecutorCollectWithheld, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"piece", "reason"},
+			Shows: "Pieces of a run's box this node's reads of it refused or did not " +
+				"show, by `piece` (`error_stream`, the end a failure and a transcript " +
+				"show; `event_stream`; `whole_piece`, the result, report, session " +
+				"record or another file read whole; `session_record`, a harness's " +
+				"record walked for its notes and newest summary) and `reason` " +
+				"(`bound`, the read's time ran out first; `refused`, the redaction " +
+				"stream refused the text; `changed`, the file was cut or written over " +
+				"while it was read, or read short; `grown`, a file read whole grew " +
+				"meanwhile; `too_large`, past the whole-read cap; `not_regular`). The " +
+				"failure or transcript says each, never quoting the piece. `bound` " +
+				"rising is boxes or redaction slower than a collection's room; " +
+				"`changed` or `grown` above zero is something in a box still writing " +
+				"after its job ended.",
+		},
+		{
 			Name: ExecutorSessionTrimmed, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"harness"},
 			Shows: "Executor session captures kept trimmed, by the `harness` " +

@@ -834,7 +834,8 @@ func (c Copilot) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Path
 	var large passBudget
 	defer large.release()
 	summary := summaryRead{claim: newSummaryClaim(ctx, &large)}
-	_, _ = c.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
+	_, err := c.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
+	countRecordChanged(ctx, err)
 	return sandbox.MainThreadReading{Summary: summary.reading()}
 }
 

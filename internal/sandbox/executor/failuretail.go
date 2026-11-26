@@ -90,13 +90,14 @@ func (r *Runner) readFailureTail(ctx context.Context, p *piece, keep int, readBy
 				"redaction read %s of it from its first byte and did not reach its end, so its end is withheld: "+
 				"an end the redaction has not reached may still change with what came before it",
 				max(by.Sub(began), 0).Round(time.Second), humanSize(read))
+			p.withhold(sandbox.WithheldPastBound, "")
 			return tail, nil
 		}
 		n, err := src.Read(buf)
 		read += int64(n)
 		if n > 0 {
 			if _, werr := s.Write(buf[:n]); werr != nil {
-				return declinedTail(tail, werr)
+				return declinedTail(p, tail, werr)
 			}
 		}
 		if errors.Is(err, io.EOF) {
@@ -107,7 +108,7 @@ func (r *Runner) readFailureTail(ctx context.Context, p *piece, keep int, readBy
 		}
 	}
 	if err := s.Close(); err != nil {
-		return declinedTail(tail, err)
+		return declinedTail(p, tail, err)
 	}
 	shown, at := sandbox.KeepEnd(end.String(), keep)
 	tail.shown, tail.before = shown, end.dropped()+int64(at)
@@ -123,11 +124,11 @@ func deadlineOf(ctx context.Context) time.Time {
 // declinedTail is tail withheld because its redaction stream refused the text
 // ([redact.ErrDecidedEarly]): what it wrote may hold what redaction takes out.
 // The ring never fails a write, so any other error is the stream's own fault.
-func declinedTail(tail failureTail, err error) (failureTail, error) {
+func declinedTail(p *piece, tail failureTail, err error) (failureTail, error) {
 	if !errors.Is(err, redact.ErrDecidedEarly) {
 		return failureTail{}, fmt.Errorf("executor: redacting the error stream: %w", err)
 	}
-	tail.withheld = redactionRefused
+	tail.withheld = p.withhold(sandbox.WithheldRefused, redactionRefused)
 	return tail, nil
 }
 

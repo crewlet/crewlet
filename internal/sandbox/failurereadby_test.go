@@ -81,3 +81,34 @@ func TestAReadsErrorStreamIsGivenOnlyWhatItsWaitLeaves(t *testing.T) {
 		})
 	}
 }
+
+// A READ OF A BOX COUNTS WHAT IT WITHHOLDS TO THE NODE'S METER: the read hands
+// its collection a context carrying [CoordinatorOptions.Collects], which the
+// runner counts each piece it refuses or does not show to ([MeterOf]); a node
+// given none hands none.
+//
+// Mutation: read the box under the context it was asked under.
+func TestAReadOfABoxCountsWhatItWithholdsToTheNodesMeter(t *testing.T) {
+	t.Parallel()
+	meter := &countedMeter{}
+	for name, given := range map[string]CollectMeter{"given one": meter, "given none": nil} {
+		rig := newCoordRigWith(t, func(o *CoordinatorOptions) { o.Collects = given })
+		var handed CollectMeter
+		rig.runner.CollectFunc = func(ctx context.Context) error {
+			handed = MeterOf(ctx)
+			return nil
+		}
+		run := rig.launchedBy("t1", "")
+		if _, _, err := rig.coordinator.readBox(t.Context(), run, BoxReadCollect); err != nil {
+			t.Fatalf("%s: readBox: %v", name, err)
+		}
+		if handed != given {
+			t.Errorf("a node %s handed its collection the meter %v, want %v", name, handed, given)
+		}
+	}
+}
+
+// countedMeter is a meter a case hands a node.
+type countedMeter struct{}
+
+func (*countedMeter) Withheld(Withholding) {}

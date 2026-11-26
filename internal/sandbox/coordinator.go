@@ -723,6 +723,10 @@ type CoordinatorOptions struct {
 	// per launch ([SessionMeter]). Nil measures nothing.
 	Carries SessionMeter
 
+	// Collects is told each piece this node's reads of its runs' boxes
+	// refused or did not show, and why ([CollectMeter]). Nil counts nothing.
+	Collects CollectMeter
+
 	// Conversations is told, once the executor log has a turn's end, the
 	// verdict its conversation is told ([PendingRun.ConversationNotice],
 	// [ConversationTeller]). Nil tells nobody.
@@ -860,6 +864,8 @@ type Coordinator struct {
 	spoolRoom *spoolRoom
 	// sessionMeter is [CoordinatorOptions.Carries].
 	sessionMeter SessionMeter
+	// collectMeter is [CoordinatorOptions.Collects].
+	collectMeter CollectMeter
 	// conversations is [CoordinatorOptions.Conversations].
 	conversations ConversationTeller
 	// answerBudget is the node's answer budget ([CoordinatorOptions.AnswerBudget]).
@@ -1137,6 +1143,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		sharedPack:    make(chan struct{}, 1),
 		spoolRoom:     newSpoolRoom(opts.Spools),
 		sessionMeter:  opts.Carries,
+		collectMeter:  opts.Collects,
 		conversations: opts.Conversations,
 		answerBudget:  opts.AnswerBudget,
 		relaunchWait:  relaunchAskWait,
@@ -2209,6 +2216,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 // where that is another node than this, the box's host, so the run's seat
 // moved since its launch ([RunHandle.BridgeHolderChanged]).
 func (c *Coordinator) readBoxFor(ctx context.Context, run PendingRun, read BoxRead, away bool) (Result, bool, error) {
+	ctx = CountingWithheld(ctx, c.collectMeter)
 	manager := c.mgr()
 	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {

@@ -1113,6 +1113,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	if openErr != nil {
 		return sandbox.Result{}, openErr
 	}
+	pieces.counting(ctx)
 	defer pieces.close()
 	release, holdErr := holdCollection(ctx, answers, pieces)
 	if holdErr != nil {
