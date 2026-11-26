@@ -551,9 +551,13 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
 				t.Fatalf("the standby's keep came to %+v, want the session kept in the next place", kept)
 			}
-			if took := time.Since(began); took < standbyWait {
-				t.Errorf("the standby took the next place %v into its keep, before its wait of %v ran out", took,
-					standbyWait)
+			// AT THE STOOD-BY CAPTURE'S OWN BOUND, the text bound's, never the
+			// kept bound's longer wait.
+			if took, wait := time.Since(began), standbyWaitFor(textBound); took < wait ||
+				took >= standbyWaitFor(keptBound) {
+				t.Errorf("the standby took the next place %v into its keep, want past its wait of %v for a "+
+					"capture at the text bound and before the kept bound's %v", took, wait,
+					standbyWaitFor(keptBound))
 			}
 			keptByTheStandby(t, rig, writes, keep)
 		})
@@ -576,9 +580,9 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			if kept := rig.coordinator.keepCapture(t.Context(), standby); kept != nil {
 				t.Errorf("beside the record the log took, the standby's keep came to %+v, want nothing", kept)
 			}
-			if took := time.Since(began); took < standbyWait {
+			if took := time.Since(began); took < standbyWaitFor(textBound) {
 				t.Errorf("the standby stood down %v into its keep, before its wait of %v ran out", took,
-					standbyWait)
+					standbyWaitFor(textBound))
 			}
 			if read := restore.askedFor(); len(read) != 1 {
 				t.Errorf("the turn's row on the log was read %v, want once, as the standby's wait ran out", read)
@@ -627,9 +631,9 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			if kept := rig.coordinator.keepCapture(t.Context(), standby); kept != nil {
 				t.Errorf("beside a record still unanswered, the standby's keep came to %+v, want nothing", kept)
 			}
-			if took := time.Since(began); took < standbyWait {
+			if took := time.Since(began); took < standbyWaitFor(textBound) {
 				t.Errorf("the standby stood down %v into its keep, before its wait of %v ran out", took,
-					standbyWait)
+					standbyWaitFor(textBound))
 			}
 			if uploads := keep.uploads(); len(uploads) != 1 || !bytes.Equal(uploads[0], placeHolderArchive) {
 				t.Errorf("uploaded %q, want the place-holder's session once", uploads)
@@ -994,9 +998,11 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				}
 				run := rig.launchKept(t, "t1")
 				lease := claimTaker(t, store, takingProcess)
+				// AT THE KEPT BOUND, whose standby waits and lives the longest.
 				begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
 					State: CaptureBegun, Final: true, At: rig.coordinator.now().Add(-time.Second),
-					Taker: takingProcess, TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1"}
+					Taker: takingProcess, TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1",
+					KeptBound: true}
 				if saving {
 					save := begun
 					save.Final, save.Interrupted, save.Through = false, true, new(0)
@@ -1451,31 +1457,40 @@ func TestAnAskThatLeavesARecordUnansweredWritesNothing(t *testing.T) {
 	})
 }
 
-// mediaReaderCaptureLife is the capture life a build at MediaStampVersion
-// reads a begun capture by, on its own clock: 4,440.076990122 s (its
-// takeOverLife: three changes of the row, a read and its 1,740 s keep). Such a
-// build reads a capture as kept while its age is under that and twice the
-// skew, so a take it may watch must end its last attempt at or before it.
-const mediaReaderCaptureLife = 4_440_076_990_122 * time.Nanosecond
-
-// A TAKE HELD TO THE TEXT BOUND LIVES WITHIN A VERSION-1 READER'S CAPTURE LIFE:
-// a reader at MediaStampVersion waits exactly 4,440.08 s for a begun capture,
-// so a take gated to the text bound while such a reader may watch must not
-// outlive it: its life and a takeover's, at that bound's keep, end at or
-// before it (inclusive, the takeover's is exactly it). A second more on the
-// gated take's keep goes red.
+// A TAKE HELD TO THE TEXT BOUND STAYS WITHIN EVERY FIGURE A VERSION-1 READER
+// HOLDS IT TO: while a node says only MediaStampVersion, every take is gated
+// to the text bound, and such a reader holds that take, its takeover, its
+// standby and its keep to its own figures, a turn's end holding a standby
+// exactly its window. So each gated figure is at or within the reader's
+// (inclusive: several are exactly it), each row pinned at the reader's value,
+// and a figure added later gets a row. Values a build at MediaStampVersion
+// derives (6e94ffd7ac).
 //
-// Mutation: add a room to the text bound's keep, or keep a gated take at the
-// kept bound's budget, and it goes red.
-func TestAGatedTakeLivesWithinAVersionOneReadersCaptureLife(t *testing.T) {
+// Mutation: add a room to the text bound's keep or take, hold every take to
+// the kept bound's budget, or wait for a gated capture at the kept life.
+func TestAGatedTakeStaysWithinEveryFigureAVersionOneReaderHoldsItTo(t *testing.T) {
 	t.Parallel()
-	take, over := takeLifeWith(textBound.keep), takeOverLifeWith(textBound.keep)
-	if life := max(take, over); life > mediaReaderCaptureLife {
-		t.Errorf("a take at the text bound lives %v (take %v, takeover %v), past the %v a version-1 reader "+
-			"reads a capture as kept for", life, take, over, mediaReaderCaptureLife)
-	}
-	if over != mediaReaderCaptureLife {
-		t.Errorf("a takeover at the text bound lives %v, and the docs state it equals a version-1 reader's "+
-			"%v: restate them", over, mediaReaderCaptureLife)
+	ns := func(n int64) time.Duration { return time.Duration(n) }
+	for _, row := range []struct {
+		figure    string
+		gated, v1 time.Duration
+	}{
+		{"a take's budget, which an asker's box read waits for", textBound.take, 480 * time.Second},
+		{"a keep's budget", textBound.keep, 1_740 * time.Second},
+		{"a take's life", takeLifeWith(textBound), ns(3_870_051_326_748)},
+		{"a takeover's life", takeOverLifeWith(textBound.keep), ns(4_440_076_990_122)},
+		{"a capture's life, which a turn's end and a stamp's age hold it to", captureLifeAt(textBound),
+			ns(4_440_076_990_122)},
+		{"a standby's wait", standbyWaitFor(textBound), ns(4_442_076_990_122)},
+		{"a standby's window, which a turn's end holds a standby exactly", standbyWindowFor(textBound, textBound),
+			ns(9_272_205_306_992)},
+		{"a relaunch's wait at the text bound", captureRestFor(executorkeep.SessionMaxBytes, 0, false),
+			2_049 * time.Second},
+		{"a relaunch's wait at half a mebibyte", captureRestFor(512<<10, 0, false), 515 * time.Second},
+	} {
+		if row.gated > row.v1 {
+			t.Errorf("%s at the text bound is %v, past the %v a version-1 reader holds it to", row.figure,
+				row.gated, row.v1)
+		}
 	}
 }

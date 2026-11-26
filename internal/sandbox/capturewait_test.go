@@ -32,9 +32,8 @@ func TestTheScrubWaitIsDerivedFromTheArchivesBound(t *testing.T) {
 		}
 	}
 	reads := 2 * archiveReadFor(executorkeep.SessionKeptMaxBytes)
-	if scrubArchiveReads != reads {
-		t.Errorf("the scrub's size term is %s, want the archive at its bound read twice at the box-read floor, %s",
-			scrubArchiveReads, reads)
+	if text := scrubWaitFor(executorkeep.SessionMaxBytes); text != 6*time.Minute {
+		t.Errorf("the scrub waits %s at the text bound, and the docs state six minutes: restate them", text)
 	}
 	sum := spoolRoomWait + reads + scrubPlainSlowest
 	if SessionScrubWait < sum || SessionScrubWait-sum >= time.Minute || SessionScrubWait%time.Minute != 0 {

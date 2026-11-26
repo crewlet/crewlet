@@ -1327,11 +1327,13 @@ follows (internal/sandbox's `session.go` and `handed.go`, internal/engine's
 before the box is paused or reclaimed: the archive, packed where it must be,
 streamed through the scrub and sealed under the fleet keyring into a spool on
 the node's own disk, bounded by the pack's and the scrub's waits
-(`SessionTakeBudget`). The scrub's, `SessionScrubWait`, is eight minutes, from
-its measured worst: the slowest session a harness writes at the scrub's
-256 MiB of plaintext (`scrubPlainMax`), 183 s, and the archive read twice out
-of a box at a mebibyte a second, 188 s at the kept bound's 94 MiB, and the
-minute a take may wait for its spool's room (`spoolRoomWait`), 431 s; lines that are no JSON, which
+(`SessionTakeBudget`, each take its own bound's). The scrub's,
+`SessionScrubWait`, is eight minutes at the kept bound (six at the text
+bound), from its measured worst: the slowest session a harness writes at the
+scrub's 256 MiB of plaintext (`scrubPlainMax`), 183 s, and the archive read
+twice out of a box at a mebibyte a second, 188 s at the kept bound's 94 MiB
+(96 s at 48 MiB), and the minute a take may wait for its spool's room
+(`spoolRoomWait`), 431 s (339 s); lines that are no JSON, which
 only a corrupted transcript holds, do not set it. A take past it FAILS CLOSED:
 nothing is kept, its place is refused and the last kept copy stands, so a box
 can only cost its own session. The KEEP — the upload at the object store's
@@ -6509,9 +6511,10 @@ other refusal is final. This moves no budget: `SessionKeepBudget` (the kept
 bound's, sixty-eight minutes, below) and a capture's life stand.
 
 **The scrub's wait** is derived in code from the archive's bound: the spool's
-minute, the archive read twice at the box-read floor (`scrubArchiveReads`,
-188 s at the kept bound's 94 MiB) and the slowest plaintext
-(`scrubPlainSlowest`), rounded up to the minute, eight minutes.
+minute, the archive read twice at the box-read floor at its take's bound
+(`scrubWaitFor`: 188 s at the kept bound's 94 MiB, 96 s at 48 MiB) and the
+slowest plaintext (`scrubPlainSlowest`), rounded up to the minute: eight
+minutes at the kept bound, six at the text bound.
 
 **Mid-upgrade.** `archive_size` is a new key an older build carries among a
 capture's unknown keys. An older relaunch still waits fifteen seconds, and an
@@ -6852,10 +6855,11 @@ and one more for each of `MediaMaxCount` objects), and its keep is budgeted at
 it (`SessionTake.KeepPaceMiB`): one object's pace alone would leave a capture
 near the bound room for none of its media. `SessionKeepBudget` is the kept
 bound's, 68 minutes (5 × 30 + 127 × 30 + 2 × (30 + 30) s), and bounds every
-keep; a keep is held to its own take's, 29 minutes at the text bound. Every
-take's scrub is given the kept bound's reads, 188 s, since no reader knows which
-bound a take holds: `SessionScrubWait` is eight minutes and `SessionTakeBudget`
-ten. From these, `captureLife` is 6,780.08 s, `SessionCaptureBudget`
+keep; a keep is held to its own take's, 29 minutes at the text bound. A
+take's scrub and its budget are its own bound's too, six and eight minutes
+at the text bound, eight and ten at the kept bound, and a reader that cannot
+know a take's bound holds it to the kept bound's (`SessionScrubWait`,
+`SessionTakeBudget`). From these, `captureLife` is 6,780.08 s, `SessionCaptureBudget`
 13,980.08 s, `standbyBudget` 18,932.21 s, and `saveLedgerHold` 29 h 45.5 min,
 fourteen and a half minutes under the uploads bucket's 30 h
 (`coord.UploadRetention`), a margin a test pins.
@@ -6873,4 +6877,9 @@ then to the sealed size. `spoolRoomBytes` (481.17 MiB) and the operator's
 
 **Mid-upgrade.** A node at stamp version 1, live or on its record while
 offline, keeps every take at the text bound until it is upgraded or its id is
-retired.
+retired. While a reader says version 1, its take, takeover and standby figures
+bound every gated take's: the take's budget (480 s), its keep (29 min), its
+life, its takeover's and a standby's wait and window are each at or within the
+version-1 reader's (a standby waits for the stood-by capture at that
+capture's own bound), a turn's end there holding a standby exactly its window
+(`sandbox.TestAGatedTakeStaysWithinEveryFigureAVersionOneReaderHoldsItTo`).

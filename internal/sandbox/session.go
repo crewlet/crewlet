@@ -1017,19 +1017,32 @@ func (c SessionCapture) standbyOf() SessionCapture {
 		State: CaptureBegun, At: c.StandbyAt, Taker: c.StandbyTaker, TakerEpoch: c.StandbyTakerEpoch}
 }
 
-// standbyWait is how long a read standing by waits for the capture it stands
-// by for to come to something ([Coordinator.takeOver]), from the start of its
-// keep: that capture's whole life ([captureLife]), which began before this
-// read stood by ([PendingStore.StandBy] names a standby only on a capture
-// already begun), and one more read of the run's row ([captureWaitTick]), the
-// one in which it sees how that capture came out.
+// standbyWait is the most a read standing by waits for the capture it stands
+// by for to come to something ([Coordinator.takeOver], [standbyWaitFor]), from
+// the start of its keep: that capture's whole life ([captureLife]), which began
+// before this read stood by ([PendingStore.StandBy] names a standby only on a
+// capture already begun), and one more read of the run's row
+// ([captureWaitTick]), the one in which it sees how that capture came out.
 //
 // ON ITS OWN MONOTONIC CLOCK, never against the capture's stamped instant,
 // which another machine's clock wrote: past it, nothing that capture's taker
 // sends lands, so a capture still begun is one whose taker stopped or whose
 // stamp never reached the row, and the read takes the place after it
 // ([Coordinator.waitedOut]). (6,780.08 + 2) s, 1 h 53 min 2 s today.
-var standbyWait = captureLife + captureWaitTick
+var standbyWait = standbyWaitFor(keptBound)
+
+// standbyWaitFor is [standbyWait] for a capture taken at stood: its life at
+// that bound ([captureLifeAt]) and a tick. A capture stamped at the text bound
+// is waited for as a build before the kept bound waits for it, 4,442.08 s, so
+// a standby beside such a build never outlives its hold (.claude/rules/
+// compatibility.md).
+func standbyWaitFor(stood takeBound) time.Duration { return captureLifeAt(stood) + captureWaitTick }
+
+// standbyWindowFor is [standbyWindow] for a standby taken at own beside a
+// capture taken at stood: its take's own budget and its wait for that capture.
+func standbyWindowFor(own, stood takeBound) time.Duration {
+	return own.take + discardGrace + standbyWaitFor(stood) + 5*captureStampBudget + captureReadBudget
+}
 
 // standbyWindow is the longest a read standing by can still take the place
 // after the capture it stands by for, from its own instant
@@ -1039,9 +1052,10 @@ var standbyWait = captureLife + captureWaitTick
 // end, the read of the turn's row past it and the settle it decides,
 // [Coordinator.namedAtWaitsEnd], and its takeover) and its last read of the
 // row ([captureReadBudget]), each at the slowest crossing, since the standby
-// and the wait may be any two nodes. 600 + 30 + 6,782.08 + 5 × 810.03 + 270 =
+// and the wait may be any two nodes. The most, both at the kept bound, which
+// a reader holds every standby to: 600 + 30 + 6,782.08 + 5 × 810.03 + 270 =
 // 11,732.21 s, three hours, fifteen minutes and thirty-two seconds today.
-var standbyWindow = SessionTakeBudget + discardGrace + standbyWait + 5*captureStampBudget + captureReadBudget
+var standbyWindow = standbyWindowFor(keptBound, keptBound)
 
 // standbyBudget is how long after the instant a read stood by
 // ([SessionCapture.StandbyAt]) any node reads it as standing
@@ -1139,13 +1153,6 @@ func archiveReadFor(n int64) time.Duration {
 	return time.Duration((n+objstore.MiB-1)/objstore.MiB) * boxReadPace
 }
 
-// scrubArchiveReads is the scrub's size term: an archive at the kept bound
-// (executorkeep.SessionKeptMaxBytes) read twice out of its box at
-// [boxReadPace], [archiveReadFor] of it twice, written out so
-// [SessionScrubWait] stays a constant: 188 s today. Every take is given it, at
-// either bound ([takeBound]): a reader cannot know which a take holds.
-const scrubArchiveReads = 2 * ((executorkeep.SessionKeptMaxBytes + objstore.MiB - 1) / objstore.MiB) * boxReadPace
-
 // scrubPlainSlowest is the scrub's plaintext term: the slowest session a
 // harness writes at the 256 MiB of plaintext a reading reads
 // (internal/sandbox/executor's scrubPlainMax), a string torn at its last line,
@@ -1155,26 +1162,35 @@ const scrubArchiveReads = 2 * ((executorkeep.SessionKeptMaxBytes + objstore.MiB 
 // inflate to the bound.
 const scrubPlainSlowest = 183 * time.Second
 
-// SessionScrubWait bounds the scrub of a session as it streams out of its box,
-// both readings of its tar: the minute a take may wait for its spool's room
-// ([spoolRoomWait]), the archive at its bound read twice
-// ([scrubArchiveReads]) and the slowest plaintext ([scrubPlainSlowest]), 431 s
-// apart, ROUNDED UP TO THE MINUTE: eight minutes today. A take still scrubbing
-// at its end FAILS CLOSED: nothing is kept, its place is refused and the last
-// kept copy stands, so a box costs only its own session (ADR-0073;
-// docs/concepts/code-sandbox.md, "Eight minutes for the scrub").
-const SessionScrubWait = (spoolRoomWait + scrubArchiveReads + scrubPlainSlowest + time.Minute - 1) /
-	time.Minute * time.Minute
+// SessionScrubWait bounds the scrub of a session at the kept bound as it
+// streams out of its box ([scrubWaitFor]): eight minutes today, six at the
+// text bound. A take still scrubbing at its end FAILS CLOSED: nothing is kept,
+// its place is refused and the last kept copy stands, so a box costs only its
+// own session (ADR-0073; docs/concepts/code-sandbox.md, "Eight minutes for the
+// scrub").
+var SessionScrubWait = scrubWaitFor(executorkeep.SessionKeptMaxBytes)
+
+// scrubWaitFor is the scrub's wait for a take admitting archive bytes: the
+// minute it may wait for its spool's room ([spoolRoomWait]), the archive at
+// that bound read twice and the slowest plaintext ([scrubPlainSlowest]),
+// ROUNDED UP TO THE MINUTE: 431 s, eight minutes, at the kept bound; 339 s,
+// six, at the text bound.
+func scrubWaitFor(archive int64) time.Duration {
+	return (spoolRoomWait + 2*archiveReadFor(archive) + scrubPlainSlowest + time.Minute - 1) /
+		time.Minute * time.Minute
+}
 
 // SessionTakeBudget is the most a take adds to the read of a box it is made in:
-// the pack ([SessionPackWait]) and the scrub ([SessionScrubWait]).
+// the pack ([SessionPackWait]) and the scrub ([SessionScrubWait]), at the
+// kept bound. A take is held to its own bound's ([takeBound]), 480 s at the
+// text bound; a reader that cannot know a take's bound holds it to this.
 //
 // SIZED ON THE BOUNDS, NOT ON THE ARCHIVE, because a node that asks another to
 // read a box ([BoxReadBudget]) cannot know how large the session in it is
 // before the read: a session of an ordinary day's work is a mebibyte or two and
 // takes seconds, and the bound is what a host that is still working is given
 // before the asker takes it for one that is not.
-const SessionTakeBudget = SessionPackWait + SessionScrubWait
+var SessionTakeBudget = keptBound.take
 
 // keepBudgetFor is what a keep of a sealed session of n bytes needs on its
 // longest path ([keepBudgetAt] of its pace).
@@ -1204,7 +1220,7 @@ func keepBudgetAt(paceMiB int64) time.Duration {
 // pace sets.
 type takeBound struct {
 	archive, sealed, paceMiB int64
-	keep                     time.Duration
+	take, keep               time.Duration
 }
 
 // textBound is a take's bound while a node that may settle a run's row reads
@@ -1215,6 +1231,7 @@ type takeBound struct {
 // capture as kept.
 var textBound = takeBound{archive: executorkeep.SessionMaxBytes, sealed: executorkeep.SealedMaxBytes,
 	paceMiB: (executorkeep.SealedMaxBytes + objstore.MiB - 1) / objstore.MiB,
+	take:    SessionPackWait + scrubWaitFor(executorkeep.SessionMaxBytes),
 	keep:    keepBudgetFor(executorkeep.SealedMaxBytes)}
 
 // keptBound is a take's bound once every such node reads it: what one capture
@@ -1222,7 +1239,8 @@ var textBound = takeBound{archive: executorkeep.SessionMaxBytes, sealed: executo
 // executorkeep.SessionMaxBytes, at executorkeep.KeptPaceMiB, every object's
 // mebibyte begun counted. 68 minutes of keep.
 var keptBound = takeBound{archive: executorkeep.SessionKeptMaxBytes, sealed: executorkeep.KeptSealedMaxBytes,
-	paceMiB: executorkeep.KeptPaceMiB, keep: keepBudgetAt(executorkeep.KeptPaceMiB)}
+	paceMiB: executorkeep.KeptPaceMiB, take: SessionPackWait + scrubWaitFor(executorkeep.SessionKeptMaxBytes),
+	keep: keepBudgetAt(executorkeep.KeptPaceMiB)}
 
 // boundOf is the bound a take at kept holds.
 func boundOf(kept bool) takeBound {
@@ -1328,12 +1346,12 @@ const MediaReadersRoom = sessionRecordBudget
 // starts as the take returns its spool ([SessionKeepBudget]), and the stamp of
 // what came of it ([captureStampBudget]). An hour, forty-five and a half
 // minutes and a fraction at today's bounds.
-var takeLife = takeLifeWith(SessionKeepBudget)
+var takeLife = takeLifeWith(keptBound)
 
-// takeLifeWith is [takeLife] with a keep of keep, a take's at its own bound
-// ([takeBound]).
-func takeLifeWith(keep time.Duration) time.Duration {
-	return SessionTakeBudget + captureStampBudget + discardGrace + keep + captureStampBudget
+// takeLifeWith is [takeLife] of a take at bound, its take's and its keep's
+// budgets its own ([takeBound]).
+func takeLifeWith(bound takeBound) time.Duration {
+	return bound.take + captureStampBudget + discardGrace + bound.keep + captureStampBudget
 }
 
 // takeOverLife is the same of a takeover's begun stamp, from its own instant
@@ -1363,7 +1381,12 @@ func takeOverLifeWith(keep time.Duration) time.Duration {
 // reservation's room, a keep's reads and a takeover's steps, a rule reading a
 // begun stamp's age against it could read a capture still being kept as
 // abandoned. max(6,330.05, 6,780.08) s, 1 h 53 min today, a takeover's.
-var captureLife = max(takeLife, takeOverLife)
+var captureLife = captureLifeAt(keptBound)
+
+// captureLifeAt is [captureLife] of a capture taken at bound.
+func captureLifeAt(bound takeBound) time.Duration {
+	return max(takeLifeWith(bound), takeOverLifeWith(bound.keep))
+}
 
 // sessionKeepDrain is how long a stopping coordinator lets keeps already under
 // way finish before it cancels them ([Coordinator.Stop]): the teardown grace
@@ -1621,8 +1644,10 @@ type spooledCapture struct {
 	// standby says the take holds no place of its own: it stands by for
 	// another read's capture at stamp's place ([Coordinator.standBy]), and its
 	// keep first waits to see whether to take the next one
-	// ([Coordinator.takeOver]).
+	// ([Coordinator.takeOver]); stood is that capture's bound, which its wait
+	// is held to ([standbyWaitFor]).
 	standby bool
+	stood   takeBound
 
 	// places is what the capture is raised by once its take is counted
 	// ([SessionCapture.placeAtNewest]): set for a capture no read places, nil
@@ -1795,7 +1820,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// time, which ends a summary's upload early where the read found one
 	// ([Coordinator.summaryBy]).
 	read := ctx
-	ctx, cancel, _ := c.takeContext(ctx)
+	ctx, cancel, _ := c.takeContext(ctx, boundOf(policy.kept()).take)
 	if at.summary != nil {
 		ctx, cancel = before(ctx, cancel, c.summaryBy(by))
 	}
@@ -1987,7 +2012,13 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// before by ([Coordinator.takeContext]).
 	reserveBy, _ := ctx.Deadline()
 	standBy := func(stamp SessionCapture) (*spooledCapture, *SessionKept) {
-		spooled, kept := c.standBy(ctx, by, reserveBy, run, stamp, taken, at, places, room)
+		// THE STOOD-BY CAPTURE'S OWN BOUND where the row names it, the kept
+		// bound's where it does not.
+		stood := keptBound
+		if held := current.Capture; held != nil && held.CaptureSeq == stamp.CaptureSeq {
+			stood = boundOf(held.KeptBound)
+		}
+		spooled, kept := c.standBy(ctx, by, reserveBy, run, stamp, taken, at, places, room, stood)
 		spooledHold = spooled != nil
 		return spooled, kept
 	}
@@ -2162,7 +2193,8 @@ func (c *Coordinator) spooledWhole(ctx context.Context, by time.Time, run Pendin
 // ONE THAT MAY STAND: the keep reads the row first ([Coordinator.awaitStood]);
 // not standing, it keeps nothing and withdraws.
 func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run PendingRun, stamp SessionCapture,
-	taken TakenSession, at capturePoint, places *savePlaces, hold *spoolHold) (*spooledCapture, *SessionKept) {
+	taken TakenSession, at capturePoint, places *savePlaces, hold *spoolHold, stoodAt takeBound) (*spooledCapture,
+	*SessionKept) {
 
 	stood, _, err := c.askStamp(ctx, reserveBy, run.TurnID, stamp, c.pending.StandBy)
 	switch {
@@ -2183,7 +2215,7 @@ func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run 
 		c.standDown(ctx, by, run, stamp, why)
 		return nil, nil
 	}
-	spooled.standby, spooled.summary = true, at.summary
+	spooled.standby, spooled.stood, spooled.summary = true, stoodAt, at.summary
 	c.spooledWhole(ctx, by, run, spooled, taken, at.window)
 	log.InfoContext(ctx, "executor_session_standing_by", "turn_id", run.TurnID, "point", at.name,
 		"capture_seq", stamp.CaptureSeq, "bytes", spooled.bytes(),
@@ -2213,10 +2245,10 @@ func (c *Coordinator) standDown(ctx context.Context, by time.Time, run PendingRu
 // log names, keeps the session and the standby keeps nothing: one upload of a
 // job's session, never two. The wait is that capture's whole life on this
 // node's clock ([standbyWait]), never its stamped instant, which another
-// machine's clock wrote.
+// machine's clock wrote, at that capture's bound ([standbyWaitFor]).
 func (c *Coordinator) takeOver(ctx context.Context, spooled *spooledCapture) bool {
 	run, standby := spooled.run, spooled.stamp
-	wait, cancel := context.WithTimeout(ctx, standbyWait)
+	wait, cancel := context.WithTimeout(ctx, standbyWaitFor(spooled.stood))
 	defer cancel()
 	stood, keep, why := c.awaitStood(wait, run, standby)
 	switch {
@@ -2438,7 +2470,7 @@ func (c *Coordinator) namedAtWaitsEnd(ctx context.Context, run PendingRun, stand
 
 // takeContext is the context a take runs under once its row is read
 // ([Coordinator.placingRow]), and the instant by which its own records must be
-// made: its own budget ([SessionTakeBudget]) for its pack and scrub, and beside
+// made: budget, its bound's ([takeBound]), for its pack and scrub, and beside
 // it the room its reservation of the capture's place is given
 // ([Coordinator.reserveRoom]), never past where the read it is part of must
 // stop ([Coordinator.takeBy]). by is zero where the read has no deadline. EVERY
@@ -2446,8 +2478,10 @@ func (c *Coordinator) namedAtWaitsEnd(ctx context.Context, run PendingRun, stand
 // it as the reservation within it: each crosses the row whole, a pack at its
 // bound left only the scrub's minutes, and a large row was cut while its bytes
 // crossed a slow link (crewlet/crewlet#1151).
-func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context.CancelFunc, time.Time) {
-	deadline := time.Now().Add(SessionTakeBudget + c.reserveRoom())
+func (c *Coordinator) takeContext(ctx context.Context, budget time.Duration) (context.Context,
+	context.CancelFunc, time.Time) {
+
+	deadline := time.Now().Add(budget + c.reserveRoom())
 	by := c.recordsBy(ctx)
 	if last := c.takeBy(by); !last.IsZero() && last.Before(deadline) {
 		deadline = last

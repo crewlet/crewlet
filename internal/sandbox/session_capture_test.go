@@ -502,7 +502,7 @@ func TestATakesReadOfWhoReadsItsMediaCostsItsPackAndScrubNothing(t *testing.T) {
 			readCapture(BoxReadStop, Result{}, false))
 		rig.coordinator.keepLater(t.Context(), spooled)
 		rig.awaitKeeps()
-		if took, whole := <-streamed, SessionTakeBudget+rig.coordinator.reserveRoom(); took <= whole-MediaReadersRoom {
+		if took, whole := <-streamed, textBound.take+rig.coordinator.reserveRoom(); took <= whole-MediaReadersRoom {
 			t.Errorf("the stream was cut %v after it began, behind a policy read of %v, want the take's "+
 				"whole %v", took, MediaReadersRoom, whole)
 		}
@@ -553,9 +553,10 @@ func TestATakeWhoseScrubRunsPastItsWaitIsNotKept(t *testing.T) {
 		if spooled != nil {
 			t.Errorf("a take whose stream ran out its time spooled %+v, want nothing", spooled)
 		}
-		if took := <-streamed; took < SessionScrubWait || took > SessionTakeBudget+rig.coordinator.reserveRoom() {
-			t.Errorf("the stream was cut %v after it began, want within the take's budget and no sooner than "+
-				"the scrub's wait of %v", took, SessionScrubWait)
+		scrub := scrubWaitFor(textBound.archive)
+		if took := <-streamed; took < scrub || took > textBound.take+rig.coordinator.reserveRoom() {
+			t.Errorf("the stream was cut %v after it began, want within its bound's take budget and no sooner "+
+				"than its scrub's wait of %v", took, scrub)
 		}
 		row := rig.get("t1")
 		if c := row.Capture; c == nil || c.CaptureSeq != kept.CaptureSeq+1 || c.State != CaptureRefused {

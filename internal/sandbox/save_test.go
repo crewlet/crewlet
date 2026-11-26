@@ -877,12 +877,12 @@ func TestASaveIsTakenWholeAfterAPackAtItsBound(t *testing.T) {
 	inBubble(t, func(t *testing.T) {
 		rig, _, _ := savingRig(t, memory.NewFleet(), newTakerStore())
 		rig.launchKept(t, "t1")
-		// THE SCRUB AT ITS BOUND: the take's whole budget but a second.
+		// THE SCRUB AT ITS BOUND: the take's whole budget, its bound's, but a second.
 		atItsBound := func(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(SessionTakeBudget - time.Second):
+			case <-time.After(textBound.take - time.Second):
 				return nil
 			}
 		}

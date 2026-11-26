@@ -625,7 +625,7 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	}
 	// THE TAKE CONTEXT AFTER THE PACK, so the scrub has its whole budget; a
 	// drain's end bounds it after takeContext, never its parent.
-	take, cancel, by := c.takeContext(ctx)
+	take, cancel, by := c.takeContext(ctx, boundOf(in.policy.kept()).take)
 	defer cancel()
 	if !job.drainEnd.IsZero() {
 		var endDrain context.CancelFunc
