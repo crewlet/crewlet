@@ -1583,7 +1583,7 @@ func (o *binding) Offered() []toolsession.Tool {
 	defs := surface.ToolDefs()
 	out := make([]toolsession.Tool, 0, len(defs))
 	for _, def := range defs {
-		if !o.offeredTool(def.Name) {
+		if !o.offeredTool(def) {
 			continue
 		}
 		out = append(out, toolsession.Tool{Def: def, Annotations: surface.AnnotationsOf(def.Name)})
