@@ -336,90 +336,138 @@ type request struct {
 func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query,
 	chat *ChatHub) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r, refusal := resolved(guard, w, r)
-		// THE RESOLVED REQUEST'S CONTEXT IS THIS HANDLER'S OWN, carrying
-		// the guard's answer: see [auth.Guard.Middleware], which reads it
-		// the same way and says why contextcheck cannot see that. The
-		// socket's lifetime below is that same context.
-		//nolint:contextcheck // derived from r.Context(); see the paragraph above
-		principal, how := iam.From(r.Context())
-		if refusal == nil && how == iam.Unknown {
-			// 503 AND NEVER 401, for the guard's own reason: a browser
-			// reads 401 as "sign in again" and discards the cookie, and
-			// this node merely could not read its identity estate.
-			httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
-				auth.RetryIdentitySeconds)
+		admitted, ok := Admit(guard, origins, w, r) //nolint:contextcheck // decided on the request's own context
+		if !ok {
 			return
 		}
-		if refusal != nil {
-			// A PERSON WHOSE SEAT IS GONE is resolved and still refused,
-			// with the guard's own code and detail — a socket is a
-			// surface that acts as the seat.
-			httpjson.FailWith(w, refusal.Status, refusal.Code,
-				map[string]string{"detail": refusal.Detail})
-			return
-		}
-		if how != iam.Resolved {
-			// REFUSED BEFORE THE UPGRADE: accepting a credential this node rejects, only
-			// to close it a moment later, would let anyone open a socket here.
-			//
-			// A close code rides a close FRAME, so a handshake that never completed
-			// cannot carry one: the browser reports 1006 (like a stopped engine) and hides
-			// the status. The client re-asks over plain HTTP, where this route answers a
-			// GET without an Upgrade header 401 (refused) or 426 (accepted); the
-			// dashboard's token gate relies on that pairing (`probeRefusal` in
-			// dashboard/src/protocol/socket.ts).
-			//
-			// Real JSON, not http.Error: that sets text/plain AND nosniff, which stops a
-			// strict client parsing the body. The envelope is every REST route's.
-			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
-			return
-		}
-		// EVERY RESOLVED PRINCIPAL WHOSE STAGE MAY ACT OPENS THE SOCKET (ADR-0033):
-		// what it carries is the overview, everybody's; what a reader may not read (a
-		// seat's body, the audit trail, an inbox without Worklet) is withheld per kind
-		// and payload by the audience built below, never by refusing the socket.
-		//
-		// The STAGE is the authority table's first check and the query registry's:
-		// this holds the socket to the rule every other surface states. Refused
-		// before the upgrade, where the page's HTTP re-ask can see the status.
-		if !principal.Stage.MayAct() {
-			authz.EnvelopeRefusal(w, r, authz.Policy{},
-				authz.Decision{Reason: authz.ReasonStage})
-			return
-		}
-		// WHAT THE SOCKET WAS OPENED WITH, which is what decides it again
-		// for as long as it is open — see lifetime.go.
-		//nolint:contextcheck // the resolved request's; see where it is resolved
-		ends, _ := auth.Lifetime(r.Context())
-		cred := credential{
-			who:    &asking{principal: principal},
-			opened: openedWith(principal),
-			ends:   ends,
-			decide: deciderFor(guard, r),
-		}
-
-		// THE HANDSHAKE'S ORIGIN IS JUDGED BY THE WRITES' RULE, and only
-		// a handshake's: see [auth.CSRF.RefuseCrossSite] for why the
-		// library's own check is switched off below, and why the plain
-		// GET the dashboard re-asks this path with is not judged.
-		if auth.WebSocketUpgrade(r) && origins.RefuseCrossSite(w, r) {
-			return
-		}
-		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			// JUDGED ABOVE, against api.external_url and every
-			// api.auth.allowed_origins entry. The library's own check
-			// compares Origin with this request's Host header, which a
-			// second hostname and a Host-rewriting proxy both fail.
-			InsecureSkipVerify: true,
-		})
+		conn, err := admitted.Accept(w)
 		if err != nil {
 			log.Debug("stream_accept_failed", "error", err)
 			return
 		}
-		//nolint:contextcheck // the resolved request's; see where it is resolved
-		serveSocket(r.Context(), conn, svc, query, chat, cred)
+		//nolint:contextcheck // the resolved request's; see [Admit]
+		serveSocket(admitted.r.Context(), conn, svc, query, chat, admitted.cred)
 	})
+}
+
+// Admitted is a socket handshake every engine socket's rules let through:
+// resolved to a principal whose stage may act, from an Origin the CSRF rule
+// accepts. /ws/stream and /ws/dictation are both admitted here, so the two
+// cannot come to disagree about who may open a socket.
+type Admitted struct {
+	r    *http.Request
+	cred credential
+}
+
+// Principal is who the handshake resolved to.
+func (a *Admitted) Principal() iam.Principal { return a.cred.who.current() }
+
+// Request is the resolved handshake: its context carries the principal.
+func (a *Admitted) Request() *http.Request { return a.r }
+
+// Admit decides a socket handshake, answering a refusal itself (503 while
+// identity cannot be read, the guard's own refusal, 401, the stage refusal,
+// the Origin refusal) and reporting false.
+func Admit(guard *auth.Guard, origins CrossSite, w http.ResponseWriter,
+	r *http.Request) (*Admitted, bool) {
+
+	r, refusal := resolved(guard, w, r)
+	// THE RESOLVED REQUEST'S CONTEXT IS THE SOCKET'S OWN, carrying the
+	// guard's answer: see [auth.Guard.Middleware], which reads it the same
+	// way and says why contextcheck cannot see that. The socket's lifetime
+	// is that same context.
+	//nolint:contextcheck // derived from r.Context(); see the paragraph above
+	principal, how := iam.From(r.Context())
+	if refusal == nil && how == iam.Unknown {
+		// 503 AND NEVER 401, for the guard's own reason: a browser
+		// reads 401 as "sign in again" and discards the cookie, and
+		// this node merely could not read its identity estate.
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
+			auth.RetryIdentitySeconds)
+		return nil, false
+	}
+	if refusal != nil {
+		// A PERSON WHOSE SEAT IS GONE is resolved and still refused,
+		// with the guard's own code and detail: a socket is a
+		// surface that acts as the seat.
+		httpjson.FailWith(w, refusal.Status, refusal.Code,
+			map[string]string{"detail": refusal.Detail})
+		return nil, false
+	}
+	if how != iam.Resolved {
+		// REFUSED BEFORE THE UPGRADE: accepting a credential this node rejects, only
+		// to close it a moment later, would let anyone open a socket here.
+		//
+		// A close code rides a close FRAME, so a handshake that never completed
+		// cannot carry one: the browser reports 1006 (like a stopped engine) and hides
+		// the status. The client re-asks over plain HTTP, where this route answers a
+		// GET without an Upgrade header 401 (refused) or 426 (accepted); the
+		// dashboard's token gate relies on that pairing (`probeRefusal` in
+		// dashboard/src/protocol/socket.ts).
+		//
+		// Real JSON, not http.Error: that sets text/plain AND nosniff, which stops a
+		// strict client parsing the body. The envelope is every REST route's.
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
+		return nil, false
+	}
+	// EVERY RESOLVED PRINCIPAL WHOSE STAGE MAY ACT OPENS THE SOCKET (ADR-0033):
+	// what it carries is the overview, everybody's; what a reader may not read (a
+	// seat's body, the audit trail, an inbox without Worklet) is withheld per kind
+	// and payload by the audience built below, never by refusing the socket.
+	//
+	// The STAGE is the authority table's first check and the query registry's:
+	// this holds the socket to the rule every other surface states. Refused
+	// before the upgrade, where the page's HTTP re-ask can see the status.
+	if !principal.Stage.MayAct() {
+		authz.EnvelopeRefusal(w, r, authz.Policy{},
+			authz.Decision{Reason: authz.ReasonStage})
+		return nil, false
+	}
+	// WHAT THE SOCKET WAS OPENED WITH, which is what decides it again
+	// for as long as it is open (lifetime.go).
+	//nolint:contextcheck // the resolved request's; see where it is resolved
+	ends, _ := auth.Lifetime(r.Context())
+	cred := credential{
+		who:    &asking{principal: principal},
+		opened: openedWith(principal),
+		ends:   ends,
+		decide: deciderFor(guard, r),
+	}
+
+	// THE HANDSHAKE'S ORIGIN IS JUDGED BY THE WRITES' RULE, and only
+	// a handshake's: see [auth.CSRF.RefuseCrossSite] for why the
+	// library's own check is switched off below, and why the plain
+	// GET the dashboard re-asks this path with is not judged.
+	if auth.WebSocketUpgrade(r) && origins.RefuseCrossSite(w, r) {
+		return nil, false
+	}
+	return &Admitted{r: r, cred: cred}, true
+}
+
+// Accept upgrades an admitted handshake. A plain GET, which a dashboard
+// re-asks a socket's path with to read why a handshake failed, is answered
+// 426 here.
+func (a *Admitted) Accept(w http.ResponseWriter) (*websocket.Conn, error) {
+	return websocket.Accept(w, a.r, &websocket.AcceptOptions{
+		// JUDGED IN [Admit], against api.external_url and every
+		// api.auth.allowed_origins entry. The library's own check
+		// compares Origin with this request's Host header, which a
+		// second hostname and a Host-rewriting proxy both fail.
+		InsecureSkipVerify: true,
+	})
+}
+
+// KeepDecided decides an admitted socket's credential again for as long as it
+// is open, closing it as /ws/stream's are (lifetime.go: 4401, 4403, 1013), and
+// returns when ctx ends or it closed the socket. For a socket other than this
+// package's own, which has no audience or watch to decide again.
+func (s *Service) KeepDecided(ctx context.Context, conn *websocket.Conn, a *Admitted) {
+	l := newListener(a.cred.opened)
+	defer s.listeners.add(l)()
+	defer containPanic(ctx, "socket_decide", func() {
+		_ = conn.Close(CloseUndecided, "Sign-in could not be decided again. Reconnecting.")
+	})
+	keepDecided(ctx, conn, l, a.cred, s.seatOf, s.now, nil, nil)
 }
 
 // CrossSite judges a handshake's `Origin` and answers the refusal itself. The
