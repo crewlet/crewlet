@@ -46,6 +46,19 @@
 // its high-value acts and one generic tool per class over the rest of its
 // catalog, so every method ships without hundreds of tools.
 //
+// # Above a seat's level
+//
+// A seat is offered only the tools its level allows, so a method above it
+// must never read as one that does not exist. A call naming a method its
+// tool does not list is refused in the catalog's words ([Catalog.Outside]):
+// its class, the tool and level that make it, the approval a held class
+// waits for, and, below that level, that an administrator raises it on the
+// Agents tab, asked in words since request_access asks for no level
+// (ADR-0118); a method no tool makes says no level reaches it. Every class
+// tool's description says what lies above it ([Catalog.Above]), from each
+// higher class tool's [Tool.Covers], and an operations listing marks the
+// methods above the seat rather than leaving them out.
+//
 // # Every step on the access log
 //
 // Each step of a growth act is one record on the access log ([Record], [Step],

@@ -140,7 +140,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		}
 		out = append(out, growth.Tool{
 			Name: genericTools()[class], Class: class, Operations: ids,
-			Description: genericDescription(class),
+			Description: genericDescription(class), Covers: genericCovers(class),
 			Parameters: toolschema.Object(map[string]any{
 				"operation": map[string]any{"type": "string", "enum": ids,
 					"description": "The method's ID, as docs/integrations/google-search-console.md lists it."},
@@ -168,6 +168,19 @@ func genericDescription(class growth.Class) string {
 	default:
 		return "Ask an administrator to approve adding or removing a property, verifying one, or changing " +
 			"or relinquishing its owners, by its method's ID; held until they answer, at a fresh step-up."
+	}
+}
+
+// genericCovers is what a generic tool of class above read changes, which the
+// tools below it name (growth.Catalog.Above).
+func genericCovers(class growth.Class) string {
+	switch class {
+	case growth.ClassRead:
+		return ""
+	case growth.ClassOperate:
+		return "sitemaps and Indexing API notifications"
+	default:
+		return "adding, removing and verifying a property, and its owners"
 	}
 }
 

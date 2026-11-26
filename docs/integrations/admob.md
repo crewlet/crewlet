@@ -18,7 +18,7 @@ An agent is on at one level across every publisher account it is granted.
 | `operate` | Everything `read` can, plus changes made at once and recorded: new apps by name, ad units, ad unit mappings, mediation groups and their lines (ad source, eCPM, mode, enabled or disabled, ad units), and starting or stopping a mediation A/B experiment | Inventory management at View and manage, or Manager; and the sign-in made again to allow changes |
 | `administer` | Everything `operate` can, plus asking an administrator to approve each change that cannot be undone: linking a new app to its store listing, removing a mediation line, stopping an A/B experiment keeping the treatment's lines | The same as `operate` |
 
-Raising an agent to `operate` or `administer` asks for a fresh sign-in (step-up).
+Raising an agent to `operate` or `administer` asks for a fresh sign-in (step-up). An agent holds only its level's tools, and each tool that takes a method's ID says what lies above it. A method above the agent's level, named on a tool it holds, is refused before AdMob is called, naming the method's class, the tool and level that make it, whether an administrator approves each call, and that an administrator raises the level on the Agents tab, asked in words (`request_access` asks for no level). A method Crewlet does not offer is refused as one no level reaches.
 
 ### The roles AdMob gives
 

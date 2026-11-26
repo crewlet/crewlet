@@ -18,7 +18,7 @@ An agent is on at one level across every publisher account it is granted.
 | `operate` | Everything `read` can, plus changes made at once and recorded: new display ad units and custom channels, renaming them, archiving or reactivating a unit, turning a channel's data collection on or off, and a platform group's description. It also asks an administrator to approve each change visitors see: a live ad unit's size or type, and asking Google to review a platform site |
 | `administer` | Everything `operate` can, plus asking an administrator to approve each change that cannot be undone or sets up accounts: deleting a custom channel, creating or closing a platform's sub-account, adding or removing its sites, recording a sign-up or log-in event, and moving a site to another revenue group |
 
-Raising an agent to `operate` or `administer` asks for a fresh sign-in (step-up).
+Raising an agent to `operate` or `administer` asks for a fresh sign-in (step-up). An agent holds only its level's tools, and each tool that takes a method's ID says what lies above it. A method above the agent's level, named on a tool it holds, is refused before AdSense is called, naming the method's class, the tool and level that make it, whether an administrator approves each call, and that an administrator raises the level on the Agents tab, asked in words (`request_access` asks for no level). A method Crewlet does not offer is refused as one no level reaches.
 
 ### The roles AdSense gives
 

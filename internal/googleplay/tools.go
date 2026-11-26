@@ -249,7 +249,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			required = append(required, "reason")
 		}
 		out = append(out, growth.Tool{Name: genericTools()[class], Class: class, Operations: ids,
-			Description: genericDescription(class), Parameters: toolschema.Object(props, required...)})
+			Description: genericDescription(class), Covers: genericCovers(class), Parameters: toolschema.Object(props, required...)})
 	}
 	return out
 }
@@ -274,6 +274,23 @@ func genericDescription(class growth.Class) string {
 		return "Ask an administrator to approve a Google Play account, user, access, key, tax or irreversible " +
 			"change, by its method's ID: users and grants, app signing, deletions, purchase fulfilment, " +
 			"subscription cancels and deferrals. Held until they answer, at a fresh step-up."
+	}
+}
+
+// genericCovers is what a generic tool of class above read changes, which the
+// tools below it name (growth.Catalog.Above).
+func genericCovers(class growth.Class) string {
+	switch class {
+	case growth.ClassRead:
+		return ""
+	case growth.ClassOperate:
+		return "draft releases, halted rollouts, tester groups, draft products and offers, and mapping files"
+	case growth.ClassPublic:
+		return "listings, images, releases, prices, offers, product states, Data safety and app recovery"
+	case growth.ClassSpend:
+		return "refunds"
+	default:
+		return "users and grants, app signing, deletions, purchase fulfilment, subscription cancels and deferrals, and tax"
 	}
 }
 

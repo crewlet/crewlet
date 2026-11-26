@@ -90,18 +90,10 @@ func (p *Product) generic(call growth.Call) (googlegrowth.Request, growth.Class,
 		return googlegrowth.Request{}, "", refusal(growth.RefusedNotFound, call.Tool+" is not a Search Console tool.")
 	}
 	id, _ := call.Args["operation"].(string)
-	op, known := p.Catalog().Operation(id)
-	switch {
-	case !known:
-		return googlegrowth.Request{}, "", refusal(growth.RefusedInvalid, fmt.Sprintf("%q is no Search Console "+
-			"method: name one of %s's operations. No vendor was reached.", id, call.Tool))
-	case op.Class == growth.ClassNever:
-		return googlegrowth.Request{}, "", refusal(growth.RefusedForbidden, id+" is not offered: "+op.Reason+
-			" No vendor was reached.")
-	case !slices.Contains(tool.Operations, id):
-		return googlegrowth.Request{}, "", refusal(growth.RefusedInvalid, fmt.Sprintf("%s is %s, so %s cannot "+
-			"make it: call %s. No vendor was reached.", id, op.Class, call.Tool, genericTools()[op.Class]))
+	if !slices.Contains(tool.Operations, id) {
+		return googlegrowth.Request{}, "", p.Catalog().Outside(call.Tool, id, p.Level(call.Handle))
 	}
+	op, _ := p.Catalog().Operation(id)
 	req, err := newRequest(p.sites(call.Handle), op, stringMap(call.Args["path"]), stringMap(call.Args["query"]),
 		objectArg(call.Args["body"]))
 	return req, tool.Class, err
