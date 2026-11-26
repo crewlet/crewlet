@@ -33,7 +33,8 @@ cat "$COPILOT_HOME/copilot-instructions.md" > "$s/instructions"
 // home's settings and MCP file keep their entries beside the run's, the notes
 // extension sits beside the home's, the prompt-mode switches are on and the
 // added instruction and skill directories reach it. A later run with neither
-// notes nor a cap finds the earlier run's extension and instructions gone.
+// notes nor a cap finds an extension of its own, which hands its checkouts,
+// and the earlier run's instructions gone.
 //
 // Mutations, each red: clear any of the home's places again; unset
 // COPILOT_SKILLS_DIRS; drop a prompt-mode pin; write the settings whole.
@@ -145,8 +146,9 @@ func copilotLoads(t *testing.T) {
 
 	files, _ = run(sandbox.RunRequest{Brief: "work"})
 	t.Run("a later run in the same box", func(t *testing.T) {
-		if file := p.CopilotExtension() + "/extension.mjs"; slices.Contains(files, "."+strings.TrimPrefix(file, home)) {
-			t.Errorf("%s from the earlier run was still there", file)
+		// ITS OWN EXTENSION, which hands its checkouts: wired to no notes and no cap.
+		if ext := boxFile(t, box, p.CopilotExtension()+"/extension.mjs"); !strings.Contains(ext, `"url":"","cap":0,`) {
+			t.Errorf("the later run's extension is not its own, wired to no notes and no cap:\n%.300s", ext)
 		}
 		if got := boxFile(t, box, home+"/seen/instructions"); strings.Contains(got, "Work well.") {
 			t.Errorf("the run's instructions still hold the earlier run's: %q", got)

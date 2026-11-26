@@ -1321,7 +1321,7 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 	if settings["experimental"] != true {
 		t.Errorf("settings = %v, want experimental", settings)
 	}
-	if got := read(paths.CopilotInstructions()); !strings.HasPrefix(got, "Work well.\n\n") ||
+	if got := read(paths.CopilotRunInstructions()); !strings.HasPrefix(got, "Work well.\n\n") ||
 		!strings.HasSuffix(got, CopilotSteerInstruction) {
 		t.Errorf("instructions = %q, want the system text then the notes instruction", got)
 	}
@@ -1329,7 +1329,8 @@ func TestCopilotWriteConfigWritesItsHomeAndKeepsTheLogin(t *testing.T) {
 	launchKey := func(ext string) string {
 		t.Helper()
 		m := regexp.MustCompile(`const config = \{"url":"http://engine/mcp/tok/steer","cap":7,"state":"` +
-			regexp.QuoteMeta(paths.CopilotNotesState()) + `","run":"([^"]+)"\}`).FindStringSubmatch(ext)
+			regexp.QuoteMeta(paths.CopilotNotesState()) + `","run":"([^"]+)","helper":"","nested":"","attempt":"` +
+			regexp.QuoteMeta(paths.CopilotAttempt()) + `","kept":"","sessions":"","armed":""\}`).FindStringSubmatch(ext)
 		if m == nil || strings.Contains(ext, copilotExtensionConfig) {
 			t.Fatalf("the extension's settings are not its own:\n%s", firstLine(ext[strings.Index(ext, "const config"):], 200))
 		}
@@ -1383,7 +1384,10 @@ func TestACopilotRunsArtifactsAreItsHomesOwnFiles(t *testing.T) {
 	}
 	files, dirs := (Copilot{}).artifactFiles(paths), (Copilot{}).artifactDirs(paths)
 	if !slices.Equal(files, []string{paths.CopilotExtensionFresh(), paths.CopilotNotesState(),
-		paths.CopilotNotesState() + ".tmp", paths.CopilotGuardSettings()}) ||
+		paths.CopilotNotesState() + ".tmp", paths.CopilotGuardSettings(), paths.CopilotRunInstructions(),
+		paths.CopilotNoteHelper(), paths.CopilotCheckoutLaunch(), paths.CopilotRepoInstructions(),
+		paths.CopilotAttempt(), paths.CopilotStoreCheck(), paths.CopilotExtensionOff(),
+		paths.CopilotArmed()}) ||
 		!slices.Equal(dirs, []string{paths.CopilotExtension()}) {
 		t.Fatalf("artifacts = %v, %v", files, dirs)
 	}
