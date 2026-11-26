@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"cmp"
 	"context"
 	"math/rand/v2"
 	"strings"
@@ -75,13 +76,19 @@ func TestATakeKeepsTheKeptBoundOnlyWhereThePolicyReadsIt(t *testing.T) {
 // answer, and a case goes red.
 func TestAKeptBoundRecordIsRefusedOnceAReaderFallsBelow(t *testing.T) {
 	t.Parallel()
-	const below = "node seats-1 says capture stamp version 1, below the 2 a take at the kept bound is asked again at"
+	const (
+		below = "node seats-1 says capture stamp version 1, below the 2 a take at the kept bound is asked again at"
+		log   = "node data-2 reads the executor log to record version 12, below the 13 a capture naming media " +
+			"is stamped at"
+	)
 	for name, tc := range map[string]struct {
-		unread string
-		lands  bool
+		unread, media, says string
+		lands               bool
 	}{
-		"a stamp reader below the kept bound": {},
-		"readers unread in their room":        {unread: "the position register could not be read", lands: true},
+		"a stamp reader below the kept bound": {says: "no longer reads a capture kept past 48 MiB"},
+		"a log reader below the media's version": {media: log,
+			says: "no longer reads a capture taken at the kept bound, which keeps its media apart"},
+		"readers unread in their room": {unread: "the position register could not be read", lands: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -96,9 +103,12 @@ func TestAKeptBoundRecordIsRefusedOnceAReaderFallsBelow(t *testing.T) {
 				}
 				keep.mu.Lock()
 				keep.policy.KeptBound, keep.policy.MediaUnread, keep.policy.KeptBelow = false, tc.unread, ""
-				if tc.unread == "" {
+				switch {
+				case tc.media != "":
+					keep.policy.MediaApart, keep.policy.MediaBelow = false, tc.media
+				case tc.unread == "":
 					keep.policy.KeptBelow = below
-				} else {
+				default:
 					keep.policy.MediaApart = false
 				}
 				keep.mu.Unlock()
@@ -108,10 +118,11 @@ func TestAKeptBoundRecordIsRefusedOnceAReaderFallsBelow(t *testing.T) {
 				case tc.lands && (kept == nil || kept.NotKept != "" || len(captured) != 1):
 					t.Errorf("the keep came to %+v after %d records, want it landed on its take's answer", kept,
 						len(captured))
-				case !tc.lands && (kept == nil || !strings.Contains(kept.NotKept, below) || len(captured) != 0 ||
-					stamp == nil || stamp.Loss != executorkeep.LossKeepFailed):
+				case !tc.lands && (kept == nil || !strings.Contains(kept.NotKept, cmp.Or(tc.media, below)) ||
+					!strings.Contains(kept.NotKept, tc.says) || len(captured) != 0 || stamp == nil ||
+					stamp.Loss != executorkeep.LossKeepFailed):
 					t.Errorf("the keep came to %+v after %d records, stamped %+v, want it refused unsent as "+
-						"keep_failed, naming the node below", kept, len(captured), stamp)
+						"keep_failed, naming the node below and saying it %s", kept, len(captured), stamp, tc.says)
 				}
 			})
 		})

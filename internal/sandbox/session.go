@@ -2082,6 +2082,8 @@ func captureStamp(row PendingRun, launch string, place int64, final, interrupted
 		RunBegan: taken.Archive.RunStart.Began, RunAfter: taken.Archive.RunStart.After,
 		RunUnshadowed: taken.Archive.Unshadowed, Trimmed: taken.Archive.Trim.Trimmed(), Home: box.Home(),
 		Workspace: path.Join(box.Home(), WorkspaceSubdir), SeatBudget: policy.SeatBudget,
+		// AT RESERVATION, before the archive's size is known: the take's
+		// budgets and its MaxBytes are its bound's from its start.
 		KeptBound: policy.kept(),
 	}
 }
@@ -3598,12 +3600,15 @@ func (c *Coordinator) readersBelow(ctx context.Context, run PendingRun, stamp Se
 			"version below the one a capture naming media needs")
 		return below + ", so it no longer reads a capture naming media, and the capture, its media kept " +
 			"apart, was not recorded; the next take keeps them inline"
-	case stamp.KeptBound && !policy.kept():
-		below := cmp.Or(policy.KeptBelow, policy.MediaBelow, "a node that settles its runs says a version "+
-			"below the one a capture at the kept bound needs")
-		return below + fmt.Sprintf(", so it no longer reads a capture kept past %d MiB, and the capture was "+
-			"not recorded; the next take keeps the %d MiB bound", executorkeep.SessionMaxBytes>>20,
+	case stamp.KeptBound && policy.KeptBelow != "":
+		return policy.KeptBelow + fmt.Sprintf(", so it no longer reads a capture kept past %d MiB, and the "+
+			"capture was not recorded; the next take keeps the %d MiB bound", executorkeep.SessionMaxBytes>>20,
 			executorkeep.SessionMaxBytes>>20)
+	case stamp.KeptBound && !policy.kept():
+		below := cmp.Or(policy.MediaBelow, "a node that applies the executor log or settles its runs says a "+
+			"version below the one a capture at the kept bound needs")
+		return below + ", so it no longer reads a capture taken at the kept bound, which keeps its media " +
+			"apart, and the capture was not recorded; the next take keeps its media inline"
 	default:
 		return ""
 	}
