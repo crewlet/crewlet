@@ -54,8 +54,8 @@ func (Hermes) storeRequests(ctx context.Context, box sandbox.Sandbox, paths Path
 		return 0, false, fmt.Errorf("executor: reading where the run began in its Hermes session: %w", err)
 	}
 	session, from, ok := strings.Cut(strings.TrimSpace(string(raw)), " ")
-	after, atoiErr := strconv.ParseInt(from, 10, 64)
-	if !ok || atoiErr != nil || after < 0 || !sandbox.ValidSessionID(session) {
+	after := lineCount(from)
+	if !ok || after < 0 || !sandbox.ValidSessionID(session) {
 		return 0, false, nil
 	}
 	q := shellword.Quote
