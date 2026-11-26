@@ -1404,19 +1404,17 @@ func (ClaudeCode) Parse(result []byte) sandbox.Result {
 // rest ([failureDetail]).
 const unparsedShownBytes = sandbox.MaxFailureBytes / 2
 
-// unparsedFailure is the failure of output that is no result: the output whole
-// within [unparsedShownBytes], since the useful part (the error after the banner
-// and the warnings) is at its END; past it, that end as a failure's tail shows
-// the error stream's ([Runner.readFailureTail]): the end of the whole output's
+// unparsedFailure is the failure of output that is no result, redacted on its
+// own, never only inside the failure it joins: the output whole within
+// [unparsedShownBytes], since the useful part (the error after the banner and
+// the warnings) is at its END; past it, that end as a failure's tail shows the
+// error stream's ([Runner.readFailureTail]): the end of the whole output's
 // redaction in whole lines, and the output's size; none of it where the
 // redaction stream refuses it. Never more: a failure's head is never cut
 // ([failureDetail]), so a whole output past the bound would ride the failure
 // at up to [sandbox.MaxFileBytes].
 func unparsedFailure(text []byte) string {
 	const opening = "the harness's output could not be parsed"
-	if len(text) <= unparsedShownBytes {
-		return opening + ":\n" + string(text)
-	}
 	size := humanSize(int64(len(text)))
 	end := &endRing{keep: unparsedShownBytes + 1}
 	s := redact.NewStream(end)
@@ -1424,8 +1422,11 @@ func unparsedFailure(text []byte) string {
 	if err == nil {
 		err = s.Close()
 	}
-	if err != nil {
+	switch {
+	case err != nil:
 		return fmt.Sprintf("%s: it is %s, and %s", opening, size, redactionRefused)
+	case len(text) <= unparsedShownBytes && end.dropped() == 0:
+		return opening + ":\n" + end.String()
 	}
 	shown, _ := sandbox.KeepEnd(end.String(), unparsedShownBytes)
 	return opening + " (" + size + "; its end shown):\n" + shown

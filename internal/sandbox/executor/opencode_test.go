@@ -58,28 +58,30 @@ func TestATranscriptLineHonoursItsOwnBound(t *testing.T) {
 	}
 }
 
-// UNPARSEABLE OUTPUT IS ITS FAILURE'S DETAIL, AT MOST ITS END: whole within
-// [unparsedShownBytes], since its actual error comes at the END, after the
-// banner; past it, the end of the whole output's redaction in whole lines and
-// the output's size, never the whole, which would ride the failure uncut
-// ([failureDetail]); and a line longer than the end keeps its own end, marked.
+// UNPARSEABLE OUTPUT IS ITS FAILURE'S DETAIL, AT MOST ITS END, REDACTED ON ITS
+// OWN: whole within [unparsedShownBytes], since its actual error comes at the
+// END, after the banner; past it, the end of the whole output's redaction in
+// whole lines and the output's size, never the whole, which would ride the
+// failure uncut ([failureDetail]); and a line longer than the end keeps its
+// own end, marked.
 //
 // Mutations, each red: quote the whole output past the bound; keep its start
-// rather than its end; leave the end unredacted; leave the size unsaid; redact
-// only a window of the end, which shows nothing of one long line.
+// rather than its end; leave the end, or a short output, unredacted; leave the
+// size unsaid; redact only a window of the end, which shows nothing of one
+// long line.
 func TestUnparseableOutputIsItsFailuresDetailAtMostItsEnd(t *testing.T) {
 	t.Parallel()
 	const opening = "the harness's output could not be parsed"
-	short := strings.Repeat("banner\n", 1000) + "Error: token expired"
-	if got := (ClaudeCode{}).Parse([]byte(short)).Error; got != opening+":\n"+short {
-		t.Errorf("output within the bound reads %.80q..., want it whole", got)
-	}
-
 	var key string
 	for _, s := range redacttest.Shapes() {
 		if s.Name == "anthropic-key" {
 			key = s.Sample
 		}
+	}
+	short := strings.Repeat("banner\n", 1000) + "the key was " + key + "\nError: token expired"
+	if got, want := (ClaudeCode{}).Parse([]byte(short)).Error, opening+":\n"+redact.Secrets(short); got != want ||
+		strings.Contains(got, key) {
+		t.Errorf("output within the bound reads …%q, want it whole, redacted on its own", got[max(0, len(got)-80):])
 	}
 	long := strings.Repeat("banner\n", 2*unparsedShownBytes/len("banner\n")) + "the key was " + key +
 		"\nError: token expired"
