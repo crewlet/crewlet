@@ -333,51 +333,80 @@ func TestAReadStandingByKeepsTheSessionWhereTheReadHoldingThePlaceStopped(t *tes
 // read's scrub refuses its archive it keeps its own session in the next place.
 //
 // Mutation: stand down where the store refuses the reservation, as a read
-// once did, and nothing is kept.
+// once did, and nothing is kept; wait at the standby's own bound, and a case
+// whose bounds differ goes red.
 func TestAReadWhoseReservationAnotherReadBeatStandsByForItsCapture(t *testing.T) {
 	t.Parallel()
-	inBubble(t, func(t *testing.T) {
-		rig, writes, keep := keepingRig(t)
-		run := ownMemory(t, rig, rig.launchKept(t, "t1"))
-		taking, proceed := make(chan struct{}), make(chan struct{})
-		second := make(chan *spooledCapture, 1)
-		go func() {
-			spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
-				takenAs{FakeRunner: rig.runner, body: bytes.NewReader(standbyArchive), taking: taking, proceed: proceed},
-				readCapture(BoxReadCollect, Result{}, true))
-			second <- spooled
-		}()
-		select {
-		case <-taking:
-		case got := <-second:
-			t.Fatalf("the collection's read ended before its take: %+v", got)
-		}
-		// THE COLLECTION'S READ HAS READ THE ROW, which held no capture: now the
-		// stop's read reserves the place, and holds in its spool.
-		held := newHeldArchive(placeHolderArchive)
-		placed := holdingPlace(t, rig, run, held)
-		rig.now = rig.now.Add(time.Second)
-		close(proceed)
-		standby := <-second
-		if standby == nil || !standby.standingBy() || standby.stamp.CaptureSeq != 1 {
-			t.Fatalf("the read whose reservation the stop's beat spooled %+v, want it standing by at the stop's "+
-				"place", standby)
-		}
-		// AT THE STOP'S CAPTURE'S OWN BOUND, off the row read again: the text
-		// bound's wait, as a version-1 reader's turn end holds it.
-		if standby.stoodBy != atTextBound {
-			t.Errorf("the standby waits for the stop's capture at %+v, want the text bound it was taken at",
-				standby.stoodBy)
-		}
-		held.end <- errScrubRefused
-		if spooled := <-placed; spooled != nil {
-			t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
-		}
-		if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
-			t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
-		}
-		keptByTheStandby(t, rig, writes, keep)
-	})
+	for name, tc := range standbyBounds {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, writes, keep := keepingRig(t)
+				takingAt(keep, tc.own)
+				run := ownMemory(t, rig, rig.launchKept(t, "t1"))
+				taking, proceed := make(chan struct{}), make(chan struct{})
+				second := make(chan *spooledCapture, 1)
+				go func() {
+					spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
+						takenAs{FakeRunner: rig.runner, body: bytes.NewReader(standbyArchive), taking: taking,
+							proceed: proceed},
+						readCapture(BoxReadCollect, Result{}, true))
+					second <- spooled
+				}()
+				select {
+				case <-taking:
+				case got := <-second:
+					t.Fatalf("the collection's read ended before its take: %+v", got)
+				}
+				// THE COLLECTION'S READ HAS READ THE ROW, which held no capture: now
+				// the stop's read reserves the place at its own bound, and holds in
+				// its spool.
+				takingAt(keep, tc.stood)
+				held := newHeldArchive(placeHolderArchive)
+				placed := holdingPlace(t, rig, run, held)
+				takingAt(keep, tc.own)
+				rig.now = rig.now.Add(time.Second)
+				close(proceed)
+				standby := <-second
+				if standby == nil || !standby.standingBy() || standby.stamp.CaptureSeq != 1 {
+					t.Fatalf("the read whose reservation the stop's beat spooled %+v, want it standing by at "+
+						"the stop's place", standby)
+				}
+				// AT THE STOP'S CAPTURE'S OWN BOUND, off the row read again, never
+				// the standby's own: a version-1 reader's turn end holds a text
+				// bound's wait.
+				if standby.stoodBy != tc.stood {
+					t.Errorf("the standby waits for the stop's capture at %v, want the bound it was taken at, %v",
+						standby.stoodBy, tc.stood)
+				}
+				held.end <- errScrubRefused
+				if spooled := <-placed; spooled != nil {
+					t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
+				}
+				if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
+					t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
+				}
+				keptByTheStandby(t, rig, writes, keep)
+			})
+		})
+	}
+}
+
+// standbyBounds are the bounds a read standing by and the capture it stands by
+// for are each taken at: the same, and each way apart, so a wait sized off the
+// standby's own bound rather than that capture's shows ([Coordinator.besideAnother]).
+var standbyBounds = map[string]struct{ own, stood captureBound }{
+	"both at the text bound":                        {atTextBound, atTextBound},
+	"a kept-bound read beside a text-bound capture": {atKeptBound, atTextBound},
+	"a text-bound read beside a kept-bound capture": {atTextBound, atKeptBound},
+}
+
+// takingAt has keep's policy take at bound from here on.
+func takingAt(keep *sessionKeep, bound captureBound) {
+	keep.mu.Lock()
+	defer keep.mu.Unlock()
+	keep.policy.KeptBound = bound == atKeptBound
+	keep.policy.MediaApart = keep.policy.MediaApart || bound == atKeptBound
 }
 
 // askedTakeOver is a run store that counts the asks to take the place after a
@@ -849,53 +878,63 @@ func (s *failsReservations) StampCapture(ctx context.Context, turnID string, sta
 // next place.
 //
 // Mutation: walk away from the place another read holds once the reservation
-// went unanswered, as such a read once did, and nothing keeps the session.
+// went unanswered, as such a read once did, and nothing keeps the session;
+// wait at the standby's own bound, and a case whose bounds differ goes red.
 func TestAReadWhoseReservationWentUnansweredBesideAnotherStandsByForIt(t *testing.T) {
 	t.Parallel()
-	inBubble(t, func(t *testing.T) {
-		rig, writes, keep := keepingRig(t)
-		run := ownMemory(t, rig, rig.launchKept(t, "t1"))
-		store := &failsReservations{PendingStore: rig.coordinator.pending}
-		rig.coordinator.pending = store
-		taking, proceed := make(chan struct{}), make(chan struct{})
-		second := make(chan *spooledCapture, 1)
-		go func() {
-			spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
-				takenAs{FakeRunner: rig.runner, body: bytes.NewReader(standbyArchive), taking: taking, proceed: proceed},
-				readCapture(BoxReadCollect, Result{}, true))
-			second <- spooled
-		}()
-		select {
-		case <-taking:
-		case got := <-second:
-			t.Fatalf("the collection's read ended before its take: %+v", got)
-		}
-		// THE COLLECTION'S READ HAS READ THE ROW, which held no capture: now the
-		// stop's read reserves the place and holds in its spool, and the store
-		// answers no reservation after it.
-		held := newHeldArchive(placeHolderArchive)
-		placed := holdingPlace(t, rig, run, held)
-		store.armed.Store(true)
-		rig.now = rig.now.Add(time.Second)
-		close(proceed)
-		standby := <-second
-		if standby == nil || !standby.standingBy() || standby.stamp.CaptureSeq != 1 {
-			t.Fatalf("the read whose reservation went unanswered spooled %+v, want it standing by for the stop's",
-				standby)
-		}
-		if standby.stoodBy != atTextBound {
-			t.Errorf("the standby waits for the stop's capture at %+v, want the text bound it was taken at",
-				standby.stoodBy)
-		}
-		held.end <- errScrubRefused
-		if spooled := <-placed; spooled != nil {
-			t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
-		}
-		if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
-			t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
-		}
-		keptByTheStandby(t, rig, writes, keep)
-	})
+	for name, tc := range standbyBounds {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, writes, keep := keepingRig(t)
+				takingAt(keep, tc.own)
+				run := ownMemory(t, rig, rig.launchKept(t, "t1"))
+				store := &failsReservations{PendingStore: rig.coordinator.pending}
+				rig.coordinator.pending = store
+				taking, proceed := make(chan struct{}), make(chan struct{})
+				second := make(chan *spooledCapture, 1)
+				go func() {
+					spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
+						takenAs{FakeRunner: rig.runner, body: bytes.NewReader(standbyArchive), taking: taking,
+							proceed: proceed},
+						readCapture(BoxReadCollect, Result{}, true))
+					second <- spooled
+				}()
+				select {
+				case <-taking:
+				case got := <-second:
+					t.Fatalf("the collection's read ended before its take: %+v", got)
+				}
+				// THE COLLECTION'S READ HAS READ THE ROW, which held no capture: now
+				// the stop's read reserves the place at its own bound and holds in
+				// its spool, and the store answers no reservation after it.
+				takingAt(keep, tc.stood)
+				held := newHeldArchive(placeHolderArchive)
+				placed := holdingPlace(t, rig, run, held)
+				takingAt(keep, tc.own)
+				store.armed.Store(true)
+				rig.now = rig.now.Add(time.Second)
+				close(proceed)
+				standby := <-second
+				if standby == nil || !standby.standingBy() || standby.stamp.CaptureSeq != 1 {
+					t.Fatalf("the read whose reservation went unanswered spooled %+v, want it standing by for "+
+						"the stop's", standby)
+				}
+				if standby.stoodBy != tc.stood {
+					t.Errorf("the standby waits for the stop's capture at %v, want the bound it was taken at, %v",
+						standby.stoodBy, tc.stood)
+				}
+				held.end <- errScrubRefused
+				if spooled := <-placed; spooled != nil {
+					t.Fatalf("a take whose scrub refused its archive spooled %+v", spooled)
+				}
+				if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
+					t.Fatalf("the standby's keep came to %+v, want the session kept", kept)
+				}
+				keptByTheStandby(t, rig, writes, keep)
+			})
+		})
+	}
 }
 
 // lostStandBy is a run store that makes every standby it is asked for and
