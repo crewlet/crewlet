@@ -279,6 +279,15 @@ type SessionPolicy struct {
 // its media apart.
 func (p SessionPolicy) kept() bool { return p.KeptBound && p.MediaApart }
 
+// Bound is take held to p's bound ([takeBound]): the archive it admits of its
+// box, whether it keeps its media apart, and the pace it keeps them to. Every
+// take and save is asked through it.
+func (p SessionPolicy) Bound(take SessionTake) SessionTake {
+	limit := boundOf(p.kept())
+	take.MaxBytes, take.MediaApart, take.KeepPaceMiB = limit.archive, p.MediaApart, limit.paceMiB
+	return take
+}
+
 // CaptureStampVersion is the shape of a capture's stamp ([SessionCapture]) this
 // build asks again whole and reads when it settles one
 // ([Coordinator.settleCapture]): 2, its media included ([MediaStampVersion])
@@ -1924,9 +1933,8 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, refuse(calls, loss, why)
 	}
 	limit := boundOf(policy.kept())
-	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
-		MaxBytes: limit.archive, Scope: current.AgentID, Session: current.Launch.Minted,
-		Spool: room.scrubbing(dir), MediaApart: policy.MediaApart, KeepPaceMiB: limit.paceMiB})
+	taken, err := taker.TakeSession(ctx, box, policy.Bound(SessionTake{Pack: at.pack, Scrub: scrub,
+		Scope: current.AgentID, Session: current.Launch.Minted, Spool: room.scrubbing(dir)}))
 	give()
 	if err != nil {
 		loss, why := takeRefusal(ctx, err)

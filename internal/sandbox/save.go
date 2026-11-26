@@ -644,10 +644,8 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 		out.unplaced = "spool"
 		return end(saveFailed, err.Error())
 	}
-	bound := boundOf(in.policy.kept())
-	taken, err := in.saver.TakeSession(take, in.box, SessionTake{Save: in.archive.Path, Scrub: scrub,
-		MaxBytes: bound.archive, Scope: row.AgentID, Session: row.Launch.Minted,
-		Spool: in.room.scrubbing(dir), MediaApart: in.policy.MediaApart, KeepPaceMiB: bound.paceMiB})
+	taken, err := in.saver.TakeSession(take, in.box, in.policy.Bound(SessionTake{Save: in.archive.Path,
+		Scrub: scrub, Scope: row.AgentID, Session: row.Launch.Minted, Spool: in.room.scrubbing(dir)}))
 	switch {
 	case err != nil:
 		out.unplaced = "take"
