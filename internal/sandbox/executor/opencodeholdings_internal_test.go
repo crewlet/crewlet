@@ -753,7 +753,7 @@ func ohAllocated(t *testing.T, doc func() io.Reader, calls ...sandbox.LoggedCall
 		h   sandbox.SessionHoldings
 		err error
 	)
-	_, allocated := allocationsOf(func() {
+	_, allocated := allocationsOf(t, func() {
 		h, err = readOpenCodeHoldings(t.Context(), doc(), ohSession, ohBegan, ask)
 	})
 	if err != nil || !h.Read {

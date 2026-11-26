@@ -1123,7 +1123,7 @@ func TestQwenReadingHoldsNoLine(t *testing.T) {
 			h   sandbox.SessionHoldings
 			err error
 		)
-		_, allocated := allocationsOf(func() {
+		_, allocated := allocationsOf(t, func() {
 			h, err = readQwenHoldings(t.Context(), bytes.NewReader(archive), qhSession, ohBegan, ask)
 		})
 		if got := ohHeld(t, h, err, tc.call); !slices.Equal(got, []int{1}) {
