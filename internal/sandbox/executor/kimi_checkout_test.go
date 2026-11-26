@@ -292,14 +292,15 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAKimiRun(t *testing.T) {
 }
 
 // WHAT A KIMI RUN'S FIRING LEFT OUT, AND A HAND A HOOK KEPT, REACH ITS ERROR
-// STREAM ONCE, AFTER KIMI: a clone whose skill the home's own skills hide is
-// steered with the line, which the script prints once Kimi has stopped; a hand
-// a UserPromptSubmit hook blocks never ends the run (it carries no note,
+// STREAM ONCE, AFTER KIMI: a clone's skill whose name a person's skill in
+// ~/.agents/skills takes, case aside, is not copied, as the copy would hide
+// it, but steered with the line, which the script prints once Kimi stops; a
+// hand a UserPromptSubmit hook blocks never ends the run (it carries no note,
 // brief or tool of the run's): the run succeeds, the skip log saying once
 // which hook kept it.
 //
-// Mutation: drop the print, refuse a kept hand, take the kept hand's turn for
-// the run's outcome, or say it per hand: a row goes red.
+// Mutation: drop the print or Kimi's listing rule, refuse a kept hand, take
+// its turn for the run's outcome, or say it per hand: a row goes red.
 func TestAKimiRunsLeftOutLinesAndKeptHandsReachItsErrorStreamOnce(t *testing.T) {
 	t.Parallel()
 	for _, keep := range []bool{false, true} {
@@ -308,7 +309,8 @@ func TestAKimiRunsLeftOutLinesAndKeptHandsReachItsErrorStreamOnce(t *testing.T) 
 			runner, box := kimiCheckoutBox(t)
 			p := executor.PathsFor(box)
 			plant(t, box, piCheckout("workspace/repo", map[string]string{"AGENTS.md": "REPO\n"}))
-			plantFile(t, filepath.Join(p.KimiSkills(), "late:fix", "SKILL.md"), "---\nname: \"late:fix\"\ndescription: Mine.\n---\n")
+			mine := filepath.Join(box.Home(), ".agents", "skills", "mine")
+			plantFile(t, filepath.Join(mine, "SKILL.md"), "---\nname: Late:Fix\ndescription: Mine.\n---\n")
 			late := t.TempDir()
 			for rel, body := range piCheckout("late", map[string]string{"AGENTS.md": "LATE\n",
 				".agents/skills/fix/SKILL.md": "---\nname: fix\ndescription: Fixes.\n---\n"}) {
@@ -326,11 +328,17 @@ func TestAKimiRunsLeftOutLinesAndKeptHandsReachItsErrorStreamOnce(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			line := "the skill " + work + "/late/.agents/skills/fix is left out: the home's skills hold late:fix already"
+			line := "the skill " + work + "/late/.agents/skills/fix is left out: the home's " + mine +
+				", which Kimi Code lists as Late:Fix, takes the name late:fix it would list the copy under"
 			var steers []string
 			seenBy(t, box, "steers", &steers)
 			if len(steers) != 1 || !strings.Contains(steers[0], "- "+line) {
 				t.Errorf("the run steered %q, want the line in its one hand", steers)
+			}
+			var lateSkills map[string]string
+			seenBy(t, box, "skills-late", &lateSkills)
+			if _, ok := lateSkills["late:fix/SKILL.md"]; ok {
+				t.Errorf("the copy late:fix was made beside the person's own Late:Fix: %q", lateSkills)
 			}
 			errs := boxFile(t, box, p.Err())
 			if n := strings.Count(errs, line); n != 1 {

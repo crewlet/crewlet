@@ -7,13 +7,21 @@ import "time"
 // agents.md, by exact case, a file of whitespace alone passed over for the
 // next name; whole, since Kimi bounds none (a 200,000-byte file reached the
 // model whole); and the skills a walk of its .kimi-code/skills and
-// .agents/skills reaches, .kimi-code's winning a name. A firing's text is held
-// to [kimiFiringLimit].
-var kimiCheckouts = checkoutSpec{
-	Instructions: []checkoutSlot{{Names: []string{".kimi-code/AGENTS.md"}},
-		{Names: []string{"AGENTS.md", "agents.md"}, SkipBlank: true}},
-	Limit: checkoutUnlimited, FiringLimit: &kimiFiringLimit,
-	SkillDirs: []checkoutSkillDir{{Dir: ".kimi-code/skills", Recursive: true}, {Dir: ".agents/skills", Recursive: true}}}
+// .agents/skills reaches, .kimi-code's winning a name. A copy is left out where
+// a person's skill in a user root Kimi lists, the run's skills or
+// ~/.agents/skills, takes its name by Kimi's rule (the helper's "kimi"), so
+// the copy never hides it. A firing's text is held to [kimiFiringLimit].
+func kimiCheckouts(paths Paths) checkoutSpec {
+	agents := paths.Home + "/.agents/skills"
+	return checkoutSpec{
+		Instructions: []checkoutSlot{{Names: []string{".kimi-code/AGENTS.md"}},
+			{Names: []string{"AGENTS.md", "agents.md"}, SkipBlank: true}},
+		Limit: checkoutUnlimited, FiringLimit: &kimiFiringLimit,
+		SkillDirs: []checkoutSkillDir{{Dir: ".kimi-code/skills", Recursive: true}, {Dir: ".agents/skills", Recursive: true}},
+		ListedAs:  "kimi", HomeSkills: []checkoutSkillDir{
+			{Dir: agents, Recursive: true, checkoutWalk: checkoutWalk{Every: true, Depth: 8}},
+			{Dir: agents, checkoutWalk: checkoutWalk{Commands: true}}}}
+}
 
 // kimiFiringLimit bounds the files one kimi-nested firing hands, each counted
 // with its frame. The driver steers the firing's text in one request to KAP,
