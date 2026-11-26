@@ -187,9 +187,13 @@ type skillDir struct {
 
 // checkoutSkillDirs is the skill directories under root's skill directories,
 // in order, each skill directory read within the entry bound, a recursive one
-// walked ([skillWalk]), a commands one read for its files ([commandSkills]);
-// one past a bound is left out whole, over saying why.
+// walked ([skillWalk]), a commands one read for its files ([commandSkills]),
+// a gated checkout's those its gate names ([gatedSkillDirs]); one past a
+// bound is left out whole, over saying why.
 func checkoutSkillDirs(root string, spec checkoutSpec) (dirs []skillDir, over []string) {
+	if spec.gate != nil {
+		return gatedSkillDirs(spec.gate.Checkouts[root]), nil
+	}
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, nil

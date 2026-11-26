@@ -134,7 +134,7 @@
 //     file's body without frontmatter or HTML comments, none if empty, and
 //     `paths` read as Qwen Code reads them (qwenrule.go). `grok` (1.0.92):
 //     files directly in dir, dot files too, s in any case, a file link
-//     followed, none scoped.
+//     inside followed, none scoped.
 //     A tree past 8 directories deep, 1,024 entries or 32 MiB is left out
 //     whole, said: Copilot walks 9 levels and Claude Code 10 at least
 //     (measured), so a deeper tree is the gap. Names as {"names": [...],
@@ -303,20 +303,16 @@
 //
 // # Its builds
 //
-// The engine embeds a gzipped build per box arch
-// (internal/sandbox/executor/notehelper/*.gz, notehelper_embed.go): committed
-// generated files, as static/dashboard is, rebuilt by `make notehelper` at
-// go.mod's toolchain with -trimpath, no VCS stamp and an empty build id, and
-// gzipped by ./gzipbuild, so a rebuild is byte for byte the same; `make
-// notehelper-check` and ci.yml's build job rebuild and diff them. It links the
-// standard library and two modules beyond it, each kept because dropping it
-// means hand-rolling a protocol, which #1818's ruling forbids:
-// golang.org/x/net/websocket (RFC 6455) and github.com/klauspost/compress/zstd
-// (RFC 8878, which std does not decode); and gopkg.in/yaml.v3, the engine's own
-// YAML module, as Claude Code reads a rule's frontmatter as YAML. A bump of any
-// changes the builds (their module info), and
-// .github/workflows/dependabot-notehelper.yml rebuilds them on Dependabot's
-// pull request.
+// Built per box arch wherever the engine is built, never committed: the
+// release archives carry the builds beside the binary, the image under
+// /usr/local/share/crewlet, and the engine reads the one for a box's arch at
+// each launch (./helperbuild has the recipe, internal/sandbox/executor where
+// it looks). It links the standard library and two modules beyond it, each
+// kept because dropping it means hand-rolling a protocol, which #1818's
+// ruling forbids: golang.org/x/net/websocket (RFC 6455) and
+// github.com/klauspost/compress/zstd (RFC 8878, which std does not decode);
+// and gopkg.in/yaml.v3, the engine's own YAML module, as Claude Code reads a
+// rule's frontmatter as YAML.
 package main
 
 import (
@@ -330,6 +326,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+
+	"github.com/crewlet/crewlet/internal/notehelper/helpersource"
 )
 
 // The exit statuses (the package doc's "Exit").
@@ -375,6 +373,10 @@ type flags struct {
 	config                string
 	skillLoads, loadsOnly bool
 	slot                  int
+	// hermes-nested's: the characters the tool's result has left; hermes-peek's:
+	// the skip log's line for each checkout a launch left with no firing to come.
+	room int
+	left bool
 	// codex-renew's: the rollout of the session the run continues.
 	rollout string
 	// codex-materialize's: Codex's sessions directory, and the thread whose
@@ -393,6 +395,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	var f flags
 	set := flag.NewFlagSet("notehelper", flag.ContinueOnError)
 	set.SetOutput(stderr)
+	// The source this build was made from, which also keeps the stamp in the
+	// binary for the engine to read (internal/notehelper/helpersource).
+	set.Usage = func() {
+		_, _ = fmt.Fprintf(stderr, "notehelper, built from %s:\n", helpersource.Digest)
+		set.PrintDefaults()
+	}
 	set.StringVar(&f.adapter, "adapter", "", "the harness to hand notes to: codex-app-server")
 	set.StringVar(&f.socket, "socket", "", "the harness's unix socket")
 	set.StringVar(&f.threadFile, "thread-file", "", "the file the run's script writes the harness's thread id to")
