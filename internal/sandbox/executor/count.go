@@ -21,16 +21,29 @@ const countReadBytes = liveBacklog
 // life and the line handling [Runner.Collect] reads with, so its count is the
 // collection's of the same bytes; or, for a harness whose stream shows its
 // requests only once it exits, of its own record of the session
-// ([recordCounted]) or its session store ([storeCounted]).
+// ([recordCounted]), of the largest of its records ([recordsCounted]), or of
+// its session store ([storeCounted]).
 func (r *Runner) Count(sandbox.RunHandle) sandbox.Counter {
 	if sc, ok := r.harness.(storeCounted); ok {
 		return &storeCount{harness: sc, inFlight: r.harness.Events().InFlight()}
 	}
 	if rc, ok := r.harness.(recordCounted); ok {
-		return &recordCount{harness: rc, bound: r.lineBound, readBytes: countReadBytes,
-			inFlight: r.harness.Events().InFlight()}
+		return r.recordCounter(rc)
+	}
+	if rs, ok := r.harness.(recordsCounted); ok {
+		m := &maxCount{}
+		for _, rc := range rs.countedRecords() {
+			m.parts = append(m.parts, r.recordCounter(rc))
+		}
+		return m
 	}
 	return &counter{harness: r.harness, bound: r.lineBound, readBytes: countReadBytes}
+}
+
+// recordCounter is one live count of the job off record rc.
+func (r *Runner) recordCounter(rc recordCounted) *recordCount {
+	return &recordCount{harness: rc, bound: r.lineBound, readBytes: countReadBytes,
+		inFlight: r.harness.Events().InFlight()}
 }
 
 // counter is one live count of one job's stream ([Runner.Count]).

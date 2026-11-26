@@ -335,8 +335,8 @@ func (d *geminiEvents) Ended() bool { return d.result != nil }
 // Requests implements [Decoder]: the requests the run's chat file states, which
 // the script appends after Gemini CLI exits ([geminiUsageEvent]), its main
 // model's alone (measured on 0.70.0: 31 of a run's 41, the 10 others its flash
-// side calls). NOT THE TURN CAP'S COUNT, which the run's telemetry holds, side
-// calls included ([GeminiCLI.liveRecord], [recordCollected]).
+// side calls). THE TURN CAP'S COUNT is the larger of it and the run's
+// telemetry's, which holds the side calls too ([GeminiCLI.countedRecords]).
 func (d *geminiEvents) Requests() int { return d.requests }
 
 // InFlight implements [Decoder]: none, as Gemini CLI's own maxSessionTurns

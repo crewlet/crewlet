@@ -1143,9 +1143,18 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		undecided = streamed.undecided
 	}
 	// A HARNESS WHOSE OWN RECORD SHOWS ITS REQUESTS ([recordCollected]) is held to
-	// its cap by that record, read as its live count reads it.
+	// its cap by that record, read as its live count reads it; one counted off
+	// several ([recordsCounted]) by the largest, its stream's count of the
+	// records it carries among them.
 	if rc, ok := r.harness.(recordCollected); ok {
 		count, err := r.collectedRecord(ctx, box, rc)
+		if err != nil {
+			return sandbox.Result{}, err
+		}
+		requests, undecided = count.Requests, count.Undecided
+	}
+	if rs, ok := r.harness.(recordsCounted); ok {
+		count, err := r.collectedRecords(ctx, box, rs, sandbox.RequestCount{Requests: requests, Undecided: undecided})
 		if err != nil {
 			return sandbox.Result{}, err
 		}

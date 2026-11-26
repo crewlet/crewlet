@@ -407,6 +407,11 @@ func CountingBy(r *Runner, readBytes int64) sandbox.Counter {
 	case *recordCount:
 		c.readBytes = readBytes
 		return c
+	case *maxCount:
+		for _, part := range c.parts {
+			part.readBytes = readBytes
+		}
+		return c
 	}
 	return nil
 }
@@ -414,8 +419,9 @@ func CountingBy(r *Runner, readBytes int64) sandbox.Counter {
 // RecordCounted reports whether h is counted live off its harness's own
 // record of the session rather than its stream.
 func RecordCounted(h Harness) bool {
-	_, ok := h.(recordCounted)
-	return ok
+	_, one := h.(recordCounted)
+	_, several := h.(recordsCounted)
+	return one || several
 }
 
 // CodexRolloutKinds is the rollout lines a Codex run's script appends.
@@ -425,8 +431,12 @@ const CodexRolloutKinds = codexRolloutKinds
 const MuseTraceNeedle = museTraceNeedle
 
 // CollectedRecordCount is what r's collection counts off its harness's own
-// record in box ([recordCollected]); none for a harness counted off its stream.
+// record in box ([recordCollected]), or its records beside a stream that counts
+// none of them ([recordsCounted]); none for a harness counted off its stream.
 func CollectedRecordCount(ctx context.Context, r *Runner, box sandbox.Sandbox) (sandbox.RequestCount, error) {
+	if rs, ok := r.harness.(recordsCounted); ok {
+		return r.collectedRecords(ctx, box, rs, sandbox.RequestCount{})
+	}
 	rc, ok := r.harness.(recordCollected)
 	if !ok {
 		return sandbox.RequestCount{}, nil

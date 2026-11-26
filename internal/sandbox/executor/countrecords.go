@@ -4,13 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// The runners counted live off their harness's own record ([recordCounted]),
-// each by the rule its collection counts the same record by:
+// The runners counted live off their harness's own records ([recordCounted],
+// [recordsCounted]), each by the rule its collection counts the same record by:
 // read off the lines its script appends of it, or off the record itself
 // ([recordCollected]).
 
@@ -117,6 +119,109 @@ func (c *copilotJournalCount) Skipped(line LongLine) {
 func (c *copilotJournalCount) requests() int  { return c.n + c.compactions }
 func (c *copilotJournalCount) undecided() int { return c.unread }
 
+// countedRecords implements [recordsCounted]: the chat file and the
+// telemetry, each a lower bound of the run's requests and neither the whole.
+// The chat file shows each main-model response at once (at most 0.14 s behind
+// it, measured on 0.70.0) and never a side call on the flash model; the
+// telemetry shows the side calls too (41 for 41), but a second at a time, and
+// an exit that skips Gemini CLI's flush (its own turn limit's, exit 53, or an
+// end the engine asks) loses its last unflushed batch (8 of 20 at a cap of
+// 20). So the count is their larger. NOT COUNTED: side calls in that last
+// second before such an exit.
+func (GeminiCLI) countedRecords() []recordCounted {
+	return []recordCounted{geminiChatRecord{}, geminiTelemetryRecord{}}
+}
+
+// geminiChatRecord is a Gemini CLI run's chat file as a record its requests
+// are counted off ([GeminiCLI.countedRecords]): read live, its collection's
+// count being the helper's of the same file, which the script appends to the
+// stream ([geminiEvents.Requests]).
+type geminiChatRecord struct{}
+
+// geminiChatName is a session's chat file name, `session-<time>-<id8>.jsonl`.
+var geminiChatName = regexp.MustCompile(`^session-[0-9A-Za-z.:_-]+\.jsonl$`)
+
+// liveRecord implements [recordCounted]: the chat file the script found for
+// the run's session ([geminiPointer]).
+func (geminiChatRecord) liveRecord(ctx context.Context, box sandbox.Sandbox, paths Paths) (string, int, bool, error) {
+	return recordPlace{root: paths.GeminiChats(), depth: 0, name: geminiChatName}.named(ctx, box, paths)
+}
+
+// recordTally implements [recordCounted]: the helper's own rule
+// (gemini_helper.mjs, usage): the distinct responses with tokens, but those the
+// session held as the run began ([Paths.GeminiUsageBefore]). Where that list
+// was never written the helper counts none, and the script names no record
+// ([geminiPointer]).
+func (geminiChatRecord) recordTally(ctx context.Context, box sandbox.Sandbox, paths Paths) (recordTally, error) {
+	raw, err := box.ReadFile(ctx, paths.GeminiUsageBefore())
+	if err != nil {
+		return nil, fmt.Errorf("executor: reading the responses the session held as the run began: %w", err)
+	}
+	before := map[string]bool{}
+	for _, id := range strings.Split(string(raw), "\n") {
+		before[id] = true
+	}
+	return &geminiChatCount{before: before, ids: map[string]bool{}}, nil
+}
+
+// geminiChatCount is a chat file's count. ONE ID A RESPONSE: the file appends a
+// response's entry again as it completes (measured on 0.70.0: 91 entries for
+// 31 responses). The ids held are the responses', one a request.
+type geminiChatCount struct {
+	before, ids map[string]bool
+	unread      int
+}
+
+func (g *geminiChatCount) Line(line []byte) {
+	var entry struct {
+		Type   string          `json:"type"`
+		ID     string          `json:"id"`
+		Tokens json.RawMessage `json:"tokens"`
+	}
+	if json.Unmarshal(line, &entry) != nil || entry.Type != "gemini" || entry.ID == "" ||
+		!jsTruthy(entry.Tokens) {
+		return
+	}
+	g.add(entry.ID)
+}
+
+// Skipped reads the entry's kind and id at its head, where the file writes
+// them; a line whose head names no kind may be a response the count cannot read.
+func (g *geminiChatCount) Skipped(line LongLine) {
+	switch t := windowField(line.Head, "type", false); {
+	case t == "gemini" && windowField(line.Head, "id", false) != "":
+		g.add(windowField(line.Head, "id", false))
+	case t == "":
+		g.unread++
+	}
+}
+
+func (g *geminiChatCount) add(id string) {
+	if !g.before[id] {
+		g.ids[id] = true
+	}
+}
+
+func (g *geminiChatCount) requests() int  { return len(g.ids) }
+func (g *geminiChatCount) undecided() int { return g.unread }
+
+// jsTruthy reports whether a JSON value reads as true where the helper tests
+// it: present, and neither null, false, a zero nor an empty string.
+func jsTruthy(v json.RawMessage) bool {
+	switch s := strings.TrimSpace(string(v)); s {
+	case "", "null", "false", `""`:
+		return false
+	default:
+		var n float64
+		return json.Unmarshal([]byte(s), &n) != nil || n != 0
+	}
+}
+
+// geminiTelemetryRecord is a Gemini CLI run's own telemetry file as a record
+// its requests are counted off ([GeminiCLI.countedRecords]), live and at its
+// collection alike.
+type geminiTelemetryRecord struct{}
+
 // liveRecord implements [recordCounted]: the run's own telemetry file, at the
 // run's own path, cleared before the run starts ([Paths.GeminiTelemetry]): no
 // pointer to read. IT IS LARGE, about 130 KB a request (measured on 0.70.0:
@@ -128,18 +233,18 @@ func (c *copilotJournalCount) undecided() int { return c.unread }
 // the box goes. IT LAGS, written a second at a time (at most 1.1 s, measured).
 //
 //nolint:unparam // the interface's: the runners whose scripts find their record read a pointer that can fail.
-func (GeminiCLI) liveRecord(_ context.Context, _ sandbox.Sandbox, paths Paths) (string, int, bool, error) {
+func (geminiTelemetryRecord) liveRecord(_ context.Context, _ sandbox.Sandbox, paths Paths) (string, int, bool, error) {
 	return paths.GeminiTelemetry(), 0, true, nil
 }
 
 // recordTally implements [recordCounted].
-func (GeminiCLI) recordTally(context.Context, sandbox.Sandbox, Paths) (recordTally, error) {
+func (geminiTelemetryRecord) recordTally(context.Context, sandbox.Sandbox, Paths) (recordTally, error) {
 	return &geminiTelemetryCount{}, nil
 }
 
 // collectsFromRecord implements [recordCollected]: the stream states no request
 // the side calls make, and the telemetry does.
-func (GeminiCLI) collectsFromRecord() {}
+func (geminiTelemetryRecord) collectsFromRecord() {}
 
 // geminiResponse is the line of the telemetry file, a JSON object printed whole
 // a field a line, that names one model response: each request answered, its

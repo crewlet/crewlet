@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -15,10 +16,11 @@ import (
 // A RUNNER WHOSE STREAM SHOWS ITS REQUESTS ONLY ONCE ITS HARNESS EXITS is
 // counted live off the harness's own record of the session, which shows each
 // request as it is made (measured on each pinned release against a stand-in:
-// Codex's rollout, Gemini CLI's chat file, Copilot's events.jsonl, Muse Code's
-// session.jsonl and Hermes's plugin record, each within about a second of the
+// Codex's rollout, Gemini CLI's chat file and telemetry, Copilot's
+// events.jsonl and Muse Code's session.jsonl, each within about a second of the
 // request), and which its collection counts too, by the same rule
-// ([recordCounted]). Where the script finds the record as the run goes, it
+// ([recordCounted], [recordsCounted]); Hermes's off its session store
+// ([storeCounted]). Where the script finds the record as the run goes, it
 // names it in [Paths.CountRecord], a pointer the count holds to the record's
 // place before it reads a byte ([recordPlace]).
 
@@ -39,6 +41,49 @@ type recordCounted interface {
 	// recordTally is a fresh count of the record's lines, the run's own, in its
 	// collection's unit; ctx and box read what the count needs beside them.
 	recordTally(ctx context.Context, box sandbox.Sandbox, paths Paths) (recordTally, error)
+}
+
+// recordsCounted is a harness whose run's requests are counted off more than
+// one record of its own, each showing some of them and none all: its count is
+// their largest, live ([maxCount]) and at its collection alike, which never
+// counts more than the run made.
+type recordsCounted interface {
+	countedRecords() []recordCounted
+}
+
+// maxCount is one live count of a job off several records ([recordsCounted]):
+// the most requests any of them shows, and, where a record holds lines it
+// cannot read, as many undecided as take the reading that may show the most
+// to its most ([reachOf]). Each part never goes down, so neither does it.
+type maxCount struct{ parts []*recordCount }
+
+// Read implements [sandbox.Counter]: every part is read, and a part that
+// failed fails the read, the others' count still standing.
+func (m *maxCount) Read(ctx context.Context, box sandbox.Sandbox) (sandbox.RequestCount, error) {
+	counts := make([]sandbox.RequestCount, 0, len(m.parts))
+	var errs []error
+	for _, p := range m.parts {
+		c, err := p.Read(ctx, box)
+		counts = append(counts, c)
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return reachOf(counts...), errors.Join(errs...)
+}
+
+// reachOf is counts read as one: the most requests any shows, and undecided
+// lines enough that requests and undecided together are the most any shows.
+func reachOf(counts ...sandbox.RequestCount) sandbox.RequestCount {
+	var out sandbox.RequestCount
+	reach := 0
+	for _, c := range counts {
+		out.Requests = max(out.Requests, c.Requests)
+		out.InFlight = max(out.InFlight, c.InFlight)
+		reach = max(reach, c.Requests+c.Undecided)
+	}
+	out.Undecided = reach - out.Requests
+	return out
 }
 
 // recordTally counts the requests the lines of a run's own record show, a line
@@ -201,6 +246,27 @@ func (r *Runner) collectedRecord(ctx context.Context, box sandbox.Sandbox, rc re
 
 	c := &recordCount{harness: rc, bound: r.lineBound, readBytes: math.MaxInt64, inFlight: r.harness.Events().InFlight()}
 	return c.read(ctx, box, true)
+}
+
+// collectedRecords is the requests a harness counted off several records shows
+// once its job is over ([recordsCounted]): the largest of streamed, its
+// stream's count of the records whose lines its script appends there, and
+// each record its collection reads itself ([recordCollected]), as [maxCount]
+// reads them live.
+func (r *Runner) collectedRecords(ctx context.Context, box sandbox.Sandbox, rs recordsCounted,
+	streamed sandbox.RequestCount) (sandbox.RequestCount, error) {
+
+	counts := []sandbox.RequestCount{streamed}
+	for _, rc := range rs.countedRecords() {
+		if collected, ok := rc.(recordCollected); ok {
+			c, err := r.collectedRecord(ctx, box, collected)
+			if err != nil {
+				return sandbox.RequestCount{}, err
+			}
+			counts = append(counts, c)
+		}
+	}
+	return reachOf(counts...), nil
 }
 
 // restart begins the reading at the record's first byte, with a fresh count.

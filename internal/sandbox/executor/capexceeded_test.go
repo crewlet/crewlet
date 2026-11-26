@@ -144,7 +144,7 @@ func collectCapped(t *testing.T, h executor.Harness, stream string, turnCap int)
 		if m := regexp.MustCompile(`"requests":([0-9]+)`).FindStringSubmatch(stream); m != nil {
 			made, _ = strconv.Atoi(m[1])
 		}
-		record, _ := fixtureRecord(recordFixtures[executor.GeminiCLIName], made, 0)
+		record, _ := fixtureRecord(recordFixtures[geminiTelemetryRow], made, 0)
 		b.Put(p.GeminiTelemetry(), record)
 	}
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{TurnCap: turnCap}, queue.NewAnswerBudget(nil))

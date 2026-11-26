@@ -205,11 +205,30 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 			` "$s" > `+before+`.part 2> /dev/null && mv -f `+before+`.part `+before+`; else : > `+before+`; fi`,
 		`if [ "$k" = yes ]; then set -- --resume "$s"; else set -- --session-id "$s"; fi`,
 		geminiIncludeRoots(paths),
+		// ITS CHAT FILE, named for the live count once Gemini CLI writes it
+		// ([geminiPointer]).
+		geminiPointer(paths),
 		run,
+		`kill "$gwp" 2> /dev/null`,
 		"node "+q(paths.GeminiHelper())+" usage "+q(paths.GeminiChats())+` "$s" `+before,
 		geminiLocate(paths),
 		strings.TrimSuffix(chatCapture(paths, paths.GeminiSlugDir(), GeminiCLI{}), "\n"),
 		"exit $code"), "\n")
+}
+
+// geminiPointer starts, in the background as gwp, a watcher that names in
+// [Paths.CountRecord] the chat file of the run's session once Gemini CLI writes
+// it, as the helper finds it (gemini_helper.mjs, sessionFile): a file of the
+// chats directory named for the session's first eight characters whose first
+// line names the session ([geminiChatRecord]). None where the list of the
+// responses the session held was never written: the helper counts none then.
+func geminiPointer(paths Paths) string {
+	q := shellword.Quote
+	pointer := q(paths.CountRecord())
+	return `g8=$(printf '%.8s' "$s"); ( [ -f ` + q(paths.GeminiUsageBefore()) + ` ] || exit 0; while kill -0 $$ 2> /dev/null; do for f in ` + q(paths.GeminiChats()) +
+		`/session-*-"$g8".jsonl; do if [ -f "$f" ] && [ ! -L "$f" ] && head -n 1 "$f" | grep -qF "$s"; then ` +
+		`printf '%s\n0\n' "$f" > ` + pointer + `.next && mv -f ` + pointer + `.next ` + pointer + `; exit 0; fi; done; ` +
+		`sleep 0.1; done ) & gwp=$!`
 }
 
 // geminiBridgedPrefix opens the name Gemini CLI gives each tool of the
@@ -307,7 +326,7 @@ func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, paths Paths) []
 // geminiTelemetryPins turn on Gemini CLI's own telemetry, into the run's file
 // alone ([Paths.GeminiTelemetry]), for a CAPPED run alone: the record its turn
 // cap is counted off, which nothing else reads, so an uncapped run writes none
-// and the file is bounded by the cap ([GeminiCLI.liveRecord]). PINNED IN THE
+// and the file is bounded by the cap ([geminiTelemetryRecord]). PINNED IN THE
 // ENVIRONMENT, which outranks every settings file (measured on 0.70.0): a file
 // switches the OTLP export off, and the local target keeps a "gcp" one from
 // exporting ahead of it (0 connections in a run whose home's settings named
