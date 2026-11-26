@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -237,63 +236,59 @@ func TestAClaudeSummaryPastAControlCommandsOutputIsRead(t *testing.T) {
 	}
 }
 
-// What a Claude Code box read asking the newest summary may allocate beyond
-// its walk alone ([TestAClaudeSummaryAddsOnlyItsWordsToTheWalk]): six times
-// the summary's words, their buffer grown a piece at a time (Go's append past
-// 256 bytes: at most five times what it ends at) and the string the answer
-// holds one more; and its reading's own state, at 4 KiB. A second reader of
-// the summary's line, its buffers alone 64 KiB, is past both.
+// What a Claude Code box read's summary may allocate in its own reading
+// ([TestAClaudeSummaryAddsOnlyItsWordsToTheWalk]): six times the summary's
+// words, their buffer grown a piece at a time (Go's append past 256 bytes: at
+// most five times what it ends at) and the string the answer holds one more;
+// and its reading's own state, at 4 KiB. A second reader of the summary's
+// line, its buffers alone 64 KiB, is past both.
 const (
 	claudeSummaryWordsAllocates = 6
 	claudeSummaryStateAllocates = 4 << 10
 )
 
-// A CLAUDE CODE SUMMARY ADDS ONLY ITS WORDS TO THE WALK: a box read asking
-// the newest summary beside the count allocates at most what the read asking
-// the count alone does, the summary's words [claudeSummaryWordsAllocates]
-// times over, and [claudeSummaryStateAllocates]: no second reader reads their
-// line again. Not parallel: it reads the process's allocation count, the
-// fewest of five rounds of [allocationsOf] taken in turn, as the walk's json
-// v2 decoder pools, which under -race let a quarter of what is put back go,
-// swing a round's fewest of three by tens of kilobytes.
+// claudeSummaryFrames are the functions a box read's summary is read in: its
+// reading's ([claudeSummaryReading]), its words' ([summaryText]), the answer's
+// and the claim's, made and kept ([newSummaryClaim]).
+var claudeSummaryFrames = []string{methodsOf((*claudeSummaryReading).line), methodsOf((*summaryText).Write),
+	methodsOf((*summaryRead).take), methodsOf((*summaryClaim).track), functionOf(newSummaryClaim),
+	functionOf(handOver)}
+
+// A CLAUDE CODE SUMMARY ADDS ONLY ITS WORDS TO THE WALK: what a box read asking
+// the newest summary allocates in the summary's own reading
+// ([claudeSummaryFrames]) is at least its words and at most them
+// [claudeSummaryWordsAllocates] times over and [claudeSummaryStateAllocates]:
+// no second reader reads their line again. Counted alone, a pool's refill
+// aside ([ownAllocationsWithin]), never as the difference of two whole reads,
+// which the walk's json v2 decoder pools, letting a quarter of what is put
+// back go under -race, swing by over a hundred kilobytes.
 //
 // Mutation: read the summary's line again with a reader of its own: this goes
 // red.
 func TestAClaudeSummaryAddsOnlyItsWordsToTheWalk(t *testing.T) {
-	// Just within [summaryGrowAt], so the words grow as append grows them,
-	// and enough of them that the pools' swing is under their allowance.
+	// Just within [summaryGrowAt], so the words grow as append grows them.
 	words := "the work so far: " + strings.Repeat("a step taken, a file read, a test run. ", 405)
 	b := claudeSummaryBox(t, func(lines [][]byte) [][]byte {
 		i, line := lineWith(t, lines, `"isCompactSummary":true`)
 		lines[i] = edited(t, line, func(m map[string]any) { m["message"].(map[string]any)["content"] = words })
 		return lines
 	})
-	read := func(summarize bool) (sandbox.MainThreadReading, uint64) {
-		var reading sandbox.MainThreadReading
-		ask := sandbox.MainThreadAsk{Session: b.session, Release: b.release, Count: true, Summary: summarize}
-		_, allocated := allocationsOf(t, func() {
-			reading = b.h.readMainThread(context.Background(), b.box, PathsFor(b.box), ask)
-		})
-		return reading, allocated
+	var reading sandbox.MainThreadReading
+	read := func() {
+		reading = b.h.readMainThread(context.Background(), b.box, PathsFor(b.box), sandbox.MainThreadAsk{
+			Session: b.session, Release: b.release, Count: true, Summary: true})
 	}
-	var summarized sandbox.MainThreadReading
-	alone, both := uint64(math.MaxUint64), uint64(math.MaxUint64)
-	for range 5 {
-		_, n := read(false)
-		alone = min(alone, n)
-		summarized, n = read(true)
-		both = min(both, n)
+	read()
+	_, own := ownAllocationsWithin(read, claudeSummaryFrames...)
+	if reading.Summary.Text != words {
+		t.Fatalf("the read reads the summary %.40q (%s), want its words", reading.Summary.Text,
+			reading.Summary.Unread)
 	}
-	if summarized.Summary.Text != words {
-		t.Fatalf("the read reads the summary %.40q (%s), want its words", summarized.Summary.Text,
-			summarized.Summary.Unread)
-	}
-	limit := alone + claudeSummaryWordsAllocates*uint64(len(words)) + claudeSummaryStateAllocates
-	t.Logf("the walk alone allocates %d bytes, with the summary of %d bytes %d (%d more)", alone, len(words), both,
-		int64(both)-int64(alone))
-	if both > limit {
-		t.Errorf("with the summary the read allocates %d bytes, %d past the walk's %d; want at most %d", both,
-			both-alone, alone, limit)
+	limit := claudeSummaryWordsAllocates*uint64(len(words)) + claudeSummaryStateAllocates
+	t.Logf("the summary of %d bytes allocates %d bytes in its own reading", len(words), own)
+	if own < uint64(len(words)) || own > limit {
+		t.Errorf("the summary of %d bytes allocates %d bytes in its own reading; want its words at least and %d "+
+			"at most", len(words), own, limit)
 	}
 }
 
