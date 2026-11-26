@@ -203,17 +203,17 @@ func TestAMuseHomeSkillNamedUnplainlyLeavesEveryCopyOut(t *testing.T) {
 func TestACopysTakenPlaceIsNeverListedAsTheRuns(t *testing.T) {
 	t.Parallel()
 	for _, listedAs := range []string{"", listedGrok, listedKimi, listedMuse} {
-		r := newRepoRun(t, map[string]string{"repo/.git/": "", "repo/.agents/skills/s/SKILL.md": "---\nname: s\n---\n"})
-		root := filepath.Join(r.work, "repo")
+		r := newRepoRun(t, map[string]string{"late/.git/": "", "late/.agents/skills/s/SKILL.md": "---\nname: s\n---\n"})
+		root := filepath.Join(r.work, "late")
 		real, err := filepath.EvalSymlinks(root)
 		if err != nil {
 			t.Fatal(err)
 		}
-		plan, _, err := planSkill(filepath.Join(root, ".agents/skills/s"), real, "repo:s")
+		plan, _, err := planSkill(filepath.Join(root, ".agents/skills/s"), real, "late:s")
 		if err != nil {
 			t.Fatal(err)
 		}
-		mine := filepath.Join(r.skills, "repo:s", "x.md")
+		mine := filepath.Join(r.skills, "late:s", "x.md")
 		if err := os.MkdirAll(filepath.Dir(mine), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -223,10 +223,10 @@ func TestACopysTakenPlaceIsNeverListedAsTheRuns(t *testing.T) {
 		spec := museSpec(r.skills)
 		spec.ListedAs, spec.held = listedAs, &homeNames{read: true, taken: map[string]string{}}
 		_, err = copyPlanned(plan, spec, filepath.Join(r.state, stagingDir), &skips{stderr: io.Discard})
-		if err == nil || err.Error() != "the home's skills hold repo:s already" {
+		if err == nil || err.Error() != "the home's skills hold late:s already" {
 			t.Errorf("listedAs %q: the copy over a person's entry returned %v", listedAs, err)
 		}
-		if copied, _ := os.ReadFile(spec.Copied); strings.Contains(string(copied), "repo:s") {
+		if copied, _ := os.ReadFile(spec.Copied); strings.Contains(string(copied), "late:s") {
 			t.Errorf("listedAs %q: the person's entry was listed for removal: %q", listedAs, copied)
 		}
 		if raw, _ := os.ReadFile(mine); string(raw) != "MINE" {
