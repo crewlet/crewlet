@@ -138,11 +138,12 @@ const cursorRule = ".cursor/rules/crewlet-standing.mdc"
 // cursorScript is a Cursor run's script, giving its harness stop to go once
 // asked to end: the end protocol (end.go); the release read and an older one
 // refused; Cursor's node found; the routing the run does not set removed
-// ([cursorRoutingOff]); its rules written ([cursorRules]); the session settled
-// and recorded ([cursorSessionGate]); its MCP servers laid into the home's;
-// the harness run with its cap's follower ([cursorCapFollow]); Cursor's own end
-// added to the stream ([cursorTurnEnded]); the servers and rules taken out
-// again; and the session packed ([cursorCapture]).
+// ([cursorRoutingOff]); its rules and checkouts ([cursorRules],
+// [cursorCheckoutsGate], [cursorCheckoutRules]); the session settled
+// ([cursorSessionGate]); its MCP servers laid into the home's; the harness run
+// with its cap's follower ([cursorCapFollow]), the home's hooks.json put back
+// on every end ([cursorEndTraps]); Cursor's own end added to the stream
+// ([cursorTurnEnded]); the servers and rules taken out; the session packed.
 //
 // THE BRIEF IS NOT ON ITS COMMAND LINE: print mode with no prompt argument
 // reads stdin, the brief's file (measured on [cursorSupported]).
@@ -152,6 +153,7 @@ func cursorScript(req sandbox.RunRequest, session Session, paths Paths, configur
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
+	b.WriteString(cursorEndTraps(paths))
 	b.WriteString(cursorReleaseRead)
 	b.WriteString(cursorNode(1))
 	if off := cursorRoutingOff(req); len(off) > 0 {
@@ -160,9 +162,14 @@ func cursorScript(req sandbox.RunRequest, session Session, paths Paths, configur
 	line(`mkdir -p %s || exit 1`, q(paths.CursorSessions()))
 	line(`set --`)
 	b.WriteString(cursorRules(paths))
+	b.WriteString(cursorCheckoutsGate(paths))
+	b.WriteString(cursorCheckoutRules(paths))
 	b.WriteString(cursorSessionGate(session, paths, configured, req.FreshWiring != nil && configured))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "${n%%%%-*}" > %s`,
 		q(paths.SessionRecord()))
+	// THE RUN'S CONVERSATION, for its hook to tell a subagent's call apart
+	// (internal/notehelper's cursorConversation).
+	line(`[ ! -d %[1]s ] || printf '%%s\n' "$s" > %[1]s/conversation || exit 1`, q(paths.CursorCheckouts()))
 	add := q(paths.CursorMCPAdded())
 	if configured {
 		line(`"$cn" %s mcp-add %s %s %s || exit 1`, q(paths.CursorHelper()), q(paths.CursorMCP()),
@@ -193,6 +200,7 @@ func cursorScript(req sandbox.RunRequest, session Session, paths Paths, configur
 			turns, q(paths.CursorCapped()))
 	}
 	b.WriteString(cursorWorkersEnd)
+	line(`cput`)
 	b.WriteString(cursorTurnEnded)
 	if turns > 0 {
 		line(`[ ! -s %s ] || printf '\n%%s\n' %s`, q(paths.CursorCapped()), q(cursorCapLine(turns)))
@@ -226,16 +234,11 @@ func cursorNode(code int) string {
 `, code)
 }
 
-// cursorRules is the part of a run's script that writes the rules the run is
-// handed in its directory's .cursor/rules, an earlier run's taken out first:
-// its standing instructions ([cursorRule]), which Cursor puts in every
-// request's first user message; and for each checkout directly below (a
-// `.git` in it), its instructions (AGENTS.md, CLAUDE.md, .cursorrules) in one
-// rule and its own rules, nested ones too, named by path, each glob prefixed
-// with the checkout's directory, as Cursor reads rules only where a run starts
-// and matches globs from there; and `--add-dir` on the checkout, for its
-// skills. Its MCP servers, hooks and permissions are not handed: Cursor reads
-// them only where a run starts. All measured on [cursorSupported].
+// cursorRules is the part of a run's script that writes its standing
+// instructions as a rule in its directory's .cursor/rules ([cursorRule]),
+// which Cursor puts in every request's first user message, an earlier run's
+// rules taken out first. Cursor reads rules only where a run starts (measured
+// on [cursorSupported]).
 func cursorRules(paths Paths) string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -243,27 +246,38 @@ func cursorRules(paths Paths) string {
 	line(`rd=.cursor/rules; mkdir -p "$rd" || exit 1; rm -f "$rd"/crewlet-*.mdc`)
 	line(`if [ -s %s ]; then { printf -- '---\ndescription: The instructions this run works under\nalwaysApply: true\n---\n'; cat %s; } > %s || exit 1; fi`,
 		q(paths.System()), q(paths.System()), q(cursorRule))
-	line(`for c in ./*/; do c=${c%%/}; c=${c#./}; [ -e "$c/.git" ] || continue`)
+	return b.String()
+}
+
+// cursorCheckoutRules is the part of a run's script that hands each checkout
+// the launch handed ([cursorCheckoutsGate]: a finished clone directly below,
+// by the note helper's own test, so one cloned half way gets nothing) what
+// Cursor reads of it only through the run: `--add-dir` on it, for its skills,
+// and its own rules, nested ones too, copied beside the run's, named by path,
+// each glob prefixed with its directory, as Cursor matches globs from where a
+// run starts. Its MCP servers, hooks and permissions are not handed: Cursor
+// reads them only there. All measured on [cursorSupported].
+func cursorCheckoutRules(paths Paths) string {
+	q := shellword.Quote
+	var b strings.Builder
+	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	line(`ru=' '; if [ -n "$hk" ] && [ -f %s ]; then while IFS= read -r c; do [ -n "$c" ] && [ -d "$c" ] || continue`,
+		q(paths.CursorCheckouts()+"/handed"))
 	line(`  set -- "$@" --add-dir "$PWD/$c"`)
 	line(`  t=$(printf '%%s' "$c" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-'); u=$t; i=1`)
-	line(`  while [ -e "$rd/crewlet-checkout-$u.mdc" ]; do i=$((i + 1)); u=$t-$i; done`)
-	line(`  r="$rd/crewlet-checkout-$u.mdc"; h=`)
-	line(`  for f in AGENTS.md CLAUDE.md .cursorrules; do [ -f "$c/$f" ] || continue`)
-	line(`    if [ -z "$h" ]; then printf -- '---\ndescription: The instructions of the checkout %%s\nalwaysApply: true\n---\nThe checkout %%s, at %%s, brings these instructions of its own.\n' "$c" "$c" "$PWD/$c" > "$r" || exit 1; h=1; fi`)
-	line(`    { printf '\n# %%s\n\n' "$f"; cat "$c/$f"; } >> "$r" || exit 1`)
-	line(`  done`)
+	line(`  while case "$ru" in *" $u "*) true;; *) false;; esac; do i=$((i + 1)); u=$t-$i; done; ru="$ru$u "`)
 	line(`  fl=$(find "$c/.cursor/rules" -type f -name '*.mdc' 2> /dev/null | sort); set -f; o=$IFS; IFS='`)
 	line(`'`)
 	line(`  for f in $fl; do IFS=$o; n=$(printf '%%s' "${f#"$c/.cursor/rules/"}" | sed 's|/|--|g')`)
 	line(`    P="$c/" awk %s "$f" > "$rd/crewlet-checkout-$u--$n" || exit 1`, q(cursorGlobs))
 	line(`  done; IFS=$o; set +f`)
-	line(`done`)
+	line(`done < %s; fi`, q(paths.CursorCheckouts()+"/handed"))
 	return b.String()
 }
 
 // cursorGlobs is the awk program that copies a checkout's rule with each glob
 // of its frontmatter's `globs:` (a comma-separated list, each item quoted or
-// not) prefixed with P, the checkout's directory ([cursorRules]).
+// not) prefixed with P, the checkout's directory ([cursorCheckoutRules]).
 const cursorGlobs = `NR == 1 && /^---$/ { fm = 1; print; next }
 fm && /^---$/ { fm = 0; print; next }
 fm && /^globs:/ {
@@ -608,7 +622,9 @@ var errCursorWebDenied = errors.New("executor: Cursor Agent has no setting that 
 // instructions ([Paths.System]), and its MCP servers ([cursorServers]) at
 // [Paths.MCPConfig], with a fresh session's copy beside it
 // ([sandbox.RunRequest.FreshWiring]), returned as the run's config, "" for a
-// run handed none. The script lays them into the home's own.
+// run handed none, which the script lays into the home's own; and what hands
+// the run its checkouts, its postToolUse hook among them
+// ([cursorCheckoutsSetup]).
 func (CursorAgent) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
 	if req.WebDenied {
@@ -626,25 +642,31 @@ func (CursorAgent) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 			return "", fmt.Errorf("executor: writing the run's standing instructions: %w", err)
 		}
 	}
-	if len(req.MCPServers) == 0 {
-		return "", nil
-	}
-	nonce, err := cursorNonce()
-	if err != nil {
-		return "", err
-	}
-	if err = cursorGuard(ctx, box, req, paths, nonce); err != nil {
-		return "", err
-	}
-	if err = writeCursorServers(ctx, box, paths.MCPConfig(), req.MCPServers, nonce); err != nil {
-		return "", err
-	}
-	if f := req.FreshWiring; f != nil {
-		if err = writeCursorServers(ctx, box, paths.MCPConfigFresh(), f.MCPServers, nonce); err != nil {
+	config := ""
+	if len(req.MCPServers) > 0 {
+		nonce, err := cursorNonce()
+		if err != nil {
 			return "", err
 		}
+		if err = cursorGuard(ctx, box, req, paths, nonce); err != nil {
+			return "", err
+		}
+		if err = writeCursorServers(ctx, box, paths.MCPConfig(), req.MCPServers, nonce); err != nil {
+			return "", err
+		}
+		if f := req.FreshWiring; f != nil {
+			if err = writeCursorServers(ctx, box, paths.MCPConfigFresh(), f.MCPServers, nonce); err != nil {
+				return "", err
+			}
+		}
+		config = paths.MCPConfig()
 	}
-	return paths.MCPConfig(), nil
+	// THE HOOK AFTER THE GUARD: a refused run leaves the home's hooks.json as
+	// it found it.
+	if err := cursorCheckoutsSetup(ctx, box, req, paths); err != nil {
+		return "", err
+	}
+	return config, nil
 }
 
 // cursorNonce is the run's own suffix to its servers' names: four random
@@ -705,9 +727,9 @@ func (CursorAgent) artifactFiles(p Paths) []string {
 }
 
 // artifactDirs is the directories a Cursor run leaves in its box of its own,
-// removed whole: its run's own (the helper, its pid and cap marks, the
-// history). The home's .cursor is a person's, and the box's copies of its
-// sessions are kept.
+// removed whole: its run's own (the helpers, its pid and cap marks, the
+// history, its checkout state and copies). The home's .cursor is a person's,
+// and the box's copies of its sessions are kept.
 func (CursorAgent) artifactDirs(p Paths) []string { return []string{p.CursorRun()} }
 
 // cursorChargeBytes is the fewest bytes a Cursor session's brief is counted at

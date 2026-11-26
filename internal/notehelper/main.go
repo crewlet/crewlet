@@ -210,7 +210,8 @@
 // with and loads instructions only as it starts, measured on 1.6.0);
 // copilot-nested the listing alone, added the same way; kimi-nested as
 // pi-nested, for Kimi's `<!-- From: ... -->`, steered in by the run's driver;
-// opencode-nested as pi-nested, after OpenCode's `Instructions from: <path>`. A
+// opencode-nested as pi-nested, after OpenCode's `Instructions from: <path>`;
+// cursor-nested on an MCP call's result. A
 // nested hook only adds to the launch: a run whose settings switch it off
 // starts, its skip log saying so once; only losing a contract hook (notes,
 // skill loads) refuses. Grok's stays registered, as Grok 1.0.92 skips it itself
