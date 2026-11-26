@@ -2,11 +2,11 @@ package webhooks
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/config"
 )
 
 // forgeEvent names the integration a relayed Cloud event belongs to and the
@@ -88,9 +88,14 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 		if source == "" {
 			products = []string{"jira", "confluence"}
 		}
-		reasons := make([]string, 0, len(products))
-		for _, product := range products {
-			reasons = append(reasons, config.ForgeHoldReason(product))
+		var reasons []string
+		for _, hold := range material.ForgeHeld {
+			if slices.Contains(products, hold.Product) {
+				reasons = append(reasons, hold.Reason)
+			}
+		}
+		if len(reasons) == 0 {
+			reasons = append(reasons, "no Cloud site configured for "+strings.Join(products, " or "))
 		}
 		log.Error("forge_no_cloud_site", "event", event, "product", source,
 			"detail", strings.Join(reasons, "; "))

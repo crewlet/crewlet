@@ -10,6 +10,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // The cloud ids of the company's own Atlassian site and of another site the
@@ -214,63 +216,45 @@ roles:
 }
 
 // A HELD PRODUCT IS NAMED WITH THE FIELD THAT CLEARS IT, in the words the
-// route logs and the integrations answer shows. Mutation: hold a block with a
-// cloud id, a Data Center block, or any block with no app id, or drop the
-// field from the sentence, and this goes red.
+// route logs and the integrations answer shows, and they depend on the block:
+// config refuses a url beside a cloud_id, so a url-named block is told to
+// replace its url. Mutation: hold a block with a cloud id, a Data Center
+// block, or any block with no app id, or word both holds alike, and a case
+// goes red.
 func TestAForgeHoldNamesTheFieldThatClearsIt(t *testing.T) {
 	t.Parallel()
-	held := secretsFor(t, `
-name: Acme
-providers:
-  sandbox: {fake: true}
-  llm:
-    primary:
-      model: claude-sonnet-5
-integrations:
-  jira:
-    url: https://acme.atlassian.net
-    token: t
-  confluence:
-    cloud_id: `+ownSite+`
-    site_url: https://acme.atlassian.net/wiki
-    token: t
-  forge_app_id: forge-app
-roles:
-  - name: CEO
-    handle: ceo
-    llm: primary
-`)
-	want := "Forge relay events for Jira are refused until integrations.jira.cloud_id (with site_url) is set"
-	if got := held.IngressHolds(); len(got) != 1 || got["forge"] != want {
-		t.Errorf("IngressHolds() = %v, want forge: %q", got, want)
-	}
-
-	// Data Center blocks: no Forge event is theirs, so nothing is held.
-	if got := secretsFor(t, servedYAML).IngressHolds(); len(got) != 0 {
-		t.Errorf("Data Center blocks held %v", got)
-	}
-	// No app id: nothing is relayed, so nothing is held.
-	held.ForgeHeld = nil
-	if got := held.IngressHolds(); len(got) != 0 {
-		t.Errorf("IngressHolds() = %v with nothing held", got)
-	}
-	none := secretsFor(t, `
-name: Acme
-providers:
-  sandbox: {fake: true}
-  llm:
-    primary:
-      model: claude-sonnet-5
-integrations:
-  jira:
-    url: https://acme.atlassian.net
-    token: t
-roles:
-  - name: CEO
-    handle: ceo
-    llm: primary
-`)
-	if len(none.ForgeHeld) != 0 {
-		t.Errorf("ForgeHeld = %v with no Forge app id", none.ForgeHeld)
+	const (
+		urlNamed = "Forge relay events for Jira are refused until integrations.jira.url " +
+			"is replaced by cloud_id (with site_url)"
+		addressless = "Forge relay events for Confluence are refused until " +
+			"integrations.confluence.cloud_id (with site_url) is set"
+	)
+	for _, tc := range []struct {
+		name string
+		in   config.Integrations
+		want string
+	}{
+		{"a url-named Cloud site and a block with no address yet", config.Integrations{
+			ForgeAppID: "app-123",
+			Jira:       &config.Jira{URL: "https://acme.atlassian.net"},
+			Confluence: &config.Confluence{},
+		}, urlNamed + "; " + addressless},
+		{"a cloud id", config.Integrations{
+			ForgeAppID: "app-123", Jira: &config.Jira{CloudID: ownSite},
+		}, ""},
+		{"a Data Center url", config.Integrations{
+			ForgeAppID: "app-123", Jira: &config.Jira{URL: "https://jira.example.com"},
+		}, ""},
+		{"no forge app id", config.Integrations{
+			Jira: &config.Jira{URL: "https://acme.atlassian.net"}, Confluence: &config.Confluence{},
+		}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := webhooks.SecretsOf(&config.Company{Integrations: tc.in}, nil, literal).IngressHolds()
+			if got["forge"] != tc.want || (tc.want == "") != (len(got) == 0) {
+				t.Errorf("IngressHolds() = %v, want forge: %q", got, tc.want)
+			}
+		})
 	}
 }

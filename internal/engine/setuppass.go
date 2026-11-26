@@ -184,10 +184,10 @@ func (p *atlassianPass) recordSite(
 func forgeHolds(in config.Integrations, resolve func(string) string, recorded map[string]bool) []integration.Finding {
 	_, held := in.ForgeBinding(resolve)
 	var findings []integration.Finding
-	for _, product := range held {
-		if !recorded[product] {
+	for _, hold := range held {
+		if !recorded[hold.Product] {
 			findings = append(findings, integration.Finding{
-				Kind: integration.FindingIngressBlocked, Detail: config.ForgeHoldReason(product),
+				Kind: integration.FindingIngressBlocked, Detail: hold.Reason,
 			})
 		}
 	}

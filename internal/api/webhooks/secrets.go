@@ -53,7 +53,7 @@ type Secrets struct {
 
 	// ForgeHeld are the products whose relayed events are held for want
 	// of a cloud id while an app id is set ([config.Integrations.ForgeBinding]).
-	ForgeHeld []string
+	ForgeHeld []config.ForgeHold
 
 	// Slack is PER SEAT, keyed by agent handle, because each agent has its
 	// own Slack app. The handle comes from the URL path, which is why that
@@ -141,13 +141,13 @@ func (s Secrets) Verifiable() []string {
 
 // IngressHolds names, by surface, why a route refuses every delivery of a
 // kind although its material resolved: today the Forge relay, for each
-// product with no cloud id ([config.ForgeHoldReason]). Empty holds nothing.
+// product with no cloud id ([config.ForgeHold]). Empty holds nothing.
 func (s Secrets) IngressHolds() map[string]string {
 	holds := map[string]string{}
 	if len(s.ForgeHeld) > 0 {
 		reasons := make([]string, 0, len(s.ForgeHeld))
-		for _, product := range s.ForgeHeld {
-			reasons = append(reasons, config.ForgeHoldReason(product))
+		for _, hold := range s.ForgeHeld {
+			reasons = append(reasons, hold.Reason)
 		}
 		holds["forge"] = strings.Join(reasons, "; ")
 	}

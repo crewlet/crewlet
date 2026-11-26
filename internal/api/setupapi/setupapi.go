@@ -2162,8 +2162,10 @@ func (s *Service) forgeHeld(company *config.Company, kind integration.Kind) stri
 	_, held := company.Integrations.ForgeBinding(func(value string) string {
 		return setup.Deref(value, s.resolve)
 	})
-	if slices.Contains(held, string(kind)) {
-		return config.ForgeHoldReason(string(kind))
+	for _, hold := range held {
+		if hold.Product == string(kind) {
+			return hold.Reason
+		}
 	}
 	return ""
 }

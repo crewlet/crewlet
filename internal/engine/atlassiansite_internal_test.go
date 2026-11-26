@@ -44,7 +44,7 @@ func TestTheAtlassianPassNamesEachForgeHoldItCannotClear(t *testing.T) {
 	got := forgeHolds(in, literal, map[string]bool{"confluence": true})
 	if len(got) != 1 || got[0].Kind != integration.FindingIngressBlocked ||
 		got[0].Detail != "Forge relay events for Jira are refused until "+
-			"integrations.jira.cloud_id (with site_url) is set" {
+			"integrations.jira.url is replaced by cloud_id (with site_url)" {
 		t.Fatalf("findings = %+v, want jira's hold alone", got)
 	}
 	if got := forgeHolds(in, literal, nil); len(got) != 2 {

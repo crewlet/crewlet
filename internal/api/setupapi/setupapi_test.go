@@ -3150,7 +3150,7 @@ func TestAJiraWriteBesideAForgeAppNamesTheCloudIDItLacks(t *testing.T) {
 	}{
 		{"with a forge app id", strings.Replace(companyDoc, `"name": "Acme",`,
 			`"name": "Acme", "integrations": {"forge_app_id": "app-123"},`, 1),
-			"Forge relay events for Jira are refused until integrations.jira.cloud_id (with site_url) is set"},
+			"Forge relay events for Jira are refused until integrations.jira.url is replaced by cloud_id (with site_url)"},
 		{"without one", companyDoc, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
