@@ -26,6 +26,14 @@ var workingAtInit = map[string]string{
 		"returns at once",
 }
 
+// neverLinked is refused by name, whatever reading its init finds: nats-server's
+// process sampler, which #2160's readings carried, and the package that links
+// it. A change to how pse arms its timer must not let it back unseen.
+var neverLinked = []string{
+	"github.com/nats-io/nats-server/v2/server",
+	"github.com/nats-io/nats-server/v2/server/pse",
+}
+
 // THE TEST BINARY LINKS NOTHING THAT WORKS FROM INIT BUT WHAT workingAtInit
 // NAMES: such work runs beside every case that reads a reader's allocations
 // off the process's counts, as nats-server's process sampler (server/pse, its
@@ -36,7 +44,8 @@ var workingAtInit = map[string]string{
 // Tick) works from init. A timer is no goroutine until it fires, so only
 // reading the init sees one.
 //
-// Mutation: import nats-server's server package from internal/jsprovision again.
+// Mutation: blank-import internal/jsapi, which links nats-server's server
+// package, from a test file of this package.
 func TestTheTestBinaryLinksNothingThatWorksFromInit(t *testing.T) {
 	t.Parallel()
 	pkgs, err := testBinaryPackages(t)
@@ -46,6 +55,11 @@ func TestTheTestBinaryLinksNothingThatWorksFromInit(t *testing.T) {
 	found := map[string]bool{}
 	read := 0
 	for _, p := range pkgs {
+		if slices.Contains(neverLinked, p.ImportPath) {
+			t.Errorf("this package's test binary links %s, nats-server's process sampler or the package "+
+				"that links it, which allocates every second beside every case measuring a reader's "+
+				"allocations; drop the import that reaches it", p.ImportPath)
+		}
 		// The test binary's own main, generated into the build cache, is
 		// none of the linked packages.
 		if p.Standard || strings.HasSuffix(p.ImportPath, ".test") {
@@ -89,7 +103,10 @@ type linkedPackage struct {
 }
 
 // testBinaryPackages is every package this package's test binary links, with
-// the files each builds on this platform.
+// the files each builds on this platform. It asks the go command, whose
+// -deps -test closure is the package graph it compiles into the binary
+// (the test files' imports, transitively, under this platform's constraints),
+// rather than walking go/build over the module and resolving it a second way.
 func testBinaryPackages(t *testing.T) ([]linkedPackage, error) {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "go", "list", "-deps", "-test",
