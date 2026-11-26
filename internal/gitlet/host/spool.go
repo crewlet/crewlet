@@ -246,11 +246,15 @@ type spoolTurn struct {
 
 // start begins a body for credential that claims claim bytes, with room for
 // need bytes and up to want: at once when grantLocked allows it, otherwise in
-// its turn, holding a place (waiting is called on the caller's goroutine once
-// it has one) until it is granted, wait passes (a *spoolUnserved,
+// its turn, holding a place until it is granted, wait passes (a *spoolUnserved,
 // spoolExpired), or ctx ends (ctx's error). One that must wait and finds no
 // place is refused (a *spoolUnserved, spoolRefused). need past claim is
 // errPastClaim, and claim past request pastCeiling.
+//
+// waiting hands the request's head to its place: called once, on the caller's
+// goroutine, under a.mu in the step that places it, so no reader counts a
+// waiter still charged to the request memory. It may take only a leaf lock
+// (heads') and never call into a.
 func (a *spools) start(ctx context.Context, credential string, claim, need, want int64, wait time.Duration,
 	waiting func()) (spoolTurn, spoolWait, error) {
 
@@ -276,10 +280,10 @@ func (a *spools) start(ctx context.Context, credential string, claim, need, want
 		a.mu.Unlock()
 		return spoolTurn{}, spoolWait{outcome: spoolRefused}, err
 	}
-	a.mu.Unlock()
 	if waiting != nil {
 		waiting()
 	}
+	a.mu.Unlock()
 	got, sw, err := a.await(ctx, w, wait)
 	if err != nil {
 		return spoolTurn{}, sw, err

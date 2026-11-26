@@ -421,14 +421,14 @@ func CheckBudget(bytes int64) time.Duration {
 }
 
 // HashBudget bounds a HASH of bytes of a copy's files held to their rows:
-// the read of the rows and one read attempt (gitproc.ReadDeadline), and the
-// bytes hashed at VerifyHashPerMiB. It is CheckBudget's hash term, so the two
+// the read of the rows, one read attempt ([RowReadAttempt]), and the bytes
+// hashed at VerifyHashPerMiB. It is CheckBudget's hash term, so the two
 // cannot drift, and the whole bound of a hint's confirmation (hint.go), which
-// hashes one bundle and runs no fsck: about 2.3 minutes for the largest pack
+// hashes one bundle and runs no fsck: about 2.4 minutes for the largest pack
 // (MaxPackBytes), where CheckBudget would allow some 24.
 func HashBudget(bytes int64) time.Duration {
 	mib := max(bytes+objstore.MiB-1, 0) / objstore.MiB
-	return gitproc.ReadDeadline + time.Duration(mib)*VerifyHashPerMiB
+	return RowReadAttempt + time.Duration(mib)*VerifyHashPerMiB
 }
 
 // pass is one check of the incarnation s pins, run under the pass's own bound

@@ -88,6 +88,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AMintedSessionIsBoundOnceToItsOwnJob", testAMintedSessionIsBoundOnceToItsOwnJob},
 		{"AMintedSessionIsOneLiveRuns", testAMintedSessionIsOneLiveRuns},
 		{"AJobItsCapEndedIsRecordedOnceForItsOwnJob", testAJobItsCapEndedIsRecordedOnceForItsOwnJob},
+		{"ARunningJobItsTurnCapEndedIsRecordedOnceForItsOwnJob",
+			testARunningJobItsTurnCapEndedIsRecordedOnceForItsOwnJob},
 		{"AJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands", testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands},
 		{"AJobsHarnessEndRidesEveryWriteOfItsRecord", testAJobsHarnessEndRidesEveryWriteOfItsRecord},
 		{"AReleaseRecordsTheHarnessEndByTheRecordsRule", testAReleaseRecordsTheHarnessEndByTheRecordsRule},

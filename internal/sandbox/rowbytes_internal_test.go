@@ -853,7 +853,7 @@ func worstRow(t *testing.T) PendingRun {
 		// release writes none that is no window (BudgetWindow.Valid), and of
 		// the three periods a day spells the widest pair, written as itself.
 		RelaunchRefusedIn: BudgetWindow{Period: period.Day, Label: period.At(period.Day, worstAt, nil).Label},
-		EndedAtDeadline:   true, HostStoreSilentSince: worstAt, HarnessEnd: HarnessEnd(plain(32)),
+		EndedAtDeadline:   true, EndedAtTurnCap: true, HostStoreSilentSince: worstAt, HarnessEnd: HarnessEnd(plain(32)),
 		// A REFUSAL THE SEAT'S HOLDER OWES, its condition at the longest
 		// the record takes, in the bytes that escape the most: nothing but
 		// that bound holds a condition's spelling ([MaxOwedConditionBytes]).

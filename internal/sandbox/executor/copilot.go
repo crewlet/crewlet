@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -66,6 +67,12 @@ func (Copilot) Name() string { return CopilotName }
 // bound ([copilotMCP]), and a 1040-second call under a 1050-second one was
 // answered whole (measured on 1.0.114).
 func (Copilot) MCPCallCeiling() time.Duration { return 0 }
+
+// CountedAtCollection implements [collectionCounted].
+func (Copilot) CountedAtCollection() string {
+	return "its stream marks no model request: " +
+		"the usage records its count reads are appended by the run's script once Copilot exits"
+}
 
 // Resumes says Copilot continues a session it reported: `--session-id` on an
 // id its home holds resumes it (measured on 1.0.114).
@@ -184,7 +191,9 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	// THE HOME'S OWN SETTINGS AND INSTRUCTIONS BACK however the script exits;
 	// a run killed first leaves them to the next run's clear ([homeKeeper]).
-	line(`cput() { %s; }; trap cput EXIT`, Copilot{}.homeRestore(paths))
+	// AND WHAT THE RUN'S HANDING LEFT OUT SAID first ([checkoutHome.saySkipped]),
+	// once per run, whatever its attempts.
+	line(`cput() { %s; %s; }; trap cput EXIT`, copilotCheckoutHome(paths).saySkipped(), Copilot{}.homeRestore(paths))
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
 	b.WriteString(copilotRelease)
@@ -209,7 +218,11 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 		q(paths.SessionRecord()))
 	line(`ev=%s/"$s"/events.jsonl`, q(paths.CopilotHome()+"/"+copilotSessionState))
 	b.WriteString(copilotJournalAtLaunch())
-	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([copilotCheckoutHome]), beside the
+	// person's own instruction directories (pi, ps).
+	line(`pi=${COPILOT_CUSTOM_INSTRUCTIONS_DIRS-}; ps=${COPILOT_CUSTOM_INSTRUCTIONS_DIRS+1}`)
+	b.WriteString(copilotCheckoutHome(paths).prepare())
+	b.WriteString(copilotAttempts(paths, strings.Join(parts, " ")))
 	b.WriteString(copilotUsage())
 	b.WriteString(copilotCapture(paths))
 	line(`exit "$code"`)
@@ -304,7 +317,7 @@ func copilotSessionGate(session Session, paths Paths, rewired bool) string {
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellword.Quote
 	if !session.Continues {
-		line(`s=%s k=no w=`, q(session.ID))
+		line(`s=%s k=no w= bf=%s`, q(session.ID), q(paths.Brief()))
 		line(`set -- "$@" --session-id %s`, q(session.ID))
 		return b.String()
 	}
@@ -330,8 +343,10 @@ func copilotSessionGate(session Session, paths Paths, rewired bool) string {
 			q(from+"/"+copilotWorkspace) + " " + q(held+"/"+copilotWorkspace) + "; }",
 		"{ [ ! -d " + q(from+"/"+copilotCheckpoints) + " ] || [ -L " + q(from+"/"+copilotCheckpoints) + " ] || mv " +
 			q(from+"/"+copilotCheckpoints) + " " + q(held+"/"+copilotCheckpoints) + "; }",
+		"{ [ ! -f " + q(from+"/"+copilotKeptSets) + " ] || [ -L " + q(from+"/"+copilotKeptSets) + " ] || mv " +
+			q(from+"/"+copilotKeptSets) + " " + q(held+"/"+copilotKeptSets) + "; }",
 	}, " && ")
-	line(`s=%s k=yes w= h= d=`, q(session.ID))
+	line(`s=%s k=yes w= h= d= bf=%s`, q(session.ID), q(paths.Brief()))
 	line(`[ -s %s ] && h=1`, q(held+"/events.jsonl"))
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
 	if session.Replaces {
@@ -366,7 +381,7 @@ func copilotSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`  printf '%%s%%s\n' %s "$w" >&2`, q("crewlet: this run was asked to continue the Copilot session "+
 		session.ID+", and starts a new session, "+session.Fresh+", instead: "))
 	line(`  set -- "$@" --session-id %s`, q(session.Fresh))
-	line(`  [ ! -s %s ] || exec < %s`, q(paths.FreshBrief()), q(paths.FreshBrief()))
+	line(`  [ ! -s %[1]s ] || { exec < %[1]s; bf=%[1]s; }`, q(paths.FreshBrief()))
 	if rewired {
 		// THE NEW SESSION WIRED TO ITS OWN TOKEN, the bridge's and the notes
 		// route's alike, or not started: [claudeSessionGate]'s reason.
@@ -439,10 +454,10 @@ func copilotLastRotated(v string) string {
 // tar of members named relative to the run's home, under
 // `session-state/<session>/`: events.jsonl, the conversation, which a resume
 // takes up whole on its own, a rotated one's too: its head copies every record
-// a resume reads ([copilotLastRotated]); and workspace.yaml and checkpoints/
-// where the session has them ([copilotWorkspace]), which every reader passes
-// over (measured on 1.0.114). A layout an older reader cannot read is a new
-// format.
+// a resume reads ([copilotLastRotated]); and workspace.yaml, checkpoints/ and
+// the kept launch sets ([copilotKeptSets]) where the session has them
+// ([copilotWorkspace]), which every reader passes over (measured on 1.0.114).
+// A layout an older reader cannot read is a new format.
 const copilotArchiveFormat = 1
 
 // ArchiveFormat is the layout a Copilot run packs its session in ([carrier]).
@@ -525,12 +540,12 @@ func copilotPack(paths Paths, at packAt) string { return copilotPackAt(paths, at
 
 // copilotPackAt packs the session s names into at.staged and moves it over
 // at.dest, its digest kept ([packDigest]) and its trim past trim said beside it
-// ([trimTar], [trimMarked]): its events.jsonl, and its workspace.yaml and
-// checkpoints/ where they are ([copilotArchiveFormat]), never the files a
-// rotation left. NEVER session.db or its -journal, the sql tool's tables, so
-// that tool's data does not carry to a continued session: a binary SQLite file
-// cannot pass the archive's text scrub without being corrupted. A pack beside a
-// working harness is held to [claudeHeldTar]'s rule.
+// ([trimTar], [trimMarked]): its events.jsonl, and its workspace.yaml,
+// checkpoints/ and kept launch sets where they are ([copilotArchiveFormat]),
+// never the files a rotation left. NEVER session.db or its -journal, the sql
+// tool's tables, so that tool's data does not carry to a continued session: a
+// binary SQLite file cannot pass the archive's text scrub without being
+// corrupted. A pack beside a working harness is held to [claudeHeldTar]'s rule.
 func copilotPackAt(paths Paths, at packAt, trim trimPoints) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -540,7 +555,8 @@ func copilotPackAt(paths Paths, at packAt, trim trimPoints) string {
 	line(`if [ -s %s/%s/events.jsonl ]; then`, q(home), dir)
 	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
 	line(`    set -- %s/events.jsonl`, dir)
-	for _, beside := range []struct{ test, name string }{{"-f", copilotWorkspace}, {"-d", copilotCheckpoints}} {
+	for _, beside := range []struct{ test, name string }{{"-f", copilotWorkspace}, {"-d", copilotCheckpoints},
+		{"-f", copilotKeptSets}} {
 		line(`    if [ %[1]s %[2]s/%[3]s/%[4]s ] && [ ! -L %[2]s/%[3]s/%[4]s ]; then set -- "$@" %[3]s/%[4]s; fi`,
 			beside.test, q(home), dir, beside.name)
 	}
@@ -682,11 +698,21 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 	if err != nil {
 		return "", err
 	}
+	helper, helperErr := noteHelperFor(ctx, box)
+	if helperErr != nil && !errors.Is(helperErr, errNoHelperBuild) {
+		return "", helperErr
+	}
 	// THE GUARD BEFORE ANY WRITE: a refused run leaves the home as it found it.
-	if err = copilotGuard(ctx, box, req, paths, c.policy, settings); err != nil {
+	off, err := copilotGuard(ctx, box, req, paths, c.policy, settings)
+	if err != nil {
 		return "", err
 	}
-	if _, err = holdHome(ctx, box, paths.CopilotSettings(), paths.CopilotHeldSettings()); err != nil {
+	// THE EXTENSION'S CHECKOUT WORK ONLY WHERE IT LOADS: switched off for a run
+	// that needs it for nothing else, the run goes on and says so
+	// ([copilotExtensionOff]).
+	handing := helperErr == nil
+	extended := handing && len(off) == 0
+	if err = holdHome(ctx, box, paths.CopilotSettings(), paths.CopilotHeldSettings()); err != nil {
 		return "", err
 	}
 	if err = writeHome(ctx, box, paths, paths.CopilotSettings(), settings); err != nil {
@@ -698,30 +724,52 @@ func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandb
 	}
 	if system != "" {
 		// THE PERSON'S OWN INSTRUCTIONS STILL LOAD, after the run's, in the one
-		// file Copilot reads them from; the home's file comes back as the run ends.
-		own, err := holdHome(ctx, box, paths.CopilotInstructions(), paths.CopilotHeldInstructions())
-		if err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(own) != "" {
-			system += "\n\n" + own
-		}
-		if err := writeHome(ctx, box, paths, paths.CopilotInstructions(), []byte(system)); err != nil {
+		// file Copilot reads them from: the script writes both and the
+		// checkouts' sections, and puts the home's back as the run ends
+		// ([copilotCheckoutHome]).
+		if err = box.WriteFile(ctx, paths.CopilotRunInstructions(), []byte(system)); err != nil {
 			return "", fmt.Errorf("executor: writing Copilot's standing instructions: %w", err)
 		}
 	}
+	// THE HELPER WHERE THE ENGINE HAS A BUILD FOR THE BOX: without one the run
+	// starts without its checkouts, as its script says.
+	if helperErr == nil {
+		if err = writeHelperBuild(ctx, box, paths.CopilotNoteHelper(), helper); err != nil {
+			return "", err
+		}
+		if err = box.WriteFile(ctx, paths.CopilotStoreCheck(), []byte(copilotStoreCheck)); err != nil {
+			return "", fmt.Errorf("executor: writing the check of a refused launch: %w", err)
+		}
+	}
+	launch := copilotCheckoutHome(paths).launchConfig(copilotCheckouts(), req.ReportedRepos)
+	if err = box.WriteFile(ctx, paths.CopilotCheckoutLaunch(), launch); err != nil {
+		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
+	}
+	if handing && !extended {
+		if err = box.WriteFile(ctx, paths.CopilotExtensionOff(), []byte(copilotExtensionOff(off))); err != nil {
+			return "", fmt.Errorf("executor: writing why the run's extension hands no checkout: %w", err)
+		}
+	}
 	bridges := crewletServers(req.MCPServers)
-	if req.Steer.Set() || req.Limits.MaxTurns > 0 || len(bridges) > 0 {
+	if req.Steer.Set() || req.Limits.MaxTurns > 0 || len(bridges) > 0 || extended {
 		// THIS LAUNCH'S OWN KEY, never the session's: a continued session keeps
 		// its id across runs, and a state an earlier run left must count nothing.
-		launch := uuid.NewString()
+		settings := copilotExtensionSettings{Cap: req.Limits.MaxTurns, Bridges: bridges,
+			State: paths.CopilotNotesState(), Run: uuid.NewString(), Attempt: paths.CopilotAttempt()}
+		if extended {
+			settings.Helper, settings.Nested = paths.CopilotNoteHelper(), paths.CopilotRepo()+"/nested.json"
+			settings.Kept = paths.CopilotRepo() + "/kept"
+			settings.Sessions = paths.CopilotHome() + "/" + copilotSessionState
+			settings.Armed = paths.CopilotArmed()
+		}
 		if err := writeCopilotExtension(ctx, box, paths.CopilotExtension()+"/extension.mjs", req.Steer,
-			req.Limits.MaxTurns, bridges, paths.CopilotNotesState(), launch); err != nil {
+			settings); err != nil {
 			return "", err
 		}
 		if f := req.FreshWiring; f != nil {
-			if err := writeCopilotExtension(ctx, box, paths.CopilotExtensionFresh(), f.Steer,
-				req.Limits.MaxTurns, crewletServers(f.MCPServers), paths.CopilotNotesState(), launch); err != nil {
+			fresh := settings
+			fresh.Bridges = crewletServers(f.MCPServers)
+			if err := writeCopilotExtension(ctx, box, paths.CopilotExtensionFresh(), f.Steer, fresh); err != nil {
 				return "", err
 			}
 		}
@@ -768,12 +816,10 @@ func copilotMergedSettings(ctx context.Context, box sandbox.Sandbox, file string
 	return json.MarshalIndent(settings, "", "  ")
 }
 
-// writeCopilotExtension writes the extension, wired to steer's notes route
-// where it is set, to the turn cap and to the bridges it guards, to file,
-// keeping its state in state under launch, this launch's own key.
+// writeCopilotExtension writes the extension with settings, wired to steer's
+// notes route where it is set, to file.
 func writeCopilotExtension(ctx context.Context, box sandbox.Sandbox, file string, steer sandbox.SteerWiring,
-	turns int, bridges []string, state, launch string) error {
-	settings := copilotExtensionSettings{Cap: turns, Bridges: bridges, State: state, Run: launch}
+	settings copilotExtensionSettings) error {
 	if steer.Set() {
 		settings.URL = steer.URL
 	}
@@ -838,18 +884,21 @@ func (Copilot) exportsTelemetry() bool { return true }
 // ([Copilot.homeRestore]).
 func (Copilot) artifactFiles(p Paths) []string {
 	return []string{p.CopilotExtensionFresh(), p.CopilotNotesState(), p.CopilotNotesState() + ".tmp",
-		p.CopilotGuardSettings()}
+		p.CopilotGuardSettings(), p.CopilotRunInstructions(), p.CopilotNoteHelper(), p.CopilotCheckoutLaunch(),
+		p.CopilotRepoInstructions(), p.CopilotAttempt(), p.CopilotStoreCheck(), p.CopilotExtensionOff(), p.CopilotArmed()}
 }
 
 var _ homeKeeper = Copilot{}
 
-// homeRestore puts the home's own settings.json and copilot-instructions.md
-// back over the run's ([putBackHome]), each whatever came of the other
-// ([everyStep]), run by the script as it exits and by the clear before every
-// run whichever harness it runs.
+// homeRestore puts the home's own settings.json back over the run's
+// ([putBackHome]) and its checkout home as it was ([checkoutHome.restore]:
+// copilot-instructions.md, the copied skills), and drops the skip log no
+// script printed ([checkoutHome.dropSkipped]), each whatever came of the
+// others ([everyStep]), run by the script as it exits, after it printed that
+// log, and by the clear before every run whichever harness it runs.
 func (Copilot) homeRestore(p Paths) string {
-	return everyStep(putBackHome(p.CopilotSettings(), p.CopilotHeldSettings()),
-		putBackHome(p.CopilotInstructions(), p.CopilotHeldInstructions()))
+	h := copilotCheckoutHome(p)
+	return everyStep(putBackHome(p.CopilotSettings(), p.CopilotHeldSettings()), h.restore(), h.dropSkipped())
 }
 
 // artifactDirs is the run's own notes extension ([Paths.CopilotExtension]),

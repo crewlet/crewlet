@@ -27,6 +27,9 @@ type checkoutHome struct {
 	agentsFrom            string
 	held, sections        string
 	skills, copied, roots string
+	// own is the run's own instructions, written ahead of the home's
+	// (Copilot's share its one file), "" for none.
+	own string
 }
 
 // holdsHome reports whether h writes a home instruction file: from its
@@ -83,6 +86,10 @@ type checkoutSpec struct {
 	NestedSkillsOnly   bool
 	ImportInstructions bool
 	SkillSep           checkoutSkillSep
+	// ListedAs and HomeSkills are the helper's ("grok", Grok Build's listing
+	// rule).
+	ListedAs   string
+	HomeSkills []checkoutSkillDir
 }
 
 // checkoutSkillSep is what joins a copy's repository and skill (the helper's
@@ -96,18 +103,31 @@ const checkoutSkillSepHyphen checkoutSkillSep = "-"
 // checkoutSkillDir is a checkout's skill directory as the helper reads it:
 // Dir, below the checkout's root, whose skills are the directories directly
 // in it, written as a string; or, Recursive, every one a walk of it reaches,
-// written as {"dir": ..., "recursive": true}.
+// or a walk's options set, written as an object.
 type checkoutSkillDir struct {
-	Dir       string
-	Recursive bool
+	Dir       string `json:"dir"`
+	Recursive bool   `json:"recursive,omitempty"`
+	checkoutWalk
+}
+
+// checkoutWalk is how the helper walks a skill directory past Pi's walk, as
+// Grok Build 1.0.92 does: on below a skill (Through), dot directories and
+// node_modules too (Every), to Depth directories below it, or its command
+// files as skills (Commands).
+type checkoutWalk struct {
+	Through  bool `json:"through,omitempty"`
+	Every    bool `json:"every,omitempty"`
+	Depth    int  `json:"depth,omitempty"`
+	Commands bool `json:"commands,omitempty"`
 }
 
 // MarshalJSON writes d in the helper's shape.
 func (d checkoutSkillDir) MarshalJSON() ([]byte, error) {
-	if !d.Recursive {
+	if !d.Recursive && d.checkoutWalk == (checkoutWalk{}) {
 		return json.Marshal(d.Dir)
 	}
-	return json.Marshal(map[string]any{"dir": d.Dir, "recursive": true})
+	type wire checkoutSkillDir
+	return json.Marshal(wire(d))
 }
 
 // checkoutSlot is one instruction slot as the helper reads it: Names, the
@@ -117,17 +137,22 @@ func (d checkoutSkillDir) MarshalJSON() ([]byte, error) {
 type checkoutSlot struct {
 	Names []string
 	Tree  *checkoutTree
+	// Inside follows a name's link only within the checkout; Once hands no
+	// file an earlier slot handed.
+	Inside bool `json:"inside,omitempty"`
+	Once   bool `json:"once,omitempty"`
 }
 
 // checkoutTree is a tree slot: the directory below a checkout's root, the
 // suffix of a handed file's name, the harness whose walk and frontmatter
 // reading the helper follows, and the frontmatter scope that leaves a file
-// out, nil for none.
+// out, nil for none; Once, as [checkoutSlot]'s.
 type checkoutTree struct {
 	Tree   string         `json:"tree"`
 	Suffix string         `json:"suffix"`
 	Form   checkoutForm   `json:"form"`
 	Scoped *checkoutScope `json:"scoped,omitempty"`
+	Once   bool           `json:"once,omitempty"`
 }
 
 // checkoutForm is a harness whose tree walk the helper knows (its treeForm).
@@ -136,8 +161,13 @@ type checkoutForm string
 const (
 	// checkoutFormClaude is Claude Code's walk of .claude/rules.
 	checkoutFormClaude checkoutForm = "claude"
+	// checkoutFormCopilot is Copilot 1.0.114's walk of .claude/rules.
+	checkoutFormCopilot checkoutForm = "copilot"
 	// checkoutFormQwen is Qwen Code's walk of .qwen/rules.
 	checkoutFormQwen checkoutForm = "qwen"
+	// checkoutFormGrok is Grok Build's read of .grok/rules and .claude/rules
+	// (flat, dot files too).
+	checkoutFormGrok checkoutForm = "grok"
 )
 
 // checkoutScope is the frontmatter keys that scope a file to paths, the first
@@ -150,8 +180,15 @@ type checkoutScope struct {
 // MarshalJSON writes s in the helper's shape: a tree as an object, names as a
 // list.
 func (s checkoutSlot) MarshalJSON() ([]byte, error) {
-	if s.Tree != nil {
+	switch {
+	case s.Tree != nil:
 		return json.Marshal(s.Tree)
+	case s.Inside || s.Once:
+		return json.Marshal(struct {
+			Names  []string `json:"names"`
+			Inside bool     `json:"inside,omitempty"`
+			Once   bool     `json:"once,omitempty"`
+		}{s.Names, s.Inside, s.Once})
 	}
 	return json.Marshal(s.Names)
 }
@@ -164,13 +201,17 @@ var checkoutUnlimited *int
 // repositories the run pushes to first, and the seats' namespace reserved, so
 // no repository's skills are listed under it.
 func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
-	launch, _ := json.Marshal(map[string]any{"state": h.state, "agents": h.sections, "first": repos,
+	config := map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "firingLimit": spec.FiringLimit,
 		"skillDirs": spec.SkillDirs, "skills": h.skills, "copied": h.copied,
 		"reserved":         []string{sandbox.SkillNamespace},
 		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions,
-		"skillSep": spec.SkillSep, "roots": h.roots})
-	return launch // strings, lists and an int cannot fail to encode
+		"skillSep": spec.SkillSep, "roots": h.roots}
+	if spec.ListedAs != "" {
+		config["listedAs"], config["homeSkills"] = spec.ListedAs, spec.HomeSkills
+	}
+	launch, _ := json.Marshal(config)
+	return launch // strings, lists, booleans and ints cannot fail to encode
 }
 
 // gate is the part of a run's script that hands the harness its checkouts'
@@ -183,7 +224,12 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 // keeps the file, its directory made where there is none (a fresh home, or a
 // Qwen Code context.fileName naming a path below it; [heldMade]), the file
 // left untouched where they hand nothing or the harness reads none.
-func (h checkoutHome) gate() string {
+func (h checkoutHome) gate() string { return h.prepare() + h.compose() }
+
+// prepare is [checkoutHome.gate] up to checkout-launch: the hold, the
+// removals and the launch, which write the sections [checkoutHome.compose]
+// puts in place.
+func (h checkoutHome) prepare() string {
 	q := shellword.Quote
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -210,12 +256,6 @@ func (h checkoutHome) gate() string {
 	line(`else`)
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
 	line(`fi`)
-	if h.holdsHome() {
-		line(`if [ -s "$rq" ] && [ -n "$ra" ]; then { if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && `+
-			`{ rmd=$(dirname "$ra"); rmt=; while [ ! -e "$rmd" ]; do rmt=$rmd; rmd=$(dirname "$rmd"); done; `+
-			`[ -z "$rmt" ] || { printf '%%s\n' "$rmt" > "$rha%s" && mkdir -p "$(dirname "$ra")"; }; } && `+
-			`cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`, heldMade)
-	}
 	return b.String()
 }
 
@@ -243,6 +283,28 @@ func (h checkoutHome) holdHome(line func(string, ...any)) {
 	}
 	line(`if [ -z "$ra" ]; then :; elif [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
 		`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
+}
+
+// compose is the shell writing the home's instruction file from what
+// [checkoutHome.prepare] held and the launch wrote: the run's own (where h has
+// a file of them), the home's own, then the sections, through a link as the
+// home keeps it, its directory made where there is none ([heldMade]); left
+// untouched where the run adds nothing or the harness reads no home file. A
+// Copilot run composes again for each launch attempt (copilotAttempts).
+func (h checkoutHome) compose() string {
+	if !h.holdsHome() {
+		return ""
+	}
+	has, text := `[ -s "$rq" ]`, `{ if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; }`
+	if h.own != "" {
+		o := shellword.Quote(h.own)
+		has = `{ [ -s "$rq" ] || [ -s ` + o + ` ]; }`
+		text = `{ rs=; for rf in ` + o + ` "$rha" "$rq"; do if [ -s "$rf" ]; then printf "$rs"; cat "$rf"; rs='\n\n'; fi; done; }`
+	}
+	return fmt.Sprintf(`if %s && [ -n "$ra" ]; then %s > "$rq.all" && `+
+		`{ rmd=$(dirname "$ra"); rmt=; while [ ! -e "$rmd" ]; do rmt=$rmd; rmd=$(dirname "$rmd"); done; `+
+		`[ -z "$rmt" ] || { printf '%%s\n' "$rmt" > "$rha%s" && mkdir -p "$(dirname "$ra")"; }; } && `+
+		`cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`+"\n", has, text, heldMade)
 }
 
 // restore is the shell marking the run ended once no firing holds the

@@ -36,7 +36,7 @@ type Spent struct {
 	Waited []Position `json:"waited,omitempty"`
 
 	// Unconfirmed is every log on which a node's barrier ran its whole budget
-	// ([DefaultBarrierBudget]) without committing. A read on it appends NO
+	// ([ElectionBarrierBudget], [SoloBarrierBudget]) without committing. A read on it appends NO
 	// SECOND barrier: it is refused at once, `no_quorum` where several members
 	// store the log and `broker_stalled` where one does
 	// ([ReadIndex.unconfirmed]). Every node's barrier goes to the one log's

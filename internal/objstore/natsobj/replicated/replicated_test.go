@@ -158,6 +158,46 @@ func TestAnObjectPutThroughOneMemberIsWholeThroughEvery(t *testing.T) {
 	}
 }
 
+// AN OBJECT IS READ ACROSS A CHANGE OF ITS STREAM'S LEADER: the leader's member
+// shuts down, handing its leadership over, and a stat and a get through another
+// member, asked at once, answer from the new leader inside the read's deadline.
+// A SMOKE TEST of the wiring on a real cluster: the cluster is too young for a
+// member to answer a read leaderless (nats-server answers 10008 only past ten
+// seconds of a group's life, isGroupLeaderless), so natsobj's
+// TestAReadWaitsOutAStreamWithNoLeader holds that answer deterministically.
+func TestAnObjectIsReadAcrossAChangeOfItsStreamsLeader(t *testing.T) {
+	f := startFleet(t)
+	buckets := make([]*natsobj.Backend, replicas)
+	for i := range replicas {
+		buckets[i] = f.bucket(t, i)
+	}
+	data := bytes.Repeat([]byte("read across an election "), 2*natsobj.MessageBytes/24)
+	name := objstore.KeyAt(time.Now()).Name()
+	if err := buckets[0].Put(t.Context(), name, bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	leader := f.leader(t)
+	reader := (leader + 1) % replicas
+	f.clients[leader].Conn().Close()
+	f.cluster.StopMember(leader)
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	if stat, err := buckets[reader].Stat(ctx, name); err != nil || stat.Size != int64(len(data)) {
+		t.Fatalf("a stat through member %d across the election = %+v, %v; want %d bytes", reader,
+			stat, err, len(data))
+	}
+	r, err := buckets[reader].Get(ctx, name, 0, -1)
+	if err != nil {
+		t.Fatalf("a get through member %d across the election: %v", reader, err)
+	}
+	defer r.Close()
+	if got, err := io.ReadAll(r); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read through member %d across the election: %d of %d bytes, %v", reader,
+			len(got), len(data), err)
+	}
+}
+
 // BenchmarkBackend measures the broker's object store at three replicas
 // through the suite every backend runs, driven from a FOLLOWER's client
 // (`from=follower`): the stream leader answers every put and read whichever

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -46,7 +47,8 @@ const geminiCollapseKeptTurns = 3
 const geminiContextAllowance = 64 << 10
 
 // geminiCountIDs bounds the ids one count keeps: past 1<<16 records, answers
-// and calls, the session is unread rather than held in memory.
+// and calls, the session is unread rather than held in memory, and the count
+// keeps no id after the line that passed it ([geminiCounting.full]).
 const geminiCountIDs = 1 << 16
 
 // geminiCountBaseIDs is the most ids a count keeps at its base, holding no
@@ -89,7 +91,8 @@ type geminiCall struct {
 // tokens and its text's UTF-8 bytes; each answer's largest; each call; the
 // records removed; the order records came in and whether each is a
 // compression's summary; what the walk could not read; and the line it reads.
-// Each id is kept by its key ([recordWord.key]).
+// Each id is kept by its key ([recordWord.key]). sum, where not nil, reads the
+// newest summary on the same walk ([geminiSummaryCapture]).
 type geminiCounting struct {
 	quarters, bytes map[string]int64
 	answers         map[string]*geminiAnswer
@@ -99,9 +102,13 @@ type geminiCounting struct {
 	snapshot        map[string]bool
 	compressions    geminiCompressionLines[string]
 	marks           countMarks
-	l               geminiCountLine
-	seps            lineSeparators
-	head            lineFormHead
+	// full says the ids passed [geminiCountIDs]: the count is unread, and
+	// keeps no more of them.
+	full bool
+	sum  *geminiSummaryCapture
+	l    geminiCountLine
+	seps lineSeparators
+	head lineFormHead
 }
 
 func newGeminiCounting() *geminiCounting {
@@ -110,26 +117,87 @@ func newGeminiCounting() *geminiCounting {
 		snapshot: map[string]bool{}}
 }
 
-// lineFormHead is a line's first [lineFormMaxBytes] bytes and one more, as
-// the walk takes them, for its forms ([lineForm.holds]): no more, whatever
-// the line's length.
-type lineFormHead []byte
-
-func (h *lineFormHead) Write(p []byte) (int, error) {
-	if room := lineFormMaxBytes + 1 - len(*h); room > 0 {
-		*h = append(*h, p[:min(len(p), room)]...)
-	}
-	return len(p), nil
+// lineFormHead is a line as its forms judge it ([lineForm.holds]), taken a
+// piece at a time as the walk reads it: from its first character that is no
+// white space, as bytes.TrimSpace reads one, to its first [lineFormMaxBytes]
+// bytes and one more (a character split there whole), which no whole form
+// holds; past says a character that is no white space follows that, and
+// carry is a character split across two pieces. So the walk judges a line as
+// the whole-line count did, the line trimmed whole, white space about it of
+// any length (codexLines), and holds no more of it.
+type lineFormHead struct {
+	held        []byte
+	begun, past bool
+	carry       [utf8.UTFMax]byte
+	carried     int
 }
 
-// form is the head as the whole-line count matched a form on the line, its
-// white space trimmed ([codexLines]): from its start alone where the line ran
-// past it, which no whole form holds.
-func (h lineFormHead) form() []byte {
-	if len(h) > lineFormMaxBytes {
-		return bytes.TrimLeftFunc(h, unicode.IsSpace)
+// reset starts the next line, keeping the head's room.
+func (h *lineFormHead) reset() { h.held, h.begun, h.past, h.carried = h.held[:0], false, false, 0 }
+
+func (h *lineFormHead) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 && !h.past {
+		if room := lineFormMaxBytes + 1 - len(h.held); h.begun && h.carried == 0 && (room > 0 || h.split()) {
+			k := max(room, 1)
+			h.held, p = append(h.held, p[:min(len(p), k)]...), p[min(len(p), k):]
+			continue
+		}
+		// A CHARACTER WHOLE, before the line's first that is no white space or
+		// after its head: one split across two pieces is held until it ends.
+		var char [utf8.UTFMax]byte
+		var c []byte
+		switch {
+		case h.carried == 0 && utf8.FullRune(p):
+			_, size := utf8.DecodeRune(p)
+			c, p = p[:size], p[size:]
+		default:
+			k := copy(h.carry[h.carried:], p)
+			if !utf8.FullRune(h.carry[:h.carried+k]) {
+				h.carried += k
+				return n, nil
+			}
+			// A split character may prove no character, ending before p.
+			_, size := utf8.DecodeRune(h.carry[:h.carried+k])
+			c = char[:copy(char[:], h.carry[:size])]
+			if size < h.carried {
+				h.carried = copy(h.carry[:], h.carry[size:h.carried])
+			} else {
+				p, h.carried = p[size-h.carried:], 0
+			}
+		}
+		switch r, _ := utf8.DecodeRune(c); {
+		case h.begun && len(h.held) <= lineFormMaxBytes, !h.begun && !unicode.IsSpace(r):
+			h.begun, h.held = true, append(h.held, c...)
+		case h.begun && !unicode.IsSpace(r):
+			h.past = true
+		}
 	}
-	return bytes.TrimSpace(h)
+	return n, nil
+}
+
+// split reports whether the head ends inside a character, which it takes
+// whole.
+func (h *lineFormHead) split() bool {
+	i := len(h.held) - 1
+	for i > 0 && len(h.held)-i < utf8.UTFMax && !utf8.RuneStart(h.held[i]) {
+		i--
+	}
+	return i >= 0 && !utf8.FullRune(h.held[i:])
+}
+
+// form is the line as the whole-line count judged a form on it ([codexLines]),
+// so far as the walk has read it: trimmed at both ends, and past
+// [lineFormMaxBytes] its first bytes alone, which no whole form holds. A
+// character the line ends inside is none of its white space.
+func (h *lineFormHead) form() []byte {
+	switch {
+	case h.past, h.carried > 0 && h.begun:
+		return h.held
+	case h.carried > 0:
+		return h.carry[:h.carried]
+	}
+	return bytes.TrimRightFunc(h.held, unicode.IsSpace)
 }
 
 // geminiCountLine is what the count reads of one line on the walk: whether
@@ -137,11 +205,14 @@ func (h lineFormHead) form() []byte {
 // ([geminiCounting.patch]), a `$set`, a `$rewindTo` or a session's header, its
 // type, and the record it is where none of those ([geminiCountRecord]); twice
 // says a member the count reads was written twice ([twice]), unread a part of
-// a patch that does not read, or more of them than [geminiCountBaseIDs].
+// a patch that does not read, or more of them than [geminiCountBaseIDs];
+// shapeless a `$patch` of no shape at all; took that the count took the
+// line's record.
 type geminiCountLine struct {
 	patch, set, rewind, session bool
 	typeAbsent, entry, user     bool
-	twice, unread               bool
+	twice, unread, shapeless    bool
+	took                        bool
 	record                      geminiCountRecord
 	updates                     []geminiCountRecord
 	removes                     []string
@@ -231,7 +302,10 @@ func (c *geminiCounting) start() {
 	c.l = geminiCountLine{record: record, updates: updates, removes: removes}
 	c.l.record.reset()
 	c.seps.reset()
-	c.head = c.head[:0]
+	c.head.reset()
+	if c.sum != nil {
+		c.sum.start(len(c.order))
+	}
 }
 
 // hold counts n more of a patch's parts the line holds, past
@@ -272,6 +346,7 @@ func (c *geminiCounting) record(w *lineWalk) error {
 			return err
 		case "$patch":
 			member(geminiCountsPatch)
+			l.shapeless = l.shapeless || k != jsonscan.ObjectStart
 			if l.patch = k != jsonscan.Null; l.patch {
 				return c.patch(w, k)
 			}
@@ -286,6 +361,9 @@ func (c *geminiCounting) record(w *lineWalk) error {
 			}
 			member(bit)
 			*present = k != jsonscan.Null
+			if name == "$rewindTo" && c.sum != nil {
+				return c.sum.rewindMember(w, k)
+			}
 			return w.scan.Skip()
 		}
 		handled, err := c.recordMember(w, name, k, &l.record, &seen, &l.twice)
@@ -310,7 +388,7 @@ func (c *geminiCounting) recordMember(w *lineWalk, name string, k jsonscan.Kind,
 		r.idOK = ok && k == jsonscan.String && !r.id.empty()
 	case "content":
 		*again = twice(seen, geminiCountsContent) || *again
-		err = w.geminiContent(k, r, again)
+		err = w.geminiContent(k, r, c.summaryWords(r), again)
 	case "thoughts":
 		*again = twice(seen, geminiCountsThoughts) || *again
 		err = w.geminiThoughts(k, r, again)
@@ -328,8 +406,13 @@ func (c *geminiCounting) recordMember(w *lineWalk, name string, k jsonscan.Kind,
 // late, as the whole-line count knew it, by the line's head ([lineFormHead]).
 func (c *geminiCounting) line(object bool) {
 	user := c.read(object)
-	if summary, ok := c.compressions.line(c.head.form(), user, user != ""); ok {
+	form := c.head.form()
+	summary, ok := c.compressions.line(form, user, user != "")
+	if ok {
 		c.snapshot[summary] = true
+	}
+	if c.sum != nil {
+		c.sum.line(c, object, form, summary, ok)
 	}
 }
 
@@ -352,29 +435,36 @@ func (c *geminiCounting) read(object bool) string {
 			c.take(&l.updates[i])
 		}
 		for _, id := range l.removes {
-			c.removed[id] = true
+			if !c.full {
+				c.removed[id] = true
+			}
 		}
 	case l.set, l.rewind, l.session && l.typeAbsent:
 	case !l.entry:
 		c.marks = c.marks.with(sandbox.CountUnread)
 		return ""
 	default:
-		c.take(&l.record)
+		l.took = c.take(&l.record)
 		if l.user && l.record.idOK {
 			user = l.record.id.key()
 		}
 	}
 	if len(c.quarters)+len(c.answers)+len(c.calls)+len(c.removed) > geminiCountIDs {
 		c.marks = c.marks.with(sandbox.CountUnread)
+		c.full = true
 	}
 	return user
 }
 
-// take takes one copy of a record.
-func (c *geminiCounting) take(r *geminiCountRecord) {
+// take takes one copy of a record, none once the count is full, and reports
+// whether it took it.
+func (c *geminiCounting) take(r *geminiCountRecord) bool {
 	if !r.idOK || r.past {
 		c.marks = c.marks.with(sandbox.CountUnread)
-		return
+		return false
+	}
+	if c.full {
+		return false
 	}
 	id := r.id.key()
 	if _, seen := c.quarters[id]; !seen {
@@ -403,6 +493,7 @@ func (c *geminiCounting) take(r *geminiCountRecord) {
 	}
 	c.quarters[id] = max(c.quarters[id], r.quarters)
 	c.bytes[id] = max(c.bytes[id], r.bytes)
+	return true
 }
 
 // geminiCarried is carriers with id, the newest, where it is not already the
@@ -421,7 +512,7 @@ func geminiCarried(carriers []string, id string) []string {
 func (c *geminiCounting) patch(w *lineWalk, k jsonscan.Kind) error {
 	l := &c.l
 	if k != jsonscan.ObjectStart {
-		l.unread = true
+		l.unread, l.shapeless = true, true
 		return w.scan.Skip()
 	}
 	var seen uint16
@@ -431,7 +522,7 @@ func (c *geminiCounting) patch(w *lineWalk, k jsonscan.Kind) error {
 			l.twice = twice(&seen, 1) || l.twice
 			ok, err := w.listField(k, func(k jsonscan.Kind) error {
 				if k != jsonscan.ObjectStart {
-					l.unread = true
+					l.unread, l.shapeless = true, true
 					return w.scan.Skip()
 				}
 				if len(l.updates) < cap(l.updates) {
@@ -441,36 +532,49 @@ func (c *geminiCounting) patch(w *lineWalk, k jsonscan.Kind) error {
 				}
 				r := &l.updates[len(l.updates)-1]
 				r.reset()
+				if c.sum != nil {
+					c.sum.updateStart()
+				}
 				var fields uint16
 				err := w.members(func(name string, k jsonscan.Kind) error {
+					if name == "type" && c.sum != nil {
+						return c.sum.updateType(w, k)
+					}
 					handled, err := c.recordMember(w, name, k, r, &fields, &l.twice)
 					if !handled {
 						err = w.scan.Skip()
 					}
 					return err
 				})
+				if c.sum != nil {
+					c.sum.updated(c, r)
+				}
 				if !l.hold(1 + len(r.answers) + len(r.calls)) {
 					l.updates = l.updates[:len(l.updates)-1]
 				}
 				return err
 			})
-			l.unread = l.unread || !ok
+			l.unread, l.shapeless = l.unread || !ok, l.shapeless || !ok
 			return err
 		case "removeIds":
 			l.twice = twice(&seen, 2) || l.twice
 			ok, err := w.listField(k, func(k jsonscan.Kind) error {
 				id, ok, err := w.idField(k)
 				l.unread = l.unread || !ok
+				if ok && c.sum != nil {
+					c.sum.removal(c, id)
+				}
 				if ok && l.hold(1) {
 					l.removes = append(l.removes, id.key())
 				}
 				return err
 			})
-			l.unread = l.unread || !ok
+			l.unread, l.shapeless = l.unread || !ok, l.shapeless || !ok
 			return err
 		case "orderIds":
 			l.twice = twice(&seen, 4) || l.twice
 			l.unread = l.unread || k != jsonscan.Null
+			l.shapeless = l.shapeless || k != jsonscan.Null
 		}
 		return w.scan.Skip()
 	})
@@ -478,21 +582,25 @@ func (c *geminiCounting) patch(w *lineWalk, k jsonscan.Kind) error {
 
 // geminiContent reads a record's content, the value k begins, into r: a text
 // or its parts (an object one part), its answers kept apart and its calls
-// kept, and its texts' UTF-8 bytes.
-func (w *lineWalk) geminiContent(k jsonscan.Kind, r *geminiCountRecord, again *bool) error {
+// kept, and its texts' UTF-8 bytes; and its words into words where not nil, a
+// string or a list's parts alone, as the transcript reads them
+// ([chatReading.parts]).
+func (w *lineWalk) geminiContent(k jsonscan.Kind, r *geminiCountRecord, words *geminiWords, again *bool) error {
+	words.start()
 	switch k {
 	case jsonscan.Null:
 		return nil
 	case jsonscan.String:
-		t, err := w.chatText(false)
+		t, err := w.chatTextTo(false, words.partText())
 		r.quarters, r.bytes = r.quarters+t.estimate(), r.bytes+t.bytes
+		words.partEnd(words.untrimmed() > 0, false)
 		return err
 	case jsonscan.ObjectStart:
-		return w.geminiPart(k, 0, r, again)
+		return w.geminiPart(k, 0, r, nil, again)
 	case jsonscan.ArrayStart:
 		i := 0
 		return w.elements(func(k jsonscan.Kind) (bool, error) {
-			err := w.geminiPart(k, i, r, again)
+			err := w.geminiPart(k, i, r, words, again)
 			i++
 			return true, err
 		})
@@ -512,8 +620,9 @@ const (
 
 // geminiPart reads the i'th part of a record's content, the value k begins,
 // into r: a text, an answer, media, or anything else at its JSON's length,
-// its call kept.
-func (w *lineWalk) geminiPart(k jsonscan.Kind, i int, r *geminiCountRecord, again *bool) error {
+// its call kept; and its text into words where not nil ([geminiWords]).
+func (w *lineWalk) geminiPart(k jsonscan.Kind, i int, r *geminiCountRecord, words *geminiWords,
+	again *bool) error {
 	if k != jsonscan.ObjectStart {
 		r.marks = r.marks.with(sandbox.CountUnread)
 		return w.scan.Skip()
@@ -522,6 +631,7 @@ func (w *lineWalk) geminiPart(k jsonscan.Kind, i int, r *geminiCountRecord, agai
 		seen                   uint16
 		text                   chatText
 		textOK, textOn         bool
+		thought                bool
 		answer                 geminiCountAnswer
 		answerMarks            countMarks
 		answerOn, inline, file bool
@@ -537,8 +647,10 @@ func (w *lineWalk) geminiPart(k jsonscan.Kind, i int, r *geminiCountRecord, agai
 				return 4, w.scan.Skip()
 			}
 			var err error
-			text, err = w.chatText(false)
+			text, err = w.chatTextTo(false, words.partText())
 			return 0, err
+		case "thought":
+			thought = k == jsonscan.True
 		case "functionResponse":
 			*again = twice(&seen, geminiCountPartAnswer) || *again
 			if answerOn = !null; null {
@@ -565,6 +677,9 @@ func (w *lineWalk) geminiPart(k jsonscan.Kind, i int, r *geminiCountRecord, agai
 		}
 		return w.jsValue(k)
 	})
+	if err == nil {
+		words.partEnd(textOK, thought)
+	}
 	switch {
 	case err != nil:
 		return err
