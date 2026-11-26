@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -185,5 +186,27 @@ func TestAnInstructionDirectoryIsHandedOnlyInsideItsCheckout(t *testing.T) {
 	if want := work + "/in/shared/instructions"; n != "1" || dirs != want || kept != "in\n" {
 		t.Errorf("copilot-launch handed %q sets, dirs %q, kept %q; want in's directory alone, by its real path %q",
 			n, dirs, kept, want)
+	}
+}
+
+// A COPILOT LISTING KEEPS WHAT IT LEFT OUT BEFORE ITS SKILLS: where the
+// skills' listing and the left-out lines pass one firing's bound, the
+// left-out lines come whole, last, and the skills' listing before them is
+// cut.
+//
+// Mutation: take the skills first, and this goes red.
+func TestACopilotListingKeepsWhatItLeftOutBeforeItsSkills(t *testing.T) {
+	t.Parallel()
+	h := handedCheckout{name: "late", root: "/w/late"}
+	for i := range 200 {
+		h.skills = append(h.skills, handedSkill{name: fmt.Sprintf("late:s%d", i),
+			description: strings.Repeat("d", maxSkillDescription), path: fmt.Sprintf("/h/skills/late:s%d/SKILL.md", i)})
+	}
+	skipped := []string{"the skill /w/late/.github/skills/x is left out: its name is taken"}
+	listing := copilotNestedListing([]handedCheckout{h}, skipped)
+	skills, ok := strings.CutSuffix(listing, "\n\n"+skippedListing(skipped))
+	if !ok || !strings.HasSuffix(skills, "\n"+listingCut) || len(listing) > maxListing {
+		t.Errorf("the listing (%d bytes) is not the skills cut, then what was left out whole: ...%s", len(listing),
+			listing[max(len(listing)-300, 0):])
 	}
 }
