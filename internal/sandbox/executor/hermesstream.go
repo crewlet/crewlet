@@ -239,16 +239,17 @@ func (d *hermesEvents) roundCapped() bool {
 func (d *hermesEvents) Ended() bool { return d.done }
 
 // Requests implements [Decoder]: the responses the run's plugin recorded,
-// which the script appends after Hermes exits ([hermesRequestEvent]); its
-// stdout marks no request. Measured on 0.23.3 against a stand-in: 31 for 31,
-// and 6 with a 429 and a 500 it retried.
+// which the script appends after Hermes exits ([hermesRequestEvent]): its loop's
+// alone (measured on 0.23.3: 31 for 31, 6 with a 429 and a 500 retried, and not
+// the summary a run its round cap stopped asks for). NOT THE TURN CAP'S COUNT,
+// which the session store holds, that summary included ([Hermes.storeRequests]).
 func (d *hermesEvents) Requests() int { return len(d.requests) }
 
-// InFlight implements [Decoder]: none, as Hermes's own --max-turns stops its
-// loop before the next request (measured on 0.23.3: a cap of 3, 3 requests of
-// its loop). NOT COUNTED: the summary request Hermes makes once its loop is
-// capped, which the plugin's record leaves out (a fourth request there).
-func (d *hermesEvents) InFlight() int { return 0 }
+// InFlight implements [Decoder]: one, the summary Hermes asks for once its own
+// --max-turns stops its loop (measured on 0.23.3: a cap of 3, the loop's 3
+// requests and the summary's 1, all 4 in the session store the cap's count
+// reads, [Hermes.storeRequests]), so an honest capped run is left to that stop.
+func (d *hermesEvents) InFlight() int { return 1 }
 
 // Result implements [Decoder].
 func (d *hermesEvents) Result() sandbox.Result {

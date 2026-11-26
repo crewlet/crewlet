@@ -16,22 +16,34 @@ import (
 // skipped, and no read holds a slot for longer than one that size takes.
 const countReadBytes = liveBacklog
 
-// collectionCounted is a harness whose stream shows its run's model requests
-// only once the harness has exited, so its runs are counted at their
-// collection alone and never live ([Runner.Count]): CountedAtCollection says
-// why, at the declaration.
-type collectionCounted interface{ CountedAtCollection() string }
-
 // Count implements [sandbox.Runner]: a reading of the job's event stream from
 // its first byte, through a decoder of the harness's own kept for the reading's
 // life and the line handling [Runner.Collect] reads with, so its count is the
-// collection's of the same bytes. Nil for a harness counted at its collection
-// alone ([collectionCounted]), or one with no event stream.
+// collection's of the same bytes; or, for a harness whose stream shows its
+// requests only once it exits, of its own record of the session
+// ([recordCounted]), of the largest of its records ([recordsCounted]), or of
+// its session store ([storeCounted]).
 func (r *Runner) Count(sandbox.RunHandle) sandbox.Counter {
-	if _, atEnd := r.harness.(collectionCounted); atEnd {
-		return nil
+	if sc, ok := r.harness.(storeCounted); ok {
+		return &storeCount{harness: sc, inFlight: r.harness.Events().InFlight()}
+	}
+	if rc, ok := r.harness.(recordCounted); ok {
+		return r.recordCounter(rc)
+	}
+	if rs, ok := r.harness.(recordsCounted); ok {
+		m := &maxCount{}
+		for _, rc := range rs.countedRecords() {
+			m.parts = append(m.parts, r.recordCounter(rc))
+		}
+		return m
 	}
 	return &counter{harness: r.harness, bound: r.lineBound, readBytes: countReadBytes}
+}
+
+// recordCounter is one live count of the job off record rc.
+func (r *Runner) recordCounter(rc recordCounted) *recordCount {
+	return &recordCount{harness: rc, bound: r.lineBound, readBytes: countReadBytes,
+		inFlight: r.harness.Events().InFlight()}
 }
 
 // counter is one live count of one job's stream ([Runner.Count]).
