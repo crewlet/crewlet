@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -246,6 +247,127 @@ func TestAReturnOwedWhenItsProcessDiesIsDeliveredAgain(t *testing.T) {
 	if md == nil || md.NumDelivered != 2 {
 		t.Fatalf("the message whose return was owed came back as %+v, want its second delivery", md)
 	}
+}
+
+// A RETURN OWED PAST ITS ACK WINDOW IS KEPT IN PROGRESS until it is sent: the
+// next pull can stay open longer than the window, and a drain's later handlers
+// run as long as they take. Lapsed, the broker delivers the message again, and
+// the owed return, which it matches by stream sequence alone, lands on that
+// newer delivery and has it delivered once more before its handler settles it:
+// a handler past its budget, as the hold-over-pull cases saw. Read in a bubble,
+// as the keeper's loop runs it ([attachment.run]): no gap in the owed
+// delivery's renewals, through its return, exceeds a third of the window.
+//
+// Mutation: renew no owed return ([attachment.renewSpaced]), or start no keeper
+// in run, and the gap is the whole wait.
+func TestAReturnOwedPastItsAckWindowIsKeptInProgress(t *testing.T) {
+	t.Parallel()
+	const window = 3 * time.Second
+	pass := spacedOutcomes["pass"]
+	cases := map[string]func(t *testing.T, a *attachment, returned *clockedMsg, wait func()){
+		"a pull open past the window": func(t *testing.T, a *attachment, returned *clockedMsg, wait func()) {
+			a.cons = &slowPull{wait: wait, scriptedConsumer: &scriptedConsumer{t: t,
+				answers: []pullAnswer{{delivered: []jetstream.Msg{returned}}, {}}}}
+			h := func(context.Context, *events.Event) queue.Result { return pass }
+			a.takeOne(t.Context(), h)
+			a.takeOne(t.Context(), h)
+		},
+		"a drain's later handler running past it": func(t *testing.T, a *attachment, returned *clockedMsg, wait func()) {
+			a.cons = &scriptedConsumer{t: t, answers: []pullAnswer{
+				{delivered: []jetstream.Msg{deliveredEvent("test.waiting", 9)}}, {}}}
+			at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			first := &events.Event{Type: "test.returned", Timestamp: at}
+			later := &events.Event{Type: "test.later", Timestamp: at.Add(time.Second)}
+			opts := queue.DefaultBatchOptions()
+			a.dispatchBatch(t.Context(), []delivery{{msg: returned, ev: first, seq: 7},
+				{msg: deliveredEvent("test.later", 8), ev: later, seq: 8}},
+				func(_ context.Context, evs []*events.Event) queue.Result {
+					if evs[0].Type == "test.returned" {
+						return pass
+					}
+					wait()
+					return queue.Ack()
+				}, func(ev *events.Event) string { return ev.Type }, opts)
+			if got := a.drain(t.Context(), opts); len(got) != 1 {
+				t.Fatalf("the next drain took %d deliveries, want the 1 waiting", len(got))
+			}
+		},
+	}
+	for name, owe := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				returned := &clockedMsg{answeredMsg: deliveredEvent("test.returned", 7)}
+				a := spacingAttachment(t, nil)
+				a.q.cfg.AckWait = window
+				a.done, a.abandon = make(chan struct{}), func() {}
+				a.run(t.Context(), func(context.Context, *attachment) {
+					owe(t, a, returned, func() { time.Sleep(4 * window) })
+				})
+				synctest.Wait()
+
+				signals := returned.stamped()
+				if n := len(signals); n == 0 || !signals[n-1].returned ||
+					slices.ContainsFunc(signals[:n-1], func(s ackStamp) bool { return s.returned }) {
+					t.Fatalf("the owed delivery's signals were %v, want renewals and then its one return",
+						signals)
+				}
+				for i := 1; i < len(signals); i++ {
+					if gap := signals[i].at.Sub(signals[i-1].at); gap > window/3 {
+						t.Errorf("the owed delivery went %v unrenewed before signal %d of %d, past a "+
+							"third of its %v window: the broker would deliver it again before its "+
+							"return", gap, i+1, len(signals), window)
+					}
+				}
+			})
+		})
+	}
+}
+
+// clockedMsg is a delivered message that stamps, in order and on the clock,
+// each renewal of its ack window and each return sent of it.
+type clockedMsg struct {
+	*answeredMsg
+	mu      sync.Mutex
+	signals []ackStamp
+}
+
+// ackStamp is one acknowledgement of a clockedMsg: a renewal, or its return.
+type ackStamp struct {
+	at       time.Time
+	returned bool
+}
+
+func (m *clockedMsg) InProgress() error { return m.stamp(false) }
+
+func (m *clockedMsg) NakWithDelay(time.Duration) error { return m.stamp(true) }
+
+func (m *clockedMsg) stamp(returned bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.signals = append(m.signals, ackStamp{at: time.Now(), returned: returned})
+	return nil
+}
+
+// stamped is what m stamped so far.
+func (m *clockedMsg) stamped() []ackStamp {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.signals)
+}
+
+// slowPull is a scripted broker that answers every pull after the first only
+// once wait returns: a pull it holds open as long as wait takes.
+type slowPull struct {
+	*scriptedConsumer
+	wait func()
+}
+
+func (c *slowPull) Fetch(n int, opts ...jetstream.FetchOpt) (jetstream.MessageBatch, error) {
+	if len(c.fetches) > 0 {
+		c.wait()
+	}
+	return c.scriptedConsumer.Fetch(n, opts...)
 }
 
 // pullWitness is a scripted broker that reads, at each pull, how many spaced
