@@ -21,15 +21,15 @@ const listedKimi = "kimi"
 // keeps a copy out), 8 deep at most, nothing refused past that.
 var kimiListing = listingRule{harness: "Kimi Code", walk: skillWalkOptions{Every: true, Depth: 8}, loose: true,
 	key: strings.ToLower, shown: func(name string) string { return name },
-	takes: func(d skillDir) (string, []string) {
+	takes: func(d skillDir) (string, []string, bool) {
 		n, named := frontName(entryFile(d))
 		if !named || n == "" {
 			if !d.command {
-				return "", nil
+				return "", nil, true
 			}
 			n = d.name
 		}
-		return n, []string{strings.ToLower(n)}
+		return n, []string{strings.ToLower(n)}, true
 	}}
 
 // runKimiNested is one firing of a Kimi Code run's nested hand, which the
