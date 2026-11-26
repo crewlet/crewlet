@@ -268,7 +268,7 @@ COMPANY ?=
 .PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer setup-steps ssh-held-words objects-answer broker-answer assistant-fixtures retention-alarms \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint notehelper notehelper-check \
         check fmt-check tidy-check signoff-check signoff-test git-test chromium-test node-test playwright-tree-test vet lint test test-norace test-cross test-solo \
-        require-npm bench git test-gitproc test-capture test-speech chromium node playwright-tree \
+        require-npm bench git test-gitproc test-capture test-speech speech-pin-test chromium node playwright-tree \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -702,7 +702,7 @@ SUITE_ENV = $(REQUIRED) $(GIT_ENV) $(CHROMIUM_ENV) $(NODE_FLOOR_ENV) $(PLAYWRIGH
 # environment and a sub-make inherits the parent's command line, so a value
 # exported in the shell or given to `make check` would run one shard of each
 # half and print that every gate passed.
-check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test node-test playwright-tree-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test notehelper-check ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test node-test speech-pin-test playwright-tree-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test notehelper-check ## every gate CI runs on a PR
 	@status=0; \
 	$(MAKE) test TEST_SHARD= || status=1; \
 	$(MAKE) test-solo TEST_SHARD= || status=1; \
@@ -792,6 +792,11 @@ git-test: ## run the git recipe's and the pin check's own suite (ci: build + vet
 # second run. It needs curl, zip, unzip and sha256sum (or shasum).
 chromium-test: ## run the Chromium recipe's and the pin check's own suite (ci: build + vet)
 	@scripts/chromium-pin_test.sh
+
+# The OWN SUITE of the weekly sherpa-onnx pin check (scripts/sherpa-pin-check.sh),
+# against stand-in release listings under file://: no network, under a second.
+speech-pin-test: ## run the sherpa-onnx pin check's own suite (ci: build + vet)
+	@scripts/sherpa-pin_test.sh
 
 # The OWN SUITE of the floor Node's recipe (scripts/node.sh) and of its weekly
 # pin check (scripts/node-pin-check.sh), for git-test's reasons: shell no Go
