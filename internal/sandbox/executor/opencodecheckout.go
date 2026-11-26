@@ -40,17 +40,21 @@ func openCodeCheckouts(paths Paths, env map[string]string) checkoutSpec {
 	if prompt {
 		names = names[:1]
 	}
+	// THE HOME'S SKILL DIRECTORIES, each listed for a run in the working
+	// directory, a git repository or not (measured, B2b's homeoc rows).
 	dirs := []string{".opencode/skills", ".opencode/skill", ".claude/skills", ".agents/skills"}
+	home := []string{".config/opencode/skills", ".config/opencode/skill", ".opencode/skills", ".opencode/skill",
+		".claude/skills", ".agents/skills"}
 	if skills {
-		dirs = slices.DeleteFunc(dirs, func(d string) bool { return d == ".claude/skills" })
+		claude := func(d string) bool { return d == ".claude/skills" }
+		dirs, home = slices.DeleteFunc(dirs, claude), slices.DeleteFunc(home, claude)
 	}
-	work := paths.Home + "/" + sandbox.WorkspaceSubdir
-	home := []string{paths.Home + "/.config/opencode/skills", paths.Home + "/.config/opencode/skill"}
-	for _, d := range dirs[2:] {
-		home = append(home, paths.Home+"/"+d)
+	listed := make([]string, 0, len(home)+len(dirs))
+	for _, d := range home {
+		listed = append(listed, paths.Home+"/"+d)
 	}
 	for _, d := range dirs {
-		home = append(home, work+"/"+d)
+		listed = append(listed, paths.Home+"/"+sandbox.WorkspaceSubdir+"/"+d)
 	}
 	walked := func(dirs []string) []checkoutSkillDir {
 		out := make([]checkoutSkillDir, len(dirs))
@@ -64,7 +68,7 @@ func openCodeCheckouts(paths Paths, env map[string]string) checkoutSpec {
 		Limit:        checkoutUnlimited,
 		FiringLimit:  &openCodeFiringLimit,
 		SkillDirs:    walked(dirs),
-		HomeSkills:   walked(home),
+		HomeSkills:   walked(listed),
 	}
 }
 

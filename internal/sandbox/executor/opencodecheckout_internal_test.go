@@ -11,7 +11,8 @@ import (
 // _SKILLS (the skills) is "1" or "true" in any case (measured, B2b's cc rows;
 // its flag reader), so the spec drops that slot name or skill directory, and
 // the home's .claude/skills from the names no copy takes; any other value, a
-// padded "1" included, leaves both.
+// padded "1" included, leaves both. The home's ~/.opencode/skill(s) count
+// among the names no copy takes, as OpenCode lists them (homeoc rows).
 //
 // Mutation: ignore a switch, read the umbrella for one half only, or take
 // any non-empty value as set, and a row goes red.
@@ -38,7 +39,9 @@ func TestARunWhoseEnvironmentSwitchesClaudeCodeOffHandsNoneOfIt(t *testing.T) {
 			return slices.ContainsFunc(dirs, func(d checkoutSkillDir) bool { return d.Dir == dir })
 		}
 		if has(spec.SkillDirs, ".claude/skills") != tc.dirs || has(spec.HomeSkills, "/home/box/.claude/skills") != tc.dirs ||
-			!has(spec.SkillDirs, ".agents/skills") || !has(spec.HomeSkills, "/home/box/.config/opencode/skills") {
+			!has(spec.SkillDirs, ".agents/skills") || !has(spec.HomeSkills, "/home/box/.config/opencode/skills") ||
+			!has(spec.HomeSkills, "/home/box/.opencode/skills") || !has(spec.HomeSkills, "/home/box/.opencode/skill") ||
+			!has(spec.HomeSkills, "/home/box/workspace/.opencode/skills") {
 			t.Errorf("%s: the skill directories are %v, listed %v, want .claude/skills %v", name, spec.SkillDirs,
 				spec.HomeSkills, tc.dirs)
 		}
