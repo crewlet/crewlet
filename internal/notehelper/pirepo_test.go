@@ -232,6 +232,62 @@ func TestAPiFiringInASmallRoomKeepsWhatItLeftOut(t *testing.T) {
 	}
 }
 
+// A PI FIRING CLAIMS ONLY THE CHECKOUTS IT CAN NAME: in a room under the
+// listings' 64 KiB, which hands no file, a claimed checkout's file is named
+// in the answer whatever lines about skills the firing says (the file lines
+// come first), and a checkout whose line no longer fits waits, unclaimed,
+// for a firing with room, which hands it.
+//
+// Mutation: say the file lines after the skills', or claim past the names'
+// room, and this goes red.
+func TestAPiFiringClaimsOnlyTheCheckoutsItCanName(t *testing.T) {
+	t.Parallel()
+	const room = 6_000
+	r := newRepoRun(t, nil)
+	work := r.workdir(t)
+	r.launchWith(t, piSpec(r.skills), false, "")
+	files := map[string]string{"a-skills/.git/": ""}
+	for i := range 40 {
+		for _, group := range []string{"web", "infra"} {
+			files[fmt.Sprintf("a-skills/.pi/skills/%s/d%02d/SKILL.md", group, i)] = fmt.Sprintf(
+				"---\nname: d%02d\ndescription: D.\n---\n", i)
+		}
+	}
+	for i := range 40 {
+		files[fmt.Sprintf("c%02d/.git/", i)] = ""
+		files[fmt.Sprintf("c%02d/AGENTS.md", i)] = "C\n"
+	}
+	r.add(t, files)
+	out, _ := r.piFireWithin(t, room)
+	if len(out) > room {
+		t.Errorf("the answer takes %d bytes, past its room of %d", len(out), room)
+	}
+	claimed := map[string]bool{}
+	for _, name := range strings.Split(strings.TrimSpace(read(t, filepath.Join(r.state, "handed"))), "\n") {
+		claimed[name] = true
+	}
+	var waiting []string
+	for i := range 40 {
+		name := fmt.Sprintf("c%02d", i)
+		line := piLeftOut(filepath.Join(work, name, "AGENTS.md"))
+		switch {
+		case !claimed[name]:
+			waiting = append(waiting, name)
+		case !strings.Contains(out, line):
+			t.Errorf("%s is claimed but its file is not named in the answer", name)
+		}
+	}
+	if len(waiting) == 0 || len(waiting) == 40 {
+		t.Fatalf("%d of 40 checkouts wait, want some named and some waiting", len(waiting))
+	}
+	later, _ := r.piFire(t)
+	for _, name := range waiting {
+		if !strings.Contains(later, piFramed(work, name, "AGENTS.md", "C\n")) {
+			t.Errorf("%s, which waited, is not handed whole by a firing with room", name)
+		}
+	}
+}
+
 // EACH CLONE NAMES THE FILE PI WOULD LOAD AT ITS ROOT: the first of
 // AGENTS.override.md, AGENTS.md, AGENTS.MD, CLAUDE.md and CLAUDE.MD, by exact
 // name (measured on 1.6.0), its path in the wrapping; a clone with neither

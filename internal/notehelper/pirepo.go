@@ -24,7 +24,10 @@ func runPiNested(_ context.Context, f flags, _ io.Reader, stdout, stderr io.Writ
 	}
 	room := max(f.room, 0)
 	listings := min(maxListing, room)
-	c.firing = &firingBound{left: room - listings, count: utf16Count}
+	// A ROOM UNDER THE LISTINGS' FULL BOUND NAMES LESS THAN A LATER ONE MAY:
+	// a checkout it cannot name waits for that one.
+	c.firing = &firingBound{left: room - listings, count: utf16Count,
+		names: newListingBudgetWithin(listings).namesWithin(), namesCap: listings >= maxListing}
 	handed, skipped, err := handNested(c, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "notehelper: handing a checkout's instructions: %v\n", err)

@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -170,8 +171,8 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 	if err = os.WriteFile(filepath.Join(c.State, "handed"), nil, 0o600); err != nil {
 		return err
 	}
-	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec, &firingBound{left: math.MaxInt, count: byteCount},
-		&skips{stderr: stderr})
+	handed, err := handCheckouts(c.State, work, c.First, c.checkoutSpec,
+		unboundNames(&firingBound{left: math.MaxInt, count: byteCount}), &skips{stderr: stderr})
 	if err != nil {
 		return err
 	}
@@ -285,12 +286,26 @@ type skips struct {
 	stderr io.Writer
 	keep   string
 	lines  []string
+	files  int // how many lines open lines, said by [skips.sayFiles]
 }
 
 // say says one line of what the firing left out.
 func (s *skips) say(format string, args ...any) {
-	line := fmt.Sprintf(format, args...)
-	s.lines = append(s.lines, line)
+	s.put(len(s.lines), fmt.Sprintf(format, args...))
+}
+
+// sayFiles says lines about a checkout's instruction files, ahead of every
+// line about a skill: they name what a claimed checkout was not handed, and a
+// cut listing keeps its first lines.
+func (s *skips) sayFiles(lines []string) {
+	for _, line := range lines {
+		s.put(s.files, line)
+		s.files++
+	}
+}
+
+func (s *skips) put(at int, line string) {
+	s.lines = slices.Insert(s.lines, at, line)
 	if s.keep == "" {
 		fmt.Fprintf(s.stderr, "notehelper: %s\n", line)
 	}
@@ -368,7 +383,8 @@ func handNested(c nestedConfig, stderr io.Writer) ([]handedCheckout, []string, e
 	said := &skips{stderr: stderr, keep: filepath.Join(c.State, skippedLog)}
 	firing := c.firing
 	if firing == nil {
-		firing = &firingBound{left: math.MaxInt, count: byteCount}
+		firing = &firingBound{left: math.MaxInt, count: byteCount, names: newListingBudget().namesWithin(),
+			namesCap: true}
 		if c.FiringLimit != nil {
 			firing.left = *c.FiringLimit
 		}
@@ -383,6 +399,24 @@ func handNested(c nestedConfig, stderr io.Writer) ([]handedCheckout, []string, e
 type firingBound struct {
 	left  int
 	count func(string) int
+	// names is the bytes left for the lines naming the files left out, each
+	// with its "\n- " ([fitClaim]); namesCap whether no later firing names
+	// more, so the first checkout is claimed even past it; namesUsed whether
+	// one took any.
+	names               int
+	namesCap, namesUsed bool
+}
+
+// unboundNames is a firing bound with no bound on its names: a launch's.
+func unboundNames(b *firingBound) *firingBound {
+	b.names, b.namesCap = math.MaxInt, true
+	return b
+}
+
+// namesWithin is the bytes a firing's left-out listing, taken first from
+// budget b ([listingBudget.listings]), holds for its lines.
+func (b *listingBudget) namesWithin() int {
+	return max(b.left-len(skippedListing([]string{""})), 0)
 }
 
 // byteCount is s's length in bytes.
@@ -591,12 +625,16 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 	room, spent := newCopyRoom(), false
 	var claimed []string
 	plans := map[string][]plannedSkill{}
+	parts := map[string][]instructionPart{}
+	fits := func(name string) bool { return fitClaim(work, name, limit, spec, firing, parts, said) }
 	for _, name := range names {
 		if was[name] || !cloneFinished(filepath.Join(work, name)) {
 			continue
 		}
 		if spec.Skills == "" {
-			claimed = append(claimed, name)
+			if fits(name) {
+				claimed = append(claimed, name)
+			}
 			continue
 		}
 		if room.spent() {
@@ -604,7 +642,8 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 				fmt.Fprintln(said.stderr, "notehelper: this firing's copy bound is spent; the checkouts with skills left wait for the next")
 				spent = true
 			}
-			if dirs, over := checkoutSkillDirs(filepath.Join(work, name), spec); len(dirs) > 0 || len(over) > 0 {
+			if dirs, over := checkoutSkillDirs(filepath.Join(work, name), spec); len(dirs) > 0 || len(over) > 0 ||
+				!fits(name) {
 				continue
 			}
 			tags.take(name)
@@ -616,7 +655,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 		// before it is handed.
 		planSaid := &skips{stderr: io.Discard}
 		planned, past := planCheckoutSkills(filepath.Join(work, name), tags.peek(name), spec, planSaid)
-		if (past || !room.fits(planned)) && room.used {
+		if (past || !room.fits(planned)) && room.used || !fits(name) {
 			continue
 		}
 		said.sayAll(planSaid.lines)
@@ -655,9 +694,7 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 		if spec.ImportInstructions {
 			h.text = rootImports(root, spec.Instructions, said)
 		} else {
-			parts, _ := instructionParts(root, limit, spec.Instructions, said)
-			parts = fitFiring(parts, firing, said)
-			h.text, h.parts = joinParts(parts), parts
+			h.text, h.parts = joinParts(parts[name]), parts[name]
 		}
 		for _, p := range plans[name] {
 			skill, err := copyPlanned(p, spec, staging, said)
@@ -670,6 +707,37 @@ func handCheckouts(state, work string, first []string, spec checkoutSpec, firing
 		handed = append(handed, h)
 	}
 	return handed, nil
+}
+
+// fitClaim is whether the checkout name under work may be claimed now for
+// its instructions: its files read within limit and fitted to what is left
+// of firing ([fitFiring]) into parts, the lines naming those left out said
+// first ([skips.sayFiles]) and within firing's names, a line each with its
+// "\n- ". One whose lines pass what is left waits for a later firing, unless
+// it would be the first to name any where no firing names more: a checkout
+// is claimed for good, and a file it was not handed is the model's to find
+// only by its line. An importing spec reads its files at hand, naming none.
+func fitClaim(work, name string, limit int, spec checkoutSpec, firing *firingBound,
+	parts map[string][]instructionPart, said *skips) bool {
+	if spec.ImportInstructions {
+		return true
+	}
+	trial := &skips{stderr: io.Discard}
+	read, _ := instructionParts(filepath.Join(work, name), limit, spec.Instructions, trial)
+	try := *firing
+	kept := fitFiring(read, &try, trial)
+	cost := 0
+	for _, line := range trial.lines {
+		cost += len(line) + len("\n- ")
+	}
+	if cost > firing.names && (firing.namesUsed || !firing.namesCap) {
+		return false
+	}
+	firing.left, firing.names = try.left, firing.names-cost
+	firing.namesUsed = firing.namesUsed || cost > 0
+	parts[name] = kept
+	said.sayFiles(trial.lines)
+	return true
 }
 
 // checkoutNames is every checkout directly under work: the names in first

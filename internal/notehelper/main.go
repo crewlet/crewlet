@@ -100,9 +100,9 @@
 // started in a repository checked out below it would, so the helper hands each
 // checkout directly under W (a directory or a link to one, holding .git, its
 // name with no leading dot or control character) its instructions and skills
-// once its clone has finished (checkoutclone.go; checkout.go), and once its
-// skills fit what is left of the firing's bound, else at a later firing. Its
-// logic names no harness; a runner gives it a spec:
+// once its clone has finished (checkoutclone.go; checkout.go) and its skills,
+// and the lines naming its files left out, fit what the firing has left, else
+// at a later firing. Its logic names no harness; a runner gives it a spec:
 //   - `instructions`: slots, in order, within `limit`, the harness's own
 //     bound in bytes on what a session started in the checkout reads of them
 //     (Codex: project_doc_max_bytes), omitted for a harness with none, a file
