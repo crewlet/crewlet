@@ -25,7 +25,7 @@ type Step struct {
 	Files          map[string]string `json:"files,omitempty"`
 	Commands       []string          `json:"commands,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
-	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
+	TimeoutSeconds float64           `json:"timeout_seconds,omitempty"`
 	// EveryBox runs the step in each box, never in a build: for a step that
 	// needs a credential none of [CachedPrefix]'s other rules see.
 	EveryBox bool `json:"every_box,omitempty"`
@@ -33,6 +33,9 @@ type Step struct {
 
 // Input is what a box's home is provisioned from.
 type Input struct {
+	// Owner is the seat the home is for: [Cache.Collect] keeps what its
+	// owners hold. Not keyed (the seat's identity facts in Env are).
+	Owner string
 	// Runtime is the container runtime that runs the build and the box.
 	Runtime string
 	// ImageID is the box image's ID, never its tag: a tag moves under a pull.
@@ -45,10 +48,14 @@ type Input struct {
 	// Withheld is every variable a launch's environment carries and the build
 	// is not handed: a step whose commands name one is not cached.
 	Withheld []string
+	// Secrets is every value a launch hands the box from a credential
+	// position: a step with a file holding one is not cached, and a tree
+	// holding one is not kept. Not keyed.
+	Secrets []string
 }
 
 // keyed is what a key is the digest of: everything that changes what a build
-// leaves, and nothing else (Withheld only decides the prefix).
+// leaves, and nothing else (Withheld and Secrets only decide the prefix).
 type keyed struct {
 	Format  int               `json:"format"`
 	Runtime string            `json:"runtime"`
@@ -85,29 +92,30 @@ var shellVariable = sync.OnceValue(func() *regexp.Regexp {
 
 // CachedPrefix is how many of steps, from the first, a build may run: those
 // before the first step that needs what a build is not handed (see the package
-// doc). withheld is [Input.Withheld].
-func CachedPrefix(steps []Step, withheld []string) int {
+// doc). withheld and secrets are [Input.Withheld] and [Input.Secrets].
+func CachedPrefix(steps []Step, withheld, secrets []string) int {
+	needles := needlesOf(secrets)
 	for i, step := range steps {
-		if step.EveryBox || referencesCredential(step) || namesWithheld(step, withheld) {
+		if step.EveryBox || referencesCredential(step, needles) || namesWithheld(step, withheld) {
 			return i
 		}
 	}
 	return len(steps)
 }
 
-// referencesCredential is whether a step's env carries a ${VAR} reference or
-// one of its files is exactly one: what the launch resolves and a build is not
+// referencesCredential is whether a step's env carries a ${VAR} reference, or
+// one of its files is exactly one or holds a credential value (the launch
+// resolves a whole reference before the box sees it): what a build is not
 // handed. A reference inside a longer file is text the box's own tools read
-// (npm expands `${NPM_TOKEN}` in an .npmrc), so the file is the same in every
-// box and may be kept.
-func referencesCredential(step Step) bool {
+// (npm expands `${NPM_TOKEN}` in an .npmrc), the same in every box.
+func referencesCredential(step Step, needles [][]byte) bool {
 	for _, value := range step.Env {
 		if envref.Has(value) {
 			return true
 		}
 	}
 	for _, body := range step.Files {
-		if _, whole := envref.Whole(body); whole {
+		if _, whole := envref.Whole(body); whole || containsAny([]byte(body), needles) {
 			return true
 		}
 	}

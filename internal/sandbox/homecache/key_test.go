@@ -17,6 +17,10 @@ func TestTheCachedPrefixEndsAtTheFirstStepNeedingACredential(t *testing.T) {
 		{"a reference in its env", Step{Name: "x", Env: map[string]string{"T": "Bearer ${TOKEN}"}}, 1},
 		{"a literal env", Step{Name: "x", Env: map[string]string{"GIT_TERMINAL_PROMPT": "0"}}, 2},
 		{"a file that is one reference", Step{Name: "x", Files: map[string]string{".npmrc": "${NPMRC}"}}, 1},
+		{"a file holding a credential value", Step{Name: "x",
+			Files: map[string]string{".config/tool/token": "ghs_resolvedvalue"}}, 1},
+		{"a file holding a value too short to tell", Step{Name: "x",
+			Files: map[string]string{".config/tool/port": "5432"}}, 2},
 		{"a reference inside a file, for the box's tools", Step{Name: "x",
 			Files: map[string]string{".npmrc": "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n"}}, 2},
 		{"a command naming a withheld variable", Step{Name: "x",
@@ -30,7 +34,7 @@ func TestTheCachedPrefixEndsAtTheFirstStepNeedingACredential(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			steps := []Step{plain, tc.step, plain}
-			got := CachedPrefix(steps, withheld)
+			got := CachedPrefix(steps, withheld, []string{"ghs_resolvedvalue", "5432"})
 			if tc.want == 2 {
 				tc.want = len(steps)
 			}
@@ -39,7 +43,7 @@ func TestTheCachedPrefixEndsAtTheFirstStepNeedingACredential(t *testing.T) {
 			}
 		})
 	}
-	if got := CachedPrefix(nil, withheld); got != 0 {
+	if got := CachedPrefix(nil, withheld, nil); got != 0 {
 		t.Errorf("no steps: %d", got)
 	}
 }

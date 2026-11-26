@@ -23,9 +23,10 @@
 //
 // The build that fills the cache is handed no credential, so none can be in
 // what it leaves. [CachedPrefix] is the steps up to the first one that needs
-// one: a step whose env carries a ${VAR} reference or one of whose files is
-// exactly one, a step whose commands name a variable the build is not handed
-// ([Input.Withheld]), or a step marked to run in every box ([Step.EveryBox]).
+// one: a step whose env carries a ${VAR} reference, or one of whose files is
+// exactly one or holds a credential value ([Input.Secrets]), a step whose
+// commands name a variable the build is not handed ([Input.Withheld]), or a
+// step marked to run in every box ([Step.EveryBox]).
 // That step and every later one run in each box after the copy, with the
 // launch's environment, in the order they are written. A step whose need for a
 // credential none of those see fails in the build, which is handed nothing,
@@ -38,11 +39,13 @@
 // and builds once more with the shorter prefix. The cut is kept with the key,
 // so nothing tries the longer prefix again while the setup is unchanged.
 //
-// After a build, every value the caller names as a credential ([Provision]'s
-// secrets: what a launch of the seat would hand its box) is looked for in the
-// tree's paths, link targets and file contents. The build was handed none of
-// them, so a hit is an engine bug, and the tree is discarded rather than kept
-// ([SecretError], naming the path, never the value).
+// After a build, every value the caller names as a credential ([Input.Secrets]:
+// what a launch of the seat would hand its box, at least eight bytes long) is
+// looked for in the tree's paths, link targets and file contents. The build
+// was handed none of them, so a hit is an engine bug or a credential that is
+// also ordinary text: the tree is discarded, and the key is cut at its first
+// step ([Cut.Secret], naming the path, never the value), so every step runs in
+// each box as if nothing were cached, and the caller says so.
 //
 // # Rebuilt when its key changes, and at no age
 //
@@ -68,7 +71,8 @@
 // # Layout and concurrency
 //
 // Under the root: trees/<key> is a published tree, cuts/<key>.json a key's
-// cut, objects/ the content every tree shares, locks/<key> a key's lock.
+// cut, objects/ the content every tree shares, locks/<key> a key's lock and
+// owners/ whose each key is.
 //
 //   - A tree is published by renaming its build into place, so a reader sees
 //     a whole tree or none. The builder's directory must be on the cache's
@@ -84,7 +88,9 @@
 //     hard-linked), so seats that differ only by their identity facts share
 //     their harness's bytes. A box is handed a copy, never a link: nothing
 //     writes a cached file.
-//   - [Cache.Collect] removes every tree, cut and object no key in use names.
-//     The disk the cache takes is the bytes of the keys the configuration
-//     names, so it needs no cap of its own.
+//   - Each key a box is provisioned through is recorded as its owner's
+//     (owners/, a seat), and an owner's older keys are removed as its new
+//     one is recorded. [Cache.Collect] removes what no owner it is told to
+//     keep holds, and every object no tree holds. The disk the cache takes is
+//     the bytes of its owners' current keys, so it needs no cap of its own.
 package homecache

@@ -45,7 +45,7 @@ func (c *Cache) publish(home string, key Key, secrets []string) error {
 		}
 		if containsAny([]byte(rel), needles) {
 			// The name itself holds the value, so only its directory is said.
-			return &SecretError{Path: filepath.Join(filepath.Dir(rel), "(a name in it)")}
+			return &secretAt{path: filepath.Join(filepath.Dir(rel), "(a name in it)")}
 		}
 		switch t := d.Type(); {
 		case t.IsDir():
@@ -61,7 +61,7 @@ func (c *Cache) publish(home string, key Key, secrets []string) error {
 				return lerr
 			}
 			if containsAny([]byte(target), needles) {
-				return &SecretError{Path: rel}
+				return &secretAt{path: rel}
 			}
 			return nil
 		case t.IsRegular():
@@ -73,7 +73,7 @@ func (c *Cache) publish(home string, key Key, secrets []string) error {
 		}
 	})
 	if err != nil {
-		if se := (*SecretError)(nil); errors.As(err, &se) {
+		if se := (*secretAt)(nil); errors.As(err, &se) {
 			return se
 		}
 		return fmt.Errorf("homecache: reading a built home: %w", err)
@@ -93,7 +93,7 @@ func (c *Cache) publish(home string, key Key, secrets []string) error {
 			return fmt.Errorf("homecache: reading %s of a built home: %w", rel, derr)
 		}
 		if hit {
-			return &SecretError{Path: rel}
+			return &secretAt{path: rel}
 		}
 		if err = c.share(path, name); err != nil {
 			return err
@@ -128,11 +128,25 @@ func removeTree(path string) error {
 	return os.RemoveAll(path)
 }
 
-// needlesOf is every non-empty value of secrets, as bytes.
+// minSecretBytes is the shortest value looked for as a credential: the floor
+// of the kept sessions' scrub (internal/sandbox/executor's minScrubBytes), for
+// its reason. A shorter value (a port, a version, a word) is as likely to be
+// in a harness's binary as a secret is, and would cut every key it touched.
+const minSecretBytes = 8
+
+// secretAt is a build that left a credential value at path, relative to the
+// home: never the value.
+type secretAt struct{ path string }
+
+func (e *secretAt) Error() string {
+	return fmt.Sprintf("homecache: a build left a credential value at %s in the home", e.path)
+}
+
+// needlesOf is every value of secrets at least [minSecretBytes] long, as bytes.
 func needlesOf(secrets []string) [][]byte {
 	var needles [][]byte
 	for _, s := range secrets {
-		if s != "" {
+		if len(s) >= minSecretBytes {
 			needles = append(needles, []byte(s))
 		}
 	}

@@ -20,7 +20,7 @@ import (
 type fakeBuild struct {
 	base   string
 	files  func(n int, steps []Step) map[string]string
-	escape func(steps []Step) *Escape
+	escape func(steps []Step) *Cut
 
 	mu    sync.Mutex
 	steps [][]Step
@@ -83,6 +83,7 @@ func newCache(t *testing.T) (*Cache, string) {
 
 func input(commands ...string) Input {
 	return Input{
+		Owner:   "sre",
 		Runtime: "docker",
 		ImageID: "sha256:aaaa",
 		Env:     map[string]string{"CREWLET_AGENT_HANDLE": "sre"},
@@ -90,10 +91,10 @@ func input(commands ...string) Input {
 	}
 }
 
-func provision(t *testing.T, c *Cache, in Input, secrets []string, f *fakeBuild) (Result, string, error) {
+func provision(t *testing.T, c *Cache, in Input, f *fakeBuild) (Result, string, error) {
 	t.Helper()
 	dst := t.TempDir()
-	res, err := c.Provision(t.Context(), in, secrets, f.build, dst)
+	res, err := c.Provision(t.Context(), in, f.build, dst)
 	return res, dst, err
 }
 
@@ -119,9 +120,16 @@ func entries(t *testing.T, dir string) []string {
 	return names
 }
 
+// withSecrets is in with the credential values a launch hands its box.
+func withSecrets(in Input, secrets ...string) Input {
+	in.Secrets = secrets
+	return in
+}
+
 // A build is handed no credential, so a credential in what it left is an
-// engine bug: the tree is discarded, nothing is copied, and the error names
-// where without saying what.
+// engine bug: the tree is discarded, nothing is copied, the key is cut at its
+// first step so every step runs in the box, and the cut names where without
+// saying what. A value too short to tell from ordinary text is not one.
 func TestABuildLeavingACredentialIsKeptNowhere(t *testing.T) {
 	const secret = "ghs_0123456789abcdefSECRET"
 	for name, files := range map[string]map[string]string{
@@ -133,13 +141,16 @@ func TestABuildLeavingACredentialIsKeptNowhere(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c, base := newCache(t)
 			f := &fakeBuild{base: base, files: func(int, []Step) map[string]string { return files }}
-			_, dst, err := provision(t, c, input("install"), []string{"", secret}, f)
-			var se *SecretError
-			if !errors.As(err, &se) {
-				t.Fatalf("a build that left the credential was taken: %v", err)
+			in := withSecrets(input("install"), "", "5432", secret)
+			res, dst, err := provision(t, c, in, f)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if strings.Contains(err.Error(), secret) {
-				t.Errorf("the refusal says the credential: %v", err)
+			if res.Prefix != 0 || len(res.Cuts) != 1 || res.Cuts[0].Secret == "" || res.Cuts[0].Step != 0 {
+				t.Fatalf("a build that left the credential was taken: %+v", res)
+			}
+			if strings.Contains(fmt.Sprint(res.Cuts), secret) {
+				t.Errorf("the cut says the credential: %+v", res.Cuts)
 			}
 			if got := entries(t, c.trees()); len(got) != 0 {
 				t.Errorf("the tree was kept: %v", got)
@@ -147,8 +158,20 @@ func TestABuildLeavingACredentialIsKeptNowhere(t *testing.T) {
 			if got := entries(t, dst); len(got) != 0 {
 				t.Errorf("the box was handed %v", got)
 			}
+			if res, _, err = provision(t, c, in, f); err != nil || res.Prefix != 0 || len(res.Cuts) != 0 || f.calls() != 1 {
+				t.Errorf("the next box: %+v, %v, %d builds: the cut was not kept", res, err, f.calls())
+			}
 		})
 	}
+	t.Run("a value too short to tell", func(t *testing.T) {
+		c, base := newCache(t)
+		f := &fakeBuild{base: base, files: func(int, []Step) map[string]string {
+			return map[string]string{"bin/tool": "listens on 5432"}
+		}}
+		if res, _, err := provision(t, c, withSecrets(input("install"), "5432"), f); err != nil || res.Prefix != 1 {
+			t.Fatalf("a home holding a port was refused as a credential: %+v, %v", res, err)
+		}
+	})
 	t.Run("a link to it", func(t *testing.T) {
 		c, base := newCache(t)
 		f := &fakeBuild{base: base, files: release}
@@ -159,10 +182,9 @@ func TestABuildLeavingACredentialIsKeptNowhere(t *testing.T) {
 			}
 			return b, err
 		}
-		_, err := c.Provision(t.Context(), input("install"), []string{secret}, build, t.TempDir())
-		var se *SecretError
-		if !errors.As(err, &se) || se.Path != "token" {
-			t.Fatalf("a link naming the credential was taken: %v", err)
+		res, err := c.Provision(t.Context(), withSecrets(input("install"), secret), build, t.TempDir())
+		if err != nil || len(res.Cuts) != 1 || res.Cuts[0].Secret != "token" {
+			t.Fatalf("a link naming the credential was taken: %+v, %v", res, err)
 		}
 	})
 }
@@ -174,7 +196,7 @@ func TestAHomeIsRebuiltWhenItsKeyChangesAndNeverOtherwise(t *testing.T) {
 	f := &fakeBuild{base: base, files: release}
 	in := input("npm install -g some-harness")
 	for range 3 {
-		_, dst, err := provision(t, c, in, nil, f)
+		_, dst, err := provision(t, c, in, f)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -195,8 +217,9 @@ func TestAHomeIsRebuiltWhenItsKeyChangesAndNeverOtherwise(t *testing.T) {
 	for _, name := range slices.Sorted(maps.Keys(changes)) {
 		changed := input("npm install -g some-harness")
 		changes[name](&changed)
+		changed.Owner = name // its own seat, so no other tree is replaced as its owner's
 		before := f.calls()
-		res, dst, err := provision(t, c, changed, nil, f)
+		res, dst, err := provision(t, c, changed, f)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -233,12 +256,12 @@ func TestTwoTakersOfOneKeyBuildItOnce(t *testing.T) {
 	firstDst, secondDst := t.TempDir(), t.TempDir()
 	ctx := t.Context()
 	go func() {
-		_, perr := first.Provision(ctx, in, nil, f.build, firstDst)
+		_, perr := first.Provision(ctx, in, f.build, firstDst)
 		firstDone <- outcome{firstDst, perr}
 	}()
 	<-f.building
 	go func() {
-		_, perr := second.Provision(ctx, in, nil, f.build, secondDst)
+		_, perr := second.Provision(ctx, in, f.build, secondDst)
 		secondDone <- outcome{secondDst, perr}
 	}()
 	select {
@@ -277,7 +300,7 @@ func TestCollectionSparesACopyInFlight(t *testing.T) {
 	done := make(chan error, 1)
 	dst, ctx := t.TempDir(), t.Context()
 	go func() {
-		_, perr := c.Provision(ctx, in, nil, f.build, dst)
+		_, perr := c.Provision(ctx, in, f.build, dst)
 		done <- perr
 	}()
 	<-inCopy
@@ -293,8 +316,11 @@ func TestCollectionSparesACopyInFlight(t *testing.T) {
 		t.Fatalf("collection took %v while a box was copied from it", removed)
 	}
 	c.copying = nil
-	if removed, err = c.Collect([]Input{in}); err != nil || len(removed) != 0 {
-		t.Fatalf("collection took a key in use: %v, %v", removed, err)
+	if _, _, err = provision(t, c, in, f); err != nil || f.calls() != 1 {
+		t.Fatalf("the next box: %v, %d builds", err, f.calls())
+	}
+	if removed, err = c.Collect([]string{"sre"}); err != nil || len(removed) != 0 {
+		t.Fatalf("collection took a key its owner holds: %v, %v", removed, err)
 	}
 	if removed, err = c.Collect(nil); err != nil || len(removed) != 1 {
 		t.Fatalf("collection left a key nothing uses: %v, %v", removed, err)
@@ -322,19 +348,19 @@ func TestAStepLeavingTheHomeIsCutOnce(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, base := newCache(t)
-			f := &fakeBuild{base: base, files: release, escape: func(s []Step) *Escape {
+			f := &fakeBuild{base: base, files: release, escape: func(s []Step) *Cut {
 				if len(s) > tc.at {
-					return &Escape{Step: tc.at, Name: s[tc.at].Name, Paths: []string{"/usr/bin/x"}}
+					return &Cut{Step: tc.at, Name: s[tc.at].Name, Paths: []string{"/usr/bin/x"}}
 				}
 				return nil
 			}}
-			in := Input{Runtime: "docker", ImageID: "sha256:aaaa", Steps: steps}
-			res, _, err := provision(t, c, in, nil, f)
+			in := Input{Owner: "sre", Runtime: "docker", ImageID: "sha256:aaaa", Steps: steps}
+			res, _, err := provision(t, c, in, f)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res.Prefix != tc.at || res.Cut == nil || res.Cut.Name != steps[tc.at].Name {
-				t.Fatalf("the first box: prefix %d, cut %+v", res.Prefix, res.Cut)
+			if res.Prefix != tc.at || len(res.Cuts) != 1 || res.Cuts[0].Name != steps[tc.at].Name {
+				t.Fatalf("the first box: prefix %d, cuts %+v", res.Prefix, res.Cuts)
 			}
 			var lens []int
 			for _, s := range f.steps {
@@ -343,15 +369,15 @@ func TestAStepLeavingTheHomeIsCutOnce(t *testing.T) {
 			if !slices.Equal(lens, tc.builds) {
 				t.Errorf("builds of %v steps, want %v", lens, tc.builds)
 			}
-			res, _, err = provision(t, c, in, nil, f)
+			res, _, err = provision(t, c, in, f)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res.Prefix != tc.at || res.Cut != nil || f.calls() != len(tc.builds) {
-				t.Errorf("the next box: prefix %d, cut %+v, %d builds: the cut was not kept",
-					res.Prefix, res.Cut, f.calls())
+			if res.Prefix != tc.at || len(res.Cuts) != 0 || f.calls() != len(tc.builds) {
+				t.Errorf("the next box: prefix %d, cuts %+v, %d builds: the cut was not kept",
+					res.Prefix, res.Cuts, f.calls())
 			}
-			if removed, cerr := c.Collect([]Input{in}); cerr != nil || len(removed) != 0 {
+			if removed, cerr := c.Collect([]string{"sre"}); cerr != nil || len(removed) != 0 {
 				t.Errorf("collection took a cut key in use: %v, %v", removed, cerr)
 			}
 		})
@@ -374,18 +400,18 @@ func TestIdenticalFilesOfTwoHomesAreOneInodeAndABoxGetsACopy(t *testing.T) {
 		return b, os.Chmod(filepath.Join(b.Home, "bin"), 0o555)
 	}
 	sre, qa := input("install"), input("install")
-	qa.Env = map[string]string{"CREWLET_AGENT_HANDLE": "qa"}
+	qa.Owner, qa.Env = "qa", map[string]string{"CREWLET_AGENT_HANDLE": "qa"}
 	dst, dst2 := t.TempDir(), t.TempDir()
 	t.Cleanup(func() {
 		_ = os.Chmod(filepath.Join(dst, "bin"), 0o700)
 		_ = os.Chmod(filepath.Join(dst2, "bin"), 0o700)
 		_, _ = c.Collect(nil)
 	})
-	r1, err := c.Provision(t.Context(), sre, nil, build, dst)
+	r1, err := c.Provision(t.Context(), sre, build, dst)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r2, err := c.Provision(t.Context(), qa, nil, build, dst2)
+	r2, err := c.Provision(t.Context(), qa, build, dst2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +453,7 @@ func TestACopiedHomeIsTheBuildsLessTheBoxsOwn(t *testing.T) {
 			os.Chmod(filepath.Join(b.Home, "ro"), 0o500))
 	}
 	dst := t.TempDir()
-	if _, err := c.Provision(t.Context(), input("install"), nil, build, dst); err != nil {
+	if _, err := c.Provision(t.Context(), input("install"), build, dst); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dst, "ro"), 0o700) })
@@ -459,13 +485,41 @@ func TestAFailedBuildKeepsNothing(t *testing.T) {
 	c, base := newCache(t)
 	f := &fakeBuild{base: base, files: release}
 	failing := func(context.Context, []Step) (Built, error) { return Built{}, errors.New("exit 1") }
-	if _, err := c.Provision(t.Context(), input("install"), nil, failing, t.TempDir()); err == nil {
+	if _, err := c.Provision(t.Context(), input("install"), failing, t.TempDir()); err == nil {
 		t.Fatal("a failed build was taken")
 	}
 	if got := entries(t, c.trees()); len(got) != 0 {
 		t.Fatalf("a failed build left %v", got)
 	}
-	if res, _, err := provision(t, c, input("install"), nil, f); err != nil || !res.Built {
+	if res, _, err := provision(t, c, input("install"), f); err != nil || !res.Built {
 		t.Fatalf("the next box did not build: %+v, %v", res, err)
+	}
+}
+
+// A seat's box provisioned from a new key (its setup or image changed) takes
+// the seat's older tree with it: an owner holds its current key alone.
+func TestAnOwnersNewKeyRemovesItsOlderTree(t *testing.T) {
+	c, base := newCache(t)
+	f := &fakeBuild{base: base, files: release}
+	old, err := c.Provision(t.Context(), input("install@1"), f.build, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := input("install@1")
+	other.Owner, other.Env = "qa", map[string]string{"CREWLET_AGENT_HANDLE": "qa"}
+	kept, err := c.Provision(t.Context(), other, f.build, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := c.Provision(t.Context(), input("install@2"), f.build, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := entries(t, c.trees())
+	if slices.Contains(got, string(old.Key)) {
+		t.Errorf("the seat's older tree was kept beside its new one: %v", got)
+	}
+	if !slices.Contains(got, string(current.Key)) || !slices.Contains(got, string(kept.Key)) {
+		t.Errorf("a current tree went: %v", got)
 	}
 }
