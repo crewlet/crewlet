@@ -46,6 +46,11 @@ func copilotReachesTheBridgesRoute(t *testing.T) {
 	}, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
+	// THE LAUNCH ATTEMPT the run's script names before Copilot starts, which
+	// keys the extension's state.
+	if err := box.WriteFile(t.Context(), p.CopilotAttempt(), []byte("1\n")); err != nil {
+		t.Fatal(err)
+	}
 	extension, err := box.ReadFile(t.Context(), p.CopilotExtension()+"/extension.mjs")
 	if err != nil || extension == nil {
 		t.Fatalf("the run was written no extension (%v)", err)

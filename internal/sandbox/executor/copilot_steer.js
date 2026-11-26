@@ -58,8 +58,28 @@
 // later), so one writer at a time. FAILING CLOSED: a note whose id cannot be
 // kept is not sent, and a capped run whose count cannot be kept, or whose file
 // cannot be read, is stopped (unkeptMessage); no restart counts from nothing.
+//
+// A CHECKOUT CLONED DURING THE RUN. After each of the main agent's tool calls
+// (a subagent's input carries an agentId) the note helper hands each checkout
+// cloned since its skills (`copilot-nested`, internal/notehelper), and their
+// listing is appended to that tool's own result, `modifiedResult`'s
+// textResultForLlm, which reaches the next request whole, where
+// additionalContext is cut at 10,240 characters without a word (measured on
+// 1.0.114). Its instructions Copilot loads itself on the first view of a file
+// in it. The helper's own skip lines are kept for the run's end, not repeated.
+//
+// A LAUNCH COPILOT REFUSED. Copilot refuses a launch whose static context
+// passes the model's budget before any request (`session.warning`
+// compaction_static_context_blocked), and the run's script starts it again
+// with fewer of its checkouts' instructions (copilotrepo.go). A refused attempt
+// of a NEW session is deleted here, whole, so the next attempt starts clean and
+// no model ever reads it from the session store: once a request has gone, or
+// for a resumed session, nothing is. Each attempt is its own launch: its state
+// is keyed by the attempt the script names, so a refused attempt's count, cursor
+// and sent notes count nothing, and a note it sent is sent again.
 
-import { readFileSync, renameSync, writeFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { joinSession } from "@microsoft/copilot-sdk/extension"
 
 // config is the run's: {url, cap, state, run}, written over the placeholder by
@@ -100,6 +120,31 @@ const unkeptMessage = "crewlet: this run's turn count could not be kept, so the 
 // notes stay unconfirmed and are served again after the run.
 const notesUnkeptMessage = "crewlet: this run's notes could not be kept, so none is sent until they can be"
 
+// nestedTimeoutMs bounds one firing of the note helper, which Copilot does not
+// (measured on 1.0.114: a 75 s hook held the turn and was answered): ten
+// seconds, as Codex's nested hook (codexrepo.go, codexNestedTimeout), where the
+// slowest firing measured on the build VM took 0.12 s. nestedMaxBuffer holds
+// its answer, a listing the helper bounds at 64 KiB (maxListing).
+const nestedTimeoutMs = 10_000
+const nestedMaxBuffer = 1 << 20
+
+// nestedFailedMessage opens the log line written where a firing of the helper
+// failed, so what it claimed is not listed.
+const nestedFailedMessage =
+  "crewlet: the note helper handing a checkout cloned during the run failed, so its skills are not listed: "
+
+// blockedWarning is the warningType of Copilot's refusal of a launch, or of a
+// request, past its static budget (measured on 1.0.114).
+const blockedWarning = "compaction_static_context_blocked"
+
+// keptFailedMessage opens the log line written where the launch sets an
+// attempt kept could not be stored in its session: a resume then hands none.
+const keptFailedMessage = "crewlet: the session could not keep the repositories it was started with: "
+
+// removeFailedMessage opens the log line written where a refused attempt
+// could not be deleted; the script finds it left and fails the run.
+const removeFailedMessage = "crewlet: the refused launch's session could not be removed: "
+
 // armedMessage is the log line written once the extension runs in the session
 // (copilotsteer.go, copilotArmedMessage): a run with a turn cap whose stream
 // lacks it is collected as a failure, the cap never enforced.
@@ -114,15 +159,18 @@ if (config !== null && typeof config === "object") {
   await arm(config)
 }
 
-async function arm({ url, cap, bridges, state, run }) {
+async function arm({ url, cap, bridges, state, run, helper, nested, attempt, kept: keptFile, sessions, armed }) {
   // kept is what an earlier process of this launch left (A RESTART RESUMES THE
   // RUN, above): the requests counted, the cursor, and the inbox ids sent; or
-  // broken, a file this process cannot read, which sends no note.
-  const kept = resume(state, run)
+  // broken, a file this process cannot read, which sends no note. The launch
+  // is this attempt's (A LAUNCH COPILOT REFUSED, above).
+  const launch = attemptOf(run, attempt)
+  const kept = launch === null ? { turns: 0, cursor: 0, sent: [], broken: true } : resume(state, launch)
   const polling = typeof url === "string" && url !== "" && !kept.broken
   const capped = Number.isSafeInteger(cap) && cap > 0
+  const handing = typeof helper === "string" && helper !== "" && typeof nested === "string" && nested !== ""
   const guarded = Array.isArray(bridges) ? bridges.filter((b) => typeof b === "string" && b !== "") : []
-  if (!polling && !capped && guarded.length === 0) return
+  if (!polling && !capped && !handing && guarded.length === 0) return
 
   // life is the extension's whole run; a refusal of the route ends its polling.
   const life = new AbortController()
@@ -130,7 +178,7 @@ async function arm({ url, cap, bridges, state, run }) {
   let cursor = kept.cursor
   let turns = kept.turns
   const sent = new Set(kept.sent)
-  const save = () => keep(state, run, { turns, cursor, sent: [...sent] })
+  const save = () => launch !== null && keep(state, launch, { turns, cursor, sent: [...sent] })
   // unkept is a capped run whose count was not kept, or not read back.
   let unkept = capped && kept.broken
   // notesSaid is whether the run's stream was told a note's id could not be kept.
@@ -263,6 +311,85 @@ async function arm({ url, cap, bridges, state, run }) {
     if (mainAgent(input) !== false && spent()) await capNow()
   }
 
+  // handNested hands the checkouts cloned since the last of the main agent's
+  // tools (A CHECKOUT CLONED DURING THE RUN, above) as input's tool result
+  // with their listing appended; nothing where there is none.
+  const handNested = (input) => {
+    if (!handing || mainAgent(input) === false || aborting) return undefined
+    let listing
+    try {
+      listing = execFileSync(helper, ["-adapter", "copilot-nested", "-config", nested], {
+        encoding: "utf8",
+        timeout: nestedTimeoutMs,
+        maxBuffer: nestedMaxBuffer,
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+    } catch (error) {
+      quietly(session.log(nestedFailedMessage + String(error?.message ?? error).split("\n")[0], { level: "warning" }))
+      return undefined
+    }
+    if (listing === "") return undefined
+    const result = input?.toolResult ?? {}
+    return { modifiedResult: { ...result, textResultForLlm: (result.textResultForLlm ?? "") + "\n\n" + listing } }
+  }
+
+  // source is how Copilot started the session (sessionStart's), and answered
+  // whether a model request of it was answered: a refusal deletes only a new
+  // session no request reached.
+  let source = null
+  let answered = false
+  let removing = false
+
+  // storeKept writes the launch sets this attempt kept into its new session's
+  // directory as the session starts, so a pack taken while it runs carries
+  // them and a resume launches with exactly them (copilotrepo.go,
+  // copilotKeptSets); a refused attempt's goes with its session.
+  const storeKept = () => {
+    const id = process.env.SESSION_ID
+    if (typeof keptFile !== "string" || keptFile === "" || typeof sessions !== "string" || sessions === "") return
+    try {
+      if (typeof id !== "string" || id === "" || id.includes("/")) throw new Error("Copilot named no session")
+      let names = ""
+      try {
+        names = readFileSync(keptFile, "utf8")
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error
+      }
+      const dir = sessions + "/" + id
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(dir + "/crewlet-checkouts.tmp", names)
+      renameSync(dir + "/crewlet-checkouts.tmp", dir + "/crewlet-checkouts")
+    } catch (error) {
+      quietly(session.log(keptFailedMessage + String(error?.message ?? error).split("\n")[0], { level: "warning" }))
+    }
+  }
+
+  // removeRefused deletes this attempt's own session, Copilot's process being
+  // the one it is joined to: the extension SDK offers no delete, so a second
+  // client on the internal parent-process connection asks Copilot's own
+  // sessions.bulkDelete for exactly its id (measured: the session's directory
+  // and its store rows gone; the refused launch exits in about 4.4 s on the
+  // pinned 1.0.114, as without it, and in about 65 s on 1.0.115, which waits
+  // 60 s after the delete). It stops nothing else; the script checks it is gone
+  // before the next attempt (copilot_storecheck.mjs). executor's package doc,
+  // "Copilot's internal client", has why and what breaks without it.
+  const removeRefused = async () => {
+    if (removing) return
+    removing = true
+    life.abort()
+    close()
+    try {
+      const id = process.env.SESSION_ID
+      if (typeof id !== "string" || id === "") throw new Error("Copilot named no session")
+      const sdk = await import("@microsoft/copilot-sdk")
+      const client = new sdk.CopilotClient({ mode: "coding-agent", _internalConnection: { kind: "parent-process" } })
+      await client.start()
+      await client.rpc.sessions.bulkDelete({ sessionIds: [id] })
+    } catch (error) {
+      quietly(session.log(removeFailedMessage + String(error?.message ?? error).split("\n")[0], { level: "warning" }))
+    }
+  }
+
   // unbridged stops the run once for the agent agentId's server under a
   // bridge's name: the error that fails it, then the abort.
   const unbridged = async (agentId, server) => {
@@ -285,12 +412,26 @@ async function arm({ url, cap, bridges, state, run }) {
   // soon as the session is joined.
   const session = await joinSession({
     hooks: {
+      onSessionStart: async (input) => {
+        source = input?.source ?? null
+        // THE RUN'S MARK that this extension ran in the session, which the
+        // script reads at a refusal and as the run ends (copilotrepo.go).
+        if (typeof armed === "string" && armed !== "") {
+          try {
+            writeFileSync(armed, "")
+          } catch {}
+        }
+        if (source === "new" && handing) storeKept()
+      },
       onPreToolUse: async (input) => {
         if (typeof input?.agentId !== "string" || !taken.has(input.agentId)) return
         if (!guarded.some((b) => String(input.toolName).startsWith(b + "-"))) return
         return { permissionDecision: "deny", permissionDecisionReason: unbridgedMessage }
       },
-      onPostToolUse: async (input) => capAfterTool(input),
+      onPostToolUse: async (input) => {
+        await capAfterTool(input)
+        return handNested(input)
+      },
       onPostToolUseFailure: async (input) => capAfterTool(input),
       onAgentStop: async (input) => {
         if (!polling || mainAgent(input) === false || life.signal.aborted || spent()) return
@@ -300,8 +441,13 @@ async function arm({ url, cap, bridges, state, run }) {
   })
   session.on((event) => {
     if (event === null || typeof event !== "object") return
+    if (event.type === "assistant.message") answered = true
     if (event.type === "subagent.started" && typeof event.agentId === "string") {
       agents.set(event.agentId, named(event.data?.agentName))
+    }
+    if (event.type === "session.warning" && event.data?.warningType === blockedWarning && !answered && source === "new") {
+      quietly(removeRefused())
+      return
     }
     if (
       event.type === "session.mcp_server_status_changed" &&
@@ -342,6 +488,19 @@ async function stop(session, line) {
     await session.log(line, { level: "warning" })
   } finally {
     await session.abort()
+  }
+}
+
+// attemptOf is this launch's key: run and the attempt the script wrote to the
+// file attempt names, run alone where there is no file to read; null where it
+// cannot be read, which counts as nothing known.
+function attemptOf(run, attempt) {
+  if (typeof attempt !== "string" || attempt === "") return run
+  try {
+    const n = readFileSync(attempt, "utf8").trim()
+    return /^[0-9]+$/.test(n) ? run + "/" + n : null
+  } catch {
+    return null
   }
 }
 
