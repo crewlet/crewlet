@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"math/rand/v2"
 	"strings"
 	"testing"
 	"time"
@@ -110,6 +111,54 @@ func TestAKeptBoundRecordIsRefusedOnceAReaderFallsBelow(t *testing.T) {
 					stamp == nil || stamp.Loss != executorkeep.LossKeepFailed):
 					t.Errorf("the keep came to %+v after %d records, stamped %+v, want it refused unsent as "+
 						"keep_failed, naming the node below", kept, len(captured), stamp)
+				}
+			})
+		})
+	}
+}
+
+// A CAPTURE AT THE KEPT BOUND IS HELD TO ITS SEAT'S BUDGET: the kept bound
+// admits a take of three payloads kept apart, and the seat's budget
+// (max_bytes_per_seat) still decides whether it is kept: within a budget the
+// case sets, it lands, all three uploaded; past one, it is refused naming the
+// setting, nothing uploaded. A capture up to 94 MiB meets the 64 MiB default
+// the same way.
+//
+// Mutation: leave a kept-bound capture's media out of the budget's count, and
+// the refusal goes red.
+func TestACaptureAtTheKeptBoundIsHeldToItsSeatsBudget(t *testing.T) {
+	t.Parallel()
+	raw := make([]byte, 96<<10)
+	rand.NewChaCha8([32]byte{9}).Read(raw)
+	whole, body := mediaBody(t, "text", mediaPart+string(raw[:32<<10]), "between",
+		mediaPart+string(raw[32<<10:64<<10]), "and", mediaPart+string(raw[64<<10:]), "end")
+	for name, tc := range map[string]struct {
+		budget int64
+		kept   bool
+	}{
+		"within the budget the case sets": {budget: 1 << 20, kept: true},
+		"past it":                         {budget: 64 << 10},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, writes, keep := mediaRig(t, whole, body)
+				keep.mu.Lock()
+				keep.policy.KeptBound, keep.policy.SeatBudget = true, tc.budget
+				keep.mu.Unlock()
+				spooled, taken := finalTake(t, rig, rig.launchKept(t, "t1"), rig.runner)
+				if spooled == nil || !spooled.stamp.KeptBound || len(spooled.media) != 3 {
+					t.Fatalf("the take came to %+v, want it at the kept bound with three payloads apart", taken)
+				}
+				kept := rig.coordinator.keepCapture(t.Context(), spooled)
+				switch {
+				case tc.kept && (kept == nil || kept.NotKept != "" || len(keep.uploads()) != 4):
+					t.Errorf("the keep came to %+v with %d uploads, want it landed, its text and three payloads",
+						kept, len(keep.uploads()))
+				case !tc.kept && (kept == nil || !strings.Contains(kept.NotKept, "max_bytes_per_seat") ||
+					len(keep.uploads()) != 0 || len(writes.captured()) != 0):
+					t.Errorf("the keep came to %+v, want it refused naming max_bytes_per_seat, nothing uploaded",
+						kept)
 				}
 			})
 		})

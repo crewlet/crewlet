@@ -1459,11 +1459,11 @@ func TestAnAskThatLeavesARecordUnansweredWritesNothing(t *testing.T) {
 const mediaReaderCaptureLife = 4_440_076_990_122 * time.Nanosecond
 
 // A TAKE HELD TO THE TEXT BOUND LIVES WITHIN A VERSION-1 READER'S CAPTURE LIFE:
-// while a stamp reader says only MediaStampVersion, a take keeps the text
-// bound, and both its life and a takeover's, at that bound's keep, end at or
-// before the life such a reader waits for (inclusive: the takeover's is
-// exactly it), so the reader never reads a capture still being kept as
-// abandoned. A second more on the gated take's keep goes red.
+// a reader at MediaStampVersion waits exactly 4,440.08 s for a begun capture,
+// so a take gated to the text bound while such a reader may watch must not
+// outlive it: its life and a takeover's, at that bound's keep, end at or
+// before it (inclusive, the takeover's is exactly it). A second more on the
+// gated take's keep goes red.
 //
 // Mutation: add a room to the text bound's keep, or keep a gated take at the
 // kept bound's budget, and it goes red.
