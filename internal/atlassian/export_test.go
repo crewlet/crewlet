@@ -1,6 +1,9 @@
 package atlassian
 
-import "context"
+import (
+	"context"
+	"net/http"
+)
 
 // FlyForTest runs one lookup of site outside the shared flight: the state a
 // caller reaches when it read the map before another lookup stored a
@@ -12,3 +15,6 @@ func FlyForTest(c *CloudIDs, ctx context.Context, site string) (string, error) {
 	}
 	return c.fly(ctx, key)
 }
+
+// ClientForTest is the client c reads with.
+func ClientForTest(c *CloudIDs) *http.Client { return c.client }

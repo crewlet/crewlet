@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
@@ -224,5 +225,91 @@ func TestAKeptCloudIDIsNeverOverwritten(t *testing.T) {
 	}
 	if rt.calls.Load() != before {
 		t.Error("a lookup asked the site for an id already kept")
+	}
+}
+
+// gated answers once gate is closed, or fails when its request is cancelled.
+func gated(gate <-chan struct{}) *transport {
+	return &transport{answer: func(_ int64, r *http.Request) (*http.Response, error) {
+		select {
+		case <-gate:
+			return reply(http.StatusOK, `{"cloudId":"`+siteID+`"}`), nil
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		}
+	}}
+}
+
+// CONCURRENT LOOKUPS OF ONE SITE SHARE ONE REQUEST, so a burst of events
+// asks the site once. Mutation: drop the singleflight and two requests go.
+func TestConcurrentLookupsOfOneSiteShareOneRequest(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		gate := make(chan struct{})
+		rt := gated(gate)
+		ids := atlassian.NewCloudIDs(atlassian.CloudIDOptions{Client: &http.Client{Transport: rt}})
+		results := make(chan string, 2)
+		for range 2 {
+			go func() {
+				id, _ := ids.Resolve(context.Background(), acmeSite)
+				results <- id
+			}()
+		}
+		synctest.Wait()
+		if n := rt.calls.Load(); n != 1 {
+			t.Errorf("%d requests for two concurrent lookups of one site, want 1", n)
+		}
+		close(gate)
+		for range 2 {
+			if id := <-results; id != siteID {
+				t.Errorf("a lookup answered %q, want %q", id, siteID)
+			}
+		}
+	})
+}
+
+// A CALLER THAT GIVES UP DOES NOT CANCEL THE SHARED LOOKUP: it finishes and
+// keeps the id for the next caller. Mutation: run the lookup on the caller's
+// context and the cancel fails it.
+func TestACancelledCallerLeavesTheLookupRunning(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		gate := make(chan struct{})
+		rt := gated(gate)
+		ids := atlassian.NewCloudIDs(atlassian.CloudIDOptions{Client: &http.Client{Transport: rt}})
+		ctx, cancel := context.WithCancel(context.Background())
+		gaveUp := make(chan error, 1)
+		go func() {
+			_, err := ids.Resolve(ctx, acmeSite)
+			gaveUp <- err
+		}()
+		synctest.Wait()
+		cancel()
+		if err := <-gaveUp; err == nil {
+			t.Error("a cancelled caller got an answer")
+		}
+		close(gate)
+		synctest.Wait()
+		if id, err := ids.Resolve(context.Background(), acmeSite); err != nil || id != siteID {
+			t.Errorf("after the caller gave up: %q, %v; want the id the lookup kept", id, err)
+		}
+		if n := rt.calls.Load(); n != 1 {
+			t.Errorf("%d requests, want the one shared lookup", n)
+		}
+	})
+}
+
+// THE PRODUCTION CLIENT HAS THE READ BUDGET AND REFUSES REDIRECTS, not only
+// the constants. Mutation: build it with another timeout, or without the
+// redirect refusal, and this goes red.
+func TestTheResolversOwnClientHasTheReadBudget(t *testing.T) {
+	t.Parallel()
+	client := atlassian.ClientForTest(atlassian.NewCloudIDs(atlassian.CloudIDOptions{}))
+	if client.Timeout != atlassian.TenantInfoTimeout {
+		t.Errorf("client timeout = %s, want %s", client.Timeout, atlassian.TenantInfoTimeout)
+	}
+	if client.CheckRedirect == nil ||
+		client.CheckRedirect(&http.Request{}, nil) != http.ErrUseLastResponse {
+		t.Error("the client follows redirects")
 	}
 }
