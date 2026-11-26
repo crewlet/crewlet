@@ -627,9 +627,7 @@ func TestThePiExtensionHandsTheHelperTheRoomPiLeaves(t *testing.T) {
 		helper, calls := filepath.Join(dir, "notehelper"), filepath.Join(dir, "calls")
 		script := "#!/bin/sh\nprintf '%s ' \"$@\" >> " + shellword.Quote(calls) + "; echo >> " + shellword.Quote(calls) +
 			"\necho HANDED\n"
-		if err := os.WriteFile(helper, []byte(script), 0o700); err != nil { //nolint:gosec // the case's own helper
-			t.Fatal(err)
-		}
+		writeHostProgram(t, helper, []byte(script), 0o700)
 		p := startPiProbe(t, piExtensionSettings{Checkouts: piTestHand(helper, 60_000)})
 		p.expect("loaded")
 		p.send(map[string]any{"op": "usage", "usage": c.usage})
