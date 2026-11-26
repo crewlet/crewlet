@@ -1253,9 +1253,10 @@ var keptBound = takeBound{archive: executorkeep.SessionKeptMaxBytes, sealed: exe
 	keep: keepBudgetAt(executorkeep.KeptPaceMiB)}
 
 // captureBound names the bound a take holds, which every per-bound figure is
-// sized at ([captureBound.limits]): a required argument, its zero value no
-// bound at all, so no caller sizes a wait without naming one. A reader that
-// cannot know a take's bound names [atKeptBound], the most, at the call.
+// sized at ([captureBound.limits]): an argument each call names at compile
+// time, its zero value no bound at all and refused at run time, so no caller
+// sizes a wait without naming one. A reader that cannot know a take's bound
+// names [atKeptBound], the most, at the call.
 type captureBound uint8
 
 const (
@@ -1676,13 +1677,13 @@ type spooledCapture struct {
 	// back with their files ([spooledCapture.remove]).
 	hold *spoolHold
 
-	// standby says the take holds no place of its own: it stands by for
-	// another read's capture at stamp's place ([Coordinator.standBy]), and its
-	// keep first waits to see whether to take the next one
-	// ([Coordinator.takeOver]); stood is that capture's bound, which its wait
-	// is held to ([standbyWaitFor]).
-	standby bool
-	stood   captureBound
+	// stoodBy is, where the take holds no place of its own and stands by for
+	// another read's capture at stamp's place ([Coordinator.standBy]), that
+	// capture's bound, which its keep's wait to see whether to take the next
+	// place is held to ([Coordinator.takeOver], [standbyWaitFor]). One field
+	// for the flag and its bound, so neither is set without the other: zero is
+	// no standby ([spooledCapture.standingBy]), and no figure is sized from it.
+	stoodBy captureBound
 
 	// places is what the capture is raised by once its take is counted
 	// ([SessionCapture.placeAtNewest]): set for a capture no read places, nil
@@ -1701,6 +1702,10 @@ type spooledCapture struct {
 	// spool cut apart, which its keep stamps first ([Coordinator.stampMediaCount]).
 	begun SessionCapture
 }
+
+// standingBy reports whether s stands by for another read's capture
+// ([spooledCapture.stoodBy]).
+func (s *spooledCapture) standingBy() bool { return s.stoodBy != 0 }
 
 // spooledMedia is one payload's member, sealed in file; carried is the object
 // its keep carries in its stead, and uploaded the object its keep put it into.
@@ -2261,7 +2266,7 @@ func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run 
 		c.standDown(ctx, by, run, stamp, why)
 		return nil, nil
 	}
-	spooled.standby, spooled.stood, spooled.summary = true, stoodAt, at.summary
+	spooled.stoodBy, spooled.summary = stoodAt, at.summary
 	c.spooledWhole(ctx, by, run, spooled, taken, at.window)
 	log.InfoContext(ctx, "executor_session_standing_by", "turn_id", run.TurnID, "point", at.name,
 		"capture_seq", stamp.CaptureSeq, "bytes", spooled.bytes(),
@@ -2281,7 +2286,7 @@ func (c *Coordinator) standDown(ctx context.Context, by time.Time, run PendingRu
 		"launch_seq", standby.LaunchSeq, "capture_seq", standby.CaptureSeq, "detail", stampReason(why))
 }
 
-// takeOver is a standby's keep up to its own place ([spooledCapture.standby]):
+// takeOver is a standby's keep up to its own place ([spooledCapture.stoodBy]):
 // it waits for the capture it stands by for ([Coordinator.awaitStood]) and,
 // where that did not land, takes the place after it, begun at a new instant
 // under this process's taker lease, in a write the store makes only while that
@@ -2294,7 +2299,7 @@ func (c *Coordinator) standDown(ctx context.Context, by time.Time, run PendingRu
 // machine's clock wrote, at that capture's bound ([standbyWaitFor]).
 func (c *Coordinator) takeOver(ctx context.Context, spooled *spooledCapture) bool {
 	run, standby := spooled.run, spooled.stamp
-	wait, cancel := context.WithTimeout(ctx, standbyWaitFor(spooled.stood))
+	wait, cancel := context.WithTimeout(ctx, standbyWaitFor(spooled.stoodBy))
 	defer cancel()
 	stood, keep, why := c.awaitStood(wait, run, standby)
 	switch {
@@ -2774,7 +2779,7 @@ func (c *Coordinator) dropSpool(ctx context.Context, spooled *spooledCapture, lo
 	why string) {
 
 	defer spooled.remove()
-	if spooled.standby {
+	if spooled.standingBy() {
 		c.standDown(ctx, time.Time{}, spooled.run, spooled.stamp, why)
 		return
 	}
@@ -2795,7 +2800,7 @@ func (c *Coordinator) dropSpool(ctx context.Context, spooled *spooledCapture, lo
 // more ([MediaReadersRoom]), beside the upload's pace ([takeLife]).
 func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) *SessionKept {
 	defer spooled.remove()
-	if spooled.standby && !c.takeOver(ctx, spooled) {
+	if spooled.standingBy() && !c.takeOver(ctx, spooled) {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, spooled.stamp.bound().limits().keep)
@@ -2880,7 +2885,7 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 // count lengthens a wait, and decides nothing of the keep.
 func (c *Coordinator) stampMediaCount(ctx context.Context, spooled *spooledCapture) {
 	begun := spooled.begun
-	if spooled.standby || begun.MediaCount == 0 {
+	if spooled.standingBy() || begun.MediaCount == 0 {
 		return
 	}
 	room, cancel := context.WithTimeout(ctx, keepReadRoom)

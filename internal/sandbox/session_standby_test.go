@@ -250,7 +250,7 @@ func TestAReadStandingByKeepsTheSessionWhereTheReadHoldingThePlaceFails(t *testi
 				held := newHeldArchive(placeHolderArchive)
 				placed := holdingPlace(t, rig, run, held)
 				standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-				if standby == nil || !standby.standby || standby.stamp.CaptureSeq != 1 {
+				if standby == nil || !standby.standingBy() || standby.stamp.CaptureSeq != 1 {
 					t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by at the "+
 						"stop's place", standby)
 				}
@@ -310,7 +310,7 @@ func TestAReadStandingByKeepsTheSessionWhereTheReadHoldingThePlaceStopped(t *tes
 		rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{
 			"t1": {Handle: "swe", Turn: "t1"}}}
 		standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-		if standby == nil || !standby.standby {
+		if standby == nil || !standby.standingBy() {
 			t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
 		}
 		lapse(store)
@@ -359,15 +359,15 @@ func TestAReadWhoseReservationAnotherReadBeatStandsByForItsCapture(t *testing.T)
 		rig.now = rig.now.Add(time.Second)
 		close(proceed)
 		standby := <-second
-		if standby == nil || !standby.standby || standby.stamp.CaptureSeq != 1 {
+		if standby == nil || !standby.standingBy() || standby.stamp.CaptureSeq != 1 {
 			t.Fatalf("the read whose reservation the stop's beat spooled %+v, want it standing by at the stop's "+
 				"place", standby)
 		}
 		// AT THE STOP'S CAPTURE'S OWN BOUND, off the row read again: the text
 		// bound's wait, as a version-1 reader's turn end holds it.
-		if standby.stood != atTextBound {
+		if standby.stoodBy != atTextBound {
 			t.Errorf("the standby waits for the stop's capture at %+v, want the text bound it was taken at",
-				standby.stood)
+				standby.stoodBy)
 		}
 		held.end <- errScrubRefused
 		if spooled := <-placed; spooled != nil {
@@ -411,7 +411,7 @@ func TestAReadStandingByKeepsNothingOnceTheCaptureItStoodByForLands(t *testing.T
 		held := newHeldArchive(placeHolderArchive)
 		placed := holdingPlace(t, rig, run, held)
 		standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-		if standby == nil || !standby.standby {
+		if standby == nil || !standby.standingBy() {
 			t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", standby)
 		}
 		held.end <- nil
@@ -470,7 +470,7 @@ func TestAReadStandingByThatCannotKeepWhatItTookIsWithdrawn(t *testing.T) {
 		}},
 		{name: "its node stopped before its keep", stand: func(t *testing.T, rig *coordRig, run PendingRun) {
 			spooled := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if spooled == nil || !spooled.standby {
+			if spooled == nil || !spooled.standingBy() {
 				t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", spooled)
 			}
 			rig.coordinator.dropSpool(t.Context(), spooled, executorkeep.LossKeepFailed,
@@ -658,7 +658,7 @@ func TestALossReadStandsByForACaptureOfTheJobStillBeingKept(t *testing.T) {
 		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
 		rig.now = rig.now.Add(time.Second)
 		spooled, _, _ := rig.coordinator.readLost(t.Context(), lostRow())
-		if spooled == nil || !spooled.standby || spooled.stamp.CaptureSeq != 1 {
+		if spooled == nil || !spooled.standingBy() || spooled.stamp.CaptureSeq != 1 {
 			t.Fatalf("the loss's read beside node-a's capture spooled %+v, want it standing by for it", spooled)
 		}
 		refused := begun
@@ -726,7 +726,7 @@ func TestAReadStandingByTakesOverAnUnansweredCaptureOnlyOnceTheLogRefusesIt(t *t
 				held := newHeldArchive(placeHolderArchive)
 				placed := holdingPlace(t, rig, run, held)
 				standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-				if standby == nil || !standby.standby {
+				if standby == nil || !standby.standingBy() {
 					t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", standby)
 				}
 				held.end <- nil
@@ -801,7 +801,7 @@ func TestAFinalReadBesideACaptureTakenAsTheJobStoodTakesTheNextPlace(t *testing.
 		rig.now = rig.now.Add(time.Second)
 		close(proceed)
 		final := <-second
-		if final == nil || final.standby || final.stamp.CaptureSeq != 2 || !final.stamp.Final {
+		if final == nil || final.standingBy() || final.stamp.CaptureSeq != 2 || !final.stamp.Final {
 			t.Fatalf("the collection's read beside the stop's capture taken as the job stood spooled %+v, want its "+
 				"own final capture in the next place", final)
 		}
@@ -879,13 +879,13 @@ func TestAReadWhoseReservationWentUnansweredBesideAnotherStandsByForIt(t *testin
 		rig.now = rig.now.Add(time.Second)
 		close(proceed)
 		standby := <-second
-		if standby == nil || !standby.standby || standby.stamp.CaptureSeq != 1 {
+		if standby == nil || !standby.standingBy() || standby.stamp.CaptureSeq != 1 {
 			t.Fatalf("the read whose reservation went unanswered spooled %+v, want it standing by for the stop's",
 				standby)
 		}
-		if standby.stood != atTextBound {
+		if standby.stoodBy != atTextBound {
 			t.Errorf("the standby waits for the stop's capture at %+v, want the text bound it was taken at",
-				standby.stood)
+				standby.stoodBy)
 		}
 		held.end <- errScrubRefused
 		if spooled := <-placed; spooled != nil {
@@ -928,7 +928,7 @@ func TestAStandbyTheStoreNeverAnsweredKeepsTheSessionWhereItStands(t *testing.T)
 		placed := holdingPlace(t, rig, run, held)
 		rig.coordinator.pending = lostStandBy{PendingStore: rig.coordinator.pending}
 		standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-		if standby == nil || !standby.standby {
+		if standby == nil || !standby.standingBy() {
 			t.Fatalf("the read whose standby the store never answered spooled %+v, want it going on as one", standby)
 		}
 		held.end <- errScrubRefused
@@ -971,7 +971,7 @@ func TestATakeoverTheStoreNeverAnsweredIsKeptUnderWhereItWasMade(t *testing.T) {
 		held := newHeldArchive(placeHolderArchive)
 		placed := holdingPlace(t, rig, run, held)
 		standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-		if standby == nil || !standby.standby {
+		if standby == nil || !standby.standingBy() {
 			t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", standby)
 		}
 		held.end <- errScrubRefused
@@ -1070,7 +1070,7 @@ func TestATakeoverLeftUnansweredReadsItsRowWithinARead(t *testing.T) {
 		held := newHeldArchive(placeHolderArchive)
 		placed := holdingPlace(t, rig, run, held)
 		standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-		if standby == nil || !standby.standby {
+		if standby == nil || !standby.standingBy() {
 			t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", standby)
 		}
 		held.end <- errScrubRefused
@@ -1234,7 +1234,7 @@ func TestAReadStandingByTakesOverACaptureBegunPastItsBudget(t *testing.T) {
 			t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
 		}
 		standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-		if standby == nil || !standby.standby {
+		if standby == nil || !standby.standingBy() {
 			t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
 		}
 		rig.now = rig.now.Add(SessionCaptureBudget)
@@ -1329,7 +1329,7 @@ func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *tes
 				}
 				rig.coordinator.restore = restore
 				standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-				if standby == nil || !standby.standby {
+				if standby == nil || !standby.standingBy() {
 					t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
 				}
 				if standby.stamp.CaptureSeq != begun.CaptureSeq {
@@ -1454,11 +1454,11 @@ func TestAStandbyWhoseRowWentUnreadWaitsAtItsOwnBound(t *testing.T) {
 		close(proceed)
 		standby := <-second
 		store.armed.Store(false)
-		if standby == nil || !standby.standby {
+		if standby == nil || !standby.standingBy() {
 			t.Fatalf("the read whose row went unread spooled %+v, want it standing by", standby)
 		}
-		if standby.stood != atTextBound {
-			t.Errorf("the standby waits at %+v, want its own take's text bound", standby.stood)
+		if standby.stoodBy != atTextBound {
+			t.Errorf("the standby waits at %+v, want its own take's text bound", standby.stoodBy)
 		}
 		held.end <- errScrubRefused
 		<-placed

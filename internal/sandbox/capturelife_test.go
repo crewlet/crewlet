@@ -298,7 +298,7 @@ func TestAKeepsReadsLeaveItsUploadItsWholePace(t *testing.T) {
 		run := rig.launchKept(t, "t1")
 		spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID), rig.runner,
 			readCapture(BoxReadStop, Result{}, true))
-		if spooled == nil || spooled.standby {
+		if spooled == nil || spooled.standingBy() {
 			t.Fatalf("the stop's read spooled %+v, want the capture's own place", spooled)
 		}
 		return spooled
@@ -399,7 +399,7 @@ func TestAnEndWaitsForEachCaptureItSeesItsWholeLifeFromFirstSight(t *testing.T) 
 			standby, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
 				takenAs{FakeRunner: rig.runner, body: bytes.NewReader(standbyArchive)},
 				readCapture(BoxReadCollect, Result{}, true))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("the late read beside node-a's capture spooled %+v, want it standing by", standby)
 			}
 			kept := make(chan *SessionKept, 1)
@@ -582,7 +582,7 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			run := rig.launchKept(t, "t1")
 			stuck(t, rig, run)
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
 			}
 			began := time.Now()
@@ -611,7 +611,7 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			onTheLog(restore, row)
 			rig.coordinator.restore = restore
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
 			}
 			began := time.Now()
@@ -650,7 +650,7 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			held := newHeldArchive(placeHolderArchive)
 			placed := holdingPlace(t, rig, run, held)
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("the collection's read beside the stop's spooled %+v, want it standing by", standby)
 			}
 			held.end <- nil
@@ -690,7 +690,7 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			run := rig.launchKept(t, "t1")
 			stuck(t, rig, run)
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
 			}
 			ctx, cancel := context.WithCancel(t.Context())
@@ -943,7 +943,7 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				func(by *time.Time) func() { return func() { time.Sleep(time.Until(*by) - time.Second) } })
 			spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
 				takenAs{FakeRunner: rig.runner, body: f.archive}, readCapture(BoxReadStop, Result{}, true))
-			if spooled == nil || spooled.standby {
+			if spooled == nil || spooled.standingBy() {
 				t.Fatalf("the stop's read spooled %+v, want the capture's own place", spooled)
 			}
 			if kept := rig.coordinator.keepCapture(t.Context(), spooled); kept == nil || kept.NotKept != "" {
@@ -974,7 +974,7 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 			keep.policy.MediaApart, keep.policy.KeptBound = true, true
 			keep.mu.Unlock()
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby || !standby.stamp.KeptBound {
+			if standby == nil || !standby.standingBy() || !standby.stamp.KeptBound {
 				t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by at the kept "+
 					"bound", standby)
 			}
@@ -1066,7 +1066,7 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 					func(by *time.Time) func() { return func() { time.Sleep(time.Until(*by) - time.Second) } })
 				standby, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
 					takenAs{FakeRunner: rig.runner, body: f.archive}, readCapture(BoxReadCollect, Result{}, true))
-				if standby == nil || !standby.standby {
+				if standby == nil || !standby.standingBy() {
 					t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
 				}
 				// NODE-A'S LEASE GOES while the wait's last read of the row

@@ -202,7 +202,7 @@ func keptWithPuts(t *testing.T, refusal error, fails int) (*coordRig, *sessionWr
 	run := rig.launchKept(t, "t1")
 	spooled, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID), rig.runner,
 		readCapture(BoxReadStop, Result{}, true))
-	if spooled == nil || spooled.standby {
+	if spooled == nil || spooled.standingBy() {
 		t.Fatalf("the stop's read spooled %+v, want the capture's own place", spooled)
 	}
 	puts := &refusedPuts{sessionKeep: base, refusal: refusal, fails: fails}

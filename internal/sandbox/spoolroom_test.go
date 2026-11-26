@@ -363,7 +363,7 @@ func TestEverySpoolGivesItsRoomBackWithItsFile(t *testing.T) {
 			run := rig.launchKept(t, "t1")
 			stampedBegun(t, rig, run)
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("the read beside node-a's capture spooled %+v, want it standing by", standby)
 			}
 			rig.now = rig.now.Add(SessionCaptureBudget)
@@ -380,7 +380,7 @@ func TestEverySpoolGivesItsRoomBackWithItsFile(t *testing.T) {
 			run := rig.launchKept(t, "t1")
 			stampedBegun(t, rig, run)
 			standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-			if standby == nil || !standby.standby {
+			if standby == nil || !standby.standingBy() {
 				t.Fatalf("the read beside node-a's capture spooled %+v, want it standing by", standby)
 			}
 			rig.coordinator.Stop()

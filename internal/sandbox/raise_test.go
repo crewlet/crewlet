@@ -245,7 +245,7 @@ func TestAStandbysTakeoverReservesAtThePointItsOwnTakeRaised(t *testing.T) {
 		held := newHeldArchive(placeHolderArchive)
 		placed := holdingPlace(t, rig, run, held)
 		standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
-		if standby == nil || !standby.standby {
+		if standby == nil || !standby.standingBy() {
 			t.Fatalf("the second read spooled %+v, want it standing by", standby)
 		}
 		held.end <- errScrubRefused
