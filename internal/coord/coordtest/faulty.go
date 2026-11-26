@@ -129,14 +129,6 @@ func (f *Faulty) PreferredResources(ctx context.Context, class coord.Class, node
 	return f.inner.PreferredResources(ctx, class, nodeID)
 }
 
-// EverPresent delegates, or fails with the configured error.
-func (f *Faulty) EverPresent(ctx context.Context) ([]string, error) {
-	if err := f.fault(); err != nil {
-		return nil, err
-	}
-	return f.inner.EverPresent(ctx)
-}
-
 // FleetProtocolFloor delegates, or fails with the configured error.
 func (f *Faulty) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 	if err := f.fault(); err != nil {

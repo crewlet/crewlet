@@ -9,8 +9,11 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -21,13 +24,14 @@ import (
 // executor log counts reads a capture naming media at its stamp's version
 // (executordomain.MediaCaptureVersion), and every node that may settle a run's
 // row says sandbox.MediaStampVersion: live on its presence, offline on its
-// record, at zero where it held presence or a row and recorded nothing. A no
-// names the first node below; a standing retirement uncounts an offline node.
+// record. A node that recorded nothing is a build before the record, not
+// looked for. A no names the first node below; a standing retirement uncounts
+// an offline node.
 //
 // Mutation: answer apart whatever the readers say, skip a node at zero, count
-// no offline, recorded or row-only node, read a record over a live presence,
-// honour a retirement a later row or record voids, read this node's own
-// presence, or name a node out of order, and a case goes red.
+// no recorded node, count a node that recorded nothing, read a record over a
+// live presence, honour a retirement a later record voids, read this node's
+// own presence, or name a node out of order, and a case goes red.
 func TestATakeKeepsMediaApartOnlyOnceEveryReaderReadsIt(t *testing.T) {
 	t.Parallel()
 	media, stamp := executordomain.MediaCaptureVersion, sandbox.MediaStampVersion
@@ -60,11 +64,11 @@ func TestATakeKeepsMediaApartOnlyOnceEveryReaderReadsIt(t *testing.T) {
 		"a live node whose presence says no stamp, its record one": {rows: []coord.NodePositions{selfRow},
 			live: []presence{self, {"seats-c", seats, 0}}, stamps: map[string]int{"seats-c": stamp},
 			below: "seats-c"},
-		"an offline seats-only node recorded at zero": {rows: []coord.NodePositions{selfRow},
+		"an offline seats-only node whose record says zero": {rows: []coord.NodePositions{selfRow},
 			live: []presence{self}, gone: []string{"seats-x"}, stamps: map[string]int{"seats-x": 0},
 			below: "seats-x"},
 		"an offline node that recorded nothing": {rows: []coord.NodePositions{selfRow},
-			live: []presence{self}, gone: []string{"seats-x"}, below: "seats-x"},
+			live: []presence{self}, gone: []string{"seats-x"}, apart: true},
 		"an offline node recorded at the stamp": {rows: []coord.NodePositions{selfRow},
 			live: []presence{self}, gone: []string{"seats-x"}, stamps: map[string]int{"seats-x": stamp},
 			apart: true},
@@ -76,16 +80,13 @@ func TestATakeKeepsMediaApartOnlyOnceEveryReaderReadsIt(t *testing.T) {
 		"a retired node that recorded since": {rows: []coord.NodePositions{selfRow},
 			live: []presence{self}, gone: []string{"seats-x"}, stamps: map[string]int{"seats-x": 0},
 			retiredBefore: []string{"seats-x"}, below: "seats-x"},
-		"a retired node whose position row is stored since": {rows: []coord.NodePositions{selfRow,
-			mediaRow("data-f", media)}, live: []presence{self}, gone: []string{"data-f"},
-			stamps: map[string]int{"data-f": 0}, retired: []string{"data-f"}, below: "data-f"},
 		"a retired node live again": {rows: []coord.NodePositions{selfRow},
 			live: []presence{self, {"seats-x", seats, 0}}, retired: []string{"seats-x"}, below: "seats-x"},
 		"an offline data node the log counts, recorded at the stamp": {rows: []coord.NodePositions{selfRow,
 			mediaRow("data-e", media)}, live: []presence{self}, gone: []string{"data-e"},
 			stamps: map[string]int{"data-e": stamp}, apart: true},
 		"an offline data node the log counts, recorded nowhere": {rows: []coord.NodePositions{selfRow,
-			mediaRow("data-e", media)}, live: []presence{self}, below: "data-e"},
+			mediaRow("data-e", media)}, live: []presence{self}, apart: true},
 		"a log reader below the media version": {rows: []coord.NodePositions{selfRow,
 			mediaRow("data-b", media-1)}, live: []presence{self, {"data-b", data, stamp}}, below: "data-b"},
 		"the first node below in node order": {rows: []coord.NodePositions{selfRow},
@@ -96,7 +97,7 @@ func TestATakeKeepsMediaApartOnlyOnceEveryReaderReadsIt(t *testing.T) {
 			live: []presence{self}, stamps: map[string]int{"data-x": stamp}, apart: true},
 		"an offline node that applies no executor log, recorded nowhere": {rows: []coord.NodePositions{
 			selfRow, {NodeID: "data-x", Domains: map[string]coord.DomainPosition{"tracker": {RecordVersion: 1}}}},
-			live: []presence{self}, below: "data-x"},
+			live: []presence{self}, apart: true},
 		"this node's own presence not saying": {rows: []coord.NodePositions{selfRow},
 			live: []presence{{"data-a", data, -1}}, apart: true},
 		"no node the log counts": {unread: true},
@@ -141,6 +142,36 @@ func TestATakeKeepsMediaApartOnlyOnceEveryReaderReadsIt(t *testing.T) {
 	}
 }
 
+// THE MEDIA GATE'S READS FIT ITS ROOM AT THE FLOOR: every read the gate makes
+// across a link ([Engine.readMediaReaders]) of a fleet at its widest
+// (coord.MaxMaintenanceParticipants nodes): each node's presence at its
+// class's bound, its position row, capture stamp record and retirement at
+// their widest, each reply whole at the floor pace (jsapi.Crossing at
+// objstore.MiBPace), and a read term for each listing's own round trip. The
+// log's evictions are this node's own rows. The figure is
+// sandbox.MediaReadersRoom's doc's, to the tenth of a second.
+//
+// Mutation: drop a listing, or raise the fleet past the room.
+func TestTheMediaGatesReadsFitItsRoomAtTheFloor(t *testing.T) {
+	t.Parallel()
+	widest := map[string]int{}
+	for _, w := range coordtest.WidestPositionsRecords() {
+		widest[w.Class] = max(widest[w.Class], w.Stored())
+	}
+	cross := func(n int) time.Duration { return jsapi.Crossing(n, objstore.MiBPace) }
+	node := cross(coord.SmallValueBytes) + cross(widest[coord.PositionClass]) +
+		cross(widest[coord.CaptureStampClass]) + cross(widest[coord.RetirementClass])
+	const listings = 4
+	reads := time.Duration(coord.MaxMaintenanceParticipants)*node + listings*jsprovision.ReadTerm
+	if reads > sandbox.MediaReadersRoom {
+		t.Errorf("the gate's reads take %v at the floor, past its room, %v", reads, sandbox.MediaReadersRoom)
+	}
+	if got := reads.Round(100 * time.Millisecond).String(); got != "23.3s" {
+		t.Errorf("the gate's reads take %s at the floor, and sandbox.MediaReadersRoom's doc states 23.3s: "+
+			"restate it", got)
+	}
+}
+
 // EVERY UNKNOWN KEEPS MEDIA INLINE AS UNKNOWN, NEVER AS A NODE BELOW: a read
 // that failed or a log nobody counted is why the readers went unread, and the
 // policy names no node.
@@ -159,9 +190,6 @@ func TestEveryUnknownKeepsMediaInlineAsUnknown(t *testing.T) {
 		}},
 		"live nodes that cannot be listed": {leases: func() coord.Backend {
 			return unlistedNodes{coordmemory.New()}
-		}},
-		"nodes ever present that cannot be read": {leases: func() coord.Backend {
-			return unrolledNodes{Backend: coordmemory.New(), err: failed}
 		}},
 		"capture stamp records that cannot be read": {fleet: func(f *rosterFleet) coord.Fleet {
 			return mediaFleet{rosterFleet: f, stampsErr: failed}
@@ -369,15 +397,6 @@ func (f mediaFleet) CaptureStamps(context.Context) ([]coord.CaptureStampRecord, 
 func (f mediaFleet) NodeRetirements(context.Context) ([]coord.NodeRetirement, error) {
 	return f.retired, f.retiredErr
 }
-
-// unrolledNodes is a coordination store whose nodes ever present cannot be
-// read.
-type unrolledNodes struct {
-	coord.Backend
-	err error
-}
-
-func (u unrolledNodes) EverPresent(context.Context) ([]string, error) { return nil, u.err }
 
 // unreadablePositions is a fleet whose position register cannot be read.
 type unreadablePositions struct{ *rosterFleet }

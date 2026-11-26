@@ -6608,10 +6608,11 @@ the log says it reads the version a capture naming media is stamped at, 13
 (`executordomain.MediaCaptureVersion`, `statelog.Readers`), and every node that
 may settle a run's row says `sandbox.MediaStampVersion`: a live node on its
 presence; any other on the record every node writes as it starts, before it
-claims presence (`coord.CaptureStampRecord`), at zero where a node that ever
-held presence (`coord.Backend.EverPresent`) or wrote a position row recorded
-nothing; none whose retirement stands against its last row and record. A
-definite no names the first node below and what it says
+claims presence (`coord.CaptureStampRecord`); none whose retirement stands
+against its record. A node that recorded nothing is a build from before the
+record, which no tag shipped, and the gate does not look for it: the record,
+and a stamp a newer build extended being settled off the log, are the forward
+mechanisms that hold every upgrade from here on. A definite no names the first node below and what it says
 (`SessionPolicy.MediaBelow`). Until then, and whenever these cannot be read
 within `sandbox.MediaReadersRoom` (30 s, counted in `BoxReadBudget`) or no node
 says what it reads of the log, every capture keeps them inline, unchanged. A

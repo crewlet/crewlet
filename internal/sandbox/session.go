@@ -1224,14 +1224,16 @@ var captureReadBudget = sessionRecordBudget + coord.MaxValueReadCrossing
 const keepReadRoom = sessionRecordBudget
 
 // MediaReadersRoom is the room the read of who reads a capture naming media is
-// held to ([SessionPolicy.MediaApart]): the live nodes' presences, the position
-// register and the executor log's evictions. A record's budget
-// ([sessionRecordBudget]), for [keepReadRoom]'s reason: a store that has not
-// answered small reads by then is in an outage its own alarms name. Past it the
-// take keeps its media inline, which loses nothing, logged with why; the reads
-// list every node, so a large fleet across a slow link can pass it. Read before
-// the take's budget begins ([Coordinator.placingPolicy]), so [BoxReadBudget]
-// counts it beside the take.
+// held to ([SessionPolicy.MediaApart]): four listings of small values (the live
+// nodes' presences, the position register's rows, the nodes' capture stamp
+// records and the retired node ids) and the executor log's evictions, this
+// node's own rows. MEASURED, 23.3 s for a fleet at its widest
+// (coord.MaxMaintenanceParticipants nodes, each record at its widest, each
+// reply crossing at the floor pace, a read term a listing; internal/engine's
+// TestTheMediaGatesReadsFitItsRoomAtTheFloor), so a record's budget
+// ([sessionRecordBudget]) holds them. Past it the take keeps its media inline,
+// logged with why. Read before the take's budget begins
+// ([Coordinator.placingPolicy]), so [BoxReadBudget] counts it beside the take.
 const MediaReadersRoom = sessionRecordBudget
 
 // takeLife is the longest a take's begun stamp stands before its taker's last

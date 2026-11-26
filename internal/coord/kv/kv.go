@@ -1556,32 +1556,6 @@ func (s *Store) PreferredResources(ctx context.Context, class coord.Class, nodeI
 	return out, nil
 }
 
-// EverPresent reads the node ids off the epochs bucket's presence records:
-// every claim mints on its record before the lease is written, and no
-// lease's end removes it.
-//
-// A KEY THAT NAMES NO NODE IS RAISED, never skipped as a hint's record is: a
-// node dropped here is one the media gate never counts.
-func (s *Store) EverPresent(ctx context.Context) ([]string, error) {
-	var out []string
-	err := s.eachUnder(ctx, s.counter.list, coord.ClassNode, "the nodes ever present",
-		func(kve jetstream.KeyValueEntry) error {
-			resource, ok := decodeResource(kve.Key())
-			node, named := coord.ClassNode.Name(resource)
-			if !ok || !named {
-				return fmt.Errorf("%w: the presence record at %s names no node",
-					coord.ErrUnavailable, kve.Key())
-			}
-			out = append(out, node)
-			return nil
-		})
-	if err != nil {
-		return nil, err
-	}
-	slices.Sort(out)
-	return slices.Compact(out), nil
-}
-
 // FleetProtocolFloor returns the lowest protocol among the live leases the
 // gate counts (coord.ProtocolGateCounts), and whether there were any: the
 // gate's observability half, asked only after a [coord.RefusedProtocol] to

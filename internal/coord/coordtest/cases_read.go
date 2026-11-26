@@ -352,31 +352,6 @@ var readCases = []testCase{
 			"seat:ceo", "seat:cto")
 	}},
 
-	{"ever_present_names_every_node_that_held_presence_lapsed_and_released_ones_included", func(h *harness) {
-		// The media gate's roll of every node that may settle a run: a node
-		// offline when it reads (a lapsed lease, or one released at a stop)
-		// is exactly the one it must still count, and no other class's
-		// resource is a node. The short-TTL claim goes last, before the lapse.
-		released := h.claim(coord.NodeResource("node-a"), coord.AcquireOptions{
-			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
-		})
-		h.release(coord.NodeResource("node-a"), "node-a:1", released.Epoch)
-		h.claim(coord.NodeResource("node-b"), coord.AcquireOptions{
-			Owner: "node-b:1", TTL: LongTTL, Ungated: true,
-		})
-		h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-b:1", TTL: LongTTL, Preferred: "node-b"})
-		h.claim(coord.NodeResource("node-c"), coord.AcquireOptions{
-			Owner: "node-c:1", TTL: ShortTTL, Ungated: true,
-		})
-		h.lapse()
-
-		h.requireResources("live nodes", h.listLive(coord.ClassNode), coord.NodeResource("node-b"))
-		got, err := h.b.EverPresent(h.ctx)
-		if err != nil || !reflect.DeepEqual(got, []string{"node-a", "node-b", "node-c"}) {
-			h.t.Fatalf("EverPresent = %v, %v, want node-a, node-b and node-c", got, err)
-		}
-	}},
-
 	{"preferred_resources_are_scoped_to_the_prefix", func(h *harness) {
 		h.claim("seat:ceo", coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Preferred: "node-a",

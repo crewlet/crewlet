@@ -2416,8 +2416,8 @@ only the group hears is told to wait, as `exclude` says. It names no log, and is
 window judges it every time it is read, waiving a participant (printed
 `retired`) only while the retirement stands and waiting for it again the
 moment the node runs. Nor does a session take wait on it before it keeps
-media apart while the retirement stands against the node's last position row
-and [capture stamp record](../concepts/code-sandbox.md).
+media apart while the retirement stands against the node's [capture stamp
+record](../concepts/code-sandbox.md).
 
 `abandon` changes what the operation is trying to reach, never the barrier
 it must cross. From `opened` it clears outright, since no request was issued,

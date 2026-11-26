@@ -669,12 +669,6 @@ type Backend interface {
 	// purpose is to bring a restarted node's own seats back to it.
 	PreferredResources(ctx context.Context, class Class, nodeID string) (map[string]struct{}, error)
 
-	// EverPresent returns every node id that has held presence ([ClassNode])
-	// in this store, LAPSED AND RELEASED ONES INCLUDED, sorted: the fleet's
-	// one roll of every node that ever ran, on every build, read off the
-	// fencing counter's records, which no lease's end removes.
-	EverPresent(ctx context.Context) ([]string, error)
-
 	// FleetProtocolFloor returns the lowest protocol among the live leases
 	// the gate counts ([ProtocolGateCounts]), and whether there were any. A
 	// claim refused [RefusedProtocol] names this floor, so it counts EXACTLY

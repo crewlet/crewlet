@@ -224,8 +224,9 @@ func (k executorKeep) Policy(ctx context.Context) (sandbox.SessionPolicy, error)
 // recordCaptureStamp records the capture stamp version this node's build asks
 // again whole ([coord.CaptureStampRecord]) before the node claims presence, so
 // the media gate reads it while the node is offline. Once a process, since the
-// version is the build's. A node that cannot write it does not start: running
-// on, it would be read offline at what an earlier build under its id recorded.
+// version is the build's. A node that cannot write it does not start, as
+// node.Node.Start does not when its queue does not: running on, it would be
+// read offline at what an earlier build under its id recorded.
 func (e *Engine) recordCaptureStamp(ctx context.Context) error {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil
@@ -311,7 +312,6 @@ type mediaReads struct {
 	held    []coord.Lease
 	rows    []coord.NodePositions
 	tombs   []statelog.Tombstone
-	present []string
 	stamps  []coord.CaptureStampRecord
 	retired []coord.NodeRetirement
 }
@@ -329,9 +329,6 @@ func (e *Engine) readMediaReaders(room context.Context) (mediaReads, string, err
 	read.tombs, _ = logTombstones(room, e.backends.Store, executordomain.Domain{}, 0)
 	if err = room.Err(); err != nil {
 		return read, "the executor log's evictions could not be read", err
-	}
-	if read.present, err = e.backends.Coord.EverPresent(room); err != nil {
-		return read, "the nodes that ever held presence could not be read", err
 	}
 	if read.stamps, err = e.backends.Fleet.CaptureStamps(room); err != nil {
 		return read, "the nodes' capture stamp records could not be read", err
@@ -362,30 +359,21 @@ func mediaReadersUnread(ctx, room context.Context, what string, err error) strin
 }
 
 // stampReaders is the capture stamp version each node that may settle a run's
-// row says ([sandbox.CaptureStampVersion]): every node that ever held presence,
-// wrote a position row or recorded its version, at its live presence's word,
-// else its record's, else zero, a node not saying (a build before the record
-// among them); this node at its own build's. An offline node whose retirement
-// stands against its last row and record is gone for good, and not counted
-// (ADR-0073's amendment, "Mid-upgrade").
+// row says ([sandbox.CaptureStampVersion]): every node that recorded it, at its
+// record's, and every live node at its presence's word over it; this node at
+// its own build's. An offline node whose retirement stands against its record
+// is gone for good, and not counted. A node that recorded nothing is a build
+// before the record, unreleased, so not looked for (CLAUDE.md, "Breaking
+// Changes Are Free Until a Tag Ships Them"): the record is the forward
+// mechanism (ADR-0073's amendment, "Mid-upgrade").
 func stampReaders(self string, read mediaReads) map[string]int {
-	out := make(map[string]int, len(read.present)+len(read.rows)+len(read.stamps))
-	wrote := make(map[string]time.Time, len(read.rows)+len(read.stamps))
-	for _, node := range read.present {
-		out[node] = 0
-	}
-	for _, row := range read.rows {
-		out[row.NodeID] = 0
-		wrote[row.NodeID] = row.StoredAt
-	}
+	out := make(map[string]int, len(read.stamps)+len(read.held))
+	stored := make(map[string]time.Time, len(read.stamps))
 	for _, r := range read.stamps {
-		out[r.NodeID] = r.CaptureStampVersion
-		if r.StoredAt.After(wrote[r.NodeID]) {
-			wrote[r.NodeID] = r.StoredAt
-		}
+		out[r.NodeID], stored[r.NodeID] = r.CaptureStampVersion, r.StoredAt
 	}
 	for _, r := range read.retired {
-		if r.Stands(wrote[r.NodeID]) {
+		if r.Stands(stored[r.NodeID]) {
 			delete(out, r.NodeID)
 		}
 	}
