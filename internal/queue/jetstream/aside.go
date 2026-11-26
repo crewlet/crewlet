@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"slices"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
@@ -14,7 +13,7 @@ import (
 
 // An aside delivery ([queue.OutcomeAside]) is the message itself, kept by the
 // attachment that fetched it: unacknowledged, its ack window restarted by an
-// in-progress acknowledgement every third of it ([attachment.keepAside]), its
+// in-progress acknowledgement every third of it ([attachment.keepHeld]), its
 // delivery count untouched. Readmit moves it to the attachment's readmitted
 // list, which the next drain takes first. Nothing is copied or republished, so
 // the broker's own state is the record: a node that dies holding it leaves it
@@ -74,12 +73,7 @@ func (a *attachment) setAside(ctx context.Context, items []delivery, key string)
 	for _, d := range items {
 		a.aside = append(a.aside, asideDelivery{delivery: d, key: key})
 	}
-	start := !a.keeperRunning
-	a.keeperRunning = true
 	a.asideMu.Unlock()
-	if start {
-		go a.keepAside()
-	}
 }
 
 // bySeq is held with more added, every one marked readmitted, in the order the
@@ -192,32 +186,6 @@ func (a *attachment) handBackAside(ctx context.Context) {
 	a.asideMu.Unlock()
 	if len(held) > 0 {
 		a.handBackUndispatched(ctx, held, a.blockedBy())
-	}
-}
-
-// keepAside restarts the ack window of every delivery a holds aside or
-// readmitted every third of it, as [attachment.withProgress] keeps a handler's,
-// until a's consume loop has ended and handed them back.
-func (a *attachment) keepAside() {
-	t := time.NewTicker(a.q.ackWait() / 3)
-	defer t.Stop()
-	for {
-		select {
-		case <-a.done:
-			return
-		case <-t.C:
-		}
-		failed := 0
-		var last error
-		for _, msg := range a.heldMsgs() {
-			if err := msg.InProgress(); err != nil {
-				failed, last = failed+1, err
-			}
-		}
-		if failed > 0 {
-			a.log.Warn("aside_progress_failed", "deliveries", failed, "error", last.Error(),
-				"detail", "an aside delivery whose ack window lapses is redelivered, at one delivery")
-		}
 	}
 }
 

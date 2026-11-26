@@ -22,7 +22,7 @@ import (
 // once its window runs out, and two of them in turn hold the aside delivery
 // past two windows. Any member may take it, so every member is readmitted.
 //
-// Mutation: start no keeper ([attachment.keepAside]), or let it signal nothing,
+// Mutation: start no keeper ([attachment.keepHeld]), or let it signal nothing,
 // and the aside delivery is redelivered before the Readmit.
 func TestAnAsideDeliveryIsKeptPastTheAckWindow(t *testing.T) {
 	t.Parallel()

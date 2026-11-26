@@ -885,13 +885,16 @@ func (p *openCodePlugin) UnmarshalJSON(raw []byte) error {
 	return json.Unmarshal(raw, (*entry)(p))
 }
 
-// runPlugins is plugins without the removals of OpenCode's own plugins and the
+// runPlugins is plugins without the removals of OpenCode's own plugins, the
 // tool-environment plugin every run's configuration names last
-// ([Paths.OpenCodeToolEnvPlugin]), which their own cases hold
-// (opencode_config_test.go, toolenv_test.go).
+// ([Paths.OpenCodeToolEnvPlugin]) and the checkouts plugin a run on a box
+// with the note helper names ([Paths.OpenCodeCheckoutsPlugin]), which their
+// own cases hold (opencode_config_test.go, toolenv_test.go,
+// opencode_checkout_test.go).
 func runPlugins(plugins []openCodePlugin) []openCodePlugin {
 	return slices.DeleteFunc(slices.Clone(plugins), func(p openCodePlugin) bool {
-		return p.Removes != "" || path.Base(p.Package) == "opencode-tool-env"
+		return p.Removes != "" || path.Base(p.Package) == "opencode-tool-env" ||
+			path.Base(p.Package) == "opencode-checkouts-plugin"
 	})
 }
 
