@@ -380,7 +380,7 @@ func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake, summary *
 	var e piNoteLine
 	var sums *piSummaries
 	if summary != nil {
-		sums, e.summary = &piSummaries{}, &summaryText{}
+		sums, e.summary = &piSummaries{}, summary.newWords()
 	}
 	for {
 		line, err := w.noteLine(ctx, func() error { return e.read(&w) })
@@ -482,13 +482,16 @@ type piSummaries struct {
 
 // keep keeps a compaction's summary t, and is its place.
 func (p *piSummaries) keep(t *summaryText) int {
-	kept := summaryText{buf: slices.Clone(t.buf), set: t.set, past: t.past, odd: t.odd}
+	// Its words handed over, not copied: t takes a buffer of its own next.
+	kept := summaryText{buf: t.buf, set: t.set, past: t.past, odd: t.odd, claim: t.claim, counted: t.counted}
+	t.buf, t.counted = nil, 0
 	p.texts = append(p.texts, kept)
 	p.held += len(kept.buf)
 	for i := 0; p.held > summaryReadMaxBytes && i < len(p.texts); i++ {
 		if k := &p.texts[i]; k.set && !k.past {
 			p.held -= len(k.buf)
 			k.buf, k.past = nil, true
+			k.claim.track(&k.counted, 0)
 		}
 	}
 	return len(p.texts) - 1
@@ -670,7 +673,9 @@ func (p Pi) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
 	if why := p.summaryWhy(ask); why != "" {
 		return sandbox.MainThreadReading{Summary: summaryUnread(why)}
 	}
-	var summary summaryRead
+	var large passBudget
+	defer large.release()
+	summary := summaryRead{claim: newSummaryClaim(ctx, &large)}
 	_, _ = p.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
 	return sandbox.MainThreadReading{Summary: summary.reading()}
 }

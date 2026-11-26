@@ -58,17 +58,17 @@ func TestANodeKeepsThePoolsItRunsWithTheLimitsRoom(t *testing.T) {
 // again; size the scrub with no value, or at a reading of nothing.
 func TestTheLargeSlotIsCountedAtTheLargerOfItsTwoHolders(t *testing.T) {
 	t.Parallel()
-	chain := int64(threadChainHeldBytes)
+	chain := int64(threadChainHeldBytes + summaryLargeHeldBytes)
 	line := int64(threadLineMax-collectionBaseLineCharge) * 5 / 4
 	count := int64(geminiCountLargeHeldBytes - meterBaseHeldBytes)
 	take := scrubHeldBytes(scrubPlainMax, scrubLongestMax) - scrubBaseHeldBytes + max(line, count)
-	if take <= chain || count <= line {
-		t.Fatalf("the premise: a take past its base holds %d bytes, no more than a chain's %d, or a Gemini CLI "+
-			"count past its base %d, no more than a Claude Code meter's line %d", take, chain, count, line)
+	if take == chain || count <= line {
+		t.Fatalf("the premise: a take past its base holds %d bytes, what a chain's pass does beside its summary, "+
+			"or a Gemini CLI count past its base %d, no more than a Claude Code meter's line %d", take, count, line)
 	}
 	if got := largeReadHeldBytes(); got != max(chain, take) {
-		t.Errorf("the large slot is counted at %d bytes, want the larger of a chain's %d and a take's %d", got,
-			chain, take)
+		t.Errorf("the large slot is counted at %d bytes, want the larger of a chain's beside its summary's %d "+
+			"and a take's %d", got, chain, take)
 	}
 }
 

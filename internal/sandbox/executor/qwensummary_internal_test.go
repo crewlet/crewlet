@@ -74,9 +74,11 @@ func qwenSummaryLineWhole(read *summaryRead, line []byte) {
 // qwenSummaryOnTheWalk is chat's newest summary as a box read's count reads
 // it on its walk ([QwenCode.readMainThread]).
 func qwenSummaryOnTheWalk(ctx context.Context, chat string) sandbox.ThreadSummary {
+	var large passBudget
+	defer large.release()
 	c := new(qwenCounting)
-	c.summarize()
-	return c.summary(chatFileLines(ctx, strings.NewReader(chat), c, new(passBudget)))
+	c.summarize(newSummaryClaim(ctx, &large))
+	return c.summary(chatFileLines(ctx, strings.NewReader(chat), c, &large))
 }
 
 // qwenSummaryOnTheNotesWalk is chat's newest summary as a read of its notes

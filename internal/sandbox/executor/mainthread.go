@@ -159,20 +159,34 @@ const collectionBaseRecords = 1 << 13
 // COEFFICIENTS): one of the chain's items at End's peak
 // (BenchmarkAThreadChainAtItsBounds); a line's reader within the line; and the
 // strings one charge covers, the last with the buffer json v2 unquotes it
-// through. TestTheBaseCoefficientsHold measures the last two. baseTierReadBytes
-// is what the base tier counts each read in flight at, about 5.3 MiB, and a
-// collection's least weight of the node's answer budget ([collectionWeight]):
-// what its fixed per-read buffers hold whatever its pieces weigh.
+// through. TestTheBaseCoefficientsHold measures the last two. baseTierPassBytes
+// is what a pass at both bases holds, about 5.3 MiB; baseTierReadBytes, what
+// the base tier counts each read in flight at, its pass and its summary's
+// share ([summaryBaseHeldBytes]), and a collection's least weight of the
+// node's answer budget ([collectionWeight]): what its fixed per-read buffers
+// hold whatever its pieces weigh.
 const (
 	chainItemBytes     = 344
 	readerLineBytes    = 1730 << 10
 	chargeStringsBytes = 808 << 10
-	baseTierReadBytes  = 5450 << 10
+	baseTierPassBytes  = 5450 << 10
+	baseTierReadBytes  = baseTierPassBytes + summaryBaseHeldBytes
 )
 
-// A pass at both bases holds no more than the base tier counts it at, its
-// facts at 1.25 bytes a charged byte: a negative constant does not compile.
-const _ = uint(baseTierReadBytes - collectionBaseRecords*chainItemBytes - readerLineBytes - chargeStringsBytes -
+// What a read holds for its summary's words beyond the same read of as long a
+// file asking none or a short one, at the worst of the eleven readers
+// (TestABoxReadsSummaryIsBudgeted): within their share ([summaryBaseBytes]),
+// Gemini CLI's allocates 309,920 bytes, counted at 320 KiB; past it to
+// [summaryReadMaxBytes], under the large slot, Gemini CLI's holds 4,165,816
+// live (the collector at every 1% of growth), counted at 4.5 MiB.
+const (
+	summaryBaseHeldBytes  = 320 << 10
+	summaryLargeHeldBytes = 4608 << 10
+)
+
+// A pass at both bases holds no more than baseTierPassBytes, its facts at 1.25
+// bytes a charged byte: a negative constant does not compile.
+const _ = uint(baseTierPassBytes - collectionBaseRecords*chainItemBytes - readerLineBytes - chargeStringsBytes -
 	collectionBaseLineCharge*5/4)
 
 // CollectionLargeReadsAtOnce is how many passes past their base this process
@@ -328,8 +342,10 @@ func (r *Runner) ReadMainThread(ctx context.Context, box sandbox.Sandbox,
 	confirms = confirms && len(ask.Takes) > 0
 	var summary *summaryRead
 	thread := ask
+	var large passBudget
+	defer large.release()
 	if confirms && ask.Summary && records.recordSummary(ask) {
-		summary, thread.Summary = &summaryRead{}, false
+		summary, thread.Summary = &summaryRead{claim: newSummaryClaim(ctx, &large)}, false
 	}
 	var reading sandbox.MainThreadReading
 	if reads, ok := r.harness.(mainThreadHarness); ok {
