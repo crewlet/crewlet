@@ -156,17 +156,23 @@ func grokAttempts(ctx context.Context, box sandbox.Sandbox, path string) (int, e
 	if err != nil {
 		return 0, fmt.Errorf("executor: reading a Grok Build compaction's record: %w", err)
 	}
+	return grokListedAttempts(raw), nil
+}
+
+// grokListedAttempts is the requests a compaction file's attempts stand for
+// ([grokAttempts]); a file that is no record of them counts none.
+func grokListedAttempts(raw []byte) int {
 	var file struct {
 		Error    string            `json:"error"`
 		Attempts []json.RawMessage `json:"attempt_details"`
 	}
-	if json.Unmarshal(raw, &file) != nil {
-		return 0, nil
+	switch {
+	case json.Unmarshal(raw, &file) != nil:
+		return 0
+	case file.Error == "":
+		return max(len(file.Attempts)-1, 0)
 	}
-	if file.Error == "" {
-		return max(len(file.Attempts)-1, 0), nil
-	}
-	return len(file.Attempts), nil
+	return len(file.Attempts)
 }
 
 // grokTitled reports whether a session's summary.json names its generated title.
