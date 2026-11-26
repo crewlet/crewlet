@@ -14,8 +14,8 @@ import (
 // (internal/notehelper's "Checkouts below the working directory") keeps them:
 // the helper, its state and launch config ([checkoutSpec]); the home file the
 // harness reads (agents: the first candidate that exists, else the first;
-// none, and nothing held, for a harness handed no instruction text) and its
-// own copy held beside the run (held); the sections' file; the skills
+// none, nothing held, where its sections are read where they are written)
+// and its own copy held beside the run (held); the sections' file; the skills
 // directory with the list of copies the run's end removes, each built in
 // state/staging ([checkoutHome.staging]); the roots' file for a harness the
 // script points at them ("" for none); and fallback, the files (a path a
@@ -88,7 +88,7 @@ type checkoutSpec struct {
 	ImportInstructions bool
 	SkillSep           checkoutSkillSep
 	// ListedAs and HomeSkills are the helper's ("grok", Grok Build's listing
-	// rule; "kimi", Kimi Code's; "muse", Muse Code's).
+	// rule; "kimi", Kimi Code's; "opencode", OpenCode's; "muse", Muse Code's).
 	ListedAs   string
 	HomeSkills []checkoutSkillDir
 	Budget     string
@@ -218,7 +218,10 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions,
 		"skillSep": spec.SkillSep, "roots": h.roots}
 	if spec.ListedAs != "" {
-		config["listedAs"], config["homeSkills"] = spec.ListedAs, spec.HomeSkills
+		config["listedAs"] = spec.ListedAs
+	}
+	if len(spec.HomeSkills) > 0 {
+		config["homeSkills"] = spec.HomeSkills
 	}
 	if spec.Budget != "" {
 		config["budget"] = map[string]string{"form": spec.Budget, "own": h.openingText()}

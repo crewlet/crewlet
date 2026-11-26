@@ -860,19 +860,22 @@ type leaderReads struct{ l *jsapi.Leader }
 
 func (r leaderReads) Last(ctx context.Context, subject string) (jsapi.Message, error) {
 	return jsprovision.ThroughElection(ctx, Stream, func(ctx context.Context) (jsapi.Message, error) {
-		return r.l.Last(ctx, subject)
+		msg, err := r.l.Last(ctx, subject)
+		return msg, jsapi.ClientError(err)
 	})
 }
 
 func (r leaderReads) First(ctx context.Context, subject string) (jsapi.Message, error) {
 	return jsprovision.ThroughElection(ctx, Stream, func(ctx context.Context) (jsapi.Message, error) {
-		return r.l.First(ctx, subject)
+		msg, err := r.l.First(ctx, subject)
+		return msg, jsapi.ClientError(err)
 	})
 }
 
 func (r leaderReads) Next(ctx context.Context, subject string, from uint64) (jsapi.Message, error) {
 	return jsprovision.ThroughElection(ctx, Stream, func(ctx context.Context) (jsapi.Message, error) {
-		return r.l.Next(ctx, subject, from)
+		msg, err := r.l.Next(ctx, subject, from)
+		return msg, jsapi.ClientError(err)
 	})
 }
 
@@ -880,7 +883,7 @@ func (r leaderReads) Next(ctx context.Context, subject string, from uint64) (jsa
 // leaderless answer: visit must take a page it was handed before.
 func (r leaderReads) Subjects(ctx context.Context, filter string, visit func(map[string]uint64) error) error {
 	_, err := jsprovision.ThroughElection(ctx, Stream, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, r.l.Subjects(ctx, filter, visit)
+		return struct{}{}, jsapi.ClientError(r.l.Subjects(ctx, filter, visit))
 	})
 	return err
 }

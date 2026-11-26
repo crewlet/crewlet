@@ -163,8 +163,8 @@ func checkoutLaunch(config, cwd string, stderr io.Writer) error {
 		return fmt.Errorf("the launch config's skillSep %q is neither %q nor %q", c.SkillSep, ":", "-")
 	}
 	if _, ok := listingRules[c.ListedAs]; c.ListedAs != "" && !ok {
-		return fmt.Errorf("the launch config's listedAs %q is none of %q, %q and %q", c.ListedAs, listedGrok, listedKimi,
-			listedMuse)
+		return fmt.Errorf("the launch config's listedAs %q is none of %q, %q, %q and %q", c.ListedAs, listedGrok,
+			listedKimi, listedOpenCode, listedMuse)
 	}
 	if c.Budget != nil && c.Budget.Form != budgetMuse {
 		return fmt.Errorf("the launch config's budget form %q is none the helper knows", c.Budget.Form)

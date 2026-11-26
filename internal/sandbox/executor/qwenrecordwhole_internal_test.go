@@ -107,6 +107,23 @@ func (b *transcriptBuilder) qwenRespondedWhole(at time.Time, parts json.RawMessa
 // qwenCompressedWhole reads a chat_compression record as the summary Qwen
 // Code goes on from; one past the value bound is said in its place.
 func (b *transcriptBuilder) qwenCompressedWhole(at time.Time, payload json.RawMessage) error {
+	summary, shaped, past := qwenCompactionWhole(payload, b.valueMax)
+	switch {
+	case !shaped:
+		return b.unread(qwenCompactionUnread)
+	case past:
+		return b.unread(fmt.Sprintf("a compaction record's summary runs past %s, and was not read",
+			humanSize(int64(b.valueMax))))
+	case summary == "":
+		return nil
+	}
+	return b.add(TranscriptEntry{Kind: EntrySummary, At: at, Thread: b.thread}, summary)
+}
+
+// qwenCompactionWhole is a chat_compression record's summary, its payload
+// decoded whole, "" for none; shaped false for a payload of no shape, and
+// past for a summary past valueMax.
+func qwenCompactionWhole(payload json.RawMessage, valueMax int) (summary string, shaped, past bool) {
 	var p struct {
 		SummaryPrefixLength *int `json:"summaryPrefixLength"`
 		CompressedHistory   []struct {
@@ -115,7 +132,7 @@ func (b *transcriptBuilder) qwenCompressedWhole(at time.Time, payload json.RawMe
 		} `json:"compressedHistory"`
 	}
 	if !wireObject(payload) || wireDecode(payload, &p) != nil {
-		return b.unread(qwenCompactionUnread)
+		return "", false, false
 	}
 	prefix := len(p.CompressedHistory)
 	if p.SummaryPrefixLength != nil && *p.SummaryPrefixLength >= 0 {
@@ -128,19 +145,14 @@ func (b *transcriptBuilder) qwenCompressedWhole(at time.Time, payload json.RawMe
 		}
 		for _, part := range geminiParts(entry.Parts) {
 			if part.Text != nil && !part.Thought && strings.TrimSpace(*part.Text) != "" {
-				texts = append(texts, chatTrim(*part.Text, b.valueMax))
+				texts = append(texts, chatTrim(*part.Text, valueMax))
 			}
 		}
 	}
-	summary := strings.Join(texts, "\n\n")
-	switch {
-	case len(texts) == 0:
-		return nil
-	case len(summary) > b.valueMax:
-		return b.unread(fmt.Sprintf("a compaction record's summary runs past %s, and was not read",
-			humanSize(int64(b.valueMax))))
+	if summary = strings.Join(texts, "\n\n"); len(summary) > valueMax {
+		return "", true, true
 	}
-	return b.add(TranscriptEntry{Kind: EntrySummary, At: at, Thread: b.thread}, summary)
+	return summary, true, false
 }
 
 // qwenNotesHeldWhole is the inbox ids of takes, in serve order, whose items the

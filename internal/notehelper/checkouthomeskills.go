@@ -17,8 +17,8 @@ import (
 // one of them takes is left out, said; each SKILL.md is read only to its
 // frontmatter's close, and a directory that cannot be read, or a name the
 // rule cannot read plainly, leaves out every copy, as it may hold the name.
-// With no rule, a copy is left out only where the run's skills directory
-// holds an entry of its name.
+// With a rule or none, a copy is left out where the run's skills directory
+// holds an entry of its name, of any kind ([skillsHold]).
 
 // listingRule is how a harness lists a skill, for the home check: harness,
 // its name in what is said; walk, how the run's skills directory is walked
@@ -37,12 +37,14 @@ type listingRule struct {
 }
 
 // listingRules is each listing rule by its checkoutSpec.ListedAs.
-var listingRules = map[string]listingRule{listedGrok: grokListing, listedKimi: kimiListing, listedMuse: museListing}
+var listingRules = map[string]listingRule{listedGrok: grokListing, listedKimi: kimiListing,
+	listedOpenCode: openCodeListing, listedMuse: museListing}
 
 // homeHolds is why a copy named name may not be made, "" where it may: by
 // the spec's listing rule, the home's skills or a copy this firing made
 // take its key ([homeNames]); and, whatever the rule, the run's skills hold
-// an entry of that name ([skillsHold]).
+// an entry of that name ([skillsHold]), checked after the rule's so a copy
+// this firing made keeps its own wording.
 func homeHolds(spec checkoutSpec, name string) string {
 	if rule, ruled := listingRules[spec.ListedAs]; ruled {
 		held := spec.held
@@ -58,9 +60,9 @@ func homeHolds(spec checkoutSpec, name string) string {
 
 // skillsHold is why the run's skills directory has no place for a copy named
 // name, "" where it has: an entry of that name there, whatever it is (a
-// directory without SKILL.md, a file, a link leading nowhere), which the copy
-// would replace and the run's end then remove, as it removes every copy
-// listed; or a place it cannot read.
+// directory without SKILL.md, a skill no rule keys as the copy, a file, a
+// link leading nowhere), which the copy would replace or, listed, the run's
+// end would remove; or a place that cannot be read.
 func skillsHold(spec checkoutSpec, name string) string {
 	_, err := os.Lstat(filepath.Join(spec.Skills, name))
 	switch {

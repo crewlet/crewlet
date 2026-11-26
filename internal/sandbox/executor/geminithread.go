@@ -64,7 +64,7 @@ func (g GeminiCLI) readMainThread(ctx context.Context, box sandbox.Sandbox, path
 		if summarize {
 			counter.summarize()
 		}
-		count, err := chatCopyCount(ctx, box, file, counter, ask.Release, geminiRelease, nil)
+		count, err := chatCopyCount(ctx, box, file, counter, ask.Release, geminiRelease)
 		if ask.Count {
 			reading.Count = count
 		}

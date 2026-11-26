@@ -61,7 +61,7 @@ func chatMemberLines(ctx context.Context, r io.Reader, member func(string) bool,
 			return errChatArchive
 		}
 		read = true
-		if err := chatFileLines(ctx, tr, c, large, nil); err != nil {
+		if err := chatFileLines(ctx, tr, c, large); err != nil {
 			return err
 		}
 	}
@@ -74,10 +74,8 @@ func chatMemberLines(ctx context.Context, r io.Reader, member func(string) bool,
 // read, as the whole-line read took each ([codexLines]). ONCE C KEEPS MORE
 // THAN ITS BASE it holds large's slot to the walk's end, waiting within ctx
 // ([errLargeWait] where the wait ends), as a collection's pass keeping a
-// thread's records does ([walkThread]). Each line's bytes, its break among
-// them, go to follow too where it is not nil ([chatFileFollowed]).
-func chatFileLines(ctx context.Context, r io.Reader, c chatCounter, large *passBudget,
-	follow io.Writer) (err error) {
+// thread's records does ([walkThread]).
+func chatFileLines(ctx context.Context, r io.Reader, c chatCounter, large *passBudget) (err error) {
 	held := false
 	defer func() {
 		if held {
@@ -88,9 +86,6 @@ func chatFileLines(ctx context.Context, r io.Reader, c chatCounter, large *passB
 	w.setupNotes(bufio.NewReaderSize(r, lineChunkBytes), codexWalkBound)
 	w.passImages()
 	w.src.tee = c.tee(&w.trim)
-	if follow != nil {
-		w.src.tee = teeTwo{w.src.tee, follow}
-	}
 	for n := 1; ; n++ {
 		c.start()
 		line, err := w.noteLine(ctx, func() error { return c.record(&w) })
@@ -114,9 +109,6 @@ func chatFileLines(ctx context.Context, r io.Reader, c chatCounter, large *passB
 		}
 		if line.ended {
 			return nil
-		}
-		if follow != nil {
-			_, _ = follow.Write(lineBreak)
 		}
 	}
 }
@@ -182,78 +174,30 @@ func countChat(release, measured string, walk func() error) (countMarks, error) 
 // whose job continues it in place resumes that file, unscrubbed, so a relaunch
 // continuing the copy, or a capture of it taken whole, is judged by this count
 // ([sandbox.LaunchRecord.ResumedCount]); a release but measured counts nothing.
-// summary, where it is not nil, follows the same walk ([chatFileFollowed]),
-// and err is why it did not read the file to its end; c nil counts nothing.
+// err is why it did not read the file to its end, which leaves a summary c
+// reads on the same walk unread ([geminiCounting.summary],
+// [qwenCounting.summary]).
 func chatCopyCount(ctx context.Context, box sandbox.Sandbox, file string, c chatCounter,
-	release, measured string, summary *chatSummaryLines) (count *sandbox.ResumedCount, err error) {
+	release, measured string) (count *sandbox.ResumedCount, err error) {
 
-	marked := func(mark sandbox.CountMark) *sandbox.ResumedCount {
-		if c == nil {
-			return nil
-		}
-		return &sandbox.ResumedCount{Mark: mark}
-	}
 	if release != measured {
-		return marked(sandbox.CountRelease), fmt.Errorf("the job ran release %q, and this build reads %s alone",
-			release, measured)
+		return &sandbox.ResumedCount{Mark: sandbox.CountRelease},
+			fmt.Errorf("the job ran release %q, and this build reads %s alone", release, measured)
 	}
 	if file == "" {
-		return marked(sandbox.CountUnread), errChatFile
+		return &sandbox.ResumedCount{Mark: sandbox.CountUnread}, errChatFile
 	}
 	r, err := box.OpenFile(ctx, file)
 	if err != nil {
-		return marked(sandbox.CountUnread), err
+		return &sandbox.ResumedCount{Mark: sandbox.CountUnread}, err
 	}
 	defer func() { _ = r.Close() }()
-	marks, err := countChat(release, measured, func() error { return chatFileFollowed(ctx, r, c, summary) })
-	if c == nil {
-		return nil, err
-	}
+	marks, err := countChat(release, measured, func() error { return chatFileLines(ctx, r, c, new(passBudget)) })
 	return c.count(marks, 0), err
 }
 
 // errChatFile is a session no one chat file in its box names.
 var errChatFile = errors.New("no one chat file in the box names the session")
-
-// chatFileFollowed walks r, one chat file, into c ([chatFileLines]; c nil
-// counts nothing) as summary follows the same walk where it is not nil
-// ([chatSummaryLines.follow]): the walk's bytes handed on through a pipe as
-// it takes them, each line's break among them, so the summary is read off
-// the one walk and neither holds a line. The pipe ends with the walk's error.
-func chatFileFollowed(ctx context.Context, r io.Reader, c chatCounter, summary *chatSummaryLines) error {
-	if c == nil {
-		c = chatSkip{}
-	}
-	if summary == nil {
-		return chatFileLines(ctx, r, c, new(passBudget), nil)
-	}
-	pr, pw := io.Pipe()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		summary.follow(ctx, pr)
-		// A reading that ended early lets the walk's writes go by unread.
-		_ = pr.Close()
-	}()
-	err := chatFileLines(ctx, r, c, new(passBudget), pw)
-	_ = pw.CloseWithError(err)
-	<-done
-	return err
-}
-
-// lineBreak is the break a followed walk hands on after each line it took.
-var lineBreak = []byte{'\n'}
-
-// chatSkip is a count of nothing, a walk's lines passed over
-// ([chatFileFollowed]).
-type chatSkip struct{}
-
-func (chatSkip) tee(trim *lineTrim) io.Writer                  { return trim }
-func (chatSkip) start()                                        {}
-func (chatSkip) record(w *lineWalk) error                      { return w.skip(jsonscan.ObjectStart) }
-func (chatSkip) line(bool)                                     {}
-func (chatSkip) pastBase() bool                                { return false }
-func (chatSkip) count(countMarks, int64) *sandbox.ResumedCount { return nil }
 
 // lineSeparators judges a chat file line, a piece at a time as the walk
 // takes it, for U+2028 or U+2029, raw or escaped: a JavaScript reader may

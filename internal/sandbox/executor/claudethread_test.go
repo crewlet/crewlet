@@ -4245,8 +4245,8 @@ func TestAReplysIterationsCostItsUsageAnEntryAtATime(t *testing.T) {
 				u, ok, err)
 		}
 	}
-	fewObjects, fewBytes := allocationsOf(usage(one))
-	manyObjects, manyBytes := allocationsOf(usage(long))
+	fewObjects, fewBytes := allocationsOf(t, usage(one))
+	manyObjects, manyBytes := allocationsOf(t, usage(long))
 	if manyObjects > fewObjects+listSlack {
 		t.Errorf("a usage listing %d bytes of iterations costs %d allocations, and one listing one entry %d",
 			len(longRecord), manyObjects, fewObjects)
@@ -4463,8 +4463,8 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	if one() == nil || full() == nil {
 		t.Fatalf("an edits list whose first block is none reads with no error")
 	}
-	oneObjects, oneBytes := allocationsOf(func() { _ = one() })
-	fullObjects, fullBytes := allocationsOf(func() { _ = full() })
+	oneObjects, oneBytes := allocationsOf(t, func() { _ = one() })
+	fullObjects, fullBytes := allocationsOf(t, func() { _ = full() })
 	if fullObjects > oneObjects+slack || fullBytes > oneBytes+2*uint64(len(edits)) {
 		t.Errorf("refused at its first block, an edits list of %d bytes costs %d allocations and %d bytes, and a "+
 			"list of one %d and %d: more than a copy of the list more", len(edits), fullObjects, fullBytes,
@@ -4484,8 +4484,8 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 			err, strings.Count(string(longList), "1"))
 	}
 	keepNone := func(json.RawMessage, int) error { return nil }
-	fewObjects, fewBytes := allocationsOf(func() { _ = eachElement(oneList, keepNone) })
-	manyObjects, manyBytes := allocationsOf(func() { _ = eachElement(longList, keepNone) })
+	fewObjects, fewBytes := allocationsOf(t, func() { _ = eachElement(oneList, keepNone) })
+	manyObjects, manyBytes := allocationsOf(t, func() { _ = eachElement(longList, keepNone) })
 	if manyObjects > fewObjects+slack || manyBytes > fewBytes+uint64(len(longList)) {
 		t.Errorf("a walk of a list of %d bytes costs %d allocations and %d bytes, and of a list of one %d and %d: "+
 			"more than the list's own size more", len(longList), manyObjects, manyBytes, fewObjects, fewBytes)
@@ -4526,7 +4526,7 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 				m.Blocks().Len(), len(m.Calls()), err, blocks, calls)
 		}
 		fields := calls * (uint64(unsafe.Sizeof(threadCall{})) + tc.own)
-		if held, limit := heldBy(read), fields*2+heldSlack; held > limit {
+		if held, limit := heldBy(t, read), fields*2+heldSlack; held > limit {
 			t.Errorf("%s: a list of %d bytes read to its end holds %d bytes, more than its %d calls of %d blocks "+
 				"take: %d", name, len(record)+1, held, calls, blocks, limit)
 		}
@@ -4559,8 +4559,8 @@ func TestAnObjectsWalkCostsWhatOneKeyCosts(t *testing.T) {
 		}); err != nil || keys != n {
 			t.Fatalf("%s: an object of %d keys walks as %d keys, %v", name, n, keys, err)
 		}
-		fewObjects, fewBytes := allocationsOf(func() { _ = eachKey(one, keepNone) })
-		manyObjects, manyBytes := allocationsOf(func() { _ = eachKey(object, keepNone) })
+		fewObjects, fewBytes := allocationsOf(t, func() { _ = eachKey(one, keepNone) })
+		manyObjects, manyBytes := allocationsOf(t, func() { _ = eachKey(object, keepNone) })
 		if manyObjects > fewObjects+listSlack || manyBytes > fewBytes+uint64(len(object)) {
 			t.Errorf("%s: a walk of an object of %d keys costs %d allocations and %d bytes, and of an object of "+
 				"one %d and %d: more than the object's own size more", name, n, manyObjects, manyBytes, fewObjects,
