@@ -56,9 +56,10 @@ func inlineTake(t *testing.T, layout archiveLayout, archive []byte, s scrubber) 
 // keptApart is a framed body as a spool keeps it and a later launch opens it:
 // split (sandbox.SplitTakenBody), each first member sealed and uploaded as an
 // object of its own and the text object beside them, then opened through the
-// session store, which splices the members back. It answers what the open
-// read, the text object as it was sealed, and each member uploaded by its
-// digest.
+// session store, which splices the members back, its read budgeted by the
+// split's count of the archive restored, which must be what the open read. It
+// answers what the open read, the text object as it was sealed, and each
+// member uploaded by its digest.
 func keptApart(t *testing.T, body []byte) (opened, text []byte, members map[string][]byte) {
 	t.Helper()
 	at := func() time.Time { return time.Now().UTC() }
@@ -104,13 +105,17 @@ func keptApart(t *testing.T, body []byte) (opened, text []byte, members map[stri
 		t.Fatal(err)
 	}
 	read, err := store.Open(t.Context(), executordomain.Session{Handle: handle, Turn: turn, Object: put.Object,
-		Media: media})
+		Media: media, ArchiveBytes: split.Restored()})
 	if err != nil {
 		t.Fatalf("opening the kept session: %v", err)
 	}
 	defer func() { _ = read.Close() }()
 	if opened, err = io.ReadAll(read); err != nil {
 		t.Fatalf("reading the kept session: %v", err)
+	}
+	if len(media) > 0 && split.Restored() != int64(len(opened)) {
+		t.Errorf("the split counts the archive its frames restore to as %d bytes, and it opens as %d",
+			split.Restored(), len(opened))
 	}
 	return opened, kept.Bytes(), members
 }

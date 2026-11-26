@@ -57,8 +57,15 @@ type Capture struct {
 	// Media is every media object the session's frames name, the turn's
 	// whole set, which replaces the one its row named: none for a session
 	// kept whole, which keeps the record readable by an older build. Record
-	// version 9 ([MediaVersion]).
+	// version 9 ([mediaVersion]).
 	Media []CaptureMedia `json:"media,omitempty"`
+
+	// ArchiveBytes is the archive the session restores to, every member at
+	// each frame naming it: what [SessionStore.Open] budgets the text
+	// object's read for, open while each streams. Set exactly where Media
+	// is: a session kept whole is its object's own archive. Record version
+	// 13 ([archiveBytesVersion]).
+	ArchiveBytes int64 `json:"archive_bytes,omitempty"`
 
 	// LaunchSeq and CaptureSeq are the capture's ordinals (its launch, and
 	// its place among that launch's captures). A pair not newer than the

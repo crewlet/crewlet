@@ -50,7 +50,8 @@ var errBodyFrames = errors.New("sandbox: the take's body is framed otherwise tha
 // its text and an executorkeep.FrameMedia frame where each payload stands, the
 // frames executordomain's SessionStore.Open splices from. Each first member
 // is handed to media as it comes, read to its end before its frame stands,
-// and must answer the SHA-256 it read, in lowercase hex. Made by
+// and must answer the SHA-256 it read, in lowercase hex. It counts the
+// archive the frames restore to as it reads ([TakenText.Restored]). Made by
 // [SplitTakenBody].
 type TakenText struct {
 	r     *bufio.Reader
@@ -64,7 +65,10 @@ type TakenText struct {
 	out      []byte
 	owed     [1 + executorkeep.MediaDigestBytes]byte
 	stage    [64]byte
-	firsts   map[[executorkeep.MediaDigestBytes]byte]bool
+	// firsts is each first member's length, by its digest, which a repeat
+	// naming it restores; restored is what the frames read so far restore to.
+	firsts   map[[executorkeep.MediaDigestBytes]byte]int64
+	restored int64
 	err      error
 }
 
@@ -72,8 +76,14 @@ type TakenText struct {
 // object ([TakenText]), handing each payload's first member to media.
 func SplitTakenBody(body io.Reader, media func(member io.Reader) (digest string, err error)) *TakenText {
 	return &TakenText{r: bufio.NewReaderSize(body, 64<<10), media: media,
-		firsts: map[[executorkeep.MediaDigestBytes]byte]bool{}}
+		firsts: map[[executorkeep.MediaDigestBytes]byte]int64{}}
 }
+
+// Restored is the archive t's spliced body restores to, every first member's
+// bytes again at each repeat naming it, and its text: the archive whole the
+// take digested, counted as t is read, so whole once t has been read to its
+// end. A body kept whole counts none: its object is its archive.
+func (t *TakenText) Restored() int64 { return t.restored }
 
 func (t *TakenText) Read(p []byte) (int, error) {
 	if t.err != nil {
@@ -134,9 +144,11 @@ func (t *TakenText) read(p []byte) (int, error) {
 			if _, err = io.ReadFull(t.r, digest[:]); err != nil {
 				return 0, cutFrames(err)
 			}
-			if !t.firsts[digest] {
+			length, first := t.firsts[digest]
+			if !first {
 				return 0, fmt.Errorf("%w: a repeat names media %x before its first", errBodyFrames, digest)
 			}
+			t.restored += length
 			t.owe(digest)
 		default:
 			return 0, fmt.Errorf("%w: a frame of kind %q", errBodyFrames, kind)
@@ -182,6 +194,7 @@ func (t *TakenText) text(p []byte) (int, error) {
 	if n == 0 && t.err != nil {
 		return 0, t.err
 	}
+	t.restored += int64(n)
 	var size [binary.MaxVarintLen64]byte
 	w := binary.PutUvarint(size[:], uint64(n))
 	at := head - 1 - w
@@ -195,6 +208,7 @@ func (t *TakenText) text(p []byte) (int, error) {
 func (t *TakenText) member() error {
 	m := &memberFrames{r: t.r}
 	digest, err := t.media(m)
+	_, twice := t.firsts[m.sum]
 	switch {
 	case err != nil:
 		return err
@@ -202,11 +216,11 @@ func (t *TakenText) member() error {
 		return fmt.Errorf("%w: a media member was not read to its end", errBodyFrames)
 	case digest != hex.EncodeToString(m.sum[:]):
 		return fmt.Errorf("%w: media %x was read as %s", errBodyFrames, m.sum, digest)
-	case t.firsts[m.sum]:
+	case twice:
 		return fmt.Errorf("%w: media %x is framed as a first twice, and a member is stored once", errBodyFrames,
 			m.sum)
 	}
-	t.firsts[m.sum] = true
+	t.firsts[m.sum], t.restored = m.n, t.restored+m.n
 	t.owe(m.sum)
 	return nil
 }
@@ -220,11 +234,12 @@ func (t *TakenText) owe(digest [executorkeep.MediaDigestBytes]byte) {
 
 // memberFrames reads one payload's first member out of a spliced body, from
 // the length of the frame that began it to its end frame, whose digest it
-// keeps.
+// keeps, counting its bytes.
 type memberFrames struct {
 	r       *bufio.Reader
 	begun   bool
 	left    uint64
+	n       int64
 	ended   bool
 	sum     [executorkeep.MediaDigestBytes]byte
 	failure error
@@ -239,7 +254,7 @@ func (m *memberFrames) Read(p []byte) (int, error) {
 			return 0, io.EOF
 		case m.left > 0:
 			k, err := m.r.Read(p[:min(uint64(len(p)), m.left)])
-			m.left -= uint64(k)
+			m.left, m.n = m.left-uint64(k), m.n+int64(k)
 			if err != nil {
 				m.failure = cutFrames(err)
 			}

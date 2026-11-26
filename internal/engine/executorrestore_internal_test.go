@@ -1088,8 +1088,9 @@ func TestARunTakenOverIsHeldToWhatItsBoxSaysAsItsRecordNamesTheBrief(t *testing.
 //
 // Mutation: stream the object unopened, or open it against anything but its
 // own row, and the bytes differ; leave the row's media out of storedSession
-// and its frames stream as the archive; answer a row naming no object, or
-// another turn's, with an empty stream, and its case goes red.
+// and its frames stream as the archive, or its archive size, and the read is
+// budgeted short; answer a row naming no object, or another turn's, with an
+// empty stream, and its case goes red.
 func TestTheRestoreOpensTheObjectItsRowNamesAsItStreams(t *testing.T) {
 	t.Parallel()
 	objects, err := objstore.NewStore(memobj.New())
@@ -1150,11 +1151,15 @@ func TestTheRestoreOpensTheObjectItsRowNamesAsItStreams(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 	withMedia := executorkeep.TurnRow{Handle: "swe", Turn: turn, Object: framed.Object,
-		Media: []executorkeep.MediaObject{kept}}
+		Media: []executorkeep.MediaObject{kept}, ArchiveBytes: int64(len(archive) + len(member))}
 	if streamed, err := streamOf(t, restore, withMedia); err != nil ||
 		!bytes.Equal(streamed, append(bytes.Clone(archive), member...)) {
 		t.Errorf("the restore streamed %d bytes of a row naming media (%v), want its archive and member spliced",
 			len(streamed), err)
+	}
+	if opened := storedSession(withMedia); opened.ArchiveBytes != withMedia.ArchiveBytes {
+		t.Errorf("the store opens a row naming media restoring to %d bytes, want the row's %d, which its read "+
+			"is budgeted for", opened.ArchiveBytes, withMedia.ArchiveBytes)
 	}
 }
 

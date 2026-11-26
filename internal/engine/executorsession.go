@@ -85,7 +85,7 @@ func (r executorRecords) Capture(ctx context.Context, c sandbox.CaptureRecord) (
 		Handle: c.Handle, Turn: c.Turn, ConversationKey: c.ConversationKey, WorkKey: c.WorkKey,
 		Harness: stamp.Harness, HarnessVersion: stamp.HarnessVersion, Entry: stamp.Entry,
 		SessionID: stamp.SessionID, Object: c.Object, ContentKey: stamp.ContentKey, ArchiveFormat: stamp.ArchiveFormat,
-		Media:     media,
+		Media: media, ArchiveBytes: stamp.ArchiveBytes,
 		LaunchSeq: stamp.LaunchSeq, CaptureSeq: stamp.CaptureSeq,
 		Home: stamp.Home, Workspace: stamp.Workspace, SeatBudget: stamp.SeatBudget,
 		// WHAT ONLY THE RUN'S ROW KNEW OF THE SESSION, carried onto the log's
@@ -220,7 +220,7 @@ func (k executorKeep) Policy(ctx context.Context) (sandbox.SessionPolicy, error)
 
 // executorMediaRead says whether a take keeps its media apart: every node
 // applying the executor log reads a capture naming them
-// (executordomain.MediaVersion), its counted set as the trim counts it
+// (executordomain.MediaCaptureVersion), its counted set as the trim counts it
 // ([statelog.CountedSet], [statelog.Readers]), and every node that may settle
 // a run's row asks its stamp again whole ([stampReaders]). Never a guess: a
 // node below either or not saying answers inline, and readers not read within
@@ -269,7 +269,7 @@ func (e *Engine) executorMediaReaders(ctx context.Context) (bool, string) {
 	counted := statelog.CountedSet(e.now(), reportedPositions(rows, domain.Name()), presencesOf(dataNodesOf(held)), tombs)
 	readers := statelog.Readers(counted)
 	for _, version := range readers {
-		if version < executordomain.MediaVersion {
+		if version < executordomain.MediaCaptureVersion {
 			return false, ""
 		}
 	}

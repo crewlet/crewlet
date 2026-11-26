@@ -550,9 +550,15 @@ func (s *SessionStore) Open(ctx context.Context, session Session) (io.ReadCloser
 	}
 	fail := func(err error) error { return unreadable(session, err) }
 	// THE TEXT OBJECT STAYS OPEN WHILE EVERY MEMBER STREAMS between its
-	// frames, so its deadline is budgeted for them all, not its own bytes.
-	text, err := s.openSealed(ctx, session.Object, session.Object.Size+session.MediaBytes(),
-		AAD(session.Handle, session.Turn, session.Object.Key), fail)
+	// frames, at each frame naming it, so its deadline is budgeted for the
+	// archive they restore to ([Session.ArchiveBytes]), not its own bytes,
+	// nor each member once: a member framed again streams again.
+	span := session.Object.Size
+	if len(named) > 0 {
+		span = session.ArchiveBytes
+	}
+	text, err := s.openSealed(ctx, session.Object, span, AAD(session.Handle, session.Turn, session.Object.Key),
+		fail)
 	if err != nil {
 		return nil, err
 	}

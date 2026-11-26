@@ -213,8 +213,11 @@ type NewCapture struct {
 	ArchiveFormat int
 
 	// Media is every media object the session's frames name ([Capture.Media]):
-	// none for a session kept whole.
-	Media []NewMedia
+	// none for a session kept whole. ArchiveBytes is the archive they restore
+	// to, every member at each frame naming it ([Capture.ArchiveBytes]): set
+	// exactly where Media is.
+	Media        []NewMedia
+	ArchiveBytes int64
 
 	LaunchSeq  int64
 	CaptureSeq int64
@@ -311,14 +314,20 @@ func (n NewCapture) validate() error {
 		return invalid("the capture's object is %d bytes and a sealed session is at "+
 			"most %d", n.Object.Size, executorkeep.SealedMaxBytes)
 	}
-	return checkMedia(n.Object, n.Media)
+	return checkMedia(n.Object, n.Media, n.ArchiveBytes)
 }
 
 // checkMedia refuses a capture's media set the record could not carry: past
 // [executorkeep.MediaMaxCount], a digest or an object named twice (one object
-// per distinct member, and never the session's own), one no reader parses, or
-// the session and its media together past [executorkeep.KeptSealedMaxBytes].
-func checkMedia(session objstore.Object, media []NewMedia) error {
+// per distinct member, and never the session's own), one no reader parses, the
+// session and its media together past [executorkeep.KeptSealedMaxBytes], or an
+// archive size [archiveSized] refuses beside them.
+func checkMedia(session objstore.Object, media []NewMedia, archiveBytes int64) error {
+	if !archiveSized(len(media), archiveBytes) {
+		return invalid("the capture names %d media and an archive of %d bytes: one naming media restores to "+
+			"1 to %d bytes, and one naming none is its object's own archive and states none", len(media),
+			archiveBytes, executorkeep.ArchiveMaxBytes)
+	}
 	if len(media) > executorkeep.MediaMaxCount {
 		return invalid("the capture names %d media objects and the maximum is %d",
 			len(media), executorkeep.MediaMaxCount)
@@ -436,7 +445,7 @@ func (w *Writer) Capture(ctx context.Context, c Call, n NewCapture) (CaptureResu
 		Harness: n.Harness, HarnessVersion: n.HarnessVersion, Entry: n.Entry, SessionID: n.SessionID,
 		Object: n.Object.Key.String(), ObjectHash: string(n.Object.Hash),
 		ObjectSize: n.Object.Size, ContentKey: n.ContentKey, ArchiveFormat: n.ArchiveFormat,
-		Media:     captureMedia(n.Media),
+		Media: captureMedia(n.Media), ArchiveBytes: n.ArchiveBytes,
 		LaunchSeq: n.LaunchSeq, CaptureSeq: n.CaptureSeq,
 		Home: n.Home, Workspace: n.Workspace, SeatBudget: n.SeatBudget,
 		ContextTokens: n.ContextTokens, Interrupted: n.Interrupted, Trimmed: n.Trimmed,

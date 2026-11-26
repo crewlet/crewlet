@@ -6546,7 +6546,12 @@ opens it. `executordomain.SessionStore.Open` splices every member back where
 its frame stands, checking it against its digest once read, so the box, every
 reader and the take's own digest of the archive see exactly the bytes the take
 wrote, and no reader parses a reference inside a transcript. A session with no
-media is stored as before.
+media is stored as before. A capture naming media states the archive they
+restore to, every member at each frame naming it (`Capture.ArchiveBytes`,
+record version 13, kept on its row), which `Open` budgets the text object's
+read for, since it stays open while each member streams: a member framed again
+streams again, so neither the text object's own size nor each member once is
+enough.
 
 **Cut by the take, after its scrub.** A payload is a JSON string value whose
 scrubbed text is base64 whole, or a data URI's, of a mebibyte or more; the take
@@ -6587,7 +6592,8 @@ applies a row whose frames its estate does not name; its collector then reads
 an incomplete estate and deletes nothing. An older build also asks an
 unanswered capture again from the run's stamp without its `media` key, landing
 it without them. So a take keeps its media apart only once every node applying
-the log says it reads record version 9 (`statelog.Readers`) and every node that
+the log says it reads the version a capture naming media is stamped at, 13
+(`executordomain.MediaCaptureVersion`, `statelog.Readers`), and every node that
 may settle a run's row says `sandbox.CaptureStampVersion` (a live node on its
 presence, one the log counts while offline on its last position row); until
 then, and whenever these cannot be read within `sandbox.MediaReadersRoom` (30

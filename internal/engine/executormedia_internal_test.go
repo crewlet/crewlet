@@ -19,17 +19,19 @@ import (
 
 // A TAKE KEEPS ITS MEDIA APART ONLY ONCE EVERY READER READS IT, as the engine's
 // policy answers a take: every node the executor log counts reads a capture
-// naming media (executordomain.MediaVersion), and every node that may settle a
-// run's row, a seats-only one included, says it asks its stamp again whole
-// (sandbox.CaptureStampVersion), live on its presence, offline on its position
-// row. A node below either or not saying keeps them inline, this node aside.
+// naming media at the version it is stamped (executordomain.MediaCaptureVersion),
+// and every node that may settle a run's row, a seats-only one included, says
+// it asks its stamp again whole (sandbox.CaptureStampVersion), live on its
+// presence, offline on its position row. A node below either or not saying
+// keeps them inline, this node aside.
 //
-// Mutation: answer apart whatever the readers say, skip a node at zero, read
-// only data nodes' presences or a live node's row, count no offline node, or
-// read this node's own presence, and a case goes red.
+// Mutation: answer apart whatever the readers say, hold readers to a version
+// below the stamp, skip a node at zero, read only data nodes' presences or a
+// live node's row, count no offline node, or read this node's own presence,
+// and a case goes red.
 func TestATakeKeepsMediaApartOnlyOnceEveryReaderReadsIt(t *testing.T) {
 	t.Parallel()
-	media, stamp := executordomain.MediaVersion, sandbox.CaptureStampVersion
+	media, stamp := executordomain.MediaCaptureVersion, sandbox.CaptureStampVersion
 	data, seats := placement.Roles(placement.RoleData, placement.RoleSeats), placement.Roles(placement.RoleSeats)
 	type presence struct {
 		node    string

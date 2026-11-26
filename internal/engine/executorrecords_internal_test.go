@@ -68,7 +68,7 @@ func TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives(t *testi
 	stamp := sandbox.SessionCapture{Minted: minted, Launch: "launch-2", LaunchSeq: 2, CaptureSeq: 3,
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1", ContentKey: "k1",
 		ArchiveFormat: 1, Home: "/home/agent", Workspace: "/workspace", SeatBudget: 64 << 20,
-		ContextTokens: 61_000, Interrupted: true, Media: []sandbox.CaptureMedia{
+		ContextTokens: 61_000, Interrupted: true, ArchiveBytes: 3 << 20, Media: []sandbox.CaptureMedia{
 			{Digest: digest("a"), Object: fresh.Key.String(), ObjectHash: "m1", ObjectSize: 7, ContentKey: "k1"},
 			{Digest: digest("b"), Object: carried.Key.String(), ObjectHash: "m2", ObjectSize: 9, ContentKey: "k0",
 				Carried: true}}}
@@ -89,7 +89,8 @@ func TestTheSandboxsRecordsAreTheLogsUnderTheOperationTheirPlaceDerives(t *testi
 	want := executordomain.NewCapture{Handle: "swe", Turn: "t1", ConversationKey: "chat:room", WorkKey: "w1",
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1", Object: object, ContentKey: "k1",
 		ArchiveFormat: 1, LaunchSeq: 2, CaptureSeq: 3, Home: "/home/agent", Workspace: "/workspace",
-		SeatBudget: 64 << 20, ContextTokens: 61_000, Interrupted: true, Media: []executordomain.NewMedia{
+		SeatBudget: 64 << 20, ContextTokens: 61_000, Interrupted: true, ArchiveBytes: 3 << 20,
+		Media: []executordomain.NewMedia{
 			{MediaObject: executorkeep.MediaObject{Digest: digest("a"), Object: fresh, ContentKey: "k1"}},
 			{MediaObject: executorkeep.MediaObject{Digest: digest("b"), Object: carried, ContentKey: "k0"},
 				Carried: true}}}

@@ -143,14 +143,15 @@ func uploadedMembers(uploads [][]byte) map[string][]byte {
 
 // A SESSION WITH LARGE READS IS KEPT, AND RESTORED, BYTE IDENTICAL: the spool
 // stores its text object, the frames naming each payload where it stood, and
-// each distinct payload's member once, apart; the capture names each, fresh;
-// and the text spliced with the members is the archive the take digested, byte
-// for byte. A policy that keeps no media apart (a reader below the version)
-// asks the take for none, and keeps the archive whole, as today.
+// each distinct payload's member once, apart; the capture names each, fresh,
+// and the archive they restore to, a repeat counted at each place; and the
+// text spliced with the members is the archive the take digested. A policy
+// keeping no media apart (a reader below the version) asks the take for none,
+// and keeps the archive whole, as today, stating no archive size.
 //
 // Mutation: write a member into the text object, upload a repeat again, name a
-// member the capture did not upload, or ask the take for media apart against
-// the policy, and a check goes red.
+// member the capture did not upload, count a repeat or a text frame as nothing,
+// or ask the take for media apart against the policy, and a check goes red.
 func TestASessionWithLargeReadsIsKeptAndRestoredByteIdentical(t *testing.T) {
 	t.Parallel()
 	pdf, image := strings.Repeat("JVBERi0xLjQK", 6<<10), strings.Repeat("iVBORw0KGgo", 2<<10)
@@ -180,6 +181,10 @@ func TestASessionWithLargeReadsIsKeptAndRestoredByteIdentical(t *testing.T) {
 			if len(media) != 2 {
 				t.Fatalf("the capture names %d media, want the two", len(media))
 			}
+			if got := captured[len(captured)-1].Stamp.ArchiveBytes; got != int64(len(whole)) {
+				t.Errorf("the capture says its media restore to %d bytes, want the %d of the archive whole", got,
+					len(whole))
+			}
 			for _, m := range media {
 				if _, held := members[m.Digest]; !held || m.Carried {
 					t.Errorf("the capture names media %+v, want each uploaded, fresh", m)
@@ -200,12 +205,30 @@ func TestASessionWithLargeReadsIsKeptAndRestoredByteIdentical(t *testing.T) {
 			if takes := rig.runner.Takes(); len(takes) != 1 || takes[0].MediaApart {
 				t.Errorf("the take was asked %+v, want its media kept inline", takes)
 			}
-			if len(uploads) != 1 || !bytes.Equal(uploads[0], whole) || len(captured[len(captured)-1].Stamp.Media) != 0 {
-				t.Errorf("uploaded %d objects naming %d media, want the archive whole and none", len(uploads),
-					len(captured[len(captured)-1].Stamp.Media))
+			stamp := captured[len(captured)-1].Stamp
+			if len(uploads) != 1 || !bytes.Equal(uploads[0], whole) || len(stamp.Media) != 0 || stamp.ArchiveBytes != 0 {
+				t.Errorf("uploaded %d objects naming %d media restoring to %d bytes, want the archive whole, "+
+					"none and none", len(uploads), len(stamp.Media), stamp.ArchiveBytes)
 			}
 		})
 	})
+}
+
+// A CAPTURE'S RESTORED SIZE IS HELD TO ITS BOUND: the stamp states the archive
+// its media restore to, which its record carries and a restore's read is
+// budgeted by, so a size below zero or past executorkeep.ArchiveMaxBytes is
+// refused before the row carries it, as the log refuses it.
+//
+// Mutation: leave the size unbounded, or bound it short of its bound.
+func TestACapturesRestoredSizeIsHeldToItsBound(t *testing.T) {
+	t.Parallel()
+	for size, refused := range map[int64]bool{-1: true, 0: false, executorkeep.ArchiveMaxBytes: false,
+		executorkeep.ArchiveMaxBytes + 1: true} {
+		err := SessionCapture{ArchiveBytes: size}.Bounded()
+		if got := errors.Is(err, ErrCaptureUnbounded); got != refused {
+			t.Errorf("a stamp restoring to %d bytes is refused %t (%v), want %t", size, got, err, refused)
+		}
+	}
 }
 
 // A TAKE'S MEDIA SHARE THE ROOM ITS SESSION HOLDS: today's sealed half of a
@@ -359,7 +382,7 @@ func TestAKeepCarriesMediaItsTurnHolds(t *testing.T) {
 // opens to no archive at all.
 //
 // Mutation: rebuild the record asked again without the stamp's media, and the
-// session it names is unreadable.
+// session it names is unreadable; without its archive size, and it names none.
 func TestACaptureNamingMediaIsAskedAgainWhole(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -398,6 +421,10 @@ func TestACaptureNamingMediaIsAskedAgainWhole(t *testing.T) {
 		if len(named) != len(members) {
 			t.Fatalf("the record asked again names %d media of the %d its session's frames splice", len(named),
 				len(members))
+		}
+		if asked.Stamp.ArchiveBytes != int64(len(whole)) {
+			t.Errorf("the record asked again restores to %d bytes, want the %d of the archive taken",
+				asked.Stamp.ArchiveBytes, len(whole))
 		}
 		if got := spliced(t, uploads[0], named); !bytes.Equal(got, whole) {
 			t.Error("the session the record asked again names does not read back as the archive taken")
@@ -541,10 +568,11 @@ func TestAStampANewerBuildExtendedIsNotAskedAgainShort(t *testing.T) {
 
 // A CAPTURE SETTLED OFF THE LOG KEEPS ITS MEDIA: a keep whose taker stopped
 // after its record landed is settled from the turn's row, and stamped kept
-// with every media object that row names, so its seat's budget and its saves
-// count them.
+// with every media object that row names and the archive they restore to, so
+// its seat's budget and its saves count them and the stamp is its record's.
 //
-// Mutation: settle the object alone, and the stamp keeps no media.
+// Mutation: settle the object alone, or the media without their archive size,
+// and the stamp keeps neither.
 func TestACaptureSettledOffTheLogKeepsItsMedia(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -557,13 +585,14 @@ func TestACaptureSettledOffTheLogKeepsItsMedia(t *testing.T) {
 		row.Media = []executorkeep.MediaObject{{Digest: strings.Repeat("b", 64), ContentKey: "k1",
 			Object: objstore.Object{Key: objstore.KeyAt(rig.now), Hash: objstore.Hash(strings.Repeat("c", 64)),
 				Size: 9}}}
+		row.ArchiveBytes = 5 << 20
 		onTheLog(restore, row)
 		if _, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", RestorerUnder(rig.runner, "")); why != "" {
 			t.Fatalf("the relaunch decided %q, want the capture the log took", why)
 		}
 		got := rig.get("t1").Kept
 		if got == nil || len(got.Media) != 1 || got.Media[0] != captureMediaOf(row.Media[0], false) ||
-			got.mediaBytes() != 9 {
+			got.mediaBytes() != 9 || got.ArchiveBytes != row.ArchiveBytes {
 			t.Errorf("the row keeps %+v, want the capture settled with the media its row names", got)
 		}
 	})
@@ -586,7 +615,7 @@ func (s storeRestore) Session(_ context.Context, _, turn string) (executorkeep.T
 
 func (s storeRestore) Open(ctx context.Context, row executorkeep.TurnRow) (io.ReadCloser, error) {
 	return s.store.Open(ctx, executordomain.Session{Handle: row.Handle, Turn: row.Turn, Object: row.Object,
-		Media: row.Media})
+		Media: row.Media, ArchiveBytes: row.ArchiveBytes})
 }
 
 // A MISSING MEDIA OBJECT RESTORES NOTHING: a session whose text the store

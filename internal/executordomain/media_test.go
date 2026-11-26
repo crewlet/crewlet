@@ -256,52 +256,81 @@ func TestARowNamingNoMediaOpensNoFrames(t *testing.T) {
 }
 
 // A SPLICED RESTORE IS BUDGETED FOR EVERY MEMBER IT STREAMS: the text object
-// stays open while each member streams between its frames, so its read is
-// budgeted for the text and every media object together, and a restore read
-// at objstore.ReadBudget's floor on both legs (two MiBPace a mebibyte) reads
-// the session whole where the text object's own budget would have ended it
-// past the member. In a bubble, so the pace is exact and costs no wall time.
+// stays open while each member streams at every frame naming it, so its read is
+// budgeted for the archive the row says they restore to, every repeat counted
+// (Session.ArchiveBytes), and a restore read at objstore.ReadBudget's floor on
+// both legs (two MiBPace a mebibyte) reads the session whole where a shorter
+// span ends it past the members: the text object's own, or its text and each
+// distinct member once beside a member framed four times. In a bubble, so the
+// pace is exact and costs no wall time.
 //
-// Mutation: open the text object under its own budget, and the read of the
-// text after the member fails past its deadline.
+// Mutation: open the text object under its own budget, or under its text and
+// its distinct media's, and the read of the text after the members fails past
+// its deadline.
 func TestASplicedRestoreIsBudgetedForEveryMemberItStreams(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		store, _ := sessionStore(t, "k1")
-		// THE TEXT AFTER THE MEMBER spans sealed chunks the text object's
-		// read has not fetched when the member begins.
-		head, member, tail := archive(t, 100), archive(t, 3*objstore.MiB), archive(t, 3*secrets.StreamChunkBytes)
-		kept := keepMedia(t, store, "ana", member)
-		row := keepFramed(t, store, "ana", statelog.NewOpID(time.Now(), ""),
-			slices.Concat(textFrame(head), mediaFrame(kept.Digest), textFrame(tail)), kept)
-		want := slices.Concat(head, member, tail)
-		const piece = 32 << 10
-		pace := 2 * objstore.MiBPace * piece / objstore.MiB
-		if past := pace * time.Duration((len(head)+len(member))/piece); past <= objstore.ReadBudget(row.Object.Size) {
-			t.Fatalf("the member is read whole %v in, within the text object's own budget: the case "+
-				"proves nothing", past)
+	for name, tc := range map[string]struct {
+		member, framed int
+		// short is a span the case holds too short: the read past it fails.
+		short func(executordomain.Session) int64
+	}{
+		"a member framed once": {member: 3 * objstore.MiB, framed: 1,
+			short: func(s executordomain.Session) int64 { return s.Object.Size }},
+		"a member framed four times": {member: objstore.MiB, framed: 4,
+			short: func(s executordomain.Session) int64 { return s.Object.Size + s.MediaBytes() }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) { readPaced(t, tc.member, tc.framed, tc.short) })
+		})
+	}
+}
+
+// readPaced keeps a session framing a member of size bytes framed times
+// between two texts and reads it back at objstore.ReadBudget's floor pace,
+// first checking short spans too little for the read before the last text.
+//
+//fixedwait:bubble
+func readPaced(t *testing.T, size, framed int, short func(executordomain.Session) int64) {
+	t.Helper()
+	store, _ := sessionStore(t, "k1")
+	// THE TEXT AFTER THE MEMBERS spans sealed chunks the text object's read
+	// has not fetched when the first member begins.
+	head, member, tail := archive(t, 100), archive(t, size), archive(t, 3*secrets.StreamChunkBytes)
+	kept := keepMedia(t, store, "ana", member)
+	frames, want := textFrame(head), slices.Clone(head)
+	for range framed {
+		frames, want = append(frames, mediaFrame(kept.Digest)...), append(want, member...)
+	}
+	frames, want = append(frames, textFrame(tail)...), append(want, tail...)
+	row := keepFramed(t, store, "ana", statelog.NewOpID(time.Now(), ""), frames, kept)
+	row.ArchiveBytes = int64(len(want))
+	const piece = 32 << 10
+	pace := 2 * objstore.MiBPace * piece / objstore.MiB
+	if past := pace * time.Duration((len(want)-len(tail))/piece); past <= objstore.ReadBudget(short(row)) {
+		t.Fatalf("the members are read whole %v in, within the short span's budget: the case proves nothing",
+			past)
+	}
+	r, err := store.Open(t.Context(), row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	got, buf := make([]byte, 0, len(want)), make([]byte, piece)
+	for {
+		n, err := io.ReadFull(r, buf)
+		got = append(got, buf[:n]...)
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			break
 		}
-		r, err := store.Open(t.Context(), row)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("the paced restore failed after %d of %d bytes: %v", len(got), len(want), err)
 		}
-		defer func() { _ = r.Close() }()
-		got, buf := make([]byte, 0, len(want)), make([]byte, piece)
-		for {
-			n, err := io.ReadFull(r, buf)
-			got = append(got, buf[:n]...)
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				break
-			}
-			if err != nil {
-				t.Fatalf("the paced restore failed after %d of %d bytes: %v", len(got), len(want), err)
-			}
-			time.Sleep(pace)
-		}
-		if !bytes.Equal(got, want) {
-			t.Fatalf("the paced restore read back %d bytes, want the %d the take wrote", len(got), len(want))
-		}
-	})
+		time.Sleep(pace)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("the paced restore read back %d bytes, want the %d the take wrote", len(got), len(want))
+	}
 }
 
 // A MEDIA MEMBER PAST THE KEPT BOUND IS REFUSED WHOLE: one capture keeps at most

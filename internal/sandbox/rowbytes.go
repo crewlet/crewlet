@@ -85,10 +85,12 @@ const (
 	wroteRowBytes = 4<<10 + 512
 
 	// mediaRowBytes is the figure of the media its capture sections name
-	// ([SessionCapture.Media]), moved out of the room a later build adds keys
-	// in: three sections (the capture, the kept one and the save) of
-	// executorkeep.MediaMaxCount objects at their bounds, a content key at
-	// secrets.MaxStreamKeyIDBytes, 50,718 bytes with the fields' names, which
+	// ([SessionCapture.Media]) and the archive they restore to
+	// ([SessionCapture.ArchiveBytes]), which rides only beside them, moved out
+	// of the room a later build adds keys in: three sections (the capture, the
+	// kept one and the save) of executorkeep.MediaMaxCount objects at their
+	// bounds, a content key at secrets.MaxStreamKeyIDBytes, and the archive at
+	// executorkeep.ArchiveMaxBytes, 50,796 bytes with the fields' names, which
 	// 50 KiB leaves a little over (TestTheWholeRowFitsItsBudget weighs them).
 	mediaRowBytes = 50 << 10
 
@@ -284,8 +286,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_432_100
-	measuredSpare       = 351_516
+	measuredOtherFields = 2_432_178
+	measuredSpare       = 351_438
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].

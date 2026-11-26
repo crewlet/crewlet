@@ -185,14 +185,14 @@ const (
 	// the row's ending.
 	releaseStatement = `
 		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET object = NULL, object_hash = '',
-			object_size = 0, content_key = '', version = ?
+			object_size = 0, content_key = '', archive_bytes = 0, version = ?
 		WHERE agent_handle = ? AND turn_id = ?`
 
 	// retireStatement takes a spent session off every ended row of one
 	// conversation that names it, saying which turn spent it and how.
 	retireStatement = `
 		UPDATE executor_sessions INDEXED BY ` + conversationIdx + ` SET object = NULL, object_hash = '',
-			object_size = 0, content_key = '', retired_by = ?, retired_loss = ?, version = ?
+			object_size = 0, content_key = '', archive_bytes = 0, retired_by = ?, retired_loss = ?, version = ?
 		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
 		  AND session_id = ? AND object IS NOT NULL`
 
@@ -203,8 +203,8 @@ const (
 			agent_handle, turn_id, conversation_key, work_key, harness, harness_version,
 			entry, session_id, object, object_hash, object_size, content_key, archive_format,
 			launch_seq, capture_seq, home, workspace, context_tokens, interrupted, trimmed,
-			captured_at, read_through, absorbs, last_at, first_seq, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			archive_bytes, captured_at, read_through, absorbs, last_at, first_seq, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (agent_handle, turn_id) DO NOTHING`
 
 	// updateCaptureStatement is a later capture of a live turn, or its first
@@ -215,8 +215,8 @@ const (
 		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET work_key = ?, harness = ?, harness_version = ?,
 			entry = ?, session_id = ?, object = ?, object_hash = ?, object_size = ?,
 			content_key = ?, archive_format = ?, launch_seq = ?, capture_seq = ?,
-			home = ?, workspace = ?, context_tokens = ?, interrupted = ?, trimmed = ?, captured_at = ?,
-			read_through = ?, absorbs = ?, last_at = ?, version = ?
+			home = ?, workspace = ?, context_tokens = ?, interrupted = ?, trimmed = ?, archive_bytes = ?,
+			captured_at = ?, read_through = ?, absorbs = ?, last_at = ?, version = ?
 		WHERE agent_handle = ? AND turn_id = ? AND end_seq IS NULL AND version < ?`
 
 	// insertBeginStatement is the row of a turn whose begin landed before
@@ -711,9 +711,10 @@ func mediaNamed(ctx context.Context, tx *sql.Tx, handle, turn string, m CaptureM
 
 // mediaWellFormed reports whether a capture's media set is one every reader of
 // its rows parses ([checkMedia]'s shape): within the cap, each digest and
-// object once, never the session's own object.
+// object once, never the session's own object, beside an archive size
+// [archiveSized] takes.
 func mediaWellFormed(p Capture) bool {
-	if len(p.Media) > executorkeep.MediaMaxCount {
+	if len(p.Media) > executorkeep.MediaMaxCount || !archiveSized(len(p.Media), p.ArchiveBytes) {
 		return false
 	}
 	digests := make(map[string]bool, len(p.Media))
@@ -726,6 +727,13 @@ func mediaWellFormed(p Capture) bool {
 		digests[m.Digest], objects[m.Object] = true, true
 	}
 	return true
+}
+
+// archiveSized reports whether a capture naming media media objects states
+// the archive they restore to as one a take writes ([Capture.ArchiveBytes]):
+// 1 to [executorkeep.ArchiveMaxBytes] beside media, and none beside none.
+func archiveSized(media int, archiveBytes int64) bool {
+	return archiveBytes >= 0 && archiveBytes <= executorkeep.ArchiveMaxBytes && (archiveBytes > 0) == (media > 0)
 }
 
 // nameMedia replaces the media a turn's row names with its capture's whole set.
@@ -994,14 +1002,14 @@ func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (i
 		res, err = tx.ExecContext(ctx, updateCaptureStatement,
 			work, p.Harness, p.HarnessVersion, p.Entry, p.SessionID, p.Object, p.ObjectHash, p.ObjectSize,
 			p.ContentKey, p.ArchiveFormat, p.LaunchSeq, p.CaptureSeq, p.Home, p.Workspace,
-			p.ContextTokens, flag(p.Interrupted), flag(p.Trimmed), c.at(), readThrough, absorbed, c.at(),
-			c.packed, p.Handle, p.Turn, c.packed)
+			p.ContextTokens, flag(p.Interrupted), flag(p.Trimmed), p.ArchiveBytes, c.at(), readThrough, absorbed,
+			c.at(), c.packed, p.Handle, p.Turn, c.packed)
 	} else {
 		res, err = tx.ExecContext(ctx, insertCaptureStatement,
 			p.Handle, p.Turn, p.ConversationKey, work, p.Harness, p.HarnessVersion, p.Entry,
 			p.SessionID, p.Object, p.ObjectHash, p.ObjectSize, p.ContentKey, p.ArchiveFormat,
 			p.LaunchSeq, p.CaptureSeq, p.Home, p.Workspace, p.ContextTokens, flag(p.Interrupted),
-			flag(p.Trimmed), c.at(), readThrough, absorbed, c.at(), c.packed, c.packed)
+			flag(p.Trimmed), p.ArchiveBytes, c.at(), readThrough, absorbed, c.at(), c.packed, c.packed)
 	}
 	if err != nil {
 		return written, fmt.Errorf("executordomain: record %s's capture of turn %s at %s: %w",

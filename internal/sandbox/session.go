@@ -582,6 +582,12 @@ type SessionCapture struct {
 	// figure is [mediaRowBytes].
 	Media []CaptureMedia `json:"media,omitempty"`
 
+	// ArchiveBytes is the archive the session restores to, every member at
+	// each frame naming it, as its take's body was read whole
+	// ([TakenText.Restored]): stamped exactly where its media are spooled,
+	// on the stamp for Media's reason, within executorkeep.ArchiveMaxBytes.
+	ArchiveBytes int64 `json:"archive_bytes,omitempty"`
+
 	// SeatBudget and Minted are the record's: the per-seat budget it carries
 	// and the instant its operation is derived at, kept so an unresolved
 	// capture is asked again as the very operation it was.
@@ -646,6 +652,10 @@ func (c SessionCapture) Bounded() error {
 	if c.ArchiveSize < 0 || c.ArchiveSize > executorkeep.SessionMaxBytes {
 		return fmt.Errorf("sandbox: its archive is %d bytes, outside the 0 to %d it may be: %w",
 			c.ArchiveSize, executorkeep.SessionMaxBytes, ErrCaptureUnbounded)
+	}
+	if c.ArchiveBytes < 0 || c.ArchiveBytes > executorkeep.ArchiveMaxBytes {
+		return fmt.Errorf("sandbox: its archive restores to %d bytes, outside the 0 to %d it may: %w",
+			c.ArchiveBytes, executorkeep.ArchiveMaxBytes, ErrCaptureUnbounded)
 	}
 	if len(c.BridgeOpen) > maxOpenPlaces {
 		return fmt.Errorf("sandbox: it names %d open places, past the %d it may: %w", len(c.BridgeOpen),
@@ -2455,10 +2465,13 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 		return nil, fmt.Errorf("sandbox: a spool for the session on this node's disk: %w", err)
 	}
 	left := hold.bytes()
-	var media []spooledMedia
+	var (
+		media []spooledMedia
+		split *TakenText
+	)
 	text := io.Reader(taken.Body)
 	if taken.Framed {
-		text = SplitTakenBody(taken.Body, func(member io.Reader) (string, error) {
+		split = SplitTakenBody(taken.Body, func(member io.Reader) (string, error) {
 			m, mediaErr := c.spoolMedia(dir, run.AgentHandle, member, &left)
 			if mediaErr != nil {
 				return "", mediaErr
@@ -2466,6 +2479,7 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 			media = append(media, m)
 			return m.spool.Digest, nil
 		})
+		text = split
 	}
 	stop := context.AfterFunc(ctx, func() { _ = taken.Body.Close() })
 	sealed, sealErr := c.keep.Seal(run.AgentHandle, run.TurnID, text, &heldWriter{w: file, left: &left})
@@ -2477,6 +2491,11 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 	}
 	spooled := &spooledCapture{run: run, stamp: stamp, spool: sealed, file: file.Name(), media: media,
 		hold: hold, places: places}
+	if len(media) > 0 {
+		// THE ARCHIVE ITS RESTORE HANDS BACK, every repeat counted: its seal
+		// read the body whole, so the count is whole.
+		spooled.stamp.ArchiveBytes = split.Restored()
+	}
 	hold.shrinkTo(spooled.bytes())
 	return spooled, nil
 }
@@ -3647,7 +3666,7 @@ func (c *Coordinator) settleGone(ctx context.Context, run PendingRun, admits fun
 			if row.HasObject() {
 				settled.Object, settled.ObjectHash = row.Object.Key.String(), string(row.Object.Hash)
 				settled.ObjectSize, settled.ContentKey = row.Object.Size, row.ContentKey
-				settled.Media = rowMedia(row.Media, settled.Media)
+				settled.Media, settled.ArchiveBytes = rowMedia(row.Media, settled.Media), row.ArchiveBytes
 			}
 			settled.ContextTokens = row.ContextTokens
 			if !s.gone {
