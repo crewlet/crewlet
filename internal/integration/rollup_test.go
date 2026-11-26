@@ -271,17 +271,21 @@ func TestConnectedNeverSitsOverABrokenDeliveryPath(t *testing.T) {
 }
 
 // A HELD SURFACE NEEDS A PERSON, and its card says why in the route's words,
-// whether the loop has reported on it, converges it, or cannot be read.
-// Mutation: drop the Held case from judge or from ingressFault and a case goes
-// red.
+// whatever the loop reported, whether it converges the surface, and whether
+// its status could be read. Mutation: read Held only after the report, or
+// only on a ready one, and a case goes red.
 func TestAHeldSurfaceNamesWhatHoldsIt(t *testing.T) {
 	t.Parallel()
 	const why = "Forge relay events for Jira are refused until integrations.jira.cloud_id (with site_url) is set"
 	ready := reported("forge", Report{Phase: PhaseReady})
 	unreported := SurfaceStatus{Key: "forge", Enabled: true, Known: true}
 	unconverged := SurfaceStatus{Key: "forge", Enabled: true, Known: true, Converges: no()}
+	degraded := reported("forge", Report{Phase: PhaseDegraded, Actor: ActorAdmin, Detail: "something else"})
+	activating := reported("forge", Report{Phase: PhaseActivating, Actor: ActorEngine, Detail: "coming up"})
+	unreadable := SurfaceStatus{Key: "forge", Enabled: true, Known: false}
 	for name, s := range map[string]SurfaceStatus{
-		"reported ready": ready, "unreported": unreported, "converged by nothing": unconverged,
+		"reported ready": ready, "reported degraded": degraded, "reported activating": activating,
+		"unreported": unreported, "converged by nothing": unconverged, "status unreadable": unreadable,
 	} {
 		s.Held = why
 		got := Rollup(toolNamed(t, "atlassian"), []SurfaceStatus{s})
