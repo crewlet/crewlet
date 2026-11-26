@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/shellword"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // A CHECKOUT SPEC REACHES THE HELPER IN THE SHAPE IT READS: Codex's slot of
@@ -435,5 +436,67 @@ func TestEveryRunnerHandsItsCheckouts(t *testing.T) {
 	added := []Harness{Pi{}, checkoutlessRunner{Harness: Pi{}}}
 	if got := unhandedCheckouts(added); !slices.Equal(got, []string{"checkoutless hands no checkout"}) {
 		t.Errorf("a runner added without a checkout home is reported as %q", got)
+	}
+}
+
+// checkoutSections is each runner's section of docs/concepts/code-sandbox.md,
+// by its harness's name; no profile names a harness as a reader does.
+var checkoutSections = map[string]string{
+	"claude-code": "Claude Code", "opencode": "OpenCode", "codex": "Codex", "gemini-cli": "Gemini CLI",
+	"qwen-code": "Qwen Code", "copilot": "GitHub Copilot CLI", "grok": "Grok Build", "muse-code": "Muse Code",
+	"kimi-code": "Kimi Code", "hermes": "Hermes Agent", "pi": "Pi", "cursor-agent": "Cursor Agent",
+}
+
+// checkoutLabel opens each runner's statement of what a checkout's own
+// configuration leaves out of a run started above it.
+const checkoutLabel = "**What a checkout does not bring**"
+
+// unlabelledSections names each of names whose section of page is not named
+// in [checkoutSections], is missing, or does not hold [checkoutLabel].
+func unlabelledSections(page string, names []string) []string {
+	var out []string
+	for _, name := range names {
+		title, ok := checkoutSections[name]
+		if !ok {
+			out = append(out, name+" names no section")
+			continue
+		}
+		_, section, found := strings.Cut(page, "\n### "+title+"\n")
+		if !found {
+			out = append(out, name+": no section "+title)
+			continue
+		}
+		for _, next := range []string{"\n## ", "\n### "} {
+			if end := strings.Index(section, next); end >= 0 {
+				section = section[:end]
+			}
+		}
+		if !strings.Contains(section, checkoutLabel) {
+			out = append(out, name+": "+title+" does not say "+checkoutLabel)
+		}
+	}
+	return out
+}
+
+// EVERY RUNNER'S SECTION SAYS WHAT A CHECKOUT DOES NOT BRING: a run hands a
+// checkout what its harness loads at the checkout's root, and what the harness
+// loads only where a session starts (settings, servers, hooks) differs per
+// harness, so each runner's section of code-sandbox.md states it under one
+// label a reader finds it by.
+//
+// Mutation: drop the label from one runner's section, or hand the check a
+// runner with no section named, and it goes red.
+func TestEveryRunnersSectionSaysWhatACheckoutDoesNotBring(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "concepts", "code-sandbox.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, problem := range unlabelledSections(string(raw), Names()) {
+		t.Error(problem)
+	}
+	if got := unlabelledSections(string(raw), []string{"pi", "checkoutless"}); !slices.Equal(got,
+		[]string{"checkoutless names no section"}) {
+		t.Errorf("a runner added with no section is reported as %q", got)
 	}
 }
