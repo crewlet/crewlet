@@ -124,7 +124,7 @@ func geminiPersonVariants() []string {
 		`{"type":5,"content":"x"}`,
 		`{"type":"x","extra":{"deep":[1,{"a":"b"}],"s":` + q(h.words) + `}}`,
 		`  {"type":"user","content":"blanks around"}  `,
-	}, boundedLines()...)
+	}, append(geminiMediaLines(chatMediaKB), boundedLines()...)...)
 }
 
 // A PERSON'S READ OF A GEMINI CLI SESSION ON THE WALK IS ITS WHOLE-LINE READ'S:

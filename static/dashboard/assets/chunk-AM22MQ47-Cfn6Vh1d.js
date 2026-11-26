@@ -1,1 +1,0 @@
-import{ra as e}from"./chunk-PMMCH542-BtOaRRLI.js";import{t}from"./react-C1iE8mnY.js";var n=t();function r({columns:t,min:r=`md`,gap:i=4,as:a=`div`,className:o,children:s,...c}){return(0,n.jsx)(a,{...c,className:e(`crewlet-card-grid`,o),"data-columns":t,"data-min":r,"data-gap":i,children:s})}export{r as t};

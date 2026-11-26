@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/growth"
+	"github.com/crewlet/crewlet/internal/tools/toolschema"
 )
 
 // The curated tools, for the acts agents make most, each with typed
@@ -58,15 +59,6 @@ func stringsSchema(desc string) map[string]any {
 	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": desc}
 }
 
-// object is an object schema.
-func object(props map[string]any, required ...string) map[string]any {
-	out := map[string]any{"type": "object", "properties": props, "additionalProperties": false}
-	if len(required) > 0 {
-		out["required"] = required
-	}
-	return out
-}
-
 // mediaArg names the file an upload sends.
 func mediaArg() map[string]any {
 	return map[string]any{"type": "string", "description": "For an upload: the file to send, as " +
@@ -76,7 +68,7 @@ func mediaArg() map[string]any {
 
 // stepSchema is one staged change of an edit.
 func stepSchema(ids []string) map[string]any {
-	return object(map[string]any{
+	return toolschema.Object(map[string]any{
 		"operation": map[string]any{"type": "string", "enum": ids, "description": "The staged method's ID."},
 		"path":      stringMap("Its path parameters but editId, which the engine fills."),
 		"query":     stringMap("Its query parameters."),
@@ -92,11 +84,11 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolListApps, Class: growth.ClassRead, Operations: []string{"playdeveloperreporting.apps.search"},
 			Description: "List the Google Play apps this agent may reach, with each app's package name and title, " +
 				"and the ones of its list its identity is not invited to yet.",
-			Parameters: object(map[string]any{})},
+			Parameters: toolschema.Object(map[string]any{})},
 		{Name: toolListReviews, Class: growth.ClassRead, Operations: []string{"androidpublisher.reviews.list"},
 			Description: "List an app's reviews with text, newest first: Google Play answers only reviews written " +
 				"or changed in the last 7 days (older ones are in the monthly reviews report).",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"app": appArg(),
 				"translation_language": map[string]any{"type": "string",
 					"description": "A language to translate reviews into, such as en."},
@@ -109,7 +101,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 				"androidpublisher.edits.images.list"},
 			Description: "Read an app's store listing in every language and its contact details, and with " +
 				"image_type the images of one language and type.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"app":        appArg(),
 				"language":   map[string]any{"type": "string", "description": "For images: the language, such as en-US."},
 				"image_type": map[string]any{"type": "string", "enum": imageTypes(), "description": "For images: their type."},
@@ -117,11 +109,11 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolReadTracks, Class: growth.ClassRead, Operations: []string{"androidpublisher.edits.tracks.list"},
 			Description: "Read an app's tracks (production, testing, form factors) and each release on them: " +
 				"version codes, status, rollout fraction, release notes.",
-			Parameters: object(map[string]any{"app": appArg()}, "app")},
+			Parameters: toolschema.Object(map[string]any{"app": appArg()}, "app")},
 		{Name: toolQueryVitals, Class: growth.ClassRead, Operations: vitalsQueries(ops),
 			Description: "Query an app's Android vitals over a time range: crash, ANR, slow start, slow rendering, " +
 				"wakeups, wakelocks, memory and error counts, by day or hour, with dimensions.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"app":        appArg(),
 				"metric_set": map[string]any{"type": "string", "enum": metricSets(), "description": "The metric set."},
 				"metrics":    stringsSchema("Metric names of the set, such as crashRate and distinctUsers."),
@@ -140,7 +132,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			Description: "Read Google Play's monthly reports (installs, ratings, crashes, store performance, " +
 				"reviews, and for an agent at administer sales and earnings) from the account's reports bucket, as the company's figures: list them " +
 				"by prefix, or read one, its rows decoded.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"bucket": map[string]any{"type": "string", "description": "The reports bucket, as " +
 					"integrations.google_play.reports_buckets names it; the only one where one is named."},
 				"prefix": map[string]any{"type": "string", "description": "To list: a prefix such as stats/installs/."},
@@ -153,7 +145,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolHaltRelease, Class: growth.ClassOperate, Operations: []string{"androidpublisher.edits.tracks.patch"},
 			Description: "Halt an app's staged rollout on a track, which stops serving it to more users: made at " +
 				"once and recorded. Resuming it is google_play_release, asked first.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"app":   appArg(),
 				"track": map[string]any{"type": "string", "description": "The track, such as production or beta."},
 				"version_codes": stringsSchema("The release's version codes; the track's one release rolling " +
@@ -162,10 +154,10 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		{Name: toolReply, Class: growth.ClassPublic, Operations: []string{"androidpublisher.reviews.reply"},
 			Description: "Ask an administrator to approve replies to 1 to 10 reviews of one app, each at most " +
 				"350 characters, published on the store page as shown; replying again replaces a reply.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"app": appArg(),
 				"replies": map[string]any{"type": "array", "minItems": 1, "maxItems": growth.MaxPublicActs,
-					"items": object(map[string]any{
+					"items": toolschema.Object(map[string]any{
 						"review": map[string]any{"type": "string", "description": "The review's ID."},
 						"text":   map[string]any{"type": "string", "maxLength": replyLimit, "description": "The reply."},
 					}, "review", "text")},
@@ -176,7 +168,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 				"androidpublisher.edits.commit"},
 			Description: "Ask an administrator to approve a store listing change, published in one commit: one " +
 				"language's title, short and full description or video, and the app's contact details.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"app":      appArg(),
 				"language": map[string]any{"type": "string", "description": "The listing's language, such as en-US."},
 				"title": map[string]any{"type": "string", "maxLength": titleLimit,
@@ -195,7 +187,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 				"androidpublisher.edits.images.deleteall", "androidpublisher.edits.commit"},
 			Description: "Ask an administrator to approve store images of one language and type, published in " +
 				"one commit: upload screenshots or graphics from an artifact, and remove images.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"app":        appArg(),
 				"language":   map[string]any{"type": "string", "description": "The listing's language, such as en-US."},
 				"image_type": map[string]any{"type": "string", "enum": imageTypes()},
@@ -209,7 +201,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			Description: "Ask an administrator to approve a release on a track, committed in one edit: roll out " +
 				"version codes Expo or a build uploaded (to a fraction of users or all), raise a rollout's " +
 				"fraction, complete it, resume a halted one, or change a live release's notes or countries.",
-			Parameters: object(map[string]any{
+			Parameters: toolschema.Object(map[string]any{
 				"app":           appArg(),
 				"track":         map[string]any{"type": "string", "description": "The track, such as production, beta or internal."},
 				"version_codes": stringsSchema("The release's version codes."),
@@ -218,7 +210,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 				"user_fraction": map[string]any{"type": "number", "minimum": 0, "maximum": 1,
 					"description": "For inProgress: the share of users, such as 0.1."},
 				"name": map[string]any{"type": "string", "description": "The release's name."},
-				"release_notes": map[string]any{"type": "array", "items": object(map[string]any{
+				"release_notes": map[string]any{"type": "array", "items": toolschema.Object(map[string]any{
 					"language": map[string]any{"type": "string"}, "text": map[string]any{"type": "string", "maxLength": notesLimit},
 				}, "language", "text")},
 				"countries":              stringsSchema("For a production rollout: the countries it reaches, ISO 3166 codes."),
@@ -257,7 +249,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			required = append(required, "reason")
 		}
 		out = append(out, growth.Tool{Name: genericTools()[class], Class: class, Operations: ids,
-			Description: genericDescription(class), Parameters: object(props, required...)})
+			Description: genericDescription(class), Parameters: toolschema.Object(props, required...)})
 	}
 	return out
 }
