@@ -80,11 +80,11 @@ func cursorCheckoutsEnd(paths Paths) string {
 // cursorHookTimeout is the seconds Cursor waits on the run's hook before it
 // drops its answer and goes on (measured: an entry's "timeout" holds; the
 // default is 60 s): twice the note helper's own claim deadline
-// (cursorClaimWithin, the firing bound of Pi and OpenCode,
-// [codexNestedTimeout]), past which a firing claims nothing and the clone goes
-// at the next MCP call. What follows a claim, reading at most 39,000 bytes of
-// files and copying at most 32 MiB of skills (0.12 s on the build VM), gets
-// as long again, so a loaded box answers a claim in time.
+// (cursorClaimWithin, [codexNestedTimeout]), past which a firing claims
+// nothing, so a timeout costs nothing but the wait: the clone goes at the
+// next MCP call. A firing only lists and frames a claimed clone (0.63 s on the
+// build VM for 200 skills and a 30 KB AGENTS.md), so what follows a claim has
+// ten seconds on a loaded box.
 const cursorHookTimeout = 2 * codexNestedTimeout
 
 // cursorHookSources is every file Cursor Agent 2026.11.22-e9042b2 reads hooks

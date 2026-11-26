@@ -51,13 +51,14 @@ func runCursorNested(_ context.Context, f flags, stdin io.Reader, stdout, stderr
 	return exitDone
 }
 
-// cursorClaimWithin is how long a firing may take to claim: past it, it claims
-// nothing and the clone waits for the next MCP call, since Cursor drops an
-// answer past its hook's timeout (measured) and a clone claimed into a dropped
-// answer is never handed. The runner's timeout is twice it
-// (internal/sandbox/executor's cursorHookTimeout), so what follows a claim,
-// reading at most [cursorResultInline] bytes and copying at most
-// [maxCopyBytes] (0.12 s on the build VM), has as long again.
+// cursorClaimWithin is how long a firing may take, from its start, to claim:
+// past it, it claims nothing and the clone waits for the next MCP call, since
+// Cursor drops an answer past its hook's timeout (measured) and a clone
+// claimed into a dropped answer is never handed. A whole firing handing a
+// clone of 200 skills and a 30 KB AGENTS.md took 0.63 s on the build VM (one
+// with nothing new, 9 ms); the runner's timeout is twice this
+// (internal/sandbox/executor's cursorHookTimeout), so what follows a claim has
+// as long again.
 const cursorClaimWithin = 10 * time.Second
 
 // cursorNestedAnswer is the hook's answer, claiming only by claimBy: {} where
