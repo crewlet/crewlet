@@ -374,7 +374,7 @@ func TestTheOpenCodeCountHoldsNoStringOfAnExport(t *testing.T) {
 		read exportReading
 		err  error
 	)
-	_, allocated := allocationsOf(func() {
+	_, allocated := allocationsOf(t, func() {
 		read, err = meterExport(t.Context(), bytes.NewReader(doc), "2.3.2", nil)
 	})
 	if err != nil {
