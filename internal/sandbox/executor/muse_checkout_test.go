@@ -195,7 +195,8 @@ func TestWhatACheckoutBelowTheStartDirectoryBringsAMuseRun(t *testing.T) {
 				}
 			}
 			line := "the skill " + work + "/repo/.codex/skills/hidden is left out: the home's " + p.MuseConfig() +
-				"/skills/pdir is listed as repo:hidden too, and Muse Code would not list both"
+				"/skills/pdir, which Muse Code lists as repo:hidden, takes the name repo:hidden it would list the " +
+				"copy under"
 			if n := strings.Count(errs, line); n != 1 {
 				t.Errorf("skills: the run's error stream says the hidden copy %d times, want once:\n%s", n, errs)
 			}
