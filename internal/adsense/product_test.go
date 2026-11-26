@@ -210,7 +210,7 @@ func TestACallTheEngineCannotReadNeverReachesGoogle(t *testing.T) {
 	} {
 		tool := toolFor(t, args["operation"].(string))
 		if _, err := h.p.Prepare(context.Background(), h.call(tool, args)); !refusedAs(err, growth.RefusedInvalid) ||
-			strings.Contains(err.Error(), "name one of its operations") {
+			strings.Contains(err.Error(), "does not make") {
 			t.Errorf("%s answered %v, want invalid", name, err)
 		}
 	}

@@ -36,10 +36,10 @@ func levels() []seataccess.Level {
 				"attribution and event create rules, made at once and recorded. Needs Marketer on the property, " +
 				"which only a person adds, and Crewlet cannot read it back."},
 		{ID: string(growth.LevelOperate), Name: "Operate", Administers: true, Note: "Read, plus reversible " +
-			"changes made at once and recorded: key events, custom definitions, audiences, settings. Needs " +
-			"Editor on the property."},
+			"changes made at once and recorded: key events, custom definitions, audiences, property and stream " +
+			"settings. Needs Editor on the property."},
 		{ID: string(growth.LevelAdminister), Name: "Administer", Administers: true, Note: "Operate, plus asking " +
-			"an administrator to approve each account, access, link, key or irreversible change. Needs Editor, " +
-			"or Administrator for access."},
+			"an administrator to approve each account, access, link, key, data retention or irreversible change. " +
+			"Needs Editor, or Administrator for access."},
 	}
 }

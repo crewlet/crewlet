@@ -75,8 +75,7 @@ func (p *Product) requestOf(call growth.Call) (googlegrowth.Request, error) {
 	}
 	id, _ := call.Args["operation"].(string)
 	if !slices.Contains(tool.Operations, id) {
-		return googlegrowth.Request{}, refusal(growth.RefusedInvalid, fmt.Sprintf("%s cannot call %q: name one of "+
-			"its operations. No vendor was reached.", call.Tool, id))
+		return googlegrowth.Request{}, p.Catalog().Outside(call.Tool, id, p.Level(call.Handle))
 	}
 	op, _ := p.Catalog().Operation(id)
 	return p.newRequest(op, stringMap(call.Args["path"]), stringMap(call.Args["query"]), objectArg(call.Args["body"]))

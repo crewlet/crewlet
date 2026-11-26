@@ -93,7 +93,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		}
 		out = append(out, growth.Tool{
 			Name: genericTools()[class], Class: class, Operations: ids,
-			Description: genericDescription(class),
+			Description: genericDescription(class), Covers: genericCovers(class),
 			Parameters: toolschema.Object(map[string]any{
 				"operation": map[string]any{"type": "string", "enum": ids,
 					"description": "The method's ID, as docs/integrations/google-analytics.md lists it."},
@@ -114,11 +114,24 @@ func genericDescription(class growth.Class) string {
 	case growth.ClassRead:
 		return "Call any Google Analytics method that only reads, by its ID, on this agent's properties."
 	case growth.ClassOperate:
-		return "Call any reversible Google Analytics change by its method's ID: settings, definitions, audiences, " +
-			"annotations. Recorded in the access log; nobody is asked."
+		return "Call any reversible Google Analytics change by its method's ID: property and stream settings, definitions, " +
+			"audiences, annotations. Recorded in the access log; nobody is asked."
 	default:
-		return "Ask an administrator to approve a Google Analytics account, access, link, key, billing or irreversible change, " +
-			"by its method's ID; held until they answer, at a fresh step-up."
+		return "Ask an administrator to approve a Google Analytics account, access, link, key, data retention or irreversible " +
+			"change, by its method's ID; held until they answer, at a fresh step-up."
+	}
+}
+
+// genericCovers is what a generic tool of class above read changes, which the
+// tools below it name (growth.Catalog.Above).
+func genericCovers(class growth.Class) string {
+	switch class {
+	case growth.ClassRead:
+		return ""
+	case growth.ClassOperate:
+		return "property and stream settings, attribution, key events, custom dimensions and metrics, calculated metrics, audiences, channel groups, annotations and event rules"
+	default:
+		return "accounts, properties, access, links to other products, Measurement Protocol secrets and events, data retention, Google signals, user deletion, and every delete or archive"
 	}
 }
 

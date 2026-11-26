@@ -220,7 +220,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			}
 		}
 		out = append(out, growth.Tool{
-			Name: genericTools()[class], Class: class, Operations: ids, Description: genericDescription(class),
+			Name: genericTools()[class], Class: class, Operations: ids, Description: genericDescription(class), Covers: genericCovers(class),
 			Parameters: toolschema.Object(map[string]any{
 				"operation": map[string]any{"type": "string", "enum": ids,
 					"description": "The method's ID, as docs/integrations/adsense.md lists it."},
@@ -255,6 +255,21 @@ func genericDescription(class growth.Class) string {
 		return "Ask an administrator to approve an AdSense change that cannot be undone or sets up accounts, " +
 			"by its method's ID: deleting a custom channel, a platform's sub-accounts, their sites and events, " +
 			"and moving a site to another revenue group. Held until they answer, at a fresh step-up."
+	}
+}
+
+// genericCovers is what a generic tool of class above read changes, which the
+// tools below it name (growth.Catalog.Above).
+func genericCovers(class growth.Class) string {
+	switch class {
+	case growth.ClassRead:
+		return ""
+	case growth.ClassOperate:
+		return "ad units, custom channels and a platform group's description"
+	case growth.ClassPublic:
+		return "a live ad unit's size or type, and a platform site's review"
+	default:
+		return "deletes, a platform's sub-accounts, sites and events, and a site's revenue group"
 	}
 }
 

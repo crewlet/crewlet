@@ -88,7 +88,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		}
 		out = append(out, growth.Tool{
 			Name: genericTools()[class], Class: class, Operations: ids,
-			Description: genericDescription(class),
+			Description: genericDescription(class), Covers: genericCovers(class),
 			Parameters: toolschema.Object(map[string]any{
 				"operation": map[string]any{"type": "string", "enum": ids,
 					"description": "The method's ID, as docs/integrations/google-ads.md lists it."},
@@ -132,6 +132,23 @@ func genericDescription(class growth.Class) string {
 	default:
 		return "Ask an administrator to approve a Google Ads removal, user, link, billing or account change, by its " +
 			"method's ID; held until they answer, at a fresh step-up."
+	}
+}
+
+// genericCovers is what a generic tool of class above read changes, which the
+// tools below it name (growth.Catalog.Above).
+func genericCovers(class growth.Class) string {
+	switch class {
+	case growth.ClassRead:
+		return ""
+	case growth.ClassOperate:
+		return "pauses, lowered budgets and bids, negatives, labels, audiences and conversions"
+	case growth.ClassPublic:
+		return "ad text and assets published or retracted"
+	case growth.ClassSpend:
+		return "enabling, raised budgets and bids, and wider reach"
+	default:
+		return "removals, users, links, billing and account changes"
 	}
 }
 

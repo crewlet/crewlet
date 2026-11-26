@@ -302,6 +302,9 @@ type Tool struct {
 	// it: a sentence of what it does, and its arguments' JSON Schema.
 	Description string
 	Parameters  map[string]any
+	// Covers is what a class tool's methods change, in a few words, which a
+	// tool below it names ([Catalog.Above]); every one above read says it.
+	Covers string
 }
 
 // Role is one role or permission level the vendor gives an identity, as the
@@ -435,6 +438,10 @@ func (c Catalog) Validate() error {
 			strings.TrimSpace(t.Description) == "" || t.Parameters == nil {
 			bad("growth: %s tool %q needs a unique name starting %s_, a callable class, its operations, a "+
 				"description and its parameters", c.Kind, t.Name, c.Kind)
+		}
+		if t.TakesOperation() && t.Class != ClassRead && strings.TrimSpace(t.Covers) == "" {
+			bad("growth: %s tool %q names methods by ID above read and says nothing of what they change (Covers)",
+				c.Kind, t.Name)
 		}
 		if faults := toolschema.Faults(t.Parameters); len(faults) > 0 {
 			bad("growth: %s tool %q has an invalid input schema: %s", c.Kind, t.Name, strings.Join(faults, "; "))

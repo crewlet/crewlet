@@ -7,6 +7,7 @@ import {
   BUCKET_MS,
   bucketFor,
   cutInto,
+  endOfBucket,
   isRange,
   parseWindow,
   spanOf,
@@ -239,6 +240,46 @@ describe("the bucket and the alignment", () => {
     // the engine for rows that do not exist yet.
     const plain = windowEdges("6h", NOW2);
     expect(plain.until).toBe("2026-06-15T12:34:56.000Z");
+  });
+
+  // Mutation: round the edge up with `Math.ceil`, which leaves a clock on a
+  // boundary where it is, as the end of the bucket before it.
+  it("ends a clock on a boundary a whole bucket on, so the window is never wider than its span", () => {
+    // A clock, and the `since` and `until` it names.
+    const cases = {
+      // A day by the hour: on an hour, on midnight's hour, and inside an hour.
+      "1d": {
+        "2026-11-18T00:00:00Z": ["2026-11-17T01:00:00.000Z", "2026-11-18T01:00:00.000Z"],
+        "2026-11-18T13:00:00Z": ["2026-11-17T14:00:00.000Z", "2026-11-18T14:00:00.000Z"],
+        "2026-11-18T12:30:00Z": ["2026-11-17T13:00:00.000Z", "2026-11-18T13:00:00.000Z"],
+      },
+      // A week by the day: on a midnight, on an hour of the day, and inside one.
+      "7d": {
+        "2026-11-18T00:00:00Z": ["2026-11-12T00:00:00.000Z", "2026-11-19T00:00:00.000Z"],
+        "2026-11-18T13:00:00Z": ["2026-11-12T00:00:00.000Z", "2026-11-19T00:00:00.000Z"],
+        "2026-11-18T00:30:00Z": ["2026-11-12T00:00:00.000Z", "2026-11-19T00:00:00.000Z"],
+      },
+    } as const;
+    for (const w of ["1d", "7d"] as const) {
+      const step = stepOf(bucketFor(w));
+      for (const [clock, [since, until]] of Object.entries(cases[w])) {
+        const now = Date.parse(clock);
+        const got = windowEdges(w, now, step);
+        expect(got.since, `${w} at ${clock}`).toBe(since);
+        expect(got.until, `${w} at ${clock}`).toBe(until);
+        expect(Date.parse(got.until) - Date.parse(got.since), w).toBe(RANGE_MS[w]);
+        // The bucket in progress is on the chart, and nothing past its end.
+        expect(Date.parse(got.until), `${w} at ${clock}`).toBeGreaterThan(now);
+        expect(Date.parse(got.until) - now, `${w} at ${clock}`).toBeLessThanOrEqual(step);
+      }
+    }
+  });
+
+  it("puts the end of a bucket one whole step past an instant on its start", () => {
+    expect(endOfBucket(120_000, 60_000)).toBe(180_000);
+    expect(endOfBucket(120_001, 60_000)).toBe(180_000);
+    expect(endOfBucket(179_999, 60_000)).toBe(180_000);
+    expect(endOfBucket(0, 60_000)).toBe(60_000);
   });
 
   it("keeps the comparison window the same width once aligned", () => {
