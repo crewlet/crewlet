@@ -230,18 +230,18 @@ type attachment struct {
 	failuresMu sync.Mutex
 
 	// spaced is the spaced returns the loop owes ([attachment.sendSpaced]),
-	// touched by the loop alone.
-	spaced []spacedReturn
+	// guarded by spacedMu, which the loop sends them under and
+	// [attachment.keepHeld] renews them under.
+	spacedMu sync.Mutex
+	spaced   []spacedReturn
 
 	// aside is what this attachment holds aside ([queue.OutcomeAside]),
-	// readmitted what a Readmit handed back for the next drain, readmits the
-	// keys readmitted since the running dispatch began, and keeperRunning
-	// whether [attachment.keepAside] runs (aside.go).
-	asideMu       sync.Mutex
-	aside         []asideDelivery
-	readmitted    []delivery
-	readmits      map[string]struct{}
-	keeperRunning bool
+	// readmitted what a Readmit handed back for the next drain, and readmits
+	// the keys readmitted since the running dispatch began (aside.go).
+	asideMu    sync.Mutex
+	aside      []asideDelivery
+	readmitted []delivery
+	readmits   map[string]struct{}
 }
 
 // failureRecord is what one attachment knows of one message's failures
@@ -779,6 +779,9 @@ func (a *attachment) run(ctx context.Context, loop func(context.Context, *attach
 	// stop closes the connection under it, and what it owes spaced with it.
 	defer a.handBackAside(ctx)
 	defer a.sendSpaced()
+	// Beside the loop until done closes: what it holds with no handler on it
+	// stays in progress ([attachment.keepHeld]).
+	go a.keepHeld()
 	loop(ctx, a)
 }
 
@@ -1274,13 +1277,17 @@ func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, ev *event
 		return
 	}
 	// IN PROGRESS WHILE OWED: its ack window restarts now, where the return
-	// used to land, so holding it costs no redelivery; a process that dies
+	// used to land, and every third of it until the return is sent
+	// ([attachment.keepHeld]), so holding it costs no redelivery however long
+	// the next fetch waits or a drain's later handlers run. A process that dies
 	// before sending it leaves it to that window, delivered again at least once.
 	if err := msg.InProgress(); err != nil {
 		a.log.Warn("owed_progress_failed", "error", err.Error(),
-			"detail", "a return owed until the loop's next delivery keeps its last ack window")
+			"detail", "the owed delivery's ack window restarts at the keeper's next renewal")
 	}
+	a.spacedMu.Lock()
 	a.spaced = append(a.spaced, spacedReturn{msg: msg, delay: delay})
+	a.spacedMu.Unlock()
 }
 
 // spacedReturn is a failure's or a pass's return of msg at delay, which the
@@ -1298,13 +1305,71 @@ type spacedReturn struct {
 // backoff raced the next pull, which a loaded node or a leaf's link loses, and
 // the broker serves a due redelivery before new mail. Owed for a fetch, or a
 // drain's later handlers and the next drain, as that drain's own mail waits.
+// Sent under spacedMu, so no renewal of [attachment.keepHeld] follows its
+// return and restarts the window in place of the return's backoff.
 func (a *attachment) sendSpaced() {
+	a.spacedMu.Lock()
+	defer a.spacedMu.Unlock()
 	for _, r := range a.spaced {
 		if err := r.msg.NakWithDelay(r.delay); err != nil {
 			a.log.Warn("nak_failed", "error", err.Error())
 		}
 	}
 	a.spaced = nil
+}
+
+// keepHeld restarts, every third of the ack window, the window of every
+// delivery a holds with no handler running on it, as [attachment.withProgress]
+// keeps a handler's: the returns its loop owes ([attachment.renewSpaced]) and
+// what it holds aside or readmitted (aside.go). It runs beside the consume loop
+// until that loop has ended, having sent the one and handed back the other.
+//
+// LAPSED, AN OWED DELIVERY IS DELIVERED AGAIN, and the broker matches the owed
+// return to a message by its stream sequence alone, not by delivery: sent once
+// the loop holds that newer delivery, it reschedules it under its handler, and
+// the broker hands it over again before the handler's settlement lands, a
+// delivery past the budget (TestAReturnOwedPastItsAckWindowIsKeptInProgress).
+func (a *attachment) keepHeld() {
+	t := time.NewTicker(a.q.ackWait() / 3)
+	defer t.Stop()
+	for {
+		select {
+		case <-a.done:
+			return
+		case <-t.C:
+		}
+		if failed, last := a.renewSpaced(); failed > 0 {
+			a.log.Warn("owed_progress_failed", "deliveries", failed, "error", last.Error(),
+				"detail", "an owed delivery whose ack window lapses is redelivered, at one delivery")
+		}
+		failed := 0
+		var last error
+		for _, msg := range a.heldMsgs() {
+			if err := msg.InProgress(); err != nil {
+				failed, last = failed+1, err
+			}
+		}
+		if failed > 0 {
+			a.log.Warn("aside_progress_failed", "deliveries", failed, "error", last.Error(),
+				"detail", "an aside delivery whose ack window lapses is redelivered, at one delivery")
+		}
+	}
+}
+
+// renewSpaced restarts the ack window of every return the loop owes, under the
+// lock [attachment.sendSpaced] sends them under, and reports how many failed
+// and the last error.
+func (a *attachment) renewSpaced() (int, error) {
+	a.spacedMu.Lock()
+	defer a.spacedMu.Unlock()
+	failed := 0
+	var last error
+	for _, r := range a.spaced {
+		if err := r.msg.InProgress(); err != nil {
+			failed, last = failed+1, err
+		}
+	}
+	return failed, last
 }
 
 // retire keeps msg (delivery md), whose return spent its budget, as its

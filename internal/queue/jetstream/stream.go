@@ -25,17 +25,16 @@
 //
 // # What it costs, measured
 //
-// There is no free handoff: every path back to the broker increments the
-// delivery count, absorbed by the delivery budget (maxDeliver). Conversation
-// order is by event timestamp (queue.OrderForDispatch). A CONSUMER'S COUNTERS
-// DO NOT READ YOUR OWN WRITES (the server counts a message after acking its
-// publisher), so anything that must be synchronous with a returned publish
-// reads the STREAM's own state (Backlog).
+// There is no free handoff: every path back to the broker counts a delivery,
+// absorbed by the delivery budget (maxDeliver). Conversation order is by event
+// timestamp (queue.OrderForDispatch). A CONSUMER'S COUNTERS DO NOT READ YOUR
+// OWN WRITES (the server counts a message after acking its publisher), so what
+// must agree with a returned publish reads the STREAM's own state (Backlog).
 //
 // A FAILURE OR A PASS GOES BACK ONCE ITS LOOP HOLDS THE NEXT DELIVERY or heard
-// none waits ([attachment.sendSpaced]): sent sooner, its backoff races that
-// pull, and a due redelivery is served before new mail. A process dying first
-// leaves it to its ack window.
+// none waits ([attachment.sendSpaced]), in progress till then
+// ([attachment.keepHeld]): sooner, its backoff races that pull, and a due
+// redelivery beats new mail. A dying process leaves it to its ack window.
 //
 // # What a broker that does not answer looks like from above
 //
