@@ -432,3 +432,60 @@ func TestARefusalTakesBackOnlyItsOwnAssetOffer(t *testing.T) {
 		})
 	}
 }
+
+// ONLY A STORED FILE COUNTS AN UNANSWERED WRITE'S OFFER: an upload's second
+// file is sent after a publish of its first landed unanswered and its retry
+// was refused as moved. No version can name bytes that had not landed, so a
+// later publish of the upload that does not name the second file deletes it
+// and releases its hold.
+//
+// Mutation: let takeClaim count the offer against every held file, pending
+// ones included, and the second file stays stored and held.
+func TestOnlyAStoredFileCountsAnUnansweredWritesOffer(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{loseAnswer: true})
+	created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": "<p>v1</p>"})
+	c := h.person("ada", h.opKey("upload"))
+	files := map[string]string{"a.txt": "uploaded", "b.txt": "sent after"}
+	intent, err := h.svc.Intend(t.Context(), c, created.Artifact, declare(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(p string) {
+		t.Helper()
+		if err := h.svc.Transfer(t.Context(), c, intent.Upload, p, strings.NewReader(files[p]), -1); err != nil {
+			t.Fatalf("transfer %s: %v", p, err)
+		}
+	}
+	send("a.txt")
+	req := artifactupload.PublishRequest{Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch,
+		Upload: intent.Upload, Files: []artifactupload.FileSpec{{Path: "a.txt", Upload: true}}}
+	k := h.person("ada", h.opKey("lost"))
+	if _, _, err := h.svc.Publish(t.Context(), k, req); err == nil {
+		t.Fatal("premise: the first attempt's answer was not lost")
+	}
+	var moved *artifactsdomain.VersionMoved
+	if _, _, err := h.svc.Publish(t.Context(), k, req); !errors.As(err, &moved) {
+		t.Fatalf("the retry answered %v, want it refused as moved", err)
+	}
+	send("b.txt")
+	raw, err := artifactupload.UploadKey(t.Context(), h.svc, intent.Upload, "b.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := objstore.ParseKey(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Base = 2
+	if _, _, err := h.svc.Publish(t.Context(), h.person("ada", h.opKey("again")), req); err != nil {
+		t.Fatalf("publish the reopened upload again: %v", err)
+	}
+	if _, ok := h.stored()[second]; ok {
+		t.Error("the second file, stored after the unanswered write, is still stored after a publish " +
+			"that does not name it")
+	}
+	if gone := h.gone(); len(gone) > 0 {
+		t.Errorf("rows name %v, which the store no longer holds", gone)
+	}
+}

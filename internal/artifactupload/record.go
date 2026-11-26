@@ -185,11 +185,12 @@ func (r *record) keeps() bool {
 	return r.Kept > 0 || slices.ContainsFunc(r.Files, func(f file) bool { return f.offered() && f.held() })
 }
 
-// offerHeld counts one more write of unknown outcome against every file the
-// record still holds.
-func (r *record) offerHeld() {
+// offerStored counts one more write of unknown outcome against every file
+// whose bytes the record has stored: no version can name bytes that never
+// landed.
+func (r *record) offerStored() {
 	for i := range r.Files {
-		if r.Files[i].held() {
+		if r.Files[i].State == fileStored {
 			r.Files[i].Offers++
 		}
 	}

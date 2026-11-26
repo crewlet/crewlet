@@ -65,7 +65,7 @@
 // An object is deleted only by the attempt that owns it, and only where no
 // write of unknown outcome was offered it. An attempt owns the generated
 // objects it stored itself and, once its version lands, the files its upload
-// streamed through the engine. The record counts, on each file, the
+// streamed through the engine. The record counts, on each stored file, the
 // writes of unknown outcome it was offered to, since a version or asset one
 // landed may name it: a retry taking up a claim counts the run before it, and
 // an asset add, having no claim, counts itself before its write and takes its
