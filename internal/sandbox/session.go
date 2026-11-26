@@ -1272,17 +1272,21 @@ func boundOf(kept bool) captureBound {
 	return atTextBound
 }
 
+// valid reports whether b is one of the two bounds: its zero value, no bound
+// at all, and any value past the two are not.
+func (b captureBound) valid() bool { return b == atTextBound || b == atKeptBound }
+
 // limits is b's [takeBound]. NO BOUND IS REFUSED, never read as either: a
 // figure sized at the zero value is a caller that named none, a bug, and
 // guessing either bound there sized waits on another bound's figures.
 func (b captureBound) limits() takeBound {
-	switch b {
-	case atTextBound:
-		return textBound
-	case atKeptBound:
+	if !b.valid() {
+		panic(fmt.Sprintf("sandbox: a figure was sized at no take bound (%d)", b))
+	}
+	if b == atKeptBound {
 		return keptBound
 	}
-	panic(fmt.Sprintf("sandbox: a figure was sized at no take bound (%d)", b))
+	return textBound
 }
 
 // SessionKeepBudget bounds every keep, off the read, whatever its session's
@@ -2247,6 +2251,11 @@ func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run 
 	taken TakenSession, at capturePoint, places *savePlaces, hold *spoolHold, stoodAt captureBound) (*spooledCapture,
 	*SessionKept) {
 
+	// NO BOUND IS REFUSED, as [captureBound.limits] refuses one: stood by at
+	// none, the spool would read as no standby ([spooledCapture.stoodBy]).
+	if !stoodAt.valid() {
+		panic(fmt.Sprintf("sandbox: a read stood by at no take bound (%d)", stoodAt))
+	}
 	stood, _, err := c.askStamp(ctx, reserveBy, run.TurnID, stamp, c.pending.StandBy)
 	switch {
 	case !stood && err == nil:

@@ -319,3 +319,31 @@ func TestAFigureSizedAtNoBoundIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A READ STOOD BY AT NO BOUND IS REFUSED before it asks the store anything:
+// stood by at none, its spool would read as a read holding its own place
+// ([spooledCapture.stoodBy]), so nothing waits for the capture it stood by for.
+//
+// Mutation: drop standBy's check, and the read asks to stand by and is answered.
+func TestAReadStoodByAtNoBoundIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, bound := range []captureBound{0, atKeptBound + 1} {
+		t.Run(fmt.Sprintf("at %d", bound), func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, _, _ := keepingRig(t)
+				run := rig.launchKept(t, "t1")
+				stamp := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
+					State: CaptureBegun, At: rig.coordinator.now(), Taker: takingProcess, TakerEpoch: 1,
+					Harness: "claude-code", SessionID: "s-1"}
+				defer func() {
+					if recover() == nil {
+						t.Errorf("a read stood by at bound %d, want it refused", bound)
+					}
+				}()
+				rig.coordinator.standBy(t.Context(), time.Time{}, time.Time{}, run, stamp, TakenSession{},
+					capturePoint{}, nil, nil, bound)
+			})
+		})
+	}
+}
