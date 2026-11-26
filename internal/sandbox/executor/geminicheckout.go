@@ -26,11 +26,11 @@ var geminiCheckouts = checkoutSpec{SkillDirs: []checkoutSkillDir{{Dir: ".agents/
 // would list ([geminiGuard]).
 const geminiCheckoutsHook = "crewlet-checkouts"
 
-// geminiCheckoutHome is where a Gemini CLI run keeps its checkouts' skills
+// checkoutHome is where a Gemini CLI run keeps its checkouts' skills
 // ([checkoutHome]): the home's ~/.gemini/skills, and the roots the script
 // names. No home file: the run writes no instruction text, so the home's
 // GEMINI.md, which save_memory writes, is never held.
-func geminiCheckoutHome(paths Paths) checkoutHome {
+func (GeminiCLI) checkoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.GeminiCheckouts(), helper: paths.GeminiNoteHelper(),
 		launch: paths.GeminiCheckoutLaunch(), sections: paths.GeminiCheckoutSections(), skills: paths.GeminiSkills(),
 		copied: paths.GeminiCheckoutSkills(), roots: paths.GeminiCheckoutRoots()}
@@ -46,7 +46,7 @@ func writeGeminiCheckouts(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	} else if err != nil {
 		return false, err
 	}
-	launch := geminiCheckoutHome(paths).launchConfig(geminiCheckouts, req.ReportedRepos)
+	launch := GeminiCLI{}.checkoutHome(paths).launchConfig(geminiCheckouts, req.ReportedRepos)
 	if err := box.WriteFile(ctx, paths.GeminiCheckoutLaunch(), launch); err != nil {
 		return false, fmt.Errorf("executor: writing what hands the run's repositories their skills: %w", err)
 	}
@@ -67,7 +67,7 @@ func geminiCheckoutsEntry(paths Paths) map[string]any {
 // geminiCheckoutsGate is the part of a run's script that hands its checkouts'
 // skills before Gemini CLI starts ([checkoutHome.gate], which sets hk where
 // the helper ran), after the run's settings are in the home's.
-func geminiCheckoutsGate(paths Paths) string { return geminiCheckoutHome(paths).gate() }
+func geminiCheckoutsGate(paths Paths) string { return GeminiCLI{}.checkoutHome(paths).gate() }
 
 // geminiIncludeRoots is the shell adding `--include-directories <root>` to the
 // run's arguments for each checkout the launch handed ([Paths.GeminiCheckoutRoots]).

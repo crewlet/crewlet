@@ -129,7 +129,7 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		// foreground command the signal also reached returns. A run killed
 		// outright leaves them to the next run's clear ([homeKeeper]).
 		// What the checkouts' hook left out said first ([checkoutHome.saySkipped]).
-		"restore() { " + geminiCheckoutHome(paths).saySkipped() + "; " + GeminiCLI{}.homeRestore(paths) +
+		"restore() { " + GeminiCLI{}.checkoutHome(paths).saySkipped() + "; " + GeminiCLI{}.homeRestore(paths) +
 			"; }; trap restore EXIT",
 		`trap 'restore; trap - EXIT; exit 143' TERM; trap 'restore; trap - EXIT; exit 130' INT; ` +
 			`trap 'restore; trap - EXIT; exit 129' HUP`,
@@ -156,7 +156,7 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		// NOTHING OF CREWLET'S OWN SWITCHED OFF OR REPLACED where no tier of the
 		// run's undoes it ([geminiGuard]), checked before Gemini CLI first starts;
 		// the checkouts' hook switched off only said in the skip log (D709).
-		"gk=" + q(geminiCheckoutsHook) + "; gs=" + q(geminiCheckoutHome(paths).skipped()),
+		"gk=" + q(geminiCheckoutsHook) + "; gs=" + q(GeminiCLI{}.checkoutHome(paths).skipped()),
 		"node " + q(paths.GeminiHelper()) + " guard" + geminiGuard(req) +
 			` ${hk:+--checkouts "$gk" --skipped "$gs"} || exit 1`,
 		// WHETHER NO OTHER SERVER CAN SPELL THE BRIDGE'S TOOLS, read before the
@@ -559,7 +559,7 @@ var _ homeKeeper = GeminiCLI{}
 // of times; and the checkouts' copies removed and a skip log no script
 // printed dropped ([checkoutHome.restore], [checkoutHome.dropSkipped]).
 func (GeminiCLI) homeRestore(paths Paths) string {
-	h := geminiCheckoutHome(paths)
+	h := GeminiCLI{}.checkoutHome(paths)
 	return everyStep(fmt.Sprintf(`if [ -e %[1]s ]; then if [ -s %[1]s ]; then cat %[1]s > %[2]s && rm -f %[1]s; else rm -f %[1]s %[2]s; fi; fi`,
 		shellword.Quote(paths.GeminiHeldSettings()), shellword.Quote(paths.GeminiHomeSettings())), h.restore(), h.dropSkipped())
 }

@@ -108,7 +108,7 @@ func (Kimi) Command(req sandbox.RunRequest, session Session, paths Paths, config
 // node required, which the driver runs on; the routing variables the entry did
 // not set removed ([kimiRoutingOff]); the session settled and recorded
 // ([kimiSessionGate], [Paths.SessionRecord]); the checkouts below the start
-// directory handed theirs ([kimiCheckoutHome]); the driver run under the end
+// directory handed theirs ([Kimi.checkoutHome]); the driver run under the end
 // protocol ([launchHarness]), its brief on stdin; the server it started ended
 // where it outlived it, and the home's AGENTS.md and skills put back; the
 // run's own usage added to the stream
@@ -131,12 +131,12 @@ func kimiScript(req sandbox.RunRequest, session Session, paths Paths, settings s
 	b.WriteString(kimiSessionGate(session, paths, req.FreshWiring != nil))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`, q(paths.SessionRecord()))
 	b.WriteString(kimiLinesBefore(paths))
-	// THE CHECKOUTS BELOW THE START DIRECTORY ([kimiCheckoutHome]), and once
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([Kimi.checkoutHome]), and once
 	// Kimi has stopped, on a failure before and on a teardown's signal, the
 	// home's own AGENTS.md back, the copies removed and what a firing left out
 	// said, each step whatever came of the other ([everyStep]); a run killed
 	// outright leaves the put-back to the next run's clear ([homeKeeper]).
-	home := kimiCheckoutHome(paths)
+	home := Kimi{}.checkoutHome(paths)
 	line(`kput() { %s; }`, everyStep(home.restore(), home.saySkipped()))
 	line(`kquit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; kserver; kput; exit "$1"; }`)
 	line(`trap kput EXIT; trap 'kquit 143' TERM; trap 'kquit 130' INT; trap 'kquit 129' HUP`)
@@ -414,14 +414,14 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		Servers: slices.Sorted(maps.Keys(req.MCPServers)), MCPConfig: paths.KimiMCPConfig(), WebDenied: req.WebDenied,
 		ServerStartMs: kimiServerStartMs}
 	// THE NOTE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR, which hands
-	// the checkouts below the start directory theirs ([kimiCheckoutHome]); a
+	// the checkouts below the start directory theirs ([Kimi.checkoutHome]); a
 	// box with none starts without them, its gate saying so.
 	if err := writeNoteHelper(ctx, box, paths.KimiNoteHelper()); err == nil {
 		settings.Checkouts = kimiNested(paths)
 	} else if !errors.Is(err, errNoHelperBuild) {
 		return "", err
 	}
-	launch := kimiCheckoutHome(paths).launchConfig(kimiCheckouts(paths), req.ReportedRepos)
+	launch := Kimi{}.checkoutHome(paths).launchConfig(kimiCheckouts(paths), req.ReportedRepos)
 	if err := box.WriteFile(ctx, paths.KimiCheckoutLaunch(), launch); err != nil {
 		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}

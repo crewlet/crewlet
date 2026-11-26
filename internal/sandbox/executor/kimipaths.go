@@ -63,7 +63,7 @@ func (p Paths) KimiSettingsFresh() string { return p.WorkDir() + "/kimi-run-fres
 func (p Paths) KimiLinesBefore() string { return p.WorkDir() + "/kimi-lines-before" }
 
 // KimiNoteHelper is where a Kimi run's note helper is written, which hands the
-// checkouts below its start directory theirs ([kimiCheckoutHome]).
+// checkouts below its start directory theirs ([Kimi.checkoutHome]).
 func (p Paths) KimiNoteHelper() string { return p.WorkDir() + "/kimi-notehelper" }
 
 // KimiCheckouts is the run's checkout state, which the note helper's

@@ -33,11 +33,11 @@ func kimiCheckouts(paths Paths) checkoutSpec {
 // byte steer reached the model whole (measured).
 var kimiFiringLimit = 96 << 10
 
-// kimiCheckoutHome is where a Kimi run keeps its checkouts' instructions and
+// checkoutHome is where a Kimi run keeps its checkouts' instructions and
 // skills ([checkoutHome]): KIMI_CODE_HOME/AGENTS.md, which Kimi loads ahead of
 // a project's, the home's own held beside the run, and KIMI_CODE_HOME/skills,
 // the first user skill root, each skill copied as `<repository>:<skill>`.
-func kimiCheckoutHome(paths Paths) checkoutHome {
+func (Kimi) checkoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.KimiCheckouts(), helper: paths.KimiNoteHelper(), launch: paths.KimiCheckoutLaunch(),
 		agents: []string{paths.KimiHomeAgents()}, held: paths.KimiHomeInstructions(),
 		sections: paths.KimiCheckoutSections(), skills: paths.KimiSkills(), copied: paths.KimiCheckoutSkillsCopied()}
@@ -50,7 +50,7 @@ var _ homeKeeper = Kimi{}
 // the skip log it left ([checkoutHome.dropSkipped]), run by the clear before
 // every run, whichever harness it runs.
 func (Kimi) homeRestore(p Paths) string {
-	h := kimiCheckoutHome(p)
+	h := Kimi{}.checkoutHome(p)
 	return everyStep(h.restore(), h.dropSkipped())
 }
 
@@ -78,7 +78,7 @@ type kimiNestedHand struct {
 
 // kimiNested is the driver's kimiNestedHand for a run in paths.
 func kimiNested(paths Paths) *kimiNestedHand {
-	h := kimiCheckoutHome(paths)
+	h := Kimi{}.checkoutHome(paths)
 	return &kimiNestedHand{Helper: paths.KimiNoteHelper(), Config: h.state + "/nested.json",
 		TimeoutMs: kimiNestedTimeout.Milliseconds(), MaxOutput: kimiNestedMaxOutput, Skipped: h.skipped()}
 }

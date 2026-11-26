@@ -29,7 +29,7 @@ func copilotRepoLaunched(t *testing.T, files map[string]string) (Paths, string) 
 		t.Fatal(err)
 	}
 	for path, body := range map[string][]byte{p.CopilotNoteHelper(): bin,
-		p.CopilotCheckoutLaunch(): copilotCheckoutHome(p).launchConfig(copilotCheckouts(), nil)} {
+		p.CopilotCheckoutLaunch(): Copilot{}.checkoutHome(p).launchConfig(copilotCheckouts(), nil)} {
 		if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
 		}

@@ -214,7 +214,7 @@ func TestTheSectionsGoIntoTheHomeFileTheHarnessReads(t *testing.T) {
 // removal, and the script goes red.
 func TestOneHomeFileCandidateNamesNoHeldFile(t *testing.T) {
 	t.Parallel()
-	h := codexCheckoutHome(Paths{Home: "/home/box"})
+	h := Codex{}.checkoutHome(Paths{Home: "/home/box"})
 	if strings.Contains(h.gate()+h.restore(), heldLive) {
 		t.Errorf("Codex's gate or put-back names the held file:\n%s\n%s", h.gate(), h.restore())
 	}

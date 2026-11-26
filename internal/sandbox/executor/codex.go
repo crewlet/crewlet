@@ -173,7 +173,7 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	// THEN what the nested hook left out said ([checkoutHome.saySkipped]) and
 	// THE HOME'S OWN CONFIGURATION BACK once the server is gone ([codexRestoreHome]).
 	line(`stop() { end "$tpid"; end "$gpid"; end "$hpid"; end "$apid" again; tpid= gpid= hpid= apid=; rm -f %s; %s; %s; }`,
-		sock, codexCheckoutHome(paths).saySkipped(), codexRestoreHome(paths))
+		sock, Codex{}.checkoutHome(paths).saySkipped(), codexRestoreHome(paths))
 	// THE THREAD, off the stream's first line, the one `exec --json` prints as
 	// the server starts the thread, before its turn: written for the helper
 	// and reported for collection, with where the run began in its rollout
@@ -203,10 +203,10 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 
 	line(`rm -f %s %s %s %s`, sock, thread, threadNext, runStart)
 	// THE REPOSITORIES' INSTRUCTIONS AND SKILLS, none of their configuration
-	// ([codexCheckoutHome]), and the nested hook that hands a later checkout's
+	// ([Codex.checkoutHome]), and the nested hook that hands a later checkout's
 	// where the box holds the helper it runs ([codexNestedHookFlags]).
 	line(`[ ! -s %[1]s ] || cat %[1]s >&2`, q(paths.CodexGuardSaid()))
-	h := codexCheckoutHome(paths)
+	h := Codex{}.checkoutHome(paths)
 	b.WriteString(h.gate())
 	// A BOX THAT SWITCHES HOOKS OFF starts Codex without the nested hook, the
 	// skip log saying so once Codex has stopped (D709, [Paths.CodexHooksOffBy]).

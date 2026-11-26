@@ -151,7 +151,7 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 	if len(req.Skills) > 0 {
 		parts = append(parts, "--skill", q(paths.PiSkills()))
 	}
-	// THE CHECKOUTS' SKILLS IN A DIRECTORY OF THEIR OWN ([piCheckoutHome]), so
+	// THE CHECKOUTS' SKILLS IN A DIRECTORY OF THEIR OWN ([Pi.checkoutHome]), so
 	// the seat's stays its skills alone, each of which the extension reports.
 	parts = append(parts, "--skill", q(paths.PiCheckoutSkills()), `"$@"`)
 
@@ -170,12 +170,12 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 	b.WriteString(piSessionGate(session, paths, req.FreshWiring != nil && extension != ""))
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		q(paths.SessionRecord()))
-	// THE CHECKOUTS BELOW THE START DIRECTORY ([piCheckoutHome]), and once
+	// THE CHECKOUTS BELOW THE START DIRECTORY ([Pi.checkoutHome]), and once
 	// pi has stopped, on a failure before and on a teardown's signal, the
 	// agent directory's own instruction file back and what a firing left out
 	// said, each step whatever came of the other ([everyStep]); a run killed
 	// outright leaves the put-back to the next run's clear ([homeKeeper]).
-	home := piCheckoutHome(paths)
+	home := Pi{}.checkoutHome(paths)
 	line(`piput() { %s; }`, everyStep(home.restore(), home.saySkipped()))
 	line(`piquit() { trap '' USR1; trap - EXIT TERM INT HUP; end "$harness"; harness=; piput; exit "$1"; }`)
 	line(`trap piput EXIT; trap 'piquit 143' TERM; trap 'piquit 130' INT; trap 'piquit 129' HUP`)
@@ -521,7 +521,7 @@ func (p Pi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.Ru
 		skills[at] = s.Listed()
 	}
 	// THE NOTE HELPER IN EVERY BOX ITS MACHINE HAS A BUILD FOR, which hands
-	// the checkouts below the start directory theirs ([piCheckoutHome]); a box
+	// the checkouts below the start directory theirs ([Pi.checkoutHome]); a box
 	// with none starts without them, its gate saying so.
 	var nested *piNestedHand
 	if err := writeNoteHelper(ctx, box, paths.PiNoteHelper()); err == nil {
@@ -529,7 +529,7 @@ func (p Pi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.Ru
 	} else if !errors.Is(err, errNoHelperBuild) {
 		return "", err
 	}
-	launch := piCheckoutHome(paths).launchConfig(piCheckouts(), req.ReportedRepos)
+	launch := Pi{}.checkoutHome(paths).launchConfig(piCheckouts(), req.ReportedRepos)
 	if err := box.WriteFile(ctx, paths.PiCheckoutLaunch(), launch); err != nil {
 		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
