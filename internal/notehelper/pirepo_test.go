@@ -232,17 +232,27 @@ func TestAPiFiringInASmallRoomKeepsWhatItLeftOut(t *testing.T) {
 	}
 }
 
-// A PI FIRING CLAIMS ONLY THE CHECKOUTS IT CAN NAME: in a room under the
-// listings' 64 KiB, which hands no file, a claimed checkout's file is named
-// in the answer whatever lines about skills the firing says (the file lines
-// come first), and a checkout whose line no longer fits waits, unclaimed,
-// for a firing with room, which hands it.
+// A PI FIRING CLAIMS ONLY THE CHECKOUTS IT CAN NAME: in rooms of 4 to 8 KiB,
+// under the listings' 64 KiB, which hand no file, a claimed checkout's file
+// is named in the answer whatever lines about skills the firing says (the
+// file lines come first), and a checkout whose line no longer fits waits,
+// unclaimed, for a firing with room, which hands it.
 //
 // Mutation: say the file lines after the skills', or claim past the names'
 // room, and this goes red.
 func TestAPiFiringClaimsOnlyTheCheckoutsItCanName(t *testing.T) {
 	t.Parallel()
-	const room = 6_000
+	for _, room := range []int{4 << 10, 6_000, 8 << 10} {
+		t.Run(fmt.Sprintf("room %d", room), func(t *testing.T) {
+			t.Parallel()
+			piFiringNamesWhatItClaims(t, room)
+		})
+	}
+}
+
+// piFiringNamesWhatItClaims is [TestAPiFiringClaimsOnlyTheCheckoutsItCanName]
+// in a room of room characters.
+func piFiringNamesWhatItClaims(t *testing.T, room int) {
 	r := newRepoRun(t, nil)
 	work := r.workdir(t)
 	r.launchWith(t, piSpec(r.skills), false, "")
