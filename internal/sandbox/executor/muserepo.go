@@ -60,7 +60,8 @@ func museCheckoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.MuseCheckouts(), helper: paths.MuseNoteHelper(), launch: paths.MuseCheckoutLaunch(),
 		agents: []string{paths.MuseConfig() + "/AGENTS.md", paths.MuseConfig() + "/CLAUDE.md"},
 		held:   paths.MuseHomeRules(), sections: paths.MuseCheckoutSections(), skills: paths.MuseSkills(),
-		copied: paths.MuseCheckoutCopied(), fallback: paths.MuseForeignRules(), own: paths.MuseHomeRulesOwn()}
+		copied: paths.MuseCheckoutCopied(), fallback: paths.MuseForeignRules(),
+		homeText: paths.MuseHomeRulesOwn()}
 }
 
 var _ homeKeeper = Muse{}

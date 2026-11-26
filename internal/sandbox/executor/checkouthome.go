@@ -19,15 +19,18 @@ import (
 // directory with the list of copies the run's end removes, each built in
 // state/staging ([checkoutHome.staging]); the roots' file for a harness the
 // script points at them ("" for none); and fallback, the files (a path a
-// line) a harness loads where the home file is not there (Muse's foreign
-// rules), the first opening the file the run makes, its text kept in own.
+// line) a harness loads in the home file's absence (Muse's foreign rules),
+// the first opening the file the run makes, its text kept in homeText.
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
 	agentsFrom            string
 	held, sections        string
 	skills, copied, roots string
-	fallback, own         string
+	fallback, homeText    string
+	// own is the run's own instructions, written ahead of the home's
+	// (Copilot's share its one file), "" for none.
+	own string
 }
 
 // holdsHome reports whether h writes a home instruction file: from its
@@ -161,6 +164,8 @@ type checkoutForm string
 const (
 	// checkoutFormClaude is Claude Code's walk of .claude/rules.
 	checkoutFormClaude checkoutForm = "claude"
+	// checkoutFormCopilot is Copilot 1.0.114's walk of .claude/rules.
+	checkoutFormCopilot checkoutForm = "copilot"
 	// checkoutFormQwen is Qwen Code's walk of .qwen/rules.
 	checkoutFormQwen checkoutForm = "qwen"
 	// checkoutFormGrok is Grok Build's read of .grok/rules and .claude/rules
@@ -198,7 +203,7 @@ var checkoutUnlimited *int
 // launchConfig is the helper's checkout-launch config: spec, h's places, the
 // repositories the run pushes to first, and the seats' namespace reserved, so
 // no repository's skills are listed under it; a budget counts the text the
-// gate opens the home file with ([checkoutHome.ownText]).
+// gate opens the home file with ([checkoutHome.openingText]).
 func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	config := map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "firingLimit": spec.FiringLimit,
@@ -210,7 +215,7 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 		config["listedAs"], config["homeSkills"] = spec.ListedAs, spec.HomeSkills
 	}
 	if spec.Budget != "" {
-		config["budget"] = map[string]string{"form": spec.Budget, "own": h.ownText()}
+		config["budget"] = map[string]string{"form": spec.Budget, "own": h.openingText()}
 	}
 	if len(spec.Skipped) > 0 {
 		config["skipped"] = spec.Skipped
@@ -219,11 +224,12 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	return launch // strings, lists, booleans and ints cannot fail to encode
 }
 
-// ownText is the file holding the text the run's home file opens with before
-// the sections: own where the harness has a fallback, else the held copy.
-func (h checkoutHome) ownText() string {
+// openingText is the file holding the home's text the run's home file opens
+// with before the sections: homeText where the harness has a fallback, else
+// the held copy.
+func (h checkoutHome) openingText() string {
 	if h.fallback != "" {
-		return h.own
+		return h.homeText
 	}
 	return h.held
 }
@@ -239,7 +245,12 @@ func (h checkoutHome) ownText() string {
 // home keeps the file, its directory made where there is none (a fresh home,
 // or a Qwen Code context.fileName naming a path below it; [heldMade]), the
 // file left untouched where they hand nothing or the harness reads none.
-func (h checkoutHome) gate() string {
+func (h checkoutHome) gate() string { return h.prepare() + h.compose() }
+
+// prepare is [checkoutHome.gate] up to checkout-launch: the hold, the
+// removals and the launch, which write the sections [checkoutHome.compose]
+// puts in place.
+func (h checkoutHome) prepare() string {
 	q := shellword.Quote
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -266,16 +277,6 @@ func (h checkoutHome) gate() string {
 	line(`else`)
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
 	line(`fi`)
-	if h.holdsHome() {
-		own := `"$rha"`
-		if h.fallback != "" {
-			own = `"$ro"`
-		}
-		line(`if [ -s "$rq" ] && [ -n "$ra" ]; then { if [ -s %[1]s ]; then cat %[1]s; printf '\n\n'; fi; cat "$rq"; } > "$rq.all" && `+
-			`{ rmd=$(dirname "$ra"); rmt=; while [ ! -e "$rmd" ]; do rmt=$rmd; rmd=$(dirname "$rmd"); done; `+
-			`[ -z "$rmt" ] || { printf '%%s\n' "$rmt" > "$rha%[2]s" && mkdir -p "$(dirname "$ra")"; }; } && `+
-			`cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`, own, heldMade)
-	}
 	return b.String()
 }
 
@@ -308,8 +309,34 @@ func (h checkoutHome) holdHome(line func(string, ...any)) {
 		// one the run makes, so the person keeps it ([checkoutHome]).
 		line(`ro=%s; rm -f "$ro" && if [ -e "$rha" ]; then cp "$rha" "$ro"; elif [ -f %s ]; then while IFS= read -r rn; do `+
 			`if [ -f "$rn" ]; then cp "$rn" "$ro" || exit 1; break; fi; done < %s; fi || exit 1`,
-			q(h.own), q(h.fallback), q(h.fallback))
+			q(h.homeText), q(h.fallback), q(h.fallback))
 	}
+}
+
+// compose is the shell writing the home's instruction file from what
+// [checkoutHome.prepare] held and the launch wrote: the run's own (where h has
+// a file of them), the home's own, then the sections, through a link as the
+// home keeps it, its directory made where there is none ([heldMade]); left
+// untouched where the run adds nothing or the harness reads no home file. A
+// Copilot run composes again for each launch attempt (copilotAttempts).
+func (h checkoutHome) compose() string {
+	if !h.holdsHome() {
+		return ""
+	}
+	home := `"$rha"`
+	if h.fallback != "" {
+		home = `"$ro"`
+	}
+	has, text := `[ -s "$rq" ]`, `{ if [ -s `+home+` ]; then cat `+home+`; printf '\n\n'; fi; cat "$rq"; }`
+	if h.own != "" {
+		o := shellword.Quote(h.own)
+		has = `{ [ -s "$rq" ] || [ -s ` + o + ` ]; }`
+		text = `{ rs=; for rf in ` + o + ` ` + home + ` "$rq"; do if [ -s "$rf" ]; then printf "$rs"; cat "$rf"; rs='\n\n'; fi; done; }`
+	}
+	return fmt.Sprintf(`if %s && [ -n "$ra" ]; then %s > "$rq.all" && `+
+		`{ rmd=$(dirname "$ra"); rmt=; while [ ! -e "$rmd" ]; do rmt=$rmd; rmd=$(dirname "$rmd"); done; `+
+		`[ -z "$rmt" ] || { printf '%%s\n' "$rmt" > "$rha%s" && mkdir -p "$(dirname "$ra")"; }; } && `+
+		`cat "$rq.all" > "$ra" && rm -f "$rq.all" || exit 1; fi`+"\n", has, text, heldMade)
 }
 
 // restore is the shell marking the run ended once no firing holds the

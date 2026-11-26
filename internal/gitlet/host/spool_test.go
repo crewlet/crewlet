@@ -727,7 +727,11 @@ func TestAQueueBehindOneTokenLeavesTheRequestMemoryToEverybodyElse(t *testing.T)
 	host.SetSpools(node.Host(), host.SpoolSizes{Limit: 64 << 10, Share: 64 << 10, Request: 64 << 10, Grain: 1 << 10,
 		Places: 64, PlacesPerCredential: 16})
 	first := openFetch(t, c, "ceo", body)
-	eventually(t, "the first request's body arriving", func() bool { return host.SpoolsArriving(node.Host()) == 1 })
+	// Its head in its spool too: a body counts as arriving from its grant,
+	// and its head stays charged to the request memory until written there.
+	eventually(t, "the first request's body arriving, its head in its spool", func() bool {
+		return host.SpoolsArriving(node.Host()) == 1 && host.RequestMemoryInUse(node.Host()) == 0
+	})
 	var waiters []<-chan reply
 	for i := range 4 {
 		waiters = append(waiters, fetchAsync(t, c, "ceo", body))

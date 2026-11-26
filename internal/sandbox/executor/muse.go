@@ -62,6 +62,12 @@ func (Muse) Name() string { return MuseName }
 // 1050-second bound was answered whole (measured on 1.4.25).
 func (Muse) MCPCallCeiling() time.Duration { return 0 }
 
+// CountedAtCollection implements [collectionCounted].
+func (Muse) CountedAtCollection() string {
+	return "its stream states a run's requests once, " +
+		"on the run.usage line Muse Code prints as that run ends"
+}
+
 // Resumes says Muse Code continues a session it ran: `muse exec --session-id`
 // on an id its data directory holds resumes it (measured on 1.4.25).
 func (Muse) Resumes() bool { return true }
