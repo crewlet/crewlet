@@ -63,10 +63,6 @@ updates:
     commit-message:
       prefix: "build(deps)"
 
-  # A bump of a module internal/notehelper links (golang.org/x/net,
-  # github.com/klauspost/compress, gopkg.in/yaml.v3) changes the note helper builds the engine
-  # embeds, since a Go build carries its modules' versions; .github/workflows/dependabot-notehelper.yml rebuilds
-  # and pushes them onto the bump's branch, as the dashboard's workflow does.
   - package-ecosystem: gomod
     directory: "/"
     schedule:
