@@ -282,6 +282,10 @@ jobs:
       # the runner image, and takes about fifty seconds.
       - name: the floor Node's recipe's and the pin check's own suite
         run: scripts/node-pin_test.sh
+      # The own suite of the sherpa-onnx pin check (scripts/sherpa-pin-check.sh)
+      # (`make speech-pin-test`), against stand-in listings under file://.
+      - name: the sherpa-onnx pin check's own suite
+        run: scripts/sherpa-pin_test.sh
       # The own suite of the Playwright tree's recipe (scripts/playwright-tree.sh)
       # — `make playwright-tree-test` — for the git suite's reasons, against a
       # stand-in registry on 127.0.0.1 with every other address sent to a
