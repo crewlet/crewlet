@@ -22,12 +22,13 @@ import (
 // file past the cap whole lets a runner test certify a read no real box makes.
 // A backend's own geometry (where a path may point, teardown) is not covered.
 // fresh returns an empty box per case, built with [ReadCap] as its whole-read
-// cap; every path is under its [sandbox.Sandbox.Home].
-func Box(t *testing.T, fresh func(t *testing.T) sandbox.Sandbox) {
+// cap, and how to edit its files in place; every path is under its
+// [sandbox.Sandbox.Home].
+func Box(t *testing.T, fresh func(t *testing.T) (sandbox.Sandbox, InPlace)) {
 	t.Helper()
 	cases := []struct {
 		name string
-		fn   func(*testing.T, sandbox.Sandbox)
+		fn   func(*testing.T, sandbox.Sandbox, InPlace)
 	}{
 		{"AMissingFileIsEmptyToEveryRead", testAMissingFileIsEmptyToEveryRead},
 		{"AWholeReadReturnsTheFileByteForByte", testAWholeReadReturnsTheFileByteForByte},
@@ -49,8 +50,126 @@ func Box(t *testing.T, fresh func(t *testing.T) sandbox.Sandbox) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			c.fn(t, fresh(t))
+			box, edit := fresh(t)
+			c.fn(t, box, edit)
 		})
+	}
+	for name, fn := range map[string]func(*testing.T, sandbox.Sandbox, InPlace){
+		"AReadTellsAFileUntouchedSinceItsOpen": testAReadTellsAFileUntouchedSinceItsOpen,
+		"AReadTellsAFileGrownSinceItsOpen":     testAReadTellsAFileGrownSinceItsOpen,
+		"AReadTellsAFileCutSinceItsOpen":       testAReadTellsAFileCutSinceItsOpen,
+	} {
+		t.Run(name, func(t *testing.T) {
+			box, edit := fresh(t)
+			fn(t, box, edit)
+		})
+	}
+}
+
+// InPlace edits a box's file where it is, the same file, as a writer holding
+// it open does: Append adds to its end, Truncate cuts it to n bytes.
+type InPlace struct {
+	Append   func(t *testing.T, path string, more []byte)
+	Truncate func(t *testing.T, path string, n int64)
+}
+
+// opens is every open a read's body tells through ([sandbox.ChangeOf]), each
+// opening path for a read of its whole.
+func opens(box sandbox.Sandbox) map[string]func(ctx context.Context, path string) (io.ReadCloser, error) {
+	return map[string]func(ctx context.Context, path string) (io.ReadCloser, error){
+		"OpenWhole": func(ctx context.Context, path string) (io.ReadCloser, error) {
+			r, _, err := box.OpenWhole(ctx, path)
+			return r, err
+		},
+		"OpenFile": box.OpenFile,
+		"OpenTail": func(ctx context.Context, path string) (io.ReadCloser, error) {
+			r, _, err := box.OpenTail(ctx, path, math.MaxInt64)
+			return r, err
+		},
+		"OpenRange": func(ctx context.Context, path string) (io.ReadCloser, error) {
+			r, _, err := box.OpenRange(ctx, path, 0, math.MaxInt64)
+			return r, err
+		},
+	}
+}
+
+// changeAfter is what the body of open says of path once edit ran between the
+// open and the end of its read, the first half read before it.
+func changeAfter(t *testing.T, open func(context.Context, string) (io.ReadCloser, error), path string,
+	edit func()) sandbox.FileChange {
+	t.Helper()
+	r, err := open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() { _ = r.Close() }()
+	if _, err = io.ReadFull(r, make([]byte, 100)); err != nil {
+		t.Fatalf("reading the start of %s: %v", path, err)
+	}
+	edit()
+	if _, err = io.ReadAll(r); err != nil {
+		t.Fatalf("reading the rest of %s: %v", path, err)
+	}
+	change, err := sandbox.ChangeOf(r)
+	if err != nil {
+		t.Fatalf("ChangeOf %s: %v", path, err)
+	}
+	return change
+}
+
+// A READ TELLS A FILE UNTOUCHED SINCE ITS OPEN, on every open: what it read is
+// the file as it stood. So does one REPLACED since, a write making a new file
+// at the path, since the open still reads the one it opened.
+//
+// Mutation: tell a change on every read, or compare the path rather than the
+// open file.
+func testAReadTellsAFileUntouchedSinceItsOpen(t *testing.T, box sandbox.Sandbox, _ InPlace) {
+	path := pathIn(box, "tells.log")
+	for name, open := range opens(box) {
+		write(t, box, path, pattern(1000))
+		if got := changeAfter(t, open, path, func() {}); got != sandbox.FileUnchanged {
+			t.Errorf("%s of a file left alone tells %q, want %q", name, got, sandbox.FileUnchanged)
+		}
+		if got := changeAfter(t, open, path, func() { write(t, box, path, pattern(500)) }); got != sandbox.FileUnchanged {
+			t.Errorf("%s of a file replaced at its path tells %q, want %q: the open reads the file it opened",
+				name, got, sandbox.FileUnchanged)
+		}
+	}
+}
+
+// A READ TELLS A FILE GROWN SINCE ITS OPEN, on every open: what it read, to
+// the size the open found, is the start of a file still being written.
+//
+// Mutation: tell an append as no change, or as a change.
+func testAReadTellsAFileGrownSinceItsOpen(t *testing.T, box sandbox.Sandbox, edit InPlace) {
+	path := pathIn(box, "grows.log")
+	for name, open := range opens(box) {
+		write(t, box, path, pattern(1000))
+		if got := changeAfter(t, open, path, func() { edit.Append(t, path, []byte("more\n")) }); got != sandbox.FileAppended {
+			t.Errorf("%s of a file appended to tells %q, want %q", name, got, sandbox.FileAppended)
+		}
+	}
+}
+
+// A READ TELLS A FILE CUT SINCE ITS OPEN, on every open: cut, or cut and grown
+// again short of the size the open found, what it read may join two versions
+// of the file. A file cut and grown past that size reads as one appended to,
+// which is why whatever writes a stream anew writes a new file.
+//
+// Mutation: tell a shrink as no change; compare only the size to the open's
+// where it is larger.
+func testAReadTellsAFileCutSinceItsOpen(t *testing.T, box sandbox.Sandbox, edit InPlace) {
+	path := pathIn(box, "cut.log")
+	for name, open := range opens(box) {
+		for cut, fn := range map[string]func(){
+			"cut":                 func() { edit.Truncate(t, path, 200) },
+			"cut and grown short": func() { edit.Truncate(t, path, 0); edit.Append(t, path, pattern(700)) },
+		} {
+			write(t, box, path, pattern(1000))
+			if got := changeAfter(t, open, path, fn); got != sandbox.FileChanged {
+				t.Errorf("%s of a file %s tells %q, want %q", name, cut, got, sandbox.FileChanged)
+			}
+		}
 	}
 }
 
@@ -150,7 +269,7 @@ func readStream(t *testing.T, box sandbox.Sandbox, path string) []byte {
 // "NOT THERE YET" IS THE ORDINARY ANSWER, on every read: the runner polls for
 // markers and streams that do not exist until the job has written them, and a
 // poll is not an error.
-func testAMissingFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox) {
+func testAMissingFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "absent")
 	if got, err := box.ReadFile(t.Context(), path); err != nil || len(got) != 0 {
 		t.Errorf("ReadFile of a missing file = %q, %v; want empty", got, err)
@@ -167,7 +286,7 @@ func testAMissingFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox) {
 	}
 }
 
-func testAWholeReadReturnsTheFileByteForByte(t *testing.T, box sandbox.Sandbox) {
+func testAWholeReadReturnsTheFileByteForByte(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "report.md")
 	content := pattern(wholeReadBytes)
 	write(t, box, path, content)
@@ -183,7 +302,7 @@ func testAWholeReadReturnsTheFileByteForByte(t *testing.T, box sandbox.Sandbox) 
 // and that is what a tail reports: zero, with no data. Over HTTP a suffix range
 // on an empty file is the one unsatisfiable range, which a backend must answer
 // as an empty end rather than as a failed read.
-func testAnEmptyFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox) {
+func testAnEmptyFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "err.log")
 	write(t, box, path, nil)
 	if got, err := box.ReadFile(t.Context(), path); err != nil || len(got) != 0 {
@@ -207,7 +326,7 @@ func testAnEmptyFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox) {
 // before them. Its bytes are the file's own from the right place, its size
 // the whole file's, and a stream asked for more than the file is the whole
 // file.
-func testAStreamedTailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox) {
+func testAStreamedTailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "output")
 	content := pattern(wholeReadBytes)
 	write(t, box, path, content)
@@ -226,7 +345,7 @@ func testAStreamedTailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbo
 // THE END, AND HOW MUCH CAME BEFORE IT. A caller reading a stream's end says
 // what it did not read by the file's whole size, so a tail that answered the
 // right bytes and the wrong size would have it present the end as the whole.
-func testATailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox) {
+func testATailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "result.json")
 	content := pattern(10_000)
 	write(t, box, path, content)
@@ -256,7 +375,7 @@ func testATailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbo
 // found; an offset at or past the end is nothing with the size, which is how a
 // reader whose file shrank finds out; a missing file is nothing and 0, and a
 // negative range is refused.
-func testARangeIsTheFilesBytesFromItsOffsetAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox) {
+func testARangeIsTheFilesBytesFromItsOffsetAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	ctx := t.Context()
 	path := pathIn(box, "events.jsonl")
 	content := pattern(wholeReadBytes)
@@ -318,7 +437,7 @@ func testARangeIsTheFilesBytesFromItsOffsetAndNamesItsWholeSize(t *testing.T, bo
 // reads as a finished one; the same bytes read as a stream or from their end
 // are what a run's event log and its stderr are, and refusing those refused a
 // run for the size of its own log.
-func testAFilePastTheCapIsRefusedWholeAndReadAsAStream(t *testing.T, box sandbox.Sandbox) {
+func testAFilePastTheCapIsRefusedWholeAndReadAsAStream(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "stream.jsonl")
 	content := pattern(ReadCap + 1)
 	write(t, box, path, content)
@@ -369,7 +488,7 @@ func testAFilePastTheCapIsRefusedWholeAndReadAsAStream(t *testing.T, box sandbox
 
 // The cap is inclusive: a file of exactly it is read, so the refusal above is
 // the +1 and not an off-by-one that refuses honest output.
-func testAFileAtTheCapIsReadWhole(t *testing.T, box sandbox.Sandbox) {
+func testAFileAtTheCapIsReadWhole(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "findings.md")
 	content := pattern(ReadCap)
 	write(t, box, path, content)
@@ -387,7 +506,7 @@ func testAFileAtTheCapIsReadWhole(t *testing.T, box sandbox.Sandbox) {
 //
 // Mutations, each red: open a file past the cap; answer the cap for the size;
 // read past the size the open gave.
-func testAWholeOpenSizesTheFileAndRefusesOnePastTheCap(t *testing.T, box sandbox.Sandbox) {
+func testAWholeOpenSizesTheFileAndRefusesOnePastTheCap(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "findings.md")
 	if r, size, err := box.OpenWhole(t.Context(), path); err != nil || size != 0 || len(readAllOf(t, r)) != 0 {
 		t.Errorf("OpenWhole of a missing file = size %d, %v; want nothing and 0", size, err)
@@ -419,7 +538,7 @@ func testAWholeOpenSizesTheFileAndRefusesOnePastTheCap(t *testing.T, box sandbox
 // A reader that stops early (a decoder that found what it needed) closes
 // the stream without draining it, and the close neither fails nor hangs, from
 // whichever open the stream came.
-func testAStreamClosedEarlyIsReleased(t *testing.T, box sandbox.Sandbox) {
+func testAStreamClosedEarlyIsReleased(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "stream.jsonl")
 	content := pattern(1 << 20)
 	write(t, box, path, content)
@@ -467,7 +586,7 @@ func testAStreamClosedEarlyIsReleased(t *testing.T, box sandbox.Sandbox) {
 // Each is written whole and streamed in turn ([sandbox.Sandbox.WriteStream]),
 // a piece at a time, so a streamed write filling the file in place is caught
 // as a written one would be.
-func testARewriteIsNeverReadHalfDone(t *testing.T, box sandbox.Sandbox) {
+func testARewriteIsNeverReadHalfDone(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "github-token")
 	long := pattern(wholeReadBytes)
 	short := bytes.Repeat([]byte{0xff}, wholeReadBytes/3)
@@ -609,7 +728,7 @@ func stream(t *testing.T, box sandbox.Sandbox, path string, content io.Reader) {
 //
 // Mutation: write only the first piece a source hands over, and the file is
 // 997 bytes of the 70,000.
-func testAStreamedWriteIsReadBackByteForByte(t *testing.T, box sandbox.Sandbox) {
+func testAStreamedWriteIsReadBackByteForByte(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "session-carried")
 	content := pattern(wholeReadBytes)
 	stream(t, box, path, &pieces{rest: content, size: streamPiece})
@@ -621,7 +740,7 @@ func testAStreamedWriteIsReadBackByteForByte(t *testing.T, box sandbox.Sandbox) 
 // A SOURCE THAT YIELDS NOTHING WRITES AN EMPTY FILE, and replaces what was at
 // the path: an empty archive is the box's to refuse, never a write that left
 // the last one in place.
-func testAnEmptyStreamWritesAnEmptyFile(t *testing.T, box sandbox.Sandbox) {
+func testAnEmptyStreamWritesAnEmptyFile(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "session-carried")
 	write(t, box, path, []byte("the archive before"))
 	stream(t, box, path, strings.NewReader(""))
@@ -642,7 +761,7 @@ func testAnEmptyStreamWritesAnEmptyFile(t *testing.T, box sandbox.Sandbox) {
 //
 // Mutation: hold the write to [sandbox.MaxFileBytes], and the file is cut at
 // the cap.
-func testAStreamPastTheReadCapIsWrittenWhole(t *testing.T, box sandbox.Sandbox) {
+func testAStreamPastTheReadCapIsWrittenWhole(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "session-carried")
 	n := ReadCap + 1
 	stream(t, box, path, &patternSource{n: n})
@@ -672,7 +791,7 @@ func testAStreamPastTheReadCapIsWrittenWhole(t *testing.T, box sandbox.Sandbox) 
 // A STREAMED WRITE REPLACES THE FILE WHOLE: a shorter body over a longer one
 // leaves the shorter alone, never the longer one's end after it, as a write in
 // place that did not truncate would.
-func testAStreamReplacesTheFileWhole(t *testing.T, box sandbox.Sandbox) {
+func testAStreamReplacesTheFileWhole(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "session-carried")
 	write(t, box, path, pattern(wholeReadBytes))
 	short := bytes.Repeat([]byte{0xab}, wholeReadBytes/7)
@@ -690,7 +809,7 @@ func testAStreamReplacesTheFileWhole(t *testing.T, box sandbox.Sandbox) {
 //
 // Mutation: write the source over the file in place, and the file holds the
 // half the source yielded.
-func testAStreamThatFailsLeavesTheFileAsItWas(t *testing.T, box sandbox.Sandbox) {
+func testAStreamThatFailsLeavesTheFileAsItWas(t *testing.T, box sandbox.Sandbox, _ InPlace) {
 	path := pathIn(box, "session-carried")
 	before := []byte("the archive the box held")
 	write(t, box, path, before)

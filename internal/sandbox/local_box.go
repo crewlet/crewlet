@@ -1059,11 +1059,16 @@ func openHomeFile(l boxLayout, rel, path string) (io.ReadCloser, error) {
 	f, err := openHomeRegular(l, rel)
 	switch {
 	case absent(err):
-		return io.NopCloser(strings.NewReader("")), nil
+		return absentFile(), nil
 	case err != nil:
 		return nil, fmt.Errorf("local sandbox: open %s: %w", path, err)
 	}
-	return f, nil
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("local sandbox: stat %s: %w", path, err)
+	}
+	return hostWhole{File: f, host: hostFile{file: f, opened: info}}, nil
 }
 
 // openHomeTail is a local box's OpenTail once the path is mapped onto its
@@ -1073,7 +1078,7 @@ func openHomeTail(l boxLayout, rel, path string, n int64) (io.ReadCloser, int64,
 	f, err := openHomeRegular(l, rel)
 	switch {
 	case absent(err):
-		return io.NopCloser(strings.NewReader("")), 0, nil
+		return absentFile(), 0, nil
 	case err != nil:
 		return nil, 0, fmt.Errorf("local sandbox: open %s: %w", path, err)
 	}
@@ -1084,7 +1089,8 @@ func openHomeTail(l boxLayout, rel, path string, n int64) (io.ReadCloser, int64,
 	}
 	size := info.Size()
 	start := max(size-max(n, 0), 0)
-	return hostSection{Reader: io.NewSectionReader(f, start, size-start), Closer: f}, size, nil
+	return hostSection{Reader: io.NewSectionReader(f, start, size-start), Closer: f,
+		host: hostFile{file: f, opened: info}}, size, nil
 }
 
 // openHomeRange is a local box's OpenRange once the path is mapped onto its
@@ -1095,7 +1101,7 @@ func openHomeRange(l boxLayout, rel, path string, off, n int64) (io.ReadCloser, 
 	f, err := openHomeRegular(l, rel)
 	switch {
 	case absent(err):
-		return io.NopCloser(strings.NewReader("")), 0, nil
+		return absentFile(), 0, nil
 	case err != nil:
 		return nil, 0, fmt.Errorf("local sandbox: open %s: %w", path, err)
 	}
@@ -1105,17 +1111,9 @@ func openHomeRange(l boxLayout, rel, path string, off, n int64) (io.ReadCloser, 
 		return nil, 0, fmt.Errorf("local sandbox: stat %s: %w", path, err)
 	}
 	size := info.Size()
-	if off >= size {
-		_ = f.Close()
-		return io.NopCloser(strings.NewReader("")), size, nil
-	}
-	return hostSection{Reader: io.NewSectionReader(f, off, min(n, size-off)), Closer: f}, size, nil
-}
-
-// hostSection is a section of a file on the engine host, closed with it.
-type hostSection struct {
-	io.Reader
-	io.Closer
+	off = min(off, size)
+	return hostSection{Reader: io.NewSectionReader(f, off, min(n, size-off)), Closer: f,
+		host: hostFile{file: f, opened: info}}, size, nil
 }
 
 // readHomeTail is a local box's ReadTail once the path is mapped onto its home.
@@ -1178,7 +1176,7 @@ func openHomeWhole(l boxLayout, rel, path string, limit int) (io.ReadCloser, int
 	f, err := openHomeRegular(l, rel)
 	switch {
 	case absent(err):
-		return io.NopCloser(strings.NewReader("")), 0, nil
+		return absentFile(), 0, nil
 	case err != nil:
 		return nil, 0, fmt.Errorf("local sandbox: open %s: %w", path, err)
 	}
@@ -1191,7 +1189,8 @@ func openHomeWhole(l boxLayout, rel, path string, limit int) (io.ReadCloser, int
 		_ = f.Close()
 		return nil, 0, &FileTooLargeError{Path: path, Limit: limit, Size: size}
 	}
-	return hostSection{Reader: io.NewSectionReader(f, 0, info.Size()), Closer: f}, info.Size(), nil
+	return hostSection{Reader: io.NewSectionReader(f, 0, info.Size()), Closer: f,
+		host: hostFile{file: f, opened: info}}, info.Size(), nil
 }
 
 // writeHomeFile is a local box's WriteFile once the path is mapped onto its

@@ -822,7 +822,8 @@ type Sandbox interface {
 	// read from the one open, so a file renamed over it after cannot swap in.
 	// Past the whole-read cap it is refused as ReadFile refuses it, its
 	// [*FileTooLargeError] naming the size, and nothing stays open; missing is
-	// nothing and 0. The caller closes it.
+	// nothing and 0. Its body tells what became of the file since the open
+	// ([ChangeOf]). The caller closes it.
 	OpenWhole(ctx context.Context, path string) (io.ReadCloser, int64, error)
 
 	// OpenFile streams a file front to back, for a MACHINE STREAM decoded
@@ -830,7 +831,8 @@ type Sandbox interface {
 	// collection a line at a time. Nothing is refused for its size, since
 	// the reader holds one piece at a time and decides itself what to keep.
 	// A missing file is a reader that yields nothing, as ReadFile's empty
-	// answer is; the caller closes it.
+	// answer is; its body tells what became of the file since the open
+	// ([ChangeOf]). The caller closes it.
 	OpenFile(ctx context.Context, path string) (io.ReadCloser, error)
 
 	// ReadTail reads at most n bytes from the END of a file, with the
@@ -849,7 +851,8 @@ type Sandbox interface {
 	// OpenFile, reading and dropping the earlier bytes, would cost a check
 	// that wrote gigabytes every one of them to keep its last tens of MiB. A
 	// missing file is a reader that yields nothing and a size of 0, as the
-	// others answer; the caller closes it.
+	// others answer; its body tells what became of the file since the open
+	// ([ChangeOf]). The caller closes it.
 	OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error)
 
 	// OpenRange streams at most n bytes of a file from byte off, as the file stood
@@ -860,7 +863,8 @@ type Sandbox interface {
 	// the size, so a file that shrank says so; a missing file is nothing and a
 	// size of 0, as the others answer. It may stream fewer than n bytes; the
 	// caller reads on from where it ended. A negative off or n is refused
-	// ([ErrRangeNegative]). The caller closes it.
+	// ([ErrRangeNegative]). Its body tells what became of the file since the
+	// open ([ChangeOf]). The caller closes it.
 	OpenRange(ctx context.Context, path string, off, n int64) (io.ReadCloser, int64, error)
 
 	// Touch moves the box's last-seen stamp to now.

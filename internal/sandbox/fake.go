@@ -35,6 +35,11 @@ type FakeSandbox struct {
 	id    string
 	home  string
 	files map[string][]byte
+	// inodes is each file's identity, a new one each time a write replaces
+	// it, kept by an edit in place ([FakeSandbox.AppendInPlace]): a body asks
+	// it as a host box asks its descriptor ([ChangeOf]).
+	inodes map[string]uint64
+	inode  uint64
 	// touches is when each Touch came: see [FakeSandbox.Touches].
 	touches []time.Time
 	paused  bool
@@ -107,7 +112,7 @@ var _ Sandbox = (*FakeSandbox)(nil)
 // NewFakeSandbox mints a box with the given id. It reads files whole up to
 // [MaxFileBytes], as every real box does.
 func NewFakeSandbox(id string) *FakeSandbox {
-	return &FakeSandbox{id: id, home: DefaultHome, files: map[string][]byte{}}
+	return &FakeSandbox{id: id, home: DefaultHome, files: map[string][]byte{}, inodes: map[string]uint64{}}
 }
 
 // EngineHost is the name the engine host answers to inside the box, as a
@@ -286,7 +291,7 @@ func (s *FakeSandbox) WriteStream(ctx context.Context, p string, content io.Read
 	if s.closed {
 		return errors.New("sandbox: box is closed")
 	}
-	s.files[path.Clean(p)] = got
+	s.replaceLocked(p, got)
 	return nil
 }
 
@@ -315,7 +320,7 @@ func (s *FakeSandbox) OpenWhole(ctx context.Context, p string) (io.ReadCloser, i
 	if limit := s.ReadCap(); size > int64(limit) {
 		return nil, 0, &FileTooLargeError{Path: p, Limit: limit, Size: size}
 	}
-	return io.NopCloser(s.streaming(p, content)), size, nil
+	return s.body(p, content, content), size, nil
 }
 
 // OpenFile streams the file whole, as every real backend does: a machine
@@ -325,7 +330,7 @@ func (s *FakeSandbox) OpenFile(ctx context.Context, p string) (io.ReadCloser, er
 	if err != nil {
 		return nil, err
 	}
-	return io.NopCloser(s.streaming(p, content)), nil
+	return s.body(p, content, content), nil
 }
 
 // ReadTail answers the file's last n bytes and its whole size.
@@ -349,7 +354,7 @@ func (s *FakeSandbox) OpenTail(ctx context.Context, p string, n int64) (io.ReadC
 	}
 	size := int64(len(content))
 	start := max(size-max(n, 0), 0)
-	return io.NopCloser(s.streaming(p, content[start:])), size, nil
+	return s.body(p, content, content[start:]), size, nil
 }
 
 // OpenRange streams at most n bytes of the file from off, with its whole size:
@@ -364,7 +369,16 @@ func (s *FakeSandbox) OpenRange(ctx context.Context, p string, off, n int64) (io
 	}
 	size := int64(len(content))
 	from := min(off, size)
-	return io.NopCloser(s.streaming(p, content[from:from+min(n, size-from)])), size, nil
+	return s.body(p, content, content[from:from+min(n, size-from)]), size, nil
+}
+
+// body is the read of part of a file whose whole the open found, telling what
+// became of the file since ([ChangeOf]).
+func (s *FakeSandbox) body(p string, whole, part []byte) io.ReadCloser {
+	s.mu.Lock()
+	inode := s.inodes[path.Clean(p)]
+	s.mu.Unlock()
+	return fakeBody{Reader: s.streaming(p, part), box: s, path: path.Clean(p), inode: inode, opened: whole}
 }
 
 // Delivered is how many bytes of its files the box's reads have handed out —
@@ -516,11 +530,34 @@ func (s *FakeSandbox) Files() []string {
 	return slices.Sorted(maps.Keys(s.files))
 }
 
-// Put seeds a file, standing in for something the job wrote.
+// Put seeds a file, standing in for something the job wrote: a new file at
+// the path, as a write that replaces one is.
 func (s *FakeSandbox) Put(p, content string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.files[path.Clean(p)] = []byte(content)
+	s.replaceLocked(p, []byte(content))
+}
+
+// replaceLocked puts a new file at p. s.mu is held.
+func (s *FakeSandbox) replaceLocked(p string, content []byte) {
+	s.inode++
+	s.files[path.Clean(p)], s.inodes[path.Clean(p)] = content, s.inode
+}
+
+// AppendInPlace adds more to the end of the file at p, the same file, as a
+// writer still holding it open does.
+func (s *FakeSandbox) AppendInPlace(p string, more []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.files[path.Clean(p)] = append(slices.Clone(s.files[path.Clean(p)]), more...)
+}
+
+// TruncateInPlace cuts the file at p to n bytes, the same file, as a shell's
+// `>` into it does.
+func (s *FakeSandbox) TruncateInPlace(p string, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.files[path.Clean(p)] = slices.Clone(s.files[path.Clean(p)][:min(n, len(s.files[path.Clean(p)]))])
 }
 
 // FakeProvider mints [FakeSandbox]es and remembers them, so Connect returns

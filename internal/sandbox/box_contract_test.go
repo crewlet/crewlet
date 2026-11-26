@@ -25,15 +25,20 @@ import (
 // [TestEveryBoxReadsWholeUpToMaxFileBytes]'s.
 func TestTheFakeKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
-	sandboxtest.Box(t, func(*testing.T) sandbox.Sandbox {
-		return sandbox.NewFakeSandbox("box-1").CapReads(sandboxtest.ReadCap)
+	sandboxtest.Box(t, func(*testing.T) (sandbox.Sandbox, sandboxtest.InPlace) {
+		box := sandbox.NewFakeSandbox("box-1")
+		return box.CapReads(sandboxtest.ReadCap), sandboxtest.InPlace{
+			Append:   func(_ *testing.T, path string, more []byte) { box.AppendInPlace(path, more) },
+			Truncate: func(_ *testing.T, path string, n int64) { box.TruncateInPlace(path, int(n)) },
+		}
 	})
 }
 
 func TestADirectBoxKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
-	sandboxtest.Box(t, func(t *testing.T) sandbox.Sandbox {
-		return sandbox.CapReads(directBox(t), sandboxtest.ReadCap)
+	sandboxtest.Box(t, func(t *testing.T) (sandbox.Sandbox, sandboxtest.InPlace) {
+		box := directBox(t)
+		return sandbox.CapReads(box, sandboxtest.ReadCap), hostEdits(box.Home(), box.Home())
 	})
 }
 
@@ -41,9 +46,33 @@ func TestADirectBoxKeepsTheFileContract(t *testing.T) {
 // contract is certified there; what the container itself does is local_test's.
 func TestAContainerBoxKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
-	sandboxtest.Box(t, func(t *testing.T) sandbox.Sandbox {
-		return sandbox.CapReads(containerBox(t), sandboxtest.ReadCap)
+	sandboxtest.Box(t, func(t *testing.T) (sandbox.Sandbox, sandboxtest.InPlace) {
+		box, home := sandbox.NewContainerBoxAt(t.TempDir())
+		return sandbox.CapReads(box, sandboxtest.ReadCap), hostEdits(box.Home(), home)
 	})
+}
+
+// hostEdits edits a local box's files in place on the engine host, a box path
+// under boxHome being the host path under hostHome.
+func hostEdits(boxHome, hostHome string) sandboxtest.InPlace {
+	at := func(path string) string { return hostHome + strings.TrimPrefix(path, boxHome) }
+	return sandboxtest.InPlace{
+		Append: func(t *testing.T, path string, more []byte) {
+			f, err := os.OpenFile(at(path), os.O_WRONLY|os.O_APPEND, 0)
+			if err == nil {
+				_, err = f.Write(more)
+				err = errors.Join(err, f.Close())
+			}
+			if err != nil {
+				t.Fatalf("appending to %s: %v", path, err)
+			}
+		},
+		Truncate: func(t *testing.T, path string, n int64) {
+			if err := os.Truncate(at(path), n); err != nil {
+				t.Fatalf("truncating %s: %v", path, err)
+			}
+		},
+	}
 }
 
 // A LOCAL BOX'S RANGE ENDS AT THE SIZE ITS OPEN ANSWERED, though the file grows
