@@ -275,9 +275,9 @@ func (s *unansweredListing) listed() (began, cut time.Time) {
 	return s.began, s.cut
 }
 
-// A KEEP'S READS LEAVE ITS UPLOAD ITS WHOLE PACE. Its two reads of the
+// A KEEP'S READS LEAVE ITS UPLOAD ITS WHOLE PACE. Its reads of the
 // coordination store before the upload (the turn's operations minted, the
-// seat's runs listed) each have a room of their own beside the upload's pace in
+// seat's runs listed, a save's amend) each have a room of their own beside the upload's pace in
 // the keep's budget, so a store slow or silent on them costs the upload
 // nothing. A listing that never answers is cut at its room and decides nothing:
 // the upload is handed at least its pace at the slowest and its record's

@@ -467,33 +467,51 @@ func TestACarryTheLogFindsGoneIsRecordedAgainFresh(t *testing.T) {
 	})
 }
 
-// A MEDIA RECORD IS REFUSED ONCE A READER FALLS BELOW: a node that joined
-// after the take and reads no capture naming media would retain it, or ask it
-// again short, and a take is not made again; so the policy is read again
-// before the record's first send, and the capture refused, saying why, with
-// nothing sent.
+// A MEDIA RECORD IS REFUSED ONCE A READER FALLS BELOW, AND ONLY THEN: a node
+// that joined after the take and reads no capture naming media would retain it,
+// or ask it again short, and a take is not made again; so the policy is read
+// again before the record's first send, and a definite answer below refuses the
+// capture, saying why, with nothing sent. An unknown answer (the readers not
+// read in their room) is no evidence of such a node, and the capture lands on
+// its take's answer rather than lose media already uploaded.
 //
-// Mutation: read the policy at the take alone, and the record is sent.
+// Mutation: read the policy at the take alone, or refuse an unknown answer,
+// and a case goes red.
 func TestAMediaRecordIsRefusedOnceAReaderFallsBelow(t *testing.T) {
 	t.Parallel()
-	inBubble(t, func(t *testing.T) {
-		whole, body := mediaBody(t, "one", mediaPart+strings.Repeat("JVBERi0xLjQK", 6<<10), "two")
-		rig, writes, keep := mediaRig(t, whole, body)
-		spooled, taken := finalTake(t, rig, rig.launchKept(t, "t1"), rig.runner)
-		if spooled == nil || len(spooled.media) != 1 {
-			t.Fatalf("the take came to %+v, want its member spooled apart", taken)
-		}
-		keep.mu.Lock()
-		keep.policy.MediaApart = false
-		keep.mu.Unlock()
-		kept := rig.coordinator.keepCapture(t.Context(), spooled)
-		if kept == nil || !strings.Contains(kept.NotKept, "no longer reads a capture naming media") {
-			t.Errorf("the keep came to %+v, want the media record refused", kept)
-		}
-		if captured := writes.captured(); len(captured) != 0 {
-			t.Errorf("sent %d records, want none", len(captured))
-		}
-	})
+	for name, tc := range map[string]struct {
+		unread string
+		lands  bool
+	}{
+		"a reader below the version":   {},
+		"readers unread in their room": {unread: "the position register could not be read", lands: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				whole, body := mediaBody(t, "one", mediaPart+strings.Repeat("JVBERi0xLjQK", 6<<10), "two")
+				rig, writes, keep := mediaRig(t, whole, body)
+				spooled, taken := finalTake(t, rig, rig.launchKept(t, "t1"), rig.runner)
+				if spooled == nil || len(spooled.media) != 1 {
+					t.Fatalf("the take came to %+v, want its member spooled apart", taken)
+				}
+				keep.mu.Lock()
+				keep.policy.MediaApart, keep.policy.MediaUnread = false, tc.unread
+				keep.mu.Unlock()
+				kept := rig.coordinator.keepCapture(t.Context(), spooled)
+				captured := writes.captured()
+				switch {
+				case tc.lands && (kept == nil || kept.NotKept != "" || len(captured) != 1):
+					t.Errorf("the keep came to %+v after %d records, want the capture landed on its take's "+
+						"answer", kept, len(captured))
+				case !tc.lands && (kept == nil || !strings.Contains(kept.NotKept,
+					"no longer reads a capture naming media") || len(captured) != 0):
+					t.Errorf("the keep came to %+v after %d records, want the media record refused unsent", kept,
+						len(captured))
+				}
+			})
+		})
+	}
 }
 
 // A STAMP A NEWER BUILD EXTENDED IS NOT ASKED AGAIN SHORT: a capture stamped

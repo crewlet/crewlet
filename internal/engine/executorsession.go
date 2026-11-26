@@ -214,7 +214,7 @@ func (k executorKeep) Policy(ctx context.Context) (sandbox.SessionPolicy, error)
 	if err != nil || !policy.Keep {
 		return policy, err
 	}
-	policy.MediaApart = k.engine.executorMediaRead(ctx)
+	policy.MediaApart, policy.MediaUnread = k.engine.executorMediaRead(ctx)
 	return policy, nil
 }
 
@@ -229,7 +229,7 @@ func (k executorKeep) Policy(ctx context.Context) (sandbox.SessionPolicy, error)
 // applier, never drops it (.claude/rules/compatibility.md), so its estate names
 // none of the media until it upgrades, and its collector deletes nothing
 // meanwhile (ADR-0073's amendment, "Mid-upgrade").
-func (e *Engine) executorMediaRead(ctx context.Context) bool {
+func (e *Engine) executorMediaRead(ctx context.Context) (apart bool, unread string) {
 	apart, why := e.executorMediaReaders(ctx)
 	if why == "" {
 		e.mediaInline.Store(nil)
@@ -239,7 +239,7 @@ func (e *Engine) executorMediaRead(ctx context.Context) bool {
 			"large payloads inline until every node applying the executor log, and every node that may "+
 			"settle a run's record, is known to read a capture naming them")
 	}
-	return apart
+	return apart, why
 }
 
 // executorMediaReaders is [Engine.executorMediaRead]'s answer, and why it is

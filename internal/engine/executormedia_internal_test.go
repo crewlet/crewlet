@@ -120,7 +120,7 @@ func TestReadersNotReadWithinTheirRoomKeepMediaInline(t *testing.T) {
 			Fleet: silentPositions{&rosterFleet{memoryFleet: coordmemory.NewFleet()}}, Coord: coordmemory.New()}}
 		for range 2 {
 			began := time.Now()
-			if e.executorMediaRead(t.Context()) {
+			if apart, _ := e.executorMediaRead(t.Context()); apart {
 				t.Error("media kept apart past the readers' room, want inline")
 			}
 			if took := time.Since(began); took != sandbox.MediaReadersRoom {

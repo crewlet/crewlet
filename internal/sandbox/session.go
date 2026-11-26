@@ -247,6 +247,12 @@ type SessionPolicy struct {
 	// read, a rolling upgrade's takes keep them inline, as the archive always
 	// held them.
 	MediaApart bool
+
+	// MediaUnread is why the nodes could not be read, "" where they were and
+	// MediaApart is their definite answer. Unknown keeps a take's media
+	// inline, but never refuses a capture whose take already read them apart
+	// ([Coordinator.mediaUnread]).
+	MediaUnread string
 }
 
 // CaptureStampVersion is the shape of a capture's stamp ([SessionCapture]) this
@@ -2546,10 +2552,10 @@ func (c *Coordinator) dropSpool(ctx context.Context, spooled *spooledCapture, lo
 // NAMES before every attempt at its upload ([Coordinator.uploadSpool]) and its
 // record, each record's cut at its window's end ([Coordinator.recordCapture]):
 // a keep the lease no longer covers may be one a peer has already settled
-// refused ([Coordinator.fenceKeep]). ITS TWO READS BEFORE THE UPLOAD each have a room
-// ([keepReadRoom]) beside the upload's pace, so a session at its bound gets
-// that pace whole ([takeLife]); a mint past it refuses the capture, a listing
-// past it decides nothing ([Coordinator.overBudget]).
+// refused ([Coordinator.fenceKeep]). ITS THREE READS BEFORE THE UPLOAD (the
+// mint, the carry read with the listing, a save's amend) each have a room
+// ([keepReadRoom]) beside the upload's pace ([takeLife]); a mint past it
+// refuses the capture, a listing past it decides nothing.
 func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) *SessionKept {
 	defer spooled.remove()
 	if spooled.standby && !c.takeOver(ctx, spooled) {
@@ -3342,20 +3348,25 @@ func (c *Coordinator) recordCapture(ctx context.Context, run PendingRun, stamp S
 }
 
 // mediaUnread is why a capture naming media is not recorded, "" where it may
-// be or names none: every node that applies the executor log or settles its
-// run's rows must still read one ([SessionPolicy.MediaApart]), asked again
-// before its record, since a node below that joined after the take would
-// retain it or ask it again short. A take is not made again, so the capture
-// is refused, and the next take keeps its media inline.
+// be or names none: asked again before its record, since a node below the
+// version that joined after the take would retain it or ask it again short.
+// ONLY A DEFINITE ANSWER REFUSES (a counted node below): an unknown one (the
+// room ran out, the store unread) is no evidence of such a joiner, whose
+// applier defers the record anyway, and refusing it would throw away media
+// already uploaded on a merely slow store; it goes on, on the take's answer.
 func (c *Coordinator) mediaUnread(ctx context.Context, stamp SessionCapture) string {
 	if len(stamp.Media) == 0 {
 		return ""
 	}
 	policy, err := c.keep.Policy(ctx)
+	unknown := policy.MediaUnread
+	if err != nil {
+		unknown = err.Error()
+	}
 	switch {
-	case err != nil:
-		return fmt.Sprintf("whether every node still reads a capture naming media could not be read again "+
-			"before its record (%v), so the capture, its media kept apart, was not recorded", err)
+	case unknown != "":
+		log.InfoContext(ctx, "executor_media_readers_unread", "turn_id", stamp.Launch, "why", unknown,
+			"detail", "the capture is recorded on its take's answer that every node reads its media")
 	case !policy.MediaApart:
 		return "a node that applies the executor log or settles its runs no longer reads a capture naming " +
 			"media, so the capture, its media kept apart, was not recorded; the next take keeps them inline"
