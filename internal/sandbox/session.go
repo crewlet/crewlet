@@ -2083,8 +2083,8 @@ func captureStamp(row PendingRun, launch string, place int64, final, interrupted
 		RunBegan: taken.Archive.RunStart.Began, RunAfter: taken.Archive.RunStart.After,
 		RunUnshadowed: taken.Archive.Unshadowed, Trimmed: taken.Archive.Trim.Trimmed(), Home: box.Home(),
 		Workspace: path.Join(box.Home(), WorkspaceSubdir), SeatBudget: policy.SeatBudget,
-		// AT RESERVATION, before the archive's size is known: the take's
-		// budgets and its MaxBytes are its bound's from its start.
+		// THE BOUND THE TAKE RAN UNDER (its MaxBytes and its take's budget,
+		// takeContext), so its life is counted at that bound, whatever its size.
 		KeptBound: policy.kept(),
 	}
 }
