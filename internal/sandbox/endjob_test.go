@@ -493,7 +493,7 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	t.Parallel()
 	uncapped := PendingRun{TurnID: "t1"}
 	held := SessionTakeBudget + 2*sessionRecordBudget + coord.MaxValueReadCrossing + MediaReadersRoom +
-		3*discardGrace + boxReadChanges*coord.MaxValueCrossing
+		3*discardGrace + boxReadChanges*coord.MaxValueCrossing + FailureReadWait
 	if got, want := BoxReadBudget(uncapped, BoxReadCollect, ThreadTraits{}),
 		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
 		t.Errorf("a collection's read of a turn with no cap waits %v, want the take alone, %v", got, want)
@@ -527,8 +527,8 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	}
 
 	// THE HOST'S READ, with its job's end, the cap's record (its grace and the
-	// slowest crossing, which this host's store takes), its own poll, the
-	// take's read of its row ([Coordinator.placingRow]) and of who reads its
+	// slowest crossing, which this host's store takes), its own poll and its
+	// read of the error stream ([FailureReadWait]), the take's read of its row ([Coordinator.placingRow]) and of who reads its
 	// media ([Coordinator.placingPolicy]) all spent at their bounds, still
 	// hands its take the take's whole budget.
 	inBubble(t, func(t *testing.T) {
@@ -537,7 +537,7 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 				readCrossing: coord.MaxValueReadCrossing, given: map[string][]handed{}}
 		})
 		share := time.Duration(float64(BoxReadBudget(passed, BoxReadCollect, ThreadTraits{})) * BoxReadAnswerShare)
-		spent := JobEndBudget + discardGrace + coord.MaxValueCrossing +
+		spent := JobEndBudget + discardGrace + coord.MaxValueCrossing + FailureReadWait +
 			time.Duration(float64(pollBound)*BoxReadAnswerShare) +
 			RowReadBudget(rig.coordinator.pending, rig.coordinator.recordBudget) + MediaReadersRoom
 		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(share-spent))

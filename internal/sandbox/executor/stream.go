@@ -430,29 +430,10 @@ func (t *transcriptLines) take(end bool) []string {
 	return lines
 }
 
-// streamEnd is the end of a stream a person or model can be shown: at most
-// keep bytes of WHOLE lines ([sandbox.KeepEnd]) from tail's end, redacted
-// first, and how many stream bytes came before it. tail is the stream's end
-// read [redact.LookBack] past keep, or the whole stream.
-//
-// SHOWN ONLY WHERE THE CONTEXT SETTLES IT ([settledEnd]): bounded by redacted
-// bytes alone, the end could reach back into the context when redaction shrank
-// what followed, and be redacted without what decides it. A read opened inside
-// a line running to the end has no line it opens to show, so it shows nothing,
-// and every byte is counted.
-func streamEnd(tail sandbox.FileTail, keep int) (string, int64) {
-	ctx := 0
-	if tail.Before() > 0 {
-		ctx = redact.LookBack
-	}
-	kept, at := settledEnd(string(tail.Data), ctx, keep)
-	return kept, tail.Before() + int64(at)
-}
-
 // settledEnd is the redacted end of text that its first ctx bytes settle
 // ([redact.SettledEnd]), at most keep bytes of it as [sandbox.KeepEnd] keeps
 // them, and how much came before it: in text's bytes up to the settled start,
-// in redacted bytes past it, as [failureDetail] counts what it cuts.
+// in redacted bytes past it.
 func settledEnd(text string, ctx, keep int) (string, int) {
 	end, at := redact.SettledEnd(text, ctx)
 	if end == "" {

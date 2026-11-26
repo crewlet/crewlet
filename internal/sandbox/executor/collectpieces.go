@@ -8,7 +8,6 @@ import (
 	"math"
 
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -129,16 +128,16 @@ func openStream(ctx context.Context, box sandbox.Sandbox, path string) (*piece, 
 // collectionPieces is every piece one collection reads, opened before its
 // weight is taken: at most ten opens a collection waiting for the budget holds.
 type collectionPieces struct {
-	stream, result, record, base, errEnd, exitCode, ended, findings *piece
+	stream, result, record, base, stderr, exitCode, ended, findings *piece
 	memory                                                          [2]*piece
-	// errWant is the error stream's end asked for, of which errEnd holds
-	// at most that much.
-	errWant int64
+	// keep is how much of the error stream's redacted end its read keeps
+	// ([Runner.failureBound]).
+	keep int
 }
 
 // all is every piece, absent ones nil.
 func (c *collectionPieces) all() []*piece {
-	return []*piece{c.stream, c.result, c.record, c.base, c.errEnd, c.exitCode, c.ended, c.findings,
+	return []*piece{c.stream, c.result, c.record, c.base, c.stderr, c.exitCode, c.ended, c.findings,
 		c.memory[0], c.memory[1]}
 }
 
@@ -149,17 +148,25 @@ func (c *collectionPieces) close() {
 	}
 }
 
-// weight is what the collection holds of the node's answer budget
-// ([collectionWeight]) for what its opens hold: the error stream's end only.
+// weight is what the collection holds of the node's answer budget: its pieces
+// at [collectionWeight], and beside them the error stream's read
+// ([stderrHeld]), which holds no piece whole.
 func (c *collectionPieces) weight() int64 {
 	var sizes int64
 	for _, p := range c.all() {
-		sizes += p.weight()
+		if p != c.stderr {
+			sizes += p.weight()
+		}
 	}
-	if c.errEnd != nil {
-		sizes -= c.errEnd.weight() - min(c.errEnd.weight(), c.errWant)
-	}
-	return collectionWeight(sizes)
+	return min(collectionWeight(sizes)+stderrHeld(c.stderr.weight(), c.keep), sandbox.BoxReadHeldBytes)
+}
+
+// stderrHeld is what the read of an error stream of size bytes holds
+// ([Runner.readFailureTail]): one redaction stream at its stages' windows
+// ([streamHeldBytes]) and the keep+1 bytes of its end the ring keeps, or, for
+// a stream short enough to be redacted whole, [collectHeldMultiple] times it.
+func stderrHeld(size int64, keep int) int64 {
+	return min(collectHeldMultiple*size, streamHeldBytes+int64(keep)+1)
 }
 
 // openCollection opens every piece a collection of the run in box reads, in
@@ -167,7 +174,7 @@ func (c *collectionPieces) weight() int64 {
 func (r *Runner) openCollection(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	out Output) (_ *collectionPieces, err error) {
 
-	c := &collectionPieces{errWant: int64(r.failureBound + redact.LookBack)}
+	c := &collectionPieces{keep: r.failureBound}
 	defer func() {
 		if err != nil {
 			c.close()
@@ -205,31 +212,18 @@ func (r *Runner) openCollection(ctx context.Context, box sandbox.Sandbox, paths 
 			return nil, err
 		}
 	}
-	body, size, err := box.OpenTail(ctx, paths.Err(), c.errWant)
+	// FROM ITS FIRST BYTE, as it stood at the open: a failure shows the end of
+	// the whole stream's redaction ([Runner.readFailureTail]).
+	body, size, err := box.OpenRange(ctx, paths.Err(), 0, math.MaxInt64)
 	if refusal := notRegularPiece(err, paths.Err(), "the error stream"); refusal != "" {
-		c.errEnd = &piece{path: paths.Err(), what: "the error stream", refusal: refusal}
+		c.stderr = &piece{path: paths.Err(), what: "the error stream", refusal: refusal}
 		return c, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("executor: reading the error stream: %w", err)
 	}
-	c.errEnd = &piece{path: paths.Err(), what: "the error stream", body: body, size: size}
+	c.stderr = &piece{path: paths.Err(), what: "the error stream", body: body, size: size}
 	return c, nil
-}
-
-// errTail reads the error stream's end the collection opened: at most what it
-// asked for, with the stream's whole size at the open, or the refusal.
-func (c *collectionPieces) errTail() (sandbox.FileTail, string, error) {
-	p := c.errEnd
-	if p.refusal != "" || p.body == nil {
-		return sandbox.FileTail{}, p.refusal, nil
-	}
-	defer p.close()
-	data, err := io.ReadAll(io.LimitReader(p.body, c.errWant))
-	if err != nil {
-		return sandbox.FileTail{}, "", fmt.Errorf("executor: reading the error stream: %w", err)
-	}
-	return sandbox.FileTail{Data: data, Size: max(p.size, int64(len(data)))}, "", nil
 }
 
 // holdCollection takes the weight of c from answers for a collection: in a

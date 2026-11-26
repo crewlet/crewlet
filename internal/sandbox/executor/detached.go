@@ -449,8 +449,8 @@ type Pinned struct{ Name, Value string }
 type Runner struct {
 	harness Harness
 
-	// failureBound is how much of a run's error stream, from its end, a
-	// collection reads, and the most a composed failure may be:
+	// failureBound is how much of the end of a run's error stream's
+	// redaction a collection keeps, and the most a composed failure may be:
 	// [sandbox.MaxFailureBytes] in every runner [New] builds. The failure is
 	// what the coordinator condenses, so it is held to what one condensation
 	// takes beside the coordinator's prefix; from the end, because a process's
@@ -1089,8 +1089,8 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 }
 
 // Collect reads the finished job's result out of the box. The event stream is
-// decoded a line at a time ([eachLine]) and the error stream read from its end
-// ([Runner.failureBound]), so neither is refused for its size. A piece read
+// decoded a line at a time ([eachLine]) and the error stream redacted from its
+// start, its end kept ([Runner.readFailureTail]), so neither is refused for its size. A piece read
 // whole (report, question, result line, exit code) past [sandbox.MaxFileBytes],
 // or any piece whose path is not a regular file ([sandbox.ErrNotRegularFile],
 // which a retry would read again), degrades only itself: described, the run
@@ -1287,31 +1287,20 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	}
 
 	// The transcript is the observability surface of an agent with no
-	// telemetry: the parser's from streamed events, else the error stream,
-	// read once and reused below for the failure detail.
-	errTail, refusal, err := pieces.errTail()
-	if err != nil {
-		return sandbox.Result{}, err
-	}
-	if refusal != "" {
+	// telemetry: the parser's from streamed events, else the error stream's
+	// end, read only where it is shown, and once for the failure detail too.
+	if refusal := pieces.stderr.refusal; refusal != "" {
 		refused = append(refused, refusal)
 	}
-	shown, unread := streamEnd(errTail, r.failureBound)
-	stderr := strings.TrimSpace(shown)
-	// NOTHING OF ITS END SHOWN ([settledEnd]) but blank lines, the stream is
-	// said in the engine's own words, which the failure keeps whole.
-	continued := ""
-	if stderr == "" && unread > 0 {
-		continued = continuedNote(errTail.Size, shown != "")
-	}
-	switch {
-	case result.Transcript != "":
-	case stderr != "" && unread > 0:
-		result.Transcript = unreadNote(unread, false) + "\n" + stderr
-	case stderr != "":
-		result.Transcript = stderr
-	default:
-		result.Transcript = continued
+	stderrTail := sync.OnceValues(func() (failureTail, error) {
+		return r.readFailureTail(pieces.stderr, r.failureBound)
+	})
+	if result.Transcript == "" {
+		tail, tailErr := stderrTail()
+		if tailErr != nil {
+			return sandbox.Result{}, tailErr
+		}
+		result.Transcript = tail.transcript()
 	}
 
 	codeText, refusal, err := pieces.exitCode.text()
@@ -1388,7 +1377,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// produced nothing at all, the exit status, the harness's error and the
 	// error stream.
 	var said []string
-	errStream := ""
+	errStream, unread := "", int64(0)
 	switch {
 	case findings != "":
 		// The report's refs before the message's, by one rule over both
@@ -1412,8 +1401,12 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		if crashed && result.JobEnd == "" {
 			said = append(said, "the harness exited with status "+code)
 		}
-		said = append(said, result.Error, continued)
-		errStream = stderr
+		tail, tailErr := stderrTail()
+		if tailErr != nil {
+			return sandbox.Result{}, tailErr
+		}
+		said = append(said, result.Error, tail.note())
+		errStream, unread = strings.TrimSpace(tail.shown), tail.before
 	default:
 		said = append(said, result.Error)
 	}
@@ -1721,21 +1714,9 @@ func unreadNote(unread int64, none bool) string {
 		return fmt.Sprintf("(the error stream, %s, is not shown: the engine's own account of the "+
 			"run fills what one condensation can take)", humanSize(unread))
 	}
-	return fmt.Sprintf("(the error stream's first %s were not read: a run's failure is read from "+
-		"its end, as much of it as one condensation can take beside the engine's own account)",
+	return fmt.Sprintf("(the error stream's first %s are not shown: a run's failure shows the end of "+
+		"its redaction, as much of it as one condensation can take beside the engine's own account)",
 		humanSize(unread))
-}
-
-// continuedNote is what stands for an error stream of size bytes of whose end
-// nothing is shown: the end, as read, continues what was written before the
-// read, or every line it opens is blank.
-func continuedNote(size int64, blank bool) string {
-	why := "continues what was written before it"
-	if blank {
-		why = "opens only blank lines"
-	}
-	return fmt.Sprintf("(the error stream, %s, is not shown: the end a run's failure reads of it %s)",
-		humanSize(size), why)
 }
 
 // decodeStream reads the event stream a collection opened through a fresh

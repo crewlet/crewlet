@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -38,32 +37,40 @@ func collectedBox(findings, errBytes int) (*sandbox.FakeSandbox, map[string]int)
 	return b, sizes
 }
 
-// A COLLECTION WEIGHS WHAT ITS OPENS HOLD: five times every piece it reads,
-// the error stream's end only as far as it asks for it, at least the fixed
-// per-read buffers and at most what one collection can hold.
+// A COLLECTION WEIGHS WHAT ITS OPENS HOLD: five times every piece it reads
+// but the error stream, at least the fixed per-read buffers, and beside them
+// the error stream's read, one redaction stream and its end's ring, or five
+// times a stream short enough to be redacted whole; at most what one
+// collection can hold.
 //
 // Mutations, each red: leave a piece out of the weight; count the error stream
-// whole; drop the multiple, the floor or the cap.
+// among the pieces; leave its read's stream or ring out; drop the multiple,
+// the floor or the cap.
 func TestACollectionWeighsWhatItsOpensHold(t *testing.T) {
 	t.Parallel()
 	r := NewClaudeCode()
-	errWant := r.failureBound + redact.LookBack
-	b, sizes := collectedBox(3<<20, errWant*4)
-	p := PathsFor(b)
-	c, err := r.openCollection(t.Context(), b, p, r.harness.Output(p))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.close()
-	var want int64
-	for path, size := range sizes {
-		if path == p.Err() {
-			size = errWant
+	for _, errBytes := range []int{1 << 10, 64 << 20} {
+		b, sizes := collectedBox(3<<20, errBytes)
+		p := PathsFor(b)
+		c, err := r.openCollection(t.Context(), b, p, r.harness.Output(p))
+		if err != nil {
+			t.Fatal(err)
 		}
-		want += int64(size)
+		var want int64
+		for path, size := range sizes {
+			if path != p.Err() {
+				want += int64(size)
+			}
+		}
+		read := min(collectHeldMultiple*int64(errBytes), streamHeldBytes+int64(r.failureBound)+1)
+		if got := c.weight(); got != collectHeldMultiple*want+read {
+			t.Errorf("with an error stream of %d bytes the collection weighs %d, want five times the %d bytes "+
+				"its other pieces hold and the %d its read of the stream holds", errBytes, got, want, read)
+		}
+		c.close()
 	}
-	if got := c.weight(); got != collectHeldMultiple*want {
-		t.Errorf("the collection weighs %d, want five times the %d bytes its pieces hold", got, want)
+	if got, want := stderrHeld(64<<20, 2<<20), int64(streamHeldBytes+2<<20+1); got != want {
+		t.Errorf("a long error stream's read weighs %d, want one redaction stream and its ring, %d", got, want)
 	}
 	for _, tc := range []struct{ sizes, want int64 }{
 		{0, baseTierReadBytes},

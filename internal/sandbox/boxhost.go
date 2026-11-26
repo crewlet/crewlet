@@ -138,21 +138,21 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 
 // BoxReadBudget is how long a node waits for a box's host to make a read of
 // run's box ([BoxReader]) before taking it for a host that did not answer, by
-// what the read may do there: [pollBound], plus the take of the job's harness
-// session ([SessionTakeBudget]) with its reads of the row ([captureReadBudget])
-// and of who reads its media ([MediaReadersRoom]), its reservation's reason
+// what the read may do there: [pollBound], the read of the error stream a
+// failure shows ([FailureReadWait]), the take of the job's harness session
+// ([SessionTakeBudget]) with its reads of the row ([captureReadBudget]) and of
+// who reads its media ([MediaReadersRoom]), its reservation's reason
 // ([sessionRecordBudget]) and graces, each change of the row at
-// coord.MaxValueCrossing, the job's end ([JobEndBudget]) for every collection
-// of a turn with a cap and for a stop or loss, the main-thread read
+// coord.MaxValueCrossing, the job's end ([JobEndBudget]) for every collection of
+// a turn with a cap and for a stop or loss, the main-thread read
 // ([MainThreadReadWait]) with a hook's serve's verdict ([hookVerdictWait]), and
-// the newest summary's upload a runner reads ([summaryUploadRoom]), all at the
-// host's share ([BoxReadRequest.AnswerBudget]): a slow host is not a stopped
-// one. Only a node asking another node's host waits on it ("Box read budget").
+// the newest summary's upload ([summaryUploadRoom]), all at the host's share
+// ([BoxReadRequest.AnswerBudget]); only a node asking another's waits ("Box read budget").
 func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Duration {
 	// The kept bound's take on purpose: an asker cannot know the bound of the
 	// take its read makes.
 	held := SessionTakeBudget + captureReadBudget + MediaReadersRoom + sessionRecordBudget + 3*discardGrace +
-		boxReadChanges*coord.MaxValueCrossing
+		boxReadChanges*coord.MaxValueCrossing + FailureReadWait
 	if read.mayEnd(run) {
 		held += JobEndBudget
 	}
@@ -170,6 +170,16 @@ func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Durat
 	}
 	return pollBound + time.Duration(float64(held)/BoxReadAnswerShare)
 }
+
+// FailureReadWait is how long a collection reads and redacts a run's error
+// stream from its first byte before it withholds the stream's end
+// (internal/sandbox/executor's failure tail): what the box-read floor
+// ([boxReadPace]) gives the largest piece a collection reads whole
+// ([MaxFileBytes]), 32 s. A working box and the redaction of ordinary text go
+// far faster, so only a stream of hundreds of mebibytes, or one filled with
+// the redaction's slowest shapes, reaches it. Every read collects, so
+// [BoxReadBudget] counts it for every read.
+const FailureReadWait = (MaxFileBytes >> 20) * boxReadPace
 
 // boxReadChanges is how many changes of a run's row every read of its box gives
 // room to on its host: the reservation of the capture's place

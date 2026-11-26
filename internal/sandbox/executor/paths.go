@@ -25,10 +25,10 @@
 // # A run's output is read as a stream
 //
 // A run's event stream and its error stream grow with the run, so neither is
-// ever read whole: the stream is decoded a line at a time in bounded memory
-// and the error stream is read from its end, while the files meant to be
-// read whole (the report, the question, the result line) are, and one too
-// large degrades only itself; stream.go says why.
+// held whole: the stream is decoded a line at a time and the error stream
+// redacted from its start, keeping its end, while the files meant to be read
+// whole (the report, the question, the result line) are, and one too large
+// degrades only itself; stream.go says why.
 //
 // # A Claude Code thread is read a line at a time, holding what its readers read
 //

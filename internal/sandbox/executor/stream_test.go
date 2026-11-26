@@ -1,15 +1,14 @@
 package executor_test
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -210,19 +209,15 @@ func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 	}
 }
 
-// THE ERROR STREAM IS READ FROM ITS END, at most what a condensation can take,
-// and its unread start is said by size: it reaches the reviewer as the
-// failure's detail, and its end names what broke.
+// THE ERROR STREAM'S END IS SHOWN, at most what a condensation can take, and
+// the start it leaves out is said by size: it reaches the reviewer as the
+// failure's detail, and its end names what broke. A run with no parsed
+// transcript carries the same end behind the same note. At
+// [testFailureBound], with an error stream two and a half times it.
 //
-// The read itself is held to the bound plus the redaction's context, not only
-// what is shown, and a run with no parsed transcript carries at most the bound
-// of the stream behind a note sizing the rest: a read to the engine's ceiling
-// shows the same failure, so only the request tells. At [testFailureBound],
-// with an error stream two and a half times it.
-//
-// Mutation: read or keep the end to [sandbox.MaxFailureBytes] rather than the
+// Mutation: keep the end to [sandbox.MaxFailureBytes] rather than the
 // runner's bound, and this fails.
-func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
+func TestTheErrorStreamsEndIsShownAndItsStartIsSaid(t *testing.T) {
 	t.Parallel()
 	runner := executor.Bounded(executor.NewClaudeCode(), testFailureBound, executor.MaxLineBytes)
 	b := box(t, runner)
@@ -231,14 +226,9 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 	b.Put(p.Err(), stderr)
 	b.Put(p.ExitCode(), "1")
 
-	reads := &tailReads{Sandbox: b}
-	res, err := runner.Collect(t.Context(), reads, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
-	}
-	if got, want := reads.asked(p.Err()), []int{testFailureBound + executor.RedactContext}; !slices.Equal(got, want) {
-		t.Errorf("the error stream's end was read as %v bytes; want %v, the runner's bound and the "+
-			"redaction's context", got, want)
 	}
 	note, shown, _ := strings.Cut(res.Transcript, "\n")
 	switch {
@@ -254,12 +244,91 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 	if !strings.HasSuffix(res.Error, "FATAL: migrations/0007.sql is missing") {
 		t.Errorf("the failure lost the error stream's last line: …%q", tailOf(res.Error, 120))
 	}
-	if !strings.Contains(res.Error, "were not read: a run's failure is read from its end") {
-		t.Errorf("the unread start is not said: %.300q", res.Error)
+	if !strings.Contains(res.Error, "are not shown: a run's failure shows the end of its redaction") {
+		t.Errorf("the start left out is not said: %.300q", res.Error)
 	}
 	if len(res.Error) > testFailureBound {
 		t.Errorf("the failure is %d bytes, past the %d its runner holds it to", len(res.Error), testFailureBound)
 	}
+}
+
+// AN ERROR STREAM WHOSE REDACTION DID NOT END WITHIN ITS WAIT IS SAID, NOT
+// SHOWN: on a clock that passes [sandbox.FailureReadWait] while the stream is
+// read, the transcript and the failure give its size and why, and none of it.
+//
+// Mutation: show the end read so far at the wait, and the stream reaches both.
+func TestAnErrorStreamPastItsWaitIsSaidNotShown(t *testing.T) {
+	t.Parallel()
+	var now time.Time
+	runner := executor.Clocked(executor.Bounded(executor.NewClaudeCode(), testFailureBound, executor.MaxLineBytes),
+		func() time.Time {
+			now = now.Add(sandbox.FailureReadWait / 2)
+			return now
+		})
+	b := box(t, runner)
+	p := paths(b)
+	stderr := strings.Repeat("noise line\n", 3*testFailureBound/11) + "FATAL: the last line"
+	b.Put(p.Err(), stderr)
+	b.Put(p.ExitCode(), "1")
+
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	said := "(the error stream, " + executor.HumanSize(int64(len(stderr))) + ", is not shown: its redaction, " +
+		"read from its first byte, did not reach its end within the 32s a collection gives it"
+	for name, got := range map[string]string{"transcript": res.Transcript, "failure": res.Error} {
+		if !strings.Contains(got, said) || strings.Contains(got, "noise line") || strings.Contains(got, "FATAL") {
+			t.Errorf("the %s is …%q; want %q, none of the stream shown", name, tailOf(got, 200), said)
+		}
+	}
+}
+
+// AN ERROR STREAM IS READ ONLY WHERE IT IS SHOWN: a run whose events gave its
+// transcript and which succeeded shows none of its error stream, so its
+// collection reads none of it, however long it is.
+//
+// Mutation: read the error stream on every collection, and this case reads it.
+func TestAnErrorStreamIsReadOnlyWhereItIsShown(t *testing.T) {
+	t.Parallel()
+	runner := executor.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+	b.Put(p.Stream(), `{"type":"assistant","message":{"content":[{"type":"text","text":"Built it."}]}}`+"\n"+
+		`{"type":"result","subtype":"success","is_error":false,"result":"Built it."}`+"\n")
+	b.Put(p.Result(), `{"type":"result","subtype":"success","is_error":false,"result":"Built it."}`)
+	b.Put(p.Err(), strings.Repeat("a warning\n", 1000))
+	b.Put(p.ExitCode(), "0")
+	var read atomic.Int64
+	b.Streams = func(path string, r io.Reader) io.Reader {
+		if path != p.Err() {
+			return r
+		}
+		return readCount{r, &read}
+	}
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !res.Success || res.Transcript == "" || strings.Contains(res.Transcript, "a warning") {
+		t.Fatalf("the case's run collected as success %v with the transcript %.80q; it needs a succeeded "+
+			"run whose events gave its transcript", res.Success, res.Transcript)
+	}
+	if n := read.Load(); n != 0 {
+		t.Errorf("the collection read %d bytes of an error stream it shows none of", n)
+	}
+}
+
+// readCount counts what is read through it.
+type readCount struct {
+	r io.Reader
+	n *atomic.Int64
+}
+
+func (c readCount) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	return n, err
 }
 
 // THE WHOLE FAILURE IS WHAT ONE CONDENSATION CAN TAKE, not the error stream
@@ -309,7 +378,7 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 				"the report the harness wrote", // the refused piece, first
 				"the harness exited with status 1",
 				"error_during_execution: the provider answered 529",
-				"were not read: a run's failure is read from its end",
+				"are not shown: a run's failure shows the end of its redaction",
 			} {
 				if !strings.Contains(res.Error, want) {
 					t.Errorf("the failure lost %q: %.400q", want, res.Error)
@@ -353,24 +422,23 @@ func TestAFailureWhoseSentencesFillTheBoundSaysItsStreamWasNotShown(t *testing.T
 	}
 }
 
-// AN ERROR STREAM OF WHOSE END NOTHING IS SHOWN IS SAID, NOT SHOWN: the end a
-// failure reads is one line begun before the read, of which nothing is shown,
-// or blank lines after it or alone, so the transcript and the failure say the
-// stream by its size and why none of it is there.
+// AN ERROR STREAM WHOSE END IS BLANK LINES IS SAID, NOT SHOWN: after the
+// start it leaves out, or alone, the transcript and the failure give its size
+// and why none of it is there. A line longer than the end shows its own end,
+// marked, as the whole stream's redaction ends.
 //
 // Mutation: leave the note out, or decide it on the end before it is trimmed,
 // and the run says nothing of its error stream.
-func TestAnErrorStreamOfWhoseEndNothingIsShownIsSaid(t *testing.T) {
+func TestAnErrorStreamWhoseEndIsBlankIsSaidNotShown(t *testing.T) {
 	t.Parallel()
-	long := "starting\n" + strings.Repeat("e", testFailureBound+2*executor.RedactContext)
-	const continues = "continues what was written before it)"
-	const blank = "opens only blank lines)"
-	for _, c := range []struct{ name, stderr, why string }{
-		{"one line begun before the read", long + "FATAL: the last line", continues},
-		{"that line, ended", long + "\n", continues},
-		{"that line, then a blank line", long + "\n\n", blank},
-		{"that line, then a line of spaces", long + "\n \n", blank},
-		{"blank lines alone", "starting\n" + strings.Repeat("\n", testFailureBound+2*executor.RedactContext), blank},
+	long := "starting\n" + strings.Repeat("e", 2*testFailureBound)
+	const blank = "the end a run's failure shows of it holds only blank lines)"
+	for _, c := range []struct{ name, stderr, said string }{
+		{"a long line, then a blank line", long + "\n\n", blank},
+		{"a long line, then a line of spaces", long + "\n \n", blank},
+		{"blank lines alone", "starting\n" + strings.Repeat("\n", 2*testFailureBound), blank},
+		{"a long line to the end", long + "FATAL: the last line", ""},
+		{"a long line, ended", long + "\n", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -384,10 +452,15 @@ func TestAnErrorStreamOfWhoseEndNothingIsShownIsSaid(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
-			said := fmt.Sprintf("(the error stream, %s, is not shown: the end a run's failure reads of it %s",
-				executor.HumanSize(int64(len(c.stderr))), c.why)
 			for name, got := range map[string]string{"transcript": res.Transcript, "failure": res.Error} {
-				if !strings.HasSuffix(got, said) || strings.Contains(got, "eeee") || strings.Contains(got, "FATAL") {
+				if c.said == "" {
+					if !strings.Contains(got, "…eee") || !strings.HasSuffix(strings.TrimSpace(c.stderr), tailOf(got, 20)) {
+						t.Errorf("the %s ends …%q; want the long line's end, marked", name, tailOf(got, 160))
+					}
+					continue
+				}
+				said := "(the error stream, " + executor.HumanSize(int64(len(c.stderr))) + ", is not shown: " + c.said
+				if !strings.HasSuffix(got, said) || strings.Contains(got, "eeee") {
 					t.Errorf("the %s ends …%q; want %q, none of the stream shown", name, tailOf(got, 160), said)
 				}
 			}
@@ -452,44 +525,6 @@ func TestAnUnreadableBoxIsAnErrorNotAPiece(t *testing.T) {
 }
 
 func tailOf(s string, n int) string { return s[max(0, len(s)-n):] }
-
-// tailReads is a box that records how much of a file's end each ReadTail asked
-// for: a read past its bound shows what a bounded one does and costs the whole
-// file, so only the request says which one was made.
-type tailReads struct {
-	sandbox.Sandbox
-	mu   sync.Mutex
-	asks map[string][]int
-}
-
-func (b *tailReads) ReadTail(ctx context.Context, path string, n int) (sandbox.FileTail, error) {
-	b.mu.Lock()
-	if b.asks == nil {
-		b.asks = map[string][]int{}
-	}
-	b.asks[path] = append(b.asks[path], n)
-	b.mu.Unlock()
-	return b.Sandbox.ReadTail(ctx, path, n)
-}
-
-// OpenTail counts what it asks for as ReadTail does: a collection opens the
-// error stream's end before it weighs its pieces.
-func (b *tailReads) OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error) {
-	b.mu.Lock()
-	if b.asks == nil {
-		b.asks = map[string][]int{}
-	}
-	b.asks[path] = append(b.asks[path], int(n))
-	b.mu.Unlock()
-	return b.Sandbox.OpenTail(ctx, path, n)
-}
-
-// asked is every n a ReadTail or OpenTail of path asked for, in order.
-func (b *tailReads) asked(path string) []int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return slices.Clone(b.asks[path])
-}
 
 // testFailureBound and testLineBound are the bounds the cases that go past
 // one run their runner at ([executor.Bounded]): 64 KiB each, room for every
