@@ -86,9 +86,7 @@ func withNoteHelper(t *testing.T, p Paths) {
 	if err = os.MkdirAll(filepath.Dir(p.CodexNoteHelper()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(p.CodexNoteHelper(), bin, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeHostProgram(t, p.CodexNoteHelper(), bin, 0o600)
 }
 
 // runCodexRepoGate runs the gate in work with PATH set to path ("" for the
@@ -729,9 +727,7 @@ func TestAHomeFileIsHeldWholeOrNotAtAll(t *testing.T) {
 				}
 			}
 			cut := "#!" + sh + "\nhead -c 5 \"$1\" > \"$2\"\nkill -KILL $PPID\n"
-			if err := os.WriteFile(filepath.Join(bin, "cp"), []byte(cut), 0o700); err != nil { //nolint:gosec // the case's own stand-in
-				t.Fatal(err)
-			}
+			writeHostProgram(t, filepath.Join(bin, "cp"), []byte(cut), 0o700)
 			launch := codexCheckoutHome(p).launchConfig(codexCheckouts(codexProjectDocMaxBytes), nil)
 			if err := os.MkdirAll(filepath.Dir(p.CodexCheckoutLaunch()), 0o700); err != nil {
 				t.Fatal(err)

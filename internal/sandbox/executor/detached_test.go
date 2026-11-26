@@ -52,7 +52,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 		p.ClaudeHooksOff(), p.ClaudeHooksOffBy(), p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(),
 		p.ClaudeSettingsGuarded(),
 		p.ClaudeNotesSettingsGuarded(), p.ClaudeBridgeGuard(), p.ClaudeUnbridged(), p.CommitAttribution(),
-		p.AttributionHook(), p.GitHooks(),
+		p.AttributionHook(), p.GitHooks(), p.ProgramStaging(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.SessionStaging(), p.SessionDigests(),
 		p.SessionPackStaging("a-pack"), p.SessionPackHeld("a-pack"), p.ClaudeConfigDir(), p.JobScript(),
 		p.JobEnded(), p.SessionSave("node-a:a-taker", "a-save"), p.SessionSaveStaging("node-a:a-taker", "a-save"),
@@ -228,14 +228,15 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 			t.Fatalf("%q was not cleared: %s", want, cleared)
 		}
 	}
-	// OpenCode's values and notes plugin, the commit attribution, and each
+	// OpenCode's values and notes plugin, the commit attribution, the programs'
+	// staging, and each
 	// harness's run skills with their load reporter are DIRECTORIES, removed
 	// whole: a run with fewer than the last would keep the last one's beside
 	// its own (a plugin nothing names, a hook crediting the last run, loads
 	// reported to an endpoint that is over).
 	_, removed, _ := strings.Cut(cleared, "; rm -rf ")
 	for _, dir := range []string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution(),
-		p.SessionStaging(), p.ClaudeSkillsPlugin(), p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()} {
+		p.SessionStaging(), p.ProgramStaging(), p.ClaudeSkillsPlugin(), p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()} {
 		if !strings.Contains(removed, "'"+dir+"'") {
 			t.Fatalf("the directory %q was not removed whole: %s", dir, cleared)
 		}

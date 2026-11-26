@@ -190,18 +190,14 @@ func installAttribution(ctx context.Context, box sandbox.Sandbox, paths Paths, a
 	if err != nil {
 		return err
 	}
-	source := paths.AttributionHook() + ".source"
-	if err = box.WriteFile(ctx, source, attributionHook(trailers, paths.GitHooks())); err != nil {
+	// A program the box runs, so git's exec of it is never refused as busy
+	// ([writeProgram]): a refused hook would be a refused commit.
+	if err = writeProgram(ctx, box, paths.AttributionHook(), attributionHook(trailers, paths.GitHooks())); err != nil {
 		return fmt.Errorf("executor: writing the commit attribution hook: %w", err)
 	}
-	// The box's own process copies the hook into place: on the engine host a
-	// fork of the engine can inherit the engine's write descriptor, and Linux
-	// refuses to execute a file held open for writing (ETXTBSY), refusing the
-	// commit. A copy by an exited process is held open by nobody. The links are
-	// relative and made in the box: a host-made link names a host path a
-	// container lacks.
-	link := "cd " + shellword.Quote(paths.CommitAttribution()) + " && cp hook.source hook && rm hook.source && " +
-		"chmod 700 hook && mkdir -p hooks && " +
+	// The links are relative and made in the box: a host-made link names a host
+	// path a container lacks.
+	link := "cd " + shellword.Quote(paths.CommitAttribution()) + " && chmod 700 hook && mkdir -p hooks && " +
 		"for hook in " + strings.Join(gitHooks, " ") + `; do ln -sf ../hook "hooks/$hook" || exit; done`
 	res, err := box.Exec(ctx, link, sandbox.ExecOptions{})
 	if err != nil {

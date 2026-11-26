@@ -588,9 +588,7 @@ func TestEveryOpenCodePackTrimsAtTheTakesBounds(t *testing.T) {
 		`{"data":[]}`: "",
 	} {
 		stub := filepath.Join(t.TempDir(), "opencode")
-		if err := os.WriteFile(stub, []byte("#!/bin/sh\nprintf '%s' "+shellword.Quote(page)+"\n"), 0o700); err != nil {
-			t.Fatal(err)
-		}
+		writeHostProgram(t, stub, []byte("#!/bin/sh\nprintf '%s' "+shellword.Quote(page)+"\n"), 0o700)
 		out, errText, code := codexShell(t, home.Home, "PATH="+shellword.Quote(filepath.Dir(stub))+`:"$PATH"`+"\n"+
 			openCodeCursor()+`bounded() { shift 3; "$@"; }`+"\nk=yes sid="+session+" w= v='opencode v2.3.2' "+
 			trimStartVar+"=\n"+openCodeRunStart(home, times, openCodeAnswerFile(home))+`printf '%s' "$`+trimStartVar+`"`)
