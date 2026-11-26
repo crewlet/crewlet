@@ -91,8 +91,7 @@ func WidestPositionsRecords() []PositionsWidest {
 	add := func(w PositionsWidest) { out = append(out, w) }
 
 	node := coord.NodePositions{NodeID: plain(coord.MaxNodeIDBytes), At: widestAt,
-		EngineVersion: plain(coord.MaxEngineVersionBytes), CaptureStampVersion: math.MinInt64,
-		Domains:       map[string]coord.DomainPosition{},
+		EngineVersion: plain(coord.MaxEngineVersionBytes), Domains: map[string]coord.DomainPosition{},
 		SnapshotBytes: math.MinInt64, SnapshotSkip: plain(coord.MaxSnapshotSkipBytes)}
 	for i := range coord.MaxLogDomains {
 		node.Domains[numbered(i, coord.MaxDomainNameBytes)] = coord.DomainPosition{
@@ -199,6 +198,17 @@ func WidestPositionsRecords() []PositionsWidest {
 			past := retirement
 			past.NodeID += "a"
 			return f.RetireNode(ctx, past)
+		}})
+
+	stamp := coord.CaptureStampRecord{NodeID: plain(coord.MaxNodeIDBytes), CaptureStampVersion: math.MaxInt64,
+		At: widestAt}
+	add(PositionsWidest{Class: coord.CaptureStampClass, Key: coord.CaptureStampKey(stamp.NodeID),
+		Bound: coord.SmallValueBytes, Record: stamp,
+		Write: func(ctx context.Context, f coord.Fleet) error { return f.PutCaptureStamp(ctx, stamp) },
+		Past: func(ctx context.Context, f coord.Fleet) error {
+			past := stamp
+			past.NodeID += "a"
+			return f.PutCaptureStamp(ctx, past)
 		}})
 
 	mark := coord.FeedMark{Stream: plain(coord.MaxStreamNameBytes), Group: plain(coord.MaxDomainNameBytes),

@@ -460,8 +460,8 @@ type Engine struct {
 	// ([Engine.ShuttingDown]).
 	shuttingDown atomic.Bool
 
-	// mediaInline is why takes last kept their media inline for want of the
-	// readers of a capture naming them, logged once each time it changes
+	// mediaInline is why takes last kept their media inline, a node below or
+	// readers unread, logged once each time it changes
 	// ([Engine.executorMediaRead]).
 	mediaInline atomic.Pointer[string]
 
@@ -2515,6 +2515,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 // during the start begins the host's drain at once ([node.Node.BeginDrain],
 // on [Engine.stopping]'s allowance): the pass claims nothing more.
 func (e *Engine) Start(ctx context.Context) error {
+	if err := e.recordCaptureStamp(ctx); err != nil {
+		return fmt.Errorf("engine: start: %w", err)
+	}
 	cutDone := make(chan struct{})
 	stopCut := context.AfterFunc(ctx, func() {
 		defer close(cutDone)

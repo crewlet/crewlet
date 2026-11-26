@@ -22,7 +22,7 @@ func TestAPositionsRowAndAFloorAreThePinnedBytes(t *testing.T) {
 	snapped := time.Date(2026, 9, 28, 3, 0, 0, 0, time.UTC)
 
 	row := coord.NodePositions{
-		NodeID: "node-a", At: at, EngineVersion: "v0.0.0-test", CaptureStampVersion: 1,
+		NodeID: "node-a", At: at, EngineVersion: "v0.0.0-test",
 		Domains: map[string]coord.DomainPosition{
 			"tracker": {
 				Seq: 7, Generation: 1, AppliedThrough: 6,
@@ -50,7 +50,7 @@ func TestAPositionsRowAndAFloorAreThePinnedBytes(t *testing.T) {
 		want  string
 	}{
 		"a positions row": {row, `{"node_id":"node-a","at":"2026-09-28T12:00:00Z",` +
-			`"engine_version":"v0.0.0-test","capture_stamp_version":1,"domains":{` +
+			`"engine_version":"v0.0.0-test","domains":{` +
 			`"pages":{"seq":3,"generation":1,"applied_through":3,"record_version":2},` +
 			`"tracker":{"seq":7,"generation":1,"applied_through":6,` +
 			`"stream_created_at":"2026-09-01T08:00:00Z",` +

@@ -204,6 +204,9 @@ func (f faultyBackend) WatchLive(context.Context, coord.Class) (<-chan coord.Lea
 func (f faultyBackend) PreferredResources(context.Context, coord.Class, string) (map[string]struct{}, error) {
 	return nil, f.err
 }
+func (f faultyBackend) EverPresent(context.Context) ([]string, error) {
+	return nil, f.err
+}
 func (f faultyBackend) FleetProtocolFloor(context.Context) (int, bool, error) {
 	return 0, false, f.err
 }

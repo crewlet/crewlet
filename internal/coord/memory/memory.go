@@ -677,6 +677,24 @@ func (b *Backend) PreferredResources(ctx context.Context, class coord.Class, nod
 	return out, nil
 }
 
+// EverPresent returns every node id that has held presence in this store:
+// its row outlives every lease written on it, as the KV's epoch record does.
+func (b *Backend) EverPresent(ctx context.Context) ([]string, error) {
+	if err := unavailable(ctx); err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []string
+	for _, r := range b.rows {
+		if node, ok := coord.ClassNode.Name(r.resource); ok && r.epoch > 0 {
+			out = append(out, node)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
 // FleetProtocolFloor returns the lowest protocol among the live leases the
 // gate counts (coord.ProtocolGateCounts), and whether there were any. It is
 // the observability half of the gate: a claim refused [coord.RefusedProtocol]

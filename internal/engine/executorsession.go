@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -214,8 +216,34 @@ func (k executorKeep) Policy(ctx context.Context) (sandbox.SessionPolicy, error)
 	if err != nil || !policy.Keep {
 		return policy, err
 	}
-	policy.MediaApart, policy.MediaUnread = k.engine.executorMediaRead(ctx)
+	media := k.engine.executorMediaRead(ctx)
+	policy.MediaApart, policy.MediaUnread, policy.MediaBelow = media.apart, media.unread, media.below
 	return policy, nil
+}
+
+// recordCaptureStamp records the capture stamp version this node's build asks
+// again whole ([coord.CaptureStampRecord]) before the node claims presence, so
+// the media gate reads it while the node is offline. Once a process, since the
+// version is the build's. A node that cannot write it does not start: running
+// on, it would be read offline at what an earlier build under its id recorded.
+func (e *Engine) recordCaptureStamp(ctx context.Context) error {
+	if e.backends == nil || e.backends.Fleet == nil {
+		return nil
+	}
+	err := e.backends.Fleet.PutCaptureStamp(ctx, coord.CaptureStampRecord{NodeID: e.selfNode(),
+		CaptureStampVersion: sandbox.CaptureStampVersion, At: time.Now().UTC()})
+	if err != nil {
+		return fmt.Errorf("record this node's capture stamp version in the coordination store before it "+
+			"claims presence (start it again once the store answers): %w", err)
+	}
+	return nil
+}
+
+// mediaAnswer is the gate's answer: exactly one of apart, why the readers went
+// unread (unknown), or the node found below and what it says (a definite no).
+type mediaAnswer struct {
+	apart         bool
+	unread, below string
 }
 
 // executorMediaRead says whether a take keeps its media apart: every node
@@ -223,62 +251,105 @@ func (k executorKeep) Policy(ctx context.Context) (sandbox.SessionPolicy, error)
 // (executordomain.MediaCaptureVersion), its counted set as the trim counts it
 // ([statelog.CountedSet], [statelog.Readers]), and every node that may settle
 // a run's row asks its stamp again whole ([stampReaders]). Never a guess: a
-// node below either or not saying answers inline, and readers not read within
-// [sandbox.MediaReadersRoom] do too, logged once with why. A node below the
-// log's version that joins after the answer defers such a capture on its
-// applier, never drops it (.claude/rules/compatibility.md), so its estate names
-// none of the media until it upgrades, and its collector deletes nothing
-// meanwhile (ADR-0073's amendment, "Mid-upgrade").
-func (e *Engine) executorMediaRead(ctx context.Context) (apart bool, unread string) {
-	apart, why := e.executorMediaReaders(ctx)
+// node below either or not saying answers inline, naming the first in node
+// order, and readers not read within [sandbox.MediaReadersRoom] or not there to
+// read answer unknown; either is logged once each time its sentence changes. A
+// node below the log's version that joins after the answer defers such a
+// capture on its applier, never drops it (.claude/rules/compatibility.md), so
+// its estate names none of the media until it upgrades, and its collector
+// deletes nothing meanwhile (ADR-0073's amendment, "Mid-upgrade").
+func (e *Engine) executorMediaRead(ctx context.Context) mediaAnswer {
+	media := e.executorMediaReaders(ctx)
+	kind, why := "below", media.below
+	if media.unread != "" {
+		kind, why = "unread", media.unread
+	}
 	if why == "" {
 		e.mediaInline.Store(nil)
 	} else if last := e.mediaInline.Load(); last == nil || *last != why {
 		e.mediaInline.Store(&why)
-		log.WarnContext(ctx, "executor_media_kept_inline", "why", why, "detail", "every take keeps its "+
-			"large payloads inline until every node applying the executor log, and every node that may "+
-			"settle a run's record, is known to read a capture naming them")
+		log.WarnContext(ctx, "executor_media_kept_inline", "kind", kind, "why", why, "detail", "every take "+
+			"keeps its large payloads inline until every node applying the executor log, and every node "+
+			"that may settle a run's record, is known to read a capture naming them")
 	}
-	return apart, why
+	return media
 }
 
-// executorMediaReaders is [Engine.executorMediaRead]'s answer, and why it is
-// inline where the readers could not say: the live nodes, the position
-// register and the log's evictions, read together in [sandbox.MediaReadersRoom],
-// the live data nodes taken off that one listing as [Engine.holdersOf] takes
-// them.
-func (e *Engine) executorMediaReaders(ctx context.Context) (bool, string) {
+// executorMediaReaders is [Engine.executorMediaRead]'s answer: the live nodes,
+// the position register, the log's evictions and who may settle a run's row
+// ([mediaReads]), read together in [sandbox.MediaReadersRoom], the live data
+// nodes taken off that one listing as [Engine.holdersOf] takes them. A log
+// nobody has said they read is unknown, never a node below.
+func (e *Engine) executorMediaReaders(ctx context.Context) mediaAnswer {
 	if e.backends == nil || e.backends.Fleet == nil || e.backends.Coord == nil {
-		return false, "this node has no coordination store to read the executor log's readers from"
+		return mediaAnswer{unread: "this node has no coordination store to read the executor log's readers from"}
 	}
 	room, cancel := context.WithTimeout(ctx, sandbox.MediaReadersRoom)
 	defer cancel()
-	held, err := e.backends.Coord.ListLive(room, coord.ClassNode)
+	read, what, err := e.readMediaReaders(room)
 	if err != nil {
-		return false, mediaReadersUnread(ctx, room, "the live nodes could not be listed", err)
+		return mediaAnswer{unread: mediaReadersUnread(ctx, room, what, err)}
 	}
-	rows, err := e.backends.Fleet.Positions(room)
-	if err != nil {
-		return false, mediaReadersUnread(ctx, room, "the position register could not be read", err)
+	readers := statelog.Readers(statelog.CountedSet(e.now(), reportedPositions(read.rows,
+		executordomain.Domain{}.Name()), presencesOf(dataNodesOf(read.held)), read.tombs))
+	if len(readers) == 0 {
+		return mediaAnswer{unread: "no node the executor log counts has said which record version it reads"}
 	}
-	domain := executordomain.Domain{}
-	tombs, _ := logTombstones(room, e.backends.Store, domain, 0)
-	if err := room.Err(); err != nil {
-		return false, mediaReadersUnread(ctx, room, "the executor log's evictions could not be read", err)
+	if node, version, ok := firstBelow(readers, executordomain.MediaCaptureVersion); ok {
+		return mediaAnswer{below: fmt.Sprintf("node %s reads the executor log to record version %d, below "+
+			"the %d a capture naming media is stamped at", node, version, executordomain.MediaCaptureVersion)}
 	}
-	counted := statelog.CountedSet(e.now(), reportedPositions(rows, domain.Name()), presencesOf(dataNodesOf(held)), tombs)
-	readers := statelog.Readers(counted)
-	for _, version := range readers {
-		if version < executordomain.MediaCaptureVersion {
-			return false, ""
+	if node, version, ok := firstBelow(stampReaders(e.selfNode(), read), sandbox.MediaStampVersion); ok {
+		return mediaAnswer{below: fmt.Sprintf("node %s says capture stamp version %d, below the %d a "+
+			"capture naming media is asked again at", node, version, sandbox.MediaStampVersion)}
+	}
+	return mediaAnswer{apart: true}
+}
+
+// mediaReads is what the media gate reads of the fleet within its room.
+type mediaReads struct {
+	held    []coord.Lease
+	rows    []coord.NodePositions
+	tombs   []statelog.Tombstone
+	present []string
+	stamps  []coord.CaptureStampRecord
+	retired []coord.NodeRetirement
+}
+
+// readMediaReaders reads [mediaReads] on room, or names what could not be read.
+func (e *Engine) readMediaReaders(room context.Context) (mediaReads, string, error) {
+	var read mediaReads
+	var err error
+	if read.held, err = e.backends.Coord.ListLive(room, coord.ClassNode); err != nil {
+		return read, "the live nodes could not be listed", err
+	}
+	if read.rows, err = e.backends.Fleet.Positions(room); err != nil {
+		return read, "the position register could not be read", err
+	}
+	read.tombs, _ = logTombstones(room, e.backends.Store, executordomain.Domain{}, 0)
+	if err = room.Err(); err != nil {
+		return read, "the executor log's evictions could not be read", err
+	}
+	if read.present, err = e.backends.Coord.EverPresent(room); err != nil {
+		return read, "the nodes that ever held presence could not be read", err
+	}
+	if read.stamps, err = e.backends.Fleet.CaptureStamps(room); err != nil {
+		return read, "the nodes' capture stamp records could not be read", err
+	}
+	if read.retired, err = e.backends.Fleet.NodeRetirements(room); err != nil {
+		return read, "the retired nodes could not be read", err
+	}
+	return read, "", nil
+}
+
+// firstBelow is the first node, in node order, whose version is below want.
+func firstBelow(versions map[string]int, want int) (string, int, bool) {
+	for _, node := range slices.Sorted(maps.Keys(versions)) {
+		if versions[node] < want {
+			return node, versions[node], true
 		}
 	}
-	for _, version := range stampReaders(e.selfNode(), held, rows, counted) {
-		if version < sandbox.CaptureStampVersion {
-			return false, ""
-		}
-	}
-	return len(readers) > 0, ""
+	return "", 0, false
 }
 
 // mediaReadersUnread is why the readers went unread: what failed, and the room
@@ -290,25 +361,35 @@ func mediaReadersUnread(ctx, room context.Context, what string, err error) strin
 	return fmt.Sprintf("%s: %v", what, err)
 }
 
-// stampReaders is the capture stamp's version each node that may settle a
-// run's row asks again whole ([sandbox.CaptureStampVersion]): every live node,
-// of any role, at what its presence says ([coord.NodeStatus]); every node the
-// log's counted set holds while offline at what its position row last said, as
-// the trim reads it; this node at its own build's. Zero is a node not saying,
-// a build before media among them, whose ask would land a capture naming media
-// without them.
-func stampReaders(self string, held []coord.Lease, rows []coord.NodePositions,
-	counted []statelog.NodePosition) map[string]int {
-
-	said := make(map[string]int, len(rows))
-	for _, row := range rows {
-		said[row.NodeID] = row.CaptureStampVersion
+// stampReaders is the capture stamp version each node that may settle a run's
+// row says ([sandbox.CaptureStampVersion]): every node that ever held presence,
+// wrote a position row or recorded its version, at its live presence's word,
+// else its record's, else zero, a node not saying (a build before the record
+// among them); this node at its own build's. An offline node whose retirement
+// stands against its last row and record is gone for good, and not counted
+// (ADR-0073's amendment, "Mid-upgrade").
+func stampReaders(self string, read mediaReads) map[string]int {
+	out := make(map[string]int, len(read.present)+len(read.rows)+len(read.stamps))
+	wrote := make(map[string]time.Time, len(read.rows)+len(read.stamps))
+	for _, node := range read.present {
+		out[node] = 0
 	}
-	out := make(map[string]int, len(counted)+len(held))
-	for _, n := range counted {
-		out[n.NodeID] = said[n.NodeID]
+	for _, row := range read.rows {
+		out[row.NodeID] = 0
+		wrote[row.NodeID] = row.StoredAt
 	}
-	for _, lease := range held {
+	for _, r := range read.stamps {
+		out[r.NodeID] = r.CaptureStampVersion
+		if r.StoredAt.After(wrote[r.NodeID]) {
+			wrote[r.NodeID] = r.StoredAt
+		}
+	}
+	for _, r := range read.retired {
+		if r.Stands(wrote[r.NodeID]) {
+			delete(out, r.NodeID)
+		}
+	}
+	for _, lease := range read.held {
 		if node, ok := coord.ClassNode.Name(lease.Resource); ok {
 			status, _ := coord.StatusFromMeta(lease.Meta)
 			out[node] = status.CaptureStampVersion

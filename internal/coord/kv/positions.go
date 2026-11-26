@@ -561,6 +561,45 @@ func (f *FleetStore) NodeRetirements(ctx context.Context) ([]coord.NodeRetiremen
 	return out, err
 }
 
+// PutCaptureStamp writes a node's capture stamp record at its own key
+// ([coord.CaptureStampKey]). A plain put: only the node writes its key.
+func (f *FleetStore) PutCaptureStamp(ctx context.Context, r coord.CaptureStampRecord) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	if r.At.IsZero() {
+		r.At = time.Now().UTC()
+	}
+	body, err := json.Marshal(r)
+	if err != nil {
+		return fmt.Errorf("coord: encode node %s's capture stamp record: %w", r.NodeID, err)
+	}
+	if _, err := f.positions.Put(ctx, coord.CaptureStampKey(r.NodeID), body); err != nil {
+		return unavailable("record the node's capture stamp version", err)
+	}
+	return nil
+}
+
+// CaptureStamps reads every node's capture stamp record, each with the instant
+// the broker stored it, the clock a retirement is compared against.
+//
+// A DECODE FAILURE IS RAISED: a record skipped here is a node the media gate
+// reads at what it says elsewhere, or not at all.
+func (f *FleetStore) CaptureStamps(ctx context.Context) ([]coord.CaptureStampRecord, error) {
+	var out []coord.CaptureStampRecord
+	err := f.eachPositionKey(ctx, coord.CaptureStampClass, "the capture stamp records",
+		func(key string, value []byte, stored time.Time) error {
+			var r coord.CaptureStampRecord
+			if err := json.Unmarshal(value, &r); err != nil {
+				return fmt.Errorf("coord: the capture stamp record at %s does not decode: %w", key, err)
+			}
+			r.StoredAt = stored
+			out = append(out, r)
+			return nil
+		})
+	return out, err
+}
+
 // eachPositionKey walks one key class of the positions register, handing fn
 // each key, its value and the instant the broker stored that value.
 //

@@ -397,3 +397,36 @@ func (f *Fleet) NodeRetirements(_ context.Context) ([]coord.NodeRetirement, erro
 	}
 	return out, nil
 }
+
+// PutCaptureStamp writes a node's capture stamp record, stored at the twin's
+// own instant. See the KV backend.
+func (f *Fleet) PutCaptureStamp(_ context.Context, r coord.CaptureStampRecord) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	if err := holdRecord(coord.CaptureStampKey(r.NodeID), r, coord.SmallValueBytes); err != nil {
+		return err
+	}
+	if r.At.IsZero() {
+		r.At = time.Now().UTC()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stamps == nil {
+		f.stamps = map[string]coord.CaptureStampRecord{}
+	}
+	r.StoredAt = time.Now().UTC()
+	f.stamps[r.NodeID] = r
+	return nil
+}
+
+// CaptureStamps reads every node's capture stamp record, by node.
+func (f *Fleet) CaptureStamps(_ context.Context) ([]coord.CaptureStampRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]coord.CaptureStampRecord, 0, len(f.stamps))
+	for _, id := range slices.Sorted(maps.Keys(f.stamps)) {
+		out = append(out, f.stamps[id])
+	}
+	return out, nil
+}

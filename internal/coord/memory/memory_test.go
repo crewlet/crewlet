@@ -135,6 +135,7 @@ func TestDeadContextIsUnknownNotRefusal(t *testing.T) {
 			_, err := b.PreferredResources(ctx, coord.ClassSeat, "node-a")
 			return err
 		}},
+		{"EverPresent", func() error { _, err := b.EverPresent(ctx); return err }},
 		{"FleetProtocolFloor", func() error {
 			floor, any, err := b.FleetProtocolFloor(ctx)
 			if any {

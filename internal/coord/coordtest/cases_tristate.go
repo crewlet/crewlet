@@ -225,6 +225,10 @@ var tristateCases = []testCase{
 		if hints, err := f.PreferredResources(ctx, coord.ClassSeat, "node-a"); err == nil {
 			h.t.Fatalf("PreferredResources answered %v with no error", hints)
 		}
+		if nodes, err := f.EverPresent(ctx); err == nil {
+			h.t.Fatalf("EverPresent answered %v with no error — the media gate would count a "+
+				"fleet it could not see", nodes)
+		}
 	}},
 
 	{"an_unknown_protocol_floor_does_not_read_as_an_empty_fleet", func(h *harness) {
