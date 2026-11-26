@@ -1,15 +1,20 @@
 package executor
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
 // imageURL is an image's data URL n bytes long, its data base64 of zeros.
@@ -506,4 +511,53 @@ func allocated(read func() error) (uint64, error) {
 	err := read()
 	runtime.ReadMemStats(&after)
 	return after.TotalAlloc - before.TotalAlloc, err
+}
+
+// A STRING READ FOR TWO READERS IS READ AS EACH READS IT: [lineWalk.readAlso]
+// hands one reader the string as [lineWalk.read] reads it, an image's place
+// on a walk that passes images, and the other every byte of it as written:
+// short, past a data URL's head and a read's piece, escaped, and an image
+// within its head and past it, on a walk that passes images and one that
+// does not.
+//
+// Mutation: hand the second reader only the string's head, or the first an
+// image's bytes: a case fails.
+func TestAStringReadForTwoReadersIsReadAsEachReadsIt(t *testing.T) {
+	t.Parallel()
+	each := func(value string, images bool, read func(w *lineWalk) error) {
+		var w lineWalk
+		w.setupNotes(bufio.NewReaderSize(strings.NewReader(`{"s":`+value+"}\n"), lineChunkBytes), maxLineBytes)
+		if images {
+			w.passImages()
+		}
+		if _, err := w.noteLine(t.Context(), func() error {
+			return w.members(func(_ string, _ jsonscan.Kind) error { return read(&w) })
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, value := range []string{`"short"`, boundedQuoted(strings.Repeat("words ", 30_000)),
+		`"\"quoted\" \\ é 😀"`, boundedQuoted(imageURL(200)), boundedQuoted(imageURL(200_000))} {
+		for _, images := range []bool{true, false} {
+			var read, raw, also, alsoRaw bytes.Buffer
+			each(value, images, func(w *lineWalk) error { return w.read(&read) })
+			each(value, images, func(w *lineWalk) error {
+				for {
+					n, err := w.scan.Read(w.piece)
+					raw.Write(w.piece[:n])
+					switch {
+					case errors.Is(err, io.EOF):
+						return nil
+					case err != nil:
+						return err
+					}
+				}
+			})
+			each(value, images, func(w *lineWalk) error { return w.readAlso(&also, &alsoRaw) })
+			if also.String() != read.String() || alsoRaw.String() != raw.String() {
+				t.Errorf("%.40s (images %t): read for two reads %.60q and %.60q as written, want %.60q and %.60q",
+					value, images, also.String(), alsoRaw.String(), read.String(), raw.String())
+			}
+		}
+	}
 }

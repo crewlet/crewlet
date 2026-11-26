@@ -15,9 +15,8 @@ import (
 )
 
 // BenchmarkAChatCountAtItsBounds measures Qwen Code's and Gemini CLI's count:
-// the take's meter (meter) and a collection's of the box's copy, alone (copy),
-// with its summary (summary) or Qwen Code's summary alone (summary_alone),
-// against [meterBaseHeldBytes] and [baseTierReadBytes]. A line just within the
+// the take's meter (meter) and a collection's of the box's copy, alone (copy)
+// or with its summary read on the same walk (summary), against [meterBaseHeldBytes] and [baseTierReadBytes]. A line just within the
 // bound passed over (skipped), in words, an answer or a call's arguments, past
 // it (past, failing the read), or none (plain); the most ids a count keeps, as
 // uuids (ids) and at the word bound (ids_long), and Gemini CLI's at its base
@@ -47,10 +46,7 @@ func BenchmarkAChatCountAtItsBounds(b *testing.B) {
 			if c.big == nil && c.name != "plain" {
 				continue
 			}
-			for _, how := range []string{"meter", "copy", "summary", "summary_alone"} {
-				if how == "summary_alone" && h.follow == nil {
-					continue
-				}
+			for _, how := range []string{"meter", "copy", "summary"} {
 				b.Run(h.name+"_"+how+"_"+c.name, func(b *testing.B) { chatBenchRead(b, h, how, c.name == "past", c.big) })
 			}
 		}
@@ -59,8 +55,8 @@ func BenchmarkAChatCountAtItsBounds(b *testing.B) {
 
 // chatBenchHarness is how the bench writes a harness's chat file: its counter,
 // the line that anchors its count, and each case's line around a quoted value,
-// or the most ids it keeps of length n; and how it reads the newest summary,
-// by a reading that follows the walk, or else on the count's own (summarize).
+// or the most ids it keeps of length n; and how its count reads the newest
+// summary on its walk (summarize).
 type chatBenchHarness struct {
 	name                         string
 	counter                      func() chatCounter
@@ -71,7 +67,6 @@ type chatBenchHarness struct {
 	skipped, words, answer, call func(quoted string) string
 	ids                          func(n int) string
 	idsBase                      func() string
-	follow                       func() *chatSummaryLines
 	summarize                    func(c chatCounter)
 }
 
@@ -102,7 +97,7 @@ func chatBenchHarnesses() []chatBenchHarness {
 				return `{"type":"assistant","message":{"role":"model","parts":[{"functionCall":{"id":"c1",` +
 					`"name":"run_shell_command","args":{"command":` + q + `}}}]}}`
 			},
-			follow: func() *chatSummaryLines { return &newQwenSummaryReading(&summaryRead{}).chatSummaryLines },
+			summarize: func(c chatCounter) { c.(*qwenCounting).summarize() },
 			ids: func(n int) string {
 				parts := make([]string, qwenCountIDs)
 				for i := range parts {
@@ -171,25 +166,15 @@ func chatBenchRead(b *testing.B, h chatBenchHarness, how string, past bool, big 
 		start := time.Now()
 		c := h.counter()
 		var read error
-		var summary *chatSummaryLines
-		counted := c
-		switch {
-		case how == "summary" && h.follow == nil:
+		if how == "summary" {
 			h.summarize(c)
-		case how == "summary":
-			summary = h.follow()
-		case how == "summary_alone":
-			summary, counted = h.follow(), nil
 		}
 		if archive {
 			_, read = chatMeter(b.Context(), c, f, h.isMember, h.release, h.release, new(passBudget))
 		} else {
 			_, read = countChat(h.release, h.release, func() error {
-				return chatFileFollowed(b.Context(), f, counted, summary)
+				return chatFileLines(b.Context(), f, c, new(passBudget))
 			})
-		}
-		if summary != nil && summary.err != nil && !past {
-			b.Fatalf("the summary read: %v", summary.err)
 		}
 		count := c.count(0, 0)
 		elapsed := time.Since(start) //fixedwait:measure the read's time is what the case reports
@@ -199,7 +184,7 @@ func chatBenchRead(b *testing.B, h chatBenchHarness, how string, past bool, big 
 		switch {
 		case past && read == nil:
 			b.Fatalf("the count read %s, want it failed past the bound", countString(count))
-		case !past && (read != nil || counted != nil && count.Mark == sandbox.CountUnread):
+		case !past && (read != nil || count.Mark == sandbox.CountUnread):
 			b.Fatalf("the count read %s (%v), want it read", countString(count), read)
 		}
 	}

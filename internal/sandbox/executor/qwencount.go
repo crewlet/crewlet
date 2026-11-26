@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"cmp"
 	"context"
 	"io"
 	"regexp"
@@ -60,6 +59,9 @@ type qwenCounting struct {
 	images      int
 	marks       countMarks
 	l           qwenCountLine
+	// sum reads the newest summary on the walk, where a read asks it
+	// ([qwenCounting.summarize]).
+	sum *qwenSummaryCapture
 }
 
 // qwenCountLine is what the count reads of one line on the walk, each member
@@ -155,6 +157,7 @@ func (c *qwenCounting) start() {
 	ops := c.l.message.ops[:0]
 	c.l = qwenCountLine{}
 	c.l.message.ops = ops
+	c.sum.payload().lineStart()
 }
 
 // The members a line's reader reads, a bit each for [twice].
@@ -186,13 +189,13 @@ func (c *qwenCounting) record(w *lineWalk) error {
 			l.subtype, _, err = w.wordField(k)
 		case "message":
 			member(qwenCountMessage)
-			err = w.qwenContent(k, &l.message, true, &l.twice)
+			err = w.qwenContent(k, &l.message, true, nil, &l.twice)
 		case "usageMetadata":
 			member(qwenCountUsageMember)
 			err = w.qwenUsage(k, &l.usage, &l.twice)
 		case "systemPayload":
 			member(qwenCountPayloadMember)
-			err = w.qwenPayload(k, &l.payload, &l.twice)
+			err = w.qwenPayload(k, &l.payload, c.sum.payload(), &l.twice)
 		default:
 			err = w.skip(k)
 		}
@@ -204,6 +207,7 @@ func (c *qwenCounting) record(w *lineWalk) error {
 // reply with a figure anchors it again; every other message adds its bytes.
 func (c *qwenCounting) line(object bool) {
 	l := &c.l
+	c.sum.line(object, l)
 	if !object || l.twice || !l.typed {
 		c.marks = c.marks.with(sandbox.CountUnread)
 		return
@@ -337,9 +341,14 @@ func (w *lineWalk) qwenUsage(k jsonscan.Kind, u *qwenCountUsage, again *bool) er
 }
 
 // qwenPayload reads a compression's payload, the value k begins, into p:
-// its info and its history, each entry counted as a content ([qwenCountContent]).
-func (w *lineWalk) qwenPayload(k jsonscan.Kind, p *qwenCountPayload, again *bool) error {
+// its info and its history, each entry counted as a content ([qwenCountContent]);
+// and where sum is not nil, its summary by the steps of its transcript's read
+// ([qwenCompaction.read]).
+func (w *lineWalk) qwenPayload(k jsonscan.Kind, p *qwenCountPayload, sum *qwenCompaction, again *bool) error {
 	*p = qwenCountPayload{}
+	if sum != nil {
+		sum.payload(k)
+	}
 	switch k {
 	case jsonscan.Null:
 		p.decoded = true
@@ -370,25 +379,39 @@ func (w *lineWalk) qwenPayload(k jsonscan.Kind, p *qwenCountPayload, again *bool
 		case "compressedHistory":
 			*again = twice(&seen, 2) || *again
 			p.history, p.images, p.answers = k == jsonscan.ArrayStart, 0, 0
+			if sum != nil {
+				sum.history(k)
+			}
 			if !p.history {
 				return w.skip(k)
 			}
 			return w.elements(func(k jsonscan.Kind) (bool, error) {
-				err := w.qwenContent(k, &entry, false, again)
+				err := w.qwenContent(k, &entry, false, sum, again)
 				p.images += entry.imageCount()
 				p.answers += entry.answerBytes()
 				return true, err
 			})
+		case "summaryPrefixLength":
+			if sum != nil {
+				return sum.prefixLength(w, k)
+			}
 		}
 		return w.skip(k)
 	})
 }
 
 // qwenContent reads the content k begins into m, its calls and answers
-// among it where calls.
-func (w *lineWalk) qwenContent(k jsonscan.Kind, m *qwenCountContent, calls bool, again *bool) error {
+// among it where calls; and where sum is not nil, as an entry of its history
+// ([qwenCompaction.historyEntry]).
+func (w *lineWalk) qwenContent(k jsonscan.Kind, m *qwenCountContent, calls bool, sum *qwenCompaction,
+	again *bool) error {
+
 	*m = qwenCountContent{ops: m.ops[:0]}
+	entry := sum != nil && sum.entryStart(k)
 	if k == jsonscan.Null {
+		if entry {
+			sum.entryEnd()
+		}
 		return nil
 	}
 	m.present, m.object = true, k == jsonscan.ObjectStart
@@ -398,18 +421,30 @@ func (w *lineWalk) qwenContent(k jsonscan.Kind, m *qwenCountContent, calls bool,
 			return w.skip(k)
 		}
 		return w.members(func(name string, k jsonscan.Kind) error {
-			if name != "parts" {
+			switch {
+			case name == "role" && sum != nil:
+				return sum.role(w, k)
+			case name != "parts":
 				return w.skip(k)
 			}
 			*again = twice(&seen, 1) || *again
 			m.partsBad, m.imagesBad, m.idsBad, m.images, m.answers = false, false, false, 0, 0
 			m.ops, m.opsPast = m.ops[:0], false
-			ok, err := w.listField(k, func(k jsonscan.Kind) error { return w.qwenPart(k, m, calls, again) })
+			if sum != nil {
+				if read, err := sum.partsStart(w, k); read {
+					m.partsBad = true
+					return err
+				}
+			}
+			ok, err := w.listField(k, func(k jsonscan.Kind) error { return w.qwenPart(k, m, calls, sum, again) })
 			m.partsBad = m.partsBad || !ok
 			return err
 		})
 	})
 	m.size = size
+	if entry && err == nil {
+		sum.entryEnd()
+	}
 	return err
 }
 
@@ -422,8 +457,11 @@ const (
 )
 
 // qwenPart reads one part of a content, the value k begins, into m: its
-// images, its answer's bytes, and its call or answer where calls.
-func (w *lineWalk) qwenPart(k jsonscan.Kind, m *qwenCountContent, calls bool, again *bool) error {
+// images, its answer's bytes, and its call or answer where calls; and where
+// sum is not nil, its text a summary may hold ([qwenCompaction.parts]).
+func (w *lineWalk) qwenPart(k jsonscan.Kind, m *qwenCountContent, calls bool, sum *qwenCompaction,
+	again *bool) error {
+
 	switch k {
 	case jsonscan.Null:
 		return nil
@@ -431,6 +469,10 @@ func (w *lineWalk) qwenPart(k jsonscan.Kind, m *qwenCountContent, calls bool, ag
 	default:
 		m.partsBad = true
 		return w.skip(k)
+	}
+	if sum != nil {
+		sum.partStart()
+		defer sum.partEnd()
 	}
 	var seen uint16
 	var opened, closed, inline, file bool
@@ -508,6 +550,14 @@ func (w *lineWalk) qwenPart(k jsonscan.Kind, m *qwenCountContent, calls bool, ag
 			})
 			m.idsBad = m.idsBad || !ok
 			return err
+		case "text":
+			if sum != nil {
+				return sum.partText(w, k)
+			}
+		case "thought":
+			if sum != nil {
+				sum.thought(k)
+			}
 		}
 		return w.skip(k)
 	})
@@ -622,22 +672,23 @@ func (QwenCode) threadTraits() sandbox.ThreadTraits {
 // readMainThread counts the copy of ask's session a Qwen Code job's box holds,
 // where ask asks ([chatCopyCount]): the one chat file naming it
 // ([qwenChatFile]), its newest summary read in the same walk
-// ([qwenSummaryReading]), or with no count off the notes' walk.
+// ([qwenSummaryCapture]), or with no count off the notes' walk.
 func (QwenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
 	var reading sandbox.MainThreadReading
-	var summary *summaryRead
+	summarize := false
 	if ask.Summary {
 		if why := summaryReleaseWhy(ask.Release, qwenRelease); why != "" {
 			reading.Summary = summaryUnread(why)
 		} else {
-			summary = &summaryRead{}
+			summarize = true
 		}
 	}
 	if !ask.Count {
-		if summary != nil {
-			_, _ = QwenCode{}.notesHeld(ctx, box, Session{ID: ask.Session}, nil, summary)
+		if summarize {
+			var summary summaryRead
+			_, _ = QwenCode{}.notesHeld(ctx, box, Session{ID: ask.Session}, nil, &summary)
 			reading.Summary = summary.reading()
 		}
 		return reading
@@ -646,21 +697,14 @@ func (QwenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, _ Paths
 	if sandbox.ValidSessionID(ask.Session) {
 		file, _ = qwenChatFile(ctx, box, ask.Session)
 	}
-	var counter chatCounter
-	if ask.Count {
-		counter = new(qwenCounting)
+	counter := new(qwenCounting)
+	if summarize {
+		counter.summarize()
 	}
-	var lines *chatSummaryLines
-	if summary != nil {
-		lines = &newQwenSummaryReading(summary).chatSummaryLines
-	}
-	count, err := chatCopyCount(ctx, box, file, counter, ask.Release, qwenRelease, lines)
+	count, err := chatCopyCount(ctx, box, file, counter, ask.Release, qwenRelease)
 	reading.Count = count
-	if summary != nil {
-		if err = cmp.Or(err, lines.err); err != nil {
-			summary.fail("the session's chat file was not read to its end: " + err.Error())
-		}
-		reading.Summary = summary.reading()
+	if summarize {
+		reading.Summary = counter.summary(err)
 	}
 	return reading
 }

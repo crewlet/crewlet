@@ -3,6 +3,7 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -189,7 +190,9 @@ func TestAPersonsReadOfAQwenSessionIsItsWholeLineRead(t *testing.T) {
 // null and torn lines),
 // between a note and its reply and torn after them, read whole and in pieces
 // of seventeen bytes, from the start and past a line, it holds the notes the
-// whole-line read holds.
+// whole-line read holds; in pieces, with the newest summary read on the same
+// walk, it holds them too, the summary its whole-line read's
+// ([qwenNotesSummaryWholeOf]).
 //
 // Mutation: keep a note a compaction's prefix covers, take a note's text from
 // a part past the first, or keep pending notes past a line of another kind:
@@ -251,10 +254,16 @@ func TestACollectionsReadOfAQwenSessionIsItsWholeLineRead(t *testing.T) {
 			if !slices.Equal(got, want) || (err != nil) != (wantErr != nil) {
 				t.Errorf("%s from %d: held %v (%v), want %v (%v)", name, from, got, err, want, wantErr)
 			}
+			var summary summaryRead
 			got, err = qwenNotesHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, takes, from,
-				maxLineBytes, nil)
+				maxLineBytes, &summary)
 			if !slices.Equal(got, want) || (err != nil) != (wantErr != nil) {
 				t.Errorf("%s from %d in pieces: held %v (%v), want %v (%v)", name, from, got, err, want, wantErr)
+			}
+			if read, whole := summary.reading(), qwenNotesSummaryWholeOf(record); err == nil &&
+				!reflect.DeepEqual(read, whole) {
+				t.Errorf("%s from %d in pieces: the summary reads %s, want %s", name, from,
+					geminiSummaryString(read), geminiSummaryString(whole))
 			}
 		}
 	}
@@ -340,9 +349,9 @@ func TestAQwenCompactionsEntryEndsGrowNoFasterThanItsJoin(t *testing.T) {
 	c.reset(TranscriptValueMaxBytes)
 	ends := map[int]int{}
 	for i := range 200_000 {
-		c.role, c.entry, c.entryPast = "user", c.entry[:0], false
+		c.roleWord, c.entry, c.entryPast = "user", c.entry[:0], false
 		if i%3 == 2 {
-			c.role = "model"
+			c.roleWord = "model"
 		}
 		if len(c.held) > 0 {
 			c.entry = append(c.entry, "\n\n"...)

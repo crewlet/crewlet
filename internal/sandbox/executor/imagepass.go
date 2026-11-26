@@ -273,6 +273,48 @@ func (w *lineWalk) readImage(to io.Writer, head []byte, ended bool) (bool, []byt
 	return true, nil, true, err
 }
 
+// readAlso is [lineWalk.read] into to, the current string read as written
+// into raw too where raw is not nil: an image's bytes go to raw alone and its
+// place to to, none of them counted out of the line's bound, as a read of
+// the string as written counts none ([framedDigest.scan]).
+func (w *lineWalk) readAlso(to, raw io.Writer) error {
+	if raw == nil {
+		return w.read(to)
+	}
+	var head []byte
+	image, ended := false, false
+	if w.images {
+		var err error
+		head, image, ended, err = w.told(w.head[:0])
+		_, _ = raw.Write(head)
+		if err != nil {
+			return err
+		}
+	}
+	if !image {
+		_, _ = to.Write(head)
+	}
+	passed := int64(len(head))
+	for !ended {
+		n, err := w.scan.Read(w.piece)
+		_, _ = raw.Write(w.piece[:n])
+		if !image {
+			_, _ = to.Write(w.piece[:n])
+		}
+		passed += int64(n)
+		switch {
+		case errors.Is(err, io.EOF):
+			ended = true
+		case err != nil:
+			return err
+		}
+	}
+	if image {
+		_, _ = io.WriteString(to, mediaPlaceholder(head, passed))
+	}
+	return nil
+}
+
 // asWritten is t, where a value is written as written, through the walk's
 // [asWrittenImages] on a walk that passes images.
 func (w *lineWalk) asWritten(t io.Writer) io.Writer {
