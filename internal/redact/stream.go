@@ -108,8 +108,9 @@ var errStreamClosed = errors.New("redact: write to a closed stream")
 // the writer it was made with, in one pass, or refuses it. However the text
 // is cut into writes, it holds its stages' windows (a live stream also the
 // text past its settled point, [liveHeldBytes] at most), whether it refuses
-// depends on the text and its flushes alone ([Stream.Flush]), and where
-// Close answers nil it wrote exactly [Secrets]. Writes cut at any byte.
+// depends on the text and its flushes alone ([Stream.Flush]; a live stream's
+// also on whether it trails, which where its writes are cut decides too), and
+// where Close answers nil it wrote exactly [Secrets]. Writes cut at any byte.
 //
 // A refusal is [ErrDecidedEarly], from Close and every later write: the keys'
 // stage decided a window before the rules' claims there were known. What was
@@ -279,9 +280,11 @@ func (s *Stream) trail(rest []byte) {
 
 // Trailing reports whether a live stream has stopped writing as far as
 // [Settled] settles: past [liveHeldBytes] held, its stages write what they
-// decide, trailing by their windows, and Flush's held counts the text not
-// yet in what it wrote. It trails until Close, which writes the rest, and
-// never refuses for it. A stream that is not live never trails.
+// decide, trailing by their windows, and Flush's held is a lower bound on
+// the text not yet in what it wrote. It trails until Close, which writes the
+// rest, and never refuses for it. Whether it trails turns on the text and on
+// where its writes are cut, since it asks Settled only once a write's piece
+// is taken ([Stream.settleIn]). A stream that is not live never trails.
 func (s *Stream) Trailing() bool {
 	return s.live != nil && s.live.trailing
 }
