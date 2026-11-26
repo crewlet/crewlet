@@ -160,6 +160,11 @@ func TestACaptureAtTheKeptBoundIsHeldToItsSeatsBudget(t *testing.T) {
 					t.Errorf("the keep came to %+v, want it refused naming max_bytes_per_seat, nothing uploaded",
 						kept)
 				}
+				if stamp := rig.get("t1").Capture; !tc.kept && (stamp == nil || stamp.State != CaptureRefused ||
+					stamp.Loss != executorkeep.LossStoreRefused || !strings.Contains(stamp.Reason, "max_bytes_per_seat")) {
+					t.Errorf("the row holds %+v, want the capture refused as the store's, its words naming "+
+						"max_bytes_per_seat", stamp)
+				}
 			})
 		})
 	}
