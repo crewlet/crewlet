@@ -601,11 +601,14 @@ func (w *worker) read() {
 	open := w.streams
 	w.streams = nil
 	w.mu.Unlock()
+	// The recognizer lets go of the worker BEFORE its streams learn it died:
+	// a dictation that sees ErrLost and opens again starts a new worker,
+	// never this dead one.
+	w.l.workerExited(w, status, len(open))
 	for _, s := range open {
 		s.end(ErrLost)
 	}
 	close(w.exited)
-	w.l.workerExited(w, status, len(open))
 }
 
 // stop ends the worker's input, which it exits on, and kills it after

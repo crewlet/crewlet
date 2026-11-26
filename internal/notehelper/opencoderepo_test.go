@@ -33,7 +33,7 @@ func (r repoRun) openCodeLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	var errs bytes.Buffer
-	if err := checkoutLaunch(config, r.work, &errs); err != nil || errs.Len() > 0 {
+	if err := checkoutLaunch(config, r.work, strings.NewReader(""), &errs); err != nil || errs.Len() > 0 {
 		t.Fatalf("the launch failed: %v\n%s", err, errs.String())
 	}
 }
@@ -133,7 +133,7 @@ func TestACopyNeverTakesTheNameOfASkillTheHarnessListsElsewhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	var errs bytes.Buffer
-	if err := checkoutLaunch(config, r.work, &errs); err != nil {
+	if err := checkoutLaunch(config, r.work, strings.NewReader(""), &errs); err != nil {
 		t.Fatalf("the launch failed: %v\n%s", err, errs.String())
 	}
 	skill := func(name string) string { return "---\nname: " + name + "\ndescription: " + name + ".\n---\n" }

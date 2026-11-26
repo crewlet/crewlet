@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // hermesPluginOf is the plugin WriteConfig staged for req's run in a box, its
@@ -370,6 +373,243 @@ func TestAHermesRunsNotesFollowItsSessionIntoACompactionsChild(t *testing.T) {
 	} {
 		if !slices.Equal(seen[store], want) {
 			t.Errorf("%s: after each of the last three hooks the plugin's turn is %+v, want %+v", store, seen[store], want)
+		}
+	}
+}
+
+// hermesNestedProbe registers the plugin with a stand-in of Hermes's plugin
+// context and hook bound (argv[3] seconds), settings argv[2], and fires its
+// transform_tool_result for the run's own session after its turn starts:
+// for each pause in argv[4] (seconds to wait first), argv[5] firings at once,
+// each on its own thread as a parallel batch's are. It prints the results in
+// firing order, the roots it started a render of (a render's own write may
+// come after the probe exits), and each firing that outlasted the hook bound.
+// argv[6], where not empty, is the stand-in's tools/budget_config.py.
+const hermesNestedProbe = `import importlib.util, json, os, sys, threading, time
+os.environ["CREWLET_HERMES_PLUGIN"] = sys.argv[2]
+stand = os.path.join(os.path.dirname(sys.argv[2]), "py")
+os.makedirs(os.path.join(stand, "hermes_cli"), exist_ok=True)
+open(os.path.join(stand, "hermes_cli", "__init__.py"), "w").close()
+with open(os.path.join(stand, "hermes_cli", "plugins.py"), "w") as f:
+    f.write("def _resolve_hook_callback_timeout():\n    return %s\n" % sys.argv[3])
+if sys.argv[6]:
+    os.makedirs(os.path.join(stand, "tools"), exist_ok=True)
+    open(os.path.join(stand, "tools", "__init__.py"), "w").close()
+    with open(os.path.join(stand, "tools", "budget_config.py"), "w") as f:
+        f.write(sys.argv[6])
+sys.path.insert(0, stand)
+spec = importlib.util.spec_from_file_location("crewlet_plugin", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+hooks = {}
+class Ctx:
+    def register_hook(self, name, fn, **kw):
+        hooks[name] = fn
+m.register(Ctx())
+hooks["pre_llm_call"](session_id="main")
+out, outlasted = [], []
+for pause in json.loads(sys.argv[4]):
+    time.sleep(pause)
+    wave, over = [None] * int(sys.argv[5]), []
+    def fire(i):
+        t0 = time.monotonic()
+        wave[i] = hooks["transform_tool_result"](session_id="main", tool_name="terminal", result="cloned")
+        if time.monotonic() - t0 >= float(sys.argv[3]):
+            over.append(len(out) + i + 1)
+    threads = [threading.Thread(target=fire, args=(i,)) for i in range(len(wave))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    out += wave
+    outlasted += over
+print(json.dumps({"results": out, "rendering": sorted(m._renders), "outlasted": outlasted}))
+`
+
+// HERMES'S RENDER OF A LATER CHECKOUT IS BOUNDED, NEVER STARTED TWICE, AND
+// SAID ONCE IT KEEPS FAILING: every firing finding a render running (a
+// parallel batch's too) waits on it within its bound; a late result serves a
+// later firing unless what it read changed (then rendered again), its claim
+// taking the home's names of then; a render fails once per bound it outlives,
+// once where it raised, and an answer clears the count; at three the checkout
+// is claimed as left out, said with the last error, else as late; no render
+// starts without the render's reserve, no claim without its own; no firing
+// outlasts the hook bound, a slow stamp or name read included (plugin's _gate).
+//
+// Mutation: undo any of these (a failure per firing finding a render running,
+// a late raise counted twice, an error forgotten), and a row goes red.
+func TestHermesRenderOfALaterCheckoutIsBounded(t *testing.T) {
+	t.Parallel()
+	python := prereqtest.OnPath(t, "python3", "the case runs Hermes's plugin", "install python3")
+	plugin, _ := hermesPluginOf(t, sandbox.RunRequest{})
+	late := "the instructions and skills of /r are left out: Hermes did not render it within the hand's bound 3 times"
+	failed := "the instructions and skills of /r are left out: its render failed: RuntimeError: boom"
+	for _, c := range []struct {
+		name, render, pauses, names, budget string
+		width                               int // firings at once at each pause
+		reserve                             float64
+		want                                []string // each firing's result, "" for none
+		starts                              int
+		said, unsaid                        string // in the gate the last claim read
+	}{
+		{name: "in time", render: "pass", pauses: "[0]", reserve: 1, want: []string{"cloned\n\nHANDED"}, starts: 1},
+		{name: "a parallel batch waits on one render", render: "time.sleep(0.5)", pauses: "[0]", width: 4, reserve: 1,
+			want: slices.Repeat([]string{"cloned\n\nHANDED"}, 4), starts: 1, unsaid: "left out"},
+		{name: "a parallel batch counts a late render once", render: "time.sleep(2.5)", pauses: "[0, 2]", width: 4,
+			reserve: 1, want: append(slices.Repeat([]string{""}, 4), slices.Repeat([]string{"cloned\n\nHANDED"}, 4)...),
+			starts: 1, unsaid: "left out"},
+		{name: "late, then kept for the next firing with the names of then", pauses: "[0, 2]", reserve: 1,
+			render: "time.sleep(2.5)\n    open(TAKEN, 'w').write('added')",
+			want:   []string{"", "cloned\n\nHANDED"}, starts: 1, said: `"home": "added"`},
+		{name: "kept, then changed, rendered again", pauses: "[0, 2]", reserve: 1,
+			render: "if len(open(STARTS).read()) == 1:\n        time.sleep(2.5)\n        open(STAMP, 'w').write('changed')",
+			want:   []string{"", "cloned\n\nHANDED"}, starts: 2},
+		{name: "late at three firings", render: "time.sleep(60)", pauses: "[0, 0, 0]", reserve: 1,
+			want: []string{"", "", "cloned\n\nHANDED"}, starts: 1, said: late},
+		{name: "failing at three firings", render: "raise RuntimeError('boom')", pauses: "[0, 0, 0]", reserve: 1,
+			want: []string{"", "", "cloned\n\nHANDED"}, starts: 3, said: failed},
+		{name: "late, then raising, fails once", pauses: "[0, 1.5, 0]", reserve: 1,
+			render: "if len(open(STARTS).read()) == 1:\n        time.sleep(2.5)\n    raise RuntimeError('boom')",
+			want:   []string{"", "", "cloned\n\nHANDED"}, starts: 3, said: failed},
+		{name: "raising, then late, said as the error", pauses: "[0, 0, 0]", reserve: 1,
+			render: "if len(open(STARTS).read()) < 3:\n        raise RuntimeError('boom')\n    time.sleep(60)",
+			want:   []string{"", "", "cloned\n\nHANDED"}, starts: 3, said: failed},
+		{name: "no render or claim without the reserve", render: "pass", pauses: "[0]", reserve: 5, want: []string{""}},
+		{name: "no claim without the claim's reserve", render: "pass", pauses: "[0]", reserve: 1,
+			names: "time.sleep(5)", want: []string{""}, starts: 1},
+		{name: "no claim once the room's read passes the claim's reserve", render: "pass", pauses: "[0]", reserve: 1,
+			budget: "import time\ndef budget_for_context_window(context_length):\n    time.sleep(2.6)\n",
+			want:   []string{""}, starts: 1},
+		{name: "a kept render whose stamp is slow waits", pauses: "[0, 2]", reserve: 1,
+			render: "time.sleep(2.5)\n    open(STAMP, 'w').write('slow')", want: []string{"", ""}, starts: 1},
+		{name: "an answer clears the failures before it", pauses: "[0, 0, 0, 0]", reserve: 1,
+			render: "n = len(open(STARTS).read())\n    if n == 3:\n        open(STAMP, 'w').write('v2')\n" +
+				"    if n != 3:\n        raise RuntimeError('boom')",
+			want: []string{"", "", "cloned\n\nHANDED", ""}, starts: 4},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			q := shellword.Quote
+			helper := "#!/bin/sh\nif [ \"$2\" = hermes-peek ]; then echo '{\"roots\":[\"/r\"]}'; exit 0; fi\n" +
+				"cat > " + q(filepath.Join(dir, "gate.json")) + "\nprintf HANDED\n"
+			names := c.names
+			if names == "" {
+				names = "pass"
+			}
+			carry := "import time\n" +
+				"STARTS, TAKEN, STAMP = " + strconv.Quote(filepath.Join(dir, "starts")) + ", " +
+				strconv.Quote(filepath.Join(dir, "taken")) + ", " + strconv.Quote(filepath.Join(dir, "stamp")) + "\n" +
+				"def _read(path):\n    try:\n        return open(path).read()\n    except OSError:\n        return \"\"\n" +
+				"def skill_names():\n    " + names + "\n    return {\"home\": _read(TAKEN)}\n" +
+				"def checkout_stamp(root):\n    s = _read(STAMP)\n    if s == \"slow\":\n        time.sleep(5)\n    return s\n" +
+				"def checkout_gate(roots, window):\n    taken = {\"home\": _read(TAKEN)}\n" +
+				"    open(STARTS, \"a\").write(\"s\")\n    " + c.render +
+				"\n    return {\"checkouts\": {roots[0]: {\"text\": \"T\"}}, \"taken\": taken}\n"
+			settings, _ := json.Marshal(map[string]any{"checkouts": map[string]any{"helper": filepath.Join(dir, "helper"),
+				"config": filepath.Join(dir, "nested.json"), "carry": filepath.Join(dir, "carry.py"), "margin": 1,
+				"render_reserve": c.reserve, "claim_reserve": c.reserve / 2}})
+			for name, body := range map[string]string{"helper": helper, "carry.py": carry, "settings.json": string(settings)} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			width := max(c.width, 1)
+			out, err := exec.Command(python, "-I", "-c", hermesNestedProbe, plugin, filepath.Join(dir, "settings.json"),
+				"4", c.pauses, strconv.Itoa(width), c.budget).Output()
+			if err != nil {
+				t.Fatalf("the plugin's hook: %v", err)
+			}
+			var got struct {
+				Results   []*string
+				Rendering []string
+				Outlasted []int
+			}
+			if err = json.Unmarshal(out, &got); err != nil || len(got.Results) != len(c.want) {
+				t.Fatalf("the probe printed %q: %v", out, err)
+			}
+			if len(got.Outlasted) > 0 {
+				t.Errorf("firings %v outlasted Hermes's hook bound", got.Outlasted)
+			}
+			if started := len(got.Rendering) > 0; started != (c.starts > 0) {
+				t.Errorf("a render was started: %t, want %t", started, c.starts > 0)
+			}
+			for i, want := range c.want {
+				if g := deref(got.Results[i]); g != want {
+					t.Errorf("firing %d: the result became %q, want %q", i+1, g, want)
+				}
+			}
+			starts, _ := os.ReadFile(filepath.Join(dir, "starts"))
+			if len(starts) != c.starts {
+				t.Errorf("Hermes was asked to render %d times, want %d", len(starts), c.starts)
+			}
+			gate, _ := os.ReadFile(filepath.Join(dir, "gate.json"))
+			if c.said != "" && !strings.Contains(string(gate), c.said) {
+				t.Errorf("the last claim's gate %s says nothing of %q", gate, c.said)
+			}
+			if c.unsaid != "" && strings.Contains(string(gate), c.unsaid) {
+				t.Errorf("the last claim's gate %s says %q", gate, c.unsaid)
+			}
+		})
+	}
+}
+
+// hermesRoomProbe loads the plugin beside a stand-in of Hermes 0.23.3's
+// result budget for a large window and of its subdirectory hint tracker, which
+// answers a call naming {"hint": n} with n characters of hints from the run's
+// working directory (TERMINAL_CWD), and prints the room a result of argv[2]
+// characters has in a batch of argv[3] calls, the call naming argv[5].
+const hermesRoomProbe = `import importlib.util, os, sys
+stand = sys.argv[4]
+for package in ("tools", "agent"):
+    os.makedirs(os.path.join(stand, package), exist_ok=True)
+    open(os.path.join(stand, package, "__init__.py"), "w").close()
+with open(os.path.join(stand, "tools", "budget_config.py"), "w") as f:
+    f.write("class B:\n    default_result_size = 100000\n    turn_budget = 200000\n"
+            "    def resolve_threshold(self, tool):\n        return 100000\n"
+            "def budget_for_context_window(context_length):\n    return B()\n")
+with open(os.path.join(stand, "agent", "runtime_cwd.py"), "w") as f:
+    f.write("import os\ndef scope_terminal_cwd():\n    return os.environ.get('TERMINAL_CWD', '')\n")
+with open(os.path.join(stand, "agent", "subdirectory_hints.py"), "w") as f:
+    f.write("class SubdirectoryHintTracker:\n"
+            "    def __init__(self, working_dir=None, *, enabled=True):\n        self.working_dir = working_dir\n"
+            "    def check_tool_call(self, tool_name, tool_args):\n"
+            "        n = tool_args.get('hint', 0) if self.working_dir == '/work' else 0\n"
+            "        return 'h' * n if n else None\n")
+os.environ["TERMINAL_CWD"] = "/work"
+sys.path.insert(0, stand)
+spec = importlib.util.spec_from_file_location("crewlet_plugin", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+print(m._room("terminal", {"hint": int(sys.argv[5])}, "x" * int(sys.argv[2]), 262144, int(sys.argv[3])))
+`
+
+// A HERMES HAND KEEPS TO ITS SHARE OF THE TURN BUDGET LESS THE HINTS HERMES
+// ADDS: a result has Hermes's per-result threshold, and at most its share of
+// the 200,000-character turn budget among the response's calls (all of it
+// for one call) less the subdirectory hints Hermes's own tracker, from the
+// run's working directory, answers for the call, since Hermes adds them
+// after the hand and past that budget spills the batch's largest result
+// first (measured on 0.23.3: our 86,283-character clone result was spilled).
+//
+// Mutation: ignore the batch, leave no room for the hints, count one hint
+// whatever the call names, or spare a single call the turn budget, and a row
+// goes red.
+func TestAHermesHandKeepsToItsShareOfTheTurnBudgetLessHermessHints(t *testing.T) {
+	t.Parallel()
+	python := prereqtest.OnPath(t, "python3", "the case runs Hermes's plugin", "install python3")
+	plugin, _ := hermesPluginOf(t, sandbox.RunRequest{})
+	for _, c := range []struct{ result, calls, hint, want string }{
+		{"6", "1", "0", "99994"}, {"6", "5", "0", "39994"}, {"6", "5", "32400", "7594"},
+		{"1000", "2", "64800", "34200"}, {"6", "1", "129600", "70394"},
+	} {
+		out, err := exec.Command(python, "-I", "-c", hermesRoomProbe, plugin, c.result, c.calls, t.TempDir(), c.hint).Output()
+		if err != nil {
+			t.Fatalf("the probe: %v", err)
+		}
+		if got := strings.TrimSpace(string(out)); got != c.want {
+			t.Errorf("a %s-character result in a batch of %s with %s characters of hints has room %s, want %s",
+				c.result, c.calls, c.hint, got, c.want)
 		}
 	}
 }
