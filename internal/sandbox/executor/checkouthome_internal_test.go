@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -341,4 +342,47 @@ func waitingOnLock(t *testing.T, state string) bool {
 		}
 	}
 	return false
+}
+
+// checkoutHolder is a runner that hands the checkouts below its run's start
+// directory what its harness would load at their roots ([checkoutHome]).
+type checkoutHolder interface {
+	checkoutHome(paths Paths) checkoutHome
+}
+
+// unhandedCheckouts names each of hs that is no [checkoutHolder].
+func unhandedCheckouts(hs []Harness) []string {
+	var out []string
+	for _, h := range hs {
+		if _, holds := h.(checkoutHolder); !holds {
+			out = append(out, h.Name()+" hands no checkout")
+		}
+	}
+	return out
+}
+
+// checkoutlessRunner is a runner that hands no checkout, as a new one would.
+type checkoutlessRunner struct{ Harness }
+
+func (checkoutlessRunner) Name() string { return "checkoutless" }
+
+// EVERY RUNNER HANDS THE CHECKOUTS BELOW ITS START DIRECTORY: a run loads what
+// a person's session of its harness started at a checkout's root would load
+// there (docs/concepts/code-sandbox.md, each runner's section: "A run is
+// handed its repositories' ..."), through its [checkoutHome], so a runner
+// added without one would run with none of its checkouts' instructions or
+// skills and no test would notice. Every registered runner is a
+// [checkoutHolder]; none is excused.
+//
+// Mutation: rename one runner's checkoutHome method, or hand the check a
+// runner without one, and it goes red.
+func TestEveryRunnerHandsItsCheckouts(t *testing.T) {
+	t.Parallel()
+	for _, problem := range unhandedCheckouts(Registered()) {
+		t.Error(problem)
+	}
+	added := []Harness{Pi{}, checkoutlessRunner{Harness: Pi{}}}
+	if got := unhandedCheckouts(added); !slices.Equal(got, []string{"checkoutless hands no checkout"}) {
+		t.Errorf("a runner added without a checkout home is reported as %q", got)
+	}
 }

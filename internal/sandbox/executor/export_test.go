@@ -401,3 +401,15 @@ func CountingBy(r *Runner, readBytes int64) sandbox.Counter {
 	c.readBytes = readBytes
 	return c
 }
+
+// CheckoutSkipLogs is the skip log of every runner that hands its checkouts
+// ([checkoutHolder]), by its harness's name.
+func CheckoutSkipLogs(p Paths) map[string]string {
+	logs := map[string]string{}
+	for _, h := range Registered() {
+		if c, ok := h.(checkoutHolder); ok {
+			logs[h.Name()] = c.checkoutHome(p).skipped()
+		}
+	}
+	return logs
+}
