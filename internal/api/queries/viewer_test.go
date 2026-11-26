@@ -4,6 +4,7 @@ package queries_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
+	"github.com/crewlet/crewlet/internal/speech"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -131,6 +133,41 @@ func TestTheViewerSaysWhetherAPageCanBeOpenedHere(t *testing.T) {
 		answered, err := askAsSeat(t, sources, "ana", "viewer", nil)
 		if got := answerMap(t, answered, err)["artifact_pages"]; got != want {
 			t.Errorf("artifact_pages = %v, want %v", got, want)
+		}
+	}
+}
+
+// A MICROPHONE IS DRAWN FROM THE ANSWER EVERY SCREEN HOLDS: whether this
+// node's recognizer can dictate now, and the reason it cannot, and nothing
+// else (no path, model or secret). A node handed no recognizer is off.
+func TestTheViewerSaysWhetherDictationIsAvailable(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		source func() speech.Availability
+		want   speech.Availability
+	}{
+		"off":       {nil, speech.Availability{Reason: speech.ReasonDisabled}},
+		"available": {func() speech.Availability { return speech.Availability{Available: true} }, speech.Availability{Available: true}},
+		"failed": {func() speech.Availability { return speech.Availability{Reason: speech.ReasonModelUnavailable} },
+			speech.Availability{Reason: speech.ReasonModelUnavailable}},
+	} {
+		sources := viewerSources(t, &stubWork{})
+		sources.Dictation = c.source
+		answered, err := askAsSeat(t, sources, "ana", "viewer", nil)
+		raw, err := json.Marshal(answerMap(t, answered, err)["dictation"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]any{"available": c.want.Available}
+		if c.want.Reason != "" {
+			want["reason"] = string(c.want.Reason)
+		}
+		if len(got) != len(want) || got["available"] != want["available"] || got["reason"] != want["reason"] {
+			t.Errorf("%s: dictation = %v, want %v", name, got, want)
 		}
 	}
 }
