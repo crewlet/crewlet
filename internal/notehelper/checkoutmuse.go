@@ -199,6 +199,29 @@ func museStartFile(work string, slots []instructionSlot) (string, string, bool) 
 	return "", "", false
 }
 
+// listedMuse is the [checkoutSpec.ListedAs] of a harness that lists skills as
+// Muse Code 1.4.25 does ([museListing]).
+const listedMuse = "muse"
+
+// museListing is Muse Code 1.4.25's listing rule ([listingRule]): a skill is
+// listed under its frontmatter's name, else its directory's ([museFrontName]),
+// and of two of one name Muse lists the higher place's alone, or, both in one
+// directory, neither (measured, rows fn1-fn4, so1-so6), so even where the
+// copy would win (over ~/.claude/skills and ~/.codex/skills) the person's
+// keeps its name. A home walked as Muse lists one: the skill directories
+// directly in it, dot ones too (unmeasured, so none assumed unlisted).
+var museListing = listingRule{harness: "Muse Code", walk: skillWalkOptions{Every: true, Depth: 1},
+	key: func(name string) string { return name }, shown: func(name string) string { return name },
+	takes: func(d skillDir) (string, []string, bool) {
+		names, plain := museFrontName(entryFile(d))
+		for i, n := range names {
+			if n == "" {
+				names[i] = d.name
+			}
+		}
+		return names[0], names, plain
+	}}
+
 // museFrontName is the names a SKILL.md's frontmatter may have Muse Code
 // 1.4.25 list its skill under, "" for its directory's, and whether it can be
 // read plainly: a file opening with `---` and a `name:` line before the `---`

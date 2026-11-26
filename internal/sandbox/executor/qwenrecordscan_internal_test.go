@@ -140,7 +140,7 @@ func qwenPersonVariants() []string {
 		`{"type":5,"message":{"parts":[{"text":"x"}]}}`,
 		`{"type":"x","extra":{"deep":[1,{"a":"b"}],"s":` + q(h.words) + `}}`,
 		`  {"type":"assistant","message":{"parts":[{"text":"blanks around"}]}}  `,
-	}, boundedLines()...)
+	}, append(qwenMediaLines(chatMediaKB), boundedLines()...)...)
 }
 
 // A PERSON'S READ OF A QWEN CODE SESSION ON THE WALK IS ITS WHOLE-LINE READ'S:

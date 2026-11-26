@@ -22,7 +22,8 @@ var museRulesNames = []string{"AGENTS.md", "CLAUDE.md", ".agents/AGENTS.md", ".c
 // "muse" budget); never its hooks, MCP servers, settings, agents or commands.
 // A copy is left out where Muse would not list it beside a skill listed under
 // its name (rows so1-so6, fn1-fn4): in ~/.config/muse/skills or the start
-// directory's (listed in its place), ~/.agents/skills (neither listed), and,
+// directory's (listed in its place), ~/.agents/skills (neither; the helper
+// reads it as the run's skills), and,
 // where foreign says Muse lists them, ~/.claude/skills and ~/.codex/skills
 // (the copy listed in theirs).
 func museCheckouts(paths Paths, foreign bool) checkoutSpec {
@@ -30,13 +31,14 @@ func museCheckouts(paths Paths, foreign bool) checkoutSpec {
 	spec := checkoutSpec{Instructions: []checkoutSlot{{Names: museRulesNames}}, Limit: checkoutUnlimited,
 		SkillDirs: []checkoutSkillDir{{Dir: ".agents/skills"}, {Dir: ".claude/skills"}, {Dir: ".codex/skills"}},
 		Budget:    museBudget}
-	dirs := []string{paths.MuseConfig() + "/skills", paths.MuseSkills(), work + "/.agents/skills",
-		work + "/.claude/skills", work + "/.codex/skills"}
+	dirs := []string{paths.MuseConfig() + "/skills", work + "/.agents/skills", work + "/.claude/skills",
+		work + "/.codex/skills"}
 	if foreign {
 		dirs = append(dirs, paths.Home+"/.claude/skills", paths.Home+"/.codex/skills")
 	}
-	for _, dir := range dirs {
-		spec.HomeSkills = append(spec.HomeSkills, checkoutSkillDir{Dir: dir})
+	for _, dir := range dirs { // the skill directories directly in each, dot ones too, as ~/.agents/skills
+		spec.HomeSkills = append(spec.HomeSkills, checkoutSkillDir{Dir: dir, Recursive: true,
+			checkoutWalk: checkoutWalk{Every: true, Depth: 1}})
 	}
 	spec.ListedAs, spec.Reserved = museListedAs, museReserved
 	return spec

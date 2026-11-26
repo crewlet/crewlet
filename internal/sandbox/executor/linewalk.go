@@ -94,6 +94,8 @@ type lineWalk struct {
 	images  bool
 	head    []byte
 	written asWrittenImages
+	// inline says the string read next is a payload whole ([passing]).
+	inline bool
 	// inner reads, through innerSrc, the JSON text a string holds
 	// ([lineWalk.decoded]).
 	inner    *jsonscan.Scanner

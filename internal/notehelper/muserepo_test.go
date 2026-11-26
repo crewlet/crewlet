@@ -20,7 +20,8 @@ func museSpec(skills string, home ...string) checkoutSpec {
 		Skills:    skills, Copied: filepath.Join(filepath.Dir(skills), "copied"), Reserved: []string{"crewlet", "bundled", "plugin"},
 		ListedAs: listedMuse}
 	for _, dir := range home {
-		spec.HomeSkills = append(spec.HomeSkills, skillDirSlot{Dir: dir})
+		spec.HomeSkills = append(spec.HomeSkills, skillDirSlot{Dir: dir, Recursive: true,
+			skillWalkOptions: skillWalkOptions{Every: true, Depth: 1}})
 	}
 	return spec
 }
@@ -394,7 +395,8 @@ func TestAMuseCopyAHomeSkillIsListedBesideIsLeftOutSaid(t *testing.T) {
 		"late/.agents/skills/lint/SKILL.md":   "---\nname: lint\ndescription: Lints.\n---\n"})
 	got := museContext(t, r.museFire(t, "s", "s"))
 	line := "the skill " + r.workdir(t) + "/late/.agents/skills/deploy is left out: the home's " +
-		filepath.Join(home, "pdir") + " is listed as late:deploy too, and Muse Code would not list both"
+		filepath.Join(home, "pdir") + ", which Muse Code lists as late:deploy, takes the name late:deploy it would " +
+		"list the copy under"
 	if !strings.Contains(got, "- "+line) || !strings.Contains(got, "- late:lint: Lints.") {
 		t.Errorf("the answer is\n%s\nwant the hidden copy said and the other listed", got)
 	}

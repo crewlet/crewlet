@@ -37,6 +37,7 @@ var oneShots = map[string]oneShot{
 	"grok-nested":       {run: runGrokNested, config: true},
 	"pi-nested":         {run: runPiNested, config: true},
 	"muse-nested":       {run: runMuseNested, config: true},
+	"kimi-nested":       {run: runKimiNested, config: true},
 	"codex-renew":       {run: runCodexRenew, config: true},
 	"codex-materialize": {run: runCodexMaterialize},
 	"copilot-launch":    {run: runCopilotLaunch, config: true},

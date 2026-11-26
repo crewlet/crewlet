@@ -19,6 +19,10 @@ import (
 // written; a home skill whose own name rewrites to the copy's takes it too
 // (inferred).
 
+// listedGrok is the [checkoutSpec.ListedAs] of a harness that lists skills as
+// Grok Build 1.0.92 does.
+const listedGrok = "grok"
+
 // frontName is the `name` a SKILL.md's frontmatter gives, and whether it has
 // one: the frontmatter's lines between a first line `---` and the next, the
 // first `name:` key's value, its quotes trimmed, read no further
@@ -95,6 +99,19 @@ func grokSessionSkills(dirs []skillDir) []skillDir {
 	}
 	return out
 }
+
+// grokListing is Grok Build 1.0.92's listing rule ([listingRule]): a copy
+// is listed and keyed by its name rewritten ([skillname.Grok]); a home skill
+// or command takes its listed name and its own name rewritten. Grok drops the
+// copy behind such a home skill, whichever was written first, or keeps the
+// name and lists the person's skill by another (measured, section 11's rule),
+// so the copy is left out. A home walked as Grok walks a skills directory.
+var grokListing = listingRule{harness: "Grok Build", walk: grokHomeWalk, key: skillname.Grok, shown: skillname.Grok,
+	takes: func(d skillDir) (string, []string, bool) {
+		n, named := frontName(entryFile(d))
+		listed, _ := skillname.GrokListed(n, named, d.name)
+		return listed, []string{listed, skillname.Grok(d.name)}, true
+	}}
 
 // grokHomeWalk is how the run's skills directory is walked for the names it
 // holds, as Grok Build 1.0.92 walks a skills directory (measured in a

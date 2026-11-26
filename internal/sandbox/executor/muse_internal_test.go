@@ -816,11 +816,14 @@ func TestAKilledMuseRunsPluginRecordsComeBack(t *testing.T) {
 }
 
 // A MUSE COPY IS CHECKED AGAINST EVERY SKILL DIRECTORY MUSE WOULD LIST BESIDE
-// IT (measured, rows so1-so6): ~/.config/muse/skills, ~/.agents/skills and
-// the start directory's three, and ~/.claude/skills and ~/.codex/skills only
-// where the home's settings leave Muse listing another harness's skills.
+// IT (measured, rows so1-so6): ~/.config/muse/skills and the start
+// directory's three beside ~/.agents/skills (the run's skills, which the
+// helper reads itself), and ~/.claude/skills and ~/.codex/skills only where
+// the home's settings leave Muse listing another harness's skills, each read
+// for the skill directories directly in it, as Muse lists them.
 //
-// Mutation: drop a directory, check the foreign ones whatever the setting,
+// Mutation: drop a directory, walk one deeper, check the foreign ones
+// whatever the setting,
 // name no listing rule (the helper then reads none of them), or leave the
 // tags `bundled` and `plugin` free (rows p2, p5: Muse refuses those names).
 func TestAMuseCopyIsCheckedAgainstTheSkillsMuseListsBesideIt(t *testing.T) {
@@ -829,8 +832,11 @@ func TestAMuseCopyIsCheckedAgainstTheSkillsMuseListsBesideIt(t *testing.T) {
 		var got []string
 		for _, d := range museCheckouts(p, foreign).HomeSkills {
 			got = append(got, d.Dir)
+			if !d.Recursive || d.checkoutWalk != (checkoutWalk{Every: true, Depth: 1}) {
+				t.Errorf("foreign skills %v: %s is read as %+v, want the skill directories directly in it", foreign, d.Dir, d)
+			}
 		}
-		want := []string{"/h/.config/muse/skills", "/h/.agents/skills", "/h/workspace/.agents/skills",
+		want := []string{"/h/.config/muse/skills", "/h/workspace/.agents/skills",
 			"/h/workspace/.claude/skills", "/h/workspace/.codex/skills"}
 		if foreign {
 			want = append(want, "/h/.claude/skills", "/h/.codex/skills")

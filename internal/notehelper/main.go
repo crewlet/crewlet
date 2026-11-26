@@ -142,7 +142,8 @@
 //     whole, said: Copilot walks 9 levels and Claude Code 10 at least
 //     (measured), so a deeper tree is the gap. Names as {"names": [...],
 //     "inside": true} follow a link only inside the checkout, and "once" on
-//     either kind hands no file an earlier slot did, by real path (Grok's);
+//     either kind hands no file an earlier slot did, by real path (Grok's),
+//     and names' "skipBlank" skips a blank file (Kimi's);
 //     `importInstructions` for a harness that reads them itself (Claude Code),
 //     each file then named as one `@<absolute path>` import in place of its
 //     text, no limit applying (checkoutimport.go);
@@ -162,9 +163,10 @@
 //     too, as a skill named by its file less `.md`. Grok follows a link out
 //     too; the walks do not;
 //   - `listedAs`: a harness's listing rule, "grok" (Grok 1.0.92's,
-//     checkoutgrok.go) or "muse" (Muse 1.4.25's); a copy is left out, said,
-//     where a skill of `homeSkills` (Grok's: of `skills` too) takes its
-//     listed name (checkouthome.go); Muse lists a plugin's skill as
+//     checkoutgrok.go), "kimi" (Kimi 2.7.2's, kimirepo.go) or "muse" (Muse
+//     1.4.25's, checkoutmuse.go); a home skill (of `skills` or `homeSkills`)
+//     taking a copy's listed name leaves it out, said
+//     (checkouthomeskills.go); Muse lists a plugin's skill as
 //     `plugin:<id>:<skill>`, no copy's (rows p1-p3);
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
@@ -188,42 +190,41 @@
 // `nestedSkillsOnly` for a nested adapter that hands no instructions, whose
 // spec then names none to read, and `roots`, a file listing each checkout's
 // root, a line each, for a harness the runner points at them (Gemini CLI's
-// --include-directories). Its `budget` ({"form": "muse", "own": <file>})
-// bounds the sections with what Muse loads beside them (checkoutmuse.go); its
-// `skipped` lines (D709) go to the skip log. It keeps what it handed in
-// state/launched.json, for copilot-launch (copilotrepo.go). It writes
-// state/nested.json, the -config of the harness's nested adapter, which the
-// run's post-tool hook runs after each of the main loop's tool calls: it
-// claims each checkout that appeared since, once, under state's lock, copies
-// its skills, and writes in its harness's shape what the harness does not
-// load itself: codex-nested the instructions and the skills' listing (name,
-// description, the copy's SKILL.md) as its hook's context; claude-nested the
-// listing alone, and nothing for a subagent's call, as gemini-nested does
-// under AfterTool; qwen-nested each instruction file and rule framed as Qwen
-// Code frames a context file, then the listing;
-// grok-nested each file as Grok's `## From: <path>` within its hook cut of
-// 10,000 code points, checkouts whole while they fit, the rest named by path;
-// muse-nested as codex-nested, each file as Muse wraps a rules file, within
-// the 16,384 bytes Muse reads of a hook, the rest named, for the main loop
-// alone (muserepo.go); pi-nested the same as codex-nested with each file in
-// Pi's `<project_instructions path=...>`, on stdout for the run's extension to
-// add to the tool's result (Pi lists no skill it did not start with and loads
-// instructions only as it starts, measured on 1.6.0); copilot-nested the
-// listing alone, added the same way. A nested hook only adds to the launch: a
-// run whose settings switch it off starts, its skip log saying so once; only
-// losing a contract hook (notes, skill loads) refuses. Grok's stays registered,
-// as Grok 1.0.92 skips it itself (measured). A harness taking checkouts adds a
-// nested adapter, never a second core; its runner holds the home file and the
-// copies (internal/sandbox/executor's checkoutHome). What a nested firing
-// leaves out (a skill whose name the home's skills hold, one that leads out of
-// its checkout, a tree past a bound) is a line each on its stderr, in its
-// answer, and in state/skipped under the lock, which the runner's script prints
-// to the run's error stream once the harness has stopped, since no harness
-// shows a hook's stderr; checkout-launch's stderr is the run's own. The
-// runner's restore marks the state ended, after which a firing claims nothing.
-// A run killed before its script printed the log loses it: the next run's gate
-// removes the state unprinted, as its lines in another run's error stream would
-// read as that run's; each was in its firing's answer already.
+// --include-directories). Its `budget` (Muse's, checkoutmuse.go) bounds the
+// sections with what loads beside them; `skipped` lines (D709) go to the skip
+// log. It keeps what it handed in state/launched.json, for copilot-launch
+// (copilotrepo.go). It writes state/nested.json, the -config of the harness's
+// nested adapter, which the run's post-tool hook runs after each of the main
+// loop's tool calls: it claims each checkout that appeared since, once, under
+// state's lock, copies its skills, and writes in its harness's shape what the
+// harness does not load itself: codex-nested the instructions and the skills'
+// listing (name, description, the copy's SKILL.md) as its hook's context;
+// claude-nested the listing alone, and nothing for a subagent's call, as
+// gemini-nested does under AfterTool; qwen-nested each instruction file and
+// rule framed as Qwen Code frames a context file, then the listing; grok-nested
+// each file as Grok's `## From: <path>` within its hook cut of 10,000 code
+// points, checkouts whole while they fit, the rest named by path; muse-nested
+// as codex-nested in Muse's rules-file wrap, in its 16,384-byte hook bound,
+// main loop only (muserepo.go); pi-nested the same as codex-nested with
+// each file in Pi's `<project_instructions path=...>`, on stdout for the run's
+// extension to add to the tool's result (Pi lists no skill it did not start
+// with and loads instructions only as it starts, measured on 1.6.0);
+// copilot-nested the listing alone, added the same way; kimi-nested as
+// pi-nested, for Kimi's `<!-- From: ... -->`, steered in by the run's driver. A
+// nested hook only adds to the launch: a run whose settings switch it off
+// starts, its skip log saying so once; only losing a contract hook (notes,
+// skill loads) refuses. Grok's stays registered, as Grok 1.0.92 skips it itself
+// (measured). A harness taking checkouts adds a nested adapter, never a second
+// core; its runner holds the home file and the copies
+// (internal/sandbox/executor's checkoutHome). What a nested firing leaves out
+// (a skill whose name the home's skills hold, one that leads out of its
+// checkout, a tree past a bound) is a line each on its stderr, in its answer,
+// and in state/skipped under the lock, which the runner's script prints to the
+// run's error stream once the harness has stopped, since no harness shows a
+// hook's stderr; checkout-launch's stderr is the run's own. The runner's
+// restore marks the state ended, after which a firing claims nothing. A killed
+// run's log is dropped unprinted by the next gate (its lines were in its
+// firings' answers).
 //
 // # A continued Codex session's standing instructions
 //
