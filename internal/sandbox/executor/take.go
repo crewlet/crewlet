@@ -43,9 +43,9 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 // holding a slot of [sessionTakes] from before it asks its box for anything
 // to its scrub's and its meter's end. 29: a take at its base holds at most
 // 11.64 MiB ([takeBaseHeldBytes]); 29 times over is 337.5 MiB, within the
-// base tier's 340.6 MiB (64 reads at [baseTierReadBytes], the package doc's
-// "A collection's read of a thread"): so the takes at their base hold no
-// more than every read of the tier does.
+// 340.6 MiB of the base tier's 64 reads' passes ([baseTierPassBytes], the
+// package doc's "A collection's read of a thread"): so the takes at their base
+// hold no more than every read's pass does, a take reading no summary.
 const SessionTakesAtOnce = 29
 
 // takeBaseHeldBytes is what a take at its base holds at most, its scrub's and
@@ -75,9 +75,9 @@ func takeLargeHeldBytes() int64 {
 		max((threadLineMax-collectionBaseLineCharge)*5/4, geminiCountLargeHeldBytes-meterBaseHeldBytes)
 }
 
-// The takes at their base hold no more than the box host's reads for its peers
-// at [baseTierReadBytes] each: a negative constant does not compile.
-const _ = uint(queue.ConcurrentAnswers*baseTierReadBytes - SessionTakesAtOnce*takeBaseHeldBytes)
+// The takes at their base hold no more than the box host's reads for its peers'
+// passes at [baseTierPassBytes] each: a negative constant does not compile.
+const _ = uint(queue.ConcurrentAnswers*baseTierPassBytes - SessionTakesAtOnce*takeBaseHeldBytes)
 
 // sessionTakes holds a slot for each take in flight ([SessionTakesAtOnce]).
 var sessionTakes = make(chan struct{}, SessionTakesAtOnce)
@@ -233,6 +233,17 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	// at, read off the archive as it is kept (measure.go), beside the take and
 	// within its context, never holding it up.
 	meter := newContextMeter(metering, carries, archive.SessionID, archive.Version, large)
+	// THE ARCHIVE WHOLE is what the box keeps the digest of and the meter
+	// reads; a take keeping its media apart frames its body beside it
+	// ([memberSplit]). ITS ALLOWANCE IS THE BOX'S BOUND, MaxBytes, of first
+	// occurrences' text in all: one capture's media never outgrow what a take
+	// admits of its box (SessionMaxBytes today), and crewlet/crewlet#2020's
+	// raise of that bound (piece 4c) moves the allowance with it.
+	kept := io.MultiWriter(write, sum, meter)
+	if take.MediaApart {
+		kept = io.MultiWriter(sum, meter)
+		bounds = bounds.splitting(write, take.MaxBytes)
+	}
 	scrubbingStarted = true
 	go func() {
 		defer close(out.done)
@@ -255,7 +266,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 			return again, nil
 		}
 		scrubErr := plainTooLarge(scrubContained(ctx, func() error {
-			return scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum, meter), scrub, bounds)
+			return scrubArchive(carries.layout(), body, reopen, kept, scrub, bounds)
 		}))
 		logMemoUse(ctx, remembered)
 		out.finished(scrubErr, sum.String())
@@ -284,7 +295,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		}
 		return prefix.lines()
 	}
-	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
+	return sandbox.TakenSession{Archive: archive, Body: out, Framed: take.MediaApart, Keep: keep, Context: meter.context,
 		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next, RunLines: runLines,
 		ResumeRead: r.resumeRead(archive.Version)}, nil
 }

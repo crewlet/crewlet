@@ -16,6 +16,12 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
+// WriteHostProgram is [writeHostProgram] at 0700, for the stand-ins the
+// external cases write.
+func WriteHostProgram(t *testing.T, path, script string) {
+	writeHostProgram(t, path, []byte(script), 0o700)
+}
+
 // Bounded holds r's failure — the error stream it reads from the end, and the
 // whole failure it composes — to failure bytes, and the lines of an event
 // stream it reads to line bytes, and returns r.
@@ -394,12 +400,55 @@ const CountReadBytes = countReadBytes
 
 // CountingBy is r's live count of a job, each read taking at most readBytes.
 func CountingBy(r *Runner, readBytes int64) sandbox.Counter {
-	c, ok := r.Count(sandbox.RunHandle{}).(*counter)
-	if !ok {
-		return nil
+	switch c := r.Count(sandbox.RunHandle{}).(type) {
+	case *counter:
+		c.readBytes = readBytes
+		return c
+	case *recordCount:
+		c.readBytes = readBytes
+		return c
+	case *maxCount:
+		for _, part := range c.parts {
+			part.readBytes = readBytes
+		}
+		return c
 	}
-	c.readBytes = readBytes
-	return c
+	return nil
+}
+
+// RecordCounted reports whether h is counted live off its harness's own
+// record of the session rather than its stream.
+func RecordCounted(h Harness) bool {
+	_, one := h.(recordCounted)
+	_, several := h.(recordsCounted)
+	return one || several
+}
+
+// CodexRolloutKinds is the rollout lines a Codex run's script appends.
+const CodexRolloutKinds = codexRolloutKinds
+
+// MuseTraceNeedle is how a Muse Code run's script picks its traces out.
+const MuseTraceNeedle = museTraceNeedle
+
+// CollectedRecordCount is what r's collection counts off its harness's own
+// record in box ([recordCollected]), or its records beside a stream that counts
+// none of them ([recordsCounted]); none for a harness counted off its stream.
+func CollectedRecordCount(ctx context.Context, r *Runner, box sandbox.Sandbox) (sandbox.RequestCount, error) {
+	if rs, ok := r.harness.(recordsCounted); ok {
+		return r.collectedRecords(ctx, box, rs, sandbox.RequestCount{})
+	}
+	rc, ok := r.harness.(recordCollected)
+	if !ok {
+		return sandbox.RequestCount{}, nil
+	}
+	return r.collectedRecord(ctx, box, rc)
+}
+
+// StoreCounted reports whether h is counted off its session store, asked
+// through the box.
+func StoreCounted(h Harness) bool {
+	_, ok := h.(storeCounted)
+	return ok
 }
 
 // CheckoutSkipLogs is the skip log of every runner that hands its checkouts

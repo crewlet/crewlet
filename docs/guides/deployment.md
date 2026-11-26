@@ -158,9 +158,10 @@ hours of each other:
 - A [kept session's](../concepts/code-sandbox.md#each-launchs-session-kept)
   capture is stamped on the run's record by the clock of the node taking it,
   and any other node reads it as still being kept until its life and two
-  hours have passed by its own clock, about three hours and eleven minutes; a
-  read standing by beside it is read as standing until its window and two
-  hours have passed, about four hours and thirty-one and a half minutes.
+  hours have passed by its own clock, about three hours and fourteen
+  minutes; a read standing by beside it is read as standing until its window
+  and two hours have passed, about four hours and thirty-four and a half
+  minutes.
   Neither wait holds that long on that reading alone: a turn's end holds each
   capture for its life, and each standby for its window and its takeover's
   life, from the moment it first sees it, on its own clock. A reader whose
@@ -1439,6 +1440,10 @@ engines starting at once could leave a half-written file that fails
 verification for good. Crewlet therefore extracts under a lock in
 `<cache>/turso-go/`, and clears and re-extracts an entry that will not verify.
 
+- **The same cache holds dictation's recognizer library**, downloaded on the
+  first dictation into `<cache>/sherpa-onnx/` beside `turso-go/` (31 to
+  40 MB) when no prepared copy is found, so one variable moves both. See
+  [Voice Dictation](dictation.md#where-the-recognizer-comes-from).
 - **Point `TURSO_GO_CACHE_DIR` at a writable, persistent path** in an ephemeral
   container. A read-only or per-restart cache costs a 20 MB extraction on every
   start; a cache root that cannot be created fails the store open with an error
@@ -1852,7 +1857,7 @@ Every figure above is of the memory the executor's pools, the answers in flight,
 [page cache](#the-page-cache) and the read lane leave: a Gitlet node keeps them first and sizes
 Gitlet by what is left
 ([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 107 MiB for the
-transcript reads its API answers and 1 834 MiB where it runs seats too, 284 MiB for the answers in flight, a
+transcript reads its API answers and 1 884 MiB where it runs seats too, 284 MiB for the answers in flight, a
 sixteenth of its memory for the page cache and 128 MiB a core for git's reads, so give it that much more. They are the executor's in-process pools alone: a node
 running seats also holds its harness calls and boxes
 ([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's pools

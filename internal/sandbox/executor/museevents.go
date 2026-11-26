@@ -19,6 +19,8 @@ type museEnvelope struct {
 	Stream      museStream      `json:"stream"`
 	RecordedAt  int64           `json:"recorded_at"`
 	Payload     json.RawMessage `json:"payload"`
+	// Line is the session's own line a script line wraps ([museTraceEvent]).
+	Line json.RawMessage `json:"line"`
 }
 
 type museStream struct {
@@ -50,26 +52,40 @@ type musePayload struct {
 		ToolName string `json:"tool_name"`
 	} `json:"correlation_facts"`
 
-	// Calls and Models are the run's usage, once per run; Completed and
-	// Cancelled the calls that were answered or cut off, a failed attempt being
-	// neither ([museEvents.calls]).
-	Calls     int         `json:"calls"`
-	Completed *int        `json:"completed_calls"`
-	Cancelled int         `json:"cancelled_calls"`
-	Models    []museUsage `json:"models"`
+	// Models is the run's usage, once per run.
+	Models []museUsage `json:"models"`
 }
 
-// calls is the requests a `run.usage` counts: those answered and those cut off,
-// never an attempt that failed. MUSE RETRIES A FAILED ATTEMPT AND STATES IT
-// APART (`failed_calls`): measured on 1.4.25 against a stand-in, a 429 and a
-// 500 each retried once stated 8 calls, 6 completed and 2 failed, for 6
-// requests. An attempt that failed bills nothing. A usage that states no
-// completed calls is read by its calls.
-func (p musePayload) calls() int {
-	if p.Completed == nil {
-		return p.Calls
+// museTraceEvent is the type of the lines a run's script adds to its stream
+// once Muse has exited, on an end too: each a line of the main thread's
+// session.jsonl that records a model request ([museTraceLine]), wrapped as
+// `{"payload_type":…,"line":<the session line>}`.
+const museTraceEvent = "crewlet.muse_trace"
+
+// museTraceKind is the session event Muse writes as it makes each model
+// request: measured on 1.4.25 against a stand-in, one a request answered (13,
+// 6 and 3 in three runs, as many as run.usage's calls answered or cut off),
+// one for a request the run's end cut off (4, where run.usage, which an ended
+// run never prints, said nothing), and none for an attempt a 429 or a 500
+// failed. museTraceNeedle is how the script picks such lines out.
+const (
+	museTraceKind   = "model_input_trace_recorded"
+	museTraceNeedle = `"kind":"` + museTraceKind + `"`
+)
+
+// museTraceLine reports whether line, a line of a session's session.jsonl,
+// records one model request ([museTraceKind]).
+func museTraceLine(line []byte) bool {
+	var rec struct {
+		PayloadType string `json:"payload_type"`
+		Payload     struct {
+			Event struct {
+				Kind string `json:"kind"`
+			} `json:"event"`
+		} `json:"payload"`
 	}
-	return *p.Completed + p.Cancelled
+	return json.Unmarshal(line, &rec) == nil && rec.PayloadType == "runtime.session" &&
+		rec.Payload.Event.Kind == museTraceKind
 }
 
 // museUsage is one model's usage on `run.usage` (`models[]`), or one request's
@@ -146,7 +162,7 @@ type museEvents struct {
 
 	// spent is what the run's usage and its children's records state,
 	// stated whether `run.usage` was read, and requests how many requests
-	// the main thread made.
+	// the main thread made, off its session ([museTraceEvent]).
 	spent    museUsage
 	stated   bool
 	requests int
@@ -178,19 +194,11 @@ func (d *museEvents) Entries(end bool) []string {
 func (d *museEvents) Skipped(line LongLine) {
 	d.transcript.skip(line.Size, line.Bound)
 	switch t := windowField(line.Head, "payload_type", false); {
-	case t == "run.usage":
-		p := musePayload{}
-		if n, ok := windowInt(line.Head, "calls", false); ok {
-			p.Calls = n
-			if c, ok := windowInt(line.Head, "completed_calls", false); ok {
-				p.Completed = &c
-			}
-			p.Cancelled, _ = windowInt(line.Head, "cancelled_calls", false)
-			d.requests += p.calls()
-		} else {
-			d.undecided++
-		}
-	case t == "":
+	case t == museTraceEvent && inEither(line, museTraceNeedle):
+		d.requests++
+	case t == museTraceEvent, t == "":
+		// THE SCRIPT ADDS ONLY A TRACE: one whose kind neither end shows may
+		// be a request this count cannot read.
 		d.undecided++
 	}
 }
@@ -236,9 +244,12 @@ func (d *museEvents) Line(line []byte) {
 	case "run.usage":
 		// ONCE PER RUN, the main thread's: whole prompts, cache inside.
 		d.stated = true
-		d.requests += p.calls()
 		for _, m := range p.Models {
 			d.spend(m)
+		}
+	case museTraceEvent:
+		if museTraceLine(env.Line) {
+			d.requests++
 		}
 	case museChildMark:
 		d.marked = true
@@ -338,8 +349,8 @@ func (d *museEvents) limitReport() string { return d.limit }
 // `run.terminal.failed`.
 func (d *museEvents) Ended() bool { return d.completed || d.failure != "" }
 
-// Requests implements [Decoder]: the calls each exec run's `run.usage` states,
-// but for the failed attempts it states apart ([musePayload.calls]).
+// Requests implements [Decoder]: the model requests the main thread's session
+// records ([museTraceKind]), its every exec run's.
 func (d *museEvents) Requests() int { return d.requests }
 
 // InFlight implements [Decoder]: none, as Muse's own --max-model-steps stops

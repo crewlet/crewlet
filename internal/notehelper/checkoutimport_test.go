@@ -22,7 +22,7 @@ func (r repoRun) launchImporting(t *testing.T) (string, string) {
 		t.Fatal(err)
 	}
 	var errs bytes.Buffer
-	if err := checkoutLaunch(config, r.work, &errs); err != nil {
+	if err := checkoutLaunch(config, r.work, strings.NewReader(""), &errs); err != nil {
 		t.Fatalf("the launch: %v\n%s", err, errs.String())
 	}
 	got, err := os.ReadFile(r.agents)

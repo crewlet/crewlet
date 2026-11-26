@@ -1,0 +1,13 @@
+-- A session keeping its media apart says the archive it restores to (ADR-0073's
+-- amendment "A session's large media is kept apart").
+--
+-- WHO HAS TO AGREE ON IT: every data node, identically, derived from the
+-- CREWLET_EXECUTOR_LOG stream by its one applier, as 0073 states for the rest of
+-- executor_sessions.
+--
+-- `archive_bytes` is the archive the row's session restores to, every media
+-- member spliced in at each frame naming it, as its newest capture stated it:
+-- what the read of its text object, open while each member streams, is budgeted
+-- for. 0 for a row naming no media, whose object is its archive, and for a row
+-- whose object went.
+ALTER TABLE executor_sessions ADD COLUMN archive_bytes INTEGER NOT NULL DEFAULT 0;

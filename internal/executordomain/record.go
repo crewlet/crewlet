@@ -19,7 +19,7 @@ import (
 // end applies ([wentOnVersion]). A record above it is RETAINED rather than
 // skipped (the framework's deferral contract), so a rolling upgrade reduces
 // coverage rather than causing an outage.
-const RecordVersion = summaryPlaceVersion
+const RecordVersion = archiveBytesVersion
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
@@ -84,6 +84,22 @@ const summaryVersion = 11
 // row would name a summary no reader can tell newer than a capture or not.
 const summaryPlaceVersion = 12
 
+// archiveBytesVersion stamps a capture naming media that states the archive its
+// restore hands a box, every member at each frame naming it
+// ([Capture.ArchiveBytes]), which the apply keeps on the turn's row. An older
+// build retains it: applied without it, its row would budget the read of the
+// session's frames for each member once, and a member they name again would
+// stream past that read's deadline.
+const archiveBytesVersion = 13
+
+// MediaCaptureVersion is what a capture naming media is stamped at: the
+// highest version of the fields every such capture carries ([mediaVersion],
+// [archiveBytesVersion]). Exported so a take keeps its media apart only once
+// every node applying the log reads it (internal/engine's executorMediaRead,
+// statelog.Readers): a node reading the media and not the archive's size
+// retains every such capture all the same.
+const MediaCaptureVersion = max(mediaVersion, archiveBytesVersion)
+
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER: a node's eviction, the one gate here. A field such a record needs that
 // it cannot have belongs somewhere else.
@@ -123,6 +139,8 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "ending", "summary"}},
 	{Name: "End.Ending.Summary.Place", Since: summaryPlaceVersion, Op: string(OpEnd),
 		Path: []string{"mutation", "ending", "summary", "place"}},
+	{Name: "Capture.ArchiveBytes", Since: archiveBytesVersion, Op: string(OpCapture),
+		Path: []string{"mutation", "archive_bytes"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

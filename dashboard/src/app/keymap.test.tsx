@@ -7,10 +7,12 @@
 import { useRef, type ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { LayerHost, Modal } from "@crewlethq/ui";
+import { DICTATION_SHORTCUT, LayerHost, Modal } from "@crewlethq/ui";
 import {
   KEYMAP,
   KEY_SCOPES,
+  ariaKeysOf,
+  capsOf,
   keyRow,
   layerScoped,
   liveTogether,
@@ -132,6 +134,13 @@ describe("the table", () => {
         .map((r) => r.id)
         .sort(),
     ).toEqual(["compose.send", "list.open"]);
+  });
+
+  test("every message box dictates on one row: the kit's own chord, from inside the field", () => {
+    const row = keyRow("compose.dictate");
+    expect(row).toMatchObject({ scope: "compose", by: "kit", whileTyping: true });
+    expect(row.presses.map(capsOf)).toEqual([[...DICTATION_SHORTCUT]]);
+    expect(ariaKeysOf(row.presses[0]!)).toBe("Meta+Shift+Space Control+Shift+Space");
   });
 
   test("a sequence's prefix is no key of its own", () => {

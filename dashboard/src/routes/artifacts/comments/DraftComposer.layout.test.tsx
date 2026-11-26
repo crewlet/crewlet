@@ -6,10 +6,14 @@
 import "~/test/layout.tsx";
 import "~/styles/comments.css";
 import { afterEach, expect, test, vi } from "vitest";
+import type { ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { ArtifactDetail } from "~/protocol/index.ts";
 import { DraftComposer } from "./DraftComposer.tsx";
 import { DraftPin } from "./layer.tsx";
@@ -77,6 +81,18 @@ function comments(draft: Omit<CommentDraft, "seq">): ArtifactComments {
   };
 }
 
+/** The viewer the draft's box asks whether the engine can dictate, from a client that answers nothing. */
+function WithViewer({ children }: { children: ReactNode }) {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  socket.query = (() => Promise.resolve({})) as typeof socket.query;
+  return (
+    <ClientContext.Provider value={{ store, socket }}>
+      <ViewerProvider>{children}</ViewerProvider>
+    </ClientContext.Provider>
+  );
+}
+
 /** A frame's stage `w` by `h` with the draft's pin at `x`, `y`, as `PagePins` draws it. */
 async function open(w: number, h: number, x: number, y: number, draft: Omit<CommentDraft, "seq">) {
   host = document.createElement("div");
@@ -86,17 +102,19 @@ async function open(w: number, h: number, x: number, y: number, draft: Omit<Comm
   root = createRoot(host);
   flushSync(() =>
     root!.render(
-      <Router>
-        <ToastProvider>
-          <CommentsScope value={comments(draft)}>
-            <div className="artifact-comment-layer">
-              <LayerHost>
-                <DraftPin x={x} y={y} />
-              </LayerHost>
-            </div>
-          </CommentsScope>
-        </ToastProvider>
-      </Router>,
+      <WithViewer>
+        <Router>
+          <ToastProvider>
+            <CommentsScope value={comments(draft)}>
+              <div className="artifact-comment-layer">
+                <LayerHost>
+                  <DraftPin x={x} y={y} />
+                </LayerHost>
+              </div>
+            </CommentsScope>
+          </ToastProvider>
+        </Router>
+      </WithViewer>,
     ),
   );
   for (let i = 0; i < 60; i++) {
@@ -217,13 +235,15 @@ test("in the panel on a phone, Cancel and Comment share one row", async () => {
   const value = { ...comments(STATES[0]![1]), narrow: true };
   flushSync(() =>
     root!.render(
-      <Router>
-        <ToastProvider>
-          <CommentsScope value={value}>
-            <DraftComposer />
-          </CommentsScope>
-        </ToastProvider>
-      </Router>,
+      <WithViewer>
+        <Router>
+          <ToastProvider>
+            <CommentsScope value={value}>
+              <DraftComposer />
+            </CommentsScope>
+          </ToastProvider>
+        </Router>
+      </WithViewer>,
     ),
   );
   const buttons = [...host.querySelectorAll("button")];

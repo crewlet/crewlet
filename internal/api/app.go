@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/advisor/duty"
 	"github.com/crewlet/crewlet/internal/api/assistantapi"
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/dictation"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpapi"
@@ -35,6 +36,7 @@ import (
 	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/speech"
 	"github.com/crewlet/crewlet/internal/worklet"
 	"github.com/crewlet/crewlet/static"
 
@@ -78,6 +80,9 @@ type App struct {
 	// where this node reads none.
 	advisorWork AdvisorWork
 	stopAdvisor func()
+
+	// dictation is the recognizer /ws/dictation serves.
+	dictation speech.Streamer
 
 	// chatLive is the process's chat hub, which the socket carries chat
 	// through. The App's to mount and never to start or stop.
@@ -376,6 +381,11 @@ type Options struct {
 	// name every surface reports is [queries.Sources.NodeID], the one
 	// config.ResolveNodeID answered.
 	Bootstrap *config.Bootstrap
+
+	// Dictation is the recognizer /ws/dictation serves, under
+	// Bootstrap.Dictation's limits; nil is dictation switched off. The app
+	// closes it on Stop when it can be closed.
+	Dictation speech.Streamer
 
 	// Runtime is the engine this process runs beside.
 	Runtime NodeRuntime
@@ -972,6 +982,10 @@ func New(opts Options) (*App, error) {
 	if opts.Bootstrap != nil && opts.Bootstrap.API.Artifacts.ExternalBase() != "" {
 		sources.ArtifactPages = true
 	}
+	// WHETHER DICTATION IS OFFERED, from the recognizer the socket serves.
+	if sources.Dictation == nil && opts.Dictation != nil {
+		sources.Dictation = opts.Dictation.Availability
+	}
 	// HOW A PERSON SIGNS IN HERE: the company's policy within this node's
 	// limits. A caller that supplied its own keeps it.
 	if sources.SignIn == nil && opts.Bootstrap != nil {
@@ -1043,6 +1057,17 @@ func New(opts Options) (*App, error) {
 		return nil, fmt.Errorf("api: mount Gitlet's routes: %w", err)
 	}
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer, a.chatLive))
+	// DICTATION, admitted and kept decided by the live socket's own rules.
+	a.dictation = opts.Dictation
+	if a.dictation == nil {
+		a.dictation = speech.Disabled{}
+	}
+	var dictationLimits config.Dictation
+	if opts.Bootstrap != nil {
+		dictationLimits = opts.Bootstrap.Dictation
+	}
+	mux.Handle(dictation.Path, dictation.New(a.guard, a.csrf, a.stream, a.dictation,
+		dictation.Limits{Session: dictationLimits.Session(), Idle: dictationLimits.Idle()}))
 	// The OPERATOR surface: the same tracker and knowledge tools a seat
 	// holds, offered to a person's own assistant over MCP and to the person
 	// themself over the act route. Under its own
@@ -1624,6 +1649,9 @@ func (a *App) Stop(ctx context.Context) {
 		stop()
 	}
 	a.stream.Stop()
+	if closer, ok := a.dictation.(interface{ Close() }); ok {
+		closer.Close()
+	}
 	ctx, cancel := context.WithTimeout(ctx, fleetTellBudget)
 	defer cancel()
 	a.listens.Close(ctx)

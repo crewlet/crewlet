@@ -572,8 +572,9 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		p.SessionRecord(), p.SessionReport(), p.sessionReportStaging(), p.SessionCapture(),
 		trimMarkOf(p.SessionCapture()), p.SessionCarried(),
 		p.MCPConfig(), p.MCPConfigFresh(),
-		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
-	dirs := []string{p.CommitAttribution(), p.SessionStaging()}
+		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next",
+		p.CountRecord(), p.CountRecord() + ".next"}
+	dirs := []string{p.CommitAttribution(), p.SessionStaging(), p.ProgramStaging()}
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
 	// A home file a killed run left holding its settings, the bridge's token
 	// among them, is put back first ([homeMender], [homeKeeper]).
@@ -1140,6 +1141,33 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		window, limits, ended = streamed.window, streamed.limits, streamed.ended
 		requests, unheld, inFlight = streamed.requests, streamed.unheld, streamed.inFlight
 		undecided = streamed.undecided
+	}
+	// A HARNESS WHOSE OWN RECORD SHOWS ITS REQUESTS ([recordCollected]) is held to
+	// its cap by that record, read as its live count reads it; one counted off
+	// several ([recordsCounted]) by the largest, its stream's count of the
+	// records it carries among them.
+	if rc, ok := r.harness.(recordCollected); ok {
+		count, err := r.collectedRecord(ctx, box, rc)
+		if err != nil {
+			return sandbox.Result{}, err
+		}
+		requests, undecided = count.Requests, count.Undecided
+	}
+	if rs, ok := r.harness.(recordsCounted); ok {
+		count, err := r.collectedRecords(ctx, box, rs, sandbox.RequestCount{Requests: requests, Undecided: undecided})
+		if err != nil {
+			return sandbox.Result{}, err
+		}
+		requests, undecided = count.Requests, count.Undecided
+	}
+	// AND ONE WHOSE SESSION STORE DOES ([storeCounted]), asked as its live count
+	// asks it.
+	if sc, ok := r.harness.(storeCounted); ok {
+		n, _, err := sc.storeRequests(ctx, box, paths)
+		if err != nil {
+			return sandbox.Result{}, err
+		}
+		requests, undecided = n, 0
 	}
 	// THE STREAM BEFORE THE RESULT FILE, keeping not its last line: what its
 	// reading holds after is the record's halves, so the file is parsed beside

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -127,8 +128,8 @@ type SandboxProvider struct {
 	// scheduled turn's timeout_seconds, or when a person stops it, never on a
 	// clock of its box's or part-way through a budget.
 	//
-	// A PLAIN INT: zero (left out or 0) is uncapped, every other value the cap.
-	DefaultMaxTurns int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one executor run on seats that name none. Unset or 0 = uncapped."`
+	// A PLAIN INT: 0 is uncapped, any other value the cap, at most [RoundCapCeiling].
+	DefaultMaxTurns int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0;max=1000" desc:"Agentic-round cap for one executor run on seats that name none. Unset or 0 = uncapped; at most 1000."`
 
 	// CommitAttribution says whether every commit an executor authors as itself
 	// credits Crewlet: `Co-authored-by: Crewlet <noreply@crewlet.com>`,
@@ -159,6 +160,22 @@ func (s *SandboxProvider) HostGrace() time.Duration {
 		return 0
 	}
 	return time.Duration(s.HostGraceSeconds * float64(time.Second))
+}
+
+// RoundCapCeiling is the most a round cap may be (role.sandbox.max_turns,
+// providers.sandbox.default_max_turns). A capped run's own record of its
+// requests stays in its box until the next launch clears it, and Gemini CLI's
+// is about 130 KB a request (measured on 0.70.0), so about 134 MB at this
+// ceiling, on a box-root volume every box shares with no quota of its own.
+// The largest cap the docs and examples name is 120; past 1,000 requests a cap
+// bounds little spend. Work that needs more is split, or runs uncapped (0),
+// where no such record is kept.
+const RoundCapCeiling = 1000
+
+// roundCapPastCeiling is the refusal of a round cap n past [RoundCapCeiling].
+func roundCapPastCeiling(n int) string {
+	return fmt.Sprintf("%d (a round cap is at most %d, since a capped run keeps a record of every request in "+
+		"its box; split the work into smaller items, or set 0 for uncapped)", n, RoundCapCeiling)
 }
 
 // MaxTurns is the agentic-round cap one executor run takes when its seat
@@ -297,10 +314,13 @@ func (s *SandboxProvider) validate(path Path) error {
 		p.add(at(path, "host_grace_seconds"), ErrOutOfRange,
 			"must be positive, or 0 for the default, got %v", s.HostGraceSeconds)
 	}
-	if s.DefaultMaxTurns < 0 {
+	switch {
+	case s.DefaultMaxTurns < 0:
 		p.add(at(path, "default_max_turns"), ErrOutOfRange,
 			"%d (a round cap cannot be negative; omit the field, or set 0, to "+
 				"leave executor runs uncapped)", s.DefaultMaxTurns)
+	case s.DefaultMaxTurns > RoundCapCeiling:
+		p.add(at(path, "default_max_turns"), ErrOutOfRange, "%s", roundCapPastCeiling(s.DefaultMaxTurns))
 	}
 	// A NEGATIVE value is refused: an unbounded pause is the leak this knob
 	// exists to prevent.

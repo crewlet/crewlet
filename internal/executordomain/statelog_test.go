@@ -181,6 +181,13 @@ func suitePayload(kind executordomain.ObjectKind, id string) (
 		executordomain.SeatDelete{V: 1, Handle: id}
 }
 
+// suiteMedia is one media object a capture of id's names.
+func suiteMedia(id string) []executordomain.CaptureMedia {
+	return []executordomain.CaptureMedia{{Digest: strings.Repeat("ab", 32),
+		Object: objstore.KeyAt(suiteStamped).String(), ObjectHash: string(objstore.HashOf([]byte("media-" + id))),
+		ObjectSize: 4 << 20, ContentKey: "k1"}}
+}
+
 // carryingSuiteRecord is a record carrying exactly the versioned field named and
 // no other, with its version left for the domain's encoder to stamp.
 func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
@@ -213,9 +220,13 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// A SESSION KEEPING A PAYLOAD APART: an older build retains the capture
 		// rather than name a text object whose frames no row of its own names.
 		c := captureOf(id, 1)
-		c.Media = []executordomain.CaptureMedia{{Digest: strings.Repeat("ab", 32),
-			Object: objstore.KeyAt(suiteStamped).String(), ObjectHash: string(objstore.HashOf([]byte("media-" + id))),
-			ObjectSize: 4 << 20, ContentKey: "k1"}}
+		c.Media = suiteMedia(id)
+		op, scope, payload = executordomain.OpCapture, seatScope(id), c
+	case "Capture.ArchiveBytes":
+		// THE SAME SESSION, SAYING THE ARCHIVE ITS MEDIA RESTORE TO: an older
+		// build retains the capture rather than budget its restore short.
+		c := captureOf(id, 1)
+		c.Media, c.ArchiveBytes = suiteMedia(id), 9<<20
 		op, scope, payload = executordomain.OpCapture, seatScope(id), c
 	case "End.Ending.SpentSessions":
 		// A TURN WHOSE LAUNCH SPENT ITS SESSION, naming how: an older build

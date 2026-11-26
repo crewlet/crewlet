@@ -174,13 +174,15 @@ var standingRoutes = map[string]standingProbe{
 	}},
 	// Hermes Agent freezes the standing instructions in the session's local
 	// policy as it creates it, and a resume keeps them (measured on 0.23.3):
-	// the gate runs hermes_carry.py's renew on the store, handing it this
-	// launch's file, before the resume (hermesSessionGate).
+	// the gate runs hermes_carry.py's renew on the store before the resume
+	// (hermesSessionGate), handing it the prompt this launch starts with, its
+	// text then its checkouts' sections, written first (hermesSystemWithCheckouts).
 	HermesName: {routeRewrite, func(t *testing.T, h Harness, req sandbox.RunRequest, session Session) {
 		box, p := standingWritten(t, h, req, session)
-		renew := `"$(hcarry renew ` + shellword.Quote(p.HermesStateDB()) + ` "$sid" ` + shellword.Quote(p.System()) + `)"`
-		if !strings.Contains(hermesSessionGate(req, session, p, false), renew) ||
-			standingFile(t, box, p.System()) != req.System {
+		script := hermesScript(req, session, p, hermesRunTimes())
+		renew := `"$(hcarry renew ` + shellword.Quote(p.HermesStateDB()) + ` "$sid" ` + shellword.Quote(p.HermesSystem()) + `)"`
+		composed, renewed := strings.Index(script, hermesSystemWithCheckouts(p)), strings.Index(script, renew)
+		if composed < 0 || renewed < composed || standingFile(t, box, p.System()) != req.System {
 			t.Error("a continued session's frozen launch is resumed on instructions this launch did not renew")
 		}
 	}},

@@ -80,6 +80,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"mcp_accepted", mcpAcceptedCases},
 		{"maintenance", maintenanceCases},
 		{"retirements", retirementCases},
+		{"capture_stamps", captureStampCases},
 		{"backups", backupCases},
 		{"feed_marks", feedMarkCases},
 		{"listings", listingCases},

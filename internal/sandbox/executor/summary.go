@@ -1,9 +1,12 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
+	"unsafe"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/jsonscan"
@@ -65,6 +68,14 @@ func summaryReleaseWhy(release string, read ...string) string {
 		words.And(read))
 }
 
+// summaryBaseBytes is the words of a summary a box read holds within the base
+// tier ([summaryBaseHeldBytes]); past them its pass takes the large slot
+// before it holds more ([summaryText.gate]), as a chain past its base does.
+// 128 KiB: the largest summary the recorded sessions hold is Muse Code
+// 1.4.25's replacement text of about 59 KB (on a line of 95,738 bytes), every
+// other's under 10 KB; 2.2 times the largest, a power of two.
+const summaryBaseBytes = 128 << 10
+
 // summaryText is one summary's words as a line's reader streams them
 // ([lineWalk.read]), held to [summaryReadMaxBytes]: past it, none.
 type summaryText struct {
@@ -72,19 +83,99 @@ type summaryText struct {
 	// set says a string was read, past that it ran past the bound, and odd
 	// that a value of another kind than a string or null was.
 	set, past, odd bool
+	// claim is the box read's claim its words count toward, nil for none, and
+	// counted what it counts of them now.
+	claim   *summaryClaim
+	counted int
 }
 
-func (s *summaryText) reset() { s.buf, s.set, s.past, s.odd = s.buf[:0], false, false, false }
+func (s *summaryText) reset() {
+	s.buf, s.set, s.past, s.odd = s.buf[:0], false, false, false
+	s.claim.track(&s.counted, 0)
+}
 
 func (s *summaryText) Write(p []byte) (int, error) {
+	n := len(s.buf) + len(p)
 	switch {
 	case s.past:
-	case len(s.buf)+len(p) > summaryReadMaxBytes:
+	case n > summaryReadMaxBytes:
 		s.buf, s.past = s.buf[:0], true
+		s.claim.track(&s.counted, 0)
+	case !s.claim.track(&s.counted, n):
+		s.buf, s.past = nil, true
+		s.claim.track(&s.counted, 0)
 	default:
-		s.buf = append(s.buf, p...)
+		s.buf = append(s.claim.grown(s.buf, n), p...)
 	}
 	return len(p), nil
+}
+
+// words is the words held, handed over without a copy ([handOver]): whoever
+// keeps them counts them toward the claim ([summaryRead.take]).
+func (s *summaryText) words() string {
+	w := handOver(s.buf)
+	s.buf = nil
+	s.claim.track(&s.counted, 0)
+	return w
+}
+
+// handOver is b as a string, without a copy, as strings.Builder hands over its
+// buffer: its caller keeps no other reference to b, so nothing writes it again.
+func handOver(b []byte) string { return unsafe.String(unsafe.SliceData(b), len(b)) }
+
+// summaryClaim is a box read's claim on its pass's large slot for the words of
+// the summaries its readers hold: held is what they hold now, each holder
+// counting its own ([summaryClaim.track]), and past [summaryBaseBytes] the
+// pass takes the slot, once, before they hold more ([passBudget.hold]), to the
+// read's end; failed is why its wait ended, after which they hold no more. A
+// nil claim counts nothing: a read no pass budgets, a person's transcript.
+type summaryClaim struct {
+	gate   pieceGate
+	held   int
+	waited bool
+	failed error
+}
+
+// newSummaryClaim is a box read's claim on large, its pass's, within ctx.
+func newSummaryClaim(ctx context.Context, large *passBudget) *summaryClaim {
+	return &summaryClaim{gate: large.gate(ctx)}
+}
+
+// track counts n bytes for a holder that counted *at before, *at made n,
+// before it holds them, and reports whether it may.
+func (c *summaryClaim) track(at *int, n int) bool {
+	if c == nil {
+		return true
+	}
+	c.held, *at = c.held+n-*at, n
+	if c.held > summaryBaseBytes && !c.waited {
+		c.waited = true
+		c.failed = c.gate.hold()
+	}
+	return c.failed == nil
+}
+
+// summaryGrowAt is the words a holder grows to as append grows it, a page of
+// a summary: every recorded summary but Muse Code's is within it.
+const summaryGrowAt = 16 << 10
+
+// grown is b ready to hold need bytes, counted already: past [summaryGrowAt]
+// and within the share, grown at once by what is left of it, so words to the
+// share are copied once rather than at every growth, whose garbage a read
+// holds as long; else, or for a read no claim counts, as append grows it.
+func (c *summaryClaim) grown(b []byte, need int) []byte {
+	if c == nil || need <= cap(b) || need <= summaryGrowAt || c.held >= summaryBaseBytes {
+		return b
+	}
+	return slices.Grow(b, need+summaryBaseBytes-c.held-len(b))
+}
+
+// err is why the read's words could not be held, nil for none.
+func (c *summaryClaim) err() error {
+	if c == nil {
+		return nil
+	}
+	return c.failed
 }
 
 // tee is where a line's reader writes a value's words, w, which s, where a
@@ -134,6 +225,10 @@ var errSummaryPast = fmt.Errorf("the newest summary runs past the %d bytes a box
 type summaryRead struct {
 	text  string
 	found bool
+	// claim is the box read's claim its readers' words count toward
+	// ([summaryClaim]), nil for none, and counted what text counts in it.
+	claim   *summaryClaim
+	counted int
 	// unsaid is why the newest summary cannot be said, which a later one
 	// clears; failed is why the read did not reach the thread's end, which
 	// nothing clears.
@@ -146,23 +241,41 @@ func (s *summaryRead) take(text string) {
 		return
 	}
 	s.text, s.found, s.unsaid = text, true, ""
+	s.claim.track(&s.counted, len(text))
 }
 
+// newWords is a summary's words to be read for s, counting toward its claim.
+func (s *summaryRead) newWords() *summaryText { return &summaryText{claim: s.claim} }
+
 // unshaped makes the newest summary one that cannot be said, and why.
-func (s *summaryRead) unshaped(why string) { s.text, s.found, s.unsaid = "", false, why }
+func (s *summaryRead) unshaped(why string) {
+	s.text, s.found, s.unsaid = "", false, why
+	s.claim.track(&s.counted, 0)
+}
 
 // taken makes t the newest summary, where it read a string: past the bound,
 // or of no string, one that cannot be said.
 func (s *summaryRead) taken(t *summaryText) {
 	switch {
+	case s.waitFailed(t.claim):
 	case t.odd:
 		s.unshaped("the newest compaction's summary is no text")
 	case !t.set:
 	case t.past:
 		s.unshaped(errSummaryPast.Error())
 	default:
-		s.take(string(t.buf))
+		s.take(t.words())
 	}
+}
+
+// waitFailed reports whether claim's wait for the large slot ended, failing
+// s: the words past their share were never held.
+func (s *summaryRead) waitFailed(claim *summaryClaim) bool {
+	err := claim.err()
+	if err != nil {
+		s.fail("the newest summary's words past its share waited for the large read slot: " + err.Error())
+	}
+	return err != nil
 }
 
 // failedBy is err, which fails s too where s is not nil: a record a read of

@@ -21,7 +21,7 @@ subcommand below is served by it.
 | `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse, on the same logs. Refused, printing the numbers and writing nothing, while the node has not applied every record up to the one before the higher of the trim floor and any of those logs' first surviving sequence. A partial readmission is finished like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down, in a fleet-wide maintenance window costing three restarts (a Tier A ceiling is only the value the stream is created with). A raise the broker has no room for is refused **before** the window opens; one refused at the apply is reported as a refusal, not an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
-| `crewlet retention maintenance retire -node ID -confirm ID` | Record that no process will run under a node id again, so no capacity window counts it while it runs nothing and stores no row; refused while it runs (a live presence lease, or a broker the metadata group hears) |
+| `crewlet retention maintenance retire -node ID -confirm ID` | Record that no process will run under a node id again, so no capacity window counts it, nor a session take keeping media apart, while it runs nothing and stores no row; refused while it runs (a live presence lease, or a broker the metadata group hears) |
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream or a broker restored from an older copy: move that log to its next generation (every position below it comparable and safely stale), resuming its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end; one continuing in a generation only an evicted peer held, from this node's own checkpoint, that generation's records void. A restored log with post-restore records this node's rows lack is refused unless `-discard` accepts they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** (a cron hook for a lapsed restore test). Talks to no node |
 | `crewlet worklet purge <item> -reason TEXT -confirm <item-key> [-op-id ID]` | Destroy a task and every row it produced, on every data node. No inverse; `admin` credential only, never a seat. Its children move onto its own parent |
@@ -84,6 +84,8 @@ subcommand below is served by it.
 | `crewlet github provision <company.yaml>` | Report a [GitHub](../integrations/github.md) deployment against the config (which account each seat's credential authenticates as) and register the inbound webhooks with a minted secret: one on the organization where the credential may, else one per named repository. GitHub issues no credentials for a provisioner, so it reports more than it changes |
 | `crewlet mattermost doctor <company.yaml>` | Check a [Mattermost](../integrations/mattermost.md) install end to end: reachability, the Site URL every browser inherits (against the address people browse, given `-browser-url`), a browser-shaped websocket upgrade, one real authenticated socket per agent seat |
 | `crewlet mcp-relay <socket>` | Not for people: the MCP server a seat's harness starts, relaying the harness's stdio to the engine's tool socket and back; see [`crewlet mcp-relay`](#crewlet-mcp-relay) |
+| `crewlet speech prepare -dir <DIR> [-platform GOOS/GOARCH]` | Download the pinned [dictation](../guides/dictation.md) recognizer, a platform's library (this machine's by default) and the model, and verify every file against its SHA-256, into `DIR`: for `dictation.recognizer_dir` on a host with no route to the releases, or a container image |
+| `crewlet speech-worker` | Not for people: the dictation recognizer the engine starts from its own binary as a child process; see [Voice Dictation](../guides/dictation.md#how-it-works) |
 | `crewlet version` | Show the installed version (`--version` and `-v` too) |
 | `crewlet help` | Show the usage message (`--help` and `-h` too) |
 
@@ -2413,7 +2415,9 @@ broker the metadata group hears) is refused, as is the node you ask. One
 only the group hears is told to wait, as `exclude` says. It names no log, and is never written into a window: an open
 window judges it every time it is read, waiving a participant (printed
 `retired`) only while the retirement stands and waiting for it again the
-moment the node runs.
+moment the node runs. Nor does a session take wait on it before it keeps
+media apart while the retirement stands against the node's [capture stamp
+record](../concepts/code-sandbox.md).
 
 `abandon` changes what the operation is trying to reach, never the barrier
 it must cross. From `opened` it clears outright, since no request was issued,

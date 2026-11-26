@@ -198,7 +198,7 @@ func codexConversation(ctx context.Context, r io.Reader, from int, summary *summ
 	w.passImages()
 	var l codexNoteLine
 	if summary != nil {
-		l.compaction = &codexCompaction{}
+		l.compaction = &codexCompaction{message: *summary.newWords()}
 	}
 	for n := 1; ; n++ {
 		l.start()

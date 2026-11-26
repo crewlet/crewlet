@@ -437,6 +437,7 @@ export default defineConfig({
       // The live socket, and the plain GET the socket makes to diagnose a
       // handshake the engine refused.
       "/ws/stream": { target: "ws://localhost:8000", ws: true },
+      "/ws/dictation": { target: "ws://localhost:8000", ws: true },
       // The degraded-mode snapshot poll, for a browser that cannot upgrade.
       "/stream": { target: "http://localhost:8000" },
       "/config": { target: "http://localhost:8000" },

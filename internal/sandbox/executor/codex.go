@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -42,12 +43,6 @@ func (Codex) Name() string { return CodexName }
 // it cuts one at 300 seconds ("timed out awaiting tools/call after 300s");
 // set to 1050, a 1040-second call was answered whole (measured on 0.171.0).
 func (Codex) MCPCallCeiling() time.Duration { return 0 }
-
-// CountedAtCollection implements [collectionCounted].
-func (Codex) CountedAtCollection() string {
-	return "exec --json's stdout marks no model response: " +
-		"the rollout lines its count reads are appended by the run's script once Codex exits"
-}
 
 // resumesOnLaunchRoute: measured on 0.171.0, the one release supported
 // ([launchRouted]): created on a config provider at stub A, resumed through
@@ -236,7 +231,10 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 		b.WriteString(codexBridgeCheck(req, paths))
 	}
 
-	line(`( while kill -0 $$ 2> /dev/null; do thread && exit 0; sleep 0.1; done ) &`)
+	// AND ONCE THE THREAD IS KNOWN, ITS ROLLOUT, named for the live count
+	// ([codexPointer]).
+	b.WriteString(codexPointer(paths))
+	line(`( while kill -0 $$ 2> /dev/null; do thread && break; sleep 0.1; done; while kill -0 $$ 2> /dev/null; do rollout && exit 0; sleep 0.1; done ) &`)
 	line(`tpid=$!`)
 
 	if helped {
@@ -464,6 +462,19 @@ func codexFinish(paths Paths) string {
 // content names one runs past its bound beside an image.
 const codexRolloutKinds = `^[{]"timestamp":"[^"]*","ordinal":[0-9][0-9]*,"type":"(turn_context|token_usage_record|` +
 	`event_msg","payload":[{]"type":"(token_count|turn_aborted))"`
+
+// codexKept matches a rollout line the script appends ([codexRolloutKinds]).
+var codexKept = regexp.MustCompile(codexRolloutKinds)
+
+// codexPointer defines the script's `rollout`: the rollout of the thread the
+// run reported, named in [Paths.CountRecord] with the lines it held as the run
+// began, for the live count ([Codex.liveRecord]); false while Codex has not
+// written it.
+func codexPointer(paths Paths) string {
+	pointer := shellword.Quote(paths.CountRecord())
+	return fmt.Sprintf(`rollout() { [ -n "$tid" ] || return 1; f=$(find %s -type f -name "rollout-*-$tid.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1); [ -n "$f" ] || return 1; printf '%%s\n%%s\n' "$f" "$before" > %s.next && mv -f %s.next %s; }`+"\n",
+		shellword.Quote(paths.CodexSessions()), pointer, pointer, pointer)
+}
 
 // Output is where a Codex run's stream lands, which is its result: its
 // stdout, `exec --json`, with the rollout lines its script adds after it

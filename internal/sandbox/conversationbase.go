@@ -81,6 +81,10 @@ type BaseSession struct {
 	ObjectSize int64  `json:"object_size"`
 	ContentKey string `json:"content_key,omitempty"`
 
+	// MediaBytes is what the media objects its row named held sealed, which
+	// the seat's budget counts beside the object ([Coordinator.overBudget]).
+	MediaBytes int64 `json:"media_bytes,omitempty"`
+
 	// Harness, HarnessVersion, SessionID and ArchiveFormat are the session as
 	// its box described it: what a runner's restore reads ([ArchiveOf]).
 	Harness        string `json:"harness"`
@@ -172,7 +176,11 @@ func NewConversationBase(head executorkeep.ConversationHead, told []string) *Con
 // decides a conversation's head by ([ReadContinuityOf]), so the two decide one
 // shape by one decision ([BaseContinuityOf]).
 func baseSessionOf(row executorkeep.TurnRow) BaseSession {
-	return BaseSession{Turn: row.Turn,
+	var media int64
+	for _, m := range row.Media {
+		media += m.Object.Size
+	}
+	return BaseSession{Turn: row.Turn, MediaBytes: media,
 		Object: row.Object.Key.String(), ObjectHash: string(row.Object.Hash), ObjectSize: row.Object.Size,
 		ContentKey: row.ContentKey, Harness: row.Harness, HarnessVersion: row.HarnessVersion,
 		SessionID: row.SessionID, ArchiveFormat: row.ArchiveFormat, Entry: row.Entry,

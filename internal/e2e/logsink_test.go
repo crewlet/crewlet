@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcprelay"
+	"github.com/crewlet/crewlet/internal/notehelper/helperbuild"
 	"github.com/crewlet/crewlet/internal/solo"
 )
 
@@ -66,7 +67,9 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	logging.Configure(slog.LevelDebug, logging.FormatJSON, logs)
-	os.Exit(solo.Run(m))
+	// Every launch writes the note helper, which this binary finds only where
+	// helperbuild names it (go doc ./internal/notehelper/helperbuild).
+	os.Exit(helperbuild.WithHelpers(func() int { return solo.Run(m) }))
 }
 
 // logs indexes what a test can assert on, and passes on what a PERSON needs.

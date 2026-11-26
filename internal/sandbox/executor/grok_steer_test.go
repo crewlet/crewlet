@@ -81,7 +81,7 @@ func grokReachesTheBridgesTool(t *testing.T) {
 	if err := json.Unmarshal(raw, &take); err != nil || take.Endpoint != endpoint || take.Tool != mcpbridge.SteerTool {
 		t.Fatalf("the take config %s (%v): want the run's endpoint and steer_take", raw, err)
 	}
-	if helper, _ := box.ReadFile(t.Context(), p.GrokNoteHelper()); len(helper) == 0 {
+	if !handedProgram(t, box, p.GrokNoteHelper()) {
 		t.Error("the run was written no note helper")
 	}
 	hooks := grokSettingsHooks(t, settings)

@@ -1,6 +1,7 @@
-// Command notices writes the third-party notices for the crewlet binary: the
-// license and notice files of every Go module linked into it, and of the Go
-// toolchain whose standard library and runtime it carries.
+// Command notices writes the third-party notices for the binaries a release
+// ships, the crewlet binary and the note helper (-main names each): the
+// license and notice files of every Go module linked into them, and of the Go
+// toolchain whose standard library and runtime they carry.
 //
 // goreleaser runs it as a before hook (.goreleaser.yaml), and the release
 // archives and the container image ship what it writes beside LICENSE. The
@@ -40,6 +41,14 @@
 // is byte-identical to one already reproduced for the same component (the Go
 // license again under GOROOT/src/vendor/golang.org/x) is written once.
 //
+// # Native code and models a linked package ships
+//
+// A package of this module that fetches third-party bytes the Go module graph
+// does not see (internal/speech's recognizer library and model)
+// keeps their notices beside it, unmodified, in third_party/<name>@<version>/.
+// Each such directory is one more component, carried whenever its package is
+// linked.
+//
 // # A component with no license file stops the release
 //
 // Its notice cannot be reproduced, and shipping without it is the defect this
@@ -66,7 +75,7 @@ import (
 
 func main() {
 	out := flag.String("out", "", "file to write the notices to (required)")
-	pkg := flag.String("main", "", "the main package the binary is built from, for example ./cmd/crewlet (required)")
+	pkg := flag.String("main", "", "comma-separated main packages the release ships binaries of, for example ./cmd/crewlet,./internal/notehelper (required)")
 	targets := flag.String("targets", "", "comma-separated GOOS/GOARCH release targets, for example linux/amd64,darwin/arm64 (required)")
 	flag.Parse()
 
@@ -89,13 +98,17 @@ func run(ctx context.Context, out, pkg, targetList string) error {
 	if err != nil {
 		return err
 	}
-	lists := make([][]component, 0, len(targets))
+	lists := make([][]component, 0, 2*len(targets))
 	for _, t := range targets {
-		listed, std, listErr := goList(ctx, pkg, t)
+		listed, std, own, listErr := goList(ctx, strings.Split(pkg, ","), t)
 		if listErr != nil {
 			return listErr
 		}
-		lists = append(lists, listed)
+		vendored, vendErr := vendoredBeside(own)
+		if vendErr != nil {
+			return vendErr
+		}
+		lists = append(lists, listed, vendored)
 		toolchain.Packages = append(toolchain.Packages, std...)
 	}
 	toolchain.Packages = sortedUnique(toolchain.Packages)
@@ -157,57 +170,65 @@ type listedModule struct {
 	Replace *listedModule
 }
 
-// goList runs `go list -deps -json` for one target.
+// goList runs `go list -deps -json` over pkgs for one target, so the notices
+// cover every binary an archive ships (the engine and the note helper).
 //
 // CGO_ENABLED=0 because that is how every release target is built, and cgo
 // changes which files, and so which imports, a package has.
-func goList(ctx context.Context, pkg string, t target) ([]component, []string, error) {
-	cmd := exec.CommandContext(ctx, "go", "list", "-deps", "-json", pkg)
+func goList(ctx context.Context, pkgs []string, t target) ([]component, []string, []string, error) {
+	cmd := exec.CommandContext(ctx, "go", append([]string{"list", "-deps", "-json"}, pkgs...)...)
+	pkg := strings.Join(pkgs, " ")
 	cmd.Env = append(os.Environ(), "GOOS="+t.goos, "GOARCH="+t.goarch, "CGO_ENABLED=0")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.Output()
 	if err != nil {
-		return nil, nil, fmt.Errorf("go list -deps %s for %s/%s: %w: %s", pkg, t.goos, t.goarch, err, stderr.String())
+		return nil, nil, nil, fmt.Errorf("go list -deps %s for %s/%s: %w: %s", pkg, t.goos, t.goarch, err, stderr.String())
 	}
-	listed, std, err := parseList(bytes.NewReader(stdout))
+	listed, std, own, err := parseList(bytes.NewReader(stdout))
 	if err != nil {
-		return nil, nil, fmt.Errorf("go list -deps %s for %s/%s: %w", pkg, t.goos, t.goarch, err)
+		return nil, nil, nil, fmt.Errorf("go list -deps %s for %s/%s: %w", pkg, t.goos, t.goarch, err)
 	}
-	return listed, std, nil
+	return listed, std, own, nil
 }
 
 // parseList reads a `go list -json` stream and returns the modules its
-// packages belong to (one entry per package, which merge folds together) and
-// the directories of the standard library packages, excluding the main module.
+// packages belong to (one entry per package, which merge folds together), the
+// directories of the standard library packages, and those of the main
+// module's own packages, whose vendored notices [vendoredBeside] reads.
 //
 // A replaced module is reported under its original path, since that is the
 // name the code imports, with the version and directory of the replacement,
 // since that is the source that was linked.
-func parseList(r io.Reader) ([]component, []string, error) {
+func parseList(r io.Reader) ([]component, []string, []string, error) {
 	dec := json.NewDecoder(r)
 	var (
 		out []component
 		std []string
+		own []string
 	)
 	for {
 		var p listedPackage
 		err := dec.Decode(&p)
 		if errors.Is(err, io.EOF) {
-			return out, std, nil
+			return out, std, own, nil
 		}
 		if err != nil {
-			return nil, nil, fmt.Errorf("decoding the package list: %w", err)
+			return nil, nil, nil, fmt.Errorf("decoding the package list: %w", err)
 		}
 		if p.Standard {
 			if p.Dir == "" {
-				return nil, nil, fmt.Errorf("standard package %s has no source directory; the toolchain's "+
+				return nil, nil, nil, fmt.Errorf("standard package %s has no source directory; the toolchain's "+
 					"GOROOT/src is incomplete, so reinstall the toolchain and retry", p.ImportPath)
 			}
 			std = append(std, p.Dir)
 			continue
 		}
-		if p.Module == nil || p.Module.Main {
+		if p.Module != nil && p.Module.Main {
+			own = append(own, p.Dir)
+			continue
+		}
+		if p.Module == nil {
 			continue
 		}
 		m := component{Path: p.Module.Path, Version: p.Module.Version, Dir: p.Module.Dir}
@@ -218,12 +239,37 @@ func parseList(r io.Reader) ([]component, []string, error) {
 			}
 		}
 		if m.Dir == "" || p.Dir == "" {
-			return nil, nil, fmt.Errorf("package %s: module %s %s has no source directory; run `go mod download` and retry",
+			return nil, nil, nil, fmt.Errorf("package %s: module %s %s has no source directory; run `go mod download` and retry",
 				p.ImportPath, m.Path, m.Version)
 		}
 		m.Packages = []string{p.Dir}
 		out = append(out, m)
 	}
+}
+
+// vendoredBeside answers a component for every third_party/<name>@<version>
+// directory beside a package of the main module (see the package doc).
+func vendoredBeside(dirs []string) ([]component, error) {
+	var out []component
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(filepath.Join(dir, "third_party"))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading the vendored notices beside %s: %w", dir, err)
+		}
+		for _, e := range entries {
+			name, version, ok := strings.Cut(e.Name(), "@")
+			if !e.IsDir() || !ok || name == "" || version == "" {
+				return nil, fmt.Errorf("%s: a vendored notice directory is named <name>@<version>",
+					filepath.Join(dir, "third_party", e.Name()))
+			}
+			out = append(out, component{Path: name, Version: version,
+				Dir: filepath.Join(dir, "third_party", e.Name())})
+		}
+	}
+	return out, nil
 }
 
 // merge unions the per-target lists, sorted by path, one entry per module
@@ -271,10 +317,10 @@ func goToolchain(ctx context.Context) (component, error) {
 }
 
 // noticeName matches the files a component's own notices live in: its
-// license, a NOTICE (which Apache-2.0 requires to be passed on), and a patent
-// grant, bare or with a suffix such as LICENSE.txt, LICENSE-MIT or
-// COPYING.LESSER.
-var noticeName = regexp.MustCompile(`(?i)^(licen[cs]e|copying|notice|patents)([-._][^/]*)?$`)
+// license, a NOTICE (which Apache-2.0 requires to be passed on), a patent
+// grant and onnxruntime's ThirdPartyNotices, bare or with a suffix such as
+// LICENSE.txt, LICENSE-MIT or COPYING.LESSER.
+var noticeName = regexp.MustCompile(`(?i)^(licen[cs]e|copying|notice|patents|thirdpartynotices)([-._][^/]*)?$`)
 
 // sourceExtensions are the files the go command compiles or links into a
 // package. The pattern above accepts any suffix, and the walk reads package
@@ -354,9 +400,10 @@ func render(w io.Writer, toolchain component, modules []component) error {
 	var missing []string
 	fmt.Fprintf(w, "Third-party notices for the crewlet binary\n\n"+
 		"The crewlet binary is built with the Go toolchain and links the Go modules\n"+
-		"listed below. Each section reproduces that component's own license and\n"+
-		"notice files, unmodified, including those kept beside the packages the\n"+
-		"binary links from it. Crewlet itself is licensed under the Elastic License\n"+
+		"listed below, with the native library and models of its dictation\n"+
+		"recognizer, which it fetches. Each section reproduces that\n"+
+		"component's own license and notice files, unmodified, including those kept\n"+
+		"beside the packages the binary links from it. Crewlet itself is licensed under the Elastic License\n"+
 		"2.0 in LICENSE, with its copyright notice in NOTICE. The dashboard the\n"+
 		"binary embeds lists its own bundled dependencies, fonts and icons in\n"+
 		"dashboard/THIRD_PARTY_NOTICES.txt beside this file, and a running engine\n"+

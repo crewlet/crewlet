@@ -9,28 +9,37 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
-// checkoutHome is where a runner that hands the checkouts below its run's
-// working directory their instructions and skills through the note helper's
-// checkout core (internal/notehelper's "Checkouts below the working
-// directory") keeps them: the helper and its state, the launch config
-// ([checkoutSpec]), the home instruction file the harness reads (agents: the
-// first of its candidates that exists, else the first; none for a harness
-// whose home file is never held, its sections read where they are written), the home's own
-// copy held beside the run (held), the file the helper writes the checkouts'
-// sections into (sections), the skills directory they are copied into with
-// the list of copies the run's end removes, and the file listing their roots
-// for a harness the script points at them (roots, "" for none). A copy is
-// built in state/staging ([checkoutHome.staging]).
+// checkoutHome is where a runner handing the checkouts below its working
+// directory their instructions and skills through the note helper's core
+// (internal/notehelper's "Checkouts below the working directory") keeps them:
+// the helper, its state and launch config ([checkoutSpec]); the home
+// instruction file the harness reads (agents: the first candidate that exists,
+// else the first; none for a harness whose home file is never held, its
+// sections read where they are written), the home's own held beside it (held),
+// the helper's sections (sections); the skills directory copies go into, each
+// built in state/staging ([checkoutHome.staging]), with the list the run's end
+// removes; roots, listing their roots for a harness the script points at them
+// ("" for none); for a gated spec, gateCmd, writing what checkout-launch reads,
+// and afterLaunch, run once it has claimed.
 type checkoutHome struct {
 	state, helper, launch string
 	agents                []string
 	agentsFrom            string
 	held, sections        string
 	skills, copied, roots string
+	gateCmd, afterLaunch  string
+	// fallback lists, a path a line, the files a harness loads in the home
+	// file's absence (Muse's foreign rules), the first opening the file the
+	// run makes; homeText keeps the text that file opens with.
+	fallback, homeText string
 	// own is the run's own instructions, written ahead of the home's
 	// (Copilot's share its one file), "" for none.
 	own string
 }
+
+// gateFile is where [checkoutHome]'s gateCmd writes the gate
+// checkout-launch reads: in the state, remade by every run.
+func (h checkoutHome) gateFile() string { return h.state + "/gate.json" }
 
 // holdsHome reports whether h writes a home instruction file: from its
 // candidates, or from the file the script lists them in at run time
@@ -69,27 +78,44 @@ func (h checkoutHome) removeSiblingStaging() string {
 // checkoutSpec is what a runner's harness reads from a checkout's root, for
 // [checkoutHome.launchConfig]: Instructions, the slots ([checkoutSlot]);
 // Limit, the harness's own bound in bytes on a checkout's instructions, nil
-// for a harness with none; SkillDirs, the checkout's skill directories
-// ([checkoutSkillDir]); NestedSkillsOnly where the harness's nested adapter
-// hands skills alone, so its firings read no instruction file;
-// ImportInstructions where the harness reads them itself, each named as an
-// `@<absolute path>` import in place of its text, Limit not applying (Claude
-// Code, measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code import no
-// absolute path from a home file, measured on 0.70.0 and 0.28.4); SkillSep,
-// what joins a copy's repository and skill, "" for `:`; and FiringLimit, a
-// nested firing's bound in bytes on all its checkouts' files, nil for none.
+// for none; SkillDirs ([checkoutSkillDir]); NestedSkillsOnly where the nested
+// adapter hands skills alone; ImportInstructions where the harness reads them
+// itself, each an `@<absolute path>` import, Limit not applying (Claude Code,
+// measured on 2.1.310 and 2.1.330; Gemini CLI and Qwen Code import no absolute
+// path from a home file, measured on 0.70.0 and 0.28.4); SkillSep, what joins
+// a copy's repository and skill, "" for `:`; FiringLimit, a firing's bound in
+// bytes, nil for none; LaunchSkillsLoaded, no launch copy; Gated where the
+// harness's own code answers (internal/notehelper's checkoutGate); Budget, the
+// bound the sections share with the run's own text, nil for none.
 type checkoutSpec struct {
 	Instructions       []checkoutSlot
 	Limit              *int
 	FiringLimit        *int
 	SkillDirs          []checkoutSkillDir
 	NestedSkillsOnly   bool
+	LaunchSkillsLoaded bool
 	ImportInstructions bool
 	SkillSep           checkoutSkillSep
+	Gated              bool
+	Budget             *checkoutBudget
 	// ListedAs and HomeSkills are the helper's ("grok", Grok Build's listing
-	// rule; "kimi", Kimi Code's; "opencode", OpenCode's).
+	// rule; "kimi", Kimi Code's; "opencode", OpenCode's; "muse", Muse Code's).
 	ListedAs   string
 	HomeSkills []checkoutSkillDir
+	// Skipped is lines for the run's skip log.
+	Skipped []string
+	// Reserved is the tags no checkout takes beside the seats' namespace: a
+	// prefix the harness refuses a skill's name under.
+	Reserved []string
+}
+
+// checkoutBudget is the bound a launch's sections share with the text the
+// harness reads beside them (internal/notehelper's launchBudget): Form,
+// whose count applies; Own, the file of the run's own text; Bytes, the bound.
+type checkoutBudget struct {
+	Form  string `json:"form"`
+	Own   string `json:"own"`
+	Bytes int    `json:"bytes"`
 }
 
 // checkoutSkillSep is what joins a copy's repository and skill (the helper's
@@ -207,7 +233,7 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	config := map[string]any{"state": h.state, "agents": h.sections, "first": repos,
 		"instructions": spec.Instructions, "limit": spec.Limit, "firingLimit": spec.FiringLimit,
 		"skillDirs": spec.SkillDirs, "skills": h.skills, "copied": h.copied,
-		"reserved":         []string{sandbox.SkillNamespace},
+		"reserved":         append([]string{sandbox.SkillNamespace}, spec.Reserved...),
 		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions,
 		"skillSep": spec.SkillSep, "roots": h.roots}
 	if spec.ListedAs != "" {
@@ -215,6 +241,18 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	}
 	if len(spec.HomeSkills) > 0 {
 		config["homeSkills"] = spec.HomeSkills
+	}
+	if spec.Gated {
+		config["gated"] = true
+	}
+	if spec.LaunchSkillsLoaded {
+		config["launchSkillsLoaded"] = true
+	}
+	if spec.Budget != nil {
+		config["budget"] = spec.Budget
+	}
+	if len(spec.Skipped) > 0 {
+		config["skipped"] = spec.Skipped
 	}
 	launch, _ := json.Marshal(config)
 	return launch // strings, lists, booleans and ints cannot fail to encode
@@ -226,10 +264,11 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 // ([putBackHome]) and the home's own held afresh, whole ([heldPart]; a link
 // leading nowhere set aside whole, [heldLink]), the copies an earlier run
 // listed and the state with its staging removed, checkout-launch run, and the
-// checkouts' sections written after the home's own through a link as the home
-// keeps the file, its directory made where there is none (a fresh home, or a
-// Qwen Code context.fileName naming a path below it; [heldMade]), the file
-// left untouched where they hand nothing or the harness reads none.
+// checkouts' sections written after the home's own (where the home has none,
+// after the first fallback file there, [checkoutHome]) through a link as the
+// home keeps the file, its directory made where there is none (a fresh home,
+// or a Qwen Code context.fileName naming a path below it; [heldMade]), the
+// file left untouched where they hand nothing or the harness reads none.
 func (h checkoutHome) gate() string { return h.prepare() + h.compose() }
 
 // prepare is [checkoutHome.gate] up to checkout-launch: the hold, the
@@ -256,8 +295,17 @@ func (h checkoutHome) prepare() string {
 	}
 	line(`if [ -f "$rh" ]; then`)
 	line(`  chmod 700 "$rh" || exit 1`)
-	line(`  "$rh" -adapter checkout-launch -config %s < /dev/null || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`,
+	launch := fmt.Sprintf(`"$rh" -adapter checkout-launch -config %s < %%s || { echo 'crewlet: the run could not hand its repositories their instructions' >&2; exit 1; }`,
 		q(h.launch))
+	if h.gateCmd == "" {
+		line(`  %s`, fmt.Sprintf(launch, "/dev/null"))
+	} else {
+		line(`  %s`, h.gateCmd) // which writes the gate, an empty one where the harness cannot answer
+		line(`  %s`, fmt.Sprintf(launch, q(h.gateFile())))
+		if h.afterLaunch != "" {
+			line(`  %s`, h.afterLaunch)
+		}
+	}
 	line(`  hk=1`)
 	line(`else`)
 	line(`  echo 'crewlet: this box has no note helper for its machine, so the run starts without the instructions and skills of its repositories, and without the hook that hands a checkout cloned during it its instructions and skills' >&2`)
@@ -289,6 +337,13 @@ func (h checkoutHome) holdHome(line func(string, ...any)) {
 	}
 	line(`if [ -z "$ra" ]; then :; elif [ -e "$ra" ]; then cp "$ra" "$rha%s" && mv -f "$rha%s" "$rha"; elif [ -L "$ra" ]; then mv -f "$ra" "$rha%s"; `+
 		`else : > "$rha%s"; fi || exit 1`, heldPart, heldPart, heldLink, heldNone)
+	if h.fallback != "" {
+		// THE TEXT THE HARNESS WOULD LOAD IN THE HOME FILE'S PLACE opens the
+		// one the run makes, so the person keeps it ([checkoutHome]).
+		line(`ro=%s; rm -f "$ro" && if [ -e "$rha" ]; then cp "$rha" "$ro"; elif [ -f %s ]; then while IFS= read -r rn; do `+
+			`if [ -f "$rn" ]; then cp "$rn" "$ro" || exit 1; break; fi; done < %s; fi || exit 1`,
+			q(h.homeText), q(h.fallback), q(h.fallback))
+	}
 }
 
 // compose is the shell writing the home's instruction file from what
@@ -301,11 +356,15 @@ func (h checkoutHome) compose() string {
 	if !h.holdsHome() {
 		return ""
 	}
-	has, text := `[ -s "$rq" ]`, `{ if [ -s "$rha" ]; then cat "$rha"; printf '\n\n'; fi; cat "$rq"; }`
+	home := `"$rha"`
+	if h.fallback != "" {
+		home = `"$ro"`
+	}
+	has, text := `[ -s "$rq" ]`, `{ if [ -s `+home+` ]; then cat `+home+`; printf '\n\n'; fi; cat "$rq"; }`
 	if h.own != "" {
 		o := shellword.Quote(h.own)
 		has = `{ [ -s "$rq" ] || [ -s ` + o + ` ]; }`
-		text = `{ rs=; for rf in ` + o + ` "$rha" "$rq"; do if [ -s "$rf" ]; then printf "$rs"; cat "$rf"; rs='\n\n'; fi; done; }`
+		text = `{ rs=; for rf in ` + o + ` ` + home + ` "$rq"; do if [ -s "$rf" ]; then printf "$rs"; cat "$rf"; rs='\n\n'; fi; done; }`
 	}
 	return fmt.Sprintf(`if %s && [ -n "$ra" ]; then %s > "$rq.all" && `+
 		`{ rmd=$(dirname "$ra"); rmt=; while [ ! -e "$rmd" ]; do rmt=$rmd; rmd=$(dirname "$rmd"); done; `+

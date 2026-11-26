@@ -1011,7 +1011,7 @@ func codexShellExcluded(t *testing.T, argv []string) []string {
 // bridge's namespace beside a server `mcp::crewlet` and its `submit_work`
 // beside a server `crewle` listing `tsubmit_work` (measured), so the run's
 // script asks the app-server, before `exec`, through the note helper the
-// engine embeds (internal/notehelper's codex-bridge).
+// engine writes (internal/notehelper's codex-bridge).
 //
 // Mutation: drop the script's bridge check, and the first two rows run.
 func TestACodexRunStartsNothingWhereAnotherServerWouldRenameItsBridge(t *testing.T) {

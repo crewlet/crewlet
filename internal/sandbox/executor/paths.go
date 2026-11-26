@@ -265,9 +265,10 @@
 // its meter one pass — holds no token while what it holds stays within its
 // BASE, and holds ONE slot of a pool of its own ([CollectionLargeReadsAtOnce],
 // [passBudget]) while it holds more. A walk's triggers: a line whose facts
-// charge the meter past [collectionBaseLineCharge] ([threadReader.Gate]), and
-// a reading keeping more than [collectionBaseRecords] records ([recordKeeper],
-// the chain, counted by every item it files, its call ids among them).
+// charge the meter past [collectionBaseLineCharge] ([threadReader.Gate]), a
+// reading keeping more than [collectionBaseRecords] records ([recordKeeper],
+// the chain, counted by every item it files, its call ids among them), and a
+// read's summary words past [summaryBaseBytes] ([summaryClaim]).
 //
 // THE LINE'S TRIGGER IS ITS FACTS' CHARGE ([lineMeter]), the measure the layer
 // bounds a line's hold by, never its length: what no reader reads of a line is
@@ -289,14 +290,14 @@
 //
 // HELD PER PIECE, KEPT ONLY WHERE A READING KEEPS RECORDS: a pass whose
 // readings keep records (the collection's chain, which may keep a line's
-// facts; [chatFileLines]'s Gemini CLI ids) keeps the slot from its first hold
-// to its end, so one keeping more than [collectionBaseRecords] records holds
-// it to its end whatever its lines; every other reader, the take's scrub and
-// meter, a collection's count alone, holds it for its piece past the base and
-// drops it once done (a walk's line, at the next), the slot going back
-// with the pass's last hold. Kept to a take's end, the one slot would be held
-// for its whole scrub and spool, minutes, while its box's stream and the takes
-// behind it waited. The scrub and the meter share one budget: with
+// facts; [chatFileLines]'s Gemini CLI ids; a summary's words) keeps the slot
+// from its first hold to its end, so one keeping more than
+// [collectionBaseRecords] records holds it to its end whatever its lines;
+// every other reader, the take's scrub and meter, a collection's count alone,
+// holds it for its piece past the base and drops it once done (a walk's line,
+// at the next), the slot going back with the pass's last hold: kept to a
+// take's end, it would be held minutes while the takes behind waited.
+// The scrub and the meter share one budget: with
 // two, the scrub's write would wait on the meter and the meter on the slot the
 // scrub holds. A wait its reader's context ends is [errLargeWait], a failure
 // of the read, never a reading of it. A take's Close ends both readers' waits.
@@ -323,7 +324,7 @@
 // [chargeStringsBytes] are the two a test measures.
 //
 // THE BASE: a pass at its base holds about 5.3 MiB at its worst, by no token
-// ([baseTierReadBytes]; a pass at both bases past it does not build): the chain
+// ([baseTierPassBytes]; a pass at both bases past it does not build): the chain
 // at 2^13 of its items (its records, retraction prefixes, kept uuids and call
 // ids), 2.7 MiB; a line's reader, 1.7 MiB, and the strings a charge covers with
 // their decode, 808 KiB, both at their worst; the facts of a line charging the
@@ -341,23 +342,23 @@
 // longest lines (67,871 lines in 9,434 real threads, the longest 2,002,134
 // bytes; each of the 28 threads holding a line past 256 KiB had a large file
 // read or written into it, which its facts do not keep). MEASURED on a
-// dedicated two-core slot (BenchmarkACollectionPassAtItsBase, read off the GC
-// trace as BenchmarkAThreadChainAtItsBounds says): a main thread whose chain
-// files 2^13 items, one a user's line growing every scratch buffer to its most
-// beside results under ids of 32,769 bytes whose facts charge the base exactly,
-// read by the chain, the count and the next request's estimate in one walk,
-// in 0.13 to 0.17 s, holding 4 MiB at most at GOGC=10 and its heap peaking at
-// 5 to 8 MiB at the default, within the arithmetic, and taking no slot.
+// dedicated two-core slot (BenchmarkACollectionPassAtItsBase): a main thread
+// whose chain files 2^13 items, one a user's line growing every scratch buffer
+// to its most beside results under ids of 32,769 bytes whose facts charge the
+// base exactly, read by the chain, the count and the next request's estimate
+// in one walk, in 0.13 to 0.17 s, holding 4 MiB at most at GOGC=10 and its
+// heap peaking at 5 to 8 MiB at the default, within the arithmetic, and
+// taking no slot.
 //
 // THE BASE TIER'S COUNT: no token of this pool holds it, so it is every read in
 // flight at once: the node's own, at most its turns (internal/sandbox's
 // collections), up to the box host's boxReadsHeld (64) reads for its peers,
-// each about 5.3 MiB at its worst,
-// 341 MiB, and one per take. A take at its base holds at most 11.6 MiB, its
-// scrub's 8.2 (BenchmarkATakeAtItsBase) and its meter's 3.3
-// (BenchmarkAMeterAtItsBase), measured apart, each with its own heap, so the
-// sum over-counts: the meter's worst line is past the scrub's base, but the
-// scrub may read on at its base while the meter is still on it. So every take
+// each 5.6 MiB, its pass and its summary's share, 320 KiB
+// ([baseTierReadBytes]), their passes 341 MiB, and one per take. A take at its
+// base holds at most 11.6 MiB, its scrub's 8.2 (BenchmarkATakeAtItsBase) and
+// its meter's 3.3 (BenchmarkAMeterAtItsBase), measured apart, so the sum
+// over-counts: the meter's worst line is past the scrub's base, but the scrub
+// may read on at its base while the meter is still on it. So every take
 // holds one of [SessionTakesAtOnce] (29), a pool of its own sized so the takes
 // at their base hold at most those 341 MiB.
 //
@@ -612,8 +613,8 @@
 // never over a box whose copy holds that archive ([Paths.SessionDigests]), and
 // starts its own, saying why, where it can do neither. Whether a box can
 // continue a carried session is its harness's release, asked of the box
-// ([Runner.CheckCarry]). What each archive holds is its harness's: see carry.go
-// and each runner's own carry.
+// ([Runner.CheckCarry]). What each archive holds is its harness's (carry.go,
+// each runner's own).
 //
 // A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
 // it, by the pack the run's own end makes held to a stricter rule: a file the
@@ -689,10 +690,10 @@
 //
 //  1. BY VALUE: every secret the engine itself put in the box, its login and
 //     its environment's credentials, is taken out wherever it appears, in its
-//     raw form and in the form a JSON string holds it in, whatever its shape,
-//     so a value redact's rules would never recognise (an operator's opaque
-//     token) is gone all the same. First, so the second pass sees the marker
-//     where the value was rather than a half it could not place.
+//     raw form and in the form a JSON string holds it in, so a value redact's
+//     rules would never recognise (an operator's opaque token) is gone too.
+//     First, so the second pass sees the marker where the value was rather
+//     than a half it could not place.
 //  2. BY SHAPE: redact.Secrets, the one denylist every surface uses, which
 //     catches what the engine did not put there: a key the run printed.
 //
@@ -718,10 +719,9 @@
 //     way a token at a time as it streams, and one of blanks alone written as
 //     nothing ([rewriteDocument]), since blanks hold nothing a harness reads.
 //     A `.json` file the rewrite cannot read as one JSON value (a task file
-//     its harness was killed while it wrote, which the run's own end packs as
-//     it finds it) is redacted as text, as a transcript's torn line is, rather
-//     than costing the session; an export read on internal/jsonscan holds
-//     none of its strings.
+//     its harness was killed writing) is redacted as text, as a transcript's
+//     torn line is, rather than costing the session; an export read on
+//     internal/jsonscan holds none of its strings.
 //   - ANYTHING ELSE, as text, scrubbed and redacted as it streams, so a rule
 //     that reads across lines sees them all.
 //
@@ -779,36 +779,32 @@
 // the take's SPOOL ([unitSpool]: gzip at the kept archive's level, in its
 // process's spool directory), counting each file's size as kept, and the
 // second writes the tar from it, never the box ([spoolCopy]): a header names
-// the size of what follows it, whatever the box's archive does meanwhile.
-// Members before a reading's resume point are kept as the first reading read
-// them; the member it resumes in is checked by name, kind and length
-// ([tarPlan.memberAt]). The first reads each line and `.json` file as JSON
+// the size of what follows it, whatever the box's archive does meanwhile. A
+// reading resumes in a member checked by name, kind and length, those before
+// kept ([tarPlan.memberAt]). The first reads each line and `.json` file as JSON
 // alone; the first that is no JSON ends it, and the next goes on from it,
 // reading it as text and every later one both ways ([tarPlan.unitAhead]), each
 // way held to [wayRoomBytes] until the unit's is known ([candidate]): a JSON
 // way past it goes into a gzip member of its own, cut back out of the spool
 // where the text is kept, and a unit whose text was let go before its JSON
-// failed is read once more, as text, all within the first reading. Both ways
-// run on the scrub's own goroutine, where the take contains a panic
-// ([measureFile]). The spool is removed on every way out, before the take's
-// body ends, and held to the room the take holds for it (internal/sandbox's
-// takeRoomBytes): a spool that would pass it refuses the take.
+// failed is read once more, as text, all within the first reading. The spool
+// is removed on every way out, before the take's body ends, and held to the
+// room the take holds for it (internal/sandbox's takeRoomBytes): a spool that
+// would pass it refuses the take.
 //
 // THE PLAN ([tarPlan]) is two streams of bits, each written by the first
 // reading in the order it decides them and read back by the second in that
 // order: for each member its kind, and for a regular file its size as kept;
 // and each line that loses a definition: where the spool holds it, which list,
 // how many elements it holds, the bytes the cut takes and a bit each, set for
-// one cut. So it is AT MOST A SIXTEENTH OF THE PLAINTEXT: a member's header is
-// 512 bytes against a few dozen bits, a list's element, a byte and its comma,
-// one bit, and its cut a few dozen more, which the record it is cut out of
-// pays for. A record of its own for each member, line or cut would let a box's
-// archive of a mebibyte hold the engine host to gibibytes between the two
-// readings.
+// one cut; and each payload kept apart ([mediaPlan]). So it is AT MOST A
+// SIXTEENTH OF THE PLAINTEXT: a member's header is 512 bytes against a few
+// dozen bits, a list's element, a byte and its comma, one bit, and its cut a
+// few dozen more, which the record it is cut out of pays for. A record of its
+// own for each member, line or cut would let a box's archive of a mebibyte
+// hold the engine host to gibibytes between the two readings.
 //
-// AN EXPORT IS SPOOLED TOO ([scrubDocument]): a reading refuses a document
-// only once it has read it, and what it rewrote before a refusal would else
-// reach the take's pipe, uploader, checksum and meter.
+// AN EXPORT IS SPOOLED TOO ([scrubDocument]): one is refused only once read.
 //
 // A TEXT A TAKE FOUND UNCHANGED IS NOT REDACTED AGAIN. The redaction is the
 // scrub's cost, and every turn's take scrubs the whole session: a whole-PDF
@@ -824,8 +820,8 @@
 // because the redaction's answer for a text is the text's alone
 // (redact.Stream; its rules are the build's): each text has a redaction of its
 // own, a key's credential is judged on its raw name, and a credential's value
-// never reaches it. In memory alone: a restart, a deploy or a seat's move to
-// another node costs one take at most what it costs without. On two cores of
+// never reaches it. In memory alone: a restart, a deploy or a seat's move
+// costs one take at most what it costs without. On two cores of
 // the build machine, two runs each (BenchmarkASecondTakeOfAPDFSession), that
 // read's take came to 6.1 s with no memo, 5.2 s as a process's first and 3.4 s
 // as its second.
@@ -841,7 +837,7 @@
 // one whose text the redaction refuses ([errRedaction], what the redaction said
 // read off its error, and redact.ErrDecidedEarly whether its stream decided a
 // window before what it read there was known, at a write or at its close), is
-// refused, stamped with why, rather than costing the engine host its memory;
+// refused, stamped with why, rather than costing the host its memory;
 // and the whole scrub is held to the take's time (internal/sandbox's
 // SessionScrubWait). A panic in the scrub is CONTAINED on the take's own
 // goroutine (scrubContained, take.go), which reads every byte of the archive, a
@@ -858,7 +854,7 @@
 // 132 MiB at the bound and [scrubLongestMax], 16 MiB of it the plan and 12 MiB
 // that value, near nothing in a real session. A test holds it at a smaller
 // bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the real one,
-// both readings from a file on disk.
+// both readings from disk.
 // On two cores of the build machine:
 //
 //	one string to the bound:   16.2 s a scrub, held 17.8 MiB (256 MiB from 28 MiB)
@@ -872,6 +868,14 @@
 // why a take past it fails closed are in code-sandbox.md); the torn string,
 // read on from its last line, the slowest. A string is redacted once, as JSON
 // in its first reading.
+//
+// # A kept session's media is kept apart
+//
+// Each large payload a take keeps apart is found after the scrub ([mediaRun])
+// and cut into a gzip member alone ([memberSplit]); no JSON text changes. The
+// box digests and restores the archive whole, so its gzip must read several
+// members, as GNU's and BusyBox's do
+// (TestASessionSplicedFromItsMembersIsRestoredAsOne).
 //
 // # A definition the scrub renamed is cut out of its line
 //
@@ -1577,6 +1581,12 @@ func (p Paths) MCPConfigFresh() string { return p.WorkDir() + "/mcp-fresh.json" 
 // checkout, where a commit could carry it and a `git clean` could remove it;
 // and its own, removed whole before every run ([Runner.ClearArtifacts]).
 func (p Paths) CommitAttribution() string { return p.WorkDir() + "/commit-attribution" }
+
+// ProgramStaging is the DIRECTORY the engine writes a program's bytes into
+// before the box's own process copies them into place ([writeProgram]),
+// removed whole before every run ([Runner.ClearArtifacts]), so a write whose
+// copy never ran leaves nothing past the next run's clear.
+func (p Paths) ProgramStaging() string { return p.WorkDir() + "/program-staging" }
 
 // AttributionHook is the one script every hook name in [Paths.GitHooks] links
 // to.

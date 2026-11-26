@@ -106,9 +106,7 @@ func candidateHome(t *testing.T, names []string) (h checkoutHome, agent, work st
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(h.helper, bin, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeHostProgram(t, h.helper, bin, 0o600)
 	if err = os.WriteFile(h.launch, h.launchConfig(codexCheckouts(codexProjectDocMaxBytes), nil), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -247,9 +245,7 @@ func TestAHoldCutShortNeverReplacesTheHomesFile(t *testing.T) {
 			// A cp that writes part of the file, then dies with its script.
 			bin := t.TempDir()
 			cut := "#!/bin/sh\nhead -c 5 \"$1\" > \"$2\"\nkill -KILL \"$PPID\"\n"
-			if err := os.WriteFile(filepath.Join(bin, "cp"), []byte(cut), 0o700); err != nil { //nolint:gosec // the case's own tool
-				t.Fatal(err)
-			}
+			writeHostProgram(t, filepath.Join(bin, "cp"), []byte(cut), 0o700)
 			sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
 			cmd := exec.Command(sh, "-c", "cd "+shellword.Quote(work)+" || exit 1\n"+h.gate())
 			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
@@ -439,5 +435,60 @@ func TestEveryRunnersSectionSaysWhatACheckoutDoesNotBring(t *testing.T) {
 	if got := unlabelledSections(string(raw), []string{"pi", "checkoutless"}); !slices.Equal(got,
 		[]string{"checkoutless names no section"}) {
 		t.Errorf("a runner added with no section is reported as %q", got)
+	}
+}
+
+// CODEX'S AND PI'S CHECKOUT FORMS ARE THE ONES THEY WERE, BESIDE HERMES'S
+// GATED ONE: their launch configs carry no gate or budget, their gates hold
+// the home's instruction file, run checkout-launch on no input and write the
+// sections into that file, and their restores put it back; Hermes's carries
+// its gate and budget, peeks and asks Hermes before checkout-launch, and
+// holds, writes and puts back no home file.
+//
+// Mutation: write `gated` or `budget` for every harness, run the gate's
+// command for one without it, or hold a home file Hermes has none of, and a
+// case goes red.
+func TestCodexAndPiCheckoutFormsCarryNoGateBesideHermess(t *testing.T) {
+	t.Parallel()
+	paths := Paths{Home: "/home/u"}
+	keys := func(h checkoutHome, spec checkoutSpec) []string {
+		var config map[string]any
+		if err := json.Unmarshal(h.launchConfig(spec, []string{"repo"}), &config); err != nil {
+			t.Fatal(err)
+		}
+		return slices.Sorted(maps.Keys(config))
+	}
+	plain := []string{"agents", "copied", "firingLimit", "first", "importInstructions", "instructions", "limit",
+		"nestedSkillsOnly", "reserved", "roots", "skillDirs", "skillSep", "skills", "state"}
+	for name, c := range map[string]struct {
+		home  checkoutHome
+		spec  checkoutSpec
+		gated bool
+	}{
+		"codex":  {Codex{}.checkoutHome(paths), codexCheckouts(codexProjectDocMaxBytes), false},
+		"pi":     {Pi{}.checkoutHome(paths), piCheckouts(), false},
+		"hermes": {hermesLaunchHome(paths, "m"), hermesCheckouts(paths), true},
+	} {
+		want := plain
+		if c.gated {
+			want = slices.Sorted(slices.Values(append(slices.Clone(plain), "budget", "gated")))
+		}
+		if got := keys(c.home, c.spec); !slices.Equal(got, want) {
+			t.Errorf("%s: the launch config's keys are %q, want %q", name, got, want)
+		}
+		gate, restore := c.home.gate(), c.home.restore()
+		for what, held := range map[string]bool{
+			"the home file held":           strings.Contains(gate, `cp "$ra" "$rha`),
+			"the sections written into it": strings.Contains(gate, `> "$ra"`),
+			"the home file put back":       c.home.held != "" && strings.Contains(restore, shellword.Quote(c.home.held)),
+			"checkout-launch on no input":  strings.Contains(gate, "-adapter checkout-launch -config "+shellword.Quote(c.home.launch)+" < /dev/null"),
+		} {
+			if held == c.gated {
+				t.Errorf("%s: %s: %v", name, what, held)
+			}
+		}
+		if peeks := strings.Contains(gate, "-adapter hermes-peek"); peeks != c.gated {
+			t.Errorf("%s: the gate peeks: %v", name, peeks)
+		}
 	}
 }

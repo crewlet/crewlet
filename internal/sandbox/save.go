@@ -239,7 +239,10 @@ type saveTaken struct {
 	policy  SessionPolicy
 	archive SessionArchive
 	counted int64
-	// room is the room its sealed spool holds, and scrubbing its scrub's
+	// charge is its entry on its seat's save ledger, which its keep amends
+	// to what it uploads.
+	charge *saveCharge
+	// room is the room its sealed spools hold, and scrubbing its scrub's
 	// spool's, from before its pack ([takeRoomBytes]).
 	room, scrubbing *spoolHold
 	// sealed is the size of the object the keep landed.
@@ -280,7 +283,7 @@ func (c *Coordinator) saveTask(ctx, phase context.Context, job saveJob) saveOutc
 		log.InfoContext(ctx, "executor_session_saved", "turn_id", job.run.TurnID, "agent", job.run.AgentHandle,
 			"launch_seq", in.row.LaunchSeq, "capture_seq", nextCaptureSeq(in.row), "point", point,
 			"late_s", start.Sub(job.due).Seconds(), "took_s", c.now().Sub(start).Seconds(),
-			"counted", out.counted, "bytes", in.sealed)
+			"counted", out.counted, "amended", in.charge.entry.Bytes, "bytes", in.sealed)
 	case saveNotMoved, savePaced, saveNotYet:
 		log.DebugContext(ctx, "executor_session_save_deferred", "turn_id", job.run.TurnID, "point", point,
 			"class", string(out.class), "why", out.why)
@@ -451,17 +454,24 @@ func (c *Coordinator) saveInHand(ctx, phase context.Context, job saveJob, out sa
 		}
 	}
 	spooling.shrinkTo(counted)
-	entry := savedEntry{ID: uuid.New(), Until: c.now().UTC().Add(saveLedgerHold), Bytes: counted}
-	if refused, refusal := c.chargeSave(ctx, row.AgentHandle, entry, policy.SeatBudget); refused != "" {
+	// CHARGED WHAT IT WILL MOST LIKELY UPLOAD: its archive, less the media
+	// its turn's newest kept capture holds, which its keep carries rather
+	// than uploads; amended once the keep knows ([Coordinator.amendSave]).
+	charge := &saveCharge{seat: row.AgentHandle, budget: policy.SeatBudget,
+		entry: savedEntry{ID: uuid.New(), Until: c.now().UTC().Add(saveLedgerHold), Bytes: counted}}
+	if row.Kept != nil {
+		charge.entry.Bytes = max(counted-row.Kept.mediaBytes(), saveMarginFloor)
+	}
+	if refused, refusal := c.chargeSave(ctx, charge.seat, charge.entry, charge.budget); refused != "" {
 		release()
 		if refused == savePaced {
 			out.pacedUntil = c.now().Add(saveRetryCeiling)
 		}
 		return end(refused, refusal)
 	}
-	out.counted = counted
+	out.counted = charge.entry.Bytes
 	return &saveTaken{box: box, saver: saver, row: row, policy: policy, archive: archive, counted: counted,
-		room: spooling, scrubbing: scrubbing}, out
+		charge: charge, room: spooling, scrubbing: scrubbing}, out
 }
 
 // saveRow is rule 7: the ONE READ of the run's row a save's place, save point
@@ -640,7 +650,7 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	}
 	taken, err := in.saver.TakeSession(take, in.box, SessionTake{Save: in.archive.Path, Scrub: scrub,
 		MaxBytes: executorkeep.SessionMaxBytes, Scope: row.AgentID, Session: row.Launch.Minted,
-		Spool: in.scrubbing.spooling(dir)})
+		Spool: in.scrubbing.spooling(dir), MediaApart: in.policy.MediaApart})
 	switch {
 	case err != nil:
 		out.unplaced = "take"
@@ -676,19 +686,21 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	case !took:
 		return end(saveNotYet, "the run's row refused the save's place")
 	}
-	// NEVER PAST WHAT ITS SEAT'S LEDGER COUNTED: its room was shrunk to it, and
-	// the seal is refused before a byte past it lands.
+	// NEVER PAST ITS ROOM, shrunk to its archive counted ([countedFor]): the
+	// seal is refused before a byte past it lands, and the ledger is held to
+	// what the keep uploads ([Coordinator.amendSave]).
 	spooled, err := c.spool(take, row, stamp, taken, &savePlaces{run: row, resumeRead: taken.ResumeRead,
 		needsResumeRead: placesWithResumeRead(in.saver)}, in.room)
 	if err != nil {
 		loss, why := takeRefusal(take, err)
 		if errors.Is(err, errSpoolPastHold) {
-			why = fmt.Sprintf("the session sealed is past the %d bytes its seat's save ledger counted for it",
+			why = fmt.Sprintf("the session sealed is past the %d bytes its spools' room held for it",
 				in.counted)
 		}
 		c.finishCapture(take, by, row, stamp, CaptureRefused, loss, why)
 		return end(saveFailed, why)
 	}
+	spooled.charge = in.charge
 	c.spooledWhole(take, by, row, spooled, taken, 0)
 	if !c.joinKeeps() {
 		// A SAVE NEVER STANDS BY, so its spool is refused, never withdrawn.

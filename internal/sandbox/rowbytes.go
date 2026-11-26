@@ -61,11 +61,11 @@ const (
 	// serves', the calls those answered, an item's late call or wakes and the
 	// notes' tellings), and that this build carries without reading: STATED HERE,
 	// so the next field a build adds is added inside it, and the build that adds
-	// it moves its own figure out of this one, as the turn's wake items, the
-	// job's fold-ins and what the turn wrote took theirs ([wakeRowBytes],
-	// [foldInRowBytes], [wroteRowBytes]). The turn's read of its conversation
+	// it moves its own figure out of this one, as the wake items, fold-ins,
+	// writes and captures' media took theirs ([wakeRowBytes], [foldInRowBytes],
+	// [wroteRowBytes], [mediaRowBytes]). The turn's read of its conversation
 	// ([PendingRun.Base]) has its own place, at [ConversationBaseMaxBytes].
-	ExtraRowBytes = 256<<10 - wakeRowBytes - foldInRowBytes - wroteRowBytes - parkedRowBytes
+	ExtraRowBytes = 256<<10 - wakeRowBytes - foldInRowBytes - wroteRowBytes - parkedRowBytes - mediaRowBytes
 
 	// wakeRowBytes is the turn's wake items' figure, moved out of the room a
 	// later build adds keys in: [MaxTurnWakes] items at their bound, a hundred
@@ -83,6 +83,17 @@ const (
 	// as themselves, 4,495 bytes with the field's name, which 4.5 KiB leaves a
 	// little over (TestTheWholeRowFitsItsBudget weighs them).
 	wroteRowBytes = 4<<10 + 512
+
+	// mediaRowBytes is the figure of the media its capture sections name
+	// ([SessionCapture.Media]), the archive they restore to and their count
+	// ([SessionCapture.ArchiveBytes], [SessionCapture.MediaCount]), which ride
+	// only beside them, moved out of the room a later build adds keys in: three
+	// sections (the capture, the kept one and the save) of
+	// executorkeep.MediaMaxCount objects at their bounds, a content key at
+	// secrets.MaxStreamKeyIDBytes, the archive at executorkeep.ArchiveMaxBytes
+	// and the count at MediaMaxCount, 50,847 bytes with the fields' names,
+	// which 50 KiB leaves a little over (TestTheWholeRowFitsItsBudget weighs).
+	mediaRowBytes = 50 << 10
 
 	// parkedRowBytes is the figure of the calls the job parked on
 	// ([PendingRun.ParkedCalls]), moved out of the room a later build adds
@@ -276,8 +287,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_381_382
-	measuredSpare       = 351_034
+	measuredOtherFields = 2_432_229
+	measuredSpare       = 351_387
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].

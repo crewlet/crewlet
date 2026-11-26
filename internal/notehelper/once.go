@@ -36,12 +36,17 @@ var oneShots = map[string]oneShot{
 	"codex-bridge":      {run: runCodexBridge, config: true},
 	"grok-nested":       {run: runGrokNested, config: true},
 	"pi-nested":         {run: runPiNested, config: true},
+	"muse-nested":       {run: runMuseNested, config: true},
+	"hermes-peek":       {run: runHermesPeek, config: true},
+	"hermes-nested":     {run: runHermesNested, config: true},
 	"kimi-nested":       {run: runKimiNested, config: true},
 	"opencode-nested":   {run: runOpenCodeNested, config: true},
 	"codex-renew":       {run: runCodexRenew, config: true},
 	"codex-materialize": {run: runCodexMaterialize},
 	"copilot-launch":    {run: runCopilotLaunch, config: true},
 	"copilot-nested":    {run: runCopilotNested, config: true},
+	"cursor-nested":     {run: runCursorNested, config: true},
+	"cursor-left":       {run: runCursorLeft, config: true},
 }
 
 // oneShot is one adapter run once: its run, and whether it reads -config,
@@ -66,6 +71,8 @@ func runOnce(ctx context.Context, args []string, getenv func(string) string, std
 	set.BoolVar(&f.skillLoads, "skill-loads", false, "")
 	set.BoolVar(&f.loadsOnly, "loads-only", false, "")
 	set.IntVar(&f.slot, "slot", 0, "")
+	set.IntVar(&f.room, "room", 0, "")
+	set.BoolVar(&f.left, "left", false, "")
 	set.StringVar(&f.threadFile, "thread-file", "", "")
 	f.digests = digestFlag{}
 	set.Var(f.digests, "skill-digest", "")

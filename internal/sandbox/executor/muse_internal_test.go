@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +41,18 @@ func museFixture(t *testing.T, name string) []byte {
 	return raw
 }
 
+// museTraceLines is n lines a run's script appends of its session's traces, one a
+// model request ([museTraceEvent]).
+func museTraceLines(n int) []byte {
+	var b bytes.Buffer
+	for i := range n {
+		fmt.Fprintf(&b, `{"payload_type":"%s","line":{"schema_version":1,"id":"e%d","stream":{"kind":"session","id":"s"},`+
+			`"payload_type":"runtime.session","payload":{"event":{"base_instructions":"b","kind":"%s"},"kind":"run"}}}`+"\n",
+			museTraceEvent, i, museTraceKind)
+	}
+	return b.Bytes()
+}
+
 // museDecoded is the decoder fed stream.
 func museDecoded(t *testing.T, stream []byte) *museEvents {
 	t.Helper()
@@ -58,7 +71,7 @@ func museDecoded(t *testing.T, stream []byte) *museEvents {
 // Mutation: drop the records after the mark, or keep only the last
 // `run.usage`, and the spend comes out short.
 func TestALaunchedMuseRunReadsAsItsAnswerAndItsWholeSpend(t *testing.T) {
-	res := (Muse{}).Parse(museFixture(t, "launched.result.jsonl"))
+	res := (Muse{}).Parse(append(museFixture(t, "launched.result.jsonl"), museTraceLines(4)...))
 	if !res.Success || res.Text != "ANSWER launched run." || res.SessionID != "0b5e0000-0000-4000-8000-0000000000e1" {
 		t.Fatalf("result = %+v, want the answer of session ...e1", res)
 	}
@@ -126,16 +139,21 @@ func TestAMuseRunItsCapStoppedReadsAsCapped(t *testing.T) {
 	}
 }
 
-// AN EXEC'S REQUESTS ARE EVERY ONE OF ITS RUNS', whatever each run's own cap
-// said: `--max-model-steps` caps each run apart, so the collection holds the
-// exec's whole count to the cap ([Decoder.Requests]). tools made five.
+// AN EXEC'S REQUESTS ARE ITS SESSION'S TRACES, every one of its runs':
+// `--max-model-steps` caps each run apart, so the collection holds the exec's
+// whole count to the cap ([Decoder.Requests]), read off the main thread's
+// session, never off a run.usage, which a run its end cut off never prints.
+// tools made five, each run's run.usage stating its own.
 //
-// Mutation: count one run's requests, or none, and the count is not five.
-func TestAMuseExecsRequestsAreEveryRunsWhateverEachRunSaid(t *testing.T) {
-	dec := &museEvents{}
-	_ = eachLine(bytes.NewReader(museFixture(t, "tools.stream.jsonl")), dec, maxLineBytes)
+// Mutation: count the run.usages' calls, or one run's traces, and the count is
+// not five.
+func TestAMuseExecsRequestsAreItsSessionsTraces(t *testing.T) {
+	if dec := museDecoded(t, museFixture(t, "tools.stream.jsonl")); dec.Requests() != 0 {
+		t.Fatalf("the exec's stream alone counts %d requests, want none: run.usage is its spend's", dec.Requests())
+	}
+	dec := museDecoded(t, append(museFixture(t, "tools.stream.jsonl"), museTraceLines(5)...))
 	if dec.Requests() != 5 {
-		t.Fatalf("the exec counts %d requests, want five", dec.Requests())
+		t.Fatalf("the exec counts %d requests, want its five traces", dec.Requests())
 	}
 }
 
@@ -554,9 +572,7 @@ func TestAMuseBoxsReleaseDecidesTheRun(t *testing.T) {
 			"/.local/share/muse/sessions/2026/11/22/" + id + "/session.jsonl": "{}\n",
 		})
 		bin := t.TempDir()
-		if err := os.WriteFile(filepath.Join(bin, "muse"), []byte("#!/bin/sh\necho '"+c.version+"'\n"), 0o700); err != nil {
-			t.Fatal(err)
-		}
+		writeHostProgram(t, filepath.Join(bin, "muse"), []byte("#!/bin/sh\necho '"+c.version+"'\n"), 0o700)
 		script := "PATH=" + bin + ":$PATH\n" + museRelease +
 			fmt.Sprintf(`if ! at %s; then echo refused; exit 0; fi`+"\n", floorArgs(museSupported())) +
 			museSessionGate(Session{ID: id, Continues: true, Fresh: "fresh-id"}, p, false) +
@@ -658,13 +674,14 @@ func TestAMuseRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	p := Paths{Home: "/h"}
 	files, dirs := (Muse{}).artifactFiles(p), (Muse{}).artifactDirs(p)
 	if !slices.Equal(files, []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
-		p.MuseNotesInstall()}) ||
+		p.MuseNotesInstall(), p.MuseCheckoutLaunch(), p.MuseCheckoutSections(), p.MuseForeignRules(),
+		p.MuseHomeRulesOwn()}) ||
 		!slices.Equal(dirs, []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}) {
 		t.Fatalf("artifacts = %v %v", files, dirs)
 	}
 	for _, kept := range []string{p.MuseSettings(), p.MuseConfig() + "/auth.json", p.MuseSessions(),
 		p.MuseConfig() + "/AGENTS.md", p.MuseSkills() + "/home", p.MuseConfig() + "/skills/home",
-		p.Home + "/.local/share/muse/plugins/installed.json", p.MuseServersAdded()} {
+		p.Home + "/.local/share/muse/plugins/installed.json", p.MuseServersAdded(), p.MuseHomeRules()} {
 		if slices.ContainsFunc(append(files, dirs...), func(gone string) bool {
 			return kept == gone || strings.HasPrefix(kept, gone+"/")
 		}) {
@@ -790,23 +807,148 @@ func TestAMuseServerNameStaysWholeUpTo19Characters(t *testing.T) {
 	}
 }
 
-// A MUSE RUN'S FAILED ATTEMPTS ARE NONE OF ITS REQUESTS: its usage states
-// them apart from the calls answered or cut off, and a refused attempt bills
-// nothing, so the run counts the calls answered and cut off; a usage stating
-// no such split is read by its calls.
+// A KILLED MUSE RUN'S PLUGIN RECORDS COME BACK AS THE HOME HELD THEM: the
+// script's remove and install drop a person's reject of the nested hook, which
+// the run left out (D709); the clear puts the home's own
+// `plugin:crewlet-notes:*` capabilities back from the held settings, the run's
+// approvals gone, and leaves every other capability as the file holds it.
 //
-// Mutation: count every call the usage states, and the first row counts 8.
-func TestAMuseRunsFailedAttemptsAreNoneOfItsRequests(t *testing.T) {
-	for payload, want := range map[string]int{
-		`{"calls":8,"completed_calls":6,"failed_calls":2,"cancelled_calls":0,"models":[]}`: 6,
-		`{"calls":5,"completed_calls":4,"failed_calls":0,"cancelled_calls":1,"models":[]}`: 5,
-		`{"calls":3,"models":[]}`: 3,
+// Mutation: skip the capabilities at the clear, or replace them all.
+func TestAKilledMuseRunsPluginRecordsComeBack(t *testing.T) {
+	home := []byte(`{"runtime_capabilities":{"plugin:crewlet-notes:hook:posttooluse-checkouts":{"enabled":false},` +
+		`"plugin:other:hook:x":{"enabled":false}}}`)
+	settings := map[string]json.RawMessage{"runtime_capabilities": json.RawMessage(
+		`{"plugin:crewlet-notes:hook:stop":{"enabled":true},"plugin:other:hook:y":{"enabled":true}}`)}
+	if err := museCapabilitiesBack(settings, home, "/h/settings.json"); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	_ = json.Unmarshal(settings["runtime_capabilities"], &got)
+	if want := []string{"plugin:crewlet-notes:hook:posttooluse-checkouts", "plugin:other:hook:y"}; !slices.Equal(
+		slices.Sorted(maps.Keys(got)), want) {
+		t.Errorf("the capabilities after the clear are %v, want %v", slices.Sorted(maps.Keys(got)), want)
+	}
+}
+
+// A MUSE COPY IS CHECKED AGAINST EVERY SKILL DIRECTORY MUSE WOULD LIST BESIDE
+// IT (measured, rows so1-so6): ~/.config/muse/skills and the start
+// directory's three beside ~/.agents/skills (the run's skills, which the
+// helper reads itself), and ~/.claude/skills and ~/.codex/skills only where
+// the home's settings leave Muse listing another harness's skills, each read
+// for the skill directories directly in it, as Muse lists them.
+//
+// Mutation: drop a directory, walk one deeper, check the foreign ones
+// whatever the setting,
+// name no listing rule (the helper then reads none of them), or leave the
+// tags `bundled` and `plugin` free (rows p2, p5: Muse refuses those names).
+func TestAMuseCopyIsCheckedAgainstTheSkillsMuseListsBesideIt(t *testing.T) {
+	p := Paths{Home: "/h"}
+	for _, foreign := range []bool{true, false} {
+		var got []string
+		for _, d := range museCheckouts(p, foreign).HomeSkills {
+			got = append(got, d.Dir)
+			if !d.Recursive || d.checkoutWalk != (checkoutWalk{Every: true, Depth: 1}) {
+				t.Errorf("foreign skills %v: %s is read as %+v, want the skill directories directly in it", foreign, d.Dir, d)
+			}
+		}
+		want := []string{"/h/.config/muse/skills", "/h/workspace/.agents/skills",
+			"/h/workspace/.claude/skills", "/h/workspace/.codex/skills"}
+		if foreign {
+			want = append(want, "/h/.claude/skills", "/h/.codex/skills")
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("foreign skills %v: the copies are checked against %q, want %q", foreign, got, want)
+		}
+		launch := Muse{}.checkoutHome(p).launchConfig(museCheckouts(p, foreign), nil)
+		if !strings.Contains(string(launch), `"listedAs":"muse"`) {
+			t.Errorf("foreign skills %v: the launch names no Muse listing rule, so no home skill is read: %s", foreign, launch)
+		}
+		if !strings.Contains(string(launch), `"reserved":["crewlet","bundled","plugin"]`) {
+			t.Errorf("foreign skills %v: the launch leaves a tag Muse refuses a skill under free: %s", foreign, launch)
+		}
+	}
+	if rules, skills := museForeignOn([]byte(`{"context":{"foreign_personal_skills":false}}`)); !rules || skills {
+		t.Errorf("foreign_personal_skills false read as rules %v, skills %v", rules, skills)
+	}
+}
+
+// A RUN THAT REINSTALLS THE PLUGIN HOLDS THE SETTINGS A NESTED REJECT IS IN,
+// AND ONLY SUCH A RUN (D709): with skill loads alone, and no standing text,
+// the reinstall drops a person's reject of the nested hook, so the launch
+// holds the home's settings for the script to put back whole; with neither
+// notes nor loads the plugin is left alone and nothing is held. Either way the
+// hook is left out of the plugin and the skip log is handed the line.
+//
+// Mutation: hold only where there is standing text, hold for every run, or
+// install the hook.
+func TestAMuseRunHoldsTheNestedRejectWhereItReinstallsThePlugin(t *testing.T) {
+	const settings = `{"schema_version":1,"runtime_capabilities":{"plugin:crewlet-notes:hook:posttooluse-checkouts":` +
+		`{"enabled":false}}}`
+	for _, loads := range []bool{true, false} {
+		box := sandbox.NewFakeSandbox("b")
+		box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+			if cmd == "uname -m" {
+				return sandbox.ExecResult{Stdout: "x86_64\n"}, nil
+			}
+			return sandbox.ExecResult{}, nil
+		}
+		p := PathsFor(box)
+		if err := box.WriteFile(t.Context(), p.MuseSettings(), []byte(settings)); err != nil {
+			t.Fatal(err)
+		}
+		req := sandbox.RunRequest{Brief: "x"}
+		if loads {
+			req.SkillLoads = sandbox.SkillWiring{Server: "crewlet", Tool: "skill_loaded", URL: "http://127.0.0.1:7/mcp/t/skill"}
+		}
+		if _, err := (Muse{}).WriteConfig(t.Context(), box, req, Session{ID: "s"}, p); err != nil {
+			t.Fatalf("loads %v: WriteConfig: %v", loads, err)
+		}
+		want := ""
+		if loads {
+			want = settings
+		}
+		if held, _ := box.ReadFile(t.Context(), p.MuseHeldSettings()); string(held) != want {
+			t.Errorf("loads %v: the home's settings were held as %q, want %q", loads, held, want)
+		}
+		if manifest, _ := box.ReadFile(t.Context(), p.MuseNotesPlugin()+"/.muse-plugin/plugin.json"); strings.Contains(
+			string(manifest), "muse-nested") {
+			t.Errorf("loads %v: the plugin carries the nested hook the person rejected", loads)
+		}
+		if launch, _ := box.ReadFile(t.Context(), p.MuseCheckoutLaunch()); !strings.Contains(string(launch),
+			`"skipped":["a repository cloned during the run is not handed`) {
+			t.Errorf("loads %v: the launch hands the skip log no line: %s", loads, launch)
+		}
+	}
+}
+
+// A MUSE RUN'S REQUESTS ARE ITS SESSION'S TRACES ALONE ([museTraceKind]): an
+// appended line of another event is none, and one too long to read counts
+// where an end shows its trace, or may hide one where neither does.
+//
+// Mutation: count every appended line, read the kind off the line's stream
+// rather than its event, or count a long line by its type alone, and a row
+// goes red.
+func TestAMuseRunsRequestsAreItsSessionsTracesAlone(t *testing.T) {
+	other := []byte(`{"payload_type":"` + museTraceEvent + `","line":{"stream":{"kind":"` + museTraceKind + `"},` +
+		`"payload_type":"runtime.session","payload":{"event":{"kind":"model_completed"}}}}` + "\n")
+	if dec := museDecoded(t, append(museTraceLines(2), other...)); dec.Requests() != 2 {
+		t.Errorf("two traces and a completion count %d requests, want 2", dec.Requests())
+	}
+	for _, c := range []struct {
+		name                string
+		head, tail          string
+		requests, undecided int
+	}{
+		{"a trace at its tail", `{"payload_type":"` + museTraceEvent + `","line":{"payload":{"event":{"base_instructions":"`,
+			`"kind":"` + museTraceKind + `"},"kind":"run"}}}`, 1, 0},
+		{"no trace at either end", `{"payload_type":"` + museTraceEvent + `","line":{"payload":{"event":{"base_instructions":"`,
+			`xxx"}}}}`, 0, 1},
 	} {
 		dec := &museEvents{}
-		_ = eachLine(strings.NewReader(`{"stream":{"kind":"exec.usage","id":"x"},"payload_type":"run.usage","payload":`+
-			payload+`}`), dec, maxLineBytes)
-		if dec.Requests() != want {
-			t.Errorf("%s: %d requests, want %d", payload, dec.Requests(), want)
+		dec.Skipped(LongLine{Size: 1 << 30, Bound: maxLineBytes, Head: []byte(c.head), Tail: []byte(c.tail)})
+		if dec.Requests() != c.requests || dec.Undecided() != c.undecided {
+			t.Errorf("%s: %d requests and %d undecided, want %d and %d", c.name, dec.Requests(), dec.Undecided(),
+				c.requests, c.undecided)
 		}
 	}
 }

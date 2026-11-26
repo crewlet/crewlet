@@ -75,11 +75,17 @@ func museReachesTheBridgesTool(t *testing.T) {
 	if err := json.Unmarshal(raw, &take); err != nil || take.Endpoint != endpoint || take.Tool != mcpbridge.SteerTool {
 		t.Fatalf("the take config %s (%v): want the run's endpoint and steer_take", raw, err)
 	}
-	if helper, _ := box.ReadFile(t.Context(), p.MuseNoteHelper()); len(helper) == 0 {
+	if !handedProgram(t, box, p.MuseNoteHelper()) {
 		t.Error("the run was written no note helper")
 	}
 	events := map[string]int{}
+	nested := 0
 	for _, h := range manifest.Capabilities.Hooks {
+		if slices.Equal(h.Command, []string{p.MuseNoteHelper(), "-adapter", "muse-nested", "-config",
+			p.MuseCheckouts() + "/nested.json"}) && h.Event == "PostToolUse" {
+			nested++
+			continue
+		}
 		events[h.Event]++
 		if len(h.Command) < 5 || h.Command[0] != p.MuseNoteHelper() || !slices.Equal(h.Command[1:5],
 			[]string{"-adapter", "muse-hook", "-config", p.MuseTakeConfig()}) {
@@ -109,7 +115,8 @@ func museReachesTheBridgesTool(t *testing.T) {
 			}
 		}
 	}
-	if events["PostToolUse"] != 3 || events["Stop"] != 1 || manifest.Name != "crewlet-notes" {
-		t.Errorf("the plugin %q has hooks %v, want three PostToolUse and a Stop", manifest.Name, events)
+	if events["PostToolUse"] != 3 || events["Stop"] != 1 || nested != 1 || manifest.Name != "crewlet-notes" {
+		t.Errorf("the plugin %q has note hooks %v and %d nested, want three PostToolUse, a Stop and the nested "+
+			"hook of its own", manifest.Name, events, nested)
 	}
 }

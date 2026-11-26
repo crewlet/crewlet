@@ -1051,6 +1051,13 @@
   - `internal/executordomain.TestAnOpenSplicesEveryMediaWhereItsFrameStands`
   - `internal/executordomain.TestNoMediaOutlivesItsSession`
   - `internal/executordomain.TestTheSeatBudgetCountsSharedMediaOnce`
+  - `internal/sandbox/executor.TestATakeCutsEachLargePayloadIntoAMemberOfItsOwn`
+  - `internal/sandbox/executor.TestAValuePlantedBesideAPayloadIsStillTakenOut`
+  - `internal/sandbox/executor.TestASessionSplicedFromItsMembersIsRestoredAsOne`
+  - `internal/sandbox.TestAKeepCarriesMediaItsTurnHolds`
+  - `internal/sandbox.TestAMissingMediaObjectRestoresNothing`
+  - `internal/engine.TestATakeKeepsMediaApartOnlyOnceEveryReaderReadsIt`
+  - `internal/engine.TestReadersNotReadWithinTheirRoomKeepMediaInline`
   - `internal/sandbox/executor.TestTheTrimPointsAreTheTakesBounds`
   - `internal/sandbox/executor.TestATrimmedCodexPackKeepsWhatItsResumeLoads`
   - `internal/sandbox/executor.TestACodexPackWithNothingToTrimIsPackedWhole`
@@ -1123,6 +1130,11 @@
   - `internal/sandbox/executor.TestAClaudeSummaryReadOnTheWalkIsItsWholeLineRead`
   - `internal/sandbox/executor.TestEveryRecordedClaudeSummaryReadsAsBeforeTheWalk`
   - `internal/sandbox/executor.TestAClaudeSummaryAddsOnlyItsWordsToTheWalk`
+  - `internal/sandbox/executor.TestABoxReadsSummaryIsBudgeted`
+  - `internal/sandbox/executor.TestATrimsHeldRunCountsTowardItsClaim`
+  - `internal/sandbox/executor.TestASummaryWhoseWaitEndedUnmetIsUnreadForIt`
+  - `internal/sandbox/executor.TestAChainsPassHoldsItsSummaryWithinItsTerm`
+  - `internal/sandbox/executor.TestAQwenCompactionsFirstTextsAreHeldWhereTheyWereRead`
   - `internal/sandbox.TestASummaryIsPlacedAtTheCaptureThatFirstNamedIt`
   - `internal/executorkeep.TestALaterPlaceIsALaterLaunchsOrALaterCaptureOfIt`
   - `internal/agent/runner.TestAReseedTellsTheSessionItDoesNotContinueBeforeItsCalls`
@@ -1135,6 +1147,12 @@
   - `internal/sandbox/executor.TestEveryRecordedGeminiSummaryReadsAsBeforeTheCountsWalk`
   - `internal/sandbox/executor.TestAGeminiSummaryOnTheCountsWalkIsItsWholeLineReplay`
   - `internal/sandbox/executor.TestAGeminiSummaryAddsOnlyItsWordsToTheCount`
+  - `internal/sandbox/executor.TestAQwenSummaryIsItsNewestCompactionsPrefix`
+  - `internal/sandbox/executor.TestEveryRecordedQwenSummaryReadsAsBeforeTheCountsWalk`
+  - `internal/sandbox/executor.TestAQwenSummaryOnEitherWalkIsItsWholeLineRead`
+  - `internal/sandbox/executor.TestAQwenSummaryAddsOnlyItsWordsToTheWalk`
+  - `internal/sandbox/executor.TestAQwenSummaryOnTheNotesWalkHoldsNoneOfItsPayload`
+  - `internal/sandbox/executor.TestAQwenNoteACompactionKeepsIsHeldWithItsSummaryRead`
 - **Measured:** a harness's session of a day's work compresses to one or two mebibytes, and one that read a whole 20 MiB PDF, Claude Code's limit, to 40.1 MiB as kept; bounded here at 48 MiB, so a session holding more media than that is not kept (crewlet/crewlet#1626); at the reference company's 3 000 turns a day the log that names the sessions grows about 32 MB a day, about a kibibyte of it each turn's first read of its conversation (its `begin`), while the sessions themselves would be gigabytes; crewlet-operator's smallest data volumes leave 448 MiB (12Gi with the objects in S3, and 16Gi beside the nats bucket) above the other logs at their floors, and this log, scaled to its 64 MiB floor there, still fits both — the minimum classes do not move, but the least a fresh node boots in rises by 64 MiB of logs (12348030975 bytes of broker on nats, up 85.3 MiB with the bucket's quarter beside it, and 64 MiB on S3), which is what the operator's own floors follow. At that floor the log holds about two days at the reference company's rate, under the seven-day `min_age` a healthy trim keeps, so a company above about thirty seats on those volumes sets `stream.executor_log_max_bytes` or a larger volume, and `log_ceiling_short` says so; a continued session's first request: Claude Code 2.1.310 and 2.1.322 compact before it at 167,000 tokens under a 200,000-token window (a count of 165,922 sent whole, one of 167,834 compacted, the harness's own count of it replicated to the token on both), and a resume adds at most 2,597 bytes of records beside its brief and its turn's attachments at most 2,232; the count's rule matched the harness's recorded count to 73 tokens at 186 real compactions, each just before its boundary, and the bound read at or above that replica at 376,937 cut points of real sessions; the take's meter walks a 118 MiB thread in 1.61 to 1.75 s beside its scrub's 10.7 to 10.8 s, and the collection's read of a main thread at its 256 MiB bound of ordinary lines takes 1.96 to 2.00 s (`BenchmarkTheMeterAtItsBounds`, `BenchmarkTheMainThreadReadAtItsBound`, on two dedicated cores), within the 15 s wait at twice its figure; a continued Claude Code session hands its model what a reading of its kept archive counts on, as probe T measured 2.1.310 and 2.1.322 continue one: 14 continuations a release, 25 whole-line results after the last restart among them and 4 of those off the chain parallel calls leave, every one carried once with its call, and a result the harness wrote itself only for a call its file held none of; five continuations each carrying a seat server's call and its result whatever its server's state; a task notification carried verbatim; every path behind a flag Anthropic's servers set read in both releases' shipped code, not run; the chain a resume hands its model, its leaf and what it recovers off it read in both releases' shipped code, and the rule the reading builds on it reading every one of the 402 of the probes' 432 main sessions that hold a call (no reading for none) and leaving not whole three of the 80 subagent threads it reads there: P2(d)'s torn thread in its two copies, whose line 25 is no record, and its box's copy cut back whole, a record of its own on a branch its own load does not hand (the strict rule); and a reading holds what its readers read of a line, never the line: a whole PDF's Read, 55,924,056 bytes on one line, is read in 26 to 35 ms holding 146.5 to 151.5 KiB (`BenchmarkAReaderAtALineOfAnyLength`), 255 MiB of ordinary lines, the plaintext's bound, in 3.1 to 3.2 s, four prompts of about 64 MiB to it in 1.09 to 1.11 s, the slowest archive measured, a subagent's lines of blocks to the plaintext's and the lines' bounds (2^20 lines, past which a reading fails closed), in 21.4 to 22.6 s, inside the reading's 30 s wait, a thread at both bounds of the model of the resume in 2.3 to 2.5 s, holding 43 MiB, a reading's worst, and an ordinary session in 72 to 88 ms (`BenchmarkAReadingAtItsBounds`, on a dedicated two-core build slot); a seat's saves of its running sessions hold at most its session budget again in the object store while they wait for the collector; a Codex 0.171.0 rollout cut to its first line and everything from its newest `compacted` line (17 lines, 36,975 bytes of 514,791) resumed from a fresh `CODEX_HOME` with the same request as the whole one, 8 input items and 38,769 bytes each with the same instructions and tools, only the new message's minted id differing; a Hermes Agent 0.23.3 dump cut to all but its inactive messages below its newest compaction summary, each settled admission's stored result slimmed (125,568 bytes of 900,353), resumed in a fresh home with the same requests as the whole one, over 13 request pairs in three cases, one that compacted again included, only a UTC time Hermes writes into a file's name differing; a Claude Code transcript gzips 10.4 to one, past the 5.33 of the plaintext and archive bounds, so text meets the plaintext bound first
 - **Tag-status:** unreleased
 
@@ -4862,24 +4880,28 @@ hours of each other (`objstore.AssumedClockSkew`). So a capture still being
 kept could be read as abandoned: a standby took its place over and uploaded
 the session again, and a turn's end recorded over it, its tombstone refusing
 the session's record. The figures are now derived step by step at the slowest
-crossing (internal/sandbox's `session.go`): the keep's two reads each in a
-room of their own beside the upload's pace (`keepReadRoom`,
-`SessionKeepBudget`, twenty-six minutes), a mint past it refusing the capture
-and a listing past it deciding nothing; a take's life from its instant
-(`takeLife`, an hour and one and a half minutes) and a takeover's (`takeOverLife`,
-an hour and eleven), the longer of them a capture's life (`captureLife`);
+crossing (internal/sandbox's `session.go`): the keep's steps before its
+upload, four with its media count and a save's amend of its charge, each in a
+room of their own, and its read again of who reads its media before its
+record, and an amend, a read again and a record more where the log finds a
+carry gone, beside the upload's pace (`keepReadRoom`, `MediaReadersRoom`,
+`SessionKeepBudget`, twenty-nine minutes), a mint past it refusing
+the capture and a listing past it deciding nothing; a take's life from its
+instant (`takeLife`, an hour and four and a half minutes) and a takeover's
+(`takeOverLife`, an hour and fourteen), the longer of them a capture's
+life (`captureLife`);
 and a read standing by's window from its own instant, its take's rest, its
 own wait, the read of the turn's row on the log past it and the settle it
 decides, and around its takeover a settle, its last read of the run's row and
-the takeover itself (`standbyWindow`, two hours and thirty-one and a half).
+the takeover itself (`standbyWindow`, two hours and thirty-four and a half).
 Each change of the run's row counts a change's crossing, and each read of it
 (a takeover's read back, a standby's last read, the end's last read) its
 reply's alone (`captureReadBudget`, four and a half minutes with its reason),
 since a read sends no write. Past a capture's life nothing its taker sends
 lands, and past a standby's window nothing the standby sends does. Every node
 reads a stamp's age against those and twice the skew (`SessionCaptureBudget`,
-three hours and eleven minutes; `standbyBudget`, four hours and
-thirty-one and a half), so a reader whose clock stands ahead never releases a capture still
+three hours and fourteen minutes; `standbyBudget`, four hours and
+thirty-four and a half), so a reader whose clock stands ahead never releases a capture still
 being kept. The waits decide on their own monotonic clocks instead of on a
 reader's word: a read standing by waits for the capture it stood by for that
 capture's whole life and one read (`standbyWait`), then reads the turn's row
@@ -4895,9 +4917,9 @@ once every bound has passed, the end reads the row once more and decides on
 that read, since its last read inside a bound is issued up to a tick before
 it, and a takeover that landed after that read, in the window's last
 instants, was otherwise never seen and its record met the end's tombstone.
-The bounds are allowances at the floor: an hour and fifteen and a half
-minutes for a capture from first sight, its life and that read, and three
-hours and fifty-one and a half for a standby's, its window, its takeover's
+The bounds are allowances at the floor: an hour and eighteen and a half minutes
+for a capture from first sight, its life and that read, and three hours and
+fifty-seven and a half for a standby's, its window, its takeover's
 life and a read after each. The
 spools a crash left behind are swept by their process's lock, never their age
 (the amendment on a node's session spools, below). At an ordinary pace every step answers in
@@ -4985,8 +5007,8 @@ second change of the row no room counts. So at the floor any one of them can
 be cut: the harness end left unrecorded, the pause's stamp missing, or the
 capture left begun until a turn's end gives up on it. A taker
 whose leases answer while its stamp never reaches the row is held by readers
-for up to three hours and eleven minutes on their clocks, and by a turn's end
-for its life from first sight and one more read of the row. A read standing
+for up to three hours and fourteen minutes on their clocks, and by a
+turn's end for its life from first sight and one more read of the row. A read standing
 by beside a capture whose
 record the log took but whose stamp never reached the row takes the place
 after it at the end of its wait and uploads the session again, as one did by
@@ -5120,9 +5142,9 @@ turn's row for a begun stamp naming a taker whose lease holds, or that the
 store cannot say of, as well, and settles it landed where the row names its
 place: the turn's end at most once every record's budget, thirty seconds on
 its wait's own clock, never at its two-second tick (`heldRowPace`,
-`beganUnderTaker`), about a hundred and forty-four linearizable reads for
+`beganUnderTaker`), about a hundred and forty-three linearizable reads for
 one capture held its whole life from first sight, and about four hundred and
-sixty over a standby's chain, the end's rounds alone reading the log; a
+sixty-five over a standby's chain, the end's rounds alone reading the log; a
 relaunch once, after its wait has run out, for a stamp of the job it follows
 however long ago it began (`ContinuedCapture`,
 `followedBegunUnderTaker`), since such a host holds its lease for as long as
@@ -5146,7 +5168,7 @@ reads the turn's row on the log once there, held to one change of the record,
 before it reads the run's row and decides (`waitedOut`), so a wait that ran
 out first does not upload the session a second time either. The standby's
 window counts that read and the settle it decides (`standbyWindow`, two
-hours and thirty-one and a half minutes). The landed arm needs no fence: the row names the place
+hours and thirty-four and a half minutes). The landed arm needs no fence: the row names the place
 only once the log has taken the record, and nothing takes a record back; so a
 lease the store cannot say of is admitted to it as a lease that holds is, for
 the end's, the relaunch's and the standby's reads alike, since a store that
@@ -5377,7 +5399,7 @@ allowance of a seat's saves, and a seat holds up to twice it. The whole
 company has to agree on it, so it is one value per seat in the coordination
 store's uploads bucket (`coord.SaveAllowances`, key class `save.<seat>`), aged
 out by the bucket's thirty hours with no sweep and no retirement step. Each
-entry is held `saveLedgerHold`, 29 h 2.5 min: the take's life before its
+entry is held `saveLedgerHold`, 29 h 4.5 min: the take's life before its
 object is stored, the collector's grace and two of its passes, and twice the
 assumed clock skew, since its end is written on one node's clock and read on
 another's. THE CHARGE COMES BEFORE THE STAMP'S INSTANT, by compare-and-swap,
@@ -6450,10 +6472,14 @@ once its place is reserved, each step at its floor (`captureRestFor`): the
 scrub's two readings of the archive out of its box at the box-read floor, a
 mebibyte a second (`boxReadPace`), and its slowest plaintext, 183 s; the digest
 left in its box; and one keep of the sealed session the archive may become
-(`keepBudgetFor` of `countedFor`). 5 min 35 s for an archive of half a
-mebibyte, 31 min 9 s at the bound, the longest where it waits on two
-(`Coordinator.relaunchWaitOf`). A take stamps its archive's size with its
-place (`archive_size`, as the box reported it before the scrub). The
+(`keepBudgetFor` of `countedFor`), and a pace more for each media object its
+take cut apart, each uploaded paced by the mebibyte begun. 8 min 35 s for an
+archive of half a mebibyte, 34 min 9 s at the bound, the longest where it
+waits on two (`Coordinator.relaunchWaitOf`). A take stamps its archive's size
+with its place (`archive_size`, as the box reported it before the scrub), and
+its keep its media count on its begun stamp before uploading any
+(`media_count`); a count stamped after a relaunch began lengthens its wait,
+from the same start. The
 relaunch's asks, of a record never answered and its one read of the log past
 the wait, keep fifteen seconds (`relaunchAskWait`, the begin record's budget).
 The frame holds the seat and a slot of the node's admission that long only
@@ -6468,8 +6494,8 @@ spaced as a record's attempts are, each begun only while the keep's budget
 left holds the session at the store's slowest pace and its record's room
 (`Coordinator.uploadSpool`), the taker lease's fence asked before each; any
 other refusal is final. `SessionKeepBudget` is unchanged (`keepBudgetFor` of
-the sealed bound, twenty-six minutes), so a capture's life and every bound
-read from it are too.
+the sealed bound, twenty-nine minutes), so a capture's life and
+every bound read from it are too.
 
 **The scrub's wait** is derived in code from the archive's bound: the spool's
 minute, the archive read twice at the box-read floor (`scrubArchiveReads`,
@@ -6520,9 +6546,7 @@ A harness keeps every image, PDF or file it read inline, as base64 in its
 transcript: a whole-PDF Claude Code read is 40.1 MiB of the 48 MiB bound, kept
 twice where a read repeats, and kept again in every capture of the session. So a
 kept session's large payloads are stored apart from its text, once each
-(crewlet/crewlet#1626). The log and the session store hold and restore a
-session so; the take still keeps every session whole until its scrub cuts the
-payloads apart (crewlet/crewlet#2020).
+(crewlet/crewlet#1626).
 
 **Stored by its member, spliced back byte for byte.** Each payload is a gzip
 member of its own in the archive a take writes; the session's text object
@@ -6535,7 +6559,19 @@ opens it. `executordomain.SessionStore.Open` splices every member back where
 its frame stands, checking it against its digest once read, so the box, every
 reader and the take's own digest of the archive see exactly the bytes the take
 wrote, and no reader parses a reference inside a transcript. A session with no
-media is stored as before.
+media is stored as before. A capture naming media states the archive they
+restore to, every member at each frame naming it (`Capture.ArchiveBytes`,
+record version 13, kept on its row), which `Open` budgets the text object's
+read for, since it stays open while each member streams: a member framed again
+streams again, so neither the text object's own size nor each member once is
+enough.
+
+**Cut by the take, after its scrub.** A payload is a JSON string value whose
+scrubbed text is base64 whole, or a data URI's, of a mebibyte or more; the take
+finds it after the scrub, so a secret inside one leaves it inline and redacted,
+and cuts it at the gzip level, never inside the JSON. It keeps apart at most
+`MediaMaxCount` first occurrences holding `SessionMaxBytes` of text, and a
+repeat by its first's digest; past either a payload stays inline.
 
 **Named by rows, kept by reachability.** A capture names its session's whole
 media set (`Capture.Media`, record version 9; one with none keeps the older
@@ -6558,11 +6594,41 @@ media together at `executorkeep.SessionKeptMaxBytes` (94 MiB, sealed:
 `KeptSealedMaxBytes`) and at `MediaMaxCount` (32) objects; the text object stays
 within `SessionMaxBytes`. A rotation waits out media objects as it does
 sessions. The API row and the Sessions screen state `media_bytes` beside
-`object_bytes`.
+`object_bytes`. A keep reads which media its turn's row and held base name
+before its upload, in the listing's room, and a save amends its charge to what
+it uploads in a room of its own: the fourth of its steps before the upload,
+after its media count and its mint, and made again with the read again and the
+record where the log finds a carry gone, all counted in the keep's budget
+(`keepBudgetFor`). A take keeps apart only what that budget's pace holds, each
+object paced by the mebibyte begun.
 
 **Mid-upgrade.** An older build retains a capture naming media, so it never
 applies a row whose frames its estate does not name; its collector then reads
-an incomplete estate and deletes nothing. A capture with no media is unchanged.
+an incomplete estate and deletes nothing. An older build also asks an
+unanswered capture again from the run's stamp without its `media` key, landing
+it without them. So a take keeps its media apart only once every node applying
+the log says it reads the version a capture naming media is stamped at, 13
+(`executordomain.MediaCaptureVersion`, `statelog.Readers`), and every node that
+may settle a run's row says `sandbox.MediaStampVersion`: a live node on its
+presence; any other on the record every node writes as it starts, before it
+claims presence (`coord.CaptureStampRecord`); none whose retirement stands
+against its record. A node that recorded nothing is a build from before the
+record, which no tag shipped, and the gate does not look for it: the record,
+and a stamp a newer build extended being settled off the log, are the forward
+mechanisms that hold every upgrade from here on. A definite no names the first
+node below and what it says (`SessionPolicy.MediaBelow`). A node that has not
+said is no node below: a live one whose presence carried no status for a beat
+(its hook overran) stands on its record, and with none it is unknown, as is a
+log reader at zero, a live data node with no position row yet. Until then, and
+whenever these cannot be read within `sandbox.MediaReadersRoom` (30 s, counted
+in `BoxReadBudget`) or a node has not said, every capture keeps them inline,
+unchanged. A
+keep asks again before its record, and only a definite answer refuses: a node
+below that joined since the take refuses the capture, naming the node, while
+an answer it cannot get is no evidence of one, and the capture lands on its
+take's answer rather than lose media already uploaded. A node below the version that joins
+later, after the record, defers such a capture on its applier, never drops it. An older asker's `BoxReadBudget` holds no room for that read,
+so a newer host's read spends up to 30 s of the asker's wait before its take.
 
 ## Amendment: a kept session is what its harness's resume loads
 

@@ -152,12 +152,15 @@ func museJSONString(s string) string {
 	return b.String()
 }
 
-// musePluginManifest is the notes plugin's manifest for a run whose take
+// musePluginManifest is the run's plugin's manifest for a run whose take
 // config is config: a hook per [museNoteHooks], each the note helper at
-// helper once per firing; the first PostToolUse hook also reports skill loads
-// where skills says so. Its approval is the definition's hash, which the run's
-// script asks for after installing it.
-func musePluginManifest(helper, config string, notes, skills bool) ([]byte, error) {
+// helper once per firing, where notes says so; the first PostToolUse hook
+// also reports skill loads where skills says so; and, where nested names a
+// command, the nested hook ([museNestedCommand]): a PostToolUse hook of its
+// own, so its answer has Muse's 16,384-byte ceiling to itself, never the
+// notes' room. Its approval is the definition's hash, which the run's script
+// asks for after installing it.
+func musePluginManifest(helper, config string, notes, skills bool, nested []string) ([]byte, error) {
 	var hooks []map[string]any
 	for _, h := range museNoteHooks {
 		takes := notes
@@ -175,9 +178,13 @@ func musePluginManifest(helper, config string, notes, skills bool) ([]byte, erro
 		hooks = append(hooks, map[string]any{"id": h.id, "event": h.event, "command": command,
 			"timeoutMs": museHookTimeout.Milliseconds(), "async": false})
 	}
+	if nested != nil {
+		hooks = append(hooks, map[string]any{"id": museNestedHookID, "event": "PostToolUse", "command": nested,
+			"timeoutMs": museHookTimeout.Milliseconds(), "async": false})
+	}
 	return json.MarshalIndent(map[string]any{
 		"schemaVersion": 1, "name": museNotesPlugin, "displayName": "Crewlet notes", "version": "1.0.0",
-		"description": "A person's notes to this run, between its steps.",
+		"description": "A person's notes to this run between its steps, and the instructions of a repository cloned during it.",
 		"compat":      map[string]string{"source": "native", "manifestDir": ".muse-plugin"},
 		"capabilities": map[string]any{"skills": []any{}, "developerPrompts": []any{}, "mcpServers": []any{},
 			"commands": []any{}, "reminders": []any{}, "hooks": hooks},

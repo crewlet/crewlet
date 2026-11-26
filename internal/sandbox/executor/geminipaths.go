@@ -51,6 +51,13 @@ func (p Paths) GeminiChats() string { return p.GeminiSlugDir() + "/chats" }
 // as its run starts, which the run's spend leaves out ([geminiScript]).
 func (p Paths) GeminiUsageBefore() string { return p.WorkDir() + "/gemini-usage-before" }
 
+// GeminiTelemetry is the run's own telemetry file, which Gemini CLI writes as it
+// makes each model request and which its turn cap is counted off
+// ([geminiTelemetryRecord]): under the work directory, cleared with every run,
+// and outside the one directory a Gemini CLI pack reads ([Paths.GeminiSlugDir]),
+// so no kept session carries it.
+func (p Paths) GeminiTelemetry() string { return p.WorkDir() + "/gemini-telemetry.json" }
+
 // GeminiProjectSlug is the project slug every run's working directory is
 // pinned to: one constant, so the session sits at the same path whatever the
 // box's working directory is called (Gemini CLI otherwise slugs its basename).

@@ -236,7 +236,8 @@ one deciding none its arrival (the reply at the floor in brackets):
 
 Every other family is a small value: a node's positions (`node`), a trim
 hold, floor and backup point, a capacity window (`maintenance`), its
-admissions and acknowledgements, a retired node id (`retired`), a feed mark, a seat's pause, a box reading,
+admissions and acknowledgements, a retired node id (`retired`), a node's
+capture stamp version (`capture_stamp`), a feed mark, a seat's pause, a box reading,
 a conversation hold, a model retry, an MCP tool's acceptance and restart, an
 SSH test, an issue report, an insight record and a Google identity. Each
 record's widest is its fields' widest as stored, every byte of free text one
