@@ -378,7 +378,7 @@ func TestALaunchRefusesAListingRuleItDoesNotKnow(t *testing.T) {
 	if err := os.WriteFile(config, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := checkoutLaunch(config, r.work, &bytes.Buffer{})
+	err := checkoutLaunch(config, r.work, strings.NewReader(""), &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "listedAs") {
 		t.Fatalf("the launch with listedAs hermes returned %v, want it refused naming listedAs", err)
 	}

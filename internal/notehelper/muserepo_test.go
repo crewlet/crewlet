@@ -44,7 +44,7 @@ func (r repoRun) museLaunch(t *testing.T, own string, home ...string) string {
 		t.Fatal(err)
 	}
 	var errs bytes.Buffer
-	if err := checkoutLaunch(config, r.work, &errs); err != nil {
+	if err := checkoutLaunch(config, r.work, strings.NewReader(""), &errs); err != nil {
 		t.Fatalf("the launch failed: %v\n%s", err, errs.String())
 	}
 	return errs.String()

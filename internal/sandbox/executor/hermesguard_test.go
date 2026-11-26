@@ -56,11 +56,11 @@ plugins["disabled"] = [n for n in plugins.get("disabled") or [] if n != sys.argv
 json.dump(config, open(path, "w"))
 `
 
-// hermesGuardBox is a box whose `hermes` answers the release, enables a plugin
-// ([hermesEnable]), runs the carry script's overlay, guard and plugoff under
-// a stand-in of Hermes's modules whose managed scope is the box home's
-// `system`, and answers `chat` as a finished run (a measured stream) only
-// where [hermesReach] says the bridge is reached.
+// hermesGuardBox is a box whose `hermes` answers the release, enables a
+// plugin ([hermesEnable]), runs the carry script's overlay, guard, plugoff
+// and gate under a stand-in of Hermes's modules whose managed scope is the box
+// home's `system`, and answers `chat` as a finished run (a measured stream)
+// only where [hermesReach] says the bridge is reached.
 func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 	t.Helper()
 	runner, box := standInBox(t, executor.NewHermes(), nil)
@@ -78,7 +78,7 @@ func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 	launch := q(bin+"/hermes") + " --run-module cProfile -o /dev/null "
 	writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/hermes", "#!/bin/sh\ncase \"$1\" in\n"+
 		"--version) echo 'Hermes Agent v0.23.3 (2026.9.24)'; exit 0;;\n"+
-		"--run-module) case \"$6\" in overlay|guard|plugoff) exec "+q(bin+"/hermes")+" \"$@\";; esac; exit 0;;\n"+
+		"--run-module) case \"$6\" in overlay|guard|plugoff|gate) exec "+q(bin+"/hermes")+" \"$@\";; esac; exit 0;;\n"+
 		"plugins) [ \"$2\" = enable ] && exec "+launch+q(bin+"/enable.py")+" \"$3\"; exit 0;;\n"+
 		"chat) r=$("+launch+q(bin+"/reach.py")+")\n"+
 		"  [ \"$r\" = reached ] || { echo \"$r\" >&2; exit 1; }\n"+
@@ -95,10 +95,9 @@ func hermesGuardBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 // (a web-denied run's too), a cli toolset list leaving it out, a launch switch,
 // a sticky profile, a header beside the run's own, an entry Hermes skips, the
 // plugin gated off, a seat skill disabled; others' pass. Mutations, each red:
-// drop the guard or any leaf of the run's own entry; match one toolset
-// spelling; skip the cli toolsets, headers, suspicious or cost check, plugin
-// gate, skills or sticky profile; read the launch switches from the process
-// alone; name no file, or show a header's or env's value.
+// drop the guard or a leaf of the run's entry; match one toolset spelling;
+// skip any check; read the launch switches from the process alone; name no
+// file, or show a header's value.
 func TestAHermesRunsBridgeAndPluginCannotBeSwitchedOffUnseen(t *testing.T) {
 	t.Parallel()
 	const reason = "Hermes Agent would not start with the run's own plugin and MCP servers as written: "

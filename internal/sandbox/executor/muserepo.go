@@ -30,7 +30,7 @@ func museCheckouts(paths Paths, foreign bool) checkoutSpec {
 	work := paths.Home + "/" + sandbox.WorkspaceSubdir
 	spec := checkoutSpec{Instructions: []checkoutSlot{{Names: museRulesNames}}, Limit: checkoutUnlimited,
 		SkillDirs: []checkoutSkillDir{{Dir: ".agents/skills"}, {Dir: ".claude/skills"}, {Dir: ".codex/skills"}},
-		Budget:    museBudget}
+		Budget:    &checkoutBudget{Form: museBudget, Own: paths.MuseHomeRulesOwn()}}
 	dirs := []string{paths.MuseConfig() + "/skills", work + "/.agents/skills", work + "/.claude/skills",
 		work + "/.codex/skills"}
 	if foreign {

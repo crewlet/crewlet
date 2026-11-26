@@ -134,7 +134,7 @@
 //     file's body without frontmatter or HTML comments, none if empty, and
 //     `paths` read as Qwen Code reads them (qwenrule.go). `grok` (1.0.92):
 //     files directly in dir, dot files too, s in any case, a file link
-//     followed, none scoped.
+//     inside followed, none scoped.
 //     A tree past 8 directories deep, 1,024 entries or 32 MiB is left out
 //     whole, said: Copilot walks 9 levels and Claude Code 10 at least
 //     (measured), so a deeper tree is the gap. Names as {"names": [...],
@@ -189,9 +189,9 @@
 // `nestedSkillsOnly` for a nested adapter that hands no instructions, whose
 // spec then names none to read, and `roots`, a file listing each checkout's
 // root, a line each, for a harness the runner points at them (Gemini CLI's
-// --include-directories). Its `budget` (Muse's, checkoutmuse.go) bounds the
-// sections with what loads beside them; `skipped` lines (D709) go to the skip
-// log. It keeps what it handed in state/launched.json, for copilot-launch
+// --include-directories). Its `budget` (Hermes's, hermesrepo.go; Muse's,
+// checkoutmuse.go) bounds the sections with what loads beside them; `skipped`
+// lines (D709) go to the skip log. It keeps what it handed in state/launched.json, for copilot-launch
 // (copilotrepo.go). It writes state/nested.json, the -config of the harness's
 // nested adapter, which the run's post-tool hook runs after each of the main
 // loop's tool calls: it claims each checkout that appeared since, once, under
@@ -374,6 +374,10 @@ type flags struct {
 	config                string
 	skillLoads, loadsOnly bool
 	slot                  int
+	// hermes-nested's: the characters the tool's result has left; hermes-peek's:
+	// the skip log's line for each checkout a launch left with no firing to come.
+	room int
+	left bool
 	// codex-renew's: the rollout of the session the run continues.
 	rollout string
 	// codex-materialize's: Codex's sessions directory, and the thread whose

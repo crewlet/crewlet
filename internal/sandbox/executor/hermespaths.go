@@ -113,3 +113,32 @@ func (p Paths) HermesCarryErrors() string { return p.WorkDir() + "/hermes-carry.
 // HermesEnabled marks that the box's Hermes configuration enables the runner's
 // plugin, so later runs in the box skip the enabling command.
 func (p Paths) HermesEnabled() string { return p.WorkDir() + "/hermes-plugin-enabled" }
+
+// HermesNoteHelper is the note helper a Hermes run writes at every launch
+// ([writeNoteHelper]): its gate runs hermes-peek and checkout-launch, and
+// its plugin hermes-peek and hermes-nested after each of the main loop's tool
+// calls ([hermesCheckoutHome]).
+func (p Paths) HermesNoteHelper() string { return p.WorkDir() + "/hermes-notehelper" }
+
+// HermesCheckouts is the run's checkout state ([hermesCheckoutHome]): the
+// checkouts handed, the lock, the gate and the nested adapter's config,
+// remade by every run.
+func (p Paths) HermesCheckouts() string { return p.WorkDir() + "/hermes-checkouts" }
+
+// HermesCheckoutLaunch is the run's checkout-launch config ([hermesCheckouts]).
+func (p Paths) HermesCheckoutLaunch() string { return p.WorkDir() + "/hermes-checkout-launch.json" }
+
+// HermesCheckoutSections is where checkout-launch writes the checkouts'
+// sections, which the script adds to the run's system prompt
+// ([hermesSystemWithCheckouts]).
+func (p Paths) HermesCheckoutSections() string { return p.WorkDir() + "/hermes-checkout-sections.md" }
+
+// HermesCheckoutSkillsCopied lists, a name a line, the skills a run copied
+// into [Paths.HermesSkills], so the next run's gate removes them.
+func (p Paths) HermesCheckoutSkillsCopied() string {
+	return p.WorkDir() + "/hermes-checkout-skills-copied"
+}
+
+// HermesSystem is the system prompt a run launches and renews its session
+// with: the run's own ([Paths.System]) and its checkouts' sections.
+func (p Paths) HermesSystem() string { return p.WorkDir() + "/hermes-system.md" }

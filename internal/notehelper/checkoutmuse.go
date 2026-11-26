@@ -22,15 +22,6 @@ import (
 // budgetMuse is the [launchBudget] form of Muse Code 1.4.25's rules reminder.
 const budgetMuse = "muse"
 
-// launchBudget is the bound the launch's sections share with what the harness
-// loads beside them: Form, whose rendering counts ([budgetMuse]), and Own, the
-// file holding the text the home instruction file opens with before the
-// sections (the run's script writes it; none where the file is not there).
-type launchBudget struct {
-	Form string `json:"form"`
-	Own  string `json:"own"`
-}
-
 // The reminder Muse Code 1.4.25 renders the rules files it loads at the start
 // into (measured, rows capb and fr3): this opening, then each file wrapped in
 // its tag ([museTag]) and [museFileClose], [museFilesApart] between two, then
