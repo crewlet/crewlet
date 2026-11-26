@@ -87,7 +87,7 @@ type checkoutSpec struct {
 	ImportInstructions bool
 	SkillSep           checkoutSkillSep
 	// ListedAs and HomeSkills are the helper's ("grok", Grok Build's listing
-	// rule).
+	// rule; "kimi", Kimi Code's).
 	ListedAs   string
 	HomeSkills []checkoutSkillDir
 }

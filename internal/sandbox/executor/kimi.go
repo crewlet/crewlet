@@ -421,7 +421,7 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 	} else if !errors.Is(err, errNoHelperBuild) {
 		return "", err
 	}
-	launch := kimiCheckoutHome(paths).launchConfig(kimiCheckouts, req.ReportedRepos)
+	launch := kimiCheckoutHome(paths).launchConfig(kimiCheckouts(paths), req.ReportedRepos)
 	if err := box.WriteFile(ctx, paths.KimiCheckoutLaunch(), launch); err != nil {
 		return "", fmt.Errorf("executor: writing what hands the run's repositories their instructions: %w", err)
 	}
