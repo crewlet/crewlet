@@ -829,7 +829,7 @@ type Coordinator struct {
 	restore      SessionRestore
 	holders      SessionHolders // [CoordinatorOptions.Holders]
 	relaunchWait time.Duration
-	captureRest  func(archive int64, media int, kept bool) time.Duration
+	captureRest  func(archive int64, media int, bound captureBound) time.Duration
 	holdingsWait time.Duration
 	// endWait is how long a read waits for a job its script was asked to end
 	// ([JobEndWait]); endPoll how often it asks ([jobEndPoll]).

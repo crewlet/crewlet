@@ -905,7 +905,7 @@ const relaunchAskWait = beginRecordBudget
 func (c *Coordinator) relaunchWaitOf(run PendingRun, now time.Time) time.Duration {
 	wait := c.relaunchWait
 	for _, stamp := range stampsInFlight(run, now, relaunchAdmits(run)) {
-		wait = max(wait, c.captureRest(stamp.ArchiveSize, stamp.MediaCount, stamp.KeptBound))
+		wait = max(wait, c.captureRest(stamp.ArchiveSize, stamp.MediaCount, stamp.bound()))
 	}
 	return wait
 }

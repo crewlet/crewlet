@@ -6859,8 +6859,11 @@ keep; a keep is held to its own take's, 29 minutes at the text bound. A
 take's scrub and its budget are its own bound's too, six and eight minutes
 at the text bound, eight and ten at the kept bound, and a reader that cannot
 know a take's bound holds it to the kept bound's (`SessionScrubWait`,
-`SessionTakeBudget`). From these, `captureLife` is 6,780.08 s, `SessionCaptureBudget`
-13,980.08 s, `standbyBudget` 18,932.21 s, and `saveLedgerHold` 29 h 45.5 min,
+`SessionTakeBudget`). Every figure sized per bound takes the bound as a
+required argument (`sandbox.captureBound`) whose zero value is refused, so
+none is sized at the kept bound by omission, and each reader holding the kept
+bound's maximum names it at the call. From these, `captureLife` is
+6,780.08 s, `SessionCaptureBudget` 13,980.08 s, `standbyBudget` 18,932.21 s, and `saveLedgerHold` 29 h 45.5 min,
 fourteen and a half minutes under the uploads bucket's 30 h
 (`coord.UploadRetention`), a margin a test pins.
 

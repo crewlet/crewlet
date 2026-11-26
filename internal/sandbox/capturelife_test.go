@@ -553,11 +553,11 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			}
 			// AT THE STOOD-BY CAPTURE'S OWN BOUND, the text bound's, never the
 			// kept bound's longer wait.
-			if took, wait := time.Since(began), standbyWaitFor(textBound); took < wait ||
-				took >= standbyWaitFor(keptBound) {
+			if took, wait := time.Since(began), standbyWaitFor(atTextBound); took < wait ||
+				took >= standbyWaitFor(atKeptBound) {
 				t.Errorf("the standby took the next place %v into its keep, want past its wait of %v for a "+
 					"capture at the text bound and before the kept bound's %v", took, wait,
-					standbyWaitFor(keptBound))
+					standbyWaitFor(atKeptBound))
 			}
 			keptByTheStandby(t, rig, writes, keep)
 		})
@@ -580,9 +580,9 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			if kept := rig.coordinator.keepCapture(t.Context(), standby); kept != nil {
 				t.Errorf("beside the record the log took, the standby's keep came to %+v, want nothing", kept)
 			}
-			if took := time.Since(began); took < standbyWaitFor(textBound) {
+			if took := time.Since(began); took < standbyWaitFor(atTextBound) {
 				t.Errorf("the standby stood down %v into its keep, before its wait of %v ran out", took,
-					standbyWaitFor(textBound))
+					standbyWaitFor(atTextBound))
 			}
 			if read := restore.askedFor(); len(read) != 1 {
 				t.Errorf("the turn's row on the log was read %v, want once, as the standby's wait ran out", read)
@@ -631,9 +631,9 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 			if kept := rig.coordinator.keepCapture(t.Context(), standby); kept != nil {
 				t.Errorf("beside a record still unanswered, the standby's keep came to %+v, want nothing", kept)
 			}
-			if took := time.Since(began); took < standbyWaitFor(textBound) {
+			if took := time.Since(began); took < standbyWaitFor(atTextBound) {
 				t.Errorf("the standby stood down %v into its keep, before its wait of %v ran out", took,
-					standbyWaitFor(textBound))
+					standbyWaitFor(atTextBound))
 			}
 			if uploads := keep.uploads(); len(uploads) != 1 || !bytes.Equal(uploads[0], placeHolderArchive) {
 				t.Errorf("uploaded %q, want the place-holder's session once", uploads)
@@ -1477,16 +1477,16 @@ func TestAGatedTakeStaysWithinEveryFigureAVersionOneReaderHoldsItTo(t *testing.T
 	}{
 		{"a take's budget, which an asker's box read waits for", textBound.take, 480 * time.Second},
 		{"a keep's budget", textBound.keep, 1_740 * time.Second},
-		{"a take's life", takeLifeWith(textBound), ns(3_870_051_326_748)},
-		{"a takeover's life", takeOverLifeWith(textBound.keep), ns(4_440_076_990_122)},
-		{"a capture's life, which a turn's end and a stamp's age hold it to", captureLifeAt(textBound),
+		{"a take's life", takeLifeWith(atTextBound), ns(3_870_051_326_748)},
+		{"a takeover's life", takeOverLifeWith(atTextBound), ns(4_440_076_990_122)},
+		{"a capture's life, which a turn's end and a stamp's age hold it to", captureLifeAt(atTextBound),
 			ns(4_440_076_990_122)},
-		{"a standby's wait", standbyWaitFor(textBound), ns(4_442_076_990_122)},
-		{"a standby's window, which a turn's end holds a standby exactly", standbyWindowFor(textBound, textBound),
+		{"a standby's wait", standbyWaitFor(atTextBound), ns(4_442_076_990_122)},
+		{"a standby's window, which a turn's end holds a standby exactly", standbyWindowFor(atTextBound, atTextBound),
 			ns(9_272_205_306_992)},
-		{"a relaunch's wait at the text bound", captureRestFor(executorkeep.SessionMaxBytes, 0, false),
+		{"a relaunch's wait at the text bound", captureRestFor(executorkeep.SessionMaxBytes, 0, atTextBound),
 			2_049 * time.Second},
-		{"a relaunch's wait at half a mebibyte", captureRestFor(512<<10, 0, false), 515 * time.Second},
+		{"a relaunch's wait at half a mebibyte", captureRestFor(512<<10, 0, atTextBound), 515 * time.Second},
 	} {
 		if row.gated > row.v1 {
 			t.Errorf("%s at the text bound is %v, past the %v a version-1 reader holds it to", row.figure,

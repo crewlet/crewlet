@@ -183,7 +183,7 @@ func keptTurnBy(t *testing.T, with func(*CoordinatorOptions)) (*coordRig, *keptR
 // ([captureRestFor]) alike, so a case's wait runs out where the case says.
 func (r *coordRig) relaunchWithin(wait time.Duration) {
 	r.coordinator.relaunchWait = wait
-	r.coordinator.captureRest = func(int64, int, bool) time.Duration { return wait }
+	r.coordinator.captureRest = func(int64, int, captureBound) time.Duration { return wait }
 }
 
 // continuingKept is the relaunch of t1 that continues kept, with its three
@@ -1008,7 +1008,7 @@ func TestARelaunchWaitsForTheCaptureOfTheJobItFollowsAsLongAsItsSizeNeeds(t *tes
 		return newer
 	}
 	for _, size := range []int64{512 << 10, executorkeep.SessionMaxBytes} {
-		rest := captureRestFor(size, 0, false)
+		rest := captureRestFor(size, 0, atTextBound)
 		t.Run(fmt.Sprintf("%d bytes still being kept", size), func(t *testing.T) {
 			t.Parallel()
 			inBubble(t, func(t *testing.T) {
@@ -1074,7 +1074,7 @@ func TestARelaunchWaitsForTheCaptureOfTheJobItFollowsAsLongAsItsSizeNeeds(t *tes
 func TestARelaunchWaitsForEachMediaObjectItsCapturesKeepUploads(t *testing.T) {
 	t.Parallel()
 	const size, media = int64(512 << 10), 4
-	base, rest := captureRestFor(size, 0, false), captureRestFor(size, media, false)
+	base, rest := captureRestFor(size, 0, atTextBound), captureRestFor(size, media, atTextBound)
 	for name, tc := range map[string]struct {
 		countedAt time.Duration // when the count is stamped, from the ask; 0 is before it
 		lands     bool

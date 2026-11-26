@@ -279,11 +279,14 @@ type SessionPolicy struct {
 // its media apart.
 func (p SessionPolicy) kept() bool { return p.KeptBound && p.MediaApart }
 
+// bound is the bound a take under p holds.
+func (p SessionPolicy) bound() captureBound { return boundOf(p.kept()) }
+
 // Bound is take held to p's bound ([takeBound]): the archive it admits of its
 // box, whether it keeps its media apart, and the pace it keeps them to. Every
 // take and save is asked through it.
 func (p SessionPolicy) Bound(take SessionTake) SessionTake {
-	limit := boundOf(p.kept())
+	limit := p.bound().limits()
 	take.MaxBytes, take.MediaApart, take.KeepPaceMiB = limit.archive, p.MediaApart, limit.paceMiB
 	return take
 }
@@ -667,6 +670,9 @@ type SessionCapture struct {
 	Summary *SummaryStamp `json:"-"`
 }
 
+// bound is the bound c's take held ([SessionCapture.KeptBound]).
+func (c SessionCapture) bound() captureBound { return boundOf(c.KeptBound) }
+
 // ErrCaptureUnbounded is a capture stamp carrying a field past the bound the
 // row holds it to ([SessionCapture.Bounded]), refused by
 // [PendingStore.StampCapture] before anything is written.
@@ -711,7 +717,7 @@ func (c SessionCapture) Bounded() error {
 		return fmt.Errorf("sandbox: its run's start is line %d, outside the 0 to %d it may be: %w",
 			c.RunAfterLines, MaxRunStartLines, ErrCaptureUnbounded)
 	}
-	if bound := boundOf(c.KeptBound).archive; c.ArchiveSize < 0 || c.ArchiveSize > bound {
+	if bound := c.bound().limits().archive; c.ArchiveSize < 0 || c.ArchiveSize > bound {
 		return fmt.Errorf("sandbox: its archive is %d bytes, outside the 0 to %d it may be: %w",
 			c.ArchiveSize, bound, ErrCaptureUnbounded)
 	}
@@ -978,6 +984,9 @@ func (c SessionCapture) standsBy(take SessionCapture) bool {
 // younger than [standbyBudget]. An older one's node stopped, or its keep ran
 // out, before it took the next place or withdrew.
 func (c SessionCapture) standing(now time.Time) bool {
+	// The kept bound's on purpose, whatever c's: a reader holding a standby
+	// past its own bound only waits longer; one holding it short reads a
+	// standby that may still take the place as gone.
 	return c.State != CaptureLanded && !c.StandbyAt.IsZero() && now.Sub(c.StandbyAt) < standbyBudget
 }
 
@@ -986,6 +995,7 @@ func (c SessionCapture) standing(now time.Time) bool {
 // it. Past it, its taker's node stopped, or its keep ran out, before it stamped
 // what came of it.
 func (c SessionCapture) keeping(now time.Time) bool {
+	// The kept bound's on purpose, whatever c's, as [SessionCapture.standing].
 	return c.State == CaptureBegun && now.Sub(c.At) < SessionCaptureBudget
 }
 
@@ -1029,19 +1039,19 @@ func (c SessionCapture) standbyOf() SessionCapture {
 // sends lands, so a capture still begun is one whose taker stopped or whose
 // stamp never reached the row, and the read takes the place after it
 // ([Coordinator.waitedOut]). (6,780.08 + 2) s, 1 h 53 min 2 s today.
-var standbyWait = standbyWaitFor(keptBound)
+var standbyWait = standbyWaitFor(atKeptBound) // the kept bound on purpose: the most any standby waits
 
 // standbyWaitFor is [standbyWait] for a capture taken at stood: its life at
 // that bound ([captureLifeAt]) and a tick. A capture stamped at the text bound
 // is waited for as a build before the kept bound waits for it, 4,442.08 s, so
 // a standby beside such a build never outlives its hold (.claude/rules/
 // compatibility.md).
-func standbyWaitFor(stood takeBound) time.Duration { return captureLifeAt(stood) + captureWaitTick }
+func standbyWaitFor(stood captureBound) time.Duration { return captureLifeAt(stood) + captureWaitTick }
 
 // standbyWindowFor is [standbyWindow] for a standby taken at own beside a
 // capture taken at stood: its take's own budget and its wait for that capture.
-func standbyWindowFor(own, stood takeBound) time.Duration {
-	return own.take + discardGrace + standbyWaitFor(stood) + 5*captureStampBudget + captureReadBudget
+func standbyWindowFor(own, stood captureBound) time.Duration {
+	return own.limits().take + discardGrace + standbyWaitFor(stood) + 5*captureStampBudget + captureReadBudget
 }
 
 // standbyWindow is the longest a read standing by can still take the place
@@ -1055,7 +1065,7 @@ func standbyWindowFor(own, stood takeBound) time.Duration {
 // and the wait may be any two nodes. The most, both at the kept bound, which
 // a reader holds every standby to: 600 + 30 + 6,782.08 + 5 × 810.03 + 270 =
 // 11,732.21 s, three hours, fifteen minutes and thirty-two seconds today.
-var standbyWindow = standbyWindowFor(keptBound, keptBound)
+var standbyWindow = standbyWindowFor(atKeptBound, atKeptBound) // the kept bound on purpose: the most
 
 // standbyBudget is how long after the instant a read stood by
 // ([SessionCapture.StandbyAt]) any node reads it as standing
@@ -1168,7 +1178,7 @@ const scrubPlainSlowest = 183 * time.Second
 // its place is refused and the last kept copy stands, so a box costs only its
 // own session (ADR-0073; docs/concepts/code-sandbox.md, "Eight minutes for the
 // scrub").
-var SessionScrubWait = scrubWaitFor(executorkeep.SessionKeptMaxBytes)
+var SessionScrubWait = scrubWaitFor(atKeptBound.limits().archive) // the kept bound on purpose: the most
 
 // scrubWaitFor is the scrub's wait for a take admitting archive bytes: the
 // minute it may wait for its spool's room ([spoolRoomWait]), the archive at
@@ -1190,7 +1200,7 @@ func scrubWaitFor(archive int64) time.Duration {
 // before the read: a session of an ordinary day's work is a mebibyte or two and
 // takes seconds, and the bound is what a host that is still working is given
 // before the asker takes it for one that is not.
-var SessionTakeBudget = keptBound.take
+var SessionTakeBudget = atKeptBound.limits().take // the kept bound on purpose: the most
 
 // keepBudgetFor is what a keep of a sealed session of n bytes needs on its
 // longest path ([keepBudgetAt] of its pace).
@@ -1242,19 +1252,43 @@ var keptBound = takeBound{archive: executorkeep.SessionKeptMaxBytes, sealed: exe
 	paceMiB: executorkeep.KeptPaceMiB, take: SessionPackWait + scrubWaitFor(executorkeep.SessionKeptMaxBytes),
 	keep: keepBudgetAt(executorkeep.KeptPaceMiB)}
 
+// captureBound names the bound a take holds, which every per-bound figure is
+// sized at ([captureBound.limits]): a required argument, its zero value no
+// bound at all, so no caller sizes a wait without naming one. A reader that
+// cannot know a take's bound names [atKeptBound], the most, at the call.
+type captureBound uint8
+
+const (
+	atTextBound captureBound = iota + 1
+	atKeptBound
+)
+
 // boundOf is the bound a take at kept holds.
-func boundOf(kept bool) takeBound {
+func boundOf(kept bool) captureBound {
 	if kept {
+		return atKeptBound
+	}
+	return atTextBound
+}
+
+// limits is b's [takeBound]. NO BOUND IS REFUSED, never read as either: a
+// figure sized at the zero value is a caller that named none, a bug, and
+// guessing either bound there sized waits on another bound's figures.
+func (b captureBound) limits() takeBound {
+	switch b {
+	case atTextBound:
+		return textBound
+	case atKeptBound:
 		return keptBound
 	}
-	return textBound
+	panic(fmt.Sprintf("sandbox: a figure was sized at no take bound (%d)", b))
 }
 
 // SessionKeepBudget bounds every keep, off the read, whatever its session's
 // size or its take's bound: the kept bound's ([keptBound]), within which an
 // upload the store did not take is made again ([Coordinator.uploadSpool]). A
 // keep is held to its own take's ([takeBound]). Sixty-eight minutes today.
-var SessionKeepBudget = keptBound.keep
+var SessionKeepBudget = atKeptBound.limits().keep // the kept bound on purpose: the most
 
 // captureRestFor is the most a capture of an archive of n bytes, its spool
 // cutting media objects apart, taken at the kept bound or not, may still take
@@ -1267,9 +1301,9 @@ var SessionKeepBudget = keptBound.keep
 // depends on ([Coordinator.relaunchWaitOf]): 8 min 35 s for an archive of
 // half a mebibyte, 34 min 9 s at the text bound, 58 min 41 s at the kept
 // bound, and 30 s more for each object.
-func captureRestFor(n int64, media int, kept bool) time.Duration {
+func captureRestFor(n int64, media int, bound captureBound) time.Duration {
 	return 2*archiveReadFor(n) + scrubPlainSlowest + discardGrace +
-		keepBudgetFor(countedFor(n, boundOf(kept).sealed)) + time.Duration(media)*objstore.MiBPace
+		keepBudgetFor(countedFor(n, bound)) + time.Duration(media)*objstore.MiBPace
 }
 
 // SessionCaptureBudget is how long after its stamped instant
@@ -1346,12 +1380,13 @@ const MediaReadersRoom = sessionRecordBudget
 // starts as the take returns its spool ([SessionKeepBudget]), and the stamp of
 // what came of it ([captureStampBudget]). An hour, forty-five and a half
 // minutes and a fraction at today's bounds.
-var takeLife = takeLifeWith(keptBound)
+var takeLife = takeLifeWith(atKeptBound) // the kept bound on purpose: the most
 
 // takeLifeWith is [takeLife] of a take at bound, its take's and its keep's
 // budgets its own ([takeBound]).
-func takeLifeWith(bound takeBound) time.Duration {
-	return bound.take + captureStampBudget + discardGrace + bound.keep + captureStampBudget
+func takeLifeWith(bound captureBound) time.Duration {
+	limit := bound.limits()
+	return limit.take + captureStampBudget + discardGrace + limit.keep + captureStampBudget
 }
 
 // takeOverLife is the same of a takeover's begun stamp, from its own instant
@@ -1361,12 +1396,12 @@ func takeLifeWith(bound takeBound) time.Duration {
 // of what came of it. Each change of the row ([captureStampBudget]), the read
 // back a read ([captureReadBudget]): 3 × 810.03 + 270 + 4,080 = 6,780.08 s,
 // an hour, fifty-three minutes and a fraction at today's bounds.
-var takeOverLife = takeOverLifeWith(SessionKeepBudget)
+var takeOverLife = takeOverLifeWith(atKeptBound) // the kept bound on purpose: the most
 
-// takeOverLifeWith is [takeOverLife] with a keep of keep, a takeover's at its
-// capture's bound ([takeBound]).
-func takeOverLifeWith(keep time.Duration) time.Duration {
-	return 3*captureStampBudget + captureReadBudget + keep
+// takeOverLifeWith is [takeOverLife] of a takeover at its capture's bound,
+// its keep that bound's ([takeBound]).
+func takeOverLifeWith(bound captureBound) time.Duration {
+	return 3*captureStampBudget + captureReadBudget + bound.limits().keep
 }
 
 // captureLife is the longest life of a begun capture, a take's or a
@@ -1381,11 +1416,11 @@ func takeOverLifeWith(keep time.Duration) time.Duration {
 // reservation's room, a keep's reads and a takeover's steps, a rule reading a
 // begun stamp's age against it could read a capture still being kept as
 // abandoned. max(6,330.05, 6,780.08) s, 1 h 53 min today, a takeover's.
-var captureLife = captureLifeAt(keptBound)
+var captureLife = captureLifeAt(atKeptBound) // the kept bound on purpose: the most
 
 // captureLifeAt is [captureLife] of a capture taken at bound.
-func captureLifeAt(bound takeBound) time.Duration {
-	return max(takeLifeWith(bound), takeOverLifeWith(bound.keep))
+func captureLifeAt(bound captureBound) time.Duration {
+	return max(takeLifeWith(bound), takeOverLifeWith(bound))
 }
 
 // sessionKeepDrain is how long a stopping coordinator lets keeps already under
@@ -1647,7 +1682,7 @@ type spooledCapture struct {
 	// ([Coordinator.takeOver]); stood is that capture's bound, which its wait
 	// is held to ([standbyWaitFor]).
 	standby bool
-	stood   takeBound
+	stood   captureBound
 
 	// places is what the capture is raised by once its take is counted
 	// ([SessionCapture.placeAtNewest]): set for a capture no read places, nil
@@ -1820,8 +1855,8 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// time, which ends a summary's upload early where the read found one
 	// ([Coordinator.summaryBy]).
 	read := ctx
-	budget := boundOf(policy.kept()).take
-	ctx, cancel, _ := c.takeContext(ctx, budget)
+	own := policy.bound()
+	ctx, cancel, _ := c.takeContext(ctx, own)
 	if at.summary != nil {
 		ctx, cancel = before(ctx, cancel, c.summaryBy(by))
 	}
@@ -1947,7 +1982,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	}()
 	dir, err := c.spoolHere()
 	if err != nil {
-		loss, why := takeRefusal(ctx, err, budget)
+		loss, why := takeRefusal(ctx, err, own)
 		return nil, refuse(calls, loss, why)
 	}
 	// ONE PACK AT A TIME in a box that shares the node's memory
@@ -1955,22 +1990,21 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// made once TakeSession returns, before the stream the spool reads.
 	give, err := c.packSlot(ctx, current)
 	if err != nil {
-		loss, why := takeRefusal(ctx, err, budget)
+		loss, why := takeRefusal(ctx, err, own)
 		return nil, refuse(calls, loss, why)
 	}
-	limit := boundOf(policy.kept())
 	taken, err := taker.TakeSession(ctx, box, policy.Bound(SessionTake{Pack: at.pack, Scrub: scrub,
 		Scope: current.AgentID, Session: current.Launch.Minted, Spool: room.scrubbing(dir)}))
 	give()
 	if err != nil {
-		loss, why := takeRefusal(ctx, err, budget)
+		loss, why := takeRefusal(ctx, err, own)
 		return nil, refuse(calls, loss, why)
 	}
 	if taken.Body == nil {
 		return nil, nil
 	}
 	defer func() { _ = taken.Body.Close() }()
-	room.counting(countedFor(taken.Archive.Size, limit.sealed))
+	room.counting(countedFor(taken.Archive.Size, own))
 	// AND THE TENURE THE STAMP NAMES, read again once the session is in hand,
 	// right before its place is reserved: the pack and the scrub can take
 	// minutes ([SessionTakeBudget]), and a lease that lapsed and was claimed
@@ -2017,8 +2051,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// where another read's reservation beat it ([Coordinator.besideAnother]).
 	// Where no row names it, this take's own: a gated fleet holds none at the
 	// kept bound.
-	own := boundOf(policy.kept())
-	standBy := func(stamp SessionCapture, stood takeBound) (*spooledCapture, *SessionKept) {
+	standBy := func(stamp SessionCapture, stood captureBound) (*spooledCapture, *SessionKept) {
 		spooled, kept := c.standBy(ctx, by, reserveBy, run, stamp, taken, at, places, room, stood)
 		spooledHold = spooled != nil
 		return spooled, kept
@@ -2044,7 +2077,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		case took:
 			spooled, err := c.spool(ctx, run, stamp, taken, places, room)
 			if err != nil {
-				loss, why := takeRefusal(ctx, err, budget)
+				loss, why := takeRefusal(ctx, err, own)
 				stamp.Summary = keepRefused()
 				return nil, c.finishCapture(ctx, by, run, stamp, CaptureRefused, loss, why)
 			}
@@ -2101,7 +2134,7 @@ func captureStamp(row PendingRun, launch string, place int64, final, interrupted
 // by at own, where the row cannot be read or names that capture no more: the
 // store decides ([PendingStore.StandBy]).
 func (c *Coordinator) besideAnother(ctx context.Context, run PendingRun, stamp SessionCapture,
-	own takeBound) (SessionCapture, bool, takeBound) {
+	own captureBound) (SessionCapture, bool, captureBound) {
 
 	current, found, err := c.pending.Get(ctx, run.TurnID)
 	if err != nil || !found {
@@ -2123,9 +2156,9 @@ func (c *Coordinator) besideAnother(ctx context.Context, run PendingRun, stamp S
 
 // boundAt is the bound of the capture r names at place, or, where it names
 // none there, otherwise.
-func (r PendingRun) boundAt(place int64, otherwise takeBound) takeBound {
+func (r PendingRun) boundAt(place int64, otherwise captureBound) captureBound {
 	if held := r.Capture; held != nil && held.CaptureSeq == place {
-		return boundOf(held.KeptBound)
+		return held.bound()
 	}
 	return otherwise
 }
@@ -2206,7 +2239,7 @@ func (c *Coordinator) spooledWhole(ctx context.Context, by time.Time, run Pendin
 // ONE THAT MAY STAND: the keep reads the row first ([Coordinator.awaitStood]);
 // not standing, it keeps nothing and withdraws.
 func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run PendingRun, stamp SessionCapture,
-	taken TakenSession, at capturePoint, places *savePlaces, hold *spoolHold, stoodAt takeBound) (*spooledCapture,
+	taken TakenSession, at capturePoint, places *savePlaces, hold *spoolHold, stoodAt captureBound) (*spooledCapture,
 	*SessionKept) {
 
 	stood, _, err := c.askStamp(ctx, reserveBy, run.TurnID, stamp, c.pending.StandBy)
@@ -2224,7 +2257,7 @@ func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run 
 	}
 	spooled, err := c.spool(ctx, run, stamp, taken, places, hold)
 	if err != nil {
-		_, why := takeRefusal(ctx, err, boundOf(stamp.KeptBound).take)
+		_, why := takeRefusal(ctx, err, stamp.bound())
 		c.standDown(ctx, by, run, stamp, why)
 		return nil, nil
 	}
@@ -2483,7 +2516,7 @@ func (c *Coordinator) namedAtWaitsEnd(ctx context.Context, run PendingRun, stand
 
 // takeContext is the context a take runs under once its row is read
 // ([Coordinator.placingRow]), and the instant by which its own records must be
-// made: budget, its bound's ([takeBound]), for its pack and scrub, and beside
+// made: its bound's budget ([takeBound]) for its pack and scrub, and beside
 // it the room its reservation of the capture's place is given
 // ([Coordinator.reserveRoom]), never past where the read it is part of must
 // stop ([Coordinator.takeBy]). by is zero where the read has no deadline. EVERY
@@ -2491,10 +2524,10 @@ func (c *Coordinator) namedAtWaitsEnd(ctx context.Context, run PendingRun, stand
 // it as the reservation within it: each crosses the row whole, a pack at its
 // bound left only the scrub's minutes, and a large row was cut while its bytes
 // crossed a slow link (crewlet/crewlet#1151).
-func (c *Coordinator) takeContext(ctx context.Context, budget time.Duration) (context.Context,
+func (c *Coordinator) takeContext(ctx context.Context, bound captureBound) (context.Context,
 	context.CancelFunc, time.Time) {
 
-	deadline := time.Now().Add(budget + c.reserveRoom())
+	deadline := time.Now().Add(bound.limits().take + c.reserveRoom())
 	by := c.recordsBy(ctx)
 	if last := c.takeBy(by); !last.IsZero() && last.Before(deadline) {
 		deadline = last
@@ -2599,7 +2632,7 @@ func before(ctx context.Context, cancel context.CancelFunc, by time.Time) (conte
 // takeRefusal is why a take was refused, in the words its stamp keeps: the
 // take's budget where that is what ended it, which says so plainly rather than
 // as a deadline error.
-func takeRefusal(ctx context.Context, err error, budget time.Duration) (executorkeep.Loss, string) {
+func takeRefusal(ctx context.Context, err error, bound captureBound) (executorkeep.Loss, string) {
 	var unrestorable *UnrestorableError
 	switch {
 	case errors.As(err, &unrestorable):
@@ -2612,7 +2645,7 @@ func takeRefusal(ctx context.Context, err error, budget time.Duration) (executor
 		return executorkeep.LossTooLarge, tooLargeWhy(err)
 	case ctx.Err() != nil:
 		return executorkeep.LossKeepFailed, fmt.Sprintf("the session could not be taken out of its box within "+
-			"the take's budget (%s at its bound): %v", budget, err)
+			"the take's budget (%s at its bound): %v", bound.limits().take, err)
 	}
 	return executorkeep.LossKeepFailed, fmt.Sprintf("the box's session could not be taken: %v", err)
 }
@@ -2765,7 +2798,7 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 	if spooled.standby && !c.takeOver(ctx, spooled) {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, boundOf(spooled.stamp.KeptBound).keep)
+	ctx, cancel := context.WithTimeout(ctx, spooled.stamp.bound().limits().keep)
 	defer cancel()
 	c.stampMediaCount(ctx, spooled)
 	// ITS SUMMARY BESIDE IT, waited for before the keep's stamp, which names
@@ -4147,6 +4180,8 @@ func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun, within t
 // = 19,052.28 s (5 h 17.5 min): its window, a read, its takeover's life, a read.
 func (c *Coordinator) awaitEndCaptures(ctx context.Context, run PendingRun) (PendingRun, bool, error) {
 	seen := endSightings{}
+	// The kept bound's life on purpose, the most: the first round's bound only,
+	// as a capture seen during it is held from first sight ([endSightings.until]).
 	within := captureLife
 	if until := seen.until(run, c.now()); !until.IsZero() {
 		within = time.Until(until)
@@ -4215,6 +4250,8 @@ type endSightings map[endSighting]time.Time
 // which only holds the end the longer.
 func (s endSightings) until(run PendingRun, now time.Time) time.Time {
 	var until time.Time
+	// Every hold at the kept bound on purpose, whatever the row's stamps say:
+	// a standby's names no bound of its own, and an end held long is only late.
 	hold := func(sighted endSighting, bound time.Duration) {
 		first, seen := s[sighted]
 		if !seen {

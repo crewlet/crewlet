@@ -725,7 +725,7 @@ func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 		share := time.Duration(float64(BoxReadBudget(run, BoxReadCollect, ThreadTraits{})) * BoxReadAnswerShare)
 		read, cancel := context.WithDeadline(t.Context(), time.Now().Add(share))
 		defer cancel()
-		take, cancelTake, _ := rig.coordinator.takeContext(read, SessionTakeBudget)
+		take, cancelTake, _ := rig.coordinator.takeContext(read, atKeptBound)
 		defer cancelTake()
 		deadline, _ := take.Deadline()
 		if got, want := time.Until(deadline), SessionTakeBudget+sessionRecordBudget+crossing; got != want {
@@ -737,7 +737,7 @@ func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 		// keep theirs.
 		short, cancelShort := context.WithDeadline(t.Context(), time.Now().Add(SessionTakeBudget))
 		defer cancelShort()
-		take, cancelTake, by := rig.coordinator.takeContext(short, SessionTakeBudget)
+		take, cancelTake, by := rig.coordinator.takeContext(short, atKeptBound)
 		defer cancelTake()
 		deadline, _ = take.Deadline()
 		end, _ := short.Deadline()

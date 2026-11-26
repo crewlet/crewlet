@@ -3,12 +3,14 @@ package sandbox
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"math/rand/v2"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
@@ -221,4 +223,99 @@ func TestACaptureAtTheKeptBoundMeetsTheDefaultSeatBudget(t *testing.T) {
 				"max_bytes_per_seat, nothing uploaded", len(body), kept, stamp)
 		}
 	})
+}
+
+// EVERY TAKE IS GIVEN ITS OWN BOUND'S BUDGET, A COLLECTION'S AND A SAVE'S: the
+// take runs under its bound's pack and scrub ([takeBound]) and its
+// reservation's room beside it, 480 s at the text bound and 600 s only where
+// the policy reads the kept bound, so a gated take never holds a v1 asker
+// past the 480 s it allows.
+//
+// Mutation: size either path's take at the kept bound, or at the text bound
+// under the kept policy, and a case goes red.
+func TestEveryTakeIsGivenItsOwnBoundsBudget(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		apart, kept bool
+		want        takeBound
+	}{
+		"every reader at the kept bound":     {apart: true, kept: true, want: keptBound},
+		"media apart, a reader below it":     {apart: true, want: textBound},
+		"the kept bound without media apart": {kept: true, want: textBound},
+	} {
+		for path, take := range map[string]func(t *testing.T, rig *coordRig){
+			"a collection's": func(t *testing.T, rig *coordRig) {
+				if spooled, _ := finalTake(t, rig, rig.launchKept(t, "t1"), rig.runner); spooled == nil {
+					t.Fatal("the collection's take spooled nothing, want its session")
+				}
+			},
+			"a save's": func(t *testing.T, rig *coordRig) {
+				rig.launchKept(t, "t1")
+				if out := saveOf(rig, "t1", nil); out.class != saveLanded {
+					t.Fatalf("the save came to %+v, want it landed", out)
+				}
+			},
+		} {
+			t.Run(name+", "+path, func(t *testing.T) {
+				t.Parallel()
+				inBubble(t, func(t *testing.T) {
+					rig, _, keep := savingRig(t, memory.NewFleet(), newTakerStore())
+					keep.mu.Lock()
+					keep.policy.MediaApart, keep.policy.KeptBound = tc.apart, tc.kept
+					keep.mu.Unlock()
+					var room time.Duration
+					rig.runner.Session.Taking = func(ctx context.Context) {
+						if by, ok := ctx.Deadline(); ok {
+							room = time.Until(by)
+						}
+					}
+					take(t, rig)
+					// Less what the case's reads before the pack's end took on the
+					// bubble's clock, far under the two bounds' two minutes apart.
+					if most := tc.want.take + rig.coordinator.reserveRoom(); room > most ||
+						room <= most-time.Minute {
+						t.Errorf("the take ran within %s, want its bound's %s and its reservation's room, "+
+							"%s", room, tc.want.take, most)
+					}
+				})
+			})
+		}
+	}
+}
+
+// A FIGURE SIZED AT NO BOUND IS REFUSED, never read as either: a caller that
+// named none is a bug, and either guess sizes its waits on another bound's
+// figures ([captureBound]).
+//
+// Mutation: read the zero value, or any value past the two, as either bound,
+// and a case goes red.
+func TestAFigureSizedAtNoBoundIsRefused(t *testing.T) {
+	t.Parallel()
+	for name, figure := range map[string]func(captureBound){
+		"a take's life":                    func(b captureBound) { takeLifeWith(b) },
+		"a takeover's life":                func(b captureBound) { takeOverLifeWith(b) },
+		"a capture's life":                 func(b captureBound) { captureLifeAt(b) },
+		"a standby's wait":                 func(b captureBound) { standbyWaitFor(b) },
+		"a standby's window, at its own":   func(b captureBound) { standbyWindowFor(b, atTextBound) },
+		"a standby's window, at its stood": func(b captureBound) { standbyWindowFor(atTextBound, b) },
+		"a relaunch's wait":                func(b captureBound) { captureRestFor(1, 0, b) },
+		"a seat's count of a session":      func(b captureBound) { countedFor(1, b) },
+		"a take's refusal for its time": func(b captureBound) {
+			ended, cancel := context.WithCancel(t.Context())
+			cancel()
+			takeRefusal(ended, context.Canceled, b)
+		},
+	} {
+		for _, bound := range []captureBound{0, atKeptBound + 1} {
+			t.Run(fmt.Sprintf("%s at %d", name, bound), func(t *testing.T) {
+				t.Parallel()
+				defer func() {
+					if recover() == nil {
+						t.Errorf("%s was sized at bound %d, want it refused", name, bound)
+					}
+				}()
+				figure(bound)
+			})
+		}
+	}
 }

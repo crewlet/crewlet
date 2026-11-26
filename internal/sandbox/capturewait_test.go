@@ -67,18 +67,18 @@ func TestARelaunchsWaitForACaptureCountsWhatItsSizeStillNeeds(t *testing.T) {
 		got, want time.Duration
 		docs      string
 	}{
-		{"half a mebibyte", captureRestFor(512<<10, 0, false),
+		{"half a mebibyte", captureRestFor(512<<10, 0, atTextBound),
 			2*time.Second + scrubPlainSlowest + discardGrace + keep(1), "8m35s"},
-		{"at the text bound", captureRestFor(executorkeep.SessionMaxBytes, 0, false),
+		{"at the text bound", captureRestFor(executorkeep.SessionMaxBytes, 0, atTextBound),
 			2*time.Duration(bound)*time.Second + scrubPlainSlowest + discardGrace + keep(time.Duration(bound)+1),
 			"34m9s"},
-		{"at the kept bound", captureRestFor(executorkeep.SessionKeptMaxBytes, 0, true),
+		{"at the kept bound", captureRestFor(executorkeep.SessionKeptMaxBytes, 0, atKeptBound),
 			2*time.Duration(kept)*time.Second + scrubPlainSlowest + discardGrace + keep(time.Duration(keptSealed)),
 			"58m41s"},
 		{"at the kept bound, thirty-two objects", captureRestFor(executorkeep.SessionKeptMaxBytes,
-			executorkeep.MediaMaxCount, true), 2*time.Duration(kept)*time.Second + scrubPlainSlowest +
+			executorkeep.MediaMaxCount, atKeptBound), 2*time.Duration(kept)*time.Second + scrubPlainSlowest +
 			discardGrace + keep(time.Duration(keptSealed+executorkeep.MediaMaxCount)), "1h14m41s"},
-		{"half a mebibyte cutting three media objects apart", captureRestFor(512<<10, 3, false),
+		{"half a mebibyte cutting three media objects apart", captureRestFor(512<<10, 3, atTextBound),
 			2*time.Second + scrubPlainSlowest + discardGrace + keep(1+3), "10m5s"},
 		{"a keep at the text bound", keepBudgetFor(executorkeep.SealedMaxBytes), textBound.keep, "29m0s"},
 		{"a keep at the kept bound", keep(time.Duration(executorkeep.KeptPaceMiB)), SessionKeepBudget, "1h8m0s"},
@@ -127,25 +127,25 @@ func TestARelaunchWaitsAsLongAsTheLongestKeepItDependsOnNeeds(t *testing.T) {
 	}{
 		{"nothing being kept", PendingRun{LaunchSeq: 2, Kept: kept}, relaunchAskWait},
 		{"the followed job's capture", PendingRun{LaunchSeq: 2, Kept: kept, Capture: begun(2, 2, small)},
-			captureRestFor(small, 0, false)},
+			captureRestFor(small, 0, atTextBound)},
 		{"the followed job's capture cutting media apart", PendingRun{LaunchSeq: 2, Kept: kept,
-			Capture: counted(begun(2, 2, small), 5)}, captureRestFor(small, 5, false)},
+			Capture: counted(begun(2, 2, small), 5)}, captureRestFor(small, 5, atTextBound)},
 		{"its save beside a smaller final take", PendingRun{LaunchSeq: 2, Kept: kept, Capture: begun(2, 3, small),
-			Saving: begun(2, 2, large)}, captureRestFor(large, 0, false)},
+			Saving: begun(2, 2, large)}, captureRestFor(large, 0, atTextBound)},
 		{"the followed job's capture taken at the kept bound", PendingRun{LaunchSeq: 2, Kept: kept,
-			Capture: atKept(begun(2, 2, large))}, captureRestFor(large, 0, true)},
+			Capture: atKept(begun(2, 2, large))}, captureRestFor(large, 0, atKeptBound)},
 		{"an earlier job's capture beside one the turn kept",
 			PendingRun{LaunchSeq: 3, Kept: kept, Capture: begun(2, 2, large)}, relaunchAskWait},
 		{"an earlier job's capture, the turn having kept none",
-			PendingRun{LaunchSeq: 3, Capture: begun(2, 1, large)}, captureRestFor(large, 0, false)},
+			PendingRun{LaunchSeq: 3, Capture: begun(2, 1, large)}, captureRestFor(large, 0, atTextBound)},
 	} {
 		if got := coordinator.relaunchWaitOf(c.run, now); got != c.want {
 			t.Errorf("%s: the relaunch waits %s, want %s", c.name, got, c.want)
 		}
 	}
-	if captureRestFor(0, 0, false) <= relaunchAskWait {
+	if captureRestFor(0, 0, atTextBound) <= relaunchAskWait {
 		t.Errorf("a capture of no bytes is waited %s, within an ask's %s: an ask's wait would cut it short",
-			captureRestFor(0, 0, false), relaunchAskWait)
+			captureRestFor(0, 0, atTextBound), relaunchAskWait)
 	}
 }
 
@@ -258,7 +258,7 @@ func TestAnUploadTheStoreTookNoneOfIsMadeAgainWithinTheKeepsBudget(t *testing.T)
 			}
 			attempts, _ := puts.made()
 			room := objstore.PaceFor(spooled.spool.Size) + rig.coordinator.recordBudget
-			budget := boundOf(spooled.stamp.KeptBound).keep
+			budget := spooled.stamp.bound().limits().keep
 			last, lastBy := attempts[len(attempts)-1], began.Add(budget-room)
 			if len(attempts) < 2 || last.After(lastBy) || !last.After(lastBy.Add(-sessionRetryCeiling)) {
 				t.Errorf("uploaded %d times, the last %s into the keep, want attempts until the budget left could "+

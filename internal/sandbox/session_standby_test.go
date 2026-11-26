@@ -365,7 +365,7 @@ func TestAReadWhoseReservationAnotherReadBeatStandsByForItsCapture(t *testing.T)
 		}
 		// AT THE STOP'S CAPTURE'S OWN BOUND, off the row read again: the text
 		// bound's wait, as a version-1 reader's turn end holds it.
-		if standby.stood != textBound {
+		if standby.stood != atTextBound {
 			t.Errorf("the standby waits for the stop's capture at %+v, want the text bound it was taken at",
 				standby.stood)
 		}
@@ -883,7 +883,7 @@ func TestAReadWhoseReservationWentUnansweredBesideAnotherStandsByForIt(t *testin
 			t.Fatalf("the read whose reservation went unanswered spooled %+v, want it standing by for the stop's",
 				standby)
 		}
-		if standby.stood != textBound {
+		if standby.stood != atTextBound {
 			t.Errorf("the standby waits for the stop's capture at %+v, want the text bound it was taken at",
 				standby.stood)
 		}
@@ -1457,7 +1457,7 @@ func TestAStandbyWhoseRowWentUnreadWaitsAtItsOwnBound(t *testing.T) {
 		if standby == nil || !standby.standby {
 			t.Fatalf("the read whose row went unread spooled %+v, want it standing by", standby)
 		}
-		if standby.stood != textBound {
+		if standby.stood != atTextBound {
 			t.Errorf("the standby waits at %+v, want its own take's text bound", standby.stood)
 		}
 		held.end <- errScrubRefused

@@ -66,6 +66,9 @@ const (
 // the uploads bucket's age (coord.UploadRetention, 30 h), the room left to
 // any raise of the take's or the keep's budget; a test holds the hold under
 // it and pins the margin.
+//
+// At the kept bound on purpose, whatever the save's: one hold paces every save
+// (rule 8), and an entry held past its object only charges its seat longer.
 var saveLedgerHold = takeLife + collectPendingGrace + 2*collectInterval + 2*objstore.AssumedClockSkew
 
 // saveMarginFloor is the least margin a save is counted at beyond its packed
@@ -80,9 +83,9 @@ const saveMarginFloor = 64 << 10
 // and the re-tar's room; a spool sealing past it is refused. Its seat is
 // charged it less the media its keep will most likely carry, and then what
 // its keep uploads ([Coordinator.amendSave]).
-func countedFor(size, sealed int64) int64 {
+func countedFor(size int64, bound captureBound) int64 {
 	return min(secrets.SealedStreamSize(size+max(size/8, saveMarginFloor),
-		strings.Repeat("k", secrets.MaxStreamKeyIDBytes)), sealed)
+		strings.Repeat("k", secrets.MaxStreamKeyIDBytes)), bound.limits().sealed)
 }
 
 // saveLedger is a seat's ledger as written: every save counted against the

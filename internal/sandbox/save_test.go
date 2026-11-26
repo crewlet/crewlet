@@ -174,7 +174,7 @@ func TestTheSaveLedgerHoldOutlastsTheCollectorAndFitsTheUploadsBucket(t *testing
 // check or the spool's room check, or charge the save after its reservation.
 func TestASeatsSavesStayWithinItsAllowance(t *testing.T) {
 	t.Parallel()
-	counted := countedFor(14, textBound.sealed)
+	counted := countedFor(14, atTextBound)
 	// LONG PAST ITS PACE, so the charge alone decides: a room of half a save
 	// paces one two holds out of its last attempt.
 	longPast := func(j *saveJob) { j.last = j.last.Add(-3 * saveLedgerHold) }
@@ -187,7 +187,7 @@ func TestASeatsSavesStayWithinItsAllowance(t *testing.T) {
 			// AN UPLOAD OF OVER HALF THE COUNT, so the first save's entry, cut
 			// to what it uploads at its keep, still leaves the second no room.
 			const size = 128 << 10
-			charged := countedFor(size, textBound.sealed)
+			charged := countedFor(size, atTextBound)
 			for _, rig := range []*coordRig{first, second} {
 				rig.runner.Session.Archive.Size, rig.runner.Session.Body = size, bytes.Repeat([]byte("x"), size)
 			}
@@ -481,9 +481,9 @@ func TestAFirstSaveThatPacksPastItsPaceIsReleasedUncharged(t *testing.T) {
 		rig.runner.Session.Archive.Size = size
 		out := saveOf(rig, "t1", nil)
 		if out.class != savePaced || !out.pacedUntil.Equal(rig.now.Add(saveRetryCeiling)) ||
-			out.counted != countedFor(size, textBound.sealed) {
+			out.counted != countedFor(size, atTextBound) {
 			t.Errorf("the save came to %+v, want it paced an hour out and counted at %d", out,
-				countedFor(size, textBound.sealed))
+				countedFor(size, atTextBound))
 		}
 		released, left := rig.runner.Released(), rig.runner.SavesLeft(rig.provider.Box(run.SandboxID))
 		if len(released) != 1 || len(left) != 0 {
@@ -525,9 +525,9 @@ func TestAPacedFirstSaveRemembersWhatItMeasured(t *testing.T) {
 		if !offerOf(t, rig, "t1") || packs != 1 {
 			t.Fatalf("the premise: at its interval the first save packed %d times, want once", packs)
 		}
-		if memo := memoIn(rig, "t1"); memo == nil || memo.counted != countedFor(size, textBound.sealed) {
+		if memo := memoIn(rig, "t1"); memo == nil || memo.counted != countedFor(size, atTextBound) {
 			t.Errorf("the paced save's memory is %+v, want it counted at %d", memo,
-				countedFor(size, textBound.sealed))
+				countedFor(size, atTextBound))
 		}
 		// THE POLL'S CADENCE, which keeps the memory: an offer every interval.
 		started, end := 0, rig.now.Add(3*time.Hour)
@@ -563,7 +563,7 @@ func TestADrainSaveIsNeverPacedAfterItsPack(t *testing.T) {
 		const size = 24 << 20
 		rig.runner.Session.Archive.Size = size
 		drain := func(j *saveJob) { j.drainEnd = time.Now().Add(time.Minute) }
-		counted := countedFor(size, textBound.sealed)
+		counted := countedFor(size, atTextBound)
 		if out := saveOf(rig, "t1", drain); out.class != saveLanded || out.counted != counted {
 			t.Errorf("the drain save came to %+v, want it landed and counted at %d", out, counted)
 		}
