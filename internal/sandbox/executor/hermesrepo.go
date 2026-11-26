@@ -48,21 +48,21 @@ func hermesCheckouts(paths Paths) checkoutSpec {
 		Budget: &checkoutBudget{Form: "hermes", Own: paths.System(), Bytes: hermesSystemMaxBytes}}
 }
 
-// hermesCheckoutHome is where a Hermes run keeps its checkouts' instructions
+// checkoutHome is where a Hermes run keeps its checkouts' instructions
 // and skills ([checkoutHome]): no home file, since the script adds the
 // sections to the run's system prompt itself ([hermesSystemWithCheckouts]),
 // and the home's skills, each copy `<repository>:<skill>`. A launch's gate is
 // [hermesLaunchHome]'s.
-func hermesCheckoutHome(paths Paths) checkoutHome {
+func (Hermes) checkoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.HermesCheckouts(), helper: paths.HermesNoteHelper(),
 		launch: paths.HermesCheckoutLaunch(), sections: paths.HermesCheckoutSections(), skills: paths.HermesSkills(),
 		copied: paths.HermesCheckoutSkillsCopied()}
 }
 
-// hermesLaunchHome is [hermesCheckoutHome] with the gate a launch of model
+// hermesLaunchHome is [Hermes.checkoutHome] with the gate a launch of model
 // asks Hermes for ([hermesGateCommand]).
 func hermesLaunchHome(paths Paths, model string) checkoutHome {
-	h := hermesCheckoutHome(paths)
+	h := Hermes{}.checkoutHome(paths)
 	h.gateCmd = hermesGateCommand(paths, model, hermesGateWait)
 	// EACH CHECKOUT THE LAUNCH LEFT FOR A FIRING where none will come (one that
 	// waited for room or the copy bound, or every one Hermes could not render)
@@ -131,9 +131,9 @@ var _ homeKeeper = Hermes{}
 // skills ([checkoutHome.restore]) and drops its skip log
 // ([checkoutHome.dropSkipped]), run by the clear before every run, whichever
 // harness it runs.
-func (Hermes) homeRestore(p Paths) string {
-	h := hermesCheckoutHome(p)
-	return everyStep(h.restore(), h.dropSkipped())
+func (h Hermes) homeRestore(p Paths) string {
+	home := h.checkoutHome(p)
+	return everyStep(home.restore(), home.dropSkipped())
 }
 
 // hermesNestedHand is the plugin's settings for a nested firing: the note

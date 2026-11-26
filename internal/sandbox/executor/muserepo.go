@@ -58,13 +58,13 @@ const museListedAs = "muse"
 // reminder (internal/notehelper's checkoutmuse.go).
 const museBudget = "muse"
 
-// museCheckoutHome is where a Muse Code run keeps its checkouts' instructions
+// checkoutHome is where a Muse Code run keeps its checkouts' instructions
 // and skills ([checkoutHome]): the home's rules file, $CONFIG_DIR/AGENTS.md
 // or $CONFIG_DIR/CLAUDE.md, whichever Muse loads, held beside the run, else
 // an AGENTS.md of the run's opening with the foreign personal rules Muse
 // would have loaded in its absence ([Paths.MuseForeignRules]); and
 // ~/.agents/skills, each copied as `<repository>:<skill>`.
-func museCheckoutHome(paths Paths) checkoutHome {
+func (Muse) checkoutHome(paths Paths) checkoutHome {
 	return checkoutHome{state: paths.MuseCheckouts(), helper: paths.MuseNoteHelper(), launch: paths.MuseCheckoutLaunch(),
 		agents: []string{paths.MuseConfig() + "/AGENTS.md", paths.MuseConfig() + "/CLAUDE.md"},
 		held:   paths.MuseHomeRules(), sections: paths.MuseCheckoutSections(), skills: paths.MuseSkills(),
@@ -78,8 +78,8 @@ var _ homeKeeper = Muse{}
 // killed Muse Code run left them ([checkoutHome.restore]) and drops the skip
 // log it left ([checkoutHome.dropSkipped]), run by the clear before every
 // run, whichever harness it runs.
-func (Muse) homeRestore(p Paths) string {
-	h := museCheckoutHome(p)
+func (m Muse) homeRestore(p Paths) string {
+	h := m.checkoutHome(p)
 	return everyStep(h.restore(), h.dropSkipped())
 }
 
@@ -134,7 +134,7 @@ func museNestedCommand(paths Paths) []string {
 	return []string{paths.MuseNoteHelper(), "-adapter", "muse-nested", "-config", paths.MuseCheckouts() + "/nested.json"}
 }
 
-// MuseCheckouts is the run's checkout state ([museCheckoutHome]): the
+// MuseCheckouts is the run's checkout state ([Muse.checkoutHome]): the
 // checkouts handed, the lock and the nested hook's config, remade by every run.
 func (p Paths) MuseCheckouts() string { return p.WorkDir() + "/muse-checkouts" }
 
@@ -143,7 +143,7 @@ func (p Paths) MuseCheckoutLaunch() string { return p.WorkDir() + "/muse-checkou
 
 // MuseCheckoutSections is where checkout-launch writes the run's checkouts'
 // instructions, which the gate writes after the home's own into the home's
-// rules file ([museCheckoutHome]).
+// rules file ([Muse.checkoutHome]).
 func (p Paths) MuseCheckoutSections() string { return p.WorkDir() + "/muse-checkout-sections.md" }
 
 // MuseCheckoutCopied lists, a name a line, the checkouts' skills a run copied

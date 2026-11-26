@@ -100,11 +100,11 @@ func runCodexRepoGate(t *testing.T, p Paths, work, path string, repos ...string)
 	if err := os.MkdirAll(filepath.Dir(p.CodexCheckoutLaunch()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	launch := codexCheckoutHome(p).launchConfig(codexCheckouts(codexProjectDocMaxBytes), repos)
+	launch := Codex{}.checkoutHome(p).launchConfig(codexCheckouts(codexProjectDocMaxBytes), repos)
 	if err := os.WriteFile(p.CodexCheckoutLaunch(), launch, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(sh, "-c", "cd "+shellword.Quote(work)+" || exit 1\n"+codexCheckoutHome(p).gate()+`echo "hk=$hk"`)
+	cmd := exec.Command(sh, "-c", "cd "+shellword.Quote(work)+" || exit 1\n"+Codex{}.checkoutHome(p).gate()+`echo "hk=$hk"`)
 	if path != "" {
 		cmd.Env = append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "PATH=") }),
 			"PATH="+path)
@@ -451,13 +451,13 @@ func TestAFiringKilledMidCopyLeavesNothingTheNextLaunchKeeps(t *testing.T) {
 	})
 	withNoteHelper(t, p)
 	sibling := p.CodexHome() + "/.crewlet-staging-skills"
-	stagings := []string{codexCheckoutHome(p).staging(), sibling}
+	stagings := []string{Codex{}.checkoutHome(p).staging(), sibling}
 	left := map[string]string{
-		sibling + "/late:other/partial":                         "HALF",
-		p.CodexSkills() + "/own/SKILL.md":                       "---\nname: own\n---\n",
-		codexCheckoutHome(p).staging() + "/late:half/partial":   "HALF",
-		codexCheckoutHome(p).staging() + "/late:whole/SKILL.md": "---\nname: \"late:whole\"\n---\n",
-		p.CodexRepoSkills():                                     "late:listed\nlate:half\nlate:whole\n",
+		sibling + "/late:other/partial":                            "HALF",
+		p.CodexSkills() + "/own/SKILL.md":                          "---\nname: own\n---\n",
+		Codex{}.checkoutHome(p).staging() + "/late:half/partial":   "HALF",
+		Codex{}.checkoutHome(p).staging() + "/late:whole/SKILL.md": "---\nname: \"late:whole\"\n---\n",
+		p.CodexRepoSkills():                                        "late:listed\nlate:half\nlate:whole\n",
 	}
 	for path, body := range left {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -578,7 +578,7 @@ func TestANestedFiringsSkipReachesTheRunsErrorStreamOnce(t *testing.T) {
 		CombinedOutput(); err != nil {
 		t.Fatalf("the nested firing: %v\n%s", err, out)
 	}
-	piece := codexCheckoutHome(p).saySkipped()
+	piece := Codex{}.checkoutHome(p).saySkipped()
 	want := "notehelper: the skill " + filepath.Join(work, "late/.codex/skills/s") +
 		" is left out: the home's skills hold late:s already\n"
 	for _, says := range []string{want, ""} {
@@ -728,7 +728,7 @@ func TestAHomeFileIsHeldWholeOrNotAtAll(t *testing.T) {
 			}
 			cut := "#!" + sh + "\nhead -c 5 \"$1\" > \"$2\"\nkill -KILL $PPID\n"
 			writeHostProgram(t, filepath.Join(bin, "cp"), []byte(cut), 0o700)
-			launch := codexCheckoutHome(p).launchConfig(codexCheckouts(codexProjectDocMaxBytes), nil)
+			launch := Codex{}.checkoutHome(p).launchConfig(codexCheckouts(codexProjectDocMaxBytes), nil)
 			if err := os.MkdirAll(filepath.Dir(p.CodexCheckoutLaunch()), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -738,7 +738,7 @@ func TestAHomeFileIsHeldWholeOrNotAtAll(t *testing.T) {
 			env := append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "PATH=") }),
 				"PATH="+bin)
 			for _, hold := range []string{holdHomeShell(p.CodexLiveConfig(), p.CodexHomeConfig()),
-				"cd " + shellword.Quote(work) + " || exit 1\n" + codexCheckoutHome(p).gate()} {
+				"cd " + shellword.Quote(work) + " || exit 1\n" + Codex{}.checkoutHome(p).gate()} {
 				cmd := exec.Command(sh, "-c", hold)
 				cmd.Env = env
 				if out, err := cmd.CombinedOutput(); err == nil {

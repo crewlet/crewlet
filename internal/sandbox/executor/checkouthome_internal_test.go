@@ -213,7 +213,7 @@ func TestTheSectionsGoIntoTheHomeFileTheHarnessReads(t *testing.T) {
 // removal, and the script goes red.
 func TestOneHomeFileCandidateNamesNoHeldFile(t *testing.T) {
 	t.Parallel()
-	h := codexCheckoutHome(Paths{Home: "/home/box"})
+	h := Codex{}.checkoutHome(Paths{Home: "/home/box"})
 	if strings.Contains(h.gate()+h.restore(), heldLive) {
 		t.Errorf("Codex's gate or put-back names the held file:\n%s\n%s", h.gate(), h.restore())
 	}
@@ -367,8 +367,8 @@ func TestCodexAndPiCheckoutFormsCarryNoGateBesideHermess(t *testing.T) {
 		spec  checkoutSpec
 		gated bool
 	}{
-		"codex":  {codexCheckoutHome(paths), codexCheckouts(codexProjectDocMaxBytes), false},
-		"pi":     {piCheckoutHome(paths), piCheckouts(), false},
+		"codex":  {Codex{}.checkoutHome(paths), codexCheckouts(codexProjectDocMaxBytes), false},
+		"pi":     {Pi{}.checkoutHome(paths), piCheckouts(), false},
 		"hermes": {hermesLaunchHome(paths, "m"), hermesCheckouts(paths), true},
 	} {
 		want := plain

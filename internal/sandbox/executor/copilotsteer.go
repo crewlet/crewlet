@@ -77,7 +77,7 @@ func CopilotClientTurnID(inbox string) string { return copilotTurnPrefix + inbox
 // minted for each launch: a state another launch left counts nothing; the
 // bridge's servers it guards the names of ([crewletServers]), none for none;
 // the note helper and its nested config, which hand a checkout cloned during
-// the run its skills ([copilotCheckoutHome]), "" for a box without the helper;
+// the run its skills ([Copilot.checkoutHome]), "" for a box without the helper;
 // the file the script names each launch attempt in, which keys the state per
 // attempt ([Paths.CopilotAttempt]); the attempt's kept launch sets and the
 // session-state directory its new session stores them in ([copilotKeptSets]);

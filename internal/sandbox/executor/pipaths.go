@@ -37,10 +37,10 @@ func (p Paths) PiSkills() string { return p.PiRun() + "/skills" }
 
 // PiNoteHelper is the note helper a Pi run writes at every launch
 // ([writeNoteHelper]): its gate runs checkout-launch, and its extension the
-// pi-nested adapter after each tool call ([piCheckoutHome]).
+// pi-nested adapter after each tool call ([Pi.checkoutHome]).
 func (p Paths) PiNoteHelper() string { return p.PiRun() + "/notehelper" }
 
-// PiCheckouts is the run's checkout state ([piCheckoutHome]): the checkouts
+// PiCheckouts is the run's checkout state ([Pi.checkoutHome]): the checkouts
 // handed, the lock and the nested adapter's config, remade by every run.
 func (p Paths) PiCheckouts() string { return p.PiRun() + "/checkouts" }
 
@@ -49,11 +49,11 @@ func (p Paths) PiCheckoutLaunch() string { return p.PiRun() + "/checkout-launch.
 
 // PiCheckoutSections is where checkout-launch writes the run's checkouts'
 // instructions, which the gate then writes after the home's own into the
-// agent directory's instruction file ([piCheckoutHome]).
+// agent directory's instruction file ([Pi.checkoutHome]).
 func (p Paths) PiCheckoutSections() string { return p.PiRun() + "/checkout-sections.md" }
 
 // PiCheckoutSkills is the directory the checkouts' skills are copied into,
-// which the run names with a `--skill` of its own ([piCheckoutHome]).
+// which the run names with a `--skill` of its own ([Pi.checkoutHome]).
 func (p Paths) PiCheckoutSkills() string { return p.PiRun() + "/checkout-skills" }
 
 // PiCheckoutSkillsCopied lists, a name a line, the skills a run copied into

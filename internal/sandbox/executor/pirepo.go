@@ -16,12 +16,12 @@ func piCheckouts() checkoutSpec {
 		SkillDirs: []checkoutSkillDir{{Dir: ".pi/skills", Recursive: true}, {Dir: ".agents/skills", Recursive: true}}}
 }
 
-// piCheckoutHome is where a Pi run keeps its checkouts' instructions and
+// checkoutHome is where a Pi run keeps its checkouts' instructions and
 // skills ([checkoutHome]): the agent directory's instruction file, the one of
 // [piInstructionNames] Pi loads there, the home's own held beside the run;
 // and a skills directory of the run's own, named with one more `--skill`
 // ([piScript]), each skill copied as `<repository>:<skill>`.
-func piCheckoutHome(paths Paths) checkoutHome {
+func (Pi) checkoutHome(paths Paths) checkoutHome {
 	agents := make([]string, len(piInstructionNames))
 	for i, name := range piInstructionNames {
 		agents[i] = paths.PiAgentDir() + "/" + name
@@ -37,8 +37,8 @@ var _ homeKeeper = Pi{}
 // killed Pi run held it ([checkoutHome.restore]) and drops the skip log it
 // left ([checkoutHome.dropSkipped]), run by the clear before every run,
 // whichever harness it runs.
-func (Pi) homeRestore(p Paths) string {
-	h := piCheckoutHome(p)
+func (p Pi) homeRestore(paths Paths) string {
+	h := p.checkoutHome(paths)
 	return everyStep(h.restore(), h.dropSkipped())
 }
 

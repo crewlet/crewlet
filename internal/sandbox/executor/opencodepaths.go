@@ -69,7 +69,7 @@ func (p Paths) OpenCodeSkillsPlugin() string { return p.WorkDir() + "/opencode-s
 func (p Paths) OpenCodeRenewExport() string { return p.WorkDir() + "/opencode-renew-export.json" }
 
 // OpenCodeCheckouts is the DIRECTORY of what an OpenCode run hands the
-// checkouts below its working directory with ([openCodeCheckoutHome]): the
+// checkouts below its working directory with ([OpenCode.checkoutHome]): the
 // note helper, its launch config, the sections file and skills directory the
 // run's configuration names, and the checkouts' state. Under WorkDir, removed
 // whole before every run ([OpenCode.artifactDirs]), so no run's copies or
@@ -81,7 +81,7 @@ func (p Paths) OpenCodeCheckouts() string { return p.WorkDir() + "/opencode-chec
 // checkouts plugin the opencode-nested adapter.
 func (p Paths) OpenCodeNoteHelper() string { return p.OpenCodeCheckouts() + "/notehelper" }
 
-// OpenCodeCheckoutState is the run's checkout state ([openCodeCheckoutHome]):
+// OpenCodeCheckoutState is the run's checkout state ([OpenCode.checkoutHome]):
 // the checkouts handed, the lock, the skip log and the nested adapter's
 // config, remade by every run's gate.
 func (p Paths) OpenCodeCheckoutState() string { return p.OpenCodeCheckouts() + "/state" }
