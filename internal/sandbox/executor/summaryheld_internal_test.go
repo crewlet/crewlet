@@ -102,13 +102,14 @@ func summaryWords(n int) string {
 // liveHeldBy is the most live heap read holds beyond what was live before it,
 // the fewest of three reads: the collector run at every 1% of growth, its
 // live heap read as each cycle ends ([watchLiveHeap]). GOMAXPROCS is one while
-// it measures, as [allocationsOf]'s is.
-func liveHeldBy(read func()) uint64 {
+// it measures, and no goroutine runs beside it, as with [allocationsOf].
+func liveHeldBy(t testing.TB, read func()) uint64 {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	defer debug.SetGCPercent(debug.SetGCPercent(1))
 	held := uint64(math.MaxUint64)
 	live := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
 	for range 3 {
+		requireNoStrays(t)
 		runtime.GC()
 		runtime.GC()
 		metrics.Read(live)
@@ -157,7 +158,7 @@ func TestABoxReadsSummaryIsBudgeted(t *testing.T) {
 			name        string
 			words, term int
 			slot        bool
-			held        func(read func()) uint64
+			held        func(t testing.TB, read func()) uint64
 		}{
 			{" within its share", share - around, baseTierReadBytes - baseTierPassBytes, false, allocatedBy},
 			{" past its share", summaryReadMaxBytes - around, summaryLargeHeldBytes, true, liveHeldBy},
@@ -186,8 +187,8 @@ func TestABoxReadsSummaryIsBudgeted(t *testing.T) {
 // allocatedBy is what read allocates, the fewest bytes of three
 // ([allocationsOf]): what a read allocates for its summary bounds what it
 // holds of it, where the words are too few for the collector to see.
-func allocatedBy(read func()) uint64 {
-	_, n := allocationsOf(read)
+func allocatedBy(t testing.TB, read func()) uint64 {
+	_, n := allocationsOf(t, read)
 	return n
 }
 
@@ -196,7 +197,7 @@ func allocatedBy(read func()) uint64 {
 // for while held elsewhere, its summary unread for that, never as past its
 // bound, where the wait ends unmet; and else never.
 func summaryHeldWithin(t *testing.T, name string, b summaryBox, counts bool, base func(), term int64, slot bool,
-	held func(read func()) uint64) {
+	held func(t testing.TB, read func()) uint64) {
 	t.Helper()
 	free := holdLargeSlot(t)
 	leaving, leave := context.WithCancel(t.Context())
@@ -224,8 +225,8 @@ func summaryHeldWithin(t *testing.T, name string, b summaryBox, counts bool, bas
 		t.Errorf("%s reads %.40q (%q) once its wait for the large slot ended unmet, want it unread for that",
 			name, waited.Summary.Text, waited.Summary.Unread)
 	}
-	before := held(base)
-	with := held(func() { b.asking(t.Context(), counts, true) })
+	before := held(t, base)
+	with := held(t, func() { b.asking(t.Context(), counts, true) })
 	t.Logf("%s holds %d bytes for its summary", name, with-min(with, before))
 	if with > before+uint64(term) {
 		t.Errorf("%s holds %d bytes for its summary, past the %d it is counted at", name, with-before, term)

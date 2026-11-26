@@ -225,7 +225,7 @@ func TestAChatFilesReadingHoldsNoLine(t *testing.T) {
 		n     int
 		err   error
 	)
-	_, allocated := allocationsOf(func() {
+	_, allocated := allocationsOf(t, func() {
 		total = 0
 		piece := make([]byte, textDigestBytes)
 		file := io.MultiReader(&repeating{lines: vs, left: 64 << 20}, strings.NewReader("\n"))
