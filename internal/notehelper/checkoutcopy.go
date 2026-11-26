@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,12 +19,13 @@ import (
 // ([copyRoom]), never through a link that leads out of the checkout, and
 // crash-safe: its name is listed for removal (spec.Copied) before anything is
 // written, the copy is built outside the skills directory ([stagingFor]), its
-// SKILL.md renamed last, and the whole moved into place by one rename. A
-// firing killed at any point leaves the final name absent or complete, and
-// nothing the next launch does not remove (its gate removes every listed
-// name, the state and the sibling staging). A checkout's skills are planned
-// before it is claimed, and one whose skills do not fit what is left waits
-// for a firing with room ([handCheckouts]).
+// SKILL.md renamed last, and the whole moved into place by one rename that
+// replaces nothing ([renameNoReplace]); one that never lands comes off the
+// list. A firing killed at any point leaves the final name absent or
+// complete, and nothing the next launch does not remove (its gate removes
+// every listed name, the state and the sibling staging). A checkout's skills
+// are planned before it is claimed, and one whose skills do not fit what is
+// left waits for a firing with room ([handCheckouts]).
 
 // stagingDir is the directory under a run's checkout state a copy is built
 // in, outside every skills directory and every harness's own: Grok Build
@@ -87,9 +89,10 @@ func (e *otherFilesystemError) Error() string {
 // Unwrap is the rename's own error, EXDEV.
 func (e *otherFilesystemError) Unwrap() error { return syscall.EXDEV }
 
-// renameCopy moves a built copy into place; a test stands in for it to see
-// the skills directory as the copy lands, or a rename across filesystems.
-var renameCopy = os.Rename
+// renameCopy moves a built copy into place, never over an entry there
+// ([renameNoReplace]); a test stands in for it to see the skills directory as
+// the copy lands, or a rename across filesystems.
+var renameCopy = renameNoReplace
 
 // The bounds of one firing's copies (a launch is one firing): bytes, entries
 // (files and directories) and depth, well past the largest skill directory
@@ -369,13 +372,15 @@ func planEntry(d skillDir, realRoot, name string, bare bool) (plannedSkill, plan
 // copyPlanned copies p to spec.Skills, built in staging, crash-safe (the
 // file's header), saying each entry left out of it, and is it as listed.
 func copyPlanned(p plannedSkill, spec checkoutSpec, staging string, said *skips) (handedSkill, error) {
+	// ONE FIRING PLANS EVERY CHECKOUT BEFORE IT COPIES ANY, so another
+	// checkout's copy this firing made can take the name only now; and
+	// NOTHING THE RUN DID NOT MAKE IS LISTED AS ITS COPY, as the run's end
+	// removes every name listed: an entry at its place leaves it out.
+	if why := homeHolds(spec, p.name); why != "" {
+		return handedSkill{}, errors.New(why)
+	}
 	listed, key := p.name, p.name
 	if rule, ok := listingRules[spec.ListedAs]; ok {
-		// ONE FIRING PLANS EVERY CHECKOUT BEFORE IT COPIES ANY, so another
-		// checkout's copy this firing made can take the name only now.
-		if why := homeHolds(spec, p.name); why != "" {
-			return handedSkill{}, errors.New(why)
-		}
 		listed, key = rule.shown(p.name), rule.key(p.name)
 	}
 	if spec.Copied != "" {
@@ -390,12 +395,23 @@ func copyPlanned(p plannedSkill, spec checkoutSpec, staging string, said *skips)
 	}
 	if err == nil {
 		err = renameCopy(built, final)
-		if errors.Is(err, syscall.EXDEV) {
+		switch {
+		case errors.Is(err, syscall.EXDEV):
 			err = &otherFilesystemError{skills: spec.Skills, staging: staging}
+		case errors.Is(err, fs.ErrExist):
+			err = errors.New("the home's skills hold " + p.name + " already")
 		}
 	}
 	if err != nil {
 		_ = os.RemoveAll(built)
+		// A COPY THAT NEVER LANDED IS NOT THE RUN'S: its name comes off the
+		// list, or the run's end would remove whatever is put there later.
+		if spec.Copied != "" {
+			if uerr := unlistCopy(spec.Copied, p.name); uerr != nil {
+				err = fmt.Errorf("%w; and its name could not be taken off %s, whose entry the run's end removes: %w",
+					err, spec.Copied, uerr)
+			}
+		}
 		return handedSkill{}, err
 	}
 	_ = os.Remove(staging) // emptied; never one holding another firing's copy
@@ -595,6 +611,30 @@ func copyFile(it copyItem, dst string) error {
 	_, err = io.Copy(out, io.LimitReader(in, it.size))
 	if cerr := out.Close(); err == nil {
 		err = cerr
+	}
+	return err
+}
+
+// unlistCopy takes name back off the list of copies at path, one that never
+// landed: the list is rewritten without it and moved over the old by one
+// rename, under the state's lock the firing holds.
+func unlistCopy(path, name string) error {
+	raw, err := os.ReadFile(path) //nolint:gosec // the run's own state
+	if err != nil {
+		return err
+	}
+	var kept strings.Builder
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if line != "" && line != name {
+			kept.WriteString(line + "\n")
+		}
+	}
+	tmp := path + ".unlist"
+	if err = os.WriteFile(tmp, []byte(kept.String()), 0o600); err != nil {
+		return err
+	}
+	if err = os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
 	}
 	return err
 }

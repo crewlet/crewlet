@@ -99,6 +99,20 @@ func awaitOver(t *testing.T, runner *executor.Runner, box sandbox.Sandbox, handl
 	}
 }
 
+// startedRecord is what a stand-in harness recorded at path, in a direct box,
+// as it started. A box reads a missing file as empty, so a run that ended before its harness
+// started would read as a harness that started on nothing: that run fails as
+// itself, with its exit code and error stream.
+func startedRecord(t *testing.T, box sandbox.Sandbox, path string) string {
+	t.Helper()
+	if _, err := os.Stat(path); err != nil {
+		p := executor.PathsFor(box)
+		t.Fatalf("the harness never started (%v): the run exited %q, its error stream:\n%s", err,
+			strings.TrimSpace(boxFile(t, box, p.ExitCode())), boxFile(t, box, p.Err()))
+	}
+	return boxFile(t, box, path)
+}
+
 // askEnd asks the job handle names to end and fails the case unless the
 // request was delivered.
 func askEnd(t *testing.T, runner *executor.Runner, box sandbox.Sandbox, handle sandbox.RunHandle) {

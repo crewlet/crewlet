@@ -578,9 +578,7 @@ func TestAPiOlderThanTheSupportedReleaseIsRefusedAtTheStart(t *testing.T) {
 			t.Errorf("releaseOf(%q) reads as the supported release", tc.printed)
 		}
 		bin := t.TempDir()
-		if err := os.WriteFile(filepath.Join(bin, "pi"), []byte("#!/bin/sh\necho "+tc.printed+"\n"), 0o700); err != nil { //nolint:gosec // an executable stand-in
-			t.Fatal(err)
-		}
+		writeHostProgram(t, filepath.Join(bin, "pi"), []byte("#!/bin/sh\necho "+tc.printed+"\n"), 0o700)
 		cmd := exec.Command("sh", "-c", check+"echo started\n") //nolint:gosec // the runner's own script
 		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
 		var stderr bytes.Buffer

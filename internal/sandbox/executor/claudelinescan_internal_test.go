@@ -1328,7 +1328,7 @@ func TestAReaderKeepsNoScratchALineOfLongValuesGrew(t *testing.T) {
 	ctx := t.Context()
 	long := `"` + strings.Repeat("x", threadValueMax-2) + `"`
 	held := func(member string) uint64 {
-		return heldBy(func() any {
+		return heldBy(t, func() any {
 			r := newThreadReader(strings.NewReader(member), threadPlainMax)
 			for {
 				_, err := r.Next(ctx)
@@ -1617,7 +1617,7 @@ func TestALinesFactsAreHeldToTheBound(t *testing.T) {
 	}
 
 	n := scanCallsHeld(1, len(recordUser))
-	if held := heldBy(func() any {
+	if held := heldBy(t, func() any {
 		line, _ := scanRead(ctx, results("", small, "")(n))
 		return line
 	}); held > threadLineMax*5/4+64<<10 {

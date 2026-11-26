@@ -37,9 +37,7 @@ func codexBox(t *testing.T, rollout []byte) Paths {
 	}
 	// A STAND-IN NOTE HELPER whose codex-renew renews the rollout as it is,
 	// recording its argv beside itself: the gate's renew is its own case.
-	if err := os.WriteFile(p.CodexNoteHelper(), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.argv\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeHostProgram(t, p.CodexNoteHelper(), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.argv\"\n"), 0o600)
 	if rollout != nil {
 		name := filepath.Join(dir, "rollout-2026-11-21T18-33-59-"+codexThread+".jsonl")
 		if err := os.WriteFile(name, rollout, 0o600); err != nil {
@@ -347,9 +345,7 @@ func TestACodexSessionIsRenewedToTheRunsInstructionsBeforeItIsResumed(t *testing
 				t.Fatal(err)
 			}
 			if c.helper != "" {
-				if err := os.WriteFile(p.CodexNoteHelper(), []byte(c.helper), 0o600); err != nil {
-					t.Fatal(err)
-				}
+				writeHostProgram(t, p.CodexNoteHelper(), []byte(c.helper), 0o600)
 			}
 			_, k, w, _ := codexGate(t, p, p.Home, Session{ID: codexThread, Continues: true, Fresh: "fresh"}, true)
 			if k != c.k || w != c.w {

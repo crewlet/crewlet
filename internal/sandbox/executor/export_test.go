@@ -16,6 +16,12 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
+// WriteHostProgram is [writeHostProgram] at 0700, for the stand-ins the
+// external cases write.
+func WriteHostProgram(t *testing.T, path, script string) {
+	writeHostProgram(t, path, []byte(script), 0o700)
+}
+
 // Bounded holds r's failure — the error stream it reads from the end, and the
 // whole failure it composes — to failure bytes, and the lines of an event
 // stream it reads to line bytes, and returns r.

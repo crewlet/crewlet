@@ -165,7 +165,7 @@ func TestTheListIsTheLinkedThirdPartyModules(t *testing.T) {
 {"ImportPath": "example.com/b", "Dir": "/cache/fork/b@v1.0.1", "Module": {"Path": "example.com/b", "Version": "v1.0.0", "Dir": "/cache/b@v1.0.0",
   "Replace": {"Path": "example.com/fork/b", "Version": "v1.0.1", "Dir": "/cache/fork/b@v1.0.1"}}}
 `
-	listed, std, err := parseList(strings.NewReader(stream))
+	listed, std, _, err := parseList(strings.NewReader(stream))
 	if err != nil {
 		t.Fatalf("parseList: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestTheListIsTheLinkedThirdPartyModules(t *testing.T) {
 func TestAModuleWithNoSourceDirectoryIsAnError(t *testing.T) {
 	t.Parallel()
 	stream := `{"ImportPath": "example.com/a", "Module": {"Path": "example.com/a", "Version": "v1.0.0"}}`
-	if _, _, err := parseList(strings.NewReader(stream)); err == nil || !strings.Contains(err.Error(), "go mod download") {
+	if _, _, _, err := parseList(strings.NewReader(stream)); err == nil || !strings.Contains(err.Error(), "go mod download") {
 		t.Errorf("err = %v, want a refusal naming go mod download", err)
 	}
 }
@@ -210,5 +210,42 @@ func TestTargetsMustBeGOOSSlashGOARCH(t *testing.T) {
 		if _, err := parseTargets(bad); err == nil {
 			t.Errorf("parseTargets(%q) accepted a malformed target", bad)
 		}
+	}
+}
+
+// A LINKED PACKAGE'S VENDORED NOTICES ARE COMPONENTS OF THEIR OWN, named and
+// versioned by their directory: the native library and models dictation
+// ships are in no module the walk above reads. A directory not named
+// <name>@<version> is refused rather than skipped.
+func TestVendoredNoticesBesideALinkedPackageAreCarried(t *testing.T) {
+	t.Parallel()
+	pkg := t.TempDir()
+	lib := filepath.Join(pkg, "third_party", "libfoo@v1.2.3")
+	if err := os.MkdirAll(lib, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lib, "ThirdPartyNotices.txt"), []byte("bar is MIT"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := vendoredBeside([]string{pkg, t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Path != "libfoo" || got[0].Version != "v1.2.3" {
+		t.Fatalf("vendored = %+v, want libfoo v1.2.3", got)
+	}
+	var out bytes.Buffer
+	toolchain := component{Path: "Go toolchain", Version: "go1", Dir: lib}
+	if err := render(&out, toolchain, got); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "libfoo v1.2.3") || !strings.Contains(out.String(), "bar is MIT") {
+		t.Errorf("the document lacks the vendored component:\n%s", out.String())
+	}
+	if err := os.MkdirAll(filepath.Join(pkg, "third_party", "unversioned"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vendoredBeside([]string{pkg}); err == nil {
+		t.Error("a vendored directory with no version was accepted")
 	}
 }

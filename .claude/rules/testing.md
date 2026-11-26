@@ -23,7 +23,7 @@ paths:
 - `gofmt -l` over `go run ./internal/sourcetree/gofiles`, and `golangci-lint run`'s stricter `gofmt` (with `simplify`) and `goimports`: a redundant composite-literal type passes the first and fails the second (`CLAUDE.md` says how to repair both)
 - `go mod tidy -diff` (`make tidy` applies it)
 - `scripts/check-signoff.sh` and its suite `scripts/check-signoff_test.sh`
-- `scripts/git-pin_test.sh` (`make git-test`), `scripts/chromium-pin_test.sh` (`make chromium-test`) and `scripts/node-pin_test.sh` (`make node-test`): the suites of the git, Chromium and floor Node recipes and their weekly pin checks, offline and building or fetching nothing; the first and the last need GnuPG and `xz`, the second `zip` and `unzip`
+- `scripts/git-pin_test.sh` (`make git-test`), `scripts/chromium-pin_test.sh` (`make chromium-test`), `scripts/node-pin_test.sh` (`make node-test`) and `scripts/sherpa-pin_test.sh` (`make speech-pin-test`): the recipes' and weekly pin checks' suites, offline, building nothing; git's and Node's need GnuPG and `xz`, Chromium's `zip` and `unzip`
 - `scripts/playwright-tree_test.sh` (`make playwright-tree-test`): the Playwright tree recipe's suite, against a stand-in registry and reading no network; it needs `node` and an npm of `MinNPMMajor` or newer
 - `go vet ./...`, the only vet (both test targets run `go test -vet=off`)
 - `golangci-lint run`, a prebuilt release: one built with a Go whose language version is older than `go.mod`'s refuses the module
@@ -41,7 +41,7 @@ In CI, `test plan` deals each half into shards by measured duration, every packa
 
 **`internal/skipgate`** reads both test targets' `go test -json`. Each `allowed.go` entry has a reason and a `When`: `Always` (also reported once it stops firing) or `Environment`.
 
-`node` runs four suites: the dashboard's (through `npm`), `internal/e2e`'s client replay (in `make test-solo`), `internal/sandbox/executor`'s probes of the three OpenCode plugins the engine embeds (notes, skill-load and tool environment), of its Kimi Code driver, Pi's extension and Cursor Agent's chat-store helper, and `internal/browser/boxhelper`'s, which runs the box helper's modules and installs the Playwright tree in each box with each Node's own npm, offline (both in `make test`). `npm` also installs the suite's tree (`make playwright-tree`). A make target that runs one refuses to start without `node`, or without `npm` where it needs it. A passing `make check` prints what it does not cover (`make snapshot`).
+`node` runs four suites: the dashboard's (through `npm`), `internal/e2e`'s client replay (in `make test-solo`), `internal/sandbox/executor`'s probes of the OpenCode plugins the engine embeds (notes, skill loads, tool environment, checkouts), its Kimi Code driver, Pi's extension and Cursor Agent's chat-store helper, and `internal/browser/boxhelper`'s, which runs the box helper's modules and installs the Playwright tree in each box with each Node's own npm, offline (both in `make test`). `npm` also installs the suite's tree (`make playwright-tree`). A make target that runs one refuses to start without `node`, or without `npm` where it needs it. A passing `make check` prints what it does not cover (`make snapshot`).
 
 `python3` runs the executor's Hermes plugin and carry-script cases (standard library, `make test`).
 

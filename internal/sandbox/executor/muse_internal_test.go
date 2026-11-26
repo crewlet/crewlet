@@ -571,9 +571,7 @@ func TestAMuseBoxsReleaseDecidesTheRun(t *testing.T) {
 			"/.local/share/muse/sessions/2026/11/22/" + id + "/session.jsonl": "{}\n",
 		})
 		bin := t.TempDir()
-		if err := os.WriteFile(filepath.Join(bin, "muse"), []byte("#!/bin/sh\necho '"+c.version+"'\n"), 0o700); err != nil {
-			t.Fatal(err)
-		}
+		writeHostProgram(t, filepath.Join(bin, "muse"), []byte("#!/bin/sh\necho '"+c.version+"'\n"), 0o700)
 		script := "PATH=" + bin + ":$PATH\n" + museRelease +
 			fmt.Sprintf(`if ! at %s; then echo refused; exit 0; fi`+"\n", floorArgs(museSupported())) +
 			museSessionGate(Session{ID: id, Continues: true, Fresh: "fresh-id"}, p, false) +

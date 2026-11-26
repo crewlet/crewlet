@@ -529,16 +529,19 @@ The prerequisites that legitimately vary by machine:
   a relative value is read against the repository (the nearest directory above
   the script holding a `go.mod`), not the working directory.
 
-  `node` also runs the **three OpenCode plugins** the engine embeds
-  (`internal/sandbox/executor/opencode_steer.js`, `opencode_skills.js` and
-  `opencode_toolenv.js`) and its **Kimi Code driver** (`kimi_driver.js`).
+  `node` also runs the **four OpenCode plugins** the engine embeds
+  (`internal/sandbox/executor/opencode_steer.js`, `opencode_skills.js`,
+  `opencode_toolenv.js` and `opencode_checkouts.js`) and its **Kimi Code
+  driver** (`kimi_driver.js`).
   `opencode_steer_test.go` drives the notes plugin, as the engine writes it into
   a real box, through `opencode_steer_probe.mjs` against a stand-in of the
   bridge's notes route and a real bridge's; `opencode_skills_test.go` drives the
   skill-load plugin through `opencode_skills_probe.mjs` against a stand-in of
   the bridge's skill route; `toolenv_test.go` drives the tool-environment plugin
-  through `opencode_toolenv_probe.mjs`; and `kimi_driver_internal_test.go` runs
-  the driver against a stand-in of Kimi Code's server; and
+  through `opencode_toolenv_probe.mjs`; `opencode_checkout_test.go` loads the
+  checkouts plugin in a stand-in OpenCode server; and
+  `kimi_driver_internal_test.go` runs the driver against a stand-in of Kimi
+  Code's server; and
   `pi_extension_internal_test.go` and `pi_contract_test.go` drive Pi's extension
   (`pi_extension.mjs`) through `pi_extension_probe.mjs`, a stand-in of pi's
   extension API, beside a stand-in of the one module of pi's it imports; and
@@ -1197,7 +1200,7 @@ the engine *does*, not merely that it parses.
 ## Dependency updates
 
 Dependabot watches every dependency manifest and opens a pull request for a
-newer release. The git, Chromium and floor Node pins are no manifest, so a
+newer release. The git, Chromium, floor Node and sherpa-onnx pins are no manifest, so a
 workflow of this repository's own watches them; the tool servers the docs and
 examples launch are held by a test (see below).
 
@@ -1212,6 +1215,7 @@ examples launch are held by a test (see below).
 | `scripts/git-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the gits the engine image builds and the suite runs |
 | `scripts/chromium-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the Chromiums the suite drives |
 | `scripts/node-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the oldest Node, with its npm, the box helper supports |
+| `internal/speech/native.go` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the sherpa-onnx release dictation's recognizer fetches |
 
 **Choosing a version goes the same direction: take the newest release, and pin
 it exactly.** Find the newest in the registry, not memory, and write a literal

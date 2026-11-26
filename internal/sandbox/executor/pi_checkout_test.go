@@ -366,7 +366,7 @@ func TestAPiRunPutsTheHomesInstructionFileBackHoweverItEnds(t *testing.T) {
 					if own {
 						want = "== AGENTS.md\nOWN\n\n\nfor `repo` with root " + work + "/repo\n\nREPO\n"
 					}
-					if got := boxFile(t, box, box.Home()+"/seen-agents"); got != want {
+					if got := startedRecord(t, box, box.Home()+"/seen-agents"); got != want {
 						t.Fatalf("pi started on the agent directory's\n%q\nwant\n%q", got, want)
 					}
 				}

@@ -20,6 +20,7 @@
 
 import { useState, useSyncExternalStore, type ReactNode, type Ref } from "react";
 import { Composer, type ComposerProps } from "@crewlethq/ui";
+import { useDictation } from "~/lib/dictation/source.ts";
 
 /** The text in the composer, held outside React's state so a keystroke renders only the composer. */
 export interface DraftBox {
@@ -73,6 +74,7 @@ export interface AskComposerProps extends Omit<
 /** The kit's composer, bound to a [DraftBox]: the only part of the drawer a keystroke renders. */
 export function AskComposer({ box, onSubmit, trailing, ref, ...rest }: AskComposerProps) {
   const text = useSyncExternalStore(box.subscribe, box.read, box.read);
+  const dictation = useDictation();
   return (
     <Composer
       {...rest}
@@ -81,6 +83,7 @@ export function AskComposer({ box, onSubmit, trailing, ref, ...rest }: AskCompos
       onChange={box.write}
       onSubmit={() => onSubmit(text)}
       trailing={trailing(text)}
+      dictation={dictation}
     />
   );
 }

@@ -1690,6 +1690,16 @@ retention:
                                   #   trims, so "who is responsible for this"
                                   #   has a real answer on every deployment
                                   #   that intends to keep working
+
+dictation:                # optional: voice dictation, on with no setup. See
+                          #   the Voice Dictation guide
+  enabled: true           # unset = true; false serves no dictation here
+  recognizer_dir: ""      # a prepared recognizer (`crewlet speech prepare
+                          #   -dir`), read only; empty uses the image's or
+                          #   downloads it once (about 230 MB)
+  max_concurrent: 0       # live dictations at once; 0 = 4 per available core
+  session_seconds: 300    # the longest dictation, by time and audio (1..3600)
+  idle_seconds: 15        # ends one that sends no audio (1..300)
 ```
 
 **The sign-in policy is the company's; `api.auth.limits` bounds it on this node.** Second factor, shortest password, session lifetime, idle limit and step-up window are Tier B (`sign_in`, see [Sign-in](#sign-in)), changed from Settings › Sign-in policy without a restart. An administrator reads them, this node's limits and what it enforces through the [`sign_in_policy`](../reference/api-endpoints.md#queries) question. Changing a limit is an edit to this file and a restart.

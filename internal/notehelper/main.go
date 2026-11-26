@@ -131,13 +131,10 @@
 //     loads), a key's value a string or a list's strings, split on `,`,
 //     trimmed, its other entries and another kind holding none. `qwen`
 //     (0.28.4, .qwen/rules): as `claude`, but no link followed at all, each
-//     file handed as Qwen Code loads it, its body without frontmatter or HTML
-//     comments, none where that is empty, and `paths` read as it reads it
-//     (qwenrule.go): a non-empty string, `**` included, or a list entry
-//     JavaScript's String makes non-empty names a path, a list holding a
-//     mapping none, and frontmatter its YAML parser refuses is read by its
-//     line reader. `grok` (1.0.92): files directly in dir, dot files too, s
-//     in any case, a file link followed, none scoped.
+//     file's body without frontmatter or HTML comments, none if empty, and
+//     `paths` read as Qwen Code reads them (qwenrule.go). `grok` (1.0.92):
+//     files directly in dir, dot files too, s in any case, a file link
+//     followed, none scoped.
 //     A tree past 8 directories deep, 1,024 entries or 32 MiB is left out
 //     whole, said: Copilot walks 9 levels and Claude Code 10 at least
 //     (measured), so a deeper tree is the gap. Names as {"names": [...],
@@ -158,7 +155,8 @@
 //     also follows a link out of the checkout, lists a loose root `.md` skill,
 //     and honours .gitignore, .ignore and .fdignore; the walk does none of
 //     these. As Grok 1.0.92 walks: "through" on below a skill, "every" into
-//     dot directories and node_modules, "depth" N no deeper (Grok: 6);
+//     dot directories and node_modules, "depth" N no deeper (6 for Grok and
+//     OpenCode);
 //     {"dir": <d>, "commands": true} each `*.md` directly in d, dot files
 //     too, as a skill named by its file less `.md`. Grok follows a link out
 //     too; the walks do not;
@@ -171,6 +169,7 @@
 //     left out, said, where a skill of `skills` or `homeSkills` (the home's
 //     other skill directories) lists under, or rewrites its own name to, its
 //     rewritten name (the latter inferred); "kimi", Kimi 2.7.2's (kimirepo.go);
+//     "opencode", OpenCode 2.3.2's (opencoderepo.go);
 //   - `skills`: the run's skills directory each skill is copied into whole,
 //     links followed while they stay in the checkout, within one firing's
 //     bound, as `<tag>:<skill>` (`skillSep` `-` joining them for Gemini CLI,
@@ -178,9 +177,10 @@
 //     name rewritten to that, never over one already there, built in
 //     state/staging (or, where the state is on another filesystem than the
 //     skills, beside the skills directory's real path), outside every skills
-//     directory, and moved into place by one rename; `copied`: the file each
-//     copy is listed in before it is written, for the runner's next launch to
-//     remove (checkoutcopy.go); `reserved`: the tags no checkout takes (the
+//     directory, and moved into place by one rename replacing nothing;
+//     `copied`: the file each copy is listed in before it is written, and off
+//     again where it never lands, for the runner's next launch to remove
+//     (checkoutcopy.go); `reserved`: the tags no checkout takes (the
 //     seats' namespace). A tag is the checkout's name lower-cased, a byte
 //     outside [a-z0-9] a hyphen, `-2`, `-3`... where taken.
 //
@@ -208,21 +208,22 @@
 // `<project_instructions path=...>`, on stdout for the run's extension to add
 // to the tool's result (Pi lists no skill it did not start with and loads
 // instructions only as it starts, measured on 1.6.0); copilot-nested the
-// listing alone, added the same way; kimi-nested as pi-nested, for Kimi's
-// `<!-- From: ... -->`, steered in by the run's driver. A nested hook only adds
-// to the launch: a run whose settings switch it off starts, its skip log
-// saying so once; only losing a contract hook (notes, skill loads) refuses.
-// Grok's stays registered, as Grok 1.0.92 skips it itself (measured). A
-// harness taking checkouts adds a nested adapter, never a second core; its
-// runner holds the home file and the copies (internal/sandbox/executor's
-// checkoutHome). What a nested firing leaves out (a skill whose name the
-// home's skills hold, one that leads out of its checkout, a tree past a bound)
-// is a line each on its stderr, in its answer, and in state/skipped under the
-// lock, which the runner's script prints to the run's error stream once the
-// harness has stopped, since no harness shows a hook's stderr;
-// checkout-launch's stderr is the run's own. The runner's restore marks the
-// state ended, after which a firing claims nothing. A killed run's log is
-// dropped unprinted by the next gate (its lines were in its firings' answers).
+// listing alone, added the same way; kimi-nested as pi-nested, for Kimi's `<!--
+// From: ... -->`, steered in by the run's driver; opencode-nested as pi-nested,
+// after OpenCode's `Instructions from: <path>`. A nested hook only adds to the
+// launch: a run whose settings switch it off starts, its skip log saying so
+// once; only losing a contract hook (notes, skill loads) refuses. Grok's stays
+// registered, as Grok 1.0.92 skips it itself (measured). A harness taking
+// checkouts adds a nested adapter, never a second core; its runner holds the
+// home file and the copies (internal/sandbox/executor's checkoutHome). What a
+// nested firing leaves out (a skill whose name the home's skills hold, one that
+// leads out of its checkout, a tree past a bound) is a line each on its stderr,
+// in its answer, and in state/skipped under the lock, which the runner's script
+// prints to the run's error stream once the harness has stopped, since no
+// harness shows a hook's stderr; checkout-launch's stderr is the run's own. The
+// runner's restore marks the state ended, after which a firing claims nothing.
+// A killed run's log is dropped unprinted by the next gate (its lines were in
+// its firings' answers).
 //
 // # A continued Codex session's standing instructions
 //

@@ -65,6 +65,9 @@ type Bootstrap struct {
 	// Artifacts is the plan quotas this node enforces on artifacts and their
 	// datastores. See [Artifacts].
 	Artifacts Artifacts `yaml:"artifacts,omitempty" json:"artifacts,omitzero"`
+
+	// Dictation is this node's voice dictation (dictation.go).
+	Dictation Dictation `yaml:"dictation,omitempty" json:"dictation,omitzero"`
 }
 
 // Retention is what the operator owns about this deployment's history.
@@ -304,6 +307,7 @@ func (b *Bootstrap) Validate() error {
 	p.wrap(b.Secrets.validate(field("secrets")))
 	p.wrap(b.Logging.validate(field("logging")))
 	p.wrap(b.Artifacts.validate(field("artifacts")))
+	p.wrap(b.Dictation.validate(field("dictation")))
 	p.wrap(b.validateObjectReservation())
 	p.wrap(b.validateTopology())
 	p.wrap(b.ValidateListeners())

@@ -13,8 +13,8 @@ import {
 } from "react";
 import {
   Button,
+  Composer,
   Disclosure,
-  Input,
   SegmentedControl,
   Select,
   Stack,
@@ -26,8 +26,9 @@ import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useDraftState } from "~/app/assistant/draft.ts";
 import type { DiffLine } from "~/components/DiffView.tsx";
 import { CATEGORY_CHOICES, SEVERITY_CHOICES, categoryWord, severityWord } from "~/lib/code.ts";
-import { WriteButton, pressable } from "~/components/WriteButton.tsx";
+import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
+import { useDictationBox } from "~/lib/dictation/source.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { plural } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -458,6 +459,7 @@ function LineComment({
 }) {
   const write = useAct("code_comment_on_change");
   const [body, setBody] = useDraftState("");
+  const { dictation, refusal: dictating } = useDictationBox();
   const lines = linesOf(pick);
   useDraftBox({
     path: "line_comment",
@@ -466,7 +468,7 @@ function LineComment({
     rank: 10,
     value: body,
     set: setBody,
-    refuses: () => null,
+    refuses: () => dictating,
   });
   const blocked = body.trim() ? undefined : "Write the comment first.";
   const send = async () => {
@@ -494,34 +496,39 @@ function LineComment({
       }}
     >
       <p className="muted">A comment on {lines}, posted now as a thread of its own.</p>
-      <Textarea
-        aria-label="Comment"
+      <Composer
+        label="Comment"
         placeholder="Leave a comment. Markdown works."
         autoFocus
         value={body}
         rows={3}
-        onChange={(event) => setBody(event.target.value)}
+        onChange={setBody}
+        dictation={dictation}
         onKeyDown={(event) => {
           if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
             event.preventDefault();
             void send();
           }
         }}
+        actions={
+          <>
+            <Button size="small" variant="ghost" onClick={onDone} disabled={write.busy}>
+              Cancel
+            </Button>
+            <WriteButton
+              write={write}
+              size="small"
+              variant="primary"
+              showRefusal={false}
+              blocked={blocked}
+              onPress={() => void send()}
+            >
+              Comment
+            </WriteButton>
+          </>
+        }
       />
-      <div className="row gap-2">
-        <WriteButton
-          write={write}
-          size="small"
-          variant="primary"
-          blocked={blocked}
-          onPress={() => void send()}
-        >
-          Comment
-        </WriteButton>
-        <Button size="small" variant="ghost" onClick={onDone} disabled={write.busy}>
-          Cancel
-        </Button>
-      </div>
+      <RefusalNote write={write} />
     </form>
   );
 }
@@ -546,6 +553,8 @@ function FindingComposer({
   const [body, setBody] = useDraftState(initial?.body ?? "");
   const [suggesting, setSuggesting] = useState(initial?.suggestion !== undefined);
   const [suggestion, setSuggestion] = useDraftState(initial?.suggestion ?? "");
+  const titleDictation = useDictationBox();
+  const bodyDictation = useDictationBox();
   const lines = linesOf(pick);
   // THE FINDING'S BOXES AS FIELDS of the change page's one draft, so the
   // person's assistant reads and can fill what is being written here.
@@ -556,7 +565,8 @@ function FindingComposer({
     rank: 10,
     value: title,
     set: setTitle,
-    refuses: (next) => (next.includes("\n") ? "A finding's title is one line." : null),
+    refuses: (next) =>
+      titleDictation.refusal ?? (next.includes("\n") ? "A finding's title is one line." : null),
   });
   useDraftBox({
     path: "finding.body",
@@ -565,7 +575,7 @@ function FindingComposer({
     rank: 11,
     value: body,
     set: setBody,
-    refuses: () => null,
+    refuses: () => bodyDictation.refusal,
   });
   useDraftBox(
     suggesting
@@ -607,18 +617,21 @@ function FindingComposer({
           ariaLabel="About"
         />
       </div>
-      <Input
-        aria-label="Title"
+      <Composer
+        singleLine
+        label="Title"
         placeholder="What is wrong, in a line"
         value={title}
-        onChange={(event) => setTitle(event.target.value)}
+        onChange={setTitle}
+        dictation={titleDictation.dictation}
       />
-      <Textarea
-        aria-label="Body"
+      <Composer
+        label="Body"
         placeholder="Why, and what to do (optional)"
         value={body}
         rows={3}
-        onChange={(event) => setBody(event.target.value)}
+        onChange={setBody}
+        dictation={bodyDictation.dictation}
       />
       {pick.side === "new" && (
         <label className="row gap-1">

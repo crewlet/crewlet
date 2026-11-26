@@ -134,11 +134,13 @@ func openCodeRuleList(rules []openCodePolicyRule) []map[string]string {
 
 // openCodePluginIDs is each of the run's plugins' id, by its directory's
 // name, read off the plugin's own source (opencode_steer.js,
-// opencode_skills.js, opencode_toolenv.js) so the two cannot disagree.
+// opencode_skills.js, opencode_toolenv.js, opencode_checkouts.js) so the two
+// cannot disagree.
 var openCodePluginIDs = map[string]string{
-	path.Base(Paths{}.OpenCodeSteerPlugin()):   openCodePluginID(openCodeSteerPlugin),
-	path.Base(Paths{}.OpenCodeSkillsPlugin()):  openCodePluginID(openCodeSkillsPlugin),
-	path.Base(Paths{}.OpenCodeToolEnvPlugin()): openCodePluginID(openCodeToolEnvPlugin),
+	path.Base(Paths{}.OpenCodeSteerPlugin()):     openCodePluginID(openCodeSteerPlugin),
+	path.Base(Paths{}.OpenCodeSkillsPlugin()):    openCodePluginID(openCodeSkillsPlugin),
+	path.Base(Paths{}.OpenCodeToolEnvPlugin()):   openCodePluginID(openCodeToolEnvPlugin),
+	path.Base(Paths{}.OpenCodeCheckoutsPlugin()): openCodePluginID(openCodeCheckoutsPlugin),
 }
 
 // openCodePluginIDLine is a plugin source's own `id: "<id>",` line.
@@ -332,6 +334,36 @@ func openCodeRulesDeny(rules []openCodePolicyRule, action, target string) (openC
 	return openCodePolicyRule{}, false
 }
 
+// openCodeDenial says that r, a policy denying something of the run's, stops
+// what.
+func openCodeDenial(r openCodePolicyRule, what string) string {
+	return fmt.Sprintf("%s's policies deny %s %q (effect deny), which stops %s", r.doc, r.Action, r.Resource, what)
+}
+
+// openCodePluginStopped is what in docs keeps the run's plugin p from
+// loading: a policy denying plugin.use on it, or a document's removal of it by
+// a pattern naming its id ([openCodeIDMatches]), which the run's own entries
+// after it would undo (2.3.2 keeps the removal as written in config.get).
+func openCodePluginStopped(docs []openCodePolicyDoc, p string) []string {
+	var said []string
+	if r, denied := openCodePolicyDenies(docs, "plugin.use", p); denied {
+		said = append(said, openCodeDenial(r, "the run's plugin "+p))
+	}
+	for _, d := range docs {
+		for _, raw := range d.Info.Plugins {
+			var entry string
+			if json.Unmarshal(raw, &entry) != nil {
+				continue
+			}
+			if removed, ok := strings.CutPrefix(entry, "-"); ok && openCodeIDMatches(removed, openCodePluginIDs[path.Base(p)]) {
+				said = append(said, fmt.Sprintf("%s's plugins remove %q, the run's plugin %s, which the run never "+
+					"loads back", d.Path, entry, p))
+			}
+		}
+	}
+	return said
+}
+
 // openCodePolicy refuses req's run where docs ([openCodeDocs]) would deny
 // one of the run's plugins, its seat skills (skill.use) or its own MCP server
 // (mcp.use), or, under the run's own rules (top and agent), its agent the
@@ -343,30 +375,11 @@ func openCodePolicy(docs []openCodePolicyDoc, req sandbox.RunRequest, plugins []
 	var said []string
 	deny := func(action, target, what string) {
 		if r, denied := openCodePolicyDenies(docs, action, target); denied {
-			said = append(said, fmt.Sprintf("%s's policies deny %s %q (effect deny), which stops %s", r.doc,
-				r.Action, r.Resource, what))
+			said = append(said, openCodeDenial(r, what))
 		}
 	}
 	for _, p := range plugins {
-		deny("plugin.use", p, "the run's plugin "+p)
-	}
-	// A DOCUMENT'S REMOVAL OF ONE OF THE RUN'S PLUGINS by a pattern naming its
-	// id ([openCodeIDMatches]), which the run's own entries after it would
-	// undo (2.3.2 keeps the removal as written in config.get).
-	for _, d := range docs {
-		for _, raw := range d.Info.Plugins {
-			var entry string
-			if json.Unmarshal(raw, &entry) != nil {
-				continue
-			}
-			removed, ok := strings.CutPrefix(entry, "-")
-			for _, p := range plugins {
-				if ok && openCodeIDMatches(removed, openCodePluginIDs[path.Base(p)]) {
-					said = append(said, fmt.Sprintf("%s's plugins remove %q, the run's plugin %s, which the run never "+
-						"loads back", d.Path, entry, p))
-				}
-			}
-		}
+		said = append(said, openCodePluginStopped(docs, p)...)
 	}
 	for _, s := range req.Skills {
 		deny("skill.use", s.Listed(), "the seat skill "+s.Listed())
