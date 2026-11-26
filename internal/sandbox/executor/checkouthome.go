@@ -225,9 +225,8 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 		"instructions": spec.Instructions, "limit": spec.Limit, "firingLimit": spec.FiringLimit,
 		"skillDirs": spec.SkillDirs, "skills": h.skills, "copied": h.copied,
 		"reserved":         []string{sandbox.SkillNamespace},
-		"nestedSkillsOnly": spec.NestedSkillsOnly, "launchSkillsLoaded": spec.LaunchSkillsLoaded,
-		"importInstructions": spec.ImportInstructions,
-		"skillSep":           spec.SkillSep, "roots": h.roots}
+		"nestedSkillsOnly": spec.NestedSkillsOnly, "importInstructions": spec.ImportInstructions,
+		"skillSep": spec.SkillSep, "roots": h.roots}
 	if spec.ListedAs != "" {
 		config["listedAs"] = spec.ListedAs
 	}
@@ -236,6 +235,9 @@ func (h checkoutHome) launchConfig(spec checkoutSpec, repos []string) []byte {
 	}
 	if spec.Gated {
 		config["gated"] = true
+	}
+	if spec.LaunchSkillsLoaded {
+		config["launchSkillsLoaded"] = true
 	}
 	if spec.Budget != nil {
 		config["budget"] = spec.Budget

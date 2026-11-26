@@ -32,7 +32,7 @@ func (r repoRun) cursorLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	var errs bytes.Buffer
-	if err := checkoutLaunch(config, r.work, &errs); err != nil || errs.Len() > 0 {
+	if err := checkoutLaunch(config, r.work, strings.NewReader(""), &errs); err != nil || errs.Len() > 0 {
 		t.Fatalf("the launch failed: %v\n%s", err, errs.String())
 	}
 	if err := os.WriteFile(filepath.Join(r.state, cursorConversation), []byte(cursorRunConversation+"\n"), 0o600); err != nil {
