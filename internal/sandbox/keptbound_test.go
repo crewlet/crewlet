@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
@@ -168,4 +169,45 @@ func TestACaptureAtTheKeptBoundIsHeldToItsSeatsBudget(t *testing.T) {
 			})
 		})
 	}
+}
+
+// AT THE DEFAULT BUDGET, A CAPTURE AT THE KEPT BOUND MEETS THE SEAT'S REFUSAL:
+// the default max_bytes_per_seat is below what the kept bound admits, so a
+// session just past it, taken at the kept bound by a fake take with no scrub,
+// is refused naming the setting, nothing uploaded.
+//
+// Mutation: raise the default to 94 MiB, or skip the seat's budget for a
+// kept-bound capture, and it goes red.
+func TestACaptureAtTheKeptBoundMeetsTheDefaultSeatBudget(t *testing.T) {
+	t.Parallel()
+	if config.DefaultSessionBytesPerSeat >= executorkeep.KeptSealedMaxBytes {
+		t.Fatalf("the default max_bytes_per_seat, %d bytes, holds a capture at the kept bound (%d sealed): a "+
+			"kept-bound capture can no longer meet the seat's refusal at the default",
+			config.DefaultSessionBytesPerSeat, executorkeep.KeptSealedMaxBytes)
+	}
+	inBubble(t, func(t *testing.T) {
+		rig, writes, keep := keepingRig(t)
+		// JUST PAST THE DEFAULT AS ITS DOC STATES IT, 64 MiB: a default
+		// raised past the session lets it land.
+		body := make([]byte, 64<<20+64<<10)
+		keep.mu.Lock()
+		keep.policy.MediaApart, keep.policy.KeptBound = true, true
+		keep.policy.SeatBudget = config.DefaultSessionBytesPerSeat
+		keep.mu.Unlock()
+		rig.runner.mu.Lock()
+		rig.runner.Session.Body, rig.runner.Session.Archive.Size = body, int64(len(body))
+		rig.runner.mu.Unlock()
+		spooled, taken := finalTake(t, rig, rig.launchKept(t, "t1"), rig.runner)
+		if spooled == nil || !spooled.stamp.KeptBound {
+			t.Fatalf("the take came to %+v, want it spooled at the kept bound", taken)
+		}
+		kept := rig.coordinator.keepCapture(t.Context(), spooled)
+		stamp := rig.get("t1").Capture
+		if kept == nil || !strings.Contains(kept.NotKept, "max_bytes_per_seat") || len(keep.uploads()) != 0 ||
+			len(writes.captured()) != 0 || stamp == nil || stamp.State != CaptureRefused ||
+			!strings.Contains(stamp.Reason, "max_bytes_per_seat") {
+			t.Errorf("a %d-byte capture at the default budget came to %+v, stamped %+v, want it refused naming "+
+				"max_bytes_per_seat, nothing uploaded", len(body), kept, stamp)
+		}
+	})
 }
