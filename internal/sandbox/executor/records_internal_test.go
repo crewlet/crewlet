@@ -501,8 +501,8 @@ func TestAResultsSpendModelByModelCostsItsReaderAModelAtATime(t *testing.T) {
 		"one model over and over": {line: over, reference: head + model(0) + tail,
 			says: fmt.Sprintf("one model %d times, and a line naming it once", times)},
 	} {
-		fewObjects, fewBytes := allocationsOf(stream(tc.reference))
-		manyObjects, manyBytes := allocationsOf(stream(tc.line))
+		fewObjects, fewBytes := allocationsOf(t, stream(tc.reference))
+		manyObjects, manyBytes := allocationsOf(t, stream(tc.line))
 		if manyObjects > fewObjects+listSlack {
 			t.Errorf("%s: a line naming %s cost %d allocations and %d", name, tc.says, manyObjects, fewObjects)
 		}

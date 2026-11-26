@@ -17,6 +17,9 @@ name: pins
 #     beside the machine's own node, an official release by version and the
 #     SHA-256 of its tarball on every released platform. No release carries
 #     it, so a bump is the suite's alone.
+#   - sherpa-onnx: internal/speech pins the release's shared-library archive
+#     per platform for dictation; its leg names the newer release and what a
+#     bump changes, the digests being the bump's to compute and review.
 # No Dependabot ecosystem watches a source tarball, a Chrome for Testing build
 # or a Node release, so without this each pin would be watched by nothing,
 # which looks exactly like a pin with nothing to update.
@@ -109,6 +112,11 @@ jobs:
             title: node pin behind upstream
             current: The floor in scripts/node-pin.env is the newest patch of its major again
             keys: true
+          - what: sherpa-onnx
+            check: scripts/sherpa-pin-check.sh
+            pins: internal/speech/native.go
+            title: sherpa-onnx pin behind upstream
+            current: The sherpa-onnx internal/speech pins is the latest release again
     # The git leg reads kernel.org's listing and, for each pin that is behind,
     # one tarball of about 8 MB and its signature: measured from a development
     # machine, 0.6 s with every pin current and 2.8 s with one release to

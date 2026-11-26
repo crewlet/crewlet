@@ -3,9 +3,13 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"unsafe"
+
+	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
 // qwenMembers is a Qwen Code archive's chat file holding lines.
@@ -185,11 +189,11 @@ func TestAPersonsReadOfAQwenSessionIsItsWholeLineRead(t *testing.T) {
 // A COLLECTION'S READ OF A QWEN CODE SESSION ON THE WALK IS ITS WHOLE-LINE
 // READ'S: over every recorded chat file, every person's variant and the lines
 // that pick a note's receipt apart (compactions keeping and summarizing it,
-// members of another kind, a note in another part, keys in another case,
-// null and torn lines),
-// between a note and its reply and torn after them, read whole and in pieces
-// of seventeen bytes, from the start and past a line, it holds the notes the
-// whole-line read holds.
+// members of another kind, a note in another part, keys in another case, null
+// and torn lines), between a note and its reply and torn after them, read
+// whole and in pieces of seventeen bytes, from the start and past a line, it
+// holds the notes the whole-line read holds, in pieces with the newest
+// summary read beside them as its whole-line read reads it.
 //
 // Mutation: keep a note a compaction's prefix covers, take a note's text from
 // a part past the first, or keep pending notes past a line of another kind:
@@ -251,10 +255,16 @@ func TestACollectionsReadOfAQwenSessionIsItsWholeLineRead(t *testing.T) {
 			if !slices.Equal(got, want) || (err != nil) != (wantErr != nil) {
 				t.Errorf("%s from %d: held %v (%v), want %v (%v)", name, from, got, err, want, wantErr)
 			}
+			var summary summaryRead
 			got, err = qwenNotesHeld(t.Context(), &exportPieces{r: strings.NewReader(record), n: 17}, takes, from,
-				maxLineBytes, nil)
+				maxLineBytes, &summary)
 			if !slices.Equal(got, want) || (err != nil) != (wantErr != nil) {
 				t.Errorf("%s from %d in pieces: held %v (%v), want %v (%v)", name, from, got, err, want, wantErr)
+			}
+			if read, whole := summary.reading(), qwenNotesSummaryWholeOf(record); err == nil &&
+				!reflect.DeepEqual(read, whole) {
+				t.Errorf("%s from %d in pieces: the summary reads %s, want %s", name, from,
+					geminiSummaryString(read), geminiSummaryString(whole))
 			}
 		}
 	}
@@ -340,9 +350,9 @@ func TestAQwenCompactionsEntryEndsGrowNoFasterThanItsJoin(t *testing.T) {
 	c.reset(TranscriptValueMaxBytes)
 	ends := map[int]int{}
 	for i := range 200_000 {
-		c.role, c.entry, c.entryPast = "user", c.entry[:0], false
+		c.roleWord, c.entry, c.entryPast = "user", c.entry[:0], false
 		if i%3 == 2 {
-			c.role = "model"
+			c.roleWord = "model"
 		}
 		if len(c.held) > 0 {
 			c.entry = append(c.entry, "\n\n"...)
@@ -362,5 +372,33 @@ func TestAQwenCompactionsEntryEndsGrowNoFasterThanItsJoin(t *testing.T) {
 	c.reset(TranscriptValueMaxBytes)
 	if cap(c.ends) > lineScratchKeep || cap(c.held) > lineScratchKeep {
 		t.Errorf("the next payload keeps %d and %d bytes of the last one's buffers", cap(c.ends), cap(c.held))
+	}
+}
+
+// A QWEN CODE COMPACTION'S FIRST TEXTS ARE HELD WHERE THEY WERE READ: the
+// first user entry's texts, read into the entry, become the join with no copy,
+// so a summary, a prefix's first user entry, is held once; a later entry's
+// are joined after them.
+//
+// Mutation: copy the first entry into the join: this goes red.
+func TestAQwenCompactionsFirstTextsAreHeldWhereTheyWereRead(t *testing.T) {
+	t.Parallel()
+	var c qwenCompaction
+	c.reset(TranscriptValueMaxBytes)
+	c.history(jsonscan.ArrayStart)
+	read := func(text string) *byte {
+		c.entryStart(jsonscan.ObjectStart)
+		c.roleWord = "user"
+		c.entry = append(c.entry, text...)
+		at := unsafe.SliceData(c.entry)
+		c.entryEnd()
+		return at
+	}
+	if first := read("the summary"); unsafe.SliceData(c.held) != first {
+		t.Error("the first entry's texts were copied into the join, not held where they were read")
+	}
+	read("the tail")
+	if end := c.summaryEnd(1); string(c.held[:end]) != "the summary" || string(c.held) != "the summarythe tail" {
+		t.Errorf("the join holds %q, the first entry ending at %d; want both entries, the first its own", c.held, end)
 	}
 }

@@ -1099,6 +1099,11 @@ const (
 	// knows clears any. A condition of the node is answered as one instead
 	// (unavailable, in a person's words under its own hint).
 	CodeAssistantUnavailable Code = "assistant_unavailable"
+	// CodeDictationUnavailable is dictation this node cannot serve: switched
+	// off, a build with no recognizer, or a model or recognizer that would
+	// not start. 503 before /ws/dictation's upgrade, its `reason` the
+	// recognizer's (internal/speech.Reason); the socket's `error` frame after.
+	CodeDictationUnavailable Code = "dictation_unavailable"
 	// CodeAssistantModelNotReady is a question refused before its first round
 	// because every model in the assistant's chain is known unusable now: its
 	// detail `reason` is the error code a turn would have failed with
@@ -1673,6 +1678,7 @@ var codes = map[Code]string{
 		"Retry-After names, then ask again.",
 	CodeAssistantUnavailable:   "Ask Crewlet can't answer here, and waiting won't change that.",
 	CodeAssistantModelNotReady: "Ask Crewlet's model cannot answer right now.",
+	CodeDictationUnavailable:   "Dictation isn't available here right now.",
 	CodeAssistantFileRefused: "This file cannot be attached. Attach a PNG, JPEG, WebP " +
 		"or GIF image.",
 	CodeAssistantFileLimit: "This conversation holds as many attachments as it can. " +

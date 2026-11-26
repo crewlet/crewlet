@@ -36,7 +36,7 @@ import {
   InboxGroup,
   InboxList,
   InboxRow,
-  Input,
+  Composer as KitComposer,
   ListDetail,
   MessageAction,
   MessageActions,
@@ -100,6 +100,7 @@ import { StartNote } from "./StartNote.tsx";
 import { ThreadPane } from "./Thread.tsx";
 import { ViewHead } from "./ViewHead.tsx";
 import { ago } from "~/lib/ago.ts";
+import { useDictation } from "~/lib/dictation/source.ts";
 
 /** How many rows a view's page holds: the reader's views are short lists. */
 const VIEW_PAGE = 20;
@@ -1119,6 +1120,7 @@ export function NewMessageView() {
   const [to, setTo] = useState<string[]>(() => [...initial]);
   const [q, setQ] = useState("");
   const [body, setBody] = useState("");
+  const dictation = useDictation();
   const [report, setReport] = useState<ReturnType<typeof reportFor> | null>(null);
   const field = useRef<HTMLInputElement>(null);
 
@@ -1268,31 +1270,28 @@ export function NewMessageView() {
         <StartNote report={report} />
       </div>
       <footer className="chat-view-foot">
-        <div className="chat-new-compose">
-          <Input
-            aria-label="Message"
-            width="full"
-            placeholder={to.length ? `Message ${names.join(", ")}` : "Choose who it is to first"}
-            value={body}
-            disabled={to.length === 0}
-            onChange={(event) => setBody(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void send();
+        <KitComposer
+          singleLine
+          label="Message"
+          placeholder={`Message ${names.join(", ")}`}
+          disabledReason={to.length === 0 ? "Choose who it is to first" : undefined}
+          value={body}
+          onChange={setBody}
+          onSubmit={() => void send()}
+          canSubmit
+          dictation={dictation}
+          trailing={
+            <IconButton
+              label="Send"
+              variant="primary"
+              icon={<SendGlyph size="sm" />}
+              disabledReason={
+                blocked ?? (frame.outbox.post.can ? undefined : frame.outbox.post.reason)
               }
-            }}
-          />
-          <IconButton
-            label="Send"
-            variant="primary"
-            icon={<SendGlyph size="sm" />}
-            disabledReason={
-              blocked ?? (frame.outbox.post.can ? undefined : frame.outbox.post.reason)
-            }
-            onClick={() => void send()}
-          />
-        </div>
+              onClick={() => void send()}
+            />
+          }
+        />
       </footer>
     </section>
   );

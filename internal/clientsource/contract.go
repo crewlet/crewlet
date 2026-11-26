@@ -386,6 +386,10 @@ var contract = []Entry{
 		"internal/api/stream.TestTheDashboardClosesOnTheEnginesCloseCodes"},
 	{"CLOSE_FORBIDDEN", ReadScalar, "internal/api/stream.TestTheDashboardClosesOnTheEnginesCloseCodes"},
 
+	// dictation.ts
+	{"DictationReason", ReadUnion, "internal/api/dictation.TestTheDashboardReadsTheDictationSocket"},
+	{"DictationDoneReason", ReadUnion, "internal/api/dictation.TestTheDashboardReadsTheDictationSocket"},
+
 	// retention.ts
 	{"RetentionTrimFloorState", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
 	{"RetentionGenerationState", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},

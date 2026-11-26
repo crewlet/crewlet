@@ -18,7 +18,8 @@
  *  - be listed in [NOT_A_DRAFT] with the reason it holds no draft the
  *    assistant could be asked about: a modal form (the drawer is inert while
  *    a modal holds the page, so nobody can ask), a signed-out page (there is
- *    no assistant), or a control that saves each change as it is made.
+ *    no assistant), a control that saves each change as it is made, or one
+ *    message box on a page that declares no draft, posted and cleared.
  *
  * Every listing is held to the tree too: a module listed that no longer has
  * a mark, that declares its own draft, or whose screen no longer declares
@@ -107,6 +108,15 @@ const EDITING_ELEMENTS = new Set([
   "ScopeList",
 ]);
 
+/**
+ * uilet's editing elements known by the name they are imported as, so the
+ * dashboard's own components of the same name are not taken for them.
+ */
+const KIT_EDITING = new Set([
+  // A message box: its field, footer and dictation.
+  "Composer",
+]);
+
 /** The call that declares a draft. */
 const DECLARES = "useAssistantDraft";
 
@@ -177,6 +187,10 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
   "routes/worklet/item/Body.tsx": {
     screen: ["routes/worklet/item/edit.tsx"],
     why: "a task's title and description editors, fields of the one draft its page's edits declare",
+  },
+  "routes/worklet/item/remark.tsx": {
+    screen: ["routes/worklet/item/edit.tsx"],
+    why: "one of the reader's comments being rewritten, a field of the one draft its page's edits declare",
   },
   "routes/gitlet/change/CommentCard.tsx": {
     screen: ["routes/gitlet/change/ChangePage.tsx"],
@@ -254,6 +268,14 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/chatlet/Dialogs.tsx":
     "modal: a new room, a room's topic or description, people to add, in their dialogs",
   "routes/inbox/NoticeActions.tsx": "modal: a snooze's time",
+  "routes/inbox/InboxPane.tsx":
+    "one message: an answer to an executor's question, sent and cleared; the Inbox declares no draft",
+  "routes/chatlet/Views.tsx":
+    "one message: a new conversation's first message, sent and cleared; its page declares no draft",
+  "routes/artifacts/comments/CommentsPanel.tsx":
+    "one message: a comment on a whole version, posted and cleared; an open artifact declares no draft",
+  "routes/artifacts/comments/DraftComposer.tsx":
+    "one message: a comment on a pinned part, posted and cleared; an open artifact declares no draft",
   "routes/org/builder/dialogParts.tsx":
     "modal: the fields of the builder's side sheet and dialogs, the sheet's or the dialog's own until its Apply, Add, Move or Delete records them",
   "routes/settings/AccessDialogs.tsx":
@@ -326,8 +348,17 @@ interface Reading {
 
 function read(module: Module): Reading {
   const marks = new Set<string>();
+  const kit = new Map<string, string>();
   let declares = false;
   walk(parse(module.text, module.lang), (node: Node) => {
+    if (node.type === "ImportDeclaration" && (node.source as Node).value === "@crewlethq/ui") {
+      for (const spec of node.specifiers as Node[]) {
+        if (spec.type !== "ImportSpecifier") continue;
+        const imported = spec.imported as Node;
+        const name = String(imported.type === "Identifier" ? imported.name : imported.value);
+        if (KIT_EDITING.has(name)) kit.set(String((spec.local as Node).name), name);
+      }
+    }
     if (node.type === "CallExpression") {
       const callee = node.callee as Node;
       const name = callee.type === "Identifier" ? String(callee.name) : null;
@@ -338,6 +369,7 @@ function read(module: Module): Reading {
       const name = node.name as Node;
       const tag = name.type === "JSXIdentifier" ? String(name.name) : "";
       if (EDITING_ELEMENTS.has(tag)) marks.add(`<${tag}>`);
+      else if (kit.has(tag)) marks.add(`<${kit.get(tag)}>`);
     }
   });
   return { marks: [...marks].sort(), declares };
@@ -430,7 +462,7 @@ describe("the draft gate", () => {
       const r = readings.get(path);
       expect(r?.marks.length ?? 0, `${path} is listed and has no editing mark`).toBeGreaterThan(0);
       expect(r?.declares, `${path} declares a draft; take it off the list`).toBe(false);
-      expect(why).toMatch(/^(modal|signed out|saved per change|not an editor): /);
+      expect(why).toMatch(/^(modal|signed out|saved per change|not an editor|one message): /);
     }
   });
 });

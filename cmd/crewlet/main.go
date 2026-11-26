@@ -54,6 +54,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/speech"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -240,6 +241,11 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 		// The literal is mcprelay.Command; a case is read as the command list
 		// ([TestTheRelayIsDispatchedUnderItsOwnName] holds the two together).
 		return mcprelay.Run(rest, os.Stdin, stdout, stderr)
+	case "speech":
+		return runSpeech(rest, stdout, stderr)
+	case "speech-worker":
+		// The literal is speech.WorkerCommand, held together as mcp-relay's.
+		return speech.RunWorker(rest, os.Stdin, stdout, stderr)
 	case "gitlab", "github", "jira", "slack", "confluence", "mattermost":
 		return runIntegration(inv, cmd, rest, stdout, stderr)
 	default:
@@ -304,6 +310,11 @@ Usage:
                               on their own scripts or against a candidate model
   crewlet mcp-relay SOCKET    Not for people: the MCP server a seat's harness
                               starts, relaying its stdio to the engine's tools
+  crewlet speech prepare -dir DIR
+                              Download and verify the dictation recognizer into
+                              DIR, for dictation.recognizer_dir or an image
+  crewlet speech-worker       Not for people: the dictation recognizer the engine
+                              runs as a child process
   crewlet gitlab <cmd>        Register a GitLab group's webhook and its signing secret
   crewlet github <cmd>        Report a GitHub deployment's seat accounts and hook it
   crewlet jira <cmd>          Report a Jira instance's seat accounts and projects
@@ -1909,6 +1920,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// else reached from here creates a context.
 	opts := api.Options{
 		Bootstrap: boot,
+		// DICTATION'S RECOGNIZER, which loads nothing until the first
+		// dictation (internal/speech); nil where dictation is switched off.
+		Dictation: dictationRecognizer(boot),
 		// The company's half of a Tier A principal: the directory's binding
 		// for a token's login, through the same seat view a signed-in
 		// person's seat uses, so a token bound to a removed seat is refused

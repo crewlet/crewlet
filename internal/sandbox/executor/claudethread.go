@@ -2406,6 +2406,9 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 	defer func() { _ = body.Close() }()
 	var large passBudget
 	defer large.release()
+	if summary != nil {
+		summary.claim(newSummaryClaim(ctx, &large))
+	}
 	var (
 		readings []threadReading
 		count    resumedReading

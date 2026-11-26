@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button, Card, Checkbox, Composer, Spinner } from "@crewlethq/ui";
 import { openComment } from "~/lib/artifacts/api.ts";
 import { useComments, useCommentWrite } from "./state.tsx";
+import { useDictation } from "~/lib/dictation/source.ts";
 
 /** Where the picture of the part is: being drawn, shown, or none could be drawn. */
 export type PictureState = "drawing" | "shown" | "none";
@@ -21,6 +22,7 @@ export function DraftComposer({ beside = false }: { beside?: boolean }) {
     setTyped(next);
   };
   const [withCrop, setWithCrop] = useState(true);
+  const dictation = useDictation();
   if (!c?.draft) return null;
   const d = c.draft;
   const picture = pictureState(d.crop);
@@ -86,6 +88,7 @@ export function DraftComposer({ beside = false }: { beside?: boolean }) {
         placeholder="Say what should change"
         // THE ACTIONS KEEP ONE ROW at a draft's width; the field's description still names the keys.
         sendHint={false}
+        dictation={dictation}
         onSubmit={() => void post()}
         actions={
           <>

@@ -164,7 +164,7 @@ func TestAJSONRewriteHoldsItsScannerItsBufferAndAFrameADepth(t *testing.T) {
 	figure := termFigure(t, "rewrites", 0, 0) / 2
 	depth := jsonscan.MaxDepth/2 - 1
 	doc := strings.Repeat(`{"a":[`, depth) + `1` + strings.Repeat(`]}`, depth)
-	_, scanned := allocationsOf(func() {
+	_, scanned := allocationsOf(t, func() {
 		sc := jsonscan.New(strings.NewReader(doc))
 		for {
 			if _, err := sc.Next(); err != nil {
@@ -203,7 +203,7 @@ func TestAnArchivesReadersAndWritersHoldItsTerm(t *testing.T) {
 	figure := termFigure(t, "archive", 0, 0)
 	body := []byte(randomBase64(1173, 4<<20))
 	archive := tarOf(t, map[string]string{"projects/p/s.jsonl": string(body)})
-	_, allocated := allocationsOf(func() {
+	_, allocated := allocationsOf(t, func() {
 		if err := eachMember(bytes.NewReader(archive), testBounds, func(_ *tar.Header, r io.Reader) error {
 			_, err := io.Copy(io.Discard, r)
 			return err

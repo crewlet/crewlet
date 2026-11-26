@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/speech"
 )
 
 // errNoSeat is the refusal a question about a SEAT's trail makes of a caller
@@ -117,6 +118,13 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		// WHETHER A FRAMED KIND'S PAGE CAN BE OPENED HERE, so a create page says
 		// so before it spends a publish, rather than the frame refusing after.
 		"artifact_pages": s.ArtifactPages,
+		// WHETHER A MICROPHONE IN A COMPOSER CAN DICTATE HERE, and why not
+		// (internal/speech's Reason), so a screen draws it disabled or uses
+		// the browser's own recognition. No path, model or secret.
+		"dictation": speech.Availability{Reason: speech.ReasonDisabled},
+	}
+	if s.Dictation != nil {
+		out["dictation"] = s.Dictation()
 	}
 	if principal.Can(iam.GrantChatlet) {
 		out["chat_vendors"] = s.chatVendors()

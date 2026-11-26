@@ -51,6 +51,7 @@ import { accessToAsk } from "~/lib/authorityRemedy.ts";
 import { BrandAgentNote } from "~/components/brand.tsx";
 import { titleProblem } from "./create.ts";
 import { WhoBuildsIt, type WhoBuildsItState } from "./WhoBuildsIt.tsx";
+import { useDictation } from "~/lib/dictation/source.ts";
 
 /** The panel's value in the address. */
 const ASK = "ask";
@@ -214,6 +215,7 @@ export function AskAgentPanel({
   busy = false,
 }: AskAgentPanelProps) {
   const agent = chosenAgent(who);
+  const dictation = useDictation();
   return (
     <AgentHandoffPanel
       icon={<BotGlyph size="sm" />}
@@ -227,6 +229,7 @@ export function AskAgentPanel({
       briefHelper={briefHelper}
       briefMaxLength={briefMaxLength}
       briefRef={briefRef}
+      briefDictation={dictation}
       starters={starters}
       onStarter={(key) => {
         const starter = starters?.find((s) => s.key === key);

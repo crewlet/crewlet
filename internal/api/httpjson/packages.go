@@ -16,7 +16,7 @@ import "sync"
 var goPackages = sync.OnceValue(func() map[string]bool {
 	return map[string]bool{
 		"a2a": true, "a2atest": true, "accessdomain": true, "activityline": true, "accessmigrate": true, "accessreview": true, "adr": true, "agentaccess": true, "alarmwake": true,
-		"advisor": true, "advisordomain": true, "duty": true, "modelpass": true, "api": true, "atlas": true, "atlasdomain": true, "derive": true, "gather": true, "codescan": true, "collecttest": true, "deployfiles": true,
+		"advisor": true, "advisordomain": true, "duty": true, "modelpass": true, "api": true, "atlas": true, "atlasdomain": true, "derive": true, "dictation": true, "gather": true, "codescan": true, "collecttest": true, "deployfiles": true,
 		"argval": true, "toolargs": true, "toolschema": true, "toolschematest": true, "artifactdata": true, "artifactdataapi": true, "artifacts": true,
 		"artifactrender": true, "artifactsapi": true, "artifactsdomain": true, "artifactserve": true,
 		"artifactspike": true, "artifactupload": true,
@@ -49,7 +49,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"lint": true, "linktest": true, "manifest": true, "mcprelay": true, "mediatype": true,
 		"llmapi": true, "mattermost": true, "metaads": true, "mcp": true, "mcpapi": true, "mcpbridge": true, "mcpreview": true, "memobj": true, "nodememory": true, "nodebudget": true, "modelcatalog": true, "modelnote": true,
 		"memory": true, "memread": true, "memsync": true, "metrics": true, "migrate": true, "mirror": true,
-		"named": true, "natsobj": true, "node": true, "notify": true, "oauth": true, "objstore": true,
+		"named": true, "nativelib": true, "natsobj": true, "node": true, "notify": true, "oauth": true, "objstore": true,
 		"objstoretest": true, "observe": true, "operator": true,
 		"objectives": true, "query": true,
 		"opkey": true, "org": true, "orgchart": true, "origin": true, "paced": true, "pagepolicy": true,
@@ -65,7 +65,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"seataccess": true, "seataccesstest": true, "seatname": true, "secrets": true, "secretsapi": true, "session": true, "setup": true,
 		"setupapi": true, "setuptest": true, "shellword": true, "signedask": true, "sigv4": true, "skillname": true, "skills": true,
 		"skillsync": true, "slack": true, "ssh": true, "sshdtest": true, "slideformat": true, "solo": true, "sockcount": true,
-		"sourcetree": true, "spendguard": true, "spendguardtest": true, "sqlledger": true,
+		"sourcetree": true, "speech": true, "spendguard": true, "spendguardtest": true, "sqlledger": true,
 		"statelog": true, "statelogtest": true, "static": true, "steer": true,
 		"steersourcetest": true, "store": true, "storetest": true, "stream": true, "structured": true,
 		"subagent": true, "svgsafe": true, "testbinary": true, "textcut": true, "textindex": true, "tokens": true,

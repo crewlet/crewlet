@@ -265,9 +265,10 @@
 // its meter one pass — holds no token while what it holds stays within its
 // BASE, and holds ONE slot of a pool of its own ([CollectionLargeReadsAtOnce],
 // [passBudget]) while it holds more. A walk's triggers: a line whose facts
-// charge the meter past [collectionBaseLineCharge] ([threadReader.Gate]), and
-// a reading keeping more than [collectionBaseRecords] records ([recordKeeper],
-// the chain, counted by every item it files, its call ids among them).
+// charge the meter past [collectionBaseLineCharge] ([threadReader.Gate]), a
+// reading keeping more than [collectionBaseRecords] records ([recordKeeper],
+// the chain, counted by every item it files, its call ids among them), and a
+// read's summary words past [summaryBaseBytes] ([summaryClaim]).
 //
 // THE LINE'S TRIGGER IS ITS FACTS' CHARGE ([lineMeter]), the measure the layer
 // bounds a line's hold by, never its length: what no reader reads of a line is
@@ -289,14 +290,14 @@
 //
 // HELD PER PIECE, KEPT ONLY WHERE A READING KEEPS RECORDS: a pass whose
 // readings keep records (the collection's chain, which may keep a line's
-// facts; [chatFileLines]'s Gemini CLI ids) keeps the slot from its first hold
-// to its end, so one keeping more than [collectionBaseRecords] records holds
-// it to its end whatever its lines; every other reader, the take's scrub and
-// meter, a collection's count alone, holds it for its piece past the base and
-// drops it once done (a walk's line, at the next), the slot going back
-// with the pass's last hold. Kept to a take's end, the one slot would be held
-// for its whole scrub and spool, minutes, while its box's stream and the takes
-// behind it waited. The scrub and the meter share one budget: with
+// facts; [chatFileLines]'s Gemini CLI ids; a summary's words) keeps the slot
+// from its first hold to its end, so one keeping more than
+// [collectionBaseRecords] records holds it to its end whatever its lines;
+// every other reader, the take's scrub and meter, a collection's count alone,
+// holds it for its piece past the base and drops it once done (a walk's line,
+// at the next), the slot going back with the pass's last hold: kept to a
+// take's end, it would be held minutes while the takes behind waited.
+// The scrub and the meter share one budget: with
 // two, the scrub's write would wait on the meter and the meter on the slot the
 // scrub holds. A wait its reader's context ends is [errLargeWait], a failure
 // of the read, never a reading of it. A take's Close ends both readers' waits.
@@ -323,7 +324,7 @@
 // [chargeStringsBytes] are the two a test measures.
 //
 // THE BASE: a pass at its base holds about 5.3 MiB at its worst, by no token
-// ([baseTierReadBytes]; a pass at both bases past it does not build): the chain
+// ([baseTierPassBytes]; a pass at both bases past it does not build): the chain
 // at 2^13 of its items (its records, retraction prefixes, kept uuids and call
 // ids), 2.7 MiB; a line's reader, 1.7 MiB, and the strings a charge covers with
 // their decode, 808 KiB, both at their worst; the facts of a line charging the
@@ -341,23 +342,23 @@
 // longest lines (67,871 lines in 9,434 real threads, the longest 2,002,134
 // bytes; each of the 28 threads holding a line past 256 KiB had a large file
 // read or written into it, which its facts do not keep). MEASURED on a
-// dedicated two-core slot (BenchmarkACollectionPassAtItsBase, read off the GC
-// trace as BenchmarkAThreadChainAtItsBounds says): a main thread whose chain
-// files 2^13 items, one a user's line growing every scratch buffer to its most
-// beside results under ids of 32,769 bytes whose facts charge the base exactly,
-// read by the chain, the count and the next request's estimate in one walk,
-// in 0.13 to 0.17 s, holding 4 MiB at most at GOGC=10 and its heap peaking at
-// 5 to 8 MiB at the default, within the arithmetic, and taking no slot.
+// dedicated two-core slot (BenchmarkACollectionPassAtItsBase): a main thread
+// whose chain files 2^13 items, one a user's line growing every scratch buffer
+// to its most beside results under ids of 32,769 bytes whose facts charge the
+// base exactly, read by the chain, the count and the next request's estimate
+// in one walk, in 0.13 to 0.17 s, holding 4 MiB at most at GOGC=10 and its
+// heap peaking at 5 to 8 MiB at the default, within the arithmetic, and
+// taking no slot.
 //
 // THE BASE TIER'S COUNT: no token of this pool holds it, so it is every read in
 // flight at once: the node's own, at most its turns (internal/sandbox's
 // collections), up to the box host's boxReadsHeld (64) reads for its peers,
-// each about 5.3 MiB at its worst,
-// 341 MiB, and one per take. A take at its base holds at most 11.6 MiB, its
-// scrub's 8.2 (BenchmarkATakeAtItsBase) and its meter's 3.3
-// (BenchmarkAMeterAtItsBase), measured apart, each with its own heap, so the
-// sum over-counts: the meter's worst line is past the scrub's base, but the
-// scrub may read on at its base while the meter is still on it. So every take
+// each 5.6 MiB, its pass and its summary's share, 320 KiB
+// ([baseTierReadBytes]), their passes 341 MiB, and one per take. A take at its
+// base holds at most 11.6 MiB, its scrub's 8.2 (BenchmarkATakeAtItsBase) and
+// its meter's 3.3 (BenchmarkAMeterAtItsBase), measured apart, so the sum
+// over-counts: the meter's worst line is past the scrub's base, but the scrub
+// may read on at its base while the meter is still on it. So every take
 // holds one of [SessionTakesAtOnce] (29), a pool of its own sized so the takes
 // at their base hold at most those 341 MiB.
 //
