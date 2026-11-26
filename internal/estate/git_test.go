@@ -124,9 +124,10 @@ func (g *fakeGit) writes() []askedWrite {
 }
 
 // servedAnAttempt reports whether deadline, what a git half was served until,
-// is gitlet.ReplyMargin before the end of an attempt of whole begun at begun:
-// exactly, as a synctest bubble ([inBubble]) has it, where the request's trip
-// takes no time.
+// is gitlet.ReplyMargin before the end of an attempt of whole begun at begun,
+// exactly: a request carries its wait, counted from its arrival on the node's
+// clock, so only in a synctest bubble ([inBubble]), where its trip takes no
+// time and the wait no rounding, is the instant fixed.
 func servedAnAttempt(deadline, begun time.Time, whole time.Duration) bool {
 	return !deadline.IsZero() && deadline.Equal(begun.Add(whole-gitlet.ReplyMargin))
 }
@@ -1425,9 +1426,7 @@ func testAGitletNodeAtItsShareIsHeardInsideItsAskersAttempt(t *testing.T) {
 // Mutation: run the in-process read under its caller's context — its half
 // sees no deadline, red.
 //
-// In a synctest bubble ([inBubble]): the request carries its wait, counted from
-// its arrival on the node's clock, so on the machine's clock the instant it is
-// served until moves with the trip and the wait's rounding to a millisecond.
+// In a synctest bubble ([inBubble]), for [servedAnAttempt]'s reason.
 func TestAGitReadInProcessIsHeldToTheAttemptARemoteOneIs(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -2063,9 +2062,7 @@ func TestAnEngineWritesAttemptFollowsItsKind(t *testing.T) {
 // Mutation: give it the caller's deadline (budgetFor) — the write under a
 // five-minute caller is served nearly five minutes, red.
 //
-// In a synctest bubble ([inBubble]): the request carries its wait, counted from
-// its arrival on the node's clock, so on the machine's clock the instant it is
-// served until moves with the trip and the wait's rounding to a millisecond.
+// In a synctest bubble ([inBubble]), for [servedAnAttempt]'s reason.
 func TestAGitWriteIsHeldToItsOwnAttempt(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {

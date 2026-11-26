@@ -168,13 +168,12 @@ func TestAnOlderAskersRequestIsBoundByItsDeadlineOnTheNodesClock(t *testing.T) {
 	})
 }
 
-// A DATA NODE THREE SECONDS AHEAD IS HEARD FOR ITS ASKER'S WHOLE WAIT, in a
-// fleet of two data nodes, the one asked first standing three seconds ahead of
-// the asker. A read needing its whole read attempt there, the reply's margin
-// short of it, is answered from it, never cut short; a caller with two seconds
-// left is still refused there by admission, which judges the asker's deadline
-// on the node's clock with no allowance (#1406's piece 3c), and served by the
-// other node.
+// A DATA NODE THREE SECONDS AHEAD IS HEARD FOR ITS ASKER'S WHOLE WAIT, the one
+// asked first of two. A read needing its whole read attempt there, less the
+// reply's margin, is answered from it, never cut short; a caller with two
+// seconds left is still refused there by admission, which judges the asker's
+// deadline on the node's clock with no allowance (#1406's piece 3c), and
+// served by the other node.
 //
 // Mutation: bound the work by the asker's deadline on the node's clock, and
 // the long read is cut three seconds early and asked of the other node, red.

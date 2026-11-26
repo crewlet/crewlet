@@ -2070,17 +2070,12 @@ func TestARepositorysFloorIsItsOwnAndBounded(t *testing.T) {
 // CommitBudget and the ReplyMargin are left, answering busy once they are not),
 // so a routed proposal reaches the code half bounded by its asker's attempt:
 // the router's write attempt for a caller with no deadline (the host's
-// receiver), the caller's own where it has one. Served with none, it would be
-// judged by its queue wait alone and could be answered up to the floor wait and the trip after its asker had handed the
-// push id to the runner-up.
+// receiver), the caller's own where it has one. Served with none, it could be
+// answered after its asker had handed the push id to the runner-up.
 //
-// The router's write attempt is set halfway between the shortest a router
-// takes and production's, so a router that waited production's constant or its
-// read attempt for a write is caught.
-//
-// In a synctest bubble ([inBubble]): the request carries its wait, counted from
-// its arrival on the node's clock, so on the machine's clock the instant it is
-// served until moves with the trip and the wait's rounding to a millisecond.
+// The router's write attempt is halfway between the shortest a router takes
+// and production's, so a router that waited production's or its read attempt
+// for a write is caught. In a synctest bubble, for [servedAnAttempt]'s reason.
 func TestAProposalCarriesItsAttemptToTheCommitter(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
