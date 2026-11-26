@@ -1,7 +1,6 @@
 package webhooks_test
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,7 +8,6 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 )
@@ -137,26 +135,66 @@ func TestEachProductIsHeldToItsOwnSite(t *testing.T) {
 	}
 }
 
-func TestAProductWithNoCloudIDHoldsItsDeliveries(t *testing.T) {
+func TestTheRouteHoldsExactlyWhatTheIntegrationsAnswerHolds(t *testing.T) {
 	t.Parallel()
-	// No site, nothing to bind a token to: the same class as a missing
-	// secret. Mutation: let an empty site list pass and this goes red.
-	e := newEdge(t)
-	e.secrets.ForgeSites = map[string]string{"jira": ownSite}
-
-	res := postForge(t, e, forgePageEvent, validForgeClaims())
-	if res.Code != http.StatusServiceUnavailable {
-		t.Fatalf("got %d, want 503", res.Code)
+	// One rule decides both: a 503 for a product the answer shows held, and
+	// for no other. A product with no Cloud site that is not held (Data
+	// Center, or no block) is refused. Mutation: answer 503 whenever a
+	// product has no site, or decide it from anything but ForgeHeld, and a
+	// case goes red.
+	events := map[string][]byte{
+		"jira": forgeJiraEvent, "confluence": forgePageEvent,
+		"": []byte(`{"eventType":"avi:forge:other"}`),
 	}
-	var answer map[string]any
-	if err := json.Unmarshal(res.Body.Bytes(), &answer); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if answer["error"] != string(httpjson.CodeNoWebhookSecret) {
-		t.Errorf("error = %v, want %q", answer["error"], httpjson.CodeNoWebhookSecret)
-	}
-	if e.published.count() != 0 {
-		t.Error("a delivery with no site to bind it to was published")
+	for _, tc := range []struct {
+		name string
+		in   config.Integrations
+	}{
+		{"Data Center blocks", config.Integrations{
+			Jira:       &config.Jira{URL: "https://jira.example.com"},
+			Confluence: &config.Confluence{URL: "https://wiki.example.com"},
+		}},
+		{"no blocks", config.Integrations{}},
+		{"a url-named Cloud site", config.Integrations{
+			Jira: &config.Jira{URL: "https://acme.atlassian.net"},
+		}},
+		{"a block with no address yet", config.Integrations{
+			Confluence: &config.Confluence{},
+		}},
+		{"cloud ids", config.Integrations{
+			Jira: &config.Jira{CloudID: ownSite}, Confluence: &config.Confluence{CloudID: ownSite},
+		}},
+		{"one of each", config.Integrations{
+			Jira: &config.Jira{URL: "https://acme.atlassian.net"}, Confluence: &config.Confluence{CloudID: ownSite},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.in.ForgeAppID = "app-123"
+			material := webhooks.SecretsOf(&config.Company{Integrations: tc.in}, nil, literal)
+			held := map[string]bool{}
+			for _, hold := range material.ForgeHeld {
+				held[hold.Product] = true
+			}
+			if (len(held) > 0) != (material.IngressHolds()["forge"] != "") {
+				t.Fatalf("ForgeHeld %v and IngressHolds %v disagree", material.ForgeHeld, material.IngressHolds())
+			}
+			for product, body := range events {
+				e := newEdge(t)
+				*e.secrets = material
+				_, site := material.ForgeSites[product]
+				want := http.StatusUnauthorized
+				switch {
+				case product == "" && len(material.ForgeSites) > 0, site:
+					want = http.StatusOK
+				case held[product], product == "" && len(held) > 0:
+					want = http.StatusServiceUnavailable
+				}
+				if got := postForge(t, e, body, validForgeClaims()).Code; got != want {
+					t.Errorf("event of %q: got %d, want %d", product, got, want)
+				}
+			}
+		})
 	}
 }
 

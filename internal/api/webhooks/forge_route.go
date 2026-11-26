@@ -76,11 +76,12 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 		noSecret(w, "forge")
 		return
 	}
-	// And so is a product with no cloud id: there is nothing to bind the
-	// token to. 503 for the same class, but nothing waits: Forge retries a
-	// refused event up to four times, a minute apart, then drops it, so only
-	// an id recorded within those minutes saves it. The integrations answer
-	// names the field ([Secrets.IngressHolds]).
+	// And so is a product HELD for want of a cloud id ([Secrets.IngressHolds],
+	// the same rule the integrations answer reads). 503 for that class, but
+	// nothing waits: Forge retries a refused event up to four times, a minute
+	// apart, then drops it. A product with no Cloud site that is not held (a
+	// Data Center block, or none) is refused: no Forge event for it can come
+	// from the company's own site.
 	source := forgeSource(event)
 	sites := material.forgeSites(source)
 	if len(sites) == 0 {
@@ -95,7 +96,10 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 		if len(reasons) == 0 {
-			reasons = append(reasons, "no Cloud site configured for "+strings.Join(products, " or "))
+			log.Warn("forge_fit_invalid", "error",
+				"no Cloud site configured for "+strings.Join(products, " or "))
+			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidSignature)
+			return
 		}
 		log.Error("forge_no_cloud_site", "event", event, "product", source,
 			"detail", strings.Join(reasons, "; "))
@@ -115,7 +119,8 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		// The REASON reaches the log, never the caller: it distinguishes
 		// an expired token from one addressed at another app, which is
-		// what an operator needs and what an attacker would use to probe.
+		// what an operator needs and what an unauthenticated caller could
+		// use to probe.
 		log.Warn("forge_fit_invalid", "error", err)
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidSignature)
 		return
