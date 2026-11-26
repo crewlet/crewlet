@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // forgeEvent names the integration a relayed Cloud event belongs to and the
@@ -88,7 +89,7 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 	if len(ids) == 0 && len(lookups) == 0 {
 		if len(held) == 0 {
 			log.Warn("forge_fit_invalid", "error",
-				"no Cloud site configured for "+strings.Join(products, " or "))
+				"no Cloud site configured for "+words.Or(products))
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidSignature)
 			return
 		}
