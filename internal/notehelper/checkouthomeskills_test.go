@@ -42,14 +42,15 @@ func plantPlace(t *testing.T, path, kind string) {
 var placeKinds = []string{"a directory without SKILL.md", "a skill under another name", "a plain file",
 	"a link leading nowhere"}
 
-// A COPY'S TAKEN PLACE IS NEVER LISTED AS THE RUN'S: the run's end removes
-// every name its copied list holds, so an entry already at the copy's place,
-// of any kind and under any listing rule, refuses the copy before it is
-// listed, said as the home's skills holding the name, and the entry is as it
-// was.
+// A COPY'S TAKEN PLACE IS NEVER LISTED AS THE RUN'S, NOT FOR A MOMENT: the
+// run's end and the next gate remove every name the copied list holds, so an
+// entry already at the copy's place, of any kind and under any listing rule,
+// refuses the copy before it is listed (a firing killed after listing it would
+// leave the entry to the next gate), said as the home's skills holding the
+// name, and the entry is as it was.
 //
 // Mutation: list the copy before checking its place (drop copyPlanned's
-// check), and the name is listed.
+// check), and the list is written.
 func TestACopysTakenPlaceIsNeverListedAsTheRuns(t *testing.T) {
 	t.Parallel()
 	for _, listedAs := range []string{"", listedGrok, listedKimi, listedOpenCode} {
@@ -73,8 +74,9 @@ func TestACopysTakenPlaceIsNeverListedAsTheRuns(t *testing.T) {
 			if err == nil || err.Error() != "the home's skills hold late:s already" {
 				t.Errorf("listedAs %q, %s: the copy over it returned %v", listedAs, kind, err)
 			}
-			if copied, _ := os.ReadFile(spec.Copied); strings.Contains(string(copied), "late:s") {
-				t.Errorf("listedAs %q, %s: the person's entry was listed for removal: %q", listedAs, kind, copied)
+			if _, err := os.Lstat(spec.Copied); !os.IsNotExist(err) {
+				copied, _ := os.ReadFile(spec.Copied)
+				t.Errorf("listedAs %q, %s: the copy over the person's entry was listed (%q, %v)", listedAs, kind, copied, err)
 			}
 			if after, err := os.Lstat(place); err != nil || after.Mode() != before.Mode() {
 				t.Errorf("listedAs %q, %s: the person's entry is now %v (%v)", listedAs, kind, after, err)
@@ -181,6 +183,10 @@ func TestACopyThatNeverLandsIsTakenOffTheList(t *testing.T) {
 // parallel: it stands in for renameCopy.
 func TestACopyNeverReplacesWhatCameToItsPlace(t *testing.T) {
 	r, plan, spec := plannedCopy(t)
+	occupied := t.TempDir()
+	if err := renameCopy(t.TempDir(), occupied); !errors.Is(err, os.ErrExist) {
+		t.Errorf("the copy's move onto an empty directory returned %v, want EEXIST", err)
+	}
 	place := filepath.Join(r.skills, "late:s")
 	renameCopy = func(from, to string) error {
 		if err := os.MkdirAll(place, 0o700); err != nil {
@@ -196,9 +202,6 @@ func TestACopyNeverReplacesWhatCameToItsPlace(t *testing.T) {
 	unlisted(t, spec, "a rename onto an entry")
 	if entries, err := os.ReadDir(place); err != nil || len(entries) != 0 {
 		t.Errorf("the directory made at the copy's place now holds %v (%v)", entries, err)
-	}
-	if err := renameNoReplace(t.TempDir(), place); !errors.Is(err, os.ErrExist) {
-		t.Errorf("a no-replace rename onto an entry returned %v, want EEXIST", err)
 	}
 }
 
