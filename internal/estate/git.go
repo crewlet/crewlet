@@ -544,14 +544,15 @@ func (r *Router) runLocalGit(ctx context.Context, spec *opSpec, x exchange, g Gi
 // copy verdict, floor or lag gate ([GitCopy]). A node without Gitlet answers
 // `no_backend`, never silence (read as a node gone); a half not ready answers
 // `behind` with its reason ([reply.Unready]), `behind_config` for the node's
-// posture. Served until its answer is due ([gitlet.AnswerBy]), every wait
+// posture. Served until its answer is due ([gitlet.AnswerBy]): due, its asker's
+// wait counted from arrival on this node's clock ([server.answer]), every wait
 // taking that context (statelog.WithReplyMargin binds only statelog's), so a
 // busy node's `behind` arrives while its asker listens, never read as gone. A
 // write past [gitWritesHeld] is answered `behind` at its share at once, before
 // decoding and without demoting the node, never left to the broker client's
 // buffer, which drops a request past its bytes.
-func (s server) answerGit(ctx context.Context, spec *opSpec, req request, out reply) []byte {
-	ctx, cancel := gitlet.AnswerBy(ctx, req.Deadline)
+func (s server) answerGit(ctx context.Context, spec *opSpec, req request, due time.Time, out reply) []byte {
+	ctx, cancel := gitlet.AnswerBy(ctx, due)
 	defer cancel()
 	var g GitServer
 	ok := false

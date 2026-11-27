@@ -124,20 +124,12 @@ func (g *fakeGit) writes() []askedWrite {
 }
 
 // servedAnAttempt reports whether deadline, what a git half was served until,
-// is gitlet.ReplyMargin before the end of an attempt of whole that the router
-// began between before and after.
-//
-// It reads the deadline the request carried, fixed where the router opens its
-// attempt, never the time left when the half began: that also counts the
-// walk's work, the broker's hop and the envelope's checks, unbounded on a
-// loaded runner under -race. Round(0) strips monotonic readings, since a
-// peer's deadline crossed the wire as wall clock alone.
-func servedAnAttempt(deadline, before, after time.Time, whole time.Duration) bool {
-	if deadline.IsZero() {
-		return false
-	}
-	end := deadline.Round(0).Add(gitlet.ReplyMargin)
-	return !end.Before(before.Round(0).Add(whole)) && !end.After(after.Round(0).Add(whole))
+// is gitlet.ReplyMargin before the end of an attempt of whole begun at begun,
+// exactly: a request carries its wait, counted from its arrival on the node's
+// clock, so only in a synctest bubble ([inBubble]), where its trip takes no
+// time and the wait no rounding, is the instant fixed.
+func servedAnAttempt(deadline, begun time.Time, whole time.Duration) bool {
+	return !deadline.IsZero() && deadline.Equal(begun.Add(whole-gitlet.ReplyMargin))
 }
 
 func (g *fakeGit) Read(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
@@ -1433,28 +1425,31 @@ func testAGitletNodeAtItsShareIsHeardInsideItsAskersAttempt(t *testing.T) {
 //
 // Mutation: run the in-process read under its caller's context — its half
 // sees no deadline, red.
+//
+// In a synctest bubble ([inBubble]), for [servedAnAttempt]'s reason.
 func TestAGitReadInProcessIsHeldToTheAttemptARemoteOneIs(t *testing.T) {
 	t.Parallel()
-	f := newFleet(t)
-	halves := f.gitletNodes(t, []string{"git-a"})
-	half := halves["git-a"]
-	attempt := Production().GitReadAttempt
-	for name, r := range map[string]*Router{
-		"asked of the Gitlet node by another": f.client,
-		"asked in process by the Gitlet node": f.gitRouter(t, "git-a", gitHalf{node: half}),
-	} {
-		before := time.Now()
-		if _, err := r.Code().GitRead(t.Context(), treeOf(repoID(9))); err != nil {
-			t.Fatalf("%s: %v", name, err)
+	inBubble(t, func(t *testing.T) {
+		f := newFleet(t)
+		halves := f.gitletNodes(t, []string{"git-a"})
+		half := halves["git-a"]
+		attempt := Production().GitReadAttempt
+		for name, r := range map[string]*Router{
+			"asked of the Gitlet node by another": f.client,
+			"asked in process by the Gitlet node": f.gitRouter(t, "git-a", gitHalf{node: half}),
+		} {
+			begun := time.Now()
+			if _, err := r.Code().GitRead(t.Context(), treeOf(repoID(9))); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			deadlines := half.readDeadlines()
+			if got := deadlines[len(deadlines)-1]; !servedAnAttempt(got, begun, attempt) {
+				t.Errorf("%s: the git half was served until %v after the read began (the zero time for no "+
+					"deadline: %v), want a git read's attempt of %v less the reply's margin", name,
+					got.Sub(begun), got.IsZero(), attempt)
+			}
 		}
-		after := time.Now()
-		deadlines := half.readDeadlines()
-		if got := deadlines[len(deadlines)-1]; !servedAnAttempt(got, before, after, attempt) {
-			t.Errorf("%s: the git half was served until %v after the read returned (the zero time for no "+
-				"deadline: %v), want a git read's attempt of %v, begun during the read, less the reply's "+
-				"margin", name, got.Round(0).Sub(after.Round(0)), got.IsZero(), attempt)
-		}
-	}
+	})
 }
 
 // A NODE BEHIND THE COMPANY'S CONFIGURATION DECIDES NO GRANT (M3-O8's hard
@@ -2066,52 +2061,54 @@ func TestAnEngineWritesAttemptFollowsItsKind(t *testing.T) {
 //
 // Mutation: give it the caller's deadline (budgetFor) — the write under a
 // five-minute caller is served nearly five minutes, red.
+//
+// In a synctest bubble ([inBubble]), for [servedAnAttempt]'s reason.
 func TestAGitWriteIsHeldToItsOwnAttempt(t *testing.T) {
 	t.Parallel()
-	f := newFleet(t)
-	half := f.gitletNodes(t, []string{"git-a"})["git-a"]
-	attempt := Production().GitWriteAttempt
-	for name, r := range map[string]*Router{
-		"asked of the Gitlet node by another": f.client,
-		"asked in process by the Gitlet node": f.gitRouter(t, "git-a", gitHalf{node: half}),
-	} {
-		for _, tc := range []struct {
-			// caller is the caller's deadline (zero: none); callers is
-			// whether it, not the attempt, bounds what the half is served.
-			caller  time.Duration
-			callers bool
-		}{
-			{0, false},
-			{5 * time.Minute, false},
-			{20 * time.Second, true},
+	inBubble(t, func(t *testing.T) {
+		f := newFleet(t)
+		half := f.gitletNodes(t, []string{"git-a"})["git-a"]
+		attempt := Production().GitWriteAttempt
+		for name, r := range map[string]*Router{
+			"asked of the Gitlet node by another": f.client,
+			"asked in process by the Gitlet node": f.gitRouter(t, "git-a", gitHalf{node: half}),
 		} {
-			ctx, cancel := t.Context(), context.CancelFunc(func() {})
-			if tc.caller > 0 {
-				ctx, cancel = context.WithTimeout(ctx, tc.caller)
-			}
-			before := time.Now()
-			_, err := r.Code().GitWrite(ctx, writeOf(repoID(9)))
-			after := time.Now()
-			callerDeadline := deadlineOf(ctx)
-			cancel()
-			if err != nil {
-				t.Fatalf("%s, its caller's deadline %v: %v", name, tc.caller, err)
-			}
-			writes := half.writes()
-			got := writes[len(writes)-1].deadline
-			if tc.callers {
-				if want := callerDeadline.Add(-gitlet.ReplyMargin); !got.Equal(want) {
-					t.Errorf("%s, its caller's deadline %v: the git half was served until %v, want its "+
-						"caller's deadline less the reply's margin, %v", name, tc.caller, got, want)
+			for _, tc := range []struct {
+				// caller is the caller's deadline (zero: none); callers is
+				// whether it, not the attempt, bounds what the half is served.
+				caller  time.Duration
+				callers bool
+			}{
+				{0, false},
+				{5 * time.Minute, false},
+				{20 * time.Second, true},
+			} {
+				ctx, cancel := t.Context(), context.CancelFunc(func() {})
+				if tc.caller > 0 {
+					ctx, cancel = context.WithTimeout(ctx, tc.caller)
 				}
-				continue
-			}
-			if !servedAnAttempt(got, before, after, attempt) {
-				t.Errorf("%s, its caller's deadline %v: the git half was served until %v after the write "+
-					"returned (the zero time for no deadline: %v), want the router's git write attempt of %v, "+
-					"begun during the write, less the reply's margin", name, tc.caller,
-					got.Round(0).Sub(after.Round(0)), got.IsZero(), attempt)
+				begun := time.Now()
+				_, err := r.Code().GitWrite(ctx, writeOf(repoID(9)))
+				callerDeadline := deadlineOf(ctx)
+				cancel()
+				if err != nil {
+					t.Fatalf("%s, its caller's deadline %v: %v", name, tc.caller, err)
+				}
+				writes := half.writes()
+				got := writes[len(writes)-1].deadline
+				if tc.callers {
+					if want := callerDeadline.Add(-gitlet.ReplyMargin); !got.Equal(want) {
+						t.Errorf("%s, its caller's deadline %v: the git half was served until %v, want its "+
+							"caller's deadline less the reply's margin, %v", name, tc.caller, got, want)
+					}
+					continue
+				}
+				if !servedAnAttempt(got, begun, attempt) {
+					t.Errorf("%s, its caller's deadline %v: the git half was served until %v after the write "+
+						"began (the zero time for no deadline: %v), want the router's git write attempt of %v "+
+						"less the reply's margin", name, tc.caller, got.Sub(begun), got.IsZero(), attempt)
+				}
 			}
 		}
-	}
+	})
 }

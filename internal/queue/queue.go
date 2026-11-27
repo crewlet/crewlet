@@ -122,14 +122,17 @@
 //
 // An answerer answers concurrently, up to the bound its registration states
 // through ONE AnswerGate both backends share, one gate per registration so a
-// request waits only behind its own registration's answers. The real
-// backend's buffer is bounded (the NATS client's 64 MiB and 500 000 messages a
-// subscription, past which a request is dropped as a slow consumer and its
-// asker hears nothing), so a registration whose requests are large and whose
-// answers wait must bound its answers below what that buffer holds at once. A
-// withdrawal waits for what is in flight: run inside the subscription
-// callback, every request waited behind the one before while the twin
-// answered in parallel and certified it clean.
+// request waits only behind its own registration's answers. A REQUEST'S
+// ARRIVAL IS STAMPED BEFORE ANY WAIT FOR A SLOT (Arrived), and the request
+// waits in the gate's queue, never in the transport's buffer: a delivery
+// parked for a slot left every later request there, where nothing counted its
+// wait, and an answerer bounds its work by its asker's wait from arrival. The
+// queue is bounded as the NATS client's buffer is (500 000 requests and 64 MiB
+// a subscription, its defaults), past which a request is dropped, logged
+// scatter_request_dropped, and its asker hears nothing, so a registration
+// whose requests are large and whose answers wait must bound its answers below
+// what that holds at once. A withdrawal answers nothing it held waiting and
+// waits for what is in flight.
 //
 // # Passes and the ack-pending budget
 //
@@ -1016,10 +1019,11 @@ type EventQueue interface {
 	// Serve makes this process one of subject's answerers. EVERY SERVER SEES
 	// EVERY REQUEST, unlike Subscribe: a scatter divides work by what the
 	// request NAMES. An answerer's error answers NOTHING (AnswerFunc). ANSWERS
-	// RUN CONCURRENTLY, up to answers at once; one beyond waits for a slot as far
-	// as the backend buffers (NATS drops past 64 MiB/500 000 pending, heard as no
-	// answer; the twin holds all), so LARGE, slow-held requests bound their own
-	// backlog and answer past it AT ONCE with "not now" (internal/estate). The
+	// RUN CONCURRENTLY, up to answers at once; one beyond waits for a slot, its
+	// arrival stamped first (Arrived), up to 500 000 requests and 64 MiB, past
+	// which it is dropped, heard as no answer (package doc), so LARGE, slow-held
+	// requests bound their own backlog and answer past it AT ONCE with "not
+	// now" (internal/estate). The
 	// bound and slots are the registration's own ([ConcurrentAnswers] for work
 	// done now; below one is [ErrAnswerBound]). Unsubscribe WAITS for in-flight
 	// answers, bounded by its context. Returning means only THIS server holds

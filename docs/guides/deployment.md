@@ -180,6 +180,17 @@ hours of each other:
   more than those two hours and the read's wait refuses every such read, and
   its asker hears a host that did not answer: a collection is handed back and
   asked again, and a stop waits for the host.
+- A request to a data node's estate service or its Gitlet half, a
+  [code search](../concepts/gitlet.md#code-search) and a
+  [test of an MCP server](tools-and-mcp.md#testing-a-server) each carry how
+  long the asker waits, which the node asked counts from the request's arrival
+  on its own clock, time waiting for a free slot included, ending its work a
+  reply's margin before; one whose wait ran out while it waited runs nothing.
+  It takes the
+  request only until the asker's deadline by its own clock, with no allowance,
+  so a node whose clock runs ahead of its asker's by more than the wait refuses
+  it: the estate's router asks the next data node, and a code search or a test
+  hears a node that did not answer.
 - A person's stop of a run whose box is on another node's host is given up
   with nothing read once that host has been silent for the host grace by the
   clock of the node asking it, or once the stop is the host grace and two
@@ -233,7 +244,7 @@ while no node raises it, every data node and that member keep within an hour of
 the fleet's clock, and any two of them — every member of an embedded broker
 among them — within two hours of each other, inside every margin above. A rule
 judged on the clock of a node that runs seats, a turn's hold, a capture's or a
-standby's age, a box read's admission or a stop's give-up above, rests on a
+standby's age, a box read's or an MCP test's admission or a stop's give-up above, rests on a
 clock the alarm measures only where that node holds data too: a node without
 the `data` role writes no row to the register, so nothing measures its clock,
 and NTP on it is all that keeps it inside the bound. With two data nodes

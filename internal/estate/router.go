@@ -1,6 +1,7 @@
 package estate
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -355,8 +356,8 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 // (server/raft.go:329) and the new leader's first 1 s heartbeat (raft.go:331).
 // The read's own 5 s is argued, not measured: the floor's and the position's
 // [statelog.ReadBudget] (2 s each, the read's promise, refused rather than
-// grown) and gitlet.ReplyMargin (1 s, two orders over the answer's trip and
-// clock skew). A node silent that long is gone rather than slow; gitproc's
+// grown) and gitlet.ReplyMargin (1 s, two orders over the request's and the
+// answer's trips). A node silent that long is gone rather than slow; gitproc's
 // ReadDeadline and SlotWait fit inside one (TestAGitReadFitsInsideOneReadAttempt).
 const ReadAttempt = 15 * time.Second
 
@@ -1395,8 +1396,15 @@ func (r *Router) ask(ctx context.Context, node, subject string, req request,
 
 	attempt, cancel := attemptContext(ctx, budget)
 	defer cancel()
+	deadline, bounded := attempt.Deadline()
+	wait := time.Until(deadline)
+	if bounded && wait <= 0 {
+		// NOTHING LEFT TO ASK WITH: a request carrying no wait is refused.
+		return reply{}, heard{}, fmt.Errorf("no time left to ask %s: %w", node,
+			cmp.Or(context.Cause(attempt), context.DeadlineExceeded))
+	}
 	req.ID = signedask.NewID()
-	req.Deadline = deadlineOf(attempt)
+	req.Deadline, req.BudgetMS = deadline, signedask.WaitMS(wait)
 	sealed, err := r.env.sealRequest(req)
 	if err != nil {
 		return reply{}, heard{}, err
