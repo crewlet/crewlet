@@ -15,17 +15,15 @@ import (
 // THE SCRUB'S REWRITE OF JSON, a token at a time on internal/jsonscan, holding
 // no name, string or number whole (see the file comment of scrub.go).
 //
-// Every name and string is read from the scanner as the text it decodes to, a
-// piece at a time, scrubbed by value and by shape as it streams
-// ([scrubber.text]) and written again as a JSON string ([jsonStringWriter]); a
-// number is written as its literal reads; and every string, number, true and
-// false under a credential's key ([keyReading]), at any depth of the
-// containers there, is written as [credentialMarker], a string, the
-// containers kept as they stand so a harness reads its record back. A text
-// short enough to be read whole in one piece is scrubbed whole
-// ([textWholeBytes]), which is what the streams themselves do with a text that
-// short: what each writes, put together, is exactly the whole-text pass of
-// everything written to it.
+// Every name and string is read as the text it decodes to, a piece at a time,
+// scrubbed by value and by shape as it streams ([scrubber.text]) and written
+// again as a JSON string ([jsonStringWriter]); a number as its literal reads;
+// and every string, number, true and false under a credential's key
+// ([keyReading]), at any depth, as [credentialMarker], the containers kept so a
+// harness reads its record back. A text short enough to be read in one piece
+// is scrubbed whole ([textWholeBytes]), as the streams themselves do with a
+// text that short: what each writes, put together, is exactly the whole-text
+// pass of everything written to it.
 
 // textWholeBytes is the longest text of a name or a string the rewrite reads
 // whole and scrubs in one call, rather than through the streams: the scanner's
