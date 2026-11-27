@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
@@ -304,4 +305,60 @@ func directBox(t *testing.T) sandbox.Sandbox {
 func containerBox(t *testing.T) sandbox.Sandbox {
 	box, _ := sandbox.NewContainerBoxAt(t.TempDir())
 	return box
+}
+
+// A LOCAL BOX TELLS A FILE WRITTEN OVER IN PLACE AT ITS SIZE: the same inode,
+// the same length, new bytes and a new modification time, as a writer that
+// cut it and wrote it again leaves it, is a change, not the file as opened.
+//
+// Mutation: compare only the file's size to the open's.
+func TestALocalBoxTellsAFileWrittenOverInPlace(t *testing.T) {
+	t.Parallel()
+	for name, fresh := range map[string]func(*testing.T) (sandbox.Sandbox, string){
+		"direct": func(t *testing.T) (sandbox.Sandbox, string) {
+			box := directBox(t)
+			return box, box.Home()
+		},
+		"container": func(t *testing.T) (sandbox.Sandbox, string) {
+			return sandbox.NewContainerBoxAt(t.TempDir())
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			box, home := fresh(t)
+			path := box.Home() + "/.crewlet/over.log"
+			if err := box.WriteFile(t.Context(), path, bytes.Repeat([]byte("a"), 1000)); err != nil {
+				t.Fatal(err)
+			}
+			r, _, err := box.OpenRange(t.Context(), path, 0, math.MaxInt64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = r.Close() }()
+			if _, err = io.ReadAll(r); err != nil {
+				t.Fatal(err)
+			}
+			host := home + strings.TrimPrefix(path, box.Home())
+			f, err := os.OpenFile(host, os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = f.WriteAt(bytes.Repeat([]byte("b"), 1000), 0)
+			if err = errors.Join(err, f.Close()); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			later := info.ModTime().Add(time.Second)
+			if err := os.Chtimes(host, later, later); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := sandbox.ChangeOf(r); err != nil || got != sandbox.FileChanged {
+				t.Errorf("a file written over in place at its size tells %q (%v), want %q", got, err,
+					sandbox.FileChanged)
+			}
+		})
+	}
 }
