@@ -22,9 +22,11 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // longValue is an engine value the cases below plant inside a long string.
@@ -1369,4 +1371,56 @@ func TestAJSONFileItsArchiveFailsInRefusesTheTakeAtOnce(t *testing.T) {
 		t.Errorf("the take ended %v having opened the archive again %d times; want errScrubBound at once", err,
 			opened)
 	}
+}
+
+// EVERY VALUE UNDER A CREDENTIAL'S KEY IS ITS MARKER, AT ANY DEPTH: a string,
+// a number, true and false under the key, in an array there or an object, at
+// any depth, are each the credential's marker, a string; the containers stand
+// as they were, their own keys and nulls kept, so a harness reads its record
+// back; and a value of whole base64 past the mebibyte in an array under the
+// key is its marker too, nothing kept apart, with media inline or apart.
+//
+// Mutation: take only a string whole, or a container's values only at its
+// first depth, and a case goes red.
+func TestEveryValueUnderACredentialsKeyIsItsMarker(t *testing.T) {
+	t.Parallel()
+	s := newScrubber(nil)
+	marker, _ := plainjson.Marshal(credentialMarker, "")
+	m := string(marker)
+	for name, tc := range map[string]struct{ value, want string }{
+		"a string":          {`"hunter2-secret"`, m},
+		"a number":          {`73519046284`, m},
+		"true":              {`true`, m},
+		"false":             {`false`, m},
+		"an array":          {`["hunter2",42,false,null]`, `[` + m + `,` + m + `,` + m + `,null]`},
+		"an object":         {`{"a":"hunter2","b":{"c":7}}`, `{"a":` + m + `,"b":{"c":` + m + `}}`},
+		"arrays in objects": {`{"x":[["deep"]]}`, `{"x":[[` + m + `]]}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := rewriteLine(t, `{"password":`+tc.value+`,"after":"kept"}`, s)
+			if want := `{"password":` + tc.want + `,"after":"kept"}`; got != want {
+				t.Errorf("kept %q, want %q", got, want)
+			}
+		})
+	}
+	t.Run("a payload in an array", func(t *testing.T) {
+		t.Parallel()
+		payload := mediaPayload(56, mediaMinBytes+8)
+		archive := claudeArchive(t, `{"type":"user","password":["`+payload+`"]}`)
+		for name, plain := range map[string]string{
+			"media inline": mediaPlain(t, inlineTake(t, archiveTar, archive, s)),
+			"media apart": func() string {
+				whole, body := mediaTake(t, archiveTar, archive, s, executorkeep.SessionMaxBytes)
+				if body[0] != sandbox.BodyWhole {
+					t.Error("the value under the credential's key is kept apart")
+				}
+				return mediaPlain(t, whole)
+			}(),
+		} {
+			if strings.Contains(plain, payload[:64]) || !strings.Contains(plain, `"password":[`+m+`]`) {
+				t.Errorf("%s: the value in the array under the credential's key is kept", name)
+			}
+		}
+	})
 }

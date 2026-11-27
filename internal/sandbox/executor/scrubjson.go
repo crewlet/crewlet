@@ -15,15 +15,15 @@ import (
 // THE SCRUB'S REWRITE OF JSON, a token at a time on internal/jsonscan, holding
 // no name, string or number whole (see the file comment of scrub.go).
 //
-// Every name and string is read from the scanner as the text it decodes to, a
-// piece at a time, scrubbed by value and by shape as it streams
-// ([scrubber.text]) and written again as a JSON string ([jsonStringWriter]); a
-// number is written as its literal reads; and a string or a number under a
-// credential's key ([keyReading]) is written as [credentialMarker]. A text
-// short enough to be read whole in one piece is scrubbed whole
-// ([textWholeBytes]), which is what the streams themselves do with a text that
-// short: what each writes, put together, is exactly the whole-text pass of
-// everything written to it.
+// Every name and string is read as the text it decodes to, a piece at a time,
+// scrubbed by value and by shape as it streams ([scrubber.text]) and written
+// again as a JSON string ([jsonStringWriter]); a number as its literal reads;
+// and every string, number, true and false under a credential's key
+// ([keyReading]), at any depth, as [credentialMarker], the containers kept so a
+// harness reads its record back. A text short enough to be read in one piece
+// is scrubbed whole ([textWholeBytes]), as the streams themselves do with a
+// text that short: what each writes, put together, is exactly the whole-text
+// pass of everything written to it.
 
 // textWholeBytes is the longest text of a name or a string the rewrite reads
 // whole and scrubs in one call, rather than through the streams: the scanner's
@@ -120,6 +120,10 @@ func (t *textScrub) Close() error {
 	t.taken = t.out.own.taken(t.in)
 	return nil
 }
+
+// took is what the text's scrub took out, once it is closed, where its
+// scrubber tallies.
+func (t *textScrub) took() int64 { return t.taken }
 
 // redactionRefusal is what a text's scrub answers for err, what its redaction's
 // stream answered at its close, wrote the first error its writer gave:
@@ -255,9 +259,9 @@ type jsonStringWriter struct {
 	capMax  int
 	over    bool
 	err     error
-	// media reads the text as kept for a payload, nil where nothing does
+	// media measures the text as kept for a payload, nil where nothing does
 	// ([jsonStringWriter.finding]).
-	media *mediaRun
+	media *payloadSpan
 }
 
 // begin opens a string onto out, keeping its first capMax bytes.
@@ -266,10 +270,11 @@ func (e *jsonStringWriter) begin(out *rewriteOut, capMax int) error {
 	return out.writeByte('"')
 }
 
-// finding has run read the string just begun for a payload.
-func (e *jsonStringWriter) finding(run *mediaRun) {
-	run.begin(e.out.n)
-	e.media = run
+// finding has span measure the string just begun, where its scrub classes it
+// a payload ([payloadScrub]).
+func (e *jsonStringWriter) finding(span *payloadSpan) {
+	span.begin(e.out.n)
+	e.media = span
 }
 
 // Write writes the next piece of the text, escaped.
@@ -412,8 +417,9 @@ func escapedASCII(c byte) string {
 
 // jsonRewrite rewrites one JSON text read from a scanner, token by token, onto
 // a [rewriteOut]: every name and string scrubbed and written again as a JSON
-// string, every number, true, false and null as written, a string or a number
-// under a credential's key as [credentialMarker], and no blank between tokens.
+// string, every number, true, false and null as written, every string, number,
+// true and false under a credential's key, at any depth, as [credentialMarker],
+// and no blank between tokens.
 // A text the scanner refuses ends the rewrite on its *jsonscan.Error, what the
 // rewrite wrote of it before counted and not taken back.
 //
@@ -431,9 +437,12 @@ type jsonRewrite struct {
 	buf []byte
 	str jsonStringWriter
 	key keyReading
-	// payload reads a string value for a payload where the scrub finds
-	// media ([scrubber.media]).
-	payload mediaRun
+	// payload measures a string value its scrub classed a payload, where
+	// the scrub finds media ([scrubber.media]).
+	payload payloadSpan
+	// held is the room a string value is held in while it is read for a
+	// payload ([payloadHeldBytes]).
+	held []byte
 	// containers is how many containers the text has opened so far, which
 	// names the list a cut applies to.
 	containers int
@@ -451,8 +460,10 @@ type rewriteFrame struct {
 	// n is how many members (an object's pairs, an array's values) are
 	// written.
 	n int
-	// credential says the member being read is under a credential's key.
-	credential bool
+	// credential says the value being read is a credential's: an object's
+	// member under a credential's key, or any value of a container under
+	// one (under), at any depth.
+	credential, under bool
 	// role is what the frame is to a transcript line's cut, and member which
 	// of the names the role reads the member being read is under.
 	role   frameRole
@@ -557,12 +568,8 @@ func (j *jsonRewrite) token(k jsonscan.Kind) error {
 		if err := j.number(); err != nil {
 			return err
 		}
-	case jsonscan.True:
-		if err := j.out.writeString("true"); err != nil {
-			return err
-		}
-	case jsonscan.False:
-		if err := j.out.writeString("false"); err != nil {
+	case jsonscan.True, jsonscan.False:
+		if err := j.literal(k == jsonscan.True); err != nil {
 			return err
 		}
 	case jsonscan.Null:
@@ -616,7 +623,8 @@ func (j *jsonRewrite) open(k jsonscan.Kind) error {
 		return err
 	}
 	j.containers++
-	f := rewriteFrame{object: object}
+	under := j.frame() != nil && j.frame().credential
+	f := rewriteFrame{object: object, under: under, credential: under}
 	if j.defs != nil {
 		f.role = roleFor(j.frame(), object)
 	}
@@ -690,7 +698,7 @@ func (j *jsonRewrite) name() error {
 	if err := j.out.writeByte(':'); err != nil {
 		return err
 	}
-	f.credential = j.key.Credential()
+	f.credential = f.under || j.key.Credential()
 	f.member = readOther
 	if reads != nil && !j.str.over {
 		f.member = reads[string(j.str.capture)]
@@ -725,6 +733,23 @@ func (j *jsonRewrite) credentialValue() error {
 			return err
 		}
 	}
+}
+
+// literal writes true or false: under a credential's key, as
+// [credentialMarker], a string where the literal stood, as a number goes
+// ([jsonRewrite.number]).
+func (j *jsonRewrite) literal(truth bool) error {
+	word := "false"
+	if truth {
+		word = "true"
+	}
+	if f := j.frame(); f != nil && f.credential {
+		if err := j.takenWhole(int64(len(word)), io.EOF); err != nil {
+			return err
+		}
+		return j.marker()
+	}
+	return j.out.writeString(word)
 }
 
 // marker writes [credentialMarker] as a JSON string, where the value under a
@@ -827,7 +852,12 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 			break
 		}
 	}
-	t := j.scrub.text(&j.str)
+	var t stringScrub
+	if key == nil && j.scrub.media != nil {
+		t = j.scrub.payloadText(&j.str, &j.payload, &j.held)
+	} else {
+		t = j.scrub.text(&j.str)
+	}
 	total, held := 0, false
 	defer func() {
 		if held {
@@ -860,12 +890,12 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 	if err := t.Close(); err != nil {
 		return err
 	}
-	j.out.tally(t.taken)
+	j.out.tally(t.took())
 	return j.ended()
 }
 
 // ended closes the string, telling the scrub's plan of the payload it is
-// ([mediaRun]).
+// ([payloadSpan]).
 func (j *jsonRewrite) ended() error {
 	if err := j.str.end(); err != nil {
 		return err
