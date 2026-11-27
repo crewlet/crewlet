@@ -309,11 +309,20 @@ func containerBox(t *testing.T) sandbox.Sandbox {
 // A LOCAL BOX TELLS A FILE WRITTEN OVER IN PLACE AT ITS SIZE, its
 // modification time put back: the same inode, the same length, new bytes, and
 // the modification time it had at the open, as `touch -r` leaves it. The
-// change time, which no user sets, tells it.
+// change time, which no user sets, tells it; so it does of a file given a
+// second link first, since only a link FALLING (the clear's unlink) leaves the
+// change time unread.
 //
-// Mutation: compare only the file's size and modification time to the open's.
+// Mutations, each red: compare only the file's size and modification time to
+// the open's; leave the change time unread whenever the link count moves.
 func TestALocalBoxTellsAFileWrittenOverInPlace(t *testing.T) {
 	t.Parallel()
+	for _, linked := range []bool{false, true} {
+		testALocalBoxTellsAFileWrittenOverInPlace(t, linked)
+	}
+}
+
+func testALocalBoxTellsAFileWrittenOverInPlace(t *testing.T, linked bool) {
 	for name, fresh := range map[string]func(*testing.T) (sandbox.Sandbox, string){
 		"direct": func(t *testing.T) (sandbox.Sandbox, string) {
 			box := directBox(t)
@@ -323,6 +332,9 @@ func TestALocalBoxTellsAFileWrittenOverInPlace(t *testing.T) {
 			return sandbox.NewContainerBoxAt(t.TempDir())
 		},
 	} {
+		if linked {
+			name += " linked"
+		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			box, home := fresh(t)
@@ -339,6 +351,11 @@ func TestALocalBoxTellsAFileWrittenOverInPlace(t *testing.T) {
 				t.Fatal(err)
 			}
 			host := home + strings.TrimPrefix(path, box.Home())
+			if linked {
+				if err := os.Link(host, host+".link"); err != nil {
+					t.Fatal(err)
+				}
+			}
 			before, err := os.Stat(host)
 			if err != nil {
 				t.Fatal(err)
@@ -358,8 +375,8 @@ func TestALocalBoxTellsAFileWrittenOverInPlace(t *testing.T) {
 				t.Fatalf("the modification time was not put back: %v", err)
 			}
 			if got, err := sandbox.ChangeOf(r); err != nil || got != sandbox.FileChanged {
-				t.Errorf("a file written over in place at its size tells %q (%v), want %q", got, err,
-					sandbox.FileChanged)
+				t.Errorf("a file (linked again first: %t) written over in place at its size tells %q (%v), "+
+					"want %q", linked, got, err, sandbox.FileChanged)
 			}
 		})
 	}

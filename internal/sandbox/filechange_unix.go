@@ -57,12 +57,12 @@ func (h hostFile) change() (FileChange, error) {
 		return FileAppended, nil
 	case now.Mtim != h.opened.Mtim:
 		return FileChanged, nil
-	case now.Ctim != h.opened.Ctim && now.Nlink == h.opened.Nlink:
+	case now.Ctim != h.opened.Ctim && now.Nlink >= h.opened.Nlink:
 		// The change time, which no user sets, tells a write whose
-		// modification time was put back; but an unlink moves it too, with
-		// the link count, and the clear before each job unlinks the last
-		// job's streams under a read of them, so a moved count leaves it
-		// unread.
+		// modification time was put back; but an unlink moves it too, and
+		// the clear before each job unlinks the last job's streams under a
+		// read of them, so a FALLEN link count leaves it unread. A raised one
+		// (an `ln` in the box) does not: it would turn the check off.
 		return FileChanged, nil
 	}
 	return FileUnchanged, nil
