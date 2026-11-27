@@ -242,10 +242,11 @@ func (c *collectionPieces) weight() int64 {
 
 // stderrHeld is what the read of an error stream of size bytes holds
 // ([Runner.readFailureTail]): one redaction stream at its stages' windows
-// ([streamHeldBytes]) and the keep+1 bytes of its end the ring keeps, or, for
-// a stream short enough to be redacted whole, [collectHeldMultiple] times it.
+// ([streamHeldBytes]), the 2*keep+1 bytes of its end the ring keeps and the
+// keep+1 of its start held raw while it is no longer, or, for a stream short
+// enough to be redacted whole, [collectHeldMultiple] times it.
 func stderrHeld(size int64, keep int) int64 {
-	return min(collectHeldMultiple*size, streamHeldBytes+int64(keep)+1)
+	return min(collectHeldMultiple*size, streamHeldBytes+3*int64(keep)+2)
 }
 
 // openCollection opens every piece a collection of the run in box reads, in

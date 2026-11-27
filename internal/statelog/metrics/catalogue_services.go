@@ -342,7 +342,9 @@ func serviceInstruments() []Instrument {
 				"(`bound`, the read's time ran out first; `refused`, the redaction " +
 				"stream refused the text; `changed`, the file was cut or written over " +
 				"while it was read, or read short; `grown`, a file read whole grew " +
-				"meanwhile; `too_large`, past the whole-read cap; `not_regular`). The " +
+				"meanwhile; `too_large`, past the whole-read cap; `not_regular`; " +
+				"`unsettled`, a stream still being written whose redaction had settled " +
+				"too little to show its end). The " +
 				"failure or transcript says each, never quoting the piece. `bound` " +
 				"rising is boxes or redaction slower than a collection's room; " +
 				"`changed` or `grown` above zero is something in a box still writing " +

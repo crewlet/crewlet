@@ -30,6 +30,9 @@ type failureTail struct {
 	size int64
 	// withheld is why none is shown where the read could not show any.
 	withheld string
+	// unended says the stream was still being written when the read ended:
+	// shown ends where its redaction had settled.
+	unended bool
 }
 
 // note is the line that stands for a stream of which nothing is shown, its
@@ -40,7 +43,11 @@ func (f failureTail) note() string {
 	if why == "" && f.before > 0 && strings.TrimSpace(f.shown) == "" {
 		why = "the end a run's failure shows of it holds only blank lines"
 	}
-	if why == "" {
+	switch {
+	case why == "" && f.unended:
+		return fmt.Sprintf("(the error stream, %s, was still being written when the collection read it: "+
+			"its end shown is where its redaction had settled)", humanSize(f.size))
+	case why == "":
 		return ""
 	}
 	return fmt.Sprintf("(the error stream, %s, is not shown: %s)", humanSize(f.size), why)
@@ -54,7 +61,10 @@ func (f failureTail) transcript() string {
 	case f.withheld != "" || shown == "":
 		return f.note()
 	case f.before > 0:
-		return unreadNote(f.before, false) + "\n" + shown
+		shown = unreadNote(f.before, false) + "\n" + shown
+	}
+	if f.unended {
+		return f.note() + "\n" + shown
 	}
 	return shown
 }
@@ -73,8 +83,12 @@ func (r *Runner) readFailureTail(ctx context.Context, p *piece, keep int, readBy
 		return tail, nil
 	}
 	defer p.close()
-	end := &endRing{keep: keep + 1}
+	end := &endRing{keep: 2*keep + 1}
 	s := redact.NewStream(end)
+	// raw is the stream as read while it is no longer than keep+1 bytes: a
+	// short stream's redaction writes nothing before its end, so where it
+	// is still being written its settled end is read off raw ([settledTail]).
+	raw := make([]byte, 0, min(p.size, int64(keep)+1))
 	src := io.LimitReader(p.body, p.size)
 	buf := make([]byte, failureReadPiece)
 	began, read := r.now(), int64(0)
@@ -95,6 +109,11 @@ func (r *Runner) readFailureTail(ctx context.Context, p *piece, keep int, readBy
 		}
 		n, err := src.Read(buf)
 		read += int64(n)
+		if raw != nil && len(raw)+n <= keep+1 {
+			raw = append(raw, buf[:n]...)
+		} else {
+			raw = nil
+		}
 		if n > 0 {
 			if _, werr := s.Write(buf[:n]); werr != nil {
 				return declinedTail(p, tail, werr)
@@ -107,11 +126,63 @@ func (r *Runner) readFailureTail(ctx context.Context, p *piece, keep int, readBy
 			return failureTail{}, fmt.Errorf("executor: reading the error stream: %w", err)
 		}
 	}
+	change, err := sandbox.ChangeOf(p.body)
+	switch {
+	case err != nil:
+		return failureTail{}, fmt.Errorf("executor: telling whether the error stream changed while it was read: %w",
+			err)
+	case read < p.size || change == sandbox.FileChanged:
+		tail.withheld = p.withhold(sandbox.WithheldChanged, fmt.Sprintf("it changed while the collection read it "+
+			"(%s of the %s it held when opened were read, and it was cut or written over meanwhile), and a read "+
+			"that may join two versions of it stands for neither", humanSize(read), humanSize(p.size)))
+		return tail, nil
+	case change == sandbox.FileAppended:
+		return settledTail(p, tail, s, end, raw, keep)
+	}
 	if err := s.Close(); err != nil {
 		return declinedTail(p, tail, err)
 	}
 	shown, at := sandbox.KeepEnd(end.String(), keep)
 	tail.shown, tail.before = shown, end.dropped()+int64(at)
+	return tail, nil
+}
+
+// settledTail is the tail of a stream still being written when its read
+// reached the size its open found: never Close, which would take that size
+// for the stream's end, but only what nothing written after can change, cut
+// to its last whole line, then [sandbox.KeepEnd] of it. A short stream, held
+// raw, is cut where [redact.Settled] settles it and redacted; a longer one is
+// what its redaction stream says is final of what it wrote
+// ([redact.Stream.Flush]), the ring holding 2*keep+1 bytes so a stretch of up
+// to keep not yet final still leaves keep+1 that are. Past that, or where no
+// whole line settled, the tail is withheld as unsettled.
+func settledTail(p *piece, tail failureTail, s *redact.Stream, end *endRing, raw []byte,
+	keep int) (failureTail, error) {
+	text, before := "", int64(0)
+	if raw != nil {
+		text = redact.Secrets(string(raw[:redact.Settled(string(raw))]))
+	} else {
+		final, _, err := s.Flush()
+		if err != nil {
+			return declinedTail(p, tail, err)
+		}
+		held, unfinal := end.String(), end.total-final
+		if unfinal <= int64(len(held)) {
+			text = held[:int64(len(held))-unfinal]
+			text = text[:strings.LastIndexByte(text, '\n')+1]
+			before = end.dropped()
+			if before > 0 && len(text) < keep+1 {
+				text = ""
+			}
+		}
+	}
+	if strings.TrimSpace(text) == "" {
+		tail.withheld = p.withhold(sandbox.WithheldUnsettled, "it was still being written when the collection "+
+			"read it, and too little of what was read had a settled redaction to show its end")
+		return tail, nil
+	}
+	shown, at := sandbox.KeepEnd(text, keep)
+	tail.shown, tail.before, tail.unended = shown, before+int64(at), true
 	return tail, nil
 }
 

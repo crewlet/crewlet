@@ -41,6 +41,9 @@ func (c *readCounter) Read(p []byte) (int, error) {
 
 func (c *readCounter) Close() error { return nil }
 
+// Change tells the text read is its file as it stood ([sandbox.ChangeOf]).
+func (c *readCounter) Change() (sandbox.FileChange, error) { return sandbox.FileUnchanged, nil }
+
 // failureTailOf is what a collection shows of text as its error stream, kept
 // to keep bytes, on a clock that never passes the read's wait.
 func failureTailOf(t *testing.T, text string, keep int) failureTail {
@@ -330,3 +333,84 @@ func (m *withholdings) all() []sandbox.Withholding {
 	defer m.mu.Unlock()
 	return slices.Clone(m.got)
 }
+
+// A FAILURE'S TAIL IS READ AS ONE VERSION OF ITS STREAM: one still being
+// written when its read reaches the size its open found shows only what its
+// redaction had settled, to a whole line, and says it was still being written,
+// so a password's key whose value a later line holds is not shown as an end;
+// one cut while read shows nothing and says it changed; one untouched shows
+// its end whole.
+//
+// Mutations, each red: close the redaction of a stream still being written;
+// show a stream cut while read; leave the note out.
+func TestAFailuresTailIsReadAsOneVersionOfItsStream(t *testing.T) {
+	t.Parallel()
+	const key = "the deploy's password:"
+	text := strings.Repeat("compiling a package of the build\n", 40) + key + "\n"
+	// LONG: past what the redaction holds whole, so it writes as it reads
+	// and only what it made final is shown ([redact.Stream.Flush]).
+	long := strings.Repeat("compiling a package of the build\n", (16<<20)/33) + key + "\n"
+	for _, c := range []struct {
+		name  string
+		text  string
+		edit  func(b *sandbox.FakeSandbox, path string)
+		check func(t *testing.T, tail failureTail)
+	}{
+		{"untouched", text, func(*sandbox.FakeSandbox, string) {}, func(t *testing.T, tail failureTail) {
+			if !strings.HasSuffix(tail.shown, key+"\n") || tail.unended || tail.withheld != "" {
+				t.Errorf("an untouched stream shows …%q (unended %v, withheld %q); want its end whole",
+					tailOfText(tail.shown), tail.unended, tail.withheld)
+			}
+		}},
+		{"still being written", text, func(b *sandbox.FakeSandbox, path string) {
+			b.AppendInPlace(path, []byte("hunter2x9\n"))
+		}, func(t *testing.T, tail failureTail) {
+			if strings.Contains(tail.shown, key) || !strings.HasSuffix(tail.shown, "build\n") || !tail.unended ||
+				!strings.Contains(tail.transcript(), "was still being written when the collection read it") {
+				t.Errorf("a stream still being written shows …%q (%q); want its settled lines, saying so",
+					tailOfText(tail.shown), tail.transcript())
+			}
+		}},
+		{"still being written, long", long, func(b *sandbox.FakeSandbox, path string) {
+			b.AppendInPlace(path, []byte("hunter2x9\n"))
+		}, func(t *testing.T, tail failureTail) {
+			if strings.Contains(tail.shown, key) || !strings.HasSuffix(tail.shown, "build\n") || !tail.unended ||
+				!strings.Contains(tail.transcript(), "was still being written when the collection read it") {
+				t.Errorf("a stream still being written shows …%q (%q); want its settled lines, saying so",
+					tailOfText(tail.shown), tail.transcript())
+			}
+		}},
+		{"cut while read", text, func(b *sandbox.FakeSandbox, path string) {
+			b.TruncateInPlace(path, 100)
+		}, func(t *testing.T, tail failureTail) {
+			if tail.shown != "" || !strings.Contains(tail.note(), "it changed while the collection read it") {
+				t.Errorf("a stream cut while read shows %q with %q; want none, saying it changed", tail.shown,
+					tail.note())
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			b := sandbox.NewFakeSandbox("box-1")
+			path := PathsFor(b).Err()
+			b.Put(path, c.text)
+			b.Streams = func(p string, r io.Reader) io.Reader {
+				c.edit(b, path)
+				return r
+			}
+			body, size, err := b.OpenRange(t.Context(), path, 0, int64(len(c.text)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			tail, err := (&Runner{now: stillClock}).readFailureTail(t.Context(), &piece{path: path,
+				what: "the error stream", body: body, size: size, kind: sandbox.WithheldErrorStream}, 4<<10, time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.check(t, tail)
+		})
+	}
+}
+
+// tailOfText is the last bytes of s, for a case's message.
+func tailOfText(s string) string { return s[max(0, len(s)-80):] }

@@ -54,13 +54,16 @@ const (
 	WithheldTooLarge WithheldReason = "too_large"
 	// WithheldNotRegular is a path that is no regular file.
 	WithheldNotRegular WithheldReason = "not_regular"
+	// WithheldUnsettled is a stream still being written whose redaction had
+	// settled too little of what was read to show its end.
+	WithheldUnsettled WithheldReason = "unsettled"
 )
 
 // Valid reports whether r is a reason a read gives.
 func (r WithheldReason) Valid() bool {
 	switch r {
 	case WithheldPastBound, WithheldRefused, WithheldChanged, WithheldGrown, WithheldTooLarge,
-		WithheldNotRegular:
+		WithheldNotRegular, WithheldUnsettled:
 		return true
 	}
 	return false

@@ -62,14 +62,14 @@ func TestACollectionWeighsWhatItsOpensHold(t *testing.T) {
 				want += int64(size)
 			}
 		}
-		read := min(collectHeldMultiple*int64(errBytes), streamHeldBytes+int64(r.failureBound)+1)
+		read := min(collectHeldMultiple*int64(errBytes), streamHeldBytes+3*int64(r.failureBound)+2)
 		if got := c.weight(); got != collectHeldMultiple*want+read {
 			t.Errorf("with an error stream of %d bytes the collection weighs %d, want five times the %d bytes "+
 				"its other pieces hold and the %d its read of the stream holds", errBytes, got, want, read)
 		}
 		c.close()
 	}
-	if got, want := stderrHeld(64<<20, 2<<20), int64(streamHeldBytes+2<<20+1); got != want {
+	if got, want := stderrHeld(64<<20, 2<<20), int64(streamHeldBytes+6<<20+2); got != want {
 		t.Errorf("a long error stream's read weighs %d, want one redaction stream and its ring, %d", got, want)
 	}
 	for _, tc := range []struct{ sizes, want int64 }{
