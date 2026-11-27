@@ -75,7 +75,7 @@ A seat names the ad accounts it may touch (`ad_accounts`, required while on). Ev
 
 | Tool | Class | What it does |
 |---|---|---|
-| `apple_ads_operations` | read | Lists the operations the agent may call now, with their class and roles |
+| `apple_ads_operations` | read | Lists every operation, with the level that offers it (one above the agent's marked), their class and roles |
 | `apple_ads_read` | read | Any read or query of the API on the agent's ad accounts |
 | `apple_ads_report` | read | A campaign, ad group, keyword, search term or ad report: zone, freshness, truncation, why empty |
 | `apple_ads_operate` | operate | A change that raises no spend and publishes nothing; refused where it comes to more |
@@ -91,6 +91,8 @@ An update is classed by what it changes on its target as it reads just before: a
 ## Spend and decisions
 
 A spend, public or admin call is held for an administrator, who answers **Allow once** or **Deny** at a fresh sign-in, never a delegate ([ADR-0171](../../adr/0171-spend-public-and-admin-acts-are-held-for-an-administrator-never-a-delegate.md)). Before anybody is asked, a spend act passes the spend guard: an ad account's daily capacity is the daily budgets of its enabled, unended campaigns, and a change may add at most `per_change` to it and leave it at most `daily`. A bid or target CPA raise adds nothing to capacity and is still asked. The administrator reads the exact requests, the targets as they are now and the capacity before and after; Allow once runs the guard again and sends nothing if a target changed. An unanswered ask lapses after a day. Every call, ask, answer and outcome is in the access log.
+
+An agent holds only its level's tools, and each tool that takes a method's ID says what lies above it. A method above the agent's level, named on a tool it holds, is refused before Apple Ads is called, naming the method's class, the tool and level that make it, whether an administrator approves each call, and that an administrator raises the level on the Agents tab, asked in words (`request_access` asks for no level). A method Crewlet does not offer is refused as one no level reaches.
 
 ## Limits
 

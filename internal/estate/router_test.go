@@ -131,6 +131,8 @@ type fakeNode struct {
 	// node, waited for until the asker's deadline, where a gone node is known
 	// at once to have answered nothing.
 	hang chan struct{}
+	// hangFrom, where set, holds only the requests sent from that node.
+	hangFrom string
 
 	// requests counts every request that reached this node over the broker,
 	// whatever it answered; anyway counts those sent as the last resort
@@ -728,6 +730,9 @@ func (s silencer) Serve(ctx context.Context, subject string, answers int,
 			s.node.anyway++
 		}
 		silent, hang, refusesLagging := s.node.silent, s.node.hang, s.node.refusesLagging
+		if s.node.hangFrom != "" && req.From != s.node.hangFrom {
+			hang = nil
+		}
 		older, undeclared, newer := s.node.olderBuild, s.node.undeclared, s.node.newerBuild
 		s.node.mu.Unlock()
 		if refusesLagging {

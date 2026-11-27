@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -384,3 +385,93 @@ func serve(t *testing.T, l net.Listener, h http.HandlerFunc) {
 	srv.Start()
 	t.Cleanup(srv.Close)
 }
+
+// EACH PIN'S PROTOCOL NAMES ITS COMMANDS' PARAMETERS, from the one answer
+// Protocol read: on both pins Methods is every command and event the answer
+// describes, Parameters every command's parameter and no event's, each name's
+// method among Methods, and each pin names hundreds of both; and an answer
+// describing fewer than minDomains domains is refused, since it describes
+// nothing a case could hold its names to.
+//
+// Mutations, each red: project parameters from events too; drop the
+// minDomains check.
+func TestEachPinsProtocolNamesItsCommandsParameters(t *testing.T) {
+	t.Run("an answer describing too few domains", func(t *testing.T) {
+		few := `{"domains":[{"domain":"Probe","commands":[{"name":"touch","parameters":[{"name":"x"}]}]}]}`
+		if _, err := describe([]byte(few)); err == nil {
+			t.Error("an answer describing one domain was taken, and it describes nothing")
+		}
+	})
+	Each(t, func(t *testing.T, chrome string) {
+		d := Protocol(t, chrome)
+		type entry struct {
+			Name       string `json:"name"`
+			Parameters []struct {
+				Name string `json:"name"`
+			} `json:"parameters"`
+		}
+		var answer struct {
+			Domains []struct {
+				Domain   string  `json:"domain"`
+				Commands []entry `json:"commands"`
+				Events   []entry `json:"events"`
+			} `json:"domains"`
+		}
+		if err := json.Unmarshal(d.Raw, &answer); err != nil {
+			t.Fatalf("the answer Protocol kept is no description: %v", err)
+		}
+		methods, params, eventParams := map[string]bool{}, map[string]bool{}, map[string]bool{}
+		for _, domain := range answer.Domains {
+			for _, c := range domain.Commands {
+				methods[domain.Domain+"."+c.Name] = true
+				for _, p := range c.Parameters {
+					params[domain.Domain+"."+c.Name+"."+p.Name] = true
+				}
+			}
+			for _, e := range domain.Events {
+				methods[domain.Domain+"."+e.Name] = true
+				for _, p := range e.Parameters {
+					eventParams[domain.Domain+"."+e.Name+"."+p.Name] = true
+				}
+			}
+		}
+		gotMethods, gotParams := d.Methods(), d.Parameters()
+		if !maps.Equal(gotMethods, methods) {
+			t.Errorf("Methods names %d, and the answer describes %d commands and events", len(gotMethods),
+				len(methods))
+		}
+		if !maps.Equal(gotParams, params) {
+			t.Errorf("Parameters names %d, and the answer describes %d parameters of commands", len(gotParams),
+				len(params))
+		}
+		var ofEvents, unnamed []string
+		for p := range gotParams {
+			if eventParams[p] && !params[p] {
+				ofEvents = append(ofEvents, p)
+			}
+			if method := p[:strings.LastIndex(p, ".")]; !gotMethods[method] {
+				unnamed = append(unnamed, p)
+			}
+		}
+		if len(ofEvents) > 0 {
+			slices.Sort(ofEvents)
+			t.Errorf("Parameters names %d parameters of events, which no caller sends, %s first", len(ofEvents),
+				ofEvents[0])
+		}
+		if len(unnamed) > 0 {
+			slices.Sort(unnamed)
+			t.Errorf("Parameters names %d parameters whose method Methods does not name, %s first", len(unnamed),
+				unnamed[0])
+		}
+		if len(gotMethods) < minNamed || len(gotParams) < minNamed {
+			t.Errorf("the pin names %d methods and %d parameters: fewer than %d of either is a projection that "+
+				"read nothing", len(gotMethods), len(gotParams), minNamed)
+		}
+	})
+}
+
+// minNamed is the fewest methods, and the fewest parameters, a pin's
+// projections may name: both pins name about 900 methods and 1,190
+// parameters of commands (2026-11-25), so fewer than 200 is a projection that
+// read nothing.
+const minNamed = 200

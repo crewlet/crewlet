@@ -2,7 +2,6 @@ package googleanalytics
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -128,8 +127,7 @@ func (p *Product) generic(call growth.Call) (googlegrowth.Request, growth.Class,
 	}
 	id, _ := call.Args["operation"].(string)
 	if !slices.Contains(tool.Operations, id) {
-		return googlegrowth.Request{}, tool.Class, refusal(growth.RefusedInvalid, fmt.Sprintf("%s cannot call "+
-			"%q: name one of its operations. No vendor was reached.", call.Tool, id))
+		return googlegrowth.Request{}, tool.Class, p.Catalog().Outside(call.Tool, id, p.Level(call.Handle))
 	}
 	op, _ := p.Catalog().Operation(id)
 	req, err := newRequest(op, stringMap(call.Args["path"]), stringMap(call.Args["query"]), objectArg(call.Args["body"]))

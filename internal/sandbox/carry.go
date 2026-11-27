@@ -430,7 +430,7 @@ type SessionTake struct {
 	// passes.
 	Scrub []string
 
-	// MaxBytes is the largest archive kept (executorkeep.SessionMaxBytes):
+	// MaxBytes is the largest archive kept, the take's bound's ([takeBound]):
 	// one the box describes as larger is refused before a byte of it is read,
 	// and it bounds the plaintext the scrub reads out of the archive, and with
 	// it what the scrub holds, which holds no piece whole: an archive the
@@ -461,18 +461,27 @@ type SessionTake struct {
 	// ([SessionPolicy.MediaApart]). Its first occurrences hold at most
 	// MaxBytes of payload text, and the rest stay inline.
 	MediaApart bool
+
+	// KeepPaceMiB is the store's pace units (objstore.PaceFor) the take's keep
+	// uploads its objects in, its budget's ([takeBound]): a take keeping its
+	// media apart keeps no more apart than that pace holds, every object's
+	// mebibyte begun counted, and the rest inline. Named by every such take.
+	KeepPaceMiB int64
 }
 
 // SessionSpool is the room a take's scrub spools in ([SessionTake.Spool]): a
 // directory of the process's own, so the sweep that removes a crashed
-// process's spools removes the scrub's too; the bytes the spool may write
-// there, counted as written and refused past; and Held, told the bytes the
-// spool holds whenever that moves, none once it is removed, which it is
-// before the take's body ends.
+// process's spools removes the scrub's too; Take, which takes n bytes of the
+// take's room before the spool writes them and refuses past it, and Give,
+// which gives them back as they leave the disk, to the TAKE's room, never the
+// node's, so the take's sealed spools write into what its second reading
+// drained; and Spooled, told once the first reading has written all it keeps.
+// Every byte is given back before the take's body ends.
 type SessionSpool struct {
-	Dir   string
-	Bytes int64
-	Held  func(bytes int64)
+	Dir     string
+	Take    func(n int64) error
+	Give    func(n int64)
+	Spooled func()
 }
 
 // TakenSession is a session archive on its way out of its box: described, and

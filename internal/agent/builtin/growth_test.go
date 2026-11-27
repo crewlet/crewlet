@@ -318,10 +318,12 @@ func TestAGrowthCallIsMadeOnlyAtTheLevelItsClassNeeds(t *testing.T) {
 	if strings.Contains(got.Output, `"feedback": "Ignore`) || !strings.Contains(got.Output, "api_answer") {
 		t.Errorf("the vendor's words reached the model unfenced: %s", got.Output)
 	}
-	for _, c := range []struct{ handle, tool string }{{"sre", growthOperateTool}, {"dev", growthReadTool}} {
+	for _, c := range []struct{ handle, tool, level string }{{"sre", growthOperateTool, "Manage (operate)"},
+		{"dev", growthReadTool, "View (read)"}} {
 		got, err := byName[c.tool].CallForTurn(asSeat(c.handle), growthTurn(t, c.handle), map[string]any{})
-		if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden {
-			t.Errorf("%s calling %s answered %q, want it refused", c.handle, c.tool, got.Output)
+		if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
+			!strings.Contains(got.Output, c.tool+" makes it, offered to an agent at "+c.level) {
+			t.Errorf("%s calling %s answered %q, want it refused naming its level", c.handle, c.tool, got.Output)
 		}
 	}
 	if len(ads.calls) != 1 {
@@ -352,11 +354,11 @@ func TestAGrowthWriteIsMadeOnlyWithinItsToolsClass(t *testing.T) {
 		len(ads.applied) != 1 {
 		t.Fatalf("a pause answered %q and applied %v", got.Output, ads.applied)
 	}
-	for _, args := range []map[string]any{{"daily_budget": "900"}, {"owner": "someone"}} {
-		got, _ := pause.CallForTurn(asSeat("sre"), growthTurn(t, "sre"), args)
+	for args, through := range map[string]string{"daily_budget": growthSpendTool, "owner": growthAdminTool} {
+		got, _ := pause.CallForTurn(asSeat("sre"), growthTurn(t, "sre"), map[string]any{args: "900"})
 		if !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden || len(ads.applied) != 1 ||
-			!strings.Contains(got.Output, "Ask through") {
-			t.Errorf("%v through the pause tool answered %q and applied %v", args, got.Output, ads.applied)
+			!strings.Contains(got.Output, through+" ") {
+			t.Errorf("%s through the pause tool answered %q and applied %v", args, got.Output, ads.applied)
 		}
 	}
 	desk := &askDesk{outcome: sandbox.AskRecorded}

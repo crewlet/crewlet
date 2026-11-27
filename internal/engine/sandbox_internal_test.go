@@ -452,7 +452,7 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 	for _, placement := range config.Placements {
 		// NO RESOLVER: this asks whether each backend can be CONSTRUCTED,
 		// and the catalogue holds no reference to resolve.
-		provider, err := buildSandboxProvider(spec, nil, placement)
+		provider, err := buildSandboxProvider(spec, nil, placement, nil)
 		if err != nil {
 			t.Errorf("run_in %q is accepted by the config and cannot be "+
 				"built: %v", placement, err)
@@ -481,7 +481,7 @@ func TestTheRuntimesDeclaredEnvironmentIsResolvedAtTheEdge(t *testing.T) {
 			"AWS_ROLE_ARN":  "${REGISTRY_ROLE}",
 			"AWS_PROFILE":   "registry-pull",
 		},
-	}}, env, config.PlacementContainer).RuntimeEnv
+	}}, env, config.PlacementContainer, nil).RuntimeEnv
 	want := map[string]string{
 		"SSH_AUTH_SOCK": "/run/user/1000/ssh-agent.sock",
 		"AWS_ROLE_ARN":  "arn:aws:iam::123456789012:role/pull",
@@ -526,10 +526,10 @@ roles:
 			t.Fatalf("the fixture does not parse: %v", err)
 		}
 		spec := c.Providers.Sandbox
-		if got := localOptions(spec, nil, config.PlacementDirect).HostGrace; got != tc.local {
+		if got := localOptions(spec, nil, config.PlacementDirect, nil).HostGrace; got != tc.local {
 			t.Errorf("%q hands the reaper %v, want %v", tc.line, got, tc.local)
 		}
-		manager, err := buildSandbox(c, nil, nil, nil)
+		manager, err := buildSandbox(c, nil, nil, nil, nil)
 		if err != nil || manager == nil {
 			t.Fatalf("buildSandbox = %v, %v", manager, err)
 		}
@@ -559,7 +559,7 @@ func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
 	t.Parallel()
 	spec := &config.SandboxProvider{Fake: true}
 	for _, placement := range config.Placements {
-		provider, err := buildSandboxProvider(spec, nil, placement)
+		provider, err := buildSandboxProvider(spec, nil, placement, nil)
 		if err != nil {
 			t.Fatalf("the double cannot serve %q: %v", placement, err)
 		}

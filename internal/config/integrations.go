@@ -1336,6 +1336,81 @@ func (i Integrations) DiscoversAtlassianSite() bool {
 	return i.Atlassian != nil && i.Atlassian.IsCloud()
 }
 
+// ForgeHoldTitle leads every finding a Forge hold is reported as, which is
+// how the integrations answer finds those findings in the shared status store.
+const ForgeHoldTitle = "Forge relay events are refused"
+
+// ForgeHold is a product whose Forge relay events are refused, and the
+// sentence saying what clears it.
+type ForgeHold struct {
+	Product string
+	Reason  string
+}
+
+// ForgeRelay is what the Jira and Confluence blocks bind the Forge relay to.
+// A Forge token names its site by cloud id only, so each Cloud product is
+// bound by one: its `cloud_id` or a gateway `url`'s (Sites), or the id read
+// from the site a `url` names (Lookups, read at run time). A block with no
+// address yet is Held while `forge_app_id` is set. A Data Center block is in
+// none: no Forge event is its own.
+type ForgeRelay struct {
+	Sites   map[string]string
+	Lookups map[string]string
+	Held    []ForgeHold
+}
+
+// ForgeRelay reads the blocks through resolve, in catalogue order.
+func (i Integrations) ForgeRelay(resolve func(string) string) ForgeRelay {
+	type block struct{ product, url, cloudID string }
+	var blocks []block
+	if j := i.Jira; j != nil {
+		blocks = append(blocks, block{"jira", j.URL, j.CloudID})
+	}
+	if c := i.Confluence; c != nil {
+		blocks = append(blocks, block{"confluence", c.URL, c.CloudID})
+	}
+	declared := i.Atlassian.Declared()
+	relayed := strings.TrimSpace(resolve(i.ForgeAppID)) != ""
+	var out ForgeRelay
+	put := func(m *map[string]string, product, value string) {
+		if *m == nil {
+			*m = map[string]string{}
+		}
+		(*m)[product] = value
+	}
+	for _, b := range blocks {
+		address := strings.TrimSpace(resolve(b.url))
+		id := strings.ToLower(strings.TrimSpace(resolve(b.cloudID)))
+		if id == "" && atlassianhost.IsGateway(address) {
+			id = atlassianhost.GatewayCloudID(address)
+		}
+		switch {
+		case id != "":
+			put(&out.Sites, b.product, id)
+		case address != "" && atlassianhost.Of(address, declared) == atlassianhost.Cloud:
+			put(&out.Lookups, b.product, address)
+		case address == "" && relayed:
+			// A site the organization has not supplied yet.
+			out.Held = append(out.Held, ForgeHold{b.product, "Forge relay events for " +
+				forgeProductName(b.product) + " are refused until integrations." +
+				b.product + ".cloud_id (with site_url) is set"})
+		}
+	}
+	return out
+}
+
+// ForgeLookupHold is the hold for a product whose site's cloud id could not
+// be read: cause names the address asked and why ([ForgeRelay.Lookups]).
+func ForgeLookupHold(product string, cause error) ForgeHold {
+	return ForgeHold{product, "Forge relay events for " + forgeProductName(product) +
+		" are refused: " + cause.Error() + "; check the site is reachable, or set integrations." +
+		product + ".cloud_id with site_url in place of url"}
+}
+
+func forgeProductName(product string) string {
+	return map[string]string{"jira": "Jira", "confluence": "Confluence"}[product]
+}
+
 // DatadogIgnore is the route_to value that means "wake nobody".
 //
 // A VALUE, not an empty string, and the difference is the whole point. Empty

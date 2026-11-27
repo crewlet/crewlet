@@ -105,11 +105,11 @@ func (e *decidedEarly) Unwrap() error { return ErrDecidedEarly }
 var errStreamClosed = errors.New("redact: write to a closed stream")
 
 // Stream redacts a text written to it in pieces, writing the redacted text to
-// the writer it was made with, in one pass, or refuses it. However the text
-// is cut into writes, it holds its stages' windows (a live stream also the
-// text past its settled point, any length: [settling]), whether it refuses
-// depends on the text and its flushes alone ([Stream.Flush]), and where
-// Close answers nil it wrote exactly [Secrets]. Writes cut at any byte.
+// the writer it was made with, in one pass, or refuses it. It holds its
+// stages' windows (a live stream also the text past its settled point,
+// [liveHeldBytes] at most); whether it refuses depends on the text, its
+// flushes ([Stream.Flush]) and whether it trails ([Stream.Trailing]); and
+// where Close answers nil it wrote exactly [Secrets], its writes cut anywhere.
 //
 // A refusal is [ErrDecidedEarly], from Close and every later write: the keys'
 // stage decided a window before the rules' claims there were known. What was
@@ -143,7 +143,7 @@ type Stream struct {
 }
 
 // live is what a live stream keeps beside its stages: the text past the
-// settled point, which its stages have not been handed.
+// settled point, which its stages have not been handed, until it trails.
 type live struct {
 	// settled is the settled point in head while the text is held whole,
 	// up to which Flush wrote head's redaction, and view the settling that
@@ -153,7 +153,19 @@ type live struct {
 	settled int
 	view    settling[[]byte]
 	raw     growing
+	// trailing is whether raw ran past [liveHeldBytes] and went to the
+	// stages, which hold all the text since ([Stream.Trailing]).
+	trailing bool
 }
+
+// liveHeldBytes is the most text a live stream holds past its settled point
+// once a write is taken, and half the most during one ([Stream.settleIn]):
+// [LookBack], the reads that cross a line break summed along the stages,
+// which is as far as any lines Settled holds back of a credential's format
+// reach, so only a line or a run of holds no format writes passes it. Each
+// ask rereads what is held, so a larger bound costs every write more; a
+// smaller one would trail beside a key's block and a password's value below.
+const liveHeldBytes = LookBack
 
 // NewStream is a Stream that writes what it redacts to w.
 func NewStream(w io.Writer) *Stream {
@@ -185,7 +197,7 @@ func (s *Stream) Write(p []byte) (int, error) {
 		return 0, errStreamClosed
 	case s.err != nil:
 		return 0, s.err
-	case s.p != nil && s.live != nil:
+	case s.p != nil && s.live != nil && !s.live.trailing:
 		s.settleIn(p)
 		return len(p), s.err
 	case s.p != nil:
@@ -227,10 +239,53 @@ func (s *Stream) Write(p []byte) (int, error) {
 }
 
 // settleIn takes p as the next of a live stream's text, and hands its stages
-// what is settled.
+// what is settled. It takes p [liveHeldBytes] at a time, asking after each,
+// so what it holds stays within twice that and each ask reads no more; held
+// past it once asked, the stream trails ([Stream.trail]).
 func (s *Stream) settleIn(p []byte) {
-	s.live.raw.write(p)
-	s.settle()
+	l := s.live
+	for {
+		n := min(len(p), liveHeldBytes)
+		l.raw.write(p[:n])
+		p = p[n:]
+		s.settle()
+		switch {
+		case s.p == nil || s.err != nil:
+			return
+		case len(l.raw.text) > liveHeldBytes:
+			s.trail(p)
+			return
+		case len(p) == 0:
+			return
+		}
+	}
+}
+
+// trail hands a live stream's stages all it holds and rest, and from then on
+// all it is written, as a [NewStream]'s, so it holds no more than their
+// windows: past [liveHeldBytes], a line too long or a run of holds no
+// credential's format writes. Flush then decides nothing as at an end, since
+// the stages hold text Settled has not settled, and the stream never settles
+// again (the package doc's "Text that is still being written").
+func (s *Stream) trail(rest []byte) {
+	l := s.live
+	l.trailing = true
+	s.p.feed(l.raw.text)
+	l.raw.text = nil
+	s.p.feed(rest)
+	s.endErr()
+	s.stopOnMiss()
+}
+
+// Trailing reports whether a live stream has stopped writing as far as
+// [Settled] settles: past [liveHeldBytes] held, its stages write what they
+// decide, trailing by their windows, and Flush's held is a lower bound on
+// the text not yet in what it wrote. It trails until Close, which writes the
+// rest, and never refuses for it. Whether it trails turns on the text and on
+// where its writes are cut, since it asks Settled only once a write's piece
+// is taken ([Stream.settleIn]). A stream that is not live never trails.
+func (s *Stream) Trailing() bool {
+	return s.live != nil && s.live.trailing
 }
 
 // settle hands a live stream's stages the text [Settled] settled since it
@@ -245,9 +300,9 @@ func (s *Stream) settle() {
 // how many bytes of all the stream has written are final (a prefix of Secrets
 // of the text whatever is written after it or the stream answers later) and
 // how many bytes of the text are not yet in what it wrote. On a Stream from
-// NewStream it writes nothing and counts only what no window decided early
-// waits on, and held is a lower bound. After an error it answers the counts
-// it last had.
+// NewStream, or a live one that trails ([Stream.Trailing]), it writes nothing
+// and counts only what no window decided early waits on, and held is a lower
+// bound. After an error it answers the counts it last had.
 //
 // Each stage is handed only settled text, and decides all it holds as it does
 // at the text's end ([pipeline.decideHeld]): the redaction composes there. So
@@ -269,7 +324,7 @@ func (s *Stream) Flush() (final int64, held int, err error) {
 			l.settled += n
 			l.view.scanned -= n
 		}
-	case s.p != nil && l != nil:
+	case s.p != nil && l != nil && !l.trailing:
 		if s.settle(); s.p != nil {
 			s.p.decideHeld()
 			s.endErr()
@@ -291,7 +346,7 @@ func (s *Stream) counts() (final int64, held int) {
 		return s.emitted, len(s.head) - l.settled
 	case s.p == nil:
 		return 0, len(s.head)
-	case l != nil:
+	case l != nil && !l.trailing:
 		return s.written(), len(l.raw.text)
 	}
 	return s.emitted + s.p.keys.finalWritten(), s.p.keys.arrived + len(s.p.carry) - s.p.lent - s.p.keys.pos

@@ -713,9 +713,10 @@ const (
 	CodeUnknownTool Code = "unknown_tool"
 	// CodeReadOnlyTool is a proven-read tool sent to a transport that only writes. 400.
 	CodeReadOnlyTool Code = "read_only_tool"
-	// CodeUnsupportedMediaType is an act whose body is not declared
-	// `application/json`, which keeps a cross-site form (no preflight) from
-	// reaching a write. 415.
+	// CodeUnsupportedMediaType is a body not declared the type its route
+	// takes: an act's not `application/json`, which keeps a cross-site form
+	// (no preflight) from reaching a write, and a browser frame's not
+	// `image/jpeg`. 415.
 	CodeUnsupportedMediaType Code = "unsupported_media_type"
 
 	// THE DEPLOYMENT'S OWN CONTROLS: a backup, the retention gestures and the
@@ -1076,6 +1077,10 @@ const (
 	// budget, the writer's own on the artifact or the artifact's. 429 with a
 	// Retry-After; never a lockout.
 	CodeRateLimited Code = "rate_limited"
+	// CodeTooFast is a post of a box's browser relay past its job's or its
+	// node's rate (internal/browser/screen). 429 with the refusing limit's own
+	// wait as its Retry-After; never a lockout.
+	CodeTooFast Code = "too_fast"
 
 	// --- the Dashboard Assistant ---
 
@@ -1352,8 +1357,8 @@ var codes = map[Code]string{
 		"running a different version. Reload the page.",
 	CodeReadOnlyTool: "That is a read, and this route only makes changes. Ask " +
 		"the question through its own route.",
-	CodeUnsupportedMediaType: "Send the change as JSON, declared " +
-		"Content-Type: application/json.",
+	CodeUnsupportedMediaType: "The body is not declared as the type this " +
+		"endpoint takes. Send it again, declared as that type.",
 
 	CodeNoDestination: "Name the directory to write the backup into, as an " +
 		"absolute path on the engine's host.",
@@ -1650,6 +1655,8 @@ var codes = map[Code]string{
 	CodeCheckBudget: "Too many checks at once. Wait the moment Retry-After names, " +
 		"then check the page again.",
 	CodeRateLimited: "Too many comments on this artifact at once. Wait the moment " +
+		"Retry-After names, then send it again.",
+	CodeTooFast: "This is arriving faster than it can be taken. Wait the moment " +
 		"Retry-After names, then send it again.",
 
 	CodeApplying: "This node is applying the configuration the fleet " +

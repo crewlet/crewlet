@@ -190,6 +190,7 @@ func testASaveReservesItsPlaceOnlyWhileItsJobRunsUndecided(t *testing.T, s sandb
 			{"a save whose taker stopped longer ago than a take keeps", true,
 				func(t *testing.T, turnID string) sandbox.SessionCapture {
 					r := runningRow(t, s, turnID)
+					// Past the kept bound's budget on purpose: the most any reader holds.
 					mustReserve(t, s, turnID, saveAt(r, 1, now.Add(-sandbox.SessionCaptureBudget-time.Minute)))
 					return saveAt(r, 2, now)
 				}},

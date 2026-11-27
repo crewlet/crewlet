@@ -194,6 +194,10 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		run = "GEMINI_SYSTEM_MD=" + q(paths.GeminiSystem()) + " " + run
 	}
 	before := q(paths.GeminiUsageBefore())
+	// THE JOB'S BROWSER RELAY BESIDE THE RUN ([relayStep]), ended by an `end`
+	// of the script's own at the grace every runner's script gives what it
+	// stops: Gemini CLI runs in the foreground, with no end protocol to lend it.
+	start, stop := relayStep(paths)
 	return strings.Join(append(lines,
 		// THE RUN'S OWN SPEND, NOT THE SESSION'S: the responses the chat file
 		// holds as the run starts are listed first and left out of the sum
@@ -208,8 +212,10 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		// ITS CHAT FILE, named for the live count once Gemini CLI writes it
 		// ([geminiPointer]).
 		geminiPointer(paths),
+		endFunction(sandbox.JobStopGrace)+relayPrologue()+strings.TrimSuffix(start, "\n"),
 		run,
 		`kill "$gwp" 2> /dev/null`,
+		strings.TrimSuffix(stop, "\n"),
 		"node "+q(paths.GeminiHelper())+" usage "+q(paths.GeminiChats())+` "$s" `+before,
 		geminiLocate(paths),
 		strings.TrimSuffix(chatCapture(paths, paths.GeminiSlugDir(), GeminiCLI{}), "\n"),

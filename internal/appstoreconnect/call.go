@@ -45,6 +45,8 @@ type made struct {
 	// call and every read the engine makes for it.
 	team *team
 	key  agentKey
+	// level is the calling seat's level, which a refusal names the way up from.
+	level growth.Level
 }
 
 // toolClass is the class each generic tool calls with.
@@ -75,14 +77,11 @@ func (p *Product) concrete(ctx context.Context, handle, tool string, args map[st
 	}
 	class := toolClass[tool]
 	id, _ := args["operation"].(string)
-	op, ok := Catalog().Operation(id)
-	if !ok {
-		return made{}, invalid("%q is not an App Store Connect operation: %s lists them.", id, ToolOperations)
+	op, _ := Catalog().Operation(id)
+	if def, _ := Catalog().Tool(tool); !slices.Contains(def.Operations, id) {
+		return made{}, Catalog().Outside(tool, id, growth.LevelOf(seat.Level))
 	}
-	if op.Class != class && !slices.ContainsFunc(op.States, func(s growth.StateRule) bool { return s.Class == class }) {
-		return made{}, invalid("%s is a %s operation: call it with %s.", op.ID, op.Class, toolFor(op.Class))
-	}
-	m := made{op: op, class: class, query: url.Values{}}
+	m := made{op: op, class: class, query: url.Values{}, level: growth.LevelOf(seat.Level)}
 	if m.path, err = fillPath(op.Path, args["path"]); err != nil {
 		return made{}, err
 	}

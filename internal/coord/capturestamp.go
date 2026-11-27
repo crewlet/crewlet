@@ -8,9 +8,9 @@ import (
 
 // A NODE'S CAPTURE STAMP RECORD says, past its presence, the capture stamp
 // version its build asks again whole when it settles a run's row
-// ([NodeStatus.CaptureStampVersion]): a take keeps a capture's media apart
-// only once every node that may settle the run says a version carrying them,
-// and an offline node (a seats-only one has no positions row) says it nowhere
+// ([NodeStatus.CaptureStampVersion]): a take keeps a capture's media apart,
+// or a session at the kept bound, only once every node that may settle the run
+// says a version reading it, and an offline node (a seats-only one has no positions row) says it nowhere
 // else. Every node writes its own as it starts, before it claims presence.
 //
 // NO AGE AND NO REMOVAL, as the positions rows beside it: the version is what

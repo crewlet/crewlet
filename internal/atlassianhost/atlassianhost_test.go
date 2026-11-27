@@ -334,3 +334,22 @@ roles:
 	}
 	return c.Validate()
 }
+
+// A GATEWAY PATH NAMES ITS CLOUD ID, and nothing else does. Mutation: accept
+// any product, or any path of three parts, and a refused case goes red.
+func TestAGatewayPathNamesItsCloudID(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[string]string{
+		"https://api.atlassian.com/ex/jira/0F3A":            "0f3a",
+		"https://api.atlassian.com/ex/confluence/0f3a/wiki": "0f3a",
+		"https://api.stg.atlassian.com/ex/jira/0f3a":        "0f3a",
+		"https://api.atlassian.com/ex/bitbucket/0f3a":       "",
+		"https://api.atlassian.com/rest/jira/0f3a":          "",
+		"https://acme.atlassian.net":                        "",
+		"https://api.atlassian.com/ex/jira":                 "",
+	} {
+		if got := atlassianhost.GatewayCloudID(raw); got != want {
+			t.Errorf("GatewayCloudID(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}

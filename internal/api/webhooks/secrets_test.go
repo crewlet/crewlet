@@ -294,8 +294,16 @@ func TestVerifiableNamesWhatCouldActuallyAcceptADelivery(t *testing.T) {
 		},
 		{
 			"the surfaces whose secret is any non-empty string",
-			webhooks.Secrets{GitHub: "gh", Jira: "jr", Confluence: "cf", ForgeAppID: "forge"},
+			webhooks.Secrets{GitHub: "gh", Jira: "jr", Confluence: "cf", ForgeAppID: "forge",
+				ForgeSites: map[string]string{"jira": "c1"}},
 			[]string{"confluence", "forge", "github", "jira"},
+		},
+		{
+			// Mutation: list forge on its app id alone and this goes red.
+			// Every token is refused until it can be bound to a site.
+			"a forge app id with no Cloud site to bind a token to",
+			webhooks.Secrets{ForgeAppID: "forge"},
+			nil,
 		},
 		{
 			// Mattermost holds a websocket rather than a route: there is no

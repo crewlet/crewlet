@@ -907,12 +907,12 @@ const relaunchAskWait = beginRecordBudget
 // relaunchWaitOf is how long a relaunch of run's turn waits, from now, for what
 // its decision depends on: its asks ([relaunchAskWait]), and each capture or
 // save it waits for ([relaunchWaitsOn]) as long as a capture of its archive's
-// size, cutting its media objects apart, may still take ([captureRestFor]), so
+// size, cutting its media objects apart, at its bound, may still take ([captureRestFor]), so
 // it passes over none its keep may still land. The longest of them.
 func (c *Coordinator) relaunchWaitOf(run PendingRun, now time.Time) time.Duration {
 	wait := c.relaunchWait
 	for _, stamp := range stampsInFlight(run, now, relaunchAdmits(run)) {
-		wait = max(wait, c.captureRest(stamp.ArchiveSize, stamp.MediaCount))
+		wait = max(wait, c.captureRest(stamp.ArchiveSize, stamp.MediaCount, stamp.bound()))
 	}
 	return wait
 }

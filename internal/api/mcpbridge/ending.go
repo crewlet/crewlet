@@ -398,8 +398,8 @@ func (o *binding) answeringLocked() []<-chan struct{} {
 func (o *binding) end(how ending) { o.endKeeping(nil, how) }
 
 // endKeeping is [binding.end], closing the opening's note inbox unless it is
-// keep — the inbox an opening replacing this one serves too — and telling the
-// box how the opening ended (how).
+// keep — the inbox an opening replacing this one serves too — and its browser
+// screen whatever replaces it, and telling the box how the opening ended (how).
 //
 // IT WAITS FOR NO CALL: under the opening's lock it refuses every later call,
 // answers each call it took whose tool has not returned as still running
@@ -432,11 +432,14 @@ func (o *binding) endKeeping(keep SteerInbox, how ending) {
 		close(c.cut)
 		cut++
 	}
-	inbox := o.steer
-	o.steer, o.endedSteer = nil, inbox
+	inbox, screen := o.steer, o.browser
+	o.steer, o.endedSteer, o.browser = nil, inbox, nil
 	o.mu.Unlock()
 	if inbox != nil && inbox != keep {
 		inbox.Close()
+	}
+	if screen != nil {
+		screen.Close()
 	}
 	if cut > 0 {
 		log.InfoContext(o.ctx, "mcp_bridge_answered_at_end", "run_id", o.session.RunID,

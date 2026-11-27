@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -486,7 +485,7 @@ func TestATrimmedChatTakeFindsItsRunStartInTheCutCopy(t *testing.T) {
 			if c.mark != "" {
 				box.Put(trimMarkOf(paths.SessionCapture()), c.mark)
 			}
-			spool := sandbox.SessionSpool{Dir: t.TempDir(), Bytes: math.MaxInt64, Held: func(int64) {}}
+			spool := unboundSpool(t.TempDir())
 			taken, err := NewGeminiCLI().TakeSession(t.Context(), box, sandbox.SessionTake{Spool: spool,
 				MaxBytes: int64(len(archive)), Session: session})
 			if err != nil || taken.Body == nil {

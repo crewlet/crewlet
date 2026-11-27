@@ -258,17 +258,17 @@ func BenchmarkALiveStream(b *testing.B) {
 	}
 }
 
-// A LIVE STREAM SETTLES PAST A LINE OF ANY LENGTH AS THE WHOLE TEXT DOES: a
-// line longer than any window (1.1 MiB, ending in a key that awaits its
-// separator, a key pending, or a quoted key), then a line of 300 KiB of
-// keys whose pairing that line's end decides, then a line that is the last
-// key's value or not, at both parities: written in 64 KiB pieces and flushed
-// at every line end, Close answers nil and the stream wrote [redact.Secrets].
+// A LIVE STREAM WRITES SECRETS PAST A LINE OF ANY LENGTH: a line longer than
+// any window (1.1 MiB, ending in a key that awaits its separator, a key
+// pending, or a quoted key), which it trails past ([redact.Stream.Trailing]),
+// then a line of 300 KiB of keys whose pairing that line's end decides, then
+// a line that is the last key's value or not, at both parities: written in
+// 64 KiB pieces and flushed at every line end, Close answers nil and the
+// stream wrote [redact.Secrets].
 //
-// Mutation: past 1 MiB unsettled, hand the stages the text and settle again
-// from the line's end once four reaches settle there, and the stream writes
-// another text than Secrets.
-func TestALiveStreamSettlesPastALineOfAnyLengthAsTheWholeTextDoes(t *testing.T) {
+// Mutation: settle again from the line's end once four reaches settle there,
+// and the stream writes another text than Secrets.
+func TestALiveStreamWritesSecretsPastALineOfAnyLength(t *testing.T) {
 	t.Parallel()
 	filler := "filler " + strings.Repeat("x", 1100<<10) + " "
 	for _, sh := range [][3]string{

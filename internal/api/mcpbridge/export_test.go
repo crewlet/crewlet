@@ -72,15 +72,16 @@ const EndAnswerWait = endAnswerWait
 // that waits one out.
 func HoldPollsFor(b *Bridge, d time.Duration) { b.hold = d }
 
-// SteerHold is how long a poll for notes is held when none waits.
-const SteerHold = steerHold
+// PollHold is how long a held poll is held: a poll for notes while none
+// waits, a browser's until its answer moves.
+const PollHold = pollHold
 
 // SteerTakeBudget bounds the inbox's answer to one hook.
 const SteerTakeBudget = steerTakeBudget
 
-// SteerPollRetry is the Retry-After a notes call its opening's end overtook is
-// turned away with.
-const SteerPollRetry = steerPollRetry
+// AskAgainRetry is the Retry-After a notes or browser call its opening's end
+// overtook is turned away with.
+const AskAgainRetry = askAgainRetry
 
 // CallMargin is what a call's answer can take beyond its tool's own bound
 // ([Bridge.CallTimeout]).

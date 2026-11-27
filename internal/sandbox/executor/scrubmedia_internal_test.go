@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"io"
 	"math"
 	"math/rand/v2"
@@ -37,7 +38,7 @@ func mediaTake(t *testing.T, layout archiveLayout, archive []byte, s scrubber, a
 	t.Helper()
 	var full, framed bytes.Buffer
 	if err := scrubArchive(layout, bytes.NewReader(archive), reopenOf(archive), &full, s,
-		testBounds.splitting(&framed, allowance)); err != nil {
+		testBounds.splitting(&framed, allowance, textPace)); err != nil {
 		t.Fatalf("the take keeping its media apart: %v", err)
 	}
 	return full.Bytes(), framed.Bytes()
@@ -542,33 +543,105 @@ func TestALineKeptAsTextCutsNoMedia(t *testing.T) {
 	}
 }
 
+// textPace is the pace units a take at the text bound uploads in: one object's
+// at the sealed bound (internal/sandbox's textBound).
+var textPace = paceUnits(executorkeep.SealedMaxBytes)
+
 // THE MEDIA KEPT APART FIT THE KEEP'S PACE: the store paces each object by the
-// mebibyte begun, so thirty-two payloads of 1.4 MiB kept apart would cost a
-// keep at the floor pace a third more than today's budget, and the take keeps
-// fewer apart, the rest inline, so its session and media fit that budget.
+// mebibyte begun, so at the text bound thirty-two payloads of 1.4 MiB kept
+// apart would cost a keep at the floor pace a third more than its budget, and
+// the take keeps fewer apart, the rest inline; and at the kept bound, paced at
+// executorkeep.KeptPaceMiB, two whole-file reads (each payload twice, 80.3 MiB
+// kept) beside 13.7 MiB of text both stay apart, the session and its media
+// within that budget.
 //
-// Mutation: count the allowance in raw bytes alone, or forget the text
-// object's own mebibyte, and the keep's pace passes its budget.
+// Mutation: count the allowance in raw bytes alone, forget the text object's
+// own mebibyte, or pace the kept bound at one object's pace, and a case goes
+// red.
 func TestTheMediaKeptApartFitTheKeepsPace(t *testing.T) {
 	t.Parallel()
-	const payload = 1_468_006
-	member := int64(payload)*3/4 + 4<<10
-	plan := &mediaPlan{on: true, allowance: executorkeep.SessionMaxBytes}
-	for i := range executorkeep.MediaMaxCount {
-		plan.add(int64(i)<<22, payload, [sha256.Size]byte{byte(i), 1})
+	for name, tc := range map[string]struct {
+		allowance, pace, payload int64
+		texts, copies            int
+		text                     int64
+		wantAll                  bool
+	}{
+		"thirty-two payloads at the text bound": {executorkeep.SessionMaxBytes, textPace, 1_468_006,
+			executorkeep.MediaMaxCount, 1, 1 << 20, false},
+		"two whole-file reads at the kept bound": {executorkeep.SessionKeptMaxBytes, executorkeep.KeptPaceMiB,
+			28_001_000, 2, 2, 13_700 << 10, true},
+	} {
+		member := tc.payload*3/4 + 4<<10
+		plan := &mediaPlan{on: true, allowance: tc.allowance, pace: tc.pace}
+		for i := range tc.texts {
+			for c := range tc.copies {
+				plan.add(int64(i*tc.copies+c)<<26, tc.payload, [sha256.Size]byte{byte(i), 1})
+			}
+		}
+		kept := int64(tc.texts*tc.copies)*member + tc.text
+		plan.paced(kept)
+		apart := int64(len(plan.texts))
+		switch {
+		case tc.wantAll && apart != int64(tc.texts):
+			t.Errorf("%s: the take keeps %d of %d payloads apart, want every one", name, apart, tc.texts)
+		case !tc.wantAll && (apart == 0 || apart >= int64(tc.texts)):
+			t.Errorf("%s: the take keeps %d of %d payloads apart, want fewer", name, apart, tc.texts)
+		}
+		if int64(len(plan.found)) != apart*int64(tc.copies) {
+			t.Errorf("%s: %d payloads listed, want each of the %d apart %d times", name, len(plan.found),
+				apart, tc.copies)
+		}
+		pace := objstore.PaceFor(kept - apart*int64(tc.copies)*member)
+		for range apart {
+			pace += objstore.PaceFor(member)
+		}
+		if budget := time.Duration(tc.pace) * objstore.MiBPace; pace > budget {
+			t.Errorf("%s: a keep of %d payloads apart is paced %v, past its %v", name, apart, pace, budget)
+		}
 	}
-	kept := int64(executorkeep.MediaMaxCount)*member + 1<<20
-	plan.paced(kept)
-	apart := int64(len(plan.texts))
-	if apart == 0 || apart >= executorkeep.MediaMaxCount || int64(len(plan.found)) != apart {
-		t.Fatalf("the take keeps %d of %d payloads apart (%d listed), want fewer, each once", apart,
-			executorkeep.MediaMaxCount, len(plan.found))
+}
+
+// TEXT PAST ITS BOUND IS REFUSED BEFORE THE SECOND READING: a take keeping its
+// media apart whose first reading leaves more text inline than its seal keeps
+// (here a session of text alone) is refused as too large once that reading is
+// done, nothing written to its body and no spool left; within the bound it is
+// kept.
+//
+// Mutation: drop the check, or count the payloads kept apart as text, and a
+// case goes red.
+func TestTextPastItsBoundIsRefusedBeforeTheSecondReading(t *testing.T) {
+	t.Parallel()
+	var lines []string
+	for i := range 32 {
+		lines = append(lines, `{"type":"assistant","text":"`+mediaPayload(byte(i), 64<<10)+`"}`)
 	}
-	pace := objstore.PaceFor(kept - apart*member)
-	for range apart {
-		pace += objstore.PaceFor(member)
+	archive := claudeArchive(t, lines...)
+	for name, tc := range map[string]struct {
+		textMax int64
+		kept    bool
+	}{
+		"text past its bound": {textMax: 1 << 20},
+		"text within it":      {textMax: 8 << 20, kept: true},
+	} {
+		dir := t.TempDir()
+		var full, framed bytes.Buffer
+		bounds := testBounds.spooling(spoolPlace{dir: dir}).splitting(&framed, executorkeep.SessionKeptMaxBytes,
+			executorkeep.KeptPaceMiB)
+		bounds.split.textMax = tc.textMax
+		err := scrubArchive(archiveTar, bytes.NewReader(archive), reopenOf(archive), &full, newScrubber(nil), bounds)
+		switch {
+		case tc.kept && err != nil:
+			t.Errorf("%s: refused: %v", name, err)
+		case !tc.kept && (!errors.Is(err, executorkeep.ErrSessionTooLarge) || framed.Len() != 0 || full.Len() != 0):
+			t.Errorf("%s: came to %v having written %d bytes, want it refused as too large before writing", name,
+				err, framed.Len()+full.Len())
+		}
+		if left := spoolsLeft(t, dir); len(left) != 0 {
+			t.Errorf("%s: the scrub left %v", name, left)
+		}
 	}
-	if budget := objstore.PaceFor(executorkeep.SealedMaxBytes); pace > budget {
-		t.Errorf("a keep of %d payloads apart is paced %v, past today's %v", apart, pace, budget)
+	plan := &mediaPlan{on: true, textMax: 1 << 20, found: []mediaAt{{n: 4 << 20}}}
+	if err := plan.inlinePast(5<<20 - 64<<10); err != nil {
+		t.Errorf("a spool of payloads kept apart is refused as text past its bound: %v", err)
 	}
 }

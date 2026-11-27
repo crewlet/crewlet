@@ -232,7 +232,9 @@
 // keeps: a request that does not verify is never dispatched, and a key a node does
 // not hold is "did not run". A request carries an id and a deadline under the
 // signature, so a replay is refused; a reply names its request; a reply it cannot believe is no answer, never
-// "did not run", so a once-write met with one is [ErrOutcomeUnknown].
+// "did not run", so a once-write met with one is [ErrOutcomeUnknown]. Its wait
+// crosses as a duration, required, counted from arrival on the serving node's
+// clock ([request.BudgetMS]); an older node ignores it.
 //
 // # What does not cross the wire, and who supplies it
 //

@@ -66,6 +66,16 @@ type SetupStep struct {
 	// takes [DefaultSetupTimeout]. Lower it for a step that should be
 	// instant, so a hung command fails setup rather than eating the turn.
 	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty"`
+
+	// EveryBox runs the step in every box, never in the build a container
+	// box's home is cached from ([Local.CreateProvisioned]): for a step that
+	// needs a credential the cache's rules cannot see it read.
+	EveryBox bool `yaml:"every_box,omitempty" json:"every_box,omitempty"`
+
+	// Credentials marks the launch's own step of the integrations' box files,
+	// which hold the seat's credentials: written into every box first, never
+	// cached, and never ending the cached prefix of the steps after it.
+	Credentials bool `yaml:"-" json:"-"`
 }
 
 func (s SetupStep) timeout() time.Duration {

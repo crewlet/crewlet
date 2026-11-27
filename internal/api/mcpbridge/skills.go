@@ -124,7 +124,7 @@ func (o *binding) loadSkill(name string) {
 // SkillHandler serves the skill route ([SkillPattern]): the same routing as
 // [Bridge.Handler] — served here by the node holding the job's opening, and
 // relayed to it by any other.
-func (b *Bridge) SkillHandler() http.Handler { return b.routed(b.serveSkill) }
+func (b *Bridge) SkillHandler() http.Handler { return b.routed(b.serveSkill, nil) }
 
 // serveSkill answers one report of the skill route on the opening that holds
 // it — admitted, as every route under the prefix is, by the routing in front

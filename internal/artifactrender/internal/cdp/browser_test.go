@@ -50,22 +50,9 @@ func newest(t testing.TB) bool { return strings.HasSuffix(t.Name(), "/newest") }
 // type Page.navigate's url as a *string, whose nil is written as null.
 func TestThePinsDescribeEveryMethodTheClientDeclares(t *testing.T) {
 	chromiumtest.Each(t, func(t *testing.T, chrome string) {
-		ep := chromiumtest.LaunchPort(t, chrome)
-		req, err := http.NewRequestWithContext(bounded(t), http.MethodGet, ep.HTTP+"/json/protocol", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp, err := httpx.Client(0).Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
 		var desc protocol
-		if err := json.NewDecoder(resp.Body).Decode(&desc); err != nil {
+		if err := json.Unmarshal(chromiumtest.Protocol(t, chrome).Raw, &desc); err != nil {
 			t.Fatalf("/json/protocol: %v", err)
-		}
-		if len(desc.Domains) < 20 {
-			t.Fatalf("/json/protocol described %d domains: it is describing nothing", len(desc.Domains))
 		}
 		for _, problem := range describes(desc, newest(t)) {
 			t.Error(problem)

@@ -565,10 +565,10 @@ CHROMIUM_ENV = chromium_newest="$$(scripts/chromium.sh newest)" || exit 1; \
 # change to how the recipe lays a build out, is a new build beside the old).
 # boxhelpertest hands it, node and npm, to a case of the helper beside the
 # machine's own, so what the case asserts holds on the oldest Node and npm a
-# box may carry (boxhelper's package doc). About 31 MB of download and 136 MB
-# kept, once; after that node.sh finds the build and answers at once. Named
-# for what it fetches, as `git` and `chromium` are, never `node-floor`, which
-# names git's floor for a Gitlet node (GIT_PINS).
+# box may carry (CONTRIBUTING.md, "The floor Node"). About 31 MB of download
+# and 136 MB kept, once; after that node.sh finds the build and answers at
+# once. Named for what it fetches, as `git` and `chromium` are, never
+# `node-floor`, which names git's floor for a Gitlet node (GIT_PINS).
 node: ## fetch the pinned floor Node with its npm, the oldest the box helper supports (scripts/node-pin.env; needs curl and xz)
 	@scripts/node.sh floor >/dev/null
 
@@ -592,8 +592,9 @@ NODE_FLOOR_ENV = floor_node="$$(scripts/node.sh floor)" || exit 1; \
 # bump of the lock, or a change to how the recipe lays a tree out, is a new
 # tree beside the old). boxhelper's cases read the Chromium build it expects
 # from it, and install it again from its npm cache with each Node's own npm,
-# offline (boxhelper's package doc). About 4 MB of download and 23 MB kept,
-# once; after that playwright-tree.sh finds the tree and answers at once.
+# offline (CONTRIBUTING.md, "The Playwright tree"). About 4 MB of download and
+# 23 MB kept, once; after that playwright-tree.sh finds the tree and answers at
+# once.
 playwright-tree: require-npm ## install the Playwright tree internal/browser/boxhelper/tree locks, for the suite (needs npm)
 	@scripts/playwright-tree.sh >/dev/null
 
@@ -857,15 +858,19 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # embeds — notes (opencode_steer_test.go), run under node against a stand-in of
 # the bridge's notes route and a real bridge's, skill-load
 # (opencode_skills_test.go), against a stand-in of its skill route, tool
-# environment (toolenv_test.go) and count (opencodecountplugin_test.go), against a
+# environment (toolenv_test.go), checkouts (opencode_checkout_test.go), against
+# a stand-in of OpenCode, and count (opencodecountplugin_test.go), against a
 # stand-in of the server's events — and of its Kimi Code driver
 # (kimi_driver_internal_test.go), against a stand-in of Kimi Code's server —
 # and of Pi's extension (pi_extension_internal_test.go), against a stand-in of
 # pi's extension API — and of its Cursor Agent helper
 # (cursorcarry_internal_test.go), on real chat stores of the release — and
-# internal/browser/boxhelper, which runs the box helper under this node and the
-# floor's, each box installing the Playwright tree with that Node's own npm,
-# offline. Without node those cases fail under REQUIRED
+# the box helper's relay (relay_test.go), which a run's script starts against
+# a stand-in bridge; internal/browser/boxhelper and its live view, which run
+# the box helper under this node and the floor's, each box installing the
+# Playwright tree with that Node's own npm, offline; and internal/browser/screen,
+# which carries a real box's screen across the real bridge. Without node those
+# cases fail under REQUIRED
 # (internal/prereqtest's one rule), once the whole half has run; the
 # prerequisite says it before anything runs. ci.yml's `test (race)` installs
 # node for the same reason. (internal/e2e's dashboard replay is node's other
@@ -1009,17 +1014,18 @@ require-npm: ## fail unless npm is on PATH (every dashboard target and the suite
 	  exit 1; \
 	} >&2
 
-require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCode plugin and Kimi Code driver probes, and the box helper's cases need it)
+require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCode plugin and Kimi Code driver probes, and the box helper's and the browser screen's cases need it)
 	@command -v node >/dev/null 2>&1 || { \
-	  echo "node is not on PATH, and three of the suite's gates need it."; \
+	  echo "node is not on PATH, and four of the suite's gates need it."; \
 	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
 	  echo "  module over the frames a real engine produced,"; \
 	  echo "  internal/sandbox/executor runs the OpenCode plugins and"; \
 	  echo "  the Kimi Code driver, Pi extension and Cursor Agent helper the"; \
-	  echo "  engine embeds, and"; \
+	  echo "  engine embeds, and the box helper's relay,"; \
 	  echo "  internal/browser/boxhelper runs the box"; \
 	  echo "  helper's modules under node, each box installing its Playwright"; \
-	  echo "  tree with that node's npm. Each FAILS without node"; \
+	  echo "  tree with that node's npm, and internal/browser/screen carries a"; \
+	  echo "  box's screen across the bridge. Each FAILS without node"; \
 	  echo "  under the targets that run the suite"; \
 	  echo "  (CREWLET_REQUIRE_PREREQUISITES=1), but only after the whole"; \
 	  echo "  suite has run, so this says so first."; \

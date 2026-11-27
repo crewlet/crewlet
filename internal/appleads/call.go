@@ -133,12 +133,9 @@ func (m made) where() string {
 func (m *made) generic(args map[string]any) error {
 	id, _ := args["operation"].(string)
 	op, ok := Catalog().Operation(id)
-	if !ok {
-		return invalid("%q is not an Apple Ads operation: %s lists them.", id, ToolOperations)
-	}
 	def, _ := Catalog().Tool(m.tool)
-	if !slices.Contains(def.Operations, op.ID) {
-		return invalid("%s is a %s operation: call it with %s.", op.ID, op.Class, genericTool[op.Class])
+	if !ok || !slices.Contains(def.Operations, op.ID) {
+		return Catalog().Outside(m.tool, id, growth.LevelOf(m.seat.Level))
 	}
 	t := target{op: op}
 	var err error

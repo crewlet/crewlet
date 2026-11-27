@@ -58,7 +58,7 @@ const contextType = "crewlet-context"
 const section = "crewlet"
 
 // pollAbortMs bounds one poll: the route holds an empty one ten seconds
-// (internal/api/mcpbridge, steerHold), and the same again is room for a relay.
+// (internal/api/mcpbridge, pollHold), and the same again is room for a relay.
 const pollAbortMs = 20_000
 // reportAbortMs bounds one skill report, which the model's next request waits on.
 const reportAbortMs = 5_000

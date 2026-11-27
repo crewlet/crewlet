@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/codeindex"
@@ -184,13 +185,16 @@ type fleet struct {
 	servers map[string]*codesearch.Server
 	silent  map[string]bool
 	order   func(replies [][]byte) [][]byte
-	// versions is the protocol of every request asked, in order.
+	// versions is the protocol of every request asked, in order, and waits
+	// the wait each carried.
 	versions []int
+	waits    []int64
 }
 
 func (f *fleet) ask(ctx context.Context, request []byte, each func([]byte) bool) error {
 	if w, err := codesearch.NewWire(fleetRing); err == nil {
-		f.versions = append(f.versions, w.Admit(request, signedask.NewGuard(), time.Now()).Request.Version)
+		asked := w.Admit(request, signedask.NewGuard(), time.Now()).Request
+		f.versions, f.waits = append(f.versions, asked.Version), append(f.waits, asked.BudgetMS)
 	}
 	var replies [][]byte
 	for id, s := range f.servers {
@@ -467,7 +471,7 @@ func TestARequestIsStampedWithTheProtocolItNeeds(t *testing.T) {
 	} {
 		id := fmt.Sprintf("req-%d", i)
 		sealed, err := wire(t, fleetRing).SealRequest(codesearch.Request{Version: tc.version, ID: id,
-			Deadline: time.Now().Add(time.Minute), Asker: person, Search: tc.search, Assign: assign})
+			Deadline: time.Now().Add(time.Minute), BudgetMS: signedask.WaitMS(time.Minute), Asker: person, Search: tc.search, Assign: assign})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -484,6 +488,45 @@ func TestARequestIsStampedWithTheProtocolItNeeds(t *testing.T) {
 				rep, why, err)
 		}
 	}
+}
+
+// A ROUND CARRIES ITS ASKER'S WAIT AS A DURATION, which each node counts from
+// the request's arrival on its own clock: the round's whole budget, or what its
+// caller has left where that ends sooner.
+//
+// Mutation: send no wait, and both rounds carry none, red.
+//
+// In a synctest bubble, so the caller's time left is exact.
+func TestARoundCarriesItsAskersWait(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		// TWO REPOSITORIES, so the search scatters: one is read through the
+		// estate's keyed walk.
+		var repos []repo
+		for _, name := range []string{"alpha", "beta"} {
+			r := indexed(name, "git-a")
+			r.lines = []gitlet.SearchHit{line("a.go", 1)}
+			repos = append(repos, r)
+		}
+		e := &estate{repos: repos}
+		f := newFleet(t, e, map[string]*node{"git-a": {}})
+		s := searcher(t, e, f)
+		short := codesearch.RoundBudget - 3*time.Second
+		for _, left := range []time.Duration{0, short} {
+			ctx, cancel := t.Context(), context.CancelFunc(func() {})
+			if left > 0 {
+				ctx, cancel = context.WithTimeout(ctx, left)
+			}
+			f.waits = nil
+			_, err := s.Search(ctx, query("needle"))
+			cancel()
+			want := signedask.WaitMS(cmp.Or(left, codesearch.RoundBudget))
+			if err != nil || !slices.Equal(f.waits, []int64{want}) {
+				t.Errorf("a caller with %v left (0: none) asked carrying %v ms (%v), want %d", left, f.waits, err,
+					want)
+			}
+		}
+	})
 }
 
 // A REPOSITORY NAMED TWICE IS SEARCHED ONCE: a repo: filter naming alpha
@@ -534,7 +577,7 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := codesearch.Request{Version: codesearch.Protocol, ID: "req-1", Deadline: time.Now().Add(time.Minute),
+	req := codesearch.Request{Version: codesearch.Protocol, ID: "req-1", Deadline: time.Now().Add(time.Minute), BudgetMS: signedask.WaitMS(time.Minute),
 		Asker: person, Search: gitlet.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral},
 		Assign: map[string][]codesearch.Assigned{"git-a": {{RepoID: r.ref.ID, Name: "alpha", Home: true}}}}
 	stranger := recordseal.OneKey("k1", "somebody else's key material")
@@ -549,7 +592,7 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 	// A plain search at the older protocol, whose asker drops a reply of another version.
 	plain := codesearch.ContextProtocol - 1
 	unknown, err := wire(t, other).SealRequest(codesearch.Request{Version: plain, ID: "req-2",
-		Deadline: req.Deadline, Asker: person, Search: req.Search, Assign: req.Assign})
+		Deadline: req.Deadline, BudgetMS: req.BudgetMS, Asker: person, Search: req.Search, Assign: req.Assign})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1073,7 +1116,7 @@ func TestASeatReadFindsAUnitWhileASearchRuns(t *testing.T) {
 		assign = append(assign, codesearch.Assigned{RepoID: fmt.Sprintf("id-%02d", i), Name: fmt.Sprintf("r%02d", i),
 			Home: true})
 	}
-	req := codesearch.Request{Version: codesearch.Protocol, ID: "req-share", Deadline: time.Now().Add(time.Minute),
+	req := codesearch.Request{Version: codesearch.Protocol, ID: "req-share", Deadline: time.Now().Add(time.Minute), BudgetMS: signedask.WaitMS(time.Minute),
 		Asker: person, Search: gitlet.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral},
 		Assign: map[string][]codesearch.Assigned{"git-a": assign}}
 	sealed, err := wire(t, fleetRing).SealRequest(req)

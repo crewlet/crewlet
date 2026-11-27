@@ -11,8 +11,8 @@ import type { EventRecord } from "~/protocol/index.ts";
 // and a case goes red.
 test("a verdict is said in the engine's sentence", () => {
   expect(notContinuedSentence({ loss: "too_large", instead: "fresh", detail: "ghp_secret" })).toBe(
-    "The run did not continue its session: its session was larger than the 48 MiB kept for one " +
-      "session. It started a fresh session.",
+    "The run did not continue its session: its session was larger than one is kept at: 94 MiB in " +
+      "all, at most 48 MiB of it text. It started a fresh session.",
   );
   expect(
     notContinuedSentence({
@@ -22,8 +22,9 @@ test("a verdict is said in the engine's sentence", () => {
       older_turn: "t-m",
     }),
   ).toBe(
-    "The run did not continue turn t-n's session: its session was larger than the 48 MiB kept " +
-      "for one session. It continued turn t-m's older session instead, which ends before that work.",
+    "The run did not continue turn t-n's session: its session was larger than one is kept at: " +
+      "94 MiB in all, at most 48 MiB of it text. It continued turn t-m's older session instead, " +
+      "which ends before that work.",
   );
   expect(
     notContinuedSentence({

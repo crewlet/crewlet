@@ -18,7 +18,7 @@ An agent is on at one level across every account it is granted.
 | `operate` | Everything `read` can, plus changes that spend nothing more, made at once and recorded: pausing, lowering budgets and bids, adding negatives, labels, audiences, conversions, experiments' setup | Standard |
 | `administer` | Everything `operate` can, plus asking an administrator to approve each change that can raise spend (enabling, raising a budget or a bid, widening reach), publishes or retracts ad text, removes, or touches users, links, billing and the account | Standard; Admin for users, links and billing |
 
-Raising an agent to `operate` or `administer` asks for a fresh sign-in (step-up).
+Raising an agent to `operate` or `administer` asks for a fresh sign-in (step-up). An agent holds only its level's tools, and each tool that takes a method's ID says what lies above it. A method above the agent's level, named on a tool it holds, is refused before Google Ads is called, naming the method's class, the tool and level that make it, whether an administrator approves each call, and that an administrator raises the level on the Agents tab, asked in words (`request_access` asks for no level). A method Crewlet does not offer is refused as one no level reaches.
 
 Google Ads' access levels, least first: **Email only** and **Billing** (no API method an agent calls), **Read-only** (reads everything, changes nothing), **Standard** (every change to campaigns, ads, budgets, bids, audiences and conversions, not users or links), **Admin** (users, links, billing and account budgets). A manager account's access reaches its client accounts through it.
 

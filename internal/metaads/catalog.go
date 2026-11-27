@@ -194,7 +194,7 @@ func tools() []growth.Tool {
 	}
 	return []growth.Tool{
 		{Name: ToolOperations, Class: growth.ClassRead,
-			Description: "List the Meta Marketing API operations this agent may call now, each with what it does, its class (read, operate, public, spend, admin), the field rules that class a write by what it changes, the permissions it needs and whether Meta cannot undo it. Filter by node type, class or words. Use it to find the operation ID the generic meta_ads tools take.",
+			Description: "List every Meta Marketing API operation, each with the level that offers it (one above this agent's level is marked, and asking for it says how to get that level), what it does, its class (read, operate, public, spend, admin), the field rules that class a write by what it changes, the permissions it needs and whether Meta cannot undo it. Filter by node type, class or words. Use it to find the operation ID the generic meta_ads tools take.",
 			Parameters: toolschema.Object(map[string]any{"resource": str("A node type, such as Campaign or AdSet."),
 				"class": str("read, operate, public, spend or admin."), "text": str("Words in the operation's ID, path or purpose.")})},
 		{Name: ToolRead, Class: growth.ClassRead, Operations: ofClass(growth.ClassRead),
@@ -224,7 +224,8 @@ func tools() []growth.Tool {
 				"limit":     map[string]any{"type": "integer", "minimum": 1, "maximum": growth.ReportMaxRows, "description": "Rows, default 200."}})},
 		{Name: ToolOperate, Class: growth.ClassOperate, Operations: ofClass(growth.ClassOperate),
 			Description: "Make a change that starts or raises no spend and shows customers nothing: a pause, a lowered budget or bid, a rename, a label, a creative or audience nothing serves yet, a campaign, ad set or ad created PAUSED, a dry run (execution_options validate_only). Made at once and recorded. A change that comes to more is refused here: ask with " + ToolSpend + ", " + ToolPublish + " or " + ToolAdmin + ".",
-			Parameters:  genericParams(true)},
+			Parameters:  genericParams(true),
+			Covers:      "pauses, lowered budgets and bids, renames, labels, and what nothing serves or is created paused"},
 		{Name: ToolPause, Class: growth.ClassOperate, Operations: []string{opCampaignUpdate, opAdSetUpdate, opAdUpdate},
 			Description: "Pause campaigns, ad sets or ads of one ad account at once: the brake. Made at once and recorded; one already paused is left as it is. Enabling again is spend: ask with " + ToolEnable + ".",
 			Parameters: toolschema.Object(map[string]any{"account": accountParam, "level": level(levelCampaign, levelAdSet, levelAd),
@@ -248,7 +249,8 @@ func tools() []growth.Tool {
 				"reason": reasonParam}, "name", "daily_budget", "application_id", "object_store_url", "countries", "creatives", "reason")},
 		{Name: ToolSpend, Class: growth.ClassSpend, Operations: ofClass(growth.ClassSpend),
 			Description: "Ask an administrator to allow a change that starts or raises spend: an enable, a raised budget or bid, wider targeting, an active campaign, ad set or ad created, a copy, a value rule, an automated rule that can raise budgets, an audience an active ad set uses widened. The spend guard checks the account's caps first, and the card shows its daily capacity before and after. Your run is parked until they answer Allow once or Deny; a lower or a pause sent here is made at once.",
-			Parameters:  genericParams(true)},
+			Parameters:  genericParams(true),
+			Covers:      "enabling, raised budgets and bids, wider targeting, and active campaigns, ad sets and ads created"},
 		{Name: ToolEnable, Class: growth.ClassSpend, Operations: []string{opCampaignUpdate, opAdSetUpdate, opAdUpdate},
 			Description: "Ask an administrator to set campaigns, ad sets or ads of one ad account ACTIVE. The spend guard counts what enabling adds to the account's daily capacity first. Parked until they answer.",
 			Parameters: toolschema.Object(map[string]any{"account": accountParam, "level": level(levelCampaign, levelAdSet, levelAd),
@@ -280,10 +282,12 @@ func tools() []growth.Tool {
 				"reason":     reasonParam}, "ad_set", "name", "reason")},
 		{Name: ToolPublish, Class: growth.ClassPublic, Operations: ofClass(growth.ClassPublic),
 			Description: "Ask an administrator to allow a change customers see: a Page post, a lead form, an Instant Experience published, a reply or comment as the Page, a creative swapped on a live ad, catalog items that catalog ads show. Parked until they answer Allow once or Deny.",
-			Parameters:  genericParams(true)},
+			Parameters:  genericParams(true),
+			Covers:      "Page posts, lead forms, Instant Experiences, replies and comments, live creatives and catalog items"},
 		{Name: ToolAdmin, Class: growth.ClassAdmin, Operations: ofClass(growth.ClassAdmin),
 			Description: "Ask an administrator to allow an account change (users, agencies, assets, billing, the spending limit, pixel sharing), a production event Meta cannot recall, or an archive or delete, which Meta cannot undo. Parked until they answer Allow once or Deny. To stop something, pause it instead.",
-			Parameters:  genericParams(true)},
+			Parameters:  genericParams(true),
+			Covers:      "users, agencies, assets, billing, the spending limit, pixel sharing, production events, and archives and deletes"},
 	}
 }
 

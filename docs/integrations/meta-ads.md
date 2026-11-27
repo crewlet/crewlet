@@ -75,7 +75,7 @@ A seat names the ad accounts it may touch (`ad_accounts`, required while on). Ev
 
 | Tool | Class | What it does |
 |---|---|---|
-| `meta_ads_operations` | read | Lists the operations the agent may call now, with what each does, its class and field rules |
+| `meta_ads_operations` | read | Lists every operation, with the level that offers it (one above the agent's marked), what each does, its class and field rules |
 | `meta_ads_read` | read | Any read of the API on the agent's ad accounts |
 | `meta_ads_accounts` | read | The agent's ad accounts: currency, zone, status and why, spend, minimum daily budget, access tier |
 | `meta_ads_campaigns`, `meta_ads_ad_sets`, `meta_ads_ads` | read | One ad account's campaigns, ad sets or ads, with budgets, bids, targeting and review feedback |
@@ -99,6 +99,8 @@ Not offered in this release: the programs Meta grants separately (Messenger mark
 ## Spend and decisions
 
 A spend, public or admin call is held for an administrator, who answers **Allow once** or **Deny** at a fresh sign-in, never a delegate ([ADR-0171](../../adr/0171-spend-public-and-admin-acts-are-held-for-an-administrator-never-a-delegate.md)). Before anybody is asked, a spend act passes the spend guard: an ad account's daily capacity is, over campaigns whose own status is ACTIVE and that have not ended, the campaign's daily budget where it holds the budget, otherwise its ACTIVE ad sets' daily budgets, a lifetime budget counted as its remainder over its remaining days. A change may add at most `per_change` to it and leave it at most `daily`. Enabling an ad, raising a bid or changing targeting adds nothing to capacity and is still asked. Caps limit the budgets agents may set: Meta may spend more than a daily budget on a given day.
+
+An agent holds only its level's tools, and each tool that takes a method's ID says what lies above it. A method above the agent's level, named on a tool it holds, is refused before Meta is called, naming the method's class, the tool and level that make it, whether an administrator approves each call, and that an administrator raises the level on the Agents tab, asked in words (`request_access` asks for no level). A method Crewlet does not offer is refused as one no level reaches.
 
 The administrator reads the exact requests, the targets as they are now and the capacity before and after; Allow once records the answer first, runs the guard again under the ad account's lease and sends nothing if a target changed. An unanswered ask lapses after a day. Every call, ask, answer and outcome is in the access log.
 

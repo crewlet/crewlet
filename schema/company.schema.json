@@ -6804,6 +6804,15 @@
             "null"
           ]
         },
+        "every_box": {
+          "description": "Run this step in every box rather than once per node into a container box's cached home: for a step that needs a credential the engine cannot see it read.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "files": {
           "additionalProperties": {
             "type": [

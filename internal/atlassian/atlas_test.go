@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -502,5 +503,31 @@ func TestAnUnconnectedAtlassianIsNotConfigured(t *testing.T) {
 	}
 	if _, err := atlassianSource(t).Collect(t.Context(), collect.Input{}); !errors.Is(err, integration.ErrNotConfigured) {
 		t.Errorf("no document: %v, want not configured", err)
+	}
+}
+
+// THE ADMIN CLIENT ANSWERS ONLY FROM ITS ONE HOST: a redirect is refused and
+// its target never asked, so the site it discovers comes from that host
+// alone. Mutation: let the client follow redirects and the target is asked
+// and its site discovered.
+func TestTheAdminClientRefusesRedirects(t *testing.T) {
+	t.Parallel()
+	o := acme()
+	var asked atomic.Int64
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked.Add(1)
+		o.serve(w, r)
+	}))
+	t.Cleanup(elsewhere.Close)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(srv.Close)
+	site, err := atlassian.NewClient(atlassian.ClientOptions{BaseURL: srv.URL}).DiscoverSite(t.Context(), atlasKey, atlasOrg)
+	if err == nil {
+		t.Errorf("a redirected listing discovered %+v", site)
+	}
+	if n := asked.Load(); n != 0 {
+		t.Errorf("the redirect's target was asked %d times, want 0", n)
 	}
 }

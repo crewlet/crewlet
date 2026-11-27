@@ -40,7 +40,13 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 	if subject == "" {
 		return nil, fmt.Errorf("%w: empty subject", ErrSubject)
 	}
-	gate, gateErr := queue.NewAnswerGate(answers)
+	// THE REQUESTS HELD WAITING FOR A SLOT ARE BOUND AS THE SUBSCRIPTION'S
+	// PENDING BUFFER IS: the client's own defaults, which every subscription
+	// here keeps. The callback no longer parks, so they are held in the gate
+	// rather than in that buffer, and a request is dropped at the threshold
+	// today's slow-consumer drop has: nothing buffered before is dropped now.
+	gate, gateErr := queue.NewServeGate(answers, nats.DefaultSubPendingMsgsLimit,
+		nats.DefaultSubPendingBytesLimit)
 	if gateErr != nil {
 		return nil, fmt.Errorf("serve %s: %w", subject, gateErr)
 	}
@@ -59,25 +65,22 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 	// would otherwise be answered after the withdrawal.
 	var stopped atomic.Bool
 
-	// ONE GOROUTINE PER ANSWER, never the callback's own: a core NATS
-	// subscription delivers on one goroutine, so an answer run inline holds
-	// every later request behind it. The registration's slots (answers)
-	// bound it; a request past them waits in the callback, backpressure on
-	// this subscription alone, since each is delivered on its own goroutine.
+	// ONE GOROUTINE PER ANSWER, never the callback's own, and THE CALLBACK
+	// NEVER WAITS: a core NATS subscription delivers on one goroutine, so a
+	// callback parked for a slot left every later request in the client's
+	// buffer, where nothing counted its wait. The request's arrival is
+	// stamped first, and the gate holds it for a slot ([queue.AnswerGate.Offer]).
 	sub, err := q.nc.Subscribe(subject, func(msg *nats.Msg) {
+		arrived := time.Now()
 		if stopped.Load() || msg.Reply == "" {
 			return
 		}
-		if !gate.Enter(serving) {
-			return
-		}
-		go func() {
-			defer gate.Leave()
+		err := gate.Offer(arrived, len(msg.Data), func(arrived time.Time) {
 			// NO REQUEST CONTEXT: the deadline is the ASKER's, enforced
 			// there. Its walking away frees the reply mailbox and makes the
 			// respond below a no-op. What the answer holds of the node's
 			// answer budget is given back once the respond below returns.
-			answering, replied := queue.Replying(serving)
+			answering, replied := queue.Replying(queue.Arriving(serving, arrived))
 			defer replied()
 			reply, err := answer(answering, subject, h, msg.Data)
 			if err != nil {
@@ -93,7 +96,8 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 					"detail", "the asker's reply mailbox is gone, which is what "+
 						"a deadline that passed looks like from here")
 			}
-		}()
+		}, nil) // a request dropped by the withdrawal holds nothing here
+		queue.LogDropped(q.log, subject, err)
 	})
 	if err != nil {
 		retire()
@@ -119,6 +123,7 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 
 	return func(ctx context.Context) error {
 		stopped.Store(true)
+		gate.Shut()
 		q.unanswer(subject, gate)
 		var unsubErr error
 		// A SUBSCRIPTION ALREADY GONE IS NO FAILURE ([queue.Unsubscribe]):

@@ -48,8 +48,8 @@
 // # A note inbox
 //
 // A person's notes to the run's turn, at the harness's own boundaries (Claude Code's
-// hooks, OpenCode's next step). A run's session carries a note INBOX
-// ([Session.Steer]), served two ways, both behind the run's own token only:
+// hooks, OpenCode's next step): the session's note INBOX ([Session.Steer]), served two
+// ways, both behind the run's own token only:
 //
 //   - THE steer_take TOOL ([SteerTool]), a hook's call. NEVER LISTED, so no model
 //     is offered it; answered by the server's receiving middleware, never reaching
@@ -57,21 +57,22 @@
 //     error: an error answer made Claude Code drop and re-initialise the whole
 //     bridge.
 //   - THE NOTES ROUTE ([SteerPattern]) a plugin polls: GET `notes?after=<seq>` holds
-//     up to [steerHold] and answers the notes past the cursor, each recorded served
+//     up to [pollHold] and answers the notes past the cursor, each recorded served
 //     before it is answered ([SteerInbox.Wait]); POST `read` records the notes the
 //     harness put before its model plain; POST `again` grants, by id alone, the second
 //     admission of notes a compaction folded ([SteerInbox.Again]); POST `folded` names
 //     the ones it gave up ([SteerInbox.Folded]).
 //
-// THE BRIDGE DECIDES NOTHING ABOUT NOTES: what waits, fits, is read and recorded
-// is the inbox's (internal/engine, runsteer.go). The bridge routes a call to the
-// session holding it ([Bridge.Join]), keeps a hook's call to the main agent's
-// boundaries, and bounds how long either is held.
+// THE BRIDGE DECIDES NOTHING ABOUT NOTES: what waits, fits, is read and recorded is the
+// inbox's (internal/engine, runsteer.go). It routes a call to the session holding it
+// ([Bridge.Join]), keeps a hook's call to the main agent's boundaries, and bounds how
+// long either is held. NOR ABOUT A JOB'S BROWSER ([Session.Browser]), whose box's relay
+// posts its screen and polls on [BrowserPattern] as notes are (internal/browser/screen).
 //
-// A NOTES CALL THAT REACHES ITS OPENING AS IT ENDS IS TURNED AWAY TO ASK AGAIN
-// ([Bridge.serveSteer], [Bridge.pollNotes], [readNotes]): a 503 with a
-// Retry-After, its next try routed afresh. NEVER THE 404 of a session with no inbox:
-// the OpenCode plugin reads that as a refused token and stops asking for the run.
+// A NOTES OR BROWSER CALL THAT REACHES ITS OPENING AS IT ENDS IS TURNED AWAY TO ASK
+// AGAIN ([Bridge.serveSteer], [Bridge.serveBrowser]): a 503 with a Retry-After, its
+// next try routed afresh. NEVER THE 404 of a session with none, on which the OpenCode
+// plugin and a box's relay stop asking for the run.
 //
 // A READ ([readNotes]) IS RECORDED OR TURNED AWAY TO ASK AGAIN, NEVER ANSWERED
 // DONE WITH NOTHING RECORDED: the plugin would never confirm those notes again and
@@ -169,11 +170,10 @@
 // never wrote its answer.
 //
 // AN ENDING ANSWERS EVERY CALL STILL RUNNING, THEN CLOSES. Under the opening's lock
-// it refuses later calls and answers each call whose tool has not returned
-// ([ending]): where the run is over for the box, that it has ended, the call is still
-// running and must not be made again, and the turn should end; where the box goes on
-// (seat leaving, recovery), that the call is still running and must not be made again.
-// NOT A FAILURE, as the tool loop's own "still running" is not
+// it refuses later calls and answers each call whose tool has not returned ([ending])
+// that it is still running and must not be made again, and, where the run is over for
+// the box rather than going on (seat leaving, recovery), that it has ended and the
+// turn should end. NOT A FAILURE, as the tool loop's own "still running" is not
 // (internal/agent/toolloop): a model makes a failed call again, where this one's effect
 // is still to come. A call whose entry is still being written, or that waits for
 // admission, is answered not run, failed ([ending.notRun]), and never runs. The ending
@@ -273,8 +273,8 @@
 // A session holds a live [tools.Surface] (the seat's MCP children, skill guard and
 // recording) in the process that holds the seat. So ONLY THE NODE HOLDING THE
 // RUN'S SEAT CAN SERVE ITS SESSION. Signing shares authentication across a fleet, not
-// the surface. A call is answered by the holder wherever it lands ([Bridge.Join]),
-// starting from what it can do for the call's job ([Bridge.verdict]).
+// the surface. The holder answers from what it can do for the call's job
+// ([Bridge.verdict]).
 //
 // "OVER" ONLY ONCE THIS NODE HAS FINISHED TAKING THE SEAT ([Bridge.SeatReady]): until
 // then a missing opening says nothing about the run. The opening and the seat's readiness
@@ -448,6 +448,13 @@ type Session struct {
 	// answers 404 and steer_take answers nothing, as on an engine assembled
 	// without note inboxes.
 	Steer SteerInbox
+
+	// Browser is the job's browser screen, which the bridge serves to its
+	// box's relay (browser.go): set by whoever opens the session, waiting or
+	// serving, and closed with the opening that serves it, every end alike,
+	// since an opening of the job's again gets a screen of its own. Nil
+	// serves none: every browser verb answers 404.
+	Browser Browser
 
 	// Skills maps the name the harness lists each skill under to the Tool Skill
 	// key: a reported load is recorded as the run's own load of the key (skills.go).
@@ -714,7 +721,7 @@ type Bridge struct {
 	shutdown     chan struct{}
 	shutdownOnce sync.Once
 
-	// hold is how long a notes poll is held when none waits: [steerHold].
+	// hold is how long a held poll is held: [pollHold].
 	hold time.Duration
 
 	// calls is every call the bridge's openings took until recorded, and every
@@ -759,7 +766,7 @@ func New(opts Options) (*Bridge, error) {
 		runs:     map[string]*binding{},
 		ready:    map[uuid.UUID]bool{},
 		shutdown: make(chan struct{}),
-		hold:     steerHold,
+		hold:     pollHold,
 		calls:    newBridgedCalls(),
 	}
 	// NO IDLE TIMEOUT: a session lives as long as its run, and a harness goes quiet
@@ -1230,7 +1237,7 @@ func (b *Bridge) Reachable() bool {
 // answers from its own opening, fenced or not, or refuses.
 func (b *Bridge) Handler() http.Handler {
 	b.mounted.Store(true)
-	return b.routed(b.serveMCP)
+	return b.routed(b.serveMCP, nil)
 }
 
 // servedOpening is the request context key [Bridge.serveMCP] hands the MCP
@@ -1278,9 +1285,12 @@ func (b *Bridge) serveMCP(w http.ResponseWriter, r *http.Request, opened *bindin
 }
 
 // routed is the routing every route under the prefix takes, so the MCP
-// endpoint and the notes route cannot disagree on which node answers a token;
-// serve is handed the opening where this node answers.
-func (b *Bridge) routed(serve func(http.ResponseWriter, *http.Request, *binding)) http.Handler {
+// endpoint and the job's own routes cannot disagree on which node answers a
+// token; serve is handed the opening where this node answers. held reports
+// the route's held poll, relayed so a shutdown lets go of it
+// ([Bridge.forwardPoll]); nil for a route that holds none.
+func (b *Bridge) routed(serve func(http.ResponseWriter, *http.Request, *binding),
+	held func(*http.Request) bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// REFUSED BEFORE THE MCP MACHINERY SEES IT: an unauthenticated caller cannot
 		// make this process allocate a session, and the refusal is a plain 401, not a
@@ -1296,7 +1306,7 @@ func (b *Bridge) routed(serve func(http.ResponseWriter, *http.Request, *binding)
 			return
 		}
 		if f := b.fleet.Load(); f != nil {
-			if isNotesPoll(r) {
+			if held != nil && held(r) {
 				b.forwardPoll(w, r, sub, f)
 				return
 			}
@@ -1463,6 +1473,10 @@ type binding struct {
 	// ([binding.cancelInbox]).
 	steer, endedSteer SteerInbox
 
+	// browser is the job's browser screen ([Session.Browser]), closed when the
+	// opening ends and nil after.
+	browser Browser
+
 	// callUnread says once, per opening, that a hook's steer_take came with
 	// an id the bridge could not read — see [binding.steerMiddleware].
 	callUnread sync.Once
@@ -1505,7 +1519,7 @@ const answerEvery = 20 * time.Second
 func newBinding(ctx context.Context, s *Session, where route, calls *bridgedCalls) *binding {
 	opened := &binding{id: s.Launch, session: s, caller: s.caller(), route: where,
 		ctx: context.WithoutCancel(ctx), arrived: s.LastSeq, parked: s.ParkedCalls, steer: s.Steer,
-		calls: calls, running: map[*bridgedCall]struct{}{}}
+		browser: s.Browser, calls: calls, running: map[*bridgedCall]struct{}{}}
 	// EVERY ENDPOINT IS FILED BEFORE ANY SERVER IS BUILT: a server lists its tools
 	// as built, reading which endpoint lists each off the map; one built before
 	// its siblings were filed would list theirs.
@@ -1566,6 +1580,17 @@ func (o *binding) inbox() SteerInbox {
 		return nil
 	}
 	return o.steer
+}
+
+// browserOf is the opening's browser screen, nil once it ended or where it has
+// none.
+func (o *binding) browserOf() Browser {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.ended {
+		return nil
+	}
+	return o.browser
 }
 
 // over reports whether the opening has ended.

@@ -819,7 +819,13 @@ func (s *Searcher) round(ctx context.Context, q Query, sq gitlet.SearchQuery, he
 	rctx, cancel := context.WithTimeout(ctx, RoundBudget)
 	defer cancel()
 	deadline, _ := rctx.Deadline()
-	req := Request{Version: requestProtocol(sq), ID: signedask.NewID(), Deadline: deadline, Asker: q.Asker,
+	wait := time.Until(deadline)
+	if wait <= 0 {
+		// NOTHING LEFT TO ASK WITH: a request carrying no wait is refused.
+		return nil, cmp.Or(ctx.Err(), context.DeadlineExceeded)
+	}
+	req := Request{Version: requestProtocol(sq), ID: signedask.NewID(), Deadline: deadline,
+		BudgetMS: signedask.WaitMS(wait), Asker: q.Asker,
 		CeilingSeat: q.CeilingSeat, Turn: q.Turn, Fresh: q.Git, Head: head, Search: sq, Assign: assign}
 	sealed, err := s.wire.SealRequest(req)
 	if err != nil {

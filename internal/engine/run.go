@@ -28,9 +28,11 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/atlas/collect"
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/atlaswake"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	awsint "github.com/crewlet/crewlet/internal/aws"
+	"github.com/crewlet/crewlet/internal/browser/screen"
 	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
@@ -464,6 +466,11 @@ type Engine struct {
 	// readers unread, logged once each time it changes
 	// ([Engine.executorMediaRead]).
 	mediaInline atomic.Pointer[string]
+
+	// keptAtText is why takes last kept sessions at the text bound, a stamp
+	// reader below the kept bound's version, logged once each time it changes
+	// ([Engine.executorMediaRead]).
+	keptAtText atomic.Pointer[string]
 
 	// drainOnce makes the drain one operation however many callers ask:
 	// [Engine.Stop] drains for a caller that did not, and a second run would
@@ -908,6 +915,11 @@ type Engine struct {
 		material webhooks.Secrets
 	}
 
+	// cloudIDs reads the cloud id of a Cloud site the company names by url,
+	// once per process, for the Forge route, the passes and setup. The
+	// integrations answer reads the passes' shared findings instead.
+	cloudIDs *atlassian.CloudIDs
+
 	// embeddings is the company's vector backend, swapped on apply. Atomic,
 	// not a mutex: read on the turn's prefetch hot path, written only by an
 	// apply, so a read must not queue behind anything.
@@ -1072,6 +1084,10 @@ type Engine struct {
 	// connectMarks is this node's writes of a harness's bridge connection under
 	// way, which a collection waits for (connectmarks.go).
 	connectMarks *connectMarks
+
+	// screenLimits are this node's limits on what its jobs' browser screens
+	// take, built once a node and handed to every hub here (browserscreen.go).
+	screenLimits screen.Limits
 
 	// runSteers is this node's half of the notes a turn's executor holds on
 	// its record, from launch to the turn's end (runsteer.go, ADR-0067).
@@ -1622,6 +1638,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	}
 
 	e := &Engine{
+		cloudIDs: atlassian.NewCloudIDs(atlassian.CloudIDOptions{}),
 		boot:     opts.Bootstrap,
 		environ:  environ,
 		refusals: newRefusalLatch(),
@@ -1647,6 +1664,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// an ingress-only node with no runtime still files a person's note on a
 		// run another node launched.
 		connectMarks: newConnectMarks(),
+		screenLimits: screen.NewLimits(nil),
 		runSteers: newRunSteers(steerSeals, sandbox.NewCoordStore(backends.Fleet), backends.Queue).
 			claimingIn(ledgerstore.NewFleetCompletions(backends.Fleet)).
 			seeingThrough(ledgerstore.NewSeenThrough(backends.Fleet)),

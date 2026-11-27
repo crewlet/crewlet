@@ -106,8 +106,9 @@ type NodeStatus struct {
 	// CaptureStampVersion is the shape of a run's capture stamp this node's
 	// build asks again whole when it settles one (internal/sandbox's
 	// CaptureStampVersion), zero where a node says none: a take keeps its
-	// media apart only once every node that may settle a run's row says a
-	// version that carries them, so a node not saying holds them inline.
+	// media apart, or a session at the kept bound, only once every node that
+	// may settle a run's row says a version that reads it, so a node not
+	// saying holds the take to neither.
 	CaptureStampVersion int
 
 	// AppliersReady and AppliersTotal are how many of this node's state-log

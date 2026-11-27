@@ -960,6 +960,9 @@ func New(opts Options) (*App, error) {
 	sources.Verifiable = func(ctx context.Context) []string {
 		return opts.Runtime.Snapshot(ctx).VerifiableSources
 	}
+	sources.Held = func(ctx context.Context) map[string]string {
+		return opts.Runtime.Snapshot(ctx).IngressHolds
+	}
 	// WHAT THIS PRINCIPAL MAY DO, from the SAME catalogue the act route
 	// serves and the same authority every one of its tools is decided by:
 	// a list computed anywhere else would be a second opinion about which
@@ -1367,6 +1370,7 @@ func (o Options) missing() error {
 		{"Inbound.Claims", o.Inbound.Claims == nil},
 		{"Inbound.Secrets", o.Inbound.Secrets == nil},
 		{"Inbound.AppFlow", o.Inbound.AppFlow == nil},
+		{"Inbound.CloudIDs", o.Inbound.CloudIDs == nil},
 		{"Config", o.Config == nil},
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
@@ -1494,6 +1498,10 @@ type Inbound struct {
 	// Keys verifies Forge invocation tokens. Nil uses Atlassian's
 	// published JWKS.
 	Keys webhooks.KeySource
+
+	// CloudIDs reads a url-named Cloud site's cloud id for the Forge route:
+	// the engine's one reader, shared with the node's passes and setup.
+	CloudIDs webhooks.CloudIDSource
 }
 
 // mountWebhooks registers the inbound edge.
@@ -1505,6 +1513,7 @@ func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, signIns webhooks.OA
 		Publisher:  in.Publisher,
 		Claims:     in.Claims,
 		Keys:       in.Keys,
+		CloudIDs:   in.CloudIDs,
 		AppFlow:    in.AppFlow,
 		Recheck:    in.Recheck,
 		Configured: a.Configured,

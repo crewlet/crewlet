@@ -542,7 +542,7 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 			RowReadBudget(rig.coordinator.pending, rig.coordinator.recordBudget) + MediaReadersRoom
 		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(share-spent))
 		defer cancel()
-		take, cancelTake, _ := rig.coordinator.takeContext(ctx)
+		take, cancelTake, _ := rig.coordinator.takeContext(ctx, atKeptBound)
 		defer cancelTake()
 		deadline, _ := take.Deadline()
 		// Less the nanosecond the share's float rounding takes off the read's

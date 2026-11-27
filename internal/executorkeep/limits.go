@@ -14,18 +14,16 @@ import (
 // capture and restore sessions stop at the same numbers: so each is declared
 // once, here, where both read it (see the package doc).
 const (
-	// SessionMaxBytes bounds one captured session's ARCHIVE, before it is
-	// sealed: a harness's transcript and its sidecars, packed.
+	// SessionMaxBytes bounds one captured session's TEXT, before it is
+	// sealed: a harness's transcript and its sidecars, packed, less the large
+	// payloads a take keeps apart, which [SessionKeptMaxBytes] bounds with it;
+	// a take keeping none apart holds its whole archive to it.
 	//
-	// FORTY-EIGHT MEBIBYTES: one whole-file read at a harness's limit beside
-	// about 8 MiB of ordinary work. Claude Code keeps a whole 20 MiB PDF read
-	// as 40.13 MiB (gzip level 7), OpenCode the same file as an image as
-	// 20.1 MiB; a session holding more media than that is still not kept
-	// (crewlet/crewlet#1626): a pack's trim drops lines, never media, and a
-	// text session meets [SessionPlainMaxBytes] first. A capture or restore
-	// streams it a chunk at a time ([secrets.StreamChunkBytes]), the store keeps
-	// [SealedMaxBytes], and it is pinned against objstore.RecordWithin at
-	// objstore.MiBPace in internal/objstore/references.
+	// FORTY-EIGHT MEBIBYTES: one whole 20 MiB PDF read inline (40.13 MiB, gzip
+	// level 7) beside about 8 MiB of work; a text session meets
+	// [SessionPlainMaxBytes] first. A capture or restore streams it a chunk at
+	// a time ([secrets.StreamChunkBytes]), the store keeps [SealedMaxBytes],
+	// pinned against objstore.RecordWithin in internal/objstore/references.
 	SessionMaxBytes = 48 << 20
 
 	// CompletedWorkMaxBytes and BlockedOnMaxBytes bound the reviewer's
@@ -112,7 +110,7 @@ const (
 	//
 	// NINETY-FOUR MEBIBYTES, ruled with the drain of crewlet/crewlet#2020:
 	// a take of a session at it, its scrub spool drained into its sealed
-	// spools, peaks at 95.14 MiB before its objects' seal headers and
+	// spools, peaks at 95.15 MiB before its objects' seal headers and
 	// members, inside one take's room (internal/sandbox's takeRoomBytes,
 	// 96.23 MiB); 95 MiB would leave them under a tenth of a mebibyte. Two
 	// whole-file Claude Code reads (80.3 MiB kept) fit beside 13.7 MiB of text.
@@ -129,9 +127,23 @@ const (
 // and the header and last chunk's tag each of [MediaMaxCount] more objects
 // adds. It is what a media object is uploaded under and what the object
 // store's pacing is held to for a capture's uploads.
-var KeptSealedMaxBytes = secrets.SealedStreamSize(SessionKeptMaxBytes,
-	strings.Repeat("k", secrets.MaxStreamKeyIDBytes)) +
-	MediaMaxCount*secrets.SealedStreamSize(0, strings.Repeat("k", secrets.MaxStreamKeyIDBytes))
+var KeptSealedMaxBytes = KeptSealedFor(SessionKeptMaxBytes)
+
+// KeptSealedFor is what a capture keeping n bytes in all holds sealed, its
+// objects at the most there may be ([KeptSealedMaxBytes]).
+func KeptSealedFor(n int64) int64 {
+	key := strings.Repeat("k", secrets.MaxStreamKeyIDBytes)
+	return secrets.SealedStreamSize(n, key) + MediaMaxCount*secrets.SealedStreamSize(0, key)
+}
+
+// KeptPaceMiB is the store's pace units (objstore.PaceFor, a mebibyte begun
+// each) a capture at the kept bound uploads in all: [KeptSealedMaxBytes]
+// begun, and one more for each of [MediaMaxCount] objects beside the text,
+// since Σ⌈sᵢ⌉ ≤ ⌈Σsᵢ⌉ + k for k+1 objects. 127. The take's media are paced
+// to it and its keep is budgeted at it (internal/sandbox's
+// SessionKeepBudget), so the two rise together; one object's pace alone would
+// leave a capture near the bound room for none of its media.
+var KeptPaceMiB = (KeptSealedMaxBytes+objstore.MiB-1)/objstore.MiB + MediaMaxCount
 
 // GzipMostBytes is the most Go's gzip writes of n bytes it cannot shrink, at
 // any level, in one member: flate stores such input as it came, five bytes of
@@ -158,7 +170,18 @@ const GzipMemberBytes = 10 + 8 + 5
 // which its test holds together with these.
 const SpoolMembersMostBytes = (256<<20/(64<<10) + 1) * GzipMemberBytes
 
-// ErrSessionTooLarge reports an archive past [SessionMaxBytes]: nothing is
+// SpoolSegmentBytes is the size of each file a take's scrub spool is written
+// in, which its second reading removes as it reads past it, so the sealed
+// spools write into the room the scrub's gives back (internal/sandbox's
+// takeRoomBytes). ONE MEBIBYTE: a take's drain holds at most one file it has
+// read, so this is the drain's peak overhead, beside the store's and the box
+// read's pace unit (objstore.MiB); 94 files a take at [SessionKeptMaxBytes]
+// cost nothing a disk notices, and a smaller file only opens more.
+const SpoolSegmentBytes = objstore.MiB
+
+// ErrSessionTooLarge reports a session past a bound it is kept within: an
+// archive past its take's ([SessionKeptMaxBytes] at most), a text past
+// [SessionMaxBytes] sealed, or an object past the store's. Nothing is
 // recorded, and the turn's next launch starts from the session the row already
 // names, or fresh.
 var ErrSessionTooLarge = errors.New("executorkeep: the session is over its size bound")

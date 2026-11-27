@@ -1475,6 +1475,13 @@ type FakeSession struct {
 	// to answer the write.
 	Keeping func(ctx context.Context)
 
+	// Drains, where set, has the take's scrub spool its body as a real one
+	// does: the whole body taken from the spool's room in files of
+	// executorkeep.SpoolSegmentBytes before the take returns, and each given
+	// back as the body is read past its end, the rest at the body's end
+	// (internal/sandbox/executor's spoolDisk). Unset, it spools nothing.
+	Drains bool
+
 	// kept counts the digests recorded.
 	kept atomic.Int32
 }
@@ -1526,9 +1533,20 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	if session.TakeErr != nil {
 		return TakenSession{}, session.TakeErr
 	}
-	// ITS SCRUB SPOOLS NOTHING, so its spool holds nothing.
-	if take.Spool.Held != nil {
-		take.Spool.Held(0)
+	framed := take.MediaApart && session.Framed != nil
+	if framed {
+		raw = session.Framed
+	}
+	// ITS SCRUB SPOOLS NOTHING unless it drains, so its spool holds nothing.
+	if session.Drains {
+		for at := 0; at < len(raw); at += executorkeep.SpoolSegmentBytes {
+			if err := take.Spool.Take(int64(min(executorkeep.SpoolSegmentBytes, len(raw)-at))); err != nil {
+				return TakenSession{}, err
+			}
+		}
+	}
+	if take.Spool.Spooled != nil {
+		take.Spool.Spooled()
 	}
 	// A MINTING FAKE'S SESSION IS THE ONE BOUND TO ITS JOB, as a real runner
 	// names it ([SessionTake.Session]); one with none bound takes nothing.
@@ -1545,11 +1563,10 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	if session.Count != nil {
 		count = func() *ResumedCount { counted := *session.Count; return &counted }
 	}
-	framed := take.MediaApart && session.Framed != nil
-	if framed {
-		raw = session.Framed
-	}
 	body := &takenFake{Reader: bytes.NewReader(raw), take: ctx}
+	if session.Drains {
+		body.drain = &fakeDrain{give: take.Spool.Give, spooled: int64(len(raw))}
+	}
 	if session.Streaming != nil {
 		body.stall = func() { session.Streaming(ctx) }
 	}
@@ -1591,11 +1608,36 @@ type takenFake struct {
 	io.Reader
 	take   context.Context
 	stall  func()
+	drain  *fakeDrain
 	once   sync.Once
 	closed atomic.Bool
 	// ended says the take was read to its end, which a real take's RunLines
 	// waits for ([TakenSession.RunLines]).
 	ended atomic.Bool
+}
+
+// fakeDrain gives a draining fake's spool back as its body is read
+// ([FakeSession.Drains]).
+type fakeDrain struct {
+	mu            sync.Mutex
+	give          func(int64)
+	read, spooled int64
+}
+
+// passed gives back each file the body's read has passed, and every one left
+// where the body ended.
+func (d *fakeDrain) passed(n int, ended bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.read += int64(n)
+	if ended {
+		d.read = d.spooled
+	}
+	for d.spooled > 0 && (d.read >= executorkeep.SpoolSegmentBytes || d.read == d.spooled) {
+		file := min(executorkeep.SpoolSegmentBytes, d.spooled)
+		d.give(file)
+		d.read, d.spooled = d.read-file, d.spooled-file
+	}
 }
 
 func (b *takenFake) Read(p []byte) (int, error) {
@@ -1612,11 +1654,17 @@ func (b *takenFake) Read(p []byte) (int, error) {
 	if errors.Is(err, io.EOF) {
 		b.ended.Store(true)
 	}
+	if b.drain != nil {
+		b.drain.passed(n, err != nil)
+	}
 	return n, err
 }
 
 func (b *takenFake) Close() error {
 	b.closed.Store(true)
+	if b.drain != nil {
+		b.drain.passed(0, true)
+	}
 	return nil
 }
 

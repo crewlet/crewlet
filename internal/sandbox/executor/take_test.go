@@ -30,12 +30,33 @@ import (
 const takeBound = executorkeep.SessionMaxBytes
 
 // testSpool is a take's spool in a directory of the test's own, in the room a
-// take holds for its scrub's spool.
+// take's scrub may spool at the kept bound, every byte given back by its end.
 func testSpool(t testing.TB) sandbox.SessionSpool {
 	t.Helper()
+	room := executorkeep.GzipMostBytes(executorkeep.SessionKeptMaxBytes) + executorkeep.SpoolMembersMostBytes
+	var (
+		mu   sync.Mutex
+		used int64
+	)
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if used != 0 {
+			t.Errorf("the take's spool left %d bytes of its room taken", used)
+		}
+	})
 	return sandbox.SessionSpool{Dir: t.TempDir(),
-		Bytes: 2*executorkeep.GzipMostBytes(executorkeep.SealedMaxBytes) - executorkeep.SealedMaxBytes,
-		Held:  func(int64) {}}
+		Take: func(n int64) error {
+			mu.Lock()
+			defer mu.Unlock()
+			if used+n > room {
+				return errors.New("the spool's room is full")
+			}
+			used += n
+			return nil
+		},
+		Give:    func(n int64) { mu.Lock(); used -= n; mu.Unlock() },
+		Spooled: func() {}}
 }
 
 // keptAndOpened is a taken session as a later launch opens it: sealed into a
