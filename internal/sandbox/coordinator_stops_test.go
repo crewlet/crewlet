@@ -1250,12 +1250,12 @@ func (s *refusingStore) TakeWaitOver(ctx context.Context, turnID, launch string,
 	return s.inner.TakeWaitOver(ctx, turnID, launch, fence)
 }
 
-func (s *refusingStore) ReviveWaitOver(ctx context.Context, turnID, launch string, fence Fence, lost bool,
+func (s *refusingStore) ReviveWaitOver(ctx context.Context, turnID string, revival Revival,
 ) (PendingRun, bool, error) {
 	if s.called("ReviveWaitOver") {
 		return PendingRun{}, false, errRefusedCall
 	}
-	return s.inner.ReviveWaitOver(ctx, turnID, launch, fence, lost)
+	return s.inner.ReviveWaitOver(ctx, turnID, revival)
 }
 
 func (s *refusingStore) MarkHeldCall(ctx context.Context, turnID, launch string, fence Fence) (HeldCall, bool, error) {

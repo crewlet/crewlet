@@ -4258,15 +4258,14 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Pushes") {
 		t.Fatalf("a coordinator with no reader of a run's pushes = %v, want it refused naming Pushes", err)
 	}
-	// AND A TAKER LEASE WITH NO HOLDER, OR A HOLDER WITH NO LEASE: an
-	// incarnation named on a capture with no lease behind it reads as a taker
-	// gone the moment the capture is begun.
+	// AND A TAKER LEASE WITH NO HOLDER, OR A HOLDER PAST WHAT A ROW CARRIES: a
+	// lease is held under the process's incarnation. A holder with no lease
+	// store is built, and names the clock of what it stamps (rowclock.go).
 	for _, c := range []struct {
 		name        string
 		incarnation string
 		takers      TakerLeases
 	}{
-		{name: "a holder with no lease store", incarnation: "node-a:1"},
 		{name: "a lease store with no holder", takers: memory.New()},
 		{name: "a holder past what a row carries of one", takers: memory.New(),
 			incarnation: "node-a:" + strings.Repeat("9", maxIncarnationBytes)},
@@ -4277,6 +4276,22 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 			Incarnation: c.incarnation, Takers: c.takers,
 		}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Incarnation") {
 			t.Errorf("a coordinator built with %s = %v, want it refused naming Incarnation", c.name, err)
+		}
+	}
+	for _, incarnation := range []string{"node-a:1", ""} {
+		c, err := NewCoordinator(CoordinatorOptions{
+			Pushes: &pushSpy{}, Audience: &audienceSpy{}, Resume: &resumeSpy{}, Answers: rigAnswers(),
+			Queue: rig.queue, Pending: rig.pending, Manager: rig.manager, Incarnation: incarnation,
+		})
+		if err == nil {
+			t.Cleanup(c.Stop)
+		}
+		switch {
+		case err != nil:
+			t.Errorf("a coordinator built with holder %q and no lease store = %v, want it built", incarnation, err)
+		case c.incarnation == "" || (incarnation != "" && c.incarnation != incarnation):
+			t.Errorf("a coordinator built with holder %q names its clock %q, want the holder, or one of its "+
+				"own: an empty clock is nobody's (rowclock.go)", incarnation, c.incarnation)
 		}
 	}
 }

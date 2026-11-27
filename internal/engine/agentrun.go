@@ -1078,7 +1078,7 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	ledger.bind(job)
 	// WHO RUNS THE SESSION'S CALLS, as every entry it writes ahead of a call
 	// names it: what a collection on any node reads this process's liveness by.
-	ledger.runner = e.callRunner()
+	ledger.runner, ledger.clock = e.callRunner(), e.incarnation
 	// AND WHERE ITS HARNESS'S CONNECTION IS HELD until its row says so, for a
 	// collection here or the seat's release ([connectMarks]).
 	ledger.marks, ledger.seat = e.connectMarks, s.Handle

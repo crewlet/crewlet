@@ -287,8 +287,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_432_283
-	measuredSpare       = 351_333
+	measuredOtherFields = 2_432_928
+	measuredSpare       = 350_688
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -402,11 +402,11 @@ const (
 	// MaxCallInFlightBytes bounds one entry in flight as the log holds it
 	// ([keptEntry]): its identity — its name at its worst (256 bytes escaped
 	// six-fold, 1,538 as the encoder writes it), its digest, its place, the
-	// instants the log and the bridge took it at, its bound
-	// ([BridgeCall.Until]) and the incarnation that runs it
+	// instants the log and the bridge took it at, its bound and its clock
+	// ([BridgeCall.Until], [BridgeCall.UntilClock]), the incarnation that runs it
 	// ([BridgeCall.Runner], held to [maxIncarnationBytes], 770 at its most
 	// escaped) — and the id its harness gave it ([BridgeCall.CallID], held to
-	// [MaxBridgeCallIDBytes]): 2,616 bytes at their widest, 2,539 without that
+	// [MaxBridgeCallIDBytes]): 2,761 bytes at their widest, 2,684 without that
 	// id, measured by TestACallInFlightIsHeldToItsShare. FOUR KIB is that
 	// rounded up to the next power of two: what is left is the room for the
 	// keys a later build adds to an entry, which this build carries unread
@@ -533,13 +533,13 @@ var ErrHeldCallTooLarge = errors.New("sandbox: a held call's sealed arguments ar
 // in the clear would let a log reader confirm a guess at what the seal hides
 // ([BridgeCall.Withheld], [approvedCall]). The harness's id is kept WHOLE OR
 // NOT AT ALL ([keptCallID]); a finished call keeps NOTHING THAT WAITS FOR IT
-// ([BridgeCall.Runner], [BridgeCall.Until]), held here whatever handed it,
-// since only an entry's runner is bounded ([keptEntry]). IDEMPOTENT: a size
-// already recorded is the whole's, never replaced.
+// ([BridgeCall.Runner], [BridgeCall.Until], [BridgeCall.UntilClock]), held here
+// whatever handed it, since only an entry's are bounded ([keptEntry]).
+// IDEMPOTENT: a size already recorded is the whole's, never replaced.
 func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 	call.Name = textcut.Within(call.Name, MaxBridgeCallNameBytes)
 	call.CallID = keptCallID(call.CallID)
-	call.Runner, call.Until = "", time.Time{}
+	call.Runner, call.Until, call.UntilClock = "", time.Time{}, ""
 	if call.Withheld() {
 		call.Args, call.ArgsBytes, call.Digest = "", 0, ""
 	}
@@ -785,6 +785,7 @@ func keptEntry(call BridgeCall) BridgeCall {
 		Name: textcut.Within(call.Name, MaxBridgeCallNameBytes), Digest: call.Digest,
 		CallID: keptCallID(call.CallID), At: call.At, Seq: call.Seq, StartedAt: call.StartedAt,
 		Runner: textcut.Within(call.Runner, maxIncarnationBytes), Until: call.Until,
+		UntilClock: textcut.Within(call.UntilClock, maxIncarnationBytes),
 	}
 }
 
@@ -1000,6 +1001,11 @@ func (l BridgeLog) ElisionKnown() bool {
 // digits of fraction and a zone of its own, never `Z`.
 var widestInstant = time.Date(9999, 12, 31, 23, 59, 59, 999_999_999, time.FixedZone("", 14*3600))
 
+// widestWindow is a [RowWindow] at its widest: an incarnation at its bound
+// ([maxIncarnationBytes], plain bytes), and its two instants at theirs.
+var widestWindow = RowWindow{Clock: strings.Repeat("n", maxIncarnationBytes), Since: widestInstant,
+	Of: widestInstant}
+
 // keptTitle is a run's title as its row keeps it: within [MaxRunTitleBytes]
 // as the row holds it, the cut said, and NEVER INSIDE A MARKER the redaction
 // wrote, which the launching turn's title holds ([LaunchRequest.Task]): one
@@ -1050,12 +1056,13 @@ func keptQuestion(q string) string {
 // AS THE ROW WILL HOLD IT, not as it is handed over: the record and the steps
 // after it add the status it took the run out of ([RecordedAnswer.From]), and
 // the claims that take it or lose it ([RecordedAnswer.TakenAt],
-// [RecordedAnswer.LostClaims], [RecordedAnswer.FirstLostAt]), each measured
-// here at its widest, so an answer that fits its share now still fits it
-// once every one of them is written.
+// [RecordedAnswer.LostClaims], [RecordedAnswer.FirstLostAt],
+// [RecordedAnswer.LostOn]), each measured here at its widest, so an answer that
+// fits its share now still fits it once every one of them is written.
 func answerFits(turnID string, answer RecordedAnswer) error {
 	answer.From = slices.MaxFunc(Awaiting, func(a, b string) int { return cmp.Compare(len(a), len(b)) })
 	answer.TakenAt, answer.FirstLostAt, answer.LostClaims = widestInstant, widestInstant, math.MaxInt
+	answer.LostOn = new(widestWindow)
 	raw, err := json.Marshal(answer)
 	if err != nil {
 		return fmt.Errorf("sandbox: encoding the answer to run %s: %w", turnID, err)

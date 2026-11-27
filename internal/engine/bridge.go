@@ -173,6 +173,10 @@ type bridgeLedger struct {
 	// read-only after.
 	runner string
 
+	// clock is this process's incarnation, whose clock dates every entry's
+	// bound ([sandbox.BridgeCall.UntilClock]); set with runner, read-only after.
+	clock string
+
 	mu sync.Mutex
 	// launch is the job this session's calls are recorded under, as the
 	// store opened it, and round its round ([sandbox.OpenedJob.Round]).
@@ -281,7 +285,7 @@ func (l *bridgeLedger) Begin(ctx context.Context, runID string, call mcpbridge.B
 		return errUnbound
 	}
 	entry := sandbox.BridgeCall{Name: call.Name, Seq: call.Seq, StartedAt: call.StartedAt,
-		Digest: call.Digest, CallID: call.CallID, Runner: l.runner, Until: call.Until}
+		Digest: call.Digest, CallID: call.CallID, Runner: l.runner, Until: call.Until, UntilClock: l.clock}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), beginBudget)
 	defer cancel()
 	taken, err := l.stepRetrying(ctx, runID, sandbox.BridgeAppend{Step: sandbox.AppendBegin,

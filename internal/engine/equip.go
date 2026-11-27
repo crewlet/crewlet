@@ -155,7 +155,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// AND ITS CALLS THAT NEED APPROVAL, on the same row, their arguments
 	// sealed under the fleet keyring.
 	if hold := builtin.NewCallHold(runAsks{engine: e}, sandbox.NewCallSeal(e.cipher), heldActs{engine: e},
-		delegatedRules{engine: e}); hold != nil {
+		delegatedRules{engine: e}).OnIncarnation(e.incarnation); hold != nil {
 		c.HoldTool = hold
 	}
 	// THE EXECUTOR RUN'S CHECKOUT, where the code tools serve on this

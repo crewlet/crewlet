@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/objstore"
 )
 
 // EVERY SECRET A LAUNCH HANDS ITS BOX IS KEPT FOR ITS SESSION'S SCRUB, AND
@@ -268,19 +269,47 @@ func TestAnIssuedDocumentIsScrubbedByEveryStringItHolds(t *testing.T) {
 	})
 }
 
-// A RENEWED VALUE IS DROPPED AN HOUR PAST ITS EXPIRY, and nothing a launch
+// A RENEWED VALUE STAYS UNTIL ITS ISSUER'S CLOCK IS PAST ITS EXPIRY too: the
+// expiry is the issuer's instant, the drop is judged on the node's clock, and
+// the two may stand twice objstore.AssumedClockSkew apart with no clock_skew
+// raised. An issuer behind the node by that much still honours the token until
+// the node reads its expiry plus the whole of it, so the token is kept until
+// then and dropped just after.
+//
+// Mutation: a lapse of an hour, or anything under twice the skew, drops the
+// still-good token and the first check goes red; never dropping fails the
+// second.
+func TestARenewedValueStaysUntilItsIssuerCountsItLapsed(t *testing.T) {
+	t.Parallel()
+	expires := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	behind := 2 * objstore.AssumedClockSkew
+	set := HandedSecrets{}
+	set.record("a-token-an-issuer-behind-renewed", expires)
+	// The node reads expires+behind as the issuer reads expires: the token's
+	// last good instant.
+	set.drop(expires.Add(behind))
+	if !slices.Contains(set.Values, "a-token-an-issuer-behind-renewed") {
+		t.Fatalf("at %v by the node's clock, the issuer %v behind it still honours the token, but the set "+
+			"dropped it", expires.Add(behind), behind)
+	}
+	set.drop(expires.Add(behind + time.Second))
+	if len(set.Values) != 0 {
+		t.Errorf("a second past the issuer's own expiry the set still holds %q", set.Values)
+	}
+}
+
+// A RENEWED VALUE IS DROPPED THE LAPSE PAST ITS EXPIRY, and nothing a launch
 // handed ever is. Dropping lapsed tokens keeps a long run's renewals (an AWS
-// session's 144 a day) within the set's bound; an hour is far past any clock's
-// error. A value recorded twice, or held by both sets a launch joins, lapses at
-// the later expiry, and one either holds for good never lapses. The poll's
-// record drops lapsed values as it adds the next, and a launch continuing in
-// the box as it seals the set it carried.
+// session's 144 a day) within the set's bound. A value recorded twice, or held
+// by both sets a launch joins, lapses at the later expiry, and one either holds
+// for good never lapses. The poll's record drops lapsed values as it adds the
+// next, and a launch continuing in the box as it seals the set it carried.
 //
 // Mutation: drop at the expiry itself, never drop, drop a value the launch
 // handed, keep the earlier of two expiries (in a record or in a union), give a
 // value held for good a lapse, drop only at a launch, or seal a carried set
 // without dropping, and a check below goes red.
-func TestARenewedValueIsDroppedAnHourPastItsExpiry(t *testing.T) {
+func TestARenewedValueIsDroppedTheLapsePastItsExpiry(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		at := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
@@ -296,12 +325,12 @@ func TestARenewedValueIsDroppedAnHourPastItsExpiry(t *testing.T) {
 			}
 		}
 		set.drop(at.Add(handedLapse))
-		holds("an hour past the first expiry,", "the-launchs-own-token", "the-first-renewed-token",
+		holds("the lapse past the first expiry,", "the-launchs-own-token", "the-first-renewed-token",
 			"the-second-renewed-token")
 		set.drop(at.Add(handedLapse + time.Second))
 		holds("a second later,", "the-launchs-own-token", "the-second-renewed-token")
 		set.drop(at.Add(30*time.Minute + handedLapse + time.Second))
-		holds("an hour past the later expiry,", "the-launchs-own-token")
+		holds("the lapse past the later expiry,", "the-launchs-own-token")
 		if len(set.Expires) != 0 {
 			t.Errorf("the set keeps %d expiries of values it no longer holds", len(set.Expires))
 		}
@@ -342,7 +371,7 @@ func TestARenewedValueIsDroppedAnHourPastItsExpiry(t *testing.T) {
 		if slices.Contains(stored.Values, "the-first-renewed-token") ||
 			!slices.Contains(stored.Values, "the-next-renewed-token") || !slices.Contains(stored.Values, handedToken) {
 			t.Errorf("the set beside the row holds %q, want the launch's token and the next renewal, "+
-				"the first renewal an hour past its expiry dropped", stored.Values)
+				"the first renewal the lapse past its expiry dropped", stored.Values)
 		}
 
 		// AND AS A KEPT BOX'S NEXT JOB IS SEALED, with what the job before it
@@ -374,7 +403,7 @@ func TestARenewedValueIsDroppedAnHourPastItsExpiry(t *testing.T) {
 		if slices.Contains(sealed.Values, "a-renewal-long-lapsed") ||
 			!slices.Contains(sealed.Values, "a-renewal-still-good") || !slices.Contains(sealed.Values, "the-first-jobs-token") {
 			t.Errorf("the relaunch's set holds %q, want what the job before it handed and its renewal still good, "+
-				"the one an hour past its expiry dropped", sealed.Values)
+				"the one the lapse past its expiry dropped", sealed.Values)
 		}
 		if when, lapses := sealed.Expires[expiryKey("a-renewal-still-good")]; !lapses ||
 			!when.Equal(relaunchRig.now.Add(10*time.Minute)) {

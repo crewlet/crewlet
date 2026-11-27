@@ -60,11 +60,12 @@ type WaitOver struct {
 	// node stopped before it is revived, one after it is reaped as used.
 	TakenAt time.Time `json:"taken_at,omitzero"`
 
-	// LostClaims and FirstLostAt count the claims that died before their turn
-	// took them, as [RecordedAnswer.LostClaims] does, bounding the revivals by
-	// [MaxAnswerRevivals] and the run's awaiting window.
-	LostClaims  int       `json:"lost_claims,omitempty"`
-	FirstLostAt time.Time `json:"first_lost_at,omitzero"`
+	// LostClaims, FirstLostAt and LostOn count the claims that died before
+	// their turn took them, as [RecordedAnswer.LostClaims] does, bounding the
+	// revivals by [MaxAnswerRevivals] and the run's awaiting window.
+	LostClaims  int        `json:"lost_claims,omitempty"`
+	FirstLostAt time.Time  `json:"first_lost_at,omitzero"`
+	LostOn      *RowWindow `json:"lost_on,omitempty"`
 
 	// Extra is every key of the section this build does not know: see
 	// [RunSteer.Extra].
@@ -137,6 +138,7 @@ func (s *CoordStore) ClaimWaitOver(ctx context.Context, turnID, launch string, f
 		over := WaitOver{From: before, Job: launch}
 		if run.WaitOver != nil {
 			over.LostClaims, over.FirstLostAt = run.WaitOver.LostClaims, run.WaitOver.FirstLostAt
+			over.LostOn = run.WaitOver.LostOn
 		}
 		run.WaitOver = &over
 		run.Status = StatusResumed
@@ -173,8 +175,8 @@ func (s *CoordStore) TakeWaitOver(ctx context.Context, turnID, launch string, fe
 
 // ReviveWaitOver gives a wait's claim no turn took back to waiting. See the
 // contract on [PendingStore].
-func (s *CoordStore) ReviveWaitOver(ctx context.Context, turnID, launch string, fence Fence, lost bool,
-) (PendingRun, bool, error) {
+func (s *CoordStore) ReviveWaitOver(ctx context.Context, turnID string, revival Revival) (PendingRun, bool, error) {
+	launch, fence := revival.Launch, revival.Fence
 	var taken PendingRun
 	wasTaken := false
 	written, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
@@ -186,11 +188,13 @@ func (s *CoordStore) ReviveWaitOver(ctx context.Context, turnID, launch string, 
 			return false
 		}
 		over := *run.WaitOver
-		if lost {
+		if revival.Lost {
+			now := s.clock()
 			over.LostClaims++
 			if over.FirstLostAt.IsZero() {
-				over.FirstLostAt = s.clock()
+				over.FirstLostAt = now
 			}
+			over.LostOn = over.lostWait().recorded(revival.Clock, now, over.FirstLostAt)
 		}
 		run.Status, run.WaitOver = over.From, &over
 		if fence.Fenced() {
@@ -355,7 +359,7 @@ func (c *Coordinator) giveBackWaitOver(ctx context.Context, run PendingRun) (Pen
 	if !held || outranked(run, fence) || (fence.Fenced() && run.OwnerEpoch != fence.Epoch) {
 		return run, nil
 	}
-	given, won, err := c.pending.ReviveWaitOver(ctx, run.TurnID, run.LaunchID, fence, false)
+	given, won, err := c.pending.ReviveWaitOver(ctx, run.TurnID, Revival{Launch: run.LaunchID, Fence: fence})
 	c.syncSeat(ctx, run.AgentHandle)
 	switch {
 	case errors.Is(err, ErrWaitOverTaken):
@@ -384,12 +388,13 @@ func (c *Coordinator) reviveWaitOver(ctx context.Context, run PendingRun, fence 
 	if !claimedWaitOver(run) || over.Taken() {
 		return nil, reapLeft, false
 	}
-	if why := c.revivableAfter(run, "this run's carrying on", over.LostClaims, over.FirstLostAt); why != "" {
+	if why := c.revivableAfter(run, "this run's carrying on", over.LostClaims, over.lostWait()); why != "" {
 		log.WarnContext(ctx, "sandbox_wait_over_not_revived", "turn_id", run.TurnID,
 			"agent", run.AgentHandle, "reason", why)
 		return nil, reapLeft, false
 	}
-	revived, won, err := c.pending.ReviveWaitOver(ctx, run.TurnID, run.LaunchID, fence, true)
+	revived, won, err := c.pending.ReviveWaitOver(ctx, run.TurnID, Revival{Launch: run.LaunchID, Fence: fence,
+		Lost: true, Clock: c.incarnation})
 	switch {
 	case errors.Is(err, ErrWaitOverTaken):
 		return nil, reapLeft, false

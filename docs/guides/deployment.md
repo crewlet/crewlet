@@ -199,6 +199,28 @@ hours of each other:
   grace has passed in real time, so a node whose clock runs further ahead of
   the decider's than that gives a host up early, and writes off the stopped
   run's spend while the host may still be restarting.
+- A run's give-ups and waits timed by an instant on its record are judged on
+  the clock of the engine process that stamped it, which the record names by
+  its incarnation, not its node id, so a node that comes back under the same
+  id on another machine reads its old instants as another clock's: a
+  collection that keeps failing (a minute), a resume that keeps failing (half
+  an hour), a
+  revived answer's or carried-on wait's lost claims (the run's
+  `pause_ttl_seconds`), a collection's wait for a
+  [call still in flight](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box) (the
+  call's bound) and a [delegated request's](delegated-decisions.md)
+  deadline. Any other process, or a record an older engine wrote, gives up
+  once the bound and two hours have passed by its own clock, or sooner on its
+  own clock alone: a process recording another failure of the run restarts its
+  window there, and the delegated-decisions duty counts a deadline from the
+  pass that first saw the request. A node whose clock runs further ahead of
+  the stamper's than the two hours can give up early.
+- A token the poll renewed in a box stays in the run's set for its scrub until
+  two hours past its issuer's expiry by the clock of the node recording the
+  next renewal.
+- A held call answered by an administrator lapses a day after it was held, by
+  the clock of the node deciding the answer: a policy's edge, moved by up to
+  the two hours.
 - A [joining node](retention.md#the-join-runbook) waits on every node whose
   positions-register row names an artefact and was taken by the coordination
   store within the last forty seconds and two hours, by the joining node's
@@ -244,7 +266,8 @@ while no node raises it, every data node and that member keep within an hour of
 the fleet's clock, and any two of them — every member of an embedded broker
 among them — within two hours of each other, inside every margin above. A rule
 judged on the clock of a node that runs seats, a turn's hold, a capture's or a
-standby's age, a box read's or an MCP test's admission or a stop's give-up above, rests on a
+standby's age, a box read's or an MCP test's admission, a stop's or a run's
+give-up above, rests on a
 clock the alarm measures only where that node holds data too: a node without
 the `data` role writes no row to the register, so nothing measures its clock,
 and NTP on it is all that keeps it inside the bound. With two data nodes
@@ -1868,7 +1891,7 @@ Every figure above is of the memory the executor's pools, the answers in flight,
 [page cache](#the-page-cache) and the read lane leave: a Gitlet node keeps them first and sizes
 Gitlet by what is left
 ([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 107 MiB for the
-transcript reads its API answers and 1 884 MiB where it runs seats too, 284 MiB for the answers in flight, a
+transcript reads its API answers and 1 889 MiB where it runs seats too, 284 MiB for the answers in flight, a
 sixteenth of its memory for the page cache and 128 MiB a core for git's reads, so give it that much more. They are the executor's in-process pools alone: a node
 running seats also holds its harness calls and boxes
 ([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's pools

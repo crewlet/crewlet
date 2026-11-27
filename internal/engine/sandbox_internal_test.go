@@ -1386,9 +1386,9 @@ func presentOnBuild(ctx context.Context, t *testing.T, backend coord.Backend, no
 // that lease in the same store, so the engine hands its coordinator its
 // incarnation, its lease store and the seat lease TTL in force. The lease is
 // claimed as the coordinator is built and released after its last keep, which
-// the engine's stop reaches after the drain. No lease store: no taker at all.
-// The store's clock is held still, so the deadline is exactly the TTL past the
-// claim.
+// the engine's stop reaches after the drain. No lease store: no taker, but the
+// incarnation still, the clock of what it stamps. The store's clock is held
+// still, so the deadline is exactly the TTL past the claim.
 //
 // Mutation: leave the incarnation, store or TTL off the coordinator's options,
 // build its lease on another TTL, or keep its stop off the engine's: red.
@@ -1455,10 +1455,12 @@ func TestTheEnginesCoordinatorHoldsThisProcesssTakerLease(t *testing.T) {
 			lease.Owner, lease.Epoch)
 	}
 
+	// WITH NO LEASE STORE, no taker lease, but the incarnation all the same: it
+	// names the clock of every instant the coordinator stamps on a run's row.
 	e.backends.Coord = nil
-	if opts := e.coordinatorOptions(nil, nil); opts.Takers != nil || opts.Incarnation != "" {
+	if opts := e.coordinatorOptions(nil, nil); opts.Takers != nil || opts.Incarnation != "node-a:1" {
 		t.Errorf("an engine with no lease store hands its coordinator %#v as its taker lease's store, under %q; "+
-			"want neither", opts.Takers, opts.Incarnation)
+			"want none, under this process's incarnation", opts.Takers, opts.Incarnation)
 	}
 }
 

@@ -289,8 +289,11 @@ type RelaunchTarget struct {
 	Placement Placement
 
 	// Node is the node holding the seat: a box is continued in only by the node
-	// it was launched on ([PriorBox.ReachableFrom]).
+	// it was launched on ([PriorBox.ReachableFrom]). At is Node's clock as it
+	// said this target, which a box it launched is dated on ([PendingRun.BoxSince]),
+	// so a reader on another node judges the box's age as the launch does.
 	Node string
+	At   time.Time
 
 	// Entry is the member's providers.llm entry ([LaunchRequest.Entry]), and
 	// LaunchRouted whether its harness resumes on its launch's route: what the
@@ -537,7 +540,7 @@ func relaunchContinuity(row executorkeep.TurnRow, run PendingRun, target Relaunc
 	if kept.Continues {
 		return ReadContinuity{Decided: true, Continues: true, In: ContinuesInAnyBox}
 	}
-	box, why := inParkedBox(run, row, target, now)
+	box, why := inParkedBox(run, row, target)
 	reason := kept.Why
 	if why != "" {
 		reason += "; " + why
@@ -761,7 +764,7 @@ const (
 // ([PriorBox.ContinuesIn], [PriorBox.ReachableFrom]): a seat that moved leaves
 // its box on the host it was launched on, which the next holder cannot reach.
 // AND OF THE SESSION THE ROW NAMES ([PendingRun.SessionRan]).
-func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget, now time.Time) (boxCarry, string) {
+func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget) (boxCarry, string) {
 	carried, undecided := boxContinues, ""
 	switch {
 	case run.Status == StatusAwaiting || run.Status == StatusReseed || run.Status == StatusAnswered ||
@@ -802,22 +805,26 @@ func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget
 	prior := PriorBox{SandboxID: run.SandboxID, Placement: run.Placement, Harness: run.Harness,
 		Status: StatusResumed, LaunchNode: run.LaunchNode, Since: run.BoxSince}
 	switch {
-	// THE BOX'S AGE FIRST, with its own reason: the launch's test refuses a box
-	// past [KeptBoxMaxAge], or never dated, whatever its cell and harness
-	// ([PriorBox.ContinuesIn]).
+	// THE BOX'S DATE, HOST AND AGE FIRST, each with its own reason: the launch
+	// refuses a box never dated, on another host, or past [KeptBoxMaxAge],
+	// whatever its cell and harness ([PriorBox.ContinuesIn]). The age is read on
+	// its host's clock, the holder's ([RelaunchTarget.At]), as the launch reads it.
 	case run.BoxSince.IsZero():
 		return boxNot, "the box its run ran in was never dated, so no age of it holds to the bound a " +
 			"relaunch continues in a box within"
-	case now.Sub(run.BoxSince) >= KeptBoxMaxAge:
-		return boxNot, fmt.Sprintf("the box its run ran in was first attached %s, and a relaunch "+
-			"continues only in a box younger than %d days", run.BoxSince.UTC().Format(time.RFC3339),
-			int(KeptBoxMaxAge/(24*time.Hour)))
-	case !prior.ContinuesIn(Spec{Placement: target.Placement, Harness: target.Harness}, now):
-		return boxNot, fmt.Sprintf("the box its run ran in runs %s in the %s cell, and a relaunch is "+
-			"launched on %s in the %s cell", run.Harness, run.Placement, target.Harness, target.Placement)
 	case !prior.ReachableFrom(target.Node):
 		return boxNot, fmt.Sprintf("the box its run ran in is on the host of %s, and %s, which holds "+
 			"the seat, cannot continue in it", run.LaunchNode, target.Node)
+	case target.At.IsZero():
+		return boxUndecided, "the node holding the seat did not say its clock, on which the age of the box " +
+			"its run ran in is read"
+	case target.At.Sub(run.BoxSince) >= KeptBoxMaxAge:
+		return boxNot, fmt.Sprintf("the box its run ran in was first attached %s, and a relaunch "+
+			"continues only in a box younger than %d days", run.BoxSince.UTC().Format(time.RFC3339),
+			int(KeptBoxMaxAge/(24*time.Hour)))
+	case !prior.ContinuesIn(Spec{Placement: target.Placement, Harness: target.Harness}, target.At):
+		return boxNot, fmt.Sprintf("the box its run ran in runs %s in the %s cell, and a relaunch is "+
+			"launched on %s in the %s cell", run.Harness, run.Placement, target.Harness, target.Placement)
 	}
 	// AND UNDER THE ENTRY ITS JOB RAN UNDER, as the launch's in-place branch
 	// holds it ([Coordinator.continueSession]).

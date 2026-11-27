@@ -133,7 +133,7 @@ Each case below goes to people.
 | A deploy's conditions | Every change it names has merged into one branch, the commit holds each and is on that branch, and every check the branch requires and its rule requires of it passed on the commit (a branch with neither goes to people; on Gitlet the commit is at or behind the branch's newest green commit). |
 | Hourly caps | Past `allows_per_hour` per kind and delegate, or `server_allows_per_hour` per server, in a clock hour (UTC) across the fleet; also when Crewlet cannot take the count. |
 | A fact it cannot read | A code host that does not answer, a change touching more paths than Crewlet reads, or a check it may not read. Not one: GitHub refusing branch protection or rulesets because the plan lacks them; that reads as the branch requiring nothing of its own, and the rule's checks decide. |
-| Time | No delegate answered within `deadline_seconds`. A new deadline applies at once to every waiting request. |
+| Time | No delegate answered within `deadline_seconds`. A new deadline applies at once to every waiting request. It is timed on the clock of the engine process that held the request, or on the sweeping node's own clock from the minute's sweep that first saw it, and never more than two hours past the deadline by the sweeping node's clock ([every machine's clock](deployment.md#every-machines-clock)). |
 | Turning it off | `enabled: false`, removing a rule, or changing its delegates shows its waiting requests to people on the next read, and records why within a minute. |
 
 Every verdict, and every escalation Crewlet makes itself, is recorded in the

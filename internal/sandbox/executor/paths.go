@@ -850,7 +850,7 @@
 // JSON rewrites, each its scanner, its read buffer and a frame a container
 // open; the readers and writers of the archive's gzip and tar, and of the
 // spool; a unit's two ways; and the plan, a sixteenth of the plaintext. About
-// 132 MiB at the bound and [scrubLongestMax], 16 MiB of it the plan and 12 MiB
+// 135 MiB at the bound and [scrubLongestMax], 16 MiB of it the plan and 15 MiB
 // that value, near nothing in a real session. A test holds it at a smaller
 // bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the real one,
 // both readings from disk.
