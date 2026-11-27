@@ -3,9 +3,13 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // cachedHomes is a FakeProvider whose run boxes start from a cached home
@@ -117,5 +121,38 @@ func TestAStepsEscapeIsItsOwnChangeOutsideTheHome(t *testing.T) {
 	}
 	if got := escaped(nil, many); len(got) != maxEscapedPaths {
 		t.Errorf("an escape named %d paths, want %d", len(got), maxEscapedPaths)
+	}
+}
+
+// A NODE THAT HAS NEVER RUN THE BOX IMAGE KEYS ITS FIRST BOX'S HOME TOO: the
+// image is pulled, as the box's own run would pull it, and its ID read after,
+// so a fresh node's first box is cached rather than running every step. An
+// image the node holds is not pulled again.
+func TestAFreshNodesFirstBoxKeysTheImageItPulls(t *testing.T) {
+	dir := t.TempDir()
+	runtime := filepath.Join(dir, "docker")
+	writeExecutable(t, runtime, `#!/bin/sh
+d=`+shellword.Quote(dir)+`
+echo "$1" >> "$d/calls"
+case "$1 $2" in
+"image inspect")
+	[ -e "$d/pulled" ] || { echo "Error response from daemon: No such image: alpine:3.24.1" >&2; exit 1; }
+	echo sha256:feedface;;
+"pull alpine:3.24.1") : > "$d/pulled";;
+*) exit 2;;
+esac
+`)
+	l := &Local{opts: LocalOptions{Placement: Container, Image: "alpine:3.24.1"}, cli: containerCLI{path: runtime}}
+	for range 2 {
+		if id, err := l.imageID(t.Context()); err != nil || id != "sha256:feedface" {
+			t.Fatalf("imageID on a node without the image = %q, %v", id, err)
+		}
+	}
+	calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pulls := strings.Count(string(calls), "pull\n"); pulls != 1 {
+		t.Errorf("the image was pulled %d times, want once: %q", pulls, calls)
 	}
 }
