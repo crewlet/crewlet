@@ -126,7 +126,7 @@ func TestTheStreamsLastLineIsKeptOnlyWhereItStandsInForTheResultFile(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		read, _, err := runner.decodeStream(stream, keep)
+		read, _, err := runner.decodeStream(t.Context(), stream, keep)
 		stream.close()
 		if err != nil {
 			t.Fatalf("decodeStream: %v", err)

@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"context"
+	"errors"
 	"hash/maphash"
 	"io"
 	"strings"
@@ -264,5 +266,34 @@ func TestAStandInLineFromAnOpenThatCannotReadAgainIsRefused(t *testing.T) {
 	if err != nil || raw != nil || !strings.Contains(refusal, "could not be read again") {
 		t.Errorf("a stand-in from an open that cannot read again gave %q, refusal %q, %v; want a refusal",
 			raw, refusal, err)
+	}
+}
+
+// AN EVENT STREAM'S READ ENDED BY ITS CONTEXT IS AN ERROR, never the stream's
+// end: a collection cancelled while it decodes stops there, holding its opens
+// and weight no longer, and what it decoded is never taken for the stream.
+//
+// Mutation: take the context's end for the stream's.
+func TestAnEventStreamsReadEndedByItsContextIsAnError(t *testing.T) {
+	t.Parallel()
+	runner := NewOpenCode()
+	b := sandbox.NewFakeSandbox("box-1")
+	path := PathsFor(b).WorkDir() + "/stream.jsonl"
+	// Past one buffered read, so the read goes on after the cancel.
+	b.Put(path, openCodeLines(2000))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	b.Streams = func(_ string, r io.Reader) io.Reader {
+		return &beforeRead{Reader: r, then: cancel}
+	}
+	stream, err := openStream(t.Context(), b, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.close()
+	read, refusal, err := runner.decodeStream(ctx, stream, false)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("a stream read whose context ended decoded %d bytes of answer, refusal %q, error %v; "+
+			"want the context's end as the error", len(read.result.Text), refusal, err)
 	}
 }

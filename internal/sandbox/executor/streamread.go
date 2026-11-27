@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -14,9 +15,11 @@ import (
 // streamRead is a run's event stream read from its open, no further than the
 // size it was weighed at: what the open found of a stream its job's writers
 // may still add to, since a job ends when its harness exits and a child it
-// left can go on writing. Nothing but the read's end ends it, so no short read
-// is ever taken for the stream.
+// left can go on writing. Nothing but the read's end or its context's ends
+// it, and a context's end is an error, never the stream's end, so no short
+// read is ever taken for the stream.
 type streamRead struct {
+	ctx        context.Context
 	body       io.Reader
 	src        io.Reader
 	size, read int64
@@ -25,14 +28,18 @@ type streamRead struct {
 	change sandbox.FileChange
 }
 
-// readStream is p read as a [streamRead].
-func readStream(p *piece) *streamRead {
-	return &streamRead{body: p.body, src: io.LimitReader(p.body, p.size), size: p.size}
+// readStream is p read as a [streamRead] under ctx.
+func readStream(ctx context.Context, p *piece) *streamRead {
+	return &streamRead{ctx: ctx, body: p.body, src: io.LimitReader(p.body, p.size), size: p.size}
 }
 
 func (s *streamRead) Read(p []byte) (int, error) {
 	if s.change != "" {
 		return 0, io.EOF
+	}
+	if err := s.ctx.Err(); err != nil {
+		// Wrapped where the read's error is ([Runner.decodeLines]).
+		return 0, err
 	}
 	n, err := s.src.Read(p)
 	s.read += int64(n)
