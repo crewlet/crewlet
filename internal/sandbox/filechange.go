@@ -45,7 +45,10 @@ type changeTeller interface {
 // descriptor it opened ([hostFile]) for its device, inode, size, modification
 // time and change time; the change time, which every write and every reset of
 // the modification time sets, also catches a same-size rewrite whose
-// modification time was put back.
+// modification time was put back. What it cannot tell: a process inside the
+// box that deliberately truncates and regrows the harness's own output past
+// the open's size reads as an append; nothing else cuts a job's streams, since
+// the executor's clear before each job start leaves them new files.
 func ChangeOf(body io.Reader) (FileChange, error) {
 	if t, ok := body.(changeTeller); ok {
 		return t.Change()
