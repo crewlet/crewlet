@@ -150,7 +150,7 @@ func TestATranscriptOfAStreamStillBeingWrittenKeepsWhatSettled(t *testing.T) {
 // never opened again by path, which could read the next job's file. A stream
 // cut while read is refused, so no line of it stands in; one still being
 // written, its result line not yet ended, has that line taken for no line: a
-// cut line never collects as a success.
+// cut line never collects as a success, nor shows its answer.
 //
 // Mutations, each red: read the stream again for its last line; keep the last
 // line of a stream refused as changed; take the unended line for a line.
@@ -164,11 +164,10 @@ func TestAStandInResultComesOnlyFromTheOneCheckedRead(t *testing.T) {
 		success      bool
 	}{
 		{"whole", strings.Repeat(line, 40) + result + "\n", func(*sandbox.FakeSandbox, string) {}, true},
-		// Cut after its result line, which the read then reads whole.
-		{"cut while read", strings.Repeat(line, 40) + result + "\n" + line,
-			func(b *sandbox.FakeSandbox, path string) {
-				b.TruncateInPlace(path, 40*len(line)+len(result)+1)
-			}, false},
+		// A fake box's read reads the bytes its open found, its result line
+		// the last whole one; the cut tells only in what became of the file.
+		{"cut while read", strings.Repeat(line, 40) + result + "\n",
+			func(b *sandbox.FakeSandbox, path string) { b.TruncateInPlace(path, 40) }, false},
 		{"its result line not yet ended", strings.Repeat(line, 40) + result,
 			func(b *sandbox.FakeSandbox, path string) { b.AppendInPlace(path, []byte(" and more words\n")) }, false},
 	} {
@@ -200,9 +199,12 @@ func TestAStandInResultComesOnlyFromTheOneCheckedRead(t *testing.T) {
 			if opens != 1 {
 				t.Errorf("the stream was opened %d times, want once", opens)
 			}
-			if got := res.Success && res.Text == "Built it."; got != c.success {
-				t.Errorf("a stream %s collected as success %v, text %q, error %.200q; want success %v", c.name,
-					res.Success, res.Text, res.Error, c.success)
+			// Neither the success nor the answer: a refused stream's failure
+			// alone keeps the first, and its line must not give the second.
+			stood := strings.Contains(res.Text, "Built it.")
+			if res.Success != c.success || stood != c.success {
+				t.Errorf("a stream %s collected as success %v, text %q, error %.200q; want success and "+
+					"its answer %v", c.name, res.Success, res.Text, res.Error, c.success)
 			}
 		})
 	}
