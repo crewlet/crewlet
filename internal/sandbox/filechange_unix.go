@@ -17,14 +17,18 @@ import (
 type hostFile struct {
 	file   *os.File
 	opened unix.Stat_t
-	err    error
 }
 
-// openedFile is f as its open found it.
-func openedFile(f *os.File) hostFile {
+// openedFile is f as its open found it: ONE fstat, which both sizes the read
+// and is what [ChangeOf] compares with, so no growth between two stats can
+// pass a cut read for the file.
+func openedFile(f *os.File) (hostFile, error) {
 	st, err := fstat(f)
-	return hostFile{file: f, opened: st, err: err}
+	return hostFile{file: f, opened: st}, err
 }
+
+// size is the file's size at the open.
+func (h hostFile) size() int64 { return h.opened.Size }
 
 // fstat is f's own record in the kernel.
 func fstat(f *os.File) (unix.Stat_t, error) {
@@ -42,9 +46,6 @@ func fstat(f *os.File) (unix.Stat_t, error) {
 
 // change compares the file now with its open.
 func (h hostFile) change() (FileChange, error) {
-	if h.err != nil {
-		return "", h.err
-	}
 	now, err := fstat(h.file)
 	if err != nil {
 		return "", err

@@ -89,10 +89,12 @@ type hostSection struct {
 	host    hostFile
 }
 
-// hostRange is the n bytes of f from off, as its open found it.
-func hostRange(f *os.File, off, n int64) hostSection {
-	s := io.NewSectionReader(f, off, n)
-	return hostSection{Reader: s, Closer: f, section: s, host: openedFile(f)}
+// hostRange is at most n bytes from off of the file h opened, sized by the
+// open's own stat and no other: an offset at or past that size is nothing.
+func hostRange(h hostFile, off, n int64) hostSection {
+	off = min(off, h.size())
+	s := io.NewSectionReader(h.file, off, min(n, h.size()-off))
+	return hostSection{Reader: s, Closer: h.file, section: s, host: h}
 }
 
 // Change implements [ChangeOf].
@@ -113,7 +115,7 @@ func (h hostWhole) Change() (FileChange, error) { return h.host.change() }
 
 // ReadAgain implements [ReadAgain], to the size the open found.
 func (h hostWhole) ReadAgain(p []byte, off int64) (int, error) {
-	return io.NewSectionReader(h.File, 0, h.host.opened.Size).ReadAt(p, off)
+	return io.NewSectionReader(h.File, 0, h.host.size()).ReadAt(p, off)
 }
 
 // absentBody is a file that was not there at its open: nothing was read and
