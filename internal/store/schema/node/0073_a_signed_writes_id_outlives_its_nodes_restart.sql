@@ -2,8 +2,8 @@
 --
 -- One row per request a node took on a signed channel whose replay writes
 -- (internal/signedask): the channel's name, the request's id, and until when,
--- by this node's clock, the channel would still admit it. A guard reads its
--- channel's rows back at boot, so a request captured before a restart and
+-- by this node's clock, the channel would still admit it. A write whose id is
+-- here already is a replay, so a request captured before a restart and
 -- replayed after it is refused, not run again as the actor it names.
 --
 -- WHO HAS TO AGREE ON IT: this node alone. Each node takes a scattered

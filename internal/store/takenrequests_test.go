@@ -43,25 +43,30 @@ func (a takenAnswer) Answers() string { return a.Request }
 var ringForTaken = recordseal.OneKey("k1", "the taken-requests cases' fleet key material")
 
 // A TAKEN WRITE'S ID OUTLIVES A CLOSE AND A REOPEN OF THE NODE FILE, by its
-// channel, until its window ends: the second Keep of an id is not fresh, an id
-// of another channel is that channel's alone, and Kept answers an id until the
-// instant its until reaches, then deletes it.
+// channel, until its window ends: after the restart a Keep of the id is not
+// fresh, a Forget before its until keeps it and one at its until deletes it,
+// and an id of another channel is that channel's alone.
 //
-// Mutations: Keep's ON CONFLICT answers fresh, Kept drops its channel filter,
-// or Forget deletes by `<` rather than `<=`: red.
+// Mutations: Keep's ON CONFLICT answers fresh, Forget drops its channel
+// filter, or Forget deletes by `<` rather than `<=`: red.
 func TestATakenWritesIDOutlivesTheNodeFilesRestart(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "node.db")
 	db := storetest.OpenNode(t, path, store.Options{})
 	file := store.NewTakenRequests(db)
 	until := takenAt.Add(time.Minute)
-	for _, k := range []struct{ channel, id string }{{"estate", "w-1"}, {"seat.broker", "w-1"}} {
-		if fresh, err := file.Keep(t.Context(), k.channel, k.id, until); err != nil || !fresh {
-			t.Fatalf("keep %s/%s = (%v, %v), want it fresh", k.channel, k.id, fresh, err)
+	held := func(channel string) bool {
+		t.Helper()
+		fresh, err := file.Keep(t.Context(), channel, "w-1", until)
+		if err != nil {
+			t.Fatal(err)
 		}
+		return !fresh
 	}
-	if fresh, err := file.Keep(t.Context(), "estate", "w-1", until); err != nil || fresh {
-		t.Fatalf("a second keep of one id = (%v, %v), want it held already", fresh, err)
+	for _, channel := range []string{"estate", "seat.broker"} {
+		if held(channel) {
+			t.Fatalf("the first keep of w-1 on %s found it held already", channel)
+		}
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
@@ -70,21 +75,20 @@ func TestATakenWritesIDOutlivesTheNodeFilesRestart(t *testing.T) {
 	db = storetest.OpenNode(t, path, store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	file = store.NewTakenRequests(db)
-	kept, err := file.Kept(t.Context(), "estate", until.Add(-time.Nanosecond))
-	if err != nil {
+	if !held("estate") {
+		t.Fatal("after a restart the node file did not hold the estate's w-1")
+	}
+	if err := file.Forget(t.Context(), "estate", until.Add(-time.Nanosecond)); err != nil || !held("estate") {
+		t.Fatalf("a forget before w-1's until (%v) deleted it", err)
+	}
+	if err := file.Forget(t.Context(), "estate", until); err != nil {
 		t.Fatal(err)
 	}
-	if len(kept) != 1 || !kept["w-1"].Equal(until) {
-		t.Fatalf("after a restart the estate kept %v, want w-1 until %s", kept, until)
+	if held("estate") {
+		t.Fatal("a forget at w-1's until left it held")
 	}
-	if kept, err = file.Kept(t.Context(), "estate", until); err != nil || len(kept) != 0 {
-		t.Fatalf("at its until the estate kept %v (%v), want nothing", kept, err)
-	}
-	if fresh, err := file.Keep(t.Context(), "estate", "w-1", until.Add(time.Minute)); err != nil || !fresh {
-		t.Fatalf("an id kept again after its row was deleted = (%v, %v), want it fresh", fresh, err)
-	}
-	if kept, err = file.Kept(t.Context(), "seat.broker", takenAt); err != nil || len(kept) != 1 {
-		t.Fatalf("the broker's channel kept %v (%v), want its own id untouched", kept, err)
+	if !held("seat.broker") {
+		t.Fatal("the estate's forget deleted the broker's w-1")
 	}
 }
 

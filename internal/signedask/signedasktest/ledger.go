@@ -20,7 +20,7 @@ type Ledger struct {
 // NewLedger is an empty ledger.
 func NewLedger() *Ledger { return &Ledger{kept: map[string]map[string]time.Time{}} }
 
-// Refuse makes every later Keep, Kept and Forget fail with err; nil heals it.
+// Refuse makes every later Keep and Forget fail with err; nil heals it.
 func (l *Ledger) Refuse(err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -42,20 +42,6 @@ func (l *Ledger) Keep(_ context.Context, channel, id string, until time.Time) (b
 	}
 	l.kept[channel][id] = until
 	return true, nil
-}
-
-// Kept deletes channel's ids whose until is not after now and answers the rest.
-func (l *Ledger) Kept(ctx context.Context, channel string, now time.Time) (map[string]time.Time, error) {
-	if err := l.Forget(ctx, channel, now); err != nil {
-		return nil, err
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	out := map[string]time.Time{}
-	for id, until := range l.kept[channel] {
-		out[id] = until
-	}
-	return out, nil
 }
 
 // Forget deletes channel's ids whose until is not after now.

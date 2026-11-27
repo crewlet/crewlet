@@ -28,13 +28,13 @@ func keptGuard(t *testing.T, c *Channel[ask, answer], file Ledger, now time.Time
 }
 
 // A WRITE TAKEN BEFORE A RESTART IS REFUSED AFTER IT: the guard a node builds
-// at boot over its own file holds every write it took inside its window, so a
-// captured write replayed at the restarted node is a replay, not a request. A
-// read's id is kept in memory only, so the restarted node takes a read again,
-// which costs nothing.
+// at boot over its own file finds there every write it took inside its window,
+// so a captured write replayed at the restarted node is a replay, not a
+// request. A read's id is kept in memory only, so the restarted node takes a
+// read again, which costs nothing.
 //
-// Mutations: Guard.take skips the Keep, or KeptGuard starts empty: the replay
-// is admitted, red.
+// Mutations: Guard.take skips the Keep, or reads Keep's fresh as true: the
+// replay is admitted, red.
 func TestAWriteTakenBeforeARestartIsRefusedAfterIt(t *testing.T) {
 	t.Parallel()
 	c := channel(t, "test.channel", fleetRing)
@@ -70,7 +70,8 @@ func TestAWriteTakenBeforeARestartIsRefusedAfterIt(t *testing.T) {
 // writes its channel admits inside one window.
 //
 // Mutations: Guard.take skips the Forget after a sweep (the file keeps every
-// short write), or Kept stops deleting (the file keeps the expired id): red.
+// short write), or KeptGuard skips its own (the file keeps the expired ids):
+// red.
 func TestTheFileForgetsAWriteWhenItsWindowEnds(t *testing.T) {
 	t.Parallel()
 	c := channel(t, "test.channel", fleetRing)
@@ -100,10 +101,7 @@ func TestTheFileForgetsAWriteWhenItsWindowEnds(t *testing.T) {
 		t.Errorf("after the sweep the file holds %d ids, want the two still inside their windows", n)
 	}
 
-	past := instant.Add(2 * time.Hour)
-	if restarted := keptGuard(t, c, file, past); len(restarted.seen) != 0 {
-		t.Errorf("a guard starting past every window holds %d ids", len(restarted.seen))
-	}
+	keptGuard(t, c, file, instant.Add(2*time.Hour))
 	if n := file.Len("test.channel"); n != 0 {
 		t.Errorf("a guard starting past every window left %d ids in the file", n)
 	}
@@ -152,9 +150,9 @@ func TestAGuardWithoutAFileRunsNoWrite(t *testing.T) {
 	}
 }
 
-// A GUARD WHOSE FILE CANNOT BE READ DOES NOT START: it could not tell a write
-// it took before the restart from a new one. And a write the file already
-// holds is a replay, whatever the memory says.
+// A GUARD WHOSE FILE REFUSES ITS START DOES NOT START: it could keep no write
+// there. And a write the file already holds is a replay, whatever the memory
+// says.
 func TestAGuardTrustsItsFileOverItsMemory(t *testing.T) {
 	t.Parallel()
 	c := channel(t, "test.channel", fleetRing)
@@ -162,7 +160,7 @@ func TestAGuardTrustsItsFileOverItsMemory(t *testing.T) {
 	file.Refuse(errors.New("unreadable"))
 	if _, err := c.KeptGuard(t.Context(), file, instant); err == nil ||
 		!strings.Contains(err.Error(), "signed_request_taken") {
-		t.Fatalf("a guard over an unreadable file = %v, want it refused naming the table", err)
+		t.Fatalf("a guard over a file that refuses = %v, want it refused naming the table", err)
 	}
 	file.Refuse(nil)
 	g := keptGuard(t, c, file, instant)

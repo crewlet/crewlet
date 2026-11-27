@@ -123,17 +123,19 @@
 // actor it names. So every request says whether it writes
 // ([Request.Writes]), and a guard keeps a write's id in the node's own file
 // ([Channel.KeptGuard], [Ledger]), committed BEFORE the request is admitted,
-// for exactly as long as it holds it in memory; on boot it reads back every id
-// still inside its window. A write whose id the file refuses runs nothing
+// for exactly as long as it holds it in memory. The FILE HAS THE LAST WORD: a
+// write whose id it holds already is a replay, whatever the memory says, so a
+// restart forgets nothing and the guard reads nothing back at boot. A write
+// whose id the file refuses runs nothing
 // ([Unrecorded]), and a guard without a file refuses every write: nothing
 // that writes is ever taken unrecorded. Reads stay in memory, where a restart
 // costs nothing. Each channel's request says whether it writes, and why a
 // note to a turn and the box bridge's relay need no file: each is taken only
 // by the process it names, which a restart replaces.
 //
-// The file holds what the memory holds: an id is deleted when a sweep forgets
-// it ([Guard]), and at boot, so its rows are bounded as the memory is, by the
-// writes a channel admits inside one window.
+// The file holds no id past its window: a sweep of the memory ([Guard])
+// deletes every row past its own, and so does a guard's start, so its rows are
+// bounded as the memory is, by the writes a channel admits inside one window.
 //
 // BOTH INSTANTS ARE THIS NODE'S WALL CLOCK: admission judges the deadline on
 // it, and an id is kept until the deadline plus the allowance on it, so the
@@ -525,12 +527,8 @@ type Guard struct {
 type Ledger interface {
 	// Keep records id as taken on channel until until, committed durably
 	// before it returns. fresh is false, and nothing changed, where the file
-	// holds the id already.
+	// holds the id already: a replay.
 	Keep(ctx context.Context, channel, id string, until time.Time) (fresh bool, err error)
-
-	// Kept deletes channel's ids whose until is not after now, and answers
-	// the rest.
-	Kept(ctx context.Context, channel string, now time.Time) (map[string]time.Time, error)
 
 	// Forget deletes channel's ids whose until is not after now.
 	Forget(ctx context.Context, channel string, now time.Time) error
@@ -549,20 +547,19 @@ func NewGuard() *Guard {
 }
 
 // KeptGuard is this channel's guard over the node's own file: every write it
-// takes is kept there until its window ends, and it starts holding every id
-// the file kept inside its window, judged on now. It refuses to start where
-// the file cannot be read, since a guard that forgot what it took cannot tell
-// a replay from the request it repeats.
+// takes is kept there until its window ends, and one the file holds already,
+// from before a restart, is a replay. It starts by deleting the ids past their
+// window, judged on now, and refuses to start where the file refuses that: a
+// file it cannot write is one it could keep no write in.
 func (c *Channel[Q, R]) KeptGuard(ctx context.Context, file Ledger, now time.Time) (*Guard, error) {
 	if file == nil {
 		return nil, fmt.Errorf("signedask: %s: a guard that keeps its writes needs the node's file", c.name)
 	}
-	kept, err := file.Kept(ctx, c.name, now)
-	if err != nil {
-		return nil, fmt.Errorf("signedask: %s: read back the requests this node took before it "+
-			"restarted (the node file's signed_request_taken table): %w", c.name, err)
+	if err := file.Forget(ctx, c.name, now); err != nil {
+		return nil, fmt.Errorf("signedask: %s: clear the requests this node took past their window "+
+			"(the node file's signed_request_taken table): %w", c.name, err)
 	}
-	return &Guard{seen: kept, sweepAt: max(2*len(kept), sweepFloor), file: file, channel: c.name}, nil
+	return &Guard{seen: map[string]time.Time{}, sweepAt: sweepFloor, file: file, channel: c.name}, nil
 }
 
 // take records one request's id until its deadline plus apart — the last
