@@ -129,12 +129,16 @@ func TestAnEventStreamIsReadAsOneVersionOfIt(t *testing.T) {
 			}
 		}},
 		{"still being written", func(b *sandbox.FakeSandbox, path string) {
-			b.AppendInPlace(path, []byte(`{"type":"text","part":{"messageID":"msg_2","text":"later"}}`))
+			// Opened with its last line, the run's end, not yet broken
+			// (unbroken below): the break comes after the open, so that
+			// line is not read as one.
+			b.AppendInPlace(path, []byte("\n"+`{"type":"text","part":{"messageID":"msg_2","text":"later"}}`))
 		}, func(t *testing.T, res sandbox.Result) {
 			if !strings.Contains(res.Transcript, "the run's event stream was still being written") ||
-				strings.Contains(res.Transcript, "later") || strings.Contains(res.Transcript, key) {
-				t.Errorf("a stream still being written left the transcript %.300q; want its settled whole lines, "+
-					"saying so", res.Transcript)
+				strings.Contains(res.Transcript, "later") || strings.Contains(res.Transcript, key) || res.Success {
+				t.Errorf("a stream still being written collected as success %v, its transcript %.300q; want its "+
+					"settled whole lines, saying so, and its unbroken last line, the run's end, not read",
+					res.Success, res.Transcript)
 			}
 		}},
 		{"cut while read", func(b *sandbox.FakeSandbox, path string) {
@@ -151,7 +155,11 @@ func TestAnEventStreamIsReadAsOneVersionOfIt(t *testing.T) {
 			runner := NewOpenCode()
 			b := sandbox.NewFakeSandbox("box-1")
 			p := PathsFor(b)
-			b.Put(p.Result(), whole)
+			opened := whole
+			if c.name == "still being written" {
+				opened = strings.TrimSuffix(whole, "\n")
+			}
+			b.Put(p.Result(), opened)
 			b.Put(p.ExitCode(), "0")
 			b.Streams = func(path string, r io.Reader) io.Reader {
 				if path == p.Result() {

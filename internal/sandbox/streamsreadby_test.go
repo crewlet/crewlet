@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // A READ'S STREAMS ARE GIVEN ONLY WHAT ITS WAIT LEAVES. The host hands its
@@ -60,7 +62,12 @@ func TestAReadsStreamsAreGivenOnlyWhatItsWaitLeaves(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			inBubble(t, func(t *testing.T) {
-				rig := newCoordRig(t)
+				// A STORE AS SLOW AS ANY NODE'S, so the take's records need
+				// all the room the budget gives them.
+				rig := newCoordRigWith(t, func(o *CoordinatorOptions) {
+					o.Pending = &crossingWrites{PendingStore: o.Pending, crossing: coord.MaxValueCrossing,
+						readCrossing: coord.MaxValueReadCrossing, given: map[string][]handed{}}
+				})
 				share := time.Duration(float64(wait) * BoxReadAnswerShare)
 				ctx, cancel := context.WithTimeout(t.Context(), share)
 				defer cancel()
