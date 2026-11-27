@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"math/rand/v2"
 	"slices"
@@ -127,14 +128,14 @@ func TestAFailuresTailIsTheEndOfItsWholeStreamsRedaction(t *testing.T) {
 // A FAILURE'S TAIL IS NOT SHOWN PAST THE READ'S BOUND: a stream whose
 // redaction has not reached its end within [sandbox.FailureReadWait] on the
 // runner's clock, or by the bound its box read handed it
-// ([sandbox.RunHandle.FailureReadBy]), or once its read's context ended, shows
-// none of it and says why and the time it was given, since an end the
-// redaction has not reached is no end of the stream's; one that reached it in
-// time is shown.
+// ([sandbox.RunHandle.FailureReadBy]), shows none of it and says why and the
+// time it was given, since an end the redaction has not reached is no end of
+// the stream's; one that reached it in time is shown. A read whose context
+// ended fails, never taken for a short stream.
 //
 // Mutations, each red: show what the ring holds at the bound; read the clock
 // only before the first piece; read on past the bound; ignore the handle's
-// bound or the context's end.
+// bound; withhold a read its context ended rather than fail it.
 func TestAFailuresTailIsNotShownPastTheReadsBound(t *testing.T) {
 	t.Parallel()
 	text := strings.Repeat("compiling a package of the build\n", 4*failureReadPiece/33) + "FATAL: the last line\n"
@@ -151,7 +152,6 @@ func TestAFailuresTailIsNotShownPastTheReadsBound(t *testing.T) {
 		{"a read the wait ends", sandbox.FailureReadWait / 3, 0, nil, "32s"},
 		{"a read its box read's bound ends", sandbox.FailureReadWait / 16, sandbox.FailureReadWait / 8, nil, "4s"},
 		{"a read handed a bound already passed", sandbox.FailureReadWait / 16, -time.Second, nil, "0s"},
-		{"a read whose context ended", sandbox.FailureReadWait / 16, 0, ended, "32s"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -186,6 +186,11 @@ func TestAFailuresTailIsNotShownPastTheReadsBound(t *testing.T) {
 				t.Errorf("the read went on to the stream's end, %d bytes, past its bound", body.all)
 			}
 		})
+	}
+	body := &readCounter{text: strings.NewReader(text)}
+	if _, err := (&Runner{now: stillClock}).readFailureTail(ended, &piece{path: "err", what: "the error stream",
+		body: body, size: int64(len(text))}, 1<<10, time.Time{}); !errors.Is(err, context.Canceled) {
+		t.Errorf("a read whose context ended answered %v, want its context's end", err)
 	}
 }
 

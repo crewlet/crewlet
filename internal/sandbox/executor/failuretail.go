@@ -76,7 +76,8 @@ func (f failureTail) transcript() string {
 // RUNNER'S CLOCK, BY ITS BOUND: [sandbox.FailureReadWait], or the earlier of
 // readBy ([sandbox.RunHandle.FailureReadBy]) and ctx's deadline where they come
 // sooner; past it the read stops and withholds the end, since an end the
-// redaction has not reached is not the stream's.
+// redaction has not reached is not the stream's. A read its context ended
+// fails.
 func (r *Runner) readFailureTail(ctx context.Context, p *piece, keep int, readBy time.Time) (failureTail, error) {
 	tail := failureTail{size: p.size}
 	if p.body == nil || p.size == 0 {
@@ -99,7 +100,12 @@ func (r *Runner) readFailureTail(ctx context.Context, p *piece, keep int, readBy
 		}
 	}
 	for {
-		if r.now().After(by) || ctx.Err() != nil {
+		if err := ctx.Err(); err != nil {
+			// THE READ'S OWN END is no bound reached: an error, so nothing a
+			// read cut by it holds is taken for the stream.
+			return failureTail{}, fmt.Errorf("executor: reading the error stream: %w", err)
+		}
+		if r.now().After(by) {
 			tail.withheld = fmt.Sprintf("it ran past the collection's bound on its read, %v, within which its "+
 				"redaction read %s of it from its first byte and did not reach its end, so its end is withheld: "+
 				"an end the redaction has not reached may still change with what came before it",
