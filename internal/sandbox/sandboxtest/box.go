@@ -57,6 +57,7 @@ func Box(t *testing.T, fresh func(t *testing.T) (sandbox.Sandbox, InPlace)) {
 	for name, fn := range map[string]func(*testing.T, sandbox.Sandbox, InPlace){
 		"AReadTellsAFileUntouchedSinceItsOpen":      testAReadTellsAFileUntouchedSinceItsOpen,
 		"AReadTellsAFileGrownSinceItsOpen":          testAReadTellsAFileGrownSinceItsOpen,
+		"AReadIsOfTheFileItsOpenSized":              testAReadIsOfTheFileItsOpenSized,
 		"AReadTellsAFileCutSinceItsOpen":            testAReadTellsAFileCutSinceItsOpen,
 		"ARangeIsReadAgainFromTheFileItsOpenOpened": testARangeIsReadAgainFromTheFileItsOpenOpened,
 	} {
@@ -149,6 +150,40 @@ func testAReadTellsAFileGrownSinceItsOpen(t *testing.T, box sandbox.Sandbox, edi
 		if got := changeAfter(t, open, path, func() { edit.Append(t, path, []byte("more\n")) }); got != sandbox.FileAppended {
 			t.Errorf("%s of a file appended to tells %q, want %q", name, got, sandbox.FileAppended)
 		}
+	}
+}
+
+// A READ IS OF THE FILE ITS OPEN SIZED, on every open: a file grown once the
+// open returned, before a byte is read, reads, where the open is a section, to
+// the size the open found, and tells an append. The host's own window, between
+// its open's stat and its return, is held by the sandbox package's
+// TestAHostReadIsSizedAndCheckedByOneStatOfItsOpen.
+//
+// Mutation: size a section, or what its check compares with, at the read
+// rather than at the open.
+func testAReadIsOfTheFileItsOpenSized(t *testing.T, box sandbox.Sandbox, edit InPlace) {
+	path := pathIn(box, "sized.log")
+	want := pattern(1000)
+	for name, open := range opens(box) {
+		write(t, box, path, want)
+		r, err := open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		edit.Append(t, path, []byte("written once the open returned\n"))
+		got, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if name != "OpenFile" && !bytes.Equal(got, want) {
+			t.Errorf("%s of a file grown before its read read %d bytes, want the %d its open found", name,
+				len(got), len(want))
+		}
+		if change, err := sandbox.ChangeOf(r); err != nil || change != sandbox.FileAppended {
+			t.Errorf("%s of a file grown before its read tells %q (%v), want %q", name, change, err,
+				sandbox.FileAppended)
+		}
+		_ = r.Close()
 	}
 }
 
