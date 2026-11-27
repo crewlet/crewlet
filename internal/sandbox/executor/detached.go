@@ -1223,6 +1223,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			refused = append(refused, refusal)
 		} else {
 			parsed := r.harness.Parse(raw)
+			if unparsedRefused(parsed) {
+				pieces.result.withhold(sandbox.WithheldRefused, "")
+			}
 			if out.Events {
 				parsed.Transcript = result.Transcript
 				parsed.TranscriptElidedLines = result.TranscriptElidedLines

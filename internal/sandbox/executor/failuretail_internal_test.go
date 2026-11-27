@@ -442,3 +442,31 @@ func TestAShortReadOfAnErrorStreamIsWithheld(t *testing.T) {
 		}
 	}
 }
+
+// UNPARSEABLE OUTPUT ITS REDACTION REFUSED IS COUNTED: a result file that is
+// no result, whose redaction stream refuses its text, is counted as a refused
+// piece read whole, beside its failure saying so.
+//
+// Mutation: leave the count out.
+func TestUnparseableOutputItsRedactionRefusedIsCounted(t *testing.T) {
+	t.Parallel()
+	b := sandbox.NewFakeSandbox("box-1")
+	p := PathsFor(b)
+	refused := "k: -----BEGIN RSA PRIVATE KEY-----\n" +
+		"MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n\n" +
+		strings.Repeat("pwd:\n", 12000) + "sk-" + strings.Repeat("Ab0_-x9Z", 1<<20) + "\n" +
+		strings.Repeat("ok\n", 256<<10)
+	b.Put(p.Result(), refused)
+	b.Put(p.ExitCode(), "1")
+	meter := &withholdings{}
+	res, err := NewClaudeCode().Collect(sandbox.CountingWithheld(t.Context(), meter), b, sandbox.RunHandle{},
+		queue.NewAnswerBudget(nil))
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !strings.Contains(res.Error, redactionRefused) || !slices.Contains(meter.all(),
+		sandbox.Withholding{Piece: sandbox.WithheldWholePiece, Reason: sandbox.WithheldRefused}) {
+		t.Errorf("a refused unparseable output failed with %.200q and counted %v; want it said and counted",
+			res.Error, meter.all())
+	}
+}

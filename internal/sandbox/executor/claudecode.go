@@ -1432,6 +1432,13 @@ func unparsedFailure(text []byte) string {
 	return opening + " (" + size + "; its end shown):\n" + shown
 }
 
+// unparsedRefused reports whether parsed is the failure of unparseable output
+// its redaction stream refused ([unparsedFailure]), which its collection
+// counts as a refused piece: the sentence that failure ends on is its own.
+func unparsedRefused(parsed sandbox.Result) bool {
+	return strings.HasSuffix(parsed.Error, redactionRefused)
+}
+
 // claudeMaxTurns is the result subtype of a run that reached its --max-turns.
 const claudeMaxTurns = "error_max_turns"
 
