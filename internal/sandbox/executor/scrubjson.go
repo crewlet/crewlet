@@ -18,8 +18,10 @@ import (
 // Every name and string is read from the scanner as the text it decodes to, a
 // piece at a time, scrubbed by value and by shape as it streams
 // ([scrubber.text]) and written again as a JSON string ([jsonStringWriter]); a
-// number is written as its literal reads; and a string or a number under a
-// credential's key ([keyReading]) is written as [credentialMarker]. A text
+// number is written as its literal reads; and every string, number, true and
+// false under a credential's key ([keyReading]), at any depth of the
+// containers there, is written as [credentialMarker], a string, the
+// containers kept as they stand so a harness reads its record back. A text
 // short enough to be read whole in one piece is scrubbed whole
 // ([textWholeBytes]), which is what the streams themselves do with a text that
 // short: what each writes, put together, is exactly the whole-text pass of
@@ -417,8 +419,9 @@ func escapedASCII(c byte) string {
 
 // jsonRewrite rewrites one JSON text read from a scanner, token by token, onto
 // a [rewriteOut]: every name and string scrubbed and written again as a JSON
-// string, every number, true, false and null as written, a string or a number
-// under a credential's key as [credentialMarker], and no blank between tokens.
+// string, every number, true, false and null as written, every string, number,
+// true and false under a credential's key, at any depth, as [credentialMarker],
+// and no blank between tokens.
 // A text the scanner refuses ends the rewrite on its *jsonscan.Error, what the
 // rewrite wrote of it before counted and not taken back.
 //
@@ -459,8 +462,10 @@ type rewriteFrame struct {
 	// n is how many members (an object's pairs, an array's values) are
 	// written.
 	n int
-	// credential says the member being read is under a credential's key.
-	credential bool
+	// credential says the value being read is a credential's: an object's
+	// member under a credential's key, or any value of a container under
+	// one (under), at any depth.
+	credential, under bool
 	// role is what the frame is to a transcript line's cut, and member which
 	// of the names the role reads the member being read is under.
 	role   frameRole
@@ -565,12 +570,8 @@ func (j *jsonRewrite) token(k jsonscan.Kind) error {
 		if err := j.number(); err != nil {
 			return err
 		}
-	case jsonscan.True:
-		if err := j.out.writeString("true"); err != nil {
-			return err
-		}
-	case jsonscan.False:
-		if err := j.out.writeString("false"); err != nil {
+	case jsonscan.True, jsonscan.False:
+		if err := j.literal(k == jsonscan.True); err != nil {
 			return err
 		}
 	case jsonscan.Null:
@@ -624,7 +625,8 @@ func (j *jsonRewrite) open(k jsonscan.Kind) error {
 		return err
 	}
 	j.containers++
-	f := rewriteFrame{object: object}
+	under := j.frame() != nil && j.frame().credential
+	f := rewriteFrame{object: object, under: under, credential: under}
 	if j.defs != nil {
 		f.role = roleFor(j.frame(), object)
 	}
@@ -698,7 +700,7 @@ func (j *jsonRewrite) name() error {
 	if err := j.out.writeByte(':'); err != nil {
 		return err
 	}
-	f.credential = j.key.Credential()
+	f.credential = f.under || j.key.Credential()
 	f.member = readOther
 	if reads != nil && !j.str.over {
 		f.member = reads[string(j.str.capture)]
@@ -733,6 +735,23 @@ func (j *jsonRewrite) credentialValue() error {
 			return err
 		}
 	}
+}
+
+// literal writes true or false: under a credential's key, as
+// [credentialMarker], a string where the literal stood, as a number goes
+// ([jsonRewrite.number]).
+func (j *jsonRewrite) literal(truth bool) error {
+	word := "false"
+	if truth {
+		word = "true"
+	}
+	if f := j.frame(); f != nil && f.credential {
+		if err := j.takenWhole(int64(len(word)), io.EOF); err != nil {
+			return err
+		}
+		return j.marker()
+	}
+	return j.out.writeString(word)
 }
 
 // marker writes [credentialMarker] as a JSON string, where the value under a
