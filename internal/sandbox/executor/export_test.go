@@ -387,7 +387,7 @@ func EachLine(r io.Reader, dec Decoder, bound int) error { return eachLine(r, de
 // CollectedCount is what [Runner.Collect] counts of stream, read whole through
 // its own reading of an event stream.
 func CollectedCount(r *Runner, stream []byte) (sandbox.RequestCount, error) {
-	read, _, err := r.decodeLines(bytes.NewReader(stream), false, func() bool { return true })
+	read, err := r.decodeLines(bytes.NewReader(stream), false, func() bool { return true })
 	return sandbox.RequestCount{Requests: read.requests, InFlight: read.inFlight, Undecided: read.undecided}, err
 }
 

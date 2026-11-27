@@ -1741,12 +1741,12 @@ func (r *Runner) decodeStream(ctx context.Context, stream *piece, keepLast bool,
 	}
 	defer stream.close()
 	read := r.readStream(ctx, stream, by)
-	decoded, refusal, err := r.decodeLines(read, keepLast, read.whole)
+	decoded, err := r.decodeLines(read, keepLast, read.whole)
 	switch {
 	case err != nil:
 		return decodedStream{}, "", err
 	case read.change == sandbox.FileChanged:
-		refusal = stream.withhold(sandbox.WithheldChanged, changedPiece(stream.path, stream.what, read.read,
+		refusal := stream.withhold(sandbox.WithheldChanged, changedPiece(stream.path, stream.what, read.read,
 			stream.size))
 		return decodedStream{request: contextRead{why: "the run's event stream was not read: " + refusal}},
 			refusal, nil
@@ -1759,7 +1759,7 @@ func (r *Runner) decodeStream(ctx context.Context, stream *piece, keepLast bool,
 	case !read.whole():
 		decoded.result.Transcript = strings.TrimSpace(unendedNote() + "\n" + decoded.result.Transcript)
 	}
-	return decoded, refusal, nil
+	return decoded, "", nil
 }
 
 // redecodeStream reads the stream a collection opened again, keeping its last
@@ -1776,14 +1776,14 @@ func (r *Runner) redecodeStream(ctx context.Context, box sandbox.Sandbox, stream
 	}
 	defer func() { _ = body.Close() }()
 	read := r.readStream(ctx, &piece{body: body, size: stream.size}, time.Time{})
-	again, _, err := r.decodeLines(read, true, read.whole)
+	again, err := r.decodeLines(read, true, read.whole)
 	return again, err
 }
 
 // decodeLines decodes an event stream's lines from stream through a fresh
 // decoder, its unended last line a line only where whole says the stream
 // ended; where it did not, its transcript ends where its redaction settled.
-func (r *Runner) decodeLines(stream io.Reader, keepLast bool, whole func() bool) (decodedStream, string, error) {
+func (r *Runner) decodeLines(stream io.Reader, keepLast bool, whole func() bool) (decodedStream, error) {
 	events := r.harness.Events()
 	kept := &keepingLast{Decoder: events}
 	dec := events
@@ -1791,7 +1791,7 @@ func (r *Runner) decodeLines(stream io.Reader, keepLast bool, whole func() bool)
 		dec = kept
 	}
 	if err := eachLineOf(stream, dec, r.lineBound, whole); err != nil {
-		return decodedStream{}, "", fmt.Errorf("executor: reading the event stream: %w", err)
+		return decodedStream{}, fmt.Errorf("executor: reading the event stream: %w", err)
 	}
 	if unended, ok := events.(streamUnended); ok && !whole() {
 		unended.streamUnended()
@@ -1815,7 +1815,7 @@ func (r *Runner) decodeLines(stream io.Reader, keepLast bool, whole func() bool)
 	if reporter, ok := events.(enforcerReporter); ok {
 		out.unheld = reporter.unheld()
 	}
-	return out, "", nil
+	return out, nil
 }
 
 // decodedStream is what a run's event stream said: the result as its decoder
