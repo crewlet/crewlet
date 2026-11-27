@@ -134,6 +134,7 @@ type Promoter struct {
 	minSiblings int
 	poolAt      float64
 	timeout     time.Duration
+	budget      BudgetGate
 }
 
 // PromoterOptions configures the pass. Zero values take the shipped defaults,
@@ -154,6 +155,10 @@ type PromoterOptions struct {
 
 	// CallTimeout bounds one auxiliary call; zero takes DefaultAuxTimeout.
 	CallTimeout time.Duration
+
+	// Budget is asked for the unit's lead before the pass's model call
+	// ([BudgetGate]); nil never declines.
+	Budget BudgetGate
 }
 
 // NewPromoter builds the pass.
@@ -175,7 +180,7 @@ func NewPromoter(opts PromoterOptions) (*Promoter, error) {
 		writer: opts.Writer, skills: opts.Skills,
 		models: opts.Models, units: opts.Units,
 		minSiblings: opts.MinSiblings, poolAt: opts.JaccardThreshold,
-		timeout: opts.CallTimeout,
+		timeout: opts.CallTimeout, budget: opts.Budget,
 	}
 	if p.minSiblings <= 0 {
 		p.minSiblings = DefaultMinSiblings
@@ -256,6 +261,13 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 		return nil, nil
 	}
 
+	lead := ""
+	if unit.Lead != nil {
+		lead = unit.Lead.Handle()
+	}
+	if skip := budgetSkip(ctx, p.budget, "skill_promotion", lead); skip != "" {
+		return nil, nil
+	}
 	member, err := p.models.Auxiliary(unit.Lead, auxspend.Use{Stage: types.AuxStageBackground,
 		Purpose: types.AuxSkillPromotion})
 	if err != nil {

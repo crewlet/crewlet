@@ -186,7 +186,7 @@ func (e *Engine) prepareReflection(ctx context.Context, c *Company) (install fun
 		}
 		return func() {}, nil
 	}
-	workers, budget := e.buildReflectionWorkers(c), e.learningBudget(c)
+	workers, budget := e.buildReflectionWorkers(c), e.auxGate(c, "reflection")
 	return func() {
 		if err := reflector.Reconfigure(c.Org, workers, budget); err != nil {
 			// The previous epoch's workers keep serving: a stale org beats
@@ -223,7 +223,7 @@ func (e *Engine) attachReflection(_ context.Context, c *Company) error {
 	// THE NODE'S LEDGER, flushed for a turn before its pass's sentinel: the
 	// pass runs here, so what its workers' calls cost is in this ledger.
 	reflector, err := learning.NewReflector(c.Org, e.backends.Queue,
-		e.buildReflectionWorkers(c), e.learningBudget(c), e.auxSpend)
+		e.buildReflectionWorkers(c), e.auxGate(c, "reflection"), e.auxSpend)
 	if err != nil {
 		return fmt.Errorf("engine: build the reflect dispatcher: %w", err)
 	}
@@ -400,8 +400,9 @@ func (e *Engine) learningPasses(ctx context.Context, c *Company) learning.Backgr
 	// Compaction requires a summarizer: without one the pass could only
 	// delete, the half least wanted unsupervised, so the rows stay raw.
 	if summarize := e.auxSummarizer(c); summarize != nil {
-		passes.Lifecycle = learning.NewLifecycle(db, learning.NewSummarizer(summarize, e.episodeFit(c)),
-			lifecycleOptions(&cfg.EpisodeLifecycle, &cfg.SkillSynthesis))
+		opts := lifecycleOptions(&cfg.EpisodeLifecycle, &cfg.SkillSynthesis)
+		opts.Budget = e.auxGate(c, string(types.AuxEpisodeCompaction))
+		passes.Lifecycle = learning.NewLifecycle(db, learning.NewSummarizer(summarize, e.episodeFit(c)), opts)
 	} else {
 		log.WarnContext(ctx, "episode_compaction_unavailable",
 			"reason", "no auxiliary model is configured for any seat",
@@ -454,6 +455,7 @@ func (e *Engine) clusteringPass(c *Company) *learning.Synthesizer {
 	}
 	opts := synthesizerOptions(cfg)
 	opts.Episodes = learning.NewEpisodes(db)
+	opts.Budget = e.auxGate(c, string(types.AuxSkillClustering))
 	built, err := learning.NewSynthesizer(e.auxiliaryFor(c), learning.NewSkills(db), opts)
 	if err != nil {
 		log.Warn("skill_clustering_unavailable", "error", err,

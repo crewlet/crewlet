@@ -421,8 +421,8 @@ func (m *meter) record(ctx context.Context, named toolloop.SpendOutcome) {
 // turnAway records a refusal a GATE made on r, a reading [meter.refusing]
 // answered: work turned away before any call because a window had no room for
 // a single token — a delivery the budget park deferred ([Engine.budgetPark]), a
-// person's question refused ([answerBudget.Refusing]), a reflection pass
-// declined ([Engine.reflectionRoom]). The charge that would have stamped the
+// person's question refused ([answerBudget.Refusing]), an optional auxiliary
+// pass declined ([Engine.auxRoom]). The charge that would have stamped the
 // window is the one the gate exists not to make, so it is stamped here, on the
 // scope a charge would be refused by ([refusal.By]). Once per refusal: each
 // gate builds a meter per question, asks once and makes no call on a no.

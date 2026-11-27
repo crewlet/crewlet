@@ -156,6 +156,11 @@ type Options struct {
 	// MinAge writes summaries already past it, and the next pass deletes the
 	// row an LLM call just paid for.
 	CompactedMaxAge time.Duration
+
+	// Budget is asked before a seat's first fold, the pass's first model
+	// call ([BudgetGate]); nil never declines. The sweeps call no model and
+	// run whatever it answers.
+	Budget BudgetGate
 }
 
 const (
@@ -402,6 +407,11 @@ type PassResult struct {
 
 	CompactedEvicted int
 	ExemplarsEvicted int
+
+	// BudgetSkip is why the folds did not start, "" when they did or had
+	// nothing to fold: [SkipNoBudget] or [SkipBudgetUnknown]. Its clusters
+	// stay raw for the next pass.
+	BudgetSkip string
 }
 
 // Pass runs one full lifecycle pass over a seat.
@@ -480,6 +490,7 @@ func (l *Lifecycle) Pass(ctx context.Context, handle string, now time.Time) (Pas
 		"tool_free_dropped", res.ToolFreeDropped,
 		"orphans_dropped", res.OrphansDropped,
 		"clusters_compacted", res.ClustersCompacted,
+		"budget_skip", res.BudgetSkip,
 		"raw_replaced", res.RawReplaced,
 		"summarizer_failures", res.SummarizerFailures,
 		"compacted_evicted", res.CompactedEvicted,
@@ -665,9 +676,18 @@ func (l *Lifecycle) compact(ctx context.Context, handle string, now time.Time, r
 		return err
 	}
 
+	asked := false
 	for _, cluster := range clusterByTools(live, l.opts.JaccardThreshold) {
 		if len(cluster) < l.opts.MinClusterSize {
 			continue
+		}
+		// ONCE, BEFORE THE FIRST FOLD: a seat with nothing to fold asks
+		// nothing, so no refusal is stamped for a pass that made no call.
+		if !asked {
+			asked = true
+			if res.BudgetSkip = budgetSkip(ctx, l.opts.Budget, "episode_compaction", handle); res.BudgetSkip != "" {
+				return nil
+			}
 		}
 		deleted, answered, err := l.foldCluster(ctx, handle, cluster)
 		if err != nil {

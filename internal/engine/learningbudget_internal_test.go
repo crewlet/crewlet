@@ -37,8 +37,8 @@ func TestAnAuxiliaryCompletionPastTheCeilingIsRecordedAndClosesTheGate(t *testin
 	if _, err := fleet.PostCharge(ctx, scopeOf(t, c, lead), 90, windows); err != nil {
 		t.Fatalf("PostCharge: %v", err)
 	}
-	gate := e.learningBudget(c)
-	if ok, err := gate(ctx, lead); err != nil || !ok {
+	gate := e.auxGate(c, "reflection")
+	if ok, err := gate(ctx, lead.Handle()); err != nil || !ok {
 		t.Fatalf("gate with 10 left = (%v, %v), want (true, nil)", ok, err)
 	}
 
@@ -58,7 +58,7 @@ func TestAnAuxiliaryCompletionPastTheCeilingIsRecordedAndClosesTheGate(t *testin
 				"past a ceiling of 100 is still spent", scope, day)
 		}
 	}
-	if ok, err := gate(ctx, lead); err != nil || ok {
+	if ok, err := gate(ctx, lead.Handle()); err != nil || ok {
 		t.Fatalf("gate after the ceiling was passed = (%v, %v), want (false, nil): "+
 			"a pass that starts now spends more past it, uncounted", ok, err)
 	}
@@ -66,7 +66,7 @@ func TestAnAuxiliaryCompletionPastTheCeilingIsRecordedAndClosesTheGate(t *testin
 
 // THE PRE-FLIGHT GATE DECLINES A SEAT WITH NO ROOM LEFT, AND ASKS WITHOUT
 // SPENDING: a zero-token charge would be answered OK without looking
-// ([Engine.learningBudget]), so the gate must read the windows instead.
+// ([Engine.auxGate]), so the gate must read the windows instead.
 func TestTheLearningGateDeclinesASeatWithNoRoomLeft(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -75,16 +75,16 @@ func TestTheLearningGateDeclinesASeatWithNoRoomLeft(t *testing.T) {
 	c := meteredCompany(config.TokenBudget{}, lead)
 	// The gate reads its windows at the instant the day is filled at.
 	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
-	gate := e.learningBudget(c)
+	gate := e.auxGate(c, "reflection")
 
-	if ok, err := gate(ctx, lead); err != nil || !ok {
+	if ok, err := gate(ctx, lead.Handle()); err != nil || !ok {
 		t.Fatalf("gate with the whole day left = (%v, %v), want (true, nil)", ok, err)
 	}
 	windows := coord.WindowsAt(budgetNow, time.UTC)
 	if _, err := fleet.PostCharge(ctx, scopeOf(t, c, lead), 100, windows); err != nil {
 		t.Fatalf("PostCharge: %v", err)
 	}
-	if ok, err := gate(ctx, lead); err != nil || ok {
+	if ok, err := gate(ctx, lead.Handle()); err != nil || ok {
 		t.Fatalf("gate with the day spent = (%v, %v), want (false, nil): a pass that "+
 			"starts now spends past the ceiling", ok, err)
 	}
@@ -94,7 +94,7 @@ func TestTheLearningGateDeclinesASeatWithNoRoomLeft(t *testing.T) {
 	}
 	// A seat nothing caps is never declined.
 	free := &org.Role{Name: "Free"}
-	if ok, err := e.learningBudget(meteredCompany(config.TokenBudget{}, free))(ctx, free); err != nil || !ok {
+	if ok, err := e.auxGate(meteredCompany(config.TokenBudget{}, free), "reflection")(ctx, free.Handle()); err != nil || !ok {
 		t.Fatalf("gate for an uncapped seat = (%v, %v), want (true, nil)", ok, err)
 	}
 }
@@ -119,9 +119,9 @@ func TestADeclinedReflectionIsRecordedAsTheGatesRefusal(t *testing.T) {
 	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
 	e.epoch.current.Store(c)
 	scope, windows := scopeOf(t, c, lead), coord.WindowsAt(budgetNow, time.UTC)
-	gate := e.learningBudget(c)
+	gate := e.auxGate(c, "reflection")
 
-	if ok, err := gate(ctx, lead); err != nil || !ok {
+	if ok, err := gate(ctx, lead.Handle()); err != nil || !ok {
 		t.Fatalf("gate with the whole day left = (%v, %v), want (true, nil)", ok, err)
 	}
 	if got := refusals.refused(); len(got) != 0 {
@@ -132,7 +132,7 @@ func TestADeclinedReflectionIsRecordedAsTheGatesRefusal(t *testing.T) {
 		t.Fatalf("PostCharge: %v", err)
 	}
 	from := time.Now()
-	if ok, err := gate(ctx, lead); err != nil || ok {
+	if ok, err := gate(ctx, lead.Handle()); err != nil || ok {
 		t.Fatalf("gate with the day spent = (%v, %v), want (false, nil)", ok, err)
 	}
 	if got := refusals.refused(); len(got) != 1 || got[0] != scope {
@@ -147,11 +147,11 @@ func TestADeclinedReflectionIsRecordedAsTheGatesRefusal(t *testing.T) {
 		t.Errorf("the company was stamped at %v; it caps nothing and refused nothing", company)
 	}
 
-	// UNKNOWN IS NOT NO: an unreadable counter declines nothing and records
-	// nothing.
+	// UNKNOWN IS NO ROOM (#1838), but no refusal: nothing was read to refuse
+	// by, so nothing is stamped.
 	unread := &Engine{backends: &Backends{Fleet: unreadableCounted{fleet}}}
-	if ok, err := unread.learningBudget(c)(ctx, lead); err == nil || !ok {
-		t.Fatalf("gate over an unreadable counter = (%v, %v), want (true, an error)", ok, err)
+	if ok, err := unread.auxGate(c, "reflection")(ctx, lead.Handle()); err == nil || ok {
+		t.Fatalf("gate over an unreadable counter = (%v, %v), want (false, an error)", ok, err)
 	}
 	if got := refusals.refused(); len(got) != 1 {
 		t.Errorf("refusals recorded = %v after an unreadable counter, want no more", got)
@@ -163,4 +163,29 @@ type unreadableCounted struct{ countedFleet }
 
 func (unreadableCounted) Used(context.Context, string, coord.Windows) (coord.Usage, error) {
 	return coord.Usage{}, errors.New("the coordination store is unreachable")
+}
+
+// A PERSON'S WORK IS HELD TO THE COMPANY'S WINDOWS (#1838): a promotion for a
+// unit a person leads runs on the lead's chain, charges the company, and has
+// no seat window, so the gate reads the company's alone; before, it read
+// nothing for anyone not an agent seat and never declined such a pass.
+//
+// Mutation: answer a person with no meter, and the full company is not read.
+func TestAPersonsBackgroundPassIsHeldToTheCompanysWindow(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Founder", Kind: org.KindHuman}
+	c := meteredCompany(config.TokenBudget{Day: ceiling(100)}, lead)
+	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
+	gate := e.auxGate(c, "skill_promotion")
+	if ok, err := gate(ctx, lead.Handle()); err != nil || !ok {
+		t.Fatalf("gate with the company's day left = (%v, %v), want (true, nil)", ok, err)
+	}
+	if _, err := fleet.PostCharge(ctx, coord.OrgScope, 100, coord.WindowsAt(budgetNow, time.UTC)); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+	if ok, err := gate(ctx, lead.Handle()); err != nil || ok {
+		t.Fatalf("gate with the company's day spent = (%v, %v), want (false, nil)", ok, err)
+	}
 }

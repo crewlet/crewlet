@@ -362,6 +362,21 @@ func serviceInstruments() []Instrument {
 				"`local_sandbox_home_cut` and `local_sandbox_home_refused` " +
 				"lines name the seat, the step and the paths.",
 		},
+		{
+			Name: AuxiliaryDeclined, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"pass", "reason"},
+			Shows: "Optional auxiliary passes the token budget's gate declined " +
+				"to start, by `pass` (`reflection`, `episode_compaction`, " +
+				"`skill_clustering`, `skill_promotion`, `advisor`) and " +
+				"`reason`: `no_budget`, a capped window of the seat or the " +
+				"company had no room, which also stamps that window's " +
+				"`refused_at`; `budget_unknown`, the counter could not be " +
+				"read, so the pass did not start rather than spend against a " +
+				"ceiling nobody could read. Each pass runs again at its next " +
+				"cycle. A steady `no_budget` is a ceiling the company's " +
+				"learning keeps meeting; any `budget_unknown` is the " +
+				"coordination store unreachable from this node.",
+		},
 
 		// ---- the node's answer budget ------------------------------------
 		{

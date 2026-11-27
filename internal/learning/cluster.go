@@ -123,6 +123,9 @@ func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, agentID s
 				"agent_handle", handle, "similar_to", name, "cluster_size", cluster.Size())
 			continue
 		}
+		if skip := budgetSkip(ctx, s.budget, "skill_clustering", handle); skip != "" {
+			return nil, nil
+		}
 		return s.draftFromCluster(ctx, seat, agentID, cluster)
 	}
 	log.DebugContext(ctx, "skill_clustering_found_nothing", "agent_handle", handle,
