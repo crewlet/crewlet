@@ -439,6 +439,9 @@ type jsonRewrite struct {
 	// payload measures a string value its scrub classed a payload, where
 	// the scrub finds media ([scrubber.media]).
 	payload payloadSpan
+	// held is the room a string value is held in while it is read for a
+	// payload ([payloadHeldBytes]).
+	held []byte
 	// containers is how many containers the text has opened so far, which
 	// names the list a cut applies to.
 	containers int
@@ -834,7 +837,7 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 	}
 	var t stringScrub
 	if key == nil && j.scrub.media != nil {
-		t = j.scrub.payloadText(&j.str, &j.payload)
+		t = j.scrub.payloadText(&j.str, &j.payload, &j.held)
 	} else {
 		t = j.scrub.text(&j.str)
 	}

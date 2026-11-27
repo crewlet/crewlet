@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -38,27 +39,45 @@ const mediaMinBytes = 1 << 20
 // compile.
 const _ = uint(mediaMinBytes - wayRoomBytes)
 
-// mediaTypeMax bounds a data URI's media type a payload follows: RFC 6838's
-// type and subtype, 127 bytes each, and their slash.
-const mediaTypeMax = 255
+// mediaHeadPartMax is the most bytes a data URI's media type, or its subtype,
+// may hold where a payload follows: RFC 6838's restricted-name characters,
+// fewer than the shortest match of any shape rule they can spell (redact's
+// TestTheRulesBase64CanSpellAreKnown holds that), so shaping a payload's head
+// never changes it and a box counting payloads reads the same heads.
+const mediaHeadPartMax = 19
 
-// base64Marker ends a data URI's head, where its payload begins.
+// base64Marker ends a data URI's head, where its payload begins: no
+// parameter is read before it (`;charset=`, `;name=`), so such a string is
+// no payload.
 const base64Marker = ";base64,"
 
-// mediaAlphabet is every byte a payload's run holds: base64's and base64url's
-// alphabets and the pad. None needs a JSON escape, so a run's kept text is its
-// kept bytes.
-var mediaAlphabet = func() (t [256]bool) {
-	for _, c := range "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_=" {
-		t[c] = true
+// mediaClass is what each byte is to a payload's run ([mediaRun.run]): no
+// byte of one, a letter or digit, standard base64's own (`+`, `/`), base64url's
+// own (`-`, `_`), or the pad. None needs a JSON escape, so a run's kept text
+// is its kept bytes.
+var mediaClass = func() (t [256]byte) {
+	for _, c := range "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" {
+		t[c] = classAlnum
 	}
+	t['+'], t['/'], t['-'], t['_'], t['='] = classStandard, classStandard, classURL, classURL, classPad
 	return t
 }()
 
-// mediaTypeByte reports whether c may stand in a data URI's media type.
-func mediaTypeByte(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
-		c == '.' || c == '+' || c == '/' || c == '-'
+const (
+	classNone byte = iota
+	classAlnum
+	classStandard
+	classURL
+	classPad
+)
+
+// restrictedName reports whether c may stand in an RFC 6838 restricted name,
+// first its first byte.
+func restrictedName(c byte, first bool) bool {
+	if mediaClass[c] == classAlnum {
+		return true
+	}
+	return !first && strings.IndexByte("!#$&-^_.+", c) >= 0
 }
 
 var (
@@ -76,9 +95,10 @@ type mediaState uint8
 const (
 	// mediaHead reads the text's first bytes, to tell a data URI's head.
 	mediaHead mediaState = iota
-	// mediaType reads a data URI's media type, and mediaMarker its
-	// [base64Marker].
+	// mediaType and mediaSubtype read a data URI's media type, and
+	// mediaMarker its [base64Marker].
 	mediaType
+	mediaSubtype
 	mediaMarker
 	// mediaRunning reads the payload, and mediaNone has let the text go.
 	mediaRunning
@@ -86,93 +106,137 @@ const (
 )
 
 // mediaRun classes one JSON string value by its text AS IT CAME, before any
-// redaction ([payloadScrub]), holding nothing of it: whether it is a payload
-// (a data URI's base64, or base64 from its first byte to its last) and how
-// long its head is. An ordinary string is let go at its first byte outside the
-// alphabet. CLASSED BEFORE THE REDACTION, so no marker a rule or a value wrote
-// into a payload turns it into text (ADR-0073's amendment "a payload is
-// classed as it came, and kept from the shape rules").
+// redaction ([payloadScrub]): whether it is a payload, a data URI's base64 or
+// base64 from its first byte to its last, and its head. ONLY WELL-FORMED
+// BASE64: one alphabet a run (standard's `+/` or base64url's `-_`, never
+// both), `=` only as one or two pad bytes at its end, the padded run a
+// multiple of four, so a run spells no keyed rule's `KEY=` (redact's
+// TestTheRulesBase64CanSpellAreKnown reads runs so). CLASSED BEFORE THE
+// REDACTION, so no marker written into a payload turns it into text
+// (ADR-0073's amendment "a payload is classed as it came").
 type mediaRun struct {
-	state  mediaState
-	head   [len("data:")]byte
-	nhead  int
-	prefix int64
-	typed  int
-	match  int
-	n      int64
+	state         mediaState
+	head          [len("data:") + 2*mediaHeadPartMax + len("/") + len(base64Marker)]byte
+	nhead, part   int
+	match         int
+	n             int64
+	pad           int
+	standard, url bool
 }
 
 // begin readies m for a string's text.
 func (m *mediaRun) begin() {
-	m.state, m.nhead, m.prefix, m.typed, m.match, m.n = mediaHead, 0, 0, 0, 0, 0
+	*m = mediaRun{head: m.head}
 }
 
 // feed reads s, the next bytes of the text as it came.
 func (m *mediaRun) feed(s []byte) {
 	for len(s) > 0 {
-		switch m.state {
-		case mediaNone:
+		if m.state == mediaNone {
 			return
-		case mediaRunning:
+		}
+		if m.state == mediaRunning {
 			m.run(s)
 			return
+		}
+		c := s[0]
+		s = s[1:]
+		m.head[m.nhead] = c
+		m.nhead++
+		switch m.state {
 		case mediaHead:
-			k := copy(m.head[m.nhead:], s)
-			m.nhead, s = m.nhead+k, s[k:]
-			if m.nhead < len(m.head) {
-				return
-			}
-			if string(m.head[:]) == "data:" {
-				m.state, m.prefix = mediaType, int64(len(m.head))
+			if m.nhead < len("data:") {
 				continue
 			}
-			m.state = mediaRunning
-			m.run(m.head[:])
-		case mediaType:
-			c := s[0]
+			if string(m.head[:m.nhead]) == "data:" {
+				m.state = mediaType
+				continue
+			}
+			var first [len("data:")]byte
+			copy(first[:], m.head[:])
+			m.state, m.nhead = mediaRunning, 0
+			m.run(first[:])
+		case mediaType, mediaSubtype:
 			switch {
-			case c == ';':
+			case m.state == mediaType && c == '/' && m.part > 0:
+				m.state, m.part = mediaSubtype, 0
+			case m.state == mediaSubtype && c == ';' && m.part > 0:
 				m.state, m.match = mediaMarker, 1
-			case mediaTypeByte(c) && m.typed < mediaTypeMax:
-				m.typed++
+			case restrictedName(c, m.part == 0) && m.part < mediaHeadPartMax:
+				m.part++
 			default:
 				m.state = mediaNone
 			}
-			m.prefix, s = m.prefix+1, s[1:]
 		case mediaMarker:
-			if s[0] != base64Marker[m.match] {
+			if c != base64Marker[m.match] {
 				m.state = mediaNone
 				return
 			}
-			m.match, m.prefix, s = m.match+1, m.prefix+1, s[1:]
-			if m.match == len(base64Marker) {
+			if m.match++; m.match == len(base64Marker) {
 				m.state = mediaRunning
 			}
 		}
 	}
 }
 
-// run reads s, bytes of the payload, letting the text go at the first outside
-// the alphabet.
+// run reads s, bytes of the payload, letting the text go at the first that
+// leaves well-formed base64.
 func (m *mediaRun) run(s []byte) {
-	i := 0
-	for i < len(s) && mediaAlphabet[s[i]] {
-		i++
-	}
-	m.n += int64(i)
-	if i < len(s) {
-		m.state = mediaNone
+	for _, c := range s {
+		switch mediaClass[c] {
+		case classNone:
+			m.state = mediaNone
+		case classPad:
+			if m.pad++; m.pad > 2 {
+				m.state = mediaNone
+			}
+		default:
+			switch {
+			case m.pad > 0:
+				m.state = mediaNone
+			case mediaClass[c] == classStandard:
+				m.standard = true
+			case mediaClass[c] == classURL:
+				m.url = true
+			}
+			if m.standard && m.url {
+				m.state = mediaNone
+			}
+		}
+		if m.state == mediaNone {
+			return
+		}
+		m.n++
 	}
 }
 
 // candidate reports whether the text read so far may still be a payload.
 func (m *mediaRun) candidate() bool { return m.state != mediaNone }
 
-// payload reports whether the text read so far is a payload of [mediaMinBytes]
-// or more as long as nothing outside the alphabet follows, and its head's
-// length: a data URI's, up to its base64, or none.
-func (m *mediaRun) payload() (head int64, ok bool) {
-	return m.prefix, m.state == mediaRunning && m.n >= mediaMinBytes
+// reached reports whether the text read so far is a payload's run of
+// [mediaMinBytes] or more, still well-formed, and its head: a data URI's, up
+// to its base64, or none. Whether it ends as one is [mediaRun.payload]'s.
+func (m *mediaRun) reached() (head []byte, ok bool) {
+	if m.state != mediaRunning || m.n < mediaMinBytes {
+		return nil, false
+	}
+	if m.nhead > len("data:") {
+		return m.head[:m.nhead], true
+	}
+	return nil, true
+}
+
+// payload reports whether the text, ended, is a payload: [mediaRun.reached]
+// and a run of whole base64, padded to a multiple of four or, unpadded, of a
+// length an encoding writes (never one past a multiple of four).
+func (m *mediaRun) payload() bool {
+	if _, ok := m.reached(); !ok {
+		return false
+	}
+	if m.pad > 0 {
+		return m.n%4 == 0
+	}
+	return m.n%4 != 1
 }
 
 // payloadSpan measures, in what a string's rewrite writes, the payload its
@@ -598,10 +662,18 @@ type payloadScrub struct {
 	in     int64
 }
 
+// payloadHeldBytes is the most a [payloadScrub] holds of a text while it is
+// read for a payload: under [mediaMinBytes] of its run, a data URI's head, and
+// the piece that decides it, at most [textWholeBytes].
+const payloadHeldBytes = mediaMinBytes + len(mediaRun{}.head) + textWholeBytes
+
 // payloadText is s's scrub of a string value str writes, span measuring it
-// where its text is a payload.
-func (s scrubber) payloadText(str *jsonStringWriter, span *payloadSpan) *payloadScrub {
-	p := &payloadScrub{s: s, str: str, span: span, classing: true}
+// where its text is a payload, held reusing *held's room ([payloadHeldBytes]).
+func (s scrubber) payloadText(str *jsonStringWriter, span *payloadSpan, held *[]byte) *payloadScrub {
+	if cap(*held) < payloadHeldBytes {
+		*held = make([]byte, 0, payloadHeldBytes)
+	}
+	p := &payloadScrub{s: s, str: str, span: span, classing: true, held: (*held)[:0]}
 	p.class.begin()
 	return p
 }
@@ -631,8 +703,14 @@ func (p *payloadScrub) Write(b []byte) (int, error) {
 		p.classing = false
 		return n, p.toText()
 	}
-	if head, ok := p.class.payload(); ok {
-		p.span.measure(head)
+	if head, ok := p.class.reached(); ok {
+		// A HEAD THE SHAPE RULES WOULD CHANGE leaves no payload: written
+		// unshaped, it would stand in the text unread by them.
+		if len(head) > 0 && redact.Secrets(string(head)) != string(head) {
+			p.classing = false
+			return n, p.toText()
+		}
+		p.span.measure(int64(len(head)))
 		if p.s.shapePayloads {
 			return n, p.toText()
 		}
@@ -674,11 +752,20 @@ func (p *payloadScrub) payloadWrite(b []byte) error {
 }
 
 // Close writes the rest of the text: a payload kept from the shape rules, or
-// a text no payload, shaped, read again where it diverged.
+// a text no payload, shaped, read again where it diverged. A run that ends
+// short of whole base64 ([mediaRun.payload]) is no payload.
 func (p *payloadScrub) Close() error {
+	ended := p.classing && !p.class.payload()
 	switch {
 	case p.tee != nil:
+		if ended {
+			p.span.reject()
+			p.tee.becomeText()
+		}
 	case p.text != nil:
+		if ended {
+			p.span.reject()
+		}
 		return p.text.Close()
 	default:
 		if err := p.toText(); err != nil {

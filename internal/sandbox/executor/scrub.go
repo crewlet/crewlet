@@ -305,13 +305,15 @@ type scrubTerm struct {
 // scrubTerms are the parts [scrubHeldBytes] adds up: two text scrubs, each a
 // redaction's stream, its stage's chunk, a [valueStream] (fewer bytes than the
 // longest value held, and beside them a copy of those joined to twice it read
-// of the next piece) and a string's encoder
-// (a rune's bytes and the most of a text the cut reads); two JSON rewrites; the
-// archive's readers and writers; the spool's ([spoolHeldBytes]); and the plan,
-// a sixteenth of the plaintext ([tarPlan]), beside its blocks.
+// of the next piece) and a string's encoder (a rune's bytes and the most of a
+// text the cut reads); a string value held while the JSON way reads it for a
+// payload ([payloadHeldBytes]); two JSON rewrites; the archive's readers and
+// writers; the spool's ([spoolHeldBytes]); and the plan, a sixteenth of the
+// plaintext ([tarPlan]), beside its blocks.
 var scrubTerms = []scrubTerm{
 	{"streams", func(int64, int) int64 { return 2 * streamHeldBytes }},
 	{"pieces", func(int64, int) int64 { return 2 * pieceHeldBytes }},
+	{"payloads", func(int64, int) int64 { return int64(payloadHeldBytes) }},
 	{"values", func(_ int64, longest int) int64 { return 2 * 4 * int64(longest) }},
 	{"encoders", func(int64, int) int64 { return 2 * (utf8.UTFMax + providerToolNameMax + 1) }},
 	{"rewrites", func(int64, int) int64 { return 2 * rewriteHeldBytes }},
