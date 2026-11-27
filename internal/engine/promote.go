@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/confluence"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -133,6 +134,7 @@ func (e *Engine) buildPromoter(c *Company) *learning.Promoter {
 		Units:            e.promotionUnits,
 		MinSiblings:      cfg.MinSiblingCount,
 		JaccardThreshold: cfg.JaccardThreshold,
+		Budget:           e.auxGate(c, string(types.AuxSkillPromotion)),
 	})
 	if err != nil {
 		log.Warn("skill_promotion_unavailable", "error", err,

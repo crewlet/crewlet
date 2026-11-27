@@ -225,6 +225,12 @@ const (
 	ExecutorHomeCuts = "crewlet.executor.home.cuts"
 )
 
+// THE AUXILIARY PASSES' BUDGET GATE, which internal/engine asks before each
+// optional pass that calls a model (learningbudget.go).
+const (
+	AuxiliaryDeclined = "crewlet.auxiliary.declined"
+)
+
 // THE NODE'S ANSWER BUDGET'S INSTRUMENTS, which internal/queue measures and
 // internal/engine records: every payload answer's wait for its weight, and the
 // bytes the budget holds.

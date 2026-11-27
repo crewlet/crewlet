@@ -171,8 +171,8 @@ func (s auxiliarySeam) seatOf(role *org.Role, stage types.AuxStage) auxspend.Sea
 // its size is known only from its answer, as a RECORD, NEVER A VERDICT: spent
 // tokens are recorded whole, past a ceiling included, so every gate then reads
 // "no room". The gate is asked BEFORE the call, by its caller
-// ([Engine.reflectionRoom] through [Engine.learningBudget] for reflection, the
-// answer's own for a person's question), except for a call a turn makes: the
+// ([Engine.auxGate] for reflection and the background passes, the answer's own
+// for a person's question), except for a call a turn makes: the
 // turn's meter ([auxspend.Use.Budget]) is asked here, the one frame every
 // in-turn call passes. That meter holds every window the turn has seen full, so
 // a call it holds is a rewrite for a round that would be refused: it is not

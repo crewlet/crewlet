@@ -323,19 +323,6 @@ type reflectorEpoch struct {
 	budget BudgetGate
 }
 
-// BudgetGate reports whether a seat may spend auxiliary tokens right now.
-//
-// Three-valued in the way this codebase insists on: true/false is the
-// answer, and an error is "the counter could not be reached", which is NOT a
-// refusal. A blip must not silently stop a company learning — the charge on
-// the way out is what keeps an unreachable counter from also being free.
-//
-// A FALSE IS A REFUSAL, not an observation: the pass asks immediately before
-// the work it gates and makes no call on false, so the engine's gate records
-// it as the budget turning that work away (the window's refusal stamp).
-// Never ask it only to look.
-type BudgetGate func(ctx context.Context, seat *org.Role) (bool, error)
-
 // SpendFlusher publishes what one turn's auxiliary calls have cost on this node
 // so far — the node's auxiliary-spend ledger ([auxspend.Ledger.FlushTurn]),
 // declared here by its one caller.
@@ -572,16 +559,17 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	// nothing to do with the turn. Checking first means a redelivery after
 	// the cap moves gets a real pass, and nothing has to release a mark.
 	if gate := live.budget; gate != nil {
-		ok, err := gate(ctx, role)
+		ok, err := gate(ctx, role.Handle())
 		if err != nil {
-			// UNKNOWN, not refused. A counter that cannot be reached must
-			// not silently stop a company learning; what keeps that from
-			// also being free is that the completion charges on the way
-			// out either way.
+			// UNKNOWN IS NO ROOM ([BudgetGate]): a pass run against a
+			// ceiling nobody could read is spend past a limit the company
+			// set, and reflection is optional work.
 			log.WarnContext(ctx, "reflection_budget_unknown", "turn_id", tc.TurnID,
 				"agent_handle", tc.AgentHandle, "error", err,
-				"detail", "reflecting anyway; the spend is still charged")
-		} else if !ok {
+				"detail", "the budget could not be read, so no auxiliary call is made for this turn")
+			return Reflection{Skip: SkipBudgetUnknown}
+		}
+		if !ok {
 			log.InfoContext(ctx, "reflection_skipped_no_budget", "turn_id", tc.TurnID,
 				"agent_handle", tc.AgentHandle, "role", role.Name,
 				"detail", "the company or this seat is at its token ceiling, "+
