@@ -396,10 +396,11 @@ own detached run in a box, never stopped on a clock, its rounds capped only wher
 the seat or company sets a turn cap (`role.sandbox.max_turns`, else
 `providers.sandbox.default_max_turns`).
 
-**`max_concurrent: 4`** bounds the entry's **live harness processes** and keeps
-peak memory near 1.5 GB: each harness is a full Node or Rust runtime at roughly
-200–400 MB resident, and seats starting turns together could exhaust a small
-host. A process holds its slot for its whole run, and a model call made from
+**`max_concurrent: 4`** bounds the entry's **live harness processes** and so
+their peak memory: each harness is a full Node or Rust runtime, measured at 120
+to 630 MiB resident on one turn ([Each runner's
+memory](code-sandbox.md#each-runners-memory)), so four can hold about 2.5 GB,
+and seats starting turns together could exhaust a small host. A process holds its slot for its whole run, and a model call made from
 *inside* one of its tool calls on the same entry (a delegated worker, a condensing
 pass) borrows the run's slot when no free one comes first, since the run is idle
 until the call answers and waiting on a slot only its caller can free would wait

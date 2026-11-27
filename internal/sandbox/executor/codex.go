@@ -44,6 +44,10 @@ func (Codex) Name() string { return CodexName }
 // set to 1050, a 1040-second call was answered whole (measured on 0.171.0).
 func (Codex) MCPCallCeiling() time.Duration { return 0 }
 
+// ResidentPeak is measured on 0.171.0, its git helpers included (residentpeak.go): MiB at
+// one turn, then resuming 16, 64, 128 and 256 MiB of session.
+func (Codex) ResidentPeak() ResidentPeak { return measuredPeak("0.171.0", 192, 254, 503, 843, 1474) }
+
 // resumesOnLaunchRoute: measured on 0.171.0, the one release supported
 // ([launchRouted]): created on a config provider at stub A, resumed through
 // `app-server` and `exec --remote resume` with its base_url at stub B; the

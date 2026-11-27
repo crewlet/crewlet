@@ -46,6 +46,12 @@ func (Hermes) Name() string { return HermesName }
 // progress token, so the bridge's progress keeps the response from it.
 func (Hermes) MCPCallCeiling() time.Duration { return 0 }
 
+// ResidentPeak is a stand-in, the heaviest measured curve (residentpeak.go):
+// the measuring host could not install it.
+func (Hermes) ResidentPeak() ResidentPeak {
+	return ResidentPeak{StandIn: "Hermes Agent 0.23.3 ships as a Python package and an image the measuring host could not install"}
+}
+
 // HandsSkills reports that a Hermes run takes skills of its own, installed in
 // [Paths.HermesSkills] beside the box's.
 func (Hermes) HandsSkills() bool { return true }

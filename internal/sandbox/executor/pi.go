@@ -63,6 +63,10 @@ func (Pi) Name() string { return PiName }
 // whole (measured on 1.6.0).
 func (Pi) MCPCallCeiling() time.Duration { return 0 }
 
+// ResidentPeak is measured on 1.6.0 (residentpeak.go): MiB at
+// one turn, then resuming 16, 64, 128 and 256 MiB of session.
+func (Pi) ResidentPeak() ResidentPeak { return measuredPeak("1.6.0", 121, 231, 507, 909, 1511) }
+
 // resumesOnLaunchRoute: measured on 1.6.0, the one release supported
 // ([launchRouted]): created on a
 // models.json provider whose baseUrl was stub A, `--session` on its file with

@@ -1545,6 +1545,29 @@ Each runner's own stop, and the record the engine counts the run off, live and a
 
 **Choosing a cap.** A cap counts model requests, not a plan's steps. Measured against a stand-in model on the pinned releases: six shell steps and two subagents of five steps each made 18 requests on Claude Code and 17 on GitHub Copilot CLI; 30 shell calls and an answer made 31 on Claude Code, Codex and GitHub Copilot CLI, and 41 on Gemini CLI, 10 of them side calls on its flash model. Set the cap above what the seat's work takes, at most 1,000 ([`default_max_turns`](#engine-provider--providerssandbox)); `0` lifts it.
 
+### Each runner's memory
+
+A run's harness is a whole runtime. On a `direct` cell, or a `container` cell whose `local.run_args` give it no `--memory` of its own, it lives in the node's memory beside the engine. Each runner declares the most its harness's process tree held resident, in MiB, on the release named. That is measured against a stand-in model API on a one-turn run and on a resume of a kept session padded to each size, the transcript in many lines. Between two sizes the figure is read on a straight line, never below a smaller session's. 256 MiB of plaintext is the most a take keeps ([Each launch's session, kept](#each-launchs-session-kept)), so no carried session is past the last column.
+
+| Runner | Release | One turn | 16 MiB | 64 MiB | 128 MiB | 256 MiB |
+|---|---|---|---|---|---|---|
+| [Claude Code](#claude-code) | 2.1.330 | 216 | 514 | 857 | 1,747 | 2,737 |
+| [Codex](#codex) | 0.171.0 | 192 | 254 | 503 | 843 | 1,474 |
+| [Gemini CLI](#gemini-cli) | 0.70.0 | 424 | 638 | 1,101 | 1,534 | 2,560 |
+| [Qwen Code](#qwen-code) | 0.28.4 | 283 | 372 | 699 | 1,159 | 2,045 |
+| [OpenCode](#opencode) | 2.3.2 | 626 | 688 | 996 | 1,529 | 2,232 |
+| [GitHub Copilot CLI](#github-copilot-cli) | 1.0.114 | 380 | 538 | 750 | 1,187 | 1,968 |
+| [Grok Build](#grok-build) | 1.0.92 | 129 | 191 | 339 | 535 | 952 |
+| [Muse Code](#muse-code) | 1.4.25 | 318 | 572 | 1,207 | 2,042 | 3,713 |
+| [Kimi Code](#kimi-code) | 2.7.2 | 378 | 667 | 915 | 1,317 | 1,581 |
+| [Pi](#pi) | 1.6.0 | 121 | 231 | 507 | 909 | 1,511 |
+| [Hermes Agent](#hermes-agent) | stand-in | 626 | 688 | 1,207 | 2,042 | 3,713 |
+| [Cursor Agent](#cursor-agent) | stand-in | 626 | 688 | 1,207 | 2,042 | 3,713 |
+
+Every point is measured; none is extrapolated. Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Grok Build and Pi put the whole session in the resumed request. Kimi Code and GitHub Copilot CLI sent a few KB of each padded message, and Muse Code none of the earlier turns, so theirs is the cost of loading the session. The stand-in model has no context window, so a harness that sends the whole session also holds that request. Against a real model's window it compacts before sending that much, so for those harnesses the figures are upper bounds.
+
+A stand-in takes the heaviest measured figure at each size. Cursor Agent's model answers only from Cursor's own service, which no stand-in model answers. Hermes Agent could not be installed where the others were measured. What a run starts, such as a build or a browser, is not in these figures.
+
 ## Each launch's session, kept
 
 A run's harness keeps its conversation in its box — Claude Code as a transcript and its sidecars, OpenCode in its database, Codex as its rollout — and a box does not outlive its turn. So every launch's session is **taken out of its box and kept** in the fleet's [object store](object-store.md), one sealed object per capture, named by the turn's row of the `executor` state log ([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)), for a launch in any box on any node to continue: what is kept is the whole session, scrubbed, and the turn's row names the newest one the turn kept.

@@ -157,6 +157,13 @@ func (OpenCode) Name() string { return OpenCodeName }
 // whole (measured on 2.3.2).
 func (OpenCode) MCPCallCeiling() time.Duration { return 0 }
 
+// ResidentPeak is measured on 2.3.2 (residentpeak.go), its run's own server
+// and client together, the session padded in its database: MiB at one turn,
+// then resuming 16, 64, 128 and 256 MiB of session.
+func (OpenCode) ResidentPeak() ResidentPeak {
+	return measuredPeak("2.3.2", 626, 688, 996, 1529, 2232)
+}
+
 // resumesOnLaunchRoute: measured on 2.3.2, the one release supported
 // ([launchRouted]): created on a
 // provider whose baseURL was stub A, `run --session` with it at stub B, with

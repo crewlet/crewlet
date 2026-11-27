@@ -43,6 +43,10 @@ func (QwenCode) Name() string { return QwenCodeName }
 // answered whole (measured on 0.28.4).
 func (QwenCode) MCPCallCeiling() time.Duration { return 0 }
 
+// ResidentPeak is measured on 0.28.4 (residentpeak.go): MiB at
+// one turn, then resuming 16, 64, 128 and 256 MiB of session.
+func (QwenCode) ResidentPeak() ResidentPeak { return measuredPeak("0.28.4", 283, 372, 699, 1159, 2045) }
+
 // resumesOnLaunchRoute: measured on 0.28.4, the one release that continues a
 // carried session ([launchRouted]): created over ACP
 // with OPENAI_BASE_URL at stub A, `session/load` and `session/prompt` with it

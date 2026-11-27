@@ -65,6 +65,10 @@ func (Kimi) Name() string { return KimiName }
 // tool run again, and its model read "fetch failed" (measured on 2.7.2).
 func (Kimi) MCPCallCeiling() time.Duration { return kimiMCPCallCeiling }
 
+// ResidentPeak is measured on 2.7.2 (residentpeak.go): MiB at
+// one turn, then resuming 16, 64, 128 and 256 MiB of session.
+func (Kimi) ResidentPeak() ResidentPeak { return measuredPeak("2.7.2", 378, 667, 915, 1317, 1581) }
+
 // kimiMCPCallCeiling is [Kimi.MCPCallCeiling]'s: undici's default
 // headersTimeout, 300,000 milliseconds.
 const kimiMCPCallCeiling = 300 * time.Second

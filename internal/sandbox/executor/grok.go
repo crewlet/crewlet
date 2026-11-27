@@ -62,6 +62,10 @@ func (Grok) Name() string { return GrokName }
 // under a 1050-second one was answered whole (measured on 1.0.92).
 func (Grok) MCPCallCeiling() time.Duration { return 0 }
 
+// ResidentPeak is measured on 1.0.92 (residentpeak.go): MiB at
+// one turn, then resuming 16, 64, 128 and 256 MiB of session.
+func (Grok) ResidentPeak() ResidentPeak { return measuredPeak("1.0.92", 129, 191, 339, 535, 952) }
+
 // Resumes says Grok Build continues a session it ran: `-r` on an id its
 // sessions directory holds under the run's directory resumes it (measured on
 // 1.0.92).

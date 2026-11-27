@@ -594,6 +594,12 @@ func (CursorAgent) Pins(_ context.Context, _ sandbox.RunRequest, paths Paths) []
 // before it ([Harness.MCPCallCeiling]).
 func (CursorAgent) MCPCallCeiling() time.Duration { return cursorMCPCallCeiling }
 
+// ResidentPeak is a stand-in, the heaviest measured curve (residentpeak.go):
+// Cursor Agent answers only from Cursor's own service.
+func (CursorAgent) ResidentPeak() ResidentPeak {
+	return ResidentPeak{StandIn: "Cursor Agent runs its model on Cursor's service alone, which no stand-in model answers, and no account measured it"}
+}
+
 // cursorMCPCallCeiling is [CursorAgent.MCPCallCeiling]'s.
 const cursorMCPCallCeiling = 60 * time.Second
 
