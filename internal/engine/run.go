@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/atlaswake"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	awsint "github.com/crewlet/crewlet/internal/aws"
+	"github.com/crewlet/crewlet/internal/browser/screen"
 	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
@@ -1084,6 +1085,10 @@ type Engine struct {
 	// way, which a collection waits for (connectmarks.go).
 	connectMarks *connectMarks
 
+	// screenLimits are this node's limits on what its jobs' browser screens
+	// take, built once a node and handed to every hub here (browserscreen.go).
+	screenLimits screen.Limits
+
 	// runSteers is this node's half of the notes a turn's executor holds on
 	// its record, from launch to the turn's end (runsteer.go, ADR-0067).
 	runSteers *runSteers
@@ -1659,6 +1664,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// an ingress-only node with no runtime still files a person's note on a
 		// run another node launched.
 		connectMarks: newConnectMarks(),
+		screenLimits: screen.NewLimits(nil),
 		runSteers: newRunSteers(steerSeals, sandbox.NewCoordStore(backends.Fleet), backends.Queue).
 			claimingIn(ledgerstore.NewFleetCompletions(backends.Fleet)).
 			seeingThrough(ledgerstore.NewSeenThrough(backends.Fleet)),

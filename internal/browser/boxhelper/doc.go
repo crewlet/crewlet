@@ -6,7 +6,10 @@
 // life and serving it to the model through Playwright MCP, embedded in it,
 // behind the shim, the harness's stdio browser server ([ShimArgs]). The
 // helper runs under the box's Node, of [MinNodeMajor] or newer with an npm of
-// [MinNPMMajor] or newer; the engine links none of Playwright's code.
+// [MinNPMMajor] or newer, and its suite runs it at both ends, the floor's
+// pinned release beside the machine's own (boxhelpertest; CONTRIBUTING.md,
+// "The floor Node" and "Which node"); the engine links none of Playwright's
+// code.
 //
 // # The helper's files
 //
@@ -14,8 +17,10 @@
 // alone, embedded ([Files]) as the OpenCode plugins are, so a box runs the
 // helper this build's suite ran: helper.mjs, the entry, whose subcommands are
 // ensure and stop (ensure.mjs), supervise (supervise.mjs; serve.mjs, its
-// socket; fence.mjs) and mcp (shim.mjs), beside chromium.mjs, tree.mjs and
-// common.mjs.
+// socket; fence.mjs; and the live view it attaches, the modules of
+// internal/browser/boxhelper/live, written between the helper's and the
+// entry), mcp (shim.mjs) and relay (live's, a job's relay, [RelayScript]),
+// beside chromium.mjs, tree.mjs and common.mjs.
 // No build step stands between them and the binary: [Write] puts each into
 // the box's [Folder] whole, after every module it imports; then the lock's two
 // files, as tree-package.json and tree-package-lock.json, names neither npm
@@ -43,7 +48,7 @@
 // Nothing else a box prints reaches a prompt.
 //
 // Its checks, in order: the folder, the box user's, held at 0700 and its files
-// at 0600 before any is read, short enough for its socket's path; ensure.lock,
+// at 0600 before any is read, short enough for its sockets' paths; ensure.lock,
 // made exclusively, so two launches never start two supervisors (a younger
 // holder is waited for, at each change in the folder and every second, which
 // alone wakes it where the kernel refuses a watch; one that is no ensure or
@@ -128,8 +133,9 @@
 // closes its socket and model connections, then the browser through
 // Playwright, so Chromium writes its profile, killing its group past
 // stop_grace_ms (a frozen browser never answers); a TERM as it launches waits
-// for the launch and serves nothing. Killed outright, it takes its browser
-// too: Chromium exits as its pipe closes.
+// for the launch and serves nothing, and one as it begins serving waits for
+// that step, closes what it opened and never says ready. Killed outright, it
+// takes its browser too: Chromium exits as its pipe closes.
 //
 // Before anything loads it installs its own policy: an unhandled rejection is
 // logged and it carries on, since Playwright MCP listens for one only while a
@@ -139,6 +145,13 @@
 // ensure's source; supervisor.log, 1 MiB with one rotation, logs refusals by
 // kind and errors by message, never a page's words. Every timer runs on the
 // clock it is handed.
+//
+// Attachments, its caller's, add what else it serves: each is attached once
+// browser.sock listens and before ready; told each browser launched, each
+// state, the model connection's job, and each browser_tabs new, select or
+// close answered without error; and closed first on a stop, waited for by
+// nothing. One that fails is logged and the supervisor serves on.
+// supervisor.json's boot, drawn once, outlives every relaunch.
 //
 // # The launch
 //
@@ -271,15 +284,10 @@
 // TestTheInstalledDigestNamesTheFilesTheLockInstalls computes it again, in
 // Go, from the suite's tree.
 //
-// Dependabot proposes each release (.github/dependabot.yml), and its pull
-// request stays red until a person reads the release, checks the registry's
-// signatures on what it installs (`npm audit signatures`) and moves the
-// constants and the digest, from a branch of their own (CONTRIBUTING.md, "A
-// Playwright MCP bump is read before it lands"). Nor does it merge itself:
-// .github/workflows/dependabot-merge.yml, which queues every other bump to
-// merge once green, starts no run on one that changes only tree/. The
-// signature check fetches the registry's keys when it runs rather than reading
-// a pinned one, the price of a check npm maintains.
+// A bump lands as CONTRIBUTING.md says ("A Playwright MCP bump is read before
+// it lands"). Its signature check (`npm audit signatures`) fetches the
+// registry's keys when it runs rather than reading a pinned one, the price of
+// a check npm maintains.
 //
 // # Why Playwright MCP is embedded, not run
 //
@@ -293,26 +301,6 @@
 // drive the browser around the helper. Embedded, every connection passes the
 // helper, and nothing raw listens. The cost: createConnection's context
 // getter is undocumented, so every bump reads it again.
-//
-// # The floor Node
-//
-// A box brings its own Node and npm, and the helper supports Node
-// [MinNodeMajor] or newer with the npm that major bundles, [MinNPMMajor] or
-// newer. So boxhelpertest hands a case of the helper two Nodes, each with its
-// own npm: the machine's, at or above both, and the floor's newest release,
-// of both majors exactly, which scripts/node-pin.env pins by version and
-// per-platform SHA-256 and `make node` (scripts/node.sh) fetches, keeping its
-// node and its npm. Without the floor's run the suite would prove the newest
-// Node alone, and a floor that only CI ran would let a developer's `make
-// check` pass on code the floor rejects: the git and Chromium floors take the
-// same posture. TestTheLockInstallsWithEachNodesOwnNpm installs the lock with
-// each, offline, from the npm cache of the suite's tree.
-//
-// It is the one Node version the tree names (CONTRIBUTING.md, "Which node"),
-// because a weekly check moves it: .github/workflows/pins.yml's leg
-// (scripts/node-pin-check.sh) holds the pin to the newest patch of its major,
-// verified against the Node releasers' keys, and fails from 60 days before
-// the major's end of life, naming the release to raise it to.
 //
 // # The suite
 //

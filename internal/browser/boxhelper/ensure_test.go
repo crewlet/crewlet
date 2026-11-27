@@ -655,15 +655,16 @@ func closed(t *testing.T, box *boxhelpertest.Box) {
 
 // THE BOX'S FILES AND SOCKETS ARE ITS USER'S ALONE: whatever modes the
 // box's upload left the engine's files at (0644 here, in 0755 directories),
-// once ensure has run the folder is 0700, every file directly in it 0600, the
-// socket 0600, and nothing the supervisor or its browser made, the profile
-// included, is open to the box's other users; nor is it from a supervisor a
-// looser process starts (the probe, at umask 022) on a fresh profile, since
-// ensure's install has set 077 before it starts one. On each Node, whose
-// umask and chmod the helper's modes are.
+// once ensure has run the folder is 0700, every file directly in it 0600,
+// both sockets, browser.sock and the live view's relay.sock, 0600, and
+// nothing the supervisor or its browser made, the profile included, is open
+// to the box's other users; nor is it from a supervisor a looser process
+// starts (the probe, at umask 022) on a fresh profile, since ensure's install
+// has set 077 before it starts one. On each Node, whose umask and chmod the
+// helper's modes are.
 //
-// Mutation: skip the supervisor's umask (the probe's profile is the world's
-// to read).
+// Mutations, each red: skip the supervisor's umask (the probe's profile is
+// the world's to read); skip relay.sock's chmod.
 func TestTheBoxsFilesAndSocketsAreItsUsersAlone(t *testing.T) {
 	boxhelpertest.Each(t, func(t *testing.T, env boxhelpertest.Env) {
 		box := boxhelpertest.Start(t, env, boxhelpertest.Options{Route: boxhelpertest.OnPath})
@@ -687,8 +688,10 @@ func TestTheBoxsFilesAndSocketsAreItsUsersAlone(t *testing.T) {
 				mode(t, file, 0o600)
 			}
 		}
-		if info, err := os.Lstat(filepath.Join(box.Folder, "browser.sock")); err != nil || info.Mode()&fs.ModeSocket == 0 {
-			t.Errorf("browser.sock is %v (%v), want the supervisor's socket", info, err)
+		for _, socket := range []string{"browser.sock", "relay.sock"} {
+			if info, err := os.Lstat(filepath.Join(box.Folder, socket)); err != nil || info.Mode()&fs.ModeSocket == 0 {
+				t.Errorf("%s is %v (%v), want the supervisor's socket", socket, info, err)
+			}
 		}
 		closed(t, box)
 

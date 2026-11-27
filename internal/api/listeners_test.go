@@ -165,6 +165,7 @@ var publishedRoutes = []string{
 	mcpbridge.ServerPattern,
 	mcpbridge.SteerPattern,
 	mcpbridge.SkillPattern,
+	mcpbridge.BrowserPattern,
 	host.PatternBoxInfoRefs,
 	host.PatternBoxUploadPack,
 	host.PatternBoxReceivePack,

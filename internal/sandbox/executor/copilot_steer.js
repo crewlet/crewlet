@@ -87,7 +87,7 @@ import { joinSession } from "@microsoft/copilot-sdk/extension"
 const config = /*crewlet:config*/ null
 
 // pollAbortMs bounds one poll: the route holds an empty one ten seconds
-// (internal/api/mcpbridge, steerHold), and the same again is room for a relay.
+// (internal/api/mcpbridge, pollHold), and the same again is room for a relay.
 const pollAbortMs = 20_000
 
 // stopAskMs bounds the ask made as the main agent stops. A waiting note is

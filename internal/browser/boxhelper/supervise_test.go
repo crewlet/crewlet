@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -115,18 +117,47 @@ type event struct {
 	Kind string `json:"kind"`
 	PID  int    `json:"pid"`
 	Sent bool   `json:"sent"`
+	Hook string `json:"hook"`
 }
 
 // supervisedAnswer is the probe's answer about the supervisor it runs.
 type supervisedAnswer struct {
-	State   string   `json:"state"`
-	Events  []event  `json:"events"`
-	Reports []string `json:"reports"`
-	Killed  int      `json:"killed"`
-	PID     int      `json:"pid"`
-	Frozen  int      `json:"frozen"`
-	Pages   int      `json:"pages"`
-	Refused string   `json:"refused"`
+	State    string         `json:"state"`
+	Events   []event        `json:"events"`
+	Reports  []string       `json:"reports"`
+	Attached []attachedCall `json:"attached"`
+	Killed   int            `json:"killed"`
+	PID      int            `json:"pid"`
+	Frozen   int            `json:"frozen"`
+	Pages    int            `json:"pages"`
+	Refused  string         `json:"refused"`
+}
+
+// attachedCall is one call the probe's recording attachment was told, with
+// what the supervisor showed then: its state and whether browser.sock was
+// there; at attach, its boot; for a browser, whether the supervisor serves it
+// and its pages; and a call's job, action and answer's text.
+type attachedCall struct {
+	Hook    string `json:"hook"`
+	State   string `json:"state"`
+	Socket  bool   `json:"socket"`
+	Boot    string `json:"boot"`
+	Current bool   `json:"current"`
+	Pages   int    `json:"pages"`
+	Job     string `json:"job"`
+	Action  string `json:"action"`
+	Text    string `json:"text"`
+}
+
+// calls is every recorded call of hook, in the order it was told.
+func (a supervisedAnswer) calls(hook string) []attachedCall {
+	var out []attachedCall
+	for _, c := range a.Attached {
+		if c.Hook == hook {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // kinds is how many events of kind the answer holds.
@@ -142,12 +173,12 @@ func (a supervisedAnswer) kinds(kind string) int {
 
 // supervised starts a probe running the supervisor of box's launch in its own
 // process, on the probe's clock, its profile's lock read through fail's file
-// system: the launch box's ensure wrote, its own supervisor stopped first, so
-// the probe's holds the profile. It answers the probe and the supervisor's
-// first answer, ready or failed. Its browser's group is killed, frozen or not,
-// once the case ends.
-func supervised(t *testing.T, box *boxhelpertest.Box, rejectFirst bool, fail *fault) (*boxhelpertest.Probe,
-	supervisedAnswer) {
+// system, handed the probe's attachments live names: the launch box's ensure
+// wrote, its own supervisor stopped first, so the probe's holds the profile.
+// It answers the probe and the supervisor's first answer, ready or failed. Its
+// browser's group is killed, frozen or not, once the case ends.
+func supervised(t *testing.T, box *boxhelpertest.Box, rejectFirst bool, fail *fault, live ...string) (
+	*boxhelpertest.Probe, supervisedAnswer) {
 	t.Helper()
 	if got := box.Ensure(t); got.Verdict != browser.EnsureReady {
 		t.Fatalf("ensure answered %+v", got)
@@ -156,7 +187,7 @@ func supervised(t *testing.T, box *boxhelpertest.Box, rejectFirst bool, fail *fa
 	probe := box.Probe(t)
 	var got supervisedAnswer
 	probe.Do(map[string]any{"op": "supervise", "launch": filepath.Join(box.Folder, "launch.json"),
-		"reject_first": rejectFirst, "fail": fail}, &got)
+		"reject_first": rejectFirst, "fail": fail, "live": live}, &got)
 	t.Cleanup(func() {
 		if s := box.Supervisor(t); s.Chromium != nil && s.Chromium.PID > 0 {
 			_ = procgroup.Kill(s.Chromium.PID)
@@ -454,8 +485,13 @@ const initialized = `{"jsonrpc":"2.0","method":"notifications/initialized"}` + "
 
 // tabs is a call of browser_tabs, id, listing the tabs.
 func tabs(id int) map[string]any {
+	return tabsCall(id, map[string]any{"action": "list"})
+}
+
+// tabsCall is a call of browser_tabs, id, with arguments.
+func tabsCall(id int, arguments map[string]any) map[string]any {
 	return map[string]any{"jsonrpc": "2.0", "id": id, "method": "tools/call",
-		"params": map[string]any{"name": "browser_tabs", "arguments": map[string]any{"action": "list"}}}
+		"params": map[string]any{"name": "browser_tabs", "arguments": arguments}}
 }
 
 // THE SUPERVISOR SERVES ITS BROWSER TO ONE CONNECTION THAT SAYS ITS HELLO: a
@@ -599,4 +635,222 @@ func TestAStateTheSupervisorCannotRecordCostsOnlyThatRecord(t *testing.T) {
 			t.Errorf("the stop was answered %+v and supervisor.json records %+v, want stopped", got, s)
 		}
 	})
+}
+
+// THE SUPERVISOR OPENS WHAT ATTACHES BEFORE IT SAYS READY AND CLOSES IT FIRST:
+// an attachment is attached once browser.sock listens, the supervisor still
+// starting, and told the browser served, then ready; each model connection's
+// job as it comes and goes; each browser_tabs new, select and close the
+// server answered without error, with its answer, never a list or an error; a
+// relaunch's browser and states; and, on a stop, closed while browser.sock is
+// there. One failing to attach or in its hooks is logged, costing the browser
+// and its fellows nothing.
+//
+// Mutations, each red: attach after ready; close it last; tell a list; tell
+// no tabs; let an attach's error out of the start.
+func TestTheSupervisorOpensWhatAttachesBeforeItSaysReadyAndClosesItFirst(t *testing.T) {
+	boxhelpertest.Each(t, func(t *testing.T, env boxhelpertest.Env) {
+		t.Run("told in order", func(t *testing.T) {
+			box := boxhelpertest.Start(t, env, boxhelpertest.Options{Route: boxhelpertest.OnPath})
+			probe, got := supervised(t, box, false, nil, "record")
+			want := []attachedCall{
+				{Hook: "attach", State: "starting", Socket: true, Boot: box.Supervisor(t).Boot},
+				{Hook: "launched", Current: true, Pages: 1},
+				{Hook: "state", State: "ready"},
+			}
+			if got.State != "ready" || !slices.Equal(got.Attached, want) {
+				t.Fatalf("the supervisor answered %s with its attachment told %+v, want ready, told %+v", got.State,
+					got.Attached, want)
+			}
+			told := len(attachedTabs(t, box, probe).Attached)
+			probe.Do(map[string]any{"op": "kill_chromium"}, &got)
+			// The record of restarting and the relaunch race, so either may
+			// be told first; ready is told once the browser has been.
+			relaunched := got.Attached[told:]
+			restarting := attachedCall{Hook: "state", State: "restarting"}
+			launched := attachedCall{Hook: "launched", Current: true, Pages: 1}
+			ready := attachedCall{Hook: "state", State: "ready"}
+			if got.State != "ready" || len(relaunched) != 3 || relaunched[2] != ready ||
+				!slices.Contains(relaunched[:2], restarting) || !slices.Contains(relaunched[:2], launched) {
+				t.Errorf("a relaunch told the attachment %+v, want restarting and its browser, then ready", relaunched)
+			}
+			probe.Do(map[string]any{"op": "stop"}, &got)
+			probe.Do(map[string]any{"op": "stopped"}, &got)
+			if closed := got.calls("close"); len(closed) != 1 || closed[0].State != "ready" || !closed[0].Socket {
+				t.Errorf("the stop closed the attachment as %+v, want once, while ready and browser.sock there", closed)
+			}
+			if last := got.Attached[len(got.Attached)-1]; last.Hook != "close" {
+				t.Errorf("the attachment was told %+v after it was closed", last)
+			}
+		})
+		t.Run("one that fails", func(t *testing.T) {
+			box := boxhelpertest.Start(t, env, boxhelpertest.Options{Route: boxhelpertest.OnPath})
+			probe, got := supervised(t, box, false, nil, "fail", "fail_hooks", "record")
+			if got.State != "ready" || len(got.calls("state")) != 1 || len(got.calls("launched")) != 1 {
+				t.Fatalf("beside attachments that fail, the supervisor answered %s and told %+v, want ready, told "+
+					"its browser and its state", got.State, got.Attached)
+			}
+			probe.Do(map[string]any{"op": "context"}, &got)
+			if got.Pages != 1 || got.Refused != "" {
+				t.Errorf("beside attachments that fail, the browser serves %+v, want its one page", got)
+			}
+			probe.Do(map[string]any{"op": "stop"}, &got)
+			probe.Do(map[string]any{"op": "stopped"}, &got)
+			failed := map[string]int{}
+			for _, e := range got.Events {
+				if e.Kind == "attachment_failed" {
+					failed[e.Hook]++
+				}
+			}
+			wantFailed := map[string]int{"attach": 1, "onLaunched": 1, "onState": 1, "close": 1}
+			if got.State != "stopped" || len(got.calls("close")) != 1 || !maps.Equal(failed, wantFailed) {
+				t.Errorf("the supervisor stopped as %s, its fellow closed %d times, and logged %v failed, want "+
+					"stopped, closed once, and %v", got.State, len(got.calls("close")), failed, wantFailed)
+			}
+		})
+	})
+}
+
+// A STOP AS THE SUPERVISOR BEGINS SERVING NEVER SAYS READY: a stop that comes
+// while browser.sock opens and what attaches is attached, here from an
+// attachment that stops the supervisor as it attaches, waits for that step to
+// settle, closes every attachment while browser.sock is there, removes the
+// socket and ends stopped, never ready and nothing reported to ensure.
+//
+// Mutations, each red: say ready after a stop that came as it began serving;
+// close before what is attaching has attached.
+func TestAStopAsTheSupervisorBeginsServingNeverSaysReady(t *testing.T) {
+	boxhelpertest.Each(t, func(t *testing.T, env boxhelpertest.Env) {
+		box := boxhelpertest.Start(t, env, boxhelpertest.Options{Route: boxhelpertest.OnPath})
+		probe, _ := supervised(t, box, false, nil, "record", "stop")
+		var got supervisedAnswer
+		probe.Do(map[string]any{"op": "stopped"}, &got)
+		if got.State != "stopped" || len(got.Reports) != 0 || len(got.calls("state")) != 0 {
+			t.Errorf("a supervisor stopped as it began serving answered %s, reported %q and told %+v, want "+
+				"stopped, never ready", got.State, got.Reports, got.Attached)
+		}
+		if closed := got.calls("close"); len(closed) != 2 || !closed[0].Socket || !closed[1].Socket {
+			t.Errorf("a stop as they attached closed %+v, want both attachments, while browser.sock was there",
+				closed)
+		}
+		if _, err := os.Lstat(filepath.Join(box.Folder, "browser.sock")); !os.IsNotExist(err) {
+			t.Errorf("a supervisor stopped as it began serving left browser.sock (%v)", err)
+		}
+	})
+}
+
+// attachedTabs drives a model connection to box's probe's supervisor through
+// browser.sock and holds what its recording attachment is told: the
+// connection's job, and each tab call that moved the current tab, with the
+// tabs its answer lists, and nothing else, then the connection gone. It
+// answers the probe's answer once that is told.
+func attachedTabs(t *testing.T, box *boxhelpertest.Box, probe *boxhelpertest.Probe) supervisedAnswer {
+	t.Helper()
+	d := dial(t, box)
+	if got := d.say(t, helloOf(t, box, jobA)); got["ok"] != true {
+		t.Fatalf("the hello was answered %v, want ok", got)
+	}
+	if got := d.say(t, initialize(1)); got["result"] == nil {
+		t.Fatalf("initialize was answered %v", got)
+	}
+	d.write(t, []byte(initialized))
+	for i, arguments := range []map[string]any{
+		{"action": "new"}, {"action": "select", "index": 0}, {"action": "list"}, {"action": "select", "index": 9},
+		{"action": "close", "index": 1},
+	} {
+		if got := d.say(t, tabsCall(2+i, arguments)); got["result"] == nil {
+			t.Fatalf("browser_tabs %v was answered %v", arguments, got)
+		}
+	}
+	if err := d.conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var got supervisedAnswer
+	probe.Do(map[string]any{"op": "attached", "until": map[string]any{"hook": "model", "job": nil}}, &got)
+	if models := got.calls("model"); !slices.Equal(models, []attachedCall{{Hook: "model", Job: jobA}, {Hook: "model"}}) {
+		t.Errorf("the attachment was told the model connections %+v, want %s's, then none", models, jobA)
+	}
+	told := got.calls("tabs")
+	for i, want := range []struct{ action, current, gone string }{
+		{"new", "- 1: (current)", "- 0: (current)"},
+		{"select", "- 0: (current)", "- 1: (current)"},
+		{"close", "- 0: (current)", "- 1:"},
+	} {
+		if i >= len(told) {
+			t.Errorf("the attachment was told %d tab calls, want new, select and close: %+v", len(told), told)
+			break
+		}
+		c := told[i]
+		if c.Job != jobA || c.Action != want.action || !strings.Contains(c.Text, want.current) ||
+			strings.Contains(c.Text, want.gone) {
+			t.Errorf("tab call %d was told as %+v, want %s's %s, its answer listing %q and no %q", i, c, jobA,
+				want.action, want.current, want.gone)
+		}
+	}
+	if len(told) > 3 {
+		t.Errorf("the attachment was told %d tab calls, want new, select and close alone: %+v", len(told), told)
+	}
+	return got
+}
+
+// THE SUPERVISOR'S BOOT OUTLIVES A RELAUNCH: supervisor.json's boot is sixteen
+// hex digits drawn as a supervisor starts, the same once its browser is
+// killed and launched again, and another for the next supervisor, so what is
+// numbered under it survives a crash and starts again with a new supervisor.
+// Newest alone: the boot is the supervisor's own, which no Node or pin moves.
+//
+// Mutations, each red: draw the boot at each launch; one boot for every
+// supervisor.
+func TestTheSupervisorsBootOutlivesARelaunch(t *testing.T) {
+	box := boxhelpertest.Start(t, boxhelpertest.Newest(t), boxhelpertest.Options{Route: boxhelpertest.OnPath})
+	probe, _ := supervising(t, box, false)
+	boot := box.Supervisor(t).Boot
+	sixteen := regexp.MustCompile(`^[0-9a-f]{16}$`)
+	if !sixteen.MatchString(boot) {
+		t.Fatalf("supervisor.json's boot is %q, want sixteen hex digits", boot)
+	}
+	var got supervisedAnswer
+	probe.Do(map[string]any{"op": "kill_chromium"}, &got)
+	if s := box.Supervisor(t); got.State != "ready" || s.Boot != boot {
+		t.Errorf("after a relaunch the supervisor answered %s and its boot is %q, want ready under %q", got.State,
+			s.Boot, boot)
+	}
+	probe.Do(map[string]any{"op": "stop"}, &got)
+	probe.Do(map[string]any{"op": "stopped"}, &got)
+	if ensured := box.Ensure(t); ensured.Verdict != browser.EnsureReady {
+		t.Fatalf("ensure answered %+v, want ready under a new supervisor", ensured)
+	}
+	if next := box.Supervisor(t).Boot; next == boot || !sixteen.MatchString(next) {
+		t.Errorf("the next supervisor's boot is %q, and the last's %q: want sixteen hex digits drawn anew", next, boot)
+	}
+}
+
+// AN ATTACHMENT THAT FAILS COSTS THE MODEL NOTHING: a box whose relay.sock
+// path is a directory, where the live view cannot listen, still has ensure
+// answer ready, and a shim browses its browser; the supervisor logs the
+// attachment's failure and serves on. Newest alone: the rule is the
+// supervisor's, which no Node or pin moves.
+//
+// Mutation: fail the supervisor on an attachment's error.
+func TestAnAttachmentThatFailsCostsTheModelNothing(t *testing.T) {
+	base := pages(t, map[string]string{"/": "<title>Served</title><p>served"})
+	box := boxhelpertest.Start(t, boxhelpertest.Newest(t), boxhelpertest.Options{})
+	if err := os.Mkdir(filepath.Join(box.Folder, "relay.sock"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := box.Ensure(t); got.Verdict != browser.EnsureReady {
+		t.Fatalf("with relay.sock a directory, ensure answered %+v, want ready", got)
+	}
+	m := session(t, box, jobA)
+	r := m.Call("browser_navigate", map[string]any{"url": base + "/"})
+	if acted(t, r, "the navigate"); !strings.Contains(r.Text(), "Served") {
+		t.Errorf("with the live view failed, the model's navigate answered %q", r.Text())
+	}
+	log, err := os.ReadFile(filepath.Join(box.Folder, "supervisor.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), "attachment_failed") {
+		t.Errorf("supervisor.log records no failed attachment:\n%s", log)
+	}
 }

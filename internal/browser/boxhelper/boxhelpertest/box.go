@@ -411,10 +411,12 @@ func (b *Box) RunEnsure(ctx context.Context, home string, extra ...string) (stdo
 
 // Supervisor is the box's supervisor as its supervisor.json records it.
 type Supervisor struct {
-	PID      int    `json:"pid"`
-	State    string `json:"state"`
-	Helper   string `json:"helper"`
-	Digest   string `json:"launch_digest"`
+	PID    int    `json:"pid"`
+	State  string `json:"state"`
+	Helper string `json:"helper"`
+	Digest string `json:"launch_digest"`
+	// Boot is drawn once a supervisor and kept across its relaunches.
+	Boot     string `json:"boot"`
 	Chromium *struct {
 		PID     int    `json:"pid"`
 		Version string `json:"version"`

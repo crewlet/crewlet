@@ -177,6 +177,7 @@ func launchRecoverable(t *testing.T, extra ...tools.Callable) recoverableRun {
 		mux := http.NewServeMux()
 		mux.Handle(mcpbridge.PathPrefix+"{token}", b.Handler())
 		mux.Handle(mcpbridge.ServerPattern, b.Handler())
+		mux.Handle(mcpbridge.BrowserPattern, b.BrowserHandler())
 		server.Config.Handler = mux
 	}
 	launched := bridgeFor(t, mcpbridge.Options{Material: material, BaseURL: server.URL})

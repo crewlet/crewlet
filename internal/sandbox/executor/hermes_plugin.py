@@ -501,7 +501,7 @@ def _notes(notes_file):
         began = time.monotonic()
         url = _route(notes_file)
         try:
-            # The route holds a poll ten seconds while no note waits (mcpbridge's steerHold).
+            # The route holds a poll ten seconds while no note waits (mcpbridge's pollHold).
             with _opener.open(url + "/notes?after=%d" % cursor, timeout=20) as answer:
                 notes = json.loads(answer.read(1 << 20)).get("notes") or []
         except Exception as err:
