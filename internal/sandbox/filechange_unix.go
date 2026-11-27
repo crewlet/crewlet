@@ -11,7 +11,9 @@ import (
 // hostFile is a file on the engine host opened for a read, and what its open
 // found of it ([ChangeOf]): the same descriptor is asked again, so a file
 // renamed over the path changes nothing for the inode read, and only that
-// inode written, cut or grown in place is a change.
+// inode written, cut or grown in place is a change. The descriptor is its own
+// identity, the inode it opened for as long as it is open, so no device or
+// inode is compared: they could never differ.
 type hostFile struct {
 	file   *os.File
 	opened unix.Stat_t
@@ -48,8 +50,6 @@ func (h hostFile) change() (FileChange, error) {
 		return "", err
 	}
 	switch {
-	case now.Dev != h.opened.Dev || now.Ino != h.opened.Ino:
-		return FileChanged, nil
 	case now.Size < h.opened.Size:
 		return FileChanged, nil
 	case now.Size > h.opened.Size:

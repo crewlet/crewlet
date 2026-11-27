@@ -43,7 +43,7 @@ type changeTeller interface {
 // [Sandbox.OpenRange], [Sandbox.OpenTail], [Sandbox.OpenFile]) since the open.
 // A body that cannot tell is [FileChanged]: a read that cannot show it stood
 // for one version of a file shows nothing of it. A local box asks the
-// descriptor it opened ([hostFile]) for its device, inode, size, modification
+// descriptor it opened ([hostFile]), its identity, for its size, modification
 // time and change time; the change time, which every write and every reset of
 // the modification time sets, also catches a same-size rewrite whose
 // modification time was put back. What it cannot tell: a process inside the
