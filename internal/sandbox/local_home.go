@@ -227,8 +227,28 @@ func escaped(before, after map[string]bool) []string {
 func within(path, dir string) bool { return path == dir || strings.HasPrefix(path, dir+"/") }
 
 // imageID is the box image's ID, which keys a cached home: a tag moves when
-// it is pulled again, and its homes with it.
+// it is pulled again, and its homes with it. An image this node lacks is
+// pulled first, as the box's own run would pull it (run's default
+// --pull=missing): read before anything ran it, a fresh node has no ID to key
+// its first box by, which would then run every step itself.
 func (l *Local) imageID(ctx context.Context) (string, error) {
+	id, err := l.inspectImage(ctx)
+	if err == nil {
+		return id, nil
+	}
+	res, perr := runHost(ctx, l.cli.command(0, "pull", l.opts.Image))
+	if perr == nil && res.ExitCode != 0 {
+		perr = fmt.Errorf("exit %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	if perr != nil {
+		return "", fmt.Errorf("sandbox: image %q is not on this node (%w) and could not be pulled: %w",
+			l.opts.Image, err, perr)
+	}
+	return l.inspectImage(ctx)
+}
+
+// inspectImage is the ID of the box image as this node holds it.
+func (l *Local) inspectImage(ctx context.Context) (string, error) {
 	res, err := runHost(ctx, l.cli.command(0, "image", "inspect", "--format", "{{.Id}}", l.opts.Image))
 	if err == nil && res.ExitCode != 0 {
 		err = fmt.Errorf("exit %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
