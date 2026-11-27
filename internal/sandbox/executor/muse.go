@@ -62,6 +62,10 @@ func (Muse) Name() string { return MuseName }
 // 1050-second bound was answered whole (measured on 1.4.25).
 func (Muse) MCPCallCeiling() time.Duration { return 0 }
 
+// ResidentPeak is measured on 1.4.25 (residentpeak.go): MiB at
+// one turn, then resuming 16, 64, 128 and 256 MiB of session.
+func (Muse) ResidentPeak() ResidentPeak { return measuredPeak("1.4.25", 318, 572, 1207, 2042, 3713) }
+
 // Resumes says Muse Code continues a session it ran: `muse exec --session-id`
 // on an id its data directory holds resumes it (measured on 1.4.25).
 func (Muse) Resumes() bool { return true }

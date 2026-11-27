@@ -68,6 +68,10 @@ func (Copilot) Name() string { return CopilotName }
 // answered whole (measured on 1.0.114).
 func (Copilot) MCPCallCeiling() time.Duration { return 0 }
 
+// ResidentPeak is measured on 1.0.114 (residentpeak.go): MiB at
+// one turn, then resuming 16, 64, 128 and 256 MiB of session.
+func (Copilot) ResidentPeak() ResidentPeak { return measuredPeak("1.0.114", 380, 538, 750, 1187, 1968) }
+
 // Resumes says Copilot continues a session it reported: `--session-id` on an
 // id its home holds resumes it (measured on 1.0.114).
 func (Copilot) Resumes() bool { return true }

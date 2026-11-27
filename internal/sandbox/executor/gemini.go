@@ -43,6 +43,12 @@ func (GeminiCLI) Name() string { return GeminiCLIName }
 // answered whole (measured on 0.70.0).
 func (GeminiCLI) MCPCallCeiling() time.Duration { return 0 }
 
+// ResidentPeak is measured on 0.70.0 (residentpeak.go): MiB at
+// one turn, then resuming 16, 64, 128 and 256 MiB of session.
+func (GeminiCLI) ResidentPeak() ResidentPeak {
+	return measuredPeak("0.70.0", 424, 638, 1101, 1534, 2560)
+}
+
 // resumesOnLaunchRoute: measured on 0.70.0, the one release that continues a
 // carried session ([launchRouted]): created with
 // GOOGLE_GEMINI_BASE_URL at stub A, `--resume` with it at stub B; the resumed

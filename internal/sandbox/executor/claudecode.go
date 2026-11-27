@@ -56,6 +56,12 @@ func (ClaudeCode) Name() string { return ClaudeCodeName }
 // answered whole under a 1050-second bound).
 func (ClaudeCode) MCPCallCeiling() time.Duration { return 0 }
 
+// ResidentPeak is measured on 2.1.330 (residentpeak.go): MiB at
+// one turn, then resuming 16, 64, 128 and 256 MiB of session.
+func (ClaudeCode) ResidentPeak() ResidentPeak {
+	return measuredPeak("2.1.330", 216, 514, 857, 1747, 2737)
+}
+
 // resumesOnLaunchRoute: measured ([launchRouted]) on 2.1.310, the carry floor
 // ([claudeCarryFloor]) and the release the box image recipe installs
 // (code-sandbox.md), and on 2.1.330, the newest: created with

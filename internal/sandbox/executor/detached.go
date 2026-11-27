@@ -169,6 +169,11 @@ type Harness interface {
 	// declaration; the bridge answers a call still running before it
 	// (internal/api/mcpbridge, "A call longer than its harness waits").
 	MCPCallCeiling() time.Duration
+
+	// ResidentPeak is the most memory the harness's process tree holds in its
+	// box, by the session its run resumes, as measured on its release, or a
+	// stand-in naming why it was not measured (residentpeak.go).
+	ResidentPeak() ResidentPeak
 }
 
 // Session is the harness session one run works in, as [Runner.Start] settles it
