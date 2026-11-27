@@ -152,8 +152,9 @@ func (h *TranscriptHalves) Cut(n int) bool {
 	end = append(append(end, h.ring[h.next:]...), h.ring[:h.next]...)
 	// whole: the head and the ring meet, and every byte written is held.
 	whole := h.bytes == len(h.head)+len(end)
-	head, kept := h.head, end
-	switch drop := h.bytes - n; {
+	head, drop := h.head, h.bytes-n
+	var kept []byte
+	switch {
 	case drop <= len(end):
 		kept = end[:len(end)-drop]
 	case whole:
