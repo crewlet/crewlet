@@ -817,28 +817,36 @@ func TestARemovalReplayedAfterTheMemberRestartsRemovesNothing(t *testing.T) {
 }
 
 // A REMOVAL WHOSE ID THE MEMBER'S FILE WILL NOT KEEP IS NOT CARRIED THERE: the
-// member answers that it ran nothing, so the gesture asks the next member,
-// which carries it.
+// member answers `unrecorded`, which the asker reads as a member that ran
+// nothing, so it asks the next, and with none the gesture says no member
+// could carry it.
 //
 // Mutation: answerBroker runs an unrecorded request: node-a removes node-c, red.
-func TestARemovalTheMembersFileWillNotKeepIsCarriedByTheNext(t *testing.T) {
+func TestARemovalTheMembersFileWillNotKeepIsNotCarriedThere(t *testing.T) {
 	t.Parallel()
 	fleet := newBrokerFleet(t)
-	here := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
-	b := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
+	a := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
 	file := memberFile(t, filepath.Join(t.TempDir(), "node-a.db"))
-	local := fleet.nodeOn(t, member("node-a", placement.RoleData), here, brokerRing, file)
-	fleet.node(t, member("node-b", placement.RoleData), b)
+	fleet.nodeOn(t, member("node-a", placement.RoleData), a, brokerRing, file)
+	leaf := fleet.node(t, placement.NodeProfile{ID: "leaf-1",
+		Roles: placement.Roles(placement.RoleSeats), Broker: placement.BrokerLeaf}, nil)
+	capture := &capturingQueue{EventQueue: leaf.backends.Queue}
+	leaf.backends.Queue = capture
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	done, err := local.FleetBroker().Remove(t.Context(), BrokerRemoval{Node: "node-c"})
-	if err != nil {
-		t.Fatalf("a removal node-a's file would not keep answered %v", err)
+	if _, err := leaf.FleetBroker().Remove(t.Context(), BrokerRemoval{Node: "node-c"}); !errors.Is(err, ErrNoBrokerMember) {
+		t.Fatalf("a removal the only member's file would not keep answered %v, want no member to carry it", err)
 	}
-	if done.By != "node-b" || len(here.removed) != 0 || !slices.Equal(b.removed, []string{"node-c"}) {
-		t.Fatalf("carried by %q; node-a removed %v, node-b %v; want node-b alone", done.By,
-			here.removed, b.removed)
+	if len(a.removed) != 0 {
+		t.Fatalf("node-a removed %v from a request its file did not keep", a.removed)
+	}
+	sent := capture.payloads()
+	if len(sent) == 0 {
+		t.Fatal("the leaf asked nobody")
+	}
+	if reply := rawBrokerReply(t, fleet.client(t), "node-a", sent[0]); reply.Code != brokerCodeUnrecorded {
+		t.Errorf("node-a answered %+v, want %q", reply, brokerCodeUnrecorded)
 	}
 }
 
