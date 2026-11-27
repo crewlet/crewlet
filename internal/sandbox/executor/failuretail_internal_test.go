@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -414,3 +415,30 @@ func TestAFailuresTailIsReadAsOneVersionOfItsStream(t *testing.T) {
 
 // tailOfText is the last bytes of s, for a case's message.
 func tailOfText(s string) string { return s[max(0, len(s)-80):] }
+
+// AN ERROR STREAM READ SHORT, OR THROUGH A BODY THAT CANNOT TELL, IS WITHHELD
+// (#2215's review): a box read that ends before the size the stream was
+// weighed at is never taken for the whole stream, for every credential the
+// redaction knows cut where the read ended; nor is a read whose body cannot
+// say its file stood still ([sandbox.ChangeOf]).
+//
+// Mutations, each red: take a read short of the size for the stream; take a
+// body that cannot tell for one that stood still.
+func TestAShortReadOfAnErrorStreamIsWithheld(t *testing.T) {
+	t.Parallel()
+	for _, s := range redacttest.Shapes() {
+		whole := "starting the run\nthe credential was " + s.Sample + "\nFATAL: refused\n"
+		prefix := whole[:strings.Index(whole, s.Sample)+len(s.Sample)*2/3]
+		for name, body := range map[string]io.ReadCloser{
+			"short":       &readCounter{text: strings.NewReader(prefix)},
+			"cannot tell": io.NopCloser(strings.NewReader(whole)),
+		} {
+			tail, err := (&Runner{now: stillClock}).readFailureTail(t.Context(), &piece{path: "err",
+				what: "the error stream", body: body, size: int64(len(whole))}, 4096, time.Time{})
+			if err != nil || tail.shown != "" || !strings.Contains(tail.note(), "changed while the collection read it") {
+				t.Errorf("%s, read %s: the tail shows %q (%v) with %q; want none, saying it changed", s.Name, name,
+					tail.shown, err, tail.note())
+			}
+		}
+	}
+}

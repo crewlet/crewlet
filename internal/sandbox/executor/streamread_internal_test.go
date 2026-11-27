@@ -100,15 +100,24 @@ func TestAnEventStreamPastItsBoundShowsNoTranscript(t *testing.T) {
 
 // AN EVENT STREAM IS READ AS ONE VERSION OF IT: one still being written when
 // its read reaches the size its open found is decoded to its last whole line,
-// its unended last line never a line, and its transcript says the stream was
-// still being written; one cut or written over meanwhile is refused as a
-// piece, the run no success. A local collection under no bound reads it whole.
+// its unended last line never a line, and its transcript keeps only what its
+// redaction settled, so a password's key a later line may answer is left out,
+// saying the stream was still being written; one cut or written over
+// meanwhile is refused as a piece, the run no success. A local collection
+// under no bound reads it whole.
 //
 // Mutations, each red: hand on the unended last line of a stream still being
-// written; leave the note out; take a cut stream for whole.
+// written; end its transcript as though it had ended; leave the note out;
+// take a cut stream for whole.
 func TestAnEventStreamIsReadAsOneVersionOfIt(t *testing.T) {
 	t.Parallel()
-	whole := openCodeLines(20)
+	// Its answer's last line a password's key, whose value a line written
+	// later may hold: no transcript of a stream still being written shows it.
+	const key = "the deploy's password:"
+	lines := openCodeLines(20)
+	whole := lines[:strings.LastIndexByte(lines[:len(lines)-1], '\n')+1] +
+		`{"type":"text","part":{"messageID":"msg_1","text":"` + key + `"}}` + "\n" +
+		lines[strings.LastIndexByte(lines[:len(lines)-1], '\n')+1:]
 	for _, c := range []struct {
 		name  string
 		edit  func(b *sandbox.FakeSandbox, path string)
@@ -120,11 +129,11 @@ func TestAnEventStreamIsReadAsOneVersionOfIt(t *testing.T) {
 			}
 		}},
 		{"still being written", func(b *sandbox.FakeSandbox, path string) {
-			b.AppendInPlace(path, []byte(`{"type":"text","part":{"messageID":"msg_2","text":"lat`))
+			b.AppendInPlace(path, []byte(`{"type":"text","part":{"messageID":"msg_2","text":"later"}}`))
 		}, func(t *testing.T, res sandbox.Result) {
 			if !strings.Contains(res.Transcript, "the run's event stream was still being written") ||
-				strings.Contains(res.Transcript, "lat") {
-				t.Errorf("a stream still being written left the transcript %.300q; want its whole lines, "+
+				strings.Contains(res.Transcript, "later") || strings.Contains(res.Transcript, key) {
+				t.Errorf("a stream still being written left the transcript %.300q; want its settled whole lines, "+
 					"saying so", res.Transcript)
 			}
 		}},
