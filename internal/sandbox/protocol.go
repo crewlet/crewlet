@@ -397,12 +397,13 @@ type RunHandle struct {
 	// answers.
 	BridgeHolderChanged bool
 
-	// FailureReadBy is when the collection ends its read of the error stream
-	// for the reads after it to keep their whole budgets, on the clock of the
-	// node reading the box: set from the deadline that read runs under, for a
-	// read for another node the wait it carried ([failureReadBy]); zero where
-	// nothing bounds it but [FailureReadWait].
-	FailureReadBy time.Time
+	// StreamsReadBy is when the collection ends its reads of the run's event
+	// and error streams for the reads after them to keep their whole budgets,
+	// on the clock of the node reading the box: set from the deadline that
+	// read runs under, for a read for another node the wait it carried
+	// ([streamsReadBy]); zero where nothing bounds them (the error stream's
+	// read keeps [FailureReadWait]).
+	StreamsReadBy time.Time
 }
 
 // Result is one launch's outcome.

@@ -140,3 +140,49 @@ func (h *TranscriptHalves) Bounded() (text string, elidedLines, elidedBytes int)
 	b.Write(end[keptFrom:])
 	return b.String(), whole, dropped
 }
+
+// Cut keeps the first n bytes written, cut back to the last line break among
+// them, as the transcript of a stream still being written ends: at what its
+// redaction made final. False, changing nothing, where a byte it would drop,
+// or the line break it would end at, is no longer held, or what is left could
+// not be bounded as [TranscriptHalves.Bounded] bounds it.
+func (h *TranscriptHalves) Cut(n int) bool {
+	n = max(0, min(n, h.bytes))
+	end := make([]byte, 0, len(h.ring))
+	end = append(append(end, h.ring[h.next:]...), h.ring[:h.next]...)
+	// whole: the head and the ring meet, and every byte written is held.
+	whole := h.bytes == len(h.head)+len(end)
+	head, kept := h.head, end
+	switch drop := h.bytes - n; {
+	case drop <= len(end):
+		kept = end[:len(end)-drop]
+	case whole:
+		head, kept = h.head[:n], end[:0]
+	default:
+		return false
+	}
+	switch i := bytes.LastIndexByte(kept, '\n'); {
+	case i >= 0:
+		kept = kept[:i+1]
+	case whole:
+		head, kept = head[:bytes.LastIndexByte(head, '\n')+1], kept[:0]
+	default:
+		return false
+	}
+	removed := bytes.Count(h.head[len(head):], []byte("\n")) + bytes.Count(end[len(kept):], []byte("\n"))
+	left := h.bytes - (len(h.head) - len(head)) - (len(end) - len(kept))
+	if !whole && (left <= MaxRunTextBytes || len(kept) <= transcriptTailBytes) {
+		return false
+	}
+	h.head, h.ring, h.next = head, kept, 0
+	h.bytes, h.breaks = left, h.breaks-removed
+	switch {
+	case len(kept) > 0:
+		h.last = kept[len(kept)-1]
+	case len(head) > 0:
+		h.last = head[len(head)-1]
+	default:
+		h.last = 0
+	}
+	return true
+}

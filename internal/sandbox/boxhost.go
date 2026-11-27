@@ -141,13 +141,13 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // what the read may do there: [pollBound], then at the host's share
 // ([BoxReadRequest.AnswerBudget]) the job's end ([JobEndBudget]) with the
 // cap's record, for every collection of a turn with a cap and for a stop or
-// loss, the collection's own reads ([CollectReadWait]), and all after it
-// ([afterCollect]): a slow host is not a stopped one ("Box read budget").
+// loss, the pieces the collection reads whole ([CollectReadWait]), and all
+// after it ([afterCollect]): a slow host is not a stopped one ("Box read budget").
 //
-// THE HOST FOLLOWS THE WAIT EACH ASKER CARRIES, never this figure, its error
-// stream's read given what the rest leaves ([RunHandle.FailureReadBy]): an
-// older asker's smaller wait costs the stream's end, never the take's time, so
-// the figure is in no table of what an older reader holds.
+// THE HOST FOLLOWS THE WAIT EACH ASKER CARRIES, never this figure, its streams'
+// reads given what the rest leaves ([RunHandle.StreamsReadBy]): an older
+// asker's smaller wait costs the streams' ends, never the take's time, so the
+// figure is in no table of what an older reader holds.
 func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Duration {
 	var before time.Duration
 	if read.mayEnd(run) {
@@ -191,14 +191,13 @@ func afterCollect(run PendingRun, read BoxRead, traits ThreadTraits) time.Durati
 // continued session's spend.
 const CollectWholePieces = 8
 
-// collectWholeWait is every piece a collection reads whole at its cap
-// ([MaxFileBytes]) at the box-read floor ([boxReadPace]), 256 s: a piece's size
-// is the box's to choose.
-const collectWholeWait = CollectWholePieces * (MaxFileBytes >> 20) * boxReadPace
-
-// CollectReadWait is a collection's own reads in a box read's budget: its
-// whole pieces ([collectWholeWait]) and its error stream ([FailureReadWait]).
-const CollectReadWait = collectWholeWait + FailureReadWait
+// CollectReadWait is the pieces a collection reads whole in a box read's
+// budget: each at its cap ([MaxFileBytes]) at the box-read floor
+// ([boxReadPace]), 256 s, since a piece's size is the box's to choose. The
+// run's streams, whose length nothing bounds, get no term of their own: they
+// are read in what the asker's wait leaves ([RunHandle.StreamsReadBy]), so a
+// stream however long never delays the asker's answer to a silent host.
+const CollectReadWait = CollectWholePieces * (MaxFileBytes >> 20) * boxReadPace
 
 // FailureReadWait is how long a collection reads and redacts a run's error
 // stream from its first byte before it withholds the stream's end
@@ -207,20 +206,20 @@ const CollectReadWait = collectWholeWait + FailureReadWait
 // ([MaxFileBytes]), 32 s. A working box and the redaction of ordinary text go
 // far faster, so only a stream of hundreds of mebibytes, or one filled with
 // the redaction's slowest shapes, reaches it. A read under a deadline gives it
-// less where that leaves less ([RunHandle.FailureReadBy]).
+// less where that leaves less ([RunHandle.StreamsReadBy]); a box read's
+// budget gives it no time of its own ([CollectReadWait]).
 const FailureReadWait = (MaxFileBytes >> 20) * boxReadPace
 
-// failureReadBy is when a read of run's box under ctx ends its error stream's
-// read, for the reads after it to keep their whole budgets: ctx's deadline less
-// what follows the collection ([afterCollect]) and the pieces it reads whole
-// ([collectWholeWait]); zero where ctx carries no deadline, whose error stream
-// keeps [FailureReadWait] alone.
-func failureReadBy(ctx context.Context, run PendingRun, read BoxRead, traits ThreadTraits) time.Time {
+// streamsReadBy is when a read of run's box under ctx ends its reads of the
+// run's streams, for the reads after them to keep their whole budgets: ctx's
+// deadline less what follows the collection ([afterCollect]) and the pieces
+// it reads whole ([CollectReadWait]); zero where ctx carries no deadline.
+func streamsReadBy(ctx context.Context, run PendingRun, read BoxRead, traits ThreadTraits) time.Time {
 	d, ok := ctx.Deadline()
 	if !ok {
 		return time.Time{}
 	}
-	return d.Add(-afterCollect(run, read, traits) - collectWholeWait)
+	return d.Add(-afterCollect(run, read, traits) - CollectReadWait)
 }
 
 // boxReadChanges is how many changes of a run's row every read of its box gives

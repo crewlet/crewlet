@@ -64,7 +64,7 @@ func (f failureTail) transcript() string {
 // last keep+1 bytes of what it writes ([endRing]): with the byte before them,
 // [sandbox.KeepEnd] of those is KeepEnd of the whole redaction. ON THE
 // RUNNER'S CLOCK, BY ITS BOUND: [sandbox.FailureReadWait], or the earlier of
-// readBy ([sandbox.RunHandle.FailureReadBy]) and ctx's deadline where they come
+// readBy ([sandbox.RunHandle.StreamsReadBy]) and ctx's deadline where they come
 // sooner; past it the read stops and withholds the end, since an end the
 // redaction has not reached is not the stream's.
 func (r *Runner) readFailureTail(ctx context.Context, p *piece, keep int, readBy time.Time) (failureTail, error) {

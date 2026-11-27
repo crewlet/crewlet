@@ -1135,7 +1135,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		undecided int
 	)
 	if out.Events {
-		streamed, refusal, err := r.decodeStream(pieces.stream, false)
+		streamed, refusal, err := r.decodeStream(ctx, pieces.stream, false, handle.StreamsReadBy)
 		if err != nil {
 			return sandbox.Result{}, err
 		}
@@ -1298,7 +1298,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		refused = append(refused, refusal)
 	}
 	stderrTail := sync.OnceValues(func() (failureTail, error) {
-		return r.readFailureTail(ctx, pieces.stderr, r.failureBound, handle.FailureReadBy)
+		return r.readFailureTail(ctx, pieces.stderr, r.failureBound, handle.StreamsReadBy)
 	})
 	if result.Transcript == "" {
 		tail, tailErr := stderrTail()
@@ -1725,22 +1725,47 @@ func unreadNote(unread int64, none bool) string {
 }
 
 // decodeStream reads the event stream a collection opened through a fresh
-// decoder, no further than the size it was weighed at, and keeps its last line
-// where keepLast asks, which [Runner.Collect] reads again for where the line
-// stands for the result file — or answers the refusal of a stream the box
-// would not open because it is not a regular file ([notRegularPiece]).
-func (r *Runner) decodeStream(stream *piece, keepLast bool) (decodedStream, string, error) {
+// decoder, no further than the size it was weighed at and by by
+// ([Runner.readStream]), and keeps its last line where keepLast asks, which
+// [Runner.Collect] reads again for where the line stands for the result file.
+// A stream its bound ended shows no transcript and, where it said nothing of
+// how the run ended, says why; one still being written ends its transcript
+// where its redaction settled; one cut or written over while read is refused,
+// as one the box would not open because it is not a regular file
+// ([notRegularPiece]) is.
+func (r *Runner) decodeStream(ctx context.Context, stream *piece, keepLast bool, by time.Time) (decodedStream,
+	string, error) {
 	if stream.refusal != "" {
 		return decodedStream{request: contextRead{why: "the run's event stream was not read: " +
 			stream.refusal}}, stream.refusal, nil
 	}
 	defer stream.close()
-	return r.decodeLines(io.LimitReader(stream.body, stream.size), keepLast)
+	read := r.readStream(ctx, stream, by)
+	decoded, refusal, err := r.decodeLines(read, keepLast, read.whole)
+	switch {
+	case err != nil:
+		return decodedStream{}, "", err
+	case read.change == sandbox.FileChanged:
+		refusal = stream.withhold(sandbox.WithheldChanged, changedPiece(stream.path, stream.what, read.read,
+			stream.size))
+		return decodedStream{request: contextRead{why: "the run's event stream was not read: " + refusal}},
+			refusal, nil
+	case read.past:
+		stream.withhold(sandbox.WithheldPastBound, "")
+		decoded.result.Text, decoded.result.Transcript = "", read.pastNote()
+		if !decoded.ended {
+			decoded.result.Error = strings.TrimSpace(read.pastError() + ":\n" + decoded.result.Error)
+		}
+	case !read.whole():
+		decoded.result.Transcript = strings.TrimSpace(unendedNote() + "\n" + decoded.result.Transcript)
+	}
+	return decoded, refusal, nil
 }
 
 // redecodeStream reads the stream a collection opened again, keeping its last
 // line: opened anew, and read no further than the size the first open was
-// weighed at, so a file renamed over it since adds nothing to what is held.
+// weighed at, so a file renamed over it since adds nothing to what is held,
+// and its last line, unended, only where the read reached its end.
 func (r *Runner) redecodeStream(ctx context.Context, box sandbox.Sandbox, stream *piece) (decodedStream, error) {
 	if stream.refusal != "" || stream.size == 0 {
 		return decodedStream{}, nil
@@ -1750,21 +1775,26 @@ func (r *Runner) redecodeStream(ctx context.Context, box sandbox.Sandbox, stream
 		return decodedStream{}, fmt.Errorf("executor: opening the event stream again: %w", err)
 	}
 	defer func() { _ = body.Close() }()
-	again, _, err := r.decodeLines(io.LimitReader(body, stream.size), true)
+	read := r.readStream(ctx, &piece{body: body, size: stream.size}, time.Time{})
+	again, _, err := r.decodeLines(read, true, read.whole)
 	return again, err
 }
 
 // decodeLines decodes an event stream's lines from stream through a fresh
-// decoder.
-func (r *Runner) decodeLines(stream io.Reader, keepLast bool) (decodedStream, string, error) {
+// decoder, its unended last line a line only where whole says the stream
+// ended; where it did not, its transcript ends where its redaction settled.
+func (r *Runner) decodeLines(stream io.Reader, keepLast bool, whole func() bool) (decodedStream, string, error) {
 	events := r.harness.Events()
 	kept := &keepingLast{Decoder: events}
 	dec := events
 	if keepLast {
 		dec = kept
 	}
-	if err := eachLine(stream, dec, r.lineBound); err != nil {
+	if err := eachLineOf(stream, dec, r.lineBound, whole); err != nil {
 		return decodedStream{}, "", fmt.Errorf("executor: reading the event stream: %w", err)
+	}
+	if unended, ok := events.(streamUnended); ok && !whole() {
+		unended.streamUnended()
 	}
 	out := decodedStream{result: events.Result(), last: kept.last, ended: events.Ended(),
 		requests: events.Requests(), inFlight: events.InFlight(), undecided: events.Undecided()}

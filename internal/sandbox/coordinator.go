@@ -2257,7 +2257,7 @@ func (c *Coordinator) readBoxFor(ctx context.Context, run PendingRun, read BoxRe
 	}
 	handle := run.Handle()
 	handle.BridgeHolderChanged = away
-	handle.FailureReadBy = failureReadBy(ctx, run, read, ThreadTraitsOf(runner))
+	handle.StreamsReadBy = streamsReadBy(ctx, run, read, ThreadTraitsOf(runner))
 	result, err := runner.Collect(ctx, box, handle, c.answerBudget)
 	if err != nil {
 		return Result{}, false, err

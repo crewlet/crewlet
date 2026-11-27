@@ -6,17 +6,18 @@ import (
 	"time"
 )
 
-// A READ'S ERROR STREAM IS GIVEN ONLY WHAT ITS WAIT LEAVES. The host hands its
-// collection the instant its error stream's read ends ([RunHandle.FailureReadBy]):
-// the read's deadline less what follows the collection ([afterCollect]) and the
-// pieces it reads whole ([collectWholeWait]). A read that spends both at their
-// bounds still hands its take the take's whole budget, whether its asker
-// carried this build's wait or an older build's, which held no room for the
-// collection's reads ([CollectReadWait]). A read under no deadline sets none.
+// A READ'S STREAMS ARE GIVEN ONLY WHAT ITS WAIT LEAVES. The host hands its
+// collection the instant its reads of the run's streams end
+// ([RunHandle.StreamsReadBy]): the read's deadline less what follows the
+// collection ([afterCollect]) and the pieces it reads whole
+// ([CollectReadWait]). A read that spends both at their bounds still hands its
+// take the take's whole budget, whether its asker carried this build's wait or
+// an older build's, which held no room for the whole pieces. A read under no
+// deadline sets none.
 //
-// Mutations, each red: hand the collection no FailureReadBy; leave the whole
+// Mutations, each red: hand the collection no StreamsReadBy; leave the whole
 // pieces' room, or what follows the collection, out of it.
-func TestAReadsErrorStreamIsGivenOnlyWhatItsWaitLeaves(t *testing.T) {
+func TestAReadsStreamsAreGivenOnlyWhatItsWaitLeaves(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	host := rig.hostOn(t, "node-a", rig.pending)
@@ -43,17 +44,19 @@ func TestAReadsErrorStreamIsGivenOnlyWhatItsWaitLeaves(t *testing.T) {
 		if len(handles) != before+1 {
 			t.Fatalf("the host's read of %s collected nothing; the case needs one that did", c.turn)
 		}
-		got, want := handles[len(handles)-1].FailureReadBy, failureReadBy(ctx, run, BoxReadCollect, traits)
+		got, want := handles[len(handles)-1].StreamsReadBy, streamsReadBy(ctx, run, BoxReadCollect, traits)
 		if !got.Equal(want) || want.IsZero() == c.deadline {
-			t.Errorf("a read of %s (deadline %v) handed its collection %v to end its error stream's read by, "+
+			t.Errorf("a read of %s (deadline %v) handed its collection %v to end its streams' reads by, "+
 				"want %v", c.turn, c.deadline, got, want)
 		}
 	}
 
 	budget := BoxReadBudget(run, BoxReadCollect, ThreadTraits{})
+	// A VARIABLE, so the quotient is no constant a conversion refuses.
+	collect := CollectReadWait
 	for name, wait := range map[string]time.Duration{
 		"this build's wait": budget,
-		"an older build's":  budget - time.Duration(float64(CollectReadWait)/BoxReadAnswerShare),
+		"an older build's":  budget - time.Duration(float64(collect)/BoxReadAnswerShare),
 	} {
 		t.Run(name, func(t *testing.T) {
 			inBubble(t, func(t *testing.T) {
@@ -61,11 +64,11 @@ func TestAReadsErrorStreamIsGivenOnlyWhatItsWaitLeaves(t *testing.T) {
 				share := time.Duration(float64(wait) * BoxReadAnswerShare)
 				ctx, cancel := context.WithTimeout(t.Context(), share)
 				defer cancel()
-				by := failureReadBy(ctx, run, BoxReadCollect, ThreadTraits{})
+				by := streamsReadBy(ctx, run, BoxReadCollect, ThreadTraits{})
 				// THE COLLECTION SPENDS ALL IT MAY: its error stream to by,
 				// then every whole piece at its bound, then the take's reads
 				// of the row and of who reads its media.
-				until := by.Add(collectWholeWait + RowReadBudget(rig.coordinator.pending, rig.coordinator.recordBudget) +
+				until := by.Add(CollectReadWait + RowReadBudget(rig.coordinator.pending, rig.coordinator.recordBudget) +
 					MediaReadersRoom)
 				if wait := time.Until(until); wait > 0 {
 					time.Sleep(wait)
