@@ -1288,7 +1288,7 @@ const (
 	// few kilobytes.
 	RunLog RunPart = "log"
 	// RunHanded is the secrets the run's job's box was handed, sealed, up to
-	// internal/sandbox's 64 KiB before sealing; few readers need it.
+	// internal/sandbox's 80 KiB before sealing; few readers need it.
 	RunHanded RunPart = "handed"
 	// RunLeads is the turn's leads, each sealed by the job whose brief first
 	// told it, up to 512 KiB: what carried each session of the run on, kept

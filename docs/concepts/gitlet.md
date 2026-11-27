@@ -2755,7 +2755,7 @@ full bridge log of 200 calls:
   entry before it 12.14 ms (17.13).
 - The sealed secrets are about 0.7 KiB for a launch handed a model key, two MCP
   servers' tokens and its own telemetry and Gitlet tokens (486 bytes of values,
-  a 779-byte part), at most 64 KiB before sealing; only a capture, the next
+  a 779-byte part), at most 80 KiB before sealing; only a capture, the next
   launch's opening and the poll's record of a token it renews read them.
 - With the log on the record, the record was 516 173 bytes, a read 5.8 ms and a
   raise 11.1 ms (7.9 and 26.0), and every listing of runs and flip of one moved
