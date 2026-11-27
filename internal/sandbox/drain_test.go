@@ -340,7 +340,9 @@ func TestAnEndingThatMayNotWaitHandsACallStillWaitedForToItsRetry(t *testing.T) 
 	if err := rig.coordinator.drainEnding(t.Context(), run, false); err != nil {
 		t.Fatalf("an ending of a run with no call in flight = %v, want it decided here", err)
 	}
-	past := BridgeCall{Name: "read_page", Seq: 1, StartedAt: rig.now, Until: rig.now.Add(-time.Second)}
+	// BOUNDED ON THIS PROCESS'S OWN CLOCK, so read at its word (rowclock.go).
+	past := BridgeCall{Name: "read_page", Seq: 1, StartedAt: rig.now, Until: rig.now.Add(-time.Second),
+		UntilClock: rig.coordinator.incarnation}
 	beginInFlight(t, rig, "t1", past)
 	if err := rig.coordinator.drainEnding(t.Context(), run, false); err != nil {
 		t.Fatalf("an ending beside a call past its own bound = %v, want it decided here", err)

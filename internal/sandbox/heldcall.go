@@ -332,7 +332,7 @@ func (h HeldCall) WaitedFor(clock string, now, seen time.Time, d time.Duration) 
 	switch {
 	case h.HeldAt.IsZero():
 		return false
-	case h.HeldClock == clock && now.Sub(h.HeldAt) >= d:
+	case clock != "" && h.HeldClock == clock && now.Sub(h.HeldAt) >= d:
 		return true
 	case !seen.IsZero() && now.Sub(seen) >= d:
 		return true

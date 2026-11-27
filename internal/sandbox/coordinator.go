@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -640,10 +641,10 @@ type CoordinatorOptions struct {
 	// last keep. Every capture names the lease ([SessionCapture.Taker],
 	// [SessionCapture.TakerEpoch]); a wait for another process's capture settles
 	// from the executor log once that lease lapsed (session.go). It names this
-	// process's clock beside every instant it stamps on a row (rowclock.go). Held
-	// to [maxIncarnationBytes]. BOTH OR NEITHER ([NewCoordinator] checks): a
-	// holder with no lease would read as a taker gone the moment its capture
-	// began; neither is a test's coordinator, waited for by stamp age.
+	// process's clock beside every instant it stamps on a row (rowclock.go);
+	// empty, the coordinator mints one, as a process of its own. Held to
+	// [maxIncarnationBytes]. Takers needs it ([NewCoordinator] checks); with
+	// none, captures name no taker and are waited for by stamp age.
 	Incarnation string
 	Takers      TakerLeases
 
@@ -805,8 +806,9 @@ type Coordinator struct {
 	node  string
 	boxes BoxReader
 	nudge func(ctx context.Context, n Nudge)
-	// incarnation is [CoordinatorOptions.Incarnation]: the clock every instant
-	// this process stamps on a run's row names (rowclock.go).
+	// incarnation is [CoordinatorOptions.Incarnation], or one minted for a
+	// coordinator handed none: the clock every instant this process stamps on a
+	// run's row names (rowclock.go), never empty.
 	incarnation string
 	// taker is this process's taker lease ([CoordinatorOptions.Takers]), nil
 	// where none is wired.
@@ -1089,10 +1091,9 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 			strings.Join(missing, ", "))
 	}
 	switch {
-	case (opts.Incarnation == "") != (opts.Takers == nil):
-		return nil, fmt.Errorf("sandbox: CoordinatorOptions.Incarnation and CoordinatorOptions.Takers come " +
-			"together: a taker lease is held under the process's incarnation, and an incarnation named on a " +
-			"capture with no lease behind it reads as a taker gone")
+	case opts.Takers != nil && opts.Incarnation == "":
+		return nil, fmt.Errorf("sandbox: CoordinatorOptions.Takers needs CoordinatorOptions.Incarnation: a " +
+			"taker lease is held under the process's incarnation")
 	case len(opts.Incarnation) > maxIncarnationBytes:
 		// REFUSED HERE, not at every stamp, where every capture would be refused.
 		return nil, fmt.Errorf("sandbox: CoordinatorOptions.Incarnation is %d bytes, past the %d a run's "+
@@ -1129,7 +1130,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		busy:               opts.Busy,
 		foldInAnswered:     opts.FoldInAnswered,
 		node:               opts.Node,
-		incarnation:        opts.Incarnation,
+		incarnation:        cmp.Or(opts.Incarnation, opts.Node+":"+uuid.NewString()),
 		boxes:              opts.Boxes,
 		nudge:              opts.Nudge,
 		refresh:            opts.Refresh,

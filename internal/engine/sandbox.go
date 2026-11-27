@@ -2948,6 +2948,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// answer budget, beside its peers' payload answers (answermeter.go).
 		AnswerBudget: e.answerBudget,
 	}
+	// ITS INCARNATION, whatever the lease store: the clock every instant this
+	// process stamps on a run's row names, as the bridge and the call holder
+	// name it (internal/sandbox's rowclock.go).
+	opts.Incarnation = e.incarnation
 	// AND THIS PROCESS'S TAKER LEASE, in the node's lease store beside its seats
 	// and presence, under the ENGINE'S OWN incarnation minted once in [New] (the
 	// node is built after this coordinator on boot), at the seat lease TTL so a
@@ -2959,7 +2963,7 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 	// stop reaches, so through [holdLeases]. With no lease store captures name no
 	// taker and are waited for by age ([sandbox.CoordinatorOptions.Incarnation]).
 	if e.backends.Coord != nil {
-		opts.Incarnation, opts.TakerTTL = e.incarnation, e.leaseTTL
+		opts.TakerTTL = e.leaseTTL
 		opts.Takers = holdLeases{Backend: e.backends.Coord, engine: e}
 	}
 	// AND THE FLEET'S LEDGER OF EACH SEAT'S SAVES, which a save of a running

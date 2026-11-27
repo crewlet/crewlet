@@ -14,7 +14,8 @@ import (
 // rescheduled pod or rebuilt machine keeps on another clock. That process
 // judges it on its own clock against the bound; any other, or an instant naming
 // none (an older build's), against the bound plus the allowance, never before
-// the bound has passed in real time. A process recording the wait again
+// the bound has passed in real time; an empty clock is nobody's, never matched.
+// A process recording the wait again
 // restarts its window on its own clock ([RowWindow]), count and first kept. A
 // kept box's age is read on its host's clock ([RelaunchTarget.At]).
 
@@ -47,7 +48,8 @@ type rowWait struct {
 // windowOn is the wait's window where it is clock's and of this wait, nil
 // otherwise.
 func (w rowWait) windowOn(clock string) *RowWindow {
-	if win := w.window; win != nil && win.Clock == clock && win.Of.Equal(w.first) && !win.Since.IsZero() {
+	if win := w.window; win != nil && clock != "" && win.Clock == clock && win.Of.Equal(w.first) &&
+		!win.Since.IsZero() {
 		return win
 	}
 	return nil
@@ -100,7 +102,7 @@ func (w WaitOver) lostWait() rowWait { return rowWait{first: w.FirstLostAt, wind
 // waits no longer for the call in flight: [BridgeCall.Until] where that clock
 // stamped it, else [RowClockAllowance] past it. Zero for a call with no bound.
 func (c BridgeCall) until(clock string) time.Time {
-	if c.Until.IsZero() || c.UntilClock == clock {
+	if c.Until.IsZero() || (clock != "" && c.UntilClock == clock) {
 		return c.Until
 	}
 	return c.Until.Add(RowClockAllowance)

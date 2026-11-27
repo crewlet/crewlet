@@ -16,9 +16,15 @@ import (
 // delegate and only while the call waits on its delegates, and an escalation
 // that ends that wait once.
 
+// HoldingClock is the incarnation whose clock [DelegatedParked] holds its call
+// on ([sandbox.HeldCall.HeldClock]): a sweep under it judges the call as its
+// own.
+const HoldingClock = "node-a:holder"
+
 // DelegatedParked launches turnID, holds an ssh_operate call put to delegates
-// (rule 1) for it and parks it on the question, answering the held call as
-// recorded. The engine's sweep cases seed their rows with it.
+// (rule 1) for it at heldAt on [HoldingClock] and parks it on the question,
+// answering the held call as recorded. The engine's sweep cases seed their
+// rows with it.
 func DelegatedParked(t *testing.T, s sandbox.PendingStore, turnID string, delegates []string,
 	heldAt time.Time) sandbox.HeldCall {
 	t.Helper()
@@ -26,7 +32,7 @@ func DelegatedParked(t *testing.T, s sandbox.PendingStore, turnID string, delega
 	launch := mustLaunched(t, s, run(turnID))
 	held := sandbox.HeldCall{ID: "0190f3a8-0000-7000-8000-0000000000d1", LaunchID: launch,
 		Server: "crewlet", Tool: "ssh_operate", Raw: "ssh_operate", Digest: "sha256:op", HeldAt: heldAt,
-		Fixed: true, Approvers: sandbox.HeldApproversSSH, Act: string(delegated.KindSSHOperate),
+		HeldClock: HoldingClock, Fixed: true, Approvers: sandbox.HeldApproversSSH, Act: string(delegated.KindSSHOperate),
 		Delegation: &sandbox.HeldDelegation{Rule: 1, Delegates: delegates, Digest: strings.Repeat("ab", 32)}}
 	sealed, err := heldSeal(t).SealArguments(turnID, held, map[string]any{"host": "api-1",
 		"command": "sudo systemctl restart api", "reason": "the release needs it"})

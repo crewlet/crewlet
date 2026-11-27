@@ -60,6 +60,10 @@ func openHeld(t *testing.T) func(sandbox.PendingRun) (map[string]any, error) {
 	}
 }
 
+// holdingSweep is a sweep on the clock sandboxtest.DelegatedParked holds its
+// calls on, which judges them as its own.
+func holdingSweep() *heldSightings { return &heldSightings{clock: sandboxtest.HoldingClock} }
+
 // escalation is what the sweep wrote on turnID's held call, nil for none.
 func escalation(t *testing.T, store sandbox.PendingStore, turnID string) *sandbox.HeldEscalation {
 	t.Helper()
@@ -95,12 +99,12 @@ func TestADelegatedRequestReachesPeopleAtItsDeadline(t *testing.T) {
 		sandboxtest.DelegatedParked(t, store, "t-late", []string{"security-a"}, heldAt)
 		rules, audit := sweepRules{delegates: []string{"security-a"}, live: true}, &sweepAudit{}
 
-		sweepDelegated(t.Context(), store, rules, c.deadline, audit, openHeld(t), nil, heldAt.Add(c.deadline-time.Second))
+		sweepDelegated(t.Context(), store, rules, c.deadline, audit, openHeld(t), holdingSweep(), heldAt.Add(c.deadline-time.Second))
 		if e := escalation(t, store, "t-late"); e != nil || len(audit.verdicts) != 0 {
 			t.Fatalf("%v: a request a second before its deadline went to people: %+v, %+v", c.deadline, e,
 				audit.verdicts)
 		}
-		sweepDelegated(t.Context(), store, rules, c.deadline, audit, openHeld(t), nil, heldAt.Add(c.deadline))
+		sweepDelegated(t.Context(), store, rules, c.deadline, audit, openHeld(t), holdingSweep(), heldAt.Add(c.deadline))
 		e := escalation(t, store, "t-late")
 		if e == nil || !slices.Equal(e.Overruled, []string{delegated.OverruledDeadline}) {
 			t.Fatalf("%v: a request at its deadline: %+v, want it put to people for the deadline", c.deadline, e)
@@ -117,7 +121,7 @@ func TestADelegatedRequestReachesPeopleAtItsDeadline(t *testing.T) {
 		if v := audit.verdicts[0]; v.Host != "api-1" || v.Subject != "sudo systemctl restart api" {
 			t.Fatalf("the engine's escalation names %q on %q, want the command it decided on api-1", v.Subject, v.Host)
 		}
-		sweepDelegated(t.Context(), store, rules, c.deadline, audit, openHeld(t), nil, heldAt.Add(2*c.deadline))
+		sweepDelegated(t.Context(), store, rules, c.deadline, audit, openHeld(t), holdingSweep(), heldAt.Add(2*c.deadline))
 		if len(audit.verdicts) != 1 {
 			t.Fatalf("a second sweep recorded again: %+v", audit.verdicts)
 		}
@@ -180,7 +184,7 @@ func TestTurningDelegationOffReturnsEveryRequestToPeople(t *testing.T) {
 		sandboxtest.DelegatedParked(t, store, "t-off", []string{"security-a"}, heldAt)
 		audit := &sweepAudit{}
 		sweepDelegated(t.Context(), store, c.rules, delegated.DefaultDeadline, audit, openHeld(t),
-			nil, heldAt.Add(time.Minute))
+			holdingSweep(), heldAt.Add(time.Minute))
 		e := escalation(t, store, "t-off")
 		if e == nil || !slices.Equal(e.Overruled, []string{delegated.OverruledOff}) || len(audit.verdicts) != 1 {
 			t.Errorf("%s: the request reads %+v with %d records, want it put to people for delegation_off",
@@ -190,7 +194,7 @@ func TestTurningDelegationOffReturnsEveryRequestToPeople(t *testing.T) {
 	store := sandbox.NewCoordStore(memory.NewFleet())
 	sandboxtest.DelegatedParked(t, store, "t-on", []string{"security-a"}, heldAt)
 	sweepDelegated(t.Context(), store, sweepRules{delegates: []string{"security-a"}, live: true},
-		delegated.DefaultDeadline, &sweepAudit{}, openHeld(t), nil, heldAt.Add(time.Minute))
+		delegated.DefaultDeadline, &sweepAudit{}, openHeld(t), holdingSweep(), heldAt.Add(time.Minute))
 	if e := escalation(t, store, "t-on"); e != nil {
 		t.Errorf("a request its live rule still delegates went to people early: %+v", e)
 	}
@@ -211,7 +215,7 @@ func TestADelegatesOwnRequestReachesPeopleAtOnce(t *testing.T) {
 	sandboxtest.DelegatedParked(t, store, "t-own", []string{"swe", "security-b"}, heldAt)
 	audit := &sweepAudit{}
 	sweepDelegated(t.Context(), store, sweepRules{delegates: []string{"swe", "security-b"}, live: true},
-		delegated.DefaultDeadline, audit, openHeld(t), nil, heldAt.Add(time.Second))
+		delegated.DefaultDeadline, audit, openHeld(t), holdingSweep(), heldAt.Add(time.Second))
 	e := escalation(t, store, "t-own")
 	if e == nil || !slices.Equal(e.Overruled, []string{delegated.OverruledSelf}) || len(audit.verdicts) != 1 ||
 		audit.verdicts[0].Subject == "" {

@@ -53,6 +53,10 @@ func rowWaitCases(bound time.Duration) []rowWaitCase {
 		{"the node it moved from, timed on the other's window", onB, stamper, bound, false},
 		{"the stamper's node id under another process, a moment in", own, restarted, bound, false},
 		{"the stamper's node id under another process, at the absolute bound", own, restarted, absolute, true},
+		{"an empty clock judging an empty clock's window, at the bound", &RowWindow{Since: stampedAt,
+			Of: stampedAt}, "", bound, false},
+		{"an empty clock judging an empty clock's window, at the absolute bound", &RowWindow{Since: stampedAt,
+			Of: stampedAt}, "", absolute, true},
 		{"a row naming no node, read by its stamper", nil, stamper, bound, false},
 		{"a row naming no node, at the absolute bound", nil, stamper, absolute, true},
 		{"a window of a former run, kept by a build that carries it", &RowWindow{Clock: stamper,
@@ -64,14 +68,14 @@ func rowWaitCases(bound time.Duration) []rowWaitCase {
 // THE CLOCKS' ALLOWANCE (rowclock.go): a failed collection's run (a minute), a
 // failed resume's (half an hour) and a revived answer's or carried-on wait's
 // lost claims (the run's pause_ttl_seconds). Judged on another node's clock
-// against the bound alone, a node ahead of the stamper gave up at once, and
-// one behind waited up to two hours past it. A clock is a process's, so the
-// stamper's node id come back as another process, perhaps on another host,
-// reads the instant as another clock's.
+// against the bound alone, a node ahead gave up at once, one behind up to two
+// hours late. A clock is a process's: the stamper's node id come back as
+// another process, perhaps on another host, reads it as another clock's.
 //
 // Mutation: judge every window as the process's own, key the window on the
-// node id, ignore the window, judge the first instant against the bound alone,
-// or read a window of another run, and a reading below goes red.
+// node id, match an empty clock to an empty one, ignore the window, judge the
+// first instant against the bound alone, or read a window of another run, and
+// a reading below goes red.
 func TestAGiveUpTimedOnTheRowIsJudgedOnTheStampersClock(t *testing.T) {
 	t.Parallel()
 	const pauseTTL = time.Hour
@@ -134,6 +138,7 @@ func TestACallInFlightIsWaitedForOnItsBridgesClock(t *testing.T) {
 		{"a node behind, short of the absolute bound", stamper, other, RowClockAllowance - time.Second, true},
 		{"a node behind, at the absolute bound", stamper, other, RowClockAllowance, false},
 		{"the bridge's node id under another process, past the bound", stamper, restarted, time.Minute, true},
+		{"a bound naming no clock, judged by an empty clock", "", "", time.Minute, true},
 		{"a bound naming no node, read by its stamper", "", stamper, time.Minute, true},
 		{"a bound naming no node, at the absolute bound", "", stamper, RowClockAllowance, false},
 	} {
@@ -178,6 +183,7 @@ func TestAHeldCallsDeadlineIsTimedOnOneClock(t *testing.T) {
 		{"a node behind that never saw it, at the absolute bound", held, other, 0,
 			deadline + RowClockAllowance, true},
 		{"the holder's node id under another process, at the deadline", held, restarted, 0, deadline, false},
+		{"a call naming no clock, judged by an empty clock", HeldCall{HeldAt: stampedAt}, "", 0, deadline, false},
 		{"a call naming no node, read by its holder", HeldCall{HeldAt: stampedAt}, stamper, 0, deadline, false},
 		{"a call naming no node, at the absolute bound", HeldCall{HeldAt: stampedAt}, stamper, 0,
 			deadline + RowClockAllowance, true},
