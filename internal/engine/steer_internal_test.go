@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -312,6 +313,33 @@ func TestAReplayedNoteIsAnsweredByNobody(t *testing.T) {
 	}
 	if out, err := d.answer(t.Context(), sealed); err == nil || out != nil {
 		t.Fatalf("a replayed note was answered %q", out)
+	}
+}
+
+// A NOTE REPLAYED AT A NODE THAT RESTARTED OFFERS NOTHING, which is why a
+// note's id is kept in memory only (steer.Request.Writes): the restarted desk
+// holds no turn of the process before it, and every turn it runs is under a
+// run id minted for it, so the replay is no turn's note.
+//
+// Mutation: newRunID answers one fixed id, so the restarted node's turn is the
+// one the note named: the replay lands in its box, red.
+func TestANoteReplayedAfterARestartReachesNoTurn(t *testing.T) {
+	t.Parallel()
+	before := mustSteerDesk(t, steerRing)
+	runID := newRunID()
+	before.register(runID, steerSeat{agent: sweAgent, handle: "swe"}, steer.New(), nil)
+	_, sealed := sealedNote(t, before.wire, founderNote(runID))
+	if _, err := before.answer(t.Context(), sealed); err != nil {
+		t.Fatalf("the note itself was refused: %v", err)
+	}
+	after := mustSteerDesk(t, steerRing)
+	box := steer.New()
+	after.register(newRunID(), steerSeat{agent: sweAgent, handle: "swe"}, box, nil)
+	if out, err := after.answer(t.Context(), sealed); !errors.Is(err, errNotThisNode) || out != nil {
+		t.Fatalf("a note replayed at the restarted node = %q, %v; want no turn's", out, err)
+	}
+	if notes := box.Drain(); len(notes) != 0 {
+		t.Errorf("the restarted node's turn took the replayed note: %+v", notes)
 	}
 }
 
