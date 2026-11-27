@@ -1387,9 +1387,8 @@ func presentOnBuild(ctx context.Context, t *testing.T, backend coord.Backend, no
 // incarnation, its lease store and the seat lease TTL in force. The lease is
 // claimed as the coordinator is built and released after its last keep, which
 // the engine's stop reaches after the drain. No lease store: no taker, but the
-// incarnation still, which names the clock of what the coordinator stamps.
-// The store's clock is held still, so the deadline is exactly the TTL past the
-// claim.
+// incarnation still, the clock of what it stamps. The store's clock is held
+// still, so the deadline is exactly the TTL past the claim.
 //
 // Mutation: leave the incarnation, store or TTL off the coordinator's options,
 // build its lease on another TTL, or keep its stop off the engine's: red.
