@@ -231,8 +231,8 @@ func (l *logReader) fill() error {
 		switch {
 		case errors.Is(err, io.EOF):
 			l.ended = true
-			if err := l.unchanged(); err != nil {
-				return err
+			if uerr := l.unchanged(); uerr != nil {
+				return uerr
 			}
 			return l.s.Close()
 		case err != nil:
