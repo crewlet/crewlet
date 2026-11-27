@@ -206,12 +206,17 @@ func testARangeIsReadAgainFromTheFileItsOpenOpened(t *testing.T, box sandbox.San
 		}
 		_ = r.Close()
 	}
-	write(t, box, path, want)
-	r, _, err := box.OpenRange(t.Context(), path, 100, 500)
-	if err != nil {
-		t.Fatalf("OpenRange: %v", err)
+	// The 500 bytes from 100, closed with the case.
+	opened := func() io.ReadCloser {
+		r, _, err := box.OpenRange(t.Context(), path, 100, 500)
+		if err != nil {
+			t.Fatalf("OpenRange: %v", err)
+		}
+		t.Cleanup(func() { _ = r.Close() })
+		return r
 	}
-	defer func() { _ = r.Close() }()
+	write(t, box, path, want)
+	r := opened()
 	if got, err := again(r, 10, 50); err != nil || !bytes.Equal(got, want[110:160]) {
 		t.Errorf("a range from 100 read again at 10 gave %q (%v), want the file's bytes from 110", got, err)
 	}
@@ -223,11 +228,7 @@ func testARangeIsReadAgainFromTheFileItsOpenOpened(t *testing.T, box sandbox.San
 		t.Errorf("a range read again once its file was replaced at its path gave %q (%v), want the opened "+
 			"file's bytes", got, err)
 	}
-	edited, _, err := box.OpenRange(t.Context(), path, 100, 500)
-	if err != nil {
-		t.Fatalf("OpenRange: %v", err)
-	}
-	defer func() { _ = edited.Close() }()
+	edited := opened()
 	edit.Truncate(t, path, 300)
 	if got, err := again(edited, 180, 50); !errors.Is(err, io.EOF) || len(got) != 20 {
 		t.Errorf("a range read again once its file was cut to 300 gave %d bytes (%v), want the 20 left "+
