@@ -18,11 +18,10 @@ import (
 // UNKNOWN the same but bound to the asker's id, so the router asks a node with
 // the key; UNDECODABLE is an error (a build that disagrees, not an outsider);
 // STALE is [unservedStale], bound to the request it repeats; UNRECORDED is
-// [unservedUnrecorded]. Each node keeps the ids it took in its own
-// [signedask.Guard], a write's in its own file as well ([ServerOptions.Taken]). The domains `estate.request` and
-// `estate.reply` ([channelName]) keep other channels' envelopes and state-log
-// records from verifying here. Custody batches are event envelopes, unsigned:
-// observations, not an instruction run as somebody (the event spine's call).
+// [unservedUnrecorded]. The domains `estate.request` and `estate.reply`
+// ([channelName]) keep other channels' envelopes and state-log records from
+// verifying here. Custody batches are event envelopes, unsigned: observations,
+// not an instruction run as somebody (the event spine's call).
 
 // channelName is the estate's channel, and so the stem of its two key domains.
 const channelName = "estate"

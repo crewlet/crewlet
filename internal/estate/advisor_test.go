@@ -49,7 +49,7 @@ func TestTheAdvisorFacadesAskExactlyTheAdvisorOperations(t *testing.T) {
 				t.Errorf("%s.%s asked %d operations, want one", v.Type().Name(), method, len(sent))
 				continue
 			}
-			got[opened(sent[0].payload).Op] = true
+			got[opened(t.Context(), sent[0].payload).Op] = true
 		}
 		want := map[string]bool{}
 		for name, spec := range registry {

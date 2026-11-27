@@ -83,7 +83,7 @@ func TestTheAccessFacadesAskExactlyTheAccessOperations(t *testing.T) {
 				t.Errorf("%s.%s asked %d operations, want one", v.Type().Name(), method, len(sent))
 				continue
 			}
-			got[opened(sent[0].payload).Op] = true
+			got[opened(t.Context(), sent[0].payload).Op] = true
 		}
 		want := map[string]bool{}
 		for name, spec := range registry {
@@ -118,7 +118,7 @@ func TestACommandCrossesTheRouterSealed(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("Ran asked %d operations, want one", len(sent))
 	}
-	req := opened(sent[0].payload)
+	req := opened(t.Context(), sent[0].payload)
 	if req.Op != "access.ran" || bytes.Contains(req.Args, []byte("billing-worker-7731")) {
 		t.Fatalf("the request asks %s and carries %s, want access.ran with no command text", req.Op, req.Args)
 	}
@@ -161,7 +161,7 @@ func TestAVerdictCrossesTheRouterSealed(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("Verdict asked %d operations, want one", len(sent))
 	}
-	req := opened(sent[0].payload)
+	req := opened(t.Context(), sent[0].payload)
 	if req.Op != "access.verdict" || bytes.Contains(req.Args, []byte("billing-worker-7731")) ||
 		bytes.Contains(req.Args, []byte("ticket-4471")) {
 		t.Fatalf("the request asks %s and carries %s, want access.verdict with no text in the clear", req.Op, req.Args)

@@ -724,7 +724,7 @@ func (s silencer) Serve(ctx context.Context, subject string, answers int,
 	return s.q.Serve(ctx, subject, answers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		// Opened as a fleet member reads it: the zero request where it is
 		// not the fleet's.
-		req := opened(raw)
+		req := opened(ctx, raw)
 		s.node.mu.Lock()
 		s.node.requests++
 		if req.AcceptLagging {

@@ -113,14 +113,11 @@ func sealUnbound(t *testing.T, req request) []byte {
 
 // opened is a request as a member of the test fleet reads it off the wire:
 // verified and decoded, the zero request where it is not the fleet's.
-func opened(sealed []byte) request {
-	ctx := context.Background()
-	seen, err := fleetEnvelopes.keptGuard(ctx, signedasktest.NewLedger(), time.Now())
-	if err != nil {
-		return request{}
-	}
-	admitted := fleetEnvelopes.admit(ctx, sealed, seen, time.Now())
-	if admitted.Disposition != signedask.Admitted {
+func opened(ctx context.Context, sealed []byte) request {
+	// A WRITE IS UNRECORDED at a guard that keeps nothing, and verified all
+	// the same.
+	admitted := fleetEnvelopes.admit(ctx, sealed, signedask.NewGuard(), time.Now())
+	if admitted.Disposition != signedask.Admitted && admitted.Disposition != signedask.Unrecorded {
 		return request{}
 	}
 	return admitted.Request
@@ -230,20 +227,20 @@ func TestAReplyTheRouterCannotBelieveIsNoAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, forge := range map[string]func(sealed []byte) []byte{
-		"the fleet's, in a shape this build cannot decode": func([]byte) []byte {
+	for name, forge := range map[string]func(ctx context.Context, sealed []byte) []byte{
+		"the fleet's, in a shape this build cannot decode": func(context.Context, []byte) []byte {
 			return fleetReplies.Seal([]byte(`{"node":"data-x","request":7}`))
 		},
-		"not signed by the fleet": func(sealed []byte) []byte {
-			return outsiders.sealReply(reply{Node: "data-x", Request: opened(sealed).ID,
+		"not signed by the fleet": func(ctx context.Context, sealed []byte) []byte {
+			return outsiders.sealReply(reply{Node: "data-x", Request: opened(ctx, sealed).ID,
 				Result: json.RawMessage(`{"TotalHint":99}`)})
 		},
-		"the fleet's answer to another request": func([]byte) []byte {
+		"the fleet's answer to another request": func(context.Context, []byte) []byte {
 			return fleetEnvelopes.sealReply(reply{Node: "data-x", Request: "somebody-elses",
 				Result: json.RawMessage(`{"TotalHint":99}`)})
 		},
-		"altered after it was signed": func(sealed []byte) []byte {
-			out := fleetEnvelopes.sealReply(reply{Node: "data-x", Request: opened(sealed).ID,
+		"altered after it was signed": func(ctx context.Context, sealed []byte) []byte {
+			out := fleetEnvelopes.sealReply(reply{Node: "data-x", Request: opened(ctx, sealed).ID,
 				Result: json.RawMessage(`{"TotalHint":11}`)})
 			return bytes.Replace(out, []byte(`"TotalHint":11`), []byte(`"TotalHint":99`), 1)
 		},
@@ -253,7 +250,7 @@ func TestAReplyTheRouterCannotBelieveIsNoAnswer(t *testing.T) {
 			f := newFleet(t)
 			impostor := f.start(t)
 			stop, err := impostor.Serve(t.Context(), Subject("data-x"), queue.ConcurrentAnswers,
-				func(_ context.Context, raw []byte) ([]byte, error) { return forge(raw), nil })
+				func(ctx context.Context, raw []byte) ([]byte, error) { return forge(ctx, raw), nil })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -315,7 +312,7 @@ func TestAReplayedRequestRunsOnce(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("captured %d requests, want the one", len(sent))
 	}
-	first := opened(sent[0])
+	first := opened(t.Context(), sent[0])
 	if first.ID == "" {
 		t.Fatal("the captured request does not open as the fleet's")
 	}

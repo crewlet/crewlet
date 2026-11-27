@@ -751,11 +751,11 @@ type sentRequest struct {
 	payload []byte
 }
 
-func (a *recordingAsker) Ask(_ context.Context, subject string, payload []byte, _ int) ([][]byte, error) {
+func (a *recordingAsker) Ask(ctx context.Context, subject string, payload []byte, _ int) ([][]byte, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.sent = append(a.sent, sentRequest{subject: subject, payload: slices.Clone(payload)})
-	req := opened(payload)
+	req := opened(ctx, payload)
 	if req.ID == "" {
 		return nil, errors.New("a request that does not open as the fleet's")
 	}

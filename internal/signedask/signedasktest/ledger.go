@@ -52,7 +52,7 @@ func (l *Ledger) Forget(_ context.Context, channel string, now time.Time) error 
 		return l.refuse
 	}
 	for id, until := range l.kept[channel] {
-		if !now.Before(until) {
+		if !now.Before(until) { //fixedwait:stated now and until are the guard's, handed in, never read here
 			delete(l.kept[channel], id)
 		}
 	}

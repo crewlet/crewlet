@@ -556,8 +556,8 @@ func TestAnMCPTestCrossesWithItsAskersWait(t *testing.T) {
 			t.Cleanup(func() { _ = q.Stop(context.Background()) })
 		}
 		heard := make(chan mcpCheckAsk, 2)
-		stop, err := peer.Serve(t.Context(), topics.MCPCheck, 1, func(_ context.Context, raw []byte) ([]byte, error) {
-			heard <- checks.wire.Admit(t.Context(), raw, signedask.NewGuard(), time.Now()).Request
+		stop, err := peer.Serve(t.Context(), topics.MCPCheck, 1, func(ctx context.Context, raw []byte) ([]byte, error) {
+			heard <- checks.wire.Admit(ctx, raw, signedask.NewGuard(), time.Now()).Request
 			return nil, errors.New("this peer only listens")
 		})
 		if err != nil {

@@ -8,10 +8,6 @@ import (
 	"time"
 )
 
-// TakenRequestsMigration is the node migration that made the table
-// [TakenRequests] keeps, for the gates that name it.
-const TakenRequestsMigration = "0073_a_signed_writes_id_outlives_its_nodes_restart.sql"
-
 // TakenRequests is the node file as a signed channel's guard keeps the ids of
 // the writes it took (internal/signedask's Ledger): `signed_request_taken`,
 // one row per channel and id, until the instant the channel stops admitting
