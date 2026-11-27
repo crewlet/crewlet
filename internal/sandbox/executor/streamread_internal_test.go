@@ -31,7 +31,8 @@ func openCodeLines(n int) string {
 //
 // Mutations, each red: hand on the unended last line of a stream still being
 // written; end its transcript as though it had ended; leave the note out;
-// take a cut stream for whole.
+// show its answer, joined across events, as it stands; take a cut stream for
+// whole.
 func TestAnEventStreamIsReadAsOneVersionOfIt(t *testing.T) {
 	t.Parallel()
 	// Its answer's last line a password's key, whose value a line written
@@ -62,6 +63,12 @@ func TestAnEventStreamIsReadAsOneVersionOfIt(t *testing.T) {
 				t.Errorf("a stream still being written collected as success %v, its transcript %.300q; want its "+
 					"settled whole lines, saying so, and its unbroken last line, the run's end, not read",
 					res.Success, res.Transcript)
+			}
+			// Its answer, joined across events a later one could join, is
+			// not shown as it stands.
+			if strings.Contains(res.Text, "step x") || !strings.Contains(res.Error, "still being written") {
+				t.Errorf("a stream still being written left the answer %.80q and the failure %.200q; want "+
+					"neither shown, saying why", res.Text, res.Error)
 			}
 		}},
 		{"cut while read", func(b *sandbox.FakeSandbox, path string) {

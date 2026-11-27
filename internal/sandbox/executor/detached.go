@@ -1747,9 +1747,22 @@ func (r *Runner) decodeStream(stream *piece, keepLast bool) (decodedStream, stri
 			refusal, nil
 	case !read.whole():
 		decoded.result.Transcript = strings.TrimSpace(unendedNote() + "\n" + decoded.result.Transcript)
+		if !decoded.ended {
+			// ITS ANSWER AND ERROR MAY STILL GROW: a decoder joins them
+			// across events (OpenCode's chunks of one message), so a later
+			// event could join them and redact them otherwise. Withheld, not
+			// shown as it stands; a stream that said how its run ended closed
+			// them with that account ([Decoder.Ended]).
+			decoded.result.Text, decoded.result.Error = "", unendedError
+		}
 	}
 	return decoded, "", nil
 }
+
+// unendedError is the failure of a run whose event stream was still being
+// written, and had not said how the run ended, when its collection read it.
+const unendedError = "the run's event stream was still being written when the collection read it, and had " +
+	"not said how the run ended, so what it said so far is not shown"
 
 // decodeLines decodes an event stream's lines from stream through a fresh
 // decoder, its unended last line a line only where whole says the stream
