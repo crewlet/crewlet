@@ -871,7 +871,8 @@ type Sandbox interface {
 	// size of 0, as the others answer. It may stream fewer than n bytes; the
 	// caller reads on from where it ended. A negative off or n is refused
 	// ([ErrRangeNegative]). Its body tells what became of the file since the
-	// open ([ChangeOf]). The caller closes it.
+	// open ([ChangeOf]) and reads its range again ([ReadAgain]). The caller
+	// closes it.
 	OpenRange(ctx context.Context, path string, off, n int64) (io.ReadCloser, int64, error)
 
 	// Touch moves the box's last-seen stamp to now.

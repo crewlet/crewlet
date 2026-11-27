@@ -324,7 +324,7 @@ func (s *FakeSandbox) OpenWhole(ctx context.Context, p string) (io.ReadCloser, i
 	if limit := s.ReadCap(); size > int64(limit) {
 		return nil, 0, &FileTooLargeError{Path: p, Limit: limit, Size: size}
 	}
-	return s.body(p, content, content), size, nil
+	return s.body(p, content, 0, size), size, nil
 }
 
 // OpenFile streams the file whole, as every real backend does: a machine
@@ -334,7 +334,7 @@ func (s *FakeSandbox) OpenFile(ctx context.Context, p string) (io.ReadCloser, er
 	if err != nil {
 		return nil, err
 	}
-	return s.body(p, content, content), nil
+	return s.body(p, content, 0, int64(len(content))), nil
 }
 
 // ReadTail answers the file's last n bytes and its whole size.
@@ -358,7 +358,7 @@ func (s *FakeSandbox) OpenTail(ctx context.Context, p string, n int64) (io.ReadC
 	}
 	size := int64(len(content))
 	start := max(size-max(n, 0), 0)
-	return s.body(p, content, content[start:]), size, nil
+	return s.body(p, content, start, size-start), size, nil
 }
 
 // OpenRange streams at most n bytes of the file from off, with its whole size:
@@ -373,17 +373,18 @@ func (s *FakeSandbox) OpenRange(ctx context.Context, p string, off, n int64) (io
 	}
 	size := int64(len(content))
 	from := min(off, size)
-	return s.body(p, content, content[from:from+min(n, size-from)]), size, nil
+	return s.body(p, content, from, min(n, size-from)), size, nil
 }
 
-// body is the read of part of a file whose whole the open found, telling what
-// became of the file since ([ChangeOf]).
-func (s *FakeSandbox) body(p string, whole, part []byte) io.ReadCloser {
+// body is the read of the n bytes from from of a file whose whole the open
+// found, telling what became of the file since ([ChangeOf]) and reading its
+// range again ([ReadAgain]).
+func (s *FakeSandbox) body(p string, whole []byte, from, n int64) io.ReadCloser {
 	s.mu.Lock()
 	inode, edits := s.inodes[path.Clean(p)], s.edits[path.Clean(p)]
 	s.mu.Unlock()
-	return fakeBody{Reader: s.streaming(p, part), box: s, path: path.Clean(p), inode: inode, edits: edits,
-		opened: whole}
+	return fakeBody{Reader: s.streaming(p, whole[from:from+n]), box: s, path: path.Clean(p), inode: inode,
+		edits: edits, opened: whole, from: from, n: n}
 }
 
 // Delivered is how many bytes of its files the box's reads have handed out —

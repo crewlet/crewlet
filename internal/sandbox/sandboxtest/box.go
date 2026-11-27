@@ -55,9 +55,10 @@ func Box(t *testing.T, fresh func(t *testing.T) (sandbox.Sandbox, InPlace)) {
 		})
 	}
 	for name, fn := range map[string]func(*testing.T, sandbox.Sandbox, InPlace){
-		"AReadTellsAFileUntouchedSinceItsOpen": testAReadTellsAFileUntouchedSinceItsOpen,
-		"AReadTellsAFileGrownSinceItsOpen":     testAReadTellsAFileGrownSinceItsOpen,
-		"AReadTellsAFileCutSinceItsOpen":       testAReadTellsAFileCutSinceItsOpen,
+		"AReadTellsAFileUntouchedSinceItsOpen":      testAReadTellsAFileUntouchedSinceItsOpen,
+		"AReadTellsAFileGrownSinceItsOpen":          testAReadTellsAFileGrownSinceItsOpen,
+		"AReadTellsAFileCutSinceItsOpen":            testAReadTellsAFileCutSinceItsOpen,
+		"ARangeIsReadAgainFromTheFileItsOpenOpened": testARangeIsReadAgainFromTheFileItsOpenOpened,
 	} {
 		t.Run(name, func(t *testing.T) {
 			box, edit := fresh(t)
@@ -170,6 +171,61 @@ func testAReadTellsAFileCutSinceItsOpen(t *testing.T, box sandbox.Sandbox, edit 
 				t.Errorf("%s of a file %s tells %q, want %q", name, cut, got, sandbox.FileChanged)
 			}
 		}
+	}
+}
+
+// A RANGE IS READ AGAIN FROM THE FILE ITS OPEN OPENED ([sandbox.ReadAgain]), on
+// every open: its bytes from an offset within the range, never past the
+// range's end at the open. A file replaced at its path since is still the one
+// read; one edited in place is read as it stands.
+//
+// Mutations, each red: read the path again; read past the range's end; count
+// the offset from the file's start rather than the range's.
+func testARangeIsReadAgainFromTheFileItsOpenOpened(t *testing.T, box sandbox.Sandbox, edit InPlace) {
+	path := pathIn(box, "again.log")
+	want := pattern(1000)
+	again := func(r io.Reader, off int64, n int) ([]byte, error) {
+		got := make([]byte, n)
+		read, err := sandbox.ReadAgain(r, got, off)
+		return got[:read], err
+	}
+	for name, open := range opens(box) {
+		write(t, box, path, want)
+		r, err := open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got, err := again(r, 110, 50); err != nil || !bytes.Equal(got, want[110:160]) {
+			t.Errorf("%s read again at 110 gave %q (%v), want %q", name, got, err, want[110:160])
+		}
+		_ = r.Close()
+	}
+	write(t, box, path, want)
+	r, _, err := box.OpenRange(t.Context(), path, 100, 500)
+	if err != nil {
+		t.Fatalf("OpenRange: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+	if got, err := again(r, 10, 50); err != nil || !bytes.Equal(got, want[110:160]) {
+		t.Errorf("a range from 100 read again at 10 gave %q (%v), want the file's bytes from 110", got, err)
+	}
+	if got, err := again(r, 480, 50); !errors.Is(err, io.EOF) || !bytes.Equal(got, want[580:600]) {
+		t.Errorf("a range of 500 read again at 480 gave %q (%v), want its last 20 bytes and the end", got, err)
+	}
+	write(t, box, path, bytes.Repeat([]byte("x"), 1000))
+	if got, err := again(r, 10, 50); err != nil || !bytes.Equal(got, want[110:160]) {
+		t.Errorf("a range read again once its file was replaced at its path gave %q (%v), want the opened "+
+			"file's bytes", got, err)
+	}
+	edited, _, err := box.OpenRange(t.Context(), path, 100, 500)
+	if err != nil {
+		t.Fatalf("OpenRange: %v", err)
+	}
+	defer func() { _ = edited.Close() }()
+	edit.Truncate(t, path, 300)
+	if got, err := again(edited, 180, 50); !errors.Is(err, io.EOF) || len(got) != 20 {
+		t.Errorf("a range read again once its file was cut to 300 gave %d bytes (%v), want the 20 left "+
+			"from 280 and the end", len(got), err)
 	}
 }
 

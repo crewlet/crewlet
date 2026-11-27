@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 )
@@ -56,16 +57,49 @@ func ChangeOf(body io.Reader) (FileChange, error) {
 	return FileChanged, nil
 }
 
-// hostSection is a section of a file on the engine host, closed with it, and
-// telling what became of the file since its open.
+// ErrCannotReadAgain is [ReadAgain] of a body that cannot read its range
+// again: a reader that needs those bytes again fails closed.
+var ErrCannotReadAgain = errors.New("sandbox: this read cannot read its file again")
+
+// againReader is a body that reads its range again.
+type againReader interface {
+	ReadAgain(p []byte, off int64) (int, error)
+}
+
+// ReadAgain reads len(p) bytes of the range body was opened on
+// ([Sandbox.OpenRange], [Sandbox.OpenTail], [Sandbox.OpenWhole],
+// [Sandbox.OpenFile]) again, from off within it, as [io.ReaderAt] does: from
+// the file the open opened, as it stands now, never past the range's end at
+// the open, and never by its path, which may name another file since. A body
+// that cannot is [ErrCannotReadAgain]. What it reads is the file now: whether
+// it is what an earlier read read is the caller's to check, with [ChangeOf].
+func ReadAgain(body io.Reader, p []byte, off int64) (int, error) {
+	if r, ok := body.(againReader); ok {
+		return r.ReadAgain(p, off)
+	}
+	return 0, ErrCannotReadAgain
+}
+
+// hostSection is a section of a file on the engine host, closed with it,
+// telling what became of the file since its open and reading it again.
 type hostSection struct {
 	io.Reader
 	io.Closer
-	host hostFile
+	section *io.SectionReader
+	host    hostFile
+}
+
+// hostRange is the n bytes of f from off, as its open found it.
+func hostRange(f *os.File, off, n int64) hostSection {
+	s := io.NewSectionReader(f, off, n)
+	return hostSection{Reader: s, Closer: f, section: s, host: openedFile(f)}
 }
 
 // Change implements [ChangeOf].
 func (h hostSection) Change() (FileChange, error) { return h.host.change() }
+
+// ReadAgain implements [ReadAgain].
+func (h hostSection) ReadAgain(p []byte, off int64) (int, error) { return h.section.ReadAt(p, off) }
 
 // hostWhole is a file on the engine host read to its end ([Sandbox.OpenFile]),
 // telling what became of it since its open.
@@ -77,6 +111,11 @@ type hostWhole struct {
 // Change implements [ChangeOf].
 func (h hostWhole) Change() (FileChange, error) { return h.host.change() }
 
+// ReadAgain implements [ReadAgain], to the size the open found.
+func (h hostWhole) ReadAgain(p []byte, off int64) (int, error) {
+	return io.NewSectionReader(h.File, 0, h.host.opened.Size).ReadAt(p, off)
+}
+
 // absentBody is a file that was not there at its open: nothing was read and
 // nothing promised, so whatever is there now is no change to what was read.
 type absentBody struct{ io.Reader }
@@ -85,6 +124,14 @@ func (absentBody) Close() error { return nil }
 
 // Change implements [ChangeOf].
 func (absentBody) Change() (FileChange, error) { return FileUnchanged, nil }
+
+// ReadAgain implements [ReadAgain]: nothing, as the open read.
+func (absentBody) ReadAgain(p []byte, _ int64) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	return 0, io.EOF
+}
 
 // absentFile is the body of a file not there at its open.
 func absentFile() io.ReadCloser { return absentBody{bytes.NewReader(nil)} }
@@ -101,6 +148,8 @@ type fakeBody struct {
 	inode  uint64
 	edits  uint64
 	opened []byte
+	// from and n are the range the open read of opened.
+	from, n int64
 }
 
 func (fakeBody) Close() error { return nil }
@@ -119,4 +168,27 @@ func (f fakeBody) Change() (FileChange, error) {
 		return FileAppended, nil
 	}
 	return FileChanged, nil
+}
+
+// ReadAgain implements [ReadAgain]: the file as it stands now while the open's
+// inode is still at the path, else as the open found it, as a host's inode
+// written over at its path is left as it was.
+func (f fakeBody) ReadAgain(p []byte, off int64) (int, error) {
+	if off < 0 {
+		return 0, errors.New("sandbox: a negative offset")
+	}
+	f.box.mu.Lock()
+	file := f.opened
+	if now, there := f.box.files[f.path]; there && f.box.inodes[f.path] == f.inode {
+		file = now
+	}
+	end := min(f.from+f.n, int64(len(file)))
+	start := min(f.from+off, end)
+	n := copy(p, file[start:end])
+	f.box.delivered += int64(n)
+	f.box.mu.Unlock()
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
 }
