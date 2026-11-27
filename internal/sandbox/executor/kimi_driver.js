@@ -84,7 +84,7 @@ const waitMs = 60_000
 const waitBoundMs = waitMs + 15_000
 
 // pollAbortMs bounds one poll of the notes route, which holds an empty one ten
-// seconds (internal/api/mcpbridge, steerHold): that and the same again.
+// seconds (internal/api/mcpbridge, pollHold): that and the same again.
 const pollAbortMs = 20_000
 
 // settleMs is the pause before a session that is not yet settled is looked at

@@ -2106,7 +2106,7 @@ runs: each pool at its worst, half again for the heap's room under the
 engine's [memory limit](../guides/deployment.md#the-engines-memory-limit), over
 that limit's nine tenths: 107 MiB for the
 [transcript reads](code-sandbox.md#reading-a-seats-sessions) its API answers,
-and on a node running seats too 1 884 MiB at the default `node.max_concurrent`
+and on a node running seats too 1 889 MiB at the default `node.max_concurrent`
 (its collections of runs and reads of its boxes for its peers, 8.5 MiB a
 turn, the sessions it takes from boxes, and its seats' reads). A Gitlet node
 always serves ingress (git is served on the API listener, which only an
@@ -2178,17 +2178,17 @@ At the default lanes, with and without seats beside Gitlet (MiB, rounded):
 | Node | Seats | Executor's pools | Answers in flight | Store's page cache | Read lane | Transfers | Kept for the broker, the engine's own heap and the rest of the store | Background budget |
 |---|---|---|---|---|---|---|---|---|
 | 2 GiB, one core | no | 107 | 284 | 128 | 128 | 2 | 613 | 340 |
-| 2 GiB, one core | yes | 1 884 | 284 | 128 | 128 | 1 | 0 | 0 |
+| 2 GiB, one core | yes | 1 889 | 284 | 128 | 128 | 1 | 0 | 0 |
 | 4 GiB, two cores | no | 107 | 284 | 256 | 256 | 6 | 1 397 | 452 |
-| 4 GiB, two cores | yes | 1 884 | 284 | 256 | 256 | 2 | 619 | 348 |
+| 4 GiB, two cores | yes | 1 889 | 284 | 256 | 256 | 2 | 617 | 345 |
 | 8 GiB, four cores | no | 107 | 284 | 512 | 512 | 13 | 2 965 | 900 |
-| 8 GiB, four cores | yes | 1 884 | 284 | 512 | 512 | 9 | 2 187 | 796 |
+| 8 GiB, four cores | yes | 1 889 | 284 | 512 | 512 | 9 | 2 185 | 793 |
 | 16 GiB, eight cores | no | 107 | 284 | 1 024 | 1 024 | 27 | 6 101 | 1 796 |
-| 16 GiB, eight cores | yes | 1 884 | 284 | 1 024 | 1 024 | 23 | 5 323 | 1 692 |
+| 16 GiB, eight cores | yes | 1 889 | 284 | 1 024 | 1 024 | 23 | 5 321 | 1 689 |
 
 Its pools, page cache and read lane alone outgrow 2 GiB, and a node keeps at
-least one transfer, so 2 GiB running seats beside Gitlet keeps 601 MiB more
-than its memory, and its Go memory limit, 1 411 MiB, sits below the 1 952 MiB
+least one transfer, so 2 GiB running seats beside Gitlet keeps 606 MiB more
+than its memory, and its Go memory limit, 1 411 MiB, sits below the 1 956 MiB
 its pools and answers in flight keep: under concurrent load at the bounds its
 pools exceed the node, so expect GC pressure, then the out-of-memory killer.
 Small and development installs run there, so it still boots and serves, and
@@ -2755,7 +2755,7 @@ full bridge log of 200 calls:
   entry before it 12.14 ms (17.13).
 - The sealed secrets are about 0.7 KiB for a launch handed a model key, two MCP
   servers' tokens and its own telemetry and Gitlet tokens (486 bytes of values,
-  a 779-byte part), at most 64 KiB before sealing; only a capture, the next
+  a 779-byte part), at most 80 KiB before sealing; only a capture, the next
   launch's opening and the poll's record of a token it renews read them.
 - With the log on the record, the record was 516 173 bytes, a read 5.8 ms and a
   raise 11.1 ms (7.9 and 26.0), and every listing of runs and flip of one moved
@@ -3310,7 +3310,7 @@ sequenceDiagram
 ```
 
 - **The table.** The asking node lists the repositories the asker may read at the asker's level and assigns each to the first Gitlet node of its order: its home, and for an indexed repository the first of the two nodes keeping its index ([The home Gitlet node](#the-home-gitlet-node)). Every Gitlet node hears the request and answers only for its assigned repositories.
-- **Signed, because each node searches as the asker.** A node judges the asker's grant from its own chart, through the same reads a seat's tools make. So the request is signed under the fleet's keyring in key domains of the search's own, bound to an id and a deadline: a request the fleet did not sign is answered by nobody, and one signed under a key a node does not hold is answered with the sentence naming the keys it holds. A node refuses an id it has taken for as long as that deadline could still admit the request; a node that restarted inside that window has forgotten the ids and answers a replay again, as the asker the request names and with only what that asker may read.
+- **Signed, because each node searches as the asker.** A node judges the asker's grant from its own chart, through the same reads a seat's tools make. So the request is signed under the fleet's keyring in key domains of the search's own, bound to an id and a deadline, beside how long its asker waits, which each node counts from the request's arrival on its own clock to end its reads a second before: a request the fleet did not sign is answered by nobody, and one signed under a key a node does not hold is answered with the sentence naming the keys it holds. A node refuses an id it has taken for as long as that deadline could still admit the request; a node that restarted inside that window has forgotten the ids and answers a replay again, as the asker the request names and with only what that asker may read.
 - **A runner-up, once.** A repository whose node did not answer it (silent, busy, behind, or building its index) is asked once more of the next node of its order (an indexed repository's second index holder) in a second round. A round waits at most nine seconds (a node's two-second wait for its share of git work, the search's own five, a second each way) and ends as soon as every node it asked has answered.
 - **Never the whole share.** All searches a Gitlet node answers read together at most all but one unit of the node's share of git work for seats' reads ([Server-side reads](#server-side-reads)), one where the share is one unit, so a seat's read of a file, a log or a diff always finds a unit. A repository whose read could not start before its answer fell due is unanswered for that node's share, and its runner-up is asked.
 - **One look at the log's head for the whole search.** A node that would answer a repository with no such ref, or refuse it, from a copy that may be behind looks once more at the log's head first, as every read does ([Server-side reads](#server-side-reads)). For a search, that head is the one the asker's listing of its repositories read (linearizable for a seat and a person), carried in the request as a floor each copy is brought to, so a company-wide search naming a branch most repositories lack costs the one barrier its listing took, not one a repository.

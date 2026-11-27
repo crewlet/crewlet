@@ -383,11 +383,11 @@ type LaunchRequest struct {
 	// from the row, the name could be the next job's for a call that
 	// outlived its job. Also where calls are numbered from ([OpenedJob.LastSeq]).
 	// It answers what the box is given that needs the name ([Opening]): MCP
-	// servers BESIDE MCPServers (the tool bridge, its token naming the job,
-	// so a takeover node serves the session under the box's token and a
+	// servers BESIDE MCPServers (the tool bridge, its token naming the job, so
+	// a takeover node serves the session under the box's token and a
 	// relaunch's box cannot reach its predecessor's; a same-named answer
-	// replaces the MCPServers one) and where the harness asks for notes. An
-	// error abandons the launch before any box exists. Nil adds nothing.
+	// replaces the MCPServers one), where the harness asks for notes and where
+	// a browser's relay posts. An error abandons the launch. Nil adds nothing.
 	Opened func(job OpenedJob) (Opening, error)
 
 	// CodeHolds is the turn's Gitlet hold set as the launch read it
@@ -511,21 +511,43 @@ type OpenedJob struct {
 	// What serves the box counts its own parks after it, and admits no call
 	// that could park the job past [MaxParkedCalls].
 	ParkedCalls int
+
+	// Browser is the job's browser as what serves its box is told it: asked
+	// for a launch that readies one, ready for a job named off a record
+	// whose browser relays its screen ([relaysScreen]), none otherwise.
+	Browser JobBrowser
 }
+
+// JobBrowser is what a job's opening is told of its browser
+// ([OpenedJob.Browser]): ASKED, a launch's, whose ensure has yet to answer
+// ([Opening.BrowserReady]); READY, a job named off a record whose browser
+// relays its screen; the zero value none. It never crosses a wire or a
+// store, so it holds no value of another build's to tell apart.
+type JobBrowser string
+
+// What a job's opening is told of its browser.
+const (
+	JobBrowserAsked JobBrowser = "asked"
+	JobBrowserReady JobBrowser = "ready"
+)
 
 // NamedJob is the job r's row names, as what serves its box is told it
 // ([OpenedJob]), its calls numbered after lastSeq, each call's id read under
 // callIDMeta, the key the runner of the job's box declares
 // ([OpenedJob.CallIDMeta], "" for none), and each call answered before
 // ceiling, the wait that runner states ([OpenedJob.CallCeiling], zero for
-// none): the job, the round it works in and the calls it is parked on, off
-// the one row. ONE CONSTRUCTOR for the launch that opens the job and for a
-// node that serves it again after taking its seat over (internal/engine's
-// reopenAgentRun), so neither names a job without its round, nor without what
-// its runner states of its calls.
+// none): the job, the round it works in, the calls it is parked on and its
+// browser where it relays its screen, off the one row. ONE CONSTRUCTOR for the
+// launch that opens the job and for a node that serves it again after taking
+// its seat over (internal/engine's reopenAgentRun), so neither names a job
+// without its round, nor without what its runner states of its calls.
 func (r PendingRun) NamedJob(lastSeq int, callIDMeta string, ceiling time.Duration) OpenedJob {
-	return OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq, CallIDMeta: callIDMeta,
+	job := OpenedJob{LaunchID: r.LaunchID, Round: r.Round, LastSeq: lastSeq, CallIDMeta: callIDMeta,
 		CallCeiling: ceiling, ParkedCalls: len(r.ParkedCalls)}
+	if relaysScreen(r.Launch.Browser) {
+		job.Browser = JobBrowserReady
+	}
+	return job
 }
 
 // Opening is what a job's box is given once the job has a name — see
@@ -550,12 +572,24 @@ type Opening struct {
 	// value names nowhere, which a job handed none needs.
 	SkillLoads SkillWiring
 
-	// Fresh is the same three under the job's other bridge token: what its
-	// box is wired with where its script starts a session of its own in place
-	// of the one the launch continues ([RunRequest.FreshWiring]), so the token
-	// its harness dials says which session it started. Handed to the run only
-	// where the launch continues a session; nil hands none, and a Fresh's own
-	// Fresh is never read.
+	// Browser is where the job's browser relay posts its screen
+	// ([RunRequest.Browser]), handed to the run only once BrowserReady is
+	// told; the zero value names nowhere.
+	Browser BrowserWiring
+
+	// BrowserReady is told once, after the job's ensure answered ready at or
+	// above the floor ([relaysScreen]) and before the job starts, so what
+	// serves the relay serves before the relay can call. Nil for a job whose
+	// browser waits for nothing, and on a Fresh.
+	BrowserReady func()
+
+	// Fresh is the same wiring, Servers, Steer, SkillLoads and Browser, under
+	// the job's other bridge token: what its box is wired with where its
+	// script starts a session of its own in place of the one the launch
+	// continues ([RunRequest.FreshWiring]), so the token its harness dials
+	// says which session it started. Handed to the run only where the launch
+	// continues a session; nil hands none, and a Fresh's own Fresh is never
+	// read.
 	Fresh *Opening
 }
 
@@ -976,12 +1010,22 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// its own in place of the one this launch continues — see
 	// [Opening.Fresh] — nil where what named the job answered none.
 	var fresh *Wiring
+	// browserWiring, freshBrowser and browserReady are where the job's browser
+	// relay posts, under each token, and what is told its ensure answered:
+	// held until it has ([Opening.BrowserReady]).
+	var browserWiring, freshBrowser BrowserWiring
+	var browserReady func()
 	if req.Opened != nil {
 		// AND HOW ITS HARNESS NAMES ITS CALLS, as the runner the job is
 		// started on declares it: m's, which the spec was built with and
-		// which starts the box.
-		named, openErr := req.Opened(opened.NamedJob(opened.OpenedAfter, m.CallIDMeta(req.Spec.Harness),
-			m.MCPCallCeiling(req.Spec.Harness)))
+		// which starts the box. A BROWSER SEAT'S JOB IS NAMED ASKED: what
+		// serves its box waits for its ensure.
+		job := opened.NamedJob(opened.OpenedAfter, m.CallIDMeta(req.Spec.Harness),
+			m.MCPCallCeiling(req.Spec.Harness))
+		if req.Browser != nil {
+			job.Browser = JobBrowserAsked
+		}
+		named, openErr := req.Opened(job)
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)
@@ -989,10 +1033,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		if f := named.Fresh; f != nil {
 			fresh = &Wiring{MCPServers: withServers(req.MCPServers, f.Servers), Steer: f.Steer,
 				SkillLoads: f.SkillLoads}
+			freshBrowser = f.Browser
 		}
 		req.MCPServers, bridgedTools = withServers(req.MCPServers, named.Servers), named.Tools
 		steer = named.Steer
 		skillLoads = named.SkillLoads
+		browserWiring, browserReady = named.Browser, named.BrowserReady
 	}
 
 	// THE LAUNCH'S OWN ENVIRONMENT, now that the store has named the job
@@ -1023,6 +1069,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// THE BOX IS MADE FOR THIS TURN, which the box records so its host
 	// can tell when no run names it any more ([Spec.TurnID]).
 	req.Spec.TurnID = req.Turn.TurnID
+	// WHAT NO CACHED HOME MAY HOLD ([Spec.Secrets]): the launch's own set,
+	// the scrub's, whole and by its JSON strings.
+	req.Spec.Secrets = handedSecrets(req, req.Spec.Env).Values
 	box, runner, reused, err := c.acquire(ctx, m, req, opened.Prior)
 	if err != nil {
 		// The row is open and this launch is over. Every failure past this
@@ -1082,6 +1131,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// continued and its harness started: ready, its server joins the box's own,
 	// over a server of that name. Only the launch's own context ending fails it.
 	var browserOut *BrowserOutcome
+	// relay is where the run's browser relay posts: nowhere unless its
+	// browser relays its screen.
+	var relay BrowserWiring
 	if req.Browser != nil {
 		began := time.Now()
 		outcome, browserErr := EnsureBrowser(ctx, box, BrowserStep{Placement: req.Spec.Placement,
@@ -1099,6 +1151,19 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 			req.MCPServers = withServers(req.MCPServers, served)
 			if fresh != nil {
 				fresh.MCPServers = withServers(fresh.MCPServers, served)
+			}
+		}
+		// A BROWSER THAT RELAYS ITS SCREEN is told to what serves the box now,
+		// before the job starts, so the relay finds it serving, and only then
+		// is the run handed where its relay posts; any other, withheld or
+		// below the floor, is never served, and its run starts no relay.
+		if relaysScreen(&outcome.Record) {
+			if browserReady != nil {
+				browserReady()
+			}
+			relay = browserWiring
+			if fresh != nil {
+				fresh.Browser = freshBrowser
 			}
 		}
 	}
@@ -1159,6 +1224,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// WHERE THE JOB'S HARNESS ASKS FOR ITS TURN'S NOTES, as the job's own
 		// opening answered it — see [Opening.Steer].
 		Steer: steer,
+		// WHERE ITS BROWSER'S RELAY POSTS, as the job's own opening answered
+		// it, where its browser relays its screen — see [Opening.Browser].
+		Browser: relay,
 		// THE REPOSITORIES WHOSE PUSHES ARE REPORTED FOR THE RUN, which its
 		// report is told not to name again ([RunRequest.ReportedRepos]).
 		ReportedRepos: repoNames(Pushable(req.Spec.Repos)),

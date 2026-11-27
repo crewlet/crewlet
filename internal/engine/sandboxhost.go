@@ -169,11 +169,10 @@ var errBoxReadOtherWire = errors.New("engine: a box read of another build's wire
 // answer is the serve handler: one scattered box read, answered only by the
 // node it names — and only where the fleet signed it.
 func (b *boxReads) answer(ctx context.Context, raw []byte) ([]byte, error) {
-	// THE REQUEST'S ARRIVAL, on this node's runtime clock: the registration
-	// never makes a box read wait for one of its slots ([boxReadAnswers]), so
-	// the answer starts as the request reaches the process, and every wait
-	// the read is counted for runs from here.
-	arrived := time.Now()
+	// THE REQUEST'S ARRIVAL at this process, on its runtime clock, stamped by
+	// the queue before any wait for one of the registration's slots
+	// (queue.Arrived): every wait the read is counted for runs from here.
+	arrived := queue.Arrived(ctx)
 	admitted := b.wire.Admit(raw, b.taken, b.now())
 	switch admitted.Disposition {
 	case signedask.Admitted:

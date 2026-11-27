@@ -11,7 +11,7 @@ import net from "node:net"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
-import { LINE_MAX, isObject, readConfig, realClock } from "./common.mjs"
+import { BROWSER_SOCKET, LINE_MAX, isObject, readConfig, realClock } from "./common.mjs"
 
 // ANSWER_MS bounds the wait for the supervisor's answer to the hello, which it
 // gives from memory in milliseconds, and for the last bytes either way once
@@ -38,7 +38,7 @@ export async function shim(folder, job, root) {
   } catch (err) {
     fail(`the helper's config cannot be read: ${err.message}`)
   }
-  const sock = await connect(path.join(folder, "browser.sock"))
+  const sock = await connect(path.join(folder, BROWSER_SOCKET))
   const rootURL = pathToFileURL(root).href
   sock.write(`${JSON.stringify({ crewlet: "browser-mcp", v: config.protocol, helper: config.helper, job, root: rootURL })}\n`)
   const { said, rest } = await answer(sock)

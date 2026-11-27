@@ -1,11 +1,11 @@
 // common.mjs: what the box helper's modules share. config.json, the document
-// the engine writes beside them; the modes the helper writes at; what the
-// helper prints, the answer a failed check gives and the line that says it;
-// the longest line the shim and the supervisor pass; the cause a failed write
-// stands for; the clock every timer runs on, and a version asked on it;
-// canonical JSON; and what the kernel says of a process, and which pid may be
-// signalled. Node's built-ins alone, in the oldest Node the helper supports.
-// internal/browser/boxhelper's package doc carries the argument.
+// the engine writes beside them; the modes the helper writes at; its sockets'
+// names; what the helper prints, the answer a failed check gives and the line
+// that says it; the longest line the shim and the supervisor pass; the cause a
+// failed write stands for; the clock every timer runs on, and a version asked
+// on it; canonical JSON; and what the kernel says of a process, and which pid
+// may be signalled. Node's built-ins alone, in the oldest Node the helper
+// supports. internal/browser/boxhelper's package doc carries the argument.
 
 import { execFile, spawn } from "node:child_process"
 import { createHash } from "node:crypto"
@@ -20,6 +20,12 @@ export const CONFIG_VERSION = 1
 // FILE_MODE and DIR_MODE are what the helper writes at: the box's user alone.
 export const FILE_MODE = 0o600
 export const DIR_MODE = 0o700
+
+// BROWSER_SOCKET and RELAY_SOCKET are the sockets the supervisor listens on
+// in the helper's folder: the model's way to the browser, and the way a job's
+// relay reaches what attaches to the supervisor.
+export const BROWSER_SOCKET = "browser.sock"
+export const RELAY_SOCKET = "relay.sock"
 
 // LINE_PREFIX starts ensure's one line, the engine's to parse.
 export const LINE_PREFIX = "crewlet-browser-ensure/1"
@@ -210,6 +216,42 @@ const WINDOW_MAX = 86_400_000
 // MiB, so a larger one is no engine's.
 const OUTPUT_MAX = 2 ** 40
 
+// SIZE_MAX is the most bytes a bound of the live view's config.json may
+// name: 64 MiB, where the engine's largest is a frame's 512 KiB, so a larger
+// one is no engine's.
+const SIZE_MAX = 64 << 20
+
+// QUALITY_MAX is JPEG's own scale, which a quality config.json names keeps
+// to.
+const QUALITY_MAX = 100
+
+// SCALE_MAX is the largest page scale config.json may bound a frame's at:
+// ten times the engine's 10, so a larger one is no engine's.
+const SCALE_MAX = 100
+
+// FPS_MAX is the most frames a second config.json may ask: a display's own
+// rate, where the engine asks 2, so more is no engine's.
+const FPS_MAX = 60
+
+// MAJOR_MAX is the highest Chromium major config.json may name: four digits,
+// as chromium.expected_version's grammar holds a version's.
+const MAJOR_MAX = 9999
+
+// TABS_MAX is the most tabs config.json may let a state list: a thousand,
+// where the engine lets 32, so more is no engine's.
+const TABS_MAX = 1000
+
+// outside is the first key of block, an object of config.json's, that is
+// not a whole number within counts' [least, most] for it, or "" where every
+// one is.
+function outside(block, counts) {
+  for (const [key, [least, most]] of Object.entries(counts)) {
+    const v = block?.[key]
+    if (!Number.isInteger(v) || v < least || v > most) return key
+  }
+  return ""
+}
+
 // BOUNDS is each of ensure's and the supervisor's bounds config.json carries.
 const BOUNDS = [
   "ensure_deadline_ms",
@@ -295,7 +337,66 @@ export async function readConfig(folder, io = fsp) {
   ) {
     refuse("mcp")
   }
+  liveBounds(config, file)
   return config
+}
+
+// liveBounds holds config.json's frames, state and relay blocks to the
+// shape this helper reads, refusing the first key out of it by its path.
+function liveBounds(config, file) {
+  const refuseAt = (block, key) => {
+    const value = isObject(config[block]) ? config[block][key] : config[block]
+    throw new Error(`${file} has ${block}${isObject(config[block]) ? `.${key}` : ""} ${JSON.stringify(value)}`)
+  }
+  const f = config.frames
+  if (!isObject(f)) refuseAt("frames")
+  const frames = outside(f, {
+    quality: [1, QUALITY_MAX],
+    max_width: [1, VIEWPORT_MAX],
+    max_height: [1, VIEWPORT_MAX],
+    max_bytes: [1, SIZE_MAX],
+    meta_bytes: [1, SIZE_MAX],
+    jpeg_header_bytes: [4, SIZE_MAX],
+    device_max: [1, VIEWPORT_MAX],
+    watch_fps: [1, FPS_MAX],
+    flow_major: [1, MAJOR_MAX],
+    quiet_ms: [1, BOUND_MAX],
+    oversize_quality: [1, QUALITY_MAX],
+  })
+  if (frames !== "") refuseAt("frames", frames)
+  const scale = (v, most) => typeof v === "number" && Number.isFinite(v) && v > 0 && v <= most
+  if (!scale(f.scale_min, SCALE_MAX)) refuseAt("frames", "scale_min")
+  if (!scale(f.scale_max, SCALE_MAX) || f.scale_max < f.scale_min) refuseAt("frames", "scale_max")
+  if (!scale(f.oversize_scale, 1)) refuseAt("frames", "oversize_scale")
+  if (!isObject(config.state)) refuseAt("state")
+  const state = outside(config.state, {
+    max_bytes: [1, SIZE_MAX],
+    max_tabs: [1, TABS_MAX],
+    title_chars: [0, SIZE_MAX],
+    url_bytes: [1, SIZE_MAX],
+    title_ms: [1, BOUND_MAX],
+  })
+  if (state !== "") refuseAt("state", state)
+  if (!isObject(config.relay)) refuseAt("relay")
+  const relay = outside(config.relay, {
+    wiring_v: [1, PROTOCOL_MAX],
+    header_bytes: [2, SIZE_MAX],
+    retry_base_ms: [1, BOUND_MAX],
+    retry_ceiling_ms: [1, BOUND_MAX],
+    frame_give_up_ms: [1, BOUND_MAX],
+    post_give_up_ms: [1, BOUND_MAX],
+    poll_give_up_ms: [1, BOUND_MAX],
+    post_gap_ms: [1, BOUND_MAX],
+    term_ms: [1, BOUND_MAX],
+    parent_ms: [1, BOUND_MAX],
+    log_bytes: [1, SIZE_MAX],
+    body_bytes: [1, SIZE_MAX],
+    checkin_bytes: [1, SIZE_MAX],
+  })
+  if (relay !== "") refuseAt("relay", relay)
+  if (config.relay.retry_ceiling_ms < config.relay.retry_base_ms) refuseAt("relay", "retry_ceiling_ms")
+  const jitter = config.relay.retry_jitter
+  if (typeof jitter !== "number" || !(jitter >= 0 && jitter < 1)) refuseAt("relay", "retry_jitter")
 }
 
 // bootID is the boot the kernel's tick counts belong to, read once: ticks

@@ -116,6 +116,8 @@ var withheldRequest = map[string]string{
 	"Crewlet-Call-Request": "the tool bridge's own: its front marks each POST it " +
 		"serves with it, to see whether the box dropped the request, and drops any " +
 		"a client sent; no page of any origin calls the bridge",
+	"X-Crewlet-Frame": "the tool bridge's browser routes': a box's relay names a " +
+		"frame's metadata by it, and no page of any origin calls the bridge",
 }
 
 // unexposedResponse are the response headers a route sets that a permitted

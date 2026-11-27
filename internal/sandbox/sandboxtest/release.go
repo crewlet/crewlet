@@ -210,6 +210,55 @@ func testAReleaseRecordsTheClaimsCharge(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
+// testARunOfFailuresIsTimedOnTheNodeRecordingIt: a run of failed collections
+// or resumes is timed on the clock of the node recording it (sandbox's
+// rowclock.go). The window stays with that node's first instant while it keeps
+// recording, restarts at the instant another node records, the count and the
+// run's first instant kept, and goes with the run when a collection reads the
+// box.
+func testARunOfFailuresIsTimedOnTheNodeRecordingIt(t *testing.T, s sandbox.PendingStore) {
+	mustLaunched(t, s, run("t1"))
+	first := base.Add(3 * time.Second)
+	moved := first.Add(40 * time.Second)
+	for i, step := range []struct {
+		at   time.Time
+		node string
+	}{{first, "node-a"}, {first.Add(20 * time.Second), "node-a"}, {moved, "node-b"}} {
+		release := releaseOf(mustClaim(t, s, "t1"))
+		release.CollectFailedAt, release.ResumeFailedAt, release.Clock = step.at, step.at, step.node
+		if released, err := s.ReleaseClaim(t.Context(), "t1", release); err != nil || !released {
+			t.Fatalf("release %d: released=%v err=%v", i, released, err)
+		}
+		facts := mustGet(t, s, "t1").Launch
+		since := first
+		if step.node == "node-b" {
+			since = moved
+		}
+		want := sandbox.RowWindow{Clock: step.node, Since: since, Of: first}
+		for name, got := range map[string]*sandbox.RowWindow{
+			"collections": facts.CollectFailingOn, "resumes": facts.ResumeFailingOn,
+		} {
+			if got == nil || got.Clock != want.Clock || !got.Since.Equal(want.Since) || !got.Of.Equal(want.Of) {
+				t.Errorf("after failure %d on %s the failed %s are timed on %+v, want %+v", i+1, step.node, name,
+					got, want)
+			}
+		}
+		if facts.CollectFailures != i+1 || !facts.CollectFailingSince.Equal(first) ||
+			facts.ResumeFailures != i+1 || !facts.ResumeFailingSince.Equal(first) {
+			t.Errorf("after failure %d the record holds %+v, want %d of each since %v", i+1, facts, i+1, first)
+		}
+	}
+	collected := releaseOf(mustClaim(t, s, "t1"))
+	collected.BoxAnswered = true
+	if released, err := s.ReleaseClaim(t.Context(), "t1", collected); err != nil || !released {
+		t.Fatalf("release of a read that answered: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t1").Launch; got.CollectFailingOn != nil || got.ResumeFailingOn == nil {
+		t.Errorf("a read that answered left the collections timed on %+v and the resumes on %+v, want the "+
+			"first gone with its run and the second kept", got.CollectFailingOn, got.ResumeFailingOn)
+	}
+}
+
 func testAReleaseCountsAFailedCollectionOntoTheJob(t *testing.T, s sandbox.PendingStore) {
 	// THE BOUND ON A COLLECTION'S RETRIES LIVES ON THE JOB'S RECORD, in the
 	// write that reopens the run to the retry: a count kept in memory would

@@ -3,12 +3,15 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/crewlet/crewlet/internal/advisor/modelpass"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // AdvisorModels is what the Advisor's model pass runs on (ADR-0164): the
@@ -52,6 +55,19 @@ func (m advisorModels) Deps(ctx context.Context, _ *config.Company) (modelpass.D
 	deps := modelpass.Deps{Provider: provider, ProviderKey: picked.key, Host: m.e.sessions, Now: m.e.now}
 	if b := m.e.backends; b != nil && b.Fleet != nil {
 		meter := &meter{budgets: m.e.budgets(), basis: basisOf(c, nil), now: m.e.now}
+		// A FULL WINDOW the tool loop refuses before the first round, from
+		// what observe reads; an UNREADABLE one observe passes over, so it
+		// is refused here, as every optional auxiliary pass refuses one
+		// ([Engine.auxGate]): the pass waits for its next run rather than
+		// spend against a ceiling nobody could read.
+		if meter.basis.capped() {
+			if _, _, err := meter.refusing(ctx); err != nil {
+				m.e.metrics.Add(metrics.AuxiliaryDeclined, 1,
+					metrics.Attrs{"pass": "advisor", "reason": learning.SkipBudgetUnknown})
+				return modelpass.Deps{}, fmt.Errorf("the company's token budget could not be read, "+
+					"so the pass does not start until its next run: %w", err)
+			}
+		}
 		meter.observe(ctx)
 		deps.Budget = companyMeter{meter: meter, org: b.Fleet}
 	}

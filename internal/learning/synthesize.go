@@ -38,6 +38,7 @@ type Synthesizer struct {
 	duplicateAt  float64
 	timeout      time.Duration
 	now          func() time.Time
+	budget       BudgetGate
 
 	// The clustered path's own inputs. episodes is nil for a synthesizer
 	// built for the inline path alone, and ClusterPass answers empty.
@@ -89,6 +90,11 @@ type SynthesizerOptions struct {
 	ClusterWindow time.Duration
 
 	Now func() time.Time
+
+	// Budget is asked before the clustered pass drafts, its one model call
+	// ([BudgetGate]); nil never declines. The inline path is reflection's,
+	// which its own pass gates.
+	Budget BudgetGate
 }
 
 // The synthesizer's own defaults, kept equal to config.DefaultSkillSynthesis.
@@ -146,6 +152,7 @@ func NewSynthesizer(models Models, s *Skills, opts SynthesizerOptions) (*Synthes
 		duplicateAt:   opts.DuplicateJaccardThreshold,
 		timeout:       opts.CallTimeout,
 		now:           opts.Now,
+		budget:        opts.Budget,
 		episodes:      opts.Episodes,
 		clusterMin:    opts.ClusterMinSize,
 		clusterAt:     opts.ClusterJaccardThreshold,

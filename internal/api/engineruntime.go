@@ -367,6 +367,7 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 		// a list of what the document names would claim more than this
 		// process can do.
 		VerifiableSources: r.engine.VerifiableSources(),
+		IngressHolds:      r.engine.IngressHolds(),
 		// The watchdog's own reading, so a node degrading towards its
 		// self-terminate threshold is visible before it hits it.
 		StallLag: r.engine.StallLag(),

@@ -218,7 +218,9 @@ func TestTheRevivalsOfOneAnswerAreBounded(t *testing.T) {
 // AND BY THE RUN'S OWN WINDOW. A claim that dies more than the run's
 // pause_ttl_seconds after the answer's first claim died is reaped, the reply
 // handed back, however few claims have died: past the tolerance the run
-// declared, a resume that keeps dying is no transient worth waiting out.
+// declared, a resume that keeps dying is no transient worth waiting out. The
+// first loss here names no node's clock, so the window runs the clocks'
+// allowance longer (rowclock.go).
 func TestARevivalPastTheRunsWindowHandsTheReplyBack(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -229,7 +231,7 @@ func TestARevivalPastTheRunsWindowHandsTheReplyBack(t *testing.T) {
 	}
 	if _, ok, err := rig.pending.mutate(t.Context(), "t1", func(run *PendingRun) bool {
 		answer := *run.Answer
-		answer.LostClaims, answer.FirstLostAt = 1, rig.now.Add(-window)
+		answer.LostClaims, answer.FirstLostAt = 1, rig.now.Add(-window-RowClockAllowance)
 		run.Answer = &answer
 		return true
 	}); err != nil || !ok {

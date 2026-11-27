@@ -77,7 +77,7 @@ import (
 // play is what a `providers.sandbox.fake` company's runs do ([fakeRunners]);
 // nil plays every run as the double's own demonstration.
 func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelReceiver,
-	play fakePlayer) (*sandbox.Manager, error) {
+	play fakePlayer, homes sandbox.HomeMeter) (*sandbox.Manager, error) {
 	spec := c.Providers.Sandbox
 	if spec == nil || !spec.Enabled() {
 		return nil, nil
@@ -87,7 +87,7 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 	// container backend for a company whose seats all run direct, and failed
 	// the apply demanding an image the validator had just refused as a field
 	// nothing would read.
-	providers, err := buildSandboxProviders(spec, env, c.SandboxPlacements())
+	providers, err := buildSandboxProviders(spec, env, c.SandboxPlacements(), homes)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +183,8 @@ func demoRun(_ context.Context, _ sandbox.RunRequest) sandbox.Result {
 // ONE LOCAL BACKEND PER PLACEMENT, not one shared: a single instance would
 // have to be told which cell it serves on every call, a block-wide mode in
 // disguise.
-func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, reached map[config.Placement]string) (map[sandbox.Placement]sandbox.Provider, error) {
+func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, reached map[config.Placement]string,
+	homes sandbox.HomeMeter) (map[sandbox.Placement]sandbox.Provider, error) {
 	built := make(map[sandbox.Placement]sandbox.Provider, len(reached))
 	// WALKED IN THE CLOSED SET'S ORDER, not the map's: a map iterates
 	// randomly, and an error naming whichever backend happened to come
@@ -192,7 +193,7 @@ func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, r
 		if _, want := reached[placement]; !want {
 			continue
 		}
-		provider, err := buildSandboxProvider(spec, env, placement)
+		provider, err := buildSandboxProvider(spec, env, placement, homes)
 		if err != nil {
 			return nil, err
 		}
@@ -201,7 +202,8 @@ func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, r
 	return built, nil
 }
 
-func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, placement config.Placement) (sandbox.Provider, error) {
+func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, placement config.Placement,
+	homes sandbox.HomeMeter) (sandbox.Provider, error) {
 	if spec.Fake {
 		// The in-process double, for a deployment demonstrating the flow
 		// without a real box. Named in config rather than inferred, so
@@ -212,7 +214,7 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 	}
 	switch placement {
 	case config.PlacementDirect, config.PlacementContainer:
-		return sandbox.NewLocal(localOptions(spec, env, placement))
+		return sandbox.NewLocal(localOptions(spec, env, placement, homes))
 	default:
 		// UNREACHABLE THROUGH A PARSED CONFIG, because the closed set and
 		// this switch are the same list.
@@ -233,7 +235,8 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 // the block's map would put the literal "${SSH_AUTH_SOCK}" into the runtime's
 // environment, and the sandbox package must not be able to read the secret
 // store to do better.
-func localOptions(spec *config.SandboxProvider, env *config.Resolver, placement config.Placement) sandbox.LocalOptions {
+func localOptions(spec *config.SandboxProvider, env *config.Resolver, placement config.Placement,
+	homes sandbox.HomeMeter) sandbox.LocalOptions {
 	local := spec.Local
 	return sandbox.LocalOptions{
 		Placement:  sandbox.Placement(placement),
@@ -244,6 +247,7 @@ func localOptions(spec *config.SandboxProvider, env *config.Resolver, placement 
 		RunArgs:    local.RunArgs,
 		RuntimeEnv: resolveMap(env, local.RuntimeEnv),
 		HostGrace:  spec.HostGrace(),
+		Homes:      homes,
 	}
 }
 
@@ -277,7 +281,7 @@ func setupSteps(steps []config.SandboxSetupStep) []sandbox.SetupStep {
 		out = append(out, sandbox.SetupStep{
 			Name: s.Name, Files: s.Files, Commands: s.Commands,
 			Env: s.Env, OptionalKeys: s.OptionalKeys, Brief: s.Brief,
-			TimeoutSeconds: s.Timeout(),
+			TimeoutSeconds: s.Timeout(), EveryBox: s.EveryBox,
 		})
 	}
 	return out
@@ -298,7 +302,7 @@ func seatSetupSteps(steps []org.SandboxSetupStep) []sandbox.SetupStep {
 		out = append(out, sandbox.SetupStep{
 			Name: s.Name, Files: s.Files, Commands: s.Commands,
 			Env: s.Env, OptionalKeys: s.OptionalKeys, Brief: s.Brief,
-			TimeoutSeconds: org.SetupTimeout(s.TimeoutSeconds),
+			TimeoutSeconds: org.SetupTimeout(s.TimeoutSeconds), EveryBox: s.EveryBox,
 		})
 	}
 	return out
@@ -557,7 +561,8 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 		out.secrets = append(out.secrets, content)
 	}
 	if supplied != nil {
-		out.setup = append([]sandbox.SetupStep{{Name: integrationFilesStep, Files: supplied}}, out.setup...)
+		out.setup = append([]sandbox.SetupStep{{Name: integrationFilesStep, Files: supplied, Credentials: true}},
+			out.setup...)
 	}
 
 	out.gap = gap.missing(seat.Handle(), "the run")
@@ -2687,15 +2692,18 @@ func (e *Engine) sandboxCoordinator() *sandbox.Coordinator {
 // An apply builds the catalogue itself, earlier, so that a revision whose
 // catalogue cannot be built is refused before anything else moves.
 func (e *Engine) startSandboxFor(ctx context.Context, c *Company) error {
-	manager, err := buildSandbox(c.Config, e.resolver(), e.sandboxOtel, e.fakePlay)
+	manager, err := buildSandbox(c.Config, e.resolver(), e.sandboxOtel, e.fakePlay, homeMeter{metrics: e.metrics})
 	if err != nil {
 		return err
 	}
 	// Pinned on the epoch it was built for, as an apply pins its own — see
 	// [Company.catalogue].
 	c.catalogue = manager
-	_, err = e.startSandbox(ctx, manager)
-	return err
+	if _, err = e.startSandbox(ctx, manager); err != nil {
+		return err
+	}
+	manager.CollectHomes(homeOwners(c.Config))
+	return nil
 }
 
 // startSandbox brings up this node's code-work machinery for the first company
@@ -2951,6 +2959,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// answer budget, beside its peers' payload answers (answermeter.go).
 		AnswerBudget: e.answerBudget,
 	}
+	// ITS INCARNATION, whatever the lease store: the clock every instant this
+	// process stamps on a run's row names, as the bridge and the call holder
+	// name it (internal/sandbox's rowclock.go).
+	opts.Incarnation = e.incarnation
 	// AND THIS PROCESS'S TAKER LEASE, in the node's lease store beside its seats
 	// and presence, under the ENGINE'S OWN incarnation minted once in [New] (the
 	// node is built after this coordinator on boot), at the seat lease TTL so a
@@ -2962,7 +2974,7 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 	// stop reaches, so through [holdLeases]. With no lease store captures name no
 	// taker and are waited for by age ([sandbox.CoordinatorOptions.Incarnation]).
 	if e.backends.Coord != nil {
-		opts.Incarnation, opts.TakerTTL = e.incarnation, e.leaseTTL
+		opts.TakerTTL = e.leaseTTL
 		opts.Takers = holdLeases{Backend: e.backends.Coord, engine: e}
 	}
 	// AND THE FLEET'S LEDGER OF EACH SEAT'S SAVES, which a save of a running

@@ -571,7 +571,18 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 	if err != nil {
 		return nil, err
 	}
-	box, err := provider.Create(ctx, spec)
+	var box Sandbox
+	if homes, ok := provider.(homeProvider); ok && runner != nil {
+		// A RUN'S BOX MAY START FROM ITS NODE'S CACHED HOME, holding the
+		// first cached of the steps that are not the launch's credentials;
+		// those go first and the rest after, as they would have run.
+		credentials, rest := splitCredentials(setup)
+		var cached int
+		box, cached, err = homes.CreateProvisioned(ctx, spec, rest)
+		setup = slices.Concat(credentials, rest[cached:])
+	} else {
+		box, err = provider.Create(ctx, spec)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -603,6 +614,46 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 		"sandbox_id", box.ID(), "placement", string(placement),
 		"harness", spec.Harness, "setup_steps", names)
 	return box, nil
+}
+
+// homeProvider is a backend that can start a run's box from its node's cache
+// of provisioned homes ([Local.CreateProvisioned]): it makes the box as Create
+// does, its home already holding the first cached of steps, and says how many.
+type homeProvider interface {
+	CreateProvisioned(ctx context.Context, spec Spec, steps []SetupStep) (Sandbox, int, error)
+}
+
+// homeCollector is a backend that keeps a cache of provisioned homes
+// ([Local.CollectHomes]).
+type homeCollector interface {
+	CollectHomes(owners []string)
+}
+
+// CollectHomes has every backend that keeps a cache of provisioned homes
+// remove what no seat of owners holds: called as a revision goes live, with
+// the seats whose boxes it places in a container. Nil-safe.
+func (m *Manager) CollectHomes(owners []string) {
+	if m == nil {
+		return
+	}
+	for _, placement := range slices.Sorted(maps.Keys(m.providers)) {
+		if c, ok := m.providers[placement].(homeCollector); ok {
+			c.CollectHomes(owners)
+		}
+	}
+}
+
+// splitCredentials is setup's credential steps ([SetupStep.Credentials]) and
+// the rest, each in its order.
+func splitCredentials(setup []SetupStep) (credentials, rest []SetupStep) {
+	for _, step := range setup {
+		if step.Credentials {
+			credentials = append(credentials, step)
+		} else {
+			rest = append(rest, step)
+		}
+	}
+	return credentials, rest
 }
 
 // keepProvisioning keeps box's stamp fresh while the engine provisions it:

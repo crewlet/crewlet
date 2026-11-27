@@ -189,7 +189,7 @@ Install the [Crewlet Forge app](https://github.com/crewlet/forge) from the Atlas
 - `avi:confluence:created:blogpost` — new blog post
 - `avi:confluence:updated:blogpost` — blog post updated
 
-Events are delivered via Forge Remote to `POST /webhooks/forge`. The Forge platform handles authentication. Label events are not forwarded.
+Events are delivered via Forge Remote to `POST /webhooks/forge`, each with a Forge Invocation Token. The engine accepts one only when it is for `integrations.forge_app_id` **and** names this block's Cloud site, which may differ from Jira's, so an installation of the same app on another site is refused. The token names its site by cloud id only: a block naming `cloud_id` is bound to it directly, and one naming its site by `url` needs no change, since the engine reads that site's cloud id from its public `/_edge/tenant_info` once and keeps it. While the id cannot be read, or while the block names no address yet (setup fills `cloud_id` and `site_url` from the [Atlassian organization](#configuration)), Confluence events on the route answer `503`, and each is lost: Forge retries a refused event up to four times, 60 seconds apart ([Forge Remote](https://developer.atlassian.com/platform/forge/remote/sending-product-events/)), then drops it. The Atlassian card on the Integrations page, and setup's answer, say why and what to do. Switching a block from `url` to `cloud_id` also moves the engine's Confluence reads to the API gateway, so check its token is accepted there. See [`/webhooks/forge`](../reference/api-endpoints.md#webhooksforge). Label events are not forwarded.
 
 ### Confluence Data Center — Direct Webhook Registration
 

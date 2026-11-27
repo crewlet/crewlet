@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/jira"
 )
@@ -357,5 +358,16 @@ func TestACloudSiteDropsTheConsolesProductPath(t *testing.T) {
 		if got := client.URL(); got != want {
 			t.Errorf("NewClient(%q).URL() = %q, want %q", base, got, want)
 		}
+	}
+}
+
+// A SITE'S CLOUD ID IS READ ON THE BUDGET OF ONE READ OF THAT SITE.
+// atlassian.TenantInfoTimeout restates ClientTimeout because this package
+// imports that one. Mutation: change either and this goes red.
+func TestTheCloudIDLookupHasTheReadBudget(t *testing.T) {
+	t.Parallel()
+	if atlassian.TenantInfoTimeout != jira.ClientTimeout {
+		t.Errorf("atlassian.TenantInfoTimeout = %s, jira.ClientTimeout = %s; they are one budget",
+			atlassian.TenantInfoTimeout, jira.ClientTimeout)
 	}
 }

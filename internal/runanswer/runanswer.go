@@ -176,9 +176,11 @@ func (w Waiting) NeedsYou() bool {
 }
 
 // Delegation is whether a held call is with its delegates, escalated, or past
-// deadline (the company's, [delegated.Limits]) at now.
-func Delegation(run sandbox.PendingRun, deadline time.Duration, now time.Time) (withDelegates, escalated,
-	overdue bool) {
+// deadline (the company's, [delegated.Limits]) at now by the clock of the
+// process clock names, never before it has passed in real time
+// ([sandbox.HeldCall.WaitedFor]).
+func Delegation(run sandbox.PendingRun, deadline time.Duration, clock string, now time.Time) (withDelegates,
+	escalated, overdue bool) {
 	held := run.HeldCall
 	if held == nil || held.Delegation == nil {
 		return false, false, false
@@ -186,5 +188,5 @@ func Delegation(run sandbox.PendingRun, deadline time.Duration, now time.Time) (
 	if held.Delegation.Escalated != nil {
 		return false, true, false
 	}
-	return true, false, !held.HeldAt.IsZero() && !now.Before(held.HeldAt.Add(deadline))
+	return true, false, held.WaitedFor(clock, now, time.Time{}, deadline)
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -382,6 +383,9 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Inbound.AppFlow == nil {
 		opts.Inbound.AppFlow = noAppFlow{}
 	}
+	if opts.Inbound.CloudIDs == nil {
+		opts.Inbound.CloudIDs = atlassian.NewCloudIDs(atlassian.CloudIDOptions{})
+	}
 	if opts.Config == nil {
 		opts.Config = noRoutes{}
 	}
@@ -463,7 +467,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	for _, field := range []string{
 		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Sources.Chart", "Sources.Holders", "Sources.WithheldContacts", "Sources.Coord",
-		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
+		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow", "Inbound.CloudIDs",
 		"Config", "Secrets", "Setup", "Models", "Retention", "Capacity", "FleetBroker", "Backup",
 		"AuthEvents", "Inbox", "Credentials", "ChatLive", "Nodes", "Code", "Audit",
 	} {

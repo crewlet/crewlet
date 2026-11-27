@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/browser"
+	"github.com/crewlet/crewlet/internal/browser/boxhelper/live"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -217,6 +218,60 @@ type config struct {
 		ActionMS       int `json:"action_ms"`
 		NavigationMS   int `json:"navigation_ms"`
 	} `json:"mcp"`
+	// Frames, State and Relay are the live view's bounds: internal/browser's
+	// wire and live's own knobs, so the box keeps what the hub refuses.
+	Frames configFrames `json:"frames"`
+	State  configState  `json:"state"`
+	Relay  configRelay  `json:"relay"`
+}
+
+// configFrames is how the box captures its screen, and the bounds a frame
+// keeps.
+type configFrames struct {
+	Quality         int     `json:"quality"`
+	MaxWidth        int     `json:"max_width"`
+	MaxHeight       int     `json:"max_height"`
+	MaxBytes        int     `json:"max_bytes"`
+	MetaBytes       int     `json:"meta_bytes"`
+	JPEGHeaderBytes int     `json:"jpeg_header_bytes"`
+	DeviceMax       int     `json:"device_max"`
+	ScaleMin        float64 `json:"scale_min"`
+	ScaleMax        float64 `json:"scale_max"`
+	WatchFPS        int     `json:"watch_fps"`
+	FlowMajor       int     `json:"flow_major"`
+	QuietMS         int     `json:"quiet_ms"`
+	OversizeQuality int     `json:"oversize_quality"`
+	OversizeScale   float64 `json:"oversize_scale"`
+}
+
+// configState is the bounds of the box's state of its tabs, and how often
+// their titles are read.
+type configState struct {
+	MaxBytes   int `json:"max_bytes"`
+	MaxTabs    int `json:"max_tabs"`
+	TitleChars int `json:"title_chars"`
+	URLBytes   int `json:"url_bytes"`
+	TitleMS    int `json:"title_ms"`
+}
+
+// configRelay is a job's relay's bounds: relay.sock's on one record's
+// header, its wiring's version, its retries, give-ups and posts, its exits,
+// and what it reads and logs.
+type configRelay struct {
+	WiringV        int     `json:"wiring_v"`
+	HeaderBytes    int     `json:"header_bytes"`
+	RetryBaseMS    int     `json:"retry_base_ms"`
+	RetryCeilingMS int     `json:"retry_ceiling_ms"`
+	RetryJitter    float64 `json:"retry_jitter"`
+	FrameGiveUpMS  int     `json:"frame_give_up_ms"`
+	PostGiveUpMS   int     `json:"post_give_up_ms"`
+	PollGiveUpMS   int     `json:"poll_give_up_ms"`
+	PostGapMS      int     `json:"post_gap_ms"`
+	TermMS         int     `json:"term_ms"`
+	ParentMS       int     `json:"parent_ms"`
+	LogBytes       int     `json:"log_bytes"`
+	BodyBytes      int     `json:"body_bytes"`
+	CheckinBytes   int     `json:"checkin_bytes"`
 }
 
 // configChromium is the Chromium a box looks for: where, and the build the
@@ -256,6 +311,18 @@ func configJSON(s Settings) ([]byte, error) {
 	c.LaunchTimeoutMS, c.StopGraceMS, c.HelloMS = launchTimeoutMS, stopGraceMS, helloMS
 	c.Relaunch.Max, c.Relaunch.WindowMS = relaunchMax, relaunchWindowMS
 	c.MCP.OutputMaxBytes, c.MCP.ActionMS, c.MCP.NavigationMS = mcpOutputMaxBytes, mcpActionMS, mcpNavigationMS
+	c.Frames = configFrames{Quality: browser.FrameQuality, MaxWidth: browser.MaxFrameWidth,
+		MaxHeight: browser.MaxFrameHeight, MaxBytes: browser.MaxFrameBytes, MetaBytes: browser.MaxFrameMetaBytes,
+		JPEGHeaderBytes: browser.JPEGHeaderBytes, DeviceMax: browser.MaxDeviceSize, ScaleMin: browser.MinPageScale,
+		ScaleMax: browser.MaxPageScale, WatchFPS: browser.WatchFPS, FlowMajor: live.ScreencastFlowMajor,
+		QuietMS: live.QuietMS, OversizeQuality: live.OversizeQuality, OversizeScale: live.OversizeScale}
+	c.State = configState{MaxBytes: browser.MaxStateBytes, MaxTabs: browser.MaxTabs, TitleChars: browser.MaxTitleChars,
+		URLBytes: browser.MaxURLBytes, TitleMS: live.TitleMS}
+	c.Relay = configRelay{WiringV: browser.RelayWiringVersion, HeaderBytes: live.MaxHeaderBytes,
+		RetryBaseMS: live.RetryBaseMS, RetryCeilingMS: live.RetryCeilingMS, RetryJitter: live.RetryJitter,
+		FrameGiveUpMS: live.FrameGiveUpMS, PostGiveUpMS: live.PostGiveUpMS, PollGiveUpMS: live.PollGiveUpMS,
+		PostGapMS: 1000 / browser.ReportRate, TermMS: live.TermMS, ParentMS: live.ParentMS, LogBytes: live.LogBytes,
+		BodyBytes: browser.MaxPollAnswerBytes, CheckinBytes: browser.MaxCheckinBytes}
 	body, err := json.Marshal(c)
 	if err != nil {
 		return nil, err

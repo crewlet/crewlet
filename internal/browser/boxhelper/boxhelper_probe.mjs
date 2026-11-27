@@ -63,16 +63,29 @@
 //   {"op":"launch_failure","message":M,"name":N,"sandbox":S,"uid":U,"files":F}
 //                                          the reason and cause of a launch
 //                                          that failed with that error
-//   {"op":"supervise","launch":L,"reject_first":R,"fail":X,"umask":U}
+//   {"op":"supervise","launch":L,"reject_first":R,"fail":X,"umask":U,"live":A,"at_once":O}
 //                                          the supervisor of launch.json L in
 //                                          this process, on the probe's own
 //                                          clock, its profile's lock read
 //                                          through X's file system, once it is
-//                                          ready or failed; with R an
-//                                          unhandled rejection is raised just
-//                                          before it starts, and with U the
-//                                          probe's umask is U as it starts, as
-//                                          a looser starter's would be
+//                                          ready or failed, or with O at once;
+//                                          with R an unhandled rejection is
+//                                          raised just before it starts, with
+//                                          U the probe's umask is U as it
+//                                          starts, as a looser starter's would
+//                                          be, and A names its attachments, in
+//                                          order: "record", a stand-in
+//                                          recording each call it is told;
+//                                          "fail", one whose attach throws;
+//                                          "fail_hooks", one whose every hook
+//                                          throws or rejects; "stop", one that
+//                                          stops the supervisor as it
+//                                          attaches, its close recorded;
+//                                          "hold", one whose attach waits for
+//                                          the release op; "live", the live
+//                                          view (live.mjs)
+//   {"op":"attached","until":U}            answer once "record" has recorded
+//                                          a call whose fields hold U's values
 //   {"op":"advance","ms":N}                move the clock N ms, every timer due
 //                                          run
 //   {"op":"kill_chromium","until":S}       kill the supervised Chromium's group,
@@ -104,6 +117,91 @@
 //   {"op":"tools","launch":L}              the tools the pinned server lists
 //                                          under launch.json L's config, no
 //                                          edit between
+// The live view's (internal/browser/boxhelper/live), on the box's config:
+//   {"op":"config_read"}                   readConfig's answer for the box's
+//                                          config.json: ok, or its refusal
+//   {"op":"cdp"}                           the table: every command with its
+//                                          parameters, every event, the flow
+//                                          pair
+//   {"op":"cdp_send","method":M,"params":P}
+//                                          what send does with M and P on a
+//                                          session the probe plays: sent, or
+//                                          its refusal
+//   {"op":"jpeg_size","jpeg_b64":J}        the width and height jpeg.mjs reads
+//                                          of J, or none
+//   {"op":"tabs_listed","answer":A}        what a browser_tabs answer A lists
+//   {"op":"state_make","boot":B,"running":R,"tabs":T,"times":N}
+//                                          the document made of T N times over
+//                                          (default 1), the last, and its bytes
+//                                          as the relay posts it
+//   {"op":"tabs_overflow","next":N,"live":L}
+//                                          a registry whose next number is N
+//                                          numbers L pages, then one more: each
+//                                          id, and the boot before and after
+//   {"op":"screen","major":M,"fps":F,"shot_b64":S,"viewport":V}
+//                                          a screen on the probe's clock over
+//                                          a session the probe plays, at
+//                                          Chromium major M, its page in view
+//                                          and watched at F, its viewport V
+//                                          ({width, height}, 1280 by 800 by
+//                                          default), each capture answered
+//                                          with S
+//   {"op":"cdp_frame","jpeg_b64":J,"metadata":D,"session_id":I}
+//                                          the session sends the screen a
+//                                          frame
+//   {"op":"cdp_resized","times":N}         the session says, N times at
+//                                          once, the page resized
+//   {"op":"frame_ack","seq":N}             the relay acknowledges frame N
+//   {"op":"cdp_fail"}                      every later call of the session
+//                                          fails
+//   {"op":"page_closed"}                   no page is in view
+//   {"op":"watch","on":O,"fps":F}          the relay's watch moves
+//   {"op":"relay_gone"}                    the relay's connection closes
+//   {"op":"relay_retry","verb":V,"answers":A}
+//                                          a relay on the probe's clock whose
+//                                          requests of V (state, poll, or
+//                                          frame, one the supervisor sends)
+//                                          are answered A in turn, each
+//                                          {status, retry_after}, and the
+//                                          rest never: each request's clock
+//                                          reading and status, and what the
+//                                          relay told its supervisor when
+//   {"op":"dial","url":U}                  one POST of the relay's dialer to
+//                                          U, in the probe's environment: its
+//                                          status, or the code it failed with
+//   {"op":"relay_slot","answers":A,"puts":P,"until":U}
+//                                          a relay on the probe's clock told
+//                                          a state at each of P's times, each
+//                                          {at, rev}, its posts of them
+//                                          answered A in turn, each {status,
+//                                          retry_after, code, after}, after
+//                                          that many ms, the last answering
+//                                          every later post, until U ms on:
+//                                          each post's time, rev and status
+//   {"op":"relay_burst","states":N}        a relay on the probe's clock told N
+//                                          states at once, every post answered
+//                                          at once: each post's clock reading
+//                                          and rev
+//   {"op":"relay_term","settle":E}         a relay on the probe's clock whose
+//                                          poll and state post never answer,
+//                                          or with E end as they are
+//                                          abandoned, TERMed: what it told a
+//                                          stand-in supervisor, and when it
+//                                          exited, if it had one ms before
+//                                          term_ms
+//   {"op":"relay_parent"}                  a relay on the probe's clock whose
+//                                          parent's pid changes on a read of
+//                                          it: when it changed, and when the
+//                                          relay said bye
+//   {"op":"relay_polls","answers":N}       a relay on the probe's clock whose
+//                                          polls are answered in turn, N of
+//                                          them: how many it asked, and the
+//                                          most in flight at once
+// Each screen op answers what the screen did so far, in order, each by the
+// probe's own word for it, so a case spells no DevTools method: the session
+// told metrics, captured (a capture), started {params} (the screencast),
+// stopped, or chromium_ack {session_id}; forwarded {the frame's header and
+// its bytes}; logged {log}; and the rejections nobody handled in the probe.
 // A fault X is {method, errno, after, times, kill, uid, kill_holder,
 // kill_reading, blank_reading, hold}: every call of the file system's method
 // after the first `after`, or with times only that many, throws the error
@@ -117,9 +215,12 @@
 // that dies as its command line is read; with blank_reading such a read
 // answers nothing, as the kernel does once a browser's main thread exits;
 // with hold it waits for the release op, then runs as itself.
-// A supervisor's answers carry its state and every event it logged.
+// A supervisor's answers carry its state, every event it logged, and every
+// call "record" recorded.
 // A command that throws anything else answers {"op":"error","message":M}.
 
+import { EventEmitter } from "node:events"
+import fs from "node:fs"
 import fsp from "node:fs/promises"
 import { constants } from "node:os"
 import path from "node:path"
@@ -136,6 +237,15 @@ const { holdFolder, takeLock } = await module("ensure.mjs")
 const { supervise } = await module("supervise.mjs")
 const { fence } = await module("fence.mjs")
 const { Edits, mcpConfig } = await module("serve.mjs")
+const cdp = await module("cdp.mjs")
+const { jpegSize } = await module("jpeg.mjs")
+const { States } = await module("state.mjs")
+const { Pages, tabsListed } = await module("pages.mjs")
+const { Screen } = await module("screen.mjs")
+const { attachment: liveView } = await module("live.mjs")
+const { Relay } = await module("relay.mjs")
+const { dialer } = await module("dial.mjs")
+const { record: recordOf } = await module("frames.mjs")
 
 const answer = (fields) => process.stdout.write(JSON.stringify(fields) + "\n")
 
@@ -265,6 +375,10 @@ const clock = (() => {
       const i = timers.indexOf(t)
       if (i >= 0) timers.splice(i, 1)
     },
+    // nextAt is when the earliest timer is due, or undefined with none.
+    nextAt() {
+      return timers.length === 0 ? undefined : Math.min(...timers.map((t) => t.at))
+    },
     advance(ms) {
       const to = now + ms
       for (;;) {
@@ -290,6 +404,70 @@ let edits
 const events = []
 const reports = []
 const logged = new Set() // each called with every event as it is logged
+const attached = [] // each call "record" was told, as it recorded it
+const recorded = new Set() // each called with every call as it is recorded
+
+// record is a call "record" was told.
+function record(call) {
+  attached.push(call)
+  for (const listener of recorded) listener(call)
+}
+
+// texts is an answer's text items, joined by newlines.
+const texts = (answer) =>
+  (Array.isArray(answer?.content) ? answer.content : []).map((item) => item?.text ?? "").join("\n")
+
+// closed records a close of an attachment to s, as s shows then.
+const closed = (s) => () =>
+  record({ hook: "close", state: s.state, socket: fs.existsSync(s.launch.sockets.browser) })
+
+// attachments are the stand-ins the supervise op attaches, by name; each
+// hook a recording one is told is recorded, with what the supervisor showed
+// then.
+const attachments = {
+  record: {
+    attach(s) {
+      record({ hook: "attach", state: s.state, socket: fs.existsSync(s.launch.sockets.browser), boot: s.boot })
+      return {
+        onLaunched: (context) =>
+          record({ hook: "launched", current: context === s.current?.context, pages: context.pages().length }),
+        onState: (state) => record({ hook: "state", state }),
+        onModel: (job) => record({ hook: "model", job: job ?? null }),
+        onTabs: (job, action, answer) => record({ hook: "tabs", job, action, text: texts(answer) }),
+        close: closed(s),
+      }
+    },
+  },
+  fail: {
+    attach() {
+      throw new Error("an attachment that fails to attach")
+    },
+  },
+  fail_hooks: {
+    attach() {
+      const throws = () => {
+        throw new Error("a hook that throws")
+      }
+      const rejects = () => Promise.reject(new Error("a hook that rejects"))
+      return { onLaunched: throws, onState: rejects, onModel: throws, onTabs: rejects, close: throws }
+    },
+  },
+  stop: {
+    attach(s) {
+      void s.stop()
+      return { close: closed(s) }
+    },
+  },
+  hold: {
+    async attach() {
+      await held
+      return undefined
+    },
+  },
+  live: {
+    attach: (s) => liveView().attach(s),
+  },
+}
 
 // listed is a server's answer to tools/list under config, over a transport of
 // the probe's own, with nothing between them: no browser, which tools/list
@@ -327,8 +505,9 @@ function settled(states) {
   })
 }
 
-// supervised is a supervisor's state and every event it logged.
-const supervised = () => ({ state: supervisor.state, events, reports })
+// supervised is a supervisor's state, every event it logged and every call
+// "record" recorded.
+const supervised = () => ({ state: supervisor?.state ?? "starting", events, reports, attached })
 
 // gate is a promise and the function that settles it.
 function gate() {
@@ -399,7 +578,372 @@ function takeovers(folder, config, planted) {
   return { steps, readHolder: { B: g.B, C: g.C } }
 }
 
+// unhandled counts the rejections nobody handled in the probe, from the
+// first screen op on.
+let unhandled = 0
+let countingUnhandled = false
+
+// session is a DevTools session the probe plays: each call recorded and
+// answered as the browser would, failing where a case says, and each event
+// the case raises handed to its listeners.
+class Session {
+  constructor(shot, viewport) {
+    this.shot = shot
+    this.viewport = viewport
+    this.listeners = new Map()
+    this.failing = false
+  }
+  async send(method, params) {
+    const told = {
+      "Page.getLayoutMetrics": () => ({ kind: "metrics" }),
+      "Page.captureScreenshot": () => ({ kind: "captured", params }),
+      "Page.startScreencast": () => ({ kind: "started", params }),
+      "Page.stopScreencast": () => ({ kind: "stopped" }),
+      "Page.screencastFrameAck": () => ({ kind: "chromium_ack", session_id: params.sessionId }),
+    }[method]
+    screened.push({ ...(told?.() ?? { kind: "called", method }), at: clock.now() })
+    if (this.failing) throw new Error(`the probe fails ${method}`)
+    if (method === "Page.getLayoutMetrics") {
+      const viewport = { pageX: 0, pageY: 0, clientWidth: this.viewport.width, clientHeight: this.viewport.height }
+      return { cssLayoutViewport: viewport, cssVisualViewport: { ...viewport, offsetX: 0, offsetY: 0, scale: 1, zoom: 1 } }
+    }
+    if (method === "Page.captureScreenshot") return { data: this.shot }
+    return {}
+  }
+  on(event, f) {
+    this.listeners.set(event, [...(this.listeners.get(event) ?? []), f])
+  }
+  off(event, f) {
+    this.listeners.set(event, (this.listeners.get(event) ?? []).filter((g) => g !== f))
+  }
+  emit(event, params) {
+    for (const f of this.listeners.get(event) ?? []) f(params)
+  }
+}
+
+// screened is everything the probe's screen did, in order; screen is it,
+// and stage the page it shows, on its session.
+const screened = []
+let screen
+let stage
+
+// settled answers once the screen's promises of the moment have run.
+const settledScreen = () => new Promise((resolve) => setImmediate(resolve))
+
+// settledRelay answers once a relay's chains of promises have run, however
+// many turns they take.
+const settledRelay = async () => {
+  for (let i = 0; i < 20; i++) await settledScreen()
+}
+
+// untilDone runs a relay on the probe's clock until done says it is, each
+// timer at exactly its time once every promise before it has settled.
+async function untilDone(done) {
+  for (let step = 0; step < 400; step++) {
+    await settledRelay()
+    if (done()) return
+    const next = clock.nextAt()
+    if (next === undefined) return
+    clock.advance(next - clock.now())
+  }
+}
+
+// screenAnswer is what the screen did so far.
+const screenAnswer = async () => {
+  await settledScreen()
+  return { screen: screened, unhandled }
+}
+
+// relayAt is a relay on the probe's clock: its supervisor a stand-in that
+// answers its hello and keeps what it writes in told, each {t, at}; request
+// answers its requests, by verb.
+async function relayAt({ told, request, ppid = () => 4242, exit = () => {}, frame = false }) {
+  const config = await readConfig(folder)
+  const link = () => {
+    const sock = new EventEmitter()
+    sock.destroyed = false
+    sock.write = (bytes) => {
+      const n = bytes.readUInt32BE(0)
+      told.push({ t: JSON.parse(bytes.subarray(4, 4 + n).toString("utf8")).t, at: clock.now() })
+      return true
+    }
+    const closed = () => {
+      if (sock.destroyed) return
+      sock.destroyed = true
+      sock.emit("close")
+    }
+    sock.end = (done) => {
+      closed()
+      done?.()
+    }
+    sock.destroy = closed
+    queueMicrotask(() => {
+      sock.emit("connect")
+      sock.emit("data", recordOf({ t: "hello", v: 1, helper: config.helper, boot: "0123456789abcdef", chromium: {} }))
+      if (frame) sock.emit("data", recordOf(aFrame, Buffer.from([0xff, 0xd8, 0xff, 0xd9])))
+    })
+    return sock
+  }
+  const relay = new Relay({
+    config,
+    wiring: { url: "http://127.0.0.1:1/mcp/crewlet_rt1.probe/browser", job: "0a1b2c3d-0000-4000-8000-00000000000a" },
+    socket: path.join(folder, "relay.sock"),
+    io: {
+      clock,
+      log: () => {},
+      exit,
+      ppid,
+      connect: link,
+      request: (url, o) => request(new URL(url).pathname.split("/").pop(), o),
+      random: Math.random,
+    },
+  })
+  relay.start()
+  await settledRelay()
+  return { relay, config }
+}
+
+// never is a request that never answers, whatever asks it to stop.
+const never = () => new Promise(() => {})
+
+// aState is a state the probe's relay posts, and aFrame a frame's header.
+const aState = { v: 1, boot: "0123456789abcdef", rev: 1, running: "running", tabs: [] }
+const aFrame = { t: "frame", v: 1, boot: "0123456789abcdef", seq: 1, tab: "t1", capture: "screencast", at_ms: 1,
+  width: 1, height: 1, device_width: 1, device_height: 1, offset_top: 0, page_scale: 1 }
 const commands = {
+  async config_read() {
+    try {
+      await readConfig(folder)
+      return { ok: true }
+    } catch (err) {
+      return { refused: err.message }
+    }
+  },
+  cdp() {
+    return { sends: cdp.SENDS, reads: cdp.READS, flow: cdp.FLOW }
+  },
+  async cdp_send({ method, params }) {
+    const sent = []
+    try {
+      await cdp.send({ send: async (m, p) => sent.push({ method: m, params: p }) }, method, params)
+      return { sent }
+    } catch (err) {
+      return { refused: err.message, off_table: err instanceof cdp.OffTable, sent }
+    }
+  },
+  async jpeg_size({ jpeg_b64: jpeg }) {
+    const config = await readConfig(folder)
+    return { size: jpegSize(Buffer.from(jpeg, "base64"), config.frames.jpeg_header_bytes) ?? null }
+  },
+  tabs_listed({ answer }) {
+    return { listed: tabsListed(answer) ?? null }
+  },
+  async state_make({ boot, running, tabs, times = 1 }) {
+    const config = await readConfig(folder)
+    const states = new States(config.state)
+    let doc
+    for (let i = 0; i < times; i++) doc = states.make(boot, running, tabs)
+    return { doc, bytes: Buffer.byteLength(JSON.stringify(doc)) }
+  },
+  tabs_overflow({ next, live }) {
+    const logged = []
+    const boots = ["00000000000000a1", "00000000000000b2"]
+    const pages = new Pages({
+      boot: "00000000000000f0",
+      newBoot: () => boots.shift(),
+      log: (kind, fields) => logged.push({ kind, ...fields }),
+      onChange: () => {},
+    })
+    pages.next = next
+    const before = pages.boot
+    for (let i = 0; i < live; i++) pages.records.push({ id: pages.nextID() })
+    const numbered = pages.records.map((r) => r.id)
+    const added = pages.nextID()
+    return { numbered, ids: pages.records.map((r) => r.id), added, boot_before: before, boot: pages.boot, logged }
+  },
+  async screen({ major, fps, shot_b64: shot, viewport = { width: 1280, height: 800 } }) {
+    if (!countingUnhandled) {
+      countingUnhandled = true
+      process.on("unhandledRejection", () => {
+        unhandled += 1
+      })
+    }
+    const config = await readConfig(folder)
+    stage = { id: "t1", session: new Session(shot, viewport) }
+    screen = new Screen({
+      clock,
+      log: (kind, fields = {}) => screened.push({ kind: "logged", log: kind, ...fields, at: clock.now() }),
+      frames: config.frames,
+      major: () => major,
+      boot: () => "0123456789abcdef",
+      emit: (header, jpeg) => screened.push({ kind: "forwarded", ...header, bytes: jpeg.length, at: clock.now() }),
+    })
+    screen.show(stage)
+    screen.watched({ on: true, fps })
+    return screenAnswer()
+  },
+  cdp_frame({ jpeg_b64: jpeg, metadata, session_id: sessionId }) {
+    stage.session.emit("Page.screencastFrame", { data: jpeg, metadata, sessionId })
+    return screenAnswer()
+  },
+  cdp_resized({ times }) {
+    for (let i = 0; i < times; i++) stage.session.emit("Page.frameResized", {})
+    return screenAnswer()
+  },
+  frame_ack({ seq }) {
+    screen.acked("0123456789abcdef", seq)
+    return screenAnswer()
+  },
+  cdp_fail() {
+    stage.session.failing = true
+    return screenAnswer()
+  },
+  page_closed() {
+    screen.show(undefined)
+    return screenAnswer()
+  },
+  watch({ on, fps }) {
+    screen.watched({ on, fps })
+    return screenAnswer()
+  },
+  relay_gone() {
+    screen.watched(undefined)
+    return screenAnswer()
+  },
+  async relay_retry({ verb: asked = "state", answers }) {
+    const attempts = []
+    const told = []
+    let next = 0
+    const { relay } = await relayAt({
+      told,
+      frame: asked === "frame",
+      request: (verb) => {
+        if (verb !== asked) return never()
+        const a = answers[Math.min(next, answers.length - 1)]
+        next += 1
+        attempts.push({ at: clock.now(), status: a.status })
+        const retryAfter = a.retry_after === undefined ? undefined : a.retry_after * 1000
+        return Promise.resolve({ status: a.status, retryAfter, body: Buffer.from(JSON.stringify({ error: a.code ?? "" })) })
+      },
+    })
+    const start = clock.now()
+    if (asked === "state") relay.state.put(aState)
+    await untilDone(() => attempts.length >= answers.length && (asked !== "frame" || told.some((m) => m.t === "frame_ack")))
+    return { start, attempts, told }
+  },
+  async dial({ url }) {
+    const config = await readConfig(folder)
+    const d = dialer({ clock: realClock, bodyBytes: config.relay.body_bytes })
+    try {
+      return { status: (await d.request(url, { method: "POST", bound: 10_000 })).status }
+    } catch (err) {
+      return { failed: String(err?.code ?? err) }
+    } finally {
+      d.close()
+    }
+  },
+  async relay_slot({ answers, puts, until }) {
+    const posts = []
+    let next = 0
+    const { relay } = await relayAt({
+      told: [],
+      request: (verb, o) => {
+        if (verb !== "state") return never()
+        const a = answers[Math.min(next, answers.length - 1)]
+        next += 1
+        posts.push({ at: clock.now(), rev: JSON.parse(o.body.toString("utf8")).rev, status: a.status })
+        const answer = {
+          status: a.status,
+          retryAfter: a.retry_after === undefined ? undefined : a.retry_after * 1000,
+          body: Buffer.from(JSON.stringify({ error: a.code ?? "" })),
+        }
+        return new Promise((resolve) => clock.setTimeout(() => resolve(answer), a.after ?? 0))
+      },
+    })
+    const start = clock.now()
+    for (const { at, rev } of puts) clock.setTimeout(() => relay.state.put({ ...aState, rev }), at)
+    await untilDone(() => clock.now() >= start + until)
+    return { posts: posts.map((p) => ({ ...p, at: p.at - start })) }
+  },
+  async relay_burst({ states }) {
+    const posts = []
+    const { relay } = await relayAt({
+      told: [],
+      request: (verb, o) => {
+        if (verb !== "state") return never()
+        posts.push({ at: clock.now(), rev: JSON.parse(o.body.toString("utf8")).rev })
+        return Promise.resolve({ status: 204, body: Buffer.alloc(0) })
+      },
+    })
+    for (let rev = 1; rev <= states; rev++) relay.state.put({ ...aState, rev })
+    await untilDone(() => posts.at(-1)?.rev === states)
+    return { posts }
+  },
+  async relay_term({ settle }) {
+    const told = []
+    let exited
+    const abandoned = (verb, o) =>
+      new Promise((resolve, reject) => o.signal.addEventListener("abort", () => reject(new Error("abandoned"))))
+    const { relay, config } = await relayAt({
+      told,
+      request: settle ? abandoned : never,
+      exit: (code) => {
+        exited ??= { code, at: clock.now() }
+      },
+    })
+    relay.state.put(aState)
+    await settledRelay()
+    const term = clock.now()
+    relay.leave("SIGTERM")
+    await settledRelay()
+    clock.advance(config.relay.term_ms - 1)
+    await settledRelay()
+    const early = exited ?? null
+    clock.advance(1)
+    await settledRelay()
+    return { term, early, exited: exited ?? null, told }
+  },
+  async relay_polls({ answers }) {
+    let asked = 0
+    let inFlight = 0
+    let most = 0
+    const held = []
+    await relayAt({
+      told: [],
+      request: (verb) => {
+        if (verb !== "poll") return never()
+        asked += 1
+        inFlight += 1
+        most = Math.max(most, inFlight)
+        const level = asked
+        return new Promise((resolve) =>
+          held.push(() => {
+            inFlight -= 1
+            const body = { v: 1, hub: "probe", level, watch: { on: false, fps: 2 } }
+            resolve({ status: 200, body: Buffer.from(JSON.stringify(body)) })
+          }),
+        )
+      },
+    })
+    for (let i = 0; i < answers; i++) {
+      held.shift()?.()
+      await settledRelay()
+    }
+    return { asked, most }
+  },
+  async relay_parent() {
+    const told = []
+    let parent = 4242
+    const { config } = await relayAt({ told, request: never, ppid: () => parent })
+    clock.advance(3 * config.relay.parent_ms)
+    await settledRelay()
+    const stayed = told.some((m) => m.t === "bye")
+    parent = 1
+    const gone = clock.now()
+    clock.advance(2 * config.relay.parent_ms)
+    await settledRelay()
+    return { stayed, gone, bye: told.find((m) => m.t === "bye")?.at ?? null }
+  },
   async install({ folder, fail, abort }) {
     const pids = []
     const caller = new AbortController()
@@ -504,7 +1048,7 @@ const commands = {
     const failed = await chromium.launchFailure(err, sandbox, () => chromium.sandboxCause({ uid, read: files(texts) }))
     return { reason: failed.reason, cause: failed.cause }
   },
-  async supervise({ launch, reject_first: rejectFirst, fail, umask }) {
+  async supervise({ launch, reject_first: rejectFirst, fail, umask, live, at_once: atOnce }) {
     const io = {
       clock,
       fs: faulty(fail),
@@ -519,12 +1063,34 @@ const commands = {
     if (fail?.kill_holder || fail?.kill_reading) await watchLaunches(launch)
     if (umask !== undefined) process.umask(umask)
     if (rejectFirst) Promise.reject(new Error("a rejection raised as the supervisor starts"))
-    supervisor = await supervise(launch, io)
+    const names = live ?? []
+    const unknown = names.find((name) => !Object.hasOwn(attachments, name))
+    if (unknown !== undefined) throw new Error(`no attachment is named ${unknown}`)
+    const started = supervise(launch, io, names.map((name) => attachments[name])).then((s) => {
+      supervisor = s
+    })
+    if (!atOnce) await started
+    else started.catch((err) => events.push({ kind: "supervise_failed", error: String(err?.message ?? err) }))
     return supervised()
   },
-  advance({ ms }) {
+  async attached({ until = {} }) {
+    const matches = (call) => Object.entries(until).every(([key, value]) => (call[key] ?? null) === value)
+    if (!attached.some(matches)) {
+      await new Promise((resolve) => {
+        const listener = (call) => {
+          if (!matches(call)) return
+          recorded.delete(listener)
+          resolve()
+        }
+        recorded.add(listener)
+      })
+    }
+    return supervised()
+  },
+  async advance({ ms }) {
     clock.advance(ms)
-    return { now: clock.now() }
+    if (screen === undefined) return { now: clock.now() }
+    return { now: clock.now(), ...(await screenAnswer()) }
   },
   async kill_chromium({ until }) {
     const pid = supervisor.current?.pid

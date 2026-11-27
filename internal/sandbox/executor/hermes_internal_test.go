@@ -115,7 +115,8 @@ func TestAHermesRunNamesItsSessionAndCreatesItOnlyWhereNew(t *testing.T) {
 func TestAHermesRunsEndStopsItsGateway(t *testing.T) {
 	t.Parallel()
 	script := hermesScript(sandbox.RunRequest{}, Session{ID: "s"}, PathsFor(sandbox.NewFakeSandbox("b")), hermesRunTimes())
-	for _, want := range []string{`endedas=asked; endgw; end "$harness"`, `trap 'endgw; hput' EXIT`,
+	for _, want := range []string{`endedas=asked; relaying && kill "$relay" 2> /dev/null; endgw; end "$harness"`,
+		`trap 'endgw; hput' EXIT`,
 		`quit() { trap '' USR1; trap - EXIT TERM INT HUP; endgw; end "$harness"; harness=; hput;`, "\nendgw; hput\n"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the script lacks %q", want)

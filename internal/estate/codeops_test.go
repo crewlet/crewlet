@@ -2070,57 +2070,58 @@ func TestARepositorysFloorIsItsOwnAndBounded(t *testing.T) {
 // CommitBudget and the ReplyMargin are left, answering busy once they are not),
 // so a routed proposal reaches the code half bounded by its asker's attempt:
 // the router's write attempt for a caller with no deadline (the host's
-// receiver), the caller's own where it has one. Served with none, it would be
-// judged by its queue wait alone and could be answered up to the floor wait and the trip after its asker had handed the
-// push id to the runner-up.
+// receiver), the caller's own where it has one. Served with none, it could be
+// answered after its asker had handed the push id to the runner-up.
 //
-// The router's write attempt is set halfway between the shortest a router
-// takes and production's, so a router that waited production's constant or its
-// read attempt for a write is caught.
+// The router's write attempt is halfway between the shortest a router takes
+// and production's, so a router that waited production's or its read attempt
+// for a write is caught. In a synctest bubble, for [servedAnAttempt]'s reason.
 func TestAProposalCarriesItsAttemptToTheCommitter(t *testing.T) {
 	t.Parallel()
-	f := newFleet(t)
-	d := &codeDesk{}
-	serveDesk(t, f, d)
-	timing := Production()
-	timing.WriteAttempt = (minWriteAttempt + Production().WriteAttempt) / 2
-	if timing.WriteAttempt == timing.ReadAttempt || timing.WriteAttempt == Production().WriteAttempt {
-		t.Fatalf("the premise: a write attempt of %v tells nothing apart from a read attempt of "+
-			"%v and production's write attempt of %v", timing.WriteAttempt, timing.ReadAttempt,
-			Production().WriteAttempt)
-	}
-	r := f.routerTimed(t, "agent-2", nil, timing)
+	inBubble(t, func(t *testing.T) {
+		f := newFleet(t)
+		d := &codeDesk{}
+		serveDesk(t, f, d)
+		timing := Production()
+		timing.WriteAttempt = (minWriteAttempt + Production().WriteAttempt) / 2
+		if timing.WriteAttempt == timing.ReadAttempt || timing.WriteAttempt == Production().WriteAttempt {
+			t.Fatalf("the premise: a write attempt of %v tells nothing apart from a read attempt of "+
+				"%v and production's write attempt of %v", timing.WriteAttempt, timing.ReadAttempt,
+				Production().WriteAttempt)
+		}
+		r := f.routerTimed(t, "agent-2", nil, timing)
 
-	asked := time.Now()
-	if _, err := r.Code().Propose(t.Context(),
-		proposalTo("repo-deadline", "019a0c2e-0000-7000-8000-0000000000d1")); err != nil {
-		t.Fatalf("propose: %v", err)
-	}
-	answered := time.Now()
-	callerDeadline := answered.Add(5 * time.Minute)
-	ctx, cancel := context.WithDeadline(t.Context(), callerDeadline)
-	defer cancel()
-	if _, err := r.Code().Propose(ctx,
-		proposalTo("repo-deadline", "019a0c2e-0000-7000-8000-0000000000d2")); err != nil {
-		t.Fatalf("propose with a deadline: %v", err)
-	}
+		asked := time.Now()
+		if _, err := r.Code().Propose(t.Context(),
+			proposalTo("repo-deadline", "019a0c2e-0000-7000-8000-0000000000d1")); err != nil {
+			t.Fatalf("propose: %v", err)
+		}
+		answered := time.Now()
+		callerDeadline := answered.Add(5 * time.Minute)
+		ctx, cancel := context.WithDeadline(t.Context(), callerDeadline)
+		defer cancel()
+		if _, err := r.Code().Propose(ctx,
+			proposalTo("repo-deadline", "019a0c2e-0000-7000-8000-0000000000d2")); err != nil {
+			t.Fatalf("propose with a deadline: %v", err)
+		}
 
-	d.mu.Lock()
-	deadlines := slices.Clone(d.deadlines)
-	d.mu.Unlock()
-	if len(deadlines) != 2 {
-		t.Fatalf("the committer was proposed %d pushes, want 2", len(deadlines))
-	}
-	attempt := timing.WriteAttempt
-	if got := deadlines[0]; got.Before(asked.Add(attempt)) || got.After(answered.Add(attempt)) {
-		t.Errorf("a push from a caller with no deadline was served under %v, want the router's write "+
-			"attempt (%s) from the moment it was asked, between %v and %v", got, attempt,
-			asked.Add(attempt), answered.Add(attempt))
-	}
-	if got := deadlines[1]; !got.Equal(callerDeadline) {
-		t.Errorf("a push whose caller gave it until %v was served under %v, want the caller's own",
-			callerDeadline, got)
-	}
+		d.mu.Lock()
+		deadlines := slices.Clone(d.deadlines)
+		d.mu.Unlock()
+		if len(deadlines) != 2 {
+			t.Fatalf("the committer was proposed %d pushes, want 2", len(deadlines))
+		}
+		attempt := timing.WriteAttempt
+		if got := deadlines[0]; got.Before(asked.Add(attempt)) || got.After(answered.Add(attempt)) {
+			t.Errorf("a push from a caller with no deadline was served under %v, want the router's write "+
+				"attempt (%s) from the moment it was asked, between %v and %v", got, attempt,
+				asked.Add(attempt), answered.Add(attempt))
+		}
+		if got := deadlines[1]; !got.Equal(callerDeadline) {
+			t.Errorf("a push whose caller gave it until %v was served under %v, want the caller's own",
+				callerDeadline, got)
+		}
+	})
 }
 
 // A ROUTED PUSH CAN BE DECIDED INSIDE ITS ATTEMPT, or no router is built with

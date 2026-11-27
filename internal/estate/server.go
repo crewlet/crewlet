@@ -48,8 +48,8 @@ type ServerOptions struct {
 	// reply it answers with — required: see [Envelopes].
 	Envelopes *Envelopes
 
-	// Now is the clock a request's deadline is judged on, injected for
-	// tests. Nil is the wall clock.
+	// Now is this node's clock, injected for tests: the one a request's
+	// deadline is admitted on. Nil is the wall clock.
 	Now func() time.Time
 
 	// Answers is the node's answer budget a read answering a page or a
@@ -112,7 +112,7 @@ func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe
 		if err != nil {
 			// A ROLLBACK, so it takes a context the failure cannot
 			// have ended: each answer it waits for is bounded by its
-			// own request's deadline.
+			// own asker's wait, counted from its arrival.
 			if undo := withdraw(context.WithoutCancel(ctx)); undo != nil {
 				err = errors.Join(err, undo)
 			}
@@ -146,6 +146,10 @@ type server struct {
 // its asker would wait out its budget before trying the next.
 func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	out := reply{Node: s.self}
+	// THE REQUEST'S ARRIVAL at this process, stamped by the queue before any
+	// wait for a lane's slot (queue.Arrived), on the runtime clock every wait
+	// for it is counted on; the node's own clock admits it.
+	arrived := queue.Arrived(ctx)
 	admitted := s.env.admit(raw, s.seen, s.now())
 	switch admitted.Disposition {
 	case signedask.Tampered:
@@ -181,6 +185,13 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	}
 	req := admitted.Request
 	out.Request = req.ID
+	due, nobody := signedask.Due(arrived, req.BudgetMS, time.Now())
+	if nobody != "" {
+		log.WarnContext(ctx, "estate_request_refused", "node", s.self,
+			"from", req.From, "op", req.Op, "detail", nobody)
+		out.Unserved, out.Detail = unservedStale, fmt.Sprintf("%s: %s", s.self, nobody)
+		return s.encodeReply(out)
+	}
 	spec, known := registry[req.Op]
 	if !known {
 		// AN OPERATION THIS BUILD DOES NOT DECLARE, which no node of
@@ -204,7 +215,7 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 		// THE GIT ARM, before the copy's verdict and the readiness gates,
 		// none of which applies to a git operation ([GitCopy]). It reads the
 		// inputs itself, past the writes it holds.
-		return s.answerGit(ctx, spec, req, out)
+		return s.answerGit(ctx, spec, req, due, out)
 	}
 	// INPUTS READ WHOLE OR NOT RUN (package doc, "A request is read whole,
 	// or runs nowhere"), ahead of the floors, so a node that refuses anyway
@@ -217,10 +228,11 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	case refused != nil:
 		return s.refuseUnknown(ctx, out, req, refused)
 	}
-	// AN ADMITTED REQUEST ALWAYS CARRIES ITS DEADLINE, under the signature
-	// ([signedask.Channel.Admit] refuses one without), so it is the bound
-	// on everything run for it.
-	ctx, cancel := context.WithDeadline(ctx, req.Deadline)
+	// THE ASKER'S WAIT, COUNTED FROM ARRIVAL ON THIS NODE'S CLOCK, bounds
+	// everything run for it ([request.BudgetMS]): its deadline, the asker's
+	// instant, only admitted it, and read on this clock it cut the work short
+	// by however far this node stood ahead.
+	ctx, cancel := context.WithDeadline(ctx, due)
 	defer cancel()
 	// EVERY WAIT ENDS gitlet.ReplyMargin SHORT OF IT (the floor's below, a
 	// read's barrier and level, a write's resolution), so `behind` reaches the

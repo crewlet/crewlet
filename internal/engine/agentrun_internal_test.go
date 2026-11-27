@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/browser/screen"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -272,6 +273,9 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 	e := &Engine{
 		backends: &Backends{Queue: q},
 		bridge:   bridge,
+		// THE NODE'S LIMITS ON ITS JOBS' BROWSER SCREENS, as New builds them:
+		// a browser seat's launch builds its job's hub on them.
+		screenLimits: screen.NewLimits(nil),
 	}
 	// The engine's own resumer, as buildSandboxRuntime hands it over: the
 	// coordinator refuses to be built without one.

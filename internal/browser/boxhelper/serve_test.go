@@ -486,13 +486,9 @@ var shortened = map[string]any{"output_max_bytes": 256 << 20, "action_ms": 300, 
 // overlay always covers and a navigation nobody answers each end at the
 // config's shortened bound, naming it; an evaluate awaiting the page's own
 // promise for ten times that answers its value, since the pin bounds no
-// evaluate; browser_wait_for says it waits at most 30 s. A file the model
-// names lands under its job's root, a relative name included, whatever base
-// the call's _meta names; an absolute one in the output directory lands
-// there; one elsewhere is refused.
+// evaluate; browser_wait_for says it waits at most 30 s.
 //
-// Mutations, each red: drop timeouts from the config; answer roots/list with
-// none; leave _meta in a call.
+// Mutation: drop timeouts from the config, and it goes red.
 func TestThePinnedServerBoundsItsCallsAsTheContractSays(t *testing.T) {
 	base := pages(t, map[string]string{"/covered": `<title>Covered</title><button id="covered">Buy</button>` +
 		`<div style="position:fixed;inset:0;background:white"></div>`})
@@ -521,7 +517,22 @@ func TestThePinnedServerBoundsItsCallsAsTheContractSays(t *testing.T) {
 				t.Errorf("browser_wait_for's arguments are %s, want its time said to be at most 30", tool.InputSchema)
 			}
 		}
+	})
+}
 
+// A FILE THE MODEL NAMES LANDS UNDER ITS JOB'S ROOT, a relative name
+// included, whatever base the call's _meta names; an absolute one in the
+// output directory lands there; one elsewhere is refused. Under the
+// contract's own call bounds, since a screenshot can take a loaded host past
+// the shortened ones TestThePinnedServerBoundsItsCallsAsTheContractSays holds.
+//
+// Mutations, each red: answer roots/list with none; leave _meta in a call.
+func TestAFileTheModelNamesLandsUnderItsJobsRoot(t *testing.T) {
+	base := pages(t, map[string]string{"/named": `<title>Named</title><p>A page to save</p>`})
+	boxhelpertest.Each(t, func(t *testing.T, env boxhelpertest.Env) {
+		box := readyBox(t, env, boxhelpertest.Options{})
+		m := session(t, box, jobA)
+		acted(t, m.Call("browser_navigate", map[string]any{"url": base + "/named"}), "opening a page to save")
 		output := filepath.Join(box.Folder, "output")
 		for _, f := range []struct {
 			name, lands string

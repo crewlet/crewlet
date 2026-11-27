@@ -707,12 +707,13 @@ const (
 	CommitBudget = 30 * time.Second
 
 	// ReplyMargin is what a serving node leaves between the end of each wait (a
-	// committer's batch; a routed request's floor, barrier or record) and its
-	// asker's deadline, so running out of time is said while the asker listens
-	// (statelog.WithReplyMargin, set by internal/estate). It covers the answer's
-	// trip back and the two clocks' skew, both milliseconds under NTP; ONE SECOND
-	// is two orders of magnitude over, and costs a routed push one second of the
-	// twenty-odd it may queue.
+	// committer's batch; a routed request's floor, barrier or record) and the
+	// end of its asker's wait, counted from the request's arrival on its own
+	// clock (signedask.Due), so running out of time is said while the asker
+	// listens (statelog.WithReplyMargin, set by internal/estate). It covers the
+	// request's trip there and the answer's back, milliseconds each, and no
+	// clock's skew. ONE SECOND is two orders of magnitude over, and costs a
+	// routed push one second of the twenty-odd it may queue.
 	ReplyMargin = time.Second
 
 	// GitShareWait is the longest a seat's git work waits for a unit of its

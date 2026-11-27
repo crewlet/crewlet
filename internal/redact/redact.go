@@ -33,6 +33,20 @@
 // answers as a [NewStream] does; flushed, it writes Secrets where Close answers
 // nil, and refuses only in a layout named below.
 //
+// A LIVE STREAM HOLDS NO MORE THAN [liveHeldBytes] past its settled point,
+// and asks Settled of all it holds at each write that ends a line: a write
+// costs its length and the bound. Each ask reads the held text again rather
+// than carrying its holds, since the readers decide over whole text and a new
+// line can change any decision within a reach of the old end. Past the bound,
+// a line too long or a run of holds no credential's format writes, it TRAILS
+// ([Stream.Trailing]): its stages get all it holds and is written, and it
+// shows what they decide, never refusing for it, Close writing the rest. It
+// never settles again: Settled at a later point turns on all the text from
+// the point it let go, since its readers carry the password rule's sequence
+// along a line of any length and read across what an earlier rule replaced,
+// where [LookBack]'s exactness ends, so nothing it still holds shows a later
+// point settled.
+//
 // # How far a rule reads
 //
 // Every rule decides what it replaces by text no further than [MaxReach] from
@@ -125,7 +139,7 @@
 // claims beside it, where a text is markers end to end. So a stream allocates
 // its buffers, about 16 MiB, and past them under a quarter of a byte a byte of
 // a session or a PDF, a few where passwords are dense. Tests hold each. A live
-// stream also holds its text past the settled point, any length ([settling]).
+// stream also holds its text past the settled point, [liveHeldBytes] at most.
 //
 // A WINDOW DECIDED EARLY IS CHECKED, AND A STREAM THAT FINDS IT READ A CLAIM
 // OTHERWISE REFUSES ([ErrDecidedEarly]). Every token's and AWS secret's claim,
@@ -5700,8 +5714,9 @@ func Settled(text string) int {
 // break has arrived since it last asked, since Settled reads nothing past
 // the last one, and only of the text from its point to there, which Settled
 // chains at. It holds the line being written and the lines Settled holds
-// back, which a run of key lines can make any length. Over a string, as
-// Settled reads one, an ask copies nothing.
+// back, which a run of key lines can make any length; a live stream holds
+// them to [liveHeldBytes]. Over a string, as Settled reads one, an ask
+// copies nothing.
 type settling[T textual] struct {
 	text          T
 	scanned, asks int

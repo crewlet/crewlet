@@ -232,6 +232,12 @@ type scriptOpts struct {
 	values, freshValues string
 	// pages is the fake's `session.message.list` answer by cursor, "first" for none.
 	pages map[string]string
+	// standIns is a stand-in of the case's own by its name, beside the fake on
+	// the script's PATH ([relayNode]'s `node`, say).
+	standIns map[string]string
+	// inWorkDir is a file the run's start would have written, by its name
+	// under [executor.Paths.WorkDir] (a relay's wirings, say).
+	inWorkDir map[string]string
 }
 
 // scriptConfig is the run configuration a case's script finds, as
@@ -296,8 +302,16 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 		}
 	}
 	writeStandIn(t, filepath.Join(bin, "opencode"), fakeOpenCode)
+	for name, script := range o.standIns {
+		writeStandIn(t, filepath.Join(bin, name), script)
+	}
 	alive := serverPipe(t, dir)
 	paths := executor.Paths{Home: home}
+	for name, body := range o.inWorkDir {
+		if err := os.WriteFile(filepath.Join(paths.WorkDir(), name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if !o.unconfigured {
 		if err := os.WriteFile(paths.OpenCodeConfig(), []byte(scriptConfig), 0o600); err != nil {
 			t.Fatal(err)

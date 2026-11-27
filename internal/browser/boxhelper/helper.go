@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+
+	"github.com/crewlet/crewlet/internal/browser/boxhelper/live"
 )
 
 // js is the helper's modules, the bytes the engine writes into a box.
@@ -16,12 +18,15 @@ import (
 //go:embed js/*.mjs
 var js embed.FS
 
-// modules is every module of the helper, in the one order [Write] writes
-// them and [Version] reads them: each after every module it imports.
+// modules is every module of the helper but its entry, and entry the entry
+// itself: [Files] writes them, and [Version] reads them, as modules, then
+// the live view's (live.Modules), then entry, each after every module it
+// imports.
 var modules = []string{
 	"common.mjs", "tree.mjs", "chromium.mjs", "fence.mjs", "serve.mjs", "ensure.mjs", "supervise.mjs", "shim.mjs",
-	"helper.mjs",
 }
+
+const entry = "helper.mjs"
 
 // File is one module of the helper.
 type File struct {
@@ -36,15 +41,21 @@ type File struct {
 // so one that is missing is a build whose modules are not the list's, which
 // TestEveryEmbeddedModuleIsWrittenAfterWhatItImports refuses: it panics.
 var files = sync.OnceValue(func() []File {
-	out := make([]File, 0, len(modules))
-	for _, name := range modules {
+	own := func(name string) File {
 		body, err := js.ReadFile("js/" + name)
 		if err != nil {
 			panic(fmt.Sprintf("boxhelper: js/%s is listed and not embedded: %v", name, err))
 		}
-		out = append(out, File{Name: name, Body: body})
+		return File{Name: name, Body: body}
 	}
-	return out
+	out := make([]File, 0, len(modules)+len(live.Modules())+1)
+	for _, name := range modules {
+		out = append(out, own(name))
+	}
+	for _, name := range live.Modules() {
+		out = append(out, File{Name: name, Body: live.Module(name)})
+	}
+	return append(out, own(entry))
 })
 
 // Files is the helper's modules, in the order [Write] writes them.

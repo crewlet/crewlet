@@ -128,6 +128,28 @@ func OpenCodeEndCallTags() []string {
 	return slices.Sorted(maps.Keys(openCodeEndCalls(openCodeRunTimes())))
 }
 
+// HermesEndPath is the most a Hermes run's script spends after an end request
+// reaches it while its client runs, at the waits Command runs it at
+// ([hermesEndPath]).
+func HermesEndPath() time.Duration { return hermesEndPath(hermesRunTimes()) }
+
+// RelayStep is the job's browser relay step in the box whose paths are paths
+// ([relayStep]): start, run just before the harness, and stop, once it is over.
+func RelayStep(paths Paths) (start, stop string) { return relayStep(paths) }
+
+// EndFunction is the script's `end PID [again]`, at stop ([endFunction]): for a
+// case that runs a piece of a script that ends what it started.
+func EndFunction(stop time.Duration) string { return endFunction(stop) }
+
+// RelayPrologue is the relay's variables and the functions that tell whether
+// $relay is still the relay ([relayPrologue]), which a relay step's piece of
+// a script runs behind.
+func RelayPrologue() string { return relayPrologue() }
+
+// EndHarness is the script's `endharness`, with first as its runner's first
+// step ([endHarness]).
+func EndHarness(first string) string { return endHarness(first) }
+
 // ClaudeCodeCommandTimed is [ClaudeCode.Command] with the harness given stop to
 // go once its run is asked to end, rather than [sandbox.JobStopGrace]: for the
 // cases about a harness that outlives its grace, at a length a test can wait

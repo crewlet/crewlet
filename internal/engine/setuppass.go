@@ -148,39 +148,85 @@ func (p *atlassianPass) run(ctx context.Context, in setup.PassInput) ([]integrat
 	if err != nil {
 		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
 	}
-	var findings []integration.Finding
-	if note := p.recordSite(ctx, company, res.Site, in.Sink != nil); note != "" {
-		findings = append(findings, integration.Finding{
-			Kind: integration.FindingGrantShort, Detail: note,
-		})
-	}
-	return findings, nil
+	return p.recordSite(ctx, company, res.Site, in.Sink != nil), nil
 }
 
 // recordSite writes the site this pass discovered (the org key lists it) into
-// the Jira and Confluence blocks, or says why it could not. Only a writing
-// pass, one handed a sink, records: the dashboard's read-only check must not
-// advance the config epoch. The cloud ID is load-bearing: a provisioned
-// service account's token is accepted only at the API gateway, never the
-// site host. A value the company set itself is left alone.
+// the Jira and Confluence blocks naming no address, or says why it could not.
+// Only a writing pass, one handed a sink, records: the dashboard's read-only
+// check must not advance the config epoch. The cloud ID is load-bearing: a
+// provisioned service account's token is accepted only at the API gateway, and
+// a Forge token is bound to it. A value the company set itself is left alone.
 func (p *atlassianPass) recordSite(
 	ctx context.Context, company *Company, site atlassian.Site, writing bool,
-) string {
-	if !writing || site.CloudID == "" {
-		return ""
+) []integration.Finding {
+	patch := sitePatch(company.Config.Integrations, site)
+	if !writing || len(patch) == 0 {
+		return nil
 	}
+	if note := p.applySite(ctx, patch, site); note != "" {
+		return []integration.Finding{{Kind: integration.FindingGrantShort, Detail: note}}
+	}
+	return nil
+}
+
+// forgeFindings is the Forge relay's hold on product as its pass reports it:
+// an ingress_blocked finding in the words every surface uses, for a block with
+// no address yet, or a url-named site whose cloud id sites cannot read now.
+// Reading it here is what looks a site up when the integration starts, before
+// any event arrives.
+func forgeFindings(ctx context.Context, in config.Integrations, resolve func(string) string,
+	sites interface {
+		Resolve(context.Context, string) (string, error)
+	}, product string,
+) []integration.Finding {
+	if strings.TrimSpace(resolve(in.ForgeAppID)) == "" {
+		return nil
+	}
+	relay := in.ForgeRelay(resolve)
+	var findings []integration.Finding
+	for _, hold := range relay.Held {
+		if hold.Product == product {
+			findings = append(findings, integration.Finding{
+				Kind: integration.FindingIngressBlocked, Title: config.ForgeHoldTitle, Detail: hold.Reason,
+			})
+		}
+	}
+	if site, ok := relay.Lookups[product]; ok {
+		if _, err := sites.Resolve(ctx, site); err != nil {
+			findings = append(findings, integration.Finding{
+				Kind: integration.FindingIngressBlocked, Title: config.ForgeHoldTitle,
+				Detail: config.ForgeLookupHold(product, err).Reason,
+			})
+		}
+	}
+	return findings
+}
+
+// sitePatch is the cloud id and site address for each product block naming
+// no address of its own; empty when the site is unknown or every block names
+// one. A block naming a url is never given a cloud id beside it, which config
+// refuses as two names for one instance.
+func sitePatch(in config.Integrations, site atlassian.Site) map[string]map[string]string {
 	patch := map[string]map[string]string{}
-	if j := company.Config.Integrations.Jira; j != nil && j.CloudID == "" {
+	if site.CloudID == "" {
+		return patch
+	}
+	if j := in.Jira; j != nil && j.CloudID == "" && j.URL == "" {
 		patch["jira"] = map[string]string{"cloud_id": site.CloudID, "site_url": site.HostURL}
 	}
-	if c := company.Config.Integrations.Confluence; c != nil && c.CloudID == "" {
+	if c := in.Confluence; c != nil && c.CloudID == "" && c.URL == "" {
 		patch["confluence"] = map[string]string{
 			"cloud_id": site.CloudID, "site_url": site.HostURL + "/wiki",
 		}
 	}
-	if len(patch) == 0 {
-		return ""
-	}
+	return patch
+}
+
+// applySite writes patch into the company document, or says why it could not.
+func (p *atlassianPass) applySite(
+	ctx context.Context, patch map[string]map[string]string, site atlassian.Site,
+) string {
 	writer := p.engine.configWriterOrNil()
 	if writer == nil {
 		return "this node cannot write the company configuration, so the Atlassian " +
@@ -684,6 +730,7 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 	if cfg == nil {
 		return nil, integration.ErrNotConfigured
 	}
+	forge := forgeFindings(ctx, company.Config.Integrations, p.engine.Resolve, p.engine.cloudIDs, "jira")
 	env := p.engine.resolver()
 	base := jiraBaseURL(cfg, env)
 	token := strings.TrimSpace(env.Value(cfg.Token))
@@ -691,11 +738,11 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 		// A finding, as the loop reports it: a pass that cannot reach the
 		// instance observed nothing, and a fault would send an operator
 		// hunting an outage.
-		return []integration.Finding{{
+		return append(forge, integration.Finding{
 			Kind: integration.FindingCredentialMissing,
 			Detail: "the Jira site address or the org token did not resolve, so " +
 				"this pass could not reach the instance",
-		}}, nil
+		}), nil
 	}
 	client, err := jira.NewClient(jira.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
@@ -716,7 +763,7 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 	if err != nil {
 		return nil, fmt.Errorf("engine: jira pass: %w", err)
 	}
-	return res.Findings(), nil
+	return append(forge, res.Findings()...), nil
 }
 
 // Teardown removes the webhook this pass registered, through the function a
@@ -766,15 +813,16 @@ func (p *confluencePass) Run(ctx context.Context, in setup.PassInput) ([]integra
 	if cfg == nil {
 		return nil, integration.ErrNotConfigured
 	}
+	forge := forgeFindings(ctx, company.Config.Integrations, p.engine.Resolve, p.engine.cloudIDs, "confluence")
 	env := p.engine.resolver()
 	base := confluenceBaseURL(cfg, env)
 	token := strings.TrimSpace(env.Value(cfg.Token))
 	if base == "" || token == "" {
-		return []integration.Finding{{
+		return append(forge, integration.Finding{
 			Kind: integration.FindingCredentialMissing,
 			Detail: "the Confluence site address or the org token did not resolve, " +
 				"so this pass could not reach the instance",
-		}}, nil
+		}), nil
 	}
 	client, err := confluence.NewClient(confluence.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
@@ -791,7 +839,7 @@ func (p *confluencePass) Run(ctx context.Context, in setup.PassInput) ([]integra
 	if err != nil {
 		return nil, fmt.Errorf("engine: confluence pass: %w", err)
 	}
-	return res.Findings(), nil
+	return append(forge, res.Findings()...), nil
 }
 
 // Teardown removes the hooks this pass registered, and strands no credential:

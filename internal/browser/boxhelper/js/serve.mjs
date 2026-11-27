@@ -75,9 +75,12 @@ export function mcpConfig(launch) {
 // serve listens on socket, mode 0600, and answers {close}, which stops it
 // listening, which removes the socket (libuv unlinks a listening pipe's path
 // as it closes it), and ends every connection. o is {socket, protocol,
-// helper, helloMs, clock, log, state, createConnection, context, config}:
-// state() is the supervisor's, context() the browser's context, and config
-// Playwright MCP's.
+// helper, helloMs, clock, log, state, createConnection, context, config,
+// onModel, onTabs}: state() is the supervisor's, context() the browser's
+// context, and config Playwright MCP's; onModel(job) is told the model
+// connection's job as it is accepted, and undefined as it closes, and
+// onTabs(job, action, answer) each browser_tabs call that moved the current
+// tab (Edits).
 export async function serve(o) {
   await fsp.rm(o.socket, { force: true })
   const connections = new Set()
@@ -124,11 +127,15 @@ async function accept(o, sock, said, box) {
   }
   const prior = box.model
   box.model = current
+  o.onModel(said.job)
   prior?.close()
   sock.on("close", () => {
-    if (box.model === current) box.model = undefined
+    if (box.model !== current) return
+    box.model = undefined
+    o.onModel(undefined)
   })
-  const transport = new ModelTransport(sock, said.rest, new Edits({ log: o.log }), o.log)
+  const onTabs = (action, answer) => o.onTabs(said.job, action, answer)
+  const transport = new ModelTransport(sock, said.rest, new Edits({ log: o.log, onTabs }), o.log)
   current.mcp = await o.createConnection(o.config, o.context)
   if (sock.destroyed) return void current.mcp.close().catch(() => {})
   o.log("model_connected", { job: said.job })
@@ -232,16 +239,23 @@ function kind(m) {
   return id && ("result" in m) !== ("error" in m) ? "response" : undefined
 }
 
+// TAB_MOVES is every browser_tabs action that can move which tab is current,
+// as the server makes them: new, select and close, but never list.
+const TAB_MOVES = new Set(["new", "select", "close"])
+
 // Edits is what the supervisor does to one model connection's messages, in
 // each one's order of travel (the package doc's edits), with the table of the
-// model's requests the server holds and has not answered.
+// model's requests the server holds and has not answered. onTabs(action,
+// answer) is told each browser_tabs call of TAB_MOVES the server answered
+// without error, with its result as the server gave it, before any edit.
 export class Edits {
-  constructor({ boundary = newBoundary(), allowed = ALLOWED, log = () => {} } = {}) {
+  constructor({ boundary = newBoundary(), allowed = ALLOWED, log = () => {}, onTabs = () => {} } = {}) {
     this.boundary = boundary
     this.allowed = allowed
     this.log = log
+    this.onTabs = onTabs
     // pending is each request of the model's handed to the server and not
-    // yet answered, by id, as its method.
+    // yet answered, by id, as {method}, and a tools/call's {tool, action}.
     this.pending = new Map()
   }
 
@@ -250,7 +264,7 @@ export class Edits {
   // for it, after which the server never answers it, or as the connection
   // closes.
   get inFlight() {
-    return [...this.pending].filter(([, method]) => method === "tools/call").map(([id]) => id)
+    return [...this.pending].filter(([, call]) => call.method === "tools/call").map(([id]) => id)
   }
 
   // fromModel is what becomes of a message from the model's side: {toServer,
@@ -261,6 +275,7 @@ export class Edits {
     if (k === undefined) return { refused: "not_jsonrpc" }
     if (k === "request") {
       if (this.pending.has(m.id)) return { refused: "id_in_flight" }
+      const call = { method: m.method }
       if (m.method === "tools/call") {
         const name = m.params?.name
         if (typeof name !== "string" || !this.allowed.has(name)) {
@@ -273,8 +288,11 @@ export class Edits {
           delete m.params.arguments._meta
           this.log("call_meta_dropped", {})
         }
+        const action = isObject(m.params.arguments) ? m.params.arguments.action : undefined
+        call.tool = name
+        if (typeof action === "string") call.action = action
       }
-      this.pending.set(m.id, m.method)
+      this.pending.set(m.id, call)
     } else if (k === "notification" && m.method === "notifications/cancelled") {
       this.pending.delete(m.params?.requestId)
     }
@@ -299,8 +317,12 @@ export class Edits {
         this.log("answer_dropped", {})
         return none
       }
-      const method = this.pending.get(m.id)
+      const call = this.pending.get(m.id)
+      const method = call.method
       this.pending.delete(m.id)
+      if (call.tool === "browser_tabs" && TAB_MOVES.has(call.action) && "result" in m && m.result?.isError !== true) {
+        this.onTabs(call.action, m.result)
+      }
       let out = m
       if (method === "tools/call") out = "error" in m ? this.callError(m) : this.fenced(m)
       else if (method === "tools/list" && "result" in m) out = this.listed(m)

@@ -29,16 +29,18 @@
 //
 // [LaunchPort] opens a DevTools port on loopback, which the artifact render's
 // client dials, as it dials the Chromium an operator runs, and through which
-// [Methods] reads a pin's own description of its protocol. Each launch runs in
-// a process group of its own, with a profile in the case's temporary
-// directory, and is killed with its whole group and waited for when the case
-// ends. It ends with its test binary too, however the binary ends —
-// interrupted, signalled, killed for memory, or at go test's -timeout, none of
-// which runs a case's cleanup — rather than run on with a few hundred
-// megabytes and a profile directory and nothing left to stop it: every launch
-// holds Chromium's DevTools pipe, which nothing writes, and exits once its ends
-// close, and on Linux the kernel kills it the moment its binary dies. Its
-// flags, each for a reason:
+// [Protocol] reads a pin's own description of its protocol, the one reader of
+// it, so no second decode drifts from the first: a case reads a projection of
+// the answer ([Description.Methods], [Description.Parameters]) or decodes a
+// view of its own from its bytes. Each launch runs in a process group of its
+// own, with a profile in the case's temporary directory, and is killed with its
+// whole group and waited for when the case ends. It ends with its test binary
+// too, however the binary ends — interrupted, signalled, killed for memory, or
+// at go test's -timeout, none of which runs a case's cleanup — rather than run
+// on with a few hundred megabytes and a profile directory and nothing left to
+// stop it: every launch holds Chromium's DevTools pipe, which nothing writes,
+// and exits once its ends close, and on Linux the kernel kills it the moment
+// its binary dies. Its flags, each for a reason:
 //
 //   - --headless=new: the only headless mode a Chrome for Testing `chrome`
 //     has;
@@ -76,6 +78,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -511,11 +514,11 @@ func LaunchPort(t testing.TB, chrome string, args ...string) Endpoint {
 	return Endpoint{}
 }
 
-// Methods is every command and event chrome's own protocol describes, each
-// spelled as its domain and its name joined by a dot, read from the
-// /json/protocol of a launch under t: per call, since a launch runs under its
-// caller's t, whose end ends it.
-func Methods(t testing.TB, chrome string) map[string]bool {
+// Protocol is chrome's own description of its protocol, its /json/protocol
+// read from a launch under t: per call, since a launch runs under its caller's
+// t, whose end ends it. An answer that describes fewer than minDomains
+// domains fails t.
+func Protocol(t testing.TB, chrome string) Description {
 	t.Helper()
 	ep := LaunchPort(t, chrome)
 	ctx, cancel := context.WithTimeout(t.Context(), listenTimeout)
@@ -529,32 +532,89 @@ func Methods(t testing.TB, chrome string) map[string]bool {
 		t.Fatalf("%s/json/protocol: %v", ep.HTTP, err)
 	}
 	defer resp.Body.Close()
-	type named struct {
-		Name string `json:"name"`
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s/json/protocol answered %s", ep.HTTP, resp.Status)
 	}
-	var desc struct {
-		Domains []struct {
-			Domain   string  `json:"domain"`
-			Commands []named `json:"commands"`
-			Events   []named `json:"events"`
-		} `json:"domains"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&desc); err != nil {
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
 		t.Fatalf("%s/json/protocol: %v", ep.HTTP, err)
 	}
+	d, err := describe(raw)
+	if err != nil {
+		t.Fatalf("%s/json/protocol: %v", ep.HTTP, err)
+	}
+	return d
+}
+
+// Description is a pin's own description of its protocol, as [Protocol] read
+// it: the answer whole, for a case that decodes a view of its own, and the
+// projections the module's cases read.
+type Description struct {
+	// Raw is the /json/protocol answer as the pin sent it.
+	Raw     []byte
+	domains []describedDomain
+}
+
+// describedDomain is what the projections read of a domain: its name, and
+// each command's and event's name with its parameters' names.
+type describedDomain struct {
+	Domain   string             `json:"domain"`
+	Commands []describedMessage `json:"commands"`
+	Events   []describedMessage `json:"events"`
+}
+
+type describedMessage struct {
+	Name       string `json:"name"`
+	Parameters []struct {
+		Name string `json:"name"`
+	} `json:"parameters"`
+}
+
+// describe decodes a /json/protocol answer, refusing one that describes
+// fewer than minDomains domains.
+func describe(raw []byte) (Description, error) {
+	var desc struct {
+		Domains []describedDomain `json:"domains"`
+	}
+	if err := json.Unmarshal(raw, &desc); err != nil {
+		return Description{}, err
+	}
 	if len(desc.Domains) < minDomains {
-		t.Fatalf("%s/json/protocol described %d domains: it is describing nothing", ep.HTTP, len(desc.Domains))
+		return Description{}, fmt.Errorf("it described %d domains, fewer than %d: it is describing nothing",
+			len(desc.Domains), minDomains)
 	}
-	methods := map[string]bool{}
-	for _, d := range desc.Domains {
-		for _, m := range slices.Concat(d.Commands, d.Events) {
-			methods[d.Domain+"."+m.Name] = true
-		}
-	}
-	return methods
+	return Description{Raw: raw, domains: desc.Domains}, nil
 }
 
 // minDomains is the fewest domains a pin's protocol may describe: both pins
 // describe nearly sixty, so an answer of fewer than twenty is one that
 // describes nothing the walk could hold Go to.
 const minDomains = 20
+
+// Methods is every command and event d describes, each spelled as its domain
+// and its name joined by a dot.
+func (d Description) Methods() map[string]bool {
+	methods := map[string]bool{}
+	for _, domain := range d.domains {
+		for _, m := range slices.Concat(domain.Commands, domain.Events) {
+			methods[domain.Domain+"."+m.Name] = true
+		}
+	}
+	return methods
+}
+
+// Parameters is every parameter of every command d describes, spelled as the
+// command and the parameter joined by a dot: what a caller may put in a
+// command's params. An event's parameters are what the browser sends, so
+// none is here.
+func (d Description) Parameters() map[string]bool {
+	params := map[string]bool{}
+	for _, domain := range d.domains {
+		for _, c := range domain.Commands {
+			for _, p := range c.Parameters {
+				params[domain.Domain+"."+c.Name+"."+p.Name] = true
+			}
+		}
+	}
+	return params
+}

@@ -187,7 +187,7 @@ node still reads back what it wrote.
 | `/git/{repo}` | A person's git over HTTPS on [Gitlet](gitlet.md): a fetch or push, authenticated by the token bound to them ([Persons and their tokens](gitlet.md#persons-and-their-tokens)), plus a file's bytes and a commit's files as a ZIP, served inert (`/git/{repo}/-/raw`, `/git/{repo}/-/archive.zip`). Answered from a Gitlet node's cache, which the node a request reaches relays to. |
 | `/box/git/{repo}` · `/box/gitlet/{repo}` | An executor's git and code reads from inside its box: the run's own token, minted per launch and held to the repositories its run was granted. |
 | `/otlp/{token}/v1/{signal}` | Signed-token trace ingest. |
-| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a harness in a box. Per-run, good until the run ends. A session lives in the process holding the seat, which may serve no API, so the node a call reaches relays it to that node over the broker (`internal/httprelay`) and the box dials one address for the whole fleet. |
+| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a harness in a box, and the routes its box's browser relay posts to. Per-run, good until the run ends. A session lives in the process holding the seat, which may serve no API, so the node a call reaches relays it to that node over the broker (`internal/httprelay`) and the box dials one address for the whole fleet. |
 | `/health` · `/ready` | The two probes; [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
 
 **`workers` runs the company-wide singletons, each held on its own

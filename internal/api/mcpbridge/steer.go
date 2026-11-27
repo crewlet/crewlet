@@ -154,7 +154,8 @@ func SteerURL(endpoint string) string {
 // discards a late answer, and a take still in flight is cancelled with it.
 const steerTakeBudget = 5 * time.Second
 
-// steerHold is how long a poll for notes is held when none waits.
+// pollHold is how long a held poll is held: a poll for notes while none waits,
+// and a browser's poll until its answer moves ([Bridge.pollBrowser]).
 //
 // TEN SECONDS, under the tightest common default between a box and the bridge:
 // Envoy's route timeout, fifteen seconds when unset — a gateway in front of the
@@ -162,8 +163,8 @@ const steerTakeBudget = 5 * time.Second
 // log line for nothing. Inside the fleet relay's idle bound
 // (internal/httprelay's Idle, three heartbeats) for a poll relayed to the
 // seat's holder. Its cost is one request every ten seconds per idle run whose
-// harness polls, answered from memory.
-const steerHold = 10 * time.Second
+// harness or browser polls, answered from memory.
+const pollHold = 10 * time.Second
 
 // steerReadIDs is the most notes one read names: everything one job can be
 // owed, a turn's notes ([steer.MaxTurnNotes]) and the job's own items, its late
@@ -191,7 +192,7 @@ type steerNotes struct {
 // SteerHandler serves the notes route ([SteerPattern]): the same routing as
 // [Bridge.Handler] — served here by the node holding the job's opening, and
 // relayed to it by any other — with the notes served by the opening's inbox.
-func (b *Bridge) SteerHandler() http.Handler { return b.routed(b.serveSteer) }
+func (b *Bridge) SteerHandler() http.Handler { return b.routed(b.serveSteer, isNotesPoll) }
 
 // serveSteer answers one call of the notes route on the opening that holds it.
 //
@@ -213,7 +214,7 @@ func (b *Bridge) serveSteer(w http.ResponseWriter, r *http.Request, opened *bind
 	inbox := opened.inbox()
 	if inbox == nil {
 		// THE OPENING ENDED, which took the inbox its session has.
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(askAgainRetry))
 		return
 	}
 	switch verb := r.PathValue("verb"); {
@@ -233,14 +234,14 @@ func (b *Bridge) serveSteer(w http.ResponseWriter, r *http.Request, opened *bind
 }
 
 // pollNotes answers the notes waiting past the poll's cursor, holding the poll
-// for up to [steerHold] while none does. It returns at once on a change, the
+// for up to [pollHold] while none does. It returns at once on a change, the
 // opening's end, the bridge's shutdown and the poller going away.
 //
 // A RUN WHOSE TOOLS ARE CLOSED is answered as one with nothing waiting, as its
 // steer_take is ([binding.takeSteer]); asked at every pass, since the fence
 // closes while a poll is held. A POLL THIS OPENING CANNOT HOLD IS REFUSED, never answered as an empty one:
 // once the bridge shuts down or the opening ends, a held poll is let go and
-// later ones get a 503 and Retry-After ([steerPollRetry]). Answered 200 with
+// later ones get a 503 and Retry-After ([askAgainRetry]). Answered 200 with
 // nothing, a poller whose next poll answers its last (the OpenCode plugin's)
 // would ask again at once for most of a graceful stop. A failure is what a
 // poller pauses on; the notes wait on the run's record for the next opening.
@@ -260,10 +261,10 @@ func (b *Bridge) pollNotes(w http.ResponseWriter, r *http.Request, opened *bindi
 	for {
 		switch {
 		case b.shuttingDown():
-			httpjson.Unavailable(w, httpjson.CodeDraining, httpjson.RetrySeconds(steerPollRetry))
+			httpjson.Unavailable(w, httpjson.CodeDraining, httpjson.RetrySeconds(askAgainRetry))
 			return
 		case opened.over():
-			httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
+			httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(askAgainRetry))
 			return
 		}
 		notes, changed := inbox.Wait(ctx, after)
@@ -288,16 +289,16 @@ func (b *Bridge) pollNotes(w http.ResponseWriter, r *http.Request, opened *bindi
 }
 
 // isNotesPoll reports whether r is a poll of the notes route ([SteerPattern]):
-// the one call under the bridge's prefix that WAITS for something to happen,
-// rather than for something to be done.
+// the one call of that route that WAITS for something to happen, rather than
+// for something to be done.
 func isNotesPoll(r *http.Request) bool {
 	return r.Method == http.MethodGet && r.PathValue("verb") == "notes"
 }
 
 // forwardPoll relays a poll this node holds no opening for to the session's
-// holder ([Bridge.forward]) — and lets go of it the moment this bridge shuts
-// down, answering it as a poll held here is answered then: a 503 the poller
-// pauses on ([Bridge.pollNotes]).
+// holder ([Bridge.forward]), a notes poll or a browser's — and lets go of it
+// the moment this bridge shuts down, answering it as a poll held here is
+// answered then: a 503 the poller pauses on ([Bridge.pollNotes]).
 //
 // A RELAYED POLL IS HELD BY TWO NODES, the holder and this one waiting on its
 // answer, and only the holder's shutdown released it. A stopping node relays
@@ -308,7 +309,7 @@ func isNotesPoll(r *http.Request) bool {
 // already be running on the holder, and is left to finish.
 func (b *Bridge) forwardPoll(w http.ResponseWriter, r *http.Request, sub subject, f *fleet) {
 	if b.shuttingDown() {
-		httpjson.Unavailable(w, httpjson.CodeDraining, httpjson.RetrySeconds(steerPollRetry))
+		httpjson.Unavailable(w, httpjson.CodeDraining, httpjson.RetrySeconds(askAgainRetry))
 		return
 	}
 	ctx, cancel := context.WithCancel(r.Context())
@@ -325,7 +326,7 @@ func (b *Bridge) forwardPoll(w http.ResponseWriter, r *http.Request, sub subject
 	// (internal/httprelay), so the holder lets go of its side as well.
 	b.forward(answered, r.WithContext(ctx), sub, f)
 	if !answered.wrote && b.shuttingDown() {
-		httpjson.Unavailable(w, httpjson.CodeDraining, httpjson.RetrySeconds(steerPollRetry))
+		httpjson.Unavailable(w, httpjson.CodeDraining, httpjson.RetrySeconds(askAgainRetry))
 	}
 }
 
@@ -350,19 +351,18 @@ func (s *statusWriter) Write(b []byte) (int, error) {
 // flushes reach the client.
 func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
-// steerPollRetry is the Retry-After a poll the bridge cannot hold is turned
-// away with, and a read that reached its opening as it ended, that its inbox
-// did not take ([ErrNoteUntaken]), or that a run whose tools are closed
-// takes no more ([Bridge.serveSteer], [readNotes]): the pace the bridge's own
-// relay reads a seat's lease again at while it waits for the seat's next
-// holder ([holderRetryCeiling]), because that holder is what serves the
-// session's next opening: a node that is going hands its seats on, and an
-// opening that ended was replaced, moved with its seat, or ended with its run,
-// whose route then answers 401. No client keeps to it: OpenCode's notes
-// plugin, the route's one client, reads no Retry-After and asks again after a
-// pause of its own, a second doubling to thirty (internal/sandbox/executor,
-// opencode_steer.js).
-const steerPollRetry = holderRetryCeiling
+// askAgainRetry is the Retry-After a call is turned away with to ask again: a
+// poll the bridge cannot hold, a notes or browser call that reached its
+// opening as it ended ([Bridge.serveSteer], [Bridge.serveBrowser]), and a
+// read its inbox did not take ([ErrNoteUntaken]) or that a run whose tools are
+// closed takes no more ([readNotes]): the pace the bridge's own relay reads a
+// seat's lease again at while it waits for the seat's next holder
+// ([holderRetryCeiling]), because that holder is what serves the session's
+// next opening: a node that is going hands its seats on, and an opening that
+// ended was replaced, moved with its seat, or ended with its run, whose route
+// then answers 401. A box's browser relay waits it out; OpenCode's notes
+// plugin reads no Retry-After and pauses on a doubling of its own.
+const askAgainRetry = holderRetryCeiling
 
 func writeNotes(w http.ResponseWriter, notes []SteerNote) {
 	if notes == nil {
@@ -387,14 +387,14 @@ func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox St
 		return
 	}
 	if fence(opened.session) != nil {
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(askAgainRetry))
 		return
 	}
 	switch err := inbox.Read(r.Context(), body.IDs); {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, ErrNoteUntaken):
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(askAgainRetry))
 	default:
 		log.WarnContext(r.Context(), "mcp_bridge_steer_read_failed", "error", err.Error(),
 			"detail", "the notes wait; the poller confirms them again, and the review "+
@@ -440,13 +440,13 @@ func againNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox S
 		return
 	}
 	if fence(opened.session) != nil {
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(askAgainRetry))
 		return
 	}
 	granted, spent, err := inbox.Again(r.Context(), body.IDs)
 	switch {
 	case errors.Is(err, ErrNoteUntaken):
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(askAgainRetry))
 		return
 	case err != nil:
 		log.WarnContext(r.Context(), "mcp_bridge_steer_again_failed", "error", err.Error(),
@@ -476,10 +476,10 @@ func foldedNotes(w http.ResponseWriter, r *http.Request, inbox SteerInbox) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Shutdown releases every poll for notes this bridge holds — one it serves from
-// its own opening, and one it is relaying to the session's holder
-// ([Bridge.forwardPoll]) — and turns away every one that arrives after it, at
-// once and as a failure the poller pauses on ([Bridge.pollNotes]); and it ends
+// Shutdown releases every poll this bridge holds, for notes or a browser's: one
+// it serves from its own opening, and one it is relaying to the session's
+// holder ([Bridge.forwardPoll]). It turns away every one that arrives after it,
+// at once and as a failure the poller pauses on ([Bridge.pollNotes]); and it ends
 // every call waiting for a holder to take it ([Bridge.forward]), answered that
 // this node is draining. So a graceful stop never waits out a hold. Safe to
 // call more than once.

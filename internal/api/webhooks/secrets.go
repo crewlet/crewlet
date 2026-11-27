@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
@@ -43,6 +44,14 @@ type Secrets struct {
 	// Atlassian's published keys — but it plays the same role here: with no
 	// app id there is nothing to check the token against.
 	ForgeAppID string
+
+	// ForgeSites, ForgeLookups and ForgeHeld bind a Forge token to the
+	// company's sites, by product ("jira", "confluence"): a cloud id from
+	// config, a Cloud site url whose id is read from the site, or a hold
+	// for a block with no address yet ([config.ForgeRelay]).
+	ForgeSites   map[string]string
+	ForgeLookups map[string]string
+	ForgeHeld    []config.ForgeHold
 
 	// Slack is PER SEAT, keyed by agent handle, because each agent has its
 	// own Slack app. The handle comes from the URL path, which is why that
@@ -104,11 +113,15 @@ func (s Secrets) Verifiable() []string {
 		{"github", s.GitHub},
 		{"jira", s.Jira},
 		{"datadog", s.Datadog},
-		{"forge", s.ForgeAppID},
 	} {
 		if pair.secret != "" {
 			out = append(out, pair.kind)
 		}
+	}
+	// Forge needs a site beside the app id: a token is refused unless it
+	// names one of the company's Cloud sites.
+	if s.ForgeAppID != "" && len(s.ForgeSites)+len(s.ForgeLookups) > 0 {
+		out = append(out, "forge")
 	}
 	// One seat is enough. A company with ten Slack apps and one unresolved
 	// ${VAR} is not a company whose Slack is unverifiable; it is one seat
@@ -122,6 +135,26 @@ func (s Secrets) Verifiable() []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// IngressHolds names, by surface, why a route refuses every delivery of a
+// kind although its material resolved, from config alone: today the Forge
+// relay, for a product whose block names no address yet. A url-named site
+// whose cloud id cannot be read is a run-time hold, which the integrations
+// answer takes from the Jira and Confluence passes' shared findings, not from
+// any one node's lookup. Empty holds nothing.
+func (s Secrets) IngressHolds() map[string]string {
+	var reasons []string
+	if s.ForgeAppID != "" {
+		for _, hold := range s.ForgeHeld {
+			reasons = append(reasons, hold.Reason)
+		}
+	}
+	holds := map[string]string{}
+	if len(reasons) > 0 {
+		holds["forge"] = strings.Join(reasons, "; ")
+	}
+	return holds
 }
 
 // SecretsOf reads the verification material out of a company epoch.
@@ -154,6 +187,8 @@ func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) stri
 		if in.GitLab != nil && in.GitLab.Enabled {
 			s.GitLab = resolve(in.GitLab.SigningSecret)
 		}
+		relay := in.ForgeRelay(resolve)
+		s.ForgeSites, s.ForgeLookups, s.ForgeHeld = relay.Sites, relay.Lookups, relay.Held
 		if in.Jira != nil {
 			s.Jira = resolve(in.Jira.WebhookSecret)
 		}

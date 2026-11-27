@@ -211,6 +211,13 @@ export interface IntegrationRow {
    */
   endpoint?: string | null;
   endpoint_current?: boolean | null;
+  /**
+   * Why the route refuses every delivery to this surface although its
+   * material resolved, in the route's own words, or null: today a Forge
+   * product with no cloud id. The tool's roll-up carries the same sentence
+   * as its reason.
+   */
+  held?: string | null;
   [key: string]: unknown;
 }
 

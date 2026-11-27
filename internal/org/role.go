@@ -504,6 +504,10 @@ type SandboxSetupStep struct {
 	// killed and fails the acquisition. Unset takes
 	// [DefaultSetupTimeoutSeconds] — see [SetupTimeout].
 	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty"`
+
+	// EveryBox runs the step in every box, never into a container box's
+	// cached home.
+	EveryBox bool `yaml:"every_box,omitempty" json:"every_box,omitempty"`
 }
 
 // DefaultSetupTimeoutSeconds gives a provisioning command room for a

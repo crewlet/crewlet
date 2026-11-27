@@ -61,7 +61,9 @@
 // A key marked `use: enc` is skipped while one with no `use` is kept: the
 // field is optional, so requiring "sig" would discard every set omitting it.
 // One unusable entry is skipped, not fatal, so a rotation's retiring key
-// cannot break the incoming one. The document is read to [MaxBytes] only.
+// cannot break the incoming one. The document is read to [MaxBytes] only,
+// and only from the URL configured: a redirect is refused, so a 3xx is a
+// failed fetch like any other non-200.
 //
 // A caller waits on its own context, never the leader's deadline, and a failed
 // flight is cleared rather than latched, so one bad minute at the provider
@@ -176,7 +178,7 @@ type Options struct {
 	// Client is the HTTP client. Nil takes one from [httpx] with
 	// [FetchTimeout] applied — never a bare &http.Client{}, which shares
 	// the two-connections-per-host default transport with every other
-	// caller in the process.
+	// caller in the process. Either way [New] refuses redirects on it.
 	Client *http.Client
 
 	// Now is the clock. Nil takes wall-clock time.
@@ -194,10 +196,15 @@ type Options struct {
 
 // New builds a cached key source.
 func New(opts Options) *Set {
-	s := &Set{url: opts.URL, client: opts.Client, now: opts.Now, logger: opts.Logger}
-	if s.client == nil {
-		s.client = httpx.Client(FetchTimeout)
+	client := opts.Client
+	if client == nil {
+		client = httpx.Client(FetchTimeout)
 	}
+	// The keys must come from the URL configured, so a copy that refuses
+	// every redirect: a 3xx then fails the fetch under the 200-only rule.
+	refusing := *client
+	refusing.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	s := &Set{url: opts.URL, client: &refusing, now: opts.Now, logger: opts.Logger}
 	if s.now == nil {
 		s.now = time.Now
 	}

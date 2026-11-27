@@ -316,6 +316,7 @@ func wireAPI(
 			Claims:    backends.Fleet,
 			AppFlow:   setupSurface.AppFlow(),
 			Recheck:   e,
+			CloudIDs:  e.AtlassianCloudIDs(),
 		},
 		// The shared tick, sped up. It owns the spend rollup (deliberately,
 		// so aggregating never runs on the engine's own goroutine

@@ -74,7 +74,7 @@ type pacing struct {
 // The backoff, the floor and the poll's bound are OpenCode's plugin's, for
 // its reasons (opencode_steer.js): a second doubling to thirty delays a note
 // by at most thirty seconds once a down bridge is back; twenty seconds is the
-// bridge's ten-second hold (mcpbridge's steerHold) and the same again. The
+// bridge's ten-second hold (mcpbridge's pollHold) and the same again. The
 // thread file lands milliseconds after the harness starts, so a look every
 // 50 ms rising to a second costs nothing and adds at most a second. A socket
 // not answering, or a thread refusing its join, ten seconds on is broken (the

@@ -21,10 +21,13 @@
 //
 // Datadog and Confluence Cloud sign nothing, so a shared token IS the
 // authentication there and [secrets.CheckSharedToken] gives it a length floor;
-// the other providers verify a signature over the body. The OAuth landings
-// (Slack, the GitHub App return, the MCP sign-in callback) and the engine's
-// client metadata document live here too; mcp_oauth.go says what the callback
-// trusts.
+// the other providers verify a signature over the body, except Forge, whose
+// Atlassian-signed token must name the app AND the company's own Cloud site for
+// the event's product (forge_site.go): one app id is shared by every site that
+// installs the app, and a product with no Cloud site is a missing secret. The
+// OAuth landings (Slack, the GitHub App return, the MCP sign-in callback) and
+// the engine's client metadata document live here too; mcp_oauth.go says what
+// the callback trusts.
 package webhooks
 
 import (
@@ -159,6 +162,11 @@ type Options struct {
 	// Keys verifies Forge invocation tokens. Nil uses Atlassian's
 	// published JWKS.
 	Keys KeySource
+
+	// CloudIDs reads the cloud id of a Cloud site the company names by url,
+	// to bind a Forge token to it. REQUIRED, and the engine's own, so the
+	// route and the node's passes share one lookup.
+	CloudIDs CloudIDSource
 }
 
 // Receiver serves the inbound edge.
@@ -169,6 +177,7 @@ type Receiver struct {
 	configured func() bool
 	now        func() time.Time
 	forge      *forgeVerifier
+	cloudIDs   CloudIDSource
 	appFlow    AppCompleter
 
 	slackInstalls SlackInstaller
@@ -196,6 +205,7 @@ func New(opts Options) (*Receiver, error) {
 		{"Claims", opts.Claims == nil},
 		{"Configured", opts.Configured == nil},
 		{"AppFlow", opts.AppFlow == nil},
+		{"CloudIDs", opts.CloudIDs == nil},
 	} {
 		if field.absent {
 			missing = append(missing, "Options."+field.name)
@@ -217,6 +227,7 @@ func New(opts Options) (*Receiver, error) {
 		claims:        opts.Claims,
 		configured:    opts.Configured,
 		now:           opts.Now,
+		cloudIDs:      opts.CloudIDs,
 	}
 	if r.now == nil {
 		r.now = func() time.Time { return time.Now().UTC() }

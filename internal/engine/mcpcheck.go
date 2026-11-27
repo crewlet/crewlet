@@ -120,6 +120,13 @@ type mcpCheckAsk struct {
 	Version  int       `json:"v"`
 	ID       string    `json:"id"`
 	Deadline time.Time `json:"deadline"`
+	// BudgetMS is how long the asker waits (signedask.WaitMS), which an
+	// answering node counts from the request's arrival on its own clock
+	// (signedask.Due), so a node ahead of its asker tests for the whole wait.
+	// REQUIRED: one carrying none tests nothing, as an older unreleased build
+	// gets no compatibility. No wire version of its own, since an older node
+	// ignoring it tests as it always did.
+	BudgetMS int64 `json:"budget_ms,omitzero"`
 	// Asker is the node that asked, which tests on its own account rather
 	// than over the broker.
 	Asker string `json:"asker"`
@@ -187,6 +194,10 @@ type mcpChecks struct {
 	// taken is the ids of the requests this node has answered.
 	taken *signedask.Guard
 	stop  queue.Unsubscribe
+	// now is the clock this node binds the requests it seals to and admits
+	// those it takes by: time.Now, held so a case can set two nodes' clocks
+	// apart. No wait is counted on it; a context runs on the runtime's clock.
+	now func() time.Time
 }
 
 // newMCPChecks builds this node's half of the test channel over the fleet
@@ -196,7 +207,7 @@ func newMCPChecks(ring recordseal.Keyring) (*mcpChecks, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: the MCP test channel's envelopes: %w", err)
 	}
-	return &mcpChecks{wire: wire, taken: signedask.NewGuard()}, nil
+	return &mcpChecks{wire: wire, taken: signedask.NewGuard(), now: time.Now}, nil
 }
 
 // The bounds of a test.
@@ -205,9 +216,9 @@ const (
 	// close of what it started ([mcp.Test]'s stop, ten seconds at most) and
 	// the broker's round trips, with time to spare.
 	mcpCheckSlack = 15 * time.Second
-	// mcpCheckReplyMargin is how long before the asker's deadline an
-	// answering node's test ends, so its reply arrives in time: a broker
-	// round trip, many times over.
+	// mcpCheckReplyMargin is how long before its asker's wait runs out,
+	// counted from the request's arrival, an answering node's test ends, so
+	// its reply arrives in time: a broker round trip, many times over.
 	mcpCheckReplyMargin = 2 * time.Second
 	// maxMCPCheckToolBytes bounds the tools one node's reply carries, as
 	// encoded: every tool the server listed (at most [mcp.MaxServerTools]),
@@ -306,7 +317,6 @@ func (e *Engine) CheckMCPServer(ctx context.Context, req MCPCheckRequest) (MCPCh
 	out := MCPCheckResult{Server: server.Name, Seat: seat, Draft: req.Draft, At: at, By: req.By.Name,
 		Node: e.selfNode()}
 	budget := mcpCheckBudget(server)
-	ask.Deadline = at.Add(budget)
 	if ask.Seat == uuid.Nil {
 		nodes, readErr := e.liveNodes(ctx)
 		if readErr != nil {
@@ -418,11 +428,22 @@ func (e *Engine) askPeersMCPCheck(ctx context.Context, ask mcpCheckAsk, peers []
 	if e.backends == nil || e.backends.Queue == nil || e.mcpChecks == nil {
 		return map[string]mcpCheckReply{}, "this node has no broker to ask its peers over", nil
 	}
+	// THE ASKER'S WAIT CROSSES AS A DURATION, the budget or its caller's
+	// where that ends sooner, and each node counts it from arrival on its own
+	// clock ([mcpCheckAsk.BudgetMS]); the deadline only binds the request.
+	wait := budget
+	if d, ok := ctx.Deadline(); ok {
+		wait = min(wait, time.Until(d))
+	}
+	if wait <= 0 {
+		return map[string]mcpCheckReply{}, "this node had no time left to ask its peers", nil
+	}
+	ask.Deadline, ask.BudgetMS = e.mcpChecks.now().Add(wait), signedask.WaitMS(wait)
 	sealed, err := e.mcpChecks.wire.SealRequest(ask)
 	if err != nil {
 		return nil, "", fmt.Errorf("engine: seal an MCP test request: %w", err)
 	}
-	askCtx, cancel := context.WithDeadline(ctx, ask.Deadline)
+	askCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	asked := make(map[string]bool, len(peers))
 	for _, p := range peers {
@@ -465,7 +486,11 @@ var errMCPCheckNotHere = errors.New("engine: the MCP test is for other nodes")
 // answerMCPCheck is the serve handler: one test request, answered only where
 // the fleet signed it and it names this node (or a seat this node holds).
 func (e *Engine) answerMCPCheck(ctx context.Context, raw []byte) ([]byte, error) {
-	admitted := e.mcpChecks.wire.Admit(raw, e.mcpChecks.taken, time.Now())
+	// THE REQUEST'S ARRIVAL at this process, stamped by the queue before any
+	// wait for a slot (queue.Arrived), on the runtime clock the test is
+	// counted on; the channel's own clock admits it.
+	arrived := queue.Arrived(ctx)
+	admitted := e.mcpChecks.wire.Admit(raw, e.mcpChecks.taken, e.mcpChecks.now())
 	switch admitted.Disposition {
 	case signedask.Admitted:
 	case signedask.Tampered:
@@ -481,9 +506,13 @@ func (e *Engine) answerMCPCheck(ctx context.Context, raw []byte) ([]byte, error)
 		(ask.Seat == uuid.Nil && !slices.Contains(ask.Nodes, self)) {
 		return nil, errMCPCheckNotHere
 	}
-	// ITS ANSWER HAS TO REACH THE ASKER BEFORE THE DEADLINE, so the test
-	// ends a reply's round trip before it.
-	testCtx, cancel := context.WithDeadline(ctx, ask.Deadline.Add(-mcpCheckReplyMargin))
+	// ITS ANSWER HAS TO REACH THE ASKER WHILE IT WAITS, so the test ends a
+	// reply's round trip before the wait, counted from arrival, runs out.
+	due, nobody := signedask.Due(arrived, ask.BudgetMS, time.Now())
+	if nobody != "" {
+		return nil, fmt.Errorf("engine: an MCP test not to be taken: %s", nobody)
+	}
+	testCtx, cancel := context.WithDeadline(ctx, due.Add(-mcpCheckReplyMargin))
 	defer cancel()
 	// HELD FROM BEFORE THE TEST until the reply is written, waited for no
 	// longer than the test may run.

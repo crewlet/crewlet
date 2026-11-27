@@ -79,7 +79,7 @@
 // directory changes, and the notes themselves never touch the box's disk.
 
 // pollAbortMs bounds one poll: the engine holds a poll for up to ten seconds
-// while no note waits (internal/api/mcpbridge, steerHold), so twenty is that
+// while no note waits (internal/api/mcpbridge, pollHold), so twenty is that
 // hold and the same again for a relay and a slow network — and short of Bun's
 // own idle deadline on a request, which every request here turns off in its
 // favour (`timeout: false`).

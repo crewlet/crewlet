@@ -252,6 +252,16 @@ func browserAnswered(answer boxhelper.Ensure, home, launchID string) BrowserOutc
 		Server: &MCPServer{Name: browser.ServerName, Transport: TransportStdio, Command: command, Args: args}}
 }
 
+// relaysScreen reports whether a job's browser, as its record or its launch's
+// ensure has it, relays its screen to its seat's holder: ready, at or above
+// browser.MinChromiumMajor, the floor the suite proves a box's screen on
+// (internal/browser/screen). One predicate for the launch and for a node that
+// opens the job again from its record ([PendingRun.NamedJob]), so the two
+// never disagree on which jobs' boxes run a relay.
+func relaysScreen(b *types.ExecutorBrowser) bool {
+	return b != nil && b.State == browser.EnsureReady && b.ChromiumMajor >= browser.MinChromiumMajor
+}
+
 // record is the browser as the job's record and announcement carry it, nil
 // for a seat with no browser.
 func (o *BrowserOutcome) record() *types.ExecutorBrowser {

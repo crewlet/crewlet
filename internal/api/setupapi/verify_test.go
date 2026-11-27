@@ -542,7 +542,7 @@ func TestNewRefusesAProbeSetMissingAKind(t *testing.T) {
 	cfg := newConfigSurface(t).svc
 	v := &vault{}
 	_, err := setupapi.New(setupapi.Options{
-		Config: cfg, Secrets: v, Resolve: v.get,
+		Config: cfg, Secrets: v, Resolve: v.get, CloudIDs: fixtureSites{},
 		Passes: setup.NewRunner(nil, nil, nil), Probes: probes,
 		Sink:   func(iam.Actor) (provision.TokenSink, error) { return nil, nil },
 		Status: &statusStore{}, SlackApps: func() map[string]string { return nil },

@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"slices"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/browser/boxhelper/live"
 )
 
 // THE HELPER'S VERSION MOVES WITH EVERY BYTE AND NAME IT SHIPS: Version is the
@@ -65,13 +67,16 @@ func TestTheHelperVersionMovesWithEveryByteAndNameItShips(t *testing.T) {
 }
 
 // EVERY EMBEDDED MODULE IS WRITTEN AFTER WHAT IT IMPORTS: js/ embeds exactly
-// the modules Files lists, so none is shipped unwritten or listed unshipped,
-// and each relative import names a module listed before it, so the order Files
-// keeps is the one its doc states.
+// the helper's own modules and its entry, so none is shipped unwritten or
+// listed unshipped (live's are held so in its own case); Files writes the
+// helper's, then live's, then the entry, no name twice, since they share one
+// folder; and each relative import names a module written before it, so the
+// order Files keeps is the one its doc states.
 //
 // Mutations, each red: list tree.mjs before common.mjs; tree.mjs importing a
 // module listed after it (./chromium.mjs, say); embed a module the list
-// leaves out.
+// leaves out; write live's modules after the entry; a live module named as
+// one of the helper's.
 func TestEveryEmbeddedModuleIsWrittenAfterWhatItImports(t *testing.T) {
 	t.Parallel()
 	entries, err := fs.ReadDir(js, "js")
@@ -82,9 +87,20 @@ func TestEveryEmbeddedModuleIsWrittenAfterWhatItImports(t *testing.T) {
 	for _, e := range entries {
 		embedded = append(embedded, e.Name())
 	}
-	if !slices.Equal(embedded, slices.Sorted(slices.Values(modules))) {
+	own := append(slices.Clone(modules), entry)
+	if !slices.Equal(embedded, slices.Sorted(slices.Values(own))) {
 		t.Fatalf("js/ embeds %q, and the helper's modules are %q: list every module, and embed only those", embedded,
-			modules)
+			own)
+	}
+	var names []string
+	for _, f := range Files() {
+		names = append(names, f.Name)
+	}
+	if want := slices.Concat(modules, live.Modules(), []string{entry}); !slices.Equal(names, want) {
+		t.Fatalf("Files writes %q, want the helper's modules, then live's, then the entry: %q", names, want)
+	}
+	if sorted := slices.Sorted(slices.Values(names)); len(slices.Compact(sorted)) != len(names) {
+		t.Fatalf("Files writes %q, a name twice, and they share one folder", names)
 	}
 	imports := regexp.MustCompile(`(?:from|import)\s*\(?\s*"\./([^"]+)"`)
 	var written []string

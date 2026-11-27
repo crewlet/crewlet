@@ -175,7 +175,8 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	}
 	applied = append(applied, "secrets")
 	// THE BUILD, which changes nothing; [Buildable] runs the same one.
-	next, sandboxManager, built, err := buildRevision(cfg, e.resolver(), e.plans, e.ledger, e.sandboxOtel, e.fakePlay)
+	next, sandboxManager, built, err := buildRevision(cfg, e.resolver(), e.plans, e.ledger, e.sandboxOtel, e.fakePlay,
+		homeMeter{metrics: e.metrics})
 	applied = append(applied, built...)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
@@ -253,6 +254,8 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	if rt := e.sandbox.Load(); rt != nil {
 		rt.coordinator.SetManager(sandboxManager)
 		applied = append(applied, "sandbox")
+		// Each cached home no seat of this revision launches in a container.
+		sandboxManager.CollectHomes(homeOwners(cfg))
 	}
 
 	// The party index is rebuilt BEFORE the publish: a removed seat stays
@@ -372,14 +375,14 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 // workspace registry): a later revision driving another harness from the same
 // directory is refused until a restart.
 func buildRevision(cfg *config.Company, env *config.Resolver, plans *harness.Plans, ledger *fleet.Ledger,
-	otel *sandbox.OtelReceiver, play fakePlayer) (*Company, *sandbox.Manager, []string, error) {
+	otel *sandbox.OtelReceiver, play fakePlayer, homes sandbox.HomeMeter) (*Company, *sandbox.Manager, []string, error) {
 
 	next, err := newCompany(cfg, env, plans, ledger)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	built := []string{"company"}
-	manager, err := buildSandbox(next.Config, env, otel, play)
+	manager, err := buildSandbox(next.Config, env, otel, play, homes)
 	if err != nil {
 		return nil, nil, built, err
 	}
@@ -416,7 +419,7 @@ func signIns(c *Company) []harness.SignInID {
 // the boot snapshot ([Engine.bootSecrets]), which an apply re-reads; a value
 // rotated in between is the rotation gesture, not a different revision.
 func (e *Engine) Buildable(cfg *config.Company) error {
-	_, _, _, err := buildRevision(cfg, e.resolver(), nil, nil, nil, e.fakePlay)
+	_, _, _, err := buildRevision(cfg, e.resolver(), nil, nil, nil, e.fakePlay, nil)
 	return err
 }
 

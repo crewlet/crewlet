@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/maphash"
@@ -16,6 +17,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/envfile"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -553,18 +555,18 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 	return nil
 }
 
-// ClearArtifacts removes what a previous run left in a reused box, all but the
-// checkout, which is the continued context and the reason to reuse a box.
-// Left, a stale done marker fires the completion poll at once and Collect reads
-// the old result; a previous job's hooks name a bridge session its end closed;
-// its end-protocol records ([Paths.JobScript], [Paths.JobEnded]) would aim an
-// end request at another process or read as this run's own; its session record,
-// report, capture, saves and staging would be collected as this run's (a stale
-// report bound as this run's session) or wait in the box for its life; its fresh-session wiring ([Paths.MCPConfigFresh]) would sit
-// beside a run that has none. Directories go whole, so no stale value, plugin or
-// commit hook survives, and every file a run starts with is new to its box: across
-// a VM mount, a harness opening a host-replaced file finds nothing for ~1 s.
-// Never the session store a run continues, nor its [Paths.SessionDigests].
+// ClearArtifacts removes what a previous run left in a reused box but the
+// checkout, the continued context and the reason to reuse it. Left, a done
+// marker fires the completion poll at once, Collect reading the old result;
+// hooks, and the relay's wirings ([Paths.BrowserRelay]), name a session the
+// job's end closed; end-protocol records ([Paths.JobScript], [Paths.JobEnded])
+// aim a request at another process or read as this run's; the session record,
+// report, capture, saves and staging are collected as this run's or sit in
+// the box; a fresh-session wiring ([Paths.MCPConfigFresh]) sits beside a run
+// with none; the relay's log grows past its bound. Directories go whole, so
+// nothing stale survives, and every file a run starts with is new to its box
+// (across a VM mount a host-replaced file reads as missing for ~1 s). Never
+// the session store a run continues, nor its [Paths.SessionDigests].
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.harness.Output(p)
@@ -573,6 +575,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		p.SessionRecord(), p.SessionReport(), p.sessionReportStaging(), p.SessionCapture(),
 		trimMarkOf(p.SessionCapture()), p.SessionCarried(),
 		p.MCPConfig(), p.MCPConfigFresh(),
+		p.BrowserRelay(), p.BrowserRelayContinued(), p.BrowserRelayFresh(), p.BrowserRelayLog(),
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next",
 		p.CountRecord(), p.CountRecord() + ".next",
 		// THE ERROR STREAM TOO, and the event stream below, so each job
@@ -692,6 +695,13 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		return sandbox.RunHandle{}, fmt.Errorf("executor: this run starts a session of its own and was " +
 			"handed a second wiring for one, which only a run that continues a session is handed")
 	}
+	// AND IT NAMES A BROWSER RELAY UNDER BOTH TOKENS OR NEITHER: under one
+	// alone, the session its box started could be the one with no relay, its
+	// browser's screen never leaving the box (an engine bug, never a box's).
+	if f := req.FreshWiring; f != nil && f.Browser.Set() != req.Browser.Set() {
+		return sandbox.RunHandle{}, fmt.Errorf("executor: this run was handed a browser relay's wiring under " +
+			"one of its two bridge tokens alone, and is handed one under both or neither")
+	}
 	paths := PathsFor(box)
 	// What the session had spent ([sessionTotals]), read before the clear
 	// removes it, from the box a continued session lives in: the one its
@@ -744,22 +754,34 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	if req.SkillLoads.Set() {
 		req.SkillLoads.URL = sandbox.EngineAddress(box, req.SkillLoads.URL)
 	}
-	// AND THE SAME THREE UNDER THE JOB'S OTHER TOKEN, for a session the run's
-	// script starts of its own ([sandbox.RunRequest.FreshWiring]): dialled from
-	// the same box, so held to the same addresses. A copy, as req is.
+	// And where its browser's relay posts, which the relay dials from inside
+	// the box as the harness dials the bridge ([relayStep]); a browser runs only
+	// in a container box, so this is the rewrite its relay always takes.
+	if req.Browser.Set() {
+		req.Browser.URL = sandbox.EngineAddress(box, req.Browser.URL)
+	}
+	// AND THE SAME UNDER THE JOB'S OTHER TOKEN, for a session the run's script
+	// starts of its own ([sandbox.RunRequest.FreshWiring]): dialled from the
+	// same box, so held to the same addresses. A copy, as req is.
 	if f := req.FreshWiring; f != nil {
 		wired := sandbox.Wiring{MCPServers: sandbox.EngineServers(box, f.MCPServers), Steer: f.Steer,
-			SkillLoads: f.SkillLoads}
+			SkillLoads: f.SkillLoads, Browser: f.Browser}
 		if wired.Steer.Set() {
 			wired.Steer.URL = sandbox.EngineAddress(box, wired.Steer.URL)
 		}
 		if wired.SkillLoads.Set() {
 			wired.SkillLoads.URL = sandbox.EngineAddress(box, wired.SkillLoads.URL)
 		}
+		if wired.Browser.Set() {
+			wired.Browser.URL = sandbox.EngineAddress(box, wired.Browser.URL)
+		}
 		req.FreshWiring = &wired
 	}
 	configPath, err := r.harness.WriteConfig(ctx, box, req, session, paths)
 	if err != nil {
+		return sandbox.RunHandle{}, err
+	}
+	if err = writeRelayWirings(ctx, box, paths, req); err != nil {
 		return sandbox.RunHandle{}, err
 	}
 	// THE CREDIT ON THE RUN'S COMMITS, where its request asks for it: the
@@ -806,6 +828,35 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	log.InfoContext(ctx, "harness_started", "harness", r.harness.Name(), "pid", pid,
 		"session", session.ID, "continues", session.Continues, "carried", req.Carried != nil)
 	return sandbox.RunHandle{CommandID: pid, SessionID: session.ID, FreshSessionID: session.Fresh}, nil
+}
+
+// writeRelayWirings writes where the run's browser relay posts, as
+// browser.RelayWiring, for its script's relay step ([relayStep]): nothing for
+// a run whose browser relays no screen; a run of one session's
+// [Paths.BrowserRelay]; a continuing run's two, one under each of its bridge
+// tokens, of which its script keeps the one for the session its box started.
+func writeRelayWirings(ctx context.Context, box sandbox.Sandbox, paths Paths, req sandbox.RunRequest) error {
+	if !req.Browser.Set() {
+		return nil
+	}
+	type wiring struct {
+		file  string
+		route sandbox.BrowserWiring
+	}
+	files := []wiring{{paths.BrowserRelay(), req.Browser}}
+	if f := req.FreshWiring; f != nil {
+		files = []wiring{{paths.BrowserRelayContinued(), req.Browser}, {paths.BrowserRelayFresh(), f.Browser}}
+	}
+	for _, w := range files {
+		body, err := json.Marshal(browser.RelayWiring{V: browser.RelayWiringVersion, URL: w.route.URL, Job: w.route.Job})
+		if err != nil {
+			return fmt.Errorf("executor: encoding the browser relay's wiring: %w", err)
+		}
+		if err = box.WriteFile(ctx, w.file, body); err != nil {
+			return fmt.Errorf("executor: writing the browser relay's wiring: %w", err)
+		}
+	}
+	return nil
 }
 
 // refuseCarried is why req's carried session ([sandbox.RunRequest.Carried])

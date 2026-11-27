@@ -522,6 +522,8 @@ func (e *Engine) localRelaunchTarget(handle, turn string) sandbox.RelaunchTarget
 			"no seat " + handle}
 	}
 	target := company.relaunchTarget(seat, company.catalogue, e.id)
+	// THIS NODE'S CLOCK, which dates a box it launched (sandbox.PriorBox.Since).
+	target.At = e.now().UTC()
 	if !(executorKeep{engine: e}).Keeps() {
 		target.NoKept = sandbox.NoKeptSession
 	}

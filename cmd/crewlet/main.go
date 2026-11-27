@@ -2113,6 +2113,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Backups:     e.Backends().Fleet,
 			BackupFloor: boot.Stream.TrackerRetention.Floor(),
 			NodeID:      nodeID,
+			Incarnation: e.Node().Owner(),
 			// Artifacts, decided per artifact and shaped by the reader's role;
 			// nil on an engine with no router.
 			Artifacts: artifactsSource,
@@ -2189,6 +2190,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Claims:    e.Backends().Fleet,
 			AppFlow:   setupSurface.AppFlow(),
 			Recheck:   e,
+			CloudIDs:  e.AtlassianCloudIDs(),
 			// Each agent's Slack install, finished here when Slack returns the
 			// browser; the object the setup surface mints links with.
 			SlackInstalls: slackInstalls,

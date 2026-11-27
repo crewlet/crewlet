@@ -52,10 +52,9 @@ type jwksKey struct {
 	pub *rsa.PublicKey
 }
 
-// jwksServer serves a key set and counts how often it was asked.
-func jwksServer(t *testing.T, keys ...jwksKey) (*httptest.Server, *atomic.Int64) {
+// keySet is the document publishing keys.
+func keySet(t *testing.T, keys ...jwksKey) []byte {
 	t.Helper()
-	var hits atomic.Int64
 	var doc struct {
 		Keys []map[string]string `json:"keys"`
 	}
@@ -66,12 +65,33 @@ func jwksServer(t *testing.T, keys ...jwksKey) (*httptest.Server, *atomic.Int64)
 			"e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.pub.E)).Bytes()),
 		})
 	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("encode a key set: %v", err)
+	}
+	return raw
+}
+
+// jwksServer serves a key set and counts how often it was asked.
+func jwksServer(t *testing.T, keys ...jwksKey) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	server, hits, _ := switchingServer(t, keySet(t, keys...))
+	return server, hits
+}
+
+// switchingServer serves the document doc holds, which a case replaces to
+// rotate the published set, and counts how often it was asked.
+func switchingServer(t *testing.T, first []byte) (*httptest.Server, *atomic.Int64, *atomic.Pointer[[]byte]) {
+	t.Helper()
+	var hits atomic.Int64
+	var doc atomic.Pointer[[]byte]
+	doc.Store(&first)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
-		_ = json.NewEncoder(w).Encode(doc)
+		_, _ = w.Write(*doc.Load())
 	}))
 	t.Cleanup(server.Close)
-	return server, &hits
+	return server, &hits, &doc
 }
 
 func TestTheKeySetIsFetchedOnceAndReused(t *testing.T) {
@@ -156,17 +176,8 @@ func TestTheCacheExpires(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var second atomic.Bool
-	one, _ := jwksServer(t, jwksKey{"k0", &testKey.PublicKey})
-	two, _ := jwksServer(t, jwksKey{"k0", &testKey.PublicKey}, jwksKey{"k1", &rotated.PublicKey})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		target := one.URL
-		if second.Load() {
-			target = two.URL
-		}
-		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
-	}))
-	t.Cleanup(server.Close)
+	server, _, doc := switchingServer(t, keySet(t, jwksKey{"k0", &testKey.PublicKey}))
+	two := keySet(t, jwksKey{"k0", &testKey.PublicKey}, jwksKey{"k1", &rotated.PublicKey})
 
 	clock := pinned
 	source := jwks.New(jwks.Options{URL: server.URL, Now: func() time.Time { return clock }})
@@ -174,7 +185,7 @@ func TestTheCacheExpires(t *testing.T) {
 		t.Fatalf("warm: %v", err)
 	}
 
-	second.Store(true)
+	doc.Store(&two)
 	clock = clock.Add(2 * time.Hour)
 	if _, err := source.Key(t.Context(), "k1"); err != nil {
 		t.Fatalf("a key added after the TTL elapsed was never seen: %v", err)
@@ -192,18 +203,9 @@ func TestAWithdrawnKeyStopsBeingAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var after atomic.Bool
-	before, _ := jwksServer(t, jwksKey{"k0", &testKey.PublicKey})
+	server, _, doc := switchingServer(t, keySet(t, jwksKey{"k0", &testKey.PublicKey}))
 	// k0 is GONE from the second document — the rotation completed.
-	afterServer, _ := jwksServer(t, jwksKey{"k1", &rotated.PublicKey})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		target := before.URL
-		if after.Load() {
-			target = afterServer.URL
-		}
-		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
-	}))
-	t.Cleanup(server.Close)
+	after := keySet(t, jwksKey{"k1", &rotated.PublicKey})
 
 	clock := pinned
 	source := jwks.New(jwks.Options{URL: server.URL, Now: func() time.Time { return clock }})
@@ -211,7 +213,7 @@ func TestAWithdrawnKeyStopsBeingAccepted(t *testing.T) {
 		t.Fatalf("warm: %v", err)
 	}
 
-	after.Store(true)
+	doc.Store(&after)
 	clock = clock.Add(2 * time.Hour)
 	if _, err := source.Key(t.Context(), "k0"); err == nil {
 		t.Fatal("a key withdrawn from the document is still accepted, so the " +
@@ -227,17 +229,8 @@ func TestABrokenKeySetDoesNotPoisonTheCache(t *testing.T) {
 	// map — which the refresh floor then holds for a minute, so a
 	// momentarily broken document keeps refusing tokens long after the
 	// CDN recovered.
-	var broken atomic.Bool
-	broken.Store(true)
-	good, _ := jwksServer(t, jwksKey{"k0", &testKey.PublicKey})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if broken.Load() {
-			_, _ = w.Write([]byte(`{"keys":[]}`))
-			return
-		}
-		http.Redirect(w, r, good.URL, http.StatusTemporaryRedirect)
-	}))
-	t.Cleanup(server.Close)
+	server, _, doc := switchingServer(t, []byte(`{"keys":[]}`))
+	good := keySet(t, jwksKey{"k0", &testKey.PublicKey})
 
 	clock := pinned
 	source := jwks.New(jwks.Options{URL: server.URL, Now: func() time.Time { return clock }})
@@ -246,7 +239,7 @@ func TestABrokenKeySetDoesNotPoisonTheCache(t *testing.T) {
 	}
 
 	// The CDN recovers a second later — well inside the refresh floor.
-	broken.Store(false)
+	doc.Store(&good)
 	clock = clock.Add(time.Second)
 	if _, err := source.Key(t.Context(), "k0"); err != nil {
 		t.Fatalf("the recovered key set was not picked up: %v", err)
@@ -674,5 +667,23 @@ func TestOnlyAnRSAKeyIsRead(t *testing.T) {
 	}
 	if _, err := set.Key(t.Context(), "rsa"); err != nil {
 		t.Errorf("the RSA key beside it was discarded: %v", err)
+	}
+}
+
+// A KEY SET COMES ONLY FROM THE URL CONFIGURED: a redirect is refused, and
+// wherever it points is never asked. Mutation: let the client follow
+// redirects and the second server is asked and its keys verify.
+func TestARedirectedKeySetIsRefused(t *testing.T) {
+	t.Parallel()
+	elsewhere, asked := jwksServer(t, jwksKey{"k0", &testKey.PublicKey})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(server.Close)
+	if _, err := jwks.New(jwks.Options{URL: server.URL}).Key(t.Context(), "k0"); err == nil {
+		t.Fatal("a key set served by a redirect's target was accepted")
+	}
+	if n := asked.Load(); n != 0 {
+		t.Errorf("the redirect's target was asked %d times, want 0", n)
 	}
 }

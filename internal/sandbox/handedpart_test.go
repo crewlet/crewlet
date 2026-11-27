@@ -13,7 +13,7 @@ import (
 )
 
 // WHAT A JOB'S BOX WAS HANDED IS KEPT BESIDE THE RUN'S ROW, FOR THAT JOB ALONE.
-// The set is up to 64 KiB before sealing and the row is read whole by every git
+// The set is up to 80 KiB before sealing and the row is read whole by every git
 // request of a coding box and every listing, so the set is a part of its own,
 // named for the job whose attach wrote it. The next launch's opening hands it on
 // as the box's ([PriorBox.Handed]) and the new job has none until its own attach

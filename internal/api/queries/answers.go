@@ -425,6 +425,12 @@ type Sources struct {
 	// a silent integration has to know which half broke.
 	Verifiable func(ctx context.Context) []string
 
+	// Held names, by surface, why its route refuses every delivery although
+	// its material resolved (a Forge product with no cloud id), or is nil
+	// when this process cannot say. Read with Verifiable, from the same
+	// runtime: a held surface's secret is usable and its deliveries still fail.
+	Held func(ctx context.Context) map[string]string
+
 	// Reconciles is what the integration reconcile loop last found for
 	// each surface, or nil when this process cannot say.
 	//
@@ -599,6 +605,11 @@ type Sources struct {
 	// (config.ResolveNodeID), which is also the name the node's presence
 	// lease carries, never the raw `node.id` field.
 	NodeID string
+
+	// Incarnation is this process's incarnation, the clock an instant it judges
+	// against another process's stamp is named by (internal/sandbox's
+	// rowclock.go). Empty reads every such instant as another clock's.
+	Incarnation string
 
 	// Now is the ONE clock every answer here reads, injectable so a caller
 	// can pin it. Nil is the wall clock.

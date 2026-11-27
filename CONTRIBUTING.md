@@ -165,9 +165,9 @@ moves), once per lock, publishing it only once it passes the box helper's own
 check of a box's install (npm's record is the lock, nothing is a link, and the
 files' digest is `tree/installed.sha256`), and names it in
 `CREWLET_TEST_PLAYWRIGHT_TREE` (the Makefile's `PLAYWRIGHT_TREE_ENV`). A
-one-package loop of the box helper names it, the floor Node and both pinned
-Chromiums by hand, as five statements:
-`tree=$(scripts/playwright-tree.sh) && floor=$(scripts/node.sh floor) && newest=$(scripts/chromium.sh newest) && cfloor=$(scripts/chromium.sh floor) && CREWLET_TEST_PLAYWRIGHT_TREE="$tree" CREWLET_TEST_NODE_FLOOR="$floor" CREWLET_TEST_CHROMIUM="$newest" CREWLET_TEST_CHROMIUM_FLOOR="$cfloor" go test ./internal/browser/boxhelper/...`
+loop of the browser's packages, the box helper's and the hub's, names it, the
+floor Node and both pinned Chromiums by hand, as five statements:
+`tree=$(scripts/playwright-tree.sh) && floor=$(scripts/node.sh floor) && newest=$(scripts/chromium.sh newest) && cfloor=$(scripts/chromium.sh floor) && CREWLET_TEST_PLAYWRIGHT_TREE="$tree" CREWLET_TEST_NODE_FLOOR="$floor" CREWLET_TEST_CHROMIUM="$newest" CREWLET_TEST_CHROMIUM_FLOOR="$cfloor" go test ./internal/browser/...`
 A bare `go test` without them skips those cases, saying so, and runs the rest.
 `make check`'s `playwright-tree-test` is the recipe's own suite.
 
@@ -576,7 +576,12 @@ The prerequisites that legitimately vary by machine:
   floor adds nothing (`Newest`). Each box installs the Playwright tree with
   that Node's own npm, offline, from the suite tree's npm cache or a stand-in
   registry on 127.0.0.1, as `TestTheLockInstallsWithEachNodesOwnNpm` installs
-  it with each.
+  it with each. The helper's live view (`internal/browser/boxhelper/live`: the
+  screen, the tabs, the check-in and the job's relay) runs the same way, and
+  two suites outside it run the real relay: `internal/browser/screen` carries
+  a real box's screen across the real bridge to a hub, and
+  `internal/sandbox/executor` has a run's own script start the relay and dial
+  a bridge on the token of the session its box started.
 
 - **`npm`** builds and tests the dashboard. Vitest runs its assertions (the
   wire protocol, the router's history rules, the ordering comparators, the

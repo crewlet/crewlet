@@ -144,6 +144,13 @@ type Spec struct {
 	// never written back.
 	CredentialRules map[string]harnessprofile.FileRule
 
+	// Secrets is every value the launch hands the box from a credential
+	// position ([HandedSecrets.Values]). A container box's home cache
+	// ([Local.CreateProvisioned]) caches no step that writes one into a file,
+	// and keeps no home holding one. Set by [Coordinator.Launch], never by a
+	// caller, and never written into a box.
+	Secrets []string
+
 	// Repos are the repositories on Gitlet this run is
 	// given, each resolved at launch ([RunRepo]), at most [MaxRunRepos]. Empty
 	// for a run that clones nothing from Gitlet — a repository on
@@ -1249,17 +1256,22 @@ type RunRequest struct {
 	// names the job's own endpoint.
 	SkillLoads SkillWiring
 
+	// Browser is where the run's browser relay posts its screen — see
+	// [BrowserWiring]. Set only for a browser ready at or above the floor;
+	// the zero value starts no relay. NEVER PERSISTED, for the reason Steer
+	// is not.
+	Browser BrowserWiring
+
 	// FreshWiring is how the run's harness reaches the seat's tools where its
 	// script starts a session of its own in place of the one Resume names:
-	// MCPServers, Steer and SkillLoads as they are but under the job's OTHER
-	// bridge token, which the bridge reads as the box having started a session
-	// of its own (internal/api/mcpbridge). The run's script installs exactly
-	// one of the two once its restore settles and removes the other before its
-	// harness starts, so the token the harness dials IS the box's word on which
-	// session it started, one the run's model can neither forge nor take back.
-	// Nil where Resume is empty (a runner refuses a run that sets it) and where
-	// the run has no bridge to tell. NEVER PERSISTED, for the reason Steer is
-	// not.
+	// MCPServers, Steer, SkillLoads and Browser as they are but under the job's
+	// OTHER bridge token, which the bridge reads as the box having started a
+	// session of its own (internal/api/mcpbridge). The run's script installs
+	// exactly one of the two once its restore settles and removes the other
+	// before its harness starts, so the token the harness dials IS the box's
+	// word on which session it started, one the run's model can neither forge
+	// nor take back. Nil where Resume is empty (a runner refuses a run that
+	// sets it) and where the run has no bridge to tell. NEVER PERSISTED.
 	FreshWiring *Wiring
 
 	// Attribution is the credit every commit the run authors as itself
@@ -1392,13 +1404,28 @@ type CommitAttribution struct {
 
 // Wiring is how a run's harness reaches the seat's tools and the engine's: its
 // MCP servers, the tool bridge among them, where it asks for its turn's notes,
-// and where it reports a skill it loaded — the three parts of a run's request
-// that name the job's bridge endpoint ([RunRequest.FreshWiring]).
+// where it reports a skill it loaded, and where its browser's relay posts —
+// the parts of a run's request that name the job's bridge endpoint
+// ([RunRequest.FreshWiring]).
 type Wiring struct {
 	MCPServers map[string]MCPServer
 	Steer      SteerWiring
 	SkillLoads SkillWiring
+	Browser    BrowserWiring
 }
+
+// BrowserWiring is where a run's browser relay posts its browser's screen:
+// the URL of the bridge's browser routes for the job, the endpoint the box
+// already dials with the routes' suffix, and the job's launch, which its
+// check-ins name. The engine fills it from the names its bridge serves, so the
+// box and the bridge cannot disagree about them (internal/api/mcpbridge).
+type BrowserWiring struct {
+	URL string
+	Job string
+}
+
+// Set reports whether the wiring names a route a relay could reach.
+func (w BrowserWiring) Set() bool { return w.URL != "" && w.Job != "" }
 
 // SteerWiring is where a run's harness asks for its turn's notes: one tool of the
 // MCP server the run's tool bridge is ([RunRequest.MCPServers]), which a hook

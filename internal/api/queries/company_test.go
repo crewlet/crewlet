@@ -2617,6 +2617,89 @@ func TestTheAtlassianOrganizationClaimsNoIngress(t *testing.T) {
 	}
 }
 
+// A HELD FORGE RELAY IS NOT SILENT: the row and the Atlassian card both say
+// what holds it, in the route's words, field included. Mutation: drop the
+// row's held field or the status's Held and a check goes red.
+func TestAHeldForgeRelayNamesTheFieldThatClearsIt(t *testing.T) {
+	t.Parallel()
+	const why = "Forge relay events for Jira are refused until integrations.jira.cloud_id (with site_url) is set"
+	cfg := company(t)
+	cfg.Integrations.ForgeAppID = "ari:cloud:ecosystem::app/a1b2"
+	body := asMap(t, answer(t, queries.Sources{
+		Company:   companySource(t, cfg),
+		Converges: func(integration.Kind) bool { return false },
+		Held: func(context.Context) map[string]string {
+			return map[string]string{"forge": why}
+		},
+	}, "integrations", nil))
+	if got := surfacesOf(t, body)["forge"]["held"]; got != why {
+		t.Errorf("forge held = %v, want %q", got, why)
+	}
+	for _, tool := range rowsOf(t, body["tools"]) {
+		if tool["key"] == "atlassian" {
+			if tool["state"] != "attention" || tool["reason"] != why {
+				t.Errorf("atlassian card = %v, want attention naming the field", tool)
+			}
+			return
+		}
+	}
+	t.Fatal("no atlassian roll-up")
+}
+
+// A FORGE LOOKUP HOLD IS THE FLEET'S, NOT ONE NODE'S: a node that never looked
+// the site up still shows it, from the Jira pass's finding in the shared
+// status store, beside the static hold config names, each once. Mutation:
+// read the hold only from this node's Held, or add a finding already named,
+// and a check goes red.
+func TestAForgeLookupHoldShowsOnANodeThatNeverAskedTheSite(t *testing.T) {
+	t.Parallel()
+	const (
+		lookup = "Forge relay events for Jira are refused: the site's cloud id could not be read " +
+			"from https://acme.atlassian.net/_edge/tenant_info (HTTP 502); check the site is " +
+			"reachable, or set integrations.jira.cloud_id with site_url in place of url"
+		static = "Forge relay events for Confluence are refused until " +
+			"integrations.confluence.cloud_id (with site_url) is set"
+	)
+	finding := func(detail string) integration.Finding {
+		return integration.Finding{Kind: integration.FindingIngressBlocked, Title: config.ForgeHoldTitle, Detail: detail}
+	}
+	cfg := company(t)
+	cfg.Integrations.ForgeAppID = "ari:cloud:ecosystem::app/a1b2"
+	for _, tc := range []struct {
+		name  string
+		local map[string]string
+		want  string
+	}{
+		{"no hold of its own", map[string]string{}, lookup + "; " + static},
+		{"the static hold of its own", map[string]string{"forge": static}, static + "; " + lookup},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := asMap(t, answer(t, queries.Sources{
+				Company:   companySource(t, cfg),
+				Converges: func(integration.Kind) bool { return true },
+				Held:      func(context.Context) map[string]string { return tc.local },
+				Reconciles: func(context.Context) []integration.State {
+					return []integration.State{
+						{Kind: integration.KindJira, Report: integration.Report{Phase: integration.PhaseReady},
+							Findings: []integration.Finding{finding(lookup)}},
+						{Kind: integration.KindConfluence, Report: integration.Report{Phase: integration.PhaseReady},
+							Findings: []integration.Finding{finding(static)}},
+					}
+				},
+			}, "integrations", nil))
+			if got := surfacesOf(t, body)["forge"]["held"]; got != tc.want {
+				t.Errorf("forge held = %v, want %q", got, tc.want)
+			}
+			for _, tool := range rowsOf(t, body["tools"]) {
+				if tool["key"] == "atlassian" && tool["state"] != "attention" {
+					t.Errorf("atlassian card = %v, want attention", tool)
+				}
+			}
+		})
+	}
+}
+
 // THE FORGE RELAY ROUTES AS THE PRODUCT IT RELAYS, and the row has to answer
 // for that rather than for its own name.
 //

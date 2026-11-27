@@ -3,11 +3,12 @@
 // Playwright over a pipe, as launch.json says, kills a stale Chromium holding
 // the profile first, holds a required sandbox to the command line the kernel
 // holds, launches it again after a crash within a bound, serves it to the
-// model through Playwright MCP on browser.sock, and on TERM closes it,
-// killing its process group past a grace. Its process keeps a rejection
-// policy of its own. internal/browser/boxhelper's package doc carries the
-// argument.
+// model through Playwright MCP on browser.sock, tells what attaches to it what
+// it does, and on TERM closes it, killing its process group past a grace. Its
+// process keeps a rejection policy of its own. internal/browser/boxhelper's
+// package doc carries the argument.
 
+import { randomBytes } from "node:crypto"
 import fs from "node:fs"
 import fsp from "node:fs/promises"
 import os from "node:os"
@@ -24,10 +25,10 @@ import { load } from "./tree.mjs"
 const LOG_MAX = 1 << 20
 const ENTRY_MAX = 512
 
-// run is the supervisor as its own process: its log in supervisor.log, its one
-// line to ensure on fd 3, and its exit, 1 on a first launch that failed and 0
-// once stopped.
-export async function run(file) {
+// run is the supervisor as its own process, with attachments: its log in
+// supervisor.log, its one line to ensure on fd 3, and its exit, 1 on a first
+// launch that failed and 0 once stopped.
+export async function run(file, attachments = []) {
   const clock = realClock
   const io = {
     clock,
@@ -43,7 +44,7 @@ export async function run(file) {
     },
     exit: (code) => process.exit(code),
   }
-  const s = await supervise(file, io)
+  const s = await supervise(file, io, attachments)
   if (s.state === "failed") io.exit(1)
   await s.stopped
   io.exit(0)
@@ -53,8 +54,16 @@ export async function run(file) {
 // starts the supervisor for the launch in file, and answers it once its first
 // launch is ready or failed. io is {clock, fs, log, report, exit}: fs is the
 // file system it reads a profile's lock through.
-export async function supervise(file, io) {
-  const s = new Supervisor(file, io)
+//
+// Each of attachments is {attach(supervisor)}, which answers, once what it
+// serves can be found and with nothing awaited of the browser, the hooks it
+// is told by, each optional: onLaunched(context), each browser the supervisor
+// serves, the first at once; onState(state); onModel(job), the model
+// connection's, undefined once it closes; onTabs(job, action, answer), each
+// browser_tabs call that moved the current tab (serve.mjs); and close(), first
+// on a stop, waited for by nothing.
+export async function supervise(file, io, attachments = []) {
+  const s = new Supervisor(file, io, attachments)
   policy(s, io)
   await s.start()
   return s
@@ -79,13 +88,18 @@ function policy(s, io) {
 }
 
 // Supervisor is the box's browser and the record of it in supervisor.json.
+// boot is drawn once and outlives every relaunch, so what an attachment counts
+// under it survives a crash and starts again with a new supervisor.
 export class Supervisor {
-  constructor(file, io) {
+  constructor(file, io, attachments = []) {
     this.file = file
     this.folder = path.dirname(file)
     this.io = io
     this.clock = io.clock
     this.fs = io.fs
+    this.boot = randomBytes(8).toString("hex")
+    this.attachments = attachments
+    this.attached = []
     this.started = this.clock.now()
     this.state = "starting"
     this.relaunches = []
@@ -126,6 +140,21 @@ export class Supervisor {
     }
     // A stop that came while the browser launched closes it: nothing is served.
     if (this.stopping) return
+    this.serving = this.serveBrowser(launch, mcp)
+    await this.serving
+    // A stop that came while it began serving closes what it opened, once
+    // that has settled: never ready.
+    if (this.stopping) return
+    await this.setState("ready")
+    this.io.report(`ready ${this.current.version}`)
+  }
+
+  // serveBrowser listens on browser.sock, then attaches each attachment,
+  // before the supervisor says ready, so what it serves is there to be found
+  // when a job starts on that answer, and tells it the browser served now. One
+  // that fails is logged and left out: what attaches never costs the model its
+  // browser.
+  async serveBrowser(launch, mcp) {
     this.server = await serve({
       socket: launch.sockets.browser,
       protocol: launch.protocol,
@@ -137,9 +166,40 @@ export class Supervisor {
       createConnection: mcp.createConnection,
       context: () => this.context(),
       config: mcpConfig(launch),
+      onModel: (job) => this.tell("onModel", job),
+      onTabs: (job, action, answer) => this.tell("onTabs", job, action, answer),
     })
-    await this.setState("ready")
-    this.io.report(`ready ${this.current.version}`)
+    for (const a of this.attachments) {
+      if (this.stopping) return
+      let hooks
+      try {
+        hooks = await a.attach(this)
+      } catch (err) {
+        this.io.log("attachment_failed", { hook: "attach", error: describe(err) })
+        continue
+      }
+      if (hooks === undefined) continue
+      this.attached.push(hooks)
+      if (this.current !== undefined) this.tellOne(hooks, "onLaunched", this.current.context)
+    }
+  }
+
+  // tell calls hook on every attachment with args.
+  tell(hook, ...args) {
+    for (const hooks of this.attached) this.tellOne(hooks, hook, ...args)
+  }
+
+  // tellOne calls hooks' hook, if it has one, with args, waiting for nothing:
+  // a hook that throws or rejects is logged, and costs no other attachment,
+  // nor the supervisor, anything.
+  tellOne(hooks, hook, ...args) {
+    const failed = (err) => this.io.log("attachment_failed", { hook, error: describe(err) })
+    try {
+      const told = hooks[hook]?.(...args)
+      if (typeof told?.then === "function") told.then(undefined, failed)
+    } catch (err) {
+      failed(err)
+    }
   }
 
   // launchBrowser launches Chromium on the profile, as launch.json says, once
@@ -253,6 +313,7 @@ export class Supervisor {
           return
         }
         this.current = g
+        this.tell("onLaunched", g.context)
         await this.setState("ready")
       },
       (err) => {
@@ -278,16 +339,19 @@ export class Supervisor {
     return this.current.context
   }
 
-  // stop closes its socket and every model connection, then the browser
-  // through Playwright, Chromium's own close over its pipe, so it writes its
-  // profile; past stop_grace_ms it kills Chromium's process group. Then the
-  // record says stopped. Whatever a step meets, the stop ends in stopped,
-  // which the process exits on.
+  // stop closes every attachment, then its socket and every model
+  // connection, then the browser through Playwright, Chromium's own close over
+  // its pipe, so it writes its profile; past stop_grace_ms it kills
+  // Chromium's process group. Then the record says stopped. Whatever a step
+  // meets, the stop ends in stopped, which the process exits on.
   stop() {
     if (this.stopping) return this.stopped
     this.stopping = true
     void (async () => {
       try {
+        await this.serving?.catch(() => {})
+        this.tell("close")
+        this.attached = []
         await this.server?.close()
         await this.launching?.catch(() => {})
         while (this.relaunching !== undefined) await this.relaunching
@@ -331,6 +395,7 @@ export class Supervisor {
       this.io.log("record_failed", { state, error: describe(err) })
     }
     for (const listener of this.listeners) listener(state)
+    this.tell("onState", state)
   }
 
   // record writes supervisor.json whole, through the module's io, one write
@@ -345,6 +410,7 @@ export class Supervisor {
         helper: this.launch?.helper,
         launch_digest: this.launch?.digest,
         pid: process.pid,
+        boot: this.boot,
         started_ms: this.started,
         state: this.state,
         chromium:

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/recordseal"
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -41,7 +42,8 @@ func askDirectly(t *testing.T, f *fleet, node string, floors []statelog.Position
 	defer cancel()
 	deadline, _ := ctx.Deadline()
 	req, sealed := signed(t, fleetEnvelopes, request{Op: opTasks.spec.name, Args: args,
-		Floors: floors, Deadline: deadline, From: "agent-9"})
+		Floors: floors, Deadline: deadline, BudgetMS: signedask.WaitMS(gitlet.ReplyMargin + askerSlack),
+		From: "agent-9"})
 	replies, err := f.start(t).Ask(ctx, Subject(node), sealed, 1)
 	left := time.Until(deadline)
 	if err != nil || len(replies) != 1 {

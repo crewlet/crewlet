@@ -91,14 +91,16 @@ type relaunchTargetReply struct {
 	// Entry and LaunchRouted are the picked member's
 	// ([sandbox.RelaunchTarget.Entry]); an older holder's answer names
 	// neither, which holds the box's copy to no entry it ran under.
-	Entry        string            `json:"entry,omitempty"`
-	LaunchRouted bool              `json:"launch_routed,omitempty"`
-	Why          string            `json:"why,omitempty"`
-	Undecided    bool              `json:"undecided,omitempty"`
-	NoKept       string            `json:"no_kept,omitempty"`
-	Restores     bool              `json:"restores,omitempty"`
-	RestoreWhy   string            `json:"restore_why,omitempty"`
-	RestoreLoss  executorkeep.Loss `json:"restore_loss,omitempty"`
+	Entry        string `json:"entry,omitempty"`
+	LaunchRouted bool   `json:"launch_routed,omitempty"`
+	// At is the holder's clock as it answered ([sandbox.RelaunchTarget.At]).
+	At          time.Time         `json:"at,omitzero"`
+	Why         string            `json:"why,omitempty"`
+	Undecided   bool              `json:"undecided,omitempty"`
+	NoKept      string            `json:"no_kept,omitempty"`
+	Restores    bool              `json:"restores,omitempty"`
+	RestoreWhy  string            `json:"restore_why,omitempty"`
+	RestoreLoss executorkeep.Loss `json:"restore_loss,omitempty"`
 }
 
 // relaunchReply is the holder's answer. It names its owner because a
@@ -260,7 +262,7 @@ func (r relaunchReply) targets(node string, asked []relaunchSession) []sandbox.R
 		}
 		t := r.Targets[i]
 		out[i] = sandbox.RelaunchTarget{Harness: t.Harness, Placement: sandbox.Placement(t.Placement),
-			Node: t.Node, Entry: t.Entry, LaunchRouted: t.LaunchRouted, Why: t.Why, Undecided: t.Undecided,
+			Node: t.Node, Entry: t.Entry, LaunchRouted: t.LaunchRouted, At: t.At, Why: t.Why, Undecided: t.Undecided,
 			NoKept: t.NoKept,
 			Restorer: &answeredRestore{archive: session.Archive,
 				answer: sandbox.SessionContinuity{Continues: t.Restores, Loss: t.RestoreLoss, Why: t.RestoreWhy}}}
@@ -330,7 +332,7 @@ func (r relaunchTargets) answer(raw []byte) ([]byte, error) {
 		restores := target.Restores(session.Archive.archive())
 		reply.Targets = append(reply.Targets, relaunchTargetReply{Harness: target.Harness,
 			Placement: string(target.Placement), Node: target.Node, Entry: target.Entry,
-			LaunchRouted: target.LaunchRouted, Why: target.Why,
+			LaunchRouted: target.LaunchRouted, At: target.At, Why: target.Why,
 			Undecided: target.Undecided, NoKept: target.NoKept, Restores: restores.Continues,
 			RestoreWhy: restores.Why, RestoreLoss: restores.Loss})
 	}

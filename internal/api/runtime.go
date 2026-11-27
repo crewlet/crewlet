@@ -149,6 +149,11 @@ type RuntimeState struct {
 	// Nil is "cannot say", exactly as above, and an empty slice is the real
 	// claim that nothing here can verify anything.
 	VerifiableSources []string
+
+	// IngressHolds names, by surface, why a route refuses every delivery of
+	// a kind although its material resolved: a Forge product with no cloud
+	// id ([engine.Engine.IngressHolds]). Nil is "cannot say".
+	IngressHolds map[string]string
 }
 
 // FleetState is what the health ENVELOPE says about the fleet beyond this

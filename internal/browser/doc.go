@@ -5,8 +5,9 @@
 // [ExpectedChromiumVersion]) and whether a box's is older ([Outdated]), the
 // closed values of a box's ensure answer ([EnsureReason] and its fellows), the
 // name of a seat's browser server ([ServerName]) and where a seat's browser
-// may run, and that no Go but the artifact render's client speaks DevTools
-// (ADR-0165).
+// may run, the wire a box's relay posts its browser's screen on ([FrameMeta]
+// and its fellows), and that no Go but the artifact render's client speaks
+// DevTools (ADR-0165).
 //
 // # The floor
 //
@@ -137,6 +138,23 @@
 // pin expects is recorded so, since a floor at the patch level would withhold
 // every image's browser each time the pin moves.
 //
+// # The box's screen on the wire
+//
+// A job's relay in the box, started on one file ([RelayWiring]), posts its
+// browser to the run's bridge: frames, each a JPEG with its metadata
+// ([FrameMeta]), the box's state of its tabs ([State]) and a check-in
+// ([Checkin]); and it holds one poll, whose answer says whether anybody watches
+// ([PollAnswer]). The model holds a shell in the box, so anything there can
+// post. Every post is bounded, refused whole rather than trimmed (an [Invalid]
+// says why), read into closed values and never decoded past a JPEG's frame
+// header ([CheckJPEG]); a key this build does not declare is ignored, since
+// each is a report, and a later version refused. The per-job hub that takes
+// them on the seat's holder, internal/browser/screen, decides nothing from what
+// the box says. Its bounds ([MaxFrameBytes] and its fellows) decide both sides:
+// the box's config.json is rendered from them. A ready browser below
+// [MinChromiumMajor] has no live view: the suite proves the box's screen on the
+// two pins, and no further down.
+//
 // # DevTools only through the artifact render's client
 //
 // DevTools is full control of a browser — its pages' script, storage and
@@ -159,7 +177,7 @@
 // not the comments, of every package of another module the module's builds
 // and tests link (go list -deps -test), since a third-party DevTools client
 // names its methods in strings. It fails on any command or event either
-// pinned Chromium's own protocol describes (chromiumtest.Methods): the names
+// pinned Chromium's own protocol describes (chromiumtest.Protocol): the names
 // come from each pin, so the test spells none, and the floor's arm finds the
 // names the newest has dropped. It is a tripwire on Go text, not a proof: a
 // name built at run time — by Sprintf, Join, a constant joined to a literal,

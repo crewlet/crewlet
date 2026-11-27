@@ -452,7 +452,7 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 	for _, placement := range config.Placements {
 		// NO RESOLVER: this asks whether each backend can be CONSTRUCTED,
 		// and the catalogue holds no reference to resolve.
-		provider, err := buildSandboxProvider(spec, nil, placement)
+		provider, err := buildSandboxProvider(spec, nil, placement, nil)
 		if err != nil {
 			t.Errorf("run_in %q is accepted by the config and cannot be "+
 				"built: %v", placement, err)
@@ -481,7 +481,7 @@ func TestTheRuntimesDeclaredEnvironmentIsResolvedAtTheEdge(t *testing.T) {
 			"AWS_ROLE_ARN":  "${REGISTRY_ROLE}",
 			"AWS_PROFILE":   "registry-pull",
 		},
-	}}, env, config.PlacementContainer).RuntimeEnv
+	}}, env, config.PlacementContainer, nil).RuntimeEnv
 	want := map[string]string{
 		"SSH_AUTH_SOCK": "/run/user/1000/ssh-agent.sock",
 		"AWS_ROLE_ARN":  "arn:aws:iam::123456789012:role/pull",
@@ -526,10 +526,10 @@ roles:
 			t.Fatalf("the fixture does not parse: %v", err)
 		}
 		spec := c.Providers.Sandbox
-		if got := localOptions(spec, nil, config.PlacementDirect).HostGrace; got != tc.local {
+		if got := localOptions(spec, nil, config.PlacementDirect, nil).HostGrace; got != tc.local {
 			t.Errorf("%q hands the reaper %v, want %v", tc.line, got, tc.local)
 		}
-		manager, err := buildSandbox(c, nil, nil, nil)
+		manager, err := buildSandbox(c, nil, nil, nil, nil)
 		if err != nil || manager == nil {
 			t.Fatalf("buildSandbox = %v, %v", manager, err)
 		}
@@ -559,7 +559,7 @@ func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
 	t.Parallel()
 	spec := &config.SandboxProvider{Fake: true}
 	for _, placement := range config.Placements {
-		provider, err := buildSandboxProvider(spec, nil, placement)
+		provider, err := buildSandboxProvider(spec, nil, placement, nil)
 		if err != nil {
 			t.Fatalf("the double cannot serve %q: %v", placement, err)
 		}
@@ -1386,9 +1386,9 @@ func presentOnBuild(ctx context.Context, t *testing.T, backend coord.Backend, no
 // that lease in the same store, so the engine hands its coordinator its
 // incarnation, its lease store and the seat lease TTL in force. The lease is
 // claimed as the coordinator is built and released after its last keep, which
-// the engine's stop reaches after the drain. No lease store: no taker at all.
-// The store's clock is held still, so the deadline is exactly the TTL past the
-// claim.
+// the engine's stop reaches after the drain. No lease store: no taker, but the
+// incarnation still, the clock of what it stamps. The store's clock is held
+// still, so the deadline is exactly the TTL past the claim.
 //
 // Mutation: leave the incarnation, store or TTL off the coordinator's options,
 // build its lease on another TTL, or keep its stop off the engine's: red.
@@ -1455,10 +1455,12 @@ func TestTheEnginesCoordinatorHoldsThisProcesssTakerLease(t *testing.T) {
 			lease.Owner, lease.Epoch)
 	}
 
+	// WITH NO LEASE STORE, no taker lease, but the incarnation all the same: it
+	// names the clock of every instant the coordinator stamps on a run's row.
 	e.backends.Coord = nil
-	if opts := e.coordinatorOptions(nil, nil); opts.Takers != nil || opts.Incarnation != "" {
+	if opts := e.coordinatorOptions(nil, nil); opts.Takers != nil || opts.Incarnation != "node-a:1" {
 		t.Errorf("an engine with no lease store hands its coordinator %#v as its taker lease's store, under %q; "+
-			"want neither", opts.Takers, opts.Incarnation)
+			"want none, under this process's incarnation", opts.Takers, opts.Incarnation)
 	}
 }
 

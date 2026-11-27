@@ -887,7 +887,7 @@ func TestTheRedeliveryGuardEvictsRatherThanGrowing(t *testing.T) {
 func TestAnExhaustedBudgetSkipsTheWholePass(t *testing.T) {
 	t.Parallel()
 	w := &stubWorker{name: "persist"}
-	r := reflectorGated(t, func(context.Context, *org.Role) (bool, error) {
+	r := reflectorGated(t, func(context.Context, string) (bool, error) {
 		return false, nil
 	}, devOrg(), &recordingPub{}, w)
 
@@ -901,22 +901,21 @@ func TestAnExhaustedBudgetSkipsTheWholePass(t *testing.T) {
 	}
 }
 
-// AN UNREACHABLE COUNTER REFLECTS ANYWAY. Unknown is not "no": a coordination
-// blip must not silently stop a company learning, and what keeps that from
-// also being free is that the completion is still charged on the way out.
-func TestAnUnreachableCounterDoesNotStopReflection(t *testing.T) {
+// AN UNREADABLE COUNTER IS NO ROOM. Reflection is optional work, so declining
+// it costs one turn's learning, while running it against a ceiling nobody
+// could read is spend past a limit the company set (#1838).
+func TestAnUnreadableCounterSkipsReflection(t *testing.T) {
 	t.Parallel()
 	w := &stubWorker{name: "persist"}
-	r := reflectorGated(t, func(context.Context, *org.Role) (bool, error) {
+	r := reflectorGated(t, func(context.Context, string) (bool, error) {
 		return false, errors.New("coordination store unreachable")
 	}, devOrg(), &recordingPub{}, w)
 
-	if got := r.Reflect(t.Context(), settledTurn(), events.TraceContext{}); got.Skip != "" {
-		t.Fatalf("skip = %q, want the pass to run", got.Skip)
+	if got := r.Reflect(t.Context(), settledTurn(), events.TraceContext{}); got.Skip != learning.SkipBudgetUnknown {
+		t.Fatalf("skip = %q, want %q", got.Skip, learning.SkipBudgetUnknown)
 	}
-	if len(w.turns()) != 1 {
-		t.Errorf("worker ran %d times; a store blip must not cost the company "+
-			"its learning", len(w.turns()))
+	if len(w.turns()) != 0 {
+		t.Errorf("a worker ran %d times against a budget nobody could read", len(w.turns()))
 	}
 }
 
@@ -931,7 +930,7 @@ func TestABudgetSkipLeavesTheTurnReflectableLater(t *testing.T) {
 	t.Parallel()
 	w := &stubWorker{name: "persist"}
 	var allowed atomic.Bool
-	r := reflectorGated(t, func(context.Context, *org.Role) (bool, error) {
+	r := reflectorGated(t, func(context.Context, string) (bool, error) {
 		return allowed.Load(), nil
 	}, devOrg(), &recordingPub{}, w)
 
@@ -954,7 +953,7 @@ func TestABudgetSkipLeavesTheTurnReflectableLater(t *testing.T) {
 func TestTheMarkStillCollapsesARealRedelivery(t *testing.T) {
 	t.Parallel()
 	w := &stubWorker{name: "persist"}
-	r := reflectorGated(t, func(context.Context, *org.Role) (bool, error) {
+	r := reflectorGated(t, func(context.Context, string) (bool, error) {
 		return true, nil
 	}, devOrg(), &recordingPub{}, w)
 

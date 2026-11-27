@@ -1061,15 +1061,16 @@ func (e *Engine) parkOnCall(turnID, job string,
 
 // openBridge opens a job's bridge session under the job's own name, with its
 // ledger and its note inbox bound to the same job, and answers what the box is
-// given for it: its server entry, and where its harness asks for its turn's
-// notes ([sandbox.LaunchRequest.Opened]), for the launch and for a run taken
-// over while it works ([Engine.reopenAgentRun]), whose box already holds the
-// endpoint. The session takes what the job states of its calls, set here: numbered after
-// the log's, ids read under its key, parked before its ceiling, its parks counted after the
-// row's ([sandbox.OpenedJob]). THE INBOX IS BOUND BEFORE THE BRIDGE FILES THE OPENING, which
-// a recovery's box reaches at once: bound after Open, it was served unbound until then.
-// The caller closes the inbox of a session that does not open. The package doc's "An
-// OpenCode confirmation is recorded once, and reported" says why.
+// given for it: its server entry, where its harness asks for its turn's notes and
+// where its browser's relay posts ([sandbox.LaunchRequest.Opened]), for the launch and
+// for a run taken over while it works ([Engine.reopenAgentRun]), whose box already
+// holds the endpoint. The session takes what the job states of its calls, set here: numbered
+// after the log's, ids read under its key, parked before its ceiling, its parks counted after
+// the row's ([sandbox.OpenedJob]). THE INBOX IS BOUND, AND THE JOB'S SCREEN SET, BEFORE THE
+// BRIDGE FILES THE OPENING, which a recovery's box reaches at once: bound after Open, it was
+// served unbound until then. The caller closes the inbox of a session that does not open;
+// this, its screen. The package doc's "An OpenCode confirmation is recorded once, and
+// reported" says why.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
 	inbox *runInbox, job sandbox.OpenedJob,
 ) (_ sandbox.Opening, err error) {
@@ -1077,7 +1078,7 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	ledger.bind(job)
 	// WHO RUNS THE SESSION'S CALLS, as every entry it writes ahead of a call
 	// names it: what a collection on any node reads this process's liveness by.
-	ledger.runner = e.callRunner()
+	ledger.runner, ledger.clock = e.callRunner(), e.incarnation
 	// AND WHERE ITS HARNESS'S CONNECTION IS HELD until its row says so, for a
 	// collection here or the seat's release ([connectMarks]).
 	ledger.marks, ledger.seat = e.connectMarks, s.Handle
@@ -1085,8 +1086,21 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	s.ParkedCalls = job.ParkedCalls
 	s.Park = e.parkOnCall(s.RunID, job.LaunchID)
 	inbox.Bind(ctx, job.LaunchID, sessionFence(s.Surface))
+	hub, err := e.browserHub(s, job)
+	if err != nil {
+		return sandbox.Opening{}, fmt.Errorf("run %s's job %s's browser screen: %w", s.RunID, job.LaunchID, err)
+	}
+	// NEVER A TYPED NIL, which the bridge would serve as a screen.
+	s.Browser = nil
+	if hub != nil {
+		s.Browser = hub
+	}
 	endpoint := e.bridge.Open(ctx, s)
 	if endpoint == "" {
+		// A SCREEN NO OPENING FILED is closed here, where nothing else would.
+		if hub != nil {
+			hub.Close()
+		}
 		// UNREACHABLE past the refusals LaunchExecutor makes by name, which
 		// are every case Open refuses — said rather than assumed, because a
 		// box launched without its endpoint has none of the seat's tools.
@@ -1104,6 +1118,12 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// tool past a count of them weighs the box's browser against
 	// ([sandbox.Opening.Tools]).
 	opening.Tools = s.Listed()
+	// A LAUNCH'S SCREEN WAITS FOR ITS ENSURE, told through the opening once
+	// ensure answered ready at or above the floor; one built serving needs no
+	// word ([sandbox.Opening.BrowserReady]).
+	if hub != nil && job.Browser == sandbox.JobBrowserAsked {
+		opening.BrowserReady = hub.Serve
+	}
 	// AND THE SAME UNDER THE JOB'S OTHER TOKEN, for a session its box starts of
 	// its own in place of the one its launch continues: the token its harness
 	// dials is the box's word on which session it started
@@ -1134,9 +1154,9 @@ func (e *Engine) callRunner() string {
 // bridgeOpening is what a job's box is given at endpoint, one of its bridge
 // tokens: the bridge's servers ([bridgeServers]), each waited on for a call
 // as long as wait, where its harness asks for its turn's notes where steered,
-// and where it reports loading one of its skills where it is handed any —
-// under THE SAME NAMES THE BRIDGE SERVES, so the box and the bridge cannot
-// disagree about where they are.
+// where it reports loading one of its skills where it is handed any, and
+// where its browser's relay posts where it has a screen — under THE SAME
+// NAMES THE BRIDGE SERVES, so the box and the bridge cannot disagree.
 func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait time.Duration) sandbox.Opening {
 	opening := sandbox.Opening{Servers: bridgeServers(endpoint, s, wait)}
 	if steered {
@@ -1146,6 +1166,9 @@ func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait tim
 	if len(s.Skills) > 0 {
 		opening.SkillLoads = sandbox.SkillWiring{Server: config.ToolServerName,
 			Tool: mcpbridge.SkillTool, URL: mcpbridge.SkillURL(endpoint)}
+	}
+	if s.Browser != nil {
+		opening.Browser = sandbox.BrowserWiring{URL: mcpbridge.BrowserURL(endpoint), Job: s.Launch}
 	}
 	return opening
 }

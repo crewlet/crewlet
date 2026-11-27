@@ -82,9 +82,11 @@ func TestAParkedRunSaysWhomItIsPutToAndWhoMayAnswerIt(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
 	s := standingSources(t, now)
+	// HELD BY THIS PROCESS, so its deadline is read on its own clock.
+	s.Incarnation = "node-a:reader"
 	held := sandbox.HeldCall{ID: "0190f3a8-0000-7000-8000-0000000000a1", LaunchID: "launch-a", Server: "crewlet",
 		Tool: "ask_to_merge", Raw: "ask_to_merge", Fixed: true, Approvers: sandbox.HeldApproversRelease,
-		Act: string(delegated.KindPRMerge), HeldAt: now.Add(-5 * time.Minute),
+		Act: string(delegated.KindPRMerge), HeldAt: now.Add(-5 * time.Minute), HeldClock: s.Incarnation,
 		Delegation: &sandbox.HeldDelegation{Rule: 1, Delegates: []string{"release-manager"}}}
 	run := sandbox.PendingRun{TurnID: "t-merge", LaunchID: "launch-a", AgentHandle: "pm",
 		AgentID: uuid.NewSHA1(uuid.Nil, []byte("pm")).String(), Status: sandbox.StatusAwaiting,
