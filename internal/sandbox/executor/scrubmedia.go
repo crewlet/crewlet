@@ -648,7 +648,10 @@ type payloadScrub struct {
 	str   *jsonStringWriter
 	span  *payloadSpan
 	class mediaRun
-	held  []byte
+	// held is the text held while it is classed, in room the rewrite
+	// lends (room) and gets back grown, so each string reuses it.
+	held []byte
+	room *[]byte
 	// classing says the text may still turn out no payload.
 	classing bool
 	// text is the ordinary scrub, once the text is no payload, or every
@@ -668,12 +671,11 @@ type payloadScrub struct {
 const payloadHeldBytes = mediaMinBytes + len(mediaRun{}.head) + textWholeBytes
 
 // payloadText is s's scrub of a string value str writes, span measuring it
-// where its text is a payload, held reusing *held's room ([payloadHeldBytes]).
+// where its text is a payload, held in *held's room, grown only as far as a
+// text needs it and never past [payloadHeldBytes]: a string of words, no
+// candidate past its first bytes, costs no mebibyte.
 func (s scrubber) payloadText(str *jsonStringWriter, span *payloadSpan, held *[]byte) *payloadScrub {
-	if cap(*held) < payloadHeldBytes {
-		*held = make([]byte, 0, payloadHeldBytes)
-	}
-	p := &payloadScrub{s: s, str: str, span: span, classing: true, held: (*held)[:0]}
+	p := &payloadScrub{s: s, str: str, span: span, classing: true, held: (*held)[:0], room: held}
 	p.class.begin()
 	return p
 }
@@ -698,7 +700,7 @@ func (p *payloadScrub) Write(b []byte) (int, error) {
 		}
 		return p.text.Write(b)
 	}
-	p.held = append(p.held, b...)
+	p.hold(b)
 	if !p.class.candidate() {
 		p.classing = false
 		return n, p.toText()
@@ -719,13 +721,30 @@ func (p *payloadScrub) Write(b []byte) (int, error) {
 	return n, nil
 }
 
+// hold appends b to the text held, growing the room by doubling up to
+// [payloadHeldBytes], so the room it hands back stays within that figure.
+func (p *payloadScrub) hold(b []byte) {
+	if need := len(p.held) + len(b); need > cap(p.held) {
+		grown := make([]byte, len(p.held), max(need, min(2*cap(p.held), payloadHeldBytes)))
+		copy(grown, p.held)
+		p.held = grown
+	}
+	p.held = append(p.held, b...)
+}
+
+// release hands back what is held, and the room to the rewrite.
+func (p *payloadScrub) release() []byte {
+	held := p.held
+	p.held = nil
+	*p.room = held[:0]
+	return held
+}
+
 // toText hands the text held so far, and every piece after it, to the
 // ordinary scrub.
 func (p *payloadScrub) toText() error {
 	p.text = p.s.text(p.str)
-	held := p.held
-	p.held = nil
-	_, err := p.text.Write(held)
+	_, err := p.text.Write(p.release())
 	return err
 }
 
@@ -737,9 +756,7 @@ func (p *payloadScrub) toPayload() error {
 	}
 	p.tee = newPayloadTee(p.out)
 	p.values = p.s.stream(p.tee)
-	held := p.held
-	p.held = nil
-	return p.payloadWrite(held)
+	return p.payloadWrite(p.release())
 }
 
 // payloadWrite hands b to the payload's by-value pass.

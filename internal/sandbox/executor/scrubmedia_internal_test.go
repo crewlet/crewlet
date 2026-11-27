@@ -905,17 +905,18 @@ func TestEveryRunThePayloadClassTakesIsWellFormed(t *testing.T) {
 var _ = holdsScrubTerm("payloads", "TestAPayloadsHoldIsWithinItsFigure")
 
 // A PAYLOAD'S HOLD IS WITHIN ITS FIGURE: a string read for a payload is held
-// in room the rewrite reuses, never past [payloadHeldBytes], however its
-// pieces fall, until it is decided. The "payloads" term counts it.
+// in room the rewrite reuses, grown only as far as its text needs and never
+// past [payloadHeldBytes], however its pieces fall. The "payloads" term counts
+// it, and a string of words costs no mebibyte.
 //
-// Mutation: hold it in room of its own, grown as it comes, and the case
-// goes red.
+// Mutation: hand the room back unkept, or allocate the figure up front, and a
+// case goes red.
 func TestAPayloadsHoldIsWithinItsFigure(t *testing.T) {
 	t.Parallel()
 	figure := termFigure(t, "payloads", 0, 0)
 	text := []byte("data:image/png;base64," + mediaPayload(54, 2*mediaMinBytes))
-	var held []byte
-	for _, piece := range []int{1, 7, 4 << 10, textWholeBytes} {
+	write := func(held *[]byte, text []byte, piece int) {
+		t.Helper()
 		var out rewriteOut
 		var str jsonStringWriter
 		var span payloadSpan
@@ -923,22 +924,38 @@ func TestAPayloadsHoldIsWithinItsFigure(t *testing.T) {
 			t.Fatal(err)
 		}
 		str.finding(&span)
-		p := newScrubber(nil).finding(&mediaPlan{}).payloadText(&str, &span, &held)
+		room := *held
+		p := newScrubber(nil).finding(&mediaPlan{}).payloadText(&str, &span, held)
 		for at := 0; at < len(text); at += piece {
 			if _, err := p.Write(text[at:min(at+piece, len(text))]); err != nil {
 				t.Fatal(err)
 			}
-			if int64(cap(p.held)) > figure || int64(cap(held)) > figure {
+			if int64(cap(p.held)) > figure {
 				t.Fatalf("a string read %d bytes at a time is held in %d bytes, past the figure %d", piece,
-					max(cap(p.held), cap(held)), figure)
+					cap(p.held), figure)
 			}
-			if len(p.held) > 0 && &p.held[0] != &held[:1][0] {
+			if len(p.held) > 0 && len(p.held) <= cap(room) && &p.held[0] != &room[:1][0] {
 				t.Fatalf("a string read %d bytes at a time is held in room of its own, not the rewrite's", piece)
 			}
 		}
 		if err := p.Close(); err != nil {
 			t.Fatal(err)
 		}
+		if int64(cap(*held)) > figure {
+			t.Fatalf("the rewrite keeps %d bytes of room, past the figure %d", cap(*held), figure)
+		}
+	}
+	var held []byte
+	words := []byte("a summary of words, no payload past its first bytes")
+	write(&held, words, len(words))
+	if cap(held) > len(words) {
+		t.Errorf("a string of %d bytes of words leaves the rewrite %d bytes of room", len(words), cap(held))
+	}
+	for _, piece := range []int{1, 7, 4 << 10, textWholeBytes} {
+		write(&held, text, piece)
+	}
+	if cap(held) < mediaMinBytes {
+		t.Errorf("the rewrite keeps %d bytes of room after a payload, want what it held reused", cap(held))
 	}
 }
 
