@@ -127,7 +127,7 @@ func TestAFailuresTailIsTheEndOfItsWholeStreamsRedaction(t *testing.T) {
 // A FAILURE'S TAIL IS NOT SHOWN PAST THE READ'S BOUND: a stream whose
 // redaction has not reached its end within [sandbox.FailureReadWait] on the
 // runner's clock, or by the bound its box read handed it
-// ([sandbox.RunHandle.StreamsReadBy]), or once its read's context ended, shows
+// ([sandbox.RunHandle.FailureReadBy]), or once its read's context ended, shows
 // none of it and says why and the time it was given, since an end the
 // redaction has not reached is no end of the stream's; one that reached it in
 // time is shown.

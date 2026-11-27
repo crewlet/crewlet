@@ -339,7 +339,7 @@ func serviceInstruments() []Instrument {
 				"show; `event_stream`; `whole_piece`, the result, report, session " +
 				"record or another file read whole; `session_record`, a harness's " +
 				"record walked for its notes and newest summary) and `reason` " +
-				"(`bound`, the read's time ran out first; `refused`, the redaction " +
+				"(`bound`, the error stream's read ran out of time first; `refused`, the redaction " +
 				"stream refused the text; `changed`, the file was cut or written over " +
 				"while it was read, or read short; `grown`, a file read whole grew " +
 				"meanwhile; `too_large`, past the whole-read cap; `not_regular`; " +

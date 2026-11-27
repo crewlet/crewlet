@@ -2,56 +2,35 @@ package executor
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/activityline"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // streamRead is a run's event stream read from its open, no further than the
-// size it was weighed at and no later than by on the runner's clock: what the
-// open found of a stream its job's writers may still add to, since a job ends
-// when its harness exits and a child it left can go on writing.
+// size it was weighed at: what the open found of a stream its job's writers
+// may still add to, since a job ends when its harness exits and a child it
+// left can go on writing. Nothing but the read's end ends it, so no short read
+// is ever taken for the stream.
 type streamRead struct {
 	body       io.Reader
 	src        io.Reader
 	size, read int64
-	now        func() time.Time
-	by         time.Time
-	done       <-chan struct{}
-	// past is a read its bound ended; change what became of the file once
-	// the read reached its size ([sandbox.ChangeOf]), short of it a change.
-	past   bool
-	began  time.Time
+	// change is what became of the file once the read reached its end
+	// ([sandbox.ChangeOf]), short of its size a change.
 	change sandbox.FileChange
 }
 
-// readStream is p read as a [streamRead] under ctx by by, zero for no bound
-// but ctx's own end.
-func (r *Runner) readStream(ctx context.Context, p *piece, by time.Time) *streamRead {
-	if d, ok := ctx.Deadline(); ok && (by.IsZero() || d.Before(by)) {
-		by = d
-	}
-	return &streamRead{body: p.body, src: io.LimitReader(p.body, p.size), size: p.size, now: r.now, by: by,
-		done: ctx.Done(), began: r.now()}
+// readStream is p read as a [streamRead].
+func readStream(p *piece) *streamRead {
+	return &streamRead{body: p.body, src: io.LimitReader(p.body, p.size), size: p.size}
 }
 
 func (s *streamRead) Read(p []byte) (int, error) {
-	if s.past || s.change != "" {
-		return 0, io.EOF
-	}
-	select {
-	case <-s.done:
-		s.past = true
-		return 0, io.EOF
-	default:
-	}
-	if !s.by.IsZero() && s.now().After(s.by) {
-		s.past = true
+	if s.change != "" {
 		return 0, io.EOF
 	}
 	n, err := s.src.Read(p)
@@ -70,25 +49,8 @@ func (s *streamRead) Read(p []byte) (int, error) {
 }
 
 // whole reports whether the read reached the stream's end as one version of
-// it, so its last line, unended, is a line: neither cut by its bound nor
-// still being written.
-func (s *streamRead) whole() bool { return !s.past && s.change == sandbox.FileUnchanged }
-
-// pastNote is what stands for a transcript whose stream's read its bound
-// ended: how long the read had, how much it read and of what.
-func (s *streamRead) pastNote() string {
-	return activityline.Words(activityline.TagNote, fmt.Sprintf("the run's transcript is not shown: the "+
-		"collection's read of its event stream ran past the %v it had, after %s of its %s",
-		max(s.by.Sub(s.began), 0).Round(time.Second), humanSize(s.read), humanSize(s.size)))
-}
-
-// pastError is why a run whose stream's read its bound ended said nothing of
-// how it ended, where its result is its stream's.
-func (s *streamRead) pastError() string {
-	return fmt.Sprintf("the collection's read of the run's event stream ran past the %v it had, after %s "+
-		"of its %s, before the stream said how the run ended",
-		max(s.by.Sub(s.began), 0).Round(time.Second), humanSize(s.read), humanSize(s.size))
-}
+// it, so its last line, unended, is a line: not still being written.
+func (s *streamRead) whole() bool { return s.change == sandbox.FileUnchanged }
 
 // unendedNote says a transcript is of a stream still being written when its
 // reading ended, cut where its redaction had settled.

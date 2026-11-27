@@ -5,7 +5,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 	"unsafe"
 
 	"github.com/crewlet/crewlet/internal/queue"
@@ -121,7 +120,7 @@ func TestTheStreamsLastLineIsKeptOnlyWhereItStandsInForTheResultFile(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		read, _, err := runner.decodeStream(t.Context(), stream, keep, time.Time{})
+		read, _, err := runner.decodeStream(stream, keep)
 		if err != nil {
 			t.Fatalf("decodeStream: %v", err)
 		}

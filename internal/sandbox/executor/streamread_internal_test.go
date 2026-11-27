@@ -2,10 +2,8 @@ package executor
 
 import (
 	"io"
-	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -20,82 +18,6 @@ func openCodeLines(n int) string {
 			string(rune('a'+i%26)) + `"}}` + "\n")
 	}
 	return b.String() + `{"type":"step_finish","part":{"messageID":"msg_1","reason":"stop"}}` + "\n"
-}
-
-// steppingClock is a runner's clock that moves step at every reading.
-func steppingClock(step time.Duration) func() time.Time {
-	var now time.Time
-	return func() time.Time {
-		now = now.Add(step)
-		return now
-	}
-}
-
-// AN EVENT STREAM WHOSE READ RUNS PAST ITS BOUND SHOWS NO TRANSCRIPT, saying
-// how long it had and how much it read ([sandbox.RunHandle.StreamsReadBy]),
-// and is counted. A run whose result is a file read whole (Claude Code's)
-// keeps the outcome that file gives; one whose result is its stream reads as
-// stopped before saying how its run ended, its failure saying the read ran out
-// of time, its partial answer not taken for its report.
-//
-// Mutations, each red: read on past the bound; show the transcript read so
-// far; keep the partial answer as the report; turn a run its result file says
-// succeeded into a failure; leave the count out.
-func TestAnEventStreamPastItsBoundShowsNoTranscript(t *testing.T) {
-	t.Parallel()
-	const note = "the run's transcript is not shown: the collection's read of its event stream ran past the"
-	for _, c := range []struct {
-		name    string
-		runner  func() *Runner
-		box     func(b *sandbox.FakeSandbox, p Paths)
-		success bool
-	}{
-		{"a result read whole", NewClaudeCode, func(b *sandbox.FakeSandbox, p Paths) {
-			line := `{"type":"assistant","message":{"content":[{"type":"text","text":"` + strings.Repeat("y", 900) +
-				`"}]}}` + "\n"
-			b.Put(p.Stream(), strings.Repeat(line, 400)+
-				`{"type":"result","subtype":"success","is_error":false,"result":"Built it."}`+"\n")
-			b.Put(p.Result(), `{"type":"result","subtype":"success","is_error":false,"result":"Built it."}`)
-			b.Put(p.ExitCode(), "0")
-		}, true},
-		{"a result its stream's", NewOpenCode, func(b *sandbox.FakeSandbox, p Paths) {
-			b.Put(p.Result(), openCodeLines(4000))
-			b.Put(p.ExitCode(), "0")
-		}, false},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			runner := c.runner()
-			runner.now = steppingClock(time.Second)
-			b := sandbox.NewFakeSandbox("box-1")
-			p := PathsFor(b)
-			c.box(b, p)
-			meter := &withholdings{}
-			res, err := runner.Collect(sandbox.CountingWithheld(t.Context(), meter), b,
-				sandbox.RunHandle{StreamsReadBy: time.Time{}.Add(3 * time.Second)}, queue.NewAnswerBudget(nil))
-			if err != nil {
-				t.Fatalf("Collect: %v", err)
-			}
-			if !strings.Contains(res.Transcript, note) || strings.Contains(res.Transcript, "yyyy") ||
-				strings.Contains(res.Transcript, "step x") {
-				t.Errorf("the transcript is %.200q; want none of the stream, and %q", res.Transcript, note)
-			}
-			if !slices.Contains(meter.all(), sandbox.Withholding{Piece: sandbox.WithheldEventStream,
-				Reason: sandbox.WithheldPastBound}) {
-				t.Errorf("the collection counted %v, want the event stream past its bound", meter.all())
-			}
-			switch {
-			case c.success && (!res.Success || res.Text != "Built it."):
-				t.Errorf("a run its result file says succeeded collected as success %v with %q (%q)", res.Success,
-					res.Text, res.Error)
-			case !c.success && (res.Success || strings.Contains(res.Text, "step x") ||
-				!strings.Contains(res.Error, "ran past the") ||
-				!strings.Contains(res.Error, "before the stream said how the run ended")):
-				t.Errorf("a run whose result is its cut stream collected as success %v, text %.60q, failure %.300q; "+
-					"want stopped before saying how it ended, saying why", res.Success, res.Text, res.Error)
-			}
-		})
-	}
 }
 
 // AN EVENT STREAM IS READ AS ONE VERSION OF IT: one still being written when
