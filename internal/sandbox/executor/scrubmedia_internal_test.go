@@ -908,8 +908,8 @@ var _ = holdsScrubTerm("payloads", "TestAPayloadsHoldIsWithinItsFigure")
 // in room the rewrite reuses, never past [payloadHeldBytes], however its
 // pieces fall, until it is decided. The "payloads" term counts it.
 //
-// Mutation: hold it in room of its own, grown as it comes, and the hold
-// passes the figure.
+// Mutation: hold it in room of its own, grown as it comes, and the case
+// goes red.
 func TestAPayloadsHoldIsWithinItsFigure(t *testing.T) {
 	t.Parallel()
 	figure := termFigure(t, "payloads", 0, 0)
@@ -931,6 +931,9 @@ func TestAPayloadsHoldIsWithinItsFigure(t *testing.T) {
 			if int64(cap(p.held)) > figure || int64(cap(held)) > figure {
 				t.Fatalf("a string read %d bytes at a time is held in %d bytes, past the figure %d", piece,
 					max(cap(p.held), cap(held)), figure)
+			}
+			if len(p.held) > 0 && &p.held[0] != &held[:1][0] {
+				t.Fatalf("a string read %d bytes at a time is held in room of its own, not the rewrite's", piece)
 			}
 		}
 		if err := p.Close(); err != nil {
@@ -958,6 +961,50 @@ func TestACredentialsValueIsItsMarkerWithMediaApart(t *testing.T) {
 			if body[0] != sandbox.BodyWhole || !strings.Contains(plain, `"`+key+`":"`+credentialMarker+`"`) ||
 				strings.Contains(plain, value[:64]) {
 				t.Errorf("the value under %q is not its marker alone, nothing kept apart", key)
+			}
+		})
+	}
+}
+
+// THE MEDIA BOUNDARY IS WHERE THE DOCS SAY: inside a session's payload, well-
+// formed base64 of a mebibyte or more, no content-shape rule applies, so a
+// GitHub token glued inside a base64url run is kept with it; a configured
+// value inside one is still taken out, the payload still kept apart; and a
+// `password=` inside a run leaves it no payload, so it is scrubbed as every
+// text is, the password's value taken out (ADR-0073's amendment, code-
+// sandbox.md's "What is a payload").
+//
+// Mutation: shape a payload's content, keep a payload from the values, or
+// take a run with a pad within it, and a case goes red.
+func TestTheMediaBoundaryIsWhereTheDocsSay(t *testing.T) {
+	t.Parallel()
+	token := "ghp_" + strings.Repeat("Ab3", 12) + "A"
+	const planted, secret = "PlantedUrlValue0123456789abcdefg", "Hunter2Hunter2Hunter2"
+	for name, c := range map[string]struct {
+		text, kept, gone string
+		apart            bool
+	}{
+		"a token in its alphabet": {shapedPayload(57, mediaMinBytes+8, true, token), token, "", true},
+		"a configured value":      {shapedPayload(58, mediaMinBytes+8, true, planted), scrubMarker, planted, true},
+		"a password's assignment, base64url": {shapedPayload(59, mediaMinBytes+8, true, "password="+secret), "",
+			"", false},
+		"a password's assignment, standard": {shapedPayload(60, mediaMinBytes+8, false, "password="+secret), "",
+			secret, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			archive := claudeArchive(t, claudeRead(c.text, false))
+			s := newScrubber([]string{planted})
+			whole, body := mediaTake(t, archiveTar, archive, s, executorkeep.SessionMaxBytes)
+			plain := mediaPlain(t, whole)
+			if got := body[0] == sandbox.BodySpliced; got != c.apart {
+				t.Errorf("the string is kept apart: %v, want %v", got, c.apart)
+			}
+			if !c.apart && plain != mediaPlain(t, inlineTake(t, archiveTar, archive, s)) {
+				t.Error("the string is not scrubbed as a take keeping no media apart scrubs it")
+			}
+			if c.kept != "" && !strings.Contains(plain, c.kept) || c.gone != "" && strings.Contains(plain, c.gone) {
+				t.Errorf("the session keeps %q and not %q: want the reverse", c.gone, c.kept)
 			}
 		})
 	}

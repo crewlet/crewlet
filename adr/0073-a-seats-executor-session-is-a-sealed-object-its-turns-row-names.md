@@ -1058,6 +1058,10 @@
   - `internal/sandbox/executor.TestAPayloadHoldingAValueIsKeptApartRedacted`
   - `internal/sandbox/executor.TestATextReadAsAPayloadThatTurnsOutNoneIsShaped`
   - `internal/redact.TestTheRulesBase64CanSpellAreKnown`
+  - `internal/redact.TestNoRuleMatchesWithinAMediaHeadsPart`
+  - `internal/sandbox/executor.TestOnlyWellFormedBase64IsAPayload`
+  - `internal/sandbox/executor.TestTheMediaBoundaryIsWhereTheDocsSay`
+  - `internal/sandbox/executor.TestEveryValueUnderACredentialsKeyIsItsMarker`
   - `internal/sandbox.TestAKeepCarriesMediaItsTurnHolds`
   - `internal/sandbox.TestAMissingMediaObjectRestoresNothing`
   - `internal/engine.TestATakeKeepsMediaApartOnlyOnceEveryReaderReadsIt`
@@ -6921,4 +6925,18 @@ reading is read again from its start with every payload shaped, as a memo
 that diverged is. That costs one reading, for a mebibyte of base64 followed by
 words that spells a token. A text under a mebibyte is held until it is
 decided, never written unshaped.
+
+**Only well-formed base64, and what that leaves.** A payload's run is one
+alphabet, standard or base64url, `=` only as one or two pad bytes at its end;
+so no keyed rule's `KEY=value` stands inside one, and a data URI's head is
+`data:<type>/<subtype>;base64,`, each name at most 19 RFC 6838 bytes, shorter
+than any shape rule those bytes spell. Content-shape rules do not apply inside
+a session's media payload; configured secrets are still removed there, and the
+keyed and credential rules still apply, every value under a credential's key
+being its marker at any depth. The residual: a token pasted literally inside a
+payload, written in that payload's own alphabet, is not caught. In a standard
+run that is an AWS access key id's form and an alphanumeric Google refresh
+token's; in a base64url run, also the `sk-`, GitHub, GitLab, Slack, Google
+client secret and DigitalOcean forms
+(`executor.TestTheMediaBoundaryIsWhereTheDocsSay`).
 

@@ -836,24 +836,23 @@
 // one whose text the redaction refuses ([errRedaction], what the redaction said
 // read off its error, and redact.ErrDecidedEarly whether its stream decided a
 // window before what it read there was known, at a write or at its close), is
-// refused, stamped with why, rather than costing the host its memory;
-// and the whole scrub is held to the take's time (internal/sandbox's
-// SessionScrubWait). A panic in the scrub is CONTAINED on the take's own
-// goroutine (scrubContained, take.go), which reads every byte of the archive, a
-// `.json` file's two readings included, and refuses the take with the panic's
-// message; one in the meter beside it measures nothing (meterContained,
-// measure.go); each is told under panics.ScopeSessionTake.
+// refused, stamped with why, rather than costing the host its memory; and the
+// whole scrub is held to the take's time (internal/sandbox's SessionScrubWait).
+// A panic in the scrub is CONTAINED on the take's own goroutine
+// (scrubContained, take.go), which reads every byte of the archive, and
+// refuses the take with the panic's message; one in the meter beside it
+// measures nothing (meterContained); each is told under
+// panics.ScopeSessionTake.
 //
-// AT MOST [scrubHeldBytes] IS HELD: two text scrubs at once (a line or a
-// `.json` file read both ways), each its redaction's stages (redact.Stream's
-// figure) beside its stage's chunk, a [valueStream] and a string's encoder; two
-// JSON rewrites, each its scanner, its read buffer and a frame a container
-// open; the readers and writers of the archive's gzip and tar, and of the
-// spool; a unit's two ways; and the plan, a sixteenth of the plaintext. About
-// 132 MiB at the bound and [scrubLongestMax], 16 MiB of it the plan and 12 MiB
-// that value, near nothing in a real session. A test holds it at a smaller
-// bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the real one,
-// both readings from disk.
+// AT MOST [scrubHeldBytes] IS HELD: two text scrubs (a line or a `.json` file
+// read both ways), each its redaction's stages (redact.Stream's figure), its
+// stage's chunk, a [valueStream] and a string's encoder; a string read for a
+// payload ([payloadHeldBytes]); two JSON rewrites, each its scanner, buffer and
+// a frame a container open; the archive's and spool's readers and writers; a
+// unit's two ways; and the plan, a sixteenth of the plaintext. About 133 MiB
+// at the bound and [scrubLongestMax], 16 MiB of it the plan and 12 MiB that
+// value. A test holds it at a smaller bound, and
+// BenchmarkTheScrubAtThePlaintextBound measures it at the real one.
 // On two cores of the build machine:
 //
 //	one string to the bound:   16.2 s a scrub, held 17.8 MiB (256 MiB from 28 MiB)
@@ -863,17 +862,18 @@
 //	a file of `pwd=x` lines:   123 s a scrub
 //	`pwd=` lines, torn:        183 s a scrub
 //
-// The last three, a harness's tool results, set SessionScrubWait (its sum and
-// why a take past it fails closed are in code-sandbox.md); the torn string,
-// read on from its last line, the slowest. A string is redacted once, as JSON
-// in its first reading.
+// The last three, harnesses' tool results, set SessionScrubWait (its sum, and
+// why a take past it fails closed, in code-sandbox.md); the torn string is the
+// slowest. A string is redacted once, as JSON, in its first reading.
 //
 // # A kept session's media is kept apart
 //
-// Each large payload is cut into a gzip member alone ([memberSplit]), which
-// the box's gzip reads on (TestASessionSplicedFromItsMembersIsRestoredAsOne).
-// It is classed as it came and kept from the shape rules ([payloadScrub];
-// ADR-0073, "a payload is classed as it came").
+// A payload, well-formed base64 of a mebibyte or more as it came, is a gzip
+// member alone ([memberSplit], [payloadScrub]). No content-shape rule applies
+// inside it: configured values are still taken out and keyed and credential
+// rules apply, so a token pasted in it in its own alphabet is kept; nor reads
+// the text way's keyed rule a value after `key: [`. ADR-0073, "a payload is
+// classed as it came".
 //
 // # A definition the scrub renamed is cut out of its line
 //
