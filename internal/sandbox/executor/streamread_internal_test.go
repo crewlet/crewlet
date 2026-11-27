@@ -3,6 +3,7 @@ package executor
 import (
 	"io"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/queue"
@@ -133,5 +134,66 @@ func TestATranscriptOfAStreamStillBeingWrittenKeepsWhatSettled(t *testing.T) {
 		if text, _, _ := tr.result(); hold == 16 && !strings.Contains(text, want) || hold != 16 && text != want {
 			t.Errorf("at a hold of %d the transcript is %q; want %q", hold, text, want)
 		}
+	}
+}
+
+// A STAND-IN RESULT COMES ONLY FROM THE ONE CHECKED READ OF THE STREAM (#2215's
+// review): where Claude Code's result file is empty, its stream's last whole
+// line stands in for it, kept as the stream's one read goes; the stream is
+// never opened again by path, which could read the next job's file. A stream
+// cut while read is refused, so no line of it stands in; one still being
+// written, its result line not yet ended, has that line taken for no line: a
+// cut line never collects as a success.
+//
+// Mutations, each red: read the stream again for its last line; keep the last
+// line of a stream refused as changed; take the unended line for a line.
+func TestAStandInResultComesOnlyFromTheOneCheckedRead(t *testing.T) {
+	t.Parallel()
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}` + "\n"
+	const result = `{"type":"result","subtype":"success","is_error":false,"result":"Built it."}`
+	for _, c := range []struct {
+		name, stream string
+		edit         func(b *sandbox.FakeSandbox, path string)
+		success      bool
+	}{
+		{"whole", strings.Repeat(line, 40) + result + "\n", func(*sandbox.FakeSandbox, string) {}, true},
+		{"cut while read", strings.Repeat(line, 40) + result + "\n",
+			func(b *sandbox.FakeSandbox, path string) { b.TruncateInPlace(path, 40) }, false},
+		{"its result line not yet ended", strings.Repeat(line, 40) + result,
+			func(b *sandbox.FakeSandbox, path string) { b.AppendInPlace(path, []byte(" and more words\n")) }, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			runner := NewClaudeCode()
+			b := sandbox.NewFakeSandbox("box-1")
+			p := PathsFor(b)
+			b.Put(p.Stream(), c.stream)
+			b.Put(p.Result(), "")
+			b.Put(p.ExitCode(), "0")
+			var mu sync.Mutex
+			opens := 0
+			b.Streams = func(path string, r io.Reader) io.Reader {
+				if path == p.Stream() {
+					mu.Lock()
+					opens++
+					mu.Unlock()
+					c.edit(b, path)
+				}
+				return r
+			}
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if opens != 1 {
+				t.Errorf("the stream was opened %d times, want once", opens)
+			}
+			if got := res.Success && res.Text == "Built it."; got != c.success {
+				t.Errorf("a stream %s collected as success %v, text %q, error %.200q; want success %v", c.name,
+					res.Success, res.Text, res.Error, c.success)
+			}
+		})
 	}
 }

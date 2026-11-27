@@ -1134,8 +1134,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		inFlight  int
 		undecided int
 	)
+	var last streamLast
 	if out.Events {
-		streamed, refusal, err := r.decodeStream(pieces.stream, false)
+		streamed, refusal, err := r.decodeStream(pieces.stream, out.keepsLast())
 		if err != nil {
 			return sandbox.Result{}, err
 		}
@@ -1145,7 +1146,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		result, spent, request = streamed.result, streamed.spent, streamed.request
 		window, limits, ended = streamed.window, streamed.limits, streamed.ended
 		requests, unheld, inFlight = streamed.requests, streamed.unheld, streamed.inFlight
-		undecided = streamed.undecided
+		undecided, last = streamed.undecided, streamed.last
 	}
 	// A HARNESS WHOSE OWN RECORD SHOWS ITS REQUESTS ([recordCollected]) is held to
 	// its cap by that record, read as its live count reads it; one counted off
@@ -1187,37 +1188,31 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 		requests, undecided = n, 0
 	}
-	// THE STREAM BEFORE THE RESULT FILE, keeping not its last line: what its
-	// reading holds after is the record's halves, so the file is parsed beside
-	// nothing; the line is read again only where it stands for the file.
+	// THE STREAM BEFORE THE RESULT FILE, keeping its last whole line where it
+	// may stand for the file ([Output.keepsLast]): that line, of the one read
+	// checked to be one version of the stream, is all that stands in for it.
 	if out.Result != "" {
 		raw, refusal, err := pieces.result.whole()
 		if err != nil {
 			return sandbox.Result{}, err
 		}
-		if out.lastLineStandsIn(refusal, raw) {
-			again, err := r.redecodeStream(ctx, box, pieces.stream)
-			if err != nil {
-				return sandbox.Result{}, err
+		if out.lastLineStandsIn(refusal, raw) && last.said() {
+			// The result file holds the stream's last line, copied by the
+			// wrapper after the harness exits. Where the file is empty (the
+			// process group died) or refused, that line is read in its
+			// place, so a streamed session is not "no output" and its spend
+			// is charged; a refused file is still reported. Only where the
+			// stream said something, and only its last WHOLE line of the one
+			// read checked to be one version of it ([Runner.decodeStream]).
+			why := "was empty"
+			if refusal != "" {
+				refused = append(refused, refusal)
+				why = "was refused"
 			}
-			if again.last.said() {
-				// The result file holds the stream's last line, copied by the
-				// wrapper after the harness exits. Where the file is empty (the
-				// process group died) or refused, that line is read in its
-				// place, so a streamed session is not "no output" and its spend
-				// is charged; a refused file is still reported. Only where the
-				// stream said something: a harness that exited at once leaves
-				// both empty.
-				why := "was empty"
-				if refusal != "" {
-					refused = append(refused, refusal)
-					why = "was refused"
-				}
-				raw, refusal = again.last.resultLine(out.Stdout)
-				log.WarnContext(ctx, "harness_result_from_stream", "harness", r.harness.Name(),
-					"detail", "the result file "+why+", so the event stream's last line, which the "+
-						"wrapper copies into it, was read in its place")
-			}
+			raw, refusal = last.resultLine(out.Stdout)
+			log.WarnContext(ctx, "harness_result_from_stream", "harness", r.harness.Name(),
+				"detail", "the result file "+why+", so the event stream's last line, which the "+
+					"wrapper copies into it, was read in its place")
 		}
 		if refusal != "" {
 			refused = append(refused, refusal)
@@ -1756,24 +1751,6 @@ func (r *Runner) decodeStream(stream *piece, keepLast bool) (decodedStream, stri
 	return decoded, "", nil
 }
 
-// redecodeStream reads the stream a collection opened again, keeping its last
-// line: opened anew, and read no further than the size the first open was
-// weighed at, so a file renamed over it since adds nothing to what is held,
-// and its last line, unended, only where the read reached its end.
-func (r *Runner) redecodeStream(ctx context.Context, box sandbox.Sandbox, stream *piece) (decodedStream, error) {
-	if stream.refusal != "" || stream.size == 0 {
-		return decodedStream{}, nil
-	}
-	body, _, err := box.OpenRange(ctx, stream.path, 0, stream.size)
-	if err != nil {
-		return decodedStream{}, fmt.Errorf("executor: opening the event stream again: %w", err)
-	}
-	defer func() { _ = body.Close() }()
-	read := readStream(&piece{body: body, size: stream.size})
-	again, err := r.decodeLines(read, true, read.whole)
-	return again, err
-}
-
 // decodeLines decodes an event stream's lines from stream through a fresh
 // decoder, its unended last line a line only where whole says the stream
 // ended; where it did not, its transcript ends where its redaction settled.
@@ -1851,12 +1828,20 @@ type streamLast struct {
 // too long to read.
 func (l streamLast) said() bool { return len(l.line) > 0 || l.skipped > 0 }
 
+// keepsLast reports whether a collection keeps the event stream's last whole
+// line as it decodes it, for where it stands in for the result file
+// ([Output.lastLineStandsIn]): a result file of its own beside a stream the
+// wrapper copied the line from. Kept as the one read goes, at most a line's
+// bound, and counted in the collection's weight ([collectionPieces.weight]),
+// rather than read again by path, which could read another job's file.
+func (o Output) keepsLast() bool { return o.Events && o.Result != "" && o.Result != o.Stdout }
+
 // lastLineStandsIn reports whether the stream's last line is read in place of
 // the result file ([Runner.Collect]): the file, read as raw or refused, is
 // empty or refused, and is a file of its own beside a stream the wrapper copied
 // the line from.
 func (o Output) lastLineStandsIn(refusal string, raw []byte) bool {
-	return o.Events && o.Result != "" && o.Result != o.Stdout && (refusal != "" || len(bytes.TrimSpace(raw)) == 0)
+	return o.keepsLast() && (refusal != "" || len(bytes.TrimSpace(raw)) == 0)
 }
 
 // resultLine is the stream's last line read in place of the result file: the

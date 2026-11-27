@@ -40,8 +40,8 @@ func collectedBox(findings, errBytes int) (*sandbox.FakeSandbox, map[string]int)
 // A COLLECTION WEIGHS WHAT ITS OPENS HOLD: five times every piece it reads
 // but the error stream, at least the fixed per-read buffers, and beside them
 // the error stream's read, one redaction stream and its end's ring, or five
-// times a stream short enough to be redacted whole; at most what one
-// collection can hold.
+// times a stream short enough to be redacted whole, and the event stream's
+// kept last line; at most what one collection can hold.
 //
 // Mutations, each red: leave a piece out of the weight; count the error stream
 // among the pieces; leave its read's stream or ring out; drop the multiple,
@@ -63,9 +63,13 @@ func TestACollectionWeighsWhatItsOpensHold(t *testing.T) {
 			}
 		}
 		read := min(collectHeldMultiple*int64(errBytes), streamHeldBytes+3*int64(r.failureBound)+2)
-		if got := c.weight(); got != collectHeldMultiple*want+read {
+		// And the event stream's last line, which Claude Code's collection
+		// keeps to stand in for an empty result file: here the whole stream.
+		last := int64(sizes[p.Stream()])
+		if got := c.weight(); got != collectHeldMultiple*want+read+last {
 			t.Errorf("with an error stream of %d bytes the collection weighs %d, want five times the %d bytes "+
-				"its other pieces hold and the %d its read of the stream holds", errBytes, got, want, read)
+				"its other pieces hold, the %d its read of the stream holds and the %d of its kept last line",
+				errBytes, got, want, read, last)
 		}
 		c.close()
 	}

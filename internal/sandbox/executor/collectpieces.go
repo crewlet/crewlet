@@ -210,8 +210,10 @@ type collectionPieces struct {
 	stream, result, record, base, stderr, exitCode, ended, findings *piece
 	memory                                                          [2]*piece
 	// keep is how much of the error stream's redacted end its read keeps
-	// ([Runner.failureBound]).
+	// ([Runner.failureBound]); last the most the event stream's kept last
+	// line holds ([Output.keepsLast]), at most a line's bound.
 	keep int
+	last int64
 }
 
 // all is every piece, absent ones nil.
@@ -229,7 +231,8 @@ func (c *collectionPieces) close() {
 
 // weight is what the collection holds of the node's answer budget: its pieces
 // at [collectionWeight], and beside them the error stream's read
-// ([stderrHeld]), which holds no piece whole.
+// ([stderrHeld]), which holds no piece whole, and the event stream's kept last
+// line.
 func (c *collectionPieces) weight() int64 {
 	var sizes int64
 	for _, p := range c.all() {
@@ -237,7 +240,7 @@ func (c *collectionPieces) weight() int64 {
 			sizes += p.weight()
 		}
 	}
-	return min(collectionWeight(sizes)+stderrHeld(c.stderr.weight(), c.keep), sandbox.BoxReadHeldBytes)
+	return min(collectionWeight(sizes)+stderrHeld(c.stderr.weight(), c.keep)+c.last, sandbox.BoxReadHeldBytes)
 }
 
 // stderrHeld is what the read of an error stream of size bytes holds
@@ -263,6 +266,9 @@ func (r *Runner) openCollection(ctx context.Context, box sandbox.Sandbox, paths 
 	if out.Events {
 		if c.stream, err = openStream(ctx, box, out.Stdout); err != nil {
 			return nil, err
+		}
+		if out.keepsLast() {
+			c.last = min(c.stream.weight(), int64(r.lineBound))
 		}
 	}
 	if out.Result != "" {

@@ -80,14 +80,14 @@ func TestACollectionDecodesALongTextOnce(t *testing.T) {
 	}
 }
 
-// THE STREAM'S LAST LINE IS KEPT ONLY WHERE IT STANDS IN FOR THE RESULT FILE:
-// an empty or refused file of its own beside the stream, for which
-// [Runner.Collect] reads the stream again. Kept on every collection, a 32 MiB
-// result line would be held a second time beside the file's own copy. A
-// stream read without keeping keeps nothing.
+// THE STREAM'S LAST LINE STANDS IN FOR THE RESULT FILE ONLY WHERE THE FILE IS
+// EMPTY OR REFUSED, of a harness that keeps one of its own beside the stream,
+// whose collection keeps the line as it reads the stream ([Output.keepsLast]):
+// a harness whose result is its stream keeps none. A stream read without
+// keeping keeps nothing.
 //
-// Mutations, each red: keep the line whatever the file held; keep it for a
-// harness whose result is its stream; keep it on a read that did not ask.
+// Mutations, each red: stand the line in whatever the file held; keep it for
+// a harness whose result is its stream; keep it on a read that did not ask.
 func TestTheStreamsLastLineIsKeptOnlyWhereItStandsInForTheResultFile(t *testing.T) {
 	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
@@ -111,6 +111,12 @@ func TestTheStreamsLastLineIsKeptOnlyWhereItStandsInForTheResultFile(t *testing.
 		if got := c.out.lastLineStandsIn(c.refusal, []byte(c.raw)); got != c.want {
 			t.Errorf("%s: the stream's last line stands in = %t, want %t", c.name, got, c.want)
 		}
+		if c.want && !c.out.keepsLast() {
+			t.Errorf("%s: the line stands in, but its collection keeps none", c.name)
+		}
+	}
+	if openCode.keepsLast() {
+		t.Error("a harness whose result is its stream keeps its stream's last line")
 	}
 
 	runner := NewClaudeCode()
