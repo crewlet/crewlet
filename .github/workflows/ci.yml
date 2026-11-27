@@ -736,19 +736,38 @@ jobs:
         with:
           path: ${{ env.CREWLET_GIT_CACHE }}
           key: git-${{ runner.os }}-${{ runner.arch }}-${{ env.CREWLET_GIT_CACHE_OS }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
+      # APT READS UBUNTU'S OWN ARCHIVE ALONE. The runner image also lists
+      # third-party repositories (packages.microsoft.com among them), and
+      # `apt-get update` exits 100 when any one source fails, so one vendor's
+      # outage would fail every run. Every package installed here is in
+      # Ubuntu's archive: the files naming it (the runner's mirror list, or the
+      # archive's hosts) are copied apart, and apt reads only those.
+      - &apt-ubuntu
+        name: point apt at Ubuntu's own archive alone
+        run: |
+          src="$RUNNER_TEMP/apt-ubuntu"
+          mkdir -p "$src"
+          for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+            if [ -f "$f" ] && grep -qE 'apt-mirrors\.txt|archive\.ubuntu\.com|security\.ubuntu\.com' "$f"; then
+              cp "$f" "$src/"
+            fi
+          done
+          if [ -z "$(ls -A "$src")" ]; then
+            echo "::error::no apt source names Ubuntu's archive"; exit 1
+          fi
+          echo "APT_UBUNTU=-o Dir::Etc::sourcelist=/dev/null -o Dir::Etc::sourceparts=$src -o Acquire::Retries=5" >> "$GITHUB_ENV"
       # libcurl's development files are what building git's HTTPS transport
       # needs and the runner image may not carry; the C toolchain and zlib's
       # headers it does. Only a miss builds, so only a miss installs.
       - &git-deps
         name: install what building git needs
         if: steps.git.outputs.cache-hit != 'true'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev zlib1g-dev
+        run: sudo apt-get $APT_UBUNTU update && sudo apt-get $APT_UBUNTU install -y --no-install-recommends libcurl4-openssl-dev zlib1g-dev
       # EVERY AWK A BOX'S PACK MAY RUN. A box image is the company's own, so a
       # trimming harness's pack meets mawk (Debian, Ubuntu), gawk (Fedora, RHEL,
       # Arch), busybox's (Alpine) or BWK's (macOS, a `direct` box), and its
       # media count runs under each; `internal/prereqtest` fails a missing one
-      # under the make targets. The runner image carries mawk; only what it
-      # lacks is installed, with apt's retries for the mirror #849 records.
+      # under the make targets. Only what the runner image lacks is installed.
       - &box-awks
         name: install every awk a box's pack may run
         run: |
@@ -757,8 +776,8 @@ jobs:
             command -v "${p%%:*}" >/dev/null || missing="$missing ${p#*:}"
           done
           if [ -n "$missing" ]; then
-            sudo apt-get -o Acquire::Retries=5 update
-            sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends $missing
+            sudo apt-get $APT_UBUNTU update
+            sudo apt-get $APT_UBUNTU install -y --no-install-recommends $missing
           fi
       # THE PINNED CHROMIUMS. Both test targets depend on `make chromium`,
       # which fetches the two Chrome for Testing builds
@@ -1129,6 +1148,7 @@ jobs:
       # image after them is this job's own.
       - *git-cache-dir
       - *git-restore
+      - *apt-ubuntu
       - *git-deps
       - *box-awks
       - *chromium-cache-dir
