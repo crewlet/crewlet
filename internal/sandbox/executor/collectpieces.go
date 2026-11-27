@@ -210,8 +210,9 @@ type collectionPieces struct {
 	stream, result, record, base, stderr, exitCode, ended, findings *piece
 	memory                                                          [2]*piece
 	// keep is how much of the error stream's redacted end its read keeps
-	// ([Runner.failureBound]); last the most the event stream's kept last
-	// line holds ([Output.keepsLast]), at most a line's bound.
+	// ([Runner.failureBound]); last the most the event stream's last line,
+	// read again to stand in for the result file, holds ([Output.keepsLast]),
+	// at most a line's bound.
 	keep int
 	last int64
 }
@@ -231,8 +232,8 @@ func (c *collectionPieces) close() {
 
 // weight is what the collection holds of the node's answer budget: its pieces
 // at [collectionWeight], and beside them the error stream's read
-// ([stderrHeld]), which holds no piece whole, and the event stream's kept last
-// line.
+// ([stderrHeld]), which holds no piece whole, and the event stream's last line
+// read again.
 func (c *collectionPieces) weight() int64 {
 	var sizes int64
 	for _, p := range c.all() {

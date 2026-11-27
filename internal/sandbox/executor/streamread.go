@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -60,14 +61,22 @@ func unendedNote() string {
 }
 
 // eachLineOf is [eachLine] of a stream that may not have ended: its unended
-// last line is a line only where whole says the read reached its end.
-func eachLineOf(r io.Reader, dec Decoder, bound int, whole func() bool) error {
+// last line is a line only where whole says the read reached its end. Where
+// last is set, it marks the stream's last non-blank line handed on.
+func eachLineOf(r io.Reader, dec Decoder, bound int, whole func() bool, last *streamLast) error {
 	l := streamLines{bound: bound, ends: true}
 	line := func(line []byte) error {
+		if last != nil && len(bytes.TrimSpace(line)) > 0 {
+			// The line is what of held its break left, from held's start.
+			last.mark(l.taken-int64(len(l.held)), line)
+		}
 		dec.Line(line)
 		return nil
 	}
 	skipped := func(n int64, head, tail []byte) error {
+		if last != nil {
+			last.skip(n, bound)
+		}
 		dec.Skipped(LongLine{Size: n, Bound: bound, Head: head, Tail: tail})
 		return nil
 	}

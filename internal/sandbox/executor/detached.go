@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"io"
 	"math"
 	"net/url"
@@ -1189,7 +1190,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 		requests, undecided = n, 0
 	}
-	// THE STREAM BEFORE THE RESULT FILE, keeping its last whole line where it
+	// THE STREAM BEFORE THE RESULT FILE, marking its last whole line where it
 	// may stand for the file ([Output.keepsLast]): that line, of the one read
 	// checked to be one version of the stream, is all that stands in for it.
 	if out.Result != "" {
@@ -1204,13 +1205,16 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			// place, so a streamed session is not "no output" and its spend
 			// is charged; a refused file is still reported. Only where the
 			// stream said something, and only its last WHOLE line of the one
-			// read checked to be one version of it ([Runner.decodeStream]).
+			// read, read again from its open and checked to be the line that
+			// read decoded ([streamLast.resultLine]).
 			why := "was empty"
 			if refusal != "" {
 				refused = append(refused, refusal)
 				why = "was refused"
 			}
-			raw, refusal = last.resultLine(out.Stdout)
+			if raw, refusal, err = last.resultLine(pieces.stream); err != nil {
+				return sandbox.Result{}, err
+			}
 			log.WarnContext(ctx, "harness_result_from_stream", "harness", r.harness.Name(),
 				"detail", "the result file "+why+", so the event stream's last line, which the "+
 					"wrapper copies into it, was read in its place")
@@ -1725,8 +1729,8 @@ func unreadNote(unread int64, none bool) string {
 
 // decodeStream reads the event stream a collection opened through a fresh
 // decoder, no further than the size it was weighed at ([readStream]), and
-// keeps its last line where keepLast asks, which [Runner.Collect] reads again
-// for where the line stands for the result file. A stream still being written
+// marks its last line where keepLast asks, which [Runner.Collect] reads again
+// from the same open where the line stands for the result file. A stream still being written
 // ends its transcript where its redaction settled; one cut or written over
 // while read is refused, as one the box would not open because it is not a
 // regular file ([notRegularPiece]) is.
@@ -1735,7 +1739,11 @@ func (r *Runner) decodeStream(stream *piece, keepLast bool) (decodedStream, stri
 		return decodedStream{request: contextRead{why: "the run's event stream was not read: " +
 			stream.refusal}}, stream.refusal, nil
 	}
-	defer stream.close()
+	if !keepLast {
+		// Kept open where its last line may be read again ([streamLast]),
+		// to the collection's own close.
+		defer stream.close()
+	}
 	read := readStream(stream)
 	decoded, err := r.decodeLines(read, keepLast, read.whole)
 	switch {
@@ -1770,18 +1778,17 @@ const unendedError = "the run's event stream was still being written when the co
 // ended; where it did not, its transcript ends where its redaction settled.
 func (r *Runner) decodeLines(stream io.Reader, keepLast bool, whole func() bool) (decodedStream, error) {
 	events := r.harness.Events()
-	kept := &keepingLast{Decoder: events}
-	dec := events
+	var last *streamLast
 	if keepLast {
-		dec = kept
+		last = &streamLast{seed: maphash.MakeSeed()}
 	}
-	if err := eachLineOf(stream, dec, r.lineBound, whole); err != nil {
+	if err := eachLineOf(stream, events, r.lineBound, whole, last); err != nil {
 		return decodedStream{}, fmt.Errorf("executor: reading the event stream: %w", err)
 	}
 	if unended, ok := events.(streamUnended); ok && !whole() {
 		unended.streamUnended()
 	}
-	out := decodedStream{result: events.Result(), last: kept.last, ended: events.Ended(),
+	out := decodedStream{result: events.Result(), ended: events.Ended(),
 		requests: events.Requests(), inFlight: events.InFlight(), undecided: events.Undecided()}
 	if spender, ok := events.(runSpender); ok {
 		if spent, stated := spender.runSpend(); stated {
@@ -1799,6 +1806,9 @@ func (r *Runner) decodeLines(stream io.Reader, keepLast bool, whole func() bool)
 	}
 	if reporter, ok := events.(enforcerReporter); ok {
 		out.unheld = reporter.unheld()
+	}
+	if last != nil {
+		out.last = *last
 	}
 	return out, nil
 }
@@ -1829,25 +1839,38 @@ type decodedStream struct {
 	inFlight, undecided int
 }
 
-// streamLast is an event stream's last line, as `tail -n 1` would copy it
-// into a result file: the line itself, or the size of one too long to read
-// and the bound it was past.
+// streamLast is where an event stream's last line, as `tail -n 1` would copy
+// it into a result file, stood in the collection's one read of the stream: its
+// offset and length and a keyed hash of its bytes, or the size of one too long
+// to read and the bound it was past. The line itself is not held: a stand-in
+// reads it again from the same open ([streamLast.resultLine]).
 type streamLast struct {
-	line    []byte
+	off, n  int64
+	sum     uint64
+	seed    maphash.Seed
 	skipped int64
 	bound   int
 }
 
+// mark makes line, from off in the stream, the last line.
+func (l *streamLast) mark(off int64, line []byte) {
+	l.off, l.n, l.sum, l.skipped = off, int64(len(line)), maphash.Bytes(l.seed, line), 0
+}
+
+// skip makes a line of n bytes past bound the last line.
+func (l *streamLast) skip(n int64, bound int) { l.n, l.skipped, l.bound = 0, n, bound }
+
 // said reports whether the stream ended on anything at all: a line, or one
 // too long to read.
-func (l streamLast) said() bool { return len(l.line) > 0 || l.skipped > 0 }
+func (l streamLast) said() bool { return l.n > 0 || l.skipped > 0 }
 
-// keepsLast reports whether a collection keeps the event stream's last whole
+// keepsLast reports whether a collection marks the event stream's last whole
 // line as it decodes it, for where it stands in for the result file
 // ([Output.lastLineStandsIn]): a result file of its own beside a stream the
-// wrapper copied the line from. Kept as the one read goes, at most a line's
-// bound, and counted in the collection's weight ([collectionPieces.weight]),
-// rather than read again by path, which could read another job's file.
+// wrapper copied the line from. Read again from the same open, at most a
+// line's bound, and counted in the collection's weight
+// ([collectionPieces.weight]), never by path, which could read another job's
+// file.
 func (o Output) keepsLast() bool { return o.Events && o.Result != "" && o.Result != o.Stdout }
 
 // lastLineStandsIn reports whether the stream's last line is read in place of
@@ -1858,37 +1881,49 @@ func (o Output) lastLineStandsIn(refusal string, raw []byte) bool {
 	return o.keepsLast() && (refusal != "" || len(bytes.TrimSpace(raw)) == 0)
 }
 
-// resultLine is the stream's last line read in place of the result file: the
-// line, or a refusal where it was past what one line of a stream may hold — as
-// the copy itself would have been past what a result file is read to.
-func (l streamLast) resultLine(stream string) ([]byte, string) {
+// resultLine is the stream's last line read in place of the result file, again
+// from stream's open ([sandbox.ReadAgain]): the line, or a refusal where it was
+// past what one line of a stream may hold, as the copy itself would have been
+// past what a result file is read to, or where it is not the line the one read
+// decoded. It is only that line where its bytes hash as they did and the file
+// is the version the read read, or that version appended to: an open that
+// cannot read again stands nothing in.
+func (l streamLast) resultLine(stream *piece) ([]byte, string, error) {
 	if l.skipped > 0 {
 		return nil, fmt.Sprintf("the result its harness printed (the last line of %s, read in place of "+
 			"the result file) is %s, past the %s one line of a run's output may hold, "+
-			"so it was not read", stream, humanSize(l.skipped), humanSize(int64(l.bound)))
+			"so it was not read", stream.path, humanSize(l.skipped), humanSize(int64(l.bound))), nil
 	}
-	return l.line, ""
-}
-
-// keepingLast is a decoder that also keeps the stream's last non-blank line,
-// in one buffer it reuses, so what it holds is one line however long the
-// stream.
-type keepingLast struct {
-	Decoder
-	last streamLast
-}
-
-func (k *keepingLast) Line(line []byte) {
-	if len(bytes.TrimSpace(line)) > 0 {
-		k.last.line = append(k.last.line[:0], line...)
-		k.last.skipped = 0
+	line := make([]byte, l.n)
+	n, err := sandbox.ReadAgain(stream.body, line, l.off)
+	switch {
+	case errors.Is(err, sandbox.ErrCannotReadAgain):
+		return nil, stream.withhold(sandbox.WithheldChanged, fmt.Sprintf("the last line of %s, read in "+
+			"place of the result file, could not be read again from the collection's read of it, so it "+
+			"was not read", stream.path)), nil
+	case int64(n) < l.n:
+		// Short of what the one read read: the file was cut since.
+		return nil, stream.withhold(sandbox.WithheldChanged, lineChanged(stream.path)), nil
+	case err != nil && !errors.Is(err, io.EOF):
+		return nil, "", fmt.Errorf("executor: reading the event stream's last line again: %w", err)
 	}
-	k.Decoder.Line(line)
+	change, err := sandbox.ChangeOf(stream.body)
+	if err != nil {
+		return nil, "", fmt.Errorf("executor: telling whether the event stream changed since it was read: %w", err)
+	}
+	// AN APPEND IS NO CHANGE TO THE LINE only where its bytes are the ones
+	// read: a stream grown past its open tells nothing of a write within it.
+	if change == sandbox.FileChanged || maphash.Bytes(l.seed, line) != l.sum {
+		return nil, stream.withhold(sandbox.WithheldChanged, lineChanged(stream.path)), nil
+	}
+	return line, "", nil
 }
 
-func (k *keepingLast) Skipped(line LongLine) {
-	k.last.line, k.last.skipped, k.last.bound = k.last.line[:0], line.Size, line.Bound
-	k.Decoder.Skipped(line)
+// lineChanged describes an event stream's last line that is no longer the one
+// its collection's read decoded when read again in place of the result file.
+func lineChanged(path string) string {
+	return fmt.Sprintf("the last line of %s, read again in place of the result file, was not the line "+
+		"the collection had read (the stream was cut or written over since), so it was not read", path)
 }
 
 // readWhole reads a file meant to be read whole, answering a file past

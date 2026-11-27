@@ -82,7 +82,7 @@ func TestACollectionDecodesALongTextOnce(t *testing.T) {
 
 // THE STREAM'S LAST LINE STANDS IN FOR THE RESULT FILE ONLY WHERE THE FILE IS
 // EMPTY OR REFUSED, of a harness that keeps one of its own beside the stream,
-// whose collection keeps the line as it reads the stream ([Output.keepsLast]):
+// whose collection marks the line as it reads the stream ([Output.keepsLast]):
 // a harness whose result is its stream keeps none. A stream read without
 // keeping keeps nothing.
 //
@@ -127,11 +127,12 @@ func TestTheStreamsLastLineIsKeptOnlyWhereItStandsInForTheResultFile(t *testing.
 			t.Fatal(err)
 		}
 		read, _, err := runner.decodeStream(stream, keep)
+		stream.close()
 		if err != nil {
 			t.Fatalf("decodeStream: %v", err)
 		}
 		if read.last.said() != keep {
-			t.Errorf("a stream read keeping its last line %t kept %q", keep, read.last.line)
+			t.Errorf("a stream read keeping its last line %t marked %+v", keep, read.last)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"hash/maphash"
 	"io"
 	"strings"
 	"sync"
@@ -146,30 +147,50 @@ func TestATranscriptOfAStreamStillBeingWrittenKeepsWhatSettled(t *testing.T) {
 
 // A STAND-IN RESULT COMES ONLY FROM THE ONE CHECKED READ OF THE STREAM (#2215's
 // review): where Claude Code's result file is empty, its stream's last whole
-// line stands in for it, kept as the stream's one read goes; the stream is
-// never opened again by path, which could read the next job's file. A stream
-// cut while read is refused, so no line of it stands in; one still being
-// written, its result line not yet ended, has that line taken for no line: a
-// cut line never collects as a success, nor shows its answer.
+// line stands in for it, marked as the stream's one read goes and read back
+// from that open; the stream is never opened again by path, which could read
+// the next job's file. A stream cut while read is refused, so no line of it
+// stands in; one still being written, its result line not yet ended, has that
+// line taken for no line; one written over after the read, or its line
+// rewritten and the stream grown past it, stands nothing in: a cut or changed
+// line never collects as a success, nor shows its answer.
 //
-// Mutations, each red: read the stream again for its last line; keep the last
-// line of a stream refused as changed; take the unended line for a line.
+// Mutations, each red: read the stream again by path; keep the last line of a
+// stream refused as changed; take the unended line for a line; skip the change
+// check after reading the line back; skip the check of its bytes.
 func TestAStandInResultComesOnlyFromTheOneCheckedRead(t *testing.T) {
 	t.Parallel()
 	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}` + "\n"
 	const result = `{"type":"result","subtype":"success","is_error":false,"result":"Built it."}`
+	other := strings.Replace(result, "Built it.", "Fails it.", 1)
+	none := func(*sandbox.FakeSandbox, string) {}
 	for _, c := range []struct {
 		name, stream string
-		edit         func(b *sandbox.FakeSandbox, path string)
-		success      bool
+		// edit runs at the stream's open, after the one read its result file's
+		// read, before the line is read back.
+		edit, after func(b *sandbox.FakeSandbox, path string)
+		success     bool
 	}{
-		{"whole", strings.Repeat(line, 40) + result + "\n", func(*sandbox.FakeSandbox, string) {}, true},
+		{"whole", strings.Repeat(line, 40) + result + "\n", none, none, true},
 		// A fake box's read reads the bytes its open found, its result line
 		// the last whole one; the cut tells only in what became of the file.
 		{"cut while read", strings.Repeat(line, 40) + result + "\n",
-			func(b *sandbox.FakeSandbox, path string) { b.TruncateInPlace(path, 40) }, false},
+			func(b *sandbox.FakeSandbox, path string) { b.TruncateInPlace(path, 40) }, none, false},
 		{"its result line not yet ended", strings.Repeat(line, 40) + result,
-			func(b *sandbox.FakeSandbox, path string) { b.AppendInPlace(path, []byte(" and more words\n")) }, false},
+			func(b *sandbox.FakeSandbox, path string) { b.AppendInPlace(path, []byte(" and more words\n")) },
+			none, false},
+		// Its line as it was, the stream before it not.
+		{"written over after its read", strings.Repeat(line, 40) + result + "\n", none,
+			func(b *sandbox.FakeSandbox, path string) {
+				b.RewriteInPlace(path, []byte(strings.Replace(strings.Repeat(line, 40), "working", "WORKING", 1)+
+					result+"\n"))
+			}, false},
+		// An append, which alone leaves what was read as it was.
+		{"its line rewritten and grown past", strings.Repeat(line, 40) + other + "\n", none,
+			func(b *sandbox.FakeSandbox, path string) {
+				b.RewriteInPlace(path, []byte(strings.Repeat(line, 40)+result+"\n"))
+				b.AppendInPlace(path, []byte(line))
+			}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -182,11 +203,14 @@ func TestAStandInResultComesOnlyFromTheOneCheckedRead(t *testing.T) {
 			var mu sync.Mutex
 			opens := 0
 			b.Streams = func(path string, r io.Reader) io.Reader {
-				if path == p.Stream() {
+				switch path {
+				case p.Stream():
 					mu.Lock()
 					opens++
 					mu.Unlock()
 					c.edit(b, path)
+				case p.Result():
+					return &beforeRead{Reader: r, then: func() { c.after(b, p.Stream()) }}
 				}
 				return r
 			}
@@ -207,5 +231,38 @@ func TestAStandInResultComesOnlyFromTheOneCheckedRead(t *testing.T) {
 					"its answer %v", c.name, res.Success, res.Text, res.Error, c.success)
 			}
 		})
+	}
+}
+
+// beforeRead is a read that runs then once, before its first read.
+type beforeRead struct {
+	io.Reader
+	then func()
+	done bool
+}
+
+func (f *beforeRead) Read(p []byte) (int, error) {
+	if !f.done {
+		f.done = true
+		f.then()
+	}
+	return f.Reader.Read(p)
+}
+
+// A STAND-IN LINE IS NEVER READ FROM A READ THAT CANNOT READ IT AGAIN: an open
+// with no [sandbox.ReadAgain] fails closed, as a refusal, rather than reading
+// the stream by path.
+//
+// Mutation: read the line from anything but the read's own open.
+func TestAStandInLineFromAnOpenThatCannotReadAgainIsRefused(t *testing.T) {
+	t.Parallel()
+	stream := &piece{path: "/home/user/.crewlet/stream.jsonl", what: "the event stream",
+		body: io.NopCloser(strings.NewReader("{}\n")), size: 3}
+	last := streamLast{seed: maphash.MakeSeed()}
+	last.mark(0, []byte("{}"))
+	raw, refusal, err := last.resultLine(stream)
+	if err != nil || raw != nil || !strings.Contains(refusal, "could not be read again") {
+		t.Errorf("a stand-in from an open that cannot read again gave %q, refusal %q, %v; want a refusal",
+			raw, refusal, err)
 	}
 }
