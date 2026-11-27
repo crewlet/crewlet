@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // errLogPastBound is a kept log's redaction past the bound it is kept to.
@@ -100,12 +101,16 @@ func (a *attempt) logUnkept(ctx context.Context, limit int64, err error) string 
 	case errors.Is(err, objstore.ErrFull):
 		return "its log was not kept: the object store is full"
 	case errors.Is(err, redact.ErrDecidedEarly):
+		r.withheld(withheldLog, sandbox.WithheldRefused)
 		return "its log was not kept: its text could not be redacted in one pass"
 	case errors.Is(err, errLogUnsettled):
+		r.withheld(withheldLog, sandbox.WithheldUnsettled)
 		return "its log was not kept: no line of its output's end could be redacted as the whole output is"
 	case errors.Is(err, errLogChanged):
+		r.withheld(withheldLog, sandbox.WithheldChanged)
 		return "its log was not kept: its output changed while it was read"
 	case errors.Is(err, errLogNoLine):
+		r.withheld(withheldLog, sandbox.WithheldTooLarge)
 		return fmt.Sprintf("its log was not kept: its last line, redacted, is past the %d MiB a log keeps",
 			limit>>20)
 	}
@@ -115,6 +120,19 @@ func (a *attempt) logUnkept(ctx context.Context, limit int64, err error) string 
 	r.log.WarnContext(ctx, "code_check_log_unkept", "repo_id", a.c.RepoID, "check", a.c.Name,
 		"attempt", a.c.Attempt, "error", err.Error())
 	return "its log could not be stored"
+}
+
+// The pieces of a check's output its runner may withhold
+// ([metrics.CodeChecksWithheld]).
+const (
+	withheldLog  = "log"
+	withheldTail = "tail"
+)
+
+// withheld counts a piece of a check's output the runner did not keep or show,
+// and why, in the reasons a box read of a run's gives ([sandbox.WithheldReason]).
+func (r *Runner) withheld(piece string, reason sandbox.WithheldReason) {
+	r.o.Metrics.Add(metrics.CodeChecksWithheld, 1, metrics.Attrs{"piece": piece, "reason": string(reason)})
 }
 
 // logReadError is a log the box would not hand over, saying why.

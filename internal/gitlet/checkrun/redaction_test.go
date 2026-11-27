@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // deployToken is a check secret of a shape the redaction knows: a GitHub
@@ -245,10 +246,11 @@ func TestALogsBoundHoldsAfterItsRedaction(t *testing.T) {
 // A RUN'S OUTPUT IS KEPT AND SUMMED UP ONLY AS ONE VERSION OF IT: an output cut
 // or grown in place while its log or its tail is read keeps no log, saying
 // why, and leaves the tail empty, since what was read may join two versions of
-// it; one left alone, or written anew over its path, is kept and read.
+// it, each counted as changed ([metrics.CodeChecksWithheld]); one left alone,
+// or written anew over its path, is kept and read, counting nothing.
 //
 // Mutation: leave the check of the output after the log's read, or the tail's,
-// out.
+// out; leave either count out.
 func TestARunsOutputIsKeptOnlyAsOneVersionOfIt(t *testing.T) {
 	t.Parallel()
 	output := strings.Repeat("compiling a package of the build\n", 2000) + "FAIL web\n"
@@ -275,16 +277,29 @@ func TestARunsOutputIsKeptOnlyAsOneVersionOfIt(t *testing.T) {
 				}
 				return box
 			}
-			log, why := checkrun.KeepLogWithin(t.Context(), fresh(), storeOver(t, memobj.New()), 1<<20)
-			tail := checkrun.TailOf(t.Context(), fresh())
+			rec, err := metrics.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			log, why, tail := checkrun.KeepLogAndTail(t.Context(), fresh(), fresh(), storeOver(t, memobj.New()),
+				1<<20, rec)
+			counted := map[string]uint64{}
+			for _, s := range rec.Read() {
+				if s.Name == metrics.CodeChecksWithheld {
+					counted[s.Attrs["piece"]+"/"+s.Attrs["reason"]] += s.Total
+				}
+			}
 			switch {
 			case c.changed && (log != nil || why != "its log was not kept: its output changed while it was read"):
 				t.Errorf("an output %s while read kept log %v (%q); want none, saying why", c.name, log, why)
 			case c.changed && tail != "":
 				t.Errorf("an output %s while read sums up as %q; want nothing", c.name, tail)
-			case !c.changed && (log == nil || !strings.HasSuffix(tail, "FAIL web\n")):
-				t.Errorf("an output %s kept log %v (%q) and sums up as …%q; want both", c.name, log, why,
-					tail[max(0, len(tail)-40):])
+			case c.changed && (counted["log/changed"] != 1 || counted["tail/changed"] != 1):
+				t.Errorf("an output %s while read counted %v; want its log and its tail, each changed once", c.name,
+					counted)
+			case !c.changed && (log == nil || !strings.HasSuffix(tail, "FAIL web\n") || len(counted) != 0):
+				t.Errorf("an output %s kept log %v (%q), sums up as …%q and counted %v; want both, counting "+
+					"nothing", c.name, log, why, tail[max(0, len(tail)-40):], counted)
 			}
 		})
 	}
