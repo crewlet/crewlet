@@ -2106,7 +2106,7 @@ runs: each pool at its worst, half again for the heap's room under the
 engine's [memory limit](../guides/deployment.md#the-engines-memory-limit), over
 that limit's nine tenths: 107 MiB for the
 [transcript reads](code-sandbox.md#reading-a-seats-sessions) its API answers,
-and on a node running seats too 1 884 MiB at the default `node.max_concurrent`
+and on a node running seats too 1 889 MiB at the default `node.max_concurrent`
 (its collections of runs and reads of its boxes for its peers, 8.5 MiB a
 turn, the sessions it takes from boxes, and its seats' reads). A Gitlet node
 always serves ingress (git is served on the API listener, which only an
@@ -2178,17 +2178,17 @@ At the default lanes, with and without seats beside Gitlet (MiB, rounded):
 | Node | Seats | Executor's pools | Answers in flight | Store's page cache | Read lane | Transfers | Kept for the broker, the engine's own heap and the rest of the store | Background budget |
 |---|---|---|---|---|---|---|---|---|
 | 2 GiB, one core | no | 107 | 284 | 128 | 128 | 2 | 613 | 340 |
-| 2 GiB, one core | yes | 1 884 | 284 | 128 | 128 | 1 | 0 | 0 |
+| 2 GiB, one core | yes | 1 889 | 284 | 128 | 128 | 1 | 0 | 0 |
 | 4 GiB, two cores | no | 107 | 284 | 256 | 256 | 6 | 1 397 | 452 |
-| 4 GiB, two cores | yes | 1 884 | 284 | 256 | 256 | 2 | 619 | 348 |
+| 4 GiB, two cores | yes | 1 889 | 284 | 256 | 256 | 2 | 617 | 345 |
 | 8 GiB, four cores | no | 107 | 284 | 512 | 512 | 13 | 2 965 | 900 |
-| 8 GiB, four cores | yes | 1 884 | 284 | 512 | 512 | 9 | 2 187 | 796 |
+| 8 GiB, four cores | yes | 1 889 | 284 | 512 | 512 | 9 | 2 185 | 793 |
 | 16 GiB, eight cores | no | 107 | 284 | 1 024 | 1 024 | 27 | 6 101 | 1 796 |
-| 16 GiB, eight cores | yes | 1 884 | 284 | 1 024 | 1 024 | 23 | 5 323 | 1 692 |
+| 16 GiB, eight cores | yes | 1 889 | 284 | 1 024 | 1 024 | 23 | 5 321 | 1 689 |
 
 Its pools, page cache and read lane alone outgrow 2 GiB, and a node keeps at
-least one transfer, so 2 GiB running seats beside Gitlet keeps 601 MiB more
-than its memory, and its Go memory limit, 1 411 MiB, sits below the 1 952 MiB
+least one transfer, so 2 GiB running seats beside Gitlet keeps 606 MiB more
+than its memory, and its Go memory limit, 1 411 MiB, sits below the 1 956 MiB
 its pools and answers in flight keep: under concurrent load at the bounds its
 pools exceed the node, so expect GC pressure, then the out-of-memory killer.
 Small and development installs run there, so it still boots and serves, and

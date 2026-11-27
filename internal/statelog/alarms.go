@@ -1843,7 +1843,7 @@ var table = []rule{
 			"its new limit within ten seconds, without a restart. Or, where " +
 			"gitlet.max_transfers is set, give it fewer transfers. What the node " +
 			"keeps is fixed when it boots: first the Go runtime's share for the " +
-			"executor's pools it runs (107 MiB of transcript reads, 1 884 MiB on " +
+			"executor's pools it runs (107 MiB of transcript reads, 1 889 MiB on " +
 			"a node running seats) and the answers in flight (284 MiB), the " +
 			"store's page cache (a sixteenth of its " +
 			"memory) and its read lane (128 MiB a core), then of " +
