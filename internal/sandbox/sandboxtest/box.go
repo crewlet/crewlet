@@ -176,11 +176,12 @@ func testAReadTellsAFileCutSinceItsOpen(t *testing.T, box sandbox.Sandbox, edit 
 
 // A RANGE IS READ AGAIN FROM THE FILE ITS OPEN OPENED ([sandbox.ReadAgain]), on
 // every open: its bytes from an offset within the range, never past the
-// range's end at the open. A file replaced at its path since is still the one
-// read; one edited in place is read as it stands.
+// range's end at the open, a file grown since included. A file replaced at its
+// path since is still the one read; one edited in place is read as it stands.
 //
-// Mutations, each red: read the path again; read past the range's end; count
-// the offset from the file's start rather than the range's.
+// Mutations, each red: read the path again; read past the range's end, or a
+// whole open's past the size it found; count the offset from the file's start
+// rather than the range's.
 func testARangeIsReadAgainFromTheFileItsOpenOpened(t *testing.T, box sandbox.Sandbox, edit InPlace) {
 	path := pathIn(box, "again.log")
 	want := pattern(1000)
@@ -197,6 +198,11 @@ func testARangeIsReadAgainFromTheFileItsOpenOpened(t *testing.T, box sandbox.San
 		}
 		if got, err := again(r, 110, 50); err != nil || !bytes.Equal(got, want[110:160]) {
 			t.Errorf("%s read again at 110 gave %q (%v), want %q", name, got, err, want[110:160])
+		}
+		edit.Append(t, path, []byte("grown since its open\n"))
+		if got, err := again(r, 990, 50); !errors.Is(err, io.EOF) || !bytes.Equal(got, want[990:]) {
+			t.Errorf("%s of a file grown since read again at 990 gave %q (%v), want its last 10 bytes at "+
+				"the open and the end", name, got, err)
 		}
 		_ = r.Close()
 	}
