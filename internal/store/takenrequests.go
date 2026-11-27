@@ -26,12 +26,31 @@ func NewTakenRequests(d *DB) TakenRequests { return TakenRequests{db: d} }
 // every call rather than a panic in a handler that serves the fleet.
 var errNoTakenFile = errors.New("store: the signed requests' ledger has no node file")
 
+// ErrScratchLedger is a ledger over a SCRATCH node file ([DB.Scratch]), which
+// is deleted at every boot and so keeps no id past a restart. Refused at every
+// call, so a channel whose replay writes never starts on a node without the
+// data role, rather than starting on a promise its file cannot keep.
+var ErrScratchLedger = errors.New("store: this node's file is scratch, deleted at every boot, so it " +
+	"keeps no signed request's id past a restart; a channel whose replay writes is served only on a " +
+	"node with the data role (node.roles)")
+
+// usable says why t can keep nothing: no file, or a scratch one.
+func (t TakenRequests) usable() error {
+	switch {
+	case t.db == nil:
+		return errNoTakenFile
+	case t.db.Scratch():
+		return ErrScratchLedger
+	}
+	return nil
+}
+
 // Keep records id as taken on channel until until, in one committed
 // transaction. fresh is false, and nothing changed, where the file holds the
 // id already.
 func (t TakenRequests) Keep(ctx context.Context, channel, id string, until time.Time) (bool, error) {
-	if t.db == nil {
-		return false, errNoTakenFile
+	if err := t.usable(); err != nil {
+		return false, err
 	}
 	var fresh bool
 	err := t.db.Tx(ctx, func(tx *sql.Tx) error {
@@ -52,8 +71,8 @@ func (t TakenRequests) Keep(ctx context.Context, channel, id string, until time.
 
 // Forget deletes channel's ids whose until is not after now.
 func (t TakenRequests) Forget(ctx context.Context, channel string, now time.Time) error {
-	if t.db == nil {
-		return errNoTakenFile
+	if err := t.usable(); err != nil {
+		return err
 	}
 	err := t.db.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,

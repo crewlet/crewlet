@@ -173,6 +173,27 @@ func TestAWriteTheNodeFileRefusesIsUnrecorded(t *testing.T) {
 	}
 }
 
+// A SCRATCH NODE FILE KEEPS NO ID, so a guard over it does not start: a file
+// deleted at every boot would forget every write it took, and an IN channel
+// is served only on a node with the data role, whose file is durable.
+//
+// Mutation: TakenRequests.usable ignores Scratch: the guard starts, red.
+func TestAScratchNodeFileStartsNoGuard(t *testing.T) {
+	t.Parallel()
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "node.db"), store.Options{Scratch: true})
+	t.Cleanup(func() { _ = db.Close() })
+	c, err := signedask.New[takenAsk, takenAnswer]("test.taken", ringForTaken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.KeptGuard(t.Context(), store.NewTakenRequests(db), takenAt); !errors.Is(err, store.ErrScratchLedger) {
+		t.Fatalf("a guard over a scratch node file = %v, want %v", err, store.ErrScratchLedger)
+	}
+	if _, err := store.NewTakenRequests(db).Keep(t.Context(), "test.taken", "w-1", takenAt.Add(time.Minute)); !errors.Is(err, store.ErrScratchLedger) {
+		t.Errorf("a keep in a scratch node file = %v, want %v", err, store.ErrScratchLedger)
+	}
+}
+
 // BenchmarkKeepingATakenRequest is one Keep, a committed and fsynced INSERT
 // into the node file, as a write's admission pays it: writers=1 serially, and
 // writers=16 at once (sixteen requests admitted together queue on the file's

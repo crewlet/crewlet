@@ -148,9 +148,9 @@ type mcpCheckAsk struct {
 func (a mcpCheckAsk) Binding() (string, time.Time) { return a.ID, a.Deadline }
 
 // Writes is false (internal/signedask): a test starts the server, lists its
-// tools and stops it, keeping nothing, so a replay is the same probe again.
-// And every node answers one, data or not, where a node without data keeps a
-// scratch file deleted at every boot: no file there could keep an id.
+// tools and stops it, so a replay repeats a probe a person asked for and
+// changes no state. And every node answers one, data or not, and a node
+// without data has no durable file to keep an id in (store.ErrScratchLedger).
 func (a mcpCheckAsk) Writes() bool { return false }
 
 // mcpValueAsk is a value under test as it crosses the broker, sealed.
