@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
@@ -307,11 +306,12 @@ func containerBox(t *testing.T) sandbox.Sandbox {
 	return box
 }
 
-// A LOCAL BOX TELLS A FILE WRITTEN OVER IN PLACE AT ITS SIZE: the same inode,
-// the same length, new bytes and a new modification time, as a writer that
-// cut it and wrote it again leaves it, is a change, not the file as opened.
+// A LOCAL BOX TELLS A FILE WRITTEN OVER IN PLACE AT ITS SIZE, its
+// modification time put back: the same inode, the same length, new bytes, and
+// the modification time it had at the open, as `touch -r` leaves it. The
+// change time, which no user sets, tells it.
 //
-// Mutation: compare only the file's size to the open's.
+// Mutation: compare only the file's size and modification time to the open's.
 func TestALocalBoxTellsAFileWrittenOverInPlace(t *testing.T) {
 	t.Parallel()
 	for name, fresh := range map[string]func(*testing.T) (sandbox.Sandbox, string){
@@ -339,6 +339,10 @@ func TestALocalBoxTellsAFileWrittenOverInPlace(t *testing.T) {
 				t.Fatal(err)
 			}
 			host := home + strings.TrimPrefix(path, box.Home())
+			before, err := os.Stat(host)
+			if err != nil {
+				t.Fatal(err)
+			}
 			f, err := os.OpenFile(host, os.O_WRONLY, 0)
 			if err != nil {
 				t.Fatal(err)
@@ -347,13 +351,11 @@ func TestALocalBoxTellsAFileWrittenOverInPlace(t *testing.T) {
 			if err = errors.Join(err, f.Close()); err != nil {
 				t.Fatal(err)
 			}
-			info, err := os.Stat(host)
-			if err != nil {
+			if err := os.Chtimes(host, before.ModTime(), before.ModTime()); err != nil {
 				t.Fatal(err)
 			}
-			later := info.ModTime().Add(time.Second)
-			if err := os.Chtimes(host, later, later); err != nil {
-				t.Fatal(err)
+			if after, err := os.Stat(host); err != nil || !after.ModTime().Equal(before.ModTime()) {
+				t.Fatalf("the modification time was not put back: %v", err)
 			}
 			if got, err := sandbox.ChangeOf(r); err != nil || got != sandbox.FileChanged {
 				t.Errorf("a file written over in place at its size tells %q (%v), want %q", got, err,

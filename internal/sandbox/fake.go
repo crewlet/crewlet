@@ -40,6 +40,9 @@ type FakeSandbox struct {
 	// it as a host box asks its descriptor ([ChangeOf]).
 	inodes map[string]uint64
 	inode  uint64
+	// edits is how many edits in place each file has had, a host file's
+	// change time: [FakeSandbox.AppendInPlace] and the rest bump it.
+	edits map[string]uint64
 	// touches is when each Touch came: see [FakeSandbox.Touches].
 	touches []time.Time
 	paused  bool
@@ -112,7 +115,8 @@ var _ Sandbox = (*FakeSandbox)(nil)
 // NewFakeSandbox mints a box with the given id. It reads files whole up to
 // [MaxFileBytes], as every real box does.
 func NewFakeSandbox(id string) *FakeSandbox {
-	return &FakeSandbox{id: id, home: DefaultHome, files: map[string][]byte{}, inodes: map[string]uint64{}}
+	return &FakeSandbox{id: id, home: DefaultHome, files: map[string][]byte{}, inodes: map[string]uint64{},
+		edits: map[string]uint64{}}
 }
 
 // EngineHost is the name the engine host answers to inside the box, as a
@@ -376,9 +380,10 @@ func (s *FakeSandbox) OpenRange(ctx context.Context, p string, off, n int64) (io
 // became of the file since ([ChangeOf]).
 func (s *FakeSandbox) body(p string, whole, part []byte) io.ReadCloser {
 	s.mu.Lock()
-	inode := s.inodes[path.Clean(p)]
+	inode, edits := s.inodes[path.Clean(p)], s.edits[path.Clean(p)]
 	s.mu.Unlock()
-	return fakeBody{Reader: s.streaming(p, part), box: s, path: path.Clean(p), inode: inode, opened: whole}
+	return fakeBody{Reader: s.streaming(p, part), box: s, path: path.Clean(p), inode: inode, edits: edits,
+		opened: whole}
 }
 
 // Delivered is how many bytes of its files the box's reads have handed out —
@@ -550,6 +555,7 @@ func (s *FakeSandbox) AppendInPlace(p string, more []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.files[path.Clean(p)] = append(slices.Clone(s.files[path.Clean(p)]), more...)
+	s.edits[path.Clean(p)]++
 }
 
 // TruncateInPlace cuts the file at p to n bytes, the same file, as a shell's
@@ -558,6 +564,22 @@ func (s *FakeSandbox) TruncateInPlace(p string, n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.files[path.Clean(p)] = slices.Clone(s.files[path.Clean(p)][:min(n, len(s.files[path.Clean(p)]))])
+	s.edits[path.Clean(p)]++
+}
+
+// RewriteInPlace writes content over the file at p from its start, the same
+// file, as a writer that seeks back and writes again does: at the same size,
+// only the edit itself tells it, as a host file's change time does.
+func (s *FakeSandbox) RewriteInPlace(p string, content []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := slices.Clone(s.files[path.Clean(p)])
+	if len(content) > len(now) {
+		now = append(now, make([]byte, len(content)-len(now))...)
+	}
+	copy(now, content)
+	s.files[path.Clean(p)] = now
+	s.edits[path.Clean(p)]++
 }
 
 // FakeProvider mints [FakeSandbox]es and remembers them, so Connect returns

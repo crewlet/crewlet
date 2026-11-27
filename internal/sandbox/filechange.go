@@ -3,7 +3,6 @@ package sandbox
 import (
 	"bytes"
 	"io"
-	"io/fs"
 	"os"
 )
 
@@ -13,8 +12,8 @@ import (
 type FileChange string
 
 const (
-	// FileUnchanged is a file of the size and modification time the open
-	// found: what was read of it is the file as it stood.
+	// FileUnchanged is a file as the open found it: what was read of it is
+	// the file as it stood.
 	FileUnchanged FileChange = "unchanged"
 	// FileAppended is a file grown past the size the open found: what was
 	// read, to that size, is the start of a file still being written.
@@ -42,38 +41,16 @@ type changeTeller interface {
 // ChangeOf is what became of the file body was opened on ([Sandbox.OpenWhole],
 // [Sandbox.OpenRange], [Sandbox.OpenTail], [Sandbox.OpenFile]) since the open.
 // A body that cannot tell is [FileChanged]: a read that cannot show it stood
-// for one version of a file shows nothing of it.
+// for one version of a file shows nothing of it. A local box asks the
+// descriptor it opened ([hostFile]) for its device, inode, size, modification
+// time and change time; the change time, which every write and every reset of
+// the modification time sets, also catches a same-size rewrite whose
+// modification time was put back.
 func ChangeOf(body io.Reader) (FileChange, error) {
 	if t, ok := body.(changeTeller); ok {
 		return t.Change()
 	}
 	return FileChanged, nil
-}
-
-// hostFile is a file on the engine host opened for a read, and what its open
-// found of it: the same descriptor is asked again, so a file renamed over the
-// path changes nothing for the inode read, and only that inode written in
-// place, shrunk or grown, is a change ([ChangeOf]).
-type hostFile struct {
-	file   *os.File
-	opened fs.FileInfo
-}
-
-// change compares the file now with its open.
-func (h hostFile) change() (FileChange, error) {
-	now, err := h.file.Stat()
-	if err != nil {
-		return "", err
-	}
-	switch {
-	case now.Size() < h.opened.Size():
-		return FileChanged, nil
-	case now.Size() > h.opened.Size():
-		return FileAppended, nil
-	case !now.ModTime().Equal(h.opened.ModTime()):
-		return FileChanged, nil
-	}
-	return FileUnchanged, nil
 }
 
 // hostSection is a section of a file on the engine host, closed with it, and
@@ -109,14 +86,17 @@ func (absentBody) Change() (FileChange, error) { return FileUnchanged, nil }
 // absentFile is the body of a file not there at its open.
 func absentFile() io.ReadCloser { return absentBody{bytes.NewReader(nil)} }
 
-// fakeBody is a fake box's file as its open found it ([FakeSandbox]): its
-// inode is asked again, so a file written over the path since is one the
-// reader holds open, unchanged, and only an edit in place is a change.
+// fakeBody is a fake box's file as its open found it ([FakeSandbox]), told as
+// a host file is ([hostFile]): its inode is asked again, so a file written
+// over the path since is one the reader holds open, unchanged; an edit in
+// place since is a change by the size it leaves, grown past the open's an
+// append whatever it wrote, as a host's size is all a host can tell.
 type fakeBody struct {
 	io.Reader
 	box    *FakeSandbox
 	path   string
 	inode  uint64
+	edits  uint64
 	opened []byte
 }
 
@@ -127,11 +107,12 @@ func (f fakeBody) Change() (FileChange, error) {
 	f.box.mu.Lock()
 	now, there := f.box.files[f.path]
 	same := there && f.box.inodes[f.path] == f.inode
+	edits := f.box.edits[f.path]
 	f.box.mu.Unlock()
 	switch {
-	case !same || bytes.Equal(now, f.opened):
+	case !same || edits == f.edits:
 		return FileUnchanged, nil
-	case len(now) > len(f.opened) && bytes.HasPrefix(now, f.opened):
+	case len(now) > len(f.opened):
 		return FileAppended, nil
 	}
 	return FileChanged, nil
