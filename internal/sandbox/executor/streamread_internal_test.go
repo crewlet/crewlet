@@ -164,8 +164,11 @@ func TestAStandInResultComesOnlyFromTheOneCheckedRead(t *testing.T) {
 		success      bool
 	}{
 		{"whole", strings.Repeat(line, 40) + result + "\n", func(*sandbox.FakeSandbox, string) {}, true},
-		{"cut while read", strings.Repeat(line, 40) + result + "\n",
-			func(b *sandbox.FakeSandbox, path string) { b.TruncateInPlace(path, 40) }, false},
+		// Cut after its result line, which the read then reads whole.
+		{"cut while read", strings.Repeat(line, 40) + result + "\n" + line,
+			func(b *sandbox.FakeSandbox, path string) {
+				b.TruncateInPlace(path, 40*len(line)+len(result)+1)
+			}, false},
 		{"its result line not yet ended", strings.Repeat(line, 40) + result,
 			func(b *sandbox.FakeSandbox, path string) { b.AppendInPlace(path, []byte(" and more words\n")) }, false},
 	} {
