@@ -488,6 +488,31 @@ func TestAStopReplayedAfterARestartStopsNothing(t *testing.T) {
 	}
 }
 
+// A STOP FOR ANOTHER NODE IS KEPT NOWHERE BUT THERE: every node hears a
+// stop, and only the node running the turn records it, so the others write no
+// row, fsync nothing and log nothing, and answer nothing on the wire.
+//
+// Mutation: admitted takes the stop before asking whether it is addressed here:
+// node-a's file holds the stop, red.
+func TestAStopForAnotherNodeWritesNoRow(t *testing.T) {
+	t.Parallel()
+	fleet := keysOf(t, "fleet-material", 1)
+	file := signedasktest.NewLedger()
+	srv := &server{frames: map[uuid.UUID][]wire.Frame{turnB: {frameOf(turnB, 1, wire.EventDelta)}}}
+	here, _ := nodeOver(t, memory.NewBroker(), "node-a", fleet, srv, file)
+	stop, err := here.stops.SealRequest(StopRequest{V: FleetWireVersion, ID: signedask.NewID(),
+		Deadline: time.Now().Add(time.Minute), Node: "node-b", Owner: owner, Turn: turnB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := here.answerStop(t.Context(), stop); !errors.Is(err, errNotThisNode) || out != nil {
+		t.Fatalf("a stop for node-b at node-a = %q, %v; want no answer", out, err)
+	}
+	if n := file.Len(StopChannel); n != 0 || len(srv.stopped) != 0 {
+		t.Errorf("a stop for node-b left %d rows in node-a's file and stopped %v", n, srv.stopped)
+	}
+}
+
 func mustOneWay(t *testing.T, ring recordseal.Keyring) *signedask.OneWay[Sealed] {
 	t.Helper()
 	w, err := signedask.NewOneWay[Sealed](FrameChannel, ring)

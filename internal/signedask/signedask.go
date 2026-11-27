@@ -142,7 +142,7 @@
 // two move together. A clock stepped back only keeps an id longer; one
 // stepped forward forgets an id only once it refuses the request anyway.
 //
-// # What arrives is one of six, and each is handled once
+// # What arrives is one of seven, and each is handled once
 //
 // [Channel.Admit] decides what a serving node may do with what it was sent:
 //
@@ -165,6 +165,8 @@
 //   - UNRECORDED: the fleet's, a write, and this node could not keep its id
 //     in its own file. A fact about THIS NODE: it runs nothing, and the asker
 //     may ask another.
+//   - NOT ADDRESSED: the fleet's, and for another node of a scatter
+//     ([Channel.AdmitTo]). Takes nothing, so only the node it names keeps it.
 //
 // # And one way, for a frame a node shows to people
 //
@@ -363,7 +365,7 @@ func (c *Channel[Q, R]) SealRequest(req Q) ([]byte, error) {
 
 // Disposition is what a serving node may do with one request it was sent.
 //
-// A NAMED TYPE WITH SIX VALUES rather than a bool, for the state log's own
+// A NAMED TYPE WITH SEVEN VALUES rather than a bool, for the state log's own
 // [recordseal.Verdict] reason: the failures have different answers — a key this
 // node does not hold is "ask another node", a tampered frame is "ask nobody,
 // believe nothing" — and a caller handed `false` for all of them would have to
@@ -384,6 +386,9 @@ const (
 	// Unrecorded is a write the fleet signed whose id this node could not
 	// keep in its own file, so it runs nothing here.
 	Unrecorded Disposition = "unrecorded"
+	// NotAddressed is a request the fleet signed for another node
+	// ([Channel.AdmitTo]): nothing taken, nothing kept.
+	NotAddressed Disposition = "not_addressed"
 )
 
 // Admission is what [Channel.Admit] concluded about one request.
@@ -415,6 +420,18 @@ type Admission[Q Request] struct {
 // whatever the first was answered. A write is admitted only once its id is
 // committed to the node's file; ctx bounds that write.
 func (c *Channel[Q, R]) Admit(ctx context.Context, sealed []byte, seen *Guard, now time.Time) Admission[Q] {
+	return c.AdmitTo(ctx, sealed, seen, now, nil)
+}
+
+// AdmitTo is [Channel.Admit] on a channel whose requests each name the node
+// they are for, scattered to every node: addressed says whether this node is
+// the one. It is asked only of a request the fleet signed, after it decoded,
+// so nothing unsigned learns which node holds what; and BEFORE the take, so a
+// request for another node is [NotAddressed], taking no id and writing no row.
+// Nil addresses every request.
+func (c *Channel[Q, R]) AdmitTo(ctx context.Context, sealed []byte, seen *Guard, now time.Time,
+	addressed func(Q) bool) Admission[Q] {
+
 	var out Admission[Q]
 	body, verdict := c.requestsOpened.Open(sealed)
 	switch verdict {
@@ -441,6 +458,10 @@ func (c *Channel[Q, R]) Admit(ctx context.Context, sealed []byte, seen *Guard, n
 	out.Request = req
 	id, deadline := req.Binding()
 	out.ID = id
+	if addressed != nil && !addressed(req) {
+		out.Disposition, out.Why = NotAddressed, "the request is for another node"
+		return out
+	}
 	if refused, why := seen.take(ctx, id, deadline, c.apart, now, req.Writes()); why != "" {
 		out.Disposition, out.Why = refused, why
 		return out

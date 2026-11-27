@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 )
 
@@ -171,5 +172,37 @@ func TestAGuardTrustsItsFileOverItsMemory(t *testing.T) {
 	// Mutation: Guard.take reads Keep's fresh as true: admitted, red.
 	if got := c.Admit(t.Context(), sealed(t, c, write), g, instant); got.Disposition != Stale {
 		t.Errorf("a write the file holds and the memory does not = %+v, want it stale", got)
+	}
+}
+
+// A REQUEST FOR ANOTHER NODE TAKES NOTHING: a scattered write reaches every
+// node, and only the one it names keeps its id, so the others write no row and
+// take no memory. And the address is asked only of what the fleet signed, so
+// an unsigned request cannot learn which node a request would reach.
+//
+// Mutations: AdmitTo asks addressed after the take (the file holds the id,
+// red), or before the signature check (the predicate sees the forgery, red).
+func TestARequestForAnotherNodeTakesNothing(t *testing.T) {
+	t.Parallel()
+	c := channel(t, "test.channel", fleetRing)
+	file := signedasktest.NewLedger()
+	g := keptGuard(t, c, file, instant)
+	write := ask{ID: "w-1", Deadline: instant.Add(time.Minute), Do: "stop on node-b", Write: true}
+	asked := 0
+	elsewhere := func(ask) bool { asked++; return false }
+	if got := c.AdmitTo(t.Context(), sealed(t, c, write), g, instant, elsewhere); got.Disposition != NotAddressed {
+		t.Fatalf("a write for another node = %+v, want it not addressed", got)
+	}
+	if file.Len("test.channel") != 0 || len(g.seen) != 0 {
+		t.Fatalf("a write for another node left %d rows and %d ids held", file.Len("test.channel"), len(g.seen))
+	}
+	if got := c.Admit(t.Context(), sealed(t, c, write), g, instant); got.Disposition != Admitted {
+		t.Errorf("the same write at the node it names = %+v, want it admitted", got)
+	}
+
+	forged := channel(t, "test.channel", recordseal.OneKey("k1", "material outside the fleet"))
+	asked = 0
+	if got := c.AdmitTo(t.Context(), sealed(t, forged, write), g, instant, elsewhere); got.Disposition != Tampered || asked != 0 {
+		t.Errorf("a forged request = %+v with the address asked %d times, want it tampered and never asked", got, asked)
 	}
 }

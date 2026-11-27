@@ -371,7 +371,8 @@ flowchart TD
   the live relay a data node with an out-of-service copy hears a sound peer's
   appliers through, because it reaches dashboards as chat messages and datastore
   documents. A node takes each request once and refuses its replay until the
-  request's deadline has passed. It keeps the id of every request whose replay
+  request's deadline, plus the allowance its channel gives two nodes' clocks,
+  has passed. It keeps the id of every request whose replay
   would write (an estate write, a broker removal, an Ask Crewlet stop) in its
   own file until then, committed before the request runs, so a replay after a
   restart is refused too, and a write whose id the file refuses runs nothing
