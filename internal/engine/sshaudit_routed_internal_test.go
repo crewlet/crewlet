@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -88,7 +89,7 @@ func TestANodeWithoutDataRecordsItsSSHThroughADataNode(t *testing.T) {
 	}
 	envelopes := routerEnvelopes(t)
 	served := &receivedAccess{}
-	stop, err := estate.Serve(t.Context(), started(), estate.ServerOptions{
+	stop, err := estate.Serve(t.Context(), started(), estate.ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: "data-1", Local: served, Envelopes: envelopes,
 	})
 	if err != nil {

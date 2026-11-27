@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/rendezvous"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -777,7 +778,7 @@ func (g deskGit) MergePreview(_ context.Context, q gitlet.MergePreviewQuery) (gi
 // fleet's placements name.
 func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 	t.Helper()
-	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Self: "data-d", Local: d,
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Taken: signedasktest.NewLedger(), Self: "data-d", Local: d,
 		Git: deskGit{d: d}, Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatal(err)

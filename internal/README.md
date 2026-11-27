@@ -174,6 +174,7 @@
 | `runtoken` | The signed, self-describing per-run credential (OTLP receiver, tool bridge, Gitlet box git, artifact view ticket) that any node of a fleet can mint and verify; its key derivation also feeds the broker credentials. |
 | `recordseal` | A record's seal under the fleet's keyring (ADR-0031): the frame, `Signer`, `Verifier` and three verdicts (`Verified`, `KeyUnknown`, `Tampered`). A leaf that imports nothing of the engine, so every sealing channel can use it. |
 | `signedask` | The one rule for a request one node asks another to carry out over the queue's ephemeral verbs, and its reply: sealed with the fleet's record seal, bound to an id and deadline, never replayable (ADR-0031) |
+| `signedask/signedasktest` | TEST-ONLY: a signed channel's ledger in memory, so a suite restarts a guard over the ids it kept and makes the keep fail. |
 | `api/mcpbridge` | Serves a detached box run's tool surface (a seat's executor) to its harness over MCP on HTTP, dispatching through `tools.Surface`, fleet-addressed and relayed to the seat holder. |
 | `mcprelay` | `crewlet mcp-relay <socket>`: the stdio MCP server a harness starts for a seat's tool session, copying stdin to the engine's per-run unix socket and back; reads only its argv |
 | `mcpreview` | Decides from the fleet's MCP listings and the accepted tool definitions which tools a server changed since their levels were decided and which ask a person first (ADR-0078); one pure reading shared by every caller |

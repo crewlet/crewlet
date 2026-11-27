@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/rendezvous"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -211,7 +212,7 @@ func (f *fleet) gitletNodes(t *testing.T, names []string, idle ...string) map[st
 			half.node = &fakeGit{name: name}
 			halves[name] = half.node
 		}
-		stop, err := Serve(t.Context(), silencer{q: f.start(t), node: node}, ServerOptions{
+		stop, err := Serve(t.Context(), silencer{q: f.start(t), node: node}, ServerOptions{Taken: signedasktest.NewLedger(),
 			Self: name, Local: node, Git: half, Seams: node.seams(), Envelopes: fleetEnvelopes,
 		})
 		if err != nil {

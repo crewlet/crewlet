@@ -71,9 +71,9 @@ type fleetAsker struct {
 	want    int
 }
 
-func (a *fleetAsker) Ask(_ context.Context, subject string, request []byte, want int) ([][]byte, error) {
+func (a *fleetAsker) Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error) {
 	a.subject, a.want = subject, want
-	admitted := steerWire.Admit(request, signedask.NewGuard(), time.Now())
+	admitted := steerWire.Admit(ctx, request, signedask.NewGuard(), time.Now())
 	if admitted.Disposition != signedask.Admitted {
 		return nil, fmt.Errorf("the tool sent a request the fleet cannot take: %s", admitted.Why)
 	}

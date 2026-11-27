@@ -80,6 +80,14 @@ type Request struct {
 // (internal/signedask).
 func (r Request) Binding() (string, time.Time) { return r.ID, r.Deadline }
 
+// Writes is false, an offer included, because no replay of one can outlive
+// the process that took it (internal/signedask): a note is offered only to a
+// turn the running node's desk holds in memory, every turn runs under a run
+// id minted for it, and a restarted desk holds none, so it answers a replayed
+// note as not its own. A note filed on a run's record is kept once by its
+// NoteID.
+func (r Request) Writes() bool { return false }
+
 // Reply is the running node's answer. Only the node holding the turn sends
 // one.
 //

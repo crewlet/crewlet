@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/rendezvous"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -285,7 +286,7 @@ func (m *member) route(t testing.TB) {
 	m.router.Store(r)
 	// ON THE CLUSTER'S CONTEXT: the registration outlives the case that
 	// restarted the member.
-	withdraw, err := estate.Serve(m.c.life.Context(), m.q, estate.ServerOptions{
+	withdraw, err := estate.Serve(m.c.life.Context(), m.q, estate.ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: m.id, Local: memberCopy{m}, Git: memberGit{m}, Envelopes: clusterEnvelopes})
 	if err != nil {
 		t.Fatalf("gitletcluster: %s serves the estate: %v", m.id, err)

@@ -173,7 +173,7 @@ func (b *boxReads) answer(ctx context.Context, raw []byte) ([]byte, error) {
 	// the queue before any wait for one of the registration's slots
 	// (queue.Arrived): every wait the read is counted for runs from here.
 	arrived := queue.Arrived(ctx)
-	admitted := b.wire.Admit(raw, b.taken, b.now())
+	admitted := b.wire.Admit(ctx, raw, b.taken, b.now())
 	switch admitted.Disposition {
 	case signedask.Admitted:
 	case signedask.Tampered:

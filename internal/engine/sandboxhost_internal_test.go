@@ -468,7 +468,7 @@ func TestOnlyTheAskedHostsSignedReplyIsTheAnswer(t *testing.T) {
 			}
 			taken := signedask.NewGuard()
 			stop, err := q.Serve(t.Context(), topics.SandboxBoxRead, queue.ConcurrentAnswers, func(_ context.Context, raw []byte) ([]byte, error) {
-				admitted := fleet.wire.Admit(raw, taken, time.Now())
+				admitted := fleet.wire.Admit(t.Context(), raw, taken, time.Now())
 				if admitted.Disposition != signedask.Admitted {
 					return nil, errors.New(admitted.Why)
 				}

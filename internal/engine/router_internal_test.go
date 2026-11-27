@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -681,7 +682,7 @@ func statelessOver(t *testing.T) (*Engine, func(estate.Served)) {
 	}
 	envelopes := routerEnvelopes(t)
 	data := &servedHalves{}
-	stop, err := estate.Serve(t.Context(), started(), estate.ServerOptions{
+	stop, err := estate.Serve(t.Context(), started(), estate.ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: "data-1", Local: data, Envelopes: envelopes,
 	})
 	if err != nil {

@@ -335,6 +335,15 @@ type request struct {
 // ([signedask.Request]).
 func (r request) Binding() (string, time.Time) { return r.ID, r.Deadline }
 
+// Writes is true for every operation but a declared read, the git arm's
+// writes included: a write replayed at a node that restarted would run again
+// as the actor it names (internal/signedask). An operation this build does not
+// declare runs nothing, and is counted a write so it is never taken unkept.
+func (r request) Writes() bool {
+	spec, known := registry[r.Op]
+	return !known || spec.class != opRead
+}
+
 // unservedReason is why a node answered without running an operation.
 type unservedReason string
 
@@ -401,6 +410,12 @@ const (
 	// it carries a wait that is no duration ([request.BudgetMS]), or this
 	// node has already taken its id ([signedask.Guard]). Nothing ran.
 	unservedStale unservedReason = "stale"
+
+	// unservedUnrecorded: the request is a write and this node's own file
+	// would not keep its id ([signedask.Unrecorded]), so it ran nothing
+	// rather than run a write a replay after a restart could run again.
+	// Every class moves on.
+	unservedUnrecorded unservedReason = "unrecorded"
 )
 
 // outOfService says which of node's copies is out of service, in the words a

@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -331,6 +332,12 @@ type brokerRequest struct {
 // Binding is the request's id and deadline ([signedask.Request]).
 func (r brokerRequest) Binding() (string, time.Time) { return r.ID, r.Deadline }
 
+// Writes is true for everything but the group read: a removal replayed at a
+// member that restarted would remove a voter that rejoined under its name
+// (internal/signedask). An operation this build does not know runs nothing,
+// and is counted a write so a newer one is never taken unkept.
+func (r brokerRequest) Writes() bool { return r.Op != brokerOpGroup }
+
 const (
 	brokerOpGroup  = "group"
 	brokerOpRemove = "remove"
@@ -368,6 +375,10 @@ const (
 	// brokerCodeStale is a request the member did not run because it was
 	// not one to take now: past its deadline, unbound, or already taken.
 	brokerCodeStale = "stale"
+	// brokerCodeUnrecorded is a removal the member did not run because its
+	// own file would not keep the request's id ([signedask.Unrecorded]).
+	// Nothing ran, so the asker asks the next member.
+	brokerCodeUnrecorded = "unrecorded"
 	// brokerCodeUnconfirmed is a removal the member proposed and couldn't
 	// then confirm ([jetstream.ErrRemovalUnconfirmed]): it may have landed,
 	// so the gesture ends rather than another member proposing it again.
@@ -381,8 +392,9 @@ const (
 // removal_unconfirmed stops where it once moved on, which fails safe.
 
 // errUnverifiedRequest is a member's answer that it ran nothing because it
-// could not verify what it was sent ([brokerCodeUnauthenticated]) or was not to
-// take it now ([brokerCodeStale]): nothing ran, so another member may carry it.
+// could not verify what it was sent ([brokerCodeUnauthenticated]), was not to
+// take it now ([brokerCodeStale]) or could not keep its id
+// ([brokerCodeUnrecorded]): nothing ran, so another member may carry it.
 var errUnverifiedRequest = errors.New("engine: the member ran nothing it was sent")
 
 // errorOf turns a member's refusal back into the sentinel it answered from,
@@ -391,7 +403,7 @@ func (r brokerReply) errorOf() error {
 	switch r.Code {
 	case "":
 		return nil
-	case brokerCodeUnauthenticated, brokerCodeStale:
+	case brokerCodeUnauthenticated, brokerCodeStale, brokerCodeUnrecorded:
 		return fmt.Errorf("%w (%s)", errUnverifiedRequest, r.Detail)
 	case brokerCodeNoGroup:
 		return fmt.Errorf("%w (%s)", jetstream.ErrNoMetaGroup, r.Detail)
@@ -450,8 +462,14 @@ func (e *Engine) serveFleetBroker(ctx context.Context) error {
 	if e.brokerWire == nil {
 		return errNoBrokerWire
 	}
-	// THE IDS THIS MEMBER HAS TAKEN, for as long as it serves.
-	taken := signedask.NewGuard()
+	// THE IDS THIS MEMBER HAS TAKEN, a removal's in its own file too, so a
+	// removal replayed after a restart is refused ([brokerRequest.Writes]).
+	// NOT SERVED where the file cannot say what it took: the error ends the
+	// node's start, and every asker meanwhile asks the other members.
+	taken, err := e.brokerWire.KeptGuard(ctx, store.NewTakenRequests(e.backends.Store), time.Now())
+	if err != nil {
+		return fmt.Errorf("engine: serve the fleet's broker membership: %w", err)
+	}
 	stop, err := e.backends.Queue.Serve(ctx, fleetBrokerSubject(e.id), queue.ConcurrentAnswers,
 		func(ctx context.Context, raw []byte) ([]byte, error) {
 			return e.brokerWire.SealReply(e.answerBroker(ctx, raw, taken, time.Now()))
@@ -482,7 +500,7 @@ func (e *Engine) stopServingFleetBroker(ctx context.Context) {
 func (e *Engine) answerBroker(ctx context.Context, raw []byte, taken *signedask.Guard,
 	now time.Time) brokerReply {
 
-	admitted := e.brokerWire.Admit(raw, taken, now)
+	admitted := e.brokerWire.Admit(ctx, raw, taken, now)
 	switch admitted.Disposition {
 	case signedask.Tampered:
 		// NOT THE FLEET'S: nothing in it is believed, not even its id. At
@@ -508,6 +526,11 @@ func (e *Engine) answerBroker(ctx context.Context, raw []byte, taken *signedask.
 			"disposition", string(admitted.Disposition), "op", admitted.Request.Op,
 			"from", admitted.Request.From, "detail", admitted.Why)
 		return brokerReply{Node: e.id, Request: admitted.ID, Code: brokerCodeStale,
+			Detail: fmt.Sprintf("%s: %s", e.id, admitted.Why)}
+	case signedask.Unrecorded:
+		// THIS MEMBER'S FILE would not keep the id, logged at error by the
+		// guard: nothing ran, so the asker asks the next member.
+		return brokerReply{Node: e.id, Request: admitted.ID, Code: brokerCodeUnrecorded,
 			Detail: fmt.Sprintf("%s: %s", e.id, admitted.Why)}
 	}
 	req := admitted.Request

@@ -196,6 +196,10 @@ type relayAsk struct {
 // Binding is the ask's id and deadline ([signedask.Request]).
 func (a relayAsk) Binding() (string, time.Time) { return a.ID, a.Deadline }
 
+// Writes is false: the relay answers what the peer's appliers committed and
+// changes nothing (internal/signedask).
+func (a relayAsk) Writes() bool { return false }
+
 // relayAnswer is a server's answer: where it stands and every held batch after
 // the follower's ([relayedBatch]), or that it cannot answer for a domain the
 // follower relays (Unserved) or no longer reaches back that far (Gap). Signed
@@ -492,7 +496,7 @@ const relayEnvelopeBytes = 4 << 10
 // ([signedask.Channel.Admit]); any other is answered unserved so its follower
 // moves on, bound to the ask's id only where the id is the fleet's to name.
 func (r *liveRelay) answerSealed(ctx context.Context, raw []byte, now time.Time) relayAnswer {
-	admitted := r.wire.Admit(raw, r.taken, now)
+	admitted := r.wire.Admit(ctx, raw, r.taken, now)
 	switch admitted.Disposition {
 	case signedask.Tampered:
 		// NOT THE FLEET'S: not even its id is believed. At ERROR: whoever
@@ -515,7 +519,7 @@ func (r *liveRelay) answerSealed(ctx context.Context, raw []byte, now time.Time)
 			"disposition", string(admitted.Disposition), "detail", admitted.Why)
 		return relayAnswer{Unserved: true, Detail: fmt.Sprintf(
 			"%s could not decode an ask the fleet signed: %s", r.self, admitted.Why)}
-	case signedask.Stale:
+	case signedask.Stale, signedask.Unrecorded:
 		log.WarnContext(ctx, "live_relay_ask_refused", "node", r.self,
 			"disposition", string(admitted.Disposition), "from", admitted.Request.From,
 			"detail", admitted.Why)

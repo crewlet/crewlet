@@ -175,7 +175,7 @@ func unreadyReason(err error) gitlet.UnreadyReason {
 // could serve failed with the refusal.
 func passesFill(rep reply) bool {
 	switch rep.Unserved {
-	case unservedNoBackend, unservedUnauthenticated, unservedStale:
+	case unservedNoBackend, unservedUnauthenticated, unservedStale, unservedUnrecorded:
 		return true
 	case unservedBehind, unservedBehindConfig:
 		return rep.Unready.PassesFill()

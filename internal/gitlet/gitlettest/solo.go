@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -405,7 +406,7 @@ func (f *SoloFleet) route(t testing.TB) {
 	for i, g := range f.git {
 		ids[i] = g.o.ID
 		// ON THE FLEET'S BROKER, so a process's death takes its subjects.
-		if _, err := estate.Serve(f.life.Context(), q, estate.ServerOptions{Self: g.o.ID,
+		if _, err := estate.Serve(f.life.Context(), q, estate.ServerOptions{Taken: signedasktest.NewLedger(), Self: g.o.ID,
 			Local: soloCopy{data: f.data}, Git: g, Envelopes: soloEnvelopes}); err != nil {
 			t.Fatalf("gitlettest: %s serves the estate: %v", g.o.ID, err)
 		}

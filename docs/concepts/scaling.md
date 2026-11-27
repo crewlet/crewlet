@@ -370,7 +370,14 @@ flowchart TD
   call, the node running an Ask Crewlet turn replaying or stopping it), and so is
   the live relay a data node with an out-of-service copy hears a sound peer's
   appliers through, because it reaches dashboards as chat messages and datastore
-  documents.
+  documents. A node takes each request once and refuses its replay until the
+  request's deadline has passed. It keeps the id of every request whose replay
+  would write (an estate write, a broker removal, an Ask Crewlet stop) in its
+  own file until then, committed before the request runs, so a replay after a
+  restart is refused too, and a write whose id the file refuses runs nothing
+  there. A read's id is kept in memory. A note and a
+  relayed tool call need no file: each is taken only by the process it names
+  (the turn's desk, the holder's incarnation), and a restarted one runs neither.
 - **Nobody answering is an answer that says so**, with what each data node said,
   never an empty list, which would say the company has none of what was asked
   for. A write that went **unanswered** is different: a node may have run it, so

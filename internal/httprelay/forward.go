@@ -187,7 +187,7 @@ func (in *inbound) answer(ctx context.Context, raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer release()
-	admitted := in.rl.frames.Admit(raw, in.guard, in.rl.time.Now())
+	admitted := in.rl.frames.Admit(ctx, raw, in.guard, in.rl.time.Now())
 	if admitted.Disposition != signedask.Admitted {
 		if admitted.Disposition == signedask.Tampered {
 			log.ErrorContext(ctx, "relay_frame_refused", "relay", in.rl.name, "exchange", in.id,

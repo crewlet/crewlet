@@ -294,6 +294,9 @@ bounded by one wait (two minutes and five seconds): nobody answering as leader
 for all of it is a group without quorum, which cannot change its own
 membership, so bring enough members back first; a carrying member that goes
 silent ends it as an outcome nobody knows, so read `list` before asking again.
+A member carries each signed removal once: it keeps the request's id in its own
+store until the wait ends, so a copy replayed later removes nothing, even after
+that member restarts and the voter has rejoined.
 The **Broker members** panel on **Settings › Nodes** offers the same removal,
 by node id or peer id.
 

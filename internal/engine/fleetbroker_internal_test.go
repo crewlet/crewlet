@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -21,6 +22,9 @@ import (
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // brokerRing is the keyring every node of a broker case's fleet holds.
@@ -153,9 +157,30 @@ func (f *brokerFleet) nodeWith(t *testing.T, profile placement.NodeProfile, memb
 	ring recordseal.Keyring) *Engine {
 
 	t.Helper()
+	var file *store.DB
+	if profile.Broker == placement.BrokerMember {
+		file = memberFile(t, filepath.Join(t.TempDir(), profile.ID+".db"))
+	}
+	return f.nodeOn(t, profile, member, ring, file)
+}
+
+// memberFile is a member's own file at path, as a restart finds it, closed
+// with the case.
+func memberFile(t *testing.T, path string) *store.DB {
+	t.Helper()
+	db := storetest.OpenNode(t, path, store.Options{})
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+// nodeOn is [brokerFleet.nodeWith] over file, the node's own file.
+func (f *brokerFleet) nodeOn(t *testing.T, profile placement.NodeProfile, member brokerMembership,
+	ring recordseal.Keyring, file *store.DB) *Engine {
+
+	t.Helper()
 	ctx := t.Context()
 	e := &Engine{id: profile.ID, profile: profile, brokerWire: mustBrokerWire(t, ring),
-		backends: &Backends{Queue: f.client(t), Coord: f.leases, broker: member}}
+		backends: &Backends{Queue: f.client(t), Coord: f.leases, broker: member, Store: file}}
 	f.engines[profile.ID] = e
 	f.present(t, profile)
 	if err := e.serveFleetBroker(ctx); err != nil {
@@ -722,7 +747,12 @@ func TestASignedRemovalIsCarriedOutOnce(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("captured %d requests, want the one", len(sent))
 	}
-	opened := mustBrokerWire(t, brokerRing).Admit(sent[0], signedask.NewGuard(), time.Now())
+	wire := mustBrokerWire(t, brokerRing)
+	taken, err := wire.KeptGuard(t.Context(), signedasktest.NewLedger(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened := wire.Admit(t.Context(), sent[0], taken, time.Now())
 	if opened.Disposition != signedask.Admitted || opened.Request.By != by.Name ||
 		opened.Request.ByKind != by.Kind || opened.Request.OperatorID != by.OperatorID {
 		t.Fatalf("the removal crossed as %+v, want the asker's author, kind and credential "+
@@ -739,6 +769,76 @@ func TestASignedRemovalIsCarriedOutOnce(t *testing.T) {
 	}
 	if !slices.Equal(a.removed, []string{"node-c"}) {
 		t.Fatalf("the member removed %v, want node-c once", a.removed)
+	}
+}
+
+// A REMOVAL REPLAYED AT A MEMBER THAT RESTARTED REMOVES NOTHING: the voter it
+// removed rejoined under its name, as a restarted member does, and the member
+// that carried the removal restarted too. Its own file still holds the
+// request's id, so the replay is refused as stale, never proposed again.
+//
+// Mutations: brokerRequest.Writes answers false for a removal, or KeptGuard
+// starts empty: the replay removes node-c a second time, red.
+func TestARemovalReplayedAfterTheMemberRestartsRemovesNothing(t *testing.T) {
+	t.Parallel()
+	fleet := newBrokerFleet(t)
+	path := filepath.Join(t.TempDir(), "node-a.db")
+	a := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
+	file := memberFile(t, path)
+	before := fleet.nodeOn(t, member("node-a", placement.RoleData), a, brokerRing, file)
+	leaf := fleet.node(t, placement.NodeProfile{ID: "leaf-1",
+		Roles: placement.Roles(placement.RoleSeats), Broker: placement.BrokerLeaf}, nil)
+	capture := &capturingQueue{EventQueue: leaf.backends.Queue}
+	leaf.backends.Queue = capture
+	if _, err := leaf.FleetBroker().Remove(t.Context(), BrokerRemoval{Node: "node-c"}); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	sent := capture.payloads()
+	if len(sent) != 1 {
+		t.Fatalf("captured %d requests, want the one", len(sent))
+	}
+
+	// THE MEMBER RESTARTS over the same file, and the voter is back.
+	before.stopServingFleetBroker(t.Context())
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	a.group = groupOf("node-a", "node-b", "node-c")
+	a.mu.Unlock()
+	fleet.nodeOn(t, member("node-a", placement.RoleData), a, brokerRing, memberFile(t, path))
+	reply := rawBrokerReply(t, fleet.client(t), "node-a", sent[0])
+	if reply.Code != brokerCodeStale {
+		t.Fatalf("the removal replayed after the restart answered %+v, want it refused as stale", reply)
+	}
+	if !slices.Equal(a.removed, []string{"node-c"}) {
+		t.Fatalf("the member removed %v, want node-c once", a.removed)
+	}
+}
+
+// A REMOVAL WHOSE ID THE MEMBER'S FILE WILL NOT KEEP IS NOT CARRIED THERE: the
+// member answers that it ran nothing, so the gesture asks the next member,
+// which carries it.
+//
+// Mutation: answerBroker runs an unrecorded request: node-a removes node-c, red.
+func TestARemovalTheMembersFileWillNotKeepIsCarriedByTheNext(t *testing.T) {
+	t.Parallel()
+	fleet := newBrokerFleet(t)
+	here := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
+	b := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
+	file := memberFile(t, filepath.Join(t.TempDir(), "node-a.db"))
+	local := fleet.nodeOn(t, member("node-a", placement.RoleData), here, brokerRing, file)
+	fleet.node(t, member("node-b", placement.RoleData), b)
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	done, err := local.FleetBroker().Remove(t.Context(), BrokerRemoval{Node: "node-c"})
+	if err != nil {
+		t.Fatalf("a removal node-a's file would not keep answered %v", err)
+	}
+	if done.By != "node-b" || len(here.removed) != 0 || !slices.Equal(b.removed, []string{"node-c"}) {
+		t.Fatalf("carried by %q; node-a removed %v, node-b %v; want node-b alone", done.By,
+			here.removed, b.removed)
 	}
 }
 

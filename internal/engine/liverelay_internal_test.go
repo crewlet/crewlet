@@ -807,7 +807,7 @@ func TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket(t *testing.T) {
 			var forged atomic.Int32
 			stop, err := forger.Serve(t.Context(), liveRelaySubject("a"), queue.ConcurrentAnswers,
 				func(_ context.Context, raw []byte) ([]byte, error) {
-					claimed := reader.Admit(raw, signedask.NewGuard(), time.Now()).Request
+					claimed := reader.Admit(t.Context(), raw, signedask.NewGuard(), time.Now()).Request
 					batch, err := json.Marshal(relayedBatch{Seq: claimed.After + 1,
 						liveBatch: liveBatch{Chat: posted("m-forged")}})
 					if err != nil {

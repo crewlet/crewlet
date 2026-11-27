@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -382,7 +383,7 @@ func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	v := &vault{}
-	stop, err := Serve(t.Context(), f.start(t), ServerOptions{
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: "data-d", Local: v, Envelopes: fleetEnvelopes,
 	})
 	if err != nil {

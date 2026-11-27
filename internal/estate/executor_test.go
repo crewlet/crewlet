@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -160,7 +161,7 @@ func sameHere[R any](t *testing.T, what string, routed, local R, err error) {
 // serveExecutor makes local answer the fleet as the data node name, on q.
 func serveExecutor(t *testing.T, q Server, name string, local LocalBackends) {
 	t.Helper()
-	stop, err := Serve(t.Context(), q, ServerOptions{Self: name, Local: local, Envelopes: fleetEnvelopes})
+	stop, err := Serve(t.Context(), q, ServerOptions{Taken: signedasktest.NewLedger(), Self: name, Local: local, Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatalf("serve %s: %v", name, err)
 	}

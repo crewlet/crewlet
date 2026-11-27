@@ -224,6 +224,13 @@ type openRequest struct {
 
 func (q openRequest) Binding() (string, time.Time) { return q.ID, q.Deadline }
 
+// Writes is false although an OPEN runs a request, because no replay of one
+// can outlive the process it named: [openRequest.Owner] is the holder's
+// incarnation, new at every boot, and a restarted holder answers [Elsewhere]
+// and runs nothing ([Relay.answer]). Within one process, the guard and
+// [Relay.known] take each id and exchange once (internal/signedask).
+func (q openRequest) Writes() bool { return false }
+
 // openReply is a holder's answer to an OPEN or a CLOSE.
 type openReply struct {
 	Request string  `json:"request"`
@@ -259,6 +266,11 @@ type frameRequest struct {
 }
 
 func (q frameRequest) Binding() (string, time.Time) { return q.ID, q.Deadline }
+
+// Writes is false: a frame goes to one exchange's subject, served by the
+// process that opened it and by nobody once it restarts, and a frame
+// repeated inside it is written once by its Seq (internal/signedask).
+func (q frameRequest) Writes() bool { return false }
 
 // frameReply acknowledges a frame.
 type frameReply struct {

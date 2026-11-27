@@ -703,7 +703,7 @@ func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
 		t.Errorf("admission asked %q, want the data node's own subject %q",
 			sent[0].subject, Subject("data-a"))
 	}
-	admitted := fleetEnvelopes.admit(sent[0].payload, signedask.NewGuard(), time.Now())
+	admitted := fleetEnvelopes.admit(t.Context(), sent[0].payload, signedask.NewGuard(), time.Now())
 	if admitted.Disposition != signedask.Admitted {
 		t.Fatalf("the ping does not open as a request the fleet signed: %s (%s)",
 			admitted.Disposition, admitted.Why)

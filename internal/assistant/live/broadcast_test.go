@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 )
 
 // prose is what the person was told: it must cross the broker only encrypted.
@@ -153,6 +154,14 @@ func (s *server) StopHere(_ context.Context, who, turn uuid.UUID) (wire.TurnStat
 // node is one fleet member on a shared in-memory broker.
 func node(t *testing.T, b *memory.Broker, id string, keys fleetKeys, s Server) (*Fleet, *spy) {
 	t.Helper()
+	return nodeOver(t, b, id, keys, s, signedasktest.NewLedger())
+}
+
+// nodeOver is [node] keeping the stops it takes in file, the node's own file
+// as a restart finds it.
+func nodeOver(t *testing.T, b *memory.Broker, id string, keys fleetKeys, s Server,
+	file signedask.Ledger) (*Fleet, *spy) {
+	t.Helper()
 	q := b.Client()
 	if err := q.Start(t.Context()); err != nil {
 		t.Fatal(err)
@@ -173,7 +182,7 @@ func node(t *testing.T, b *memory.Broker, id string, keys fleetKeys, s Server) (
 	sp := &spy{Broker: q}
 	f, err := NewFleet(FleetOptions{Node: id, Broker: sp, Roster: roster{"node-a": true,
 		"node-b": true}, Cipher: keys.cipher, Frames: frames, Replays: replays, Stops: stops,
-		Answers: queue.NewAnswerBudget(nil)})
+		Taken: file, Answers: queue.NewAnswerBudget(nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,6 +437,54 @@ func TestTheRunnerRefusesAnotherPersonsTurn(t *testing.T) {
 		reach != ReachGone {
 		t.Fatalf("a stop for a node the roster does not hold answered %q %v, want gone",
 			reach, err)
+	}
+}
+
+// A STOP REPLAYED AT A NODE THAT RESTARTED STOPS NOTHING: a turn's id is its
+// client's key's, so the turn retried on the restarted node is the one a
+// captured stop names, and the node's own file still holds the stop's id. And
+// a stop whose id the file will not keep stops nothing either.
+//
+// Mutation: build the stop guard with signedask.NewGuard and keep nothing:
+// every stop is refused unrecorded, so the first is not carried out, red.
+// Mutation: KeptGuard starts empty: the replay stops the retried turn, red.
+func TestAStopReplayedAfterARestartStopsNothing(t *testing.T) {
+	t.Parallel()
+	fleet := keysOf(t, "fleet-material", 1)
+	file := signedasktest.NewLedger()
+	running := func() *server {
+		return &server{frames: map[uuid.UUID][]wire.Frame{turnB: {frameOf(turnB, 1, wire.EventDelta)}}}
+	}
+	first := running()
+	before, _ := nodeOver(t, memory.NewBroker(), "node-a", fleet, first, file)
+	stop, err := before.stops.SealRequest(StopRequest{V: FleetWireVersion, ID: signedask.NewID(),
+		Deadline: time.Now().Add(time.Minute), Node: "node-a", Owner: owner, Turn: turnB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := before.answerStop(t.Context(), stop); err != nil || len(first.stopped) != 1 {
+		t.Fatalf("the stop before the restart = %v, stopped %v; want the turn stopped", err, first.stopped)
+	}
+
+	retried := running()
+	after, _ := nodeOver(t, memory.NewBroker(), "node-a", fleet, retried, file)
+	if out, err := after.answerStop(t.Context(), stop); err == nil || out != nil {
+		t.Errorf("the stop replayed after the restart was answered %q", out)
+	}
+	if len(retried.stopped) != 0 {
+		t.Fatalf("the stop replayed after the restart stopped the retried turn")
+	}
+
+	file.Refuse(errors.New("disk full"))
+	fresh, err := after.stops.SealRequest(StopRequest{V: FleetWireVersion, ID: signedask.NewID(),
+		Deadline: time.Now().Add(time.Minute), Node: "node-a", Owner: owner, Turn: turnB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := after.answerStop(t.Context(), fresh); err == nil || out != nil ||
+		len(retried.stopped) != 0 {
+		t.Errorf("a stop the file would not keep = %q, %v, stopped %v; want nothing stopped",
+			out, err, retried.stopped)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -173,7 +174,7 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 	served := &servedWriter{}
 	placement := wholeEstate{roster: staticRoster{node: "data-1"}}
 	envelopes := routerEnvelopes(t)
-	stop, err := estate.Serve(t.Context(), start(), estate.ServerOptions{
+	stop, err := estate.Serve(t.Context(), start(), estate.ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: "data-1", Envelopes: envelopes,
 		Local: &servedEstate{backend: estate.Backend{
 			Writer: func(estate.Actor) estate.TrackerWriter { return served },

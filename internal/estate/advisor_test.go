@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -252,7 +253,7 @@ func TestTheAdvisorLogFromANodeWithoutDataCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	desk := &advisorDesk{}
-	stop, err := Serve(t.Context(), f.start(t), ServerOptions{
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: "data-d", Local: desk, Envelopes: fleetEnvelopes,
 	})
 	if err != nil {
