@@ -574,10 +574,11 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		p.MCPConfig(), p.MCPConfigFresh(),
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next",
 		p.CountRecord(), p.CountRecord() + ".next",
-		// THE STREAMS TOO, so each job writes them as new files: a `>` into
-		// the last job's would cut it under a read of it still under way,
-		// which then joins two jobs' bytes ([sandbox.ChangeOf]).
-		p.Err(), out.Stdout}
+		// THE ERROR STREAM TOO, and the event stream below, so each job
+		// writes them as new files: a `>` into the last job's would cut it
+		// under a read of it still under way, which then joins two jobs'
+		// bytes ([sandbox.ChangeOf]).
+		p.Err()}
 	dirs := []string{p.CommitAttribution(), p.SessionStaging(), p.ProgramStaging()}
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
 	// A home file a killed run left holding its settings, the bridge's token
@@ -603,9 +604,9 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 			dirs = append(dirs, a.artifactDirs(p)...)
 		}
 	}
-	// The stream too, where it lives apart from the result: it is only
-	// truncated when the next job starts, and a peek between the clear and
-	// the start would show the previous job's stream as this one's.
+	// The event stream, where it lives apart from the result (which is
+	// listed): a new file for the job, as the error stream is, and no peek
+	// between the clear and the start shows the last job's as this one's.
 	if out.Stdout != p.Result() {
 		files = append(files, out.Stdout)
 	}
